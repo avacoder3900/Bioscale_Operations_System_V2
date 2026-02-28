@@ -1,0 +1,15 @@
+import { json } from '@sveltejs/kit';
+import { connectDB, BomItem } from '$lib/server/db';
+import type { RequestHandler } from './$types';
+
+export const GET: RequestHandler = async ({ url }) => {
+	await connectDB();
+	const q = url.searchParams.get('q') || '';
+	const results = await BomItem.find({
+		$or: [
+			{ name: { $regex: q, $options: 'i' } },
+			{ partNumber: { $regex: q, $options: 'i' } }
+		]
+	}).limit(50).lean();
+	return json({ success: true, results });
+};

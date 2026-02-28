@@ -4,7 +4,7 @@ import { connectDB, AgentMessage, RoutingPattern } from '$lib/server/db';
 import type { RequestHandler } from './$types';
 
 function requireApiKey(request: Request) {
-	const key = request.headers.get('x-agent-api-key') || request.headers.get('authorization')?.replace('Bearer ', '');
+	const key = request.headers.get('x-api-key') || request.headers.get('x-agent-api-key') || request.headers.get('authorization')?.replace('Bearer ', '');
 	if (!env.AGENT_API_KEY || key !== env.AGENT_API_KEY) {
 		throw error(401, 'Invalid or missing API key');
 	}
@@ -19,9 +19,13 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const status = url.searchParams.get('status') || null;
 	const userId = url.searchParams.get('userId') || null;
 
+	if (!userId) {
+		return json({ success: false, error: 'userId parameter is required' }, { status: 400 });
+	}
+
 	const filter: any = {};
 	if (status) filter.status = status;
-	if (userId) filter.$or = [{ fromUserId: userId }, { toUserId: userId }];
+	filter.$or = [{ fromUserId: userId }, { toUserId: userId }];
 
 	const [messages, total] = await Promise.all([
 		AgentMessage.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
@@ -29,6 +33,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	]);
 
 	return json({
+		success: true,
 		messages: messages.map((m: any) => ({
 			id: m._id,
 			fromUserId: m.fromUserId,

@@ -4,7 +4,7 @@ import { connectDB, AgentQuery, mongoose } from '$lib/server/db';
 import type { RequestHandler } from './$types';
 
 function requireApiKey(request: Request) {
-	const key = request.headers.get('x-agent-api-key') || request.headers.get('authorization')?.replace('Bearer ', '');
+	const key = request.headers.get('x-api-key') || request.headers.get('x-agent-api-key') || request.headers.get('authorization')?.replace('Bearer ', '');
 	if (!env.AGENT_API_KEY || key !== env.AGENT_API_KEY) {
 		throw error(401, 'Invalid or missing API key');
 	}

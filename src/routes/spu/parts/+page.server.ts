@@ -10,7 +10,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const parts = await PartDefinition.find().sort({ sortOrder: 1, partNumber: 1 }).lean();
 
 	return {
-		parts: parts.map((p) => ({
+		items: parts.map((p) => ({
 			id: p._id,
 			partNumber: p.partNumber ?? '',
 			name: p.name ?? '',
