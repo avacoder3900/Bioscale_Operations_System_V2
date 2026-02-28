@@ -255,7 +255,7 @@ export const actions: Actions = {
 						$set: {
 							'topSeal.batchId': run._id,
 							'topSeal.topSealLotId': topSealLotId,
-							'topSeal.operator': { _id: locals.user._id, username: locals.user.username },
+							'topSeal.operator': { _id: locals.user!._id, username: locals.user!.username },
 							'topSeal.timestamp': now,
 							'topSeal.recordedAt': now,
 							currentPhase: 'sealed'

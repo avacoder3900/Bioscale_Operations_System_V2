@@ -33,7 +33,7 @@ export const actions: Actions = {
 			description: parsed.description,
 			duration: parsed.duration,
 			shelfLifeDays: parsed.shelfLifeDays,
-			bcode: parsed.bcode ? globalThis.Buffer.from(parsed.bcode, 'base64') : undefined,
+			bcode: parsed.bcode ? (globalThis as any).Buffer.from(parsed.bcode, 'base64') : undefined,
 			bcodeLength: parsed.bcodeLength,
 			checksum: parsed.checksum,
 			isActive: true,
