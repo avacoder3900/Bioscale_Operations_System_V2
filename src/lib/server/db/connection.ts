@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import { MONGODB_URI } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 
 let connected = false;
 
@@ -9,7 +9,10 @@ export async function connectDB() {
 		connected = true;
 		return;
 	}
-	await mongoose.connect(MONGODB_URI);
+	if (!env.MONGODB_URI) {
+		throw new Error('MONGODB_URI is not set');
+	}
+	await mongoose.connect(env.MONGODB_URI);
 	connected = true;
 	console.log('MongoDB connected');
 }
