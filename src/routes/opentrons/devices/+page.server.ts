@@ -1,0 +1,23 @@
+import { connectDB, OpentronsRobot } from '$lib/server/db';
+import type { PageServerLoad } from './$types';
+
+export const load: PageServerLoad = async () => {
+	await connectDB();
+	const robots = await OpentronsRobot.find().sort({ name: 1 }).lean();
+
+	return {
+		robots: robots.map((r: any) => ({
+			robotId: r._id,
+			name: r.name ?? '',
+			ip: r.ip ?? '',
+			port: r.port ?? 31950,
+			robotSide: r.robotSide ?? null,
+			robotModel: r.robotModel ?? 'OT-2',
+			robotSerial: r.robotSerial ?? null,
+			isActive: r.isActive ?? true,
+			lastHealthOk: r.lastHealthOk ?? false,
+			lastHealthAt: r.lastHealthAt ? new Date(r.lastHealthAt).toISOString() : null,
+			source: r.source ?? 'manual'
+		}))
+	};
+};

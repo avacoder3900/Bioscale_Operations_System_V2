@@ -1,0 +1,122 @@
+{
+  "project": "Bioscale Operations System V2 — MongoDB Rebuild",
+  "domains": [
+    {
+      "id": "AUTH",
+      "prdFile": "DOMAIN-01-AUTH.md",
+      "dependencies": [],
+      "stories": [
+        { "id": "AUTH-01", "title": "Database Connection & Mongoose Models", "status": "pending" },
+        { "id": "AUTH-02", "title": "Session middleware (hooks.server.ts)", "status": "pending" },
+        { "id": "AUTH-03", "title": "Login/Logout flow", "status": "pending" },
+        { "id": "AUTH-04", "title": "User Management (Admin CRUD)", "status": "pending" },
+        { "id": "AUTH-05", "title": "Roles, Permissions & Invites", "status": "pending" },
+        { "id": "AUTH-06", "title": "Layout Data & Permission Checks", "status": "pending" },
+        { "id": "AUTH-07", "title": "Demo Routes & Agent Activity", "status": "pending" }
+      ]
+    },
+    {
+      "id": "KANBAN",
+      "prdFile": "DOMAIN-02-KANBAN.md",
+      "dependencies": ["AUTH"],
+      "stories": [
+        { "id": "KB-01", "title": "Projects CRUD", "status": "pending" },
+        { "id": "KB-02", "title": "Board View & Task CRUD", "status": "pending" },
+        { "id": "KB-03", "title": "Task Detail, Comments, Tags & Activity", "status": "pending" },
+        { "id": "KB-04", "title": "List View, Archived Tasks & Cron", "status": "pending" }
+      ]
+    },
+    {
+      "id": "CUSTOMERS",
+      "prdFile": "DOMAIN-03-CUSTOMERS.md",
+      "dependencies": ["AUTH"],
+      "stories": [
+        { "id": "CUST-01", "title": "Customer CRUD & Notes", "status": "pending" }
+      ]
+    },
+    {
+      "id": "EQUIPMENT",
+      "prdFile": "DOMAIN-04-EQUIPMENT.md",
+      "dependencies": ["AUTH"],
+      "stories": [
+        { "id": "EQ-01", "title": "Fridges, Ovens & Temperature Monitoring", "status": "pending" },
+        { "id": "EQ-02", "title": "Decks, Cooling Trays & Consumables", "status": "pending" },
+        { "id": "EQ-03", "title": "Opentrons Robots, Protocols & Runs", "status": "pending" }
+      ]
+    },
+    {
+      "id": "DOCUMENTS",
+      "prdFile": "DOMAIN-05-DOCUMENTS.md",
+      "dependencies": ["AUTH"],
+      "stories": [
+        { "id": "DOC-01", "title": "Controlled Documents CRUD & Revisions", "status": "pending" },
+        { "id": "DOC-02", "title": "Approvals, Training & Electronic Signatures", "status": "pending" },
+        { "id": "DOC-03", "title": "Work Instructions", "status": "pending" },
+        { "id": "DOC-04", "title": "Document Repository, Upload & Box Integration", "status": "pending" }
+      ]
+    },
+    {
+      "id": "INVENTORY",
+      "prdFile": "DOMAIN-06-INVENTORY.md",
+      "dependencies": ["AUTH"],
+      "stories": [
+        { "id": "INV-01", "title": "Part Definitions CRUD", "status": "pending" },
+        { "id": "INV-02", "title": "BOM Items & Folders", "status": "pending" },
+        { "id": "INV-03", "title": "Inventory Transactions & BOM Settings", "status": "pending" }
+      ]
+    },
+    {
+      "id": "SPU",
+      "prdFile": "DOMAIN-07-SPU.md",
+      "dependencies": ["AUTH", "INVENTORY", "DOCUMENTS", "EQUIPMENT"],
+      "stories": [
+        { "id": "SPU-01", "title": "SPU Dashboard & CRUD", "status": "pending" },
+        { "id": "SPU-02", "title": "SPU Detail Page", "status": "pending" },
+        { "id": "SPU-03", "title": "Assembly Sessions", "status": "pending" },
+        { "id": "SPU-04", "title": "Batches & Production Runs", "status": "pending" },
+        { "id": "SPU-05", "title": "Validation Sessions & Instruments", "status": "pending" },
+        { "id": "SPU-06", "title": "Devices & Particle Integration", "status": "pending" }
+      ]
+    },
+    {
+      "id": "MANUFACTURING",
+      "prdFile": "DOMAIN-08-MANUFACTURING.md",
+      "dependencies": ["AUTH", "EQUIPMENT", "SPU"],
+      "stories": [
+        { "id": "MFG-01", "title": "Manufacturing Dashboard, Lots & Process Config", "status": "pending" },
+        { "id": "MFG-02", "title": "Wax Filling Pipeline", "status": "pending" },
+        { "id": "MFG-03", "title": "Reagent Filling Pipeline", "status": "pending" },
+        { "id": "MFG-04", "title": "Assay Definitions", "status": "pending" },
+        { "id": "MFG-05", "title": "QA/QC, Laser Cutting, Top Seal, Materials & Settings", "status": "pending" }
+      ]
+    },
+    {
+      "id": "SHIPPING",
+      "prdFile": "DOMAIN-09-SHIPPING.md",
+      "dependencies": ["AUTH", "CUSTOMERS", "MANUFACTURING"],
+      "stories": [
+        { "id": "SHIP-01", "title": "Shipping Page & Lot Management", "status": "pending" }
+      ]
+    },
+    {
+      "id": "CARTRIDGE_LAB",
+      "prdFile": "DOMAIN-10-CARTRIDGE-LAB.md",
+      "dependencies": ["AUTH", "MANUFACTURING"],
+      "stories": [
+        { "id": "CART-01", "title": "Lab Cartridge List, Dashboard & Groups", "status": "pending" },
+        { "id": "CART-02", "title": "Firmware Devices, Firmware Cartridges & Test Results", "status": "pending" }
+      ]
+    },
+    {
+      "id": "AGENT_API",
+      "prdFile": "DOMAIN-11-AGENT-API.md",
+      "dependencies": ["AUTH", "KANBAN", "CUSTOMERS", "EQUIPMENT", "DOCUMENTS", "INVENTORY", "SPU", "MANUFACTURING", "SHIPPING", "CARTRIDGE_LAB"],
+      "stories": [
+        { "id": "AGENT-01", "title": "Health, Schema & System Endpoints", "status": "pending" },
+        { "id": "AGENT-02", "title": "Messages & Query Engine", "status": "pending" },
+        { "id": "AGENT-03", "title": "Operations Dashboard & Domain APIs", "status": "pending" },
+        { "id": "AGENT-04", "title": "Approvals & Admin APIs", "status": "pending" }
+      ]
+    }
+  ]
+}
