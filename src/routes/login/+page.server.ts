@@ -48,8 +48,9 @@ export const actions: Actions = {
 				(err: Error) => console.error('Failed to update lastLoginAt:', err)
 			);
 		} catch (err) {
-			console.error('Login error:', err);
-			return fail(500, { error: 'A server error occurred. Please try again.' });
+			const message = err instanceof Error ? err.message : String(err);
+			console.error('Login error:', message, err);
+			return fail(500, { error: `Server error: ${message}` });
 		}
 
 		redirect(302, '/spu');
