@@ -7,20 +7,36 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'inventory:read');
 	await connectDB();
 
-	const boxInteg = await Integration.findOne({ type: 'box' }).lean();
+	const { env } = await import('$env/dynamic/private');
+	const isConfigured = Boolean(env.BOX_CLIENT_ID && env.BOX_CLIENT_SECRET && env.BOX_REDIRECT_URI);
+
+	const boxInteg = await Integration.findOne({ type: 'box' }).lean() as any;
+	const isConnected = Boolean(boxInteg?.accessToken);
+
+	const targetFolder = 'Box Files';
+	const targetFile = 'BOM.xlsx';
 
 	return {
+		isConfigured,
+		isConnected,
+		targetFolder,
+		targetFile,
+		folderId: boxInteg?.folderId ?? null,
+		fileId: boxInteg?.spreadsheetId ?? null,
+		lastSyncAt: boxInteg?.lastSyncAt ?? null,
+		lastSyncStatus: isConnected ? (boxInteg?.lastSyncStatus ?? 'connected') : null,
+		lastSyncError: boxInteg?.lastSyncError ?? null,
 		boxIntegration: boxInteg
 			? {
-					id: (boxInteg as any)._id,
-					accessToken: (boxInteg as any).accessToken ?? null,
-					refreshToken: (boxInteg as any).refreshToken ?? null,
-					lastSyncAt: (boxInteg as any).lastSyncAt ?? null,
-					lastSyncStatus: (boxInteg as any).lastSyncStatus ?? null,
-					lastSyncError: (boxInteg as any).lastSyncError ?? null,
-					syncIntervalMinutes: (boxInteg as any).syncIntervalMinutes ?? null,
-					folderId: (boxInteg as any).folderId ?? null,
-					spreadsheetId: (boxInteg as any).spreadsheetId ?? null
+					id: boxInteg._id,
+					accessToken: boxInteg.accessToken ?? null,
+					refreshToken: boxInteg.refreshToken ?? null,
+					lastSyncAt: boxInteg.lastSyncAt ?? null,
+					lastSyncStatus: boxInteg.lastSyncStatus ?? null,
+					lastSyncError: boxInteg.lastSyncError ?? null,
+					syncIntervalMinutes: boxInteg.syncIntervalMinutes ?? null,
+					folderId: boxInteg.folderId ?? null,
+					spreadsheetId: boxInteg.spreadsheetId ?? null
 				}
 			: null
 	};
