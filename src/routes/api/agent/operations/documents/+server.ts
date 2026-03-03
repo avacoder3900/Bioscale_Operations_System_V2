@@ -1,17 +1,49 @@
-import { json, error } from "@sveltejs/kit";
-import { env } from "$env/dynamic/private";
-import { connectDB } from "$lib/server/db";
-import type { RequestHandler } from "./$types";
-
-function requireApiKey(request: Request) {
-  const key = request.headers.get("x-api-key") || request.headers.get("x-agent-api-key") || request.headers.get("authorization")?.replace("Bearer ", "");
-  if (!env.AGENT_API_KEY || key !== env.AGENT_API_KEY) {
-    throw error(401, "Invalid or missing API key");
-  }
-}
+import { json } from '@sveltejs/kit';
+import { requireAgentApiKey } from '$lib/server/api-auth';
+import { connectDB, Document, WorkInstruction } from '$lib/server/db';
+import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request }) => {
-  requireApiKey(request);
-  await connectDB();
-  return json({ success: true, data: {} });
+	requireAgentApiKey(request);
+	await connectDB();
+
+	const [documents, workInstructions] = await Promise.all([
+		Document.find()
+			.select('_id documentNumber title category status currentRevision createdAt')
+			.sort({ createdAt: -1 }).lean(),
+		WorkInstruction.find()
+			.select('_id title status currentVersion createdAt')
+			.sort({ createdAt: -1 }).lean()
+	]);
+
+	const byStatus: Record<string, number> = {};
+	for (const doc of documents as any[]) {
+		const s = doc.status || 'unknown';
+		byStatus[s] = (byStatus[s] || 0) + 1;
+	}
+
+	return json({
+		success: true,
+		data: {
+			documents: (documents as any[]).map(d => ({
+				id: d._id,
+				documentNumber: d.documentNumber,
+				title: d.title,
+				category: d.category,
+				status: d.status,
+				currentRevision: d.currentRevision
+			})),
+			workInstructions: (workInstructions as any[]).map(w => ({
+				id: w._id,
+				title: w.title,
+				isActive: w.status === 'active',
+				currentVersion: w.currentVersion
+			})),
+			summary: {
+				totalDocs: (documents as any[]).length,
+				byStatus,
+				totalWorkInstructions: (workInstructions as any[]).length
+			}
+		}
+	});
 };
