@@ -13,7 +13,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const boxInteg = await Integration.findOne({ type: 'box' }).lean() as any;
 	const isConnected = Boolean(boxInteg?.accessToken);
 
-	const targetFolder = 'Box Files';
+	const targetFolder = 'Leo';
 	const targetFile = 'BOM.xlsx';
 
 	return {

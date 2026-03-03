@@ -11,7 +11,7 @@ export const load: PageServerLoad = async ({ url }) => {
 	const connected = Boolean(boxInteg?.accessToken);
 
 	const rootFolderId = env.BOX_ROOT_FOLDER_ID || '0';
-	const targetFolder = 'Box Files';
+	const targetFolder = 'Leo';
 
 	if (!connected) {
 		return {

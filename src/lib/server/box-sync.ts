@@ -68,17 +68,19 @@ export async function syncPartsFromBox(): Promise<SyncResult> {
 	let fileName = '';
 
 	if (!fileId) {
-		// Search for the file by name
-		console.log('[box-sync] Searching Box for "Live Equipment Overview"...');
-		const results = await searchFiles('Live Equipment Overview');
-		console.log(`[box-sync] Search returned ${results.length} result(s):`, results.map(r => r.name));
+		// Search for BOM.xlsx (the target sync file)
+		console.log('[box-sync] Searching Box for "BOM.xlsx"...');
+		const results = await searchFiles('BOM');
+		console.log(`[box-sync] Search returned ${results.length} result(s):`, results.map(r => `${r.name} (${r.type}, id=${r.id})`));
 
 		if (results.length === 0) {
-			throw new Error('Could not find "Live Equipment Overview" file in Box. Make sure the file exists and is accessible.');
+			throw new Error('Could not find "BOM.xlsx" file in Box. Make sure the file exists and is accessible.');
 		}
 
-		// Pick the first Excel file (.xlsx / .xls)
+		// Prefer exact match on BOM.xlsx, then any Excel file
 		const excelFile = results.find(r =>
+			r.name.toLowerCase() === 'bom.xlsx'
+		) ?? results.find(r =>
 			r.name.toLowerCase().endsWith('.xlsx') ||
 			r.name.toLowerCase().endsWith('.xls')
 		) ?? results[0];
