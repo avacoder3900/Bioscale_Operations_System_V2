@@ -1,6 +1,6 @@
 import { fail, error } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, BomItem, generateId } from '$lib/server/db';
+import { connectDB, BomItem, PartDefinition, generateId } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -9,25 +9,58 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 
 	const item = await BomItem.findById(params.bomId).lean();
 	if (!item) throw error(404, 'BOM item not found');
+	const it = item as any;
+
+	// Look up linked part definition by part number
+	const partDef = it.partNumber
+		? await PartDefinition.findOne({ partNumber: it.partNumber }, {
+				_id: 1, partNumber: 1, name: 1, supplier: 1, vendorPartNumber: 1,
+				unitCost: 1, leadTimeDays: 1, minimumOrderQty: 1, hazardClass: 1, inventoryCount: 1
+			}).lean()
+		: null;
+
+	// Extract version history from the item
+	const versions = (it.versionHistory ?? []).map((v: any) => ({
+		id: v._id ?? `${it._id}-v${v.version}`,
+		version: v.version,
+		changeType: v.changeType ?? 'update',
+		changedAt: v.changedAt ?? null,
+		changedBy: v.changedBy?.username ?? null,
+		changeReason: v.changeReason ?? null,
+		previousValues: v.previousValues ?? null
+	}));
 
 	return {
 		item: {
-			id: (item as any)._id,
-			partNumber: (item as any).partNumber ?? '',
-			name: (item as any).name ?? '',
-			description: (item as any).description ?? null,
-			unitCost: (item as any).unitCost ? Number((item as any).unitCost) : null,
-			quantity: (item as any).inventoryCount ?? null,
-			supplier: (item as any).supplier ?? null,
-			category: (item as any).category ?? null,
-			isActive: (item as any).isActive ?? true,
-			expirationDate: (item as any).expirationDate ?? null,
+			id: it._id,
+			partNumber: it.partNumber ?? '',
+			name: it.name ?? '',
+			description: it.description ?? null,
+			unitCost: it.unitCost?.toString() ?? null,
+			inventoryCount: (partDef as any)?.inventoryCount ?? it.inventoryCount ?? 0,
+			quantity: it.inventoryCount ?? null,
+			supplier: it.supplier ?? null,
+			category: it.category ?? null,
+			isActive: it.isActive ?? true,
+			expirationDate: it.expirationDate ?? null,
 			folderId: null,
-			bomType: (item as any).bomType ?? 'spu',
-			quantityPerUnit: (item as any).quantityPerUnit ?? null,
-			versionHistory: (item as any).versionHistory ?? [],
-			partLinks: (item as any).partLinks ?? []
-		}
+			bomType: it.bomType ?? 'spu',
+			quantityPerUnit: it.quantityPerUnit ?? null,
+			versionHistory: it.versionHistory ?? [],
+			partLinks: it.partLinks ?? []
+		},
+		part: partDef ? {
+			id: (partDef as any)._id,
+			partNumber: (partDef as any).partNumber ?? '',
+			name: (partDef as any).name ?? '',
+			supplier: (partDef as any).supplier ?? null,
+			vendorPartNumber: (partDef as any).vendorPartNumber ?? null,
+			unitCost: (partDef as any).unitCost?.toString() ?? null,
+			leadTimeDays: (partDef as any).leadTimeDays ?? null,
+			minimumOrderQty: (partDef as any).minimumOrderQty ?? null,
+			hazardClass: (partDef as any).hazardClass ?? null
+		} : null,
+		versions
 	};
 };
 
@@ -61,13 +94,13 @@ export const actions: Actions = {
 			$set: updates,
 			$push: { versionHistory: versionEntry }
 		});
-		return { success: true };
+		return { success: true, message: 'BOM item updated successfully' };
 	},
 
 	delete: async ({ locals, params }) => {
 		requirePermission(locals.user, 'inventory:write');
 		await connectDB();
 		await BomItem.deleteOne({ _id: params.bomId });
-		return { success: true };
+		return { success: true, message: 'BOM item deleted' };
 	}
 };

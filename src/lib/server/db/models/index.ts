@@ -5,6 +5,12 @@ export { Spu } from './spu.js';
 export { AssayDefinition } from './assay-definition.js';
 export { ReagentBatchRecord } from './reagent-batch-record.js';
 
+// Tier 2: Operational — Receiving & Inspection
+export { ReceivingLot } from './receiving-lot.js';
+export { InspectionResult } from './inspection-result.js';
+export { InspectionProcedureRevision } from './inspection-procedure-revision.js';
+export { ToolConfirmation } from './tool-confirmation.js';
+
 // Tier 2: Operational
 export { Session } from './session.js';
 export { Role } from './role.js';

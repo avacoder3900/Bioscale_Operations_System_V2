@@ -25,7 +25,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			documentNumber: doc.documentNumber ?? '',
 			title: doc.title ?? '',
 			category: doc.category ?? null,
-			currentRevision: parseInt(doc.currentRevision) || 0,
+			currentRevision: String(parseInt(doc.currentRevision) || 0),
 			status: doc.status ?? 'draft',
 			ownerId: doc.ownerId ?? null,
 			ownerUsername
@@ -41,6 +41,8 @@ export const actions: Actions = {
 		const form = await request.formData();
 		const content = form.get('content')?.toString() ?? '';
 		const changeDescription = form.get('changeDescription')?.toString() || undefined;
+
+		if (!content.trim()) return fail(400, { error: 'Content is required' });
 
 		const doc = await Document.findById(params.id).lean() as any;
 		if (!doc) error(404, 'Document not found');
