@@ -9,6 +9,7 @@ const partDefinitionSchema = new Schema({
 	minimumOrderQty: Number, hazardClass: String, certifications: Schema.Types.Mixed,
 	expirationDate: Date, msdsFileId: String,
 	inspectionPathway: String, scanRequired: Boolean,
+	inventoryCount: { type: Number, default: 0 },
 	sortOrder: { type: Number, default: 0 },
 	isActive: { type: Boolean, default: true },
 	sampleSize: { type: Number, default: 0 },

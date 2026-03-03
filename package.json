@@ -38,6 +38,7 @@
     "@oslojs/encoding": "^1.1.0",
     "bcryptjs": "^3.0.3",
     "mongoose": "^9.2.3",
-    "nanoid": "^3.3.11"
+    "nanoid": "^3.3.11",
+    "xlsx": "^0.18.5"
   }
 }

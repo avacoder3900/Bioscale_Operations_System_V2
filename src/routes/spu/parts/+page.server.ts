@@ -1,6 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, PartDefinition, BomItem, Integration, generateId } from '$lib/server/db';
+import { syncPartsFromBox } from '$lib/server/box-sync';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -132,5 +133,42 @@ export const actions: Actions = {
 			createdBy: locals.user!._id
 		});
 		return { success: true };
+	},
+
+	sync: async ({ locals }) => {
+		requirePermission(locals.user, 'inventory:write');
+		try {
+			const result = await syncPartsFromBox();
+			const msg = `Sync complete: ${result.upserted} parts upserted from "${result.fileName}"${result.errors.length > 0 ? ` (${result.errors.length} row errors)` : ''}.`;
+			return {
+				success: true,
+				message: msg,
+				syncResult: {
+					upserted: result.upserted,
+					skipped: result.skipped,
+					errorCount: result.errors.length,
+					columnMap: result.columnMap,
+					fileName: result.fileName
+				}
+			};
+		} catch (err: any) {
+			const message = err?.message ?? 'Unknown sync error';
+			console.error('[sync action] Box sync failed:', message);
+
+			// Record error on the Integration doc
+			await connectDB();
+			await Integration.updateOne(
+				{ type: 'box' },
+				{
+					$set: {
+						lastSyncAt: new Date(),
+						lastSyncStatus: 'error',
+						lastSyncError: message
+					}
+				}
+			);
+
+			return fail(500, { error: message });
+		}
 	}
 };

@@ -163,6 +163,25 @@ export async function getFileInfo(fileId: string): Promise<{ name: string; size:
 	return res.json();
 }
 
+/** Search for files in Box by name/query */
+export async function searchFiles(query: string): Promise<BoxItem[]> {
+	const params = new URLSearchParams({
+		query,
+		type: 'file',
+		fields: 'id,type,name,size,modified_at',
+		limit: '20'
+	});
+	const res = await boxFetch(`/search?${params.toString()}`);
+	const data = await res.json();
+	return (data.entries ?? []).map((item: any) => ({
+		id: item.id,
+		type: item.type as 'file' | 'folder',
+		name: item.name,
+		size: item.size ?? null,
+		modified_at: item.modified_at ?? null
+	}));
+}
+
 /** Upload a file to a Box folder */
 export async function uploadFile(
 	folderId: string,
