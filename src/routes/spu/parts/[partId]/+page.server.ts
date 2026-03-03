@@ -11,13 +11,11 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	if (!part) throw error(404, 'Part not found');
 	const p = part as any;
 
-	// URL filters
 	const typeFilter = url.searchParams.get('type') ?? '';
 	const startDate = url.searchParams.get('startDate') ?? '';
 	const endDate = url.searchParams.get('endDate') ?? '';
 	const retractedFilter = url.searchParams.get('retracted') ?? '';
 
-	// Build transaction filter
 	const txFilter: Record<string, any> = { partDefinitionId: params.partId };
 	if (typeFilter) txFilter.transactionType = typeFilter;
 	if (startDate || endDate) {
@@ -33,7 +31,6 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		InventoryTransaction.find(txFilter).sort({ performedAt: -1 }).limit(200).lean()
 	]);
 
-	// Build versions from lot records as version entries
 	const versions = (lots as any[]).map((l: any, idx: number) => ({
 		id: l._id,
 		version: idx + 1,
@@ -45,7 +42,6 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		operatorName: l.operator?.username ?? null
 	}));
 
-	// Audit entries from lot step entries
 	const auditEntries = (lots as any[]).flatMap((l: any) =>
 		(l.stepEntries ?? []).map((step: any, i: number) => ({
 			id: step._id ?? `${l._id}-step-${i}`,
@@ -107,52 +103,47 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 };
 
 export const actions: Actions = {
-	update: async ({ request, locals, params }) => {
+	adjustInventory: async ({ request, locals, params }) => {
 		requirePermission(locals.user, 'inventory:write');
 		await connectDB();
 		const form = await request.formData();
-		const updates: Record<string, any> = {};
-		for (const field of ['name', 'description', 'category', 'unitOfMeasure']) {
-			const val = form.get(field)?.toString().trim();
-			if (val !== undefined && val !== null) updates[field] = val || undefined;
-		}
-		const reorder = form.get('reorderPoint');
-		if (reorder) updates.minimumOrderQty = Number(reorder);
-
-		await PartDefinition.updateOne({ _id: params.partId }, { $set: updates });
-		return { success: true };
-	},
-
-	receiveLot: async ({ request, locals, params }) => {
-		requirePermission(locals.user, 'inventory:write');
-		await connectDB();
-		const form = await request.formData();
-		const lotNumber = form.get('lotNumber')?.toString().trim();
-		const quantity = Number(form.get('quantity'));
-		if (!lotNumber || !quantity) return fail(400, { error: 'Lot number and quantity required' });
-
-		await LotRecord.create({
-			_id: generateId(),
-			partDefinitionId: params.partId,
-			lotNumber,
-			quantity,
-			expirationDate: form.get('expirationDate') ? new Date(form.get('expirationDate')!.toString()) : undefined,
-			receivedAt: new Date(),
-			status: 'active',
-			createdBy: locals.user!._id
-		});
-
-		// Create receipt transaction
+		const adjustment = Number(form.get('adjustment'));
+		const reason = form.get('reason')?.toString() ?? 'Manual adjustment';
+		if (isNaN(adjustment)) return fail(400, { error: 'Invalid adjustment' });
+		const part = await PartDefinition.findById(params.partId) as any;
+		if (!part) return fail(404, { error: 'Part not found' });
+		const prevQty = part.inventoryCount ?? 0;
+		const newQty = prevQty + adjustment;
+		part.inventoryCount = newQty;
+		await part.save();
 		await InventoryTransaction.create({
 			_id: generateId(),
 			partDefinitionId: params.partId,
-			transactionType: 'receipt',
-			quantity,
-			reason: `Lot ${lotNumber} received`,
+			transactionType: adjustment > 0 ? 'addition' : 'deduction',
+			quantity: adjustment,
+			previousQuantity: prevQty,
+			newQuantity: newQty,
+			reason,
 			performedBy: locals.user!.username,
 			performedAt: new Date()
 		});
+		return { success: true };
+	},
 
+	retractTransaction: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+		const form = await request.formData();
+		const transactionId = form.get('transactionId')?.toString();
+		const reason = form.get('reason')?.toString() ?? '';
+		if (!transactionId) return fail(400, { error: 'Transaction ID required' });
+		const txn = await InventoryTransaction.findById(transactionId).lean() as any;
+		if (!txn) return fail(404, { error: 'Transaction not found' });
+		if (txn.retractedAt) return fail(400, { error: 'Already retracted' });
+		if (txn.partDefinitionId) {
+			await PartDefinition.updateOne({ _id: txn.partDefinitionId }, { $inc: { inventoryCount: Math.abs(txn.quantity) } });
+		}
+		await InventoryTransaction.updateOne({ _id: transactionId }, { $set: { retractedAt: new Date(), retractedBy: locals.user!.username, retractionReason: reason } });
 		return { success: true };
 	}
 };
