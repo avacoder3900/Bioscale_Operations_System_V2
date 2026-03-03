@@ -98,22 +98,14 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		fieldHints: { batchRecommended: true, ownerRecommended: false },
 		fleetSummary: (() => {
 			const spuList = spus.map((s: any) => ({
-				id: s._id,
-				udi: s.udi,
-				status: s.status ?? 'draft',
-				deviceState: s.deviceState ?? '',
-				owner: s.owner ?? null,
-				ownerNotes: s.ownerNotes ?? null,
-				batchId: s.batch?._id ?? null,
-				batchNumber: s.batch?.batchNumber ?? null,
-				createdAt: s.createdAt,
-				createdByUsername: userMap.get(s.createdBy) ?? null,
+				id: s._id, udi: s.udi, status: s.status ?? 'draft',
+				deviceState: s.deviceState ?? '', owner: s.owner ?? null,
+				ownerNotes: s.ownerNotes ?? null, batchId: s.batch?._id ?? null,
+				createdAt: s.createdAt ?? null, updatedAt: s.updatedAt ?? null,
+				finalizedAt: s.finalizedAt ?? null, qcStatus: s.qcStatus ?? 'pending',
+				qcDocumentUrl: s.qcDocumentUrl ?? null, assemblyStatus: s.assemblyStatus ?? 'created',
 				assignmentType: s.assignment?.type ?? null,
-				assignmentCustomerId: s.assignment?.customer?._id ?? null,
-				customerName: s.assignment?.customer?.name ?? null,
-				qcStatus: s.qcStatus ?? 'pending',
-				qcDocumentUrl: s.qcDocumentUrl ?? null,
-				assemblyStatus: s.assemblyStatus ?? 'created'
+				assignmentCustomerId: s.assignment?.customer?._id ?? null
 			}));
 			const rnd = spuList.filter((s) => s.assignmentType === 'rnd');
 			const manufacturing = spuList.filter((s) => s.assignmentType === 'manufacturing');

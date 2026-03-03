@@ -90,13 +90,13 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 					id: (particleDevice as any)._id,
 					deviceId: (particleDevice as any).deviceId,
 					particleDeviceId: (particleDevice as any).particleDeviceId ?? (particleDevice as any).deviceId ?? null,
-					name: (particleDevice as any).name ?? null,
 					serialNumber: (particleDevice as any).serialNumber ?? null,
 					firmwareVersion: (particleDevice as any).firmwareVersion ?? null,
 					systemVersion: (particleDevice as any).systemVersion ?? null,
 					status: (particleDevice as any).status ?? null,
 					lastHeardAt: (particleDevice as any).lastHeardAt ?? null,
 					lastIpAddress: (particleDevice as any).lastIpAddress ?? null,
+					name: (particleDevice as any).name ?? null,
 					linkedSpuId: (particleDevice as any).linkedSpuId ?? null,
 					lastSyncAt: (particleDevice as any).lastSyncAt ?? null
 				}

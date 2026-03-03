@@ -17,7 +17,6 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const spu = s.spuId ? await Spu.findById(s.spuId).lean() : null;
 	const sp = spu as any;
 
-	// Fetch work instruction if linked
 	let workInstruction: { documentNumber: string } | null = null;
 	let workInstructionSteps: any[] = [];
 
@@ -43,7 +42,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 				fieldDefinitions: (step.fieldDefinitions ?? []).map((fd: any) => ({
 					id: fd._id,
 					fieldName: fd.fieldName ?? '',
-					fieldLabel: fd.fieldLabel ?? '',
+					fieldLabel: fd.fieldLabel ?? fd.fieldName ?? '',
 					fieldType: fd.fieldType ?? 'manual_entry',
 					isRequired: fd.isRequired ?? false,
 					validationPattern: fd.validationPattern ?? null,
@@ -55,10 +54,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		}
 	}
 
-	// BOM parts (ordered) — spu BOM items
 	const bomItems = await BomItem.find({ bomType: 'spu', isActive: true }).sort({ boxRowIndex: 1 }).lean();
-
-	// Also fetch part definitions for inventory count
 	const bomPartNumbers = (bomItems as any[]).map((b: any) => b.partNumber).filter(Boolean);
 	const partDefs = await PartDefinition.find(
 		bomPartNumbers.length ? { partNumber: { $in: bomPartNumbers } } : {}
@@ -72,7 +68,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			partNumber: b.partNumber ?? '',
 			name: b.name ?? '',
 			category: b.category ?? null,
-			inventoryCount: partDef?.inventoryCount ?? b.inventoryCount ?? 0,
+			inventoryCount: (partDef as any)?.inventoryCount ?? b.inventoryCount ?? 0,
 			hasInventoryTracking: true,
 			bomData: {
 				id: b._id,
@@ -82,7 +78,6 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		};
 	});
 
-	// Scanned parts from SPU
 	const scannedParts = (sp?.parts ?? []).map((p: any) => ({
 		id: p._id,
 		partDefinitionId: p.partDefinitionId ?? '',
@@ -92,7 +87,6 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		scannedAt: p.scannedAt ?? null
 	}));
 
-	// Step records from assembly session
 	const stepRecords = s.stepRecords ?? [];
 	const completedStepRecords = stepRecords.map((sr: any) => ({
 		id: sr._id,
@@ -103,7 +97,6 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		completedAt: sr.completedAt ?? null
 	}));
 
-	// Captured field records from all step records
 	const capturedFieldRecords = stepRecords.flatMap((sr: any) =>
 		(sr.fieldRecords ?? []).map((fr: any) => ({
 			id: fr._id,
@@ -115,12 +108,10 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		}))
 	);
 
-	// Inventory transactions for this session
 	const rawTxns = await InventoryTransaction.find(
 		{ assemblySessionId: params.sessionId }
 	).sort({ performedAt: -1 }).lean();
 
-	// Look up part names for transactions
 	const txnPartIds = [...new Set((rawTxns as any[]).map((t: any) => t.partDefinitionId).filter(Boolean))];
 	const txnParts = txnPartIds.length
 		? await PartDefinition.find({ _id: { $in: txnPartIds } }, { partNumber: 1, name: 1 }).lean()
@@ -145,7 +136,6 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		};
 	});
 
-	// Permission check for retraction
 	const canRetract = !!(locals.user as any)?.permissions?.includes('inventory:retract')
 		|| !!(locals.user as any)?.roles?.some((r: any) =>
 			r.permissions?.includes('inventory:retract') || r.roleName === 'admin'
@@ -185,43 +175,21 @@ export const actions: Actions = {
 		const stepFieldDefinitionId = form.get('stepFieldDefinitionId')?.toString();
 		const rawValue = form.get('rawValue')?.toString();
 		const isBarcodeScan = form.get('isBarcodeScan') === 'true';
-
-		if (!stepFieldDefinitionId || rawValue === undefined) {
+		if (!stepFieldDefinitionId || rawValue === undefined)
 			return fail(400, { error: 'Field definition ID and value required' });
-		}
-
 		const session = await AssemblySession.findById(params.sessionId);
 		if (!session) return fail(404, { error: 'Session not found' });
 		const s = session as any;
-
-		// Find or create the step record for the current WI step
 		let stepRecord = (s.stepRecords ?? []).find(
 			(sr: any) => sr.workInstructionStepId === assemblyStepRecordId
 		);
-
 		if (!stepRecord) {
-			// Create new step record
-			const newSr = {
-				_id: generateId(),
-				workInstructionStepId: assemblyStepRecordId ?? '',
-				stepNumber: (s.stepRecords?.length ?? 0) + 1,
-				fieldRecords: []
-			};
 			if (!s.stepRecords) s.stepRecords = [];
-			s.stepRecords.push(newSr);
+			s.stepRecords.push({ _id: generateId(), workInstructionStepId: assemblyStepRecordId ?? '', stepNumber: (s.stepRecords?.length ?? 0) + 1, fieldRecords: [] });
 			stepRecord = s.stepRecords[s.stepRecords.length - 1];
 		}
-
 		if (!stepRecord.fieldRecords) stepRecord.fieldRecords = [];
-		stepRecord.fieldRecords.push({
-			_id: generateId(),
-			stepFieldDefinitionId,
-			fieldValue: rawValue,
-			rawBarcodeData: isBarcodeScan ? rawValue : null,
-			scannedAt: new Date(),
-			capturedBy: locals.user!._id
-		});
-
+		stepRecord.fieldRecords.push({ _id: generateId(), stepFieldDefinitionId, fieldValue: rawValue, rawBarcodeData: isBarcodeScan ? rawValue : null, scannedAt: new Date(), capturedBy: locals.user!._id });
 		await session.save();
 		return { success: true, bomItemLinked: false };
 	},
@@ -233,85 +201,33 @@ export const actions: Actions = {
 		const barcode = form.get('barcode')?.toString();
 		const partDefinitionId = form.get('partDefinitionId')?.toString();
 		const workInstructionStepId = form.get('workInstructionStepId')?.toString();
-
 		if (!barcode) return fail(400, { error: 'Barcode required' });
-
 		const session = await AssemblySession.findById(params.sessionId);
 		if (!session) return fail(404, { error: 'Session not found' });
 		const s = session as any;
-
-		// Parse lot number from barcode (simple extraction)
 		const lotNumber = barcode;
-
-		// Get part info
-		let partDef: any = null;
-		if (partDefinitionId) {
-			partDef = await PartDefinition.findById(partDefinitionId).lean();
-		}
-
-		// Add step record for WI step if provided
+		let partDef: any = partDefinitionId ? await PartDefinition.findById(partDefinitionId).lean() : null;
 		if (workInstructionStepId) {
 			if (!s.stepRecords) s.stepRecords = [];
-			const existingRecord = s.stepRecords.find(
-				(sr: any) => sr.workInstructionStepId === workInstructionStepId
-			);
+			const existingRecord = s.stepRecords.find((sr: any) => sr.workInstructionStepId === workInstructionStepId);
 			if (!existingRecord) {
-				s.stepRecords.push({
-					_id: generateId(),
-					workInstructionStepId,
-					stepNumber: s.stepRecords.length + 1,
-					scannedLotNumber: lotNumber,
-					scannedPartNumber: partDef?.partNumber ?? '',
-					completedAt: new Date(),
-					completedBy: { _id: locals.user!._id, username: locals.user!.username }
-				});
+				s.stepRecords.push({ _id: generateId(), workInstructionStepId, stepNumber: s.stepRecords.length + 1, scannedLotNumber: lotNumber, scannedPartNumber: partDef?.partNumber ?? '', completedAt: new Date(), completedBy: { _id: locals.user!._id, username: locals.user!.username } });
 			}
 		} else {
-			// Parts-only mode: advance step index
 			s.currentStepIndex = (s.currentStepIndex ?? 0) + 1;
 		}
-
 		await session.save();
-
-		// Add scanned part to SPU
 		let inventoryDeduction = null;
 		if (s.spuId) {
-			await Spu.updateOne({ _id: s.spuId }, {
-				$push: {
-					parts: {
-						_id: generateId(),
-						partDefinitionId: partDefinitionId ?? null,
-						partNumber: partDef?.partNumber ?? '',
-						partName: partDef?.name ?? '',
-						lotNumber,
-						barcodeData: barcode,
-						scannedAt: new Date(),
-						scannedBy: { _id: locals.user!._id, username: locals.user!.username }
-					}
-				}
-			});
-
-			// Inventory deduction if part has tracking
+			await Spu.updateOne({ _id: s.spuId }, { $push: { parts: { _id: generateId(), partDefinitionId: partDefinitionId ?? null, partNumber: partDef?.partNumber ?? '', partName: partDef?.name ?? '', lotNumber, barcodeData: barcode, scannedAt: new Date(), scannedBy: { _id: locals.user!._id, username: locals.user!.username } } } });
 			if (partDefinitionId && partDef) {
 				const prevQty = (partDef as any).inventoryCount ?? 0;
 				const newQty = Math.max(0, prevQty - 1);
 				await PartDefinition.updateOne({ _id: partDefinitionId }, { $inc: { inventoryCount: -1 } });
-				await InventoryTransaction.create({
-					_id: generateId(),
-					partDefinitionId,
-					assemblySessionId: params.sessionId,
-					transactionType: 'deduction',
-					quantity: -1,
-					previousQuantity: prevQty,
-					newQuantity: newQty,
-					reason: `Assembly scan for SPU ${s.spuId}`,
-					performedBy: locals.user!.username,
-					performedAt: new Date()
-				});
+				await InventoryTransaction.create({ _id: generateId(), partDefinitionId, assemblySessionId: params.sessionId, transactionType: 'deduction', quantity: -1, previousQuantity: prevQty, newQuantity: newQty, reason: `Assembly scan for SPU ${s.spuId}`, performedBy: locals.user!.username, performedAt: new Date() });
 				inventoryDeduction = { previousQuantity: prevQty, newQuantity: newQty };
 			}
 		}
-
 		return { success: true, inventoryDeduction };
 	},
 
@@ -321,48 +237,26 @@ export const actions: Actions = {
 		const form = await request.formData();
 		const transactionId = form.get('transactionId')?.toString();
 		const reason = form.get('reason')?.toString();
-
 		if (!transactionId || !reason) return fail(400, { error: 'Transaction ID and reason required' });
-
 		const txn = await InventoryTransaction.findById(transactionId).lean() as any;
 		if (!txn) return fail(404, { error: 'Transaction not found' });
 		if (txn.retractedAt) return fail(400, { error: 'Transaction already retracted' });
-
-		// Restore inventory
-		if (txn.partDefinitionId) {
-			await PartDefinition.updateOne(
-				{ _id: txn.partDefinitionId },
-				{ $inc: { inventoryCount: Math.abs(txn.quantity) } }
-			);
-		}
-
-		await InventoryTransaction.updateOne({ _id: transactionId }, {
-			$set: {
-				retractedAt: new Date(),
-				retractedBy: locals.user!.username,
-				retractionReason: reason
-			}
-		});
-
+		if (txn.partDefinitionId) await PartDefinition.updateOne({ _id: txn.partDefinitionId }, { $inc: { inventoryCount: Math.abs(txn.quantity) } });
+		await InventoryTransaction.updateOne({ _id: transactionId }, { $set: { retractedAt: new Date(), retractedBy: locals.user!.username, retractionReason: reason } });
 		return { success: true };
 	},
 
 	pause: async ({ locals, params }) => {
 		requirePermission(locals.user, 'spu:write');
 		await connectDB();
-		await AssemblySession.updateOne({ _id: params.sessionId }, {
-			$set: { status: 'paused', pausedAt: new Date() }
-		});
+		await AssemblySession.updateOne({ _id: params.sessionId }, { $set: { status: 'paused', pausedAt: new Date() } });
 		return { success: true };
 	},
 
 	resume: async ({ locals, params }) => {
 		requirePermission(locals.user, 'spu:write');
 		await connectDB();
-		await AssemblySession.updateOne({ _id: params.sessionId }, {
-			$set: { status: 'in_progress' },
-			$unset: { pausedAt: '' }
-		});
+		await AssemblySession.updateOne({ _id: params.sessionId }, { $set: { status: 'in_progress' }, $unset: { pausedAt: '' } });
 		return { success: true };
 	}
 };

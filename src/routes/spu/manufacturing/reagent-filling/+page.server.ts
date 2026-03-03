@@ -1,136 +1,101 @@
 import { redirect } from '@sveltejs/kit';
-import { connectDB, ReagentBatchRecord, AssayDefinition, CartridgeRecord, WaxFillingRun } from '$lib/server/db';
+import { connectDB, ReagentBatchRecord, AssayDefinition, CartridgeRecord } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
-// Map internal status to display stage
-function statusToStage(status: string): string {
-	switch (status) {
-		case 'setup': return 'Setup';
-		case 'running': return 'Running';
-		case 'completed': return 'Storage';
-		case 'aborted': return 'Setup';
-		default: return 'Loading';
-	}
-}
-
-export const load: PageServerLoad = async ({ locals, url }) => {
+export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	await connectDB();
 
-	const robotId = url.searchParams.get('robot') ?? '';
-
-	// Find active run for this robot (not finalized, not aborted)
-	const activeRun = robotId
-		? await ReagentBatchRecord.findOne({
-				'robot._id': robotId,
-				status: { $in: ['setup', 'running'] },
-				finalizedAt: { $exists: false }
-			})
-				.sort({ createdAt: -1 })
-				.lean() as any
-		: null;
-
-	const [assayTypes] = await Promise.all([
+	const [runs, assayTypes] = await Promise.all([
+		ReagentBatchRecord.find().sort({ createdAt: -1 }).limit(50).lean(),
 		AssayDefinition.find({ isActive: true }, { _id: 1, name: 1, skuCode: 1 }).lean()
 	]);
 
-	// Determine runState
-	const hasActiveRun = !!activeRun;
-	const runState = {
-		hasActiveRun,
-		stage: hasActiveRun ? statusToStage(activeRun.status) : null,
-		assayTypeName: activeRun?.assayType?.name ?? null,
-		cartridgeCount: activeRun?.cartridgeCount ?? activeRun?.cartridgesFilled?.length ?? 0,
-		runStartTime: activeRun?.runStartTime ?? null,
-		runEndTime: activeRun?.runEndTime ?? null
-	};
+	// Find the most recent active run
+	const activeRun = runs.find((r: any) => !['completed', 'cancelled', 'aborted'].includes(r.status));
 
-	// Get tubes for current run
-	const tubes = (activeRun?.tubeRecords ?? []).map((t: any) => ({
-		wellPosition: t.wellPosition ?? 0,
-		reagentName: t.reagentName ?? '',
-		sourceLotId: t.sourceLotId ?? null,
-		transferTubeId: t.transferTubeId ?? null,
-		preparedAt: t.preparedAt ?? null
-	}));
+	const runState: {
+		hasActiveRun: boolean;
+		stage: string | null;
+		assayTypeName: string | null;
+		cartridgeCount: number;
+		runStartTime: number | null;
+		runEndTime: number | null;
+	} = activeRun
+		? {
+				hasActiveRun: true,
+				stage: activeRun.status ?? 'Running',
+				assayTypeName: (activeRun as any).assayType?.name ?? null,
+				cartridgeCount: (activeRun as any).cartridgeCount ?? 0,
+				runStartTime: (activeRun as any).runStartTime
+					? new Date((activeRun as any).runStartTime).getTime()
+					: null,
+				runEndTime: (activeRun as any).runEndTime
+					? new Date((activeRun as any).runEndTime).getTime()
+					: null
+			}
+		: { hasActiveRun: false, stage: null, assayTypeName: null, cartridgeCount: 0, runStartTime: null, runEndTime: null };
 
-	// Get cartridges for current run
-	let cartridges: any[] = [];
-	if (activeRun?.cartridgesFilled?.length) {
-		const cartridgeIds = activeRun.cartridgesFilled.map((c: any) => c.cartridgeId);
-		const cartridgeRecords = await CartridgeRecord.find(
-			{ _id: { $in: cartridgeIds } },
-			{ _id: 1, currentPhase: 1, 'topSeal.batchId': 1 }
-		).lean();
-		const crMap = new Map((cartridgeRecords as any[]).map((c: any) => [c._id, c]));
-
-		cartridges = activeRun.cartridgesFilled.map((cf: any) => {
-			const cr = crMap.get(cf.cartridgeId);
-			return {
-				id: cf.cartridgeId,
-				deckPosition: cf.deckPosition ?? 0,
-				inspectionStatus: cf.inspectionStatus ?? 'Pending',
+	// Get cartridges for the active run
+	const cartridges: Array<{
+		cartridgeId: string;
+		barcode: string;
+		inspectionStatus: string | null;
+		inspectionReason: string | null;
+		topSealBatchId: string | null;
+		inspectedBy: string | null;
+	}> = activeRun
+		? ((activeRun as any).cartridgesFilled ?? []).map((cf: any) => ({
+				cartridgeId: cf.cartridgeId ?? '',
+				barcode: cf.barcode ?? '',
+				inspectionStatus: cf.inspectionStatus ?? null,
 				inspectionReason: cf.inspectionReason ?? null,
-				inspectedAt: cf.inspectedAt ?? null,
-				topSealBatchId: cr?.topSeal?.batchId ?? null
-			};
-		});
-	}
-
-	// Current seal batch
-	const currentSealBatch = activeRun?.topSeal?.status === 'completed' ? {
-		topSealLotId: activeRun.topSeal.topSealLotId ?? null,
-		firstScanTime: activeRun.topSeal.firstScanTime ?? null,
-		cartridgeCount: activeRun.topSeal.cartridgeCount ?? 0
-	} : null;
-
-	// Rejection codes (static list)
-	const rejectionCodes = [
-		{ code: 'visual_defect', label: 'Visual Defect' },
-		{ code: 'fill_error', label: 'Fill Error' },
-		{ code: 'contamination', label: 'Contamination' },
-		{ code: 'seal_defect', label: 'Seal Defect' },
-		{ code: 'other', label: 'Other' }
-	];
-
-	// Reagent definitions from active assay
-	let reagentDefinitions: string[] = [];
-	if (activeRun?.assayType?._id) {
-		const assay = await AssayDefinition.findById(activeRun.assayType._id).lean() as any;
-		if (assay?.reagents) {
-			reagentDefinitions = assay.reagents
-				.filter((r: any) => r.isActive !== false)
-				.sort((a: any, b: any) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
-				.map((r: any) => r.reagentName ?? '');
-		}
-	}
-
-	// Check if robot is blocked by wax filling
-	let robotBlocked: { runId: string } | null = null;
-	if (robotId) {
-		const waxRun = await WaxFillingRun?.findOne?.({
-			'robot._id': robotId,
-			status: 'running',
-			finalizedAt: { $exists: false }
-		}).lean() as any;
-		if (waxRun) {
-			robotBlocked = { runId: waxRun._id };
-		}
-	}
+				topSealBatchId: cf.topSealBatchId ?? null,
+				inspectedBy: cf.inspectedBy?.username ?? null
+			}))
+		: [];
 
 	return {
-		robotId,
-		activeRunId: activeRun?._id ?? null,
-		runState,
-		assayTypes: (assayTypes as any[]).map((a: any) => ({
+		runs: runs.map((r: any) => ({
+			id: r._id,
+			runId: r._id,
+			runNumber: r.runNumber ?? r._id,
+			robotId: r.robot?._id ?? null,
+			robotName: r.robot?.name ?? null,
+			status: r.status ?? null,
+			stage: r.status ?? null,
+			assayTypeId: r.assayType?._id ?? null,
+			assayTypeName: r.assayType?.name ?? null,
+			cartridgeCount: r.cartridgeCount ?? r.cartridgesFilled?.length ?? 0,
+			qaqcCount: (r.cartridgesFilled ?? []).filter((cf: any) => cf.inspectionStatus === 'Accepted').length,
+			qaqcCartridgeIds: (r.cartridgesFilled ?? [])
+				.filter((cf: any) => cf.inspectionStatus === 'Accepted')
+				.map((cf: any) => cf.cartridgeId),
+			startTime: r.runStartTime ?? null,
+			endTime: r.runEndTime ?? null,
+			createdAt: r.createdAt
+		})),
+		assayTypes: assayTypes.map((a: any) => ({
 			id: a._id, name: a.name, skuCode: a.skuCode ?? null
 		})),
-		reagentDefinitions,
-		tubes,
+		runState,
+		activeRunId: activeRun ? (activeRun as any)._id : null,
+		robotId: activeRun ? (activeRun as any).robot?._id ?? '' : '',
+		robotBlocked: null as { runId: string | null } | null,
+		reagentDefinitions: [] as Array<{
+			id: string;
+			reagentName: string;
+			wellPosition: number | null;
+			volumeMicroliters: number | null;
+		}>,
 		cartridges,
-		rejectionCodes,
-		currentSealBatch,
-		robotBlocked
+		currentSealBatch: null as {
+			batchId: string;
+			firstScanTime: string | null;
+			cartridgeIds: string[];
+		} | null,
+		rejectionCodes: [] as Array<{ id: string; code: string; label: string }>,
+		tubes: [] as Array<{ id: string; reagentName: string; volume: number }>
 	};
 };
 
