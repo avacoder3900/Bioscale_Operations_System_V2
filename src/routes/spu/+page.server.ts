@@ -78,8 +78,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			name: b.name ?? '',
 			expirationDate: b.expirationDate
 		})),
-		syncErrorDetail: null,
-		costBreakdown: null,
+		syncErrorDetail: null as { message: string; code?: string } | null,
+		costBreakdown: null as {
+			materialSubtotal: number;
+			laborSubtotal: number;
+			lineItems: { partName: string; materialCost: number; laborCost: number }[];
+		} | null,
 		activeRuns: activeRuns.map((r: any) => ({
 			id: r._id,
 			runNumber: r.runNumber ?? '',
@@ -92,7 +96,36 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		stateCounts,
 		stateFilter,
 		fieldHints: { batchRecommended: true, ownerRecommended: false },
-		fleetSummary: null,
+		fleetSummary: (() => {
+			const spuList = spus.map((s: any) => ({
+				id: s._id,
+				udi: s.udi,
+				status: s.status ?? 'draft',
+				deviceState: s.deviceState ?? '',
+				owner: s.owner ?? null,
+				ownerNotes: s.ownerNotes ?? null,
+				batchId: s.batch?._id ?? null,
+				batchNumber: s.batch?.batchNumber ?? null,
+				createdAt: s.createdAt,
+				createdByUsername: userMap.get(s.createdBy) ?? null,
+				assignmentType: s.assignment?.type ?? null,
+				assignmentCustomerId: s.assignment?.customer?._id ?? null,
+				customerName: s.assignment?.customer?.name ?? null,
+				qcStatus: s.qcStatus ?? 'pending',
+				qcDocumentUrl: s.qcDocumentUrl ?? null,
+				assemblyStatus: s.assemblyStatus ?? 'created'
+			}));
+			const rnd = spuList.filter((s) => s.assignmentType === 'rnd');
+			const manufacturing = spuList.filter((s) => s.assignmentType === 'manufacturing');
+			const unassigned = spuList.filter((s) => !s.assignmentType);
+			const customerGroups = customers
+				.map((c: any) => ({
+					customer: { id: c._id, name: c.name ?? '', customerType: c.customerType ?? '' },
+					spus: spuList.filter((s) => s.assignmentCustomerId === c._id)
+				}))
+				.filter((g) => g.spus.length > 0);
+			return { rnd, manufacturing, customers: customerGroups, unassigned };
+		})(),
 		activeCustomers: customers.map((c: any) => ({
 			id: c._id,
 			name: c.name ?? '',

@@ -16,7 +16,7 @@ const assayDefinitionSchema = new Schema({
 	description: String,
 	skuCode: { type: String, required: true },
 	duration: Number,
-	bcode: Buffer,
+	bcode: Schema.Types.Buffer,
 	bcodeLength: Number,
 	checksum: Number,
 	isActive: { type: Boolean, default: true },
@@ -39,7 +39,7 @@ const assayDefinitionSchema = new Schema({
 
 	versionHistory: [{
 		version: Number, previousName: String, previousDescription: String,
-		previousBcode: Buffer, previousBcodeLength: Number, previousChecksum: Number,
+		previousBcode: Schema.Types.Buffer, previousBcodeLength: Number, previousChecksum: Number,
 		previousDuration: Number, previousMetadata: Schema.Types.Mixed,
 		changedBy: operatorRef, changedAt: Date, changeNotes: String
 	}],

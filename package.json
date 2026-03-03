@@ -20,6 +20,7 @@
     "@tailwindcss/typography": "^0.5.19",
     "@tailwindcss/vite": "^4.2.1",
     "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^25.3.3",
     "dotenv": "^17.3.1",
     "mdsvex": "^0.12.6",
     "prettier": "^3.8.1",

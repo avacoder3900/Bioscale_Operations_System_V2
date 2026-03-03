@@ -103,13 +103,13 @@ userSchema.index({ 'trainingRecords.documentId': 1 });
 
 // Sacred document — users use deactivation pattern, not finalizedAt
 // Don't apply standard sacred middleware (no finalizedAt), but block deletes
-userSchema.pre('deleteOne', function (next) {
+userSchema.pre('deleteOne', function (next: (err?: Error) => void) {
 	return next(new Error('User documents cannot be deleted — deactivate instead'));
 });
-userSchema.pre('deleteMany', function (next) {
+userSchema.pre('deleteMany', function (next: (err?: Error) => void) {
 	return next(new Error('User documents cannot be deleted — deactivate instead'));
 });
-userSchema.pre('findOneAndDelete', function (next) {
+userSchema.pre('findOneAndDelete', function (next: (err?: Error) => void) {
 	return next(new Error('User documents cannot be deleted — deactivate instead'));
 });
 

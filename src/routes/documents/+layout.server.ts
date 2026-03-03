@@ -6,7 +6,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 
 	return {
-		user: locals.user,
+		user: { ...locals.user, id: (locals.user as any)._id } as typeof locals.user & { id: string },
 		permissions: {
 			canRead: hasPermission(locals.user, 'document:read'),
 			canWrite: hasPermission(locals.user, 'document:write'),

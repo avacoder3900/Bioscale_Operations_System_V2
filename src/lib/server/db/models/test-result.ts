@@ -7,7 +7,7 @@ const testResultSchema = new Schema({
 	startTime: Number, duration: Number,
 	astep: Number, atime: Number, again: Number,
 	numberOfReadings: Number, baselineScans: Number, testScans: Number,
-	checksum: Number, rawRecord: Buffer,
+	checksum: Number, rawRecord: Schema.Types.Buffer,
 	status: { type: String, enum: ['uploaded', 'processing', 'completed', 'failed'] },
 	metadata: Schema.Types.Mixed,
 	readings: [{
