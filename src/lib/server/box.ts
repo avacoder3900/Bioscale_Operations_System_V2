@@ -152,7 +152,9 @@ export async function downloadFile(fileId: string): Promise<Response> {
 		redirect: 'follow'
 	});
 	if (!res.ok) {
-		throw new Error(`Box download failed: ${res.status}`);
+		const body = await res.text().catch(() => '');
+		console.error(`[box] Download failed: ${res.status} ${res.statusText} — ${body}`);
+		throw new Error(`Box download failed: ${res.status} ${res.statusText} — ${body}`);
 	}
 	return res;
 }
