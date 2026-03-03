@@ -162,8 +162,8 @@
 				<p class="tron-text-muted mb-6">
 					Connect to Box.com to browse files in the "{data.targetFolder}" folder.
 				</p>
-				<a href="/spu/bom/settings">
-					<TronButton variant="primary">Go to Box Settings</TronButton>
+				<a href="/api/box/connect">
+					<TronButton variant="primary">Connect to Box.com</TronButton>
 				</a>
 			</div>
 		</TronCard>
