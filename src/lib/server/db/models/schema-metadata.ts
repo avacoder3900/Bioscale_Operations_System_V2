@@ -3,7 +3,9 @@ import { generateId } from '../utils.js';
 
 const schemaMetadataSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
-	tableName: String, businessName: String, businessPurpose: String,
+	collectionName: String,
+	tableName: String, // deprecated — kept for backward compat
+	businessName: String, businessPurpose: String,
 	businessDomain: String, keyRelationships: Schema.Types.Mixed,
 	commonQueries: Schema.Types.Mixed, businessConcepts: String
 }, { timestamps: true });

@@ -1,20 +1,13 @@
-import { json, error } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
+import { json } from '@sveltejs/kit';
+import { requireAgentApiKey } from '$lib/server/api-auth';
 import {
 	connectDB, CartridgeRecord, ProductionRun, LotRecord,
 	ManufacturingMaterial, ShippingLot, ShippingPackage, TestResult
 } from '$lib/server/db';
 import type { RequestHandler } from './$types';
 
-function requireApiKey(request: Request) {
-	const key = request.headers.get('x-api-key') || request.headers.get('x-agent-api-key') || request.headers.get('authorization')?.replace('Bearer ', '');
-	if (!env.AGENT_API_KEY || key !== env.AGENT_API_KEY) {
-		throw error(401, 'Invalid or missing API key');
-	}
-}
-
 export const GET: RequestHandler = async ({ request, url }) => {
-	requireApiKey(request);
+	requireAgentApiKey(request);
 	await connectDB();
 
 	const metric = url.searchParams.get('metric') || 'summary';
@@ -27,25 +20,31 @@ export const GET: RequestHandler = async ({ request, url }) => {
 		]);
 
 		return json({
-			activeRuns,
-			totalCartridges,
-			recentRuns: recentRuns.map((r: any) => ({
-				id: r._id, status: r.status, createdAt: r.createdAt
-			}))
+			success: true,
+			data: {
+				activeRuns,
+				totalCartridges,
+				recentRuns: recentRuns.map((r: any) => ({
+					id: r._id, status: r.status, createdAt: r.createdAt
+				}))
+			}
 		});
 	}
 
 	if (metric === 'inventory') {
 		const materials = await ManufacturingMaterial.find().lean();
 		return json({
-			materials: materials.map((m: any) => ({
-				id: m._id,
-				name: m.name,
-				currentQuantity: m.currentQuantity,
-				minimumQuantity: m.minimumQuantity,
-				unit: m.unit,
-				isLow: (m.currentQuantity ?? 0) <= (m.minimumQuantity ?? 0)
-			}))
+			success: true,
+			data: {
+				materials: materials.map((m: any) => ({
+					id: m._id,
+					name: m.name,
+					currentQuantity: m.currentQuantity,
+					minimumQuantity: m.minimumQuantity,
+					unit: m.unit,
+					isLow: (m.currentQuantity ?? 0) <= (m.minimumQuantity ?? 0)
+				}))
+			}
 		});
 	}
 
@@ -58,13 +57,16 @@ export const GET: RequestHandler = async ({ request, url }) => {
 		]);
 
 		return json({
-			totalTests,
-			passedTests,
-			failedTests,
-			passRate: totalTests > 0 ? ((passedTests / totalTests) * 100).toFixed(1) : '0',
-			recentResults: recentResults.map((r: any) => ({
-				id: r._id, status: r.status, deviceId: r.deviceId, createdAt: r.createdAt
-			}))
+			success: true,
+			data: {
+				totalTests,
+				passedTests,
+				failedTests,
+				passRate: totalTests > 0 ? ((passedTests / totalTests) * 100).toFixed(1) : '0',
+				recentResults: recentResults.map((r: any) => ({
+					id: r._id, status: r.status, deviceId: r.deviceId, createdAt: r.createdAt
+				}))
+			}
 		});
 	}
 
@@ -75,7 +77,10 @@ export const GET: RequestHandler = async ({ request, url }) => {
 			ShippingPackage.countDocuments()
 		]);
 
-		return json({ openLots, shippedPackages, totalPackages });
+		return json({
+			success: true,
+			data: { openLots, shippedPackages, totalPackages }
+		});
 	}
 
 	// Default summary
@@ -87,12 +92,15 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	]);
 
 	return json({
-		summary: {
-			cartridges: cartridgeCount,
-			productionRuns: runCount,
-			materials: materialCount,
-			lots: lotCount,
-			timestamp: new Date().toISOString()
+		success: true,
+		data: {
+			summary: {
+				cartridges: cartridgeCount,
+				productionRuns: runCount,
+				materials: materialCount,
+				lots: lotCount,
+				timestamp: new Date().toISOString()
+			}
 		}
 	});
 };
