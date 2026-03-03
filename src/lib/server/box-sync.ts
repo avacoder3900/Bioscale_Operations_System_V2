@@ -68,25 +68,10 @@ export async function syncPartsFromBox(): Promise<SyncResult> {
 	let fileName = '';
 
 	if (!fileId) {
-		// Search for BOM.xlsx (the target sync file)
-		console.log('[box-sync] Searching Box for "BOM.xlsx"...');
-		const results = await searchFiles('BOM');
-		console.log(`[box-sync] Search returned ${results.length} result(s):`, results.map(r => `${r.name} (${r.type}, id=${r.id})`));
-
-		if (results.length === 0) {
-			throw new Error('Could not find "BOM.xlsx" file in Box. Make sure the file exists and is accessible.');
-		}
-
-		// Prefer exact match on BOM.xlsx, then any Excel file
-		const excelFile = results.find(r =>
-			r.name.toLowerCase() === 'bom.xlsx'
-		) ?? results.find(r =>
-			r.name.toLowerCase().endsWith('.xlsx') ||
-			r.name.toLowerCase().endsWith('.xls')
-		) ?? results[0];
-
-		fileId = excelFile.id;
-		fileName = excelFile.name;
+		// Default to the known Box file ID for the BOM spreadsheet
+		// https://app.box.com/file/1990254823135
+		fileId = '1990254823135';
+		fileName = 'BOM.xlsx (default)';
 	} else {
 		fileName = `(cached file id: ${fileId})`;
 	}
