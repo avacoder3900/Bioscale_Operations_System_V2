@@ -49,6 +49,7 @@ export { ApprovalRequest } from './approval-request.js';
 export { SystemDependency } from './system-dependency.js';
 export { Integration } from './integration.js';
 export { ParticleDevice } from './particle-device.js';
+export { WorkflowViolation } from './workflow-violation.js';
 
 // Tier 3: Immutable Logs
 export { AuditLog } from './audit-log.js';
