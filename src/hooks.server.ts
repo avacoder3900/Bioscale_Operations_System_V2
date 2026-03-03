@@ -2,7 +2,7 @@ import type { Handle } from '@sveltejs/kit';
 import { redirect } from '@sveltejs/kit';
 import * as auth from '$lib/server/auth';
 
-const PUBLIC_PATHS = ['/login', '/invite/accept', '/demo/lucia/login'];
+const PUBLIC_PATHS = ['/login', '/invite/accept'];
 
 const handleAuth: Handle = async ({ event, resolve }) => {
 	const sessionToken = event.cookies.get(auth.sessionCookieName);

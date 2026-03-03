@@ -33,7 +33,6 @@ export { OpentronsRobot } from './opentrons-robot.js';
 export { Consumable } from './consumable.js';
 export { BomItem } from './bom-item.js';
 export { PartDefinition } from './part-definition.js';
-export { BomColumnMapping } from './bom-column-mapping.js';
 export { CartridgeGroup } from './cartridge-group.js';
 export { LabCartridge } from './lab-cartridge.js';
 export { FirmwareDevice } from './firmware-device.js';

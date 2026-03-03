@@ -77,17 +77,6 @@
 		</div>
 	</div>
 
-	{#if form?.error}
-		<div class="rounded border border-[var(--color-tron-red)] bg-[rgba(255,51,102,0.1)] p-3">
-			<p class="text-sm text-[var(--color-tron-red)]">{form.error}</p>
-		</div>
-	{/if}
-
-	{#if form?.success}
-		<div class="rounded border border-[var(--color-tron-green)] bg-[rgba(0,255,136,0.1)] p-3">
-			<p class="text-sm text-[var(--color-tron-green)]">{form.message}</p>
-		</div>
-	{/if}
 
 	<!-- Stats Cards -->
 	<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

@@ -62,5 +62,5 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 		});
 	}
 
-	throw redirect(303, '/spu/documents/box');
+	throw redirect(303, '/spu/parts');
 };
