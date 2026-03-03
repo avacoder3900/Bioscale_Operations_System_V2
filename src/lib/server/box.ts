@@ -92,12 +92,15 @@ async function getAccessToken(): Promise<string> {
 		throw new Error('Box integration not configured');
 	}
 
-	// Refresh if expired or expiring within 5 minutes
-	if (integ.expiresAt && new Date(integ.expiresAt).getTime() < Date.now() + 5 * 60 * 1000) {
-		if (integ.refreshToken) {
-			return refreshAccessToken(integ);
+	// Refresh if expired, expiring soon, or no expiresAt recorded
+	const needsRefresh = !integ.expiresAt || new Date(integ.expiresAt).getTime() < Date.now() + 5 * 60 * 1000;
+	if (needsRefresh && integ.refreshToken) {
+		try {
+			return await refreshAccessToken(integ);
+		} catch (e) {
+			// If refresh fails and we still have a token, try it anyway
+			console.warn('[box] Token refresh failed, trying existing token:', e);
 		}
-		throw new Error('Box token expired and no refresh token available');
 	}
 
 	return integ.accessToken;
@@ -112,6 +115,29 @@ async function boxFetch(path: string, options: RequestInit = {}, base = BOX_API_
 			...options.headers
 		}
 	});
+
+	// If 401, try one more time with a forced refresh
+	if (res.status === 401) {
+		await connectDB();
+		const integ = await Integration.findOne({ type: 'box' }).lean() as any;
+		if (integ?.refreshToken) {
+			console.log('[box] Got 401, attempting token refresh...');
+			const newToken = await refreshAccessToken(integ);
+			const retry = await fetch(`${base}${path}`, {
+				...options,
+				headers: {
+					Authorization: `Bearer ${newToken}`,
+					...options.headers
+				}
+			});
+			if (!retry.ok) {
+				const body = await retry.json().catch(() => ({ message: retry.statusText }));
+				throw new Error(body.message || `Box API error: ${retry.status} (after refresh)`);
+			}
+			return retry;
+		}
+	}
+
 	if (!res.ok) {
 		const body = await res.json().catch(() => ({ message: res.statusText }));
 		throw new Error(body.message || `Box API error: ${res.status}`);
@@ -147,10 +173,25 @@ export async function listFolder(folderId: string): Promise<{ items: BoxItem[]; 
 /** Download a file — returns a Response with the file stream */
 export async function downloadFile(fileId: string): Promise<Response> {
 	const token = await getAccessToken();
-	const res = await fetch(`${BOX_API_BASE}/files/${fileId}/content`, {
+	let res = await fetch(`${BOX_API_BASE}/files/${fileId}/content`, {
 		headers: { Authorization: `Bearer ${token}` },
 		redirect: 'follow'
 	});
+
+	// Retry with refreshed token on 401
+	if (res.status === 401) {
+		await connectDB();
+		const integ = await Integration.findOne({ type: 'box' }).lean() as any;
+		if (integ?.refreshToken) {
+			console.log('[box] Download got 401, refreshing token...');
+			const newToken = await refreshAccessToken(integ);
+			res = await fetch(`${BOX_API_BASE}/files/${fileId}/content`, {
+				headers: { Authorization: `Bearer ${newToken}` },
+				redirect: 'follow'
+			});
+		}
+	}
+
 	if (!res.ok) {
 		const body = await res.text().catch(() => '');
 		console.error(`[box] Download failed: ${res.status} ${res.statusText} — ${body}`);
