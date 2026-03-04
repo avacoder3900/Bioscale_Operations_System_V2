@@ -1,5 +1,5 @@
 import { redirect, fail } from '@sveltejs/kit';
-import { connectDB, WaxFillingRun, CartridgeRecord, AssayDefinition, Consumable, ManufacturingSettings } from '$lib/server/db';
+import { connectDB, WaxFillingRun, CartridgeRecord, AssayDefinition, Consumable, ManufacturingSettings, generateId } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -39,12 +39,21 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const robotId = data.get('robotId') as string;
 		const robotName = data.get('robotName') as string;
+		const deckId = (data.get('deckId') as string) || undefined;
+
+		// FIX-05: Validate deckId if provided
+		if (deckId) {
+			const deck = await Consumable.findOne({ _id: deckId, type: 'deck' }).lean();
+			if (!deck) return fail(400, { error: `Deck '${deckId}' not found. Register it in Consumables first.` });
+			if ((deck as any).status === 'retired') return fail(400, { error: `Deck '${deckId}' is retired and cannot be used.` });
+		}
 
 		const run = await WaxFillingRun.create({
 			robot: { _id: robotId, name: robotName },
 			operator: { _id: locals.user._id, username: locals.user.username },
 			status: 'setup',
 			cartridgeIds: [],
+			deckId,
 			setupTimestamp: new Date()
 		});
 
@@ -101,6 +110,45 @@ export const actions: Actions = {
 			await CartridgeRecord.bulkWrite(bulkOps);
 		}
 
+		// FIX-05: Update Consumable usage logs for deck and tube used in this run
+		const cartridgeCount = run?.cartridgeIds?.length ?? 0;
+		const operatorRef = { _id: locals.user._id, username: locals.user.username };
+
+		if (run?.deckId) {
+			await Consumable.findByIdAndUpdate(run.deckId, {
+				$set: { lastUsed: now },
+				$push: {
+					usageLog: {
+						_id: generateId(),
+						usageType: 'run_complete',
+						runId: run._id,
+						quantityChanged: cartridgeCount,
+						operator: operatorRef,
+						notes: `Wax filling run complete — ${cartridgeCount} cartridges filled`,
+						createdAt: now
+					}
+				}
+			});
+		}
+
+		if (run?.waxTubeId) {
+			await Consumable.findByIdAndUpdate(run.waxTubeId, {
+				$set: { lastUsedAt: now },
+				$inc: { totalCartridgesFilled: cartridgeCount, totalRunsUsed: 1 },
+				$push: {
+					usageLog: {
+						_id: generateId(),
+						usageType: 'wax_run',
+						runId: run._id,
+						quantityChanged: cartridgeCount,
+						operator: operatorRef,
+						notes: `Wax filling run complete — ${cartridgeCount} cartridges`,
+						createdAt: now
+					}
+				}
+			});
+		}
+
 		return { success: true };
 	},
 
@@ -125,6 +173,14 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
 		const cartridgeId = data.get('cartridgeId') as string;
+		const coolingTrayId = (data.get('coolingTrayId') as string) || undefined;
+
+		// FIX-05: Validate cooling tray if provided
+		if (coolingTrayId) {
+			const tray = await Consumable.findOne({ _id: coolingTrayId, type: 'cooling_tray' }).lean();
+			if (!tray) return fail(400, { error: `Cooling tray '${coolingTrayId}' not found. Register it in Consumables first.` });
+			if ((tray as any).status === 'retired') return fail(400, { error: `Cooling tray '${coolingTrayId}' is retired.` });
+		}
 
 		// Create CartridgeRecord if it doesn't exist (backing phase)
 		await CartridgeRecord.findOneAndUpdate(
