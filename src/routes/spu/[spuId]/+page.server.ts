@@ -282,17 +282,27 @@ export const actions: Actions = {
 		}
 
 		const oldData = { udi: (spu as any).udi, barcode: (spu as any).barcode };
-		await Spu.updateOne({ _id: params.spuId }, { $set: { udi: newUdi, barcode: newBarcode } });
+		try {
+			await Spu.updateOne({ _id: params.spuId }, { $set: { udi: newUdi, barcode: newBarcode } });
+		} catch (err: any) {
+			console.error('[updateIdentifiers] Update failed:', err.message);
+			return fail(500, { error: err.message || 'Failed to update SPU' });
+		}
 
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'spus',
-			recordId: params.spuId,
-			action: 'UPDATE',
-			oldData,
-			newData: { udi: newUdi, barcode: newBarcode },
-			changedBy: locals.user!.username ?? locals.user!._id
-		});
+		try {
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'spus',
+				recordId: params.spuId,
+				action: 'UPDATE',
+				oldData,
+				newData: { udi: newUdi, barcode: newBarcode },
+				changedBy: locals.user!.username ?? locals.user!._id
+			});
+		} catch (err: any) {
+			console.error('[updateIdentifiers] Audit log failed:', err.message);
+			// Non-critical — don't fail the update
+		}
 
 		return { identifierSuccess: true };
 	}
