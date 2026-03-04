@@ -85,17 +85,34 @@ export async function testConnection(accessToken: string): Promise<{ deviceCount
 }
 
 /**
- * Match Particle devices to SPUs by name === UDI, then update SPU.particleLink
- * with the Particle device ID. Only updates SPUs whose UDI matches a device name.
+ * Extract trailing numeric ID from a device name or UDI.
+ * e.g. "BT-M01-0000-0209" → "0209", "SPU-0209" → "0209"
+ */
+function extractNumericId(name: string): string | null {
+	const match = name.match(/(\d+)$/);
+	return match ? match[1] : null;
+}
+
+/**
+ * Match Particle devices to SPUs by numeric suffix (e.g. BT-M01-0000-0209 ↔ SPU-0209).
+ * Updates SPU.particleLink with the Particle device ID and serial number.
  */
 export async function linkDevicesToSpus(): Promise<{ linked: number; alreadyLinked: number; unmatched: string[]; errors: string[] }> {
 	await connectDB();
 	const { Spu } = await import('$lib/server/db');
 	const devices = await listDevices();
+	const allSpus = await Spu.find({}, { _id: 1, udi: 1, particleLink: 1 }).lean() as any[];
 	const errors: string[] = [];
 	const unmatched: string[] = [];
 	let linked = 0;
 	let alreadyLinked = 0;
+
+	// Build a map of numeric suffix → SPU for fast lookup
+	const spuByNumber = new Map<string, any>();
+	for (const spu of allSpus) {
+		const num = extractNumericId(spu.udi);
+		if (num) spuByNumber.set(num, spu);
+	}
 
 	for (const device of devices) {
 		const deviceName = device.name?.trim();
@@ -104,11 +121,16 @@ export async function linkDevicesToSpus(): Promise<{ linked: number; alreadyLink
 			continue;
 		}
 
-		// Find SPU where udi matches the Particle device name (case-insensitive)
-		const spu = await Spu.findOne({ udi: { $regex: new RegExp(`^${deviceName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } });
+		// Extract numeric suffix from Particle device name
+		const deviceNum = extractNumericId(deviceName);
+		if (!deviceNum) {
+			unmatched.push(`${deviceName} (no numeric ID)`);
+			continue;
+		}
 
+		const spu = spuByNumber.get(deviceNum);
 		if (!spu) {
-			unmatched.push(`${deviceName} (no matching SPU)`);
+			unmatched.push(`${deviceName} (no SPU with number ${deviceNum})`);
 			continue;
 		}
 
