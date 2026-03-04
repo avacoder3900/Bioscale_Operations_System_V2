@@ -1,5 +1,5 @@
-import { redirect } from '@sveltejs/kit';
-import { connectDB, ReagentBatchRecord, AssayDefinition, CartridgeRecord } from '$lib/server/db';
+import { redirect, fail } from '@sveltejs/kit';
+import { connectDB, ReagentBatchRecord, AssayDefinition, CartridgeRecord, Consumable, generateId } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -41,6 +41,14 @@ export const actions: Actions = {
 		const robotName = data.get('robotName') as string;
 		const robotSide = data.get('robotSide') as string;
 		const assayTypeId = data.get('assayTypeId') as string;
+		const deckId = (data.get('deckId') as string) || undefined;
+
+		// FIX-05: Validate deckId if provided
+		if (deckId) {
+			const deck = await Consumable.findOne({ _id: deckId, type: 'deck' }).lean();
+			if (!deck) return fail(400, { error: `Deck '${deckId}' not found. Register it in Consumables first.` });
+			if ((deck as any).status === 'retired') return fail(400, { error: `Deck '${deckId}' is retired and cannot be used.` });
+		}
 
 		let assayRef = null;
 		if (assayTypeId) {
@@ -57,6 +65,7 @@ export const actions: Actions = {
 			status: 'setup',
 			tubeRecords: [],
 			cartridgesFilled: [],
+			deckId,
 			setupTimestamp: new Date()
 		});
 
@@ -135,6 +144,25 @@ export const actions: Actions = {
 				}
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
+		}
+
+		// FIX-05: Update Consumable usage log for deck used in this run
+		if (run?.deckId) {
+			const cartridgeCount = run?.cartridgesFilled?.length ?? 0;
+			await Consumable.findByIdAndUpdate(run.deckId, {
+				$set: { lastUsed: now },
+				$push: {
+					usageLog: {
+						_id: generateId(),
+						usageType: 'run_complete',
+						runId: run._id,
+						quantityChanged: cartridgeCount,
+						operator: { _id: locals.user._id, username: locals.user.username },
+						notes: `Reagent filling run complete — ${cartridgeCount} cartridges filled`,
+						createdAt: now
+					}
+				}
+			});
 		}
 
 		return { success: true };
