@@ -8,6 +8,7 @@
 	let testing = $state(false);
 	let syncing = $state(false);
 	let disconnecting = $state(false);
+	let linking = $state(false);
 
 	function formatDate(date: Date | string | null): string {
 		if (!date) return '—';
@@ -151,6 +152,22 @@
 
 				<form
 					method="POST"
+					action="?/linkToSpus"
+					use:enhance={() => {
+						linking = true;
+						return async ({ update }) => {
+							linking = false;
+							await update();
+						};
+					}}
+				>
+					<TronButton type="submit" variant="primary" disabled={linking} style="min-height: 44px;">
+						{linking ? 'Linking...' : 'Link Devices to SPUs'}
+					</TronButton>
+				</form>
+
+				<form
+					method="POST"
 					action="?/disconnect"
 					use:enhance={() => {
 						disconnecting = true;
@@ -177,6 +194,16 @@
 	{#if form?.success && form?.message}
 		<div class="rounded border border-[var(--color-tron-green)] bg-[rgba(0,255,136,0.1)] p-3">
 			<p class="text-sm text-[var(--color-tron-green)]">{form.message}</p>
+			{#if form?.unmatched?.length}
+				<details class="mt-2">
+					<summary class="tron-text-muted cursor-pointer text-xs">Unmatched devices ({form.unmatched.length})</summary>
+					<ul class="tron-text-muted mt-1 list-inside list-disc text-xs">
+						{#each form.unmatched as name}
+							<li>{name}</li>
+						{/each}
+					</ul>
+				</details>
+			{/if}
 		</div>
 	{/if}
 

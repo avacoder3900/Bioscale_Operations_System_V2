@@ -85,6 +85,60 @@ export async function testConnection(accessToken: string): Promise<{ deviceCount
 }
 
 /**
+ * Match Particle devices to SPUs by name === UDI, then update SPU.particleLink
+ * with the Particle device ID. Only updates SPUs whose UDI matches a device name.
+ */
+export async function linkDevicesToSpus(): Promise<{ linked: number; alreadyLinked: number; unmatched: string[]; errors: string[] }> {
+	await connectDB();
+	const { Spu } = await import('$lib/server/db');
+	const devices = await listDevices();
+	const errors: string[] = [];
+	const unmatched: string[] = [];
+	let linked = 0;
+	let alreadyLinked = 0;
+
+	for (const device of devices) {
+		const deviceName = device.name?.trim();
+		if (!deviceName) {
+			unmatched.push(`Device ${device.id} (no name)`);
+			continue;
+		}
+
+		// Find SPU where udi matches the Particle device name (case-insensitive)
+		const spu = await Spu.findOne({ udi: { $regex: new RegExp(`^${deviceName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } });
+
+		if (!spu) {
+			unmatched.push(`${deviceName} (no matching SPU)`);
+			continue;
+		}
+
+		// Check if already linked to this device
+		if (spu.particleLink?.particleDeviceId === device.id) {
+			alreadyLinked++;
+			continue;
+		}
+
+		try {
+			await Spu.updateOne(
+				{ _id: spu._id },
+				{
+					$set: {
+						'particleLink.particleDeviceId': device.id,
+						'particleLink.particleSerial': device.serial_number ?? null,
+						'particleLink.linkedAt': new Date()
+					}
+				}
+			);
+			linked++;
+		} catch (err) {
+			errors.push(`${deviceName}: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+
+	return { linked, alreadyLinked, unmatched, errors };
+}
+
+/**
  * Sync all devices from Particle Cloud into the local ParticleDevice collection.
  * Upserts by particleDeviceId to keep local DB in sync.
  */

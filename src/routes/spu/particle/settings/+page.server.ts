@@ -1,7 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import { connectDB, Integration, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
-import { testConnection, syncDevices } from '$lib/server/particle';
+import { testConnection, syncDevices, linkDevicesToSpus } from '$lib/server/particle';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -102,6 +102,28 @@ export const actions: Actions = {
 				{ $set: { lastSyncStatus: 'error', lastSyncError: err instanceof Error ? err.message : String(err) } }
 			);
 			return fail(400, { error: `Sync failed: ${err instanceof Error ? err.message : String(err)}` });
+		}
+	},
+
+	linkToSpus: async ({ locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+
+		try {
+			const result = await linkDevicesToSpus();
+			const parts = [];
+			if (result.linked) parts.push(`${result.linked} SPU(s) linked`);
+			if (result.alreadyLinked) parts.push(`${result.alreadyLinked} already linked`);
+			if (result.unmatched.length) parts.push(`${result.unmatched.length} unmatched`);
+			if (result.errors.length) parts.push(`${result.errors.length} error(s)`);
+
+			return {
+				success: true,
+				message: parts.join(', ') + '.',
+				unmatched: result.unmatched
+			};
+		} catch (err) {
+			return fail(400, { error: `Link failed: ${err instanceof Error ? err.message : String(err)}` });
 		}
 	},
 
