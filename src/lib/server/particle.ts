@@ -145,6 +145,7 @@ export async function linkDevicesToSpus(): Promise<{ linked: number; alreadyLink
 				{ _id: spu._id },
 				{
 					$set: {
+						udi: deviceName,
 						'particleLink.particleDeviceId': device.id,
 						'particleLink.particleSerial': device.serial_number ?? null,
 						'particleLink.linkedAt': new Date()
