@@ -49,6 +49,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		spu: {
 			id: s._id,
 			udi: s.udi,
+			barcode: s.barcode ?? null,
 			status: s.status ?? 'draft',
 			deviceState: s.deviceState ?? '',
 			owner: s.owner ?? null,
@@ -259,5 +260,40 @@ export const actions: Actions = {
 
 		await Spu.updateOne({ _id: params.spuId }, { $set: updates });
 		return { success: true };
+	},
+
+	updateIdentifiers: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const newUdi = form.get('udi')?.toString().trim();
+		const newBarcode = form.get('barcode')?.toString().trim() || null;
+
+		if (!newUdi) return fail(400, { error: 'UDI is required' });
+
+		const spu = await Spu.findById(params.spuId);
+		if (!spu) return fail(404, { error: 'SPU not found' });
+		if ((spu as any).finalizedAt) return fail(400, { error: 'SPU is finalized and cannot be modified' });
+
+		// Check UDI uniqueness if changed
+		if (newUdi !== (spu as any).udi) {
+			const existing = await Spu.findOne({ udi: newUdi, _id: { $ne: params.spuId } });
+			if (existing) return fail(400, { error: 'Another SPU already has this UDI' });
+		}
+
+		const oldData = { udi: (spu as any).udi, barcode: (spu as any).barcode };
+		await Spu.updateOne({ _id: params.spuId }, { $set: { udi: newUdi, barcode: newBarcode } });
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'spus',
+			recordId: params.spuId,
+			action: 'UPDATE',
+			oldData,
+			newData: { udi: newUdi, barcode: newBarcode },
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+
+		return { identifierSuccess: true };
 	}
 };

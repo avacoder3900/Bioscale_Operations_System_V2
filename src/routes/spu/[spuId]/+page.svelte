@@ -9,6 +9,10 @@
 	let showStateForm = $state(false);
 	let updatingState = $state(false);
 	let showRenameForm = $state(false);
+	let editingIdentifiers = $state(false);
+	let savingIdentifiers = $state(false);
+	let editUdi = $state(data.spu.udi);
+	let editBarcode = $state(data.spu.barcode ?? '');
 	let pinging = $state(false);
 	let unlinking = $state(false);
 	let renaming = $state(false);
@@ -184,9 +188,59 @@
 					<dt class="tron-text-muted">Device ID</dt>
 					<dd class="tron-text-primary font-mono text-sm break-all">{data.spu.id}</dd>
 				</div>
-				<div class="flex justify-between">
+				<div class="flex justify-between items-start">
 					<dt class="tron-text-muted">UDI</dt>
 					<dd class="tron-text-primary font-mono">{data.spu.udi}</dd>
+				</div>
+				<div class="flex justify-between items-start">
+					<dt class="tron-text-muted">Barcode</dt>
+					<dd class="tron-text-primary font-mono">{data.spu.barcode ?? '—'}</dd>
+				</div>
+				<div>
+					{#if !editingIdentifiers}
+						<TronButton variant="ghost" onclick={() => { editingIdentifiers = true; editUdi = data.spu.udi; editBarcode = data.spu.barcode ?? ''; }} style="font-size: 0.75rem; padding: 4px 8px;">
+							✏️ Edit UDI / Barcode
+						</TronButton>
+					{:else}
+						<form
+							method="POST"
+							action="?/updateIdentifiers"
+							use:enhance={() => {
+								savingIdentifiers = true;
+								return async ({ result, update }) => {
+									savingIdentifiers = false;
+									if (result.type === 'success') {
+										editingIdentifiers = false;
+									}
+									await update();
+								};
+							}}
+							class="space-y-3 mt-2 rounded border border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.03)] p-3"
+						>
+							<div>
+								<label for="edit-udi" class="tron-label text-xs">UDI</label>
+								<input id="edit-udi" name="udi" type="text" class="tron-input text-sm" bind:value={editUdi} required style="min-height: 38px;" />
+							</div>
+							<div>
+								<label for="edit-barcode" class="tron-label text-xs">Barcode</label>
+								<input id="edit-barcode" name="barcode" type="text" class="tron-input text-sm" bind:value={editBarcode} placeholder="Scan or enter barcode" style="min-height: 38px;" />
+							</div>
+							<div class="flex gap-2">
+								<TronButton variant="primary" type="submit" disabled={savingIdentifiers} style="font-size: 0.75rem; padding: 4px 12px;">
+									{savingIdentifiers ? 'Saving...' : 'Save'}
+								</TronButton>
+								<TronButton variant="ghost" onclick={() => { editingIdentifiers = false; }} style="font-size: 0.75rem; padding: 4px 12px;">
+									Cancel
+								</TronButton>
+							</div>
+							{#if form?.error && !form?.identifierSuccess}
+								<p class="text-xs text-red-400">{form.error}</p>
+							{/if}
+							{#if form?.identifierSuccess}
+								<p class="text-xs text-green-400">✓ Updated</p>
+							{/if}
+						</form>
+					{/if}
 				</div>
 				<div class="flex justify-between">
 					<dt class="tron-text-muted">Batch</dt>
