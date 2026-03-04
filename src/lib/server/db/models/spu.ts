@@ -65,7 +65,7 @@ const spuSchema = new Schema({
 		assignedAt: Date, assignedBy: operatorRef
 	},
 
-	status: { type: String, enum: ['draft', 'assembling', 'assembled', 'validating', 'validated', 'assigned', 'deployed', 'retired', 'voided'] },
+	status: { type: String, enum: ['draft', 'assembling', 'assembled', 'validating', 'validated', 'assigned', 'deployed', 'servicing', 'retired', 'voided'] },
 	deviceState: String,
 	assemblyStatus: { type: String, enum: ['created', 'in_progress', 'completed'] },
 	qcStatus: { type: String, enum: ['pending', 'passed', 'failed'] },
