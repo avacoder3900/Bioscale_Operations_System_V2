@@ -602,11 +602,16 @@
 						value={data.spu.deviceState}
 						style="min-height: 44px;"
 					>
-						<option value="assembly">Assembly</option>
-						<option value="production">Production</option>
-						<option value="development_a">Dev A</option>
-						<option value="development_b">Dev B</option>
-						<option value="out_of_service">Out of Service</option>
+						<option value="draft">Draft</option>
+						<option value="assembling">Assembling</option>
+						<option value="assembled">Assembled</option>
+						<option value="validating">Validating</option>
+						<option value="validated">Validated</option>
+						<option value="assigned">Assigned</option>
+						<option value="deployed">Deployed</option>
+						<option value="servicing">Servicing</option>
+						<option value="retired">Retired</option>
+						<option value="voided">Voided</option>
 					</select>
 				</div>
 

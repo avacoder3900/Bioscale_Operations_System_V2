@@ -142,11 +142,16 @@
 
 	const stateTabs = [
 		{ key: null, label: 'All' },
-		{ key: 'production', label: 'Production' },
-		{ key: 'development_a', label: 'Dev A' },
-		{ key: 'development_b', label: 'Dev B' },
-		{ key: 'assembly', label: 'Assembly' },
-		{ key: 'out_of_service', label: 'Out of Service' }
+		{ key: 'draft', label: 'Draft' },
+		{ key: 'assembling', label: 'Assembling' },
+		{ key: 'assembled', label: 'Assembled' },
+		{ key: 'validating', label: 'Validating' },
+		{ key: 'validated', label: 'Validated' },
+		{ key: 'assigned', label: 'Assigned' },
+		{ key: 'deployed', label: 'Deployed' },
+		{ key: 'servicing', label: 'Servicing' },
+		{ key: 'retired', label: 'Retired' },
+		{ key: 'voided', label: 'Voided' }
 	] as const;
 
 	let activeTab = $derived(data.stateFilter);
@@ -404,11 +409,16 @@
 							disabled={registering}
 							style="min-height: 44px;"
 						>
-							<option value="assembly">Assembly</option>
-							<option value="production">Production</option>
-							<option value="development_a">Dev A</option>
-							<option value="development_b">Dev B</option>
-							<option value="out_of_service">Out of Service</option>
+							<option value="draft">Draft</option>
+							<option value="assembling">Assembling</option>
+							<option value="assembled">Assembled</option>
+							<option value="validating">Validating</option>
+							<option value="validated">Validated</option>
+							<option value="assigned">Assigned</option>
+							<option value="deployed">Deployed</option>
+							<option value="servicing">Servicing</option>
+							<option value="retired">Retired</option>
+							<option value="voided">Voided</option>
 						</select>
 					</div>
 
@@ -1200,11 +1210,16 @@
 					style="min-height: 44px;"
 				>
 					<option value="">Change State...</option>
-					<option value="production">Production</option>
-					<option value="development_a">Dev A</option>
-					<option value="development_b">Dev B</option>
-					<option value="assembly">Assembly</option>
-					<option value="out_of_service">Out of Service</option>
+					<option value="draft">Draft</option>
+					<option value="assembling">Assembling</option>
+					<option value="assembled">Assembled</option>
+					<option value="validating">Validating</option>
+					<option value="validated">Validated</option>
+					<option value="assigned">Assigned</option>
+					<option value="deployed">Deployed</option>
+					<option value="servicing">Servicing</option>
+					<option value="retired">Retired</option>
+					<option value="voided">Voided</option>
 				</select>
 				<TronButton
 					type="submit"
