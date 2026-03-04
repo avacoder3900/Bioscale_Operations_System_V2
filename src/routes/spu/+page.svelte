@@ -28,7 +28,7 @@
 
 	// Quick Status Update state
 	let statusScanInput = $state('');
-	let statusUpdateSpu = $state<{ id: string; udi: string; status: string } | null>(null);
+	let statusUpdateSpu = $state<{ id: string; udi: string; barcode: string | null; status: string } | null>(null);
 	let statusUpdateNew = $state('');
 	let statusUpdating = $state(false);
 	let statusUpdateError = $state('');
@@ -54,12 +54,13 @@
 		if (!query) return;
 		const found = data.spus.find(
 			(s) => s.udi.toLowerCase() === query.toLowerCase() ||
-				s.udi.toLowerCase().includes(query.toLowerCase())
+				s.udi.toLowerCase().includes(query.toLowerCase()) ||
+				(s.barcode && s.barcode.toLowerCase() === query.toLowerCase())
 		);
 		statusUpdateError = '';
 		statusUpdateSuccess = '';
 		if (found) {
-			statusUpdateSpu = { id: found.id, udi: found.udi, status: found.status };
+			statusUpdateSpu = { id: found.id, udi: found.udi, barcode: found.barcode, status: found.status };
 			statusUpdateNew = found.status;
 		} else {
 			statusUpdateError = `No SPU found matching "${query}"`;
@@ -381,6 +382,19 @@
 					</div>
 
 					<div>
+						<label for="reg-barcode" class="tron-label">Barcode</label>
+						<input
+							id="reg-barcode"
+							name="barcode"
+							type="text"
+							class="tron-input"
+							placeholder="Scan or enter barcode value"
+							disabled={registering}
+							style="min-height: 44px;"
+						/>
+					</div>
+
+					<div>
 						<label for="reg-deviceState" class="tron-label">Device State</label>
 						<select
 							id="reg-deviceState"
@@ -550,6 +564,10 @@
 							<div>
 								<p class="tron-text-muted text-xs mb-1">UDI</p>
 								<p class="font-mono text-sm text-[var(--color-tron-cyan)]">{statusUpdateSpu.udi}</p>
+								{#if statusUpdateSpu.barcode}
+									<p class="tron-text-muted text-xs mt-2 mb-1">Barcode</p>
+									<p class="font-mono text-sm text-[var(--color-tron-cyan)]">{statusUpdateSpu.barcode}</p>
+								{/if}
 							</div>
 							<div class="text-right">
 								<p class="tron-text-muted text-xs mb-1">Current Status</p>

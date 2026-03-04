@@ -12,6 +12,7 @@ const correctionSchema = new Schema({
 const spuSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	udi: { type: String, required: true },
+	barcode: { type: String },
 
 	batch: { _id: String, batchNumber: String },
 
@@ -81,6 +82,7 @@ const spuSchema = new Schema({
 }, { timestamps: true });
 
 spuSchema.index({ udi: 1 }, { unique: true });
+spuSchema.index({ barcode: 1 }, { sparse: true });
 spuSchema.index({ 'batch._id': 1, status: 1 });
 spuSchema.index({ status: 1, assemblyStatus: 1 });
 spuSchema.index({ 'assignment.customer._id': 1 });

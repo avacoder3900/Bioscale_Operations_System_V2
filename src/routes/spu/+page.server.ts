@@ -48,6 +48,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		spus: spus.map((s: any) => ({
 			id: s._id,
 			udi: s.udi,
+			barcode: s.barcode ?? null,
 			status: s.status ?? 'draft',
 			deviceState: s.deviceState ?? '',
 			owner: s.owner ?? null,
@@ -146,9 +147,11 @@ export const actions: Actions = {
 			if (batch) batchRef = { _id: (batch as any)._id, batchNumber: (batch as any).batchNumber };
 		}
 
+		const barcode = form.get('barcode')?.toString().trim() || undefined;
 		await Spu.create({
 			_id: generateId(),
 			udi,
+			barcode,
 			status: 'draft',
 			assemblyStatus: 'created',
 			qcStatus: 'pending',
@@ -177,9 +180,11 @@ export const actions: Actions = {
 		}
 
 		const spuId = generateId();
+		const barcode = form.get('barcode')?.toString().trim() || undefined;
 		await Spu.create({
 			_id: spuId,
 			udi,
+			barcode,
 			status: 'draft',
 			deviceState: form.get('deviceState')?.toString() || undefined,
 			owner: form.get('owner')?.toString() || undefined,
