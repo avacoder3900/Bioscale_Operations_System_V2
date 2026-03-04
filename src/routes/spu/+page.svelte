@@ -26,6 +26,69 @@
 	let bulkState = $state('');
 	let bulkUpdating = $state(false);
 
+	// Quick Status Update state
+	let statusScanInput = $state('');
+	let statusUpdateSpu = $state<{ id: string; udi: string; status: string } | null>(null);
+	let statusUpdateNew = $state('');
+	let statusUpdating = $state(false);
+	let statusUpdateError = $state('');
+	let statusUpdateSuccess = $state('');
+	let quickStatusCollapsed = $state(false);
+
+	const STATUS_OPTIONS = [
+		'draft', 'assembling', 'assembled', 'validating', 'validated',
+		'assigned', 'deployed', 'servicing', 'retired', 'voided'
+	] as const;
+
+	function statusColor(status: string): string {
+		if (['assigned', 'deployed'].includes(status)) return 'var(--color-tron-green)';
+		if (['assembling', 'assembled'].includes(status)) return 'var(--color-tron-cyan)';
+		if (['validating', 'validated'].includes(status)) return 'var(--color-tron-yellow, #fbbf24)';
+		if (status === 'servicing') return 'var(--color-tron-orange)';
+		if (status === 'voided') return 'var(--color-tron-red)';
+		return 'var(--color-tron-text-secondary)';
+	}
+
+	function handleStatusScan() {
+		const query = statusScanInput.trim();
+		if (!query) return;
+		const found = data.spus.find(
+			(s) => s.udi.toLowerCase() === query.toLowerCase() ||
+				s.udi.toLowerCase().includes(query.toLowerCase())
+		);
+		statusUpdateError = '';
+		statusUpdateSuccess = '';
+		if (found) {
+			statusUpdateSpu = { id: found.id, udi: found.udi, status: found.status };
+			statusUpdateNew = found.status;
+		} else {
+			statusUpdateError = `No SPU found matching "${query}"`;
+			statusUpdateSpu = null;
+		}
+	}
+
+	function cancelStatusUpdate() {
+		statusUpdateSpu = null;
+		statusScanInput = '';
+		statusUpdateNew = '';
+		statusUpdateError = '';
+		statusUpdateSuccess = '';
+	}
+
+	// React to updateStatus form result
+	$effect(() => {
+		if (form?.statusUpdateSuccess) {
+			statusUpdateSuccess = `Status updated to "${(form as any).updatedStatus}" successfully.`;
+			statusUpdateSpu = null;
+			statusScanInput = '';
+			statusUpdateNew = '';
+		}
+		if (form?.error && statusUpdating) {
+			statusUpdateError = (form as any).error;
+			statusUpdating = false;
+		}
+	});
+
 	// UDI lookup
 	async function handleUdiSubmit() {
 		const udi = udiInput.trim();
@@ -413,6 +476,157 @@
 						</TronButton>
 					</div>
 				</form>
+			</div>
+		{/if}
+	</TronCard>
+
+	<!-- Quick Status Update -->
+	<TronCard>
+		<button
+			type="button"
+			class="flex w-full items-center justify-between"
+			onclick={() => (quickStatusCollapsed = !quickStatusCollapsed)}
+		>
+			<div class="flex items-center gap-2">
+				<!-- barcode/scan icon -->
+				<svg class="h-5 w-5 text-[var(--color-tron-cyan)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+						d="M3 4h2v16H3V4zm4 0h1v16H7V4zm3 0h2v16h-2V4zm4 0h1v16h-1V4zm3 0h2v16h-2V4z" />
+				</svg>
+				<h3 class="tron-text-primary text-lg font-bold">Quick Status Update</h3>
+				<span class="tron-text-muted text-xs">Scan or type a UDI to update its status</span>
+			</div>
+			<svg
+				class="h-4 w-4 text-[var(--color-tron-cyan)] transition-transform {quickStatusCollapsed ? '' : 'rotate-180'}"
+				fill="none" viewBox="0 0 24 24" stroke="currentColor"
+			>
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+			</svg>
+		</button>
+
+		{#if !quickStatusCollapsed}
+			<div class="mt-4 space-y-4">
+				<!-- Scan input -->
+				{#if !statusUpdateSpu}
+					<div class="flex gap-3">
+						<input
+							type="text"
+							class="tron-input flex-1"
+							placeholder="Scan barcode or enter UDI..."
+							bind:value={statusScanInput}
+							autofocus
+							onkeydown={(e) => { if (e.key === 'Enter') handleStatusScan(); }}
+							style="min-height: 44px;"
+						/>
+						<TronButton variant="primary" onclick={handleStatusScan} style="min-height: 44px;">
+							Find SPU
+						</TronButton>
+					</div>
+				{/if}
+
+				<!-- Error feedback -->
+				{#if statusUpdateError}
+					<div class="rounded border border-[var(--color-tron-red)] bg-[rgba(255,51,102,0.1)] p-3">
+						<p class="text-sm text-[var(--color-tron-red)]">{statusUpdateError}</p>
+					</div>
+				{/if}
+
+				<!-- Success feedback -->
+				{#if statusUpdateSuccess}
+					<div class="rounded border border-[var(--color-tron-green)] bg-[rgba(0,255,128,0.1)] p-3 flex items-center justify-between">
+						<p class="text-sm text-[var(--color-tron-green)]">{statusUpdateSuccess}</p>
+						<button
+							type="button"
+							class="tron-text-muted ml-4 text-xs hover:text-[var(--color-tron-cyan)]"
+							onclick={() => (statusUpdateSuccess = '')}
+						>Dismiss</button>
+					</div>
+				{/if}
+
+				<!-- SPU found panel -->
+				{#if statusUpdateSpu}
+					<div class="rounded border border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.03)] p-4 space-y-4">
+						<div class="flex items-start justify-between gap-4">
+							<div>
+								<p class="tron-text-muted text-xs mb-1">UDI</p>
+								<p class="font-mono text-sm text-[var(--color-tron-cyan)]">{statusUpdateSpu.udi}</p>
+							</div>
+							<div class="text-right">
+								<p class="tron-text-muted text-xs mb-1">Current Status</p>
+								<span
+									class="rounded px-2 py-1 text-xs font-bold uppercase tracking-wide"
+									style="background: color-mix(in srgb, {statusColor(statusUpdateSpu.status)} 20%, transparent); color: {statusColor(statusUpdateSpu.status)};"
+								>
+									{statusUpdateSpu.status}
+								</span>
+							</div>
+						</div>
+
+						<form
+							method="POST"
+							action="?/updateStatus"
+							use:enhance={() => {
+								statusUpdating = true;
+								statusUpdateError = '';
+								return async ({ result, update }) => {
+									statusUpdating = false;
+									await update({ reset: false });
+								};
+							}}
+							class="space-y-3"
+						>
+							<input type="hidden" name="spuId" value={statusUpdateSpu.id} />
+
+							<div>
+								<label for="status-select" class="tron-label">New Status</label>
+								<select
+									id="status-select"
+									name="status"
+									class="tron-select w-full"
+									bind:value={statusUpdateNew}
+									disabled={statusUpdating}
+									style="min-height: 44px;"
+								>
+									{#each STATUS_OPTIONS as opt (opt)}
+										<option value={opt}>{opt}</option>
+									{/each}
+								</select>
+							</div>
+
+							{#if statusUpdateNew && statusUpdateNew !== statusUpdateSpu.status}
+								<p class="text-xs tron-text-muted">
+									Change:
+									<span style="color: {statusColor(statusUpdateSpu.status)}; font-weight: 600;">{statusUpdateSpu.status}</span>
+									→
+									<span style="color: {statusColor(statusUpdateNew)}; font-weight: 600;">{statusUpdateNew}</span>
+								</p>
+							{/if}
+
+							<div class="flex gap-3 pt-1">
+								<TronButton
+									type="button"
+									class="flex-1"
+									onclick={cancelStatusUpdate}
+									disabled={statusUpdating}
+								>
+									Cancel
+								</TronButton>
+								<TronButton
+									type="submit"
+									variant="primary"
+									class="flex-1"
+									disabled={statusUpdating || statusUpdateNew === statusUpdateSpu.status}
+								>
+									{#if statusUpdating}
+										Updating...
+									{:else}
+										Update Status
+									{/if}
+								</TronButton>
+							</div>
+						</form>
+					</div>
+				{/if}
 			</div>
 		{/if}
 	</TronCard>

@@ -258,5 +258,36 @@ export const actions: Actions = {
 		requirePermission(locals.user, 'inventory:write');
 		// Box sync would go here — placeholder
 		return { syncSuccess: true, syncMessage: 'Sync not configured' };
+	},
+
+	updateStatus: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const spuId = form.get('spuId')?.toString();
+		const newStatus = form.get('status')?.toString();
+		if (!spuId || !newStatus) return fail(400, { error: 'SPU ID and status required' });
+
+		const validStatuses = ['draft', 'assembling', 'assembled', 'validating', 'validated', 'assigned', 'deployed', 'servicing', 'retired', 'voided'];
+		if (!validStatuses.includes(newStatus)) return fail(400, { error: 'Invalid status' });
+
+		const spu = await Spu.findById(spuId);
+		if (!spu) return fail(404, { error: 'SPU not found' });
+		if ((spu as any).finalizedAt) return fail(400, { error: 'SPU is finalized' });
+
+		await Spu.updateOne({ _id: spuId }, { $set: { status: newStatus } });
+
+		// Audit log
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'spus',
+			recordId: spuId,
+			action: 'UPDATE',
+			oldData: { status: (spu as any).status },
+			newData: { status: newStatus },
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+
+		return { statusUpdateSuccess: true, updatedStatus: newStatus };
 	}
 };
