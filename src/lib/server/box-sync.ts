@@ -139,8 +139,8 @@ export async function syncPartsFromBox(): Promise<SyncResult> {
 	}
 
 	const allRows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(primarySheet, { defval: null, raw: true });
-	// Skip row 0 (header row embedded in data)
-	const rows = allRows.slice(1);
+	// Skip row 0 (header row embedded in data), stop at row 80 (relevant data ends there)
+	const rows = allRows.slice(1, 80);
 	console.log(`[box-sync] Inventory Tracking System: ${rows.length} data rows (skipped header row)`);
 
 	// Debug: log header row keys and first data row to verify column mapping
