@@ -27,7 +27,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	// Particle device lookup
 	let particleDevice = null;
 	if (s.particleLink?.particleDeviceId) {
-		particleDevice = await ParticleDevice.findOne({ deviceId: s.particleLink.particleDeviceId }).lean();
+		particleDevice = await ParticleDevice.findOne({ particleDeviceId: s.particleLink.particleDeviceId }).lean();
 	}
 
 	// Operator name lookup for sessions

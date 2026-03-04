@@ -132,7 +132,7 @@
 			<dl class="space-y-3">
 				<div class="flex justify-between">
 					<dt class="tron-text-muted">Device ID</dt>
-					<dd class="tron-text-primary font-mono text-sm break-all">{data.spu.id}</dd>
+					<dd class="tron-text-primary font-mono text-sm break-all">{data.particleLink?.particleDeviceId ?? data.spu.id}</dd>
 				</div>
 				<div class="flex justify-between items-start">
 					<dt class="tron-text-muted">UDI</dt>
