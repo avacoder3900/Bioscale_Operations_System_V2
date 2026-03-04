@@ -3,12 +3,21 @@ import { generateId } from '../utils.js';
 
 const operatorRef = { _id: String, username: String };
 
+// FIX-03: Typed sub-schema replacing Schema.Types.Mixed for inputLots
+const inputLotSchema = new Schema({
+	materialName: String,
+	barcode: String,
+	partDefinitionId: String,
+	scanOrder: Number,
+	scannedAt: Date
+}, { _id: false });
+
 const lotRecordSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	qrCodeRef: { type: String, required: true },
 	processConfig: { _id: String, processName: String, processType: String },
 	operator: operatorRef,
-	inputLots: Schema.Types.Mixed,
+	inputLots: { type: [inputLotSchema], default: undefined }, // typed array (backward-compatible)
 	quantityProduced: Number,
 	desiredQuantity: Number,
 	quantityDiscrepancyReason: String,
