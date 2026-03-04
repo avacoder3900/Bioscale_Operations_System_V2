@@ -69,11 +69,11 @@ function parseInventoryTrackingSheet(workbook: XLSX.WorkBook): Map<string, Recor
 	// Skip row 0 (it's the header row embedded in data)
 	for (let i = 1; i < rows.length; i++) {
 		const row = rows[i];
-		const partNumber = parseString(row['__EMPTY_1']); // BREVITEST P/N
-		if (!partNumber || partNumber === 'BREVITEST P/N') continue;
+		const partNumber = parseString(row['PRODUCTION BOM AND INVENTORY COUNT']); // Column B — Part Number
+		if (!partNumber || partNumber === 'DESCRIPTION') continue;
 
 		map.set(partNumber, {
-			name: parseString(row['PRODUCTION BOM AND INVENTORY COUNT']),
+			name: parseString(row['__EMPTY_1']), // Column C — Name
 			category: parseString(row['__EMPTY_2']),
 			supplierPartNumber: parseString(row['__EMPTY_3']),
 			supplier: parseString(row['__EMPTY_4']),
@@ -158,8 +158,8 @@ export async function syncPartsFromBox(): Promise<SyncResult> {
 	console.log(`[box-sync] Net inventory: ${netInventory.size} parts from Manually Subtract Here!`);
 
 	const columnMap: Record<string, string> = {
-		name: 'B — DESCRIPTION',
-		partNumber: 'C — BREVITEST P/N',
+		partNumber: 'B — DESCRIPTION (Part Number)',
+		name: 'C — BREVITEST P/N (Name)',
 		category: 'D — CLASSIFICATION OF MATERIAL',
 		vendorPartNumber: 'E — SUPPLIER P/N',
 		supplier: 'F — SUPPLIER',
@@ -174,15 +174,15 @@ export async function syncPartsFromBox(): Promise<SyncResult> {
 
 	for (const row of rows) {
 		try {
-			const partNumber = parseString(row['__EMPTY_1']); // BREVITEST P/N
-			const partName = parseString(row['PRODUCTION BOM AND INVENTORY COUNT']); // DESCRIPTION
+			const partNumber = parseString(row['PRODUCTION BOM AND INVENTORY COUNT']); // Column B — PART NUMBER
+			const partName = parseString(row['__EMPTY_1']); // Column C — NAME/DESCRIPTION
 
 			if (!partNumber && !partName) {
 				skipped++;
 				continue;
 			}
 			// Skip if it looks like a sub-header or section label
-			if (partNumber === 'BREVITEST P/N') {
+			if (partNumber === 'DESCRIPTION' || partName === 'BREVITEST P/N') {
 				skipped++;
 				continue;
 			}
