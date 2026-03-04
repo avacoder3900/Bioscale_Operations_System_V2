@@ -151,7 +151,16 @@ export async function syncPartsFromBox(): Promise<SyncResult> {
 	if (rows.length > 0) {
 		console.log(`[box-sync] First data row keys:`, Object.keys(rows[0]));
 		console.log(`[box-sync] First data row sample:`, JSON.stringify(rows[0]).slice(0, 500));
+		// Log first 3 data rows with key fields to verify mapping
+		for (let i = 0; i < Math.min(3, rows.length); i++) {
+			const r = rows[i];
+			console.log(`[box-sync] Row ${i+1}: PROD_BOM="${r['PRODUCTION BOM AND INVENTORY COUNT']}" | __EMPTY_1="${r['__EMPTY_1']}" | __EMPTY_22="${r['__EMPTY_22']}"`);
+		}
 	}
+
+	// Clean sync: delete all existing part definitions before re-importing
+	const deleteResult = await PartDefinition.deleteMany({});
+	console.log(`[box-sync] Cleared ${deleteResult.deletedCount} existing part definitions`);
 
 	// Parse net inventory from "Manually Subtract Here!" for actual remaining count
 	const netInventory = parseSubtractSheet(workbook);
