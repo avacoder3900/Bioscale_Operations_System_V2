@@ -67,6 +67,14 @@ const spuSchema = new Schema({
 	},
 
 	status: { type: String, enum: ['draft', 'assembling', 'assembled', 'validating', 'validated', 'assigned', 'deployed', 'servicing', 'retired', 'voided'] },
+	statusTransitions: [{
+		_id: { type: String, default: () => generateId() },
+		from: String,
+		to: { type: String, required: true },
+		changedBy: operatorRef,
+		changedAt: { type: Date, default: () => new Date() },
+		reason: String
+	}],
 	deviceState: String,
 	assemblyStatus: { type: String, enum: ['created', 'in_progress', 'completed'] },
 	qcStatus: { type: String, enum: ['pending', 'passed', 'failed'] },

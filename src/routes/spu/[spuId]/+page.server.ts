@@ -65,6 +65,14 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			assemblyStatus: s.assemblyStatus ?? 'created',
 			assemblySignatureId: s.signature?._id ?? null,
 			assemblyCompletedAt: s.assembly?.completedAt ?? null,
+			statusTransitions: (s.statusTransitions ?? []).map((t: any) => ({
+				id: t._id,
+				from: t.from ?? null,
+				to: t.to,
+				changedBy: t.changedBy?.username ?? 'System',
+				changedAt: t.changedAt,
+				reason: t.reason ?? null
+			})),
 			finalizedAt: s.finalizedAt ?? null,
 			corrections: s.corrections ?? []
 		},
@@ -305,5 +313,51 @@ export const actions: Actions = {
 		}
 
 		return { identifierSuccess: true };
+	},
+
+	transitionStatus: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const newStatus = form.get('status')?.toString();
+		const reason = form.get('reason')?.toString() || null;
+		if (!newStatus) return fail(400, { error: 'Status required' });
+
+		const spu = await Spu.findById(params.spuId);
+		if (!spu) return fail(404, { error: 'SPU not found' });
+		if ((spu as any).finalizedAt) return fail(400, { error: 'SPU is finalized' });
+
+		const oldStatus = (spu as any).status ?? 'draft';
+		if (oldStatus === newStatus) return fail(400, { error: 'Status is already ' + newStatus });
+
+		const transition = {
+			_id: generateId(),
+			from: oldStatus,
+			to: newStatus,
+			changedBy: { _id: locals.user!._id, username: locals.user!.username },
+			changedAt: new Date(),
+			reason
+		};
+
+		await Spu.updateOne(
+			{ _id: params.spuId },
+			{
+				$set: { status: newStatus },
+				$push: { statusTransitions: transition }
+			}
+		);
+
+		// Audit log
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'spus',
+			recordId: params.spuId,
+			action: 'UPDATE',
+			oldData: { status: oldStatus },
+			newData: { status: newStatus, reason },
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+
+		return { success: true, transitionSuccess: true };
 	}
 };
