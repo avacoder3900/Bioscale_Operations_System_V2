@@ -35,6 +35,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 		};
 	});
 
+	// Remove entries with no cost breakdown
+	const itemsWithCost = items.filter(i => i.unitCost != null && i.unitCost > 0);
+	const itemsNoCost = items.filter(i => i.unitCost == null || i.unitCost <= 0);
+	if (itemsNoCost.length > 0) {
+		console.log(`[parts] Filtered out ${itemsNoCost.length} items with no cost data`);
+	}
+
 	// Cartridge BOM parts
 	const cartridgeParts = (cartridgeBomItems as any[]).map((b) => {
 		const cost = parseFloat(b.unitCost) || null;
@@ -57,7 +64,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	// Low stock items (from both parts and BOM)
 	const lowStockItems = [
-		...items.filter(i => i.inventoryCount < i.minimumStockLevel && i.minimumStockLevel > 0),
+		...itemsWithCost.filter(i => i.inventoryCount < i.minimumStockLevel && i.minimumStockLevel > 0),
 		...cartridgeParts.filter(i => i.inventoryCount < i.minimumStockLevel && i.minimumStockLevel > 0)
 	].map(i => ({
 		id: i.id,
@@ -92,19 +99,19 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Computed stats
 	const allCategories = [...new Set(items.map(i => i.category).filter(Boolean))] as string[];
 	const stats = {
-		total: items.length,
+		total: itemsWithCost.length,
 		categories: allCategories.length,
-		totalInventoryValue: items.reduce((sum, i) => sum + (i.totalValue ?? 0), 0),
+		totalInventoryValue: itemsWithCost.reduce((sum, i) => sum + (i.totalValue ?? 0), 0),
 		lowStockCount: lowStockItems.length
 	};
 
 	// Low inventory: zero/negative + low (bottom 10 that are > 0)
-	const inventoryFields = (i: typeof items[0]) => ({
+	const inventoryFields = (i: typeof itemsWithCost[0]) => ({
 		id: i.id, partNumber: i.partNumber, name: i.name,
 		inventoryCount: i.inventoryCount, leadTimeDays: i.leadTimeDays
 	});
 	const zeroOrNegative = items.filter(i => i.inventoryCount <= 0).map(inventoryFields);
-	const lowPositive = [...items]
+	const lowPositive = [...itemsWithCost]
 		.filter(i => i.inventoryCount > 0)
 		.sort((a, b) => a.inventoryCount - b.inventoryCount)
 		.slice(0, 10)
@@ -112,7 +119,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const lowestInventory = [...zeroOrNegative, ...lowPositive];
 
 	return {
-		items,
+		items: itemsWithCost,
 		cartridgeParts,
 		cartridgeBomSummary,
 		lowStockItems,

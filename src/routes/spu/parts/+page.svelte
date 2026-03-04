@@ -832,7 +832,7 @@
 			<table class="tron-table">
 				<thead>
 					<tr>
-						{#each [{ key: 'partNumber', label: 'Part #' }, { key: 'name', label: 'Name' }, { key: 'category', label: 'Classification' }, { key: null, label: 'Manufacturer' }, { key: 'quantityPerUnit', label: 'Qty/Unit' }, { key: 'inventoryCount', label: 'Inventory' }, { key: 'unitCost', label: 'Unit Cost' }, { key: 'totalValue', label: 'Total Value' }, { key: 'leadTimeDays', label: 'Lead Time' }, { key: null, label: 'Actions' }] as col (col.label)}
+						{#each [{ key: 'name', label: 'Name' }, { key: 'partNumber', label: 'Part #' }, { key: 'category', label: 'Classification' }, { key: null, label: 'Manufacturer' }, { key: 'quantityPerUnit', label: 'Qty/Unit' }, { key: 'inventoryCount', label: 'Inventory' }, { key: 'unitCost', label: 'Unit Cost' }, { key: 'totalValue', label: 'Total Value' }, { key: 'leadTimeDays', label: 'Lead Time' }, { key: null, label: 'Actions' }] as col (col.label)}
 							{#if col.key}
 								<th
 									class="cursor-pointer select-none hover:text-[var(--color-tron-cyan)]"
@@ -869,8 +869,8 @@
 					{#each filteredItems as item (item.id)}
 						{@const isLow = (item.inventoryCount ?? 0) <= item.minimumStockLevel}
 						<tr>
-							<td class="font-mono text-[var(--color-tron-cyan)]">{item.partNumber}</td>
 							<td>{item.name}</td>
+							<td class="font-mono text-[var(--color-tron-cyan)]">{item.partNumber}</td>
 							<td>
 								{#if item.category}
 									<TronBadge variant="neutral">{item.category}</TronBadge>
@@ -1047,7 +1047,7 @@
 			<table class="tron-table">
 				<thead>
 					<tr>
-						{#each [{ key: 'partNumber', label: 'Part #' }, { key: 'name', label: 'Name' }, { key: 'category', label: 'Category' }, { key: null, label: 'Manufacturer' }, { key: 'quantityPerUnit', label: 'Qty/Unit' }, { key: 'inventoryCount', label: 'Inventory' }, { key: 'unitCost', label: 'Unit Cost' }, { key: 'totalValue', label: 'Total Value' }, { key: null, label: 'Actions' }] as col (col.label)}
+						{#each [{ key: 'name', label: 'Name' }, { key: 'partNumber', label: 'Part #' }, { key: 'category', label: 'Category' }, { key: null, label: 'Manufacturer' }, { key: 'quantityPerUnit', label: 'Qty/Unit' }, { key: 'inventoryCount', label: 'Inventory' }, { key: 'unitCost', label: 'Unit Cost' }, { key: 'totalValue', label: 'Total Value' }, { key: null, label: 'Actions' }] as col (col.label)}
 							{#if col.key}
 								<th
 									class="cursor-pointer select-none hover:text-[var(--color-tron-cyan)]"
@@ -1075,8 +1075,8 @@
 				<tbody>
 					{#each filteredCartridgeParts as item (item.id)}
 						<tr>
-							<td class="font-mono text-[var(--color-tron-cyan)]">{item.partNumber}</td>
 							<td>{item.name}</td>
+							<td class="font-mono text-[var(--color-tron-cyan)]">{item.partNumber}</td>
 							<td>
 								{#if item.category}
 									<TronBadge variant="neutral">{item.category}</TronBadge>
