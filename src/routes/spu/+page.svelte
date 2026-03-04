@@ -10,6 +10,7 @@
 
 	let { data, form } = $props();
 
+	let barcodeInput = $state('');
 	let udiInput = $state('');
 	let showRegisterForm = $state(false);
 	let registering = $state(false);
@@ -90,13 +91,14 @@
 		}
 	});
 
-	// UDI lookup
-	async function handleUdiSubmit() {
-		const udi = udiInput.trim();
-		if (!udi) return;
+	// Barcode scan → lookup or register
+	async function handleBarcodeScan() {
+		const barcode = barcodeInput.trim();
+		if (!barcode) return;
 
 		const existing = data.spus.find(
-			(s) => s.udi === udi || s.udi.toLowerCase().includes(udi.toLowerCase())
+			(s) => (s.barcode && s.barcode.toLowerCase() === barcode.toLowerCase()) ||
+				s.udi.toLowerCase() === barcode.toLowerCase()
 		);
 		if (existing) {
 			goto(`/spu/${existing.id}`);
@@ -110,6 +112,7 @@
 		if (form?.success && form?.spuId) {
 			registerSuccess = { spuId: form.spuId };
 			showRegisterForm = false;
+			barcodeInput = '';
 			udiInput = '';
 		}
 	});
@@ -320,21 +323,21 @@
 		<h2 class="tron-text-primary text-2xl font-bold">SPU Dashboard</h2>
 	</div>
 
-	<!-- UDI Registration / Lookup -->
+	<!-- Barcode Scan / Lookup -->
 	<TronCard>
-		<h3 class="tron-text-primary mb-3 text-lg font-bold">UDI Lookup / Register</h3>
+		<h3 class="tron-text-primary mb-3 text-lg font-bold">Barcode Scan / Lookup</h3>
 		<div class="flex gap-3">
 			<input
 				type="text"
 				class="tron-input flex-1"
-				placeholder="Enter UDI to find or register a new SPU..."
-				bind:value={udiInput}
+				placeholder="Scan barcode to find or register a new SPU..."
+				bind:value={barcodeInput}
 				onkeydown={(e) => {
-					if (e.key === 'Enter') handleUdiSubmit();
+					if (e.key === 'Enter') handleBarcodeScan();
 				}}
 				style="min-height: 44px;"
 			/>
-			<TronButton variant="primary" onclick={handleUdiSubmit} style="min-height: 44px;">
+			<TronButton variant="primary" onclick={handleBarcodeScan} style="min-height: 44px;">
 				Lookup
 			</TronButton>
 		</div>
@@ -359,7 +362,7 @@
 			<div class="mt-4 rounded border border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.03)] p-4">
 				<h4 class="tron-text-primary mb-3 font-medium">Register New SPU</h4>
 				<p class="tron-text-muted mb-4 text-sm">
-					No SPU found with this UDI. Fill in the details to register it.
+					No SPU found with this barcode. Fill in the details to register it.
 				</p>
 				<form
 					method="POST"
@@ -374,27 +377,29 @@
 					class="space-y-4"
 				>
 					<div>
-						<label for="reg-udi" class="tron-label">UDI</label>
-						<input
-							id="reg-udi"
-							name="udi"
-							type="text"
-							class="tron-input"
-							value={udiInput}
-							readonly
-							style="min-height: 44px;"
-						/>
-					</div>
-
-					<div>
 						<label for="reg-barcode" class="tron-label">Barcode</label>
 						<input
 							id="reg-barcode"
 							name="barcode"
 							type="text"
 							class="tron-input"
-							placeholder="Scan or enter barcode value"
+							value={barcodeInput}
+							readonly
+							style="min-height: 44px;"
+						/>
+					</div>
+
+					<div>
+						<label for="reg-udi" class="tron-label">UDI (Unique Device Identifier)</label>
+						<input
+							id="reg-udi"
+							name="udi"
+							type="text"
+							class="tron-input"
+							placeholder="Enter the Unique Device Identifier"
+							bind:value={udiInput}
 							disabled={registering}
+							required
 							style="min-height: 44px;"
 						/>
 					</div>
