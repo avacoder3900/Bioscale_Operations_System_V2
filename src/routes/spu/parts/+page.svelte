@@ -551,8 +551,8 @@
 			</div>
 
 			<div class="mt-3 overflow-x-auto">
+				{#if (lowInvTab === 'zero' ? zeroItems : lowItems).length > 0}
 				{@const displayItems = lowInvTab === 'zero' ? zeroItems : lowItems}
-				{#if displayItems.length > 0}
 					<table class="tron-table w-full text-sm">
 						<thead>
 							<tr>
