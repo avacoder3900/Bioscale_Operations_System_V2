@@ -63,7 +63,7 @@ function parseInventoryTrackingSheet(workbook: XLSX.WorkBook): Map<string, Recor
 	const ws = workbook.Sheets['Inventory Tracking System'];
 	if (!ws) return map;
 
-	const rows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(ws, { defval: null, raw: false });
+	const rows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(ws, { defval: null, raw: true });
 	if (rows.length < 2) return map;
 
 	// Skip row 0 (it's the header row embedded in data)
@@ -97,7 +97,7 @@ function parseSubtractSheet(workbook: XLSX.WorkBook): Map<string, number> {
 	const ws = workbook.Sheets['Manually Subtract Here!'];
 	if (!ws) return map;
 
-	const rows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(ws, { defval: null, raw: false });
+	const rows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(ws, { defval: null, raw: true });
 
 	for (const row of rows) {
 		const partNumber = parseString(row['Brevitest Part Number']);
@@ -138,10 +138,20 @@ export async function syncPartsFromBox(): Promise<SyncResult> {
 		throw new Error('Sheet "Inventory Tracking System" not found in workbook');
 	}
 
-	const allRows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(primarySheet, { defval: null, raw: false });
+	const allRows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(primarySheet, { defval: null, raw: true });
 	// Skip row 0 (header row embedded in data)
 	const rows = allRows.slice(1);
 	console.log(`[box-sync] Inventory Tracking System: ${rows.length} data rows (skipped header row)`);
+
+	// Debug: log header row keys and first data row to verify column mapping
+	if (allRows.length > 0) {
+		console.log(`[box-sync] Header row (row 0) keys:`, Object.keys(allRows[0]));
+		console.log(`[box-sync] Header row (row 0) sample:`, JSON.stringify(allRows[0]).slice(0, 500));
+	}
+	if (rows.length > 0) {
+		console.log(`[box-sync] First data row keys:`, Object.keys(rows[0]));
+		console.log(`[box-sync] First data row sample:`, JSON.stringify(rows[0]).slice(0, 500));
+	}
 
 	// Parse net inventory from "Manually Subtract Here!" for actual remaining count
 	const netInventory = parseSubtractSheet(workbook);
