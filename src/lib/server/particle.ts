@@ -209,5 +209,12 @@ export async function syncDevices(): Promise<{ synced: number; errors: string[] 
 		}
 	);
 
+	// Auto-link devices to SPUs after sync
+	try {
+		await linkDevicesToSpus();
+	} catch (_) {
+		// Non-fatal — sync succeeded even if linking fails
+	}
+
 	return { synced, errors };
 }
