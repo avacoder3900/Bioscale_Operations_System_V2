@@ -148,16 +148,14 @@ export async function syncPartsFromBox(): Promise<SyncResult> {
 	console.log(`[box-sync] Net inventory: ${netInventory.size} parts from Manually Subtract Here!`);
 
 	const columnMap: Record<string, string> = {
-		name: 'PRODUCTION BOM AND INVENTORY COUNT (DESCRIPTION)',
-		partNumber: '__EMPTY_1 (BREVITEST P/N)',
-		category: '__EMPTY_2 (CLASSIFICATION OF MATERIAL)',
-		vendorPartNumber: '__EMPTY_3 (SUPPLIER P/N)',
-		supplier: '__EMPTY_4 (SUPPLIER)',
-		qtyPerUnit: '__EMPTY_6 (QTY PER UNIT)',
-		unitOfMeasure: '__EMPTY_7 (UoM)',
-		unitCost: '__EMPTY_8 (Cost Per Unit)',
-		leadTimeDays: '__EMPTY_14 (Lead Time Days)',
-		inventoryCount: '__EMPTY_22 (Amount Current in Inventory) + net from subtract sheet'
+		name: 'B — DESCRIPTION',
+		partNumber: 'C — BREVITEST P/N',
+		category: 'D — CLASSIFICATION OF MATERIAL',
+		vendorPartNumber: 'E — SUPPLIER P/N',
+		supplier: 'F — SUPPLIER',
+		unitCost: 'N — Total Cost Per Unit',
+		leadTimeDays: 'P — Lead Time (Days)',
+		inventoryCount: 'X — Amount Current in Inventory for Production (PRIMARY)'
 	};
 
 	let upserted = 0;
@@ -187,16 +185,12 @@ export async function syncPartsFromBox(): Promise<SyncResult> {
 				name: partName || key,
 			};
 
-			// Inventory: prefer net remaining (subtract sheet), else current inventory column
-			if (netQty != null) {
-				update.inventoryCount = netQty;
-			} else {
-				update.inventoryCount = parseNumber(row['__EMPTY_22']);
-			}
+			// Column X — Amount Current in Inventory for Production (PRIMARY inventory count)
+			update.inventoryCount = parseNumber(row['__EMPTY_22']);
 
-			// Cost Per Unit
-			const cost = parseString(row['__EMPTY_8']);
-			if (cost && cost !== 'Cost Per Unit') {
+			// Column N — Total Cost Per Unit
+			const cost = parseString(row['__EMPTY_12']);
+			if (cost && cost !== 'Total Cost Per Unit') {
 				update.unitCost = cost.replace(/[$]/g, '').trim();
 			}
 
@@ -212,19 +206,7 @@ export async function syncPartsFromBox(): Promise<SyncResult> {
 				update.category = category;
 			}
 
-			// Qty per unit
-			const qpu = parseNumber(row['__EMPTY_6']);
-			if (qpu > 0) {
-				update.quantityPerUnit = qpu;
-			}
-
-			// Unit of measure
-			const uom = parseString(row['__EMPTY_7']);
-			if (uom && uom !== 'UoM') {
-				update.unitOfMeasure = uom;
-			}
-
-			// Lead time (days) — skip "N/A"
+			// Column P — Lead time (days) — skip "N/A"
 			const lt = parseString(row['__EMPTY_14']);
 			if (lt && lt !== 'N/A' && lt !== 'Lead Time (Days)') {
 				const ltNum = parseNumber(lt);
