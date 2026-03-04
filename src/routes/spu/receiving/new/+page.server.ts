@@ -8,6 +8,8 @@ import {
 	InspectionResult,
 	ToolConfirmation,
 	InventoryTransaction,
+	ManufacturingMaterial,
+	ManufacturingMaterialTransaction,
 	AuditLog,
 	generateId
 } from '$lib/server/db';
@@ -331,6 +333,41 @@ export const actions: Actions = {
 					performedBy: locals.user!._id,
 					performedAt: new Date()
 				});
+
+				// FIX-04: Also sync ManufacturingMaterial if one is linked to this PartDefinition
+				const mfgMaterial = await ManufacturingMaterial.findOne({ partDefinitionId: partId }).lean() as any;
+				if (mfgMaterial) {
+					const mfgBefore = mfgMaterial.currentQuantity ?? 0;
+					const mfgAfter = mfgBefore + quantity;
+					const now = new Date();
+
+					await ManufacturingMaterialTransaction.create({
+						_id: generateId(),
+						materialId: mfgMaterial._id,
+						transactionType: 'receive',
+						quantityChanged: quantity,
+						quantityBefore: mfgBefore,
+						quantityAfter: mfgAfter,
+						operatorId: locals.user!._id,
+						notes: `Received via lot ${lotId}`,
+						createdAt: now
+					});
+
+					const txEntry = {
+						transactionType: 'receive',
+						quantityChanged: quantity,
+						quantityBefore: mfgBefore,
+						quantityAfter: mfgAfter,
+						operatorId: locals.user!._id,
+						notes: `Received via lot ${lotId}`,
+						createdAt: now
+					};
+
+					await ManufacturingMaterial.findByIdAndUpdate(mfgMaterial._id, {
+						$set: { currentQuantity: mfgAfter, updatedAt: now },
+						$push: { recentTransactions: { $each: [txEntry], $slice: -100 } }
+					});
+				}
 			}
 
 			// Audit log for override
