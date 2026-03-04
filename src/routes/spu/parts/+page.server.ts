@@ -98,11 +98,24 @@ export const load: PageServerLoad = async ({ locals }) => {
 		lowStockCount: lowStockItems.length
 	};
 
+	// Lowest 10 inventory items with lead times
+	const lowestInventory = [...items]
+		.sort((a, b) => a.inventoryCount - b.inventoryCount)
+		.slice(0, 10)
+		.map(i => ({
+			id: i.id,
+			partNumber: i.partNumber,
+			name: i.name,
+			inventoryCount: i.inventoryCount,
+			leadTimeDays: i.leadTimeDays
+		}));
+
 	return {
 		items,
 		cartridgeParts,
 		cartridgeBomSummary,
 		lowStockItems,
+		lowestInventory,
 		boxStatus,
 		syncErrorDetail,
 		stats,

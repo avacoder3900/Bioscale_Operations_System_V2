@@ -506,6 +506,45 @@
 		</TronCard>
 	</div>
 
+	<!-- Lowest 10 Inventory -->
+	{#if data.lowestInventory && data.lowestInventory.length > 0}
+	<TronCard>
+		<h3 class="tron-text-primary mb-3 text-lg font-medium">⚠️ Lowest 10 Inventory Items</h3>
+		<div class="overflow-x-auto">
+			<table class="tron-table w-full text-sm">
+				<thead>
+					<tr>
+						<th class="text-left">Part #</th>
+						<th class="text-left">Name</th>
+						<th class="text-right">Inventory</th>
+						<th class="text-right">Lead Time (days)</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each data.lowestInventory as item (item.id)}
+						<tr>
+							<td>
+								<a href="/spu/parts/{item.id}" class="font-mono text-[var(--color-tron-cyan)] hover:underline">
+									{item.partNumber ?? '—'}
+								</a>
+							</td>
+							<td class="tron-text-muted">{item.name}</td>
+							<td class="text-right font-mono">
+								<span class={item.inventoryCount === 0 ? 'text-[var(--color-tron-red)]' : item.inventoryCount < 10 ? 'text-[var(--color-tron-orange)]' : 'tron-text-primary'}>
+									{item.inventoryCount}
+								</span>
+							</td>
+							<td class="text-right font-mono tron-text-muted">
+								{item.leadTimeDays ?? '—'}
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+	</TronCard>
+	{/if}
+
 	<!-- Filters -->
 	<TronCard>
 		<div class="flex flex-wrap items-center gap-4">
