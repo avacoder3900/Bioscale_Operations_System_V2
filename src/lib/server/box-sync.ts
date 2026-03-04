@@ -187,12 +187,13 @@ export async function syncPartsFromBox(): Promise<SyncResult> {
 				continue;
 			}
 
-			const key = partNumber || partName;
-			const netQty = netInventory.get(partNumber);
+			// Use partNumber as upsert key if available, otherwise fall back to name
+			const upsertKey = partNumber || partName;
+			const netQty = partNumber ? netInventory.get(partNumber) : undefined;
 
 			const update: Record<string, unknown> = {
-				partNumber: key,
-				name: partName || key,
+				partNumber: partNumber || null,
+				name: partName || '',
 			};
 
 			// Column X — Amount Current in Inventory for Production (PRIMARY inventory count)
@@ -229,8 +230,13 @@ export async function syncPartsFromBox(): Promise<SyncResult> {
 				update.vendorPartNumber = spn;
 			}
 
+			// Upsert by partNumber if available, otherwise by name
+			const filter = partNumber
+				? { partNumber: upsertKey }
+				: { name: upsertKey, $or: [{ partNumber: null }, { partNumber: '' }, { partNumber: { $exists: false } }] };
+
 			await PartDefinition.updateOne(
-				{ partNumber: key },
+				filter,
 				{ $set: update },
 				{ upsert: true }
 			);
