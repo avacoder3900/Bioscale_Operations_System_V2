@@ -98,17 +98,18 @@ export const load: PageServerLoad = async ({ locals }) => {
 		lowStockCount: lowStockItems.length
 	};
 
-	// Lowest 10 inventory items with lead times
-	const lowestInventory = [...items]
+	// Low inventory: zero/negative + low (bottom 10 that are > 0)
+	const inventoryFields = (i: typeof items[0]) => ({
+		id: i.id, partNumber: i.partNumber, name: i.name,
+		inventoryCount: i.inventoryCount, leadTimeDays: i.leadTimeDays
+	});
+	const zeroOrNegative = items.filter(i => i.inventoryCount <= 0).map(inventoryFields);
+	const lowPositive = [...items]
+		.filter(i => i.inventoryCount > 0)
 		.sort((a, b) => a.inventoryCount - b.inventoryCount)
 		.slice(0, 10)
-		.map(i => ({
-			id: i.id,
-			partNumber: i.partNumber,
-			name: i.name,
-			inventoryCount: i.inventoryCount,
-			leadTimeDays: i.leadTimeDays
-		}));
+		.map(inventoryFields);
+	const lowestInventory = [...zeroOrNegative, ...lowPositive];
 
 	return {
 		items,

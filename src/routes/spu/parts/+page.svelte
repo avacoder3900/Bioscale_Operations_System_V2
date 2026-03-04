@@ -71,6 +71,8 @@
 	let syncing = $state(false);
 	let filtersOpen = $state(!!params.get('fo'));
 	let lowStockOpen = $state(false);
+	let lowInventoryOpen = $state(false);
+	let lowInvTab = $state<'zero' | 'low'>('zero');
 	let syncErrorOpen = $state(false);
 
 	// Numeric range filters (initialized from URL)
@@ -95,6 +97,14 @@
 	);
 	let classifications = $derived(
 		[...new Set(data.items.map((i) => i.category).filter(Boolean))].sort() as string[]
+	);
+
+	// Low inventory derived lists from lowestInventory data
+	let zeroItems = $derived(
+		(data.lowestInventory ?? []).filter((i: { inventoryCount: number }) => i.inventoryCount <= 0)
+	);
+	let lowItems = $derived(
+		(data.lowestInventory ?? []).filter((i: { inventoryCount: number }) => i.inventoryCount > 0)
 	);
 
 	// Count active filters
@@ -506,42 +516,80 @@
 		</TronCard>
 	</div>
 
-	<!-- Lowest 10 Inventory -->
+	<!-- Low Inventory Panel (collapsible) -->
 	{#if data.lowestInventory && data.lowestInventory.length > 0}
 	<TronCard>
-		<h3 class="tron-text-primary mb-3 text-lg font-medium">⚠️ Lowest 10 Inventory Items</h3>
-		<div class="overflow-x-auto">
-			<table class="tron-table w-full text-sm">
-				<thead>
-					<tr>
-						<th class="text-left">Part #</th>
-						<th class="text-left">Name</th>
-						<th class="text-right">Inventory</th>
-						<th class="text-right">Lead Time (days)</th>
-					</tr>
-				</thead>
-				<tbody>
-					{#each data.lowestInventory as item (item.id)}
-						<tr>
-							<td>
-								<a href="/spu/parts/{item.id}" class="font-mono text-[var(--color-tron-cyan)] hover:underline">
-									{item.partNumber ?? '—'}
-								</a>
-							</td>
-							<td class="tron-text-muted">{item.name}</td>
-							<td class="text-right font-mono">
-								<span class={item.inventoryCount === 0 ? 'text-[var(--color-tron-red)]' : item.inventoryCount < 10 ? 'text-[var(--color-tron-orange)]' : 'tron-text-primary'}>
-									{item.inventoryCount}
-								</span>
-							</td>
-							<td class="text-right font-mono tron-text-muted">
-								{item.leadTimeDays ?? '—'}
-							</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
-		</div>
+		<button
+			type="button"
+			class="flex w-full items-center justify-between"
+			onclick={() => (lowInventoryOpen = !lowInventoryOpen)}
+		>
+			<h3 class="tron-text-primary text-lg font-medium">⚠️ Low Inventory</h3>
+			<svg
+				class="h-4 w-4 text-[var(--color-tron-cyan)] transition-transform {lowInventoryOpen ? 'rotate-180' : ''}"
+				fill="none" viewBox="0 0 24 24" stroke="currentColor"
+			>
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+			</svg>
+		</button>
+
+		{#if lowInventoryOpen}
+			<!-- Sub-tabs -->
+			<div class="mt-3 flex gap-1 border-b border-[var(--color-tron-border)]">
+				<button
+					class="px-3 py-1.5 text-xs font-medium transition-colors {lowInvTab === 'zero' ? 'border-b-2 border-[var(--color-tron-red)] text-[var(--color-tron-red)]' : 'tron-text-muted hover:text-[var(--color-tron-text)]'}"
+					onclick={() => (lowInvTab = 'zero')}
+				>
+					Zero & Negative ({zeroItems.length})
+				</button>
+				<button
+					class="px-3 py-1.5 text-xs font-medium transition-colors {lowInvTab === 'low' ? 'border-b-2 border-[var(--color-tron-orange)] text-[var(--color-tron-orange)]' : 'tron-text-muted hover:text-[var(--color-tron-text)]'}"
+					onclick={() => (lowInvTab = 'low')}
+				>
+					Low Stock ({lowItems.length})
+				</button>
+			</div>
+
+			<div class="mt-3 overflow-x-auto">
+				{@const displayItems = lowInvTab === 'zero' ? zeroItems : lowItems}
+				{#if displayItems.length > 0}
+					<table class="tron-table w-full text-sm">
+						<thead>
+							<tr>
+								<th class="text-left">Part #</th>
+								<th class="text-left">Name</th>
+								<th class="text-right">Inventory</th>
+								<th class="text-right">Lead Time (days)</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each displayItems as item (item.id)}
+								<tr>
+									<td>
+										<a href="/spu/parts/{item.id}" class="font-mono text-[var(--color-tron-cyan)] hover:underline">
+											{item.partNumber ?? '—'}
+										</a>
+									</td>
+									<td class="tron-text-muted">{item.name}</td>
+									<td class="text-right font-mono">
+										<span class={item.inventoryCount <= 0 ? 'text-[var(--color-tron-red)]' : 'text-[var(--color-tron-orange)]'}>
+											{item.inventoryCount}
+										</span>
+									</td>
+									<td class="text-right font-mono tron-text-muted">
+										{item.leadTimeDays ?? '—'}
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				{:else}
+					<p class="tron-text-muted py-4 text-center text-sm">
+						{lowInvTab === 'zero' ? 'No items at zero or negative inventory.' : 'No low stock items.'}
+					</p>
+				{/if}
+			</div>
+		{/if}
 	</TronCard>
 	{/if}
 
