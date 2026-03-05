@@ -77,11 +77,11 @@
 	// SITE-22: Filtering and sorting state
 	let searchQuery = $state('');
 	let filterQcStatus = $state('all');
-	let filterAssignment = $state('all');
+	// filterAssignment removed — release statuses replace assignment
 	let filterAssemblyStatus = $state('all');
 	let filterDateAfter = $state('');
 	let filterDateBefore = $state('');
-	let sortBy = $state<'createdAt' | 'qcStatus' | 'assignment'>('createdAt');
+	let sortBy = $state<'createdAt' | 'qcStatus' | 'status'>('createdAt');
 	let sortDir = $state<'asc' | 'desc'>('desc');
 
 	const ASSEMBLY_STATUSES = [
@@ -140,20 +140,6 @@
 			result = result.filter((s) => s.qcStatus === filterQcStatus);
 		}
 
-		// Assignment filter
-		if (filterAssignment !== 'all') {
-			if (filterAssignment === 'unassigned') {
-				result = result.filter((s) => !s.assignmentType);
-			} else if (filterAssignment.startsWith('customer:')) {
-				const custId = filterAssignment.slice(9);
-				result = result.filter(
-					(s) => s.assignmentType === 'customer' && s.assignmentCustomerId === custId
-				);
-			} else {
-				result = result.filter((s) => s.assignmentType === filterAssignment);
-			}
-		}
-
 		// Assembly Status filter
 		if (filterAssemblyStatus !== 'all') {
 			result = result.filter((s) => s.assemblyStatus === filterAssemblyStatus);
@@ -178,10 +164,8 @@
 			if (sortBy === 'qcStatus') {
 				return dir * a.qcStatus.localeCompare(b.qcStatus);
 			}
-			// assignment
-			const aLabel = assignmentLabel(a);
-			const bLabel = assignmentLabel(b);
-			return dir * aLabel.localeCompare(bLabel);
+			// status
+			return dir * (a.status ?? '').localeCompare(b.status ?? '');
 		});
 
 		return result;
@@ -190,7 +174,6 @@
 	let hasActiveFilters = $derived(
 		searchQuery.trim() !== '' ||
 			filterQcStatus !== 'all' ||
-			filterAssignment !== 'all' ||
 			filterAssemblyStatus !== 'all' ||
 			filterDateAfter !== '' ||
 			filterDateBefore !== ''
@@ -199,7 +182,6 @@
 	function clearFilters() {
 		searchQuery = '';
 		filterQcStatus = 'all';
-		filterAssignment = 'all';
 		filterAssemblyStatus = 'all';
 		filterDateAfter = '';
 		filterDateBefore = '';
@@ -219,13 +201,7 @@
 		return 'var(--color-tron-orange)';
 	}
 
-	function assignmentLabel(spuItem: (typeof data.spus)[0]): string {
-		if (!spuItem.assignmentType) return 'Unassigned';
-		if (spuItem.assignmentType === 'rnd') return 'R&D';
-		if (spuItem.assignmentType === 'manufacturing') return 'Manufacturing';
-		if (spuItem.assignmentType === 'customer' && spuItem.customerName) return spuItem.customerName;
-		return 'Customer';
-	}
+	// assignmentLabel removed — status badge handles display
 
 	function toggleSelect(id: string) {
 		if (selectedSpus.has(id)) {
@@ -717,48 +693,7 @@
 						>
 							{s.qcStatus.charAt(0).toUpperCase() + s.qcStatus.slice(1)}
 						</span>
-						<form
-							method="POST"
-							action="?/assignSpu"
-							use:enhance={() => {
-								assigning = true;
-								return async ({ update }) => {
-									assigning = false;
-									await update();
-								};
-							}}
-						>
-							<input type="hidden" name="spuId" value={s.id} />
-							<input type="hidden" name="assignmentType" value="" />
-							<input type="hidden" name="customerId" value="" />
-							<select
-								class="tron-select min-w-[120px] py-1 text-xs"
-								disabled={assigning}
-								onchange={(e) => {
-									const sel = e.currentTarget;
-									const val = sel.value;
-									if (!val) return;
-									const frm = sel.closest('form')!;
-									const inputs = frm.querySelectorAll<HTMLInputElement>('input[type=hidden]');
-									if (val.startsWith('customer:')) {
-										inputs[1].value = 'customer';
-										inputs[2].value = val.slice(9);
-									} else {
-										inputs[1].value = val;
-										inputs[2].value = '';
-									}
-									frm.requestSubmit();
-									sel.value = '';
-								}}
-							>
-								<option value="">Reassign...</option>
-								<option value="rnd">R&D</option>
-								<option value="manufacturing">Manufacturing</option>
-								{#each data.activeCustomers as c (c.id)}
-									<option value="customer:{c.id}">{c.name}</option>
-								{/each}
-							</select>
-						</form>
+						<SpuStatusBadge status={s.status} />
 					</div>
 				</div>
 			{/snippet}
@@ -804,10 +739,6 @@
 								{#each spuList as s (s.id)}
 									{@render fleetSpuCard(s)}
 								{/each}
-							{:else if key === 'unassigned'}
-								<p class="tron-text-muted py-2 text-center text-sm italic">
-									Assign SPUs to organize your fleet
-								</p>
 							{:else}
 								<p class="tron-text-muted py-2 text-center text-sm italic">
 									No SPUs in this category
@@ -829,7 +760,6 @@
 						group.customer.customerType.toUpperCase()
 					)}
 				{/each}
-				{@render fleetSection('unassigned', 'Unassigned', fleet.unassigned)}
 			</div>
 		</div>
 	{/if}
@@ -884,23 +814,6 @@
 					</div>
 
 					<div>
-						<label for="filter-assignment" class="tron-label text-xs">Assignment</label>
-						<select
-							id="filter-assignment"
-							class="tron-select text-sm"
-							bind:value={filterAssignment}
-						>
-							<option value="all">All</option>
-							<option value="rnd">R&D</option>
-							<option value="manufacturing">Manufacturing</option>
-							<option value="unassigned">Unassigned</option>
-							{#each data.activeCustomers as c (c.id)}
-								<option value="customer:{c.id}">{c.name}</option>
-							{/each}
-						</select>
-					</div>
-
-					<div>
 						<label for="filter-assembly" class="tron-label text-xs">Assembly Status</label>
 						<select
 							id="filter-assembly"
@@ -940,7 +853,7 @@
 						<select id="sort-by" class="tron-select text-sm" bind:value={sortBy}>
 							<option value="createdAt">Creation Date</option>
 							<option value="qcStatus">QC Status</option>
-							<option value="assignment">Assignment</option>
+							<option value="status">Status</option>
 						</select>
 					</div>
 
@@ -1171,10 +1084,7 @@
 										<span class="tron-text-muted">Created By</span>
 										<span class="tron-text-primary">{spuItem.createdByUsername ?? 'Unknown'}</span>
 									</div>
-									<div class="flex justify-between">
-										<span class="tron-text-muted">Assignment</span>
-										<span class="tron-text-primary">{assignmentLabel(spuItem)}</span>
-									</div>
+									<!-- Assignment row removed -->
 									<div class="flex items-center justify-between">
 										<span class="tron-text-muted">QC Status</span>
 										<span
