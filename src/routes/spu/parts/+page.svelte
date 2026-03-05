@@ -264,16 +264,18 @@
 </script>
 
 <div class="space-y-6">
-	<!-- Tab Switcher -->
-	<div class="flex items-center gap-1 border-b border-[var(--color-tron-border)]">
+	<!-- S16: Tab Switcher — horizontally scrollable on mobile -->
+	<div class="scroll-tabs border-b border-[var(--color-tron-border)]">
 		<button
-			class="px-4 py-2 text-sm font-medium transition-colors {activeTab === 'spu' ? 'border-b-2 border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
+			class="scroll-tabs-item whitespace-nowrap px-4 py-2 text-sm font-medium transition-colors {activeTab === 'spu' ? 'border-b-2 border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
+			style="min-height: 44px;"
 			onclick={() => switchTab('spu')}
 		>
 			SPU Parts
 		</button>
 		<button
-			class="px-4 py-2 text-sm font-medium transition-colors {activeTab === 'cartridge' ? 'border-b-2 border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
+			class="scroll-tabs-item whitespace-nowrap px-4 py-2 text-sm font-medium transition-colors {activeTab === 'cartridge' ? 'border-b-2 border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
+			style="min-height: 44px;"
 			onclick={() => switchTab('cartridge')}
 		>
 			Cartridge Parts
@@ -550,50 +552,31 @@
 				</button>
 			</div>
 
-			<div class="mt-3 overflow-x-auto">
-				{#if (lowInvTab === 'zero' ? zeroItems : lowItems).length > 0}
-				{@const displayItems = lowInvTab === 'zero' ? zeroItems : lowItems}
-					<table class="tron-table w-full text-sm">
-						<thead>
-							<tr>
-								<th class="text-left">Part #</th>
-								<th class="text-left">Name</th>
-								<th class="text-right">Inventory</th>
-								<th class="text-right">Lead Time (days)</th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each displayItems as item (item.id)}
-								<tr>
-									<td>
-										<a href="/spu/parts/{item.id}" class="font-mono text-[var(--color-tron-cyan)] hover:underline">
-											{item.partNumber ?? '—'}
-										</a>
-									</td>
-									<td class="tron-text-muted">{item.name}</td>
-									<td class="text-right font-mono">
-										<span class={item.inventoryCount <= 0 ? 'text-[var(--color-tron-red)]' : 'text-[var(--color-tron-orange)]'}>
-											{item.inventoryCount}
-										</span>
-									</td>
-									<td class="text-right font-mono tron-text-muted">
-										{item.leadTimeDays ?? '—'}
-									</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
+			<div class="mt-3">
+				{#each (lowInvTab === 'zero' ? zeroItems : lowItems) as item (item.id)}
+					<!-- S15: Low inventory alert card -->
+					<div class="mobile-card {item.inventoryCount <= 0 ? 'alert-card-critical' : 'alert-card'} mb-2">
+						<div class="mobile-card-row">
+							<a href="/spu/parts/{item.id}" class="font-mono text-sm font-bold text-[var(--color-tron-cyan)] hover:underline">{item.partNumber ?? '—'}</a>
+							<span class="font-mono text-xl font-bold {item.inventoryCount <= 0 ? 'text-[var(--color-tron-red)]' : 'text-[var(--color-tron-orange)]'}">{item.inventoryCount}</span>
+						</div>
+						<p class="text-sm text-[var(--color-tron-text-secondary)]">{item.name}</p>
+						{#if item.leadTimeDays}
+							<p class="text-xs text-[var(--color-tron-text-secondary)]">Lead time: {item.leadTimeDays} days</p>
+						{/if}
+					</div>
 				{:else}
 					<p class="tron-text-muted py-4 text-center text-sm">
 						{lowInvTab === 'zero' ? 'No items at zero or negative inventory.' : 'No low stock items.'}
 					</p>
-				{/if}
+				{/each}
 			</div>
 		{/if}
 	</TronCard>
 	{/if}
 
-	<!-- Filters -->
+	<!-- S13: Sticky search bar on mobile, static on desktop -->
+	<div class="sticky top-14 z-20 md:static">
 	<TronCard>
 		<div class="flex flex-wrap items-center gap-4">
 			<div class="flex-1">
@@ -658,7 +641,8 @@
 		</div>
 
 		{#if filtersOpen}
-			<div class="mt-4 border-t border-[var(--color-tron-border)] pt-4">
+			<!-- Desktop: show expanded in-place. Mobile: use slide-up sheet instead (sheet opened by same button) -->
+			<div class="mt-4 border-t border-[var(--color-tron-border)] pt-4 hidden md:block">
 				<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 					<!-- Inventory Range -->
 					<div>
@@ -819,6 +803,60 @@
 		{/if}
 	</TronCard>
 
+	</div><!-- end sticky wrapper -->
+
+	<!-- S5/S13: Mobile Filters Slide-Up Sheet -->
+	{#if filtersOpen}
+		<!-- Backdrop -->
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<!-- svelte-ignore a11y_click_events_have_key_events -->
+		<div class="fixed inset-0 z-40 bg-black/60 md:hidden" onclick={() => (filtersOpen = false)}></div>
+		<div class="slide-up-sheet open md:hidden" style="z-index: 50;">
+			<div class="slide-up-sheet-handle"></div>
+			<div class="mb-4 flex items-center justify-between">
+				<h3 class="tron-text-primary text-lg font-bold">Filters</h3>
+				<button type="button" class="flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-tron-text-secondary)]" onclick={() => (filtersOpen = false)}>
+					<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+				</button>
+			</div>
+			<div class="space-y-4">
+				<div>
+					<label for="m-parts-cat" class="tron-label">Classification</label>
+					<select id="m-parts-cat" class="tron-select glove-select w-full" bind:value={selectedCategory}>
+						<option value="all">All Classifications</option>
+						{#each data.categories as category (category)}
+							<option value={category}>{category}</option>
+						{/each}
+					</select>
+				</div>
+				<div>
+					<label for="m-inv-min" class="tron-label">Inventory Range</label>
+					<div class="flex items-center gap-2">
+						<input id="m-inv-min" type="number" placeholder="Min" bind:value={invMin} class="tron-input flex-1" style="min-height: 48px;" />
+						<span class="tron-text-muted">–</span>
+						<input type="number" placeholder="Max" bind:value={invMax} aria-label="Inventory max" class="tron-input flex-1" style="min-height: 48px;" />
+					</div>
+				</div>
+				<div>
+					<label for="m-mfr" class="tron-label">Manufacturer</label>
+					<input id="m-mfr" type="text" placeholder="Search manufacturers..." bind:value={manufacturerSearch} class="tron-input w-full" style="min-height: 48px;" />
+				</div>
+				<div class="flex gap-3 pt-2">
+					{#if activeFilterCount > 0}
+						<button type="button" class="flex-1 min-h-[56px] rounded-lg border border-[var(--color-tron-border)] font-medium text-[var(--color-tron-red)] hover:border-[var(--color-tron-red)]"
+							onclick={() => { clearAllFilters(); filtersOpen = false; }}>
+							Clear All
+						</button>
+					{/if}
+					<button type="button" class="flex-1 min-h-[56px] rounded-lg bg-[var(--color-tron-cyan)] font-bold text-[var(--color-tron-bg-primary)]"
+						onclick={() => (filtersOpen = false)}>
+						Apply
+					</button>
+				</div>
+			</div>
+		</div>
+	{/if}
+
 	<!-- Result Count -->
 	{#if activeFilterCount > 0 || searchQuery || selectedCategory !== 'all'}
 		<p class="tron-text-muted text-sm">
@@ -826,34 +864,102 @@
 		</p>
 	{/if}
 
-	<!-- Parts Table -->
-	<TronCard>
+	<!-- S12: Parts — Mobile Card View (below md) + Desktop Table (md+) -->
+
+	<!-- Mobile cards -->
+	<div class="space-y-3 md:hidden">
+		{#each filteredItems as item (item.id)}
+			{@const isLow = (item.inventoryCount ?? 0) <= (item.minimumStockLevel ?? 0)}
+			<!-- S15: Alert card styling for low inventory -->
+			<div class="mobile-card {isLow ? 'alert-card' : ''}">
+				<div class="mobile-card-row">
+					<a href="/spu/parts/{item.id}" class="font-mono text-sm font-bold text-[var(--color-tron-cyan)] hover:underline">{item.partNumber}</a>
+					{#if item.category}
+						<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-tron-text-secondary)]">{item.category}</span>
+					{/if}
+				</div>
+				<p class="text-sm text-[var(--color-tron-text-primary)]">{item.name}</p>
+				{#if item.supplier}
+					<p class="text-xs text-[var(--color-tron-text-secondary)]">{item.supplier}</p>
+				{/if}
+				<div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+					<div>
+						<span class="mobile-card-label">Cost</span>
+						<span class="mobile-card-value font-mono">{formatCurrency(item.unitCost)}</span>
+					</div>
+					<div>
+						<span class="mobile-card-label">Qty/Unit</span>
+						<span class="mobile-card-value font-mono">{item.quantityPerUnit}</span>
+					</div>
+					<div>
+						<span class="mobile-card-label">Value</span>
+						<span class="mobile-card-value font-mono">{formatCurrency(item.totalValue)}</span>
+					</div>
+					{#if item.leadTimeDays}
+						<div>
+							<span class="mobile-card-label">Lead Time</span>
+							<span class="mobile-card-value font-mono">{item.leadTimeDays}d</span>
+						</div>
+					{/if}
+				</div>
+				<!-- S14: Inline inventory +/- quick-update -->
+				<div class="mt-3 flex items-center justify-between">
+					<div class="flex items-center gap-2">
+						<span class="text-xs text-[var(--color-tron-text-secondary)]">Inventory:</span>
+						<div class="qty-stepper">
+							<form method="POST" action="?/adjustInventory" use:enhance>
+								<input type="hidden" name="id" value={item.id} />
+								<input type="hidden" name="delta" value="-1" />
+								<input type="hidden" name="partType" value="spu" />
+								<button type="submit" class="qty-stepper-btn" aria-label="Decrease">−</button>
+							</form>
+							<span class="qty-stepper-value {isLow ? 'text-[var(--color-tron-orange)]' : ''}">{item.inventoryCount ?? 0}</span>
+							<form method="POST" action="?/adjustInventory" use:enhance>
+								<input type="hidden" name="id" value={item.id} />
+								<input type="hidden" name="delta" value="1" />
+								<input type="hidden" name="partType" value="spu" />
+								<button type="submit" class="qty-stepper-btn" aria-label="Increase">+</button>
+							</form>
+						</div>
+						{#if isLow}
+							<span class="text-xs font-medium text-[var(--color-tron-orange)]">⚠ Low</span>
+						{/if}
+					</div>
+					<a href="/spu/parts/{item.id}" class="text-xs text-[var(--color-tron-cyan)] hover:underline">Details →</a>
+				</div>
+			</div>
+		{:else}
+			<div class="rounded-lg border border-[var(--color-tron-border)] py-10 text-center">
+				<p class="tron-text-muted text-sm">
+					{#if searchQuery || selectedCategory !== 'all' || activeFilterCount > 0}
+						No parts match your filters.
+					{:else if !data.boxStatus.isConnected}
+						Connect to Box.com to sync parts data.
+					{:else}
+						No parts yet. Sync from Box.
+					{/if}
+				</p>
+			</div>
+		{/each}
+	</div>
+
+	<!-- Desktop table -->
+	<TronCard class="hidden md:block">
 		<div class="overflow-x-auto">
 			<table class="tron-table">
 				<thead>
 					<tr>
 						{#each [{ key: 'name', label: 'Name' }, { key: 'partNumber', label: 'Part #' }, { key: 'category', label: 'Classification' }, { key: null, label: 'Manufacturer' }, { key: 'quantityPerUnit', label: 'Qty/Unit' }, { key: 'inventoryCount', label: 'Inventory' }, { key: 'unitCost', label: 'Unit Cost' }, { key: 'totalValue', label: 'Total Value' }, { key: 'leadTimeDays', label: 'Lead Time' }, { key: null, label: 'Actions' }] as col (col.label)}
 							{#if col.key}
-								<th
-									class="cursor-pointer select-none hover:text-[var(--color-tron-cyan)]"
-									onclick={() => toggleSort(col.key as SortColumn)}
-								>
+								<th class="cursor-pointer select-none hover:text-[var(--color-tron-cyan)]" onclick={() => toggleSort(col.key as SortColumn)}>
 									<span class="inline-flex items-center gap-1">
 										{col.label}
 										{#if sortColumn === col.key && sortDirection}
-											<svg
-												class="h-3 w-3 text-[var(--color-tron-cyan)]"
-												fill="currentColor"
-												viewBox="0 0 20 20"
-											>
+											<svg class="h-3 w-3 text-[var(--color-tron-cyan)]" fill="currentColor" viewBox="0 0 20 20">
 												{#if sortDirection === 'asc'}
-													<path
-														d="M5.293 9.707a1 1 0 010-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 01-1.414 1.414L10 6.414l-3.293 3.293a1 1 0 01-1.414 0z"
-													/>
+													<path d="M5.293 9.707a1 1 0 010-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 01-1.414 1.414L10 6.414l-3.293 3.293a1 1 0 01-1.414 0z" />
 												{:else}
-													<path
-														d="M14.707 10.293a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 111.414-1.414L10 13.586l3.293-3.293a1 1 0 011.414 0z"
-													/>
+													<path d="M14.707 10.293a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 111.414-1.414L10 13.586l3.293-3.293a1 1 0 011.414 0z" />
 												{/if}
 											</svg>
 										{/if}
@@ -892,12 +998,7 @@
 							<td class="font-mono">{item.leadTimeDays ? `${item.leadTimeDays}d` : '—'}</td>
 							<td>
 								<!-- eslint-disable svelte/no-navigation-without-resolve -->
-								<a
-									href="/spu/parts/{item.id}"
-									class="text-sm text-[var(--color-tron-cyan)] hover:underline"
-								>
-									View Details
-								</a>
+								<a href="/spu/parts/{item.id}" class="text-sm text-[var(--color-tron-cyan)] hover:underline">View Details</a>
 								<!-- eslint-enable svelte/no-navigation-without-resolve -->
 							</td>
 						</tr>
@@ -1031,28 +1132,93 @@
 		</div>
 	{/if}
 
-	<!-- Cartridge Search -->
-	<TronCard>
-		<input
-			type="search"
-			placeholder="Search cartridge parts..."
-			bind:value={cartSearchQuery}
-			class="tron-input w-full"
-		/>
-	</TronCard>
+	<!-- Cartridge Search (S13: sticky on mobile) -->
+	<div class="sticky top-14 z-20 md:static">
+		<TronCard>
+			<input
+				type="search"
+				placeholder="Search cartridge parts..."
+				bind:value={cartSearchQuery}
+				class="tron-input w-full"
+				style="min-height: 48px;"
+			/>
+		</TronCard>
+	</div>
 
-	<!-- Cartridge Parts Table -->
-	<TronCard>
+	<!-- S12: Cartridge Parts — Mobile Cards + Desktop Table -->
+
+	<!-- Mobile cards -->
+	<div class="space-y-3 md:hidden">
+		{#each filteredCartridgeParts as item (item.id)}
+			{@const isLow = (item.inventoryCount ?? 0) <= (item.minimumStockLevel ?? 0)}
+			<div class="mobile-card {isLow ? 'alert-card' : ''}">
+				<div class="mobile-card-row">
+					<span class="font-mono text-sm font-bold text-[var(--color-tron-cyan)]">{item.partNumber}</span>
+					{#if item.category}
+						<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-tron-text-secondary)]">{item.category}</span>
+					{/if}
+				</div>
+				<p class="text-sm text-[var(--color-tron-text-primary)]">{item.name}</p>
+				{#if item.manufacturer}
+					<p class="text-xs text-[var(--color-tron-text-secondary)]">{item.manufacturer}</p>
+				{/if}
+				<div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+					<div>
+						<span class="mobile-card-label">Cost</span>
+						<span class="mobile-card-value font-mono">{formatCurrency(item.unitCost)}</span>
+					</div>
+					<div>
+						<span class="mobile-card-label">Qty/Unit</span>
+						<span class="mobile-card-value font-mono">{item.quantityPerUnit}</span>
+					</div>
+				</div>
+				<!-- S14: Inline +/- -->
+				<div class="mt-3 flex items-center justify-between">
+					<div class="flex items-center gap-2">
+						<span class="text-xs text-[var(--color-tron-text-secondary)]">Inventory:</span>
+						<div class="qty-stepper">
+							<form method="POST" action="?/adjustInventory" use:enhance>
+								<input type="hidden" name="id" value={item.id} />
+								<input type="hidden" name="delta" value="-1" />
+								<input type="hidden" name="partType" value="cartridge" />
+								<button type="submit" class="qty-stepper-btn" aria-label="Decrease">−</button>
+							</form>
+							<span class="qty-stepper-value {isLow ? 'text-[var(--color-tron-orange)]' : ''}">{item.inventoryCount ?? 0}</span>
+							<form method="POST" action="?/adjustInventory" use:enhance>
+								<input type="hidden" name="id" value={item.id} />
+								<input type="hidden" name="delta" value="1" />
+								<input type="hidden" name="partType" value="cartridge" />
+								<button type="submit" class="qty-stepper-btn" aria-label="Increase">+</button>
+							</form>
+						</div>
+						{#if isLow}
+							<span class="text-xs font-medium text-[var(--color-tron-orange)]">⚠ Low</span>
+						{/if}
+					</div>
+					<form method="POST" action="?/deleteCartridgePart" use:enhance>
+						<input type="hidden" name="id" value={item.id} />
+						<button type="submit" class="text-xs text-[var(--color-tron-red)] hover:underline">Delete</button>
+					</form>
+				</div>
+			</div>
+		{:else}
+			<div class="rounded-lg border border-[var(--color-tron-border)] py-10 text-center">
+				<p class="tron-text-muted text-sm">
+					{#if cartSearchQuery}No cartridge parts match your search.{:else}No cartridge parts yet. Tap "+ Add Part" to get started.{/if}
+				</p>
+			</div>
+		{/each}
+	</div>
+
+	<!-- Desktop table -->
+	<TronCard class="hidden md:block">
 		<div class="overflow-x-auto">
 			<table class="tron-table">
 				<thead>
 					<tr>
 						{#each [{ key: 'name', label: 'Name' }, { key: 'partNumber', label: 'Part #' }, { key: 'category', label: 'Category' }, { key: null, label: 'Manufacturer' }, { key: 'quantityPerUnit', label: 'Qty/Unit' }, { key: 'inventoryCount', label: 'Inventory' }, { key: 'unitCost', label: 'Unit Cost' }, { key: 'totalValue', label: 'Total Value' }, { key: null, label: 'Actions' }] as col (col.label)}
 							{#if col.key}
-								<th
-									class="cursor-pointer select-none hover:text-[var(--color-tron-cyan)]"
-									onclick={() => toggleCartSort(col.key as CartSortColumn)}
-								>
+								<th class="cursor-pointer select-none hover:text-[var(--color-tron-cyan)]" onclick={() => toggleCartSort(col.key as CartSortColumn)}>
 									<span class="inline-flex items-center gap-1">
 										{col.label}
 										{#if cartSortColumn === col.key && cartSortDirection}

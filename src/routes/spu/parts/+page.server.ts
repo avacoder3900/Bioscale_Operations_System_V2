@@ -156,6 +156,27 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
+	// S14: Inline inventory quick-update (+/- from mobile card view)
+	adjustInventory: async ({ request, locals }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+		const form = await request.formData();
+		const id = form.get('id')?.toString();
+		const delta = Number(form.get('delta') ?? 0);
+		const partType = form.get('partType')?.toString() ?? 'spu'; // 'spu' | 'cartridge'
+
+		if (!id || isNaN(delta) || delta === 0) return fail(400, { error: 'Invalid adjustment' });
+
+		if (partType === 'cartridge') {
+			const result = await BomItem.updateOne({ _id: id }, { $inc: { inventoryCount: delta } });
+			if (result.matchedCount === 0) return fail(404, { error: 'Part not found' });
+		} else {
+			const result = await PartDefinition.updateOne({ _id: id }, { $inc: { inventoryCount: delta } });
+			if (result.matchedCount === 0) return fail(404, { error: 'Part not found' });
+		}
+		return { success: true };
+	},
+
 	sync: async ({ locals }) => {
 		requirePermission(locals.user, 'inventory:write');
 		try {
