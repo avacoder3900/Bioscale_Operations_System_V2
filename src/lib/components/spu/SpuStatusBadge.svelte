@@ -11,11 +11,17 @@
 
 	const statusConfig: Record<string, { variant: BadgeVariant; label: string }> = {
 		draft: { variant: 'neutral', label: 'Draft' },
-		in_assembly: { variant: 'info', label: 'In Assembly' },
-		assembly_complete: { variant: 'warning', label: 'Assembly Complete' },
+		assembling: { variant: 'info', label: 'Assembling' },
+		assembled: { variant: 'info', label: 'Assembled' },
+		validating: { variant: 'warning', label: 'Validating' },
 		validated: { variant: 'success', label: 'Validated' },
-		shipped: { variant: 'info', label: 'Shipped' },
-		retired: { variant: 'neutral', label: 'Retired' }
+		'released-rnd': { variant: 'success', label: 'Released — R&D' },
+		'released-manufacturing': { variant: 'success', label: 'Released — Mfg' },
+		'released-field': { variant: 'success', label: 'Released — Field' },
+		deployed: { variant: 'success', label: 'Deployed' },
+		servicing: { variant: 'warning', label: 'Servicing' },
+		retired: { variant: 'neutral', label: 'Retired' },
+		voided: { variant: 'error', label: 'Voided' }
 	};
 
 	let config = $derived(

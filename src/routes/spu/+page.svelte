@@ -29,11 +29,12 @@
 
 	const STATUS_OPTIONS = [
 		'draft', 'assembling', 'assembled', 'validating', 'validated',
-		'assigned', 'deployed', 'servicing', 'retired', 'voided'
+		'released-rnd', 'released-manufacturing', 'released-field',
+		'deployed', 'servicing', 'retired', 'voided'
 	] as const;
 
 	function statusColor(status: string): string {
-		if (['assigned', 'deployed'].includes(status)) return 'var(--color-tron-green)';
+		if (['released-rnd', 'released-manufacturing', 'released-field', 'deployed'].includes(status)) return 'var(--color-tron-green)';
 		if (['assembling', 'assembled'].includes(status)) return 'var(--color-tron-cyan)';
 		if (['validating', 'validated'].includes(status)) return 'var(--color-tron-yellow, #fbbf24)';
 		if (status === 'servicing') return 'var(--color-tron-orange)';
@@ -100,7 +101,9 @@
 		{ key: 'assembled', label: 'Assembled' },
 		{ key: 'validating', label: 'Validating' },
 		{ key: 'validated', label: 'Validated' },
-		{ key: 'assigned', label: 'Assigned' },
+		{ key: 'released-rnd', label: 'Released R&D' },
+		{ key: 'released-manufacturing', label: 'Released Mfg' },
+		{ key: 'released-field', label: 'Released Field' },
 		{ key: 'deployed', label: 'Deployed' },
 		{ key: 'servicing', label: 'Servicing' },
 		{ key: 'retired', label: 'Retired' },
@@ -369,7 +372,9 @@
 							<option value="assembled">Assembled</option>
 							<option value="validating">Validating</option>
 							<option value="validated">Validated</option>
-							<option value="assigned">Assigned</option>
+							<option value="released-rnd">Released R&D</option>
+							<option value="released-manufacturing">Released Mfg</option>
+							<option value="released-field">Released Field</option>
 							<option value="deployed">Deployed</option>
 							<option value="servicing">Servicing</option>
 							<option value="retired">Retired</option>
@@ -1015,7 +1020,9 @@
 					<option value="assembled">Assembled</option>
 					<option value="validating">Validating</option>
 					<option value="validated">Validated</option>
-					<option value="assigned">Assigned</option>
+					<option value="released-rnd">Released R&D</option>
+							<option value="released-manufacturing">Released Mfg</option>
+							<option value="released-field">Released Field</option>
 					<option value="deployed">Deployed</option>
 					<option value="servicing">Servicing</option>
 					<option value="retired">Retired</option>

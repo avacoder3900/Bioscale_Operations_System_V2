@@ -16,24 +16,19 @@
 	let renaming = $state(false);
 	let showRenameForm = $state(false);
 
-	let editingAssignment = $state(false);
-	let assignmentOverride = $state<string | null>(null);
-	let customerIdOverride = $state<string | null>(null);
-
-	let selectedAssignment = $derived(assignmentOverride ?? data.spu.assignmentType ?? '');
-	let selectedCustomerId = $derived(customerIdOverride ?? data.spu.assignmentCustomerId ?? '');
-	let showCustomerSelect = $derived(selectedAssignment === 'customer');
+	// Assignment removed — release status (released-rnd/manufacturing/field) replaces it
 
 	let showRecordHistory = $state(false);
 	let transitionReason = $state('');
 
 	const STATUS_OPTIONS = [
 		'draft', 'assembling', 'assembled', 'validating', 'validated',
-		'assigned', 'deployed', 'servicing', 'retired', 'voided'
+		'released-rnd', 'released-manufacturing', 'released-field',
+		'deployed', 'servicing', 'retired', 'voided'
 	] as const;
 
 	function statusColor(status: string): string {
-		if (['assigned', 'deployed'].includes(status)) return 'var(--color-tron-green)';
+		if (['released-rnd', 'released-manufacturing', 'released-field', 'deployed'].includes(status)) return 'var(--color-tron-green)';
 		if (['assembling', 'assembled'].includes(status)) return 'var(--color-tron-cyan)';
 		if (['validating', 'validated'].includes(status)) return 'var(--color-tron-yellow, #fbbf24)';
 		if (status === 'servicing') return 'var(--color-tron-orange, #f97316)';
@@ -41,34 +36,12 @@
 		return 'var(--color-tron-text-secondary)';
 	}
 
-	function startEditAssignment() {
-		assignmentOverride = data.spu.assignmentType ?? '';
-		customerIdOverride = data.spu.assignmentCustomerId ?? '';
-		editingAssignment = true;
-	}
-
-	function cancelEditAssignment() {
-		editingAssignment = false;
-		assignmentOverride = null;
-		customerIdOverride = null;
-	}
-
 	function formatDate(date: Date | string | null): string {
 		if (!date) return '—';
 		return new Date(date).toLocaleString();
 	}
 
-	function assignmentLabel(type: string | null, customerName: string | null): string {
-		if (!type) return 'Unassigned';
-		if (type === 'rnd') return 'R&D';
-		if (type === 'manufacturing') return 'Manufacturing';
-		if (type === 'customer') return customerName ?? 'Customer';
-		return type;
-	}
-
 	const fieldLabels: Record<string, string> = {
-		assignmentType: 'Assignment',
-		assignmentCustomerId: 'Customer',
 		status: 'Status',
 		batchId: 'Batch'
 	};
@@ -199,50 +172,7 @@
 					<dd class="tron-text-primary">{data.createdByName ?? '—'}</dd>
 				</div>
 
-				<!-- Assignment (editable) -->
-				<div class="flex items-center justify-between gap-2">
-					<dt class="tron-text-muted">Assignment</dt>
-					<dd class="flex items-center gap-2">
-						{#if editingAssignment}
-							<form
-								method="POST"
-								action="?/updateAssignment"
-								use:enhance={() => {
-									return async ({ update }) => {
-										await update();
-										cancelEditAssignment();
-									};
-								}}
-								class="flex items-center gap-2"
-							>
-								<select name="assignmentType" value={selectedAssignment} onchange={(e) => (assignmentOverride = e.currentTarget.value)} class="tron-input rounded px-2 py-1 text-sm">
-									<option value="rnd">R&D</option>
-									<option value="manufacturing">Manufacturing</option>
-									<option value="customer">Customer</option>
-								</select>
-								{#if showCustomerSelect}
-									<select name="customerId" value={selectedCustomerId} onchange={(e) => (customerIdOverride = e.currentTarget.value)} class="tron-input rounded px-2 py-1 text-sm">
-										<option value="">Select customer…</option>
-										{#each data.activeCustomers as c (c.id)}
-											<option value={c.id}>{c.name}</option>
-										{/each}
-									</select>
-								{/if}
-								<button type="submit" class="rounded px-2 py-1 text-xs" style="background: var(--color-tron-cyan); color: var(--color-tron-bg);">Save</button>
-								<button type="button" onclick={cancelEditAssignment} class="tron-text-muted text-xs underline">Cancel</button>
-							</form>
-						{:else}
-							<span class="tron-text-primary">
-								{#if data.spu.assignmentType === 'customer' && data.assignmentCustomerName}
-									<a href="/spu/customers/{data.spu.assignmentCustomerId}" class="underline" style="color: var(--color-tron-cyan);">{data.assignmentCustomerName}</a>
-								{:else}
-									{assignmentLabel(data.spu.assignmentType, data.assignmentCustomerName)}
-								{/if}
-							</span>
-							<button type="button" onclick={startEditAssignment} class="tron-text-muted text-xs underline">Edit</button>
-						{/if}
-					</dd>
-				</div>
+				<!-- Assignment removed — release status replaces it -->
 
 				{#if data.spu.owner}
 					<div class="flex justify-between">

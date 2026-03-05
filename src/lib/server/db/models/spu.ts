@@ -66,7 +66,7 @@ const spuSchema = new Schema({
 		assignedAt: Date, assignedBy: operatorRef
 	},
 
-	status: { type: String, enum: ['draft', 'assembling', 'assembled', 'validating', 'validated', 'assigned', 'deployed', 'servicing', 'retired', 'voided'] },
+	status: { type: String, enum: ['draft', 'assembling', 'assembled', 'validating', 'validated', 'released-rnd', 'released-manufacturing', 'released-field', 'deployed', 'servicing', 'retired', 'voided'] },
 	statusTransitions: [{
 		_id: { type: String, default: () => generateId() },
 		from: String,
