@@ -4,8 +4,15 @@ import { generateId } from '../utils.js';
 const validationSessionSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	type: String, spuId: String, generatedBarcodeId: String,
-	status: { type: String, enum: ['pending', 'in_progress', 'completed', 'failed'] },
+	status: { type: String, enum: ['pending', 'in_progress', 'running', 'completed', 'failed', 'timed_out'] },
 	startedAt: Date, completedAt: Date, userId: String,
+	spuUdi: String, spuId: String, particleDeviceId: String,
+	rawData: Schema.Types.Mixed,
+	magResults: Schema.Types.Mixed,
+	overallPassed: Boolean,
+	failureReasons: [String],
+	criteriaUsed: Schema.Types.Mixed,
+	barcode: String,
 	results: [{
 		_id: { type: String, default: () => generateId() },
 		testType: String, rawData: Schema.Types.Mixed, processedData: Schema.Types.Mixed,
