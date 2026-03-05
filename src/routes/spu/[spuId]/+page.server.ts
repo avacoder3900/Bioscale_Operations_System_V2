@@ -205,12 +205,16 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-	assignSpu: async ({ request, locals, params }) => {
+	updateAssignment: async ({ request, locals, params }) => {
 		requirePermission(locals.user, 'spu:write');
 		await connectDB();
 		const form = await request.formData();
 		const assignmentType = form.get('assignmentType')?.toString();
 		if (!assignmentType) return fail(400, { error: 'Type required' });
+
+		const spu = await Spu.findById(params.spuId);
+		if (!spu) return fail(404, { error: 'SPU not found' });
+		if ((spu as any).finalizedAt) return fail(400, { error: 'SPU is finalized' });
 
 		const assignment: Record<string, any> = {
 			type: assignmentType,
@@ -222,7 +226,37 @@ export const actions: Actions = {
 			if (customer) assignment.customer = { _id: (customer as any)._id, name: (customer as any).name };
 		}
 
-		await Spu.updateOne({ _id: params.spuId }, { $set: { assignment, status: 'assigned' } });
+		const oldStatus = (spu as any).status ?? 'draft';
+		const newStatus = 'assigned';
+		const updates: Record<string, any> = { assignment, status: newStatus };
+		const pushOps: Record<string, any> = {};
+
+		if (oldStatus !== newStatus) {
+			pushOps.statusTransitions = {
+				_id: generateId(),
+				from: oldStatus,
+				to: newStatus,
+				changedBy: { _id: locals.user!._id, username: locals.user!.username },
+				changedAt: new Date(),
+				reason: `Assigned as ${assignmentType}`
+			};
+		}
+
+		const updateQuery: Record<string, any> = { $set: updates };
+		if (Object.keys(pushOps).length) updateQuery.$push = pushOps;
+
+		await Spu.updateOne({ _id: params.spuId }, updateQuery);
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'spus',
+			recordId: params.spuId,
+			action: 'UPDATE',
+			oldData: { status: oldStatus, assignment: (spu as any).assignment },
+			newData: { status: newStatus, assignment },
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+
 		return { success: true };
 	},
 
