@@ -22,6 +22,7 @@
 	let expiringExpanded = $state(false);
 	let costExpanded = $state(false);
 	let expandedSpuId = $state<string | null>(null);
+	let mobileFiltersOpen = $state(false);
 	let collapsedSections = $state<Record<string, boolean>>({});
 	let selectedSpus = new SvelteSet<string>();
 	let bulkState = $state('');
@@ -252,23 +253,33 @@
 		<h2 class="tron-text-primary text-2xl font-bold">SPU Dashboard</h2>
 	</div>
 
-	<!-- Barcode Scan / Lookup -->
+	<!-- Barcode Scan / Lookup (S3: scan-first on mobile) -->
 	<TronCard>
 		<h3 class="tron-text-primary mb-3 text-lg font-bold">Barcode Scan / Lookup</h3>
-		<div class="flex gap-3">
+		<div class="flex gap-2">
 			<input
 				type="text"
-				class="tron-input flex-1"
+				class="tron-input flex-1 glove-input"
 				placeholder="Scan barcode to find or register a new SPU..."
 				bind:value={barcodeInput}
+				autocomplete="off"
+				autocorrect="off"
+				autocapitalize="off"
+				spellcheck={false}
+				inputmode="none"
 				onkeydown={(e) => {
 					if (e.key === 'Enter') handleBarcodeScan();
 				}}
-				style="min-height: 44px;"
+				style="min-height: 56px; font-size: 1rem;"
 			/>
-			<TronButton variant="primary" onclick={handleBarcodeScan} style="min-height: 44px;">
-				Lookup
-			</TronButton>
+			<button
+				type="button"
+				class="touch-target rounded-lg bg-[var(--color-tron-cyan)] font-bold text-[var(--color-tron-bg-primary)] px-4 transition-opacity hover:opacity-85 active:opacity-70"
+				onclick={handleBarcodeScan}
+				style="min-height: 56px; min-width: 72px;"
+			>
+				Scan
+			</button>
 		</div>
 
 		{#if registerSuccess}
@@ -303,7 +314,7 @@
 							await update();
 						};
 					}}
-					class="space-y-4"
+					class="space-y-3"
 				>
 					<div>
 						<label for="reg-barcode" class="tron-label">Barcode</label>
@@ -764,15 +775,15 @@
 		</div>
 	{/if}
 
-	<!-- Device State Tabs -->
-	<div class="flex flex-wrap gap-2">
+	<!-- Device State Tabs (S1: horizontally scrollable on mobile) -->
+	<div class="scroll-tabs md:flex md:flex-wrap md:gap-2">
 		{#each stateTabs as tab (tab.key)}
 			<a
 				href={tab.key ? `?state=${tab.key}` : '?'}
-				class="rounded-lg border px-4 py-2 text-sm font-medium transition-colors {activeTab === tab.key
+				class="scroll-tabs-item rounded-lg border px-4 py-2 text-sm font-medium transition-colors {activeTab === tab.key
 					? 'border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.15)] text-[var(--color-tron-cyan)]'
 					: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
-				style="min-height: 44px; display: inline-flex; align-items: center;"
+				style="min-height: 48px; display: inline-flex; align-items: center; white-space: nowrap;"
 			>
 				{tab.label}
 				<span
@@ -786,11 +797,51 @@
 		{/each}
 	</div>
 
-	<!-- SITE-22: Filter and Sort Controls -->
+	<!-- SITE-22 / S5: Filter and Sort Controls -->
 	{#if data.spus.length > 0}
-		<TronCard>
+		<!-- Mobile: Filters button + slide-up sheet -->
+		<div class="md:hidden">
+			<div class="flex items-center gap-2">
+				<!-- Search (always visible on mobile) -->
+				<input
+					type="text"
+					class="tron-input flex-1"
+					placeholder="Search UDI, batch, owner..."
+					bind:value={searchQuery}
+					style="min-height: 48px;"
+				/>
+				<!-- Filters trigger button -->
+				<button
+					type="button"
+					class="relative flex min-h-[48px] items-center gap-2 rounded-lg border px-4 font-medium transition-colors
+						{hasActiveFilters
+						? 'border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)] bg-[rgba(0,212,255,0.08)]'
+						: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}"
+					onclick={() => (mobileFiltersOpen = true)}
+				>
+					<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+							d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+					</svg>
+					Filters
+					{#if hasActiveFilters}
+						<span class="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-tron-cyan)] text-xs font-bold text-black">
+							{[filterQcStatus !== 'all', filterAssemblyStatus !== 'all', !!filterDateAfter, !!filterDateBefore].filter(Boolean).length}
+						</span>
+					{/if}
+				</button>
+			</div>
+
+			{#if hasActiveFilters}
+				<p class="tron-text-muted mt-2 text-xs">
+					{filteredSpus.length} of {data.spus.length} SPUs · <button type="button" class="text-[var(--color-tron-cyan)] hover:underline" onclick={clearFilters}>Clear filters</button>
+				</p>
+			{/if}
+		</div>
+
+		<!-- Desktop: always-visible filter controls -->
+		<TronCard class="hidden md:block">
 			<div class="space-y-3">
-				<!-- Search box -->
 				<div>
 					<input
 						type="text"
@@ -800,8 +851,6 @@
 						style="min-height: 44px;"
 					/>
 				</div>
-
-				<!-- Filter dropdowns row -->
 				<div class="flex flex-wrap items-end gap-3">
 					<div>
 						<label for="filter-qc" class="tron-label text-xs">QC Status</label>
@@ -812,42 +861,23 @@
 							<option value="pending">Pending</option>
 						</select>
 					</div>
-
 					<div>
 						<label for="filter-assembly" class="tron-label text-xs">Assembly Status</label>
-						<select
-							id="filter-assembly"
-							class="tron-select text-sm"
-							bind:value={filterAssemblyStatus}
-						>
+						<select id="filter-assembly" class="tron-select text-sm" bind:value={filterAssemblyStatus}>
 							<option value="all">All</option>
 							{#each ASSEMBLY_STATUSES as s (s)}
 								<option value={s}>{s.replace('_', ' ')}</option>
 							{/each}
 						</select>
 					</div>
-
 					<div>
 						<label for="filter-after" class="tron-label text-xs">Created After</label>
-						<input
-							id="filter-after"
-							type="date"
-							class="tron-input text-sm"
-							bind:value={filterDateAfter}
-						/>
+						<input id="filter-after" type="date" class="tron-input text-sm" bind:value={filterDateAfter} />
 					</div>
-
 					<div>
 						<label for="filter-before" class="tron-label text-xs">Created Before</label>
-						<input
-							id="filter-before"
-							type="date"
-							class="tron-input text-sm"
-							bind:value={filterDateBefore}
-						/>
+						<input id="filter-before" type="date" class="tron-input text-sm" bind:value={filterDateBefore} />
 					</div>
-
-					<!-- Sort controls -->
 					<div>
 						<label for="sort-by" class="tron-label text-xs">Sort By</label>
 						<select id="sort-by" class="tron-select text-sm" bind:value={sortBy}>
@@ -856,38 +886,24 @@
 							<option value="status">Status</option>
 						</select>
 					</div>
-
 					<button
 						type="button"
-						class="rounded border border-[var(--color-tron-border)] p-2 text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-surface)]"
+						class="rounded border border-[var(--color-tron-border)] p-2 text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-bg-tertiary)]"
 						title={sortDir === 'desc' ? 'Sorted descending' : 'Sorted ascending'}
 						onclick={() => (sortDir = sortDir === 'desc' ? 'asc' : 'desc')}
 					>
 						<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 							{#if sortDir === 'desc'}
-								<path
-									stroke-linecap="round"
-									stroke-linejoin="round"
-									stroke-width="2"
-									d="M19 9l-7 7-7-7"
-								/>
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
 							{:else}
-								<path
-									stroke-linecap="round"
-									stroke-linejoin="round"
-									stroke-width="2"
-									d="M5 15l7-7 7 7"
-								/>
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
 							{/if}
 						</svg>
 					</button>
-
 					{#if hasActiveFilters}
 						<TronButton class="text-xs" onclick={clearFilters}>Clear All</TronButton>
 					{/if}
 				</div>
-
-				<!-- Result count -->
 				{#if hasActiveFilters || filteredSpus.length !== data.spus.length}
 					<p class="tron-text-muted text-xs">
 						Showing {filteredSpus.length} of {data.spus.length} SPUs
@@ -895,6 +911,83 @@
 				{/if}
 			</div>
 		</TronCard>
+	{/if}
+
+	<!-- Mobile Filters Slide-Up Sheet (S5) -->
+	{#if mobileFiltersOpen}
+		<!-- Backdrop -->
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<!-- svelte-ignore a11y_click_events_have_key_events -->
+		<div class="fixed inset-0 z-40 bg-black/60 md:hidden" onclick={() => (mobileFiltersOpen = false)}></div>
+		<div class="slide-up-sheet open md:hidden" style="z-index: 50;">
+			<div class="slide-up-sheet-handle"></div>
+			<div class="mb-4 flex items-center justify-between">
+				<h3 class="tron-text-primary text-lg font-bold">Filters & Sort</h3>
+				<button
+					type="button"
+					class="flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-tron-text-secondary)]"
+					onclick={() => (mobileFiltersOpen = false)}
+				>
+					<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+					</svg>
+				</button>
+			</div>
+			<div class="space-y-4">
+				<div>
+					<label for="m-filter-qc" class="tron-label">QC Status</label>
+					<select id="m-filter-qc" class="tron-select glove-select" bind:value={filterQcStatus}>
+						<option value="all">All</option>
+						<option value="pass">Pass</option>
+						<option value="fail">Fail</option>
+						<option value="pending">Pending</option>
+					</select>
+				</div>
+				<div>
+					<label for="m-filter-assembly" class="tron-label">Assembly Status</label>
+					<select id="m-filter-assembly" class="tron-select glove-select" bind:value={filterAssemblyStatus}>
+						<option value="all">All</option>
+						{#each ASSEMBLY_STATUSES as s (s)}
+							<option value={s}>{s.replace('_', ' ')}</option>
+						{/each}
+					</select>
+				</div>
+				<div>
+					<label for="m-filter-after" class="tron-label">Created After</label>
+					<input id="m-filter-after" type="date" class="tron-input glove-input" bind:value={filterDateAfter} />
+				</div>
+				<div>
+					<label for="m-filter-before" class="tron-label">Created Before</label>
+					<input id="m-filter-before" type="date" class="tron-input glove-input" bind:value={filterDateBefore} />
+				</div>
+				<div>
+					<label for="m-sort-by" class="tron-label">Sort By</label>
+					<select id="m-sort-by" class="tron-select glove-select" bind:value={sortBy}>
+						<option value="createdAt">Creation Date</option>
+						<option value="qcStatus">QC Status</option>
+						<option value="status">Status</option>
+					</select>
+				</div>
+				<div class="flex gap-3 pt-2">
+					{#if hasActiveFilters}
+						<button
+							type="button"
+							class="flex-1 min-h-[56px] rounded-lg border border-[var(--color-tron-border)] font-medium text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-red)] hover:text-[var(--color-tron-red)]"
+							onclick={() => { clearFilters(); mobileFiltersOpen = false; }}
+						>
+							Clear All
+						</button>
+					{/if}
+					<button
+						type="button"
+						class="flex-1 min-h-[56px] rounded-lg bg-[var(--color-tron-cyan)] font-bold text-[var(--color-tron-bg-primary)]"
+						onclick={() => (mobileFiltersOpen = false)}
+					>
+						Apply
+					</button>
+				</div>
+			</div>
+		</div>
 	{/if}
 
 	<!-- Bulk Actions Bar -->
