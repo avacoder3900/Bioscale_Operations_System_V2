@@ -71,6 +71,21 @@ export async function renameDevice(deviceId: string, name: string): Promise<void
 	});
 }
 
+/** Call a function on a device */
+export async function callFunction(deviceId: string, functionName: string, arg: string = ''): Promise<{ return_value: number }> {
+	const res = await particleFetch(`/devices/${deviceId}/${functionName}`, {
+		method: 'POST',
+		body: JSON.stringify({ arg })
+	});
+	return res.json();
+}
+
+/** Read a variable from a device */
+export async function getVariable(deviceId: string, variableName: string): Promise<any> {
+	const res = await particleFetch(`/devices/${deviceId}/${variableName}`);
+	return res.json();
+}
+
 /** Test connection by listing devices — returns device count on success */
 export async function testConnection(accessToken: string): Promise<{ deviceCount: number }> {
 	const res = await fetch(`${PARTICLE_API_BASE}/devices`, {
