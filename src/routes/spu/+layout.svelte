@@ -35,6 +35,12 @@
 		}
 	});
 
+	// Close menu on navigation
+	$effect(() => {
+		$page.url;
+		menuOpen = false;
+	});
+
 	const navItems = [
 		{
 			href: '/spu',
@@ -126,7 +132,6 @@
 				label: 'Test Results',
 				icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z'
 			});
-		// Nick's additional nav items
 		items.push({
 			href: '/spu/customers',
 			label: 'Customers',
@@ -168,17 +173,91 @@
 	function closeMenu() {
 		menuOpen = false;
 	}
+
+	function toggleMenu() {
+		menuOpen = !menuOpen;
+	}
 </script>
+
+<!-- Mobile nav drawer (slide-out) — below 1024px -->
+{#if menuOpen}
+	<!-- Backdrop -->
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<!-- svelte-ignore a11y_click_events_have_key_events -->
+	<div class="mobile-nav-overlay lg:hidden" onclick={closeMenu}></div>
+{/if}
+
+<!-- Slide-out drawer (mobile) -->
+<div class="mobile-nav-drawer lg:hidden {menuOpen ? 'open' : ''}" aria-hidden={!menuOpen}>
+	<!-- Drawer header -->
+	<div class="flex h-14 items-center justify-between border-b border-[var(--color-tron-border)] px-4">
+		<span class="font-bold text-[var(--color-tron-cyan)]">BIMS</span>
+		<button
+			type="button"
+			class="flex h-10 w-10 items-center justify-center rounded-lg text-[var(--color-tron-text-secondary)] hover:bg-[var(--color-tron-bg-tertiary)]"
+			onclick={closeMenu}
+			aria-label="Close menu"
+		>
+			<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+			</svg>
+		</button>
+	</div>
+
+	<!-- Nav items list -->
+	<nav class="flex-1 overflow-y-auto py-2">
+		{#each allNavItems as item (item.href)}
+			{@const active = isActive(item.href, $page.url.pathname)}
+			<a
+				href={item.href}
+				class="flex min-h-[56px] items-center gap-3 px-4 py-3 transition-all duration-150
+					{active
+					? 'bg-[rgba(0,212,255,0.1)] border-r-2 border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]'
+					: 'text-[var(--color-tron-text-secondary)] hover:bg-[var(--color-tron-bg-tertiary)] hover:text-[var(--color-tron-cyan)]'}"
+				onclick={closeMenu}
+			>
+				<svg class="h-5 w-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={item.icon} />
+				</svg>
+				<span class="font-medium">{item.label}</span>
+			</a>
+		{/each}
+	</nav>
+
+	<!-- Drawer footer: logout -->
+	<div class="border-t border-[var(--color-tron-border)] p-4">
+		<form
+			method="POST"
+			action="/logout"
+			use:enhance={() => {
+				loggingOut = true;
+				return async ({ update }) => {
+					await update();
+					loggingOut = false;
+				};
+			}}
+		>
+			<button
+				type="submit"
+				disabled={loggingOut}
+				class="flex w-full min-h-[48px] items-center justify-center gap-2 rounded-lg border border-[var(--color-tron-border)] px-4 py-2 text-sm font-medium text-[var(--color-tron-red)] transition-colors hover:bg-[rgba(255,51,102,0.1)]"
+			>
+				{loggingOut ? 'Logging out...' : 'Logout'}
+			</button>
+		</form>
+	</div>
+</div>
 
 <GridBackground>
 	<div class="min-h-screen">
 		<!-- Header -->
-		<header class="border-b border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
-			<div class="mx-auto px-4 sm:px-6 lg:px-8">
-				<div class="flex h-14 items-center justify-between">
-					<a href="/spu" class="flex shrink-0 items-center gap-2">
+		<header class="border-b border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] sticky top-0 z-30">
+			<div class="mx-auto px-3 sm:px-6 lg:px-8">
+				<div class="flex h-14 items-center justify-between gap-2">
+					<!-- Logo + Title -->
+					<a href="/spu" class="flex shrink-0 items-center gap-2 min-w-0">
 						<div
-							class="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--color-tron-cyan)]"
+							class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-tron-cyan)]"
 						>
 							<svg
 								class="h-5 w-5 text-[var(--color-tron-bg-primary)]"
@@ -194,14 +273,36 @@
 								/>
 							</svg>
 						</div>
-						<div>
-							<h1 class="tron-text-primary tron-heading text-xl font-bold">Bioscale Internal Management System</h1>
+						<!-- Full title on large screens, short on small -->
+						<div class="min-w-0">
+							<h1 class="tron-text-primary tron-heading text-base font-bold truncate hidden sm:block lg:text-xl">
+								Bioscale Internal Management System
+							</h1>
+							<h1 class="tron-text-primary tron-heading text-base font-bold sm:hidden">
+								BIMS
+							</h1>
 						</div>
 					</a>
 
-					<div class="flex items-center gap-2">
-						<!-- Navigation Dropdown -->
-						<div class="relative">
+					<div class="flex items-center gap-1 sm:gap-2">
+						<!-- Mobile hamburger (below 1024px) — opens slide-out drawer -->
+						<button
+							type="button"
+							class="flex min-h-[44px] min-w-[44px] items-center justify-center gap-2 rounded-lg px-2 font-medium transition-all duration-200
+								text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-bg-tertiary)] lg:hidden"
+							onclick={toggleMenu}
+							aria-label="Open navigation menu"
+							aria-expanded={menuOpen}
+						>
+							<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+							</svg>
+							<!-- Current page label on tablet (sm-lg range) -->
+							<span class="hidden text-sm sm:block lg:hidden">{activeLabel}</span>
+						</button>
+
+						<!-- Desktop dropdown nav (1024px+) -->
+						<div class="relative hidden lg:block">
 							<button
 								type="button"
 								class="flex min-h-[var(--size-touch-target)] items-center gap-2 rounded-lg px-4 py-2 font-medium transition-all duration-200
@@ -218,7 +319,7 @@
 							</button>
 
 							{#if menuOpen}
-								<!-- Backdrop -->
+								<!-- Backdrop for desktop dropdown -->
 								<!-- svelte-ignore a11y_no_static_element_interactions -->
 								<!-- svelte-ignore a11y_click_events_have_key_events -->
 								<div class="fixed inset-0 z-40" onclick={closeMenu}></div>
@@ -250,7 +351,7 @@
 						<!-- Particle Status -->
 						<a
 							href="/spu/particle/settings"
-							class="flex min-h-[var(--size-touch-target)] items-center gap-2 rounded-lg px-3 py-2 text-[var(--color-tron-text-secondary)] transition-all duration-200 hover:bg-[var(--color-tron-bg-tertiary)]"
+							class="flex min-h-[var(--size-touch-target)] items-center gap-2 rounded-lg px-2 sm:px-3 py-2 text-[var(--color-tron-text-secondary)] transition-all duration-200 hover:bg-[var(--color-tron-bg-tertiary)]"
 							title={data.particleStatus === 'connected'
 								? 'Particle: Connected'
 								: data.particleStatus === 'stale'
@@ -274,10 +375,10 @@
 							></div>
 						</a>
 
-						<!-- Box.com Status -->
+						<!-- Box.com Status — hidden on small mobile to save space -->
 						<a
 							href="/spu/bom/settings"
-							class="flex items-center gap-1.5 rounded px-2 py-1.5 text-[var(--color-tron-text-secondary)] transition-colors hover:bg-[var(--color-tron-bg-tertiary)]"
+							class="hidden sm:flex items-center gap-1.5 rounded px-2 py-1.5 text-[var(--color-tron-text-secondary)] transition-colors hover:bg-[var(--color-tron-bg-tertiary)]"
 							title={data.isBoxConnected ? 'Box.com: Connected' : 'Box.com: Not Connected'}
 						>
 							<svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -295,10 +396,11 @@
 							></div>
 						</a>
 
-						<!-- Logout -->
+						<!-- Logout — hidden on mobile (accessible via drawer) -->
 						<form
 							method="POST"
 							action="/logout"
+							class="hidden lg:block"
 							use:enhance={() => {
 								loggingOut = true;
 								return async ({ update }) => {
@@ -323,7 +425,7 @@
 		</header>
 
 		<!-- Main Content -->
-		<main class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+		<main class="mx-auto max-w-7xl px-3 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
 			{@render children()}
 		</main>
 	</div>

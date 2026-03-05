@@ -1,0 +1,420 @@
+/* ============================================================================
+   MOBILE-01: Responsive Utility Classes
+   Shared patterns for manufacturing floor mobile experience
+   ============================================================================ */
+
+/* ----------------------------------------------------------------------------
+   S19: Touch Optimization Globals
+   ---------------------------------------------------------------------------- */
+
+/* Disable double-tap zoom on interactive elements */
+button,
+a,
+input,
+select,
+textarea,
+[role="button"] {
+	touch-action: manipulation;
+	-webkit-tap-highlight-color: transparent;
+}
+
+/* Prevent text selection on button-like elements */
+button,
+[role="button"] {
+	-webkit-user-select: none;
+	user-select: none;
+}
+
+/* Smooth scrolling on mobile */
+* {
+	-webkit-overflow-scrolling: touch;
+}
+
+/* Safe area insets for notched devices */
+.safe-area-top {
+	padding-top: env(safe-area-inset-top);
+}
+.safe-area-bottom {
+	padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* ----------------------------------------------------------------------------
+   S20: Touch Target — minimum 56px height, 12px gap
+   ---------------------------------------------------------------------------- */
+.touch-target {
+	min-height: 56px;
+	min-width: 56px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0 1rem;
+	touch-action: manipulation;
+	-webkit-tap-highlight-color: transparent;
+}
+
+.touch-target-sm {
+	min-height: 48px;
+	min-width: 48px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	touch-action: manipulation;
+	-webkit-tap-highlight-color: transparent;
+}
+
+/* Glove-friendly: large font + height for inputs and buttons on mobile */
+@media (max-width: 767px) {
+	.glove-input {
+		min-height: 56px !important;
+		font-size: 1.125rem !important; /* 18px */
+		padding: 0.75rem 1rem !important;
+	}
+
+	.glove-button {
+		min-height: 56px !important;
+		min-width: 56px !important;
+		font-size: 1rem !important;
+		font-weight: 600 !important;
+	}
+
+	.glove-select {
+		min-height: 56px !important;
+		font-size: 1.125rem !important;
+	}
+}
+
+/* ----------------------------------------------------------------------------
+   S20: Mobile Card — replaces table rows on small screens
+   ---------------------------------------------------------------------------- */
+.mobile-card {
+	background-color: var(--color-tron-bg-card, #16161f);
+	border: 1px solid var(--color-tron-border, rgba(0, 212, 255, 0.2));
+	border-radius: 0.5rem;
+	padding: 1rem;
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+}
+
+.mobile-card-row {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.mobile-card-label {
+	font-size: 0.75rem;
+	color: var(--color-tron-text-secondary, #a0a0a0);
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+}
+
+.mobile-card-value {
+	font-size: 0.875rem;
+	color: var(--color-tron-text-primary, #e0e0e0);
+	font-weight: 500;
+	text-align: right;
+}
+
+/* ----------------------------------------------------------------------------
+   S20: Visibility Helpers
+   ---------------------------------------------------------------------------- */
+
+/* Show only on mobile (<768px) */
+.mobile-only {
+	display: none;
+}
+
+@media (max-width: 767px) {
+	.mobile-only {
+		display: block;
+	}
+
+	.mobile-only-flex {
+		display: flex;
+	}
+
+	.desktop-only {
+		display: none !important;
+	}
+}
+
+/* Show only on desktop (>=768px) */
+.desktop-only {
+	display: block;
+}
+
+@media (max-width: 767px) {
+	.desktop-only {
+		display: none !important;
+	}
+}
+
+/* ----------------------------------------------------------------------------
+   S20: Scroll Tabs — horizontally scrollable tab container
+   ---------------------------------------------------------------------------- */
+.scroll-tabs {
+	display: flex;
+	overflow-x: auto;
+	overflow-y: hidden;
+	gap: 0.375rem;
+	padding-bottom: 0.25rem;
+	/* Hide scrollbar but keep scroll functionality */
+	-ms-overflow-style: none;
+	scrollbar-width: none;
+}
+
+.scroll-tabs::-webkit-scrollbar {
+	display: none;
+}
+
+.scroll-tabs-item {
+	flex-shrink: 0; /* prevent tabs from shrinking */
+}
+
+/* ----------------------------------------------------------------------------
+   S17: Mobile Nav Overlay
+   ---------------------------------------------------------------------------- */
+.mobile-nav-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 40;
+	background-color: rgba(0, 0, 0, 0.6);
+	backdrop-filter: blur(2px);
+}
+
+.mobile-nav-drawer {
+	position: fixed;
+	top: 0;
+	left: 0;
+	bottom: 0;
+	z-index: 50;
+	width: min(280px, 85vw);
+	background-color: var(--color-tron-bg-secondary, #12121a);
+	border-right: 1px solid var(--color-tron-border, rgba(0, 212, 255, 0.2));
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	transform: translateX(-100%);
+	transition: transform 0.25s ease-out;
+}
+
+.mobile-nav-drawer.open {
+	transform: translateX(0);
+}
+
+/* ----------------------------------------------------------------------------
+   S20: Slide-up Sheet (for filters, etc.)
+   ---------------------------------------------------------------------------- */
+.slide-up-sheet {
+	position: fixed;
+	bottom: 0;
+	left: 0;
+	right: 0;
+	z-index: 50;
+	background-color: var(--color-tron-bg-secondary, #12121a);
+	border-top: 1px solid var(--color-tron-border, rgba(0, 212, 255, 0.2));
+	border-radius: 1rem 1rem 0 0;
+	padding: 1.25rem 1rem 2rem;
+	max-height: 80vh;
+	overflow-y: auto;
+	transform: translateY(100%);
+	transition: transform 0.25s ease-out;
+	box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.slide-up-sheet.open {
+	transform: translateY(0);
+}
+
+.slide-up-sheet-handle {
+	width: 2.5rem;
+	height: 0.25rem;
+	background-color: var(--color-tron-text-secondary, #a0a0a0);
+	border-radius: 9999px;
+	margin: 0 auto 1rem;
+}
+
+/* ----------------------------------------------------------------------------
+   Flash Feedback (S8: scan success/error)
+   ---------------------------------------------------------------------------- */
+@keyframes flash-green {
+	0%, 100% { background-color: transparent; }
+	30% { background-color: rgba(0, 255, 136, 0.3); }
+}
+
+@keyframes flash-red {
+	0%, 100% { background-color: transparent; }
+	30% { background-color: rgba(255, 51, 102, 0.3); }
+}
+
+.flash-success {
+	animation: flash-green 0.6s ease-out;
+}
+
+.flash-error {
+	animation: flash-red 0.6s ease-out;
+}
+
+/* ----------------------------------------------------------------------------
+   Camera Scanner Overlay (S8)
+   ---------------------------------------------------------------------------- */
+.camera-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 60;
+	background-color: rgba(0, 0, 0, 0.95);
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+}
+
+.camera-viewfinder {
+	position: relative;
+	width: min(340px, 90vw);
+	aspect-ratio: 4/3;
+	border: 2px solid var(--color-tron-cyan, #00d4ff);
+	border-radius: 0.5rem;
+	overflow: hidden;
+	box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.7);
+}
+
+.camera-viewfinder video {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+/* Corner accent marks on viewfinder */
+.camera-viewfinder::before,
+.camera-viewfinder::after {
+	content: '';
+	position: absolute;
+	inset: -2px;
+	border: 2px solid var(--color-tron-cyan, #00d4ff);
+	border-radius: 0.5rem;
+	opacity: 0.6;
+}
+
+/* Scan line animation */
+@keyframes scan-line {
+	0% { top: 0; }
+	100% { top: 100%; }
+}
+
+.scan-line {
+	position: absolute;
+	left: 0;
+	right: 0;
+	height: 2px;
+	background: linear-gradient(90deg, transparent, var(--color-tron-cyan), transparent);
+	animation: scan-line 2s linear infinite;
+	box-shadow: 0 0 8px var(--color-tron-cyan);
+}
+
+/* ----------------------------------------------------------------------------
+   Inventory Quick-Update (+/- Stepper) (S14)
+   ---------------------------------------------------------------------------- */
+.qty-stepper {
+	display: flex;
+	align-items: center;
+	gap: 0;
+	border: 1px solid var(--color-tron-border, rgba(0, 212, 255, 0.2));
+	border-radius: 0.375rem;
+	overflow: hidden;
+}
+
+.qty-stepper-btn {
+	min-width: 44px;
+	min-height: 44px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 1.25rem;
+	font-weight: bold;
+	background-color: var(--color-tron-bg-tertiary, #1a1a2e);
+	color: var(--color-tron-cyan, #00d4ff);
+	border: none;
+	cursor: pointer;
+	touch-action: manipulation;
+	-webkit-tap-highlight-color: transparent;
+	transition: background-color 0.15s;
+}
+
+.qty-stepper-btn:active {
+	background-color: rgba(0, 212, 255, 0.15);
+}
+
+.qty-stepper-value {
+	min-width: 3rem;
+	text-align: center;
+	font-family: monospace;
+	font-size: 1rem;
+	color: var(--color-tron-text-primary, #e0e0e0);
+	background-color: var(--color-tron-bg-secondary, #12121a);
+	padding: 0 0.5rem;
+	align-self: stretch;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+/* ----------------------------------------------------------------------------
+   Low Inventory Alert Card (S15)
+   ---------------------------------------------------------------------------- */
+.alert-card {
+	background-color: rgba(255, 51, 102, 0.07);
+	border: 1px solid rgba(255, 51, 102, 0.3);
+	border-radius: 0.5rem;
+	padding: 0.875rem 1rem;
+}
+
+.alert-card-critical {
+	background-color: rgba(255, 51, 102, 0.12);
+	border-color: rgba(255, 51, 102, 0.5);
+}
+
+.alert-count {
+	font-size: 2rem;
+	font-weight: 700;
+	font-family: monospace;
+	line-height: 1;
+	color: var(--color-tron-red, #ff3366);
+}
+
+.alert-count-low {
+	color: var(--color-tron-orange, #ff6600);
+}
+
+/* ----------------------------------------------------------------------------
+   Step Progress Indicator (S6)
+   ---------------------------------------------------------------------------- */
+.step-dots {
+	display: flex;
+	gap: 0.375rem;
+	align-items: center;
+	justify-content: center;
+	flex-wrap: wrap;
+}
+
+.step-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 9999px;
+	background-color: var(--color-tron-bg-tertiary, #1a1a2e);
+	border: 1px solid var(--color-tron-border, rgba(0, 212, 255, 0.2));
+	transition: all 0.2s;
+}
+
+.step-dot.active {
+	background-color: var(--color-tron-cyan, #00d4ff);
+	box-shadow: 0 0 6px var(--color-tron-cyan, #00d4ff);
+	width: 10px;
+	height: 10px;
+}
+
+.step-dot.completed {
+	background-color: var(--color-tron-green, #00ff88);
+}
