@@ -340,5 +340,30 @@ export const actions: Actions = {
 		});
 
 		return { success: true, transitionSuccess: true };
+	},
+
+	deleteSpu: async ({ locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+
+		const spu = await Spu.findById(params.spuId).lean() as any;
+		if (!spu) return fail(404, { error: 'SPU not found' });
+		if (spu.finalizedAt) return fail(400, { error: 'Cannot delete a finalized SPU' });
+
+		// Use direct collection delete to bypass sacred middleware
+		await Spu.collection.deleteOne({ _id: params.spuId });
+
+		// Audit log
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'spus',
+			recordId: params.spuId,
+			action: 'DELETE',
+			oldData: { udi: spu.udi, status: spu.status },
+			newData: null,
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+
+		return { success: true, deleted: true };
 	}
 };

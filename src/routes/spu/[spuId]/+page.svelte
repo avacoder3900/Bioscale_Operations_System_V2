@@ -7,6 +7,8 @@
 
 	let showStateForm = $state(false);
 	let updatingState = $state(false);
+	let confirmingDelete = $state(false);
+	let deleting = $state(false);
 	let editingIdentifiers = $state(false);
 	let savingIdentifiers = $state(false);
 	let editUdi = $state(data.spu.udi);
@@ -234,6 +236,44 @@
 						</TronButton>
 					</div>
 				</form>
+			{/if}
+
+			<!-- Delete SPU -->
+			{#if !data.spu.finalizedAt}
+				{#if !confirmingDelete}
+					<button
+						type="button"
+						onclick={() => (confirmingDelete = true)}
+						class="mt-4 w-full rounded border px-4 py-2 text-sm"
+						style="border-color: var(--color-tron-red); color: var(--color-tron-red); background: transparent;"
+					>
+						🗑️ Delete SPU
+					</button>
+				{:else}
+					<div class="mt-4 rounded border p-4 space-y-3" style="border-color: var(--color-tron-red); background: rgba(255,0,0,0.05);">
+						<p class="text-sm" style="color: var(--color-tron-red);">Are you sure you want to permanently delete <strong>{data.spu.udi}</strong>? This cannot be undone.</p>
+						<div class="flex gap-2">
+							<form
+								method="POST"
+								action="?/deleteSpu"
+								use:enhance={() => {
+									deleting = true;
+									return async ({ result }) => {
+										deleting = false;
+										if (result.type === 'success') {
+											window.location.href = '/spu';
+										}
+									};
+								}}
+							>
+								<button type="submit" disabled={deleting} class="rounded px-4 py-2 text-sm font-medium" style="background: var(--color-tron-red); color: white;">
+									{deleting ? 'Deleting...' : 'Yes, Delete'}
+								</button>
+							</form>
+							<button type="button" onclick={() => (confirmingDelete = false)} class="tron-text-muted rounded px-4 py-2 text-sm">Cancel</button>
+						</div>
+					</div>
+				{/if}
 			{/if}
 
 			<!-- Immutable Status Transition Log -->
