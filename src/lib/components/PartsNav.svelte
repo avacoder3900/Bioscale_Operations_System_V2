@@ -2,15 +2,14 @@
 	import { page } from '$app/state';
 	
 	const tabs = [
-		{ href: '/spu/parts', label: 'Parts' },
+		{ href: '/spu/cartridge-admin', label: 'Cartridge Admin' },
 		{ href: '/spu/receiving', label: 'Receiving' },
 		{ href: '/spu/manufacturing/consumables', label: 'Consumables' },
-		{ href: '/spu/bom/settings/mapping', label: 'BOM Mapping' },
-		{ href: '/spu/cartridge-admin', label: 'Cartridge Admin' }
+		{ href: '/spu/bom/settings/mapping', label: 'BOM Mapping' }
 	];
 </script>
 
-<div class="flex items-center gap-2 border-b border-[var(--color-tron-border)] pb-0">
+<div class="flex items-center gap-2 border-b border-[var(--color-tron-border)] pb-0 mb-4">
 	{#each tabs as tab}
 		<a
 			href={tab.href}

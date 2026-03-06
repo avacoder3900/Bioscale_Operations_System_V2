@@ -1,7 +1,5 @@
 <script lang="ts">
 	import type { PageData } from './$types';
-	import PartsNav from '$lib/components/PartsNav.svelte';
-
 	let { data }: { data: PageData } = $props();
 </script>
 
@@ -10,7 +8,6 @@
 </svelte:head>
 
 <div class="mx-auto max-w-7xl p-6">
-	<PartsNav />
 	<div class="mb-6 flex items-center justify-between">
 		<h1 class="tron-text text-2xl font-bold">Receiving of Goods</h1>
 		<a href="/spu/receiving/new" class="tron-button px-4 py-2 text-sm font-medium">
