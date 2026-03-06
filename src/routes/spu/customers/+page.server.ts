@@ -23,6 +23,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			customerType: c.customerType ?? '',
 			status: c.status ?? 'active',
 			contactEmail: c.contactEmail ?? null,
+			contactName: c.contactName ?? null,
 			contactPhone: c.contactPhone ?? null,
 			createdAt: c.createdAt,
 			spuCount: countMap.get(c._id) ?? 0
@@ -59,6 +60,6 @@ export const actions: Actions = {
 			newData: { name: name.trim() }, changedBy: locals.user.username ?? locals.user._id
 		});
 
-		return { success: true };
+		return { success: true, message: "Customer created successfully" };
 	}
 };

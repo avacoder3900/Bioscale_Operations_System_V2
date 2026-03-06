@@ -23,7 +23,12 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 
 	// Get user's training records across all revisions
 	const userId = locals.user?._id;
-	const userTraining: any[] = [];
+	const userTraining: Array<{
+		id: string;
+		documentRevisionId: string;
+		trainedAt: Date;
+		revision: number;
+	}> = [];
 	for (const rev of doc.revisions ?? []) {
 		for (const tr of rev.trainingRecords ?? []) {
 			if (tr.userId === userId) {
@@ -37,13 +42,36 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		}
 	}
 
+	const currentRevNum = parseInt(doc.currentRevision) || 0;
+	const isTrainedOnCurrent = userTraining.some((t) => t.revision === currentRevNum);
+
+	const revisions: Array<{
+		id: string;
+		revision: number;
+		content: string | null;
+		changeDescription: string | null;
+		status: string;
+		createdAt: Date | null;
+		createdBy: string | null;
+		approvedAt: Date | null;
+	}> = (doc.revisions ?? []).map((r: any) => ({
+		id: r._id,
+		revision: parseInt(r.revision) || 0,
+		content: r.content ?? null,
+		changeDescription: r.changeDescription ?? null,
+		status: r.status ?? 'draft',
+		createdAt: r.createdAt ?? null,
+		createdBy: r.createdBy ? (creatorMap.get(r.createdBy) ?? null) : null,
+		approvedAt: r.approvedAt ?? null
+	}));
+
 	return {
 		document: {
 			id: doc._id,
 			documentNumber: doc.documentNumber ?? '',
 			title: doc.title ?? '',
 			category: doc.category ?? null,
-			currentRevision: parseInt(doc.currentRevision) || 0,
+			currentRevision: String(currentRevNum),
 			status: doc.status ?? 'draft',
 			effectiveDate: doc.effectiveDate ?? null,
 			retiredDate: doc.retiredDate ?? null,
@@ -52,16 +80,8 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			createdAt: doc.createdAt,
 			updatedAt: doc.updatedAt
 		},
-		revisions: (doc.revisions ?? []).map((r: any) => ({
-			id: r._id,
-			revision: parseInt(r.revision) || 0,
-			content: r.content ?? null,
-			changeDescription: r.changeDescription ?? null,
-			status: r.status ?? 'draft',
-			createdAt: r.createdAt,
-			createdBy: r.createdBy ? (creatorMap.get(r.createdBy) ?? null) : null,
-			approvedAt: r.approvedAt ?? null
-		})),
-		userTraining
+		revisions,
+		userTraining,
+		isTrainedOnCurrent
 	};
 };

@@ -32,26 +32,52 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	requirePermission(locals.user, 'role:read');
 	await connectDB();
 
-	const roles = await Role.find().lean();
+	const [roles, userRoleCounts] = await Promise.all([
+		Role.find().lean(),
+		User.aggregate([
+			{ $unwind: '$roles' },
+			{ $group: { _id: '$roles.roleId', count: { $sum: 1 } } }
+		])
+	]);
+	const roleCountMap = new Map(userRoleCounts.map((r: any) => [r._id, r.count]));
+
 	const selectedRoleId = url.searchParams.get('selected');
-	let selectedRole = null;
+	let selectedRole: {
+		id: string;
+		name: string;
+		description: string | null;
+		permissions: string[];
+		permissionIds: string[];
+	} | null = null;
 	if (selectedRoleId) {
 		const role = roles.find((r) => r._id === selectedRoleId);
 		if (role) {
+			const permIds = (role.permissions ?? []).map((p: string) => p);
 			selectedRole = {
 				id: role._id,
 				name: role.name,
 				description: role.description ?? null,
-				permissions: role.permissions.map((p: string) => ({ id: p, name: p }))
+				permissions: permIds,
+				permissionIds: permIds
 			};
 		}
 	}
 
 	return {
-		roles: roles.map((r) => ({ id: r._id, name: r.name, description: r.description ?? null })),
+		roles: roles.map((r) => ({
+			id: r._id,
+			name: r.name,
+			description: r.description ?? null,
+			userCount: roleCountMap.get(r._id) ?? 0
+		})),
 		permissionGroups: ALL_PERMISSIONS.map((g) => ({
-			group: g.group,
-			permissions: g.permissions.map((p) => ({ id: p, name: p, description: null }))
+			resource: g.group,
+			permissions: g.permissions.map((p) => ({
+				id: p,
+				name: p,
+				action: p.split(':').pop() ?? p,
+				description: null
+			}))
 		})),
 		selectedRole
 	};

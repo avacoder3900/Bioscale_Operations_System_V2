@@ -18,6 +18,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 	return {
 		isConfigured,
 		isConnected,
+		connectionError: null as string | null,
+		justConnected: false,
 		targetFolder,
 		targetFile,
 		folderId: boxInteg?.folderId ?? null,

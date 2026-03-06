@@ -26,6 +26,11 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		createdByUsername = creator?.username ?? null;
 	}
 
+	const userName = locals.user
+		? [locals.user.firstName, locals.user.lastName].filter(Boolean).join(' ') ||
+		  locals.user.username
+		: '';
+
 	return {
 		document: {
 			id: doc._id,
@@ -44,7 +49,8 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			status: revision.status,
 			createdAt: revision.createdAt,
 			createdByUsername
-		}
+		},
+		userName
 	};
 };
 

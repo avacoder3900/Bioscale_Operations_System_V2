@@ -1,94 +1,157 @@
-import { redirect } from '@sveltejs/kit';
-import { connectDB, LaserCutBatch, ManufacturingSettings } from '$lib/server/db';
+import { redirect, fail } from '@sveltejs/kit';
+import {
+	connectDB, LaserCutBatch, ManufacturingSettings, ManufacturingMaterial,
+	ManufacturingMaterialTransaction, generateId
+} from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	await connectDB();
 
-	const [batches, settingsDoc] = await Promise.all([
+	const [batches, settingsDoc, materials] = await Promise.all([
 		LaserCutBatch.find().sort({ createdAt: -1 }).limit(50).lean(),
-		ManufacturingSettings.findById('default').lean()
+		ManufacturingSettings.findById('default').lean(),
+		ManufacturingMaterial.find().lean()
 	]);
 
 	const general = (settingsDoc as any)?.general ?? {};
 
+	// FIX-01: Find the laser-cut output material (cut substrates) by name convention
+	const outputMaterial = (materials as any[]).find((m: any) =>
+		m.name && /laser.?cut|cut.?sub|substrate/i.test(m.name)
+	) ?? null;
+
+	// Stats rollup
+	const totalBatches = batches.length;
+	const totalInput = batches.reduce((s: number, b: any) => s + (b.inputSheetCount ?? 0), 0);
+	const totalOutput = batches.reduce((s: number, b: any) => s + (b.outputSheetCount ?? 0), 0);
+	const totalFailures = batches.reduce((s: number, b: any) => s + (b.failureCount ?? 0), 0);
+	const failureRate = totalInput > 0 ? totalFailures / totalInput : 0;
+
 	return {
-		sessions: batches.map((b: any) => ({
-			id: b._id,
-			status: b.failureCount > 0 ? 'partial' : 'completed',
-			startedAt: b.createdAt,
-			completedAt: b.updatedAt ?? null,
-			operatorName: b.operatorId ?? null,
-			sheetCount: b.inputSheetCount ?? 0,
+		batches: (batches as any[]).map((b: any) => ({
+			batchId: b._id,
+			inputSheetCount: b.inputSheetCount ?? 0,
 			outputSheetCount: b.outputSheetCount ?? 0,
 			failureCount: b.failureCount ?? 0,
 			failureNotes: b.failureNotes ?? null,
+			cuttingProgramLink: b.cuttingProgramLink ?? null,
 			toolsUsed: b.toolsUsed ?? null,
-			cuttingProgramLink: b.cuttingProgramLink ?? null
+			operatorId: b.operatorId ?? null,
+			operatorName: b.operatorId ?? null,
+			createdAt: b.createdAt
 		})),
+		stats: { totalBatches, totalInput, totalOutput, totalFailures, failureRate },
 		defaults: {
-			cartridgesPerSheet: general.cartridgesPerLaserCutSheet ?? null,
-			sheetsPerBatch: general.sheetsPerLaserBatch ?? null,
-			defaultTools: general.defaultLaserTools ?? null,
+			defaultLaserTools: general.defaultLaserTools ?? null,
 			defaultCuttingProgramLink: general.defaultCuttingProgramLink ?? null
+		},
+		inventory: {
+			laserCutSheets: {
+				name: outputMaterial?.name ?? 'Laser Cut Substrates',
+				quantity: outputMaterial?.currentQuantity ?? 0,
+				unit: outputMaterial?.unit ?? 'sheets'
+			}
 		}
 	};
 };
 
 export const actions: Actions = {
-	start: async ({ request, locals }) => {
+	/** Record a completed laser-cut batch and update inventory */
+	recordBatch: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 
 		const data = await request.formData();
+		const inputSheetCount = Number(data.get('inputSheetCount') || 0);
+		const failureCount = Number(data.get('failureCount') || 0);
+		const outputSheetCount = Math.max(0, inputSheetCount - failureCount);
+		const failureNotes = (data.get('failureNotes') as string) || undefined;
+		const cuttingProgramLink = (data.get('cuttingProgramLink') as string) || undefined;
+		const toolsUsed = (data.get('toolsUsed') as string) || undefined;
+
+		if (inputSheetCount <= 0) return fail(400, { error: 'Input sheet count must be > 0' });
+
+		// FIX-01: Find linked parts from ManufacturingSettings (optional)
 		const settingsDoc = await ManufacturingSettings.findById('default').lean() as any;
 		const general = settingsDoc?.general ?? {};
 
+		// Create the batch record
 		await LaserCutBatch.create({
-			inputSheetCount: Number(data.get('inputSheetCount') || 0),
-			outputSheetCount: 0,
-			failureCount: 0,
-			toolsUsed: (data.get('toolsUsed') as string) || general.defaultLaserTools || undefined,
-			cuttingProgramLink: (data.get('cuttingProgramLink') as string) || general.defaultCuttingProgramLink || undefined,
+			_id: generateId(),
+			inputSheetCount,
+			outputSheetCount,
+			failureCount,
+			failureNotes,
+			cuttingProgramLink: cuttingProgramLink || general.defaultCuttingProgramLink || undefined,
+			toolsUsed: toolsUsed || general.defaultLaserTools || undefined,
 			operatorId: locals.user._id
 		});
 
+		// FIX-01: Update inventory for output substrates produced
+		if (outputSheetCount > 0) {
+			const outputMaterial = await ManufacturingMaterial.findOne({
+				name: { $regex: /laser.?cut|cut.?sub|substrate/i }
+			}).lean() as any;
+
+			if (outputMaterial) {
+				const quantityBefore = outputMaterial.currentQuantity ?? 0;
+				const quantityAfter = quantityBefore + outputSheetCount;
+				const now = new Date();
+
+				await ManufacturingMaterialTransaction.create({
+					_id: generateId(),
+					materialId: outputMaterial._id,
+					transactionType: 'produce',
+					quantityChanged: outputSheetCount,
+					quantityBefore,
+					quantityAfter,
+					operatorId: locals.user._id,
+					notes: `Laser cut batch produced ${outputSheetCount} sheets (${failureCount} failures from ${inputSheetCount} input)`,
+					createdAt: now
+				});
+
+				const txEntry = {
+					transactionType: 'produce',
+					quantityChanged: outputSheetCount,
+					quantityBefore,
+					quantityAfter,
+					operatorId: locals.user._id,
+					notes: `Laser cut batch: ${outputSheetCount} output`,
+					createdAt: now
+				};
+
+				await ManufacturingMaterial.findByIdAndUpdate(outputMaterial._id, {
+					$set: { currentQuantity: quantityAfter, updatedAt: now },
+					$push: { recentTransactions: { $each: [txEntry], $slice: -100 } }
+				});
+			}
+		}
+
 		return { success: true };
 	},
 
-	complete: async ({ request, locals }) => {
+	/** Save default settings to ManufacturingSettings */
+	saveDefaults: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 
 		const data = await request.formData();
-		const batchId = data.get('batchId') as string;
+		const defaultLaserTools = (data.get('defaultLaserTools') as string) || undefined;
+		const defaultCuttingProgramLink = (data.get('defaultCuttingProgramLink') as string) || undefined;
 
-		await LaserCutBatch.findByIdAndUpdate(batchId, {
-			$set: {
-				outputSheetCount: Number(data.get('outputSheetCount') || 0),
-				failureCount: Number(data.get('failureCount') || 0),
-				failureNotes: (data.get('failureNotes') as string) || undefined
-			}
-		});
+		await ManufacturingSettings.findByIdAndUpdate(
+			'default',
+			{
+				$set: {
+					'general.defaultLaserTools': defaultLaserTools,
+					'general.defaultCuttingProgramLink': defaultCuttingProgramLink
+				}
+			},
+			{ upsert: true }
+		);
 
-		return { success: true };
-	},
-
-	abort: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const batchId = data.get('batchId') as string;
-
-		await LaserCutBatch.findByIdAndUpdate(batchId, {
-			$set: {
-				failureNotes: (data.get('failureNotes') as string) || 'Aborted',
-				failureCount: Number(data.get('failureCount') || 0)
-			}
-		});
-
-		return { success: true };
+		return { success: true, defaultsSaved: true };
 	}
 };

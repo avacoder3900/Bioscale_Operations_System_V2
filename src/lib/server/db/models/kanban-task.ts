@@ -24,6 +24,12 @@ const kanbanTaskSchema = new Schema({
 		_id: { type: String, default: () => generateId() },
 		content: String, createdAt: Date, createdBy: operatorRef
 	}],
+	parentTaskId: String,
+	transitions: [{
+		_id: { type: String, default: () => generateId() },
+		fromStatus: String, toStatus: String,
+		changedBy: String, timestamp: { type: Date, default: Date.now }
+	}],
 	activityLog: [{
 		_id: { type: String, default: () => generateId() },
 		action: String, details: Schema.Types.Mixed, createdAt: Date, createdBy: String
@@ -45,5 +51,6 @@ kanbanTaskSchema.index({ 'assignee._id': 1, status: 1 });
 kanbanTaskSchema.index({ tags: 1 });
 kanbanTaskSchema.index({ archived: 1, archivedAt: -1 });
 kanbanTaskSchema.index({ status: 1, sortOrder: 1 });
+kanbanTaskSchema.index({ parentTaskId: 1 });
 
 export const KanbanTask = mongoose.models.KanbanTask || mongoose.model('KanbanTask', kanbanTaskSchema, 'kanban_tasks');

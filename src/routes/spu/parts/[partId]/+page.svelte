@@ -3,7 +3,9 @@
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
 
-	let { data, form } = $props();
+	let { data, form: _form } = $props();
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const form = _form as any;
 
 	// Tab state
 	let activeTab = $state<'overview' | 'transactions'>('overview');
@@ -70,6 +72,9 @@
 	let editingMinStock = $state(false);
 	let minStockInput = $state(item.minimumStockLevel);
 	let historyOpen = $state(false);
+	let editingInspectionConfig = $state(false);
+	let sampleSizeInput = $state(item.inspectionConfig?.sampleSize ?? 1);
+	let percentAcceptedInput = $state(item.inspectionConfig?.percentAccepted ?? 100);
 
 	$effect(() => {
 		if (!editingMinStock) {
@@ -463,6 +468,124 @@
 				</div>
 			</dl>
 		</TronCard>
+
+		<!-- Inspection Configuration (for IP pathway parts) -->
+		{#if item.inspectionPathway === 'ip'}
+			<TronCard>
+				<div class="mb-4 flex items-center justify-between">
+					<div class="flex items-center gap-2">
+						<h3 class="tron-text-primary text-lg font-semibold">Inspection Configuration</h3>
+						<TronBadge variant="warning">IP</TronBadge>
+					</div>
+					{#if !editingInspectionConfig}
+						<button
+							type="button"
+							class="rounded border border-[var(--color-tron-border)] px-2.5 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
+							onclick={() => (editingInspectionConfig = true)}
+						>
+							Edit
+						</button>
+					{/if}
+				</div>
+
+				{#if form?.inspectionConfigError}
+					<div class="mb-4 rounded border border-[var(--color-tron-error)] bg-[color-mix(in_srgb,var(--color-tron-error)_10%,transparent)] px-4 py-2 text-sm text-[var(--color-tron-error)]">
+						{form.inspectionConfigError}
+					</div>
+				{/if}
+				{#if form?.inspectionConfigSuccess}
+					<div class="mb-4 rounded border border-[var(--color-tron-green)] bg-[color-mix(in_srgb,var(--color-tron-green)_10%,transparent)] px-4 py-2 text-sm text-[var(--color-tron-green)]">
+						Inspection config updated.
+					</div>
+				{/if}
+
+				{#if editingInspectionConfig}
+					<form
+						method="POST"
+						action="?/updateInspectionConfig"
+						use:enhance={() => {
+							return async ({ update }) => {
+								editingInspectionConfig = false;
+								await update();
+							};
+						}}
+					>
+						<div class="grid gap-4 sm:grid-cols-2">
+							<div>
+								<label for="sampleSizeInput" class="tron-text-muted mb-1 block text-xs">Sample Size</label>
+								<input
+									id="sampleSizeInput"
+									name="sampleSize"
+									type="number"
+									min="1"
+									bind:value={sampleSizeInput}
+									class="tron-input w-full px-3 py-2 text-sm"
+								/>
+								<p class="tron-text-muted mt-1 text-xs">Number of units to inspect per lot</p>
+							</div>
+							<div>
+								<label for="percentAcceptedInput" class="tron-text-muted mb-1 block text-xs">Percent Accepted (0–100)</label>
+								<input
+									id="percentAcceptedInput"
+									name="percentAccepted"
+									type="number"
+									min="0"
+									max="100"
+									step="0.1"
+									bind:value={percentAcceptedInput}
+									class="tron-input w-full px-3 py-2 text-sm"
+								/>
+								<p class="tron-text-muted mt-1 text-xs">Minimum passing rate to accept a lot</p>
+							</div>
+						</div>
+						<div class="mt-4 flex gap-2">
+							<button
+								type="submit"
+								class="rounded bg-[var(--color-tron-cyan)] px-4 py-1.5 text-sm font-semibold text-black"
+							>
+								Save
+							</button>
+							<button
+								type="button"
+								onclick={() => (editingInspectionConfig = false)}
+								class="rounded border border-[var(--color-tron-border)] px-4 py-1.5 text-sm text-[var(--color-tron-text-secondary)]"
+							>
+								Cancel
+							</button>
+						</div>
+					</form>
+				{:else}
+					<dl class="grid gap-4 sm:grid-cols-2">
+						<div>
+							<dt class="tron-text-muted text-sm">Sample Size</dt>
+							<dd class="tron-text-primary font-medium">{data.sampleSize ?? 1} units</dd>
+						</div>
+						<div>
+							<dt class="tron-text-muted text-sm">Acceptance Threshold</dt>
+							<dd class="tron-text-primary font-medium">{data.percentAccepted ?? 100}% pass rate required</dd>
+						</div>
+					</dl>
+				{/if}
+			</TronCard>
+
+			<!-- IP Revision History -->
+			<IpRevisionHistory
+				revisions={data.ipRevisions ?? []}
+				partDefinitionId={data.partDefinitionId ?? item.id}
+				ipError={form?.ipError as string | null ?? null}
+				ipSuccess={form?.ipSuccess === true}
+			/>
+
+			<!-- IP Form Definition Editor (only if there's a current revision) -->
+			{#if currentRevision}
+				<IpFormDefinitionEditor
+					revisionId={currentRevision.id}
+					formDefinition={currentRevision.formDefinition}
+					formDefError={form?.formDefError as string | null ?? null}
+					formDefSuccess={form?.formDefSuccess === true}
+				/>
+			{/if}
+		{/if}
 
 		<!-- Version History -->
 		{#if data.versions.length > 0}
