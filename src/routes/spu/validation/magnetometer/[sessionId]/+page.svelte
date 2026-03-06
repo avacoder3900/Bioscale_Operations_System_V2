@@ -20,7 +20,10 @@
 				barcode: string | null;
 				username: string | null;
 				spuUdi: string | null;
+				spuId: string | null;
 				particleDeviceId: string | null;
+				criteriaUsed: { minZ: number; maxZ: number } | null;
+				deviceTimestamp: string | null;
 			};
 			result: {
 				id: string;
@@ -44,32 +47,47 @@
 
 	const wells = (data.result?.processedData?.metrics ?? []) as MagWell[];
 	const failureReasons = data.result?.processedData?.failureReasons ?? [];
+	const minZ = data.session.criteriaUsed?.minZ ?? 3900;
+	const maxZ = data.session.criteriaUsed?.maxZ ?? 4500;
 
 	function zColor(z: number | null): string {
 		if (z === null) return 'var(--color-tron-text-secondary)';
-		// TODO: read criteria from server - hardcode for now
-		if (z >= 3900 && z <= 4500) return 'var(--color-tron-green)';
+		if (z >= minZ && z <= maxZ) return 'var(--color-tron-green)';
 		return 'var(--color-tron-red)';
 	}
 
 	function zBg(z: number | null): string {
 		if (z === null) return 'transparent';
-		if (z >= 3900 && z <= 4500) return 'rgba(0,255,128,0.08)';
+		if (z >= minZ && z <= maxZ) return 'rgba(0,255,128,0.08)';
 		return 'rgba(255,0,0,0.08)';
 	}
 </script>
 
 <div class="space-y-6">
-	<!-- Back Link -->
-	<a
-		href="/spu/validation/magnetometer"
-		class="tron-text-muted flex items-center gap-2 text-sm transition-colors hover:text-[var(--color-tron-cyan)]"
-	>
-		<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-			<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
-		</svg>
-		Back to Magnetometer Tests
-	</a>
+	<!-- Back Links -->
+	<div class="flex flex-wrap items-center gap-4">
+		<a
+			href="/spu/validation/magnetometer"
+			class="tron-text-muted flex items-center gap-2 text-sm transition-colors hover:text-[var(--color-tron-cyan)]"
+		>
+			<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+			</svg>
+			Back to Dashboard
+		</a>
+
+		{#if data.session.spuId}
+			<a
+				href="/spu/validation/magnetometer/spu/{data.session.spuId}"
+				class="tron-text-muted flex items-center gap-2 text-sm transition-colors hover:text-[var(--color-tron-cyan)]"
+			>
+				<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+				</svg>
+				Back to SPU History
+			</a>
+		{/if}
+	</div>
 
 	<!-- Header -->
 	<div class="flex items-center justify-between">
@@ -130,7 +148,7 @@
 					</table>
 				</div>
 				<p class="tron-text-muted mt-3 text-xs">
-					Green = within range (3900–4500) · Red = outside range
+					Green = within range ({minZ}–{maxZ}) · Red = outside range
 				</p>
 			</div>
 		</TronCard>
@@ -210,6 +228,20 @@
 					<span class="tron-text-muted block text-xs uppercase">Operator</span>
 					<span class="tron-text-primary font-medium">{data.session.username ?? 'N/A'}</span>
 				</div>
+				{#if data.session.criteriaUsed}
+					<div>
+						<span class="tron-text-muted block text-xs uppercase">Criteria Used</span>
+						<span class="tron-text-primary font-mono font-medium">
+							Z: {data.session.criteriaUsed.minZ} – {data.session.criteriaUsed.maxZ}
+						</span>
+					</div>
+				{/if}
+				{#if data.session.deviceTimestamp}
+					<div>
+						<span class="tron-text-muted block text-xs uppercase">Device Timestamp</span>
+						<span class="tron-text-primary font-mono font-medium">{data.session.deviceTimestamp}</span>
+					</div>
+				{/if}
 			</div>
 		</div>
 	</TronCard>

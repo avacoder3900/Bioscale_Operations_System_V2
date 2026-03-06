@@ -22,7 +22,10 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			barcode: session.barcode ?? null,
 			username: user?.username ?? null,
 			spuUdi: session.spuUdi ?? null,
-			particleDeviceId: session.particleDeviceId ?? null
+			spuId: session.spuId ?? null,
+			particleDeviceId: session.particleDeviceId ?? null,
+			criteriaUsed: session.criteriaUsed ?? null,
+			deviceTimestamp: session.deviceTimestamp ?? null
 		},
 		result: session.magResults ? {
 			id: session._id,
@@ -56,7 +59,8 @@ export const actions: Actions = {
 				return { error: 'No magnet_validation data available on device' };
 			}
 
-			// Parse the tab-delimited magnet validation result
+			// Use shared module for parsing + evaluation
+			const { parseMagValidation, evaluateCriteria, extractTimestamp } = await import('$lib/server/particle-validation');
 			const parsed = parseMagValidation(rawResult);
 
 			// Get criteria
@@ -65,18 +69,8 @@ export const actions: Actions = {
 			const minZ = criteria?.minZ ?? 3900;
 			const maxZ = criteria?.maxZ ?? 4500;
 
-			// Evaluate pass/fail per well per channel
-			const failureReasons: string[] = [];
-			for (const well of parsed) {
-				for (const ch of ['A', 'B', 'C'] as const) {
-					const z = well[`ch${ch}_Z`];
-					if (z !== null && (z < minZ || z > maxZ)) {
-						failureReasons.push(`Well ${well.well} Ch ${ch}: Z=${z} (range: ${minZ}-${maxZ})`);
-					}
-				}
-			}
-
-			const overallPassed = failureReasons.length === 0;
+			const { overallPassed, failureReasons } = evaluateCriteria(parsed, minZ, maxZ);
+			const deviceTimestamp = extractTimestamp(rawResult);
 
 			await ValidationSession.updateOne(
 				{ _id: params.sessionId },
@@ -88,7 +82,8 @@ export const actions: Actions = {
 						magResults: parsed,
 						overallPassed,
 						failureReasons,
-						criteriaUsed: { minZ, maxZ }
+						criteriaUsed: { minZ, maxZ },
+						...(deviceTimestamp ? { deviceTimestamp } : {})
 					}
 				}
 			);
@@ -99,38 +94,3 @@ export const actions: Actions = {
 		}
 	}
 };
-
-interface MagWellResult {
-	well: number;
-	chA_T: number | null; chA_X: number | null; chA_Y: number | null; chA_Z: number | null;
-	chB_T: number | null; chB_X: number | null; chB_Y: number | null; chB_Z: number | null;
-	chC_T: number | null; chC_X: number | null; chC_Y: number | null; chC_Z: number | null;
-}
-
-function parseMagValidation(raw: string): MagWellResult[] {
-	const lines = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-	const results: MagWellResult[] = [];
-
-	for (const line of lines) {
-		// Match lines starting with a number (well rows)
-		const match = line.match(/^(\d+)\t/);
-		if (!match) continue;
-
-		const parts = line.split('\t').map(s => s.trim());
-		const well = parseInt(parts[0]);
-		const nums = parts.slice(1).map(s => {
-			const n = parseFloat(s);
-			return isNaN(n) ? null : n;
-		});
-
-		// Expected: T X Y Z (chA) T X Y Z (chB) T X Y Z (chC) = 12 values
-		results.push({
-			well,
-			chA_T: nums[0] ?? null, chA_X: nums[1] ?? null, chA_Y: nums[2] ?? null, chA_Z: nums[3] ?? null,
-			chB_T: nums[4] ?? null, chB_X: nums[5] ?? null, chB_Y: nums[6] ?? null, chB_Z: nums[7] ?? null,
-			chC_T: nums[8] ?? null, chC_X: nums[9] ?? null, chC_Y: nums[10] ?? null, chC_Z: nums[11] ?? null
-		});
-	}
-
-	return results;
-}
