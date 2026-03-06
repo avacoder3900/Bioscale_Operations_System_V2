@@ -12,7 +12,12 @@ export async function connectDB() {
 	if (!env.MONGODB_URI) {
 		throw new Error('MONGODB_URI is not set');
 	}
-	await mongoose.connect(env.MONGODB_URI);
+	await mongoose.connect(env.MONGODB_URI, {
+		serverSelectionTimeoutMS: 5000,
+		connectTimeoutMS: 5000,
+		maxPoolSize: 10,
+		minPoolSize: 1
+	});
 	connected = true;
 	console.log('MongoDB connected');
 }
