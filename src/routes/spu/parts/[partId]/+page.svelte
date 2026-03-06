@@ -73,6 +73,10 @@
 	let minStockInput = $state(item.minimumStockLevel);
 	let historyOpen = $state(false);
 
+	let editingInspectionConfig = $state(false);
+	let sampleSizeInput = $state(item.inspectionConfig?.sampleSize ?? 1);
+	let percentAcceptedInput = $state(item.inspectionConfig?.percentAccepted ?? 100);
+
 	$effect(() => {
 		if (!editingMinStock) {
 			minStockInput = item.minimumStockLevel;
