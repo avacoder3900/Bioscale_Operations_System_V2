@@ -1,55 +1,91 @@
-import { fail, redirect } from '@sveltejs/kit';
+import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, ValidationSession, User, Spu, Integration, generateId } from '$lib/server/db';
-import { callFunction, getVariable } from '$lib/server/particle';
+import { connectDB, ValidationSession, Spu, Integration } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'spu:read');
 	await connectDB();
 
-	// Get all SPUs with particle links
+	// 1. Get all SPUs with particle links
 	const spus = await Spu.find(
 		{ 'particleLink.particleDeviceId': { $exists: true, $ne: null } },
 		{ udi: 1, 'particleLink.particleDeviceId': 1, status: 1 }
 	).sort({ udi: 1 }).lean() as any[];
 
-	// Get recent sessions
-	const sessions = await ValidationSession.find({ type: 'mag' })
-		.sort({ createdAt: -1 })
-		.limit(20)
-		.lean() as any[];
+	const spuIds = spus.map(s => s._id);
 
-	const userIds = [...new Set(sessions.map((s: any) => s.userId).filter(Boolean))];
-	const users = userIds.length ? await User.find({ _id: { $in: userIds } }, { username: 1 }).lean() : [];
-	const userMap = new Map((users as any[]).map((u: any) => [u._id, u.username]));
+	// 2. Get latest ValidationSession per SPU + total count per SPU
+	const sessionAgg = await ValidationSession.aggregate([
+		{ $match: { type: 'mag', spuId: { $in: spuIds } } },
+		{ $sort: { createdAt: -1 } },
+		{
+			$group: {
+				_id: '$spuId',
+				latestSession: { $first: '$$ROOT' },
+				totalCount: { $sum: 1 }
+			}
+		}
+	]);
 
-	// Get criteria
+	// Build lookup map: spuId → { latestSession, totalCount }
+	const sessionMap = new Map<string, { latestSession: any; totalCount: number }>();
+	for (const agg of sessionAgg) {
+		sessionMap.set(agg._id, { latestSession: agg.latestSession, totalCount: agg.totalCount });
+	}
+
+	// 3. Build SPU dashboard cards
+	const spuCards = spus.map(spu => {
+		const entry = sessionMap.get(spu._id);
+		const latest = entry?.latestSession ?? null;
+		let sortOrder = 1; // default: UNTESTED
+
+		if (latest) {
+			if (latest.overallPassed === false) sortOrder = 0; // FAIL first
+			else if (latest.overallPassed === true) sortOrder = 2; // PASS last
+		}
+
+		return {
+			id: spu._id,
+			udi: spu.udi,
+			particleDeviceId: spu.particleLink?.particleDeviceId ?? null,
+			status: spu.status,
+			latestTest: latest
+				? {
+						id: latest._id,
+						overallPassed: latest.overallPassed ?? null,
+						status: latest.status,
+						createdAt: latest.createdAt?.toISOString() ?? null,
+						completedAt: latest.completedAt?.toISOString() ?? null
+					}
+				: null,
+			totalTests: entry?.totalCount ?? 0,
+			sortOrder
+		};
+	});
+
+	// Sort: FAIL(0) → UNTESTED(1) → PASS(2)
+	spuCards.sort((a, b) => a.sortOrder - b.sortOrder);
+
+	// 4. Stats
+	const allSessions = sessionAgg.flatMap(a => [a.latestSession]);
+	const totalTestsAll = sessionAgg.reduce((sum, a) => sum + a.totalCount, 0);
+	const passedSpus = sessionAgg.filter(a => a.latestSession.overallPassed === true).length;
+	const failedSpus = sessionAgg.filter(a => a.latestSession.overallPassed === false).length;
+	const untestedSpus = spus.length - sessionAgg.length;
+
+	// 5. Get criteria
 	const criteria = await Integration.findOne({ type: 'mag_criteria' }).lean() as any;
 
-	const total = sessions.length;
-	const passed = sessions.filter((s: any) => s.overallPassed === true).length;
-	const failed = sessions.filter((s: any) => s.overallPassed === false).length;
-	const inProgress = sessions.filter((s: any) => s.status === 'in_progress' || s.status === 'running').length;
-
 	return {
-		spus: spus.map((s: any) => ({
-			id: s._id,
-			udi: s.udi,
-			particleDeviceId: s.particleLink?.particleDeviceId ?? null,
-			status: s.status
-		})),
-		recentSessions: sessions.map((s: any) => ({
-			id: s._id,
-			status: s.status,
-			overallPassed: s.overallPassed ?? null,
-			spuUdi: s.spuUdi ?? null,
-			startedAt: s.startedAt?.toISOString() ?? null,
-			completedAt: s.completedAt?.toISOString() ?? null,
-			createdAt: s.createdAt?.toISOString() ?? new Date().toISOString(),
-			username: userMap.get(s.userId) ?? null
-		})),
-		stats: { total, passed, failed, inProgress },
+		spuCards,
+		stats: {
+			totalSpus: spus.length,
+			totalTests: totalTestsAll,
+			passedSpus,
+			failedSpus,
+			untestedSpus
+		},
 		criteria: {
 			minZ: criteria?.minZ ?? 3900,
 			maxZ: criteria?.maxZ ?? 4500
@@ -58,110 +94,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 };
 
 export const actions: Actions = {
-	startTest: async ({ request, locals }) => {
-		requirePermission(locals.user, 'spu:write');
-		await connectDB();
-
-		const form = await request.formData();
-		const spuId = form.get('spuId')?.toString();
-		if (!spuId) return fail(400, { error: 'Select an SPU' });
-
-		const spu = await Spu.findById(spuId).lean() as any;
-		if (!spu) return fail(400, { error: 'SPU not found' });
-		if (!spu.particleLink?.particleDeviceId) return fail(400, { error: 'SPU has no Particle device linked' });
-
-		const sessionId = generateId();
-		await ValidationSession.create({
-			_id: sessionId,
-			type: 'mag',
-			status: 'running',
-			startedAt: new Date(),
-			userId: locals.user!._id,
-			spuUdi: spu.udi,
-			spuId: spu._id,
-			particleDeviceId: spu.particleLink.particleDeviceId,
-			results: []
-		});
-
-		// Call run_test on the device
-		try {
-			await callFunction(spu.particleLink.particleDeviceId, 'run_test', 'mag');
-		} catch (err) {
-			await ValidationSession.updateOne(
-				{ _id: sessionId },
-				{ $set: { status: 'failed', completedAt: new Date(), failureReasons: [`Device error: ${err instanceof Error ? err.message : String(err)}`] } }
-			);
-			return fail(400, { error: `Failed to trigger test: ${err instanceof Error ? err.message : String(err)}` });
-		}
-
-		redirect(303, `/spu/validation/magnetometer/${sessionId}`);
-	},
-
-	readFromDevice: async ({ request, locals }) => {
-		requirePermission(locals.user, 'spu:write');
-		await connectDB();
-
-		const form = await request.formData();
-		const spuId = form.get('spuId')?.toString();
-		if (!spuId) return fail(400, { error: 'Select an SPU' });
-
-		const spu = await Spu.findById(spuId).lean() as any;
-		if (!spu?.particleLink?.particleDeviceId) return fail(400, { error: 'SPU has no Particle device linked' });
-
-		// Read the current magnet_validation variable (from a previous run_test)
-		try {
-			const varData = await getVariable(spu.particleLink.particleDeviceId, 'magnet_validation');
-			const rawResult = varData.result;
-			if (!rawResult || typeof rawResult !== 'string') {
-				return fail(400, { error: 'No magnet_validation data on device. Run a test first.' });
-			}
-
-			// Parse
-			const parsed = parseMagValidation(rawResult);
-
-			// Get criteria
-			const criteria = await Integration.findOne({ type: 'mag_criteria' }).lean() as any;
-			const minZ = criteria?.minZ ?? 3900;
-			const maxZ = criteria?.maxZ ?? 4500;
-
-			// Evaluate
-			const failureReasons: string[] = [];
-			for (const well of parsed) {
-				for (const ch of ['A', 'B', 'C'] as const) {
-					const z = well[`ch${ch}_Z`];
-					if (z !== null && (z < minZ || z > maxZ)) {
-						failureReasons.push(`Well ${well.well} Ch ${ch}: Z=${z} (range: ${minZ}-${maxZ})`);
-					}
-				}
-			}
-
-			const overallPassed = failureReasons.length === 0;
-
-			const sessionId = generateId();
-			await ValidationSession.create({
-				_id: sessionId,
-				type: 'mag',
-				status: overallPassed ? 'completed' : 'failed',
-				startedAt: new Date(),
-				completedAt: new Date(),
-				userId: locals.user!._id,
-				spuUdi: spu.udi,
-				spuId: spu._id,
-				particleDeviceId: spu.particleLink.particleDeviceId,
-				rawData: rawResult,
-				magResults: parsed,
-				overallPassed,
-				failureReasons,
-				criteriaUsed: { minZ, maxZ }
-			});
-
-			redirect(303, `/spu/validation/magnetometer/${sessionId}`);
-		} catch (err: any) {
-			if (err?.status === 303) throw err; // re-throw redirect
-			return fail(400, { error: `Failed: ${err instanceof Error ? err.message : String(err)}` });
-		}
-	},
-
 	updateCriteria: async ({ request, locals }) => {
 		requirePermission(locals.user, 'spu:write');
 		await connectDB();
@@ -183,36 +115,3 @@ export const actions: Actions = {
 		return { criteriaUpdated: true };
 	}
 };
-
-interface MagWellResult {
-	well: number;
-	chA_T: number | null; chA_X: number | null; chA_Y: number | null; chA_Z: number | null;
-	chB_T: number | null; chB_X: number | null; chB_Y: number | null; chB_Z: number | null;
-	chC_T: number | null; chC_X: number | null; chC_Y: number | null; chC_Z: number | null;
-}
-
-function parseMagValidation(raw: string): MagWellResult[] {
-	const lines = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-	const results: MagWellResult[] = [];
-
-	for (const line of lines) {
-		const match = line.match(/^(\d+)\t/);
-		if (!match) continue;
-
-		const parts = line.split('\t').map(s => s.trim());
-		const well = parseInt(parts[0]);
-		const nums = parts.slice(1).map(s => {
-			const n = parseFloat(s);
-			return isNaN(n) ? null : n;
-		});
-
-		results.push({
-			well,
-			chA_T: nums[0] ?? null, chA_X: nums[1] ?? null, chA_Y: nums[2] ?? null, chA_Z: nums[3] ?? null,
-			chB_T: nums[4] ?? null, chB_X: nums[5] ?? null, chB_Y: nums[6] ?? null, chB_Z: nums[7] ?? null,
-			chC_T: nums[8] ?? null, chC_X: nums[9] ?? null, chC_Y: nums[10] ?? null, chC_Z: nums[11] ?? null
-		});
-	}
-
-	return results;
-}

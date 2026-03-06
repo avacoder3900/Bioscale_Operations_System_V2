@@ -3,20 +3,32 @@
 	import TronCard from '$lib/components/ui/TronCard.svelte';
 	import TronButton from '$lib/components/ui/TronButton.svelte';
 
+	interface SpuCard {
+		id: string;
+		udi: string;
+		particleDeviceId: string | null;
+		status: string;
+		latestTest: {
+			id: string;
+			overallPassed: boolean | null;
+			status: string;
+			createdAt: string | null;
+			completedAt: string | null;
+		} | null;
+		totalTests: number;
+		sortOrder: number;
+	}
+
 	interface Props {
 		data: {
-			spus: { id: string; udi: string; particleDeviceId: string | null; status: string }[];
-			recentSessions: {
-				id: string;
-				status: string;
-				overallPassed: boolean | null;
-				spuUdi: string | null;
-				startedAt: string | null;
-				completedAt: string | null;
-				createdAt: string;
-				username: string | null;
-			}[];
-			stats: { total: number; passed: number; failed: number; inProgress: number };
+			spuCards: SpuCard[];
+			stats: {
+				totalSpus: number;
+				totalTests: number;
+				passedSpus: number;
+				failedSpus: number;
+				untestedSpus: number;
+			};
 			criteria: { minZ: number; maxZ: number };
 		};
 		form: any;
@@ -24,24 +36,26 @@
 
 	let { data, form }: Props = $props();
 
-	let selectedSpuId = $state('');
-	let testing = $state(false);
-	let reading = $state(false);
 	let editingCriteria = $state(false);
 	let savingCriteria = $state(false);
 
-	function resultBadge(status: string, passed: boolean | null) {
-		if (status === 'running' || status === 'in_progress') return { text: 'Running', color: 'var(--color-tron-cyan)' };
-		if (passed === true) return { text: 'PASS', color: 'var(--color-tron-green)' };
-		if (passed === false) return { text: 'FAIL', color: 'var(--color-tron-red)' };
-		return { text: status, color: 'var(--color-tron-text-secondary)' };
+	function statusInfo(card: SpuCard): { label: string; color: string; icon: string } {
+		if (!card.latestTest) return { label: 'UNTESTED', color: 'var(--color-tron-text-secondary)', icon: '⚪' };
+		if (card.latestTest.overallPassed === true) return { label: 'PASS', color: 'var(--color-tron-green)', icon: '✅' };
+		if (card.latestTest.overallPassed === false) return { label: 'FAIL', color: 'var(--color-tron-red)', icon: '❌' };
+		if (card.latestTest.status === 'running') return { label: 'RUNNING', color: 'var(--color-tron-cyan)', icon: '⏳' };
+		return { label: 'UNTESTED', color: 'var(--color-tron-text-secondary)', icon: '⚪' };
+	}
+
+	function formatDate(d: string | null): string {
+		if (!d) return '—';
+		return new Date(d).toLocaleDateString();
 	}
 </script>
 
 <div class="space-y-6">
 	<h2 class="tron-text-primary text-2xl font-bold">Magnetometer Validation</h2>
 
-	<!-- Error display -->
 	{#if form?.error}
 		<div class="rounded border border-[var(--color-tron-red)] bg-[rgba(255,0,0,0.1)] p-3">
 			<p class="text-sm text-[var(--color-tron-red)]">{form.error}</p>
@@ -49,87 +63,38 @@
 	{/if}
 
 	<!-- Stats -->
-	<div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+	<div class="grid grid-cols-2 gap-3 md:grid-cols-5">
 		<TronCard>
 			<div class="p-4 text-center">
-				<div class="tron-text-muted text-xs uppercase">Total Tests</div>
-				<div class="tron-text-primary mt-1 text-2xl font-bold">{data.stats.total}</div>
-			</div>
-		</TronCard>
-		<TronCard>
-			<div class="p-4 text-center">
-				<div class="text-xs uppercase" style="color: var(--color-tron-green);">Passed</div>
-				<div class="mt-1 text-2xl font-bold" style="color: var(--color-tron-green);">{data.stats.passed}</div>
+				<div class="tron-text-muted text-xs uppercase">Total SPUs</div>
+				<div class="tron-text-primary mt-1 text-2xl font-bold">{data.stats.totalSpus}</div>
 			</div>
 		</TronCard>
 		<TronCard>
 			<div class="p-4 text-center">
 				<div class="text-xs uppercase" style="color: var(--color-tron-red);">Failed</div>
-				<div class="mt-1 text-2xl font-bold" style="color: var(--color-tron-red);">{data.stats.failed}</div>
+				<div class="mt-1 text-2xl font-bold" style="color: var(--color-tron-red);">{data.stats.failedSpus}</div>
 			</div>
 		</TronCard>
 		<TronCard>
 			<div class="p-4 text-center">
-				<div class="text-xs uppercase" style="color: var(--color-tron-cyan);">In Progress</div>
-				<div class="mt-1 text-2xl font-bold" style="color: var(--color-tron-cyan);">{data.stats.inProgress}</div>
+				<div class="tron-text-muted text-xs uppercase">Untested</div>
+				<div class="tron-text-primary mt-1 text-2xl font-bold">{data.stats.untestedSpus}</div>
+			</div>
+		</TronCard>
+		<TronCard>
+			<div class="p-4 text-center">
+				<div class="text-xs uppercase" style="color: var(--color-tron-green);">Passed</div>
+				<div class="mt-1 text-2xl font-bold" style="color: var(--color-tron-green);">{data.stats.passedSpus}</div>
+			</div>
+		</TronCard>
+		<TronCard>
+			<div class="p-4 text-center">
+				<div class="tron-text-muted text-xs uppercase">Total Tests</div>
+				<div class="tron-text-primary mt-1 text-2xl font-bold">{data.stats.totalTests}</div>
 			</div>
 		</TronCard>
 	</div>
-
-	<!-- Run Test / Read Results -->
-	<TronCard>
-		<div class="p-4 space-y-4">
-			<h3 class="tron-text-primary text-lg font-bold">Run Magnetometer Test</h3>
-
-			<div>
-				<label for="spu-select" class="tron-label">Select SPU</label>
-				<select id="spu-select" class="tron-select w-full" style="min-height: 48px;" bind:value={selectedSpuId}>
-					<option value="">Choose an SPU…</option>
-					{#each data.spus as spu (spu.id)}
-						<option value={spu.id}>{spu.udi} ({spu.status})</option>
-					{/each}
-				</select>
-			</div>
-
-			<div class="flex gap-3">
-				<form
-					method="POST"
-					action="?/startTest"
-					use:enhance={() => {
-						testing = true;
-						return async ({ update }) => {
-							testing = false;
-							await update();
-						};
-					}}
-					class="flex-1"
-				>
-					<input type="hidden" name="spuId" value={selectedSpuId} />
-					<TronButton type="submit" variant="primary" disabled={!selectedSpuId || testing} style="min-height: 48px; width: 100%;">
-						{testing ? 'Triggering Test…' : '▶ Run Test on Device'}
-					</TronButton>
-				</form>
-
-				<form
-					method="POST"
-					action="?/readFromDevice"
-					use:enhance={() => {
-						reading = true;
-						return async ({ update }) => {
-							reading = false;
-							await update();
-						};
-					}}
-					class="flex-1"
-				>
-					<input type="hidden" name="spuId" value={selectedSpuId} />
-					<TronButton type="submit" variant="secondary" disabled={!selectedSpuId || reading} style="min-height: 48px; width: 100%;">
-						{reading ? 'Reading…' : '📖 Read Last Result'}
-					</TronButton>
-				</form>
-			</div>
-		</div>
-	</TronCard>
 
 	<!-- Pass/Fail Criteria -->
 	<TronCard>
@@ -170,7 +135,7 @@
 				</form>
 			{:else}
 				<p class="tron-text-muted mt-2 text-sm">
-					Z values must be between <strong class="tron-text-primary">{data.criteria.minZ}</strong> and <strong class="tron-text-primary">{data.criteria.maxZ}</strong> gauss to pass.
+					Z values must be between <strong class="tron-text-primary">{data.criteria.minZ}</strong> and <strong class="tron-text-primary">{data.criteria.maxZ}</strong> to pass.
 				</p>
 				{#if form?.criteriaUpdated}
 					<p class="mt-1 text-xs" style="color: var(--color-tron-green);">✓ Criteria updated</p>
@@ -179,40 +144,50 @@
 		</div>
 	</TronCard>
 
-	<!-- Recent Sessions -->
-	<TronCard>
-		<div class="p-4">
-			<h3 class="tron-text-primary mb-3 font-bold">Recent Tests</h3>
-			{#if data.recentSessions.length === 0}
-				<p class="tron-text-muted text-sm">No tests run yet.</p>
-			{:else}
-				<div class="space-y-2">
-					{#each data.recentSessions as session (session.id)}
-						{@const badge = resultBadge(session.status, session.overallPassed)}
-						<a
-							href="/spu/validation/magnetometer/{session.id}"
-							class="flex items-center justify-between rounded border p-3 transition-colors hover:border-[var(--color-tron-cyan)]"
-							style="border-color: var(--color-tron-border); background: var(--color-tron-bg-secondary);"
-						>
-							<div>
-								<span class="tron-text-primary font-mono text-sm font-medium">{session.spuUdi ?? 'Unknown SPU'}</span>
-								<span class="tron-text-muted ml-2 text-xs">
-									{session.completedAt ? new Date(session.completedAt).toLocaleString() : session.startedAt ? new Date(session.startedAt).toLocaleString() : ''}
-								</span>
-								{#if session.username}
-									<span class="tron-text-muted ml-2 text-xs">by {session.username}</span>
-								{/if}
-							</div>
-							<span
-								class="rounded-full px-3 py-1 text-xs font-bold"
-								style="color: {badge.color}; background: color-mix(in srgb, {badge.color} 15%, transparent);"
-							>
-								{badge.text}
-							</span>
-						</a>
-					{/each}
+	<!-- SPU Dashboard Grid -->
+	<div>
+		<h3 class="tron-text-primary mb-3 font-bold">SPU Status Dashboard</h3>
+		{#if data.spuCards.length === 0}
+			<TronCard>
+				<div class="p-8 text-center">
+					<p class="tron-text-muted">No SPUs with Particle devices found.</p>
+					<p class="tron-text-muted mt-1 text-xs">Link devices to SPUs in the SPU management section.</p>
 				</div>
-			{/if}
-		</div>
-	</TronCard>
+			</TronCard>
+		{:else}
+			<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+				{#each data.spuCards as card (card.id)}
+					{@const info = statusInfo(card)}
+					<a
+						href="/spu/validation/magnetometer/spu/{card.id}"
+						class="block rounded border p-4 transition-all hover:border-[var(--color-tron-cyan)] hover:shadow-lg"
+						style="border-color: {info.color === 'var(--color-tron-text-secondary)' ? 'var(--color-tron-border)' : info.color}; background: var(--color-tron-bg-secondary);"
+					>
+						<!-- UDI -->
+						<div class="tron-text-primary mb-3 font-mono text-sm font-bold">{card.udi}</div>
+
+						<!-- Status Badge -->
+						<div class="mb-3 flex items-center gap-2">
+							<span class="text-lg">{info.icon}</span>
+							<span class="text-sm font-bold" style="color: {info.color};">{info.label}</span>
+						</div>
+
+						<!-- Test info -->
+						<div class="space-y-1">
+							<div class="flex justify-between text-xs">
+								<span class="tron-text-muted">Last test</span>
+								<span class="tron-text-primary">
+									{card.latestTest ? formatDate(card.latestTest.completedAt ?? card.latestTest.createdAt) : 'Never'}
+								</span>
+							</div>
+							<div class="flex justify-between text-xs">
+								<span class="tron-text-muted">Total tests</span>
+								<span class="tron-text-primary">{card.totalTests}</span>
+							</div>
+						</div>
+					</a>
+				{/each}
+			</div>
+		{/if}
+	</div>
 </div>

@@ -12,6 +12,7 @@ const validationSessionSchema = new Schema({
 	overallPassed: Boolean,
 	failureReasons: [String],
 	criteriaUsed: Schema.Types.Mixed,
+	deviceTimestamp: { type: String, index: true },
 	barcode: String,
 	results: [{
 		_id: { type: String, default: () => generateId() },
@@ -20,5 +21,8 @@ const validationSessionSchema = new Schema({
 	}],
 	createdAt: { type: Date, default: Date.now }
 }, { timestamps: false });
+
+// Unique index: prevent duplicate sessions for the same device test run
+validationSessionSchema.index({ spuId: 1, deviceTimestamp: 1, type: 1 }, { unique: true, sparse: true });
 
 export const ValidationSession = mongoose.models.ValidationSession || mongoose.model('ValidationSession', validationSessionSchema, 'validation_sessions');
