@@ -57,13 +57,9 @@
 	let vendorLotNumber = $state('');
 	let expirationDate = $state('');
 	let lotCreating = $state(false);
+	let createdLotIdManual = $state<string | undefined>(undefined);
 
-	const lotCreated = $derived(form?.lotCreated === true);
-	const createdLotId = $derived(form?.lotId as string | undefined);
-
-	$effect(() => {
-		if (lotCreated && createdLotId) step = 5;
-	});
+	const createdLotId = $derived(createdLotIdManual ?? (form?.lotId as string | undefined));
 
 	$effect(() => {
 		if (form?.cocUrl) {
@@ -525,9 +521,14 @@
 				enctype="multipart/form-data"
 				use:enhance={() => {
 					lotCreating = true;
-					return async ({ update }) => {
+					return async ({ result, update }) => {
 						lotCreating = false;
-						await update();
+						if (result.type === 'success' && result.data?.lotCreated) {
+							createdLotIdManual = result.data.lotId as string;
+							step = 5;
+						} else {
+							await update();
+						}
 					};
 				}}
 			>
