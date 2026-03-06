@@ -3,7 +3,7 @@ import { connectDB, Document, User, ElectronicSignature, AuditLog, generateId } 
 import bcrypt from 'bcryptjs';
 import type { Actions, PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ params }) => {
+export const load: PageServerLoad = async ({ params, locals }) => {
 	await connectDB();
 	const doc = await Document.findById(params.id).lean() as any;
 	if (!doc) error(404, 'Document not found');
@@ -11,6 +11,19 @@ export const load: PageServerLoad = async ({ params }) => {
 	const currentRev = (doc.revisions ?? []).find(
 		(r: any) => r.status === 'approved' && r.revision === doc.currentRevision
 	) ?? (doc.revisions ?? []).slice(-1)[0];
+
+	if (!currentRev) error(404, 'No revision found for training');
+
+	// Check if user has already trained on this revision
+	const userId = locals.user?._id;
+	const alreadyTrained = (currentRev.trainingRecords ?? []).some(
+		(tr: any) => tr.userId === userId
+	);
+
+	const userName = locals.user
+		? [locals.user.firstName, locals.user.lastName].filter(Boolean).join(' ') ||
+		  locals.user.username
+		: '';
 
 	return {
 		document: {
@@ -21,12 +34,14 @@ export const load: PageServerLoad = async ({ params }) => {
 			currentRevision: parseInt(doc.currentRevision) || 0,
 			status: doc.status ?? 'draft'
 		},
-		revision: currentRev ? {
+		revision: {
 			id: currentRev._id,
 			revision: parseInt(currentRev.revision) || 0,
 			content: currentRev.content ?? null,
 			changeDescription: currentRev.changeDescription ?? null
-		} : null
+		},
+		alreadyTrained,
+		userName
 	};
 };
 

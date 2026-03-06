@@ -22,23 +22,29 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			status: customer.status ?? 'active',
 			contactEmail: customer.contactEmail ?? null,
 			contactPhone: customer.contactPhone ?? null,
+			contactName: customer.contactName ?? null,
 			address: customer.address ?? null,
-			notes: null, // top-level notes field (not the array)
 			createdAt: customer.createdAt,
 			updatedAt: customer.updatedAt
 		},
-		assignedSpus: (assignedSpus as any[]).map((s) => ({
+		spus: (assignedSpus as any[]).map((s) => ({
 			id: s._id,
 			udi: s.udi,
 			deviceState: s.deviceState ?? 'unknown',
 			assignmentType: s.assignment?.type ?? ''
 		})),
-		customerNotes: (customer.notes ?? []).map((n: any) => ({
+		notes: (customer.notes ?? []).map((n: any) => ({
 			id: n._id,
 			content: n.noteText ?? '',
 			createdAt: n.createdAt,
 			createdByUsername: n.createdBy?.username ?? 'Unknown'
-		}))
+		})),
+		orderHistory: [] as {
+			id: string;
+			orderNumber: string;
+			status: string;
+			createdAt: Date;
+		}[]
 	};
 };
 
@@ -65,7 +71,7 @@ export const actions: Actions = {
 			newData: { name: name.trim() }, changedBy: locals.user.username ?? locals.user._id
 		});
 
-		return { success: true };
+		return { success: true, message: 'Customer updated successfully' };
 	},
 
 	addNote: async ({ request, locals, params }) => {
@@ -86,7 +92,7 @@ export const actions: Actions = {
 			}
 		});
 
-		return { success: true };
+		return { success: true, message: "Operation completed successfully" };
 	},
 
 	deactivate: async ({ locals, params }) => {
@@ -99,7 +105,7 @@ export const actions: Actions = {
 			newData: { status: 'inactive' }, changedBy: locals.user.username ?? locals.user._id
 		});
 
-		return { success: true };
+		return { success: true, message: "Operation completed successfully" };
 	},
 
 	reactivate: async ({ locals, params }) => {
@@ -112,6 +118,6 @@ export const actions: Actions = {
 			newData: { status: 'active' }, changedBy: locals.user.username ?? locals.user._id
 		});
 
-		return { success: true };
+		return { success: true, message: "Operation completed successfully" };
 	}
 };

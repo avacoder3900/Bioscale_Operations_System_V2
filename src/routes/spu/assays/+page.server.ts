@@ -1,7 +1,7 @@
-import { redirect } from '@sveltejs/kit';
-import { connectDB, AssayDefinition, CartridgeRecord } from '$lib/server/db';
+import { fail, redirect } from '@sveltejs/kit';
+import { connectDB, AssayDefinition, CartridgeRecord, generateId } from '$lib/server/db';
 import { hasPermission, requirePermission } from '$lib/server/permissions';
-import type { PageServerLoad } from './$types';
+import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!locals.user) redirect(302, '/login');
@@ -55,8 +55,44 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			inactive: allAssays.filter((a: any) => !a.isActive).length,
 			totalLinkedCartridges: totalLinked
 		},
-		filters: { search, status },
+		filters: { search: search ?? '', status },
 		canWrite: hasPermission(locals.user, 'assay:write'),
 		canDelete: hasPermission(locals.user, 'assay:write')
 	};
+};
+
+export const actions: Actions = {
+	duplicate: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
+		await connectDB();
+		const form = await request.formData();
+		const assayId = form.get('assayId')?.toString();
+		if (!assayId) return fail(400, { error: 'Assay ID required' });
+		const original = await AssayDefinition.findById(assayId).lean() as any;
+		if (!original) return fail(404, { error: 'Assay not found' });
+		await AssayDefinition.create({
+			_id: generateId(),
+			name: `${original.name} (Copy)`,
+			skuCode: original.skuCode ? `${original.skuCode}-COPY` : undefined,
+			description: original.description,
+			duration: original.duration,
+			shelfLifeDays: original.shelfLifeDays,
+			isActive: true,
+			reagents: original.reagents ?? [],
+			versionHistory: []
+		});
+		return { success: true };
+	},
+
+	delete: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
+		await connectDB();
+		const form = await request.formData();
+		const assayId = form.get('assayId')?.toString();
+		if (!assayId) return fail(400, { error: 'Assay ID required' });
+		await AssayDefinition.updateOne({ _id: assayId }, { $set: { isActive: false } });
+		return { success: true };
+	}
 };

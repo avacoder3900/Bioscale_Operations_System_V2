@@ -1,5 +1,5 @@
 import { redirect } from '@sveltejs/kit';
-import { connectDB, CartridgeRecord, ReagentBatchRecord } from '$lib/server/db';
+import { connectDB, CartridgeRecord, ReagentBatchRecord, LabCartridge, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -38,22 +38,55 @@ export const actions: Actions = {
 		const testResult = data.get('testResult') as string;
 		const shippingLotId = data.get('shippingLotId') as string;
 		const notes = data.get('notes') as string;
+		const now = new Date();
 
 		// WRITE-ONCE qaqcRelease phase
-		await CartridgeRecord.findOneAndUpdate(
+		const updated = await CartridgeRecord.findOneAndUpdate(
 			{ _id: cartridgeId, 'qaqcRelease.recordedAt': { $exists: false } },
 			{
 				$set: {
 					'qaqcRelease.shippingLotId': shippingLotId || undefined,
 					'qaqcRelease.testResult': testResult,
 					'qaqcRelease.testedBy': { _id: locals.user._id, username: locals.user.username },
-					'qaqcRelease.testedAt': new Date(),
+					'qaqcRelease.testedAt': now,
 					'qaqcRelease.notes': notes || undefined,
-					'qaqcRelease.recordedAt': new Date(),
+					'qaqcRelease.recordedAt': now,
 					currentPhase: testResult === 'pass' ? 'released' : 'voided'
 				}
-			}
-		);
+			},
+			{ new: true }
+		).lean() as any;
+
+		// FIX-06: Bridge CartridgeRecord → LabCartridge on pass
+		if (updated && testResult === 'pass') {
+			const lotNumber = updated.backing?.lotQrCode ?? updated.backing?.lotId ?? cartridgeId;
+			const performedBy = { _id: locals.user._id, username: locals.user.username };
+
+			await LabCartridge.findByIdAndUpdate(
+				cartridgeId,
+				{
+					$setOnInsert: {
+						_id: cartridgeId,
+						lotNumber,
+						cartridgeType: 'measurement',
+						status: 'available',
+						receivedDate: now,
+						isActive: true,
+						createdBy: locals.user._id
+					},
+					$push: {
+						usageLog: {
+							_id: generateId(),
+							action: 'registered',
+							notes: 'Auto-created from QA/QC release',
+							performedBy,
+							performedAt: now
+						}
+					}
+				},
+				{ upsert: true }
+			);
+		}
 
 		return { success: true };
 	}

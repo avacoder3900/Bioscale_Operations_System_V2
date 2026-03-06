@@ -59,6 +59,27 @@ export const load: PageServerLoad = async ({ params }) => {
 			pipettesRequired: dbRecord.pipettesRequired ?? null,
 			updatedAt: dbRecord.updatedAt ? new Date(dbRecord.updatedAt).toISOString() : new Date().toISOString()
 		} : null,
-		analysis
+		analysis: analysis as {
+			id: string;
+			status: string;
+			parameters?: Array<{
+				variableName: string;
+				displayName: string;
+				type: string;
+				default: unknown;
+				choices?: Array<{ value: string | number; displayName: string }>;
+				min?: number;
+				max?: number;
+			}>;
+			labware?: Array<{
+				id: string;
+				loadName: string;
+				namespace: string;
+				location: { slotName: string } | { moduleId: string } | null;
+				definitionUri: string;
+			}>;
+			pipettes?: Array<{ id: string; pipetteName: string; mount: string }>;
+			liquids?: Array<{ id: string; displayName: string; description?: string }>;
+		} | null
 	};
 };
