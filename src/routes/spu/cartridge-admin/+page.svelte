@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
+	import PartsNav from '$lib/components/PartsNav.svelte';
 	import type { LifecycleStage } from '$lib/server/services/cartridge-admin/queries';
 
 	let { data } = $props();
@@ -46,6 +47,7 @@
 </script>
 
 <div class="space-y-4">
+	<PartsNav />
 	<!-- Search + Filters -->
 	<div class="flex flex-wrap gap-2">
 		<div class="flex flex-1 gap-2">

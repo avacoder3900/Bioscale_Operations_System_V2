@@ -2,6 +2,7 @@
 	import { enhance } from '$app/forms';
 	import { page } from '$app/state';
 	import { TronCard, TronButton, TronBadge } from '$lib/components/ui';
+	import PartsNav from '$lib/components/PartsNav.svelte';
 	import { SvelteSet, SvelteURLSearchParams } from 'svelte/reactivity';
 
 	let { data, form } = $props();
@@ -264,6 +265,8 @@
 </script>
 
 <div class="space-y-6">
+	<PartsNav />
+
 	<!-- Tab Switcher -->
 	<div class="flex items-center gap-1 border-b border-[var(--color-tron-border)]">
 		<button

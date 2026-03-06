@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import PartsNav from '$lib/components/PartsNav.svelte';
 
 	interface ConsumableItem {
 		id: string;
@@ -74,6 +75,7 @@
 </script>
 
 <div class="space-y-6">
+	<PartsNav />
 	<div class="flex items-center justify-between">
 		<div>
 			<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Consumables</h1>
