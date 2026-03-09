@@ -3,7 +3,7 @@ import { requireAgentApiKey } from '$lib/server/api-auth';
 import { connectDB, KanbanTask, KanbanProject } from '$lib/server/db';
 import type { RequestHandler } from './$types';
 
-const COLUMNS = ['backlog', 'ready', 'wip', 'waiting', 'done'] as const;
+const COLUMNS = ['blocked', 'backlog', 'ready', 'wip', 'waiting', 'done'] as const;
 
 export const GET: RequestHandler = async ({ request }) => {
 	requireAgentApiKey(request);
