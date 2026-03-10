@@ -228,14 +228,22 @@
 					</div>
 				</div>
 			{:else}
-				<button
-					onclick={startWatching}
-					disabled={!selectedSpu?.particleDeviceId}
-					class="w-full rounded-lg p-4 text-center font-bold text-lg transition-all disabled:opacity-50"
-					style="background: linear-gradient(135deg, var(--color-tron-cyan), var(--color-tron-green)); color: var(--color-tron-bg-primary); min-height: 56px;"
-				>
-					👁 Start Watching for Results
-				</button>
+				{#if selectedSpu?.particleDeviceId}
+					<button
+						onclick={startWatching}
+						class="w-full rounded-lg p-4 text-center font-bold text-lg transition-all cursor-pointer hover:opacity-90 active:scale-[0.98]"
+						style="background: linear-gradient(135deg, var(--color-tron-cyan), var(--color-tron-green)); color: var(--color-tron-bg-primary); min-height: 56px;"
+					>
+						👁 Start Watching for Results
+					</button>
+				{:else}
+					<div
+						class="w-full rounded-lg p-4 text-center font-bold text-lg opacity-40"
+						style="background: linear-gradient(135deg, var(--color-tron-cyan), var(--color-tron-green)); color: var(--color-tron-bg-primary); min-height: 56px;"
+					>
+						Select an SPU to start watching
+					</div>
+				{/if}
 			{/if}
 
 			{#if pollError}
