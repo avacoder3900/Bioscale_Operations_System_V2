@@ -204,29 +204,45 @@
 			{/if}
 
 			{#if watching}
-				<div class="flex items-center gap-3">
-					<div class="h-3 w-3 rounded-full bg-[var(--color-tron-green)] animate-pulse shadow-[0_0_8px_var(--color-tron-green)]"></div>
-					<span class="tron-text-primary text-sm font-medium">{pollStatus}</span>
+				<!-- LIVE indicator banner -->
+				<div class="relative overflow-hidden rounded-lg p-4" style="background: linear-gradient(135deg, rgba(0,255,100,0.08) 0%, rgba(0,200,255,0.08) 100%); border: 2px solid var(--color-tron-green);">
+					<!-- Scanning animation bar -->
+					<div class="absolute top-0 left-0 h-1 w-full">
+						<div class="h-full bg-[var(--color-tron-green)] animate-scan-bar" style="width: 30%; box-shadow: 0 0 12px var(--color-tron-green), 0 0 24px var(--color-tron-green);"></div>
+					</div>
+
+					<div class="flex items-center justify-between">
+						<div class="flex items-center gap-3">
+							<div class="relative">
+								<div class="h-4 w-4 rounded-full bg-[var(--color-tron-green)]" style="box-shadow: 0 0 12px var(--color-tron-green), 0 0 24px rgba(0,255,100,0.4);"></div>
+								<div class="absolute inset-0 h-4 w-4 rounded-full bg-[var(--color-tron-green)] animate-ping opacity-40"></div>
+							</div>
+							<div>
+								<div class="text-sm font-bold tracking-wider" style="color: var(--color-tron-green);">● LIVE — WATCHING</div>
+								<div class="tron-text-muted text-xs mt-0.5">{pollStatus}</div>
+							</div>
+						</div>
+						<button onclick={stopWatching} class="px-4 py-2 rounded text-sm font-medium border transition-colors" style="border-color: var(--color-tron-green); color: var(--color-tron-green);" onmouseenter={(e) => { e.currentTarget.style.background = 'rgba(0,255,100,0.15)'; }} onmouseleave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+							⏹ Stop
+						</button>
+					</div>
 				</div>
-				<button onclick={stopWatching} class="tron-btn-secondary w-full" style="min-height: 48px;">
-					⏹ Stop Watching
-				</button>
 			{:else}
 				<button
 					onclick={startWatching}
 					disabled={!selectedSpu?.particleDeviceId}
-					class="tron-btn-primary w-full disabled:opacity-50" style="min-height: 48px;"
+					class="w-full rounded-lg p-4 text-center font-bold text-lg transition-all disabled:opacity-50"
+					style="background: linear-gradient(135deg, var(--color-tron-cyan), var(--color-tron-green)); color: var(--color-tron-bg-primary); min-height: 56px;"
 				>
 					👁 Start Watching for Results
 				</button>
 			{/if}
 
 			{#if pollError}
-				<div class="flex items-start gap-2 text-sm text-[var(--color-tron-red)]">
-					<svg class="h-4 w-4 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-					</svg>
-					<span>{pollError}</span>
+				<div class="rounded-lg p-3" style="background: rgba(255,0,0,0.1); border: 1px solid var(--color-tron-red);">
+					<div class="flex items-start gap-2 text-sm text-[var(--color-tron-red)]">
+						<span>⚠️ {pollError}</span>
+					</div>
 				</div>
 			{/if}
 
@@ -288,6 +304,19 @@
 			{/if}
 		</div>
 	</TronCard>
+
+	<!-- Watching banner animation -->
+	{#if watching}
+		<style>
+			@keyframes scan-bar {
+				0% { transform: translateX(-100%); }
+				100% { transform: translateX(400%); }
+			}
+			.animate-scan-bar {
+				animation: scan-bar 2s ease-in-out infinite;
+			}
+		</style>
+	{/if}
 
 	<!-- Recent Sessions -->
 	<TronCard>
