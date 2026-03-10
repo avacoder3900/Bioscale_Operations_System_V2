@@ -57,8 +57,8 @@
 		lastHash = null;
 		pollCount = 0;
 
-		// Poll every 5 seconds
-		pollInterval = setInterval(pollDevice, 5000);
+		// Poll every 10 seconds (Particle API can be slow)
+		pollInterval = setInterval(pollDevice, 10000);
 		// Do first poll immediately
 		pollDevice();
 	}
