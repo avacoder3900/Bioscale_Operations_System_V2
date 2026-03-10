@@ -24,6 +24,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	}
 
 	try {
+		// Check if device is online first (fast call, avoids timeout on offline devices)
+		const { getDevice } = await import('$lib/server/particle');
+		const deviceInfo = await getDevice(particleDeviceId);
+		if (!deviceInfo.connected) {
+			return json({ status: 'offline', error: `Device is offline (last seen: ${deviceInfo.last_heard ? new Date(deviceInfo.last_heard).toLocaleString() : 'never'})` });
+		}
+
 		const varData = await getVariable(particleDeviceId, 'magnet_validation');
 		const rawResult = varData.result;
 

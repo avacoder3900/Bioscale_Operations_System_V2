@@ -114,6 +114,10 @@
 				pollStatus = `Watching… (${pollCount} checks, ${newSessions.length} tests captured)`;
 			} else if (result.status === 'no_data') {
 				pollStatus = `Watching… no data yet (${pollCount} checks)`;
+			} else if (result.status === 'offline') {
+				pollError = result.error;
+				pollStatus = '⚠️ Device offline — turn on the SPU and try again';
+				stopWatching();
 			} else if (result.status === 'error') {
 				pollError = result.error;
 				pollStatus = '';
