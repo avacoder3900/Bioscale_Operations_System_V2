@@ -1,4 +1,8 @@
 import { json } from '@sveltejs/kit';
+
+export const config = {
+	maxDuration: 60
+};
 import { connectDB, ValidationSession, Integration, generateId } from '$lib/server/db';
 import { getVariable } from '$lib/server/particle';
 import type { RequestHandler } from './$types';
