@@ -115,15 +115,21 @@
 							{#each wells as well (well.well)}
 								<tr class="border-b" style="border-color: var(--color-tron-border);">
 									<td class="px-3 py-3 font-mono font-bold tron-text-primary">{well.well}</td>
-									<td class="px-3 py-3 text-center font-mono font-bold" style="color: {zColor(well.chA_Z)}; background: {zBg(well.chA_Z)};">
-										{well.chA_Z ?? '—'}
-									</td>
-									<td class="px-3 py-3 text-center font-mono font-bold" style="color: {zColor(well.chB_Z)}; background: {zBg(well.chB_Z)};">
-										{well.chB_Z ?? '—'}
-									</td>
-									<td class="px-3 py-3 text-center font-mono font-bold" style="color: {zColor(well.chC_Z)}; background: {zBg(well.chC_Z)};">
-										{well.chC_Z ?? '—'}
-									</td>
+									{#if well.error}
+										<td colspan="3" class="px-3 py-3 text-center text-sm" style="color: var(--color-tron-red);">
+											⚠️ {well.error}
+										</td>
+									{:else}
+										<td class="px-3 py-3 text-center font-mono font-bold" style="color: {zColor(well.chA_Z)}; background: {zBg(well.chA_Z)};">
+											{well.chA_Z ?? '—'}
+										</td>
+										<td class="px-3 py-3 text-center font-mono font-bold" style="color: {zColor(well.chB_Z)}; background: {zBg(well.chB_Z)};">
+											{well.chB_Z ?? '—'}
+										</td>
+										<td class="px-3 py-3 text-center font-mono font-bold" style="color: {zColor(well.chC_Z)}; background: {zBg(well.chC_Z)};">
+											{well.chC_Z ?? '—'}
+										</td>
+									{/if}
 								</tr>
 							{/each}
 						</tbody>

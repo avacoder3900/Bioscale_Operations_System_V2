@@ -57,10 +57,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// Evaluate pass/fail
 		const failureReasons: string[] = [];
 		for (const well of parsed) {
+			if (well.error) {
+				failureReasons.push(`Well ${well.well}: ${well.error}`);
+				continue;
+			}
 			for (const ch of ['A', 'B', 'C'] as const) {
 				const z = well[`ch${ch}_Z`];
 				if (z !== null && (z < minZ || z > maxZ)) {
 					failureReasons.push(`Well ${well.well} Ch ${ch}: Z=${z} (range: ${minZ}-${maxZ})`);
+				}
+				// Also fail if Z is null (no data for this channel)
+				if (z === null) {
+					failureReasons.push(`Well ${well.well} Ch ${ch}: No Z reading`);
 				}
 			}
 		}
@@ -108,21 +116,29 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 interface MagWellResult {
 	well: number;
+	error: string | null;
 	chA_T: number | null; chA_X: number | null; chA_Y: number | null; chA_Z: number | null;
 	chB_T: number | null; chB_X: number | null; chB_Y: number | null; chB_Z: number | null;
 	chC_T: number | null; chC_X: number | null; chC_Y: number | null; chC_Z: number | null;
 }
 
 function parseMagValidation(raw: string): MagWellResult[] {
-	const lines = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+	// Split on \r\n or \n, trim, skip empty lines
+	const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
 	const results: MagWellResult[] = [];
 
 	for (const line of lines) {
+		// Match lines starting with well number (1-5) followed by tab
 		const match = line.match(/^(\d+)\t/);
 		if (!match) continue;
 
+		const well = parseInt(match[1]);
+		if (well < 1 || well > 5) continue;
+
+		// Check for error messages in this well's data
+		const hasError = line.includes('Could not find') || line.includes('error') || line.includes('Error');
+		
 		const parts = line.split('\t').map(s => s.trim());
-		const well = parseInt(parts[0]);
 		const nums = parts.slice(1).map(s => {
 			const n = parseFloat(s);
 			return isNaN(n) ? null : n;
@@ -130,11 +146,24 @@ function parseMagValidation(raw: string): MagWellResult[] {
 
 		results.push({
 			well,
+			error: hasError ? parts.slice(1).join(' ').trim() : null,
 			chA_T: nums[0] ?? null, chA_X: nums[1] ?? null, chA_Y: nums[2] ?? null, chA_Z: nums[3] ?? null,
 			chB_T: nums[4] ?? null, chB_X: nums[5] ?? null, chB_Y: nums[6] ?? null, chB_Z: nums[7] ?? null,
 			chC_T: nums[8] ?? null, chC_X: nums[9] ?? null, chC_Y: nums[10] ?? null, chC_Z: nums[11] ?? null
 		});
 	}
 
-	return results;
+	// Ensure all 5 wells are represented (even if missing from data)
+	for (let w = 1; w <= 5; w++) {
+		if (!results.find(r => r.well === w)) {
+			results.push({
+				well: w, error: 'No data received',
+				chA_T: null, chA_X: null, chA_Y: null, chA_Z: null,
+				chB_T: null, chB_X: null, chB_Y: null, chB_Z: null,
+				chC_T: null, chC_X: null, chC_Y: null, chC_Z: null
+			});
+		}
+	}
+
+	return results.sort((a, b) => a.well - b.well);
 }
