@@ -16,7 +16,7 @@
 				createdAt: string;
 				username: string | null;
 			}[];
-			stats: { total: number; passed: number; failed: number; inProgress: number };
+			stats: { total: number; passed: number; failed: number };
 			criteria: { minZ: number; maxZ: number };
 		};
 		form: any;
@@ -25,16 +25,19 @@
 	let { data, form }: Props = $props();
 
 	let selectedSpuId = $state('');
-	let testing = $state(false);
 	let reading = $state(false);
 	let editingCriteria = $state(false);
 	let savingCriteria = $state(false);
 
-	function resultBadge(status: string, passed: boolean | null) {
-		if (status === 'running' || status === 'in_progress') return { text: 'Running', color: 'var(--color-tron-cyan)' };
+	// Filter out in-progress sessions from display
+	const completedSessions = $derived(
+		data.recentSessions.filter(s => s.status !== 'running' && s.status !== 'in_progress')
+	);
+
+	function resultBadge(passed: boolean | null) {
 		if (passed === true) return { text: 'PASS', color: 'var(--color-tron-green)' };
 		if (passed === false) return { text: 'FAIL', color: 'var(--color-tron-red)' };
-		return { text: status, color: 'var(--color-tron-text-secondary)' };
+		return { text: 'Pending', color: 'var(--color-tron-text-secondary)' };
 	}
 </script>
 
@@ -49,7 +52,7 @@
 	{/if}
 
 	<!-- Stats -->
-	<div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+	<div class="grid grid-cols-3 gap-3">
 		<TronCard>
 			<div class="p-4 text-center">
 				<div class="tron-text-muted text-xs uppercase">Total Tests</div>
@@ -68,18 +71,12 @@
 				<div class="mt-1 text-2xl font-bold" style="color: var(--color-tron-red);">{data.stats.failed}</div>
 			</div>
 		</TronCard>
-		<TronCard>
-			<div class="p-4 text-center">
-				<div class="text-xs uppercase" style="color: var(--color-tron-cyan);">In Progress</div>
-				<div class="mt-1 text-2xl font-bold" style="color: var(--color-tron-cyan);">{data.stats.inProgress}</div>
-			</div>
-		</TronCard>
 	</div>
 
-	<!-- Run Test / Read Results -->
+	<!-- Read Results from Device -->
 	<TronCard>
 		<div class="p-4 space-y-4">
-			<h3 class="tron-text-primary text-lg font-bold">Run Magnetometer Test</h3>
+			<h3 class="tron-text-primary text-lg font-bold">Read Results from Device</h3>
 
 			<div>
 				<label for="spu-select" class="tron-label">Select SPU</label>
@@ -91,43 +88,22 @@
 				</select>
 			</div>
 
-			<div class="flex gap-3">
-				<form
-					method="POST"
-					action="?/startTest"
-					use:enhance={() => {
-						testing = true;
-						return async ({ update }) => {
-							testing = false;
-							await update();
-						};
-					}}
-					class="flex-1"
-				>
-					<input type="hidden" name="spuId" value={selectedSpuId} />
-					<TronButton type="submit" variant="primary" disabled={!selectedSpuId || testing} style="min-height: 48px; width: 100%;">
-						{testing ? 'Triggering Test…' : '▶ Run Test on Device'}
-					</TronButton>
-				</form>
-
-				<form
-					method="POST"
-					action="?/readFromDevice"
-					use:enhance={() => {
-						reading = true;
-						return async ({ update }) => {
-							reading = false;
-							await update();
-						};
-					}}
-					class="flex-1"
-				>
-					<input type="hidden" name="spuId" value={selectedSpuId} />
-					<TronButton type="submit" variant="secondary" disabled={!selectedSpuId || reading} style="min-height: 48px; width: 100%;">
-						{reading ? 'Reading…' : '📖 Read Last Result'}
-					</TronButton>
-				</form>
-			</div>
+			<form
+				method="POST"
+				action="?/readFromDevice"
+				use:enhance={() => {
+					reading = true;
+					return async ({ update }) => {
+						reading = false;
+						await update();
+					};
+				}}
+			>
+				<input type="hidden" name="spuId" value={selectedSpuId} />
+				<TronButton type="submit" variant="primary" disabled={!selectedSpuId || reading} style="min-height: 48px; width: 100%;">
+					{reading ? 'Reading…' : '📖 Read Results from Device'}
+				</TronButton>
+			</form>
 		</div>
 	</TronCard>
 
@@ -183,12 +159,12 @@
 	<TronCard>
 		<div class="p-4">
 			<h3 class="tron-text-primary mb-3 font-bold">Recent Tests</h3>
-			{#if data.recentSessions.length === 0}
-				<p class="tron-text-muted text-sm">No tests run yet.</p>
+			{#if completedSessions.length === 0}
+				<p class="tron-text-muted text-sm">No tests recorded yet.</p>
 			{:else}
 				<div class="space-y-2">
-					{#each data.recentSessions as session (session.id)}
-						{@const badge = resultBadge(session.status, session.overallPassed)}
+					{#each completedSessions as session (session.id)}
+						{@const badge = resultBadge(session.overallPassed)}
 						<a
 							href="/spu/validation/magnetometer/{session.id}"
 							class="flex items-center justify-between rounded border p-3 transition-colors hover:border-[var(--color-tron-cyan)]"
@@ -197,7 +173,7 @@
 							<div>
 								<span class="tron-text-primary font-mono text-sm font-medium">{session.spuUdi ?? 'Unknown SPU'}</span>
 								<span class="tron-text-muted ml-2 text-xs">
-									{session.completedAt ? new Date(session.completedAt).toLocaleString() : session.startedAt ? new Date(session.startedAt).toLocaleString() : ''}
+									{session.completedAt ? new Date(session.completedAt).toLocaleString() : new Date(session.createdAt).toLocaleString()}
 								</span>
 								{#if session.username}
 									<span class="tron-text-muted ml-2 text-xs">by {session.username}</span>

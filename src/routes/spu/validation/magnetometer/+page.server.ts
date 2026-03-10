@@ -1,7 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, ValidationSession, User, Spu, Integration, generateId } from '$lib/server/db';
-import { callFunction, getVariable } from '$lib/server/particle';
+import { getVariable } from '$lib/server/particle';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -27,10 +27,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Get criteria
 	const criteria = await Integration.findOne({ type: 'mag_criteria' }).lean() as any;
 
-	const total = sessions.length;
-	const passed = sessions.filter((s: any) => s.overallPassed === true).length;
-	const failed = sessions.filter((s: any) => s.overallPassed === false).length;
-	const inProgress = sessions.filter((s: any) => s.status === 'in_progress' || s.status === 'running').length;
+	const completedSessions = sessions.filter((s: any) => s.status !== 'in_progress' && s.status !== 'running');
+	const total = completedSessions.length;
+	const passed = completedSessions.filter((s: any) => s.overallPassed === true).length;
+	const failed = completedSessions.filter((s: any) => s.overallPassed === false).length;
 
 	return {
 		spus: spus.map((s: any) => ({
@@ -49,7 +49,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			createdAt: s.createdAt?.toISOString() ?? new Date().toISOString(),
 			username: userMap.get(s.userId) ?? null
 		})),
-		stats: { total, passed, failed, inProgress },
+		stats: { total, passed, failed },
 		criteria: {
 			minZ: criteria?.minZ ?? 3900,
 			maxZ: criteria?.maxZ ?? 4500
@@ -58,45 +58,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 };
 
 export const actions: Actions = {
-	startTest: async ({ request, locals }) => {
-		requirePermission(locals.user, 'spu:write');
-		await connectDB();
-
-		const form = await request.formData();
-		const spuId = form.get('spuId')?.toString();
-		if (!spuId) return fail(400, { error: 'Select an SPU' });
-
-		const spu = await Spu.findById(spuId).lean() as any;
-		if (!spu) return fail(400, { error: 'SPU not found' });
-		if (!spu.particleLink?.particleDeviceId) return fail(400, { error: 'SPU has no Particle device linked' });
-
-		const sessionId = generateId();
-		await ValidationSession.create({
-			_id: sessionId,
-			type: 'mag',
-			status: 'running',
-			startedAt: new Date(),
-			userId: locals.user!._id,
-			spuUdi: spu.udi,
-			spuId: spu._id,
-			particleDeviceId: spu.particleLink.particleDeviceId,
-			results: []
-		});
-
-		// Call run_test on the device
-		try {
-			await callFunction(spu.particleLink.particleDeviceId, 'run_test', 'mag');
-		} catch (err) {
-			await ValidationSession.updateOne(
-				{ _id: sessionId },
-				{ $set: { status: 'failed', completedAt: new Date(), failureReasons: [`Device error: ${err instanceof Error ? err.message : String(err)}`] } }
-			);
-			return fail(400, { error: `Failed to trigger test: ${err instanceof Error ? err.message : String(err)}` });
-		}
-
-		redirect(303, `/spu/validation/magnetometer/${sessionId}`);
-	},
-
 	readFromDevice: async ({ request, locals }) => {
 		requirePermission(locals.user, 'spu:write');
 		await connectDB();
