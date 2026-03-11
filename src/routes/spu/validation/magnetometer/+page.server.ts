@@ -1,6 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, ValidationSession, User, Spu, Integration, generateId } from '$lib/server/db';
+import { Equipment } from '$lib/server/db/models/equipment.js';
 import { getVariable } from '$lib/server/particle';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -8,10 +9,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'spu:read');
 	await connectDB();
 
-	// Get all SPUs with particle links (include magnetometer device ID)
+	// Get the active magnetometer (there should be one registered in equipment)
+	const magnetometer = await Equipment.findOne(
+		{ equipmentType: 'magnetometer', status: 'active' }
+	).lean() as any;
+
+	// Get all SPUs with particle links
 	const spus = await Spu.find(
 		{ 'particleLink.particleDeviceId': { $exists: true, $ne: null } },
-		{ udi: 1, 'particleLink.particleDeviceId': 1, 'particleLink.magnetometerDeviceId': 1, status: 1 }
+		{ udi: 1, 'particleLink.particleDeviceId': 1, status: 1 }
 	).sort({ udi: 1 }).lean() as any[];
 
 	// Get recent sessions
@@ -33,11 +39,17 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const inProgress = sessions.filter((s: any) => s.status === 'in_progress' || s.status === 'running').length;
 
 	return {
+		magnetometer: magnetometer ? {
+			id: magnetometer._id,
+			name: magnetometer.name,
+			particleDeviceId: magnetometer.particleDeviceId,
+			serialNumber: magnetometer.serialNumber ?? null,
+			status: magnetometer.status
+		} : null,
 		spus: spus.map((s: any) => ({
 			id: s._id,
 			udi: s.udi,
 			particleDeviceId: s.particleLink?.particleDeviceId ?? null,
-			magnetometerDeviceId: s.particleLink?.magnetometerDeviceId ?? null,
 			status: s.status
 		})),
 		recentSessions: sessions.map((s: any) => ({
@@ -59,25 +71,34 @@ export const load: PageServerLoad = async ({ locals }) => {
 };
 
 export const actions: Actions = {
-	linkMagnetometer: async ({ request, locals }) => {
+	registerMagnetometer: async ({ request, locals }) => {
 		requirePermission(locals.user, 'spu:write');
 		await connectDB();
 
 		const form = await request.formData();
-		const spuId = form.get('spuId')?.toString();
-		const magnetometerDeviceId = form.get('magnetometerDeviceId')?.toString()?.trim();
-		if (!spuId) return fail(400, { error: 'Select an SPU' });
-		if (!magnetometerDeviceId) return fail(400, { error: 'Enter a magnetometer Particle device ID' });
+		const name = form.get('name')?.toString()?.trim();
+		const particleDeviceId = form.get('particleDeviceId')?.toString()?.trim();
+		const serialNumber = form.get('serialNumber')?.toString()?.trim() || null;
 
-		const spu = await Spu.findById(spuId).lean() as any;
-		if (!spu) return fail(400, { error: 'SPU not found' });
+		if (!name) return fail(400, { error: 'Enter a name for the magnetometer' });
+		if (!particleDeviceId) return fail(400, { error: 'Enter the Particle device ID' });
 
-		await Spu.updateOne(
-			{ _id: spuId },
-			{ $set: { 'particleLink.magnetometerDeviceId': magnetometerDeviceId } }
+		// Deactivate any existing active magnetometer
+		await Equipment.updateMany(
+			{ equipmentType: 'magnetometer', status: 'active' },
+			{ $set: { status: 'offline' } }
 		);
 
-		return { magnetometerLinked: true };
+		// Register the new one
+		await Equipment.create({
+			name,
+			equipmentType: 'magnetometer',
+			status: 'active',
+			particleDeviceId,
+			serialNumber
+		});
+
+		return { magnetometerRegistered: true };
 	},
 
 	readFromDevice: async ({ request, locals }) => {
@@ -89,11 +110,19 @@ export const actions: Actions = {
 		if (!spuId) return fail(400, { error: 'Select an SPU' });
 
 		const spu = await Spu.findById(spuId).lean() as any;
-		if (!spu?.particleLink?.magnetometerDeviceId) return fail(400, { error: 'No magnetometer device linked to this SPU. Link one first.' });
+		if (!spu) return fail(400, { error: 'SPU not found' });
+
+		// Look up the active magnetometer from equipment
+		const magnetometer = await Equipment.findOne(
+			{ equipmentType: 'magnetometer', status: 'active' }
+		).lean() as any;
+		if (!magnetometer?.particleDeviceId) {
+			return fail(400, { error: 'No active magnetometer registered. Register one in the equipment section above.' });
+		}
 
 		// Read mag_data directly from the magnetometer device (auto-updates every 2s)
 		try {
-			const varData = await getVariable(spu.particleLink.magnetometerDeviceId, 'mag_data');
+			const varData = await getVariable(magnetometer.particleDeviceId, 'mag_data');
 			const rawResult = varData.result;
 			if (!rawResult || typeof rawResult !== 'string') {
 				return fail(400, { error: 'No mag_data available from magnetometer. Is the device online?' });
@@ -130,7 +159,8 @@ export const actions: Actions = {
 				userId: locals.user!._id,
 				spuUdi: spu.udi,
 				spuId: spu._id,
-				particleDeviceId: spu.particleLink.magnetometerDeviceId,
+				particleDeviceId: magnetometer.particleDeviceId,
+				magnetometerId: magnetometer._id,
 				rawData: rawResult,
 				magResults: parsed,
 				overallPassed,
@@ -140,7 +170,7 @@ export const actions: Actions = {
 
 			redirect(303, `/spu/validation/magnetometer/${sessionId}`);
 		} catch (err: any) {
-			if (err?.status === 303) throw err; // re-throw redirect
+			if (err?.status === 303) throw err;
 			return fail(400, { error: `Failed: ${err instanceof Error ? err.message : String(err)}` });
 		}
 	},
