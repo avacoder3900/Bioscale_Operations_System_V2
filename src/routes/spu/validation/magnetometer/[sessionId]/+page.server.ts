@@ -50,10 +50,10 @@ export const actions: Actions = {
 		if (!session.particleDeviceId) return { error: 'No device linked to this session' };
 
 		try {
-			const varData = await getVariable(session.particleDeviceId, 'magnet_validation');
+			const varData = await getVariable(session.particleDeviceId, 'mag_data');
 			const rawResult = varData.result;
 			if (!rawResult || typeof rawResult !== 'string') {
-				return { error: 'No magnet_validation data available on device' };
+				return { error: 'No mag_data available from magnetometer. Is the device online?' };
 			}
 
 			// Parse the tab-delimited magnet validation result

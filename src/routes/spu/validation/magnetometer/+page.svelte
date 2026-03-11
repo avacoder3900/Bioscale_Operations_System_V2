@@ -5,7 +5,7 @@
 
 	interface Props {
 		data: {
-			spus: { id: string; udi: string; particleDeviceId: string | null; status: string }[];
+			spus: { id: string; udi: string; particleDeviceId: string | null; magnetometerDeviceId: string | null; status: string }[];
 			recentSessions: {
 				id: string;
 				status: string;
@@ -25,10 +25,14 @@
 	let { data, form }: Props = $props();
 
 	let selectedSpuId = $state('');
-	let testing = $state(false);
 	let reading = $state(false);
+	let linking = $state(false);
 	let editingCriteria = $state(false);
 	let savingCriteria = $state(false);
+	let magnetometerDeviceId = $state('');
+
+	let selectedSpu = $derived(data.spus.find(s => s.id === selectedSpuId));
+	let hasMagnetometer = $derived(!!selectedSpu?.magnetometerDeviceId);
 
 	function resultBadge(status: string, passed: boolean | null) {
 		if (status === 'running' || status === 'in_progress') return { text: 'Running', color: 'var(--color-tron-cyan)' };
@@ -76,40 +80,67 @@
 		</TronCard>
 	</div>
 
-	<!-- Run Test / Read Results -->
+	<!-- Read Magnetometer Data -->
 	<TronCard>
 		<div class="p-4 space-y-4">
-			<h3 class="tron-text-primary text-lg font-bold">Run Magnetometer Test</h3>
+			<h3 class="tron-text-primary text-lg font-bold">Magnetometer Validation</h3>
 
 			<div>
 				<label for="spu-select" class="tron-label">Select SPU</label>
 				<select id="spu-select" class="tron-select w-full" style="min-height: 48px;" bind:value={selectedSpuId}>
 					<option value="">Choose an SPU…</option>
 					{#each data.spus as spu (spu.id)}
-						<option value={spu.id}>{spu.udi} ({spu.status})</option>
+						<option value={spu.id}>
+							{spu.udi} ({spu.status})
+							{spu.magnetometerDeviceId ? ' ✓ Mag linked' : ' ⚠ No mag'}
+						</option>
 					{/each}
 				</select>
 			</div>
 
-			<div class="flex gap-3">
+			{#if selectedSpuId && !hasMagnetometer}
+				<!-- Link Magnetometer -->
+				<div class="rounded border border-[var(--color-tron-yellow,orange)] bg-[rgba(255,165,0,0.1)] p-3">
+					<p class="text-sm" style="color: var(--color-tron-yellow, orange);">⚠ No magnetometer linked to this SPU. Enter the magnetometer's Particle device ID below.</p>
+				</div>
 				<form
 					method="POST"
-					action="?/startTest"
+					action="?/linkMagnetometer"
 					use:enhance={() => {
-						testing = true;
+						linking = true;
 						return async ({ update }) => {
-							testing = false;
+							linking = false;
 							await update();
 						};
 					}}
-					class="flex-1"
+					class="flex gap-3"
 				>
 					<input type="hidden" name="spuId" value={selectedSpuId} />
-					<TronButton type="submit" variant="primary" disabled={!selectedSpuId || testing} style="min-height: 48px; width: 100%;">
-						{testing ? 'Triggering Test…' : '▶ Run Test on Device'}
+					<input
+						type="text"
+						name="magnetometerDeviceId"
+						placeholder="e.g. e00fce68xxxxxxxx"
+						class="tron-input flex-1"
+						style="min-height: 48px;"
+						bind:value={magnetometerDeviceId}
+					/>
+					<TronButton type="submit" variant="primary" disabled={!magnetometerDeviceId || linking} style="min-height: 48px;">
+						{linking ? 'Linking…' : '🔗 Link Magnetometer'}
 					</TronButton>
 				</form>
+			{/if}
 
+			{#if form?.magnetometerLinked}
+				<div class="rounded border border-[var(--color-tron-green)] bg-[rgba(0,255,0,0.1)] p-3">
+					<p class="text-sm" style="color: var(--color-tron-green);">✓ Magnetometer linked successfully. You can now read data.</p>
+				</div>
+			{/if}
+
+			{#if selectedSpuId && hasMagnetometer}
+				<div class="tron-text-muted text-xs">
+					Magnetometer device: <span class="font-mono tron-text-primary">{selectedSpu?.magnetometerDeviceId}</span>
+					· Data auto-updates every 2s on the device
+				</div>
 				<form
 					method="POST"
 					action="?/readFromDevice"
@@ -120,14 +151,13 @@
 							await update();
 						};
 					}}
-					class="flex-1"
 				>
 					<input type="hidden" name="spuId" value={selectedSpuId} />
-					<TronButton type="submit" variant="secondary" disabled={!selectedSpuId || reading} style="min-height: 48px; width: 100%;">
-						{reading ? 'Reading…' : '📖 Read Last Result'}
+					<TronButton type="submit" variant="primary" disabled={reading} style="min-height: 48px; width: 100%;">
+						{reading ? 'Reading from Magnetometer…' : '📡 Read Magnetometer Data'}
 					</TronButton>
 				</form>
-			</div>
+			{/if}
 		</div>
 	</TronCard>
 

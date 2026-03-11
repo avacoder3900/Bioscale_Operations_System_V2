@@ -1,17 +1,17 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, ValidationSession, User, Spu, Integration, generateId } from '$lib/server/db';
-import { callFunction, getVariable } from '$lib/server/particle';
+import { getVariable } from '$lib/server/particle';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'spu:read');
 	await connectDB();
 
-	// Get all SPUs with particle links
+	// Get all SPUs with particle links (include magnetometer device ID)
 	const spus = await Spu.find(
 		{ 'particleLink.particleDeviceId': { $exists: true, $ne: null } },
-		{ udi: 1, 'particleLink.particleDeviceId': 1, status: 1 }
+		{ udi: 1, 'particleLink.particleDeviceId': 1, 'particleLink.magnetometerDeviceId': 1, status: 1 }
 	).sort({ udi: 1 }).lean() as any[];
 
 	// Get recent sessions
@@ -37,6 +37,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			id: s._id,
 			udi: s.udi,
 			particleDeviceId: s.particleLink?.particleDeviceId ?? null,
+			magnetometerDeviceId: s.particleLink?.magnetometerDeviceId ?? null,
 			status: s.status
 		})),
 		recentSessions: sessions.map((s: any) => ({
@@ -58,43 +59,25 @@ export const load: PageServerLoad = async ({ locals }) => {
 };
 
 export const actions: Actions = {
-	startTest: async ({ request, locals }) => {
+	linkMagnetometer: async ({ request, locals }) => {
 		requirePermission(locals.user, 'spu:write');
 		await connectDB();
 
 		const form = await request.formData();
 		const spuId = form.get('spuId')?.toString();
+		const magnetometerDeviceId = form.get('magnetometerDeviceId')?.toString()?.trim();
 		if (!spuId) return fail(400, { error: 'Select an SPU' });
+		if (!magnetometerDeviceId) return fail(400, { error: 'Enter a magnetometer Particle device ID' });
 
 		const spu = await Spu.findById(spuId).lean() as any;
 		if (!spu) return fail(400, { error: 'SPU not found' });
-		if (!spu.particleLink?.particleDeviceId) return fail(400, { error: 'SPU has no Particle device linked' });
 
-		const sessionId = generateId();
-		await ValidationSession.create({
-			_id: sessionId,
-			type: 'mag',
-			status: 'running',
-			startedAt: new Date(),
-			userId: locals.user!._id,
-			spuUdi: spu.udi,
-			spuId: spu._id,
-			particleDeviceId: spu.particleLink.particleDeviceId,
-			results: []
-		});
+		await Spu.updateOne(
+			{ _id: spuId },
+			{ $set: { 'particleLink.magnetometerDeviceId': magnetometerDeviceId } }
+		);
 
-		// Call run_test on the device
-		try {
-			await callFunction(spu.particleLink.particleDeviceId, 'run_test', 'mag');
-		} catch (err) {
-			await ValidationSession.updateOne(
-				{ _id: sessionId },
-				{ $set: { status: 'failed', completedAt: new Date(), failureReasons: [`Device error: ${err instanceof Error ? err.message : String(err)}`] } }
-			);
-			return fail(400, { error: `Failed to trigger test: ${err instanceof Error ? err.message : String(err)}` });
-		}
-
-		redirect(303, `/spu/validation/magnetometer/${sessionId}`);
+		return { magnetometerLinked: true };
 	},
 
 	readFromDevice: async ({ request, locals }) => {
@@ -106,14 +89,14 @@ export const actions: Actions = {
 		if (!spuId) return fail(400, { error: 'Select an SPU' });
 
 		const spu = await Spu.findById(spuId).lean() as any;
-		if (!spu?.particleLink?.particleDeviceId) return fail(400, { error: 'SPU has no Particle device linked' });
+		if (!spu?.particleLink?.magnetometerDeviceId) return fail(400, { error: 'No magnetometer device linked to this SPU. Link one first.' });
 
-		// Read the current magnet_validation variable (from a previous run_test)
+		// Read mag_data directly from the magnetometer device (auto-updates every 2s)
 		try {
-			const varData = await getVariable(spu.particleLink.particleDeviceId, 'magnet_validation');
+			const varData = await getVariable(spu.particleLink.magnetometerDeviceId, 'mag_data');
 			const rawResult = varData.result;
 			if (!rawResult || typeof rawResult !== 'string') {
-				return fail(400, { error: 'No magnet_validation data on device. Run a test first.' });
+				return fail(400, { error: 'No mag_data available from magnetometer. Is the device online?' });
 			}
 
 			// Parse
@@ -147,7 +130,7 @@ export const actions: Actions = {
 				userId: locals.user!._id,
 				spuUdi: spu.udi,
 				spuId: spu._id,
-				particleDeviceId: spu.particleLink.particleDeviceId,
+				particleDeviceId: spu.particleLink.magnetometerDeviceId,
 				rawData: rawResult,
 				magResults: parsed,
 				overallPassed,

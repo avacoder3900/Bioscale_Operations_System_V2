@@ -49,6 +49,7 @@ const spuSchema = new Schema({
 
 	particleLink: {
 		particleSerial: String, particleDeviceId: String,
+		magnetometerDeviceId: String,
 		linkedAt: Date, linkedBy: operatorRef,
 		previousSpuId: String, unlinkReason: String
 	},
