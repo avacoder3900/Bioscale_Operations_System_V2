@@ -46,7 +46,7 @@ export const actions: Actions = {
 		if (!title?.trim()) return fail(400, { error: 'Title is required' });
 
 		const status = (fd.get('status') as string) || 'backlog';
-		const priority = (fd.get('priority') as string) || 'medium';
+		const priority = (fd.get('priority') as string) || 'ready';
 		const taskLength = (fd.get('taskLength') as string) || 'medium';
 		const projectId = fd.get('projectId') as string | null;
 		const assignedTo = fd.get('assignedTo') as string | null;

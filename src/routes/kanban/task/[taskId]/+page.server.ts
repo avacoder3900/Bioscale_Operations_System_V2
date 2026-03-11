@@ -105,7 +105,7 @@ export const actions: Actions = {
 			$set: {
 				title: title.trim(),
 				description: (fd.get('description') as string) || undefined,
-				priority: fd.get('priority') || 'medium',
+				priority: fd.get('priority') || 'ready',
 				taskLength: fd.get('taskLength') || 'medium',
 				project,
 				assignee,
