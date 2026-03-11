@@ -16,7 +16,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	await connectDB();
 
 	const body = await request.json();
-	const { title, projectId, description, status, priority, taskLength, assignedTo, dueDate, source, sourceRef, tags, parentTaskId } = body;
+	const { title, projectId, description, status, prioritized, taskLength, assignedTo, dueDate, source, sourceRef, tags, parentTaskId } = body;
 
 	if (!title?.trim()) throw error(400, 'title is required');
 	if (!projectId) throw error(400, 'projectId is required');
@@ -45,7 +45,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		title: title.trim(),
 		description: description || undefined,
 		status: taskStatus,
-		priority: priority || 'ready',
+		prioritized: prioritized === true,
 		taskLength: taskLength || 'medium',
 		project: { _id: project._id, name: project.name, color: project.color },
 		assignee,
@@ -74,7 +74,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			id: task._id,
 			title: task.title,
 			status: task.status,
-			priority: task.priority,
+			prioritized: task.prioritized ?? false,
 			projectId: project._id,
 			parentTaskId: parentTaskId || null,
 			createdAt: task.createdAt

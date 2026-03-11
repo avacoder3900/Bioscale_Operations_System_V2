@@ -14,7 +14,7 @@ export const GET: RequestHandler = async ({ request }) => {
 		KanbanProject.find({ isActive: true }).sort({ sortOrder: 1 })
 			.select('_id name color').lean(),
 		KanbanTask.find({ status: 'wip', archived: { $ne: true } })
-			.select('_id title assignee project dueDate priority statusChangedAt').sort({ statusChangedAt: -1 }).limit(20).lean(),
+			.select('_id title assignee project dueDate prioritized statusChangedAt').sort({ statusChangedAt: -1 }).limit(20).lean(),
 		Equipment.find({ status: { $ne: 'active' } })
 			.select('_id name equipmentType status location currentTemperatureC lastTemperatureReadAt').lean(),
 		ApprovalRequest.find({ status: 'pending' })
@@ -29,7 +29,7 @@ export const GET: RequestHandler = async ({ request }) => {
 			activeProjects: (activeProjects as any[]).map(p => ({ id: p._id, name: p.name, color: p.color })),
 			workInProgress: (wipTasks as any[]).map(t => ({
 				id: t._id, title: t.title, assignee: t.assignee, project: t.project,
-				dueDate: t.dueDate, priority: t.priority, statusChangedAt: t.statusChangedAt
+				dueDate: t.dueDate, prioritized: t.prioritized ?? false, statusChangedAt: t.statusChangedAt
 			})),
 			equipmentAlerts: (equipmentAlerts as any[]).map(e => ({
 				id: e._id, name: e.name, type: e.equipmentType, status: e.status,
