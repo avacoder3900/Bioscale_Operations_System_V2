@@ -28,7 +28,7 @@ export const GET: RequestHandler = async ({ request }) => {
 		KanbanTask.countDocuments({ status: 'done', archived: { $ne: true } }),
 		KanbanTask.find({ archived: { $ne: true } })
 			.sort({ updatedAt: -1 }).limit(5)
-			.select('_id title status priority assignee updatedAt').lean(),
+			.select('_id title status prioritized assignee updatedAt').lean(),
 		Equipment.countDocuments(),
 		Equipment.countDocuments({ status: 'active' }),
 		Equipment.countDocuments({ status: 'maintenance' }),
@@ -48,7 +48,7 @@ export const GET: RequestHandler = async ({ request }) => {
 				total: taskTotal,
 				byStatus: { backlog: taskBacklog, ready: taskReady, wip: taskWip, waiting: taskWaiting, done: taskDone },
 				recent: (recentTasks as any[]).map(t => ({
-					id: t._id, title: t.title, status: t.status, priority: t.priority,
+					id: t._id, title: t.title, status: t.status, prioritized: t.prioritized ?? false,
 					assignee: t.assignee, updatedAt: t.updatedAt
 				}))
 			},

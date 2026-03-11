@@ -1,36 +1,26 @@
 <script lang="ts">
 	interface Props {
-		priority: string;
+		prioritized: boolean;
 		class?: string;
 	}
 
-	let { priority, class: className = '' }: Props = $props();
-
-	const priorityConfig: Record<string, { label: string; color: string; bg: string }> = {
-		high: {
-			label: 'H',
-			color: 'var(--color-tron-red)',
-			bg: 'rgba(255, 51, 102, 0.15)'
-		},
-		medium: {
-			label: 'M',
-			color: 'var(--color-tron-orange)',
-			bg: 'rgba(255, 102, 0, 0.15)'
-		},
-		low: {
-			label: 'L',
-			color: 'var(--color-tron-text-secondary)',
-			bg: 'rgba(160, 160, 160, 0.15)'
-		}
-	};
-
-	let config = $derived(priorityConfig[priority] ?? priorityConfig.medium);
+	let { prioritized, class: className = '' }: Props = $props();
 </script>
 
-<span
-	class="inline-flex h-6 w-6 items-center justify-center rounded text-xs font-bold {className}"
-	style="color: {config.color}; background: {config.bg};"
-	title="Priority: {priority}"
->
-	{config.label}
-</span>
+{#if prioritized}
+	<span
+		class="inline-flex h-6 w-6 items-center justify-center rounded text-xs font-bold {className}"
+		style="color: var(--color-tron-red); background: rgba(255, 51, 102, 0.15);"
+		title="Prioritized"
+	>
+		P
+	</span>
+{:else}
+	<span
+		class="inline-flex h-6 w-6 items-center justify-center rounded text-xs font-bold {className}"
+		style="color: var(--color-tron-text-secondary); background: rgba(160, 160, 160, 0.15);"
+		title="Not prioritized"
+	>
+		—
+	</span>
+{/if}

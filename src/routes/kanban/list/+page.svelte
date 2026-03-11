@@ -9,7 +9,7 @@
 	type SortKey =
 		| 'title'
 		| 'status'
-		| 'priority'
+		| 'prioritized'
 		| 'project'
 		| 'assignee'
 		| 'taskLength'
@@ -19,7 +19,6 @@
 	let sortColumn = $state<SortKey | null>(null);
 	let sortDirection = $state<SortDir>('asc');
 
-	const priorityOrder: Record<string, number> = { high: 3, medium: 2, low: 1 };
 	const statusOrder: Record<string, number> = {
 		backlog: 0,
 		ready: 2,
@@ -48,9 +47,9 @@
 					av = statusOrder[a.status] ?? 0;
 					bv = statusOrder[b.status] ?? 0;
 					break;
-				case 'priority':
-					av = priorityOrder[a.priority] ?? 0;
-					bv = priorityOrder[b.priority] ?? 0;
+				case 'prioritized':
+					av = a.prioritized ? 1 : 0;
+					bv = b.prioritized ? 1 : 0;
 					break;
 				case 'project':
 					av = (a.projectName ?? '').toLowerCase();
@@ -97,7 +96,7 @@
 
 	let selectedProject = $derived($page.url.searchParams.get('project') ?? '');
 	let selectedStatus = $derived($page.url.searchParams.get('status') ?? '');
-	let selectedPriority = $derived($page.url.searchParams.get('priority') ?? '');
+	let selectedPrioritized = $derived($page.url.searchParams.get('prioritized') ?? '');
 	let selectedAssignee = $derived($page.url.searchParams.get('assignee') ?? '');
 
 	function updateFilter(key: string, value: string) {
@@ -158,13 +157,12 @@
 
 		<select
 			class="tron-select text-sm"
-			value={selectedPriority}
-			onchange={(e) => updateFilter('priority', (e.target as HTMLSelectElement).value)}
+			value={selectedPrioritized}
+			onchange={(e) => updateFilter('prioritized', (e.target as HTMLSelectElement).value)}
 		>
-			<option value="">All Priorities</option>
-			<option value="high">High</option>
-			<option value="medium">Medium</option>
-			<option value="low">Low</option>
+			<option value="">All Tasks</option>
+			<option value="true">Prioritized</option>
+			<option value="false">Not Prioritized</option>
 		</select>
 
 		<select
@@ -190,8 +188,8 @@
 					<th class="cursor-pointer select-none" onclick={() => handleSort('status')}>
 						Status{sortIcon('status')}
 					</th>
-					<th class="cursor-pointer select-none" onclick={() => handleSort('priority')}>
-						Priority{sortIcon('priority')}
+					<th class="cursor-pointer select-none" onclick={() => handleSort('prioritized')}>
+						Priority{sortIcon('prioritized')}
 					</th>
 					<th class="cursor-pointer select-none" onclick={() => handleSort('project')}>
 						Project{sortIcon('project')}
@@ -218,7 +216,7 @@
 							{task.title}
 						</td>
 						<td><TaskStatusBadge status={task.status} /></td>
-						<td><PriorityBadge priority={task.priority} /></td>
+						<td><PriorityBadge prioritized={task.prioritized} /></td>
 						<td>
 							{#if task.projectName}
 								<span

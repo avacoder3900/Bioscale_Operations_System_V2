@@ -38,7 +38,7 @@ export const POST: RequestHandler = async ({ request, params }) => {
 			title: sub.title.trim(),
 			description: sub.description || undefined,
 			status: sub.status || 'backlog',
-			priority: sub.priority || parent.priority || 'ready',
+			prioritized: sub.prioritized === true || parent.prioritized === true,
 			taskLength: sub.taskLength || 'short',
 			project: parent.project,
 			assignee: parent.assignee,

@@ -12,7 +12,7 @@
 		title: string;
 		description: string | null;
 		status: string;
-		priority: string;
+		prioritized: boolean;
 		taskLength: string;
 		assignedTo: string | null;
 		assigneeName: string | null;
@@ -118,7 +118,7 @@
 	<!-- Title row -->
 	<div class="mb-2 flex items-start justify-between gap-2">
 		<h4 class="tron-text-primary text-sm leading-tight font-medium">{task.title}</h4>
-		<PriorityBadge priority={task.priority} />
+		<PriorityBadge prioritized={task.prioritized} />
 	</div>
 
 	<!-- Description preview -->

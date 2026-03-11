@@ -36,7 +36,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			title: task.title,
 			description: task.description ?? null,
 			status: task.status,
-			priority: task.priority,
+			prioritized: task.prioritized ?? false,
 			taskLength: task.taskLength,
 			projectId: task.project?._id ?? null,
 			assignedTo: task.assignee?._id ?? null,
@@ -105,7 +105,7 @@ export const actions: Actions = {
 			$set: {
 				title: title.trim(),
 				description: (fd.get('description') as string) || undefined,
-				priority: fd.get('priority') || 'ready',
+				prioritized: fd.get('prioritized') === 'true',
 				taskLength: fd.get('taskLength') || 'medium',
 				project,
 				assignee,

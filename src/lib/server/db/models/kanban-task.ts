@@ -8,7 +8,7 @@ const kanbanTaskSchema = new Schema({
 	title: { type: String, required: true },
 	description: String,
 	status: { type: String, enum: ['backlog', 'ready', 'wip', 'waiting', 'done'], default: 'backlog' },
-	priority: { type: String, enum: ['critical', 'ready', 'queued'], default: 'ready' },
+	prioritized: { type: Boolean, default: false },
 	taskLength: { type: String, enum: ['short', 'medium', 'long'], default: 'medium' },
 	sortOrder: { type: Number, default: 0 },
 	project: { _id: String, name: String, color: String },

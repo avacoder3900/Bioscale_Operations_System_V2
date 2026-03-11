@@ -20,7 +20,7 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 	if (!task) throw error(404, 'Task not found');
 
 	const body = await request.json();
-	const { title, description, status, priority, taskLength, assignedTo, dueDate, tags, appendContext } = body;
+	const { title, description, status, prioritized, taskLength, assignedTo, dueDate, tags, appendContext } = body;
 
 	const $set: any = {};
 	const $push: any = {};
@@ -38,10 +38,10 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 		$set.description = description;
 		changedFields.push('description');
 	}
-	if (priority !== undefined) {
-		oldData.priority = task.priority;
-		$set.priority = priority;
-		changedFields.push('priority');
+	if (prioritized !== undefined) {
+		oldData.prioritized = task.prioritized;
+		$set.prioritized = prioritized === true;
+		changedFields.push('prioritized');
 	}
 	if (taskLength !== undefined) {
 		oldData.taskLength = task.taskLength;
@@ -147,7 +147,7 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 			id: updated._id,
 			title: updated.title,
 			status: updated.status,
-			priority: updated.priority,
+			prioritized: updated.prioritized ?? false,
 			changedFields,
 			updatedAt: updated.updatedAt
 		}
