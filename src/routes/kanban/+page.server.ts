@@ -10,6 +10,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const tasks = await KanbanTask.find({ archived: false }).sort({ sortOrder: 1 }).lean();
 
 	return {
+		currentUserId: locals.user._id as string,
 		tasks: tasks.map((t: any) => ({
 			id: t._id,
 			title: t.title,
