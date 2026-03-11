@@ -7,6 +7,12 @@
 	let { data, form } = $props();
 	let showCreateModal = $state(false);
 	let dragError = $state('');
+	let showMyTasks = $state(false);
+
+	// Filter tasks based on toggle
+	let filteredTasks = $derived(
+		showMyTasks ? data.tasks.filter((t) => t.assignedTo === data.currentUserId) : data.tasks
+	);
 
 	const columns = [
 		{ key: 'backlog', label: 'Backlog', color: '#a0a0a0', nextStatus: 'ready' },
@@ -47,7 +53,7 @@
 		const groups: ProjectGroup[] = [];
 		const byProject = new Map<string | null, typeof data.tasks>();
 
-		for (const task of data.tasks) {
+		for (const task of filteredTasks) {
 			const key = task.projectId;
 			if (!byProject.has(key)) byProject.set(key, []);
 			byProject.get(key)!.push(task);
@@ -83,7 +89,7 @@
 
 	/** Track which project sections are collapsed */
 	let collapsed = $state(new Set<string | null>(
-		data.projects.filter((p) => !data.tasks.some((t) => t.projectId === p.id)).map((p) => p.id)
+		data.projects.filter((p) => !filteredTasks.some((t) => t.projectId === p.id)).map((p) => p.id)
 	));
 
 	function toggleCollapse(projectId: string | null) {
@@ -122,11 +128,26 @@
 		<div>
 			<h2 class="tron-text-primary text-2xl font-bold">Task Board</h2>
 			<p class="tron-text-muted text-sm">
-				{data.tasks.length} task{data.tasks.length !== 1 ? 's' : ''} across {data.projects.length} project{data.projects.length !== 1 ? 's' : ''}
+				{filteredTasks.length} task{filteredTasks.length !== 1 ? 's' : ''}{showMyTasks ? ' assigned to you' : ''} across {data.projects.length} project{data.projects.length !== 1 ? 's' : ''}
 			</p>
 		</div>
 
 		<div class="flex items-center gap-3">
+			<!-- My Tasks / All Tasks toggle -->
+			<button
+				type="button"
+				class="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-all {showMyTasks
+					? 'border-[var(--color-tron-cyan)] bg-[rgba(0,212,255,0.15)] text-[var(--color-tron-cyan)] shadow-[0_0_10px_rgba(0,212,255,0.2)]'
+					: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
+				onclick={() => (showMyTasks = !showMyTasks)}
+			>
+				<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+						d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+				</svg>
+				{showMyTasks ? 'My Tasks' : 'All Tasks'}
+			</button>
+
 			<TronButton variant="primary" onclick={() => (showCreateModal = true)}>
 				<span class="flex items-center gap-2">
 					<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
