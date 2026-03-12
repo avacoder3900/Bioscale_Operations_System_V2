@@ -5,6 +5,9 @@ import {
 } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
+// Extend Vercel serverless timeout to 60s
+export const config = { maxDuration: 60 };
+
 const TERMINAL = new Set(['completed', 'aborted', 'voided', 'cancelled', 'Completed', 'Aborted', 'Cancelled']);
 
 /** Map legacy status → UI stage */

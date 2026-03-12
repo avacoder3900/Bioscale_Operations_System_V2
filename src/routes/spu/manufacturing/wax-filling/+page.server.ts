@@ -4,6 +4,9 @@ import {
 } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
+// Extend Vercel serverless timeout to 60s (default is 10s)
+export const config = { maxDuration: 60 };
+
 /** Map DB status → UI stage string (STAGES const in svelte) */
 function toStage(status: string | null | undefined): string | null {
 	if (!status) return null;

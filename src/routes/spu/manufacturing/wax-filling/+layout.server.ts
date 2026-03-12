@@ -3,6 +3,9 @@ import { requirePermission } from '$lib/server/permissions';
 import { connectDB, OpentronsRobot, WaxFillingRun } from '$lib/server/db';
 import type { LayoutServerLoad } from './$types';
 
+// Extend Vercel serverless timeout to 60s
+export const config = { maxDuration: 60 };
+
 const ACTIVE_STAGES = ['Setup', 'Loading', 'Running', 'Awaiting Removal', 'QC', 'Storage',
 	'setup', 'loading', 'running', 'awaiting_removal', 'cooling', 'qc', 'storage'];
 
