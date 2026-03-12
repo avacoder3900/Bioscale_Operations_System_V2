@@ -3,44 +3,52 @@ import { connectDB, WaxFillingRun, ManufacturingSettings } from '$lib/server/db'
 import { isAdmin as checkAdmin } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
+export const config = { maxDuration: 60 };
+
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
-	await connectDB();
 
-	const [settingsDoc, completedRuns] = await Promise.all([
-		ManufacturingSettings.findById('default').lean(),
-		// Runs that have entered the oven (have ovenLocationId set and are completed/storage)
-		WaxFillingRun.find({
-			status: { $in: ['completed', 'storage', 'Storage'] },
-			ovenLocationId: { $exists: true, $ne: null }
-		}).sort({ runEndTime: -1 }).limit(50).lean()
-	]);
+	try {
+		await connectDB();
 
-	const minOvenTimeMin: number = (settingsDoc as any)?.waxFilling?.minOvenTimeMin ?? 60;
-	const now = Date.now();
+		const [settingsDoc, completedRuns] = await Promise.all([
+			ManufacturingSettings.findById('default').lean(),
+			// Runs that have entered the oven (have ovenLocationId set and are completed/storage)
+			WaxFillingRun.find({
+				status: { $in: ['completed', 'storage', 'Storage'] },
+				ovenLocationId: { $exists: true, $ne: null }
+			}).sort({ runEndTime: -1 }).limit(50).lean()
+		]);
 
-	const lots = (completedRuns as any[]).map((r) => {
-		const ovenEntryTime = r.runEndTime ? new Date(r.runEndTime) : new Date(r.createdAt);
-		const readyAt = new Date(ovenEntryTime.getTime() + minOvenTimeMin * 60 * 1000);
-		const readyAtMs = readyAt.getTime();
-		const ready = now >= readyAtMs;
-		const minutesRemaining = ready ? 0 : Math.ceil((readyAtMs - now) / 60_000);
+		const minOvenTimeMin: number = (settingsDoc as any)?.waxFilling?.minOvenTimeMin ?? 60;
+		const now = Date.now();
+
+		const lots = (completedRuns as any[]).map((r) => {
+			const ovenEntryTime = r.runEndTime ? new Date(r.runEndTime) : new Date(r.createdAt);
+			const readyAt = new Date(ovenEntryTime.getTime() + minOvenTimeMin * 60 * 1000);
+			const readyAtMs = readyAt.getTime();
+			const ready = now >= readyAtMs;
+			const minutesRemaining = ready ? 0 : Math.ceil((readyAtMs - now) / 60_000);
+
+			return {
+				lotId: String(r._id),
+				configId: r.robot?.name ?? (r.robot?._id ? String(r.robot._id) : ''),
+				ovenEntryTime: ovenEntryTime.toISOString(),
+				readyAt: readyAt.toISOString(),
+				minutesRemaining,
+				ready
+			};
+		});
 
 		return {
-			lotId: String(r._id),
-			configId: r.robot?.name ?? r.robot?._id ?? '',
-			ovenEntryTime: ovenEntryTime.toISOString(),
-			readyAt: readyAt.toISOString(),
-			minutesRemaining,
-			ready
+			lots,
+			minOvenTimeMin,
+			isAdmin: checkAdmin(locals.user)
 		};
-	});
-
-	return {
-		lots,
-		minOvenTimeMin,
-		isAdmin: checkAdmin(locals.user)
-	};
+	} catch (err) {
+		console.error('[WAX-FILLING OVEN-QUEUE] Load error:', err instanceof Error ? err.message : err);
+		return { lots: [], minOvenTimeMin: 60, isAdmin: checkAdmin(locals.user) };
+	}
 };
 
 export const actions: Actions = {
