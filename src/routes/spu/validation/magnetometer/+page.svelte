@@ -207,47 +207,52 @@
 				</div>
 			{/if}
 
-			{#if watching}
-				<!-- LIVE indicator banner -->
-				<div class="relative overflow-hidden rounded-lg p-4" style="background: linear-gradient(135deg, rgba(0,255,100,0.08) 0%, rgba(0,200,255,0.08) 100%); border: 2px solid var(--color-tron-green);">
-					<!-- Scanning animation bar -->
-					<div class="absolute top-0 left-0 h-1 w-full">
-						<div class="h-full bg-[var(--color-tron-green)] animate-scan-bar" style="width: 30%; box-shadow: 0 0 12px var(--color-tron-green), 0 0 24px var(--color-tron-green);"></div>
-					</div>
-
-					<div class="flex items-center justify-between">
-						<div class="flex items-center gap-3">
-							<div class="relative">
-								<div class="h-4 w-4 rounded-full bg-[var(--color-tron-green)]" style="box-shadow: 0 0 12px var(--color-tron-green), 0 0 24px rgba(0,255,100,0.4);"></div>
-								<div class="absolute inset-0 h-4 w-4 rounded-full bg-[var(--color-tron-green)] animate-ping opacity-40"></div>
-							</div>
-							<div>
-								<div class="text-sm font-bold tracking-wider" style="color: var(--color-tron-green);">● LIVE — WATCHING</div>
-								<div class="tron-text-muted text-xs mt-0.5">{pollStatus}</div>
-							</div>
+			<!-- Toggle switch for continuous scanning -->
+			<div class="flex items-center justify-between rounded-lg p-4" style="background: var(--color-tron-bg-secondary); border: 1px solid {watching ? 'var(--color-tron-green)' : 'var(--color-tron-border)'};">
+				<div class="flex items-center gap-3">
+					{#if watching}
+						<div class="relative">
+							<div class="h-3 w-3 rounded-full bg-[var(--color-tron-green)]" style="box-shadow: 0 0 8px var(--color-tron-green);"></div>
+							<div class="absolute inset-0 h-3 w-3 rounded-full bg-[var(--color-tron-green)] animate-ping opacity-40"></div>
 						</div>
-						<button onclick={stopWatching} class="px-4 py-2 rounded text-sm font-medium border transition-colors" style="border-color: var(--color-tron-green); color: var(--color-tron-green);" onmouseenter={(e) => { e.currentTarget.style.background = 'rgba(0,255,100,0.15)'; }} onmouseleave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
-							⏹ Stop
-						</button>
+					{:else}
+						<div class="h-3 w-3 rounded-full" style="background: var(--color-tron-text-secondary);"></div>
+					{/if}
+					<div>
+						<div class="text-sm font-bold" style="color: {watching ? 'var(--color-tron-green)' : 'var(--color-tron-text-primary)'};">
+							{watching ? '● LIVE — Continuous Scan' : 'Continuous Scan'}
+						</div>
+						<div class="tron-text-muted text-xs mt-0.5">
+							{#if watching}
+								{pollStatus}
+							{:else if !selectedSpu?.particleDeviceId}
+								Select an SPU to enable
+							{:else}
+								Auto-captures results as tests complete
+							{/if}
+						</div>
 					</div>
 				</div>
-			{:else}
-				{#if selectedSpu?.particleDeviceId}
-					<button
-						onclick={startWatching}
-						class="w-full rounded-lg p-4 text-center font-bold text-lg transition-all cursor-pointer hover:opacity-90 active:scale-[0.98]"
-						style="background: linear-gradient(135deg, var(--color-tron-cyan), var(--color-tron-green)); color: var(--color-tron-bg-primary); min-height: 56px;"
-					>
-						👁 Start Watching for Results
-					</button>
-				{:else}
-					<div
-						class="w-full rounded-lg p-4 text-center font-bold text-lg opacity-40"
-						style="background: linear-gradient(135deg, var(--color-tron-cyan), var(--color-tron-green)); color: var(--color-tron-bg-primary); min-height: 56px;"
-					>
-						Select an SPU to start watching
-					</div>
-				{/if}
+				<!-- Toggle switch -->
+				<button
+					onclick={() => watching ? stopWatching() : startWatching()}
+					disabled={!selectedSpu?.particleDeviceId}
+					class="relative inline-flex h-7 w-12 items-center rounded-full transition-colors duration-300 focus:outline-none disabled:opacity-30 disabled:cursor-not-allowed"
+					style="background: {watching ? 'var(--color-tron-green)' : 'var(--color-tron-border)'};"
+					aria-label="Toggle continuous scan"
+				>
+					<span
+						class="inline-block h-5 w-5 rounded-full transition-transform duration-300"
+						style="background: var(--color-tron-bg-primary); transform: translateX({watching ? '22px' : '4px'}); box-shadow: 0 1px 3px rgba(0,0,0,0.4);"
+					></span>
+				</button>
+			</div>
+
+			{#if watching}
+				<!-- Scanning animation bar -->
+				<div class="relative h-1 w-full overflow-hidden rounded-full" style="background: rgba(0,255,100,0.1);">
+					<div class="h-full bg-[var(--color-tron-green)] animate-scan-bar" style="width: 30%; box-shadow: 0 0 8px var(--color-tron-green);"></div>
+				</div>
 			{/if}
 
 			{#if pollError}

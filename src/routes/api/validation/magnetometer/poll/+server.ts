@@ -35,15 +35,22 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const rawResult = varData.result;
 
 		if (!rawResult || typeof rawResult !== 'string' || rawResult.trim().length === 0) {
-			return json({ status: 'no_data', hash: null });
+			return json({ status: 'no_data', hash: null, testCounter: null });
 		}
 
-		// Hash the result to detect changes
-		const currentHash = crypto.createHash('md5').update(rawResult).digest('hex');
+		// Extract test counter from first line (format: #003\t1710268200)
+		let testCounter: string | null = null;
+		const counterMatch = rawResult.match(/^#(\d+)\t/);
+		if (counterMatch) {
+			testCounter = counterMatch[1];
+		}
 
-		// If hash matches, no new data
+		// Use test counter for change detection if available, fall back to hash
+		const currentHash = testCounter ?? crypto.createHash('md5').update(rawResult).digest('hex');
+
+		// If hash/counter matches, no new data
 		if (currentHash === lastHash) {
-			return json({ status: 'unchanged', hash: currentHash });
+			return json({ status: 'unchanged', hash: currentHash, testCounter });
 		}
 
 		// New data detected — parse and save
@@ -97,6 +104,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		return json({
 			status: 'new_result',
 			hash: currentHash,
+			testCounter,
 			session: {
 				id: sessionId,
 				overallPassed,
@@ -128,6 +136,9 @@ function parseMagValidation(raw: string): MagWellResult[] {
 	const results: MagWellResult[] = [];
 
 	for (const line of lines) {
+		// Skip counter/header line (e.g. #003\t1710268200)
+		if (line.startsWith('#')) continue;
+
 		// Match lines starting with well number (1-5) followed by tab
 		const match = line.match(/^(\d+)\t/);
 		if (!match) continue;
