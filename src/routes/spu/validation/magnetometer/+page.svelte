@@ -49,52 +49,17 @@
 	const passedTests = $derived(data.stats.passed + newSessions.filter(s => s.overallPassed).length);
 	const failedTests = $derived(data.stats.failed + newSessions.filter(s => !s.overallPassed).length);
 
-	let initializing = $state(false);
-
 	function startWatching() {
 		if (!selectedSpu?.particleDeviceId) return;
 		watching = true;
 		pollError = null;
-		pollStatus = 'Initializing — reading current state…';
-		lastHash = null;
+		pollStatus = 'Watching for new test results…';
 		pollCount = 0;
-		initializing = true;
 
-		// First poll just captures the current hash — doesn't store anything
-		seedCurrentState().then(() => {
-			initializing = false;
-			pollStatus = 'Watching for new test results…';
-			pollInterval = setInterval(pollDevice, 5000);
-		});
-	}
-
-	async function seedCurrentState() {
-		if (!selectedSpu?.particleDeviceId) return;
-		try {
-			const res = await fetch('/api/validation/magnetometer/poll', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					spuId: selectedSpu.id,
-					spuUdi: selectedSpu.udi,
-					particleDeviceId: selectedSpu.particleDeviceId,
-					lastHash: null,
-					seedOnly: true
-				})
-			});
-			const result = await res.json();
-			if (result.hash) {
-				lastHash = result.hash;
-			}
-			if (result.status === 'offline') {
-				pollError = result.error;
-				pollStatus = '⚠️ Device offline';
-				stopWatching();
-			}
-		} catch (err: any) {
-			pollError = err.message || 'Failed to read device';
-			stopWatching();
-		}
+		// First poll seeds the hash, subsequent polls detect changes
+		// Server-side dedup prevents duplicates regardless
+		pollInterval = setInterval(pollDevice, 5000);
+		pollDevice();
 	}
 
 	function stopWatching() {
