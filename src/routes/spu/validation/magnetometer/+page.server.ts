@@ -116,6 +116,23 @@ export const actions: Actions = {
 				criteriaUsed: { minZ, maxZ }
 			});
 
+			// Update SPU validation record
+			const magStatus = overallPassed ? 'passed' : 'failed';
+			await Spu.updateOne({ _id: spuId }, {
+				$set: {
+					'validation.magnetometer': {
+						status: magStatus,
+						sessionId,
+						completedAt: new Date(),
+						rawData: rawResult,
+						results: parsed,
+						failureReasons,
+						criteriaUsed: { minZ, maxZ }
+					},
+					qcStatus: magStatus
+				}
+			});
+
 			redirect(303, `/spu/validation/magnetometer/${sessionId}`);
 		} catch (err: any) {
 			if (err?.status === 303) throw err; // re-throw redirect

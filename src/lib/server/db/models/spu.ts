@@ -54,10 +54,27 @@ const spuSchema = new Schema({
 	},
 
 	validation: {
-		sessionId: String, type: String,
-		status: { type: String, enum: ['pending', 'passed', 'failed'] },
-		completedAt: Date,
-		results: [{ testType: String, passed: Boolean, notes: String, createdAt: Date }]
+		status: { type: String, enum: ['pending', 'passed', 'failed'], default: 'pending' },
+		magnetometer: {
+			status: { type: String, enum: ['pending', 'passed', 'failed'], default: 'pending' },
+			sessionId: String, completedAt: Date, rawData: Schema.Types.Mixed,
+			results: Schema.Types.Mixed, failureReasons: [String], criteriaUsed: Schema.Types.Mixed
+		},
+		thermocouple: {
+			status: { type: String, enum: ['pending', 'passed', 'failed'], default: 'pending' },
+			sessionId: String, completedAt: Date, rawData: Schema.Types.Mixed,
+			results: Schema.Types.Mixed, failureReasons: [String], criteriaUsed: Schema.Types.Mixed
+		},
+		lux: {
+			status: { type: String, enum: ['pending', 'passed', 'failed'], default: 'pending' },
+			sessionId: String, completedAt: Date, rawData: Schema.Types.Mixed,
+			results: Schema.Types.Mixed, failureReasons: [String], criteriaUsed: Schema.Types.Mixed
+		},
+		spectrophotometer: {
+			status: { type: String, enum: ['pending', 'passed', 'failed'], default: 'pending' },
+			sessionId: String, completedAt: Date, rawData: Schema.Types.Mixed,
+			results: Schema.Types.Mixed, failureReasons: [String], criteriaUsed: Schema.Types.Mixed
+		}
 	},
 
 	assignment: {
