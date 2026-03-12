@@ -241,6 +241,13 @@
 				</div>
 			{/if}
 
+			<!-- Debug: selected SPU info -->
+			{#if selectedSpu}
+				<div class="text-xs tron-text-muted">
+					Selected: {selectedSpu.udi} | Particle ID: {selectedSpu.particleDeviceId ?? 'NONE'} | Watching: {watching}
+				</div>
+			{/if}
+
 			<!-- Toggle switch for continuous scanning -->
 			<div class="flex items-center justify-between rounded-lg p-4" style="background: var(--color-tron-bg-secondary); border: 1px solid {watching ? 'var(--color-tron-green)' : 'var(--color-tron-border)'};">
 				<div class="flex items-center gap-3">
