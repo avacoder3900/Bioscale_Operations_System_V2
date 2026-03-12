@@ -1,5 +1,5 @@
-import { redirect } from '@sveltejs/kit';
-import { connectDB, AssayDefinition } from '$lib/server/db';
+import { fail, redirect } from '@sveltejs/kit';
+import { connectDB, AssayDefinition, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -10,37 +10,79 @@ export const load: PageServerLoad = async ({ locals }) => {
 };
 
 export const actions: Actions = {
-	default: async ({ request, locals }) => {
+	preview: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'manufacturing:write');
-		await connectDB();
 
 		const data = await request.formData();
 		const file = data.get('file') as File;
-		if (!file) return { error: 'No file provided' };
+		if (!file || !file.name) return fail(400, { error: 'No file provided' });
 
 		const text = await file.text();
 		let parsed: any;
 		try {
 			parsed = JSON.parse(text);
 		} catch {
-			return { error: 'Invalid JSON file' };
+			return fail(400, { error: 'Invalid JSON file' });
 		}
 
-		const assay = await AssayDefinition.create({
-			name: parsed.name,
-			skuCode: parsed.skuCode,
-			description: parsed.description,
-			duration: parsed.duration,
-			shelfLifeDays: parsed.shelfLifeDays,
-			bcode: parsed.bcode ? (globalThis as any).Buffer.from(parsed.bcode, 'base64') : undefined,
-			bcodeLength: parsed.bcodeLength,
-			checksum: parsed.checksum,
-			isActive: true,
-			reagents: parsed.reagents ?? [],
-			versionHistory: []
-		});
+		// Support both single assay and array of assays
+		const items: any[] = Array.isArray(parsed) ? parsed : [parsed];
 
-		redirect(303, `/spu/assays/${assay._id}`);
+		const previews = items.map((item, idx) => ({
+			idx,
+			name: item.name ?? 'Unnamed',
+			skuCode: item.skuCode ?? null,
+			description: item.description ?? null,
+			reagentCount: (item.reagents ?? []).length
+		}));
+
+		return { previews, rawJson: text, importResult: null };
+	},
+
+	import: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+
+		const data = await request.formData();
+		const rawJson = data.get('rawJson')?.toString();
+		const selectedIndices = data.getAll('selected').map((v) => parseInt(v.toString()));
+
+		if (!rawJson) return fail(400, { error: 'No data to import' });
+
+		let items: any[];
+		try {
+			const parsed = JSON.parse(rawJson);
+			items = Array.isArray(parsed) ? parsed : [parsed];
+		} catch {
+			return fail(400, { error: 'Invalid JSON data' });
+		}
+
+		const toImport = selectedIndices.length > 0
+			? items.filter((_, idx) => selectedIndices.includes(idx))
+			: items;
+
+		const created: string[] = [];
+		for (const item of toImport) {
+			const assay = await AssayDefinition.create({
+				_id: generateId(),
+				name: item.name,
+				skuCode: item.skuCode,
+				description: item.description,
+				duration: item.duration,
+				shelfLifeDays: item.shelfLifeDays,
+				isActive: true,
+				reagents: item.reagents ?? [],
+				versionHistory: []
+			});
+			created.push(assay._id);
+		}
+
+		return {
+			importResult: { count: created.length, ids: created },
+			previews: [],
+			rawJson: ''
+		};
 	}
 };

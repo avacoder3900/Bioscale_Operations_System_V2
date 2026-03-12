@@ -6,17 +6,6 @@
 	interface Props {
 		data: {
 			spus: { id: string; udi: string; particleDeviceId: string | null; status: string }[];
-			recentSessions: {
-				id: string;
-				status: string;
-				overallPassed: boolean | null;
-				spuUdi: string | null;
-				startedAt: string | null;
-				completedAt: string | null;
-				createdAt: string;
-				username: string | null;
-			}[];
-			stats: { total: number; passed: number; failed: number; inProgress: number };
 			criteria: { minZ: number; maxZ: number };
 		};
 		form: any;
@@ -25,61 +14,26 @@
 	let { data, form }: Props = $props();
 
 	let selectedSpuId = $state('');
-	let testing = $state(false);
-	let reading = $state(false);
+	let fetching = $state(false);
 	let editingCriteria = $state(false);
 	let savingCriteria = $state(false);
 
-	function resultBadge(status: string, passed: boolean | null) {
-		if (status === 'running' || status === 'in_progress') return { text: 'Running', color: 'var(--color-tron-cyan)' };
-		if (passed === true) return { text: 'PASS', color: 'var(--color-tron-green)' };
-		if (passed === false) return { text: 'FAIL', color: 'var(--color-tron-red)' };
-		return { text: status, color: 'var(--color-tron-text-secondary)' };
-	}
+	const selectedSpu = $derived(data.spus.find(s => s.id === selectedSpuId));
 </script>
 
 <div class="space-y-6">
 	<h2 class="tron-text-primary text-2xl font-bold">Magnetometer Validation</h2>
 
-	<!-- Error display -->
 	{#if form?.error}
 		<div class="rounded border border-[var(--color-tron-red)] bg-[rgba(255,0,0,0.1)] p-3">
 			<p class="text-sm text-[var(--color-tron-red)]">{form.error}</p>
 		</div>
 	{/if}
 
-	<!-- Stats -->
-	<div class="grid grid-cols-2 gap-3 md:grid-cols-4">
-		<TronCard>
-			<div class="p-4 text-center">
-				<div class="tron-text-muted text-xs uppercase">Total Tests</div>
-				<div class="tron-text-primary mt-1 text-2xl font-bold">{data.stats.total}</div>
-			</div>
-		</TronCard>
-		<TronCard>
-			<div class="p-4 text-center">
-				<div class="text-xs uppercase" style="color: var(--color-tron-green);">Passed</div>
-				<div class="mt-1 text-2xl font-bold" style="color: var(--color-tron-green);">{data.stats.passed}</div>
-			</div>
-		</TronCard>
-		<TronCard>
-			<div class="p-4 text-center">
-				<div class="text-xs uppercase" style="color: var(--color-tron-red);">Failed</div>
-				<div class="mt-1 text-2xl font-bold" style="color: var(--color-tron-red);">{data.stats.failed}</div>
-			</div>
-		</TronCard>
-		<TronCard>
-			<div class="p-4 text-center">
-				<div class="text-xs uppercase" style="color: var(--color-tron-cyan);">In Progress</div>
-				<div class="mt-1 text-2xl font-bold" style="color: var(--color-tron-cyan);">{data.stats.inProgress}</div>
-			</div>
-		</TronCard>
-	</div>
-
-	<!-- Run Test / Read Results -->
 	<TronCard>
 		<div class="p-4 space-y-4">
 			<h3 class="tron-text-primary text-lg font-bold">Run Magnetometer Test</h3>
+			<p class="tron-text-muted text-sm">Select an SPU and run the test on the device first, then click to fetch the results.</p>
 
 			<div>
 				<label for="spu-select" class="tron-label">Select SPU</label>
@@ -91,43 +45,29 @@
 				</select>
 			</div>
 
-			<div class="flex gap-3">
-				<form
-					method="POST"
-					action="?/startTest"
-					use:enhance={() => {
-						testing = true;
-						return async ({ update }) => {
-							testing = false;
-							await update();
-						};
-					}}
-					class="flex-1"
-				>
-					<input type="hidden" name="spuId" value={selectedSpuId} />
-					<TronButton type="submit" variant="primary" disabled={!selectedSpuId || testing} style="min-height: 48px; width: 100%;">
-						{testing ? 'Triggering Test…' : '▶ Run Test on Device'}
-					</TronButton>
-				</form>
+			{#if selectedSpu && !selectedSpu.particleDeviceId}
+				<div class="text-sm" style="color: var(--color-tron-orange);">
+					⚠️ This SPU has no Particle device linked.
+				</div>
+			{/if}
 
-				<form
-					method="POST"
-					action="?/readFromDevice"
-					use:enhance={() => {
-						reading = true;
-						return async ({ update }) => {
-							reading = false;
-							await update();
-						};
-					}}
-					class="flex-1"
+			<form method="POST" action="?/readFromDevice" use:enhance={() => {
+				fetching = true;
+				return async ({ update }) => {
+					fetching = false;
+					await update();
+				};
+			}}>
+				<input type="hidden" name="spuId" value={selectedSpuId} />
+				<button
+					type="submit"
+					disabled={!selectedSpu?.particleDeviceId || fetching}
+					class="w-full rounded-lg p-4 text-center font-bold text-lg transition-all cursor-pointer hover:opacity-90 active:scale-[0.98] disabled:opacity-30 disabled:cursor-not-allowed"
+					style="background: linear-gradient(135deg, var(--color-tron-cyan), var(--color-tron-green)); color: var(--color-tron-bg-primary); min-height: 56px;"
 				>
-					<input type="hidden" name="spuId" value={selectedSpuId} />
-					<TronButton type="submit" variant="secondary" disabled={!selectedSpuId || reading} style="min-height: 48px; width: 100%;">
-						{reading ? 'Reading…' : '📖 Read Last Result'}
-					</TronButton>
-				</form>
-			</div>
+					{fetching ? '⏳ Fetching…' : '🧲 Run Test'}
+				</button>
+			</form>
 		</div>
 	</TronCard>
 
@@ -175,43 +115,6 @@
 				{#if form?.criteriaUpdated}
 					<p class="mt-1 text-xs" style="color: var(--color-tron-green);">✓ Criteria updated</p>
 				{/if}
-			{/if}
-		</div>
-	</TronCard>
-
-	<!-- Recent Sessions -->
-	<TronCard>
-		<div class="p-4">
-			<h3 class="tron-text-primary mb-3 font-bold">Recent Tests</h3>
-			{#if data.recentSessions.length === 0}
-				<p class="tron-text-muted text-sm">No tests run yet.</p>
-			{:else}
-				<div class="space-y-2">
-					{#each data.recentSessions as session (session.id)}
-						{@const badge = resultBadge(session.status, session.overallPassed)}
-						<a
-							href="/spu/validation/magnetometer/{session.id}"
-							class="flex items-center justify-between rounded border p-3 transition-colors hover:border-[var(--color-tron-cyan)]"
-							style="border-color: var(--color-tron-border); background: var(--color-tron-bg-secondary);"
-						>
-							<div>
-								<span class="tron-text-primary font-mono text-sm font-medium">{session.spuUdi ?? 'Unknown SPU'}</span>
-								<span class="tron-text-muted ml-2 text-xs">
-									{session.completedAt ? new Date(session.completedAt).toLocaleString() : session.startedAt ? new Date(session.startedAt).toLocaleString() : ''}
-								</span>
-								{#if session.username}
-									<span class="tron-text-muted ml-2 text-xs">by {session.username}</span>
-								{/if}
-							</div>
-							<span
-								class="rounded-full px-3 py-1 text-xs font-bold"
-								style="color: {badge.color}; background: color-mix(in srgb, {badge.color} 15%, transparent);"
-							>
-								{badge.text}
-							</span>
-						</a>
-					{/each}
-				</div>
 			{/if}
 		</div>
 	</TronCard>

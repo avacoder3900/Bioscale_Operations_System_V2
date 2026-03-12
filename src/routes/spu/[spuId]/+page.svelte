@@ -50,9 +50,12 @@
 
 	function describeAuditEntry(entry: {
 		action: string;
+		reason: string | null;
 		oldData: Record<string, unknown> | null;
 		newData: Record<string, unknown> | null;
 	}): string {
+		// If there's a reason field, use it directly (e.g. validation results)
+		if (entry.reason) return entry.reason;
 		if (entry.action === 'INSERT') return 'SPU record created';
 		if (entry.action === 'DELETE') return 'SPU record deleted';
 		const oldData = entry.oldData ?? {};
@@ -392,6 +395,46 @@
 			</dl>
 		</TronCard>
 	{/if}
+
+	<!-- Validation Tests -->
+	<TronCard>
+		<h3 class="tron-text-primary mb-4 text-lg font-medium">Validation Tests</h3>
+		<div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+			{#each [
+				{ name: 'Magnetometer', key: 'magnetometer', icon: '🧲' },
+				{ name: 'Thermocouple', key: 'thermocouple', icon: '🌡️' },
+				{ name: 'Lux', key: 'lux', icon: '💡' },
+				{ name: 'Spectrophotometer', key: 'spectrophotometer', icon: '🔬' }
+			] as test (test.key)}
+				{@const result = data.spu.validation?.[test.key]}
+				<div class="rounded-lg border p-3" style="border-color: {result?.status === 'passed' ? 'var(--color-tron-green)' : result?.status === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-border)'}; background: {result?.status === 'passed' ? 'rgba(0,255,100,0.05)' : result?.status === 'failed' ? 'rgba(255,0,0,0.05)' : 'var(--color-tron-bg-secondary)'};">
+					<div class="text-center">
+						<div class="text-lg">{test.icon}</div>
+						<div class="tron-text-primary text-xs font-bold mt-1">{test.name}</div>
+						<div class="mt-2">
+							{#if result?.status === 'passed'}
+								<span class="rounded-full px-2 py-0.5 text-xs font-bold" style="color: var(--color-tron-green); background: rgba(0,255,100,0.15);">PASS</span>
+							{:else if result?.status === 'failed'}
+								<span class="rounded-full px-2 py-0.5 text-xs font-bold" style="color: var(--color-tron-red); background: rgba(255,0,0,0.15);">FAIL</span>
+							{:else}
+								<span class="rounded-full px-2 py-0.5 text-xs font-bold tron-text-muted" style="background: rgba(128,128,128,0.15);">PENDING</span>
+							{/if}
+						</div>
+						{#if result?.completedAt}
+							<div class="tron-text-muted text-[10px] mt-1">{formatDate(result.completedAt)}</div>
+						{/if}
+					</div>
+					{#if result?.status === 'failed' && result?.failureReasons?.length > 0}
+						<div class="mt-2 border-t pt-2 space-y-1" style="border-color: var(--color-tron-border);">
+							{#each result.failureReasons as reason}
+								<div class="text-[10px]" style="color: var(--color-tron-red);">✗ {reason}</div>
+							{/each}
+						</div>
+					{/if}
+				</div>
+			{/each}
+		</div>
+	</TronCard>
 
 	<TronCard>
 		<h3 class="tron-text-primary mb-4 text-lg font-medium">Parts Traceability</h3>

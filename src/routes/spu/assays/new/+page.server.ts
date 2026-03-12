@@ -1,4 +1,4 @@
-import { redirect } from '@sveltejs/kit';
+import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, AssayDefinition } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
@@ -16,8 +16,10 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
+		const name = data.get('name') as string;
+		if (!name?.trim()) return fail(400, { error: 'Assay name is required' });
 		const assay = await AssayDefinition.create({
-			name: data.get('name') as string,
+			name,
 			skuCode: data.get('skuCode') as string,
 			description: (data.get('description') as string) || undefined,
 			duration: data.get('duration') ? Number(data.get('duration')) : undefined,

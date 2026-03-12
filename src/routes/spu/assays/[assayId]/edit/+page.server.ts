@@ -11,9 +11,14 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const assay = await AssayDefinition.findById(params.assayId).lean() as any;
 	if (!assay) throw error(404, 'Assay not found');
 
+	// Parse instructions from metadata or bcode if available
+	const instructions: { type: string; params?: Record<string, unknown> }[] =
+		assay.instructions ?? assay.metadata?.instructions ?? [];
+
 	return {
 		assay: {
 			id: assay._id,
+			assayId: assay.assayId ?? assay._id,
 			name: assay.name,
 			skuCode: assay.skuCode ?? null,
 			description: assay.description ?? null,
@@ -24,9 +29,11 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			lockedAt: assay.lockedAt ?? null,
 			reagents: assay.reagents ?? [],
 			configuration: assay.metadata ?? {},
+			version: (assay.versionHistory ?? []).length,
 			createdAt: assay.createdAt,
 			updatedAt: assay.updatedAt
-		}
+		},
+		instructions
 	};
 };
 

@@ -61,6 +61,13 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			assignmentType: s.assignment?.type ?? null,
 			assignmentCustomerId: s.assignment?.customer?._id ?? null,
 			qcStatus: s.qcStatus ?? 'pending',
+			validation: {
+				magnetometer: s.validation?.magnetometer ?? null,
+				thermocouple: s.validation?.thermocouple ?? null,
+				lux: s.validation?.lux ?? null,
+				spectrophotometer: s.validation?.spectrophotometer ?? null,
+				status: s.validation?.status ?? 'pending'
+			},
 			qcDocumentUrl: s.qcDocumentUrl ?? null,
 			assemblyStatus: s.assemblyStatus ?? 'created',
 			assemblySignatureId: s.signature?._id ?? null,
@@ -152,10 +159,11 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		auditTrail: auditTrail.map((a: any) => ({
 			id: a._id,
 			action: a.action ?? '',
+			reason: a.reason ?? null,
 			oldData: a.oldData ?? null,
 			newData: a.newData ?? null,
-			changedBy: auditMap.get(a.userId) ?? 'System',
-			changedAt: a.createdAt
+			changedBy: auditMap.get(a.userId) ?? auditMap.get(a.changedBy) ?? 'System',
+			changedAt: a.changedAt ?? a.createdAt
 		}))
 	};
 };

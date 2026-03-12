@@ -24,7 +24,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			isActive: u.isActive,
 			lastLoginAt: u.lastLoginAt ?? null,
 			createdAt: u.createdAt,
-			roles: (u.roles ?? []).map((r: any) => ({ id: r.roleId, name: r.roleName }))
+			roles: (u.roles ?? []).map((r: any): { id: string; name: string } => ({ id: r.roleId, name: r.roleName }))
 		})),
 		roles: roles.map((r) => ({
 			id: r._id,
