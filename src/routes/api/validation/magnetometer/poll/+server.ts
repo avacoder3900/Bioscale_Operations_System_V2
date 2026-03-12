@@ -17,7 +17,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	await connectDB();
 
-	const { spuId, spuUdi, particleDeviceId, lastHash } = await request.json();
+	const { spuId, spuUdi, particleDeviceId, lastHash, seedOnly } = await request.json();
 
 	if (!particleDeviceId) {
 		return json({ error: 'No Particle device ID' }, { status: 400 });
@@ -51,6 +51,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// If hash/counter matches, no new data
 		if (currentHash === lastHash) {
 			return json({ status: 'unchanged', hash: currentHash, testCounter });
+		}
+
+		// seedOnly mode — just return the current hash, don't store
+		if (seedOnly) {
+			return json({ status: 'seeded', hash: currentHash, testCounter });
 		}
 
 		// New data detected — parse and save

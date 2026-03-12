@@ -49,18 +49,52 @@
 	const passedTests = $derived(data.stats.passed + newSessions.filter(s => s.overallPassed).length);
 	const failedTests = $derived(data.stats.failed + newSessions.filter(s => !s.overallPassed).length);
 
+	let initializing = $state(false);
+
 	function startWatching() {
 		if (!selectedSpu?.particleDeviceId) return;
 		watching = true;
 		pollError = null;
-		pollStatus = 'Watching for new test results…';
+		pollStatus = 'Initializing — reading current state…';
 		lastHash = null;
 		pollCount = 0;
+		initializing = true;
 
-		// Poll every 10 seconds (Particle API can be slow)
-		pollInterval = setInterval(pollDevice, 10000);
-		// Do first poll immediately
-		pollDevice();
+		// First poll just captures the current hash — doesn't store anything
+		seedCurrentState().then(() => {
+			initializing = false;
+			pollStatus = 'Watching for new test results…';
+			pollInterval = setInterval(pollDevice, 5000);
+		});
+	}
+
+	async function seedCurrentState() {
+		if (!selectedSpu?.particleDeviceId) return;
+		try {
+			const res = await fetch('/api/validation/magnetometer/poll', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					spuId: selectedSpu.id,
+					spuUdi: selectedSpu.udi,
+					particleDeviceId: selectedSpu.particleDeviceId,
+					lastHash: null,
+					seedOnly: true
+				})
+			});
+			const result = await res.json();
+			if (result.hash) {
+				lastHash = result.hash;
+			}
+			if (result.status === 'offline') {
+				pollError = result.error;
+				pollStatus = '⚠️ Device offline';
+				stopWatching();
+			}
+		} catch (err: any) {
+			pollError = err.message || 'Failed to read device';
+			stopWatching();
+		}
 	}
 
 	function stopWatching() {
@@ -242,8 +276,8 @@
 					aria-label="Toggle continuous scan"
 				>
 					<span
-						class="inline-block h-5 w-5 rounded-full transition-transform duration-300"
-						style="background: var(--color-tron-bg-primary); transform: translateX({watching ? '22px' : '4px'}); box-shadow: 0 1px 3px rgba(0,0,0,0.4);"
+						class="inline-block h-5 w-5 rounded-full transition-transform duration-300 {watching ? 'animate-slider-pulse' : ''}"
+						style="background: {watching ? 'var(--color-tron-bg-primary)' : 'var(--color-tron-bg-primary)'}; transform: translateX({watching ? '22px' : '4px'}); box-shadow: {watching ? '0 0 8px var(--color-tron-green), 0 1px 3px rgba(0,0,0,0.4)' : '0 1px 3px rgba(0,0,0,0.4)'};"
 					></span>
 				</button>
 			</div>
@@ -331,6 +365,13 @@
 			}
 			.animate-scan-bar {
 				animation: scan-bar 2s ease-in-out infinite;
+			}
+			@keyframes slider-pulse {
+				0%, 100% { transform: translateX(22px) scale(1); }
+				50% { transform: translateX(22px) scale(1.15); }
+			}
+			.animate-slider-pulse {
+				animation: slider-pulse 1.5s ease-in-out infinite !important;
 			}
 		</style>
 	{/if}
