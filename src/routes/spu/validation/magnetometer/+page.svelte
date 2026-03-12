@@ -213,52 +213,31 @@
 				</div>
 			{/if}
 
-			<!-- Toggle switch for continuous scanning -->
-			<div class="flex items-center justify-between rounded-lg p-4" style="background: var(--color-tron-bg-secondary); border: 1px solid {watching ? 'var(--color-tron-green)' : 'var(--color-tron-border)'};">
-				<div class="flex items-center gap-3">
-					{#if watching}
-						<div class="relative">
-							<div class="h-3 w-3 rounded-full bg-[var(--color-tron-green)]" style="box-shadow: 0 0 8px var(--color-tron-green);"></div>
-							<div class="absolute inset-0 h-3 w-3 rounded-full bg-[var(--color-tron-green)] animate-ping opacity-40"></div>
-						</div>
-					{:else}
-						<div class="h-3 w-3 rounded-full" style="background: var(--color-tron-text-secondary);"></div>
-					{/if}
-					<div>
-						<div class="text-sm font-bold" style="color: {watching ? 'var(--color-tron-green)' : 'var(--color-tron-text-primary)'};">
-							{watching ? '● LIVE — Continuous Scan' : 'Continuous Scan'}
-						</div>
-						<div class="tron-text-muted text-xs mt-0.5">
-							{#if watching}
-								{pollStatus}
-							{:else if !selectedSpu?.particleDeviceId}
-								Select an SPU to enable
-							{:else}
-								Auto-captures results as tests complete
-							{/if}
-						</div>
-					</div>
-				</div>
-				<!-- Toggle switch -->
-				<button
-					onclick={() => watching ? stopWatching() : startWatching()}
-					disabled={!selectedSpu?.particleDeviceId}
-					class="relative inline-flex h-7 w-12 items-center rounded-full transition-colors duration-300 focus:outline-none disabled:opacity-30 disabled:cursor-not-allowed"
-					style="background: {watching ? 'var(--color-tron-green)' : 'var(--color-tron-border)'};"
-					aria-label="Toggle continuous scan"
-				>
-					<span
-						class="inline-block h-5 w-5 rounded-full transition-transform duration-300 {watching ? 'animate-slider-pulse' : ''}"
-						style="background: {watching ? 'var(--color-tron-bg-primary)' : 'var(--color-tron-bg-primary)'}; transform: translateX({watching ? '22px' : '4px'}); box-shadow: {watching ? '0 0 8px var(--color-tron-green), 0 1px 3px rgba(0,0,0,0.4)' : '0 1px 3px rgba(0,0,0,0.4)'};"
-					></span>
-				</button>
-			</div>
-
+			<!-- Continuous scan button -->
 			{#if watching}
+				<button
+					onclick={stopWatching}
+					class="w-full rounded-lg p-4 text-center font-bold text-lg transition-all cursor-pointer active:scale-[0.98]"
+					style="background: var(--color-tron-green); color: var(--color-tron-bg-primary); min-height: 56px; box-shadow: 0 0 20px rgba(0,255,100,0.3);"
+				>
+					● LIVE — Continuous Scan Active ({pollCount} checks, {newSessions.length} captured) — Tap to Stop
+				</button>
 				<!-- Scanning animation bar -->
 				<div class="relative h-1 w-full overflow-hidden rounded-full" style="background: rgba(0,255,100,0.1);">
 					<div class="h-full bg-[var(--color-tron-green)] animate-scan-bar" style="width: 30%; box-shadow: 0 0 8px var(--color-tron-green);"></div>
 				</div>
+				{#if pollStatus}
+					<p class="text-xs text-center" style="color: var(--color-tron-green);">{pollStatus}</p>
+				{/if}
+			{:else}
+				<button
+					onclick={startWatching}
+					disabled={!selectedSpu?.particleDeviceId}
+					class="w-full rounded-lg p-4 text-center font-bold text-lg transition-all cursor-pointer hover:opacity-90 active:scale-[0.98] disabled:opacity-30 disabled:cursor-not-allowed"
+					style="background: linear-gradient(135deg, var(--color-tron-cyan), var(--color-tron-green)); color: var(--color-tron-bg-primary); min-height: 56px;"
+				>
+					👁 Start Continuous Scan
+				</button>
 			{/if}
 
 			{#if pollError}
