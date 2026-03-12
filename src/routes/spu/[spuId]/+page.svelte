@@ -50,9 +50,12 @@
 
 	function describeAuditEntry(entry: {
 		action: string;
+		reason: string | null;
 		oldData: Record<string, unknown> | null;
 		newData: Record<string, unknown> | null;
 	}): string {
+		// If there's a reason field, use it directly (e.g. validation results)
+		if (entry.reason) return entry.reason;
 		if (entry.action === 'INSERT') return 'SPU record created';
 		if (entry.action === 'DELETE') return 'SPU record deleted';
 		const oldData = entry.oldData ?? {};

@@ -1,6 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, ValidationSession, Spu, Integration, generateId } from '$lib/server/db';
+import { connectDB, ValidationSession, Spu, Integration, AuditLog, generateId } from '$lib/server/db';
 import { getVariable } from '$lib/server/particle';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -105,6 +105,27 @@ export const actions: Actions = {
 					},
 					qcStatus: magStatus
 				}
+			});
+
+			// Create audit log entry
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'spus',
+				recordId: spuId,
+				entityId: spuId,
+				action: 'UPDATE',
+				oldData: null,
+				newData: {
+					validationType: 'magnetometer',
+					status: magStatus,
+					sessionId,
+					overallPassed,
+					failureReasons: failureReasons.length > 0 ? failureReasons : undefined,
+					criteriaUsed: { minZ, maxZ }
+				},
+				changedAt: new Date(),
+				changedBy: locals.user!._id,
+				reason: `Magnetometer validation: ${magStatus.toUpperCase()}${failureReasons.length > 0 ? ' — ' + failureReasons.join('; ') : ''}`
 			});
 
 			redirect(303, `/spu/validation/magnetometer/${sessionId}`);

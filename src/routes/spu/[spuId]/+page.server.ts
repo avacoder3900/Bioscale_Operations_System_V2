@@ -159,10 +159,11 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		auditTrail: auditTrail.map((a: any) => ({
 			id: a._id,
 			action: a.action ?? '',
+			reason: a.reason ?? null,
 			oldData: a.oldData ?? null,
 			newData: a.newData ?? null,
-			changedBy: auditMap.get(a.userId) ?? 'System',
-			changedAt: a.createdAt
+			changedBy: auditMap.get(a.userId) ?? auditMap.get(a.changedBy) ?? 'System',
+			changedAt: a.changedAt ?? a.createdAt
 		}))
 	};
 };
