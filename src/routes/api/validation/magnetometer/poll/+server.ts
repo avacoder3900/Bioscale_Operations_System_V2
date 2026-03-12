@@ -58,6 +58,15 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			return json({ status: 'seeded', hash: currentHash, testCounter });
 		}
 
+		// Deduplicate — check if we already stored this exact data
+		const existingSession = await ValidationSession.findOne({
+			spuId,
+			rawData: rawResult
+		}).lean();
+		if (existingSession) {
+			return json({ status: 'unchanged', hash: currentHash, testCounter });
+		}
+
 		// New data detected — parse and save
 		const parsed = parseMagValidation(rawResult);
 
