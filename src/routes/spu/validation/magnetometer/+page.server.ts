@@ -1,6 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, ValidationSession, User, Spu, Integration, generateId } from '$lib/server/db';
+import { connectDB, ValidationSession, Spu, Integration, generateId } from '$lib/server/db';
 import { getVariable } from '$lib/server/particle';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -14,23 +14,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		{ udi: 1, 'particleLink.particleDeviceId': 1, status: 1 }
 	).sort({ udi: 1 }).lean() as any[];
 
-	// Get recent sessions
-	const sessions = await ValidationSession.find({ type: 'mag' })
-		.sort({ createdAt: -1 })
-		.limit(20)
-		.lean() as any[];
-
-	const userIds = [...new Set(sessions.map((s: any) => s.userId).filter(Boolean))];
-	const users = userIds.length ? await User.find({ _id: { $in: userIds } }, { username: 1 }).lean() : [];
-	const userMap = new Map((users as any[]).map((u: any) => [u._id, u.username]));
-
 	// Get criteria
 	const criteria = await Integration.findOne({ type: 'mag_criteria' }).lean() as any;
-
-	const completedSessions = sessions.filter((s: any) => s.status !== 'in_progress' && s.status !== 'running');
-	const total = completedSessions.length;
-	const passed = completedSessions.filter((s: any) => s.overallPassed === true).length;
-	const failed = completedSessions.filter((s: any) => s.overallPassed === false).length;
 
 	return {
 		spus: spus.map((s: any) => ({
@@ -39,17 +24,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 			particleDeviceId: s.particleLink?.particleDeviceId ?? null,
 			status: s.status
 		})),
-		recentSessions: sessions.map((s: any) => ({
-			id: s._id,
-			status: s.status,
-			overallPassed: s.overallPassed ?? null,
-			spuUdi: s.spuUdi ?? null,
-			startedAt: s.startedAt?.toISOString() ?? null,
-			completedAt: s.completedAt?.toISOString() ?? null,
-			createdAt: s.createdAt?.toISOString() ?? new Date().toISOString(),
-			username: userMap.get(s.userId) ?? null
-		})),
-		stats: { total, passed, failed },
 		criteria: {
 			minZ: criteria?.minZ ?? 3900,
 			maxZ: criteria?.maxZ ?? 4500

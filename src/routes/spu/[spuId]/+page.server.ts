@@ -61,6 +61,13 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			assignmentType: s.assignment?.type ?? null,
 			assignmentCustomerId: s.assignment?.customer?._id ?? null,
 			qcStatus: s.qcStatus ?? 'pending',
+			validation: {
+				magnetometer: s.validation?.magnetometer ?? null,
+				thermocouple: s.validation?.thermocouple ?? null,
+				lux: s.validation?.lux ?? null,
+				spectrophotometer: s.validation?.spectrophotometer ?? null,
+				status: s.validation?.status ?? 'pending'
+			},
 			qcDocumentUrl: s.qcDocumentUrl ?? null,
 			assemblyStatus: s.assemblyStatus ?? 'created',
 			assemblySignatureId: s.signature?._id ?? null,
