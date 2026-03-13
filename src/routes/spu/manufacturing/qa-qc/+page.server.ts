@@ -1,5 +1,5 @@
 import { redirect, fail } from '@sveltejs/kit';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import { connectDB, ReagentBatchRecord, CartridgeRecord, User, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';

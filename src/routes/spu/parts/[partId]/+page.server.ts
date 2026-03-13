@@ -17,6 +17,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const startDate = url.searchParams.get('startDate') ?? '';
 	const endDate = url.searchParams.get('endDate') ?? '';
 	const retractedFilter = url.searchParams.get('retracted') ?? '';
+	const operatorFilter = url.searchParams.get('operator') ?? '';
 
 	const txFilter: Record<string, any> = { partDefinitionId: params.partId };
 	if (typeFilter) txFilter.transactionType = typeFilter;
@@ -27,6 +28,13 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	}
 	if (retractedFilter === 'true') txFilter.retractedAt = { $exists: true, $ne: null };
 	if (retractedFilter === 'false') txFilter.retractedAt = { $exists: false };
+	if (operatorFilter) {
+		txFilter.$or = [
+			{ operatorId: operatorFilter },
+			{ operatorUsername: operatorFilter },
+			{ performedBy: operatorFilter }
+		];
+	}
 
 	const [lots, transactions, ipRevisionDocs] = await Promise.all([
 		LotRecord.find({ partDefinitionId: params.partId }).sort({ createdAt: -1 }).lean(),
@@ -116,16 +124,33 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			quantity: t.quantity ?? 0,
 			previousQuantity: t.previousQuantity ?? 0,
 			newQuantity: t.newQuantity ?? 0,
-			performedByName: t.performedBy ?? null,
+			performedByName: t.operatorUsername ?? t.performedBy ?? null,
 			performedAt: t.performedAt ?? t.createdAt,
 			assemblySessionId: t.assemblySessionId ?? null,
 			retractedAt: t.retractedAt ?? null,
 			retractionReason: t.retractionReason ?? null,
-			notes: t.reason ?? null
+			notes: t.notes ?? t.reason ?? null,
+			lotId: t.lotId ?? null,
+			cartridgeRecordId: t.cartridgeRecordId ?? null,
+			manufacturingStep: t.manufacturingStep ?? null,
+			manufacturingRunId: t.manufacturingRunId ?? null
 		})),
+		transactionSummary: (() => {
+			const all = transactions as any[];
+			const nonRetracted = all.filter((t: any) => !t.retractedAt);
+			return {
+				totalReceived: nonRetracted.filter((t: any) => t.transactionType === 'receipt').reduce((s: number, t: any) => s + Math.abs(t.quantity ?? 0), 0),
+				totalConsumed: nonRetracted.filter((t: any) => t.transactionType === 'consumption' || t.transactionType === 'deduction').reduce((s: number, t: any) => s + Math.abs(t.quantity ?? 0), 0),
+				totalCreated: nonRetracted.filter((t: any) => t.transactionType === 'creation').reduce((s: number, t: any) => s + Math.abs(t.quantity ?? 0), 0),
+				totalScrapped: nonRetracted.filter((t: any) => t.transactionType === 'scrap').reduce((s: number, t: any) => s + Math.abs(t.quantity ?? 0), 0),
+				totalAdjusted: nonRetracted.filter((t: any) => t.transactionType === 'adjustment').reduce((s: number, t: any) => s + (t.quantity ?? 0), 0),
+				currentCount: p.inventoryCount ?? 0,
+				transactionCount: all.length
+			};
+		})(),
 		versions,
 		auditEntries,
-		filters: { type: typeFilter, startDate, endDate, retracted: retractedFilter }
+		filters: { type: typeFilter, startDate, endDate, retracted: retractedFilter, operator: operatorFilter }
 	};
 };
 
