@@ -220,51 +220,55 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 };
 
 export const actions: Actions = {
-	/** Confirm setup — create a new run or re-confirm existing setup */
-	confirmSetup: async ({ request, locals, url }) => {
+	/** Create a new wax filling run in Setup status */
+	createRun: async ({ request, locals, url }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 
 		const data = await request.formData();
 		const robotId = (data.get('robotId') as string) ?? url.searchParams.get('robot') ?? '';
-		const robotName = (data.get('robotName') as string) ?? '';
-		const deckId = (data.get('deckId') as string) || undefined;
-		const waxSourceLot = (data.get('waxSourceLot') as string) || undefined;
 
-		// Validate deck if provided
-		if (deckId) {
-			const deck = await Consumable.findOne({ _id: deckId, type: 'deck' }).lean();
-			if (!deck) return fail(400, { error: `Deck '${deckId}' not found. Register it in Consumables first.` });
-			if ((deck as any).status === 'retired') return fail(400, { error: `Deck '${deckId}' is retired and cannot be used.` });
-		}
-
-		// Check for existing active run
+		// Check for existing active run on this robot
 		const existingRun = await WaxFillingRun.findOne({
 			'robot._id': robotId,
 			status: { $in: [...ACTIVE_STAGES] }
 		}).lean() as any;
 
 		if (existingRun) {
-			// Transition existing setup run to Loading
-			if (existingRun.status === 'setup' || existingRun.status === 'Setup') {
-				await WaxFillingRun.findByIdAndUpdate(existingRun._id, {
-					$set: { status: 'Loading', deckId: deckId ?? existingRun.deckId, waxSourceLot: waxSourceLot ?? existingRun.waxSourceLot }
-				});
-			}
-			return { success: true, runId: String(existingRun._id) };
+			return fail(400, { error: 'This robot already has an active wax filling run.' });
 		}
 
 		const run = await WaxFillingRun.create({
-			robot: { _id: robotId, name: robotName },
+			robot: { _id: robotId, name: robotId },
 			operator: { _id: locals.user._id, username: locals.user.username },
-			status: 'Loading',
+			status: 'Setup',
 			cartridgeIds: [],
-			deckId,
-			waxSourceLot,
 			setupTimestamp: new Date()
 		});
 
 		return { success: true, runId: String(run._id) };
+	},
+
+	/** Confirm setup — transition existing run from Setup to Loading */
+	confirmSetup: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const runId = data.get('runId') as string;
+		if (!runId) return fail(400, { error: 'Run ID required' });
+
+		const run = await WaxFillingRun.findById(runId).lean() as any;
+		if (!run) return fail(400, { error: 'Run not found' });
+		if (run.status !== 'Setup' && run.status !== 'setup') {
+			return fail(400, { error: `Run is not in Setup status (current: ${run.status})` });
+		}
+
+		await WaxFillingRun.findByIdAndUpdate(runId, {
+			$set: { status: 'Loading', updatedAt: new Date() }
+		});
+
+		return { success: true, runId };
 	},
 
 	/** Record wax preparation (tube info) */
