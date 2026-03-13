@@ -153,6 +153,9 @@ export const actions: Actions = {
 		const overrideReason = formData.get('overrideReason')?.toString() || undefined;
 		const status = (formData.get('status')?.toString() as 'accepted' | 'rejected' | 'returned' | 'other') || 'accepted';
 
+		// S3: First Article Inspection flag
+		const firstArticleInspection = formData.get('firstArticleInspection') === 'true';
+
 		// S2: Generic receiving checklist
 		const checklistJson = formData.get('checklist')?.toString();
 		const checklist = checklistJson ? JSON.parse(checklistJson) : undefined;
@@ -274,6 +277,7 @@ export const actions: Actions = {
 				cocDocumentUrl,
 				ipResults: ipResultsSummary,
 				ipRevisionId,
+				firstArticleInspection,
 				poReference,
 				supplier,
 				vendorLotNumber,
