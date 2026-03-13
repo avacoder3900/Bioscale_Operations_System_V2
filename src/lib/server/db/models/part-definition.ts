@@ -14,9 +14,13 @@ const partDefinitionSchema = new Schema({
 	isActive: { type: Boolean, default: true },
 	sampleSize: { type: Number, default: 0 },
 	percentAccepted: { type: Number, default: 100 },
-	createdBy: String
+	createdBy: String,
+	bomType: { type: String, enum: ['spu', 'cartridge'] },
+	supplierPartNumber: String,
+	quantityPerUnit: Number
 }, { timestamps: true });
 
 partDefinitionSchema.index({ partNumber: 1 }, { unique: true });
+partDefinitionSchema.index({ bomType: 1 });
 
 export const PartDefinition = mongoose.models.PartDefinition || mongoose.model('PartDefinition', partDefinitionSchema, 'part_definitions');
