@@ -8,6 +8,7 @@ import {
 	InspectionProcedureRevision,
 	PartDefinition,
 	InventoryTransaction,
+	CartridgeRecord,
 	ManufacturingMaterial,
 	ManufacturingMaterialTransaction,
 	AuditLog,
@@ -23,19 +24,81 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!lot) throw error(404, 'Receiving lot not found');
 
 	// Fetch related data in parallel
-	const [inspectionResults, toolConfirmations, ipRevision] = await Promise.all([
+	const lotIdentifiers = [lot._id, lot.lotId].filter(Boolean);
+
+	const [inspectionResults, toolConfirmations, ipRevision, lotTransactions, linkedCartridges] = await Promise.all([
 		InspectionResult.find({ lotId: lot._id }).sort({ sampleNumber: 1, stepOrder: 1 }).lean(),
 		ToolConfirmation.find({ lotId: lot._id }).lean(),
 		lot.ipRevisionId
 			? InspectionProcedureRevision.findById(lot.ipRevisionId).lean()
-			: Promise.resolve(null)
+			: Promise.resolve(null),
+		// S5: Fetch all inventory transactions referencing this lot
+		InventoryTransaction.find({ lotId: { $in: lotIdentifiers } })
+			.sort({ performedAt: -1 })
+			.limit(500)
+			.lean(),
+		// S5: Find cartridges that consumed material from this lot
+		CartridgeRecord.find({
+			$or: [
+				{ 'backing.lotId': { $in: lotIdentifiers } },
+				{ 'waxFilling.waxSourceLot': { $in: lotIdentifiers } },
+				{ 'topSeal.topSealLotId': { $in: lotIdentifiers } }
+			]
+		})
+			.select('_id currentPhase backing.lotId waxFilling.waxSourceLot waxFilling.runId topSeal.topSealLotId reagentFilling.assayType.name createdAt')
+			.sort({ createdAt: -1 })
+			.limit(200)
+			.lean()
 	]);
+
+	// Group transactions by manufacturing step
+	const transactionsByStep: Record<string, any[]> = {};
+	for (const tx of lotTransactions as any[]) {
+		const step = tx.manufacturingStep ?? 'other';
+		if (!transactionsByStep[step]) transactionsByStep[step] = [];
+		transactionsByStep[step].push({
+			id: tx._id,
+			transactionType: tx.transactionType,
+			quantity: tx.quantity,
+			previousQuantity: tx.previousQuantity,
+			newQuantity: tx.newQuantity,
+			manufacturingStep: tx.manufacturingStep,
+			manufacturingRunId: tx.manufacturingRunId,
+			cartridgeRecordId: tx.cartridgeRecordId,
+			operatorUsername: tx.operatorUsername ?? tx.performedBy,
+			performedAt: tx.performedAt,
+			notes: tx.notes ?? tx.reason
+		});
+	}
+
+	// Summary stats
+	const usageSummary = {
+		totalTransactions: (lotTransactions as any[]).length,
+		totalConsumed: (lotTransactions as any[]).filter((t: any) => t.transactionType === 'consumption').reduce((s: number, t: any) => s + Math.abs(t.quantity ?? 0), 0),
+		totalCreated: (lotTransactions as any[]).filter((t: any) => t.transactionType === 'creation').reduce((s: number, t: any) => s + Math.abs(t.quantity ?? 0), 0),
+		totalScrapped: (lotTransactions as any[]).filter((t: any) => t.transactionType === 'scrap').reduce((s: number, t: any) => s + Math.abs(t.quantity ?? 0), 0),
+		linkedCartridgeCount: (linkedCartridges as any[]).length
+	};
 
 	return {
 		lot: JSON.parse(JSON.stringify(lot)),
 		inspectionResults: JSON.parse(JSON.stringify(inspectionResults)),
 		toolConfirmations: JSON.parse(JSON.stringify(toolConfirmations)),
-		ipRevision: ipRevision ? JSON.parse(JSON.stringify(ipRevision)) : null
+		ipRevision: ipRevision ? JSON.parse(JSON.stringify(ipRevision)) : null,
+		lotUsage: {
+			transactionsByStep: JSON.parse(JSON.stringify(transactionsByStep)),
+			linkedCartridges: JSON.parse(JSON.stringify((linkedCartridges as any[]).map((c: any) => ({
+				cartridgeId: c._id,
+				currentPhase: c.currentPhase ?? 'unknown',
+				lotId: c.backing?.lotId ?? null,
+				waxSourceLot: c.waxFilling?.waxSourceLot ?? null,
+				topSealLotId: c.topSeal?.topSealLotId ?? null,
+				waxRunId: c.waxFilling?.runId ?? null,
+				assayType: c.reagentFilling?.assayType?.name ?? null,
+				createdAt: c.createdAt
+			})))),
+			summary: usageSummary
+		}
 	};
 };
 
