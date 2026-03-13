@@ -1,6 +1,8 @@
 import { fail, error } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, PartDefinition, InventoryTransaction, LotRecord, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, PartDefinition, InventoryTransaction, InspectionProcedureRevision, LotRecord, AuditLog, generateId } from '$lib/server/db';
+import { uploadFile } from '$lib/server/box';
+import { env } from '$env/dynamic/private';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params, url }) => {
@@ -26,9 +28,10 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	if (retractedFilter === 'true') txFilter.retractedAt = { $exists: true, $ne: null };
 	if (retractedFilter === 'false') txFilter.retractedAt = { $exists: false };
 
-	const [lots, transactions] = await Promise.all([
+	const [lots, transactions, ipRevisionDocs] = await Promise.all([
 		LotRecord.find({ partDefinitionId: params.partId }).sort({ createdAt: -1 }).lean(),
-		InventoryTransaction.find(txFilter).sort({ performedAt: -1 }).limit(200).lean()
+		InventoryTransaction.find(txFilter).sort({ performedAt: -1 }).limit(200).lean(),
+		InspectionProcedureRevision.find({ partId: params.partId }).sort({ revisionNumber: -1 }).lean()
 	]);
 
 	const versions = (lots as any[]).map((l: any, idx: number) => ({
@@ -38,6 +41,9 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		lotNumber: l.lotNumber ?? '',
 		quantity: l.quantityProduced ?? l.desiredQuantity ?? 0,
 		status: l.status ?? 'completed',
+		changeType: l.changeType ?? (idx === 0 ? 'create' : 'update'),
+		changedAt: l.createdAt ?? l.startTime,
+		changeReason: l.changeReason ?? null,
 		createdAt: l.createdAt ?? l.startTime,
 		operatorName: l.operator?.username ?? null
 	}));
@@ -93,7 +99,17 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		sampleSize: p.sampleSize ?? 1,
 		percentAccepted: p.percentAccepted ?? 100,
 		partDefinitionId: p._id,
-		ipRevisions: [],
+		ipRevisions: JSON.parse(JSON.stringify((ipRevisionDocs as any[]).map((r: any) => ({
+			id: r._id,
+			revisionNumber: r.revisionNumber,
+			documentUrl: r.documentUrl,
+			renderedHtmlUrl: r.renderedHtmlUrl ?? null,
+			formDefinition: r.formDefinition ?? null,
+			changeNotes: r.changeNotes ?? null,
+			isCurrent: r.isCurrent ?? false,
+			uploadedAt: r.createdAt,
+			uploadedByName: r.uploadedBy?.username ?? null
+		})))),
 		inventoryTransactions: (transactions as any[]).map((t: any) => ({
 			id: t._id,
 			transactionType: t.transactionType ?? 'unknown',
@@ -222,5 +238,120 @@ export const actions: Actions = {
 		});
 
 		return { inspectionConfigSuccess: true };
+	},
+
+	/**
+	 * Upload a new inspection procedure revision (Word doc).
+	 * Archives old current revision and creates new one.
+	 */
+	uploadIpRevision: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+
+		const formData = await request.formData();
+		const file = formData.get('file') as File | null;
+		const changeNotes = formData.get('changeNotes')?.toString() || undefined;
+		const partDefinitionId = formData.get('partDefinitionId')?.toString() || params.partId;
+
+		if (!file || file.size === 0) {
+			return fail(400, { ipError: 'A .docx file is required' });
+		}
+
+		try {
+			// Upload the file to Box.com
+			const buffer = await file.arrayBuffer();
+			const timestamp = Date.now();
+			const fileName = `ip-${partDefinitionId}-rev-${timestamp}.docx`;
+			const folderId = env.BOX_ROOT_FOLDER_ID ?? '0';
+			const uploaded = await uploadFile(folderId, fileName, buffer);
+			const documentUrl = `https://app.box.com/files/${uploaded.id}`;
+
+			// Find the current highest revision number for this part
+			const latestRev = await InspectionProcedureRevision.findOne(
+				{ partId: partDefinitionId },
+				{ revisionNumber: 1 },
+				{ sort: { revisionNumber: -1 } }
+			).lean() as any;
+
+			const nextRevNumber = (latestRev?.revisionNumber ?? 0) + 1;
+
+			// Archive all current revisions for this part
+			await InspectionProcedureRevision.updateMany(
+				{ partId: partDefinitionId, isCurrent: true },
+				{ $set: { isCurrent: false } }
+			);
+
+			// Create new revision
+			const revision = await InspectionProcedureRevision.create({
+				_id: generateId(),
+				partId: partDefinitionId,
+				revisionNumber: nextRevNumber,
+				documentUrl,
+				uploadedBy: {
+					_id: locals.user!._id,
+					username: locals.user!.username
+				},
+				changeNotes,
+				isCurrent: true
+			});
+
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'inspection_procedure_revisions',
+				recordId: revision._id,
+				action: 'INSERT',
+				oldData: null,
+				newData: { partId: partDefinitionId, revisionNumber: nextRevNumber, documentUrl },
+				changedAt: new Date(),
+				changedBy: locals.user!._id
+			});
+
+			return { ipSuccess: true };
+		} catch (err) {
+			return fail(500, { ipError: err instanceof Error ? err.message : 'Upload failed' });
+		}
+	},
+
+	/**
+	 * Save or update the form definition JSON for an inspection procedure revision.
+	 */
+	saveFormDefinition: async ({ request, locals }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+
+		const formData = await request.formData();
+		const revisionId = formData.get('revisionId')?.toString();
+		const formDefJson = formData.get('formDefinition')?.toString();
+
+		if (!revisionId) return fail(400, { formDefError: 'Revision ID is required' });
+		if (!formDefJson) return fail(400, { formDefError: 'Form definition is required' });
+
+		let formDefinition: unknown;
+		try {
+			formDefinition = JSON.parse(formDefJson);
+		} catch {
+			return fail(400, { formDefError: 'Invalid JSON' });
+		}
+
+		const revision = await InspectionProcedureRevision.findById(revisionId) as any;
+		if (!revision) return fail(404, { formDefError: 'Revision not found' });
+
+		const oldDef = revision.formDefinition;
+		revision.formDefinition = formDefinition;
+		await revision.save();
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'inspection_procedure_revisions',
+			recordId: revisionId,
+			action: 'UPDATE',
+			oldData: { formDefinition: oldDef },
+			newData: { formDefinition },
+			changedAt: new Date(),
+			changedBy: locals.user!._id,
+			changedFields: ['formDefinition']
+		});
+
+		return { formDefSuccess: true };
 	}
 };
