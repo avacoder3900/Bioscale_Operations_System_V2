@@ -1,8 +1,11 @@
 import { redirect, fail } from '@sveltejs/kit';
-import { connectDB, ReagentBatchRecord, CartridgeRecord } from '$lib/server/db';
+import bcrypt from 'bcrypt';
+import { connectDB, ReagentBatchRecord, CartridgeRecord, User, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
+
+const SCRAP_CATEGORIES = ['dimensional', 'contamination', 'seal_failure', 'wax_defect', 'reagent_defect', 'other'] as const;
 
 export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!locals.user) redirect(302, '/login');
@@ -200,5 +203,140 @@ export const actions: Actions = {
 		}
 
 		return { success: true };
+	},
+
+	/** Scrap a cartridge that fails QC */
+	scrapCartridge: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:read');
+		await connectDB();
+
+		const data = await request.formData();
+		const cartridgeId = (data.get('cartridgeId') as string)?.trim();
+		const scrapCategory = data.get('scrapCategory') as string;
+		const notes = (data.get('notes') as string) || undefined;
+		const photoUrl = (data.get('photoUrl') as string) || undefined;
+
+		if (!cartridgeId) return fail(400, { error: 'Cartridge ID is required' });
+		if (!scrapCategory || !SCRAP_CATEGORIES.includes(scrapCategory as any)) {
+			return fail(400, { error: 'Valid scrap reason category is required' });
+		}
+
+		const cartridge = await CartridgeRecord.findById(cartridgeId).lean() as any;
+		if (!cartridge) return fail(404, { error: 'Cartridge not found' });
+		if (cartridge.currentPhase === 'voided') {
+			return fail(400, { error: 'Cartridge is already scrapped/voided' });
+		}
+
+		const now = new Date();
+
+		// Mark cartridge as scrapped (voided)
+		await CartridgeRecord.findByIdAndUpdate(cartridgeId, {
+			$set: {
+				currentPhase: 'voided',
+				voidedAt: now,
+				voidReason: `Scrapped: ${scrapCategory}${notes ? ` — ${notes}` : ''}`
+			}
+		});
+
+		// Record scrap transaction
+		await recordTransaction({
+			transactionType: 'scrap',
+			cartridgeRecordId: cartridgeId,
+			quantity: 1,
+			manufacturingStep: 'scrap',
+			operatorId: locals.user._id,
+			operatorUsername: locals.user.username,
+			scrapReason: notes ?? scrapCategory,
+			scrapCategory: scrapCategory as any,
+			photoUrl,
+			notes: `QC scrap: ${scrapCategory}${notes ? ` — ${notes}` : ''}`
+		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'cartridge_records',
+			recordId: cartridgeId,
+			action: 'UPDATE',
+			oldData: { currentPhase: cartridge.currentPhase },
+			newData: { currentPhase: 'voided', voidReason: `Scrapped: ${scrapCategory}` },
+			changedAt: now,
+			changedBy: locals.user._id,
+			reason: `QC scrap: ${scrapCategory}`
+		});
+
+		return { success: true };
+	},
+
+	/** Admin override to overturn a scrap decision */
+	overturnScrap: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:read');
+		await connectDB();
+
+		const data = await request.formData();
+		const cartridgeId = (data.get('cartridgeId') as string)?.trim();
+		const adminPassword = (data.get('adminPassword') as string) || '';
+		const reason = (data.get('reason') as string)?.trim();
+
+		if (!cartridgeId) return fail(400, { error: 'Cartridge ID is required' });
+		if (!adminPassword) return fail(400, { error: 'Admin password is required' });
+		if (!reason) return fail(400, { error: 'Reason for overturning scrap is required' });
+
+		// Verify admin password
+		const adminUser = await User.findById(locals.user._id).lean() as any;
+		if (!adminUser?.passwordHash) {
+			return fail(403, { error: 'Unable to verify credentials' });
+		}
+		const validPassword = await bcrypt.compare(adminPassword, adminUser.passwordHash);
+		if (!validPassword) {
+			return fail(403, { error: 'Invalid admin password' });
+		}
+
+		const cartridge = await CartridgeRecord.findById(cartridgeId).lean() as any;
+		if (!cartridge) return fail(404, { error: 'Cartridge not found' });
+		if (cartridge.currentPhase !== 'voided') {
+			return fail(400, { error: 'Cartridge is not in scrapped/voided state' });
+		}
+
+		const now = new Date();
+
+		// Determine the previous phase before scrap (best effort from cartridge data)
+		let restoredPhase = 'stored';
+		if (cartridge.storage?.recordedAt) restoredPhase = 'stored';
+		else if (cartridge.topSeal?.recordedAt) restoredPhase = 'sealed';
+		else if (cartridge.reagentFilling?.recordedAt) restoredPhase = 'reagent_filled';
+		else if (cartridge.waxFilling?.recordedAt) restoredPhase = 'wax_filled';
+
+		// Restore cartridge
+		await CartridgeRecord.findByIdAndUpdate(cartridgeId, {
+			$set: { currentPhase: restoredPhase },
+			$unset: { voidedAt: '', voidReason: '' }
+		});
+
+		// Record adjustment transaction
+		await recordTransaction({
+			transactionType: 'adjustment',
+			cartridgeRecordId: cartridgeId,
+			quantity: 1,
+			manufacturingStep: 'qa_qc',
+			operatorId: locals.user._id,
+			operatorUsername: locals.user.username,
+			notes: `Scrap overturned by admin: ${reason}`
+		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'cartridge_records',
+			recordId: cartridgeId,
+			action: 'UPDATE',
+			oldData: { currentPhase: 'voided' },
+			newData: { currentPhase: restoredPhase },
+			changedAt: now,
+			changedBy: locals.user._id,
+			reason: `Admin override: scrap overturned — ${reason}`
+		});
+
+		return { success: true, restoredPhase };
 	}
 };
