@@ -164,6 +164,9 @@ export const actions: Actions = {
 		const storageConditionsRequired = formData.get('storageConditionsRequired') === 'true';
 		const esdHandlingRequired = formData.get('esdHandlingRequired') === 'true';
 
+		// S6: Operator notes
+		const notes = formData.get('notes')?.toString() || undefined;
+
 		if (!lotId) return fail(400, { error: 'Lot ID (barcode) is required' });
 		if (!partId) return fail(400, { error: 'Part is required' });
 		if (!quantity || quantity <= 0) return fail(400, { error: 'Valid quantity is required' });
@@ -288,6 +291,7 @@ export const actions: Actions = {
 				esdHandlingRequired,
 				checklist,
 				formFitFunctionCheck,
+				notes,
 				photos: photoUrls,
 				additionalDocuments: docUrls,
 				overrideApplied,
