@@ -11,7 +11,8 @@ import {
 	ManufacturingMaterial,
 	ManufacturingMaterialTransaction,
 	AuditLog,
-	generateId
+	generateId,
+	generateLotNumber
 } from '$lib/server/db';
 import { env } from '$env/dynamic/private';
 import { uploadFile } from '$lib/server/box';
@@ -23,7 +24,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const [parts, currentRevisions] = await Promise.all([
 		PartDefinition.find({ isActive: true })
-			.select('partNumber name category manufacturer inspectionPathway sampleSize percentAccepted')
+			.select('partNumber name category manufacturer supplier inventoryCount inspectionPathway sampleSize percentAccepted')
 			.sort({ sortOrder: 1, name: 1 })
 			.lean(),
 		InspectionProcedureRevision.find({ isCurrent: true }).lean()
@@ -59,6 +60,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 				name: p.name ?? '',
 				category: p.category ?? null,
 				manufacturer: p.manufacturer ?? null,
+				supplier: p.supplier ?? null,
+				inventoryCount: p.inventoryCount ?? 0,
 				inspectionPathway: p.inspectionPathway ?? 'coc',
 				sampleSize: p.sampleSize ?? 1,
 				percentAccepted: p.percentAccepted ?? 100
@@ -140,6 +143,7 @@ export const actions: Actions = {
 		const poReference = formData.get('poReference')?.toString() || undefined;
 		const supplier = formData.get('supplier')?.toString() || undefined;
 		const vendorLotNumber = formData.get('vendorLotNumber')?.toString() || undefined;
+		const serialNumber = formData.get('serialNumber')?.toString() || undefined;
 		const expirationStr = formData.get('expirationDate')?.toString();
 		const expirationDate = expirationStr ? new Date(expirationStr) : undefined;
 		const ipRevisionId = formData.get('ipRevisionId')?.toString() || undefined;
@@ -240,16 +244,21 @@ export const actions: Actions = {
 		}
 
 		try {
+			// Generate system lot number (LOT-YYYYMMDD-XXXX)
+			const lotNumber = await generateLotNumber(ReceivingLot);
+
 			// Create the receiving lot
 			const lot = await ReceivingLot.create({
 				_id: generateId(),
 				lotId,
+				lotNumber,
 				part: {
 					_id: part._id,
 					partNumber: part.partNumber ?? '',
 					name: part.name ?? ''
 				},
 				quantity,
+				serialNumber,
 				operator: {
 					_id: locals.user!._id,
 					username: locals.user!.username
@@ -405,7 +414,7 @@ export const actions: Actions = {
 				});
 			}
 
-			return { success: true, lotCreated: true, lotId: lot._id };
+			return { success: true, lotCreated: true, lotId: lot._id, lotNumber };
 		} catch (err) {
 			console.error('[receiving/new] createLot error:', err);
 			return fail(500, { error: err instanceof Error ? err.message : 'Failed to create lot' });
