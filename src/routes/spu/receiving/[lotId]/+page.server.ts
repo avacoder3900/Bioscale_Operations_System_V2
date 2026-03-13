@@ -106,13 +106,16 @@ export const actions: Actions = {
 			await InventoryTransaction.create({
 				_id: generateId(),
 				partDefinitionId: partId,
+				lotId: lot._id,
 				transactionType: 'receipt',
 				quantity,
 				previousQuantity: prevCount,
 				newQuantity: newCount,
 				reason: `Received lot ${lot.lotId} (${lot.lotNumber})`,
 				performedBy: locals.user!._id,
-				performedAt: now
+				performedAt: now,
+				operatorId: locals.user!._id,
+				operatorUsername: locals.user!.username
 			});
 
 			// Sync ManufacturingMaterial if linked

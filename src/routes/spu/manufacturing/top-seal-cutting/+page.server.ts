@@ -1,5 +1,6 @@
 import { redirect, fail } from '@sveltejs/kit';
 import { connectDB, Consumable, ManufacturingSettings, generateId } from '$lib/server/db';
+import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -136,6 +137,16 @@ export const actions: Actions = {
 					createdAt: now
 				}
 			}
+		});
+
+		// Record inventory transaction for top seal consumption
+		await recordTransaction({
+			transactionType: 'consumption',
+			quantity: quantityCut,
+			manufacturingStep: 'cut_thermoseal',
+			operatorId: locals.user._id,
+			operatorUsername: locals.user.username,
+			notes: `Cut ${quantityCut} top seal strips from roll ${rollId}${notes ? ` — ${notes}` : ''}`
 		});
 
 		return { success: true };

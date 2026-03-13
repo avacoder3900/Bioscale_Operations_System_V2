@@ -3,6 +3,7 @@ import {
 	connectDB, LaserCutBatch, ManufacturingSettings, ManufacturingMaterial,
 	ManufacturingMaterialTransaction, generateId
 } from '$lib/server/db';
+import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -128,6 +129,16 @@ export const actions: Actions = {
 				});
 			}
 		}
+
+		// Record inventory transaction for laser cutting
+		await recordTransaction({
+			transactionType: 'creation',
+			quantity: outputSheetCount,
+			manufacturingStep: 'laser_cut',
+			operatorId: locals.user._id,
+			operatorUsername: locals.user.username,
+			notes: `Laser cut batch: ${inputSheetCount} input → ${outputSheetCount} output (${failureCount} failures)`
+		});
 
 		return { success: true };
 	},

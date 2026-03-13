@@ -1,6 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, CartridgeRecord } from '$lib/server/db';
+import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 
 const FRIDGES = ['fridge-1', 'fridge-2', 'fridge-3', 'fridge-4'] as const;
@@ -98,6 +99,19 @@ export const actions: Actions = {
 				}
 			}
 		);
+
+		// Record storage transactions
+		for (const cid of cartridgeIds) {
+			await recordTransaction({
+				transactionType: 'creation',
+				cartridgeRecordId: cid,
+				quantity: 1,
+				manufacturingStep: 'storage',
+				operatorId: locals.user?._id,
+				operatorUsername: locals.user?.username,
+				notes: `Stored in ${fridgeId}${containerBarcode ? `, container ${containerBarcode}` : ''}`
+			});
+		}
 
 		return { message: `${cartridgeIds.length} cartridges stored in ${fridgeId}` };
 	}

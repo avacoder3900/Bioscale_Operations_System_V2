@@ -1,6 +1,7 @@
 import { redirect, fail } from '@sveltejs/kit';
 import { connectDB, ReagentBatchRecord, CartridgeRecord } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
+import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -169,6 +170,33 @@ export const actions: Actions = {
 				}
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
+
+			// Record QA/QC transactions
+			for (const cid of sampleIds) {
+				if (normalizedResult === 'fail') {
+					await recordTransaction({
+						transactionType: 'scrap',
+						cartridgeRecordId: cid,
+						quantity: 1,
+						manufacturingStep: 'qa_qc',
+						manufacturingRunId: releaseId,
+						operatorId: locals.user._id,
+						operatorUsername: locals.user.username,
+						notes: `QA/QC failed${notes ? `: ${notes}` : ''}`
+					});
+				} else {
+					await recordTransaction({
+						transactionType: 'creation',
+						cartridgeRecordId: cid,
+						quantity: 1,
+						manufacturingStep: 'qa_qc',
+						manufacturingRunId: releaseId,
+						operatorId: locals.user._id,
+						operatorUsername: locals.user.username,
+						notes: `QA/QC passed — released (lot ${shippingLotId ?? 'unknown'})`
+					});
+				}
+			}
 		}
 
 		return { success: true };

@@ -2,6 +2,7 @@ import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId
 } from '$lib/server/db';
+import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 
 // Extend Vercel serverless timeout to 60s (default is 10s)
@@ -425,6 +426,21 @@ export const actions: Actions = {
 				}
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
+
+			// Record inventory transactions for each cartridge (serialized)
+			for (const cid of run.cartridgeIds) {
+				await recordTransaction({
+					transactionType: 'creation',
+					cartridgeRecordId: cid,
+					lotId: run.waxSourceLot ?? undefined,
+					quantity: 1,
+					manufacturingStep: 'wax_filling',
+					manufacturingRunId: String(run._id),
+					operatorId: run.operator?._id,
+					operatorUsername: run.operator?.username,
+					notes: `Wax-filled cartridge created in run ${run._id}`
+				});
+			}
 		}
 
 		return { success: true };
@@ -482,6 +498,20 @@ export const actions: Actions = {
 				}
 			}
 		);
+
+		// Record scrap transaction
+		await recordTransaction({
+			transactionType: 'scrap',
+			cartridgeRecordId: cartridgeId,
+			quantity: 1,
+			manufacturingStep: 'wax_filling',
+			operatorId: locals.user._id,
+			operatorUsername: locals.user.username,
+			scrapReason: rejectionReason,
+			scrapCategory: 'wax_defect',
+			notes: `Wax QC rejection: ${rejectionReason}`
+		});
+
 		return { success: true };
 	},
 
@@ -520,6 +550,19 @@ export const actions: Actions = {
 				}
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
+
+			// Record storage transactions
+			for (const cid of cartridgeIds) {
+				await recordTransaction({
+					transactionType: 'creation',
+					cartridgeRecordId: cid,
+					quantity: 1,
+					manufacturingStep: 'storage',
+					operatorId: locals.user._id,
+					operatorUsername: locals.user.username,
+					notes: `Wax storage: ${location}${coolingTrayId ? `, tray ${coolingTrayId}` : ''}`
+				});
+			}
 		}
 
 		return { success: true };

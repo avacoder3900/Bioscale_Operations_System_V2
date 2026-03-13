@@ -3,6 +3,7 @@ import {
 	connectDB, ReagentBatchRecord, AssayDefinition, CartridgeRecord, Consumable,
 	ManufacturingSettings, WaxFillingRun, generateId
 } from '$lib/server/db';
+import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -387,6 +388,20 @@ export const actions: Actions = {
 				}
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
+
+			// Record inventory transactions for reagent filling
+			for (const cf of run.cartridgesFilled) {
+				await recordTransaction({
+					transactionType: 'creation',
+					cartridgeRecordId: cf.cartridgeId,
+					quantity: 1,
+					manufacturingStep: 'reagent_filling',
+					manufacturingRunId: String(run._id),
+					operatorId: run.operator?._id,
+					operatorUsername: run.operator?.username,
+					notes: `Reagent-filled cartridge (assay: ${run.assayType?.name ?? 'unknown'})`
+				});
+			}
 		}
 
 		return { success: true };
@@ -445,6 +460,20 @@ export const actions: Actions = {
 					}
 				}
 			);
+
+			// Record scrap transaction for rejected cartridge
+			await recordTransaction({
+				transactionType: 'scrap',
+				cartridgeRecordId: rej.cartridgeId,
+				quantity: 1,
+				manufacturingStep: 'reagent_filling',
+				manufacturingRunId: runId,
+				operatorId: locals.user._id,
+				operatorUsername: locals.user.username,
+				scrapReason: rej.reason ?? 'Reagent inspection rejection',
+				scrapCategory: 'reagent_defect',
+				notes: `Reagent inspection rejection: ${rej.reason ?? 'No reason provided'}`
+			});
 		}
 
 		return { success: true };
@@ -559,6 +588,21 @@ export const actions: Actions = {
 				}
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
+
+			// Record top seal transactions
+			for (const cid of batch.cartridgeIds) {
+				await recordTransaction({
+					transactionType: 'creation',
+					cartridgeRecordId: cid,
+					quantity: 1,
+					manufacturingStep: 'top_seal',
+					manufacturingRunId: runId,
+					operatorId: locals.user._id,
+					operatorUsername: locals.user.username,
+					lotId: batch.topSealLotId ?? undefined,
+					notes: `Top seal applied (batch ${batchId})`
+				});
+			}
 		}
 
 		return { success: true };
@@ -620,6 +664,20 @@ export const actions: Actions = {
 				}
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
+
+			// Record storage transactions
+			for (const cid of cartridgeIds) {
+				await recordTransaction({
+					transactionType: 'creation',
+					cartridgeRecordId: cid,
+					quantity: 1,
+					manufacturingStep: 'storage',
+					manufacturingRunId: runId,
+					operatorId: locals.user._id,
+					operatorUsername: locals.user.username,
+					notes: `Stored in ${location}`
+				});
+			}
 		}
 
 		return { success: true };
