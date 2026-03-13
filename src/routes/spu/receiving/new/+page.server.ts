@@ -151,7 +151,14 @@ export const actions: Actions = {
 		const inspectionResultsJson = formData.get('inspectionResults')?.toString();
 		const overrideApplied = formData.get('overrideApplied') === 'true';
 		const overrideReason = formData.get('overrideReason')?.toString() || undefined;
-		const status = (formData.get('status')?.toString() as 'accepted' | 'rejected') || 'accepted';
+		const status = (formData.get('status')?.toString() as 'accepted' | 'rejected' | 'returned' | 'other') || 'accepted';
+
+		// S2: Generic receiving checklist
+		const checklistJson = formData.get('checklist')?.toString();
+		const checklist = checklistJson ? JSON.parse(checklistJson) : undefined;
+		const formFitFunctionCheck = formData.get('formFitFunctionCheck')?.toString() || undefined;
+		const storageConditionsRequired = formData.get('storageConditionsRequired') === 'true';
+		const esdHandlingRequired = formData.get('esdHandlingRequired') === 'true';
 
 		if (!lotId) return fail(400, { error: 'Lot ID (barcode) is required' });
 		if (!partId) return fail(400, { error: 'Part is required' });
@@ -271,6 +278,10 @@ export const actions: Actions = {
 				supplier,
 				vendorLotNumber,
 				expirationDate,
+				storageConditionsRequired,
+				esdHandlingRequired,
+				checklist,
+				formFitFunctionCheck,
 				photos: photoUrls,
 				additionalDocuments: docUrls,
 				overrideApplied,
