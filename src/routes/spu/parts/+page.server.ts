@@ -158,6 +158,73 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
+	createCartridgePart: async ({ request, locals }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+		const form = await request.formData();
+		const partNumber = form.get('partNumber')?.toString().trim();
+		const name = form.get('name')?.toString().trim();
+		if (!partNumber || !name) return fail(400, { error: 'Part number and name are required' });
+
+		const existing = await PartDefinition.findOne({ partNumber });
+		if (existing) return fail(400, { error: 'Part number already exists' });
+
+		const newPart = await PartDefinition.create({
+			_id: generateId(),
+			partNumber,
+			name,
+			category: form.get('category')?.toString().trim() || undefined,
+			manufacturer: form.get('manufacturer')?.toString().trim() || undefined,
+			supplier: form.get('supplier')?.toString().trim() || undefined,
+			unitCost: form.get('unitCost')?.toString().trim() || undefined,
+			quantityPerUnit: form.get('quantityPerUnit') ? Number(form.get('quantityPerUnit')) : 1,
+			unitOfMeasure: form.get('unitOfMeasure')?.toString().trim() || 'ea',
+			inventoryCount: form.get('inventoryCount') ? Number(form.get('inventoryCount')) : 0,
+			minimumOrderQty: form.get('minimumStockLevel') ? Number(form.get('minimumStockLevel')) : 0,
+			description: form.get('description')?.toString().trim() || undefined,
+			bomType: 'cartridge',
+			isActive: true,
+			createdBy: locals.user!._id
+		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'part_definitions',
+			recordId: newPart._id,
+			action: 'INSERT',
+			newData: { partNumber, name, bomType: 'cartridge' },
+			changedAt: new Date(),
+			changedBy: locals.user!.username
+		});
+
+		return { success: true };
+	},
+
+	deleteCartridgePart: async ({ request, locals }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+		const form = await request.formData();
+		const id = form.get('id')?.toString();
+		if (!id) return fail(400, { error: 'Part ID required' });
+
+		const part = await PartDefinition.findById(id).lean() as any;
+		if (!part) return fail(404, { error: 'Part not found' });
+
+		await PartDefinition.deleteOne({ _id: id });
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'part_definitions',
+			recordId: id,
+			action: 'DELETE',
+			oldData: { partNumber: part.partNumber, name: part.name, bomType: part.bomType },
+			changedAt: new Date(),
+			changedBy: locals.user!.username
+		});
+
+		return { success: true };
+	},
+
 	sync: async ({ locals }) => {
 		requirePermission(locals.user, 'inventory:write');
 		try {

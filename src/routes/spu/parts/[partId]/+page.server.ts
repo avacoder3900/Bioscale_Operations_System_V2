@@ -1,6 +1,6 @@
 import { fail, error } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, PartDefinition, InventoryTransaction, LotRecord, generateId } from '$lib/server/db';
+import { connectDB, PartDefinition, InventoryTransaction, LotRecord, AuditLog, generateId } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params, url }) => {
@@ -65,6 +65,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			unitCost: p.unitCost ? Number(p.unitCost) : null,
 			unit: p.unitOfMeasure ?? 'ea',
 			unitOfMeasure: p.unitOfMeasure ?? 'ea',
+			quantityPerUnit: p.quantityPerUnit ?? null,
 			minimumStockLevel: p.minimumOrderQty ?? null,
 			reorderPoint: p.minimumOrderQty ?? null,
 			supplier: p.supplier ?? null,
@@ -80,9 +81,19 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			isActive: p.isActive ?? true,
 			sampleSize: p.sampleSize ?? 0,
 			percentAccepted: p.percentAccepted ?? 100,
+			bomType: p.bomType ?? null,
+			boxRowIndex: p.boxRowIndex ?? null,
+			inspectionConfig: {
+				sampleSize: p.sampleSize ?? 1,
+				percentAccepted: p.percentAccepted ?? 100
+			},
 			createdAt: p.createdAt,
 			updatedAt: p.updatedAt
 		},
+		sampleSize: p.sampleSize ?? 1,
+		percentAccepted: p.percentAccepted ?? 100,
+		partDefinitionId: p._id,
+		ipRevisions: [],
 		inventoryTransactions: (transactions as any[]).map((t: any) => ({
 			id: t._id,
 			transactionType: t.transactionType ?? 'unknown',
@@ -145,5 +156,71 @@ export const actions: Actions = {
 		}
 		await InventoryTransaction.updateOne({ _id: transactionId }, { $set: { retractedAt: new Date(), retractedBy: locals.user!.username, retractionReason: reason } });
 		return { success: true };
+	},
+
+	updateMinStockLevel: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+		const form = await request.formData();
+		const minimumStockLevel = Number(form.get('minimumStockLevel'));
+		if (isNaN(minimumStockLevel) || minimumStockLevel < 0) {
+			return fail(400, { error: 'Invalid minimum stock level' });
+		}
+		const part = await PartDefinition.findById(params.partId) as any;
+		if (!part) return fail(404, { error: 'Part not found' });
+
+		const oldValue = part.minimumOrderQty ?? 0;
+		part.minimumOrderQty = minimumStockLevel;
+		await part.save();
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'part_definitions',
+			recordId: params.partId,
+			action: 'UPDATE',
+			oldData: { minimumOrderQty: oldValue },
+			newData: { minimumOrderQty: minimumStockLevel },
+			changedAt: new Date(),
+			changedBy: locals.user!.username,
+			changedFields: ['minimumOrderQty']
+		});
+
+		return { success: true };
+	},
+
+	updateInspectionConfig: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+		const form = await request.formData();
+		const sampleSize = Number(form.get('sampleSize'));
+		const percentAccepted = Number(form.get('percentAccepted'));
+		if (isNaN(sampleSize) || sampleSize < 1) {
+			return fail(400, { inspectionConfigError: 'Sample size must be at least 1' });
+		}
+		if (isNaN(percentAccepted) || percentAccepted < 0 || percentAccepted > 100) {
+			return fail(400, { inspectionConfigError: 'Percent accepted must be between 0 and 100' });
+		}
+		const part = await PartDefinition.findById(params.partId) as any;
+		if (!part) return fail(404, { inspectionConfigError: 'Part not found' });
+
+		const oldSampleSize = part.sampleSize ?? 0;
+		const oldPercentAccepted = part.percentAccepted ?? 100;
+		part.sampleSize = sampleSize;
+		part.percentAccepted = percentAccepted;
+		await part.save();
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'part_definitions',
+			recordId: params.partId,
+			action: 'UPDATE',
+			oldData: { sampleSize: oldSampleSize, percentAccepted: oldPercentAccepted },
+			newData: { sampleSize, percentAccepted },
+			changedAt: new Date(),
+			changedBy: locals.user!.username,
+			changedFields: ['sampleSize', 'percentAccepted']
+		});
+
+		return { inspectionConfigSuccess: true };
 	}
 };
