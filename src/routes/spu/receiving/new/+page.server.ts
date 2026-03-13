@@ -140,6 +140,7 @@ export const actions: Actions = {
 		const quantity = Number(formData.get('quantity'));
 		const pathway = formData.get('pathway')?.toString() as 'coc' | 'ip';
 		const cocDocumentUrl = formData.get('cocDocumentUrl')?.toString() || undefined;
+		const cocMeetsStandards = formData.has('cocMeetsStandards') ? formData.get('cocMeetsStandards') === 'true' : undefined;
 		const poReference = formData.get('poReference')?.toString() || undefined;
 		const supplier = formData.get('supplier')?.toString() || undefined;
 		const vendorLotNumber = formData.get('vendorLotNumber')?.toString() || undefined;
@@ -275,6 +276,7 @@ export const actions: Actions = {
 				},
 				inspectionPathway: pathway,
 				cocDocumentUrl,
+				cocMeetsStandards,
 				ipResults: ipResultsSummary,
 				ipRevisionId,
 				firstArticleInspection,
