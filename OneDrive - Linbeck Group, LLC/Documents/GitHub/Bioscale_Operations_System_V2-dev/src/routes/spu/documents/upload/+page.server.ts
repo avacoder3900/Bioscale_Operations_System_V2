@@ -14,21 +14,26 @@ export const actions: Actions = {
 	upload: async ({ request, locals }) => {
 		await connectDB();
 		const form = await request.formData();
-		const file = form.get('file') as File | null;
+
+		// Get all 'file' fields — the enhance handler sets the real file,
+		// but a hidden input with the same name may also exist. Pick the actual File.
+		const fileEntries = form.getAll('file');
+		const file = fileEntries.find((f): f is File => f instanceof File && f.size > 0) as File | undefined;
 		const title = form.get('title')?.toString().trim() || undefined;
 		const description = form.get('description')?.toString().trim() || undefined;
 
 		if (!file || file.size === 0) return fail(400, { error: 'File is required' });
 
 		const fileName = file.name.toLowerCase();
-		const isWorkInstruction = fileName.includes('wimf') || fileName.includes('wi-') || fileName.includes('work instruction');
+		const isWorkInstruction = fileName.includes('wimf') || fileName.includes('wi-')
+			|| fileName.includes('work instruction') || fileName.includes('work_instruction')
+			|| fileName.endsWith('.pdf') || fileName.endsWith('.docx');
 
-		if (isWorkInstruction) {
-			// Check WI write permission
-			if (!hasPermission(locals.user, 'workInstruction:write')) {
-				return fail(403, { error: 'Permission denied: requires workInstruction:write' });
-			}
+		const id = generateId();
+		const now = new Date();
+		const username = locals.user?.username ?? 'system';
 
+		if (isWorkInstruction && hasPermission(locals.user, 'workInstruction:write')) {
 			const docNumber = extractDocumentNumber(file.name);
 			// Check for duplicate document number
 			if (docNumber) {
@@ -41,30 +46,28 @@ export const actions: Actions = {
 				}
 			}
 
-			const id = generateId();
-			const now = new Date();
-
 			await WorkInstruction.create({
 				_id: id,
 				title: title || file.name.replace(/\.(pdf|docx)$/i, ''),
 				documentNumber: docNumber || `WI-${id.slice(0, 8).toUpperCase()}`,
+				originalFileName: file.name,
+				fileSize: file.size,
+				mimeType: file.type || 'application/octet-stream',
 				status: 'draft',
 				currentVersion: 1,
 				versions: [{
 					version: 1,
 					content: description || '',
 					steps: [],
-					createdAt: now,
-					createdBy: { _id: locals.user!._id, username: locals.user!.username }
+					createdAt: now
 				}],
-				createdAt: now,
-				updatedAt: now
+				createdBy: username
 			});
 
 			await AuditLog.create({
 				_id: generateId(), tableName: 'work_instructions', recordId: id,
 				action: 'INSERT', newData: { title, documentNumber: docNumber, fileName: file.name },
-				changedAt: now, changedBy: locals.user?.username ?? 'system'
+				changedAt: now, changedBy: username
 			});
 
 			return {
@@ -85,16 +88,12 @@ export const actions: Actions = {
 				return fail(403, { error: 'Permission denied: requires documentRepo:write' });
 			}
 
-			const id = generateId();
-			const now = new Date();
-
 			await DocumentRepository.create({
 				_id: id,
 				fileName: file.name,
 				originalFileName: file.name,
 				fileSize: file.size,
 				mimeType: file.type || 'application/octet-stream',
-				category: undefined,
 				description: title,
 				uploadedAt: now,
 				uploadedBy: locals.user?._id
@@ -103,7 +102,7 @@ export const actions: Actions = {
 			await AuditLog.create({
 				_id: generateId(), tableName: 'document_repository', recordId: id,
 				action: 'INSERT', newData: { fileName: file.name },
-				changedAt: now, changedBy: locals.user?.username ?? 'system'
+				changedAt: now, changedBy: username
 			});
 
 			return {
