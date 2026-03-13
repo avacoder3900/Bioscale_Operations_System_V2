@@ -152,7 +152,7 @@ export const actions: Actions = {
 		const inspectionResultsJson = formData.get('inspectionResults')?.toString();
 		const overrideApplied = formData.get('overrideApplied') === 'true';
 		const overrideReason = formData.get('overrideReason')?.toString() || undefined;
-		const status = (formData.get('status')?.toString() as 'accepted' | 'rejected' | 'returned' | 'other') || 'accepted';
+		const status = (formData.get('status')?.toString() as 'in_progress' | 'accepted' | 'rejected' | 'returned' | 'other') || 'accepted';
 
 		// S3: First Article Inspection flag
 		const firstArticleInspection = formData.get('firstArticleInspection') === 'true';
@@ -166,6 +166,12 @@ export const actions: Actions = {
 
 		// S6: Operator notes
 		const notes = formData.get('notes')?.toString() || undefined;
+
+		// S7: Disposition fields
+		const totalRejects = formData.has('totalRejects') ? Number(formData.get('totalRejects')) : undefined;
+		const defectDescription = formData.get('defectDescription')?.toString() || undefined;
+		const rmaNumber = formData.get('rmaNumber')?.toString() || undefined;
+		const dispositionExplanation = formData.get('dispositionExplanation')?.toString() || undefined;
 
 		if (!lotId) return fail(400, { error: 'Lot ID (barcode) is required' });
 		if (!partId) return fail(400, { error: 'Part is required' });
@@ -300,6 +306,16 @@ export const actions: Actions = {
 					? { _id: locals.user!._id, username: locals.user!.username }
 					: undefined,
 				overrideAt: overrideApplied ? new Date() : undefined,
+				dispositionType: status !== 'in_progress' ? status : undefined,
+				totalRejects,
+				defectDescription,
+				ncNumber: status === 'rejected' ? `NC-${Date.now()}` : undefined,
+				rmaNumber,
+				dispositionExplanation,
+				disposedAt: status !== 'in_progress' ? new Date() : undefined,
+				disposedBy: status !== 'in_progress'
+					? { _id: locals.user!._id, username: locals.user!.username }
+					: undefined,
 				status
 			});
 
