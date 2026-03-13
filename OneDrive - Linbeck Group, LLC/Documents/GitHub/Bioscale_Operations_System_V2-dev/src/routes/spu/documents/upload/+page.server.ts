@@ -12,8 +12,20 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 export const actions: Actions = {
 	upload: async ({ request, locals }) => {
-		await connectDB();
-		const form = await request.formData();
+		try {
+			await connectDB();
+		} catch (e) {
+			console.error('DB connection failed in upload action:', e);
+			return fail(500, { error: 'Database connection failed' });
+		}
+
+		let form: FormData;
+		try {
+			form = await request.formData();
+		} catch (e) {
+			console.error('Failed to parse form data:', e);
+			return fail(400, { error: 'Failed to parse upload. File may be too large (max ~4.5MB on Vercel).' });
+		}
 
 		// Get all 'file' fields — the enhance handler sets the real file,
 		// but a hidden input with the same name may also exist. Pick the actual File.
@@ -22,7 +34,7 @@ export const actions: Actions = {
 		const title = form.get('title')?.toString().trim() || undefined;
 		const description = form.get('description')?.toString().trim() || undefined;
 
-		if (!file || file.size === 0) return fail(400, { error: 'File is required' });
+		if (!file || file.size === 0) return fail(400, { error: 'No file received. Please select a file and try again.' });
 
 		const fileName = file.name.toLowerCase();
 		const isWorkInstruction = fileName.includes('wimf') || fileName.includes('wi-')
@@ -33,87 +45,92 @@ export const actions: Actions = {
 		const now = new Date();
 		const username = locals.user?.username ?? 'system';
 
-		if (isWorkInstruction && hasPermission(locals.user, 'workInstruction:write')) {
-			const docNumber = extractDocumentNumber(file.name);
-			// Check for duplicate document number
-			if (docNumber) {
-				const existing = await WorkInstruction.findOne({ documentNumber: docNumber }).lean() as any;
-				if (existing) {
-					return fail(409, {
-						error: `Work instruction ${docNumber} already exists`,
-						existingId: existing._id
-					});
+		try {
+			if (isWorkInstruction && hasPermission(locals.user, 'workInstruction:write')) {
+				const docNumber = extractDocumentNumber(file.name);
+				// Check for duplicate document number
+				if (docNumber) {
+					const existing = await WorkInstruction.findOne({ documentNumber: docNumber }).lean() as any;
+					if (existing) {
+						return fail(409, {
+							error: `Work instruction ${docNumber} already exists`,
+							existingId: existing._id
+						});
+					}
 				}
-			}
 
-			await WorkInstruction.create({
-				_id: id,
-				title: title || file.name.replace(/\.(pdf|docx)$/i, ''),
-				documentNumber: docNumber || `WI-${id.slice(0, 8).toUpperCase()}`,
-				originalFileName: file.name,
-				fileSize: file.size,
-				mimeType: file.type || 'application/octet-stream',
-				status: 'draft',
-				currentVersion: 1,
-				versions: [{
-					version: 1,
-					content: description || '',
-					steps: [],
-					createdAt: now
-				}],
-				createdBy: username
-			});
+				await WorkInstruction.create({
+					_id: id,
+					title: title || file.name.replace(/\.(pdf|docx)$/i, ''),
+					documentNumber: docNumber || `WI-${id.slice(0, 8).toUpperCase()}`,
+					originalFileName: file.name,
+					fileSize: file.size,
+					mimeType: file.type || 'application/octet-stream',
+					status: 'draft',
+					currentVersion: 1,
+					versions: [{
+						version: 1,
+						content: description || '',
+						steps: [],
+						createdAt: now
+					}],
+					createdBy: username
+				});
 
-			await AuditLog.create({
-				_id: generateId(), tableName: 'work_instructions', recordId: id,
-				action: 'INSERT', newData: { title, documentNumber: docNumber, fileName: file.name },
-				changedAt: now, changedBy: username
-			});
+				await AuditLog.create({
+					_id: generateId(), tableName: 'work_instructions', recordId: id,
+					action: 'INSERT', newData: { title, documentNumber: docNumber, fileName: file.name },
+					changedAt: now, changedBy: username
+				});
 
-			return {
-				success: true,
-				type: 'work_instruction' as const,
-				workInstructionId: id,
-				parsed: {
-					docType: 'work_instruction',
-					documentNumber: docNumber,
-					title: title || file.name,
+				return {
+					success: true,
+					type: 'work_instruction' as const,
+					workInstructionId: id,
+					parsed: {
+						docType: 'work_instruction',
+						documentNumber: docNumber,
+						title: title || file.name,
+						fileName: file.name,
+						steps: []
+					}
+				};
+			} else {
+				// Regular document upload
+				if (!hasPermission(locals.user, 'documentRepo:write')) {
+					return fail(403, { error: 'Permission denied: requires documentRepo:write' });
+				}
+
+				await DocumentRepository.create({
+					_id: id,
 					fileName: file.name,
-					steps: []
-				}
-			};
-		} else {
-			// Regular document upload
-			if (!hasPermission(locals.user, 'documentRepo:write')) {
-				return fail(403, { error: 'Permission denied: requires documentRepo:write' });
+					originalFileName: file.name,
+					fileSize: file.size,
+					mimeType: file.type || 'application/octet-stream',
+					description: title,
+					uploadedAt: now,
+					uploadedBy: locals.user?._id
+				});
+
+				await AuditLog.create({
+					_id: generateId(), tableName: 'document_repository', recordId: id,
+					action: 'INSERT', newData: { fileName: file.name },
+					changedAt: now, changedBy: username
+				});
+
+				return {
+					success: true,
+					type: 'document' as const,
+					documentId: id,
+					parsed: {
+						fileName: file.name,
+						docType: 'document'
+					}
+				};
 			}
-
-			await DocumentRepository.create({
-				_id: id,
-				fileName: file.name,
-				originalFileName: file.name,
-				fileSize: file.size,
-				mimeType: file.type || 'application/octet-stream',
-				description: title,
-				uploadedAt: now,
-				uploadedBy: locals.user?._id
-			});
-
-			await AuditLog.create({
-				_id: generateId(), tableName: 'document_repository', recordId: id,
-				action: 'INSERT', newData: { fileName: file.name },
-				changedAt: now, changedBy: username
-			});
-
-			return {
-				success: true,
-				type: 'document' as const,
-				documentId: id,
-				parsed: {
-					fileName: file.name,
-					docType: 'document'
-				}
-			};
+		} catch (e: any) {
+			console.error('Upload action error:', e);
+			return fail(500, { error: `Upload failed: ${e.message || 'Unknown error'}` });
 		}
 	}
 };
