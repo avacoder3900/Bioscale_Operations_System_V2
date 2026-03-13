@@ -13,7 +13,7 @@
 		title: string;
 		description: string | null;
 		status: string;
-		priority: string;
+		prioritized: boolean;
 		taskLength: string;
 		assignedTo: string | null;
 		assigneeName: string | null;

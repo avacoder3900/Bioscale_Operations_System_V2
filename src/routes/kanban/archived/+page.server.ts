@@ -14,7 +14,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			title: t.title,
 			description: t.description ?? null,
 			status: t.status,
-			priority: t.priority,
+			prioritized: t.prioritized ?? false,
 			taskLength: t.taskLength,
 			projectId: t.project?._id ?? null,
 			assignedTo: t.assignee?._id ?? null,

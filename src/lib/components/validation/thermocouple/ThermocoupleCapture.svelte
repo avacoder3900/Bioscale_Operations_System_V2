@@ -180,13 +180,14 @@
 	async function readSerial() {
 		if (!port?.readable) return;
 
-		reader = port.readable.getReader();
+		const activeReader = port.readable.getReader();
+		reader = activeReader;
 		const decoder = new TextDecoder();
 		let buffer = '';
 
 		try {
 			while (captureState === 'capturing') {
-				const { value, done } = await reader.read();
+				const { value, done } = await activeReader.read();
 				if (done) break;
 
 				buffer += decoder.decode(value, { stream: true });

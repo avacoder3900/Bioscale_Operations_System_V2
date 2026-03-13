@@ -10,12 +10,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const tasks = await KanbanTask.find({ archived: false }).sort({ sortOrder: 1 }).lean();
 
 	return {
+		currentUserId: locals.user._id as string,
 		tasks: tasks.map((t: any) => ({
 			id: t._id,
 			title: t.title,
 			description: t.description ?? null,
 			status: t.status,
-			priority: t.priority,
+			prioritized: t.prioritized ?? false,
 			taskLength: t.taskLength,
 			projectId: t.project?._id ?? null,
 			assignedTo: t.assignee?._id ?? null,
@@ -46,7 +47,7 @@ export const actions: Actions = {
 		if (!title?.trim()) return fail(400, { error: 'Title is required' });
 
 		const status = (fd.get('status') as string) || 'backlog';
-		const priority = (fd.get('priority') as string) || 'medium';
+		const prioritized = fd.get('prioritized') === 'true';
 		const taskLength = (fd.get('taskLength') as string) || 'medium';
 		const projectId = fd.get('projectId') as string | null;
 		const assignedTo = fd.get('assignedTo') as string | null;
@@ -72,7 +73,7 @@ export const actions: Actions = {
 			title: title.trim(),
 			description: description || undefined,
 			status,
-			priority,
+			prioritized,
 			taskLength,
 			project,
 			assignee,

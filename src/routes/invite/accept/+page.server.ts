@@ -9,11 +9,24 @@ export const load: PageServerLoad = async ({ url }) => {
 	if (!token) return { error: 'No invitation token provided' };
 
 	await connectDB();
-	const invite = await InviteToken.findOne({ token, status: 'pending' }).lean();
-	if (!invite) return { error: 'Invalid or expired invitation' };
-	if (new Date(invite.expiresAt) < new Date()) return { error: 'Invitation has expired' };
+	const inviteDoc = await InviteToken.findOne({ token, status: 'pending' }).lean() as any;
+	if (!inviteDoc) return { error: 'Invalid or expired invitation' };
+	if (new Date(inviteDoc.expiresAt) < new Date()) return { error: 'Invitation has expired' };
 
-	return { email: invite.email, token };
+	// Resolve role name if roleId is set
+	let roleName: string | null = null;
+	if (inviteDoc.roleId) {
+		const role = await Role.findById(inviteDoc.roleId).lean() as any;
+		roleName = role?.name ?? null;
+	}
+
+	return {
+		invite: {
+			email: inviteDoc.email,
+			token,
+			roleName
+		}
+	};
 };
 
 export const actions: Actions = {

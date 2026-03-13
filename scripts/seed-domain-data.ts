@@ -620,25 +620,25 @@ async function seed() {
 	await upsertMany(db, 'kanbantasks', [
 		{
 			_id: id(), title: 'Calibrate spectrophotometer', description: 'Monthly calibration due',
-			status: 'todo', priority: 'high', projectId: actualProjects[0]?._id,
+			status: 'todo', priority: 'critical', projectId: actualProjects[0]?._id,
 			assignedTo: operator._id, createdBy: admin._id,
 			archived: false, createdAt: ago(3), updatedAt: ago(1)
 		},
 		{
 			_id: id(), title: 'Order new wax tubes', description: 'Running low on WAX-LOT-002',
-			status: 'in_progress', priority: 'medium', projectId: actualProjects[0]?._id,
+			status: 'in_progress', priority: 'ready', projectId: actualProjects[0]?._id,
 			assignedTo: admin._id, createdBy: admin._id,
 			archived: false, createdAt: ago(5), updatedAt: hoursAgo(2)
 		},
 		{
 			_id: id(), title: 'Review QC rejection trends', description: 'Monthly analysis',
-			status: 'done', priority: 'low', projectId: actualProjects[1]?._id,
+			status: 'done', priority: 'queued', projectId: actualProjects[1]?._id,
 			assignedTo: admin._id, createdBy: admin._id,
 			archived: false, createdAt: ago(10), updatedAt: ago(2)
 		},
 		{
 			_id: id(), title: 'Update reagent filling SOP', description: 'Incorporate new buffer protocol',
-			status: 'todo', priority: 'medium', projectId: actualProjects[1]?._id,
+			status: 'todo', priority: 'ready', projectId: actualProjects[1]?._id,
 			assignedTo: operator._id, createdBy: admin._id,
 			archived: false, createdAt: ago(2), updatedAt: ago(1)
 		}

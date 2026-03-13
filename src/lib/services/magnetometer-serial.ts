@@ -188,12 +188,13 @@ export class MagnetometerSerial {
 			return;
 		}
 
-		this.reader = this.port.readable.getReader();
+		const reader = this.port.readable.getReader();
+		this.reader = reader;
 		const decoder = new TextDecoder();
 
 		try {
 			while (true) {
-				const { value, done } = await this.reader.read();
+				const { value, done } = await reader.read();
 
 				if (done) {
 					break;

@@ -8,7 +8,7 @@ const kanbanTaskSchema = new Schema({
 	title: { type: String, required: true },
 	description: String,
 	status: { type: String, enum: ['backlog', 'ready', 'wip', 'waiting', 'done'], default: 'backlog' },
-	priority: { type: String, enum: ['high', 'medium', 'low'], default: 'medium' },
+	prioritized: { type: Boolean, default: false },
 	taskLength: { type: String, enum: ['short', 'medium', 'long'], default: 'medium' },
 	sortOrder: { type: Number, default: 0 },
 	project: { _id: String, name: String, color: String },
@@ -23,6 +23,12 @@ const kanbanTaskSchema = new Schema({
 	comments: [{
 		_id: { type: String, default: () => generateId() },
 		content: String, createdAt: Date, createdBy: operatorRef
+	}],
+	parentTaskId: String,
+	transitions: [{
+		_id: { type: String, default: () => generateId() },
+		fromStatus: String, toStatus: String,
+		changedBy: String, timestamp: { type: Date, default: Date.now }
 	}],
 	activityLog: [{
 		_id: { type: String, default: () => generateId() },
@@ -45,5 +51,6 @@ kanbanTaskSchema.index({ 'assignee._id': 1, status: 1 });
 kanbanTaskSchema.index({ tags: 1 });
 kanbanTaskSchema.index({ archived: 1, archivedAt: -1 });
 kanbanTaskSchema.index({ status: 1, sortOrder: 1 });
+kanbanTaskSchema.index({ parentTaskId: 1 });
 
 export const KanbanTask = mongoose.models.KanbanTask || mongoose.model('KanbanTask', kanbanTaskSchema, 'kanban_tasks');

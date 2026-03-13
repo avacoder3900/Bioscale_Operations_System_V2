@@ -5,6 +5,12 @@ export { Spu } from './spu.js';
 export { AssayDefinition } from './assay-definition.js';
 export { ReagentBatchRecord } from './reagent-batch-record.js';
 
+// Tier 2: Operational — Receiving & Inspection
+export { ReceivingLot } from './receiving-lot.js';
+export { InspectionResult } from './inspection-result.js';
+export { InspectionProcedureRevision } from './inspection-procedure-revision.js';
+export { ToolConfirmation } from './tool-confirmation.js';
+
 // Tier 2: Operational
 export { Session } from './session.js';
 export { Role } from './role.js';
@@ -48,6 +54,7 @@ export { ApprovalRequest } from './approval-request.js';
 export { SystemDependency } from './system-dependency.js';
 export { Integration } from './integration.js';
 export { ParticleDevice } from './particle-device.js';
+export { WorkflowViolation } from './workflow-violation.js';
 
 // Tier 3: Immutable Logs
 export { AuditLog } from './audit-log.js';

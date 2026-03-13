@@ -5,12 +5,6 @@
 
 	let { data, form } = $props();
 
-	const priorityLabels: Record<string, string> = {
-		high: 'High',
-		medium: 'Medium',
-		low: 'Low'
-	};
-
 	function formatDate(date: string | Date | null): string {
 		if (!date) return '—';
 		return new Date(date).toLocaleDateString('en-US', {

@@ -1,5 +1,5 @@
 import { error, redirect } from '@sveltejs/kit';
-import { connectDB, AssayDefinition } from '$lib/server/db';
+import { connectDB, AssayDefinition, FirmwareCartridge, TestResult } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -9,13 +9,47 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const assay = await AssayDefinition.findById(params.assayId).lean() as any;
 	if (!assay) throw error(404, 'Assay not found');
 
+	const [linkedCartridges, testResults] = await Promise.all([
+		FirmwareCartridge.find({ assayId: params.assayId }, {
+			_id: 1, cartridgeUuid: 1, status: 1, lotNumber: 1, serialNumber: 1, createdAt: 1
+		}).sort({ createdAt: -1 }).limit(100).lean(),
+		TestResult.find({ assayId: params.assayId }, {
+			_id: 1, cartridgeUuid: 1, deviceId: 1, status: 1, duration: 1,
+			numberOfReadings: 1, createdAt: 1
+		}).sort({ createdAt: -1 }).limit(100).lean()
+	]);
+
+	// Convert bcode buffer to hex string if present
+	let bcodeString: string | null = null;
+	if (assay.bcode) {
+		try {
+			const buf = Buffer.isBuffer(assay.bcode) ? assay.bcode : Buffer.from(assay.bcode);
+			bcodeString = buf.toString('hex');
+		} catch {
+			bcodeString = null;
+		}
+	}
+
+	// Protocol instructions from assay metadata
+	const instructions = (assay.metadata?.instructions ?? []).map((instr: any) => ({
+		type: instr.type ?? 'unknown',
+		params: instr.params ?? []
+	}));
+
+	const canWrite = !!(locals.user as any)?.roles?.some((r: any) =>
+		r.permissions?.includes('assay:write') || r.roleName === 'admin'
+	);
+	const canDelete = !!(locals.user as any)?.roles?.some((r: any) => r.roleName === 'admin');
+
 	return {
 		assay: {
 			id: assay._id,
+			assayId: assay._id,
 			name: assay.name,
 			skuCode: assay.skuCode ?? null,
 			version: assay.versionHistory?.length ?? 0,
 			status: assay.lockedAt ? 'locked' : (assay.isActive ? 'active' : 'inactive'),
+			isActive: assay.isActive ?? true,
 			description: assay.description ?? null,
 			duration: assay.duration ?? null,
 			shelfLifeDays: assay.shelfLifeDays ?? null,
@@ -26,6 +60,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			useSingleCost: assay.useSingleCost ?? false,
 			lockedAt: assay.lockedAt ?? null,
 			lockedBy: assay.lockedBy ?? null,
+			metadata: assay.metadata ?? null,
 			reagents: (assay.reagents ?? []).map((r: any) => ({
 				id: r._id,
 				wellPosition: r.wellPosition ?? null,
@@ -47,7 +82,6 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 					sortOrder: s.sortOrder ?? null
 				}))
 			})),
-			configuration: assay.metadata ?? {},
 			createdAt: assay.createdAt,
 			updatedAt: assay.updatedAt
 		},
@@ -55,7 +89,28 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			version: v.version,
 			createdAt: v.changedAt ?? null,
 			changes: v.changeNotes ?? null
-		}))
+		})),
+		instructions,
+		bcodeString,
+		linkedCartridges: (linkedCartridges as any[]).map((c: any) => ({
+			id: c._id,
+			cartridgeUuid: c.cartridgeUuid ?? '',
+			status: c.status ?? null,
+			lotNumber: c.lotNumber ?? null,
+			serialNumber: c.serialNumber ?? null,
+			createdAt: c.createdAt
+		})),
+		testResults: (testResults as any[]).map((r: any) => ({
+			id: r._id,
+			cartridgeUuid: r.cartridgeUuid ?? null,
+			deviceId: r.deviceId ?? null,
+			status: r.status ?? null,
+			duration: r.duration ?? null,
+			numberOfReadings: r.numberOfReadings ?? 0,
+			createdAt: r.createdAt
+		})),
+		canWrite,
+		canDelete
 	};
 };
 

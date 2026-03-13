@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { TronCard, TronButton, TronBadge } from '$lib/components/ui';
+	import PartsNav from '$lib/components/PartsNav.svelte';
 
 	let { data, form } = $props();
 
@@ -8,6 +9,7 @@
 </script>
 
 <div class="space-y-6">
+	<PartsNav />
 	<div class="flex items-center justify-between">
 		<div>
 			<a

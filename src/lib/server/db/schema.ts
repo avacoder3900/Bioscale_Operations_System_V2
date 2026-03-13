@@ -21,3 +21,32 @@ export interface Spu {
 	qcDocumentUrl: string | null;
 	assemblyStatus: string;
 }
+
+/** Represents a Consumable document of type 'deck'. _id is used as deckId. */
+export interface DeckRecord {
+	deckId: string;
+	status: string;
+	currentRobotId: string | null;
+	lockoutUntil: Date | string | null;
+	lastUsed: Date | string | null;
+	createdAt: Date | string;
+	updatedAt: Date | string;
+}
+
+/** Represents a Consumable document of type 'cooling_tray'. _id is used as trayId. */
+export interface CoolingTrayRecord {
+	trayId: string;
+	status: string;
+	assignedRunId: string | null;
+	createdAt: Date | string;
+	updatedAt: Date | string;
+}
+
+/** Rejection reason code stored in ManufacturingSettings */
+export interface RejectionReasonCode {
+	id: string;
+	code: string;
+	label: string;
+	processType: string;
+	sortOrder: number;
+}

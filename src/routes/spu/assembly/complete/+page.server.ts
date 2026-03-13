@@ -3,10 +3,55 @@ import { requirePermission } from '$lib/server/permissions';
 import { connectDB, AssemblySession, Spu, ElectronicSignature, generateId } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
 	requirePermission(locals.user, 'spu:read');
 	await connectDB();
-	return {};
+
+	const sessionId = url.searchParams.get('sessionId');
+	if (!sessionId) {
+		return {
+			spu: null as { udi: string } | null,
+			elapsedMs: 0,
+			scannedParts: [] as { partNumber: string; lotNumber: string; scannedAt: Date }[],
+			userName: locals.user?.username ?? ''
+		};
+	}
+
+	const session = await AssemblySession.findById(sessionId).lean() as any;
+	if (!session) {
+		return {
+			spu: null as { udi: string } | null,
+			elapsedMs: 0,
+			scannedParts: [] as { partNumber: string; lotNumber: string; scannedAt: Date }[],
+			userName: locals.user?.username ?? ''
+		};
+	}
+
+	const spuDoc = session.spuId ? await Spu.findById(session.spuId).lean() as any : null;
+
+	const elapsedMs = session.completedAt && session.startedAt
+		? new Date(session.completedAt).getTime() - new Date(session.startedAt).getTime()
+		: session.startedAt
+			? Date.now() - new Date(session.startedAt).getTime()
+			: 0;
+
+	const userName = locals.user
+		? [locals.user.firstName, locals.user.lastName].filter(Boolean).join(' ') ||
+		  locals.user.username
+		: '';
+
+	return {
+		spu: spuDoc ? { udi: spuDoc.udi ?? '' } : null as { udi: string } | null,
+		elapsedMs,
+		scannedParts: (session.stepRecords ?? [])
+			.flatMap((step: any) => step.scannedComponents ?? [])
+			.map((part: any): { partNumber: string; lotNumber: string; scannedAt: Date } => ({
+				partNumber: part.partNumber ?? '',
+				lotNumber: part.lotNumber ?? '',
+				scannedAt: part.scannedAt ?? new Date()
+			})),
+		userName
+	};
 };
 
 export const actions: Actions = {

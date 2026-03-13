@@ -185,17 +185,17 @@
 
 					<div class="mb-4 grid grid-cols-2 gap-4">
 						<div>
-							<label for="priority" class="tron-label">Priority</label>
-							<select
-								id="priority"
-								name="priority"
-								class="tron-select w-full"
-								value={data.task.priority}
-							>
-								<option value="low">Low</option>
-								<option value="medium">Medium</option>
-								<option value="high">High</option>
-							</select>
+							<label class="tron-label">Priority</label>
+							<label class="flex cursor-pointer items-center gap-2 pt-2">
+								<input
+									type="checkbox"
+									name="prioritized"
+									value="true"
+									checked={data.task.prioritized}
+									class="h-4 w-4 rounded"
+								/>
+								<span class="text-sm" style="color: var(--color-tron-text);">Prioritized</span>
+							</label>
 						</div>
 						<div>
 							<label for="taskLength" class="tron-label">Size</label>
@@ -322,7 +322,7 @@
 					</div>
 					<div class="flex justify-between">
 						<dt class="tron-text-muted">Priority</dt>
-						<dd><PriorityBadge priority={data.task.priority} /></dd>
+						<dd><PriorityBadge prioritized={data.task.prioritized} /></dd>
 					</div>
 					<div class="flex justify-between">
 						<dt class="tron-text-muted">Size</dt>

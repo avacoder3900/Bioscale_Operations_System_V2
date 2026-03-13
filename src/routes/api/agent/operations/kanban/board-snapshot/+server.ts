@@ -3,7 +3,7 @@ import { requireAgentApiKey } from '$lib/server/api-auth';
 import { connectDB, KanbanTask, KanbanProject } from '$lib/server/db';
 import type { RequestHandler } from './$types';
 
-const COLUMNS = ['backlog', 'ready', 'wip', 'waiting', 'done'] as const;
+const COLUMNS = ['blocked', 'backlog', 'ready', 'wip', 'waiting', 'done'] as const;
 
 export const GET: RequestHandler = async ({ request }) => {
 	requireAgentApiKey(request);
@@ -12,7 +12,7 @@ export const GET: RequestHandler = async ({ request }) => {
 	const [projects, tasks] = await Promise.all([
 		KanbanProject.find({ isActive: true }).sort({ sortOrder: 1 }).lean(),
 		KanbanTask.find({ archived: { $ne: true } })
-			.select('_id title status priority assignee project dueDate tags sortOrder activityLog statusChangedAt')
+			.select('_id title status prioritized assignee project dueDate tags sortOrder activityLog statusChangedAt')
 			.sort({ sortOrder: 1 })
 			.lean()
 	]);
@@ -34,7 +34,7 @@ export const GET: RequestHandler = async ({ request }) => {
 			id: t._id,
 			title: t.title,
 			status: t.status,
-			priority: t.priority,
+			prioritized: t.prioritized ?? false,
 			assignee: t.assignee,
 			project: t.project,
 			dueDate: t.dueDate,

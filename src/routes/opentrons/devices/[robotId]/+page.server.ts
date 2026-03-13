@@ -10,7 +10,11 @@ export const load: PageServerLoad = async ({ params }) => {
 	// Try to get live data from robot — stub if unavailable
 	let robotOffline = true;
 	let info: any = null;
-	let calibration: any = null;
+	let calibration: {
+		status: { deckCalibration?: { status: string } | null } | null;
+		pipetteOffsets: Array<{ mount: string; offset: number[]; status: string }>;
+		labware: Array<{ labware: { loadName: string; parent: string }; offset: number[] }>;
+	} = { status: null, pipetteOffsets: [], labware: [] };
 	let recentRuns: any[] | null = null;
 
 	try {

@@ -23,16 +23,37 @@ const reagentBatchRecordSchema = new Schema({
 	}],
 
 	setupTimestamp: Date, runStartTime: Date, runEndTime: Date,
-	status: { type: String, enum: ['setup', 'running', 'completed', 'aborted', 'voided'] },
+	// status stores the current UI workflow stage or terminal state
+	status: {
+		type: String,
+		enum: [
+			// Legacy values (keep for existing data)
+			'setup', 'running', 'completed', 'aborted', 'voided',
+			// Full workflow stages
+			'Setup', 'Loading', 'Running', 'Inspection', 'Top Sealing', 'Storage',
+			// Terminal states (PascalCase)
+			'Completed', 'Aborted', 'Cancelled'
+		]
+	},
 	abortReason: String, abortPhotoUrl: String,
 
 	cartridgesFilled: [{
 		cartridgeId: String, deckPosition: Number,
-		inspectionStatus: { type: String, enum: ['Accepted', 'Rejected', 'Pending'] },
-		inspectionReason: String, inspectedBy: operatorRef, inspectedAt: Date
+		inspectionStatus: { type: String, enum: ['Accepted', 'Rejected', 'Pending', 'QA/QC'] },
+		inspectionReason: String, inspectedBy: operatorRef, inspectedAt: Date,
+		topSealBatchId: String, storageLocation: String, storedAt: Date
 	}],
 	cartridgeCount: Number,
 
+	// Top seal batches (supports multiple batches per run)
+	sealBatches: [{
+		_id: { type: String, default: () => generateId() },
+		topSealLotId: String, operator: operatorRef,
+		firstScanTime: Date, completionTime: Date, durationSeconds: Number,
+		cartridgeIds: [String], status: { type: String, default: 'in_progress' }
+	}],
+
+	// Legacy single topSeal for backward compat
 	topSeal: {
 		_id: { type: String, default: () => generateId() },
 		topSealLotId: String, operator: operatorRef,
@@ -41,9 +62,11 @@ const reagentBatchRecordSchema = new Schema({
 	},
 
 	qcRelease: {
+		shippingLotId: String,
 		qaqcCartridgeIds: [String],
-		testResult: { type: String, enum: ['pass', 'fail', 'pending'] },
-		testedBy: operatorRef, testedAt: Date, notes: String
+		testResult: { type: String, enum: ['pass', 'fail', 'pending', 'testing'] },
+		testedBy: operatorRef, testedAt: Date, notes: String,
+		createdAt: Date
 	},
 
 	finalizedAt: Date, voidedAt: Date, voidReason: String,

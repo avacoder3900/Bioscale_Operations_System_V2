@@ -1,7 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, ValidationSession, User, Spu, Integration, generateId } from '$lib/server/db';
-import { callFunction, getVariable } from '$lib/server/particle';
+import { connectDB, ValidationSession, Spu, Integration, AuditLog, generateId } from '$lib/server/db';
+import { getVariable } from '$lib/server/particle';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -14,23 +14,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		{ udi: 1, 'particleLink.particleDeviceId': 1, status: 1 }
 	).sort({ udi: 1 }).lean() as any[];
 
-	// Get recent sessions
-	const sessions = await ValidationSession.find({ type: 'mag' })
-		.sort({ createdAt: -1 })
-		.limit(20)
-		.lean() as any[];
-
-	const userIds = [...new Set(sessions.map((s: any) => s.userId).filter(Boolean))];
-	const users = userIds.length ? await User.find({ _id: { $in: userIds } }, { username: 1 }).lean() : [];
-	const userMap = new Map((users as any[]).map((u: any) => [u._id, u.username]));
-
 	// Get criteria
 	const criteria = await Integration.findOne({ type: 'mag_criteria' }).lean() as any;
-
-	const total = sessions.length;
-	const passed = sessions.filter((s: any) => s.overallPassed === true).length;
-	const failed = sessions.filter((s: any) => s.overallPassed === false).length;
-	const inProgress = sessions.filter((s: any) => s.status === 'in_progress' || s.status === 'running').length;
 
 	return {
 		spus: spus.map((s: any) => ({
@@ -39,17 +24,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 			particleDeviceId: s.particleLink?.particleDeviceId ?? null,
 			status: s.status
 		})),
-		recentSessions: sessions.map((s: any) => ({
-			id: s._id,
-			status: s.status,
-			overallPassed: s.overallPassed ?? null,
-			spuUdi: s.spuUdi ?? null,
-			startedAt: s.startedAt?.toISOString() ?? null,
-			completedAt: s.completedAt?.toISOString() ?? null,
-			createdAt: s.createdAt?.toISOString() ?? new Date().toISOString(),
-			username: userMap.get(s.userId) ?? null
-		})),
-		stats: { total, passed, failed, inProgress },
 		criteria: {
 			minZ: criteria?.minZ ?? 3900,
 			maxZ: criteria?.maxZ ?? 4500
@@ -58,45 +32,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 };
 
 export const actions: Actions = {
-	startTest: async ({ request, locals }) => {
-		requirePermission(locals.user, 'spu:write');
-		await connectDB();
-
-		const form = await request.formData();
-		const spuId = form.get('spuId')?.toString();
-		if (!spuId) return fail(400, { error: 'Select an SPU' });
-
-		const spu = await Spu.findById(spuId).lean() as any;
-		if (!spu) return fail(400, { error: 'SPU not found' });
-		if (!spu.particleLink?.particleDeviceId) return fail(400, { error: 'SPU has no Particle device linked' });
-
-		const sessionId = generateId();
-		await ValidationSession.create({
-			_id: sessionId,
-			type: 'mag',
-			status: 'running',
-			startedAt: new Date(),
-			userId: locals.user!._id,
-			spuUdi: spu.udi,
-			spuId: spu._id,
-			particleDeviceId: spu.particleLink.particleDeviceId,
-			results: []
-		});
-
-		// Call run_test on the device
-		try {
-			await callFunction(spu.particleLink.particleDeviceId, 'run_test', 'mag');
-		} catch (err) {
-			await ValidationSession.updateOne(
-				{ _id: sessionId },
-				{ $set: { status: 'failed', completedAt: new Date(), failureReasons: [`Device error: ${err instanceof Error ? err.message : String(err)}`] } }
-			);
-			return fail(400, { error: `Failed to trigger test: ${err instanceof Error ? err.message : String(err)}` });
-		}
-
-		redirect(303, `/spu/validation/magnetometer/${sessionId}`);
-	},
-
 	readFromDevice: async ({ request, locals }) => {
 		requirePermission(locals.user, 'spu:write');
 		await connectDB();
@@ -153,6 +88,44 @@ export const actions: Actions = {
 				overallPassed,
 				failureReasons,
 				criteriaUsed: { minZ, maxZ }
+			});
+
+			// Update SPU validation record
+			const magStatus = overallPassed ? 'passed' : 'failed';
+			await Spu.updateOne({ _id: spuId }, {
+				$set: {
+					'validation.magnetometer': {
+						status: magStatus,
+						sessionId,
+						completedAt: new Date(),
+						rawData: rawResult,
+						results: parsed,
+						failureReasons,
+						criteriaUsed: { minZ, maxZ }
+					},
+					qcStatus: magStatus
+				}
+			});
+
+			// Create audit log entry
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'spus',
+				recordId: spuId,
+				entityId: spuId,
+				action: 'UPDATE',
+				oldData: null,
+				newData: {
+					validationType: 'magnetometer',
+					status: magStatus,
+					sessionId,
+					overallPassed,
+					failureReasons: failureReasons.length > 0 ? failureReasons : undefined,
+					criteriaUsed: { minZ, maxZ }
+				},
+				changedAt: new Date(),
+				changedBy: locals.user!._id,
+				reason: `Magnetometer validation: ${magStatus.toUpperCase()}${failureReasons.length > 0 ? ' — ' + failureReasons.join('; ') : ''}`
 			});
 
 			redirect(303, `/spu/validation/magnetometer/${sessionId}`);
