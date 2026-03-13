@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, PartDefinition, BomItem, Integration, generateId } from '$lib/server/db';
+import { connectDB, PartDefinition, Integration, generateId, AuditLog } from '$lib/server/db';
 import { syncPartsFromBox } from '$lib/server/box-sync';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -8,14 +8,16 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'inventory:read');
 	await connectDB();
 
-	const [parts, cartridgeBomItems, boxInteg] = await Promise.all([
-		PartDefinition.find().sort({ sortOrder: 1, partNumber: 1 }).lean(),
-		BomItem.find({ bomType: 'cartridge', isActive: true }).lean(),
+	const [spuParts, cartridgePartDocs, boxInteg] = await Promise.all([
+		PartDefinition.find({ $or: [{ bomType: 'spu' }, { bomType: { $exists: false } }] })
+			.sort({ sortOrder: 1, partNumber: 1 }).lean(),
+		PartDefinition.find({ bomType: 'cartridge', isActive: true })
+			.sort({ partNumber: 1 }).lean(),
 		Integration.findOne({ type: 'box' }).lean()
 	]);
 
-	// Map parts to expected shape
-	const items = (parts as any[]).map((p) => {
+	// Map SPU parts to expected shape
+	const items = (spuParts as any[]).map((p) => {
 		const cost = parseFloat(p.unitCost) || null;
 		const invCount = p.inventoryCount ?? 0;
 		return {
@@ -42,23 +44,23 @@ export const load: PageServerLoad = async ({ locals }) => {
 		console.log(`[parts] Filtered out ${itemsNoCost.length} items with no cost data`);
 	}
 
-	// Cartridge BOM parts
-	const cartridgeParts = (cartridgeBomItems as any[]).map((b) => {
-		const cost = parseFloat(b.unitCost) || null;
-		const invCount = b.inventoryCount ?? 0;
+	// Cartridge parts (now from PartDefinition with bomType='cartridge')
+	const cartridgeParts = (cartridgePartDocs as any[]).map((p) => {
+		const cost = parseFloat(p.unitCost) || null;
+		const invCount = p.inventoryCount ?? 0;
 		return {
-			id: b._id,
-			partNumber: b.partNumber ?? '',
-			name: b.name ?? '',
-			category: b.category ?? null,
-			quantityPerUnit: b.quantityPerUnit ?? null,
+			id: p._id,
+			partNumber: p.partNumber ?? '',
+			name: p.name ?? '',
+			category: p.category ?? null,
+			quantityPerUnit: p.quantityPerUnit ?? null,
 			inventoryCount: invCount,
 			unitCost: cost,
 			totalValue: cost != null ? cost * invCount : null,
-			manufacturer: b.manufacturer ?? null,
-			supplier: b.supplier ?? null,
-			minimumStockLevel: b.minimumStockLevel ?? 0,
-			leadTimeDays: b.leadTimeDays ?? null
+			manufacturer: p.manufacturer ?? null,
+			supplier: p.supplier ?? null,
+			minimumStockLevel: p.minimumOrderQty ?? 0,
+			leadTimeDays: p.leadTimeDays ?? null
 		};
 	});
 
