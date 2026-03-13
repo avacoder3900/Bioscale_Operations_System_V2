@@ -1,113 +1,92 @@
 import { redirect, fail } from '@sveltejs/kit';
-import { connectDB, Consumable, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, BomItem, AuditLog, generateId } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	await connectDB();
 
-	const consumables = await Consumable.find().sort({ type: 1, createdAt: -1 }).lean();
+	const parts = await BomItem.find({ bomType: 'cartridge' })
+		.sort({ name: 1 })
+		.lean();
 
-	const serialized = (consumables as any[]).map((c: any) => ({
-		id: c._id,
-		type: c.type,
-		status: c.status ?? 'active',
-		barcode: c.barcode ?? null,
-		// Incubator tube fields
-		initialVolumeUl: c.initialVolumeUl ?? null,
-		remainingVolumeUl: c.remainingVolumeUl ?? null,
-		totalCartridgesFilled: c.totalCartridgesFilled ?? 0,
-		totalRunsUsed: c.totalRunsUsed ?? 0,
-		firstUsedAt: c.firstUsedAt ?? null,
-		lastUsedAt: c.lastUsedAt ?? null,
-		registeredBy: c.registeredBy ?? null,
-		// Top seal roll fields
-		initialLengthFt: c.initialLengthFt ?? null,
-		remainingLengthFt: c.remainingLengthFt ?? null,
-		// Deck fields
-		currentRobotId: c.currentRobotId ?? null,
-		lastUsed: c.lastUsed ?? null,
-		// Cooling tray
-		assignedRunId: c.assignedRunId ?? null,
-		// Usage log (last 10)
-		recentUsage: ((c.usageLog ?? []) as any[]).slice(-10).reverse().map((u: any) => ({
-			usageType: u.usageType,
-			runId: u.runId ?? null,
-			quantityChanged: u.quantityChanged ?? null,
-			volumeChangedUl: u.volumeChangedUl ?? null,
-			operatorUsername: u.operator?.username ?? null,
-			notes: u.notes ?? null,
-			createdAt: u.createdAt
+	const serialized = (parts as any[]).map((p: any) => ({
+		id: String(p._id),
+		type: 'deck' as const,
+		status: p.isActive === false ? 'retired' : 'active',
+		barcode: p.partNumber ?? null,
+		// Repurposed fields for parts display
+		initialVolumeUl: null,
+		remainingVolumeUl: null,
+		totalCartridgesFilled: 0,
+		totalRunsUsed: 0,
+		firstUsedAt: null,
+		lastUsedAt: null,
+		registeredBy: null,
+		initialLengthFt: null,
+		remainingLengthFt: null,
+		// Show part name in the Robot column, inventory count in Last Used
+		currentRobotId: p.name ?? null,
+		lastUsed: p.inventoryCount != null ? `Stock: ${p.inventoryCount}` : null,
+		assignedRunId: null,
+		recentUsage: ((p.versionHistory ?? []) as any[]).slice(-10).reverse().map((v: any) => ({
+			usageType: v.changeType ?? 'update',
+			runId: null,
+			quantityChanged: null,
+			volumeChangedUl: null,
+			operatorUsername: v.changedBy ?? null,
+			notes: v.changeReason ?? null,
+			createdAt: v.changedAt
 		})),
-		createdAt: c.createdAt
+		createdAt: p.createdAt
 	}));
 
-	// Group by type
 	const grouped = {
-		deck: serialized.filter(c => c.type === 'deck'),
-		cooling_tray: serialized.filter(c => c.type === 'cooling_tray'),
-		incubator_tube: serialized.filter(c => c.type === 'incubator_tube'),
-		top_seal_roll: serialized.filter(c => c.type === 'top_seal_roll')
+		deck: serialized,
+		cooling_tray: [] as typeof serialized,
+		incubator_tube: [] as typeof serialized,
+		top_seal_roll: [] as typeof serialized
 	};
 
 	return { consumables: JSON.parse(JSON.stringify(grouped)) };
 };
 
 export const actions: Actions = {
-	/** Create a new consumable of any type */
+	/** Create a new BOM item (cartridge consumable) */
 	create: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 
 		const data = await request.formData();
-		const type = data.get('type') as string;
 		const barcode = (data.get('barcode') as string) || undefined;
-		const status = (data.get('status') as string) || 'active';
 
-		const validTypes = ['deck', 'cooling_tray', 'incubator_tube', 'top_seal_roll'];
-		if (!validTypes.includes(type)) return fail(400, { error: 'Invalid consumable type' });
-
-		const consumableData: Record<string, unknown> = {
+		const bomData: Record<string, unknown> = {
 			_id: generateId(),
-			type,
-			status,
-			barcode,
-			usageLog: []
+			bomType: 'cartridge',
+			partNumber: barcode,
+			name: barcode ?? 'New Part',
+			isActive: true,
+			inventoryCount: 0,
+			createdBy: locals.user._id
 		};
 
-		// Type-specific fields
-		if (type === 'incubator_tube') {
-			const initialVolumeUl = Number(data.get('initialVolumeUl') || 0);
-			consumableData.initialVolumeUl = initialVolumeUl;
-			consumableData.remainingVolumeUl = initialVolumeUl;
-			consumableData.totalCartridgesFilled = 0;
-			consumableData.totalRunsUsed = 0;
-			consumableData.registeredBy = locals.user._id;
-		} else if (type === 'top_seal_roll') {
-			const initialLengthFt = Number(data.get('initialLengthFt') || 0);
-			consumableData.initialLengthFt = initialLengthFt;
-			consumableData.remainingLengthFt = initialLengthFt;
-		} else if (type === 'deck') {
-			consumableData.currentRobotId = (data.get('currentRobotId') as string) || undefined;
-		}
-
-		const consumable = await Consumable.create(consumableData);
+		const item = await BomItem.create(bomData);
 
 		await AuditLog.create({
 			_id: generateId(),
 			action: 'create',
-			resourceType: 'consumable',
-			resourceId: consumable._id,
+			resourceType: 'bom_item',
+			resourceId: item._id,
 			userId: locals.user._id,
 			username: locals.user.username,
 			timestamp: new Date(),
-			details: { type, barcode, status }
+			details: { partNumber: barcode, bomType: 'cartridge' }
 		});
 
-		return { success: true, consumableId: consumable._id };
+		return { success: true, consumableId: String(item._id) };
 	},
 
-	/** Update consumable status */
+	/** Update BOM item active status */
 	updateStatus: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
@@ -115,20 +94,21 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const consumableId = data.get('consumableId') as string;
 		const status = data.get('status') as string;
-		const notes = (data.get('notes') as string) || undefined;
 
-		if (!consumableId) return fail(400, { error: 'Consumable ID required' });
+		if (!consumableId) return fail(400, { error: 'Item ID required' });
 
-		const now = new Date();
-		await Consumable.findByIdAndUpdate(consumableId, {
-			$set: { status },
+		const isActive = status !== 'retired' && status !== 'depleted';
+
+		await BomItem.findByIdAndUpdate(consumableId, {
+			$set: { isActive },
 			$push: {
-				usageLog: {
-					_id: generateId(),
-					usageType: 'status_change',
-					operator: { _id: locals.user._id, username: locals.user.username },
-					notes: notes ?? `Status changed to ${status}`,
-					createdAt: now
+				versionHistory: {
+					version: Date.now(),
+					changeType: 'update',
+					newValues: { isActive },
+					changedBy: locals.user.username,
+					changedAt: new Date(),
+					changeReason: `Status changed to ${status}`
 				}
 			}
 		});
@@ -136,47 +116,9 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-	/** Log manual usage against a consumable */
-	logUsage: async ({ request, locals }) => {
+	/** Log manual usage (no-op for BOM items, kept for form compatibility) */
+	logUsage: async ({ locals }) => {
 		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const consumableId = data.get('consumableId') as string;
-		const usageType = data.get('usageType') as string;
-		const notes = (data.get('notes') as string) || undefined;
-		const volumeChangedUl = data.get('volumeChangedUl') ? Number(data.get('volumeChangedUl')) : undefined;
-		const quantityChanged = data.get('quantityChanged') ? Number(data.get('quantityChanged')) : undefined;
-
-		if (!consumableId) return fail(400, { error: 'Consumable ID required' });
-
-		const now = new Date();
-		const logEntry: Record<string, unknown> = {
-			_id: generateId(),
-			usageType,
-			operator: { _id: locals.user._id, username: locals.user.username },
-			notes,
-			createdAt: now
-		};
-		if (volumeChangedUl !== undefined) {
-			logEntry.volumeChangedUl = volumeChangedUl;
-		}
-		if (quantityChanged !== undefined) {
-			logEntry.quantityChanged = quantityChanged;
-		}
-
-		const update: Record<string, unknown> = {
-			$push: { usageLog: logEntry },
-			$set: { lastUsedAt: now }
-		};
-
-		// For tubes, decrement remaining volume
-		if (volumeChangedUl !== undefined) {
-			(update.$inc as Record<string, number>) = { remainingVolumeUl: -Math.abs(volumeChangedUl) };
-		}
-
-		await Consumable.findByIdAndUpdate(consumableId, update);
-
 		return { success: true };
 	}
 };
