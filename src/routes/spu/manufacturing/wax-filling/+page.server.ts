@@ -324,16 +324,20 @@ export const actions: Actions = {
 		const run = await WaxFillingRun.findById(runId).lean() as any;
 		if (!run) return fail(404, { error: 'Run not found' });
 
-		// Create CartridgeRecord stubs for each cartridge
+		// Create CartridgeRecord stubs and link to this wax run
 		if (cartridgeIds.length > 0) {
-			const ops = cartridgeIds.map((cid: string) => ({
+			const ops = cartridgeIds.map((cid: string, idx: number) => ({
 				updateOne: {
 					filter: { _id: cid },
 					update: {
 						$setOnInsert: {
 							_id: cid,
-							currentPhase: 'backing',
 							'backing.recordedAt': new Date()
+						},
+						$set: {
+							currentPhase: 'wax_filling',
+							'waxFilling.runId': runId,
+							'waxFilling.deckPosition': idx + 1
 						}
 					},
 					upsert: true
