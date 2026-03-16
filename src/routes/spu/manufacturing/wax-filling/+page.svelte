@@ -234,8 +234,8 @@
 		if (data.runState.runId) {
 			submitAction('recordWaxPrep', {
 				runId: data.runState.runId,
-				sourceLot: result.sourceLot,
-				tubeId: result.tubeId,
+				waxSourceLot: result.sourceLot,
+				waxTubeId: result.tubeId,
 				plannedCartridgeCount: String(result.plannedCartridgeCount ?? 24)
 			});
 		}
