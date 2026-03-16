@@ -161,9 +161,9 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			updatedAt: c.updatedAt ? new Date(c.updatedAt).toISOString() : ''
 		}));
 
-		// Storage cartridges (wax_stored phase)
+		// Storage cartridges (wax_filled or wax_stored phase — includes pre- and post-storage)
 		const storageCartridgesRaw = run
-			? await CartridgeRecord.find({ 'waxFilling.runId': String(run._id), currentPhase: 'wax_stored' }).lean().catch(() => [])
+			? await CartridgeRecord.find({ 'waxFilling.runId': String(run._id), currentPhase: { $in: ['wax_filled', 'wax_stored'] } }).lean().catch(() => [])
 			: [];
 
 		const storageCartridges = (storageCartridgesRaw as any[]).map((c: any) => ({
