@@ -27,7 +27,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	// Particle device lookup
 	let particleDevice = null;
 	if (s.particleLink?.particleDeviceId) {
-		particleDevice = await ParticleDevice.findOne({ deviceId: s.particleLink.particleDeviceId }).lean();
+		particleDevice = await ParticleDevice.findOne({ particleDeviceId: s.particleLink.particleDeviceId }).lean();
 	}
 
 	// Operator name lookup for sessions
@@ -49,6 +49,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		spu: {
 			id: s._id,
 			udi: s.udi,
+			barcode: s.barcode ?? null,
 			status: s.status ?? 'draft',
 			deviceState: s.deviceState ?? '',
 			owner: s.owner ?? null,
@@ -60,10 +61,25 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			assignmentType: s.assignment?.type ?? null,
 			assignmentCustomerId: s.assignment?.customer?._id ?? null,
 			qcStatus: s.qcStatus ?? 'pending',
+			validation: {
+				magnetometer: s.validation?.magnetometer ?? null,
+				thermocouple: s.validation?.thermocouple ?? null,
+				lux: s.validation?.lux ?? null,
+				spectrophotometer: s.validation?.spectrophotometer ?? null,
+				status: s.validation?.status ?? 'pending'
+			},
 			qcDocumentUrl: s.qcDocumentUrl ?? null,
 			assemblyStatus: s.assemblyStatus ?? 'created',
 			assemblySignatureId: s.signature?._id ?? null,
 			assemblyCompletedAt: s.assembly?.completedAt ?? null,
+			statusTransitions: (s.statusTransitions ?? []).map((t: any) => ({
+				id: t._id,
+				from: t.from ?? null,
+				to: t.to,
+				changedBy: t.changedBy?.username ?? 'System',
+				changedAt: t.changedAt,
+				reason: t.reason ?? null
+			})),
 			finalizedAt: s.finalizedAt ?? null,
 			corrections: s.corrections ?? []
 		},
@@ -90,13 +106,13 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 					id: (particleDevice as any)._id,
 					deviceId: (particleDevice as any).deviceId,
 					particleDeviceId: (particleDevice as any).particleDeviceId ?? (particleDevice as any).deviceId ?? null,
-					name: (particleDevice as any).name ?? null,
 					serialNumber: (particleDevice as any).serialNumber ?? null,
 					firmwareVersion: (particleDevice as any).firmwareVersion ?? null,
 					systemVersion: (particleDevice as any).systemVersion ?? null,
 					status: (particleDevice as any).status ?? null,
 					lastHeardAt: (particleDevice as any).lastHeardAt ?? null,
 					lastIpAddress: (particleDevice as any).lastIpAddress ?? null,
+					name: (particleDevice as any).name ?? null,
 					linkedSpuId: (particleDevice as any).linkedSpuId ?? null,
 					lastSyncAt: (particleDevice as any).lastSyncAt ?? null
 				}
@@ -143,10 +159,11 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		auditTrail: auditTrail.map((a: any) => ({
 			id: a._id,
 			action: a.action ?? '',
+			reason: a.reason ?? null,
 			oldData: a.oldData ?? null,
 			newData: a.newData ?? null,
-			changedBy: auditMap.get(a.userId) ?? 'System',
-			changedAt: a.createdAt
+			changedBy: auditMap.get(a.userId) ?? auditMap.get(a.changedBy) ?? 'System',
+			changedAt: a.changedAt ?? a.createdAt
 		}))
 	};
 };
@@ -196,26 +213,7 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-	assignSpu: async ({ request, locals, params }) => {
-		requirePermission(locals.user, 'spu:write');
-		await connectDB();
-		const form = await request.formData();
-		const assignmentType = form.get('assignmentType')?.toString();
-		if (!assignmentType) return fail(400, { error: 'Type required' });
-
-		const assignment: Record<string, any> = {
-			type: assignmentType,
-			assignedAt: new Date(),
-			assignedBy: { _id: locals.user!._id, username: locals.user!.username }
-		};
-		if (form.get('customerId')) {
-			const customer = await Customer.findById(form.get('customerId')!.toString()).lean();
-			if (customer) assignment.customer = { _id: (customer as any)._id, name: (customer as any).name };
-		}
-
-		await Spu.updateOne({ _id: params.spuId }, { $set: { assignment, status: 'assigned' } });
-		return { success: true };
-	},
+	// updateAssignment removed — release status (released-rnd/manufacturing/field) via transitionStatus
 
 	updateAssemblyStatus: async ({ request, locals, params }) => {
 		requirePermission(locals.user, 'spu:write');
@@ -259,5 +257,121 @@ export const actions: Actions = {
 
 		await Spu.updateOne({ _id: params.spuId }, { $set: updates });
 		return { success: true };
+	},
+
+	updateIdentifiers: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const newUdi = form.get('udi')?.toString().trim();
+		const newBarcode = form.get('barcode')?.toString().trim() || null;
+
+		if (!newUdi) return fail(400, { error: 'UDI is required' });
+
+		const spu = await Spu.findById(params.spuId);
+		if (!spu) return fail(404, { error: 'SPU not found' });
+		if ((spu as any).finalizedAt) return fail(400, { error: 'SPU is finalized and cannot be modified' });
+
+		// Check UDI uniqueness if changed
+		if (newUdi !== (spu as any).udi) {
+			const existing = await Spu.findOne({ udi: newUdi, _id: { $ne: params.spuId } });
+			if (existing) return fail(400, { error: 'Another SPU already has this UDI' });
+		}
+
+		const oldData = { udi: (spu as any).udi, barcode: (spu as any).barcode };
+		try {
+			await Spu.updateOne({ _id: params.spuId }, { $set: { udi: newUdi, barcode: newBarcode } });
+		} catch (err: any) {
+			console.error('[updateIdentifiers] Update failed:', err.message);
+			return fail(500, { error: err.message || 'Failed to update SPU' });
+		}
+
+		try {
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'spus',
+				recordId: params.spuId,
+				action: 'UPDATE',
+				oldData,
+				newData: { udi: newUdi, barcode: newBarcode },
+				changedBy: locals.user!.username ?? locals.user!._id
+			});
+		} catch (err: any) {
+			console.error('[updateIdentifiers] Audit log failed:', err.message);
+			// Non-critical — don't fail the update
+		}
+
+		return { identifierSuccess: true };
+	},
+
+	transitionStatus: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const newStatus = form.get('status')?.toString();
+		const reason = form.get('reason')?.toString() || null;
+		if (!newStatus) return fail(400, { error: 'Status required' });
+
+		const spu = await Spu.findById(params.spuId);
+		if (!spu) return fail(404, { error: 'SPU not found' });
+		if ((spu as any).finalizedAt) return fail(400, { error: 'SPU is finalized' });
+
+		const oldStatus = (spu as any).status ?? 'draft';
+		if (oldStatus === newStatus) return fail(400, { error: 'Status is already ' + newStatus });
+
+		const transition = {
+			_id: generateId(),
+			from: oldStatus,
+			to: newStatus,
+			changedBy: { _id: locals.user!._id, username: locals.user!.username },
+			changedAt: new Date(),
+			reason
+		};
+
+		await Spu.updateOne(
+			{ _id: params.spuId },
+			{
+				$set: { status: newStatus },
+				$push: { statusTransitions: transition }
+			}
+		);
+
+		// Audit log
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'spus',
+			recordId: params.spuId,
+			action: 'UPDATE',
+			oldData: { status: oldStatus },
+			newData: { status: newStatus, reason },
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+
+		return { success: true, transitionSuccess: true };
+	},
+
+	deleteSpu: async ({ locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+
+		const spu = await Spu.findById(params.spuId).lean() as any;
+		if (!spu) return fail(404, { error: 'SPU not found' });
+		if (spu.finalizedAt) return fail(400, { error: 'Cannot delete a finalized SPU' });
+
+		// Use direct collection delete to bypass sacred middleware
+		await Spu.collection.deleteOne({ _id: params.spuId });
+
+		// Audit log
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'spus',
+			recordId: params.spuId,
+			action: 'DELETE',
+			oldData: { udi: spu.udi, status: spu.status },
+			newData: null,
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+
+		return { success: true, deleted: true };
 	}
 };

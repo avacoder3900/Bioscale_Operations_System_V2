@@ -1,0 +1,145 @@
+## Codebase Patterns
+
+### Server File Pattern
+Every `+page.server.ts` follows:
+1. Import: `connectDB`, models, `requirePermission`
+2. Guard: `requirePermission(event, 'domain:read|write')`
+3. Connect: `await connectDB()`
+4. Query: Mongoose `.find()`, `.findById()`, `.aggregate()` with `.lean()`
+5. Serialize: `JSON.parse(JSON.stringify(result))`
+6. Return: exact shape from CONTRACT-REGISTRY.md
+
+### Auth Pattern
+- `event.locals.user` — authenticated user (set by hooks.server.ts)
+- `event.locals.session` — session object
+- `requirePermission(event, 'permission:string')` — throws 403 if missing
+- `isAdmin(event)` — boolean check
+- Cookie: `auth-session`, looked up in `sessions` MongoDB collection
+
+### ID Generation
+```typescript
+import { generateId } from '$lib/server/db/models';
+const id = generateId(); // nanoid string
+```
+
+### Denormalization Pattern
+At write time, embed operator/user/project info:
+```typescript
+createdBy: { _id: user._id, username: user.username }
+project: { _id: project._id, name: project.name, color: project.color }
+```
+
+### Sacred Document Pattern
+- Check `finalizedAt` before any mutation
+- Use `corrections[]` array for post-finalization fixes
+- Write-once phases on CartridgeRecord: check `phase.recordedAt: { $exists: false }`
+
+### Immutable Log Pattern
+- AuditLog, ElectronicSignature, InventoryTransaction, DeviceEvent, ManufacturingMaterialTransaction
+- Append only — never update or delete
+- Mongoose middleware blocks `.updateOne()`, `.deleteOne()`, etc.
+
+### API Auth Pattern (Agent API)
+```typescript
+const apiKey = event.request.headers.get('x-api-key')
+    || event.request.headers.get('x-agent-api-key');
+if (apiKey !== process.env.AGENT_API_KEY) return json({ error: 'Unauthorized' }, { status: 401 });
+```
+
+---
+
+## Weekend Build Log (Feb 27 – Mar 2, 2026)
+
+### Project Genesis
+- Workshopped full rebuild plan with Jacob Quick
+- Decision: greenfield rebuild (not in-place migration) — old Postgres app stays untouched
+- Three-layer architecture: UI (frozen), Data Contracts (preserved), Server+DB (rebuilt)
+
+### Phase 1: Characterization Test Suite (Feb 27)
+- Built 84 HTTP-level contract tests against running Postgres app
+- Tests verify: page load data shapes, API response shapes, auth flow, business logic
+- Tests are database-agnostic — same tests run against Postgres or MongoDB
+- Location: `tests/contracts/` (11 test files by domain)
+- Test user: `contracttest` / `contracttest123`
+- All 84 passing (green baseline)
+
+### Phase 2: Contract Registry (Feb 27)
+- Extracted data contracts from all ~80 routes
+- Documented: load() return shapes, form action inputs/outputs, API endpoints, layout data
+- Inventoried 100+ shared server utilities
+- Output: `docs/migration/CONTRACT-REGISTRY.md` (3,752 lines)
+
+### Phase 2.5: PRDs (Feb 27)
+- Wrote 11 domain PRDs with 40 total stories
+- Each story: routes covered, contract refs, MongoDB models, acceptance criteria
+- Domain order: Auth → Kanban → Customers → Equipment → Documents → Inventory → SPU → Manufacturing → Shipping → Cartridge Lab → Agent API
+- Output: `docs/migration/prds/` (11 files + prd.json)
+
+### Phase 3: Greenfield Build (Feb 27–28)
+
+#### 3.0: Project Setup + Auth (commit e69b7e3 → 1ea69c9)
+- Scaffolded new SvelteKit project
+- Copied 131 .svelte files (UI layer — untouched)
+- Created all 53 Mongoose models with indexes, sacred middleware, immutable middleware
+- Implemented hooks.server.ts (session validation, cookie management)
+- Built auth utilities: session create/validate/invalidate, permission checking
+- Login/logout, user CRUD, role management, invite flow
+- Seed script: 3 users (admin, operator, viewer), 3 roles
+- Verified: login works, session cookies set, route protection active
+
+#### 3.1: Kanban + Customers (commit ca5f90d)
+- Board view, projects CRUD, task detail with comments/tags/proposals
+- List view with filters, archived tasks
+- Customer CRUD with embedded notes
+- Drag-and-drop status updates via API endpoint
+
+#### 3.2: Equipment + Documents (commit ca5f90d, 47c413f)
+- Equipment CRUD (fridges, ovens), locations, decks/trays (consumables)
+- Opentrons robots with live HTTP health checks
+- Controlled documents with revisions, approval workflow, e-signatures
+- Work instructions with nested versions → steps → requirements
+- Document repository, file upload
+- Box.com integration: stubbed (deferred)
+
+#### 3.3: Inventory + SPU (commit 4ee982d)
+- Part definitions CRUD, BOM items with version history
+- Inventory transactions (immutable ledger)
+- SPU dashboard with filtering, detail page with full build record
+- Assembly sessions: step-by-step flow, barcode scanning, field capture
+- Assembly completion: copies full session into SPU (sacred document)
+- Production runs, batches, validation sessions
+- Atomic barcode generation via findOneAndUpdate + $inc
+
+#### 3.4: Manufacturing (commit 7003749)
+- Lot records (operational — mutable), process configurations
+- Wax filling: runs, cartridge phases (WRITE-ONCE), QC inspection, storage
+- Reagent filling: batch records (sacred), tube prep, inspection, top seal
+- Assay definitions (sacred, lockable): CRUD, version history, lock/unlock
+- QA/QC release, manufacturing materials (immutable transactions), laser cutting
+- CartridgeRecord lifecycle: backing → waxFilling → waxQc → waxStorage → reagentFilling → reagentInspection → topSeal → ovenCure → storage → qaqcRelease → shipping
+
+#### 3.5: Shipping + Cartridge Lab + Agent API (commit 9559f2f)
+- Shipping lots with QA/QC releases, packages with full customer snapshot
+- Lab cartridges with usage log, cartridge groups
+- Firmware devices/cartridges, test results with spectro readings
+- Agent API: health, schema, queries, messages, operations, approvals (API key auth)
+
+### Phase 4: Verification (Feb 28)
+- Ran all 84 contract tests against new MongoDB app
+- Fixed 18 failures:
+  - 1 wrong data shape (parts key name)
+  - 15 missing API sub-routes (consolidated → individual)
+  - 2 auth header mismatches (X-API-Key vs x-agent-api-key)
+- Final result: 84/84 passing ✅
+- Build passes ✅
+
+### Phase 4 Manual Verification (pending)
+- Jacob to spot-check critical workflows
+- App needs real data (currently seed data only) or migration from Postgres
+
+### Known Issues
+- `svelte-check` reports 834 errors — pre-existing from copied UI layer, not caused by migration
+- Old app used argon2 for passwords; new app uses bcrypt — users need new passwords
+- Box.com integration is stubbed (deferred)
+- Opentrons endpoints depend on live robot hardware
+- MongoDB has seed data only — no production data migrated yet

@@ -48,6 +48,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		spus: spus.map((s: any) => ({
 			id: s._id,
 			udi: s.udi,
+			barcode: s.barcode ?? null,
 			status: s.status ?? 'draft',
 			deviceState: s.deviceState ?? '',
 			owner: s.owner ?? null,
@@ -98,22 +99,14 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		fieldHints: { batchRecommended: true, ownerRecommended: false },
 		fleetSummary: (() => {
 			const spuList = spus.map((s: any) => ({
-				id: s._id,
-				udi: s.udi,
-				status: s.status ?? 'draft',
-				deviceState: s.deviceState ?? '',
-				owner: s.owner ?? null,
-				ownerNotes: s.ownerNotes ?? null,
-				batchId: s.batch?._id ?? null,
-				batchNumber: s.batch?.batchNumber ?? null,
-				createdAt: s.createdAt,
-				createdByUsername: userMap.get(s.createdBy) ?? null,
+				id: s._id, udi: s.udi, status: s.status ?? 'draft',
+				deviceState: s.deviceState ?? '', owner: s.owner ?? null,
+				ownerNotes: s.ownerNotes ?? null, batchId: s.batch?._id ?? null,
+				createdAt: s.createdAt ?? null, updatedAt: s.updatedAt ?? null,
+				finalizedAt: s.finalizedAt ?? null, qcStatus: s.qcStatus ?? 'pending',
+				qcDocumentUrl: s.qcDocumentUrl ?? null, assemblyStatus: s.assemblyStatus ?? 'created',
 				assignmentType: s.assignment?.type ?? null,
-				assignmentCustomerId: s.assignment?.customer?._id ?? null,
-				customerName: s.assignment?.customer?.name ?? null,
-				qcStatus: s.qcStatus ?? 'pending',
-				qcDocumentUrl: s.qcDocumentUrl ?? null,
-				assemblyStatus: s.assemblyStatus ?? 'created'
+				assignmentCustomerId: s.assignment?.customer?._id ?? null
 			}));
 			const rnd = spuList.filter((s) => s.assignmentType === 'rnd');
 			const manufacturing = spuList.filter((s) => s.assignmentType === 'manufacturing');
@@ -154,9 +147,11 @@ export const actions: Actions = {
 			if (batch) batchRef = { _id: (batch as any)._id, batchNumber: (batch as any).batchNumber };
 		}
 
+		const barcode = form.get('barcode')?.toString().trim() || undefined;
 		await Spu.create({
 			_id: generateId(),
 			udi,
+			barcode,
 			status: 'draft',
 			assemblyStatus: 'created',
 			qcStatus: 'pending',
@@ -185,9 +180,11 @@ export const actions: Actions = {
 		}
 
 		const spuId = generateId();
+		const barcode = form.get('barcode')?.toString().trim() || undefined;
 		await Spu.create({
 			_id: spuId,
 			udi,
+			barcode,
 			status: 'draft',
 			deviceState: form.get('deviceState')?.toString() || undefined,
 			owner: form.get('owner')?.toString() || undefined,
@@ -266,5 +263,36 @@ export const actions: Actions = {
 		requirePermission(locals.user, 'inventory:write');
 		// Box sync would go here — placeholder
 		return { syncSuccess: true, syncMessage: 'Sync not configured' };
+	},
+
+	updateStatus: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const spuId = form.get('spuId')?.toString();
+		const newStatus = form.get('status')?.toString();
+		if (!spuId || !newStatus) return fail(400, { error: 'SPU ID and status required' });
+
+		const validStatuses = ['draft', 'assembling', 'assembled', 'validating', 'validated', 'assigned', 'deployed', 'servicing', 'retired', 'voided'];
+		if (!validStatuses.includes(newStatus)) return fail(400, { error: 'Invalid status' });
+
+		const spu = await Spu.findById(spuId);
+		if (!spu) return fail(404, { error: 'SPU not found' });
+		if ((spu as any).finalizedAt) return fail(400, { error: 'SPU is finalized' });
+
+		await Spu.updateOne({ _id: spuId }, { $set: { status: newStatus } });
+
+		// Audit log
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'spus',
+			recordId: spuId,
+			action: 'UPDATE',
+			oldData: { status: (spu as any).status },
+			newData: { status: newStatus },
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+
+		return { statusUpdateSuccess: true, updatedStatus: newStatus };
 	}
 };

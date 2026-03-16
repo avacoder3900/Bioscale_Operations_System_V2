@@ -1,0 +1,127 @@
+import { connectDB, OpentronsRobot, WaxFillingRun } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
+import type { PageServerLoad } from './$types';
+
+export const load: PageServerLoad = async ({ locals }) => {
+	requirePermission(locals.user, 'manufacturing:read');
+	await connectDB();
+
+	// Fetch all active robots
+	const robots = await OpentronsRobot.find({ isActive: true }, {
+		_id: 1, name: 1, robotSide: 1
+	}).lean();
+
+	const robotList = robots.map((r: any) => ({
+		robotId: r._id,
+		name: r.name ?? '',
+		description: r.robotSide ?? ''
+	}));
+
+	// Fetch active wax filling runs (not completed/aborted)
+	const activeWaxRuns = await WaxFillingRun.find({
+		status: { $nin: ['completed', 'aborted', 'cancelled'] }
+	}).lean();
+
+	// Build wax state per robot
+	const waxState = robotList.map((robot) => {
+		const run = activeWaxRuns.find((r: any) => r.robot?._id === robot.robotId);
+		return {
+			robotId: robot.robotId,
+			name: robot.name,
+			hasActiveRun: !!run,
+			stage: run ? (run as any).status ?? null : null,
+			alerts: [] as { type: string; message: string }[]
+		};
+	});
+
+	// Build reagent state per robot
+	// Check for active reagent runs in the reagent_filling_runs collection if it exists
+	let activeReagentRuns: any[] = [];
+	try {
+		const mongoose = (await import('mongoose')).default;
+		const db = mongoose.connection.db;
+		if (db) {
+			const collections = await db.listCollections({ name: 'reagent_filling_runs' }).toArray();
+			if (collections.length > 0) {
+				activeReagentRuns = await db.collection('reagent_filling_runs').find({
+					status: { $nin: ['completed', 'aborted', 'cancelled'] }
+				}).toArray();
+			}
+		}
+	} catch {
+		// Collection may not exist yet — that's fine
+	}
+
+	const reagentState = robotList.map((robot) => {
+		const run = activeReagentRuns.find((r: any) => r.robot?._id === robot.robotId);
+		return {
+			robotId: robot.robotId,
+			name: robot.name,
+			hasActiveRun: !!run,
+			stage: run ? run.status ?? null : null,
+			assayTypeName: run ? run.assayTypeName ?? null : null
+		};
+	});
+
+	// Robot availability: a robot is unavailable if it has an active wax OR reagent run
+	const robotAvailability = robotList.map((robot) => {
+		const wax = waxState.find((w) => w.robotId === robot.robotId);
+		const reagent = reagentState.find((r) => r.robotId === robot.robotId);
+		const waxActive = wax?.hasActiveRun ?? false;
+		const reagentActive = reagent?.hasActiveRun ?? false;
+		const activeWax = activeWaxRuns.find((r: any) => r.robot?._id === robot.robotId);
+		const activeReagent = activeReagentRuns.find((r: any) => r.robot?._id === robot.robotId);
+
+		return {
+			robotId: robot.robotId,
+			available: !waxActive && !reagentActive,
+			activeProcess: waxActive ? 'wax' : reagentActive ? 'reagent' : null,
+			activeRunId: activeWax?._id ?? activeReagent?._id ?? null
+		};
+	});
+
+	// Robot stats: count completed/aborted wax and reagent runs per robot
+	const allWaxRuns = await WaxFillingRun.find({}, { 'robot._id': 1, status: 1 }).lean();
+
+	let allReagentRuns: any[] = [];
+	try {
+		const mongoose = (await import('mongoose')).default;
+		const db = mongoose.connection.db;
+		if (db) {
+			const collections = await db.listCollections({ name: 'reagent_filling_runs' }).toArray();
+			if (collections.length > 0) {
+				allReagentRuns = await db.collection('reagent_filling_runs')
+					.find({}, { projection: { 'robot._id': 1, status: 1 } }).toArray();
+			}
+		}
+	} catch {
+		// Collection may not exist
+	}
+
+	const robotStats = robotList.map((robot) => {
+		const waxRuns = allWaxRuns.filter((r: any) => r.robot?._id === robot.robotId);
+		const reagentRuns = allReagentRuns.filter((r: any) => r.robot?._id === robot.robotId);
+
+		return {
+			robotId: robot.robotId,
+			waxRuns: {
+				total: waxRuns.length,
+				completed: waxRuns.filter((r: any) => r.status === 'completed').length,
+				aborted: waxRuns.filter((r: any) => r.status === 'aborted').length
+			},
+			reagentRuns: {
+				total: reagentRuns.length,
+				completed: reagentRuns.filter((r: any) => r.status === 'completed').length,
+				aborted: reagentRuns.filter((r: any) => r.status === 'aborted').length
+			}
+		};
+	});
+
+	return {
+		robots: robotList,
+		waxState,
+		reagentState,
+		robotAvailability,
+		robotStats
+	};
+};
