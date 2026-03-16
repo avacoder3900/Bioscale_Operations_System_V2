@@ -304,7 +304,11 @@ export const actions: Actions = {
 		let cartridgeIds: string[] = [];
 		if (cartridgeScansRaw) {
 			try {
-				cartridgeIds = JSON.parse(cartridgeScansRaw);
+				const parsed = JSON.parse(cartridgeScansRaw);
+				// Handle both [{cartridgeId, backedLotId}] and ["id1","id2"] formats
+				cartridgeIds = parsed.map((item: any) =>
+					typeof item === 'string' ? item : item.cartridgeId
+				);
 			} catch {
 				return fail(400, { error: 'Invalid cartridge scan data' });
 			}
