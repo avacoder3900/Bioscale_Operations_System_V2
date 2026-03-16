@@ -795,7 +795,7 @@
 				plannedCartridgeCount={previewParam ? 24 : data.runState.plannedCartridgeCount}
 				onComplete={handleDeckLoadComplete}
 				readonly={isPreviewOrPast}
-				suppressFocus={showCancelModal}
+				suppressFocus={showCancelModal || showOverrideModal}
 			/>
 		{:else if displayStage === 'Running'}
 			<RunExecution
@@ -816,7 +816,7 @@
 				deckLockoutMin={data.settings.deckLockoutMin}
 				onComplete={handleCoolingComplete}
 				readonly={isPreviewOrPast}
-				suppressFocus={showCancelModal}
+				suppressFocus={showCancelModal || showOverrideModal}
 			/>
 		{:else if displayStage === 'QC'}
 			{@const qcCarts = previewParam ? mockQcCartridges : data.qcCartridges.map((c) => ({
