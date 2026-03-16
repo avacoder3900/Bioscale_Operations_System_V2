@@ -1,6 +1,7 @@
 import { json } from '@sveltejs/kit';
 import { connectDB, generateId, Consumable, LotRecord, CartridgeRecord } from '$lib/server/db';
 import { WaxFillingRun } from '$lib/server/db/models/wax-filling-run.js';
+import { OpentronsRobot } from '$lib/server/db/models/opentrons-robot.js';
 import type { RequestHandler } from './$types';
 
 const TEST_PREFIX = 'TEST-';
@@ -9,7 +10,13 @@ const COUNT = 200;
 export const POST: RequestHandler = async () => {
 	await connectDB();
 
-	const results: Record<string, number> = {};
+	const results: Record<string, number | string[]> = {};
+
+	// 0. Find all active robots so oven lots match real robot IDs
+	const robots = await OpentronsRobot.find({ isActive: true }, { _id: 1, name: 1 }).lean();
+	const robotIds = robots.map((r: any) => String(r._id));
+	if (!robotIds.length) robotIds.push('robot-1');
+	results.robotIds = robotIds;
 
 	// 1. Lots (bulk upsert)
 	const lotOps = Array.from({ length: COUNT }, (_, i) => {
@@ -96,27 +103,31 @@ export const POST: RequestHandler = async () => {
 	results.cartridges = cartResult.upsertedCount;
 
 	// 5. Completed WaxFillingRuns with ovenLocationId (oven lots for deck loading)
-	const waxRunOps = Array.from({ length: 10 }, (_, i) => {
-		const runId = `${TEST_PREFIX}WXR-${String(i + 1).padStart(3, '0')}`;
-		return {
-			updateOne: {
-				filter: { _id: runId },
-				update: {
-					$setOnInsert: {
-						_id: runId,
-						robot: { _id: 'robot-1', name: 'Robot 1' },
-						status: 'completed',
-						ovenLocationId: `OVEN-SLOT-${i + 1}`,
-						runStartTime: new Date(Date.now() - 180 * 60 * 1000),
-						runEndTime: new Date(Date.now() - 120 * 60 * 1000),
-						plannedCartridgeCount: 24,
-						operator: { _id: 'test-user', username: 'test' }
-					}
-				},
-				upsert: true
-			}
-		};
-	});
+	//    Create 10 per robot so they show up regardless of which robot is selected
+	const waxRunOps: any[] = [];
+	for (const rid of robotIds) {
+		for (let i = 1; i <= 10; i++) {
+			const runId = `${TEST_PREFIX}WXR-${rid}-${String(i).padStart(3, '0')}`;
+			waxRunOps.push({
+				updateOne: {
+					filter: { _id: runId },
+					update: {
+						$setOnInsert: {
+							_id: runId,
+							robot: { _id: rid, name: `Robot ${rid}` },
+							status: 'completed',
+							ovenLocationId: `OVEN-SLOT-${i}`,
+							runStartTime: new Date(Date.now() - 180 * 60 * 1000),
+							runEndTime: new Date(Date.now() - 120 * 60 * 1000),
+							plannedCartridgeCount: 24,
+							operator: { _id: 'test-user', username: 'test' }
+						}
+					},
+					upsert: true
+				}
+			});
+		}
+	}
 	const waxResult = await WaxFillingRun.bulkWrite(waxRunOps);
 	results.ovenLots = waxResult.upsertedCount;
 
