@@ -303,7 +303,7 @@
 		if (data.runState.runId) {
 			submitAction('confirmCooling', {
 				runId: data.runState.runId,
-				trayId: result.trayId
+				coolingTrayId: result.trayId
 			});
 		}
 	}
