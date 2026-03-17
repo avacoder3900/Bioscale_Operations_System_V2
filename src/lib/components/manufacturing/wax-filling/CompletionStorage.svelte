@@ -13,15 +13,22 @@
 		rejectedCount: number;
 	}
 
+	interface FridgeOption {
+		id: string;
+		displayName: string;
+		barcode: string;
+	}
+
 	interface Props {
 		cartridges: CartridgeItem[];
 		runSummary: RunSummary;
+		fridges?: FridgeOption[];
 		onRecordStorage: (cartridgeIds: string[], location: string) => void;
 		onComplete: () => void;
 		readonly?: boolean;
 	}
 
-	let { cartridges, runSummary, onRecordStorage, onComplete, readonly: isReadonly = false }: Props = $props();
+	let { cartridges, runSummary, fridges = [], onRecordStorage, onComplete, readonly: isReadonly = false }: Props = $props();
 
 	let storageLocation = $state('');
 
@@ -38,6 +45,11 @@
 		if (!value || needsStorage.length === 0) return;
 		onRecordStorage(needsStorage.map((c) => c.cartridgeId), value);
 		storageLocation = '';
+	}
+
+	function selectFridge(fridge: FridgeOption) {
+		const location = fridge.barcode || fridge.displayName;
+		onRecordStorage(needsStorage.map((c) => c.cartridgeId), location);
 	}
 </script>
 
@@ -66,10 +78,47 @@
 
 	<!-- Storage assignment -->
 	{#if !allStored && !isReadonly}
-		<div class="space-y-2">
+		<div class="space-y-3">
 			<p class="text-sm text-[var(--color-tron-text-secondary)]">
 				{needsStorage.length} accepted cartridge{needsStorage.length !== 1 ? 's' : ''} need storage assignment
 			</p>
+
+			<!-- Fridge quick-select buttons -->
+			{#if fridges.length > 0}
+				<div class="space-y-2">
+					<p class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Select a fridge</p>
+					<div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+						{#each fridges as fridge (fridge.id)}
+							<button
+								type="button"
+								onclick={() => selectFridge(fridge)}
+								disabled={needsStorage.length === 0}
+								class="flex items-center gap-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3 text-left transition-all hover:border-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-50"
+							>
+								<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--color-tron-cyan)]/10">
+									<svg class="h-6 w-6 text-[var(--color-tron-cyan)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+										<path stroke-linecap="round" stroke-linejoin="round" d="M6 2h12a1 1 0 011 1v18a1 1 0 01-1 1H6a1 1 0 01-1-1V3a1 1 0 011-1zm0 12h12M10 6h1" />
+									</svg>
+								</div>
+								<div class="min-w-0 flex-1">
+									<p class="text-sm font-semibold text-[var(--color-tron-text)] truncate">{fridge.displayName}</p>
+									{#if fridge.barcode}
+										<p class="font-mono text-[10px] text-[var(--color-tron-text-secondary)] truncate">{fridge.barcode}</p>
+									{/if}
+								</div>
+							</button>
+						{/each}
+					</div>
+				</div>
+
+				<div class="flex items-center gap-3">
+					<div class="h-px flex-1 bg-[var(--color-tron-border)]"></div>
+					<span class="text-xs text-[var(--color-tron-text-secondary)]">or scan / type</span>
+					<div class="h-px flex-1 bg-[var(--color-tron-border)]"></div>
+				</div>
+			{/if}
+
+			<!-- Manual scan/type input -->
 			<div class="flex gap-2">
 				<input
 					bind:value={storageLocation}

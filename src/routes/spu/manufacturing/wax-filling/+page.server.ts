@@ -1,6 +1,7 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
-	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId
+	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
+	EquipmentLocation
 } from '$lib/server/db';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
@@ -48,7 +49,8 @@ function emptyState(robotId: string, loadError: string | null = null) {
 		ovenLots: [] as { lotId: string; ready: boolean }[],
 		rejectionCodes: [] as any[],
 		qcCartridges: [] as any[],
-		storageCartridges: [] as any[]
+		storageCartridges: [] as any[],
+		fridges: [] as { id: string; displayName: string; barcode: string }[]
 	};
 }
 
@@ -173,6 +175,14 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			storageLocation: c.waxStorage?.location ?? null
 		}));
 
+		// Fridges for storage selection
+		const fridgesRaw = await EquipmentLocation.find({ locationType: 'fridge', isActive: true }).lean().catch(() => []);
+		const fridges = (fridgesRaw as any[]).map((f: any) => ({
+			id: String(f._id),
+			displayName: f.displayName ?? f.barcode ?? String(f._id),
+			barcode: f.barcode ?? ''
+		}));
+
 		// Oven lots (completed runs with ovenLocationId set)
 		const ovenRunsRaw = await WaxFillingRun.find({
 			'robot._id': robotId,
@@ -210,7 +220,8 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			ovenLots,
 			rejectionCodes,
 			qcCartridges,
-			storageCartridges
+			storageCartridges,
+			fridges
 		};
 	} catch (err) {
 		console.error('[WAX-FILLING PAGE] Load error:', err instanceof Error ? err.message : err);
