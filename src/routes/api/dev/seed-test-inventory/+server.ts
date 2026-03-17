@@ -1,5 +1,6 @@
 import { json } from '@sveltejs/kit';
-import { connectDB, generateId, Consumable, LotRecord, CartridgeRecord } from '$lib/server/db';
+import { connectDB, generateId, Consumable, LotRecord, CartridgeRecord, EquipmentLocation } from '$lib/server/db';
+import { Equipment } from '$lib/server/db/models/equipment.js';
 import { WaxFillingRun } from '$lib/server/db/models/wax-filling-run.js';
 import { OpentronsRobot } from '$lib/server/db/models/opentrons-robot.js';
 import type { RequestHandler } from './$types';
@@ -159,6 +160,82 @@ export const POST: RequestHandler = async () => {
 	});
 	const reagentResult = await CartridgeRecord.bulkWrite(reagentOps);
 	results.reagentCartridges = reagentResult.upsertedCount;
+
+	// 7. Fridges
+	const fridgeNames = ['Fridge 1', 'Fridge 2', 'Fridge 3'];
+	const fridgeOps = fridgeNames.map((name, i) => ({
+		updateOne: {
+			filter: { displayName: name, locationType: 'fridge' },
+			update: {
+				$setOnInsert: {
+					_id: generateId(),
+					displayName: name,
+					barcode: `FRG-${String(i + 1).padStart(3, '0')}`,
+					locationType: 'fridge',
+					isActive: true,
+					capacity: 10,
+					notes: `Test fridge ${i + 1}`
+				}
+			},
+			upsert: true
+		}
+	}));
+	const fridgeResult = await EquipmentLocation.bulkWrite(fridgeOps);
+	results.fridges = fridgeResult.upsertedCount;
+
+	// 8. Ovens
+	const ovenNames = ['Oven 1', 'Oven 2', 'Oven 3'];
+	const ovenOps = ovenNames.map((name, i) => ({
+		updateOne: {
+			filter: { displayName: name, locationType: 'oven' },
+			update: {
+				$setOnInsert: {
+					_id: generateId(),
+					displayName: name,
+					barcode: `OVN-${String(i + 1).padStart(3, '0')}`,
+					locationType: 'oven',
+					isActive: true,
+					capacity: 6,
+					notes: `Test oven ${i + 1}`
+				}
+			},
+			upsert: true
+		}
+	}));
+	const ovenResult = await EquipmentLocation.bulkWrite(ovenOps);
+	results.ovens = ovenResult.upsertedCount;
+
+	// 9. Equipment records (for equipment overview page)
+	const equipOps = [
+		...fridgeNames.map((name, i) => ({
+			updateOne: {
+				filter: { name, equipmentType: 'fridge' },
+				update: {
+					$setOnInsert: {
+						_id: generateId(), name, equipmentType: 'fridge',
+						status: 'active', currentTemperatureC: 2 + Math.random() * 4,
+						notes: `Test fridge ${i + 1}`
+					}
+				},
+				upsert: true
+			}
+		})),
+		...ovenNames.map((name, i) => ({
+			updateOne: {
+				filter: { name, equipmentType: 'oven' },
+				update: {
+					$setOnInsert: {
+						_id: generateId(), name, equipmentType: 'oven',
+						status: 'active', currentTemperatureC: 60 + Math.random() * 10,
+						notes: `Test oven ${i + 1}`
+					}
+				},
+				upsert: true
+			}
+		}))
+	];
+	const equipResult = await Equipment.bulkWrite(equipOps);
+	results.equipment = equipResult.upsertedCount;
 
 	return json({
 		success: true,
