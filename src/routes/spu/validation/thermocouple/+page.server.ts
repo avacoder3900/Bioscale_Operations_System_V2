@@ -1,6 +1,6 @@
-import { fail } from '@sveltejs/kit';
+import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, ValidationSession, GeneratedBarcode, generateId } from '$lib/server/db';
+import { connectDB, ValidationSession, GeneratedBarcode, AuditLog, generateId } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -20,9 +20,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 		recentSessions: sessions.map((s: any) => ({
 			id: s._id,
 			status: s.status,
-			barcode: barcodeMap.get(s.generatedBarcodeId) ?? null,
+			barcode: s.barcode ?? barcodeMap.get(s.generatedBarcodeId) ?? null,
 			createdAt: s.createdAt?.toISOString() ?? new Date().toISOString(),
-			config: null // config stored in session if needed
+			config: s.config ?? null
 		}))
 	};
 };
@@ -33,6 +33,19 @@ export const actions: Actions = {
 		await connectDB();
 		const form = await request.formData();
 
+		// Read config from form
+		const durationSeconds = Number(form.get('durationSeconds')) || 60;
+		const intervalSeconds = Number(form.get('interval')) || 1;
+		const minTemp = Number(form.get('minTemp'));
+		const maxTemp = Number(form.get('maxTemp'));
+
+		// Validate
+		if (durationSeconds <= 0) return fail(400, { error: 'Duration must be positive' });
+		if (intervalSeconds <= 0) return fail(400, { error: 'Interval must be positive' });
+		if (isNaN(minTemp) || isNaN(maxTemp)) return fail(400, { error: 'Temperature range is required' });
+		if (minTemp >= maxTemp) return fail(400, { error: 'Min temperature must be less than max' });
+
+		// Generate barcode
 		const barcodeDoc = await GeneratedBarcode.findOneAndUpdate(
 			{ prefix: 'THERMO' },
 			{ $inc: { sequence: 1 } },
@@ -50,6 +63,7 @@ export const actions: Actions = {
 			type: 'validation_thermo'
 		});
 
+		// Create session with config
 		const sessionId = generateId();
 		await ValidationSession.create({
 			_id: sessionId,
@@ -57,9 +71,23 @@ export const actions: Actions = {
 			status: 'pending',
 			userId: locals.user!._id,
 			generatedBarcodeId: barcodeId,
+			barcode,
+			config: { durationSeconds, intervalSeconds, minTemp, maxTemp },
 			results: []
 		});
 
-		return { success: true, sessionId };
+		// Audit log
+		await AuditLog.create({
+			_id: generateId(),
+			action: 'thermocouple_session_created',
+			resourceType: 'validation_session',
+			resourceId: sessionId,
+			userId: locals.user!._id,
+			username: locals.user!.username,
+			timestamp: new Date(),
+			details: { barcode, durationSeconds, intervalSeconds, minTemp, maxTemp }
+		});
+
+		throw redirect(303, `/spu/validation/thermocouple/${sessionId}`);
 	}
 };
