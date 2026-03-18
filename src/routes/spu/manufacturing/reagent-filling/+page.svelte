@@ -651,6 +651,7 @@
 				rejectedCount: rejected.length,
 				qaqcCount: qaqc.length
 			}}
+			fridges={previewParam ? [{ id: 'f1', displayName: 'Fridge 1', barcode: 'FRG-001' }, { id: 'f2', displayName: 'Fridge 2', barcode: 'FRG-002' }] : data.fridges}
 			onRecordStorage={(cartridgeIds, location) => {
 				if (previewParam) { errorMsg = 'Actions disabled in preview mode'; return; }
 				submitForm('recordBatchStorage', { cartridgeIds: JSON.stringify(cartridgeIds), location });

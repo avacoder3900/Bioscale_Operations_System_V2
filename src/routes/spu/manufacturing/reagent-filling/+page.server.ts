@@ -1,7 +1,7 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, ReagentBatchRecord, AssayDefinition, CartridgeRecord, Consumable,
-	ManufacturingSettings, WaxFillingRun, generateId
+	ManufacturingSettings, WaxFillingRun, EquipmentLocation, generateId
 } from '$lib/server/db';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
@@ -39,7 +39,8 @@ function emptyReagentState(robotId: string, loadError?: string) {
 		cartridges: [] as any[],
 		currentSealBatch: null as null | { batchId: string; firstScanTime: string | null; cartridgeIds: string[] },
 		rejectionCodes: [] as any[],
-		tubes: [] as { id: string; reagentName: string; volume: number }[]
+		tubes: [] as { id: string; reagentName: string; volume: number }[],
+		fridges: [] as { id: string; displayName: string; barcode: string }[]
 	};
 }
 
@@ -158,6 +159,14 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			volume: t.volumeMicroliters ?? 0
 		}));
 
+		// Fridges for storage selection
+		const fridgesRaw = await EquipmentLocation.find({ locationType: 'fridge', isActive: true }).lean().catch(() => []);
+		const fridges = (fridgesRaw as any[]).map((f: any) => ({
+			id: String(f._id),
+			displayName: f.displayName ?? f.name ?? String(f._id),
+			barcode: f.barcode ?? ''
+		}));
+
 		// Check if this robot is blocked by an active wax filling run
 		let robotBlocked: { process: 'wax'; runId: string | null } | null = null;
 		if (robotId) {
@@ -181,7 +190,8 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			cartridges,
 			currentSealBatch,
 			rejectionCodes,
-			tubes
+			tubes,
+			fridges
 		};
 	} catch (err) {
 		console.error('[REAGENT-FILLING PAGE] Load error:', err instanceof Error ? err.message : err);
