@@ -22,7 +22,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		await connectDB();
 
 		const [robots, activeRuns] = await Promise.all([
-			OpentronsRobot.find({ isActive: true }, { _id: 1, name: 1, robotSide: 1 }).lean(),
+			OpentronsRobot.find({ isActive: true }, { _id: 1, name: 1, robotSide: 1 }).sort({ name: 1 }).lean(),
 			ReagentBatchRecord.find(
 				{ status: { $nin: [...TERMINAL] } },
 				{ 'robot._id': 1, status: 1, runStartTime: 1, runEndTime: 1, cartridgeCount: 1, 'assayType.name': 1 }

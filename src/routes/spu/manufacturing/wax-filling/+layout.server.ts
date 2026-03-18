@@ -23,7 +23,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		await connectDB();
 
 		const [robots, activeRuns] = await Promise.all([
-			OpentronsRobot.find({ isActive: true }, { _id: 1, name: 1, robotSide: 1 }).lean(),
+			OpentronsRobot.find({ isActive: true }, { _id: 1, name: 1, robotSide: 1 }).sort({ name: 1 }).lean(),
 			WaxFillingRun.find(
 				{ status: { $in: ACTIVE_STAGES } },
 				{ 'robot._id': 1, status: 1, runStartTime: 1, runEndTime: 1, deckId: 1 }
