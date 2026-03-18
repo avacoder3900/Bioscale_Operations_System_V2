@@ -137,10 +137,12 @@
 	let bcodeLength = $derived(new TextEncoder().encode(bcodeString).length);
 	let estimatedDuration = $derived(calcDuration(instructions));
 
-	// Notify parent on change
+	// Notify parent on change — use explicit dependency on instructions array length + bcodeString
 	$effect(() => {
-		if (bcodeString && !compileError) {
-			oncompile(instructions, bcodeString);
+		const _len = instructions.length;
+		const _bcode = bcodeString;
+		if (_bcode !== undefined && !compileError) {
+			oncompile(instructions, _bcode);
 		}
 	});
 

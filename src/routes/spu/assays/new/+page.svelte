@@ -83,6 +83,18 @@
 			</div>
 			<div>
 				<label class="mb-1 block text-sm font-bold" style="color: var(--color-tron-text-secondary)">
+					SKU Code
+				</label>
+				<input
+					name="skuCode"
+					type="text"
+					class="tron-input w-full px-3 py-2"
+					style="min-height: 44px"
+					placeholder="e.g., TROP-I-001 (auto-generated if blank)"
+				/>
+			</div>
+			<div>
+				<label class="mb-1 block text-sm font-bold" style="color: var(--color-tron-text-secondary)">
 					Description
 				</label>
 				<textarea
@@ -122,7 +134,7 @@
 				type="submit"
 				class="tron-button px-6 py-2"
 				style="min-height: 44px; background: var(--color-tron-cyan, #00ffff); color: #000"
-				disabled={submitting || !name.trim() || currentInstructions.length < 2}
+				disabled={submitting || !name.trim() || currentInstructions.length < 3}
 			>
 				{submitting ? 'Creating...' : 'Create Assay'}
 			</button>
