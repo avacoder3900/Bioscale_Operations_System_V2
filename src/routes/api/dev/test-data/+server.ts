@@ -17,12 +17,19 @@ export const GET: RequestHandler = async ({ url }) => {
 			if (!deck) return json({ error: 'No available decks found' }, { status: 404 });
 			return json({ deckId: (deck as any)._id });
 		}
-		case 'reagent-cartridge': {
-			const cart = await CartridgeRecord.findOne({
-				currentStage: 'reagent_filling',
-				currentInventory: 'Wax Filled Cartridge'
-			}).lean();
-			if (!cart) return json({ error: 'No reagent-stage cartridges found' }, { status: 404 });
+		case 'reagent-cartridge':
+		case 'cartridge': {
+			// Get a random cartridge not already used in an active run
+			const exclude = url.searchParams.get('exclude')?.split(',') ?? [];
+			const filter: Record<string, any> = {
+				currentPhase: { $in: ['wax_stored', 'wax_filled', 'reagent_filling', 'backing'] }
+			};
+			if (exclude.length > 0) filter._id = { $nin: exclude };
+			const count = await CartridgeRecord.countDocuments(filter);
+			if (count === 0) return json({ error: 'No available cartridges found' }, { status: 404 });
+			const skip = Math.floor(Math.random() * count);
+			const cart = await CartridgeRecord.findOne(filter).skip(skip).lean();
+			if (!cart) return json({ error: 'No available cartridges found' }, { status: 404 });
 			return json({ cartridgeId: (cart as any)._id });
 		}
 		case 'tube': {
