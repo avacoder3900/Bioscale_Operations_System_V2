@@ -19,17 +19,10 @@ export const GET: RequestHandler = async ({ url }) => {
 		}
 		case 'reagent-cartridge':
 		case 'cartridge': {
-			// Get a random cartridge — check both currentPhase and currentStage (seed uses currentStage)
+			// Get a random cartridge that has backing data (i.e. exists and is usable)
 			const exclude = url.searchParams.get('exclude')?.split(',').filter(Boolean) ?? [];
-			const filter: Record<string, any> = {
-				$or: [
-					{ currentPhase: { $in: ['wax_stored', 'wax_filled', 'reagent_filling', 'backing'] } },
-					{ currentStage: { $in: ['wax_filling', 'reagent_filling', 'backing'] } },
-					{ currentPhase: { $exists: false }, currentStage: { $exists: true } }
-				]
-			};
+			const filter: Record<string, any> = { 'backing.recordedAt': { $exists: true } };
 			if (exclude.length > 0) filter._id = { $nin: exclude };
-			// Use aggregate $sample for speed instead of count+skip
 			const pipeline: any[] = [{ $match: filter }, { $sample: { size: 1 } }, { $project: { _id: 1 } }];
 			const results = await CartridgeRecord.aggregate(pipeline);
 			if (!results.length) return json({ error: 'No available cartridges found' }, { status: 404 });
