@@ -34,7 +34,7 @@ function emptyReagentState(robotId: string, loadError?: string) {
 			hasActiveRun: false, stage: null, assayTypeName: null,
 			cartridgeCount: 0, runStartTime: null, runEndTime: null
 		},
-		assayTypes: [] as { id: string; name: string; skuCode: string | null }[],
+		assayTypes: [] as { id: string; name: string; skuCode: string | null; isActive: boolean; reagents: { wellPosition: number; reagentName: string }[] }[],
 		reagentDefinitions: [] as { id: string; reagentName: string; wellPosition: number | null; volumeMicroliters: number | null; isActive: boolean }[],
 		cartridges: [] as any[],
 		currentSealBatch: null as null | { batchId: string; firstScanTime: string | null; cartridgeIds: string[] },
@@ -74,7 +74,11 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			}));
 
 		const assayTypes = (assayDefs as any[]).map((a) => ({
-			id: String(a._id), name: a.name ?? '', skuCode: a.skuCode ?? null, isActive: a.isActive ?? true
+			id: String(a._id), name: a.name ?? '', skuCode: a.skuCode ?? null, isActive: a.isActive ?? true,
+			reagents: ((a.reagents ?? []) as any[]).filter((r: any) => r.isActive !== false).map((r: any) => ({
+				wellPosition: r.wellPosition ?? 0,
+				reagentName: r.reagentName ?? ''
+			}))
 		}));
 
 		// Get reagent definitions for the active run's assay type (or all if no run)

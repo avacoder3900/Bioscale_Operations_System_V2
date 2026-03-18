@@ -31,10 +31,10 @@
 
 	const needsStorage = $derived(
 		cartridges.filter(
-			(c) => c.inspectionStatus === 'Accepted' && c.currentStatus !== 'Stored'
+			(c) => c.inspectionStatus === 'Accepted' && !c.storageLocation
 		)
 	);
-	const stored = $derived(cartridges.filter((c) => c.currentStatus === 'Stored'));
+	const stored = $derived(cartridges.filter((c) => c.inspectionStatus === 'Accepted' && !!c.storageLocation));
 	const allStored = $derived(needsStorage.length === 0 && stored.length > 0);
 
 	function applyToAll() {
