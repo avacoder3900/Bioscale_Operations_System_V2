@@ -19,18 +19,21 @@ export const GET: RequestHandler = async ({ url }) => {
 		}
 		case 'reagent-cartridge':
 		case 'cartridge': {
-			// Get a random cartridge not already used in an active run
-			const exclude = url.searchParams.get('exclude')?.split(',') ?? [];
+			// Get a random cartridge — check both currentPhase and currentStage (seed uses currentStage)
+			const exclude = url.searchParams.get('exclude')?.split(',').filter(Boolean) ?? [];
 			const filter: Record<string, any> = {
-				currentPhase: { $in: ['wax_stored', 'wax_filled', 'reagent_filling', 'backing'] }
+				$or: [
+					{ currentPhase: { $in: ['wax_stored', 'wax_filled', 'reagent_filling', 'backing'] } },
+					{ currentStage: { $in: ['wax_filling', 'reagent_filling', 'backing'] } },
+					{ currentPhase: { $exists: false }, currentStage: { $exists: true } }
+				]
 			};
 			if (exclude.length > 0) filter._id = { $nin: exclude };
-			const count = await CartridgeRecord.countDocuments(filter);
-			if (count === 0) return json({ error: 'No available cartridges found' }, { status: 404 });
-			const skip = Math.floor(Math.random() * count);
-			const cart = await CartridgeRecord.findOne(filter).skip(skip).lean();
-			if (!cart) return json({ error: 'No available cartridges found' }, { status: 404 });
-			return json({ cartridgeId: (cart as any)._id });
+			// Use aggregate $sample for speed instead of count+skip
+			const pipeline: any[] = [{ $match: filter }, { $sample: { size: 1 } }, { $project: { _id: 1 } }];
+			const results = await CartridgeRecord.aggregate(pipeline);
+			if (!results.length) return json({ error: 'No available cartridges found' }, { status: 404 });
+			return json({ cartridgeId: results[0]._id });
 		}
 		case 'tube': {
 			const tube = await Consumable.findOne({ type: 'incubator_tube', status: 'Active' }).lean();
