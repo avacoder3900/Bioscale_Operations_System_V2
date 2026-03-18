@@ -629,6 +629,10 @@
 				if (previewParam) { errorMsg = 'Actions disabled in preview mode'; return; }
 				submitForm('transitionToStorage');
 			}}
+			onRejectCartridge={(cartridgeId) => {
+				if (previewParam) { errorMsg = 'Actions disabled in preview mode'; return; }
+				submitForm('rejectAtSeal', { cartridgeId });
+			}}
 			readonly={isViewingPast}
 		/>
 

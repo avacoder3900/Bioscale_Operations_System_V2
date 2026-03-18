@@ -618,6 +618,40 @@ export const actions: Actions = {
 	},
 
 	/** Transition from Top Sealing to Storage */
+	/** Reject a cartridge during top sealing */
+	rejectAtSeal: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const runId = data.get('runId') as string;
+		const cartridgeId = data.get('cartridgeId') as string;
+		const now = new Date();
+
+		if (!cartridgeId) return fail(400, { error: 'Cartridge ID required' });
+
+		// Update inspection status to Rejected in the run's cartridgesFilled
+		await ReagentBatchRecord.findOneAndUpdate(
+			{ _id: runId, 'cartridgesFilled.cartridgeId': cartridgeId },
+			{
+				$set: {
+					'cartridgesFilled.$.inspectionStatus': 'Rejected',
+					'cartridgesFilled.$.inspectionReason': 'Rejected at top sealing',
+					'cartridgesFilled.$.inspectedBy': { _id: locals.user._id, username: locals.user.username },
+					'cartridgesFilled.$.inspectedAt': now
+				}
+			}
+		);
+
+		// Update CartridgeRecord
+		await CartridgeRecord.findOneAndUpdate(
+			{ _id: cartridgeId },
+			{ $set: { currentPhase: 'voided', voidedAt: now, voidReason: 'Rejected at top sealing' } }
+		);
+
+		return { success: true };
+	},
+
 	transitionToStorage: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
