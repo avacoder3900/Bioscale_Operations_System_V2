@@ -48,8 +48,7 @@
 	}
 
 	function selectFridge(fridge: FridgeOption) {
-		const location = fridge.barcode || fridge.displayName;
-		onRecordStorage(needsStorage.map((c) => c.cartridgeId), location);
+		storageLocation = fridge.barcode || fridge.displayName;
 	}
 </script>
 
