@@ -74,7 +74,7 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			}));
 
 		const assayTypes = (assayDefs as any[]).map((a) => ({
-			id: String(a._id), name: a.name ?? '', skuCode: a.skuCode ?? null
+			id: String(a._id), name: a.name ?? '', skuCode: a.skuCode ?? null, isActive: a.isActive ?? true
 		}));
 
 		// Get reagent definitions for the active run's assay type (or all if no run)
