@@ -211,7 +211,7 @@ export const actions: Actions = {
 			robot: { _id: robotId, name: robotName },
 			assayType: assayRef,
 			operator: { _id: locals.user._id, username: locals.user.username },
-			status: 'Setup',
+			status: 'Loading',
 			tubeRecords: [],
 			cartridgesFilled: [],
 			sealBatches: [],
