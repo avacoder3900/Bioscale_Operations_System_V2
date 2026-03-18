@@ -13,34 +13,26 @@
 
 	let name = $state('');
 	let description = $state('');
-	let currentInstructions = $state<Instruction[]>([]);
 	let instructionsJson = $state('[]');
 	let submitting = $state(false);
-	let editorKey = $state(0);
-	let autofillInstructions = $state<Instruction[] | undefined>(undefined);
+	let instructionCount = $state(2); // START_TEST + END_TEST
+	let showEditor = $state(true);
 
-	// Derive submit-readiness: name filled + at least 3 instructions (START + something + END)
-	let canSubmit = $derived(!submitting && name.trim().length > 0 && currentInstructions.length >= 3);
+	let canSubmit = $derived(!submitting && name.trim().length > 0 && instructionCount >= 3);
 
 	function handleCompile(instructions: Instruction[], _bcodeString: string) {
-		currentInstructions = instructions;
+		instructionCount = instructions.length;
 		instructionsJson = JSON.stringify(instructions);
 	}
 
 	function fillTestData() {
-		try {
-			name = TEST_ASSAY.name;
-			description = TEST_ASSAY.description;
-			const instrs = [...TEST_ASSAY.instructions];
-			autofillInstructions = instrs;
-			currentInstructions = instrs;
-			instructionsJson = JSON.stringify(instrs);
-			editorKey++;
-			console.log('[fillTestData] loaded', instrs.length, 'instructions, name:', name);
-		} catch (e) {
-			console.error('[fillTestData] ERROR:', e);
-			alert('Fill test data error: ' + (e instanceof Error ? e.message : String(e)));
-		}
+		name = TEST_ASSAY.name;
+		description = TEST_ASSAY.description;
+		instructionsJson = JSON.stringify(TEST_ASSAY.instructions);
+		instructionCount = TEST_ASSAY.instructions.length;
+		// Force re-render editor with test data
+		showEditor = false;
+		setTimeout(() => { showEditor = true; }, 50);
 	}
 </script>
 
@@ -120,7 +112,7 @@
 					type="button"
 					class="tron-button text-sm"
 					style="min-height: 44px; border-color: #f97316; color: #f97316"
-					onclick={fillTestData}
+					onclick={() => fillTestData()}
 				>
 					&#9881; Fill Test Data
 				</button>
@@ -131,9 +123,17 @@
 		<input type="hidden" name="instructions" value={instructionsJson} />
 
 		<!-- BCODE Editor -->
-		{#key editorKey}
-			<BcodeEditor initialInstructions={autofillInstructions} oncompile={handleCompile} />
-		{/key}
+		{#if showEditor}
+			<BcodeEditor
+				initialInstructions={instructionCount > 2 ? JSON.parse(instructionsJson) : undefined}
+				oncompile={handleCompile}
+			/>
+		{/if}
+
+		<!-- Debug info -->
+		<div class="mt-2 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-2 text-xs" style="color: var(--color-tron-text-secondary)">
+			Debug: name="{name}" | instructions={instructionCount} | canSubmit={canSubmit}
+		</div>
 
 		<!-- Submit -->
 		<div class="mt-4 flex justify-end gap-2">
@@ -143,10 +143,10 @@
 			<button
 				type="submit"
 				class="tron-button px-6 py-2"
-				style="min-height: 44px; background: var(--color-tron-cyan, #00ffff); color: #000"
+				style="min-height: 44px; background: {canSubmit ? 'var(--color-tron-cyan, #00ffff)' : '#555'}; color: {canSubmit ? '#000' : '#999'}"
 				disabled={!canSubmit}
 			>
-				{submitting ? 'Creating...' : canSubmit ? 'Create Assay' : `Need name + instructions (${currentInstructions.length} loaded)`}
+				{submitting ? 'Creating...' : canSubmit ? 'Create Assay' : `Add instructions (${instructionCount} loaded)`}
 			</button>
 		</div>
 	</form>
