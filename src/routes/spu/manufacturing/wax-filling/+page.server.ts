@@ -545,12 +545,8 @@ export const actions: Actions = {
 
 		const data = await request.formData();
 		const cartridgeIdsRaw = data.get('cartridgeIds') as string;
-		const location = data.get('location') as string;
+		const location = data.get('storageLocation') as string;
 		const coolingTrayId = (data.get('coolingTrayId') as string) || undefined;
-
-		console.log('[recordBatchStorage] formData keys:', [...data.keys()]);
-		console.log('[recordBatchStorage] location value:', JSON.stringify(location));
-		console.log('[recordBatchStorage] cartridgeIdsRaw:', cartridgeIdsRaw?.slice(0, 100));
 
 		let cartridgeIds: string[] = [];
 		try {
