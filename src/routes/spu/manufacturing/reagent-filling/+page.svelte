@@ -606,7 +606,10 @@
 				? mockCartridges.filter((c) => c.inspectionStatus === 'Accepted')
 				: data.cartridges.filter((c) => c.inspectionStatus === 'Accepted' && !c.topSealBatchId)}
 			currentBatch={previewParam ? null : (data.currentSealBatch ? {
-			...data.currentSealBatch,
+			batchId: data.currentSealBatch.batchId,
+			topSealLotId: data.currentSealBatch.topSealLotId ?? '',
+			scannedCount: data.currentSealBatch.scannedCount ?? data.currentSealBatch.cartridgeIds?.length ?? 0,
+			totalTarget: data.currentSealBatch.totalTarget ?? 12,
 			firstScanTime: data.currentSealBatch.firstScanTime ? new Date(data.currentSealBatch.firstScanTime) : null,
 			elapsedSeconds: data.currentSealBatch.firstScanTime
 				? Math.round((Date.now() - new Date(data.currentSealBatch.firstScanTime).getTime()) / 1000)

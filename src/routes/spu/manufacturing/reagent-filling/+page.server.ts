@@ -140,10 +140,14 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			const batches = activeRun?.sealBatches ?? [];
 			const inProgress = batches.find((b: any) => b.status === 'in_progress');
 			if (!inProgress) return null;
+			const cartridgeIds = (inProgress.cartridgeIds ?? []).map(String);
 			return {
 				batchId: String(inProgress._id),
+				topSealLotId: inProgress.topSealLotId ?? '',
+				scannedCount: cartridgeIds.length,
+				totalTarget: 12,
 				firstScanTime: inProgress.firstScanTime ? new Date(inProgress.firstScanTime).toISOString() : null,
-				cartridgeIds: (inProgress.cartridgeIds ?? []).map(String)
+				cartridgeIds
 			};
 		})();
 
