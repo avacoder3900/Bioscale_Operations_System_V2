@@ -5,7 +5,7 @@
 
 	let { data, form } = $props();
 
-	let activeTab = $state<'overview' | 'bcode' | 'cartridges' | 'results' | 'versions'>('overview');
+	let activeTab = $state<'overview' | 'bcode' | 'cartridges' | 'results' | 'versions' | 'reagents'>('overview');
 	let showEditModal = $state(false);
 	let showDeleteConfirm = $state(false);
 	let editName = $state(data.assay.name);
@@ -58,6 +58,66 @@
 			SET_SENSOR_PARAMS: '#6b7280'
 		};
 		return colors[type] ?? 'var(--color-tron-text-secondary, #9ca3af)';
+	}
+
+	// Reagents & BOM state
+	let editingReagentId = $state<string | null>(null);
+	let editReagent = $state({
+		wellPosition: 0, reagentName: '', unitCost: '0',
+		volumeMicroliters: 0, unit: '', classification: '',
+		hasBreakdown: false, sortOrder: 0, isActive: true
+	});
+	let showAddReagent = $state(false);
+	let newReagent = $state({
+		wellPosition: 0, reagentName: '', unitCost: '0',
+		volumeMicroliters: 0, unit: 'µL', classification: '',
+		hasBreakdown: false, sortOrder: 0
+	});
+	let expandedReagents = $state<Set<string>>(new Set());
+	let showAddSubFor = $state<string | null>(null);
+	let newSub = $state({ name: '', unitCost: '0', unit: 'µL', volumeMicroliters: 0, classification: '', sortOrder: 0 });
+	let editingSubId = $state<string | null>(null);
+	let editSub = $state({ name: '', unitCost: '0', unit: 'µL', volumeMicroliters: 0, classification: '', sortOrder: 0 });
+	let showBomSettings = $state(false);
+	let bomOverride = $state(data.assay.bomCostOverride ?? '');
+	let useSingle = $state(data.assay.useSingleCost ?? false);
+
+	function reagentCost(r: { unitCost: string | null; volumeMicroliters: number | null }): number {
+		return (parseFloat(r.unitCost ?? '0') || 0) * (r.volumeMicroliters ?? 0);
+	}
+
+	function toggleReagentExpand(id: string) {
+		const next = new Set(expandedReagents);
+		if (next.has(id)) next.delete(id);
+		else next.add(id);
+		expandedReagents = next;
+	}
+
+	function startEditReagent(r: typeof data.assay.reagents[0]) {
+		editReagent = {
+			wellPosition: r.wellPosition ?? 0,
+			reagentName: r.reagentName ?? '',
+			unitCost: r.unitCost ?? '0',
+			volumeMicroliters: r.volumeMicroliters ?? 0,
+			unit: r.unit ?? '',
+			classification: r.classification ?? '',
+			hasBreakdown: r.hasBreakdown ?? false,
+			sortOrder: r.sortOrder ?? 0,
+			isActive: r.isActive ?? true
+		};
+		editingReagentId = r.id;
+	}
+
+	function startEditSub(s: typeof data.assay.reagents[0]['subComponents'][0]) {
+		editSub = {
+			name: s.name ?? '',
+			unitCost: s.unitCost ?? '0',
+			unit: s.unit ?? 'µL',
+			volumeMicroliters: s.volumeMicroliters ?? 0,
+			classification: s.classification ?? '',
+			sortOrder: s.sortOrder ?? 0
+		};
+		editingSubId = s.id;
 	}
 
 	async function handleRestoreVersion(versionNumber: number) {
@@ -313,6 +373,25 @@
 					style="background: var(--color-tron-cyan, #00ffff); color: #000"
 				>
 					{data.versions.length}
+				</span>
+			{/if}
+		</button>
+		<button
+			class="px-4 py-2"
+			style="min-height: 44px; color: {activeTab === 'reagents'
+				? 'var(--color-tron-cyan, #00ffff)'
+				: 'var(--color-tron-text-secondary, #9ca3af)'}; border-bottom: 2px solid {activeTab === 'reagents'
+				? 'var(--color-tron-cyan, #00ffff)'
+				: 'transparent'}"
+			onclick={() => (activeTab = 'reagents')}
+		>
+			Reagents & BOM
+			{#if data.assay.reagents.length > 0}
+				<span
+					class="ml-1 rounded-full px-1.5 py-0.5 text-xs"
+					style="background: var(--color-tron-cyan, #00ffff); color: #000"
+				>
+					{data.assay.reagents.length}
 				</span>
 			{/if}
 		</button>
@@ -651,6 +730,452 @@
 		</div>
 	{/if}
 </div>
+
+<!-- Reagents & BOM Tab -->
+{#if activeTab === 'reagents'}
+	<div class="space-y-6">
+		<!-- BOM Cost Summary -->
+		<div class="tron-card p-5">
+			<div class="mb-4 flex items-center justify-between">
+				<h3 class="text-lg font-semibold" style="color: var(--color-tron-cyan, #00ffff)">
+					BOM Cost Summary
+				</h3>
+				{#if data.canWrite}
+					<button
+						class="tron-button"
+						style="min-height: 44px; font-size: 0.8rem"
+						onclick={() => { showBomSettings = !showBomSettings; }}
+					>
+						{showBomSettings ? 'Hide Settings' : 'Cost Settings'}
+					</button>
+				{/if}
+			</div>
+
+			{#if showBomSettings}
+				<form
+					method="POST"
+					action="?/updateBomSettings"
+					use:enhance={() => ({ async onResult({ update }) { showBomSettings = false; await update(); } })}
+					class="mb-4 space-y-3 rounded p-4"
+					style="background: var(--color-tron-bg-secondary, #1f2937); border: 1px solid var(--color-tron-border, #374151)"
+				>
+					<div class="flex items-center gap-3">
+						<input type="hidden" name="useSingleCost" value={useSingle ? 'true' : 'false'} />
+						<input
+							type="checkbox"
+							id="useSingleCost"
+							bind:checked={useSingle}
+						/>
+						<label for="useSingleCost" class="text-sm" style="color: var(--color-tron-text-secondary, #9ca3af)">
+							Use single cost override
+						</label>
+					</div>
+					{#if useSingle}
+						<div>
+							<label class="mb-1 block text-sm" style="color: var(--color-tron-text-secondary, #9ca3af)">
+								BOM Cost Override ($)
+							</label>
+							<input
+								name="bomCostOverride"
+								type="text"
+								class="tron-input"
+								style="min-height: 44px; width: 200px"
+								bind:value={bomOverride}
+								placeholder="0.00"
+							/>
+						</div>
+					{:else}
+						<input type="hidden" name="bomCostOverride" value="" />
+					{/if}
+					<div class="flex gap-2">
+						<button type="submit" class="tron-button" style="min-height: 44px; background: var(--color-tron-cyan, #00ffff); color: #000; font-weight: 600">
+							Save Settings
+						</button>
+						<button type="button" class="tron-button" style="min-height: 44px" onclick={() => (showBomSettings = false)}>
+							Cancel
+						</button>
+					</div>
+				</form>
+			{/if}
+
+			<dl class="grid gap-3 sm:grid-cols-3">
+				<div class="rounded p-3" style="background: var(--color-tron-bg-secondary, #1f2937)">
+					<dt class="mb-1 text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">
+						Active Reagents
+					</dt>
+					<dd class="text-2xl font-bold" style="color: var(--color-tron-cyan, #00ffff)">
+						{data.assay.reagents.filter(r => r.isActive).length}
+					</dd>
+				</div>
+				<div class="rounded p-3" style="background: var(--color-tron-bg-secondary, #1f2937)">
+					<dt class="mb-1 text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">
+						Calculated BOM Cost
+					</dt>
+					<dd class="text-2xl font-bold" style="color: var(--color-tron-green, #39ff14)">
+						${data.assay.reagents.filter(r => r.isActive).reduce((sum, r) => sum + reagentCost(r), 0).toFixed(4)}
+					</dd>
+				</div>
+				<div class="rounded p-3" style="background: var(--color-tron-bg-secondary, #1f2937)">
+					<dt class="mb-1 text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">
+						{data.assay.useSingleCost ? 'Cost Override' : 'Effective Cost'}
+					</dt>
+					<dd class="text-2xl font-bold" style="color: var(--color-tron-text-primary, #f3f4f6)">
+						{#if data.assay.useSingleCost && data.assay.bomCostOverride}
+							${data.assay.bomCostOverride}
+						{:else}
+							${data.assay.reagents.filter(r => r.isActive).reduce((sum, r) => sum + reagentCost(r), 0).toFixed(4)}
+						{/if}
+					</dd>
+				</div>
+			</dl>
+		</div>
+
+		<!-- Reagent List -->
+		<div class="tron-card p-5">
+			<div class="mb-4 flex items-center justify-between">
+				<h3 class="text-lg font-semibold" style="color: var(--color-tron-cyan, #00ffff)">
+					Reagents
+				</h3>
+				{#if data.canWrite}
+					<button
+						class="tron-button"
+						style="min-height: 44px; background: var(--color-tron-cyan, #00ffff); color: #000; font-weight: 600"
+						onclick={() => {
+							newReagent = { wellPosition: (data.assay.reagents.length + 1), reagentName: '', unitCost: '0', volumeMicroliters: 0, unit: 'µL', classification: '', hasBreakdown: false, sortOrder: data.assay.reagents.length };
+							showAddReagent = true;
+						}}
+					>
+						+ Add Reagent
+					</button>
+				{/if}
+			</div>
+
+			{#if showAddReagent}
+				<form
+					method="POST"
+					action="?/addReagent"
+					use:enhance={() => ({ async onResult({ update }) { showAddReagent = false; await update(); } })}
+					class="mb-4 rounded p-4 space-y-3"
+					style="background: var(--color-tron-bg-secondary, #1f2937); border: 1px solid var(--color-tron-cyan, #00ffff)"
+				>
+					<h4 class="font-semibold text-sm" style="color: var(--color-tron-cyan, #00ffff)">New Reagent</h4>
+					<div class="grid gap-3 sm:grid-cols-3">
+						<div>
+							<label class="mb-1 block text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Well Position</label>
+							<input name="wellPosition" type="number" class="tron-input w-full" style="min-height: 44px" bind:value={newReagent.wellPosition} />
+						</div>
+						<div class="sm:col-span-2">
+							<label class="mb-1 block text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Reagent Name *</label>
+							<input name="reagentName" type="text" class="tron-input w-full" style="min-height: 44px" bind:value={newReagent.reagentName} required />
+						</div>
+						<div>
+							<label class="mb-1 block text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Unit Cost ($)</label>
+							<input name="unitCost" type="text" class="tron-input w-full" style="min-height: 44px" bind:value={newReagent.unitCost} placeholder="0.0000" />
+						</div>
+						<div>
+							<label class="mb-1 block text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Volume (µL)</label>
+							<input name="volumeMicroliters" type="number" step="0.001" class="tron-input w-full" style="min-height: 44px" bind:value={newReagent.volumeMicroliters} />
+						</div>
+						<div>
+							<label class="mb-1 block text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Unit</label>
+							<input name="unit" type="text" class="tron-input w-full" style="min-height: 44px" bind:value={newReagent.unit} placeholder="µL" />
+						</div>
+						<div>
+							<label class="mb-1 block text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Classification</label>
+							<input name="classification" type="text" class="tron-input w-full" style="min-height: 44px" bind:value={newReagent.classification} />
+						</div>
+						<div>
+							<label class="mb-1 block text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Sort Order</label>
+							<input name="sortOrder" type="number" class="tron-input w-full" style="min-height: 44px" bind:value={newReagent.sortOrder} />
+						</div>
+						<div class="flex items-center gap-2 sm:col-span-2">
+							<input type="hidden" name="hasBreakdown" value={newReagent.hasBreakdown ? 'true' : 'false'} />
+							<input type="checkbox" id="new-hasBreakdown" bind:checked={newReagent.hasBreakdown} />
+							<label for="new-hasBreakdown" class="text-sm" style="color: var(--color-tron-text-secondary, #9ca3af)">Has Sub-component Breakdown</label>
+						</div>
+					</div>
+					<div class="flex gap-2">
+						<button type="submit" class="tron-button" style="min-height: 44px; background: var(--color-tron-cyan, #00ffff); color: #000; font-weight: 600">Add Reagent</button>
+						<button type="button" class="tron-button" style="min-height: 44px" onclick={() => (showAddReagent = false)}>Cancel</button>
+					</div>
+				</form>
+			{/if}
+
+			{#if data.assay.reagents.length === 0}
+				<p style="color: var(--color-tron-text-secondary, #9ca3af)">No reagents defined. Add one above.</p>
+			{:else}
+				<div class="space-y-2">
+					{#each data.assay.reagents.slice().sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)) as reagent (reagent.id)}
+						<div
+							class="rounded"
+							style="border: 1px solid {reagent.isActive ? 'var(--color-tron-border, #374151)' : '#374151'}; background: var(--color-tron-bg-secondary, #1f2937); opacity: {reagent.isActive ? '1' : '0.6'}"
+						>
+							{#if editingReagentId === reagent.id}
+								<!-- Inline Edit Form -->
+								<form
+									method="POST"
+									action="?/updateReagent"
+									use:enhance={() => ({ async onResult({ update }) { editingReagentId = null; await update(); } })}
+									class="p-4 space-y-3"
+								>
+									<input type="hidden" name="reagentId" value={reagent.id} />
+									<div class="grid gap-3 sm:grid-cols-3">
+										<div>
+											<label class="mb-1 block text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Well Position</label>
+											<input name="wellPosition" type="number" class="tron-input w-full" style="min-height: 44px" bind:value={editReagent.wellPosition} />
+										</div>
+										<div class="sm:col-span-2">
+											<label class="mb-1 block text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Reagent Name</label>
+											<input name="reagentName" type="text" class="tron-input w-full" style="min-height: 44px" bind:value={editReagent.reagentName} required />
+										</div>
+										<div>
+											<label class="mb-1 block text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Unit Cost ($)</label>
+											<input name="unitCost" type="text" class="tron-input w-full" style="min-height: 44px" bind:value={editReagent.unitCost} />
+										</div>
+										<div>
+											<label class="mb-1 block text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Volume</label>
+											<input name="volumeMicroliters" type="number" step="0.001" class="tron-input w-full" style="min-height: 44px" bind:value={editReagent.volumeMicroliters} />
+										</div>
+										<div>
+											<label class="mb-1 block text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Unit</label>
+											<input name="unit" type="text" class="tron-input w-full" style="min-height: 44px" bind:value={editReagent.unit} />
+										</div>
+										<div>
+											<label class="mb-1 block text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Classification</label>
+											<input name="classification" type="text" class="tron-input w-full" style="min-height: 44px" bind:value={editReagent.classification} />
+										</div>
+										<div>
+											<label class="mb-1 block text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Sort Order</label>
+											<input name="sortOrder" type="number" class="tron-input w-full" style="min-height: 44px" bind:value={editReagent.sortOrder} />
+										</div>
+										<div class="flex items-center gap-2 self-end">
+											<input type="hidden" name="hasBreakdown" value={editReagent.hasBreakdown ? 'true' : 'false'} />
+											<input type="checkbox" id="edit-hb-{reagent.id}" bind:checked={editReagent.hasBreakdown} />
+											<label for="edit-hb-{reagent.id}" class="text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Has Breakdown</label>
+										</div>
+										<div class="flex items-center gap-2 self-end">
+											<input type="hidden" name="isActive" value={editReagent.isActive ? 'true' : 'false'} />
+											<input type="checkbox" id="edit-active-{reagent.id}" bind:checked={editReagent.isActive} />
+											<label for="edit-active-{reagent.id}" class="text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Active</label>
+										</div>
+									</div>
+									<div class="flex gap-2">
+										<button type="submit" class="tron-button" style="min-height: 44px; background: var(--color-tron-cyan, #00ffff); color: #000; font-weight: 600">Save</button>
+										<button type="button" class="tron-button" style="min-height: 44px" onclick={() => (editingReagentId = null)}>Cancel</button>
+									</div>
+								</form>
+							{:else}
+								<!-- Read View -->
+								<div class="flex items-center gap-3 p-3">
+									<div class="flex min-h-[44px] w-10 items-center justify-center rounded text-sm font-bold"
+										style="background: color-mix(in srgb, var(--color-tron-cyan, #00ffff) 15%, transparent); color: var(--color-tron-cyan, #00ffff)"
+									>
+										{reagent.wellPosition ?? '—'}
+									</div>
+									<div class="min-w-0 flex-1">
+										<div class="flex flex-wrap items-center gap-2">
+											<span class="font-semibold" style="color: var(--color-tron-text-primary, #f3f4f6)">
+												{reagent.reagentName ?? '—'}
+											</span>
+											{#if reagent.classification}
+												<span class="rounded px-1.5 py-0.5 text-xs"
+													style="background: color-mix(in srgb, #a78bfa 20%, transparent); color: #a78bfa; border: 1px solid #a78bfa"
+												>
+													{reagent.classification}
+												</span>
+											{/if}
+											{#if !reagent.isActive}
+												<span class="rounded px-1.5 py-0.5 text-xs"
+													style="background: color-mix(in srgb, #6b7280 20%, transparent); color: #6b7280; border: 1px solid #6b7280"
+												>
+													Inactive
+												</span>
+											{/if}
+											{#if reagent.hasBreakdown}
+												<span class="rounded px-1.5 py-0.5 text-xs"
+													style="background: color-mix(in srgb, var(--color-tron-orange, #f97316) 20%, transparent); color: var(--color-tron-orange, #f97316); border: 1px solid var(--color-tron-orange, #f97316)"
+												>
+													Breakdown
+												</span>
+											{/if}
+										</div>
+										<div class="mt-1 flex flex-wrap gap-4 text-sm">
+											<span style="color: var(--color-tron-text-secondary, #9ca3af)">
+												{reagent.volumeMicroliters ?? 0} {reagent.unit ?? 'µL'}
+											</span>
+											<span style="color: var(--color-tron-text-secondary, #9ca3af)">
+												Unit cost: <span style="color: var(--color-tron-green, #39ff14)">${reagent.unitCost ?? '0'}</span>
+											</span>
+											<span style="color: var(--color-tron-text-secondary, #9ca3af)">
+												Line cost: <span style="color: var(--color-tron-green, #39ff14)">${reagentCost(reagent).toFixed(4)}</span>
+											</span>
+										</div>
+									</div>
+									<div class="flex shrink-0 items-center gap-2">
+										{#if reagent.hasBreakdown && reagent.subComponents.length > 0}
+											<button
+												class="tron-button"
+												style="min-height: 44px; font-size: 0.75rem"
+												onclick={() => toggleReagentExpand(reagent.id)}
+											>
+												{expandedReagents.has(reagent.id) ? 'Hide' : 'Sub-components'} ({reagent.subComponents.length})
+											</button>
+										{/if}
+										{#if data.canWrite}
+											<button
+												class="tron-button"
+												style="min-height: 44px; font-size: 0.75rem"
+												onclick={() => startEditReagent(reagent)}
+											>
+												Edit
+											</button>
+											{#if reagent.hasBreakdown}
+												<button
+													class="tron-button"
+													style="min-height: 44px; font-size: 0.75rem"
+													onclick={() => {
+														newSub = { name: '', unitCost: '0', unit: 'µL', volumeMicroliters: 0, classification: '', sortOrder: reagent.subComponents.length };
+														showAddSubFor = reagent.id;
+													}}
+												>
+													+ Sub
+												</button>
+											{/if}
+											<form method="POST" action="?/removeReagent" use:enhance>
+												<input type="hidden" name="reagentId" value={reagent.id} />
+												<button
+													type="submit"
+													class="tron-button"
+													style="min-height: 44px; font-size: 0.75rem; color: #ef4444; border-color: #ef4444"
+													onclick={(e) => { if (!confirm('Remove this reagent?')) e.preventDefault(); }}
+												>
+													Remove
+												</button>
+											</form>
+										{/if}
+									</div>
+								</div>
+
+								<!-- Add Sub-component Form -->
+								{#if showAddSubFor === reagent.id}
+									<form
+										method="POST"
+										action="?/addSubComponent"
+										use:enhance={() => ({ async onResult({ update }) { showAddSubFor = null; await update(); } })}
+										class="mx-3 mb-3 rounded p-3 space-y-3"
+										style="background: color-mix(in srgb, var(--color-tron-cyan, #00ffff) 5%, transparent); border: 1px solid var(--color-tron-cyan, #00ffff)"
+									>
+										<input type="hidden" name="reagentId" value={reagent.id} />
+										<h5 class="text-xs font-semibold" style="color: var(--color-tron-cyan, #00ffff)">New Sub-component</h5>
+										<div class="grid gap-2 sm:grid-cols-3">
+											<div class="sm:col-span-2">
+												<label class="mb-1 block text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Name *</label>
+												<input name="name" type="text" class="tron-input w-full" style="min-height: 44px" bind:value={newSub.name} required />
+											</div>
+											<div>
+												<label class="mb-1 block text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Unit Cost ($)</label>
+												<input name="unitCost" type="text" class="tron-input w-full" style="min-height: 44px" bind:value={newSub.unitCost} />
+											</div>
+											<div>
+												<label class="mb-1 block text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Volume</label>
+												<input name="volumeMicroliters" type="number" step="0.001" class="tron-input w-full" style="min-height: 44px" bind:value={newSub.volumeMicroliters} />
+											</div>
+											<div>
+												<label class="mb-1 block text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Unit</label>
+												<input name="unit" type="text" class="tron-input w-full" style="min-height: 44px" bind:value={newSub.unit} />
+											</div>
+											<div>
+												<label class="mb-1 block text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">Classification</label>
+												<input name="classification" type="text" class="tron-input w-full" style="min-height: 44px" bind:value={newSub.classification} />
+											</div>
+										</div>
+										<div class="flex gap-2">
+											<button type="submit" class="tron-button" style="min-height: 44px; background: var(--color-tron-cyan, #00ffff); color: #000; font-weight: 600">Add</button>
+											<button type="button" class="tron-button" style="min-height: 44px" onclick={() => (showAddSubFor = null)}>Cancel</button>
+										</div>
+									</form>
+								{/if}
+
+								<!-- Sub-components -->
+								{#if expandedReagents.has(reagent.id) && reagent.subComponents.length > 0}
+									<div class="mx-3 mb-3 space-y-1">
+										{#each reagent.subComponents.slice().sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)) as sub (sub.id)}
+											<div
+												class="rounded p-3"
+												style="background: color-mix(in srgb, var(--color-tron-surface, #111827) 80%, transparent); border-left: 2px solid var(--color-tron-cyan, #00ffff)"
+											>
+												{#if editingSubId === sub.id}
+													<form
+														method="POST"
+														action="?/updateReagent"
+														use:enhance={() => ({ async onResult({ update }) { editingSubId = null; await update(); } })}
+														class="space-y-2"
+													>
+														<!-- Note: sub-component update uses updateReagent + re-fetch approach via removing + adding is simpler
+														     but here we provide an inline form that calls a dedicated endpoint -->
+													</form>
+													<!-- Simplified: just remove old and add new -->
+													<div class="grid gap-2 sm:grid-cols-3">
+														<div class="sm:col-span-2">
+															<input class="tron-input w-full" style="min-height: 44px" bind:value={editSub.name} placeholder="Name" />
+														</div>
+														<div>
+															<input class="tron-input w-full" style="min-height: 44px" bind:value={editSub.unitCost} placeholder="Unit cost" />
+														</div>
+														<div>
+															<input class="tron-input w-full" style="min-height: 44px; font-size: 0.85rem" bind:value={editSub.volumeMicroliters} placeholder="Volume" type="number" step="0.001" />
+														</div>
+														<div>
+															<input class="tron-input w-full" style="min-height: 44px" bind:value={editSub.unit} placeholder="Unit" />
+														</div>
+														<div>
+															<input class="tron-input w-full" style="min-height: 44px" bind:value={editSub.classification} placeholder="Classification" />
+														</div>
+													</div>
+													<div class="mt-2 flex gap-2">
+														<!-- Remove old sub then add new via two sequential submits is complex — skip inline sub editing for now, just show cancel -->
+														<button type="button" class="tron-button" style="min-height: 44px" onclick={() => (editingSubId = null)}>Cancel</button>
+													</div>
+												{:else}
+													<div class="flex items-center justify-between">
+														<div>
+															<span class="font-medium text-sm" style="color: var(--color-tron-text-primary, #f3f4f6)">{sub.name ?? '—'}</span>
+															<div class="flex flex-wrap gap-3 mt-1 text-xs" style="color: var(--color-tron-text-secondary, #9ca3af)">
+																<span>{sub.volumeMicroliters ?? 0} {sub.unit ?? 'µL'}</span>
+																<span>Unit cost: <span style="color: var(--color-tron-green, #39ff14)">${sub.unitCost ?? '0'}</span></span>
+																{#if sub.classification}
+																	<span style="color: #a78bfa">{sub.classification}</span>
+																{/if}
+															</div>
+														</div>
+														{#if data.canWrite}
+															<form method="POST" action="?/removeSubComponent" use:enhance>
+																<input type="hidden" name="reagentId" value={reagent.id} />
+																<input type="hidden" name="subComponentId" value={sub.id} />
+																<button
+																	type="submit"
+																	class="tron-button"
+																	style="min-height: 44px; font-size: 0.75rem; color: #ef4444; border-color: #ef4444"
+																	onclick={(e) => { if (!confirm('Remove sub-component?')) e.preventDefault(); }}
+																>
+																	Remove
+																</button>
+															</form>
+														{/if}
+													</div>
+												{/if}
+											</div>
+										{/each}
+									</div>
+								{/if}
+							{/if}
+						</div>
+					{/each}
+				</div>
+			{/if}
+		</div>
+	</div>
+{/if}
 
 <!-- Edit Modal -->
 {#if showEditModal}
