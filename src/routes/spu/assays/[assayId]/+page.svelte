@@ -755,7 +755,7 @@
 				<form
 					method="POST"
 					action="?/updateBomSettings"
-					use:enhance={() => ({ async onResult({ update }) { showBomSettings = false; await update(); } })}
+					use:enhance={() => { return async ({ update }) => { showBomSettings = false; await update(); }; }}
 					class="mb-4 space-y-3 rounded p-4"
 					style="background: var(--color-tron-bg-secondary, #1f2937); border: 1px solid var(--color-tron-border, #374151)"
 				>
@@ -854,7 +854,7 @@
 				<form
 					method="POST"
 					action="?/addReagent"
-					use:enhance={() => ({ async onResult({ update }) { showAddReagent = false; await update(); } })}
+					use:enhance={() => { return async ({ update }) => { showAddReagent = false; await update(); }; }}
 					class="mb-4 rounded p-4 space-y-3"
 					style="background: var(--color-tron-bg-secondary, #1f2937); border: 1px solid var(--color-tron-cyan, #00ffff)"
 				>
@@ -915,7 +915,7 @@
 								<form
 									method="POST"
 									action="?/updateReagent"
-									use:enhance={() => ({ async onResult({ update }) { editingReagentId = null; await update(); } })}
+									use:enhance={() => { return async ({ update }) => { editingReagentId = null; await update(); }; }}
 									class="p-4 space-y-3"
 								>
 									<input type="hidden" name="reagentId" value={reagent.id} />
@@ -1061,7 +1061,7 @@
 									<form
 										method="POST"
 										action="?/addSubComponent"
-										use:enhance={() => ({ async onResult({ update }) { showAddSubFor = null; await update(); } })}
+										use:enhance={() => { return async ({ update }) => { showAddSubFor = null; await update(); }; }}
 										class="mx-3 mb-3 rounded p-3 space-y-3"
 										style="background: color-mix(in srgb, var(--color-tron-cyan, #00ffff) 5%, transparent); border: 1px solid var(--color-tron-cyan, #00ffff)"
 									>
@@ -1108,7 +1108,7 @@
 													<form
 														method="POST"
 														action="?/updateReagent"
-														use:enhance={() => ({ async onResult({ update }) { editingSubId = null; await update(); } })}
+														use:enhance={() => { return async ({ update }) => { editingSubId = null; await update(); }; }}
 														class="space-y-2"
 													>
 														<!-- Note: sub-component update uses updateReagent + re-fetch approach via removing + adding is simpler
