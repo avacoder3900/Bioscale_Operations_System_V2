@@ -35,7 +35,7 @@ function emptyReagentState(robotId: string, loadError?: string) {
 			cartridgeCount: 0, runStartTime: null, runEndTime: null
 		},
 		assayTypes: [] as { id: string; name: string; skuCode: string | null }[],
-		reagentDefinitions: [] as { id: string; reagentName: string; wellPosition: number | null; volumeMicroliters: number | null }[],
+		reagentDefinitions: [] as { id: string; reagentName: string; wellPosition: number | null; volumeMicroliters: number | null; isActive: boolean }[],
 		cartridges: [] as any[],
 		currentSealBatch: null as null | { batchId: string; firstScanTime: string | null; cartridgeIds: string[] },
 		rejectionCodes: [] as any[],
@@ -87,7 +87,7 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 		}
 
 		// Reagent definitions from the active run's assay type
-		const reagentDefinitions: { id: string; reagentName: string; wellPosition: number | null; volumeMicroliters: number | null }[] = [];
+		const reagentDefinitions: { id: string; reagentName: string; wellPosition: number | null; volumeMicroliters: number | null; isActive: boolean }[] = [];
 		if (activeRun?.assayType?._id) {
 			const assay = (assayDefs as any[]).find((a) => String(a._id) === String(activeRun.assayType._id));
 			if (assay?.reagents) {
@@ -97,7 +97,8 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 							id: String(r._id),
 							reagentName: r.reagentName ?? '',
 							wellPosition: r.wellPosition ?? null,
-							volumeMicroliters: r.volumeMicroliters ?? null
+							volumeMicroliters: r.volumeMicroliters ?? null,
+							isActive: r.isActive ?? true
 						});
 					}
 				}
