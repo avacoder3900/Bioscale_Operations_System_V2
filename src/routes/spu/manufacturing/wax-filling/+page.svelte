@@ -373,6 +373,7 @@
 	}
 
 	function handleRecordStorage(cartridgeIds: string[], location: string) {
+		console.log('[handleRecordStorage] cartridgeIds:', cartridgeIds, 'location:', JSON.stringify(location));
 		if (previewParam) return;
 		submitAction('recordBatchStorage', {
 			cartridgeIds: JSON.stringify(cartridgeIds),

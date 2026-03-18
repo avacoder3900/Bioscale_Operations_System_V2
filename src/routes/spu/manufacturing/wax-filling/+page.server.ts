@@ -548,6 +548,10 @@ export const actions: Actions = {
 		const location = data.get('location') as string;
 		const coolingTrayId = (data.get('coolingTrayId') as string) || undefined;
 
+		console.log('[recordBatchStorage] formData keys:', [...data.keys()]);
+		console.log('[recordBatchStorage] location value:', JSON.stringify(location));
+		console.log('[recordBatchStorage] cartridgeIdsRaw:', cartridgeIdsRaw?.slice(0, 100));
+
 		let cartridgeIds: string[] = [];
 		try {
 			cartridgeIds = JSON.parse(cartridgeIdsRaw);
