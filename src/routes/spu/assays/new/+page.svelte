@@ -28,13 +28,19 @@
 	}
 
 	function fillTestData() {
-		name = TEST_ASSAY.name;
-		description = TEST_ASSAY.description;
-		const instrs = [...TEST_ASSAY.instructions];
-		autofillInstructions = instrs;
-		currentInstructions = instrs;
-		instructionsJson = JSON.stringify(instrs);
-		editorKey++;
+		try {
+			name = TEST_ASSAY.name;
+			description = TEST_ASSAY.description;
+			const instrs = [...TEST_ASSAY.instructions];
+			autofillInstructions = instrs;
+			currentInstructions = instrs;
+			instructionsJson = JSON.stringify(instrs);
+			editorKey++;
+			console.log('[fillTestData] loaded', instrs.length, 'instructions, name:', name);
+		} catch (e) {
+			console.error('[fillTestData] ERROR:', e);
+			alert('Fill test data error: ' + (e instanceof Error ? e.message : String(e)));
+		}
 	}
 </script>
 
