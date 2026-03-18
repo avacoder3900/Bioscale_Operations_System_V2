@@ -95,15 +95,14 @@
 				></textarea>
 			</div>
 
-			<!-- Priority & Task Length -->
+			<!-- Prioritized & Task Length -->
 			<div class="mb-4 grid grid-cols-2 gap-4">
-				<div>
-					<label for="priority" class="tron-label">Priority</label>
-					<select id="priority" name="priority" class="tron-select w-full">
-						<option value="low">Low</option>
-						<option value="medium" selected>Medium</option>
-						<option value="high">High</option>
-					</select>
+				<div class="flex items-end">
+					<label class="flex cursor-pointer items-center gap-2">
+						<input type="checkbox" name="prioritized" value="true"
+							class="h-4 w-4 rounded border-gray-600 bg-gray-800" />
+						<span class="text-sm" style="color: var(--color-tron-text-secondary);">★ Prioritized</span>
+					</label>
 				</div>
 				<div>
 					<label for="taskLength" class="tron-label">Size</label>
