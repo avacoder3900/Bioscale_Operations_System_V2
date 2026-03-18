@@ -1,6 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, ValidationSession, GeneratedBarcode, Spu, AuditLog, generateId } from '$lib/server/db';
+import { computeChannelStats } from '$lib/server/thermocouple-stats';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -84,37 +85,15 @@ export const actions: Actions = {
 		const spu = await Spu.findById(spuId).lean() as any;
 		if (!spu) return fail(400, { error: 'SPU not found' });
 
-		// Compute stats
+		// Compute stats using shared utility
 		const temps = readings.map(r => r.temperature);
-		const min = Math.min(...temps);
-		const max = Math.max(...temps);
-		const sum = temps.reduce((a, b) => a + b, 0);
-		const average = sum / temps.length;
-		const variance = temps.reduce((acc, t) => acc + (t - average) ** 2, 0) / temps.length;
-		const stdDev = Math.sqrt(variance);
-		const cv = average !== 0 ? (stdDev / average) * 100 : 0;
-		const range = max - min;
-		const drift = temps.length >= 2 ? temps[temps.length - 1] - temps[0] : 0;
-		const outOfRangeCount = temps.filter(t => t < minTemp || t > maxTemp).length;
+		const stats = computeChannelStats(temps, minTemp, maxTemp);
 		const durationMs = readings.length >= 2
 			? readings[readings.length - 1].timestamp - readings[0].timestamp
 			: 0;
 
-		const stats = {
-			min: Math.round(min * 1000) / 1000,
-			max: Math.round(max * 1000) / 1000,
-			average: Math.round(average * 1000) / 1000,
-			stdDev: Math.round(stdDev * 1000) / 1000,
-			cv: Math.round(cv * 1000) / 1000,
-			range: Math.round(range * 1000) / 1000,
-			drift: Math.round(drift * 1000) / 1000,
-			readingCount: readings.length,
-			outOfRangeCount,
-			durationMs
-		};
-
 		// Pass/fail
-		const passed = outOfRangeCount === 0;
+		const passed = stats.outOfRangeCount === 0;
 		const failureReasons: string[] = [];
 		if (temps.some(t => t < minTemp)) {
 			failureReasons.push(`${temps.filter(t => t < minTemp).length} reading(s) below minimum ${minTemp}°C`);
@@ -125,7 +104,7 @@ export const actions: Actions = {
 
 		const interpretation = passed
 			? `All ${readings.length} readings within acceptable range (${minTemp}°C - ${maxTemp}°C)`
-			: `${outOfRangeCount} of ${readings.length} readings outside acceptable range`;
+			: `${stats.outOfRangeCount} of ${readings.length} readings outside acceptable range`;
 
 		// Generate barcode
 		const barcodeDoc = await GeneratedBarcode.findOneAndUpdate(
@@ -165,7 +144,7 @@ export const actions: Actions = {
 				testType: 'thermocouple',
 				rawData: { readings },
 				processedData: {
-					stats,
+					stats: { ...stats, durationMs },
 					interpretation,
 					failureReasons,
 					criteria: { minTemp, maxTemp }
@@ -185,7 +164,7 @@ export const actions: Actions = {
 					'validation.thermocouple.sessionId': sessionId,
 					'validation.thermocouple.completedAt': new Date(),
 					'validation.thermocouple.rawData': { readingCount: readings.length, fileName: null },
-					'validation.thermocouple.results': stats,
+					'validation.thermocouple.results': { ...stats, durationMs },
 					'validation.thermocouple.failureReasons': failureReasons,
 					'validation.thermocouple.criteriaUsed': { minTemp, maxTemp }
 				}
@@ -206,7 +185,7 @@ export const actions: Actions = {
 				spuUdi: spu.udi,
 				barcode,
 				passed,
-				stats,
+				stats: { ...stats, durationMs },
 				failureReasons
 			}
 		});
@@ -214,7 +193,7 @@ export const actions: Actions = {
 		return {
 			success: true,
 			sessionId,
-			results: { passed, stats, failureReasons }
+			results: { passed, stats: { ...stats, durationMs }, failureReasons }
 		};
 	}
 };

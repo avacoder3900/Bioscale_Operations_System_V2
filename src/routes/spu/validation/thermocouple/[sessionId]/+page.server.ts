@@ -25,6 +25,16 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	// Find the thermocouple result in the results array
 	const thermoResult = session.results?.find((r: any) => r.testType === 'thermocouple') ?? null;
 
+	// Build channel chart URLs if multi-channel data exists
+	const channelCharts = thermoResult?.processedData?.channels
+		? Object.keys(thermoResult.processedData.channels).map((ch: string) => ({
+			channel: ch,
+			url: `/api/validation/thermocouple/${session._id}/chart/${ch}`,
+			stats: thermoResult.processedData.channels[ch]?.stats ?? null,
+			passed: thermoResult.processedData.channels[ch]?.passed ?? null
+		}))
+		: null;
+
 	return {
 		session: {
 			id: session._id,
@@ -42,6 +52,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			passed: thermoResult.passed ?? null,
 			notes: thermoResult.notes ?? null,
 			createdAt: thermoResult.createdAt?.toISOString?.() ?? session.createdAt?.toISOString?.() ?? new Date().toISOString()
-		} : null
+		} : null,
+		channelCharts
 	};
 };
