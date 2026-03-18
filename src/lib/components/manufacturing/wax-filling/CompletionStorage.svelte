@@ -39,10 +39,10 @@
 
 	const needsStorage = $derived(
 		cartridges.filter(
-			(c) => c.qcStatus === 'Accepted' && c.currentInventory !== 'Stored'
+			(c) => c.qcStatus === 'Accepted' && c.currentInventory !== 'wax_stored' && c.currentInventory !== 'Stored'
 		)
 	);
-	const stored = $derived(cartridges.filter((c) => c.currentInventory === 'Stored'));
+	const stored = $derived(cartridges.filter((c) => c.currentInventory === 'wax_stored' || c.currentInventory === 'Stored'));
 	const allAssigned = $derived(needsStorage.length > 0 && needsStorage.every((c) => assignments.has(c.cartridgeId)));
 	const allStored = $derived(needsStorage.length === 0 && stored.length > 0);
 
