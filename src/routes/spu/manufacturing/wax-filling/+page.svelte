@@ -376,7 +376,7 @@
 		if (previewParam) return;
 		submitAction('recordBatchStorage', {
 			cartridgeIds: JSON.stringify(cartridgeIds),
-			storageLocation: location
+			location: location
 		});
 	}
 
