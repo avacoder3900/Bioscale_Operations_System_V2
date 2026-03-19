@@ -9,18 +9,28 @@
 	let searchInput = $state(data.filters.search ?? '');
 	let expandedId = $state<string | null>(null);
 
-	const STAGES: LifecycleStage[] = ['Backed', 'Wax Filling', 'Cooled', 'Reagent Filling', 'Inspected', 'Top Sealed', 'Stored', 'Rejected', 'Scrapped'];
+	const STAGES: LifecycleStage[] = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed', 'voided'];
+
+	function stageLabel(stage: string): string {
+		return stage.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+	}
 
 	const stageColors: Record<string, string> = {
-		Backed: 'bg-gray-900/50 text-gray-300 border-gray-500/30',
-		'Wax Filling': 'bg-blue-900/50 text-blue-300 border-blue-500/30',
-		Cooled: 'bg-cyan-900/50 text-cyan-300 border-cyan-500/30',
-		'Reagent Filling': 'bg-green-900/50 text-green-300 border-green-500/30',
-		Inspected: 'bg-yellow-900/50 text-yellow-300 border-yellow-500/30',
-		'Top Sealed': 'bg-purple-900/50 text-purple-300 border-purple-500/30',
-		Stored: 'bg-emerald-900/50 text-emerald-300 border-emerald-500/30',
-		Rejected: 'bg-red-900/50 text-red-300 border-red-500/30',
-		Scrapped: 'bg-red-950/50 text-red-400 border-red-700/30'
+		backing: 'bg-gray-900/50 text-gray-300 border-gray-500/30',
+		wax_filled: 'bg-blue-900/50 text-blue-300 border-blue-500/30',
+		wax_qc: 'bg-cyan-900/50 text-cyan-300 border-cyan-500/30',
+		wax_stored: 'bg-violet-900/50 text-violet-300 border-violet-500/30',
+		reagent_filled: 'bg-green-900/50 text-green-300 border-green-500/30',
+		inspected: 'bg-yellow-900/50 text-yellow-300 border-yellow-500/30',
+		sealed: 'bg-purple-900/50 text-purple-300 border-purple-500/30',
+		cured: 'bg-teal-900/50 text-teal-300 border-teal-500/30',
+		stored: 'bg-emerald-900/50 text-emerald-300 border-emerald-500/30',
+		released: 'bg-lime-900/50 text-lime-300 border-lime-500/30',
+		shipped: 'bg-sky-900/50 text-sky-300 border-sky-500/30',
+		assay_loaded: 'bg-amber-900/50 text-amber-300 border-amber-500/30',
+		testing: 'bg-orange-900/50 text-orange-300 border-orange-500/30',
+		completed: 'bg-green-900/50 text-green-300 border-green-500/30',
+		voided: 'bg-red-950/50 text-red-400 border-red-700/30'
 	};
 
 	function updateFilters(params: Record<string, string | undefined>) {
@@ -78,7 +88,7 @@
 		>
 			<option value="">All Stages</option>
 			{#each STAGES as stage (stage)}
-				<option value={stage} selected={data.filters.lifecycleStage === stage}>{stage}</option>
+				<option value={stage} selected={data.filters.lifecycleStage === stage}>{stageLabel(stage)}</option>
 			{/each}
 		</select>
 
