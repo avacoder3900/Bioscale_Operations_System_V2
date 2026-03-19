@@ -4,8 +4,7 @@
 	let { data, form } = $props();
 
 	let expandedStage = $state<string | null>(null);
-	let showAddMaterial = $state(false);
-	let txMaterialId = $state<string | null>(null);
+	let txPartId = $state<string | null>(null);
 	let txType = $state<'receive' | 'consume'>('receive');
 	let txQty = $state(1);
 	let txNotes = $state('');
@@ -60,11 +59,8 @@
 			{#each data.stages as stage, i (stage.id)}
 				{@const isExpanded = expandedStage === stage.id}
 				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] overflow-hidden">
-					<button
-						type="button"
-						onclick={() => toggle(stage.id)}
-						class="flex w-full items-center justify-between px-4 py-3 text-left transition-colors hover:bg-[var(--color-tron-cyan)]/5"
-					>
+					<button type="button" onclick={() => toggle(stage.id)}
+						class="flex w-full items-center justify-between px-4 py-3 text-left transition-colors hover:bg-[var(--color-tron-cyan)]/5">
 						<div class="flex items-center gap-3">
 							<span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[var(--color-tron-border)] text-xs font-bold text-[var(--color-tron-cyan)]">{i + 1}</span>
 							<span class="text-sm font-medium text-[var(--color-tron-text)]">{stage.name}</span>
@@ -124,60 +120,37 @@
 		</div>
 	</div>
 
-	<!-- ═══ SECTION 3: Material Stock Levels ═══ -->
+	<!-- ═══ SECTION 3: Cartridge Parts Stock ═══ -->
 	<div>
 		<div class="mb-3 flex items-center justify-between">
-			<h2 class="text-sm font-semibold uppercase tracking-wide text-[var(--color-tron-text-secondary)]">Material Stock</h2>
-			<button type="button" onclick={() => { showAddMaterial = !showAddMaterial; }}
-				class="rounded border border-[var(--color-tron-cyan)]/40 px-3 py-1.5 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10">
-				{showAddMaterial ? 'Cancel' : '+ Add Material'}
-			</button>
+			<h2 class="text-sm font-semibold uppercase tracking-wide text-[var(--color-tron-text-secondary)]">Cartridge Parts Stock</h2>
+			<a href="/spu/parts" class="rounded border border-[var(--color-tron-cyan)]/40 px-3 py-1.5 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10">
+				Manage Parts →
+			</a>
 		</div>
 
-		{#if showAddMaterial}
-			<form method="POST" action="?/addMaterial" use:enhance={() => { return async ({ update }) => { showAddMaterial = false; await update(); }; }}
-				class="mb-4 rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-surface)] p-4 space-y-3">
-				<div class="grid gap-3 sm:grid-cols-3">
-					<div>
-						<label class="mb-1 block text-xs text-[var(--color-tron-text-secondary)]">Name *</label>
-						<input name="name" type="text" class="tron-input w-full" style="min-height: 44px" required placeholder="e.g., Thermoseal Sheets" />
-					</div>
-					<div>
-						<label class="mb-1 block text-xs text-[var(--color-tron-text-secondary)]">Unit</label>
-						<input name="unit" type="text" class="tron-input w-full" style="min-height: 44px" placeholder="pcs, sheets, rolls, mL" />
-					</div>
-					<div class="flex items-end">
-						<button type="submit" class="min-h-[44px] rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-4 py-2 text-sm font-medium text-[var(--color-tron-cyan)]">Add</button>
-					</div>
-				</div>
-			</form>
-		{/if}
-
-		{#if data.materials.length === 0}
-			<p class="text-sm text-[var(--color-tron-text-secondary)]">No materials tracked yet. Add one above.</p>
+		{#if data.parts.length === 0}
+			<p class="text-sm text-[var(--color-tron-text-secondary)]">No cartridge parts defined. <a href="/spu/parts" class="text-[var(--color-tron-cyan)] hover:underline">Add parts</a> with BOM type "cartridge".</p>
 		{:else}
 			<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-				{#each data.materials as mat (mat.materialId)}
+				{#each data.parts as part (part.id)}
 					<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 						<div class="flex items-center justify-between">
 							<div>
-								<p class="text-sm font-medium text-[var(--color-tron-text)]">{mat.name}</p>
-								{#if mat.partNumber}
-									<p class="text-[10px] font-mono text-[var(--color-tron-text-secondary)]">{mat.partNumber}</p>
-								{/if}
+								<p class="text-sm font-medium text-[var(--color-tron-text)]">{part.name}</p>
+								<p class="text-[10px] font-mono text-[var(--color-tron-text-secondary)]">{part.partNumber}</p>
 							</div>
 							<div class="text-right">
-								<p class="text-2xl font-bold text-[var(--color-tron-cyan)]">{mat.currentQuantity}</p>
-								<p class="text-[10px] text-[var(--color-tron-text-secondary)]">{mat.unit}</p>
+								<p class="text-2xl font-bold {part.inventoryCount > 0 ? 'text-[var(--color-tron-cyan)]' : 'text-red-400'}">{part.inventoryCount}</p>
+								<p class="text-[10px] text-[var(--color-tron-text-secondary)]">{part.unitOfMeasure}</p>
 							</div>
 						</div>
 
-						<!-- Quick transaction buttons -->
-						{#if txMaterialId === mat.materialId}
+						{#if txPartId === part.id}
 							<form method="POST" action="?/recordTransaction"
-								use:enhance={() => { return async ({ update }) => { txMaterialId = null; txQty = 1; txNotes = ''; await update(); }; }}
+								use:enhance={() => { return async ({ update }) => { txPartId = null; txQty = 1; txNotes = ''; await update(); }; }}
 								class="mt-3 space-y-2 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] p-3">
-								<input type="hidden" name="materialId" value={mat.materialId} />
+								<input type="hidden" name="partId" value={part.id} />
 								<input type="hidden" name="transactionType" value={txType} />
 								<div class="flex gap-2">
 									<button type="button" onclick={() => { txType = 'receive'; }}
@@ -197,19 +170,17 @@
 									<button type="submit" class="min-h-[36px] rounded px-3 py-1.5 text-xs font-medium {txType === 'receive' ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'}">
 										{txType === 'receive' ? `+ ${txQty}` : `− ${txQty}`}
 									</button>
-									<button type="button" onclick={() => { txMaterialId = null; }} class="min-h-[36px] rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)]">Cancel</button>
+									<button type="button" onclick={() => { txPartId = null; }} class="min-h-[36px] rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)]">Cancel</button>
 								</div>
 							</form>
 						{:else}
 							<div class="mt-3 flex gap-2">
-								<button type="button" onclick={() => { txMaterialId = mat.materialId; txType = 'receive'; txQty = 1; }}
+								<button type="button" onclick={() => { txPartId = part.id; txType = 'receive'; txQty = 1; }}
 									class="min-h-[36px] flex-1 rounded border border-green-500/30 px-2 py-1.5 text-xs text-green-400 hover:bg-green-900/20">+ Receive</button>
-								<button type="button" onclick={() => { txMaterialId = mat.materialId; txType = 'consume'; txQty = 1; }}
+								<button type="button" onclick={() => { txPartId = part.id; txType = 'consume'; txQty = 1; }}
 									class="min-h-[36px] flex-1 rounded border border-red-500/30 px-2 py-1.5 text-xs text-red-400 hover:bg-red-900/20">− Consume</button>
 							</div>
 						{/if}
-
-						<p class="mt-2 text-[10px] text-[var(--color-tron-text-secondary)]">Updated: {new Date(mat.updatedAt).toLocaleDateString()}</p>
 					</div>
 				{/each}
 

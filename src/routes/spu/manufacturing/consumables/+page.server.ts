@@ -41,29 +41,28 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const sealed = await CartridgeRecord.countDocuments({ currentPhase: 'sealed' });
 	const voided = await CartridgeRecord.countDocuments({ currentPhase: 'voided' });
 
-	// === Material inventory ===
-	const [materials, settingsDoc] = await Promise.all([
-		ManufacturingMaterial.find().sort({ name: 1 }).lean(),
-		ManufacturingSettings.findById('default').lean()
-	]);
+	// === Parts inventory (cartridge BOM) ===
+	const parts = await PartDefinition.find({ bomType: 'cartridge', isActive: true })
+		.sort({ sortOrder: 1, name: 1 }).lean();
 
+	const partsList = (parts as any[]).map((p: any) => ({
+		id: String(p._id),
+		partNumber: p.partNumber ?? '',
+		name: p.name ?? '',
+		category: p.category ?? '',
+		inventoryCount: p.inventoryCount ?? 0,
+		unitOfMeasure: p.unitOfMeasure ?? 'pcs',
+		supplier: p.supplier ?? ''
+	}));
+
+	// === Settings ===
+	const settingsDoc = await ManufacturingSettings.findById('default').lean();
 	const general = (settingsDoc as any)?.general ?? {};
 	const cartridgesPerSheet = general.cartridgesPerLaserCutSheet ?? 13;
 
-	const materialsList = (materials as any[]).map((m: any) => ({
-		materialId: m._id,
-		name: m.name ?? '',
-		unit: m.unit ?? 'pcs',
-		currentQuantity: m.currentQuantity ?? 0,
-		partDefinitionId: m.partDefinitionId ?? null,
-		partNumber: m.partNumber ?? null,
-		updatedAt: m.updatedAt ?? m.createdAt ?? new Date().toISOString()
-	}));
-
-	const laserCutMaterial = (materials as any[]).find((m: any) =>
-		m.name && /laser.?cut|cut.?sub|substrate/i.test(m.name)
-	);
-	const individualBacks = (laserCutMaterial?.currentQuantity ?? 0) * cartridgesPerSheet;
+	// Derived: Individual Backs from laser-cut sheets
+	const laserCutPart = partsList.find((p) => /laser.?cut|substrate|thermoseal.?sheet/i.test(p.name));
+	const individualBacks = (laserCutPart?.inventoryCount ?? 0) * cartridgesPerSheet;
 
 	// Pipeline stages
 	const stages = [
@@ -82,7 +81,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		{
 			id: 'laser', name: 'Laser Cut', href: '/spu/manufacturing/laser-cutting',
 			inputs: [{ name: 'Thermoseal Sheets', icon: '📄', count: null as number | null, unit: 'sheets' }],
-			outputs: [{ name: 'Cartridge Backs', icon: '🔲', count: individualBacks > 0 ? individualBacks : null, unit: 'backs (13/sheet)' }],
+			outputs: [{ name: 'Cartridge Backs', icon: '🔲', count: individualBacks > 0 ? individualBacks : null, unit: `backs (${cartridgesPerSheet}/sheet)` }],
 			activeRuns: 0, completedRuns: 0
 		},
 		{
@@ -103,7 +102,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 				{ name: 'Pipette Tips', icon: '🔬', count: null as number | null, unit: 'tips' }
 			],
 			outputs: [
-				{ name: 'Wax-Filled Cartridges', icon: '🟡', count: (phaseMap.get('wax_stored') ?? 0) + (phaseMap.get('wax_filled') ?? 0), unit: 'cartridges' },
+				{ name: 'Wax-Filled', icon: '🟡', count: (phaseMap.get('wax_stored') ?? 0) + (phaseMap.get('wax_filled') ?? 0), unit: 'cartridges' },
 				{ name: 'In Fridge', icon: '❄️', count: waxStored, unit: 'stored' }
 			],
 			activeRuns: activeWaxRuns, completedRuns: waxCompleted.totalRuns ?? 0
@@ -141,18 +140,16 @@ export const load: PageServerLoad = async ({ locals }) => {
 		}
 	];
 
-	// Link material counts to pipeline stages where names match
-	for (const mat of materialsList) {
-		const lname = mat.name.toLowerCase();
+	// Link part inventory counts to pipeline inputs/outputs where part names match
+	for (const part of partsList) {
+		const pname = part.name.toLowerCase();
 		for (const stage of stages) {
-			for (const inp of stage.inputs) {
-				if (inp.count === null && lname.includes(inp.name.toLowerCase().split('(')[0].trim().toLowerCase().slice(0, 8))) {
-					inp.count = mat.currentQuantity;
-				}
-			}
-			for (const out of stage.outputs) {
-				if (out.count === null && lname.includes(out.name.toLowerCase().split('(')[0].trim().toLowerCase().slice(0, 8))) {
-					out.count = mat.currentQuantity;
+			for (const item of [...stage.inputs, ...stage.outputs]) {
+				if (item.count === null) {
+					const iname = item.name.toLowerCase().replace(/\(.*\)/, '').trim();
+					if (pname.includes(iname.slice(0, 10)) || iname.includes(pname.slice(0, 10))) {
+						item.count = part.inventoryCount;
+					}
 				}
 			}
 		}
@@ -160,66 +157,51 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	return {
 		stages,
-		materials: JSON.parse(JSON.stringify(materialsList)),
+		parts: JSON.parse(JSON.stringify(partsList)),
 		derived: { individualBacks, cartridgesPerSheet },
-		totals: {
-			backed: backedCount,
-			waxStored,
-			reagentStored,
-			sealed,
-			voided,
-			totalInSystem: backedCount
-		}
+		totals: { backed: backedCount, waxStored, reagentStored, sealed, voided, totalInSystem: backedCount }
 	};
 };
 
 export const actions: Actions = {
-	addMaterial: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-		const data = await request.formData();
-		const name = data.get('name') as string;
-		const unit = data.get('unit') as string;
-		const partDefinitionId = (data.get('partDefinitionId') as string) || null;
-		if (!name) return fail(400, { error: 'Name is required' });
-		let partNumber: string | null = null;
-		if (partDefinitionId) {
-			const part = await PartDefinition.findById(partDefinitionId).lean() as any;
-			partNumber = part?.partNumber ?? null;
-		}
-		await ManufacturingMaterial.create({
-			_id: generateId(), name, unit: unit || 'pcs', currentQuantity: 0,
-			partDefinitionId, partNumber, recentTransactions: [], updatedAt: new Date()
-		});
-		return { success: true };
-	},
-
+	/** Record a receive/consume transaction against a Part's inventoryCount */
 	recordTransaction: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
+
 		const data = await request.formData();
-		const materialId = data.get('materialId') as string;
+		const partId = data.get('partId') as string;
 		const transactionType = data.get('transactionType') as string;
 		const quantity = Number(data.get('quantity'));
 		const notes = data.get('notes') as string;
-		const material = await ManufacturingMaterial.findById(materialId).lean() as any;
-		if (!material) return fail(404, { error: 'Material not found' });
-		const quantityBefore = material.currentQuantity ?? 0;
+
+		if (!partId) return fail(400, { error: 'Part ID required' });
+		if (!quantity || quantity <= 0) return fail(400, { error: 'Quantity must be positive' });
+
+		const part = await PartDefinition.findById(partId).lean() as any;
+		if (!part) return fail(404, { error: 'Part not found' });
+
 		const quantityChanged = transactionType === 'consume' ? -Math.abs(quantity) : Math.abs(quantity);
-		const quantityAfter = quantityBefore + quantityChanged;
-		const now = new Date();
-		await ManufacturingMaterialTransaction.create({
-			_id: generateId(), materialId, transactionType, quantityChanged,
-			quantityBefore, quantityAfter, operatorId: locals.user._id,
-			notes: notes || undefined, createdAt: now
+
+		await PartDefinition.findByIdAndUpdate(partId, {
+			$inc: { inventoryCount: quantityChanged }
 		});
-		await ManufacturingMaterial.findByIdAndUpdate(materialId, {
-			$set: { currentQuantity: quantityAfter, updatedAt: now },
-			$push: { recentTransactions: { $each: [{ transactionType, quantityChanged, quantityBefore, quantityAfter, operatorId: locals.user._id, notes: notes || undefined, createdAt: now }], $slice: -100 } }
-		});
-		if (material.partDefinitionId) {
-			await PartDefinition.findByIdAndUpdate(material.partDefinitionId, { $inc: { inventoryCount: quantityChanged } });
+
+		// Also log to ManufacturingMaterialTransaction if a linked material exists
+		const linkedMat = await ManufacturingMaterial.findOne({ partDefinitionId: partId }).lean() as any;
+		if (linkedMat) {
+			const quantityBefore = linkedMat.currentQuantity ?? 0;
+			const quantityAfter = quantityBefore + quantityChanged;
+			await ManufacturingMaterialTransaction.create({
+				_id: generateId(), materialId: linkedMat._id, transactionType, quantityChanged,
+				quantityBefore, quantityAfter, operatorId: locals.user._id,
+				notes: notes || undefined, createdAt: new Date()
+			});
+			await ManufacturingMaterial.findByIdAndUpdate(linkedMat._id, {
+				$set: { currentQuantity: quantityAfter, updatedAt: new Date() }
+			});
 		}
+
 		return { success: true };
 	}
 };
