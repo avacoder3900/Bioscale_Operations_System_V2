@@ -12,11 +12,11 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	const errorParam = url.searchParams.get('error');
 
 	if (errorParam) {
-		throw redirect(303, `/spu/bom/settings?error=${encodeURIComponent(errorParam)}`);
+		throw redirect(303, `/bom/settings?error=${encodeURIComponent(errorParam)}`);
 	}
 
 	if (!code) {
-		throw redirect(303, '/spu/bom/settings?error=No+authorization+code+received');
+		throw redirect(303, '/bom/settings?error=No+authorization+code+received');
 	}
 
 	await connectDB();
@@ -62,5 +62,5 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 		});
 	}
 
-	throw redirect(303, '/spu/parts');
+	throw redirect(303, '/parts');
 };

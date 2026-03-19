@@ -2,10 +2,10 @@
 	import { page } from '$app/state';
 	
 	const tabs = [
-		{ href: '/spu/cartridge-admin', label: 'Cartridge Admin' },
-		{ href: '/spu/receiving', label: 'Receiving' },
-		{ href: '/spu/manufacturing/consumables', label: 'Consumables' },
-		{ href: '/spu/bom/settings/mapping', label: 'BOM Mapping' }
+		{ href: '/cartridge-admin', label: 'Cartridge Admin' },
+		{ href: '/receiving', label: 'Receiving' },
+		{ href: '/manufacturing/consumables', label: 'Consumables' },
+		{ href: '/bom/settings/mapping', label: 'BOM Mapping' }
 	];
 </script>
 

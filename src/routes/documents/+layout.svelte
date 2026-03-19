@@ -148,7 +148,7 @@
 									<!-- Divider + Back to SPU -->
 									<div class="border-t border-[var(--color-tron-border)]">
 										<a
-											href="/spu"
+											href='/'"
 											class="flex min-h-[var(--size-touch-target)] items-center gap-3 px-4 py-2 text-[var(--color-tron-text-secondary)] transition-all duration-150
 												hover:bg-[var(--color-tron-bg-tertiary)] hover:text-[var(--color-tron-cyan)]"
 											onclick={closeMenu}

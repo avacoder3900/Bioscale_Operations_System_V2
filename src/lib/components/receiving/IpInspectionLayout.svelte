@@ -154,7 +154,7 @@
 
 	<!-- eslint-disable svelte/no-navigation-without-resolve -->
 	<div class="mt-3 border-t border-[var(--color-tron-border)] pt-3">
-		<a href="/spu/parts/{partId}" class="text-xs text-[var(--color-tron-cyan)] hover:underline">
+		<a href="/parts/{partId}" class="text-xs text-[var(--color-tron-cyan)] hover:underline">
 			View Part Detail →
 		</a>
 	</div>
