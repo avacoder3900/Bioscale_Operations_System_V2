@@ -98,24 +98,20 @@
 	<!-- Sidebar -->
 	<aside
 		class="fixed left-0 top-0 z-40 h-full border-r border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] pt-4 transition-all duration-200 ease-in-out
-			lg:sticky lg:top-0 lg:z-0 lg:h-[calc(100vh-4rem)]
-			{sidebarOpen ? 'w-56 translate-x-0' : 'w-0 -translate-x-full lg:w-14 lg:translate-x-0'}"
+			{sidebarOpen ? 'w-48 translate-x-0' : 'w-0 -translate-x-full'}"
 	>
-		<div class="flex h-full flex-col overflow-hidden {sidebarOpen ? 'w-56' : 'lg:w-14'}">
-			<!-- Close button (mobile) / Collapse button (desktop) -->
-			<div class="flex items-center justify-end px-3 pb-3">
+		<div class="flex h-full w-48 flex-col overflow-hidden">
+			<!-- Close button -->
+			<div class="flex items-center justify-between px-3 pb-3">
+				<span class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Menu</span>
 				<button
 					type="button"
-					onclick={() => { sidebarOpen = !sidebarOpen; }}
+					onclick={() => { sidebarOpen = false; }}
 					class="rounded p-1.5 text-[var(--color-tron-text-secondary)] transition-colors hover:bg-[var(--color-tron-surface)] hover:text-[var(--color-tron-cyan)]"
-					aria-label={sidebarOpen ? 'Collapse menu' : 'Expand menu'}
+					aria-label="Close menu"
 				>
-					<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-						{#if sidebarOpen}
-							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-						{:else}
-							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7" />
-						{/if}
+					<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
 					</svg>
 				</button>
 			</div>
@@ -127,33 +123,28 @@
 					<a
 						href={item.href}
 						onclick={() => { sidebarOpen = false; }}
-						class="group flex items-center gap-3 rounded-lg px-2.5 py-2.5 text-sm font-medium transition-all
+						class="group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-all
 							{active
 								? 'bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]'
 								: 'text-[var(--color-tron-text-secondary)] hover:bg-[var(--color-tron-surface)] hover:text-[var(--color-tron-text)]'}"
-						title={sidebarOpen ? undefined : item.label}
 					>
-						<svg class="h-5 w-5 shrink-0 {active ? 'text-[var(--color-tron-cyan)]' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={item.icon} />
 						</svg>
-						{#if sidebarOpen}
-							<span class="truncate">{item.label}</span>
-						{/if}
-						{#if active && !sidebarOpen}
-							<span class="absolute left-0 h-6 w-0.5 rounded-r bg-[var(--color-tron-cyan)]"></span>
-						{/if}
+						<span class="truncate text-xs">{item.label}</span>
 					</a>
 				{/each}
 			</nav>
 
 			<!-- Admin links at bottom -->
-			{#if data.isAdmin && sidebarOpen}
+			{#if data.isAdmin}
 				{#if $page.url.pathname.startsWith('/spu/manufacturing/wi-01') || $page.url.pathname.startsWith('/spu/manufacturing/wi-02')}
 					<div class="border-t border-[var(--color-tron-border)] p-3">
 						<p class="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Admin</p>
 						{#if $page.url.pathname.startsWith('/spu/manufacturing/wi-01')}
 							<a
 								href="/spu/manufacturing/wi-01/steps"
+								onclick={() => { sidebarOpen = false; }}
 								class="block rounded px-2 py-1.5 text-xs transition-colors {$page.url.pathname === '/spu/manufacturing/wi-01/steps'
 									? 'text-[var(--color-tron-cyan)]'
 									: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
@@ -164,6 +155,7 @@
 						{#if $page.url.pathname.startsWith('/spu/manufacturing/wi-02')}
 							<a
 								href="/spu/manufacturing/wi-02/steps"
+								onclick={() => { sidebarOpen = false; }}
 								class="block rounded px-2 py-1.5 text-xs transition-colors {$page.url.pathname === '/spu/manufacturing/wi-02/steps'
 									? 'text-[var(--color-tron-cyan)]'
 									: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
