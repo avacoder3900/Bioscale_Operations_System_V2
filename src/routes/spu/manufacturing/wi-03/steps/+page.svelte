@@ -53,7 +53,7 @@
 
 <div class="space-y-6">
 	<div class="flex items-center justify-between">
-		<h2 class="text-xl font-semibold text-[var(--color-tron-text)]">WI-02 Process Steps</h2>
+		<h2 class="text-xl font-semibold text-[var(--color-tron-text)]">WI-03 Process Steps</h2>
 		<button
 			type="button"
 			onclick={() => {
