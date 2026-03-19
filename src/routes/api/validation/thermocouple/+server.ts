@@ -2,7 +2,7 @@ import { json } from '@sveltejs/kit';
 import { connectDB, ValidationSession, GeneratedBarcode, Spu, AuditLog, generateId } from '$lib/server/db';
 import { parseThermocoupleXlsx } from '$lib/server/thermocouple-xlsx-parser';
 import { computeChannelStats, computeOverallStats, determinePassFail } from '$lib/server/thermocouple-stats';
-import { generateChannelChartPng } from '$lib/server/thermocouple-chart';
+import { generateChannelChartSvg } from '$lib/server/thermocouple-chart';
 import type { RequestHandler } from './$types';
 
 /**
@@ -43,11 +43,14 @@ async function handleXlsxUpload(request: Request, locals: App.Locals) {
 	const spu = await Spu.findById(spuId).lean() as any;
 	if (!spu) return json({ error: 'SPU not found' }, { status: 400 });
 
+	// Read and store the raw xlsx file as base64
+	const fileBuffer = Buffer.from(await file.arrayBuffer());
+	const fileBase64 = fileBuffer.toString('base64');
+
 	// Parse xlsx
 	let parsed;
 	try {
-		const buffer = Buffer.from(await file.arrayBuffer());
-		parsed = parseThermocoupleXlsx(buffer, file.name);
+		parsed = parseThermocoupleXlsx(fileBuffer, file.name);
 	} catch (err: any) {
 		return json({ error: `Failed to parse xlsx: ${err.message}` }, { status: 400 });
 	}
@@ -61,14 +64,14 @@ async function handleXlsxUpload(request: Request, locals: App.Locals) {
 	const overallStats = computeOverallStats(channelStats);
 	const { passed, failureReasons, interpretation, perChannel } = determinePassFail(channelStats, minTemp, maxTemp);
 
-	// Generate charts for each channel
+	// Generate SVG charts for each channel
 	const channelsData: Record<string, any> = {};
 	for (const ch of ['ch1', 'ch2', 'ch3', 'ch4'] as const) {
-		const chartPng = await generateChannelChartPng(ch, parsed.channels[ch], parsed.num, minTemp, maxTemp, channelStats[ch]);
+		const chartSvg = generateChannelChartSvg(ch, parsed.channels[ch], parsed.num, minTemp, maxTemp, channelStats[ch]);
 		channelsData[ch] = {
 			stats: channelStats[ch],
 			passed: perChannel[ch],
-			chartPng
+			chartSvg
 		};
 	}
 
@@ -118,7 +121,9 @@ async function handleXlsxUpload(request: Request, locals: App.Locals) {
 				readings: legacyReadings,
 				channels: parsed.channels,
 				num: parsed.num,
-				fileName: parsed.fileName
+				fileName: parsed.fileName,
+				xlsxFile: fileBase64,
+				xlsxMimeType: file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 			},
 			processedData: {
 				stats: overallStats,

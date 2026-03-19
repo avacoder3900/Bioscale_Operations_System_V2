@@ -19,17 +19,15 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	if (!session) return json({ error: 'Session not found' }, { status: 404 });
 
 	const thermoResult = session.results?.find((r: any) => r.testType === 'thermocouple');
-	const chartPng = thermoResult?.processedData?.channels?.[channel]?.chartPng;
+	const chartSvg = thermoResult?.processedData?.channels?.[channel]?.chartSvg;
 
-	if (!chartPng) {
+	if (!chartSvg) {
 		return json({ error: 'Chart not found for this channel' }, { status: 404 });
 	}
 
-	const buffer = Buffer.from(chartPng, 'base64');
-	return new Response(buffer, {
+	return new Response(chartSvg, {
 		headers: {
-			'Content-Type': 'image/png',
-			'Content-Length': String(buffer.length),
+			'Content-Type': 'image/svg+xml',
 			'Cache-Control': 'public, max-age=86400'
 		}
 	});
