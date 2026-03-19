@@ -51,6 +51,10 @@
 	function selectFridge(fridge: FridgeOption) {
 		selectedFridge = fridge;
 		storageLocation = fridge.barcode || fridge.displayName;
+		// Clear stale assignments so user must re-apply with new fridge
+		if (assignments.size > 0) {
+			assignments = new SvelteMap();
+		}
 	}
 
 	function applyToAll() {
