@@ -10,6 +10,25 @@
 
 	let { data, form } = $props();
 
+	// Panel collapse state
+	let spuCollapsed = $state(false);
+	let cartCollapsed = $state(false);
+
+	function getCartStatusColor(status: string): string {
+		switch (status?.toLowerCase()) {
+			case 'active': case 'available': return 'var(--color-tron-green)';
+			case 'in_use': case 'in use': return 'var(--color-tron-cyan)';
+			case 'depleted': case 'expired': return 'var(--color-tron-orange)';
+			case 'quarantine': case 'disposed': return 'var(--color-tron-red)';
+			default: return 'var(--color-tron-text-secondary)';
+		}
+	}
+
+	function formatDate(date: string | Date | null): string {
+		if (!date) return '—';
+		return new Date(date).toLocaleDateString();
+	}
+
 	let barcodeInput = $state('');
 	let udiInput = $state('');
 	let showRegisterForm = $state(false);
@@ -246,6 +265,48 @@
 		return date.toLocaleDateString();
 	}
 </script>
+
+<style>
+	.dash-panel {
+		transition: flex 0.2s ease, width 0.2s ease, opacity 0.15s ease;
+		overflow: hidden;
+	}
+	.dash-panel.collapsed {
+		flex: 0 0 36px !important;
+		min-width: 36px;
+		max-width: 36px;
+	}
+	.dash-panel.collapsed .panel-content {
+		opacity: 0;
+		pointer-events: none;
+	}
+	.collapsed-label {
+		writing-mode: vertical-rl;
+		text-orientation: mixed;
+		transform: rotate(180deg);
+	}
+</style>
+
+<div class="flex gap-3">
+	<!-- SPU Dashboard Panel -->
+	<div class="dash-panel flex-1 min-w-0 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)]" class:collapsed={spuCollapsed}>
+		{#if spuCollapsed}
+			<button type="button" onclick={() => { spuCollapsed = false; }} class="flex h-full w-full flex-col items-center justify-start pt-3 gap-2">
+				<svg class="h-4 w-4 text-[var(--color-tron-cyan)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7" />
+				</svg>
+				<span class="collapsed-label text-xs font-semibold text-[var(--color-tron-cyan)] tracking-wider">SPU DASHBOARD</span>
+			</button>
+		{:else}
+			<div class="panel-content p-4">
+				<div class="mb-4 flex items-center justify-between">
+					<h2 class="text-lg font-bold text-[var(--color-tron-text)]">SPU Dashboard</h2>
+					<button type="button" onclick={() => { spuCollapsed = true; }} class="rounded p-1 text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)] transition-colors" title="Collapse">
+						<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7" />
+						</svg>
+					</button>
+				</div>
 
 <div class="space-y-6">
 	<div class="flex items-center justify-between">
@@ -1224,3 +1285,114 @@
 		</div>
 	</div>
 {/if}
+
+</div><!-- end space-y-6 -->
+			</div><!-- end panel-content -->
+		{/if}
+	</div><!-- end SPU panel -->
+
+	<!-- Cartridge Dashboard Panel -->
+	<div class="dash-panel flex-1 min-w-0 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)]" class:collapsed={cartCollapsed}>
+		{#if cartCollapsed}
+			<button type="button" onclick={() => { cartCollapsed = false; }} class="flex h-full w-full flex-col items-center justify-start pt-3 gap-2">
+				<svg class="h-4 w-4 text-[var(--color-tron-cyan)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7" />
+				</svg>
+				<span class="collapsed-label text-xs font-semibold text-[var(--color-tron-cyan)] tracking-wider">CARTRIDGE DASHBOARD</span>
+			</button>
+		{:else}
+			<div class="panel-content p-4">
+				<div class="mb-4 flex items-center justify-between">
+					<h2 class="text-lg font-bold text-[var(--color-tron-text)]">Cartridge Dashboard</h2>
+					<button type="button" onclick={() => { cartCollapsed = true; }} class="rounded p-1 text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)] transition-colors" title="Collapse">
+						<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7" />
+						</svg>
+					</button>
+				</div>
+
+				{#if data.cartridgeDashboard}
+					{@const cd = data.cartridgeDashboard}
+					<div class="space-y-4">
+						<!-- Total -->
+						<TronCard>
+							<div class="text-center">
+								<div class="text-3xl font-bold text-[var(--color-tron-cyan)]">{cd.totalCartridges}</div>
+								<div class="text-xs text-[var(--color-tron-text-secondary)]">Total Cartridges</div>
+							</div>
+						</TronCard>
+
+						<!-- Status breakdown -->
+						<TronCard>
+							<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">By Status</h3>
+							<div class="space-y-2">
+								{#each cd.statusCounts as s}
+									<div class="flex items-center justify-between">
+										<div class="flex items-center gap-2">
+											<div class="h-2 w-2 rounded-full" style="background: {getCartStatusColor(s.status)}"></div>
+											<span class="text-xs text-[var(--color-tron-text)]">{s.status ?? 'unknown'}</span>
+										</div>
+										<span class="font-mono text-xs font-bold text-[var(--color-tron-text)]">{s.count}</span>
+									</div>
+								{/each}
+							</div>
+						</TronCard>
+
+						<!-- Type breakdown -->
+						{#if cd.typeCounts.length > 0}
+							<TronCard>
+								<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">By Type</h3>
+								<div class="space-y-2">
+									{#each cd.typeCounts as t}
+										<div class="flex items-center justify-between">
+											<span class="text-xs text-[var(--color-tron-text)]">{t.type ?? 'untyped'}</span>
+											<span class="font-mono text-xs font-bold text-[var(--color-tron-text)]">{t.count}</span>
+										</div>
+									{/each}
+								</div>
+							</TronCard>
+						{/if}
+
+						<!-- Groups -->
+						{#if cd.groupSummary.length > 0}
+							<TronCard>
+								<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Groups</h3>
+								<div class="space-y-2">
+									{#each cd.groupSummary as g}
+										<div class="flex items-center justify-between">
+											<div class="flex items-center gap-2">
+												{#if g.color}
+													<div class="h-2 w-2 rounded-full" style="background: {g.color}"></div>
+												{/if}
+												<span class="text-xs text-[var(--color-tron-text)]">{g.groupName}</span>
+											</div>
+											<span class="font-mono text-xs font-bold text-[var(--color-tron-text)]">{g.count}</span>
+										</div>
+									{/each}
+								</div>
+							</TronCard>
+						{/if}
+
+						<!-- Recent Activity -->
+						<TronCard>
+							<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Recent Activity</h3>
+							<div class="space-y-1.5 max-h-64 overflow-y-auto">
+								{#each cd.recentActivity as c}
+									<a href="/cartridges/{c.id}" class="flex items-center justify-between rounded px-2 py-1.5 text-xs hover:bg-[var(--color-tron-surface)] transition-colors">
+										<span class="font-mono text-[var(--color-tron-text)]">{c.barcode ?? c.id.slice(-8)}</span>
+										<div class="flex items-center gap-2">
+											<TronBadge variant={c.status === 'active' || c.status === 'available' ? 'success' : 'neutral'}>{c.status ?? '—'}</TronBadge>
+											<span class="text-[var(--color-tron-text-secondary)]">{formatDate(c.updatedAt)}</span>
+										</div>
+									</a>
+								{/each}
+							</div>
+						</TronCard>
+					</div>
+				{:else}
+					<p class="text-sm text-[var(--color-tron-text-secondary)]">Cartridge data unavailable.</p>
+				{/if}
+			</div>
+		{/if}
+	</div><!-- end Cartridge panel -->
+</div><!-- end flex container -->
