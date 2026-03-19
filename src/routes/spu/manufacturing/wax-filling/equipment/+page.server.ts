@@ -5,8 +5,12 @@ import {
 import { isAdmin as checkAdmin } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
+export const config = { maxDuration: 60 };
+
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
+
+	try {
 	await connectDB();
 
 	const [decksRaw, traysRaw, equipmentRaw, settingsDoc, activeWaxRunsRaw] = await Promise.all([
@@ -145,6 +149,14 @@ export const load: PageServerLoad = async ({ locals }) => {
 		waxRunHistory,
 		reagentRunHistory
 	};
+	} catch (err) {
+		console.error('[WAX-FILLING EQUIPMENT] Load error:', err instanceof Error ? err.message : err);
+		return {
+			decks: [], trays: [], rejectionCodes: [], isAdmin: checkAdmin(locals.user),
+			equipmentList: [], placements: [], activeWaxRuns: [], activeReagentRuns: [],
+			waxRunHistory: [], reagentRunHistory: []
+		};
+	}
 };
 
 export const actions: Actions = {

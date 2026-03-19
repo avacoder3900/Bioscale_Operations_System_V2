@@ -2,8 +2,12 @@ import { redirect } from '@sveltejs/kit';
 import { connectDB, CartridgeRecord, ManufacturingSettings } from '$lib/server/db';
 import type { PageServerLoad } from './$types';
 
+export const config = { maxDuration: 60 };
+
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
+
+	try {
 	await connectDB();
 
 	const [settingsDoc, coolingCartridges] = await Promise.all([
@@ -54,4 +58,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 	});
 
 	return { cartridges };
+	} catch (err) {
+		console.error('[REAGENT-FILLING COOLING-QUEUE] Load error:', err instanceof Error ? err.message : err);
+		return { cartridges: [] };
+	}
 };

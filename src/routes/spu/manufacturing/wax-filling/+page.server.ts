@@ -4,6 +4,9 @@ import {
 } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
+// Extend Vercel serverless timeout to 60s (default is 10s)
+export const config = { maxDuration: 60 };
+
 /** Map DB status → UI stage string (STAGES const in svelte) */
 function toStage(status: string | null | undefined): string | null {
 	if (!status) return null;
@@ -22,163 +25,197 @@ function toStage(status: string | null | undefined): string | null {
 const ACTIVE_STAGES = new Set(['Setup', 'Loading', 'Running', 'Awaiting Removal', 'QC', 'Storage',
 	'setup', 'loading', 'running', 'awaiting_removal', 'cooling', 'qc', 'storage']);
 
-export const load: PageServerLoad = async ({ locals, url, parent }) => {
-	if (!locals.user) redirect(302, '/login');
-	await connectDB();
-
-	// Get robotId from URL param or first robot from layout
-	const layoutData = await parent();
-	const robotIdParam = url.searchParams.get('robot');
-	const robotId = robotIdParam ?? layoutData.robots[0]?.robotId ?? '';
-
-	if (!robotId) {
-		return {
-			robotId: '',
-			loadError: 'No robots configured. Add a robot in equipment settings.',
-			robotBlocked: null,
-			runState: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null },
-			settings: { runDurationMin: 45, removeDeckWarningMin: 5, coolingWarningMin: 30, deckLockoutMin: 60, incubatorTempC: 37, heaterTempC: 65 },
-			tubeData: null, ovenLots: [], rejectionCodes: [], qcCartridges: [], storageCartridges: []
-		};
-	}
-
-	// Load everything in parallel
-	const [activeWaxRun, settingsDoc, activeTube, activeReagentRunRaw] = await Promise.all([
-		WaxFillingRun.findOne({ 'robot._id': robotId, status: { $in: [...ACTIVE_STAGES] } })
-			.sort({ createdAt: -1 }).lean(),
-		ManufacturingSettings.findById('default').lean(),
-		Consumable.findOne({ type: 'incubator_tube', status: 'active' }).lean(),
-		// Check if a reagent run is active on this robot
-		(async () => {
-			try {
-				const mongoose = (await import('mongoose')).default;
-				const db = mongoose.connection.db;
-				if (!db) return null;
-				const cols = await db.listCollections({ name: 'reagent_filling_runs' }).toArray();
-				if (!cols.length) return null;
-				return db.collection('reagent_filling_runs').findOne({
-					'robot._id': robotId,
-					status: { $nin: ['completed', 'aborted', 'cancelled', 'Completed', 'Aborted', 'Cancelled'] }
-				});
-			} catch { return null; }
-		})()
-	]);
-
-	const wax = (settingsDoc as any)?.waxFilling ?? {};
-	const rejectionCodes = ((settingsDoc as any)?.rejectionReasonCodes ?? [])
-		.filter((r: any) => !r.processType || r.processType === 'wax')
-		.map((r: any, i: number) => ({
-			id: r._id ?? String(i), code: r.code ?? '', label: r.label ?? '',
-			processType: r.processType ?? 'wax', sortOrder: r.sortOrder ?? i
-		}));
-
-	const run = activeWaxRun as any;
-	const stage = run ? toStage(run.status) : null;
-
-	// Build runState
-	const runState = run
-		? {
-			hasActiveRun: true,
-			runId: String(run._id),
-			stage,
-			runStartTime: run.runStartTime ? new Date(run.runStartTime).toISOString() : null,
-			runEndTime: run.runEndTime ? new Date(run.runEndTime).toISOString() : null,
-			deckId: run.deckId ?? null,
-			waxSourceLot: run.waxSourceLot ?? null,
-			coolingTrayId: run.coolingTrayId ?? null,
-			plannedCartridgeCount: run.plannedCartridgeCount ?? run.cartridgeIds?.length ?? null
-		}
-		: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null };
-
-	// Tube data
-	const tube = activeTube as any;
-	const tubeData = tube
-		? {
-			tubeId: String(tube._id),
-			initialVolumeUl: tube.initialVolumeUl ?? 0,
-			remainingVolumeUl: tube.remainingVolumeUl ?? 0,
-			status: tube.status ?? 'active',
-			totalCartridgesFilled: tube.totalCartridgesFilled ?? 0,
-			totalRunsUsed: tube.totalRunsUsed ?? 0
-		}
-		: null;
-
-	// QC cartridges (wax_filled phase, for this robot's run)
-	const qcCartridgesRaw = run
-		? await CartridgeRecord.find({ 'waxFilling.runId': String(run._id) }).lean()
-		: [];
-
-	const qcCartridges = (qcCartridgesRaw as any[]).map((c: any) => ({
-		cartridgeId: String(c._id),
-		backedLotId: c.backing?.lotId ?? '',
-		ovenEntryTime: c.backing?.ovenEntryTime ? new Date(c.backing.ovenEntryTime).toISOString() : null,
-		waxRunId: c.waxFilling?.runId ?? null,
-		deckPosition: c.waxFilling?.deckPosition ?? null,
-		waxTubeId: c.waxFilling?.waxTubeId ?? null,
-		coolingTrayId: c.waxStorage?.coolingTrayId ?? null,
-		transferTimeSeconds: c.waxFilling?.transferTimeSeconds ?? null,
-		qcStatus: c.waxQc?.status ?? 'Pending',
-		rejectionReason: c.waxQc?.rejectionReason ?? null,
-		qcTimestamp: c.waxQc?.timestamp ? new Date(c.waxQc.timestamp).toISOString() : null,
-		currentInventory: c.currentPhase ?? 'wax_filled',
-		storageLocation: c.waxStorage?.location ?? null,
-		storageTimestamp: c.waxStorage?.timestamp ? new Date(c.waxStorage.timestamp).toISOString() : null,
-		storageOperatorId: c.waxStorage?.operator?._id ?? null,
-		createdAt: c.createdAt ? new Date(c.createdAt).toISOString() : '',
-		updatedAt: c.updatedAt ? new Date(c.updatedAt).toISOString() : ''
-	}));
-
-	// Storage cartridges (wax_stored phase)
-	const storageCartridgesRaw = run
-		? await CartridgeRecord.find({ 'waxFilling.runId': String(run._id), currentPhase: 'wax_stored' }).lean()
-		: [];
-
-	const storageCartridges = (storageCartridgesRaw as any[]).map((c: any) => ({
-		cartridgeId: String(c._id),
-		qcStatus: c.waxQc?.status ?? 'Accepted',
-		currentInventory: c.currentPhase ?? 'wax_stored',
-		storageLocation: c.waxStorage?.location ?? null
-	}));
-
-	// Oven lots (completed runs with ovenLocationId set)
-	const ovenRunsRaw = await WaxFillingRun.find({
-		'robot._id': robotId,
-		status: { $in: ['completed', 'storage', 'Storage'] },
-		ovenLocationId: { $exists: true, $ne: null }
-	}).sort({ runEndTime: -1 }).limit(20).lean();
-
-	const minOvenTimeMin = wax.minOvenTimeMin ?? 60;
-	const now = Date.now();
-	const ovenLots = (ovenRunsRaw as any[]).map((r: any) => {
-		const endTime = r.runEndTime ? new Date(r.runEndTime).getTime() : 0;
-		const elapsedMin = endTime ? (now - endTime) / 60000 : 0;
-		return { lotId: String(r._id), ready: elapsedMin >= minOvenTimeMin };
-	});
-
-	// Check if robot is blocked by reagent filling
-	const robotBlocked = activeReagentRunRaw
-		? { process: 'reagent' as const, runId: activeReagentRunRaw._id ? String(activeReagentRunRaw._id) : null }
-		: null;
-
+/** Safe-default empty state for error fallback */
+function emptyState(robotId: string, loadError: string | null = null) {
 	return {
 		robotId,
-		loadError: null,
-		robotBlocked,
-		runState,
-		settings: {
-			runDurationMin: wax.runDurationMin ?? 45,
-			removeDeckWarningMin: wax.removeDeckWarningMin ?? 5,
-			coolingWarningMin: wax.coolingWarningMin ?? 30,
-			deckLockoutMin: wax.deckLockoutMin ?? 60,
-			incubatorTempC: wax.incubatorTempC ?? 37,
-			heaterTempC: wax.heaterTempC ?? 65
+		loadError,
+		robotBlocked: null as { process: 'reagent'; runId: string | null } | null,
+		runState: {
+			hasActiveRun: false, runId: null, stage: null,
+			runStartTime: null, runEndTime: null,
+			deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null
 		},
-		tubeData,
-		ovenLots,
-		rejectionCodes,
-		qcCartridges,
-		storageCartridges
+		settings: {
+			runDurationMin: 45, removeDeckWarningMin: 5, coolingWarningMin: 30,
+			deckLockoutMin: 60, incubatorTempC: 37, heaterTempC: 65
+		},
+		tubeData: null as null | {
+			tubeId: string; initialVolumeUl: number; remainingVolumeUl: number;
+			status: string; totalCartridgesFilled: number; totalRunsUsed: number;
+		},
+		ovenLots: [] as { lotId: string; ready: boolean }[],
+		rejectionCodes: [] as any[],
+		qcCartridges: [] as any[],
+		storageCartridges: [] as any[]
 	};
+}
+
+export const load: PageServerLoad = async ({ locals, url, parent }) => {
+	if (!locals.user) redirect(302, '/login');
+
+	// Get robotId from URL param or first robot from layout — do this BEFORE connectDB
+	// so we have a safe fallback even if DB is unavailable
+	let layoutData: Awaited<ReturnType<typeof parent>>;
+	try {
+		layoutData = await parent();
+	} catch (err) {
+		console.error('[WAX-FILLING PAGE] parent() error:', err instanceof Error ? err.message : err);
+		return emptyState('', 'Layout data unavailable. Please refresh.');
+	}
+
+	const robotIdParam = url.searchParams.get('robot');
+	const robotId = String(robotIdParam ?? layoutData.robots?.[0]?.robotId ?? '');
+
+	if (!robotId) {
+		return emptyState('', 'No robots configured. Add a robot in equipment settings.');
+	}
+
+	try {
+		await connectDB();
+
+		// Load everything in parallel
+		const [activeWaxRun, settingsDoc, activeTube, activeReagentRunRaw] = await Promise.all([
+			WaxFillingRun.findOne({ 'robot._id': robotId, status: { $in: [...ACTIVE_STAGES] } })
+				.sort({ createdAt: -1 }).lean(),
+			ManufacturingSettings.findById('default').lean(),
+			Consumable.findOne({ type: 'incubator_tube', status: 'active' }).lean(),
+			// Check if a reagent run is active on this robot
+			(async () => {
+				try {
+					const mongoose = (await import('mongoose')).default;
+					const db = mongoose.connection.db;
+					if (!db) return null;
+					const cols = await db.listCollections({ name: 'reagent_filling_runs' }).toArray();
+					if (!cols.length) return null;
+					return db.collection('reagent_filling_runs').findOne({
+						'robot._id': robotId,
+						status: { $nin: ['completed', 'aborted', 'cancelled', 'Completed', 'Aborted', 'Cancelled'] }
+					});
+				} catch { return null; }
+			})()
+		]);
+
+		const wax = (settingsDoc as any)?.waxFilling ?? {};
+		const rejectionCodes = ((settingsDoc as any)?.rejectionReasonCodes ?? [])
+			.filter((r: any) => !r.processType || r.processType === 'wax')
+			.map((r: any, i: number) => ({
+				id: r._id ? String(r._id) : String(i), code: r.code ?? '', label: r.label ?? '',
+				processType: r.processType ?? 'wax', sortOrder: r.sortOrder ?? i
+			}));
+
+		const run = activeWaxRun as any;
+		const stage = run ? toStage(run.status) : null;
+
+		// Build runState
+		const runState = run
+			? {
+				hasActiveRun: true,
+				runId: String(run._id),
+				stage,
+				runStartTime: run.runStartTime ? new Date(run.runStartTime).toISOString() : null,
+				runEndTime: run.runEndTime ? new Date(run.runEndTime).toISOString() : null,
+				deckId: run.deckId ?? null,
+				waxSourceLot: run.waxSourceLot ?? null,
+				coolingTrayId: run.coolingTrayId ?? null,
+				plannedCartridgeCount: run.plannedCartridgeCount ?? run.cartridgeIds?.length ?? null
+			}
+			: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null };
+
+		// Tube data
+		const tube = activeTube as any;
+		const tubeData = tube
+			? {
+				tubeId: String(tube._id),
+				initialVolumeUl: tube.initialVolumeUl ?? 0,
+				remainingVolumeUl: tube.remainingVolumeUl ?? 0,
+				status: tube.status ?? 'active',
+				totalCartridgesFilled: tube.totalCartridgesFilled ?? 0,
+				totalRunsUsed: tube.totalRunsUsed ?? 0
+			}
+			: null;
+
+		// QC cartridges (wax_filled phase, for this robot's run)
+		const qcCartridgesRaw = run
+			? await CartridgeRecord.find({ 'waxFilling.runId': String(run._id) }).lean().catch(() => [])
+			: [];
+
+		const qcCartridges = (qcCartridgesRaw as any[]).map((c: any) => ({
+			cartridgeId: String(c._id),
+			backedLotId: c.backing?.lotId ?? '',
+			ovenEntryTime: c.backing?.ovenEntryTime ? new Date(c.backing.ovenEntryTime).toISOString() : null,
+			waxRunId: c.waxFilling?.runId ? String(c.waxFilling.runId) : null,
+			deckPosition: c.waxFilling?.deckPosition ?? null,
+			waxTubeId: c.waxFilling?.waxTubeId ?? null,
+			coolingTrayId: c.waxStorage?.coolingTrayId ?? null,
+			transferTimeSeconds: c.waxFilling?.transferTimeSeconds ?? null,
+			qcStatus: c.waxQc?.status ?? 'Pending',
+			rejectionReason: c.waxQc?.rejectionReason ?? null,
+			qcTimestamp: c.waxQc?.timestamp ? new Date(c.waxQc.timestamp).toISOString() : null,
+			currentInventory: c.currentPhase ?? 'wax_filled',
+			storageLocation: c.waxStorage?.location ?? null,
+			storageTimestamp: c.waxStorage?.timestamp ? new Date(c.waxStorage.timestamp).toISOString() : null,
+			storageOperatorId: c.waxStorage?.operator?._id ? String(c.waxStorage.operator._id) : null,
+			createdAt: c.createdAt ? new Date(c.createdAt).toISOString() : '',
+			updatedAt: c.updatedAt ? new Date(c.updatedAt).toISOString() : ''
+		}));
+
+		// Storage cartridges (wax_stored phase)
+		const storageCartridgesRaw = run
+			? await CartridgeRecord.find({ 'waxFilling.runId': String(run._id), currentPhase: 'wax_stored' }).lean().catch(() => [])
+			: [];
+
+		const storageCartridges = (storageCartridgesRaw as any[]).map((c: any) => ({
+			cartridgeId: String(c._id),
+			qcStatus: c.waxQc?.status ?? 'Accepted',
+			currentInventory: c.currentPhase ?? 'wax_stored',
+			storageLocation: c.waxStorage?.location ?? null
+		}));
+
+		// Oven lots (completed runs with ovenLocationId set)
+		const ovenRunsRaw = await WaxFillingRun.find({
+			'robot._id': robotId,
+			status: { $in: ['completed', 'storage', 'Storage'] },
+			ovenLocationId: { $exists: true, $ne: null }
+		}).sort({ runEndTime: -1 }).limit(20).lean().catch(() => []);
+
+		const minOvenTimeMin = wax.minOvenTimeMin ?? 60;
+		const now = Date.now();
+		const ovenLots = (ovenRunsRaw as any[]).map((r: any) => {
+			const endTime = r.runEndTime ? new Date(r.runEndTime).getTime() : 0;
+			const elapsedMin = endTime ? (now - endTime) / 60000 : 0;
+			return { lotId: String(r._id), ready: elapsedMin >= minOvenTimeMin };
+		});
+
+		// Check if robot is blocked by reagent filling
+		const robotBlocked = activeReagentRunRaw
+			? { process: 'reagent' as const, runId: activeReagentRunRaw._id ? String(activeReagentRunRaw._id) : null }
+			: null;
+
+		return {
+			robotId,
+			loadError: null,
+			robotBlocked,
+			runState,
+			settings: {
+				runDurationMin: wax.runDurationMin ?? 45,
+				removeDeckWarningMin: wax.removeDeckWarningMin ?? 5,
+				coolingWarningMin: wax.coolingWarningMin ?? 30,
+				deckLockoutMin: wax.deckLockoutMin ?? 60,
+				incubatorTempC: wax.incubatorTempC ?? 37,
+				heaterTempC: wax.heaterTempC ?? 65
+			},
+			tubeData,
+			ovenLots,
+			rejectionCodes,
+			qcCartridges,
+			storageCartridges
+		};
+	} catch (err) {
+		console.error('[WAX-FILLING PAGE] Load error:', err instanceof Error ? err.message : err);
+		// Return safe defaults — do NOT throw a 500; let the page display an error message
+		return emptyState(robotId, 'Failed to load wax filling data. Please refresh the page.');
+	}
 };
 
 export const actions: Actions = {

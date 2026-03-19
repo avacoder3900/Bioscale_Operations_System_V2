@@ -2,6 +2,9 @@ import { connectDB, OpentronsRobot, WaxFillingRun } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
+// Extend Vercel serverless timeout to 60s
+export const config = { maxDuration: 60 };
+
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
