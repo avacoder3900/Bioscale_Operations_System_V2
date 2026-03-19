@@ -11,7 +11,8 @@ import {
 	ManufacturingMaterial,
 	ManufacturingMaterialTransaction,
 	AuditLog,
-	generateId
+	generateId,
+	generateLotNumber
 } from '$lib/server/db';
 import { env } from '$env/dynamic/private';
 import { uploadFile } from '$lib/server/box';
@@ -23,7 +24,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const [parts, currentRevisions] = await Promise.all([
 		PartDefinition.find({ isActive: true })
-			.select('partNumber name category manufacturer inspectionPathway sampleSize percentAccepted')
+			.select('partNumber name category manufacturer supplier inventoryCount inspectionPathway sampleSize percentAccepted')
 			.sort({ sortOrder: 1, name: 1 })
 			.lean(),
 		InspectionProcedureRevision.find({ isCurrent: true }).lean()
@@ -59,6 +60,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 				name: p.name ?? '',
 				category: p.category ?? null,
 				manufacturer: p.manufacturer ?? null,
+				supplier: p.supplier ?? null,
+				inventoryCount: p.inventoryCount ?? 0,
 				inspectionPathway: p.inspectionPathway ?? 'coc',
 				sampleSize: p.sampleSize ?? 1,
 				percentAccepted: p.percentAccepted ?? 100
@@ -137,9 +140,11 @@ export const actions: Actions = {
 		const quantity = Number(formData.get('quantity'));
 		const pathway = formData.get('pathway')?.toString() as 'coc' | 'ip';
 		const cocDocumentUrl = formData.get('cocDocumentUrl')?.toString() || undefined;
+		const cocMeetsStandards = formData.has('cocMeetsStandards') ? formData.get('cocMeetsStandards') === 'true' : undefined;
 		const poReference = formData.get('poReference')?.toString() || undefined;
 		const supplier = formData.get('supplier')?.toString() || undefined;
 		const vendorLotNumber = formData.get('vendorLotNumber')?.toString() || undefined;
+		const serialNumber = formData.get('serialNumber')?.toString() || undefined;
 		const expirationStr = formData.get('expirationDate')?.toString();
 		const expirationDate = expirationStr ? new Date(expirationStr) : undefined;
 		const ipRevisionId = formData.get('ipRevisionId')?.toString() || undefined;
@@ -147,7 +152,26 @@ export const actions: Actions = {
 		const inspectionResultsJson = formData.get('inspectionResults')?.toString();
 		const overrideApplied = formData.get('overrideApplied') === 'true';
 		const overrideReason = formData.get('overrideReason')?.toString() || undefined;
-		const status = (formData.get('status')?.toString() as 'accepted' | 'rejected') || 'accepted';
+		const status = (formData.get('status')?.toString() as 'in_progress' | 'accepted' | 'rejected' | 'returned' | 'other') || 'accepted';
+
+		// S3: First Article Inspection flag
+		const firstArticleInspection = formData.get('firstArticleInspection') === 'true';
+
+		// S2: Generic receiving checklist
+		const checklistJson = formData.get('checklist')?.toString();
+		const checklist = checklistJson ? JSON.parse(checklistJson) : undefined;
+		const formFitFunctionCheck = formData.get('formFitFunctionCheck')?.toString() || undefined;
+		const storageConditionsRequired = formData.get('storageConditionsRequired') === 'true';
+		const esdHandlingRequired = formData.get('esdHandlingRequired') === 'true';
+
+		// S6: Operator notes
+		const notes = formData.get('notes')?.toString() || undefined;
+
+		// S7: Disposition fields
+		const totalRejects = formData.has('totalRejects') ? Number(formData.get('totalRejects')) : undefined;
+		const defectDescription = formData.get('defectDescription')?.toString() || undefined;
+		const rmaNumber = formData.get('rmaNumber')?.toString() || undefined;
+		const dispositionExplanation = formData.get('dispositionExplanation')?.toString() || undefined;
 
 		if (!lotId) return fail(400, { error: 'Lot ID (barcode) is required' });
 		if (!partId) return fail(400, { error: 'Part is required' });
@@ -240,28 +264,40 @@ export const actions: Actions = {
 		}
 
 		try {
+			// Generate system lot number (LOT-YYYYMMDD-XXXX)
+			const lotNumber = await generateLotNumber(ReceivingLot);
+
 			// Create the receiving lot
 			const lot = await ReceivingLot.create({
 				_id: generateId(),
 				lotId,
+				lotNumber,
 				part: {
 					_id: part._id,
 					partNumber: part.partNumber ?? '',
 					name: part.name ?? ''
 				},
 				quantity,
+				serialNumber,
 				operator: {
 					_id: locals.user!._id,
 					username: locals.user!.username
 				},
 				inspectionPathway: pathway,
 				cocDocumentUrl,
+				cocMeetsStandards,
 				ipResults: ipResultsSummary,
 				ipRevisionId,
+				firstArticleInspection,
 				poReference,
 				supplier,
 				vendorLotNumber,
 				expirationDate,
+				storageConditionsRequired,
+				esdHandlingRequired,
+				checklist,
+				formFitFunctionCheck,
+				notes,
 				photos: photoUrls,
 				additionalDocuments: docUrls,
 				overrideApplied,
@@ -270,6 +306,16 @@ export const actions: Actions = {
 					? { _id: locals.user!._id, username: locals.user!.username }
 					: undefined,
 				overrideAt: overrideApplied ? new Date() : undefined,
+				dispositionType: status !== 'in_progress' ? status : undefined,
+				totalRejects,
+				defectDescription,
+				ncNumber: status === 'rejected' ? `NC-${Date.now()}` : undefined,
+				rmaNumber,
+				dispositionExplanation,
+				disposedAt: status !== 'in_progress' ? new Date() : undefined,
+				disposedBy: status !== 'in_progress'
+					? { _id: locals.user!._id, username: locals.user!.username }
+					: undefined,
 				status
 			});
 
@@ -405,7 +451,7 @@ export const actions: Actions = {
 				});
 			}
 
-			return { success: true, lotCreated: true, lotId: lot._id };
+			return { success: true, lotCreated: true, lotId: lot._id, lotNumber };
 		} catch (err) {
 			console.error('[receiving/new] createLot error:', err);
 			return fail(500, { error: err instanceof Error ? err.message : 'Failed to create lot' });

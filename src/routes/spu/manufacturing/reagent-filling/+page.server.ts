@@ -1,8 +1,9 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, ReagentBatchRecord, AssayDefinition, CartridgeRecord, Consumable,
-	ManufacturingSettings, WaxFillingRun, generateId
+	ManufacturingSettings, WaxFillingRun, EquipmentLocation, generateId
 } from '$lib/server/db';
+import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -33,12 +34,13 @@ function emptyReagentState(robotId: string, loadError?: string) {
 			hasActiveRun: false, stage: null, assayTypeName: null,
 			cartridgeCount: 0, runStartTime: null, runEndTime: null
 		},
-		assayTypes: [] as { id: string; name: string; skuCode: string | null }[],
-		reagentDefinitions: [] as { id: string; reagentName: string; wellPosition: number | null; volumeMicroliters: number | null }[],
+		assayTypes: [] as { id: string; name: string; skuCode: string | null; isActive: boolean; reagents: { wellPosition: number; reagentName: string }[] }[],
+		reagentDefinitions: [] as { id: string; reagentName: string; wellPosition: number | null; volumeMicroliters: number | null; isActive: boolean }[],
 		cartridges: [] as any[],
 		currentSealBatch: null as null | { batchId: string; firstScanTime: string | null; cartridgeIds: string[] },
 		rejectionCodes: [] as any[],
-		tubes: [] as { id: string; reagentName: string; volume: number }[]
+		tubes: [] as { id: string; reagentName: string; volume: number }[],
+		fridges: [] as { id: string; displayName: string; barcode: string }[]
 	};
 }
 
@@ -73,7 +75,11 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			}));
 
 		const assayTypes = (assayDefs as any[]).map((a) => ({
-			id: String(a._id), name: a.name ?? '', skuCode: a.skuCode ?? null
+			id: String(a._id), name: a.name ?? '', skuCode: a.skuCode ?? null, isActive: a.isActive ?? true,
+			reagents: ((a.reagents ?? []) as any[]).filter((r: any) => r.isActive !== false).map((r: any) => ({
+				wellPosition: r.wellPosition ?? 0,
+				reagentName: r.reagentName ?? ''
+			}))
 		}));
 
 		// Get reagent definitions for the active run's assay type (or all if no run)
@@ -86,7 +92,7 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 		}
 
 		// Reagent definitions from the active run's assay type
-		const reagentDefinitions: { id: string; reagentName: string; wellPosition: number | null; volumeMicroliters: number | null }[] = [];
+		const reagentDefinitions: { id: string; reagentName: string; wellPosition: number | null; volumeMicroliters: number | null; isActive: boolean }[] = [];
 		if (activeRun?.assayType?._id) {
 			const assay = (assayDefs as any[]).find((a) => String(a._id) === String(activeRun.assayType._id));
 			if (assay?.reagents) {
@@ -96,7 +102,8 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 							id: String(r._id),
 							reagentName: r.reagentName ?? '',
 							wellPosition: r.wellPosition ?? null,
-							volumeMicroliters: r.volumeMicroliters ?? null
+							volumeMicroliters: r.volumeMicroliters ?? null,
+							isActive: r.isActive ?? true
 						});
 					}
 				}
@@ -134,10 +141,14 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			const batches = activeRun?.sealBatches ?? [];
 			const inProgress = batches.find((b: any) => b.status === 'in_progress');
 			if (!inProgress) return null;
+			const cartridgeIds = (inProgress.cartridgeIds ?? []).map(String);
 			return {
 				batchId: String(inProgress._id),
+				topSealLotId: inProgress.topSealLotId ?? '',
+				scannedCount: cartridgeIds.length,
+				totalTarget: 12,
 				firstScanTime: inProgress.firstScanTime ? new Date(inProgress.firstScanTime).toISOString() : null,
-				cartridgeIds: (inProgress.cartridgeIds ?? []).map(String)
+				cartridgeIds
 			};
 		})();
 
@@ -146,6 +157,14 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			id: t._id ? String(t._id) : generateId(),
 			reagentName: t.reagentName ?? '',
 			volume: t.volumeMicroliters ?? 0
+		}));
+
+		// Fridges for storage selection
+		const fridgesRaw = await EquipmentLocation.find({ locationType: 'fridge', isActive: true }).lean().catch(() => []);
+		const fridges = (fridgesRaw as any[]).map((f: any) => ({
+			id: String(f._id),
+			displayName: f.displayName ?? f.name ?? String(f._id),
+			barcode: f.barcode ?? ''
 		}));
 
 		// Check if this robot is blocked by an active wax filling run
@@ -171,7 +190,8 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			cartridges,
 			currentSealBatch,
 			rejectionCodes,
-			tubes
+			tubes,
+			fridges
 		};
 	} catch (err) {
 		console.error('[REAGENT-FILLING PAGE] Load error:', err instanceof Error ? err.message : err);
@@ -210,7 +230,7 @@ export const actions: Actions = {
 			robot: { _id: robotId, name: robotName },
 			assayType: assayRef,
 			operator: { _id: locals.user._id, username: locals.user.username },
-			status: 'Setup',
+			status: 'Loading',
 			tubeRecords: [],
 			cartridgesFilled: [],
 			sealBatches: [],
@@ -387,6 +407,20 @@ export const actions: Actions = {
 				}
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
+
+			// Record inventory transactions for reagent filling
+			for (const cf of run.cartridgesFilled) {
+				await recordTransaction({
+					transactionType: 'creation',
+					cartridgeRecordId: cf.cartridgeId,
+					quantity: 1,
+					manufacturingStep: 'reagent_filling',
+					manufacturingRunId: String(run._id),
+					operatorId: run.operator?._id,
+					operatorUsername: run.operator?.username,
+					notes: `Reagent-filled cartridge (assay: ${run.assayType?.name ?? 'unknown'})`
+				});
+			}
 		}
 
 		return { success: true };
@@ -445,6 +479,20 @@ export const actions: Actions = {
 					}
 				}
 			);
+
+			// Record scrap transaction for rejected cartridge
+			await recordTransaction({
+				transactionType: 'scrap',
+				cartridgeRecordId: rej.cartridgeId,
+				quantity: 1,
+				manufacturingStep: 'reagent_filling',
+				manufacturingRunId: runId,
+				operatorId: locals.user._id,
+				operatorUsername: locals.user.username,
+				scrapReason: rej.reason ?? 'Reagent inspection rejection',
+				scrapCategory: 'reagent_defect',
+				notes: `Reagent inspection rejection: ${rej.reason ?? 'No reason provided'}`
+			});
 		}
 
 		return { success: true };
@@ -559,12 +607,61 @@ export const actions: Actions = {
 				}
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
+
+			// Record top seal transactions
+			for (const cid of batch.cartridgeIds) {
+				await recordTransaction({
+					transactionType: 'creation',
+					cartridgeRecordId: cid,
+					quantity: 1,
+					manufacturingStep: 'top_seal',
+					manufacturingRunId: runId,
+					operatorId: locals.user._id,
+					operatorUsername: locals.user.username,
+					lotId: batch.topSealLotId ?? undefined,
+					notes: `Top seal applied (batch ${batchId})`
+				});
+			}
 		}
 
 		return { success: true };
 	},
 
 	/** Transition from Top Sealing to Storage */
+	/** Reject a cartridge during top sealing */
+	rejectAtSeal: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const runId = data.get('runId') as string;
+		const cartridgeId = data.get('cartridgeId') as string;
+		const now = new Date();
+
+		if (!cartridgeId) return fail(400, { error: 'Cartridge ID required' });
+
+		// Update inspection status to Rejected in the run's cartridgesFilled
+		await ReagentBatchRecord.findOneAndUpdate(
+			{ _id: runId, 'cartridgesFilled.cartridgeId': cartridgeId },
+			{
+				$set: {
+					'cartridgesFilled.$.inspectionStatus': 'Rejected',
+					'cartridgesFilled.$.inspectionReason': 'Rejected at top sealing',
+					'cartridgesFilled.$.inspectedBy': { _id: locals.user._id, username: locals.user.username },
+					'cartridgesFilled.$.inspectedAt': now
+				}
+			}
+		);
+
+		// Update CartridgeRecord
+		await CartridgeRecord.findOneAndUpdate(
+			{ _id: cartridgeId },
+			{ $set: { currentPhase: 'voided', voidedAt: now, voidReason: 'Rejected at top sealing' } }
+		);
+
+		return { success: true };
+	},
+
 	transitionToStorage: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
@@ -620,6 +717,20 @@ export const actions: Actions = {
 				}
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
+
+			// Record storage transactions
+			for (const cid of cartridgeIds) {
+				await recordTransaction({
+					transactionType: 'creation',
+					cartridgeRecordId: cid,
+					quantity: 1,
+					manufacturingStep: 'storage',
+					manufacturingRunId: runId,
+					operatorId: locals.user._id,
+					operatorUsername: locals.user.username,
+					notes: `Stored in ${location}`
+				});
+			}
 		}
 
 		return { success: true };

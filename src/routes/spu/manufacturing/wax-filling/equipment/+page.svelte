@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/stores';
+	import { goto } from '$app/navigation';
 	import { SvelteMap } from 'svelte/reactivity';
 	import type { DeckRecord, CoolingTrayRecord, RejectionReasonCode } from '$lib/server/db/schema';
 
@@ -46,8 +48,21 @@
 
 	let { data, form }: Props = $props();
 
-	// Tab state
-	let activeTab = $state<'overview' | 'decks-trays'>('overview');
+	// Tab state — persist via URL param so it survives form submissions
+	let activeTab = $derived.by(() => {
+		const t = $page.url.searchParams.get('tab');
+		return t === 'decks-trays' ? 'decks-trays' as const : 'overview' as const;
+	});
+
+	function setTab(tab: 'overview' | 'decks-trays') {
+		const url = new URL($page.url);
+		if (tab === 'overview') {
+			url.searchParams.delete('tab');
+		} else {
+			url.searchParams.set('tab', tab);
+		}
+		goto(url.toString(), { replaceState: true, noScroll: true });
+	}
 
 	let saving = $state(false);
 
@@ -408,7 +423,7 @@
 	<div class="flex gap-1 border-b border-[var(--color-tron-border)]">
 		<button
 			type="button"
-			onclick={() => (activeTab = 'overview')}
+			onclick={() => setTab('overview')}
 			class="min-h-[44px] border-b-2 px-5 py-2.5 text-sm font-medium transition-colors {activeTab === 'overview'
 				? 'border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]'
 				: 'border-transparent text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
@@ -417,7 +432,7 @@
 		</button>
 		<button
 			type="button"
-			onclick={() => (activeTab = 'decks-trays')}
+			onclick={() => setTab('decks-trays')}
 			class="min-h-[44px] border-b-2 px-5 py-2.5 text-sm font-medium transition-colors {activeTab === 'decks-trays'
 				? 'border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]'
 				: 'border-transparent text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"

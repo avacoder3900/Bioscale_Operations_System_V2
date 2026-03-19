@@ -49,7 +49,10 @@
 
 	// Auto-focus tray input (suppressed when modal is open)
 	$effect(() => {
-		if (step === 'scan_tray' && inputEl && !suppressFocus && !trayPendingValue) inputEl.focus();
+		if (step === 'scan_tray' && inputEl && !suppressFocus && !trayPendingValue) {
+			const modal = document.querySelector('.fixed.inset-0.z-50');
+			if (!modal) inputEl.focus();
+		}
 	});
 
 	function playBeep(success: boolean) {
@@ -96,7 +99,14 @@
 	}
 
 	function handleTrayBlur() {
-		if (step === 'scan_tray' && !suppressFocus && !trayPendingValue) setTimeout(() => inputEl?.focus(), 100);
+		if (step === 'scan_tray' && !suppressFocus && !trayPendingValue) {
+			setTimeout(() => {
+				// Don't steal focus if a modal/overlay is open (z-50 fixed overlay)
+				const modal = document.querySelector('.fixed.inset-0.z-50');
+				if (modal) return;
+				inputEl?.focus();
+			}, 100);
+		}
 	}
 
 	function handleConfirmCooling() {

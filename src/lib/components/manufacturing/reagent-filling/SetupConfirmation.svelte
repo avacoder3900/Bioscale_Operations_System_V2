@@ -1,17 +1,30 @@
 <script lang="ts">
-	import type { AssayType } from '$lib/server/db/schema';
+	interface AssayType {
+		id: string;
+		name: string;
+		skuCode: string | null;
+		isActive: boolean;
+		reagents?: { wellPosition: number; reagentName: string }[];
+	}
 
 	interface Props {
 		assayTypes: AssayType[];
-		reagentNames: { wellPosition: number; reagentName: string }[];
+		reagentNames?: { wellPosition: number; reagentName: string }[];
 		selectedAssayTypeId: string;
 		onSelectAssayType: (id: string) => void;
 		onComplete: () => void;
 		readonly?: boolean;
 	}
 
-	let { assayTypes, reagentNames, selectedAssayTypeId, onSelectAssayType, onComplete, readonly: isReadonly = false }: Props =
+	let { assayTypes, reagentNames = [], selectedAssayTypeId, onSelectAssayType, onComplete, readonly: isReadonly = false }: Props =
 		$props();
+
+	// Use reagents from the selected assay type if reagentNames is empty
+	const activeReagents = $derived(() => {
+		if (reagentNames.length > 0) return reagentNames;
+		const selected = assayTypes.find((a) => a.id === selectedAssayTypeId);
+		return selected?.reagents ?? [];
+	});
 
 	let checks = $state([false, false, false, false, false]);
 
@@ -50,7 +63,7 @@
 		</select>
 	</div>
 
-	{#if selectedAssayTypeId && reagentNames.length > 0}
+	{#if selectedAssayTypeId && activeReagents().length > 0}
 		<div
 			class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3"
 		>
@@ -58,7 +71,7 @@
 				Reagent wells for this assay:
 			</p>
 			<div class="grid grid-cols-3 gap-2">
-				{#each reagentNames as rn (rn.wellPosition)}
+				{#each activeReagents() as rn (rn.wellPosition)}
 					<div class="text-xs text-[var(--color-tron-text)]">
 						<span class="text-[var(--color-tron-cyan)]">Well {rn.wellPosition}:</span>
 						{rn.reagentName}

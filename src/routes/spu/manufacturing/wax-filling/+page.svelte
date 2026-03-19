@@ -70,6 +70,11 @@
 				currentInventory: string;
 				storageLocation: string | null;
 			}[];
+			fridges: {
+				id: string;
+				displayName: string;
+				barcode: string;
+			}[];
 		};
 	}
 
@@ -234,8 +239,8 @@
 		if (data.runState.runId) {
 			submitAction('recordWaxPrep', {
 				runId: data.runState.runId,
-				sourceLot: result.sourceLot,
-				tubeId: result.tubeId,
+				waxSourceLot: result.sourceLot,
+				waxTubeId: result.tubeId,
 				plannedCartridgeCount: String(result.plannedCartridgeCount ?? 24)
 			});
 		}
@@ -303,7 +308,7 @@
 		if (data.runState.runId) {
 			submitAction('confirmCooling', {
 				runId: data.runState.runId,
-				trayId: result.trayId
+				coolingTrayId: result.trayId
 			});
 		}
 	}
@@ -368,6 +373,7 @@
 	}
 
 	function handleRecordStorage(cartridgeIds: string[], location: string) {
+		console.log('[handleRecordStorage] cartridgeIds:', cartridgeIds, 'location:', JSON.stringify(location));
 		if (previewParam) return;
 		submitAction('recordBatchStorage', {
 			cartridgeIds: JSON.stringify(cartridgeIds),
@@ -795,7 +801,7 @@
 				plannedCartridgeCount={previewParam ? 24 : data.runState.plannedCartridgeCount}
 				onComplete={handleDeckLoadComplete}
 				readonly={isPreviewOrPast}
-				suppressFocus={showCancelModal}
+				suppressFocus={showCancelModal || showOverrideModal}
 			/>
 		{:else if displayStage === 'Running'}
 			<RunExecution
@@ -816,7 +822,7 @@
 				deckLockoutMin={data.settings.deckLockoutMin}
 				onComplete={handleCoolingComplete}
 				readonly={isPreviewOrPast}
-				suppressFocus={showCancelModal}
+				suppressFocus={showCancelModal || showOverrideModal}
 			/>
 		{:else if displayStage === 'QC'}
 			{@const qcCarts = previewParam ? mockQcCartridges : data.qcCartridges.map((c) => ({
@@ -852,6 +858,7 @@
 			<CompletionStorage
 				cartridges={storageCarts}
 				runSummary={summary}
+				fridges={previewParam ? [{ id: 'f1', displayName: 'Fridge 1', barcode: 'FRG-001' }, { id: 'f2', displayName: 'Fridge 2', barcode: 'FRG-002' }] : data.fridges}
 				onRecordStorage={handleRecordStorage}
 				onComplete={handleCompleteRun}
 				readonly={isPreviewOrPast}

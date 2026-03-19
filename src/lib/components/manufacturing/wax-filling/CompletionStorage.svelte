@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { SvelteMap } from 'svelte/reactivity';
+
 	interface CartridgeItem {
 		cartridgeId: string;
 		qcStatus: string;
@@ -13,31 +15,85 @@
 		rejectedCount: number;
 	}
 
+	interface FridgeOption {
+		id: string;
+		displayName: string;
+		barcode: string;
+	}
+
 	interface Props {
 		cartridges: CartridgeItem[];
 		runSummary: RunSummary;
+		fridges?: FridgeOption[];
 		onRecordStorage: (cartridgeIds: string[], location: string) => void;
 		onComplete: () => void;
 		readonly?: boolean;
 	}
 
-	let { cartridges, runSummary, onRecordStorage, onComplete, readonly: isReadonly = false }: Props = $props();
+	let { cartridges, runSummary, fridges = [], onRecordStorage, onComplete, readonly: isReadonly = false }: Props = $props();
 
+	// Per-cartridge storage assignments (local state before submit)
+	let assignments = $state(new SvelteMap<string, string>());
 	let storageLocation = $state('');
+	let selectedFridge = $state<FridgeOption | null>(null);
 
 	const needsStorage = $derived(
 		cartridges.filter(
-			(c) => c.qcStatus === 'Accepted' && c.currentInventory !== 'Stored'
+			(c) => c.qcStatus === 'Accepted' && c.currentInventory !== 'wax_stored' && c.currentInventory !== 'Stored'
 		)
 	);
-	const stored = $derived(cartridges.filter((c) => c.currentInventory === 'Stored'));
+	const stored = $derived(cartridges.filter((c) => c.currentInventory === 'wax_stored' || c.currentInventory === 'Stored'));
+	const allAssigned = $derived(needsStorage.length > 0 && needsStorage.every((c) => assignments.has(c.cartridgeId)));
 	const allStored = $derived(needsStorage.length === 0 && stored.length > 0);
+
+	function selectFridge(fridge: FridgeOption) {
+		selectedFridge = fridge;
+		storageLocation = fridge.barcode || fridge.displayName;
+	}
 
 	function applyToAll() {
 		const value = storageLocation.trim();
 		if (!value || needsStorage.length === 0) return;
-		onRecordStorage(needsStorage.map((c) => c.cartridgeId), value);
+		for (const c of needsStorage) {
+			assignments.set(c.cartridgeId, value);
+		}
+		// Trigger reactivity
+		assignments = new SvelteMap(assignments);
+	}
+
+	function assignSingle(cartridgeId: string) {
+		const value = storageLocation.trim();
+		if (!value) return;
+		assignments.set(cartridgeId, value);
+		assignments = new SvelteMap(assignments);
+	}
+
+	function unassign(cartridgeId: string) {
+		assignments.delete(cartridgeId);
+		assignments = new SvelteMap(assignments);
+	}
+
+	function clearAll() {
+		assignments = new SvelteMap();
+		selectedFridge = null;
 		storageLocation = '';
+	}
+
+	function submitStorage() {
+		// Group cartridges by location
+		const grouped = new Map<string, string[]>();
+		for (const [cid, loc] of assignments) {
+			const list = grouped.get(loc) ?? [];
+			list.push(cid);
+			grouped.set(loc, list);
+		}
+		// Submit each group
+		for (const [loc, cids] of grouped) {
+			onRecordStorage(cids, loc);
+		}
+		assignments = new SvelteMap();
+		storageLocation = '';
+		selectedFridge = null;
 	}
 </script>
 
@@ -66,13 +122,60 @@
 
 	<!-- Storage assignment -->
 	{#if !allStored && !isReadonly}
-		<div class="space-y-2">
+		<div class="space-y-3">
 			<p class="text-sm text-[var(--color-tron-text-secondary)]">
 				{needsStorage.length} accepted cartridge{needsStorage.length !== 1 ? 's' : ''} need storage assignment
 			</p>
+
+			<!-- Fridge quick-select buttons -->
+			{#if fridges.length > 0}
+				<div class="space-y-2">
+					<p class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Select a fridge</p>
+					<div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+						{#each fridges as fridge (fridge.id)}
+							{@const isSelected = selectedFridge?.id === fridge.id}
+							<button
+								type="button"
+								onclick={() => selectFridge(fridge)}
+								disabled={needsStorage.length === 0}
+								class="flex items-center gap-3 rounded-lg border p-3 text-left transition-all disabled:opacity-50
+									{isSelected
+										? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/20 ring-1 ring-[var(--color-tron-cyan)]'
+										: 'border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] hover:border-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10'}"
+							>
+								<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg {isSelected ? 'bg-[var(--color-tron-cyan)]/30' : 'bg-[var(--color-tron-cyan)]/10'}">
+									<svg class="h-6 w-6 text-[var(--color-tron-cyan)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+										<path stroke-linecap="round" stroke-linejoin="round" d="M6 2h12a1 1 0 011 1v18a1 1 0 01-1 1H6a1 1 0 01-1-1V3a1 1 0 011-1zm0 12h12M10 6h1" />
+									</svg>
+								</div>
+								<div class="min-w-0 flex-1">
+									<p class="text-sm font-semibold text-[var(--color-tron-text)] truncate">{fridge.displayName}</p>
+									{#if fridge.barcode}
+										<p class="font-mono text-[10px] text-[var(--color-tron-text-secondary)] truncate">{fridge.barcode}</p>
+									{/if}
+								</div>
+								{#if isSelected}
+									<svg class="h-5 w-5 shrink-0 text-[var(--color-tron-cyan)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+										<path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+									</svg>
+								{/if}
+							</button>
+						{/each}
+					</div>
+				</div>
+
+				<div class="flex items-center gap-3">
+					<div class="h-px flex-1 bg-[var(--color-tron-border)]"></div>
+					<span class="text-xs text-[var(--color-tron-text-secondary)]">or scan / type</span>
+					<div class="h-px flex-1 bg-[var(--color-tron-border)]"></div>
+				</div>
+			{/if}
+
+			<!-- Manual scan/type input -->
 			<div class="flex gap-2">
 				<input
 					bind:value={storageLocation}
+					oninput={() => { selectedFridge = null; }}
 					onkeydown={(e) => { if (e.key === 'Enter') applyToAll(); }}
 					placeholder="Storage location (scan or type)..."
 					class="min-h-[44px] flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
@@ -83,6 +186,49 @@
 					Apply to All ({needsStorage.length})
 				</button>
 			</div>
+
+			<!-- Per-cartridge list -->
+			<div class="space-y-1.5">
+				<div class="flex items-center justify-between">
+					<p class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Cartridge Assignments</p>
+					{#if assignments.size > 0}
+						<button type="button" onclick={clearAll} class="text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-red)] transition-colors">
+							Clear All
+						</button>
+					{/if}
+				</div>
+				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] divide-y divide-[var(--color-tron-border)]">
+					{#each needsStorage as c (c.cartridgeId)}
+						{@const assigned = assignments.get(c.cartridgeId)}
+						<div class="flex items-center gap-2 px-3 py-2">
+							<span class="font-mono text-xs text-[var(--color-tron-text)] flex-shrink-0 w-24 truncate">{c.cartridgeId.slice(-8)}</span>
+							{#if assigned}
+								<span class="flex-1 text-xs text-green-400 font-mono truncate">→ {assigned}</span>
+								<button type="button" onclick={() => unassign(c.cartridgeId)}
+									class="text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-red)] transition-colors shrink-0">
+									✕
+								</button>
+							{:else}
+								<span class="flex-1 text-xs text-[var(--color-tron-text-secondary)] italic">unassigned</span>
+								<button type="button" onclick={() => assignSingle(c.cartridgeId)}
+									disabled={!storageLocation.trim()}
+									class="text-xs text-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]/80 disabled:opacity-30 transition-colors shrink-0">
+									Assign
+								</button>
+							{/if}
+						</div>
+					{/each}
+				</div>
+			</div>
+
+			<!-- Submit storage -->
+			{#if assignments.size > 0}
+				<button type="button" onclick={submitStorage}
+					class="min-h-[44px] w-full rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-6 py-3 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30"
+				>
+					Record Storage ({assignments.size} cartridge{assignments.size !== 1 ? 's' : ''})
+				</button>
+			{/if}
 		</div>
 	{:else if !allStored}
 		<p class="text-sm text-[var(--color-tron-text-secondary)]">
