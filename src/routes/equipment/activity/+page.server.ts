@@ -1,3 +1,4 @@
+export const config = { maxDuration: 60 };
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, Consumable, EquipmentLocation, Equipment, WaxFillingRun, ReagentBatchRecord } from '$lib/server/db';
 import type { PageServerLoad } from './$types';

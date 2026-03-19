@@ -1,3 +1,4 @@
+export const config = { maxDuration: 60 };
 import { connectDB, Equipment } from '$lib/server/db';
 import type { PageServerLoad } from './$types';
 

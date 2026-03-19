@@ -1,3 +1,4 @@
+export const config = { maxDuration: 60 };
 import { redirect, fail } from '@sveltejs/kit';
 import { connectDB, OpentronsRobot, generateId } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';

@@ -1,3 +1,4 @@
+export const config = { maxDuration: 60 };
 import { connectDB, Equipment, EquipmentLocation } from '$lib/server/db';
 import { isAdmin } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
