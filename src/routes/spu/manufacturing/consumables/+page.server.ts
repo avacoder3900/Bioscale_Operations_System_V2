@@ -46,14 +46,27 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Build pipeline stages with inputs consumed and outputs produced
 	const stages = [
 		{
-			id: 'thermoseal',
+			id: 'cut-thermoseal',
 			name: 'Cut Thermoseal',
 			href: '/spu/manufacturing/wi-02',
 			inputs: [
-				{ name: 'Thermoseal Sheets', icon: '📄', count: null as number | null, unit: 'sheets' }
+				{ name: 'Thermoseal Roll', icon: '🧻', count: null as number | null, unit: 'rolls (ROG)' }
 			],
 			outputs: [
-				{ name: 'Cut Thermoseal Pieces', icon: '✂️', count: null as number | null, unit: 'pieces' }
+				{ name: 'Thermoseal Sheets', icon: '📄', count: null as number | null, unit: 'sheets' }
+			],
+			activeRuns: 0,
+			completedRuns: 0
+		},
+		{
+			id: 'cut-topseal',
+			name: 'Cut Top Seal',
+			href: '/spu/manufacturing/wi-03',
+			inputs: [
+				{ name: 'Top Seal Roll', icon: '🧻', count: null as number | null, unit: 'rolls (ROG)' }
+			],
+			outputs: [
+				{ name: 'Top Seal Sheets', icon: '📄', count: null as number | null, unit: 'sheets' }
 			],
 			activeRuns: 0,
 			completedRuns: 0
@@ -63,10 +76,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 			name: 'Laser Cut',
 			href: '/spu/manufacturing/laser-cutting',
 			inputs: [
-				{ name: 'Acrylic Sheets', icon: '🔲', count: null as number | null, unit: 'sheets' }
+				{ name: 'Thermoseal Sheets', icon: '📄', count: null as number | null, unit: 'sheets' }
 			],
 			outputs: [
-				{ name: 'Laser Cut Bodies', icon: '⚡', count: null as number | null, unit: 'bodies' }
+				{ name: 'Cartridge Backs', icon: '🔲', count: null as number | null, unit: 'backs (13 per sheet)' }
 			],
 			activeRuns: 0,
 			completedRuns: 0
@@ -76,9 +89,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 			name: 'Cartridge Back',
 			href: '/spu/manufacturing/wi-01',
 			inputs: [
-				{ name: 'Cut Thermoseal', icon: '✂️', count: null as number | null, unit: 'pieces' },
-				{ name: 'Laser Cut Bodies', icon: '⚡', count: null as number | null, unit: 'bodies' },
-				{ name: 'Acrylic Cement', icon: '🧪', count: null as number | null, unit: 'mL' }
+				{ name: 'Cartridge Back (laser cut)', icon: '🔲', count: null as number | null, unit: 'backs' },
+				{ name: 'Raw Cartridge', icon: '📦', count: null as number | null, unit: 'cartridges (ROG)' },
+				{ name: 'Barcode Label', icon: '🏷️', count: null as number | null, unit: 'labels' }
 			],
 			outputs: [
 				{ name: 'Backed Cartridges', icon: '📦', count: backedCount, unit: 'cartridges' }
@@ -119,12 +132,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 			completedRuns: reagentCompleted.totalRuns ?? 0
 		},
 		{
-			id: 'topseal',
-			name: 'Top Seal',
+			id: 'topseal-apply',
+			name: 'Top Seal Apply',
 			href: '/spu/manufacturing/top-seal-cutting',
 			inputs: [
 				{ name: 'Reagent-Filled Cartridges', icon: '🟣', count: reagentStored, unit: 'available' },
-				{ name: 'Top Seal Material', icon: '🔖', count: null as number | null, unit: 'rolls' }
+				{ name: 'Top Seal Sheets', icon: '📄', count: null as number | null, unit: 'sheets' }
 			],
 			outputs: [
 				{ name: 'Sealed Cartridges', icon: '✅', count: sealed, unit: 'cartridges' }

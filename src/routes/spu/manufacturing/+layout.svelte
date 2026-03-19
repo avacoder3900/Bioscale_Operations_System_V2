@@ -37,8 +37,13 @@
 			icon: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z'
 		},
 		{
+			href: '/spu/manufacturing/wi-03',
+			label: 'Cut Top Seal',
+			icon: 'M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.242 4.243 3 3 0 004.242-4.242zm0-5.758a3 3 0 10-4.242-4.243 3 3 0 004.242 4.243z'
+		},
+		{
 			href: '/spu/manufacturing/top-seal-cutting',
-			label: 'Top Seal',
+			label: 'Top Seal Apply',
 			icon: 'M4 6h16M4 12h16M4 18h7'
 		},
 		{
