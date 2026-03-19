@@ -1,8 +1,9 @@
 import { redirect, fail } from '@sveltejs/kit';
+import bcrypt from 'bcryptjs';
 import {
 	connectDB, CartridgeRecord, WaxFillingRun, ReagentBatchRecord,
 	ManufacturingMaterial, ManufacturingMaterialTransaction,
-	ManufacturingSettings, PartDefinition, generateId
+	ManufacturingSettings, PartDefinition, User, AuditLog, generateId
 } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -19,15 +20,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const waxStats = await WaxFillingRun.aggregate([
 		{ $match: { status: { $in: ['completed', 'Completed'] } } },
-		{ $group: { _id: null, totalRuns: { $sum: 1 }, totalCartridges: { $sum: '$cartridgeCount' } } }
+		{ $group: { _id: null, totalRuns: { $sum: 1 } } }
 	]);
-	const waxCompleted = waxStats[0] ?? { totalRuns: 0, totalCartridges: 0 };
-
 	const reagentStats = await ReagentBatchRecord.aggregate([
 		{ $match: { status: { $in: ['completed', 'Completed'] } } },
-		{ $group: { _id: null, totalRuns: { $sum: 1 }, totalCartridges: { $sum: '$cartridgeCount' } } }
+		{ $group: { _id: null, totalRuns: { $sum: 1 } } }
 	]);
-	const reagentCompleted = reagentStats[0] ?? { totalRuns: 0, totalCartridges: 0 };
 
 	const activeWaxRuns = await WaxFillingRun.countDocuments({
 		status: { $nin: ['completed', 'Completed', 'aborted', 'cancelled', 'voided'] }
@@ -60,9 +58,22 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const general = (settingsDoc as any)?.general ?? {};
 	const cartridgesPerSheet = general.cartridgesPerLaserCutSheet ?? 13;
 
-	// Derived: Individual Backs from laser-cut sheets
 	const laserCutPart = partsList.find((p) => /laser.?cut|substrate|thermoseal.?sheet/i.test(p.name));
 	const individualBacks = (laserCutPart?.inventoryCount ?? 0) * cartridgesPerSheet;
+
+	// === Recent manual edits ===
+	const recentEdits = await AuditLog.find({ action: 'manual_inventory_edit' })
+		.sort({ timestamp: -1 }).limit(20).lean();
+	const editsList = (recentEdits as any[]).map((e: any) => ({
+		id: String(e._id),
+		username: e.username ?? '',
+		partName: e.details?.partName ?? '',
+		partNumber: e.details?.partNumber ?? '',
+		type: e.details?.transactionType ?? '',
+		quantity: e.details?.quantity ?? 0,
+		reason: e.details?.reason ?? '',
+		timestamp: e.timestamp ? new Date(e.timestamp).toISOString() : ''
+	}));
 
 	// Pipeline stages
 	const stages = [
@@ -105,7 +116,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 				{ name: 'Wax-Filled', icon: '🟡', count: (phaseMap.get('wax_stored') ?? 0) + (phaseMap.get('wax_filled') ?? 0), unit: 'cartridges' },
 				{ name: 'In Fridge', icon: '❄️', count: waxStored, unit: 'stored' }
 			],
-			activeRuns: activeWaxRuns, completedRuns: waxCompleted.totalRuns ?? 0
+			activeRuns: activeWaxRuns, completedRuns: waxStats[0]?.totalRuns ?? 0
 		},
 		{
 			id: 'reagent', name: 'Reagent Filling', href: '/spu/manufacturing/reagent-filling',
@@ -118,7 +129,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 				{ name: 'Reagent-Filled', icon: '🟣', count: reagentStored + sealed, unit: 'cartridges' },
 				{ name: 'In Fridge', icon: '❄️', count: reagentStored, unit: 'stored' }
 			],
-			activeRuns: activeReagentRuns, completedRuns: reagentCompleted.totalRuns ?? 0
+			activeRuns: activeReagentRuns, completedRuns: reagentStats[0]?.totalRuns ?? 0
 		},
 		{
 			id: 'topseal-apply', name: 'Top Seal Apply', href: '/spu/manufacturing/top-seal-cutting',
@@ -140,7 +151,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		}
 	];
 
-	// Link part inventory counts to pipeline inputs/outputs where part names match
+	// Link part inventory counts to pipeline
 	for (const part of partsList) {
 		const pname = part.name.toLowerCase();
 		for (const stage of stages) {
@@ -158,14 +169,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 	return {
 		stages,
 		parts: JSON.parse(JSON.stringify(partsList)),
+		recentEdits: JSON.parse(JSON.stringify(editsList)),
 		derived: { individualBacks, cartridgesPerSheet },
 		totals: { backed: backedCount, waxStored, reagentStored, sealed, voided, totalInSystem: backedCount }
 	};
 };
 
 export const actions: Actions = {
-	/** Record a receive/consume transaction against a Part's inventoryCount */
-	recordTransaction: async ({ request, locals }) => {
+	/** Manual inventory edit — requires admin password + reason */
+	manualEdit: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 
@@ -173,32 +185,71 @@ export const actions: Actions = {
 		const partId = data.get('partId') as string;
 		const transactionType = data.get('transactionType') as string;
 		const quantity = Number(data.get('quantity'));
-		const notes = data.get('notes') as string;
+		const reason = (data.get('reason') as string)?.trim();
+		const adminUsername = (data.get('adminUsername') as string)?.trim();
+		const adminPassword = data.get('adminPassword') as string;
 
-		if (!partId) return fail(400, { error: 'Part ID required' });
+		if (!partId) return fail(400, { error: 'Select a part' });
 		if (!quantity || quantity <= 0) return fail(400, { error: 'Quantity must be positive' });
+		if (!reason) return fail(400, { error: 'Reason is required for manual edits' });
+		if (!adminUsername || !adminPassword) return fail(400, { error: 'Admin credentials required' });
+
+		// Verify admin credentials
+		const adminUser = await User.findOne({ username: adminUsername }).lean() as any;
+		if (!adminUser) return fail(403, { error: 'Invalid admin credentials' });
+		const validPassword = await bcrypt.compare(adminPassword, adminUser.passwordHash);
+		if (!validPassword) return fail(403, { error: 'Invalid admin credentials' });
+
+		// Check admin role
+		if (adminUser.role !== 'admin' && adminUser.role !== 'manager') {
+			return fail(403, { error: 'Only admin or manager accounts can authorize manual edits' });
+		}
 
 		const part = await PartDefinition.findById(partId).lean() as any;
 		if (!part) return fail(404, { error: 'Part not found' });
 
 		const quantityChanged = transactionType === 'consume' ? -Math.abs(quantity) : Math.abs(quantity);
+		const newCount = (part.inventoryCount ?? 0) + quantityChanged;
 
 		await PartDefinition.findByIdAndUpdate(partId, {
-			$inc: { inventoryCount: quantityChanged }
+			$set: { inventoryCount: Math.max(0, newCount) }
 		});
 
-		// Also log to ManufacturingMaterialTransaction if a linked material exists
+		// Audit log
+		await AuditLog.create({
+			_id: generateId(),
+			action: 'manual_inventory_edit',
+			resourceType: 'part_definition',
+			resourceId: partId,
+			userId: locals.user._id,
+			username: locals.user.username,
+			timestamp: new Date(),
+			details: {
+				partName: part.name,
+				partNumber: part.partNumber,
+				transactionType,
+				quantity: Math.abs(quantity),
+				quantityChanged,
+				previousCount: part.inventoryCount ?? 0,
+				newCount: Math.max(0, newCount),
+				reason,
+				authorizedBy: adminUsername
+			}
+		});
+
+		// Sync linked ManufacturingMaterial if exists
 		const linkedMat = await ManufacturingMaterial.findOne({ partDefinitionId: partId }).lean() as any;
 		if (linkedMat) {
-			const quantityBefore = linkedMat.currentQuantity ?? 0;
-			const quantityAfter = quantityBefore + quantityChanged;
+			const matBefore = linkedMat.currentQuantity ?? 0;
+			const matAfter = matBefore + quantityChanged;
 			await ManufacturingMaterialTransaction.create({
 				_id: generateId(), materialId: linkedMat._id, transactionType, quantityChanged,
-				quantityBefore, quantityAfter, operatorId: locals.user._id,
-				notes: notes || undefined, createdAt: new Date()
+				quantityBefore: matBefore, quantityAfter: Math.max(0, matAfter),
+				operatorId: locals.user._id, notes: `Manual edit: ${reason} (authorized by ${adminUsername})`,
+				createdAt: new Date()
 			});
 			await ManufacturingMaterial.findByIdAndUpdate(linkedMat._id, {
-				$set: { currentQuantity: quantityAfter, updatedAt: new Date() }
+				$set: { currentQuantity: Math.max(0, matAfter), updatedAt: new Date() }
 			});
 		}
 
