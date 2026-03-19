@@ -3,211 +3,290 @@
 
 	let { data } = $props();
 
-	function getStatusColor(status: string): string {
-		switch (status.toLowerCase()) {
-			case 'active':
-			case 'available':
-				return 'var(--color-tron-green)';
-			case 'in_use':
-			case 'in use':
-				return 'var(--color-tron-cyan)';
-			case 'depleted':
-			case 'expired':
-				return 'var(--color-tron-orange)';
-			case 'quarantine':
-			case 'disposed':
-				return 'var(--color-tron-red)';
-			default:
-				return 'var(--color-tron-text-secondary)';
-		}
+	const phaseColors: Record<string, string> = {
+		backing: '#6366f1',
+		wax_filled: '#8b5cf6',
+		wax_qc: '#a78bfa',
+		wax_stored: '#7c3aed',
+		reagent_filled: '#06b6d4',
+		inspected: '#22d3ee',
+		sealed: '#14b8a6',
+		cured: '#10b981',
+		stored: '#059669',
+		released: '#34d399',
+		shipped: '#4ade80',
+		assay_loaded: '#f59e0b',
+		testing: '#f97316',
+		completed: '#22c55e'
+	};
+
+	function phaseColor(phase: string): string {
+		return phaseColors[phase] ?? 'var(--color-tron-text-secondary)';
 	}
 
-	function getStatusBadgeVariant(status: string): 'success' | 'info' | 'warning' | 'error' | 'neutral' {
-		switch (status.toLowerCase()) {
-			case 'available':
-				return 'success';
-			case 'in_use':
-			case 'in use':
-				return 'info';
-			case 'depleted':
-				return 'warning';
-			case 'expired':
-			case 'quarantine':
-			case 'disposed':
-				return 'error';
-			default:
-				return 'neutral';
-		}
+	function formatRelative(date: string | Date | null): string {
+		if (!date) return '—';
+		const diff = Date.now() - new Date(date).getTime();
+		const h = Math.floor(diff / 3600000);
+		if (h < 1) return 'Just now';
+		if (h < 24) return `${h}h ago`;
+		const d = Math.floor(h / 24);
+		return d === 1 ? 'Yesterday' : `${d}d ago`;
 	}
 
 	function formatDate(date: string | Date | null): string {
 		if (!date) return '—';
-		return new Date(date).toLocaleDateString();
+		return new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 	}
 
-	function formatRelativeTime(date: string | Date | null): string {
-		if (!date) return '—';
-		const d = new Date(date);
-		const diff = Date.now() - d.getTime();
-		const hours = Math.floor(diff / 3600000);
-		if (hours < 1) return 'Just now';
-		if (hours < 24) return `${hours}h ago`;
-		const days = Math.floor(hours / 24);
-		if (days === 1) return 'Yesterday';
-		return `${days}d ago`;
+	function daysUntil(date: string | Date | null): number {
+		if (!date) return 999;
+		return Math.ceil((new Date(date).getTime() - Date.now()) / 86400000);
 	}
 
-	// Derive top stats from statusCounts
-	let activeCount = $derived((data.statusCounts ?? []).find((s: { status: string }) => s.status === 'available')?.count ?? 0);
-	let inUseCount = $derived((data.statusCounts ?? []).find((s: { status: string }) => s.status === 'in_use')?.count ?? 0);
-	let depletedCount = $derived((data.statusCounts ?? []).find((s: { status: string }) => s.status === 'depleted')?.count ?? 0);
+	// Pipeline total for percentage calc
+	const pipelineTotal = $derived(data.pipeline.reduce((s: number, p: { count: number }) => s + p.count, 0));
+	const maxPhaseCount = $derived(Math.max(...data.pipeline.map((p: { count: number }) => p.count), 1));
 
-	// Max count for proportional bars
-	let maxStatusCount = $derived(Math.max(...(data.statusCounts ?? []).map((s: { count: number }) => s.count), 1));
-	let maxTypeCount = $derived(Math.max(...(data.typeCounts ?? []).map((t: { count: number }) => t.count), 1));
+	// QC totals
+	const waxTotal = $derived((data.waxQc['Accepted'] ?? 0) + (data.waxQc['Rejected'] ?? 0));
+	const reagentTotal = $derived((data.reagentInspection['Accepted'] ?? 0) + (data.reagentInspection['Rejected'] ?? 0));
+
+	// QC yield rates
+	const waxYield = $derived(() => {
+		return waxTotal > 0 ? (((data.waxQc['Accepted'] ?? 0) / waxTotal) * 100).toFixed(1) : '—';
+	});
+	const reagentYield = $derived(() => {
+		return reagentTotal > 0 ? (((data.reagentInspection['Accepted'] ?? 0) / reagentTotal) * 100).toFixed(1) : '—';
+	});
 </script>
 
-<div class="space-y-6">
+<div class="space-y-5">
 	<!-- Header -->
 	<div>
-		<h2 class="tron-text-primary font-mono text-2xl font-bold">Cartridge Dashboard</h2>
-		<p class="tron-text-muted text-sm">Overview of lab cartridge inventory and activity</p>
+		<h2 class="text-xl font-bold text-[var(--color-tron-text)]">Cartridge Dashboard</h2>
+		<p class="text-xs text-[var(--color-tron-text-secondary)]">Manufacturing pipeline &amp; inventory at a glance</p>
 	</div>
 
-	<!-- Stats Cards -->
-	<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+	<!-- Top Stats Row -->
+	<div class="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
 		<TronCard>
 			<div class="text-center">
-				<div class="font-mono text-3xl font-bold text-[var(--color-tron-cyan)]">
-					{data.totalCartridges}
-				</div>
-				<div class="tron-text-muted text-sm">Total Cartridges</div>
+				<div class="text-2xl font-bold text-[var(--color-tron-cyan)]">{data.totalMfg}</div>
+				<div class="text-[10px] text-[var(--color-tron-text-secondary)] uppercase tracking-wider">Total Active</div>
 			</div>
 		</TronCard>
 		<TronCard>
 			<div class="text-center">
-				<div class="font-mono text-3xl font-bold text-[var(--color-tron-green)]">
-					{activeCount}
-				</div>
-				<div class="tron-text-muted text-sm">Available</div>
+				<div class="text-2xl font-bold text-green-400">{data.weeklyProduction}</div>
+				<div class="text-[10px] text-[var(--color-tron-text-secondary)] uppercase tracking-wider">This Week</div>
 			</div>
 		</TronCard>
 		<TronCard>
 			<div class="text-center">
-				<div class="font-mono text-3xl font-bold text-[var(--color-tron-cyan)]">
-					{inUseCount}
+				<div class="text-2xl font-bold" style="color: {(waxYield() !== '—' && parseFloat(waxYield()) >= 90) ? 'var(--color-tron-green)' : 'var(--color-tron-orange)'}">
+					{waxYield()}{waxYield() !== '—' ? '%' : ''}
 				</div>
-				<div class="tron-text-muted text-sm">In Use</div>
+				<div class="text-[10px] text-[var(--color-tron-text-secondary)] uppercase tracking-wider">Wax QC Yield</div>
 			</div>
 		</TronCard>
 		<TronCard>
 			<div class="text-center">
-				<div class="font-mono text-3xl font-bold text-[var(--color-tron-orange)]">
-					{depletedCount}
+				<div class="text-2xl font-bold" style="color: {(reagentYield() !== '—' && parseFloat(reagentYield()) >= 90) ? 'var(--color-tron-green)' : 'var(--color-tron-orange)'}">
+					{reagentYield()}{reagentYield() !== '—' ? '%' : ''}
 				</div>
-				<div class="tron-text-muted text-sm">Depleted</div>
+				<div class="text-[10px] text-[var(--color-tron-text-secondary)] uppercase tracking-wider">Reagent Yield</div>
 			</div>
 		</TronCard>
+		{#if data.expiringCount > 0}
+			<TronCard>
+				<div class="text-center">
+					<div class="text-2xl font-bold text-amber-400">{data.expiringCount}</div>
+					<div class="text-[10px] text-[var(--color-tron-text-secondary)] uppercase tracking-wider">Expiring &lt;30d</div>
+				</div>
+			</TronCard>
+		{:else}
+			<TronCard>
+				<div class="text-center">
+					<div class="text-2xl font-bold text-red-400">{data.totalVoided}</div>
+					<div class="text-[10px] text-[var(--color-tron-text-secondary)] uppercase tracking-wider">Voided</div>
+				</div>
+			</TronCard>
+		{/if}
 	</div>
 
-	<!-- Status & Type Breakdown -->
+	<!-- Pipeline + QC Row -->
+	<div class="grid gap-4 lg:grid-cols-3">
+		<!-- Manufacturing Pipeline (spans 2 cols) -->
+		<div class="lg:col-span-2">
+			<TronCard>
+				<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Manufacturing Pipeline</h3>
+				<div class="space-y-1.5">
+					{#each data.pipeline.filter((p: { count: number }) => p.count > 0) as stage}
+						<div class="flex items-center gap-2">
+							<span class="w-24 truncate text-xs text-[var(--color-tron-text-secondary)]">{stage.label}</span>
+							<div class="flex-1 h-5 rounded-sm bg-[var(--color-tron-surface)] overflow-hidden">
+								<div
+									class="h-full rounded-sm flex items-center px-1.5 transition-all"
+									style="width: {Math.max((stage.count / maxPhaseCount) * 100, 3)}%; background: {phaseColor(stage.phase)};"
+								>
+									{#if stage.count > 0}
+										<span class="text-[10px] font-bold text-white drop-shadow-sm">{stage.count}</span>
+									{/if}
+								</div>
+							</div>
+						</div>
+					{/each}
+				</div>
+				{#if pipelineTotal === 0}
+					<p class="text-center text-xs text-[var(--color-tron-text-secondary)] py-4">No cartridges in pipeline yet.</p>
+				{/if}
+			</TronCard>
+		</div>
+
+		<!-- QC & Assay Breakdown -->
+		<div class="space-y-4">
+			<!-- QC Summary -->
+			<TronCard>
+				<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">QC Summary</h3>
+				<div class="space-y-3">
+					<div>
+						<div class="flex items-center justify-between mb-1">
+							<span class="text-xs text-[var(--color-tron-text-secondary)]">Wax QC</span>
+							<span class="text-xs font-mono text-[var(--color-tron-text)]">
+								<span class="text-green-400">{data.waxQc['Accepted'] ?? 0}✓</span>
+								<span class="text-red-400 ml-1">{data.waxQc['Rejected'] ?? 0}✕</span>
+								{#if data.waxQc['Pending']}
+									<span class="text-amber-400 ml-1">{data.waxQc['Pending']}?</span>
+								{/if}
+							</span>
+						</div>
+						{#if waxTotal > 0}
+							<div class="flex h-2 rounded-full overflow-hidden bg-[var(--color-tron-surface)]">
+								<div class="bg-green-500" style="width: {((data.waxQc['Accepted'] ?? 0) / waxTotal) * 100}%"></div>
+								<div class="bg-red-500" style="width: {((data.waxQc['Rejected'] ?? 0) / waxTotal) * 100}%"></div>
+							</div>
+						{/if}
+					</div>
+					<div>
+						<div class="flex items-center justify-between mb-1">
+							<span class="text-xs text-[var(--color-tron-text-secondary)]">Reagent Insp.</span>
+							<span class="text-xs font-mono text-[var(--color-tron-text)]">
+								<span class="text-green-400">{data.reagentInspection['Accepted'] ?? 0}✓</span>
+								<span class="text-red-400 ml-1">{data.reagentInspection['Rejected'] ?? 0}✕</span>
+								{#if data.reagentInspection['Pending']}
+									<span class="text-amber-400 ml-1">{data.reagentInspection['Pending']}?</span>
+								{/if}
+							</span>
+						</div>
+						{#if reagentTotal > 0}
+							<div class="flex h-2 rounded-full overflow-hidden bg-[var(--color-tron-surface)]">
+								<div class="bg-green-500" style="width: {((data.reagentInspection['Accepted'] ?? 0) / reagentTotal) * 100}%"></div>
+								<div class="bg-red-500" style="width: {((data.reagentInspection['Rejected'] ?? 0) / reagentTotal) * 100}%"></div>
+							</div>
+						{/if}
+					</div>
+				</div>
+			</TronCard>
+
+			<!-- Assay Breakdown -->
+			{#if data.assayBreakdown.length > 0}
+				<TronCard>
+					<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">By Assay</h3>
+					<div class="space-y-2">
+						{#each data.assayBreakdown as assay}
+							<div class="flex items-center justify-between">
+								<span class="text-xs text-[var(--color-tron-text)] truncate">{assay.name}</span>
+								<span class="text-xs font-mono font-bold text-[var(--color-tron-cyan)] ml-2">{assay.count}</span>
+							</div>
+						{/each}
+					</div>
+				</TronCard>
+			{/if}
+
+			<!-- Storage Distribution -->
+			{#if data.storageDistribution.length > 0}
+				<TronCard>
+					<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Fridge Storage</h3>
+					<div class="space-y-2">
+						{#each data.storageDistribution as loc}
+							<div class="flex items-center justify-between">
+								<span class="text-xs text-[var(--color-tron-text)]">{loc.locationName}</span>
+								<span class="text-xs font-mono font-bold text-[var(--color-tron-cyan)]">{loc.count}</span>
+							</div>
+						{/each}
+					</div>
+				</TronCard>
+			{/if}
+		</div>
+	</div>
+
+	<!-- Expiring + Recent Row -->
 	<div class="grid gap-4 lg:grid-cols-2">
-		<!-- Status Breakdown -->
-		<TronCard>
-			<h3 class="tron-text-primary mb-4 font-mono text-lg font-semibold">Status Breakdown</h3>
-			{#if data.statusCounts && data.statusCounts.length > 0}
-				<div class="space-y-3">
-					{#each data.statusCounts as item (item.status)}
-						<div class="flex items-center gap-3">
-							<span class="w-24 text-sm capitalize" style="color: {getStatusColor(item.status)}">{item.status.replace('_', ' ')}</span>
-							<div class="flex-1">
-								<div
-									class="h-4 rounded"
-									style="width: {(item.count / maxStatusCount) * 100}%; background: {getStatusColor(item.status)}; opacity: 0.7; min-width: 4px"
-								></div>
+		<!-- Expiring Soon -->
+		{#if data.expiringSoon.length > 0}
+			<TronCard>
+				<h3 class="mb-3 text-sm font-semibold text-amber-400">⚠ Expiring Soon</h3>
+				<div class="space-y-1.5">
+					{#each data.expiringSoon as c}
+						{@const days = daysUntil(c.expirationDate)}
+						<a href="/cartridges/{c.id}" class="flex items-center justify-between rounded px-2 py-1.5 hover:bg-[var(--color-tron-surface)] transition-colors">
+							<div class="flex items-center gap-2">
+								<span class="font-mono text-xs text-[var(--color-tron-text)]">{c.id.slice(-8)}</span>
+								<span class="text-xs text-[var(--color-tron-text-secondary)]">{c.assay}</span>
 							</div>
-							<span class="tron-text-primary w-8 text-right font-mono text-sm font-bold">{item.count}</span>
-						</div>
+							<span class="text-xs font-mono {days <= 7 ? 'text-red-400 font-bold' : 'text-amber-400'}">
+								{days}d
+							</span>
+						</a>
 					{/each}
 				</div>
-			{:else}
-				<p class="tron-text-muted text-center text-sm">No status data available.</p>
-			{/if}
-		</TronCard>
+			</TronCard>
+		{/if}
 
-		<!-- Type Breakdown -->
+		<!-- Recent Activity -->
 		<TronCard>
-			<h3 class="tron-text-primary mb-4 font-mono text-lg font-semibold">Type Breakdown</h3>
-			{#if data.typeCounts && data.typeCounts.length > 0}
-				<div class="space-y-3">
-					{#each data.typeCounts as item (item.type)}
-						<div class="flex items-center gap-3">
-							<span class="tron-text-primary w-24 text-sm capitalize">{item.type}</span>
-							<div class="flex-1">
-								<div
-									class="h-4 rounded"
-									style="width: {(item.count / maxTypeCount) * 100}%; background: var(--color-tron-cyan); opacity: 0.7; min-width: 4px"
-								></div>
-							</div>
-							<span class="tron-text-primary w-8 text-right font-mono text-sm font-bold">{item.count}</span>
+			<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Recent Activity</h3>
+			<div class="space-y-1">
+				{#each data.recentActivity as c}
+					<a href="/cartridges/{c.id}" class="flex items-center justify-between rounded px-2 py-1.5 hover:bg-[var(--color-tron-surface)] transition-colors">
+						<div class="flex items-center gap-2">
+							<div class="h-2 w-2 rounded-full" style="background: {phaseColor(c.phase)}"></div>
+							<span class="font-mono text-xs text-[var(--color-tron-text)]">{c.id.slice(-8)}</span>
 						</div>
-					{/each}
-				</div>
-			{:else}
-				<p class="tron-text-muted text-center text-sm">No type data available.</p>
-			{/if}
+						<div class="flex items-center gap-2">
+							<span class="text-[10px] text-[var(--color-tron-text-secondary)] capitalize">{c.phase?.replace(/_/g, ' ') ?? '—'}</span>
+							{#if c.waxQc}
+								<TronBadge variant={c.waxQc === 'Accepted' ? 'success' : c.waxQc === 'Rejected' ? 'error' : 'neutral'}>
+									{c.waxQc === 'Accepted' ? '✓' : c.waxQc === 'Rejected' ? '✕' : '?'}
+								</TronBadge>
+							{/if}
+							<span class="text-[10px] text-[var(--color-tron-text-secondary)]">{formatRelative(c.updatedAt)}</span>
+						</div>
+					</a>
+				{:else}
+					<p class="text-center text-xs text-[var(--color-tron-text-secondary)] py-4">No activity yet.</p>
+				{/each}
+			</div>
 		</TronCard>
 	</div>
 
-	<!-- Group Summary -->
-	{#if data.groupSummary && data.groupSummary.length > 0}
+	<!-- Lab Cartridges (if any) -->
+	{#if data.lab.total > 0}
 		<TronCard>
-			<h3 class="tron-text-primary mb-4 font-mono text-lg font-semibold">Group Summary</h3>
-			<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-				{#each data.groupSummary as group (group.groupId)}
-					<div class="flex items-center gap-3 rounded border border-[var(--color-tron-border)] p-3">
-						<span
-							class="h-3 w-3 flex-shrink-0 rounded-full"
-							style="background: {group.color || 'var(--color-tron-cyan)'}"
-						></span>
-						<div class="min-w-0 flex-1">
-							<div class="tron-text-primary truncate text-sm font-medium">{group.groupName}</div>
-						</div>
-						<span class="font-mono text-lg font-bold text-[var(--color-tron-cyan)]">{group.count}</span>
+			<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Lab Cartridges</h3>
+			<div class="grid gap-3 sm:grid-cols-3">
+				<div class="text-center">
+					<div class="text-xl font-bold text-[var(--color-tron-cyan)]">{data.lab.total}</div>
+					<div class="text-[10px] text-[var(--color-tron-text-secondary)] uppercase">Total</div>
+				</div>
+				{#each data.lab.statusCounts as s}
+					<div class="text-center">
+						<div class="text-xl font-bold text-[var(--color-tron-text)]">{s.count}</div>
+						<div class="text-[10px] text-[var(--color-tron-text-secondary)] capitalize">{s.status?.replace(/_/g, ' ') ?? '—'}</div>
 					</div>
 				{/each}
 			</div>
 		</TronCard>
 	{/if}
-
-	<!-- Recent Activity Table -->
-	<TronCard>
-		<h3 class="tron-text-primary mb-4 font-mono text-lg font-semibold">Recent Activity</h3>
-		<div class="overflow-x-auto">
-			<table class="tron-table">
-				<thead>
-					<tr>
-						<th>Barcode</th>
-						<th>Type</th>
-						<th>Status</th>
-						<th>Updated</th>
-					</tr>
-				</thead>
-				<tbody>
-					{#each data.recentActivity ?? [] as item (item.id)}
-						<tr>
-							<td class="font-mono text-[var(--color-tron-cyan)]">{item.barcode ?? item.id}</td>
-							<td class="capitalize">{item.cartridgeType}</td>
-							<td><TronBadge variant={getStatusBadgeVariant(item.status)}>{item.status.replace('_', ' ')}</TronBadge></td>
-							<td class="tron-text-muted">{formatRelativeTime(item.updatedAt)}</td>
-						</tr>
-					{:else}
-						<tr>
-							<td colspan="4" class="tron-text-muted text-center">No cartridge activity yet.</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
-		</div>
-	</TronCard>
 </div>
