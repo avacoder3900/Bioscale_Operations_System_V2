@@ -2,7 +2,8 @@ import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import {
 	connectDB, Spu, Batch, BomItem, ProductionRun, Customer, User, AuditLog, generateId,
-	LabCartridge, CartridgeGroup, CartridgeRecord, EquipmentLocation
+	LabCartridge, CartridgeGroup, CartridgeRecord, EquipmentLocation,
+	OpentronsRobot, WaxFillingRun, Consumable, AssayDefinition
 } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -191,6 +192,43 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				]);
 				const labGroupMap = new Map((labGroups as any[]).map((g: any) => [g._id, g]));
 
+				// ── New dashboard queries ──
+				const [
+					fridgeCapacityAgg, allRobots, activeWaxRuns, allAssays,
+					cartridgeBomItems, dailyThroughputAgg, recentWaxRuns, consumableCountsAgg
+				] = await Promise.all([
+					CartridgeRecord.aggregate([
+						{ $match: { currentPhase: 'wax_stored', 'waxStorage.location': { $exists: true } } },
+						{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
+					]),
+					OpentronsRobot.find({ isActive: true }).select('name lastHealthOk').lean(),
+					WaxFillingRun.find({ status: { $in: ['running', 'setup'] } }).select('robot status').lean(),
+					AssayDefinition.find({ isActive: true }).select('name skuCode').lean(),
+					BomItem.find({ isActive: true, partNumber: { $regex: /^CRT-/ } }).select('partNumber name unitCost').lean(),
+					CartridgeRecord.aggregate([
+						{ $match: { createdAt: { $gte: sevenDaysAgo } } },
+						{ $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }, count: { $sum: 1 } } },
+						{ $sort: { _id: 1 } }
+					]),
+					WaxFillingRun.find().sort({ createdAt: -1 }).limit(5).lean(),
+					Consumable.aggregate([{ $group: { _id: '$type', count: { $sum: 1 } } }])
+				]);
+
+				const assayFillCounts = await CartridgeRecord.aggregate([
+					{ $match: { 'reagentFilling.assayType._id': { $exists: true } } },
+					{ $group: { _id: '$reagentFilling.assayType._id', count: { $sum: 1 } } }
+				]);
+				const assayFillMap = new Map((assayFillCounts as any[]).map((a: any) => [a._id, a.count]));
+				const busyRobotIds = new Set((activeWaxRuns as any[]).map((r: any) => r.robot?._id));
+				const dayMap = new Map((dailyThroughputAgg as any[]).map((d: any) => [d._id, d.count]));
+				const last7Days: { date: string; count: number }[] = [];
+				for (let i = 6; i >= 0; i--) {
+					const d = new Date(cdNow.getTime() - i * 86400000);
+					const key = d.toISOString().slice(0, 10);
+					last7Days.push({ date: key, count: dayMap.get(key) ?? 0 });
+				}
+				const crtCostTotal = (cartridgeBomItems as any[]).reduce((s: number, b: any) => s + (Number(b.unitCost) || 0), 0);
+
 				return {
 					pipeline: phaseOrder.map(phase => ({
 						phase,
@@ -230,7 +268,45 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 							const group = labGroupMap.get(g._id) as any;
 							return { groupName: group?.name ?? 'Unknown', color: group?.color, count: g.count };
 						})
-					}
+					},
+					fridgeCapacity: (fridgeCapacityAgg as any[]).map((f: any) => ({
+						locationId: f._id,
+						locationName: fridgeMap.get(f._id) ?? f._id,
+						used: f.count,
+						capacity: 10
+					})),
+					robotStatus: (allRobots as any[]).map((r: any) => ({
+						id: r._id,
+						name: r.name,
+						healthy: r.lastHealthOk ?? false,
+						busy: busyRobotIds.has(r._id)
+					})),
+					assayInventory: (allAssays as any[]).map((a: any) => ({
+						id: a._id,
+						name: a.name,
+						skuCode: a.skuCode,
+						fillCount: assayFillMap.get(a._id) ?? 0
+					})),
+					dailyThroughput: last7Days,
+					recentRuns: (recentWaxRuns as any[]).map((r: any) => ({
+						id: r._id,
+						status: r.status,
+						robotName: r.robot?.name ?? '—',
+						cartridgeCount: r.cartridgeIds?.length ?? r.plannedCartridgeCount ?? 0,
+						date: r.createdAt
+					})),
+					bomCostPerCartridge: {
+						total: crtCostTotal,
+						items: (cartridgeBomItems as any[]).map((b: any) => ({
+							partNumber: b.partNumber,
+							name: b.name,
+							unitCost: Number(b.unitCost) || 0
+						}))
+					},
+					consumableStock: (consumableCountsAgg as any[]).map((c: any) => ({
+						type: c._id,
+						count: c.count
+					}))
 				};
 			} catch { return null; }
 		})()

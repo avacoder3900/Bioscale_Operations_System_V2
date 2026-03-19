@@ -458,6 +458,140 @@
 					</div>
 				</div>
 
+				<!-- Fridge Capacity Utilization -->
+				{#if cd.fridgeCapacity && cd.fridgeCapacity.length > 0}
+					<TronCard>
+						<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Fridge Capacity</h3>
+						<div class="space-y-2">
+							{#each cd.fridgeCapacity as fridge}
+								{@const pct = Math.min((fridge.used / fridge.capacity) * 100, 100)}
+								<div class="space-y-1">
+									<div class="flex items-center justify-between">
+										<span class="text-xs text-[var(--color-tron-text)]">{fridge.locationName}</span>
+										<span class="text-xs font-mono font-bold {pct >= 90 ? 'text-red-400' : pct >= 70 ? 'text-amber-400' : 'text-[var(--color-tron-cyan)]'}">{fridge.used}/{fridge.capacity}</span>
+									</div>
+									<div class="h-2 rounded-full bg-[var(--color-tron-surface)] overflow-hidden">
+										<div class="h-full rounded-full transition-all" style="width: {pct}%; background: {pct >= 90 ? '#f87171' : pct >= 70 ? '#fbbf24' : 'var(--color-tron-cyan)'};"></div>
+									</div>
+								</div>
+							{/each}
+						</div>
+					</TronCard>
+				{/if}
+
+				<!-- Robot Status -->
+				{#if cd.robotStatus && cd.robotStatus.length > 0}
+					<TronCard>
+						<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Robot Status</h3>
+						<div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+							{#each cd.robotStatus as robot}
+								<div class="rounded border border-[var(--color-tron-border)] p-2 text-center">
+									<div class="text-xs font-bold text-[var(--color-tron-text)] truncate">{robot.name}</div>
+									<div class="mt-1">
+										{#if robot.busy}
+											<span class="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium bg-[rgba(0,255,255,0.15)] text-[var(--color-tron-cyan)]">Running</span>
+										{:else if robot.healthy}
+											<span class="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium bg-[rgba(34,197,94,0.15)] text-green-400">Idle</span>
+										{:else}
+											<span class="inline-block rounded px-1.5 py-0.5 text-[10px] font-medium bg-[rgba(239,68,68,0.15)] text-red-400">Offline</span>
+										{/if}
+									</div>
+								</div>
+							{/each}
+						</div>
+					</TronCard>
+				{/if}
+
+				<!-- Assay Inventory -->
+				{#if cd.assayInventory && cd.assayInventory.length > 0}
+					<TronCard>
+						<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Assay Inventory</h3>
+						<div class="space-y-1.5">
+							{#each cd.assayInventory as assay}
+								<div class="flex items-center justify-between">
+									<div class="min-w-0 flex-1">
+										<span class="text-xs text-[var(--color-tron-text)] truncate block">{assay.name}</span>
+										<span class="text-[10px] font-mono text-[var(--color-tron-text-secondary)]">{assay.skuCode}</span>
+									</div>
+									<span class="text-xs font-mono font-bold text-[var(--color-tron-cyan)] ml-2">{assay.fillCount}</span>
+								</div>
+							{/each}
+						</div>
+					</TronCard>
+				{/if}
+
+				<!-- Daily Throughput (7-day bar chart) -->
+				{#if cd.dailyThroughput && cd.dailyThroughput.length > 0}
+					{@const maxDay = Math.max(...cd.dailyThroughput.map((d: any) => d.count), 1)}
+					<TronCard>
+						<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Daily Throughput (7d)</h3>
+						<div class="flex items-end gap-1 h-20">
+							{#each cd.dailyThroughput as day}
+								<div class="flex-1 flex flex-col items-center gap-1">
+									<span class="text-[9px] font-mono text-[var(--color-tron-text-secondary)]">{day.count}</span>
+									<div class="w-full rounded-t" style="height: {Math.max((day.count / maxDay) * 56, 2)}px; background: var(--color-tron-cyan);"></div>
+									<span class="text-[8px] text-[var(--color-tron-text-secondary)]">{day.date.slice(5)}</span>
+								</div>
+							{/each}
+						</div>
+					</TronCard>
+				{/if}
+
+				<!-- Recent Wax Filling Runs -->
+				{#if cd.recentRuns && cd.recentRuns.length > 0}
+					<TronCard>
+						<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Recent Wax Runs</h3>
+						<div class="space-y-1.5">
+							{#each cd.recentRuns as run}
+								<div class="flex items-center justify-between text-xs">
+									<div class="flex items-center gap-2 min-w-0">
+										<span class="rounded px-1.5 py-0.5 text-[10px] font-medium {run.status === 'completed' ? 'bg-[rgba(34,197,94,0.15)] text-green-400' : run.status === 'running' ? 'bg-[rgba(0,255,255,0.15)] text-[var(--color-tron-cyan)]' : run.status === 'aborted' ? 'bg-[rgba(239,68,68,0.15)] text-red-400' : 'bg-[rgba(255,255,255,0.05)] text-[var(--color-tron-text-secondary)]'}">{run.status}</span>
+										<span class="text-[var(--color-tron-text)] truncate">{run.robotName}</span>
+									</div>
+									<div class="flex items-center gap-2 shrink-0">
+										<span class="font-mono text-[var(--color-tron-cyan)]">{run.cartridgeCount}</span>
+										<span class="text-[var(--color-tron-text-secondary)]">{formatDate(run.date)}</span>
+									</div>
+								</div>
+							{/each}
+						</div>
+					</TronCard>
+				{/if}
+
+				<!-- BOM Cost Per Cartridge -->
+				{#if cd.bomCostPerCartridge && cd.bomCostPerCartridge.items.length > 0}
+					<TronCard>
+						<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">BOM Cost / Cartridge</h3>
+						<div class="text-center mb-3">
+							<span class="text-2xl font-bold text-[var(--color-tron-cyan)]">${cd.bomCostPerCartridge.total.toFixed(2)}</span>
+							<div class="text-[10px] text-[var(--color-tron-text-secondary)] uppercase tracking-wider">Total CRT Parts</div>
+						</div>
+						<div class="space-y-1">
+							{#each cd.bomCostPerCartridge.items as item}
+								<div class="flex items-center justify-between text-xs">
+									<span class="text-[var(--color-tron-text-secondary)] truncate">{item.partNumber}</span>
+									<span class="font-mono text-[var(--color-tron-text)] ml-2">${item.unitCost.toFixed(2)}</span>
+								</div>
+							{/each}
+						</div>
+					</TronCard>
+				{/if}
+
+				<!-- Consumable Stock -->
+				{#if cd.consumableStock && cd.consumableStock.length > 0}
+					<TronCard>
+						<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Consumable Stock</h3>
+						<div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+							{#each cd.consumableStock as item}
+								<div class="text-center">
+									<div class="text-xl font-bold text-[var(--color-tron-cyan)]">{item.count}</div>
+									<div class="text-[10px] text-[var(--color-tron-text-secondary)] capitalize">{item.type?.replace(/_/g, ' ') ?? '—'}</div>
+								</div>
+							{/each}
+						</div>
+					</TronCard>
+				{/if}
+
 				<!-- Expiring + Recent Row -->
 				<div class="grid gap-4 lg:grid-cols-2">
 					{#if cd.expiringSoon.length > 0}
