@@ -84,60 +84,60 @@
 	);
 </script>
 
-<!-- Mobile/tablet overlay backdrop -->
-{#if sidebarOpen}
-	<button
-		type="button"
-		class="fixed inset-0 z-30 bg-black/50 lg:hidden"
-		onclick={() => { sidebarOpen = false; }}
-		aria-label="Close menu"
-	></button>
-{/if}
-
 <div class="flex min-h-[calc(100vh-4rem)]">
 	<!-- Sidebar -->
 	<aside
-		class="fixed left-0 top-0 z-40 h-full border-r border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] pt-4 transition-all duration-200 ease-in-out
-			{sidebarOpen ? 'w-48 translate-x-0' : 'w-0 -translate-x-full'}"
+		class="sticky left-0 top-0 z-10 h-[calc(100vh-4rem)] shrink-0 border-r border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] pt-4 transition-all duration-200 ease-in-out
+			{sidebarOpen ? 'w-48' : 'w-11'}"
 	>
-		<div class="flex h-full w-48 flex-col overflow-hidden">
-			<!-- Close button -->
-			<div class="flex items-center justify-between px-3 pb-3">
-				<span class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Menu</span>
+		<div class="flex h-full flex-col overflow-hidden">
+			<!-- Toggle button -->
+			<div class="flex items-center {sidebarOpen ? 'justify-between px-3' : 'justify-center'} pb-3">
+				{#if sidebarOpen}
+					<span class="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Menu</span>
+				{/if}
 				<button
 					type="button"
-					onclick={() => { sidebarOpen = false; }}
-					class="rounded p-1.5 text-[var(--color-tron-text-secondary)] transition-colors hover:bg-[var(--color-tron-surface)] hover:text-[var(--color-tron-cyan)]"
-					aria-label="Close menu"
+					onclick={() => { sidebarOpen = !sidebarOpen; }}
+					class="rounded p-1 text-[var(--color-tron-text-secondary)] transition-colors hover:bg-[var(--color-tron-surface)] hover:text-[var(--color-tron-cyan)]"
+					aria-label={sidebarOpen ? 'Collapse menu' : 'Expand menu'}
 				>
 					<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+						{#if sidebarOpen}
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7" />
+						{:else}
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7" />
+						{/if}
 					</svg>
 				</button>
 			</div>
 
 			<!-- Nav items -->
-			<nav class="flex-1 space-y-0.5 overflow-y-auto px-2">
+			<nav class="flex-1 space-y-0.5 overflow-y-auto {sidebarOpen ? 'px-2' : 'px-1'}">
 				{#each navItems as item}
 					{@const active = isActive(item.href, $page.url.pathname, item.exact)}
 					<a
 						href={item.href}
-						onclick={() => { sidebarOpen = false; }}
-						class="group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-all
+						onclick={() => { if (sidebarOpen) sidebarOpen = false; }}
+						class="group flex items-center rounded-lg transition-all
+							{sidebarOpen ? 'gap-2.5 px-2.5 py-2' : 'justify-center px-0 py-2'}
 							{active
 								? 'bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]'
 								: 'text-[var(--color-tron-text-secondary)] hover:bg-[var(--color-tron-surface)] hover:text-[var(--color-tron-text)]'}"
+						title={sidebarOpen ? undefined : item.label}
 					>
 						<svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={item.icon} />
 						</svg>
-						<span class="truncate text-xs">{item.label}</span>
+						{#if sidebarOpen}
+							<span class="truncate text-xs font-medium">{item.label}</span>
+						{/if}
 					</a>
 				{/each}
 			</nav>
 
 			<!-- Admin links at bottom -->
-			{#if data.isAdmin}
+			{#if data.isAdmin && sidebarOpen}
 				{#if $page.url.pathname.startsWith('/spu/manufacturing/wi-01') || $page.url.pathname.startsWith('/spu/manufacturing/wi-02')}
 					<div class="border-t border-[var(--color-tron-border)] p-3">
 						<p class="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Admin</p>
@@ -171,26 +171,9 @@
 
 	<!-- Main content -->
 	<main class="min-w-0 flex-1 p-4 lg:p-6">
-		<!-- Header with breadcrumb + hamburger -->
-		<div class="mb-6 flex items-center gap-3">
-			<button
-				type="button"
-				onclick={() => { sidebarOpen = !sidebarOpen; }}
-				class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-2 text-[var(--color-tron-text-secondary)] transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
-				aria-label="Toggle menu"
-			>
-				<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
-				</svg>
-			</button>
+		<!-- Breadcrumb header -->
+		<div class="mb-6">
 			<nav class="flex items-center gap-2 text-sm">
-				<a
-					href="/spu"
-					class="text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-cyan)]"
-				>
-					SPU
-				</a>
-				<span class="text-[var(--color-tron-text-secondary)]">/</span>
 				<a
 					href="/spu/manufacturing"
 					class="text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-cyan)]"
