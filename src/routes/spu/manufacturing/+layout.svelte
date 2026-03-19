@@ -8,6 +8,7 @@
 	}
 
 	let { children, data }: Props = $props();
+	let sidebarOpen = $state(false);
 
 	const navItems = [
 		{
@@ -58,7 +59,7 @@
 		},
 		{
 			href: '/spu/equipment',
-			label: 'Cartridge Filling Equipment',
+			label: 'Equipment',
 			icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z'
 		}
 	];
@@ -76,66 +77,139 @@
 		}
 		return currentPath.startsWith(href);
 	}
+
+	// Find the currently active nav label for the header
+	const activeLabel = $derived(
+		navItems.find((item) => isActive(item.href, $page.url.pathname, item.exact))?.label ?? 'Manufacturing'
+	);
 </script>
 
-<div class="space-y-6">
-	<nav class="flex items-center gap-2 text-sm">
-		<a
-			href="/spu"
-			class="text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-cyan)]"
-		>
-			SPU
-		</a>
-		<span class="text-[var(--color-tron-text-secondary)]">/</span>
-		<span class="text-[var(--color-tron-text)]">Manufacturing</span>
-	</nav>
+<!-- Mobile/tablet overlay backdrop -->
+{#if sidebarOpen}
+	<button
+		type="button"
+		class="fixed inset-0 z-30 bg-black/50 lg:hidden"
+		onclick={() => { sidebarOpen = false; }}
+		aria-label="Close menu"
+	></button>
+{/if}
 
-	<div class="flex gap-4 border-b border-[var(--color-tron-border)]">
-		{#each navItems as item}
-			<a
-				href={item.href}
-				class="flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors {isActive(
-					item.href,
-					$page.url.pathname,
-					item.exact
-				)
-					? 'border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]'
-					: 'border-transparent text-[var(--color-tron-text-secondary)]'}"
+<div class="flex min-h-[calc(100vh-4rem)]">
+	<!-- Sidebar -->
+	<aside
+		class="fixed left-0 top-0 z-40 h-full border-r border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] pt-4 transition-all duration-200 ease-in-out
+			lg:sticky lg:top-0 lg:z-0 lg:h-[calc(100vh-4rem)]
+			{sidebarOpen ? 'w-56 translate-x-0' : 'w-0 -translate-x-full lg:w-14 lg:translate-x-0'}"
+	>
+		<div class="flex h-full flex-col overflow-hidden {sidebarOpen ? 'w-56' : 'lg:w-14'}">
+			<!-- Close button (mobile) / Collapse button (desktop) -->
+			<div class="flex items-center justify-end px-3 pb-3">
+				<button
+					type="button"
+					onclick={() => { sidebarOpen = !sidebarOpen; }}
+					class="rounded p-1.5 text-[var(--color-tron-text-secondary)] transition-colors hover:bg-[var(--color-tron-surface)] hover:text-[var(--color-tron-cyan)]"
+					aria-label={sidebarOpen ? 'Collapse menu' : 'Expand menu'}
+				>
+					<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						{#if sidebarOpen}
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+						{:else}
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+						{/if}
+					</svg>
+				</button>
+			</div>
+
+			<!-- Nav items -->
+			<nav class="flex-1 space-y-0.5 overflow-y-auto px-2">
+				{#each navItems as item}
+					{@const active = isActive(item.href, $page.url.pathname, item.exact)}
+					<a
+						href={item.href}
+						onclick={() => { sidebarOpen = false; }}
+						class="group flex items-center gap-3 rounded-lg px-2.5 py-2.5 text-sm font-medium transition-all
+							{active
+								? 'bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]'
+								: 'text-[var(--color-tron-text-secondary)] hover:bg-[var(--color-tron-surface)] hover:text-[var(--color-tron-text)]'}"
+						title={sidebarOpen ? undefined : item.label}
+					>
+						<svg class="h-5 w-5 shrink-0 {active ? 'text-[var(--color-tron-cyan)]' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={item.icon} />
+						</svg>
+						{#if sidebarOpen}
+							<span class="truncate">{item.label}</span>
+						{/if}
+						{#if active && !sidebarOpen}
+							<span class="absolute left-0 h-6 w-0.5 rounded-r bg-[var(--color-tron-cyan)]"></span>
+						{/if}
+					</a>
+				{/each}
+			</nav>
+
+			<!-- Admin links at bottom -->
+			{#if data.isAdmin && sidebarOpen}
+				{#if $page.url.pathname.startsWith('/spu/manufacturing/wi-01') || $page.url.pathname.startsWith('/spu/manufacturing/wi-02')}
+					<div class="border-t border-[var(--color-tron-border)] p-3">
+						<p class="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Admin</p>
+						{#if $page.url.pathname.startsWith('/spu/manufacturing/wi-01')}
+							<a
+								href="/spu/manufacturing/wi-01/steps"
+								class="block rounded px-2 py-1.5 text-xs transition-colors {$page.url.pathname === '/spu/manufacturing/wi-01/steps'
+									? 'text-[var(--color-tron-cyan)]'
+									: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
+							>
+								Edit WI-01 Steps
+							</a>
+						{/if}
+						{#if $page.url.pathname.startsWith('/spu/manufacturing/wi-02')}
+							<a
+								href="/spu/manufacturing/wi-02/steps"
+								class="block rounded px-2 py-1.5 text-xs transition-colors {$page.url.pathname === '/spu/manufacturing/wi-02/steps'
+									? 'text-[var(--color-tron-cyan)]'
+									: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
+							>
+								Edit WI-02 Steps
+							</a>
+						{/if}
+					</div>
+				{/if}
+			{/if}
+		</div>
+	</aside>
+
+	<!-- Main content -->
+	<main class="min-w-0 flex-1 p-4 lg:p-6">
+		<!-- Header with breadcrumb + hamburger -->
+		<div class="mb-6 flex items-center gap-3">
+			<button
+				type="button"
+				onclick={() => { sidebarOpen = !sidebarOpen; }}
+				class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-2 text-[var(--color-tron-text-secondary)] transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
+				aria-label="Toggle menu"
 			>
 				<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={item.icon} />
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
 				</svg>
-				{item.label}
-			</a>
-		{/each}
-	</div>
+			</button>
+			<nav class="flex items-center gap-2 text-sm">
+				<a
+					href="/spu"
+					class="text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-cyan)]"
+				>
+					SPU
+				</a>
+				<span class="text-[var(--color-tron-text-secondary)]">/</span>
+				<a
+					href="/spu/manufacturing"
+					class="text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-cyan)]"
+				>
+					Manufacturing
+				</a>
+				<span class="text-[var(--color-tron-text-secondary)]">/</span>
+				<span class="text-[var(--color-tron-text)]">{activeLabel}</span>
+			</nav>
+		</div>
 
-	{#if data.isAdmin}
-		{#if $page.url.pathname.startsWith('/spu/manufacturing/wi-01') || $page.url.pathname.startsWith('/spu/manufacturing/wi-02')}
-			<div class="flex gap-3 text-xs">
-				{#if $page.url.pathname.startsWith('/spu/manufacturing/wi-01')}
-					<a
-						href="/spu/manufacturing/wi-01/steps"
-						class="rounded border px-2 py-1 transition-colors {$page.url.pathname === '/spu/manufacturing/wi-01/steps'
-							? 'border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]'
-							: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
-					>
-						Edit Steps
-					</a>
-				{/if}
-				{#if $page.url.pathname.startsWith('/spu/manufacturing/wi-02')}
-					<a
-						href="/spu/manufacturing/wi-02/steps"
-						class="rounded border px-2 py-1 transition-colors {$page.url.pathname === '/spu/manufacturing/wi-02/steps'
-							? 'border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]'
-							: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
-					>
-						Edit Steps
-					</a>
-				{/if}
-			</div>
-		{/if}
-	{/if}
-
-	{@render children()}
+		{@render children()}
+	</main>
 </div>
