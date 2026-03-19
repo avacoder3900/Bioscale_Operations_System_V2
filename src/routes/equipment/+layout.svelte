@@ -24,7 +24,7 @@
 <div class="space-y-6">
 	<nav class="flex items-center gap-2 text-sm">
 		<a
-			href='/'"
+			href='/'
 			class="text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-cyan)]"
 		>
 			SPU

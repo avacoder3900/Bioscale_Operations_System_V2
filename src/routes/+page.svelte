@@ -3,8 +3,8 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { TronCard, TronButton, TronBadge } from '$lib/components/ui';
-	import SpuStatusBadge from '$lib/components/SpuStatusBadge.svelte';
-	import SpuDeviceStateBadge from '$lib/components/SpuDeviceStateBadge.svelte';
+	import SpuStatusBadge from '$lib/components/spu/SpuStatusBadge.svelte';
+	import SpuDeviceStateBadge from '$lib/components/spu/SpuDeviceStateBadge.svelte';
 	import type { Spu } from '$lib/server/db/schema';
 	import { SvelteSet } from 'svelte/reactivity';
 
@@ -1286,7 +1286,6 @@
 	</div>
 {/if}
 
-</div><!-- end space-y-6 -->
 			</div><!-- end panel-content -->
 		{/if}
 	</div><!-- end SPU panel -->

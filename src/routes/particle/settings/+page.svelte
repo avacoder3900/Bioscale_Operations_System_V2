@@ -209,7 +209,7 @@
 
 	<!-- Navigation -->
 	<div class="flex gap-3">
-		<a href='/'">
+		<a href='/'>
 			<TronButton variant="primary" style="min-height: 44px;">Back to Dashboard</TronButton>
 		</a>
 	</div>

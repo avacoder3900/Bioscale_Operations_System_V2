@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { TronCard, TronButton, TronBadge } from '$lib/components/ui';
-	import SpuStatusBadge from '$lib/components/SpuStatusBadge.svelte';
+	import SpuStatusBadge from '$lib/components/spu/SpuStatusBadge.svelte';
 
 	let { data, form } = $props();
 

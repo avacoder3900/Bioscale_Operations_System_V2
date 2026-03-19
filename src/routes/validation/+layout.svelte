@@ -45,7 +45,7 @@
 	<!-- Breadcrumb -->
 	<nav class="flex items-center gap-2 text-sm">
 		<a
-			href='/'"
+			href='/'
 			class="text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-cyan)]"
 		>
 			SPU
@@ -66,7 +66,7 @@
 	<!-- Sub-navigation tabs -->
 	<div class="flex gap-2 border-b border-[var(--color-tron-border)] pb-4">
 		{#each navItems as item (item.href)}
-			{@const active = isActive(item.href, $page.url.pathname, item.exact)}
+			{@const active = isActive(item.href, $page.url.pathname)}
 			<a
 				href={item.href}
 				class="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all duration-200
