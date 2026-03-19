@@ -55,6 +55,7 @@ export { SystemDependency } from './system-dependency.js';
 export { Integration } from './integration.js';
 export { ParticleDevice } from './particle-device.js';
 export { WorkflowViolation } from './workflow-violation.js';
+export { ServiceTicket } from './service-ticket.js';
 
 // Tier 3: Immutable Logs
 export { AuditLog } from './audit-log.js';
