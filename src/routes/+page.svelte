@@ -293,9 +293,9 @@
 	}
 </script>
 
-<div class="space-y-6">
-	<!-- ═══════════════ CARTRIDGE DASHBOARD (TOP) ═══════════════ -->
-	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)]">
+<div class="flex gap-4 items-start">
+	<!-- ═══════════════ CARTRIDGE DASHBOARD (LEFT) ═══════════════ -->
+	<div class="flex-1 min-w-0 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)]">
 		<button type="button" onclick={() => { cartCollapsed = !cartCollapsed; }} class="flex w-full items-center justify-between p-4">
 			<h2 class="text-lg font-bold text-[var(--color-tron-text)]">Cartridge Dashboard</h2>
 			<svg class="h-4 w-4 text-[var(--color-tron-cyan)] transition-transform {cartCollapsed ? '' : 'rotate-180'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -529,8 +529,8 @@
 		{/if}
 	</div>
 
-	<!-- ═══════════════ SPU DASHBOARD (BELOW) ═══════════════ -->
-	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)]">
+	<!-- ═══════════════ SPU DASHBOARD (RIGHT) ═══════════════ -->
+	<div class="flex-1 min-w-0 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)]">
 		<button type="button" onclick={() => { spuCollapsed = !spuCollapsed; }} class="flex w-full items-center justify-between p-4">
 			<h2 class="text-lg font-bold text-[var(--color-tron-text)]">SPU Dashboard</h2>
 			<svg class="h-4 w-4 text-[var(--color-tron-cyan)] transition-transform {spuCollapsed ? '' : 'rotate-180'}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
