@@ -121,3 +121,5 @@ export const actions: Actions = {
 		return { success: true, message: "Operation completed successfully" };
 	}
 };
+
+export const config = { maxDuration: 60 };

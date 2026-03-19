@@ -60,3 +60,5 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 		particleStatus
 	};
 };
+
+export const config = { maxDuration: 60 };

@@ -72,3 +72,5 @@ export const load: PageServerLoad = async ({ url }) => {
 		};
 	}
 };
+
+export const config = { maxDuration: 60 };

@@ -113,3 +113,5 @@ export const actions: Actions = {
 		redirect(303, `/spu/${s.spuId}`);
 	}
 };
+
+export const config = { maxDuration: 60 };

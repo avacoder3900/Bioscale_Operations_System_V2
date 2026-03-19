@@ -114,3 +114,5 @@ export const actions: Actions = {
 		redirect(303, `/manufacturing/lots/${lot._id}`);
 	}
 };
+
+export const config = { maxDuration: 60 };

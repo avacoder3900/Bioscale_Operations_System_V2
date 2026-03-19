@@ -84,3 +84,5 @@ export const actions: Actions = {
 		redirect(303, `/assays/${params.assayId}`);
 	}
 };
+
+export const config = { maxDuration: 60 };

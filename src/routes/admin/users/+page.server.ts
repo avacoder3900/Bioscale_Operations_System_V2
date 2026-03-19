@@ -176,3 +176,5 @@ export const actions: Actions = {
 		return { success: true, token };
 	}
 };
+
+export const config = { maxDuration: 60 };

@@ -75,3 +75,5 @@ export const actions: Actions = {
 		redirect(303, `/validation/spectrophotometer/${sessionId}`);
 	}
 };
+
+export const config = { maxDuration: 60 };

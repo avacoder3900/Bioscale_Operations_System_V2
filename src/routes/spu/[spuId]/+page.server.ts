@@ -375,3 +375,5 @@ export const actions: Actions = {
 		return { success: true, deleted: true };
 	}
 };
+
+export const config = { maxDuration: 60 };

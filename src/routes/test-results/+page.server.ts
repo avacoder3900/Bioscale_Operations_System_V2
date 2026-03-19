@@ -46,3 +46,5 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		filters: { status: statusFilter, deviceId: deviceFilter }
 	};
 };
+
+export const config = { maxDuration: 60 };

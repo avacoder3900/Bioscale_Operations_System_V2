@@ -116,3 +116,5 @@ export const actions: Actions = {
 		return { message: `${cartridgeIds.length} cartridges stored in ${fridgeId}` };
 	}
 };
+
+export const config = { maxDuration: 60 };

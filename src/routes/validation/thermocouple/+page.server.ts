@@ -63,3 +63,5 @@ export const actions: Actions = {
 		return { success: true, sessionId };
 	}
 };
+
+export const config = { maxDuration: 60 };

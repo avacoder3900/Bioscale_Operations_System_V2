@@ -406,3 +406,5 @@ export const actions: Actions = {
 		return { statusUpdateSuccess: true, updatedStatus: newStatus };
 	}
 };
+
+export const config = { maxDuration: 60 };

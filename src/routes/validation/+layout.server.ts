@@ -5,3 +5,5 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	return { user: locals.user };
 };
+
+export const config = { maxDuration: 60 };

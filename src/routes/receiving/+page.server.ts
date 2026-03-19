@@ -44,3 +44,5 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		filters: { status: statusFilter, part: partFilter, startDate, endDate, operator: operatorFilter, search }
 	};
 };
+
+export const config = { maxDuration: 60 };

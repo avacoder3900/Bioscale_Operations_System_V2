@@ -71,3 +71,5 @@ export const actions: Actions = {
 		return { assigned: 0, errors: [] as string[] };
 	}
 };
+
+export const config = { maxDuration: 60 };

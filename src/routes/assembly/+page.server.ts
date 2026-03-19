@@ -63,3 +63,5 @@ export const actions: Actions = {
 		redirect(303, `/assembly/${sessionId}`);
 	}
 };
+
+export const config = { maxDuration: 60 };

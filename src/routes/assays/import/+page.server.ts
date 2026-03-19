@@ -86,3 +86,5 @@ export const actions: Actions = {
 		};
 	}
 };
+
+export const config = { maxDuration: 60 };

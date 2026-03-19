@@ -4,3 +4,5 @@ export const load: LayoutServerLoad = async () => {
 	// Auth and permissions are handled by the root layout
 	return {};
 };
+
+export const config = { maxDuration: 60 };

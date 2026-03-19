@@ -100,3 +100,5 @@ export const actions: Actions = {
 		return { message: 'Mapping saved successfully' };
 	}
 };
+
+export const config = { maxDuration: 60 };

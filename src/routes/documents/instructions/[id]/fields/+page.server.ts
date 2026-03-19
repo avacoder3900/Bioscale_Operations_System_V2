@@ -31,3 +31,5 @@ export const load: PageServerLoad = async ({ params }) => {
 		fields
 	};
 };
+
+export const config = { maxDuration: 60 };

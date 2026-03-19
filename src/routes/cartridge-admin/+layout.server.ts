@@ -7,3 +7,5 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'cartridgeAdmin:read');
 	return { user: locals.user };
 };
+
+export const config = { maxDuration: 60 };

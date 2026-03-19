@@ -63,3 +63,5 @@ export const actions: Actions = {
 		return { success: true, message: "Customer created successfully" };
 	}
 };
+
+export const config = { maxDuration: 60 };

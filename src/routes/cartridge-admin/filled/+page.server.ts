@@ -115,3 +115,5 @@ export const actions: Actions = {
 		return { success: true, message: `${cartridgeIds.length} cartridges added to lot` };
 	}
 };
+
+export const config = { maxDuration: 60 };

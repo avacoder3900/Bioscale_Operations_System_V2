@@ -114,3 +114,5 @@ export const load: PageServerLoad = async ({ locals }) => {
 		groups: groupStats
 	};
 };
+
+export const config = { maxDuration: 60 };

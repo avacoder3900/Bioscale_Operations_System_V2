@@ -10,3 +10,5 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		user: locals.user
 	};
 };
+
+export const config = { maxDuration: 60 };

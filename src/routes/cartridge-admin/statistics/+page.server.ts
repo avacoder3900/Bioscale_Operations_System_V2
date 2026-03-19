@@ -137,3 +137,5 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		assayTypeStats
 	};
 };
+
+export const config = { maxDuration: 60 };

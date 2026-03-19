@@ -60,3 +60,5 @@ export const actions: Actions = {
 		return { success: true, uploadSuccess: true, uploadError: null, folderId: parentFolderId };
 	}
 };
+
+export const config = { maxDuration: 60 };

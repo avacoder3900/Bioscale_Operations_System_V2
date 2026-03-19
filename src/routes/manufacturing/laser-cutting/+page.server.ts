@@ -166,3 +166,5 @@ export const actions: Actions = {
 		return { success: true, defaultsSaved: true };
 	}
 };
+
+export const config = { maxDuration: 60 };

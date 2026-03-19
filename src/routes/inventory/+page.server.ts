@@ -6,3 +6,5 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'inventory:read');
 	redirect(302, '/inventory/transactions');
 };
+
+export const config = { maxDuration: 60 };

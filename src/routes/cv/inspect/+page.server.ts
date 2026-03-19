@@ -24,3 +24,5 @@ export const load: PageServerLoad = async ({ locals }) => {
 		cameras
 	};
 };
+
+export const config = { maxDuration: 60 };

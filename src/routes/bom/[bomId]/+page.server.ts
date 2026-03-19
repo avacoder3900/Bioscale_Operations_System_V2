@@ -104,3 +104,5 @@ export const actions: Actions = {
 		return { success: true, message: 'BOM item deleted' };
 	}
 };
+
+export const config = { maxDuration: 60 };

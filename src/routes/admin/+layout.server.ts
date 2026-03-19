@@ -14,3 +14,5 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 
 	return { canManageUsers, canManageRoles };
 };
+
+export const config = { maxDuration: 60 };

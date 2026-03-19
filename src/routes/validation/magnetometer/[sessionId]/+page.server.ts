@@ -148,3 +148,5 @@ function parseMagValidation(raw: string): MagWellResult[] {
 
 	return results.sort((a, b) => a.well - b.well);
 }
+
+export const config = { maxDuration: 60 };

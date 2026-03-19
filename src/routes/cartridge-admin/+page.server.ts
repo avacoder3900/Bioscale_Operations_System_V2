@@ -91,3 +91,5 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		pageNum
 	};
 };
+
+export const config = { maxDuration: 60 };

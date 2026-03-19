@@ -148,3 +148,5 @@ export const actions: Actions = {
 		return { success: true, message: 'Particle integration disconnected.' };
 	}
 };
+
+export const config = { maxDuration: 60 };

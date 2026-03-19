@@ -57,3 +57,5 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		filters: { search, assayTypeId, sortBy, sortDir }
 	};
 };
+
+export const config = { maxDuration: 60 };

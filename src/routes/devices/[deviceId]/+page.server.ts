@@ -57,3 +57,5 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		}))
 	};
 };
+
+export const config = { maxDuration: 60 };

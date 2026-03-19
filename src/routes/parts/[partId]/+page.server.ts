@@ -380,3 +380,5 @@ export const actions: Actions = {
 		return { formDefSuccess: true };
 	}
 };
+
+export const config = { maxDuration: 60 };

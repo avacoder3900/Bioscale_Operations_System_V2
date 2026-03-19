@@ -54,3 +54,5 @@ export const load: PageServerLoad = async ({ url }) => {
 		analysis
 	};
 };
+
+export const config = { maxDuration: 60 };

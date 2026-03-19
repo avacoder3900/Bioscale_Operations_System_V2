@@ -189,3 +189,5 @@ function parseMagValidation(raw: string): MagWellResult[] {
 
 	return results;
 }
+
+export const config = { maxDuration: 60 };

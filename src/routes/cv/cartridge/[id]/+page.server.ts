@@ -94,3 +94,5 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		failCount: inspections.filter((i) => i.result === 'fail').length
 	};
 };
+
+export const config = { maxDuration: 60 };

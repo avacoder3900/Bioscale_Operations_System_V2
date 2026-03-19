@@ -340,3 +340,5 @@ export const actions: Actions = {
 		return { success: true, restoredPhase };
 	}
 };
+
+export const config = { maxDuration: 60 };

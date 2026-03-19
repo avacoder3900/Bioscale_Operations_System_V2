@@ -124,3 +124,5 @@ export const actions: Actions = {
 		return { success: true, message: 'Test result recorded' };
 	}
 };
+
+export const config = { maxDuration: 60 };

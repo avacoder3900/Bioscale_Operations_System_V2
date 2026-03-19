@@ -82,3 +82,5 @@ export const actions: Actions = {
 		redirect(302, '/');
 	}
 };
+
+export const config = { maxDuration: 60 };

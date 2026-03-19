@@ -228,3 +228,5 @@ export const actions: Actions = {
 		return { success: true, disposed: true };
 	}
 };
+
+export const config = { maxDuration: 60 };
