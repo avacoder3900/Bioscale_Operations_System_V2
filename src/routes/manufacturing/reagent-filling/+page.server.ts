@@ -327,7 +327,14 @@ export const actions: Actions = {
 			const ops = cartridgesFilled.map((cf: any) => ({
 				updateOne: {
 					filter: { _id: cf.cartridgeId },
-					update: { $setOnInsert: { _id: cf.cartridgeId, currentPhase: 'backing', 'backing.recordedAt': new Date() } },
+					update: {
+						$setOnInsert: {
+							_id: cf.cartridgeId,
+							currentPhase: 'backing',
+							'backing.operator': { _id: locals.user._id, username: locals.user.username },
+							'backing.recordedAt': new Date()
+						}
+					},
 					upsert: true
 				}
 			}));

@@ -335,6 +335,7 @@ export const actions: Actions = {
 					update: {
 						$setOnInsert: {
 							_id: cid,
+							'backing.operator': { _id: locals.user._id, username: locals.user.username },
 							'backing.recordedAt': new Date()
 						},
 						$set: {

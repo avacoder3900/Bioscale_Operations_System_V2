@@ -22,6 +22,7 @@ const cartridgeRecordSchema = new Schema({
 		lotId: String,
 		lotQrCode: String,
 		ovenEntryTime: Date,
+		operator: operatorRef,
 		recordedAt: Date
 	},
 	waxFilling: {
