@@ -296,7 +296,7 @@
 				{#if selectedFridge}
 					<form
 						method="POST"
-						action="?/recordStorage"
+						action="?/store"
 						use:enhance={() => {
 							return async ({ result, update }) => {
 								handleFormResult(result as { type: string; data?: Record<string, unknown> });

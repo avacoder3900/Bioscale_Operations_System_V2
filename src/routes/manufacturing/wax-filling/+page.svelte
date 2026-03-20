@@ -94,6 +94,7 @@
 	let lotScanError = $state('');
 	let lotScanSuccess = $state(false);
 	let lotScanSubmitting = $state(false);
+	let lotOverride = $state(false);
 	// confirmed lot — once scanned OK, set from server response or existing activeLotId
 	let confirmedLotId = $state<string | null>(data.activeLotId ?? null);
 	let confirmedLotCount = $state<number | null>(data.activeLotCartridgeCount ?? null);
@@ -116,6 +117,7 @@
 			const fd = new FormData();
 			fd.set('lotBarcode', lotScanInput.trim());
 			fd.set('runId', data.runState.runId);
+			if (lotOverride) fd.set('override', 'true');
 			const res = await fetch('?/scanBackingLot', {
 				method: 'POST',
 				body: fd,
@@ -903,6 +905,11 @@
 								{lotScanSubmitting ? 'Checking...' : 'Verify'}
 							</button>
 						</div>
+						<!-- Test override toggle -->
+						<label class="flex items-center gap-2 text-xs text-amber-400 cursor-pointer">
+							<input type="checkbox" bind:checked={lotOverride} class="rounded" />
+							Test Override (skip oven time check, auto-create lot)
+						</label>
 						<!-- Quick-pick from ready lots -->
 						{#if data.ovenLots.filter(l => l.ready).length > 0}
 							<div class="text-xs text-[var(--color-tron-text-secondary)]">

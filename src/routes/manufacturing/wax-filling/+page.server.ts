@@ -240,11 +240,34 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const lotBarcode = (data.get('lotBarcode') as string)?.trim();
 		const runId = (data.get('runId') as string)?.trim();
+		const override = data.get('override') === 'true';
 
 		if (!lotBarcode) return fail(400, { error: 'Lot barcode is required' });
 
 		const settingsDoc = await ManufacturingSettings.findById('default').lean() as any;
 		const minOvenTimeMin: number = settingsDoc?.waxFilling?.minOvenTimeMin ?? 60;
+
+		// TEST OVERRIDE: skip lot lookup and oven check
+		if (override) {
+			// Auto-create lot if it doesn't exist
+			const existing = await BackingLot.findById(lotBarcode).lean();
+			if (!existing) {
+				await BackingLot.create({
+					_id: lotBarcode,
+					lotType: 'backing',
+					ovenEntryTime: new Date(Date.now() - 120 * 60000), // 2 hours ago
+					operator: { _id: locals.user._id, username: locals.user.username },
+					cartridgeCount: 24,
+					status: 'ready'
+				});
+			} else {
+				await BackingLot.findByIdAndUpdate(lotBarcode, { $set: { status: 'ready' } });
+			}
+			if (runId) {
+				await WaxFillingRun.findByIdAndUpdate(runId, { $set: { activeLotId: lotBarcode } });
+			}
+			return { success: true, lotId: lotBarcode, overridden: true };
+		}
 
 		const lot = await BackingLot.findById(lotBarcode).lean() as any;
 		if (!lot) {

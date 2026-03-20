@@ -378,7 +378,7 @@
 
 				<form
 					method="POST"
-					action="?/signAndComplete"
+					action="?/signUnit"
 					use:enhance={() => {
 						signing = true;
 						return async ({ update }) => {

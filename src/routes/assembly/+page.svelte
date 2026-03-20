@@ -28,7 +28,7 @@
 		<form
 			bind:this={formElement}
 			method="POST"
-			action="?/startAssembly"
+			action="?/start"
 			use:enhance
 			class="space-y-6"
 		>

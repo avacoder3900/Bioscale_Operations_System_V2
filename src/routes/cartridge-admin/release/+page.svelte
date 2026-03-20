@@ -110,7 +110,7 @@
 			<h3 class="mb-3 text-sm font-medium text-[var(--color-tron-cyan)]">Create Shipping Lot</h3>
 			<form
 				method="POST"
-				action="?/createShippingLot"
+				action="?/createLot"
 				use:enhance={() => {
 					return async ({ result, update }) => {
 						handleFormResult(result as { type: string; data?: Record<string, unknown> });
