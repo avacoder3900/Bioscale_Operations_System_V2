@@ -1,6 +1,85 @@
+export const config = { maxDuration: 60 };
 import { fail } from '@sveltejs/kit';
-import { connectDB, Consumable, AuditLog, generateId } from '$lib/server/db';
-import type { Actions } from './$types';
+import { connectDB, Consumable, WaxFillingRun, CartridgeRecord, AuditLog, generateId } from '$lib/server/db';
+import { isAdmin } from '$lib/server/permissions';
+import type { PageServerLoad, Actions } from './$types';
+
+export const load: PageServerLoad = async ({ url, locals }) => {
+	await connectDB();
+	const deckId = url.searchParams.get('id') ?? '';
+
+	const deck = deckId ? await Consumable.findOne({ _id: deckId, type: 'deck' }).lean() : null;
+
+	// Runs that used this deck
+	const runs = deckId ? await WaxFillingRun.find({ deckId }).sort({ createdAt: -1 }).limit(50).lean() : [];
+
+	// Cartridges filled on this deck
+	const cartridges = deckId ? await CartridgeRecord.find({ 'waxFilling.deckId': deckId }).lean() : [];
+
+	const accepted = cartridges.filter((c: any) => c.waxQc?.status === 'Accepted').length;
+	const rejected = cartridges.filter((c: any) => c.waxQc?.status === 'Rejected').length;
+	const total = accepted + rejected;
+	const operators = new Set(cartridges.map((c: any) => c.waxFilling?.operator?.username).filter(Boolean));
+
+	// Position stats
+	const positionMap = new Map<number, { total: number; accepted: number; rejected: number }>();
+	for (const c of cartridges as any[]) {
+		const pos = c.waxFilling?.deckPosition;
+		if (pos == null) continue;
+		const entry = positionMap.get(pos) ?? { total: 0, accepted: 0, rejected: 0 };
+		entry.total++;
+		if (c.waxQc?.status === 'Accepted') entry.accepted++;
+		if (c.waxQc?.status === 'Rejected') entry.rejected++;
+		positionMap.set(pos, entry);
+	}
+
+	return {
+		deckId,
+		deck: deck ? {
+			status: (deck as any).status === 'available' ? 'Available' : (deck as any).status === 'in_use' ? 'In Use' : (deck as any).status ?? 'Unknown',
+			createdAt: (deck as any).createdAt ?? null,
+			lastUsed: (deck as any).lastUsed ?? null,
+			lockoutUntil: (deck as any).lockoutUntil ?? null,
+			totalRuns: runs.length
+		} : null,
+		stats: {
+			totalRuns: runs.length,
+			totalFills: cartridges.length,
+			acceptanceRate: total > 0 ? accepted / total : 1,
+			uniqueOperators: operators.size,
+			heatingEvents: 0
+		},
+		positionStats: Array.from(positionMap.entries()).map(([pos, s]) => ({
+			position: pos,
+			totalFills: s.total,
+			acceptedCount: s.accepted,
+			rejectedCount: s.rejected,
+			successRate: s.total > 0 ? s.accepted / s.total : 0
+		})),
+		runs: (runs as any[]).map((r: any) => ({
+			runId: r._id,
+			robotId: r.robot?._id ?? '',
+			operatorName: r.operator?.username ?? '—',
+			status: r.status,
+			waxSourceLot: r.waxSourceLot ?? null,
+			waxTubeId: r.waxTubeId ?? null,
+			plannedCartridgeCount: r.plannedCartridgeCount ?? 0,
+			coolingTrayId: r.coolingTrayId ?? null,
+			startTime: r.runStartTime ?? r.createdAt,
+			endTime: r.runEndTime ?? null
+		})),
+		cartridges: (cartridges as any[]).slice(0, 100).map((c: any) => ({
+			cartridgeId: c._id,
+			waxRunId: c.waxFilling?.runId ?? null,
+			deckPosition: c.waxFilling?.deckPosition ?? null,
+			qcStatus: c.waxQc?.status ?? 'Pending',
+			rejectionReason: c.waxQc?.rejectionReason ?? null,
+			transferTimeSeconds: c.waxFilling?.transferTimeSeconds ?? null,
+			currentInventory: c.currentPhase ?? 'unknown'
+		})),
+		isAdmin: isAdmin(locals.user)
+	};
+};
 
 export const actions: Actions = {
 	create: async ({ request, locals }) => {
@@ -10,11 +89,10 @@ export const actions: Actions = {
 		if (!name) return fail(400, { error: 'Name is required' });
 
 		const id = generateId();
-		await Consumable.create({ _id: id, type: 'deck', status: 'active' });
+		await Consumable.create({ _id: id, type: 'deck', status: 'available' });
 		await AuditLog.create({
 			_id: generateId(), tableName: 'consumables', recordId: id,
-			action: 'INSERT', newData: { type: 'deck', name },
-			changedAt: new Date(), changedBy: locals.user?.username ?? 'system'
+			action: 'INSERT', changedAt: new Date(), changedBy: locals.user?.username ?? 'system'
 		});
 		return { success: true };
 	},
@@ -29,8 +107,7 @@ export const actions: Actions = {
 		await Consumable.updateOne({ _id: id, type: 'deck' }, { $set: { status } });
 		await AuditLog.create({
 			_id: generateId(), tableName: 'consumables', recordId: id,
-			action: 'UPDATE', newData: { status },
-			changedAt: new Date(), changedBy: locals.user?.username ?? 'system'
+			action: 'UPDATE', newData: { status }, changedAt: new Date(), changedBy: locals.user?.username ?? 'system'
 		});
 		return { success: true };
 	},
@@ -49,5 +126,3 @@ export const actions: Actions = {
 		return { success: true };
 	}
 };
-
-export const config = { maxDuration: 60 };
