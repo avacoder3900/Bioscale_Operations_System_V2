@@ -128,6 +128,12 @@
 					<dt class="tron-text-muted">Vendor Lot #</dt>
 					<dd class="tron-text font-mono">{lot.vendorLotNumber ?? '—'}</dd>
 				</div>
+				{#if lot.bagBarcode}
+					<div>
+						<dt class="tron-text-muted">Bag Barcode</dt>
+						<dd class="tron-text font-mono">{lot.bagBarcode}</dd>
+					</div>
+				{/if}
 				{#if lot.serialNumber}
 					<div>
 						<dt class="tron-text-muted">Serial Number</dt>

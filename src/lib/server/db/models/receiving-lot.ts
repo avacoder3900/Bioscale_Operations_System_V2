@@ -22,6 +22,7 @@ const receivingLotSchema = new Schema({
 	poReference: String,
 	supplier: String,
 	vendorLotNumber: String,
+	bagBarcode: String, // barcode label placed on storage bag
 	expirationDate: Date,
 	storageConditionsRequired: { type: Boolean, default: false },
 	esdHandlingRequired: { type: Boolean, default: false },
@@ -53,6 +54,7 @@ const receivingLotSchema = new Schema({
 
 receivingLotSchema.index({ lotId: 1 }, { unique: true });
 receivingLotSchema.index({ lotNumber: 1 });
+receivingLotSchema.index({ bagBarcode: 1 }, { sparse: true });
 receivingLotSchema.index({ 'part._id': 1 });
 receivingLotSchema.index({ status: 1 });
 receivingLotSchema.index({ createdAt: -1 });

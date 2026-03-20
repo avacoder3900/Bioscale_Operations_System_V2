@@ -587,20 +587,34 @@
 						</div>
 					{/if}
 
-					<div>
-						<label for="barcode" class="tron-text-muted mb-1 block text-xs"
-							>Scan Barcode / Enter Lot ID *</label
-						>
-						<!-- svelte-ignore a11y_autofocus -->
-						<input
-							id="barcode"
-							name="lotId"
-							type="text"
-							bind:value={lotBarcode}
-							autofocus
-							placeholder="Scan or type barcode..."
-							class="tron-input w-full px-3 py-2 font-mono text-sm"
-						/>
+					<div class="grid gap-4 sm:grid-cols-2">
+						<div>
+							<label for="barcode" class="tron-text-muted mb-1 block text-xs"
+								>Scan Barcode / Enter Lot ID *</label
+							>
+							<!-- svelte-ignore a11y_autofocus -->
+							<input
+								id="barcode"
+								name="lotId"
+								type="text"
+								bind:value={lotBarcode}
+								autofocus
+								placeholder="Scan or type barcode..."
+								class="tron-input w-full px-3 py-2 font-mono text-sm"
+							/>
+						</div>
+						<div>
+							<label for="bagBarcode" class="tron-text-muted mb-1 block text-xs"
+								>Bag Barcode</label
+							>
+							<input
+								id="bagBarcode"
+								name="bagBarcode"
+								type="text"
+								placeholder="Scan or type bag barcode..."
+								class="tron-input w-full px-3 py-2 font-mono text-sm"
+							/>
+						</div>
 					</div>
 
 					<div class="grid gap-4 sm:grid-cols-3">

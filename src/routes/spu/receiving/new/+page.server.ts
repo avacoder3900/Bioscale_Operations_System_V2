@@ -144,6 +144,7 @@ export const actions: Actions = {
 		const poReference = formData.get('poReference')?.toString() || undefined;
 		const supplier = formData.get('supplier')?.toString() || undefined;
 		const vendorLotNumber = formData.get('vendorLotNumber')?.toString() || undefined;
+		const bagBarcode = formData.get('bagBarcode')?.toString()?.trim() || undefined;
 		const serialNumber = formData.get('serialNumber')?.toString() || undefined;
 		const expirationStr = formData.get('expirationDate')?.toString();
 		const expirationDate = expirationStr ? new Date(expirationStr) : undefined;
@@ -292,6 +293,7 @@ export const actions: Actions = {
 				poReference,
 				supplier,
 				vendorLotNumber,
+				bagBarcode,
 				expirationDate,
 				storageConditionsRequired,
 				esdHandlingRequired,
