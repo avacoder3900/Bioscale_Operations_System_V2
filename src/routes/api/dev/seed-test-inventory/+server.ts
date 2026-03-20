@@ -57,6 +57,20 @@ export const POST: RequestHandler = async () => {
 	const deckResult = await Consumable.bulkWrite(deckOps);
 	results.decks = deckResult.upsertedCount;
 
+	// 2b. Cooling trays
+	const trayOps = Array.from({ length: 20 }, (_, i) => {
+		const trayId = `${TEST_PREFIX}TRAY-${String(i + 1).padStart(3, '0')}`;
+		return {
+			updateOne: {
+				filter: { _id: trayId },
+				update: { $setOnInsert: { _id: trayId, type: 'cooling_tray', status: 'available' } },
+				upsert: true
+			}
+		};
+	});
+	const trayResult = await Consumable.bulkWrite(trayOps);
+	results.trays = trayResult.upsertedCount;
+
 	// 3. Incubator tubes
 	const tubeOps = Array.from({ length: COUNT }, (_, i) => {
 		const tubeId = `${TEST_PREFIX}TUBE-${String(i + 1).padStart(3, '0')}`;
