@@ -1,11 +1,8 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, CartridgeRecord } from '$lib/server/db';
+import { connectDB, CartridgeRecord, EquipmentLocation } from '$lib/server/db';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
-
-const FRIDGES = ['fridge-1', 'fridge-2', 'fridge-3', 'fridge-4'] as const;
-type FridgeId = typeof FRIDGES[number];
 
 type StoredCartridge = {
 	cartridgeId: string;
@@ -18,53 +15,58 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'cartridge:read');
 	await connectDB();
 
+	// Get real fridges from EquipmentLocation
+	const fridgesRaw = await EquipmentLocation.find({ locationType: 'fridge', isActive: true })
+		.sort({ displayName: 1 }).lean();
+	const fridges = (fridgesRaw as any[]).map((f: any) => ({
+		id: String(f._id),
+		displayName: f.displayName ?? f.barcode ?? String(f._id),
+		barcode: f.barcode ?? ''
+	}));
+
 	// Get cartridges awaiting storage (completed QC but not yet stored)
 	const awaitingStorage = await CartridgeRecord.find(
-		{ currentPhase: { $in: ['qc_complete', 'assay_loaded'] }, 'storage.storedAt': { $exists: false } },
+		{ currentPhase: { $in: ['qc_complete', 'assay_loaded'] }, 'storage.fridgeName': { $exists: false } },
 		{ _id: 1, barcode: 1, lotNumber: 1 }
 	).sort({ createdAt: -1 }).limit(500).lean();
 
-	// Get stored cartridges grouped by fridge
+	// Get stored cartridges grouped by fridge (using storage.fridgeName — the field the rest of the system uses)
+	const fridgeKeys = fridges.map((f) => f.barcode || f.displayName);
 	const storedCartridges = await CartridgeRecord.find(
-		{ 'storage.fridgeId': { $in: FRIDGES } },
-		{ _id: 1, 'storage.fridgeId': 1, 'storage.containerBarcode': 1, 'storage.storedAt': 1, status: 1 }
+		{ 'storage.fridgeName': { $in: fridgeKeys } },
+		{ _id: 1, 'storage.fridgeName': 1, 'storage.containerBarcode': 1, 'storage.storedAt': 1, 'storage.recordedAt': 1, status: 1 }
 	).lean();
 
-	const summary: Record<FridgeId, number> = {
-		'fridge-1': 0,
-		'fridge-2': 0,
-		'fridge-3': 0,
-		'fridge-4': 0
-	};
-
-	const fridgeDetails: Record<FridgeId, StoredCartridge[]> = {
-		'fridge-1': [],
-		'fridge-2': [],
-		'fridge-3': [],
-		'fridge-4': []
-	};
+	const summary: Record<string, number> = {};
+	const fridgeDetails: Record<string, StoredCartridge[]> = {};
+	for (const f of fridges) {
+		const key = f.barcode || f.displayName;
+		summary[key] = 0;
+		fridgeDetails[key] = [];
+	}
 
 	for (const c of storedCartridges as any[]) {
-		const fridgeId = c.storage?.fridgeId as FridgeId;
-		if (FRIDGES.includes(fridgeId)) {
-			summary[fridgeId] = (summary[fridgeId] ?? 0) + 1;
-			fridgeDetails[fridgeId].push({
+		const key = c.storage?.fridgeName;
+		if (key && key in summary) {
+			summary[key] = (summary[key] ?? 0) + 1;
+			fridgeDetails[key].push({
 				cartridgeId: c._id,
 				containerBarcode: c.storage?.containerBarcode ?? null,
-				storedAt: c.storage?.storedAt ? new Date(c.storage.storedAt).toISOString() : null,
+				storedAt: (c.storage?.storedAt ?? c.storage?.recordedAt) ? new Date(c.storage.storedAt ?? c.storage.recordedAt).toISOString() : null,
 				status: c.status ?? 'stored'
 			});
 		}
 	}
 
 	return {
-		summary: summary as Record<string, number>,
+		fridges,
+		summary,
 		awaitingStorage: awaitingStorage.map((c: any) => ({
 			cartridgeId: c._id,
 			barcode: c.barcode ?? '',
 			lotNumber: c.lotNumber ?? ''
 		})),
-		fridgeDetails: fridgeDetails as Record<string, StoredCartridge[]>
+		fridgeDetails
 	};
 };
 
@@ -75,11 +77,11 @@ export const actions: Actions = {
 
 		const form = await request.formData();
 		const cartridgeIds = form.getAll('cartridgeIds').map(String).filter(Boolean);
-		const fridgeId = form.get('fridgeId')?.toString();
+		const fridgeKey = form.get('fridgeId')?.toString();
 		const containerBarcode = form.get('containerBarcode')?.toString() || null;
 
-		if (!fridgeId || !FRIDGES.includes(fridgeId as FridgeId)) {
-			return fail(400, { error: 'Invalid fridge ID' });
+		if (!fridgeKey) {
+			return fail(400, { error: 'Fridge selection is required' });
 		}
 		if (!cartridgeIds.length) {
 			return fail(400, { error: 'No cartridges selected' });
@@ -90,9 +92,10 @@ export const actions: Actions = {
 			{ _id: { $in: cartridgeIds } },
 			{
 				$set: {
-					'storage.fridgeId': fridgeId,
+					'storage.fridgeName': fridgeKey,
 					'storage.containerBarcode': containerBarcode,
 					'storage.storedAt': now,
+					'storage.recordedAt': now,
 					'storage.storedBy': locals.user?._id,
 					currentPhase: 'stored',
 					status: 'stored'
@@ -109,11 +112,11 @@ export const actions: Actions = {
 				manufacturingStep: 'storage',
 				operatorId: locals.user?._id,
 				operatorUsername: locals.user?.username,
-				notes: `Stored in ${fridgeId}${containerBarcode ? `, container ${containerBarcode}` : ''}`
+				notes: `Stored in ${fridgeKey}${containerBarcode ? `, container ${containerBarcode}` : ''}`
 			});
 		}
 
-		return { message: `${cartridgeIds.length} cartridges stored in ${fridgeId}` };
+		return { message: `${cartridgeIds.length} cartridges stored in ${fridgeKey}` };
 	}
 };
 

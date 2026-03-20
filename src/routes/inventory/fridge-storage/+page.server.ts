@@ -21,7 +21,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const storedCartridges = await CartridgeRecord.find({
 		$or: [
 			{ 'waxStorage.location': { $exists: true, $ne: null }, currentPhase: 'wax_stored' },
-			{ 'storage.locationId': { $exists: true, $ne: null }, currentPhase: { $in: ['stored', 'reagent_filled'] } }
+			{ 'storage.fridgeName': { $exists: true, $ne: null }, currentPhase: { $in: ['stored', 'reagent_filled'] } }
 		]
 	}).select({
 		_id: 1,
@@ -30,7 +30,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		'waxStorage.recordedAt': 1,
 		'waxStorage.operator': 1,
 		'waxFilling.runId': 1,
-		'storage.locationId': 1,
+		'storage.fridgeName': 1,
 		'storage.recordedAt': 1,
 		'storage.operator': 1,
 		'reagentFilling.runId': 1,
@@ -48,7 +48,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Also track an "Unassigned" bucket for unknown locations
 	for (const c of storedCartridges as any[]) {
 		const waxLoc = c.waxStorage?.location;
-		const reagentLoc = c.storage?.locationId;
+		const reagentLoc = c.storage?.fridgeName;
 
 		if (waxLoc) {
 			const list = fridgeMap.get(waxLoc) ?? [];

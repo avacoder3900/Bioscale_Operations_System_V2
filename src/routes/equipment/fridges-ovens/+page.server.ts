@@ -1,6 +1,6 @@
 export const config = { maxDuration: 60 };
 import { fail } from '@sveltejs/kit';
-import { connectDB, generateId, Equipment, EquipmentLocation, AuditLog } from '$lib/server/db';
+import { connectDB, generateId, Equipment, EquipmentLocation, AuditLog, CartridgeRecord } from '$lib/server/db';
 import { isAdmin } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -13,27 +13,46 @@ export const load: PageServerLoad = async ({ locals }) => {
 			Equipment.find().sort({ name: 1 }).lean()
 		]);
 
+		// Compute occupant counts from CartridgeRecord (waxStorage.location and storage.fridgeName)
+		const [waxCounts, reagentCounts] = await Promise.all([
+			CartridgeRecord.aggregate([
+				{ $match: { 'waxStorage.location': { $exists: true }, currentPhase: 'wax_stored' } },
+				{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
+			]),
+			CartridgeRecord.aggregate([
+				{ $match: { 'storage.fridgeName': { $exists: true }, currentPhase: 'stored' } },
+				{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
+			])
+		]);
+		const occupantMap = new Map<string, number>();
+		for (const s of [...waxCounts as any[], ...reagentCounts as any[]]) {
+			occupantMap.set(s._id, (occupantMap.get(s._id) ?? 0) + s.count);
+		}
+
 		return {
-			locations: (locations as any[]).map((loc: any) => ({
-				id: loc._id,
-				barcode: loc.barcode ?? null,
-				locationType: loc.locationType ?? null,
-				displayName: loc.displayName ?? null,
-				isActive: loc.isActive ?? true,
-				capacity: loc.capacity ?? null,
-				notes: loc.notes ?? null,
-				createdAt: loc.createdAt?.toISOString?.() ?? loc.createdAt ?? null,
-				occupantCount: (loc.currentPlacements ?? []).length,
-				currentPlacements: (loc.currentPlacements ?? []).map((p: any) => ({
-					id: p._id,
-					itemType: p.itemType ?? null,
-					itemId: p.itemId ?? null,
-					placedBy: p.placedBy ?? null,
-					placedAt: p.placedAt ?? null,
-					runId: p.runId ?? null,
-					notes: p.notes ?? null
-				}))
-			})),
+			locations: (locations as any[]).map((loc: any) => {
+				const key = loc.barcode ?? loc.displayName ?? String(loc._id);
+				return {
+					id: loc._id,
+					barcode: loc.barcode ?? null,
+					locationType: loc.locationType ?? null,
+					displayName: loc.displayName ?? null,
+					isActive: loc.isActive ?? true,
+					capacity: loc.capacity ?? null,
+					notes: loc.notes ?? null,
+					createdAt: loc.createdAt?.toISOString?.() ?? loc.createdAt ?? null,
+					occupantCount: occupantMap.get(key) ?? occupantMap.get(loc.displayName ?? '') ?? 0,
+					currentPlacements: (loc.currentPlacements ?? []).map((p: any) => ({
+						id: p._id,
+						itemType: p.itemType ?? null,
+						itemId: p.itemId ?? null,
+						placedBy: p.placedBy ?? null,
+						placedAt: p.placedAt ?? null,
+						runId: p.runId ?? null,
+						notes: p.notes ?? null
+					}))
+				};
+			}),
 			equipmentSensors: (equipment as any[]).map((e: any) => ({
 				equipmentId: e._id,
 				name: e.name ?? null,

@@ -1,7 +1,7 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
-	EquipmentLocation
+	EquipmentLocation, OpentronsRobot
 } from '$lib/server/db';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
@@ -84,19 +84,10 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			ManufacturingSettings.findById('default').lean(),
 			Consumable.findOne({ type: 'incubator_tube', status: 'active' }).lean(),
 			// Check if a reagent run is active on this robot
-			(async () => {
-				try {
-					const mongoose = (await import('mongoose')).default;
-					const db = mongoose.connection.db;
-					if (!db) return null;
-					const cols = await db.listCollections({ name: 'reagent_filling_runs' }).toArray();
-					if (!cols.length) return null;
-					return db.collection('reagent_filling_runs').findOne({
-						'robot._id': robotId,
-						status: { $nin: ['completed', 'aborted', 'cancelled', 'Completed', 'Aborted', 'Cancelled'] }
-					});
-				} catch { return null; }
-			})()
+			(await import('$lib/server/db')).ReagentBatchRecord.findOne({
+				'robot._id': robotId,
+				status: { $nin: ['completed', 'aborted', 'cancelled', 'Completed', 'Aborted', 'Cancelled'] }
+			}).lean().catch(() => null)
 		]);
 
 		const wax = (settingsDoc as any)?.waxFilling ?? {};
@@ -249,8 +240,9 @@ export const actions: Actions = {
 			return fail(400, { error: 'This robot already has an active wax filling run.' });
 		}
 
+		const robotDoc = await OpentronsRobot.findById(robotId, { _id: 1, name: 1 }).lean() as any;
 		const run = await WaxFillingRun.create({
-			robot: { _id: robotId, name: robotId },
+			robot: { _id: robotId, name: robotDoc?.name ?? robotId },
 			operator: { _id: locals.user._id, username: locals.user.username },
 			status: 'Setup',
 			cartridgeIds: [],

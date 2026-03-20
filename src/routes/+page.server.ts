@@ -171,11 +171,24 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					LabCartridge.countDocuments()
 				]);
 
-				const storageCounts = await CartridgeRecord.aggregate([
-					{ $match: { 'storage.locationId': { $exists: true }, currentPhase: { $in: ['stored', 'wax_stored'] } } },
-					{ $group: { _id: '$storage.locationId', count: { $sum: 1 } } }
-				]);
-				const fridgeMap = new Map((fridges as any[]).map((f: any) => [String(f._id), f.displayName ?? f.barcode ?? String(f._id)]));
+				storageCounts = await (async () => {
+					const [waxCounts, reagentCounts] = await Promise.all([
+						CartridgeRecord.aggregate([
+							{ $match: { 'waxStorage.location': { $exists: true }, currentPhase: 'wax_stored' } },
+							{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
+						]),
+						CartridgeRecord.aggregate([
+							{ $match: { 'storage.fridgeName': { $exists: true }, currentPhase: 'stored' } },
+							{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
+						])
+					]);
+					const merged = new Map<string, number>();
+					for (const s of [...waxCounts as any[], ...reagentCounts as any[]]) {
+						merged.set(s._id, (merged.get(s._id) ?? 0) + s.count);
+					}
+					return Array.from(merged.entries()).map(([k, v]) => ({ _id: k, count: v }));
+				})();
+				const fridgeMap = new Map((fridges as any[]).map((f: any) => [f.barcode ?? f.displayName ?? String(f._id), f.displayName ?? f.barcode ?? String(f._id)]));
 
 				const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed'];
 				const phaseMap = new Map((phaseCounts as any[]).map((p: any) => [p._id, p.count]));

@@ -21,13 +21,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 		const [deckRuns, trayRuns] = await Promise.all([
 			deckIds.length
-				? WaxFillingRun.find({ 'deck._id': { $in: deckIds } })
+				? WaxFillingRun.find({ deckId: { $in: deckIds } })
 					.sort({ runStartTime: -1 })
 					.limit(500)
 					.lean()
 				: Promise.resolve([]),
 			trayIds.length
-				? WaxFillingRun.find({ 'coolingTray._id': { $in: trayIds } })
+				? WaxFillingRun.find({ coolingTrayId: { $in: trayIds } })
 					.sort({ runStartTime: -1 })
 					.limit(500)
 					.lean()
@@ -37,7 +37,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		// Group runs by deck/tray
 		const runsByDeck = new Map<string, any[]>();
 		for (const r of deckRuns as any[]) {
-			const did = r.deck?._id;
+			const did = (r as any).deckId;
 			if (did) {
 				if (!runsByDeck.has(did)) runsByDeck.set(did, []);
 				runsByDeck.get(did)!.push(r);
@@ -45,7 +45,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		}
 		const runsByTray = new Map<string, any[]>();
 		for (const r of trayRuns as any[]) {
-			const tid = r.coolingTray?._id;
+			const tid = (r as any).coolingTrayId;
 			if (tid) {
 				if (!runsByTray.has(tid)) runsByTray.set(tid, []);
 				runsByTray.get(tid)!.push(r);
@@ -117,7 +117,7 @@ function mapDeckRun(r: any) {
 		operatorName: r.operator?.username ?? '',
 		waxSourceLot: r.waxSourceLot ?? null,
 		cartridgeCount: r.plannedCartridgeCount ?? 0,
-		coolingTrayId: r.coolingTray?._id ?? null,
+		coolingTrayId: r.coolingTrayId ?? null,
 		durationMinutes: r.runStartTime && r.runEndTime
 			? Math.round((new Date(r.runEndTime).getTime() - new Date(r.runStartTime).getTime()) / 60000)
 			: null,
@@ -129,7 +129,7 @@ function mapTrayRun(r: any) {
 	return {
 		runId: r._id,
 		robotId: r.robot?._id ?? '',
-		deckId: r.deck?._id ?? null,
+		deckId: r.deckId ?? null,
 		status: r.status ?? '',
 		operatorName: r.operator?.username ?? '',
 		cartridgeCount: r.plannedCartridgeCount ?? 0,

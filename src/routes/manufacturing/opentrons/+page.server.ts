@@ -1,4 +1,4 @@
-import { connectDB, OpentronsRobot, WaxFillingRun } from '$lib/server/db';
+import { connectDB, OpentronsRobot, WaxFillingRun, ReagentBatchRecord } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
@@ -37,26 +37,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 		};
 	});
 
-	// Build reagent state per robot
-	// Check for active reagent runs in the reagent_filling_runs collection if it exists
-	let activeReagentRuns: any[] = [];
-	try {
-		const mongoose = (await import('mongoose')).default;
-		const db = mongoose.connection.db;
-		if (db) {
-			const collections = await db.listCollections({ name: 'reagent_filling_runs' }).toArray();
-			if (collections.length > 0) {
-				activeReagentRuns = await db.collection('reagent_filling_runs').find({
-					status: { $nin: ['completed', 'aborted', 'cancelled'] }
-				}).toArray();
-			}
-		}
-	} catch {
-		// Collection may not exist yet — that's fine
-	}
+	// Build reagent state per robot using ReagentBatchRecord model
+	const activeReagentRuns = await ReagentBatchRecord.find({
+		status: { $nin: ['completed', 'aborted', 'cancelled', 'Completed', 'Aborted', 'Cancelled'] }
+	}).lean().catch(() => []);
 
 	const reagentState = robotList.map((robot) => {
-		const run = activeReagentRuns.find((r: any) => r.robot?._id === robot.robotId);
+		const run = (activeReagentRuns as any[]).find((r: any) => r.robot?._id === robot.robotId);
 		return {
 			robotId: robot.robotId,
 			name: robot.name,
@@ -73,7 +60,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		const waxActive = wax?.hasActiveRun ?? false;
 		const reagentActive = reagent?.hasActiveRun ?? false;
 		const activeWax = activeWaxRuns.find((r: any) => r.robot?._id === robot.robotId);
-		const activeReagent = activeReagentRuns.find((r: any) => r.robot?._id === robot.robotId);
+		const activeReagent = (activeReagentRuns as any[]).find((r: any) => r.robot?._id === robot.robotId);
 
 		return {
 			robotId: robot.robotId,
@@ -85,25 +72,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	// Robot stats: count completed/aborted wax and reagent runs per robot
 	const allWaxRuns = await WaxFillingRun.find({}, { 'robot._id': 1, status: 1 }).lean();
-
-	let allReagentRuns: any[] = [];
-	try {
-		const mongoose = (await import('mongoose')).default;
-		const db = mongoose.connection.db;
-		if (db) {
-			const collections = await db.listCollections({ name: 'reagent_filling_runs' }).toArray();
-			if (collections.length > 0) {
-				allReagentRuns = await db.collection('reagent_filling_runs')
-					.find({}, { projection: { 'robot._id': 1, status: 1 } }).toArray();
-			}
-		}
-	} catch {
-		// Collection may not exist
-	}
+	const allReagentRuns = await ReagentBatchRecord.find({}, { 'robot._id': 1, status: 1 }).lean().catch(() => []);
 
 	const robotStats = robotList.map((robot) => {
 		const waxRuns = allWaxRuns.filter((r: any) => r.robot?._id === robot.robotId);
-		const reagentRuns = allReagentRuns.filter((r: any) => r.robot?._id === robot.robotId);
+		const reagentRuns = (allReagentRuns as any[]).filter((r: any) => r.robot?._id === robot.robotId);
 
 		return {
 			robotId: robot.robotId,
