@@ -119,7 +119,25 @@
 		}
 	}
 
-	function confirmDeck() {
+	let deckValidating = $state(false);
+
+	async function confirmDeck() {
+		// Validate deck exists in MongoDB
+		deckValidating = true;
+		deckError = '';
+		try {
+			const res = await fetch(`/api/dev/validate-equipment?type=deck&id=${encodeURIComponent(deckPendingValue)}`);
+			const result = await res.json();
+			if (!res.ok || result.error) {
+				deckError = result.error ?? `Deck "${deckPendingValue}" not found in the system.`;
+				playBeep(false);
+				deckValidating = false;
+				return;
+			}
+		} catch {
+			// If validation endpoint doesn't exist, fall through (backwards compat)
+		}
+		deckValidating = false;
 		deckId = deckPendingValue;
 		deckPendingValue = '';
 		step = 'loading';
@@ -130,7 +148,7 @@
 		setTimeout(() => deckInputEl?.focus(), 50);
 	}
 
-	function handleCartridgeKeydown(e: KeyboardEvent) {
+	async function handleCartridgeKeydown(e: KeyboardEvent) {
 		if (isReadonly) return;
 		if (e.key === 'Enter' && cartridgeInput.trim()) {
 			e.preventDefault();
@@ -142,10 +160,10 @@
 				return;
 			}
 
-			// Check for duplicate
+			// Check for duplicate in current session
 			if (scans.some((s) => s.cartridgeId === scanned)) {
 				playBeep(false);
-				deckError = `Cartridge "${scanned}" already scanned`;
+				deckError = `Cartridge "${scanned}" already scanned in this session`;
 				return;
 			}
 
@@ -153,6 +171,19 @@
 				playBeep(false);
 				deckError = 'No available oven-ready lots';
 				return;
+			}
+
+			// Validate cartridge against MongoDB (check not already processed)
+			try {
+				const res = await fetch(`/api/dev/validate-equipment?type=cartridge&id=${encodeURIComponent(scanned)}`);
+				const result = await res.json();
+				if (!res.ok || result.error) {
+					playBeep(false);
+					deckError = result.error ?? `Cartridge "${scanned}" validation failed`;
+					return;
+				}
+			} catch {
+				// If endpoint unavailable, allow scan (backwards compat)
 			}
 
 			deckError = '';
