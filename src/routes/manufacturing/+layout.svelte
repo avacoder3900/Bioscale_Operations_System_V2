@@ -33,7 +33,7 @@
 
 <style>
 	.mfg-sidebar {
-		width: 30px;
+		width: 24px;
 		transition: width 0.15s ease;
 	}
 	.mfg-sidebar:hover {
@@ -52,12 +52,12 @@
 <div class="flex">
 	<!-- Sidebar: icons only, expand on hover -->
 	<aside class="mfg-sidebar sticky top-14 h-[calc(100vh-3.5rem)] shrink-0 overflow-hidden border-r border-[var(--color-tron-border)] bg-[var(--color-tron-bg)]">
-		<nav class="flex flex-col gap-0.5 px-0.5 pt-2">
+		<nav class="flex flex-col gap-0 px-0 pt-1">
 			{#each navItems as item}
 				{@const active = isActive(item.href, $page.url.pathname, item.exact)}
 				<a
 					href={item.href}
-					class="flex items-center gap-2 rounded-md px-1.5 py-1.5 transition-colors
+					class="flex items-center gap-2 px-1 py-1.5 transition-colors
 						{active
 							? 'bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]'
 							: 'text-[var(--color-tron-text-secondary)] hover:bg-[var(--color-tron-surface)] hover:text-[var(--color-tron-text)]'}"
