@@ -14,8 +14,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 	] = await Promise.all([
 		Consumable.find({ type: 'deck' }).lean(),
 		Consumable.find({ type: 'cooling_tray' }).lean(),
-		EquipmentLocation.find().lean(),
-		Equipment.find().lean(),
+		EquipmentLocation.find({ isActive: true }).lean(),
+		Equipment.find({ isActive: { $ne: false } }).lean(),
 		WaxFillingRun.find({ status: { $in: ['setup', 'running'] } }).sort({ createdAt: -1 }).lean(),
 		ReagentBatchRecord.find({ status: { $in: ['setup', 'running'] } }).sort({ createdAt: -1 }).lean(),
 		WaxFillingRun.find().sort({ createdAt: -1 }).limit(50).lean(),
