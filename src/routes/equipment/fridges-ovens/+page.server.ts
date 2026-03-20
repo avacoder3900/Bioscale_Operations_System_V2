@@ -164,7 +164,7 @@ export const actions: Actions = {
 		const id = data.get('id')?.toString();
 		if (!id) return fail(400, { error: 'Location ID is required' });
 
-		const doc = await EquipmentLocation.findByIdAndUpdate(id, { isActive: false }, { new: true }).lean();
+		const doc = await EquipmentLocation.findByIdAndDelete(id).lean();
 		if (!doc) return fail(404, { error: 'Location not found' });
 
 		await AuditLog.create({
@@ -178,6 +178,6 @@ export const actions: Actions = {
 			newData: {}
 		});
 
-		return { success: true, message: 'Location deactivated' };
+		return { success: true, message: 'Location deleted' };
 	}
 };
