@@ -753,7 +753,8 @@ export const actions: Actions = {
 					filter: { _id: cid, 'storage.recordedAt': { $exists: false } },
 					update: {
 						$set: {
-							'storage.fridgeName': location,
+							'storage.fridgeName': location,   // barcode string — for fridgeName-based queries
+							'storage.locationId': location,   // same value — for locationId-based queries
 							'storage.operator': { _id: locals.user._id, username: locals.user.username },
 							'storage.timestamp': now,
 							'storage.recordedAt': now,

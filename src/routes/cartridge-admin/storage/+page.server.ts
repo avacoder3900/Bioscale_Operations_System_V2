@@ -92,7 +92,8 @@ export const actions: Actions = {
 			{ _id: { $in: cartridgeIds } },
 			{
 				$set: {
-					'storage.fridgeName': fridgeKey,
+					'storage.fridgeName': fridgeKey,       // barcode string — for fridgeName-based queries
+					'storage.locationId': fridgeKey,       // same value — for locationId-based queries
 					'storage.containerBarcode': containerBarcode,
 					'storage.storedAt': now,
 					'storage.recordedAt': now,
