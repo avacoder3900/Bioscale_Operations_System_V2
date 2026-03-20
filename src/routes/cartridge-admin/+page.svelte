@@ -202,7 +202,7 @@
 									</div>
 									<div class="col-span-2">
 										<span class="text-[var(--color-tron-text-secondary)]">Future:</span>
-										<span class="ml-1 italic text-[var(--color-tron-text-secondary)]">Customer Assignment, Shipping, Results — Coming Soon</span>
+										<span class="ml-1 italic text-[var(--color-tron-text-secondary)]">Customer Assignment, Shipping, Results</span>
 									</div>
 								</div>
 							</td>

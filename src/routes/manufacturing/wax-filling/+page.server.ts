@@ -425,6 +425,27 @@ export const actions: Actions = {
 			}
 		}
 
+		// Check for duplicate barcodes in this scan batch
+		const uniqueIds = new Set(cartridgeIds);
+		if (uniqueIds.size !== cartridgeIds.length) {
+			const dupes = cartridgeIds.filter((id, i) => cartridgeIds.indexOf(id) !== i);
+			return fail(400, { error: `Duplicate barcode(s) scanned: ${[...new Set(dupes)].join(', ')}` });
+		}
+
+		// Check if any of these cartridges are already in another active wax run
+		if (cartridgeIds.length > 0) {
+			const alreadyInUse = await CartridgeRecord.find({
+				_id: { $in: cartridgeIds },
+				'waxFilling.runId': { $exists: true },
+				currentPhase: { $nin: [null, 'backing', 'voided'] }
+			}).select('_id currentPhase waxFilling.runId').lean();
+
+			if (alreadyInUse.length > 0) {
+				const ids = (alreadyInUse as any[]).map((c: any) => c._id).join(', ');
+				return fail(400, { error: `Cartridge(s) already processed: ${ids}. These have already been through wax filling.` });
+			}
+		}
+
 		// Validate deck if provided
 		if (deckId) {
 			const deck = await Consumable.findOne({ _id: deckId, type: 'deck' }).lean();

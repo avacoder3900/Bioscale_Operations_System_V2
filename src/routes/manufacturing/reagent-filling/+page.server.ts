@@ -314,6 +314,26 @@ export const actions: Actions = {
 			try { cartridgeScans = JSON.parse(cartridgeScansRaw); } catch { /* ignore */ }
 		}
 
+		// Check for duplicate barcodes in scan batch
+		const scannedIds = cartridgeScans.map((cs: any) => cs.cartridgeId ?? cs.id ?? '');
+		const uniqueScanned = new Set(scannedIds);
+		if (uniqueScanned.size !== scannedIds.length) {
+			const dupes = scannedIds.filter((id: string, i: number) => scannedIds.indexOf(id) !== i);
+			return fail(400, { error: `Duplicate barcode(s) scanned: ${[...new Set(dupes)].join(', ')}` });
+		}
+
+		// Check if cartridges already have reagent filling
+		if (scannedIds.length > 0) {
+			const alreadyFilled = await CartridgeRecord.find({
+				_id: { $in: scannedIds },
+				'reagentFilling.recordedAt': { $exists: true }
+			}).select('_id').lean();
+			if (alreadyFilled.length > 0) {
+				const ids = (alreadyFilled as any[]).map((c: any) => c._id).join(', ');
+				return fail(400, { error: `Cartridge(s) already reagent-filled: ${ids}` });
+			}
+		}
+
 		// Validate deck
 		if (deckId) {
 			const deck = await Consumable.findOne({ _id: deckId, type: 'deck' }).lean();

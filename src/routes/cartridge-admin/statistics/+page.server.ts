@@ -71,7 +71,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const totalInspected = cs.filter((c) => c.reagentInspection?.status).length;
 	const rejected = cs.filter((c) => c.reagentInspection?.status === 'Rejected').length;
 	const rejectionRate = totalInspected > 0 ? rejected / totalInspected : 0;
-	const qaqcRate = 0; // QAQC failure rate — placeholder
+	const qaqcInspected = cs.filter((c) => (c as any).qaqc?.status).length;
+	const qaqcFailed = cs.filter((c) => (c as any).qaqc?.status === 'Failed' || (c as any).qaqc?.status === 'Rejected').length;
+	const qaqcRate = qaqcInspected > 0 ? qaqcFailed / qaqcInspected : 0;
 	const waxRejectedCount = cs.filter((c) => c.currentPhase === 'wax_qc' || (c as any).waxQc?.status === 'Rejected').length;
 
 	// Rejection breakdown

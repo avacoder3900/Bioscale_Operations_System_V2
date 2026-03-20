@@ -40,10 +40,6 @@
 	{:else}
 		<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Lot {data.lot.lotId}</h1>
 
-		<p class="text-lg font-bold text-red-500">
-			This is a placeholder page — full lot detail view coming soon.
-		</p>
-
 		<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
 				<div class="text-xs text-[var(--color-tron-text-secondary)]">Config</div>

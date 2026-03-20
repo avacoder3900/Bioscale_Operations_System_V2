@@ -47,7 +47,6 @@
 
 	function zColor(z: number | null): string {
 		if (z === null) return 'var(--color-tron-text-secondary)';
-		// TODO: read criteria from server - hardcode for now
 		if (z >= 3900 && z <= 4500) return 'var(--color-tron-green)';
 		return 'var(--color-tron-red)';
 	}
