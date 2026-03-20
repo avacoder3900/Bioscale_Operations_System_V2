@@ -28,6 +28,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			category: p.category ?? null,
 			supplier: p.supplier ?? null,
 			manufacturer: p.manufacturer ?? null,
+			barcode: p.barcode ?? null,
 			inventoryCount: invCount,
 			quantityPerUnit: p.quantityPerUnit ?? null,
 			unitCost: cost,
@@ -59,6 +60,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			totalValue: cost != null ? cost * invCount : null,
 			manufacturer: p.manufacturer ?? null,
 			supplier: p.supplier ?? null,
+			barcode: p.barcode ?? null,
 			minimumStockLevel: p.minimumOrderQty ?? 0,
 			leadTimeDays: p.leadTimeDays ?? null
 		};

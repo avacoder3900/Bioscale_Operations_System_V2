@@ -96,6 +96,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			sampleSize: p.sampleSize ?? 0,
 			percentAccepted: p.percentAccepted ?? 100,
 			bomType: p.bomType ?? null,
+			barcode: p.barcode ?? null,
 			boxRowIndex: p.boxRowIndex ?? null,
 			inspectionConfig: {
 				sampleSize: p.sampleSize ?? 1,
@@ -263,6 +264,34 @@ export const actions: Actions = {
 		});
 
 		return { inspectionConfigSuccess: true };
+	},
+
+	updateBarcode: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+		const form = await request.formData();
+		const barcode = form.get('barcode')?.toString()?.trim() || null;
+
+		const part = await PartDefinition.findById(params.partId) as any;
+		if (!part) return fail(404, { error: 'Part not found' });
+
+		const oldBarcode = part.barcode ?? null;
+		part.barcode = barcode;
+		await part.save();
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'part_definitions',
+			recordId: params.partId,
+			action: 'UPDATE',
+			oldData: { barcode: oldBarcode },
+			newData: { barcode },
+			changedAt: new Date(),
+			changedBy: locals.user!.username,
+			changedFields: ['barcode']
+		});
+
+		return { barcodeSuccess: true };
 	},
 
 	/**

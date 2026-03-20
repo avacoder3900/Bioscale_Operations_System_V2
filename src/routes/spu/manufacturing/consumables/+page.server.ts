@@ -48,6 +48,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		partNumber: p.partNumber ?? '',
 		name: p.name ?? '',
 		category: p.category ?? '',
+		barcode: p.barcode ?? '',
 		inventoryCount: p.inventoryCount ?? 0,
 		unitOfMeasure: p.unitOfMeasure ?? 'pcs',
 		supplier: p.supplier ?? ''
