@@ -59,7 +59,7 @@ export const actions: Actions = {
 	/** Create a QA/QC release for a reagent run */
 	create: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'manufacturing:read');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -92,7 +92,7 @@ export const actions: Actions = {
 	/** Start testing — assign cartridge IDs for QA/QC */
 	startTesting: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'manufacturing:read');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -125,7 +125,7 @@ export const actions: Actions = {
 	/** Record the QA/QC test result */
 	recordResult: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'manufacturing:read');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -208,7 +208,7 @@ export const actions: Actions = {
 	/** Scrap a cartridge that fails QC */
 	scrapCartridge: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'manufacturing:read');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -271,7 +271,7 @@ export const actions: Actions = {
 	/** Admin override to overturn a scrap decision */
 	overturnScrap: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'manufacturing:read');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();
