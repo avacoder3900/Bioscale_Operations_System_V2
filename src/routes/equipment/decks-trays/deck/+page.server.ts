@@ -95,6 +95,13 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 			}
 			return m;
 		})(),
+		heatingHistory: [],
+		operators: Array.from(operators).map(name => ({
+			operatorName: name,
+			totalRuns: (cartridges as any[]).filter((c: any) => c.waxFilling?.operator?.username === name).length,
+			acceptedCount: (cartridges as any[]).filter((c: any) => c.waxFilling?.operator?.username === name && c.waxQc?.status === 'Accepted').length,
+			rejectedCount: (cartridges as any[]).filter((c: any) => c.waxFilling?.operator?.username === name && c.waxQc?.status === 'Rejected').length
+		})),
 		isAdmin: isAdmin(locals.user)
 	};
 };
