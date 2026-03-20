@@ -137,6 +137,12 @@
 			>
 				Settings
 			</a>
+			<a
+				href={resolve('/spu/equipment/activity')}
+				class="min-h-[44px] rounded px-3 py-2 text-sm font-medium transition-colors text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]"
+			>
+				Equipment
+			</a>
 		</nav>
 	</div>
 

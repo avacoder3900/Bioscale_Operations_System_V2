@@ -246,7 +246,8 @@
 					<button
 						type="button"
 						onclick={async () => {
-						const res = await fetch('/api/dev/test-data?type=reagent-cartridge');
+						const scannedIds = scans.map((s) => s.cartridgeId).join(',');
+						const res = await fetch(`/api/dev/test-data?type=reagent-cartridge&exclude=${scannedIds}`);
 						if (res.ok) {
 							const data = await res.json();
 							cartridgeInput = data.cartridgeId;

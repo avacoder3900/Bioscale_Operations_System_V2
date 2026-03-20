@@ -5,46 +5,58 @@ import {
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
+export const config = { maxDuration: 60 };
+
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:admin');
-	await connectDB();
 
-	const [settingsDoc, assayDefs] = await Promise.all([
-		ManufacturingSettings.findById('default').lean(),
-		AssayDefinition.find({}, { _id: 1, name: 1, skuCode: 1, isActive: 1, reagents: 1 }).sort({ name: 1 }).lean()
-	]);
+	try {
+		await connectDB();
 
-	const reagent = (settingsDoc as any)?.reagentFilling ?? {};
-	const rejectionReasons = ((settingsDoc as any)?.rejectionReasonCodes ?? [])
-		.filter((r: any) => !r.processType || r.processType === 'reagent')
-		.map((r: any, i: number) => ({
-			id: r._id ?? String(i),
-			code: r.code ?? '',
-			label: r.label ?? '',
-			sortOrder: r.sortOrder ?? i
-		}));
+		const [settingsDoc, assayDefs] = await Promise.all([
+			ManufacturingSettings.findById('default').lean(),
+			AssayDefinition.find({}, { _id: 1, name: 1, skuCode: 1, isActive: 1, reagents: 1 }).sort({ name: 1 }).lean()
+		]);
 
-	return {
-		settings: {
-			minCoolingTimeMin: reagent.minCoolingTimeMin ?? 30,
-			fillTimePerCartridgeMin: reagent.fillTimePerCartridgeMin ?? 0.5
-		},
-		assayTypes: (assayDefs as any[]).map((a) => ({
-			id: String(a._id),
-			name: a.name ?? '',
-			skuCode: a.skuCode ?? '',
-			isActive: a.isActive ?? true,
-			reagents: (a.reagents ?? []).map((r: any) => ({
-				id: String(r._id),
-				reagentName: r.reagentName ?? '',
-				wellPosition: r.wellPosition ?? null,
-				volumeMicroliters: r.volumeMicroliters ?? null,
-				isActive: r.isActive ?? true
-			}))
-		})),
-		rejectionReasons
-	};
+		const reagent = (settingsDoc as any)?.reagentFilling ?? {};
+		const rejectionReasons = ((settingsDoc as any)?.rejectionReasonCodes ?? [])
+			.filter((r: any) => !r.processType || r.processType === 'reagent')
+			.map((r: any, i: number) => ({
+				id: r._id ? String(r._id) : String(i),
+				code: r.code ?? '',
+				label: r.label ?? '',
+				sortOrder: r.sortOrder ?? i
+			}));
+
+		return {
+			settings: {
+				minCoolingTimeMin: reagent.minCoolingTimeMin ?? 30,
+				fillTimePerCartridgeMin: reagent.fillTimePerCartridgeMin ?? 0.5
+			},
+			assayTypes: (assayDefs as any[]).map((a) => ({
+				id: String(a._id),
+				name: a.name ?? '',
+				skuCode: a.skuCode ?? '',
+				isActive: a.isActive ?? true,
+				reagents: (a.reagents ?? []).map((r: any) => ({
+					id: String(r._id),
+					reagentName: r.reagentName ?? '',
+					wellPosition: r.wellPosition ?? null,
+					volumeMicroliters: r.volumeMicroliters ?? null,
+					isActive: r.isActive ?? true
+				}))
+			})),
+			rejectionReasons
+		};
+	} catch (err) {
+		console.error('[REAGENT-FILLING SETTINGS] Load error:', err instanceof Error ? err.message : err);
+		return {
+			settings: { minCoolingTimeMin: 30, fillTimePerCartridgeMin: 0.5 },
+			assayTypes: [],
+			rejectionReasons: []
+		};
+	}
 };
 
 export const actions: Actions = {

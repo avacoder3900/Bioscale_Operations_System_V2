@@ -3,39 +3,52 @@ import { connectDB, ManufacturingSettings, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
+export const config = { maxDuration: 60 };
+
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:admin');
-	await connectDB();
 
-	const settingsDoc = await ManufacturingSettings.findById('default').lean();
-	const wax = (settingsDoc as any)?.waxFilling ?? {};
-
-	const rejectionReasons = ((settingsDoc as any)?.rejectionReasonCodes ?? [])
-		.filter((r: any) => !r.processType || r.processType === 'wax')
-		.map((r: any, i: number) => ({
-			id: r._id ?? String(i),
-			code: r.code ?? '',
-			label: r.label ?? '',
-			sortOrder: r.sortOrder ?? i
-		}));
-
-	return {
-		settings: {
-			minOvenTimeMin: wax.minOvenTimeMin ?? 60,
-			runDurationMin: wax.runDurationMin ?? 45,
-			removeDeckWarningMin: wax.removeDeckWarningMin ?? 5,
-			coolingWarningMin: wax.coolingWarningMin ?? 30,
-			deckLockoutMin: wax.deckLockoutMin ?? 60,
-			incubatorTempC: wax.incubatorTempC ?? 37,
-			heaterTempC: wax.heaterTempC ?? 65,
-			waxPerDeckUl: wax.waxPerDeckUl ?? 5000,
-			tubeCapacityUl: wax.tubeCapacityUl ?? 20000,
-			waxPerCartridgeUl: wax.waxPerCartridgeUl ?? 100,
-			cartridgesPerColumn: wax.cartridgesPerColumn ?? 8
-		},
-		rejectionReasons
+	const defaultSettings = {
+		minOvenTimeMin: 60, runDurationMin: 45, removeDeckWarningMin: 5,
+		coolingWarningMin: 30, deckLockoutMin: 60, incubatorTempC: 37, heaterTempC: 65,
+		waxPerDeckUl: 5000, tubeCapacityUl: 20000, waxPerCartridgeUl: 100, cartridgesPerColumn: 8
 	};
+
+	try {
+		await connectDB();
+		const settingsDoc = await ManufacturingSettings.findById('default').lean();
+		const wax = (settingsDoc as any)?.waxFilling ?? {};
+
+		const rejectionReasons = ((settingsDoc as any)?.rejectionReasonCodes ?? [])
+			.filter((r: any) => !r.processType || r.processType === 'wax')
+			.map((r: any, i: number) => ({
+				id: r._id ? String(r._id) : String(i),
+				code: r.code ?? '',
+				label: r.label ?? '',
+				sortOrder: r.sortOrder ?? i
+			}));
+
+		return {
+			settings: {
+				minOvenTimeMin: wax.minOvenTimeMin ?? defaultSettings.minOvenTimeMin,
+				runDurationMin: wax.runDurationMin ?? defaultSettings.runDurationMin,
+				removeDeckWarningMin: wax.removeDeckWarningMin ?? defaultSettings.removeDeckWarningMin,
+				coolingWarningMin: wax.coolingWarningMin ?? defaultSettings.coolingWarningMin,
+				deckLockoutMin: wax.deckLockoutMin ?? defaultSettings.deckLockoutMin,
+				incubatorTempC: wax.incubatorTempC ?? defaultSettings.incubatorTempC,
+				heaterTempC: wax.heaterTempC ?? defaultSettings.heaterTempC,
+				waxPerDeckUl: wax.waxPerDeckUl ?? defaultSettings.waxPerDeckUl,
+				tubeCapacityUl: wax.tubeCapacityUl ?? defaultSettings.tubeCapacityUl,
+				waxPerCartridgeUl: wax.waxPerCartridgeUl ?? defaultSettings.waxPerCartridgeUl,
+				cartridgesPerColumn: wax.cartridgesPerColumn ?? defaultSettings.cartridgesPerColumn
+			},
+			rejectionReasons
+		};
+	} catch (err) {
+		console.error('[WAX-FILLING SETTINGS] Load error:', err instanceof Error ? err.message : err);
+		return { settings: defaultSettings, rejectionReasons: [] };
+	}
 };
 
 export const actions: Actions = {

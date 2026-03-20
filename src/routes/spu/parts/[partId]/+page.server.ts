@@ -1,6 +1,8 @@
 import { fail, error } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, PartDefinition, InventoryTransaction, LotRecord, generateId } from '$lib/server/db';
+import { connectDB, PartDefinition, InventoryTransaction, InspectionProcedureRevision, LotRecord, AuditLog, generateId } from '$lib/server/db';
+import { uploadFile } from '$lib/server/box';
+import { env } from '$env/dynamic/private';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params, url }) => {
@@ -15,6 +17,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	const startDate = url.searchParams.get('startDate') ?? '';
 	const endDate = url.searchParams.get('endDate') ?? '';
 	const retractedFilter = url.searchParams.get('retracted') ?? '';
+	const operatorFilter = url.searchParams.get('operator') ?? '';
 
 	const txFilter: Record<string, any> = { partDefinitionId: params.partId };
 	if (typeFilter) txFilter.transactionType = typeFilter;
@@ -25,10 +28,18 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 	}
 	if (retractedFilter === 'true') txFilter.retractedAt = { $exists: true, $ne: null };
 	if (retractedFilter === 'false') txFilter.retractedAt = { $exists: false };
+	if (operatorFilter) {
+		txFilter.$or = [
+			{ operatorId: operatorFilter },
+			{ operatorUsername: operatorFilter },
+			{ performedBy: operatorFilter }
+		];
+	}
 
-	const [lots, transactions] = await Promise.all([
+	const [lots, transactions, ipRevisionDocs] = await Promise.all([
 		LotRecord.find({ partDefinitionId: params.partId }).sort({ createdAt: -1 }).lean(),
-		InventoryTransaction.find(txFilter).sort({ performedAt: -1 }).limit(200).lean()
+		InventoryTransaction.find(txFilter).sort({ performedAt: -1 }).limit(200).lean(),
+		InspectionProcedureRevision.find({ partId: params.partId }).sort({ revisionNumber: -1 }).lean()
 	]);
 
 	const versions = (lots as any[]).map((l: any, idx: number) => ({
@@ -38,6 +49,9 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		lotNumber: l.lotNumber ?? '',
 		quantity: l.quantityProduced ?? l.desiredQuantity ?? 0,
 		status: l.status ?? 'completed',
+		changeType: l.changeType ?? (idx === 0 ? 'create' : 'update'),
+		changedAt: l.createdAt ?? l.startTime,
+		changeReason: l.changeReason ?? null,
 		createdAt: l.createdAt ?? l.startTime,
 		operatorName: l.operator?.username ?? null
 	}));
@@ -65,6 +79,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			unitCost: p.unitCost ? Number(p.unitCost) : null,
 			unit: p.unitOfMeasure ?? 'ea',
 			unitOfMeasure: p.unitOfMeasure ?? 'ea',
+			quantityPerUnit: p.quantityPerUnit ?? null,
 			minimumStockLevel: p.minimumOrderQty ?? null,
 			reorderPoint: p.minimumOrderQty ?? null,
 			supplier: p.supplier ?? null,
@@ -80,25 +95,62 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			isActive: p.isActive ?? true,
 			sampleSize: p.sampleSize ?? 0,
 			percentAccepted: p.percentAccepted ?? 100,
+			bomType: p.bomType ?? null,
+			boxRowIndex: p.boxRowIndex ?? null,
+			inspectionConfig: {
+				sampleSize: p.sampleSize ?? 1,
+				percentAccepted: p.percentAccepted ?? 100
+			},
 			createdAt: p.createdAt,
 			updatedAt: p.updatedAt
 		},
+		sampleSize: p.sampleSize ?? 1,
+		percentAccepted: p.percentAccepted ?? 100,
+		partDefinitionId: p._id,
+		ipRevisions: JSON.parse(JSON.stringify((ipRevisionDocs as any[]).map((r: any) => ({
+			id: r._id,
+			revisionNumber: r.revisionNumber,
+			documentUrl: r.documentUrl,
+			renderedHtmlUrl: r.renderedHtmlUrl ?? null,
+			formDefinition: r.formDefinition ?? null,
+			changeNotes: r.changeNotes ?? null,
+			isCurrent: r.isCurrent ?? false,
+			uploadedAt: r.createdAt,
+			uploadedByName: r.uploadedBy?.username ?? null
+		})))),
 		inventoryTransactions: (transactions as any[]).map((t: any) => ({
 			id: t._id,
 			transactionType: t.transactionType ?? 'unknown',
 			quantity: t.quantity ?? 0,
 			previousQuantity: t.previousQuantity ?? 0,
 			newQuantity: t.newQuantity ?? 0,
-			performedByName: t.performedBy ?? null,
+			performedByName: t.operatorUsername ?? t.performedBy ?? null,
 			performedAt: t.performedAt ?? t.createdAt,
 			assemblySessionId: t.assemblySessionId ?? null,
 			retractedAt: t.retractedAt ?? null,
 			retractionReason: t.retractionReason ?? null,
-			notes: t.reason ?? null
+			notes: t.notes ?? t.reason ?? null,
+			lotId: t.lotId ?? null,
+			cartridgeRecordId: t.cartridgeRecordId ?? null,
+			manufacturingStep: t.manufacturingStep ?? null,
+			manufacturingRunId: t.manufacturingRunId ?? null
 		})),
+		transactionSummary: (() => {
+			const all = transactions as any[];
+			const nonRetracted = all.filter((t: any) => !t.retractedAt);
+			return {
+				totalReceived: nonRetracted.filter((t: any) => t.transactionType === 'receipt').reduce((s: number, t: any) => s + Math.abs(t.quantity ?? 0), 0),
+				totalConsumed: nonRetracted.filter((t: any) => t.transactionType === 'consumption' || t.transactionType === 'deduction').reduce((s: number, t: any) => s + Math.abs(t.quantity ?? 0), 0),
+				totalCreated: nonRetracted.filter((t: any) => t.transactionType === 'creation').reduce((s: number, t: any) => s + Math.abs(t.quantity ?? 0), 0),
+				totalScrapped: nonRetracted.filter((t: any) => t.transactionType === 'scrap').reduce((s: number, t: any) => s + Math.abs(t.quantity ?? 0), 0),
+				totalAdjusted: nonRetracted.filter((t: any) => t.transactionType === 'adjustment').reduce((s: number, t: any) => s + (t.quantity ?? 0), 0),
+				currentCount: p.inventoryCount ?? 0,
+				transactionCount: all.length
+			};
+		})(),
 		versions,
 		auditEntries,
-		filters: { type: typeFilter, startDate, endDate, retracted: retractedFilter }
+		filters: { type: typeFilter, startDate, endDate, retracted: retractedFilter, operator: operatorFilter }
 	};
 };
 
@@ -145,5 +197,186 @@ export const actions: Actions = {
 		}
 		await InventoryTransaction.updateOne({ _id: transactionId }, { $set: { retractedAt: new Date(), retractedBy: locals.user!.username, retractionReason: reason } });
 		return { success: true };
+	},
+
+	updateMinStockLevel: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+		const form = await request.formData();
+		const minimumStockLevel = Number(form.get('minimumStockLevel'));
+		if (isNaN(minimumStockLevel) || minimumStockLevel < 0) {
+			return fail(400, { error: 'Invalid minimum stock level' });
+		}
+		const part = await PartDefinition.findById(params.partId) as any;
+		if (!part) return fail(404, { error: 'Part not found' });
+
+		const oldValue = part.minimumOrderQty ?? 0;
+		part.minimumOrderQty = minimumStockLevel;
+		await part.save();
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'part_definitions',
+			recordId: params.partId,
+			action: 'UPDATE',
+			oldData: { minimumOrderQty: oldValue },
+			newData: { minimumOrderQty: minimumStockLevel },
+			changedAt: new Date(),
+			changedBy: locals.user!.username,
+			changedFields: ['minimumOrderQty']
+		});
+
+		return { success: true };
+	},
+
+	updateInspectionConfig: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+		const form = await request.formData();
+		const sampleSize = Number(form.get('sampleSize'));
+		const percentAccepted = Number(form.get('percentAccepted'));
+		if (isNaN(sampleSize) || sampleSize < 1) {
+			return fail(400, { inspectionConfigError: 'Sample size must be at least 1' });
+		}
+		if (isNaN(percentAccepted) || percentAccepted < 0 || percentAccepted > 100) {
+			return fail(400, { inspectionConfigError: 'Percent accepted must be between 0 and 100' });
+		}
+		const part = await PartDefinition.findById(params.partId) as any;
+		if (!part) return fail(404, { inspectionConfigError: 'Part not found' });
+
+		const oldSampleSize = part.sampleSize ?? 0;
+		const oldPercentAccepted = part.percentAccepted ?? 100;
+		part.sampleSize = sampleSize;
+		part.percentAccepted = percentAccepted;
+		await part.save();
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'part_definitions',
+			recordId: params.partId,
+			action: 'UPDATE',
+			oldData: { sampleSize: oldSampleSize, percentAccepted: oldPercentAccepted },
+			newData: { sampleSize, percentAccepted },
+			changedAt: new Date(),
+			changedBy: locals.user!.username,
+			changedFields: ['sampleSize', 'percentAccepted']
+		});
+
+		return { inspectionConfigSuccess: true };
+	},
+
+	/**
+	 * Upload a new inspection procedure revision (Word doc).
+	 * Archives old current revision and creates new one.
+	 */
+	uploadIpRevision: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+
+		const formData = await request.formData();
+		const file = formData.get('file') as File | null;
+		const changeNotes = formData.get('changeNotes')?.toString() || undefined;
+		const partDefinitionId = formData.get('partDefinitionId')?.toString() || params.partId;
+
+		if (!file || file.size === 0) {
+			return fail(400, { ipError: 'A .docx file is required' });
+		}
+
+		try {
+			// Upload the file to Box.com
+			const buffer = await file.arrayBuffer();
+			const timestamp = Date.now();
+			const fileName = `ip-${partDefinitionId}-rev-${timestamp}.docx`;
+			const folderId = env.BOX_ROOT_FOLDER_ID ?? '0';
+			const uploaded = await uploadFile(folderId, fileName, buffer);
+			const documentUrl = `https://app.box.com/files/${uploaded.id}`;
+
+			// Find the current highest revision number for this part
+			const latestRev = await InspectionProcedureRevision.findOne(
+				{ partId: partDefinitionId },
+				{ revisionNumber: 1 },
+				{ sort: { revisionNumber: -1 } }
+			).lean() as any;
+
+			const nextRevNumber = (latestRev?.revisionNumber ?? 0) + 1;
+
+			// Archive all current revisions for this part
+			await InspectionProcedureRevision.updateMany(
+				{ partId: partDefinitionId, isCurrent: true },
+				{ $set: { isCurrent: false } }
+			);
+
+			// Create new revision
+			const revision = await InspectionProcedureRevision.create({
+				_id: generateId(),
+				partId: partDefinitionId,
+				revisionNumber: nextRevNumber,
+				documentUrl,
+				uploadedBy: {
+					_id: locals.user!._id,
+					username: locals.user!.username
+				},
+				changeNotes,
+				isCurrent: true
+			});
+
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'inspection_procedure_revisions',
+				recordId: revision._id,
+				action: 'INSERT',
+				oldData: null,
+				newData: { partId: partDefinitionId, revisionNumber: nextRevNumber, documentUrl },
+				changedAt: new Date(),
+				changedBy: locals.user!._id
+			});
+
+			return { ipSuccess: true };
+		} catch (err) {
+			return fail(500, { ipError: err instanceof Error ? err.message : 'Upload failed' });
+		}
+	},
+
+	/**
+	 * Save or update the form definition JSON for an inspection procedure revision.
+	 */
+	saveFormDefinition: async ({ request, locals }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+
+		const formData = await request.formData();
+		const revisionId = formData.get('revisionId')?.toString();
+		const formDefJson = formData.get('formDefinition')?.toString();
+
+		if (!revisionId) return fail(400, { formDefError: 'Revision ID is required' });
+		if (!formDefJson) return fail(400, { formDefError: 'Form definition is required' });
+
+		let formDefinition: unknown;
+		try {
+			formDefinition = JSON.parse(formDefJson);
+		} catch {
+			return fail(400, { formDefError: 'Invalid JSON' });
+		}
+
+		const revision = await InspectionProcedureRevision.findById(revisionId) as any;
+		if (!revision) return fail(404, { formDefError: 'Revision not found' });
+
+		const oldDef = revision.formDefinition;
+		revision.formDefinition = formDefinition;
+		await revision.save();
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'inspection_procedure_revisions',
+			recordId: revisionId,
+			action: 'UPDATE',
+			oldData: { formDefinition: oldDef },
+			newData: { formDefinition },
+			changedAt: new Date(),
+			changedBy: locals.user!._id,
+			changedFields: ['formDefinition']
+		});
+
+		return { formDefSuccess: true };
 	}
 };

@@ -12,7 +12,8 @@
 		{ href: '/spu/equipment/activity', label: 'Overview' },
 		{ href: '/spu/equipment/decks-trays', label: 'Decks & Trays' },
 		{ href: '/spu/equipment/fridges-ovens', label: 'Fridges & Ovens' },
-		{ href: '/spu/equipment/temperature-probes', label: 'Temperature Probes' }
+		{ href: '/spu/equipment/temperature-probes', label: 'Temperature Probes' },
+		{ href: '/spu/equipment/robots', label: 'Opentrons Robots' }
 	];
 
 	function isActive(href: string, currentPath: string): boolean {

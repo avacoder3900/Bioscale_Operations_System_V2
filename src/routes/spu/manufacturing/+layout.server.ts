@@ -3,6 +3,8 @@ import { requirePermission, hasPermission } from '$lib/server/permissions';
 import { connectDB, ProcessConfiguration } from '$lib/server/db';
 import type { LayoutServerLoad } from './$types';
 
+export const config = { maxDuration: 60 };
+
 export const load: LayoutServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 
@@ -25,7 +27,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		user: locals.user,
 		isAdmin: hasPermission(locals.user, 'manufacturing:admin'),
 		processConfigs: configs.map((c) => ({
-			configId: c._id,
+			configId: String(c._id),
 			processName: c.processName,
 			processType: c.processType
 		}))

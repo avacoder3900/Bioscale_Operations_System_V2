@@ -606,7 +606,10 @@
 				? mockCartridges.filter((c) => c.inspectionStatus === 'Accepted')
 				: data.cartridges.filter((c) => c.inspectionStatus === 'Accepted' && !c.topSealBatchId)}
 			currentBatch={previewParam ? null : (data.currentSealBatch ? {
-			...data.currentSealBatch,
+			batchId: data.currentSealBatch.batchId,
+			topSealLotId: data.currentSealBatch.topSealLotId ?? '',
+			scannedCount: data.currentSealBatch.scannedCount ?? data.currentSealBatch.cartridgeIds?.length ?? 0,
+			totalTarget: data.currentSealBatch.totalTarget ?? 12,
 			firstScanTime: data.currentSealBatch.firstScanTime ? new Date(data.currentSealBatch.firstScanTime) : null,
 			elapsedSeconds: data.currentSealBatch.firstScanTime
 				? Math.round((Date.now() - new Date(data.currentSealBatch.firstScanTime).getTime()) / 1000)
@@ -626,6 +629,10 @@
 				if (previewParam) { errorMsg = 'Actions disabled in preview mode'; return; }
 				submitForm('transitionToStorage');
 			}}
+			onRejectCartridge={(cartridgeId) => {
+				if (previewParam) { errorMsg = 'Actions disabled in preview mode'; return; }
+				submitForm('rejectAtSeal', { cartridgeId });
+			}}
 			readonly={isViewingPast}
 		/>
 
@@ -644,6 +651,7 @@
 				rejectedCount: rejected.length,
 				qaqcCount: qaqc.length
 			}}
+			fridges={previewParam ? [{ id: 'f1', displayName: 'Fridge 1', barcode: 'FRG-001' }, { id: 'f2', displayName: 'Fridge 2', barcode: 'FRG-002' }] : data.fridges}
 			onRecordStorage={(cartridgeIds, location) => {
 				if (previewParam) { errorMsg = 'Actions disabled in preview mode'; return; }
 				submitForm('recordBatchStorage', { cartridgeIds: JSON.stringify(cartridgeIds), location });

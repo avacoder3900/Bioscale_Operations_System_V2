@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, PartDefinition, BomItem, Integration, generateId } from '$lib/server/db';
+import { connectDB, PartDefinition, Integration, generateId, AuditLog } from '$lib/server/db';
 import { syncPartsFromBox } from '$lib/server/box-sync';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -8,14 +8,16 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'inventory:read');
 	await connectDB();
 
-	const [parts, cartridgeBomItems, boxInteg] = await Promise.all([
-		PartDefinition.find().sort({ sortOrder: 1, partNumber: 1 }).lean(),
-		BomItem.find({ bomType: 'cartridge', isActive: true }).lean(),
+	const [spuParts, cartridgePartDocs, boxInteg] = await Promise.all([
+		PartDefinition.find({ $or: [{ bomType: 'spu' }, { bomType: { $exists: false } }] })
+			.sort({ sortOrder: 1, partNumber: 1 }).lean(),
+		PartDefinition.find({ bomType: 'cartridge', isActive: true })
+			.sort({ partNumber: 1 }).lean(),
 		Integration.findOne({ type: 'box' }).lean()
 	]);
 
-	// Map parts to expected shape
-	const items = (parts as any[]).map((p) => {
+	// Map SPU parts to expected shape
+	const items = (spuParts as any[]).map((p) => {
 		const cost = parseFloat(p.unitCost) || null;
 		const invCount = p.inventoryCount ?? 0;
 		return {
@@ -42,23 +44,23 @@ export const load: PageServerLoad = async ({ locals }) => {
 		console.log(`[parts] Filtered out ${itemsNoCost.length} items with no cost data`);
 	}
 
-	// Cartridge BOM parts
-	const cartridgeParts = (cartridgeBomItems as any[]).map((b) => {
-		const cost = parseFloat(b.unitCost) || null;
-		const invCount = b.inventoryCount ?? 0;
+	// Cartridge parts (now from PartDefinition with bomType='cartridge')
+	const cartridgeParts = (cartridgePartDocs as any[]).map((p) => {
+		const cost = parseFloat(p.unitCost) || null;
+		const invCount = p.inventoryCount ?? 0;
 		return {
-			id: b._id,
-			partNumber: b.partNumber ?? '',
-			name: b.name ?? '',
-			category: b.category ?? null,
-			quantityPerUnit: b.quantityPerUnit ?? null,
+			id: p._id,
+			partNumber: p.partNumber ?? '',
+			name: p.name ?? '',
+			category: p.category ?? null,
+			quantityPerUnit: p.quantityPerUnit ?? null,
 			inventoryCount: invCount,
 			unitCost: cost,
 			totalValue: cost != null ? cost * invCount : null,
-			manufacturer: b.manufacturer ?? null,
-			supplier: b.supplier ?? null,
-			minimumStockLevel: b.minimumStockLevel ?? 0,
-			leadTimeDays: b.leadTimeDays ?? null
+			manufacturer: p.manufacturer ?? null,
+			supplier: p.supplier ?? null,
+			minimumStockLevel: p.minimumOrderQty ?? 0,
+			leadTimeDays: p.leadTimeDays ?? null
 		};
 	});
 
@@ -153,6 +155,73 @@ export const actions: Actions = {
 			minimumOrderQty: form.get('reorderPoint') ? Number(form.get('reorderPoint')) : undefined,
 			createdBy: locals.user!._id
 		});
+		return { success: true };
+	},
+
+	createCartridgePart: async ({ request, locals }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+		const form = await request.formData();
+		const partNumber = form.get('partNumber')?.toString().trim();
+		const name = form.get('name')?.toString().trim();
+		if (!partNumber || !name) return fail(400, { error: 'Part number and name are required' });
+
+		const existing = await PartDefinition.findOne({ partNumber });
+		if (existing) return fail(400, { error: 'Part number already exists' });
+
+		const newPart = await PartDefinition.create({
+			_id: generateId(),
+			partNumber,
+			name,
+			category: form.get('category')?.toString().trim() || undefined,
+			manufacturer: form.get('manufacturer')?.toString().trim() || undefined,
+			supplier: form.get('supplier')?.toString().trim() || undefined,
+			unitCost: form.get('unitCost')?.toString().trim() || undefined,
+			quantityPerUnit: form.get('quantityPerUnit') ? Number(form.get('quantityPerUnit')) : 1,
+			unitOfMeasure: form.get('unitOfMeasure')?.toString().trim() || 'ea',
+			inventoryCount: form.get('inventoryCount') ? Number(form.get('inventoryCount')) : 0,
+			minimumOrderQty: form.get('minimumStockLevel') ? Number(form.get('minimumStockLevel')) : 0,
+			description: form.get('description')?.toString().trim() || undefined,
+			bomType: 'cartridge',
+			isActive: true,
+			createdBy: locals.user!._id
+		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'part_definitions',
+			recordId: newPart._id,
+			action: 'INSERT',
+			newData: { partNumber, name, bomType: 'cartridge' },
+			changedAt: new Date(),
+			changedBy: locals.user!.username
+		});
+
+		return { success: true };
+	},
+
+	deleteCartridgePart: async ({ request, locals }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+		const form = await request.formData();
+		const id = form.get('id')?.toString();
+		if (!id) return fail(400, { error: 'Part ID required' });
+
+		const part = await PartDefinition.findById(id).lean() as any;
+		if (!part) return fail(404, { error: 'Part not found' });
+
+		await PartDefinition.deleteOne({ _id: id });
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'part_definitions',
+			recordId: id,
+			action: 'DELETE',
+			oldData: { partNumber: part.partNumber, name: part.name, bomType: part.bomType },
+			changedAt: new Date(),
+			changedBy: locals.user!.username
+		});
+
 		return { success: true };
 	},
 

@@ -1,0 +1,365 @@
+@import 'tailwindcss';
+@plugin '@tailwindcss/typography';
+
+@theme {
+	/* TRON Background Colors */
+	--color-tron-bg-primary: #0a0a0f;
+	--color-tron-bg-secondary: #12121a;
+	--color-tron-bg-tertiary: #1a1a2e;
+	--color-tron-bg-card: #16161f;
+
+	/* TRON Accent Colors */
+	--color-tron-cyan: #00d4ff;
+	--color-tron-blue: #4a9eff;
+	--color-tron-green: #00ff88;
+	--color-tron-yellow: #ffc233;
+	--color-tron-orange: #ff6600;
+	--color-tron-red: #ff3366;
+	--color-tron-purple: #a78bfa;
+
+	/* TRON Text Colors */
+	--color-tron-text: #e0e0e0;
+	--color-tron-text-primary: #e0e0e0;
+	--color-tron-text-secondary: #a0a0a0;
+
+	/* TRON Status Colors */
+	--color-tron-error: #ff3366;
+
+	/* TRON Border & Shadow */
+	--color-tron-border: rgba(0, 212, 255, 0.2);
+	--shadow-tron-glow: 0 0 20px rgba(0, 212, 255, 0.3);
+	--shadow-tron-glow-strong: 0 0 30px rgba(0, 212, 255, 0.5);
+
+	/* Touch target size */
+	--size-touch-target: 44px;
+}
+
+/* Global default text color for dark backgrounds */
+body {
+	color: var(--color-tron-text);
+}
+
+/* TRON Grid Background */
+.tron-grid-bg {
+	background-color: var(--color-tron-bg-primary);
+	background-image:
+		linear-gradient(rgba(0, 212, 255, 0.03) 1px, transparent 1px),
+		linear-gradient(90deg, rgba(0, 212, 255, 0.03) 1px, transparent 1px);
+	background-size: 50px 50px;
+}
+
+/* Scanline overlay effect */
+.tron-scanlines {
+	pointer-events: none;
+	background: repeating-linear-gradient(
+		0deg,
+		rgba(0, 0, 0, 0.1) 0px,
+		rgba(0, 0, 0, 0.1) 1px,
+		transparent 1px,
+		transparent 2px
+	);
+}
+
+/* TRON Pulse Animation */
+@keyframes tron-pulse {
+	0%,
+	100% {
+		box-shadow: 0 0 5px var(--color-tron-cyan);
+	}
+	50% {
+		box-shadow: 0 0 20px var(--color-tron-cyan), 0 0 30px var(--color-tron-cyan);
+	}
+}
+
+.animate-tron-pulse {
+	animation: tron-pulse 2s ease-in-out infinite;
+}
+
+/* Text utilities */
+.tron-text-primary {
+	color: var(--color-tron-text-primary);
+}
+
+.tron-text-muted {
+	color: var(--color-tron-text-secondary);
+}
+
+.tron-heading {
+	color: var(--color-tron-cyan);
+}
+
+/* ============================================================================
+   TRON Component Classes
+   ============================================================================ */
+
+/* Cards */
+.tron-card {
+	background-color: var(--color-tron-bg-card);
+	border: 1px solid var(--color-tron-border);
+	border-radius: 0.5rem;
+	padding: 1.5rem;
+}
+
+.tron-card-interactive {
+	background-color: var(--color-tron-bg-card);
+	border: 1px solid var(--color-tron-border);
+	border-radius: 0.5rem;
+	padding: 1.5rem;
+	transition: all 0.2s ease;
+	cursor: pointer;
+}
+
+.tron-card-interactive:hover {
+	border-color: var(--color-tron-cyan);
+	box-shadow: var(--shadow-tron-glow);
+}
+
+/* Buttons */
+.tron-button {
+	min-height: var(--size-touch-target);
+	padding: 0.5rem 1rem;
+	border: 1px solid var(--color-tron-border);
+	border-radius: 0.375rem;
+	background-color: var(--color-tron-bg-tertiary);
+	color: var(--color-tron-text-primary);
+	font-weight: 500;
+	cursor: pointer;
+	transition: all 0.2s ease;
+}
+
+.tron-button:hover {
+	border-color: var(--color-tron-cyan);
+	background-color: var(--color-tron-bg-secondary);
+}
+
+.tron-button:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.tron-button-primary {
+	min-height: var(--size-touch-target);
+	padding: 0.5rem 1rem;
+	border: 1px solid var(--color-tron-cyan);
+	border-radius: 0.375rem;
+	background-color: var(--color-tron-cyan);
+	color: var(--color-tron-bg-primary);
+	font-weight: 600;
+	cursor: pointer;
+	transition: all 0.2s ease;
+}
+
+.tron-button-primary:hover {
+	box-shadow: var(--shadow-tron-glow);
+}
+
+.tron-button-primary:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.tron-button-danger {
+	min-height: var(--size-touch-target);
+	padding: 0.5rem 1rem;
+	border: 1px solid var(--color-tron-red);
+	border-radius: 0.375rem;
+	background-color: transparent;
+	color: var(--color-tron-red);
+	font-weight: 500;
+	cursor: pointer;
+	transition: all 0.2s ease;
+}
+
+.tron-button-danger:hover {
+	background-color: var(--color-tron-red);
+	color: white;
+}
+
+/* Shorthand button aliases (solid light blue style) */
+.tron-btn-primary {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: var(--size-touch-target);
+	padding: 0.5rem 1rem;
+	border: none;
+	border-radius: 0.375rem;
+	background-color: var(--color-tron-cyan);
+	color: var(--color-tron-bg-primary);
+	font-weight: 600;
+	font-size: 0.875rem;
+	cursor: pointer;
+	transition: opacity 0.15s ease;
+}
+
+.tron-btn-primary:hover {
+	opacity: 0.85;
+}
+
+.tron-btn-primary:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.tron-btn-secondary {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: var(--size-touch-target);
+	padding: 0.5rem 1rem;
+	border: 1px solid var(--color-tron-border);
+	border-radius: 0.375rem;
+	background-color: var(--color-tron-bg-tertiary);
+	color: var(--color-tron-text);
+	font-weight: 500;
+	font-size: 0.875rem;
+	cursor: pointer;
+	transition: all 0.15s ease;
+}
+
+.tron-btn-secondary:hover {
+	border-color: var(--color-tron-cyan);
+	color: var(--color-tron-cyan);
+}
+
+.tron-btn-secondary:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+/* Inputs */
+.tron-input {
+	min-height: var(--size-touch-target);
+	width: 100%;
+	padding: 0.5rem 0.75rem;
+	border: 1px solid var(--color-tron-border);
+	border-radius: 0.375rem;
+	background-color: var(--color-tron-bg-secondary);
+	color: var(--color-tron-text-primary);
+	transition: border-color 0.2s ease;
+}
+
+.tron-input:focus {
+	outline: none;
+	border-color: var(--color-tron-cyan);
+	box-shadow: 0 0 0 2px rgba(0, 212, 255, 0.2);
+}
+
+.tron-input::placeholder {
+	color: var(--color-tron-text-secondary);
+}
+
+.tron-input-error {
+	border-color: var(--color-tron-red);
+}
+
+.tron-select {
+	min-height: var(--size-touch-target);
+	width: 100%;
+	padding: 0.5rem 0.75rem;
+	border: 1px solid var(--color-tron-border);
+	border-radius: 0.375rem;
+	background-color: var(--color-tron-bg-secondary);
+	color: var(--color-tron-text-primary);
+	cursor: pointer;
+}
+
+.tron-select:focus {
+	outline: none;
+	border-color: var(--color-tron-cyan);
+}
+
+.tron-select option,
+select option {
+	background-color: #1a1a2e;
+	color: #e0e0e0;
+}
+
+/* Labels */
+.tron-label {
+	display: block;
+	margin-bottom: 0.5rem;
+	font-size: 0.875rem;
+	font-weight: 500;
+	color: var(--color-tron-text-secondary);
+}
+
+/* Badges */
+.tron-badge {
+	display: inline-flex;
+	align-items: center;
+	padding: 0.25rem 0.75rem;
+	border-radius: 9999px;
+	font-size: 0.75rem;
+	font-weight: 500;
+}
+
+.tron-badge-info {
+	background-color: rgba(0, 212, 255, 0.2);
+	color: var(--color-tron-cyan);
+	border: 1px solid rgba(0, 212, 255, 0.3);
+}
+
+.tron-badge-success {
+	background-color: rgba(0, 255, 136, 0.2);
+	color: var(--color-tron-green);
+	border: 1px solid rgba(0, 255, 136, 0.3);
+}
+
+.tron-badge-warning {
+	background-color: rgba(255, 102, 0, 0.2);
+	color: var(--color-tron-orange);
+	border: 1px solid rgba(255, 102, 0, 0.3);
+}
+
+.tron-badge-error {
+	background-color: rgba(255, 51, 102, 0.2);
+	color: var(--color-tron-red);
+	border: 1px solid rgba(255, 51, 102, 0.3);
+}
+
+.tron-badge-neutral {
+	background-color: rgba(160, 160, 160, 0.2);
+	color: var(--color-tron-text-secondary);
+	border: 1px solid rgba(160, 160, 160, 0.3);
+}
+
+/* Progress Bar */
+.tron-progress {
+	width: 100%;
+	height: 0.5rem;
+	background-color: var(--color-tron-bg-tertiary);
+	border-radius: 9999px;
+	overflow: hidden;
+}
+
+.tron-progress-bar {
+	height: 100%;
+	background: linear-gradient(90deg, var(--color-tron-cyan), var(--color-tron-green));
+	border-radius: 9999px;
+	transition: width 0.3s ease;
+}
+
+/* Table */
+.tron-table {
+	width: 100%;
+	border-collapse: collapse;
+}
+
+.tron-table th {
+	padding: 0.75rem 1rem;
+	text-align: left;
+	font-weight: 600;
+	color: var(--color-tron-text-secondary);
+	border-bottom: 1px solid var(--color-tron-border);
+}
+
+.tron-table td {
+	padding: 0.75rem 1rem;
+	color: var(--color-tron-text-primary);
+	border-bottom: 1px solid var(--color-tron-border);
+}
+
+.tron-table tr:hover td {
+	background-color: var(--color-tron-bg-secondary);
+}
