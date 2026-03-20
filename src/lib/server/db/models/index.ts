@@ -12,6 +12,7 @@ export { InspectionProcedureRevision } from './inspection-procedure-revision.js'
 export { ToolConfirmation } from './tool-confirmation.js';
 
 // Tier 2: Operational
+export { BackingLot } from './backing-lot.js';
 export { Session } from './session.js';
 export { Role } from './role.js';
 export { InviteToken } from './invite-token.js';

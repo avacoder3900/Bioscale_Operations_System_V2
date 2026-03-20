@@ -1,7 +1,7 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
-	EquipmentLocation, OpentronsRobot, AuditLog
+	EquipmentLocation, OpentronsRobot, AuditLog, BackingLot
 } from '$lib/server/db';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
@@ -46,7 +46,9 @@ function emptyState(robotId: string, loadError: string | null = null) {
 			tubeId: string; initialVolumeUl: number; remainingVolumeUl: number;
 			status: string; totalCartridgesFilled: number; totalRunsUsed: number;
 		},
-		ovenLots: [] as { lotId: string; ready: boolean }[],
+		activeLotId: null as string | null,
+		activeLotCartridgeCount: null as number | null,
+		ovenLots: [] as { lotId: string; ready: boolean; cartridgeCount: number }[],
 		rejectionCodes: [] as any[],
 		qcCartridges: [] as any[],
 		storageCartridges: [] as any[],
@@ -174,20 +176,25 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			barcode: f.barcode ?? ''
 		}));
 
-		// Oven lots (completed runs with ovenLocationId set)
-		const ovenRunsRaw = await WaxFillingRun.find({
-			'robot._id': robotId,
-			status: { $in: ['completed', 'storage', 'Storage'] },
-			ovenLocationId: { $exists: true, $ne: null }
-		}).sort({ runEndTime: -1 }).limit(20).lean().catch(() => []);
-
+		// Backing lots from BackingLot collection
 		const minOvenTimeMin = wax.minOvenTimeMin ?? 60;
 		const now = Date.now();
-		const ovenLots = (ovenRunsRaw as any[]).map((r: any) => {
-			const endTime = r.runEndTime ? new Date(r.runEndTime).getTime() : 0;
-			const elapsedMin = endTime ? (now - endTime) / 60000 : 0;
-			return { lotId: String(r._id), ready: elapsedMin >= minOvenTimeMin };
+		const backingLotsRaw = await BackingLot.find({ status: { $in: ['in_oven', 'ready', 'created'] } })
+			.sort({ ovenEntryTime: -1 }).lean().catch(() => []);
+
+		const ovenLots = (backingLotsRaw as any[]).map((bl: any) => {
+			const entryTime = bl.ovenEntryTime ? new Date(bl.ovenEntryTime).getTime() : 0;
+			const elapsedMin = entryTime ? (now - entryTime) / 60000 : 0;
+			return {
+				lotId: String(bl._id),
+				ready: elapsedMin >= minOvenTimeMin,
+				cartridgeCount: bl.cartridgeCount ?? 0
+			};
 		});
+
+		// activeLotId: the current lot associated with the active run (stored on run)
+		const activeLotId: string | null = run?.activeLotId ?? null;
+		const activeLot = activeLotId ? ovenLots.find((l) => l.lotId === activeLotId) : null;
 
 		// Check if robot is blocked by reagent filling
 		const robotBlocked = activeReagentRunRaw
@@ -208,11 +215,14 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 				heaterTempC: wax.heaterTempC ?? 65
 			},
 			tubeData,
+			activeLotId,
+			activeLotCartridgeCount: activeLot?.cartridgeCount ?? null,
 			ovenLots,
 			rejectionCodes,
 			qcCartridges,
 			storageCartridges,
-			fridges
+			fridges,
+			minOvenTimeMin
 		};
 	} catch (err) {
 		console.error('[WAX-FILLING PAGE] Load error:', err instanceof Error ? err.message : err);
@@ -222,6 +232,62 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 };
 
 export const actions: Actions = {
+	/** Scan backing lot barcode — validates oven time and associates lot with run */
+	scanBackingLot: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const lotBarcode = (data.get('lotBarcode') as string)?.trim();
+		const runId = (data.get('runId') as string)?.trim();
+
+		if (!lotBarcode) return fail(400, { error: 'Lot barcode is required' });
+
+		const settingsDoc = await ManufacturingSettings.findById('default').lean() as any;
+		const minOvenTimeMin: number = settingsDoc?.waxFilling?.minOvenTimeMin ?? 60;
+
+		const lot = await BackingLot.findById(lotBarcode).lean() as any;
+		if (!lot) {
+			return fail(404, { error: `Lot "${lotBarcode}" not found. Register it on the manufacturing dashboard first.` });
+		}
+		if (lot.status === 'consumed') {
+			return fail(400, { error: `Lot "${lotBarcode}" has already been consumed.` });
+		}
+
+		const entryTime = lot.ovenEntryTime ? new Date(lot.ovenEntryTime).getTime() : 0;
+		if (!entryTime) {
+			return fail(400, { error: `Lot "${lotBarcode}" has no oven entry time recorded.` });
+		}
+
+		const elapsedMin = (Date.now() - entryTime) / 60000;
+		const remainingMin = Math.ceil(Math.max(0, minOvenTimeMin - elapsedMin));
+
+		if (elapsedMin < minOvenTimeMin) {
+			return fail(400, {
+				error: `Lot not ready. ${remainingMin} minute${remainingMin === 1 ? '' : 's'} remaining (minimum ${minOvenTimeMin} min required).`,
+				remainingMin,
+				lotId: lotBarcode
+			});
+		}
+
+		// Mark lot as ready in DB
+		await BackingLot.findByIdAndUpdate(lotBarcode, { $set: { status: 'ready' } });
+
+		// If a runId was provided, record activeLotId on the run
+		if (runId) {
+			await WaxFillingRun.findByIdAndUpdate(runId, {
+				$set: { activeLotId: lotBarcode }
+			});
+		}
+
+		return {
+			success: true,
+			lotId: lotBarcode,
+			cartridgeCount: lot.cartridgeCount ?? 0,
+			elapsedMin: Math.floor(elapsedMin)
+		};
+	},
+
 	/** Create a new wax filling run in Setup status */
 	createRun: async ({ request, locals, url }) => {
 		if (!locals.user) redirect(302, '/login');
@@ -346,6 +412,9 @@ export const actions: Actions = {
 		const run = await WaxFillingRun.findById(runId).lean() as any;
 		if (!run) return fail(404, { error: 'Run not found' });
 
+		// Get activeLotId from the run for traceability
+		const activeLotId: string | undefined = (run as any).activeLotId ?? undefined;
+
 		// Create CartridgeRecord stubs and link to this wax run
 		if (cartridgeIds.length > 0) {
 			const ops = cartridgeIds.map((cid: string, idx: number) => ({
@@ -354,13 +423,15 @@ export const actions: Actions = {
 					update: {
 						$setOnInsert: {
 							_id: cid,
+							'backing.lotId': activeLotId ?? null,
 							'backing.operator': { _id: locals.user._id, username: locals.user.username },
 							'backing.recordedAt': new Date()
 						},
 						$set: {
 							currentPhase: 'wax_filling',
 							'waxFilling.runId': runId,
-							'waxFilling.deckPosition': idx + 1
+							'waxFilling.deckPosition': idx + 1,
+							...(activeLotId ? { 'backing.lotId': activeLotId } : {})
 						}
 					},
 					upsert: true

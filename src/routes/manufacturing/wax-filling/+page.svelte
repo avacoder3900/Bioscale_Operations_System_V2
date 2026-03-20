@@ -43,7 +43,10 @@
 				totalCartridgesFilled: number;
 				totalRunsUsed: number;
 			} | null;
-			ovenLots: { lotId: string; ready: boolean }[];
+			activeLotId: string | null;
+			activeLotCartridgeCount: number | null;
+			ovenLots: { lotId: string; ready: boolean; cartridgeCount: number }[];
+			minOvenTimeMin: number;
 			rejectionCodes: RejectionReasonCode[];
 			qcCartridges: {
 				cartridgeId: string;
@@ -85,6 +88,64 @@
 	let errorMsg = $state('');
 	let showCancelModal = $state(false);
 	let cancelReason = $state('');
+
+	// Backing lot scan state
+	let lotScanInput = $state('');
+	let lotScanError = $state('');
+	let lotScanSuccess = $state(false);
+	let lotScanSubmitting = $state(false);
+	// confirmed lot — once scanned OK, set from server response or existing activeLotId
+	let confirmedLotId = $state<string | null>(data.activeLotId ?? null);
+	let confirmedLotCount = $state<number | null>(data.activeLotCartridgeCount ?? null);
+
+	// Keep confirmedLotId in sync if server already has one (e.g. after page reload)
+	$effect(() => {
+		if (data.activeLotId && !confirmedLotId) {
+			confirmedLotId = data.activeLotId;
+			confirmedLotCount = data.activeLotCartridgeCount ?? null;
+			lotScanSuccess = true;
+		}
+	});
+
+	async function handleScanBackingLot() {
+		if (!lotScanInput.trim() || !data.runState.runId) return;
+		lotScanSubmitting = true;
+		lotScanError = '';
+		lotScanSuccess = false;
+		try {
+			const fd = new FormData();
+			fd.set('lotBarcode', lotScanInput.trim());
+			fd.set('runId', data.runState.runId);
+			const res = await fetch('?/scanBackingLot', {
+				method: 'POST',
+				body: fd,
+				headers: { 'x-sveltekit-action': 'true' }
+			});
+			const json = await res.json();
+			if (!res.ok) {
+				const msg = json?.error ?? json?.data?.error ?? `Error ${res.status}`;
+				lotScanError = msg;
+			} else {
+				const d = json?.data ?? json;
+				confirmedLotId = d?.lotId ?? lotScanInput.trim();
+				confirmedLotCount = d?.cartridgeCount ?? null;
+				lotScanSuccess = true;
+				lotScanInput = '';
+				await invalidateAll();
+			}
+		} catch (e) {
+			lotScanError = e instanceof Error ? e.message : 'Scan failed';
+		} finally {
+			lotScanSubmitting = false;
+		}
+	}
+
+	function handleLotScanKeydown(e: KeyboardEvent) {
+		if (e.key === 'Enter' && lotScanInput.trim()) {
+			e.preventDefault();
+			handleScanBackingLot();
+		}
+	}
 
 	// Admin override state
 	let showOverrideModal = $state(false);
@@ -395,6 +456,9 @@
 		if (data.runState.waxSourceLot) return 'deck_load';
 		return 'wax_prep';
 	});
+
+	// Lot scan is required before deck loading sub-stage
+	let lotConfirmed = $derived(!!confirmedLotId || !!data.activeLotId);
 
 	// Preview mode
 	type WaxStage = (typeof STAGES)[number];
@@ -796,13 +860,81 @@
 				</div>
 			</div>
 		{:else if displayStage === 'Loading' && displayLoadingSub === 'deck_load'}
-			<DeckLoadingGrid
-				availableLots={previewParam ? [{ lotId: 'LOT-PREVIEW', ready: true }] : data.ovenLots}
-				plannedCartridgeCount={previewParam ? 24 : data.runState.plannedCartridgeCount}
-				onComplete={handleDeckLoadComplete}
-				readonly={isPreviewOrPast}
-				suppressFocus={showCancelModal || showOverrideModal}
-			/>
+			<!-- Backing Lot Gate — must scan before deck loading is enabled -->
+			{#if !previewParam}
+				<div class="rounded-lg border {(lotConfirmed) ? 'border-green-500/40 bg-green-900/10' : 'border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-surface)]'} p-4 space-y-3 mb-4">
+					<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">Step 1 — Scan Backing Lot Barcode</h3>
+					{#if lotConfirmed}
+						<div class="flex items-center gap-2">
+							<span class="inline-block h-2.5 w-2.5 rounded-full bg-green-500" aria-hidden="true"></span>
+							<span class="text-sm text-green-400 font-medium">Lot confirmed:</span>
+							<span class="font-mono text-sm text-[var(--color-tron-cyan)]">{confirmedLotId ?? data.activeLotId}</span>
+							{#if confirmedLotCount}
+								<span class="text-xs text-[var(--color-tron-text-secondary)]">({confirmedLotCount} cartridges)</span>
+							{/if}
+							<button type="button" onclick={() => { confirmedLotId = null; confirmedLotCount = null; lotScanSuccess = false; lotScanError = ''; }}
+								class="ml-auto text-xs text-[var(--color-tron-text-secondary)] underline hover:text-[var(--color-tron-text)]">
+								Change
+							</button>
+						</div>
+					{:else}
+						<p class="text-xs text-[var(--color-tron-text-secondary)]">
+							Scan the Avery lot barcode from the box. Lot must have been in the oven for ≥ {data.minOvenTimeMin} minutes.
+						</p>
+						{#if lotScanError}
+							<div class="rounded border border-red-500/30 bg-red-900/20 px-3 py-2 text-xs text-red-300">{lotScanError}</div>
+						{/if}
+						<div class="flex items-center gap-3">
+							<input
+								type="text"
+								class="tron-input flex-1"
+								placeholder="Scan lot barcode..."
+								bind:value={lotScanInput}
+								onkeydown={handleLotScanKeydown}
+								autocomplete="off"
+								disabled={lotScanSubmitting}
+							/>
+							<button
+								type="button"
+								onclick={handleScanBackingLot}
+								disabled={lotScanSubmitting || !lotScanInput.trim()}
+								class="min-h-[44px] rounded-lg bg-[var(--color-tron-cyan)] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-50"
+							>
+								{lotScanSubmitting ? 'Checking...' : 'Verify'}
+							</button>
+						</div>
+						<!-- Quick-pick from ready lots -->
+						{#if data.ovenLots.filter(l => l.ready).length > 0}
+							<div class="text-xs text-[var(--color-tron-text-secondary)]">
+								Ready lots:
+								{#each data.ovenLots.filter(l => l.ready) as ol}
+									<button type="button" onclick={() => { lotScanInput = ol.lotId; handleScanBackingLot(); }}
+										class="ml-1 font-mono text-[var(--color-tron-cyan)] underline hover:no-underline">
+										{ol.lotId}
+									</button>
+								{/each}
+							</div>
+						{/if}
+					{/if}
+				</div>
+			{/if}
+
+			<!-- Deck loading grid — only enabled after lot confirmed (or in preview) -->
+			{#if previewParam || lotConfirmed}
+				<DeckLoadingGrid
+					availableLots={previewParam ? [{ lotId: 'LOT-PREVIEW', ready: true, cartridgeCount: 24 }] : (confirmedLotId ? [{ lotId: confirmedLotId, ready: true, cartridgeCount: confirmedLotCount ?? 0 }] : data.ovenLots.filter(l => l.ready))}
+					plannedCartridgeCount={previewParam ? 24 : data.runState.plannedCartridgeCount}
+					onComplete={handleDeckLoadComplete}
+					readonly={isPreviewOrPast}
+					suppressFocus={showCancelModal || showOverrideModal}
+				/>
+			{:else}
+				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">
+					<p class="text-sm text-[var(--color-tron-text-secondary)]">
+						Scan the backing lot barcode above to unlock cartridge scanning.
+					</p>
+				</div>
+			{/if}
 		{:else if displayStage === 'Running'}
 			<RunExecution
 				runDurationMin={data.settings.runDurationMin}

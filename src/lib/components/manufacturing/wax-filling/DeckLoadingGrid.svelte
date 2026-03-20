@@ -5,6 +5,7 @@
 	interface OvenLot {
 		lotId: string;
 		ready: boolean;
+		cartridgeCount?: number;
 	}
 
 	interface CartridgeScan {
