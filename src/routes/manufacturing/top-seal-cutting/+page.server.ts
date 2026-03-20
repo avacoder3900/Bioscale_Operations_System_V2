@@ -1,5 +1,5 @@
 import { redirect, fail } from '@sveltejs/kit';
-import { connectDB, Consumable, ManufacturingSettings, generateId } from '$lib/server/db';
+import { connectDB, Consumable, ManufacturingSettings, CartridgeRecord, generateId } from '$lib/server/db';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -105,6 +105,9 @@ export const actions: Actions = {
 		const rollId = data.get('rollId') as string;
 		const quantityCut = Number(data.get('quantity') || 0);
 		const notes = (data.get('notes') as string) || undefined;
+		// Optional: comma-separated cartridge IDs to link roll lot to CartridgeRecord.topSeal
+		const cartridgeIdsRaw = (data.get('cartridgeIds') as string) || '';
+		const cartridgeIds = cartridgeIdsRaw.split(',').map((s) => s.trim()).filter(Boolean);
 
 		if (!rollId) return fail(400, { error: 'Roll ID required' });
 		if (quantityCut <= 0) return fail(400, { error: 'Quantity must be greater than 0' });
@@ -121,6 +124,9 @@ export const actions: Actions = {
 		const remainingBefore = roll.remainingLengthFt ?? roll.initialLengthFt ?? 0;
 		const remainingAfter = Math.max(0, remainingBefore - totalLengthUsed);
 		const now = new Date();
+
+		// The roll barcode is the lot identifier for top seal traceability
+		const rollLotId = roll.barcode ?? rollId;
 
 		await Consumable.findByIdAndUpdate(rollId, {
 			$set: { remainingLengthFt: remainingAfter, updatedAt: now },
@@ -139,17 +145,34 @@ export const actions: Actions = {
 			}
 		});
 
+		// Link roll lot to CartridgeRecord.topSeal for each specified cartridge
+		if (cartridgeIds.length > 0) {
+			await CartridgeRecord.updateMany(
+				{ _id: { $in: cartridgeIds } },
+				{
+					$set: {
+						'topSeal.batchId': rollId,
+						'topSeal.topSealLotId': rollLotId,
+						'topSeal.operator': { _id: locals.user._id, username: locals.user.username },
+						'topSeal.timestamp': now,
+						'topSeal.recordedAt': now,
+						currentPhase: 'sealed'
+					}
+				}
+			);
+		}
+
 		// Record inventory transaction for top seal consumption
 		await recordTransaction({
 			transactionType: 'consumption',
 			quantity: quantityCut,
-			manufacturingStep: 'cut_thermoseal',
+			manufacturingStep: 'top_seal',
 			operatorId: locals.user._id,
 			operatorUsername: locals.user.username,
-			notes: `Cut ${quantityCut} top seal strips from roll ${rollId}${notes ? ` — ${notes}` : ''}`
+			notes: `Applied top seal from roll ${rollLotId} to ${cartridgeIds.length > 0 ? `${cartridgeIds.length} cartridges` : `${quantityCut} strips cut`}${notes ? ` — ${notes}` : ''}`
 		});
 
-		return { success: true };
+		return { success: true, rollLotId };
 	},
 
 	/** Retire a roll (mark as no longer in use) */

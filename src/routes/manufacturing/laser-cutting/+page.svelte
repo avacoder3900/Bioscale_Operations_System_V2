@@ -11,6 +11,9 @@
 		toolsUsed: string | null;
 		operatorId: string;
 		operatorName: string;
+		inputLotId: string | null;
+		outputLotId: string | null;
+		operator: { _id: string; username: string } | null;
 		createdAt: string;
 	}
 
@@ -45,6 +48,8 @@
 	let inputCount = $state(10);
 	let failureCount = $state(0);
 	let failureNotes = $state('');
+	// LOT TRACEABILITY: Input lot barcode for substrate sheets
+	let inputLotId = $state('');
 
 	// Auto-fill from saved defaults
 	let cuttingProgramLink = $state(data.defaults.defaultCuttingProgramLink ?? '');
@@ -160,6 +165,7 @@
 					inputCount = 10;
 					failureCount = 0;
 					failureNotes = '';
+					inputLotId = '';
 					cuttingProgramLink = data.defaults.defaultCuttingProgramLink ?? '';
 					toolsUsed = data.defaults.defaultLaserTools ?? '';
 					await update();
@@ -168,6 +174,11 @@
 			class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5 space-y-4"
 		>
 			<h3 class="text-sm font-semibold text-[var(--color-tron-cyan)]">Record Laser Cut Batch</h3>
+			<!-- LOT TRACEABILITY -->
+			<label class="block">
+				<span class="tron-label">Input Lot / Barcode <span class="text-[var(--color-tron-text-secondary)]">(substrate sheets going in)</span></span>
+				<input type="text" name="inputLotId" bind:value={inputLotId} class="tron-input" placeholder="Scan or enter lot barcode of input sheets..." />
+			</label>
 			<div class="grid gap-4 sm:grid-cols-3">
 				<label class="block">
 					<span class="tron-label">Input Strips</span>
@@ -178,7 +189,7 @@
 					<input type="number" name="failureCount" bind:value={failureCount} min="0" max={inputCount} class="tron-input" />
 				</label>
 				<div>
-					<span class="tron-label">Output Sheets</span>
+					<span class="tron-label">Output Sheets (auto-lot generated)</span>
 					<p class="mt-2 text-xl font-bold text-green-400">{outputCount}</p>
 				</div>
 			</div>
@@ -217,13 +228,13 @@
 					<thead>
 						<tr>
 							<th>Batch</th>
+							<th>Input Lot</th>
+							<th>Output Lot</th>
 							<th>Operator</th>
 							<th>Input</th>
 							<th>Output</th>
 							<th>Failures</th>
 							<th>Tools</th>
-							<th>Program</th>
-							<th>Notes</th>
 							<th>Date</th>
 						</tr>
 					</thead>
@@ -231,25 +242,15 @@
 						{#each data.batches as batch (batch.batchId)}
 							<tr>
 								<td class="font-mono text-[var(--color-tron-cyan)]">{batch.batchId}</td>
-								<td class="text-[var(--color-tron-text)]">{batch.operatorName}</td>
+								<td class="font-mono text-xs text-[var(--color-tron-text-secondary)]">{batch.inputLotId ?? '-'}</td>
+								<td class="font-mono text-xs text-green-400">{batch.outputLotId ?? '-'}</td>
+								<td class="text-[var(--color-tron-text)]">{batch.operator?.username ?? batch.operatorName ?? '-'}</td>
 								<td>{batch.inputSheetCount}</td>
 								<td class="text-green-400">{batch.outputSheetCount}</td>
 								<td class={batch.failureCount > 0 ? 'text-red-400 font-semibold' : 'text-[var(--color-tron-text-secondary)]'}>
 									{batch.failureCount}
 								</td>
 								<td class="max-w-[150px] truncate text-[var(--color-tron-text-secondary)]">{batch.toolsUsed ?? '-'}</td>
-								<td class="max-w-[150px] truncate">
-									{#if batch.cuttingProgramLink}
-										<!-- eslint-disable svelte/no-navigation-without-resolve -->
-										<a href={batch.cuttingProgramLink} target="_blank" rel="noopener noreferrer" class="text-[var(--color-tron-cyan)] underline hover:text-[var(--color-tron-cyan)]/80">
-											Link
-										</a>
-										<!-- eslint-enable svelte/no-navigation-without-resolve -->
-									{:else}
-										<span class="text-[var(--color-tron-text-secondary)]">-</span>
-									{/if}
-								</td>
-								<td class="max-w-[200px] truncate text-[var(--color-tron-text-secondary)]">{batch.failureNotes ?? '-'}</td>
 								<td class="whitespace-nowrap text-[var(--color-tron-text-secondary)]">{new Date(batch.createdAt).toLocaleDateString()}</td>
 							</tr>
 						{/each}

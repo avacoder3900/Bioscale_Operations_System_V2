@@ -35,6 +35,8 @@
 	let cuttingRollId = $state<string | null>(null);
 	let cutQuantity = $state(10);
 	let cutNotes = $state('');
+	// Optional: comma-separated cartridge IDs to link roll lot to CartridgeRecord.topSeal
+	let cutCartridgeIds = $state('');
 
 	const activeRolls = $derived(data.rolls.filter((r) => r.status === 'Active'));
 	const otherRolls = $derived(data.rolls.filter((r) => r.status !== 'Active'));
@@ -108,18 +110,26 @@
 						<!-- Actions -->
 						<div class="mt-3 flex gap-2">
 							{#if cuttingRollId === roll.rollId}
-								<form method="POST" action="?/recordCut" use:enhance={() => { return async ({ update }) => { cuttingRollId = null; cutQuantity = 10; cutNotes = ''; await update(); }; }} class="flex flex-1 items-end gap-2">
+								<form method="POST" action="?/recordCut" use:enhance={() => { return async ({ update }) => { cuttingRollId = null; cutQuantity = 10; cutNotes = ''; cutCartridgeIds = ''; await update(); }; }} class="flex flex-1 flex-col gap-2">
 									<input type="hidden" name="rollId" value={roll.rollId} />
+									<div class="flex flex-1 items-end gap-2">
+										<label class="block">
+											<span class="text-xs text-[var(--color-tron-text-secondary)]">Strips</span>
+											<input type="number" name="quantity" bind:value={cutQuantity} min="1" max="100" class="tron-input text-sm" style="width:80px" />
+										</label>
+										<label class="block flex-1">
+											<span class="text-xs text-[var(--color-tron-text-secondary)]">Notes</span>
+											<input type="text" name="notes" bind:value={cutNotes} class="tron-input text-sm" placeholder="Optional" />
+										</label>
+									</div>
 									<label class="block">
-										<span class="text-xs text-[var(--color-tron-text-secondary)]">Strips</span>
-										<input type="number" name="quantity" bind:value={cutQuantity} min="1" max="100" class="tron-input text-sm" style="width:80px" />
+										<span class="text-xs text-[var(--color-tron-text-secondary)]">Cartridge IDs (comma-separated, links roll lot to CartridgeRecord)</span>
+										<input type="text" name="cartridgeIds" bind:value={cutCartridgeIds} class="tron-input text-xs w-full" placeholder="e.g. abc123, def456 — leave blank if not applying yet" />
 									</label>
-									<label class="block flex-1">
-										<span class="text-xs text-[var(--color-tron-text-secondary)]">Notes</span>
-										<input type="text" name="notes" bind:value={cutNotes} class="tron-input text-sm" placeholder="Optional" />
-									</label>
-									<button type="submit" class="min-h-[44px] rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-xs text-green-300 hover:bg-green-900/30">Cut</button>
-									<button type="button" onclick={() => { cuttingRollId = null; }} class="min-h-[44px] rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">Cancel</button>
+									<div class="flex gap-2">
+										<button type="submit" class="min-h-[44px] rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-xs text-green-300 hover:bg-green-900/30">Cut</button>
+										<button type="button" onclick={() => { cuttingRollId = null; }} class="min-h-[44px] rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">Cancel</button>
+									</div>
 								</form>
 							{:else}
 								<button

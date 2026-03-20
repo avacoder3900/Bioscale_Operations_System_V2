@@ -3,6 +3,7 @@ import {
 	connectDB, LaserCutBatch, ManufacturingSettings, ManufacturingMaterial,
 	ManufacturingMaterialTransaction, generateId
 } from '$lib/server/db';
+import { nanoid } from 'nanoid';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -41,6 +42,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 			toolsUsed: b.toolsUsed ?? null,
 			operatorId: b.operatorId ?? null,
 			operatorName: b.operatorId ?? null,
+			inputLotId: b.inputLotId ?? null,
+			outputLotId: b.outputLotId ?? null,
+			operator: b.operator ?? null,
 			createdAt: b.createdAt
 		})),
 		stats: { totalBatches, totalInput, totalOutput, totalFailures, failureRate },
@@ -71,12 +75,18 @@ export const actions: Actions = {
 		const failureNotes = (data.get('failureNotes') as string) || undefined;
 		const cuttingProgramLink = (data.get('cuttingProgramLink') as string) || undefined;
 		const toolsUsed = (data.get('toolsUsed') as string) || undefined;
+		const inputLotId = (data.get('inputLotId') as string) || undefined;
 
 		if (inputSheetCount <= 0) return fail(400, { error: 'Input sheet count must be > 0' });
 
 		// FIX-01: Find linked parts from ManufacturingSettings (optional)
 		const settingsDoc = await ManufacturingSettings.findById('default').lean() as any;
 		const general = settingsDoc?.general ?? {};
+
+		// Generate output lot number: LOT-YYYYMMDD-XXXX
+		const now2 = new Date();
+		const dateStr = `${now2.getFullYear()}${String(now2.getMonth() + 1).padStart(2, '0')}${String(now2.getDate()).padStart(2, '0')}`;
+		const outputLotId = `LOT-${dateStr}-${nanoid(4).toUpperCase()}`;
 
 		// Create the batch record
 		await LaserCutBatch.create({
@@ -87,7 +97,10 @@ export const actions: Actions = {
 			failureNotes,
 			cuttingProgramLink: cuttingProgramLink || general.defaultCuttingProgramLink || undefined,
 			toolsUsed: toolsUsed || general.defaultLaserTools || undefined,
-			operatorId: locals.user._id
+			operatorId: locals.user._id,
+			inputLotId,
+			outputLotId,
+			operator: { _id: locals.user._id, username: locals.user.username }
 		});
 
 		// FIX-01: Update inventory for output substrates produced
