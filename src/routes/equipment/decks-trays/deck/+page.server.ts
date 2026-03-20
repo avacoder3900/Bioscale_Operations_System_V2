@@ -77,6 +77,24 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 			transferTimeSeconds: c.waxFilling?.transferTimeSeconds ?? null,
 			currentInventory: c.currentPhase ?? 'unknown'
 		})),
+		cartridgesByRun: (() => {
+			const m: Record<string, any[]> = {};
+			for (const c of cartridges as any[]) {
+				const rid = c.waxFilling?.runId;
+				if (!rid) continue;
+				if (!m[rid]) m[rid] = [];
+				m[rid].push({
+					cartridgeId: c._id,
+					waxRunId: rid,
+					deckPosition: c.waxFilling?.deckPosition ?? null,
+					qcStatus: c.waxQc?.status ?? 'Pending',
+					rejectionReason: c.waxQc?.rejectionReason ?? null,
+					transferTimeSeconds: c.waxFilling?.transferTimeSeconds ?? null,
+					currentInventory: c.currentPhase ?? 'unknown'
+				});
+			}
+			return m;
+		})(),
 		isAdmin: isAdmin(locals.user)
 	};
 };
