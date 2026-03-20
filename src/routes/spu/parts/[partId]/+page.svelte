@@ -337,6 +337,19 @@
 				</dl>
 			</TronCard>
 
+			<!-- Barcode -->
+			<TronCard>
+				<h3 class="tron-text-primary mb-3 text-lg font-semibold">Barcode</h3>
+				<p class="tron-text-muted mb-3 text-sm">Assign a scannable barcode to this part for quick lookup in line inventory.</p>
+				<form method="POST" action="?/updateBarcode" use:enhance class="flex items-end gap-3">
+					<div class="flex-1">
+						<label for="barcodeInput" class="tron-text-muted mb-1 block text-xs">Scan or type barcode</label>
+						<input id="barcodeInput" name="barcode" type="text" value={item.barcode || ''} placeholder="Scan or type barcode..." class="tron-input w-full px-3 py-2 font-mono text-sm" />
+					</div>
+					<button type="submit" class="tron-button px-4 py-2 text-sm">Save</button>
+				</form>
+			</TronCard>
+
 			<!-- Compliance Information -->
 			<TronCard>
 				<div class="mb-4 flex items-center gap-2">

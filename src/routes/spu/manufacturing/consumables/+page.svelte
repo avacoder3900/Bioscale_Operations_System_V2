@@ -11,6 +11,21 @@
 	let editReason = $state('');
 	let editAdminUser = $state('');
 	let editAdminPass = $state('');
+	let searchQuery = $state('');
+
+	const filteredParts = $derived(
+		searchQuery.trim()
+			? data.parts.filter((p: any) => {
+					const q = searchQuery.trim().toLowerCase();
+					return (
+						p.name.toLowerCase().includes(q) ||
+						p.partNumber.toLowerCase().includes(q) ||
+						(p.barcode && p.barcode.toLowerCase().includes(q)) ||
+						p.supplier.toLowerCase().includes(q)
+					);
+				})
+			: data.parts
+	);
 
 	function toggle(id: string) {
 		expandedStage = expandedStage === id ? null : id;
@@ -144,6 +159,15 @@
 			</div>
 		</div>
 
+		<div class="mb-3">
+			<input
+				type="text"
+				bind:value={searchQuery}
+				placeholder="Search or scan barcode..."
+				class="tron-input w-full px-3 py-2 font-mono text-sm"
+			/>
+		</div>
+
 		{#if data.parts.length === 0}
 			<p class="text-sm text-[var(--color-tron-text-secondary)]">No cartridge parts defined. <a href="/spu/parts" class="text-[var(--color-tron-cyan)] hover:underline">Add parts</a> with BOM type "cartridge".</p>
 		{:else}
@@ -153,15 +177,17 @@
 						<tr class="border-b border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]">
 							<th class="px-4 py-3 text-left text-xs font-medium text-[var(--color-tron-text-secondary)]">Part</th>
 							<th class="px-4 py-3 text-left text-xs font-medium text-[var(--color-tron-text-secondary)]">Part #</th>
+							<th class="px-4 py-3 text-left text-xs font-medium text-[var(--color-tron-text-secondary)]">Barcode</th>
 							<th class="px-4 py-3 text-right text-xs font-medium text-[var(--color-tron-text-secondary)]">On Hand</th>
 							<th class="px-4 py-3 text-left text-xs font-medium text-[var(--color-tron-text-secondary)]">Unit</th>
 						</tr>
 					</thead>
 					<tbody class="divide-y divide-[var(--color-tron-border)]/30">
-						{#each data.parts as part (part.id)}
+						{#each filteredParts as part (part.id)}
 							<tr class="hover:bg-[var(--color-tron-cyan)]/5">
 								<td class="px-4 py-2.5 text-[var(--color-tron-text)]">{part.name}</td>
 								<td class="px-4 py-2.5 font-mono text-xs text-[var(--color-tron-text-secondary)]">{part.partNumber}</td>
+								<td class="px-4 py-2.5 font-mono text-xs text-[var(--color-tron-text-secondary)]">{part.barcode || '—'}</td>
 								<td class="px-4 py-2.5 text-right font-mono font-bold {part.inventoryCount > 0 ? 'text-[var(--color-tron-cyan)]' : 'text-red-400'}">{part.inventoryCount}</td>
 								<td class="px-4 py-2.5 text-xs text-[var(--color-tron-text-secondary)]">{part.unitOfMeasure}</td>
 							</tr>
