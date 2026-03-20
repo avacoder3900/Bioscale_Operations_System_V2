@@ -201,7 +201,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 						{ $match: { currentPhase: 'wax_stored', 'waxStorage.location': { $exists: true } } },
 						{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
 					]),
-					OpentronsRobot.find({ isActive: true }).select('name lastHealthOk').lean(),
+					OpentronsRobot.find({ isActive: true }).select('name lastHealthOk').sort({ name: 1 }).lean(),
 					WaxFillingRun.find({ status: { $in: ['running', 'setup'] } }).select('robot status').lean(),
 					AssayDefinition.find({ isActive: true }).select('name skuCode').lean(),
 					BomItem.find({ isActive: true, partNumber: { $regex: /^CRT-/ } }).select('partNumber name unitCost').lean(),
