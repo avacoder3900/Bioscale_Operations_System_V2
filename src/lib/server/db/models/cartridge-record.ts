@@ -52,7 +52,10 @@ const cartridgeRecordSchema = new Schema({
 		batchId: String, topSealLotId: String, operator: operatorRef, timestamp: Date, recordedAt: Date
 	},
 	ovenCure: {
-		locationId: String, locationName: String, entryTime: Date, recordedAt: Date
+		locationId: String, locationName: String,
+		entryTime: Date, exitTime: Date,
+		operator: operatorRef,
+		recordedAt: Date
 	},
 	storage: {
 		fridgeId: String, fridgeName: String, locationId: String, containerBarcode: String,

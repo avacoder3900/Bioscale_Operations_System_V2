@@ -376,21 +376,48 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-	/** Confirm deck removed — transition Running → Awaiting Removal */
+	/** Confirm deck removed — transition Running → Awaiting Removal; record oven entry */
 	confirmDeckRemoved: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
+		const ovenLocationId = (data.get('ovenLocationId') as string) || undefined;
+		const ovenLocationName = (data.get('ovenLocationName') as string) || undefined;
+		const now = new Date();
 
-		await WaxFillingRun.findByIdAndUpdate(runId, {
-			$set: { status: 'Awaiting Removal', deckRemovedTime: new Date() }
-		});
+		const run = await WaxFillingRun.findByIdAndUpdate(runId, {
+			$set: {
+				status: 'Awaiting Removal',
+				deckRemovedTime: now,
+				...(ovenLocationId ? { ovenLocationId } : {})
+			}
+		}, { new: true }).lean() as any;
+
+		// Write ovenCure entry time to all cartridges in this run (WRITE-ONCE for entryTime)
+		if (run?.cartridgeIds?.length) {
+			const bulkOps = run.cartridgeIds.map((cid: string) => ({
+				updateOne: {
+					filter: { _id: cid, 'ovenCure.entryTime': { $exists: false } },
+					update: {
+						$set: {
+							'ovenCure.locationId': ovenLocationId ?? run.ovenLocationId ?? undefined,
+							'ovenCure.locationName': ovenLocationName ?? undefined,
+							'ovenCure.entryTime': now,
+							'ovenCure.operator': { _id: locals.user._id, username: locals.user.username },
+							'ovenCure.recordedAt': now
+						}
+					}
+				}
+			}));
+			await CartridgeRecord.bulkWrite(bulkOps);
+		}
+
 		return { success: true };
 	},
 
-	/** Confirm cooling — transition Awaiting Removal → QC */
+	/** Confirm cooling — transition Awaiting Removal → QC; record oven exit */
 	confirmCooling: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
@@ -398,11 +425,24 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
 		const coolingTrayId = (data.get('coolingTrayId') as string) || undefined;
+		const now = new Date();
 
-		const update: Record<string, any> = { status: 'QC', coolingConfirmedTime: new Date() };
+		const update: Record<string, any> = { status: 'QC', coolingConfirmedTime: now };
 		if (coolingTrayId) update.coolingTrayId = coolingTrayId;
 
-		await WaxFillingRun.findByIdAndUpdate(runId, { $set: update });
+		const run = await WaxFillingRun.findByIdAndUpdate(runId, { $set: update }, { new: true }).lean() as any;
+
+		// Record oven exit time on cartridges that have an ovenCure.entryTime
+		if (run?.cartridgeIds?.length) {
+			const bulkOps = run.cartridgeIds.map((cid: string) => ({
+				updateOne: {
+					filter: { _id: cid, 'ovenCure.entryTime': { $exists: true }, 'ovenCure.exitTime': { $exists: false } },
+					update: { $set: { 'ovenCure.exitTime': now } }
+				}
+			}));
+			await CartridgeRecord.bulkWrite(bulkOps);
+		}
+
 		return { success: true };
 	},
 
