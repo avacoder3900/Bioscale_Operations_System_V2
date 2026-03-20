@@ -894,6 +894,7 @@
 								bind:value={lotScanInput}
 								onkeydown={handleLotScanKeydown}
 								autocomplete="off"
+								autofocus
 								disabled={lotScanSubmitting}
 							/>
 							<button

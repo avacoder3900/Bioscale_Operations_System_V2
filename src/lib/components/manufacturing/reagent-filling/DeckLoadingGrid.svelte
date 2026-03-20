@@ -166,6 +166,7 @@
 							onkeydown={handleDeckKeydown}
 							onblur={handleDeckBlur}
 							autocomplete="off"
+							autofocus
 						/>
 					</div>
 				</div>

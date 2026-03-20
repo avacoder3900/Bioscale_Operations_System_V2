@@ -283,6 +283,7 @@
 							bind:value={deckInput}
 							onkeydown={handleDeckKeydown}
 							onblur={handleDeckBlur}
+							autofocus
 							autocomplete="off"
 						/>
 					</div>
