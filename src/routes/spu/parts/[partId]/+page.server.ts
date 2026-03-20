@@ -1,6 +1,6 @@
 import { fail, error } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, PartDefinition, InventoryTransaction, InspectionProcedureRevision, LotRecord, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, PartDefinition, InventoryTransaction, InspectionProcedureRevision, LotRecord, ReceivingLot, AuditLog, generateId } from '$lib/server/db';
 import { uploadFile } from '$lib/server/box';
 import { env } from '$env/dynamic/private';
 import type { Actions, PageServerLoad } from './$types';
@@ -41,6 +41,22 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		InventoryTransaction.find(txFilter).sort({ performedAt: -1 }).limit(200).lean(),
 		InspectionProcedureRevision.find({ partId: params.partId }).sort({ revisionNumber: -1 }).lean()
 	]);
+
+	// Build a map of lotId -> cocDocumentUrl for transactions that reference a receiving lot
+	const txLotIds = [...new Set((transactions as any[]).map((t: any) => t.lotId).filter(Boolean))];
+	const cocMap: Record<string, string> = {};
+	if (txLotIds.length > 0) {
+		const receivingLots = await ReceivingLot.find(
+			{ $or: [{ _id: { $in: txLotIds } }, { lotId: { $in: txLotIds } }] },
+			{ _id: 1, lotId: 1, cocDocumentUrl: 1, photos: 1 }
+		).lean() as any[];
+		for (const rl of receivingLots) {
+			if (rl.cocDocumentUrl || (rl.photos && rl.photos.length > 0)) {
+				cocMap[rl._id] = rl.cocDocumentUrl ?? rl.photos?.[0] ?? null;
+				if (rl.lotId) cocMap[rl.lotId] = rl.cocDocumentUrl ?? rl.photos?.[0] ?? null;
+			}
+		}
+	}
 
 	const versions = (lots as any[]).map((l: any, idx: number) => ({
 		id: l._id,
@@ -132,6 +148,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 			retractionReason: t.retractionReason ?? null,
 			notes: t.notes ?? t.reason ?? null,
 			lotId: t.lotId ?? null,
+			cocUrl: t.lotId ? (cocMap[t.lotId] ?? null) : null,
 			cartridgeRecordId: t.cartridgeRecordId ?? null,
 			manufacturingStep: t.manufacturingStep ?? null,
 			manufacturingRunId: t.manufacturingRunId ?? null
