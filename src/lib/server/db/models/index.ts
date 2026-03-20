@@ -58,6 +58,7 @@ export { WorkflowViolation } from './workflow-violation.js';
 
 // Tier 3: Immutable Logs
 export { AuditLog } from './audit-log.js';
+export { CalibrationRecord } from './calibration-record.js';
 export { ElectronicSignature } from './electronic-signature.js';
 export { InventoryTransaction } from './inventory-transaction.js';
 export { DeviceEvent } from './device-event.js';
