@@ -1,5 +1,5 @@
 import { redirect } from '@sveltejs/kit';
-import { connectDB, ShippingLot, ShippingPackage, CartridgeRecord, Customer } from '$lib/server/db';
+import { connectDB, ShippingLot, ShippingPackage, CartridgeRecord, Customer, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -179,22 +179,40 @@ export const actions: Actions = {
 		const packageId = data.get('packageId') as string;
 		const cartridgeId = data.get('cartridgeId') as string;
 
+		// Get package snapshot for customer/tracking data
+		const pkg = await ShippingPackage.findById(packageId, {
+			barcode: 1, customer: 1, trackingNumber: 1, carrier: 1
+		}).lean() as any;
+
 		await ShippingPackage.findByIdAndUpdate(packageId, {
 			$push: { cartridges: { cartridgeId, addedAt: new Date() } }
 		});
 
-		// Write shipping phase to cartridge DMR
+		const now = new Date();
+
+		// Write shipping subdoc to CartridgeRecord DMR (correct field, not phantom phases[])
 		await CartridgeRecord.findByIdAndUpdate(cartridgeId, {
-			$push: {
-				phases: {
-					phaseType: 'shipping',
-					status: 'completed',
-					startedAt: new Date(),
-					completedAt: new Date(),
-					performedBy: { _id: locals.user._id, username: locals.user.username },
-					notes: `Added to shipping package ${packageId}`
-				}
+			$set: {
+				'shipping.packageId': packageId,
+				'shipping.packageBarcode': pkg?.barcode ?? undefined,
+				'shipping.customer': pkg?.customer ?? undefined,
+				'shipping.trackingNumber': pkg?.trackingNumber ?? undefined,
+				'shipping.carrier': pkg?.carrier ?? undefined,
+				'shipping.shippedAt': now,
+				'shipping.recordedAt': now,
+				currentPhase: 'shipped'
 			}
+		});
+
+		// Audit log
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'cartridge_records',
+			recordId: cartridgeId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: now,
+			newData: { currentPhase: 'shipped', 'shipping.packageId': packageId }
 		});
 
 		return { success: true };
