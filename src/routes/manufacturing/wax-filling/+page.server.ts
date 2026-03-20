@@ -461,27 +461,36 @@ export const actions: Actions = {
 
 		// Create CartridgeRecord stubs and link to this wax run
 		if (cartridgeIds.length > 0) {
+			const now = new Date();
 			const ops = cartridgeIds.map((cid: string, idx: number) => ({
 				updateOne: {
 					filter: { _id: cid },
 					update: {
 						$setOnInsert: {
 							_id: cid,
-							'backing.lotId': activeLotId ?? null,
 							'backing.operator': { _id: locals.user._id, username: locals.user.username },
-							'backing.recordedAt': new Date()
+							'backing.recordedAt': now
 						},
 						$set: {
 							currentPhase: 'wax_filling',
+							'backing.lotId': activeLotId ?? null,
 							'waxFilling.runId': runId,
+							'waxFilling.deckId': deckId ?? null,
+							'waxFilling.robotId': run.robot?._id ?? null,
+							'waxFilling.robotName': run.robot?.name ?? null,
 							'waxFilling.deckPosition': idx + 1,
-							...(activeLotId ? { 'backing.lotId': activeLotId } : {})
+							'waxFilling.operator': { _id: locals.user._id, username: locals.user.username }
 						}
 					},
 					upsert: true
 				}
 			}));
-			await CartridgeRecord.bulkWrite(ops);
+			try {
+				await CartridgeRecord.bulkWrite(ops);
+			} catch (err) {
+				console.error('[loadDeck] bulkWrite error:', err instanceof Error ? err.message : err);
+				return fail(500, { error: `Failed to save cartridge records: ${err instanceof Error ? err.message : 'Unknown error'}` });
+			}
 		}
 
 		await WaxFillingRun.findByIdAndUpdate(runId, {
