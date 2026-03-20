@@ -75,13 +75,22 @@ export const actions: Actions = {
 		const customerName = data.get('customerName') as string;
 		const notes = data.get('notes') as string;
 
-		await ShippingLot.create({
+		const lot = await ShippingLot.create({
 			assayType: { _id: assayId, name: assayName },
 			customer: { _id: customerId, name: customerName },
 			status: 'open',
 			cartridgeCount: 0,
 			notes: notes || undefined,
 			qaqcReleases: []
+		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'shipping_lots',
+			recordId: String(lot._id),
+			action: 'INSERT',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
 		});
 
 		return { success: true };
@@ -95,14 +104,26 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const lotId = data.get('lotId') as string;
 		const status = data.get('status') as string;
+		const now = new Date();
 
 		const update: any = { status };
 		if (status === 'released') {
-			update.releasedAt = new Date();
+			update.releasedAt = now;
 			update.releasedBy = locals.user.username;
 		}
 
 		await ShippingLot.findByIdAndUpdate(lotId, update);
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'shipping_lots',
+			recordId: lotId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: now,
+			newData: { status }
+		});
+
 		return { success: true };
 	},
 
@@ -150,7 +171,7 @@ export const actions: Actions = {
 		const customer = await Customer.findById(customerId).lean() as any;
 		if (!customer) return { success: false, error: 'Customer not found' };
 
-		await ShippingPackage.create({
+		const pkg = await ShippingPackage.create({
 			barcode: barcode || undefined,
 			customer: {
 				_id: customer._id,
@@ -165,6 +186,15 @@ export const actions: Actions = {
 			status: 'created',
 			notes: notes || undefined,
 			cartridges: []
+		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'shipping_packages',
+			recordId: String(pkg._id),
+			action: 'INSERT',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
 		});
 
 		return { success: true };
@@ -228,18 +258,30 @@ export const actions: Actions = {
 		const status = data.get('status') as string;
 		const trackingNumber = data.get('trackingNumber') as string;
 
+		const now = new Date();
 		const update: any = { status };
 		if (trackingNumber) update.trackingNumber = trackingNumber;
 		if (status === 'packed') {
 			update.packedBy = locals.user.username;
-			update.packedAt = new Date();
+			update.packedAt = now;
 		} else if (status === 'shipped') {
-			update.shippedAt = new Date();
+			update.shippedAt = now;
 		} else if (status === 'delivered') {
-			update.deliveredAt = new Date();
+			update.deliveredAt = now;
 		}
 
 		await ShippingPackage.findByIdAndUpdate(packageId, update);
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'shipping_packages',
+			recordId: packageId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: now,
+			newData: { status, ...(trackingNumber ? { trackingNumber } : {}) }
+		});
+
 		return { success: true };
 	}
 };

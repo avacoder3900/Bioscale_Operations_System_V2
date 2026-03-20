@@ -226,7 +226,7 @@ export const actions: Actions = {
 			if (assay) assayRef = { _id: assay._id, name: assay.name, skuCode: assay.skuCode };
 		}
 
-		await ReagentBatchRecord.create({
+		const run = await ReagentBatchRecord.create({
 			robot: { _id: robotId, name: robotName },
 			assayType: assayRef,
 			operator: { _id: locals.user._id, username: locals.user.username },
@@ -235,6 +235,15 @@ export const actions: Actions = {
 			cartridgesFilled: [],
 			sealBatches: [],
 			setupTimestamp: new Date()
+		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'reagent_batch_records',
+			recordId: String(run._id),
+			action: 'INSERT',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
 		});
 
 		return { success: true };
@@ -376,6 +385,16 @@ export const actions: Actions = {
 			$set: { status: 'Running', runStartTime, runEndTime }
 		});
 
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'reagent_batch_records',
+			recordId: runId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: runStartTime,
+			newData: { status: 'Running', runStartTime }
+		});
+
 		return { success: true };
 	},
 
@@ -429,6 +448,16 @@ export const actions: Actions = {
 				});
 			}
 		}
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'reagent_batch_records',
+			recordId: runId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: now,
+			newData: { status: 'Inspection' }
+		});
 
 		return { success: true };
 	},
@@ -629,6 +658,16 @@ export const actions: Actions = {
 					notes: `Top seal applied (batch ${batchId})`
 				});
 			}
+
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'reagent_batch_records',
+				recordId: runId,
+				action: 'UPDATE',
+				changedBy: locals.user?.username,
+				changedAt: now,
+				newData: { sealBatchId: batchId, status: 'completed', topSealLotId: batch.topSealLotId }
+			});
 		}
 
 		return { success: true };
@@ -738,6 +777,16 @@ export const actions: Actions = {
 					notes: `Stored in ${location}`
 				});
 			}
+
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'cartridge_records',
+				recordId: cartridgeIds[0] ?? 'batch',
+				action: 'UPDATE',
+				changedBy: locals.user?.username,
+				changedAt: now,
+				newData: { currentPhase: 'stored', location, count: cartridgeIds.length }
+			});
 		}
 
 		return { success: true };
@@ -774,6 +823,16 @@ export const actions: Actions = {
 			});
 		}
 
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'reagent_batch_records',
+			recordId: runId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: now,
+			newData: { status: 'Completed' }
+		});
+
 		return { success: true };
 	},
 
@@ -785,10 +844,22 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
 		const reason = (data.get('reason') as string) || 'Cancelled by operator';
+		const now = new Date();
 
 		await ReagentBatchRecord.findByIdAndUpdate(runId, {
-			$set: { status: 'Cancelled', abortReason: reason, runEndTime: new Date() }
+			$set: { status: 'Cancelled', abortReason: reason, runEndTime: now }
 		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'reagent_batch_records',
+			recordId: runId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: now,
+			newData: { status: 'Cancelled', abortReason: reason }
+		});
+
 		return { success: true };
 	},
 
@@ -801,15 +872,27 @@ export const actions: Actions = {
 		const runId = data.get('runId') as string;
 		const reason = (data.get('reason') as string) || 'Aborted';
 		const photoUrl = (data.get('photoUrl') as string) || undefined;
+		const now = new Date();
 
 		await ReagentBatchRecord.findByIdAndUpdate(runId, {
 			$set: {
 				status: 'Aborted',
 				abortReason: reason,
 				abortPhotoUrl: photoUrl,
-				runEndTime: new Date()
+				runEndTime: now
 			}
 		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'reagent_batch_records',
+			recordId: runId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: now,
+			newData: { status: 'Aborted', abortReason: reason }
+		});
+
 		return { success: true };
 	},
 

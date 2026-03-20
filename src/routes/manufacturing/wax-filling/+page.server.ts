@@ -1,7 +1,7 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
-	EquipmentLocation, OpentronsRobot
+	EquipmentLocation, OpentronsRobot, AuditLog
 } from '$lib/server/db';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
@@ -249,6 +249,15 @@ export const actions: Actions = {
 			setupTimestamp: new Date()
 		});
 
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'wax_filling_runs',
+			recordId: String(run._id),
+			action: 'INSERT',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
+		});
+
 		return { success: true, runId: String(run._id) };
 	},
 
@@ -269,6 +278,16 @@ export const actions: Actions = {
 
 		await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'Loading', updatedAt: new Date() }
+		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'wax_filling_runs',
+			recordId: runId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date(),
+			newData: { status: 'Loading' }
 		});
 
 		return { success: true, runId };
@@ -369,10 +388,22 @@ export const actions: Actions = {
 
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
+		const now = new Date();
 
 		await WaxFillingRun.findByIdAndUpdate(runId, {
-			$set: { status: 'Running', runStartTime: new Date() }
+			$set: { status: 'Running', runStartTime: now }
 		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'wax_filling_runs',
+			recordId: runId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: now,
+			newData: { status: 'Running' }
+		});
+
 		return { success: true };
 	},
 
@@ -499,6 +530,16 @@ export const actions: Actions = {
 			}
 		}
 
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'wax_filling_runs',
+			recordId: runId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: now,
+			newData: { status: 'Storage' }
+		});
+
 		return { success: true };
 	},
 
@@ -510,10 +551,22 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
 		const reason = (data.get('reason') as string) || 'Cancelled by operator';
+		const now = new Date();
 
 		await WaxFillingRun.findByIdAndUpdate(runId, {
-			$set: { status: 'aborted', abortReason: reason, runEndTime: new Date() }
+			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
 		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'wax_filling_runs',
+			recordId: runId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: now,
+			newData: { status: 'aborted', abortReason: reason }
+		});
+
 		return { success: true };
 	},
 
@@ -524,10 +577,22 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
 		const reason = (data.get('reason') as string) || 'Aborted';
+		const now = new Date();
 
 		await WaxFillingRun.findByIdAndUpdate(runId, {
-			$set: { status: 'aborted', abortReason: reason, runEndTime: new Date() }
+			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
 		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'wax_filling_runs',
+			recordId: runId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: now,
+			newData: { status: 'aborted', abortReason: reason }
+		});
+
 		return { success: true };
 	},
 
@@ -619,6 +684,17 @@ export const actions: Actions = {
 					notes: `Wax storage: ${location}${coolingTrayId ? `, tray ${coolingTrayId}` : ''}`
 				});
 			}
+
+			// Audit log for batch storage
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'cartridge_records',
+				recordId: cartridgeIds[0] ?? 'batch',
+				action: 'UPDATE',
+				changedBy: locals.user?.username,
+				changedAt: now,
+				newData: { currentPhase: 'wax_stored', location, count: cartridgeIds.length }
+			});
 		}
 
 		return { success: true };
@@ -667,6 +743,16 @@ export const actions: Actions = {
 				}
 			});
 		}
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'wax_filling_runs',
+			recordId: runId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: now,
+			newData: { status: 'completed', cartridgeCount }
+		});
 
 		return { success: true };
 	}
