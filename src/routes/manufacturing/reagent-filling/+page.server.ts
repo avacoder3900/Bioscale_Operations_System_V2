@@ -1,7 +1,7 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, ReagentBatchRecord, AssayDefinition, CartridgeRecord, Consumable,
-	ManufacturingSettings, WaxFillingRun, EquipmentLocation, generateId
+	ManufacturingSettings, WaxFillingRun, EquipmentLocation, generateId, AuditLog
 } from '$lib/server/db';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
@@ -853,8 +853,25 @@ export const actions: Actions = {
 			return fail(400, { error: `Invalid target stage: ${targetStage}` });
 		}
 
+		// Get current status before advancing
+		const run = await ReagentBatchRecord.findById(runId, { status: 1 }).lean() as any;
+		const previousStage = run?.status ?? null;
+
 		await ReagentBatchRecord.findByIdAndUpdate(runId, {
 			$set: { status: targetStage }
+		});
+
+		// ISO 13485 audit trail for force advance
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'reagent_batch_records',
+			recordId: runId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date(),
+			oldData: { status: previousStage },
+			newData: { status: targetStage },
+			reason: `Admin force-advance from "${previousStage}" to "${targetStage}"`
 		});
 
 		return { success: true };
