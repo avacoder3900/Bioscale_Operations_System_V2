@@ -91,13 +91,13 @@ export const actions: Actions = {
 
 		await AuditLog.create({
 			_id: generateId(),
-			action: 'create',
-			resourceType: 'equipment_location',
-			resourceId: id,
-			userId: locals.user._id,
-			username: locals.user.username,
-			timestamp: new Date(),
-			details: { displayName, barcode, locationType, capacity, notes }
+			action: 'INSERT',
+			tableName: 'equipment_location',
+			recordId: id,
+			changedBy: locals.user?.username ?? locals.user?._id,
+			
+			changedAt: new Date(),
+			newData: {}
 		});
 
 		return { success: true, message: `${displayName} registered successfully` };
@@ -127,13 +127,11 @@ export const actions: Actions = {
 
 		await AuditLog.create({
 			_id: generateId(),
-			action: 'update',
-			resourceType: 'equipment_location',
-			resourceId: id,
-			userId: locals.user._id,
-			username: locals.user.username,
-			timestamp: new Date(),
-			details: update
+			tableName: 'equipment_location',
+			recordId: id,
+			action: 'UPDATE',
+			changedBy: locals.user?.username ?? locals.user?._id,
+			changedAt: new Date()
 		});
 
 		return { success: true, message: 'Location updated' };
@@ -152,13 +150,13 @@ export const actions: Actions = {
 
 		await AuditLog.create({
 			_id: generateId(),
-			action: 'deactivate',
-			resourceType: 'equipment_location',
-			resourceId: id,
-			userId: locals.user._id,
-			username: locals.user.username,
-			timestamp: new Date(),
-			details: { deactivated: true }
+			action: 'DELETE',
+			tableName: 'equipment_location',
+			recordId: id,
+			changedBy: locals.user?.username ?? locals.user?._id,
+			
+			changedAt: new Date(),
+			newData: {}
 		});
 
 		return { success: true, message: 'Location deactivated' };

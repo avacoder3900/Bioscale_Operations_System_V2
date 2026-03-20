@@ -158,13 +158,13 @@ export const actions: Actions = {
 
 		await AuditLog.create({
 			_id: generateId(),
-			action: 'create',
-			resourceType: 'consumable_deck',
-			resourceId: deckId,
-			userId: locals.user._id,
-			username: locals.user.username,
-			timestamp: new Date(),
-			details: { type: 'deck' }
+			action: 'INSERT',
+			tableName: 'consumable_deck',
+			recordId: deckId,
+			changedBy: locals.user?.username ?? locals.user?._id,
+			
+			changedAt: new Date(),
+			newData: {}
 		});
 
 		return { success: true, message: `Deck ${deckId} registered` };
@@ -187,13 +187,13 @@ export const actions: Actions = {
 
 		await AuditLog.create({
 			_id: generateId(),
-			action: 'create',
-			resourceType: 'consumable_cooling_tray',
-			resourceId: trayId,
-			userId: locals.user._id,
-			username: locals.user.username,
-			timestamp: new Date(),
-			details: { type: 'cooling_tray' }
+			action: 'INSERT',
+			tableName: 'consumable_cooling_tray',
+			recordId: trayId,
+			changedBy: locals.user?.username ?? locals.user?._id,
+			
+			changedAt: new Date(),
+			newData: {}
 		});
 
 		return { success: true, message: `Cooling tray ${trayId} registered` };
@@ -228,13 +228,13 @@ export const actions: Actions = {
 
 		await AuditLog.create({
 			_id: generateId(),
-			action: 'force_release',
-			resourceType: 'consumable_deck',
-			resourceId: deckId,
-			userId: locals.user._id,
-			username: locals.user.username,
-			timestamp: new Date(),
-			details: { newStatus, reason, override: true }
+			action: 'UPDATE',
+			tableName: 'consumable_deck',
+			recordId: deckId,
+			changedBy: locals.user?.username ?? locals.user?._id,
+			
+			changedAt: new Date(),
+			newData: {}
 		});
 
 		return { success: true, message: `Deck ${deckId} force-released to ${newStatus}` };
@@ -267,13 +267,13 @@ export const actions: Actions = {
 
 		await AuditLog.create({
 			_id: generateId(),
-			action: 'force_release',
-			resourceType: 'consumable_cooling_tray',
-			resourceId: trayId,
-			userId: locals.user._id,
-			username: locals.user.username,
-			timestamp: new Date(),
-			details: { newStatus, reason, override: true }
+			action: 'UPDATE',
+			tableName: 'consumable_cooling_tray',
+			recordId: trayId,
+			changedBy: locals.user?.username ?? locals.user?._id,
+			
+			changedAt: new Date(),
+			newData: {}
 		});
 
 		return { success: true, message: `Tray ${trayId} force-released to ${newStatus}` };
