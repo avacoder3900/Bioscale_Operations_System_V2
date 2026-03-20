@@ -202,19 +202,28 @@
 		{#if lot.cocDocumentUrl}
 			<div class="tron-card p-4">
 				<h2 class="tron-text mb-3 text-sm font-semibold tracking-wider uppercase">Certificate of Conformity</h2>
-				<div class="flex items-center gap-3 text-sm">
-					<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
-					<a href={lot.cocDocumentUrl} target="_blank" rel="noopener noreferrer"
-						class="text-[var(--color-tron-cyan)] hover:underline">
-						View CoC Document
-					</a>
-					{#if lot.cocMeetsStandards !== undefined && lot.cocMeetsStandards !== null}
+				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
+				<a href={lot.cocDocumentUrl} target="_blank" rel="noopener noreferrer"
+					class="flex items-center gap-3 rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-cyan)]/5 px-4 py-3 transition-colors hover:bg-[var(--color-tron-cyan)]/10">
+					<svg class="h-8 w-8 shrink-0 text-[var(--color-tron-cyan)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+					</svg>
+					<div class="flex-1">
+						<div class="text-sm font-medium text-[var(--color-tron-cyan)]">View CoC Document</div>
+						<div class="text-xs text-[var(--color-tron-text-secondary)]">Click to open in Box.com</div>
+					</div>
+					<svg class="h-5 w-5 text-[var(--color-tron-cyan)]/60" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+					</svg>
+				</a>
+				{#if lot.cocMeetsStandards !== undefined && lot.cocMeetsStandards !== null}
+					<div class="mt-2">
 						<span class="rounded px-2 py-0.5 text-xs font-medium
 							{lot.cocMeetsStandards ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}">
 							{lot.cocMeetsStandards ? 'Meets Standards' : 'Does Not Meet Standards'}
 						</span>
-					{/if}
-				</div>
+					</div>
+				{/if}
 			</div>
 		{/if}
 
@@ -314,12 +323,21 @@
 		{#if lot.photos && lot.photos.length > 0}
 			<div class="tron-card p-4">
 				<h2 class="tron-text mb-3 text-sm font-semibold tracking-wider uppercase">Photos ({lot.photos.length})</h2>
-				<div class="flex flex-wrap gap-2">
+				<div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
 					{#each lot.photos as photo, i}
 						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
 						<a href={photo} target="_blank" rel="noopener noreferrer"
-							class="text-sm text-[var(--color-tron-cyan)] hover:underline">
-							Photo {i + 1}
+							class="flex items-center gap-3 rounded-lg border border-purple-500/20 bg-purple-500/5 px-4 py-3 transition-colors hover:bg-purple-500/10">
+							<svg class="h-8 w-8 shrink-0 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0022.5 18.75V5.25A2.25 2.25 0 0020.25 3H3.75A2.25 2.25 0 001.5 5.25v13.5A2.25 2.25 0 003.75 21z" />
+							</svg>
+							<div class="flex-1 min-w-0">
+								<div class="text-sm font-medium text-purple-300">Photo {i + 1}</div>
+								<div class="text-xs text-[var(--color-tron-text-secondary)]">Click to view</div>
+							</div>
+							<svg class="h-4 w-4 shrink-0 text-purple-400/60" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+							</svg>
 						</a>
 					{/each}
 				</div>
@@ -330,12 +348,21 @@
 		{#if lot.additionalDocuments && lot.additionalDocuments.length > 0}
 			<div class="tron-card p-4">
 				<h2 class="tron-text mb-3 text-sm font-semibold tracking-wider uppercase">Documents ({lot.additionalDocuments.length})</h2>
-				<div class="flex flex-wrap gap-2">
+				<div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
 					{#each lot.additionalDocuments as doc, i}
 						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
 						<a href={doc} target="_blank" rel="noopener noreferrer"
-							class="text-sm text-[var(--color-tron-cyan)] hover:underline">
-							Document {i + 1}
+							class="flex items-center gap-3 rounded-lg border border-blue-500/20 bg-blue-500/5 px-4 py-3 transition-colors hover:bg-blue-500/10">
+							<svg class="h-8 w-8 shrink-0 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+							</svg>
+							<div class="flex-1 min-w-0">
+								<div class="text-sm font-medium text-blue-300">Document {i + 1}</div>
+								<div class="text-xs text-[var(--color-tron-text-secondary)]">Click to view</div>
+							</div>
+							<svg class="h-4 w-4 shrink-0 text-blue-400/60" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+							</svg>
 						</a>
 					{/each}
 				</div>
