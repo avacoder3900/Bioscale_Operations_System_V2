@@ -2,14 +2,17 @@
 	import { SvelteMap } from 'svelte/reactivity';
 	import type { WaxCartridgeRecord, RejectionReasonCode } from '$lib/server/db/schema';
 
+	const COOLING_GATE_MIN = 10;
+
 	interface Props {
 		cartridges: WaxCartridgeRecord[];
 		rejectionCodes: RejectionReasonCode[];
 		onComplete: (data: { rejectedCartridges: { cartridgeId: string; reasonCode: string }[] }) => void;
 		readonly?: boolean;
+		coolingConfirmedAt?: Date | null;
 	}
 
-	let { cartridges, rejectionCodes, onComplete, readonly: isReadonly = false }: Props = $props();
+	let { cartridges, rejectionCodes, onComplete, readonly: isReadonly = false, coolingConfirmedAt = null }: Props = $props();
 
 	let rejected = new SvelteMap<string, string>();
 	let scanInput = $state('');
@@ -17,6 +20,26 @@
 	let selectedReasonCode = $state('');
 	let error = $state('');
 	let inputEl: HTMLInputElement | undefined = $state();
+
+	// 10-minute cooling gate
+	let coolTick = $state(0);
+	$effect(() => {
+		if (!coolingConfirmedAt) return;
+		const interval = setInterval(() => { coolTick++; }, 1000);
+		return () => clearInterval(interval);
+	});
+	const coolingElapsedMs = $derived.by(() => {
+		void coolTick;
+		return coolingConfirmedAt ? Date.now() - coolingConfirmedAt.getTime() : Infinity;
+	});
+	const coolingRemainingMs = $derived(Math.max(0, COOLING_GATE_MIN * 60_000 - coolingElapsedMs));
+	const coolingGateBlocked = $derived(coolingRemainingMs > 0);
+	const coolingRemainingDisplay = $derived(() => {
+		const totalSec = Math.ceil(coolingRemainingMs / 1000);
+		const min = Math.floor(totalSec / 60);
+		const sec = totalSec % 60;
+		return `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+	});
 
 	const acceptedIds = $derived(
 		cartridges.filter((c) => !rejected.has(c.cartridgeId)).map((c) => c.cartridgeId)
@@ -100,6 +123,21 @@
 
 <div class="space-y-5">
 	<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">QC Inspection</h2>
+
+	<!-- Cooling gate: block QC until cartridges have cooled for 10 minutes -->
+	{#if coolingGateBlocked}
+		<div class="rounded-lg border border-amber-500/50 bg-amber-900/20 p-6 text-center">
+			<svg class="mx-auto mb-3 h-10 w-10 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+				<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+			</svg>
+			<p class="text-lg font-bold text-amber-300">Cartridges Still Cooling</p>
+			<p class="mt-2 text-sm text-[var(--color-tron-text-secondary)]">
+				Cartridges must cool for at least {COOLING_GATE_MIN} minutes before QC inspection.
+			</p>
+			<p class="mt-4 font-mono text-4xl font-bold text-amber-400">{coolingRemainingDisplay()}</p>
+			<p class="mt-1 text-xs text-amber-400/70">remaining</p>
+		</div>
+	{/if}
 
 	<!-- Summary -->
 	<div class="grid grid-cols-3 gap-3">
@@ -221,8 +259,9 @@
 	<button
 		type="button"
 		onclick={handleComplete}
-		class="min-h-[44px] w-full rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-6 py-3 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30"
+		disabled={coolingGateBlocked}
+		class="min-h-[44px] w-full rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-6 py-3 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30 disabled:cursor-not-allowed disabled:opacity-40"
 	>
-		Complete QC ({acceptedIds.length} accepted, {rejected.size} rejected)
+		{coolingGateBlocked ? `Complete QC (cooling: ${coolingRemainingDisplay()})` : `Complete QC (${acceptedIds.length} accepted, ${rejected.size} rejected)`}
 	</button>
 </div>

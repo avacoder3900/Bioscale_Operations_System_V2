@@ -28,6 +28,7 @@
 				coolingTrayId: string | null;
 				plannedCartridgeCount: number | null;
 				coolingConfirmedAt: string | null;
+				coolingConfirmedAt: string | null;
 			};
 			settings: {
 				runDurationMin: number;
@@ -339,6 +340,12 @@
 	function handleDeckRemoved() {
 		if (data.runState.runId) {
 			submitAction('confirmDeckRemoved', { runId: data.runState.runId });
+		}
+	}
+
+	function handleResetToLoading() {
+		if (data.runState.runId) {
+			submitAction('resetToLoading', { runId: data.runState.runId });
 		}
 	}
 
@@ -694,7 +701,7 @@
 						Run {data.runState.runId}
 					</span>
 					<div class="flex items-center gap-3">
-					<a href="/manufacturing/reagent-filling" class="text-xs text-[var(--color-tron-cyan)] hover:underline">Move to Reagent Run →</a>
+					<a href="/manufacturing/reagent-filling?robot={data.robotId}" class="rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 px-2 py-0.5 text-xs font-medium text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20">Move to Reagent Run →</a>
 					<span class="text-xs text-[var(--color-tron-text-secondary)]">
 						Stage {currentStageIndex + 1} of {STAGES.length}
 					</span>
@@ -876,14 +883,24 @@
 						Deck {previewParam ? 'DECK-PREVIEW' : data.runState.deckId} is loaded and ready. Proceed to run execution.
 					</p>
 					{#if !isPreviewOrPast}
-						<button
-							type="button"
-							onclick={handleRunStarted}
-							disabled={submitting}
-							class="min-h-[44px] rounded-lg bg-[var(--color-tron-cyan)] px-8 py-3 text-base font-semibold text-white transition-colors hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-50"
-						>
-							Start Run
-						</button>
+						<div class="flex flex-col items-center gap-2">
+							<button
+								type="button"
+								onclick={handleRunStarted}
+								disabled={submitting}
+								class="min-h-[44px] rounded-lg bg-[var(--color-tron-cyan)] px-8 py-3 text-base font-semibold text-white transition-colors hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-50"
+							>
+								Start Run
+							</button>
+							<button
+								type="button"
+								onclick={handleResetToLoading}
+								disabled={submitting}
+								class="rounded border border-amber-500/40 px-4 py-2 text-xs text-amber-400 transition-colors hover:border-amber-500 hover:bg-amber-900/20 disabled:opacity-50"
+							>
+								↩ Reset to Deck Loading
+							</button>
+						</div>
 					{/if}
 				</div>
 			</div>
@@ -1011,6 +1028,7 @@
 					rejectionCodes={data.rejectionCodes}
 					onComplete={handleQCComplete}
 					readonly={isPreviewOrPast}
+					coolingConfirmedAt={previewParam ? null : (data.runState.coolingConfirmedAt ? new Date(data.runState.coolingConfirmedAt) : null)}
 				/>
 			{:else}
 				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">

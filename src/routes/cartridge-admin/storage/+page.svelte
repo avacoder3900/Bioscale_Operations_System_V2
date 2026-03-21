@@ -69,8 +69,27 @@
 		playBeep(true);
 	}
 
-	function selectFridge(fridgeId: string) {
+	let fridgeValidating = $state(false);
+	let fridgeError = $state('');
+
+	async function selectFridge(fridgeId: string) {
+		fridgeError = '';
+		fridgeValidating = true;
+		try {
+			const res = await fetch(`/api/dev/validate-equipment?type=fridge&id=${encodeURIComponent(fridgeId)}`);
+			const result = await res.json();
+			if (!res.ok || result.error) {
+				fridgeError = result.error ?? `Fridge "${fridgeId}" not found in the system.`;
+				playBeep(false);
+				fridgeValidating = false;
+				return;
+			}
+		} catch {
+			// If endpoint unavailable, accept selection (backwards compat)
+		}
+		fridgeValidating = false;
 		selectedFridge = fridgeId;
+		playBeep(true);
 	}
 
 	function resetWorkflow() {
@@ -275,6 +294,9 @@
 				<p class="text-sm text-[var(--color-tron-text-secondary)]">
 					Select the fridge to store these cartridges:
 				</p>
+				{#if fridgeError}
+					<p class="text-sm text-red-400">{fridgeError}</p>
+				{/if}
 
 				<div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
 					{#each FRIDGES as fridge (fridge)}

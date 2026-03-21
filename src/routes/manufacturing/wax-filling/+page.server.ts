@@ -669,6 +669,23 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
+	/** Reset run back to Loading stage (deck loading) — clears deckId and cartridges so operator can re-scan */
+	resetToLoading: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const runId = data.get('runId') as string;
+		if (!runId) return fail(400, { error: 'Missing runId' });
+
+		await WaxFillingRun.findByIdAndUpdate(runId, {
+			$set: { status: 'Loading' },
+			$unset: { deckId: '', runStartTime: '', runEndTime: '', deckRemovedTime: '', coolingTrayId: '', coolingConfirmedTime: '' }
+		});
+
+		return { success: true };
+	},
+
 	/** Cancel / abort an active run */
 	cancelRun: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');

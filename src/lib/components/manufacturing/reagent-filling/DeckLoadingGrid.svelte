@@ -112,18 +112,13 @@
 				return;
 			}
 
-			// Validate cartridge: must already exist (came through wax filling)
+			// Validate cartridge: must already exist in wax_filled phase (came through wax filling)
 			try {
-				const res = await fetch(`/api/dev/validate-equipment?type=cartridge&id=${encodeURIComponent(scanned)}`);
+				const res = await fetch(`/api/dev/validate-equipment?type=cartridge&id=${encodeURIComponent(scanned)}&context=reagent`);
 				const result = await res.json();
 				if (!res.ok || result.error) {
 					playBeep(false);
-					deckError = result.error ?? `Cartridge "${scanned}" validation failed`;
-					return;
-				}
-				if (result.isNew) {
-					playBeep(false);
-					deckError = `Cartridge not found in system. Must go through wax filling first.`;
+					deckError = result.error ?? `Cartridge "${scanned}" not found. It must go through wax filling first.`;
 					return;
 				}
 			} catch {

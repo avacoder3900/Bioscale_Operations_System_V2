@@ -79,6 +79,15 @@ export const actions: Actions = {
 
 		const data = await request.formData();
 		const barcode = (data.get('barcode') as string) || undefined;
+
+		// Check for duplicate barcode
+		if (barcode) {
+			const existing = await Consumable.findOne({ type: 'top_seal_roll', barcode }).lean();
+			if (existing) {
+				return fail(400, { error: `A roll with barcode "${barcode}" already exists.` });
+			}
+		}
+
 		const settingsDoc = await ManufacturingSettings.findById('default').lean() as any;
 		const defaultLength = settingsDoc?.general?.defaultRollLengthFt ?? 100;
 
