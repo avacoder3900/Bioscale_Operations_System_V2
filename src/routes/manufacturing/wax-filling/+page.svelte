@@ -22,6 +22,7 @@
 				stage: string | null;
 				runStartTime: string | null;
 				runEndTime: string | null;
+				deckRemovedTime: string | null;
 				deckId: string | null;
 				waxSourceLot: string | null;
 				coolingTrayId: string | null;
@@ -957,7 +958,7 @@
 			/>
 		{:else if displayStage === 'Awaiting Removal'}
 			<PostRunCooling
-				runEndTime={previewParam ? new Date() : (data.runState.runEndTime ? new Date(data.runState.runEndTime) : new Date())}
+				runEndTime={previewParam ? new Date() : (data.runState.deckRemovedTime ? new Date(data.runState.deckRemovedTime) : (data.runState.runEndTime ? new Date(data.runState.runEndTime) : new Date()))}
 				coolingWarningMin={data.settings.coolingWarningMin}
 				deckLockoutMin={data.settings.deckLockoutMin}
 				onComplete={handleCoolingComplete}

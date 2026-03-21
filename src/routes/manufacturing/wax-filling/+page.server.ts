@@ -111,12 +111,13 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 				stage,
 				runStartTime: run.runStartTime ? new Date(run.runStartTime).toISOString() : null,
 				runEndTime: run.runEndTime ? new Date(run.runEndTime).toISOString() : null,
+				deckRemovedTime: run.deckRemovedTime ? new Date(run.deckRemovedTime).toISOString() : null,
 				deckId: run.deckId ?? null,
 				waxSourceLot: run.waxSourceLot ?? null,
 				coolingTrayId: run.coolingTrayId ?? null,
 				plannedCartridgeCount: run.plannedCartridgeCount ?? run.cartridgeIds?.length ?? null
 			}
-			: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null };
+			: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckRemovedTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null };
 
 		// Tube data
 		const tube = activeTube as any;

@@ -87,7 +87,25 @@
 		}
 	}
 
-	function confirmTray() {
+	let trayValidating = $state(false);
+	let trayError = $state('');
+
+	async function confirmTray() {
+		trayValidating = true;
+		trayError = '';
+		try {
+			const res = await fetch(`/api/dev/validate-equipment?type=tray&id=${encodeURIComponent(trayPendingValue)}`);
+			const result = await res.json();
+			if (!res.ok || result.error) {
+				trayError = result.error ?? `Tray "${trayPendingValue}" not found in the system.`;
+				playBeep(false);
+				trayValidating = false;
+				return;
+			}
+		} catch {
+			// If endpoint unavailable, fall through
+		}
+		trayValidating = false;
 		trayId = trayPendingValue;
 		trayPendingValue = '';
 		step = 'confirm_cooling';
@@ -235,6 +253,9 @@
 			<div class="space-y-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5">
 				<p class="text-sm text-[var(--color-tron-text-secondary)]">Scanned cooling tray:</p>
 				<p class="font-mono text-lg font-semibold text-[var(--color-tron-cyan)]">{trayPendingValue}</p>
+				{#if trayError}
+					<p class="text-sm text-red-400">{trayError}</p>
+				{/if}
 				<div class="flex gap-3">
 					<button
 						type="button"
@@ -246,9 +267,10 @@
 					<button
 						type="button"
 						onclick={confirmTray}
-						class="min-h-[44px] flex-1 rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-6 py-3 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30"
+						disabled={trayValidating}
+						class="min-h-[44px] flex-1 rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-6 py-3 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30 disabled:opacity-50"
 					>
-						Continue
+						{trayValidating ? 'Checking...' : 'Continue'}
 					</button>
 				</div>
 			</div>
