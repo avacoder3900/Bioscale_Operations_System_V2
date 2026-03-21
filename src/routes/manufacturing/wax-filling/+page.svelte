@@ -27,6 +27,7 @@
 				waxSourceLot: string | null;
 				coolingTrayId: string | null;
 				plannedCartridgeCount: number | null;
+				coolingConfirmedAt: string | null;
 			};
 			settings: {
 				runDurationMin: number;
@@ -452,6 +453,29 @@
 		}
 	}
 
+	// Cooling timer: block QC for 10 minutes after coolingConfirmedAt
+	const COOLING_REQUIRED_MS = 10 * 60 * 1000;
+	let coolingTick = $state(0);
+	$effect(() => {
+		if (data.runState.stage === 'QC' && data.runState.coolingConfirmedAt) {
+			const interval = setInterval(() => { coolingTick++; }, 1000);
+			return () => clearInterval(interval);
+		}
+	});
+	const coolingConfirmedAt = $derived(data.runState.coolingConfirmedAt ? new Date(data.runState.coolingConfirmedAt) : null);
+	const coolingElapsedMs = $derived.by(() => {
+		void coolingTick;
+		return coolingConfirmedAt ? Date.now() - coolingConfirmedAt.getTime() : COOLING_REQUIRED_MS;
+	});
+	const coolingRemainingMs = $derived(Math.max(0, COOLING_REQUIRED_MS - coolingElapsedMs));
+	const coolingComplete = $derived(coolingRemainingMs === 0);
+	const coolingCountdown = $derived.by(() => {
+		const totalSec = Math.ceil(coolingRemainingMs / 1000);
+		const m = Math.floor(totalSec / 60);
+		const s = totalSec % 60;
+		return `${m}:${String(s).padStart(2, '0')}`;
+	});
+
 	// Loading stage has 3 sub-steps: wax prep -> deck loading -> ready to run
 	let loadingSubStage = $derived.by(() => {
 		if (!effectiveHasActiveRun || (viewStage !== 'Loading' && effectiveStage !== 'Loading')) return 'wax_prep';
@@ -670,6 +694,7 @@
 						Run {data.runState.runId}
 					</span>
 					<div class="flex items-center gap-3">
+					<a href="/manufacturing/reagent-filling" class="text-xs text-[var(--color-tron-cyan)] hover:underline">Move to Reagent Run →</a>
 					<span class="text-xs text-[var(--color-tron-text-secondary)]">
 						Stage {currentStageIndex + 1} of {STAGES.length}
 					</span>
@@ -974,7 +999,13 @@
 				createdAt: new Date(c.createdAt),
 				updatedAt: new Date(c.updatedAt)
 			}))}
-			{#if qcCarts.length > 0}
+			{#if !previewParam && !coolingComplete}
+				<div class="rounded-lg border border-blue-500/50 bg-blue-900/20 p-5 text-center">
+					<p class="text-sm font-medium text-blue-300">Cooling in progress — inspection locked</p>
+					<p class="mt-2 font-mono text-3xl font-bold text-blue-200">Cooling: {coolingCountdown} remaining before inspection</p>
+					<p class="mt-2 text-xs text-blue-400/70">Cartridges must cool for 10 minutes before QC inspection can begin.</p>
+				</div>
+			{:else if qcCarts.length > 0}
 				<QCInspection
 					cartridges={qcCarts}
 					rejectionCodes={data.rejectionCodes}

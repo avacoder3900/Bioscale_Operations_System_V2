@@ -115,9 +115,10 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 				deckId: run.deckId ?? null,
 				waxSourceLot: run.waxSourceLot ?? null,
 				coolingTrayId: run.coolingTrayId ?? null,
-				plannedCartridgeCount: run.plannedCartridgeCount ?? run.cartridgeIds?.length ?? null
+				plannedCartridgeCount: run.plannedCartridgeCount ?? run.cartridgeIds?.length ?? null,
+				coolingConfirmedAt: run.coolingConfirmedTime ? new Date(run.coolingConfirmedTime).toISOString() : null
 			}
-			: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckRemovedTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null };
+			: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckRemovedTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null, coolingConfirmedAt: null };
 
 		// Tube data
 		const tube = activeTube as any;
@@ -583,7 +584,7 @@ export const actions: Actions = {
 		const coolingTrayId = (data.get('coolingTrayId') as string) || undefined;
 		const now = new Date();
 
-		const update: Record<string, any> = { status: 'QC', coolingConfirmedTime: now };
+		const update: Record<string, any> = { status: 'QC', coolingConfirmedTime: now, coolingConfirmedAt: now };
 		if (coolingTrayId) update.coolingTrayId = coolingTrayId;
 
 		const run = await WaxFillingRun.findByIdAndUpdate(runId, { $set: update }, { new: true }).lean() as any;

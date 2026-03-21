@@ -63,17 +63,31 @@
 		} catch { /* audio not available */ }
 	}
 
-	function handleDeckKeydown(e: KeyboardEvent) {
+	async function handleDeckKeydown(e: KeyboardEvent) {
 		if (e.key === 'Enter' && deckInput.trim()) {
 			e.preventDefault();
-			deckPendingValue = deckInput.trim();
+			const value = deckInput.trim();
 			deckInput = '';
 			deckError = '';
+			// Validate deck on Enter
+			try {
+				const res = await fetch(`/api/dev/validate-equipment?type=deck&id=${encodeURIComponent(value)}`);
+				const result = await res.json();
+				if (!res.ok || result.error) {
+					deckError = result.error ?? `Deck "${value}" not found in the system.`;
+					playBeep(false);
+					return;
+				}
+			} catch {
+				// If validation endpoint unavailable, fall through (backwards compat)
+			}
+			deckPendingValue = value;
 			playBeep(true);
 		}
 	}
 
 	function confirmDeck() {
+		// Validation already done on Enter keydown
 		deckId = deckPendingValue;
 		deckPendingValue = '';
 		step = 'loading';
@@ -84,7 +98,7 @@
 		setTimeout(() => deckInputEl?.focus(), 50);
 	}
 
-	function handleCartridgeKeydown(e: KeyboardEvent) {
+	async function handleCartridgeKeydown(e: KeyboardEvent) {
 		if (e.key === 'Enter' && cartridgeInput.trim()) {
 			e.preventDefault();
 			const scanned = cartridgeInput.trim();
@@ -96,6 +110,24 @@
 				playBeep(false);
 				deckError = `Cartridge "${scanned}" already scanned`;
 				return;
+			}
+
+			// Validate cartridge: must already exist (came through wax filling)
+			try {
+				const res = await fetch(`/api/dev/validate-equipment?type=cartridge&id=${encodeURIComponent(scanned)}`);
+				const result = await res.json();
+				if (!res.ok || result.error) {
+					playBeep(false);
+					deckError = result.error ?? `Cartridge "${scanned}" validation failed`;
+					return;
+				}
+				if (result.isNew) {
+					playBeep(false);
+					deckError = `Cartridge not found in system. Must go through wax filling first.`;
+					return;
+				}
+			} catch {
+				// If endpoint unavailable, allow scan (backwards compat)
 			}
 
 			deckError = '';

@@ -78,11 +78,25 @@
 		}
 	}
 
-	function handleTrayScan(e: KeyboardEvent) {
+	async function handleTrayScan(e: KeyboardEvent) {
 		if (e.key === 'Enter' && trayInput.trim()) {
 			e.preventDefault();
-			trayPendingValue = trayInput.trim();
+			const value = trayInput.trim();
 			trayInput = '';
+			trayError = '';
+			// Validate on Enter before showing confirm UI
+			try {
+				const res = await fetch(`/api/dev/validate-equipment?type=tray&id=${encodeURIComponent(value)}`);
+				const result = await res.json();
+				if (!res.ok || result.error) {
+					trayError = result.error ?? `Tray "${value}" not found in the system.`;
+					playBeep(false);
+					return;
+				}
+			} catch {
+				// If endpoint unavailable, fall through (backwards compat)
+			}
+			trayPendingValue = value;
 			playBeep(true);
 		}
 	}
@@ -90,22 +104,8 @@
 	let trayValidating = $state(false);
 	let trayError = $state('');
 
-	async function confirmTray() {
-		trayValidating = true;
-		trayError = '';
-		try {
-			const res = await fetch(`/api/dev/validate-equipment?type=tray&id=${encodeURIComponent(trayPendingValue)}`);
-			const result = await res.json();
-			if (!res.ok || result.error) {
-				trayError = result.error ?? `Tray "${trayPendingValue}" not found in the system.`;
-				playBeep(false);
-				trayValidating = false;
-				return;
-			}
-		} catch {
-			// If endpoint unavailable, fall through
-		}
-		trayValidating = false;
+	function confirmTray() {
+		// Validation already done on Enter keydown
 		trayId = trayPendingValue;
 		trayPendingValue = '';
 		step = 'confirm_cooling';
@@ -248,6 +248,9 @@
 						Test
 					</button>
 				</div>
+				{#if trayError}
+					<p class="text-sm text-red-400">{trayError}</p>
+				{/if}
 			</div>
 		{:else}
 			<div class="space-y-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5">
@@ -267,10 +270,9 @@
 					<button
 						type="button"
 						onclick={confirmTray}
-						disabled={trayValidating}
-						class="min-h-[44px] flex-1 rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-6 py-3 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30 disabled:opacity-50"
+						class="min-h-[44px] flex-1 rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-6 py-3 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30"
 					>
-						{trayValidating ? 'Checking...' : 'Continue'}
+						Continue
 					</button>
 				</div>
 			</div>

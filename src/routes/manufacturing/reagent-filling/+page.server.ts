@@ -332,6 +332,14 @@ export const actions: Actions = {
 				const ids = (alreadyFilled as any[]).map((c: any) => c._id).join(', ');
 				return fail(400, { error: `Cartridge(s) already reagent-filled: ${ids}` });
 			}
+
+			// Verify cartridges exist in system — they must have come through wax filling
+			const existingCartridges = await CartridgeRecord.find({ _id: { $in: scannedIds } }).select('_id').lean();
+			const existingIds = new Set((existingCartridges as any[]).map((c: any) => String(c._id)));
+			const missingIds = scannedIds.filter((id: string) => !existingIds.has(id));
+			if (missingIds.length > 0) {
+				return fail(400, { error: `Cartridge ${missingIds[0]} not found. Must complete wax filling first.` });
+			}
 		}
 
 		// Validate deck
