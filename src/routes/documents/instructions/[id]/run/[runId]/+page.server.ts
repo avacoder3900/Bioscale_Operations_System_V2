@@ -1,4 +1,4 @@
-import { error, fail } from '@sveltejs/kit';
+import { error, fail, redirect } from '@sveltejs/kit';
 import { connectDB, WorkInstruction, ProductionRun, User, AssemblySession } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -104,7 +104,8 @@ export const load: PageServerLoad = async ({ params }) => {
 };
 
 export const actions: Actions = {
-	signUnit: async ({ request, params }) => {
+	signUnit: async ({ request, params, locals }) => {
+		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 		const form = await request.formData();
 		const unitId = form.get('unitId')?.toString();
@@ -122,7 +123,8 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-	completeRun: async ({ params }) => {
+	completeRun: async ({ params, locals }) => {
+		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 		await ProductionRun.updateOne({ _id: params.runId }, {
 			$set: { status: 'completed', completedAt: new Date() }
@@ -130,7 +132,8 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-	cancelRun: async ({ params }) => {
+	cancelRun: async ({ params, locals }) => {
+		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 		await ProductionRun.updateOne({ _id: params.runId }, {
 			$set: { status: 'planning' }

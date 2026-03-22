@@ -2,7 +2,8 @@ import { json } from '@sveltejs/kit';
 import { connectDB, Consumable, CartridgeRecord, LotRecord } from '$lib/server/db';
 import type { RequestHandler } from './$types';
 
-export const GET: RequestHandler = async ({ url }) => {
+export const GET: RequestHandler = async ({ url, locals }) => {
+	if (!locals.user) return json({ error: 'Unauthorized' }, { status: 401 });
 	await connectDB();
 	const type = url.searchParams.get('type');
 

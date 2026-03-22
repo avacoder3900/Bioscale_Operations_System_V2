@@ -1,5 +1,5 @@
 export const config = { maxDuration: 60 };
-import { fail } from '@sveltejs/kit';
+import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, Consumable, WaxFillingRun, CartridgeRecord, AuditLog, generateId } from '$lib/server/db';
 import { isAdmin } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
@@ -108,6 +108,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 
 export const actions: Actions = {
 	create: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 		const form = await request.formData();
 		const name = form.get('name')?.toString().trim();
@@ -123,6 +124,7 @@ export const actions: Actions = {
 	},
 
 	update: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 		const form = await request.formData();
 		const id = form.get('id')?.toString();
@@ -138,6 +140,7 @@ export const actions: Actions = {
 	},
 
 	delete: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 		const form = await request.formData();
 		const id = form.get('id')?.toString();

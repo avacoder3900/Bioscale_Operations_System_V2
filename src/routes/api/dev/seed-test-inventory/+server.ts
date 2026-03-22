@@ -8,7 +8,8 @@ import type { RequestHandler } from './$types';
 const TEST_PREFIX = 'TEST-';
 const COUNT = 200;
 
-export const POST: RequestHandler = async () => {
+export const POST: RequestHandler = async ({ locals }) => {
+	if (!locals.user) return json({ error: 'Unauthorized' }, { status: 401 });
 	await connectDB();
 
 	const results: Record<string, number | string[]> = {};

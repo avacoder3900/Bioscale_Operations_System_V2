@@ -1,5 +1,5 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { connectDB, AssayDefinition, FirmwareCartridge, TestResult, generateId } from '$lib/server/db';
+import { connectDB, AssayDefinition, FirmwareCartridge, TestResult, AuditLog, generateId } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -128,6 +128,14 @@ export const actions: Actions = {
 				}
 			}
 		);
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assay_definitions',
+			recordId: params.assayId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
+		});
 		return { success: true };
 	},
 
@@ -137,6 +145,14 @@ export const actions: Actions = {
 
 		await AssayDefinition.findByIdAndUpdate(params.assayId, {
 			$unset: { lockedAt: 1, lockedBy: 1 }
+		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assay_definitions',
+			recordId: params.assayId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
 		});
 		return { success: true };
 	},
@@ -150,6 +166,14 @@ export const actions: Actions = {
 
 		await AssayDefinition.findByIdAndUpdate(params.assayId, {
 			$set: { isActive: !assay.isActive }
+		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assay_definitions',
+			recordId: params.assayId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
 		});
 		return { success: true };
 	},
@@ -186,6 +210,14 @@ export const actions: Actions = {
 					subComponents: []
 				}
 			}
+		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assay_definitions',
+			recordId: params.assayId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
 		});
 		return { success: true };
 	},
@@ -224,6 +256,14 @@ export const actions: Actions = {
 				}
 			}
 		);
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assay_definitions',
+			recordId: params.assayId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
+		});
 		return { success: true };
 	},
 
@@ -237,6 +277,14 @@ export const actions: Actions = {
 
 		await AssayDefinition.findByIdAndUpdate(params.assayId, {
 			$pull: { reagents: { _id: reagentId } }
+		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assay_definitions',
+			recordId: params.assayId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
 		});
 		return { success: true };
 	},
@@ -303,6 +351,14 @@ export const actions: Actions = {
 
 		await AssayDefinition.findByIdAndUpdate(params.assayId, {
 			$set: { bomCostOverride: bomCostOverride || null, useSingleCost }
+		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assay_definitions',
+			recordId: params.assayId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
 		});
 		return { success: true };
 	}

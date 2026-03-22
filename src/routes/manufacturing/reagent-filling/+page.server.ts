@@ -879,6 +879,17 @@ export const actions: Actions = {
 			$set: { status: 'Cancelled', abortReason: reason, runEndTime: now }
 		});
 
+		// Clean up cartridges that were in reagent_filling phase for this run
+		await CartridgeRecord.bulkWrite([{
+			updateMany: {
+				filter: { 'reagentFilling.runId': runId, currentPhase: 'reagent_filling' },
+				update: {
+					$set: { currentPhase: 'wax_filled' },
+					$unset: { reagentFilling: '' }
+				}
+			}
+		}]);
+
 		await AuditLog.create({
 			_id: generateId(),
 			tableName: 'reagent_batch_records',
@@ -911,6 +922,17 @@ export const actions: Actions = {
 				runEndTime: now
 			}
 		});
+
+		// Clean up cartridges that were in reagent_filling phase for this run
+		await CartridgeRecord.bulkWrite([{
+			updateMany: {
+				filter: { 'reagentFilling.runId': runId, currentPhase: 'reagent_filling' },
+				update: {
+					$set: { currentPhase: 'wax_filled' },
+					$unset: { reagentFilling: '' }
+				}
+			}
+		}]);
 
 		await AuditLog.create({
 			_id: generateId(),

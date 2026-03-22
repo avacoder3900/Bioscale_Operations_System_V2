@@ -1,5 +1,5 @@
 import { redirect, fail } from '@sveltejs/kit';
-import { connectDB, Consumable, ManufacturingSettings, CartridgeRecord, generateId } from '$lib/server/db';
+import { connectDB, Consumable, ManufacturingSettings, CartridgeRecord, AuditLog, generateId } from '$lib/server/db';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -91,8 +91,9 @@ export const actions: Actions = {
 		const settingsDoc = await ManufacturingSettings.findById('default').lean() as any;
 		const defaultLength = settingsDoc?.general?.defaultRollLengthFt ?? 100;
 
+		const rollId = generateId();
 		await Consumable.create({
-			_id: generateId(),
+			_id: rollId,
 			type: 'top_seal_roll',
 			barcode: barcode || undefined,
 			initialLengthFt: defaultLength,
@@ -100,6 +101,15 @@ export const actions: Actions = {
 			status: 'active',
 			registeredBy: locals.user._id,
 			usageLog: []
+		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'consumables',
+			recordId: rollId,
+			action: 'INSERT',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
 		});
 
 		return { success: true };
@@ -181,6 +191,15 @@ export const actions: Actions = {
 			notes: `Applied top seal from roll ${rollLotId} to ${cartridgeIds.length > 0 ? `${cartridgeIds.length} cartridges` : `${quantityCut} strips cut`}${notes ? ` — ${notes}` : ''}`
 		});
 
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'consumables',
+			recordId: rollId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: now
+		});
+
 		return { success: true, rollLotId };
 	},
 
@@ -206,6 +225,15 @@ export const actions: Actions = {
 					createdAt: now
 				}
 			}
+		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'consumables',
+			recordId: rollId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: now
 		});
 
 		return { success: true };

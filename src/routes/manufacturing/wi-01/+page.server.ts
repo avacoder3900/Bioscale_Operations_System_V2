@@ -8,7 +8,7 @@ import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, LotRecord, ProcessConfiguration, CartridgeRecord,
 	ManufacturingMaterial, ManufacturingMaterialTransaction,
-	PartDefinition, generateId
+	PartDefinition, AuditLog, generateId
 } from '$lib/server/db';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import { nanoid } from 'nanoid';
@@ -137,6 +137,15 @@ export const actions: Actions = {
 			cartridgeIds: []
 		});
 
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'lot_records',
+			recordId: lotId,
+			action: 'INSERT',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
+		});
+
 		return { bindQR: { success: true, lotId, outputLotNumber } };
 	},
 
@@ -187,6 +196,15 @@ export const actions: Actions = {
 
 		await LotRecord.findByIdAndUpdate(lotId, {
 			$set: { status: 'In Progress', startTime: new Date() }
+		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'lot_records',
+			recordId: lotId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
 		});
 
 		return { startBatch: { success: true } };
@@ -254,6 +272,15 @@ export const actions: Actions = {
 			operatorId: locals.user._id,
 			operatorUsername: locals.user.username,
 			notes: `WI-01 Backing lot ${lotId}: ${quantity} cartridges backed`
+		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'lot_records',
+			recordId: lotId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
 		});
 
 		const config = await ProcessConfiguration.findOne({ processType: PROCESS_TYPE }).lean() as any;

@@ -125,7 +125,9 @@
 					return;
 				}
 			} catch {
-				// If validation endpoint unavailable, fall through (backwards compat)
+				deckError = 'Validation service unavailable, cannot proceed';
+				playBeep(false);
+				return;
 			}
 			deckPendingValue = value;
 			playBeep(true);
@@ -181,7 +183,9 @@
 					return;
 				}
 			} catch {
-				// If endpoint unavailable, allow scan (backwards compat)
+				playBeep(false);
+				deckError = 'Validation service unavailable, cannot proceed';
+				return;
 			}
 
 			deckError = '';

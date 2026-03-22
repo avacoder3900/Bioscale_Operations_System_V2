@@ -4,6 +4,7 @@ import {
 	EquipmentLocation, OpentronsRobot, AuditLog, BackingLot
 } from '$lib/server/db';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';
+import { isAdmin } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 // Extend Vercel serverless timeout to 60s (default is 10s)
@@ -249,8 +250,11 @@ export const actions: Actions = {
 		const settingsDoc = await ManufacturingSettings.findById('default').lean() as any;
 		const minOvenTimeMin: number = settingsDoc?.waxFilling?.minOvenTimeMin ?? 60;
 
-		// TEST OVERRIDE: skip lot lookup and oven check
+		// TEST OVERRIDE: skip lot lookup and oven check (admin only)
 		if (override) {
+			if (!isAdmin(locals.user)) {
+				return fail(403, { error: 'Override requires admin permission.' });
+			}
 			// Auto-create lot if it doesn't exist
 			const existing = await BackingLot.findById(lotBarcode).lean();
 			if (!existing) {
@@ -612,6 +616,16 @@ export const actions: Actions = {
 		const runId = data.get('runId') as string;
 		const now = new Date();
 
+		// Server-side cooling timer check: minimum 10 minutes must pass after cooling confirmed
+		const runBeforeQc = await WaxFillingRun.findById(runId).select('coolingConfirmedAt').lean() as any;
+		if (runBeforeQc?.coolingConfirmedAt) {
+			const elapsedMs = Date.now() - new Date(runBeforeQc.coolingConfirmedAt).getTime();
+			if (elapsedMs < 10 * 60 * 1000) {
+				const remainingMin = Math.ceil((10 * 60 * 1000 - elapsedMs) / 60000);
+				return fail(400, { error: `Cartridges must cool for at least 10 minutes before QC inspection. ${remainingMin} minute${remainingMin === 1 ? '' : 's'} remaining.` });
+			}
+		}
+
 		const run = await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'Storage', runEndTime: now }
 		}, { new: true }).lean() as any;
@@ -700,6 +714,17 @@ export const actions: Actions = {
 			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
 		});
 
+		// Clean up cartridges that were in wax_filling phase for this run
+		await CartridgeRecord.bulkWrite([{
+			updateMany: {
+				filter: { 'waxFilling.runId': runId, currentPhase: 'wax_filling' },
+				update: {
+					$set: { currentPhase: 'backing' },
+					$unset: { waxFilling: '' }
+				}
+			}
+		}]);
+
 		await AuditLog.create({
 			_id: generateId(),
 			tableName: 'wax_filling_runs',
@@ -725,6 +750,17 @@ export const actions: Actions = {
 		await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
 		});
+
+		// Clean up cartridges that were in wax_filling phase for this run
+		await CartridgeRecord.bulkWrite([{
+			updateMany: {
+				filter: { 'waxFilling.runId': runId, currentPhase: 'wax_filling' },
+				update: {
+					$set: { currentPhase: 'backing' },
+					$unset: { waxFilling: '' }
+				}
+			}
+		}]);
 
 		await AuditLog.create({
 			_id: generateId(),
