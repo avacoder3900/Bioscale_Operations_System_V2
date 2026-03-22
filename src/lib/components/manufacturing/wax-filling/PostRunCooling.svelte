@@ -78,16 +78,34 @@
 		}
 	}
 
-	function handleTrayScan(e: KeyboardEvent) {
+	async function handleTrayScan(e: KeyboardEvent) {
 		if (e.key === 'Enter' && trayInput.trim()) {
 			e.preventDefault();
-			trayPendingValue = trayInput.trim();
+			const value = trayInput.trim();
 			trayInput = '';
+			trayError = '';
+			// Validate on Enter before showing confirm UI
+			try {
+				const res = await fetch(`/api/dev/validate-equipment?type=tray&id=${encodeURIComponent(value)}`);
+				const result = await res.json();
+				if (!res.ok || result.error) {
+					trayError = result.error ?? `Tray "${value}" not found in the system.`;
+					playBeep(false);
+					return;
+				}
+			} catch {
+				// If endpoint unavailable, fall through (backwards compat)
+			}
+			trayPendingValue = value;
 			playBeep(true);
 		}
 	}
 
+	let trayValidating = $state(false);
+	let trayError = $state('');
+
 	function confirmTray() {
+		// Validation already done on Enter keydown
 		trayId = trayPendingValue;
 		trayPendingValue = '';
 		step = 'confirm_cooling';
@@ -230,11 +248,17 @@
 						Test
 					</button>
 				</div>
+				{#if trayError}
+					<p class="text-sm text-red-400">{trayError}</p>
+				{/if}
 			</div>
 		{:else}
 			<div class="space-y-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5">
 				<p class="text-sm text-[var(--color-tron-text-secondary)]">Scanned cooling tray:</p>
 				<p class="font-mono text-lg font-semibold text-[var(--color-tron-cyan)]">{trayPendingValue}</p>
+				{#if trayError}
+					<p class="text-sm text-red-400">{trayError}</p>
+				{/if}
 				<div class="flex gap-3">
 					<button
 						type="button"

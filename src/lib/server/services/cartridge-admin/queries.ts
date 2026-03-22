@@ -3,39 +3,42 @@
  */
 
 export type LifecycleStage =
-	| 'Backed'
-	| 'Wax Filling'
-	| 'Cooled'
-	| 'Reagent Filling'
-	| 'Inspected'
-	| 'Top Sealed'
-	| 'Stored'
-	| 'Rejected'
-	| 'Scrapped';
+	| 'backing'
+	| 'wax_filled'
+	| 'wax_qc'
+	| 'wax_stored'
+	| 'reagent_filled'
+	| 'inspected'
+	| 'sealed'
+	| 'cured'
+	| 'stored'
+	| 'released'
+	| 'shipped'
+	| 'assay_loaded'
+	| 'testing'
+	| 'completed'
+	| 'voided';
 
 export const LIFECYCLE_STAGES: LifecycleStage[] = [
-	'Backed',
-	'Wax Filling',
-	'Cooled',
-	'Reagent Filling',
-	'Inspected',
-	'Top Sealed',
-	'Stored',
-	'Rejected',
-	'Scrapped'
+	'backing',
+	'wax_filled',
+	'wax_qc',
+	'wax_stored',
+	'reagent_filled',
+	'inspected',
+	'sealed',
+	'cured',
+	'stored',
+	'released',
+	'shipped',
+	'assay_loaded',
+	'testing',
+	'completed',
+	'voided'
 ];
 
 export function phaseToLifecycleStage(phase: string): LifecycleStage {
-	const map: Record<string, LifecycleStage> = {
-		backed: 'Backed',
-		wax_filling: 'Wax Filling',
-		cooling: 'Cooled',
-		reagent_filling: 'Reagent Filling',
-		inspected: 'Inspected',
-		top_seal: 'Top Sealed',
-		stored: 'Stored',
-		rejected: 'Rejected',
-		scrapped: 'Scrapped'
-	};
-	return map[phase] ?? 'Backed';
+	// Phase values now map directly to lifecycle stages
+	if (LIFECYCLE_STAGES.includes(phase as LifecycleStage)) return phase as LifecycleStage;
+	return 'backing';
 }

@@ -534,7 +534,7 @@
 							</div>
 						{:else if isCompleted}
 							<a
-								href="/spu/validation/thermocouple/{sessionId}"
+								href="/validation/thermocouple/{sessionId}"
 								class="tron-button px-6 py-3"
 								style="min-height: 44px; background: var(--color-tron-cyan); color: #000; font-weight: 600"
 							>

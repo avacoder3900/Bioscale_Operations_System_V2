@@ -79,6 +79,8 @@ export const actions: Actions = {
 		const session = await createSession(sessionToken, userId);
 		setSessionTokenCookie(event, sessionToken, session.expiresAt);
 
-		redirect(302, '/spu');
+		redirect(302, '/');
 	}
 };
+
+export const config = { maxDuration: 60 };

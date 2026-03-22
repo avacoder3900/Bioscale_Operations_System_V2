@@ -29,7 +29,7 @@
 			icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z'
 		},
 		{
-			href: '/spu',
+			href: '/',
 			label: 'Back to BIMS',
 			icon: 'M11 17l-5-5m0 0l5-5m-5 5h12'
 		}
@@ -50,7 +50,7 @@
 
 	function isActive(href: string, currentPath: string): boolean {
 		if (href === '/cv') return currentPath === '/cv';
-		if (href === '/spu') return false;
+		if (href === '/') return false;
 		return currentPath.startsWith(href);
 	}
 

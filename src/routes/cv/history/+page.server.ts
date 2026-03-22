@@ -74,3 +74,5 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		pagination: { page: pageNum, totalPages, total }
 	};
 };
+
+export const config = { maxDuration: 60 };

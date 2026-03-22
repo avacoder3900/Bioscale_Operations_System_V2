@@ -55,6 +55,103 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 };
 
 export const actions: Actions = {
+	approve: async ({ request, params, locals }) => {
+		requirePermission(locals.user, 'document:approve');
+		await connectDB();
+		const form = await request.formData();
+		const password = form.get('password')?.toString();
+		const revisionId = form.get('revisionId')?.toString();
+		const meaning = 'I approve this document revision for release.';
+
+		if (!password) {
+			return fail(400, { error: 'Password is required' });
+		}
+
+		// Verify password for e-signature
+		const user = await User.findById(locals.user?._id).lean() as any;
+		if (!user) return fail(400, { error: 'User not found' });
+		const validPassword = await bcrypt.compare(password, user.passwordHash);
+		if (!validPassword) return fail(400, { error: 'Invalid password' });
+
+		const doc = await Document.findById(params.id).lean() as any;
+		if (!doc) error(404, 'Document not found');
+
+		const revision = (doc.revisions ?? []).find((r: any) =>
+			revisionId ? String(r._id) === revisionId : r.status === 'in_review'
+		);
+		if (!revision) return fail(400, { error: 'No pending revision found' });
+
+		const now = new Date();
+		const sigId = generateId();
+
+		await ElectronicSignature.create({
+			_id: sigId,
+			userId: locals.user?._id,
+			entityType: 'document_revision',
+			entityId: revision._id,
+			meaning,
+			signedAt: now
+		});
+
+		await Document.updateOne(
+			{ _id: params.id, 'revisions._id': revision._id },
+			{
+				$set: {
+					'revisions.$.status': 'approved',
+					'revisions.$.approvedAt': now,
+					'revisions.$.approvedBy': locals.user?._id,
+					'revisions.$.approvalSignatureId': sigId,
+					currentRevision: revision.revision,
+					status: 'approved',
+					effectiveDate: now
+				}
+			}
+		);
+
+		await AuditLog.create({
+			_id: generateId(), tableName: 'documents', recordId: params.id,
+			action: 'UPDATE', newData: { decision: 'approve', revisionId: revision._id },
+			changedAt: now, changedBy: locals.user?.username ?? 'system'
+		});
+
+		redirect(303, `/documents/${params.id}`);
+	},
+
+	reject: async ({ request, params, locals }) => {
+		requirePermission(locals.user, 'document:approve');
+		await connectDB();
+		const form = await request.formData();
+		const reason = form.get('reason')?.toString();
+		const revisionId = form.get('revisionId')?.toString();
+
+		if (!reason) {
+			return fail(400, { error: 'Rejection reason is required' });
+		}
+
+		const doc = await Document.findById(params.id).lean() as any;
+		if (!doc) error(404, 'Document not found');
+
+		const revision = (doc.revisions ?? []).find((r: any) =>
+			revisionId ? String(r._id) === revisionId : r.status === 'in_review'
+		);
+		if (!revision) return fail(400, { error: 'No pending revision found' });
+
+		const now = new Date();
+
+		await Document.updateOne(
+			{ _id: params.id, 'revisions._id': revision._id },
+			{ $set: { 'revisions.$.status': 'draft', status: 'draft' } }
+		);
+
+		await AuditLog.create({
+			_id: generateId(), tableName: 'documents', recordId: params.id,
+			action: 'UPDATE', newData: { decision: 'reject', revisionId: revision._id, reason },
+			changedAt: now, changedBy: locals.user?.username ?? 'system'
+		});
+
+		redirect(303, `/documents/${params.id}`);
+	},
+
 	default: async ({ request, params, locals }) => {
 		requirePermission(locals.user, 'document:approve');
 		await connectDB();
@@ -68,7 +165,6 @@ export const actions: Actions = {
 			return fail(400, { error: 'Decision, password, and meaning are required' });
 		}
 
-		// Verify password for e-signature
 		const user = await User.findById(locals.user?._id).lean() as any;
 		if (!user) return fail(400, { error: 'User not found' });
 		const validPassword = await bcrypt.compare(password, user.passwordHash);
@@ -83,7 +179,6 @@ export const actions: Actions = {
 		const now = new Date();
 		const sigId = generateId();
 
-		// Create electronic signature
 		await ElectronicSignature.create({
 			_id: sigId,
 			userId: locals.user?._id,
@@ -124,3 +219,5 @@ export const actions: Actions = {
 		redirect(303, `/documents/${params.id}`);
 	}
 };
+
+export const config = { maxDuration: 60 };

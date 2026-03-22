@@ -6,7 +6,7 @@ import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (locals.user) {
-		redirect(302, '/spu');
+		redirect(302, '/');
 	}
 	return {};
 };
@@ -53,6 +53,8 @@ export const actions: Actions = {
 			return fail(500, { error: `Server error: ${message}` });
 		}
 
-		redirect(302, '/spu');
+		redirect(302, '/');
 	}
 };
+
+export const config = { maxDuration: 60 };

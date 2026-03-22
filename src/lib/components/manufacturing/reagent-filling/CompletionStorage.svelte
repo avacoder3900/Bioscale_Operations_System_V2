@@ -38,6 +38,8 @@
 	let assignments = $state(new SvelteMap<string, string>());
 	let storageLocation = $state('');
 	let selectedFridge = $state<FridgeOption | null>(null);
+	let storageError = $state('');
+	let storageValidating = $state(false);
 
 	const needsStorage = $derived(
 		cartridges.filter(
@@ -48,9 +50,47 @@
 	const allAssigned = $derived(needsStorage.length > 0 && needsStorage.every((c) => assignments.has(c.id)));
 	const allStored = $derived(needsStorage.length === 0 && stored.length > 0);
 
+	function playBeep(success: boolean) {
+		try {
+			const ctx = new AudioContext();
+			const osc = ctx.createOscillator();
+			const gain = ctx.createGain();
+			osc.connect(gain);
+			gain.connect(ctx.destination);
+			osc.frequency.value = success ? 880 : 220;
+			osc.type = 'sine';
+			gain.gain.value = 0.3;
+			osc.start();
+			setTimeout(() => { osc.stop(); ctx.close(); }, success ? 100 : 300);
+		} catch { /* audio not available */ }
+	}
+
+	async function validateAndApplyFridge(value: string) {
+		storageError = '';
+		storageValidating = true;
+		try {
+			const res = await fetch(`/api/dev/validate-equipment?type=fridge&id=${encodeURIComponent(value)}`);
+			const result = await res.json();
+			if (!res.ok || result.error) {
+				storageError = result.error ?? `Fridge "${value}" not found in the system.`;
+				playBeep(false);
+				storageValidating = false;
+				return;
+			}
+			// Use the fridge name if returned
+			storageLocation = value;
+		} catch {
+			// If endpoint unavailable, accept the value (backwards compat)
+		}
+		storageValidating = false;
+		playBeep(true);
+		applyToAll();
+	}
+
 	function selectFridge(fridge: FridgeOption) {
 		selectedFridge = fridge;
 		storageLocation = fridge.barcode || fridge.displayName;
+		storageError = '';
 		// Clear stale assignments so user must re-apply with new fridge
 		if (assignments.size > 0) {
 			assignments = new SvelteMap();
@@ -180,19 +220,24 @@
 			{/if}
 
 			<!-- Manual scan/type input -->
-			<div class="flex gap-2">
-				<input
-					bind:value={storageLocation}
-					oninput={() => { selectedFridge = null; }}
-					onkeydown={(e) => { if (e.key === 'Enter') applyToAll(); }}
-					placeholder="Storage location (scan or type)..."
-					class="min-h-[44px] flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
-				/>
-				<button type="button" onclick={applyToAll} disabled={!storageLocation.trim() || needsStorage.length === 0}
-					class="min-h-[44px] rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-4 py-2 text-sm font-medium text-[var(--color-tron-cyan)] disabled:opacity-50"
-				>
-					Apply to All ({needsStorage.length})
-				</button>
+			<div class="space-y-1">
+				<div class="flex gap-2">
+					<input
+						bind:value={storageLocation}
+						oninput={() => { selectedFridge = null; storageError = ''; }}
+						onkeydown={async (e) => { if (e.key === 'Enter' && storageLocation.trim()) { e.preventDefault(); await validateAndApplyFridge(storageLocation.trim()); } }}
+						placeholder="Storage location / fridge barcode (scan or type)..."
+						class="min-h-[44px] flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+					/>
+					<button type="button" onclick={async () => { if (storageLocation.trim()) await validateAndApplyFridge(storageLocation.trim()); }} disabled={!storageLocation.trim() || needsStorage.length === 0 || storageValidating}
+						class="min-h-[44px] rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-4 py-2 text-sm font-medium text-[var(--color-tron-cyan)] disabled:opacity-50"
+					>
+						{storageValidating ? 'Checking...' : `Apply to All (${needsStorage.length})`}
+					</button>
+				</div>
+				{#if storageError}
+					<p class="text-sm text-red-400">{storageError}</p>
+				{/if}
 			</div>
 
 			<!-- Per-cartridge list -->

@@ -75,3 +75,5 @@ export const load: PageServerLoad = async ({ locals }) => {
 		stats: { total, passed, failed, pending, passRate }
 	};
 };
+
+export const config = { maxDuration: 60 };

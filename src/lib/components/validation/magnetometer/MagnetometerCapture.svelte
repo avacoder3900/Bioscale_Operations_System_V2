@@ -127,7 +127,7 @@
 			onSubmit?.(capturedReadings);
 
 			// Redirect to results page
-			window.location.href = `/spu/validation/magnetometer/${sessionId}`;
+			window.location.href = `/validation/magnetometer/${sessionId}`;
 		} catch (err) {
 			connectionError = err instanceof Error ? err.message : 'Submission failed';
 			onError?.(err instanceof Error ? err : new Error('Submission failed'));

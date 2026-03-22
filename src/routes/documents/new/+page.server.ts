@@ -60,3 +60,5 @@ export const actions: Actions = {
 		redirect(303, `/documents/${docId}`);
 	}
 };
+
+export const config = { maxDuration: 60 };
