@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, Role, User, generateId } from '$lib/server/db';
+import { connectDB, Role, User, AuditLog, generateId } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
 
 // All available permissions grouped
@@ -92,7 +92,9 @@ export const actions: Actions = {
 		const description = form.get('description')?.toString().trim() || undefined;
 		if (!name) return fail(400, { error: 'Role name required' });
 
-		await Role.create({ _id: generateId(), name, description, permissions: [] });
+		const roleId = generateId();
+		await Role.create({ _id: roleId, name, description, permissions: [] });
+		await AuditLog.create({ _id: generateId(), tableName: 'roles', recordId: roleId, action: 'INSERT', changedBy: locals.user?.username, changedAt: new Date() });
 		return { success: true };
 	},
 
@@ -109,6 +111,7 @@ export const actions: Actions = {
 		if (name) updates.name = name;
 		if (description !== undefined) updates.description = description;
 		await Role.updateOne({ _id: roleId }, { $set: updates });
+		await AuditLog.create({ _id: generateId(), tableName: 'roles', recordId: roleId, action: 'UPDATE', changedBy: locals.user?.username, changedAt: new Date() });
 		return { success: true };
 	},
 
@@ -122,6 +125,7 @@ export const actions: Actions = {
 		await Role.deleteOne({ _id: roleId });
 		// Remove this role from all users
 		await User.updateMany({ 'roles.roleId': roleId }, { $pull: { roles: { roleId } } });
+		await AuditLog.create({ _id: generateId(), tableName: 'roles', recordId: roleId, action: 'DELETE', changedBy: locals.user?.username, changedAt: new Date() });
 		return { success: true };
 	},
 
@@ -145,6 +149,7 @@ export const actions: Actions = {
 			{ $set: { 'roles.$[r].permissions': permissions, 'roles.$[r].roleName': role.name } },
 			{ arrayFilters: [{ 'r.roleId': roleId }] }
 		);
+		await AuditLog.create({ _id: generateId(), tableName: 'roles', recordId: roleId, action: 'UPDATE', changedBy: locals.user?.username, changedAt: new Date() });
 		return { success: true };
 	}
 };

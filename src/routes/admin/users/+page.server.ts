@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, User, Role, InviteToken, generateId } from '$lib/server/db';
+import { connectDB, User, Role, InviteToken, AuditLog, generateId } from '$lib/server/db';
 import bcrypt from 'bcryptjs';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -51,7 +51,9 @@ export const actions: Actions = {
 		if (existing) return fail(400, { error: 'Username already exists' });
 
 		const passwordHash = await bcrypt.hash(password, 10);
-		await User.create({ _id: generateId(), username, passwordHash, email, firstName, lastName });
+		const newUserId = generateId();
+		await User.create({ _id: newUserId, username, passwordHash, email, firstName, lastName });
+		await AuditLog.create({ _id: generateId(), tableName: 'users', recordId: newUserId, action: 'INSERT', changedBy: locals.user?.username, changedAt: new Date() });
 		return { success: true };
 	},
 
@@ -68,6 +70,7 @@ export const actions: Actions = {
 			if (val !== undefined) updates[field] = val || undefined;
 		}
 		await User.updateOne({ _id: userId }, { $set: updates });
+		await AuditLog.create({ _id: generateId(), tableName: 'users', recordId: userId, action: 'UPDATE', changedBy: locals.user?.username, changedAt: new Date() });
 		return { success: true };
 	},
 
@@ -85,6 +88,7 @@ export const actions: Actions = {
 				deactivatedBy: { _id: locals.user!._id, username: locals.user!.username }
 			}
 		});
+		await AuditLog.create({ _id: generateId(), tableName: 'users', recordId: userId, action: 'UPDATE', changedBy: locals.user?.username, changedAt: new Date() });
 		return { success: true };
 	},
 
@@ -99,6 +103,7 @@ export const actions: Actions = {
 			$set: { isActive: true },
 			$unset: { deactivatedAt: '', deactivatedBy: '', deactivationReason: '' }
 		});
+		await AuditLog.create({ _id: generateId(), tableName: 'users', recordId: userId, action: 'UPDATE', changedBy: locals.user?.username, changedAt: new Date() });
 		return { success: true };
 	},
 
@@ -112,6 +117,7 @@ export const actions: Actions = {
 
 		const passwordHash = await bcrypt.hash(newPassword, 10);
 		await User.updateOne({ _id: userId }, { $set: { passwordHash } });
+		await AuditLog.create({ _id: generateId(), tableName: 'users', recordId: userId, action: 'UPDATE', changedBy: locals.user?.username, changedAt: new Date() });
 		return { success: true };
 	},
 
@@ -136,6 +142,7 @@ export const actions: Actions = {
 				}
 			}
 		});
+		await AuditLog.create({ _id: generateId(), tableName: 'users', recordId: userId, action: 'UPDATE', changedBy: locals.user?.username, changedAt: new Date() });
 		return { success: true };
 	},
 
@@ -156,6 +163,7 @@ export const actions: Actions = {
 				'roleHistory.$.revokedBy': { _id: locals.user!._id, username: locals.user!.username }
 			} }
 		);
+		await AuditLog.create({ _id: generateId(), tableName: 'users', recordId: userId, action: 'UPDATE', changedBy: locals.user?.username, changedAt: new Date() });
 		return { success: true };
 	},
 
