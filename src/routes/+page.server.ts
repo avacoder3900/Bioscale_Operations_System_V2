@@ -321,7 +321,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 						count: c.count
 					}))
 				};
-			} catch { return null; }
+			} catch (err) { console.error('[DASHBOARD] cartridgeDashboard error:', err instanceof Error ? err.message : err); return null; }
 		})()
 	};
 };
