@@ -205,9 +205,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				]);
 				const labGroupMap = new Map((labGroups as any[]).map((g: any) => [g._id, g]));
 
-				// ── New dashboard queries ──
-				const [
-					fridgeCapacityAgg, allRobots, activeWaxRuns, allAssays,
+				// ── New dashboard queries (each wrapped to prevent one failure from killing all) ──
+				let fridgeCapacityAgg: any[] = [], allRobots: any[] = [], activeWaxRuns: any[] = [];
+				let allAssays: any[] = [], cartridgeBomItems: any[] = [], dailyThroughputAgg: any[] = [];
+				let recentWaxRuns: any[] = [], consumableCountsAgg: any[] = [];
+				try {
+				[fridgeCapacityAgg, allRobots, activeWaxRuns, allAssays,
 					cartridgeBomItems, dailyThroughputAgg, recentWaxRuns, consumableCountsAgg
 				] = await Promise.all([
 					CartridgeRecord.aggregate([
@@ -226,6 +229,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					WaxFillingRun.find().sort({ createdAt: -1 }).limit(5).lean(),
 					Consumable.aggregate([{ $group: { _id: '$type', count: { $sum: 1 } } }])
 				]);
+				} catch (enrichErr) {
+					console.error('[DASHBOARD] enriched queries failed:', enrichErr instanceof Error ? enrichErr.message : enrichErr);
+				}
 
 				const assayFillCounts = await CartridgeRecord.aggregate([
 					{ $match: { 'reagentFilling.assayType._id': { $exists: true } } },
@@ -321,7 +327,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 						count: c.count
 					}))
 				};
-			} catch (err) { console.error('[DASHBOARD] cartridgeDashboard error:', err instanceof Error ? err.message : err); return null; }
+			} catch (err) { 
+				console.error('[DASHBOARD] cartridgeDashboard error:', err instanceof Error ? err.stack : err); 
+				return null; 
+			}
 		})()
 	};
 };
