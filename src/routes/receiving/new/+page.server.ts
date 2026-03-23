@@ -15,7 +15,8 @@ import {
 	generateLotNumber
 } from '$lib/server/db';
 import { env } from '$env/dynamic/private';
-import { uploadFile } from '$lib/server/box';
+import { uploadFile, getOrCreateDateFolder } from '$lib/server/box';
+import { extractText } from '$lib/server/ocr';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -73,8 +74,14 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 export const actions: Actions = {
 	/**
-	 * Upload a Certificate of Conformance document to Box.com.
-	 * Returns the Box.com file URL.
+	 * Upload a COC photo to Box.com with OCR lot-number extraction.
+	 *
+	 * Flow:
+	 *   1. Accept photo + optional manual lot number
+	 *   2. Run OCR to extract lot # (format L-YYYY-MM-DD-XX), or use manual value
+	 *   3. Create/reuse a date folder in Box (BOX_COC_FOLDER_ID / YYYY-MM-DD)
+	 *   4. Rename the photo to the lot number and upload
+	 *   5. Return file URL, folder URL, and extracted lot number
 	 */
 	uploadCoc: async ({ request, locals }) => {
 		requirePermission(locals.user, 'inventory:write');
@@ -82,19 +89,55 @@ export const actions: Actions = {
 		const formData = await request.formData();
 		const file = formData.get('cocFile') as File | null;
 		const partId = formData.get('partId')?.toString();
+		const manualLotNumber = formData.get('cocLotNumber')?.toString()?.trim();
 
 		if (!file || !partId) return fail(400, { error: 'File and part are required' });
 
 		try {
 			const buffer = await file.arrayBuffer();
-			const timestamp = Date.now();
-			const ext = file.name.split('.').pop() ?? 'bin';
-			const fileName = `coc-${partId}-${timestamp}.${ext}`;
-			const folderId = env.BOX_ROOT_FOLDER_ID ?? '0';
+			const ext = file.name.split('.').pop() ?? 'jpg';
 
-			const uploaded = await uploadFile(folderId, fileName, buffer);
-			const cocUrl = `https://app.box.com/files/${uploaded.id}`;
-			return { success: true, cocUrl };
+			// Step 1: Extract lot number via OCR or use manual override
+			let lotNumber = manualLotNumber || '';
+			let ocrText = '';
+
+			if (!lotNumber) {
+				const ocrResult = await extractText(buffer, file.name);
+				ocrText = ocrResult.rawText;
+				if (ocrResult.lotNumbers.length > 0) {
+					lotNumber = ocrResult.lotNumbers[0];
+				}
+			}
+
+			if (!lotNumber) {
+				return fail(422, {
+					error: 'Could not extract lot number from photo. Please enter it manually.',
+					ocrText
+				});
+			}
+
+			// Step 2: Create date folder in Box COC root
+			const cocRootFolderId = env.BOX_COC_FOLDER_ID || env.BOX_ROOT_FOLDER_ID || '0';
+			const today = new Date().toISOString().slice(0, 10);
+			const dateFolder = await getOrCreateDateFolder(cocRootFolderId, today);
+
+			// Step 3: Upload photo named after the lot number
+			const fileName = `${lotNumber}.${ext}`;
+			const uploaded = await uploadFile(dateFolder.id, fileName, buffer);
+
+			const fileUrl = `https://app.box.com/file/${uploaded.id}`;
+			const folderUrl = `https://app.box.com/folder/${dateFolder.id}`;
+
+			return {
+				success: true,
+				cocUrl: fileUrl,
+				cocFolderUrl: folderUrl,
+				cocFolderId: dateFolder.id,
+				cocLotNumber: lotNumber,
+				cocFileId: uploaded.id,
+				cocFileName: uploaded.name,
+				ocrText: ocrText || undefined
+			};
 		} catch (err) {
 			return fail(500, { error: err instanceof Error ? err.message : 'Upload failed' });
 		}
@@ -141,6 +184,9 @@ export const actions: Actions = {
 		const pathway = formData.get('pathway')?.toString() as 'coc' | 'ip';
 		const cocDocumentUrl = formData.get('cocDocumentUrl')?.toString() || undefined;
 		const cocMeetsStandards = formData.has('cocMeetsStandards') ? formData.get('cocMeetsStandards') === 'true' : undefined;
+		const cocFolderUrl = formData.get('cocFolderUrl')?.toString() || undefined;
+		const cocFolderId = formData.get('cocFolderId')?.toString() || undefined;
+		const cocPhotosJson = formData.get('cocPhotos')?.toString();
 		const poReference = formData.get('poReference')?.toString() || undefined;
 		const supplier = formData.get('supplier')?.toString() || undefined;
 		const vendorLotNumber = formData.get('vendorLotNumber')?.toString() || undefined;
@@ -287,6 +333,9 @@ export const actions: Actions = {
 				inspectionPathway: pathway,
 				cocDocumentUrl,
 				cocMeetsStandards,
+				cocFolderUrl,
+				cocFolderId,
+				cocPhotos: cocPhotosJson ? JSON.parse(cocPhotosJson) : undefined,
 				ipResults: ipResultsSummary,
 				ipRevisionId,
 				firstArticleInspection,
