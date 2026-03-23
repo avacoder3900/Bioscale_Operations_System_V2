@@ -462,18 +462,26 @@
 				{#if cd.fridgeCapacity && cd.fridgeCapacity.length > 0}
 					<TronCard>
 						<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Fridge Capacity</h3>
-						<div class="space-y-2">
+						<div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
 							{#each cd.fridgeCapacity as fridge}
 								{@const pct = Math.min((fridge.used / fridge.capacity) * 100, 100)}
-								<div class="space-y-1">
-									<div class="flex items-center justify-between">
-										<span class="text-xs text-[var(--color-tron-text)]">{fridge.locationName}</span>
-										<span class="text-xs font-mono font-bold {pct >= 90 ? 'text-red-400' : pct >= 70 ? 'text-amber-400' : 'text-[var(--color-tron-cyan)]'}">{fridge.used}/{fridge.capacity}</span>
+								{@const href = fridge.dbLocationId ? `/equipment/location/${fridge.dbLocationId}` : null}
+								<svelte:element
+									this={href ? 'a' : 'div'}
+									{href}
+									class="group flex flex-col items-center gap-1.5 rounded-lg border border-blue-500/20 bg-blue-950/30 p-3 text-center transition-colors {href ? 'hover:border-blue-400/40 hover:bg-blue-950/50 cursor-pointer' : ''}"
+								>
+									<div class="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-500/20 transition-colors {href ? 'group-hover:bg-blue-500/30' : ''}">
+										<svg class="h-5 w-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+											<path stroke-linecap="round" stroke-linejoin="round" d="M6 2h12a1 1 0 011 1v18a1 1 0 01-1 1H6a1 1 0 01-1-1V3a1 1 0 011-1zm0 12h12M10 6h1" />
+										</svg>
 									</div>
-									<div class="h-2 rounded-full bg-[var(--color-tron-surface)] overflow-hidden">
-										<div class="h-full rounded-full transition-all" style="width: {pct}%; background: {pct >= 90 ? '#f87171' : pct >= 70 ? '#fbbf24' : 'var(--color-tron-cyan)'};"></div>
+									<span class="text-xs font-medium text-blue-100 leading-tight truncate w-full">{fridge.locationName}</span>
+									<span class="font-mono text-xs font-bold {pct >= 90 ? 'text-red-400' : pct >= 70 ? 'text-amber-400' : 'text-blue-300'}">{fridge.used}/{fridge.capacity}</span>
+									<div class="h-1.5 w-full overflow-hidden rounded-full bg-blue-950/60">
+										<div class="h-full rounded-full transition-all" style="width: {pct}%; background: {pct >= 90 ? '#f87171' : pct >= 70 ? '#fbbf24' : '#60a5fa'};"></div>
 									</div>
-								</div>
+								</svelte:element>
 							{/each}
 						</div>
 					</TronCard>

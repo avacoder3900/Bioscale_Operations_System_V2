@@ -290,7 +290,7 @@
 										{/if}
 									</div>
 									<div>
-										<span class="text-sm font-semibold text-[var(--color-tron-text)]">{loc.displayName}</span>
+										<a href="/equipment/location/{loc.id}" class="text-sm font-semibold text-[var(--color-tron-text)] hover:text-[var(--color-tron-cyan)] transition-colors">{loc.displayName}</a>
 										<span class="ml-2 inline-flex rounded border px-2 py-0.5 text-[10px] font-bold uppercase {typeBadgeClass(loc.locationType)}">
 											{loc.locationType}
 										</span>

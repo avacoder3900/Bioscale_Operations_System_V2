@@ -268,7 +268,7 @@
 											<path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
 										</svg>
 									</div>
-									<span class="text-sm font-semibold text-blue-100">{fridge.displayName}</span>
+									<a href="/equipment/location/{fridge.id}" class="text-sm font-semibold text-blue-100 hover:text-blue-300 transition-colors">{fridge.displayName}</a>
 								</div>
 								<div class="flex items-center gap-2">
 									{#if temp != null}
@@ -332,7 +332,7 @@
 											<path stroke-linecap="round" stroke-linejoin="round" d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z" />
 										</svg>
 									</div>
-									<span class="text-sm font-semibold text-orange-100">{oven.displayName}</span>
+									<a href="/equipment/location/{oven.id}" class="text-sm font-semibold text-orange-100 hover:text-orange-300 transition-colors">{oven.displayName}</a>
 								</div>
 								<div class="flex items-center gap-2">
 									{#if temp != null}

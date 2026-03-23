@@ -191,6 +191,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					return Array.from(merged.entries()).map(([k, v]) => ({ _id: k, count: v }));
 				})();
 				const fridgeMap = new Map((fridges as any[]).map((f: any) => [f.barcode ?? f.displayName ?? String(f._id), f.displayName ?? f.barcode ?? String(f._id)]));
+				// Map from barcode/displayName key → actual _id for detail links
+				const fridgeIdMap = new Map((fridges as any[]).map((f: any) => [f.barcode ?? f.displayName ?? String(f._id), String(f._id)]));
 
 				const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed'];
 				const phaseMap = new Map((phaseCounts as any[]).map((p: any) => [p._id, p.count]));
@@ -292,6 +294,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					},
 					fridgeCapacity: (fridgeCapacityAgg as any[]).map((f: any) => ({
 						locationId: f._id,
+						dbLocationId: fridgeIdMap.get(f._id) ?? null,
 						locationName: fridgeMap.get(f._id) ?? f._id,
 						used: f.count,
 						capacity: 10
