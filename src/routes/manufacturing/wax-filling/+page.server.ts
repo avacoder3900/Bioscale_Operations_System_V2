@@ -427,6 +427,11 @@ export const actions: Actions = {
 			}
 		}
 
+		// Hard cap at 24 cartridges per deck load
+		if (cartridgeIds.length > 24) {
+			return fail(400, { error: `Maximum 24 cartridges per deck. Received ${cartridgeIds.length}.` });
+		}
+
 		// Check for duplicate barcodes in this scan batch
 		const uniqueIds = new Set(cartridgeIds);
 		if (uniqueIds.size !== cartridgeIds.length) {

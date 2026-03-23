@@ -153,8 +153,9 @@
 			const scanned = cartridgeInput.trim();
 			cartridgeInput = '';
 
-			if (isFull) {
+			if (isFull || scans.length >= TOTAL_POSITIONS) {
 				playBeep(false);
+				deckError = `Deck is full (${TOTAL_POSITIONS} max)`;
 				return;
 			}
 
@@ -382,7 +383,7 @@
 					</div>
 					<button
 						type="button"
-						onclick={() => { cartridgeInput = generateTestBarcode('CART'); handleCartridgeKeydown(new KeyboardEvent('keydown', { key: 'Enter' })); }}
+						onclick={() => { if (scans.length >= TOTAL_POSITIONS) return; cartridgeInput = generateTestBarcode('CART'); handleCartridgeKeydown(new KeyboardEvent('keydown', { key: 'Enter' })); }}
 						class="mt-5 rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-orange)] hover:text-[var(--color-tron-orange)]"
 					>
 						Test
