@@ -1,7 +1,7 @@
 import { redirect, fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import {
-	connectDB, CartridgeRecord, AssayDefinition, ShippingLot, ReagentBatchRecord, generateId
+	connectDB, CartridgeRecord, AssayDefinition, ShippingLot, ReagentBatchRecord, generateId, AuditLog
 } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -76,6 +76,14 @@ export const actions: Actions = {
 			status: 'open',
 			cartridgeCount: 0
 		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'shipping_lots',
+			recordId: lot._id,
+			action: 'INSERT',
+			changedBy: locals.user?.username ?? locals.user?._id,
+			changedAt: new Date()
+		});
 		return { success: true, action: 'createLot', lotId: lot._id };
 	},
 
@@ -96,6 +104,14 @@ export const actions: Actions = {
 		};
 
 		await ShippingLot.updateOne({ _id: lotId }, { $push: { qaqcReleases: newRelease } });
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'shipping_lots',
+			recordId: lotId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username ?? locals.user?._id,
+			changedAt: new Date()
+		});
 		return { success: true, action: 'createRelease', message: 'QAQC release created' };
 	},
 
@@ -121,6 +137,14 @@ export const actions: Actions = {
 				}
 			}
 		);
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'shipping_lots',
+			recordId: lotId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username ?? locals.user?._id,
+			changedAt: new Date()
+		});
 		return { success: true, message: 'Test result recorded' };
 	}
 };

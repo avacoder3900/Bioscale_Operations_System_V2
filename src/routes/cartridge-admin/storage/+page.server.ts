@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, CartridgeRecord, EquipmentLocation } from '$lib/server/db';
+import { connectDB, CartridgeRecord, EquipmentLocation, AuditLog, generateId } from '$lib/server/db';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -114,6 +114,14 @@ export const actions: Actions = {
 				operatorId: locals.user?._id,
 				operatorUsername: locals.user?.username,
 				notes: `Stored in ${fridgeKey}${containerBarcode ? `, container ${containerBarcode}` : ''}`
+			});
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'cartridge_records',
+				recordId: cid,
+				action: 'UPDATE',
+				changedBy: locals.user?.username ?? locals.user?._id,
+				changedAt: new Date()
 			});
 		}
 
