@@ -50,8 +50,9 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 				return json({ error: `Cartridge "${id}" not found. It must go through wax filling first.`, isNew: true }, { status: 404 });
 			}
 			const phase = (cart as any).currentPhase;
-			if (phase !== 'wax_filled') {
-				return json({ error: `Cartridge "${id}" is in phase "${phase}", expected wax_filled. Cannot add to reagent run.` }, { status: 400 });
+			const validForReagent = ['wax_filled', 'wax_stored', 'wax_qc'];
+			if (!validForReagent.includes(phase)) {
+				return json({ error: `Cartridge "${id}" is in phase "${phase}". Must be wax stored before reagent filling.` }, { status: 400 });
 			}
 			return json({ valid: true, id, isNew: false, phase });
 		}
