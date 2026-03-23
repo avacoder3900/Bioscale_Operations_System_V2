@@ -1,3 +1,4 @@
+export const config = { maxDuration: 60 };
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import {
@@ -505,4 +506,3 @@ export const actions: Actions = {
 	}
 };
 
-export const config = { maxDuration: 60 };
