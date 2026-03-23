@@ -22,7 +22,7 @@ const partDefinitionSchema = new Schema({
 }, { timestamps: true });
 
 partDefinitionSchema.index({ partNumber: 1 }, { unique: true });
-partDefinitionSchema.index({ barcode: 1 }, { sparse: true });
+partDefinitionSchema.index({ barcode: 1 }, { unique: true, sparse: true });
 partDefinitionSchema.index({ bomType: 1 });
 
 export const PartDefinition = mongoose.models.PartDefinition || mongoose.model('PartDefinition', partDefinitionSchema, 'part_definitions');

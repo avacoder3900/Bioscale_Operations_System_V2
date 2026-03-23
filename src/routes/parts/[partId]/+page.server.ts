@@ -292,6 +292,11 @@ export const actions: Actions = {
 		const part = await PartDefinition.findById(params.partId) as any;
 		if (!part) return fail(404, { error: 'Part not found' });
 
+		if (barcode) {
+			const existing = await PartDefinition.findOne({ barcode, _id: { $ne: params.partId } }).lean() as any;
+			if (existing) return fail(400, { error: `Barcode already assigned to ${existing.partNumber ?? existing._id}` });
+		}
+
 		const oldBarcode = part.barcode ?? null;
 		part.barcode = barcode;
 		await part.save();
