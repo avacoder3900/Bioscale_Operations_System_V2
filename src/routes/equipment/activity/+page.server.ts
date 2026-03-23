@@ -1,6 +1,6 @@
 export const config = { maxDuration: 60 };
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, Consumable, EquipmentLocation, Equipment, WaxFillingRun, ReagentBatchRecord } from '$lib/server/db';
+import { connectDB, Consumable, EquipmentLocation, Equipment, WaxFillingRun, ReagentBatchRecord, CartridgeRecord } from '$lib/server/db';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -37,15 +37,38 @@ export const load: PageServerLoad = async ({ locals }) => {
 		assignedRunId: t.assignedRunId ?? null
 	}));
 
+	// Compute occupant counts from CartridgeRecord
+	const [waxCounts, reagentCounts] = await Promise.all([
+		CartridgeRecord.aggregate([
+			{ $match: { 'waxStorage.location': { $exists: true }, currentPhase: 'wax_stored' } },
+			{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
+		]).catch(() => []),
+		CartridgeRecord.aggregate([
+			{ $match: { 'storage.fridgeName': { $exists: true }, currentPhase: { $in: ['stored', 'reagent_filled'] } } },
+			{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
+		]).catch(() => [])
+	]);
+	const occupantMap = new Map<string, number>();
+	for (const c of [...waxCounts as any[], ...reagentCounts as any[]]) {
+		// Match by barcode or display name
+		occupantMap.set(c._id, (occupantMap.get(c._id) ?? 0) + c.count);
+	}
+
 	// Locations
-	const locations = (locationDocs as any[]).map(l => ({
-		id: l._id,
-		barcode: l.barcode ?? '',
-		locationType: l.locationType ?? 'fridge',
-		displayName: l.displayName ?? '',
-		isActive: l.isActive ?? true,
-		capacity: l.capacity ?? null
-	}));
+	const locations = (locationDocs as any[]).map(l => {
+		const barcode = l.barcode ?? '';
+		const name = l.displayName ?? '';
+		const occupants = (occupantMap.get(barcode) ?? 0) + (occupantMap.get(name) ?? 0);
+		return {
+			id: l._id,
+			barcode,
+			locationType: l.locationType ?? 'fridge',
+			displayName: name,
+			isActive: l.isActive ?? true,
+			capacity: l.capacity ?? null,
+			occupantCount: occupants
+		};
+	});
 
 	// Equipment temperatures keyed by name
 	const equipmentTemps: Record<string, number | null> = {};
