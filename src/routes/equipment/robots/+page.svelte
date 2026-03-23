@@ -14,6 +14,10 @@
 </script>
 
 <div class="space-y-6">
+	<div class="rounded-lg border border-amber-500/30 bg-amber-900/10 px-4 py-3 mb-4">
+		<p class="text-sm text-amber-300">⚠️ MULTI RUN FEATURES TO BE ADDED ONCE FLOW AND FUNCTIONALITY HAS BEEN FINALIZED. FOR NOW, ONE FULL RUN PER ROBOT.</p>
+	</div>
+
 	<div class="flex items-center justify-between">
 		<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Opentrons Robots</h2>
 		<button

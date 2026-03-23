@@ -89,6 +89,29 @@
 	let submitting = $state(false);
 	let submittingTooLong = $state(false);
 	let errorMsg = $state('');
+	let coolingBypassed = $state(false);
+	let showCoolingBypass = $state(false);
+	let coolingBypassPassword = $state('');
+	let coolingBypassError = $state('');
+
+	function handleCoolingBypass() {
+		// Check admin password (same pattern as manual edits in line inventory)
+		const pw = coolingBypassPassword.trim();
+		if (!pw) { coolingBypassError = 'Enter admin password'; return; }
+		// Verify via server
+		fetch('/api/dev/validate-equipment?type=admin-password&id=' + encodeURIComponent(pw))
+			.then(r => r.json())
+			.then(d => {
+				if (d.valid) {
+					coolingBypassed = true;
+					showCoolingBypass = false;
+					coolingBypassError = '';
+				} else {
+					coolingBypassError = 'Invalid admin password';
+				}
+			})
+			.catch(() => { coolingBypassError = 'Verification failed'; });
+	}
 	let showCancelModal = $state(false);
 	let cancelReason = $state('');
 
@@ -1016,11 +1039,32 @@
 				createdAt: new Date(c.createdAt),
 				updatedAt: new Date(c.updatedAt)
 			}))}
-			{#if !previewParam && !coolingComplete}
+			{#if !previewParam && !coolingComplete && !coolingBypassed}
 				<div class="rounded-lg border border-blue-500/50 bg-blue-900/20 p-5 text-center">
 					<p class="text-sm font-medium text-blue-300">Cooling in progress — inspection locked</p>
 					<p class="mt-2 font-mono text-3xl font-bold text-blue-200">Cooling: {coolingCountdown} remaining before inspection</p>
 					<p class="mt-2 text-xs text-blue-400/70">Cartridges must cool for 10 minutes before QC inspection can begin.</p>
+					{#if !showCoolingBypass}
+						<button type="button" onclick={() => { showCoolingBypass = true; }} class="mt-3 text-xs text-blue-400/50 hover:text-blue-300 transition-colors">
+							Admin Override
+						</button>
+					{:else}
+						<div class="mt-3 flex items-center justify-center gap-2">
+							<input
+								type="password"
+								bind:value={coolingBypassPassword}
+								placeholder="Admin password..."
+								class="rounded border border-blue-500/30 bg-blue-900/30 px-3 py-1.5 text-sm text-blue-200 placeholder:text-blue-400/40 focus:border-blue-400 focus:outline-none"
+								onkeydown={(e) => { if (e.key === 'Enter') handleCoolingBypass(); }}
+							/>
+							<button type="button" onclick={handleCoolingBypass} class="rounded bg-blue-500/20 px-3 py-1.5 text-sm text-blue-300 hover:bg-blue-500/30">
+								Bypass
+							</button>
+						</div>
+						{#if coolingBypassError}
+							<p class="mt-1 text-xs text-red-400">{coolingBypassError}</p>
+						{/if}
+					{/if}
 				</div>
 			{:else if qcCarts.length > 0}
 				<QCInspection
