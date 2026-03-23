@@ -442,19 +442,7 @@
 							</TronCard>
 						{/if}
 
-						{#if cd.storageDistribution.length > 0}
-							<TronCard>
-								<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Fridge Storage</h3>
-								<div class="space-y-2">
-									{#each cd.storageDistribution as loc}
-										<div class="flex items-center justify-between">
-											<span class="text-xs text-[var(--color-tron-text)]">{loc.locationName}</span>
-											<span class="text-xs font-mono font-bold text-[var(--color-tron-cyan)]">{loc.count}</span>
-										</div>
-									{/each}
-								</div>
-							</TronCard>
-						{/if}
+						<!-- Fridge storage data moved to Fridge Capacity icon cards below -->
 					</div>
 				</div>
 
