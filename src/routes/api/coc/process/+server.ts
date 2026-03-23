@@ -80,7 +80,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const fileName = `${lotNumber}.${ext}`;
 		const uploaded = await uploadFile(dateFolder.id, fileName, buffer);
 
-		const fileUrl = `https://app.box.com/file/${uploaded.id}`;
+		// Use BIMS proxy URL so the file loads inline (not Box redirect)
+		const fileUrl = `/api/box/files/${uploaded.id}/view`;
 		const folderUrl = `https://app.box.com/folder/${dateFolder.id}`;
 
 		// --- Step 4: Audit log ---

@@ -125,7 +125,8 @@ export const actions: Actions = {
 			const fileName = `${lotNumber}.${ext}`;
 			const uploaded = await uploadFile(dateFolder.id, fileName, buffer);
 
-			const fileUrl = `https://app.box.com/file/${uploaded.id}`;
+			// Use BIMS proxy URL so clicking the COC button loads the file inline
+			const fileUrl = `/api/box/files/${uploaded.id}/view`;
 			const folderUrl = `https://app.box.com/folder/${dateFolder.id}`;
 
 			return {
