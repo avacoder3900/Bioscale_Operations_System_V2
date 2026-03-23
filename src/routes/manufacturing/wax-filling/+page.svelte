@@ -492,7 +492,7 @@
 		return coolingConfirmedAt ? Date.now() - coolingConfirmedAt.getTime() : COOLING_REQUIRED_MS;
 	});
 	const coolingRemainingMs = $derived(Math.max(0, COOLING_REQUIRED_MS - coolingElapsedMs));
-	const coolingComplete = $derived(coolingRemainingMs === 0);
+	const coolingComplete = $derived(coolingRemainingMs === 0 || coolingBypassed);
 	const coolingCountdown = $derived.by(() => {
 		const totalSec = Math.ceil(coolingRemainingMs / 1000);
 		const m = Math.floor(totalSec / 60);
