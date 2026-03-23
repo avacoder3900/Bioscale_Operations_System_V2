@@ -280,7 +280,12 @@
 								</div>
 							</div>
 							<div class="min-h-[40px] rounded-lg border border-blue-500/10 bg-blue-950/30 p-2">
-								{#if items.length === 0}
+								{#if fridge.occupantCount > 0}
+									<div class="flex items-center justify-center gap-2 py-1">
+										<span class="text-2xl font-bold text-blue-200">{fridge.occupantCount}</span>
+										<span class="text-xs text-blue-300/60">cartridges stored</span>
+									</div>
+								{:else if items.length === 0}
 									<p class="py-1 text-center text-[11px] text-blue-300/30">Empty</p>
 								{:else}
 									<div class="flex flex-wrap gap-1.5">
@@ -339,7 +344,12 @@
 								</div>
 							</div>
 							<div class="min-h-[40px] rounded-lg border border-orange-500/10 bg-orange-950/30 p-2">
-								{#if items.length === 0}
+								{#if oven.occupantCount > 0}
+									<div class="flex items-center justify-center gap-2 py-1">
+										<span class="text-2xl font-bold text-orange-200">{oven.occupantCount}</span>
+										<span class="text-xs text-orange-300/60">cartridges</span>
+									</div>
+								{:else if items.length === 0}
 									<p class="py-1 text-center text-[11px] text-orange-300/30">Empty</p>
 								{:else}
 									<div class="flex flex-wrap gap-1.5">
