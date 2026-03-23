@@ -133,6 +133,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				const cdNow = new Date();
 				const sevenDaysAgo = new Date(cdNow.getTime() - 7 * 24 * 60 * 60 * 1000);
 				const thirtyDaysFromNow = new Date(cdNow.getTime() + 30 * 24 * 60 * 60 * 1000);
+				let storageCounts: any[] = [];
 
 				const [
 					phaseCounts, totalMfg, totalVoided, waxQcCounts, reagentInspCounts,
