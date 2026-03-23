@@ -138,22 +138,28 @@ Build a Part Accession page that generates and assigns barcodes to parts in the 
 - Modify: `src/routes/receiving/[lotId]/+page.server.ts` (in disposeLot acceptance block)
 - This ensures all FUTURE parts get barcodes automatically at receiving
 
-### S7: Barcode Label Data Export
-**As an** operator, **I want** to export barcode data for printing labels **so that** I can put physical barcode stickers on parts/bins.
+### S7: QR Code Generation & Label Export
+**As an** operator, **I want** QR codes generated for each part and a printable label sheet **so that** I can print and stick QR labels on parts/bins for scanning.
 
 **Acceptance Criteria:**
-- Form action `exportLabels` on accession page
-- Input: selection of part IDs (or "all registered")
-- Returns downloadable data in a format suitable for label printing:
-  - CSV with columns: partNumber, partName, barcode, category, bomType
-  - One row per part
-- File name: `part-barcodes-YYYY-MM-DD.csv`
+- All part barcodes are rendered as **QR codes** (not 1D barcodes)
+- QR code content: the `PART-XXXXXX` string (scanner reads this, system looks up the part)
+- Accession page shows a QR code preview next to each registered part
+- Form action `exportLabels` on accession page:
+  - Input: selection of part IDs (or "all registered")
+  - Generates a **printable HTML/PDF page** with QR code labels:
+    - Each label shows: QR code image + part number + part name (human-readable below QR)
+    - Grid layout suitable for label sheets (e.g., Avery 5160 or similar)
+  - File name: `part-qr-labels-YYYY-MM-DD.pdf` or printable HTML page
+- QR codes also displayed on individual part detail pages (`/parts/[partId]`)
 - Permission: `inventory:read`
 
 **Technical Notes:**
-- Return CSV as `text/csv` response with Content-Disposition header
-- This gets fed into whatever label printer software they use (Zebra, DYMO, Brother, etc.)
-- Physical label printing integration is out of scope — just the data export
+- Use a server-side QR library (e.g., `qrcode` npm package) to generate QR as SVG or PNG data URI
+- QR generation happens server-side in the load function — returns base64 SVG/PNG per part
+- For the printable label page: generate a full-page HTML with CSS print styles, or use a PDF library
+- QR codes encode the `PART-XXXXXX` string only — scanners emit this as keyboard input, which the system already handles
+- The accession page and part detail page show QR inline; the export action generates the printable sheet
 
 ## Implementation Order
 
@@ -172,7 +178,7 @@ Phase 2 — Ongoing Integration
 
 ## Out of Scope
 - Physical label printer integration (Zebra/DYMO drivers)
-- QR code generation (barcodes are text-based identifiers for now)
+- ~~QR code generation~~ — QR codes are IN SCOPE (see S7)
 - Barcode format customization per part category
 - Vendor barcode ↔ part barcode cross-reference validation
 - Mobile barcode scanning UI (existing scanner input works via keyboard emulation)
@@ -192,4 +198,4 @@ Phase 2 — Ongoing Integration
 | `/parts/accession` | GET | List registered/unregistered parts |
 | `/parts/accession` (action: assignBarcode) | POST | Generate + assign barcode to single part |
 | `/parts/accession` (action: assignAll) | POST | Bulk assign barcodes to all unregistered parts |
-| `/parts/accession` (action: exportLabels) | POST | Download CSV for label printing |
+| `/parts/accession` (action: exportLabels) | POST | Generate printable QR code label sheet |
