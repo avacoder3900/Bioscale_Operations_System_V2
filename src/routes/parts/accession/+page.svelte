@@ -168,23 +168,38 @@
 				Registered Parts ({data.registered.length})
 			</h2>
 			{#if data.registered.length > 0}
-				<form method="POST" action="?/exportLabels" use:enhance={() => {
-					return async ({ result }) => {
-						if (result.type === 'success' && result.data?.csv) {
-							const blob = new Blob([result.data.csv], { type: 'text/csv' });
-							const url = URL.createObjectURL(blob);
-							const a = document.createElement('a');
-							a.href = url;
-							a.download = `part-qr-labels-${new Date().toISOString().slice(0, 10)}.csv`;
-							a.click();
-							URL.revokeObjectURL(url);
-						}
-					};
-				}}>
-					<button type="submit" class="px-4 py-2 bg-gray-600 text-white text-sm rounded-lg hover:bg-gray-700">
-						Export Labels (CSV)
-					</button>
-				</form>
+				<div class="flex gap-2">
+					<form method="POST" action="?/exportLabels" use:enhance={() => {
+						return async ({ result }) => {
+							if (result.type === 'success' && result.data?.html) {
+								const w = window.open('', '_blank');
+								if (w) { w.document.write(result.data.html); w.document.close(); }
+							}
+						};
+					}}>
+						<button type="submit" class="px-4 py-2 bg-gray-600 text-white text-sm rounded-lg hover:bg-gray-700">
+							Print QR Labels
+						</button>
+					</form>
+					<form method="POST" action="?/exportLabels" use:enhance={() => {
+						return async ({ result }) => {
+							if (result.type === 'success' && result.data?.csv) {
+								const blob = new Blob([result.data.csv], { type: 'text/csv' });
+								const url = URL.createObjectURL(blob);
+								const a = document.createElement('a');
+								a.href = url;
+								a.download = `part-barcodes-${new Date().toISOString().slice(0, 10)}.csv`;
+								a.click();
+								URL.revokeObjectURL(url);
+							}
+						};
+					}}>
+						<input type="hidden" name="format" value="csv" />
+						<button type="submit" class="px-4 py-2 bg-gray-500 text-white text-sm rounded-lg hover:bg-gray-600">
+							Export CSV
+						</button>
+					</form>
+				</div>
 			{/if}
 		</div>
 		{#if data.registered.length > 0}
@@ -192,6 +207,7 @@
 				<table class="w-full text-sm">
 					<thead class="bg-gray-50">
 						<tr>
+							<th class="text-left p-3 font-medium text-gray-600">QR</th>
 							<th class="text-left p-3 font-medium text-gray-600">Part Number</th>
 							<th class="text-left p-3 font-medium text-gray-600">Name</th>
 							<th class="text-left p-3 font-medium text-gray-600">Barcode</th>
@@ -203,6 +219,11 @@
 					<tbody class="divide-y">
 						{#each data.registered as part}
 							<tr class="hover:bg-gray-50">
+								<td class="p-3">
+									{#if part.qrDataUrl}
+										<img src={part.qrDataUrl} alt={part.barcode} class="w-10 h-10" />
+									{/if}
+								</td>
 								<td class="p-3 font-mono text-xs">{part.partNumber}</td>
 								<td class="p-3">{part.name}</td>
 								<td class="p-3">

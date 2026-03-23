@@ -2,6 +2,7 @@ import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, PartDefinition, AuditLog, generateId } from '$lib/server/db';
 import { generatePartBarcode } from '$lib/server/services/barcode-generator';
+import QRCode from 'qrcode';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -13,8 +14,19 @@ export const load: PageServerLoad = async ({ locals }) => {
 		.sort({ partNumber: 1 })
 		.lean() as any[];
 
-	const registered = allParts
-		.filter((p: any) => p.barcode)
+	const registeredParts = allParts.filter((p: any) => p.barcode);
+
+	// Generate QR code data URIs for registered parts
+	const qrCodes: Record<string, string> = {};
+	for (const p of registeredParts) {
+		try {
+			qrCodes[p._id] = await QRCode.toDataURL(p.barcode, { width: 128, margin: 1 });
+		} catch {
+			qrCodes[p._id] = '';
+		}
+	}
+
+	const registered = registeredParts
 		.map((p: any) => ({
 			id: p._id,
 			partNumber: p.partNumber ?? '',
@@ -22,7 +34,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			category: p.category ?? null,
 			bomType: p.bomType ?? null,
 			inventoryCount: p.inventoryCount ?? 0,
-			barcode: p.barcode
+			barcode: p.barcode,
+			qrDataUrl: qrCodes[p._id] ?? ''
 		}));
 
 	const unregistered = allParts
@@ -137,6 +150,7 @@ export const actions: Actions = {
 
 		const form = await request.formData();
 		const partIds = form.get('partIds')?.toString();
+		const format = form.get('format')?.toString() ?? 'html';
 
 		let filter: Record<string, any> = { isActive: true, barcode: { $exists: true, $nin: [null, ''] } };
 		if (partIds) {
@@ -149,17 +163,42 @@ export const actions: Actions = {
 			.sort({ partNumber: 1 })
 			.lean() as any[];
 
-		// Generate CSV
-		const header = 'Part Number,Part Name,Barcode,Category,BOM Type';
-		const rows = parts.map((p: any) =>
-			`"${p.partNumber ?? ''}","${(p.name ?? '').replace(/"/g, '""')}","${p.barcode ?? ''}","${p.category ?? ''}","${p.bomType ?? ''}"`
-		);
-		const csv = [header, ...rows].join('\n');
+		if (format === 'csv') {
+			const header = 'Part Number,Part Name,Barcode,Category,BOM Type';
+			const rows = parts.map((p: any) =>
+				`"${p.partNumber ?? ''}","${(p.name ?? '').replace(/"/g, '""')}","${p.barcode ?? ''}","${p.category ?? ''}","${p.bomType ?? ''}"`
+			);
+			return { exportSuccess: true, csv: [header, ...rows].join('\n'), count: parts.length };
+		}
 
-		return {
-			exportSuccess: true,
-			csv,
-			count: parts.length
-		};
+		// Generate printable HTML with QR codes
+		const labels: { partNumber: string; name: string; barcode: string; qr: string }[] = [];
+		for (const p of parts) {
+			const qr = await QRCode.toDataURL(p.barcode, { width: 150, margin: 1 });
+			labels.push({ partNumber: p.partNumber ?? '', name: p.name ?? '', barcode: p.barcode, qr });
+		}
+
+		const html = `<!DOCTYPE html>
+<html><head><title>Part QR Labels</title>
+<style>
+@media print { body { margin: 0; } .label { break-inside: avoid; } }
+body { font-family: Arial, sans-serif; }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; padding: 12px; }
+.label { border: 1px solid #ccc; border-radius: 4px; padding: 8px; text-align: center; }
+.label img { width: 100px; height: 100px; }
+.label .part-number { font-size: 11px; font-weight: bold; margin-top: 4px; }
+.label .part-name { font-size: 9px; color: #666; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; margin-inline: auto; }
+.label .barcode-text { font-size: 10px; font-family: monospace; margin-top: 2px; }
+</style></head><body>
+<div class="grid">${labels.map(l => `
+<div class="label">
+<img src="${l.qr}" alt="${l.barcode}" />
+<div class="part-number">${l.partNumber}</div>
+<div class="part-name">${l.name}</div>
+<div class="barcode-text">${l.barcode}</div>
+</div>`).join('')}
+</div></body></html>`;
+
+		return { exportSuccess: true, html, count: parts.length };
 	}
 };
