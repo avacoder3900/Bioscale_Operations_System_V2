@@ -142,33 +142,33 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 						{ $match: { currentPhase: { $ne: null } } },
 						{ $group: { _id: '$currentPhase', count: { $sum: 1 } } },
 						{ $sort: { count: -1 } }
-					]),
-					CartridgeRecord.countDocuments({ currentPhase: { $ne: 'voided' } }),
-					CartridgeRecord.countDocuments({ currentPhase: 'voided' }),
+					]).catch(() => []),
+					CartridgeRecord.countDocuments({ currentPhase: { $ne: 'voided' } }).catch(() => 0),
+					CartridgeRecord.countDocuments({ currentPhase: 'voided' }).catch(() => 0),
 					CartridgeRecord.aggregate([
 						{ $match: { 'waxQc.status': { $exists: true } } },
 						{ $group: { _id: '$waxQc.status', count: { $sum: 1 } } }
-					]),
+					]).catch(() => []),
 					CartridgeRecord.aggregate([
 						{ $match: { 'reagentInspection.status': { $exists: true } } },
 						{ $group: { _id: '$reagentInspection.status', count: { $sum: 1 } } }
-					]),
-					CartridgeRecord.find().sort({ updatedAt: -1 }).limit(15).lean(),
+					]).catch(() => []),
+					CartridgeRecord.find().sort({ updatedAt: -1 }).limit(15).lean().catch(() => []),
 					CartridgeRecord.find({
 						'reagentFilling.expirationDate': { $lte: thirtyDaysFromNow, $gte: cdNow },
 						currentPhase: { $nin: ['voided', 'completed', 'shipped'] }
-					}).sort({ 'reagentFilling.expirationDate': 1 }).limit(10).lean(),
+					}).sort({ 'reagentFilling.expirationDate': 1 }).limit(10).lean().catch(() => []),
 					EquipmentLocation.find({ locationType: 'fridge', isActive: true }).lean().catch(() => []),
-					CartridgeRecord.countDocuments({ createdAt: { $gte: sevenDaysAgo } }),
+					CartridgeRecord.countDocuments({ createdAt: { $gte: sevenDaysAgo } }).catch(() => 0),
 					CartridgeRecord.aggregate([
 						{ $match: { 'reagentFilling.assayType.name': { $exists: true } } },
 						{ $group: { _id: '$reagentFilling.assayType.name', count: { $sum: 1 } } },
 						{ $sort: { count: -1 } }
-					]),
-					LabCartridge.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
-					LabCartridge.aggregate([{ $group: { _id: '$cartridgeType', count: { $sum: 1 } } }]),
-					CartridgeGroup.find().lean(),
-					LabCartridge.countDocuments()
+					]).catch(() => []),
+					LabCartridge.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]).catch(() => []),
+					LabCartridge.aggregate([{ $group: { _id: '$cartridgeType', count: { $sum: 1 } } }]).catch(() => []),
+					CartridgeGroup.find().lean().catch(() => []),
+					LabCartridge.countDocuments().catch(() => 0)
 				]);
 
 				storageCounts = await (async () => {
