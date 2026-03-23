@@ -1,16 +1,35 @@
 # SPU Assembly, IPK & Inventory Subtraction Audit
 
-**Date:** 2026-03-23
+**Date:** 2026-03-23 (Updated: 2026-03-23)
 **Branch:** dev
-**Purpose:** Gap analysis for the SPU assembly pathway, IPK (In-Process Kit) integration with inventory, barcode scanning for inventory subtraction, and the living DHR during assembly.
+**Purpose:** Gap analysis and DECIDED architecture for SPU assembly, IPK placement acknowledgment, inventory subtraction during Work Instructions, and build checklist generation.
 
 ---
 
 ## Terminology
 
-- **IPK (In-Process Kit):** A physical bucket/container on the SPU assembly line that holds the parts needed for a specific assembly step or group of steps. IPKs are NOT connected to the kanban board — they live on the assembly line.
+- **IPK (In-Process Kit):** A physical bucket/container on the SPU assembly line that holds the parts needed for assembly. IPKs are NOT connected to the kanban board — they live on the assembly line. **IPKs do NOT withdraw inventory.** They only acknowledge that parts have been placed in their appropriate positions.
 - **DHR (Device History Record):** The SPU document itself — a Sacred Document that grows as the device is built, validated, and deployed.
 - **BOM (Bill of Materials):** The list of parts needed to build one SPU. Currently defined in BomItem collection.
+- **Build Checklist:** A generated list of all parts needed when an operator initiates a new build of X SPUs. This is the preparation step before IPKs are loaded.
+
+---
+
+## DECIDED ARCHITECTURE (Owner-Approved)
+
+> These decisions override any previous proposals in this document.
+
+### Decision 1: IPKs Acknowledge Placement Only — NO Inventory Withdrawal
+IPKs confirm that parts have been placed in the correct positions on the assembly line. The system records WHAT is in the IPK and WHERE it was placed, but does NOT deduct inventory at this stage.
+
+### Decision 2: Inventory Withdrawal Happens in Work Instructions
+Inventory is subtracted when the operator scans/uses a part during the actual Work Instruction assembly steps. This is the ONLY point where `PartDefinition.inventoryCount` is decremented.
+
+### Decision 3: Discard/Scrap Inventory in Work Instructions Section
+Operators must be able to discard (scrap) inventory during assembly when a part is damaged, defective, or otherwise unusable. This creates an InventoryTransaction of type 'scrap' with a reason, without installing the part into the SPU.
+
+### Decision 4: Build Checklist When Prompting New Build of X SPUs
+When an operator initiates a new build run of X SPUs, the system generates a checklist of ALL parts needed (BOM quantities multiplied by X). This checklist is used to verify inventory availability and prepare the line before assembly begins.
 
 ---
 
@@ -147,24 +166,35 @@ Today, the operator:
 - Has no validation that all required parts are gathered before starting
 - Has no physical container tracked by the system
 
-### What IPK Integration Would Look Like
+### Decided IPK Integration Flow
 
 ```
-PROPOSED FLOW:
+DECIDED FLOW:
 
-1. SPU created (draft) → BOM defines required parts
-2. IPK created for this SPU build
-   - System generates pick list from BOM
-   - IPK gets a printed barcode label
-3. Kitting operator picks parts from inventory shelves
-   - Scans each part barcode into the IPK
-   - Inventory deducted at pick time (not assembly time)
-   - IPK tracks: what's been picked, what's still needed
-4. IPK placed on assembly line
-5. Assembly operator scans IPK barcode to start
-   - All parts already accounted for
-   - Assembly just records which specific part went into which SPU step
-6. DHR records both: IPK source + individual part scans
+1. Operator initiates "New Build of X SPUs"
+   → System generates BUILD CHECKLIST (BOM × X)
+   → Shows: part name, part number, total qty needed, current inventory, shortfall
+   → Operator reviews and confirms inventory is sufficient
+
+2. Operator loads IPKs on the assembly line
+   → Scans/acknowledges each IPK placement
+   → System records: which parts are in which IPK, placed by whom, when
+   → NO INVENTORY IS DEDUCTED — acknowledgment only
+
+3. Operator starts assembly (Work Instructions)
+   → For each WI step, operator scans the part barcode
+   → INVENTORY IS DEDUCTED HERE (PartDefinition.inventoryCount -= qty)
+   → InventoryTransaction created (type: 'deduction')
+   → SPU.parts[] updated with scan data
+   → DHR grows with each step
+
+4. If part is damaged/defective during assembly:
+   → Operator discards the part via WI interface
+   → InventoryTransaction created (type: 'scrap', with reason)
+   → Part NOT added to SPU.parts[]
+   → Operator scans replacement part (new deduction)
+
+5. Assembly complete → signature → SPU.status = 'assembled'
 ```
 
 ---
@@ -173,36 +203,67 @@ PROPOSED FLOW:
 
 ### 3.1 No IPK Model or Collection
 
-Need a new model:
+Need a new model for placement acknowledgment (NOT inventory deduction):
 
 ```typescript
 InProcessKit {
   _id: String (nanoid),
   ipkBarcode: String (unique, generated),
-  spuId: String (optional — may be pre-assigned or assigned at assembly start),
-  batchId: String (optional),
-  status: 'created' | 'picking' | 'staged' | 'in_assembly' | 'completed' | 'voided',
+  ipkLabel: String,                     // Human-readable name ('IPK-A: Heater Assembly')
+  linePosition: String,                 // Where on the assembly line this IPK sits
+  status: 'empty' | 'loaded' | 'in_use' | 'completed',
 
-  requiredParts: [{           // Generated from BOM
-    bomItemId: String,
+  assignedParts: [{                     // What SHOULD be in this bucket
     partDefinitionId: String,
     partNumber: String,
     partName: String,
-    requiredQuantity: Number
+    expectedQuantity: Number            // Per single SPU build
   }],
 
-  pickedParts: [{             // Filled during kitting
+  placementAcknowledgments: [{          // Log of each time IPK is loaded
+    acknowledgedAt: Date,
+    acknowledgedBy: { _id, username },
+    buildRunId: String,                 // Which build run this loading is for
+    notes: String
+  }],
+
+  createdBy: { _id, username },
+  createdAt: Date
+}
+```
+
+### 3.2 No Build Checklist / Build Run Model
+
+Need a model to represent "we are building X SPUs":
+
+```typescript
+BuildRun {
+  _id: String (nanoid),
+  quantity: Number,                     // How many SPUs to build
+  status: 'checklist' | 'ipk_loading' | 'assembling' | 'completed',
+  batchId: String (optional),
+
+  checklist: [{                         // BOM × quantity
     partDefinitionId: String,
     partNumber: String,
-    lotNumber: String,        // From barcode scan
-    barcodeData: String,      // Raw scan
-    quantity: Number,
-    pickedAt: Date,
-    pickedBy: { _id, username }
+    partName: String,
+    quantityPerUnit: Number,            // From BOM
+    totalRequired: Number,              // quantityPerUnit × build quantity
+    currentInventory: Number,           // Snapshot at checklist generation
+    shortfall: Number,                  // max(0, totalRequired - currentInventory)
+    verified: Boolean,                  // Operator checked this line
+    verifiedBy: { _id, username },
+    verifiedAt: Date
   }],
 
-  location: String,           // 'Workstation A', 'Assembly Line Slot 3'
-  assemblySessionId: String,  // Linked when assembly starts
+  ipkAcknowledgments: [{               // Which IPKs were loaded for this run
+    ipkId: String,
+    acknowledgedAt: Date,
+    acknowledgedBy: { _id, username }
+  }],
+
+  spuIds: [String],                     // SPUs created in this run
+  assemblySessionIds: [String],         // Assembly sessions for this run
 
   createdBy: { _id, username },
   createdAt: Date,
@@ -210,30 +271,36 @@ InProcessKit {
 }
 ```
 
-### 3.2 No Barcode-to-Entity Router
+### 3.3 No Discard/Scrap Action in Work Instructions
 
-When something is scanned, the system doesn't know WHAT was scanned. It relies on context (which form field the scan goes into). Need a unified lookup:
+The assembly page has `scanPart` (deduct + install) and `retractInventory` (undo deduction), but NO action to discard/scrap a part. Need:
 
-```
-Scan barcode → Is it a part barcode? (PartDefinition.barcode)
-             → Is it a lot barcode? (ReceivingLot.lotId)
-             → Is it an IPK barcode? (InProcessKit.ipkBarcode)
-             → Is it an SPU barcode? (SPU.barcode / SPU.udi)
-             → Unknown barcode → error
-```
-
-### 3.3 No Inventory Deduction at Pick Time
-
-Currently inventory is deducted during assembly scanning. With IPKs, deduction should happen when parts are **picked into the IPK**, not when they're installed. This changes the deduction point:
-
-```
-TODAY:     Inventory → [operator walks] → Assembly Scan → Deduct
-WITH IPK:  Inventory → Pick into IPK (Deduct) → Assembly Line → Assembly Scan (record only)
+```typescript
+// New action: discardPart
+// - Deducts from PartDefinition.inventoryCount
+// - Creates InventoryTransaction (type: 'scrap', reason: required)
+// - Does NOT add part to SPU.parts[]
+// - Logs in AssemblySession for audit trail
+// - Prompts operator to scan replacement part
 ```
 
-### 3.4 No Pick List Generation
+### 3.4 No Build Checklist Generation
 
-No mechanism to generate "you need these N parts for this SPU build" from the BOM. The work instruction has partRequirements per step, but nothing aggregates them into a single pick list.
+No mechanism to aggregate BOM × quantity and check against current inventory. Need:
+
+```
+Operator says: "Build 5 SPUs"
+System generates:
+┌──────────────┬─────────────┬──────────┬───────────┬───────────┐
+│ Part Number  │ Part Name   │ Per Unit │ Total (×5)│ In Stock  │
+├──────────────┼─────────────┼──────────┼───────────┼───────────┤
+│ PT-SPU-001   │ Heater Block│ 1        │ 5         │ 12    ✓   │
+│ PT-SPU-002   │ Thermistor  │ 2        │ 10        │ 8     ✗   │
+│ PT-SPU-003   │ PCB Assy    │ 1        │ 5         │ 5     ✓   │
+│ PT-SPU-004   │ Linear Rail │ 1        │ 5         │ 3     ✗   │
+└──────────────┴─────────────┴──────────┴───────────┴───────────┘
+SHORTFALL: 2× Thermistor, 2× Linear Rail — cannot proceed until restocked
+```
 
 ### 3.5 No Part Validation During Assembly
 
@@ -245,7 +312,7 @@ The system does NOT validate:
 
 ### 3.6 No Per-Lot Remaining Quantity
 
-`ReceivingLot` tracks the original received quantity but NOT how much remains. Consumption is tracked via InventoryTransaction links, but there's no `remainingQuantity` field. This matters for IPK picking — you need to know if a lot has enough to fill the IPK.
+`ReceivingLot` tracks the original received quantity but NOT how much remains. This matters when the operator needs to know if a lot has enough parts left.
 
 ### 3.7 No FIFO Enforcement
 
@@ -253,7 +320,7 @@ No mechanism to ensure older lots are consumed before newer ones. Regulatory com
 
 ### 3.8 No Expiration Enforcement
 
-`PartDefinition.expirationDate` exists but nothing blocks picking or scanning an expired part.
+`PartDefinition.expirationDate` exists but nothing blocks scanning an expired part during WI assembly.
 
 ### 3.9 Dual Inventory Systems
 
@@ -263,11 +330,12 @@ No mechanism to ensure older lots are consumed before newer ones. Regulatory com
 
 ## 4. MongoDB Infrastructure Needed
 
-### 4.1 New Collection
+### 4.1 New Collections
 
 | Collection | Model | Purpose | Effort |
 |------------|-------|---------|--------|
-| `in_process_kits` | InProcessKit | Physical IPK buckets with barcode, parts picked, status | Medium |
+| `in_process_kits` | InProcessKit | IPK buckets — placement acknowledgment only, no inventory deduction | Medium |
+| `build_runs` | BuildRun | Build checklist for X SPUs, tracks the entire build session | Medium |
 
 ### 4.2 Model Modifications
 
@@ -276,72 +344,104 @@ No mechanism to ensure older lots are consumed before newer ones. Regulatory com
 | PartDefinition | Add `storageLocation` | Where the part physically lives (shelf/bin) | Small |
 | ReceivingLot | Add `remainingQuantity` | Track per-lot depletion for FIFO | Small |
 | PartDefinition | Add index on `expirationDate` | Query expiring stock | Small |
-| AssemblySession | Add `ipkId` reference | Link assembly to the IPK used | Small |
-| SPU | Add `ipkId` reference | Traceability: which IPK was used for this build | Small |
+| AssemblySession | Add `buildRunId` reference | Link assembly to the build run | Small |
+| AssemblySession | Add `ipkIds[]` reference | Which IPKs were used for this assembly | Small |
+| SPU | Add `buildRunId` reference | Traceability: which build run produced this SPU | Small |
 
-### 4.3 New API Routes
+### 4.3 New Routes
 
 | Route | Purpose | Effort |
 |-------|---------|--------|
-| `POST /api/ipk/create` | Create IPK from BOM, generate pick list + barcode | Medium |
-| `POST /api/ipk/[ipkId]/pick` | Scan part into IPK, deduct inventory | Medium |
-| `GET /api/ipk/[ipkId]` | Get IPK status, picked vs. required | Small |
+| `POST /api/build-run/create` | Generate build checklist for X SPUs from BOM | Medium |
+| `GET /api/build-run/[runId]` | Get checklist, IPK status, progress | Small |
+| `POST /api/build-run/[runId]/verify-checklist` | Operator confirms inventory is ready | Small |
+| `POST /api/build-run/[runId]/acknowledge-ipk` | Record IPK placement on line (no deduction) | Small |
 | `GET /api/barcode/lookup/[barcode]` | Unified barcode router (part? lot? IPK? SPU?) | Small |
-| `POST /api/ipk/[ipkId]/start-assembly` | Link IPK to assembly session | Small |
 
 ### 4.4 Server Route Changes
 
 | File | Change | Effort |
 |------|--------|--------|
-| `assembly/[sessionId]/+page.server.ts` | Load IPK data, validate parts against IPK, change deduction point | Medium |
-| `assembly/+page.server.ts` | Allow starting assembly from IPK scan | Small |
+| `assembly/[sessionId]/+page.server.ts` | Add `discardPart` action (scrap with reason, no SPU install) | Medium |
+| `assembly/[sessionId]/+page.server.ts` | Link assembly to build run + IPK acknowledgments | Small |
+| `assembly/+page.server.ts` | Allow starting assembly from build run context | Small |
 
 ---
 
-## 5. What You May Not Be Thinking About
+## 5. Things To Consider
 
-1. **Partial IPKs** — What if a part is out of stock when kitting? Do you block the IPK or allow partial fills and wait for receiving?
+1. **Build checklist shortfall handling** — When the checklist shows insufficient inventory for X SPUs, does the system block the build entirely, or allow a reduced quantity? (e.g., "You can build 3 of the 5 requested")
 
-2. **IPK expiration** — If an IPK sits on the line for days, do parts inside expire or need re-verification?
+2. **IPK re-acknowledgment** — If an IPK is emptied and refilled between builds, does the operator need to re-acknowledge? Should there be a "clear IPK" action between build runs?
 
-3. **Multi-SPU batches** — If building 10 SPUs in a batch, do you create 10 IPKs or one mega-IPK? The BOM quantityPerUnit field supports this but the IPK model needs to handle it.
+3. **Scrap reason categories** — The discard action needs a reason. Should these be freeform or a dropdown? Common reasons: damaged, defective, contaminated, expired, wrong part. Categorized reasons help with reporting.
 
-4. **Part substitution** — If a part in the IPK is wrong or defective, the operator needs to swap it. This means un-picking (retract from IPK) and re-picking. Both need audit trails.
+4. **Scrap-then-replace flow** — After discarding, the operator needs a replacement part. If the IPK has spares, they grab from there. If not, they need to go to inventory. The WI page needs to handle both scenarios without breaking the step flow.
 
-5. **IPK barcode printing** — You need physical labels. Consider label printer integration or at minimum a printable page with barcode + pick list.
+5. **IPK barcode printing** — Physical labels for IPK buckets. Consider label printer integration or a printable page with barcode + part list.
 
-6. **Double deduction risk** — If inventory is deducted at IPK pick time, the assembly scan should NOT deduct again. The assembly scan becomes a "verification" step, not a deduction step. This is a fundamental flow change.
+6. **Build checklist as gate** — Should the checklist BLOCK assembly from starting if there's a shortfall? Or is it advisory only? Blocking is safer for compliance.
 
-7. **IPK-to-DHR traceability** — The final SPU (DHR) should record which IPK was used AND which individual parts were in it. This creates the full chain: Receiving Lot → IPK → SPU → Deployment.
+7. **IPK-to-DHR traceability** — The final SPU (DHR) should record which build run it came from. The chain: Receiving Lot → Build Checklist → IPK Acknowledgment → WI Scan (deduction) → SPU (DHR).
 
-8. **Scrap/reject during assembly** — If a part is damaged during assembly, it needs to come out of the IPK record and a new one picked. The scrapped part needs an InventoryTransaction of type 'scrap'.
+8. **Race conditions on inventory** — Two operators building simultaneously both deducting from the same PartDefinition. `$inc` is atomic but doesn't prevent going negative. Consider a floor check: `if (currentInventory < needed) fail()`.
 
-9. **Race conditions** — Two operators picking from the same lot simultaneously could over-deduct. The `$inc` is atomic per document but doesn't prevent going negative without a floor check.
+9. **Partial build completion** — If building 5 SPUs and you finish 3 but run out of a part, what happens to the build run? Need a way to close out a partial run and handle remaining checklist items.
 
-10. **Work instruction alignment** — Work instruction steps have `partRequirements[]` but these aren't enforced. With IPKs, the pick list should be generated FROM the work instruction's aggregate part requirements, not directly from BOM items.
+10. **Checklist snapshot vs. live inventory** — The checklist captures inventory at generation time. During a long build, inventory could change (receiving adds stock, another build deducts). Should the checklist update live or stay as a snapshot?
 
 ---
 
 ## 6. Distance to Goal
 
+### Already Built (no changes needed)
+
 | Capability | Status | Notes |
 |-----------|--------|-------|
 | SPU creation + living DHR | Built | Sacred document pattern working |
-| Assembly barcode scanning | Built | Scans deduct from PartDefinition |
+| Assembly barcode scanning → inventory deduction | Built | Scans deduct from PartDefinition during WI steps |
 | Inventory transactions (immutable) | Built | Full audit trail |
 | Receiving → inventory addition | Built | On lot acceptance |
-| Work instructions with part requirements | Built | Per-step, not enforced |
+| Work instructions with part requirements | Built | Per-step definitions exist |
 | Retraction workflow | Built | Restores inventory, marks original |
-| IPK model / collection | Not started | New model needed |
-| IPK barcode generation | Not started | GeneratedBarcode pattern exists to reuse |
-| IPK pick list from BOM | Not started | Aggregate work instruction part requirements |
-| Scan-to-pick into IPK | Not started | New route, deduction at pick time |
-| Barcode router (what did I scan?) | Not started | Part vs. lot vs. IPK vs. SPU |
-| Assembly from IPK (verify, don't deduct) | Not started | Changes existing assembly flow |
-| Per-lot remaining quantity | Not started | ReceivingLot schema change |
-| FIFO lot enforcement | Not started | Logic in pick flow |
-| Expiration enforcement | Not started | Logic in pick flow |
-| Part validation during assembly | Not started | Right part for right step |
-| IPK-to-DHR traceability | Not started | SPU + AssemblySession schema change |
 
-**Overall: The core DHR, scanning, and inventory infrastructure is solid (~60% done). The IPK layer is 0% built — it's a new workflow layer that sits between inventory and assembly. The biggest architectural decision is moving the inventory deduction point from assembly to IPK picking.**
+### Needs to Be Built
+
+| Capability | Status | Priority | Notes |
+|-----------|--------|----------|-------|
+| Build checklist generation (BOM × X) | Not started | HIGH | Core feature — gate for starting builds |
+| BuildRun model + collection | Not started | HIGH | Tracks build of X SPUs end-to-end |
+| Discard/scrap action in WI page | Not started | HIGH | InventoryTransaction type 'scrap' + reason |
+| IPK model + collection | Not started | MEDIUM | Placement acknowledgment, no deduction |
+| IPK barcode generation | Not started | MEDIUM | Reuse GeneratedBarcode pattern |
+| IPK placement acknowledgment flow | Not started | MEDIUM | Scan IPK → confirm parts loaded |
+| Build checklist shortfall detection | Not started | MEDIUM | Block or warn when inventory insufficient |
+| Barcode router (what did I scan?) | Not started | LOW | Part vs. lot vs. IPK vs. SPU lookup |
+| Per-lot remaining quantity | Not started | LOW | ReceivingLot schema change |
+| FIFO lot enforcement | Not started | LOW | Logic in WI scan flow |
+| Expiration enforcement | Not started | LOW | Logic in WI scan flow |
+| Part validation during assembly | Not started | LOW | Right part for right step |
+
+### Implementation Order (Recommended)
+
+```
+Phase 1 — Build Checklist + Scrap (HIGH priority, enables core workflow)
+  1. BuildRun model + create route
+  2. Checklist generation (BOM × quantity, inventory check)
+  3. Discard/scrap action in assembly/[sessionId]/+page.server.ts
+  4. Link AssemblySession + SPU to BuildRun
+
+Phase 2 — IPK Acknowledgment (MEDIUM priority, adds line organization)
+  5. InProcessKit model
+  6. IPK barcode generation
+  7. IPK placement acknowledgment route
+  8. Link IPK acknowledgments to BuildRun
+
+Phase 3 — Enforcement (LOW priority, compliance hardening)
+  9. Part validation (right part for right step)
+  10. FIFO lot enforcement
+  11. Expiration blocking
+  12. Barcode router
+```
+
+**Overall: ~65% of the backend infrastructure exists. The inventory deduction point stays where it is (WI assembly scanning). The main new work is the BuildRun checklist system (Phase 1) and the IPK acknowledgment layer (Phase 2).**
