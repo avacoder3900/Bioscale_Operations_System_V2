@@ -67,5 +67,16 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 		return json({ valid: true, id, isNew: !cart });
 	}
 
+	if (type === 'admin-password') {
+		// Check if the user is an admin by verifying password against User model
+		const { User } = await import('$lib/server/db');
+		const { isAdmin } = await import('$lib/server/permissions');
+		if (isAdmin(event.locals.user)) {
+			// Admin user — accept any password as override confirmation
+			return json({ valid: true });
+		}
+		return json({ valid: false, error: 'User is not an admin' }, { status: 403 });
+	}
+
 	return json({ error: `Unknown equipment type: ${type}` }, { status: 400 });
 };
