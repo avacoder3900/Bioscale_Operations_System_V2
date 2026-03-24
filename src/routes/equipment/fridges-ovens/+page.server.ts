@@ -251,11 +251,9 @@ export const actions: Actions = {
 		const id = data.get('id')?.toString();
 		if (!id) return fail(400, { error: 'Location ID is required' });
 
-		// Try Equipment first (set to offline), then EquipmentLocation
-		const equip = await Equipment.findById(id).lean();
-		if (equip) {
-			await Equipment.findByIdAndUpdate(id, { status: 'offline' });
-		} else {
+		// Try Equipment first (hard delete), then EquipmentLocation
+		const equip = await Equipment.findByIdAndDelete(id).lean();
+		if (!equip) {
 			const doc = await EquipmentLocation.findByIdAndDelete(id).lean();
 			if (!doc) return fail(404, { error: 'Location not found' });
 		}
@@ -270,6 +268,6 @@ export const actions: Actions = {
 			newData: {}
 		});
 
-		return { success: true, message: 'Location deleted' };
+		return { success: true, message: 'Equipment deleted' };
 	}
 };
