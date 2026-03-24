@@ -1,9 +1,9 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, ReagentBatchRecord, AssayDefinition, CartridgeRecord, Consumable,
-	ManufacturingSettings, WaxFillingRun, EquipmentLocation, generateId, AuditLog
+	ManufacturingSettings, WaxFillingRun, Equipment, EquipmentLocation, generateId, AuditLog
 } from '$lib/server/db';
-import { recordTransaction } from '$lib/server/services/inventory-transaction';
+import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -159,13 +159,23 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			volume: t.volumeMicroliters ?? 0
 		}));
 
-		// Fridges for storage selection
-		const fridgesRaw = await EquipmentLocation.find({ locationType: 'fridge', isActive: true }).lean().catch(() => []);
-		const fridges = (fridgesRaw as any[]).map((f: any) => ({
-			id: String(f._id),
-			displayName: f.displayName ?? f.name ?? String(f._id),
-			barcode: f.barcode ?? ''
-		}));
+		// Fridges for storage selection — use parent Equipment records
+		const [equipFridges, orphanFridges] = await Promise.all([
+			Equipment.find({ equipmentType: 'fridge', status: { $ne: 'offline' } }).lean().catch(() => []),
+			EquipmentLocation.find({ locationType: 'fridge', isActive: true, parentEquipmentId: { $exists: false } }).lean().catch(() => [])
+		]);
+		const fridges = [
+			...(equipFridges as any[]).map((f: any) => ({
+				id: String(f._id),
+				displayName: f.name ?? f.barcode ?? String(f._id),
+				barcode: f.barcode ?? ''
+			})),
+			...(orphanFridges as any[]).map((f: any) => ({
+				id: String(f._id),
+				displayName: f.displayName ?? f.barcode ?? String(f._id),
+				barcode: f.barcode ?? ''
+			}))
+		];
 
 		// Check if this robot is blocked by an active wax filling run
 		let robotBlocked: { process: 'wax'; runId: string | null } | null = null;
@@ -462,10 +472,12 @@ export const actions: Actions = {
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
 
-			// Record inventory transactions for reagent filling
+			// Record inventory transactions for reagent filling — consume 2ml tube (PT-CT-107)
+			const tubePartId = await resolvePartId('PT-CT-107');
 			for (const cf of run.cartridgesFilled) {
 				await recordTransaction({
-					transactionType: 'creation',
+					transactionType: 'consumption',
+					partDefinitionId: tubePartId ?? undefined,
 					cartridgeRecordId: cf.cartridgeId,
 					quantity: 1,
 					manufacturingStep: 'reagent_filling',
@@ -672,10 +684,12 @@ export const actions: Actions = {
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
 
-			// Record top seal transactions
+			// Record top seal transactions — consume top seal (PT-CT-103)
+			const topSealPartId = await resolvePartId('PT-CT-103');
 			for (const cid of batch.cartridgeIds) {
 				await recordTransaction({
-					transactionType: 'creation',
+					transactionType: 'consumption',
+					partDefinitionId: topSealPartId ?? undefined,
 					cartridgeRecordId: cid,
 					quantity: 1,
 					manufacturingStep: 'top_seal',
@@ -879,6 +893,17 @@ export const actions: Actions = {
 			$set: { status: 'Cancelled', abortReason: reason, runEndTime: now }
 		});
 
+		// Clean up cartridges that were in reagent_filling phase for this run
+		await CartridgeRecord.bulkWrite([{
+			updateMany: {
+				filter: { 'reagentFilling.runId': runId, currentPhase: 'reagent_filling' },
+				update: {
+					$set: { currentPhase: 'wax_filled' },
+					$unset: { reagentFilling: '' }
+				}
+			}
+		}]);
+
 		await AuditLog.create({
 			_id: generateId(),
 			tableName: 'reagent_batch_records',
@@ -911,6 +936,17 @@ export const actions: Actions = {
 				runEndTime: now
 			}
 		});
+
+		// Clean up cartridges that were in reagent_filling phase for this run
+		await CartridgeRecord.bulkWrite([{
+			updateMany: {
+				filter: { 'reagentFilling.runId': runId, currentPhase: 'reagent_filling' },
+				update: {
+					$set: { currentPhase: 'wax_filled' },
+					$unset: { reagentFilling: '' }
+				}
+			}
+		}]);
 
 		await AuditLog.create({
 			_id: generateId(),

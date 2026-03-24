@@ -3,6 +3,7 @@ import { generateId } from '../utils.js';
 
 const equipmentLocationSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
+	parentEquipmentId: String,
 	barcode: String, locationType: { type: String, enum: ['fridge', 'oven'] },
 	displayName: String, isActive: { type: Boolean, default: true },
 	capacity: Number, notes: String,

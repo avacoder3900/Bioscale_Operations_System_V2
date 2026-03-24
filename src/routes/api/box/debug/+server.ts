@@ -3,7 +3,8 @@ import { connectDB, Integration } from '$lib/server/db';
 import { getFileInfo, listFolder } from '$lib/server/box';
 import type { RequestHandler } from './$types';
 
-export const GET: RequestHandler = async () => {
+export const GET: RequestHandler = async ({ locals }) => {
+	if (!locals.user) return json({ error: 'Unauthorized' }, { status: 401 });
 	try {
 		await connectDB();
 		const integ = await Integration.findOne({ type: 'box' }).lean() as any;

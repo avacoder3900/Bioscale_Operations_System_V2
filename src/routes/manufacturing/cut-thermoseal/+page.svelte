@@ -22,11 +22,11 @@
 	let step = $state<'idle' | 'scanned'>('idle');
 	let lotBarcode = $state('');
 	let expectedSheets = $state(data.defaultExpectedStrips);
-	let acceptedCount = $state(0);
-	let notes = $state('');
 	let showSettings = $state(false);
 	let adminPassword = $state('');
 	let newExpected = $state(data.defaultExpectedStrips);
+	let acceptedCount = $state(0);
+	let notes = $state('');
 
 	let barcodeInput: HTMLInputElement;
 
@@ -47,6 +47,13 @@
 		setTimeout(() => barcodeInput?.focus(), 100);
 	}
 
+	function useTestBarcode() {
+		if (form?.testBarcode) {
+			lotBarcode = form.testBarcode;
+			step = 'scanned';
+		}
+	}
+
 	$effect(() => {
 		if (form?.success) {
 			step = 'idle';
@@ -57,7 +64,6 @@
 		}
 		if (form?.testBarcode && step === 'idle') {
 			lotBarcode = form.testBarcode;
-			expectedSheets = data.defaultExpectedStrips;
 			step = 'scanned';
 		}
 	});
@@ -65,13 +71,15 @@
 
 <div class="space-y-6">
 	<div class="flex items-center justify-between">
-		<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Cut Top Seal</h1>
-		{#if step !== 'idle'}
-			<button type="button" onclick={startNew}
-				class="min-h-[44px] rounded border border-red-500/50 bg-red-900/10 px-4 py-2 text-sm font-medium text-red-400 hover:bg-red-900/20">
-				Cancel
-			</button>
-		{/if}
+		<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Cut Thermoseal</h1>
+		<div class="flex gap-2">
+			{#if step !== 'idle'}
+				<button type="button" onclick={startNew}
+					class="min-h-[44px] rounded border border-red-500/50 bg-red-900/10 px-4 py-2 text-sm font-medium text-red-400 hover:bg-red-900/20">
+					Cancel
+				</button>
+			{/if}
+		</div>
 	</div>
 
 	{#if form?.success}
@@ -136,7 +144,7 @@
 	{#if step === 'idle'}
 		<div class="rounded-lg border-2 border-dashed border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-surface)] p-8 text-center space-y-4">
 			<div class="text-4xl">📦</div>
-			<h2 class="text-lg font-semibold text-[var(--color-tron-cyan)]">Scan Top Seal Roll Barcode</h2>
+			<h2 class="text-lg font-semibold text-[var(--color-tron-cyan)]">Scan Thermoseal Roll Barcode</h2>
 			<p class="text-sm text-[var(--color-tron-text-secondary)]">Scan or type the roll barcode to begin tracking this cutting run.</p>
 			<input
 				bind:this={barcodeInput}
@@ -148,6 +156,8 @@
 				autofocus
 			/>
 			<p class="text-xs text-[var(--color-tron-text-secondary)]">Press Enter after scanning</p>
+
+			<!-- Test barcode button -->
 			<form method="POST" action="?/generateTestBarcode" use:enhance class="mt-2">
 				<button type="submit"
 					class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)]/50 hover:text-[var(--color-tron-cyan)]">
@@ -159,8 +169,12 @@
 
 	<!-- STEP 2: Scanned — Enter expected + accepted -->
 	{#if step === 'scanned'}
-		<form method="POST" action="?/recordRun" use:enhance
-			class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5 space-y-5">
+		<form
+			method="POST"
+			action="?/recordRun"
+			use:enhance
+			class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5 space-y-5"
+		>
 			<input type="hidden" name="lotBarcode" value={lotBarcode} />
 
 			<div class="rounded border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-cyan)]/5 px-4 py-3 flex items-center justify-between">
@@ -176,6 +190,7 @@
 				<input type="number" name="expectedSheets" bind:value={expectedSheets} min="1"
 					class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
 					autofocus />
+				<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">How many strips should this roll produce?</p>
 			</label>
 
 			<label class="block">
@@ -199,9 +214,11 @@
 						<p class="text-xs text-[var(--color-tron-text-secondary)]">Rejected</p>
 					</div>
 				</div>
-				<p class="text-center text-sm">
-					Yield: <span class="font-bold text-[var(--color-tron-cyan)]">{Math.round((acceptedCount / expectedSheets) * 100)}%</span>
-				</p>
+				{#if expectedSheets > 0}
+					<p class="text-center text-sm">
+						Yield: <span class="font-bold text-[var(--color-tron-cyan)]">{Math.round((acceptedCount / expectedSheets) * 100)}%</span>
+					</p>
+				{/if}
 			{/if}
 
 			<label class="block">

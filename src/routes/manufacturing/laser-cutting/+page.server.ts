@@ -1,10 +1,10 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, LaserCutBatch, ManufacturingSettings, ManufacturingMaterial,
-	ManufacturingMaterialTransaction, generateId
+	ManufacturingMaterialTransaction, AuditLog, generateId
 } from '$lib/server/db';
 import { nanoid } from 'nanoid';
-import { recordTransaction } from '$lib/server/services/inventory-transaction';
+import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -45,7 +45,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			inputLotId: b.inputLotId ?? null,
 			outputLotId: b.outputLotId ?? null,
 			operator: b.operator ?? null,
-			createdAt: b.createdAt
+			createdAt: b.createdAt instanceof Date ? b.createdAt.toISOString() : String(b.createdAt ?? '')
 		})),
 		stats: { totalBatches, totalInput, totalOutput, totalFailures, failureRate },
 		defaults: {
@@ -151,6 +151,17 @@ export const actions: Actions = {
 			operatorId: locals.user._id,
 			operatorUsername: locals.user.username,
 			notes: `Laser cut batch: ${inputSheetCount} input → ${outputSheetCount} output (${failureCount} failures)`
+		});
+
+		// Audit log for batch record creation
+		const batchRecord = await LaserCutBatch.findOne({ operatorId: locals.user._id, outputLotId }).lean() as any;
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'laser_cut_batches',
+			recordId: batchRecord?._id ?? outputLotId,
+			action: 'INSERT',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
 		});
 
 		return { success: true };

@@ -120,26 +120,18 @@ export const load: PageServerLoad = async ({ locals }) => {
 			activeRuns: activeWaxRuns, completedRuns: waxStats[0]?.totalRuns ?? 0
 		},
 		{
-			id: 'reagent', name: 'Reagent Filling', href: '/manufacturing/reagent-filling',
+			id: 'reagent', name: 'Reagent Filling + Top Seal', href: '/manufacturing/reagent-filling',
 			inputs: [
 				{ name: 'Wax-Filled Cartridges', icon: '🟡', count: waxStored, unit: 'available' },
 				{ name: 'Reagents (per assay)', icon: '💧', count: null as number | null, unit: 'wells' },
+				{ name: 'Top Seal Sheets', icon: '📄', count: null as number | null, unit: 'sheets' },
 				{ name: 'Pipette Tips', icon: '🔬', count: null as number | null, unit: 'tips' }
 			],
 			outputs: [
-				{ name: 'Reagent-Filled', icon: '🟣', count: reagentStored + sealed, unit: 'cartridges' },
+				{ name: 'Sealed Cartridges', icon: '✅', count: reagentStored + sealed, unit: 'cartridges' },
 				{ name: 'In Fridge', icon: '❄️', count: reagentStored, unit: 'stored' }
 			],
 			activeRuns: activeReagentRuns, completedRuns: reagentStats[0]?.totalRuns ?? 0
-		},
-		{
-			id: 'topseal-apply', name: 'Top Seal Apply', href: '/manufacturing/top-seal-cutting',
-			inputs: [
-				{ name: 'Reagent-Filled Cartridges', icon: '🟣', count: reagentStored, unit: 'available' },
-				{ name: 'Top Seal Sheets', icon: '📄', count: null as number | null, unit: 'sheets' }
-			],
-			outputs: [{ name: 'Sealed Cartridges', icon: '✅', count: sealed, unit: 'cartridges' }],
-			activeRuns: 0, completedRuns: 0
 		},
 		{
 			id: 'qaqc', name: 'QA/QC', href: '/manufacturing/qa-qc',

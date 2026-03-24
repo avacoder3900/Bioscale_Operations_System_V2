@@ -8,7 +8,8 @@ import type { RequestHandler } from './$types';
 const TEST_PREFIX = 'TEST-';
 const COUNT = 200;
 
-export const POST: RequestHandler = async () => {
+export const POST: RequestHandler = async ({ locals }) => {
+	if (!locals.user) return json({ error: 'Unauthorized' }, { status: 401 });
 	await connectDB();
 
 	const results: Record<string, number | string[]> = {};
@@ -175,81 +176,74 @@ export const POST: RequestHandler = async () => {
 	const reagentResult = await CartridgeRecord.bulkWrite(reagentOps);
 	results.reagentCartridges = reagentResult.upsertedCount;
 
-	// 7. Fridges
-	const fridgeNames = ['Fridge 1', 'Fridge 2', 'Fridge 3'];
-	const fridgeOps = fridgeNames.map((name, i) => ({
-		updateOne: {
-			filter: { displayName: name, locationType: 'fridge' },
-			update: {
-				$setOnInsert: {
+	// 7. Equipment records — SKIPPED: equipment should only be created via the Equipment CRUD page
+	// Fridges and ovens must be manually registered, not auto-seeded
+	results.equipment = 0;
+	const fridgeDefs: { name: string; barcode: string; capacity: number; shelves: number }[] = [];
+	const ovenDefs: { name: string; barcode: string; capacity: number }[] = [];
+	/*
+	const fridgeDefs = [
+		{ name: 'Fridge 001', barcode: 'FRG-001', capacity: 30, shelves: 3 },
+		{ name: 'Fridge 002', barcode: 'FRG-002', capacity: 30, shelves: 3 },
+		{ name: 'Fridge 003', barcode: 'FRG-003', capacity: 30, shelves: 3 }
+	];
+	const ovenDefs = [
+		{ name: 'Oven 001', barcode: 'OVN-001', capacity: 6 },
+		{ name: 'Oven 002', barcode: 'OVN-002', capacity: 6 },
+		{ name: 'Oven 003', barcode: 'OVN-003', capacity: 6 }
+	];
+	*/
+
+	// Equipment seeding disabled — use Equipment CRUD page instead
+	// const equipOps = [...]; const equipResult = await Equipment.bulkWrite(equipOps);
+
+	// 8. Child shelf locations for fridges (linked to parent Equipment via parentEquipmentId)
+	const fridgeEquipDocs = await Equipment.find({ equipmentType: 'fridge' }).lean() as any[];
+	let shelfCount = 0;
+	for (const fridge of fridgeEquipDocs) {
+		const def = fridgeDefs.find(f => f.name === fridge.name);
+		const numShelves = def?.shelves ?? 3;
+		for (let s = 1; s <= numShelves; s++) {
+			const shelfName = `${fridge.name} - Shelf ${s}`;
+			const shelfBarcode = `${fridge.barcode}-S${s}`;
+			const existing = await EquipmentLocation.findOne({ barcode: shelfBarcode }).lean();
+			if (!existing) {
+				await EquipmentLocation.create({
 					_id: generateId(),
-					displayName: name,
-					barcode: `FRG-${String(i + 1).padStart(3, '0')}`,
+					parentEquipmentId: String(fridge._id),
+					displayName: shelfName,
+					barcode: shelfBarcode,
 					locationType: 'fridge',
 					isActive: true,
 					capacity: 10,
-					notes: `Test fridge ${i + 1}`
-				}
-			},
-			upsert: true
-		}
-	}));
-	const fridgeResult = await EquipmentLocation.bulkWrite(fridgeOps);
-	results.fridges = fridgeResult.upsertedCount;
-
-	// 8. Ovens
-	const ovenNames = ['Oven 1', 'Oven 2', 'Oven 3'];
-	const ovenOps = ovenNames.map((name, i) => ({
-		updateOne: {
-			filter: { displayName: name, locationType: 'oven' },
-			update: {
-				$setOnInsert: {
-					_id: generateId(),
-					displayName: name,
-					barcode: `OVN-${String(i + 1).padStart(3, '0')}`,
-					locationType: 'oven',
-					isActive: true,
-					capacity: 6,
-					notes: `Test oven ${i + 1}`
-				}
-			},
-			upsert: true
-		}
-	}));
-	const ovenResult = await EquipmentLocation.bulkWrite(ovenOps);
-	results.ovens = ovenResult.upsertedCount;
-
-	// 9. Equipment records (for equipment overview page)
-	const equipOps = [
-		...fridgeNames.map((name, i) => ({
-			updateOne: {
-				filter: { name, equipmentType: 'fridge' },
-				update: {
-					$setOnInsert: {
-						_id: generateId(), name, equipmentType: 'fridge',
-						status: 'active', currentTemperatureC: 2 + Math.random() * 4,
-						notes: `Test fridge ${i + 1}`
-					}
-				},
-				upsert: true
+					notes: `Shelf ${s} of ${fridge.name}`
+				});
+				shelfCount++;
 			}
-		})),
-		...ovenNames.map((name, i) => ({
-			updateOne: {
-				filter: { name, equipmentType: 'oven' },
-				update: {
-					$setOnInsert: {
-						_id: generateId(), name, equipmentType: 'oven',
-						status: 'active', currentTemperatureC: 60 + Math.random() * 10,
-						notes: `Test oven ${i + 1}`
-					}
-				},
-				upsert: true
-			}
-		}))
-	];
-	const equipResult = await Equipment.bulkWrite(equipOps);
-	results.equipment = equipResult.upsertedCount;
+		}
+	}
+	results.fridges = shelfCount;
+
+	// 9. Child locations for ovens (single slot each)
+	const ovenEquipDocs = await Equipment.find({ equipmentType: 'oven' }).lean() as any[];
+	let ovenLocCount = 0;
+	for (const oven of ovenEquipDocs) {
+		const existing = await EquipmentLocation.findOne({ parentEquipmentId: String(oven._id) }).lean();
+		if (!existing) {
+			await EquipmentLocation.create({
+				_id: generateId(),
+				parentEquipmentId: String(oven._id),
+				displayName: oven.name,
+				barcode: oven.barcode,
+				locationType: 'oven',
+				isActive: true,
+				capacity: oven.capacity ?? 6,
+				notes: `Oven location for ${oven.name}`
+			});
+			ovenLocCount++;
+		}
+	}
+	results.ovens = ovenLocCount;
 
 	return json({
 		success: true,

@@ -1,8 +1,9 @@
+export const config = { maxDuration: 60 };
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import {
 	connectDB, Spu, Batch, BomItem, ProductionRun, Customer, User, AuditLog, generateId,
-	LabCartridge, CartridgeGroup, CartridgeRecord, EquipmentLocation,
+	LabCartridge, CartridgeGroup, CartridgeRecord, Equipment, EquipmentLocation,
 	OpentronsRobot, WaxFillingRun, Consumable, AssayDefinition
 } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
@@ -132,6 +133,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				const cdNow = new Date();
 				const sevenDaysAgo = new Date(cdNow.getTime() - 7 * 24 * 60 * 60 * 1000);
 				const thirtyDaysFromNow = new Date(cdNow.getTime() + 30 * 24 * 60 * 60 * 1000);
+				let storageCounts: any[] = [];
 
 				const [
 					phaseCounts, totalMfg, totalVoided, waxQcCounts, reagentInspCounts,
@@ -142,33 +144,33 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 						{ $match: { currentPhase: { $ne: null } } },
 						{ $group: { _id: '$currentPhase', count: { $sum: 1 } } },
 						{ $sort: { count: -1 } }
-					]),
-					CartridgeRecord.countDocuments({ currentPhase: { $ne: 'voided' } }),
-					CartridgeRecord.countDocuments({ currentPhase: 'voided' }),
+					]).catch(() => []),
+					CartridgeRecord.countDocuments({ currentPhase: { $ne: 'voided' } }).catch(() => 0),
+					CartridgeRecord.countDocuments({ currentPhase: 'voided' }).catch(() => 0),
 					CartridgeRecord.aggregate([
 						{ $match: { 'waxQc.status': { $exists: true } } },
 						{ $group: { _id: '$waxQc.status', count: { $sum: 1 } } }
-					]),
+					]).catch(() => []),
 					CartridgeRecord.aggregate([
 						{ $match: { 'reagentInspection.status': { $exists: true } } },
 						{ $group: { _id: '$reagentInspection.status', count: { $sum: 1 } } }
-					]),
-					CartridgeRecord.find().sort({ updatedAt: -1 }).limit(15).lean(),
+					]).catch(() => []),
+					CartridgeRecord.find().sort({ updatedAt: -1 }).limit(15).lean().catch(() => []),
 					CartridgeRecord.find({
 						'reagentFilling.expirationDate': { $lte: thirtyDaysFromNow, $gte: cdNow },
 						currentPhase: { $nin: ['voided', 'completed', 'shipped'] }
-					}).sort({ 'reagentFilling.expirationDate': 1 }).limit(10).lean(),
-					EquipmentLocation.find({ locationType: 'fridge', isActive: true }).lean().catch(() => []),
-					CartridgeRecord.countDocuments({ createdAt: { $gte: sevenDaysAgo } }),
+					}).sort({ 'reagentFilling.expirationDate': 1 }).limit(10).lean().catch(() => []),
+					Equipment.find({ equipmentType: 'fridge', status: { $ne: 'offline' } }).lean().catch(() => []),
+					CartridgeRecord.countDocuments({ createdAt: { $gte: sevenDaysAgo } }).catch(() => 0),
 					CartridgeRecord.aggregate([
 						{ $match: { 'reagentFilling.assayType.name': { $exists: true } } },
 						{ $group: { _id: '$reagentFilling.assayType.name', count: { $sum: 1 } } },
 						{ $sort: { count: -1 } }
-					]),
-					LabCartridge.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
-					LabCartridge.aggregate([{ $group: { _id: '$cartridgeType', count: { $sum: 1 } } }]),
-					CartridgeGroup.find().lean(),
-					LabCartridge.countDocuments()
+					]).catch(() => []),
+					LabCartridge.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]).catch(() => []),
+					LabCartridge.aggregate([{ $group: { _id: '$cartridgeType', count: { $sum: 1 } } }]).catch(() => []),
+					CartridgeGroup.find().lean().catch(() => []),
+					LabCartridge.countDocuments().catch(() => 0)
 				]);
 
 				storageCounts = await (async () => {
@@ -188,7 +190,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					}
 					return Array.from(merged.entries()).map(([k, v]) => ({ _id: k, count: v }));
 				})();
-				const fridgeMap = new Map((fridges as any[]).map((f: any) => [f.barcode ?? f.displayName ?? String(f._id), f.displayName ?? f.barcode ?? String(f._id)]));
+				const fridgeMap = new Map((fridges as any[]).map((f: any) => [f.barcode ?? f.name ?? String(f._id), f.name ?? f.barcode ?? String(f._id)]));
+				// Map from barcode/name key → actual _id for detail links
+				const fridgeIdMap = new Map((fridges as any[]).map((f: any) => [f.barcode ?? f.name ?? String(f._id), String(f._id)]));
 
 				const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed'];
 				const phaseMap = new Map((phaseCounts as any[]).map((p: any) => [p._id, p.count]));
@@ -205,9 +209,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				]);
 				const labGroupMap = new Map((labGroups as any[]).map((g: any) => [g._id, g]));
 
-				// ── New dashboard queries ──
-				const [
-					fridgeCapacityAgg, allRobots, activeWaxRuns, allAssays,
+				// ── New dashboard queries (each wrapped to prevent one failure from killing all) ──
+				let fridgeCapacityAgg: any[] = [], allRobots: any[] = [], activeWaxRuns: any[] = [];
+				let allAssays: any[] = [], cartridgeBomItems: any[] = [], dailyThroughputAgg: any[] = [];
+				let recentWaxRuns: any[] = [], consumableCountsAgg: any[] = [];
+				try {
+				[fridgeCapacityAgg, allRobots, activeWaxRuns, allAssays,
 					cartridgeBomItems, dailyThroughputAgg, recentWaxRuns, consumableCountsAgg
 				] = await Promise.all([
 					CartridgeRecord.aggregate([
@@ -226,6 +233,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					WaxFillingRun.find().sort({ createdAt: -1 }).limit(5).lean(),
 					Consumable.aggregate([{ $group: { _id: '$type', count: { $sum: 1 } } }])
 				]);
+				} catch (enrichErr) {
+					console.error('[DASHBOARD] enriched queries failed:', enrichErr instanceof Error ? enrichErr.message : enrichErr);
+				}
 
 				const assayFillCounts = await CartridgeRecord.aggregate([
 					{ $match: { 'reagentFilling.assayType._id': { $exists: true } } },
@@ -284,6 +294,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					},
 					fridgeCapacity: (fridgeCapacityAgg as any[]).map((f: any) => ({
 						locationId: f._id,
+						dbLocationId: fridgeIdMap.get(f._id) ?? null,
 						locationName: fridgeMap.get(f._id) ?? f._id,
 						used: f.count,
 						capacity: 10
@@ -321,7 +332,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 						count: c.count
 					}))
 				};
-			} catch { return null; }
+			} catch (err) { 
+				console.error('[DASHBOARD] cartridgeDashboard error:', err instanceof Error ? err.stack : err); 
+				return null; 
+			}
 		})()
 	};
 };
@@ -496,4 +510,3 @@ export const actions: Actions = {
 	}
 };
 
-export const config = { maxDuration: 60 };

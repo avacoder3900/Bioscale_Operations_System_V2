@@ -17,14 +17,12 @@
 	// Fridge expansion state
 	let expandedFridge = $state<string | null>(null);
 
-	const FRIDGES = ['fridge-1', 'fridge-2', 'fridge-3', 'fridge-4'] as const;
+	// Dynamic fridges from Equipment collection — no hardcoded list
+	const FRIDGES = $derived(data.fridges.map((f: any) => f.barcode || f.id));
 
-	const fridgeLabels: Record<string, string> = {
-		'fridge-1': 'Fridge 1',
-		'fridge-2': 'Fridge 2',
-		'fridge-3': 'Fridge 3',
-		'fridge-4': 'Fridge 4'
-	};
+	const fridgeLabels = $derived(
+		Object.fromEntries(data.fridges.map((f: any) => [f.barcode || f.id, f.displayName]))
+	);
 
 	const totalStored = $derived(
 		Object.values(data.summary).reduce((a, b) => a + b, 0)

@@ -1,5 +1,5 @@
 import { redirect } from '@sveltejs/kit';
-import { connectDB, CartridgeRecord, LabCartridge, CartridgeGroup, EquipmentLocation } from '$lib/server/db';
+import { connectDB, CartridgeRecord, LabCartridge, CartridgeGroup, Equipment } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
@@ -57,7 +57,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			currentPhase: { $nin: ['voided', 'completed', 'shipped'] }
 		}).sort({ 'reagentFilling.expirationDate': 1 }).limit(10).lean(),
 		// Fridge storage locations
-		EquipmentLocation.find({ locationType: 'fridge', isActive: true }).lean().catch(() => []),
+		Equipment.find({ equipmentType: 'fridge', status: { $ne: 'offline' } }).lean().catch(() => []),
 		// Weekly production (created in last 7 days)
 		CartridgeRecord.countDocuments({ createdAt: { $gte: sevenDaysAgo } }),
 		// Assay type breakdown
@@ -78,7 +78,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		{ $match: { 'storage.locationId': { $exists: true }, currentPhase: { $in: ['stored', 'wax_stored'] } } },
 		{ $group: { _id: '$storage.locationId', count: { $sum: 1 } } }
 	]);
-	const fridgeMap = new Map((fridges as any[]).map((f: any) => [String(f._id), f.displayName ?? f.barcode ?? String(f._id)]));
+	const fridgeMap = new Map((fridges as any[]).map((f: any) => [String(f._id), f.name ?? f.barcode ?? String(f._id)]));
 
 	// Phase pipeline order for display
 	const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed'];

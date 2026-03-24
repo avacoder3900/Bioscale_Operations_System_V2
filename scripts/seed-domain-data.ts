@@ -66,10 +66,38 @@ async function seed() {
 
 	// ─── 1. Process Configurations (manufacturing) ──────────────────
 	console.log('Seeding process configurations...');
+	const cutThermosealConfigId = id();
+	const cutTopSealConfigId = id();
 	const backingConfigId = id();
 	const waxConfigId = id();
 	const reagentConfigId = id();
 	await upsertMany(db, 'processconfigurations', [
+		{
+			_id: cutThermosealConfigId, processName: 'Cut Thermoseal', processType: 'cut_thermoseal',
+			maxBatchSize: 500, steps: [
+				{ stepNumber: 1, title: 'Load thermoseal roll', description: 'Mount roll on cutting station' },
+				{ stepNumber: 2, title: 'Cut strips', description: 'Cut thermoseal strips to size' },
+				{ stepNumber: 3, title: 'Inspect strips', description: 'Visual inspection of cut strips' }
+			],
+			inputMaterials: [
+				{ name: 'Thermoseal Roll', scanOrder: 1 }
+			],
+			handoffPrompt: 'Cut thermoseal strips ready for laser cutting.',
+			createdAt: ago(30), updatedAt: ago(30)
+		},
+		{
+			_id: cutTopSealConfigId, processName: 'Cut Top Seal', processType: 'cut_top_seal',
+			maxBatchSize: 500, steps: [
+				{ stepNumber: 1, title: 'Load top seal roll', description: 'Mount roll on cutting station' },
+				{ stepNumber: 2, title: 'Cut sheets', description: 'Cut top seal sheets to size' },
+				{ stepNumber: 3, title: 'Inspect sheets', description: 'Visual inspection of cut sheets' }
+			],
+			inputMaterials: [
+				{ name: 'Top Seal Roll', scanOrder: 1 }
+			],
+			handoffPrompt: 'Cut top seal sheets ready for sealing.',
+			createdAt: ago(30), updatedAt: ago(30)
+		},
 		{
 			_id: backingConfigId, processName: 'Backing', processType: 'backing',
 			maxBatchSize: 96, steps: [
@@ -77,6 +105,12 @@ async function seed() {
 				{ stepNumber: 2, title: 'Apply adhesive', description: 'Apply adhesive per WI' },
 				{ stepNumber: 3, title: 'Oven cure', description: 'Transfer to oven' }
 			],
+			inputMaterials: [
+				{ name: 'Raw Cartridge', scanOrder: 1 },
+				{ name: 'Laser Cut Back', scanOrder: 2 },
+				{ name: 'Barcode Label', scanOrder: 3 }
+			],
+			handoffPrompt: 'Backed cartridges ready for wax filling.',
 			createdAt: ago(30), updatedAt: ago(30)
 		},
 		{
@@ -198,41 +232,47 @@ async function seed() {
 	const ovenId = id();
 	await upsertMany(db, 'equipment', [
 		{
-			_id: fridgeId, name: 'Fridge A', equipmentType: 'fridge', location: 'Lab Room 101',
+			_id: fridgeId, name: 'Fridge 001', barcode: 'FRG-001', equipmentType: 'fridge',
+			location: 'Lab Room 101', capacity: 96,
 			status: 'active', currentTemperatureC: 4.2, temperatureMinC: 2, temperatureMaxC: 8,
 			lastTemperatureReadAt: hoursAgo(0.5), notes: 'Primary cartridge storage',
 			createdAt: ago(90), updatedAt: now
 		},
 		{
-			_id: ovenId, name: 'Oven 1', equipmentType: 'oven', location: 'Lab Room 102',
+			_id: ovenId, name: 'Oven 1', barcode: 'OVN-001', equipmentType: 'oven',
+			location: 'Lab Room 102', capacity: 192,
 			status: 'active', currentTemperatureC: 37.5, temperatureMinC: 35, temperatureMaxC: 40,
 			lastTemperatureReadAt: hoursAgo(0.5), notes: 'Curing oven',
 			createdAt: ago(90), updatedAt: now
 		}
 	], 'name');
 
-	const actualFridge = await db.collection('equipment').findOne({ name: 'Fridge A' });
+	const actualFridge = await db.collection('equipment').findOne({ name: 'Fridge 001' });
 	const actualOven = await db.collection('equipment').findOne({ name: 'Oven 1' });
 
 	const locIds = [id(), id(), id(), id()];
 	await upsertMany(db, 'equipmentlocations', [
 		{
-			_id: locIds[0], barcode: 'LOC-FR-A1', locationType: 'fridge', displayName: 'Fridge A - Shelf 1',
+			_id: locIds[0], parentEquipmentId: actualFridge?._id ?? fridgeId,
+			barcode: 'FRG-001-S1', locationType: 'fridge', displayName: 'Fridge 001 - Shelf 1',
 			isActive: true, capacity: 48, currentPlacements: [],
 			createdAt: ago(90), updatedAt: now
 		},
 		{
-			_id: locIds[1], barcode: 'LOC-FR-A2', locationType: 'fridge', displayName: 'Fridge A - Shelf 2',
+			_id: locIds[1], parentEquipmentId: actualFridge?._id ?? fridgeId,
+			barcode: 'FRG-001-S2', locationType: 'fridge', displayName: 'Fridge 001 - Shelf 2',
 			isActive: true, capacity: 48, currentPlacements: [],
 			createdAt: ago(90), updatedAt: now
 		},
 		{
-			_id: locIds[2], barcode: 'LOC-OV-1A', locationType: 'oven', displayName: 'Oven 1 - Rack A',
+			_id: locIds[2], parentEquipmentId: actualOven?._id ?? ovenId,
+			barcode: 'OVN-001-RA', locationType: 'oven', displayName: 'Oven 1 - Rack A',
 			isActive: true, capacity: 96, currentPlacements: [],
 			createdAt: ago(90), updatedAt: now
 		},
 		{
-			_id: locIds[3], barcode: 'LOC-OV-1B', locationType: 'oven', displayName: 'Oven 1 - Rack B',
+			_id: locIds[3], parentEquipmentId: actualOven?._id ?? ovenId,
+			barcode: 'OVN-001-RB', locationType: 'oven', displayName: 'Oven 1 - Rack B',
 			isActive: true, capacity: 96, currentPlacements: [],
 			createdAt: ago(90), updatedAt: now
 		}
@@ -358,7 +398,7 @@ async function seed() {
 				status: 'Accepted', operator: operatorRef, timestamp: ago(3), recordedAt: ago(3)
 			} : undefined,
 			waxStorage: ['wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released'].includes(phase) ? {
-				location: 'Fridge A - Shelf 1', coolingTrayId: trayIds[0],
+				location: 'Fridge 001 - Shelf 1', coolingTrayId: trayIds[0],
 				operator: operatorRef, timestamp: ago(3), recordedAt: ago(3)
 			} : undefined,
 			reagentFilling: ['reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released'].includes(phase) ? {
@@ -712,7 +752,7 @@ async function seed() {
 			openedDate: ['in_use', 'depleted', 'disposed'].includes(status) ? ago(15 - i) : null,
 			usesRemaining: status === 'depleted' ? 0 : status === 'disposed' ? 0 : 10 - i,
 			totalUses: 10,
-			storageLocation: i % 2 === 0 ? 'Fridge A - Shelf 1' : 'Fridge A - Shelf 2',
+			storageLocation: i % 2 === 0 ? 'Fridge 001 - Shelf 1' : 'Fridge 001 - Shelf 2',
 			storageConditions: '2-8°C',
 			notes: i === 4 ? 'Quarantined due to temperature excursion' : null,
 			isActive: status !== 'disposed',

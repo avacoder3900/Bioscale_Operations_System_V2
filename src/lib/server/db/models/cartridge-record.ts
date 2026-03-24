@@ -27,7 +27,7 @@ const cartridgeRecordSchema = new Schema({
 	},
 	waxFilling: {
 		runId: String, robotId: String, robotName: String, deckId: String, deckPosition: Number,
-		waxTubeId: String, waxSourceLot: String, transferTimeSeconds: Number,
+		waxTubeId: String, waxSourceLot: String, transferTimeSeconds: Number, // ORPHANED: never written by any action
 		operator: operatorRef, runStartTime: Date, runEndTime: Date, recordedAt: Date
 	},
 	waxQc: {
@@ -58,7 +58,9 @@ const cartridgeRecordSchema = new Schema({
 		recordedAt: Date
 	},
 	storage: {
-		fridgeId: String, fridgeName: String, locationId: String, containerBarcode: String,
+		fridgeId: String, // ORPHANED: never written by any action
+		fridgeName: String, locationId: String,
+		containerBarcode: String, // ORPHANED: never written by any action
 		operator: operatorRef, timestamp: Date, recordedAt: Date
 	},
 	qaqcRelease: {
@@ -100,11 +102,11 @@ const cartridgeRecordSchema = new Schema({
 
 	currentPhase: {
 		type: String,
-		enum: ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected',
+		enum: ['backing', 'wax_filling', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected',
 			'sealed', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed', 'voided']
 	},
 
-	finalizedAt: Date,
+	finalizedAt: Date, // ORPHANED: never written by any action
 	voidedAt: Date,
 	voidReason: String,
 	corrections: [correctionSchema]

@@ -36,7 +36,7 @@
 				</thead>
 				<tbody>
 					{#each data.lots as lot}
-						<tr class="tron-border-b hover:bg-white/5 border-b cursor-pointer" onclick={() => window.location.href = `/spu/receiving/${lot._id}`}>
+						<tr class="tron-border-b hover:bg-white/5 border-b cursor-pointer" onclick={() => window.location.href = `/receiving/${lot._id}`}>
 							<td class="px-4 py-3">
 								<span class="tron-text font-mono text-xs">{lot.lotId}</span>
 							</td>

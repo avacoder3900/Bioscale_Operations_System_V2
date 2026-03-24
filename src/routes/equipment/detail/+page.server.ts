@@ -1,4 +1,5 @@
 import { fail } from '@sveltejs/kit';
+import { requirePermission } from '$lib/server/permissions';
 import { connectDB, Equipment, DeviceEvent, generateId } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -42,9 +43,11 @@ export const load: PageServerLoad = async ({ url }) => {
 			equipment: {
 				id: String(equip._id),
 				name: equip.name ?? '',
+				barcode: equip.barcode ?? null,
 				equipmentType: equip.equipmentType ?? '',
 				status: equip.status ?? 'active',
 				location: equip.location ?? null,
+				capacity: equip.capacity ?? null,
 				notes: equip.notes ?? null,
 				createdAt: equip.createdAt?.toISOString?.() ?? new Date().toISOString(),
 				updatedAt: equip.updatedAt?.toISOString?.() ?? new Date().toISOString()
@@ -66,7 +69,8 @@ export const load: PageServerLoad = async ({ url }) => {
 };
 
 export const actions: Actions = {
-	updateStatus: async ({ request }) => {
+	updateStatus: async ({ request, locals }) => {
+		requirePermission(locals.user, 'equipment:write');
 		await connectDB();
 		try {
 			const data = await request.formData();
@@ -83,7 +87,8 @@ export const actions: Actions = {
 		}
 	},
 
-	logEvent: async ({ request }) => {
+	logEvent: async ({ request, locals }) => {
+		requirePermission(locals.user, 'equipment:write');
 		await connectDB();
 		try {
 			const data = await request.formData();

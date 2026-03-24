@@ -1,8 +1,9 @@
 import { json } from '@sveltejs/kit';
-import { connectDB, Consumable, EquipmentLocation, OpentronsRobot, CartridgeRecord } from '$lib/server/db';
+import { connectDB, Consumable, Equipment, EquipmentLocation, OpentronsRobot, CartridgeRecord } from '$lib/server/db';
 import type { RequestHandler } from './$types';
 
-export const GET: RequestHandler = async ({ url }) => {
+export const GET: RequestHandler = async ({ url, locals }) => {
+	if (!locals.user) return json({ error: 'Unauthorized' }, { status: 401 });
 	await connectDB();
 
 	const type = url.searchParams.get('type');
@@ -26,6 +27,10 @@ export const GET: RequestHandler = async ({ url }) => {
 	}
 
 	if (type === 'fridge') {
+		// Check Equipment first (parent fridges), then fall back to EquipmentLocation
+		const equip = await Equipment.findOne({ _id: id, equipmentType: 'fridge', status: { $ne: 'offline' } }).lean()
+			?? await Equipment.findOne({ barcode: id, equipmentType: 'fridge', status: { $ne: 'offline' } }).lean();
+		if (equip) return json({ valid: true, id: (equip as any)._id, name: (equip as any).name });
 		const fridge = await EquipmentLocation.findOne({ _id: id, locationType: 'fridge', isActive: true }).lean()
 			?? await EquipmentLocation.findOne({ barcode: id, locationType: 'fridge', isActive: true }).lean();
 		if (!fridge) return json({ error: `Fridge "${id}" does not exist or is inactive.` }, { status: 404 });
@@ -49,8 +54,9 @@ export const GET: RequestHandler = async ({ url }) => {
 				return json({ error: `Cartridge "${id}" not found. It must go through wax filling first.`, isNew: true }, { status: 404 });
 			}
 			const phase = (cart as any).currentPhase;
-			if (phase !== 'wax_filled') {
-				return json({ error: `Cartridge "${id}" is in phase "${phase}", expected wax_filled. Cannot add to reagent run.` }, { status: 400 });
+			const validForReagent = ['wax_filled', 'wax_stored', 'wax_qc'];
+			if (!validForReagent.includes(phase)) {
+				return json({ error: `Cartridge "${id}" is in phase "${phase}". Must be wax stored before reagent filling.` }, { status: 400 });
 			}
 			return json({ valid: true, id, isNew: false, phase });
 		}

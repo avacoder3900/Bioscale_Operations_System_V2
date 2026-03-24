@@ -144,3 +144,5 @@ export const actions: Actions = {
 		throw redirect(303, '/spu/servicing');
 	}
 };
+
+export const config = { maxDuration: 60 };
