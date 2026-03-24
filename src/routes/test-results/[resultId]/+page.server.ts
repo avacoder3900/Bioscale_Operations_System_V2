@@ -1,20 +1,18 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { requirePermission } from '$lib/server/permissions';
+import { requirePermission, hasPermission } from '$lib/server/permissions';
 import { connectDB, TestResult } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!locals.user) redirect(302, '/login');
-	requirePermission(locals.user, 'testResults:read');
+	requirePermission(locals.user, 'testResult:read');
 	await connectDB();
 
 	const raw = await TestResult.findById(params.resultId).lean();
 	if (!raw) throw error(404, 'Test result not found');
 	const r = raw as any;
 
-	const canWrite = !!(locals.user as any)?.roles?.some((role: any) =>
-		role.permissions?.includes('testResults:write') || role.roleName === 'admin'
-	);
+	const canWrite = hasPermission(locals.user, 'testResult:write') || hasPermission(locals.user, 'admin:full');
 
 	return {
 		result: {
@@ -61,7 +59,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 
 export const actions: Actions = {
 	updateStatus: async ({ request, locals, params }) => {
-		requirePermission(locals.user, 'testResults:write');
+		requirePermission(locals.user, 'testResult:write');
 		await connectDB();
 		const form = await request.formData();
 		const status = form.get('status')?.toString();

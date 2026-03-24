@@ -1,11 +1,13 @@
 import { redirect, fail } from '@sveltejs/kit';
 import { connectDB, LotRecord, BackingLot, Equipment, EquipmentLocation, ManufacturingSettings, AuditLog, generateId } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 export const config = { maxDuration: 60 };
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
 	const todayStart = new Date();
@@ -95,6 +97,7 @@ export const actions: Actions = {
 	/** Register a backing lot — places it in the oven, starts the timer */
 	registerBackingLot: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();

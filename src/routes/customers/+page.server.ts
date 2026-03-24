@@ -1,10 +1,12 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, Customer, Spu, AuditLog } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'customer:read');
 	await connectDB();
 
 	const customers = await Customer.find().sort({ name: 1 }).lean();
@@ -34,6 +36,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 export const actions: Actions = {
 	create: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'customer:write');
 		await connectDB();
 		const fd = await request.formData();
 		const name = fd.get('name') as string;
@@ -65,6 +68,7 @@ export const actions: Actions = {
 
 	deactivate: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'customer:write');
 		await connectDB();
 		const fd = await request.formData();
 		const customerId = fd.get('customerId') as string;

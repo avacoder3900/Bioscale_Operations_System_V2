@@ -1,8 +1,10 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { connectDB, WorkInstruction, ProductionRun, User, AssemblySession } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
-export const load: PageServerLoad = async ({ params }) => {
+export const load: PageServerLoad = async ({ params, locals }) => {
+	requirePermission(locals.user, 'workInstruction:read');
 	await connectDB();
 
 	const [wi, run] = await Promise.all([

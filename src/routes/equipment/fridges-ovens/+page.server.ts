@@ -1,10 +1,11 @@
 export const config = { maxDuration: 60 };
 import { fail } from '@sveltejs/kit';
 import { connectDB, generateId, Equipment, EquipmentLocation, AuditLog, CartridgeRecord } from '$lib/server/db';
-import { isAdmin } from '$lib/server/permissions';
+import { isAdmin, requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
+	requirePermission(locals.user, 'equipment:read');
 	try {
 		await connectDB();
 
@@ -153,6 +154,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 export const actions: Actions = {
 	createLocation: async ({ request, locals }) => {
+		requirePermission(locals.user, 'equipment:write');
 		if (!isAdmin(locals.user)) return fail(403, { error: 'Admin access required' });
 		await connectDB();
 
@@ -196,6 +198,7 @@ export const actions: Actions = {
 	},
 
 	updateLocation: async ({ request, locals }) => {
+		requirePermission(locals.user, 'equipment:write');
 		if (!isAdmin(locals.user)) return fail(403, { error: 'Admin access required' });
 		await connectDB();
 
@@ -242,6 +245,7 @@ export const actions: Actions = {
 	},
 
 	deleteLocation: async ({ request, locals }) => {
+		requirePermission(locals.user, 'equipment:write');
 		if (!isAdmin(locals.user)) return fail(403, { error: 'Admin access required' });
 		await connectDB();
 

@@ -31,7 +31,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		]);
 
 		return {
-			user: locals.user,
+			user: JSON.parse(JSON.stringify(locals.user)),
 			robots: (robots as any[]).map((r) => ({
 				// Stringify ObjectId to ensure proper serialization on Vercel
 				robotId: String(r._id),
@@ -61,7 +61,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		console.error('[WAX-FILLING LAYOUT] DB error:', err instanceof Error ? err.message : err);
 		// Return safe defaults so the page can still render with an error state
 		return {
-			user: locals.user,
+			user: JSON.parse(JSON.stringify(locals.user)),
 			robots: [],
 			dashboardState: []
 		};

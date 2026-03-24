@@ -1,10 +1,12 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, KanbanProject, AuditLog } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'kanban:read');
 	await connectDB();
 
 	const projects = await KanbanProject.find().sort({ sortOrder: 1 }).lean();
@@ -25,6 +27,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 export const actions: Actions = {
 	create: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
 		await connectDB();
 		const fd = await request.formData();
 		const name = fd.get('name') as string;
@@ -56,6 +59,7 @@ export const actions: Actions = {
 
 	update: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
 		await connectDB();
 		const fd = await request.formData();
 		const projectId = fd.get('projectId') as string;
@@ -84,6 +88,7 @@ export const actions: Actions = {
 
 	toggleActive: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
 		await connectDB();
 		const fd = await request.formData();
 		const projectId = fd.get('projectId') as string;

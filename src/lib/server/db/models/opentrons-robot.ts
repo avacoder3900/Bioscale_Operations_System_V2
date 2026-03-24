@@ -16,6 +16,7 @@ const opentronsRobotSchema = new Schema({
 		uploadedBy: String, createdAt: Date, updatedAt: Date
 	}],
 	recentHealthSnapshots: [{
+		_id: false,
 		firmwareVersion: String, apiVersion: String, systemVersion: String,
 		leftPipette: Schema.Types.Mixed, rightPipette: Schema.Types.Mixed,
 		modules: Schema.Types.Mixed, isHealthy: Boolean, responseTimeMs: Number,

@@ -3,10 +3,11 @@ import { fail } from '@sveltejs/kit';
 import bcrypt from 'bcryptjs';
 import { connectDB, generateId, Equipment, AuditLog, User } from '$lib/server/db';
 import { WaxFillingRun } from '$lib/server/db/models/wax-filling-run.js';
-import { isAdmin } from '$lib/server/permissions';
+import { isAdmin, requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
+	requirePermission(locals.user, 'equipment:read');
 	try {
 		await connectDB();
 
@@ -142,6 +143,7 @@ function mapTrayRun(r: any) {
 
 export const actions: Actions = {
 	createDeck: async ({ request, locals }) => {
+		requirePermission(locals.user, 'equipment:write');
 		await connectDB();
 		const data = await request.formData();
 		const deckId = data.get('deckId')?.toString()?.trim();
@@ -172,6 +174,7 @@ export const actions: Actions = {
 	},
 
 	createTray: async ({ request, locals }) => {
+		requirePermission(locals.user, 'equipment:write');
 		await connectDB();
 		const data = await request.formData();
 		const trayId = data.get('trayId')?.toString()?.trim();
@@ -202,6 +205,7 @@ export const actions: Actions = {
 	},
 
 	forceReleaseDeck: async ({ request, locals }) => {
+		requirePermission(locals.user, 'equipment:write');
 		if (!isAdmin(locals.user)) return fail(403, { error: 'Admin access required' });
 		await connectDB();
 
@@ -243,6 +247,7 @@ export const actions: Actions = {
 	},
 
 	forceReleaseTray: async ({ request, locals }) => {
+		requirePermission(locals.user, 'equipment:write');
 		if (!isAdmin(locals.user)) return fail(403, { error: 'Admin access required' });
 		await connectDB();
 

@@ -5,10 +5,12 @@ import {
 	ManufacturingMaterial, ManufacturingMaterialTransaction,
 	ManufacturingSettings, PartDefinition, User, AuditLog, generateId
 } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
 	// === Pipeline counts ===
@@ -172,6 +174,7 @@ export const actions: Actions = {
 	/** Manual inventory edit — requires admin password + reason */
 	manualEdit: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();

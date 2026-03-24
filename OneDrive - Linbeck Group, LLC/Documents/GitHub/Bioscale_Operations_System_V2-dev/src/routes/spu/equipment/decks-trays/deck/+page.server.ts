@@ -1,9 +1,11 @@
 import { fail } from '@sveltejs/kit';
 import { connectDB, Consumable, AuditLog, generateId } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { Actions } from './$types';
 
 export const actions: Actions = {
 	create: async ({ request, locals }) => {
+		requirePermission(locals.user, 'equipment:write');
 		await connectDB();
 		const form = await request.formData();
 		const name = form.get('name')?.toString().trim();
@@ -20,6 +22,7 @@ export const actions: Actions = {
 	},
 
 	update: async ({ request, locals }) => {
+		requirePermission(locals.user, 'equipment:write');
 		await connectDB();
 		const form = await request.formData();
 		const id = form.get('id')?.toString();
@@ -36,6 +39,7 @@ export const actions: Actions = {
 	},
 
 	delete: async ({ request, locals }) => {
+		requirePermission(locals.user, 'equipment:write');
 		await connectDB();
 		const form = await request.formData();
 		const id = form.get('id')?.toString();

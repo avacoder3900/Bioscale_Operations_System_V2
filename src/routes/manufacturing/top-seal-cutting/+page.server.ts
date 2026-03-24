@@ -1,5 +1,6 @@
 import { redirect, fail } from '@sveltejs/kit';
 import { connectDB, AuditLog, PartDefinition, generateId } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 import mongoose from 'mongoose';
@@ -10,6 +11,7 @@ function getCollection() {
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
 	const [runs, topSealPart, settingsDoc] = await Promise.all([
@@ -47,6 +49,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 export const actions: Actions = {
 	updateExpected: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 		const data = await request.formData();
 		const password = (data.get('adminPassword') as string)?.trim();
@@ -64,12 +67,14 @@ export const actions: Actions = {
 
 	generateTestBarcode: async ({ locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		const barcode = `TSEAL-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 		return { testBarcode: barcode };
 	},
 
 	recordRun: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();

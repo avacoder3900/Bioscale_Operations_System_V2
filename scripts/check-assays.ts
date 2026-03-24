@@ -1,0 +1,14 @@
+import mongoose from 'mongoose';
+import * as dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+dotenv.config({ path: resolve(__dirname, '..', '.env') });
+await mongoose.connect(process.env.MONGODB_URI!);
+const db = mongoose.connection.db!;
+const a1 = await db.collection('assay_definitions').countDocuments();
+const a2 = await db.collection('assaydefinitions').countDocuments();
+console.log('assay_definitions:', a1, 'docs');
+console.log('assaydefinitions:', a2, 'docs');
+await mongoose.disconnect();

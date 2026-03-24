@@ -41,7 +41,7 @@ const cartridgeRecordSchema = new Schema({
 		runId: String, robotId: String, robotName: String,
 		assayType: { _id: String, name: String, skuCode: String },
 		deckPosition: Number,
-		tubeRecords: [{ wellPosition: Number, reagentName: String, sourceLotId: String, transferTubeId: String }],
+		tubeRecords: [{ _id: false, wellPosition: Number, reagentName: String, sourceLotId: String, transferTubeId: String }],
 		operator: operatorRef, fillDate: Date, expirationDate: Date, recordedAt: Date
 	},
 	reagentInspection: {
@@ -79,7 +79,7 @@ const cartridgeRecordSchema = new Schema({
 	testExecution: {
 		spu: {
 			_id: String, udi: String,
-			parts: [{ partNumber: String, partName: String, lotNumber: String, serialNumber: String }],
+			parts: [{ _id: false, partNumber: String, partName: String, lotNumber: String, serialNumber: String }],
 			firmwareVersion: String,
 			lastValidation: { type: String, status: String, completedAt: Date },
 			particleLink: { particleSerial: String, particleDeviceId: String }
@@ -94,7 +94,7 @@ const cartridgeRecordSchema = new Schema({
 		analyte: String, value: Number, unit: String,
 		referenceRange: { low: Number, high: Number },
 		interpretation: String,
-		spectroReadings: [{ readingNumber: Number, channel: String, value: Number, timestampMs: Number }],
+		spectroReadings: [{ _id: false, readingNumber: Number, channel: String, value: Number, timestampMs: Number }],
 		processedData: Schema.Types.Mixed,
 		status: { type: String, enum: ['pending', 'completed', 'failed', 'invalid'] },
 		completedAt: Date, recordedAt: Date

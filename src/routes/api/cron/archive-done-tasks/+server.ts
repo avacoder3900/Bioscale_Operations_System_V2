@@ -1,13 +1,10 @@
 import { json } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
 import { connectDB, KanbanTask, AuditLog } from '$lib/server/db';
+import { requireAgentApiKey } from '$lib/server/api-auth';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
-	const key = request.headers.get('x-api-key') || request.headers.get('x-agent-api-key') || request.headers.get('authorization')?.replace('Bearer ', '');
-	if (!env.AGENT_API_KEY || key !== env.AGENT_API_KEY) {
-		return json({ error: 'Unauthorized' }, { status: 401 });
-	}
+	requireAgentApiKey(request);
 	await connectDB();
 
 	const result = await KanbanTask.updateMany(

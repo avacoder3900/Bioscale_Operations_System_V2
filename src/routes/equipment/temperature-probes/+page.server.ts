@@ -1,9 +1,10 @@
 export const config = { maxDuration: 60 };
 import { connectDB, Equipment } from '$lib/server/db';
-import { isAdmin } from '$lib/server/permissions';
+import { isAdmin, requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
+	requirePermission(locals.user, 'equipment:read');
 	try {
 		await connectDB();
 		const equipment = await Equipment.find().sort({ name: 1 }).lean();

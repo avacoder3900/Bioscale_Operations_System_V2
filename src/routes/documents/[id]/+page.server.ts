@@ -1,8 +1,10 @@
 import { error } from '@sveltejs/kit';
 import { connectDB, Document, User } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
+	requirePermission(locals.user, 'document:read');
 	await connectDB();
 	const doc = await Document.findById(params.id).lean() as any;
 	if (!doc) error(404, 'Document not found');

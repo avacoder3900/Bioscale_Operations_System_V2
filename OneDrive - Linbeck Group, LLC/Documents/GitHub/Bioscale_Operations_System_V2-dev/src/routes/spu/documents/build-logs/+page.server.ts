@@ -1,7 +1,9 @@
 import { connectDB, ProductionRun, WorkInstruction, User } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async () => {
+export const load: PageServerLoad = async ({ locals }) => {
+	requirePermission(locals.user, 'workInstruction:read');
 	await connectDB();
 	const runs = await ProductionRun.find().sort({ createdAt: -1 }).limit(100).lean();
 
