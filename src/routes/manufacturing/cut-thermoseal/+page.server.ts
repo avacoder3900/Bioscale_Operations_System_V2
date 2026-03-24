@@ -23,12 +23,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 			id: String(r._id),
 			lotBarcode: r.lotBarcode ?? '—',
 			expectedSheets: r.expectedSheets ?? 0,
-			cutCount: r.cutCount ?? 0,
 			acceptedCount: r.acceptedCount ?? 0,
-			rejectedCount: (r.cutCount ?? 0) - (r.acceptedCount ?? 0),
+			rejectedCount: (r.expectedSheets ?? 0) - (r.acceptedCount ?? 0),
 			operator: r.operator?.username ?? 'unknown',
 			notes: r.notes ?? null,
-			status: r.status ?? 'completed',
 			createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : ''
 		}))
 	};
@@ -42,15 +40,13 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const lotBarcode = (data.get('lotBarcode') as string)?.trim();
 		const expectedSheets = Number(data.get('expectedSheets') || 0);
-		const cutCount = Number(data.get('cutCount') || 0);
 		const acceptedCount = Number(data.get('acceptedCount') || 0);
 		const notes = (data.get('notes') as string) || undefined;
 
 		if (!lotBarcode) return fail(400, { error: 'Lot barcode is required — scan the roll first' });
-		if (expectedSheets <= 0) return fail(400, { error: 'Expected sheets must be > 0' });
-		if (cutCount <= 0) return fail(400, { error: 'Cut count must be > 0' });
+		if (expectedSheets <= 0) return fail(400, { error: 'Expected strips must be > 0' });
 		if (acceptedCount < 0) return fail(400, { error: 'Accepted count cannot be negative' });
-		if (acceptedCount > cutCount) return fail(400, { error: 'Accepted count cannot exceed cut count' });
+		if (acceptedCount > expectedSheets) return fail(400, { error: 'Accepted cannot exceed expected' });
 
 		const now = new Date();
 		const runId = generateId();
@@ -59,7 +55,6 @@ export const actions: Actions = {
 			_id: runId,
 			lotBarcode,
 			expectedSheets,
-			cutCount,
 			acceptedCount,
 			operator: { _id: locals.user._id, username: locals.user.username },
 			notes: notes || null,
@@ -79,7 +74,7 @@ export const actions: Actions = {
 				operatorId: locals.user._id,
 				operatorUsername: locals.user.username,
 				lotId: lotBarcode,
-				notes: `Cut thermoseal [${lotBarcode}]: ${acceptedCount} accepted of ${cutCount} cut (${expectedSheets} sheets expected)`
+				notes: `Cut thermoseal [${lotBarcode}]: ${acceptedCount} accepted of ${expectedSheets} expected`
 			});
 		}
 
@@ -90,7 +85,7 @@ export const actions: Actions = {
 			action: 'INSERT',
 			changedBy: locals.user.username,
 			changedAt: now,
-			newData: { lotBarcode, expectedSheets, cutCount, acceptedCount }
+			newData: { lotBarcode, expectedSheets, acceptedCount }
 		});
 
 		return { success: true };
