@@ -489,6 +489,7 @@
 	const coolingConfirmedAt = $derived(data.runState.coolingConfirmedAt ? new Date(data.runState.coolingConfirmedAt) : null);
 	const coolingElapsedMs = $derived.by(() => {
 		void coolingTick;
+		if (coolingBypassed) return COOLING_REQUIRED_MS;
 		return coolingConfirmedAt ? Date.now() - coolingConfirmedAt.getTime() : COOLING_REQUIRED_MS;
 	});
 	const coolingRemainingMs = $derived(Math.max(0, COOLING_REQUIRED_MS - coolingElapsedMs));
