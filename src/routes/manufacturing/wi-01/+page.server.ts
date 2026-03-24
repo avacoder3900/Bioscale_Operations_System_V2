@@ -41,7 +41,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 			lotStepEntries: [],
 			recentLots: [],
 			inventory: {
-				cutThermosealStrips: { name: 'Laser Cut Backs', quantity: 0, unit: 'pcs' },
 				rawCartridges: { name: 'Raw Cartridges', quantity: 0, unit: 'pcs' },
 				barcodeLabels: { name: 'Barcode Labels', quantity: 0, unit: 'pcs' },
 				individualBacks: { name: 'Laser Cut Backs', quantity: 0, unit: 'pcs' }
@@ -91,7 +90,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 		})),
 		inventory: {
 			rawCartridges: { name: 'Raw Cartridges', quantity: findQty(/raw.?cartridge|cartridge.?body/i), unit: 'pcs' },
-			cutThermosealStrips: { name: 'Laser Cut Backs', quantity: findQty(/laser.?cut|cut.?sub|substrate/i), unit: 'pcs' },
 			barcodeLabels: { name: 'Barcode Labels', quantity: findQty(/barcode.?label|label/i), unit: 'pcs' },
 			individualBacks: { name: 'Laser Cut Backs', quantity: findQty(/laser.?cut|cut.?sub|substrate/i), unit: 'pcs' }
 		}
