@@ -1,5 +1,5 @@
 import { redirect, fail } from '@sveltejs/kit';
-import { connectDB, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, AuditLog, PartDefinition, generateId } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 import mongoose from 'mongoose';
@@ -12,13 +12,21 @@ export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	await connectDB();
 
-	const runs = await getCollection()
-		.find({})
-		.sort({ createdAt: -1 })
-		.limit(50)
-		.toArray();
+	const [runs, thermosealPart] = await Promise.all([
+		getCollection().find({}).sort({ createdAt: -1 }).limit(50).toArray(),
+		PartDefinition.findOne({ partNumber: 'PT-CT-101' }).lean()
+	]);
+
+	// Calculate total strips accepted (current inventory of cut strips)
+	const allRuns = await getCollection().find({}).toArray();
+	const totalStripsProduced = allRuns.reduce((sum: number, r: any) => sum + (r.acceptedCount ?? 0), 0);
 
 	return {
+		inventory: {
+			rollStock: (thermosealPart as any)?.inventoryCount ?? 0,
+			rollPartName: (thermosealPart as any)?.name ?? 'Thermoseal',
+			totalStripsProduced
+		},
 		runs: runs.map((r: any) => ({
 			id: String(r._id),
 			lotBarcode: r.lotBarcode ?? '—',
@@ -89,5 +97,12 @@ export const actions: Actions = {
 		});
 
 		return { success: true };
+	},
+
+	/** Generate a test barcode for scanning */
+	generateTestBarcode: async ({ locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		const barcode = `THERM-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+		return { testBarcode: barcode };
 	}
 };

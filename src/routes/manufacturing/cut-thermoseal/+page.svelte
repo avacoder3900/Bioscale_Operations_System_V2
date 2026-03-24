@@ -13,14 +13,13 @@
 	}
 
 	interface Props {
-		data: { runs: Run[] };
-		form: { success?: boolean; error?: string } | null;
+		data: { runs: Run[]; inventory: { rollStock: number; rollPartName: string; totalStripsProduced: number } };
+		form: { success?: boolean; error?: string; testBarcode?: string } | null;
 	}
 
 	let { data, form }: Props = $props();
 
-	// Multi-step state
-	let step = $state<'idle' | 'scanned' | 'record'>('idle');
+	let step = $state<'idle' | 'scanned'>('idle');
 	let lotBarcode = $state('');
 	let expectedSheets = $state(0);
 	let acceptedCount = $state(0);
@@ -28,23 +27,9 @@
 
 	let barcodeInput: HTMLInputElement;
 
-	// Known roll yields (sheets per roll) — extend as needed
-	const rollYields: Record<string, number> = {
-		// Default if not in map — operator enters manually
-	};
-
-	const todayRuns = $derived(data.runs.filter((r) => {
-		const today = new Date().toISOString().slice(0, 10);
-		return r.createdAt.startsWith(today);
-	}));
-	const todayAccepted = $derived(todayRuns.reduce((sum, r) => sum + r.acceptedCount, 0));
-
 	function onBarcodeScan(e: KeyboardEvent) {
 		if (e.key === 'Enter' && lotBarcode.trim()) {
 			e.preventDefault();
-			// Look up expected yield or let operator enter
-			const known = rollYields[lotBarcode.trim()];
-			if (known) expectedSheets = known;
 			step = 'scanned';
 		}
 	}
@@ -58,7 +43,13 @@
 		setTimeout(() => barcodeInput?.focus(), 100);
 	}
 
-	// After successful form submission, reset
+	function useTestBarcode() {
+		if (form?.testBarcode) {
+			lotBarcode = form.testBarcode;
+			step = 'scanned';
+		}
+	}
+
 	$effect(() => {
 		if (form?.success) {
 			step = 'idle';
@@ -67,18 +58,24 @@
 			acceptedCount = 0;
 			notes = '';
 		}
+		if (form?.testBarcode && step === 'idle') {
+			lotBarcode = form.testBarcode;
+			step = 'scanned';
+		}
 	});
 </script>
 
 <div class="space-y-6">
 	<div class="flex items-center justify-between">
 		<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Cut Thermoseal</h1>
-		{#if step !== 'idle'}
-			<button type="button" onclick={startNew}
-				class="min-h-[44px] rounded border border-red-500/50 bg-red-900/10 px-4 py-2 text-sm font-medium text-red-400 hover:bg-red-900/20">
-				Cancel
-			</button>
-		{/if}
+		<div class="flex gap-2">
+			{#if step !== 'idle'}
+				<button type="button" onclick={startNew}
+					class="min-h-[44px] rounded border border-red-500/50 bg-red-900/10 px-4 py-2 text-sm font-medium text-red-400 hover:bg-red-900/20">
+					Cancel
+				</button>
+			{/if}
+		</div>
 	</div>
 
 	{#if form?.success}
@@ -90,15 +87,15 @@
 		<div class="rounded border border-red-500/30 bg-red-900/20 px-4 py-3 text-sm text-red-300">{form.error}</div>
 	{/if}
 
-	<!-- Today's Stats -->
+	<!-- Inventory Stats -->
 	<div class="grid grid-cols-2 gap-4">
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 text-center">
-			<p class="text-2xl font-bold text-[var(--color-tron-cyan)]">{todayRuns.length}</p>
-			<p class="text-xs text-[var(--color-tron-text-secondary)]">Runs Today</p>
+			<p class="text-2xl font-bold text-[var(--color-tron-cyan)]">{data.inventory.rollStock}</p>
+			<p class="text-xs text-[var(--color-tron-text-secondary)]">{data.inventory.rollPartName} Rolls in Stock</p>
 		</div>
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 text-center">
-			<p class="text-2xl font-bold text-green-400">{todayAccepted}</p>
-			<p class="text-xs text-[var(--color-tron-text-secondary)]">Strips Accepted Today</p>
+			<p class="text-2xl font-bold text-green-400">{data.inventory.totalStripsProduced}</p>
+			<p class="text-xs text-[var(--color-tron-text-secondary)]">Total Strips Cut</p>
 		</div>
 	</div>
 
@@ -118,6 +115,14 @@
 				autofocus
 			/>
 			<p class="text-xs text-[var(--color-tron-text-secondary)]">Press Enter after scanning</p>
+
+			<!-- Test barcode button -->
+			<form method="POST" action="?/generateTestBarcode" use:enhance class="mt-2">
+				<button type="submit"
+					class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)]/50 hover:text-[var(--color-tron-cyan)]">
+					🧪 Generate Test Barcode
+				</button>
+			</form>
 		</div>
 	{/if}
 
@@ -131,7 +136,6 @@
 		>
 			<input type="hidden" name="lotBarcode" value={lotBarcode} />
 
-			<!-- Roll info banner -->
 			<div class="rounded border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-cyan)]/5 px-4 py-3 flex items-center justify-between">
 				<div>
 					<p class="text-xs text-[var(--color-tron-text-secondary)]">Roll Barcode</p>
