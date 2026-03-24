@@ -126,10 +126,19 @@ export const actions: Actions = {
 		const role = await Role.findById(roleId).lean();
 		if (!role) return fail(400, { error: 'Role not found' });
 
+		// Check if user already has this role
+		const user = await User.findById(userId).lean();
+		if (!user) return fail(400, { error: 'User not found' });
+		const alreadyHasRole = (user.roles ?? []).some((r: any) => r.roleId === roleId);
+		if (alreadyHasRole) return fail(400, { error: 'User already has this role' });
+
 		const now = new Date();
+		// Replace roles array (single role per user) instead of pushing
 		await User.updateOne({ _id: userId }, {
+			$set: {
+				roles: [{ roleId: role._id, roleName: role.name, permissions: role.permissions, assignedAt: now, assignedBy: locals.user!._id }]
+			},
 			$push: {
-				roles: { roleId: role._id, roleName: role.name, permissions: role.permissions, assignedAt: now, assignedBy: locals.user!._id },
 				roleHistory: {
 					_id: generateId(), roleId: role._id, roleName: role.name, permissions: role.permissions,
 					grantedAt: now, grantedBy: { _id: locals.user!._id, username: locals.user!.username }
