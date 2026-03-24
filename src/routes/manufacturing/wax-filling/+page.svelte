@@ -1068,6 +1068,7 @@
 					onComplete={handleQCComplete}
 					readonly={isPreviewOrPast}
 					coolingConfirmedAt={previewParam ? null : (data.runState.coolingConfirmedAt ? new Date(data.runState.coolingConfirmedAt) : null)}
+					{coolingBypassed}
 				/>
 			{:else}
 				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">
