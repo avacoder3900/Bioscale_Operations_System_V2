@@ -4,7 +4,7 @@ import {
 	ManufacturingMaterialTransaction, AuditLog, generateId
 } from '$lib/server/db';
 import { nanoid } from 'nanoid';
-import { recordTransaction } from '$lib/server/services/inventory-transaction';
+import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {

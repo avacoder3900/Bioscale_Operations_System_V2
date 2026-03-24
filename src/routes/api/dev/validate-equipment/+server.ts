@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { connectDB, Consumable, EquipmentLocation, OpentronsRobot, CartridgeRecord } from '$lib/server/db';
+import { connectDB, Consumable, Equipment, EquipmentLocation, OpentronsRobot, CartridgeRecord } from '$lib/server/db';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ url, locals }) => {
@@ -27,6 +27,10 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	}
 
 	if (type === 'fridge') {
+		// Check Equipment first (parent fridges), then fall back to EquipmentLocation
+		const equip = await Equipment.findOne({ _id: id, equipmentType: 'fridge', status: { $ne: 'offline' } }).lean()
+			?? await Equipment.findOne({ barcode: id, equipmentType: 'fridge', status: { $ne: 'offline' } }).lean();
+		if (equip) return json({ valid: true, id: (equip as any)._id, name: (equip as any).name });
 		const fridge = await EquipmentLocation.findOne({ _id: id, locationType: 'fridge', isActive: true }).lean()
 			?? await EquipmentLocation.findOne({ barcode: id, locationType: 'fridge', isActive: true }).lean();
 		if (!fridge) return json({ error: `Fridge "${id}" does not exist or is inactive.` }, { status: 404 });

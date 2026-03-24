@@ -3,7 +3,7 @@ import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import {
 	connectDB, Spu, Batch, BomItem, ProductionRun, Customer, User, AuditLog, generateId,
-	LabCartridge, CartridgeGroup, CartridgeRecord, EquipmentLocation,
+	LabCartridge, CartridgeGroup, CartridgeRecord, Equipment, EquipmentLocation,
 	OpentronsRobot, WaxFillingRun, Consumable, AssayDefinition
 } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
@@ -160,7 +160,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 						'reagentFilling.expirationDate': { $lte: thirtyDaysFromNow, $gte: cdNow },
 						currentPhase: { $nin: ['voided', 'completed', 'shipped'] }
 					}).sort({ 'reagentFilling.expirationDate': 1 }).limit(10).lean().catch(() => []),
-					EquipmentLocation.find({ locationType: 'fridge', isActive: true }).lean().catch(() => []),
+					Equipment.find({ equipmentType: 'fridge', status: { $ne: 'offline' } }).lean().catch(() => []),
 					CartridgeRecord.countDocuments({ createdAt: { $gte: sevenDaysAgo } }).catch(() => 0),
 					CartridgeRecord.aggregate([
 						{ $match: { 'reagentFilling.assayType.name': { $exists: true } } },
@@ -190,9 +190,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					}
 					return Array.from(merged.entries()).map(([k, v]) => ({ _id: k, count: v }));
 				})();
-				const fridgeMap = new Map((fridges as any[]).map((f: any) => [f.barcode ?? f.displayName ?? String(f._id), f.displayName ?? f.barcode ?? String(f._id)]));
-				// Map from barcode/displayName key → actual _id for detail links
-				const fridgeIdMap = new Map((fridges as any[]).map((f: any) => [f.barcode ?? f.displayName ?? String(f._id), String(f._id)]));
+				const fridgeMap = new Map((fridges as any[]).map((f: any) => [f.barcode ?? f.name ?? String(f._id), f.name ?? f.barcode ?? String(f._id)]));
+				// Map from barcode/name key → actual _id for detail links
+				const fridgeIdMap = new Map((fridges as any[]).map((f: any) => [f.barcode ?? f.name ?? String(f._id), String(f._id)]));
 
 				const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed'];
 				const phaseMap = new Map((phaseCounts as any[]).map((p: any) => [p._id, p.count]));

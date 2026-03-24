@@ -54,12 +54,52 @@ export const load: PageServerLoad = async ({ locals }) => {
 		occupantMap.set(c._id, (occupantMap.get(c._id) ?? 0) + c.count);
 	}
 
-	// Locations
-	const locations = (locationDocs as any[]).map(l => {
+	// Build child map for parent grouping
+	const childLocMap = new Map<string, any[]>();
+	const orphanLocs: any[] = [];
+	for (const l of locationDocs as any[]) {
+		if (l.parentEquipmentId) {
+			const children = childLocMap.get(l.parentEquipmentId) ?? [];
+			children.push(l);
+			childLocMap.set(l.parentEquipmentId, children);
+		} else {
+			orphanLocs.push(l);
+		}
+	}
+
+	// Locations: show Equipment as parent entries, plus orphan EquipmentLocations
+	const locations: any[] = [];
+	for (const equip of equipmentDocs as any[]) {
+		if (equip.equipmentType !== 'fridge' && equip.equipmentType !== 'oven') continue;
+		const children = childLocMap.get(String(equip._id)) ?? [];
+		let occupants = 0;
+		const keys = [equip.barcode, equip.name].filter(Boolean);
+		for (const key of keys) occupants += occupantMap.get(key) ?? 0;
+		for (const child of children) {
+			const childKeys = [child.barcode, child.displayName].filter(Boolean);
+			for (const key of childKeys) occupants += occupantMap.get(key) ?? 0;
+		}
+		let capacity = equip.capacity ?? null;
+		if (!capacity && children.length > 0) {
+			let total = 0; let hasAny = false;
+			for (const child of children) { if (child.capacity) { total += child.capacity; hasAny = true; } }
+			if (hasAny) capacity = total;
+		}
+		locations.push({
+			id: equip._id,
+			barcode: equip.barcode ?? '',
+			locationType: equip.equipmentType ?? 'fridge',
+			displayName: equip.name ?? '',
+			isActive: equip.status !== 'offline',
+			capacity,
+			occupantCount: occupants
+		});
+	}
+	for (const l of orphanLocs) {
 		const barcode = l.barcode ?? '';
 		const name = l.displayName ?? '';
 		const occupants = (occupantMap.get(barcode) ?? 0) + (occupantMap.get(name) ?? 0);
-		return {
+		locations.push({
 			id: l._id,
 			barcode,
 			locationType: l.locationType ?? 'fridge',
@@ -67,8 +107,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			isActive: l.isActive ?? true,
 			capacity: l.capacity ?? null,
 			occupantCount: occupants
-		};
-	});
+		});
+	}
 
 	// Equipment temperatures keyed by name
 	const equipmentTemps: Record<string, number | null> = {};

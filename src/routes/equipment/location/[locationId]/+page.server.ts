@@ -1,31 +1,76 @@
 export const config = { maxDuration: 60 };
 import { error } from '@sveltejs/kit';
-import { connectDB, EquipmentLocation, CartridgeRecord, WaxFillingRun } from '$lib/server/db';
+import { connectDB, Equipment, EquipmentLocation, CartridgeRecord, WaxFillingRun } from '$lib/server/db';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ params, locals }) => {
+export const load: PageServerLoad = async ({ params }) => {
 	await connectDB();
 
 	const { locationId } = params;
 
-	// Load the location
-	const locRaw = await EquipmentLocation.findById(locationId).lean().catch(() => null);
-	if (!locRaw) {
-		throw error(404, 'Location not found');
+	// Try Equipment first (parent fridge/oven), then fall back to EquipmentLocation (shelf)
+	const equipRaw = await Equipment.findById(locationId).lean().catch(() => null) as any;
+	const isEquipment = !!equipRaw;
+
+	let locationName: string;
+	let locationBarcode: string | null;
+	let locationType: string;
+	let capacity: number | null;
+	let isActive: boolean;
+	let createdAt: string | null;
+	let childLocationIds: string[] = [];
+
+	if (isEquipment) {
+		locationName = equipRaw.name ?? String(equipRaw._id);
+		locationBarcode = equipRaw.barcode ?? null;
+		locationType = equipRaw.equipmentType ?? 'fridge';
+		capacity = equipRaw.capacity ?? null;
+		isActive = equipRaw.status !== 'offline';
+		createdAt = equipRaw.createdAt?.toISOString?.() ?? null;
+
+		// Load child locations (shelves) belonging to this equipment
+		const children = await EquipmentLocation.find({ parentEquipmentId: locationId }).lean() as any[];
+		childLocationIds = children.map((c: any) => String(c._id));
+
+		// Aggregate capacity from children if equipment doesn't have its own
+		if (!capacity && children.length > 0) {
+			let total = 0;
+			let hasAny = false;
+			for (const child of children) {
+				if (child.capacity) { total += child.capacity; hasAny = true; }
+			}
+			if (hasAny) capacity = total;
+		}
+	} else {
+		const locRaw = await EquipmentLocation.findById(locationId).lean().catch(() => null);
+		if (!locRaw) {
+			throw error(404, 'Location not found');
+		}
+		const loc = locRaw as any;
+		locationName = loc.displayName ?? loc.barcode ?? String(loc._id);
+		locationBarcode = loc.barcode ?? null;
+		locationType = loc.locationType ?? 'fridge';
+		capacity = loc.capacity ?? null;
+		isActive = loc.isActive ?? true;
+		createdAt = loc.createdAt?.toISOString?.() ?? null;
 	}
-	const loc = locRaw as any;
 
-	const locationName = loc.displayName ?? loc.barcode ?? String(loc._id);
-	const locationBarcode = loc.barcode ?? null;
-
-	// Match cartridges by BOTH waxStorage.location and storage.fridgeName against barcode AND displayName
-	const matchValues = [locationBarcode, locationName].filter(Boolean);
+	// Build match values: equipment name/barcode + all child location barcodes/displayNames
+	const matchValues = [locationBarcode, locationName].filter(Boolean) as string[];
+	if (isEquipment) {
+		const children = await EquipmentLocation.find({ parentEquipmentId: locationId }).lean() as any[];
+		for (const child of children) {
+			if (child.barcode) matchValues.push(child.barcode);
+			if (child.displayName) matchValues.push(child.displayName);
+		}
+	}
+	const uniqueMatchValues = [...new Set(matchValues)];
 
 	const [cartridgesRaw, waxRunsRaw] = await Promise.all([
 		CartridgeRecord.find({
 			$or: [
-				{ 'waxStorage.location': { $in: matchValues } },
-				{ 'storage.fridgeName': { $in: matchValues } }
+				{ 'waxStorage.location': { $in: uniqueMatchValues } },
+				{ 'storage.fridgeName': { $in: uniqueMatchValues } }
 			]
 		}).select({
 			_id: 1,
@@ -48,10 +93,15 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		}).lean().catch(() => []),
 
 		WaxFillingRun.find({
-			$or: [
-				{ coolingLocationId: locationId },
-				{ ovenLocationId: locationId }
-			]
+			$or: isEquipment
+				? [
+					{ coolingLocationId: { $in: [locationId, ...childLocationIds] } },
+					{ ovenLocationId: { $in: [locationId, ...childLocationIds] } }
+				]
+				: [
+					{ coolingLocationId: locationId },
+					{ ovenLocationId: locationId }
+				]
 		}).sort({ createdAt: -1 }).limit(20).select({
 			_id: 1,
 			status: 1,
@@ -64,9 +114,10 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		}).lean().catch(() => [])
 	]);
 
+	const matchSet = new Set(uniqueMatchValues);
 	const cartridges = (cartridgesRaw as any[]).map((c) => {
-		const isWax = matchValues.includes(c.waxStorage?.location);
-		const isReagent = matchValues.includes(c.storage?.fridgeName);
+		const isWax = matchSet.has(c.waxStorage?.location);
+		const isReagent = matchSet.has(c.storage?.fridgeName);
 		const storedAt = isWax
 			? (c.waxStorage?.recordedAt ?? null)
 			: (c.storage?.recordedAt ?? null);
@@ -106,13 +157,13 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 
 	return {
 		location: {
-			id: String(loc._id),
+			id: locationId,
 			name: locationName,
 			barcode: locationBarcode,
-			locationType: loc.locationType ?? 'fridge',
-			capacity: loc.capacity ?? null,
-			isActive: loc.isActive ?? true,
-			createdAt: loc.createdAt?.toISOString?.() ?? null
+			locationType,
+			capacity,
+			isActive,
+			createdAt
 		},
 		cartridges,
 		waxRuns,
@@ -120,7 +171,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			total: cartridges.length,
 			waxCount,
 			reagentCount,
-			utilization: loc.capacity ? Math.round((cartridges.length / loc.capacity) * 100) : null
+			utilization: capacity ? Math.round((cartridges.length / capacity) * 100) : null
 		}
 	};
 };

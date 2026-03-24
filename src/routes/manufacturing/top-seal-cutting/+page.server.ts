@@ -1,6 +1,6 @@
 import { redirect, fail } from '@sveltejs/kit';
 import { connectDB, Consumable, ManufacturingSettings, CartridgeRecord, AuditLog, generateId } from '$lib/server/db';
-import { recordTransaction } from '$lib/server/services/inventory-transaction';
+import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -181,9 +181,11 @@ export const actions: Actions = {
 			);
 		}
 
-		// Record inventory transaction for top seal consumption
+		// Record inventory transaction for top seal consumption — consume top seal (PT-CT-103)
+		const topSealPartId = await resolvePartId('PT-CT-103');
 		await recordTransaction({
 			transactionType: 'consumption',
+			partDefinitionId: topSealPartId ?? undefined,
 			quantity: quantityCut,
 			manufacturingStep: 'top_seal',
 			operatorId: locals.user._id,

@@ -1,9 +1,9 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
-	EquipmentLocation, OpentronsRobot, AuditLog, BackingLot
+	Equipment, EquipmentLocation, OpentronsRobot, AuditLog, BackingLot
 } from '$lib/server/db';
-import { recordTransaction } from '$lib/server/services/inventory-transaction';
+import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { isAdmin } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -171,13 +171,23 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			storageLocation: c.waxStorage?.location ?? null
 		}));
 
-		// Fridges for storage selection
-		const fridgesRaw = await EquipmentLocation.find({ locationType: 'fridge', isActive: true }).lean().catch(() => []);
-		const fridges = (fridgesRaw as any[]).map((f: any) => ({
-			id: String(f._id),
-			displayName: f.displayName ?? f.barcode ?? String(f._id),
-			barcode: f.barcode ?? ''
-		}));
+		// Fridges for storage selection — use parent Equipment records
+		const [equipFridges, orphanFridges] = await Promise.all([
+			Equipment.find({ equipmentType: 'fridge', status: { $ne: 'offline' } }).lean().catch(() => []),
+			EquipmentLocation.find({ locationType: 'fridge', isActive: true, parentEquipmentId: { $exists: false } }).lean().catch(() => [])
+		]);
+		const fridges = [
+			...(equipFridges as any[]).map((f: any) => ({
+				id: String(f._id),
+				displayName: f.name ?? f.barcode ?? String(f._id),
+				barcode: f.barcode ?? ''
+			})),
+			...(orphanFridges as any[]).map((f: any) => ({
+				id: String(f._id),
+				displayName: f.displayName ?? f.barcode ?? String(f._id),
+				barcode: f.barcode ?? ''
+			}))
+		];
 
 		// Backing lots from BackingLot collection
 		const minOvenTimeMin = wax.minOvenTimeMin ?? 60;
@@ -659,10 +669,12 @@ export const actions: Actions = {
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
 
-			// Record inventory transactions for each cartridge (serialized)
+			// Record inventory transactions for each cartridge — consume wax (PT-CT-105)
+			const waxPartId = await resolvePartId('PT-CT-105');
 			for (const cid of run.cartridgeIds) {
 				await recordTransaction({
-					transactionType: 'creation',
+					transactionType: 'consumption',
+					partDefinitionId: waxPartId ?? undefined,
 					cartridgeRecordId: cid,
 					lotId: run.waxSourceLot ?? undefined,
 					quantity: 1,

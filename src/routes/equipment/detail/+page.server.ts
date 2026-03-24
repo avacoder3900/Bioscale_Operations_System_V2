@@ -43,9 +43,11 @@ export const load: PageServerLoad = async ({ url }) => {
 			equipment: {
 				id: String(equip._id),
 				name: equip.name ?? '',
+				barcode: equip.barcode ?? null,
 				equipmentType: equip.equipmentType ?? '',
 				status: equip.status ?? 'active',
 				location: equip.location ?? null,
+				capacity: equip.capacity ?? null,
 				notes: equip.notes ?? null,
 				createdAt: equip.createdAt?.toISOString?.() ?? new Date().toISOString(),
 				updatedAt: equip.updatedAt?.toISOString?.() ?? new Date().toISOString()

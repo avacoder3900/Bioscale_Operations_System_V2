@@ -1,6 +1,21 @@
 import { InventoryTransaction, PartDefinition } from '$lib/server/db/models/index.js';
 import { generateId } from '$lib/server/db/utils.js';
 
+// Cache partDefinitionId lookups by partNumber (stable across requests in same process)
+const partNumberCache = new Map<string, string | null>();
+
+/**
+ * Look up a PartDefinition _id by partNumber (e.g. 'PT-CT-104').
+ * Caches results to avoid repeated DB queries.
+ */
+export async function resolvePartId(partNumber: string): Promise<string | null> {
+	if (partNumberCache.has(partNumber)) return partNumberCache.get(partNumber)!;
+	const part = await PartDefinition.findOne({ partNumber }).select('_id').lean() as any;
+	const id = part ? String(part._id) : null;
+	partNumberCache.set(partNumber, id);
+	return id;
+}
+
 export interface RecordTransactionParams {
 	transactionType: 'receipt' | 'consumption' | 'creation' | 'scrap' | 'adjustment';
 	partDefinitionId?: string;
