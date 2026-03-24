@@ -481,7 +481,7 @@
 	const COOLING_REQUIRED_MS = 10 * 60 * 1000;
 	let coolingTick = $state(0);
 	$effect(() => {
-		if (data.runState.stage === 'QC' && data.runState.coolingConfirmedAt) {
+		if (data.runState.stage === 'QC' && data.runState.coolingConfirmedAt && !coolingBypassed) {
 			const interval = setInterval(() => { coolingTick++; }, 1000);
 			return () => clearInterval(interval);
 		}
@@ -1034,7 +1034,7 @@
 				createdAt: new Date(c.createdAt),
 				updatedAt: new Date(c.updatedAt)
 			}))}
-			{#if !previewParam && !coolingComplete && !coolingBypassed}
+			{#if !previewParam && !coolingComplete}
 				<div class="rounded-lg border border-blue-500/50 bg-blue-900/20 p-5 text-center">
 					<p class="text-sm font-medium text-blue-300">Cooling in progress — inspection locked</p>
 					<p class="mt-2 font-mono text-3xl font-bold text-blue-200">Cooling: {coolingCountdown} remaining before inspection</p>
