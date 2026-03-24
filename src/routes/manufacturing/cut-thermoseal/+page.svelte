@@ -13,15 +13,18 @@
 	}
 
 	interface Props {
-		data: { runs: Run[]; inventory: { rollStock: number; rollPartName: string; totalStripsProduced: number } };
-		form: { success?: boolean; error?: string; testBarcode?: string } | null;
+		data: { runs: Run[]; inventory: { rollStock: number; rollPartName: string; totalStripsProduced: number }; defaultExpectedStrips: number };
+		form: { success?: boolean; error?: string; testBarcode?: string; settingsSuccess?: boolean; settingsError?: string } | null;
 	}
 
 	let { data, form }: Props = $props();
 
 	let step = $state<'idle' | 'scanned'>('idle');
 	let lotBarcode = $state('');
-	let expectedSheets = $state(0);
+	let expectedSheets = $state(data.defaultExpectedStrips);
+	let showSettings = $state(false);
+	let adminPassword = $state('');
+	let newExpected = $state(data.defaultExpectedStrips);
 	let acceptedCount = $state(0);
 	let notes = $state('');
 
@@ -30,6 +33,7 @@
 	function onBarcodeScan(e: KeyboardEvent) {
 		if (e.key === 'Enter' && lotBarcode.trim()) {
 			e.preventDefault();
+			expectedSheets = data.defaultExpectedStrips;
 			step = 'scanned';
 		}
 	}
@@ -37,7 +41,7 @@
 	function startNew() {
 		step = 'idle';
 		lotBarcode = '';
-		expectedSheets = 0;
+		expectedSheets = data.defaultExpectedStrips;
 		acceptedCount = 0;
 		notes = '';
 		setTimeout(() => barcodeInput?.focus(), 100);
@@ -54,7 +58,7 @@
 		if (form?.success) {
 			step = 'idle';
 			lotBarcode = '';
-			expectedSheets = 0;
+			expectedSheets = data.defaultExpectedStrips;
 			acceptedCount = 0;
 			notes = '';
 		}
@@ -98,6 +102,43 @@
 			<p class="text-xs text-[var(--color-tron-text-secondary)]">Total Strips Cut</p>
 		</div>
 	</div>
+
+	<!-- Settings -->
+	{#if form?.settingsSuccess}
+		<div class="rounded border border-green-500/30 bg-green-900/20 px-4 py-3 text-sm text-green-300">✓ Default expected strips updated.</div>
+	{/if}
+	{#if form?.settingsError}
+		<div class="rounded border border-red-500/30 bg-red-900/20 px-4 py-3 text-sm text-red-300">{form.settingsError}</div>
+	{/if}
+
+	<div class="flex items-center justify-between">
+		<p class="text-xs text-[var(--color-tron-text-secondary)]">Default expected strips per roll: <span class="font-bold text-[var(--color-tron-cyan)]">{data.defaultExpectedStrips}</span></p>
+		<button type="button" onclick={() => { showSettings = !showSettings; adminPassword = ''; newExpected = data.defaultExpectedStrips; }}
+			class="text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)] underline">
+			{showSettings ? 'Cancel' : '⚙ Change'}
+		</button>
+	</div>
+
+	{#if showSettings}
+		<form method="POST" action="?/updateExpected" use:enhance={() => { return async ({ update }) => { showSettings = false; adminPassword = ''; await update(); }; }}
+			class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-3">
+			<label class="block">
+				<span class="text-xs font-medium text-[var(--color-tron-text-secondary)]">New Expected Strips per Roll</span>
+				<input type="number" name="newExpected" bind:value={newExpected} min="1"
+					class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none" />
+			</label>
+			<label class="block">
+				<span class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Admin Password</span>
+				<input type="password" name="adminPassword" bind:value={adminPassword}
+					class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+					placeholder="Enter admin password..." />
+			</label>
+			<button type="submit" class="rounded bg-[var(--color-tron-cyan)] px-3 py-1.5 text-xs font-semibold text-[var(--color-tron-bg)] hover:opacity-90"
+				disabled={!adminPassword || newExpected <= 0}>
+				Update Default
+			</button>
+		</form>
+	{/if}
 
 	<!-- STEP 1: Scan Barcode -->
 	{#if step === 'idle'}

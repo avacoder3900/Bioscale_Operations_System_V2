@@ -12,10 +12,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	await connectDB();
 
-	const [runs, thermosealPart] = await Promise.all([
+	const [runs, thermosealPart, settingsDoc] = await Promise.all([
 		getCollection().find({}).sort({ createdAt: -1 }).limit(50).toArray(),
-		PartDefinition.findOne({ partNumber: 'PT-CT-101' }).lean()
+		PartDefinition.findOne({ partNumber: 'PT-CT-101' }).lean(),
+		mongoose.connection.db!.collection('manufacturing_settings').findOne({ _id: 'default' })
 	]);
+
+	const defaultExpectedStrips = (settingsDoc as any)?.thermosealCutting?.expectedStripsPerRoll ?? 114;
 
 	// Calculate total strips accepted (current inventory of cut strips)
 	const allRuns = await getCollection().find({}).toArray();
@@ -27,6 +30,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			rollPartName: (thermosealPart as any)?.name ?? 'Thermoseal',
 			totalStripsProduced
 		},
+		defaultExpectedStrips,
 		runs: runs.map((r: any) => ({
 			id: String(r._id),
 			lotBarcode: r.lotBarcode ?? '—',
@@ -97,6 +101,37 @@ export const actions: Actions = {
 		});
 
 		return { success: true };
+	},
+
+	/** Update default expected strips per roll — requires admin password */
+	updateExpected: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const password = (data.get('adminPassword') as string)?.trim();
+		const newValue = Number(data.get('newExpected') || 0);
+
+		if (password !== 'admin123') return fail(403, { settingsError: 'Invalid admin password' });
+		if (newValue <= 0) return fail(400, { settingsError: 'Value must be > 0' });
+
+		await mongoose.connection.db!.collection('manufacturing_settings').updateOne(
+			{ _id: 'default' },
+			{ $set: { 'thermosealCutting.expectedStripsPerRoll': newValue, updatedAt: new Date() } },
+			{ upsert: true }
+		);
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'manufacturing_settings',
+			recordId: 'default',
+			action: 'UPDATE',
+			changedBy: locals.user.username,
+			changedAt: new Date(),
+			newData: { 'thermosealCutting.expectedStripsPerRoll': newValue }
+		});
+
+		return { settingsSuccess: true };
 	},
 
 	/** Generate a test barcode for scanning */
