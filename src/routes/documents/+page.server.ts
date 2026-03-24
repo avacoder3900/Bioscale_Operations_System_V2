@@ -39,3 +39,5 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		selectedCategory
 	};
 };
+
+export const config = { maxDuration: 60 };

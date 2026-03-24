@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { SvelteMap } from 'svelte/reactivity';
+
 	interface CartridgeItem {
 		id: string;
 		cartridgeId: string;
@@ -16,32 +18,125 @@
 		qaqcCount: number;
 	}
 
+	interface FridgeOption {
+		id: string;
+		displayName: string;
+		barcode: string;
+	}
+
 	interface Props {
 		cartridges: CartridgeItem[];
 		runSummary: RunSummary;
+		fridges?: FridgeOption[];
 		onRecordStorage: (cartridgeIds: string[], location: string) => void;
 		onComplete: () => void;
 		readonly?: boolean;
 	}
 
-	let { cartridges, runSummary, onRecordStorage, onComplete, readonly: isReadonly = false }: Props = $props();
+	let { cartridges, runSummary, fridges = [], onRecordStorage, onComplete, readonly: isReadonly = false }: Props = $props();
 
+	let assignments = $state(new SvelteMap<string, string>());
 	let storageLocation = $state('');
-	let storageInputEl: HTMLInputElement | undefined = $state();
+	let selectedFridge = $state<FridgeOption | null>(null);
+	let storageError = $state('');
+	let storageValidating = $state(false);
 
 	const needsStorage = $derived(
 		cartridges.filter(
-			(c) => c.inspectionStatus === 'Accepted' && c.currentStatus !== 'Stored'
+			(c) => c.inspectionStatus === 'Accepted' && !c.storageLocation
 		)
 	);
-	const stored = $derived(cartridges.filter((c) => c.currentStatus === 'Stored'));
+	const stored = $derived(cartridges.filter((c) => c.inspectionStatus === 'Accepted' && !!c.storageLocation));
+	const allAssigned = $derived(needsStorage.length > 0 && needsStorage.every((c) => assignments.has(c.id)));
 	const allStored = $derived(needsStorage.length === 0 && stored.length > 0);
+
+	function playBeep(success: boolean) {
+		try {
+			const ctx = new AudioContext();
+			const osc = ctx.createOscillator();
+			const gain = ctx.createGain();
+			osc.connect(gain);
+			gain.connect(ctx.destination);
+			osc.frequency.value = success ? 880 : 220;
+			osc.type = 'sine';
+			gain.gain.value = 0.3;
+			osc.start();
+			setTimeout(() => { osc.stop(); ctx.close(); }, success ? 100 : 300);
+		} catch { /* audio not available */ }
+	}
+
+	async function validateAndApplyFridge(value: string) {
+		storageError = '';
+		storageValidating = true;
+		try {
+			const res = await fetch(`/api/dev/validate-equipment?type=fridge&id=${encodeURIComponent(value)}`);
+			const result = await res.json();
+			if (!res.ok || result.error) {
+				storageError = result.error ?? `Fridge "${value}" not found in the system.`;
+				playBeep(false);
+				storageValidating = false;
+				return;
+			}
+			// Use the fridge name if returned
+			storageLocation = value;
+		} catch {
+			// If endpoint unavailable, accept the value (backwards compat)
+		}
+		storageValidating = false;
+		playBeep(true);
+		applyToAll();
+	}
+
+	function selectFridge(fridge: FridgeOption) {
+		selectedFridge = fridge;
+		storageLocation = fridge.barcode || fridge.displayName;
+		storageError = '';
+		// Clear stale assignments so user must re-apply with new fridge
+		if (assignments.size > 0) {
+			assignments = new SvelteMap();
+		}
+	}
 
 	function applyToAll() {
 		const value = storageLocation.trim();
 		if (!value || needsStorage.length === 0) return;
-		onRecordStorage(needsStorage.map((c) => c.id), value);
+		for (const c of needsStorage) {
+			assignments.set(c.id, value);
+		}
+		assignments = new SvelteMap(assignments);
+	}
+
+	function assignSingle(cartridgeId: string) {
+		const value = storageLocation.trim();
+		if (!value) return;
+		assignments.set(cartridgeId, value);
+		assignments = new SvelteMap(assignments);
+	}
+
+	function unassign(cartridgeId: string) {
+		assignments.delete(cartridgeId);
+		assignments = new SvelteMap(assignments);
+	}
+
+	function clearAll() {
+		assignments = new SvelteMap();
+		selectedFridge = null;
 		storageLocation = '';
+	}
+
+	function submitStorage() {
+		const grouped = new Map<string, string[]>();
+		for (const [cid, loc] of assignments) {
+			const list = grouped.get(loc) ?? [];
+			list.push(cid);
+			grouped.set(loc, list);
+		}
+		for (const [loc, cids] of grouped) {
+			onRecordStorage(cids, loc);
+		}
+		assignments = new SvelteMap();
+		storageLocation = '';
+		selectedFridge = null;
 	}
 </script>
 
@@ -74,33 +169,124 @@
 	</div>
 
 	<!-- Storage assignment -->
-	{#if !allStored}
-		<div class="space-y-2">
+	{#if !allStored && !isReadonly}
+		<div class="space-y-3">
 			<p class="text-sm text-[var(--color-tron-text-secondary)]">
 				{needsStorage.length} accepted cartridge{needsStorage.length !== 1 ? 's' : ''} need storage assignment
 			</p>
-			<div class="flex gap-2">
-				<input
-					bind:this={storageInputEl}
-					bind:value={storageLocation}
-					onkeydown={(e) => { if (e.key === 'Enter') applyToAll(); }}
-					placeholder="Storage location (scan or type)..."
-					class="min-h-[44px] flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
-				/>
-				<button type="button" onclick={applyToAll} disabled={!storageLocation.trim() || needsStorage.length === 0}
-					class="min-h-[44px] rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-4 py-2 text-sm font-medium text-[var(--color-tron-cyan)] disabled:opacity-50"
-				>
-					Apply to All ({needsStorage.length})
-				</button>
-				<button
-					type="button"
-					onclick={() => { storageLocation = 'fridge-1'; applyToAll(); }}
-					class="min-h-[44px] rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-orange)] hover:text-[var(--color-tron-orange)]"
-				>
-					Test
-				</button>
+
+			<!-- Fridge quick-select buttons -->
+			{#if fridges.length > 0}
+				<div class="space-y-2">
+					<p class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Select a fridge</p>
+					<div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+						{#each fridges as fridge (fridge.id)}
+							{@const isSelected = selectedFridge?.id === fridge.id}
+							<button
+								type="button"
+								onclick={() => selectFridge(fridge)}
+								disabled={needsStorage.length === 0}
+								class="flex items-center gap-3 rounded-lg border p-3 text-left transition-all disabled:opacity-50
+									{isSelected
+										? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/20 ring-1 ring-[var(--color-tron-cyan)]'
+										: 'border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] hover:border-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10'}"
+							>
+								<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg {isSelected ? 'bg-[var(--color-tron-cyan)]/30' : 'bg-[var(--color-tron-cyan)]/10'}">
+									<svg class="h-6 w-6 text-[var(--color-tron-cyan)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+										<path stroke-linecap="round" stroke-linejoin="round" d="M6 2h12a1 1 0 011 1v18a1 1 0 01-1 1H6a1 1 0 01-1-1V3a1 1 0 011-1zm0 12h12M10 6h1" />
+									</svg>
+								</div>
+								<div class="min-w-0 flex-1">
+									<p class="text-sm font-semibold text-[var(--color-tron-text)] truncate">{fridge.displayName}</p>
+									{#if fridge.barcode}
+										<p class="font-mono text-[10px] text-[var(--color-tron-text-secondary)] truncate">{fridge.barcode}</p>
+									{/if}
+								</div>
+								{#if isSelected}
+									<svg class="h-5 w-5 shrink-0 text-[var(--color-tron-cyan)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+										<path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+									</svg>
+								{/if}
+							</button>
+						{/each}
+					</div>
+				</div>
+
+				<div class="flex items-center gap-3">
+					<div class="h-px flex-1 bg-[var(--color-tron-border)]"></div>
+					<span class="text-xs text-[var(--color-tron-text-secondary)]">or scan / type</span>
+					<div class="h-px flex-1 bg-[var(--color-tron-border)]"></div>
+				</div>
+			{/if}
+
+			<!-- Manual scan/type input -->
+			<div class="space-y-1">
+				<div class="flex gap-2">
+					<input
+						bind:value={storageLocation}
+						oninput={() => { selectedFridge = null; storageError = ''; }}
+						onkeydown={async (e) => { if (e.key === 'Enter' && storageLocation.trim()) { e.preventDefault(); await validateAndApplyFridge(storageLocation.trim()); } }}
+						placeholder="Storage location / fridge barcode (scan or type)..."
+						class="min-h-[44px] flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+					/>
+					<button type="button" onclick={async () => { if (storageLocation.trim()) await validateAndApplyFridge(storageLocation.trim()); }} disabled={!storageLocation.trim() || needsStorage.length === 0 || storageValidating}
+						class="min-h-[44px] rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-4 py-2 text-sm font-medium text-[var(--color-tron-cyan)] disabled:opacity-50"
+					>
+						{storageValidating ? 'Checking...' : `Apply to All (${needsStorage.length})`}
+					</button>
+				</div>
+				{#if storageError}
+					<p class="text-sm text-red-400">{storageError}</p>
+				{/if}
 			</div>
+
+			<!-- Per-cartridge list -->
+			<div class="space-y-1.5">
+				<div class="flex items-center justify-between">
+					<p class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Cartridge Assignments</p>
+					{#if assignments.size > 0}
+						<button type="button" onclick={clearAll} class="text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-red)] transition-colors">
+							Clear All
+						</button>
+					{/if}
+				</div>
+				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] divide-y divide-[var(--color-tron-border)]">
+					{#each needsStorage as c (c.id)}
+						{@const assigned = assignments.get(c.id)}
+						<div class="flex items-center gap-2 px-3 py-2">
+							<span class="font-mono text-xs text-[var(--color-tron-text)] flex-shrink-0 w-24 truncate">{c.cartridgeId.slice(-8)}</span>
+							{#if assigned}
+								<span class="flex-1 text-xs text-green-400 font-mono truncate">→ {assigned}</span>
+								<button type="button" onclick={() => unassign(c.id)}
+									class="text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-red)] transition-colors shrink-0">
+									✕
+								</button>
+							{:else}
+								<span class="flex-1 text-xs text-[var(--color-tron-text-secondary)] italic">unassigned</span>
+								<button type="button" onclick={() => assignSingle(c.id)}
+									disabled={!storageLocation.trim()}
+									class="text-xs text-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]/80 disabled:opacity-30 transition-colors shrink-0">
+									Assign
+								</button>
+							{/if}
+						</div>
+					{/each}
+				</div>
+			</div>
+
+			<!-- Submit storage -->
+			{#if assignments.size > 0}
+				<button type="button" onclick={submitStorage}
+					class="min-h-[44px] w-full rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-6 py-3 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30"
+				>
+					Record Storage ({assignments.size} cartridge{assignments.size !== 1 ? 's' : ''})
+				</button>
+			{/if}
 		</div>
+	{:else if !allStored}
+		<p class="text-sm text-[var(--color-tron-text-secondary)]">
+			{needsStorage.length} accepted cartridge{needsStorage.length !== 1 ? 's' : ''} awaiting storage assignment
+		</p>
 	{/if}
 
 	<!-- Stored list -->
@@ -120,11 +306,13 @@
 		</div>
 	{/if}
 
-	<button type="button" disabled={!allStored} onclick={onComplete}
-		class="min-h-[44px] w-full rounded-lg border px-6 py-3 text-sm font-semibold transition-all {allStored
-			? 'border-emerald-500/50 bg-emerald-900/20 text-emerald-300 hover:bg-emerald-900/30'
-			: 'cursor-not-allowed border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] text-[var(--color-tron-text-secondary)] opacity-50'}"
-	>
-		{allStored ? 'Complete Run' : `${needsStorage.length} awaiting storage`}
-	</button>
+	{#if !isReadonly}
+		<button type="button" disabled={!allStored} onclick={onComplete}
+			class="min-h-[44px] w-full rounded-lg border px-6 py-3 text-sm font-semibold transition-all {allStored
+				? 'border-emerald-500/50 bg-emerald-900/20 text-emerald-300 hover:bg-emerald-900/30'
+				: 'cursor-not-allowed border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] text-[var(--color-tron-text-secondary)] opacity-50'}"
+		>
+			{allStored ? 'Complete Run' : `${needsStorage.length} awaiting storage`}
+		</button>
+	{/if}
 </div>

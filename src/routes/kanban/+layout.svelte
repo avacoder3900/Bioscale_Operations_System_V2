@@ -96,7 +96,7 @@
 
 							<!-- Back to Main Site -->
 						<a
-							href="/spu"
+							href='/'
 							class="flex min-h-[var(--size-touch-target)] items-center gap-2 rounded-lg px-3 py-2 text-[var(--color-tron-text-secondary)] transition-all duration-200 hover:bg-[var(--color-tron-bg-tertiary)] hover:text-[var(--color-tron-cyan)]"
 							title="Back to Main Site"
 						>

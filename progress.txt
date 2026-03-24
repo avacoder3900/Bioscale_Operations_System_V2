@@ -48,6 +48,13 @@ import { requireAgentApiKey } from '$lib/server/api-auth';
 // Note: 9 endpoints still use local inline requireApiKey() — consolidation needed
 ```
 
+### Deployment Rule (MANDATORY)
+**NEVER deploy to Vercel from local.** Always:
+1. Commit to the feature branch
+2. `git push origin <branch>` to GitHub
+3. Deploy from GitHub via Vercel (linked to the repo)
+No `npx vercel` from local working directory. All deployments must be traceable to a GitHub commit.
+
 ---
 
 ## Phase 1: Initial Build (Feb 27 – Mar 2, 2026)

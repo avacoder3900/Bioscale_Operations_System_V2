@@ -111,3 +111,5 @@ export const actions: Actions = {
 		redirect(303, `/documents/${params.id}`);
 	}
 };
+
+export const config = { maxDuration: 60 };

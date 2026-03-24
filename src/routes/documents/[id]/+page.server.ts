@@ -87,3 +87,5 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		isTrainedOnCurrent
 	};
 };
+
+export const config = { maxDuration: 60 };

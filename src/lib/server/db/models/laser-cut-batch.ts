@@ -12,7 +12,11 @@ const laserCutBatchSchema = new Schema({
 	outputPartId: String,    // PartDefinition._id for cut substrates produced
 	inputPartName: String,   // denormalized
 	outputPartName: String,  // denormalized
-	outputCartridgeSubstrateCount: Number // usable substrates produced this batch
+	outputCartridgeSubstrateCount: Number, // usable substrates produced this batch
+	// LOT TRACEABILITY (ISO 13485)
+	inputLotId: String,      // lot barcode of substrate sheets going in
+	outputLotId: String,     // lot barcode of cut substrates coming out (LOT-YYYYMMDD-XXXX)
+	operator: { _id: String, username: String } // operator who performed the cut
 }, { timestamps: true });
 
 export const LaserCutBatch = mongoose.models.LaserCutBatch || mongoose.model('LaserCutBatch', laserCutBatchSchema, 'laser_cut_batches');

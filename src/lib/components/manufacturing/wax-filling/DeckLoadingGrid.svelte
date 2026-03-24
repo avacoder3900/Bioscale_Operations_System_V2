@@ -5,6 +5,7 @@
 	interface OvenLot {
 		lotId: string;
 		ready: boolean;
+		cartridgeCount?: number;
 	}
 
 	interface CartridgeScan {
@@ -107,18 +108,36 @@
 		}
 	}
 
-	function handleDeckKeydown(e: KeyboardEvent) {
+	async function handleDeckKeydown(e: KeyboardEvent) {
 		if (isReadonly) return;
 		if (e.key === 'Enter' && deckInput.trim()) {
 			e.preventDefault();
-			deckPendingValue = deckInput.trim();
+			const value = deckInput.trim();
 			deckInput = '';
 			deckError = '';
+			// Validate on Enter before showing confirm UI
+			try {
+				const res = await fetch(`/api/dev/validate-equipment?type=deck&id=${encodeURIComponent(value)}`);
+				const result = await res.json();
+				if (!res.ok || result.error) {
+					deckError = result.error ?? `Deck "${value}" not found in the system.`;
+					playBeep(false);
+					return;
+				}
+			} catch {
+				deckError = 'Validation service unavailable, cannot proceed';
+				playBeep(false);
+				return;
+			}
+			deckPendingValue = value;
 			playBeep(true);
 		}
 	}
 
+	let deckValidating = $state(false);
+
 	function confirmDeck() {
+		// Validation already done on Enter keydown
 		deckId = deckPendingValue;
 		deckPendingValue = '';
 		step = 'loading';
@@ -129,28 +148,44 @@
 		setTimeout(() => deckInputEl?.focus(), 50);
 	}
 
-	function handleCartridgeKeydown(e: KeyboardEvent) {
+	async function handleCartridgeKeydown(e: KeyboardEvent) {
 		if (isReadonly) return;
 		if (e.key === 'Enter' && cartridgeInput.trim()) {
 			e.preventDefault();
 			const scanned = cartridgeInput.trim();
 			cartridgeInput = '';
 
-			if (isFull) {
+			if (isFull || scans.length >= TOTAL_POSITIONS) {
 				playBeep(false);
+				deckError = `Deck is full (${TOTAL_POSITIONS} max)`;
 				return;
 			}
 
-			// Check for duplicate
+			// Check for duplicate in current session
 			if (scans.some((s) => s.cartridgeId === scanned)) {
 				playBeep(false);
-				deckError = `Cartridge "${scanned}" already scanned`;
+				deckError = `Cartridge "${scanned}" already scanned in this session`;
 				return;
 			}
 
 			if (!currentLot) {
 				playBeep(false);
 				deckError = 'No available oven-ready lots';
+				return;
+			}
+
+			// Validate cartridge against MongoDB (check not already processed)
+			try {
+				const res = await fetch(`/api/dev/validate-equipment?type=cartridge&id=${encodeURIComponent(scanned)}`);
+				const result = await res.json();
+				if (!res.ok || result.error) {
+					playBeep(false);
+					deckError = result.error ?? `Cartridge "${scanned}" validation failed`;
+					return;
+				}
+			} catch {
+				playBeep(false);
+				deckError = 'Validation service unavailable, cannot proceed';
 				return;
 			}
 
@@ -251,6 +286,7 @@
 							bind:value={deckInput}
 							onkeydown={handleDeckKeydown}
 							onblur={handleDeckBlur}
+							autofocus
 							autocomplete="off"
 						/>
 					</div>
@@ -351,7 +387,7 @@
 					</div>
 					<button
 						type="button"
-						onclick={() => { cartridgeInput = generateTestBarcode('CART'); handleCartridgeKeydown(new KeyboardEvent('keydown', { key: 'Enter' })); }}
+						onclick={() => { if (scans.length >= TOTAL_POSITIONS) return; cartridgeInput = generateTestBarcode('CART'); handleCartridgeKeydown(new KeyboardEvent('keydown', { key: 'Enter' })); }}
 						class="mt-5 rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-orange)] hover:text-[var(--color-tron-orange)]"
 					>
 						Test

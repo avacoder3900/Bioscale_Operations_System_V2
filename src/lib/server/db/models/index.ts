@@ -12,6 +12,7 @@ export { InspectionProcedureRevision } from './inspection-procedure-revision.js'
 export { ToolConfirmation } from './tool-confirmation.js';
 
 // Tier 2: Operational
+export { BackingLot } from './backing-lot.js';
 export { Session } from './session.js';
 export { Role } from './role.js';
 export { InviteToken } from './invite-token.js';
@@ -58,6 +59,7 @@ export { WorkflowViolation } from './workflow-violation.js';
 
 // Tier 3: Immutable Logs
 export { AuditLog } from './audit-log.js';
+export { CalibrationRecord } from './calibration-record.js';
 export { ElectronicSignature } from './electronic-signature.js';
 export { InventoryTransaction } from './inventory-transaction.js';
 export { DeviceEvent } from './device-event.js';

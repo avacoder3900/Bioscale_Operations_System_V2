@@ -37,3 +37,5 @@ export const load: PageServerLoad = async ({ locals }) => {
 		protocolRecords
 	};
 };
+
+export const config = { maxDuration: 60 };

@@ -39,7 +39,6 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			description: task.description ?? null,
 			status: task.status,
 			prioritized: task.prioritized ?? false,
-			priority: task.priority,
 			taskLength: task.taskLength as 'short' | 'medium' | 'long' | undefined,
 			projectId: task.project?._id ?? null,
 			assignedTo: task.assignee?._id ?? null,
@@ -214,3 +213,5 @@ export const actions: Actions = {
 		return { success: true };
 	}
 };
+
+export const config = { maxDuration: 60 };

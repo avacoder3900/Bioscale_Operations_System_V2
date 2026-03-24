@@ -22,3 +22,5 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		users: users.map((u) => ({ id: u._id, username: u.username }))
 	};
 };
+
+export const config = { maxDuration: 60 };

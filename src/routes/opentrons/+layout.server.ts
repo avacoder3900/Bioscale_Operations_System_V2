@@ -7,3 +7,5 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'manufacturing:read');
 	return { user: { id: locals.user._id, username: locals.user.username } };
 };
+
+export const config = { maxDuration: 60 };

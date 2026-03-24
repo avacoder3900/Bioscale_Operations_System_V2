@@ -63,17 +63,33 @@
 		} catch { /* audio not available */ }
 	}
 
-	function handleDeckKeydown(e: KeyboardEvent) {
+	async function handleDeckKeydown(e: KeyboardEvent) {
 		if (e.key === 'Enter' && deckInput.trim()) {
 			e.preventDefault();
-			deckPendingValue = deckInput.trim();
+			const value = deckInput.trim();
 			deckInput = '';
 			deckError = '';
+			// Validate deck on Enter
+			try {
+				const res = await fetch(`/api/dev/validate-equipment?type=deck&id=${encodeURIComponent(value)}`);
+				const result = await res.json();
+				if (!res.ok || result.error) {
+					deckError = result.error ?? `Deck "${value}" not found in the system.`;
+					playBeep(false);
+					return;
+				}
+			} catch {
+				deckError = 'Validation service unavailable, cannot proceed';
+				playBeep(false);
+				return;
+			}
+			deckPendingValue = value;
 			playBeep(true);
 		}
 	}
 
 	function confirmDeck() {
+		// Validation already done on Enter keydown
 		deckId = deckPendingValue;
 		deckPendingValue = '';
 		step = 'loading';
@@ -84,7 +100,7 @@
 		setTimeout(() => deckInputEl?.focus(), 50);
 	}
 
-	function handleCartridgeKeydown(e: KeyboardEvent) {
+	async function handleCartridgeKeydown(e: KeyboardEvent) {
 		if (e.key === 'Enter' && cartridgeInput.trim()) {
 			e.preventDefault();
 			const scanned = cartridgeInput.trim();
@@ -95,6 +111,21 @@
 			if (scans.some((s) => s.cartridgeId === scanned)) {
 				playBeep(false);
 				deckError = `Cartridge "${scanned}" already scanned`;
+				return;
+			}
+
+			// Validate cartridge: must already exist in wax_filled phase (came through wax filling)
+			try {
+				const res = await fetch(`/api/dev/validate-equipment?type=cartridge&id=${encodeURIComponent(scanned)}&context=reagent`);
+				const result = await res.json();
+				if (!res.ok || result.error) {
+					playBeep(false);
+					deckError = result.error ?? `Cartridge "${scanned}" not found. It must go through wax filling first.`;
+					return;
+				}
+			} catch {
+				playBeep(false);
+				deckError = 'Validation service unavailable, cannot proceed';
 				return;
 			}
 
@@ -166,6 +197,7 @@
 							onkeydown={handleDeckKeydown}
 							onblur={handleDeckBlur}
 							autocomplete="off"
+							autofocus
 						/>
 					</div>
 				</div>
@@ -246,7 +278,8 @@
 					<button
 						type="button"
 						onclick={async () => {
-						const res = await fetch('/api/dev/test-data?type=reagent-cartridge');
+						const scannedIds = scans.map((s) => s.cartridgeId).join(',');
+						const res = await fetch(`/api/dev/test-data?type=reagent-cartridge&exclude=${scannedIds}`);
 						if (res.ok) {
 							const data = await res.json();
 							cartridgeInput = data.cartridgeId;

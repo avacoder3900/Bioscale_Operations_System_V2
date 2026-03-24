@@ -24,6 +24,7 @@
 		onScanCartridge: (batchId: string, cartridgeRecordId: string) => void;
 		onCompleteBatch: (batchId: string) => void;
 		onProceedToStorage: () => void;
+		onRejectCartridge?: (cartridgeId: string) => void;
 		readonly?: boolean;
 	}
 
@@ -34,6 +35,7 @@
 		onScanCartridge,
 		onCompleteBatch,
 		onProceedToStorage,
+		onRejectCartridge,
 		readonly: isReadonly = false
 	}: Props = $props();
 
@@ -52,7 +54,7 @@
 
 	const MAX_PER_BATCH = 12;
 	const unsealed = $derived(acceptedCartridges.filter((c) => !locallyScannedIds.has(c.cartridgeId)));
-	const allSealed = $derived(unsealed.length === 0 && !currentBatch);
+	const allSealed = $derived(acceptedCartridges.length === 0 || (unsealed.length === 0 && !currentBatch));
 	const filteredUnsealed = $derived(
 		filterText
 			? unsealed.filter((c) => c.cartridgeId.toLowerCase().includes(filterText.toLowerCase()))
@@ -202,7 +204,18 @@
 					{#each acceptedCartridges as cart (cart.id)}
 						<div class="flex items-center justify-between border-b border-[var(--color-tron-border)]/20 px-3 py-2 text-sm last:border-b-0">
 							<span class="font-mono text-[var(--color-tron-text)]">{cart.cartridgeId}</span>
-							<span class="text-xs text-[var(--color-tron-text-secondary)]">Pos {cart.deckPosition}</span>
+							<div class="flex items-center gap-2">
+								<span class="text-xs text-[var(--color-tron-text-secondary)]">Pos {cart.deckPosition}</span>
+								{#if onRejectCartridge}
+									<button
+										type="button"
+										onclick={() => onRejectCartridge?.(cart.id)}
+										class="min-h-[32px] rounded border border-red-500/40 px-2 py-1 text-xs text-red-400 transition-colors hover:bg-red-900/20 hover:text-red-300"
+									>
+										Reject
+									</button>
+								{/if}
+							</div>
 						</div>
 					{/each}
 				</div>
@@ -299,17 +312,29 @@
 					<p class="mb-2 text-xs text-[var(--color-tron-text-secondary)]">Click a cartridge to add it to the batch</p>
 					<div class="max-h-60 overflow-y-auto rounded border border-[var(--color-tron-border)]/30 bg-[var(--color-tron-surface)]/30">
 						{#each filteredUnsealed as cart (cart.id)}
+							<div class="flex items-center justify-between border-b border-[var(--color-tron-border)]/20 px-3 py-2.5 last:border-b-0">
 							<button
 								type="button"
 								onclick={() => clickCartridge(cart)}
 								disabled={isReadonly}
-								class="flex w-full items-center justify-between border-b border-[var(--color-tron-border)]/20 px-3 py-2.5 text-left text-sm transition-colors last:border-b-0 hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-50"
+								class="flex flex-1 items-center gap-2 text-left text-sm transition-colors hover:text-[var(--color-tron-cyan)] disabled:opacity-50"
 							>
 								<span class="font-mono text-[var(--color-tron-text)]">{cart.cartridgeId}</span>
 								<span class="rounded bg-[var(--color-tron-surface)] px-2 py-0.5 text-xs text-[var(--color-tron-text-secondary)]">
 									Pos {cart.deckPosition}
 								</span>
 							</button>
+							{#if onRejectCartridge}
+								<button
+									type="button"
+									onclick={() => onRejectCartridge?.(cart.id)}
+									disabled={isReadonly}
+									class="ml-2 min-h-[32px] shrink-0 rounded border border-red-500/40 px-2 py-1 text-xs text-red-400 transition-colors hover:bg-red-900/20 hover:text-red-300 disabled:opacity-50"
+								>
+									Reject
+								</button>
+							{/if}
+						</div>
 						{/each}
 						{#if filteredUnsealed.length === 0 && filterText}
 							<p class="px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">No cartridges match "{filterText}"</p>

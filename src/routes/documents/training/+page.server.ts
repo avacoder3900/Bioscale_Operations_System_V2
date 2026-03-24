@@ -77,3 +77,5 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	return { completedTraining, pendingTraining };
 };
+
+export const config = { maxDuration: 60 };

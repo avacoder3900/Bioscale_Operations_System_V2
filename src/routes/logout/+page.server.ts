@@ -15,3 +15,5 @@ export const actions: Actions = {
 		redirect(302, '/login');
 	}
 };
+
+export const config = { maxDuration: 60 };

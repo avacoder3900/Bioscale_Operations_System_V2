@@ -54,3 +54,5 @@ export const actions: Actions = {
 		return { success: true, count: result.modifiedCount };
 	}
 };
+
+export const config = { maxDuration: 60 };

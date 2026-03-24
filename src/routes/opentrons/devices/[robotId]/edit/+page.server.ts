@@ -78,3 +78,5 @@ export const actions: Actions = {
 		redirect(303, `/opentrons/devices/${params.robotId}`);
 	}
 };
+
+export const config = { maxDuration: 60 };

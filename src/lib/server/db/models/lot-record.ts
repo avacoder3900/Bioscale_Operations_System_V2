@@ -30,7 +30,9 @@ const lotRecordSchema = new Schema({
 
 	startTime: Date, finishTime: Date, cycleTime: Number,
 	ovenEntryTime: Date, wiRevision: String, status: String,
-	cartridgeIds: [String]
+	cartridgeIds: [String],
+	// LOT TRACEABILITY (ISO 13485) — output lot number for this batch
+	outputLotNumber: String  // auto-generated LOT-YYYYMMDD-XXXX for this production batch
 }, { timestamps: true });
 
 lotRecordSchema.index({ qrCodeRef: 1 }, { unique: true });

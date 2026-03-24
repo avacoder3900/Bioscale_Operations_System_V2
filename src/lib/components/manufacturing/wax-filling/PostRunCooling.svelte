@@ -12,7 +12,10 @@
 		suppressFocus?: boolean;
 	}
 
-	let { runEndTime, coolingWarningMin = 15, deckLockoutMin = 25, onComplete, readonly: isReadonly = false, suppressFocus = false }: Props = $props();
+	let { runEndTime, coolingWarningMin = 7, deckLockoutMin = 25, onComplete, readonly: isReadonly = false, suppressFocus = false }: Props = $props();
+
+	let alarmPlaying = $state(false);
+	let alarmDismissed = $state(false);
 
 	type Step = 'scan_tray' | 'confirm_cooling' | 'place_deck';
 
@@ -37,6 +40,32 @@
 
 	const isTransferOverdue = $derived(elapsedMin >= coolingWarningMin);
 
+	// Alarm: play repeating beep when transfer overdue
+	$effect(() => {
+		if (isTransferOverdue && !alarmDismissed && !alarmPlaying && step === 'scan_tray') {
+			alarmPlaying = true;
+			const playAlarm = () => {
+				try {
+					const ctx = new AudioContext();
+					const osc = ctx.createOscillator();
+					const gain = ctx.createGain();
+					osc.connect(gain);
+					gain.connect(ctx.destination);
+					osc.frequency.value = 880;
+					gain.gain.value = 0.3;
+					osc.start();
+					setTimeout(() => { osc.stop(); ctx.close(); }, 500);
+				} catch { /* audio not supported */ }
+			};
+			playAlarm();
+			const interval = setInterval(() => {
+				if (alarmDismissed) { clearInterval(interval); return; }
+				playAlarm();
+			}, 3000);
+			return () => clearInterval(interval);
+		}
+	});
+
 	// Timer tick for elapsed time
 	$effect(() => {
 		if (step === 'scan_tray' || step === 'confirm_cooling') {
@@ -49,7 +78,10 @@
 
 	// Auto-focus tray input (suppressed when modal is open)
 	$effect(() => {
-		if (step === 'scan_tray' && inputEl && !suppressFocus && !trayPendingValue) inputEl.focus();
+		if (step === 'scan_tray' && inputEl && !suppressFocus && !trayPendingValue) {
+			const modal = document.querySelector('.fixed.inset-0.z-50');
+			if (!modal) inputEl.focus();
+		}
 	});
 
 	function playBeep(success: boolean) {
@@ -75,16 +107,34 @@
 		}
 	}
 
-	function handleTrayScan(e: KeyboardEvent) {
+	async function handleTrayScan(e: KeyboardEvent) {
 		if (e.key === 'Enter' && trayInput.trim()) {
 			e.preventDefault();
-			trayPendingValue = trayInput.trim();
+			const value = trayInput.trim();
 			trayInput = '';
+			trayError = '';
+			// Validate on Enter before showing confirm UI
+			try {
+				const res = await fetch(`/api/dev/validate-equipment?type=tray&id=${encodeURIComponent(value)}`);
+				const result = await res.json();
+				if (!res.ok || result.error) {
+					trayError = result.error ?? `Tray "${value}" not found in the system.`;
+					playBeep(false);
+					return;
+				}
+			} catch {
+				// If endpoint unavailable, fall through (backwards compat)
+			}
+			trayPendingValue = value;
 			playBeep(true);
 		}
 	}
 
+	let trayValidating = $state(false);
+	let trayError = $state('');
+
 	function confirmTray() {
+		// Validation already done on Enter keydown
 		trayId = trayPendingValue;
 		trayPendingValue = '';
 		step = 'confirm_cooling';
@@ -96,7 +146,14 @@
 	}
 
 	function handleTrayBlur() {
-		if (step === 'scan_tray' && !suppressFocus && !trayPendingValue) setTimeout(() => inputEl?.focus(), 100);
+		if (step === 'scan_tray' && !suppressFocus && !trayPendingValue) {
+			setTimeout(() => {
+				// Don't steal focus if a modal/overlay is open (z-50 fixed overlay)
+				const modal = document.querySelector('.fixed.inset-0.z-50');
+				if (modal) return;
+				inputEl?.focus();
+			}, 100);
+		}
 	}
 
 	function handleConfirmCooling() {
@@ -142,13 +199,16 @@
 			{elapsedDisplay}
 		</p>
 		{#if isTransferOverdue}
-			<p class="mt-1 text-sm font-medium text-amber-400">
-				Transfer time exceeds {coolingWarningMin} minutes
-			</p>
+			<div class="mt-2 rounded-lg border border-red-500/50 bg-red-900/20 px-4 py-3">
+				<p class="text-sm font-bold text-red-400">⚠️ ALERT: Cartridges must be cooled within {coolingWarningMin} minutes!</p>
+				<p class="mt-1 text-xs text-red-300">Transfer to cooling tray immediately.</p>
+				{#if !alarmDismissed}
+					<button type="button" onclick={() => { alarmDismissed = true; alarmPlaying = false; }} class="mt-2 rounded border border-red-500/30 px-3 py-1 text-xs text-red-300 hover:bg-red-900/30">
+						Dismiss Alarm
+					</button>
+				{/if}
+			</div>
 		{/if}
-		<div class="mt-2">
-			<FinishTimerButton onFinish={handleFinishTimer} label="Skip Timer" />
-		</div>
 	</div>
 
 	<!-- Step indicators -->
@@ -220,11 +280,17 @@
 						Test
 					</button>
 				</div>
+				{#if trayError}
+					<p class="text-sm text-red-400">{trayError}</p>
+				{/if}
 			</div>
 		{:else}
 			<div class="space-y-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5">
 				<p class="text-sm text-[var(--color-tron-text-secondary)]">Scanned cooling tray:</p>
 				<p class="font-mono text-lg font-semibold text-[var(--color-tron-cyan)]">{trayPendingValue}</p>
+				{#if trayError}
+					<p class="text-sm text-red-400">{trayError}</p>
+				{/if}
 				<div class="flex gap-3">
 					<button
 						type="button"

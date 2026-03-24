@@ -359,7 +359,7 @@
 				{#if !showRenameForm}
 					<TronButton type="button" onclick={() => (showRenameForm = true)} style="min-height: 44px;">Rename</TronButton>
 				{/if}
-				<form method="POST" action="?/unlinkDevice" use:enhance={() => { unlinking = true; return async ({ update }) => { unlinking = false; await update(); }; }}>
+				<form method="POST" action="?/unlinkParticle" use:enhance={() => { unlinking = true; return async ({ update }) => { unlinking = false; await update(); }; }}>
 					<TronButton type="submit" disabled={unlinking} style="min-height: 44px;">{unlinking ? 'Unlinking...' : 'Unlink Device'}</TronButton>
 				</form>
 			</div>
