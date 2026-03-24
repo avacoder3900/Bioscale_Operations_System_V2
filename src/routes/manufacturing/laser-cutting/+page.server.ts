@@ -45,7 +45,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			inputLotId: b.inputLotId ?? null,
 			outputLotId: b.outputLotId ?? null,
 			operator: b.operator ?? null,
-			createdAt: b.createdAt
+			createdAt: b.createdAt instanceof Date ? b.createdAt.toISOString() : String(b.createdAt ?? '')
 		})),
 		stats: { totalBatches, totalInput, totalOutput, totalFailures, failureRate },
 		defaults: {
