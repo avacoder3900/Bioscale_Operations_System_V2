@@ -1,4 +1,4 @@
-import { connectDB, OpentronsRobot, WaxFillingRun, ReagentBatchRecord } from '$lib/server/db';
+import { connectDB, Equipment, WaxFillingRun, ReagentBatchRecord } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
@@ -10,7 +10,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	await connectDB();
 
 	// Fetch all active robots
-	const robots = await OpentronsRobot.find({ isActive: true }, {
+	const robots = await Equipment.find({ equipmentType: 'robot', isActive: true }, {
 		_id: 1, name: 1, robotSide: 1
 	}).lean();
 

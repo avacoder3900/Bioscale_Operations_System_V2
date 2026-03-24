@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { connectDB, Consumable, Equipment, EquipmentLocation, OpentronsRobot, CartridgeRecord } from '$lib/server/db';
+import { connectDB, Equipment, EquipmentLocation, CartridgeRecord } from '$lib/server/db';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ url, locals }) => {
@@ -14,14 +14,14 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	}
 
 	if (type === 'deck') {
-		const deck = await Consumable.findOne({ _id: id, type: 'deck' }).lean();
+		const deck = await Equipment.findOne({ _id: id, equipmentType: 'deck' }).lean();
 		if (!deck) return json({ error: `Deck "${id}" does not exist. Register it in Equipment → Decks & Trays first.` }, { status: 404 });
 		if ((deck as any).status === 'retired') return json({ error: `Deck "${id}" is retired.` }, { status: 400 });
 		return json({ valid: true, id, name: (deck as any).name ?? id, status: (deck as any).status });
 	}
 
 	if (type === 'tray') {
-		const tray = await Consumable.findOne({ _id: id, type: 'cooling_tray' }).lean();
+		const tray = await Equipment.findOne({ _id: id, equipmentType: 'cooling_tray' }).lean();
 		if (!tray) return json({ error: `Tray "${id}" does not exist. Register it in Equipment → Decks & Trays first.` }, { status: 404 });
 		return json({ valid: true, id, status: (tray as any).status });
 	}
@@ -38,7 +38,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	}
 
 	if (type === 'robot') {
-		const robot = await OpentronsRobot.findById(id).lean();
+		const robot = await Equipment.findOne({ _id: id, equipmentType: 'robot' }).lean();
 		if (!robot) return json({ error: `Robot "${id}" does not exist.` }, { status: 404 });
 		if (!(robot as any).isActive) return json({ error: `Robot "${id}" is inactive.` }, { status: 400 });
 		return json({ valid: true, id, name: (robot as any).name });

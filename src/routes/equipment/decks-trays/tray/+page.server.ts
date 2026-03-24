@@ -1,6 +1,6 @@
 export const config = { maxDuration: 60 };
 import { fail, redirect } from '@sveltejs/kit';
-import { connectDB, Consumable, WaxFillingRun, CartridgeRecord, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, Equipment, WaxFillingRun, CartridgeRecord, AuditLog, generateId } from '$lib/server/db';
 import { isAdmin } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -8,7 +8,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	await connectDB();
 	const trayId = url.searchParams.get('id') ?? '';
 
-	const tray = trayId ? await Consumable.findOne({ _id: trayId, type: 'cooling_tray' }).lean() : null;
+	const tray = trayId ? await Equipment.findOne({ _id: trayId, equipmentType: 'cooling_tray' }).lean() : null;
 
 	// Runs that used this tray
 	const runs = trayId ? await WaxFillingRun.find({ coolingTrayId: trayId }).sort({ createdAt: -1 }).limit(50).lean() : [];
@@ -62,9 +62,9 @@ export const actions: Actions = {
 		if (!name) return fail(400, { error: 'Name is required' });
 
 		const id = generateId();
-		await Consumable.create({ _id: id, type: 'cooling_tray', status: 'available' });
+		await Equipment.create({ _id: id, name: id, equipmentType: 'cooling_tray', status: 'available' });
 		await AuditLog.create({
-			_id: generateId(), tableName: 'consumables', recordId: id,
+			_id: generateId(), tableName: 'equipment', recordId: id,
 			action: 'INSERT', changedAt: new Date(), changedBy: locals.user?.username ?? 'system'
 		});
 		return { success: true };
@@ -77,9 +77,9 @@ export const actions: Actions = {
 		const id = form.get('id')?.toString();
 		if (!id) return fail(400, { error: 'ID required' });
 
-		await Consumable.deleteOne({ _id: id, type: 'cooling_tray' });
+		await Equipment.deleteOne({ _id: id, equipmentType: 'cooling_tray' });
 		await AuditLog.create({
-			_id: generateId(), tableName: 'consumables', recordId: id,
+			_id: generateId(), tableName: 'equipment', recordId: id,
 			action: 'DELETE', changedAt: new Date(), changedBy: locals.user?.username ?? 'system'
 		});
 		return { success: true };

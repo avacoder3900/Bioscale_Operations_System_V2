@@ -1,7 +1,7 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
-	Equipment, EquipmentLocation, OpentronsRobot, AuditLog, BackingLot
+	Equipment, EquipmentLocation, AuditLog, BackingLot
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { isAdmin } from '$lib/server/permissions';
@@ -345,7 +345,7 @@ export const actions: Actions = {
 			return fail(400, { error: 'This robot already has an active wax filling run.' });
 		}
 
-		const robotDoc = await OpentronsRobot.findById(robotId, { _id: 1, name: 1 }).lean() as any;
+		const robotDoc = await Equipment.findOne({ _id: robotId, equipmentType: 'robot' }, { _id: 1, name: 1 }).lean() as any;
 		const run = await WaxFillingRun.create({
 			robot: { _id: robotId, name: robotDoc?.name ?? robotId },
 			operator: { _id: locals.user._id, username: locals.user.username },
@@ -469,8 +469,8 @@ export const actions: Actions = {
 
 		// Validate deck if provided
 		if (deckId) {
-			const deck = await Consumable.findOne({ _id: deckId, type: 'deck' }).lean();
-			if (!deck) return fail(400, { error: `Deck '${deckId}' not found. Register it in Consumables first.` });
+			const deck = await Equipment.findOne({ _id: deckId, equipmentType: 'deck' }).lean();
+			if (!deck) return fail(400, { error: `Deck '${deckId}' not found. Register it in Equipment first.` });
 			if ((deck as any).status === 'retired') return fail(400, { error: `Deck '${deckId}' is retired.` });
 		}
 
@@ -914,7 +914,7 @@ export const actions: Actions = {
 		const operatorRef = { _id: locals.user._id, username: locals.user.username };
 
 		if (run?.deckId) {
-			await Consumable.findByIdAndUpdate(run.deckId, {
+			await Equipment.findByIdAndUpdate(run.deckId, {
 				$set: { lastUsed: now },
 				$push: {
 					usageLog: {

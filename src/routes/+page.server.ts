@@ -4,7 +4,7 @@ import { requirePermission } from '$lib/server/permissions';
 import {
 	connectDB, Spu, Batch, BomItem, ProductionRun, Customer, User, AuditLog, generateId,
 	LabCartridge, CartridgeGroup, CartridgeRecord, Equipment, EquipmentLocation,
-	OpentronsRobot, WaxFillingRun, Consumable, AssayDefinition
+	OpentronsRobot, WaxFillingRun, AssayDefinition
 } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -231,7 +231,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 						{ $sort: { _id: 1 } }
 					]),
 					WaxFillingRun.find().sort({ createdAt: -1 }).limit(5).lean(),
-					Consumable.aggregate([{ $group: { _id: '$type', count: { $sum: 1 } } }])
+					Equipment.aggregate([
+						{ $match: { equipmentType: { $in: ['deck', 'cooling_tray', 'robot'] } } },
+						{ $group: { _id: '$equipmentType', count: { $sum: 1 } } }
+					])
 				]);
 				} catch (enrichErr) {
 					console.error('[DASHBOARD] enriched queries failed:', enrichErr instanceof Error ? enrichErr.message : enrichErr);

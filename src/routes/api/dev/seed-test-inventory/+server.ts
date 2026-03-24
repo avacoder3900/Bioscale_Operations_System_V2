@@ -1,8 +1,6 @@
 import { json } from '@sveltejs/kit';
-import { connectDB, generateId, Consumable, LotRecord, CartridgeRecord, EquipmentLocation } from '$lib/server/db';
-import { Equipment } from '$lib/server/db/models/equipment.js';
+import { connectDB, generateId, Consumable, Equipment, LotRecord, CartridgeRecord, EquipmentLocation } from '$lib/server/db';
 import { WaxFillingRun } from '$lib/server/db/models/wax-filling-run.js';
-import { OpentronsRobot } from '$lib/server/db/models/opentrons-robot.js';
 import type { RequestHandler } from './$types';
 
 const TEST_PREFIX = 'TEST-';
@@ -15,7 +13,7 @@ export const POST: RequestHandler = async ({ locals }) => {
 	const results: Record<string, number | string[]> = {};
 
 	// 0. Find all active robots so oven lots match real robot IDs
-	const robots = await OpentronsRobot.find({ isActive: true }, { _id: 1, name: 1 }).lean();
+	const robots = await Equipment.find({ equipmentType: 'robot', isActive: true }, { _id: 1, name: 1 }).lean();
 	const robotIds = robots.map((r: any) => String(r._id));
 	if (!robotIds.length) robotIds.push('robot-1');
 	results.robotIds = robotIds;
@@ -50,12 +48,12 @@ export const POST: RequestHandler = async ({ locals }) => {
 		return {
 			updateOne: {
 				filter: { _id: deckId },
-				update: { $setOnInsert: { _id: deckId, type: 'deck', status: 'available' } },
+				update: { $setOnInsert: { _id: deckId, name: deckId, equipmentType: 'deck', status: 'available' } },
 				upsert: true
 			}
 		};
 	});
-	const deckResult = await Consumable.bulkWrite(deckOps);
+	const deckResult = await Equipment.bulkWrite(deckOps);
 	results.decks = deckResult.upsertedCount;
 
 	// 2b. Cooling trays
@@ -64,12 +62,12 @@ export const POST: RequestHandler = async ({ locals }) => {
 		return {
 			updateOne: {
 				filter: { _id: trayId },
-				update: { $setOnInsert: { _id: trayId, type: 'cooling_tray', status: 'available' } },
+				update: { $setOnInsert: { _id: trayId, name: trayId, equipmentType: 'cooling_tray', status: 'available' } },
 				upsert: true
 			}
 		};
 	});
-	const trayResult = await Consumable.bulkWrite(trayOps);
+	const trayResult = await Equipment.bulkWrite(trayOps);
 	results.trays = trayResult.upsertedCount;
 
 	// 3. Incubator tubes

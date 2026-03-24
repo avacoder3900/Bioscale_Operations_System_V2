@@ -1,6 +1,6 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
-	connectDB, Consumable, Equipment, ManufacturingSettings, WaxFillingRun, generateId
+	connectDB, Equipment, ManufacturingSettings, WaxFillingRun, generateId
 } from '$lib/server/db';
 import { isAdmin as checkAdmin } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
@@ -14,9 +14,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 	await connectDB();
 
 	const [decksRaw, traysRaw, equipmentRaw, settingsDoc, activeWaxRunsRaw] = await Promise.all([
-		Consumable.find({ type: 'deck' }).sort({ createdAt: -1 }).lean(),
-		Consumable.find({ type: 'cooling_tray' }).sort({ createdAt: -1 }).lean(),
-		Equipment.find({}).sort({ name: 1 }).lean(),
+		Equipment.find({ equipmentType: 'deck' }).sort({ createdAt: -1 }).lean(),
+		Equipment.find({ equipmentType: 'cooling_tray' }).sort({ createdAt: -1 }).lean(),
+		Equipment.find({ equipmentType: { $in: ['fridge', 'oven'] } }).sort({ name: 1 }).lean(),
 		ManufacturingSettings.findById('default').lean(),
 		WaxFillingRun.find({
 			status: { $nin: ['completed', 'aborted', 'cancelled'] }
@@ -171,8 +171,8 @@ export const actions: Actions = {
 
 		if (!deckId) return fail(400, { error: 'Deck ID required' });
 
-		await Consumable.findOneAndUpdate(
-			{ _id: deckId, type: 'deck' },
+		await Equipment.findOneAndUpdate(
+			{ _id: deckId, equipmentType: 'deck' },
 			{ $set: { status, lastUsed: new Date() } }
 		);
 
@@ -190,8 +190,8 @@ export const actions: Actions = {
 
 		if (!trayId) return fail(400, { error: 'Tray ID required' });
 
-		await Consumable.findOneAndUpdate(
-			{ _id: trayId, type: 'cooling_tray' },
+		await Equipment.findOneAndUpdate(
+			{ _id: trayId, equipmentType: 'cooling_tray' },
 			{ $set: { status } }
 		);
 

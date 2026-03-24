@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { connectDB, Consumable, CartridgeRecord, LotRecord } from '$lib/server/db';
+import { connectDB, Consumable, Equipment, CartridgeRecord, LotRecord } from '$lib/server/db';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ url, locals }) => {
@@ -14,7 +14,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 			return json({ lotId: (lot as any).qrCodeRef || (lot as any)._id });
 		}
 		case 'deck': {
-			const deck = await Consumable.findOne({ type: 'deck', status: 'available' }).lean();
+			const deck = await Equipment.findOne({ equipmentType: 'deck', status: 'available' }).lean();
 			if (!deck) return json({ error: 'No available decks found' }, { status: 404 });
 			return json({ deckId: (deck as any)._id });
 		}

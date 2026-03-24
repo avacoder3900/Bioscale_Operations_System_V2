@@ -354,9 +354,9 @@ export const actions: Actions = {
 
 		// Validate deck
 		if (deckId) {
-			const deck = await Consumable.findOne({ _id: deckId, type: 'deck' }).lean();
+			const deck = await Equipment.findOne({ _id: deckId, equipmentType: 'deck' }).lean();
 			if (!deck && !adminUser) {
-				return fail(400, { error: `Deck '${deckId}' not found. Register it in Consumables first.` });
+				return fail(400, { error: `Deck '${deckId}' not found. Register it in Equipment first.` });
 			}
 			if ((deck as any)?.status === 'retired' && !adminUser) {
 				return fail(400, { error: `Deck '${deckId}' is retired.` });
@@ -851,7 +851,7 @@ export const actions: Actions = {
 		// Update deck usage if deckId is set
 		if (run?.deckId) {
 			const cartridgeCount = run?.cartridgesFilled?.length ?? 0;
-			await Consumable.findByIdAndUpdate(run.deckId, {
+			await Equipment.findByIdAndUpdate(run.deckId, {
 				$set: { lastUsed: now },
 				$push: {
 					usageLog: {

@@ -1,6 +1,6 @@
 export const config = { maxDuration: 60 };
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, Consumable, EquipmentLocation, Equipment, WaxFillingRun, ReagentBatchRecord, CartridgeRecord } from '$lib/server/db';
+import { connectDB, EquipmentLocation, Equipment, WaxFillingRun, ReagentBatchRecord, CartridgeRecord } from '$lib/server/db';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -12,8 +12,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		activeWaxDocs, activeReagentDocs,
 		waxHistoryDocs, reagentHistoryDocs
 	] = await Promise.all([
-		Consumable.find({ type: 'deck' }).lean(),
-		Consumable.find({ type: 'cooling_tray' }).lean(),
+		Equipment.find({ equipmentType: 'deck' }).lean(),
+		Equipment.find({ equipmentType: 'cooling_tray' }).lean(),
 		EquipmentLocation.find({ isActive: true }).lean(),
 		Equipment.find({ isActive: { $ne: false } }).lean(),
 		WaxFillingRun.find({ status: { $in: ['setup', 'running'] } }).sort({ createdAt: -1 }).lean(),

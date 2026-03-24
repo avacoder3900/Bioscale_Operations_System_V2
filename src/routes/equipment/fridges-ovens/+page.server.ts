@@ -70,9 +70,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		}
 
 		// Return Equipment records as the primary "locations" list
-		// Each equipment represents a parent fridge/oven
+		// Includes ALL equipment types: fridge, oven, robot, deck, cooling_tray
 		const locations = (equipmentDocs as any[])
-			.filter((e: any) => e.equipmentType === 'fridge' || e.equipmentType === 'oven')
 			.map((equip: any) => {
 				const children = childMap.get(String(equip._id)) ?? [];
 				const capacity = getCapacity(equip, children);
@@ -127,7 +126,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		return {
 			locations,
 			equipmentSensors: (equipmentDocs as any[])
-				.filter((e: any) => e.equipmentType === 'fridge' || e.equipmentType === 'oven')
+				.filter((e: any) => e.equipmentType === 'fridge' || e.equipmentType === 'oven') // temperature sensors are fridge/oven only
 				.map((e: any) => ({
 					equipmentId: e._id,
 					name: e.name ?? null,
@@ -165,9 +164,8 @@ export const actions: Actions = {
 		const notes = data.get('notes')?.toString()?.trim() || undefined;
 
 		if (!displayName) return fail(400, { error: 'Display name is required' });
-		if (!barcode) return fail(400, { error: 'Barcode is required' });
-		if (!locationType || !['fridge', 'oven'].includes(locationType)) {
-			return fail(400, { error: 'Invalid location type' });
+		if (!locationType || !['fridge', 'oven', 'robot', 'deck', 'cooling_tray'].includes(locationType)) {
+			return fail(400, { error: 'Invalid equipment type' });
 		}
 
 		const capacity = capacityStr ? parseInt(capacityStr, 10) : undefined;
