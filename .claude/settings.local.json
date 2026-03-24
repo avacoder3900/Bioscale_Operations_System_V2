@@ -5,7 +5,18 @@
       "Bash(xargs grep:*)",
       "Bash(npx tsc:*)",
       "Bash(npx tsx:*)",
-      "Bash(gh auth:*)"
+      "Bash(gh auth:*)",
+      "Bash(for branch:*)",
+      "Bash(do echo:*)",
+      "Bash(git log:*)",
+      "Bash(done)",
+      "Bash(for b:*)",
+      "Bash(git fetch:*)",
+      "Bash(npm install:*)",
+      "Bash(grep -L \"requirePermission\\\\|hasPermission\\\\|isAdmin\" /c/Users/jacobq/Documents/GitHub/Bioscale_Operations_System_V2/src/routes/spu/**/*.server.ts)",
+      "Bash(grep -B5 -A10 \"export const load\" /c/Users/jacobq/Documents/GitHub/Bioscale_Operations_System_V2/src/routes/documents/[id]/train/+page.server.ts)",
+      "Bash(npx svelte-check:*)",
+      "Bash(npx svelte-kit:*)"
     ]
   }
 }
