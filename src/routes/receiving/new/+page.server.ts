@@ -382,7 +382,25 @@ export const actions: Actions = {
 					performedAt: new Date()
 				});
 
-				// FIX-04: Also sync ManufacturingMaterial if one is linked to this PartDefinition
+				// Auto-assign barcode if part doesn't have one yet
+			if (!prevPart?.barcode) {
+				const { generatePartBarcode } = await import('$lib/server/services/barcode-generator');
+				const newBarcode = await generatePartBarcode();
+				await PartDefinition.updateOne({ _id: partId }, { $set: { barcode: newBarcode } });
+				await AuditLog.create({
+					_id: generateId(),
+					tableName: 'part_definitions',
+					recordId: partId,
+					action: 'UPDATE',
+					oldData: { barcode: null },
+					newData: { barcode: newBarcode },
+					changedAt: new Date(),
+					changedBy: locals.user!._id,
+					reason: 'Barcode auto-assigned at receiving acceptance'
+				});
+			}
+
+			// FIX-04: Also sync ManufacturingMaterial if one is linked to this PartDefinition
 				const mfgMaterial = await ManufacturingMaterial.findOne({ partDefinitionId: partId }).lean() as any;
 				if (mfgMaterial) {
 					const mfgBefore = mfgMaterial.currentQuantity ?? 0;

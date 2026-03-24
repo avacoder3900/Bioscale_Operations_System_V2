@@ -46,6 +46,13 @@ const apiKey = event.request.headers.get('x-api-key')
 if (apiKey !== process.env.AGENT_API_KEY) return json({ error: 'Unauthorized' }, { status: 401 });
 ```
 
+### Deployment Rule (MANDATORY)
+**NEVER deploy to Vercel from local.** Always:
+1. Commit to the feature branch
+2. `git push origin <branch>` to GitHub
+3. Deploy from GitHub via Vercel (linked to the repo)
+No `npx vercel` from local working directory. All deployments must be traceable to a GitHub commit.
+
 ---
 
 ## Weekend Build Log (Feb 27 – Mar 2, 2026)
