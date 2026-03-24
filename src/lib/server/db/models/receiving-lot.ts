@@ -16,13 +16,11 @@ const receivingLotSchema = new Schema({
 	inspectionPathway: { type: String, enum: ['coc', 'ip'], required: true },
 	cocDocumentUrl: String,
 	cocMeetsStandards: Boolean,
-	cocFolderUrl: String, // Box folder link for this lot's COC photos
-	cocFolderId: String, // Box folder ID for direct API access
 	cocPhotos: [{
-		lotNumber: String, // extracted lot # (L-YYYY-MM-DD-XX)
-		fileId: String, // Box file ID
-		fileUrl: String, // Box web link to file
-		fileName: String, // file name in Box
+		lotNumber: String,
+		r2Key: String,
+		fileUrl: String,
+		fileName: String,
 		uploadedAt: { type: Date, default: Date.now }
 	}],
 	ipResults: Schema.Types.Mixed, // { result, passRate, percentRequired }

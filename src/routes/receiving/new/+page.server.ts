@@ -15,7 +15,7 @@ import {
 	generateLotNumber
 } from '$lib/server/db';
 import { env } from '$env/dynamic/private';
-import { uploadFile, getOrCreateDateFolder } from '$lib/server/box';
+import { uploadFile as r2Upload, buildCocKey } from '$lib/server/r2';
 import { extractText } from '$lib/server/ocr';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -74,14 +74,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 export const actions: Actions = {
 	/**
-	 * Upload a COC photo to Box.com with OCR lot-number extraction.
-	 *
-	 * Flow:
-	 *   1. Accept photo + optional manual lot number
-	 *   2. Run OCR to extract lot # (format L-YYYY-MM-DD-XX), or use manual value
-	 *   3. Create/reuse a date folder in Box (BOX_COC_FOLDER_ID / YYYY-MM-DD)
-	 *   4. Rename the photo to the lot number and upload
-	 *   5. Return file URL, folder URL, and extracted lot number
+	 * Upload a COC photo to R2 with OCR lot-number extraction.
 	 */
 	uploadCoc: async ({ request, locals }) => {
 		requirePermission(locals.user, 'inventory:write');
@@ -97,48 +90,22 @@ export const actions: Actions = {
 			const buffer = await file.arrayBuffer();
 			const ext = file.name.split('.').pop() ?? 'jpg';
 
-			// Step 1: Extract lot number via OCR or use manual override
 			let lotNumber = manualLotNumber || '';
 			let ocrText = '';
-
 			if (!lotNumber) {
 				const ocrResult = await extractText(buffer, file.name);
 				ocrText = ocrResult.rawText;
-				if (ocrResult.lotNumbers.length > 0) {
-					lotNumber = ocrResult.lotNumbers[0];
-				}
+				if (ocrResult.lotNumbers.length > 0) lotNumber = ocrResult.lotNumbers[0];
 			}
-
 			if (!lotNumber) {
-				return fail(422, {
-					error: 'Could not extract lot number from photo. Please enter it manually.',
-					ocrText
-				});
+				return fail(422, { error: 'Could not extract lot number. Please enter manually.', ocrText });
 			}
 
-			// Step 2: Create date folder in Box COC root
-			const cocRootFolderId = env.BOX_COC_FOLDER_ID || env.BOX_ROOT_FOLDER_ID || '0';
-			const today = new Date().toISOString().slice(0, 10);
-			const dateFolder = await getOrCreateDateFolder(cocRootFolderId, today);
+			const r2Key = buildCocKey(lotNumber, ext);
+			await r2Upload(r2Key, buffer, file.type || 'image/jpeg');
+			const fileUrl = `/api/r2/files/${r2Key}`;
 
-			// Step 3: Upload photo named after the lot number
-			const fileName = `${lotNumber}.${ext}`;
-			const uploaded = await uploadFile(dateFolder.id, fileName, buffer);
-
-			// Use BIMS proxy URL so clicking the COC button loads the file inline
-			const fileUrl = `/api/box/files/${uploaded.id}/view`;
-			const folderUrl = `https://app.box.com/folder/${dateFolder.id}`;
-
-			return {
-				success: true,
-				cocUrl: fileUrl,
-				cocFolderUrl: folderUrl,
-				cocFolderId: dateFolder.id,
-				cocLotNumber: lotNumber,
-				cocFileId: uploaded.id,
-				cocFileName: uploaded.name,
-				ocrText: ocrText || undefined
-			};
+			return { success: true, cocUrl: fileUrl, cocR2Key: r2Key, cocLotNumber: lotNumber, cocFileName: `${lotNumber}.${ext}` };
 		} catch (err) {
 			return fail(500, { error: err instanceof Error ? err.message : 'Upload failed' });
 		}
@@ -185,8 +152,6 @@ export const actions: Actions = {
 		const pathway = formData.get('pathway')?.toString() as 'coc' | 'ip';
 		const cocDocumentUrl = formData.get('cocDocumentUrl')?.toString() || undefined;
 		const cocMeetsStandards = formData.has('cocMeetsStandards') ? formData.get('cocMeetsStandards') === 'true' : undefined;
-		const cocFolderUrl = formData.get('cocFolderUrl')?.toString() || undefined;
-		const cocFolderId = formData.get('cocFolderId')?.toString() || undefined;
 		const cocPhotosJson = formData.get('cocPhotos')?.toString();
 		const poReference = formData.get('poReference')?.toString() || undefined;
 		const supplier = formData.get('supplier')?.toString() || undefined;
@@ -283,16 +248,15 @@ export const actions: Actions = {
 		const docFiles = formData.getAll('lotDocuments') as File[];
 		const photoUrls: string[] = [];
 		const docUrls: string[] = [];
-		const folderId = env.BOX_ROOT_FOLDER_ID ?? '0';
 
 		for (const file of photoFiles) {
 			if (!file.size) continue;
 			try {
 				const buffer = await file.arrayBuffer();
 				const ext = file.name.split('.').pop() ?? 'jpg';
-				const fileName = `lot-photo-${lotId}-${Date.now()}.${ext}`;
-				const uploaded = await uploadFile(folderId, fileName, buffer);
-				photoUrls.push(`https://app.box.com/files/${uploaded.id}`);
+				const r2Key = `lots/${lotId}/photos/lot-photo-${Date.now()}.${ext}`;
+				await r2Upload(r2Key, buffer, file.type || 'image/jpeg');
+				photoUrls.push(`/api/r2/files/${r2Key}`);
 			} catch {
 				// Skip failed uploads silently
 			}
@@ -303,9 +267,9 @@ export const actions: Actions = {
 			try {
 				const buffer = await file.arrayBuffer();
 				const ext = file.name.split('.').pop() ?? 'bin';
-				const fileName = `lot-doc-${lotId}-${Date.now()}.${ext}`;
-				const uploaded = await uploadFile(folderId, fileName, buffer);
-				docUrls.push(`https://app.box.com/files/${uploaded.id}`);
+				const r2Key = `lots/${lotId}/docs/lot-doc-${Date.now()}.${ext}`;
+				await r2Upload(r2Key, buffer, file.type || 'application/octet-stream');
+				docUrls.push(`/api/r2/files/${r2Key}`);
 			} catch {
 				// Skip failed uploads silently
 			}
@@ -334,8 +298,6 @@ export const actions: Actions = {
 				inspectionPathway: pathway,
 				cocDocumentUrl,
 				cocMeetsStandards,
-				cocFolderUrl,
-				cocFolderId,
 				cocPhotos: cocPhotosJson ? JSON.parse(cocPhotosJson) : undefined,
 				ipResults: ipResultsSummary,
 				ipRevisionId,
@@ -432,7 +394,25 @@ export const actions: Actions = {
 					performedAt: new Date()
 				});
 
-				// FIX-04: Also sync ManufacturingMaterial if one is linked to this PartDefinition
+				// Auto-assign barcode if part doesn't have one yet
+			if (!prevPart?.barcode) {
+				const { generatePartBarcode } = await import('$lib/server/services/barcode-generator');
+				const newBarcode = await generatePartBarcode();
+				await PartDefinition.updateOne({ _id: partId }, { $set: { barcode: newBarcode } });
+				await AuditLog.create({
+					_id: generateId(),
+					tableName: 'part_definitions',
+					recordId: partId,
+					action: 'UPDATE',
+					oldData: { barcode: null },
+					newData: { barcode: newBarcode },
+					changedAt: new Date(),
+					changedBy: locals.user!._id,
+					reason: 'Barcode auto-assigned at receiving acceptance'
+				});
+			}
+
+			// FIX-04: Also sync ManufacturingMaterial if one is linked to this PartDefinition
 				const mfgMaterial = await ManufacturingMaterial.findOne({ partDefinitionId: partId }).lean() as any;
 				if (mfgMaterial) {
 					const mfgBefore = mfgMaterial.currentQuantity ?? 0;
