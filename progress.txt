@@ -226,7 +226,92 @@ All 9 SEC PRDs implemented (23 of 24 stories done, 1 deferred). 65 files changed
 
 ---
 
-## Current Branch State (as of Mar 23, 2026)
+## Phase 10: User Role Cleanup (Mar 24, 2026)
+
+### Problem
+AI agent (`agent001`) scrambled user roles between Mar 4–9:
+- Created a custom "User" role and assigned it to jacob, javier, andres, zane, l3
+- Gave viewer1 Admin access
+- Stacked both "User" and "Admin" on nick
+- Created a broken "admin" account with zero permissions
+
+### Fixes applied
+- **jacob, javier, andres, nick, l3**: set to Admin
+- **contracttest**: set to Operator (was Admin)
+- **viewer1**: set to Viewer (was Admin)
+- **zane**: set to Operator
+- **nick**: deduplicated from User+Admin to just Admin
+- **admin account**: deleted (empty, no role, no purpose)
+- **assignRole bug fixed**: changed from `$push` to `$set` on `roles[]` to prevent role stacking
+- Added duplicate role check before assignment
+- Scripts: `scripts/fix-user-roles.ts`
+
+---
+
+## Phase 11: Mongoose Subdocument ObjectId Fix (Mar 24, 2026)
+
+### Problem
+New users created through the admin UI got 500 errors on every page load. Root cause: Mongoose auto-generates ObjectId `_id` on subdocument arrays unless explicitly disabled with `{ _id: false }`. The `user.roles[]` subdocument was missing this flag. SvelteKit cannot serialize ObjectId objects.
+
+This only affected users whose roles were assigned through Mongoose (admin UI). Users created via raw MongoDB driver (seed scripts) were unaffected because the driver doesn't add auto-generated `_id` fields.
+
+### Fixes applied
+1. **Schema fixes** — Added `_id: false` to 11 subdocument arrays across 8 model files:
+   - `user.ts`: roles, communicationPreferences
+   - `bom-item.ts`: versionHistory
+   - `cartridge-record.ts`: tubeRecords, parts, spectroReadings
+   - `manufacturing-settings.ts`: rejectionReasonCodes
+   - `opentrons-robot.ts`: recentHealthSnapshots
+   - `reagent-batch-record.ts`: tubeRecords, cartridgesFilled
+   - `shipping-package.ts`: cartridges
+   - `test-result.ts`: readings
+
+2. **Layout serialization** — All 8 layouts that return `locals.user` now wrap with `JSON.parse(JSON.stringify())` as defense-in-depth
+
+3. **Data cleanup** — Removed existing ObjectId `_id` from 2 affected user accounts via `scripts/fix-role-objectids.ts`
+
+4. **Documentation** — CLAUDE.md updated with `_id: false` pitfall
+
+### Impact assessment
+- The 11 schema fixes are preventative — most load functions already manually map fields, so the ObjectId never reached the client
+- The layout serialization was the actual fix for the 500 error — layouts pass the full user object unfiltered
+- The larger codebase was not affected
+
+---
+
+## Phase 12: Security Documentation (Mar 24, 2026)
+
+### Created SECURITY.md
+Canonical security reference document covering:
+- Authentication architecture (custom sessions on @oslojs/crypto, not Lucia)
+- Authorization model (32 permissions, 20 resource groups, 3 canonical roles)
+- Required patterns for load functions, actions, and API endpoints
+- Admin-tier operations and their elevated permission requirements
+- Security anti-patterns (roleName checks, $push on roles, try/catch on requirePermission, etc.)
+- Known security issues with severity ratings
+- Research webapp portability guide
+
+### Updated AGENTS.md
+- Expanded security section with key rules and anti-patterns
+- Added SECURITY.md to Ralph Loop mandatory read list
+- Added explicit rules: no roleName checks, no try/catch on requirePermission, no local requireApiKey
+
+### Fixed CLAUDE.md
+- Corrected `requirePermission(event, ...)` → `requirePermission(locals.user, ...)` in code examples
+- Added SECURITY.md reference at top
+- Added `_id: false` and `requirePermission` to Common Pitfalls
+
+---
+
+## Current Branch State (as of Mar 24, 2026)
+
+### Commits today (Mar 24)
+- `9a01d7c` feat: DB cleanup (164→61 collections) + permission hardening (SEC-01 through SEC-09)
+- `5153960` fix: clean up user roles scrambled by AI agent + fix assignRole to replace instead of push
+- `187eb83` docs: add SECURITY.md as canonical auth/permission reference
+- `a3224de` fix: prevent ObjectId on roles subdocument causing 500 errors
+- `b402f5f` fix: add _id:false to 11 subdocument arrays + JSON-serialize user in all layouts
+
 
 ### Active branches (unmerged to master)
 | Branch | Commits ahead | Status | Key content |
@@ -248,27 +333,36 @@ Dev is 157 commits ahead of master. It contains the bulk of the manufacturing pi
 
 ---
 
-## Known Issues (updated Mar 23, 2026)
+## Known Issues (updated Mar 24, 2026)
 
-### Critical
-- ~50 page load functions missing `requirePermission()` checks
-- Manufacturing layout try/catch silently swallows permission errors
-- Equipment deck/tray mutations completely unprotected
-- Permission string typo: `testResults:read/write` vs `testResult:read/write`
-- 4 files hardcode `roleName === 'admin'` bypassing permission system
+### RESOLVED (this session)
+- ~~50 page load functions missing `requirePermission()` checks~~ — SEC-01 through SEC-09
+- ~~Manufacturing layout try/catch silently swallows permission errors~~ — SEC-01-01
+- ~~Equipment deck/tray mutations completely unprotected~~ — SEC-05-02
+- ~~Permission string typo: `testResults:read/write`~~ — SEC-01-02
+- ~~4 files hardcode `roleName === 'admin'`~~ — SEC-01-03
+- ~~9 API endpoints duplicate `requireApiKey()`~~ — SEC-01-04
+- ~~`api/box/debug` endpoint has zero auth~~ — SEC-09-01 (deleted)
+- ~~Mongoose subdocument ObjectId causes 500~~ — _id:false on 11 arrays + layout serialization
+- ~~User roles scrambled by AI agent~~ — fix-user-roles.ts + assignRole $set fix
+
+### Security — High
+- **Deactivated users retain session access** — `validateSessionToken` doesn't check `isActive`. A deactivated user keeps full access for up to 30 days until session expires.
+- **No audit logging on admin mutations** — createUser, updateProfile, deactivateUser, reactivateUser, resetPassword, assignRole, removeRole, createRole, updateRole, deleteRole, setPermissions — zero AuditLog entries. Most sensitive area of the app.
+- **No login rate limiting** — unlimited brute force attempts, no lockout, no backoff
+
+### Security — Medium
+- **`removeRole` only revokes first roleHistory entry** — uses `$` positional operator instead of `arrayFilters`
+- **`deleteRole` doesn't stamp roleHistory revocation** — audit trail shows grant but no revocation
+- **Login error leaks server internals** — `fail(500, { error: \`Server error: ${message}\` })`
+- **No password strength validation** — createUser, resetPassword, invite accept all allow single-character passwords
+
+### Data / Schema
+- `assaydefinitions` vs `assay_definitions` schema divergence unresolved (Monday team discussion)
 - `scripts/seed-domain-data.ts` writes to wrong (camelCase) collection names
-
-### High
-- 50+ mutation actions missing audit log creation
-- `isAdmin()` defined but never used
-- 9 API endpoints duplicate `requireApiKey()` instead of importing centralized version
-- `assaydefinitions` vs `assay_definitions` schema divergence unresolved
-
-### Medium
 - `unitCost` stored as String in BOM/Part models, expected as Number
 - `currentRevision`/`revision` stored as String, expected as Number
 - `_id` vs `id` transformation inconsistent across layouts
-- `api/box/debug` endpoint has zero auth
 - 136+ `as any` type assertions across server files
 
 ### Low / Deferred
@@ -276,3 +370,5 @@ Dev is 157 commits ahead of master. It contains the bulk of the manufacturing pi
 - Box.com integration stubbed
 - Opentrons endpoints depend on live robot hardware
 - Seed script only creates users/roles (no domain test data via Mongoose)
+- `isAdmin()` defined but never used
+- Sacred document correction endpoints don't exist yet (will need `admin:full` when built)
