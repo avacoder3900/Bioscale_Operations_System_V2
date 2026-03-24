@@ -1086,7 +1086,7 @@
 			<CompletionStorage
 				cartridges={storageCarts}
 				runSummary={summary}
-				fridges={previewParam ? [{ id: 'f1', displayName: 'Fridge 1', barcode: 'FRG-001' }, { id: 'f2', displayName: 'Fridge 2', barcode: 'FRG-002' }] : data.fridges}
+				fridges={data.fridges}
 				onRecordStorage={handleRecordStorage}
 				onComplete={handleCompleteRun}
 				readonly={isPreviewOrPast}

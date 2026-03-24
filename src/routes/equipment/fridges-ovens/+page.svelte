@@ -163,7 +163,7 @@
 				</div>
 				<div>
 					<label for="create-name" class="mb-1 block text-xs font-medium text-[var(--color-tron-text-secondary)]">Display Name</label>
-					<input id="create-name" type="text" name="displayName" required placeholder="e.g. Fridge A" class="tron-input w-full" />
+					<input id="create-name" type="text" name="displayName" required placeholder="e.g. Fridge 001" class="tron-input w-full" />
 				</div>
 				<div>
 					<label for="create-barcode" class="mb-1 block text-xs font-medium text-[var(--color-tron-text-secondary)]">Barcode</label>

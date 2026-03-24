@@ -176,7 +176,12 @@ export const POST: RequestHandler = async ({ locals }) => {
 	const reagentResult = await CartridgeRecord.bulkWrite(reagentOps);
 	results.reagentCartridges = reagentResult.upsertedCount;
 
-	// 7. Parent Equipment records (fridges + ovens)
+	// 7. Equipment records — SKIPPED: equipment should only be created via the Equipment CRUD page
+	// Fridges and ovens must be manually registered, not auto-seeded
+	results.equipment = 0;
+	const fridgeDefs: { name: string; barcode: string; capacity: number; shelves: number }[] = [];
+	const ovenDefs: { name: string; barcode: string; capacity: number }[] = [];
+	/*
 	const fridgeDefs = [
 		{ name: 'Fridge 001', barcode: 'FRG-001', capacity: 30, shelves: 3 },
 		{ name: 'Fridge 002', barcode: 'FRG-002', capacity: 30, shelves: 3 },
@@ -187,39 +192,10 @@ export const POST: RequestHandler = async ({ locals }) => {
 		{ name: 'Oven 002', barcode: 'OVN-002', capacity: 6 },
 		{ name: 'Oven 003', barcode: 'OVN-003', capacity: 6 }
 	];
+	*/
 
-	const equipOps = [
-		...fridgeDefs.map((f) => ({
-			updateOne: {
-				filter: { name: f.name, equipmentType: 'fridge' },
-				update: {
-					$setOnInsert: {
-						_id: generateId(), name: f.name, barcode: f.barcode,
-						equipmentType: 'fridge', status: 'active', capacity: f.capacity,
-						currentTemperatureC: 2 + Math.random() * 4,
-						notes: `Production fridge`
-					}
-				},
-				upsert: true
-			}
-		})),
-		...ovenDefs.map((o) => ({
-			updateOne: {
-				filter: { name: o.name, equipmentType: 'oven' },
-				update: {
-					$setOnInsert: {
-						_id: generateId(), name: o.name, barcode: o.barcode,
-						equipmentType: 'oven', status: 'active', capacity: o.capacity,
-						currentTemperatureC: 60 + Math.random() * 10,
-						notes: `Production oven`
-					}
-				},
-				upsert: true
-			}
-		}))
-	];
-	const equipResult = await Equipment.bulkWrite(equipOps);
-	results.equipment = equipResult.upsertedCount;
+	// Equipment seeding disabled — use Equipment CRUD page instead
+	// const equipOps = [...]; const equipResult = await Equipment.bulkWrite(equipOps);
 
 	// 8. Child shelf locations for fridges (linked to parent Equipment via parentEquipmentId)
 	const fridgeEquipDocs = await Equipment.find({ equipmentType: 'fridge' }).lean() as any[];
