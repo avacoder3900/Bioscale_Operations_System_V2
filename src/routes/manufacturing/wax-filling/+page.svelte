@@ -95,16 +95,22 @@
 	let coolingBypassError = $state('');
 
 	function handleCoolingBypass() {
+		// Check admin password via server validation
 		const pw = coolingBypassPassword.trim();
 		if (!pw) { coolingBypassError = 'Enter admin password'; return; }
-		if (pw === 'admin123') {
-			coolingBypassed = true;
-			showCoolingBypass = false;
-			coolingBypassError = '';
-			coolingBypassPassword = '';
-		} else {
-			coolingBypassError = 'Invalid admin password';
-		}
+		fetch('/api/dev/validate-equipment?type=admin-password&id=' + encodeURIComponent(pw))
+			.then(r => r.json())
+			.then(d => {
+				if (d.valid) {
+					coolingBypassed = true;
+					showCoolingBypass = false;
+					coolingBypassError = '';
+					coolingBypassPassword = '';
+				} else {
+					coolingBypassError = 'Invalid admin password';
+				}
+			})
+			.catch(() => { coolingBypassError = 'Verification failed'; });
 	}
 	let showCancelModal = $state(false);
 	let cancelReason = $state('');
