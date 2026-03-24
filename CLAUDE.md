@@ -1,5 +1,7 @@
 # CLAUDE.md — Coding Standards for Bioscale Operations System V2
 
+> **Security:** All auth, permission, and session code MUST follow patterns in [`SECURITY.md`](SECURITY.md). Read it before modifying any auth-related files.
+
 ## Stack
 - **Framework:** SvelteKit 2 + Svelte 5
 - **Database:** MongoDB Atlas + Mongoose 8
@@ -63,8 +65,8 @@ import { SomeModel } from '$lib/server/db/models';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async (event) => {
-    requirePermission(event, 'resource:read');
+export const load: PageServerLoad = async ({ locals }) => {
+    requirePermission(locals.user, 'resource:read');
     await connectDB();
     
     const items = await SomeModel.find({ active: true })
@@ -83,8 +85,8 @@ import { generateId } from '$lib/server/db/models';
 import { AuditLog } from '$lib/server/db/models';
 
 export const actions = {
-    create: async (event) => {
-        requirePermission(event, 'resource:write');
+    create: async ({ request, locals }) => {
+        requirePermission(locals.user, 'resource:write');
         await connectDB();
         
         const data = await event.request.formData();
