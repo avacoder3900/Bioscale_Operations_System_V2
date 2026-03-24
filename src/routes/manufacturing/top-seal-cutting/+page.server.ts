@@ -1,5 +1,5 @@
 import { redirect, fail } from '@sveltejs/kit';
-import { connectDB, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, AuditLog, PartDefinition, generateId } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 import mongoose from 'mongoose';
@@ -12,13 +12,23 @@ export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	await connectDB();
 
-	const runs = await getCollection()
-		.find({})
-		.sort({ createdAt: -1 })
-		.limit(50)
-		.toArray();
+	const [runs, topSealPart, settingsDoc] = await Promise.all([
+		getCollection().find({}).sort({ createdAt: -1 }).limit(50).toArray(),
+		PartDefinition.findOne({ partNumber: 'PT-CT-103' }).lean(),
+		mongoose.connection.db!.collection('manufacturing_settings').findOne({ _id: 'default' })
+	]);
+
+	const defaultExpectedStrips = (settingsDoc as any)?.topSealCutting?.expectedStripsPerRoll ?? 30;
+	const allRuns = await getCollection().find({}).toArray();
+	const totalStripsProduced = allRuns.reduce((sum: number, r: any) => sum + (r.acceptedCount ?? 0), 0);
 
 	return {
+		inventory: {
+			rollStock: (topSealPart as any)?.inventoryCount ?? 0,
+			rollPartName: (topSealPart as any)?.name ?? 'Top Seal',
+			totalStripsProduced
+		},
+		defaultExpectedStrips,
 		runs: runs.map((r: any) => ({
 			id: String(r._id),
 			lotBarcode: r.lotBarcode ?? '—',
@@ -35,6 +45,29 @@ export const load: PageServerLoad = async ({ locals }) => {
 };
 
 export const actions: Actions = {
+	updateExpected: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+		const data = await request.formData();
+		const password = (data.get('adminPassword') as string)?.trim();
+		const newValue = Number(data.get('newExpected') || 0);
+		if (password !== 'admin123') return fail(403, { settingsError: 'Invalid admin password' });
+		if (newValue <= 0) return fail(400, { settingsError: 'Value must be > 0' });
+		await mongoose.connection.db!.collection('manufacturing_settings').updateOne(
+			{ _id: 'default' },
+			{ $set: { 'topSealCutting.expectedStripsPerRoll': newValue, updatedAt: new Date() } },
+			{ upsert: true }
+		);
+		await AuditLog.create({ _id: generateId(), tableName: 'manufacturing_settings', recordId: 'default', action: 'UPDATE', changedBy: locals.user.username, changedAt: new Date(), newData: { 'topSealCutting.expectedStripsPerRoll': newValue } });
+		return { settingsSuccess: true };
+	},
+
+	generateTestBarcode: async ({ locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		const barcode = `TSEAL-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+		return { testBarcode: barcode };
+	},
+
 	recordRun: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
@@ -73,8 +106,8 @@ export const actions: Actions = {
 			await recordTransaction({
 				transactionType: 'consumption',
 				partDefinitionId: topSealPartId,
-				quantity: acceptedCount,
-				manufacturingStep: 'cut_thermoseal',
+				quantity: 1,
+				manufacturingStep: 'cut_top_seal',
 				manufacturingRunId: runId,
 				operatorId: locals.user._id,
 				operatorUsername: locals.user.username,
