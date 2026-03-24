@@ -47,13 +47,13 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	if (type === 'cartridge') {
 		// context=reagent means cartridge must already exist (wax_filled) and not yet reagent-filled
 		const context = url.searchParams.get('context');
-		const cart = await CartridgeRecord.findById(id).select('_id currentPhase waxFilling.runId reagentFilling.runId').lean();
+		const cart = await CartridgeRecord.findById(id).select('_id status waxFilling.runId reagentFilling.runId').lean();
 
 		if (context === 'reagent') {
 			if (!cart) {
 				return json({ error: `Cartridge "${id}" not found. It must go through wax filling first.`, isNew: true }, { status: 404 });
 			}
-			const phase = (cart as any).currentPhase;
+			const phase = (cart as any).status;
 			const validForReagent = ['wax_filled', 'wax_stored', 'wax_qc'];
 			if (!validForReagent.includes(phase)) {
 				return json({ error: `Cartridge "${id}" is in phase "${phase}". Must be wax stored before reagent filling.` }, { status: 400 });
@@ -63,7 +63,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
 		// Default (wax filling context): cartridge should be new or in backing phase
 		if (cart) {
-			const phase = (cart as any).currentPhase;
+			const phase = (cart as any).status;
 			if (phase && phase !== 'backing' && phase !== 'voided') {
 				return json({ error: `Cartridge "${id}" already exists in phase "${phase}". It cannot be re-scanned.` }, { status: 400 });
 			}

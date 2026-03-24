@@ -25,7 +25,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			{ 'backing.lotId': { $regex: search, $options: 'i' } }
 		];
 	}
-	if (lifecycleStage) query.currentPhase = lifecycleStage;
+	if (lifecycleStage) query.status = lifecycleStage;
 	if (assayTypeId) query['reagentFilling.assayType._id'] = assayTypeId;
 	if (operatorId) {
 		query.$or = [
@@ -39,7 +39,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// Sort mapping
 	const sortMap: Record<string, string> = {
 		createdAt: 'createdAt',
-		currentLifecycleStage: 'currentPhase',
+		currentLifecycleStage: 'status',
 		cartridgeId: '_id'
 	};
 	const sortField = sortMap[sortBy] || 'createdAt';
@@ -71,12 +71,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				assayTypeName: c.reagentFilling?.assayType?.name ?? null,
 				waxRunId: c.waxFilling?.runId ?? null,
 				reagentRunId: c.reagentFilling?.runId ?? null,
-				currentLifecycleStage: c.currentPhase ?? 'unknown',
+				currentLifecycleStage: c.status ?? 'unknown',
 				operatorName,
 				createdAt: c.createdAt,
 				expirationDate: c.reagentFilling?.expirationDate ?? null,
 				storageLocation: c.storage?.fridgeName ?? c.storage?.locationId ?? null,
-				waxStatus: c.waxFilling?.recordedAt ? 'completed' : (c.currentPhase === 'backing' ? 'pending' : null),
+				waxStatus: c.waxFilling?.recordedAt ? 'completed' : (c.status === 'backing' ? 'pending' : null),
 				waxQcStatus: c.waxQc?.status ?? null,
 				inspectionStatus: c.reagentInspection?.status ?? null,
 				topSealBatchId: c.topSeal?.batchId ?? null,

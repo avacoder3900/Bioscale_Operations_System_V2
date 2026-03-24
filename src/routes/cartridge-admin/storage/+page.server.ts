@@ -44,7 +44,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	// Get cartridges awaiting storage (completed QC but not yet stored)
 	const awaitingStorage = await CartridgeRecord.find(
-		{ currentPhase: { $in: ['qc_complete', 'assay_loaded'] }, 'storage.fridgeName': { $exists: false } },
+		{ status: { $in: ['released', 'linked'] }, 'storage.fridgeName': { $exists: false } },
 		{ _id: 1, barcode: 1, lotNumber: 1 }
 	).sort({ createdAt: -1 }).limit(500).lean();
 
@@ -116,7 +116,6 @@ export const actions: Actions = {
 					'storage.storedAt': now,
 					'storage.recordedAt': now,
 					'storage.storedBy': locals.user?._id,
-					currentPhase: 'stored',
 					status: 'stored'
 				}
 			}

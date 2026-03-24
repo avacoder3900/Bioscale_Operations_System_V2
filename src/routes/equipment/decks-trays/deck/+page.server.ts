@@ -75,7 +75,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 			qcStatus: c.waxQc?.status ?? 'Pending',
 			rejectionReason: c.waxQc?.rejectionReason ?? null,
 			transferTimeSeconds: c.waxFilling?.transferTimeSeconds ?? null,
-			currentInventory: c.currentPhase ?? 'unknown'
+			currentInventory: c.status ?? 'unknown'
 		})),
 		cartridgesByRun: (() => {
 			const m: Record<string, any[]> = {};
@@ -90,7 +90,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 					qcStatus: c.waxQc?.status ?? 'Pending',
 					rejectionReason: c.waxQc?.rejectionReason ?? null,
 					transferTimeSeconds: c.waxFilling?.transferTimeSeconds ?? null,
-					currentInventory: c.currentPhase ?? 'unknown'
+					currentInventory: c.status ?? 'unknown'
 				});
 			}
 			return m;

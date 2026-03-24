@@ -377,7 +377,7 @@ export const actions: Actions = {
 					update: {
 						$setOnInsert: {
 							_id: cf.cartridgeId,
-							currentPhase: 'backing',
+							status: 'backing',
 							'backing.operator': { _id: locals.user._id, username: locals.user.username },
 							'backing.recordedAt': new Date()
 						}
@@ -465,7 +465,7 @@ export const actions: Actions = {
 							'reagentFilling.operator': run.operator,
 							'reagentFilling.fillDate': now,
 							'reagentFilling.recordedAt': now,
-							currentPhase: 'reagent_filled'
+							status: 'reagent_filled'
 						}
 					}
 				}
@@ -551,7 +551,7 @@ export const actions: Actions = {
 						'reagentInspection.operator': { _id: locals.user._id, username: locals.user.username },
 						'reagentInspection.timestamp': now,
 						'reagentInspection.recordedAt': now,
-						currentPhase: 'voided'
+						status: 'voided'
 					}
 				}
 			);
@@ -677,7 +677,7 @@ export const actions: Actions = {
 							'topSeal.operator': { _id: locals.user._id, username: locals.user.username },
 							'topSeal.timestamp': now,
 							'topSeal.recordedAt': now,
-							currentPhase: 'sealed'
+							status: 'sealed'
 						}
 					}
 				}
@@ -744,7 +744,7 @@ export const actions: Actions = {
 		// Update CartridgeRecord
 		await CartridgeRecord.findOneAndUpdate(
 			{ _id: cartridgeId },
-			{ $set: { currentPhase: 'voided', voidedAt: now, voidReason: 'Rejected at top sealing' } }
+			{ $set: { status: 'voided', voidedAt: now, voidReason: 'Rejected at top sealing' } }
 		);
 
 		return { success: true };
@@ -800,7 +800,7 @@ export const actions: Actions = {
 							'storage.operator': { _id: locals.user._id, username: locals.user.username },
 							'storage.timestamp': now,
 							'storage.recordedAt': now,
-							currentPhase: 'stored'
+							status: 'stored'
 						}
 					}
 				}
@@ -828,7 +828,7 @@ export const actions: Actions = {
 				action: 'UPDATE',
 				changedBy: locals.user?.username,
 				changedAt: now,
-				newData: { currentPhase: 'stored', location, count: cartridgeIds.length }
+				newData: { status: 'stored', location, count: cartridgeIds.length }
 			});
 		}
 
@@ -896,9 +896,9 @@ export const actions: Actions = {
 		// Clean up cartridges that were in reagent_filling phase for this run
 		await CartridgeRecord.bulkWrite([{
 			updateMany: {
-				filter: { 'reagentFilling.runId': runId, currentPhase: 'reagent_filling' },
+				filter: { 'reagentFilling.runId': runId, status: 'reagent_filling' },
 				update: {
-					$set: { currentPhase: 'wax_filled' },
+					$set: { status: 'wax_filled' },
 					$unset: { reagentFilling: '' }
 				}
 			}
@@ -940,9 +940,9 @@ export const actions: Actions = {
 		// Clean up cartridges that were in reagent_filling phase for this run
 		await CartridgeRecord.bulkWrite([{
 			updateMany: {
-				filter: { 'reagentFilling.runId': runId, currentPhase: 'reagent_filling' },
+				filter: { 'reagentFilling.runId': runId, status: 'reagent_filling' },
 				update: {
-					$set: { currentPhase: 'wax_filled' },
+					$set: { status: 'wax_filled' },
 					$unset: { reagentFilling: '' }
 				}
 			}
@@ -975,8 +975,8 @@ export const actions: Actions = {
 		// Void all CartridgeRecord entries for this run
 		if (run.cartridgesFilled?.length) {
 			await CartridgeRecord.updateMany(
-				{ 'reagentFilling.runId': runId, currentPhase: { $nin: ['completed', 'voided'] } },
-				{ $set: { currentPhase: 'voided', voidedAt: new Date(), voidReason: 'Reset to deck loading' } }
+				{ 'reagentFilling.runId': runId, status: { $nin: ['completed', 'voided'] } },
+				{ $set: { status: 'voided', voidedAt: new Date(), voidReason: 'Reset to deck loading' } }
 			);
 		}
 
