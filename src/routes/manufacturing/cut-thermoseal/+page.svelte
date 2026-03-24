@@ -3,6 +3,7 @@
 
 	interface Run {
 		id: string;
+		lotBarcode: string;
 		expectedSheets: number;
 		cutCount: number;
 		acceptedCount: number;
@@ -20,7 +21,8 @@
 
 	let { data, form }: Props = $props();
 
-	let expectedSheets = $state(1);
+	let lotBarcode = $state('');
+	let expectedSheets = $state(0);
 	let cutCount = $state(0);
 	let acceptedCount = $state(0);
 	let notes = $state('');
@@ -30,9 +32,19 @@
 		const today = new Date().toISOString().slice(0, 10);
 		return r.createdAt.startsWith(today);
 	}));
-
 	const todayAccepted = $derived(todayRuns.reduce((sum, r) => sum + r.acceptedCount, 0));
 	const todayRejected = $derived(todayRuns.reduce((sum, r) => sum + r.rejectedCount, 0));
+
+	let barcodeInput: HTMLInputElement;
+
+	function onBarcodeKeydown(e: KeyboardEvent) {
+		if (e.key === 'Enter') {
+			e.preventDefault();
+			// Focus next field after scan
+			const next = document.querySelector<HTMLInputElement>('input[name="expectedSheets"]');
+			next?.focus();
+		}
+	}
 </script>
 
 <div class="space-y-6">
@@ -40,7 +52,7 @@
 		<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Cut Thermoseal</h1>
 		<button
 			type="button"
-			onclick={() => { showForm = !showForm; }}
+			onclick={() => { showForm = !showForm; if (!showForm) { lotBarcode = ''; expectedSheets = 0; cutCount = 0; acceptedCount = 0; notes = ''; } else { setTimeout(() => barcodeInput?.focus(), 100); } }}
 			class="min-h-[44px] rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-4 py-2 text-sm font-medium text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20"
 		>
 			{showForm ? 'Cancel' : '+ Record Cut Run'}
@@ -77,10 +89,7 @@
 			use:enhance={() => {
 				return async ({ update }) => {
 					showForm = false;
-					expectedSheets = 1;
-					cutCount = 0;
-					acceptedCount = 0;
-					notes = '';
+					lotBarcode = ''; expectedSheets = 0; cutCount = 0; acceptedCount = 0; notes = '';
 					await update();
 				};
 			}}
@@ -89,60 +98,59 @@
 			<h3 class="text-sm font-semibold text-[var(--color-tron-cyan)]">Record Thermoseal Cut Run</h3>
 
 			<label class="block">
-				<span class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Expected Sheets</span>
+				<span class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Scan Roll/Lot Barcode</span>
 				<input
-					type="number"
-					name="expectedSheets"
-					bind:value={expectedSheets}
-					min="1"
-					class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+					bind:this={barcodeInput}
+					type="text"
+					name="lotBarcode"
+					bind:value={lotBarcode}
+					onkeydown={onBarcodeKeydown}
+					class="mt-1 block w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none font-mono"
+					placeholder="Scan barcode..."
+					autofocus
 				/>
+			</label>
+
+			{#if lotBarcode}
+				<div class="rounded border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-cyan)]/5 px-3 py-2">
+					<p class="text-xs text-[var(--color-tron-text-secondary)]">Roll: <span class="font-mono text-[var(--color-tron-cyan)]">{lotBarcode}</span></p>
+				</div>
+			{/if}
+
+			<label class="block">
+				<span class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Expected Sheets from Roll</span>
+				<input type="number" name="expectedSheets" bind:value={expectedSheets} min="1"
+					class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none" />
 			</label>
 
 			<label class="block">
 				<span class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Total Cut</span>
-				<input
-					type="number"
-					name="cutCount"
-					bind:value={cutCount}
-					min="0"
-					class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
-				/>
+				<input type="number" name="cutCount" bind:value={cutCount} min="0"
+					class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none" />
 			</label>
 
 			<label class="block">
 				<span class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Accepted</span>
-				<input
-					type="number"
-					name="acceptedCount"
-					bind:value={acceptedCount}
-					min="0"
-					max={cutCount}
-					class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
-				/>
+				<input type="number" name="acceptedCount" bind:value={acceptedCount} min="0" max={cutCount}
+					class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none" />
 			</label>
 
-			{#if cutCount > 0 && acceptedCount >= 0}
+			{#if cutCount > 0}
 				<p class="text-xs text-[var(--color-tron-text-secondary)]">
 					Rejected: <span class="text-red-400">{cutCount - acceptedCount}</span>
-					{#if cutCount > 0}
-						 — Yield: <span class="text-[var(--color-tron-cyan)]">{Math.round((acceptedCount / cutCount) * 100)}%</span>
-					{/if}
+					— Yield: <span class="text-[var(--color-tron-cyan)]">{Math.round((acceptedCount / cutCount) * 100)}%</span>
 				</p>
 			{/if}
 
 			<label class="block">
 				<span class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Notes (optional)</span>
-				<textarea
-					name="notes"
-					bind:value={notes}
-					rows="2"
+				<textarea name="notes" bind:value={notes} rows="2"
 					class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
-					placeholder="Any issues or observations..."
-				></textarea>
+					placeholder="Any issues or observations..."></textarea>
 			</label>
 
-			<button type="submit" class="min-h-[44px] w-full rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-semibold text-[var(--color-tron-bg)] hover:opacity-90">
+			<button type="submit" class="min-h-[44px] w-full rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-semibold text-[var(--color-tron-bg)] hover:opacity-90"
+				disabled={!lotBarcode}>
 				Record Cut Run
 			</button>
 		</form>
@@ -158,31 +166,31 @@
 				<table class="w-full text-sm">
 					<thead>
 						<tr class="border-b border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]">
-							<th class="px-4 py-2 text-left text-xs font-medium text-[var(--color-tron-text-secondary)]">Date</th>
-							<th class="px-4 py-2 text-center text-xs font-medium text-[var(--color-tron-text-secondary)]">Expected</th>
-							<th class="px-4 py-2 text-center text-xs font-medium text-[var(--color-tron-text-secondary)]">Cut</th>
-							<th class="px-4 py-2 text-center text-xs font-medium text-[var(--color-tron-text-secondary)]">Accepted</th>
-							<th class="px-4 py-2 text-center text-xs font-medium text-[var(--color-tron-text-secondary)]">Rejected</th>
-							<th class="px-4 py-2 text-center text-xs font-medium text-[var(--color-tron-text-secondary)]">Yield</th>
-							<th class="px-4 py-2 text-left text-xs font-medium text-[var(--color-tron-text-secondary)]">Operator</th>
-							<th class="px-4 py-2 text-left text-xs font-medium text-[var(--color-tron-text-secondary)]">Notes</th>
+							<th class="px-3 py-2 text-left text-xs font-medium text-[var(--color-tron-text-secondary)]">Date</th>
+							<th class="px-3 py-2 text-left text-xs font-medium text-[var(--color-tron-text-secondary)]">Lot</th>
+							<th class="px-3 py-2 text-center text-xs font-medium text-[var(--color-tron-text-secondary)]">Expected</th>
+							<th class="px-3 py-2 text-center text-xs font-medium text-[var(--color-tron-text-secondary)]">Cut</th>
+							<th class="px-3 py-2 text-center text-xs font-medium text-[var(--color-tron-text-secondary)]">Accepted</th>
+							<th class="px-3 py-2 text-center text-xs font-medium text-[var(--color-tron-text-secondary)]">Rej</th>
+							<th class="px-3 py-2 text-center text-xs font-medium text-[var(--color-tron-text-secondary)]">Yield</th>
+							<th class="px-3 py-2 text-left text-xs font-medium text-[var(--color-tron-text-secondary)]">Operator</th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each data.runs as run (run.id)}
 							<tr class="border-b border-[var(--color-tron-border)]/50 hover:bg-[var(--color-tron-surface)]">
-								<td class="px-4 py-2 text-[var(--color-tron-text)]">
+								<td class="px-3 py-2 text-xs text-[var(--color-tron-text)]">
 									{new Date(run.createdAt).toLocaleDateString()} {new Date(run.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
 								</td>
-								<td class="px-4 py-2 text-center text-[var(--color-tron-text)]">{run.expectedSheets}</td>
-								<td class="px-4 py-2 text-center text-[var(--color-tron-text)]">{run.cutCount}</td>
-								<td class="px-4 py-2 text-center text-green-400">{run.acceptedCount}</td>
-								<td class="px-4 py-2 text-center text-red-400">{run.rejectedCount}</td>
-								<td class="px-4 py-2 text-center text-[var(--color-tron-cyan)]">
+								<td class="px-3 py-2 font-mono text-xs text-[var(--color-tron-cyan)]">{run.lotBarcode}</td>
+								<td class="px-3 py-2 text-center text-[var(--color-tron-text)]">{run.expectedSheets}</td>
+								<td class="px-3 py-2 text-center text-[var(--color-tron-text)]">{run.cutCount}</td>
+								<td class="px-3 py-2 text-center text-green-400">{run.acceptedCount}</td>
+								<td class="px-3 py-2 text-center text-red-400">{run.rejectedCount}</td>
+								<td class="px-3 py-2 text-center text-[var(--color-tron-cyan)]">
 									{run.cutCount > 0 ? Math.round((run.acceptedCount / run.cutCount) * 100) : 0}%
 								</td>
-								<td class="px-4 py-2 text-[var(--color-tron-text-secondary)]">{run.operator}</td>
-								<td class="px-4 py-2 text-[var(--color-tron-text-secondary)] max-w-[200px] truncate">{run.notes ?? '—'}</td>
+								<td class="px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">{run.operator}</td>
 							</tr>
 						{/each}
 					</tbody>

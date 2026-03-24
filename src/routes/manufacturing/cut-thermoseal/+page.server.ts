@@ -4,7 +4,6 @@ import { recordTransaction, resolvePartId } from '$lib/server/services/inventory
 import type { PageServerLoad, Actions } from './$types';
 import mongoose from 'mongoose';
 
-/** Simple collection for thermoseal cutting runs */
 function getCollection() {
 	return mongoose.connection.db!.collection('thermoseal_cutting_runs');
 }
@@ -22,6 +21,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	return {
 		runs: runs.map((r: any) => ({
 			id: String(r._id),
+			lotBarcode: r.lotBarcode ?? '—',
 			expectedSheets: r.expectedSheets ?? 0,
 			cutCount: r.cutCount ?? 0,
 			acceptedCount: r.acceptedCount ?? 0,
@@ -35,17 +35,18 @@ export const load: PageServerLoad = async ({ locals }) => {
 };
 
 export const actions: Actions = {
-	/** Record a thermoseal cutting run */
 	recordRun: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 
 		const data = await request.formData();
+		const lotBarcode = (data.get('lotBarcode') as string)?.trim();
 		const expectedSheets = Number(data.get('expectedSheets') || 0);
 		const cutCount = Number(data.get('cutCount') || 0);
 		const acceptedCount = Number(data.get('acceptedCount') || 0);
 		const notes = (data.get('notes') as string) || undefined;
 
+		if (!lotBarcode) return fail(400, { error: 'Lot barcode is required — scan the roll first' });
 		if (expectedSheets <= 0) return fail(400, { error: 'Expected sheets must be > 0' });
 		if (cutCount <= 0) return fail(400, { error: 'Cut count must be > 0' });
 		if (acceptedCount < 0) return fail(400, { error: 'Accepted count cannot be negative' });
@@ -56,6 +57,7 @@ export const actions: Actions = {
 
 		await getCollection().insertOne({
 			_id: runId,
+			lotBarcode,
 			expectedSheets,
 			cutCount,
 			acceptedCount,
@@ -66,7 +68,6 @@ export const actions: Actions = {
 			updatedAt: now
 		});
 
-		// Record inventory transaction for thermoseal consumption
 		const thermosealPartId = await resolvePartId('PT-CT-101');
 		if (thermosealPartId) {
 			await recordTransaction({
@@ -77,7 +78,8 @@ export const actions: Actions = {
 				manufacturingRunId: runId,
 				operatorId: locals.user._id,
 				operatorUsername: locals.user.username,
-				notes: `Cut thermoseal: ${acceptedCount} accepted of ${cutCount} cut (${expectedSheets} sheets expected)`
+				lotId: lotBarcode,
+				notes: `Cut thermoseal [${lotBarcode}]: ${acceptedCount} accepted of ${cutCount} cut (${expectedSheets} sheets expected)`
 			});
 		}
 
@@ -88,7 +90,7 @@ export const actions: Actions = {
 			action: 'INSERT',
 			changedBy: locals.user.username,
 			changedAt: now,
-			newData: { expectedSheets, cutCount, acceptedCount }
+			newData: { lotBarcode, expectedSheets, cutCount, acceptedCount }
 		});
 
 		return { success: true };
