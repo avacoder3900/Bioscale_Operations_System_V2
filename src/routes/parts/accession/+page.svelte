@@ -7,6 +7,43 @@
 	let showAssignAllConfirm = $state(false);
 	let assignAllResult = $state<any>(null);
 	let lastAssigned = $state<{ partNumber: string; barcode: string } | null>(null);
+
+	// Quick Scan state
+	let qsPartId = $state('');
+	let qsBagBarcode = $state('');
+	let qsQuantity = $state('');
+	let qsNotes = $state('');
+	let qsLookupStatus = $state<'idle' | 'checking' | 'available' | 'exists'>('idle');
+	let qsLookupInfo = $state('');
+	let qsScans = $state<Array<{ barcode: string; partNumber: string; quantity: number; lotNumber: string }>>([]);
+	let qsBarcodeInput: HTMLInputElement | undefined = $state();
+	let qsLookupTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function handleBarcodeInput(value: string) {
+		qsBagBarcode = value;
+		qsLookupStatus = 'idle';
+		qsLookupInfo = '';
+		if (qsLookupTimer) clearTimeout(qsLookupTimer);
+		if (!value.trim()) return;
+		qsLookupTimer = setTimeout(async () => {
+			qsLookupStatus = 'checking';
+			try {
+				const res = await fetch(`/api/parts/lookup?barcode=${encodeURIComponent(value.trim())}`);
+				if (res.ok) {
+					const data = await res.json();
+					qsLookupStatus = 'exists';
+					qsLookupInfo = `This barcode is already registered as Lot #${data.lot.lotNumber} for ${data.lot.part?.name || data.lot.part?.partNumber || 'unknown part'}`;
+				} else if (res.status === 404) {
+					qsLookupStatus = 'available';
+					qsLookupInfo = '';
+				} else {
+					qsLookupStatus = 'idle';
+				}
+			} catch {
+				qsLookupStatus = 'idle';
+			}
+		}, 300);
+	}
 </script>
 
 <svelte:head>
@@ -77,11 +114,113 @@
 		</div>
 	{/if}
 
+	{#if form?.quickScanSuccess}
+		<div class="bg-green-50 border border-green-200 rounded-lg p-3 mb-4">
+			<p class="text-green-800 text-sm">
+				Accessioned <strong>{form.quantity}</strong> units of <strong>{form.partNumber}</strong> as Lot <strong>{form.lotNumber}</strong> (barcode: {form.bagBarcode})
+			</p>
+		</div>
+	{/if}
+
 	{#if form?.error}
 		<div class="bg-red-50 border border-red-200 rounded-lg p-3 mb-4">
 			<p class="text-red-800 text-sm">{form.error}</p>
 		</div>
 	{/if}
+
+	<!-- Quick Scan Accession -->
+	<div class="bg-white rounded-lg shadow mb-6">
+		<div class="p-4 border-b">
+			<h2 class="text-lg font-semibold text-gray-900">📦 Quick Scan Accession</h2>
+			<p class="text-sm text-gray-500 mt-1">Scan bag barcodes to accession existing inventory</p>
+		</div>
+		<div class="p-4">
+			<form method="POST" action="?/quickScan" use:enhance={() => {
+				return async ({ result, update }) => {
+					if (result.type === 'success' && result.data?.quickScanSuccess) {
+						qsScans = [{ barcode: result.data.bagBarcode, partNumber: result.data.partNumber, quantity: result.data.quantity, lotNumber: result.data.lotNumber }, ...qsScans];
+						qsBagBarcode = '';
+						qsQuantity = '';
+						qsLookupStatus = 'idle';
+						qsLookupInfo = '';
+						await update();
+						setTimeout(() => qsBarcodeInput?.focus(), 50);
+					} else {
+						await update();
+					}
+				};
+			}}>
+				<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+					<div>
+						<label for="qs-part" class="block text-sm font-medium text-gray-700 mb-1">Part</label>
+						<select id="qs-part" name="partId" bind:value={qsPartId} required class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+							<option value="">Select a part...</option>
+							{#each [...data.registered, ...data.unregistered] as part}
+								<option value={part.id}>{part.partNumber} — {part.name}</option>
+							{/each}
+						</select>
+					</div>
+					<div>
+						<label for="qs-barcode" class="block text-sm font-medium text-gray-700 mb-1">Bag Barcode</label>
+						<div class="relative">
+							<input id="qs-barcode" name="bagBarcode" type="text" bind:this={qsBarcodeInput} value={qsBagBarcode} oninput={(e) => handleBarcodeInput(e.currentTarget.value)} required autofocus placeholder="Scan or type barcode" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm pr-8 focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
+							<span class="absolute right-2 top-2.5 text-gray-400">
+								{#if qsLookupStatus === 'checking'}⏳{:else if qsLookupStatus === 'available'}✅{:else if qsLookupStatus === 'exists'}⚠️{:else}🔍{/if}
+							</span>
+						</div>
+						{#if qsLookupStatus === 'exists'}
+							<p class="text-xs text-amber-600 mt-1">{qsLookupInfo}</p>
+						{/if}
+					</div>
+					<div>
+						<label for="qs-qty" class="block text-sm font-medium text-gray-700 mb-1">Quantity</label>
+						<input id="qs-qty" name="quantity" type="number" min="1" bind:value={qsQuantity} required placeholder="0" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
+					</div>
+					<div>
+						<label for="qs-notes" class="block text-sm font-medium text-gray-700 mb-1">Notes (optional)</label>
+						<div class="flex gap-2">
+							<input id="qs-notes" name="notes" type="text" bind:value={qsNotes} placeholder="Optional notes" class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
+							<button type="submit" class="px-4 py-2 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 whitespace-nowrap" disabled={qsLookupStatus === 'exists'}>
+								Accession
+							</button>
+						</div>
+					</div>
+				</div>
+			</form>
+		</div>
+
+		{#if qsScans.length > 0}
+			<div class="border-t p-4">
+				<h3 class="text-sm font-semibold text-gray-700 mb-2">Today's Scans ({qsScans.length})</h3>
+				<div class="max-h-48 overflow-y-auto">
+					<table class="w-full text-sm">
+						<thead class="bg-gray-50">
+							<tr>
+								<th class="text-left p-2 font-medium text-gray-600">Barcode</th>
+								<th class="text-left p-2 font-medium text-gray-600">Part</th>
+								<th class="text-right p-2 font-medium text-gray-600">Qty</th>
+								<th class="text-left p-2 font-medium text-gray-600">Lot #</th>
+							</tr>
+						</thead>
+						<tbody class="divide-y">
+							{#each qsScans as scan}
+								<tr>
+									<td class="p-2 font-mono text-xs">{scan.barcode}</td>
+									<td class="p-2">{scan.partNumber}</td>
+									<td class="p-2 text-right">{scan.quantity}</td>
+									<td class="p-2 font-mono text-xs">{scan.lotNumber}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+				<div class="mt-2 text-sm text-gray-500 flex gap-4">
+					<span>Total scans: <strong>{qsScans.length}</strong></span>
+					<span>Total units: <strong>{qsScans.reduce((sum, s) => sum + s.quantity, 0)}</strong></span>
+				</div>
+			</div>
+		{/if}
+	</div>
 
 	<!-- Unregistered Parts -->
 	{#if data.unregistered.length > 0}

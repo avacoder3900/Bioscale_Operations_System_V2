@@ -1,6 +1,6 @@
 import { fail, error } from '@sveltejs/kit';
 import { hasPermission } from '$lib/server/permissions';
-import { connectDB, PartDefinition, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, PartDefinition, AuditLog, ReceivingLot, InventoryTransaction, ManufacturingMaterial, ManufacturingMaterialTransaction, generateId, generateLotNumber } from '$lib/server/db';
 import { generatePartBarcode } from '$lib/server/services/barcode-generator';
 import QRCode from 'qrcode';
 import type { Actions, PageServerLoad } from './$types';
@@ -206,5 +206,120 @@ body { font-family: Arial, sans-serif; }
 </div></body></html>`;
 
 		return { exportSuccess: true, html, count: parts.length };
+	},
+
+	quickScan: async ({ request, locals }) => {
+		requireAccessionPermission(locals.user);
+		await connectDB();
+
+		const form = await request.formData();
+		const partId = form.get('partId')?.toString();
+		const bagBarcode = form.get('bagBarcode')?.toString();
+		const quantityStr = form.get('quantity')?.toString();
+		const notes = form.get('notes')?.toString() || 'Bulk accession - existing inventory';
+
+		if (!partId) return fail(400, { error: 'Part is required' });
+		if (!bagBarcode) return fail(400, { error: 'Bag barcode is required' });
+		if (!quantityStr) return fail(400, { error: 'Quantity is required' });
+
+		const quantity = parseInt(quantityStr, 10);
+		if (isNaN(quantity) || quantity <= 0) return fail(400, { error: 'Quantity must be a positive number' });
+
+		// Check for duplicate barcode
+		const existing = await ReceivingLot.findOne({ lotId: bagBarcode }).lean();
+		if (existing) return fail(400, { error: `Barcode "${bagBarcode}" is already registered as a lot` });
+
+		// Look up part
+		const part = await PartDefinition.findById(partId).lean() as any;
+		if (!part) return fail(404, { error: 'Part not found' });
+
+		const lotNumber = await generateLotNumber(ReceivingLot);
+
+		// Create ReceivingLot
+		const lot = await ReceivingLot.create({
+			_id: generateId(),
+			lotId: bagBarcode,
+			lotNumber,
+			part: { _id: part._id, partNumber: part.partNumber, name: part.name },
+			quantity,
+			operator: { _id: locals.user!._id, username: locals.user!.username },
+			inspectionPathway: 'coc',
+			cocMeetsStandards: true,
+			status: 'accepted',
+			notes,
+			bagBarcode,
+			createdAt: new Date()
+		});
+
+		// Update inventory count
+		const prevCount = part.inventoryCount ?? 0;
+		const newCount = prevCount + quantity;
+		await PartDefinition.updateOne({ _id: partId }, { $inc: { inventoryCount: quantity } });
+
+		// Create InventoryTransaction
+		await InventoryTransaction.create({
+			_id: generateId(),
+			partDefinitionId: partId,
+			transactionType: 'receipt',
+			quantity,
+			previousQuantity: prevCount,
+			newQuantity: newCount,
+			reason: `Quick scan accession lot ${lotNumber}`,
+			performedBy: locals.user!._id,
+			performedAt: new Date()
+		});
+
+		// Sync ManufacturingMaterial if linked
+		const mfgMaterial = await ManufacturingMaterial.findOne({ partDefinitionId: partId }).lean() as any;
+		if (mfgMaterial) {
+			const mfgBefore = mfgMaterial.currentQuantity ?? 0;
+			const mfgAfter = mfgBefore + quantity;
+			const now = new Date();
+
+			await ManufacturingMaterialTransaction.create({
+				_id: generateId(),
+				materialId: mfgMaterial._id,
+				transactionType: 'receive',
+				quantityChanged: quantity,
+				quantityBefore: mfgBefore,
+				quantityAfter: mfgAfter,
+				operatorId: locals.user!._id,
+				notes: `Received via quick scan lot ${lotNumber}`,
+				createdAt: now
+			});
+
+			await ManufacturingMaterial.findByIdAndUpdate(mfgMaterial._id, {
+				$set: { currentQuantity: mfgAfter, updatedAt: now },
+				$push: {
+					recentTransactions: {
+						$each: [{
+							transactionType: 'receive',
+							quantityChanged: quantity,
+							quantityBefore: mfgBefore,
+							quantityAfter: mfgAfter,
+							operatorId: locals.user!._id,
+							notes: `Received via quick scan lot ${lotNumber}`,
+							createdAt: now
+						}],
+						$slice: -100
+					}
+				}
+			});
+		}
+
+		// Audit log
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'receiving_lot',
+			recordId: lot._id,
+			action: 'CREATE',
+			oldData: null,
+			newData: { lotId: bagBarcode, lotNumber, partNumber: part.partNumber, quantity, status: 'accepted' },
+			changedAt: new Date(),
+			changedBy: locals.user!.username,
+			reason: 'Quick scan accession - bulk inventory'
+		});
+
+		return { quickScanSuccess: true, lotNumber, bagBarcode, partNumber: part.partNumber, quantity };
 	}
 };
