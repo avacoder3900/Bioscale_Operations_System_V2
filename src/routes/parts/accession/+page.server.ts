@@ -1,12 +1,18 @@
-import { fail } from '@sveltejs/kit';
-import { requirePermission } from '$lib/server/permissions';
+import { fail, error } from '@sveltejs/kit';
+import { hasPermission } from '$lib/server/permissions';
 import { connectDB, PartDefinition, AuditLog, generateId } from '$lib/server/db';
 import { generatePartBarcode } from '$lib/server/services/barcode-generator';
 import QRCode from 'qrcode';
 import type { Actions, PageServerLoad } from './$types';
 
+function requireAccessionPermission(user: any): void {
+	if (!hasPermission(user, 'inventory:write') && !hasPermission(user, 'inventory:read') && !hasPermission(user, 'admin:full')) {
+		throw error(403, 'Permission denied: requires inventory:read, inventory:write, or admin:full');
+	}
+}
+
 export const load: PageServerLoad = async ({ locals }) => {
-	requirePermission(locals.user, 'inventory:read');
+	requireAccessionPermission(locals.user);
 	await connectDB();
 
 	const allParts = await PartDefinition.find({ isActive: true })
@@ -62,7 +68,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 export const actions: Actions = {
 	assignBarcode: async ({ request, locals }) => {
-		requirePermission(locals.user, 'inventory:write');
+		requireAccessionPermission(locals.user);
 		await connectDB();
 
 		const form = await request.formData();
@@ -94,7 +100,7 @@ export const actions: Actions = {
 	},
 
 	assignAll: async ({ locals }) => {
-		requirePermission(locals.user, 'inventory:write');
+		requireAccessionPermission(locals.user);
 		await connectDB();
 
 		const unregistered = await PartDefinition.find({
@@ -145,7 +151,7 @@ export const actions: Actions = {
 	},
 
 	exportLabels: async ({ request, locals }) => {
-		requirePermission(locals.user, 'inventory:read');
+		requireAccessionPermission(locals.user);
 		await connectDB();
 
 		const form = await request.formData();
