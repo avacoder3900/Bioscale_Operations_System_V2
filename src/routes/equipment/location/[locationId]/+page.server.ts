@@ -74,7 +74,7 @@ export const load: PageServerLoad = async ({ params }) => {
 			]
 		}).select({
 			_id: 1,
-			currentPhase: 1,
+			status: 1,
 			'backing.lotId': 1,
 			'waxFilling.robotName': 1,
 			'waxFilling.deckId': 1,
@@ -127,7 +127,7 @@ export const load: PageServerLoad = async ({ params }) => {
 
 		return {
 			id: String(c._id),
-			currentPhase: c.currentPhase ?? null,
+			currentPhase: c.status ?? null,
 			lotId: c.backing?.lotId ?? null,
 			robotName: c.waxFilling?.robotName ?? null,
 			deckId: c.waxFilling?.deckId ?? null,

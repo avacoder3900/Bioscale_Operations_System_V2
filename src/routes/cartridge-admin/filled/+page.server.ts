@@ -18,10 +18,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const sortDir = url.searchParams.get('sortDir') ?? 'desc';
 
 	const filter: Record<string, any> = {
-		currentPhase: { $in: ['sealed', 'cured', 'stored', 'released'] }
+		status: { $in: ['sealed', 'cured', 'stored', 'released'] }
 	};
 	if (assayTypeId) filter['reagentFilling.assayType._id'] = assayTypeId;
-	if (lifecycleStage) filter.currentPhase = lifecycleStage;
+	if (lifecycleStage) filter.status = lifecycleStage;
 	if (search) filter._id = { $regex: search, $options: 'i' };
 
 	const sortField = sortBy === 'createdAt' ? 'createdAt' : sortBy;
@@ -42,7 +42,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	return {
 		cartridges: (rawCartridges as any[]).map((c: any) => ({
 			cartridgeId: c._id,
-			currentLifecycleStage: c.currentPhase ?? 'unknown',
+			currentLifecycleStage: c.status ?? 'unknown',
 			assayTypeId: c.reagentFilling?.assayType?._id ?? null,
 			assayTypeName: c.reagentFilling?.assayType?.name ?? null,
 			reagentRunId: c.reagentFilling?.runId ?? null,

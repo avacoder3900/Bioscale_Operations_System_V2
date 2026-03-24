@@ -27,11 +27,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 		// Compute occupant counts from CartridgeRecord (waxStorage.location and storage.fridgeName)
 		const [waxCounts, reagentCounts] = await Promise.all([
 			CartridgeRecord.aggregate([
-				{ $match: { 'waxStorage.location': { $exists: true }, currentPhase: 'wax_stored' } },
+				{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored' } },
 				{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
 			]),
 			CartridgeRecord.aggregate([
-				{ $match: { 'storage.fridgeName': { $exists: true }, currentPhase: 'stored' } },
+				{ $match: { 'storage.fridgeName': { $exists: true }, status: 'stored' } },
 				{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
 			])
 		]);

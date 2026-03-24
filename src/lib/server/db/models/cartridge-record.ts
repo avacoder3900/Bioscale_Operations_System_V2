@@ -100,10 +100,14 @@ const cartridgeRecordSchema = new Schema({
 		completedAt: Date, recordedAt: Date
 	},
 
-	currentPhase: {
+	status: {
 		type: String,
-		enum: ['backing', 'wax_filling', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected',
-			'sealed', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed', 'voided']
+		enum: [
+			'backing', 'wax_filling', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected',
+			'sealed', 'cured', 'stored', 'released', 'shipped',
+			'linked', 'underway', 'completed', 'cancelled', 'scrapped', 'voided',
+			'packeted', 'transferred', 'refrigerated', 'received'
+		]
 	},
 
 	finalizedAt: Date, // ORPHANED: never written by any action
@@ -112,7 +116,7 @@ const cartridgeRecordSchema = new Schema({
 	corrections: [correctionSchema]
 }, { timestamps: true });
 
-cartridgeRecordSchema.index({ currentPhase: 1 });
+cartridgeRecordSchema.index({ status: 1 });
 cartridgeRecordSchema.index({ 'backing.lotId': 1 });
 cartridgeRecordSchema.index({ 'waxFilling.runId': 1 });
 cartridgeRecordSchema.index({ 'reagentFilling.runId': 1 });
@@ -121,7 +125,7 @@ cartridgeRecordSchema.index({ 'storage.locationId': 1 });
 cartridgeRecordSchema.index({ 'storage.containerBarcode': 1 });
 cartridgeRecordSchema.index({ 'qaqcRelease.shippingLotId': 1 });
 cartridgeRecordSchema.index({ 'shipping.packageId': 1 });
-cartridgeRecordSchema.index({ currentPhase: 1, 'reagentFilling.expirationDate': 1 });
+cartridgeRecordSchema.index({ status: 1, 'reagentFilling.expirationDate': 1 });
 cartridgeRecordSchema.index({ 'testExecution.spu._id': 1 });
 cartridgeRecordSchema.index({ 'sample.subjectId': 1 });
 cartridgeRecordSchema.index({ 'testResult.status': 1 });

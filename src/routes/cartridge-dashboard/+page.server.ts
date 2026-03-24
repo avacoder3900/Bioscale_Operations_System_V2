@@ -30,12 +30,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 	] = await Promise.all([
 		// Manufacturing pipeline phase counts
 		CartridgeRecord.aggregate([
-			{ $match: { currentPhase: { $ne: null } } },
-			{ $group: { _id: '$currentPhase', count: { $sum: 1 } } },
+			{ $match: { status: { $ne: null } } },
+			{ $group: { _id: '$status', count: { $sum: 1 } } },
 			{ $sort: { count: -1 } }
 		]),
-		CartridgeRecord.countDocuments({ currentPhase: { $ne: 'voided' } }),
-		CartridgeRecord.countDocuments({ currentPhase: 'voided' }),
+		CartridgeRecord.countDocuments({ status: { $ne: 'voided' } }),
+		CartridgeRecord.countDocuments({ status: 'voided' }),
 		// Wax QC pass/fail
 		CartridgeRecord.aggregate([
 			{ $match: { 'waxQc.status': { $exists: true } } },
@@ -54,7 +54,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		// Expiring within 30 days (reagent fill expiration)
 		CartridgeRecord.find({
 			'reagentFilling.expirationDate': { $lte: thirtyDaysFromNow, $gte: now },
-			currentPhase: { $nin: ['voided', 'completed', 'shipped'] }
+			status: { $nin: ['voided', 'completed', 'shipped'] }
 		}).sort({ 'reagentFilling.expirationDate': 1 }).limit(10).lean(),
 		// Fridge storage locations
 		Equipment.find({ equipmentType: 'fridge', status: { $ne: 'offline' } }).lean().catch(() => []),
@@ -77,11 +77,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Both fields store the fridge barcode string, not the equipment _id
 	const [waxStorageCounts, reagentStorageCounts] = await Promise.all([
 		CartridgeRecord.aggregate([
-			{ $match: { 'waxStorage.location': { $exists: true }, currentPhase: 'wax_stored' } },
+			{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored' } },
 			{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
 		]),
 		CartridgeRecord.aggregate([
-			{ $match: { 'storage.fridgeName': { $exists: true }, currentPhase: 'stored' } },
+			{ $match: { 'storage.fridgeName': { $exists: true }, status: 'stored' } },
 			{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
 		])
 	]);
@@ -101,7 +101,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	}
 
 	// Phase pipeline order for display
-	const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed'];
+	const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped', 'linked', 'underway', 'completed'];
 	const phaseMap = new Map((phaseCounts as any[]).map((p: any) => [p._id, p.count]));
 
 	const qcMap = (arr: any[]) => {
@@ -140,11 +140,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 			id: c._id,
 			assay: c.reagentFilling?.assayType?.name ?? '—',
 			expirationDate: c.reagentFilling?.expirationDate,
-			phase: c.currentPhase
+			phase: c.status
 		})),
 		recentActivity: (recentCartridges as any[]).map((c: any) => ({
 			id: c._id,
-			phase: c.currentPhase,
+			phase: c.status,
 			assay: c.reagentFilling?.assayType?.name ?? null,
 			waxQc: c.waxQc?.status ?? null,
 			updatedAt: c.updatedAt

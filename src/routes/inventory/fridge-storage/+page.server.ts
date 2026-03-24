@@ -63,12 +63,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Get all stored cartridges (wax storage + reagent storage)
 	const storedCartridges = await CartridgeRecord.find({
 		$or: [
-			{ 'waxStorage.location': { $exists: true, $ne: null }, currentPhase: 'wax_stored' },
-			{ 'storage.fridgeName': { $exists: true, $ne: null }, currentPhase: { $in: ['stored', 'reagent_filled'] } }
+			{ 'waxStorage.location': { $exists: true, $ne: null }, status: 'wax_stored' },
+			{ 'storage.fridgeName': { $exists: true, $ne: null }, status: { $in: ['stored', 'reagent_filled'] } }
 		]
 	}).select({
 		_id: 1,
-		currentPhase: 1,
+		status: 1,
 		'waxStorage.location': 1,
 		'waxStorage.recordedAt': 1,
 		'waxStorage.operator': 1,
@@ -101,7 +101,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			fridgeCartridges[idx].push({
 				id: String(c._id),
 				type: 'wax_filled',
-				phase: c.currentPhase ?? 'wax_stored',
+				phase: c.status ?? 'wax_stored',
 				location: waxLoc,
 				storedAt: c.waxStorage?.recordedAt ? new Date(c.waxStorage.recordedAt).toISOString() : null,
 				operator: c.waxStorage?.operator?.username ?? null,
@@ -115,7 +115,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			fridgeCartridges[idx].push({
 				id: String(c._id),
 				type: 'reagent_filled',
-				phase: c.currentPhase ?? 'stored',
+				phase: c.status ?? 'stored',
 				location: reagentLoc,
 				storedAt: c.storage?.recordedAt ? new Date(c.storage.recordedAt).toISOString() : null,
 				operator: c.storage?.operator?.username ?? null,

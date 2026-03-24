@@ -59,7 +59,7 @@ export const actions: Actions = {
 							'assayLoaded.assay': { _id: assay._id, name: assay.name, skuCode: assay.skuCode },
 							'assayLoaded.loadedAt': now,
 							'assayLoaded.recordedAt': now,
-							currentPhase: 'assay_loaded'
+							status: 'linked'
 						}
 					}
 				}

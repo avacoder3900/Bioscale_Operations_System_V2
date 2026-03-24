@@ -230,7 +230,7 @@ export const actions: Actions = {
 				'shipping.carrier': pkg?.carrier ?? undefined,
 				'shipping.shippedAt': now,
 				'shipping.recordedAt': now,
-				currentPhase: 'shipped'
+				status: 'shipped'
 			}
 		});
 
@@ -242,7 +242,7 @@ export const actions: Actions = {
 			action: 'UPDATE',
 			changedBy: locals.user?.username,
 			changedAt: now,
-			newData: { currentPhase: 'shipped', 'shipping.packageId': packageId }
+			newData: { status: 'shipped', 'shipping.packageId': packageId }
 		});
 
 		return { success: true };

@@ -83,7 +83,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		cartridge: cartridge
 			? {
 					_id: (cartridge as Record<string, unknown>)._id as string,
-					currentPhase: (cartridge as Record<string, unknown>).currentPhase as string,
+					currentPhase: (cartridge as Record<string, unknown>).status as string,
 					createdAt: (cartridge as Record<string, unknown>).createdAt as string
 				}
 			: null,

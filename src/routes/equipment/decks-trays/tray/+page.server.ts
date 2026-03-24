@@ -47,7 +47,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 			qcStatus: c.waxQc?.status ?? 'Pending',
 			storedAt: c.waxStorage?.timestamp ?? null,
 			location: c.waxStorage?.location ?? null,
-			currentPhase: c.currentPhase ?? 'unknown'
+			currentPhase: c.status ?? 'unknown'
 		})),
 		isAdmin: isAdmin(locals.user)
 	};

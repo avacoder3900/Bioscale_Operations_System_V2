@@ -15,7 +15,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	// === Pipeline counts ===
 	const phaseCounts = await CartridgeRecord.aggregate([
-		{ $group: { _id: '$currentPhase', count: { $sum: 1 } } }
+		{ $group: { _id: '$status', count: { $sum: 1 } } }
 	]);
 	const phaseMap = new Map<string, number>(phaseCounts.map((p: any) => [p._id ?? 'unknown', p.count]));
 	const backedCount = await CartridgeRecord.countDocuments({ 'backing.recordedAt': { $exists: true } });
@@ -36,10 +36,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 		status: { $nin: ['completed', 'Completed', 'aborted', 'Aborted', 'cancelled', 'Cancelled', 'voided'] }
 	});
 
-	const waxStored = await CartridgeRecord.countDocuments({ currentPhase: 'wax_stored' });
-	const reagentStored = await CartridgeRecord.countDocuments({ currentPhase: 'stored' });
-	const sealed = await CartridgeRecord.countDocuments({ currentPhase: 'sealed' });
-	const voided = await CartridgeRecord.countDocuments({ currentPhase: 'voided' });
+	const waxStored = await CartridgeRecord.countDocuments({ status: 'wax_stored' });
+	const reagentStored = await CartridgeRecord.countDocuments({ status: 'stored' });
+	const sealed = await CartridgeRecord.countDocuments({ status: 'sealed' });
+	const voided = await CartridgeRecord.countDocuments({ status: 'voided' });
 
 	// === Parts inventory (cartridge BOM) ===
 	const parts = await PartDefinition.find({ bomType: 'cartridge', isActive: true })
