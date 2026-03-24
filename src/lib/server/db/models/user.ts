@@ -34,6 +34,7 @@ const userSchema = new Schema({
 	age: Number,
 
 	roles: [{
+		_id: false,
 		roleId: String,
 		roleName: String,
 		assignedAt: Date,
