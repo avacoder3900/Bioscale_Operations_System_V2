@@ -6,13 +6,13 @@
       "prdFile": "DOMAIN-01-AUTH.md",
       "dependencies": [],
       "stories": [
-        { "id": "AUTH-01", "title": "Database Connection & Mongoose Models", "status": "pending" },
-        { "id": "AUTH-02", "title": "Session middleware (hooks.server.ts)", "status": "pending" },
-        { "id": "AUTH-03", "title": "Login/Logout flow", "status": "pending" },
-        { "id": "AUTH-04", "title": "User Management (Admin CRUD)", "status": "pending" },
-        { "id": "AUTH-05", "title": "Roles, Permissions & Invites", "status": "pending" },
-        { "id": "AUTH-06", "title": "Layout Data & Permission Checks", "status": "pending" },
-        { "id": "AUTH-07", "title": "Demo Routes & Agent Activity", "status": "pending" }
+        { "id": "AUTH-01", "title": "Database Connection & Mongoose Models", "status": "done" },
+        { "id": "AUTH-02", "title": "Session middleware (hooks.server.ts)", "status": "done" },
+        { "id": "AUTH-03", "title": "Login/Logout flow", "status": "done" },
+        { "id": "AUTH-04", "title": "User Management (Admin CRUD)", "status": "done" },
+        { "id": "AUTH-05", "title": "Roles, Permissions & Invites", "status": "done" },
+        { "id": "AUTH-06", "title": "Layout Data & Permission Checks", "status": "done" },
+        { "id": "AUTH-07", "title": "Demo Routes & Agent Activity", "status": "done" }
       ]
     },
     {
@@ -20,10 +20,10 @@
       "prdFile": "DOMAIN-02-KANBAN.md",
       "dependencies": ["AUTH"],
       "stories": [
-        { "id": "KB-01", "title": "Projects CRUD", "status": "pending" },
-        { "id": "KB-02", "title": "Board View & Task CRUD", "status": "pending" },
-        { "id": "KB-03", "title": "Task Detail, Comments, Tags & Activity", "status": "pending" },
-        { "id": "KB-04", "title": "List View, Archived Tasks & Cron", "status": "pending" }
+        { "id": "KB-01", "title": "Projects CRUD", "status": "done" },
+        { "id": "KB-02", "title": "Board View & Task CRUD", "status": "done" },
+        { "id": "KB-03", "title": "Task Detail, Comments, Tags & Activity", "status": "done" },
+        { "id": "KB-04", "title": "List View, Archived Tasks & Cron", "status": "done" }
       ]
     },
     {
@@ -31,7 +31,7 @@
       "prdFile": "DOMAIN-03-CUSTOMERS.md",
       "dependencies": ["AUTH"],
       "stories": [
-        { "id": "CUST-01", "title": "Customer CRUD & Notes", "status": "pending" }
+        { "id": "CUST-01", "title": "Customer CRUD & Notes", "status": "done" }
       ]
     },
     {
@@ -39,9 +39,9 @@
       "prdFile": "DOMAIN-04-EQUIPMENT.md",
       "dependencies": ["AUTH"],
       "stories": [
-        { "id": "EQ-01", "title": "Fridges, Ovens & Temperature Monitoring", "status": "pending" },
-        { "id": "EQ-02", "title": "Decks, Cooling Trays & Consumables", "status": "pending" },
-        { "id": "EQ-03", "title": "Opentrons Robots, Protocols & Runs", "status": "pending" }
+        { "id": "EQ-01", "title": "Fridges, Ovens & Temperature Monitoring", "status": "done" },
+        { "id": "EQ-02", "title": "Decks, Cooling Trays & Consumables", "status": "done" },
+        { "id": "EQ-03", "title": "Opentrons Robots, Protocols & Runs", "status": "done" }
       ]
     },
     {
@@ -49,10 +49,10 @@
       "prdFile": "DOMAIN-05-DOCUMENTS.md",
       "dependencies": ["AUTH"],
       "stories": [
-        { "id": "DOC-01", "title": "Controlled Documents CRUD & Revisions", "status": "pending" },
-        { "id": "DOC-02", "title": "Approvals, Training & Electronic Signatures", "status": "pending" },
-        { "id": "DOC-03", "title": "Work Instructions", "status": "pending" },
-        { "id": "DOC-04", "title": "Document Repository, Upload & Box Integration", "status": "pending" }
+        { "id": "DOC-01", "title": "Controlled Documents CRUD & Revisions", "status": "done" },
+        { "id": "DOC-02", "title": "Approvals, Training & Electronic Signatures", "status": "done" },
+        { "id": "DOC-03", "title": "Work Instructions", "status": "done" },
+        { "id": "DOC-04", "title": "Document Repository, Upload & Box Integration", "status": "done" }
       ]
     },
     {
@@ -60,9 +60,9 @@
       "prdFile": "DOMAIN-06-INVENTORY.md",
       "dependencies": ["AUTH"],
       "stories": [
-        { "id": "INV-01", "title": "Part Definitions CRUD", "status": "pending" },
-        { "id": "INV-02", "title": "BOM Items & Folders", "status": "pending" },
-        { "id": "INV-03", "title": "Inventory Transactions & BOM Settings", "status": "pending" }
+        { "id": "INV-01", "title": "Part Definitions CRUD", "status": "done" },
+        { "id": "INV-02", "title": "BOM Items & Folders", "status": "done" },
+        { "id": "INV-03", "title": "Inventory Transactions & BOM Settings", "status": "done" }
       ]
     },
     {
@@ -70,12 +70,12 @@
       "prdFile": "DOMAIN-07-SPU.md",
       "dependencies": ["AUTH", "INVENTORY", "DOCUMENTS", "EQUIPMENT"],
       "stories": [
-        { "id": "SPU-01", "title": "SPU Dashboard & CRUD", "status": "pending" },
-        { "id": "SPU-02", "title": "SPU Detail Page", "status": "pending" },
-        { "id": "SPU-03", "title": "Assembly Sessions", "status": "pending" },
-        { "id": "SPU-04", "title": "Batches & Production Runs", "status": "pending" },
-        { "id": "SPU-05", "title": "Validation Sessions & Instruments", "status": "pending" },
-        { "id": "SPU-06", "title": "Devices & Particle Integration", "status": "pending" }
+        { "id": "SPU-01", "title": "SPU Dashboard & CRUD", "status": "done" },
+        { "id": "SPU-02", "title": "SPU Detail Page", "status": "done" },
+        { "id": "SPU-03", "title": "Assembly Sessions", "status": "done" },
+        { "id": "SPU-04", "title": "Batches & Production Runs", "status": "done" },
+        { "id": "SPU-05", "title": "Validation Sessions & Instruments", "status": "done" },
+        { "id": "SPU-06", "title": "Devices & Particle Integration", "status": "done" }
       ]
     },
     {
@@ -83,11 +83,11 @@
       "prdFile": "DOMAIN-08-MANUFACTURING.md",
       "dependencies": ["AUTH", "EQUIPMENT", "SPU"],
       "stories": [
-        { "id": "MFG-01", "title": "Manufacturing Dashboard, Lots & Process Config", "status": "pending" },
-        { "id": "MFG-02", "title": "Wax Filling Pipeline", "status": "pending" },
-        { "id": "MFG-03", "title": "Reagent Filling Pipeline", "status": "pending" },
-        { "id": "MFG-04", "title": "Assay Definitions", "status": "pending" },
-        { "id": "MFG-05", "title": "QA/QC, Laser Cutting, Top Seal, Materials & Settings", "status": "pending" }
+        { "id": "MFG-01", "title": "Manufacturing Dashboard, Lots & Process Config", "status": "done" },
+        { "id": "MFG-02", "title": "Wax Filling Pipeline", "status": "done" },
+        { "id": "MFG-03", "title": "Reagent Filling Pipeline", "status": "done" },
+        { "id": "MFG-04", "title": "Assay Definitions", "status": "done" },
+        { "id": "MFG-05", "title": "QA/QC, Laser Cutting, Top Seal, Materials & Settings", "status": "done" }
       ]
     },
     {
@@ -95,7 +95,7 @@
       "prdFile": "DOMAIN-09-SHIPPING.md",
       "dependencies": ["AUTH", "CUSTOMERS", "MANUFACTURING"],
       "stories": [
-        { "id": "SHIP-01", "title": "Shipping Page & Lot Management", "status": "pending" }
+        { "id": "SHIP-01", "title": "Shipping Page & Lot Management", "status": "done" }
       ]
     },
     {
@@ -103,8 +103,8 @@
       "prdFile": "DOMAIN-10-CARTRIDGE-LAB.md",
       "dependencies": ["AUTH", "MANUFACTURING"],
       "stories": [
-        { "id": "CART-01", "title": "Lab Cartridge List, Dashboard & Groups", "status": "pending" },
-        { "id": "CART-02", "title": "Firmware Devices, Firmware Cartridges & Test Results", "status": "pending" }
+        { "id": "CART-01", "title": "Lab Cartridge List, Dashboard & Groups", "status": "done" },
+        { "id": "CART-02", "title": "Firmware Devices, Firmware Cartridges & Test Results", "status": "done" }
       ]
     },
     {
@@ -112,10 +112,117 @@
       "prdFile": "DOMAIN-11-AGENT-API.md",
       "dependencies": ["AUTH", "KANBAN", "CUSTOMERS", "EQUIPMENT", "DOCUMENTS", "INVENTORY", "SPU", "MANUFACTURING", "SHIPPING", "CARTRIDGE_LAB"],
       "stories": [
-        { "id": "AGENT-01", "title": "Health, Schema & System Endpoints", "status": "pending" },
-        { "id": "AGENT-02", "title": "Messages & Query Engine", "status": "pending" },
-        { "id": "AGENT-03", "title": "Operations Dashboard & Domain APIs", "status": "pending" },
-        { "id": "AGENT-04", "title": "Approvals & Admin APIs", "status": "pending" }
+        { "id": "AGENT-01", "title": "Health, Schema & System Endpoints", "status": "done" },
+        { "id": "AGENT-02", "title": "Messages & Query Engine", "status": "done" },
+        { "id": "AGENT-03", "title": "Operations Dashboard & Domain APIs", "status": "done" },
+        { "id": "AGENT-04", "title": "Approvals & Admin APIs", "status": "done" }
+      ]
+    },
+    {
+      "id": "AGENT_API_SECURITY",
+      "prdFile": "AGENT-API-PHASE1-SECURITY.md",
+      "dependencies": ["AGENT_API"],
+      "stories": [
+        { "id": "ASEC-01", "title": "Agent API security hardening", "status": "done" },
+        { "id": "ASEC-02", "title": "Kanban CRUD agent endpoints", "status": "done" }
+      ]
+    },
+    {
+      "id": "DB_CLEANUP",
+      "prdFile": "../db-cleanup-plan.md",
+      "dependencies": [],
+      "stories": [
+        { "id": "DB-01", "title": "Drop 88 ghost collections (Tier 1)", "status": "done" },
+        { "id": "DB-02", "title": "Migrate 15 camelCase twins (Tier 2)", "status": "done" },
+        { "id": "DB-03", "title": "Resolve assaydefinitions schema divergence (Tier 3)", "status": "pending" },
+        { "id": "DB-04", "title": "Fix seed-domain-data.ts collection names", "status": "pending" }
+      ]
+    },
+    {
+      "id": "SEC_CORE",
+      "prdFile": "SEC-01-AUTH-CORE-FIXES.md",
+      "dependencies": ["AUTH"],
+      "stories": [
+        { "id": "SEC-01-01", "title": "Fix manufacturing layout try/catch", "status": "done" },
+        { "id": "SEC-01-02", "title": "Fix testResults permission string typo", "status": "done" },
+        { "id": "SEC-01-03", "title": "Replace roleName === admin hardcodes", "status": "done" },
+        { "id": "SEC-01-04", "title": "Consolidate requireApiKey into centralized import", "status": "done" }
+      ]
+    },
+    {
+      "id": "SEC_KANBAN",
+      "prdFile": "SEC-02-KANBAN-PERMISSIONS.md",
+      "dependencies": ["SEC_CORE"],
+      "stories": [
+        { "id": "SEC-02-01", "title": "Add requirePermission to kanban page loads", "status": "done" },
+        { "id": "SEC-02-02", "title": "Add kanban:write to mutation actions", "status": "done" }
+      ]
+    },
+    {
+      "id": "SEC_CUSTOMERS",
+      "prdFile": "SEC-03-CUSTOMER-PERMISSIONS.md",
+      "dependencies": ["SEC_CORE"],
+      "stories": [
+        { "id": "SEC-03-01", "title": "Add customer:read/write to customer routes", "status": "done" }
+      ]
+    },
+    {
+      "id": "SEC_DOCUMENTS",
+      "prdFile": "SEC-04-DOCUMENT-PERMISSIONS.md",
+      "dependencies": ["SEC_CORE"],
+      "stories": [
+        { "id": "SEC-04-01", "title": "Add document:read to document listing and detail loads", "status": "done" },
+        { "id": "SEC-04-02", "title": "Add document:train to training page", "status": "done" },
+        { "id": "SEC-04-03", "title": "Add workInstruction:read/write to instruction routes", "status": "done" }
+      ]
+    },
+    {
+      "id": "SEC_EQUIPMENT",
+      "prdFile": "SEC-05-EQUIPMENT-PERMISSIONS.md",
+      "dependencies": ["SEC_CORE"],
+      "stories": [
+        { "id": "SEC-05-01", "title": "Add equipment:read/write to equipment routes", "status": "done" },
+        { "id": "SEC-05-02", "title": "Add equipment:write to deck/tray CRUD actions", "status": "done" }
+      ]
+    },
+    {
+      "id": "SEC_MANUFACTURING",
+      "prdFile": "SEC-06-MANUFACTURING-PERMISSIONS.md",
+      "dependencies": ["SEC_CORE"],
+      "stories": [
+        { "id": "SEC-06-01", "title": "Add manufacturing:read to manufacturing sub-route loads", "status": "done" },
+        { "id": "SEC-06-02", "title": "Add manufacturing:write to lot/laser/consumable mutations", "status": "done" },
+        { "id": "SEC-06-03", "title": "Add opentrons permission checks to opentrons page routes", "status": "done" }
+      ]
+    },
+    {
+      "id": "SEC_SPU_MISC",
+      "prdFile": "SEC-07-SPU-MISC-PERMISSIONS.md",
+      "dependencies": ["SEC_CORE"],
+      "stories": [
+        { "id": "SEC-07-01", "title": "Add assay:read to assay detail/assign loads", "status": "done" },
+        { "id": "SEC-07-02", "title": "Add permission checks to receiving routes", "status": "done" },
+        { "id": "SEC-07-03", "title": "Add permission checks to build logs and box routes", "status": "done" },
+        { "id": "SEC-07-04", "title": "Add permission checks to particle settings", "status": "done" }
+      ]
+    },
+    {
+      "id": "SEC_ADMIN",
+      "prdFile": "SEC-08-ADMIN-TIER-CONTROLS.md",
+      "dependencies": ["SEC_CORE"],
+      "stories": [
+        { "id": "SEC-08-01", "title": "Assay lock/unlock requires manufacturing:admin", "status": "done" },
+        { "id": "SEC-08-02", "title": "Sacred document corrections require admin:full", "status": "deferred", "note": "No correction endpoints exist yet — will enforce when they are built" },
+        { "id": "SEC-08-03", "title": "Audit log page requires admin:full", "status": "done" }
+      ]
+    },
+    {
+      "id": "SEC_API",
+      "prdFile": "SEC-09-API-ENDPOINT-HARDENING.md",
+      "dependencies": ["SEC_CORE"],
+      "stories": [
+        { "id": "SEC-09-01", "title": "Remove or protect api/box/debug endpoint", "status": "done" },
+        { "id": "SEC-09-02", "title": "Add permission checks to bom/search, inventory/transactions, kanban/move APIs", "status": "done" }
       ]
     }
   ]

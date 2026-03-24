@@ -1,7 +1,9 @@
 import { connectDB, Document, User } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ url }) => {
+export const load: PageServerLoad = async ({ url, locals }) => {
+	requirePermission(locals.user, 'document:read');
 	await connectDB();
 	const selectedCategory = url.searchParams.get('category');
 

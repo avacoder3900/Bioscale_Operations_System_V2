@@ -1,9 +1,11 @@
 import { error, redirect, fail } from '@sveltejs/kit';
 import { connectDB, LotRecord, ProcessConfiguration } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
 	const lot = await LotRecord.findById(params.lotId).lean() as any;
@@ -45,6 +47,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 export const actions: Actions = {
 	updateLot: async ({ request, params, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -67,6 +70,7 @@ export const actions: Actions = {
 
 	addStep: async ({ request, params, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -88,6 +92,7 @@ export const actions: Actions = {
 
 	createLot: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();

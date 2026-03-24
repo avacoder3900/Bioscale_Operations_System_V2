@@ -1,8 +1,9 @@
 import { connectDB, Equipment, EquipmentLocation } from '$lib/server/db';
-import { isAdmin } from '$lib/server/permissions';
+import { isAdmin, requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
+	requirePermission(locals.user, 'equipment:read');
 	await connectDB();
 
 	const [locations, equipment] = await Promise.all([

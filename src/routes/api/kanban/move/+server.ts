@@ -1,10 +1,12 @@
 import { json } from '@sveltejs/kit';
 import { connectDB, KanbanTask } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
+import { requirePermission } from '$lib/server/permissions';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!locals.user) return json({ error: 'Unauthorized' }, { status: 401 });
+	requirePermission(locals.user, 'kanban:write');
 	await connectDB();
 
 	const { taskId, newStatus, sortOrder } = await request.json();

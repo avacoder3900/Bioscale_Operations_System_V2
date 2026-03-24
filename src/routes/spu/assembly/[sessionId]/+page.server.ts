@@ -1,5 +1,5 @@
 import { fail, error } from '@sveltejs/kit';
-import { requirePermission } from '$lib/server/permissions';
+import { requirePermission, hasPermission } from '$lib/server/permissions';
 import {
 	connectDB, AssemblySession, Spu, WorkInstruction, PartDefinition,
 	BomItem, InventoryTransaction, generateId
@@ -136,10 +136,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		};
 	});
 
-	const canRetract = !!(locals.user as any)?.permissions?.includes('inventory:retract')
-		|| !!(locals.user as any)?.roles?.some((r: any) =>
-			r.permissions?.includes('inventory:retract') || r.roleName === 'admin'
-		);
+	const canRetract = hasPermission(locals.user, 'inventory:retract') || hasPermission(locals.user, 'admin:full');
 
 	return {
 		session: {

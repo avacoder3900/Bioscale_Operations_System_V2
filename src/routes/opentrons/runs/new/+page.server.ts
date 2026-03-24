@@ -1,7 +1,11 @@
+import { redirect } from '@sveltejs/kit';
 import { connectDB, OpentronsRobot } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ url }) => {
+export const load: PageServerLoad = async ({ url, locals }) => {
+	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'manufacturing:write');
 	await connectDB();
 	const preselectedRobotId = url.searchParams.get('robotId');
 	const preselectedProtocolId = url.searchParams.get('protocolId');

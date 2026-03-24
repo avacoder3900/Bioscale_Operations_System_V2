@@ -1,9 +1,11 @@
 import { redirect } from '@sveltejs/kit';
 import { connectDB, KanbanTask } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'kanban:read');
 	await connectDB();
 
 	const project = url.searchParams.get('project');

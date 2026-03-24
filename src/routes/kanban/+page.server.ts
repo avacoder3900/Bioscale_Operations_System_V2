@@ -1,10 +1,12 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, KanbanTask, KanbanProject, AuditLog } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'kanban:read');
 	await connectDB();
 
 	const tasks = await KanbanTask.find({ archived: false }).sort({ sortOrder: 1 }).lean();
@@ -41,6 +43,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 export const actions: Actions = {
 	create: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
 		await connectDB();
 		const fd = await request.formData();
 		const title = fd.get('title') as string;
@@ -95,6 +98,7 @@ export const actions: Actions = {
 
 	move: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
 		await connectDB();
 		const fd = await request.formData();
 		const taskId = fd.get('taskId') as string;
@@ -137,6 +141,7 @@ export const actions: Actions = {
 
 	delete: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
 		await connectDB();
 		const fd = await request.formData();
 		const taskId = fd.get('taskId') as string;
