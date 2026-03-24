@@ -179,6 +179,8 @@ npx tsx scripts/seed.ts # Seed test data
 - **Don't use ObjectId** — all `_id` fields are nanoid strings
 - **Don't forget `await connectDB()`** — Mongoose connection is lazy
 - **Don't forget `.lean()`** — without it, Mongoose returns heavy documents
-- **Don't forget JSON serialization** — SvelteKit can't serialize Mongoose docs directly
+- **Don't forget JSON serialization** — SvelteKit can't serialize Mongoose docs directly. Always `JSON.parse(JSON.stringify(data))` before returning from load functions, especially for user objects in layouts.
 - **Don't modify .svelte files** — the UI layer is frozen
 - **Don't skip audit logging** — every mutation gets an AuditLog entry
+- **Don't forget `_id: false` on subdocument arrays** — Mongoose auto-adds ObjectId `_id` to every subdocument unless you opt out. ObjectId breaks SvelteKit serialization. Use `_id: false` for data-only subdocs, or `_id: { type: String, default: () => generateId() }` for trackable subdocs.
+- **Don't skip `requirePermission()`** — every load function and action needs it. See [SECURITY.md](SECURITY.md).

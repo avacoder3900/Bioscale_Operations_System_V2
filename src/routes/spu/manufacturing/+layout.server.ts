@@ -17,7 +17,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 	}
 
 	return {
-		user: locals.user,
+		user: JSON.parse(JSON.stringify(locals.user)),
 		isAdmin: hasPermission(locals.user, 'manufacturing:admin'),
 		processConfigs: configs.map((c) => ({
 			configId: c._id,

@@ -42,7 +42,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 	const canManageRoles = hasPermission(user, 'role:read');
 
 	return {
-		user,
+		user: JSON.parse(JSON.stringify(user)),
 		canAccessDocuments,
 		canAccessInventory,
 		canAccessCartridges,

@@ -13,7 +13,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 	const users = await User.find({}, { _id: 1, username: 1 }).lean();
 
 	return {
-		user: locals.user,
+		user: JSON.parse(JSON.stringify(locals.user)),
 		projects: projects.map((p) => ({
 			id: p._id, name: p.name, description: p.description ?? null,
 			color: p.color, isActive: p.isActive, sortOrder: p.sortOrder,

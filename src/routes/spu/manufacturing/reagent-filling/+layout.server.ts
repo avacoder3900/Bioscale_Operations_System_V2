@@ -19,7 +19,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 	).lean();
 
 	return {
-		user: locals.user,
+		user: JSON.parse(JSON.stringify(locals.user)),
 		robots: (robots as any[]).map((r) => ({
 			robotId: r._id, name: r.name, description: r.robotSide ?? null
 		})),

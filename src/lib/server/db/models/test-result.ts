@@ -11,6 +11,7 @@ const testResultSchema = new Schema({
 	status: { type: String, enum: ['uploaded', 'processing', 'completed', 'failed'] },
 	metadata: Schema.Types.Mixed,
 	readings: [{
+		_id: false,
 		readingNumber: Number, channel: { type: String, enum: ['A', 'B', 'C'] },
 		position: Number, temperature: Number, laserOutput: Number, timestampMs: Number,
 		f1: Number, f2: Number, f3: Number, f4: Number,

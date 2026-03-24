@@ -75,6 +75,7 @@ const userSchema = new Schema({
 	}],
 
 	communicationPreferences: [{
+		_id: false,
 		channel: String,
 		frequency: { type: String, enum: ['real_time', 'hourly_digest', 'daily_digest', 'urgent_only'] },
 		formatPreference: { type: String, enum: ['detailed', 'summary', 'bullet_points'] },
