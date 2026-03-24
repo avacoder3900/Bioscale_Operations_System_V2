@@ -75,18 +75,19 @@ export const actions: Actions = {
 			updatedAt: now
 		});
 
+		// Consume 1 roll per cutting run
 		const thermosealPartId = await resolvePartId('PT-CT-101');
 		if (thermosealPartId) {
 			await recordTransaction({
 				transactionType: 'consumption',
 				partDefinitionId: thermosealPartId,
-				quantity: acceptedCount,
+				quantity: 1,
 				manufacturingStep: 'cut_thermoseal',
 				manufacturingRunId: runId,
 				operatorId: locals.user._id,
 				operatorUsername: locals.user.username,
 				lotId: lotBarcode,
-				notes: `Cut thermoseal [${lotBarcode}]: ${acceptedCount} accepted of ${expectedSheets} expected`
+				notes: `Cut thermoseal [${lotBarcode}]: 1 roll consumed → ${acceptedCount} strips accepted of ${expectedSheets} expected`
 			});
 		}
 
