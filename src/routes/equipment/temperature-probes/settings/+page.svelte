@@ -113,6 +113,8 @@
 				<thead>
 					<tr class="border-b border-[var(--color-tron-border)] text-left text-[var(--color-tron-text-secondary)]">
 						<th class="px-4 py-3 font-medium">Sensor Name</th>
+						<th class="px-4 py-3 font-medium">Current °C</th>
+						<th class="px-4 py-3 font-medium">Battery</th>
 						<th class="px-4 py-3 font-medium">Mapped Equipment</th>
 						<th class="px-4 py-3 font-medium">Min °C</th>
 						<th class="px-4 py-3 font-medium">Max °C</th>
@@ -127,6 +129,24 @@
 							<td class="px-4 py-3">
 								<div class="font-medium text-[var(--color-tron-text)]">{sensor.sensorName}</div>
 								<div class="text-xs text-[var(--color-tron-text-secondary)]">{sensor.model}</div>
+							</td>
+							<td class="px-4 py-3 text-center">
+								{#if sensor.currentTemp != null}
+									<span class="font-mono text-sm font-bold {
+										sensor.temperatureMinC != null && sensor.currentTemp < sensor.temperatureMinC ? 'text-blue-400' :
+										sensor.temperatureMaxC != null && sensor.currentTemp > sensor.temperatureMaxC ? 'text-red-400' :
+										'text-emerald-400'
+									}">{sensor.currentTemp.toFixed(1)}°</span>
+								{:else}
+									<span class="text-xs text-[var(--color-tron-text-secondary)]">—</span>
+								{/if}
+							</td>
+							<td class="px-4 py-3 text-center text-xs">
+								{#if sensor.batteryLevel != null}
+									<span class="{sensor.batteryLevel > 50 ? 'text-emerald-400' : sensor.batteryLevel > 20 ? 'text-amber-400' : 'text-red-400'}">{sensor.batteryLevel}%</span>
+								{:else}
+									<span class="text-[var(--color-tron-text-secondary)]">—</span>
+								{/if}
 							</td>
 							<td class="px-4 py-3">
 								<select

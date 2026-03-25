@@ -39,8 +39,9 @@ export const load: PageServerLoad = async (event) => {
 			}).sort({ timestamp: -1 }).lean() as Promise<any[]>
 		]);
 
-		// Build 24h stats per equipment
+		// Build 24h stats per equipment + track latest battery/signal from readings
 		const statsByEquipment = new Map<string, { min: number; max: number; sum: number; count: number; sparkline: number[] }>();
+		const latestMetaByEquipment = new Map<string, { batteryLevel: number | null; signalLevel: number | null }>();
 		for (const r of recentReadingDocs) {
 			if (r.equipmentId && r.temperature != null) {
 				const key = String(r.equipmentId);
@@ -54,6 +55,24 @@ export const load: PageServerLoad = async (event) => {
 				stats.sum += r.temperature;
 				stats.count++;
 				stats.sparkline.push(r.temperature);
+				// Track battery/signal from most recent reading (first one since sorted desc)
+				if (!latestMetaByEquipment.has(key)) {
+					latestMetaByEquipment.set(key, {
+						batteryLevel: r.batteryLevel ?? null,
+						signalLevel: r.signalLevel ?? null
+					});
+				}
+			}
+		}
+		
+		// Also build battery/signal lookup by sensorId for unmapped sensors
+		const latestMetaBySensor = new Map<string, { batteryLevel: number | null; signalLevel: number | null }>();
+		for (const r of recentReadingDocs) {
+			if (r.sensorId && !latestMetaBySensor.has(r.sensorId)) {
+				latestMetaBySensor.set(r.sensorId, {
+					batteryLevel: r.batteryLevel ?? null,
+					signalLevel: r.signalLevel ?? null
+				});
 			}
 		}
 
@@ -103,9 +122,9 @@ export const load: PageServerLoad = async (event) => {
 				// Connection status
 				isOffline,
 				minutesSinceLastRead,
-				// Mocreo metadata
-				batteryLevel: e.mocreoMeta?.batteryLevel ?? null,
-				signalLevel: e.mocreoMeta?.signalLevel ?? null
+				// Battery/signal from readings or mocreoMeta
+				batteryLevel: latestMetaByEquipment.get(String(e._id))?.batteryLevel ?? latestMetaBySensor.get(e.mocreoDeviceId)?.batteryLevel ?? e.mocreoMeta?.batteryLevel ?? null,
+				signalLevel: latestMetaByEquipment.get(String(e._id))?.signalLevel ?? latestMetaBySensor.get(e.mocreoDeviceId)?.signalLevel ?? e.mocreoMeta?.signalLevel ?? null
 			};
 		});
 

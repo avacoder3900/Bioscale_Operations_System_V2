@@ -1,6 +1,6 @@
 export const config = { maxDuration: 60 };
 import { fail, redirect } from '@sveltejs/kit';
-import { connectDB, Equipment, SensorConfig, ManufacturingSettings, generateId, AuditLog } from '$lib/server/db';
+import { connectDB, Equipment, SensorConfig, ManufacturingSettings, TemperatureReading, generateId, AuditLog } from '$lib/server/db';
 import { isAdmin } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -18,6 +18,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const sensorConfigs = await SensorConfig.find().lean() as any[];
 	const sensorConfigMap = new Map<string, any>();
 	for (const sc of sensorConfigs) sensorConfigMap.set(sc._id, sc);
+
+	// Get latest reading per sensor for current temp + battery
+	const allReadings = await TemperatureReading.find({}).sort({ timestamp: -1 }).lean() as any[];
+	const latestReadingMap = new Map<string, any>();
+	for (const r of allReadings) {
+		if (r.sensorId && !latestReadingMap.has(r.sensorId)) {
+			latestReadingMap.set(r.sensorId, r);
+		}
+	}
 
 	// Get Mocreo sensors
 	let mocreoSensors: any[] = [];
@@ -41,10 +50,16 @@ export const load: PageServerLoad = async ({ locals }) => {
 			max: s.info?.temperature?.max != null ? s.info.temperature.max / 100 : null
 		};
 
+		// Get latest reading for this sensor
+		const latestReading = latestReadingMap.get(s.thingName);
+		
 		return {
 			sensorId: s.thingName,
 			sensorName: s.name,
 			model: s.model ?? 'ST5',
+			currentTemp: latestReading?.temperature ?? mappedEq?.currentTemperatureC ?? null,
+			batteryLevel: latestReading?.batteryLevel ?? s.batteryLevel ?? null,
+			signalLevel: latestReading?.signalLevel ?? s.signalLevel ?? null,
 			temperatureMinC: sc?.temperatureMinC ?? mappedEq?.temperatureMinC ?? null,
 			temperatureMaxC: sc?.temperatureMaxC ?? mappedEq?.temperatureMaxC ?? null,
 			alertsEnabled: sc?.alertsEnabled ?? true,
