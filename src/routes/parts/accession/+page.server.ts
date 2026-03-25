@@ -225,6 +225,55 @@ body { font-family: Arial, sans-serif; }
 		return { exportSuccess: true, html, count: parts.length };
 	},
 
+	registerBarcode: async ({ request, locals }) => {
+		requireAccessionPermission(locals.user);
+		await connectDB();
+
+		const form = await request.formData();
+		const partId = form.get('partId')?.toString();
+		const barcode = form.get('barcode')?.toString()?.trim();
+
+		if (!partId) return fail(400, { registerError: 'Part is required' });
+		if (!barcode) return fail(400, { registerError: 'Barcode is required' });
+
+		const part = await PartDefinition.findById(partId).lean() as any;
+		if (!part) return fail(404, { registerError: 'Part not found' });
+
+		// Check uniqueness — no other part should have this barcode
+		const existing = await PartDefinition.findOne({ barcode, _id: { $ne: partId } }).lean() as any;
+		if (existing) {
+			return fail(400, { registerError: `Barcode "${barcode}" is already assigned to ${existing.partNumber} (${existing.name})` });
+		}
+
+		const oldBarcode = part.barcode || null;
+		await PartDefinition.updateOne({ _id: partId }, { $set: { barcode } });
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'part_definitions',
+			recordId: partId,
+			action: 'UPDATE',
+			oldData: { barcode: oldBarcode },
+			newData: { barcode },
+			changedAt: new Date(),
+			changedBy: locals.user!.username,
+			changedFields: ['barcode'],
+			reason: oldBarcode
+				? 'Manual barcode re-registration via Part Accession'
+				: 'Manual barcode registration via Part Accession'
+		});
+
+		return {
+			registerSuccess: true,
+			registeredPartNumber: part.partNumber,
+			registeredPartName: part.name,
+			registeredBarcode: barcode,
+			registeredPartId: partId,
+			wasOverwrite: !!oldBarcode,
+			oldBarcode
+		};
+	},
+
 	quickScan: async ({ request, locals }) => {
 		requireAccessionPermission(locals.user);
 		try {
