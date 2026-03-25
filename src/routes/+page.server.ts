@@ -47,9 +47,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		(b: any) => b.expirationDate && new Date(b.expirationDate) <= thirtyDays
 	);
 
-	// SPU Parts — lowest inventory + build capacity
+	// SPU Parts — lowest inventory + build capacity (BOM parts only)
 	const spuParts = await PartDefinition.find({
 		isActive: true,
+		isBom: { $ne: false },
 		$or: [{ bomType: 'spu' }, { bomType: { $exists: false } }]
 	}).sort({ inventoryCount: 1 }).lean() as any[];
 

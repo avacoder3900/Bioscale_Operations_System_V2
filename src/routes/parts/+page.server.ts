@@ -8,13 +8,17 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'inventory:read');
 	await connectDB();
 
-	const [spuParts, cartridgePartDocs, boxInteg] = await Promise.all([
+	const [allSpuParts, cartridgePartDocs, boxInteg] = await Promise.all([
 		PartDefinition.find({ $or: [{ bomType: 'spu' }, { bomType: { $exists: false } }] })
 			.sort({ sortOrder: 1, partNumber: 1 }).lean(),
 		PartDefinition.find({ bomType: 'cartridge', isActive: true })
 			.sort({ partNumber: 1 }).lean(),
 		Integration.findOne({ type: 'box' }).lean()
 	]);
+
+	// Split SPU parts into BOM and non-BOM
+	const spuParts = (allSpuParts as any[]).filter((p: any) => p.isBom !== false);
+	const nonBomParts = (allSpuParts as any[]).filter((p: any) => p.isBom === false);
 
 	// Map SPU parts to expected shape
 	const items = (spuParts as any[]).map((p) => {
@@ -122,9 +126,22 @@ export const load: PageServerLoad = async ({ locals }) => {
 		.map(inventoryFields);
 	const lowestInventory = [...zeroOrNegative, ...lowPositive];
 
+	// Non-BOM parts mapped
+	const nonBomItems = nonBomParts.map((p: any) => ({
+		id: p._id,
+		partNumber: p.partNumber ?? '',
+		name: p.name ?? '',
+		category: p.category ?? null,
+		supplier: p.supplier ?? null,
+		inventoryCount: p.inventoryCount ?? 0,
+		unitCost: parseFloat(p.unitCost) || null,
+		barcode: p.barcode ?? null
+	}));
+
 	return {
 		items: itemsWithCost,
 		cartridgeParts,
+		nonBomItems,
 		cartridgeBomSummary,
 		lowStockItems,
 		lowestInventory,
