@@ -33,55 +33,32 @@
 	let qsBarcodeInput: HTMLInputElement | undefined = $state();
 	let qsLookupTimer: ReturnType<typeof setTimeout> | undefined;
 
-	// Part barcode scan state
-	let partScanBarcode = $state('');
-	let partScanStatus = $state<'idle' | 'checking' | 'found' | 'not-found'>('idle');
-	let partScanInfo = $state('');
+	// Scan Part Barcode to auto-select
+	let qsPartScan = $state('');
+	let qsPartScanStatus = $state<'idle' | 'checking' | 'found' | 'not-found'>('idle');
+	let qsPartScanInfo = $state('');
 
-	// Lookup state
-	let lookupBarcode = $state('');
-	let lookupResult = $state<any>(null);
-	let lookupStatus = $state<'idle' | 'checking' | 'found' | 'not-found'>('idle');
-
-	async function handleLookupScan(e: KeyboardEvent) {
+	async function handlePartScan(e: KeyboardEvent) {
 		if (e.key !== 'Enter') return;
-		const barcode = lookupBarcode.trim();
+		e.preventDefault();
+		const barcode = qsPartScan.trim();
 		if (!barcode) return;
-		lookupStatus = 'checking';
-		lookupResult = null;
-		try {
-			const res = await fetch(`/api/parts/lookup?barcode=${encodeURIComponent(barcode)}`);
-			if (res.ok) {
-				lookupResult = await res.json();
-				lookupStatus = 'found';
-			} else {
-				lookupStatus = 'not-found';
-			}
-		} catch {
-			lookupStatus = 'not-found';
-		}
-	}
-
-	async function handlePartBarcodeScan(e: KeyboardEvent) {
-		if (e.key !== 'Enter') return;
-		const barcode = partScanBarcode.trim();
-		if (!barcode) return;
-		partScanStatus = 'checking';
+		qsPartScanStatus = 'checking';
 		try {
 			const res = await fetch(`/api/parts/lookup-by-barcode?barcode=${encodeURIComponent(barcode)}`);
 			if (res.ok) {
-				const data = await res.json();
-				qsPartId = data.part._id;
-				partScanStatus = 'found';
-				partScanInfo = `${data.part.partNumber} — ${data.part.name}`;
+				const result = await res.json();
+				qsPartId = result.id;
+				qsPartScanStatus = 'found';
+				qsPartScanInfo = `${result.partNumber} — ${result.name}`;
 				setTimeout(() => qsBarcodeInput?.focus(), 50);
 			} else {
-				partScanStatus = 'not-found';
-				partScanInfo = `No part found for barcode ${barcode}`;
+				qsPartScanStatus = 'not-found';
+				qsPartScanInfo = `No part found for barcode "${barcode}"`;
 			}
 		} catch {
-			partScanStatus = 'not-found';
-			partScanInfo = 'Lookup failed — please retry';
+			qsPartScanStatus = 'not-found';
+			qsPartScanInfo = 'Lookup failed — check connection';
 		}
 	}
 
@@ -321,13 +298,13 @@
 			}}>
 				<div class="mb-4 flex items-end gap-3">
 					<div class="flex-1">
-						<label for="part-scan" class="block text-sm font-medium text-gray-700 mb-1">Scan Part Barcode</label>
-						<input id="part-scan" type="text" bind:value={partScanBarcode} onkeydown={handlePartBarcodeScan} onfocus={() => { partScanBarcode = ''; partScanStatus = 'idle'; partScanInfo = ''; }} placeholder="Scan part QR code..." class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
+						<label for="qs-part-scan" class="block text-sm font-medium text-gray-700 mb-1">Scan Part Barcode</label>
+						<input id="qs-part-scan" type="text" bind:value={qsPartScan} onkeydown={handlePartScan} onfocus={() => { qsPartScan = ''; qsPartScanStatus = 'idle'; qsPartScanInfo = ''; }} placeholder="Scan part barcode to auto-select..." class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
 					</div>
 					<div class="flex items-center gap-2 pb-0.5">
-						{#if partScanStatus === 'checking'}<span class="text-gray-400 text-sm">Checking...</span>{/if}
-						{#if partScanStatus === 'found'}<span class="text-green-600 text-sm">&#10003; {partScanInfo}</span>{/if}
-						{#if partScanStatus === 'not-found'}<span class="text-red-600 text-sm">{partScanInfo}</span>{/if}
+						{#if qsPartScanStatus === 'checking'}<span class="text-gray-400 text-sm">Checking...</span>{/if}
+						{#if qsPartScanStatus === 'found'}<span class="text-green-600 text-sm">✓ {qsPartScanInfo}</span>{/if}
+						{#if qsPartScanStatus === 'not-found'}<span class="text-red-600 text-sm">{qsPartScanInfo}</span>{/if}
 					</div>
 				</div>
 				<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -343,7 +320,7 @@
 					<div>
 						<label for="qs-barcode" class="block text-sm font-medium text-gray-700 mb-1">Bag Barcode</label>
 						<div class="relative">
-							<input id="qs-barcode" name="bagBarcode" type="text" bind:this={qsBarcodeInput} value={qsBagBarcode} oninput={(e) => handleBarcodeInput(e.currentTarget.value)} onfocus={() => { qsBagBarcode = ''; qsLookupStatus = 'idle'; qsLookupInfo = ''; }} required autofocus placeholder="Scan or type barcode" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm pr-8 focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
+							<input id="qs-barcode" name="bagBarcode" type="text" bind:this={qsBarcodeInput} value={qsBagBarcode} oninput={(e) => handleBarcodeInput(e.currentTarget.value)} required autofocus placeholder="Scan or type barcode" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm pr-8 focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
 							<span class="absolute right-2 top-2.5 text-gray-400">
 								{#if qsLookupStatus === 'checking'}⏳{:else if qsLookupStatus === 'available'}✅{:else if qsLookupStatus === 'exists'}⚠️{:else}🔍{/if}
 							</span>
@@ -400,57 +377,6 @@
 				</div>
 			</div>
 		{/if}
-	</div>
-
-	<!-- Barcode Lookup -->
-	<div class="bg-white rounded-lg shadow mb-6">
-		<div class="p-4 border-b">
-			<h2 class="text-lg font-semibold text-gray-900">🔍 Barcode Lookup</h2>
-			<p class="text-sm text-gray-500 mt-1">Scan any barcode to see part and lot info</p>
-		</div>
-		<div class="p-4">
-			<div class="flex items-end gap-3 mb-4">
-				<div class="flex-1">
-					<label for="lookup-barcode" class="block text-sm font-medium text-gray-700 mb-1">Scan Barcode</label>
-					<input id="lookup-barcode" type="text" bind:value={lookupBarcode} onkeydown={handleLookupScan} onfocus={() => { lookupBarcode = ''; lookupStatus = 'idle'; lookupResult = null; }} placeholder="Scan any barcode..." class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
-				</div>
-				{#if lookupStatus === 'checking'}<span class="text-gray-400 text-sm pb-2">Checking...</span>{/if}
-			</div>
-			{#if lookupStatus === 'found' && lookupResult}
-				<div class="bg-green-50 border border-green-200 rounded-lg p-4">
-					{#if lookupResult.type === 'lot'}
-						<div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-							<div><span class="text-gray-500">Type:</span> <strong>Receiving Lot</strong></div>
-							<div><span class="text-gray-500">Lot #:</span> <strong>{lookupResult.lot.lotNumber}</strong></div>
-							<div><span class="text-gray-500">Quantity:</span> <strong>{lookupResult.lot.quantity}</strong></div>
-							<div><span class="text-gray-500">Status:</span> <strong>{lookupResult.lot.status}</strong></div>
-						</div>
-						{#if lookupResult.partDetail}
-							<div class="mt-3 pt-3 border-t border-green-200 grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-								<div><span class="text-gray-500">Part:</span> <strong>{lookupResult.partDetail.partNumber}</strong></div>
-								<div><span class="text-gray-500">Name:</span> <strong>{lookupResult.partDetail.name}</strong></div>
-								<div><span class="text-gray-500">Category:</span> <strong>{lookupResult.partDetail.category ?? '—'}</strong></div>
-								<div><span class="text-gray-500">Inventory:</span> <strong>{lookupResult.partDetail.inventoryCount}</strong></div>
-							</div>
-						{/if}
-						<div class="mt-2 text-xs text-gray-500">
-							Received: {lookupResult.lot.createdAt ? new Date(lookupResult.lot.createdAt).toLocaleString() : '—'}
-						</div>
-					{:else if lookupResult.type === 'part'}
-						<div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-							<div><span class="text-gray-500">Type:</span> <strong>Part</strong></div>
-							<div><span class="text-gray-500">Part #:</span> <strong>{lookupResult.partDetail.partNumber}</strong></div>
-							<div><span class="text-gray-500">Name:</span> <strong>{lookupResult.partDetail.name}</strong></div>
-							<div><span class="text-gray-500">Inventory:</span> <strong>{lookupResult.partDetail.inventoryCount}</strong></div>
-						</div>
-					{/if}
-				</div>
-			{:else if lookupStatus === 'not-found'}
-				<div class="bg-red-50 border border-red-200 rounded-lg p-3">
-					<p class="text-red-800 text-sm">No part or lot found for barcode "{lookupBarcode}"</p>
-				</div>
-			{/if}
-		</div>
 	</div>
 
 	<!-- Unregistered Parts -->

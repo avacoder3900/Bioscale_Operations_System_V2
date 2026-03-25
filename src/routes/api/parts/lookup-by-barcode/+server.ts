@@ -14,7 +14,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
 	await connectDB();
 
-	const part = await PartDefinition.findOne({ barcode }).lean() as any;
+	const part = await PartDefinition.findOne({ barcode, isActive: true }).lean() as any;
 
 	if (!part) {
 		return json({ found: false }, { status: 404 });
@@ -22,13 +22,11 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
 	return json({
 		found: true,
-		part: {
-			_id: part._id,
-			partNumber: part.partNumber,
-			name: part.name,
-			category: part.category,
-			inventoryCount: part.inventoryCount,
-			barcode: part.barcode
-		}
+		id: part._id,
+		partNumber: part.partNumber ?? '',
+		name: part.name ?? '',
+		category: part.category ?? null,
+		barcode: part.barcode,
+		inventoryCount: part.inventoryCount ?? 0
 	});
 };
