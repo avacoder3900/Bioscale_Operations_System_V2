@@ -9,7 +9,10 @@ const equipmentSchema = new Schema({
 	// Fridge/oven specific
 	mocreoDeviceId: String, mocreoAssetId: String,
 	temperatureMinC: Number, temperatureMaxC: Number,
-	currentTemperatureC: Number, lastTemperatureReadAt: Date, notes: String,
+	currentTemperatureC: Number, lastTemperatureReadAt: Date,
+	alertsEnabled: { type: Boolean, default: false },
+	connectionTimeoutMinutes: { type: Number, default: 30 },
+	notes: String,
 	// Robot specific (mirrored from opentrons_robots for manufacturing use)
 	ip: String, port: Number, robotSide: String,
 	isActive: { type: Boolean, default: true },

@@ -65,3 +65,5 @@ export { ElectronicSignature } from './electronic-signature.js';
 export { InventoryTransaction } from './inventory-transaction.js';
 export { DeviceEvent } from './device-event.js';
 export { ManufacturingMaterialTransaction } from './manufacturing-material-transaction.js';
+export { TemperatureReading } from './temperature-reading.js';
+export { TemperatureAlert } from './temperature-alert.js';
