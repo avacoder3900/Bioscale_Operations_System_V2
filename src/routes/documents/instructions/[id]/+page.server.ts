@@ -1,4 +1,4 @@
-import { error, fail } from '@sveltejs/kit';
+import { error, fail, redirect } from '@sveltejs/kit';
 import { connectDB, WorkInstruction, ProductionRun, User, PartDefinition, generateId } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -130,7 +130,8 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 };
 
 export const actions: Actions = {
-	changeStatus: async ({ request, params }) => {
+	changeStatus: async ({ request, params, locals }) => {
+		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 		try {
 			const data = await request.formData();
@@ -148,6 +149,7 @@ export const actions: Actions = {
 	},
 
 	createRun: async ({ request, params, locals }) => {
+		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 		try {
 			const data = await request.formData();
@@ -194,6 +196,7 @@ export const actions: Actions = {
 	},
 
 	bulkCancelRuns: async ({ request, params, locals }) => {
+		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 		try {
 			const data = await request.formData();

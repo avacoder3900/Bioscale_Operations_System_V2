@@ -1,6 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, AssemblySession, Spu, WorkInstruction, User, generateId } from '$lib/server/db';
+import { connectDB, AssemblySession, Spu, WorkInstruction, User, generateId, AuditLog } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -58,6 +58,14 @@ export const actions: Actions = {
 
 		await Spu.updateOne({ _id: spuId }, {
 			$set: { status: 'assembling', assemblyStatus: 'in_progress' }
+		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assembly_sessions',
+			recordId: sessionId,
+			action: 'INSERT',
+			changedBy: locals.user?.username ?? locals.user?._id,
+			changedAt: new Date()
 		});
 
 		redirect(303, `/assembly/${sessionId}`);

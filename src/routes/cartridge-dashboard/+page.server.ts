@@ -1,5 +1,5 @@
 import { redirect } from '@sveltejs/kit';
-import { connectDB, CartridgeRecord, LabCartridge, CartridgeGroup, EquipmentLocation } from '$lib/server/db';
+import { connectDB, CartridgeRecord, LabCartridge, CartridgeGroup, Equipment } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
@@ -57,7 +57,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			currentPhase: { $nin: ['voided', 'completed', 'shipped'] }
 		}).sort({ 'reagentFilling.expirationDate': 1 }).limit(10).lean(),
 		// Fridge storage locations
-		EquipmentLocation.find({ locationType: 'fridge', isActive: true }).lean().catch(() => []),
+		Equipment.find({ equipmentType: 'fridge', status: { $ne: 'offline' } }).lean().catch(() => []),
 		// Weekly production (created in last 7 days)
 		CartridgeRecord.countDocuments({ createdAt: { $gte: sevenDaysAgo } }),
 		// Assay type breakdown
@@ -73,12 +73,32 @@ export const load: PageServerLoad = async ({ locals }) => {
 		LabCartridge.countDocuments()
 	]);
 
-	// Storage distribution (how many cartridges per fridge)
-	const storageCounts = await CartridgeRecord.aggregate([
-		{ $match: { 'storage.locationId': { $exists: true }, currentPhase: { $in: ['stored', 'wax_stored'] } } },
-		{ $group: { _id: '$storage.locationId', count: { $sum: 1 } } }
+	// Storage distribution — merge wax storage (waxStorage.location) and reagent storage (storage.fridgeName)
+	// Both fields store the fridge barcode string, not the equipment _id
+	const [waxStorageCounts, reagentStorageCounts] = await Promise.all([
+		CartridgeRecord.aggregate([
+			{ $match: { 'waxStorage.location': { $exists: true }, currentPhase: 'wax_stored' } },
+			{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
+		]),
+		CartridgeRecord.aggregate([
+			{ $match: { 'storage.fridgeName': { $exists: true }, currentPhase: 'stored' } },
+			{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
+		])
 	]);
-	const fridgeMap = new Map((fridges as any[]).map((f: any) => [String(f._id), f.displayName ?? f.barcode ?? String(f._id)]));
+	const mergedCounts = new Map<string, number>();
+	for (const s of [...waxStorageCounts as any[], ...reagentStorageCounts as any[]]) {
+		mergedCounts.set(s._id, (mergedCounts.get(s._id) ?? 0) + s.count);
+	}
+	const storageCounts = Array.from(mergedCounts.entries()).map(([k, v]) => ({ _id: k, count: v }));
+
+	// fridgeMap: keyed by barcode AND name so we can resolve any stored string back to a display name
+	const fridgeMap = new Map<string, string>();
+	const fridgeIdMap = new Map<string, string>(); // barcode/name → _id for detail links
+	for (const f of fridges as any[]) {
+		const label = f.name ?? f.barcode ?? String(f._id);
+		if (f.barcode) { fridgeMap.set(f.barcode, label); fridgeIdMap.set(f.barcode, String(f._id)); }
+		if (f.name) { fridgeMap.set(f.name, label); fridgeIdMap.set(f.name, String(f._id)); }
+	}
 
 	// Phase pipeline order for display
 	const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed'];
@@ -111,7 +131,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		reagentInspection: qcMap(reagentInspCounts as any[]),
 		assayBreakdown: (assayBreakdown as any[]).map((a: any) => ({ name: a._id, count: a.count })),
 		storageDistribution: (storageCounts as any[]).map((s: any) => ({
-			locationId: s._id,
+			locationId: fridgeIdMap.get(s._id) ?? s._id,
 			locationName: fridgeMap.get(s._id) ?? s._id,
 			count: s.count
 		})),

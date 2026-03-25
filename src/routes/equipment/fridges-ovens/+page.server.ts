@@ -8,10 +8,20 @@ export const load: PageServerLoad = async ({ locals }) => {
 	try {
 		await connectDB();
 
-		const [locations, equipment] = await Promise.all([
-			EquipmentLocation.find().sort({ displayName: 1 }).lean(),
-			Equipment.find().sort({ name: 1 }).lean()
+		const [equipmentDocs, locationDocs] = await Promise.all([
+			Equipment.find().sort({ name: 1 }).lean(),
+			EquipmentLocation.find().sort({ displayName: 1 }).lean()
 		]);
+
+		// Build a map of parentEquipmentId -> child locations
+		const childMap = new Map<string, any[]>();
+		for (const loc of locationDocs as any[]) {
+			if (loc.parentEquipmentId) {
+				const children = childMap.get(loc.parentEquipmentId) ?? [];
+				children.push(loc);
+				childMap.set(loc.parentEquipmentId, children);
+			}
+		}
 
 		// Compute occupant counts from CartridgeRecord (waxStorage.location and storage.fridgeName)
 		const [waxCounts, reagentCounts] = await Promise.all([
@@ -29,10 +39,65 @@ export const load: PageServerLoad = async ({ locals }) => {
 			occupantMap.set(s._id, (occupantMap.get(s._id) ?? 0) + s.count);
 		}
 
-		return {
-			locations: (locations as any[]).map((loc: any) => {
-				const key = loc.barcode ?? loc.displayName ?? String(loc._id);
+		// Helper: compute total occupants for an equipment and all its child locations
+		function getOccupantCount(equip: any, children: any[]): number {
+			let total = 0;
+			// Match by equipment name and barcode
+			const keys = [equip.barcode, equip.name].filter(Boolean);
+			for (const key of keys) {
+				total += occupantMap.get(key) ?? 0;
+			}
+			// Also count from child location barcodes and display names
+			for (const child of children) {
+				const childKeys = [child.barcode, child.displayName].filter(Boolean);
+				for (const key of childKeys) {
+					total += occupantMap.get(key) ?? 0;
+				}
+			}
+			return total;
+		}
+
+		// Helper: aggregate capacity from children (or use equipment's own capacity)
+		function getCapacity(equip: any, children: any[]): number | null {
+			if (equip.capacity) return equip.capacity;
+			if (children.length === 0) return null;
+			let total = 0;
+			let hasAny = false;
+			for (const child of children) {
+				if (child.capacity) { total += child.capacity; hasAny = true; }
+			}
+			return hasAny ? total : null;
+		}
+
+		// Return Equipment records as the primary "locations" list
+		// Includes ALL equipment types: fridge, oven, robot, deck, cooling_tray
+		const locations = (equipmentDocs as any[])
+			.map((equip: any) => {
+				const children = childMap.get(String(equip._id)) ?? [];
+				const capacity = getCapacity(equip, children);
 				return {
+					id: String(equip._id),
+					barcode: equip.barcode ?? null,
+					locationType: equip.equipmentType ?? null,
+					displayName: equip.name ?? null,
+					isActive: equip.status !== 'offline',
+					capacity,
+					notes: equip.notes ?? null,
+					createdAt: equip.createdAt?.toISOString?.() ?? equip.createdAt ?? null,
+					occupantCount: getOccupantCount(equip, children),
+					currentPlacements: []
+				};
+			});
+
+		// Also include any orphan EquipmentLocations without a parent (backward compat)
+		const parentedIds = new Set<string>();
+		for (const loc of locationDocs as any[]) {
+			if (loc.parentEquipmentId) parentedIds.add(String(loc._id));
+		}
+		for (const loc of locationDocs as any[]) {
+			if (!loc.parentEquipmentId) {
+				const key = loc.barcode ?? loc.displayName ?? String(loc._id);
+				locations.push({
 					id: loc._id,
 					barcode: loc.barcode ?? null,
 					locationType: loc.locationType ?? null,
@@ -51,20 +116,29 @@ export const load: PageServerLoad = async ({ locals }) => {
 						runId: p.runId ?? null,
 						notes: p.notes ?? null
 					}))
-				};
-			}),
-			equipmentSensors: (equipment as any[]).map((e: any) => ({
-				equipmentId: e._id,
-				name: e.name ?? null,
-				equipmentType: e.equipmentType ?? null,
-				status: e.status ?? 'active',
-				currentTemperatureC: e.currentTemperatureC ?? null,
-				temperatureMinC: e.temperatureMinC ?? null,
-				temperatureMaxC: e.temperatureMaxC ?? null,
-				lastTemperatureReadAt: e.lastTemperatureReadAt ?? null,
-				mocreoDeviceId: e.mocreoDeviceId ?? null,
-				mocreoAssetId: e.mocreoAssetId ?? null
-			})),
+				});
+			}
+		}
+
+		// Sort locations by displayName
+		locations.sort((a, b) => (a.displayName ?? '').localeCompare(b.displayName ?? ''));
+
+		return {
+			locations,
+			equipmentSensors: (equipmentDocs as any[])
+				.filter((e: any) => e.equipmentType === 'fridge' || e.equipmentType === 'oven') // temperature sensors are fridge/oven only
+				.map((e: any) => ({
+					equipmentId: e._id,
+					name: e.name ?? null,
+					equipmentType: e.equipmentType ?? null,
+					status: e.status ?? 'active',
+					currentTemperatureC: e.currentTemperatureC ?? null,
+					temperatureMinC: e.temperatureMinC ?? null,
+					temperatureMaxC: e.temperatureMaxC ?? null,
+					lastTemperatureReadAt: e.lastTemperatureReadAt ?? null,
+					mocreoDeviceId: e.mocreoDeviceId ?? null,
+					mocreoAssetId: e.mocreoAssetId ?? null
+				})),
 			isAdmin: isAdmin(locals.user)
 		};
 	} catch (err) {
@@ -90,20 +164,20 @@ export const actions: Actions = {
 		const notes = data.get('notes')?.toString()?.trim() || undefined;
 
 		if (!displayName) return fail(400, { error: 'Display name is required' });
-		if (!barcode) return fail(400, { error: 'Barcode is required' });
-		if (!locationType || !['fridge', 'oven'].includes(locationType)) {
-			return fail(400, { error: 'Invalid location type' });
+		if (!locationType || !['fridge', 'oven', 'robot', 'deck', 'cooling_tray'].includes(locationType)) {
+			return fail(400, { error: 'Invalid equipment type' });
 		}
 
 		const capacity = capacityStr ? parseInt(capacityStr, 10) : undefined;
 
-		const id = generateId();
-		await EquipmentLocation.create({
-			_id: id,
-			displayName,
+		// Create a parent Equipment record (the fridge/oven itself)
+		const equipId = generateId();
+		await Equipment.create({
+			_id: equipId,
+			name: displayName,
 			barcode,
-			locationType,
-			isActive: true,
+			equipmentType: locationType,
+			status: 'active',
 			capacity,
 			notes
 		});
@@ -111,10 +185,9 @@ export const actions: Actions = {
 		await AuditLog.create({
 			_id: generateId(),
 			action: 'INSERT',
-			tableName: 'equipment_location',
-			recordId: id,
+			tableName: 'equipment',
+			recordId: equipId,
 			changedBy: locals.user?.username ?? locals.user?._id,
-			
 			changedAt: new Date(),
 			newData: {}
 		});
@@ -135,18 +208,30 @@ export const actions: Actions = {
 		const notes = data.get('notes')?.toString()?.trim();
 		const isActiveStr = data.get('isActive')?.toString();
 
-		const update: Record<string, any> = {};
-		if (displayName) update.displayName = displayName;
-		if (capacityStr) update.capacity = parseInt(capacityStr, 10);
-		if (notes !== undefined) update.notes = notes || undefined;
-		if (isActiveStr !== undefined) update.isActive = isActiveStr === 'true';
+		// Try Equipment first, then EquipmentLocation
+		const equip = await Equipment.findById(id).lean();
+		if (equip) {
+			const update: Record<string, any> = {};
+			if (displayName) update.name = displayName;
+			if (capacityStr) update.capacity = parseInt(capacityStr, 10);
+			if (notes !== undefined) update.notes = notes || undefined;
+			if (isActiveStr !== undefined) update.status = isActiveStr === 'true' ? 'active' : 'offline';
 
-		const doc = await EquipmentLocation.findByIdAndUpdate(id, update, { new: true }).lean();
-		if (!doc) return fail(404, { error: 'Location not found' });
+			await Equipment.findByIdAndUpdate(id, update);
+		} else {
+			const update: Record<string, any> = {};
+			if (displayName) update.displayName = displayName;
+			if (capacityStr) update.capacity = parseInt(capacityStr, 10);
+			if (notes !== undefined) update.notes = notes || undefined;
+			if (isActiveStr !== undefined) update.isActive = isActiveStr === 'true';
+
+			const doc = await EquipmentLocation.findByIdAndUpdate(id, update, { new: true }).lean();
+			if (!doc) return fail(404, { error: 'Location not found' });
+		}
 
 		await AuditLog.create({
 			_id: generateId(),
-			tableName: 'equipment_location',
+			tableName: 'equipment',
 			recordId: id,
 			action: 'UPDATE',
 			changedBy: locals.user?.username ?? locals.user?._id,
@@ -164,20 +249,23 @@ export const actions: Actions = {
 		const id = data.get('id')?.toString();
 		if (!id) return fail(400, { error: 'Location ID is required' });
 
-		const doc = await EquipmentLocation.findByIdAndDelete(id).lean();
-		if (!doc) return fail(404, { error: 'Location not found' });
+		// Try Equipment first (hard delete), then EquipmentLocation
+		const equip = await Equipment.findByIdAndDelete(id).lean();
+		if (!equip) {
+			const doc = await EquipmentLocation.findByIdAndDelete(id).lean();
+			if (!doc) return fail(404, { error: 'Location not found' });
+		}
 
 		await AuditLog.create({
 			_id: generateId(),
 			action: 'DELETE',
-			tableName: 'equipment_location',
+			tableName: 'equipment',
 			recordId: id,
 			changedBy: locals.user?.username ?? locals.user?._id,
-			
 			changedAt: new Date(),
 			newData: {}
 		});
 
-		return { success: true, message: 'Location deleted' };
+		return { success: true, message: 'Equipment deleted' };
 	}
 };

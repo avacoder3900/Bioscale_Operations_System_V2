@@ -95,10 +95,9 @@
 	let coolingBypassError = $state('');
 
 	function handleCoolingBypass() {
-		// Check admin password (same pattern as manual edits in line inventory)
+		// Check admin password via server validation
 		const pw = coolingBypassPassword.trim();
 		if (!pw) { coolingBypassError = 'Enter admin password'; return; }
-		// Verify via server
 		fetch('/api/dev/validate-equipment?type=admin-password&id=' + encodeURIComponent(pw))
 			.then(r => r.json())
 			.then(d => {
@@ -106,6 +105,7 @@
 					coolingBypassed = true;
 					showCoolingBypass = false;
 					coolingBypassError = '';
+					coolingBypassPassword = '';
 				} else {
 					coolingBypassError = 'Invalid admin password';
 				}
@@ -487,7 +487,7 @@
 	const COOLING_REQUIRED_MS = 10 * 60 * 1000;
 	let coolingTick = $state(0);
 	$effect(() => {
-		if (data.runState.stage === 'QC' && data.runState.coolingConfirmedAt) {
+		if (data.runState.stage === 'QC' && data.runState.coolingConfirmedAt && !coolingBypassed) {
 			const interval = setInterval(() => { coolingTick++; }, 1000);
 			return () => clearInterval(interval);
 		}
@@ -495,10 +495,11 @@
 	const coolingConfirmedAt = $derived(data.runState.coolingConfirmedAt ? new Date(data.runState.coolingConfirmedAt) : null);
 	const coolingElapsedMs = $derived.by(() => {
 		void coolingTick;
+		if (coolingBypassed) return COOLING_REQUIRED_MS;
 		return coolingConfirmedAt ? Date.now() - coolingConfirmedAt.getTime() : COOLING_REQUIRED_MS;
 	});
 	const coolingRemainingMs = $derived(Math.max(0, COOLING_REQUIRED_MS - coolingElapsedMs));
-	const coolingComplete = $derived(coolingRemainingMs === 0);
+	const coolingComplete = $derived(coolingRemainingMs === 0 || coolingBypassed);
 	const coolingCountdown = $derived.by(() => {
 		const totalSec = Math.ceil(coolingRemainingMs / 1000);
 		const m = Math.floor(totalSec / 60);
@@ -1039,7 +1040,7 @@
 				createdAt: new Date(c.createdAt),
 				updatedAt: new Date(c.updatedAt)
 			}))}
-			{#if !previewParam && !coolingComplete && !coolingBypassed}
+			{#if !previewParam && !coolingComplete}
 				<div class="rounded-lg border border-blue-500/50 bg-blue-900/20 p-5 text-center">
 					<p class="text-sm font-medium text-blue-300">Cooling in progress — inspection locked</p>
 					<p class="mt-2 font-mono text-3xl font-bold text-blue-200">Cooling: {coolingCountdown} remaining before inspection</p>
@@ -1073,6 +1074,7 @@
 					onComplete={handleQCComplete}
 					readonly={isPreviewOrPast}
 					coolingConfirmedAt={previewParam ? null : (data.runState.coolingConfirmedAt ? new Date(data.runState.coolingConfirmedAt) : null)}
+					{coolingBypassed}
 				/>
 			{:else}
 				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">
@@ -1092,7 +1094,7 @@
 			<CompletionStorage
 				cartridges={storageCarts}
 				runSummary={summary}
-				fridges={previewParam ? [{ id: 'f1', displayName: 'Fridge 1', barcode: 'FRG-001' }, { id: 'f2', displayName: 'Fridge 2', barcode: 'FRG-002' }] : data.fridges}
+				fridges={data.fridges}
 				onRecordStorage={handleRecordStorage}
 				onComplete={handleCompleteRun}
 				readonly={isPreviewOrPast}

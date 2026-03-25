@@ -1,6 +1,6 @@
 import { redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, OpentronsRobot, WaxFillingRun } from '$lib/server/db';
+import { connectDB, Equipment, WaxFillingRun } from '$lib/server/db';
 import type { LayoutServerLoad } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -23,7 +23,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		await connectDB();
 
 		const [robots, activeRuns] = await Promise.all([
-			OpentronsRobot.find({ isActive: true }, { _id: 1, name: 1, robotSide: 1 }).sort({ name: 1 }).lean(),
+			Equipment.find({ equipmentType: 'robot', isActive: true }, { _id: 1, name: 1, robotSide: 1 }).sort({ name: 1 }).lean(),
 			WaxFillingRun.find(
 				{ status: { $in: ACTIVE_STAGES } },
 				{ 'robot._id': 1, status: 1, runStartTime: 1, runEndTime: 1, deckId: 1 }

@@ -9,7 +9,7 @@ export const GET: RequestHandler = async ({ request }) => {
 
 	const [equipment, locations] = await Promise.all([
 		Equipment.find().lean(),
-		EquipmentLocation.find().select('_id displayName locationType isActive').lean()
+		EquipmentLocation.find().select('_id displayName locationType isActive parentEquipmentId').lean()
 	]);
 
 	let active = 0, maintenance = 0, offline = 0;
@@ -21,6 +21,7 @@ export const GET: RequestHandler = async ({ request }) => {
 			id: e._id,
 			name: e.name,
 			type: e.equipmentType,
+			barcode: e.barcode ?? null,
 			location: e.location,
 			status: e.status,
 			temperatureC: e.currentTemperatureC,
@@ -32,7 +33,13 @@ export const GET: RequestHandler = async ({ request }) => {
 		success: true,
 		data: {
 			equipment: mapped,
-			locations: (locations as any[]).map(l => ({ id: l._id, name: l.displayName, type: l.locationType, isActive: l.isActive })),
+			locations: (locations as any[]).map(l => ({
+				id: l._id,
+				name: l.displayName,
+				type: l.locationType,
+				isActive: l.isActive,
+				parentEquipmentId: l.parentEquipmentId ?? null
+			})),
 			summary: { total: mapped.length, active, maintenance, offline }
 		}
 	});

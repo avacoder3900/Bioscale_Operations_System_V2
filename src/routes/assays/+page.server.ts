@@ -1,5 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { connectDB, AssayDefinition, CartridgeRecord, generateId } from '$lib/server/db';
+import { connectDB, AssayDefinition, CartridgeRecord, AuditLog, generateId } from '$lib/server/db';
 import { hasPermission, requirePermission } from '$lib/server/permissions';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -71,8 +71,9 @@ export const actions: Actions = {
 		if (!assayId) return fail(400, { error: 'Assay ID required' });
 		const original = await AssayDefinition.findById(assayId).lean() as any;
 		if (!original) return fail(404, { error: 'Assay not found' });
+		const newId = generateId();
 		await AssayDefinition.create({
-			_id: generateId(),
+			_id: newId,
 			name: `${original.name} (Copy)`,
 			skuCode: original.skuCode ? `${original.skuCode}-COPY` : undefined,
 			description: original.description,
@@ -81,6 +82,14 @@ export const actions: Actions = {
 			isActive: true,
 			reagents: original.reagents ?? [],
 			versionHistory: []
+		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assay_definitions',
+			recordId: newId,
+			action: 'INSERT',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
 		});
 		return { success: true };
 	},
@@ -93,6 +102,14 @@ export const actions: Actions = {
 		const assayId = form.get('assayId')?.toString();
 		if (!assayId) return fail(400, { error: 'Assay ID required' });
 		await AssayDefinition.updateOne({ _id: assayId }, { $set: { isActive: false } });
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assay_definitions',
+			recordId: assayId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
+		});
 		return { success: true };
 	}
 };

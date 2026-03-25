@@ -10,9 +10,10 @@
 		onComplete: (data: { rejectedCartridges: { cartridgeId: string; reasonCode: string }[] }) => void;
 		readonly?: boolean;
 		coolingConfirmedAt?: Date | null;
+		coolingBypassed?: boolean;
 	}
 
-	let { cartridges, rejectionCodes, onComplete, readonly: isReadonly = false, coolingConfirmedAt = null }: Props = $props();
+	let { cartridges, rejectionCodes, onComplete, readonly: isReadonly = false, coolingConfirmedAt = null, coolingBypassed = false }: Props = $props();
 
 	let rejected = new SvelteMap<string, string>();
 	let scanInput = $state('');
@@ -24,12 +25,13 @@
 	// 10-minute cooling gate
 	let coolTick = $state(0);
 	$effect(() => {
-		if (!coolingConfirmedAt) return;
+		if (!coolingConfirmedAt || coolingBypassed) return;
 		const interval = setInterval(() => { coolTick++; }, 1000);
 		return () => clearInterval(interval);
 	});
 	const coolingElapsedMs = $derived.by(() => {
 		void coolTick;
+		if (coolingBypassed) return COOLING_GATE_MIN * 60_000;
 		return coolingConfirmedAt ? Date.now() - coolingConfirmedAt.getTime() : Infinity;
 	});
 	const coolingRemainingMs = $derived(Math.max(0, COOLING_GATE_MIN * 60_000 - coolingElapsedMs));

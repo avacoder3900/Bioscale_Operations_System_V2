@@ -99,3 +99,5 @@ export const actions: Actions = {
 		throw redirect(303, `/spu/servicing/${(ticket as any)._id}`);
 	}
 };
+
+export const config = { maxDuration: 60 };

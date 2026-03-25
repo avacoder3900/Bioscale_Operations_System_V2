@@ -1,5 +1,5 @@
 import { redirect, fail } from '@sveltejs/kit';
-import { connectDB, LotRecord, BackingLot, EquipmentLocation, ManufacturingSettings, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, LotRecord, BackingLot, Equipment, EquipmentLocation, ManufacturingSettings, AuditLog, generateId } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
 export const config = { maxDuration: 60 };
@@ -11,13 +11,29 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const todayStart = new Date();
 	todayStart.setHours(0, 0, 0, 0);
 
-	const [recentLots, todayLots, activeBakingLots, ovens, settingsDoc] = await Promise.all([
+	const [recentLots, todayLots, activeBakingLots, equipOvens, locationOvens, settingsDoc] = await Promise.all([
 		LotRecord.find().sort({ createdAt: -1 }).limit(10).lean(),
 		LotRecord.find({ createdAt: { $gte: todayStart } }).lean(),
 		BackingLot.find({ status: { $in: ['in_oven', 'ready'] } }).sort({ ovenEntryTime: -1 }).lean(),
-		EquipmentLocation.find({ locationType: 'oven', isActive: true }).lean(),
+		// Ovens from Equipment collection (primary source of truth)
+		Equipment.find({ equipmentType: 'oven', status: { $ne: 'offline' } }).sort({ name: 1 }).lean(),
+		// Orphan EquipmentLocations of type oven (backward compat — should be empty after cleanup)
+		EquipmentLocation.find({ locationType: 'oven', isActive: true, parentEquipmentId: { $exists: false } }).lean(),
 		ManufacturingSettings.findById('default').lean()
 	]);
+	// Merge into a single ovens list
+	const ovens = [
+		...(equipOvens as any[]).map((e: any) => ({
+			_id: e._id,
+			displayName: e.name ?? e.barcode ?? String(e._id),
+			barcode: e.barcode ?? ''
+		})),
+		...(locationOvens as any[]).map((o: any) => ({
+			_id: o._id,
+			displayName: o.displayName ?? o.barcode ?? String(o._id),
+			barcode: o.barcode ?? ''
+		}))
+	];
 
 	// Build stats keyed by configId: { lotsToday, unitsToday }
 	const stats: Record<string, { lotsToday: number; unitsToday: number }> = {};
@@ -66,9 +82,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 		})),
 		stats,
 		bakingLots,
-		ovens: (ovens as any[]).map((o: any) => ({
+		ovens: ovens.map((o: any) => ({
 			id: String(o._id),
-			displayName: o.displayName ?? o.barcode ?? String(o._id),
+			displayName: o.displayName ?? o.name ?? o.barcode ?? String(o._id),
 			barcode: o.barcode ?? ''
 		})),
 		minOvenTimeMin
@@ -103,11 +119,16 @@ export const actions: Actions = {
 			}
 		}
 
-		// Look up oven name
+		// Look up oven name — check Equipment first (primary), then EquipmentLocation (backward compat)
 		let ovenLocationName: string | undefined;
 		if (ovenLocationId) {
-			const oven = await EquipmentLocation.findById(ovenLocationId, { displayName: 1, barcode: 1 }).lean() as any;
-			ovenLocationName = oven?.displayName ?? oven?.barcode ?? ovenLocationId;
+			const equipOven = await Equipment.findById(ovenLocationId, { name: 1, barcode: 1 }).lean() as any;
+			if (equipOven) {
+				ovenLocationName = equipOven.name ?? equipOven.barcode ?? ovenLocationId;
+			} else {
+				const locOven = await EquipmentLocation.findById(ovenLocationId, { displayName: 1, barcode: 1 }).lean() as any;
+				ovenLocationName = locOven?.displayName ?? locOven?.barcode ?? ovenLocationId;
+			}
 		}
 
 		const now = new Date();

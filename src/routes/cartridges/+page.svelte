@@ -135,7 +135,7 @@
 					</div>
 					<div>
 						<label class="tron-text-muted mb-1 block text-xs">Storage Location</label>
-						<input type="text" name="storageLocation" class="tron-input w-full" placeholder="e.g. Fridge A - Shelf 1" />
+						<input type="text" name="storageLocation" class="tron-input w-full" placeholder="e.g. Fridge 001 - Shelf 1" />
 					</div>
 					<div>
 						<label class="tron-text-muted mb-1 block text-xs">Storage Conditions</label>

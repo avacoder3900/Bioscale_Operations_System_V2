@@ -1,6 +1,6 @@
 import { redirect, fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, CartridgeRecord, AssayDefinition, Customer, ShippingLot, generateId } from '$lib/server/db';
+import { connectDB, CartridgeRecord, AssayDefinition, Customer, ShippingLot, generateId, AuditLog } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
 const PAGE_SIZE = 50;
@@ -95,6 +95,14 @@ export const actions: Actions = {
 			status: 'open',
 			cartridgeCount: 0
 		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'shipping_lots',
+			recordId: lot._id,
+			action: 'INSERT',
+			changedBy: locals.user?.username ?? locals.user?._id,
+			changedAt: new Date()
+		});
 
 		return { success: true, action: 'createLot', lotId: lot._id };
 	},
@@ -111,6 +119,14 @@ export const actions: Actions = {
 			{ _id: lotId },
 			{ $inc: { cartridgeCount: cartridgeIds.length } }
 		);
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'shipping_lots',
+			recordId: lotId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username ?? locals.user?._id,
+			changedAt: new Date()
+		});
 
 		return { success: true, message: `${cartridgeIds.length} cartridges added to lot` };
 	}

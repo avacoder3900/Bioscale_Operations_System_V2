@@ -436,6 +436,16 @@ export const actions: Actions = {
 				}
 			}
 
+			// Audit log for lot creation
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'receiving_lot',
+				recordId: lot._id,
+				action: 'INSERT',
+				changedBy: locals.user!.username,
+				changedAt: new Date()
+			});
+
 			// Audit log for override
 			if (overrideApplied) {
 				await AuditLog.create({
