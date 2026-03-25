@@ -36,10 +36,11 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		];
 	}
 
-	const [lots, transactions, ipRevisionDocs] = await Promise.all([
+	const [lots, transactions, ipRevisionDocs, receivingLots] = await Promise.all([
 		LotRecord.find({ partDefinitionId: params.partId }).sort({ createdAt: -1 }).lean(),
 		InventoryTransaction.find(txFilter).sort({ performedAt: -1 }).limit(200).lean(),
-		InspectionProcedureRevision.find({ partId: params.partId }).sort({ revisionNumber: -1 }).lean()
+		InspectionProcedureRevision.find({ partId: params.partId }).sort({ revisionNumber: -1 }).lean(),
+		ReceivingLot.find({ 'part._id': params.partId }).sort({ createdAt: -1 }).lean()
 	]);
 
 	// Build a map of lotId -> cocDocumentUrl for transactions that reference a receiving lot
@@ -166,6 +167,18 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 				transactionCount: all.length
 			};
 		})(),
+		receivingLots: JSON.parse(JSON.stringify((receivingLots as any[]).map((rl: any) => ({
+			id: rl._id,
+			lotNumber: rl.lotNumber ?? '',
+			lotId: rl.lotId ?? '',
+			quantity: rl.quantity ?? 0,
+			status: rl.status ?? 'pending',
+			operator: rl.operator?.username ?? null,
+			bagBarcode: rl.bagBarcode ?? null,
+			cocDocumentUrl: rl.cocDocumentUrl ?? null,
+			createdAt: rl.createdAt
+		})))),
+		receivingLotsTotalQty: (receivingLots as any[]).reduce((sum: number, rl: any) => sum + (rl.quantity ?? 0), 0),
 		versions,
 		auditEntries,
 		filters: { type: typeFilter, startDate, endDate, retracted: retractedFilter, operator: operatorFilter }

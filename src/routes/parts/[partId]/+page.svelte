@@ -8,7 +8,7 @@
 	const form = _form as any;
 
 	// Tab state
-	let activeTab = $state<'overview' | 'transactions'>('overview');
+	let activeTab = $state<'overview' | 'transactions' | 'receiving'>('overview');
 
 	// Filter state
 	let typeFilter = $state(data.filters.type ?? '');
@@ -174,6 +174,19 @@
 			Transaction History
 			{#if data.inventoryTransactions.length > 0}
 				<span class="tab-count">{data.inventoryTransactions.length}</span>
+			{/if}
+		</button>
+		<button
+			class="tab-btn"
+			class:active={activeTab === 'receiving'}
+			onclick={() => (activeTab = 'receiving')}
+		>
+			<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+			</svg>
+			Receiving Lots
+			{#if data.receivingLots?.length > 0}
+				<span class="tab-count">{data.receivingLots.length}</span>
 			{/if}
 		</button>
 	</div>
@@ -927,6 +940,61 @@
 				{/if}
 			</div>
 		{/if}
+	<!-- ===== RECEIVING LOTS TAB ===== -->
+	{#if activeTab === 'receiving'}
+		<div class="p-4">
+			{#if data.receivingLots?.length > 0}
+				<div class="mb-3 text-sm tron-text-muted">
+					Total received: <strong class="tron-text-primary">{data.receivingLotsTotalQty}</strong> units across {data.receivingLots.length} lot{data.receivingLots.length !== 1 ? 's' : ''}
+				</div>
+				<div class="overflow-x-auto">
+					<table class="w-full text-sm">
+						<thead>
+							<tr class="border-b" style="border-color: var(--color-tron-border);">
+								<th class="text-left p-2 font-medium tron-text-muted">Lot #</th>
+								<th class="text-left p-2 font-medium tron-text-muted">Barcode</th>
+								<th class="text-right p-2 font-medium tron-text-muted">Qty</th>
+								<th class="text-left p-2 font-medium tron-text-muted">Status</th>
+								<th class="text-left p-2 font-medium tron-text-muted">Operator</th>
+								<th class="text-left p-2 font-medium tron-text-muted">Date</th>
+								<th class="text-left p-2 font-medium tron-text-muted">CoC</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each data.receivingLots as lot}
+								<tr class="border-b hover:bg-white/5" style="border-color: var(--color-tron-border);">
+									<td class="p-2">
+										<a href="/receiving/{lot.id}" class="text-cyan-400 hover:underline font-mono text-xs">{lot.lotNumber}</a>
+									</td>
+									<td class="p-2 font-mono text-xs tron-text-muted">{lot.bagBarcode || lot.lotId || '—'}</td>
+									<td class="p-2 text-right tron-text-primary">{lot.quantity}</td>
+									<td class="p-2">
+										<span class="px-2 py-0.5 rounded text-xs font-medium" class:bg-green-900={lot.status === 'accepted'} class:text-green-300={lot.status === 'accepted'} class:bg-yellow-900={lot.status === 'pending'} class:text-yellow-300={lot.status === 'pending'} class:bg-red-900={lot.status === 'rejected'} class:text-red-300={lot.status === 'rejected'}>
+											{lot.status}
+										</span>
+									</td>
+									<td class="p-2 tron-text-muted">{lot.operator ?? '—'}</td>
+									<td class="p-2 tron-text-muted text-xs">{lot.createdAt ? new Date(lot.createdAt).toLocaleDateString() : '—'}</td>
+									<td class="p-2">
+										{#if lot.cocDocumentUrl}
+											<a href={lot.cocDocumentUrl} target="_blank" class="text-cyan-400 hover:underline text-xs">View CoC</a>
+										{:else}
+											<span class="tron-text-muted text-xs">—</span>
+										{/if}
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{:else}
+				<div class="empty-state">
+					<p class="tron-text-muted">No receiving lots recorded for this part.</p>
+					<p class="tron-text-muted text-xs mt-1">Use the <a href="/parts/accession" class="text-cyan-400 hover:underline">Part Accession</a> page to scan incoming inventory.</p>
+				</div>
+			{/if}
+		</div>
+	{/if}
 	</TronCard>
 </div>
 
