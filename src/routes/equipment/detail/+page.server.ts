@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, Equipment, DeviceEvent, generateId } from '$lib/server/db';
+import { connectDB, Equipment, DeviceEvent, TemperatureReading, generateId } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ url }) => {
@@ -39,6 +39,19 @@ export const load: PageServerLoad = async ({ url }) => {
 			.limit(50)
 			.lean() as any[];
 
+		// Fetch temperature history if equipment has a Mocreo sensor
+		let temperatureHistory: any[] = [];
+		if (equip.mocreoDeviceId) {
+			const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+			temperatureHistory = await TemperatureReading.find({
+				sensorId: equip.mocreoDeviceId,
+				timestamp: { $gte: oneDayAgo }
+			})
+				.sort({ timestamp: 1 })
+				.select('temperature humidity timestamp')
+				.lean() as any[];
+		}
+
 		return {
 			equipment: {
 				id: String(equip._id),
@@ -49,9 +62,15 @@ export const load: PageServerLoad = async ({ url }) => {
 				location: equip.location ?? null,
 				capacity: equip.capacity ?? null,
 				notes: equip.notes ?? null,
+				mocreoDeviceId: equip.mocreoDeviceId ?? null,
+				currentTemperatureC: equip.currentTemperatureC ?? null,
+				temperatureMinC: equip.temperatureMinC ?? null,
+				temperatureMaxC: equip.temperatureMaxC ?? null,
+				lastTemperatureReadAt: equip.lastTemperatureReadAt ?? null,
 				createdAt: equip.createdAt?.toISOString?.() ?? new Date().toISOString(),
 				updatedAt: equip.updatedAt?.toISOString?.() ?? new Date().toISOString()
 			},
+			temperatureHistory: JSON.parse(JSON.stringify(temperatureHistory)),
 			events: events.map((e) => ({
 				id: String(e._id),
 				equipmentId: String(e.deviceId ?? id),
