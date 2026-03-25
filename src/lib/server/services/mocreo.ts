@@ -100,8 +100,18 @@ export async function fetchAllSensors(): Promise<MocreoSensor[]> {
 	return (body.data ?? body) as MocreoSensor[];
 }
 
+/**
+ * Convert thingName (e.g. MC30AEA4004617) to the sample-endpoint node ID format
+ * (e.g. 0030aea400461700) — 16 chars, lowercase, MC→00 prefix, 00 suffix
+ */
+function toSampleNodeId(thingName: string): string {
+	if (thingName.length >= 16 && !thingName.startsWith('MC')) return thingName;
+	return '00' + thingName.slice(2).toLowerCase() + '00';
+}
+
 export async function fetchLatestReading(nodeId: string): Promise<MocreoSample | null> {
-	const body = await apiGet(`/nodes/${encodeURIComponent(nodeId)}/samples?limit=1`);
+	const sampleId = toSampleNodeId(nodeId);
+	const body = await apiGet(`/nodes/${encodeURIComponent(sampleId)}/samples?limit=1`);
 	const records: MocreoSample[] = body.data?.records ?? [];
 	return records[0] ?? null;
 }
@@ -111,8 +121,9 @@ export async function fetchHistory(
 	from: number,
 	to: number
 ): Promise<MocreoSample[]> {
+	const sampleId = toSampleNodeId(nodeId);
 	const body = await apiGet(
-		`/nodes/${encodeURIComponent(nodeId)}/samples?startTime=${from}&endTime=${to}&limit=1000`
+		`/nodes/${encodeURIComponent(sampleId)}/samples?startTime=${from}&endTime=${to}&limit=1000`
 	);
 	return body.data?.records ?? [];
 }
