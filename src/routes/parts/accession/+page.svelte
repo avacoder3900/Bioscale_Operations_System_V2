@@ -8,6 +8,20 @@
 	let assignAllResult = $state<any>(null);
 	let lastAssigned = $state<{ partNumber: string; barcode: string } | null>(null);
 
+	// Register Barcode state
+	let rbPartId = $state('');
+	let rbBarcode = $state('');
+	let rbRegistrations = $state<Array<{ partNumber: string; partName: string; barcode: string; wasOverwrite: boolean }>>([]);
+	let rbBarcodeInput: HTMLInputElement | undefined = $state();
+
+	// Derived: current barcode of selected part
+	let rbSelectedPart = $derived(
+		rbPartId ? [...data.registered, ...data.unregistered].find(p => p.id === rbPartId) : null
+	);
+	let rbCurrentBarcode = $derived(
+		rbSelectedPart && 'barcode' in rbSelectedPart ? (rbSelectedPart as any).barcode : null
+	);
+
 	// Quick Scan state
 	let qsPartId = $state('');
 	let qsBagBarcode = $state('');
@@ -122,11 +136,114 @@
 		</div>
 	{/if}
 
+	{#if form?.registerSuccess}
+		<div class="bg-green-50 border border-green-200 rounded-lg p-3 mb-4">
+			<p class="text-green-800 text-sm">
+				{#if form.wasOverwrite}
+					Barcode updated for <strong>{form.registeredPartNumber}</strong>: <span class="line-through text-gray-400">{form.oldBarcode}</span> &rarr; <strong class="font-mono">{form.registeredBarcode}</strong>
+				{:else}
+					Barcode <strong class="font-mono">{form.registeredBarcode}</strong> registered to <strong>{form.registeredPartNumber}</strong> ({form.registeredPartName})
+				{/if}
+			</p>
+		</div>
+	{/if}
+
+	{#if form?.registerError}
+		<div class="bg-red-50 border border-red-200 rounded-lg p-3 mb-4">
+			<p class="text-red-800 text-sm">{form.registerError}</p>
+		</div>
+	{/if}
+
 	{#if form?.error}
 		<div class="bg-red-50 border border-red-200 rounded-lg p-3 mb-4">
 			<p class="text-red-800 text-sm">{form.error}</p>
 		</div>
 	{/if}
+
+	<!-- Register Part Barcodes -->
+	<div class="bg-white rounded-lg shadow mb-6">
+		<div class="p-4 border-b">
+			<h2 class="text-lg font-semibold text-gray-900">📋 Register Part Barcodes</h2>
+			<p class="text-sm text-gray-500 mt-1">Scan your own physical barcode labels and link them to parts</p>
+		</div>
+		<div class="p-4">
+			<form method="POST" action="?/registerBarcode" use:enhance={() => {
+				return async ({ result, update }) => {
+					if (result.type === 'success' && result.data?.registerSuccess) {
+						rbRegistrations = [{
+							partNumber: result.data.registeredPartNumber,
+							partName: result.data.registeredPartName,
+							barcode: result.data.registeredBarcode,
+							wasOverwrite: result.data.wasOverwrite
+						}, ...rbRegistrations];
+						rbBarcode = '';
+						await update();
+						setTimeout(() => rbBarcodeInput?.focus(), 50);
+					} else {
+						await update();
+					}
+				};
+			}}>
+				<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+					<div>
+						<label for="rb-part" class="block text-sm font-medium text-gray-700 mb-1">Part</label>
+						<select id="rb-part" name="partId" bind:value={rbPartId} required class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+							<option value="">Select a part...</option>
+							{#each [...data.registered, ...data.unregistered] as part}
+								<option value={part.id}>{part.partNumber} — {part.name}</option>
+							{/each}
+						</select>
+						{#if rbCurrentBarcode}
+							<p class="text-xs text-amber-600 mt-1">Current barcode: <span class="font-mono">{rbCurrentBarcode}</span> — registering will overwrite</p>
+						{/if}
+					</div>
+					<div>
+						<label for="rb-barcode" class="block text-sm font-medium text-gray-700 mb-1">Scan Barcode</label>
+						<input id="rb-barcode" name="barcode" type="text" bind:this={rbBarcodeInput} bind:value={rbBarcode} onfocus={() => rbBarcode = ''} required placeholder="Scan physical barcode label" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
+					</div>
+					<div class="flex items-end">
+						<button type="submit" class="px-6 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 whitespace-nowrap" disabled={!rbPartId || !rbBarcode}>
+							Register
+						</button>
+					</div>
+				</div>
+			</form>
+		</div>
+
+		{#if rbRegistrations.length > 0}
+			<div class="border-t p-4">
+				<h3 class="text-sm font-semibold text-gray-700 mb-2">Just Registered ({rbRegistrations.length})</h3>
+				<div class="max-h-48 overflow-y-auto">
+					<table class="w-full text-sm">
+						<thead class="bg-gray-50">
+							<tr>
+								<th class="text-left p-2 font-medium text-gray-600">Part</th>
+								<th class="text-left p-2 font-medium text-gray-600">Name</th>
+								<th class="text-left p-2 font-medium text-gray-600">Barcode</th>
+								<th class="text-left p-2 font-medium text-gray-600">Status</th>
+							</tr>
+						</thead>
+						<tbody class="divide-y">
+							{#each rbRegistrations as reg}
+								<tr>
+									<td class="p-2 font-mono text-xs">{reg.partNumber}</td>
+									<td class="p-2">{reg.partName}</td>
+									<td class="p-2 font-mono text-xs">{reg.barcode}</td>
+									<td class="p-2 text-xs">
+										{#if reg.wasOverwrite}
+											<span class="text-amber-600">Overwritten</span>
+										{:else}
+											<span class="text-green-600">New</span>
+										{/if}
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		{/if}
+	</div>
 
 	<!-- Quick Scan Accession -->
 	<div class="bg-white rounded-lg shadow mb-6">
@@ -238,7 +355,7 @@
 					</button>
 				{:else}
 					<div class="flex items-center gap-2">
-						<span class="text-sm text-amber-600">Assign barcodes to all {data.unregistered.length} parts?</span>
+						<span class="text-sm text-amber-600">Assign system barcodes to all {data.unregistered.length} unregistered parts? This will NOT overwrite manually registered barcodes.</span>
 						<form method="POST" action="?/assignAll" use:enhance={() => {
 							return async ({ update }) => {
 								showAssignAllConfirm = false;
