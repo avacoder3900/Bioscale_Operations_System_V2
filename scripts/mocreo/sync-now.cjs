@@ -125,12 +125,13 @@ async function sync() {
     } catch (e) { /* skip failed sensors */ }
   }
 
-  // Check lost connections (lastSeen > 30 min ago)
+  // Check lost connections — use latest reading timestamp from DB, not API lastSeen
   for (const n of nodes) {
-    if (n.lastSeen) {
-      const lastSeenMs = typeof n.lastSeen === 'number' ? n.lastSeen : new Date(n.lastSeen).getTime();
-      const minutesAgo = (Date.now() - lastSeenMs) / 60000;
-      if (minutesAgo > 30) {
+    const latestReading = await db.collection('temperature_readings')
+      .findOne({ sensorId: n.thingName }, { sort: { timestamp: -1 } });
+    if (latestReading?.timestamp) {
+      const readingAge = (Date.now() - new Date(latestReading.timestamp).getTime()) / 60000;
+      if (readingAge > 30) {
         const existing = await db.collection('temperature_alerts').findOne({
           sensorId: n.thingName, alertType: 'lost_connection', acknowledged: false
         });
@@ -138,7 +139,7 @@ async function sync() {
           await db.collection('temperature_alerts').insertOne({ _id: nanoid(),
             sensorId: n.thingName, sensorName: n.name,
             alertType: 'lost_connection', actualValue: null,
-            minutesOffline: Math.round(minutesAgo),
+            minutesOffline: Math.round(readingAge),
             timestamp: new Date(), acknowledged: false
           });
         }
