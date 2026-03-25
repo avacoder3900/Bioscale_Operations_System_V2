@@ -351,11 +351,22 @@ export const actions: Actions = {
 		const alertId = data.get('alertId')?.toString();
 		if (!alertId) return fail(400, { error: 'Alert ID is required' });
 
-		await TemperatureAlert.findByIdAndUpdate(alertId, {
+		// Try string ID first (nanoid), then ObjectId
+		const mongoose = await import('mongoose');
+		const result = await TemperatureAlert.findByIdAndUpdate(alertId, {
 			acknowledged: true,
 			acknowledgedBy: { _id: locals.user?._id, username: locals.user?.username },
 			acknowledgedAt: new Date()
 		});
+		if (!result) {
+			// Fallback: try as ObjectId via raw collection
+			try {
+				await mongoose.default.connection.db!.collection('temperature_alerts').updateOne(
+					{ _id: new mongoose.default.Types.ObjectId(alertId) },
+					{ $set: { acknowledged: true, acknowledgedBy: { _id: locals.user?._id, username: locals.user?.username }, acknowledgedAt: new Date() } }
+				);
+			} catch { /* ignore */ }
+		}
 
 		return { success: true, dismissed: true };
 	},

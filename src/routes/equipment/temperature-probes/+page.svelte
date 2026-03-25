@@ -303,7 +303,9 @@
 							<span class="text-[var(--color-tron-text-secondary)]">({alert.equipmentName})</span>
 						{/if}
 					</span>
-					{#if alert.actualValue != null}
+					{#if alert.alertType === 'lost_connection'}
+						<span class="text-sm font-mono text-amber-300">Sensor not responding</span>
+					{:else if alert.actualValue != null}
 						<span class="text-sm font-mono text-red-300">{alert.actualValue.toFixed(1)}°C</span>
 						{#if alert.threshold != null}
 							<span class="text-xs text-[var(--color-tron-text-secondary)]">

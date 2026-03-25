@@ -3,6 +3,7 @@ const https = require('https');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
+const { nanoid } = require('nanoid');
 
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
@@ -100,7 +101,7 @@ async function sync() {
         for (const eq of equipDocs) {
           if (temp != null) {
             if (eq.temperatureMinC != null && temp < eq.temperatureMinC) {
-              await db.collection('temperature_alerts').insertOne({
+              await db.collection('temperature_alerts').insertOne({ _id: nanoid(),
                 sensorId: n.thingName, sensorName: n.name,
                 alertType: 'low_temp', threshold: eq.temperatureMinC, actualValue: temp,
                 equipmentId: String(eq._id), equipmentName: eq.name,
@@ -108,7 +109,7 @@ async function sync() {
               });
             }
             if (eq.temperatureMaxC != null && temp > eq.temperatureMaxC) {
-              await db.collection('temperature_alerts').insertOne({
+              await db.collection('temperature_alerts').insertOne({ _id: nanoid(),
                 sensorId: n.thingName, sensorName: n.name,
                 alertType: 'high_temp', threshold: eq.temperatureMaxC, actualValue: temp,
                 equipmentId: String(eq._id), equipmentName: eq.name,
@@ -134,9 +135,10 @@ async function sync() {
           sensorId: n.thingName, alertType: 'lost_connection', acknowledged: false
         });
         if (!existing) {
-          await db.collection('temperature_alerts').insertOne({
+          await db.collection('temperature_alerts').insertOne({ _id: nanoid(),
             sensorId: n.thingName, sensorName: n.name,
-            alertType: 'lost_connection', actualValue: Math.round(minutesAgo),
+            alertType: 'lost_connection', actualValue: null,
+            minutesOffline: Math.round(minutesAgo),
             timestamp: new Date(), acknowledged: false
           });
         }
