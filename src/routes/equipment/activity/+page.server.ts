@@ -177,6 +177,14 @@ export const load: PageServerLoad = async ({ locals }) => {
 		createdAt: r.createdAt
 	}));
 
+	// Robots from equipment collection
+	const robotDocs = (equipmentDocs as any[]).filter(e => e.equipmentType === 'robot');
+	const robots = robotDocs.map((r: any) => ({
+		robotId: String(r._id),
+		name: r.name ?? String(r._id),
+		status: r.status ?? 'active'
+	}));
+
 	return {
 		decks,
 		trays,
@@ -186,6 +194,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		activeWaxRuns,
 		activeReagentRuns,
 		waxRunHistory,
-		reagentRunHistory
+		reagentRunHistory,
+		robots
 	};
 };

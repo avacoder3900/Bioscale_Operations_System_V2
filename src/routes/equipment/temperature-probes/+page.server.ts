@@ -34,19 +34,29 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	}
 
 	// Get latest reading per sensor from DB (primary data source)
-	const latestReadings = await TemperatureReading.aggregate([
-		{ $sort: { timestamp: -1 } },
-		{
-			$group: {
-				_id: '$sensorId',
-				sensorName: { $first: '$sensorName' },
-				temperature: { $first: '$temperature' },
-				humidity: { $first: '$humidity' },
-				timestamp: { $first: '$timestamp' },
-				readingCount: { $sum: 1 }
-			}
+	// Use find + sort + manual grouping instead of aggregate (more reliable on serverless cold starts)
+	const allReadings = await TemperatureReading.find({})
+		.sort({ timestamp: -1 })
+		.lean() as any[];
+	
+	const latestBySensor = new Map<string, any>();
+	const countBySensor = new Map<string, number>();
+	for (const r of allReadings) {
+		const sid = r.sensorId;
+		countBySensor.set(sid, (countBySensor.get(sid) ?? 0) + 1);
+		if (!latestBySensor.has(sid)) {
+			latestBySensor.set(sid, r);
 		}
-	]);
+	}
+	
+	const latestReadings = [...latestBySensor.entries()].map(([sid, r]) => ({
+		_id: sid,
+		sensorName: r.sensorName,
+		temperature: r.temperature,
+		humidity: r.humidity,
+		timestamp: r.timestamp,
+		readingCount: countBySensor.get(sid) ?? 0
+	}));
 
 	// Optionally enrich with live Mocreo metadata (signal/battery)
 	// This uses try/catch so it degrades gracefully on Vercel (no filesystem)
