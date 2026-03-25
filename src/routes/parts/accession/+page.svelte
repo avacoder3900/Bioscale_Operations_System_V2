@@ -24,6 +24,30 @@
 	let partScanStatus = $state<'idle' | 'checking' | 'found' | 'not-found'>('idle');
 	let partScanInfo = $state('');
 
+	// Lookup state
+	let lookupBarcode = $state('');
+	let lookupResult = $state<any>(null);
+	let lookupStatus = $state<'idle' | 'checking' | 'found' | 'not-found'>('idle');
+
+	async function handleLookupScan(e: KeyboardEvent) {
+		if (e.key !== 'Enter') return;
+		const barcode = lookupBarcode.trim();
+		if (!barcode) return;
+		lookupStatus = 'checking';
+		lookupResult = null;
+		try {
+			const res = await fetch(`/api/parts/lookup?barcode=${encodeURIComponent(barcode)}`);
+			if (res.ok) {
+				lookupResult = await res.json();
+				lookupStatus = 'found';
+			} else {
+				lookupStatus = 'not-found';
+			}
+		} catch {
+			lookupStatus = 'not-found';
+		}
+	}
+
 	async function handlePartBarcodeScan(e: KeyboardEvent) {
 		if (e.key !== 'Enter') return;
 		const barcode = partScanBarcode.trim();
@@ -259,6 +283,57 @@
 				</div>
 			</div>
 		{/if}
+	</div>
+
+	<!-- Barcode Lookup -->
+	<div class="bg-white rounded-lg shadow mb-6">
+		<div class="p-4 border-b">
+			<h2 class="text-lg font-semibold text-gray-900">🔍 Barcode Lookup</h2>
+			<p class="text-sm text-gray-500 mt-1">Scan any barcode to see part and lot info</p>
+		</div>
+		<div class="p-4">
+			<div class="flex items-end gap-3 mb-4">
+				<div class="flex-1">
+					<label for="lookup-barcode" class="block text-sm font-medium text-gray-700 mb-1">Scan Barcode</label>
+					<input id="lookup-barcode" type="text" bind:value={lookupBarcode} onkeydown={handleLookupScan} onfocus={() => { lookupBarcode = ''; lookupStatus = 'idle'; lookupResult = null; }} placeholder="Scan any barcode..." class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
+				</div>
+				{#if lookupStatus === 'checking'}<span class="text-gray-400 text-sm pb-2">Checking...</span>{/if}
+			</div>
+			{#if lookupStatus === 'found' && lookupResult}
+				<div class="bg-green-50 border border-green-200 rounded-lg p-4">
+					{#if lookupResult.type === 'lot'}
+						<div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+							<div><span class="text-gray-500">Type:</span> <strong>Receiving Lot</strong></div>
+							<div><span class="text-gray-500">Lot #:</span> <strong>{lookupResult.lot.lotNumber}</strong></div>
+							<div><span class="text-gray-500">Quantity:</span> <strong>{lookupResult.lot.quantity}</strong></div>
+							<div><span class="text-gray-500">Status:</span> <strong>{lookupResult.lot.status}</strong></div>
+						</div>
+						{#if lookupResult.partDetail}
+							<div class="mt-3 pt-3 border-t border-green-200 grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+								<div><span class="text-gray-500">Part:</span> <strong>{lookupResult.partDetail.partNumber}</strong></div>
+								<div><span class="text-gray-500">Name:</span> <strong>{lookupResult.partDetail.name}</strong></div>
+								<div><span class="text-gray-500">Category:</span> <strong>{lookupResult.partDetail.category ?? '—'}</strong></div>
+								<div><span class="text-gray-500">Inventory:</span> <strong>{lookupResult.partDetail.inventoryCount}</strong></div>
+							</div>
+						{/if}
+						<div class="mt-2 text-xs text-gray-500">
+							Received: {lookupResult.lot.createdAt ? new Date(lookupResult.lot.createdAt).toLocaleString() : '—'}
+						</div>
+					{:else if lookupResult.type === 'part'}
+						<div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+							<div><span class="text-gray-500">Type:</span> <strong>Part</strong></div>
+							<div><span class="text-gray-500">Part #:</span> <strong>{lookupResult.partDetail.partNumber}</strong></div>
+							<div><span class="text-gray-500">Name:</span> <strong>{lookupResult.partDetail.name}</strong></div>
+							<div><span class="text-gray-500">Inventory:</span> <strong>{lookupResult.partDetail.inventoryCount}</strong></div>
+						</div>
+					{/if}
+				</div>
+			{:else if lookupStatus === 'not-found'}
+				<div class="bg-red-50 border border-red-200 rounded-lg p-3">
+					<p class="text-red-800 text-sm">No part or lot found for barcode "{lookupBarcode}"</p>
+				</div>
+			{/if}
+		</div>
 	</div>
 
 	<!-- Unregistered Parts -->
