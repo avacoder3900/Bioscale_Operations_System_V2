@@ -718,41 +718,34 @@
 							{@const padB = 10}
 							{@const plotW = chartW - padL - padR}
 							{@const plotH = chartH - padT - padB}
+							{@const step = plotW / (pts.length - 1)}
+							{@const fillPath = pts.map((v, i) => {
+								const x = padL + i * step;
+								const y = padT + plotH - ((v - minVal) / range) * plotH;
+								return `${i === 0 ? 'M' : 'L'} ${x},${y}`;
+							}).join(' ') + ` L ${padL + (pts.length-1)*step},${padT+plotH} L ${padL},${padT+plotH} Z`}
+							{@const linePath = pts.map((v, i) => {
+								const x = padL + i * step;
+								const y = padT + plotH - ((v - minVal) / range) * plotH;
+								return `${i === 0 ? 'M' : 'L'} ${x},${y}`;
+							}).join(' ')}
 							<div class="w-full mt-2 mb-1">
 								<svg viewBox="0 0 {chartW} {chartH}" class="w-full" preserveAspectRatio="xMidYMid meet" style="min-height: 80px;">
-									<!-- Y axis labels -->
 									<text x="{padL - 1}" y="{padT + 3}" text-anchor="end" fill="rgba(255,255,255,0.4)" font-size="3">{maxVal.toFixed(0)}°</text>
 									<text x="{padL - 1}" y="{padT + plotH}" text-anchor="end" fill="rgba(255,255,255,0.4)" font-size="3">{minVal.toFixed(0)}°</text>
-									<!-- X axis labels -->
 									<text x="{padL}" y="{chartH - 1}" text-anchor="start" fill="rgba(255,255,255,0.3)" font-size="2.5">24h ago</text>
 									<text x="{chartW - padR}" y="{chartH - 1}" text-anchor="end" fill="rgba(255,255,255,0.3)" font-size="2.5">now</text>
-									<!-- Grid lines -->
 									<line x1="{padL}" y1="{padT}" x2="{padL + plotW}" y2="{padT}" stroke="rgba(255,255,255,0.08)" stroke-width="0.3"/>
 									<line x1="{padL}" y1="{padT + plotH}" x2="{padL + plotW}" y2="{padT + plotH}" stroke="rgba(255,255,255,0.08)" stroke-width="0.3"/>
 									<line x1="{padL}" y1="{padT + plotH/2}" x2="{padL + plotW}" y2="{padT + plotH/2}" stroke="rgba(255,255,255,0.05)" stroke-width="0.3" stroke-dasharray="1,1"/>
-									<!-- Gradient fill -->
 									<defs>
 										<linearGradient id="sparkFill-{sensor.sensorId}" x1="0" y1="0" x2="0" y2="1">
 											<stop offset="0%" stop-color="rgb(20, 184, 166)" stop-opacity="0.3"/>
 											<stop offset="100%" stop-color="rgb(20, 184, 166)" stop-opacity="0.02"/>
 										</linearGradient>
 									</defs>
-									<!-- Fill area -->
-									{@const step = plotW / (pts.length - 1)}
-									{@const fillPath = pts.map((v, i) => {
-										const x = padL + i * step;
-										const y = padT + plotH - ((v - minVal) / range) * plotH;
-										return `${i === 0 ? 'M' : 'L'} ${x},${y}`;
-									}).join(' ') + ` L ${padL + (pts.length-1)*step},${padT+plotH} L ${padL},${padT+plotH} Z`}
 									<path d={fillPath} fill="url(#sparkFill-{sensor.sensorId})"/>
-									<!-- Line -->
-									{@const linePath = pts.map((v, i) => {
-										const x = padL + i * step;
-										const y = padT + plotH - ((v - minVal) / range) * plotH;
-										return `${i === 0 ? 'M' : 'L'} ${x},${y}`;
-									}).join(' ')}
 									<path d={linePath} fill="none" stroke="rgb(20, 184, 166)" stroke-width="0.8" stroke-linecap="round" stroke-linejoin="round"/>
-									<!-- Data points -->
 									{#each pts as v, i}
 										{@const x = padL + i * step}
 										{@const y = padT + plotH - ((v - minVal) / range) * plotH}
