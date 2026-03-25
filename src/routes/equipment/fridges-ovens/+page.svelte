@@ -106,6 +106,7 @@
 </script>
 
 <div class="space-y-6">
+	<a href="/equipment/activity" class="inline-flex items-center gap-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)] transition-colors">← Equipment Overview</a>
 	<div class="flex items-center justify-between">
 		<div>
 			<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Fridges & Ovens</h1>

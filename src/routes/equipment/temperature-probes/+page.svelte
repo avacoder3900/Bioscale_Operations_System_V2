@@ -1,276 +1,217 @@
 <script lang="ts">
-	interface Sensor {
-		equipmentId: string;
-		name: string;
-		equipmentType: string;
-		status: string;
-		currentTemperatureC: number | null;
-		temperatureMinC: number | null;
-		temperatureMaxC: number | null;
-		lastTemperatureReadAt: string | null;
-		mocreoDeviceId: string | null;
-		mocreoAssetId: string | null;
-		notes: string | null;
+	import { enhance } from '$app/forms';
+
+	interface MocreoSensor {
+		sensorId: string;
+		sensorName: string;
+		model: string;
+		temperature: number | null;
+		humidity: number | null;
+		lastReadingAt: string | null;
+		readingCount: number;
+		mappedEquipmentId: string | null;
+		mappedEquipmentName: string | null;
+		mappedEquipmentType: string | null;
 	}
 
-	interface Reading {
+	interface EquipmentItem {
 		id: string;
-		equipmentId: string;
-		temperatureC: number | null;
-		description: string | null;
-		createdAt: string;
+		name: string;
+		equipmentType: string;
+		mocreoDeviceId: string | null;
+		currentTemperatureC: number | null;
+		lastTemperatureReadAt: string | null;
+		temperatureMinC: number | null;
+		temperatureMaxC: number | null;
 	}
 
 	interface Props {
-		data: { sensors: Sensor[]; recentReadings: Reading[]; isAdmin: boolean };
+		data: {
+			mocreoSensors: MocreoSensor[];
+			equipment: EquipmentItem[];
+			totalReadings: number;
+			isAdmin: boolean;
+		};
+		form: { success?: boolean; error?: string } | null;
 	}
 
-	let { data }: Props = $props();
+	let { data, form }: Props = $props();
+	let mappingFor = $state<string | null>(null);
+	let selectedEquipmentId = $state('');
 
-	let fridgeSensors = $derived(data.sensors.filter((s) => s.equipmentType === 'fridge'));
-	let ovenSensors = $derived(data.sensors.filter((s) => s.equipmentType === 'oven'));
-	let linkedCount = $derived(data.sensors.filter((s) => s.mocreoDeviceId).length);
-
-	function getTempStatus(sensor: Sensor): 'normal' | 'low' | 'high' | 'unknown' {
-		if (sensor.currentTemperatureC == null) return 'unknown';
-		if (sensor.temperatureMinC != null && sensor.currentTemperatureC < sensor.temperatureMinC) return 'low';
-		if (sensor.temperatureMaxC != null && sensor.currentTemperatureC > sensor.temperatureMaxC) return 'high';
-		return 'normal';
+	function tempColor(temp: number | null, min?: number | null, max?: number | null): string {
+		if (temp == null) return 'text-[var(--color-tron-text-secondary)]';
+		if (min != null && temp < min) return 'text-blue-400';
+		if (max != null && temp > max) return 'text-red-400';
+		return 'text-green-400';
 	}
 
-	function tempStatusClass(status: 'normal' | 'low' | 'high' | 'unknown'): string {
-		switch (status) {
-			case 'normal': return 'text-green-300 bg-green-900/30 border-green-500/30';
-			case 'low': return 'text-blue-300 bg-blue-900/30 border-blue-500/30';
-			case 'high': return 'text-red-300 bg-red-900/30 border-red-500/30';
-			case 'unknown': return 'text-[var(--color-tron-text-secondary)] bg-[var(--color-tron-surface)] border-[var(--color-tron-border)]';
+	function formatTemp(temp: number | null): string {
+		if (temp == null) return '—';
+		return temp.toFixed(1) + '°C';
+	}
+
+	function timeAgo(dateStr: string | null): string {
+		if (!dateStr) return 'Never';
+		const diff = Date.now() - new Date(dateStr).getTime();
+		const mins = Math.floor(diff / 60000);
+		if (mins < 1) return 'Just now';
+		if (mins < 60) return mins + 'm ago';
+		const hrs = Math.floor(mins / 60);
+		if (hrs < 24) return hrs + 'h ago';
+		return Math.floor(hrs / 24) + 'd ago';
+	}
+
+	function typeIcon(type: string | null): string {
+		switch (type) {
+			case 'fridge': return '🧊';
+			case 'oven': return '🔥';
+			case 'robot': return '🤖';
+			default: return '🌡️';
 		}
 	}
 
-	function tempStatusLabel(status: 'normal' | 'low' | 'high' | 'unknown'): string {
-		switch (status) {
-			case 'normal': return 'Normal';
-			case 'low': return 'Below Range';
-			case 'high': return 'Above Range';
-			case 'unknown': return 'No Data';
-		}
-	}
-
-	function formatTempTime(iso: string | null): string {
-		if (!iso) return 'Never';
-		const d = new Date(iso);
-		const now = Date.now();
-		const diffMs = now - d.getTime();
-		if (diffMs < 60000) return 'Just now';
-		if (diffMs < 3600000) return `${Math.floor(diffMs / 60000)}m ago`;
-		if (diffMs < 86400000) return `${Math.floor(diffMs / 3600000)}h ago`;
-		return d.toLocaleDateString();
-	}
+	const unmappedEquipment = $derived(
+		data.equipment.filter(e => !e.mocreoDeviceId && ['fridge', 'oven'].includes(e.equipmentType))
+	);
 </script>
 
-<div class="space-y-8">
-	<!-- Header -->
-	<div>
-		<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Temperature Probes</h1>
-		<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">
-			MOCREO Smart System temperature sensors linked to fridges and ovens.
-			<span class="ml-2 font-mono text-[var(--color-tron-cyan)]">{data.sensors.length} probe{data.sensors.length !== 1 ? 's' : ''}</span>
-			<span class="mx-1 text-[var(--color-tron-text-secondary)]">/</span>
-			<span class="font-mono {linkedCount > 0 ? 'text-green-300' : 'text-[var(--color-tron-text-secondary)]'}">{linkedCount} linked</span>
-		</p>
-	</div>
-
-	<!-- Status Summary Cards -->
-	<div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 text-center">
-			<p class="text-2xl font-bold text-[var(--color-tron-text)]">{data.sensors.length}</p>
-			<p class="text-xs text-[var(--color-tron-text-secondary)]">Total Probes</p>
-		</div>
-		<div class="rounded-lg border border-green-500/30 bg-green-900/10 p-4 text-center">
-			<p class="text-2xl font-bold text-green-300">{linkedCount}</p>
-			<p class="text-xs text-green-300/70">MOCREO Linked</p>
-		</div>
-		<div class="rounded-lg border border-blue-500/30 bg-blue-900/10 p-4 text-center">
-			<p class="text-2xl font-bold text-blue-300">{fridgeSensors.length}</p>
-			<p class="text-xs text-blue-300/70">Fridge Probes</p>
-		</div>
-		<div class="rounded-lg border border-orange-500/30 bg-orange-900/10 p-4 text-center">
-			<p class="text-2xl font-bold text-orange-300">{ovenSensors.length}</p>
-			<p class="text-xs text-orange-300/70">Oven Probes</p>
-		</div>
-	</div>
-
-	<!-- Probe Cards -->
-	{#if data.sensors.length === 0}
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-12 text-center">
-			<svg class="mx-auto mb-4 h-12 w-12 text-[var(--color-tron-text-secondary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-				<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
-			</svg>
+<div class="space-y-6">
+	<!-- Header with back button -->
+	<div class="flex items-center gap-4">
+		<a href="/equipment/activity" class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)] transition-colors">
+			← Equipment
+		</a>
+		<div>
+			<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Temperature Probes</h1>
 			<p class="text-sm text-[var(--color-tron-text-secondary)]">
-				No temperature probes configured yet. Register equipment in the Fridges & Ovens tab to create probe entries.
+				{data.mocreoSensors.length} Mocreo sensors • {data.totalReadings} total readings stored
 			</p>
 		</div>
-	{:else}
-		<div class="space-y-3">
-			{#each data.sensors as sensor (sensor.equipmentId)}
-				{@const status = getTempStatus(sensor)}
-				<div class="rounded-lg border border-l-4 border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] {sensor.equipmentType === 'fridge' ? 'border-l-blue-500' : 'border-l-orange-500'}">
-					<div class="p-4">
-						<div class="flex items-center justify-between">
-							<div class="flex-1">
-								<div class="flex items-center gap-3">
-									<!-- Icon -->
-									<div class="flex h-10 w-10 items-center justify-center rounded-lg {sensor.equipmentType === 'fridge' ? 'bg-blue-500/20' : 'bg-orange-500/20'}">
-										{#if sensor.equipmentType === 'fridge'}
-											<svg class="h-5 w-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-												<path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-											</svg>
-										{:else}
-											<svg class="h-5 w-5 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-												<path stroke-linecap="round" stroke-linejoin="round" d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z" />
-											</svg>
-										{/if}
-									</div>
+	</div>
 
-									<!-- Name & badges -->
-									<div>
-										<div class="flex items-center gap-2">
-											<span class="text-sm font-semibold text-[var(--color-tron-text)]">{sensor.name}</span>
-											<span class="rounded border px-2 py-0.5 text-[10px] font-bold uppercase {sensor.equipmentType === 'fridge'
-												? 'border-blue-500/40 bg-blue-900/30 text-blue-300'
-												: 'border-orange-500/40 bg-orange-900/30 text-orange-300'}">
-												{sensor.equipmentType}
-											</span>
-											<span class="rounded border px-2 py-0.5 text-[10px] font-medium {tempStatusClass(status)}">
-												{tempStatusLabel(status)}
-											</span>
-										</div>
-										<div class="mt-1 flex items-center gap-4 text-xs text-[var(--color-tron-text-secondary)]">
-											<span class="font-mono">{sensor.equipmentId}</span>
-											{#if sensor.temperatureMinC != null && sensor.temperatureMaxC != null}
-												<span>
-													Range: <span class="font-mono text-[var(--color-tron-text)]">{sensor.temperatureMinC}°C — {sensor.temperatureMaxC}°C</span>
-												</span>
-											{/if}
-											<span>Last read: {formatTempTime(sensor.lastTemperatureReadAt)}</span>
-										</div>
-									</div>
+	{#if form?.success}
+		<div class="rounded border border-green-500/30 bg-green-900/20 px-4 py-3 text-sm text-green-300">✓ Sensor mapping updated.</div>
+	{/if}
+	{#if form?.error}
+		<div class="rounded border border-red-500/30 bg-red-900/20 px-4 py-3 text-sm text-red-300">{form.error}</div>
+	{/if}
+
+	<!-- All Mocreo Sensors -->
+	<section>
+		<h2 class="mb-3 text-lg font-medium text-[var(--color-tron-cyan)]">Mocreo Sensors ({data.mocreoSensors.length})</h2>
+		
+		{#if data.mocreoSensors.length === 0}
+			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">
+				<p class="text-sm text-[var(--color-tron-text-secondary)]">No Mocreo sensors found. Check API connection.</p>
+			</div>
+		{:else}
+			<div class="space-y-3">
+				{#each data.mocreoSensors as sensor (sensor.sensorId)}
+					<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
+						<div class="flex items-start justify-between gap-4">
+							<!-- Sensor info -->
+							<div class="flex-1">
+								<div class="flex items-center gap-2">
+									<span class="text-lg">{sensor.mappedEquipmentType ? typeIcon(sensor.mappedEquipmentType) : '📡'}</span>
+									<h3 class="font-semibold text-[var(--color-tron-text)]">{sensor.sensorName}</h3>
+									<span class="rounded bg-[var(--color-tron-surface)] px-1.5 py-0.5 text-[10px] font-mono text-[var(--color-tron-text-secondary)] border border-[var(--color-tron-border)]">{sensor.model}</span>
 								</div>
+								<p class="mt-1 font-mono text-xs text-[var(--color-tron-text-secondary)]">ID: {sensor.sensorId}</p>
+								
+								{#if sensor.mappedEquipmentName}
+									<p class="mt-1 text-xs">
+										<span class="text-[var(--color-tron-text-secondary)]">Mapped to:</span>
+										<span class="text-[var(--color-tron-cyan)] font-medium">{sensor.mappedEquipmentName}</span>
+									</p>
+								{:else}
+									<p class="mt-1 text-xs text-amber-400/70">⚠ Not mapped to any equipment</p>
+								{/if}
 							</div>
 
 							<!-- Temperature display -->
-							<div class="flex items-center gap-4">
-								{#if sensor.currentTemperatureC != null}
-									<div class="flex flex-col items-end">
-										<span class="inline-flex items-center gap-1.5 rounded-full border px-4 py-1.5 font-mono text-lg font-bold {tempStatusClass(status)}">
-											{#if status === 'high'}
-												<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-													<path stroke-linecap="round" stroke-linejoin="round" d="M5 15l7-7 7 7" />
-												</svg>
-											{:else if status === 'low'}
-												<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-													<path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
-												</svg>
-											{/if}
-											{sensor.currentTemperatureC.toFixed(1)}°C
-										</span>
-									</div>
-								{:else}
-									<span class="rounded-full border border-[var(--color-tron-border)] px-4 py-1.5 text-sm text-[var(--color-tron-text-secondary)]">
-										— °C
-									</span>
+							<div class="text-right">
+								<p class="text-2xl font-bold {tempColor(sensor.temperature)}">
+									{formatTemp(sensor.temperature)}
+								</p>
+								{#if sensor.humidity != null}
+									<p class="text-sm text-[var(--color-tron-text-secondary)]">{sensor.humidity.toFixed(1)}% RH</p>
 								{/if}
+								<p class="text-xs text-[var(--color-tron-text-secondary)]">{timeAgo(sensor.lastReadingAt)}</p>
+								<p class="text-[10px] text-[var(--color-tron-text-secondary)]">{sensor.readingCount} readings</p>
 							</div>
 						</div>
 
-						<!-- MOCREO Connection Info -->
-						<div class="mt-3 flex flex-wrap items-center gap-3 border-t border-[var(--color-tron-border)]/30 pt-3">
-							<div class="flex items-center gap-1.5 text-xs">
-								{#if sensor.mocreoDeviceId}
-									<span class="inline-flex items-center gap-1.5 rounded-full border border-green-500/30 bg-green-900/20 px-2.5 py-0.5 text-[10px] font-medium text-green-300">
-										<span class="h-1.5 w-1.5 rounded-full bg-green-400"></span>
-										MOCREO Connected
-									</span>
-									<span class="font-mono text-[10px] text-[var(--color-tron-text-secondary)]">
-										Device: {sensor.mocreoDeviceId}
-									</span>
-									{#if sensor.mocreoAssetId}
-										<span class="font-mono text-[10px] text-[var(--color-tron-text-secondary)]">
-											/ Asset: {sensor.mocreoAssetId}
-										</span>
-									{/if}
-								{:else}
-									<span class="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-900/15 px-2.5 py-0.5 text-[10px] font-medium text-amber-300">
-										<span class="h-1.5 w-1.5 rounded-full bg-amber-400"></span>
-										Not Linked
-									</span>
-									<span class="text-[10px] text-[var(--color-tron-text-secondary)]">
-										Configure MOCREO device ID to enable automatic temperature polling
-									</span>
-								{/if}
-							</div>
-							{#if sensor.notes}
-								<span class="text-xs italic text-[var(--color-tron-text-secondary)]">{sensor.notes}</span>
+						<!-- Mapping controls -->
+						{#if data.isAdmin}
+							{#if mappingFor === sensor.sensorId}
+								<form method="POST" action="?/mapSensor" use:enhance={() => { return async ({ update }) => { mappingFor = null; await update(); }; }}
+									class="mt-3 flex items-center gap-2 border-t border-[var(--color-tron-border)]/50 pt-3">
+									<input type="hidden" name="mocreoDeviceId" value={sensor.sensorId} />
+									<select name="equipmentId" bind:value={selectedEquipmentId}
+										class="flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)]">
+										<option value="">— Select equipment —</option>
+										{#each data.equipment.filter(e => ['fridge', 'oven'].includes(e.equipmentType)) as eq (eq.id)}
+											<option value={eq.id}>{typeIcon(eq.equipmentType)} {eq.name} ({eq.equipmentType})</option>
+										{/each}
+									</select>
+									<button type="submit" class="rounded bg-[var(--color-tron-cyan)] px-3 py-2 text-xs font-semibold text-[var(--color-tron-bg)]" disabled={!selectedEquipmentId}>Map</button>
+									<button type="button" onclick={() => { mappingFor = null; }} class="rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">Cancel</button>
+								</form>
+							{:else}
+								<button type="button" onclick={() => { mappingFor = sensor.sensorId; selectedEquipmentId = sensor.mappedEquipmentId ?? ''; }}
+									class="mt-2 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)] underline">
+									{sensor.mappedEquipmentId ? '🔗 Change mapping' : '🔗 Map to equipment'}
+								</button>
 							{/if}
-						</div>
+						{/if}
 					</div>
-				</div>
-			{/each}
-		</div>
-	{/if}
-
-	<!-- Recent Temperature Readings -->
-	<section>
-		<h2 class="mb-4 text-lg font-semibold text-[var(--color-tron-text)]">Recent Readings</h2>
-		{#if data.recentReadings.length === 0}
-			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-8 text-center">
-				<p class="text-sm text-[var(--color-tron-text-secondary)]">
-					No temperature readings recorded yet. Readings will appear here once MOCREO sensors are linked and polling is active.
-				</p>
-			</div>
-		{:else}
-			<div class="overflow-hidden rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]">
-				<div class="overflow-x-auto">
-					<table class="w-full text-xs">
-						<thead>
-							<tr class="border-b border-[var(--color-tron-border)] text-left text-[var(--color-tron-text-secondary)]">
-								<th class="px-4 py-2.5 font-medium">Equipment</th>
-								<th class="px-3 py-2.5 font-medium">Temperature</th>
-								<th class="px-3 py-2.5 font-medium">Description</th>
-								<th class="px-3 py-2.5 font-medium">Time</th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each data.recentReadings as reading (reading.id)}
-								{@const sensor = data.sensors.find((s) => s.equipmentId === reading.equipmentId)}
-								<tr class="border-b border-[var(--color-tron-border)]/30 transition-colors hover:bg-[var(--color-tron-bg)]">
-									<td class="px-4 py-2 text-[var(--color-tron-text)]">{sensor?.name ?? reading.equipmentId}</td>
-									<td class="px-3 py-2">
-										{#if reading.temperatureC != null}
-											<span class="font-mono font-bold text-[var(--color-tron-text)]">{reading.temperatureC.toFixed(1)}°C</span>
-										{:else}
-											<span class="text-[var(--color-tron-text-secondary)]">—</span>
-										{/if}
-									</td>
-									<td class="px-3 py-2 text-[var(--color-tron-text-secondary)]">{reading.description ?? '—'}</td>
-									<td class="px-3 py-2 text-[var(--color-tron-text-secondary)]">{new Date(reading.createdAt).toLocaleString()}</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
+				{/each}
 			</div>
 		{/if}
 	</section>
 
-	<!-- MOCREO Configuration Info -->
-	<section class="rounded-lg border border-[var(--color-tron-border)]/50 bg-[var(--color-tron-bg)] p-5">
-		<h3 class="mb-2 text-sm font-semibold text-[var(--color-tron-text)]">MOCREO Integration</h3>
-		<p class="text-xs leading-relaxed text-[var(--color-tron-text-secondary)]">
-			Temperature probes are polled via the MOCREO Smart System API. To enable automatic readings, set the
-			<code class="rounded bg-[var(--color-tron-surface)] px-1.5 py-0.5 font-mono text-[var(--color-tron-cyan)]">MOCREO_API_KEY</code>
-			environment variable and link each equipment record to a MOCREO device ID and asset ID.
-			The system will poll sensors periodically and log out-of-range warnings.
-		</p>
+	<!-- Equipment with temperature data -->
+	<section>
+		<h2 class="mb-3 text-lg font-medium text-[var(--color-tron-cyan)]">Equipment Temperature Status</h2>
+		<div class="overflow-x-auto rounded-lg border border-[var(--color-tron-border)]">
+			<table class="w-full text-sm">
+				<thead>
+					<tr class="border-b border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]">
+						<th class="px-4 py-2 text-left text-xs font-medium text-[var(--color-tron-text-secondary)]">Equipment</th>
+						<th class="px-4 py-2 text-left text-xs font-medium text-[var(--color-tron-text-secondary)]">Type</th>
+						<th class="px-4 py-2 text-center text-xs font-medium text-[var(--color-tron-text-secondary)]">Current Temp</th>
+						<th class="px-4 py-2 text-center text-xs font-medium text-[var(--color-tron-text-secondary)]">Min / Max</th>
+						<th class="px-4 py-2 text-left text-xs font-medium text-[var(--color-tron-text-secondary)]">Sensor</th>
+						<th class="px-4 py-2 text-left text-xs font-medium text-[var(--color-tron-text-secondary)]">Last Reading</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each data.equipment.filter(e => ['fridge', 'oven'].includes(e.equipmentType)) as eq (eq.id)}
+						{@const sensor = data.mocreoSensors.find(s => s.sensorId === eq.mocreoDeviceId)}
+						<tr class="border-b border-[var(--color-tron-border)]/50 hover:bg-[var(--color-tron-surface)]">
+							<td class="px-4 py-2 font-medium text-[var(--color-tron-text)]">{typeIcon(eq.equipmentType)} {eq.name}</td>
+							<td class="px-4 py-2 text-[var(--color-tron-text-secondary)] capitalize">{eq.equipmentType}</td>
+							<td class="px-4 py-2 text-center font-bold {tempColor(eq.currentTemperatureC, eq.temperatureMinC, eq.temperatureMaxC)}">
+								{formatTemp(eq.currentTemperatureC)}
+							</td>
+							<td class="px-4 py-2 text-center text-xs text-[var(--color-tron-text-secondary)]">
+								{eq.temperatureMinC != null ? eq.temperatureMinC + '°C' : '—'} / {eq.temperatureMaxC != null ? eq.temperatureMaxC + '°C' : '—'}
+							</td>
+							<td class="px-4 py-2 text-xs">
+								{#if sensor}
+									<span class="text-[var(--color-tron-cyan)]">{sensor.sensorName}</span>
+								{:else if eq.mocreoDeviceId}
+									<span class="font-mono text-[var(--color-tron-text-secondary)]">{eq.mocreoDeviceId}</span>
+								{:else}
+									<span class="text-amber-400/70">Not mapped</span>
+								{/if}
+							</td>
+							<td class="px-4 py-2 text-xs text-[var(--color-tron-text-secondary)]">{timeAgo(eq.lastTemperatureReadAt)}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
 	</section>
 </div>

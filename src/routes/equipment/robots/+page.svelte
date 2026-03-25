@@ -14,6 +14,7 @@
 </script>
 
 <div class="space-y-6">
+	<a href="/equipment/activity" class="inline-flex items-center gap-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)] transition-colors">← Equipment Overview</a>
 	<div class="rounded-lg border border-amber-500/30 bg-amber-900/10 px-4 py-3 mb-4">
 		<p class="text-sm text-amber-300">⚠️ MULTI RUN FEATURES TO BE ADDED ONCE FLOW AND FUNCTIONALITY HAS BEEN FINALIZED. FOR NOW, ONE FULL RUN PER ROBOT.</p>
 	</div>
