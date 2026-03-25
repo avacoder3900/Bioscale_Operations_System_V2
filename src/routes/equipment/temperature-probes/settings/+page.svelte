@@ -3,7 +3,7 @@
 
 	let { data, form } = $props();
 
-	let sensors = $state(data.sensors.map((s: any) => ({ ...s })));
+	let sensors = $state(data.sensors.map((s: any) => ({ ...s, emailRecipientsStr: (s.emailRecipients ?? []).join(', ') })));
 	let globalEmails = $state(data.globalEmailRecipients.join(', '));
 	let saving = $state(false);
 	let savingEmails = $state(false);
