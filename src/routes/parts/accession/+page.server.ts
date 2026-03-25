@@ -11,6 +11,13 @@ function requireAccessionPermission(user: any): void {
 	}
 }
 
+function mapDbError(err: any): string {
+	if (err?.code === 11000) return 'This barcode is already registered';
+	if (err?.name === 'MongoNetworkError' || err?.name === 'MongoServerSelectionError') return 'Database connection error — please retry';
+	if (err?.name === 'MongoTimeoutError') return 'Database connection error — please retry';
+	return err?.message ?? 'An unexpected error occurred';
+}
+
 export const load: PageServerLoad = async ({ locals }) => {
 	requireAccessionPermission(locals.user);
 	await connectDB();
@@ -69,38 +76,44 @@ export const load: PageServerLoad = async ({ locals }) => {
 export const actions: Actions = {
 	assignBarcode: async ({ request, locals }) => {
 		requireAccessionPermission(locals.user);
-		await connectDB();
+		try {
+			await connectDB();
 
-		const form = await request.formData();
-		const partDefinitionId = form.get('partDefinitionId')?.toString();
-		if (!partDefinitionId) return fail(400, { error: 'Part ID required' });
+			const form = await request.formData();
+			const partDefinitionId = form.get('partDefinitionId')?.toString();
+			if (!partDefinitionId) return fail(400, { error: 'Part ID required' });
 
-		const part = await PartDefinition.findById(partDefinitionId) as any;
-		if (!part) return fail(404, { error: 'Part not found' });
-		if (part.barcode) return fail(400, { error: 'Part already has a barcode' });
+			const part = await PartDefinition.findById(partDefinitionId) as any;
+			if (!part) return fail(404, { error: 'Part not found — it may have been deleted by a Box sync' });
+			if (part.barcode) return fail(400, { error: 'Part already has a barcode' });
 
-		const barcode = await generatePartBarcode();
-		part.barcode = barcode;
-		await part.save();
+			const barcode = await generatePartBarcode();
+			part.barcode = barcode;
+			await part.save();
 
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'part_definitions',
-			recordId: partDefinitionId,
-			action: 'UPDATE',
-			oldData: { barcode: null },
-			newData: { barcode },
-			changedAt: new Date(),
-			changedBy: locals.user!.username,
-			changedFields: ['barcode'],
-			reason: 'Barcode assigned via Part Accession'
-		});
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'part_definitions',
+				recordId: partDefinitionId,
+				action: 'UPDATE',
+				oldData: { barcode: null },
+				newData: { barcode },
+				changedAt: new Date(),
+				changedBy: locals.user!.username,
+				changedFields: ['barcode'],
+				reason: 'Barcode assigned via Part Accession'
+			});
 
-		return { success: true, barcode, partNumber: part.partNumber };
+			return { success: true, barcode, partNumber: part.partNumber };
+		} catch (err: any) {
+			console.error('[accession:assignBarcode]', err);
+			return fail(500, { error: mapDbError(err) });
+		}
 	},
 
 	assignAll: async ({ locals }) => {
 		requireAccessionPermission(locals.user);
+		try {
 		await connectDB();
 
 		const unregistered = await PartDefinition.find({
@@ -148,6 +161,10 @@ export const actions: Actions = {
 			assignments,
 			failures: failures.length > 0 ? failures : undefined
 		};
+		} catch (err: any) {
+			console.error('[accession:assignAll]', err);
+			return fail(500, { error: mapDbError(err) });
+		}
 	},
 
 	exportLabels: async ({ request, locals }) => {
@@ -210,6 +227,7 @@ body { font-family: Arial, sans-serif; }
 
 	quickScan: async ({ request, locals }) => {
 		requireAccessionPermission(locals.user);
+		try {
 		await connectDB();
 
 		const form = await request.formData();
@@ -231,7 +249,7 @@ body { font-family: Arial, sans-serif; }
 
 		// Look up part
 		const part = await PartDefinition.findById(partId).lean() as any;
-		if (!part) return fail(404, { error: 'Part not found' });
+		if (!part) return fail(404, { error: 'Part not found — it may have been deleted by a Box sync' });
 
 		const lotNumber = await generateLotNumber(ReceivingLot);
 
@@ -331,5 +349,9 @@ body { font-family: Arial, sans-serif; }
 		});
 
 		return { quickScanSuccess: true, lotNumber, bagBarcode, partNumber: part.partNumber, quantity };
+		} catch (err: any) {
+			console.error('[accession:quickScan]', err);
+			return fail(500, { error: mapDbError(err) });
+		}
 	}
 };
