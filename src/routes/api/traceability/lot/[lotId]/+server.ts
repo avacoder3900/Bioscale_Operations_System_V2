@@ -26,7 +26,7 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 				{ 'topSeal.topSealLotId': { $in: lotIdentifiers } }
 			]
 		})
-			.select('_id currentPhase backing.lotId waxFilling.waxSourceLot topSeal.topSealLotId reagentFilling.assayType.name createdAt')
+			.select('_id status backing.lotId waxFilling.waxSourceLot topSeal.topSealLotId reagentFilling.assayType.name createdAt')
 			.sort({ createdAt: -1 })
 			.limit(200)
 			.lean()
@@ -55,7 +55,7 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 		transactionsByStep: JSON.parse(JSON.stringify(transactionsByStep)),
 		linkedCartridges: JSON.parse(JSON.stringify((linkedCartridges as any[]).map((c: any) => ({
 			cartridgeId: c._id,
-			currentPhase: c.currentPhase ?? 'unknown',
+			currentPhase: c.status ?? 'unknown',
 			createdAt: c.createdAt
 		})))),
 		summary: {

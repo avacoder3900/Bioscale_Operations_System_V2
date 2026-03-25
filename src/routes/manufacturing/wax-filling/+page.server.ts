@@ -151,7 +151,7 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			qcStatus: c.waxQc?.status ?? 'Pending',
 			rejectionReason: c.waxQc?.rejectionReason ?? null,
 			qcTimestamp: c.waxQc?.timestamp ? new Date(c.waxQc.timestamp).toISOString() : null,
-			currentInventory: c.currentPhase ?? 'wax_filled',
+			currentInventory: c.status ?? 'wax_filled',
 			storageLocation: c.waxStorage?.location ?? null,
 			storageTimestamp: c.waxStorage?.timestamp ? new Date(c.waxStorage.timestamp).toISOString() : null,
 			storageOperatorId: c.waxStorage?.operator?._id ? String(c.waxStorage.operator._id) : null,
@@ -167,7 +167,7 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 		const storageCartridges = (storageCartridgesRaw as any[]).map((c: any) => ({
 			cartridgeId: String(c._id),
 			qcStatus: c.waxQc?.status ?? 'Accepted',
-			currentInventory: c.currentPhase ?? 'wax_stored',
+			currentInventory: c.status ?? 'wax_stored',
 			storageLocation: c.waxStorage?.location ?? null
 		}));
 
@@ -458,8 +458,8 @@ export const actions: Actions = {
 			const alreadyInUse = await CartridgeRecord.find({
 				_id: { $in: cartridgeIds },
 				'waxFilling.runId': { $exists: true },
-				currentPhase: { $nin: [null, 'backing', 'voided'] }
-			}).select('_id currentPhase waxFilling.runId').lean();
+				status: { $nin: [null, 'backing', 'voided'] }
+			}).select('_id status waxFilling.runId').lean();
 
 			if (alreadyInUse.length > 0) {
 				const ids = (alreadyInUse as any[]).map((c: any) => c._id).join(', ');
@@ -493,7 +493,7 @@ export const actions: Actions = {
 							'backing.recordedAt': now
 						},
 						$set: {
-							currentPhase: 'wax_filling',
+							status: 'wax_filling',
 							'backing.lotId': activeLotId ?? null,
 							'waxFilling.runId': runId,
 							'waxFilling.deckId': deckId ?? null,
@@ -662,7 +662,7 @@ export const actions: Actions = {
 							'waxFilling.runStartTime': run.runStartTime,
 							'waxFilling.runEndTime': now,
 							'waxFilling.recordedAt': now,
-							currentPhase: 'wax_filled'
+							status: 'wax_filled'
 						}
 					}
 				}
@@ -734,9 +734,9 @@ export const actions: Actions = {
 		// Clean up cartridges that were in wax_filling phase for this run
 		await CartridgeRecord.bulkWrite([{
 			updateMany: {
-				filter: { 'waxFilling.runId': runId, currentPhase: 'wax_filling' },
+				filter: { 'waxFilling.runId': runId, status: 'wax_filling' },
 				update: {
-					$set: { currentPhase: 'backing' },
+					$set: { status: 'backing' },
 					$unset: { waxFilling: '' }
 				}
 			}
@@ -771,9 +771,9 @@ export const actions: Actions = {
 		// Clean up cartridges that were in wax_filling phase for this run
 		await CartridgeRecord.bulkWrite([{
 			updateMany: {
-				filter: { 'waxFilling.runId': runId, currentPhase: 'wax_filling' },
+				filter: { 'waxFilling.runId': runId, status: 'wax_filling' },
 				update: {
-					$set: { currentPhase: 'backing' },
+					$set: { status: 'backing' },
 					$unset: { waxFilling: '' }
 				}
 			}
@@ -811,7 +811,7 @@ export const actions: Actions = {
 					'waxQc.operator': { _id: locals.user._id, username: locals.user.username },
 					'waxQc.timestamp': now,
 					'waxQc.recordedAt': now,
-					currentPhase: 'voided'
+					status: 'voided'
 				}
 			}
 		);
@@ -861,7 +861,7 @@ export const actions: Actions = {
 							'waxStorage.operator': { _id: locals.user._id, username: locals.user.username },
 							'waxStorage.timestamp': now,
 							'waxStorage.recordedAt': now,
-							currentPhase: 'wax_stored'
+							status: 'wax_stored'
 						}
 					}
 				}
@@ -889,7 +889,7 @@ export const actions: Actions = {
 				action: 'UPDATE',
 				changedBy: locals.user?.username,
 				changedAt: now,
-				newData: { currentPhase: 'wax_stored', location, count: cartridgeIds.length }
+				newData: { status: 'wax_stored', location, count: cartridgeIds.length }
 			});
 		}
 

@@ -8,7 +8,7 @@ const shippingPackageSchema = new Schema({
 	trackingNumber: String, carrier: String,
 	status: { type: String, enum: ['created', 'packing', 'packed', 'shipped', 'delivered'] },
 	notes: String, packedBy: String, packedAt: Date, shippedAt: Date, deliveredAt: Date,
-	cartridges: [{ cartridgeId: String, addedAt: Date }]
+	cartridges: [{ _id: false, cartridgeId: String, addedAt: Date }]
 }, { timestamps: true });
 
 export const ShippingPackage = mongoose.models.ShippingPackage || mongoose.model('ShippingPackage', shippingPackageSchema, 'shipping_packages');

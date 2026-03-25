@@ -9,30 +9,13 @@
  *   Request Type: POST
  *   Request Format: JSON
  */
-import { json, error } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
-import { timingSafeEqual } from 'crypto';
+import { json } from '@sveltejs/kit';
 import { connectDB, DeviceEvent, ParticleDevice, generateId } from '$lib/server/db';
+import { requireAgentApiKey } from '$lib/server/api-auth';
 import type { RequestHandler } from './$types';
 
-function requireApiKey(request: Request) {
-	const key =
-		request.headers.get('x-api-key') ||
-		request.headers.get('x-agent-api-key') ||
-		request.headers.get('authorization')?.replace('Bearer ', '');
-	if (!env.AGENT_API_KEY || !key) {
-		throw error(401, 'Invalid or missing API key');
-	}
-	// Use timing-safe comparison to prevent timing attacks
-	const expected = Buffer.from(env.AGENT_API_KEY, 'utf8');
-	const provided = Buffer.from(key, 'utf8');
-	if (expected.length !== provided.length || !timingSafeEqual(expected, provided)) {
-		throw error(401, 'Invalid or missing API key');
-	}
-}
-
 export const POST: RequestHandler = async ({ request }) => {
-	requireApiKey(request);
+	requireAgentApiKey(request);
 	await connectDB();
 
 	const body = await request.json();

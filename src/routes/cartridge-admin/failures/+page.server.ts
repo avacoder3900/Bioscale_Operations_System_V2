@@ -41,7 +41,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	return {
 		cartridges: (rawCartridges as any[]).map((c: any) => ({
 			cartridgeId: c._id,
-			currentLifecycleStage: c.currentPhase ?? 'unknown',
+			currentLifecycleStage: c.status ?? 'unknown',
 			assayTypeId: c.reagentFilling?.assayType?._id ?? null,
 			assayTypeName: c.reagentFilling?.assayType?.name ?? null,
 			reagentInspectionStatus: c.reagentInspection?.status ?? null,

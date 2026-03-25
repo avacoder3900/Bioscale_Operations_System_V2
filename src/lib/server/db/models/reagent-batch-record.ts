@@ -18,6 +18,7 @@ const reagentBatchRecordSchema = new Schema({
 	deckId: String,
 
 	tubeRecords: [{
+		_id: false,
 		wellPosition: Number, reagentName: String, sourceLotId: String,
 		transferTubeId: String, preparedAt: Date
 	}],
@@ -38,6 +39,7 @@ const reagentBatchRecordSchema = new Schema({
 	abortReason: String, abortPhotoUrl: String,
 
 	cartridgesFilled: [{
+		_id: false,
 		cartridgeId: String, deckPosition: Number,
 		inspectionStatus: { type: String, enum: ['Accepted', 'Rejected', 'Pending', 'QA/QC'] },
 		inspectionReason: String, inspectedBy: operatorRef, inspectedAt: Date,

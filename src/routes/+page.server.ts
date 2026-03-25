@@ -141,12 +141,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					assayBreakdown, labStatusCounts, labTypeCounts, labGroups, labTotal
 				] = await Promise.all([
 					CartridgeRecord.aggregate([
-						{ $match: { currentPhase: { $ne: null } } },
-						{ $group: { _id: '$currentPhase', count: { $sum: 1 } } },
+						{ $match: { status: { $ne: null } } },
+						{ $group: { _id: '$status', count: { $sum: 1 } } },
 						{ $sort: { count: -1 } }
 					]).catch(() => []),
-					CartridgeRecord.countDocuments({ currentPhase: { $ne: 'voided' } }).catch(() => 0),
-					CartridgeRecord.countDocuments({ currentPhase: 'voided' }).catch(() => 0),
+					CartridgeRecord.countDocuments({ status: { $ne: 'voided' } }).catch(() => 0),
+					CartridgeRecord.countDocuments({ status: 'voided' }).catch(() => 0),
 					CartridgeRecord.aggregate([
 						{ $match: { 'waxQc.status': { $exists: true } } },
 						{ $group: { _id: '$waxQc.status', count: { $sum: 1 } } }
@@ -158,7 +158,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					CartridgeRecord.find().sort({ updatedAt: -1 }).limit(15).lean().catch(() => []),
 					CartridgeRecord.find({
 						'reagentFilling.expirationDate': { $lte: thirtyDaysFromNow, $gte: cdNow },
-						currentPhase: { $nin: ['voided', 'completed', 'shipped'] }
+						status: { $nin: ['voided', 'completed', 'shipped'] }
 					}).sort({ 'reagentFilling.expirationDate': 1 }).limit(10).lean().catch(() => []),
 					Equipment.find({ equipmentType: 'fridge', status: { $ne: 'offline' } }).lean().catch(() => []),
 					CartridgeRecord.countDocuments({ createdAt: { $gte: sevenDaysAgo } }).catch(() => 0),
@@ -176,11 +176,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				storageCounts = await (async () => {
 					const [waxCounts, reagentCounts] = await Promise.all([
 						CartridgeRecord.aggregate([
-							{ $match: { 'waxStorage.location': { $exists: true }, currentPhase: 'wax_stored' } },
+							{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored' } },
 							{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
 						]),
 						CartridgeRecord.aggregate([
-							{ $match: { 'storage.fridgeName': { $exists: true }, currentPhase: 'stored' } },
+							{ $match: { 'storage.fridgeName': { $exists: true }, status: 'stored' } },
 							{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
 						])
 					]);
@@ -194,7 +194,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				// Map from barcode/name key → actual _id for detail links
 				const fridgeIdMap = new Map((fridges as any[]).map((f: any) => [f.barcode ?? f.name ?? String(f._id), String(f._id)]));
 
-				const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed'];
+				const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped', 'linked', 'underway', 'completed'];
 				const phaseMap = new Map((phaseCounts as any[]).map((p: any) => [p._id, p.count]));
 
 				const qcMap = (arr: any[]) => {
@@ -218,7 +218,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					cartridgeBomItems, dailyThroughputAgg, recentWaxRuns, consumableCountsAgg
 				] = await Promise.all([
 					CartridgeRecord.aggregate([
-						{ $match: { currentPhase: 'wax_stored', 'waxStorage.location': { $exists: true } } },
+						{ $match: { status: 'wax_stored', 'waxStorage.location': { $exists: true } } },
 						{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
 					]),
 					OpentronsRobot.find({ isActive: true }).select('name lastHealthOk').sort({ name: 1 }).lean(),
@@ -277,11 +277,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 						id: c._id,
 						assay: c.reagentFilling?.assayType?.name ?? '—',
 						expirationDate: c.reagentFilling?.expirationDate,
-						phase: c.currentPhase
+						phase: c.status
 					})),
 					recentActivity: (recentCartridges as any[]).map((c: any) => ({
 						id: c._id,
-						phase: c.currentPhase,
+						phase: c.status,
 						assay: c.reagentFilling?.assayType?.name ?? null,
 						waxQc: c.waxQc?.status ?? null,
 						updatedAt: c.updatedAt

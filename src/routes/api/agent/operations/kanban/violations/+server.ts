@@ -1,18 +1,11 @@
 import { json, error } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
 import { connectDB, WorkflowViolation, AuditLog } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
+import { requireAgentApiKey } from '$lib/server/api-auth';
 import type { RequestHandler } from './$types';
 
-function requireApiKey(request: Request) {
-	const key = request.headers.get('x-api-key') || request.headers.get('x-agent-api-key') || request.headers.get('authorization')?.replace('Bearer ', '');
-	if (!env.AGENT_API_KEY || key !== env.AGENT_API_KEY) {
-		throw error(401, 'Invalid or missing API key');
-	}
-}
-
 export const GET: RequestHandler = async ({ request, url }) => {
-	requireApiKey(request);
+	requireAgentApiKey(request);
 	await connectDB();
 
 	const resolved = url.searchParams.get('resolved');
@@ -52,7 +45,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 };
 
 export const POST: RequestHandler = async ({ request }) => {
-	requireApiKey(request);
+	requireAgentApiKey(request);
 	await connectDB();
 
 	const body = await request.json();

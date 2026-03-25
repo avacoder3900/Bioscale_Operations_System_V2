@@ -1,6 +1,7 @@
 import { fail, redirect, error } from '@sveltejs/kit';
 import { connectDB, KanbanTask, KanbanProject, AuditLog, User } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 function mapTag(tag: string) {
@@ -9,6 +10,7 @@ function mapTag(tag: string) {
 
 export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'kanban:read');
 	await connectDB();
 
 	const task = await KanbanTask.findById(params.taskId).lean() as any;
@@ -80,6 +82,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 export const actions: Actions = {
 	update: async ({ request, locals, params }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
 		await connectDB();
 		const fd = await request.formData();
 
@@ -128,6 +131,7 @@ export const actions: Actions = {
 
 	move: async ({ request, locals, params }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
 		await connectDB();
 		const fd = await request.formData();
 		const newStatus = fd.get('newStatus') as string;
@@ -152,6 +156,7 @@ export const actions: Actions = {
 
 	addComment: async ({ request, locals, params }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
 		await connectDB();
 		const fd = await request.formData();
 		const content = fd.get('content') as string;
@@ -173,6 +178,7 @@ export const actions: Actions = {
 
 	addTag: async ({ request, locals, params }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
 		await connectDB();
 		const fd = await request.formData();
 		const tagId = fd.get('tagId') as string;
@@ -184,6 +190,7 @@ export const actions: Actions = {
 
 	removeTag: async ({ request, locals, params }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
 		await connectDB();
 		const fd = await request.formData();
 		const tagId = fd.get('tagId') as string;
@@ -195,6 +202,7 @@ export const actions: Actions = {
 
 	createTag: async ({ request, locals, params }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
 		await connectDB();
 		const fd = await request.formData();
 		const name = fd.get('name') as string;

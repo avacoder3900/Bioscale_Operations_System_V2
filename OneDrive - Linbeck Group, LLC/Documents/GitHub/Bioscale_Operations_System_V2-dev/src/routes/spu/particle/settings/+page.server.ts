@@ -5,7 +5,7 @@ import { testConnection, syncDevices, linkDevicesToSpus } from '$lib/server/part
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
-	requirePermission(locals.user, 'spu:read');
+	requirePermission(locals.user, 'device:read');
 	await connectDB();
 
 	const integ = await Integration.findOne({ type: 'particle' }).lean() as any;
@@ -22,7 +22,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 export const actions: Actions = {
 	saveToken: async ({ request, locals }) => {
-		requirePermission(locals.user, 'spu:write');
+		requirePermission(locals.user, 'device:write');
 		await connectDB();
 
 		const form = await request.formData();
@@ -66,7 +66,7 @@ export const actions: Actions = {
 	},
 
 	testConnection: async ({ locals }) => {
-		requirePermission(locals.user, 'spu:read');
+		requirePermission(locals.user, 'device:read');
 		await connectDB();
 
 		const integ = await Integration.findOne({ type: 'particle' }).lean() as any;
@@ -81,7 +81,7 @@ export const actions: Actions = {
 	},
 
 	syncNow: async ({ locals }) => {
-		requirePermission(locals.user, 'spu:write');
+		requirePermission(locals.user, 'device:write');
 		await connectDB();
 
 		// Mark in-progress
@@ -106,7 +106,7 @@ export const actions: Actions = {
 	},
 
 	linkToSpus: async ({ locals }) => {
-		requirePermission(locals.user, 'spu:write');
+		requirePermission(locals.user, 'device:write');
 		await connectDB();
 
 		try {
@@ -128,7 +128,7 @@ export const actions: Actions = {
 	},
 
 	disconnect: async ({ locals }) => {
-		requirePermission(locals.user, 'spu:write');
+		requirePermission(locals.user, 'device:write');
 		await connectDB();
 
 		await Integration.updateOne(

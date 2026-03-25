@@ -5,7 +5,19 @@
       "Bash(xargs grep:*)",
       "Bash(npx tsc:*)",
       "Bash(npx tsx:*)",
-      "Bash(gh auth:*)"
+      "Bash(gh auth:*)",
+      "Bash(for branch:*)",
+      "Bash(do echo:*)",
+      "Bash(git log:*)",
+      "Bash(done)",
+      "Bash(for b:*)",
+      "Bash(git fetch:*)",
+      "Bash(npm install:*)",
+      "Bash(grep -L \"requirePermission\\\\|hasPermission\\\\|isAdmin\" /c/Users/jacobq/Documents/GitHub/Bioscale_Operations_System_V2/src/routes/spu/**/*.server.ts)",
+      "Bash(grep -B5 -A10 \"export const load\" /c/Users/jacobq/Documents/GitHub/Bioscale_Operations_System_V2/src/routes/documents/[id]/train/+page.server.ts)",
+      "Bash(npx svelte-check:*)",
+      "Bash(npx svelte-kit:*)",
+      "Bash(grep -n \"requirePermission\" src/routes/manufacturing/laser-cutting/+page.server.ts src/routes/manufacturing/top-seal-cutting/+page.server.ts src/routes/manufacturing/opentrons/history/+page.server.ts src/routes/assays/[assayId]/+page.server.ts src/routes/assays/[assayId]/assign/+page.server.ts src/routes/documents/instructions/+page.server.ts \"src/routes/documents/instructions/[id]/+page.server.ts\" \"src/routes/documents/instructions/[id]/fields/+page.server.ts\" \"src/routes/documents/instructions/[id]/run/[runId]/+page.server.ts\" src/routes/documents/build-logs/+page.server.ts src/routes/documents/box/+page.server.ts)"
     ]
   }
 }

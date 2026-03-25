@@ -47,7 +47,7 @@ export async function validateSessionToken(token: string) {
 	}
 
 	const user = await User.findById(session.userId).select('-passwordHash').lean();
-	if (!user) {
+	if (!user || !(user as any).isActive) {
 		await Session.deleteOne({ _id: session._id });
 		return { session: null, user: null };
 	}

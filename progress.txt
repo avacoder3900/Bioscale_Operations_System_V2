@@ -3,7 +3,7 @@
 ### Server File Pattern
 Every `+page.server.ts` follows:
 1. Import: `connectDB`, models, `requirePermission`
-2. Guard: `requirePermission(event, 'domain:read|write')`
+2. Guard: `requirePermission(locals.user, 'domain:read|write')`
 3. Connect: `await connectDB()`
 4. Query: Mongoose `.find()`, `.findById()`, `.aggregate()` with `.lean()`
 5. Serialize: `JSON.parse(JSON.stringify(result))`
@@ -12,9 +12,11 @@ Every `+page.server.ts` follows:
 ### Auth Pattern
 - `event.locals.user` — authenticated user (set by hooks.server.ts)
 - `event.locals.session` — session object
-- `requirePermission(event, 'permission:string')` — throws 403 if missing
-- `isAdmin(event)` — boolean check
-- Cookie: `auth-session`, looked up in `sessions` MongoDB collection
+- `requirePermission(locals.user, 'permission:string')` — throws error(403) if missing
+- `hasPermission(user, 'perm')` — boolean check (used in layouts for UI flags)
+- `isAdmin(user)` — defined but currently unused
+- Cookie: `auth-session`, SHA-256 hashed, looked up in `sessions` MongoDB collection
+- Auth library: custom implementation on `@oslojs/crypto` + `@oslojs/encoding` (Lucia was removed in the Postgres→MongoDB migration)
 
 ### ID Generation
 ```typescript
@@ -41,9 +43,9 @@ project: { _id: project._id, name: project.name, color: project.color }
 
 ### API Auth Pattern (Agent API)
 ```typescript
-const apiKey = event.request.headers.get('x-api-key')
-    || event.request.headers.get('x-agent-api-key');
-if (apiKey !== process.env.AGENT_API_KEY) return json({ error: 'Unauthorized' }, { status: 401 });
+// Centralized: src/lib/server/api-auth.ts (timing-safe comparison)
+import { requireAgentApiKey } from '$lib/server/api-auth';
+// Note: 9 endpoints still use local inline requireApiKey() — consolidation needed
 ```
 
 ### Deployment Rule (MANDATORY)
@@ -55,14 +57,16 @@ No `npx vercel` from local working directory. All deployments must be traceable 
 
 ---
 
-## Weekend Build Log (Feb 27 – Mar 2, 2026)
+## Phase 1: Initial Build (Feb 27 – Mar 2, 2026)
 
-### Project Genesis
+Branch: `feature/inventory-spu-server` → merged to master
+
+### 1.0: Project Genesis
 - Workshopped full rebuild plan with Jacob Quick
 - Decision: greenfield rebuild (not in-place migration) — old Postgres app stays untouched
 - Three-layer architecture: UI (frozen), Data Contracts (preserved), Server+DB (rebuilt)
 
-### Phase 1: Characterization Test Suite (Feb 27)
+### 1.1: Characterization Test Suite (Feb 27)
 - Built 84 HTTP-level contract tests against running Postgres app
 - Tests verify: page load data shapes, API response shapes, auth flow, business logic
 - Tests are database-agnostic — same tests run against Postgres or MongoDB
@@ -70,83 +74,308 @@ No `npx vercel` from local working directory. All deployments must be traceable 
 - Test user: `contracttest` / `contracttest123`
 - All 84 passing (green baseline)
 
-### Phase 2: Contract Registry (Feb 27)
+### 1.2: Contract Registry (Feb 27)
 - Extracted data contracts from all ~80 routes
 - Documented: load() return shapes, form action inputs/outputs, API endpoints, layout data
 - Inventoried 100+ shared server utilities
 - Output: `docs/migration/CONTRACT-REGISTRY.md` (3,752 lines)
 
-### Phase 2.5: PRDs (Feb 27)
+### 1.3: PRDs (Feb 27)
 - Wrote 11 domain PRDs with 40 total stories
 - Each story: routes covered, contract refs, MongoDB models, acceptance criteria
 - Domain order: Auth → Kanban → Customers → Equipment → Documents → Inventory → SPU → Manufacturing → Shipping → Cartridge Lab → Agent API
 - Output: `docs/migration/prds/` (11 files + prd.json)
 
-### Phase 3: Greenfield Build (Feb 27–28)
+### 1.4: Greenfield Build (Feb 27–28)
+- **Auth:** Scaffolded SvelteKit project, copied 131 .svelte files, created 53 Mongoose models, hooks.server.ts, login/logout, user CRUD, roles, invites, seed script
+- **Kanban + Customers:** Board view, projects CRUD, task detail, list view, customer CRUD
+- **Equipment + Documents:** Fridges/ovens, locations, decks/trays, Opentrons, controlled docs, revisions, approvals, e-signatures, work instructions, file upload, Box.com (stubbed)
+- **Inventory + SPU:** Parts, BOM, inventory transactions, SPU dashboard/detail, assembly sessions, production runs, batches, validation, barcode generation
+- **Manufacturing:** Lot records, process configs, wax filling pipeline, reagent filling pipeline, assay definitions, QA/QC, laser cutting, top seal, materials
+- **Shipping + Cartridge Lab + Agent API:** Shipping lots/packages, lab cartridges, firmware devices, test results, agent health/schema/queries/messages/operations/approvals
 
-#### 3.0: Project Setup + Auth (commit e69b7e3 → 1ea69c9)
-- Scaffolded new SvelteKit project
-- Copied 131 .svelte files (UI layer — untouched)
-- Created all 53 Mongoose models with indexes, sacred middleware, immutable middleware
-- Implemented hooks.server.ts (session validation, cookie management)
-- Built auth utilities: session create/validate/invalidate, permission checking
-- Login/logout, user CRUD, role management, invite flow
-- Seed script: 3 users (admin, operator, viewer), 3 roles
-- Verified: login works, session cookies set, route protection active
-
-#### 3.1: Kanban + Customers (commit ca5f90d)
-- Board view, projects CRUD, task detail with comments/tags/proposals
-- List view with filters, archived tasks
-- Customer CRUD with embedded notes
-- Drag-and-drop status updates via API endpoint
-
-#### 3.2: Equipment + Documents (commit ca5f90d, 47c413f)
-- Equipment CRUD (fridges, ovens), locations, decks/trays (consumables)
-- Opentrons robots with live HTTP health checks
-- Controlled documents with revisions, approval workflow, e-signatures
-- Work instructions with nested versions → steps → requirements
-- Document repository, file upload
-- Box.com integration: stubbed (deferred)
-
-#### 3.3: Inventory + SPU (commit 4ee982d)
-- Part definitions CRUD, BOM items with version history
-- Inventory transactions (immutable ledger)
-- SPU dashboard with filtering, detail page with full build record
-- Assembly sessions: step-by-step flow, barcode scanning, field capture
-- Assembly completion: copies full session into SPU (sacred document)
-- Production runs, batches, validation sessions
-- Atomic barcode generation via findOneAndUpdate + $inc
-
-#### 3.4: Manufacturing (commit 7003749)
-- Lot records (operational — mutable), process configurations
-- Wax filling: runs, cartridge phases (WRITE-ONCE), QC inspection, storage
-- Reagent filling: batch records (sacred), tube prep, inspection, top seal
-- Assay definitions (sacred, lockable): CRUD, version history, lock/unlock
-- QA/QC release, manufacturing materials (immutable transactions), laser cutting
-- CartridgeRecord lifecycle: backing → waxFilling → waxQc → waxStorage → reagentFilling → reagentInspection → topSeal → ovenCure → storage → qaqcRelease → shipping
-
-#### 3.5: Shipping + Cartridge Lab + Agent API (commit 9559f2f)
-- Shipping lots with QA/QC releases, packages with full customer snapshot
-- Lab cartridges with usage log, cartridge groups
-- Firmware devices/cartridges, test results with spectro readings
-- Agent API: health, schema, queries, messages, operations, approvals (API key auth)
-
-### Phase 4: Verification (Feb 28)
-- Ran all 84 contract tests against new MongoDB app
-- Fixed 18 failures:
-  - 1 wrong data shape (parts key name)
-  - 15 missing API sub-routes (consolidated → individual)
-  - 2 auth header mismatches (X-API-Key vs x-agent-api-key)
-- Final result: 84/84 passing ✅
+### 1.5: Verification (Feb 28)
+- 84/84 contract tests passing ✅
 - Build passes ✅
+- Fixed 18 failures: 1 data shape, 15 missing sub-routes, 2 auth header mismatches
 
-### Phase 4 Manual Verification (pending)
-- Jacob to spot-check critical workflows
-- App needs real data (currently seed data only) or migration from Postgres
+---
 
-### Known Issues
-- `svelte-check` reports 834 errors — pre-existing from copied UI layer, not caused by migration
-- Old app used argon2 for passwords; new app uses bcrypt — users need new passwords
-- Box.com integration is stubbed (deferred)
+## Phase 2: Agent API Hardening + Kanban Features (Mar 3 – Mar 11)
+
+### Agent API Audit (Mar 3) — merged to master
+- `audit/agent-api` branch: security hardening, stub implementations, model cleanup
+- Kanban CRUD agent API endpoints
+- Blocked column added to board-snapshot API
+
+### Nick's Contributions (Mar 4–10)
+- `NichEditsandTesting`: Svelte 5 `$state()` declarations for bind compatibility
+- `nick-merge-file`: MongoDB connection timeouts to prevent Vercel 504s
+- `nick-merge-v2`: File uploads (2 commits)
+- `NickManufacturingFixes`, `NickEditsandTesting`: merged to master (fixes)
+
+### Kanban Priority System (Mar 9–11) — merged to master
+- `ralph/priority-system-update`: Critical/ready/queued priority levels
+- `ralph/priority-simplify`: Simplified to boolean `prioritized` field
+- `ralph/kanban-user-filter`: Personal task filter
+- All merged to master
+
+---
+
+## Phase 3: Magnetometer + Manufacturing (Mar 11–12)
+
+### Magnetometer Validation — merged to dev, then master
+- `MAGPLSWORK` branch: Wire BIMS magnetometer to read mag_data from device
+- Magnetometer as equipment: register once, auto-links to all SPUs
+- Mag test results in SPU Record History audit trail
+- Redirect /spu/validation → /spu/validation/magnetometer
+- Merged to dev (Mar 12), then to master (Mar 16)
+
+---
+
+## Phase 4: ROG Overhaul + Manufacturing Pipeline (Mar 12–19)
+
+### v2-rog-overhaul — 72 commits, merged to dev
+Active development by Ralph. Major scope:
+- **Receiving of Goods:** Barcode-scan lot creation (LOT-YYYYMMDD-XXXX auto-numbering), receiving checklists (FAI, COC, ESD handling), QC disposition (accept/reject/return), admin password override for stock edits
+- **Model expansions:** InventoryTransaction (+19 fields: traceability, scrap, consumption), PartDefinition (+bomType, supplierPartNumber, quantityPerUnit), ReceivingLot (+16 fields: checklists, disposition, NC/RMA numbers)
+- **Wax filling fixes:** loadDeck sets runId on cartridges, QC finds them, cooling tray scan, fridge quick-select buttons, storage UX
+- **Reagent filling:** CompletionStorage with per-cartridge assignments, fridge quick-select, assay reagent preview
+- **Top sealing:** Reject button, fix allSealed logic, server field mapping
+- **Equipment:** Opentrons robots tab (add/edit/delete/activate), sort by name
+- **Inventory:** Fridge storage page (cartridges by fridge, wax/reagent filter), Line Inventory (read-only stock, admin override for manual edits)
+- **Assays:** Reagents & BOM editor on detail page, BcodeEditor fix, SKU auto-generate
+- **Work instructions:** WI-03 Cut Top Seal, pipeline corrections (thermoseal→sheets→backs)
+
+### Manufacturing Sidebar + Dashboard (on dev)
+- Replace top tab bar with collapsible sidebar menu
+- Hover to expand, 42px icon rail, CSS transitions
+- Dual collapsible dashboard panels: SPU + Cartridge side by side
+
+---
+
+## Phase 5: URL Restructure + ISO Compliance (Mar 19–21)
+
+### ralph/url-restructure — 129 commits, merged to dev
+- Remove `/spu` URL prefix — restructure all routes to root level
+- Rebuild cartridge dashboard: manufacturing pipeline, QC yields, assay breakdown, fridge storage, expiring alerts
+- Move full cartridge dashboard to home page top
+- Add maxDuration=60s to all page/layout server files (Vercel cold start timeouts)
+- **ISO 13485 compliance (8 commits):**
+  - Temperature probe serial number required field
+  - Equipment CRUD: edit form, create route, archive/restore with deactivatedAt
+  - Equipment detail page: maintenance history, calibration records
+  - Barcode traceability: validate all barcodes in receiving, assembly, filling pipelines
+- Comprehensive barcode validation audit
+- Cooling timer alarm with audio notification + gate
+
+---
+
+## Phase 6: Thermocouple + Service Tickets (Mar 19, on separate branch)
+
+### thermocouple-and-spec-validation — 5 commits, NOT merged
+- Thermocouple validation: xlsx upload workflow, multi-channel parsing, per-channel stats, SVG charts
+- SPU servicing ticket system: barcode-scan-triggered workflow
+- **New model: ServiceTicket** (service_tickets collection) — tracks SPU repair with parts replaced, firmware changes, operator attribution
+- Servicing tab added to Manufacturing nav group
+
+---
+
+## Phase 7: CV Integration (Mar 16)
+
+### ralph/cv-integration — 6 commits, NOT merged
+- CV API client + TypeScript types
+- CV Dashboard page with layout and sidebar nav
+- Capture & Inspect page with CV API proxy routes
+- Inspection History page with filters and detail panel
+- Cartridge CV Timeline page with phase grouping and lightbox
+- Computer Vision link in main BIMS sidebar
+
+---
+
+## Phase 8: Database Cleanup (Mar 23)
+
+### DB-01: Ghost Collection Removal — executed on master
+- **Audit:** 164 collections found, 53 active models. 111 ghost collections from Postgres migration.
+- **Root cause:** `scripts/seed-domain-data.ts` bypasses Mongoose models and writes directly to camelCase collection names via `db.collection()`. All Mongoose models correctly use explicit snake_case collection names.
+- **Tier 1 executed:** Dropped 88 dead collections (82 empty, 6 with stale data). Postgres-era relics, auto-pluralized ghosts, orphaned RBAC experiment.
+- **Tier 2 executed:** Migrated 119 documents from 15 camelCase twins into canonical snake_case collections, then dropped the camelCase sources. Zero duplicates, all verified.
+- **Result:** 164 → 61 collections.
+- **Left for team discussion:** `assaydefinitions` (3 docs, divergent schema from `assay_definitions`), `receiving_lots` vs `backing_lots` disambiguation, seed script fix.
+- **Docs:** `docs/db-cleanup-plan.md`, `scripts/db-cleanup.ts`
+
+---
+
+## Phase 9: Permission Hardening (Mar 23, 2026) — COMPLETE
+
+### Auth System Health: 5/10 → 8/10
+All 9 SEC PRDs implemented (23 of 24 stories done, 1 deferred). 65 files changed, 572 insertions, 319 deletions.
+
+**SEC-01: Core fixes**
+- Fixed manufacturing layout try/catch that silently swallowed 403 errors
+- Fixed `testResults:read/write` → `testResult:read/write` typo
+- Replaced 4 files' `roleName === 'admin'` hardcodes with `hasPermission(user, 'admin:full')`
+- Consolidated 10 local `requireApiKey()` definitions into centralized `requireAgentApiKey` import
+
+**SEC-02: Kanban** — `kanban:read` on 5 page loads, `kanban:write` on 14 mutation actions + API
+**SEC-03: Customers** — `customer:read/write` on list + detail routes (6 actions)
+**SEC-04: Documents** — `document:read` on listing/detail, `document:train` on training, `workInstruction:read/write` on 5 instruction routes
+**SEC-05: Equipment** — `equipment:read` on 4 page loads, `equipment:write` on deck/tray CRUD (6 actions)
+**SEC-06: Manufacturing** — `manufacturing:read` on 7 sub-routes, `manufacturing:write` on 17 mutation actions, permission checks on 8 Opentrons page routes
+**SEC-07: SPU/Misc** — `assay:read/write` on detail/assign, receiving already covered, `documentRepo:read` on Box, `device:read/write` on Particle
+**SEC-08: Admin-tier** — assay lock/unlock elevated to `manufacturing:admin`, audit page requires `admin:full`, sacred corrections deferred (no endpoints exist yet)
+**SEC-09: API** — deleted `api/box/debug`, added `inventory:read` to BOM search + inventory transactions APIs
+
+### Remaining permission gaps
+- SEC-08-02: Sacred document correction endpoints don't exist yet — will enforce `admin:full` when built
+- `fridges-ovens/+page.server.ts` has no form actions to protect (load is covered)
+- Receiving routes were already properly protected (no changes needed)
+
+---
+
+## Phase 10: User Role Cleanup (Mar 24, 2026)
+
+### Problem
+AI agent (`agent001`) scrambled user roles between Mar 4–9:
+- Created a custom "User" role and assigned it to jacob, javier, andres, zane, l3
+- Gave viewer1 Admin access
+- Stacked both "User" and "Admin" on nick
+- Created a broken "admin" account with zero permissions
+
+### Fixes applied
+- **jacob, javier, andres, nick, l3**: set to Admin
+- **contracttest**: set to Operator (was Admin)
+- **viewer1**: set to Viewer (was Admin)
+- **zane**: set to Operator
+- **nick**: deduplicated from User+Admin to just Admin
+- **admin account**: deleted (empty, no role, no purpose)
+- **assignRole bug fixed**: changed from `$push` to `$set` on `roles[]` to prevent role stacking
+- Added duplicate role check before assignment
+- Scripts: `scripts/fix-user-roles.ts`
+
+---
+
+## Phase 11: Mongoose Subdocument ObjectId Fix (Mar 24, 2026)
+
+### Problem
+New users created through the admin UI got 500 errors on every page load. Root cause: Mongoose auto-generates ObjectId `_id` on subdocument arrays unless explicitly disabled with `{ _id: false }`. The `user.roles[]` subdocument was missing this flag. SvelteKit cannot serialize ObjectId objects.
+
+This only affected users whose roles were assigned through Mongoose (admin UI). Users created via raw MongoDB driver (seed scripts) were unaffected because the driver doesn't add auto-generated `_id` fields.
+
+### Fixes applied
+1. **Schema fixes** — Added `_id: false` to 11 subdocument arrays across 8 model files:
+   - `user.ts`: roles, communicationPreferences
+   - `bom-item.ts`: versionHistory
+   - `cartridge-record.ts`: tubeRecords, parts, spectroReadings
+   - `manufacturing-settings.ts`: rejectionReasonCodes
+   - `opentrons-robot.ts`: recentHealthSnapshots
+   - `reagent-batch-record.ts`: tubeRecords, cartridgesFilled
+   - `shipping-package.ts`: cartridges
+   - `test-result.ts`: readings
+
+2. **Layout serialization** — All 8 layouts that return `locals.user` now wrap with `JSON.parse(JSON.stringify())` as defense-in-depth
+
+3. **Data cleanup** — Removed existing ObjectId `_id` from 2 affected user accounts via `scripts/fix-role-objectids.ts`
+
+4. **Documentation** — CLAUDE.md updated with `_id: false` pitfall
+
+### Impact assessment
+- The 11 schema fixes are preventative — most load functions already manually map fields, so the ObjectId never reached the client
+- The layout serialization was the actual fix for the 500 error — layouts pass the full user object unfiltered
+- The larger codebase was not affected
+
+---
+
+## Phase 12: Security Documentation (Mar 24, 2026)
+
+### Created SECURITY.md
+Canonical security reference document covering:
+- Authentication architecture (custom sessions on @oslojs/crypto, not Lucia)
+- Authorization model (32 permissions, 20 resource groups, 3 canonical roles)
+- Required patterns for load functions, actions, and API endpoints
+- Admin-tier operations and their elevated permission requirements
+- Security anti-patterns (roleName checks, $push on roles, try/catch on requirePermission, etc.)
+- Known security issues with severity ratings
+- Research webapp portability guide
+
+### Updated AGENTS.md
+- Expanded security section with key rules and anti-patterns
+- Added SECURITY.md to Ralph Loop mandatory read list
+- Added explicit rules: no roleName checks, no try/catch on requirePermission, no local requireApiKey
+
+### Fixed CLAUDE.md
+- Corrected `requirePermission(event, ...)` → `requirePermission(locals.user, ...)` in code examples
+- Added SECURITY.md reference at top
+- Added `_id: false` and `requirePermission` to Common Pitfalls
+
+---
+
+## Current Branch State (as of Mar 24, 2026)
+
+### Commits today (Mar 24)
+- `9a01d7c` feat: DB cleanup (164→61 collections) + permission hardening (SEC-01 through SEC-09)
+- `5153960` fix: clean up user roles scrambled by AI agent + fix assignRole to replace instead of push
+- `187eb83` docs: add SECURITY.md as canonical auth/permission reference
+- `a3224de` fix: prevent ObjectId on roles subdocument causing 500 errors
+- `b402f5f` fix: add _id:false to 11 subdocument arrays + JSON-serialize user in all layouts
+
+
+### Active branches (unmerged to master)
+| Branch | Commits ahead | Status | Key content |
+|--------|--------------|--------|-------------|
+| `dev` | 157 | Integration branch | Contains ROG + URL restructure + thermocouple + ISO fixes |
+| `ralph/url-restructure` | 129 | Merged to dev | URL restructure + ISO compliance + dashboards |
+| `v2-rog-overhaul` | 72 | Merged to dev | Receiving, inventory, manufacturing pipeline |
+| `ralph/cv-integration` | 6 | Not merged anywhere | Computer Vision integration |
+| `thermocouple-and-spec-validation` | 5 | Partially in dev | Thermocouple + service tickets |
+| `ralph/prioritized-field` | 1 | Merged to dev | Kanban boolean prioritized field |
+| `nick-merge-file` | 3 | Not merged | MongoDB timeouts + Svelte 5 fixes |
+| `nick-merge-v2` | 2 | Not merged | File uploads |
+
+### Merged to master (complete)
+`CV-feature-AV`, `NickEditsandTesting`, `NickManufacturingFixes`, `ralph/kanban-to-main`, `ralph/kanban-user-filter`, `ralph/priority-simplify`, `ralph/priority-system-update`
+
+### dev → master gap
+Dev is 157 commits ahead of master. It contains the bulk of the manufacturing pipeline work, ISO compliance, URL restructure, and dashboard improvements. This is the main merge that needs to happen — but permission hardening should go in first.
+
+---
+
+## Known Issues (updated Mar 24, 2026)
+
+### RESOLVED (this session)
+- ~~50 page load functions missing `requirePermission()` checks~~ — SEC-01 through SEC-09
+- ~~Manufacturing layout try/catch silently swallows permission errors~~ — SEC-01-01
+- ~~Equipment deck/tray mutations completely unprotected~~ — SEC-05-02
+- ~~Permission string typo: `testResults:read/write`~~ — SEC-01-02
+- ~~4 files hardcode `roleName === 'admin'`~~ — SEC-01-03
+- ~~9 API endpoints duplicate `requireApiKey()`~~ — SEC-01-04
+- ~~`api/box/debug` endpoint has zero auth~~ — SEC-09-01 (deleted)
+- ~~Mongoose subdocument ObjectId causes 500~~ — _id:false on 11 arrays + layout serialization
+- ~~User roles scrambled by AI agent~~ — fix-user-roles.ts + assignRole $set fix
+
+### Security — High
+- **Deactivated users retain session access** — `validateSessionToken` doesn't check `isActive`. A deactivated user keeps full access for up to 30 days until session expires.
+- **No audit logging on admin mutations** — createUser, updateProfile, deactivateUser, reactivateUser, resetPassword, assignRole, removeRole, createRole, updateRole, deleteRole, setPermissions — zero AuditLog entries. Most sensitive area of the app.
+- **No login rate limiting** — unlimited brute force attempts, no lockout, no backoff
+
+### Security — Medium
+- **`removeRole` only revokes first roleHistory entry** — uses `$` positional operator instead of `arrayFilters`
+- **`deleteRole` doesn't stamp roleHistory revocation** — audit trail shows grant but no revocation
+- **Login error leaks server internals** — `fail(500, { error: \`Server error: ${message}\` })`
+- **No password strength validation** — createUser, resetPassword, invite accept all allow single-character passwords
+
+### Data / Schema
+- `assaydefinitions` vs `assay_definitions` schema divergence unresolved (Monday team discussion)
+- `scripts/seed-domain-data.ts` writes to wrong (camelCase) collection names
+- `unitCost` stored as String in BOM/Part models, expected as Number
+- `currentRevision`/`revision` stored as String, expected as Number
+- `_id` vs `id` transformation inconsistent across layouts
+- 136+ `as any` type assertions across server files
+
+### Low / Deferred
+- `svelte-check` reports 834 errors (pre-existing from copied UI layer)
+- Box.com integration stubbed
 - Opentrons endpoints depend on live robot hardware
-- MongoDB has seed data only — no production data migrated yet
+- Seed script only creates users/roles (no domain test data via Mongoose)
+- `isAdmin()` defined but never used
+- Sacred document correction endpoints don't exist yet (will need `admin:full` when built)

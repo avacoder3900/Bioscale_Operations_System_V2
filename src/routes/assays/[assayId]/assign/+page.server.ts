@@ -1,9 +1,11 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { connectDB, AssayDefinition, CartridgeRecord } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'assay:read');
 	await connectDB();
 
 	const assay = await AssayDefinition.findById(params.assayId, {
@@ -35,6 +37,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 export const actions: Actions = {
 	default: async ({ request, params, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
 		await connectDB();
 
 		const assay = await AssayDefinition.findById(params.assayId, {
@@ -56,7 +59,7 @@ export const actions: Actions = {
 							'assayLoaded.assay': { _id: assay._id, name: assay.name, skuCode: assay.skuCode },
 							'assayLoaded.loadedAt': now,
 							'assayLoaded.recordedAt': now,
-							currentPhase: 'assay_loaded'
+							status: 'linked'
 						}
 					}
 				}

@@ -17,7 +17,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	const [cartridges, runs, assayTypes] = await Promise.all([
 		CartridgeRecord.find({ createdAt: { $gte: since } }, {
-			currentPhase: 1,
+			status: 1,
 			'reagentFilling.assayType': 1,
 			'reagentInspection.status': 1,
 			'reagentInspection.reason': 1,
@@ -42,15 +42,15 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		stage: phase.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()),
 		count: cs.filter((c) => {
 			const phaseOrder = ['wax_filled', 'wax_qc', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released'];
-			return phaseOrder.indexOf(c.currentPhase) >= phaseOrder.indexOf(phase);
+			return phaseOrder.indexOf(c.status) >= phaseOrder.indexOf(phase);
 		}).length
 	}));
-	const finalCount = cs.filter((c) => ['stored', 'released', 'shipped'].includes(c.currentPhase)).length;
+	const finalCount = cs.filter((c) => ['stored', 'released', 'shipped'].includes(c.status)).length;
 	const overallYield = totalBacked > 0 ? finalCount / totalBacked : 0;
 
 	// Throughput
-	const totalCompleted = cs.filter((c) => ['stored', 'released', 'shipped'].includes(c.currentPhase)).length;
-	const totalInProgress = cs.filter((c) => ['reagent_filled', 'inspected', 'sealed', 'cured'].includes(c.currentPhase)).length;
+	const totalCompleted = cs.filter((c) => ['stored', 'released', 'shipped'].includes(c.status)).length;
+	const totalInProgress = cs.filter((c) => ['reagent_filled', 'inspected', 'sealed', 'cured'].includes(c.status)).length;
 
 	// Daily counts
 	const dailyMap = new Map<string, number>();
@@ -74,7 +74,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const qaqcInspected = cs.filter((c) => (c as any).qaqc?.status).length;
 	const qaqcFailed = cs.filter((c) => (c as any).qaqc?.status === 'Failed' || (c as any).qaqc?.status === 'Rejected').length;
 	const qaqcRate = qaqcInspected > 0 ? qaqcFailed / qaqcInspected : 0;
-	const waxRejectedCount = cs.filter((c) => c.currentPhase === 'wax_qc' || (c as any).waxQc?.status === 'Rejected').length;
+	const waxRejectedCount = cs.filter((c) => c.status === 'wax_qc' || (c as any).waxQc?.status === 'Rejected').length;
 
 	// Rejection breakdown
 	const rejectionMap = new Map<string, number>();

@@ -241,7 +241,7 @@ export const actions: Actions = {
 					operator: { _id: locals.user._id, username: locals.user.username },
 					recordedAt: now
 				},
-				currentPhase: 'backing',
+				status: 'backing',
 				createdAt: now,
 				updatedAt: now
 			});

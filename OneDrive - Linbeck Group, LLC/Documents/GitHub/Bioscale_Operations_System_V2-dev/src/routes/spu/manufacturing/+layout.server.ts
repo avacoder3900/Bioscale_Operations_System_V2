@@ -6,12 +6,7 @@ import type { LayoutServerLoad } from './$types';
 export const load: LayoutServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 
-	try {
-		requirePermission(locals.user, 'manufacturing:read');
-	} catch (e: unknown) {
-		if (e && typeof e === 'object' && 'status' in e) throw e;
-		console.error('[MFG LAYOUT] Permission check error:', e instanceof Error ? e.message : e);
-	}
+	requirePermission(locals.user, 'manufacturing:read');
 
 	await connectDB();
 	let configs: any[] = [];
@@ -22,7 +17,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 	}
 
 	return {
-		user: locals.user,
+		user: JSON.parse(JSON.stringify(locals.user)),
 		isAdmin: hasPermission(locals.user, 'manufacturing:admin'),
 		processConfigs: configs.map((c) => ({
 			configId: c._id,

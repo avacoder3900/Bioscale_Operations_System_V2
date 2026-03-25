@@ -1,9 +1,11 @@
 import { error, fail, redirect } from '@sveltejs/kit';
+import { hasPermission, requirePermission } from '$lib/server/permissions';
 import { connectDB, AssayDefinition, FirmwareCartridge, TestResult, AuditLog, generateId } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'assay:read');
 	await connectDB();
 
 	const assay = await AssayDefinition.findById(params.assayId).lean() as any;
@@ -36,10 +38,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		params: instr.params ?? []
 	}));
 
-	const canWrite = !!(locals.user as any)?.roles?.some((r: any) =>
-		r.permissions?.includes('assay:write') || r.roleName === 'admin'
-	);
-	const canDelete = !!(locals.user as any)?.roles?.some((r: any) => r.roleName === 'admin');
+	const canWrite = hasPermission(locals.user, 'assay:write') || hasPermission(locals.user, 'admin:full');
+	const canDelete = hasPermission(locals.user, 'admin:full');
 
 	return {
 		assay: {
@@ -117,6 +117,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 export const actions: Actions = {
 	lock: async ({ params, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:admin');
 		await connectDB();
 
 		await AssayDefinition.findOneAndUpdate(
@@ -141,6 +142,7 @@ export const actions: Actions = {
 
 	unlock: async ({ params, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:admin');
 		await connectDB();
 
 		await AssayDefinition.findByIdAndUpdate(params.assayId, {
@@ -159,6 +161,7 @@ export const actions: Actions = {
 
 	toggleActive: async ({ params, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
 		await connectDB();
 
 		const assay = await AssayDefinition.findById(params.assayId).lean() as any;
@@ -180,6 +183,7 @@ export const actions: Actions = {
 
 	addReagent: async ({ params, locals, request }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -224,6 +228,7 @@ export const actions: Actions = {
 
 	updateReagent: async ({ params, locals, request }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -269,6 +274,7 @@ export const actions: Actions = {
 
 	removeReagent: async ({ params, locals, request }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -291,6 +297,7 @@ export const actions: Actions = {
 
 	addSubComponent: async ({ params, locals, request }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -327,6 +334,7 @@ export const actions: Actions = {
 
 	removeSubComponent: async ({ params, locals, request }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -343,6 +351,7 @@ export const actions: Actions = {
 
 	updateBomSettings: async ({ params, locals, request }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -365,6 +374,7 @@ export const actions: Actions = {
 
 	duplicate: async ({ params, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
 		await connectDB();
 
 		const original = await AssayDefinition.findById(params.assayId).lean() as any;
@@ -392,6 +402,7 @@ export const actions: Actions = {
 
 	delete: async ({ params, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
 		await connectDB();
 
 		const assay = await AssayDefinition.findById(params.assayId).lean() as any;

@@ -1,10 +1,11 @@
 export const config = { maxDuration: 60 };
 import { fail } from '@sveltejs/kit';
 import { connectDB, generateId, Equipment, EquipmentLocation, AuditLog, CartridgeRecord } from '$lib/server/db';
-import { isAdmin } from '$lib/server/permissions';
+import { isAdmin, requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
+	requirePermission(locals.user, 'equipment:read');
 	try {
 		await connectDB();
 
@@ -26,11 +27,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 		// Compute occupant counts from CartridgeRecord (waxStorage.location and storage.fridgeName)
 		const [waxCounts, reagentCounts] = await Promise.all([
 			CartridgeRecord.aggregate([
-				{ $match: { 'waxStorage.location': { $exists: true }, currentPhase: 'wax_stored' } },
+				{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored' } },
 				{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
 			]),
 			CartridgeRecord.aggregate([
-				{ $match: { 'storage.fridgeName': { $exists: true }, currentPhase: 'stored' } },
+				{ $match: { 'storage.fridgeName': { $exists: true }, status: 'stored' } },
 				{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
 			])
 		]);
@@ -153,6 +154,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 export const actions: Actions = {
 	createLocation: async ({ request, locals }) => {
+		requirePermission(locals.user, 'equipment:write');
 		if (!isAdmin(locals.user)) return fail(403, { error: 'Admin access required' });
 		await connectDB();
 
@@ -196,6 +198,7 @@ export const actions: Actions = {
 	},
 
 	updateLocation: async ({ request, locals }) => {
+		requirePermission(locals.user, 'equipment:write');
 		if (!isAdmin(locals.user)) return fail(403, { error: 'Admin access required' });
 		await connectDB();
 
@@ -242,6 +245,7 @@ export const actions: Actions = {
 	},
 
 	deleteLocation: async ({ request, locals }) => {
+		requirePermission(locals.user, 'equipment:write');
 		if (!isAdmin(locals.user)) return fail(403, { error: 'Admin access required' });
 		await connectDB();
 

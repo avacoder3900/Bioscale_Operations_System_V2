@@ -4,6 +4,7 @@
 
 export type LifecycleStage =
 	| 'backing'
+	| 'wax_filling'
 	| 'wax_filled'
 	| 'wax_qc'
 	| 'wax_stored'
@@ -14,13 +15,20 @@ export type LifecycleStage =
 	| 'stored'
 	| 'released'
 	| 'shipped'
-	| 'assay_loaded'
-	| 'testing'
+	| 'linked'
+	| 'underway'
 	| 'completed'
-	| 'voided';
+	| 'cancelled'
+	| 'scrapped'
+	| 'voided'
+	| 'packeted'
+	| 'transferred'
+	| 'refrigerated'
+	| 'received';
 
 export const LIFECYCLE_STAGES: LifecycleStage[] = [
 	'backing',
+	'wax_filling',
 	'wax_filled',
 	'wax_qc',
 	'wax_stored',
@@ -31,14 +39,20 @@ export const LIFECYCLE_STAGES: LifecycleStage[] = [
 	'stored',
 	'released',
 	'shipped',
-	'assay_loaded',
-	'testing',
+	'linked',
+	'underway',
 	'completed',
-	'voided'
+	'cancelled',
+	'scrapped',
+	'voided',
+	'packeted',
+	'transferred',
+	'refrigerated',
+	'received'
 ];
 
-export function phaseToLifecycleStage(phase: string): LifecycleStage {
-	// Phase values now map directly to lifecycle stages
-	if (LIFECYCLE_STAGES.includes(phase as LifecycleStage)) return phase as LifecycleStage;
+export function statusToLifecycleStage(status: string): LifecycleStage {
+	// Status values now map directly to lifecycle stages
+	if (LIFECYCLE_STAGES.includes(status as LifecycleStage)) return status as LifecycleStage;
 	return 'backing';
 }

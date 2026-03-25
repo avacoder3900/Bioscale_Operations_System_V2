@@ -1,0 +1,6590 @@
+{
+  "collections": {
+    "bioscale.agent_messages": {
+      "ns": "bioscale.agent_messages",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.agent_queries": {
+      "ns": "bioscale.agent_queries",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "category",
+          "collectionName",
+          "createdAt",
+          "description",
+          "isActive",
+          "maxRows",
+          "mongoQuery",
+          "name",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "category": {
+            "bsonType": "string"
+          },
+          "collectionName": {
+            "bsonType": "string"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "description": {
+            "bsonType": "string"
+          },
+          "isActive": {
+            "bsonType": "bool"
+          },
+          "maxRows": {
+            "bsonType": "int"
+          },
+          "mongoQuery": {
+            "bsonType": "object",
+            "properties": {
+              "archived": {
+                "bsonType": "object",
+                "properties": {
+                  "$ne": {
+                    "bsonType": "bool"
+                  }
+                },
+                "required": [
+                  "$ne"
+                ]
+              },
+              "inventoryCount": {
+                "bsonType": "object",
+                "properties": {
+                  "$lte": {
+                    "bsonType": "int"
+                  }
+                },
+                "required": [
+                  "$lte"
+                ]
+              },
+              "isActive": {
+                "bsonType": "bool"
+              },
+              "status": {
+                "bsonType": "string"
+              }
+            }
+          },
+          "name": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.agentmessages": {
+      "ns": "bioscale.agentmessages",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.agentqueries": {
+      "ns": "bioscale.agentqueries",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.approval_requests": {
+      "ns": "bioscale.approval_requests",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.approvalhistories": {
+      "ns": "bioscale.approvalhistories",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.approvalrequests": {
+      "ns": "bioscale.approvalrequests",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.assay_definitions": {
+      "ns": "bioscale.assay_definitions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "corrections",
+          "createdAt",
+          "description",
+          "isActive",
+          "metadata",
+          "name",
+          "reagents",
+          "skuCode",
+          "updatedAt",
+          "useSingleCost",
+          "versionHistory"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "corrections": {
+            "bsonType": "array"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "description": {
+            "bsonType": "string"
+          },
+          "isActive": {
+            "bsonType": "bool"
+          },
+          "metadata": {
+            "bsonType": "object",
+            "properties": {
+              "instructions": {
+                "bsonType": "array",
+                "items": {
+                  "bsonType": "object",
+                  "properties": {
+                    "code": {
+                      "bsonType": "array",
+                      "items": {
+                        "bsonType": "object",
+                        "properties": {
+                          "params": {
+                            "bsonType": "array",
+                            "items": {
+                              "bsonType": "int"
+                            }
+                          },
+                          "type": {
+                            "bsonType": "string"
+                          }
+                        },
+                        "required": [
+                          "params",
+                          "type"
+                        ]
+                      }
+                    },
+                    "params": {
+                      "bsonType": "array",
+                      "items": {
+                        "bsonType": "int"
+                      }
+                    },
+                    "type": {
+                      "bsonType": "string"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "instructions"
+            ]
+          },
+          "name": {
+            "bsonType": "string"
+          },
+          "reagents": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "_id": {
+                  "bsonType": "string"
+                },
+                "classification": {
+                  "bsonType": "string"
+                },
+                "hasBreakdown": {
+                  "bsonType": "bool"
+                },
+                "isActive": {
+                  "bsonType": "bool"
+                },
+                "reagentName": {
+                  "bsonType": "string"
+                },
+                "sortOrder": {
+                  "bsonType": "int"
+                },
+                "subComponents": {
+                  "bsonType": "array"
+                },
+                "unit": {
+                  "bsonType": "string"
+                },
+                "unitCost": {
+                  "bsonType": "string"
+                },
+                "volumeMicroliters": {
+                  "bsonType": "int"
+                },
+                "wellPosition": {
+                  "bsonType": "int"
+                }
+              },
+              "required": [
+                "_id",
+                "classification",
+                "hasBreakdown",
+                "isActive",
+                "reagentName",
+                "sortOrder",
+                "subComponents",
+                "unit",
+                "unitCost",
+                "volumeMicroliters",
+                "wellPosition"
+              ]
+            }
+          },
+          "skuCode": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          },
+          "useSingleCost": {
+            "bsonType": "bool"
+          },
+          "versionHistory": {
+            "bsonType": "array"
+          }
+        }
+      }
+    },
+    "bioscale.assaydefinitions": {
+      "ns": "bioscale.assaydefinitions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "assayId",
+          "bcodeLength",
+          "checksum",
+          "corrections",
+          "createdAt",
+          "description",
+          "duration",
+          "isActive",
+          "name",
+          "reagents",
+          "shelfLifeDays",
+          "skuCode",
+          "updatedAt",
+          "versionHistory"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "assayId": {
+            "bsonType": "string"
+          },
+          "bcodeLength": {
+            "bsonType": "int"
+          },
+          "checksum": {
+            "bsonType": "int"
+          },
+          "corrections": {
+            "bsonType": "array"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "description": {
+            "bsonType": "string"
+          },
+          "duration": {
+            "bsonType": "int"
+          },
+          "isActive": {
+            "bsonType": "bool"
+          },
+          "name": {
+            "bsonType": "string"
+          },
+          "reagents": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "classification": {
+                  "bsonType": "string"
+                },
+                "isActive": {
+                  "bsonType": "bool"
+                },
+                "reagentName": {
+                  "bsonType": "string"
+                },
+                "sortOrder": {
+                  "bsonType": "int"
+                },
+                "unit": {
+                  "bsonType": "string"
+                },
+                "unitCost": {
+                  "bsonType": "string"
+                },
+                "volumeMicroliters": {
+                  "bsonType": "int"
+                },
+                "wellPosition": {
+                  "bsonType": "int"
+                }
+              },
+              "required": [
+                "classification",
+                "isActive",
+                "reagentName",
+                "sortOrder",
+                "unit",
+                "unitCost",
+                "volumeMicroliters",
+                "wellPosition"
+              ]
+            }
+          },
+          "shelfLifeDays": {
+            "bsonType": "int"
+          },
+          "skuCode": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          },
+          "versionHistory": {
+            "bsonType": "array"
+          }
+        }
+      }
+    },
+    "bioscale.assays": {
+      "ns": "bioscale.assays",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.assaytypes": {
+      "ns": "bioscale.assaytypes",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.assayversions": {
+      "ns": "bioscale.assayversions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.assembly_sessions": {
+      "ns": "bioscale.assembly_sessions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.assemblysessions": {
+      "ns": "bioscale.assemblysessions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.assemblysteprecords": {
+      "ns": "bioscale.assemblysteprecords",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.audit_log": {
+      "ns": "bioscale.audit_log",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "action",
+          "changedAt",
+          "changedBy",
+          "recordId",
+          "tableName"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "action": {
+            "bsonType": "string"
+          },
+          "changedAt": {
+            "bsonType": "date"
+          },
+          "changedBy": {
+            "bsonType": "string"
+          },
+          "changedFields": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "string"
+            }
+          },
+          "newData": {
+            "bsonType": "object",
+            "properties": {
+              "agentQueries": {
+                "bsonType": "int"
+              },
+              "assignee": {
+                "bsonType": "object",
+                "properties": {
+                  "_id": {
+                    "bsonType": "string"
+                  },
+                  "username": {
+                    "bsonType": "string"
+                  }
+                },
+                "required": [
+                  "_id",
+                  "username"
+                ]
+              },
+              "backlogDate": {
+                "bsonType": "date"
+              },
+              "barcode": {
+                "bsonType": "string"
+              },
+              "collectionName": {
+                "bsonType": "string"
+              },
+              "completedDate": {
+                "bsonType": "date"
+              },
+              "connected": {
+                "bsonType": "bool"
+              },
+              "count": {
+                "bsonType": "int"
+              },
+              "currentPhase": {
+                "bsonType": "string"
+              },
+              "filterKeys": {
+                "bsonType": "array",
+                "items": {
+                  "bsonType": "string"
+                }
+              },
+              "location": {
+                "bsonType": "string"
+              },
+              "name": {
+                "bsonType": "string"
+              },
+              "prioritized": {
+                "bsonType": "bool"
+              },
+              "priority": {
+                "bsonType": "string"
+              },
+              "projectId": {
+                "bsonType": "string"
+              },
+              "readyDate": {
+                "bsonType": "date"
+              },
+              "rowCount": {
+                "bsonType": "int"
+              },
+              "schemaMetadata": {
+                "bsonType": "int"
+              },
+              "serviceTicketId": {
+                "bsonType": "string"
+              },
+              "source": {
+                "bsonType": "string"
+              },
+              "status": {
+                "bsonType": "string"
+              },
+              "statusChangedAt": {
+                "bsonType": "date"
+              },
+              "title": {
+                "bsonType": "string"
+              },
+              "type": {
+                "bsonType": "string"
+              },
+              "udi": {
+                "bsonType": "string"
+              },
+              "wipDate": {
+                "bsonType": "date"
+              }
+            }
+          },
+          "oldData": {
+            "bsonType": "object",
+            "properties": {
+              "assignee": {
+                "anyOf": [
+                  {
+                    "bsonType": "null"
+                  },
+                  {
+                    "bsonType": "object",
+                    "properties": {
+                      "_id": {
+                        "bsonType": "string"
+                      },
+                      "username": {
+                        "bsonType": "string"
+                      }
+                    }
+                  }
+                ]
+              },
+              "barcode": {
+                "bsonType": "string"
+              },
+              "prioritized": {
+                "bsonType": "bool"
+              },
+              "priority": {
+                "bsonType": "string"
+              },
+              "status": {
+                "bsonType": "string"
+              },
+              "title": {
+                "bsonType": "string"
+              },
+              "udi": {
+                "bsonType": "string"
+              }
+            }
+          },
+          "reason": {
+            "bsonType": "string"
+          },
+          "recordId": {
+            "bsonType": "string"
+          },
+          "tableName": {
+            "bsonType": "string"
+          }
+        }
+      }
+    },
+    "bioscale.auditlogs": {
+      "ns": "bioscale.auditlogs",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "action",
+          "changedAt",
+          "changedBy",
+          "newData",
+          "recordId",
+          "tableName"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "action": {
+            "bsonType": "string"
+          },
+          "changedAt": {
+            "bsonType": "date"
+          },
+          "changedBy": {
+            "bsonType": "string"
+          },
+          "newData": {
+            "bsonType": "object",
+            "properties": {
+              "color": {
+                "bsonType": "string"
+              },
+              "name": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "color",
+              "name"
+            ]
+          },
+          "recordId": {
+            "bsonType": "string"
+          },
+          "tableName": {
+            "bsonType": "string"
+          }
+        }
+      }
+    },
+    "bioscale.backing_lots": {
+      "ns": "bioscale.backing_lots",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "cartridgeCount",
+          "createdAt",
+          "lotType",
+          "operator",
+          "ovenEntryTime",
+          "status",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "cartridgeCount": {
+            "bsonType": "int"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "lotType": {
+            "bsonType": "string"
+          },
+          "operator": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "username": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "username"
+            ]
+          },
+          "ovenEntryTime": {
+            "bsonType": "date"
+          },
+          "status": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.batches": {
+      "ns": "bioscale.batches",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.bom_column_mapping": {
+      "ns": "bioscale.bom_column_mapping",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.bom_items": {
+      "ns": "bioscale.bom_items",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.bomcolumnmappings": {
+      "ns": "bioscale.bomcolumnmappings",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.bomitems": {
+      "ns": "bioscale.bomitems",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "bomType",
+          "category",
+          "createdAt",
+          "createdBy",
+          "inventoryCount",
+          "isActive",
+          "manufacturer",
+          "minimumStockLevel",
+          "name",
+          "partNumber",
+          "quantityPerUnit",
+          "supplier",
+          "unitCost",
+          "unitOfMeasure",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "bomType": {
+            "bsonType": "string"
+          },
+          "category": {
+            "bsonType": "string"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "createdBy": {
+            "bsonType": "string"
+          },
+          "inventoryCount": {
+            "bsonType": "int"
+          },
+          "isActive": {
+            "bsonType": "bool"
+          },
+          "manufacturer": {
+            "bsonType": "string"
+          },
+          "minimumStockLevel": {
+            "bsonType": "int"
+          },
+          "name": {
+            "bsonType": "string"
+          },
+          "partNumber": {
+            "bsonType": "string"
+          },
+          "quantityPerUnit": {
+            "bsonType": "int"
+          },
+          "supplier": {
+            "bsonType": "string"
+          },
+          "unitCost": {
+            "bsonType": "string"
+          },
+          "unitOfMeasure": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.bomitemversions": {
+      "ns": "bioscale.bomitemversions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.bompartlinks": {
+      "ns": "bioscale.bompartlinks",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.boxintegrations": {
+      "ns": "bioscale.boxintegrations",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.calibration_records": {
+      "ns": "bioscale.calibration_records",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.cartridge_groups": {
+      "ns": "bioscale.cartridge_groups",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.cartridge_records": {
+      "ns": "bioscale.cartridge_records",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "backing",
+          "corrections",
+          "createdAt",
+          "reagentFilling",
+          "testExecution",
+          "testResult",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "backing": {
+            "bsonType": "object",
+            "properties": {
+              "lotId": {
+                "bsonType": "string"
+              },
+              "lotQrCode": {
+                "bsonType": "string"
+              },
+              "operator": {
+                "bsonType": "object",
+                "properties": {
+                  "_id": {
+                    "bsonType": "string"
+                  },
+                  "username": {
+                    "bsonType": "string"
+                  }
+                },
+                "required": [
+                  "_id",
+                  "username"
+                ]
+              },
+              "ovenEntryTime": {
+                "bsonType": "date"
+              },
+              "recordedAt": {
+                "bsonType": "date"
+              }
+            },
+            "required": [
+              "recordedAt"
+            ]
+          },
+          "corrections": {
+            "bsonType": "array"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "currentPhase": {
+            "bsonType": "string"
+          },
+          "ovenCure": {
+            "bsonType": "object",
+            "properties": {
+              "entryTime": {
+                "bsonType": "date"
+              },
+              "exitTime": {
+                "bsonType": "date"
+              },
+              "operator": {
+                "bsonType": "object",
+                "properties": {
+                  "_id": {
+                    "bsonType": "string"
+                  },
+                  "username": {
+                    "bsonType": "string"
+                  }
+                },
+                "required": [
+                  "_id",
+                  "username"
+                ]
+              },
+              "recordedAt": {
+                "bsonType": "date"
+              }
+            },
+            "required": [
+              "entryTime",
+              "exitTime",
+              "operator",
+              "recordedAt"
+            ]
+          },
+          "reagentFilling": {
+            "bsonType": "object",
+            "properties": {
+              "assayType": {
+                "bsonType": "object",
+                "properties": {
+                  "_id": {
+                    "bsonType": "string"
+                  },
+                  "name": {
+                    "bsonType": "string"
+                  },
+                  "skuCode": {
+                    "bsonType": "string"
+                  }
+                },
+                "required": [
+                  "_id",
+                  "name",
+                  "skuCode"
+                ]
+              },
+              "deckPosition": {
+                "bsonType": "int"
+              },
+              "fillDate": {
+                "bsonType": "date"
+              },
+              "operator": {
+                "bsonType": "object",
+                "properties": {
+                  "_id": {
+                    "bsonType": "string"
+                  },
+                  "username": {
+                    "bsonType": "string"
+                  }
+                },
+                "required": [
+                  "_id",
+                  "username"
+                ]
+              },
+              "recordedAt": {
+                "bsonType": "date"
+              },
+              "robotId": {
+                "bsonType": "string"
+              },
+              "robotName": {
+                "bsonType": "string"
+              },
+              "runId": {
+                "bsonType": "string"
+              },
+              "tubeRecords": {
+                "bsonType": "array",
+                "items": {
+                  "bsonType": "object",
+                  "properties": {
+                    "_id": {
+                      "bsonType": "objectId"
+                    },
+                    "reagentName": {
+                      "bsonType": "string"
+                    },
+                    "sourceLotId": {
+                      "bsonType": "string"
+                    },
+                    "transferTubeId": {
+                      "bsonType": "string"
+                    },
+                    "wellPosition": {
+                      "bsonType": "int"
+                    }
+                  },
+                  "required": [
+                    "_id",
+                    "reagentName",
+                    "sourceLotId",
+                    "transferTubeId",
+                    "wellPosition"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "tubeRecords"
+            ]
+          },
+          "storage": {
+            "bsonType": "object",
+            "properties": {
+              "fridgeName": {
+                "bsonType": "string"
+              },
+              "operator": {
+                "bsonType": "object",
+                "properties": {
+                  "_id": {
+                    "bsonType": "string"
+                  },
+                  "username": {
+                    "bsonType": "string"
+                  }
+                },
+                "required": [
+                  "_id",
+                  "username"
+                ]
+              },
+              "recordedAt": {
+                "bsonType": "date"
+              },
+              "timestamp": {
+                "bsonType": "date"
+              }
+            },
+            "required": [
+              "fridgeName",
+              "operator",
+              "recordedAt",
+              "timestamp"
+            ]
+          },
+          "testExecution": {
+            "bsonType": "object",
+            "properties": {
+              "spu": {
+                "bsonType": "object",
+                "properties": {
+                  "parts": {
+                    "bsonType": "array"
+                  }
+                },
+                "required": [
+                  "parts"
+                ]
+              }
+            },
+            "required": [
+              "spu"
+            ]
+          },
+          "testResult": {
+            "bsonType": "object",
+            "properties": {
+              "spectroReadings": {
+                "bsonType": "array"
+              }
+            },
+            "required": [
+              "spectroReadings"
+            ]
+          },
+          "topSeal": {
+            "bsonType": "object",
+            "properties": {
+              "batchId": {
+                "bsonType": "string"
+              },
+              "operator": {
+                "bsonType": "object",
+                "properties": {
+                  "_id": {
+                    "bsonType": "string"
+                  },
+                  "username": {
+                    "bsonType": "string"
+                  }
+                },
+                "required": [
+                  "_id",
+                  "username"
+                ]
+              },
+              "recordedAt": {
+                "bsonType": "date"
+              },
+              "timestamp": {
+                "bsonType": "date"
+              },
+              "topSealLotId": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "batchId",
+              "operator",
+              "recordedAt",
+              "timestamp",
+              "topSealLotId"
+            ]
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          },
+          "waxFilling": {
+            "bsonType": "object",
+            "properties": {
+              "deckId": {
+                "bsonType": "string"
+              },
+              "deckPosition": {
+                "bsonType": "int"
+              },
+              "operator": {
+                "bsonType": "object",
+                "properties": {
+                  "_id": {
+                    "bsonType": "string"
+                  },
+                  "username": {
+                    "bsonType": "string"
+                  }
+                },
+                "required": [
+                  "_id",
+                  "username"
+                ]
+              },
+              "recordedAt": {
+                "bsonType": "date"
+              },
+              "robotId": {
+                "bsonType": "string"
+              },
+              "robotName": {
+                "bsonType": "string"
+              },
+              "runEndTime": {
+                "bsonType": "date"
+              },
+              "runId": {
+                "bsonType": "string"
+              },
+              "runStartTime": {
+                "bsonType": "date"
+              },
+              "waxSourceLot": {
+                "bsonType": "string"
+              },
+              "waxTubeId": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "deckPosition",
+              "runId"
+            ]
+          },
+          "waxStorage": {
+            "bsonType": "object",
+            "properties": {
+              "location": {
+                "bsonType": "string"
+              },
+              "operator": {
+                "bsonType": "object",
+                "properties": {
+                  "_id": {
+                    "bsonType": "string"
+                  },
+                  "username": {
+                    "bsonType": "string"
+                  }
+                },
+                "required": [
+                  "_id",
+                  "username"
+                ]
+              },
+              "recordedAt": {
+                "bsonType": "date"
+              },
+              "timestamp": {
+                "bsonType": "date"
+              }
+            },
+            "required": [
+              "location",
+              "operator",
+              "recordedAt",
+              "timestamp"
+            ]
+          }
+        }
+      }
+    },
+    "bioscale.cartridgebomitems": {
+      "ns": "bioscale.cartridgebomitems",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.cartridgegroups": {
+      "ns": "bioscale.cartridgegroups",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.cartridgerecords": {
+      "ns": "bioscale.cartridgerecords",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "backing",
+          "corrections",
+          "createdAt",
+          "currentPhase",
+          "reagentFilling",
+          "reagentInspection",
+          "topSeal",
+          "updatedAt",
+          "waxFilling",
+          "waxQc",
+          "waxStorage"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "backing": {
+            "bsonType": "object",
+            "properties": {
+              "lotId": {
+                "bsonType": "string"
+              },
+              "lotQrCode": {
+                "bsonType": "string"
+              },
+              "ovenEntryTime": {
+                "bsonType": "date"
+              },
+              "recordedAt": {
+                "bsonType": "date"
+              }
+            },
+            "required": [
+              "lotId",
+              "lotQrCode",
+              "ovenEntryTime",
+              "recordedAt"
+            ]
+          },
+          "corrections": {
+            "bsonType": "array"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "currentPhase": {
+            "bsonType": "string"
+          },
+          "reagentFilling": {
+            "anyOf": [
+              {
+                "bsonType": "object",
+                "properties": {
+                  "assayType": {
+                    "bsonType": "object",
+                    "properties": {
+                      "_id": {
+                        "bsonType": "string"
+                      },
+                      "name": {
+                        "bsonType": "string"
+                      },
+                      "skuCode": {
+                        "bsonType": "string"
+                      }
+                    },
+                    "required": [
+                      "_id",
+                      "name",
+                      "skuCode"
+                    ]
+                  },
+                  "deckPosition": {
+                    "bsonType": "int"
+                  },
+                  "expirationDate": {
+                    "bsonType": "date"
+                  },
+                  "fillDate": {
+                    "bsonType": "date"
+                  },
+                  "operator": {
+                    "bsonType": "object",
+                    "properties": {
+                      "_id": {
+                        "bsonType": "string"
+                      },
+                      "username": {
+                        "bsonType": "string"
+                      }
+                    },
+                    "required": [
+                      "_id",
+                      "username"
+                    ]
+                  },
+                  "recordedAt": {
+                    "bsonType": "date"
+                  },
+                  "robotId": {
+                    "bsonType": "string"
+                  },
+                  "robotName": {
+                    "bsonType": "string"
+                  },
+                  "runId": {
+                    "bsonType": "string"
+                  }
+                },
+                "required": [
+                  "assayType",
+                  "deckPosition",
+                  "expirationDate",
+                  "fillDate",
+                  "operator",
+                  "recordedAt",
+                  "robotId",
+                  "robotName",
+                  "runId"
+                ]
+              },
+              {
+                "bsonType": "null"
+              }
+            ]
+          },
+          "reagentInspection": {
+            "anyOf": [
+              {
+                "bsonType": "null"
+              },
+              {
+                "bsonType": "object",
+                "properties": {
+                  "operator": {
+                    "bsonType": "object",
+                    "properties": {
+                      "_id": {
+                        "bsonType": "string"
+                      },
+                      "username": {
+                        "bsonType": "string"
+                      }
+                    },
+                    "required": [
+                      "_id",
+                      "username"
+                    ]
+                  },
+                  "reason": {
+                    "bsonType": [
+                      "null",
+                      "string"
+                    ]
+                  },
+                  "recordedAt": {
+                    "bsonType": "date"
+                  },
+                  "status": {
+                    "bsonType": "string"
+                  },
+                  "timestamp": {
+                    "bsonType": "date"
+                  }
+                },
+                "required": [
+                  "operator",
+                  "reason",
+                  "recordedAt",
+                  "status",
+                  "timestamp"
+                ]
+              }
+            ]
+          },
+          "topSeal": {
+            "anyOf": [
+              {
+                "bsonType": "null"
+              },
+              {
+                "bsonType": "object",
+                "properties": {
+                  "batchId": {
+                    "bsonType": "string"
+                  },
+                  "operator": {
+                    "bsonType": "object",
+                    "properties": {
+                      "_id": {
+                        "bsonType": "string"
+                      },
+                      "username": {
+                        "bsonType": "string"
+                      }
+                    },
+                    "required": [
+                      "_id",
+                      "username"
+                    ]
+                  },
+                  "recordedAt": {
+                    "bsonType": "date"
+                  },
+                  "timestamp": {
+                    "bsonType": "date"
+                  },
+                  "topSealLotId": {
+                    "bsonType": "string"
+                  }
+                },
+                "required": [
+                  "batchId",
+                  "operator",
+                  "recordedAt",
+                  "timestamp",
+                  "topSealLotId"
+                ]
+              }
+            ]
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          },
+          "waxFilling": {
+            "anyOf": [
+              {
+                "bsonType": "object",
+                "properties": {
+                  "deckId": {
+                    "bsonType": "string"
+                  },
+                  "deckPosition": {
+                    "bsonType": "int"
+                  },
+                  "operator": {
+                    "bsonType": "object",
+                    "properties": {
+                      "_id": {
+                        "bsonType": "string"
+                      },
+                      "username": {
+                        "bsonType": "string"
+                      }
+                    },
+                    "required": [
+                      "_id",
+                      "username"
+                    ]
+                  },
+                  "recordedAt": {
+                    "bsonType": "date"
+                  },
+                  "robotId": {
+                    "bsonType": "string"
+                  },
+                  "robotName": {
+                    "bsonType": "string"
+                  },
+                  "runEndTime": {
+                    "bsonType": "date"
+                  },
+                  "runId": {
+                    "bsonType": "string"
+                  },
+                  "runStartTime": {
+                    "bsonType": "date"
+                  },
+                  "waxSourceLot": {
+                    "bsonType": "string"
+                  },
+                  "waxTubeId": {
+                    "bsonType": "string"
+                  }
+                },
+                "required": [
+                  "deckId",
+                  "deckPosition",
+                  "operator",
+                  "recordedAt",
+                  "robotId",
+                  "robotName",
+                  "runEndTime",
+                  "runId",
+                  "runStartTime",
+                  "waxSourceLot",
+                  "waxTubeId"
+                ]
+              },
+              {
+                "bsonType": "null"
+              }
+            ]
+          },
+          "waxQc": {
+            "anyOf": [
+              {
+                "bsonType": "object",
+                "properties": {
+                  "operator": {
+                    "bsonType": "object",
+                    "properties": {
+                      "_id": {
+                        "bsonType": "string"
+                      },
+                      "username": {
+                        "bsonType": "string"
+                      }
+                    },
+                    "required": [
+                      "_id",
+                      "username"
+                    ]
+                  },
+                  "recordedAt": {
+                    "bsonType": "date"
+                  },
+                  "status": {
+                    "bsonType": "string"
+                  },
+                  "timestamp": {
+                    "bsonType": "date"
+                  }
+                },
+                "required": [
+                  "operator",
+                  "recordedAt",
+                  "status",
+                  "timestamp"
+                ]
+              },
+              {
+                "bsonType": "null"
+              }
+            ]
+          },
+          "waxStorage": {
+            "anyOf": [
+              {
+                "bsonType": "object",
+                "properties": {
+                  "coolingTrayId": {
+                    "bsonType": "string"
+                  },
+                  "location": {
+                    "bsonType": "string"
+                  },
+                  "operator": {
+                    "bsonType": "object",
+                    "properties": {
+                      "_id": {
+                        "bsonType": "string"
+                      },
+                      "username": {
+                        "bsonType": "string"
+                      }
+                    },
+                    "required": [
+                      "_id",
+                      "username"
+                    ]
+                  },
+                  "recordedAt": {
+                    "bsonType": "date"
+                  },
+                  "timestamp": {
+                    "bsonType": "date"
+                  }
+                },
+                "required": [
+                  "coolingTrayId",
+                  "location",
+                  "operator",
+                  "recordedAt",
+                  "timestamp"
+                ]
+              },
+              {
+                "bsonType": "null"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "bioscale.cartridges": {
+      "ns": "bioscale.cartridges",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.cartridgeusagelogs": {
+      "ns": "bioscale.cartridgeusagelogs",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.communicationpreferences": {
+      "ns": "bioscale.communicationpreferences",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.consumables": {
+      "ns": "bioscale.consumables",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "createdAt",
+          "status",
+          "type",
+          "updatedAt",
+          "usageLog"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "lastUsed": {
+            "bsonType": "date"
+          },
+          "status": {
+            "bsonType": "string"
+          },
+          "type": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          },
+          "usageLog": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "_id": {
+                  "bsonType": "string"
+                },
+                "createdAt": {
+                  "bsonType": "date"
+                },
+                "notes": {
+                  "bsonType": "string"
+                },
+                "operator": {
+                  "bsonType": "object",
+                  "properties": {
+                    "_id": {
+                      "bsonType": "string"
+                    },
+                    "username": {
+                      "bsonType": "string"
+                    }
+                  },
+                  "required": [
+                    "_id",
+                    "username"
+                  ]
+                },
+                "quantityChanged": {
+                  "bsonType": "int"
+                },
+                "runId": {
+                  "bsonType": "string"
+                },
+                "usageType": {
+                  "bsonType": "string"
+                }
+              },
+              "required": [
+                "_id",
+                "createdAt",
+                "notes",
+                "operator",
+                "quantityChanged",
+                "runId",
+                "usageType"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "bioscale.coolingtrayrecords": {
+      "ns": "bioscale.coolingtrayrecords",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.customernotes": {
+      "ns": "bioscale.customernotes",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.customers": {
+      "ns": "bioscale.customers",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "address",
+          "contactEmail",
+          "contactName",
+          "contactPhone",
+          "createdAt",
+          "createdBy",
+          "customerType",
+          "isActive",
+          "name",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "address": {
+            "bsonType": "string"
+          },
+          "contactEmail": {
+            "bsonType": "string"
+          },
+          "contactName": {
+            "bsonType": "string"
+          },
+          "contactPhone": {
+            "bsonType": "string"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "createdBy": {
+            "bsonType": "string"
+          },
+          "customerType": {
+            "bsonType": "string"
+          },
+          "isActive": {
+            "bsonType": "bool"
+          },
+          "name": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.deckrecords": {
+      "ns": "bioscale.deckrecords",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.device_events": {
+      "ns": "bioscale.device_events",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.deviceevents": {
+      "ns": "bioscale.deviceevents",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.document_repository": {
+      "ns": "bioscale.document_repository",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.documentrepositories": {
+      "ns": "bioscale.documentrepositories",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.documentrevisions": {
+      "ns": "bioscale.documentrevisions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.documents": {
+      "ns": "bioscale.documents",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.documenttrainings": {
+      "ns": "bioscale.documenttrainings",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.electronic_signatures": {
+      "ns": "bioscale.electronic_signatures",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.electronicsignatures": {
+      "ns": "bioscale.electronicsignatures",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.equipment": {
+      "ns": "bioscale.equipment",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "createdAt",
+          "currentTemperatureC",
+          "equipmentType",
+          "name",
+          "notes",
+          "status",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "currentTemperatureC": {
+            "bsonType": "double"
+          },
+          "equipmentType": {
+            "bsonType": "string"
+          },
+          "name": {
+            "bsonType": "string"
+          },
+          "notes": {
+            "bsonType": "string"
+          },
+          "status": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.equipment_locations": {
+      "ns": "bioscale.equipment_locations",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "barcode",
+          "createdAt",
+          "currentPlacements",
+          "displayName",
+          "isActive",
+          "locationType",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "barcode": {
+            "bsonType": "string"
+          },
+          "capacity": {
+            "bsonType": "int"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "currentPlacements": {
+            "bsonType": "array"
+          },
+          "displayName": {
+            "bsonType": "string"
+          },
+          "isActive": {
+            "bsonType": "bool"
+          },
+          "locationType": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.equipmenteventlogs": {
+      "ns": "bioscale.equipmenteventlogs",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.equipmentlocations": {
+      "ns": "bioscale.equipmentlocations",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "barcode",
+          "capacity",
+          "createdAt",
+          "currentPlacements",
+          "displayName",
+          "isActive",
+          "locationType",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "barcode": {
+            "bsonType": "string"
+          },
+          "capacity": {
+            "bsonType": "int"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "currentPlacements": {
+            "bsonType": "array"
+          },
+          "displayName": {
+            "bsonType": "string"
+          },
+          "isActive": {
+            "bsonType": "bool"
+          },
+          "locationType": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.files": {
+      "ns": "bioscale.files",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.firmware_cartridges": {
+      "ns": "bioscale.firmware_cartridges",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.firmware_devices": {
+      "ns": "bioscale.firmware_devices",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.firmwarecartridges": {
+      "ns": "bioscale.firmwarecartridges",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.firmwaredevices": {
+      "ns": "bioscale.firmwaredevices",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.generated_barcodes": {
+      "ns": "bioscale.generated_barcodes",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "createdAt",
+          "prefix",
+          "sequence"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "barcode": {
+            "bsonType": "string"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "prefix": {
+            "bsonType": "string"
+          },
+          "sequence": {
+            "bsonType": "int"
+          },
+          "type": {
+            "bsonType": "string"
+          }
+        }
+      }
+    },
+    "bioscale.generatedbarcodes": {
+      "ns": "bioscale.generatedbarcodes",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "barcode",
+          "createdAt",
+          "prefix",
+          "sequence",
+          "type"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "barcode": {
+            "bsonType": "string"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "prefix": {
+            "bsonType": "string"
+          },
+          "sequence": {
+            "bsonType": "int"
+          },
+          "type": {
+            "bsonType": "string"
+          }
+        }
+      }
+    },
+    "bioscale.incubatortubes": {
+      "ns": "bioscale.incubatortubes",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.incubatortubeusages": {
+      "ns": "bioscale.incubatortubeusages",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.inspection_procedure_revisions": {
+      "ns": "bioscale.inspection_procedure_revisions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.inspection_results": {
+      "ns": "bioscale.inspection_results",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.integrations": {
+      "ns": "bioscale.integrations",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "accessToken",
+          "createdAt",
+          "isActive",
+          "lastSyncAt",
+          "lastSyncError",
+          "lastSyncStatus",
+          "syncIntervalMinutes",
+          "type",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "accessToken": {
+            "bsonType": "string"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "expiresAt": {
+            "bsonType": "date"
+          },
+          "isActive": {
+            "bsonType": "bool"
+          },
+          "lastSyncAt": {
+            "bsonType": "date"
+          },
+          "lastSyncError": {
+            "bsonType": [
+              "null",
+              "string"
+            ]
+          },
+          "lastSyncStatus": {
+            "bsonType": "string"
+          },
+          "refreshToken": {
+            "bsonType": "string"
+          },
+          "spreadsheetId": {
+            "bsonType": "string"
+          },
+          "syncIntervalMinutes": {
+            "bsonType": "int"
+          },
+          "type": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.inventory_transactions": {
+      "ns": "bioscale.inventory_transactions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "newQuantity",
+          "performedAt",
+          "performedBy",
+          "previousQuantity",
+          "quantity",
+          "reason",
+          "transactionType"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "cartridgeRecordId": {
+            "bsonType": "string"
+          },
+          "lotId": {
+            "bsonType": "string"
+          },
+          "manufacturingRunId": {
+            "bsonType": "string"
+          },
+          "manufacturingStep": {
+            "bsonType": "string"
+          },
+          "newQuantity": {
+            "bsonType": "int"
+          },
+          "notes": {
+            "bsonType": "string"
+          },
+          "operatorId": {
+            "bsonType": "string"
+          },
+          "operatorUsername": {
+            "bsonType": "string"
+          },
+          "partDefinitionId": {
+            "bsonType": "string"
+          },
+          "performedAt": {
+            "bsonType": "date"
+          },
+          "performedBy": {
+            "bsonType": "string"
+          },
+          "previousQuantity": {
+            "bsonType": "int"
+          },
+          "quantity": {
+            "bsonType": "int"
+          },
+          "reason": {
+            "bsonType": "string"
+          },
+          "transactionType": {
+            "bsonType": "string"
+          }
+        }
+      }
+    },
+    "bioscale.inventorytransactions": {
+      "ns": "bioscale.inventorytransactions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "newQuantity",
+          "partDefinitionId",
+          "performedAt",
+          "performedBy",
+          "previousQuantity",
+          "quantity",
+          "reason",
+          "transactionType"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "assemblySessionId": {
+            "bsonType": "string"
+          },
+          "newQuantity": {
+            "bsonType": "int"
+          },
+          "partDefinitionId": {
+            "bsonType": "string"
+          },
+          "performedAt": {
+            "bsonType": "date"
+          },
+          "performedBy": {
+            "bsonType": "string"
+          },
+          "previousQuantity": {
+            "bsonType": "int"
+          },
+          "quantity": {
+            "bsonType": "int"
+          },
+          "reason": {
+            "bsonType": "string"
+          },
+          "retractedAt": {
+            "bsonType": "date"
+          },
+          "retractedBy": {
+            "bsonType": "string"
+          },
+          "retractionReason": {
+            "bsonType": "string"
+          },
+          "transactionType": {
+            "bsonType": "string"
+          }
+        }
+      }
+    },
+    "bioscale.invite_tokens": {
+      "ns": "bioscale.invite_tokens",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.invitetokens": {
+      "ns": "bioscale.invitetokens",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.kanban_projects": {
+      "ns": "bioscale.kanban_projects",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "color",
+          "createdAt",
+          "createdBy",
+          "isActive",
+          "name",
+          "sortOrder"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "color": {
+            "bsonType": "string"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "createdBy": {
+            "bsonType": "string"
+          },
+          "description": {
+            "bsonType": "string"
+          },
+          "isActive": {
+            "bsonType": "bool"
+          },
+          "name": {
+            "bsonType": "string"
+          },
+          "sortOrder": {
+            "bsonType": "int"
+          }
+        }
+      }
+    },
+    "bioscale.kanban_tasks": {
+      "ns": "bioscale.kanban_tasks",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "activityLog",
+          "assignee",
+          "createdAt",
+          "status",
+          "statusChangedAt",
+          "title",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "activityLog": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "_id": {
+                  "bsonType": "string"
+                },
+                "action": {
+                  "bsonType": "string"
+                },
+                "createdAt": {
+                  "bsonType": [
+                    "date",
+                    "string"
+                  ]
+                },
+                "createdBy": {
+                  "bsonType": "string"
+                },
+                "details": {
+                  "bsonType": "object",
+                  "properties": {
+                    "by": {
+                      "bsonType": "string"
+                    },
+                    "fields": {
+                      "bsonType": "string"
+                    },
+                    "from": {
+                      "bsonType": "string"
+                    },
+                    "to": {
+                      "bsonType": "string"
+                    }
+                  }
+                }
+              },
+              "required": [
+                "_id",
+                "action",
+                "createdAt",
+                "createdBy",
+                "details"
+              ]
+            }
+          },
+          "archived": {
+            "bsonType": "bool"
+          },
+          "assignee": {
+            "anyOf": [
+              {
+                "bsonType": "object",
+                "properties": {
+                  "_id": {
+                    "bsonType": "string"
+                  },
+                  "username": {
+                    "bsonType": "string"
+                  }
+                },
+                "required": [
+                  "_id",
+                  "username"
+                ]
+              },
+              {
+                "bsonType": "null"
+              }
+            ]
+          },
+          "assigneeId": {
+            "bsonType": "string"
+          },
+          "backlogDate": {
+            "bsonType": "date"
+          },
+          "comments": {
+            "bsonType": "array"
+          },
+          "completedAt": {
+            "bsonType": [
+              "date",
+              "null"
+            ]
+          },
+          "completedDate": {
+            "bsonType": "date"
+          },
+          "createdAt": {
+            "bsonType": [
+              "date",
+              "string"
+            ]
+          },
+          "createdBy": {
+            "bsonType": "string"
+          },
+          "description": {
+            "bsonType": "string"
+          },
+          "dueDate": {
+            "bsonType": "null"
+          },
+          "prioritized": {
+            "bsonType": "bool"
+          },
+          "priority": {
+            "bsonType": "string"
+          },
+          "project": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "color": {
+                "bsonType": "string"
+              },
+              "name": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "color",
+              "name"
+            ]
+          },
+          "projectId": {
+            "bsonType": "string"
+          },
+          "proposals": {
+            "bsonType": "array"
+          },
+          "readyDate": {
+            "bsonType": "date"
+          },
+          "sortOrder": {
+            "bsonType": "int"
+          },
+          "source": {
+            "bsonType": "string"
+          },
+          "status": {
+            "bsonType": "string"
+          },
+          "statusChangedAt": {
+            "bsonType": "date"
+          },
+          "tags": {
+            "bsonType": "array"
+          },
+          "taskLength": {
+            "bsonType": "string"
+          },
+          "title": {
+            "bsonType": "string"
+          },
+          "transitions": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "_id": {
+                  "bsonType": "string"
+                },
+                "changedBy": {
+                  "bsonType": "string"
+                },
+                "fromStatus": {
+                  "bsonType": "string"
+                },
+                "timestamp": {
+                  "bsonType": "date"
+                },
+                "toStatus": {
+                  "bsonType": "string"
+                }
+              },
+              "required": [
+                "_id",
+                "changedBy",
+                "fromStatus",
+                "timestamp",
+                "toStatus"
+              ]
+            }
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          },
+          "waitingDate": {
+            "bsonType": "date"
+          },
+          "waitingOn": {
+            "bsonType": "null"
+          },
+          "waitingReason": {
+            "bsonType": "null"
+          },
+          "wipDate": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.kanbanactionlogs": {
+      "ns": "bioscale.kanbanactionlogs",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.kanbanboardevents": {
+      "ns": "bioscale.kanbanboardevents",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.kanbancomments": {
+      "ns": "bioscale.kanbancomments",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.kanbanprojects": {
+      "ns": "bioscale.kanbanprojects",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "color",
+          "createdAt",
+          "createdBy",
+          "isActive",
+          "name"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "color": {
+            "bsonType": "string"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "createdBy": {
+            "bsonType": "string"
+          },
+          "description": {
+            "bsonType": "null"
+          },
+          "isActive": {
+            "bsonType": "bool"
+          },
+          "name": {
+            "bsonType": "string"
+          },
+          "sortOrder": {
+            "bsonType": "int"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.kanbantags": {
+      "ns": "bioscale.kanbantags",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.kanbantaskproposals": {
+      "ns": "bioscale.kanbantaskproposals",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.kanbantasks": {
+      "ns": "bioscale.kanbantasks",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "archived",
+          "assignedTo",
+          "createdAt",
+          "createdBy",
+          "description",
+          "priority",
+          "projectId",
+          "status",
+          "title",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "archived": {
+            "bsonType": "bool"
+          },
+          "assignedTo": {
+            "bsonType": "string"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "createdBy": {
+            "bsonType": "string"
+          },
+          "description": {
+            "bsonType": "string"
+          },
+          "priority": {
+            "bsonType": "string"
+          },
+          "projectId": {
+            "bsonType": "string"
+          },
+          "status": {
+            "bsonType": "string"
+          },
+          "title": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.kanbantasktags": {
+      "ns": "bioscale.kanbantasktags",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.lab_cartridges": {
+      "ns": "bioscale.lab_cartridges",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.laborentries": {
+      "ns": "bioscale.laborentries",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.laser_cut_batches": {
+      "ns": "bioscale.laser_cut_batches",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.lasercutbatches": {
+      "ns": "bioscale.lasercutbatches",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.locationplacements": {
+      "ns": "bioscale.locationplacements",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.lot_records": {
+      "ns": "bioscale.lot_records",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "cartridgeIds",
+          "createdAt",
+          "desiredQuantity",
+          "operator",
+          "ovenEntryTime",
+          "processConfig",
+          "qrCodeRef",
+          "quantityProduced",
+          "startTime",
+          "status",
+          "stepEntries",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "cartridgeIds": {
+            "bsonType": "array"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "desiredQuantity": {
+            "bsonType": "int"
+          },
+          "operator": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "username": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "username"
+            ]
+          },
+          "ovenEntryTime": {
+            "bsonType": "date"
+          },
+          "processConfig": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "processName": {
+                "bsonType": "string"
+              },
+              "processType": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "processName",
+              "processType"
+            ]
+          },
+          "qrCodeRef": {
+            "bsonType": "string"
+          },
+          "quantityProduced": {
+            "bsonType": "int"
+          },
+          "startTime": {
+            "bsonType": "date"
+          },
+          "status": {
+            "bsonType": "string"
+          },
+          "stepEntries": {
+            "bsonType": "array"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.lotrecords": {
+      "ns": "bioscale.lotrecords",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "createdAt",
+          "cycleTime",
+          "desiredQuantity",
+          "finishTime",
+          "operator",
+          "processConfig",
+          "qrCodeRef",
+          "quantityProduced",
+          "startTime",
+          "status",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "cycleTime": {
+            "bsonType": [
+              "int",
+              "null"
+            ]
+          },
+          "desiredQuantity": {
+            "bsonType": "int"
+          },
+          "finishTime": {
+            "bsonType": [
+              "date",
+              "null"
+            ]
+          },
+          "operator": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "username": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "username"
+            ]
+          },
+          "processConfig": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "processName": {
+                "bsonType": "string"
+              },
+              "processType": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "processName",
+              "processType"
+            ]
+          },
+          "qrCodeRef": {
+            "bsonType": "string"
+          },
+          "quantityDiscrepancyReason": {
+            "bsonType": "string"
+          },
+          "quantityProduced": {
+            "bsonType": "int"
+          },
+          "startTime": {
+            "bsonType": "date"
+          },
+          "status": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.lotstepentries": {
+      "ns": "bioscale.lotstepentries",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.manufacturing_material_transactions": {
+      "ns": "bioscale.manufacturing_material_transactions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.manufacturing_materials": {
+      "ns": "bioscale.manufacturing_materials",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.manufacturing_settings": {
+      "ns": "bioscale.manufacturing_settings",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "general",
+          "reagentFilling",
+          "rejectionReasonCodes",
+          "updatedAt",
+          "waxFilling"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "general": {
+            "bsonType": "object",
+            "properties": {
+              "cartridgesPerLaserCutSheet": {
+                "bsonType": "int"
+              },
+              "defaultCuttingProgramLink": {
+                "bsonType": "string"
+              },
+              "defaultLaserTools": {
+                "bsonType": "string"
+              },
+              "defaultRollLengthFt": {
+                "bsonType": "int"
+              },
+              "sheetsPerLaserBatch": {
+                "bsonType": "int"
+              },
+              "topSealLengthPerCutFt": {
+                "bsonType": "int"
+              }
+            },
+            "required": [
+              "cartridgesPerLaserCutSheet",
+              "defaultCuttingProgramLink",
+              "defaultLaserTools",
+              "defaultRollLengthFt",
+              "sheetsPerLaserBatch",
+              "topSealLengthPerCutFt"
+            ]
+          },
+          "reagentFilling": {
+            "bsonType": "object",
+            "properties": {
+              "fillTimePerCartridgeMin": {
+                "bsonType": "int"
+              },
+              "minCoolingTimeMin": {
+                "bsonType": "int"
+              }
+            },
+            "required": [
+              "fillTimePerCartridgeMin",
+              "minCoolingTimeMin"
+            ]
+          },
+          "rejectionReasonCodes": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "code": {
+                  "bsonType": "string"
+                },
+                "label": {
+                  "bsonType": "string"
+                },
+                "processType": {
+                  "bsonType": "string"
+                },
+                "sortOrder": {
+                  "bsonType": "int"
+                }
+              },
+              "required": [
+                "code",
+                "label",
+                "processType",
+                "sortOrder"
+              ]
+            }
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          },
+          "waxFilling": {
+            "bsonType": "object",
+            "properties": {
+              "cartridgesPerColumn": {
+                "bsonType": "int"
+              },
+              "coolingWarningMin": {
+                "bsonType": "int"
+              },
+              "deckLockoutMin": {
+                "bsonType": "int"
+              },
+              "heaterTempC": {
+                "bsonType": "int"
+              },
+              "incubatorTempC": {
+                "bsonType": "int"
+              },
+              "minOvenTimeMin": {
+                "bsonType": "int"
+              },
+              "removeDeckWarningMin": {
+                "bsonType": "int"
+              },
+              "runDurationMin": {
+                "bsonType": "int"
+              },
+              "tubeCapacityUl": {
+                "bsonType": "int"
+              },
+              "waxPerCartridgeUl": {
+                "bsonType": "int"
+              },
+              "waxPerDeckUl": {
+                "bsonType": "int"
+              }
+            },
+            "required": [
+              "cartridgesPerColumn",
+              "coolingWarningMin",
+              "deckLockoutMin",
+              "heaterTempC",
+              "incubatorTempC",
+              "minOvenTimeMin",
+              "removeDeckWarningMin",
+              "runDurationMin",
+              "tubeCapacityUl",
+              "waxPerCartridgeUl",
+              "waxPerDeckUl"
+            ]
+          }
+        }
+      }
+    },
+    "bioscale.manufacturingmaterials": {
+      "ns": "bioscale.manufacturingmaterials",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.manufacturingmaterialtransactions": {
+      "ns": "bioscale.manufacturingmaterialtransactions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.manufacturingsettings": {
+      "ns": "bioscale.manufacturingsettings",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.opentrons_robots": {
+      "ns": "bioscale.opentrons_robots",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "createdAt",
+          "isActive",
+          "name",
+          "robotSide",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "isActive": {
+            "bsonType": "bool"
+          },
+          "name": {
+            "bsonType": "string"
+          },
+          "robotSide": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.opentronshealthsnapshots": {
+      "ns": "bioscale.opentronshealthsnapshots",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.opentronsprotocolrecords": {
+      "ns": "bioscale.opentronsprotocolrecords",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.opentronsrobots": {
+      "ns": "bioscale.opentronsrobots",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.packagecartridges": {
+      "ns": "bioscale.packagecartridges",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.part_definitions": {
+      "ns": "bioscale.part_definitions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "bomType",
+          "createdAt",
+          "inventoryCount",
+          "isActive",
+          "name",
+          "partNumber",
+          "quantityPerUnit",
+          "sortOrder",
+          "supplier",
+          "unitCost",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "bomType": {
+            "bsonType": "string"
+          },
+          "category": {
+            "bsonType": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "inventoryCount": {
+            "bsonType": "int"
+          },
+          "isActive": {
+            "bsonType": "bool"
+          },
+          "leadTimeDays": {
+            "bsonType": [
+              "int",
+              "null"
+            ]
+          },
+          "name": {
+            "bsonType": "string"
+          },
+          "partNumber": {
+            "bsonType": "string"
+          },
+          "percentAccepted": {
+            "bsonType": "int"
+          },
+          "quantityPerUnit": {
+            "bsonType": [
+              "int",
+              "double",
+              "null"
+            ]
+          },
+          "sampleSize": {
+            "bsonType": "int"
+          },
+          "sortOrder": {
+            "bsonType": "int"
+          },
+          "supplier": {
+            "bsonType": [
+              "string",
+              "null"
+            ]
+          },
+          "supplierPartNumber": {
+            "bsonType": [
+              "string",
+              "null"
+            ]
+          },
+          "unitCost": {
+            "bsonType": [
+              "string",
+              "null"
+            ]
+          },
+          "unitOfMeasure": {
+            "bsonType": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          },
+          "vendorPartNumber": {
+            "bsonType": "string"
+          }
+        }
+      }
+    },
+    "bioscale.partdefinitions": {
+      "ns": "bioscale.partdefinitions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "category",
+          "createdAt",
+          "createdBy",
+          "description",
+          "isActive",
+          "leadTimeDays",
+          "manufacturer",
+          "minimumOrderQty",
+          "name",
+          "partNumber",
+          "sortOrder",
+          "supplier",
+          "unitCost",
+          "unitOfMeasure",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "category": {
+            "bsonType": "string"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "createdBy": {
+            "bsonType": "string"
+          },
+          "description": {
+            "bsonType": "string"
+          },
+          "isActive": {
+            "bsonType": "bool"
+          },
+          "leadTimeDays": {
+            "bsonType": "int"
+          },
+          "manufacturer": {
+            "bsonType": "string"
+          },
+          "minimumOrderQty": {
+            "bsonType": "int"
+          },
+          "name": {
+            "bsonType": "string"
+          },
+          "partNumber": {
+            "bsonType": "string"
+          },
+          "sortOrder": {
+            "bsonType": "int"
+          },
+          "supplier": {
+            "bsonType": "string"
+          },
+          "unitCost": {
+            "bsonType": "string"
+          },
+          "unitOfMeasure": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.particle_devices": {
+      "ns": "bioscale.particle_devices",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "createdAt",
+          "firmwareVersion",
+          "lastHeardAt",
+          "lastIpAddress",
+          "name",
+          "needsAttention",
+          "particleDeviceId",
+          "platformId",
+          "serialNumber",
+          "status",
+          "systemVersion",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "firmwareVersion": {
+            "bsonType": "null"
+          },
+          "lastHeardAt": {
+            "bsonType": [
+              "date",
+              "null"
+            ]
+          },
+          "lastIpAddress": {
+            "bsonType": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "bsonType": "string"
+          },
+          "needsAttention": {
+            "bsonType": "bool"
+          },
+          "particleDeviceId": {
+            "bsonType": "string"
+          },
+          "platformId": {
+            "bsonType": "int"
+          },
+          "serialNumber": {
+            "bsonType": "string"
+          },
+          "status": {
+            "bsonType": "string"
+          },
+          "systemVersion": {
+            "bsonType": [
+              "string",
+              "null"
+            ]
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.particledevices": {
+      "ns": "bioscale.particledevices",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.particleintegrations": {
+      "ns": "bioscale.particleintegrations",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.particlelinks": {
+      "ns": "bioscale.particlelinks",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.permissions": {
+      "ns": "bioscale.permissions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "createdAt",
+          "name",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "name": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.process_configurations": {
+      "ns": "bioscale.process_configurations",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.processconfigurations": {
+      "ns": "bioscale.processconfigurations",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "createdAt",
+          "maxBatchSize",
+          "processName",
+          "processType",
+          "steps",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "maxBatchSize": {
+            "bsonType": "int"
+          },
+          "processName": {
+            "bsonType": "string"
+          },
+          "processType": {
+            "bsonType": "string"
+          },
+          "steps": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "description": {
+                  "bsonType": "string"
+                },
+                "stepNumber": {
+                  "bsonType": "int"
+                },
+                "title": {
+                  "bsonType": "string"
+                }
+              },
+              "required": [
+                "description",
+                "stepNumber",
+                "title"
+              ]
+            }
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.processsteps": {
+      "ns": "bioscale.processsteps",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.production_runs": {
+      "ns": "bioscale.production_runs",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.productionruns": {
+      "ns": "bioscale.productionruns",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.productionrununits": {
+      "ns": "bioscale.productionrununits",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.qaqcreleases": {
+      "ns": "bioscale.qaqcreleases",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.reagent_batch_records": {
+      "ns": "bioscale.reagent_batch_records",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "assayType",
+          "cartridgesFilled",
+          "corrections",
+          "createdAt",
+          "operator",
+          "qcRelease",
+          "robot",
+          "sealBatches",
+          "setupTimestamp",
+          "status",
+          "topSeal",
+          "tubeRecords",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "abortReason": {
+            "bsonType": "string"
+          },
+          "assayType": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "name": {
+                "bsonType": "string"
+              },
+              "skuCode": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "name",
+              "skuCode"
+            ]
+          },
+          "cartridgeCount": {
+            "bsonType": "int"
+          },
+          "cartridgesFilled": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "_id": {
+                  "bsonType": "objectId"
+                },
+                "cartridgeId": {
+                  "bsonType": "string"
+                },
+                "deckPosition": {
+                  "bsonType": "int"
+                },
+                "inspectedAt": {
+                  "bsonType": "date"
+                },
+                "inspectedBy": {
+                  "bsonType": "object",
+                  "properties": {
+                    "_id": {
+                      "bsonType": "string"
+                    },
+                    "username": {
+                      "bsonType": "string"
+                    }
+                  },
+                  "required": [
+                    "_id",
+                    "username"
+                  ]
+                },
+                "inspectionStatus": {
+                  "bsonType": "string"
+                },
+                "storageLocation": {
+                  "bsonType": "string"
+                },
+                "storedAt": {
+                  "bsonType": "date"
+                },
+                "topSealBatchId": {
+                  "bsonType": "string"
+                }
+              },
+              "required": [
+                "_id",
+                "cartridgeId",
+                "deckPosition",
+                "inspectedAt",
+                "inspectedBy",
+                "inspectionStatus",
+                "storageLocation",
+                "storedAt",
+                "topSealBatchId"
+              ]
+            }
+          },
+          "corrections": {
+            "bsonType": "array"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "deckId": {
+            "bsonType": "string"
+          },
+          "finalizedAt": {
+            "bsonType": "date"
+          },
+          "operator": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "username": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "username"
+            ]
+          },
+          "qcRelease": {
+            "bsonType": "object",
+            "properties": {
+              "qaqcCartridgeIds": {
+                "bsonType": "array"
+              }
+            },
+            "required": [
+              "qaqcCartridgeIds"
+            ]
+          },
+          "robot": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "name": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "name"
+            ]
+          },
+          "runEndTime": {
+            "bsonType": "date"
+          },
+          "runStartTime": {
+            "bsonType": "date"
+          },
+          "sealBatches": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "_id": {
+                  "bsonType": "string"
+                },
+                "cartridgeIds": {
+                  "bsonType": "array",
+                  "items": {
+                    "bsonType": "string"
+                  }
+                },
+                "completionTime": {
+                  "bsonType": "date"
+                },
+                "firstScanTime": {
+                  "bsonType": "date"
+                },
+                "operator": {
+                  "bsonType": "object",
+                  "properties": {
+                    "_id": {
+                      "bsonType": "string"
+                    },
+                    "username": {
+                      "bsonType": "string"
+                    }
+                  },
+                  "required": [
+                    "_id",
+                    "username"
+                  ]
+                },
+                "status": {
+                  "bsonType": "string"
+                },
+                "topSealLotId": {
+                  "bsonType": "string"
+                }
+              },
+              "required": [
+                "_id",
+                "cartridgeIds",
+                "firstScanTime",
+                "operator",
+                "status",
+                "topSealLotId"
+              ]
+            }
+          },
+          "setupTimestamp": {
+            "bsonType": "date"
+          },
+          "status": {
+            "bsonType": "string"
+          },
+          "topSeal": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id"
+            ]
+          },
+          "tubeRecords": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "_id": {
+                  "bsonType": "objectId"
+                },
+                "preparedAt": {
+                  "bsonType": "date"
+                },
+                "reagentName": {
+                  "bsonType": "string"
+                },
+                "sourceLotId": {
+                  "bsonType": "string"
+                },
+                "transferTubeId": {
+                  "bsonType": "string"
+                },
+                "wellPosition": {
+                  "bsonType": "int"
+                }
+              },
+              "required": [
+                "_id",
+                "preparedAt",
+                "reagentName",
+                "sourceLotId",
+                "transferTubeId",
+                "wellPosition"
+              ]
+            }
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.reagentbatchrecords": {
+      "ns": "bioscale.reagentbatchrecords",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "assayType",
+          "cartridgeCount",
+          "cartridgesFilled",
+          "corrections",
+          "createdAt",
+          "deckId",
+          "operator",
+          "robot",
+          "runEndTime",
+          "runNumber",
+          "runStartTime",
+          "status",
+          "tubeRecords",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "assayType": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "name": {
+                "bsonType": "string"
+              },
+              "skuCode": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "name",
+              "skuCode"
+            ]
+          },
+          "cartridgeCount": {
+            "bsonType": "int"
+          },
+          "cartridgesFilled": {
+            "bsonType": "array"
+          },
+          "corrections": {
+            "bsonType": "array"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "deckId": {
+            "bsonType": "string"
+          },
+          "operator": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "username": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "username"
+            ]
+          },
+          "robot": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "name": {
+                "bsonType": "string"
+              },
+              "side": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "name",
+              "side"
+            ]
+          },
+          "runEndTime": {
+            "bsonType": [
+              "null",
+              "date"
+            ]
+          },
+          "runNumber": {
+            "bsonType": "string"
+          },
+          "runStartTime": {
+            "bsonType": [
+              "null",
+              "date"
+            ]
+          },
+          "status": {
+            "bsonType": "string"
+          },
+          "tubeRecords": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "reagentName": {
+                  "bsonType": "string"
+                },
+                "sourceLotId": {
+                  "bsonType": "string"
+                },
+                "transferTubeId": {
+                  "bsonType": "string"
+                },
+                "wellPosition": {
+                  "bsonType": "int"
+                }
+              },
+              "required": [
+                "reagentName",
+                "sourceLotId",
+                "transferTubeId",
+                "wellPosition"
+              ]
+            }
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.reagentcartridgerecords": {
+      "ns": "bioscale.reagentcartridgerecords",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.reagentdefinitions": {
+      "ns": "bioscale.reagentdefinitions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.reagentfillingruns": {
+      "ns": "bioscale.reagentfillingruns",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.reagentfillingsettings": {
+      "ns": "bioscale.reagentfillingsettings",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.reagentsubcomponents": {
+      "ns": "bioscale.reagentsubcomponents",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.reagenttuberecords": {
+      "ns": "bioscale.reagenttuberecords",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.receiving_lots": {
+      "ns": "bioscale.receiving_lots",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "additionalDocuments",
+          "cocDocumentUrl",
+          "createdAt",
+          "disposedAt",
+          "disposedBy",
+          "dispositionType",
+          "esdHandlingRequired",
+          "firstArticleInspection",
+          "inspectionPathway",
+          "lotId",
+          "lotNumber",
+          "operator",
+          "overrideApplied",
+          "part",
+          "photos",
+          "quantity",
+          "status",
+          "storageConditionsRequired",
+          "supplier",
+          "updatedAt",
+          "vendorLotNumber"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "additionalDocuments": {
+            "bsonType": "array"
+          },
+          "cocDocumentUrl": {
+            "bsonType": "string"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "disposedAt": {
+            "bsonType": "date"
+          },
+          "disposedBy": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "username": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "username"
+            ]
+          },
+          "dispositionType": {
+            "bsonType": "string"
+          },
+          "esdHandlingRequired": {
+            "bsonType": "bool"
+          },
+          "firstArticleInspection": {
+            "bsonType": "bool"
+          },
+          "inspectionPathway": {
+            "bsonType": "string"
+          },
+          "lotId": {
+            "bsonType": "string"
+          },
+          "lotNumber": {
+            "bsonType": "string"
+          },
+          "operator": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "username": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "username"
+            ]
+          },
+          "overrideApplied": {
+            "bsonType": "bool"
+          },
+          "part": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "name": {
+                "bsonType": "string"
+              },
+              "partNumber": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "name",
+              "partNumber"
+            ]
+          },
+          "photos": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "string"
+            }
+          },
+          "quantity": {
+            "bsonType": "int"
+          },
+          "status": {
+            "bsonType": "string"
+          },
+          "storageConditionsRequired": {
+            "bsonType": "bool"
+          },
+          "supplier": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          },
+          "vendorLotNumber": {
+            "bsonType": "string"
+          }
+        }
+      }
+    },
+    "bioscale.rejectionreasoncodes": {
+      "ns": "bioscale.rejectionreasoncodes",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.rolepermissions": {
+      "ns": "bioscale.rolepermissions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "createdAt",
+          "permissionId",
+          "roleId",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "permissionId": {
+            "bsonType": "string"
+          },
+          "roleId": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.roles": {
+      "ns": "bioscale.roles",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "createdAt",
+          "description",
+          "name",
+          "permissions"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "description": {
+            "bsonType": "string"
+          },
+          "name": {
+            "bsonType": "string"
+          },
+          "permissions": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "string"
+            }
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.routing_patterns": {
+      "ns": "bioscale.routing_patterns",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.routingpatterns": {
+      "ns": "bioscale.routingpatterns",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.schema_metadata": {
+      "ns": "bioscale.schema_metadata",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "businessDomain",
+          "businessName",
+          "businessPurpose",
+          "collectionName",
+          "createdAt",
+          "tableName",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "businessDomain": {
+            "bsonType": "string"
+          },
+          "businessName": {
+            "bsonType": "string"
+          },
+          "businessPurpose": {
+            "bsonType": "string"
+          },
+          "collectionName": {
+            "bsonType": "string"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "tableName": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.schemametadatas": {
+      "ns": "bioscale.schemametadatas",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "businessConcepts",
+          "businessDomain",
+          "businessName",
+          "businessPurpose",
+          "commonQueries",
+          "createdAt",
+          "tableName",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "businessConcepts": {
+            "bsonType": "string"
+          },
+          "businessDomain": {
+            "bsonType": "string"
+          },
+          "businessName": {
+            "bsonType": "string"
+          },
+          "businessPurpose": {
+            "bsonType": "string"
+          },
+          "commonQueries": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "description": {
+                  "bsonType": "string"
+                },
+                "query": {
+                  "bsonType": "string"
+                }
+              },
+              "required": [
+                "description",
+                "query"
+              ]
+            }
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "keyRelationships": {
+            "bsonType": "object",
+            "properties": {
+              "foreignKeys": {
+                "bsonType": "array",
+                "items": {
+                  "bsonType": "object",
+                  "properties": {
+                    "field": {
+                      "bsonType": "string"
+                    },
+                    "meaning": {
+                      "bsonType": "string"
+                    },
+                    "table": {
+                      "bsonType": "string"
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "meaning",
+                    "table"
+                  ]
+                }
+              },
+              "references": {
+                "bsonType": "array",
+                "items": {
+                  "bsonType": "object",
+                  "properties": {
+                    "meaning": {
+                      "bsonType": "string"
+                    },
+                    "table": {
+                      "bsonType": "string"
+                    }
+                  },
+                  "required": [
+                    "meaning",
+                    "table"
+                  ]
+                }
+              }
+            }
+          },
+          "tableName": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.service_tickets": {
+      "ns": "bioscale.service_tickets",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "createdAt",
+          "firmwareChanges",
+          "notes",
+          "openedAt",
+          "openedBy",
+          "otherChanges",
+          "partsReplaced",
+          "previousSpuStatus",
+          "priority",
+          "reason",
+          "spuBarcode",
+          "spuId",
+          "spuUdi",
+          "status",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "firmwareChanges": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "_id": {
+                  "bsonType": "string"
+                },
+                "deviceType": {
+                  "bsonType": "string"
+                },
+                "newVersion": {
+                  "bsonType": "string"
+                },
+                "performedAt": {
+                  "bsonType": "date"
+                },
+                "performedBy": {
+                  "bsonType": "object",
+                  "properties": {
+                    "_id": {
+                      "bsonType": "string"
+                    },
+                    "username": {
+                      "bsonType": "string"
+                    }
+                  },
+                  "required": [
+                    "_id",
+                    "username"
+                  ]
+                },
+                "previousVersion": {
+                  "bsonType": "string"
+                },
+                "reason": {
+                  "bsonType": "string"
+                }
+              },
+              "required": [
+                "_id",
+                "deviceType",
+                "newVersion",
+                "performedAt",
+                "performedBy",
+                "previousVersion",
+                "reason"
+              ]
+            }
+          },
+          "notes": {
+            "bsonType": "array"
+          },
+          "openedAt": {
+            "bsonType": "date"
+          },
+          "openedBy": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "username": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "username"
+            ]
+          },
+          "otherChanges": {
+            "bsonType": "array"
+          },
+          "partsReplaced": {
+            "bsonType": "array"
+          },
+          "previousSpuStatus": {
+            "bsonType": "string"
+          },
+          "priority": {
+            "bsonType": "string"
+          },
+          "reason": {
+            "bsonType": "string"
+          },
+          "spuBarcode": {
+            "bsonType": "string"
+          },
+          "spuId": {
+            "bsonType": "string"
+          },
+          "spuUdi": {
+            "bsonType": "string"
+          },
+          "status": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.sessions": {
+      "ns": "bioscale.sessions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "expiresAt",
+          "userId"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "expiresAt": {
+            "bsonType": "date"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          },
+          "userId": {
+            "bsonType": "string"
+          }
+        }
+      }
+    },
+    "bioscale.shipping_lots": {
+      "ns": "bioscale.shipping_lots",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.shipping_packages": {
+      "ns": "bioscale.shipping_packages",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.shippinglots": {
+      "ns": "bioscale.shippinglots",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "createdAt",
+          "createdBy",
+          "lotNumber",
+          "status",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "createdBy": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "username": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "username"
+            ]
+          },
+          "lotNumber": {
+            "bsonType": "string"
+          },
+          "status": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.shippingpackages": {
+      "ns": "bioscale.shippingpackages",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "barcode",
+          "carrier",
+          "createdAt",
+          "shippingLotId",
+          "status",
+          "trackingNumber",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "barcode": {
+            "bsonType": "string"
+          },
+          "carrier": {
+            "bsonType": "string"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "shippingLotId": {
+            "bsonType": "string"
+          },
+          "status": {
+            "bsonType": "string"
+          },
+          "trackingNumber": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          }
+        }
+      }
+    },
+    "bioscale.spectroreadings": {
+      "ns": "bioscale.spectroreadings",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.spuparts": {
+      "ns": "bioscale.spuparts",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.spupartusages": {
+      "ns": "bioscale.spupartusages",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.spus": {
+      "ns": "bioscale.spus",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "createdAt",
+          "particleLink",
+          "status",
+          "statusTransitions",
+          "udi",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "barcode": {
+            "bsonType": "string"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "particleLink": {
+            "bsonType": "object",
+            "properties": {
+              "linkedAt": {
+                "bsonType": "date"
+              },
+              "particleDeviceId": {
+                "bsonType": "string"
+              },
+              "particleSerial": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "linkedAt",
+              "particleDeviceId",
+              "particleSerial"
+            ]
+          },
+          "qcStatus": {
+            "bsonType": "string"
+          },
+          "status": {
+            "bsonType": "string"
+          },
+          "statusTransitions": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "_id": {
+                  "bsonType": "string"
+                },
+                "changedAt": {
+                  "bsonType": "date"
+                },
+                "changedBy": {
+                  "bsonType": "object",
+                  "properties": {
+                    "_id": {
+                      "bsonType": "string"
+                    },
+                    "username": {
+                      "bsonType": "string"
+                    }
+                  },
+                  "required": [
+                    "_id",
+                    "username"
+                  ]
+                },
+                "from": {
+                  "bsonType": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "reason": {
+                  "bsonType": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "to": {
+                  "bsonType": "string"
+                }
+              },
+              "required": [
+                "_id",
+                "changedAt",
+                "changedBy",
+                "from",
+                "reason",
+                "to"
+              ]
+            }
+          },
+          "udi": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          },
+          "validation": {
+            "bsonType": "object",
+            "properties": {
+              "magnetometer": {
+                "bsonType": "object",
+                "properties": {
+                  "completedAt": {
+                    "bsonType": "date"
+                  },
+                  "criteriaUsed": {
+                    "bsonType": "object",
+                    "properties": {
+                      "maxZ": {
+                        "bsonType": "int"
+                      },
+                      "minZ": {
+                        "bsonType": "int"
+                      }
+                    },
+                    "required": [
+                      "maxZ",
+                      "minZ"
+                    ]
+                  },
+                  "failureReasons": {
+                    "bsonType": "array"
+                  },
+                  "rawData": {
+                    "bsonType": "string"
+                  },
+                  "results": {
+                    "bsonType": "array",
+                    "items": {
+                      "bsonType": "object",
+                      "properties": {
+                        "chA_T": {
+                          "bsonType": "double"
+                        },
+                        "chA_X": {
+                          "bsonType": "int"
+                        },
+                        "chA_Y": {
+                          "bsonType": "int"
+                        },
+                        "chA_Z": {
+                          "bsonType": "int"
+                        },
+                        "chB_T": {
+                          "bsonType": "double"
+                        },
+                        "chB_X": {
+                          "bsonType": "int"
+                        },
+                        "chB_Y": {
+                          "bsonType": "int"
+                        },
+                        "chB_Z": {
+                          "bsonType": "int"
+                        },
+                        "chC_T": {
+                          "bsonType": "double"
+                        },
+                        "chC_X": {
+                          "bsonType": "int"
+                        },
+                        "chC_Y": {
+                          "bsonType": "int"
+                        },
+                        "chC_Z": {
+                          "bsonType": "int"
+                        },
+                        "well": {
+                          "bsonType": "int"
+                        }
+                      },
+                      "required": [
+                        "chA_T",
+                        "chA_X",
+                        "chA_Y",
+                        "chA_Z",
+                        "chB_T",
+                        "chB_X",
+                        "chB_Y",
+                        "chB_Z",
+                        "chC_T",
+                        "chC_X",
+                        "chC_Y",
+                        "chC_Z",
+                        "well"
+                      ]
+                    }
+                  },
+                  "sessionId": {
+                    "bsonType": "string"
+                  },
+                  "status": {
+                    "bsonType": "string"
+                  }
+                },
+                "required": [
+                  "completedAt",
+                  "criteriaUsed",
+                  "failureReasons",
+                  "rawData",
+                  "results",
+                  "sessionId",
+                  "status"
+                ]
+              },
+              "thermocouple": {
+                "bsonType": "object",
+                "properties": {
+                  "completedAt": {
+                    "bsonType": "date"
+                  },
+                  "criteriaUsed": {
+                    "bsonType": "object",
+                    "properties": {
+                      "maxTemp": {
+                        "bsonType": "int"
+                      },
+                      "minTemp": {
+                        "bsonType": "int"
+                      }
+                    },
+                    "required": [
+                      "maxTemp",
+                      "minTemp"
+                    ]
+                  },
+                  "failureReasons": {
+                    "bsonType": "array",
+                    "items": {
+                      "bsonType": "string"
+                    }
+                  },
+                  "rawData": {
+                    "bsonType": "object",
+                    "properties": {
+                      "fileName": {
+                        "bsonType": "null"
+                      },
+                      "readingCount": {
+                        "bsonType": "int"
+                      }
+                    },
+                    "required": [
+                      "fileName",
+                      "readingCount"
+                    ]
+                  },
+                  "results": {
+                    "bsonType": "object",
+                    "properties": {
+                      "average": {
+                        "bsonType": "int"
+                      },
+                      "cv": {
+                        "bsonType": "double"
+                      },
+                      "drift": {
+                        "bsonType": "int"
+                      },
+                      "durationMs": {
+                        "bsonType": "int"
+                      },
+                      "max": {
+                        "bsonType": "int"
+                      },
+                      "min": {
+                        "bsonType": "int"
+                      },
+                      "outOfRangeCount": {
+                        "bsonType": "int"
+                      },
+                      "range": {
+                        "bsonType": "int"
+                      },
+                      "readingCount": {
+                        "bsonType": "int"
+                      },
+                      "stdDev": {
+                        "bsonType": "double"
+                      }
+                    },
+                    "required": [
+                      "average",
+                      "cv",
+                      "drift",
+                      "durationMs",
+                      "max",
+                      "min",
+                      "outOfRangeCount",
+                      "range",
+                      "readingCount",
+                      "stdDev"
+                    ]
+                  },
+                  "sessionId": {
+                    "bsonType": "string"
+                  },
+                  "status": {
+                    "bsonType": "string"
+                  }
+                },
+                "required": [
+                  "completedAt",
+                  "criteriaUsed",
+                  "failureReasons",
+                  "rawData",
+                  "results",
+                  "sessionId",
+                  "status"
+                ]
+              }
+            },
+            "required": [
+              "magnetometer",
+              "thermocouple"
+            ]
+          }
+        }
+      }
+    },
+    "bioscale.stepfielddefinitions": {
+      "ns": "bioscale.stepfielddefinitions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.stepfieldrecords": {
+      "ns": "bioscale.stepfieldrecords",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.steppartrequirements": {
+      "ns": "bioscale.steppartrequirements",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.steptoolrequirements": {
+      "ns": "bioscale.steptoolrequirements",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.system_dependencies": {
+      "ns": "bioscale.system_dependencies",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.systemdependencies": {
+      "ns": "bioscale.systemdependencies",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.test_results": {
+      "ns": "bioscale.test_results",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.testresults": {
+      "ns": "bioscale.testresults",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.tool_confirmations": {
+      "ns": "bioscale.tool_confirmations",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.topsealbatches": {
+      "ns": "bioscale.topsealbatches",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.topsealcutrecords": {
+      "ns": "bioscale.topsealcutrecords",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.topsealrolls": {
+      "ns": "bioscale.topsealrolls",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.userroles": {
+      "ns": "bioscale.userroles",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "createdAt",
+          "roleId",
+          "updatedAt",
+          "userId"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "roleId": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          },
+          "userId": {
+            "bsonType": "string"
+          }
+        }
+      }
+    },
+    "bioscale.users": {
+      "ns": "bioscale.users",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "createdAt",
+          "isActive",
+          "passwordHash",
+          "updatedAt",
+          "username"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "communicationPreferences": {
+            "bsonType": "array"
+          },
+          "corrections": {
+            "bsonType": "array"
+          },
+          "createdAt": {
+            "bsonType": [
+              "string",
+              "date"
+            ]
+          },
+          "email": {
+            "bsonType": "string"
+          },
+          "firstName": {
+            "bsonType": "string"
+          },
+          "isActive": {
+            "bsonType": "bool"
+          },
+          "lastLoginAt": {
+            "bsonType": "date"
+          },
+          "lastName": {
+            "bsonType": "string"
+          },
+          "passwordHash": {
+            "bsonType": "string"
+          },
+          "roleHistory": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "_id": {
+                  "bsonType": "string"
+                },
+                "grantedAt": {
+                  "bsonType": "date"
+                },
+                "grantedBy": {
+                  "bsonType": "object",
+                  "properties": {
+                    "_id": {
+                      "bsonType": "string"
+                    },
+                    "username": {
+                      "bsonType": "string"
+                    }
+                  },
+                  "required": [
+                    "_id",
+                    "username"
+                  ]
+                },
+                "permissions": {
+                  "bsonType": "array",
+                  "items": {
+                    "bsonType": "string"
+                  }
+                },
+                "roleId": {
+                  "bsonType": "string"
+                },
+                "roleName": {
+                  "bsonType": "string"
+                }
+              },
+              "required": [
+                "_id",
+                "grantedAt",
+                "grantedBy",
+                "permissions",
+                "roleId",
+                "roleName"
+              ]
+            }
+          },
+          "roles": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "_id": {
+                  "bsonType": "string"
+                },
+                "assignedAt": {
+                  "bsonType": [
+                    "string",
+                    "date"
+                  ]
+                },
+                "assignedBy": {
+                  "bsonType": "string"
+                },
+                "permissions": {
+                  "bsonType": "array",
+                  "items": {
+                    "bsonType": "string"
+                  }
+                },
+                "roleId": {
+                  "bsonType": "string"
+                },
+                "roleName": {
+                  "bsonType": "string"
+                }
+              },
+              "required": [
+                "assignedAt",
+                "assignedBy",
+                "permissions",
+                "roleId",
+                "roleName"
+              ]
+            }
+          },
+          "trainingRecords": {
+            "bsonType": "array"
+          },
+          "updatedAt": {
+            "bsonType": [
+              "date",
+              "string"
+            ]
+          },
+          "username": {
+            "bsonType": "string"
+          }
+        }
+      }
+    },
+    "bioscale.validation_sessions": {
+      "ns": "bioscale.validation_sessions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "createdAt",
+          "failureReasons",
+          "results",
+          "status",
+          "type",
+          "userId"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "barcode": {
+            "bsonType": "string"
+          },
+          "completedAt": {
+            "bsonType": "date"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "criteriaUsed": {
+            "bsonType": "object",
+            "properties": {
+              "maxZ": {
+                "bsonType": "int"
+              },
+              "minZ": {
+                "bsonType": "int"
+              }
+            },
+            "required": [
+              "maxZ",
+              "minZ"
+            ]
+          },
+          "failureReasons": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "string"
+            }
+          },
+          "generatedBarcodeId": {
+            "bsonType": "string"
+          },
+          "magResults": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "chA_T": {
+                  "bsonType": [
+                    "double",
+                    "null",
+                    "int"
+                  ]
+                },
+                "chA_X": {
+                  "bsonType": [
+                    "int",
+                    "null"
+                  ]
+                },
+                "chA_Y": {
+                  "bsonType": [
+                    "int",
+                    "null"
+                  ]
+                },
+                "chA_Z": {
+                  "bsonType": [
+                    "int",
+                    "null"
+                  ]
+                },
+                "chB_T": {
+                  "bsonType": [
+                    "double",
+                    "null",
+                    "int"
+                  ]
+                },
+                "chB_X": {
+                  "bsonType": [
+                    "int",
+                    "null"
+                  ]
+                },
+                "chB_Y": {
+                  "bsonType": [
+                    "int",
+                    "null"
+                  ]
+                },
+                "chB_Z": {
+                  "bsonType": [
+                    "int",
+                    "null"
+                  ]
+                },
+                "chC_T": {
+                  "bsonType": [
+                    "double",
+                    "null",
+                    "int"
+                  ]
+                },
+                "chC_X": {
+                  "bsonType": [
+                    "int",
+                    "null"
+                  ]
+                },
+                "chC_Y": {
+                  "bsonType": [
+                    "int",
+                    "null"
+                  ]
+                },
+                "chC_Z": {
+                  "bsonType": [
+                    "int",
+                    "null"
+                  ]
+                },
+                "error": {
+                  "bsonType": [
+                    "null",
+                    "string"
+                  ]
+                },
+                "well": {
+                  "bsonType": "int"
+                }
+              },
+              "required": [
+                "chA_T",
+                "chA_X",
+                "chA_Y",
+                "chA_Z",
+                "chB_T",
+                "chB_X",
+                "chB_Y",
+                "chB_Z",
+                "chC_T",
+                "chC_X",
+                "chC_Y",
+                "chC_Z",
+                "well"
+              ]
+            }
+          },
+          "overallPassed": {
+            "bsonType": "bool"
+          },
+          "particleDeviceId": {
+            "bsonType": "string"
+          },
+          "rawData": {
+            "bsonType": "string"
+          },
+          "results": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "_id": {
+                  "bsonType": "string"
+                },
+                "createdAt": {
+                  "bsonType": "date"
+                },
+                "notes": {
+                  "bsonType": "string"
+                },
+                "passed": {
+                  "bsonType": "bool"
+                },
+                "processedData": {
+                  "bsonType": "object",
+                  "properties": {
+                    "criteria": {
+                      "bsonType": "object",
+                      "properties": {
+                        "maxTemp": {
+                          "bsonType": "int"
+                        },
+                        "minTemp": {
+                          "bsonType": "int"
+                        }
+                      },
+                      "required": [
+                        "maxTemp",
+                        "minTemp"
+                      ]
+                    },
+                    "failureReasons": {
+                      "bsonType": "array",
+                      "items": {
+                        "bsonType": "string"
+                      }
+                    },
+                    "interpretation": {
+                      "bsonType": "string"
+                    },
+                    "stats": {
+                      "bsonType": "object",
+                      "properties": {
+                        "average": {
+                          "bsonType": "int"
+                        },
+                        "cv": {
+                          "bsonType": "double"
+                        },
+                        "drift": {
+                          "bsonType": "int"
+                        },
+                        "durationMs": {
+                          "bsonType": "int"
+                        },
+                        "max": {
+                          "bsonType": "int"
+                        },
+                        "min": {
+                          "bsonType": "int"
+                        },
+                        "outOfRangeCount": {
+                          "bsonType": "int"
+                        },
+                        "range": {
+                          "bsonType": "int"
+                        },
+                        "readingCount": {
+                          "bsonType": "int"
+                        },
+                        "stdDev": {
+                          "bsonType": "double"
+                        }
+                      },
+                      "required": [
+                        "average",
+                        "cv",
+                        "drift",
+                        "durationMs",
+                        "max",
+                        "min",
+                        "outOfRangeCount",
+                        "range",
+                        "readingCount",
+                        "stdDev"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "criteria",
+                    "failureReasons",
+                    "interpretation",
+                    "stats"
+                  ]
+                },
+                "rawData": {
+                  "bsonType": "object",
+                  "properties": {
+                    "readings": {
+                      "bsonType": "array",
+                      "items": {
+                        "bsonType": "object",
+                        "properties": {
+                          "temperature": {
+                            "bsonType": "int"
+                          },
+                          "timestamp": {
+                            "bsonType": "double"
+                          }
+                        },
+                        "required": [
+                          "temperature",
+                          "timestamp"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "readings"
+                  ]
+                },
+                "testType": {
+                  "bsonType": "string"
+                }
+              },
+              "required": [
+                "_id",
+                "createdAt",
+                "notes",
+                "passed",
+                "processedData",
+                "rawData",
+                "testType"
+              ]
+            }
+          },
+          "spuId": {
+            "bsonType": "string"
+          },
+          "spuUdi": {
+            "bsonType": "string"
+          },
+          "startedAt": {
+            "bsonType": "date"
+          },
+          "status": {
+            "bsonType": "string"
+          },
+          "type": {
+            "bsonType": "string"
+          },
+          "userId": {
+            "bsonType": "string"
+          }
+        }
+      }
+    },
+    "bioscale.validationresults": {
+      "ns": "bioscale.validationresults",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.validationsessions": {
+      "ns": "bioscale.validationsessions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "completedAt",
+          "createdAt",
+          "results",
+          "spuId",
+          "startedAt",
+          "status",
+          "type",
+          "userId"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "completedAt": {
+            "bsonType": [
+              "date",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "results": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "object",
+              "properties": {
+                "createdAt": {
+                  "bsonType": "date"
+                },
+                "notes": {
+                  "bsonType": "string"
+                },
+                "passed": {
+                  "bsonType": "bool"
+                },
+                "testType": {
+                  "bsonType": "string"
+                }
+              },
+              "required": [
+                "createdAt",
+                "notes",
+                "passed",
+                "testType"
+              ]
+            }
+          },
+          "spuId": {
+            "bsonType": "string"
+          },
+          "startedAt": {
+            "bsonType": "date"
+          },
+          "status": {
+            "bsonType": "string"
+          },
+          "type": {
+            "bsonType": "string"
+          },
+          "userId": {
+            "bsonType": "string"
+          }
+        }
+      }
+    },
+    "bioscale.wax_filling_runs": {
+      "ns": "bioscale.wax_filling_runs",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "__v",
+          "cartridgeIds",
+          "createdAt",
+          "operator",
+          "plannedCartridgeCount",
+          "robot",
+          "runEndTime",
+          "runStartTime",
+          "status",
+          "updatedAt"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "__v": {
+            "bsonType": "int"
+          },
+          "abortReason": {
+            "bsonType": "string"
+          },
+          "activeLotId": {
+            "bsonType": "string"
+          },
+          "cartridgeIds": {
+            "bsonType": "array",
+            "items": {
+              "bsonType": "string"
+            }
+          },
+          "coolingConfirmedTime": {
+            "bsonType": "date"
+          },
+          "coolingTrayId": {
+            "bsonType": "string"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "deckId": {
+            "bsonType": "string"
+          },
+          "deckRemovedTime": {
+            "bsonType": "date"
+          },
+          "operator": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "username": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "username"
+            ]
+          },
+          "ovenLocationId": {
+            "bsonType": "string"
+          },
+          "plannedCartridgeCount": {
+            "bsonType": "int"
+          },
+          "robot": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "name": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "name"
+            ]
+          },
+          "runEndTime": {
+            "bsonType": "date"
+          },
+          "runStartTime": {
+            "bsonType": "date"
+          },
+          "setupTimestamp": {
+            "bsonType": "date"
+          },
+          "status": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          },
+          "waxSourceLot": {
+            "bsonType": "string"
+          },
+          "waxTubeId": {
+            "bsonType": "string"
+          }
+        }
+      }
+    },
+    "bioscale.waxcartridgerecords": {
+      "ns": "bioscale.waxcartridgerecords",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.waxfillingruns": {
+      "ns": "bioscale.waxfillingruns",
+      "jsonSchema": {
+        "bsonType": "object",
+        "required": [
+          "_id",
+          "cartridgeIds",
+          "coolingTrayId",
+          "createdAt",
+          "deckId",
+          "operator",
+          "plannedCartridgeCount",
+          "robot",
+          "runEndTime",
+          "runStartTime",
+          "status",
+          "updatedAt",
+          "waxSourceLot",
+          "waxTubeId"
+        ],
+        "properties": {
+          "_id": {
+            "bsonType": "string"
+          },
+          "abortReason": {
+            "bsonType": "string"
+          },
+          "cartridgeIds": {
+            "bsonType": "array"
+          },
+          "coolingTrayId": {
+            "bsonType": "string"
+          },
+          "createdAt": {
+            "bsonType": "date"
+          },
+          "deckId": {
+            "bsonType": "string"
+          },
+          "operator": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "username": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "username"
+            ]
+          },
+          "plannedCartridgeCount": {
+            "bsonType": "int"
+          },
+          "robot": {
+            "bsonType": "object",
+            "properties": {
+              "_id": {
+                "bsonType": "string"
+              },
+              "name": {
+                "bsonType": "string"
+              }
+            },
+            "required": [
+              "_id",
+              "name"
+            ]
+          },
+          "runEndTime": {
+            "bsonType": [
+              "date",
+              "null"
+            ]
+          },
+          "runStartTime": {
+            "bsonType": "date"
+          },
+          "status": {
+            "bsonType": "string"
+          },
+          "updatedAt": {
+            "bsonType": "date"
+          },
+          "waxSourceLot": {
+            "bsonType": "string"
+          },
+          "waxTubeId": {
+            "bsonType": "string"
+          }
+        }
+      }
+    },
+    "bioscale.waxfillingsettings": {
+      "ns": "bioscale.waxfillingsettings",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.work_instructions": {
+      "ns": "bioscale.work_instructions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.workflow_violations": {
+      "ns": "bioscale.workflow_violations",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.workinstructions": {
+      "ns": "bioscale.workinstructions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.workinstructionsteps": {
+      "ns": "bioscale.workinstructionsteps",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    },
+    "bioscale.workinstructionversions": {
+      "ns": "bioscale.workinstructionversions",
+      "jsonSchema": {
+        "bsonType": "object",
+        "properties": {}
+      }
+    }
+  },
+  "relationships": [
+    {
+      "id": "2e6ec4f0-f7c6-4f88-8416-df5d02e0b25f",
+      "relationship": [
+        {
+          "ns": "bioscale.reagentbatchrecords",
+          "fields": [
+            "assayType",
+            "_id"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.assaydefinitions",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "2801de99-3283-42b7-b9d2-1442fb030a44",
+      "relationship": [
+        {
+          "ns": "bioscale.wax_filling_runs",
+          "fields": [
+            "activeLotId"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.backing_lots",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "fdcc31a7-39ac-4116-9d0a-baa937cf8138",
+      "relationship": [
+        {
+          "ns": "bioscale.wax_filling_runs",
+          "fields": [
+            "cartridgeIds"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.cartridge_records",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "93287d65-a944-48ed-98b9-c22003c70f37",
+      "relationship": [
+        {
+          "ns": "bioscale.validation_sessions",
+          "fields": [
+            "generatedBarcodeId"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.generated_barcodes",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "f6985407-67c4-48ad-8032-e854d324ba27",
+      "relationship": [
+        {
+          "ns": "bioscale.kanban_tasks",
+          "fields": [
+            "projectId"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.kanban_projects",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "b6f5bbce-f2a5-456c-8b07-4f5a5f84c491",
+      "relationship": [
+        {
+          "ns": "bioscale.auditlogs",
+          "fields": [
+            "recordId"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.kanbanprojects",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "96455359-2364-4c2f-a8e7-c6c90f1196e3",
+      "relationship": [
+        {
+          "ns": "bioscale.inventory_transactions",
+          "fields": [
+            "partDefinitionId"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.part_definitions",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "3e2128dd-24f3-4250-be92-71be8e49ea87",
+      "relationship": [
+        {
+          "ns": "bioscale.receiving_lots",
+          "fields": [
+            "part",
+            "_id"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.part_definitions",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "f8666948-e4c3-4146-962f-b7c679b3e190",
+      "relationship": [
+        {
+          "ns": "bioscale.rolepermissions",
+          "fields": [
+            "permissionId"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.permissions",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "905d60d9-ce5f-433b-8c38-47d6d0bf62c8",
+      "relationship": [
+        {
+          "ns": "bioscale.rolepermissions",
+          "fields": [
+            "roleId"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.roles",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "eee986eb-a83c-4050-8c64-c3ffa51cafe5",
+      "relationship": [
+        {
+          "ns": "bioscale.userroles",
+          "fields": [
+            "roleId"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.roles",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "811ec9a1-07f9-4f2b-bf36-c8fbc6db6ee7",
+      "relationship": [
+        {
+          "ns": "bioscale.audit_log",
+          "fields": [
+            "newData",
+            "serviceTicketId"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.service_tickets",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "87af6902-109d-43f1-805f-10fe37fdab3a",
+      "relationship": [
+        {
+          "ns": "bioscale.shippingpackages",
+          "fields": [
+            "shippingLotId"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.shippinglots",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "a15c812e-cb0e-406d-94a3-f43220236e5d",
+      "relationship": [
+        {
+          "ns": "bioscale.service_tickets",
+          "fields": [
+            "spuId"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.spus",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "bf2a1e3e-b281-4d6d-9ebd-2dc016580b2e",
+      "relationship": [
+        {
+          "ns": "bioscale.cartridge_records",
+          "fields": [
+            "backing",
+            "operator",
+            "_id"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.users",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "a0cdbf36-ea36-4619-89c4-bfec0b188e0d",
+      "relationship": [
+        {
+          "ns": "bioscale.cartridge_records",
+          "fields": [
+            "ovenCure",
+            "operator",
+            "_id"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.users",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "80f71f1b-fbf5-4fef-915f-d40189edd86d",
+      "relationship": [
+        {
+          "ns": "bioscale.service_tickets",
+          "fields": [
+            "firmwareChanges",
+            "performedBy",
+            "_id"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.users",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "39c0e2d5-af49-47c5-9c4d-80687f486741",
+      "relationship": [
+        {
+          "ns": "bioscale.service_tickets",
+          "fields": [
+            "openedBy",
+            "_id"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.users",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "c1f9bda9-b089-4e7f-bb44-3d423b60bd0b",
+      "relationship": [
+        {
+          "ns": "bioscale.shippinglots",
+          "fields": [
+            "createdBy",
+            "_id"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.users",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "174d6a32-3df2-4b39-97cd-2725c06beeb6",
+      "relationship": [
+        {
+          "ns": "bioscale.userroles",
+          "fields": [
+            "userId"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.users",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "1b609d49-92bb-4a6d-a009-cce71e4f81b9",
+      "relationship": [
+        {
+          "ns": "bioscale.spus",
+          "fields": [
+            "validation",
+            "magnetometer",
+            "sessionId"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.validation_sessions",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "250d1b69-0de6-4ba1-9164-9c4d3460b54a",
+      "relationship": [
+        {
+          "ns": "bioscale.spus",
+          "fields": [
+            "validation",
+            "thermocouple",
+            "sessionId"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.validation_sessions",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    },
+    {
+      "id": "ecabff69-6bb0-4a4e-9aa4-93f3b947592d",
+      "relationship": [
+        {
+          "ns": "bioscale.consumables",
+          "fields": [
+            "usageLog",
+            "runId"
+          ],
+          "cardinality": 1
+        },
+        {
+          "ns": "bioscale.wax_filling_runs",
+          "fields": [
+            "_id"
+          ],
+          "cardinality": 1
+        }
+      ],
+      "isInferred": true
+    }
+  ]
+}

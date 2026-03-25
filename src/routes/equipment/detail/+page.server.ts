@@ -3,7 +3,8 @@ import { requirePermission } from '$lib/server/permissions';
 import { connectDB, Equipment, DeviceEvent, generateId } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
-export const load: PageServerLoad = async ({ url }) => {
+export const load: PageServerLoad = async ({ url, locals }) => {
+	requirePermission(locals.user, 'equipment:read');
 	try {
 		await connectDB();
 		const id = url.searchParams.get('id');

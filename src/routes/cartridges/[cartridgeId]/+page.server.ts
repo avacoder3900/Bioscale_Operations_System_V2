@@ -1,5 +1,5 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { requirePermission } from '$lib/server/permissions';
+import { requirePermission, hasPermission } from '$lib/server/permissions';
 import {
 	connectDB, LabCartridge, CartridgeGroup, FirmwareCartridge, AssayDefinition,
 	DeviceEvent
@@ -33,12 +33,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const groupsMap = new Map((groups as any[]).map((g: any) => [g._id, g]));
 	const group = c.groupId ? groupsMap.get(c.groupId) : null;
 
-	const canWrite = !!(locals.user as any)?.roles?.some((role: any) =>
-		role.permissions?.includes('cartridge:write') || role.roleName === 'admin'
-	);
-	const canDelete = !!(locals.user as any)?.roles?.some((role: any) =>
-		role.roleName === 'admin'
-	);
+	const canWrite = hasPermission(locals.user, 'cartridge:write') || hasPermission(locals.user, 'admin:full');
+	const canDelete = hasPermission(locals.user, 'admin:full');
 
 	// Firmware status
 	const firmwareStatus = firmwareRecord
