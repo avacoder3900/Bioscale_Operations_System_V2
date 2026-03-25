@@ -1102,10 +1102,9 @@
 					class="flex items-center justify-between gap-2 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2"
 				>
 					<div class="min-w-0">
-						<div class="text-xs font-bold text-[var(--color-tron-cyan)]">
-							{extractShortId(s.udi)}
+						<div class="truncate text-xs font-bold text-[var(--color-tron-cyan)] font-mono" title={s.udi}>
+							{s.udi}
 						</div>
-						<div class="tron-text-muted truncate font-mono text-xs" title={s.udi}>{s.udi}</div>
 					</div>
 					<div class="flex items-center gap-2">
 						<span
@@ -1470,13 +1469,7 @@
 						>
 							<div class="mb-3 flex items-start justify-between pl-6">
 								<div>
-									<div class="text-sm font-bold text-[var(--color-tron-cyan)]">
-										{extractShortId(spuItem.udi)}
-									</div>
-									<div
-										class="tron-text-muted mt-0.5 max-w-[200px] truncate font-mono text-xs"
-										title={spuItem.udi}
-									>
+									<div class="truncate text-sm font-bold text-[var(--color-tron-cyan)] font-mono" title={spuItem.udi}>
 										{spuItem.udi}
 									</div>
 								</div>
