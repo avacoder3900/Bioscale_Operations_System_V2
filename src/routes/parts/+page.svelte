@@ -1074,9 +1074,9 @@
 				</thead>
 				<tbody>
 					{#each filteredCartridgeParts as item (item.id)}
-						<tr>
-							<td>{item.name}</td>
-							<td class="font-mono text-[var(--color-tron-cyan)]">{item.partNumber}</td>
+						<tr class="cursor-pointer hover:bg-white/5" onclick={() => window.location.href = `/parts/${item.id}`}>
+							<td><a href="/parts/{item.id}" class="text-[var(--color-tron-cyan)] hover:underline">{item.name}</a></td>
+							<td class="font-mono text-[var(--color-tron-cyan)]"><a href="/parts/{item.id}" class="hover:underline">{item.partNumber}</a></td>
 							<td>
 								{#if item.category}
 									<TronBadge variant="neutral">{item.category}</TronBadge>
