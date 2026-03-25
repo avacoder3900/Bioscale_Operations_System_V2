@@ -863,9 +863,43 @@
 		{/if}
 	</TronCard>
 
-	<!-- BOM Summary Widget -->
+	<!-- SPU Inventory Overview -->
+	<div class="grid gap-4 sm:grid-cols-2">
+		<!-- SPU Build Capacity -->
+		<TronCard>
+			<div class="text-center">
+				<div class="mb-1 text-4xl font-bold {data.spuBuildCount > 0 ? 'text-[var(--color-tron-green)]' : 'text-[var(--color-tron-red)]'}">{data.spuBuildCount}</div>
+				<div class="tron-text-muted text-sm">SPUs Buildable with Current Inventory</div>
+			</div>
+		</TronCard>
+
+		<!-- 5 Lowest Inventory Parts -->
+		<TronCard>
+			<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">5 Lowest Inventory Parts</h3>
+			<div class="space-y-2">
+				{#each data.lowestSpuParts as part (part.id)}
+					<a href="/parts/{part.id}" class="flex items-center justify-between rounded px-2 py-1.5 hover:bg-white/5 transition-colors">
+						<div class="min-w-0">
+							<div class="text-xs font-mono text-[var(--color-tron-cyan)] truncate">{part.partNumber}</div>
+							<div class="tron-text-muted text-xs truncate">{part.name}</div>
+						</div>
+						<div class="shrink-0 ml-3 font-mono text-sm font-bold {part.inventoryCount <= 0 ? 'text-[var(--color-tron-red)]' : part.inventoryCount < 10 ? 'text-[var(--color-tron-orange)]' : 'tron-text-primary'}">
+							{part.inventoryCount}
+						</div>
+					</a>
+				{:else}
+					<p class="tron-text-muted text-xs italic text-center">No parts data</p>
+				{/each}
+			</div>
+			<div class="mt-3 border-t border-[var(--color-tron-border)] pt-2 text-center">
+				<a href="/parts" class="text-xs text-[var(--color-tron-cyan)] hover:underline">View all parts →</a>
+			</div>
+		</TronCard>
+	</div>
+
+	<!-- Legacy BOM Summary (hidden) -->
+	<div class="hidden">
 	<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-		<!-- Total Parts card -->
 		<a href={resolve('/bom')} class="block">
 			<TronCard interactive>
 				<div class="text-center">
@@ -1054,6 +1088,7 @@
 				</div>
 			</TronCard>
 		</div>
+	</div>
 	</div>
 
 	<!-- Active Production Runs -->

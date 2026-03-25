@@ -4,7 +4,7 @@ import { requirePermission } from '$lib/server/permissions';
 import {
 	connectDB, Spu, Batch, BomItem, ProductionRun, Customer, User, AuditLog, generateId,
 	LabCartridge, CartridgeGroup, CartridgeRecord, Equipment, EquipmentLocation,
-	OpentronsRobot, WaxFillingRun, AssayDefinition
+	OpentronsRobot, WaxFillingRun, AssayDefinition, PartDefinition
 } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -47,6 +47,29 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		(b: any) => b.expirationDate && new Date(b.expirationDate) <= thirtyDays
 	);
 
+	// SPU Parts — lowest inventory + build capacity
+	const spuParts = await PartDefinition.find({
+		isActive: true,
+		$or: [{ bomType: 'spu' }, { bomType: { $exists: false } }]
+	}).sort({ inventoryCount: 1 }).lean() as any[];
+
+	const lowestSpuParts = spuParts.slice(0, 5).map((p: any) => ({
+		id: p._id,
+		partNumber: p.partNumber ?? '',
+		name: p.name ?? '',
+		inventoryCount: p.inventoryCount ?? 0,
+		quantityPerUnit: p.quantityPerUnit ?? 1
+	}));
+
+	// SPU build capacity = min(inventoryCount / quantityPerUnit) across all SPU parts with quantityPerUnit > 0
+	const spuBuildCapacity = spuParts
+		.filter((p: any) => (p.quantityPerUnit ?? 0) > 0 && (p.inventoryCount ?? 0) >= 0)
+		.reduce((min: number, p: any) => {
+			const canBuild = Math.floor((p.inventoryCount ?? 0) / (p.quantityPerUnit ?? 1));
+			return Math.min(min, canBuild);
+		}, Infinity);
+	const spuBuildCount = spuBuildCapacity === Infinity ? 0 : spuBuildCapacity;
+
 	return {
 		spus: spus.map((s: any) => ({
 			id: s._id,
@@ -82,6 +105,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			name: b.name ?? '',
 			expirationDate: b.expirationDate
 		})),
+		lowestSpuParts,
+		spuBuildCount,
 		syncErrorDetail: null as { message: string; code?: string } | null,
 		costBreakdown: null as {
 			materialSubtotal: number;

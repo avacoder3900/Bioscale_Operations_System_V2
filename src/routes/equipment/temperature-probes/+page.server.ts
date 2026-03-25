@@ -102,7 +102,10 @@ export const load: PageServerLoad = async (event) => {
 				} : null,
 				// Connection status
 				isOffline,
-				minutesSinceLastRead
+				minutesSinceLastRead,
+				// Mocreo metadata
+				batteryLevel: e.mocreoMeta?.batteryLevel ?? null,
+				signalLevel: e.mocreoMeta?.signalLevel ?? null
 			};
 		});
 
