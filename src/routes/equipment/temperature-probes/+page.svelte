@@ -146,8 +146,8 @@
 		const min = Math.min(...pts);
 		const max = Math.max(...pts);
 		const range = max - min || 1;
-		const w = 80;
-		const h = 20;
+		const w = 160;
+		const h = 40;
 		const step = w / (pts.length - 1);
 		let d = `M 0,${h - ((pts[0] - min) / range) * h}`;
 		for (let i = 1; i < pts.length; i++) {
@@ -688,7 +688,7 @@
 							</div>
 							<!-- Sparkline -->
 							{#if sensor.sparkline.length >= 2}
-								<svg width="80" height="20" class="shrink-0 ml-2 opacity-70">
+								<svg width="160" height="40" class="shrink-0 ml-2 opacity-70">
 									<path d={sparklinePath(sensor.sparkline)} fill="none" stroke="rgb(20, 184, 166)" stroke-width="1.5" stroke-linecap="round"/>
 								</svg>
 							{/if}
