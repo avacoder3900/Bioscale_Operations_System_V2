@@ -21,6 +21,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		recentCartridges,
 		expiringCartridges,
 		fridges,
+		ovens,
 		weeklyProduction,
 		assayBreakdown,
 		labStatusCounts,
@@ -30,12 +31,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 	] = await Promise.all([
 		// Manufacturing pipeline phase counts
 		CartridgeRecord.aggregate([
-			{ $match: { currentPhase: { $ne: null } } },
-			{ $group: { _id: '$currentPhase', count: { $sum: 1 } } },
+			{ $match: { status: { $ne: null } } },
+			{ $group: { _id: '$status', count: { $sum: 1 } } },
 			{ $sort: { count: -1 } }
 		]),
-		CartridgeRecord.countDocuments({ currentPhase: { $ne: 'voided' } }),
-		CartridgeRecord.countDocuments({ currentPhase: 'voided' }),
+		CartridgeRecord.countDocuments({ status: { $ne: 'voided' } }),
+		CartridgeRecord.countDocuments({ status: 'voided' }),
 		// Wax QC pass/fail
 		CartridgeRecord.aggregate([
 			{ $match: { 'waxQc.status': { $exists: true } } },
@@ -54,10 +55,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 		// Expiring within 30 days (reagent fill expiration)
 		CartridgeRecord.find({
 			'reagentFilling.expirationDate': { $lte: thirtyDaysFromNow, $gte: now },
-			currentPhase: { $nin: ['voided', 'completed', 'shipped'] }
+			status: { $nin: ['voided', 'completed', 'shipped'] }
 		}).sort({ 'reagentFilling.expirationDate': 1 }).limit(10).lean(),
 		// Fridge storage locations
 		Equipment.find({ equipmentType: 'fridge', status: { $ne: 'offline' } }).lean().catch(() => []),
+		// Oven/heater equipment
+		Equipment.find({ equipmentType: 'oven', status: { $ne: 'offline' } }).lean().catch(() => []),
 		// Weekly production (created in last 7 days)
 		CartridgeRecord.countDocuments({ createdAt: { $gte: sevenDaysAgo } }),
 		// Assay type breakdown
@@ -77,11 +80,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Both fields store the fridge barcode string, not the equipment _id
 	const [waxStorageCounts, reagentStorageCounts] = await Promise.all([
 		CartridgeRecord.aggregate([
-			{ $match: { 'waxStorage.location': { $exists: true }, currentPhase: 'wax_stored' } },
+			{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored' } },
 			{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
 		]),
 		CartridgeRecord.aggregate([
-			{ $match: { 'storage.fridgeName': { $exists: true }, currentPhase: 'stored' } },
+			{ $match: { 'storage.fridgeName': { $exists: true }, status: 'stored' } },
 			{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
 		])
 	]);
@@ -101,7 +104,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	}
 
 	// Phase pipeline order for display
-	const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed'];
+	const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped', 'linked', 'underway', 'completed'];
 	const phaseMap = new Map((phaseCounts as any[]).map((p: any) => [p._id, p.count]));
 
 	const qcMap = (arr: any[]) => {
@@ -130,39 +133,32 @@ export const load: PageServerLoad = async ({ locals }) => {
 		waxQc: qcMap(waxQcCounts as any[]),
 		reagentInspection: qcMap(reagentInspCounts as any[]),
 		assayBreakdown: (assayBreakdown as any[]).map((a: any) => ({ name: a._id, count: a.count })),
-		storageDistribution: (() => {
-			// Always show all fridges, even if empty
-			const countMap = new Map((storageCounts as any[]).map((s: any) => [s._id, s.count]));
-			const result: { locationId: string; locationName: string; count: number; capacity: number | null }[] = [];
-			for (const f of fridges as any[]) {
-				const label = f.name ?? f.barcode ?? String(f._id);
-				const keys = [f.barcode, f.name].filter(Boolean);
-				let count = 0;
-				for (const k of keys) count += countMap.get(k) ?? 0;
-				result.push({
-					locationId: String(f._id),
-					locationName: label,
-					count,
-					capacity: f.capacity ?? null
-				});
-				for (const k of keys) countMap.delete(k);
-			}
-			// Add any orphan storage locations not matching a fridge
-			for (const [key, cnt] of countMap) {
-				result.push({ locationId: key, locationName: fridgeMap.get(key) ?? key, count: cnt, capacity: null });
-			}
-			return result;
-		})(),
+		storageDistribution: (fridges as any[]).map((f: any) => {
+			const label = f.name ?? f.barcode ?? String(f._id);
+			const key = f.barcode ?? f.name ?? String(f._id);
+			return {
+				locationId: String(f._id),
+				locationName: label,
+				count: mergedCounts.get(key) ?? mergedCounts.get(f.name) ?? mergedCounts.get(f.barcode) ?? 0,
+				capacity: f.capacity ?? null
+			};
+		}),
+		ovenDistribution: (ovens as any[]).map((o: any) => ({
+			locationId: String(o._id),
+			locationName: o.name ?? o.barcode ?? String(o._id),
+			count: 0,
+			capacity: o.capacity ?? null
+		})),
 		expiringCount: expiringCartridges.length,
 		expiringSoon: (expiringCartridges as any[]).map((c: any) => ({
 			id: c._id,
 			assay: c.reagentFilling?.assayType?.name ?? '—',
 			expirationDate: c.reagentFilling?.expirationDate,
-			phase: c.currentPhase
+			phase: c.status
 		})),
 		recentActivity: (recentCartridges as any[]).map((c: any) => ({
 			id: c._id,
-			phase: c.currentPhase,
+			phase: c.status,
 			assay: c.reagentFilling?.assayType?.name ?? null,
 			waxQc: c.waxQc?.status ?? null,
 			updatedAt: c.updatedAt
