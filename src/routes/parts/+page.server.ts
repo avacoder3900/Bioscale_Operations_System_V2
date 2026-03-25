@@ -231,12 +231,13 @@ export const actions: Actions = {
 		requirePermission(locals.user, 'inventory:write');
 		try {
 			const result = await syncPartsFromBox();
-			const msg = `Sync complete: ${result.upserted} parts upserted from "${result.fileName}"${result.errors.length > 0 ? ` (${result.errors.length} row errors)` : ''}.`;
+			const msg = `Sync complete: ${result.created} created, ${result.updated} updated from "${result.fileName}"${result.errors.length > 0 ? ` (${result.errors.length} row errors)` : ''}.`;
 			return {
 				success: true,
 				message: msg,
 				syncResult: {
-					upserted: result.upserted,
+					created: result.created,
+					updated: result.updated,
 					skipped: result.skipped,
 					errorCount: result.errors.length,
 					columnMap: result.columnMap,

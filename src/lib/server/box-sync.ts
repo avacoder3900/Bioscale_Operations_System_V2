@@ -22,7 +22,7 @@
  *   X (23) = Amount Current in Inventory for Production
  */
 import * as XLSX from 'xlsx';
-import { connectDB, Integration, PartDefinition } from '$lib/server/db';
+import { connectDB, Integration, PartDefinition, AuditLog, generateId } from '$lib/server/db';
 import { downloadFile } from '$lib/server/box';
 
 function parseNumber(val: unknown): number {
@@ -39,7 +39,8 @@ function parseString(val: unknown): string {
 }
 
 export interface SyncResult {
-	upserted: number;
+	created: number;
+	updated: number;
 	skipped: number;
 	errors: string[];
 	columnMap: Record<string, string>;
@@ -77,10 +78,6 @@ export async function syncPartsFromBox(): Promise<SyncResult> {
 		console.log(`[box-sync] Row ${i}: name="${r[1]}" partNum="${r[2]}" inventory=${r[23]}`);
 	}
 
-	// Clean sync
-	const deleteResult = await PartDefinition.deleteMany({});
-	console.log(`[box-sync] Cleared ${deleteResult.deletedCount} existing part definitions`);
-
 	const columnMap: Record<string, string> = {
 		name: 'B (1) - DESCRIPTION',
 		partNumber: 'C (2) - BREVITEST P/N',
@@ -94,7 +91,8 @@ export async function syncPartsFromBox(): Promise<SyncResult> {
 		inventoryCount: 'X (23) - Amount Current in Inventory'
 	};
 
-	let upserted = 0;
+	let created = 0;
+	let updated = 0;
 	let skipped = 0;
 	const errors: string[] = [];
 
@@ -118,30 +116,60 @@ export async function syncPartsFromBox(): Promise<SyncResult> {
 				continue;
 			}
 
-			const update: Record<string, unknown> = {
+			// Fields that Box always overwrites
+			const boxFields: Record<string, unknown> = {
 				name,
-				partNumber: partNumber || null,
 				category: parseString(row[3]) || null,
-				vendorPartNumber: parseString(row[4]) || null,
 				supplier: parseString(row[5]) || null,
-				qtyPerUnit: parseNumber(row[7]) || null,
-				unitOfMeasure: parseString(row[8]) || null,
+				vendorPartNumber: parseString(row[4]) || null,
 				unitCost: parseNumber(row[13]) || null,
 				leadTimeDays: row[15] != null && row[15] !== 'N/A' ? parseNumber(row[15]) || null : null,
-				inventoryCount: parseNumber(row[23]),
+				unitOfMeasure: parseString(row[8]) || null,
+				quantityPerUnit: parseNumber(row[7]) || null,
+				lastBoxSyncAt: new Date()
 			};
+
+			// Fields only set on insert (not overwritten if part already exists)
+			const onInsertFields: Record<string, unknown> = {
+				partNumber: partNumber || null,
+				inventoryCount: parseNumber(row[23]),
+				isActive: true
+			};
+			// Never overwritten by sync: barcode, bomType, isActive, sampleSize, percentAccepted, scanRequired, inspectionPathway
 
 			const filter = partNumber
 				? { partNumber }
 				: { name, $or: [{ partNumber: null }, { partNumber: '' }, { partNumber: { $exists: false } }] };
 
-			await PartDefinition.updateOne(filter, { $set: update }, { upsert: true });
-			upserted++;
+			const result = await PartDefinition.updateOne(
+				filter,
+				{ $set: boxFields, $setOnInsert: onInsertFields },
+				{ upsert: true }
+			);
+
+			if (result.upsertedCount > 0) {
+				created++;
+			} else {
+				updated++;
+			}
 		} catch (err: any) {
 			errors.push(err?.message ?? String(err));
 			if (errors.length <= 5) console.error('[box-sync] Row error:', err?.message);
 		}
 	}
+
+	// Log sync activity to AuditLog
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'part_definitions',
+		recordId: 'box-sync',
+		action: 'SYNC',
+		oldData: null,
+		newData: { created, updated, skipped, errors: errors.length },
+		changedAt: new Date(),
+		changedBy: 'system:box-sync',
+		reason: `Box sync: ${created} created, ${updated} updated, ${skipped} skipped, ${errors.length} errors`
+	});
 
 	await Integration.updateOne(
 		{ type: 'box' },
@@ -155,6 +183,6 @@ export async function syncPartsFromBox(): Promise<SyncResult> {
 		}
 	);
 
-	console.log(`[box-sync] Done. Upserted: ${upserted}, Skipped: ${skipped}, Errors: ${errors.length}`);
-	return { upserted, skipped, errors, columnMap, fileId, fileName };
+	console.log(`[box-sync] Done. Created: ${created}, Updated: ${updated}, Skipped: ${skipped}, Errors: ${errors.length}`);
+	return { created, updated, skipped, errors, columnMap, fileId, fileName };
 }

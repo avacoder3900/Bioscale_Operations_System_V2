@@ -18,7 +18,8 @@ const partDefinitionSchema = new Schema({
 	bomType: { type: String, enum: ['spu', 'cartridge'] },
 	supplierPartNumber: String,
 	quantityPerUnit: Number,
-	barcode: String // scannable barcode label for this part
+	barcode: String, // scannable barcode label for this part
+	lastBoxSyncAt: Date
 }, { timestamps: true });
 
 partDefinitionSchema.index({ partNumber: 1 }, { unique: true });
