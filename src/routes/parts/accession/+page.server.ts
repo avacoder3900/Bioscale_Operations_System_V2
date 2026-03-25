@@ -389,7 +389,7 @@ body { font-family: Arial, sans-serif; }
 			_id: generateId(),
 			tableName: 'receiving_lot',
 			recordId: lot._id,
-			action: 'CREATE',
+			action: 'INSERT',
 			oldData: null,
 			newData: { lotId: bagBarcode, lotNumber, partNumber: part.partNumber, quantity, status: 'accepted' },
 			changedAt: new Date(),
