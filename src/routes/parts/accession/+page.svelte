@@ -19,6 +19,34 @@
 	let qsBarcodeInput: HTMLInputElement | undefined = $state();
 	let qsLookupTimer: ReturnType<typeof setTimeout> | undefined;
 
+	// Part barcode scan state
+	let partScanBarcode = $state('');
+	let partScanStatus = $state<'idle' | 'checking' | 'found' | 'not-found'>('idle');
+	let partScanInfo = $state('');
+
+	async function handlePartBarcodeScan(e: KeyboardEvent) {
+		if (e.key !== 'Enter') return;
+		const barcode = partScanBarcode.trim();
+		if (!barcode) return;
+		partScanStatus = 'checking';
+		try {
+			const res = await fetch(`/api/parts/lookup-by-barcode?barcode=${encodeURIComponent(barcode)}`);
+			if (res.ok) {
+				const data = await res.json();
+				qsPartId = data.part._id;
+				partScanStatus = 'found';
+				partScanInfo = `${data.part.partNumber} — ${data.part.name}`;
+				setTimeout(() => qsBarcodeInput?.focus(), 50);
+			} else {
+				partScanStatus = 'not-found';
+				partScanInfo = `No part found for barcode ${barcode}`;
+			}
+		} catch {
+			partScanStatus = 'not-found';
+			partScanInfo = 'Lookup failed — please retry';
+		}
+	}
+
 	function handleBarcodeInput(value: string) {
 		qsBagBarcode = value;
 		qsLookupStatus = 'idle';
@@ -150,6 +178,17 @@
 					}
 				};
 			}}>
+				<div class="mb-4 flex items-end gap-3">
+					<div class="flex-1">
+						<label for="part-scan" class="block text-sm font-medium text-gray-700 mb-1">Scan Part Barcode</label>
+						<input id="part-scan" type="text" bind:value={partScanBarcode} onkeydown={handlePartBarcodeScan} onfocus={() => { partScanBarcode = ''; partScanStatus = 'idle'; partScanInfo = ''; }} placeholder="Scan part QR code..." class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
+					</div>
+					<div class="flex items-center gap-2 pb-0.5">
+						{#if partScanStatus === 'checking'}<span class="text-gray-400 text-sm">Checking...</span>{/if}
+						{#if partScanStatus === 'found'}<span class="text-green-600 text-sm">&#10003; {partScanInfo}</span>{/if}
+						{#if partScanStatus === 'not-found'}<span class="text-red-600 text-sm">{partScanInfo}</span>{/if}
+					</div>
+				</div>
 				<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
 					<div>
 						<label for="qs-part" class="block text-sm font-medium text-gray-700 mb-1">Part</label>
