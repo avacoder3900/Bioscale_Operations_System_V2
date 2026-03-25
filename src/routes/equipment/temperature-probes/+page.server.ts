@@ -20,6 +20,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		equipmentType: string;
 		temperatureMinC: number | null;
 		temperatureMaxC: number | null;
+		mocreoMeta: any;
 	}>();
 	for (const e of equipment as any[]) {
 		if (e.mocreoDeviceId) {
@@ -28,7 +29,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				equipmentName: e.name,
 				equipmentType: e.equipmentType,
 				temperatureMinC: e.temperatureMinC ?? null,
-				temperatureMaxC: e.temperatureMaxC ?? null
+				temperatureMaxC: e.temperatureMaxC ?? null,
+				mocreoMeta: e.mocreoMeta ?? null
 			});
 		}
 	}
@@ -127,8 +129,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			humidity: r.humidity ?? null,
 			lastReadingAt: r.timestamp ?? null,
 			readingCount: r.readingCount ?? 0,
-			signalLevel: meta?.info?.signalLevel ?? null,
-			batteryLevel: meta?.info?.batteryLevel ?? null,
+			signalLevel: meta?.signalLevel ?? mapping?.mocreoMeta?.signalLevel ?? r.signalLevel ?? null,
+			batteryLevel: meta?.batteryLevel ?? mapping?.mocreoMeta?.batteryLevel ?? r.batteryLevel ?? null,
+			onlined: meta?.onlined ?? mapping?.mocreoMeta?.onlined ?? r.onlined ?? null,
+			lastSeen: meta?.lastSeen ?? mapping?.mocreoMeta?.lastSeen ?? r.lastSeen ?? null,
+			model: meta?.model ?? mapping?.mocreoMeta?.model ?? r.model ?? 'ST5',
+			firmwareVersion: mapping?.mocreoMeta?.firmwareVersion ?? null,
+			mocreoThresholds: mapping?.mocreoMeta?.thresholds ?? null,
 			mappedEquipmentId: mapping?.equipmentId ?? null,
 			mappedEquipmentName: mapping?.equipmentName ?? null,
 			mappedEquipmentType: mapping?.equipmentType ?? null,
