@@ -2,41 +2,91 @@ export const config = { maxDuration: 60 };
 import { fail } from '@sveltejs/kit';
 import { connectDB, Equipment, TemperatureReading, generateId, AuditLog } from '$lib/server/db';
 import { isAdmin } from '$lib/server/permissions';
+import { fetchAllSensors } from '$lib/server/services/mocreo';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	try {
 		await connectDB();
-		const equipment = await Equipment.find().sort({ name: 1 }).lean();
 
-		// Get recent readings (last 2 hours) for all sensors with mocreoDeviceId
-		const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
-		const recentReadings = await TemperatureReading.find({ timestamp: { $gte: twoHoursAgo } })
-			.sort({ timestamp: -1 })
-			.limit(200)
-			.select('sensorId sensorName temperature humidity timestamp equipmentId')
-			.lean();
+		// Get all equipment
+		const equipment = await Equipment.find().sort({ equipmentType: 1, name: 1 }).lean();
+
+		// Get all Mocreo sensors from the API
+		let mocreoSensors: { thingName: string; name: string; model: string }[] = [];
+		try {
+			mocreoSensors = await fetchAllSensors();
+		} catch (err) {
+			console.error('[TEMP PROBES] Mocreo API error:', err instanceof Error ? err.message : err);
+		}
+
+		// Get ALL readings from DB (latest per sensor)
+		const latestReadings = await TemperatureReading.aggregate([
+			{ $sort: { timestamp: -1 } },
+			{ $group: {
+				_id: '$sensorId',
+				sensorName: { $first: '$sensorName' },
+				temperature: { $first: '$temperature' },
+				humidity: { $first: '$humidity' },
+				timestamp: { $first: '$timestamp' },
+				readingCount: { $sum: 1 }
+			}}
+		]);
+
+		// Build sensor→equipment mapping
+		const sensorToEquipment = new Map<string, any>();
+		for (const e of equipment as any[]) {
+			if (e.mocreoDeviceId) {
+				sensorToEquipment.set(e.mocreoDeviceId, {
+					equipmentId: String(e._id),
+					equipmentName: e.name,
+					equipmentType: e.equipmentType
+				});
+			}
+		}
+
+		// Build reading map by sensorId
+		const readingMap = new Map<string, any>();
+		for (const r of latestReadings) {
+			readingMap.set(r._id, r);
+		}
+
+		// Total reading count
+		const totalReadings = await TemperatureReading.countDocuments();
 
 		return {
-			sensors: (equipment as any[]).map((e: any) => ({
-				equipmentId: e._id,
-				name: e.name ?? null,
-				equipmentType: e.equipmentType ?? 'unknown',
+			mocreoSensors: mocreoSensors.map((s: any) => {
+				const reading = readingMap.get(s.thingName);
+				const mapping = sensorToEquipment.get(s.thingName);
+				return {
+					sensorId: s.thingName,
+					sensorName: s.name,
+					model: s.model ?? 'ST5',
+					temperature: reading?.temperature ?? null,
+					humidity: reading?.humidity ?? null,
+					lastReadingAt: reading?.timestamp ?? null,
+					readingCount: reading?.readingCount ?? 0,
+					mappedEquipmentId: mapping?.equipmentId ?? null,
+					mappedEquipmentName: mapping?.equipmentName ?? null,
+					mappedEquipmentType: mapping?.equipmentType ?? null
+				};
+			}),
+			equipment: (equipment as any[]).map((e: any) => ({
+				id: String(e._id),
+				name: e.name,
+				equipmentType: e.equipmentType,
 				mocreoDeviceId: e.mocreoDeviceId ?? null,
-				currentTemperature: e.currentTemperatureC ?? null,
+				currentTemperatureC: e.currentTemperatureC ?? null,
+				lastTemperatureReadAt: e.lastTemperatureReadAt ?? null,
 				temperatureMinC: e.temperatureMinC ?? null,
-				temperatureMaxC: e.temperatureMaxC ?? null,
-				targetTemperature: e.temperatureMaxC ?? null,
-				lastReadingAt: e.lastTemperatureReadAt ?? null,
-				status: e.status ?? 'active',
-				isActive: e.isActive ?? true
+				temperatureMaxC: e.temperatureMaxC ?? null
 			})),
-			recentReadings: JSON.parse(JSON.stringify(recentReadings)),
+			totalReadings,
 			isAdmin: isAdmin(locals.user)
 		};
 	} catch (err) {
 		console.error('[TEMP PROBES] Load error:', err instanceof Error ? err.message : err);
-		return { sensors: [], recentReadings: [], isAdmin: isAdmin(locals.user) };
+		return { mocreoSensors: [], equipment: [], totalReadings: 0, isAdmin: isAdmin(locals.user) };
 	}
 };
 
@@ -59,10 +109,11 @@ export const actions: Actions = {
 			);
 		}
 
-		await Equipment.findByIdAndUpdate(equipmentId, {
-			mocreoDeviceId: mocreoDeviceId ?? undefined,
-			...(mocreoDeviceId ? {} : { $unset: { mocreoDeviceId: 1 } })
-		});
+		await Equipment.findByIdAndUpdate(equipmentId, 
+			mocreoDeviceId 
+				? { mocreoDeviceId } 
+				: { $unset: { mocreoDeviceId: 1 } }
+		);
 
 		await AuditLog.create({
 			_id: generateId(),
@@ -74,6 +125,6 @@ export const actions: Actions = {
 			newData: { mocreoDeviceId }
 		});
 
-		return { success: true, message: 'Sensor mapping updated' };
+		return { success: true };
 	}
 };
