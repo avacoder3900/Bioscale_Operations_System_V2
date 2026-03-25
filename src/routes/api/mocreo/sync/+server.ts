@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireAgentApiKey } from '$lib/server/api-auth';
-import { connectDB, generateId, Equipment, TemperatureReading, TemperatureAlert } from '$lib/server/db';
+import { connectDB, generateId, Equipment, TemperatureReading, TemperatureAlert, SensorConfig } from '$lib/server/db';
 import {
 	fetchAllSensors,
 	fetchLatestReading,
@@ -33,6 +33,11 @@ export const POST: RequestHandler = async ({ request }) => {
 	for (const eq of equipmentDocs) {
 		if (eq.mocreoDeviceId) sensorToEquipment.set(eq.mocreoDeviceId, eq);
 	}
+
+	// Load sensor configs for threshold overrides
+	const sensorConfigs = await SensorConfig.find().lean() as any[];
+	const sensorConfigMap = new Map<string, any>();
+	for (const sc of sensorConfigs) sensorConfigMap.set(sc._id, sc);
 
 	const now = new Date();
 
@@ -83,32 +88,38 @@ export const POST: RequestHandler = async ({ request }) => {
 				});
 			}
 
-			// Check thresholds after storing reading
-			if (eq && temperature != null) {
-				if (eq.temperatureMinC != null && temperature < eq.temperatureMinC) {
+			// Check thresholds after storing reading (SensorConfig overrides Equipment)
+			const sc = sensorConfigMap.get(sensor.thingName);
+			const alertsEnabled = sc?.alertsEnabled ?? true;
+			const minC = sc?.temperatureMinC ?? eq?.temperatureMinC ?? null;
+			const maxC = sc?.temperatureMaxC ?? eq?.temperatureMaxC ?? null;
+			const eqName = eq?.name ?? sc?.sensorName ?? sensor.name;
+
+			if (alertsEnabled && temperature != null) {
+				if (minC != null && temperature < minC) {
 					await TemperatureAlert.create({
 						_id: generateId(),
 						sensorId: sensor.thingName,
 						sensorName: sensor.name,
 						alertType: 'low_temp',
-						threshold: eq.temperatureMinC,
+						threshold: minC,
 						actualValue: temperature,
 						equipmentId,
-						equipmentName: eq.name,
+						equipmentName: eqName,
 						timestamp: now
 					});
 					alertsCreated.push('low_temp');
 				}
-				if (eq.temperatureMaxC != null && temperature > eq.temperatureMaxC) {
+				if (maxC != null && temperature > maxC) {
 					await TemperatureAlert.create({
 						_id: generateId(),
 						sensorId: sensor.thingName,
 						sensorName: sensor.name,
 						alertType: 'high_temp',
-						threshold: eq.temperatureMaxC,
+						threshold: maxC,
 						actualValue: temperature,
 						equipmentId,
-						equipmentName: eq.name,
+						equipmentName: eqName,
 						timestamp: now
 					});
 					alertsCreated.push('high_temp');

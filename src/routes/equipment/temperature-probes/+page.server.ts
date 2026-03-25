@@ -1,6 +1,6 @@
 export const config = { maxDuration: 60 };
 import { fail } from '@sveltejs/kit';
-import { connectDB, Equipment, TemperatureReading, TemperatureAlert, generateId, AuditLog } from '$lib/server/db';
+import { connectDB, Equipment, TemperatureReading, TemperatureAlert, SensorConfig, generateId, AuditLog } from '$lib/server/db';
 import { isAdmin } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -10,8 +10,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const selectedSensorId = url.searchParams.get('sensor');
 	const range = url.searchParams.get('range') || 'day';
 
-	// Get all equipment
+	// Get all equipment and sensor configs
 	const equipment = await Equipment.find().sort({ equipmentType: 1, name: 1 }).lean();
+	const sensorConfigs = await SensorConfig.find().lean() as any[];
+	const sensorConfigMap = new Map<string, any>();
+	for (const sc of sensorConfigs) sensorConfigMap.set(sc._id, sc);
 
 	// Build sensor→equipment mapping
 	const sensorToEquipment = new Map<string, {
@@ -103,6 +106,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		knownSensorIds.add(r._id);
 		const meta = mocreoMeta.get(r._id);
 		const mapping = sensorToEquipment.get(r._id);
+		const sc = sensorConfigMap.get(r._id);
 		const s24 = stats24h.get(r._id);
 		const lastReadAt = r.timestamp ? new Date(r.timestamp).getTime() : 0;
 		const isOffline = !r.timestamp || (now.getTime() - lastReadAt > offlineThresholdMs);
@@ -124,7 +128,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		return {
 			sensorId: r._id,
 			sensorName: meta?.name ?? r.sensorName ?? r._id,
-			model: meta?.model ?? 'ST5',
+			model: meta?.model ?? mapping?.mocreoMeta?.model ?? r.model ?? 'ST5',
 			temperature: r.temperature ?? null,
 			humidity: r.humidity ?? null,
 			lastReadingAt: r.timestamp ?? null,
@@ -133,14 +137,14 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			batteryLevel: meta?.batteryLevel ?? mapping?.mocreoMeta?.batteryLevel ?? r.batteryLevel ?? null,
 			onlined: meta?.onlined ?? mapping?.mocreoMeta?.onlined ?? r.onlined ?? null,
 			lastSeen: meta?.lastSeen ?? mapping?.mocreoMeta?.lastSeen ?? r.lastSeen ?? null,
-			model: meta?.model ?? mapping?.mocreoMeta?.model ?? r.model ?? 'ST5',
 			firmwareVersion: mapping?.mocreoMeta?.firmwareVersion ?? null,
 			mocreoThresholds: mapping?.mocreoMeta?.thresholds ?? null,
 			mappedEquipmentId: mapping?.equipmentId ?? null,
 			mappedEquipmentName: mapping?.equipmentName ?? null,
 			mappedEquipmentType: mapping?.equipmentType ?? null,
-			temperatureMinC: mapping?.temperatureMinC ?? null,
-			temperatureMaxC: mapping?.temperatureMaxC ?? null,
+			temperatureMinC: sc?.temperatureMinC ?? mapping?.temperatureMinC ?? null,
+			temperatureMaxC: sc?.temperatureMaxC ?? mapping?.temperatureMaxC ?? null,
+			alertsEnabled: sc?.alertsEnabled ?? true,
 			isOffline,
 			stats24h: s24 ? {
 				min: Math.round(s24.min * 10) / 10,
@@ -156,6 +160,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	for (const [thingName, meta] of mocreoMeta) {
 		if (knownSensorIds.has(thingName)) continue;
 		const mapping = sensorToEquipment.get(thingName);
+		const sc2 = sensorConfigMap.get(thingName);
 		sensors.push({
 			sensorId: thingName,
 			sensorName: meta.name ?? thingName,
@@ -166,11 +171,16 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			readingCount: 0,
 			signalLevel: meta.info?.signalLevel ?? null,
 			batteryLevel: meta.info?.batteryLevel ?? null,
-			mappedEquipmentId: mapping?.equipmentId ?? null,
+			onlined: meta.info?.onlined ?? null,
+			lastSeen: meta.info?.lastSeen ?? null,
+			firmwareVersion: null,
+			mocreoThresholds: null,
+			mappedEquipmentId: sc2?.mappedEquipmentId ?? mapping?.equipmentId ?? null,
 			mappedEquipmentName: mapping?.equipmentName ?? null,
 			mappedEquipmentType: mapping?.equipmentType ?? null,
-			temperatureMinC: mapping?.temperatureMinC ?? null,
-			temperatureMaxC: mapping?.temperatureMaxC ?? null,
+			temperatureMinC: sc2?.temperatureMinC ?? mapping?.temperatureMinC ?? null,
+			temperatureMaxC: sc2?.temperatureMaxC ?? mapping?.temperatureMaxC ?? null,
+			alertsEnabled: sc2?.alertsEnabled ?? true,
 			isOffline: true,
 			stats24h: null,
 			sparkline: []
@@ -307,32 +317,38 @@ export const actions: Actions = {
 				});
 			}
 
-			// Check thresholds and create alerts if needed
-			if (eq && temperature != null) {
-				const eqFull = await Equipment.findById(equipmentId).select('temperatureMinC temperatureMaxC name').lean() as any;
-				if (eqFull?.temperatureMinC != null && temperature < eqFull.temperatureMinC) {
+			// Check thresholds (SensorConfig overrides Equipment)
+			const sc = await SensorConfig.findById(sensorId).lean() as any;
+			const eqFull = eq ? await Equipment.findById(equipmentId).select('temperatureMinC temperatureMaxC name').lean() as any : null;
+			const alertsEnabled = sc?.alertsEnabled ?? true;
+			const minC = sc?.temperatureMinC ?? eqFull?.temperatureMinC ?? null;
+			const maxC = sc?.temperatureMaxC ?? eqFull?.temperatureMaxC ?? null;
+			const eqName = eqFull?.name ?? sensorId;
+
+			if (alertsEnabled && temperature != null) {
+				if (minC != null && temperature < minC) {
 					await TemperatureAlert.create({
 						_id: generateId(),
 						sensorId,
 						sensorName: sensorId,
 						alertType: 'low_temp',
-						threshold: eqFull.temperatureMinC,
+						threshold: minC,
 						actualValue: temperature,
 						equipmentId,
-						equipmentName: eqFull.name,
+						equipmentName: eqName,
 						timestamp: new Date()
 					});
 				}
-				if (eqFull?.temperatureMaxC != null && temperature > eqFull.temperatureMaxC) {
+				if (maxC != null && temperature > maxC) {
 					await TemperatureAlert.create({
 						_id: generateId(),
 						sensorId,
 						sensorName: sensorId,
 						alertType: 'high_temp',
-						threshold: eqFull.temperatureMaxC,
+						threshold: maxC,
 						actualValue: temperature,
 						equipmentId,
-						equipmentName: eqFull.name,
+						equipmentName: eqName,
 						timestamp: new Date()
 					});
 				}
@@ -351,21 +367,24 @@ export const actions: Actions = {
 		const alertId = data.get('alertId')?.toString();
 		if (!alertId) return fail(400, { error: 'Alert ID is required' });
 
-		// Try string ID first (nanoid), then ObjectId
 		const mongoose = await import('mongoose');
-		const result = await TemperatureAlert.findByIdAndUpdate(alertId, {
-			acknowledged: true,
-			acknowledgedBy: { _id: locals.user?._id, username: locals.user?.username },
-			acknowledgedAt: new Date()
-		});
-		if (!result) {
-			// Fallback: try as ObjectId via raw collection
+		const col = mongoose.default.connection.db!.collection('temperature_alerts');
+		const update = {
+			$set: {
+				acknowledged: true,
+				acknowledgedBy: { _id: locals.user?._id, username: locals.user?.username },
+				acknowledgedAt: new Date()
+			}
+		};
+
+		let result = await col.updateOne({ _id: alertId as any }, update);
+		if (result.matchedCount === 0) {
 			try {
-				await mongoose.default.connection.db!.collection('temperature_alerts').updateOne(
-					{ _id: new mongoose.default.Types.ObjectId(alertId) },
-					{ $set: { acknowledged: true, acknowledgedBy: { _id: locals.user?._id, username: locals.user?.username }, acknowledgedAt: new Date() } }
+				result = await col.updateOne(
+					{ _id: new mongoose.default.Types.ObjectId(alertId) as any },
+					update
 				);
-			} catch { /* ignore */ }
+			} catch { /* not a valid ObjectId */ }
 		}
 
 		return { success: true, dismissed: true };
