@@ -163,7 +163,7 @@
 					<div>
 						<label for="qs-barcode" class="block text-sm font-medium text-gray-700 mb-1">Bag Barcode</label>
 						<div class="relative">
-							<input id="qs-barcode" name="bagBarcode" type="text" bind:this={qsBarcodeInput} value={qsBagBarcode} oninput={(e) => handleBarcodeInput(e.currentTarget.value)} required autofocus placeholder="Scan or type barcode" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm pr-8 focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
+							<input id="qs-barcode" name="bagBarcode" type="text" bind:this={qsBarcodeInput} value={qsBagBarcode} oninput={(e) => handleBarcodeInput(e.currentTarget.value)} onfocus={() => { qsBagBarcode = ''; qsLookupStatus = 'idle'; qsLookupInfo = ''; }} required autofocus placeholder="Scan or type barcode" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm pr-8 focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
 							<span class="absolute right-2 top-2.5 text-gray-400">
 								{#if qsLookupStatus === 'checking'}⏳{:else if qsLookupStatus === 'available'}✅{:else if qsLookupStatus === 'exists'}⚠️{:else}🔍{/if}
 							</span>

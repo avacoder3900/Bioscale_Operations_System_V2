@@ -236,20 +236,30 @@ body { font-family: Arial, sans-serif; }
 		const lotNumber = await generateLotNumber(ReceivingLot);
 
 		// Create ReceivingLot
-		const lot = await ReceivingLot.create({
-			_id: generateId(),
-			lotId: bagBarcode,
-			lotNumber,
-			part: { _id: part._id, partNumber: part.partNumber, name: part.name },
-			quantity,
-			operator: { _id: locals.user!._id, username: locals.user!.username },
-			inspectionPathway: 'coc',
-			cocMeetsStandards: true,
-			status: 'accepted',
-			notes,
-			bagBarcode,
-			createdAt: new Date()
-		});
+		let lot: any;
+		try {
+			lot = await ReceivingLot.create({
+				_id: generateId(),
+				lotId: bagBarcode,
+				lotNumber,
+				part: { _id: part._id, partNumber: part.partNumber, name: part.name },
+				quantity,
+				operator: { _id: locals.user!._id, username: locals.user!.username },
+				inspectionPathway: 'coc',
+				cocMeetsStandards: true,
+				status: 'accepted',
+				notes,
+				bagBarcode,
+				createdAt: new Date()
+			});
+		} catch (err: any) {
+			if (err?.code === 11000) {
+				const existingLot = await ReceivingLot.findOne({ lotId: bagBarcode }).lean() as any;
+				const lotRef = existingLot?.lotNumber ? `Lot #${existingLot.lotNumber}` : 'an existing lot';
+				return fail(400, { error: `This barcode is already registered as ${lotRef}` });
+			}
+			throw err;
+		}
 
 		// Update inventory count
 		const prevCount = part.inventoryCount ?? 0;
