@@ -60,6 +60,7 @@ export { ServiceTicket } from './service-ticket.js';
 
 // Tier 3: Immutable Logs — Temperature
 export { TemperatureReading } from './temperature-reading.js';
+export { TemperatureAlert } from './temperature-alert.js';
 
 // Tier 3: Immutable Logs
 export { AuditLog } from './audit-log.js';
