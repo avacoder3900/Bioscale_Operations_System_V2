@@ -1,5 +1,6 @@
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, ReceivingLot } from '$lib/server/db';
+import { normalizeDocUrl } from '$lib/server/url-utils';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -38,6 +39,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		.sort({ createdAt: -1 })
 		.limit(200)
 		.lean();
+
+	for (const lot of lots as any[]) { lot.cocDocumentUrl = normalizeDocUrl(lot.cocDocumentUrl); }
 
 	return {
 		lots: JSON.parse(JSON.stringify(lots)),
