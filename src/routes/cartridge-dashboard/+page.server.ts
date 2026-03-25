@@ -21,6 +21,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		recentCartridges,
 		expiringCartridges,
 		fridges,
+		ovens,
 		weeklyProduction,
 		assayBreakdown,
 		labStatusCounts,
@@ -58,6 +59,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		}).sort({ 'reagentFilling.expirationDate': 1 }).limit(10).lean(),
 		// Fridge storage locations
 		Equipment.find({ equipmentType: 'fridge', status: { $ne: 'offline' } }).lean().catch(() => []),
+		// Oven/heater equipment
+		Equipment.find({ equipmentType: 'oven', status: { $ne: 'offline' } }).lean().catch(() => []),
 		// Weekly production (created in last 7 days)
 		CartridgeRecord.countDocuments({ createdAt: { $gte: sevenDaysAgo } }),
 		// Assay type breakdown
@@ -130,10 +133,21 @@ export const load: PageServerLoad = async ({ locals }) => {
 		waxQc: qcMap(waxQcCounts as any[]),
 		reagentInspection: qcMap(reagentInspCounts as any[]),
 		assayBreakdown: (assayBreakdown as any[]).map((a: any) => ({ name: a._id, count: a.count })),
-		storageDistribution: (storageCounts as any[]).map((s: any) => ({
-			locationId: fridgeIdMap.get(s._id) ?? s._id,
-			locationName: fridgeMap.get(s._id) ?? s._id,
-			count: s.count
+		storageDistribution: (fridges as any[]).map((f: any) => {
+			const label = f.name ?? f.barcode ?? String(f._id);
+			const key = f.barcode ?? f.name ?? String(f._id);
+			return {
+				locationId: String(f._id),
+				locationName: label,
+				count: mergedCounts.get(key) ?? mergedCounts.get(f.name) ?? mergedCounts.get(f.barcode) ?? 0,
+				capacity: f.capacity ?? null
+			};
+		}),
+		ovenDistribution: (ovens as any[]).map((o: any) => ({
+			locationId: String(o._id),
+			locationName: o.name ?? o.barcode ?? String(o._id),
+			count: 0,
+			capacity: o.capacity ?? null
 		})),
 		expiringCount: expiringCartridges.length,
 		expiringSoon: (expiringCartridges as any[]).map((c: any) => ({
