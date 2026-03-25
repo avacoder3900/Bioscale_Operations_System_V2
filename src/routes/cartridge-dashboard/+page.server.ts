@@ -130,11 +130,29 @@ export const load: PageServerLoad = async ({ locals }) => {
 		waxQc: qcMap(waxQcCounts as any[]),
 		reagentInspection: qcMap(reagentInspCounts as any[]),
 		assayBreakdown: (assayBreakdown as any[]).map((a: any) => ({ name: a._id, count: a.count })),
-		storageDistribution: (storageCounts as any[]).map((s: any) => ({
-			locationId: fridgeIdMap.get(s._id) ?? s._id,
-			locationName: fridgeMap.get(s._id) ?? s._id,
-			count: s.count
-		})),
+		storageDistribution: (() => {
+			// Always show all fridges, even if empty
+			const countMap = new Map((storageCounts as any[]).map((s: any) => [s._id, s.count]));
+			const result: { locationId: string; locationName: string; count: number; capacity: number | null }[] = [];
+			for (const f of fridges as any[]) {
+				const label = f.name ?? f.barcode ?? String(f._id);
+				const keys = [f.barcode, f.name].filter(Boolean);
+				let count = 0;
+				for (const k of keys) count += countMap.get(k) ?? 0;
+				result.push({
+					locationId: String(f._id),
+					locationName: label,
+					count,
+					capacity: f.capacity ?? null
+				});
+				for (const k of keys) countMap.delete(k);
+			}
+			// Add any orphan storage locations not matching a fridge
+			for (const [key, cnt] of countMap) {
+				result.push({ locationId: key, locationName: fridgeMap.get(key) ?? key, count: cnt, capacity: null });
+			}
+			return result;
+		})(),
 		expiringCount: expiringCartridges.length,
 		expiringSoon: (expiringCartridges as any[]).map((c: any) => ({
 			id: c._id,

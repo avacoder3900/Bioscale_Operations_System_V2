@@ -205,19 +205,26 @@
 			{/if}
 
 			<!-- Storage Distribution -->
-			{#if data.storageDistribution.length > 0}
-				<TronCard>
-					<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Fridge Storage</h3>
+			<TronCard>
+				<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">🧊 Fridge Storage</h3>
+				{#if data.storageDistribution.length > 0}
 					<div class="space-y-2">
 						{#each data.storageDistribution as loc}
-							<div class="flex items-center justify-between">
+							<a href="/equipment/location/{loc.locationId}" class="flex items-center justify-between rounded px-2 py-1.5 hover:bg-[var(--color-tron-cyan)]/5 transition-colors">
 								<span class="text-xs text-[var(--color-tron-text)]">{loc.locationName}</span>
-								<span class="text-xs font-mono font-bold text-[var(--color-tron-cyan)]">{loc.count}</span>
-							</div>
+								<div class="flex items-center gap-2">
+									<span class="text-xs font-mono font-bold text-[var(--color-tron-cyan)]">{loc.count}</span>
+									{#if loc.capacity}
+										<span class="text-[10px] text-[var(--color-tron-text-secondary)]">/ {loc.capacity}</span>
+									{/if}
+								</div>
+							</a>
 						{/each}
 					</div>
-				</TronCard>
-			{/if}
+				{:else}
+					<p class="text-xs text-[var(--color-tron-text-secondary)]">No fridges registered. Add fridges on the Equipment page.</p>
+				{/if}
+			</TronCard>
 		</div>
 	</div>
 
