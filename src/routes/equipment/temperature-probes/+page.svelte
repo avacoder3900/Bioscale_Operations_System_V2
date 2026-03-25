@@ -153,6 +153,17 @@
 												</span>
 											{/if}
 											<span>Last read: {formatTempTime(sensor.lastTemperatureReadAt)}</span>
+											{#if sensor.batteryLevel != null}
+												<span class="flex items-center gap-1">
+													<span class="inline-block w-5 h-2.5 rounded-sm border border-current relative overflow-hidden">
+														<span class="absolute inset-0.5 rounded-sm {sensor.batteryLevel > 50 ? 'bg-emerald-500' : sensor.batteryLevel > 20 ? 'bg-amber-500' : 'bg-red-500'}" style="width: {sensor.batteryLevel}%"></span>
+													</span>
+													{sensor.batteryLevel}%
+												</span>
+											{/if}
+											{#if sensor.signalLevel != null}
+												<span>📶 {sensor.signalLevel}%</span>
+											{/if}
 										</div>
 									</div>
 								</div>
