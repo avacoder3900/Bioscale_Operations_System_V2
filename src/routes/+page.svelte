@@ -69,6 +69,7 @@
 	let costExpanded = $state(false);
 	let expandedSpuId = $state<string | null>(null);
 	let collapsedSections = $state<Record<string, boolean>>({});
+	let showAssayInventory = $state(false);
 	let selectedSpus = new SvelteSet<string>();
 	let bulkState = $state('');
 	let bulkUpdating = $state(false);
@@ -498,21 +499,41 @@
 					</TronCard>
 				{/if}
 
-				<!-- Assay Inventory -->
-				{#if cd.assayInventory && cd.assayInventory.length > 0}
+				<!-- Oven Status -->
+				{#if cd.ovenList && cd.ovenList.length > 0}
 					<TronCard>
-						<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Assay Inventory</h3>
+						<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">🔥 Ovens</h3>
 						<div class="space-y-1.5">
-							{#each cd.assayInventory as assay}
-								<div class="flex items-center justify-between">
-									<div class="min-w-0 flex-1">
-										<span class="text-xs text-[var(--color-tron-text)] truncate block">{assay.name}</span>
-										<span class="text-[10px] font-mono text-[var(--color-tron-text-secondary)]">{assay.skuCode}</span>
-									</div>
-									<span class="text-xs font-mono font-bold text-[var(--color-tron-cyan)] ml-2">{assay.fillCount}</span>
-								</div>
+							{#each cd.ovenList as oven}
+								<a href="/equipment/location/{oven.id}" class="flex items-center justify-between rounded px-2 py-1.5 hover:bg-[var(--color-tron-surface)] transition-colors">
+									<span class="text-xs text-[var(--color-tron-text)]">{oven.name}</span>
+									<span class="text-xs font-mono text-amber-400">{oven.currentTemperatureC != null ? oven.currentTemperatureC.toFixed(1) + '°C' : '—'}</span>
+								</a>
 							{/each}
 						</div>
+					</TronCard>
+				{/if}
+
+				<!-- Assay Inventory (collapsible) -->
+				{#if cd.assayInventory && cd.assayInventory.length > 0}
+					<TronCard>
+						<button type="button" class="w-full flex items-center justify-between mb-1" onclick={() => { showAssayInventory = !showAssayInventory; }}>
+							<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">Assay Inventory ({cd.assayInventory.length})</h3>
+							<svg class="w-4 h-4 text-[var(--color-tron-cyan)] transition-transform {showAssayInventory ? 'rotate-180' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+						</button>
+						{#if showAssayInventory}
+							<div class="space-y-1.5 mt-2">
+								{#each cd.assayInventory as assay}
+									<div class="flex items-center justify-between">
+										<div class="min-w-0 flex-1">
+											<span class="text-xs text-[var(--color-tron-text)] truncate block">{assay.name}</span>
+											<span class="text-[10px] font-mono text-[var(--color-tron-text-secondary)]">{assay.skuCode}</span>
+										</div>
+										<span class="text-xs font-mono font-bold text-[var(--color-tron-cyan)] ml-2">{assay.fillCount}</span>
+									</div>
+								{/each}
+							</div>
+						{/if}
 					</TronCard>
 				{/if}
 
