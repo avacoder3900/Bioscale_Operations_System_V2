@@ -70,7 +70,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Locations: show Equipment as parent entries, plus orphan EquipmentLocations
 	const locations: any[] = [];
 	for (const equip of equipmentDocs as any[]) {
-		if (equip.equipmentType !== 'fridge' && equip.equipmentType !== 'oven') continue;
+		if (!['fridge', 'oven', 'robot'].includes(equip.equipmentType)) continue;
 		const children = childLocMap.get(String(equip._id)) ?? [];
 		let occupants = 0;
 		const keys = [equip.barcode, equip.name].filter(Boolean);
@@ -177,6 +177,14 @@ export const load: PageServerLoad = async ({ locals }) => {
 		createdAt: r.createdAt
 	}));
 
+	// Robots from equipment collection
+	const robotDocs = (equipmentDocs as any[]).filter(e => e.equipmentType === 'robot');
+	const robots = robotDocs.map((r: any) => ({
+		robotId: String(r._id),
+		name: r.name ?? String(r._id),
+		status: r.status ?? 'active'
+	}));
+
 	return {
 		decks,
 		trays,
@@ -186,6 +194,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		activeWaxRuns,
 		activeReagentRuns,
 		waxRunHistory,
-		reagentRunHistory
+		reagentRunHistory,
+		robots
 	};
 };

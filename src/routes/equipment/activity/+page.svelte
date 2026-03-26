@@ -83,8 +83,11 @@
 	});
 
 	function robotLabel(robotId: string): string {
+		const robot = data.robots?.find((r: any) => r.id === robotId || r.robotId === robotId);
+		if (robot) return robot.name ?? robotId;
 		if (robotId === 'robot-1') return 'Robot 1';
 		if (robotId === 'robot-2') return 'Robot 2';
+		if (robotId === 'robot-3') return 'Robot 3';
 		return robotId;
 	}
 
@@ -118,7 +121,8 @@
 
 	let fridgeItems = $derived(groupByZone('fridge', fridges.map((f) => f.displayName)));
 	let ovenItems = $derived(groupByZone('oven', ovens.map((o) => o.displayName)));
-	let robotItems = $derived(groupByZone('robot', ['Robot 1', 'Robot 2']));
+	let robotNames = $derived((data.robots ?? []).map((r: any) => r.name ?? r.robotId ?? 'Unknown'));
+	let robotItems = $derived(groupByZone('robot', robotNames.length > 0 ? robotNames : ['Robot 1', 'Robot 2', 'Robot 3']));
 
 	let tableItems = $derived.by(() => {
 		const items: ZoneItem[] = [];

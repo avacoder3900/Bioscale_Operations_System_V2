@@ -15,6 +15,9 @@ const manufacturingSettingsSchema = new Schema({
 		defaultLaserTools: String, defaultCuttingProgramLink: String
 	},
 	rejectionReasonCodes: [{ _id: false, code: String, label: String, processType: String, sortOrder: Number }],
+	temperatureAlerts: {
+		emailRecipients: [String]
+	},
 	updatedAt: Date
 }, { timestamps: false });
 

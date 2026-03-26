@@ -5,25 +5,20 @@ const temperatureAlertSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	sensorId: { type: String, required: true, index: true },
 	sensorName: String,
+	alertType: { type: String, required: true, enum: ['high_temp', 'low_temp', 'lost_connection'] },
+	threshold: Number,        // configured threshold that was breached
+	actualValue: Number,      // the actual reading (null for lost_connection)
 	equipmentId: String,
-	alertType: {
-		type: String,
-		enum: ['high_temp', 'low_temp', 'lost_connection'],
-		required: true
-	},
-	threshold: Number,
-	actualValue: Number,
-	timestamp: { type: Date, required: true },
+	equipmentName: String,
 	acknowledged: { type: Boolean, default: false },
-	acknowledgedBy: {
-		_id: String,
-		username: String
-	},
-	acknowledgedAt: Date
-}, { timestamps: true });
+	acknowledgedBy: { _id: String, username: String },
+	acknowledgedAt: Date,
+	timestamp: { type: Date, required: true },
+	createdAt: { type: Date, default: () => new Date() }
+});
 
 temperatureAlertSchema.index({ acknowledged: 1, timestamp: -1 });
-temperatureAlertSchema.index({ equipmentId: 1, acknowledged: 1 });
+temperatureAlertSchema.index({ sensorId: 1, alertType: 1, acknowledged: 1 });
 
 export const TemperatureAlert = mongoose.models.TemperatureAlert
 	|| mongoose.model('TemperatureAlert', temperatureAlertSchema, 'temperature_alerts');

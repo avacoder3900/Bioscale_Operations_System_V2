@@ -12,6 +12,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		.lean();
 
 	return json({
+		success: true,
 		count: alerts.length,
 		alerts: JSON.parse(JSON.stringify(alerts))
 	});

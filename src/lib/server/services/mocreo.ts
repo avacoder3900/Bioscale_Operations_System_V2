@@ -24,6 +24,7 @@ function loadConfig(): MocreoConfig {
 }
 
 async function authenticate(): Promise<string> {
+	// Return cached token if still valid (with 60s buffer)
 	if (tokenCache && Date.now() < tokenCache.expiresAt - 60_000) {
 		return tokenCache.accessToken;
 	}
@@ -46,6 +47,7 @@ async function authenticate(): Promise<string> {
 	const body = await res.json();
 	const { accessToken, refreshToken } = body.data;
 
+	// Cache token for 55 minutes (Mocreo tokens typically last 1 hour)
 	tokenCache = {
 		accessToken,
 		refreshToken,
@@ -62,6 +64,7 @@ async function apiGet(path: string): Promise<any> {
 	});
 
 	if (!res.ok) {
+		// If 401, clear cache and retry once
 		if (res.status === 401 && tokenCache) {
 			tokenCache = null;
 			const newToken = await authenticate();
@@ -85,10 +88,10 @@ export interface MocreoSensor {
 }
 
 export interface MocreoSample {
-	time: number;
+	time: number;         // unix seconds
 	data: {
-		tm?: number;
-		hm?: number;
+		tm?: number;      // raw temperature
+		hm?: number;      // raw humidity
 	};
 }
 
@@ -97,8 +100,18 @@ export async function fetchAllSensors(): Promise<MocreoSensor[]> {
 	return (body.data ?? body) as MocreoSensor[];
 }
 
+/**
+ * Convert thingName (e.g. MC30AEA4004617) to the sample-endpoint node ID format
+ * (e.g. 0030aea400461700) — 16 chars, lowercase, MC→00 prefix, 00 suffix
+ */
+function toSampleNodeId(thingName: string): string {
+	if (thingName.length >= 16 && !thingName.startsWith('MC')) return thingName;
+	return '00' + thingName.slice(2).toLowerCase() + '00';
+}
+
 export async function fetchLatestReading(nodeId: string): Promise<MocreoSample | null> {
-	const body = await apiGet(`/nodes/${encodeURIComponent(nodeId)}/samples?limit=1`);
+	const sampleId = toSampleNodeId(nodeId);
+	const body = await apiGet(`/nodes/${encodeURIComponent(sampleId)}/samples?limit=1`);
 	const records: MocreoSample[] = body.data?.records ?? [];
 	return records[0] ?? null;
 }
@@ -108,8 +121,9 @@ export async function fetchHistory(
 	from: number,
 	to: number
 ): Promise<MocreoSample[]> {
+	const sampleId = toSampleNodeId(nodeId);
 	const body = await apiGet(
-		`/nodes/${encodeURIComponent(nodeId)}/samples?startTime=${from}&endTime=${to}&limit=1000`
+		`/nodes/${encodeURIComponent(sampleId)}/samples?startTime=${from}&endTime=${to}&limit=1000`
 	);
 	return body.data?.records ?? [];
 }

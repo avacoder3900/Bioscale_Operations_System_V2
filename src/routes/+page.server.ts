@@ -163,7 +163,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 				const [
 					phaseCounts, totalMfg, totalVoided, waxQcCounts, reagentInspCounts,
-					recentCartridges, expiringCartridges, fridges, weeklyProduction,
+					recentCartridges, expiringCartridges, fridges, ovens, weeklyProduction,
 					assayBreakdown, labStatusCounts, labTypeCounts, labGroups, labTotal
 				] = await Promise.all([
 					CartridgeRecord.aggregate([
@@ -187,6 +187,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 						status: { $nin: ['voided', 'completed', 'shipped'] }
 					}).sort({ 'reagentFilling.expirationDate': 1 }).limit(10).lean().catch(() => []),
 					Equipment.find({ equipmentType: 'fridge', status: { $ne: 'offline' } }).lean().catch(() => []),
+					Equipment.find({ equipmentType: 'oven', status: { $ne: 'offline' } }).lean().catch(() => []),
 					CartridgeRecord.countDocuments({ createdAt: { $gte: sevenDaysAgo } }).catch(() => 0),
 					CartridgeRecord.aggregate([
 						{ $match: { 'reagentFilling.assayType.name': { $exists: true } } },
@@ -321,12 +322,22 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 							return { groupName: group?.name ?? 'Unknown', color: group?.color, count: g.count };
 						})
 					},
-					fridgeCapacity: (fridgeCapacityAgg as any[]).map((f: any) => ({
-						locationId: f._id,
-						dbLocationId: fridgeIdMap.get(f._id) ?? null,
-						locationName: fridgeMap.get(f._id) ?? f._id,
-						used: f.count,
-						capacity: 10
+					fridgeCapacity: (fridges as any[]).map((f: any) => {
+						const key = f.barcode ?? f.name ?? String(f._id);
+						const agg = (fridgeCapacityAgg as any[]).find((a: any) => a._id === key || a._id === f.name || a._id === f.barcode);
+						return {
+							locationId: key,
+							dbLocationId: String(f._id),
+							locationName: f.name ?? f.barcode ?? String(f._id),
+							used: agg?.count ?? 0,
+							capacity: f.capacity ?? 10
+						};
+					}),
+					ovenList: (ovens as any[]).map((o: any) => ({
+						id: String(o._id),
+						name: o.name ?? o.barcode ?? String(o._id),
+						currentTemperatureC: o.currentTemperatureC ?? null,
+						capacity: o.capacity ?? null
 					})),
 					robotStatus: (allRobots as any[]).map((r: any) => ({
 						id: r._id,

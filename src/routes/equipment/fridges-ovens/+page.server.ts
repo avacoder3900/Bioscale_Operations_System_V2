@@ -1,6 +1,6 @@
 export const config = { maxDuration: 60 };
 import { fail } from '@sveltejs/kit';
-import { connectDB, generateId, Equipment, EquipmentLocation, AuditLog, CartridgeRecord } from '$lib/server/db';
+import { connectDB, generateId, Equipment, EquipmentLocation, AuditLog, CartridgeRecord, TemperatureReading } from '$lib/server/db';
 import { isAdmin, requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -242,6 +242,42 @@ export const actions: Actions = {
 		});
 
 		return { success: true, message: 'Location updated' };
+	},
+
+	mapSensor: async ({ request, locals }) => {
+		if (!isAdmin(locals.user)) return fail(403, { error: 'Admin access required' });
+		await connectDB();
+
+		const data = await request.formData();
+		const equipmentId = data.get('equipmentId')?.toString();
+		const mocreoDeviceId = data.get('mocreoDeviceId')?.toString() || null;
+
+		if (!equipmentId) return fail(400, { error: 'Equipment ID is required' });
+
+		// Clear previous mapping if another equipment had this sensor
+		if (mocreoDeviceId) {
+			await Equipment.updateMany(
+				{ mocreoDeviceId, _id: { $ne: equipmentId } },
+				{ $unset: { mocreoDeviceId: 1 } }
+			);
+		}
+
+		const updateOp = mocreoDeviceId
+			? { mocreoDeviceId }
+			: { $unset: { mocreoDeviceId: 1 } };
+		await Equipment.findByIdAndUpdate(equipmentId, updateOp);
+
+		await AuditLog.create({
+			_id: generateId(),
+			action: 'UPDATE',
+			tableName: 'equipment',
+			recordId: equipmentId,
+			changedBy: locals.user?.username ?? locals.user?._id,
+			changedAt: new Date(),
+			newData: { mocreoDeviceId }
+		});
+
+		return { success: true, message: 'Sensor mapping updated' };
 	},
 
 	deleteLocation: async ({ request, locals }) => {

@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireAgentApiKey } from '$lib/server/api-auth';
-import { connectDB, generateId, Equipment, TemperatureReading, TemperatureAlert } from '$lib/server/db';
+import { connectDB, generateId, Equipment, TemperatureReading, TemperatureAlert, SensorConfig } from '$lib/server/db';
 import {
 	fetchAllSensors,
 	fetchLatestReading,
@@ -9,67 +9,7 @@ import {
 	rawToHumidity
 } from '$lib/server/services/mocreo';
 
-async function checkAlerts(
-	sensorId: string,
-	sensorName: string,
-	equipmentId: string | null,
-	temperature: number | null,
-	readingTimestamp: Date,
-	equipment: any
-): Promise<void> {
-	if (!equipmentId || !equipment?.alertsEnabled) return;
-
-	// Check temperature thresholds
-	if (temperature != null) {
-		if (equipment.temperatureMaxC != null && temperature > equipment.temperatureMaxC) {
-			await TemperatureAlert.create({
-				_id: generateId(),
-				sensorId,
-				sensorName,
-				equipmentId,
-				alertType: 'high_temp',
-				threshold: equipment.temperatureMaxC,
-				actualValue: temperature,
-				timestamp: readingTimestamp
-			});
-		}
-		if (equipment.temperatureMinC != null && temperature < equipment.temperatureMinC) {
-			await TemperatureAlert.create({
-				_id: generateId(),
-				sensorId,
-				sensorName,
-				equipmentId,
-				alertType: 'low_temp',
-				threshold: equipment.temperatureMinC,
-				actualValue: temperature,
-				timestamp: readingTimestamp
-			});
-		}
-	}
-
-	// Check lost connection
-	const timeoutMs = (equipment.connectionTimeoutMinutes ?? 30) * 60 * 1000;
-	if (Date.now() - readingTimestamp.getTime() > timeoutMs) {
-		// Only create if no recent unacknowledged lost_connection alert exists
-		const existing = await TemperatureAlert.findOne({
-			sensorId,
-			alertType: 'lost_connection',
-			acknowledged: false
-		}).lean();
-		if (!existing) {
-			await TemperatureAlert.create({
-				_id: generateId(),
-				sensorId,
-				sensorName,
-				equipmentId,
-				alertType: 'lost_connection',
-				threshold: equipment.connectionTimeoutMinutes ?? 30,
-				actualValue: Math.round((Date.now() - readingTimestamp.getTime()) / 60000),
-				timestamp: new Date()
-			});
-		}
-	}
-}
+const OFFLINE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 
 export const POST: RequestHandler = async ({ request }) => {
 	requireAgentApiKey(request);
@@ -82,26 +22,43 @@ export const POST: RequestHandler = async ({ request }) => {
 		temperature: number | null;
 		humidity: number | null;
 		equipmentId: string | null;
+		alerts: string[];
 	}> = [];
 
+	// Build sensor→equipment mapping
 	const equipmentDocs = await Equipment.find({ mocreoDeviceId: { $ne: null } })
-		.select('_id mocreoDeviceId temperatureMinC temperatureMaxC alertsEnabled connectionTimeoutMinutes')
+		.select('_id mocreoDeviceId name temperatureMinC temperatureMaxC')
 		.lean() as any[];
 	const sensorToEquipment = new Map<string, any>();
 	for (const eq of equipmentDocs) {
 		if (eq.mocreoDeviceId) sensorToEquipment.set(eq.mocreoDeviceId, eq);
 	}
 
+	// Load sensor configs for threshold overrides
+	const sensorConfigs = await SensorConfig.find().lean() as any[];
+	const sensorConfigMap = new Map<string, any>();
+	for (const sc of sensorConfigs) sensorConfigMap.set(sc._id, sc);
+
+	const now = new Date();
+
+	// Fetch latest reading for each sensor (sequentially to respect rate limits)
 	for (const sensor of sensors) {
+		const alertsCreated: string[] = [];
+		const eq = sensorToEquipment.get(sensor.thingName);
+		const equipmentId = eq ? String(eq._id) : null;
+
 		try {
 			const sample = await fetchLatestReading(sensor.thingName);
 			if (!sample) {
+				// No reading — check for lost connection
+				await checkLostConnection(sensor.thingName, sensor.name, eq, now);
 				results.push({
 					sensorId: sensor.thingName,
 					sensorName: sensor.name,
 					temperature: null,
 					humidity: null,
-					equipmentId: sensorToEquipment.get(sensor.thingName)?._id ?? null
+					equipmentId,
+					alerts: ['no_reading']
 				});
 				continue;
 			}
@@ -109,9 +66,8 @@ export const POST: RequestHandler = async ({ request }) => {
 			const temperature = sample.data.tm != null ? rawToC(sample.data.tm) : null;
 			const humidity = sample.data.hm != null ? rawToHumidity(sample.data.hm) : null;
 			const timestamp = new Date(sample.time * 1000);
-			const eq = sensorToEquipment.get(sensor.thingName);
-			const equipmentId = eq ? String(eq._id) : null;
 
+			// Store reading
 			await TemperatureReading.create({
 				_id: generateId(),
 				sensorId: sensor.thingName,
@@ -124,6 +80,7 @@ export const POST: RequestHandler = async ({ request }) => {
 				equipmentId
 			});
 
+			// Update equipment with latest temperature
 			if (equipmentId && temperature != null) {
 				await Equipment.findByIdAndUpdate(equipmentId, {
 					currentTemperatureC: temperature,
@@ -131,15 +88,57 @@ export const POST: RequestHandler = async ({ request }) => {
 				});
 			}
 
-			// Check for alerts
-			await checkAlerts(sensor.thingName, sensor.name, equipmentId, temperature, timestamp, eq);
+			// Check thresholds after storing reading (SensorConfig overrides Equipment)
+			const sc = sensorConfigMap.get(sensor.thingName);
+			const alertsEnabled = sc?.alertsEnabled ?? true;
+			const minC = sc?.temperatureMinC ?? eq?.temperatureMinC ?? null;
+			const maxC = sc?.temperatureMaxC ?? eq?.temperatureMaxC ?? null;
+			const eqName = eq?.name ?? sc?.sensorName ?? sensor.name;
+
+			if (alertsEnabled && temperature != null) {
+				if (minC != null && temperature < minC) {
+					await TemperatureAlert.create({
+						_id: generateId(),
+						sensorId: sensor.thingName,
+						sensorName: sensor.name,
+						alertType: 'low_temp',
+						threshold: minC,
+						actualValue: temperature,
+						equipmentId,
+						equipmentName: eqName,
+						timestamp: now
+					});
+					alertsCreated.push('low_temp');
+				}
+				if (maxC != null && temperature > maxC) {
+					await TemperatureAlert.create({
+						_id: generateId(),
+						sensorId: sensor.thingName,
+						sensorName: sensor.name,
+						alertType: 'high_temp',
+						threshold: maxC,
+						actualValue: temperature,
+						equipmentId,
+						equipmentName: eqName,
+						timestamp: now
+					});
+					alertsCreated.push('high_temp');
+				}
+			}
+
+			// Check for lost connection (reading is old)
+			if (now.getTime() - timestamp.getTime() > OFFLINE_THRESHOLD_MS) {
+				await checkLostConnection(sensor.thingName, sensor.name, eq, now);
+				alertsCreated.push('lost_connection');
+			}
 
 			results.push({
 				sensorId: sensor.thingName,
 				sensorName: sensor.name,
 				temperature,
 				humidity,
-				equipmentId
+				equipmentId,
+				alerts: alertsCreated
 			});
 		} catch (err) {
 			console.error(`[MOCREO SYNC] Error reading sensor ${sensor.thingName}:`, err);
@@ -148,15 +147,38 @@ export const POST: RequestHandler = async ({ request }) => {
 				sensorName: sensor.name,
 				temperature: null,
 				humidity: null,
-				equipmentId: sensorToEquipment.get(sensor.thingName)?._id ?? null
+				equipmentId,
+				alerts: ['error']
 			});
 		}
 	}
 
 	return json({
 		success: true,
-		syncedAt: new Date().toISOString(),
+		syncedAt: now.toISOString(),
 		sensorCount: sensors.length,
 		results
 	});
 };
+
+async function checkLostConnection(sensorId: string, sensorName: string, eq: any, now: Date) {
+	// Only create if there isn't already an unacknowledged lost_connection alert for this sensor
+	const existing = await TemperatureAlert.findOne({
+		sensorId,
+		alertType: 'lost_connection',
+		acknowledged: false
+	});
+	if (existing) return;
+
+	await TemperatureAlert.create({
+		_id: generateId(),
+		sensorId,
+		sensorName,
+		alertType: 'lost_connection',
+		threshold: null,
+		actualValue: null,
+		equipmentId: eq ? String(eq._id) : null,
+		equipmentName: eq?.name ?? null,
+		timestamp: now
+	});
+}

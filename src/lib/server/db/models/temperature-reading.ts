@@ -6,12 +6,12 @@ const temperatureReadingSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	sensorId: { type: String, required: true, index: true },
 	sensorName: String,
-	temperature: Number,
-	humidity: Number,
-	rawTemp: Number,
-	rawHumidity: Number,
+	temperature: Number,       // °C (converted)
+	humidity: Number,          // % (converted)
+	rawTemp: Number,           // raw value from API
+	rawHumidity: Number,       // raw value from API
 	timestamp: { type: Date, required: true },
-	equipmentId: String,
+	equipmentId: String,       // linked Equipment _id, if mapped
 	createdAt: { type: Date, default: () => new Date() }
 });
 
