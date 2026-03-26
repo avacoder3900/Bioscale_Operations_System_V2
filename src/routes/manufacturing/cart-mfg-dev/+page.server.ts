@@ -3,7 +3,7 @@ import {
 	connectDB, WaxFillingRun, ReagentBatchRecord, CartridgeRecord,
 	BackingLot, LaserCutBatch, Consumable, LotRecord, ManufacturingSettings,
 	OpentronsRobot, ManufacturingMaterial, ShippingLot,
-	BarcodeSheetBatch, BarcodeInventory
+	BarcodeInventory
 } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
@@ -46,13 +46,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 		}).lean(),
 		BackingLot.find({ status: { $in: ['in_oven', 'ready', 'created'] } })
 			.sort({ ovenEntryTime: -1 }).lean(),
-		BarcodeInventory.findById('default').lean(),
+		Promise.resolve(null),
 		CartridgeRecord.aggregate([
 			{ $group: { _id: '$currentPhase', count: { $sum: 1 } } }
 		]),
 		Consumable.find({ type: 'top_seal_roll', status: 'active' })
 			.select('_id barcode remainingLengthFt initialLengthFt').lean(),
-		BarcodeSheetBatch.find().sort({ printedAt: -1 }).limit(5).lean(),
+		Promise.resolve([]),
 		ManufacturingMaterial.findOne({
 			name: { $regex: /laser.?cut|cut.?sub|substrate/i }
 		}).lean(),

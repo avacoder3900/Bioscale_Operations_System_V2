@@ -58,10 +58,6 @@ export { ParticleDevice } from './particle-device.js';
 export { WorkflowViolation } from './workflow-violation.js';
 export { ServiceTicket } from './service-ticket.js';
 
-// Barcode Tracking
-export { BarcodeSheetBatch } from './barcode-sheet-batch.js';
-export { BarcodeInventory } from './barcode-inventory.js';
-
 // Sensor Configuration
 export { SensorConfig } from './sensor-config.js';
 
@@ -76,3 +72,9 @@ export { ElectronicSignature } from './electronic-signature.js';
 export { InventoryTransaction } from './inventory-transaction.js';
 export { DeviceEvent } from './device-event.js';
 export { ManufacturingMaterialTransaction } from './manufacturing-material-transaction.js';
+
+// CV / Computer Vision
+export { CvProject } from './cv-project.js';
+export { CvImage } from './cv-image.js';
+export { CvSample } from './cv-sample.js';
+export { CvInspection } from './cv-inspection.js';

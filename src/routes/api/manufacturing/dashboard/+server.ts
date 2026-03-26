@@ -3,7 +3,7 @@ import {
 	connectDB, WaxFillingRun, ReagentBatchRecord, CartridgeRecord,
 	BackingLot, Consumable, ManufacturingSettings,
 	OpentronsRobot, ManufacturingMaterial, LaserCutBatch,
-	BarcodeSheetBatch, BarcodeInventory, ShippingLot
+	ShippingLot
 } from '$lib/server/db';
 import type { RequestHandler } from './$types';
 
@@ -40,7 +40,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 		CartridgeRecord.aggregate([
 			{ $group: { _id: '$currentPhase', count: { $sum: 1 } } }
 		]),
-		BarcodeInventory.findById('default').lean(),
+		Promise.resolve(null),
 		Consumable.find({ type: 'top_seal_roll', status: 'active' })
 			.select('_id barcode remainingLengthFt').lean()
 	]);
