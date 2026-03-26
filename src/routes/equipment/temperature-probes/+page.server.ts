@@ -1,184 +1,306 @@
 export const config = { maxDuration: 60 };
 import { fail } from '@sveltejs/kit';
-import { connectDB, Equipment, TemperatureReading, TemperatureAlert, generateId, AuditLog } from '$lib/server/db';
-import { isAdmin, requirePermission } from '$lib/server/permissions';
-import {
-	fetchLatestReading,
-	rawToC,
-	rawToHumidity
-} from '$lib/server/services/mocreo';
+import { connectDB, Equipment, TemperatureReading, TemperatureAlert, SensorConfig, generateId, AuditLog } from '$lib/server/db';
+import { isAdmin } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
-/** Transform Mocreo device ID: MC prefix → 00 prefix + 00 suffix, lowercase */
-function transformNodeId(mocreoDeviceId: string): string {
-	if (mocreoDeviceId.startsWith('MC')) {
-		return ('00' + mocreoDeviceId.slice(2) + '00').toLowerCase();
-	}
-	return mocreoDeviceId.toLowerCase();
-}
+export const load: PageServerLoad = async ({ locals, url }) => {
+	await connectDB();
 
-export const load: PageServerLoad = async (event) => {
-	requirePermission(event.locals.user, 'equipment:read');
-	try {
-		await connectDB();
+	const selectedSensorId = url.searchParams.get('sensor');
+	const range = url.searchParams.get('range') || 'day';
 
-		const now = new Date();
-		const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+	// Get all equipment and sensor configs
+	const equipment = await Equipment.find().sort({ equipmentType: 1, name: 1 }).lean();
+	const sensorConfigs = await SensorConfig.find().lean() as any[];
+	const sensorConfigMap = new Map<string, any>();
+	for (const sc of sensorConfigs) sensorConfigMap.set(sc._id, sc);
 
-		const [equipmentDocs, recentReadingDocs, activeAlerts] = await Promise.all([
-			Equipment.find({
-				equipmentType: { $in: ['fridge', 'oven'] }
-			}).sort({ name: 1 }).lean() as Promise<any[]>,
-
-			TemperatureReading.find({
-				timestamp: { $gte: twentyFourHoursAgo }
-			}).sort({ timestamp: -1 }).lean() as Promise<any[]>,
-
-			TemperatureAlert.find({
-				acknowledged: false
-			}).sort({ timestamp: -1 }).lean() as Promise<any[]>
-		]);
-
-		// Build 24h stats per equipment + track latest battery/signal from readings
-		const statsByEquipment = new Map<string, { min: number; max: number; sum: number; count: number; sparkline: number[] }>();
-		const latestMetaByEquipment = new Map<string, { batteryLevel: number | null; signalLevel: number | null }>();
-		for (const r of recentReadingDocs) {
-			if (r.equipmentId && r.temperature != null) {
-				const key = String(r.equipmentId);
-				let stats = statsByEquipment.get(key);
-				if (!stats) {
-					stats = { min: Infinity, max: -Infinity, sum: 0, count: 0, sparkline: [] };
-					statsByEquipment.set(key, stats);
-				}
-				stats.min = Math.min(stats.min, r.temperature);
-				stats.max = Math.max(stats.max, r.temperature);
-				stats.sum += r.temperature;
-				stats.count++;
-				stats.sparkline.push(r.temperature);
-				// Track battery/signal from most recent reading (first one since sorted desc)
-				if (!latestMetaByEquipment.has(key)) {
-					latestMetaByEquipment.set(key, {
-						batteryLevel: r.batteryLevel ?? null,
-						signalLevel: r.signalLevel ?? null
-					});
-				}
-			}
-		}
-		
-		// Also build battery/signal lookup by sensorId for unmapped sensors
-		const latestMetaBySensor = new Map<string, { batteryLevel: number | null; signalLevel: number | null }>();
-		for (const r of recentReadingDocs) {
-			if (r.sensorId && !latestMetaBySensor.has(r.sensorId)) {
-				latestMetaBySensor.set(r.sensorId, {
-					batteryLevel: r.batteryLevel ?? null,
-					signalLevel: r.signalLevel ?? null
-				});
-			}
-		}
-
-		// Reverse sparklines so they go oldest→newest
-		for (const stats of statsByEquipment.values()) {
-			stats.sparkline.reverse();
-			// Downsample to ~24 points for mini chart
-			if (stats.sparkline.length > 24) {
-				const step = stats.sparkline.length / 24;
-				const sampled: number[] = [];
-				for (let i = 0; i < 24; i++) {
-					sampled.push(stats.sparkline[Math.floor(i * step)]);
-				}
-				stats.sparkline = sampled;
-			}
-		}
-
-		const sensors = (equipmentDocs).map((e: any) => {
-			const stats = statsByEquipment.get(String(e._id));
-			const lastReadAt = e.lastTemperatureReadAt ? new Date(e.lastTemperatureReadAt) : null;
-			const timeoutMs = (e.connectionTimeoutMinutes ?? 30) * 60 * 1000;
-			const isOffline = lastReadAt ? (now.getTime() - lastReadAt.getTime() > timeoutMs) : false;
-			const minutesSinceLastRead = lastReadAt ? Math.round((now.getTime() - lastReadAt.getTime()) / 60000) : null;
-
-			return {
-				equipmentId: e._id,
-				name: e.name ?? null,
-				equipmentType: e.equipmentType ?? 'unknown',
-				mocreoDeviceId: e.mocreoDeviceId ?? null,
-				mocreoAssetId: e.mocreoAssetId ?? null,
-				currentTemperatureC: e.currentTemperatureC ?? null,
+	// Build sensor→equipment mapping
+	const sensorToEquipment = new Map<string, {
+		equipmentId: string;
+		equipmentName: string;
+		equipmentType: string;
+		temperatureMinC: number | null;
+		temperatureMaxC: number | null;
+		mocreoMeta: any;
+	}>();
+	for (const e of equipment as any[]) {
+		if (e.mocreoDeviceId) {
+			sensorToEquipment.set(e.mocreoDeviceId, {
+				equipmentId: String(e._id),
+				equipmentName: e.name,
+				equipmentType: e.equipmentType,
 				temperatureMinC: e.temperatureMinC ?? null,
 				temperatureMaxC: e.temperatureMaxC ?? null,
-				lastTemperatureReadAt: e.lastTemperatureReadAt ?? null,
-				status: e.status ?? 'active',
-				isActive: e.isActive ?? true,
-				alertsEnabled: e.alertsEnabled ?? false,
-				connectionTimeoutMinutes: e.connectionTimeoutMinutes ?? 30,
-				notes: e.notes ?? null,
-				// 24h stats
-				stats24h: stats ? {
-					min: Math.round(stats.min * 10) / 10,
-					max: Math.round(stats.max * 10) / 10,
-					avg: Math.round((stats.sum / stats.count) * 10) / 10,
-					sparkline: stats.sparkline.map(v => Math.round(v * 10) / 10)
-				} : null,
-				// Connection status
-				isOffline,
-				minutesSinceLastRead,
-				// Battery/signal from readings or mocreoMeta
-				batteryLevel: latestMetaByEquipment.get(String(e._id))?.batteryLevel ?? latestMetaBySensor.get(e.mocreoDeviceId)?.batteryLevel ?? e.mocreoMeta?.batteryLevel ?? null,
-				signalLevel: latestMetaByEquipment.get(String(e._id))?.signalLevel ?? latestMetaBySensor.get(e.mocreoDeviceId)?.signalLevel ?? e.mocreoMeta?.signalLevel ?? null
-			};
-		});
+				mocreoMeta: e.mocreoMeta ?? null
+			});
+		}
+	}
 
-		// Recent readings for table (last 50)
-		const recentReadings = recentReadingDocs.slice(0, 50).map((r: any) => ({
-			id: r._id,
-			equipmentId: r.equipmentId ?? null,
-			temperatureC: r.temperature ?? null,
-			humidity: r.humidity ?? null,
-			description: r.sensorName ?? null,
-			createdAt: r.timestamp ?? r.createdAt
-		}));
+	// Get latest reading per sensor from DB (primary data source)
+	const allReadings = await TemperatureReading.find({})
+		.sort({ timestamp: -1 })
+		.lean() as any[];
+
+	const latestBySensor = new Map<string, any>();
+	const countBySensor = new Map<string, number>();
+	for (const r of allReadings) {
+		const sid = r.sensorId;
+		countBySensor.set(sid, (countBySensor.get(sid) ?? 0) + 1);
+		if (!latestBySensor.has(sid)) {
+			latestBySensor.set(sid, r);
+		}
+	}
+
+	const latestReadings = [...latestBySensor.entries()].map(([sid, r]) => ({
+		_id: sid,
+		sensorName: r.sensorName,
+		temperature: r.temperature,
+		humidity: r.humidity,
+		timestamp: r.timestamp,
+		readingCount: countBySensor.get(sid) ?? 0
+	}));
+
+	// Query last 24h readings per sensor for summary stats + sparkline
+	const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+	const last24hReadings = await TemperatureReading.find({
+		timestamp: { $gte: twentyFourHoursAgo }
+	}).sort({ timestamp: 1 }).select('sensorId temperature timestamp').lean() as any[];
+
+	// Group 24h readings by sensor
+	const stats24h = new Map<string, { min: number; max: number; sum: number; count: number; sparkline: number[] }>();
+	for (const r of last24hReadings) {
+		if (r.temperature == null) continue;
+		const sid = r.sensorId;
+		if (!stats24h.has(sid)) {
+			stats24h.set(sid, { min: r.temperature, max: r.temperature, sum: r.temperature, count: 1, sparkline: [r.temperature] });
+		} else {
+			const s = stats24h.get(sid)!;
+			s.min = Math.min(s.min, r.temperature);
+			s.max = Math.max(s.max, r.temperature);
+			s.sum += r.temperature;
+			s.count++;
+			s.sparkline.push(r.temperature);
+		}
+	}
+
+	// Optionally enrich with live Mocreo metadata (signal/battery)
+	const mocreoMeta = new Map<string, any>();
+	try {
+		const { fetchAllSensors } = await import('$lib/server/services/mocreo');
+		const apiSensors = await fetchAllSensors();
+		for (const s of apiSensors) {
+			mocreoMeta.set(s.thingName, s);
+		}
+	} catch {
+		// Mocreo API unavailable — use DB data only
+	}
+
+	// Build sensor list
+	const knownSensorIds = new Set<string>();
+	const now = new Date();
+	const offlineThresholdMs = 30 * 60 * 1000; // 30 minutes
+
+	const sensors = latestReadings.map((r: any) => {
+		knownSensorIds.add(r._id);
+		const meta = mocreoMeta.get(r._id);
+		const mapping = sensorToEquipment.get(r._id);
+		const sc = sensorConfigMap.get(r._id);
+		const s24 = stats24h.get(r._id);
+		const lastReadAt = r.timestamp ? new Date(r.timestamp).getTime() : 0;
+		const isOffline = !r.timestamp || (now.getTime() - lastReadAt > offlineThresholdMs);
+
+		// Downsample sparkline to ~20 points
+		let sparkline: number[] = [];
+		if (s24) {
+			const pts = s24.sparkline;
+			if (pts.length <= 20) {
+				sparkline = pts;
+			} else {
+				const step = pts.length / 20;
+				for (let i = 0; i < 20; i++) {
+					sparkline.push(pts[Math.floor(i * step)]);
+				}
+			}
+		}
 
 		return {
-			sensors: JSON.parse(JSON.stringify(sensors)),
-			recentReadings: JSON.parse(JSON.stringify(recentReadings)),
-			alerts: JSON.parse(JSON.stringify(activeAlerts)),
-			isAdmin: isAdmin(event.locals.user)
+			sensorId: r._id,
+			sensorName: meta?.name ?? r.sensorName ?? r._id,
+			model: meta?.model ?? mapping?.mocreoMeta?.model ?? r.model ?? 'ST5',
+			temperature: r.temperature ?? null,
+			humidity: r.humidity ?? null,
+			lastReadingAt: r.timestamp ?? null,
+			readingCount: r.readingCount ?? 0,
+			signalLevel: meta?.signalLevel ?? mapping?.mocreoMeta?.signalLevel ?? r.signalLevel ?? null,
+			batteryLevel: meta?.batteryLevel ?? mapping?.mocreoMeta?.batteryLevel ?? r.batteryLevel ?? null,
+			onlined: meta?.onlined ?? mapping?.mocreoMeta?.onlined ?? r.onlined ?? null,
+			lastSeen: meta?.lastSeen ?? mapping?.mocreoMeta?.lastSeen ?? r.lastSeen ?? null,
+			firmwareVersion: mapping?.mocreoMeta?.firmwareVersion ?? null,
+			mocreoThresholds: mapping?.mocreoMeta?.thresholds ?? null,
+			mappedEquipmentId: mapping?.equipmentId ?? null,
+			mappedEquipmentName: mapping?.equipmentName ?? null,
+			mappedEquipmentType: mapping?.equipmentType ?? null,
+			temperatureMinC: sc?.temperatureMinC ?? mapping?.temperatureMinC ?? null,
+			temperatureMaxC: sc?.temperatureMaxC ?? mapping?.temperatureMaxC ?? null,
+			alertsEnabled: sc?.alertsEnabled ?? true,
+			isOffline,
+			stats24h: s24 ? {
+				min: Math.round(s24.min * 10) / 10,
+				max: Math.round(s24.max * 10) / 10,
+				avg: Math.round((s24.sum / s24.count) * 10) / 10,
+				count: s24.count
+			} : null,
+			sparkline
 		};
-	} catch (err) {
-		console.error('[TEMP PROBES] Load error:', err instanceof Error ? err.message : err);
-		return { sensors: [], recentReadings: [], alerts: [], isAdmin: isAdmin(event.locals.user) };
+	});
+
+	// Add sensors from Mocreo API that don't have DB readings yet
+	for (const [thingName, meta] of mocreoMeta) {
+		if (knownSensorIds.has(thingName)) continue;
+		const mapping = sensorToEquipment.get(thingName);
+		const sc2 = sensorConfigMap.get(thingName);
+		sensors.push({
+			sensorId: thingName,
+			sensorName: meta.name ?? thingName,
+			model: meta.model ?? 'ST5',
+			temperature: null,
+			humidity: null,
+			lastReadingAt: null,
+			readingCount: 0,
+			signalLevel: meta.info?.signalLevel ?? null,
+			batteryLevel: meta.info?.batteryLevel ?? null,
+			onlined: meta.info?.onlined ?? null,
+			lastSeen: meta.info?.lastSeen ?? null,
+			firmwareVersion: null,
+			mocreoThresholds: null,
+			mappedEquipmentId: sc2?.mappedEquipmentId ?? mapping?.equipmentId ?? null,
+			mappedEquipmentName: mapping?.equipmentName ?? null,
+			mappedEquipmentType: mapping?.equipmentType ?? null,
+			temperatureMinC: sc2?.temperatureMinC ?? mapping?.temperatureMinC ?? null,
+			temperatureMaxC: sc2?.temperatureMaxC ?? mapping?.temperatureMaxC ?? null,
+			alertsEnabled: sc2?.alertsEnabled ?? true,
+			isOffline: true,
+			stats24h: null,
+			sparkline: []
+		});
 	}
+
+	// Fetch unacknowledged alerts
+	const unacknowledgedAlerts = await TemperatureAlert.find({ acknowledged: false })
+		.sort({ timestamp: -1 })
+		.lean() as any[];
+
+	// Detail view: load history for selected sensor
+	let historyData: any[] = [];
+	let selectedSensor: any = null;
+	if (selectedSensorId) {
+		selectedSensor = sensors.find(s => s.sensorId === selectedSensorId) ?? null;
+
+		const nowMs = now.getTime();
+		let startTime: Date;
+		if (range === 'year') {
+			startTime = new Date(nowMs - 365 * 24 * 60 * 60 * 1000);
+		} else if (range === 'month') {
+			startTime = new Date(nowMs - 30 * 24 * 60 * 60 * 1000);
+		} else {
+			startTime = new Date(nowMs - 24 * 60 * 60 * 1000);
+		}
+
+		historyData = await TemperatureReading.find({
+			sensorId: selectedSensorId,
+			timestamp: { $gte: startTime, $lte: now }
+		})
+			.sort({ timestamp: 1 })
+			.select('temperature humidity timestamp')
+			.lean();
+
+		historyData = JSON.parse(JSON.stringify(historyData));
+	}
+
+	const totalReadings = await TemperatureReading.countDocuments();
+
+	return {
+		sensors: JSON.parse(JSON.stringify(sensors)),
+		equipment: (equipment as any[]).map((e: any) => ({
+			id: String(e._id),
+			name: e.name,
+			equipmentType: e.equipmentType,
+			mocreoDeviceId: e.mocreoDeviceId ?? null
+		})),
+		totalReadings,
+		isAdmin: isAdmin(locals.user),
+		selectedSensorId,
+		selectedSensor,
+		historyData,
+		range,
+		alerts: JSON.parse(JSON.stringify(unacknowledgedAlerts))
+	};
 };
 
 export const actions: Actions = {
-	ping: async (event) => {
-		requirePermission(event.locals.user, 'equipment:read');
+	mapSensor: async ({ request, locals }) => {
+		if (!isAdmin(locals.user)) return fail(403, { error: 'Admin access required' });
 		await connectDB();
 
-		const data = await event.request.formData();
+		const data = await request.formData();
 		const equipmentId = data.get('equipmentId')?.toString();
-		if (!equipmentId) return fail(400, { error: 'equipmentId is required' });
+		const mocreoDeviceId = data.get('mocreoDeviceId')?.toString() || null;
 
-		const equipment = await Equipment.findById(equipmentId).lean() as any;
-		if (!equipment?.mocreoDeviceId) {
-			return fail(400, { error: 'Equipment has no MOCREO device linked' });
+		if (!equipmentId) return fail(400, { error: 'Equipment ID is required' });
+
+		if (mocreoDeviceId) {
+			await Equipment.updateMany(
+				{ mocreoDeviceId, _id: { $ne: equipmentId } },
+				{ $unset: { mocreoDeviceId: 1 } }
+			);
 		}
 
+		await Equipment.findByIdAndUpdate(
+			equipmentId,
+			mocreoDeviceId
+				? { mocreoDeviceId }
+				: { $unset: { mocreoDeviceId: 1 } }
+		);
+
+		await AuditLog.create({
+			_id: generateId(),
+			action: 'UPDATE',
+			tableName: 'equipment',
+			recordId: equipmentId,
+			changedBy: locals.user?.username ?? locals.user?._id,
+			changedAt: new Date(),
+			newData: { mocreoDeviceId }
+		});
+
+		return { success: true };
+	},
+
+	pingSensor: async ({ request, locals }) => {
+		await connectDB();
+		const data = await request.formData();
+		const sensorId = data.get('sensorId')?.toString();
+		if (!sensorId) return fail(400, { error: 'Sensor ID is required' });
+
 		try {
-			const nodeId = transformNodeId(equipment.mocreoDeviceId);
-			const sample = await fetchLatestReading(nodeId);
-			if (!sample) {
-				return fail(400, { error: 'No reading available from sensor' });
-			}
+			const { fetchLatestReading, rawToC, rawToHumidity } = await import('$lib/server/services/mocreo');
+			const sample = await fetchLatestReading(sensorId);
+			if (!sample) return fail(404, { error: 'No reading available from sensor' });
 
 			const temperature = sample.data.tm != null ? rawToC(sample.data.tm) : null;
 			const humidity = sample.data.hm != null ? rawToHumidity(sample.data.hm) : null;
 			const timestamp = new Date(sample.time * 1000);
 
+			// Find equipment mapping
+			const eq = await Equipment.findOne({ mocreoDeviceId: sensorId }).select('_id name').lean() as any;
+			const equipmentId = eq ? String(eq._id) : null;
+
+			// Store reading
 			await TemperatureReading.create({
 				_id: generateId(),
-				sensorId: equipment.mocreoDeviceId,
-				sensorName: equipment.name,
+				sensorId,
+				sensorName: sensorId,
 				temperature,
 				humidity,
 				rawTemp: sample.data.tm ?? null,
@@ -187,73 +309,113 @@ export const actions: Actions = {
 				equipmentId
 			});
 
-			if (temperature != null) {
+			// Update equipment
+			if (equipmentId && temperature != null) {
 				await Equipment.findByIdAndUpdate(equipmentId, {
 					currentTemperatureC: temperature,
 					lastTemperatureReadAt: timestamp
 				});
 			}
 
-			return { success: true, temperature, humidity, timestamp: timestamp.toISOString() };
-		} catch (err) {
-			console.error('[TEMP PROBES] Ping error:', err instanceof Error ? err.message : err);
-			return fail(500, { error: 'Failed to ping sensor' });
+			// Check thresholds (SensorConfig overrides Equipment)
+			const sc = await SensorConfig.findById(sensorId).lean() as any;
+			const eqFull = eq ? await Equipment.findById(equipmentId).select('temperatureMinC temperatureMaxC name').lean() as any : null;
+			const alertsEnabled = sc?.alertsEnabled ?? true;
+			const minC = sc?.temperatureMinC ?? eqFull?.temperatureMinC ?? null;
+			const maxC = sc?.temperatureMaxC ?? eqFull?.temperatureMaxC ?? null;
+			const eqName = eqFull?.name ?? sensorId;
+
+			if (alertsEnabled && temperature != null) {
+				if (minC != null && temperature < minC) {
+					await TemperatureAlert.create({
+						_id: generateId(),
+						sensorId,
+						sensorName: sensorId,
+						alertType: 'low_temp',
+						threshold: minC,
+						actualValue: temperature,
+						equipmentId,
+						equipmentName: eqName,
+						timestamp: new Date()
+					});
+				}
+				if (maxC != null && temperature > maxC) {
+					await TemperatureAlert.create({
+						_id: generateId(),
+						sensorId,
+						sensorName: sensorId,
+						alertType: 'high_temp',
+						threshold: maxC,
+						actualValue: temperature,
+						equipmentId,
+						equipmentName: eqName,
+						timestamp: new Date()
+					});
+				}
+			}
+
+			return { success: true, pinged: true };
+		} catch (err: any) {
+			console.error('[PING] Error fetching sensor:', err);
+			return fail(500, { error: 'Failed to ping sensor: ' + (err.message || 'Unknown error') });
 		}
 	},
 
-	updateAlertSettings: async (event) => {
-		requirePermission(event.locals.user, 'equipment:write');
+	acknowledgeAlert: async ({ request, locals }) => {
+		await connectDB();
+		const data = await request.formData();
+		const alertId = data.get('alertId')?.toString();
+		if (!alertId) return fail(400, { error: 'Alert ID is required' });
+
+		const mongoose = await import('mongoose');
+		const col = mongoose.default.connection.db!.collection('temperature_alerts');
+		const update = {
+			$set: {
+				acknowledged: true,
+				acknowledgedBy: { _id: locals.user?._id, username: locals.user?.username },
+				acknowledgedAt: new Date()
+			}
+		};
+
+		let result = await col.updateOne({ _id: alertId as any }, update);
+		if (result.matchedCount === 0) {
+			try {
+				result = await col.updateOne(
+					{ _id: new mongoose.default.Types.ObjectId(alertId) as any },
+					update
+				);
+			} catch { /* not a valid ObjectId */ }
+		}
+
+		return { success: true, dismissed: true };
+	},
+
+	setThresholds: async ({ request, locals }) => {
+		if (!isAdmin(locals.user)) return fail(403, { error: 'Admin access required' });
 		await connectDB();
 
-		const data = await event.request.formData();
+		const data = await request.formData();
 		const equipmentId = data.get('equipmentId')?.toString();
-		if (!equipmentId) return fail(400, { error: 'equipmentId is required' });
+		const minTemp = data.get('temperatureMinC')?.toString();
+		const maxTemp = data.get('temperatureMaxC')?.toString();
 
-		const alertsEnabled = data.get('alertsEnabled') === 'true';
-		const temperatureMinC = data.get('temperatureMinC')?.toString();
-		const temperatureMaxC = data.get('temperatureMaxC')?.toString();
-		const connectionTimeoutMinutes = data.get('connectionTimeoutMinutes')?.toString();
+		if (!equipmentId) return fail(400, { error: 'Equipment ID is required' });
 
-		const update: Record<string, any> = { alertsEnabled };
-		if (temperatureMinC) update.temperatureMinC = parseFloat(temperatureMinC);
-		if (temperatureMaxC) update.temperatureMaxC = parseFloat(temperatureMaxC);
-		if (connectionTimeoutMinutes) update.connectionTimeoutMinutes = parseInt(connectionTimeoutMinutes, 10);
+		const update: any = {};
+		if (minTemp !== undefined && minTemp !== '') update.temperatureMinC = parseFloat(minTemp);
+		if (maxTemp !== undefined && maxTemp !== '') update.temperatureMaxC = parseFloat(maxTemp);
 
 		await Equipment.findByIdAndUpdate(equipmentId, update);
 
 		await AuditLog.create({
 			_id: generateId(),
+			action: 'UPDATE',
 			tableName: 'equipment',
 			recordId: equipmentId,
-			action: 'UPDATE',
-			newData: update,
+			changedBy: locals.user?.username ?? locals.user?._id,
 			changedAt: new Date(),
-			changedBy: event.locals.user?.username ?? 'unknown',
-			changedFields: Object.keys(update)
+			newData: update
 		});
-
-		return { success: true };
-	},
-
-	acknowledgeAlert: async (event) => {
-		requirePermission(event.locals.user, 'equipment:write');
-		await connectDB();
-
-		const data = await event.request.formData();
-		const alertId = data.get('alertId')?.toString();
-		if (!alertId) return fail(400, { error: 'alertId is required' });
-
-		const alert = await TemperatureAlert.findByIdAndUpdate(
-			alertId,
-			{
-				acknowledged: true,
-				acknowledgedBy: { _id: event.locals.user?._id, username: event.locals.user?.username },
-				acknowledgedAt: new Date()
-			},
-			{ new: true }
-		).lean();
-
-		if (!alert) return fail(404, { error: 'Alert not found' });
 
 		return { success: true };
 	}
