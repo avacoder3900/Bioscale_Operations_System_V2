@@ -1,6 +1,6 @@
-import { CV_WORKER_URL } from '$env/dynamic/private';
+import { env } from '$env/dynamic/private';
 
-const BASE_URL = CV_WORKER_URL || 'http://localhost:8000';
+const BASE_URL = env.CV_WORKER_URL || 'http://localhost:8000';
 
 async function request(path: string, options?: RequestInit) {
 	const res = await fetch(`${BASE_URL}${path}`, {

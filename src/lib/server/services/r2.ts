@@ -6,13 +6,12 @@ import {
 	ListObjectsV2Command
 } from '@aws-sdk/client-s3';
 import sharp from 'sharp';
-import {
-	R2_ACCOUNT_ID,
-	R2_ACCESS_KEY_ID,
-	R2_SECRET_ACCESS_KEY,
-	R2_BUCKET_NAME,
-	R2_PUBLIC_URL
-} from '$env/dynamic/private';
+import { env } from '$env/dynamic/private';
+const R2_ACCOUNT_ID = env.R2_ACCOUNT_ID ?? '';
+const R2_ACCESS_KEY_ID = env.R2_ACCESS_KEY_ID ?? '';
+const R2_SECRET_ACCESS_KEY = env.R2_SECRET_ACCESS_KEY ?? '';
+const R2_BUCKET_NAME = env.R2_BUCKET_NAME ?? '';
+const R2_PUBLIC_URL = env.R2_PUBLIC_URL ?? '';
 
 function getClient(): S3Client {
 	if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) {
