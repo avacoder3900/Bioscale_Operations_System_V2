@@ -1,27 +1,19 @@
 import { redirect } from '@sveltejs/kit';
-import { cvFetch } from '$lib/server/cv-api';
+import { connectDB } from '$lib/server/db/connection.js';
+import { CvProject } from '$lib/server/db/models/cv-project.js';
 import type { PageServerLoad } from './$types';
-import type { SampleResponse, CameraInfo } from '$lib/types/cv';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
+	await connectDB();
 
-	let samples: SampleResponse[] = [];
-	let cameras: CameraInfo[] = [];
-
-	try {
-		samples = await cvFetch<SampleResponse[]>('/api/v1/samples', {
-			params: { limit: '50' }
-		});
-	} catch { /* CV API may not be available */ }
-
-	try {
-		cameras = await cvFetch<CameraInfo[]>('/api/v1/cameras');
-	} catch { /* cameras endpoint may not be available */ }
+	const projects = await CvProject.find({ modelStatus: 'trained' })
+		.select('_id name projectType modelStatus')
+		.sort({ name: 1 })
+		.lean();
 
 	return {
-		samples: samples.map((s) => ({ id: s.id, name: s.name, project: s.project })),
-		cameras
+		projects: JSON.parse(JSON.stringify(projects))
 	};
 };
 

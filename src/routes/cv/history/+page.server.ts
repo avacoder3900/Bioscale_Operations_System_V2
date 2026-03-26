@@ -1,77 +1,46 @@
 import { redirect } from '@sveltejs/kit';
-import { cvFetch, cvThumbUrl } from '$lib/server/cv-api';
+import { connectDB } from '$lib/server/db/connection.js';
+import { CvInspection } from '$lib/server/db/models/cv-inspection.js';
+import { CvProject } from '$lib/server/db/models/cv-project.js';
 import type { PageServerLoad } from './$types';
-import type { SampleResponse, InspectionResponse } from '$lib/types/cv';
 
-export const load: PageServerLoad = async ({ locals, url }) => {
+export const load: PageServerLoad = async ({ url, locals }) => {
 	if (!locals.user) redirect(302, '/login');
+	await connectDB();
 
 	const filterResult = url.searchParams.get('result') || '';
-	const filterPhase = url.searchParams.get('phase') || '';
+	const filterProject = url.searchParams.get('projectId') || '';
 	const filterCartridge = url.searchParams.get('cartridge') || '';
-	const pageNum = parseInt(url.searchParams.get('page') || '1', 10);
+	const pageNum = parseInt(url.searchParams.get('page') || '1');
 	const pageSize = 20;
 
-	let samples: SampleResponse[] = [];
-	let allInspections: InspectionResponse[] = [];
+	const filter: Record<string, unknown> = {};
+	if (filterResult) filter.result = filterResult;
+	if (filterProject) filter.projectId = filterProject;
+	if (filterCartridge) filter.cartridgeRecordId = { $regex: filterCartridge, $options: 'i' };
 
-	try {
-		samples = await cvFetch<SampleResponse[]>('/api/v1/samples', {
-			params: { limit: '200' }
-		});
-	} catch {
-		return {
-			inspections: [],
-			filters: { result: filterResult, phase: filterPhase, cartridge: filterCartridge },
-			pagination: { page: 1, totalPages: 1, total: 0 }
-		};
+	const [inspections, total, projects] = await Promise.all([
+		CvInspection.find(filter)
+			.sort({ createdAt: -1 })
+			.skip((pageNum - 1) * pageSize)
+			.limit(pageSize)
+			.lean(),
+		CvInspection.countDocuments(filter),
+		CvProject.find().select('_id name').sort({ name: 1 }).lean()
+	]);
+
+	// Build project name lookup
+	const projectMap: Record<string, string> = {};
+	for (const p of projects as any[]) {
+		projectMap[p._id] = p.name;
 	}
-
-	// Fetch inspections for all samples
-	for (const sample of samples) {
-		try {
-			const sampleInspections = await cvFetch<InspectionResponse[]>('/api/inspections', {
-				params: { sample_id: sample.id }
-			});
-			allInspections.push(...sampleInspections);
-		} catch { /* skip */ }
-	}
-
-	// Sort by created_at descending
-	allInspections.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-
-	// Apply filters
-	let filtered = allInspections;
-	if (filterResult) {
-		filtered = filtered.filter((i) => i.result === filterResult);
-	}
-	if (filterPhase) {
-		filtered = filtered.filter((i) => i.phase === filterPhase);
-	}
-	if (filterCartridge) {
-		filtered = filtered.filter((i) =>
-			i.cartridge_record_id?.toLowerCase().includes(filterCartridge.toLowerCase())
-		);
-	}
-
-	const total = filtered.length;
-	const totalPages = Math.max(1, Math.ceil(total / pageSize));
-	const start = (pageNum - 1) * pageSize;
-	const paged = filtered.slice(start, start + pageSize);
-
-	// Build sample name lookup
-	const sampleMap = new Map(samples.map((s) => [s.id, s.name]));
-
-	const inspections = paged.map((insp) => ({
-		...insp,
-		thumbUrl: cvThumbUrl(insp.image_id),
-		sampleName: sampleMap.get(insp.sample_id) || insp.sample_id
-	}));
 
 	return {
-		inspections,
-		filters: { result: filterResult, phase: filterPhase, cartridge: filterCartridge },
-		pagination: { page: pageNum, totalPages, total }
+		inspections: JSON.parse(JSON.stringify(inspections)),
+		projects: JSON.parse(JSON.stringify(projects)),
+		projectMap,
+		filters: { result: filterResult, projectId: filterProject, cartridge: filterCartridge },
+		pagination: { page: pageNum, totalPages: Math.max(1, Math.ceil(total / pageSize)), total }
 	};
 };
 
