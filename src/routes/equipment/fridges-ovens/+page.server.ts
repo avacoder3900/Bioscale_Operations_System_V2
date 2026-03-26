@@ -10,7 +10,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		await connectDB();
 
 		const [equipmentDocs, locationDocs] = await Promise.all([
-			Equipment.find().sort({ name: 1 }).lean(),
+			Equipment.find({ equipmentType: { $in: ['fridge', 'oven'] } }).sort({ name: 1 }).lean(),
 			EquipmentLocation.find().sort({ displayName: 1 }).lean()
 		]);
 
