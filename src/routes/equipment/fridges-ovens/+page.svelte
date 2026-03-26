@@ -38,6 +38,28 @@
 	let editingId = $state<string | null>(null);
 	let filter = $state<'all' | 'fridge' | 'oven'>('all');
 	let showInactive = $state(false);
+	let expandedFridgeId = $state<string | null>(null);
+
+	function toggleExpand(id: string) {
+		expandedFridgeId = expandedFridgeId === id ? null : id;
+	}
+
+	function formatStoredDate(iso: string | null): string {
+		if (!iso) return '—';
+		const d = new Date(iso);
+		const now = Date.now();
+		const diffMs = now - d.getTime();
+		if (diffMs < 3600000) return `${Math.floor(diffMs / 60000)}m ago`;
+		if (diffMs < 86400000) return `${Math.floor(diffMs / 3600000)}h ago`;
+		const days = Math.floor(diffMs / 86400000);
+		return days === 1 ? 'Yesterday' : `${days}d ago`;
+	}
+
+	function storageTypeBadge(type: string): string {
+		return type === 'wax' ? 'text-amber-300 bg-amber-900/30 border-amber-500/30'
+			: type === 'reagent' ? 'text-blue-300 bg-blue-900/30 border-blue-500/30'
+			: 'text-[var(--color-tron-text-secondary)] bg-[var(--color-tron-surface)] border-[var(--color-tron-border)]';
+	}
 
 	let filteredLocations = $derived(
 		data.locations.filter((loc) => {
@@ -407,6 +429,62 @@
 							</div>
 						{/if}
 					</div>
+				{/if}
+
+				<!-- Expand/collapse cartridge details -->
+				{#if loc.cartridges && loc.cartridges.length > 0}
+					<button
+						class="mt-3 flex w-full items-center gap-2 rounded border border-[var(--color-tron-border)]/50 px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] transition-colors hover:bg-[var(--color-tron-surface)] hover:text-[var(--color-tron-text)]"
+						onclick={() => toggleExpand(loc.id)}
+					>
+						<svg class="h-3.5 w-3.5 transition-transform {expandedFridgeId === loc.id ? 'rotate-90' : ''}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+							<path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+						</svg>
+						{loc.cartridges.length} cartridge{loc.cartridges.length !== 1 ? 's' : ''} stored — click to view details
+					</button>
+
+					{#if expandedFridgeId === loc.id}
+						<div class="mt-2 overflow-x-auto rounded border border-[var(--color-tron-border)]/30 bg-[var(--color-tron-bg)]/50">
+							<table class="w-full text-xs">
+								<thead>
+									<tr class="border-b border-[var(--color-tron-border)]/30 text-[var(--color-tron-text-secondary)]">
+										<th class="px-3 py-2 text-left">ID</th>
+										<th class="px-3 py-2 text-left">Type</th>
+										<th class="px-3 py-2 text-left">Assay</th>
+										<th class="px-3 py-2 text-left">QC</th>
+										<th class="px-3 py-2 text-left">Stored</th>
+										<th class="px-3 py-2 text-left">By</th>
+									</tr>
+								</thead>
+								<tbody class="divide-y divide-[var(--color-tron-border)]/20">
+									{#each loc.cartridges as cart}
+										<tr class="transition-colors hover:bg-[var(--color-tron-cyan)]/5">
+											<td class="px-3 py-1.5">
+												<a href="/cartridges/{cart.id}" class="font-mono text-[var(--color-tron-cyan)] hover:underline">{cart.id}</a>
+											</td>
+											<td class="px-3 py-1.5">
+												<span class="inline-flex rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase {storageTypeBadge(cart.storageType)}">
+													{cart.storageType}
+												</span>
+											</td>
+											<td class="px-3 py-1.5 text-[var(--color-tron-text)]">{cart.assayType ?? '—'}</td>
+											<td class="px-3 py-1.5">
+												{#if cart.waxQcStatus}
+													<span class="text-[10px] font-bold {cart.waxQcStatus === 'Accepted' ? 'text-green-400' : cart.waxQcStatus === 'Rejected' ? 'text-red-400' : 'text-amber-400'}">
+														{cart.waxQcStatus}
+													</span>
+												{:else}
+													<span class="text-[var(--color-tron-text-secondary)]">—</span>
+												{/if}
+											</td>
+											<td class="px-3 py-1.5 text-[var(--color-tron-text-secondary)]">{formatStoredDate(cart.storedAt)}</td>
+											<td class="px-3 py-1.5 text-[var(--color-tron-text)]">{cart.operator ?? '—'}</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					{/if}
 				{/if}
 			</div>
 		{/each}
