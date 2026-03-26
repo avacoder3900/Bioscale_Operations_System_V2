@@ -2,6 +2,7 @@
 	let { data } = $props();
 
 	let expandedCard = $state<string | null>(null);
+	let dismissedAlerts = $state<Set<number>>(new Set());
 
 	function toggleCard(id: string) {
 		expandedCard = expandedCard === id ? null : id;
@@ -14,398 +15,383 @@
 		}
 	}
 
-	function statusColor(status: string): string {
-		if (status.startsWith('running')) return 'bg-amber-50 border-amber-300';
-		if (status === 'available') return 'bg-green-50 border-green-300';
-		if (status.startsWith('deck_free')) return 'bg-blue-50 border-blue-300';
-		if (status.startsWith('blocked')) return 'bg-red-50 border-red-300';
-		return 'bg-gray-50 border-gray-200';
+	function robotStatusBorder(status: string): string {
+		if (status.startsWith('running')) return 'border-tron-yellow';
+		if (status === 'available') return 'border-tron-green';
+		if (status.startsWith('deck_free')) return 'border-tron-cyan';
+		if (status.startsWith('blocked')) return 'border-tron-red';
+		return 'border-tron-border';
 	}
 
-	function statusIcon(status: string): string {
-		if (status.startsWith('running')) return '🟡';
-		if (status === 'available') return '✅';
-		if (status.startsWith('deck_free')) return '🔵';
-		if (status.startsWith('blocked')) return '🔴';
-		return '⚪';
+	function robotStatusBadge(status: string): string {
+		if (status.startsWith('running')) return 'tron-badge-warning';
+		if (status === 'available') return 'tron-badge-success';
+		if (status.startsWith('deck_free')) return 'tron-badge-info';
+		if (status.startsWith('blocked')) return 'tron-badge-error';
+		return 'tron-badge-neutral';
 	}
 
-	function alertColor(level: string): string {
-		if (level === 'red') return 'bg-red-100 border-red-400 text-red-800';
-		if (level === 'orange') return 'bg-orange-100 border-orange-400 text-orange-800';
-		return 'bg-yellow-100 border-yellow-400 text-yellow-800';
+	function alertBorderColor(level: string): string {
+		if (level === 'red') return 'border-tron-red';
+		if (level === 'orange') return 'border-tron-orange';
+		return 'border-tron-yellow';
 	}
 
-	let dismissedAlerts = $state<Set<number>>(new Set());
+	function alertTextColor(level: string): string {
+		if (level === 'red') return 'text-tron-red';
+		if (level === 'orange') return 'text-tron-orange';
+		return 'text-tron-yellow';
+	}
+
+	// Derive active operators from robot data
+	const activeOperators = $derived(() => {
+		const ops = new Set<string>();
+		for (const r of data.robots ?? []) {
+			if (r.activeWaxRun?.operatorUsername) ops.add(r.activeWaxRun.operatorUsername);
+			if (r.activeReagentRun?.operatorUsername) ops.add(r.activeReagentRun.operatorUsername);
+		}
+		return ops;
+	});
+
+	// Pipeline stage data for flow visualization
+	const pipelineStages = $derived(() => [
+		{ label: 'Backing', count: data.pipeline.backing.backedTotal, sub: `${data.pipeline.backing.totalReadyCartridges} ready`, color: 'tron-purple' },
+		{ label: 'Wax Fill', count: data.pipeline.waxFilling.inProgress + data.pipeline.waxFilling.waxFilled, sub: `${data.pipeline.waxFilling.inProgress} filling`, color: 'tron-yellow' },
+		{ label: 'Cooling', count: data.pipeline.waxFilling.waxStored, sub: 'in fridge', color: 'tron-blue' },
+		{ label: 'Reagent', count: data.pipeline.reagentFilling.inProgress + data.pipeline.reagentFilling.reagentFilled, sub: `${data.pipeline.reagentFilling.inProgress} filling`, color: 'tron-orange' },
+		{ label: 'Seal', count: data.pipeline.reagentFilling.sealed, sub: 'sealed', color: 'tron-cyan' },
+		{ label: 'QC', count: data.pipeline.reagentFilling.reagentFilled, sub: 'pending', color: 'tron-green' },
+		{ label: 'Store', count: data.pipeline.storage.stored, sub: `${data.pipeline.storage.voided} voided`, color: 'tron-green' },
+	]);
 </script>
 
-<div class="min-h-screen bg-gray-100 p-4 lg:p-6">
+<div class="min-h-screen tron-grid-bg p-4 lg:p-6">
 	<!-- Header -->
-	<div class="mb-4 flex items-center justify-between">
+	<div class="mb-6 flex items-center justify-between">
 		<div>
-			<h1 class="text-2xl font-bold text-gray-900">CART MFG In DEVELOPMENT</h1>
-			<p class="text-sm text-gray-500">Manufacturing Line Master View</p>
+			<h1 class="text-2xl font-bold text-tron-cyan tracking-wide">CART MFG MASTER VIEW</h1>
+			<p class="text-sm text-tron-text-secondary">Manufacturing Line Dashboard</p>
 		</div>
-		<a href="/manufacturing/cart-mfg-dev" class="rounded bg-gray-200 px-3 py-1.5 text-sm hover:bg-gray-300">↺ Refresh</a>
+		<a href="/manufacturing/cart-mfg-dev" class="tron-btn-secondary text-sm">&#8635; Refresh</a>
 	</div>
 
-	<!-- Alerts -->
+	<!-- ============ SHIFT SUMMARY STATS ============ -->
+	<div class="grid grid-cols-2 gap-3 mb-6 lg:grid-cols-5">
+		<div class="tron-card text-center">
+			<div class="text-xs font-medium text-tron-text-secondary uppercase tracking-wide">Started Today</div>
+			<div class="mt-1 text-2xl font-bold text-tron-cyan">{data.todayStats.waxRuns.completed + data.todayStats.waxRuns.inProgress + data.todayStats.waxRuns.aborted + data.todayStats.reagentRuns.completed + data.todayStats.reagentRuns.inProgress + data.todayStats.reagentRuns.aborted}</div>
+			<div class="text-xs text-tron-text-secondary">runs</div>
+		</div>
+		<div class="tron-card text-center">
+			<div class="text-xs font-medium text-tron-text-secondary uppercase tracking-wide">Completed</div>
+			<div class="mt-1 text-2xl font-bold text-tron-green">{data.todayStats.producedToday}</div>
+			<div class="text-xs text-tron-text-secondary">cartridges</div>
+		</div>
+		<div class="tron-card text-center">
+			<div class="text-xs font-medium text-tron-text-secondary uppercase tracking-wide">Failed</div>
+			<div class="mt-1 text-2xl font-bold text-tron-red">{data.todayStats.rejectedToday}</div>
+			<div class="text-xs text-tron-text-secondary">rejected</div>
+		</div>
+		<div class="tron-card text-center">
+			<div class="text-xs font-medium text-tron-text-secondary uppercase tracking-wide">Yield</div>
+			<div class="mt-1 text-2xl font-bold" class:text-tron-green={data.todayStats.yieldPercent >= 90} class:text-tron-yellow={data.todayStats.yieldPercent >= 70 && data.todayStats.yieldPercent < 90} class:text-tron-red={data.todayStats.yieldPercent < 70}>{data.todayStats.yieldPercent}%</div>
+			<div class="text-xs text-tron-text-secondary">{data.todayStats.acceptedToday}/{data.todayStats.producedToday}</div>
+		</div>
+		<div class="tron-card text-center">
+			<div class="text-xs font-medium text-tron-text-secondary uppercase tracking-wide">Operators</div>
+			<div class="mt-1 text-2xl font-bold text-tron-purple">{activeOperators().size}</div>
+			<div class="text-xs text-tron-text-secondary">active</div>
+		</div>
+	</div>
+
+	<!-- ============ ALERTS ============ -->
 	{#if data.alerts?.length}
-		<div class="mb-4 space-y-2">
+		<div class="mb-6 space-y-2">
 			{#each data.alerts as alert, i}
 				{#if !dismissedAlerts.has(i)}
-					<div class="flex items-center justify-between rounded border-l-4 px-4 py-2 {alertColor(alert.level)}">
-						<span class="text-sm font-medium">{alert.message}</span>
-						<button class="ml-4 text-xs opacity-60 hover:opacity-100" onclick={() => { dismissedAlerts = new Set([...dismissedAlerts, i]); }}>✕</button>
+					<div class="flex items-center justify-between rounded-lg border-l-4 px-4 py-2 bg-tron-bg-card {alertBorderColor(alert.level)}">
+						<span class="text-sm font-medium {alertTextColor(alert.level)}">{alert.message}</span>
+						<button class="ml-4 text-xs text-tron-text-secondary opacity-60 hover:opacity-100" onclick={() => { dismissedAlerts = new Set([...dismissedAlerts, i]); }}>&#10005;</button>
 					</div>
 				{/if}
 			{/each}
 		</div>
 	{/if}
 
-	<!-- Today's Stats -->
-	<div class="mb-6 rounded-lg border bg-white p-4 shadow-sm">
-		<h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-500">Today's Production</h2>
-		<div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
-			<div class="rounded-lg bg-blue-50 p-3">
-				<div class="text-xs font-medium text-blue-600">WAX RUNS</div>
-				<div class="mt-1 text-xl font-bold text-blue-900">{data.todayStats.waxRuns.completed} <span class="text-sm font-normal">done</span></div>
-				<div class="text-xs text-blue-700">{data.todayStats.waxRuns.inProgress} active · {data.todayStats.waxRuns.aborted} aborted</div>
-			</div>
-			<div class="rounded-lg bg-purple-50 p-3">
-				<div class="text-xs font-medium text-purple-600">REAGENT RUNS</div>
-				<div class="mt-1 text-xl font-bold text-purple-900">{data.todayStats.reagentRuns.completed} <span class="text-sm font-normal">done</span></div>
-				<div class="text-xs text-purple-700">{data.todayStats.reagentRuns.inProgress} active · {data.todayStats.reagentRuns.aborted} aborted</div>
-			</div>
-			<div class="rounded-lg bg-green-50 p-3">
-				<div class="text-xs font-medium text-green-600">CARTRIDGES</div>
-				<div class="mt-1 text-xl font-bold text-green-900">{data.todayStats.producedToday} <span class="text-sm font-normal">produced</span></div>
-				<div class="text-xs text-green-700">{data.todayStats.acceptedToday} accepted · {data.todayStats.rejectedToday} rejected</div>
-			</div>
-			<div class="rounded-lg bg-amber-50 p-3">
-				<div class="text-xs font-medium text-amber-600">YIELD RATE</div>
-				<div class="mt-1 text-xl font-bold text-amber-900">{data.todayStats.yieldPercent}%</div>
-				<div class="text-xs text-amber-700">({data.todayStats.acceptedToday}/{data.todayStats.producedToday})</div>
-			</div>
-		</div>
-
-		<!-- Robot utilization -->
-		{#if data.robots?.length}
-			<div class="mt-4">
-				<div class="text-xs font-medium uppercase text-gray-500 mb-2">Robot Utilization Today</div>
-				{#each data.robots as robot}
-					<div class="flex items-center gap-2 mb-1">
-						<span class="w-24 text-xs text-gray-600 truncate">{robot.name}</span>
-						<div class="flex-1 h-3 bg-gray-200 rounded-full overflow-hidden">
-							<div class="h-full bg-blue-500 rounded-full" style="width: {robot.utilizationPct}%"></div>
-						</div>
-						<span class="w-16 text-xs text-gray-600 text-right">{robot.utilizationPct}% ({robot.utilizationHours}h)</span>
+	<!-- ============ PIPELINE FLOW VISUALIZATION ============ -->
+	<div class="tron-card mb-6">
+		<h2 class="mb-4 text-xs font-semibold uppercase tracking-widest text-tron-cyan">Pipeline Flow</h2>
+		<div class="flex items-stretch gap-1 overflow-x-auto">
+			{#each pipelineStages() as stage, i}
+				<div class="flex-1 min-w-[100px] text-center">
+					<div class="rounded-lg bg-tron-bg-tertiary border border-tron-border p-3 h-full flex flex-col justify-center">
+						<div class="text-xs font-semibold uppercase tracking-wide text-tron-text-secondary">{stage.label}</div>
+						<div class="mt-1 text-xl font-bold text-{stage.color}">{stage.count}</div>
+						<div class="text-xs text-tron-text-secondary">{stage.sub}</div>
 					</div>
-				{/each}
-			</div>
-		{/if}
+					{#if i < pipelineStages().length - 1}
+						<div class="hidden"></div>
+					{/if}
+				</div>
+				{#if i < pipelineStages().length - 1}
+					<div class="flex items-center text-tron-cyan text-lg font-bold select-none">&#9654;</div>
+				{/if}
+			{/each}
+		</div>
 	</div>
 
-	<!-- Three-Column Pipeline Layout -->
-	<div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
-		<!-- LEFT COLUMN: Pre-Robot Stages -->
-		<div class="space-y-3">
-			<h3 class="text-xs font-semibold uppercase tracking-wider text-gray-400">Pre-Robot Inputs</h3>
-
-			<!-- Print Barcodes -->
-			<div class="cursor-pointer rounded-lg border-2 p-4 transition-all {data.pipeline.printBarcodes.sheetsOnHand < data.pipeline.printBarcodes.alertThreshold ? 'bg-orange-50 border-orange-300' : 'bg-white border-gray-200'}"
-				role="button" tabindex="0"
-				onclick={() => toggleCard('barcodes')}
-				onkeydown={(e) => handleKeydown(e, 'barcodes')}>
-				<div class="flex items-center justify-between">
-					<h4 class="text-sm font-semibold uppercase tracking-wide">Print Barcodes</h4>
-					<span class="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium">{data.pipeline.printBarcodes.sheetsOnHand} sheets</span>
+	<!-- ============ ROBOT STATUS + MATERIALS GRID ============ -->
+	<div class="grid grid-cols-1 gap-4 mb-6 lg:grid-cols-3">
+		{#each data.robots as robot}
+			<div class="tron-card border-l-4 {robotStatusBorder(robot.status)}">
+				<div class="flex items-center justify-between mb-3">
+					<h3 class="text-sm font-bold text-tron-text uppercase tracking-wide">{robot.name}</h3>
+					<span class="tron-badge {robotStatusBadge(robot.status)}">{robot.displayStatus}</span>
 				</div>
-				<div class="mt-1 text-sm text-gray-600">{data.pipeline.printBarcodes.labelsAvailable} labels available</div>
-				{#if data.pipeline.printBarcodes.sheetsOnHand < data.pipeline.printBarcodes.alertThreshold}
-					<div class="mt-1 text-xs font-medium text-orange-600">⚠ Low stock</div>
-				{/if}
-				<a href="/manufacturing/print-barcodes" class="mt-2 block text-xs text-blue-600 hover:underline" onclick={(e) => e.stopPropagation()}>→ Print Barcodes</a>
 
-				{#if expandedCard === 'barcodes'}
-					<div class="mt-3 border-t border-gray-200 pt-3">
-						<div class="text-xs font-medium text-gray-500 mb-2">Recent Print Batches</div>
-						{#if data.pipeline.printBarcodes.recentBatches?.length}
-							{#each data.pipeline.printBarcodes.recentBatches as batch}
-								<div class="flex justify-between text-xs text-gray-600 mb-1">
-									<span>{new Date(batch.printedAt).toLocaleDateString()} · {batch.printedBy?.username ?? '?'}</span>
-									<span>{batch.sheetsUsed} sheets · {batch.totalLabels} labels</span>
-								</div>
-							{/each}
-						{:else}
-							<div class="text-xs text-gray-400">No recent batches</div>
+				<!-- Utilization bar -->
+				<div class="mb-3">
+					<div class="flex justify-between text-xs text-tron-text-secondary mb-1">
+						<span>Utilization</span>
+						<span>{robot.utilizationPct}% ({robot.utilizationHours}h)</span>
+					</div>
+					<div class="tron-progress">
+						<div class="tron-progress-bar" style="width: {robot.utilizationPct}%"></div>
+					</div>
+				</div>
+
+				{#if robot.activeWaxRun}
+					<div class="space-y-1 text-xs text-tron-text-secondary">
+						<div class="flex justify-between"><span class="text-tron-text-secondary">Run</span><span class="text-tron-text">Wax Fill &middot; {robot.activeWaxRun.stage}</span></div>
+						<div class="flex justify-between"><span class="text-tron-text-secondary">Operator</span><span class="text-tron-text">{robot.activeWaxRun.operatorUsername ?? 'Unknown'}</span></div>
+						<div class="flex justify-between"><span class="text-tron-text-secondary">Elapsed</span><span class="text-tron-text">{robot.activeWaxRun.elapsedMin} min</span></div>
+						<div class="flex justify-between"><span class="text-tron-text-secondary">Cartridges</span><span class="text-tron-text">{robot.activeWaxRun.cartridgeCount}</span></div>
+						{#if robot.activeWaxRun.waxSourceLot}
+							<div class="flex justify-between"><span class="text-tron-text-secondary">Wax Lot</span><span class="text-tron-text">{robot.activeWaxRun.waxSourceLot}</span></div>
 						{/if}
+					</div>
+					<a href="/manufacturing/wax-filling?robot={robot.robotId}" class="mt-3 block text-xs text-tron-cyan hover:underline">&rarr; Go to Wax Filling</a>
+				{:else if robot.activeReagentRun}
+					<div class="space-y-1 text-xs text-tron-text-secondary">
+						<div class="flex justify-between"><span class="text-tron-text-secondary">Run</span><span class="text-tron-text">Reagent &middot; {robot.activeReagentRun.stage}</span></div>
+						<div class="flex justify-between"><span class="text-tron-text-secondary">Operator</span><span class="text-tron-text">{robot.activeReagentRun.operatorUsername ?? 'Unknown'}</span></div>
+						<div class="flex justify-between"><span class="text-tron-text-secondary">Elapsed</span><span class="text-tron-text">{robot.activeReagentRun.elapsedMin} min</span></div>
+						<div class="flex justify-between"><span class="text-tron-text-secondary">Assay</span><span class="text-tron-text">{robot.activeReagentRun.assayTypeName ?? 'N/A'}</span></div>
+						<div class="flex justify-between"><span class="text-tron-text-secondary">Cartridges</span><span class="text-tron-text">{robot.activeReagentRun.cartridgeCount}</span></div>
+					</div>
+					<a href="/manufacturing/reagent-filling?robot={robot.robotId}" class="mt-3 block text-xs text-tron-cyan hover:underline">&rarr; Go to Reagent Filling</a>
+				{:else}
+					<div class="text-xs text-tron-text-secondary mb-2">No active run</div>
+					<div class="flex gap-3">
+						<a href="/manufacturing/wax-filling?robot={robot.robotId}" class="text-xs text-tron-cyan hover:underline">&#9654; Start Wax</a>
+						<a href="/manufacturing/reagent-filling?robot={robot.robotId}" class="text-xs text-tron-cyan hover:underline">&#9654; Start Reagent</a>
+					</div>
+				{/if}
+
+				{#if robot.isStalled}
+					<div class="mt-3 rounded-lg bg-tron-red/10 border border-tron-red/30 px-3 py-2 text-xs font-medium text-tron-red">
+						Run may be stalled &mdash; last update {robot.minutesSinceUpdate} min ago
 					</div>
 				{/if}
 			</div>
+		{/each}
+	</div>
 
-			<!-- Cut Top Seal -->
-			<div class="cursor-pointer rounded-lg border-2 p-4 transition-all {data.pipeline.topSeal.rollCount === 0 ? 'bg-orange-50 border-orange-300' : 'bg-white border-gray-200'}"
-				role="button" tabindex="0"
-				onclick={() => toggleCard('topseal')}
-				onkeydown={(e) => handleKeydown(e, 'topseal')}>
-				<div class="flex items-center justify-between">
-					<h4 class="text-sm font-semibold uppercase tracking-wide">Cut Top Seal</h4>
-					<span class="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium">{data.pipeline.topSeal.rollCount} rolls</span>
+	<!-- ============ MATERIALS & OPERATOR ROW ============ -->
+	<div class="grid grid-cols-1 gap-4 mb-6 lg:grid-cols-2">
+
+		<!-- Pre-Robot Materials -->
+		<div class="tron-card">
+			<h2 class="mb-4 text-xs font-semibold uppercase tracking-widest text-tron-cyan">Materials &amp; Inputs</h2>
+			<div class="grid grid-cols-2 gap-3">
+				<!-- Barcodes -->
+				<div class="tron-card-interactive" role="button" tabindex="0"
+					onclick={() => toggleCard('barcodes')} onkeydown={(e) => handleKeydown(e, 'barcodes')}>
+					<div class="flex items-center justify-between">
+						<span class="text-xs font-semibold uppercase text-tron-text-secondary">Barcodes</span>
+						{#if data.pipeline.printBarcodes.sheetsOnHand < data.pipeline.printBarcodes.alertThreshold}
+							<span class="tron-badge tron-badge-warning">Low</span>
+						{/if}
+					</div>
+					<div class="mt-1 text-lg font-bold text-tron-text">{data.pipeline.printBarcodes.sheetsOnHand} <span class="text-xs font-normal text-tron-text-secondary">sheets</span></div>
+					<div class="text-xs text-tron-text-secondary">{data.pipeline.printBarcodes.labelsAvailable} labels</div>
+					<a href="/manufacturing/print-barcodes" class="mt-2 block text-xs text-tron-cyan hover:underline" onclick={(e) => e.stopPropagation()}>&rarr; Print</a>
+					{#if expandedCard === 'barcodes'}
+						<div class="mt-3 border-t border-tron-border pt-3">
+							<div class="text-xs text-tron-text-secondary mb-1">Recent Batches</div>
+							{#each data.pipeline.printBarcodes.recentBatches ?? [] as batch}
+								<div class="flex justify-between text-xs text-tron-text-secondary mb-1">
+									<span>{new Date(batch.printedAt).toLocaleDateString()} &middot; {batch.printedBy?.username ?? '?'}</span>
+									<span>{batch.sheetsUsed} sheets</span>
+								</div>
+							{:else}
+								<div class="text-xs text-tron-text-secondary">None</div>
+							{/each}
+						</div>
+					{/if}
 				</div>
-				<div class="mt-1 text-sm text-gray-600">~{data.pipeline.topSeal.stripsAvailableApprox} strips available</div>
-				{#if data.pipeline.topSeal.rollCount === 0}
-					<div class="mt-1 text-xs font-medium text-orange-600">⚠ No active rolls</div>
-				{/if}
-				<a href="/manufacturing/top-seal-cutting" class="mt-2 block text-xs text-blue-600 hover:underline" onclick={(e) => e.stopPropagation()}>→ Top Seal Cutting</a>
 
-				{#if expandedCard === 'topseal'}
-					<div class="mt-3 border-t border-gray-200 pt-3">
-						<div class="text-xs font-medium text-gray-500 mb-2">Active Rolls</div>
-						{#if data.pipeline.topSeal.activeRolls?.length}
-							{#each data.pipeline.topSeal.activeRolls as roll}
-								<div class="flex justify-between text-xs text-gray-600 mb-1">
+				<!-- Top Seal -->
+				<div class="tron-card-interactive" role="button" tabindex="0"
+					onclick={() => toggleCard('topseal')} onkeydown={(e) => handleKeydown(e, 'topseal')}>
+					<div class="flex items-center justify-between">
+						<span class="text-xs font-semibold uppercase text-tron-text-secondary">Top Seal</span>
+						{#if data.pipeline.topSeal.rollCount === 0}
+							<span class="tron-badge tron-badge-warning">None</span>
+						{/if}
+					</div>
+					<div class="mt-1 text-lg font-bold text-tron-text">{data.pipeline.topSeal.rollCount} <span class="text-xs font-normal text-tron-text-secondary">rolls</span></div>
+					<div class="text-xs text-tron-text-secondary">~{data.pipeline.topSeal.stripsAvailableApprox} strips</div>
+					<a href="/manufacturing/top-seal-cutting" class="mt-2 block text-xs text-tron-cyan hover:underline" onclick={(e) => e.stopPropagation()}>&rarr; Cutting</a>
+					{#if expandedCard === 'topseal'}
+						<div class="mt-3 border-t border-tron-border pt-3">
+							{#each data.pipeline.topSeal.activeRolls ?? [] as roll}
+								<div class="flex justify-between text-xs text-tron-text-secondary mb-1">
 									<span>{roll.barcode ?? roll._id}</span>
-									<span>{roll.remainingLengthFt ?? 0} ft remaining</span>
+									<span>{roll.remainingLengthFt ?? 0} ft</span>
 								</div>
+							{:else}
+								<div class="text-xs text-tron-text-secondary">No active rolls</div>
 							{/each}
-						{:else}
-							<div class="text-xs text-gray-400">No active rolls</div>
-						{/if}
-					</div>
-				{/if}
-			</div>
-
-			<!-- Laser Cut -->
-			<div class="cursor-pointer rounded-lg border-2 bg-white border-gray-200 p-4 transition-all"
-				role="button" tabindex="0"
-				onclick={() => toggleCard('lasercut')}
-				onkeydown={(e) => handleKeydown(e, 'lasercut')}>
-				<div class="flex items-center justify-between">
-					<h4 class="text-sm font-semibold uppercase tracking-wide">Laser Cut</h4>
-					<span class="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium">{data.pipeline.laserCut.sheetsOnHand} sheets</span>
+						</div>
+					{/if}
 				</div>
-				<div class="mt-1 text-sm text-gray-600">{data.pipeline.laserCut.individualBacks} individual backs</div>
-				<a href="/manufacturing/laser-cutting" class="mt-2 block text-xs text-blue-600 hover:underline" onclick={(e) => e.stopPropagation()}>→ Laser Cutting</a>
 
-				{#if expandedCard === 'lasercut'}
-					<div class="mt-3 border-t border-gray-200 pt-3">
-						<div class="text-xs text-gray-600">
-							<div>{data.pipeline.laserCut.sheetsOnHand} sheets × {data.pipeline.laserCut.cartridgesPerSheet} = {data.pipeline.laserCut.individualBacks} individual backs</div>
+				<!-- Laser Cut -->
+				<div class="tron-card-interactive" role="button" tabindex="0"
+					onclick={() => toggleCard('lasercut')} onkeydown={(e) => handleKeydown(e, 'lasercut')}>
+					<span class="text-xs font-semibold uppercase text-tron-text-secondary">Laser Cut</span>
+					<div class="mt-1 text-lg font-bold text-tron-text">{data.pipeline.laserCut.sheetsOnHand} <span class="text-xs font-normal text-tron-text-secondary">sheets</span></div>
+					<div class="text-xs text-tron-text-secondary">{data.pipeline.laserCut.individualBacks} backs</div>
+					<a href="/manufacturing/laser-cutting" class="mt-2 block text-xs text-tron-cyan hover:underline" onclick={(e) => e.stopPropagation()}>&rarr; Laser Cut</a>
+					{#if expandedCard === 'lasercut'}
+						<div class="mt-3 border-t border-tron-border pt-3 text-xs text-tron-text-secondary">
+							{data.pipeline.laserCut.sheetsOnHand} &times; {data.pipeline.laserCut.cartridgesPerSheet} = {data.pipeline.laserCut.individualBacks}
 							{#if data.pipeline.laserCut.recentBatchAt}
 								<div class="mt-1">Last batch: {new Date(data.pipeline.laserCut.recentBatchAt).toLocaleString()}</div>
 							{/if}
 						</div>
+					{/if}
+				</div>
+
+				<!-- Backing -->
+				<div class="tron-card-interactive" role="button" tabindex="0"
+					onclick={() => toggleCard('backing')} onkeydown={(e) => handleKeydown(e, 'backing')}>
+					<div class="flex items-center justify-between">
+						<span class="text-xs font-semibold uppercase text-tron-text-secondary">Backing</span>
+						{#if data.pipeline.backing.readyLots?.length}
+							<span class="tron-badge tron-badge-success">{data.pipeline.backing.readyLots.length} ready</span>
+						{/if}
 					</div>
-				{/if}
+					<div class="mt-1 text-lg font-bold text-tron-text">{data.pipeline.backing.backedTotal} <span class="text-xs font-normal text-tron-text-secondary">backed</span></div>
+					<div class="text-xs text-tron-text-secondary">{data.pipeline.backing.totalReadyCartridges} ready &middot; {data.pipeline.backing.inProgressLots?.length ?? 0} in oven</div>
+					<a href="/manufacturing/wi-01" class="mt-2 block text-xs text-tron-cyan hover:underline" onclick={(e) => e.stopPropagation()}>&rarr; WI-01</a>
+					{#if expandedCard === 'backing'}
+						<div class="mt-3 border-t border-tron-border pt-3">
+							{#each [...(data.pipeline.backing.readyLots ?? []), ...(data.pipeline.backing.inProgressLots ?? [])] as lot}
+								<div class="flex justify-between text-xs text-tron-text-secondary mb-1">
+									<span>{lot.lotId} &middot; {lot.cartridgeCount}</span>
+									<span class={lot.isReady ? 'text-tron-green font-medium' : 'text-tron-yellow'}>
+										{#if lot.isReady}Ready{:else}{lot.remainingMin}m{/if}
+									</span>
+								</div>
+							{:else}
+								<div class="text-xs text-tron-text-secondary">No lots</div>
+							{/each}
+						</div>
+					{/if}
+				</div>
 			</div>
+		</div>
 
-			<!-- WI-01 Backing -->
-			<div class="cursor-pointer rounded-lg border-2 p-4 transition-all {data.pipeline.backing.readyLots?.length ? 'bg-green-50 border-green-300' : 'bg-white border-gray-200'}"
-				role="button" tabindex="0"
-				onclick={() => toggleCard('backing')}
-				onkeydown={(e) => handleKeydown(e, 'backing')}>
-				<div class="flex items-center justify-between">
-					<h4 class="text-sm font-semibold uppercase tracking-wide">WI-01 Backing</h4>
-					<span class="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium">{data.pipeline.backing.backedTotal} backed</span>
-				</div>
-				<div class="mt-1 text-sm text-gray-600">
-					{data.pipeline.backing.totalReadyCartridges} ready for wax · {data.pipeline.backing.inProgressLots?.length ?? 0} in oven
-				</div>
-				<a href="/manufacturing/wi-01" class="mt-2 block text-xs text-blue-600 hover:underline" onclick={(e) => e.stopPropagation()}>→ Backing WI-01</a>
-
-				{#if expandedCard === 'backing'}
-					<div class="mt-3 border-t border-gray-200 pt-3">
-						<div class="text-xs font-medium text-gray-500 mb-2">Oven Status</div>
-						{#each [...(data.pipeline.backing.readyLots ?? []), ...(data.pipeline.backing.inProgressLots ?? [])] as lot}
-							<div class="flex justify-between text-xs text-gray-600 mb-1">
-								<span>{lot.lotId} · {lot.cartridgeCount} carts{#if lot.operatorUsername} · {lot.operatorUsername}{/if}</span>
-								<span class={lot.isReady ? 'text-green-600 font-medium' : 'text-amber-600'}>
-									{#if lot.isReady}Ready{:else}{lot.remainingMin}m left{/if}
-								</span>
-							</div>
-						{:else}
-							<div class="text-xs text-gray-400">No lots in oven</div>
+		<!-- Operator Activity + Output -->
+		<div class="space-y-4">
+			<!-- Operator Activity -->
+			<div class="tron-card">
+				<h2 class="mb-3 text-xs font-semibold uppercase tracking-widest text-tron-cyan">Operator Activity</h2>
+				{#if activeOperators().size > 0}
+					<div class="space-y-2">
+						{#each data.robots as robot}
+							{#if robot.activeWaxRun?.operatorUsername}
+								<div class="flex items-center justify-between text-sm">
+									<span class="text-tron-text font-medium">{robot.activeWaxRun.operatorUsername}</span>
+									<span class="text-xs text-tron-text-secondary">Wax Fill on {robot.name} &middot; {robot.activeWaxRun.elapsedMin}m</span>
+								</div>
+							{/if}
+							{#if robot.activeReagentRun?.operatorUsername}
+								<div class="flex items-center justify-between text-sm">
+									<span class="text-tron-text font-medium">{robot.activeReagentRun.operatorUsername}</span>
+									<span class="text-xs text-tron-text-secondary">Reagent on {robot.name} &middot; {robot.activeReagentRun.elapsedMin}m</span>
+								</div>
+							{/if}
 						{/each}
 					</div>
-				{/if}
-			</div>
-		</div>
-
-		<!-- CENTER COLUMN: Robots -->
-		<div class="space-y-3">
-			<h3 class="text-xs font-semibold uppercase tracking-wider text-gray-400">Robot Axis</h3>
-
-			{#each data.robots as robot}
-				<div class="rounded-lg border-2 p-4 {statusColor(robot.status)}">
-					<div class="flex items-center justify-between mb-2">
-						<h4 class="font-semibold">🤖 {robot.name}</h4>
-						<span class="text-sm">{statusIcon(robot.status)}</span>
-					</div>
-					<div class="text-sm font-medium mb-2">{robot.displayStatus}</div>
-
-					{#if robot.activeWaxRun}
-						<div class="space-y-1 text-xs text-gray-700">
-							<div>Operator: {robot.activeWaxRun.operatorUsername ?? 'Unknown'}</div>
-							<div>Stage: {robot.activeWaxRun.stage} · {robot.activeWaxRun.elapsedMin} min</div>
-							<div>Cartridges: {robot.activeWaxRun.cartridgeCount}</div>
-							{#if robot.activeWaxRun.waxSourceLot}
-								<div>Wax lot: {robot.activeWaxRun.waxSourceLot}</div>
-							{/if}
-						</div>
-						<a href="/manufacturing/wax-filling?robot={robot.robotId}" class="mt-2 block text-xs text-blue-600 hover:underline">→ Go to Wax Filling</a>
-					{:else if robot.activeReagentRun}
-						<div class="space-y-1 text-xs text-gray-700">
-							<div>Operator: {robot.activeReagentRun.operatorUsername ?? 'Unknown'}</div>
-							<div>Stage: {robot.activeReagentRun.stage} · {robot.activeReagentRun.elapsedMin} min</div>
-							<div>Assay: {robot.activeReagentRun.assayTypeName ?? 'N/A'}</div>
-							<div>Cartridges: {robot.activeReagentRun.cartridgeCount}</div>
-						</div>
-						<a href="/manufacturing/reagent-filling?robot={robot.robotId}" class="mt-2 block text-xs text-blue-600 hover:underline">→ Go to Reagent Filling</a>
-					{:else}
-						<div class="text-xs text-gray-500">No active run</div>
-						<div class="mt-2 flex gap-2">
-							<a href="/manufacturing/wax-filling?robot={robot.robotId}" class="text-xs text-blue-600 hover:underline">▶ Start Wax Run</a>
-							<a href="/manufacturing/reagent-filling?robot={robot.robotId}" class="text-xs text-blue-600 hover:underline">▶ Start Reagent</a>
-						</div>
-					{/if}
-
-					{#if robot.isStalled}
-						<div class="mt-2 rounded bg-red-100 px-2 py-1 text-xs font-medium text-red-700">
-							⚠ Run may be stalled — last update {robot.minutesSinceUpdate} min ago
-						</div>
-					{/if}
-				</div>
-			{/each}
-		</div>
-
-		<!-- RIGHT COLUMN: Post-Robot Stages -->
-		<div class="space-y-3">
-			<h3 class="text-xs font-semibold uppercase tracking-wider text-gray-400">Post-Robot Output</h3>
-
-			<!-- Wax QC -->
-			<div class="cursor-pointer rounded-lg border-2 bg-white border-gray-200 p-4 transition-all"
-				role="button" tabindex="0"
-				onclick={() => toggleCard('waxqc')}
-				onkeydown={(e) => handleKeydown(e, 'waxqc')}>
-				<div class="flex items-center justify-between">
-					<h4 class="text-sm font-semibold uppercase tracking-wide">Wax QC</h4>
-					<span class="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium">{data.pipeline.waxFilling.waxFilled} pending</span>
-				</div>
-				<div class="mt-1 text-sm text-gray-600">{data.pipeline.waxFilling.waxFilled} awaiting QC</div>
-				<a href="/manufacturing/wax-filling" class="mt-2 block text-xs text-blue-600 hover:underline" onclick={(e) => e.stopPropagation()}>→ Wax Filling (QC)</a>
-
-				{#if expandedCard === 'waxqc'}
-					<div class="mt-3 border-t border-gray-200 pt-3 text-xs text-gray-600">
-						<div>Pending QC: {data.pipeline.waxFilling.waxFilled}</div>
-						<div>In progress (on deck): {data.pipeline.waxFilling.inProgress}</div>
-					</div>
+				{:else}
+					<div class="text-sm text-tron-text-secondary">No active operators</div>
 				{/if}
 			</div>
 
-			<!-- Fridge Storage -->
-			<div class="cursor-pointer rounded-lg border-2 p-4 transition-all {data.pipeline.waxFilling.waxStored > 0 ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-200'}"
-				role="button" tabindex="0"
-				onclick={() => toggleCard('fridge')}
-				onkeydown={(e) => handleKeydown(e, 'fridge')}>
-				<div class="flex items-center justify-between">
-					<h4 class="text-sm font-semibold uppercase tracking-wide">Fridge Storage</h4>
-					<span class="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium">{data.pipeline.waxFilling.waxStored}</span>
-				</div>
-				<div class="mt-1 text-sm text-gray-600">{data.pipeline.waxFilling.waxStored} wax-stored in fridge</div>
-				<a href="/manufacturing/wax-filling" class="mt-2 block text-xs text-blue-600 hover:underline" onclick={(e) => e.stopPropagation()}>→ Wax Filling (Storage)</a>
-
-				{#if expandedCard === 'fridge'}
-					<div class="mt-3 border-t border-gray-200 pt-3 text-xs text-gray-600">
-						<div>Total in fridge: {data.pipeline.waxFilling.waxStored}</div>
-						<div>Ready for reagent filling</div>
+			<!-- Post-Robot Output -->
+			<div class="tron-card">
+				<h2 class="mb-3 text-xs font-semibold uppercase tracking-widest text-tron-cyan">Output &amp; Shipping</h2>
+				<div class="grid grid-cols-3 gap-3 text-center">
+					<div>
+						<div class="text-lg font-bold text-tron-green">{data.pipeline.storage.stored}</div>
+						<div class="text-xs text-tron-text-secondary">Stored</div>
 					</div>
-				{/if}
-			</div>
-
-			<!-- Final QC -->
-			<div class="cursor-pointer rounded-lg border-2 bg-white border-gray-200 p-4 transition-all"
-				role="button" tabindex="0"
-				onclick={() => toggleCard('finalqc')}
-				onkeydown={(e) => handleKeydown(e, 'finalqc')}>
-				<div class="flex items-center justify-between">
-					<h4 class="text-sm font-semibold uppercase tracking-wide">Final QC</h4>
-					<span class="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium">{data.pipeline.reagentFilling.reagentFilled} pending</span>
-				</div>
-				<div class="mt-1 text-sm text-gray-600">{data.pipeline.reagentFilling.reagentFilled} pending inspection</div>
-				<a href="/manufacturing/reagent-filling" class="mt-2 block text-xs text-blue-600 hover:underline" onclick={(e) => e.stopPropagation()}>→ Reagent Filling (Inspection)</a>
-
-				{#if expandedCard === 'finalqc'}
-					<div class="mt-3 border-t border-gray-200 pt-3 text-xs text-gray-600">
-						<div>Reagent filled: {data.pipeline.reagentFilling.reagentFilled}</div>
-						<div>Sealed: {data.pipeline.reagentFilling.sealed}</div>
+					<div>
+						<div class="text-lg font-bold text-tron-cyan">{data.pipeline.shipped.thisWeek}</div>
+						<div class="text-xs text-tron-text-secondary">Shipped (wk)</div>
 					</div>
-				{/if}
-			</div>
-
-			<!-- Storage -->
-			<div class="cursor-pointer rounded-lg border-2 p-4 transition-all {data.pipeline.storage.stored > 0 ? 'bg-green-50 border-green-200' : 'bg-white border-gray-200'}"
-				role="button" tabindex="0"
-				onclick={() => toggleCard('storage')}
-				onkeydown={(e) => handleKeydown(e, 'storage')}>
-				<div class="flex items-center justify-between">
-					<h4 class="text-sm font-semibold uppercase tracking-wide">Storage</h4>
-					<span class="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium">{data.pipeline.storage.stored} stored</span>
-				</div>
-				<div class="mt-1 text-sm text-gray-600">{data.pipeline.storage.stored} in final storage</div>
-				<a href="/manufacturing/reagent-filling" class="mt-2 block text-xs text-blue-600 hover:underline" onclick={(e) => e.stopPropagation()}>→ Reagent Filling (Storage)</a>
-
-				{#if expandedCard === 'storage'}
-					<div class="mt-3 border-t border-gray-200 pt-3 text-xs text-gray-600">
-						<div>Stored: {data.pipeline.storage.stored}</div>
-						<div>Sealed (pending storage): {data.pipeline.reagentFilling.sealed}</div>
-						<div>Voided: {data.pipeline.storage.voided}</div>
+					<div>
+						<div class="text-lg font-bold text-tron-blue">{data.pipeline.shipped.thisMonth}</div>
+						<div class="text-xs text-tron-text-secondary">Shipped (mo)</div>
 					</div>
-				{/if}
-			</div>
-
-			<!-- Shipped -->
-			<div class="cursor-pointer rounded-lg border-2 bg-gray-50 border-gray-200 p-4 transition-all"
-				role="button" tabindex="0"
-				onclick={() => toggleCard('shipped')}
-				onkeydown={(e) => handleKeydown(e, 'shipped')}>
-				<div class="flex items-center justify-between">
-					<h4 class="text-sm font-semibold uppercase tracking-wide">Shipped</h4>
-					<span class="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium">{data.pipeline.shipped.thisWeek} this week</span>
 				</div>
-				<div class="mt-1 text-sm text-gray-600">{data.pipeline.shipped.thisMonth} this month</div>
-
-				{#if expandedCard === 'shipped'}
-					<div class="mt-3 border-t border-gray-200 pt-3 text-xs text-gray-600">
-						<div>This week: {data.pipeline.shipped.thisWeek}</div>
-						<div>This month: {data.pipeline.shipped.thisMonth}</div>
-						{#if data.pipeline.shipped.recentShipment}
-							<div class="mt-1">Last: {new Date(data.pipeline.shipped.recentShipment.date).toLocaleDateString()} → {data.pipeline.shipped.recentShipment.destination} ({data.pipeline.shipped.recentShipment.count} units)</div>
-						{/if}
+				{#if data.pipeline.shipped.recentShipment}
+					<div class="mt-3 border-t border-tron-border pt-3 text-xs text-tron-text-secondary">
+						Last shipment: {new Date(data.pipeline.shipped.recentShipment.date).toLocaleDateString()} &rarr; {data.pipeline.shipped.recentShipment.destination} ({data.pipeline.shipped.recentShipment.count} units)
 					</div>
 				{/if}
 			</div>
 		</div>
 	</div>
 
-	<!-- Weekly Stats Footer -->
-	<div class="mt-6 rounded-lg border bg-white p-4 shadow-sm">
-		<h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-500">This Week</h2>
-		<div class="flex flex-wrap gap-4 text-sm text-gray-700">
-			<span>Wax runs: <strong>{data.weeklyStats.waxRuns}</strong></span>
-			<span>·</span>
-			<span>Reagent runs: <strong>{data.weeklyStats.reagentRuns}</strong></span>
-			<span>·</span>
-			<span>Produced: <strong>{data.weeklyStats.produced}</strong></span>
-			<span>·</span>
-			<span>Rejected: <strong>{data.weeklyStats.rejected}</strong></span>
-			<span>·</span>
-			<span>Yield: <strong>{data.weeklyStats.yieldPercent}%</strong></span>
+	<!-- ============ WEEKLY STATS / HISTORICAL ============ -->
+	<div class="tron-card">
+		<h2 class="mb-3 text-xs font-semibold uppercase tracking-widest text-tron-cyan">This Week</h2>
+		<div class="grid grid-cols-2 gap-4 lg:grid-cols-5 text-center">
+			<div>
+				<div class="text-lg font-bold text-tron-text">{data.weeklyStats.waxRuns}</div>
+				<div class="text-xs text-tron-text-secondary">Wax Runs</div>
+			</div>
+			<div>
+				<div class="text-lg font-bold text-tron-text">{data.weeklyStats.reagentRuns}</div>
+				<div class="text-xs text-tron-text-secondary">Reagent Runs</div>
+			</div>
+			<div>
+				<div class="text-lg font-bold text-tron-green">{data.weeklyStats.produced}</div>
+				<div class="text-xs text-tron-text-secondary">Produced</div>
+			</div>
+			<div>
+				<div class="text-lg font-bold text-tron-red">{data.weeklyStats.rejected}</div>
+				<div class="text-xs text-tron-text-secondary">Rejected</div>
+			</div>
+			<div>
+				<div class="text-lg font-bold" class:text-tron-green={data.weeklyStats.yieldPercent >= 90} class:text-tron-yellow={data.weeklyStats.yieldPercent >= 70 && data.weeklyStats.yieldPercent < 90} class:text-tron-red={data.weeklyStats.yieldPercent < 70}>{data.weeklyStats.yieldPercent}%</div>
+				<div class="text-xs text-tron-text-secondary">Yield</div>
+			</div>
 		</div>
 		{#if data.weeklyStats.topRejections?.length}
-			<div class="mt-2 text-xs text-gray-500">
-				Top rejections: {#each data.weeklyStats.topRejections as reason, i}{#if i > 0} · {/if}{reason._id ?? 'Unknown'} ({reason.count}){/each}
+			<div class="mt-4 border-t border-tron-border pt-3">
+				<div class="text-xs text-tron-text-secondary">
+					Top rejections: {#each data.weeklyStats.topRejections as reason, i}{#if i > 0} &middot; {/if}<span class="text-tron-text">{reason._id ?? 'Unknown'}</span> ({reason.count}){/each}
+				</div>
 			</div>
 		{/if}
+		<!-- Historical chart placeholder -->
+		<div class="mt-4 rounded-lg bg-tron-bg-tertiary border border-tron-border h-32 flex items-center justify-center">
+			<span class="text-xs text-tron-text-secondary uppercase tracking-wide">Historical trend chart &mdash; coming soon</span>
+		</div>
 	</div>
 </div>
