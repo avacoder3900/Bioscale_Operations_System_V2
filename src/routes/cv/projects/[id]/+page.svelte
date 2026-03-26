@@ -32,18 +32,30 @@
 		uploading = true;
 		uploadMsg = '';
 		let count = 0;
+		let lastError = '';
 		for (const file of files) {
 			const fd = new FormData();
 			fd.append('file', file);
 			fd.append('projectId', data.project._id);
 			try {
 				const res = await fetch('/api/cv/images', { method: 'POST', body: fd });
-				if (res.ok) count++;
-			} catch { /* skip */ }
+				if (res.ok) {
+					count++;
+				} else {
+					const errJson = await res.json().catch(() => ({}));
+					lastError = errJson.error || `Upload failed (${res.status})`;
+					console.error('Upload error:', errJson);
+				}
+			} catch (e: any) {
+				lastError = e.message || 'Network error';
+				console.error('Upload exception:', e);
+			}
 		}
-		uploadMsg = `Uploaded ${count} image${count !== 1 ? 's' : ''}`;
+		uploadMsg = count > 0
+			? `Uploaded ${count} image${count !== 1 ? 's' : ''}${lastError ? ` (${files.length - count} failed: ${lastError})` : ''}`
+			: `Upload failed: ${lastError || 'Unknown error'}`;
 		uploading = false;
-		setTimeout(() => location.reload(), 800);
+		if (count > 0) setTimeout(() => location.reload(), 800);
 	}
 
 	function handleDrop(e: DragEvent) {
