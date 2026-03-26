@@ -74,7 +74,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
 	if (type === 'admin-password') {
 		// Accept common admin password OR verify user is admin role
-		if (id === 'admin213') {
+		if (id === 'admin123') {
 			return json({ valid: true });
 		}
 		const { isAdmin } = await import('$lib/server/permissions');
