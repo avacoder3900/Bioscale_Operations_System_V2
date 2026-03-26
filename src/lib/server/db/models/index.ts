@@ -58,6 +58,10 @@ export { ParticleDevice } from './particle-device.js';
 export { WorkflowViolation } from './workflow-violation.js';
 export { ServiceTicket } from './service-ticket.js';
 
+// Barcode Tracking
+export { BarcodeSheetBatch } from './barcode-sheet-batch.js';
+export { BarcodeInventory } from './barcode-inventory.js';
+
 // Sensor Configuration
 export { SensorConfig } from './sensor-config.js';
 
