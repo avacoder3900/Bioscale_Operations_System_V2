@@ -55,9 +55,13 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 	if (projectId !== undefined) {
 		oldData.project = task.project;
 		if (projectId) {
+			// Look up project to get name and color
 			const proj = await KanbanProject.findById(projectId).lean() as any;
 			if (proj) {
 				$set.project = { _id: proj._id, name: proj.name, color: proj.color };
+			} else {
+				// Fallback: set project with just the ID (name will be missing but at least it's assigned)
+				$set.project = { _id: projectId, name: 'Unknown', color: '#808080' };
 			}
 		} else {
 			$set.project = null;
