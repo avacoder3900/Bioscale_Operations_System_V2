@@ -13,7 +13,7 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 	if (!task) throw error(404, 'Task not found');
 
 	const body = await request.json();
-	const { title, description, status, prioritized, taskLength, assignedTo, dueDate, tags, appendContext } = body;
+	const { title, description, status, prioritized, taskLength, assignedTo, dueDate, tags, appendContext, projectId } = body;
 
 	const $set: any = {};
 	const $push: any = {};
@@ -50,6 +50,20 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 		oldData.tags = task.tags;
 		$set.tags = tags;
 		changedFields.push('tags');
+	}
+
+	if (projectId !== undefined) {
+		oldData.project = task.project;
+		if (projectId) {
+			const { KanbanProject } = await import('$lib/server/db');
+			const proj = await KanbanProject.findById(projectId).lean() as any;
+			if (proj) {
+				$set.project = { _id: proj._id, name: proj.name, color: proj.color };
+			}
+		} else {
+			$set.project = null;
+		}
+		changedFields.push('project');
 	}
 
 	if (assignedTo !== undefined) {
