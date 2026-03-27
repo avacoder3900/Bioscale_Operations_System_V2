@@ -21,6 +21,13 @@
 	let retractReason = $state('');
 	let retracting = $state(false);
 
+	// Admin edit transaction state
+	let editingTxnId = $state<string | null>(null);
+	let editTxnQuantity = $state(0);
+	let editTxnReason = $state('');
+	let editingTxn = $state(false);
+	let editTxnSuccess = $state(false);
+
 	function formatCurrency(value: number | null): string {
 		if (value === null || value === undefined) return '—';
 		if (isNaN(value)) return '—';
@@ -141,6 +148,13 @@
 			class="rounded border border-[var(--color-tron-green)] bg-[color-mix(in_srgb,var(--color-tron-green)_10%,transparent)] px-4 py-2 text-[var(--color-tron-green)]"
 		>
 			Minimum stock level updated successfully.
+		</div>
+	{/if}
+	{#if editTxnSuccess}
+		<div
+			class="rounded border border-[var(--color-tron-green)] bg-[color-mix(in_srgb,var(--color-tron-green)_10%,transparent)] px-4 py-2 text-[var(--color-tron-green)]"
+		>
+			Transaction updated successfully.
 		</div>
 	{/if}
 	{#if form?.error}
@@ -756,59 +770,124 @@
 										{/if}
 									</td>
 									<td>
-										{#if !txn.retractedAt && txn.transactionType === 'deduction'}
-											{#if retractingId === txn.id}
-												<form
-													method="POST"
-													action="?/retractTransaction"
-													use:enhance={() => {
-														retracting = true;
-														return async ({ update }) => {
-															retracting = false;
-															retractingId = null;
-															retractReason = '';
-															await update();
-														};
-													}}
-													class="retract-form"
-												>
-													<input type="hidden" name="transactionId" value={txn.id} />
-													<input
-														type="text"
-														name="reason"
-														class="retract-reason-input"
-														placeholder="Reason for retraction..."
-														bind:value={retractReason}
-														required
-													/>
-													<div class="retract-actions">
-														<button
-															type="submit"
-															class="retract-confirm-btn"
-															disabled={retracting || !retractReason.trim()}
-														>
-															{retracting ? 'Retracting...' : 'Confirm'}
-														</button>
-														<button
-															type="button"
-															class="retract-cancel-btn"
-															onclick={() => { retractingId = null; retractReason = ''; }}
-														>
-															Cancel
-														</button>
-													</div>
-												</form>
-											{:else}
-												<button
-													class="retract-btn"
-													onclick={() => (retractingId = txn.id)}
-												>
-													Retract
-												</button>
+										<div class="flex items-center gap-2">
+											{#if !txn.retractedAt && txn.transactionType === 'deduction'}
+												{#if retractingId === txn.id}
+													<form
+														method="POST"
+														action="?/retractTransaction"
+														use:enhance={() => {
+															retracting = true;
+															return async ({ update }) => {
+																retracting = false;
+																retractingId = null;
+																retractReason = '';
+																await update();
+															};
+														}}
+														class="retract-form"
+													>
+														<input type="hidden" name="transactionId" value={txn.id} />
+														<input
+															type="text"
+															name="reason"
+															class="retract-reason-input"
+															placeholder="Reason for retraction..."
+															bind:value={retractReason}
+															required
+														/>
+														<div class="retract-actions">
+															<button
+																type="submit"
+																class="retract-confirm-btn"
+																disabled={retracting || !retractReason.trim()}
+															>
+																{retracting ? 'Retracting...' : 'Confirm'}
+															</button>
+															<button
+																type="button"
+																class="retract-cancel-btn"
+																onclick={() => { retractingId = null; retractReason = ''; }}
+															>
+																Cancel
+															</button>
+														</div>
+													</form>
+												{:else}
+													<button
+														class="retract-btn"
+														onclick={() => (retractingId = txn.id)}
+													>
+														Retract
+													</button>
+												{/if}
+											{:else if !txn.retractedAt}
+												<span class="tron-text-muted">—</span>
 											{/if}
-										{:else}
-											<span class="tron-text-muted">—</span>
-										{/if}
+											{#if data.isAdmin && !txn.retractedAt}
+												{#if editingTxnId === txn.id}
+													<form
+														method="POST"
+														action="?/editTransaction"
+														use:enhance={() => {
+															editingTxn = true;
+															return async ({ result, update }) => {
+																editingTxn = false;
+																if (result.type === 'success' && result.data?.editSuccess) {
+																	editTxnSuccess = true;
+																	editingTxnId = null;
+																	editTxnReason = '';
+																	setTimeout(() => { editTxnSuccess = false; }, 3000);
+																}
+																await update();
+															};
+														}}
+														class="flex flex-col gap-1 min-w-[200px]"
+													>
+														<input type="hidden" name="transactionId" value={txn.id} />
+														<label class="text-xs tron-text-muted">New Quantity</label>
+														<input
+															type="number"
+															name="newQuantity"
+															class="w-full px-2 py-1 text-xs rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-dark)] text-[var(--color-tron-text)]"
+															bind:value={editTxnQuantity}
+															required
+														/>
+														<textarea
+															name="reason"
+															class="w-full px-2 py-1 text-xs rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-dark)] text-[var(--color-tron-text)]"
+															placeholder="Reason for edit..."
+															bind:value={editTxnReason}
+															required
+															rows="2"
+														></textarea>
+														<div class="flex gap-1">
+															<button
+																type="submit"
+																class="px-2 py-0.5 text-xs rounded bg-[var(--color-tron-cyan)] text-black font-medium hover:opacity-80"
+																disabled={editingTxn || !editTxnReason.trim()}
+															>
+																{editingTxn ? 'Saving...' : 'Save'}
+															</button>
+															<button
+																type="button"
+																class="px-2 py-0.5 text-xs rounded border border-[var(--color-tron-border)] tron-text-muted hover:opacity-80"
+																onclick={() => { editingTxnId = null; editTxnReason = ''; }}
+															>
+																Cancel
+															</button>
+														</div>
+													</form>
+												{:else}
+													<button
+														class="px-2 py-0.5 text-xs rounded border border-[var(--color-tron-border)] tron-text-muted hover:text-[var(--color-tron-cyan)] hover:border-[var(--color-tron-cyan)]"
+														onclick={() => { editingTxnId = txn.id; editTxnQuantity = txn.quantity; editTxnReason = ''; }}
+													>
+														Edit
+													</button>
+												{/if}
+											{/if}
+										</div>
 									</td>
 								</tr>
 							{/each}
