@@ -450,7 +450,7 @@ export const actions: Actions = {
 			_id: generateId(),
 			tableName: 'inventory_transactions',
 			recordId: transactionId,
-			action: 'ADMIN_EDIT',
+			action: 'UPDATE',
 			oldData: { quantity: oldQuantity, newQuantity: oldNewQty },
 			newData: { quantity: newQuantity, newQuantity: oldNewQty + diff, reason },
 			changedAt: new Date(),
