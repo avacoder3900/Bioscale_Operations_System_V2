@@ -430,7 +430,9 @@ export const actions: Actions = {
 		const updatedNotes = oldNotes ? `${oldNotes} ${adminNote}` : adminNote;
 
 		const oldNewQty = txn.newQuantity ?? 0;
-		await InventoryTransaction.updateOne({ _id: transactionId }, {
+		// Bypass Mongoose immutable middleware — use raw MongoDB collection
+		const db = InventoryTransaction.collection;
+		await db.updateOne({ _id: transactionId }, {
 			$set: {
 				quantity: newQuantity,
 				newQuantity: oldNewQty + diff,
