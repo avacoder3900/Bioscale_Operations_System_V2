@@ -46,16 +46,20 @@
 					lastError = err.error || `Presign failed (${presignRes.status})`;
 					continue;
 				}
-				const { uploadUrl, key } = await presignRes.json();
+				const { uploadUrl, key, uploadSecret } = await presignRes.json();
 
-				// Step 2: Upload directly to R2 via presigned URL
+				// Step 2: Upload to R2 via Cloudflare Worker proxy
 				const putRes = await fetch(uploadUrl, {
 					method: 'PUT',
-					headers: { 'Content-Type': file.type || 'image/jpeg' },
+					headers: {
+						'Content-Type': file.type || 'image/jpeg',
+						'X-Upload-Secret': uploadSecret || ''
+					},
 					body: file
 				});
 				if (!putRes.ok) {
-					lastError = `R2 upload failed (${putRes.status})`;
+					const errText = await putRes.text().catch(() => '');
+					lastError = `R2 upload failed (${putRes.status}): ${errText}`;
 					continue;
 				}
 
