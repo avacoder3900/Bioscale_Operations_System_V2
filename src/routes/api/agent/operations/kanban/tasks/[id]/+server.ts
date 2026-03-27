@@ -1,5 +1,5 @@
 import { json, error } from '@sveltejs/kit';
-import { connectDB, KanbanTask, AuditLog } from '$lib/server/db';
+import { connectDB, KanbanTask, KanbanProject, AuditLog } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import type { RequestHandler } from './$types';
@@ -55,7 +55,6 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 	if (projectId !== undefined) {
 		oldData.project = task.project;
 		if (projectId) {
-			const { KanbanProject } = await import('$lib/server/db');
 			const proj = await KanbanProject.findById(projectId).lean() as any;
 			if (proj) {
 				$set.project = { _id: proj._id, name: proj.name, color: proj.color };
