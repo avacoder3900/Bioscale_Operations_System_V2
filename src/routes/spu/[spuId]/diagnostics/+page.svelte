@@ -234,10 +234,16 @@
 						{#each filteredTimeline() as entry, i (i)}
 							<!-- Session boundary separator -->
 							{#if entry.data.isSessionHeader}
-								<div class="py-2 px-3 mt-2 first:mt-0 rounded" style="background: rgba(0,255,255,0.05); border: 1px solid var(--color-tron-border);">
-									<span class="font-bold" style="color: var(--color-tron-cyan);">{entry.data.message.split('\n')[0]}</span>
+								<div class="py-2 px-3 mt-4 first:mt-0 rounded" style="background: rgba(0,255,255,0.05); border: 1px solid var(--color-tron-border);">
+									<div class="flex items-center justify-between">
+										<span class="font-bold" style="color: var(--color-tron-cyan);">{entry.data.message.split('\n')[0]}</span>
+										<span class="tron-text-muted text-[10px]">{formatDate(entry.data.uploadedAt)}</span>
+									</div>
 									{#if entry.data.message.includes('\n')}
-										<br/><span class="tron-text-muted">{entry.data.message.split('\n')[1]}</span>
+										<div class="tron-text-muted mt-0.5">{entry.data.message.split('\n')[1]}</div>
+									{/if}
+									{#if entry.data.lineCount != null}
+										<div class="tron-text-muted text-[10px] mt-1">{entry.data.lineCount} log lines in this upload</div>
 									{/if}
 								</div>
 							{:else if entry.source === 'firmware'}
