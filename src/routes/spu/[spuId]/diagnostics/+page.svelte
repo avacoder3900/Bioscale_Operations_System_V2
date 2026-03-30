@@ -58,7 +58,11 @@
 	}
 
 	function isMetadataLine(message: string): boolean {
-		return /UPLOAD METADATA/i.test(message) || /^={4,}/.test(message.trim());
+		const m = message.trim();
+		return /UPLOAD METADATA/i.test(m)
+			|| /^={4,}/.test(m)
+			|| /^Boot #\d+\s*\|/i.test(m)
+			|| /^Firmware:\s*v\d+\s*\|/i.test(m);
 	}
 
 	function truncate(str: string | null, len: number): string {
