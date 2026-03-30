@@ -1,13 +1,15 @@
 import { redirect } from '@sveltejs/kit';
 import {
-	connectDB, WaxFillingRun, ReagentBatchRecord, OpentronsRobot, AssayDefinition
+	connectDB, WaxFillingRun, ReagentBatchRecord, Equipment, AssayDefinition
 } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
 const PAGE_SIZE = 20;
 
 export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
 	// Parse filter params
@@ -178,7 +180,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	// Fetch filter option lists
 	const [robots, assayTypes] = await Promise.all([
-		OpentronsRobot.find({ isActive: true }, { _id: 1, name: 1 }).lean(),
+		Equipment.find({ equipmentType: 'robot', isActive: true }, { _id: 1, name: 1 }).lean(),
 		AssayDefinition.find({ isActive: true }, { _id: 1, name: 1 }).lean()
 	]);
 

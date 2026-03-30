@@ -1,8 +1,10 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, WorkInstruction, AuditLog, generateId } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { Actions, PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async () => {
+export const load: PageServerLoad = async ({ locals }) => {
+	requirePermission(locals.user, 'workInstruction:read');
 	await connectDB();
 	const wis = await WorkInstruction.find().sort({ updatedAt: -1 }).lean();
 
@@ -32,6 +34,7 @@ export const load: PageServerLoad = async () => {
 
 export const actions: Actions = {
 	create: async ({ request, locals }) => {
+		requirePermission(locals.user, 'workInstruction:write');
 		await connectDB();
 		const form = await request.formData();
 		const title = form.get('title')?.toString().trim();

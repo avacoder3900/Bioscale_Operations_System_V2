@@ -79,19 +79,23 @@
 				{@const isExpanded = expandedFridge === fridge.location}
 				<div class="rounded-lg border {fridge.isActive ? 'border-[var(--color-tron-border)]' : 'border-red-500/30 opacity-60'} bg-[var(--color-tron-surface)] overflow-hidden">
 					<!-- Fridge header -->
-					<button
-						type="button"
-						onclick={() => toggleFridge(fridge.location)}
-						class="flex w-full items-center justify-between p-4 text-left transition-colors hover:bg-[var(--color-tron-cyan)]/5"
-					>
-						<div class="flex items-center gap-3">
+					<div class="flex w-full items-center justify-between p-4">
+						<button
+							type="button"
+							onclick={() => toggleFridge(fridge.location)}
+							class="flex min-w-0 flex-1 items-center gap-3 text-left transition-colors hover:bg-transparent"
+						>
 							<div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-[var(--color-tron-cyan)]/10">
 								<svg class="h-7 w-7 text-[var(--color-tron-cyan)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
 									<path stroke-linecap="round" stroke-linejoin="round" d="M6 2h12a1 1 0 011 1v18a1 1 0 01-1 1H6a1 1 0 01-1-1V3a1 1 0 011-1zm0 12h12M10 6h1" />
 								</svg>
 							</div>
 							<div>
-								<h3 class="text-base font-semibold text-[var(--color-tron-text)]">{fridge.displayName}</h3>
+								{#if fridge.fridgeId}
+									<a href="/equipment/location/{fridge.fridgeId}" class="text-base font-semibold text-[var(--color-tron-text)] hover:text-[var(--color-tron-cyan)] transition-colors" onclick={(e) => e.stopPropagation()}>{fridge.displayName}</a>
+								{:else}
+									<h3 class="text-base font-semibold text-[var(--color-tron-text)]">{fridge.displayName}</h3>
+								{/if}
 								<div class="mt-0.5 flex items-center gap-3 text-xs text-[var(--color-tron-text-secondary)]">
 									{#if fridge.waxCount > 0}
 										<span class="rounded bg-amber-900/20 px-1.5 py-0.5 text-amber-300">{fridge.waxCount} wax</span>
@@ -104,16 +108,16 @@
 									{/if}
 								</div>
 							</div>
-						</div>
-						<div class="flex items-center gap-3">
+						</button>
+						<button type="button" onclick={() => toggleFridge(fridge.location)} class="flex items-center gap-3">
 							<span class="text-2xl font-bold {fridge.totalCount > 0 ? 'text-[var(--color-tron-text)]' : 'text-[var(--color-tron-text-secondary)]'}">
 								{filteredCarts.length}
 							</span>
 							<svg class="h-5 w-5 text-[var(--color-tron-text-secondary)] transition-transform {isExpanded ? 'rotate-180' : ''}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 								<path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
 							</svg>
-						</div>
-					</button>
+						</button>
+					</div>
 
 					<!-- Expanded cartridge list -->
 					{#if isExpanded}

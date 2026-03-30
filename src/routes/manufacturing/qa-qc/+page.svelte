@@ -34,8 +34,10 @@
 
 	function statusBadgeClass(status: string | null): string {
 		switch (status) {
-			case 'passed': return 'tron-badge tron-badge-success';
-			case 'failed': return 'tron-badge tron-badge-error';
+			case 'passed':
+			case 'pass': return 'tron-badge tron-badge-success';
+			case 'failed':
+			case 'fail': return 'tron-badge tron-badge-error';
 			case 'testing': return 'tron-badge tron-badge-warning';
 			default: return 'tron-badge tron-badge-neutral';
 		}

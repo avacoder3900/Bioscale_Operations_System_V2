@@ -3,10 +3,12 @@ import {
 	connectDB, ManufacturingMaterial, ManufacturingMaterialTransaction,
 	ManufacturingSettings, PartDefinition, generateId
 } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
 	const [materials, settingsDoc] = await Promise.all([
@@ -50,6 +52,7 @@ export const actions: Actions = {
 	/** Add a new material, optionally linked to a PartDefinition */
 	addMaterial: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -82,6 +85,7 @@ export const actions: Actions = {
 	/** Record a transaction against a material. Also syncs PartDefinition.inventoryCount if linked. */
 	recordTransaction: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();

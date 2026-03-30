@@ -1,9 +1,10 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
-	EquipmentLocation, OpentronsRobot, AuditLog, BackingLot
+	Equipment, EquipmentLocation, AuditLog, BackingLot
 } from '$lib/server/db';
-import { recordTransaction } from '$lib/server/services/inventory-transaction';
+import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
+import { isAdmin } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 // Extend Vercel serverless timeout to 60s (default is 10s)
@@ -150,7 +151,7 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			qcStatus: c.waxQc?.status ?? 'Pending',
 			rejectionReason: c.waxQc?.rejectionReason ?? null,
 			qcTimestamp: c.waxQc?.timestamp ? new Date(c.waxQc.timestamp).toISOString() : null,
-			currentInventory: c.currentPhase ?? 'wax_filled',
+			currentInventory: c.status ?? 'wax_filled',
 			storageLocation: c.waxStorage?.location ?? null,
 			storageTimestamp: c.waxStorage?.timestamp ? new Date(c.waxStorage.timestamp).toISOString() : null,
 			storageOperatorId: c.waxStorage?.operator?._id ? String(c.waxStorage.operator._id) : null,
@@ -166,17 +167,27 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 		const storageCartridges = (storageCartridgesRaw as any[]).map((c: any) => ({
 			cartridgeId: String(c._id),
 			qcStatus: c.waxQc?.status ?? 'Accepted',
-			currentInventory: c.currentPhase ?? 'wax_stored',
+			currentInventory: c.status ?? 'wax_stored',
 			storageLocation: c.waxStorage?.location ?? null
 		}));
 
-		// Fridges for storage selection
-		const fridgesRaw = await EquipmentLocation.find({ locationType: 'fridge', isActive: true }).lean().catch(() => []);
-		const fridges = (fridgesRaw as any[]).map((f: any) => ({
-			id: String(f._id),
-			displayName: f.displayName ?? f.barcode ?? String(f._id),
-			barcode: f.barcode ?? ''
-		}));
+		// Fridges for storage selection — use parent Equipment records
+		const [equipFridges, orphanFridges] = await Promise.all([
+			Equipment.find({ equipmentType: 'fridge', status: { $ne: 'offline' } }).lean().catch(() => []),
+			EquipmentLocation.find({ locationType: 'fridge', isActive: true, parentEquipmentId: { $exists: false } }).lean().catch(() => [])
+		]);
+		const fridges = [
+			...(equipFridges as any[]).map((f: any) => ({
+				id: String(f._id),
+				displayName: f.name ?? f.barcode ?? String(f._id),
+				barcode: f.barcode ?? ''
+			})),
+			...(orphanFridges as any[]).map((f: any) => ({
+				id: String(f._id),
+				displayName: f.displayName ?? f.barcode ?? String(f._id),
+				barcode: f.barcode ?? ''
+			}))
+		];
 
 		// Backing lots from BackingLot collection
 		const minOvenTimeMin = wax.minOvenTimeMin ?? 60;
@@ -249,8 +260,11 @@ export const actions: Actions = {
 		const settingsDoc = await ManufacturingSettings.findById('default').lean() as any;
 		const minOvenTimeMin: number = settingsDoc?.waxFilling?.minOvenTimeMin ?? 60;
 
-		// TEST OVERRIDE: skip lot lookup and oven check
+		// TEST OVERRIDE: skip lot lookup and oven check (admin only)
 		if (override) {
+			if (!isAdmin(locals.user)) {
+				return fail(403, { error: 'Override requires admin permission.' });
+			}
 			// Auto-create lot if it doesn't exist
 			const existing = await BackingLot.findById(lotBarcode).lean();
 			if (!existing) {
@@ -331,7 +345,7 @@ export const actions: Actions = {
 			return fail(400, { error: 'This robot already has an active wax filling run.' });
 		}
 
-		const robotDoc = await OpentronsRobot.findById(robotId, { _id: 1, name: 1 }).lean() as any;
+		const robotDoc = await Equipment.findOne({ _id: robotId, equipmentType: 'robot' }, { _id: 1, name: 1 }).lean() as any;
 		const run = await WaxFillingRun.create({
 			robot: { _id: robotId, name: robotDoc?.name ?? robotId },
 			operator: { _id: locals.user._id, username: locals.user.username },
@@ -444,8 +458,8 @@ export const actions: Actions = {
 			const alreadyInUse = await CartridgeRecord.find({
 				_id: { $in: cartridgeIds },
 				'waxFilling.runId': { $exists: true },
-				currentPhase: { $nin: [null, 'backing', 'voided'] }
-			}).select('_id currentPhase waxFilling.runId').lean();
+				status: { $nin: [null, 'backing', 'voided'] }
+			}).select('_id status waxFilling.runId').lean();
 
 			if (alreadyInUse.length > 0) {
 				const ids = (alreadyInUse as any[]).map((c: any) => c._id).join(', ');
@@ -455,8 +469,8 @@ export const actions: Actions = {
 
 		// Validate deck if provided
 		if (deckId) {
-			const deck = await Consumable.findOne({ _id: deckId, type: 'deck' }).lean();
-			if (!deck) return fail(400, { error: `Deck '${deckId}' not found. Register it in Consumables first.` });
+			const deck = await Equipment.findOne({ _id: deckId, equipmentType: 'deck' }).lean();
+			if (!deck) return fail(400, { error: `Deck '${deckId}' not found. Register it in Equipment first.` });
 			if ((deck as any).status === 'retired') return fail(400, { error: `Deck '${deckId}' is retired.` });
 		}
 
@@ -479,7 +493,7 @@ export const actions: Actions = {
 							'backing.recordedAt': now
 						},
 						$set: {
-							currentPhase: 'wax_filling',
+							status: 'wax_filling',
 							'backing.lotId': activeLotId ?? null,
 							'waxFilling.runId': runId,
 							'waxFilling.deckId': deckId ?? null,
@@ -617,6 +631,16 @@ export const actions: Actions = {
 		const runId = data.get('runId') as string;
 		const now = new Date();
 
+		// Server-side cooling timer check: minimum 10 minutes must pass after cooling confirmed
+		const runBeforeQc = await WaxFillingRun.findById(runId).select('coolingConfirmedAt').lean() as any;
+		if (runBeforeQc?.coolingConfirmedAt) {
+			const elapsedMs = Date.now() - new Date(runBeforeQc.coolingConfirmedAt).getTime();
+			if (elapsedMs < 10 * 60 * 1000) {
+				const remainingMin = Math.ceil((10 * 60 * 1000 - elapsedMs) / 60000);
+				return fail(400, { error: `Cartridges must cool for at least 10 minutes before QC inspection. ${remainingMin} minute${remainingMin === 1 ? '' : 's'} remaining.` });
+			}
+		}
+
 		const run = await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'Storage', runEndTime: now }
 		}, { new: true }).lean() as any;
@@ -638,17 +662,19 @@ export const actions: Actions = {
 							'waxFilling.runStartTime': run.runStartTime,
 							'waxFilling.runEndTime': now,
 							'waxFilling.recordedAt': now,
-							currentPhase: 'wax_filled'
+							status: 'wax_filled'
 						}
 					}
 				}
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
 
-			// Record inventory transactions for each cartridge (serialized)
+			// Record inventory transactions for each cartridge — consume wax (PT-CT-105)
+			const waxPartId = await resolvePartId('PT-CT-105');
 			for (const cid of run.cartridgeIds) {
 				await recordTransaction({
-					transactionType: 'creation',
+					transactionType: 'consumption',
+					partDefinitionId: waxPartId ?? undefined,
 					cartridgeRecordId: cid,
 					lotId: run.waxSourceLot ?? undefined,
 					quantity: 1,
@@ -705,6 +731,17 @@ export const actions: Actions = {
 			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
 		});
 
+		// Clean up cartridges that were in wax_filling phase for this run
+		await CartridgeRecord.bulkWrite([{
+			updateMany: {
+				filter: { 'waxFilling.runId': runId, status: 'wax_filling' },
+				update: {
+					$set: { status: 'backing' },
+					$unset: { waxFilling: '' }
+				}
+			}
+		}]);
+
 		await AuditLog.create({
 			_id: generateId(),
 			tableName: 'wax_filling_runs',
@@ -730,6 +767,17 @@ export const actions: Actions = {
 		await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
 		});
+
+		// Clean up cartridges that were in wax_filling phase for this run
+		await CartridgeRecord.bulkWrite([{
+			updateMany: {
+				filter: { 'waxFilling.runId': runId, status: 'wax_filling' },
+				update: {
+					$set: { status: 'backing' },
+					$unset: { waxFilling: '' }
+				}
+			}
+		}]);
 
 		await AuditLog.create({
 			_id: generateId(),
@@ -763,7 +811,7 @@ export const actions: Actions = {
 					'waxQc.operator': { _id: locals.user._id, username: locals.user.username },
 					'waxQc.timestamp': now,
 					'waxQc.recordedAt': now,
-					currentPhase: 'voided'
+					status: 'voided'
 				}
 			}
 		);
@@ -813,7 +861,7 @@ export const actions: Actions = {
 							'waxStorage.operator': { _id: locals.user._id, username: locals.user.username },
 							'waxStorage.timestamp': now,
 							'waxStorage.recordedAt': now,
-							currentPhase: 'wax_stored'
+							status: 'wax_stored'
 						}
 					}
 				}
@@ -841,7 +889,7 @@ export const actions: Actions = {
 				action: 'UPDATE',
 				changedBy: locals.user?.username,
 				changedAt: now,
-				newData: { currentPhase: 'wax_stored', location, count: cartridgeIds.length }
+				newData: { status: 'wax_stored', location, count: cartridgeIds.length }
 			});
 		}
 
@@ -866,7 +914,7 @@ export const actions: Actions = {
 		const operatorRef = { _id: locals.user._id, username: locals.user.username };
 
 		if (run?.deckId) {
-			await Consumable.findByIdAndUpdate(run.deckId, {
+			await Equipment.findByIdAndUpdate(run.deckId, {
 				$set: { lastUsed: now },
 				$push: {
 					usageLog: {

@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, CartridgeRecord, EquipmentLocation } from '$lib/server/db';
+import { connectDB, CartridgeRecord, Equipment, EquipmentLocation, AuditLog, generateId } from '$lib/server/db';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -15,18 +15,36 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'cartridge:read');
 	await connectDB();
 
-	// Get real fridges from EquipmentLocation
-	const fridgesRaw = await EquipmentLocation.find({ locationType: 'fridge', isActive: true })
-		.sort({ displayName: 1 }).lean();
-	const fridges = (fridgesRaw as any[]).map((f: any) => ({
-		id: String(f._id),
-		displayName: f.displayName ?? f.barcode ?? String(f._id),
-		barcode: f.barcode ?? ''
-	}));
+	// Get parent fridges from Equipment, plus orphan EquipmentLocations
+	const [equipDocs, locationDocs] = await Promise.all([
+		Equipment.find({ equipmentType: 'fridge', status: { $ne: 'offline' } }).sort({ name: 1 }).lean(),
+		EquipmentLocation.find({ locationType: 'fridge', isActive: true }).lean()
+	]);
+
+	const fridges: { id: string; displayName: string; barcode: string }[] = [];
+	const parentIds = new Set((equipDocs as any[]).map((e: any) => String(e._id)));
+
+	for (const equip of equipDocs as any[]) {
+		fridges.push({
+			id: String(equip._id),
+			displayName: equip.name ?? equip.barcode ?? String(equip._id),
+			barcode: equip.barcode ?? ''
+		});
+	}
+	// Add orphan locations (no parentEquipmentId or parent not in equipment)
+	for (const loc of locationDocs as any[]) {
+		if (!loc.parentEquipmentId || !parentIds.has(loc.parentEquipmentId)) {
+			fridges.push({
+				id: String(loc._id),
+				displayName: loc.displayName ?? loc.barcode ?? String(loc._id),
+				barcode: loc.barcode ?? ''
+			});
+		}
+	}
 
 	// Get cartridges awaiting storage (completed QC but not yet stored)
 	const awaitingStorage = await CartridgeRecord.find(
-		{ currentPhase: { $in: ['qc_complete', 'assay_loaded'] }, 'storage.fridgeName': { $exists: false } },
+		{ status: { $in: ['released', 'linked'] }, 'storage.fridgeName': { $exists: false } },
 		{ _id: 1, barcode: 1, lotNumber: 1 }
 	).sort({ createdAt: -1 }).limit(500).lean();
 
@@ -98,7 +116,6 @@ export const actions: Actions = {
 					'storage.storedAt': now,
 					'storage.recordedAt': now,
 					'storage.storedBy': locals.user?._id,
-					currentPhase: 'stored',
 					status: 'stored'
 				}
 			}
@@ -114,6 +131,14 @@ export const actions: Actions = {
 				operatorId: locals.user?._id,
 				operatorUsername: locals.user?.username,
 				notes: `Stored in ${fridgeKey}${containerBarcode ? `, container ${containerBarcode}` : ''}`
+			});
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'cartridge_records',
+				recordId: cid,
+				action: 'UPDATE',
+				changedBy: locals.user?.username ?? locals.user?._id,
+				changedAt: new Date()
 			});
 		}
 

@@ -1,200 +1,262 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 
-	interface Roll {
-		rollId: string;
-		barcode: string | null;
-		initialLengthFt: number;
-		remainingLengthFt: number;
-		status: string;
-		createdBy: string;
-		createdAt: string;
-		updatedAt: string;
-	}
-
-	interface CutRecord {
+	interface Run {
 		id: string;
-		rollId: string;
-		quantityCut: number;
-		lengthPerCutFt: number;
-		totalLengthUsedFt: number;
-		operatorId: string;
+		lotBarcode: string;
+		expectedSheets: number;
+		acceptedCount: number;
+		rejectedCount: number;
+		operator: string;
 		notes: string | null;
 		createdAt: string;
 	}
 
 	interface Props {
-		data: { rolls: Roll[]; recentCuts: CutRecord[] };
-		form: { success?: boolean; error?: string } | null;
+		data: { runs: Run[]; inventory: { rollStock: number; rollPartName: string; totalStripsProduced: number }; defaultExpectedStrips: number };
+		form: { success?: boolean; error?: string; testBarcode?: string; settingsSuccess?: boolean; settingsError?: string } | null;
 	}
 
 	let { data, form }: Props = $props();
 
-	let showRegister = $state(false);
-	let newBarcode = $state('');
-	let cuttingRollId = $state<string | null>(null);
-	let cutQuantity = $state(10);
-	let cutNotes = $state('');
-	// Optional: comma-separated cartridge IDs to link roll lot to CartridgeRecord.topSeal
-	let cutCartridgeIds = $state('');
+	let step = $state<'idle' | 'scanned'>('idle');
+	let lotBarcode = $state('');
+	let expectedSheets = $state(data.defaultExpectedStrips);
+	let acceptedCount = $state(0);
+	let notes = $state('');
+	let showSettings = $state(false);
+	let adminPassword = $state('');
+	let newExpected = $state(data.defaultExpectedStrips);
 
-	const activeRolls = $derived(data.rolls.filter((r) => r.status === 'Active'));
-	const otherRolls = $derived(data.rolls.filter((r) => r.status !== 'Active'));
+	let barcodeInput: HTMLInputElement;
 
-	function usagePercent(roll: Roll): number {
-		if (roll.initialLengthFt <= 0) return 100;
-		return Math.round(((roll.initialLengthFt - roll.remainingLengthFt) / roll.initialLengthFt) * 100);
+	function onBarcodeScan(e: KeyboardEvent) {
+		if (e.key === 'Enter' && lotBarcode.trim()) {
+			e.preventDefault();
+			expectedSheets = data.defaultExpectedStrips;
+			step = 'scanned';
+		}
 	}
+
+	function startNew() {
+		step = 'idle';
+		lotBarcode = '';
+		expectedSheets = data.defaultExpectedStrips;
+		acceptedCount = 0;
+		notes = '';
+		setTimeout(() => barcodeInput?.focus(), 100);
+	}
+
+	$effect(() => {
+		if (form?.success) {
+			step = 'idle';
+			lotBarcode = '';
+			expectedSheets = data.defaultExpectedStrips;
+			acceptedCount = 0;
+			notes = '';
+		}
+		if (form?.testBarcode && step === 'idle') {
+			lotBarcode = form.testBarcode;
+			expectedSheets = data.defaultExpectedStrips;
+			step = 'scanned';
+		}
+	});
 </script>
 
 <div class="space-y-6">
 	<div class="flex items-center justify-between">
-		<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Top Seal Cutting</h1>
-		<button
-			type="button"
-			onclick={() => { showRegister = !showRegister; }}
-			class="min-h-[44px] rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-4 py-2 text-sm font-medium text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20"
-		>
-			{showRegister ? 'Cancel' : '+ Register Roll'}
-		</button>
+		<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Cut Top Seal</h1>
+		{#if step !== 'idle'}
+			<button type="button" onclick={startNew}
+				class="min-h-[44px] rounded border border-red-500/50 bg-red-900/10 px-4 py-2 text-sm font-medium text-red-400 hover:bg-red-900/20">
+				Cancel
+			</button>
+		{/if}
 	</div>
 
 	{#if form?.success}
-		<div class="rounded border border-green-500/30 bg-green-900/20 px-4 py-3 text-sm text-green-300">Action completed.</div>
+		<div class="rounded border border-green-500/30 bg-green-900/20 px-4 py-3 text-sm text-green-300">
+			✓ Cut run recorded. <button type="button" onclick={startNew} class="underline hover:text-green-200">Start another</button>
+		</div>
 	{/if}
 	{#if form?.error}
 		<div class="rounded border border-red-500/30 bg-red-900/20 px-4 py-3 text-sm text-red-300">{form.error}</div>
 	{/if}
 
-	{#if showRegister}
-		<form method="POST" action="?/registerRoll" use:enhance={() => { return async ({ update }) => { showRegister = false; newBarcode = ''; await update(); }; }} class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5 space-y-4">
-			<h3 class="text-sm font-semibold text-[var(--color-tron-cyan)]">Register New Roll</h3>
+	<!-- Inventory Stats -->
+	<div class="grid grid-cols-2 gap-4">
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 text-center">
+			<p class="text-2xl font-bold text-[var(--color-tron-cyan)]">{data.inventory.rollStock}</p>
+			<p class="text-xs text-[var(--color-tron-text-secondary)]">{data.inventory.rollPartName} Rolls in Stock</p>
+		</div>
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 text-center">
+			<p class="text-2xl font-bold text-green-400">{data.inventory.totalStripsProduced}</p>
+			<p class="text-xs text-[var(--color-tron-text-secondary)]">Total Strips Cut</p>
+		</div>
+	</div>
+
+	<!-- Settings -->
+	{#if form?.settingsSuccess}
+		<div class="rounded border border-green-500/30 bg-green-900/20 px-4 py-3 text-sm text-green-300">✓ Default expected strips updated.</div>
+	{/if}
+	{#if form?.settingsError}
+		<div class="rounded border border-red-500/30 bg-red-900/20 px-4 py-3 text-sm text-red-300">{form.settingsError}</div>
+	{/if}
+
+	<div class="flex items-center justify-between">
+		<p class="text-xs text-[var(--color-tron-text-secondary)]">Default expected strips per roll: <span class="font-bold text-[var(--color-tron-cyan)]">{data.defaultExpectedStrips}</span></p>
+		<button type="button" onclick={() => { showSettings = !showSettings; adminPassword = ''; newExpected = data.defaultExpectedStrips; }}
+			class="text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)] underline">
+			{showSettings ? 'Cancel' : '⚙ Change'}
+		</button>
+	</div>
+
+	{#if showSettings}
+		<form method="POST" action="?/updateExpected" use:enhance={() => { return async ({ update }) => { showSettings = false; adminPassword = ''; await update(); }; }}
+			class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-3">
 			<label class="block">
-				<span class="tron-label">Roll Barcode (optional)</span>
-				<input type="text" name="barcode" bind:value={newBarcode} class="tron-input" placeholder="Scan or type barcode..." />
+				<span class="text-xs font-medium text-[var(--color-tron-text-secondary)]">New Expected Strips per Roll</span>
+				<input type="number" name="newExpected" bind:value={newExpected} min="1"
+					class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none" />
 			</label>
-			<button type="submit" class="tron-btn-primary">Register</button>
+			<label class="block">
+				<span class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Admin Password</span>
+				<input type="password" name="adminPassword" bind:value={adminPassword}
+					class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+					placeholder="Enter admin password..." />
+			</label>
+			<button type="submit" class="rounded bg-[var(--color-tron-cyan)] px-3 py-1.5 text-xs font-semibold text-[var(--color-tron-bg)] hover:opacity-90"
+				disabled={!adminPassword || newExpected <= 0}>
+				Update Default
+			</button>
 		</form>
 	{/if}
 
-	<!-- Active Rolls -->
-	<section>
-		<h2 class="mb-3 text-lg font-medium text-[var(--color-tron-cyan)]">Active Rolls ({activeRolls.length})</h2>
-		{#if activeRolls.length === 0}
-			<p class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center text-sm text-[var(--color-tron-text-secondary)]">No active rolls. Register one to begin cutting.</p>
-		{:else}
-			<div class="space-y-3">
-				{#each activeRolls as roll (roll.rollId)}
-					<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-						<div class="flex items-center justify-between">
-							<div>
-								<p class="font-mono text-sm font-semibold text-[var(--color-tron-cyan)]">{roll.rollId}</p>
-								{#if roll.barcode}
-									<p class="text-xs text-[var(--color-tron-text-secondary)]">Barcode: {roll.barcode}</p>
-								{/if}
-							</div>
-							<span class="tron-badge tron-badge-success">Active</span>
-						</div>
+	<!-- STEP 1: Scan Barcode -->
+	{#if step === 'idle'}
+		<div class="rounded-lg border-2 border-dashed border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-surface)] p-8 text-center space-y-4">
+			<div class="text-4xl">📦</div>
+			<h2 class="text-lg font-semibold text-[var(--color-tron-cyan)]">Scan Top Seal Roll Barcode</h2>
+			<p class="text-sm text-[var(--color-tron-text-secondary)]">Scan or type the roll barcode to begin tracking this cutting run.</p>
+			<input
+				bind:this={barcodeInput}
+				type="text"
+				bind:value={lotBarcode}
+				onkeydown={onBarcodeScan}
+				class="mx-auto block w-full max-w-md rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-bg)] px-4 py-3 text-center font-mono text-lg text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+				placeholder="Scan barcode..."
+				autofocus
+			/>
+			<p class="text-xs text-[var(--color-tron-text-secondary)]">Press Enter after scanning</p>
+			<form method="POST" action="?/generateTestBarcode" use:enhance class="mt-2">
+				<button type="submit"
+					class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)]/50 hover:text-[var(--color-tron-cyan)]">
+					🧪 Generate Test Barcode
+				</button>
+			</form>
+		</div>
+	{/if}
 
-						<!-- Length bar -->
-						<div class="mt-3">
-							<div class="flex justify-between text-xs text-[var(--color-tron-text-secondary)]">
-								<span>{roll.remainingLengthFt.toFixed(1)} ft remaining</span>
-								<span>{usagePercent(roll)}% used</span>
-							</div>
-							<div class="tron-progress mt-1">
-								<div class="tron-progress-bar" style="width: {100 - usagePercent(roll)}%"></div>
-							</div>
-						</div>
+	<!-- STEP 2: Scanned — Enter expected + accepted -->
+	{#if step === 'scanned'}
+		<form method="POST" action="?/recordRun" use:enhance
+			class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5 space-y-5">
+			<input type="hidden" name="lotBarcode" value={lotBarcode} />
 
-						<!-- Actions -->
-						<div class="mt-3 flex gap-2">
-							{#if cuttingRollId === roll.rollId}
-								<form method="POST" action="?/recordCut" use:enhance={() => { return async ({ update }) => { cuttingRollId = null; cutQuantity = 10; cutNotes = ''; cutCartridgeIds = ''; await update(); }; }} class="flex flex-1 flex-col gap-2">
-									<input type="hidden" name="rollId" value={roll.rollId} />
-									<div class="flex flex-1 items-end gap-2">
-										<label class="block">
-											<span class="text-xs text-[var(--color-tron-text-secondary)]">Strips</span>
-											<input type="number" name="quantity" bind:value={cutQuantity} min="1" max="100" class="tron-input text-sm" style="width:80px" />
-										</label>
-										<label class="block flex-1">
-											<span class="text-xs text-[var(--color-tron-text-secondary)]">Notes</span>
-											<input type="text" name="notes" bind:value={cutNotes} class="tron-input text-sm" placeholder="Optional" />
-										</label>
-									</div>
-									<label class="block">
-										<span class="text-xs text-[var(--color-tron-text-secondary)]">Cartridge IDs (comma-separated, links roll lot to CartridgeRecord)</span>
-										<input type="text" name="cartridgeIds" bind:value={cutCartridgeIds} class="tron-input text-xs w-full" placeholder="e.g. abc123, def456 — leave blank if not applying yet" />
-									</label>
-									<div class="flex gap-2">
-										<button type="submit" class="min-h-[44px] rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-xs text-green-300 hover:bg-green-900/30">Cut</button>
-										<button type="button" onclick={() => { cuttingRollId = null; }} class="min-h-[44px] rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">Cancel</button>
-									</div>
-								</form>
-							{:else}
-								<button
-									type="button"
-									onclick={() => { cuttingRollId = roll.rollId; }}
-									class="rounded border border-[var(--color-tron-cyan)]/50 px-3 py-1.5 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10"
-								>
-									Record Cut
-								</button>
-								<form method="POST" action="?/retireRoll" use:enhance onsubmit={(e) => { if (!confirm('Retire this roll?')) e.preventDefault(); }}>
-									<input type="hidden" name="rollId" value={roll.rollId} />
-									<button type="submit" class="rounded border border-red-500/50 px-3 py-1.5 text-xs text-red-400 hover:bg-red-900/20">Retire</button>
-								</form>
-							{/if}
-						</div>
-					</div>
-				{/each}
+			<div class="rounded border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-cyan)]/5 px-4 py-3 flex items-center justify-between">
+				<div>
+					<p class="text-xs text-[var(--color-tron-text-secondary)]">Roll Barcode</p>
+					<p class="font-mono text-lg font-bold text-[var(--color-tron-cyan)]">{lotBarcode}</p>
+				</div>
+				<span class="rounded bg-[var(--color-tron-cyan)]/20 px-2 py-1 text-xs font-medium text-[var(--color-tron-cyan)]">Scanned ✓</span>
 			</div>
-		{/if}
-	</section>
 
-	<!-- Recent Cuts -->
-	{#if data.recentCuts.length > 0}
-		<section>
-			<h2 class="mb-3 text-lg font-medium text-[var(--color-tron-cyan)]">Recent Cuts</h2>
-			<div class="overflow-x-auto">
-				<table class="tron-table w-full text-sm">
+			<label class="block">
+				<span class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Expected Strips from this Roll</span>
+				<input type="number" name="expectedSheets" bind:value={expectedSheets} min="1"
+					class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+					autofocus />
+			</label>
+
+			<label class="block">
+				<span class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Accepted Strips</span>
+				<input type="number" name="acceptedCount" bind:value={acceptedCount} min="0"
+					class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none" />
+			</label>
+
+			{#if expectedSheets > 0 && acceptedCount >= 0}
+				<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] p-3 grid grid-cols-3 gap-3 text-center">
+					<div>
+						<p class="text-lg font-bold text-[var(--color-tron-text)]">{expectedSheets}</p>
+						<p class="text-xs text-[var(--color-tron-text-secondary)]">Expected</p>
+					</div>
+					<div>
+						<p class="text-lg font-bold text-green-400">{acceptedCount}</p>
+						<p class="text-xs text-[var(--color-tron-text-secondary)]">Accepted</p>
+					</div>
+					<div>
+						<p class="text-lg font-bold text-red-400">{expectedSheets - acceptedCount}</p>
+						<p class="text-xs text-[var(--color-tron-text-secondary)]">Rejected</p>
+					</div>
+				</div>
+				<p class="text-center text-sm">
+					Yield: <span class="font-bold text-[var(--color-tron-cyan)]">{Math.round((acceptedCount / expectedSheets) * 100)}%</span>
+				</p>
+			{/if}
+
+			<label class="block">
+				<span class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Notes (optional)</span>
+				<textarea name="notes" bind:value={notes} rows="2"
+					class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+					placeholder="Any issues or observations..."></textarea>
+			</label>
+
+			<button type="submit"
+				class="min-h-[44px] w-full rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-semibold text-[var(--color-tron-bg)] hover:opacity-90"
+				disabled={!lotBarcode || expectedSheets <= 0}>
+				Record Cut Run
+			</button>
+		</form>
+	{/if}
+
+	<!-- Run History -->
+	<section>
+		<h2 class="mb-3 text-lg font-medium text-[var(--color-tron-cyan)]">Run History ({data.runs.length})</h2>
+		{#if data.runs.length === 0}
+			<p class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center text-sm text-[var(--color-tron-text-secondary)]">No cutting runs recorded yet.</p>
+		{:else}
+			<div class="overflow-x-auto rounded-lg border border-[var(--color-tron-border)]">
+				<table class="w-full text-sm">
 					<thead>
-						<tr>
-							<th>Roll</th>
-							<th>Qty</th>
-							<th>Length Used</th>
-							<th>Notes</th>
-							<th>Date</th>
+						<tr class="border-b border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]">
+							<th class="px-3 py-2 text-left text-xs font-medium text-[var(--color-tron-text-secondary)]">Date</th>
+							<th class="px-3 py-2 text-left text-xs font-medium text-[var(--color-tron-text-secondary)]">Roll</th>
+							<th class="px-3 py-2 text-center text-xs font-medium text-[var(--color-tron-text-secondary)]">Expected</th>
+							<th class="px-3 py-2 text-center text-xs font-medium text-[var(--color-tron-text-secondary)]">Accepted</th>
+							<th class="px-3 py-2 text-center text-xs font-medium text-[var(--color-tron-text-secondary)]">Rejected</th>
+							<th class="px-3 py-2 text-center text-xs font-medium text-[var(--color-tron-text-secondary)]">Yield</th>
+							<th class="px-3 py-2 text-left text-xs font-medium text-[var(--color-tron-text-secondary)]">Operator</th>
 						</tr>
 					</thead>
 					<tbody>
-						{#each data.recentCuts as cut (cut.id)}
-							<tr>
-								<td class="font-mono text-[var(--color-tron-cyan)]">{cut.rollId}</td>
-								<td>{cut.quantityCut} strips</td>
-								<td>{cut.totalLengthUsedFt.toFixed(1)} ft</td>
-								<td class="text-[var(--color-tron-text-secondary)]">{cut.notes ?? '-'}</td>
-								<td class="text-[var(--color-tron-text-secondary)]">{new Date(cut.createdAt).toLocaleDateString()}</td>
+						{#each data.runs as run (run.id)}
+							<tr class="border-b border-[var(--color-tron-border)]/50 hover:bg-[var(--color-tron-surface)]">
+								<td class="px-3 py-2 text-xs text-[var(--color-tron-text)]">
+									{new Date(run.createdAt).toLocaleDateString()} {new Date(run.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+								</td>
+								<td class="px-3 py-2 font-mono text-xs text-[var(--color-tron-cyan)]">{run.lotBarcode}</td>
+								<td class="px-3 py-2 text-center text-[var(--color-tron-text)]">{run.expectedSheets}</td>
+								<td class="px-3 py-2 text-center text-green-400">{run.acceptedCount}</td>
+								<td class="px-3 py-2 text-center text-red-400">{run.rejectedCount}</td>
+								<td class="px-3 py-2 text-center text-[var(--color-tron-cyan)]">
+									{run.expectedSheets > 0 ? Math.round((run.acceptedCount / run.expectedSheets) * 100) : 0}%
+								</td>
+								<td class="px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">{run.operator}</td>
 							</tr>
 						{/each}
 					</tbody>
 				</table>
 			</div>
-		</section>
-	{/if}
-
-	<!-- Retired/Depleted Rolls -->
-	{#if otherRolls.length > 0}
-		<section>
-			<h2 class="mb-3 text-lg font-medium text-[var(--color-tron-text-secondary)]">Retired / Depleted Rolls</h2>
-			<div class="space-y-2">
-				{#each otherRolls as roll (roll.rollId)}
-					<div class="flex items-center justify-between rounded border border-[var(--color-tron-border)]/50 bg-[var(--color-tron-surface)]/50 px-4 py-2 text-sm">
-						<span class="font-mono text-[var(--color-tron-text-secondary)]">{roll.rollId}</span>
-						<span class="text-xs text-[var(--color-tron-text-secondary)]">{roll.remainingLengthFt.toFixed(1)} ft remaining</span>
-						<span class="tron-badge {roll.status === 'Depleted' ? 'tron-badge-error' : 'tron-badge-neutral'}">{roll.status}</span>
-					</div>
-				{/each}
-			</div>
-		</section>
-	{/if}
+		{/if}
+	</section>
 </div>

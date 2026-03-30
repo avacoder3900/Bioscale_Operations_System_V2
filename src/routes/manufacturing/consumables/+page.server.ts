@@ -5,15 +5,17 @@ import {
 	ManufacturingMaterial, ManufacturingMaterialTransaction,
 	ManufacturingSettings, PartDefinition, User, AuditLog, generateId
 } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
 	// === Pipeline counts ===
 	const phaseCounts = await CartridgeRecord.aggregate([
-		{ $group: { _id: '$currentPhase', count: { $sum: 1 } } }
+		{ $group: { _id: '$status', count: { $sum: 1 } } }
 	]);
 	const phaseMap = new Map<string, number>(phaseCounts.map((p: any) => [p._id ?? 'unknown', p.count]));
 	const backedCount = await CartridgeRecord.countDocuments({ 'backing.recordedAt': { $exists: true } });
@@ -34,10 +36,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 		status: { $nin: ['completed', 'Completed', 'aborted', 'Aborted', 'cancelled', 'Cancelled', 'voided'] }
 	});
 
-	const waxStored = await CartridgeRecord.countDocuments({ currentPhase: 'wax_stored' });
-	const reagentStored = await CartridgeRecord.countDocuments({ currentPhase: 'stored' });
-	const sealed = await CartridgeRecord.countDocuments({ currentPhase: 'sealed' });
-	const voided = await CartridgeRecord.countDocuments({ currentPhase: 'voided' });
+	const waxStored = await CartridgeRecord.countDocuments({ status: 'wax_stored' });
+	const reagentStored = await CartridgeRecord.countDocuments({ status: 'stored' });
+	const sealed = await CartridgeRecord.countDocuments({ status: 'sealed' });
+	const voided = await CartridgeRecord.countDocuments({ status: 'voided' });
 
 	// === Parts inventory (cartridge BOM) ===
 	const parts = await PartDefinition.find({ bomType: 'cartridge', isActive: true })
@@ -120,26 +122,18 @@ export const load: PageServerLoad = async ({ locals }) => {
 			activeRuns: activeWaxRuns, completedRuns: waxStats[0]?.totalRuns ?? 0
 		},
 		{
-			id: 'reagent', name: 'Reagent Filling', href: '/manufacturing/reagent-filling',
+			id: 'reagent', name: 'Reagent Filling + Top Seal', href: '/manufacturing/reagent-filling',
 			inputs: [
 				{ name: 'Wax-Filled Cartridges', icon: '🟡', count: waxStored, unit: 'available' },
 				{ name: 'Reagents (per assay)', icon: '💧', count: null as number | null, unit: 'wells' },
+				{ name: 'Top Seal Sheets', icon: '📄', count: null as number | null, unit: 'sheets' },
 				{ name: 'Pipette Tips', icon: '🔬', count: null as number | null, unit: 'tips' }
 			],
 			outputs: [
-				{ name: 'Reagent-Filled', icon: '🟣', count: reagentStored + sealed, unit: 'cartridges' },
+				{ name: 'Sealed Cartridges', icon: '✅', count: reagentStored + sealed, unit: 'cartridges' },
 				{ name: 'In Fridge', icon: '❄️', count: reagentStored, unit: 'stored' }
 			],
 			activeRuns: activeReagentRuns, completedRuns: reagentStats[0]?.totalRuns ?? 0
-		},
-		{
-			id: 'topseal-apply', name: 'Top Seal Apply', href: '/manufacturing/top-seal-cutting',
-			inputs: [
-				{ name: 'Reagent-Filled Cartridges', icon: '🟣', count: reagentStored, unit: 'available' },
-				{ name: 'Top Seal Sheets', icon: '📄', count: null as number | null, unit: 'sheets' }
-			],
-			outputs: [{ name: 'Sealed Cartridges', icon: '✅', count: sealed, unit: 'cartridges' }],
-			activeRuns: 0, completedRuns: 0
 		},
 		{
 			id: 'qaqc', name: 'QA/QC', href: '/manufacturing/qa-qc',
@@ -180,6 +174,7 @@ export const actions: Actions = {
 	/** Manual inventory edit — requires admin password + reason */
 	manualEdit: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();

@@ -8,7 +8,7 @@
 	const form = _form as any;
 
 	// Tab state
-	let activeTab = $state<'overview' | 'transactions'>('overview');
+	let activeTab = $state<'overview' | 'transactions' | 'receiving'>('overview');
 
 	// Filter state
 	let typeFilter = $state(data.filters.type ?? '');
@@ -20,6 +20,13 @@
 	let retractingId = $state<string | null>(null);
 	let retractReason = $state('');
 	let retracting = $state(false);
+
+	// Admin edit transaction state
+	let editingTxnId = $state<string | null>(null);
+	let editTxnQuantity = $state(0);
+	let editTxnReason = $state('');
+	let editingTxn = $state(false);
+	let editTxnSuccess = $state(false);
 
 	function formatCurrency(value: number | null): string {
 		if (value === null || value === undefined) return '—';
@@ -143,6 +150,13 @@
 			Minimum stock level updated successfully.
 		</div>
 	{/if}
+	{#if editTxnSuccess}
+		<div
+			class="rounded border border-[var(--color-tron-green)] bg-[color-mix(in_srgb,var(--color-tron-green)_10%,transparent)] px-4 py-2 text-[var(--color-tron-green)]"
+		>
+			Transaction updated successfully.
+		</div>
+	{/if}
 	{#if form?.error}
 		<div
 			class="rounded border border-[var(--color-tron-error)] bg-[color-mix(in_srgb,var(--color-tron-error)_10%,transparent)] px-4 py-2 text-[var(--color-tron-error)]"
@@ -174,6 +188,19 @@
 			Transaction History
 			{#if data.inventoryTransactions.length > 0}
 				<span class="tab-count">{data.inventoryTransactions.length}</span>
+			{/if}
+		</button>
+		<button
+			class="tab-btn"
+			class:active={activeTab === 'receiving'}
+			onclick={() => (activeTab = 'receiving')}
+		>
+			<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+			</svg>
+			Receiving Lots
+			{#if data.receivingLots?.length > 0}
+				<span class="tab-count">{data.receivingLots.length}</span>
 			{/if}
 		</button>
 	</div>
@@ -743,59 +770,124 @@
 										{/if}
 									</td>
 									<td>
-										{#if !txn.retractedAt && txn.transactionType === 'deduction'}
-											{#if retractingId === txn.id}
-												<form
-													method="POST"
-													action="?/retractTransaction"
-													use:enhance={() => {
-														retracting = true;
-														return async ({ update }) => {
-															retracting = false;
-															retractingId = null;
-															retractReason = '';
-															await update();
-														};
-													}}
-													class="retract-form"
-												>
-													<input type="hidden" name="transactionId" value={txn.id} />
-													<input
-														type="text"
-														name="reason"
-														class="retract-reason-input"
-														placeholder="Reason for retraction..."
-														bind:value={retractReason}
-														required
-													/>
-													<div class="retract-actions">
-														<button
-															type="submit"
-															class="retract-confirm-btn"
-															disabled={retracting || !retractReason.trim()}
-														>
-															{retracting ? 'Retracting...' : 'Confirm'}
-														</button>
-														<button
-															type="button"
-															class="retract-cancel-btn"
-															onclick={() => { retractingId = null; retractReason = ''; }}
-														>
-															Cancel
-														</button>
-													</div>
-												</form>
-											{:else}
-												<button
-													class="retract-btn"
-													onclick={() => (retractingId = txn.id)}
-												>
-													Retract
-												</button>
+										<div class="flex items-center gap-2">
+											{#if !txn.retractedAt && txn.transactionType === 'deduction'}
+												{#if retractingId === txn.id}
+													<form
+														method="POST"
+														action="?/retractTransaction"
+														use:enhance={() => {
+															retracting = true;
+															return async ({ update }) => {
+																retracting = false;
+																retractingId = null;
+																retractReason = '';
+																await update();
+															};
+														}}
+														class="retract-form"
+													>
+														<input type="hidden" name="transactionId" value={txn.id} />
+														<input
+															type="text"
+															name="reason"
+															class="retract-reason-input"
+															placeholder="Reason for retraction..."
+															bind:value={retractReason}
+															required
+														/>
+														<div class="retract-actions">
+															<button
+																type="submit"
+																class="retract-confirm-btn"
+																disabled={retracting || !retractReason.trim()}
+															>
+																{retracting ? 'Retracting...' : 'Confirm'}
+															</button>
+															<button
+																type="button"
+																class="retract-cancel-btn"
+																onclick={() => { retractingId = null; retractReason = ''; }}
+															>
+																Cancel
+															</button>
+														</div>
+													</form>
+												{:else}
+													<button
+														class="retract-btn"
+														onclick={() => (retractingId = txn.id)}
+													>
+														Retract
+													</button>
+												{/if}
+											{:else if !txn.retractedAt}
+												<span class="tron-text-muted">—</span>
 											{/if}
-										{:else}
-											<span class="tron-text-muted">—</span>
-										{/if}
+											{#if data.isAdmin && !txn.retractedAt}
+												{#if editingTxnId === txn.id}
+													<form
+														method="POST"
+														action="?/editTransaction"
+														use:enhance={() => {
+															editingTxn = true;
+															return async ({ result, update }) => {
+																editingTxn = false;
+																if (result.type === 'success' && result.data?.editSuccess) {
+																	editTxnSuccess = true;
+																	editingTxnId = null;
+																	editTxnReason = '';
+																	setTimeout(() => { editTxnSuccess = false; }, 3000);
+																}
+																await update();
+															};
+														}}
+														class="flex flex-col gap-1 min-w-[200px]"
+													>
+														<input type="hidden" name="transactionId" value={txn.id} />
+														<label class="text-xs tron-text-muted">New Quantity</label>
+														<input
+															type="number"
+															name="newQuantity"
+															class="w-full px-2 py-1 text-xs rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-dark)] text-[var(--color-tron-text)]"
+															bind:value={editTxnQuantity}
+															required
+														/>
+														<textarea
+															name="reason"
+															class="w-full px-2 py-1 text-xs rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-dark)] text-[var(--color-tron-text)]"
+															placeholder="Reason for edit..."
+															bind:value={editTxnReason}
+															required
+															rows="2"
+														></textarea>
+														<div class="flex gap-1">
+															<button
+																type="submit"
+																class="px-2 py-0.5 text-xs rounded bg-[var(--color-tron-cyan)] text-black font-medium hover:opacity-80"
+																disabled={editingTxn || !editTxnReason.trim()}
+															>
+																{editingTxn ? 'Saving...' : 'Save'}
+															</button>
+															<button
+																type="button"
+																class="px-2 py-0.5 text-xs rounded border border-[var(--color-tron-border)] tron-text-muted hover:opacity-80"
+																onclick={() => { editingTxnId = null; editTxnReason = ''; }}
+															>
+																Cancel
+															</button>
+														</div>
+													</form>
+												{:else}
+													<button
+														class="px-2 py-0.5 text-xs rounded border border-[var(--color-tron-border)] tron-text-muted hover:text-[var(--color-tron-cyan)] hover:border-[var(--color-tron-cyan)]"
+														onclick={() => { editingTxnId = txn.id; editTxnQuantity = txn.quantity; editTxnReason = ''; }}
+													>
+														Edit
+													</button>
+												{/if}
+											{/if}
+										</div>
 									</td>
 								</tr>
 							{/each}
@@ -927,6 +1019,61 @@
 				{/if}
 			</div>
 		{/if}
+	<!-- ===== RECEIVING LOTS TAB ===== -->
+	{#if activeTab === 'receiving'}
+		<div class="p-4">
+			{#if data.receivingLots?.length > 0}
+				<div class="mb-3 text-sm tron-text-muted">
+					Total received: <strong class="tron-text-primary">{data.receivingLotsTotalQty}</strong> units across {data.receivingLots.length} lot{data.receivingLots.length !== 1 ? 's' : ''}
+				</div>
+				<div class="overflow-x-auto">
+					<table class="w-full text-sm">
+						<thead>
+							<tr class="border-b" style="border-color: var(--color-tron-border);">
+								<th class="text-left p-2 font-medium tron-text-muted">Lot #</th>
+								<th class="text-left p-2 font-medium tron-text-muted">Barcode</th>
+								<th class="text-right p-2 font-medium tron-text-muted">Qty</th>
+								<th class="text-left p-2 font-medium tron-text-muted">Status</th>
+								<th class="text-left p-2 font-medium tron-text-muted">Operator</th>
+								<th class="text-left p-2 font-medium tron-text-muted">Date</th>
+								<th class="text-left p-2 font-medium tron-text-muted">CoC</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each data.receivingLots as lot}
+								<tr class="border-b hover:bg-white/5" style="border-color: var(--color-tron-border);">
+									<td class="p-2">
+										<a href="/receiving/{lot.id}" class="text-cyan-400 hover:underline font-mono text-xs">{lot.lotNumber}</a>
+									</td>
+									<td class="p-2 font-mono text-xs tron-text-muted">{lot.bagBarcode || lot.lotId || '—'}</td>
+									<td class="p-2 text-right tron-text-primary">{lot.quantity}</td>
+									<td class="p-2">
+										<span class="px-2 py-0.5 rounded text-xs font-medium" class:bg-green-900={lot.status === 'accepted'} class:text-green-300={lot.status === 'accepted'} class:bg-yellow-900={lot.status === 'pending'} class:text-yellow-300={lot.status === 'pending'} class:bg-red-900={lot.status === 'rejected'} class:text-red-300={lot.status === 'rejected'}>
+											{lot.status}
+										</span>
+									</td>
+									<td class="p-2 tron-text-muted">{lot.operator ?? '—'}</td>
+									<td class="p-2 tron-text-muted text-xs">{lot.createdAt ? new Date(lot.createdAt).toLocaleDateString() : '—'}</td>
+									<td class="p-2">
+										{#if lot.cocDocumentUrl}
+											<a href={lot.cocDocumentUrl} target="_blank" class="text-cyan-400 hover:underline text-xs">View CoC</a>
+										{:else}
+											<span class="tron-text-muted text-xs">—</span>
+										{/if}
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{:else}
+				<div class="empty-state">
+					<p class="tron-text-muted">No receiving lots recorded for this part.</p>
+					<p class="tron-text-muted text-xs mt-1">Use the <a href="/parts/accession" class="text-cyan-400 hover:underline">Part Accession</a> page to scan incoming inventory.</p>
+				</div>
+			{/if}
+		</div>
+	{/if}
 	</TronCard>
 </div>
 

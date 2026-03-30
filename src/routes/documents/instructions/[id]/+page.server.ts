@@ -1,8 +1,10 @@
-import { error, fail } from '@sveltejs/kit';
+import { error, fail, redirect } from '@sveltejs/kit';
 import { connectDB, WorkInstruction, ProductionRun, User, PartDefinition, generateId } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
+	requirePermission(locals.user, 'workInstruction:read');
 	await connectDB();
 	const wi = await WorkInstruction.findById(params.id).lean() as any;
 	if (!wi) error(404, 'Work instruction not found');
@@ -130,7 +132,9 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 };
 
 export const actions: Actions = {
-	changeStatus: async ({ request, params }) => {
+	changeStatus: async ({ request, params, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'workInstruction:write');
 		await connectDB();
 		try {
 			const data = await request.formData();
@@ -148,6 +152,8 @@ export const actions: Actions = {
 	},
 
 	createRun: async ({ request, params, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'workInstruction:write');
 		await connectDB();
 		try {
 			const data = await request.formData();
@@ -194,6 +200,8 @@ export const actions: Actions = {
 	},
 
 	bulkCancelRuns: async ({ request, params, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'workInstruction:write');
 		await connectDB();
 		try {
 			const data = await request.formData();

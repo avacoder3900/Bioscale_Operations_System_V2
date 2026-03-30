@@ -20,7 +20,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 			{ 'storage.containerBarcode': { $regex: query, $options: 'i' } }
 		]
 	})
-		.select('_id currentPhase backing.lotId reagentFilling.assayType.name storage.fridgeName createdAt')
+		.select('_id status backing.lotId reagentFilling.assayType.name storage.fridgeName createdAt')
 		.sort({ createdAt: -1 })
 		.limit(20)
 		.lean();
@@ -29,7 +29,7 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 		success: true,
 		results: (cartridges as any[]).map(c => ({
 			cartridgeId: c._id,
-			currentPhase: c.currentPhase ?? 'unknown',
+			currentPhase: c.status ?? 'unknown',
 			lotId: c.backing?.lotId ?? null,
 			assayType: c.reagentFilling?.assayType?.name ?? null,
 			storageLocation: c.storage?.fridgeName ?? null,

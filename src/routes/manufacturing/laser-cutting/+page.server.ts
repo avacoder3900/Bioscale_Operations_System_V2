@@ -1,14 +1,16 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, LaserCutBatch, ManufacturingSettings, ManufacturingMaterial,
-	ManufacturingMaterialTransaction, generateId
+	ManufacturingMaterialTransaction, AuditLog, generateId
 } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import { nanoid } from 'nanoid';
-import { recordTransaction } from '$lib/server/services/inventory-transaction';
+import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
 	const [batches, settingsDoc, materials] = await Promise.all([
@@ -45,7 +47,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			inputLotId: b.inputLotId ?? null,
 			outputLotId: b.outputLotId ?? null,
 			operator: b.operator ?? null,
-			createdAt: b.createdAt
+			createdAt: b.createdAt instanceof Date ? b.createdAt.toISOString() : String(b.createdAt ?? '')
 		})),
 		stats: { totalBatches, totalInput, totalOutput, totalFailures, failureRate },
 		defaults: {
@@ -66,6 +68,7 @@ export const actions: Actions = {
 	/** Record a completed laser-cut batch and update inventory */
 	recordBatch: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -153,12 +156,24 @@ export const actions: Actions = {
 			notes: `Laser cut batch: ${inputSheetCount} input → ${outputSheetCount} output (${failureCount} failures)`
 		});
 
+		// Audit log for batch record creation
+		const batchRecord = await LaserCutBatch.findOne({ operatorId: locals.user._id, outputLotId }).lean() as any;
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'laser_cut_batches',
+			recordId: batchRecord?._id ?? outputLotId,
+			action: 'INSERT',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
+		});
+
 		return { success: true };
 	},
 
 	/** Save default settings to ManufacturingSettings */
 	saveDefaults: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();

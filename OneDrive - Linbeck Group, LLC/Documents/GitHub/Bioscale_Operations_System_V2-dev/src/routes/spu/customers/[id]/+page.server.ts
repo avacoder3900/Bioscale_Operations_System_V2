@@ -1,10 +1,12 @@
 import { fail, redirect, error } from '@sveltejs/kit';
 import { connectDB, Customer, Spu, AuditLog } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'customer:read');
 	await connectDB();
 
 	const customer = await Customer.findById(params.id).lean() as any;
@@ -51,6 +53,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 export const actions: Actions = {
 	update: async ({ request, locals, params }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'customer:write');
 		await connectDB();
 		const fd = await request.formData();
 		const name = fd.get('name') as string;
@@ -76,6 +79,7 @@ export const actions: Actions = {
 
 	addNote: async ({ request, locals, params }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'customer:write');
 		await connectDB();
 		const fd = await request.formData();
 		const content = fd.get('content') as string;
@@ -97,6 +101,7 @@ export const actions: Actions = {
 
 	deactivate: async ({ locals, params }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'customer:write');
 		await connectDB();
 		await Customer.updateOne({ _id: params.id }, { $set: { status: 'inactive' } });
 
@@ -110,6 +115,7 @@ export const actions: Actions = {
 
 	reactivate: async ({ locals, params }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'customer:write');
 		await connectDB();
 		await Customer.updateOne({ _id: params.id }, { $set: { status: 'active' } });
 

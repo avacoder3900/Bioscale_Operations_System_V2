@@ -1,215 +1,136 @@
 import { redirect, fail } from '@sveltejs/kit';
-import { connectDB, Consumable, ManufacturingSettings, CartridgeRecord, generateId } from '$lib/server/db';
-import { recordTransaction } from '$lib/server/services/inventory-transaction';
+import { connectDB, AuditLog, PartDefinition, generateId } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
+import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
+import mongoose from 'mongoose';
+
+function getCollection() {
+	return mongoose.connection.db!.collection('top_seal_cutting_runs');
+}
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
-	const [rollsRaw, settingsDoc] = await Promise.all([
-		Consumable.find({ type: 'top_seal_roll' }).sort({ createdAt: -1 }).lean(),
-		ManufacturingSettings.findById('default').lean()
+	const [runs, topSealPart, settingsDoc] = await Promise.all([
+		getCollection().find({}).sort({ createdAt: -1 }).limit(50).toArray(),
+		PartDefinition.findOne({ partNumber: 'PT-CT-103' }).lean(),
+		mongoose.connection.db!.collection('manufacturing_settings').findOne({ _id: 'default' })
 	]);
 
-	const lengthPerCutFt: number = (settingsDoc as any)?.general?.topSealLengthPerCutFt ?? 0.5;
+	const defaultExpectedStrips = (settingsDoc as any)?.topSealCutting?.expectedStripsPerRoll ?? 30;
+	const allRuns = await getCollection().find({}).toArray();
+	const totalStripsProduced = allRuns.reduce((sum: number, r: any) => sum + (r.acceptedCount ?? 0), 0);
 
-	const rolls = (rollsRaw as any[]).map((r) => {
-		const remaining = r.remainingLengthFt ?? r.initialLengthFt ?? 0;
-		const initial = r.initialLengthFt ?? 0;
-		let status = r.status ?? 'active';
-		// Normalize status to PascalCase for display
-		if (status === 'active') status = 'Active';
-		else if (status === 'retired' || status === 'Retired') status = 'Retired';
-		else if (remaining <= 0) status = 'Depleted';
-
-		return {
-			rollId: String(r._id),
-			barcode: r.barcode ?? null,
-			initialLengthFt: initial,
-			remainingLengthFt: remaining,
-			status,
-			createdBy: r.registeredBy ? String(r.registeredBy) : '',
-			createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : '',
-			updatedAt: r.updatedAt ? new Date(r.updatedAt).toISOString() : ''
-		};
-	});
-
-	// Build recentCuts from usageLogs across all rolls
-	const recentCuts: {
-		id: string; rollId: string; quantityCut: number;
-		lengthPerCutFt: number; totalLengthUsedFt: number;
-		operatorId: string; notes: string | null; createdAt: string;
-	}[] = [];
-
-	for (const r of rollsRaw as any[]) {
-		for (const u of r.usageLog ?? []) {
-			if (u.usageType === 'cut') {
-				const quantityCut = Math.abs(u.quantityChanged ?? 0);
-				// Compute total length from remaining before/after, fall back to qty × rate
-				const totalLengthUsedFt = u.remainingBefore != null && u.remainingAfter != null
-					? Math.abs(u.remainingBefore - u.remainingAfter)
-					: quantityCut * lengthPerCutFt;
-				recentCuts.push({
-					id: u._id ? String(u._id) : generateId(),
-					rollId: String(r._id),
-					quantityCut,
-					lengthPerCutFt,
-					totalLengthUsedFt,
-					operatorId: u.operator?._id ? String(u.operator._id) : '',
-					notes: u.notes ?? null,
-					createdAt: u.createdAt ? new Date(u.createdAt).toISOString() : ''
-				});
-			}
-		}
-	}
-
-	// Sort cuts newest first, take most recent 50
-	recentCuts.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-	const topCuts = recentCuts.slice(0, 50);
-
-	return { rolls, recentCuts: topCuts };
+	return {
+		inventory: {
+			rollStock: (topSealPart as any)?.inventoryCount ?? 0,
+			rollPartName: (topSealPart as any)?.name ?? 'Top Seal',
+			totalStripsProduced
+		},
+		defaultExpectedStrips,
+		runs: runs.map((r: any) => ({
+			id: String(r._id),
+			lotBarcode: r.lotBarcode ?? '—',
+			expectedSheets: r.expectedSheets ?? 0,
+			cutCount: r.cutCount ?? 0,
+			acceptedCount: r.acceptedCount ?? 0,
+			rejectedCount: (r.cutCount ?? 0) - (r.acceptedCount ?? 0),
+			operator: r.operator?.username ?? 'unknown',
+			notes: r.notes ?? null,
+			status: r.status ?? 'completed',
+			createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : ''
+		}))
+	};
 };
 
 export const actions: Actions = {
-	/** Register a new top seal roll */
-	registerRoll: async ({ request, locals }) => {
+	updateExpected: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
-
 		const data = await request.formData();
-		const barcode = (data.get('barcode') as string) || undefined;
-
-		// Check for duplicate barcode
-		if (barcode) {
-			const existing = await Consumable.findOne({ type: 'top_seal_roll', barcode }).lean();
-			if (existing) {
-				return fail(400, { error: `A roll with barcode "${barcode}" already exists.` });
-			}
-		}
-
-		const settingsDoc = await ManufacturingSettings.findById('default').lean() as any;
-		const defaultLength = settingsDoc?.general?.defaultRollLengthFt ?? 100;
-
-		await Consumable.create({
-			_id: generateId(),
-			type: 'top_seal_roll',
-			barcode: barcode || undefined,
-			initialLengthFt: defaultLength,
-			remainingLengthFt: defaultLength,
-			status: 'active',
-			registeredBy: locals.user._id,
-			usageLog: []
-		});
-
-		return { success: true };
+		const password = (data.get('adminPassword') as string)?.trim();
+		const newValue = Number(data.get('newExpected') || 0);
+		if (password !== 'admin123') return fail(403, { settingsError: 'Invalid admin password' });
+		if (newValue <= 0) return fail(400, { settingsError: 'Value must be > 0' });
+		await mongoose.connection.db!.collection('manufacturing_settings').updateOne(
+			{ _id: 'default' },
+			{ $set: { 'topSealCutting.expectedStripsPerRoll': newValue, updatedAt: new Date() } },
+			{ upsert: true }
+		);
+		await AuditLog.create({ _id: generateId(), tableName: 'manufacturing_settings', recordId: 'default', action: 'UPDATE', changedBy: locals.user.username, changedAt: new Date(), newData: { 'topSealCutting.expectedStripsPerRoll': newValue } });
+		return { settingsSuccess: true };
 	},
 
-	/** Record a cut — consumes strips from the active roll */
-	recordCut: async ({ request, locals }) => {
+	generateTestBarcode: async ({ locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		const barcode = `TSEAL-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+		return { testBarcode: barcode };
+	},
+
+	recordRun: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();
-		const rollId = data.get('rollId') as string;
-		const quantityCut = Number(data.get('quantity') || 0);
+		const lotBarcode = (data.get('lotBarcode') as string)?.trim();
+		const expectedSheets = Number(data.get('expectedSheets') || 0);
+		const cutCount = Number(data.get('cutCount') || 0);
+		const acceptedCount = Number(data.get('acceptedCount') || 0);
 		const notes = (data.get('notes') as string) || undefined;
-		// Optional: comma-separated cartridge IDs to link roll lot to CartridgeRecord.topSeal
-		const cartridgeIdsRaw = (data.get('cartridgeIds') as string) || '';
-		const cartridgeIds = cartridgeIdsRaw.split(',').map((s) => s.trim()).filter(Boolean);
 
-		if (!rollId) return fail(400, { error: 'Roll ID required' });
-		if (quantityCut <= 0) return fail(400, { error: 'Quantity must be greater than 0' });
-
-		const roll = await Consumable.findById(rollId).lean() as any;
-		if (!roll) return fail(404, { error: 'Roll not found' });
-		if (roll.status === 'retired' || roll.status === 'Retired') {
-			return fail(400, { error: 'Cannot cut from a retired roll' });
-		}
-
-		const settingsDoc = await ManufacturingSettings.findById('default').lean() as any;
-		const lengthPerCutFt: number = settingsDoc?.general?.topSealLengthPerCutFt ?? 0.5;
-		const totalLengthUsed = quantityCut * lengthPerCutFt;
-		const remainingBefore = roll.remainingLengthFt ?? roll.initialLengthFt ?? 0;
-		const remainingAfter = Math.max(0, remainingBefore - totalLengthUsed);
-		const now = new Date();
-
-		// The roll barcode is the lot identifier for top seal traceability
-		const rollLotId = roll.barcode ?? rollId;
-
-		await Consumable.findByIdAndUpdate(rollId, {
-			$set: { remainingLengthFt: remainingAfter, updatedAt: now },
-			$push: {
-				usageLog: {
-					_id: generateId(),
-					usageType: 'cut',
-					quantityChanged: quantityCut,
-					totalLengthUsedFt: totalLengthUsed,
-					remainingBefore,
-					remainingAfter,
-					operator: { _id: locals.user._id, username: locals.user.username },
-					notes,
-					createdAt: now
-				}
-			}
-		});
-
-		// Link roll lot to CartridgeRecord.topSeal for each specified cartridge
-		if (cartridgeIds.length > 0) {
-			await CartridgeRecord.updateMany(
-				{ _id: { $in: cartridgeIds } },
-				{
-					$set: {
-						'topSeal.batchId': rollId,
-						'topSeal.topSealLotId': rollLotId,
-						'topSeal.operator': { _id: locals.user._id, username: locals.user.username },
-						'topSeal.timestamp': now,
-						'topSeal.recordedAt': now,
-						currentPhase: 'sealed'
-					}
-				}
-			);
-		}
-
-		// Record inventory transaction for top seal consumption
-		await recordTransaction({
-			transactionType: 'consumption',
-			quantity: quantityCut,
-			manufacturingStep: 'top_seal',
-			operatorId: locals.user._id,
-			operatorUsername: locals.user.username,
-			notes: `Applied top seal from roll ${rollLotId} to ${cartridgeIds.length > 0 ? `${cartridgeIds.length} cartridges` : `${quantityCut} strips cut`}${notes ? ` — ${notes}` : ''}`
-		});
-
-		return { success: true, rollLotId };
-	},
-
-	/** Retire a roll (mark as no longer in use) */
-	retireRoll: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const rollId = data.get('rollId') as string;
-
-		if (!rollId) return fail(400, { error: 'Roll ID required' });
+		if (!lotBarcode) return fail(400, { error: 'Lot barcode is required — scan the roll first' });
+		if (expectedSheets <= 0) return fail(400, { error: 'Expected sheets must be > 0' });
+		if (cutCount <= 0) return fail(400, { error: 'Cut count must be > 0' });
+		if (acceptedCount < 0) return fail(400, { error: 'Accepted count cannot be negative' });
+		if (acceptedCount > cutCount) return fail(400, { error: 'Accepted count cannot exceed cut count' });
 
 		const now = new Date();
-		await Consumable.findByIdAndUpdate(rollId, {
-			$set: { status: 'retired', updatedAt: now },
-			$push: {
-				usageLog: {
-					_id: generateId(),
-					usageType: 'retired',
-					operator: { _id: locals.user._id, username: locals.user.username },
-					notes: 'Roll retired',
-					createdAt: now
-				}
-			}
+		const runId = generateId();
+
+		await getCollection().insertOne({
+			_id: runId,
+			lotBarcode,
+			expectedSheets,
+			cutCount,
+			acceptedCount,
+			operator: { _id: locals.user._id, username: locals.user.username },
+			notes: notes || null,
+			status: 'completed',
+			createdAt: now,
+			updatedAt: now
+		});
+
+		const topSealPartId = await resolvePartId('PT-CT-103');
+		if (topSealPartId) {
+			await recordTransaction({
+				transactionType: 'consumption',
+				partDefinitionId: topSealPartId,
+				quantity: 1,
+				manufacturingStep: 'cut_top_seal',
+				manufacturingRunId: runId,
+				operatorId: locals.user._id,
+				operatorUsername: locals.user.username,
+				lotId: lotBarcode,
+				notes: `Cut top seal [${lotBarcode}]: ${acceptedCount} accepted of ${cutCount} cut (${expectedSheets} sheets expected)`
+			});
+		}
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'top_seal_cutting_runs',
+			recordId: runId,
+			action: 'INSERT',
+			changedBy: locals.user.username,
+			changedAt: now,
+			newData: { lotBarcode, expectedSheets, cutCount, acceptedCount }
 		});
 
 		return { success: true };
 	}
 };
-
-export const config = { maxDuration: 60 };

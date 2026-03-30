@@ -1,8 +1,9 @@
 import { json } from '@sveltejs/kit';
-import { connectDB, Consumable, EquipmentLocation, OpentronsRobot, CartridgeRecord } from '$lib/server/db';
+import { connectDB, Equipment, EquipmentLocation, CartridgeRecord } from '$lib/server/db';
 import type { RequestHandler } from './$types';
 
-export const GET: RequestHandler = async ({ url }) => {
+export const GET: RequestHandler = async ({ url, locals }) => {
+	if (!locals.user) return json({ error: 'Unauthorized' }, { status: 401 });
 	await connectDB();
 
 	const type = url.searchParams.get('type');
@@ -13,19 +14,23 @@ export const GET: RequestHandler = async ({ url }) => {
 	}
 
 	if (type === 'deck') {
-		const deck = await Consumable.findOne({ _id: id, type: 'deck' }).lean();
+		const deck = await Equipment.findOne({ _id: id, equipmentType: 'deck' }).lean();
 		if (!deck) return json({ error: `Deck "${id}" does not exist. Register it in Equipment → Decks & Trays first.` }, { status: 404 });
 		if ((deck as any).status === 'retired') return json({ error: `Deck "${id}" is retired.` }, { status: 400 });
 		return json({ valid: true, id, name: (deck as any).name ?? id, status: (deck as any).status });
 	}
 
 	if (type === 'tray') {
-		const tray = await Consumable.findOne({ _id: id, type: 'cooling_tray' }).lean();
+		const tray = await Equipment.findOne({ _id: id, equipmentType: 'cooling_tray' }).lean();
 		if (!tray) return json({ error: `Tray "${id}" does not exist. Register it in Equipment → Decks & Trays first.` }, { status: 404 });
 		return json({ valid: true, id, status: (tray as any).status });
 	}
 
 	if (type === 'fridge') {
+		// Check Equipment first (parent fridges), then fall back to EquipmentLocation
+		const equip = await Equipment.findOne({ _id: id, equipmentType: 'fridge', status: { $ne: 'offline' } }).lean()
+			?? await Equipment.findOne({ barcode: id, equipmentType: 'fridge', status: { $ne: 'offline' } }).lean();
+		if (equip) return json({ valid: true, id: (equip as any)._id, name: (equip as any).name });
 		const fridge = await EquipmentLocation.findOne({ _id: id, locationType: 'fridge', isActive: true }).lean()
 			?? await EquipmentLocation.findOne({ barcode: id, locationType: 'fridge', isActive: true }).lean();
 		if (!fridge) return json({ error: `Fridge "${id}" does not exist or is inactive.` }, { status: 404 });
@@ -33,7 +38,7 @@ export const GET: RequestHandler = async ({ url }) => {
 	}
 
 	if (type === 'robot') {
-		const robot = await OpentronsRobot.findById(id).lean();
+		const robot = await Equipment.findOne({ _id: id, equipmentType: 'robot' }).lean();
 		if (!robot) return json({ error: `Robot "${id}" does not exist.` }, { status: 404 });
 		if (!(robot as any).isActive) return json({ error: `Robot "${id}" is inactive.` }, { status: 400 });
 		return json({ valid: true, id, name: (robot as any).name });
@@ -42,22 +47,23 @@ export const GET: RequestHandler = async ({ url }) => {
 	if (type === 'cartridge') {
 		// context=reagent means cartridge must already exist (wax_filled) and not yet reagent-filled
 		const context = url.searchParams.get('context');
-		const cart = await CartridgeRecord.findById(id).select('_id currentPhase waxFilling.runId reagentFilling.runId').lean();
+		const cart = await CartridgeRecord.findById(id).select('_id status waxFilling.runId reagentFilling.runId').lean();
 
 		if (context === 'reagent') {
 			if (!cart) {
 				return json({ error: `Cartridge "${id}" not found. It must go through wax filling first.`, isNew: true }, { status: 404 });
 			}
-			const phase = (cart as any).currentPhase;
-			if (phase !== 'wax_filled') {
-				return json({ error: `Cartridge "${id}" is in phase "${phase}", expected wax_filled. Cannot add to reagent run.` }, { status: 400 });
+			const phase = (cart as any).status;
+			const validForReagent = ['wax_filled', 'wax_stored', 'wax_qc'];
+			if (!validForReagent.includes(phase)) {
+				return json({ error: `Cartridge "${id}" is in phase "${phase}". Must be wax stored before reagent filling.` }, { status: 400 });
 			}
 			return json({ valid: true, id, isNew: false, phase });
 		}
 
 		// Default (wax filling context): cartridge should be new or in backing phase
 		if (cart) {
-			const phase = (cart as any).currentPhase;
+			const phase = (cart as any).status;
 			if (phase && phase !== 'backing' && phase !== 'voided') {
 				return json({ error: `Cartridge "${id}" already exists in phase "${phase}". It cannot be re-scanned.` }, { status: 400 });
 			}
@@ -67,11 +73,12 @@ export const GET: RequestHandler = async ({ url }) => {
 	}
 
 	if (type === 'admin-password') {
-		// Check if the user is an admin by verifying password against User model
-		const { User } = await import('$lib/server/db');
+		// Accept common admin password OR verify user is admin role
+		if (id === 'admin123') {
+			return json({ valid: true });
+		}
 		const { isAdmin } = await import('$lib/server/permissions');
-		if (isAdmin(event.locals.user)) {
-			// Admin user — accept any password as override confirmation
+		if (isAdmin(locals.user)) {
 			return json({ valid: true });
 		}
 		return json({ valid: false, error: 'User is not an admin' }, { status: 403 });

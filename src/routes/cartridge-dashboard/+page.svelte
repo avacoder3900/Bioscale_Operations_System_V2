@@ -52,6 +52,9 @@
 	const waxTotal = $derived((data.waxQc['Accepted'] ?? 0) + (data.waxQc['Rejected'] ?? 0));
 	const reagentTotal = $derived((data.reagentInspection['Accepted'] ?? 0) + (data.reagentInspection['Rejected'] ?? 0));
 
+	// Assay section toggle
+	let assayExpanded = $state(false);
+
 	// QC yield rates
 	const waxYield = $derived(() => {
 		return waxTotal > 0 ? (((data.waxQc['Accepted'] ?? 0) / waxTotal) * 100).toFixed(1) : '—';
@@ -189,31 +192,70 @@
 				</div>
 			</TronCard>
 
-			<!-- Assay Breakdown -->
+			<!-- Assay Breakdown (collapsible) -->
 			{#if data.assayBreakdown.length > 0}
 				<TronCard>
-					<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">By Assay</h3>
-					<div class="space-y-2">
-						{#each data.assayBreakdown as assay}
-							<div class="flex items-center justify-between">
-								<span class="text-xs text-[var(--color-tron-text)] truncate">{assay.name}</span>
-								<span class="text-xs font-mono font-bold text-[var(--color-tron-cyan)] ml-2">{assay.count}</span>
-							</div>
+					<button
+						class="w-full flex items-center justify-between text-left"
+						onclick={() => assayExpanded = !assayExpanded}
+					>
+						<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">Assay Inventory ({data.assayBreakdown.length} types)</h3>
+						<span class="text-xs text-[var(--color-tron-text-secondary)] transition-transform" style="display:inline-block; transform: rotate({assayExpanded ? 180 : 0}deg)">▼</span>
+					</button>
+					{#if assayExpanded}
+						<div class="space-y-2 mt-3">
+							{#each data.assayBreakdown as assay}
+								<div class="flex items-center justify-between">
+									<span class="text-xs text-[var(--color-tron-text)] truncate">{assay.name}</span>
+									<span class="text-xs font-mono font-bold text-[var(--color-tron-cyan)] ml-2">{assay.count}</span>
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</TronCard>
+			{/if}
+
+			<!-- Fridge Storage -->
+			{#if data.storageDistribution.length > 0}
+				<TronCard>
+					<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Fridge Storage</h3>
+					<div class="space-y-1.5">
+						{#each data.storageDistribution as loc}
+							<a href="/equipment/location/{loc.locationId}" class="flex items-center justify-between rounded px-2 py-1.5 hover:bg-[var(--color-tron-surface)] transition-colors">
+								<div class="flex items-center gap-2">
+									<span class="text-sm">🧊</span>
+									<span class="text-xs text-[var(--color-tron-text)]">{loc.locationName}</span>
+								</div>
+								<div class="flex items-center gap-2">
+									<span class="text-xs font-mono font-bold text-[var(--color-tron-cyan)]">{loc.count}</span>
+									{#if loc.capacity}
+										<span class="text-[10px] text-[var(--color-tron-text-secondary)]">/ {loc.capacity}</span>
+									{/if}
+								</div>
+							</a>
 						{/each}
 					</div>
 				</TronCard>
 			{/if}
 
-			<!-- Storage Distribution -->
-			{#if data.storageDistribution.length > 0}
+			<!-- Oven Storage -->
+			{#if data.ovenDistribution.length > 0}
 				<TronCard>
-					<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Fridge Storage</h3>
-					<div class="space-y-2">
-						{#each data.storageDistribution as loc}
-							<div class="flex items-center justify-between">
-								<span class="text-xs text-[var(--color-tron-text)]">{loc.locationName}</span>
-								<span class="text-xs font-mono font-bold text-[var(--color-tron-cyan)]">{loc.count}</span>
-							</div>
+					<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Ovens</h3>
+					<div class="space-y-1.5">
+						{#each data.ovenDistribution as loc}
+							<a href="/equipment/location/{loc.locationId}" class="flex items-center justify-between rounded px-2 py-1.5 hover:bg-[var(--color-tron-surface)] transition-colors">
+								<div class="flex items-center gap-2">
+									<span class="text-sm">🔥</span>
+									<span class="text-xs text-[var(--color-tron-text)]">{loc.locationName}</span>
+								</div>
+								<div class="flex items-center gap-2">
+									<span class="text-xs font-mono font-bold text-[var(--color-tron-cyan)]">{loc.count}</span>
+									{#if loc.capacity}
+										<span class="text-[10px] text-[var(--color-tron-text-secondary)]">/ {loc.capacity}</span>
+									{/if}
+								</div>
+							</a>
 						{/each}
 					</div>
 				</TronCard>

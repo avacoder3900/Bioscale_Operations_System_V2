@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, AssayDefinition, BomItem, generateId } from '$lib/server/db';
+import { connectDB, AssayDefinition, BomItem, generateId, AuditLog } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -113,13 +113,21 @@ export const actions: Actions = {
 				subComponents: []
 			}));
 
-			await AssayDefinition.create({
+			const newAssay = await AssayDefinition.create({
 				_id: generateId(),
 				name,
 				skuCode,
 				shelfLifeDays,
 				isActive: true,
 				reagents
+			});
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'assay_definitions',
+				recordId: newAssay._id,
+				action: 'INSERT',
+				changedBy: locals.user?.username ?? locals.user?._id,
+				changedAt: new Date()
 			});
 
 			return { success: true };
@@ -147,6 +155,14 @@ export const actions: Actions = {
 			if (data.has('useSingleCost')) update.useSingleCost = data.get('useSingleCost') === 'true';
 
 			await AssayDefinition.findByIdAndUpdate(id, { $set: update });
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'assay_definitions',
+				recordId: id,
+				action: 'UPDATE',
+				changedBy: locals.user?.username ?? locals.user?._id,
+				changedAt: new Date()
+			});
 			return { success: true };
 		} catch (err: any) {
 			return fail(500, { error: err.message ?? 'Failed to update assay type' });
@@ -179,6 +195,14 @@ export const actions: Actions = {
 				{ 'reagents._id': definitionId },
 				{ $set: setFields }
 			);
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'assay_definitions',
+				recordId: definitionId,
+				action: 'UPDATE',
+				changedBy: locals.user?.username ?? locals.user?._id,
+				changedAt: new Date()
+			});
 			return { success: true };
 		} catch (err: any) {
 			return fail(500, { error: err.message ?? 'Failed to update reagent definition' });
@@ -198,6 +222,14 @@ export const actions: Actions = {
 				{ 'reagents._id': definitionId },
 				{ $set: { 'reagents.$.isActive': isActive } }
 			);
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'assay_definitions',
+				recordId: definitionId,
+				action: 'UPDATE',
+				changedBy: locals.user?.username ?? locals.user?._id,
+				changedAt: new Date()
+			});
 			return { success: true };
 		} catch (err: any) {
 			return fail(500, { error: err.message ?? 'Failed to toggle reagent status' });
@@ -230,6 +262,14 @@ export const actions: Actions = {
 				{ 'reagents._id': reagentDefinitionId },
 				{ $push: { 'reagents.$.subComponents': newSc } }
 			);
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'assay_definitions',
+				recordId: reagentDefinitionId,
+				action: 'UPDATE',
+				changedBy: locals.user?.username ?? locals.user?._id,
+				changedAt: new Date()
+			});
 			return { success: true };
 		} catch (err: any) {
 			return fail(500, { error: err.message ?? 'Failed to create sub-component' });
@@ -269,6 +309,14 @@ export const actions: Actions = {
 				{ $set: setFields },
 				{ arrayFilters: [{ 'sc._id': subComponentId }] }
 			);
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'assay_definitions',
+				recordId: subComponentId,
+				action: 'UPDATE',
+				changedBy: locals.user?.username ?? locals.user?._id,
+				changedAt: new Date()
+			});
 			return { success: true };
 		} catch (err: any) {
 			return fail(500, { error: err.message ?? 'Failed to update sub-component' });
@@ -287,6 +335,14 @@ export const actions: Actions = {
 				{ 'reagents.subComponents._id': subComponentId },
 				{ $pull: { 'reagents.$[].subComponents': { _id: subComponentId } } }
 			);
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'assay_definitions',
+				recordId: subComponentId,
+				action: 'DELETE',
+				changedBy: locals.user?.username ?? locals.user?._id,
+				changedAt: new Date()
+			});
 			return { success: true };
 		} catch (err: any) {
 			return fail(500, { error: err.message ?? 'Failed to delete sub-component' });
@@ -334,6 +390,14 @@ export const actions: Actions = {
 				}
 			}
 
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'bom_items',
+				recordId: 'sync',
+				action: 'UPDATE',
+				changedBy: locals.user?.username ?? locals.user?._id,
+				changedAt: new Date()
+			});
 			return { success: true, syncResult: { created, updated, deleted } };
 		} catch (err: any) {
 			return fail(500, { error: err.message ?? 'Sync failed' });

@@ -1,9 +1,11 @@
 import { connectDB, Integration } from '$lib/server/db';
 import { listFolder } from '$lib/server/box';
+import { requirePermission } from '$lib/server/permissions';
 import { env } from '$env/dynamic/private';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ url }) => {
+export const load: PageServerLoad = async ({ url, locals }) => {
+	requirePermission(locals.user, 'documentRepo:read');
 	await connectDB();
 
 	// Check connection

@@ -1,6 +1,6 @@
 import { redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, OpentronsRobot, ReagentBatchRecord } from '$lib/server/db';
+import { connectDB, Equipment, ReagentBatchRecord } from '$lib/server/db';
 import type { LayoutServerLoad } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -22,7 +22,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		await connectDB();
 
 		const [robots, activeRuns] = await Promise.all([
-			OpentronsRobot.find({ isActive: true }, { _id: 1, name: 1, robotSide: 1 }).sort({ name: 1 }).lean(),
+			Equipment.find({ equipmentType: 'robot', isActive: true }, { _id: 1, name: 1, robotSide: 1 }).sort({ name: 1 }).lean(),
 			ReagentBatchRecord.find(
 				{ status: { $nin: [...TERMINAL] } },
 				{ 'robot._id': 1, status: 1, runStartTime: 1, runEndTime: 1, cartridgeCount: 1, 'assayType.name': 1 }
@@ -30,7 +30,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		]);
 
 		return {
-			user: locals.user,
+			user: JSON.parse(JSON.stringify(locals.user)),
 			robots: (robots as any[]).map((r) => ({
 				// Stringify ObjectId to ensure proper serialization on Vercel
 				robotId: String(r._id),
@@ -61,7 +61,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		console.error('[REAGENT-FILLING LAYOUT] DB error:', err instanceof Error ? err.message : err);
 		// Return safe defaults so the page can still render with an error state
 		return {
-			user: locals.user,
+			user: JSON.parse(JSON.stringify(locals.user)),
 			robots: [],
 			dashboardState: []
 		};

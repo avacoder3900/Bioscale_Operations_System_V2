@@ -1,9 +1,9 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, ReagentBatchRecord, AssayDefinition, CartridgeRecord, Consumable,
-	ManufacturingSettings, WaxFillingRun, EquipmentLocation, generateId, AuditLog
+	ManufacturingSettings, WaxFillingRun, Equipment, EquipmentLocation, generateId, AuditLog
 } from '$lib/server/db';
-import { recordTransaction } from '$lib/server/services/inventory-transaction';
+import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -159,13 +159,23 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			volume: t.volumeMicroliters ?? 0
 		}));
 
-		// Fridges for storage selection
-		const fridgesRaw = await EquipmentLocation.find({ locationType: 'fridge', isActive: true }).lean().catch(() => []);
-		const fridges = (fridgesRaw as any[]).map((f: any) => ({
-			id: String(f._id),
-			displayName: f.displayName ?? f.name ?? String(f._id),
-			barcode: f.barcode ?? ''
-		}));
+		// Fridges for storage selection — use parent Equipment records
+		const [equipFridges, orphanFridges] = await Promise.all([
+			Equipment.find({ equipmentType: 'fridge', status: { $ne: 'offline' } }).lean().catch(() => []),
+			EquipmentLocation.find({ locationType: 'fridge', isActive: true, parentEquipmentId: { $exists: false } }).lean().catch(() => [])
+		]);
+		const fridges = [
+			...(equipFridges as any[]).map((f: any) => ({
+				id: String(f._id),
+				displayName: f.name ?? f.barcode ?? String(f._id),
+				barcode: f.barcode ?? ''
+			})),
+			...(orphanFridges as any[]).map((f: any) => ({
+				id: String(f._id),
+				displayName: f.displayName ?? f.barcode ?? String(f._id),
+				barcode: f.barcode ?? ''
+			}))
+		];
 
 		// Check if this robot is blocked by an active wax filling run
 		let robotBlocked: { process: 'wax'; runId: string | null } | null = null;
@@ -344,9 +354,9 @@ export const actions: Actions = {
 
 		// Validate deck
 		if (deckId) {
-			const deck = await Consumable.findOne({ _id: deckId, type: 'deck' }).lean();
+			const deck = await Equipment.findOne({ _id: deckId, equipmentType: 'deck' }).lean();
 			if (!deck && !adminUser) {
-				return fail(400, { error: `Deck '${deckId}' not found. Register it in Consumables first.` });
+				return fail(400, { error: `Deck '${deckId}' not found. Register it in Equipment first.` });
 			}
 			if ((deck as any)?.status === 'retired' && !adminUser) {
 				return fail(400, { error: `Deck '${deckId}' is retired.` });
@@ -367,7 +377,7 @@ export const actions: Actions = {
 					update: {
 						$setOnInsert: {
 							_id: cf.cartridgeId,
-							currentPhase: 'backing',
+							status: 'backing',
 							'backing.operator': { _id: locals.user._id, username: locals.user.username },
 							'backing.recordedAt': new Date()
 						}
@@ -455,17 +465,19 @@ export const actions: Actions = {
 							'reagentFilling.operator': run.operator,
 							'reagentFilling.fillDate': now,
 							'reagentFilling.recordedAt': now,
-							currentPhase: 'reagent_filled'
+							status: 'reagent_filled'
 						}
 					}
 				}
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
 
-			// Record inventory transactions for reagent filling
+			// Record inventory transactions for reagent filling — consume 2ml tube (PT-CT-107)
+			const tubePartId = await resolvePartId('PT-CT-107');
 			for (const cf of run.cartridgesFilled) {
 				await recordTransaction({
-					transactionType: 'creation',
+					transactionType: 'consumption',
+					partDefinitionId: tubePartId ?? undefined,
 					cartridgeRecordId: cf.cartridgeId,
 					quantity: 1,
 					manufacturingStep: 'reagent_filling',
@@ -539,7 +551,7 @@ export const actions: Actions = {
 						'reagentInspection.operator': { _id: locals.user._id, username: locals.user.username },
 						'reagentInspection.timestamp': now,
 						'reagentInspection.recordedAt': now,
-						currentPhase: 'voided'
+						status: 'voided'
 					}
 				}
 			);
@@ -665,17 +677,19 @@ export const actions: Actions = {
 							'topSeal.operator': { _id: locals.user._id, username: locals.user.username },
 							'topSeal.timestamp': now,
 							'topSeal.recordedAt': now,
-							currentPhase: 'sealed'
+							status: 'sealed'
 						}
 					}
 				}
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
 
-			// Record top seal transactions
+			// Record top seal transactions — consume top seal (PT-CT-103)
+			const topSealPartId = await resolvePartId('PT-CT-103');
 			for (const cid of batch.cartridgeIds) {
 				await recordTransaction({
-					transactionType: 'creation',
+					transactionType: 'consumption',
+					partDefinitionId: topSealPartId ?? undefined,
 					cartridgeRecordId: cid,
 					quantity: 1,
 					manufacturingStep: 'top_seal',
@@ -730,7 +744,7 @@ export const actions: Actions = {
 		// Update CartridgeRecord
 		await CartridgeRecord.findOneAndUpdate(
 			{ _id: cartridgeId },
-			{ $set: { currentPhase: 'voided', voidedAt: now, voidReason: 'Rejected at top sealing' } }
+			{ $set: { status: 'voided', voidedAt: now, voidReason: 'Rejected at top sealing' } }
 		);
 
 		return { success: true };
@@ -786,7 +800,7 @@ export const actions: Actions = {
 							'storage.operator': { _id: locals.user._id, username: locals.user.username },
 							'storage.timestamp': now,
 							'storage.recordedAt': now,
-							currentPhase: 'stored'
+							status: 'stored'
 						}
 					}
 				}
@@ -814,7 +828,7 @@ export const actions: Actions = {
 				action: 'UPDATE',
 				changedBy: locals.user?.username,
 				changedAt: now,
-				newData: { currentPhase: 'stored', location, count: cartridgeIds.length }
+				newData: { status: 'stored', location, count: cartridgeIds.length }
 			});
 		}
 
@@ -837,7 +851,7 @@ export const actions: Actions = {
 		// Update deck usage if deckId is set
 		if (run?.deckId) {
 			const cartridgeCount = run?.cartridgesFilled?.length ?? 0;
-			await Consumable.findByIdAndUpdate(run.deckId, {
+			await Equipment.findByIdAndUpdate(run.deckId, {
 				$set: { lastUsed: now },
 				$push: {
 					usageLog: {
@@ -879,6 +893,17 @@ export const actions: Actions = {
 			$set: { status: 'Cancelled', abortReason: reason, runEndTime: now }
 		});
 
+		// Clean up cartridges that were in reagent_filling phase for this run
+		await CartridgeRecord.bulkWrite([{
+			updateMany: {
+				filter: { 'reagentFilling.runId': runId, status: 'reagent_filling' },
+				update: {
+					$set: { status: 'wax_filled' },
+					$unset: { reagentFilling: '' }
+				}
+			}
+		}]);
+
 		await AuditLog.create({
 			_id: generateId(),
 			tableName: 'reagent_batch_records',
@@ -912,6 +937,17 @@ export const actions: Actions = {
 			}
 		});
 
+		// Clean up cartridges that were in reagent_filling phase for this run
+		await CartridgeRecord.bulkWrite([{
+			updateMany: {
+				filter: { 'reagentFilling.runId': runId, status: 'reagent_filling' },
+				update: {
+					$set: { status: 'wax_filled' },
+					$unset: { reagentFilling: '' }
+				}
+			}
+		}]);
+
 		await AuditLog.create({
 			_id: generateId(),
 			tableName: 'reagent_batch_records',
@@ -939,8 +975,8 @@ export const actions: Actions = {
 		// Void all CartridgeRecord entries for this run
 		if (run.cartridgesFilled?.length) {
 			await CartridgeRecord.updateMany(
-				{ 'reagentFilling.runId': runId, currentPhase: { $nin: ['completed', 'voided'] } },
-				{ $set: { currentPhase: 'voided', voidedAt: new Date(), voidReason: 'Reset to deck loading' } }
+				{ 'reagentFilling.runId': runId, status: { $nin: ['completed', 'voided'] } },
+				{ $set: { status: 'voided', voidedAt: new Date(), voidReason: 'Reset to deck loading' } }
 			);
 		}
 

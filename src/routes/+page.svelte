@@ -69,6 +69,7 @@
 	let costExpanded = $state(false);
 	let expandedSpuId = $state<string | null>(null);
 	let collapsedSections = $state<Record<string, boolean>>({});
+	let showAssayInventory = $state(false);
 	let selectedSpus = new SvelteSet<string>();
 	let bulkState = $state('');
 	let bulkUpdating = $state(false);
@@ -442,19 +443,7 @@
 							</TronCard>
 						{/if}
 
-						{#if cd.storageDistribution.length > 0}
-							<TronCard>
-								<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Fridge Storage</h3>
-								<div class="space-y-2">
-									{#each cd.storageDistribution as loc}
-										<div class="flex items-center justify-between">
-											<span class="text-xs text-[var(--color-tron-text)]">{loc.locationName}</span>
-											<span class="text-xs font-mono font-bold text-[var(--color-tron-cyan)]">{loc.count}</span>
-										</div>
-									{/each}
-								</div>
-							</TronCard>
-						{/if}
+						<!-- Fridge storage data moved to Fridge Capacity icon cards below -->
 					</div>
 				</div>
 
@@ -462,18 +451,26 @@
 				{#if cd.fridgeCapacity && cd.fridgeCapacity.length > 0}
 					<TronCard>
 						<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Fridge Capacity</h3>
-						<div class="space-y-2">
+						<div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
 							{#each cd.fridgeCapacity as fridge}
 								{@const pct = Math.min((fridge.used / fridge.capacity) * 100, 100)}
-								<div class="space-y-1">
-									<div class="flex items-center justify-between">
-										<span class="text-xs text-[var(--color-tron-text)]">{fridge.locationName}</span>
-										<span class="text-xs font-mono font-bold {pct >= 90 ? 'text-red-400' : pct >= 70 ? 'text-amber-400' : 'text-[var(--color-tron-cyan)]'}">{fridge.used}/{fridge.capacity}</span>
+								{@const href = fridge.dbLocationId ? `/equipment/location/${fridge.dbLocationId}` : null}
+								<svelte:element
+									this={href ? 'a' : 'div'}
+									{href}
+									class="group flex flex-col items-center gap-1.5 rounded-lg border border-blue-500/20 bg-blue-950/30 p-3 text-center transition-colors {href ? 'hover:border-blue-400/40 hover:bg-blue-950/50 cursor-pointer' : ''}"
+								>
+									<div class="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-500/20 transition-colors {href ? 'group-hover:bg-blue-500/30' : ''}">
+										<svg class="h-5 w-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+											<path stroke-linecap="round" stroke-linejoin="round" d="M6 2h12a1 1 0 011 1v18a1 1 0 01-1 1H6a1 1 0 01-1-1V3a1 1 0 011-1zm0 12h12M10 6h1" />
+										</svg>
 									</div>
-									<div class="h-2 rounded-full bg-[var(--color-tron-surface)] overflow-hidden">
-										<div class="h-full rounded-full transition-all" style="width: {pct}%; background: {pct >= 90 ? '#f87171' : pct >= 70 ? '#fbbf24' : 'var(--color-tron-cyan)'};"></div>
+									<span class="text-xs font-medium text-blue-100 leading-tight truncate w-full">{fridge.locationName}</span>
+									<span class="font-mono text-xs font-bold {pct >= 90 ? 'text-red-400' : pct >= 70 ? 'text-amber-400' : 'text-blue-300'}">{fridge.used}/{fridge.capacity}</span>
+									<div class="h-1.5 w-full overflow-hidden rounded-full bg-blue-950/60">
+										<div class="h-full rounded-full transition-all" style="width: {pct}%; background: {pct >= 90 ? '#f87171' : pct >= 70 ? '#fbbf24' : '#60a5fa'};"></div>
 									</div>
-								</div>
+								</svelte:element>
 							{/each}
 						</div>
 					</TronCard>
@@ -502,21 +499,41 @@
 					</TronCard>
 				{/if}
 
-				<!-- Assay Inventory -->
-				{#if cd.assayInventory && cd.assayInventory.length > 0}
+				<!-- Oven Status -->
+				{#if cd.ovenList && cd.ovenList.length > 0}
 					<TronCard>
-						<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Assay Inventory</h3>
+						<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">🔥 Ovens</h3>
 						<div class="space-y-1.5">
-							{#each cd.assayInventory as assay}
-								<div class="flex items-center justify-between">
-									<div class="min-w-0 flex-1">
-										<span class="text-xs text-[var(--color-tron-text)] truncate block">{assay.name}</span>
-										<span class="text-[10px] font-mono text-[var(--color-tron-text-secondary)]">{assay.skuCode}</span>
-									</div>
-									<span class="text-xs font-mono font-bold text-[var(--color-tron-cyan)] ml-2">{assay.fillCount}</span>
-								</div>
+							{#each cd.ovenList as oven}
+								<a href="/equipment/location/{oven.id}" class="flex items-center justify-between rounded px-2 py-1.5 hover:bg-[var(--color-tron-surface)] transition-colors">
+									<span class="text-xs text-[var(--color-tron-text)]">{oven.name}</span>
+									<span class="text-xs font-mono text-amber-400">{oven.currentTemperatureC != null ? oven.currentTemperatureC.toFixed(1) + '°C' : '—'}</span>
+								</a>
 							{/each}
 						</div>
+					</TronCard>
+				{/if}
+
+				<!-- Assay Inventory (collapsible) -->
+				{#if cd.assayInventory && cd.assayInventory.length > 0}
+					<TronCard>
+						<button type="button" class="w-full flex items-center justify-between mb-1" onclick={() => { showAssayInventory = !showAssayInventory; }}>
+							<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">Assay Inventory ({cd.assayInventory.length})</h3>
+							<svg class="w-4 h-4 text-[var(--color-tron-cyan)] transition-transform {showAssayInventory ? 'rotate-180' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+						</button>
+						{#if showAssayInventory}
+							<div class="space-y-1.5 mt-2">
+								{#each cd.assayInventory as assay}
+									<div class="flex items-center justify-between">
+										<div class="min-w-0 flex-1">
+											<span class="text-xs text-[var(--color-tron-text)] truncate block">{assay.name}</span>
+											<span class="text-[10px] font-mono text-[var(--color-tron-text-secondary)]">{assay.skuCode}</span>
+										</div>
+										<span class="text-xs font-mono font-bold text-[var(--color-tron-cyan)] ml-2">{assay.fillCount}</span>
+									</div>
+								{/each}
+							</div>
+						{/if}
 					</TronCard>
 				{/if}
 
@@ -867,9 +884,43 @@
 		{/if}
 	</TronCard>
 
-	<!-- BOM Summary Widget -->
+	<!-- SPU Inventory Overview -->
+	<div class="grid gap-4 sm:grid-cols-2">
+		<!-- SPU Build Capacity -->
+		<TronCard>
+			<div class="text-center">
+				<div class="mb-1 text-4xl font-bold {data.spuBuildCount > 0 ? 'text-[var(--color-tron-green)]' : 'text-[var(--color-tron-red)]'}">{data.spuBuildCount}</div>
+				<div class="tron-text-muted text-sm">SPUs Buildable with Current Inventory</div>
+			</div>
+		</TronCard>
+
+		<!-- 5 Lowest Inventory Parts -->
+		<TronCard>
+			<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">5 Lowest Inventory Parts</h3>
+			<div class="space-y-2">
+				{#each data.lowestSpuParts as part (part.id)}
+					<a href="/parts/{part.id}" class="flex items-center justify-between rounded px-2 py-1.5 hover:bg-white/5 transition-colors">
+						<div class="min-w-0">
+							<div class="text-xs font-mono text-[var(--color-tron-cyan)] truncate">{part.partNumber}</div>
+							<div class="tron-text-muted text-xs truncate">{part.name}</div>
+						</div>
+						<div class="shrink-0 ml-3 font-mono text-sm font-bold {part.inventoryCount <= 0 ? 'text-[var(--color-tron-red)]' : part.inventoryCount < 10 ? 'text-[var(--color-tron-orange)]' : 'tron-text-primary'}">
+							{part.inventoryCount}
+						</div>
+					</a>
+				{:else}
+					<p class="tron-text-muted text-xs italic text-center">No parts data</p>
+				{/each}
+			</div>
+			<div class="mt-3 border-t border-[var(--color-tron-border)] pt-2 text-center">
+				<a href="/parts" class="text-xs text-[var(--color-tron-cyan)] hover:underline">View all parts →</a>
+			</div>
+		</TronCard>
+	</div>
+
+	<!-- Legacy BOM Summary (hidden) -->
+	<div class="hidden">
 	<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-		<!-- Total Parts card -->
 		<a href={resolve('/bom')} class="block">
 			<TronCard interactive>
 				<div class="text-center">
@@ -1059,6 +1110,7 @@
 			</TronCard>
 		</div>
 	</div>
+	</div>
 
 	<!-- Active Production Runs -->
 	<TronCard>
@@ -1106,10 +1158,9 @@
 					class="flex items-center justify-between gap-2 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2"
 				>
 					<div class="min-w-0">
-						<div class="text-xs font-bold text-[var(--color-tron-cyan)]">
-							{extractShortId(s.udi)}
+						<div class="truncate text-xs font-bold text-[var(--color-tron-cyan)] font-mono" title={s.udi}>
+							{s.udi}
 						</div>
-						<div class="tron-text-muted truncate font-mono text-xs" title={s.udi}>{s.udi}</div>
 					</div>
 					<div class="flex items-center gap-2">
 						<span
@@ -1474,13 +1525,7 @@
 						>
 							<div class="mb-3 flex items-start justify-between pl-6">
 								<div>
-									<div class="text-sm font-bold text-[var(--color-tron-cyan)]">
-										{extractShortId(spuItem.udi)}
-									</div>
-									<div
-										class="tron-text-muted mt-0.5 max-w-[200px] truncate font-mono text-xs"
-										title={spuItem.udi}
-									>
+									<div class="truncate text-sm font-bold text-[var(--color-tron-cyan)] font-mono" title={spuItem.udi}>
 										{spuItem.udi}
 									</div>
 								</div>

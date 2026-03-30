@@ -13,6 +13,7 @@ const bomItemSchema = new Schema({
 	inventoryCount: Number, minimumStockLevel: { type: Number, default: 0 },
 	isActive: { type: Boolean, default: true }, boxRowIndex: Number,
 	versionHistory: [{
+		_id: false,
 		version: Number, changeType: { type: String, enum: ['create', 'update', 'delete'] },
 		previousValues: Schema.Types.Mixed, newValues: Schema.Types.Mixed,
 		changedBy: String, changedAt: Date, changeReason: String

@@ -1,18 +1,11 @@
 import { json, error } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
-import { connectDB, KanbanTask, AuditLog } from '$lib/server/db';
+import { connectDB, KanbanTask, KanbanProject, AuditLog } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
+import { requireAgentApiKey } from '$lib/server/api-auth';
 import type { RequestHandler } from './$types';
 
-function requireApiKey(request: Request) {
-	const key = request.headers.get('x-api-key') || request.headers.get('x-agent-api-key') || request.headers.get('authorization')?.replace('Bearer ', '');
-	if (!env.AGENT_API_KEY || key !== env.AGENT_API_KEY) {
-		throw error(401, 'Invalid or missing API key');
-	}
-}
-
 export const PATCH: RequestHandler = async ({ request, params }) => {
-	requireApiKey(request);
+	requireAgentApiKey(request);
 	await connectDB();
 
 	const { id } = params;
@@ -20,7 +13,7 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 	if (!task) throw error(404, 'Task not found');
 
 	const body = await request.json();
-	const { title, description, status, prioritized, taskLength, assignedTo, dueDate, tags, appendContext } = body;
+	const { title, description, status, prioritized, taskLength, assignedTo, dueDate, tags, appendContext, projectId } = body;
 
 	const $set: any = {};
 	const $push: any = {};
@@ -57,6 +50,23 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 		oldData.tags = task.tags;
 		$set.tags = tags;
 		changedFields.push('tags');
+	}
+
+	if (projectId !== undefined) {
+		oldData.project = task.project;
+		if (projectId) {
+			// Look up project to get name and color
+			const proj = await KanbanProject.findById(projectId).lean() as any;
+			if (proj) {
+				$set.project = { _id: proj._id, name: proj.name, color: proj.color };
+			} else {
+				// Fallback: set project with just the ID (name will be missing but at least it's assigned)
+				$set.project = { _id: projectId, name: 'Unknown', color: '#808080' };
+			}
+		} else {
+			$set.project = null;
+		}
+		changedFields.push('project');
 	}
 
 	if (assignedTo !== undefined) {

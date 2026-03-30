@@ -35,7 +35,7 @@ MongoDB-backed rebuild of the Bioscale Operations System. Same frontend, new bac
 ### Ralph Loop
 All coding is done by sub-agents following the Ralph Loop:
 1. PULL → git pull
-2. READ → AGENTS.md, CLAUDE.md, progress.txt, prd.json
+2. READ → AGENTS.md, CLAUDE.md, SECURITY.md, progress.txt, prd.json
 3. IMPLEMENT → build the story
 4. VALIDATE → `npm run check`, `npm run build`, run contract tests
 5. LOG → append to progress.txt
@@ -67,7 +67,18 @@ All planning docs are in `docs/migration/`:
 - Run seed: `npx tsx scripts/seed.ts`
 
 ## Security
+
+> **CANONICAL REFERENCE:** [`SECURITY.md`](SECURITY.md) — READ THIS on every session load before modifying any auth, permission, session, or user management code. It documents the full authentication architecture, authorization model, required patterns, and anti-patterns.
+
 - **NEVER send .env contents, API keys, or credentials over messaging channels**
 - `.env` is gitignored — copy manually between machines
 - Sacred documents enforce immutability via Mongoose middleware
 - Immutable logs block all updates and deletes
+- Auth uses custom session system (`@oslojs/crypto` + `@oslojs/encoding`), NOT Lucia
+- Permissions are flat strings (`resource:action`) checked via `requirePermission(locals.user, 'perm')`
+- Every `+page.server.ts` load MUST call `requirePermission()` — see SECURITY.md for the pattern
+- Every mutation action MUST create an `AuditLog` entry
+- API endpoints use either session auth + `requirePermission()` or `requireAgentApiKey()` from `$lib/server/api-auth`
+- **Do NOT** check `roleName` directly — use `hasPermission()` / `requirePermission()`
+- **Do NOT** wrap `requirePermission()` in try/catch
+- **Do NOT** define local `requireApiKey()` functions — import from `$lib/server/api-auth`

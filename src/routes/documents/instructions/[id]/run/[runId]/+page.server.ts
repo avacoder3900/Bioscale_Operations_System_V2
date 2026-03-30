@@ -1,8 +1,10 @@
-import { error, fail } from '@sveltejs/kit';
+import { error, fail, redirect } from '@sveltejs/kit';
 import { connectDB, WorkInstruction, ProductionRun, User, AssemblySession } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
-export const load: PageServerLoad = async ({ params }) => {
+export const load: PageServerLoad = async ({ params, locals }) => {
+	requirePermission(locals.user, 'workInstruction:read');
 	await connectDB();
 
 	const [wi, run] = await Promise.all([
@@ -104,7 +106,8 @@ export const load: PageServerLoad = async ({ params }) => {
 };
 
 export const actions: Actions = {
-	signUnit: async ({ request, params }) => {
+	signUnit: async ({ request, params, locals }) => {
+		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 		const form = await request.formData();
 		const unitId = form.get('unitId')?.toString();
@@ -122,7 +125,8 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-	completeRun: async ({ params }) => {
+	completeRun: async ({ params, locals }) => {
+		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 		await ProductionRun.updateOne({ _id: params.runId }, {
 			$set: { status: 'completed', completedAt: new Date() }
@@ -130,11 +134,97 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-	cancelRun: async ({ params }) => {
+	cancelRun: async ({ params, locals }) => {
+		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 		await ProductionRun.updateOne({ _id: params.runId }, {
 			$set: { status: 'planning' }
 		});
+		return { success: true };
+	},
+
+	startUnit: async ({ request, params, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+		const form = await request.formData();
+		const unitId = form.get('unitId')?.toString();
+		if (!unitId) return fail(400, { error: 'Unit ID required' });
+
+		await ProductionRun.updateOne(
+			{ _id: params.runId, 'units._id': unitId },
+			{
+				$set: {
+					'units.$.status': 'in_progress',
+					'units.$.startedAt': new Date(),
+					'units.$.operator': { _id: locals.user._id, username: locals.user.username }
+				}
+			}
+		);
+		return { success: true };
+	},
+
+	completeUnit: async ({ request, params, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+		const form = await request.formData();
+		const unitId = form.get('unitId')?.toString();
+		if (!unitId) return fail(400, { error: 'Unit ID required' });
+
+		await ProductionRun.updateOne(
+			{ _id: params.runId, 'units._id': unitId },
+			{
+				$set: {
+					'units.$.status': 'completed',
+					'units.$.completedAt': new Date()
+				}
+			}
+		);
+		return { success: true };
+	},
+
+	pauseRun: async ({ params, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+		await ProductionRun.updateOne({ _id: params.runId }, {
+			$set: { status: 'paused', pausedAt: new Date() }
+		});
+		return { success: true };
+	},
+
+	resumeRun: async ({ params, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+		await ProductionRun.updateOne({ _id: params.runId }, {
+			$set: { status: 'in_progress' },
+			$unset: { pausedAt: '' }
+		});
+		return { success: true };
+	},
+
+	scanPart: async ({ request, params, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+		const form = await request.formData();
+		const unitId = form.get('unitId')?.toString();
+		const barcode = form.get('barcode')?.toString();
+		const workInstructionStepId = form.get('workInstructionStepId')?.toString();
+		const partDefinitionId = form.get('partDefinitionId')?.toString();
+		if (!unitId || !barcode) return fail(400, { error: 'Unit ID and barcode required' });
+
+		await ProductionRun.updateOne(
+			{ _id: params.runId, 'units._id': unitId },
+			{
+				$push: {
+					'units.$.scannedParts': {
+						barcode,
+						workInstructionStepId: workInstructionStepId ?? null,
+						partDefinitionId: partDefinitionId ?? null,
+						scannedAt: new Date(),
+						scannedBy: { _id: locals.user._id, username: locals.user.username }
+					}
+				}
+			}
+		);
 		return { success: true };
 	}
 };

@@ -12,7 +12,7 @@ export const GET: RequestHandler = async ({ request }) => {
 		TestResult.countDocuments({ status: 'completed' }),
 		TestResult.countDocuments({ status: 'failed' }),
 		CartridgeRecord.aggregate([
-			{ $group: { _id: '$currentPhase', count: { $sum: 1 } } }
+			{ $group: { _id: '$status', count: { $sum: 1 } } }
 		]),
 		WaxFillingRun.find()
 			.sort({ createdAt: -1 }).limit(20)

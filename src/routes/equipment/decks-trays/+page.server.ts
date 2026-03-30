@@ -1,18 +1,19 @@
 export const config = { maxDuration: 60 };
 import { fail } from '@sveltejs/kit';
 import bcrypt from 'bcryptjs';
-import { connectDB, generateId, Consumable, AuditLog, User } from '$lib/server/db';
+import { connectDB, generateId, Equipment, AuditLog, User } from '$lib/server/db';
 import { WaxFillingRun } from '$lib/server/db/models/wax-filling-run.js';
-import { isAdmin } from '$lib/server/permissions';
+import { isAdmin, requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
+	requirePermission(locals.user, 'equipment:read');
 	try {
 		await connectDB();
 
 		const [decks, trays] = await Promise.all([
-			Consumable.find({ type: 'deck' }).sort({ _id: 1 }).lean(),
-			Consumable.find({ type: 'cooling_tray' }).sort({ _id: 1 }).lean()
+			Equipment.find({ equipmentType: 'deck' }).sort({ _id: 1 }).lean(),
+			Equipment.find({ equipmentType: 'cooling_tray' }).sort({ _id: 1 }).lean()
 		]);
 
 		// Fetch recent wax filling runs for decks
@@ -142,17 +143,19 @@ function mapTrayRun(r: any) {
 
 export const actions: Actions = {
 	createDeck: async ({ request, locals }) => {
+		requirePermission(locals.user, 'equipment:write');
 		await connectDB();
 		const data = await request.formData();
 		const deckId = data.get('deckId')?.toString()?.trim();
 		if (!deckId) return fail(400, { error: 'Deck ID is required' });
 
-		const existing = await Consumable.findById(deckId).lean();
-		if (existing) return fail(400, { error: 'A consumable with that ID already exists' });
+		const existing = await Equipment.findById(deckId).lean();
+		if (existing) return fail(400, { error: 'An equipment record with that ID already exists' });
 
-		await Consumable.create({
+		await Equipment.create({
 			_id: deckId,
-			type: 'deck',
+			name: deckId,
+			equipmentType: 'deck',
 			status: 'available'
 		});
 
@@ -171,17 +174,19 @@ export const actions: Actions = {
 	},
 
 	createTray: async ({ request, locals }) => {
+		requirePermission(locals.user, 'equipment:write');
 		await connectDB();
 		const data = await request.formData();
 		const trayId = data.get('trayId')?.toString()?.trim();
 		if (!trayId) return fail(400, { error: 'Tray ID is required' });
 
-		const existing = await Consumable.findById(trayId).lean();
-		if (existing) return fail(400, { error: 'A consumable with that ID already exists' });
+		const existing = await Equipment.findById(trayId).lean();
+		if (existing) return fail(400, { error: 'An equipment record with that ID already exists' });
 
-		await Consumable.create({
+		await Equipment.create({
 			_id: trayId,
-			type: 'cooling_tray',
+			name: trayId,
+			equipmentType: 'cooling_tray',
 			status: 'available'
 		});
 
@@ -200,6 +205,7 @@ export const actions: Actions = {
 	},
 
 	forceReleaseDeck: async ({ request, locals }) => {
+		requirePermission(locals.user, 'equipment:write');
 		if (!isAdmin(locals.user)) return fail(403, { error: 'Admin access required' });
 		await connectDB();
 
@@ -219,7 +225,7 @@ export const actions: Actions = {
 			return fail(401, { error: 'Invalid password' });
 		}
 
-		await Consumable.findByIdAndUpdate(deckId, {
+		await Equipment.findByIdAndUpdate(deckId, {
 			status: statusToDb(newStatus),
 			currentRobotId: null,
 			lockoutUntil: null,
@@ -241,6 +247,7 @@ export const actions: Actions = {
 	},
 
 	forceReleaseTray: async ({ request, locals }) => {
+		requirePermission(locals.user, 'equipment:write');
 		if (!isAdmin(locals.user)) return fail(403, { error: 'Admin access required' });
 		await connectDB();
 
@@ -260,7 +267,7 @@ export const actions: Actions = {
 			return fail(401, { error: 'Invalid password' });
 		}
 
-		await Consumable.findByIdAndUpdate(trayId, {
+		await Equipment.findByIdAndUpdate(trayId, {
 			status: statusToDb(newStatus),
 			assignedRunId: null
 		});

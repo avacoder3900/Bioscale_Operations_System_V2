@@ -1,6 +1,6 @@
 /**
  * WI-01: Cartridge Backing
- * Lot traceability: Input lots (raw cartridge, thermoseal strip, barcode label)
+ * Lot traceability: Input lots (raw cartridge, laser-cut back, barcode label)
  * → Output lot (LotRecord.qrCodeRef) → CartridgeRecord.backing.lotId
  * ISO 13485: input lot → output lot → cartridge IDs fully linked
  */
@@ -8,9 +8,9 @@ import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, LotRecord, ProcessConfiguration, CartridgeRecord,
 	ManufacturingMaterial, ManufacturingMaterialTransaction,
-	PartDefinition, generateId
+	PartDefinition, AuditLog, generateId
 } from '$lib/server/db';
-import { recordTransaction } from '$lib/server/services/inventory-transaction';
+import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { nanoid } from 'nanoid';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -41,7 +41,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 			lotStepEntries: [],
 			recentLots: [],
 			inventory: {
-				cutThermosealStrips: { name: 'Cut Thermoseal Strips', quantity: 0, unit: 'strips' },
 				rawCartridges: { name: 'Raw Cartridges', quantity: 0, unit: 'pcs' },
 				barcodeLabels: { name: 'Barcode Labels', quantity: 0, unit: 'pcs' },
 				individualBacks: { name: 'Laser Cut Backs', quantity: 0, unit: 'pcs' }
@@ -91,7 +90,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 		})),
 		inventory: {
 			rawCartridges: { name: 'Raw Cartridges', quantity: findQty(/raw.?cartridge|cartridge.?body/i), unit: 'pcs' },
-			cutThermosealStrips: { name: 'Cut Thermoseal Strips', quantity: findQty(/thermoseal.?strip|cut.?thermoseal/i), unit: 'strips' },
 			barcodeLabels: { name: 'Barcode Labels', quantity: findQty(/barcode.?label|label/i), unit: 'pcs' },
 			individualBacks: { name: 'Laser Cut Backs', quantity: findQty(/laser.?cut|cut.?sub|substrate/i), unit: 'pcs' }
 		}
@@ -137,10 +135,19 @@ export const actions: Actions = {
 			cartridgeIds: []
 		});
 
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'lot_records',
+			recordId: lotId,
+			action: 'INSERT',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
+		});
+
 		return { bindQR: { success: true, lotId, outputLotNumber } };
 	},
 
-	/** Step 2: Record input lot barcodes (raw cartridge lot, thermoseal lot, barcode label lot) */
+	/** Step 2: Record input lot barcodes (raw cartridge lot, laser-cut back lot, barcode label lot) */
 	setInputLots: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
@@ -189,6 +196,15 @@ export const actions: Actions = {
 			$set: { status: 'In Progress', startTime: new Date() }
 		});
 
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'lot_records',
+			recordId: lotId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
+		});
+
 		return { startBatch: { success: true } };
 	},
 
@@ -225,7 +241,7 @@ export const actions: Actions = {
 					operator: { _id: locals.user._id, username: locals.user.username },
 					recordedAt: now
 				},
-				currentPhase: 'backing',
+				status: 'backing',
 				createdAt: now,
 				updatedAt: now
 			});
@@ -245,15 +261,26 @@ export const actions: Actions = {
 			}
 		});
 
-		// Consume input materials from inventory
+		// Consume cartridges (PT-CT-104) from inventory
+		const cartridgePartId = await resolvePartId('PT-CT-104');
 		await recordTransaction({
 			transactionType: 'consumption',
+			partDefinitionId: cartridgePartId ?? undefined,
 			quantity,
 			manufacturingStep: 'backing',
 			manufacturingRunId: lotId,
 			operatorId: locals.user._id,
 			operatorUsername: locals.user.username,
 			notes: `WI-01 Backing lot ${lotId}: ${quantity} cartridges backed`
+		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'lot_records',
+			recordId: lotId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
 		});
 
 		const config = await ProcessConfiguration.findOne({ processType: PROCESS_TYPE }).lean() as any;

@@ -1,7 +1,9 @@
 import { connectDB, Consumable } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async () => {
+export const load: PageServerLoad = async ({ locals }) => {
+	requirePermission(locals.user, 'equipment:read');
 	await connectDB();
 
 	const [decks, trays] = await Promise.all([

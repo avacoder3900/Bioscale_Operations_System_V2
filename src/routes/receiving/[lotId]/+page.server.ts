@@ -46,7 +46,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 				{ 'topSeal.topSealLotId': { $in: lotIdentifiers } }
 			]
 		})
-			.select('_id currentPhase backing.lotId waxFilling.waxSourceLot waxFilling.runId topSeal.topSealLotId reagentFilling.assayType.name createdAt')
+			.select('_id status backing.lotId waxFilling.waxSourceLot waxFilling.runId topSeal.topSealLotId reagentFilling.assayType.name createdAt')
 			.sort({ createdAt: -1 })
 			.limit(200)
 			.lean()
@@ -96,7 +96,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			transactionsByStep: JSON.parse(JSON.stringify(transactionsByStep)),
 			linkedCartridges: JSON.parse(JSON.stringify((linkedCartridges as any[]).map((c: any) => ({
 				cartridgeId: c._id,
-				currentPhase: c.currentPhase ?? 'unknown',
+				status: c.status ?? 'unknown',
 				lotId: c.backing?.lotId ?? null,
 				waxSourceLot: c.waxFilling?.waxSourceLot ?? null,
 				topSealLotId: c.topSeal?.topSealLotId ?? null,
@@ -187,6 +187,24 @@ export const actions: Actions = {
 				operatorId: locals.user!._id,
 				operatorUsername: locals.user!.username
 			});
+
+			// Auto-assign barcode if part doesn't have one yet
+			if (!prevPart?.barcode) {
+				const { generatePartBarcode } = await import('$lib/server/services/barcode-generator');
+				const newBarcode = await generatePartBarcode();
+				await PartDefinition.updateOne({ _id: partId }, { $set: { barcode: newBarcode } });
+				await AuditLog.create({
+					_id: generateId(),
+					tableName: 'part_definitions',
+					recordId: partId,
+					action: 'UPDATE',
+					oldData: { barcode: null },
+					newData: { barcode: newBarcode },
+					changedAt: new Date(),
+					changedBy: locals.user!._id,
+					reason: 'Barcode auto-assigned at receiving acceptance'
+				});
+			}
 
 			// Sync ManufacturingMaterial if linked
 			const mfgMaterial = await ManufacturingMaterial.findOne({ partDefinitionId: partId }).lean() as any;

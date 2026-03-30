@@ -1,9 +1,11 @@
 import { redirect, fail } from '@sveltejs/kit';
 import { connectDB, Consumable, ManufacturingSettings, generateId } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
 	const [rollsRaw, settingsDoc] = await Promise.all([
@@ -74,6 +76,7 @@ export const actions: Actions = {
 	/** Register a new top seal roll */
 	registerRoll: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -98,6 +101,7 @@ export const actions: Actions = {
 	/** Record a cut — consumes strips from the active roll */
 	recordCut: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -144,6 +148,7 @@ export const actions: Actions = {
 	/** Retire a roll (mark as no longer in use) */
 	retireRoll: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();

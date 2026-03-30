@@ -83,7 +83,7 @@ export const CARTRIDGE_PHASES = [
 	'oven_cured',
 	'qaqc_released',
 	'shipped',
-	'testing',
+	'underway',
 	'completed'
 ] as const;
 

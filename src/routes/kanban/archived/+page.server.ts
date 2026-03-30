@@ -1,9 +1,11 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, KanbanTask, AuditLog } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'kanban:read');
 	await connectDB();
 
 	const tasks = await KanbanTask.find({ archived: true }).sort({ archivedAt: -1 }).lean();
@@ -35,6 +37,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 export const actions: Actions = {
 	archiveDone: async ({ locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
 		await connectDB();
 
 		const result = await KanbanTask.updateMany(

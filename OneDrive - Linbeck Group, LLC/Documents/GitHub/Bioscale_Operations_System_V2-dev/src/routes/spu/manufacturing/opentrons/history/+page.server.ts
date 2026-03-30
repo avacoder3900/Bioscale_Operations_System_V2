@@ -2,12 +2,14 @@ import { redirect } from '@sveltejs/kit';
 import {
 	connectDB, WaxFillingRun, ReagentBatchRecord, OpentronsRobot, AssayDefinition
 } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
 const PAGE_SIZE = 20;
 
 export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
 	// Parse filter params

@@ -58,6 +58,13 @@ export { ParticleDevice } from './particle-device.js';
 export { WorkflowViolation } from './workflow-violation.js';
 export { ServiceTicket } from './service-ticket.js';
 
+// Sensor Configuration
+export { SensorConfig } from './sensor-config.js';
+
+// Tier 3: Immutable Logs — Temperature
+export { TemperatureReading } from './temperature-reading.js';
+export { TemperatureAlert } from './temperature-alert.js';
+
 // Tier 3: Immutable Logs
 export { AuditLog } from './audit-log.js';
 export { CalibrationRecord } from './calibration-record.js';
@@ -65,3 +72,12 @@ export { ElectronicSignature } from './electronic-signature.js';
 export { InventoryTransaction } from './inventory-transaction.js';
 export { DeviceEvent } from './device-event.js';
 export { ManufacturingMaterialTransaction } from './manufacturing-material-transaction.js';
+export { DeviceLog } from './device-log.js';
+export { DeviceCrash } from './device-crash.js';
+export { WebhookLog } from './webhook-log.js';
+
+// CV / Computer Vision
+export { CvProject } from './cv-project.js';
+export { CvImage } from './cv-image.js';
+export { CvSample } from './cv-sample.js';
+export { CvInspection } from './cv-inspection.js';

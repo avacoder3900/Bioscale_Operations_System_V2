@@ -14,7 +14,10 @@ const manufacturingSettingsSchema = new Schema({
 		cartridgesPerLaserCutSheet: Number, sheetsPerLaserBatch: Number,
 		defaultLaserTools: String, defaultCuttingProgramLink: String
 	},
-	rejectionReasonCodes: [{ code: String, label: String, processType: String, sortOrder: Number }],
+	rejectionReasonCodes: [{ _id: false, code: String, label: String, processType: String, sortOrder: Number }],
+	temperatureAlerts: {
+		emailRecipients: [String]
+	},
 	updatedAt: Date
 }, { timestamps: false });
 

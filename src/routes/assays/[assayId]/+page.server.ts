@@ -1,9 +1,11 @@
 import { error, fail, redirect } from '@sveltejs/kit';
-import { connectDB, AssayDefinition, FirmwareCartridge, TestResult, generateId } from '$lib/server/db';
+import { hasPermission, requirePermission } from '$lib/server/permissions';
+import { connectDB, AssayDefinition, FirmwareCartridge, TestResult, AuditLog, generateId } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'assay:read');
 	await connectDB();
 
 	const assay = await AssayDefinition.findById(params.assayId).lean() as any;
@@ -36,10 +38,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		params: instr.params ?? []
 	}));
 
-	const canWrite = !!(locals.user as any)?.roles?.some((r: any) =>
-		r.permissions?.includes('assay:write') || r.roleName === 'admin'
-	);
-	const canDelete = !!(locals.user as any)?.roles?.some((r: any) => r.roleName === 'admin');
+	const canWrite = hasPermission(locals.user, 'assay:write') || hasPermission(locals.user, 'admin:full');
+	const canDelete = hasPermission(locals.user, 'admin:full');
 
 	return {
 		assay: {
@@ -117,6 +117,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 export const actions: Actions = {
 	lock: async ({ params, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:admin');
 		await connectDB();
 
 		await AssayDefinition.findOneAndUpdate(
@@ -128,21 +129,39 @@ export const actions: Actions = {
 				}
 			}
 		);
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assay_definitions',
+			recordId: params.assayId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
+		});
 		return { success: true };
 	},
 
 	unlock: async ({ params, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:admin');
 		await connectDB();
 
 		await AssayDefinition.findByIdAndUpdate(params.assayId, {
 			$unset: { lockedAt: 1, lockedBy: 1 }
+		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assay_definitions',
+			recordId: params.assayId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
 		});
 		return { success: true };
 	},
 
 	toggleActive: async ({ params, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
 		await connectDB();
 
 		const assay = await AssayDefinition.findById(params.assayId).lean() as any;
@@ -151,11 +170,20 @@ export const actions: Actions = {
 		await AssayDefinition.findByIdAndUpdate(params.assayId, {
 			$set: { isActive: !assay.isActive }
 		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assay_definitions',
+			recordId: params.assayId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
+		});
 		return { success: true };
 	},
 
 	addReagent: async ({ params, locals, request }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -187,11 +215,20 @@ export const actions: Actions = {
 				}
 			}
 		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assay_definitions',
+			recordId: params.assayId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
+		});
 		return { success: true };
 	},
 
 	updateReagent: async ({ params, locals, request }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -224,11 +261,20 @@ export const actions: Actions = {
 				}
 			}
 		);
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assay_definitions',
+			recordId: params.assayId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
+		});
 		return { success: true };
 	},
 
 	removeReagent: async ({ params, locals, request }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -238,11 +284,20 @@ export const actions: Actions = {
 		await AssayDefinition.findByIdAndUpdate(params.assayId, {
 			$pull: { reagents: { _id: reagentId } }
 		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assay_definitions',
+			recordId: params.assayId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
+		});
 		return { success: true };
 	},
 
 	addSubComponent: async ({ params, locals, request }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -279,6 +334,7 @@ export const actions: Actions = {
 
 	removeSubComponent: async ({ params, locals, request }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -295,6 +351,7 @@ export const actions: Actions = {
 
 	updateBomSettings: async ({ params, locals, request }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -304,7 +361,64 @@ export const actions: Actions = {
 		await AssayDefinition.findByIdAndUpdate(params.assayId, {
 			$set: { bomCostOverride: bomCostOverride || null, useSingleCost }
 		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assay_definitions',
+			recordId: params.assayId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
+		});
 		return { success: true };
+	},
+
+	duplicate: async ({ params, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
+		await connectDB();
+
+		const original = await AssayDefinition.findById(params.assayId).lean() as any;
+		if (!original) throw error(404, 'Assay not found');
+
+		const newId = generateId();
+		const { _id, createdAt, updatedAt, lockedAt, lockedBy, versionHistory, ...rest } = original;
+		await AssayDefinition.create({
+			...rest,
+			_id: newId,
+			name: `${original.name} (Copy)`,
+			isActive: false,
+			versionHistory: []
+		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assay_definitions',
+			recordId: newId,
+			action: 'INSERT',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
+		});
+		redirect(303, `/assays/${newId}`);
+	},
+
+	delete: async ({ params, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'assay:write');
+		await connectDB();
+
+		const assay = await AssayDefinition.findById(params.assayId).lean() as any;
+		if (!assay) throw error(404, 'Assay not found');
+		if (assay.lockedAt) return fail(400, { error: 'Cannot delete a locked assay' });
+
+		await AssayDefinition.deleteOne({ _id: params.assayId });
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assay_definitions',
+			recordId: params.assayId,
+			action: 'DELETE',
+			changedBy: locals.user?.username,
+			changedAt: new Date()
+		});
+		redirect(303, '/assays');
 	}
 };
 

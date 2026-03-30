@@ -25,8 +25,8 @@ IPKs confirm that parts have been placed in the correct positions on the assembl
 ### Decision 2: Inventory Withdrawal Happens in Work Instructions
 Inventory is subtracted when the operator scans/uses a part during the actual Work Instruction assembly steps. This is the ONLY point where `PartDefinition.inventoryCount` is decremented.
 
-### Decision 3: Discard/Scrap Inventory in Work Instructions Section
-Operators must be able to discard (scrap) inventory during assembly when a part is damaged, defective, or otherwise unusable. This creates an InventoryTransaction of type 'scrap' with a reason, without installing the part into the SPU.
+### Decision 3: Discard/Scrap Inventory is Step-Dependent in Work Instructions
+Operators can only discard (scrap) a part when they are ON the WI step that requires that part. You don't pull a part until you reach its step, so scrap only applies within the context of the current step. This creates an InventoryTransaction of type 'scrap' with a reason, without installing the part into the SPU. The operator then scans a replacement part within the same step.
 
 ### Decision 4: Build Checklist When Prompting New Build of X SPUs
 When an operator initiates a new build run of X SPUs, the system generates a checklist of ALL parts needed (BOM quantities multiplied by X). This checklist is used to verify inventory availability and prepare the line before assembly begins.
@@ -188,11 +188,13 @@ DECIDED FLOW:
    → SPU.parts[] updated with scan data
    → DHR grows with each step
 
-4. If part is damaged/defective during assembly:
-   → Operator discards the part via WI interface
-   → InventoryTransaction created (type: 'scrap', with reason)
+4. If part is damaged/defective during a WI step:
+   → Operator is ON the step that requires this part
+   → Operator chooses "Discard" within that step's context
+   → InventoryTransaction created (type: 'scrap', with reason, linked to step)
    → Part NOT added to SPU.parts[]
-   → Operator scans replacement part (new deduction)
+   → Step remains incomplete — operator scans replacement part (new deduction)
+   → Step only completes when a good part is scanned
 
 5. Assembly complete → signature → SPU.status = 'assembled'
 ```
@@ -271,17 +273,20 @@ BuildRun {
 }
 ```
 
-### 3.3 No Discard/Scrap Action in Work Instructions
+### 3.3 No Step-Level Discard/Scrap Action in Work Instructions
 
-The assembly page has `scanPart` (deduct + install) and `retractInventory` (undo deduction), but NO action to discard/scrap a part. Need:
+The assembly page has `scanPart` (deduct + install) and `retractInventory` (undo deduction), but NO action to discard/scrap a part. Discard must be **step-dependent** — the operator is on a specific WI step and the part for THAT step is damaged. Need:
 
 ```typescript
 // New action: discardPart
+// - Only available when operator is on a step that requires a part
+// - Tied to the current step's partRequirements
 // - Deducts from PartDefinition.inventoryCount
-// - Creates InventoryTransaction (type: 'scrap', reason: required)
+// - Creates InventoryTransaction (type: 'scrap', reason: required, stepNumber, stepTitle)
 // - Does NOT add part to SPU.parts[]
-// - Logs in AssemblySession for audit trail
-// - Prompts operator to scan replacement part
+// - Logs in AssemblySession.stepRecords[] for audit trail
+// - Step remains incomplete — operator must scan replacement
+// - Step only completes when a good part is successfully scanned
 ```
 
 ### 3.4 No Build Checklist Generation
@@ -376,7 +381,7 @@ No mechanism to ensure older lots are consumed before newer ones. Regulatory com
 
 3. **Scrap reason categories** — The discard action needs a reason. Should these be freeform or a dropdown? Common reasons: damaged, defective, contaminated, expired, wrong part. Categorized reasons help with reporting.
 
-4. **Scrap-then-replace flow** — After discarding, the operator needs a replacement part. If the IPK has spares, they grab from there. If not, they need to go to inventory. The WI page needs to handle both scenarios without breaking the step flow.
+4. **Scrap-then-replace flow** — After discarding within a step, the step stays open until a replacement is scanned. If the IPK has spares, they grab from there. If not, they go to inventory. The WI page must keep the step active (not advance) until a good part is scanned and deducted.
 
 5. **IPK barcode printing** — Physical labels for IPK buckets. Consider label printer integration or a printable page with barcode + part list.
 

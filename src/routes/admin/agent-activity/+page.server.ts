@@ -1,8 +1,11 @@
+import { redirect } from '@sveltejs/kit';
 import { connectDB, AuditLog } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ url, locals }) => {
-	if (!locals.user) return { auditEntries: [], pagination: { page: 1, limit: 50, total: 0, hasNext: false, hasPrev: false }, stats: { totalActionsToday: 0, mostCommonAction: '', mostCommonActionCount: 0, lastActiveTime: null }, filters: { actionTypes: [], currentAction: null, currentDateFrom: null, currentDateTo: null } };
+	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'admin:full');
 
 	await connectDB();
 

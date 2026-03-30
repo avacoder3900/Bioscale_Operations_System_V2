@@ -8,13 +8,17 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'inventory:read');
 	await connectDB();
 
-	const [spuParts, cartridgePartDocs, boxInteg] = await Promise.all([
+	const [allSpuParts, cartridgePartDocs, boxInteg] = await Promise.all([
 		PartDefinition.find({ $or: [{ bomType: 'spu' }, { bomType: { $exists: false } }] })
 			.sort({ sortOrder: 1, partNumber: 1 }).lean(),
 		PartDefinition.find({ bomType: 'cartridge', isActive: true })
 			.sort({ partNumber: 1 }).lean(),
 		Integration.findOne({ type: 'box' }).lean()
 	]);
+
+	// Split SPU parts into BOM and non-BOM
+	const spuParts = (allSpuParts as any[]).filter((p: any) => p.isBom !== false);
+	const nonBomParts = (allSpuParts as any[]).filter((p: any) => p.isBom === false);
 
 	// Map SPU parts to expected shape
 	const items = (spuParts as any[]).map((p) => {
@@ -30,6 +34,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			manufacturer: p.manufacturer ?? null,
 			barcode: p.barcode ?? null,
 			inventoryCount: invCount,
+			inventorySource: p.inventorySource ?? 'box_estimate',
 			quantityPerUnit: p.quantityPerUnit ?? null,
 			unitCost: cost,
 			totalValue: cost != null ? cost * invCount : null,
@@ -56,6 +61,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			category: p.category ?? null,
 			quantityPerUnit: p.quantityPerUnit ?? null,
 			inventoryCount: invCount,
+			inventorySource: p.inventorySource ?? 'box_estimate',
 			unitCost: cost,
 			totalValue: cost != null ? cost * invCount : null,
 			manufacturer: p.manufacturer ?? null,
@@ -122,9 +128,22 @@ export const load: PageServerLoad = async ({ locals }) => {
 		.map(inventoryFields);
 	const lowestInventory = [...zeroOrNegative, ...lowPositive];
 
+	// Non-BOM parts mapped
+	const nonBomItems = nonBomParts.map((p: any) => ({
+		id: p._id,
+		partNumber: p.partNumber ?? '',
+		name: p.name ?? '',
+		category: p.category ?? null,
+		supplier: p.supplier ?? null,
+		inventoryCount: p.inventoryCount ?? 0,
+		unitCost: parseFloat(p.unitCost) || null,
+		barcode: p.barcode ?? null
+	}));
+
 	return {
 		items: itemsWithCost,
 		cartridgeParts,
+		nonBomItems,
 		cartridgeBomSummary,
 		lowStockItems,
 		lowestInventory,
@@ -231,12 +250,13 @@ export const actions: Actions = {
 		requirePermission(locals.user, 'inventory:write');
 		try {
 			const result = await syncPartsFromBox();
-			const msg = `Sync complete: ${result.upserted} parts upserted from "${result.fileName}"${result.errors.length > 0 ? ` (${result.errors.length} row errors)` : ''}.`;
+			const msg = `Sync complete: ${result.created} created, ${result.updated} updated from "${result.fileName}"${result.errors.length > 0 ? ` (${result.errors.length} row errors)` : ''}.`;
 			return {
 				success: true,
 				message: msg,
 				syncResult: {
-					upserted: result.upserted,
+					created: result.created,
+					updated: result.updated,
 					skipped: result.skipped,
 					errorCount: result.errors.length,
 					columnMap: result.columnMap,

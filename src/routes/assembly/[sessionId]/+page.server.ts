@@ -1,8 +1,8 @@
 import { fail, error } from '@sveltejs/kit';
-import { requirePermission } from '$lib/server/permissions';
+import { requirePermission, hasPermission } from '$lib/server/permissions';
 import {
 	connectDB, AssemblySession, Spu, WorkInstruction, PartDefinition,
-	BomItem, InventoryTransaction, generateId
+	BomItem, InventoryTransaction, generateId, AuditLog
 } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -136,10 +136,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		};
 	});
 
-	const canRetract = !!(locals.user as any)?.permissions?.includes('inventory:retract')
-		|| !!(locals.user as any)?.roles?.some((r: any) =>
-			r.permissions?.includes('inventory:retract') || r.roleName === 'admin'
-		);
+	const canRetract = hasPermission(locals.user, 'inventory:retract') || hasPermission(locals.user, 'admin:full');
 
 	return {
 		session: {
@@ -191,6 +188,14 @@ export const actions: Actions = {
 		if (!stepRecord.fieldRecords) stepRecord.fieldRecords = [];
 		stepRecord.fieldRecords.push({ _id: generateId(), stepFieldDefinitionId, fieldValue: rawValue, rawBarcodeData: isBarcodeScan ? rawValue : null, scannedAt: new Date(), capturedBy: locals.user!._id });
 		await session.save();
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assembly_sessions',
+			recordId: params.sessionId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username ?? locals.user?._id,
+			changedAt: new Date()
+		});
 		return { success: true, bomItemLinked: false };
 	},
 
@@ -228,6 +233,14 @@ export const actions: Actions = {
 				inventoryDeduction = { previousQuantity: prevQty, newQuantity: newQty };
 			}
 		}
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assembly_sessions',
+			recordId: params.sessionId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username ?? locals.user?._id,
+			changedAt: new Date()
+		});
 		return { success: true, inventoryDeduction };
 	},
 
@@ -243,6 +256,14 @@ export const actions: Actions = {
 		if (txn.retractedAt) return fail(400, { error: 'Transaction already retracted' });
 		if (txn.partDefinitionId) await PartDefinition.updateOne({ _id: txn.partDefinitionId }, { $inc: { inventoryCount: Math.abs(txn.quantity) } });
 		await InventoryTransaction.updateOne({ _id: transactionId }, { $set: { retractedAt: new Date(), retractedBy: locals.user!.username, retractionReason: reason } });
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assembly_sessions',
+			recordId: params.sessionId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username ?? locals.user?._id,
+			changedAt: new Date()
+		});
 		return { success: true };
 	},
 
@@ -250,6 +271,14 @@ export const actions: Actions = {
 		requirePermission(locals.user, 'spu:write');
 		await connectDB();
 		await AssemblySession.updateOne({ _id: params.sessionId }, { $set: { status: 'paused', pausedAt: new Date() } });
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assembly_sessions',
+			recordId: params.sessionId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username ?? locals.user?._id,
+			changedAt: new Date()
+		});
 		return { success: true };
 	},
 
@@ -257,6 +286,14 @@ export const actions: Actions = {
 		requirePermission(locals.user, 'spu:write');
 		await connectDB();
 		await AssemblySession.updateOne({ _id: params.sessionId }, { $set: { status: 'in_progress' }, $unset: { pausedAt: '' } });
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assembly_sessions',
+			recordId: params.sessionId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username ?? locals.user?._id,
+			changedAt: new Date()
+		});
 		return { success: true };
 	}
 };

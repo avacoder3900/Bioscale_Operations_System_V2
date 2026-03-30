@@ -1,8 +1,10 @@
 import { error } from '@sveltejs/kit';
 import { connectDB, WorkInstruction } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ params }) => {
+export const load: PageServerLoad = async ({ params, locals }) => {
+	requirePermission(locals.user, 'workInstruction:read');
 	await connectDB();
 	const wi = await WorkInstruction.findById(params.id).lean() as any;
 	if (!wi) error(404, 'Work instruction not found');

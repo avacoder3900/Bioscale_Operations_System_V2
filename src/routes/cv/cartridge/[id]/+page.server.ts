@@ -1,97 +1,52 @@
-import { redirect, error } from '@sveltejs/kit';
-import { connectDB } from '$lib/server/db/connection';
-import { cvFetch, cvThumbUrl, cvImageUrl } from '$lib/server/cv-api';
+import { redirect } from '@sveltejs/kit';
+import { connectDB } from '$lib/server/db/connection.js';
+import { CvInspection } from '$lib/server/db/models/cv-inspection.js';
+import { CvImage } from '$lib/server/db/models/cv-image.js';
+import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
 import type { PageServerLoad } from './$types';
-import type { ImageResponse, InspectionResponse, SampleResponse } from '$lib/types/cv';
 
-export const load: PageServerLoad = async ({ locals, params }) => {
+export const load: PageServerLoad = async ({ params, locals }) => {
 	if (!locals.user) redirect(302, '/login');
+	await connectDB();
 
 	const cartridgeId = params.id;
 
-	// Load cartridge record from BIMS MongoDB
-	await connectDB();
-	const { default: mongoose } = await import('mongoose');
-	const CartridgeRecord = mongoose.models.CartridgeRecord;
-
-	let cartridge: Record<string, unknown> | null = null;
-	if (CartridgeRecord) {
-		const doc = await CartridgeRecord.findById(cartridgeId).lean();
-		if (doc) {
-			cartridge = JSON.parse(JSON.stringify(doc));
-		}
-	}
-
-	// Fetch all images tagged with this cartridge from CV API
-	let images: ImageResponse[] = [];
+	// Load cartridge record
+	let cartridge: any = null;
 	try {
-		images = await cvFetch<ImageResponse[]>('/api/v1/images', {
-			params: { cartridge_id: cartridgeId, limit: '200' }
-		});
-	} catch { /* CV API may not have images for this cartridge */ }
+		const doc = await CartridgeRecord.findById(cartridgeId).lean();
+		if (doc) cartridge = JSON.parse(JSON.stringify(doc));
+	} catch { /* may not exist */ }
 
-	// Fetch inspections for related samples
-	const sampleIds = [...new Set(images.map((img) => img.sample_id))];
-	let inspections: InspectionResponse[] = [];
-	for (const sampleId of sampleIds) {
-		try {
-			const sampleInspections = await cvFetch<InspectionResponse[]>('/api/inspections', {
-				params: { sample_id: sampleId }
-			});
-			// Only include inspections for this cartridge
-			inspections.push(
-				...sampleInspections.filter((i) => i.cartridge_record_id === cartridgeId)
-			);
-		} catch { /* skip */ }
+	// Load inspections for this cartridge
+	const inspections = await CvInspection.find({ cartridgeRecordId: cartridgeId })
+		.sort({ createdAt: -1 })
+		.lean();
+
+	// Load related images
+	const imageIds = [...new Set((inspections as any[]).map(i => i.imageId).filter(Boolean))];
+	const images = imageIds.length > 0
+		? await CvImage.find({ _id: { $in: imageIds } }).lean()
+		: [];
+	const imageMap: Record<string, any> = {};
+	for (const img of images as any[]) {
+		imageMap[img._id] = img;
 	}
 
-	// Build inspection lookup by image_id
-	const inspectionByImage = new Map(inspections.map((i) => [i.image_id, i]));
+	// Group inspections by phase
+	const phases = [...new Set((inspections as any[]).map(i => i.phase || 'untagged'))];
 
-	// Build images with URLs and inspection data, grouped by phase
-	const imagesWithData = images.map((img) => {
-		const insp = inspectionByImage.get(img.id);
-		return {
-			...img,
-			thumbUrl: cvThumbUrl(img.id),
-			fullUrl: cvImageUrl(img.id),
-			inspection: insp
-				? {
-						id: insp.id,
-						status: insp.status,
-						result: insp.result,
-						confidence_score: insp.confidence_score,
-						defects: insp.defects,
-						model_version: insp.model_version,
-						processing_time_ms: insp.processing_time_ms,
-						created_at: insp.created_at
-					}
-				: null
-		};
-	});
-
-	// Sort by captured_at descending
-	imagesWithData.sort(
-		(a, b) => new Date(b.captured_at).getTime() - new Date(a.captured_at).getTime()
-	);
-
-	// Group by phase
-	const phases = [...new Set(imagesWithData.map((img) => img.cartridge_tag?.phase || 'untagged'))];
+	const passCount = (inspections as any[]).filter(i => i.result === 'pass').length;
+	const failCount = (inspections as any[]).filter(i => i.result === 'fail').length;
 
 	return {
 		cartridgeId,
-		cartridge: cartridge
-			? {
-					_id: (cartridge as Record<string, unknown>)._id as string,
-					currentPhase: (cartridge as Record<string, unknown>).currentPhase as string,
-					createdAt: (cartridge as Record<string, unknown>).createdAt as string
-				}
-			: null,
-		images: imagesWithData,
+		cartridge,
+		inspections: JSON.parse(JSON.stringify(inspections)),
+		imageMap: JSON.parse(JSON.stringify(imageMap)),
 		phases,
-		inspectionCount: inspections.length,
-		passCount: inspections.filter((i) => i.result === 'pass').length,
-		failCount: inspections.filter((i) => i.result === 'fail').length
+		passCount,
+		failCount
 	};
 };
 

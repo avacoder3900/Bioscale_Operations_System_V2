@@ -1,9 +1,11 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { connectDB, Document, User, ElectronicSignature, AuditLog, generateId } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import bcrypt from 'bcryptjs';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
+	requirePermission(locals.user, 'document:train');
 	await connectDB();
 	const doc = await Document.findById(params.id).lean() as any;
 	if (!doc) error(404, 'Document not found');
@@ -47,6 +49,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 
 export const actions: Actions = {
 	default: async ({ request, params, locals }) => {
+		requirePermission(locals.user, 'document:train');
 		await connectDB();
 		const form = await request.formData();
 		const notes = form.get('notes')?.toString() || undefined;

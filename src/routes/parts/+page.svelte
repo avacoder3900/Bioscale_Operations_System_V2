@@ -8,7 +8,7 @@
 
 	// Tab state from URL
 	const params = page.url.searchParams;
-	let activeTab = $state<'spu' | 'cartridge'>(params.get('tab') === 'cartridge' ? 'cartridge' : 'spu');
+	let activeTab = $state<'spu' | 'cartridge' | 'general'>(params.get('tab') === 'cartridge' ? 'cartridge' : params.get('tab') === 'general' ? 'general' : 'spu');
 
 	// Cartridge parts state
 	let cartSearchQuery = $state('');
@@ -58,7 +58,7 @@
 		return items;
 	});
 
-	function switchTab(tab: 'spu' | 'cartridge') {
+	function switchTab(tab: 'spu' | 'cartridge' | 'general') {
 		activeTab = tab;
 		const url = new URL(page.url);
 		url.searchParams.set('tab', tab);
@@ -280,6 +280,13 @@
 			{#if data.cartridgeBomSummary}
 				<span class="ml-1 text-xs">({data.cartridgeBomSummary.totalParts})</span>
 			{/if}
+		</button>
+		<button
+			class="px-4 py-2 text-sm font-medium transition-colors {activeTab === 'general' ? 'border-b-2 border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
+			onclick={() => switchTab('general')}
+		>
+			General Inventory
+			<span class="ml-1 text-xs">({data.nonBomItems?.length ?? 0})</span>
 		</button>
 	</div>
 
@@ -572,9 +579,14 @@
 									</td>
 									<td class="tron-text-muted">{item.name}</td>
 									<td class="text-right font-mono">
-										<span class={item.inventoryCount <= 0 ? 'text-[var(--color-tron-red)]' : 'text-[var(--color-tron-orange)]'}>
+										<span class={item.inventoryCount <= 0 ? 'text-[var(--color-tron-red)]' : ''}>
 											{item.inventoryCount}
 										</span>
+										{#if item.inventorySource === 'box_estimate'}
+											<span class="ml-1 text-[10px] px-1 py-0.5 rounded bg-yellow-900/50 text-yellow-400" title="From Box spreadsheet — not yet verified by scanning">BOX</span>
+										{:else}
+											<span class="ml-1 text-[10px] px-1 py-0.5 rounded bg-green-900/50 text-green-400" title="Verified via barcode scanning">✓</span>
+										{/if}
 									</td>
 									<td class="text-right font-mono tron-text-muted">
 										{item.leadTimeDays ?? '—'}
@@ -886,6 +898,11 @@
 								{:else}
 									{item.inventoryCount ?? 0}
 								{/if}
+								{#if item.inventorySource === 'box_estimate'}
+									<span class="ml-1 text-[10px] px-1 py-0.5 rounded bg-yellow-900/50 text-yellow-400" title="From Box spreadsheet — not yet verified by scanning">BOX</span>
+								{:else}
+									<span class="ml-1 text-[10px] px-1 py-0.5 rounded bg-green-900/50 text-green-400" title="Verified via barcode scanning">✓</span>
+								{/if}
 							</td>
 							<td class="font-mono">{formatCurrency(item.unitCost)}</td>
 							<td class="font-mono">{formatCurrency(item.totalValue)}</td>
@@ -1074,9 +1091,9 @@
 				</thead>
 				<tbody>
 					{#each filteredCartridgeParts as item (item.id)}
-						<tr>
-							<td>{item.name}</td>
-							<td class="font-mono text-[var(--color-tron-cyan)]">{item.partNumber}</td>
+						<tr class="cursor-pointer hover:bg-white/5" onclick={() => window.location.href = `/parts/${item.id}`}>
+							<td><a href="/parts/{item.id}" class="text-[var(--color-tron-cyan)] hover:underline">{item.name}</a></td>
+							<td class="font-mono text-[var(--color-tron-cyan)]"><a href="/parts/{item.id}" class="hover:underline">{item.partNumber}</a></td>
 							<td>
 								{#if item.category}
 									<TronBadge variant="neutral">{item.category}</TronBadge>
@@ -1114,6 +1131,39 @@
 								{/if}
 							</td>
 						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+	</TronCard>
+	{/if}
+
+	{#if activeTab === 'general'}
+	<TronCard>
+		<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">General Inventory (Non-BOM)</h3>
+		<p class="tron-text-muted text-xs mb-4">These items are tracked in inventory but are not part of the SPU or Cartridge BOM. They don't affect build capacity calculations.</p>
+		<div class="overflow-x-auto">
+			<table class="tron-table">
+				<thead>
+					<tr>
+						<th>Part #</th>
+						<th>Name</th>
+						<th>Category</th>
+						<th>Supplier</th>
+						<th class="text-right">Inventory</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each data.nonBomItems ?? [] as item (item.id)}
+						<tr class="cursor-pointer hover:bg-white/5" onclick={() => window.location.href = `/parts/${item.id}`}>
+							<td class="font-mono text-[var(--color-tron-cyan)]"><a href="/parts/{item.id}" class="hover:underline">{item.partNumber}</a></td>
+							<td>{item.name}</td>
+							<td class="tron-text-muted">{item.category ?? '—'}</td>
+							<td class="tron-text-muted">{item.supplier ?? '—'}</td>
+							<td class="text-right font-mono {(item.inventoryCount ?? 0) <= 0 ? 'text-[var(--color-tron-red)]' : ''}">{item.inventoryCount}</td>
+						</tr>
+					{:else}
+						<tr><td colspan="5" class="tron-text-muted py-8 text-center">No general inventory items</td></tr>
 					{/each}
 				</tbody>
 			</table>

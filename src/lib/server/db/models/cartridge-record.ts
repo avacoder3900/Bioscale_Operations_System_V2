@@ -27,7 +27,7 @@ const cartridgeRecordSchema = new Schema({
 	},
 	waxFilling: {
 		runId: String, robotId: String, robotName: String, deckId: String, deckPosition: Number,
-		waxTubeId: String, waxSourceLot: String, transferTimeSeconds: Number,
+		waxTubeId: String, waxSourceLot: String, transferTimeSeconds: Number, // ORPHANED: never written by any action
 		operator: operatorRef, runStartTime: Date, runEndTime: Date, recordedAt: Date
 	},
 	waxQc: {
@@ -41,7 +41,7 @@ const cartridgeRecordSchema = new Schema({
 		runId: String, robotId: String, robotName: String,
 		assayType: { _id: String, name: String, skuCode: String },
 		deckPosition: Number,
-		tubeRecords: [{ wellPosition: Number, reagentName: String, sourceLotId: String, transferTubeId: String }],
+		tubeRecords: [{ _id: false, wellPosition: Number, reagentName: String, sourceLotId: String, transferTubeId: String }],
 		operator: operatorRef, fillDate: Date, expirationDate: Date, recordedAt: Date
 	},
 	reagentInspection: {
@@ -58,7 +58,9 @@ const cartridgeRecordSchema = new Schema({
 		recordedAt: Date
 	},
 	storage: {
-		fridgeId: String, fridgeName: String, locationId: String, containerBarcode: String,
+		fridgeId: String, // ORPHANED: never written by any action
+		fridgeName: String, locationId: String,
+		containerBarcode: String, // ORPHANED: never written by any action
 		operator: operatorRef, timestamp: Date, recordedAt: Date
 	},
 	qaqcRelease: {
@@ -77,7 +79,7 @@ const cartridgeRecordSchema = new Schema({
 	testExecution: {
 		spu: {
 			_id: String, udi: String,
-			parts: [{ partNumber: String, partName: String, lotNumber: String, serialNumber: String }],
+			parts: [{ _id: false, partNumber: String, partName: String, lotNumber: String, serialNumber: String }],
 			firmwareVersion: String,
 			lastValidation: { type: String, status: String, completedAt: Date },
 			particleLink: { particleSerial: String, particleDeviceId: String }
@@ -92,25 +94,29 @@ const cartridgeRecordSchema = new Schema({
 		analyte: String, value: Number, unit: String,
 		referenceRange: { low: Number, high: Number },
 		interpretation: String,
-		spectroReadings: [{ readingNumber: Number, channel: String, value: Number, timestampMs: Number }],
+		spectroReadings: [{ _id: false, readingNumber: Number, channel: String, value: Number, timestampMs: Number }],
 		processedData: Schema.Types.Mixed,
 		status: { type: String, enum: ['pending', 'completed', 'failed', 'invalid'] },
 		completedAt: Date, recordedAt: Date
 	},
 
-	currentPhase: {
+	status: {
 		type: String,
-		enum: ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected',
-			'sealed', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed', 'voided']
+		enum: [
+			'backing', 'wax_filling', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected',
+			'sealed', 'cured', 'stored', 'released', 'shipped',
+			'linked', 'underway', 'completed', 'cancelled', 'scrapped', 'voided',
+			'packeted', 'transferred', 'refrigerated', 'received'
+		]
 	},
 
-	finalizedAt: Date,
+	finalizedAt: Date, // ORPHANED: never written by any action
 	voidedAt: Date,
 	voidReason: String,
 	corrections: [correctionSchema]
 }, { timestamps: true });
 
-cartridgeRecordSchema.index({ currentPhase: 1 });
+cartridgeRecordSchema.index({ status: 1 });
 cartridgeRecordSchema.index({ 'backing.lotId': 1 });
 cartridgeRecordSchema.index({ 'waxFilling.runId': 1 });
 cartridgeRecordSchema.index({ 'reagentFilling.runId': 1 });
@@ -119,7 +125,7 @@ cartridgeRecordSchema.index({ 'storage.locationId': 1 });
 cartridgeRecordSchema.index({ 'storage.containerBarcode': 1 });
 cartridgeRecordSchema.index({ 'qaqcRelease.shippingLotId': 1 });
 cartridgeRecordSchema.index({ 'shipping.packageId': 1 });
-cartridgeRecordSchema.index({ currentPhase: 1, 'reagentFilling.expirationDate': 1 });
+cartridgeRecordSchema.index({ status: 1, 'reagentFilling.expirationDate': 1 });
 cartridgeRecordSchema.index({ 'testExecution.spu._id': 1 });
 cartridgeRecordSchema.index({ 'sample.subjectId': 1 });
 cartridgeRecordSchema.index({ 'testResult.status': 1 });

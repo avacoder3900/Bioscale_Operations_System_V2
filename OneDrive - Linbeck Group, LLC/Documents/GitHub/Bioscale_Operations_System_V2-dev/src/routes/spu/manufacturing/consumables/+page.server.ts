@@ -1,9 +1,11 @@
 import { redirect, fail } from '@sveltejs/kit';
 import { connectDB, Consumable, AuditLog, generateId } from '$lib/server/db';
+import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
 	const consumables = await Consumable.find().sort({ type: 1, createdAt: -1 }).lean();
@@ -57,6 +59,7 @@ export const actions: Actions = {
 	/** Create a new consumable of any type */
 	create: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -110,6 +113,7 @@ export const actions: Actions = {
 	/** Update consumable status */
 	updateStatus: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();
@@ -139,6 +143,7 @@ export const actions: Actions = {
 	/** Log manual usage against a consumable */
 	logUsage: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 
 		const data = await request.formData();

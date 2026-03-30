@@ -14,7 +14,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		ManufacturingSettings.findById('default').lean(),
 		// Cartridges that are sealed/inspected and waiting in cooling before final storage
 		CartridgeRecord.find({
-			currentPhase: { $in: ['sealed', 'inspected', 'reagent_filled'] }
+			status: { $in: ['sealed', 'inspected', 'reagent_filled'] }
 		}).sort({ 'reagentFilling.fillDate': -1 }).limit(200).lean()
 	]);
 

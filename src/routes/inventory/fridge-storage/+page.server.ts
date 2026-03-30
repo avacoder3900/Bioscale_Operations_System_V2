@@ -1,31 +1,74 @@
 import { redirect } from '@sveltejs/kit';
-import { connectDB, CartridgeRecord, EquipmentLocation } from '$lib/server/db';
+import { connectDB, CartridgeRecord, Equipment, EquipmentLocation } from '$lib/server/db';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	await connectDB();
 
-	// Get all fridges
-	const fridgesRaw = await EquipmentLocation.find({ locationType: 'fridge' }).sort({ displayName: 1 }).lean().catch(() => []);
-	const fridges = (fridgesRaw as any[]).map((f) => ({
-		id: String(f._id),
-		displayName: f.displayName ?? f.name ?? String(f._id),
-		barcode: f.barcode ?? '',
-		isActive: f.isActive ?? true
-	}));
+	// Get parent fridges from Equipment collection
+	const equipDocs = await Equipment.find({ equipmentType: 'fridge' }).sort({ name: 1 }).lean().catch(() => []);
+	// Get child locations for each equipment
+	const locationDocs = await EquipmentLocation.find({ locationType: 'fridge' }).lean().catch(() => []);
+
+	// Build parent-to-children map
+	const childMap = new Map<string, any[]>();
+	const orphanLocations: any[] = [];
+	for (const loc of locationDocs as any[]) {
+		if (loc.parentEquipmentId) {
+			const children = childMap.get(loc.parentEquipmentId) ?? [];
+			children.push(loc);
+			childMap.set(loc.parentEquipmentId, children);
+		} else {
+			orphanLocations.push(loc);
+		}
+	}
+
+	// Build fridges list from Equipment + orphan locations
+	const fridges: { id: string; displayName: string; barcode: string; isActive: boolean; matchKeys: string[] }[] = [];
+
+	for (const equip of equipDocs as any[]) {
+		const children = childMap.get(String(equip._id)) ?? [];
+		// Match keys: equipment barcode/name + all child barcodes/displayNames
+		const matchKeys: string[] = [];
+		if (equip.barcode) matchKeys.push(equip.barcode);
+		if (equip.name) matchKeys.push(equip.name);
+		for (const child of children) {
+			if (child.barcode) matchKeys.push(child.barcode);
+			if (child.displayName) matchKeys.push(child.displayName);
+		}
+		fridges.push({
+			id: String(equip._id),
+			displayName: equip.name ?? equip.barcode ?? String(equip._id),
+			barcode: equip.barcode ?? '',
+			isActive: equip.status !== 'offline',
+			matchKeys: [...new Set(matchKeys)]
+		});
+	}
+
+	// Add orphan EquipmentLocations as standalone fridges
+	for (const loc of orphanLocations) {
+		const matchKeys: string[] = [];
+		if (loc.barcode) matchKeys.push(loc.barcode);
+		if (loc.displayName) matchKeys.push(loc.displayName);
+		fridges.push({
+			id: String(loc._id),
+			displayName: loc.displayName ?? loc.barcode ?? String(loc._id),
+			barcode: loc.barcode ?? '',
+			isActive: loc.isActive ?? true,
+			matchKeys: [...new Set(matchKeys)]
+		});
+	}
 
 	// Get all stored cartridges (wax storage + reagent storage)
-	// Wax-filled (wax_stored phase): have waxStorage.location set (fridge barcode)
-	// Reagent-filled (stored phase): have storage.locationId set (fridge barcode)
 	const storedCartridges = await CartridgeRecord.find({
 		$or: [
-			{ 'waxStorage.location': { $exists: true, $ne: null }, currentPhase: 'wax_stored' },
-			{ 'storage.fridgeName': { $exists: true, $ne: null }, currentPhase: { $in: ['stored', 'reagent_filled'] } }
+			{ 'waxStorage.location': { $exists: true, $ne: null }, status: 'wax_stored' },
+			{ 'storage.fridgeName': { $exists: true, $ne: null }, status: { $in: ['stored', 'reagent_filled'] } }
 		]
 	}).select({
 		_id: 1,
-		currentPhase: 1,
+		status: 1,
 		'waxStorage.location': 1,
 		'waxStorage.recordedAt': 1,
 		'waxStorage.operator': 1,
@@ -38,56 +81,57 @@ export const load: PageServerLoad = async ({ locals }) => {
 		createdAt: 1
 	}).lean().catch(() => []);
 
-	// Group cartridges by fridge
-	const fridgeMap = new Map<string, any[]>();
-	// Initialize with known fridges
-	for (const f of fridges) {
-		fridgeMap.set(f.barcode || f.displayName, []);
+	// Build a reverse lookup: matchKey -> fridgeIndex
+	const keyToFridge = new Map<string, number>();
+	for (let i = 0; i < fridges.length; i++) {
+		for (const key of fridges[i].matchKeys) {
+			keyToFridge.set(key, i);
+		}
 	}
 
-	// Also track an "Unassigned" bucket for unknown locations
+	// Group cartridges by fridge
+	const fridgeCartridges: any[][] = fridges.map(() => []);
+
 	for (const c of storedCartridges as any[]) {
 		const waxLoc = c.waxStorage?.location;
 		const reagentLoc = c.storage?.fridgeName;
 
-		if (waxLoc) {
-			const list = fridgeMap.get(waxLoc) ?? [];
-			list.push({
+		if (waxLoc && keyToFridge.has(waxLoc)) {
+			const idx = keyToFridge.get(waxLoc)!;
+			fridgeCartridges[idx].push({
 				id: String(c._id),
 				type: 'wax_filled',
-				phase: c.currentPhase ?? 'wax_stored',
+				phase: c.status ?? 'wax_stored',
 				location: waxLoc,
 				storedAt: c.waxStorage?.recordedAt ? new Date(c.waxStorage.recordedAt).toISOString() : null,
 				operator: c.waxStorage?.operator?.username ?? null,
 				runId: c.waxFilling?.runId ?? null,
 				assayType: null
 			});
-			fridgeMap.set(waxLoc, list);
 		}
 
-		if (reagentLoc) {
-			const list = fridgeMap.get(reagentLoc) ?? [];
-			list.push({
+		if (reagentLoc && keyToFridge.has(reagentLoc)) {
+			const idx = keyToFridge.get(reagentLoc)!;
+			fridgeCartridges[idx].push({
 				id: String(c._id),
 				type: 'reagent_filled',
-				phase: c.currentPhase ?? 'stored',
+				phase: c.status ?? 'stored',
 				location: reagentLoc,
 				storedAt: c.storage?.recordedAt ? new Date(c.storage.recordedAt).toISOString() : null,
 				operator: c.storage?.operator?.username ?? null,
 				runId: c.reagentFilling?.runId ?? null,
 				assayType: c.reagentFilling?.assayType?.name ?? null
 			});
-			fridgeMap.set(reagentLoc, list);
 		}
 	}
 
-	const fridgeInventory = Array.from(fridgeMap.entries()).map(([location, cartridges]) => {
-		const fridge = fridges.find((f) => f.barcode === location || f.displayName === location);
+	const fridgeInventory = fridges.map((fridge, i) => {
+		const cartridges = fridgeCartridges[i];
 		return {
-			location,
-			fridgeId: fridge?.id ?? null,
-			displayName: fridge?.displayName ?? location,
-			isActive: fridge?.isActive ?? true,
+			location: fridge.barcode || fridge.displayName,
+			fridgeId: fridge.id,
+			displayName: fridge.displayName,
+			isActive: fridge.isActive,
 			cartridges,
 			waxCount: cartridges.filter((c: any) => c.type === 'wax_filled').length,
 			reagentCount: cartridges.filter((c: any) => c.type === 'reagent_filled').length,

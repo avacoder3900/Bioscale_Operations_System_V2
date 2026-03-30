@@ -212,7 +212,7 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 		success: true,
 		cartridge: {
 			cartridgeId: cartridge._id,
-			currentPhase: cartridge.currentPhase ?? 'unknown',
+			currentPhase: cartridge.status ?? 'unknown',
 			voidedAt: cartridge.voidedAt ?? null,
 			voidReason: cartridge.voidReason ?? null,
 			createdAt: cartridge.createdAt,
