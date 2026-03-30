@@ -72,9 +72,16 @@ export const load: PageServerLoad = async ({ params, url, locals }) => {
 	let sessionUploadCount = 0;
 
 	for (const log of logs as any[]) {
-		const bootTime = log.bootTime ? new Date(log.bootTime).getTime() : null;
 		const uploadTime = new Date(log.uploadedAt).getTime();
-		const lastMs = log.logLines?.length > 0 ? log.logLines[log.logLines.length - 1].ms : 0;
+		const maxMs = log.logLines?.length > 0
+			? Math.max(...log.logLines.map((l: any) => l.ms ?? 0))
+			: 0;
+
+		// Per-chunk anchor: the last line in this chunk was written at ~uploadedAt,
+		// so the chunk's time origin is (uploadedAt - maxMs). Each line's wall-clock
+		// is then (uploadedAt - maxMs + line.ms). This correctly interleaves firmware
+		// lines with webhook/event timestamps that use server wall-clock time.
+		const chunkOrigin = uploadTime - maxMs;
 
 		// Emit session header only when bootCount changes (= real reboot)
 		if (log.bootCount !== lastBootCount) {
@@ -82,8 +89,13 @@ export const load: PageServerLoad = async ({ params, url, locals }) => {
 			const fwLabel = log.firmwareVersion != null ? `v${log.firmwareVersion}` : 'unknown';
 			const bootLabel = log.bootCount != null ? `#${log.bootCount}` : 'unknown';
 
+			// Session header timestamp = earliest line in this chunk
+			const minMs = log.logLines?.length > 0
+				? Math.min(...log.logLines.map((l: any) => l.ms ?? 0))
+				: 0;
+
 			timeline.push({
-				timestamp: (bootTime ? new Date(bootTime) : new Date(uploadTime - lastMs)).toISOString(),
+				timestamp: new Date(chunkOrigin + minMs).toISOString(),
 				source: 'firmware',
 				data: {
 					ms: 0,
@@ -106,9 +118,7 @@ export const load: PageServerLoad = async ({ params, url, locals }) => {
 		// Flatten log lines from this upload chunk into the timeline
 		if (log.logLines) {
 			for (const line of log.logLines) {
-				const ts = bootTime
-					? new Date(bootTime + (line.ms || 0))
-					: new Date(uploadTime - lastMs + (line.ms || 0));
+				const ts = new Date(chunkOrigin + (line.ms || 0));
 
 				sessionLineCount++;
 				timeline.push({
