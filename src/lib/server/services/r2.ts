@@ -92,6 +92,10 @@ export function getPresignedUploadUrl(key: string, contentType: string, expiresI
 // --- Public URL ---
 
 export function getR2Url(key: string): string {
+	const workerUrl = env.R2_WORKER_URL;
+	if (workerUrl) {
+		return `${workerUrl}/file/${encodeURIComponent(key)}`;
+	}
 	const cfg = getConfig();
 	return `${cfg.publicUrl}/${key}`;
 }

@@ -31,13 +31,16 @@ export default {
 		const url = new URL(request.url);
 		const path = url.pathname;
 
-		// Simple auth — check shared secret
-		const secret = request.headers.get('X-Upload-Secret');
-		if (secret !== env.UPLOAD_SECRET) {
-			return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-				status: 401,
-				headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
-			});
+		// Auth check — required for PUT/DELETE, public for GET/HEAD
+		const requiresAuth = request.method === 'PUT' || request.method === 'DELETE';
+		if (requiresAuth) {
+			const secret = request.headers.get('X-Upload-Secret');
+			if (secret !== env.UPLOAD_SECRET) {
+				return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+					status: 401,
+					headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+				});
+			}
 		}
 
 		// PUT /upload/:key — upload to R2
