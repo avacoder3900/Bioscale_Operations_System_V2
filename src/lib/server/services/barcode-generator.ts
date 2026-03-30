@@ -1,6 +1,6 @@
 import { connectDB } from '$lib/server/db/connection';
 import { GeneratedBarcode } from '$lib/server/db/models';
-import { generateId } from '$lib/server/db/models';
+import { generateId } from '$lib/server/db';
 
 const PART_PREFIX = 'PRT';
 

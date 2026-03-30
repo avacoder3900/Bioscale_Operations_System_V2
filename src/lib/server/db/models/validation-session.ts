@@ -6,7 +6,7 @@ const validationSessionSchema = new Schema({
 	type: String, spuId: String, generatedBarcodeId: String,
 	status: { type: String, enum: ['pending', 'in_progress', 'running', 'completed', 'failed', 'timed_out'] },
 	startedAt: Date, completedAt: Date, userId: String,
-	spuUdi: String, spuId: String, particleDeviceId: String,
+	spuUdi: String, particleDeviceId: String,
 	rawData: Schema.Types.Mixed,
 	magResults: Schema.Types.Mixed,
 	overallPassed: Boolean,
