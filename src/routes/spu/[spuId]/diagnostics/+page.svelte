@@ -57,6 +57,10 @@
 		return /^===\s*(PREV SESSION|END) CHECKPOINTS/i.test(message) || /^\s*CP\[/.test(message);
 	}
 
+	function isMetadataLine(message: string): boolean {
+		return /UPLOAD METADATA/i.test(message) || /^={4,}/.test(message.trim());
+	}
+
 	function truncate(str: string | null, len: number): string {
 		if (!str) return '—';
 		return str.length > len ? str.slice(0, len) + '...' : str;
@@ -65,6 +69,9 @@
 	// Filter timeline entries based on source toggles and search
 	function filteredTimeline() {
 		return data.timeline.filter((entry: any) => {
+			// Hide metadata lines (UPLOAD METADATA / ==== separator lines)
+			if (entry.source === 'firmware' && !entry.data.isSessionHeader && entry.data.message && isMetadataLine(entry.data.message)) return false;
+
 			// Source filter
 			if (entry.source === 'firmware' && !showFirmware) return false;
 			if (entry.source === 'webhook' && !showWebhooks) return false;
@@ -76,7 +83,6 @@
 				return entry.data.message?.toLowerCase().includes(searchQuery.toLowerCase());
 			}
 			if (searchQuery && entry.source !== 'firmware') {
-				// Keep non-firmware entries visible during search
 				return true;
 			}
 
@@ -382,10 +388,12 @@
 													<div class="max-h-80 overflow-y-auto rounded border p-3 font-mono text-xs" style="border-color: var(--color-tron-border); background: var(--color-tron-bg);">
 														{#if log.logLines && log.logLines.length > 0}
 															{#each log.logLines as line}
-																<div class="py-0.5 flex gap-3" style="color: {isErrorLine(line.message) ? 'var(--color-tron-red, #ef4444)' : 'var(--color-tron-text-primary)'}; {isErrorLine(line.message) ? 'font-weight: bold;' : ''}">
-																	<span class="tron-text-muted shrink-0 w-16 text-right">{line.ms != null ? `${(line.ms / 1000).toFixed(1)}s` : ''}</span>
-																	<span>{line.message}</span>
-																</div>
+																{#if !isMetadataLine(line.message)}
+																	<div class="py-0.5 flex gap-3" style="color: {isErrorLine(line.message) ? 'var(--color-tron-red, #ef4444)' : 'var(--color-tron-text-primary)'}; {isErrorLine(line.message) ? 'font-weight: bold;' : ''}">
+																		<span class="tron-text-muted shrink-0 w-16 text-right">{line.ms != null ? `${(line.ms / 1000).toFixed(1)}s` : ''}</span>
+																		<span>{line.message}</span>
+																	</div>
+																{/if}
 															{/each}
 														{:else}
 															<div class="tron-text-muted">
