@@ -64,39 +64,53 @@ export const load: PageServerLoad = async ({ params, url, locals }) => {
 	// Build unified timeline
 	const timeline: TimelineEntry[] = [];
 
-	// Flatten firmware log lines into individual timeline entries
+	// Group device_logs by bootCount to reconstruct continuous sessions.
+	// Multiple upload chunks share the same bootCount — they're not separate reboots.
+	// Only emit a session header when bootCount changes.
+	let lastBootCount: number | null = null;
+	let sessionLineCount = 0;
+	let sessionUploadCount = 0;
+
 	for (const log of logs as any[]) {
 		const bootTime = log.bootTime ? new Date(log.bootTime).getTime() : null;
 		const uploadTime = new Date(log.uploadedAt).getTime();
 		const lastMs = log.logLines?.length > 0 ? log.logLines[log.logLines.length - 1].ms : 0;
 
-		// Add a session boundary marker
-		const displayName = log.deviceName || log.deviceId;
-		const fwLabel = log.firmwareVersion != null ? `v${log.firmwareVersion}` : 'unknown';
-		const bootLabel = log.bootCount != null ? `#${log.bootCount}` : 'unknown';
+		// Emit session header only when bootCount changes (= real reboot)
+		if (log.bootCount !== lastBootCount) {
+			const displayName = log.deviceName || log.deviceId;
+			const fwLabel = log.firmwareVersion != null ? `v${log.firmwareVersion}` : 'unknown';
+			const bootLabel = log.bootCount != null ? `#${log.bootCount}` : 'unknown';
 
-		timeline.push({
-			timestamp: (bootTime ? new Date(bootTime) : new Date(uploadTime - lastMs)).toISOString(),
-			source: 'firmware',
-			data: {
-				ms: 0,
-				message: `======== SESSION START ========\nBoot ${bootLabel} | ${displayName} | Firmware: ${fwLabel}`,
-				sessionId: log.sessionId,
-				isSessionHeader: true,
-				firmwareVersion: log.firmwareVersion,
-				bootCount: log.bootCount,
-				deviceName: log.deviceName,
-				uploadedAt: log.uploadedAt,
-				lineCount: log.lineCount
-			}
-		});
+			timeline.push({
+				timestamp: (bootTime ? new Date(bootTime) : new Date(uploadTime - lastMs)).toISOString(),
+				source: 'firmware',
+				data: {
+					ms: 0,
+					message: `======== SESSION START ========\nBoot ${bootLabel} | ${displayName} | Firmware: ${fwLabel}`,
+					sessionId: log.sessionId,
+					isSessionHeader: true,
+					firmwareVersion: log.firmwareVersion,
+					bootCount: log.bootCount,
+					deviceName: log.deviceName,
+					uploadedAt: log.uploadedAt
+				}
+			});
+			lastBootCount = log.bootCount;
+			sessionLineCount = 0;
+			sessionUploadCount = 0;
+		}
 
+		sessionUploadCount++;
+
+		// Flatten log lines from this upload chunk into the timeline
 		if (log.logLines) {
 			for (const line of log.logLines) {
 				const ts = bootTime
 					? new Date(bootTime + (line.ms || 0))
 					: new Date(uploadTime - lastMs + (line.ms || 0));
 
+				sessionLineCount++;
 				timeline.push({
 					timestamp: ts.toISOString(),
 					source: 'firmware',
