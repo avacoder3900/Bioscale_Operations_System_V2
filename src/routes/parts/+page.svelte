@@ -8,7 +8,7 @@
 
 	// Tab state from URL
 	const params = page.url.searchParams;
-	let activeTab = $state<'spu' | 'cartridge' | 'general'>(params.get('tab') === 'cartridge' ? 'cartridge' : params.get('tab') === 'general' ? 'general' : 'spu');
+	let activeTab = $state<'spu' | 'cartridge' | 'general' | 'bom'>(params.get('tab') === 'cartridge' ? 'cartridge' : params.get('tab') === 'general' ? 'general' : params.get('tab') === 'bom' ? 'bom' : 'spu');
 
 	// Cartridge parts state
 	let cartSearchQuery = $state('');
@@ -58,7 +58,7 @@
 		return items;
 	});
 
-	function switchTab(tab: 'spu' | 'cartridge' | 'general') {
+	function switchTab(tab: 'spu' | 'cartridge' | 'general' | 'bom') {
 		activeTab = tab;
 		const url = new URL(page.url);
 		url.searchParams.set('tab', tab);
@@ -287,6 +287,13 @@
 		>
 			General Inventory
 			<span class="ml-1 text-xs">({data.nonBomItems?.length ?? 0})</span>
+		</button>
+		<button
+			class="px-4 py-2 text-sm font-medium transition-colors {activeTab === 'bom' ? 'border-b-2 border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
+			onclick={() => switchTab('bom')}
+		>
+			BOM
+			<span class="ml-1 text-xs">({data.bomParts?.length ?? 0})</span>
 		</button>
 	</div>
 
@@ -1136,6 +1143,79 @@
 			</table>
 		</div>
 	</TronCard>
+	{/if}
+
+	{#if activeTab === 'bom'}
+	<div class="space-y-4">
+		<!-- Header with buildable count -->
+		<TronCard>
+			<div class="flex items-center justify-between">
+				<div>
+					<h2 class="font-mono text-2xl font-bold text-[var(--color-tron-cyan)]">SPU Bill of Materials</h2>
+					<p class="tron-text-muted text-sm">Complete BOM for one SPU — {data.bomParts?.length ?? 0} parts</p>
+				</div>
+				<div class="text-right">
+					<div class="text-4xl font-bold font-mono {(data.spuBuildable ?? 0) < 5 ? 'text-[var(--color-tron-red)]' : (data.spuBuildable ?? 0) < 20 ? 'text-[var(--color-tron-orange)]' : 'text-[var(--color-tron-green)]'}">{data.spuBuildable ?? 0}</div>
+					<div class="text-xs tron-text-muted">Buildable SPUs</div>
+				</div>
+			</div>
+			{#if data.bottleneckPart}
+				<div class="mt-3 rounded border border-[var(--color-tron-red)]/30 bg-[var(--color-tron-red)]/10 px-3 py-2 text-sm">
+					<span class="font-semibold text-[var(--color-tron-red)]">Bottleneck:</span>
+					<span class="font-mono text-[var(--color-tron-text)]">{data.bottleneckPart.partNumber}</span>
+					<span class="tron-text-muted">({data.bottleneckPart.name})</span>
+					— limits production to <span class="font-bold text-[var(--color-tron-red)]">{data.bottleneckPart.buildable}</span> units
+				</div>
+			{/if}
+		</TronCard>
+
+		<!-- BOM Table -->
+		<TronCard>
+			<div class="overflow-x-auto">
+				<table class="tron-table">
+					<thead>
+						<tr>
+							<th>Part #</th>
+							<th>Name</th>
+							<th>Category</th>
+							<th class="text-right">Qty/Unit</th>
+							<th class="text-right">Inventory</th>
+							<th class="text-right">Buildable</th>
+							<th>Source</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each data.bomParts ?? [] as part, i}
+							{#if i === 0 || part.category !== (data.bomParts ?? [])[i - 1]?.category}
+								<tr>
+									<td colspan="7" class="bg-white/5 py-1 px-3 text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">
+										{part.category ?? 'Uncategorized'}
+									</td>
+								</tr>
+							{/if}
+							<tr class="hover:bg-white/5">
+								<td class="font-mono text-[var(--color-tron-cyan)]">{part.partNumber}</td>
+								<td>{part.name}</td>
+								<td class="tron-text-muted text-xs">{part.category ?? '—'}</td>
+								<td class="text-right font-mono">{part.quantityPerUnit}</td>
+								<td class="text-right font-mono {part.inventoryCount <= 0 ? 'text-[var(--color-tron-red)]' : ''}">{part.inventoryCount}</td>
+								<td class="text-right font-mono font-bold {part.buildable < 5 ? 'text-[var(--color-tron-red)]' : part.buildable < 20 ? 'text-[var(--color-tron-orange)]' : 'text-[var(--color-tron-green)]'}">{part.buildable}</td>
+								<td>
+									{#if part.inventorySource === 'scan'}
+										<span class="text-[var(--color-tron-green)]" title="Verified by scan">✓</span>
+									{:else}
+										<span class="rounded bg-yellow-600/30 px-1.5 py-0.5 text-xs font-mono text-yellow-400" title="Unverified (Box estimate)">BOX</span>
+									{/if}
+								</td>
+							</tr>
+						{:else}
+							<tr><td colspan="7" class="tron-text-muted py-8 text-center">No BOM parts found</td></tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		</TronCard>
+	</div>
 	{/if}
 
 	{#if activeTab === 'general'}

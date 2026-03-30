@@ -140,6 +140,31 @@ export const load: PageServerLoad = async ({ locals }) => {
 		barcode: p.barcode ?? null
 	}));
 
+	// BOM tab: active BOM parts with quantityPerUnit > 0
+	const bomParts = (spuParts as any[])
+		.filter((p: any) => p.isActive !== false && p.quantityPerUnit > 0)
+		.sort((a: any, b: any) => (a.category ?? '').localeCompare(b.category ?? '') || (a.partNumber ?? '').localeCompare(b.partNumber ?? ''))
+		.map((p: any) => {
+			const invCount = p.inventoryCount ?? 0;
+			const qpu = p.quantityPerUnit;
+			return {
+				partNumber: p.partNumber ?? '',
+				name: p.name ?? '',
+				quantityPerUnit: qpu,
+				inventoryCount: invCount,
+				buildable: Math.floor(invCount / qpu),
+				inventorySource: p.inventorySource ?? 'box_estimate',
+				category: p.category ?? null
+			};
+		});
+
+	const spuBuildable = bomParts.length > 0
+		? Math.min(...bomParts.map((p: { buildable: number }) => p.buildable))
+		: 0;
+	const bottleneckPart = bomParts.length > 0
+		? bomParts.reduce((min: any, p: any) => p.buildable < min.buildable ? p : min, bomParts[0])
+		: null;
+
 	return {
 		items: itemsWithCost,
 		cartridgeParts,
@@ -150,7 +175,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 		boxStatus,
 		syncErrorDetail,
 		stats,
-		categories: allCategories
+		categories: allCategories,
+		bomParts,
+		spuBuildable,
+		bottleneckPart: bottleneckPart ? { partNumber: bottleneckPart.partNumber, name: bottleneckPart.name, buildable: bottleneckPart.buildable } : null
 	};
 };
 
