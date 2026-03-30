@@ -175,14 +175,20 @@ export const load: PageServerLoad = async ({ params, url, locals }) => {
 	const totalInWindow = timeline.length;
 	const hasMore = totalInWindow >= 500;
 
+	// Reverse tab data so newest appears first (queries are ascending for timeline stitching)
+	const logsDesc = [...logs].reverse();
+	const crashesDesc = [...crashes].reverse();
+	const webhookLogsDesc = [...webhookLogs].reverse();
+	const eventsDesc = [...events].reverse();
+
 	return {
 		spu: { id: spu._id, udi: spu.udi },
 		particleDeviceId,
 		timeline: JSON.parse(JSON.stringify(timeline)),
-		logs: JSON.parse(JSON.stringify(logs)),
-		crashes: JSON.parse(JSON.stringify(crashes)),
-		webhookLogs: JSON.parse(JSON.stringify(webhookLogs)),
-		events: JSON.parse(JSON.stringify(events)),
+		logs: JSON.parse(JSON.stringify(logsDesc)),
+		crashes: JSON.parse(JSON.stringify(crashesDesc)),
+		webhookLogs: JSON.parse(JSON.stringify(webhookLogsDesc)),
+		events: JSON.parse(JSON.stringify(eventsDesc)),
 		stats: {
 			totalLogs,
 			totalCrashes,
