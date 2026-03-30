@@ -71,14 +71,23 @@ export const load: PageServerLoad = async ({ params, url, locals }) => {
 		const lastMs = log.logLines?.length > 0 ? log.logLines[log.logLines.length - 1].ms : 0;
 
 		// Add a session boundary marker
+		const displayName = log.deviceName || log.deviceId;
+		const fwLabel = log.firmwareVersion != null ? `v${log.firmwareVersion}` : 'unknown';
+		const bootLabel = log.bootCount != null ? `#${log.bootCount}` : 'unknown';
+
 		timeline.push({
 			timestamp: (bootTime ? new Date(bootTime) : new Date(uploadTime - lastMs)).toISOString(),
 			source: 'firmware',
 			data: {
 				ms: 0,
-				message: `======== SESSION START ========\nBoot #${log.bootCount ?? '?'} | Device: ${log.deviceId} | Firmware: v${log.firmwareVersion ?? '?'}`,
+				message: `======== SESSION START ========\nBoot ${bootLabel} | ${displayName} | Firmware: ${fwLabel}`,
 				sessionId: log.sessionId,
-				isSessionHeader: true
+				isSessionHeader: true,
+				firmwareVersion: log.firmwareVersion,
+				bootCount: log.bootCount,
+				deviceName: log.deviceName,
+				uploadedAt: log.uploadedAt,
+				lineCount: log.lineCount
 			}
 		});
 
@@ -145,8 +154,8 @@ export const load: PageServerLoad = async ({ params, url, locals }) => {
 		});
 	}
 
-	// Sort by timestamp ascending (oldest first for reading top to bottom)
-	timeline.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+	// Sort by timestamp descending (newest first)
+	timeline.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
 	// Check if there's more data outside the window
 	const totalInWindow = timeline.length;
