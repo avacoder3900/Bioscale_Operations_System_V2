@@ -244,10 +244,24 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				[fridgeCapacityAgg, allRobots, activeWaxRuns, allAssays,
 					cartridgeBomItems, dailyThroughputAgg, recentWaxRuns, consumableCountsAgg
 				] = await Promise.all([
-					CartridgeRecord.aggregate([
-						{ $match: { status: 'wax_stored', 'waxStorage.location': { $exists: true } } },
-						{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
-					]),
+					// Count ALL cartridges in fridges — both wax_stored (by waxStorage.location) and stored (by storage.fridgeName)
+					(async () => {
+						const [waxCounts, storedCounts] = await Promise.all([
+							CartridgeRecord.aggregate([
+								{ $match: { status: 'wax_stored', 'waxStorage.location': { $exists: true } } },
+								{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
+							]),
+							CartridgeRecord.aggregate([
+								{ $match: { status: 'stored', 'storage.fridgeName': { $exists: true } } },
+								{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
+							])
+						]);
+						const merged = new Map<string, number>();
+						for (const c of [...waxCounts as any[], ...storedCounts as any[]]) {
+							merged.set(c._id, (merged.get(c._id) ?? 0) + c.count);
+						}
+						return Array.from(merged.entries()).map(([k, v]) => ({ _id: k, count: v }));
+					})(),
 					OpentronsRobot.find({ isActive: true }).select('name lastHealthOk').sort({ name: 1 }).lean(),
 					WaxFillingRun.find({ status: { $in: ['running', 'setup'] } }).select('robot status').lean(),
 					AssayDefinition.find({ isActive: true }).select('name skuCode').lean(),

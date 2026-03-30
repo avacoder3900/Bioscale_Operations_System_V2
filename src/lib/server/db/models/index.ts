@@ -72,6 +72,9 @@ export { ElectronicSignature } from './electronic-signature.js';
 export { InventoryTransaction } from './inventory-transaction.js';
 export { DeviceEvent } from './device-event.js';
 export { ManufacturingMaterialTransaction } from './manufacturing-material-transaction.js';
+export { DeviceLog } from './device-log.js';
+export { DeviceCrash } from './device-crash.js';
+export { WebhookLog } from './webhook-log.js';
 
 // CV / Computer Vision
 export { CvProject } from './cv-project.js';

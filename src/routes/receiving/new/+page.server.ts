@@ -15,7 +15,8 @@ import {
 	generateLotNumber
 } from '$lib/server/db';
 import { env } from '$env/dynamic/private';
-import { uploadFile } from '$lib/server/box';
+import { uploadFile as r2Upload, buildCocKey } from '$lib/server/r2';
+import { extractText } from '$lib/server/ocr';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -73,8 +74,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 export const actions: Actions = {
 	/**
-	 * Upload a Certificate of Conformance document to Box.com.
-	 * Returns the Box.com file URL.
+	 * Upload a COC photo to R2 with OCR lot-number extraction.
 	 */
 	uploadCoc: async ({ request, locals }) => {
 		requirePermission(locals.user, 'inventory:write');
@@ -82,19 +82,30 @@ export const actions: Actions = {
 		const formData = await request.formData();
 		const file = formData.get('cocFile') as File | null;
 		const partId = formData.get('partId')?.toString();
+		const manualLotNumber = formData.get('cocLotNumber')?.toString()?.trim();
 
 		if (!file || !partId) return fail(400, { error: 'File and part are required' });
 
 		try {
 			const buffer = await file.arrayBuffer();
-			const timestamp = Date.now();
-			const ext = file.name.split('.').pop() ?? 'bin';
-			const fileName = `coc-${partId}-${timestamp}.${ext}`;
-			const folderId = env.BOX_ROOT_FOLDER_ID ?? '0';
+			const ext = file.name.split('.').pop() ?? 'jpg';
 
-			const uploaded = await uploadFile(folderId, fileName, buffer);
-			const cocUrl = `https://app.box.com/files/${uploaded.id}`;
-			return { success: true, cocUrl };
+			let lotNumber = manualLotNumber || '';
+			let ocrText = '';
+			if (!lotNumber) {
+				const ocrResult = await extractText(buffer, file.name);
+				ocrText = ocrResult.rawText;
+				if (ocrResult.lotNumbers.length > 0) lotNumber = ocrResult.lotNumbers[0];
+			}
+			if (!lotNumber) {
+				return fail(422, { error: 'Could not extract lot number. Please enter manually.', ocrText });
+			}
+
+			const r2Key = buildCocKey(lotNumber, ext);
+			await r2Upload(r2Key, buffer, file.type || 'image/jpeg');
+			const fileUrl = `/api/r2/files/${r2Key}`;
+
+			return { success: true, cocUrl: fileUrl, cocR2Key: r2Key, cocLotNumber: lotNumber, cocFileName: `${lotNumber}.${ext}` };
 		} catch (err) {
 			return fail(500, { error: err instanceof Error ? err.message : 'Upload failed' });
 		}
@@ -141,6 +152,7 @@ export const actions: Actions = {
 		const pathway = formData.get('pathway')?.toString() as 'coc' | 'ip';
 		const cocDocumentUrl = formData.get('cocDocumentUrl')?.toString() || undefined;
 		const cocMeetsStandards = formData.has('cocMeetsStandards') ? formData.get('cocMeetsStandards') === 'true' : undefined;
+		const cocPhotosJson = formData.get('cocPhotos')?.toString();
 		const poReference = formData.get('poReference')?.toString() || undefined;
 		const supplier = formData.get('supplier')?.toString() || undefined;
 		const vendorLotNumber = formData.get('vendorLotNumber')?.toString() || undefined;
@@ -236,16 +248,15 @@ export const actions: Actions = {
 		const docFiles = formData.getAll('lotDocuments') as File[];
 		const photoUrls: string[] = [];
 		const docUrls: string[] = [];
-		const folderId = env.BOX_ROOT_FOLDER_ID ?? '0';
 
 		for (const file of photoFiles) {
 			if (!file.size) continue;
 			try {
 				const buffer = await file.arrayBuffer();
 				const ext = file.name.split('.').pop() ?? 'jpg';
-				const fileName = `lot-photo-${lotId}-${Date.now()}.${ext}`;
-				const uploaded = await uploadFile(folderId, fileName, buffer);
-				photoUrls.push(`https://app.box.com/files/${uploaded.id}`);
+				const r2Key = `lots/${lotId}/photos/lot-photo-${Date.now()}.${ext}`;
+				await r2Upload(r2Key, buffer, file.type || 'image/jpeg');
+				photoUrls.push(`/api/r2/files/${r2Key}`);
 			} catch {
 				// Skip failed uploads silently
 			}
@@ -256,9 +267,9 @@ export const actions: Actions = {
 			try {
 				const buffer = await file.arrayBuffer();
 				const ext = file.name.split('.').pop() ?? 'bin';
-				const fileName = `lot-doc-${lotId}-${Date.now()}.${ext}`;
-				const uploaded = await uploadFile(folderId, fileName, buffer);
-				docUrls.push(`https://app.box.com/files/${uploaded.id}`);
+				const r2Key = `lots/${lotId}/docs/lot-doc-${Date.now()}.${ext}`;
+				await r2Upload(r2Key, buffer, file.type || 'application/octet-stream');
+				docUrls.push(`/api/r2/files/${r2Key}`);
 			} catch {
 				// Skip failed uploads silently
 			}
@@ -287,6 +298,7 @@ export const actions: Actions = {
 				inspectionPathway: pathway,
 				cocDocumentUrl,
 				cocMeetsStandards,
+				cocPhotos: cocPhotosJson ? JSON.parse(cocPhotosJson) : undefined,
 				ipResults: ipResultsSummary,
 				ipRevisionId,
 				firstArticleInspection,

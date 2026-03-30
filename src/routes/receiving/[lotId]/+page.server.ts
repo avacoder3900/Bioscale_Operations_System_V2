@@ -14,6 +14,7 @@ import {
 	AuditLog,
 	generateId
 } from '$lib/server/db';
+import { normalizeDocUrl, normalizeDocUrls } from '$lib/server/url-utils';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -80,8 +81,14 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		linkedCartridgeCount: (linkedCartridges as any[]).length
 	};
 
+	const lotData = lot as any;
+	lotData.cocDocumentUrl = normalizeDocUrl(lotData.cocDocumentUrl);
+	lotData.photos = normalizeDocUrls(lotData.photos ?? []);
+	lotData.additionalDocuments = normalizeDocUrls(lotData.additionalDocuments ?? []);
+	if (lotData.cocPhotos) { lotData.cocPhotos = lotData.cocPhotos.map((p: any) => ({ ...p, fileUrl: normalizeDocUrl(p.fileUrl) ?? p.fileUrl })); }
+
 	return {
-		lot: JSON.parse(JSON.stringify(lot)),
+		lot: JSON.parse(JSON.stringify(lotData)),
 		inspectionResults: JSON.parse(JSON.stringify(inspectionResults)),
 		toolConfirmations: JSON.parse(JSON.stringify(toolConfirmations)),
 		ipRevision: ipRevision ? JSON.parse(JSON.stringify(ipRevision)) : null,

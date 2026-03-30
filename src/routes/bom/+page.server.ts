@@ -6,7 +6,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'inventory:read');
 	await connectDB();
 
-	const items = await BomItem.find().sort({ partNumber: 1 }).lean();
+	const items = await BomItem.find({ $or: [{ bomType: 'spu' }, { bomType: { $exists: false } }] }).sort({ partNumber: 1 }).lean();
 
 	const boxInteg = await Integration.findOne({ type: 'box' }).lean() as any;
 

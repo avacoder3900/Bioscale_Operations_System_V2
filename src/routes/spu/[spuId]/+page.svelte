@@ -396,6 +396,23 @@
 		</TronCard>
 	{/if}
 
+	<!-- Diagnostics Link -->
+	{#if data.particleLink?.particleDeviceId}
+		<TronCard>
+			<div class="flex items-center justify-between">
+				<div>
+					<h3 class="tron-text-primary text-lg font-medium">Device Diagnostics</h3>
+					<p class="tron-text-muted text-sm">Session logs, crash reports, webhook activity</p>
+				</div>
+				<a href="/spu/{data.spu.id}/diagnostics">
+					<TronButton variant="primary" style="min-height: 44px;">
+						View Diagnostics
+					</TronButton>
+				</a>
+			</div>
+		</TronCard>
+	{/if}
+
 	<!-- Validation Tests -->
 	<TronCard>
 		<h3 class="tron-text-primary mb-4 text-lg font-medium">Validation Tests</h3>
