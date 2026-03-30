@@ -140,9 +140,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 		barcode: p.barcode ?? null
 	}));
 
-	// BOM tab: active SPU BOM parts only (exclude cartridge parts)
+	// BOM tab: active SPU BOM parts only (strictly exclude cartridge parts by bomType AND part number prefix)
 	const bomParts = (spuParts as any[])
-		.filter((p: any) => p.isActive !== false && p.quantityPerUnit > 0 && p.bomType !== 'cartridge')
+		.filter((p: any) => p.isActive !== false && p.quantityPerUnit > 0 && p.bomType !== 'cartridge' && !(p.partNumber ?? '').startsWith('PT-CT'))
 		.sort((a: any, b: any) => (a.category ?? '').localeCompare(b.category ?? '') || (a.partNumber ?? '').localeCompare(b.partNumber ?? ''))
 		.map((p: any) => {
 			const invCount = p.inventoryCount ?? 0;
