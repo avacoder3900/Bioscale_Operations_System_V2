@@ -140,9 +140,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 		barcode: p.barcode ?? null
 	}));
 
-	// BOM tab: active BOM parts with quantityPerUnit > 0
+	// BOM tab: active SPU BOM parts only (exclude cartridge parts)
 	const bomParts = (spuParts as any[])
-		.filter((p: any) => p.isActive !== false && p.quantityPerUnit > 0)
+		.filter((p: any) => p.isActive !== false && p.quantityPerUnit > 0 && p.bomType !== 'cartridge')
 		.sort((a: any, b: any) => (a.category ?? '').localeCompare(b.category ?? '') || (a.partNumber ?? '').localeCompare(b.partNumber ?? ''))
 		.map((p: any) => {
 			const invCount = p.inventoryCount ?? 0;
