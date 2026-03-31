@@ -17,6 +17,7 @@
 	let capturedImage = $state<string | null>(null);
 	let captureUploading = $state(false);
 	let captureMsg = $state('');
+	let captureCount = $state(0);
 	let availableCameras = $state<MediaDeviceInfo[]>([]);
 	let selectedCameraId = $state('');
 
@@ -99,8 +100,32 @@
 			const blob = await res.blob();
 			const filename = `capture-${Date.now()}.jpg`;
 			const file = new File([blob], filename, { type: 'image/jpeg' });
-			await uploadFiles([file]);
-			captureMsg = 'Image saved to project!';
+
+			// Upload directly without using uploadFiles (which reloads the page)
+			const presignRes = await fetch('/api/cv/images/presign', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ projectId: data.project._id, filename, contentType: 'image/jpeg' })
+			});
+			if (!presignRes.ok) throw new Error('Presign failed');
+			const { uploadUrl, key, uploadSecret } = await presignRes.json();
+
+			const putRes = await fetch(uploadUrl, {
+				method: 'PUT',
+				headers: { 'Content-Type': 'image/jpeg', 'X-Upload-Secret': uploadSecret || '' },
+				body: file
+			});
+			if (!putRes.ok) throw new Error('R2 upload failed');
+
+			const recordRes = await fetch('/api/cv/images/record', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ projectId: data.project._id, key, filename, contentType: 'image/jpeg', fileSize: file.size })
+			});
+			if (!recordRes.ok) throw new Error('Record failed');
+
+			captureCount++;
+			captureMsg = `Saved! (${captureCount} captured this session)`;
 			capturedImage = null;
 		} catch (err: any) {
 			captureMsg = `Save failed: ${err.message}`;
