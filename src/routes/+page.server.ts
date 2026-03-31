@@ -4,7 +4,7 @@ import { requirePermission } from '$lib/server/permissions';
 import {
 	connectDB, Spu, Batch, BomItem, ProductionRun, Customer, User, AuditLog, generateId,
 	LabCartridge, CartridgeGroup, CartridgeRecord, Equipment, EquipmentLocation,
-	OpentronsRobot, WaxFillingRun, AssayDefinition, PartDefinition
+	OpentronsRobot, WaxFillingRun, ReagentBatchRecord, AssayDefinition, PartDefinition
 } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -239,10 +239,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				// ── New dashboard queries (each wrapped to prevent one failure from killing all) ──
 				let fridgeCapacityAgg: any[] = [], allRobots: any[] = [], activeWaxRuns: any[] = [];
 				let allAssays: any[] = [], cartridgeBomItems: any[] = [], dailyThroughputAgg: any[] = [];
-				let recentWaxRuns: any[] = [], consumableCountsAgg: any[] = [];
+				let recentWaxRuns: any[] = [], recentReagentRuns: any[] = [], consumableCountsAgg: any[] = [];
 				try {
 				[fridgeCapacityAgg, allRobots, activeWaxRuns, allAssays,
-					cartridgeBomItems, dailyThroughputAgg, recentWaxRuns, consumableCountsAgg
+					cartridgeBomItems, dailyThroughputAgg, recentWaxRuns, recentReagentRuns, consumableCountsAgg
 				] = await Promise.all([
 					CartridgeRecord.aggregate([
 						{ $match: { status: 'wax_stored', 'waxStorage.location': { $exists: true } } },
@@ -264,6 +264,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 						{ $sort: { _id: 1 } }
 					]),
 					WaxFillingRun.find().sort({ createdAt: -1 }).limit(5).lean(),
+					ReagentBatchRecord.find().sort({ createdAt: -1 }).limit(5).lean(),
 					Equipment.aggregate([
 						{ $match: { equipmentType: { $in: ['deck', 'cooling_tray', 'robot'] } } },
 						{ $group: { _id: '$equipmentType', count: { $sum: 1 } } }
@@ -380,6 +381,19 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 							date: r.createdAt
 						};
 					})),
+					recentReagentRuns: (recentReagentRuns as any[]).map((r: any) => {
+						const carts = r.cartridgesFilled ?? [];
+						return {
+							id: r._id,
+							status: r.status,
+							robotName: r.robot?.name ?? '—',
+							assayName: r.assayType?.name ?? '—',
+							cartridgeCount: r.cartridgeCount ?? carts.length ?? 0,
+							passedCount: carts.filter((c: any) => c.inspectionStatus === 'Accepted').length,
+							failedCount: carts.filter((c: any) => c.inspectionStatus === 'Rejected').length,
+							date: r.createdAt
+						};
+					}),
 					bomCostPerCartridge: {
 						total: crtCostTotal,
 						items: (cartridgeBomItems as any[]).map((b: any) => ({
