@@ -254,7 +254,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					BomItem.find({ isActive: true, partNumber: { $regex: /^CRT-/ } }).select('partNumber name unitCost').lean(),
 					CartridgeRecord.aggregate([
 						{ $match: { createdAt: { $gte: sevenDaysAgo } } },
-						{ $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }, count: { $sum: 1 } } },
+						{ $group: {
+							_id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+							count: { $sum: 1 },
+							passed: { $sum: { $cond: [{ $eq: ['$qcStatus', 'passed'] }, 1, 0] } },
+							failed: { $sum: { $cond: [{ $eq: ['$qcStatus', 'failed'] }, 1, 0] } },
+							pending: { $sum: { $cond: [{ $in: ['$qcStatus', ['pending', null]] }, 1, 0] } }
+						}},
 						{ $sort: { _id: 1 } }
 					]),
 					WaxFillingRun.find().sort({ createdAt: -1 }).limit(5).lean(),
@@ -273,12 +279,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				]);
 				const assayFillMap = new Map((assayFillCounts as any[]).map((a: any) => [a._id, a.count]));
 				const busyRobotIds = new Set((activeWaxRuns as any[]).map((r: any) => r.robot?._id));
-				const dayMap = new Map((dailyThroughputAgg as any[]).map((d: any) => [d._id, d.count]));
-				const last7Days: { date: string; count: number }[] = [];
+				const dayMap = new Map((dailyThroughputAgg as any[]).map((d: any) => [d._id, { count: d.count, passed: d.passed ?? 0, failed: d.failed ?? 0, pending: d.pending ?? 0 }]));
+				const last7Days: { date: string; count: number; passed: number; failed: number; pending: number }[] = [];
 				for (let i = 6; i >= 0; i--) {
 					const d = new Date(cdNow.getTime() - i * 86400000);
 					const key = d.toISOString().slice(0, 10);
-					last7Days.push({ date: key, count: dayMap.get(key) ?? 0 });
+					const dayData = dayMap.get(key) ?? { count: 0, passed: 0, failed: 0, pending: 0 };
+					last7Days.push({ date: key, ...dayData });
 				}
 				const crtCostTotal = (cartridgeBomItems as any[]).reduce((s: number, b: any) => s + (Number(b.unitCost) || 0), 0);
 
@@ -357,6 +364,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 						status: r.status,
 						robotName: r.robot?.name ?? '—',
 						cartridgeCount: r.cartridgeIds?.length ?? r.plannedCartridgeCount ?? 0,
+						passedCount: r.qcSummary?.passed ?? 0,
+						failedCount: r.qcSummary?.failed ?? 0,
 						date: r.createdAt
 					})),
 					bomCostPerCartridge: {
