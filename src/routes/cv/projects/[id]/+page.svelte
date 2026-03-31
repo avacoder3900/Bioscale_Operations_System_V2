@@ -1,12 +1,103 @@
 <script lang="ts">
 	let { data } = $props();
 	let activeTab = $state('import');
-	const tabs = ['Import', 'Labels', 'Train', 'Test', 'Review', 'Integrate'];
+	const tabs = ['Import', 'Capture', 'Labels', 'Train', 'Test', 'Review', 'Integrate'];
 
 	// Import tab
 	let uploading = $state(false);
 	let uploadMsg = $state('');
 	let dragOver = $state(false);
+
+	// Capture tab
+	let videoEl = $state<HTMLVideoElement | null>(null);
+	let canvasEl = $state<HTMLCanvasElement | null>(null);
+	let cameraStream = $state<MediaStream | null>(null);
+	let cameraError = $state('');
+	let cameraReady = $state(false);
+	let capturedImage = $state<string | null>(null);
+	let captureUploading = $state(false);
+	let captureMsg = $state('');
+	let availableCameras = $state<MediaDeviceInfo[]>([]);
+	let selectedCameraId = $state('');
+
+	async function loadCameras() {
+		try {
+			const devices = await navigator.mediaDevices.enumerateDevices();
+			availableCameras = devices.filter(d => d.kind === 'videoinput');
+			if (availableCameras.length > 0 && !selectedCameraId) {
+				selectedCameraId = availableCameras[0].deviceId;
+			}
+		} catch { /* ignore */ }
+	}
+
+	async function startCamera() {
+		cameraError = '';
+		cameraReady = false;
+		capturedImage = null;
+		captureMsg = '';
+		stopCamera();
+		try {
+			await loadCameras();
+			const constraints: MediaStreamConstraints = {
+				video: selectedCameraId
+					? { deviceId: { exact: selectedCameraId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+					: { width: { ideal: 1920 }, height: { ideal: 1080 } }
+			};
+			cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+			if (videoEl) {
+				videoEl.srcObject = cameraStream;
+				videoEl.onloadedmetadata = () => { cameraReady = true; };
+			}
+		} catch (err: any) {
+			cameraError = err.message || 'Could not access camera. Check browser permissions.';
+		}
+	}
+
+	function stopCamera() {
+		if (cameraStream) {
+			cameraStream.getTracks().forEach(t => t.stop());
+			cameraStream = null;
+		}
+		cameraReady = false;
+	}
+
+	function capturePhoto() {
+		if (!videoEl || !canvasEl) return;
+		canvasEl.width = videoEl.videoWidth;
+		canvasEl.height = videoEl.videoHeight;
+		const ctx = canvasEl.getContext('2d');
+		if (!ctx) return;
+		ctx.drawImage(videoEl, 0, 0);
+		capturedImage = canvasEl.toDataURL('image/jpeg', 0.92);
+	}
+
+	function retakePhoto() {
+		capturedImage = null;
+		captureMsg = '';
+	}
+
+	async function saveCapture() {
+		if (!capturedImage) return;
+		captureUploading = true;
+		captureMsg = '';
+		try {
+			const res = await fetch(capturedImage);
+			const blob = await res.blob();
+			const filename = `capture-${Date.now()}.jpg`;
+			const file = new File([blob], filename, { type: 'image/jpeg' });
+			await uploadFiles([file]);
+			captureMsg = 'Image saved to project!';
+			capturedImage = null;
+		} catch (err: any) {
+			captureMsg = `Save failed: ${err.message}`;
+		}
+		captureUploading = false;
+	}
+
+	// Clean up camera when leaving capture tab or page
+	$effect(() => {
+		if (activeTab !== 'capture') stopCamera();
+	});
 
 	// Labels tab
 	let labeling = $state<string | null>(null);
@@ -261,6 +352,106 @@
 			{#if uploadMsg}
 				<p class="mt-3 text-center text-sm text-[var(--color-tron-green)]">{uploadMsg}</p>
 			{/if}
+
+		<!-- CAPTURE TAB -->
+		{:else if activeTab === 'capture'}
+			<div class="space-y-4">
+				{#if !cameraStream && !cameraError}
+					<div class="flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-[var(--color-tron-border)] py-16">
+						<svg class="mb-3 h-12 w-12 text-[var(--color-tron-text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+						</svg>
+						<p class="mb-4 text-[var(--color-tron-text-secondary)]">Connect a camera to capture images directly</p>
+						<button onclick={startCamera} class="rounded-lg bg-[var(--color-tron-cyan)] px-6 py-3 text-sm font-medium text-black hover:opacity-90">
+							Start Camera
+						</button>
+					</div>
+				{/if}
+
+				{#if cameraError}
+					<div class="rounded border border-[var(--color-tron-red)]/30 bg-[var(--color-tron-red)]/10 p-4 text-sm text-[var(--color-tron-red)]">
+						{cameraError}
+					</div>
+					<button onclick={startCamera} class="rounded-lg bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-black hover:opacity-90">
+						Retry
+					</button>
+				{/if}
+
+				{#if cameraStream}
+					<!-- Camera selector -->
+					{#if availableCameras.length > 1}
+						<div class="flex items-center gap-3">
+							<label class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Camera</label>
+							<select
+								bind:value={selectedCameraId}
+								onchange={startCamera}
+								class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-tron-text-primary)]"
+							>
+								{#each availableCameras as cam, i}
+									<option value={cam.deviceId}>{cam.label || `Camera ${i + 1}`}</option>
+								{/each}
+							</select>
+						</div>
+					{/if}
+
+					<!-- Live feed / captured image -->
+					<div class="relative overflow-hidden rounded-lg border-2 border-[var(--color-tron-border)] bg-black">
+						{#if capturedImage}
+							<img src={capturedImage} alt="Captured" class="w-full" />
+						{:else}
+							<!-- svelte-ignore element_invalid_self_closing_tag -->
+							<video bind:this={videoEl} autoplay playsinline muted class="w-full" />
+						{/if}
+						{#if cameraReady && !capturedImage}
+							<div class="absolute bottom-0 left-0 right-0 flex justify-center p-2">
+								<span class="rounded-full bg-[var(--color-tron-green)]/80 px-3 py-1 text-xs font-bold text-black">LIVE</span>
+							</div>
+						{/if}
+					</div>
+					<canvas bind:this={canvasEl} class="hidden"></canvas>
+
+					<!-- Controls -->
+					<div class="flex items-center justify-center gap-3">
+						{#if capturedImage}
+							<button
+								onclick={retakePhoto}
+								class="rounded-lg border border-[var(--color-tron-border)] px-6 py-3 text-sm font-medium text-[var(--color-tron-text-primary)] hover:bg-[var(--color-tron-bg-tertiary)]"
+							>
+								Retake
+							</button>
+							<button
+								onclick={saveCapture}
+								disabled={captureUploading}
+								class="rounded-lg bg-[var(--color-tron-green)] px-6 py-3 text-sm font-medium text-black hover:opacity-90 disabled:opacity-50"
+							>
+								{captureUploading ? 'Saving...' : 'Save to Project'}
+							</button>
+						{:else}
+							<button
+								onclick={capturePhoto}
+								disabled={!cameraReady}
+								class="rounded-full bg-[var(--color-tron-cyan)] p-4 text-black shadow-lg transition-transform hover:scale-105 disabled:opacity-50"
+								title="Capture"
+							>
+								<svg class="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<circle cx="12" cy="12" r="10" stroke-width="2"/>
+									<circle cx="12" cy="12" r="4" fill="currentColor"/>
+								</svg>
+							</button>
+							<button
+								onclick={stopCamera}
+								class="rounded-lg border border-[var(--color-tron-border)] px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-red)]"
+							>
+								Stop Camera
+							</button>
+						{/if}
+					</div>
+
+					{#if captureMsg}
+						<p class="text-center text-sm text-[var(--color-tron-green)]">{captureMsg}</p>
+					{/if}
+				{/if}
+			</div>
 
 		<!-- LABELS TAB -->
 		{:else if activeTab === 'labels'}
