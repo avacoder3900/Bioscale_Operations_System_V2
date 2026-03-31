@@ -559,6 +559,7 @@
 		<!-- Step 2: Deck loaded — now scan reagent batch barcode -->
 		<ReagentPreparation
 			reagentDefinitions={data.reagentDefinitions}
+			cartridgeCount={data.cartridges.length}
 			onComplete={(tubes) => {
 				reagentBatchBarcode = tubes[0]?.sourceLotId ?? '';
 				reagentBatchConfirmed = true;

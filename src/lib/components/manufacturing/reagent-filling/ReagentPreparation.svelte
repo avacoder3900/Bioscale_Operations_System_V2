@@ -17,17 +17,21 @@
 		reagentDefinitions: ReagentDef[];
 		onComplete: (tubes: TubeRecord[]) => void;
 		readonly?: boolean;
+		cartridgeCount?: number;
 	}
 
-	let { reagentDefinitions, onComplete, readonly: isReadonly = false }: Props = $props();
+	let { reagentDefinitions, onComplete, readonly: isReadonly = false, cartridgeCount = 0 }: Props = $props();
 
 	let batchBarcode = $state('');
 	let scanInput = $state('');
 	let scanInputEl: HTMLInputElement | undefined = $state();
 	let scanError = $state('');
 	let submitting = $state(false);
-	let batchData: { lotId: string; tubes: { wellPosition: number; reagentName: string; tubeId: string }[] } | null = $state(null);
+	let batchData: { lotId: string; cartridgeCount?: number; tubes: { wellPosition: number; reagentName: string; tubeId: string }[] } | null = $state(null);
 	let fetchingBatch = $state(false);
+	let countMismatch = $derived(
+		batchData?.cartridgeCount != null && cartridgeCount > 0 && batchData.cartridgeCount !== cartridgeCount
+	);
 
 	const activeWells = $derived(
 		reagentDefinitions.filter((d) => d.isActive).sort((a, b) => a.wellPosition - b.wellPosition)
@@ -64,6 +68,7 @@
 					// API not yet built — use stub data based on active wells
 					batchData = {
 						lotId: value,
+						cartridgeCount: cartridgeCount || undefined,
 						tubes: activeWells.map((w, i) => ({
 							wellPosition: w.wellPosition,
 							reagentName: w.reagentName,
@@ -167,6 +172,29 @@
 				</button>
 			</div>
 
+			<!-- Cartridge count validation -->
+			{#if countMismatch}
+				<div class="flex items-center gap-3 rounded-lg border border-red-500/50 bg-red-900/20 p-4">
+					<svg class="h-6 w-6 shrink-0 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+					</svg>
+					<div>
+						<p class="text-sm font-semibold text-red-400">Cartridge Count Mismatch</p>
+						<p class="text-xs text-red-300/70">
+							Deck has <span class="font-bold">{cartridgeCount}</span> cartridges loaded, but this reagent batch is for <span class="font-bold">{batchData?.cartridgeCount}</span> cartridges.
+							Re-scan a matching batch or adjust the deck.
+						</p>
+					</div>
+				</div>
+			{:else if cartridgeCount > 0 && batchData?.cartridgeCount != null}
+				<div class="flex items-center gap-2 rounded border border-green-500/30 bg-green-900/10 px-3 py-2 text-xs text-green-300">
+					<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+					</svg>
+					Cartridge count matches: {cartridgeCount} on deck, {batchData.cartridgeCount} in batch
+				</div>
+			{/if}
+
 			<!-- 6-tube location diagram -->
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 				<p class="mb-3 text-xs font-medium text-[var(--color-tron-text-secondary)]">
@@ -187,13 +215,19 @@
 		<!-- Confirm button -->
 		<button
 			type="button"
-			disabled={submitting || isReadonly}
+			disabled={submitting || isReadonly || countMismatch}
 			onclick={handleSubmit}
-			class="min-h-[44px] w-full rounded-lg border px-6 py-3 text-sm font-semibold transition-all {!submitting && !isReadonly
+			class="min-h-[44px] w-full rounded-lg border px-6 py-3 text-sm font-semibold transition-all {!submitting && !isReadonly && !countMismatch
 				? 'border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/30'
 				: 'cursor-not-allowed border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] text-[var(--color-tron-text-secondary)] opacity-50'}"
 		>
-			{submitting ? 'Confirming...' : `Confirm Reagent Batch (${batchData.tubes.length} tubes)`}
+			{#if countMismatch}
+				Cannot confirm — cartridge count mismatch
+			{:else if submitting}
+				Confirming...
+			{:else}
+				Confirm Reagent Batch ({batchData.tubes.length} tubes)
+			{/if}
 		</button>
 	{/if}
 </div>
