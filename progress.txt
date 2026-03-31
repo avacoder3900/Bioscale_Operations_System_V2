@@ -380,4 +380,40 @@ Dev is 157 commits ahead of master. It contains the bulk of the manufacturing pi
 - `isAdmin()` defined but never used
 - Sacred document correction endpoints don't exist yet (will need `admin:full` when built)
 
-1
+---
+
+## Phase 13: CV Capture Station + LIZA Image Processing (Mar 31, 2026)
+
+### Branch: `feature/cv-bims-integration`
+
+**CV Capture Tab (Phase 1)**
+- Live USB camera capture in browser via `getUserMedia`
+- Camera auto-fallback on NotReadableError (skips built-in, finds USB camera)
+- Multi-capture session (camera stays live between saves)
+- Resume live feed after save (no black screen)
+- Images upload to R2 via Cloudflare Worker proxy
+
+**R2 Worker Deploy**
+- Deployed `brevitest-r2-upload` Cloudflare Worker
+- Made GET requests public (so browser can render images)
+- Added `R2_WORKER_URL` + `R2_UPLOAD_SECRET` to Vercel env vars
+- Updated `.env.example` with R2 worker variables
+
+**QR Code Scanning (Phase 2)**
+- Browser-side QR detection via `BarcodeDetector` API (500ms scan loop)
+- QR overlay on live feed (green=detected, red=not detected, display only)
+- Barcode lookup API: `GET /api/cv/lookup-barcode?code=...`
+- LIZA filename format: `cartridge_capture_{QRDATA}_{001}.jpg`
+- Keyboard shortcuts: Space (capture/save), Esc (retake)
+
+**LIZA Image Processing Pipeline (Phase 3)**
+- Python CV worker: `/process-image` endpoint with exact LIZA `process_frame()` replica
+- 5-step pipeline: color correction, denoise, CLAHE, gamma, sharpen
+- Processing mode toggle: Full (LIZA 5-step) vs Raw (no processing)
+- Server-side processing triggered automatically after capture
+- Schema: `CvImage.processedPath`, `CvProject.captureSettings`
+
+**PRDs Created**
+- `docs/prds/CV-CAPTURE-STATION.md`
+- `docs/prds/CV-IMAGE-PROCESSING.md`
+- `docs/prds/R2-WORKER-UPLOAD-PROXY.md`

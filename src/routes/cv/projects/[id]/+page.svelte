@@ -21,6 +21,9 @@
 	let availableCameras = $state<MediaDeviceInfo[]>([]);
 	let selectedCameraId = $state('');
 
+	// Processing mode (matches LIZA: full = post-processed, raw = no processing)
+	let processingMode = $state<'full' | 'raw'>(data.project.captureSettings?.mode || 'full');
+
 	// QR scanning
 	let detectedQR = $state<string | null>(null);
 	let qrLookupResult = $state<any>(null);
@@ -224,10 +227,22 @@
 				body: JSON.stringify({ projectId: data.project._id, key, filename, contentType: 'image/jpeg', fileSize: file.size })
 			});
 			if (!recordRes.ok) throw new Error('Record failed');
+			const recordData = await recordRes.json();
 
 			captureCount++;
 			captureMsg = `Saved! (${captureCount} captured this session)`;
 			await resumeLiveFeed();
+
+			// Trigger server-side LIZA processing in background (non-blocking)
+			if (processingMode === 'full' && recordData.data?._id) {
+				fetch('/api/cv/process-image', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ imageId: recordData.data._id, mode: 'full' })
+				}).then(() => {
+					captureMsg = `Saved + processed! (${captureCount} this session)`;
+				}).catch(() => { /* processing failed silently — raw image is still saved */ });
+			}
 		} catch (err: any) {
 			captureMsg = `Save failed: ${err.message}`;
 		}
@@ -529,21 +544,36 @@
 					<div class="grid gap-4 lg:grid-cols-[1fr_300px]">
 						<!-- Left: Camera feed -->
 						<div class="space-y-3">
-							<!-- Camera selector -->
-							{#if availableCameras.length > 1}
-								<div class="flex items-center gap-3">
-									<label class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Camera</label>
-									<select
-										bind:value={selectedCameraId}
-										onchange={startCamera}
-										class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-tron-text-primary)]"
-									>
-										{#each availableCameras as cam, i}
-											<option value={cam.deviceId}>{cam.label || `Camera ${i + 1}`}</option>
-										{/each}
-									</select>
+							<!-- Camera selector + Processing mode -->
+							<div class="flex flex-wrap items-center gap-4">
+								{#if availableCameras.length > 1}
+									<div class="flex items-center gap-2">
+										<label class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Camera</label>
+										<select
+											bind:value={selectedCameraId}
+											onchange={startCamera}
+											class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-tron-text-primary)]"
+										>
+											{#each availableCameras as cam, i}
+												<option value={cam.deviceId}>{cam.label || `Camera ${i + 1}`}</option>
+											{/each}
+										</select>
+									</div>
+								{/if}
+								<div class="flex items-center gap-2">
+									<label class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Processing</label>
+									<div class="flex rounded border border-[var(--color-tron-border)]">
+										<button
+											onclick={() => processingMode = 'full'}
+											class="px-3 py-1 text-xs font-medium transition-colors {processingMode === 'full' ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
+										>Full</button>
+										<button
+											onclick={() => processingMode = 'raw'}
+											class="border-l border-[var(--color-tron-border)] px-3 py-1 text-xs font-medium transition-colors {processingMode === 'raw' ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
+										>Raw</button>
+									</div>
 								</div>
-							{/if}
+							</div>
 
 							<!-- Live feed / captured image -->
 							<div class="relative overflow-hidden rounded-lg border-2 border-[var(--color-tron-border)] bg-black">

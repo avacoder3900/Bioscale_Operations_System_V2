@@ -322,3 +322,110 @@ async def infer(req: InferRequest):
         }
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+# ---- Image Processing (LIZA pipeline) ------------------------------------
+
+class ProcessRequest(BaseModel):
+    image_url: str          # R2 key or full URL
+    output_key: str         # Where to save processed image in R2
+    mode: str = "full"      # "full" (5-step LIZA) or "raw" (no processing)
+    params: dict = {}       # Override defaults
+
+class ProcessResponse(BaseModel):
+    original_key: str
+    processed_key: str
+    width: int
+    height: int
+    processing_time_ms: float
+
+
+# Default LIZA tuning parameters (from camera_capture.py)
+LIZA_DEFAULTS = {
+    "red_correction": 0.85,
+    "green_correction": 0.90,
+    "blue_correction": 1.0,
+    "clahe_strength": 2.0,
+    "gamma": 0.85,
+}
+
+
+def liza_process_frame(frame, params=None):
+    """Exact replica of camera_capture.py process_frame() function."""
+    import cv2
+
+    p = {**LIZA_DEFAULTS, **(params or {})}
+
+    # Step 1: Color correction
+    b_ch, g_ch, r_ch = cv2.split(frame)
+    r_ch = cv2.multiply(r_ch, p["red_correction"])
+    g_ch = cv2.multiply(g_ch, p["green_correction"])
+    b_ch = cv2.multiply(b_ch, p["blue_correction"])
+    frame = cv2.merge([b_ch, g_ch, r_ch])
+
+    # Step 2: Denoise (Gaussian blur 3x3)
+    frame = cv2.GaussianBlur(frame, (3, 3), 0)
+
+    # Step 3: CLAHE local contrast enhancement
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(
+        clipLimit=p["clahe_strength"], tileGridSize=(8, 8)
+    )
+    l = clahe.apply(l)
+    frame = cv2.cvtColor(cv2.merge([l, a, b]), cv2.COLOR_LAB2BGR)
+
+    # Step 4: Gamma correction
+    inv_gamma = 1.0 / p["gamma"]
+    table = np.array([
+        ((i / 255.0) ** inv_gamma) * 255 for i in range(256)
+    ]).astype("uint8")
+    frame = cv2.LUT(frame, table)
+
+    # Step 5: Sharpen (unsharp mask kernel)
+    kernel = np.array([[ 0, -1,  0],
+                       [-1,  5, -1],
+                       [ 0, -1,  0]])
+    frame = cv2.filter2D(frame, -1, kernel)
+
+    return frame
+
+
+@app.post("/process-image")
+async def process_image(req: ProcessRequest):
+    import cv2
+
+    start = time.time()
+
+    # Download image from R2
+    key = req.image_url.split("/", 3)[-1] if "/" in req.image_url else req.image_url
+    try:
+        image_data = download_from_r2(key)
+    except Exception:
+        import urllib.request
+        image_data = urllib.request.urlopen(req.image_url).read()
+
+    # Decode image
+    img_array = np.frombuffer(image_data, np.uint8)
+    frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+    if frame is None:
+        raise HTTPException(400, "Could not decode image")
+
+    # Apply processing
+    if req.mode == "full":
+        frame = liza_process_frame(frame, req.params if req.params else None)
+
+    # Encode as PNG and upload
+    _, buffer = cv2.imencode(".png", frame)
+    upload_to_r2(buffer.tobytes(), req.output_key, "image/png")
+
+    h, w = frame.shape[:2]
+    elapsed_ms = (time.time() - start) * 1000
+
+    return ProcessResponse(
+        original_key=req.image_url,
+        processed_key=req.output_key,
+        width=w,
+        height=h,
+        processing_time_ms=round(elapsed_ms, 1),
+    )
