@@ -24,15 +24,18 @@
 	// Processing mode (matches LIZA: full = post-processed, raw = no processing)
 	let processingMode = $state<'full' | 'raw'>(data.project.captureSettings?.mode || 'full');
 
-	// Camera settings (LIZA defaults from camera_capture.py)
+	// Camera settings (initialized from camera capabilities, not hardcoded)
 	let showSettings = $state(false);
 	let cameraCapabilities = $state<any>(null);
-	let camExposure = $state(-5);
+	let camExposureComp = $state(50);
+	let camExposureTime = $state(250);
+	let camExposureMode = $state<'continuous' | 'manual'>('manual');
+	let camWhiteBalanceMode = $state<'continuous' | 'manual'>('manual');
 	let camWhiteBalance = $state(4000);
-	let camBrightness = $state(128);
-	let camContrast = $state(128);
-	let camSharpness = $state(128);
-	let camGain = $state(0);
+	let camBrightness = $state(0);
+	let camContrast = $state(32);
+	let camSharpness = $state(3);
+	let camSaturation = $state(64);
 	let camZoom = $state(1);
 
 	async function loadCameraCapabilities() {
@@ -41,24 +44,38 @@
 		if (!track) return;
 		try {
 			cameraCapabilities = track.getCapabilities();
+			// Read current settings from camera
+			const settings = track.getSettings() as any;
+			if (settings.exposureCompensation !== undefined) camExposureComp = settings.exposureCompensation;
+			if (settings.exposureTime !== undefined) camExposureTime = settings.exposureTime;
+			if (settings.exposureMode) camExposureMode = settings.exposureMode;
+			if (settings.whiteBalanceMode) camWhiteBalanceMode = settings.whiteBalanceMode;
+			if (settings.colorTemperature !== undefined) camWhiteBalance = settings.colorTemperature;
+			if (settings.brightness !== undefined) camBrightness = settings.brightness;
+			if (settings.contrast !== undefined) camContrast = settings.contrast;
+			if (settings.sharpness !== undefined) camSharpness = settings.sharpness;
+			if (settings.saturation !== undefined) camSaturation = settings.saturation;
+			if (settings.zoom !== undefined) camZoom = settings.zoom;
 		} catch { cameraCapabilities = null; }
 	}
 
 	async function applyCameraSettings() {
 		if (!cameraStream) return;
 		const track = cameraStream.getVideoTracks()[0];
-		if (!track) return;
-		const caps = cameraCapabilities;
-		if (!caps) return;
+		if (!track || !cameraCapabilities) return;
 
+		const caps = cameraCapabilities;
 		const advanced: any = {};
-		if (caps.exposureMode) advanced.exposureMode = 'manual';
-		if (caps.exposureCompensation) advanced.exposureCompensation = camExposure;
-		if (caps.colorTemperature) { advanced.whiteBalanceMode = 'manual'; advanced.colorTemperature = camWhiteBalance; }
+
+		if (caps.exposureMode) advanced.exposureMode = camExposureMode;
+		if (caps.exposureCompensation && camExposureMode === 'manual') advanced.exposureCompensation = camExposureComp;
+		if (caps.exposureTime && camExposureMode === 'manual') advanced.exposureTime = camExposureTime;
+		if (caps.whiteBalanceMode) advanced.whiteBalanceMode = camWhiteBalanceMode;
+		if (caps.colorTemperature && camWhiteBalanceMode === 'manual') advanced.colorTemperature = camWhiteBalance;
 		if (caps.brightness) advanced.brightness = camBrightness;
 		if (caps.contrast) advanced.contrast = camContrast;
 		if (caps.sharpness) advanced.sharpness = camSharpness;
-		if (caps.focusMode) advanced.focusMode = 'manual';
+		if (caps.saturation) advanced.saturation = camSaturation;
 		if (caps.zoom) advanced.zoom = camZoom;
 
 		try {
@@ -774,38 +791,81 @@
 										{#if !cameraCapabilities}
 											<p class="text-xs text-[var(--color-tron-text-secondary)]">No adjustable settings for this camera.</p>
 										{:else}
-											{#if cameraCapabilities.exposureCompensation}
+											<!-- Exposure mode -->
+											{#if cameraCapabilities.exposureMode}
 												<div>
 													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">Exposure</span>
-														<span class="font-mono text-[var(--color-tron-text-primary)]">{camExposure}</span>
+														<span class="text-[var(--color-tron-text-secondary)]">Exposure Mode</span>
+														<select bind:value={camExposureMode} onchange={applyCameraSettings}
+															class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-tron-text-primary)]">
+															<option value="continuous">Auto</option>
+															<option value="manual">Manual</option>
+														</select>
+													</div>
+												</div>
+											{/if}
+											{#if cameraCapabilities.exposureTime && camExposureMode === 'manual'}
+												<div>
+													<div class="flex items-center justify-between text-xs">
+														<span class="text-[var(--color-tron-text-secondary)]">Exposure Time</span>
+														<span class="font-mono text-[var(--color-tron-text-primary)]">{Math.round(camExposureTime)}</span>
+													</div>
+													<input type="range"
+														min={cameraCapabilities.exposureTime.min}
+														max={Math.min(cameraCapabilities.exposureTime.max, 2000)}
+														step={cameraCapabilities.exposureTime.step || 1}
+														bind:value={camExposureTime}
+														oninput={applyCameraSettings}
+														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+													/>
+												</div>
+											{/if}
+											{#if cameraCapabilities.exposureCompensation && camExposureMode === 'manual'}
+												<div>
+													<div class="flex items-center justify-between text-xs">
+														<span class="text-[var(--color-tron-text-secondary)]">Exposure Comp</span>
+														<span class="font-mono text-[var(--color-tron-text-primary)]">{camExposureComp}</span>
 													</div>
 													<input type="range"
 														min={cameraCapabilities.exposureCompensation.min}
 														max={cameraCapabilities.exposureCompensation.max}
 														step={cameraCapabilities.exposureCompensation.step || 1}
-														bind:value={camExposure}
-														onchange={applyCameraSettings}
+														bind:value={camExposureComp}
+														oninput={applyCameraSettings}
 														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
 													/>
 												</div>
 											{/if}
-											{#if cameraCapabilities.colorTemperature}
+											<!-- White Balance -->
+											{#if cameraCapabilities.whiteBalanceMode}
 												<div>
 													<div class="flex items-center justify-between text-xs">
 														<span class="text-[var(--color-tron-text-secondary)]">White Balance</span>
+														<select bind:value={camWhiteBalanceMode} onchange={applyCameraSettings}
+															class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-tron-text-primary)]">
+															<option value="continuous">Auto</option>
+															<option value="manual">Manual</option>
+														</select>
+													</div>
+												</div>
+											{/if}
+											{#if cameraCapabilities.colorTemperature && camWhiteBalanceMode === 'manual'}
+												<div>
+													<div class="flex items-center justify-between text-xs">
+														<span class="text-[var(--color-tron-text-secondary)]">Color Temp</span>
 														<span class="font-mono text-[var(--color-tron-text-primary)]">{camWhiteBalance}K</span>
 													</div>
 													<input type="range"
 														min={cameraCapabilities.colorTemperature.min}
 														max={cameraCapabilities.colorTemperature.max}
-														step={cameraCapabilities.colorTemperature.step || 100}
+														step={cameraCapabilities.colorTemperature.step || 1}
 														bind:value={camWhiteBalance}
-														onchange={applyCameraSettings}
+														oninput={applyCameraSettings}
 														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
 													/>
 												</div>
 											{/if}
+											<!-- Image adjustments -->
 											{#if cameraCapabilities.brightness}
 												<div>
 													<div class="flex items-center justify-between text-xs">
@@ -817,7 +877,7 @@
 														max={cameraCapabilities.brightness.max}
 														step={cameraCapabilities.brightness.step || 1}
 														bind:value={camBrightness}
-														onchange={applyCameraSettings}
+														oninput={applyCameraSettings}
 														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
 													/>
 												</div>
@@ -833,7 +893,23 @@
 														max={cameraCapabilities.contrast.max}
 														step={cameraCapabilities.contrast.step || 1}
 														bind:value={camContrast}
-														onchange={applyCameraSettings}
+														oninput={applyCameraSettings}
+														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+													/>
+												</div>
+											{/if}
+											{#if cameraCapabilities.saturation}
+												<div>
+													<div class="flex items-center justify-between text-xs">
+														<span class="text-[var(--color-tron-text-secondary)]">Saturation</span>
+														<span class="font-mono text-[var(--color-tron-text-primary)]">{camSaturation}</span>
+													</div>
+													<input type="range"
+														min={cameraCapabilities.saturation.min}
+														max={cameraCapabilities.saturation.max}
+														step={cameraCapabilities.saturation.step || 1}
+														bind:value={camSaturation}
+														oninput={applyCameraSettings}
 														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
 													/>
 												</div>
@@ -849,7 +925,7 @@
 														max={cameraCapabilities.sharpness.max}
 														step={cameraCapabilities.sharpness.step || 1}
 														bind:value={camSharpness}
-														onchange={applyCameraSettings}
+														oninput={applyCameraSettings}
 														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
 													/>
 												</div>
@@ -858,20 +934,20 @@
 												<div>
 													<div class="flex items-center justify-between text-xs">
 														<span class="text-[var(--color-tron-text-secondary)]">Zoom</span>
-														<span class="font-mono text-[var(--color-tron-text-primary)]">{camZoom}x</span>
+														<span class="font-mono text-[var(--color-tron-text-primary)]">{camZoom.toFixed(1)}x</span>
 													</div>
 													<input type="range"
 														min={cameraCapabilities.zoom.min}
 														max={cameraCapabilities.zoom.max}
 														step={cameraCapabilities.zoom.step || 0.1}
 														bind:value={camZoom}
-														onchange={applyCameraSettings}
+														oninput={applyCameraSettings}
 														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
 													/>
 												</div>
 											{/if}
 											<button
-												onclick={() => { camExposure = -5; camWhiteBalance = 4000; camBrightness = 128; camContrast = 128; camSharpness = 128; camGain = 0; camZoom = 1; applyCameraSettings(); }}
+												onclick={() => { camExposureMode = 'manual'; camExposureComp = 50; camExposureTime = 250; camWhiteBalanceMode = 'manual'; camWhiteBalance = 4000; camBrightness = 0; camContrast = 32; camSharpness = 3; camSaturation = 64; camZoom = 1; applyCameraSettings(); }}
 												class="w-full rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]"
 											>
 												Reset to LIZA Defaults
