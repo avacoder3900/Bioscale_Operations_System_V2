@@ -359,14 +359,26 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 						fillCount: assayFillMap.get(a._id) ?? 0
 					})),
 					dailyThroughput: last7Days,
-					recentRuns: (recentWaxRuns as any[]).map((r: any) => ({
-						id: r._id,
-						status: r.status,
-						robotName: r.robot?.name ?? '—',
-						cartridgeCount: r.cartridgeIds?.length ?? r.plannedCartridgeCount ?? 0,
-						passedCount: r.qcSummary?.passed ?? 0,
-						failedCount: r.qcSummary?.failed ?? 0,
-						date: r.createdAt
+					recentRuns: await Promise.all((recentWaxRuns as any[]).map(async (r: any) => {
+						const runId = String(r._id);
+						const qcAgg = await CartridgeRecord.aggregate([
+							{ $match: { 'waxFilling.runId': runId, 'waxQc.status': { $exists: true } } },
+							{ $group: {
+								_id: null,
+								passed: { $sum: { $cond: [{ $eq: ['$waxQc.status', 'Accepted'] }, 1, 0] } },
+								failed: { $sum: { $cond: [{ $eq: ['$waxQc.status', 'Rejected'] }, 1, 0] } }
+							}}
+						]);
+						const qc = qcAgg[0] ?? { passed: 0, failed: 0 };
+						return {
+							id: r._id,
+							status: r.status,
+							robotName: r.robot?.name ?? '—',
+							cartridgeCount: r.cartridgeIds?.length ?? r.plannedCartridgeCount ?? 0,
+							passedCount: qc.passed,
+							failedCount: qc.failed,
+							date: r.createdAt
+						};
 					})),
 					bomCostPerCartridge: {
 						total: crtCostTotal,
