@@ -1,4 +1,5 @@
 <script lang="ts">
+	import jsQR from 'jsqr';
 	let { data } = $props();
 	let activeTab = $state('import');
 	const tabs = ['Import', 'Capture', 'Labels', 'Train', 'Test', 'Review', 'Integrate'];
@@ -97,52 +98,34 @@
 		if (qrScanTimer) return;
 		qrScanCanvas = document.createElement('canvas');
 		qrScanning = true;
+		qrScanMethod = 'jsQR';
 
-		// Check for BarcodeDetector (Chrome 83+, Edge 83+)
-		const hasBarcodeDetector = 'BarcodeDetector' in window;
-		let detector: any = null;
-		if (hasBarcodeDetector) {
-			try {
-				detector = new (window as any).BarcodeDetector({ formats: ['qr_code', 'code_128', 'code_39', 'ean_13'] });
-				qrScanMethod = 'BarcodeDetector';
-			} catch {
-				detector = null;
-			}
-		}
-		if (!detector) qrScanMethod = 'none';
-
-		qrScanTimer = setInterval(async () => {
+		qrScanTimer = setInterval(() => {
 			if (!videoEl || !cameraReady || capturedImage || !qrScanCanvas) return;
 
-			// Always grab a frame to the offscreen canvas
 			try {
-				qrScanCanvas.width = videoEl.videoWidth;
-				qrScanCanvas.height = videoEl.videoHeight;
-				const ctx = qrScanCanvas.getContext('2d');
-				if (!ctx) return;
-				ctx.drawImage(videoEl, 0, 0);
-			} catch { return; }
+				const w = videoEl.videoWidth;
+				const h = videoEl.videoHeight;
+				if (!w || !h) return;
 
-			try {
-				let codes: any[] = [];
-				if (detector) {
-					// BarcodeDetector can scan from canvas (more reliable than video in some browsers)
-					codes = await detector.detect(qrScanCanvas);
-				}
-				if (codes.length > 0) {
-					const qrValue = codes[0].rawValue;
-					if (qrValue !== detectedQR) {
-						detectedQR = qrValue;
-						lookupBarcode(qrValue);
+				qrScanCanvas.width = w;
+				qrScanCanvas.height = h;
+				const ctx = qrScanCanvas.getContext('2d', { willReadFrequently: true });
+				if (!ctx) return;
+				ctx.drawImage(videoEl, 0, 0, w, h);
+				const imageData = ctx.getImageData(0, 0, w, h);
+
+				const code = jsQR(imageData.data, w, h, { inversionAttempts: 'dontInvert' });
+				if (code && code.data) {
+					if (code.data !== detectedQR) {
+						detectedQR = code.data;
+						lookupBarcode(code.data);
 					}
-				} else if (detectedQR) {
-					// Clear after 3 seconds of no detection
-					// (don't clear immediately in case of brief occlusion)
 				}
 			} catch (e) {
 				console.warn('QR scan error:', e);
 			}
-		}, 400);
+		}, 500);
 	}
 
 	function stopQRScanning() {
