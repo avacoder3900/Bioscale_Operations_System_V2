@@ -38,16 +38,26 @@
 		stopCamera();
 		try {
 			await loadCameras();
-			const constraints: MediaStreamConstraints = {
-				video: selectedCameraId
-					? { deviceId: { exact: selectedCameraId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
-					: { width: { ideal: 1920 }, height: { ideal: 1080 } }
-			};
-			cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
-			if (videoEl) {
-				videoEl.srcObject = cameraStream;
-				videoEl.onloadedmetadata = () => { cameraReady = true; };
+			// Try selected camera first, then fall back to others
+			const camerasToTry = selectedCameraId
+				? [selectedCameraId, ...availableCameras.filter(c => c.deviceId !== selectedCameraId).map(c => c.deviceId)]
+				: availableCameras.map(c => c.deviceId);
+
+			let lastErr: any = null;
+			for (const deviceId of camerasToTry) {
+				try {
+					cameraStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } });
+					selectedCameraId = deviceId;
+					if (videoEl) {
+						videoEl.srcObject = cameraStream;
+						videoEl.onloadedmetadata = () => { cameraReady = true; };
+					}
+					return; // success
+				} catch (err) {
+					lastErr = err;
+				}
 			}
+			throw lastErr || new Error('No cameras available');
 		} catch (err: any) {
 			cameraError = err.message || 'Could not access camera. Check browser permissions.';
 		}
