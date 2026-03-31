@@ -139,8 +139,11 @@
 					const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } });
 					selectedCameraId = deviceId;
 					cameraStream = stream;
-					// Wait a tick for Svelte to render the video element
-					await new Promise(r => setTimeout(r, 50));
+					// Wait for Svelte to render the video element, retry until it appears
+					for (let attempt = 0; attempt < 20; attempt++) {
+						await new Promise(r => setTimeout(r, 100));
+						if (videoEl) break;
+					}
 					if (videoEl) {
 						videoEl.srcObject = stream;
 						await videoEl.play().catch(() => {});
@@ -182,7 +185,10 @@
 	async function resumeLiveFeed() {
 		capturedImage = null;
 		// Re-attach stream to video element after Svelte re-renders it
-		await new Promise(r => setTimeout(r, 50));
+		for (let attempt = 0; attempt < 20; attempt++) {
+			await new Promise(r => setTimeout(r, 100));
+			if (videoEl) break;
+		}
 		if (videoEl && cameraStream) {
 			videoEl.srcObject = cameraStream;
 			await videoEl.play().catch(() => {});
