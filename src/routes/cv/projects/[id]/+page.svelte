@@ -46,11 +46,15 @@
 			let lastErr: any = null;
 			for (const deviceId of camerasToTry) {
 				try {
-					cameraStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } });
+					const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } });
 					selectedCameraId = deviceId;
+					cameraStream = stream;
+					// Wait a tick for Svelte to render the video element
+					await new Promise(r => setTimeout(r, 50));
 					if (videoEl) {
-						videoEl.srcObject = cameraStream;
-						videoEl.onloadedmetadata = () => { cameraReady = true; };
+						videoEl.srcObject = stream;
+						await videoEl.play().catch(() => {});
+						cameraReady = true;
 					}
 					return; // success
 				} catch (err) {
