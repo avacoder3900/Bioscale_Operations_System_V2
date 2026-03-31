@@ -25,7 +25,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	const id = generateId();
 	const ext = filename.split('.').pop() || 'jpg';
-	const key = `cv/${projectId}/${id}.${ext}`;
+	// Use the original filename (which includes barcode from QR scan) with a unique prefix
+	const safeName = filename.replace(/[^a-zA-Z0-9_\-\.]/g, '_').slice(0, 120);
+	const key = `cv/${projectId}/${id}_${safeName}`;
 
 	const workerUrl = env.R2_WORKER_URL;
 	if (!workerUrl) {
