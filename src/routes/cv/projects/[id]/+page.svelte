@@ -24,39 +24,93 @@
 	// Processing mode (matches LIZA: full = post-processed, raw = no processing)
 	let processingMode = $state<'full' | 'raw'>(data.project.captureSettings?.mode || 'full');
 
+	// Camera settings (LIZA defaults from camera_capture.py)
+	let showSettings = $state(false);
+	let cameraCapabilities = $state<any>(null);
+	let camExposure = $state(-5);
+	let camWhiteBalance = $state(4000);
+	let camBrightness = $state(128);
+	let camContrast = $state(128);
+	let camSharpness = $state(128);
+	let camGain = $state(0);
+	let camZoom = $state(1);
+
+	async function loadCameraCapabilities() {
+		if (!cameraStream) return;
+		const track = cameraStream.getVideoTracks()[0];
+		if (!track) return;
+		try {
+			cameraCapabilities = track.getCapabilities();
+		} catch { cameraCapabilities = null; }
+	}
+
+	async function applyCameraSettings() {
+		if (!cameraStream) return;
+		const track = cameraStream.getVideoTracks()[0];
+		if (!track) return;
+		const caps = cameraCapabilities;
+		if (!caps) return;
+
+		const advanced: any = {};
+		if (caps.exposureMode) advanced.exposureMode = 'manual';
+		if (caps.exposureCompensation) advanced.exposureCompensation = camExposure;
+		if (caps.colorTemperature) { advanced.whiteBalanceMode = 'manual'; advanced.colorTemperature = camWhiteBalance; }
+		if (caps.brightness) advanced.brightness = camBrightness;
+		if (caps.contrast) advanced.contrast = camContrast;
+		if (caps.sharpness) advanced.sharpness = camSharpness;
+		if (caps.focusMode) advanced.focusMode = 'manual';
+		if (caps.zoom) advanced.zoom = camZoom;
+
+		try {
+			await track.applyConstraints({ advanced: [advanced] });
+		} catch (e) {
+			console.warn('Could not apply camera settings:', e);
+		}
+	}
+
 	// QR scanning
 	let detectedQR = $state<string | null>(null);
 	let qrLookupResult = $state<any>(null);
 	let qrScanning = $state(false);
 	let qrScanTimer = $state<ReturnType<typeof setInterval> | null>(null);
 	let qrScanCanvas: HTMLCanvasElement | null = null;
+	let qrScanMethod = $state('');
 
 	async function startQRScanning() {
 		if (qrScanTimer) return;
 		qrScanCanvas = document.createElement('canvas');
 		qrScanning = true;
 
+		// Check for BarcodeDetector (Chrome 83+, Edge 83+)
 		const hasBarcodeDetector = 'BarcodeDetector' in window;
 		let detector: any = null;
 		if (hasBarcodeDetector) {
-			detector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
+			try {
+				detector = new (window as any).BarcodeDetector({ formats: ['qr_code', 'code_128', 'code_39', 'ean_13'] });
+				qrScanMethod = 'BarcodeDetector';
+			} catch {
+				detector = null;
+			}
 		}
+		if (!detector) qrScanMethod = 'none';
 
 		qrScanTimer = setInterval(async () => {
 			if (!videoEl || !cameraReady || capturedImage || !qrScanCanvas) return;
+
+			// Always grab a frame to the offscreen canvas
+			try {
+				qrScanCanvas.width = videoEl.videoWidth;
+				qrScanCanvas.height = videoEl.videoHeight;
+				const ctx = qrScanCanvas.getContext('2d');
+				if (!ctx) return;
+				ctx.drawImage(videoEl, 0, 0);
+			} catch { return; }
+
 			try {
 				let codes: any[] = [];
 				if (detector) {
-					codes = await detector.detect(videoEl);
-				} else {
-					// Fallback: grab frame to canvas and try via ImageData
-					qrScanCanvas.width = videoEl.videoWidth;
-					qrScanCanvas.height = videoEl.videoHeight;
-					const ctx = qrScanCanvas.getContext('2d');
-					if (!ctx) return;
-					ctx.drawImage(videoEl, 0, 0);
-					// Without jsQR, we can only use BarcodeDetector
-					// If unavailable, QR scanning won't work in this browser
+					// BarcodeDetector can scan from canvas (more reliable than video in some browsers)
+					codes = await detector.detect(qrScanCanvas);
 				}
 				if (codes.length > 0) {
 					const qrValue = codes[0].rawValue;
@@ -64,9 +118,14 @@
 						detectedQR = qrValue;
 						lookupBarcode(qrValue);
 					}
+				} else if (detectedQR) {
+					// Clear after 3 seconds of no detection
+					// (don't clear immediately in case of brief occlusion)
 				}
-			} catch { /* scan error, ignore */ }
-		}, 500);
+			} catch (e) {
+				console.warn('QR scan error:', e);
+			}
+		}, 400);
 	}
 
 	function stopQRScanning() {
@@ -149,6 +208,8 @@
 						await videoEl.play().catch(() => {});
 						cameraReady = true;
 					}
+					await loadCameraCapabilities();
+					await applyCameraSettings();
 					startQRScanning();
 					return; // success
 				} catch (err) {
@@ -700,6 +761,127 @@
 										<div class="text-xs text-[var(--color-tron-text-secondary)]">QR Lock</div>
 									</div>
 								</div>
+							</div>
+
+							<!-- Camera Settings (LIZA tuning panel) -->
+							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4">
+								<button onclick={() => showSettings = !showSettings} class="flex w-full items-center justify-between">
+									<h4 class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Camera Settings</h4>
+									<span class="text-xs text-[var(--color-tron-text-secondary)]">{showSettings ? '▲' : '▼'}</span>
+								</button>
+								{#if showSettings}
+									<div class="mt-3 space-y-3">
+										{#if !cameraCapabilities}
+											<p class="text-xs text-[var(--color-tron-text-secondary)]">No adjustable settings for this camera.</p>
+										{:else}
+											{#if cameraCapabilities.exposureCompensation}
+												<div>
+													<div class="flex items-center justify-between text-xs">
+														<span class="text-[var(--color-tron-text-secondary)]">Exposure</span>
+														<span class="font-mono text-[var(--color-tron-text-primary)]">{camExposure}</span>
+													</div>
+													<input type="range"
+														min={cameraCapabilities.exposureCompensation.min}
+														max={cameraCapabilities.exposureCompensation.max}
+														step={cameraCapabilities.exposureCompensation.step || 1}
+														bind:value={camExposure}
+														onchange={applyCameraSettings}
+														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+													/>
+												</div>
+											{/if}
+											{#if cameraCapabilities.colorTemperature}
+												<div>
+													<div class="flex items-center justify-between text-xs">
+														<span class="text-[var(--color-tron-text-secondary)]">White Balance</span>
+														<span class="font-mono text-[var(--color-tron-text-primary)]">{camWhiteBalance}K</span>
+													</div>
+													<input type="range"
+														min={cameraCapabilities.colorTemperature.min}
+														max={cameraCapabilities.colorTemperature.max}
+														step={cameraCapabilities.colorTemperature.step || 100}
+														bind:value={camWhiteBalance}
+														onchange={applyCameraSettings}
+														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+													/>
+												</div>
+											{/if}
+											{#if cameraCapabilities.brightness}
+												<div>
+													<div class="flex items-center justify-between text-xs">
+														<span class="text-[var(--color-tron-text-secondary)]">Brightness</span>
+														<span class="font-mono text-[var(--color-tron-text-primary)]">{camBrightness}</span>
+													</div>
+													<input type="range"
+														min={cameraCapabilities.brightness.min}
+														max={cameraCapabilities.brightness.max}
+														step={cameraCapabilities.brightness.step || 1}
+														bind:value={camBrightness}
+														onchange={applyCameraSettings}
+														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+													/>
+												</div>
+											{/if}
+											{#if cameraCapabilities.contrast}
+												<div>
+													<div class="flex items-center justify-between text-xs">
+														<span class="text-[var(--color-tron-text-secondary)]">Contrast</span>
+														<span class="font-mono text-[var(--color-tron-text-primary)]">{camContrast}</span>
+													</div>
+													<input type="range"
+														min={cameraCapabilities.contrast.min}
+														max={cameraCapabilities.contrast.max}
+														step={cameraCapabilities.contrast.step || 1}
+														bind:value={camContrast}
+														onchange={applyCameraSettings}
+														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+													/>
+												</div>
+											{/if}
+											{#if cameraCapabilities.sharpness}
+												<div>
+													<div class="flex items-center justify-between text-xs">
+														<span class="text-[var(--color-tron-text-secondary)]">Sharpness</span>
+														<span class="font-mono text-[var(--color-tron-text-primary)]">{camSharpness}</span>
+													</div>
+													<input type="range"
+														min={cameraCapabilities.sharpness.min}
+														max={cameraCapabilities.sharpness.max}
+														step={cameraCapabilities.sharpness.step || 1}
+														bind:value={camSharpness}
+														onchange={applyCameraSettings}
+														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+													/>
+												</div>
+											{/if}
+											{#if cameraCapabilities.zoom && cameraCapabilities.zoom.max > 1}
+												<div>
+													<div class="flex items-center justify-between text-xs">
+														<span class="text-[var(--color-tron-text-secondary)]">Zoom</span>
+														<span class="font-mono text-[var(--color-tron-text-primary)]">{camZoom}x</span>
+													</div>
+													<input type="range"
+														min={cameraCapabilities.zoom.min}
+														max={cameraCapabilities.zoom.max}
+														step={cameraCapabilities.zoom.step || 0.1}
+														bind:value={camZoom}
+														onchange={applyCameraSettings}
+														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+													/>
+												</div>
+											{/if}
+											<button
+												onclick={() => { camExposure = -5; camWhiteBalance = 4000; camBrightness = 128; camContrast = 128; camSharpness = 128; camGain = 0; camZoom = 1; applyCameraSettings(); }}
+												class="w-full rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]"
+											>
+												Reset to LIZA Defaults
+											</button>
+										{/if}
+										<div class="border-t border-[var(--color-tron-border)] pt-2">
+											<p class="text-xs text-[var(--color-tron-text-secondary)]">QR Scanner: <span class="font-mono text-[var(--color-tron-text-primary)]">{qrScanMethod || 'initializing...'}</span></p>
+										</div>
+									</div>
+								{/if}
 							</div>
 
 							<!-- Keyboard shortcuts -->
