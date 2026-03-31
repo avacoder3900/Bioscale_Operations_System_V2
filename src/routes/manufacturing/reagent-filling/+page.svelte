@@ -546,15 +546,29 @@
 			readonly={isViewingPast}
 		/>
 
-	{:else if displayStage === 'Loading' && (previewParam || data.tubes.length === 0)}
+	{:else if displayStage === 'Loading' && (previewParam || data.cartridges.length === 0)}
+		<!-- Step 1: Deck Loading first -->
+		<DeckLoadingGrid
+			onComplete={({ deckId, cartridgeScans }) =>
+				submitForm('loadDeck', { deckId, cartridgeScans: JSON.stringify(cartridgeScans) })}
+			readonly={isViewingPast}
+			focusPaused={showCancelModal}
+		/>
+
+	{:else if displayStage === 'Loading' && data.cartridges.length > 0 && !reagentBatchConfirmed}
+		<!-- Step 2: Deck loaded — now scan reagent batch barcode -->
 		<ReagentPreparation
 			reagentDefinitions={data.reagentDefinitions}
-			onComplete={(tubes) => submitForm('recordReagentPrep', { tubes: JSON.stringify(tubes) })}
+			onComplete={(tubes) => {
+				reagentBatchBarcode = tubes[0]?.sourceLotId ?? '';
+				reagentBatchConfirmed = true;
+				submitForm('recordReagentPrep', { tubes: JSON.stringify(tubes) });
+			}}
 			readonly={isViewingPast}
 		/>
 
 	{:else if displayStage === 'Loading' && data.cartridges.length > 0 && reagentBatchConfirmed}
-		<!-- Deck loaded AND batch confirmed — show summary and Start Run -->
+		<!-- Step 3: Deck loaded AND batch confirmed — show summary and Start Run -->
 		<div class="space-y-4">
 			<div class="rounded-lg border border-green-500/30 bg-green-900/10 p-4">
 				<div class="flex items-center gap-3">
@@ -577,24 +591,6 @@
 				</button>
 			{/if}
 		</div>
-
-	{:else if displayStage === 'Loading' && data.cartridges.length > 0 && !reagentBatchConfirmed}
-		<!-- Deck loaded but batch NOT yet confirmed — show Reagent Batch Scan -->
-		<ReagentBatchScan
-			onComplete={(barcode) => {
-				reagentBatchBarcode = barcode;
-				reagentBatchConfirmed = true;
-			}}
-			readonly={isViewingPast}
-		/>
-
-	{:else if displayStage === 'Loading'}
-		<DeckLoadingGrid
-			onComplete={({ deckId, cartridgeScans }) =>
-				submitForm('loadDeck', { deckId, cartridgeScans: JSON.stringify(cartridgeScans) })}
-			readonly={isViewingPast}
-			focusPaused={showCancelModal}
-		/>
 
 	{:else if displayStage === 'Running'}
 		<RunExecution
