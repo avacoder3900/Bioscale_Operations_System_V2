@@ -417,3 +417,15 @@ Dev is 157 commits ahead of master. It contains the bulk of the manufacturing pi
 - `docs/prds/CV-CAPTURE-STATION.md`
 - `docs/prds/CV-IMAGE-PROCESSING.md`
 - `docs/prds/R2-WORKER-UPLOAD-PROXY.md`
+
+### MAG-VAL: Magnetometer Validation Admin Override (2026-03-31)
+- **MAG-VAL-01 + MAG-VAL-02:** Admin override for failed magnetometer validation sessions
+- Added `override` subdocument to ValidationSession schema (by, at, reason, originalResult)
+- Added `overrideApproval` form action to `/validation/magnetometer/[sessionId]/+page.server.ts`
+- Requires admin:full permission + bcrypt password re-entry + reason (min 10 chars)
+- Updates both ValidationSession (overallPassed → true) and SPU record (status → overridden)
+- Full AuditLog trail with before/after snapshots
+- Load function updated to expose override state to frontend
+- Companion PRD: `docs/prds/DHR-VALIDATION-DISPLAY.md` (frontend display, separate branch)
+- Files changed: `validation-session.ts` (model), `[sessionId]/+page.server.ts` (action + load)
+- PRD: `docs/prds/MAG-VAL-ADMIN-OVERRIDE.md`

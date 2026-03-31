@@ -18,6 +18,20 @@ const validationSessionSchema = new Schema({
 		testType: String, rawData: Schema.Types.Mixed, processedData: Schema.Types.Mixed,
 		passed: Boolean, notes: String, createdAt: Date
 	}],
+	override: {
+		type: {
+			by: { _id: String, username: String },
+			at: Date,
+			reason: String,
+			originalResult: {
+				overallPassed: Boolean,
+				failureReasons: [String],
+				status: String
+			}
+		},
+		default: null,
+		_id: false
+	},
 	createdAt: { type: Date, default: Date.now }
 }, { timestamps: false });
 

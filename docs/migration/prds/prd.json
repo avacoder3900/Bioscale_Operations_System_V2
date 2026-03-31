@@ -224,6 +224,15 @@
         { "id": "SEC-09-01", "title": "Remove or protect api/box/debug endpoint", "status": "done" },
         { "id": "SEC-09-02", "title": "Add permission checks to bom/search, inventory/transactions, kanban/move APIs", "status": "done" }
       ]
+    },
+    {
+      "id": "MAG_VAL",
+      "prdFile": "../../docs/prds/MAG-VAL-ADMIN-OVERRIDE.md",
+      "dependencies": ["SPU", "AUTH"],
+      "stories": [
+        { "id": "MAG-VAL-01", "title": "Admin override form action + schema update", "status": "done" },
+        { "id": "MAG-VAL-02", "title": "Expose override state in session load", "status": "done" }
+      ]
     }
   ]
 }
