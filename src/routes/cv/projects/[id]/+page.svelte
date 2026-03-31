@@ -21,6 +21,92 @@
 	let availableCameras = $state<MediaDeviceInfo[]>([]);
 	let selectedCameraId = $state('');
 
+	// QR scanning
+	let detectedQR = $state<string | null>(null);
+	let qrLookupResult = $state<any>(null);
+	let qrScanning = $state(false);
+	let qrScanTimer = $state<ReturnType<typeof setInterval> | null>(null);
+	let qrScanCanvas: HTMLCanvasElement | null = null;
+
+	async function startQRScanning() {
+		if (qrScanTimer) return;
+		qrScanCanvas = document.createElement('canvas');
+		qrScanning = true;
+
+		const hasBarcodeDetector = 'BarcodeDetector' in window;
+		let detector: any = null;
+		if (hasBarcodeDetector) {
+			detector = new (window as any).BarcodeDetector({ formats: ['qr_code'] });
+		}
+
+		qrScanTimer = setInterval(async () => {
+			if (!videoEl || !cameraReady || capturedImage || !qrScanCanvas) return;
+			try {
+				let codes: any[] = [];
+				if (detector) {
+					codes = await detector.detect(videoEl);
+				} else {
+					// Fallback: grab frame to canvas and try via ImageData
+					qrScanCanvas.width = videoEl.videoWidth;
+					qrScanCanvas.height = videoEl.videoHeight;
+					const ctx = qrScanCanvas.getContext('2d');
+					if (!ctx) return;
+					ctx.drawImage(videoEl, 0, 0);
+					// Without jsQR, we can only use BarcodeDetector
+					// If unavailable, QR scanning won't work in this browser
+				}
+				if (codes.length > 0) {
+					const qrValue = codes[0].rawValue;
+					if (qrValue !== detectedQR) {
+						detectedQR = qrValue;
+						lookupBarcode(qrValue);
+					}
+				}
+			} catch { /* scan error, ignore */ }
+		}, 500);
+	}
+
+	function stopQRScanning() {
+		if (qrScanTimer) {
+			clearInterval(qrScanTimer);
+			qrScanTimer = null;
+		}
+		qrScanning = false;
+	}
+
+	async function lookupBarcode(code: string) {
+		try {
+			const res = await fetch(`/api/cv/lookup-barcode?code=${encodeURIComponent(code)}`);
+			if (res.ok) {
+				qrLookupResult = await res.json();
+			} else {
+				qrLookupResult = { raw: code, type: 'unknown' };
+			}
+		} catch {
+			qrLookupResult = { raw: code, type: 'unknown' };
+		}
+	}
+
+	// Keyboard shortcuts
+	function handleKeydown(e: KeyboardEvent) {
+		if (activeTab !== 'capture' || !cameraStream) return;
+		if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
+
+		if (e.code === 'Space') {
+			e.preventDefault();
+			if (capturedImage) {
+				saveCapture();
+			} else if (cameraReady) {
+				capturePhoto();
+			}
+		} else if (e.code === 'Escape') {
+			if (capturedImage) retakePhoto();
+		} else if (e.code === 'KeyS' && !e.ctrlKey && !e.metaKey) {
+			if (!cameraStream) startCamera();
+			else stopCamera();
+		}
+	}
+
 	async function loadCameras() {
 		try {
 			const devices = await navigator.mediaDevices.enumerateDevices();
@@ -57,6 +143,7 @@
 						await videoEl.play().catch(() => {});
 						cameraReady = true;
 					}
+					startQRScanning();
 					return; // success
 				} catch (err) {
 					lastErr = err;
@@ -69,11 +156,14 @@
 	}
 
 	function stopCamera() {
+		stopQRScanning();
 		if (cameraStream) {
 			cameraStream.getTracks().forEach(t => t.stop());
 			cameraStream = null;
 		}
 		cameraReady = false;
+		detectedQR = null;
+		qrLookupResult = null;
 	}
 
 	function capturePhoto() {
@@ -108,7 +198,8 @@
 		try {
 			const res = await fetch(capturedImage);
 			const blob = await res.blob();
-			const filename = `capture-${Date.now()}.jpg`;
+			const qrLabel = detectedQR ? detectedQR.replace(/[/\\:*?"<>|]/g, '_').slice(0, 60) : 'UNKNOWN';
+			const filename = `cartridge_capture_${qrLabel}_${String(captureCount + 1).padStart(3, '0')}.jpg`;
 			const file = new File([blob], filename, { type: 'image/jpeg' });
 
 			// Upload directly without using uploadFiles (which reloads the page)
@@ -146,6 +237,13 @@
 	// Clean up camera when leaving capture tab or page
 	$effect(() => {
 		if (activeTab !== 'capture') stopCamera();
+	});
+
+	// Keyboard shortcuts
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+		window.addEventListener('keydown', handleKeydown);
+		return () => window.removeEventListener('keydown', handleKeydown);
 	});
 
 	// Labels tab
@@ -414,6 +512,7 @@
 						<button onclick={startCamera} class="rounded-lg bg-[var(--color-tron-cyan)] px-6 py-3 text-sm font-medium text-black hover:opacity-90">
 							Start Camera
 						</button>
+						<p class="mt-3 text-xs text-[var(--color-tron-text-secondary)]">Shortcuts: <kbd class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5">Space</kbd> capture/save &middot; <kbd class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5">Esc</kbd> retake</p>
 					</div>
 				{/if}
 
@@ -427,78 +526,156 @@
 				{/if}
 
 				{#if cameraStream}
-					<!-- Camera selector -->
-					{#if availableCameras.length > 1}
-						<div class="flex items-center gap-3">
-							<label class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Camera</label>
-							<select
-								bind:value={selectedCameraId}
-								onchange={startCamera}
-								class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-tron-text-primary)]"
-							>
-								{#each availableCameras as cam, i}
-									<option value={cam.deviceId}>{cam.label || `Camera ${i + 1}`}</option>
-								{/each}
-							</select>
-						</div>
-					{/if}
+					<div class="grid gap-4 lg:grid-cols-[1fr_300px]">
+						<!-- Left: Camera feed -->
+						<div class="space-y-3">
+							<!-- Camera selector -->
+							{#if availableCameras.length > 1}
+								<div class="flex items-center gap-3">
+									<label class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Camera</label>
+									<select
+										bind:value={selectedCameraId}
+										onchange={startCamera}
+										class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-tron-text-primary)]"
+									>
+										{#each availableCameras as cam, i}
+											<option value={cam.deviceId}>{cam.label || `Camera ${i + 1}`}</option>
+										{/each}
+									</select>
+								</div>
+							{/if}
 
-					<!-- Live feed / captured image -->
-					<div class="relative overflow-hidden rounded-lg border-2 border-[var(--color-tron-border)] bg-black">
-						{#if capturedImage}
-							<img src={capturedImage} alt="Captured" class="w-full" />
-						{:else}
-							<!-- svelte-ignore element_invalid_self_closing_tag -->
-							<video bind:this={videoEl} autoplay playsinline muted class="w-full" />
-						{/if}
-						{#if cameraReady && !capturedImage}
-							<div class="absolute bottom-0 left-0 right-0 flex justify-center p-2">
-								<span class="rounded-full bg-[var(--color-tron-green)]/80 px-3 py-1 text-xs font-bold text-black">LIVE</span>
+							<!-- Live feed / captured image -->
+							<div class="relative overflow-hidden rounded-lg border-2 border-[var(--color-tron-border)] bg-black">
+								{#if capturedImage}
+									<img src={capturedImage} alt="Captured" class="w-full" />
+								{:else}
+									<!-- svelte-ignore element_invalid_self_closing_tag -->
+									<video bind:this={videoEl} autoplay playsinline muted class="w-full" />
+								{/if}
+								<!-- QR status overlay (display only, like LIZA) -->
+								{#if cameraReady && !capturedImage}
+									<div class="absolute left-0 top-0 right-0 flex items-center justify-between p-2">
+										{#if detectedQR}
+											<span class="rounded bg-[var(--color-tron-green)]/80 px-2 py-1 text-xs font-bold text-black">QR: {detectedQR.slice(0, 50)}</span>
+										{:else}
+											<span class="rounded bg-[var(--color-tron-red)]/60 px-2 py-1 text-xs font-bold text-white">QR: NOT DETECTED</span>
+										{/if}
+									</div>
+									<div class="absolute bottom-0 left-0 right-0 flex items-center justify-between p-2">
+										<span class="rounded-full bg-[var(--color-tron-green)]/80 px-3 py-1 text-xs font-bold text-black">LIVE</span>
+										{#if captureCount > 0}
+											<span class="rounded-full bg-[var(--color-tron-cyan)]/80 px-3 py-1 text-xs font-bold text-black">{captureCount} captured</span>
+										{/if}
+									</div>
+								{/if}
 							</div>
-						{/if}
-					</div>
-					<canvas bind:this={canvasEl} class="hidden"></canvas>
+							<canvas bind:this={canvasEl} class="hidden"></canvas>
 
-					<!-- Controls -->
-					<div class="flex items-center justify-center gap-3">
-						{#if capturedImage}
-							<button
-								onclick={retakePhoto}
-								class="rounded-lg border border-[var(--color-tron-border)] px-6 py-3 text-sm font-medium text-[var(--color-tron-text-primary)] hover:bg-[var(--color-tron-bg-tertiary)]"
-							>
-								Retake
-							</button>
-							<button
-								onclick={saveCapture}
-								disabled={captureUploading}
-								class="rounded-lg bg-[var(--color-tron-green)] px-6 py-3 text-sm font-medium text-black hover:opacity-90 disabled:opacity-50"
-							>
-								{captureUploading ? 'Saving...' : 'Save to Project'}
-							</button>
-						{:else}
-							<button
-								onclick={capturePhoto}
-								disabled={!cameraReady}
-								class="rounded-full bg-[var(--color-tron-cyan)] p-4 text-black shadow-lg transition-transform hover:scale-105 disabled:opacity-50"
-								title="Capture"
-							>
-								<svg class="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-									<circle cx="12" cy="12" r="10" stroke-width="2"/>
-									<circle cx="12" cy="12" r="4" fill="currentColor"/>
-								</svg>
-							</button>
-							<button
-								onclick={stopCamera}
-								class="rounded-lg border border-[var(--color-tron-border)] px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-red)]"
-							>
-								Stop Camera
-							</button>
-						{/if}
-					</div>
+							<!-- Controls -->
+							<div class="flex items-center justify-center gap-3">
+								{#if capturedImage}
+									<button
+										onclick={retakePhoto}
+										class="rounded-lg border border-[var(--color-tron-border)] px-6 py-3 text-sm font-medium text-[var(--color-tron-text-primary)] hover:bg-[var(--color-tron-bg-tertiary)]"
+									>
+										Retake <kbd class="ml-1 rounded bg-[var(--color-tron-bg-tertiary)] px-1 text-xs">Esc</kbd>
+									</button>
+									<button
+										onclick={saveCapture}
+										disabled={captureUploading}
+										class="rounded-lg bg-[var(--color-tron-green)] px-6 py-3 text-sm font-medium text-black hover:opacity-90 disabled:opacity-50"
+									>
+										{captureUploading ? 'Saving...' : 'Save to Project'} <kbd class="ml-1 rounded bg-black/20 px-1 text-xs">Space</kbd>
+									</button>
+								{:else}
+									<button
+										onclick={capturePhoto}
+										disabled={!cameraReady}
+										class="rounded-full bg-[var(--color-tron-cyan)] p-4 text-black shadow-lg transition-transform hover:scale-105 disabled:opacity-50"
+										title="Capture (Space)"
+									>
+										<svg class="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+											<circle cx="12" cy="12" r="10" stroke-width="2"/>
+											<circle cx="12" cy="12" r="4" fill="currentColor"/>
+										</svg>
+									</button>
+									<button
+										onclick={stopCamera}
+										class="rounded-lg border border-[var(--color-tron-border)] px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-red)]"
+									>
+										Stop Camera
+									</button>
+								{/if}
+							</div>
 
-					{#if captureMsg}
-						<p class="text-center text-sm text-[var(--color-tron-green)]">{captureMsg}</p>
-					{/if}
+							{#if captureMsg}
+								<p class="text-center text-sm text-[var(--color-tron-green)]">{captureMsg}</p>
+							{/if}
+						</div>
+
+						<!-- Right: QR Info Panel -->
+						<div class="space-y-3">
+							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4">
+								<h4 class="mb-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">QR Code Scanner</h4>
+								{#if detectedQR}
+									<div class="space-y-2">
+										<div class="rounded border border-[var(--color-tron-green)]/30 bg-[var(--color-tron-green)]/10 p-2">
+											<p class="text-xs text-[var(--color-tron-text-secondary)]">Detected</p>
+											<p class="break-all font-mono text-sm text-[var(--color-tron-green)]">{detectedQR}</p>
+										</div>
+										{#if qrLookupResult}
+											{#if qrLookupResult.type === 'cartridge'}
+												<div class="space-y-1 text-sm">
+													<p class="text-[var(--color-tron-text-primary)]">Cartridge: <span class="font-semibold text-[var(--color-tron-cyan)]">{qrLookupResult.barcode}</span></p>
+													{#if qrLookupResult.phase}<p class="text-[var(--color-tron-text-secondary)]">Phase: {qrLookupResult.phase}</p>{/if}
+													{#if qrLookupResult.lotNumber}<p class="text-[var(--color-tron-text-secondary)]">Lot: {qrLookupResult.lotNumber}</p>{/if}
+												</div>
+											{:else if qrLookupResult.type === 'lot'}
+												<div class="space-y-1 text-sm">
+													<p class="text-[var(--color-tron-text-primary)]">Lot: <span class="font-semibold text-[var(--color-tron-cyan)]">{qrLookupResult.lotNumber}</span></p>
+													{#if qrLookupResult.status}<p class="text-[var(--color-tron-text-secondary)]">Status: {qrLookupResult.status}</p>{/if}
+												</div>
+											{:else if qrLookupResult.type === 'part'}
+												<div class="space-y-1 text-sm">
+													<p class="text-[var(--color-tron-text-primary)]">Part: <span class="font-semibold text-[var(--color-tron-cyan)]">{qrLookupResult.name}</span></p>
+													{#if qrLookupResult.barcode}<p class="text-[var(--color-tron-text-secondary)]">Barcode: {qrLookupResult.barcode}</p>{/if}
+												</div>
+											{:else}
+												<p class="text-xs text-[var(--color-tron-text-secondary)]">No matching record found in BIMS</p>
+											{/if}
+										{/if}
+									</div>
+								{:else}
+									<p class="text-sm text-[var(--color-tron-text-secondary)]">Point camera at a QR code to auto-identify cartridge, lot, or part.</p>
+								{/if}
+							</div>
+
+							<!-- Session stats -->
+							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4">
+								<h4 class="mb-2 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Session</h4>
+								<div class="grid grid-cols-2 gap-2 text-center">
+									<div>
+										<div class="text-xl font-bold text-[var(--color-tron-cyan)]">{captureCount}</div>
+										<div class="text-xs text-[var(--color-tron-text-secondary)]">Captured</div>
+									</div>
+									<div>
+										<div class="text-xl font-bold {detectedQR ? 'text-[var(--color-tron-green)]' : 'text-[var(--color-tron-text-secondary)]'}">{detectedQR ? 'YES' : 'NO'}</div>
+										<div class="text-xs text-[var(--color-tron-text-secondary)]">QR Lock</div>
+									</div>
+								</div>
+							</div>
+
+							<!-- Keyboard shortcuts -->
+							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4">
+								<h4 class="mb-2 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Shortcuts</h4>
+								<div class="space-y-1 text-xs">
+									<div class="flex justify-between"><span class="text-[var(--color-tron-text-secondary)]">Capture / Save</span><kbd class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[var(--color-tron-text-primary)]">Space</kbd></div>
+									<div class="flex justify-between"><span class="text-[var(--color-tron-text-secondary)]">Retake</span><kbd class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[var(--color-tron-text-primary)]">Esc</kbd></div>
+								</div>
+							</div>
+						</div>
+					</div>
 				{/if}
 			</div>
 
