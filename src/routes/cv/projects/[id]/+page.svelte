@@ -86,9 +86,19 @@
 		capturedImage = canvasEl.toDataURL('image/jpeg', 0.92);
 	}
 
-	function retakePhoto() {
+	async function resumeLiveFeed() {
 		capturedImage = null;
-		captureMsg = '';
+		// Re-attach stream to video element after Svelte re-renders it
+		await new Promise(r => setTimeout(r, 50));
+		if (videoEl && cameraStream) {
+			videoEl.srcObject = cameraStream;
+			await videoEl.play().catch(() => {});
+			cameraReady = true;
+		}
+	}
+
+	function retakePhoto() {
+		resumeLiveFeed();
 	}
 
 	async function saveCapture() {
@@ -126,7 +136,7 @@
 
 			captureCount++;
 			captureMsg = `Saved! (${captureCount} captured this session)`;
-			capturedImage = null;
+			await resumeLiveFeed();
 		} catch (err: any) {
 			captureMsg = `Save failed: ${err.message}`;
 		}
