@@ -179,15 +179,32 @@
 								<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">{robot.description}</p>
 							{/if}
 						</div>
-						<span class="rounded px-2 py-1 text-xs font-medium {stageBadgeColor(robotState.stage)}">
-							{robotState.hasActiveRun ? robotState.stage : 'Idle'}
-						</span>
+						{#if robotState.hasActiveRun && robotState.activeProcess}
+							<div class="flex items-center gap-2 rounded border border-amber-500/30 bg-amber-900/20 px-3 py-1.5 text-xs text-amber-300">
+								<span class="h-2 w-2 rounded-full bg-amber-400 animate-pulse"></span>
+								{robotState.activeProcess === 'wax' ? 'Wax' : 'Reagent'}: {robotState.stage}
+							</div>
+						{:else}
+							<div class="flex items-center gap-2 text-xs text-green-300">
+								<span class="h-2 w-2 rounded-full bg-green-400"></span>
+								Idle
+							</div>
+						{/if}
 						{#if robotState.alerts.length > 0}
 							{#each robotState.alerts as alert (alert.type)}
 								<span class="rounded border border-red-500/30 bg-red-900/50 px-2 py-1 text-xs font-medium text-red-300">
 									{alert.message}
 								</span>
 							{/each}
+						{/if}
+						{#if robotState.hasActiveRun && robotState.activeProcess === 'reagent'}
+							<a
+								href={resolve('/manufacturing/reagent-filling') + '?robot=' + robotState.robotId}
+								class="rounded border border-amber-500/50 bg-amber-900/20 px-3 py-1.5 text-xs font-medium text-amber-300 transition-colors hover:bg-amber-900/30"
+								onclick={(e) => e.stopPropagation()}
+							>
+								Go to reagent run →
+							</a>
 						{/if}
 					</button>
 				{/each}
