@@ -15,7 +15,7 @@
 
 	let { children, data }: Props = $props();
 
-	let selectedRobotId = $derived($page.url.searchParams.get('robot') ?? data.robots[0]?.robotId ?? '');
+	let selectedRobotId = $derived($page.url.searchParams.get('robot') ?? '');
 
 	let selectedRobotState = $derived(data.dashboardState.find((r) => r.robotId === selectedRobotId));
 
@@ -151,5 +151,47 @@
 		{/each}
 	</div>
 
-	{@render children()}
+	{#if selectedRobotId}
+		{@render children()}
+	{:else}
+		<!-- No robot selected — show robot selection cards -->
+		<div class="space-y-4 pt-4">
+			<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Select a Robot</h2>
+			<p class="text-sm text-[var(--color-tron-text-secondary)]">Choose a robot to start or continue a wax filling run.</p>
+			<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+				{#each data.dashboardState as robotState (robotState.robotId)}
+					{@const robot = data.robots.find((r) => r.robotId === robotState.robotId)}
+					<button
+						type="button"
+						onclick={() => selectRobot(robotState.robotId)}
+						class="group flex flex-col items-center gap-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 transition-all hover:border-[var(--color-tron-cyan)] hover:shadow-[0_0_15px_rgba(0,255,255,0.15)]"
+					>
+						<div class="flex h-16 w-16 items-center justify-center rounded-full border-2 border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] transition-colors group-hover:border-[var(--color-tron-cyan)]">
+							<svg class="h-8 w-8 text-[var(--color-tron-text-secondary)] transition-colors group-hover:text-[var(--color-tron-cyan)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+							</svg>
+						</div>
+						<div class="text-center">
+							<h3 class="text-lg font-semibold text-[var(--color-tron-text)] transition-colors group-hover:text-[var(--color-tron-cyan)]">
+								{robotState.name}
+							</h3>
+							{#if robot?.description}
+								<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">{robot.description}</p>
+							{/if}
+						</div>
+						<span class="rounded px-2 py-1 text-xs font-medium {stageBadgeColor(robotState.stage)}">
+							{robotState.hasActiveRun ? robotState.stage : 'Idle'}
+						</span>
+						{#if robotState.alerts.length > 0}
+							{#each robotState.alerts as alert (alert.type)}
+								<span class="rounded border border-red-500/30 bg-red-900/50 px-2 py-1 text-xs font-medium text-red-300">
+									{alert.message}
+								</span>
+							{/each}
+						{/if}
+					</button>
+				{/each}
+			</div>
+		</div>
+	{/if}
 </div>
