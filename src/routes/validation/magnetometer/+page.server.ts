@@ -45,6 +45,13 @@ export const actions: Actions = {
 
 		// Read the current magnet_validation variable (from a previous run_test)
 		try {
+			// Check device is online first to avoid wasting time on offline devices
+			const { getDevice } = await import('$lib/server/particle');
+			const deviceInfo = await getDevice(spu.particleLink.particleDeviceId);
+			if (!deviceInfo.online) {
+				return fail(400, { error: `Device is offline (last seen: ${deviceInfo.last_heard ? new Date(deviceInfo.last_heard).toLocaleString() : 'never'})` });
+			}
+
 			const varData = await getVariable(spu.particleLink.particleDeviceId, 'magnet_validation');
 			const rawResult = varData.result;
 			if (!rawResult || typeof rawResult !== 'string') {
