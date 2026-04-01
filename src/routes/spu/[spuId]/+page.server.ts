@@ -2,7 +2,7 @@ import { fail, error } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import {
 	connectDB, Spu, Batch, User, Customer, AssemblySession,
-	ElectronicSignature, AuditLog, ParticleDevice, generateId
+	ElectronicSignature, AuditLog, ParticleDevice, ValidationSession, generateId
 } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -15,13 +15,17 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const s = spu as any;
 
 	// Parallel lookups
-	const [createdByUser, batch, sessions, signatures, auditTrail, customers] = await Promise.all([
+	const [createdByUser, batch, sessions, signatures, auditTrail, customers, validationSessions] = await Promise.all([
 		s.createdBy ? User.findById(s.createdBy, { username: 1 }).lean() : null,
 		s.batch?._id ? Batch.findById(s.batch._id).lean() : null,
 		AssemblySession.find({ spuId: params.spuId }).sort({ createdAt: -1 }).lean(),
 		ElectronicSignature.find({ entityId: params.spuId }).sort({ signedAt: -1 }).lean(),
 		AuditLog.find({ entityId: params.spuId }).sort({ createdAt: -1 }).limit(50).lean(),
-		Customer.find({ status: 'active' }, { name: 1 }).lean()
+		Customer.find({ status: 'active' }, { name: 1 }).lean(),
+		ValidationSession.find({ spuId: params.spuId })
+			.select('_id type status startedAt completedAt overallPassed failureReasons criteriaUsed magResults override userId rawData')
+			.sort({ createdAt: -1 })
+			.lean()
 	]);
 
 	// Particle device lookup
@@ -44,6 +48,11 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const auditUserIds = [...new Set(auditTrail.map((a: any) => a.userId).filter(Boolean))];
 	const auditUsers = auditUserIds.length ? await User.find({ _id: { $in: auditUserIds } }, { username: 1 }).lean() : [];
 	const auditMap = new Map(auditUsers.map((u: any) => [u._id, u.username]));
+
+	// Validation session user lookup
+	const valUserIds = [...new Set((validationSessions as any[]).map((v: any) => v.userId).filter(Boolean))];
+	const valUsers = valUserIds.length ? await User.find({ _id: { $in: valUserIds } }, { username: 1 }).lean() : [];
+	const valMap = new Map(valUsers.map((u: any) => [u._id, u.username]));
 
 	return {
 		spu: {
@@ -156,6 +165,25 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 				}
 			: null,
 		assemblyStatusHistory: [],
+		validationSessions: (validationSessions as any[]).map((v: any) => ({
+			id: v._id,
+			type: v.type,
+			status: v.status,
+			startedAt: v.startedAt,
+			completedAt: v.completedAt,
+			overallPassed: v.overallPassed ?? null,
+			failureReasons: v.failureReasons ?? [],
+			criteriaUsed: v.criteriaUsed ?? null,
+			magResults: v.magResults ?? null,
+			rawData: v.rawData ?? null,
+			operatorName: valMap.get(v.userId) ?? 'Unknown',
+			override: v.override ? {
+				by: v.override.by,
+				at: v.override.at,
+				reason: v.override.reason,
+				originalResult: v.override.originalResult
+			} : null
+		})),
 		auditTrail: auditTrail.map((a: any) => ({
 			id: a._id,
 			action: a.action ?? '',
