@@ -3,6 +3,11 @@
 	import { invalidateAll } from '$app/navigation';
 	import SetupConfirmation from '$lib/components/manufacturing/reagent-filling/SetupConfirmation.svelte';
 	import ReagentPreparation from '$lib/components/manufacturing/reagent-filling/ReagentPreparation.svelte';
+	import ReagentBatchScan from '$lib/components/manufacturing/reagent-filling/ReagentBatchScan.svelte';
+	// ⚠️ MERGE NOTE: Jacob's branch builds the full Reagent Batch system (models, API routes, schema).
+	// The ReagentBatchScan component and reagentBatchBarcode param passed to startRun are stubs.
+	// When merging Jacob's branch, wire ReagentBatchScan to his API and update startRun to use his batch linkage.
+	// DO NOT overwrite Jacob's reagent batch models or routes — this page is the UI consumer only.
 	import DeckLoadingGrid from '$lib/components/manufacturing/reagent-filling/DeckLoadingGrid.svelte';
 	import RunExecution from '$lib/components/manufacturing/reagent-filling/RunExecution.svelte';
 	import Inspection from '$lib/components/manufacturing/reagent-filling/Inspection.svelte';
@@ -53,6 +58,10 @@
 		completeRun: 'Storage',
 	};
 	let pendingStage = $state<string | null>(null);
+
+	// Reagent batch scan state — tracks whether batch has been scanned and confirmed in the Loading stage
+	let reagentBatchConfirmed = $state(false);
+	let reagentBatchBarcode = $state<string | null>(null);
 
 	// Preview mode: ?preview shows all stages with clickable picker
 	const previewParam = $derived($page.url.searchParams.has('preview'));
@@ -537,15 +546,30 @@
 			readonly={isViewingPast}
 		/>
 
-	{:else if displayStage === 'Loading' && (previewParam || data.tubes.length === 0)}
+	{:else if displayStage === 'Loading' && (previewParam || data.cartridges.length === 0)}
+		<!-- Step 1: Deck Loading first -->
+		<DeckLoadingGrid
+			onComplete={({ deckId, cartridgeScans }) =>
+				submitForm('loadDeck', { deckId, cartridgeScans: JSON.stringify(cartridgeScans) })}
+			readonly={isViewingPast}
+			focusPaused={showCancelModal}
+		/>
+
+	{:else if displayStage === 'Loading' && data.cartridges.length > 0 && !reagentBatchConfirmed}
+		<!-- Step 2: Deck loaded — now scan reagent batch barcode -->
 		<ReagentPreparation
 			reagentDefinitions={data.reagentDefinitions}
-			onComplete={(tubes) => submitForm('recordReagentPrep', { tubes: JSON.stringify(tubes) })}
+			cartridgeCount={data.cartridges.length}
+			onComplete={(tubes) => {
+				reagentBatchBarcode = tubes[0]?.sourceLotId ?? '';
+				reagentBatchConfirmed = true;
+				submitForm('recordReagentPrep', { tubes: JSON.stringify(tubes) });
+			}}
 			readonly={isViewingPast}
 		/>
 
-	{:else if displayStage === 'Loading' && data.cartridges.length > 0}
-		<!-- Deck already loaded — show summary and Start Run -->
+	{:else if displayStage === 'Loading' && data.cartridges.length > 0 && reagentBatchConfirmed}
+		<!-- Step 3: Deck loaded AND batch confirmed — show summary and Start Run -->
 		<div class="space-y-4">
 			<div class="rounded-lg border border-green-500/30 bg-green-900/10 p-4">
 				<div class="flex items-center gap-3">
@@ -553,14 +577,14 @@
 						<path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
 					</svg>
 					<div>
-						<p class="font-semibold text-green-400">Deck Loaded</p>
-						<p class="text-sm text-green-300/70">{data.cartridges.length} cartridges ready</p>
+						<p class="font-semibold text-green-400">Deck Loaded &amp; Reagent Batch Verified</p>
+						<p class="text-sm text-green-300/70">{data.cartridges.length} cartridges ready · Batch {reagentBatchBarcode}</p>
 					</div>
 				</div>
 			</div>
 			{#if !isViewingPast}
 				<button type="button"
-					onclick={() => submitForm('startRun')}
+					onclick={() => submitForm('startRun', { reagentBatchBarcode: reagentBatchBarcode ?? '' })}
 					disabled={submitting}
 					class="min-h-[52px] w-full rounded-lg border border-green-500/50 bg-green-900/20 px-6 py-4 text-lg font-bold text-green-400 transition-all hover:bg-green-900/30 disabled:opacity-50"
 				>
@@ -568,14 +592,6 @@
 				</button>
 			{/if}
 		</div>
-
-	{:else if displayStage === 'Loading'}
-		<DeckLoadingGrid
-			onComplete={({ deckId, cartridgeScans }) =>
-				submitForm('loadDeck', { deckId, cartridgeScans: JSON.stringify(cartridgeScans) })}
-			readonly={isViewingPast}
-			focusPaused={showCancelModal}
-		/>
 
 	{:else if displayStage === 'Running'}
 		<RunExecution

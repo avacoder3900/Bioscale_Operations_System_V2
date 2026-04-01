@@ -542,14 +542,29 @@
 					{@const maxDay = Math.max(...cd.dailyThroughput.map((d: any) => d.count), 1)}
 					<TronCard>
 						<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Daily Throughput (7d)</h3>
-						<div class="flex items-end gap-1 h-20">
+						<div class="flex items-end gap-1 h-24">
 							{#each cd.dailyThroughput as day}
 								<div class="flex-1 flex flex-col items-center gap-1">
 									<span class="text-[9px] font-mono text-[var(--color-tron-text-secondary)]">{day.count}</span>
-									<div class="w-full rounded-t" style="height: {Math.max((day.count / maxDay) * 56, 2)}px; background: var(--color-tron-cyan);"></div>
+									<div class="w-full flex flex-col-reverse rounded-t overflow-hidden" style="height: {Math.max((day.count / maxDay) * 64, 2)}px;">
+										{#if day.passed > 0}
+											<div style="height: {(day.passed / day.count) * 100}%; background: rgb(34, 197, 94);"></div>
+										{/if}
+										{#if day.failed > 0}
+											<div style="height: {(day.failed / day.count) * 100}%; background: rgb(239, 68, 68);"></div>
+										{/if}
+										{#if day.pending > 0 || (day.count > 0 && day.passed === 0 && day.failed === 0)}
+											<div style="height: {((day.pending || day.count) / day.count) * 100}%; background: var(--color-tron-cyan);"></div>
+										{/if}
+									</div>
 									<span class="text-[8px] text-[var(--color-tron-text-secondary)]">{day.date.slice(5)}</span>
 								</div>
 							{/each}
+						</div>
+						<div class="mt-2 flex items-center justify-center gap-4 text-[9px]">
+							<div class="flex items-center gap-1"><span class="inline-block h-2 w-2 rounded-sm" style="background: rgb(34, 197, 94);"></span><span class="text-[var(--color-tron-text-secondary)]">Passed</span></div>
+							<div class="flex items-center gap-1"><span class="inline-block h-2 w-2 rounded-sm" style="background: rgb(239, 68, 68);"></span><span class="text-[var(--color-tron-text-secondary)]">Failed</span></div>
+							<div class="flex items-center gap-1"><span class="inline-block h-2 w-2 rounded-sm" style="background: var(--color-tron-cyan);"></span><span class="text-[var(--color-tron-text-secondary)]">Pending</span></div>
 						</div>
 					</TronCard>
 				{/if}
@@ -565,7 +580,49 @@
 										<span class="rounded px-1.5 py-0.5 text-[10px] font-medium {run.status === 'completed' ? 'bg-[rgba(34,197,94,0.15)] text-green-400' : run.status === 'running' ? 'bg-[rgba(0,255,255,0.15)] text-[var(--color-tron-cyan)]' : run.status === 'aborted' ? 'bg-[rgba(239,68,68,0.15)] text-red-400' : 'bg-[rgba(255,255,255,0.05)] text-[var(--color-tron-text-secondary)]'}">{run.status}</span>
 										<span class="text-[var(--color-tron-text)] truncate">{run.robotName}</span>
 									</div>
-									<div class="flex items-center gap-2 shrink-0">
+									<div class="flex items-center gap-3 shrink-0">
+										{#if run.passedCount > 0 || run.failedCount > 0}
+											<div class="flex items-center gap-1.5">
+												{#if run.passedCount > 0}
+													<span class="text-[10px] font-medium text-green-400">✓{run.passedCount}</span>
+												{/if}
+												{#if run.failedCount > 0}
+													<span class="text-[10px] font-medium text-red-400">✗{run.failedCount}</span>
+												{/if}
+											</div>
+										{/if}
+										<span class="font-mono text-[var(--color-tron-cyan)]">{run.cartridgeCount}</span>
+										<span class="text-[var(--color-tron-text-secondary)]">{formatDate(run.date)}</span>
+									</div>
+								</div>
+							{/each}
+						</div>
+					</TronCard>
+				{/if}
+
+				<!-- Recent Reagent Filling Runs -->
+				{#if cd.recentReagentRuns && cd.recentReagentRuns.length > 0}
+					<TronCard>
+						<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Recent Reagent Runs</h3>
+						<div class="space-y-1.5">
+							{#each cd.recentReagentRuns as run}
+								<div class="flex items-center justify-between text-xs">
+									<div class="flex items-center gap-2 min-w-0">
+										<span class="rounded px-1.5 py-0.5 text-[10px] font-medium {run.status === 'Completed' || run.status === 'completed' ? 'bg-[rgba(34,197,94,0.15)] text-green-400' : run.status === 'Running' || run.status === 'running' ? 'bg-[rgba(0,255,255,0.15)] text-[var(--color-tron-cyan)]' : run.status === 'Aborted' || run.status === 'aborted' || run.status === 'Cancelled' ? 'bg-[rgba(239,68,68,0.15)] text-red-400' : 'bg-[rgba(255,255,255,0.05)] text-[var(--color-tron-text-secondary)]'}">{run.status}</span>
+										<span class="text-[var(--color-tron-text)] truncate">{run.robotName}</span>
+										<span class="rounded border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-cyan)]/10 px-1 py-0.5 text-[9px] text-[var(--color-tron-cyan)]">{run.assayName}</span>
+									</div>
+									<div class="flex items-center gap-3 shrink-0">
+										{#if run.passedCount > 0 || run.failedCount > 0}
+											<div class="flex items-center gap-1.5">
+												{#if run.passedCount > 0}
+													<span class="text-[10px] font-medium text-green-400">✓{run.passedCount}</span>
+												{/if}
+												{#if run.failedCount > 0}
+													<span class="text-[10px] font-medium text-red-400">✗{run.failedCount}</span>
+												{/if}
+											</div>
+										{/if}
 										<span class="font-mono text-[var(--color-tron-cyan)]">{run.cartridgeCount}</span>
 										<span class="text-[var(--color-tron-text-secondary)]">{formatDate(run.date)}</span>
 									</div>

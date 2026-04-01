@@ -1,6 +1,6 @@
 import { redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, Equipment, ReagentBatchRecord } from '$lib/server/db';
+import { connectDB, Equipment, ReagentBatchRecord, WaxFillingRun } from '$lib/server/db';
 import type { LayoutServerLoad } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -21,12 +21,19 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 	try {
 		await connectDB();
 
-		const [robots, activeRuns] = await Promise.all([
+		const WAX_ACTIVE_STAGES = ['Setup', 'Loading', 'Running', 'Awaiting Removal', 'QC', 'Storage',
+			'setup', 'loading', 'running', 'awaiting_removal', 'cooling', 'qc', 'storage'];
+
+		const [robots, activeRuns, activeWaxRuns] = await Promise.all([
 			Equipment.find({ equipmentType: 'robot', isActive: true }, { _id: 1, name: 1, robotSide: 1 }).sort({ name: 1 }).lean(),
 			ReagentBatchRecord.find(
 				{ status: { $nin: [...TERMINAL] } },
 				{ 'robot._id': 1, status: 1, runStartTime: 1, runEndTime: 1, cartridgeCount: 1, 'assayType.name': 1 }
-			).lean()
+			).lean(),
+			WaxFillingRun.find(
+				{ status: { $in: WAX_ACTIVE_STAGES } },
+				{ 'robot._id': 1, status: 1 }
+			).lean().catch(() => [])
 		]);
 
 		return {
@@ -39,20 +46,26 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 			})),
 			dashboardState: (robots as any[]).map((r) => {
 				const robotIdStr = String(r._id);
-				const run = (activeRuns as any[]).find(
+				const reagentRun = (activeRuns as any[]).find(
 					(ar) => String(ar.robot?._id) === robotIdStr
 				);
+				const waxRun = (activeWaxRuns as any[]).find(
+					(ar: any) => String(ar.robot?._id) === robotIdStr
+				);
+				const hasReagent = !!reagentRun;
+				const hasWax = !!waxRun;
 				return {
 					robotId: robotIdStr,
 					name: r.name ?? '',
 					description: r.robotSide ?? null,
-					hasActiveRun: !!run,
-					runId: run ? String(run._id) : null,
-					stage: run ? (run.status ?? null) : null,
-					assayTypeName: run?.assayType?.name ?? null,
-					runStartTime: run?.runStartTime ? new Date(run.runStartTime).toISOString() : null,
-					runEndTime: run?.runEndTime ? new Date(run.runEndTime).toISOString() : null,
-					cartridgeCount: run?.cartridgeCount ?? 0,
+					hasActiveRun: hasReagent || hasWax,
+					activeProcess: hasReagent ? 'reagent' : hasWax ? 'wax' : null,
+					runId: reagentRun ? String(reagentRun._id) : waxRun ? String(waxRun._id) : null,
+					stage: reagentRun ? (reagentRun.status ?? null) : waxRun ? (waxRun.status ?? null) : null,
+					assayTypeName: reagentRun?.assayType?.name ?? null,
+					runStartTime: reagentRun?.runStartTime ? new Date(reagentRun.runStartTime).toISOString() : null,
+					runEndTime: reagentRun?.runEndTime ? new Date(reagentRun.runEndTime).toISOString() : null,
+					cartridgeCount: reagentRun?.cartridgeCount ?? 0,
 					postRobotRuns: []
 				};
 			})

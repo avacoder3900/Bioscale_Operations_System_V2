@@ -4,7 +4,7 @@ import { requirePermission } from '$lib/server/permissions';
 import {
 	connectDB, Spu, Batch, BomItem, ProductionRun, Customer, User, AuditLog, generateId,
 	LabCartridge, CartridgeGroup, CartridgeRecord, Equipment, EquipmentLocation,
-	OpentronsRobot, WaxFillingRun, AssayDefinition, PartDefinition
+	OpentronsRobot, WaxFillingRun, ReagentBatchRecord, AssayDefinition, PartDefinition
 } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -239,10 +239,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				// ── New dashboard queries (each wrapped to prevent one failure from killing all) ──
 				let fridgeCapacityAgg: any[] = [], allRobots: any[] = [], activeWaxRuns: any[] = [];
 				let allAssays: any[] = [], cartridgeBomItems: any[] = [], dailyThroughputAgg: any[] = [];
-				let recentWaxRuns: any[] = [], consumableCountsAgg: any[] = [];
+				let recentWaxRuns: any[] = [], recentReagentRuns: any[] = [], consumableCountsAgg: any[] = [];
 				try {
 				[fridgeCapacityAgg, allRobots, activeWaxRuns, allAssays,
-					cartridgeBomItems, dailyThroughputAgg, recentWaxRuns, consumableCountsAgg
+					cartridgeBomItems, dailyThroughputAgg, recentWaxRuns, recentReagentRuns, consumableCountsAgg
 				] = await Promise.all([
 					// Count ALL cartridges in fridges — both wax_stored (by waxStorage.location) and stored (by storage.fridgeName)
 					(async () => {
@@ -268,10 +268,17 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					BomItem.find({ isActive: true, partNumber: { $regex: /^CRT-/ } }).select('partNumber name unitCost').lean(),
 					CartridgeRecord.aggregate([
 						{ $match: { createdAt: { $gte: sevenDaysAgo } } },
-						{ $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }, count: { $sum: 1 } } },
+						{ $group: {
+							_id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+							count: { $sum: 1 },
+							passed: { $sum: { $cond: [{ $eq: ['$qcStatus', 'passed'] }, 1, 0] } },
+							failed: { $sum: { $cond: [{ $eq: ['$qcStatus', 'failed'] }, 1, 0] } },
+							pending: { $sum: { $cond: [{ $in: ['$qcStatus', ['pending', null]] }, 1, 0] } }
+						}},
 						{ $sort: { _id: 1 } }
 					]),
 					WaxFillingRun.find().sort({ createdAt: -1 }).limit(5).lean(),
+					ReagentBatchRecord.find().sort({ createdAt: -1 }).limit(5).lean(),
 					Equipment.aggregate([
 						{ $match: { equipmentType: { $in: ['deck', 'cooling_tray', 'robot'] } } },
 						{ $group: { _id: '$equipmentType', count: { $sum: 1 } } }
@@ -287,12 +294,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				]);
 				const assayFillMap = new Map((assayFillCounts as any[]).map((a: any) => [a._id, a.count]));
 				const busyRobotIds = new Set((activeWaxRuns as any[]).map((r: any) => r.robot?._id));
-				const dayMap = new Map((dailyThroughputAgg as any[]).map((d: any) => [d._id, d.count]));
-				const last7Days: { date: string; count: number }[] = [];
+				const dayMap = new Map((dailyThroughputAgg as any[]).map((d: any) => [d._id, { count: d.count, passed: d.passed ?? 0, failed: d.failed ?? 0, pending: d.pending ?? 0 }]));
+				const last7Days: { date: string; count: number; passed: number; failed: number; pending: number }[] = [];
 				for (let i = 6; i >= 0; i--) {
 					const d = new Date(cdNow.getTime() - i * 86400000);
 					const key = d.toISOString().slice(0, 10);
-					last7Days.push({ date: key, count: dayMap.get(key) ?? 0 });
+					const dayData = dayMap.get(key) ?? { count: 0, passed: 0, failed: 0, pending: 0 };
+					last7Days.push({ date: key, ...dayData });
 				}
 				const crtCostTotal = (cartridgeBomItems as any[]).reduce((s: number, b: any) => s + (Number(b.unitCost) || 0), 0);
 
@@ -366,13 +374,40 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 						fillCount: assayFillMap.get(a._id) ?? 0
 					})),
 					dailyThroughput: last7Days,
-					recentRuns: (recentWaxRuns as any[]).map((r: any) => ({
-						id: r._id,
-						status: r.status,
-						robotName: r.robot?.name ?? '—',
-						cartridgeCount: r.cartridgeIds?.length ?? r.plannedCartridgeCount ?? 0,
-						date: r.createdAt
+					recentRuns: await Promise.all((recentWaxRuns as any[]).map(async (r: any) => {
+						const runId = String(r._id);
+						const qcAgg = await CartridgeRecord.aggregate([
+							{ $match: { 'waxFilling.runId': runId, 'waxQc.status': { $exists: true } } },
+							{ $group: {
+								_id: null,
+								passed: { $sum: { $cond: [{ $eq: ['$waxQc.status', 'Accepted'] }, 1, 0] } },
+								failed: { $sum: { $cond: [{ $eq: ['$waxQc.status', 'Rejected'] }, 1, 0] } }
+							}}
+						]);
+						const qc = qcAgg[0] ?? { passed: 0, failed: 0 };
+						return {
+							id: r._id,
+							status: r.status,
+							robotName: r.robot?.name ?? '—',
+							cartridgeCount: r.cartridgeIds?.length ?? r.plannedCartridgeCount ?? 0,
+							passedCount: qc.passed,
+							failedCount: qc.failed,
+							date: r.createdAt
+						};
 					})),
+					recentReagentRuns: (recentReagentRuns as any[]).map((r: any) => {
+						const carts = r.cartridgesFilled ?? [];
+						return {
+							id: r._id,
+							status: r.status,
+							robotName: r.robot?.name ?? '—',
+							assayName: r.assayType?.name ?? '—',
+							cartridgeCount: r.cartridgeCount ?? carts.length ?? 0,
+							passedCount: carts.filter((c: any) => c.inspectionStatus === 'Accepted').length,
+							failedCount: carts.filter((c: any) => c.inspectionStatus === 'Rejected').length,
+							date: r.createdAt
+						};
+					}),
 					bomCostPerCartridge: {
 						total: crtCostTotal,
 						items: (cartridgeBomItems as any[]).map((b: any) => ({
