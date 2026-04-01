@@ -118,7 +118,6 @@
 
 				<div class="text-center">
 					<h3 class="text-lg font-semibold text-[var(--color-tron-text)]">{robot.name}</h3>
-					<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">{robot.description}</p>
 				</div>
 
 				<!-- Availability -->

@@ -176,7 +176,6 @@
 								{robotState.name}
 							</h3>
 							{#if robot?.description}
-								<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">{robot.description}</p>
 							{/if}
 						</div>
 						{#if robotState.hasActiveRun && robotState.activeProcess}
