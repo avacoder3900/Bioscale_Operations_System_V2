@@ -8,6 +8,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'inventory:read');
 	await connectDB();
 
+	// Look up PT-CT-101 so we can exclude viewer1's seeded thermoseal transactions
+	const thermosealPart = await PartDefinition.findOne({ partNumber: 'PT-CT-101' }).select('_id').lean() as any;
+	const thermosealPartId = thermosealPart?._id;
+
 	const [allSpuParts, cartridgePartDocs, boxInteg, txAgg] = await Promise.all([
 		PartDefinition.find({ $or: [{ bomType: 'spu' }, { bomType: { $exists: false } }] })
 			.sort({ sortOrder: 1, partNumber: 1 }).lean(),
@@ -15,6 +19,14 @@ export const load: PageServerLoad = async ({ locals }) => {
 			.sort({ partNumber: 1 }).lean(),
 		Integration.findOne({ type: 'box' }).lean(),
 		InventoryTransaction.aggregate([
+			{ $match: {
+				$nor: [
+					{ performedBy: { $in: ['contracttest', 'operator1', 'nick'] } },
+					...(thermosealPartId
+						? [{ performedBy: '6qL9_4SC4lYXTrMGZTAui', partDefinitionId: thermosealPartId }]
+						: [])
+				]
+			}},
 			{ $sort: { createdAt: 1 } },
 			{ $group: {
 				_id: '$partDefinitionId',
