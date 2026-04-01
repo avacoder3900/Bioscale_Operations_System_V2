@@ -70,13 +70,6 @@
 			Manufacturing
 		</a>
 		<span class="text-[var(--color-tron-text-secondary)]">/</span>
-		<a
-			href={resolve('/manufacturing/opentrons')}
-			class="text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-cyan)]"
-		>
-			Opentrons
-		</a>
-		<span class="text-[var(--color-tron-text-secondary)]">/</span>
 		<span class="text-[var(--color-tron-text)]">Wax Filling</span>
 	</nav>
 
