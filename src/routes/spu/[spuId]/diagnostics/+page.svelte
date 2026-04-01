@@ -11,6 +11,36 @@
 	let dateTo = $state(data.dateRange?.to ?? '');
 	let expandedRows: Record<string, boolean> = $state({});
 
+	// Dump Logs button state
+	let dumpLogsLoading = $state(false);
+	let dumpLogsMessage = $state('');
+	let dumpLogsSuccess = $state<boolean | null>(null);
+
+	async function handleDumpLogs() {
+		dumpLogsLoading = true;
+		dumpLogsMessage = '';
+		dumpLogsSuccess = null;
+		try {
+			const res = await fetch('/api/device/dump-logs', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ particleDeviceId: data.particleDeviceId })
+			});
+			const result = await res.json();
+			dumpLogsMessage = result.message || result.error || 'Unknown response';
+			dumpLogsSuccess = result.success;
+			if (result.success) {
+				dumpLogsMessage = 'Log upload triggered — refreshing in 8s...';
+				setTimeout(() => location.reload(), 8000);
+			}
+		} catch (err) {
+			dumpLogsMessage = 'Failed to contact device';
+			dumpLogsSuccess = false;
+		} finally {
+			dumpLogsLoading = false;
+		}
+	}
+
 	// Source visibility toggles for timeline
 	let showFirmware = $state(true);
 	let showWebhooks = $state(true);
@@ -121,9 +151,26 @@
 				<p class="tron-text-muted font-mono text-xs mt-1">{data.particleDeviceId}</p>
 			{/if}
 		</div>
-		<a href="/spu/{data.spu.id}" class="tron-text-muted hover:underline text-sm" style="color: var(--color-tron-cyan);">
-			← Back to SPU
-		</a>
+		<div class="flex items-center gap-3">
+			{#if data.particleDeviceId}
+				<button
+					onclick={handleDumpLogs}
+					disabled={dumpLogsLoading}
+					class="px-4 py-2 text-sm font-medium rounded transition-colors"
+					style="background: var(--color-tron-cyan); color: var(--color-tron-bg, #000); opacity: {dumpLogsLoading ? '0.5' : '1'}; cursor: {dumpLogsLoading ? 'not-allowed' : 'pointer'};"
+				>
+					{dumpLogsLoading ? 'Requesting...' : 'Dump Logs'}
+				</button>
+				{#if dumpLogsMessage}
+					<span class="text-xs" style="color: {dumpLogsSuccess ? 'var(--color-tron-green)' : dumpLogsSuccess === false ? 'var(--color-tron-red, #ef4444)' : 'var(--color-tron-text-secondary)'};">
+						{dumpLogsMessage}
+					</span>
+				{/if}
+			{/if}
+			<a href="/spu/{data.spu.id}" class="tron-text-muted hover:underline text-sm" style="color: var(--color-tron-cyan);">
+				← Back to SPU
+			</a>
+		</div>
 	</div>
 
 	{#if !data.particleDeviceId}
