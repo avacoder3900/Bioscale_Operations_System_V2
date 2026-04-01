@@ -579,9 +579,14 @@
 									</td>
 									<td class="tron-text-muted">{item.name}</td>
 									<td class="text-right font-mono">
-										<span class={item.inventoryCount <= 0 ? 'text-[var(--color-tron-red)]' : 'text-[var(--color-tron-orange)]'}>
+										<span class={item.inventoryCount <= 0 ? 'text-[var(--color-tron-red)]' : ''}>
 											{item.inventoryCount}
 										</span>
+										{#if item.inventorySource === 'box_estimate'}
+											<span class="ml-1 text-[10px] px-1 py-0.5 rounded bg-yellow-900/50 text-yellow-400" title="From Box spreadsheet — not yet verified by scanning">BOX</span>
+										{:else}
+											<span class="ml-1 text-[10px] px-1 py-0.5 rounded bg-green-900/50 text-green-400" title="Verified via barcode scanning">✓</span>
+										{/if}
 									</td>
 									<td class="text-right font-mono tron-text-muted">
 										{item.leadTimeDays ?? '—'}
@@ -892,6 +897,11 @@
 									<span class="text-[var(--color-tron-orange)]">{item.inventoryCount ?? 0}</span>
 								{:else}
 									{item.inventoryCount ?? 0}
+								{/if}
+								{#if item.inventorySource === 'box_estimate'}
+									<span class="ml-1 text-[10px] px-1 py-0.5 rounded bg-yellow-900/50 text-yellow-400" title="From Box spreadsheet — not yet verified by scanning">BOX</span>
+								{:else}
+									<span class="ml-1 text-[10px] px-1 py-0.5 rounded bg-green-900/50 text-green-400" title="Verified via barcode scanning">✓</span>
 								{/if}
 							</td>
 							<td class="font-mono">{formatCurrency(item.unitCost)}</td>

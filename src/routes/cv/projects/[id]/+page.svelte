@@ -34,42 +34,17 @@
 		let count = 0;
 		let lastError = '';
 		for (const file of files) {
+			const fd = new FormData();
+			fd.append('file', file);
+			fd.append('projectId', data.project._id);
 			try {
-				// Step 1: Get presigned URL
-				const presignRes = await fetch('/api/cv/images/presign', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ projectId: data.project._id, filename: file.name, contentType: file.type || 'image/jpeg' })
-				});
-				if (!presignRes.ok) {
-					const err = await presignRes.json().catch(() => ({}));
-					lastError = err.error || `Presign failed (${presignRes.status})`;
-					continue;
-				}
-				const { uploadUrl, key } = await presignRes.json();
-
-				// Step 2: Upload directly to R2 via presigned URL
-				const putRes = await fetch(uploadUrl, {
-					method: 'PUT',
-					headers: { 'Content-Type': file.type || 'image/jpeg' },
-					body: file
-				});
-				if (!putRes.ok) {
-					lastError = `R2 upload failed (${putRes.status})`;
-					continue;
-				}
-
-				// Step 3: Create DB record
-				const recordRes = await fetch('/api/cv/images/record', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ projectId: data.project._id, key, filename: file.name, contentType: file.type || 'image/jpeg', fileSize: file.size })
-				});
-				if (recordRes.ok) {
+				const res = await fetch('/api/cv/images', { method: 'POST', body: fd });
+				if (res.ok) {
 					count++;
 				} else {
-					const err = await recordRes.json().catch(() => ({}));
-					lastError = err.error || `Record failed (${recordRes.status})`;
+					const errJson = await res.json().catch(() => ({}));
+					lastError = errJson.error || `Upload failed (${res.status})`;
+					console.error('Upload error:', errJson);
 				}
 			} catch (e: any) {
 				lastError = e.message || 'Network error';

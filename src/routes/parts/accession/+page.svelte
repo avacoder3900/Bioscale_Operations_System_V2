@@ -289,7 +289,7 @@
 						qsQuantity = '';
 						qsLookupStatus = 'idle';
 						qsLookupInfo = '';
-						await update();
+						await update({ reset: false });
 						setTimeout(() => qsBarcodeInput?.focus(), 50);
 					} else {
 						await update();

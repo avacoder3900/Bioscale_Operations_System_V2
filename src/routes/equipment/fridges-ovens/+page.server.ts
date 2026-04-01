@@ -24,20 +24,41 @@ export const load: PageServerLoad = async ({ locals }) => {
 			}
 		}
 
-		// Compute occupant counts from CartridgeRecord (waxStorage.location and storage.fridgeName)
-		const [waxCounts, reagentCounts] = await Promise.all([
-			CartridgeRecord.aggregate([
-				{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored' } },
-				{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
-			]),
-			CartridgeRecord.aggregate([
-				{ $match: { 'storage.fridgeName': { $exists: true }, status: 'stored' } },
-				{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
-			])
-		]);
+		// Fetch actual cartridge records stored in fridges (for counts + detail display)
+		const storedCartridges = await CartridgeRecord.find({
+			$or: [
+				{ 'waxStorage.location': { $exists: true }, status: 'wax_stored' },
+				{ 'storage.fridgeName': { $exists: true }, status: 'stored' }
+			]
+		}).select({
+			_id: 1, status: 1,
+			'reagentFilling.assayType': 1,
+			'waxQc.status': 1,
+			'waxStorage.location': 1, 'waxStorage.recordedAt': 1, 'waxStorage.operator': 1,
+			'storage.fridgeName': 1, 'storage.recordedAt': 1, 'storage.operator': 1,
+			updatedAt: 1
+		}).lean().catch(() => []) as any[];
+
+		// Group cartridges by fridge key and build occupant counts
 		const occupantMap = new Map<string, number>();
-		for (const s of [...waxCounts as any[], ...reagentCounts as any[]]) {
-			occupantMap.set(s._id, (occupantMap.get(s._id) ?? 0) + s.count);
+		const cartridgesByFridge = new Map<string, any[]>();
+		for (const c of storedCartridges) {
+			const isWax = c.status === 'wax_stored' && c.waxStorage?.location;
+			const key = isWax ? c.waxStorage.location : c.storage?.fridgeName;
+			if (!key) continue;
+			occupantMap.set(key, (occupantMap.get(key) ?? 0) + 1);
+			if (!cartridgesByFridge.has(key)) cartridgesByFridge.set(key, []);
+			const storedAt = isWax ? c.waxStorage?.recordedAt : c.storage?.recordedAt;
+			const operator = isWax ? c.waxStorage?.operator?.username : c.storage?.operator?.username;
+			cartridgesByFridge.get(key)!.push({
+				id: String(c._id),
+				status: c.status,
+				assayType: c.reagentFilling?.assayType?.name ?? null,
+				waxQcStatus: c.waxQc?.status ?? null,
+				storageType: isWax ? 'wax' : 'reagent',
+				storedAt: storedAt ? new Date(storedAt).toISOString() : null,
+				operator: operator ?? null
+			});
 		}
 
 		// Helper: compute total occupants for an equipment and all its child locations
@@ -86,7 +107,20 @@ export const load: PageServerLoad = async ({ locals }) => {
 					notes: equip.notes ?? null,
 					createdAt: equip.createdAt?.toISOString?.() ?? equip.createdAt ?? null,
 					occupantCount: getOccupantCount(equip, children),
-					currentPlacements: []
+					currentPlacements: [],
+					cartridges: (() => {
+						const keys = [equip.barcode, equip.name].filter(Boolean);
+						for (const child of children) {
+							if (child.barcode) keys.push(child.barcode);
+							if (child.displayName) keys.push(child.displayName);
+						}
+						const all: any[] = [];
+						for (const k of keys) {
+							const carts = cartridgesByFridge.get(k);
+							if (carts) all.push(...carts);
+						}
+						return all;
+					})()
 				};
 			});
 
@@ -108,6 +142,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 					notes: loc.notes ?? null,
 					createdAt: loc.createdAt?.toISOString?.() ?? loc.createdAt ?? null,
 					occupantCount: occupantMap.get(key) ?? occupantMap.get(loc.displayName ?? '') ?? 0,
+					cartridges: cartridgesByFridge.get(key) ?? cartridgesByFridge.get(loc.displayName ?? '') ?? [],
 					currentPlacements: (loc.currentPlacements ?? []).map((p: any) => ({
 						id: p._id,
 						itemType: p.itemType ?? null,

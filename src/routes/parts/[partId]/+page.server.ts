@@ -1,5 +1,5 @@
 import { fail, error } from '@sveltejs/kit';
-import { requirePermission } from '$lib/server/permissions';
+import { requirePermission, hasPermission } from '$lib/server/permissions';
 import { connectDB, PartDefinition, InventoryTransaction, InspectionProcedureRevision, LotRecord, ReceivingLot, AuditLog, generateId } from '$lib/server/db';
 import { uploadFile } from '$lib/server/box';
 import { env } from '$env/dynamic/private';
@@ -181,7 +181,8 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 		receivingLotsTotalQty: (receivingLots as any[]).reduce((sum: number, rl: any) => sum + (rl.quantity ?? 0), 0),
 		versions,
 		auditEntries,
-		filters: { type: typeFilter, startDate, endDate, retracted: retractedFilter, operator: operatorFilter }
+		filters: { type: typeFilter, startDate, endDate, retracted: retractedFilter, operator: operatorFilter },
+		isAdmin: hasPermission(locals.user, 'admin:full')
 	};
 };
 
@@ -404,6 +405,64 @@ export const actions: Actions = {
 	/**
 	 * Save or update the form definition JSON for an inspection procedure revision.
 	 */
+	editTransaction: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'admin:full');
+		await connectDB();
+
+		const form = await request.formData();
+		const transactionId = form.get('transactionId')?.toString();
+		const newQuantity = Number(form.get('newQuantity'));
+		const reason = form.get('reason')?.toString();
+
+		if (!transactionId) return fail(400, { editError: 'Transaction ID required' });
+		if (isNaN(newQuantity)) return fail(400, { editError: 'Invalid quantity' });
+		if (!reason?.trim()) return fail(400, { editError: 'Reason is required' });
+
+		const txn = await InventoryTransaction.findById(transactionId) as any;
+		if (!txn) return fail(404, { editError: 'Transaction not found' });
+
+		const oldQuantity = txn.quantity;
+		const diff = newQuantity - oldQuantity;
+
+		// Update the transaction
+		const oldNotes = txn.notes ?? txn.reason ?? '';
+		const adminNote = `[ADMIN EDIT: was ${oldQuantity}, now ${newQuantity}. Reason: ${reason}]`;
+		const updatedNotes = oldNotes ? `${oldNotes} ${adminNote}` : adminNote;
+
+		const oldNewQty = txn.newQuantity ?? 0;
+		// Bypass Mongoose immutable middleware — use raw MongoDB collection
+		const db = InventoryTransaction.collection;
+		await db.updateOne({ _id: transactionId }, {
+			$set: {
+				quantity: newQuantity,
+				newQuantity: oldNewQty + diff,
+				notes: updatedNotes
+			}
+		});
+
+		// Adjust the part's inventoryCount
+		if (txn.partDefinitionId) {
+			await PartDefinition.updateOne(
+				{ _id: txn.partDefinitionId },
+				{ $inc: { inventoryCount: diff } }
+			);
+		}
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'inventory_transactions',
+			recordId: transactionId,
+			action: 'UPDATE',
+			oldData: { quantity: oldQuantity, newQuantity: oldNewQty },
+			newData: { quantity: newQuantity, newQuantity: oldNewQty + diff, reason },
+			changedAt: new Date(),
+			changedBy: locals.user!.username,
+			changedFields: ['quantity', 'newQuantity', 'notes']
+		});
+
+		return { editSuccess: true };
+	},
+
 	saveFormDefinition: async ({ request, locals }) => {
 		requirePermission(locals.user, 'inventory:write');
 		await connectDB();

@@ -59,6 +59,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		return json({ data: JSON.parse(JSON.stringify(image)) }, { status: 201 });
 	} catch (err: any) {
-		return json({ error: err.message }, { status: 500 });
+		console.error('[CV Image Upload Error]', err);
+		return json({ error: err.message, stack: err.stack?.split('\n').slice(0, 3) }, { status: 500 });
 	}
 };
