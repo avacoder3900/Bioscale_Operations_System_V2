@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, PartDefinition, Integration, generateId, AuditLog } from '$lib/server/db';
+import { connectDB, PartDefinition, Integration, generateId, AuditLog, InventoryTransaction } from '$lib/server/db';
 import { syncPartsFromBox } from '$lib/server/box-sync';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -8,12 +8,22 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'inventory:read');
 	await connectDB();
 
-	const [allSpuParts, cartridgePartDocs, boxInteg] = await Promise.all([
+	const [allSpuParts, cartridgePartDocs, boxInteg, txAgg] = await Promise.all([
 		PartDefinition.find({ $or: [{ bomType: 'spu' }, { bomType: { $exists: false } }] })
 			.sort({ sortOrder: 1, partNumber: 1 }).lean(),
 		PartDefinition.find({ bomType: 'cartridge', isActive: true })
 			.sort({ partNumber: 1 }).lean(),
-		Integration.findOne({ type: 'box' }).lean()
+		Integration.findOne({ type: 'box' }).lean(),
+		InventoryTransaction.aggregate([
+			{ $sort: { createdAt: 1 } },
+			{ $group: {
+				_id: '$partDefinitionId',
+				totalQuantity: { $sum: '$quantity' },
+				txCount: { $sum: 1 },
+				lastTxAt: { $max: '$createdAt' },
+				lastSource: { $last: '$source' }
+			}}
+		])
 	]);
 
 	// Split SPU parts into BOM and non-BOM
@@ -140,10 +150,41 @@ export const load: PageServerLoad = async ({ locals }) => {
 		barcode: p.barcode ?? null
 	}));
 
+	// Transaction-based scanned inventory
+	const txMap = new Map(txAgg.map((t: any) => [t._id, t]));
+	const allParts = [...(allSpuParts as any[]), ...(cartridgePartDocs as any[])];
+	const scannedItems = allParts
+		.filter((p: any) => txMap.has(p._id))
+		.map((p: any) => {
+			const tx = txMap.get(p._id)!;
+			const cost = parseFloat(p.unitCost) || null;
+			return {
+				id: p._id,
+				partNumber: p.partNumber ?? '',
+				name: p.name ?? '',
+				category: p.category ?? null,
+				stock: tx.totalQuantity,
+				unitCost: cost,
+				totalValue: cost ? cost * tx.totalQuantity : null,
+				txCount: tx.txCount,
+				lastTxAt: tx.lastTxAt,
+				lastSource: tx.lastSource ?? 'unknown'
+			};
+		})
+		.sort((a, b) => a.partNumber.localeCompare(b.partNumber));
+
+	const scannedSummary = {
+		totalParts: scannedItems.length,
+		totalTransactions: scannedItems.reduce((s, i) => s + i.txCount, 0),
+		totalValue: scannedItems.reduce((s, i) => s + (i.totalValue ?? 0), 0)
+	};
+
 	return {
 		items: itemsWithCost,
 		cartridgeParts,
 		nonBomItems,
+		scannedItems: JSON.parse(JSON.stringify(scannedItems)),
+		scannedSummary,
 		cartridgeBomSummary,
 		lowStockItems,
 		lowestInventory,

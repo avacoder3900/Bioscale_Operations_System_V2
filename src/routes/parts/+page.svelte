@@ -8,7 +8,7 @@
 
 	// Tab state from URL
 	const params = page.url.searchParams;
-	let activeTab = $state<'spu' | 'cartridge' | 'general'>(params.get('tab') === 'cartridge' ? 'cartridge' : params.get('tab') === 'general' ? 'general' : 'spu');
+	let activeTab = $state<'spu' | 'cartridge' | 'general' | 'scanned'>(params.get('tab') === 'cartridge' ? 'cartridge' : params.get('tab') === 'general' ? 'general' : params.get('tab') === 'scanned' ? 'scanned' : 'spu');
 
 	// Cartridge parts state
 	let cartSearchQuery = $state('');
@@ -58,7 +58,58 @@
 		return items;
 	});
 
-	function switchTab(tab: 'spu' | 'cartridge' | 'general') {
+	// Scanned inventory tab state
+	type ScannedSortColumn = 'partNumber' | 'name' | 'category' | 'stock' | 'unitCost' | 'totalValue' | 'txCount' | 'lastTxAt' | 'lastSource';
+	let scannedSortColumn = $state<ScannedSortColumn>('partNumber');
+	let scannedSortDirection = $state<SortDirection>('asc');
+	let scannedSearchQuery = $state('');
+
+	function toggleScannedSort(column: ScannedSortColumn) {
+		if (scannedSortColumn !== column) {
+			scannedSortColumn = column;
+			scannedSortDirection = 'asc';
+		} else if (scannedSortDirection === 'asc') {
+			scannedSortDirection = 'desc';
+		} else if (scannedSortDirection === 'desc') {
+			scannedSortDirection = null;
+		} else {
+			scannedSortDirection = 'asc';
+		}
+	}
+
+	let filteredScannedItems = $derived.by(() => {
+		let items = data.scannedItems ?? [];
+		if (scannedSearchQuery) {
+			const q = scannedSearchQuery.toLowerCase();
+			items = items.filter(
+				(i: any) =>
+					i.partNumber.toLowerCase().includes(q) ||
+					i.name.toLowerCase().includes(q) ||
+					i.category?.toLowerCase().includes(q)
+			);
+		}
+		if (scannedSortDirection) {
+			const dir = scannedSortDirection === 'asc' ? 1 : -1;
+			items = [...items].sort((a: Record<string, unknown>, b: Record<string, unknown>) => {
+				const av = a[scannedSortColumn];
+				const bv = b[scannedSortColumn];
+				if (av == null && bv == null) return 0;
+				if (av == null) return 1;
+				if (bv == null) return -1;
+				if (typeof av === 'string' && typeof bv === 'string') return av.localeCompare(bv) * dir;
+				return ((av as number) - (bv as number)) * dir;
+			});
+		}
+		return items;
+	});
+
+	function stockColor(stock: number): string {
+		if (stock <= 0) return 'text-[var(--color-tron-red)]';
+		if (stock <= 10) return 'text-yellow-400';
+		return '';
+	}
+
+	function switchTab(tab: 'spu' | 'cartridge' | 'general' | 'scanned') {
 		activeTab = tab;
 		const url = new URL(page.url);
 		url.searchParams.set('tab', tab);
@@ -287,6 +338,13 @@
 		>
 			General Inventory
 			<span class="ml-1 text-xs">({data.nonBomItems?.length ?? 0})</span>
+		</button>
+		<button
+			class="px-4 py-2 text-sm font-medium transition-colors {activeTab === 'scanned' ? 'border-b-2 border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
+			onclick={() => switchTab('scanned')}
+		>
+			Scanned Inventory
+			<span class="ml-1 text-xs">({data.scannedItems?.length ?? 0})</span>
 		</button>
 	</div>
 
@@ -1168,6 +1226,69 @@
 				</tbody>
 			</table>
 		</div>
+	</TronCard>
+	{/if}
+
+	{#if activeTab === 'scanned'}
+	<TronCard>
+		<div class="mb-4">
+			<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">Scanned Inventory (Transaction-Based)</h3>
+			<p class="tron-text-muted text-xs mt-1">Only showing parts with barcode-scanned or logged transactions. Box-imported values are excluded.</p>
+		</div>
+
+		{#if data.scannedSummary}
+		<div class="flex gap-6 mb-4 text-xs">
+			<div><span class="tron-text-muted">Parts tracked:</span> <span class="font-mono text-[var(--color-tron-cyan)]">{data.scannedSummary.totalParts}</span></div>
+			<div><span class="tron-text-muted">Transactions:</span> <span class="font-mono text-[var(--color-tron-cyan)]">{data.scannedSummary.totalTransactions}</span></div>
+			<div><span class="tron-text-muted">Total value:</span> <span class="font-mono text-[var(--color-tron-cyan)]">{formatCurrency(data.scannedSummary.totalValue)}</span></div>
+		</div>
+		{/if}
+
+		<div class="mb-3">
+			<input
+				type="text"
+				placeholder="Search parts..."
+				class="tron-input w-full max-w-xs text-sm"
+				bind:value={scannedSearchQuery}
+			/>
+		</div>
+
+		<div class="overflow-x-auto">
+			<table class="tron-table">
+				<thead>
+					<tr>
+						<th class="cursor-pointer select-none" onclick={() => toggleScannedSort('partNumber')}>Part # {scannedSortColumn === 'partNumber' ? (scannedSortDirection === 'asc' ? '▲' : scannedSortDirection === 'desc' ? '▼' : '') : ''}</th>
+						<th class="cursor-pointer select-none" onclick={() => toggleScannedSort('name')}>Name {scannedSortColumn === 'name' ? (scannedSortDirection === 'asc' ? '▲' : scannedSortDirection === 'desc' ? '▼' : '') : ''}</th>
+						<th class="cursor-pointer select-none" onclick={() => toggleScannedSort('category')}>Category {scannedSortColumn === 'category' ? (scannedSortDirection === 'asc' ? '▲' : scannedSortDirection === 'desc' ? '▼' : '') : ''}</th>
+						<th class="cursor-pointer select-none text-right" onclick={() => toggleScannedSort('stock')}>Stock {scannedSortColumn === 'stock' ? (scannedSortDirection === 'asc' ? '▲' : scannedSortDirection === 'desc' ? '▼' : '') : ''}</th>
+						<th class="cursor-pointer select-none text-right" onclick={() => toggleScannedSort('unitCost')}>Unit Cost {scannedSortColumn === 'unitCost' ? (scannedSortDirection === 'asc' ? '▲' : scannedSortDirection === 'desc' ? '▼' : '') : ''}</th>
+						<th class="cursor-pointer select-none text-right" onclick={() => toggleScannedSort('totalValue')}>Total Value {scannedSortColumn === 'totalValue' ? (scannedSortDirection === 'asc' ? '▲' : scannedSortDirection === 'desc' ? '▼' : '') : ''}</th>
+						<th class="cursor-pointer select-none text-right" onclick={() => toggleScannedSort('txCount')}>Txns {scannedSortColumn === 'txCount' ? (scannedSortDirection === 'asc' ? '▲' : scannedSortDirection === 'desc' ? '▼' : '') : ''}</th>
+						<th class="cursor-pointer select-none" onclick={() => toggleScannedSort('lastTxAt')}>Last Transaction {scannedSortColumn === 'lastTxAt' ? (scannedSortDirection === 'asc' ? '▲' : scannedSortDirection === 'desc' ? '▼' : '') : ''}</th>
+						<th class="cursor-pointer select-none" onclick={() => toggleScannedSort('lastSource')}>Source {scannedSortColumn === 'lastSource' ? (scannedSortDirection === 'asc' ? '▲' : scannedSortDirection === 'desc' ? '▼' : '') : ''}</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each filteredScannedItems as item (item.id)}
+						<tr class="cursor-pointer hover:bg-white/5" onclick={() => window.location.href = `/parts/${item.id}`}>
+							<td class="font-mono text-[var(--color-tron-cyan)]"><a href="/parts/{item.id}" class="hover:underline">{item.partNumber}</a></td>
+							<td>{item.name}</td>
+							<td class="tron-text-muted">{item.category ?? '—'}</td>
+							<td class="text-right font-mono {stockColor(item.stock)}">{item.stock}</td>
+							<td class="text-right font-mono">{formatCurrency(item.unitCost)}</td>
+							<td class="text-right font-mono">{formatCurrency(item.totalValue)}</td>
+							<td class="text-right font-mono">{item.txCount}</td>
+							<td class="tron-text-muted">{formatDate(item.lastTxAt)}</td>
+							<td><TronBadge>{item.lastSource}</TronBadge></td>
+						</tr>
+					{:else}
+						<tr><td colspan="9" class="tron-text-muted py-8 text-center">No scanned inventory data</td></tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+
+		<p class="tron-text-muted text-xs mt-3">Parts with no transactions are hidden from this view.</p>
 	</TronCard>
 	{/if}
 </div>
