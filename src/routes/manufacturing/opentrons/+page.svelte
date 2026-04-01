@@ -214,9 +214,9 @@
 				{@const isBusy = availability && !availability.available}
 				{@const blockedByOtherProcess = isBusy && availability?.activeProcess !== selectedProcess}
 				{#if blockedByOtherProcess}
-					<!-- Robot busy with a different process -->
+					<!-- Robot busy with a different process — link to active run -->
 					<div
-						class="flex cursor-not-allowed flex-col items-center gap-4 rounded-lg border border-amber-500/30 bg-[var(--color-tron-surface)] p-6 opacity-50"
+						class="flex flex-col items-center gap-4 rounded-lg border border-amber-500/30 bg-[var(--color-tron-surface)] p-6 opacity-70"
 					>
 						<div class="flex h-20 w-20 items-center justify-center rounded-full border-2 border-amber-500/30 bg-[var(--color-tron-bg)]">
 							<svg class="h-10 w-10 text-amber-500/50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -230,6 +230,12 @@
 								Busy with {availability?.activeProcess} filling
 							</p>
 						</div>
+						<a
+							href={resolve(availability?.activeProcess === 'wax' ? '/manufacturing/wax-filling' : '/manufacturing/reagent-filling') + '?robot=' + robot.robotId}
+							class="rounded border border-amber-500/50 bg-amber-900/20 px-4 py-2 text-xs font-medium text-amber-300 transition-colors hover:bg-amber-900/30 hover:text-amber-200"
+						>
+							Go to run →
+						</a>
 					</div>
 				{:else}
 					<!-- Robot available or already running this process -->
