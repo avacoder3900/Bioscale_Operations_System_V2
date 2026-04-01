@@ -58,6 +58,25 @@ export const actions: Actions = {
 				return fail(400, { error: 'No magnet_validation data on device. Run a test first.' });
 			}
 
+			// Dedup: reject if this exact raw data already exists for ANY SPU
+			const existingSession = await ValidationSession.findOne({
+				particleDeviceId: spu.particleLink.particleDeviceId,
+				rawData: rawResult
+			}).lean() as any;
+			if (existingSession) {
+				const existingUdi = existingSession.spuUdi ?? existingSession.spuId;
+				const existingDate = new Date(existingSession.completedAt ?? existingSession.createdAt).toLocaleString();
+				if (existingSession.spuId === spu._id) {
+					return fail(400, {
+						error: `This data was already recorded for ${spu.udi} on ${existingDate}. Run a new physical test on the device before reading again.`
+					});
+				} else {
+					return fail(400, {
+						error: `This data was already recorded for a different SPU (${existingUdi}) on ${existingDate}. The device has not produced new results since then.`
+					});
+				}
+			}
+
 			// Parse
 			const parsed = parseMagValidation(rawResult);
 
