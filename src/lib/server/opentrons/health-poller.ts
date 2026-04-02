@@ -3,8 +3,9 @@
  * Stores results in-memory (Map) and writes snapshots to MongoDB periodically.
  */
 
-import { connectDB, OpentronsRobot } from '$lib/server/db';
+import { connectDB, OpentronsRobot, OpentronsRunRecord } from '$lib/server/db';
 import { robotBaseUrl, updateRobotHealth } from './proxy';
+import { pollRunStatus } from './run-lifecycle';
 
 const POLL_INTERVAL_MS = 15_000;
 const ROBOT_TIMEOUT_MS = 3_000;
@@ -132,6 +133,16 @@ async function pollAllRobots() {
 				}).catch(() => {});
 			}
 		}
+
+		// Poll active OT-2 run records
+		try {
+			const activeRecords = await OpentronsRunRecord.find({
+				status: { $in: ['created', 'running', 'paused'] }
+			}).lean();
+			await Promise.allSettled(
+				(activeRecords as any[]).map((r) => pollRunStatus(r))
+			);
+		} catch { /* run polling non-critical */ }
 
 		const states = getHealthStates();
 		for (const cb of listeners) {
