@@ -19,6 +19,11 @@
 	let savingCriteria = $state(false);
 
 	const selectedSpu = $derived(data.spus.find(s => s.id === selectedSpuId));
+
+	function formatDate(date: string | null): string {
+		if (!date) return '—';
+		return new Date(date).toLocaleString();
+	}
 </script>
 
 <div class="space-y-6">
@@ -68,6 +73,76 @@
 					{fetching ? '⏳ Fetching…' : '🧲 Fetch Results'}
 				</button>
 			</form>
+
+			<!-- Inline Results -->
+			{#if form?.success && form?.magResults}
+				<div class="rounded-lg border p-4 space-y-4" style="border-color: {form.overallPassed ? 'var(--color-tron-green)' : 'var(--color-tron-red)'}; background: {form.overallPassed ? 'rgba(0,255,100,0.05)' : 'rgba(255,0,0,0.05)'};">
+					<div class="flex items-center justify-between">
+						<div>
+							<span class="tron-text-primary font-bold">{form.spuUdi}</span>
+							<span class="tron-text-muted text-xs ml-2">{formatDate(form.completedAt)}</span>
+						</div>
+						{#if form.overallPassed}
+							<span class="rounded-full px-3 py-1 text-sm font-bold" style="color: var(--color-tron-green); background: rgba(0,255,100,0.15);">PASS</span>
+						{:else}
+							<span class="rounded-full px-3 py-1 text-sm font-bold" style="color: var(--color-tron-red); background: rgba(255,0,0,0.15);">FAIL</span>
+						{/if}
+					</div>
+
+					{#if form.overallPassed}
+						<p class="text-sm" style="color: var(--color-tron-green);">Results saved to SPU DHR.</p>
+					{/if}
+
+					{#if form.criteriaUsed}
+						<div class="tron-text-muted text-xs">Criteria: Z range {form.criteriaUsed.minZ} – {form.criteriaUsed.maxZ}</div>
+					{/if}
+
+					<div class="overflow-x-auto">
+						<table class="tron-table text-xs">
+							<thead>
+								<tr>
+									<th>Well</th>
+									<th>Ch A (Z)</th>
+									<th>Ch B (Z)</th>
+									<th>Ch C (Z)</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each form.magResults as well}
+									<tr>
+										<td class="font-mono font-bold">{well.well}</td>
+										{#each ['A', 'B', 'C'] as ch}
+											{@const z = well[`ch${ch}_Z`]}
+											{@const inRange = z !== null && z !== undefined && form.criteriaUsed && z >= form.criteriaUsed.minZ && z <= form.criteriaUsed.maxZ}
+											<td class="font-mono" style="color: {z === null || z === undefined ? 'var(--color-tron-text-secondary)' : inRange ? 'var(--color-tron-green)' : 'var(--color-tron-red)'};">
+												{z !== null && z !== undefined ? z : '—'}
+												{#if z !== null && z !== undefined}
+													<span class="ml-1">{inRange ? '✓' : '✗'}</span>
+												{/if}
+											</td>
+										{/each}
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+
+					{#if form.failureReasons?.length > 0}
+						<div class="space-y-1">
+							{#each form.failureReasons as reason}
+								<div class="text-xs" style="color: var(--color-tron-red);">✗ {reason}</div>
+							{/each}
+						</div>
+					{/if}
+
+					<details>
+						<summary class="tron-text-muted text-xs cursor-pointer hover:underline">Raw Device Output</summary>
+						<pre class="mt-2 text-[10px] tron-text-muted overflow-x-auto p-2 rounded" style="background: var(--color-tron-bg-secondary); white-space: pre-wrap; word-break: break-all;">{form.rawData}</pre>
+					</details>
+
+					<a href="/validation/magnetometer/{form.sessionId}" class="text-xs underline block" style="color: var(--color-tron-cyan);">View full session →</a>
+				</div>
+			{/if}
 		</div>
 	</TronCard>
 

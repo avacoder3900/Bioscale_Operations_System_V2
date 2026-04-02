@@ -137,9 +137,18 @@ export const actions: Actions = {
 				reason: `Magnetometer validation: ${magStatus.toUpperCase()}${failureReasons.length > 0 ? ' — ' + failureReasons.join('; ') : ''}`
 			});
 
-			redirect(303, `/validation/magnetometer/${sessionId}`);
+			return {
+				success: true,
+				sessionId,
+				spuUdi: spu.udi,
+				overallPassed,
+				failureReasons,
+				criteriaUsed: { minZ, maxZ },
+				magResults: parsed,
+				rawData: rawResult,
+				completedAt: new Date().toISOString()
+			};
 		} catch (err: any) {
-			if (err?.status === 303) throw err; // re-throw redirect
 			return fail(400, { error: `Failed: ${err instanceof Error ? err.message : String(err)}` });
 		}
 	},
