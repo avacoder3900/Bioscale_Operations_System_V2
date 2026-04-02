@@ -209,7 +209,6 @@
 						cameraReady = true;
 					}
 					await loadCameraCapabilities();
-					await applyCameraSettings();
 					startQRScanning();
 					return; // success
 				} catch (err) {
