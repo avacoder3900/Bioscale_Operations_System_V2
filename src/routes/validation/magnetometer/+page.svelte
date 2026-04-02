@@ -32,8 +32,8 @@
 
 	<TronCard>
 		<div class="p-4 space-y-4">
-			<h3 class="tron-text-primary text-lg font-bold">Run Magnetometer Test</h3>
-			<p class="tron-text-muted text-sm">Select an SPU and run the test on the device first, then click to fetch the results.</p>
+			<h3 class="tron-text-primary text-lg font-bold">Fetch Magnetometer Results</h3>
+			<p class="tron-text-muted text-sm">Run the test on the SPU first, then select it here to fetch the results.</p>
 
 			<div>
 				<label for="spu-select" class="tron-label">Select SPU</label>
@@ -65,7 +65,7 @@
 					class="w-full rounded-lg p-4 text-center font-bold text-lg transition-all cursor-pointer hover:opacity-90 active:scale-[0.98] disabled:opacity-30 disabled:cursor-not-allowed"
 					style="background: linear-gradient(135deg, var(--color-tron-cyan), var(--color-tron-green)); color: var(--color-tron-bg-primary); min-height: 56px;"
 				>
-					{fetching ? '⏳ Fetching…' : '🧲 Run Test'}
+					{fetching ? '⏳ Fetching…' : '🧲 Fetch Results'}
 				</button>
 			</form>
 		</div>
