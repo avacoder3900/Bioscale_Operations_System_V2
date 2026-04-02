@@ -1,6 +1,7 @@
 <script lang="ts">
 	let { data } = $props();
 	let activePhase = $state('all');
+	let enlargedUrl = $state<string | null>(null);
 
 	const filteredInspections = $derived(
 		activePhase === 'all'
@@ -77,7 +78,7 @@
 					<!-- Image thumbnail -->
 					<div class="h-20 w-20 flex-shrink-0 overflow-hidden rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)]">
 						{#if image?.imageUrl}
-							<img src={image.imageUrl} alt="inspection" class="h-full w-full object-cover" />
+							<img src={image.imageUrl} alt="inspection" class="h-full w-full cursor-pointer object-cover" onclick={() => enlargedUrl = image.imageUrl} />
 						{:else}
 							<div class="flex h-full items-center justify-center text-xs text-[var(--color-tron-text-secondary)]">No img</div>
 						{/if}
@@ -116,5 +117,12 @@
 				</div>
 			{/each}
 		</div>
+	{/if}
+
+	<!-- Enlarged image modal -->
+	{#if enlargedUrl}
+		<button class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm" onclick={() => enlargedUrl = null}>
+			<img src={enlargedUrl} alt="enlarged" class="max-h-[85vh] max-w-[90vw] rounded-lg object-contain shadow-2xl" />
+		</button>
 	{/if}
 </div>
