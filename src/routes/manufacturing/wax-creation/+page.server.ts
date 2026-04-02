@@ -36,11 +36,12 @@ export const actions: Actions = {
 		const fullTubeCount = parseInt(data.get('fullTubeCount')?.toString() || '0', 10);
 		const partialTubeMl = parseFloat(data.get('partialTubeMl')?.toString() || '0');
 		const fridgeBarcode = data.get('fridgeBarcode')?.toString() || '';
+		const lotBarcode = data.get('lotBarcode')?.toString() || '';
 		const lotNumber = data.get('lotNumber')?.toString() || '';
 		const targetWaxWeight = parseFloat(data.get('targetWaxWeight')?.toString() || '0');
 		const expectedTubes = parseInt(data.get('expectedTubes')?.toString() || '0', 10);
 
-		if (!nanodecaneWeight || !actualWaxWeight || !fullTubeCount || !lotNumber || !fridgeBarcode) {
+		if (!nanodecaneWeight || !actualWaxWeight || !fullTubeCount || !lotNumber || !fridgeBarcode || !lotBarcode) {
 			return fail(400, { error: 'All fields are required' });
 		}
 
@@ -55,6 +56,7 @@ export const actions: Actions = {
 			changedAt: new Date(),
 			newData: {
 				lotNumber,
+				lotBarcode,
 				nanodecaneWeight,
 				targetWaxWeight,
 				actualWaxWeight,

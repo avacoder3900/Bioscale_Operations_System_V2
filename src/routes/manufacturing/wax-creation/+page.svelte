@@ -10,6 +10,7 @@
 	const totalSteps = 6;
 
 	// Step 1
+	let lotBarcode = $state('');
 	let nanodecaneVisuallyMelted = $state(false);
 
 	// Step 2
@@ -45,10 +46,11 @@
 
 	let completed = $state(false);
 	let saving = $state(false);
+	let saved = $state(false);
 
 	function canProceed(step: number): boolean {
 		switch (step) {
-			case 1: return nanodecaneVisuallyMelted;
+			case 1: return nanodecaneVisuallyMelted && lotBarcode.trim() !== '';
 			case 2: return scaleTared;
 			case 3: return nanodecaneWeight !== null && nanodecaneWeight > 0;
 			case 4: return actualWaxWeight !== null && actualWaxWeight > 0 && waxTolerance() === 'pass';
@@ -74,9 +76,16 @@
 	<div class="mb-6">
 		<div class="flex items-center justify-between">
 			<h1 class="text-xl font-bold text-[var(--color-tron-cyan)]">Wax Creation — 3% Microcrystalline Wax</h1>
-			<span class="rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 px-3 py-1 text-sm font-mono font-bold text-[var(--color-tron-cyan)]">
-				{data.lotNumber}
-			</span>
+			<div class="flex items-center gap-2">
+				<span class="rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 px-3 py-1 text-sm font-mono font-bold text-[var(--color-tron-cyan)]">
+					{data.lotNumber}
+				</span>
+				{#if lotBarcode}
+					<span class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-1 text-sm font-mono text-[var(--color-tron-text-secondary)]">
+						{lotBarcode}
+					</span>
+				{/if}
+			</div>
 		</div>
 		<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">
 			Step-by-step work instruction for creating 3% microcrystalline wax mixture
@@ -132,7 +141,21 @@
 		{#if currentStep === 1}
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5">
 				<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Step 1: Heat Nanodecane</h2>
-				<ol class="mt-3 list-inside list-decimal space-y-2 text-sm text-[var(--color-tron-text-secondary)]">
+
+				<div class="mt-4">
+					<label class="block text-sm text-[var(--color-tron-text)]">
+						Scan lot barcode label
+						<input
+							type="text"
+							bind:value={lotBarcode}
+							class="mt-1 block w-64 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+							placeholder="Scan barcode sticker for tubes"
+						/>
+					</label>
+					<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">This barcode will be physically attached to all tubes in this batch</p>
+				</div>
+
+				<ol class="mt-4 list-inside list-decimal space-y-2 text-sm text-[var(--color-tron-text-secondary)]">
 					<li>Set hot plate to <span class="font-semibold text-[var(--color-tron-cyan)]">70°C</span></li>
 					<li>Place bottle of nanodecane on hot plate</li>
 					<li>Wait <span class="font-semibold text-[var(--color-tron-cyan)]">45 minutes</span></li>
@@ -367,6 +390,8 @@
 				<div class="grid grid-cols-2 gap-x-4 gap-y-2">
 					<span class="text-[var(--color-tron-text-secondary)]">Lot number</span>
 					<span>{data.lotNumber}</span>
+					<span class="text-[var(--color-tron-text-secondary)]">Lot barcode</span>
+					<span>{lotBarcode}</span>
 					<span class="text-[var(--color-tron-text-secondary)]">Nanodecane weight</span>
 					<span>{nanodecaneWeight}g</span>
 					<span class="text-[var(--color-tron-text-secondary)]">Target wax weight</span>
@@ -386,14 +411,22 @@
 				</div>
 			</div>
 
+			{#if saved}
+				<div class="mt-4 rounded border border-green-500/30 bg-green-500/10 p-3 text-sm font-semibold text-green-400">
+					Batch saved successfully!
+				</div>
+			{:else}
 			<form method="POST" action="?/save" use:enhance={() => {
 				saving = true;
-				return async ({ update }) => {
+				return async ({ result }) => {
 					saving = false;
-					await update();
+					if (result.type === 'success') {
+						saved = true;
+					}
 				};
 			}}>
 				<input type="hidden" name="lotNumber" value={data.lotNumber} />
+				<input type="hidden" name="lotBarcode" value={lotBarcode} />
 				<input type="hidden" name="nanodecaneWeight" value={nanodecaneWeight} />
 				<input type="hidden" name="actualWaxWeight" value={actualWaxWeight} />
 				<input type="hidden" name="targetWaxWeight" value={targetWaxWeight} />
@@ -409,6 +442,7 @@
 					{saving ? 'Saving...' : 'Save Batch Record'}
 				</button>
 			</form>
+			{/if}
 		</div>
 	{/if}
 </div>
