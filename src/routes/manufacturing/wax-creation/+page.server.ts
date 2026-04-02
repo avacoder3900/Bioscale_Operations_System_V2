@@ -11,13 +11,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const year = new Date().getFullYear();
 	const prefix = `WAX-${year}-`;
 	const lastBatch = await AuditLog.findOne({
-		resourceType: 'wax_creation_batch',
-		'details.lotNumber': { $regex: `^${prefix}` }
-	}).sort({ timestamp: -1 }).lean();
+		tableName: 'wax_creation_batch',
+		'newData.lotNumber': { $regex: `^${prefix}` }
+	}).sort({ changedAt: -1 }).lean();
 
 	let seq = 1;
-	if (lastBatch && (lastBatch as any).details?.lotNumber) {
-		const lastSeq = parseInt((lastBatch as any).details.lotNumber.replace(prefix, ''), 10);
+	if (lastBatch && (lastBatch as any).newData?.lotNumber) {
+		const lastSeq = parseInt((lastBatch as any).newData.lotNumber.replace(prefix, ''), 10);
 		if (!isNaN(lastSeq)) seq = lastSeq + 1;
 	}
 	const lotNumber = `${prefix}${String(seq).padStart(4, '0')}`;
@@ -48,13 +48,12 @@ export const actions: Actions = {
 
 		await AuditLog.create({
 			_id: generateId(),
-			action: 'create',
-			resourceType: 'wax_creation_batch',
-			resourceId: batchId,
-			userId: locals.user!._id,
-			username: locals.user!.username,
-			timestamp: new Date(),
-			details: {
+			action: 'INSERT',
+			tableName: 'wax_creation_batch',
+			recordId: batchId,
+			changedBy: locals.user!.username,
+			changedAt: new Date(),
+			newData: {
 				lotNumber,
 				nanodecaneWeight,
 				targetWaxWeight,
