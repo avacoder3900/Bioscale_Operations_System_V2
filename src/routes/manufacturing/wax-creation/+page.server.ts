@@ -5,7 +5,24 @@ import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'manufacturing:read');
-	return {};
+	await connectDB();
+
+	// Generate sequential lot number: WAX-YYYY-NNNN
+	const year = new Date().getFullYear();
+	const prefix = `WAX-${year}-`;
+	const lastBatch = await AuditLog.findOne({
+		resourceType: 'wax_creation_batch',
+		'details.lotNumber': { $regex: `^${prefix}` }
+	}).sort({ timestamp: -1 }).lean();
+
+	let seq = 1;
+	if (lastBatch && (lastBatch as any).details?.lotNumber) {
+		const lastSeq = parseInt((lastBatch as any).details.lotNumber.replace(prefix, ''), 10);
+		if (!isNaN(lastSeq)) seq = lastSeq + 1;
+	}
+	const lotNumber = `${prefix}${String(seq).padStart(4, '0')}`;
+
+	return { lotNumber };
 };
 
 export const actions: Actions = {
@@ -16,11 +33,14 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const nanodecaneWeight = parseFloat(data.get('nanodecaneWeight')?.toString() || '0');
 		const actualWaxWeight = parseFloat(data.get('actualWaxWeight')?.toString() || '0');
-		const actualTubeCount = parseInt(data.get('actualTubeCount')?.toString() || '0', 10);
+		const fullTubeCount = parseInt(data.get('fullTubeCount')?.toString() || '0', 10);
+		const partialTubeMl = parseFloat(data.get('partialTubeMl')?.toString() || '0');
+		const fridgeBarcode = data.get('fridgeBarcode')?.toString() || '';
+		const lotNumber = data.get('lotNumber')?.toString() || '';
 		const targetWaxWeight = parseFloat(data.get('targetWaxWeight')?.toString() || '0');
 		const expectedTubes = parseInt(data.get('expectedTubes')?.toString() || '0', 10);
 
-		if (!nanodecaneWeight || !actualWaxWeight || !actualTubeCount) {
+		if (!nanodecaneWeight || !actualWaxWeight || !fullTubeCount || !lotNumber || !fridgeBarcode) {
 			return fail(400, { error: 'All fields are required' });
 		}
 
@@ -35,11 +55,14 @@ export const actions: Actions = {
 			username: locals.user!.username,
 			timestamp: new Date(),
 			details: {
+				lotNumber,
 				nanodecaneWeight,
 				targetWaxWeight,
 				actualWaxWeight,
 				expectedTubes,
-				actualTubeCount
+				fullTubeCount,
+				partialTubeMl,
+				fridgeBarcode
 			}
 		});
 

@@ -1,6 +1,11 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 
+	interface Props {
+		data: { lotNumber: string };
+	}
+	let { data }: Props = $props();
+
 	let currentStep = $state(1);
 	const totalSteps = 6;
 
@@ -33,7 +38,9 @@
 	// Step 6
 	const expectedTotalMl = $derived(totalBatchWeight ? parseFloat((totalBatchWeight / 0.73).toFixed(1)) : 0);
 	const expectedTubes = $derived(expectedTotalMl ? Math.floor(expectedTotalMl / 12) : 0);
-	let actualTubeCount = $state<number | null>(null);
+	let fullTubeCount = $state<number | null>(null);
+	let partialTubeMl = $state<number | null>(null);
+	let fridgeBarcode = $state('');
 	let tubesLabeledAndStored = $state(false);
 
 	let completed = $state(false);
@@ -46,7 +53,7 @@
 			case 3: return nanodecaneWeight !== null && nanodecaneWeight > 0;
 			case 4: return actualWaxWeight !== null && actualWaxWeight > 0 && waxTolerance() === 'pass';
 			case 5: return waxDissolvedAndMixed;
-			case 6: return actualTubeCount !== null && actualTubeCount > 0 && tubesLabeledAndStored;
+			case 6: return fullTubeCount !== null && fullTubeCount > 0 && fridgeBarcode.trim() !== '' && tubesLabeledAndStored;
 			default: return false;
 		}
 	}
@@ -65,7 +72,12 @@
 <div class="mx-auto max-w-3xl">
 	<!-- Header -->
 	<div class="mb-6">
-		<h1 class="text-xl font-bold text-[var(--color-tron-cyan)]">Wax Creation — 3% Microcrystalline Wax</h1>
+		<div class="flex items-center justify-between">
+			<h1 class="text-xl font-bold text-[var(--color-tron-cyan)]">Wax Creation — 3% Microcrystalline Wax</h1>
+			<span class="rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 px-3 py-1 text-sm font-mono font-bold text-[var(--color-tron-cyan)]">
+				{data.lotNumber}
+			</span>
+		</div>
 		<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">
 			Step-by-step work instruction for creating 3% microcrystalline wax mixture
 		</p>
@@ -292,16 +304,40 @@
 					</p>
 				</div>
 
-				<div class="mt-4">
+				<div class="mt-4 grid grid-cols-2 gap-4">
 					<label class="block text-sm text-[var(--color-tron-text)]">
-						Actual tubes created
+						Number of full 12ml tubes created
 						<input
 							type="number"
 							step="1"
 							min="0"
-							bind:value={actualTubeCount}
-							class="mt-1 block w-48 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+							bind:value={fullTubeCount}
+							class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
 							placeholder="e.g. 11"
+						/>
+					</label>
+					<label class="block text-sm text-[var(--color-tron-text)]">
+						ml in the final (partial) tube
+						<input
+							type="number"
+							step="0.1"
+							min="0"
+							max="12"
+							bind:value={partialTubeMl}
+							class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+							placeholder="e.g. 4.5 (0 if none)"
+						/>
+					</label>
+				</div>
+
+				<div class="mt-4">
+					<label class="block text-sm text-[var(--color-tron-text)]">
+						Fridge barcode
+						<input
+							type="text"
+							bind:value={fridgeBarcode}
+							class="mt-1 block w-64 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+							placeholder="Scan or enter fridge barcode"
 						/>
 					</label>
 				</div>
@@ -323,9 +359,14 @@
 	{:else}
 		<!-- Summary -->
 		<div class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-surface)] p-5">
-			<h2 class="text-lg font-semibold text-[var(--color-tron-cyan)]">Batch Complete</h2>
+			<div class="flex items-center justify-between">
+				<h2 class="text-lg font-semibold text-[var(--color-tron-cyan)]">Batch Complete</h2>
+				<span class="font-mono text-sm font-bold text-[var(--color-tron-cyan)]">{data.lotNumber}</span>
+			</div>
 			<div class="mt-4 space-y-2 text-sm text-[var(--color-tron-text)]">
 				<div class="grid grid-cols-2 gap-x-4 gap-y-2">
+					<span class="text-[var(--color-tron-text-secondary)]">Lot number</span>
+					<span>{data.lotNumber}</span>
 					<span class="text-[var(--color-tron-text-secondary)]">Nanodecane weight</span>
 					<span>{nanodecaneWeight}g</span>
 					<span class="text-[var(--color-tron-text-secondary)]">Target wax weight</span>
@@ -336,8 +377,12 @@
 					<span>{totalBatchWeight.toFixed(2)}g</span>
 					<span class="text-[var(--color-tron-text-secondary)]">Expected tubes</span>
 					<span>{expectedTubes}</span>
-					<span class="text-[var(--color-tron-text-secondary)]">Actual tubes</span>
-					<span>{actualTubeCount}</span>
+					<span class="text-[var(--color-tron-text-secondary)]">Full tubes (12ml)</span>
+					<span>{fullTubeCount}</span>
+					<span class="text-[var(--color-tron-text-secondary)]">Partial tube</span>
+					<span>{partialTubeMl ? `${partialTubeMl}ml` : 'None'}</span>
+					<span class="text-[var(--color-tron-text-secondary)]">Fridge barcode</span>
+					<span>{fridgeBarcode}</span>
 				</div>
 			</div>
 
@@ -348,10 +393,13 @@
 					await update();
 				};
 			}}>
+				<input type="hidden" name="lotNumber" value={data.lotNumber} />
 				<input type="hidden" name="nanodecaneWeight" value={nanodecaneWeight} />
 				<input type="hidden" name="actualWaxWeight" value={actualWaxWeight} />
 				<input type="hidden" name="targetWaxWeight" value={targetWaxWeight} />
-				<input type="hidden" name="actualTubeCount" value={actualTubeCount} />
+				<input type="hidden" name="fullTubeCount" value={fullTubeCount} />
+				<input type="hidden" name="partialTubeMl" value={partialTubeMl ?? 0} />
+				<input type="hidden" name="fridgeBarcode" value={fridgeBarcode} />
 				<input type="hidden" name="expectedTubes" value={expectedTubes} />
 				<button
 					type="submit"
