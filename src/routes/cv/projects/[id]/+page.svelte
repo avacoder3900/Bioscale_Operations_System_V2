@@ -209,16 +209,6 @@
 						cameraReady = true;
 					}
 					await loadCameraCapabilities();
-					// Force zoom to minimum so camera matches native default (no crop)
-					try {
-						const track = stream.getVideoTracks()[0];
-						const caps = track?.getCapabilities?.() as any;
-						if (caps?.zoom) {
-							const minZoom = caps.zoom.min ?? 1;
-							await track.applyConstraints({ advanced: [{ zoom: minZoom } as any] });
-							camZoom = minZoom;
-						}
-					} catch { /* ignore if zoom not supported */ }
 					startQRScanning();
 					return; // success
 				} catch (err) {
