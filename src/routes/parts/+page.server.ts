@@ -299,6 +299,69 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
+	withdraw: async ({ request, locals }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+
+		const form = await request.formData();
+		const partId = form.get('partId')?.toString().trim();
+		const qtyStr = form.get('quantity')?.toString().trim();
+		const reason = form.get('reason')?.toString().trim();
+
+		if (!partId) return fail(400, { withdrawError: 'Select a part' });
+		if (!qtyStr || isNaN(Number(qtyStr)) || Number(qtyStr) <= 0) {
+			return fail(400, { withdrawError: 'Enter a valid quantity greater than 0' });
+		}
+		if (!reason) return fail(400, { withdrawError: 'Provide a reason' });
+
+		const quantity = Number(qtyStr);
+		const part = await PartDefinition.findById(partId).lean() as any;
+		if (!part) return fail(404, { withdrawError: 'Part not found' });
+
+		const balanceAgg = await InventoryTransaction.aggregate([
+			{ $match: { partDefinitionId: partId } },
+			{ $group: { _id: null, total: { $sum: '$quantity' } } }
+		]);
+		const previousQuantity = balanceAgg[0]?.total ?? 0;
+		const newQuantity = previousQuantity - quantity;
+
+		await InventoryTransaction.create({
+			_id: generateId(),
+			partDefinitionId: partId,
+			partNumber: part.partNumber,
+			transactionType: 'consumption',
+			quantity: -quantity,
+			previousQuantity,
+			newQuantity,
+			reason: `Withdraw: ${reason}`,
+			performedBy: locals.user!._id,
+			performedAt: new Date(),
+			operatorId: locals.user!._id,
+			operatorUsername: locals.user!.username,
+			notes: reason
+		});
+
+		await PartDefinition.updateOne(
+			{ _id: partId },
+			{ $inc: { inventoryCount: -quantity } }
+		);
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'inventory_transactions',
+			recordId: partId,
+			action: 'INSERT',
+			newData: { partNumber: part.partNumber, quantity: -quantity, reason },
+			changedAt: new Date(),
+			changedBy: locals.user!.username
+		});
+
+		return {
+			withdrawSuccess: true,
+			withdrawMessage: `Withdrew ${quantity} of ${part.partNumber} — ${part.name}. New stock: ${newQuantity}`
+		};
+	},
+
 	sync: async ({ locals }) => {
 		requirePermission(locals.user, 'inventory:write');
 		try {

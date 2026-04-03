@@ -308,6 +308,18 @@
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
 	}
 
+	// Withdraw modal state
+	let withdrawModal = $state<{ id: string; partNumber: string; name: string; stock: number } | null>(null);
+	let withdrawQty = $state<number | null>(null);
+	let withdrawReason = $state('');
+	let withdrawing = $state(false);
+
+	function openWithdraw(part: { id: string; partNumber: string; name: string; inventoryCount?: number; stock?: number }) {
+		withdrawModal = { id: part.id, partNumber: part.partNumber, name: part.name, stock: part.stock ?? part.inventoryCount ?? 0 };
+		withdrawQty = null;
+		withdrawReason = '';
+	}
+
 	function formatDate(date: Date | string | null): string {
 		if (!date) return '—';
 		return new Date(date).toLocaleDateString();
@@ -464,13 +476,11 @@
 								class="flex items-center justify-between rounded bg-[var(--color-tron-bg-primary)] px-2 py-1.5 text-xs"
 							>
 								<div class="min-w-0 flex-1">
-									<!-- eslint-disable svelte/no-navigation-without-resolve -->
-									<a
-										href="/parts/{item.id}"
-										class="font-mono text-[var(--color-tron-cyan)] hover:underline"
-										>{item.partNumber}</a
-									>
-									<!-- eslint-enable svelte/no-navigation-without-resolve -->
+									<button
+										type="button"
+										class="font-mono text-[var(--color-tron-cyan)] hover:underline cursor-pointer"
+										onclick={() => openWithdraw(item)}
+									>{item.partNumber}</button>
 									<div class="tron-text-muted truncate">{item.name}</div>
 								</div>
 								<div class="ml-2 text-right font-mono">
@@ -940,7 +950,7 @@
 						{@const isLow = (item.inventoryCount ?? 0) <= item.minimumStockLevel}
 						<tr>
 							<td>{item.name}</td>
-							<td class="font-mono text-[var(--color-tron-cyan)]">{item.partNumber}</td>
+							<td><button type="button" class="font-mono text-[var(--color-tron-cyan)] hover:underline cursor-pointer" onclick={() => openWithdraw(item)}>{item.partNumber}</button></td>
 							<td>
 								{#if item.category}
 									<TronBadge variant="neutral">{item.category}</TronBadge>
@@ -1151,7 +1161,7 @@
 					{#each filteredCartridgeParts as item (item.id)}
 						<tr class="cursor-pointer hover:bg-white/5" onclick={() => window.location.href = `/parts/${item.id}`}>
 							<td><a href="/parts/{item.id}" class="text-[var(--color-tron-cyan)] hover:underline">{item.name}</a></td>
-							<td class="font-mono text-[var(--color-tron-cyan)]"><a href="/parts/{item.id}" class="hover:underline">{item.partNumber}</a></td>
+							<td><button type="button" class="font-mono text-[var(--color-tron-cyan)] hover:underline cursor-pointer" onclick={(e) => { e.stopPropagation(); openWithdraw(item); }}>{item.partNumber}</button></td>
 							<td>
 								{#if item.category}
 									<TronBadge variant="neutral">{item.category}</TronBadge>
@@ -1214,7 +1224,7 @@
 				<tbody>
 					{#each data.nonBomItems ?? [] as item (item.id)}
 						<tr class="cursor-pointer hover:bg-white/5" onclick={() => window.location.href = `/parts/${item.id}`}>
-							<td class="font-mono text-[var(--color-tron-cyan)]"><a href="/parts/{item.id}" class="hover:underline">{item.partNumber}</a></td>
+							<td><button type="button" class="font-mono text-[var(--color-tron-cyan)] hover:underline cursor-pointer" onclick={(e) => { e.stopPropagation(); openWithdraw(item); }}>{item.partNumber}</button></td>
 							<td>{item.name}</td>
 							<td class="tron-text-muted">{item.category ?? '—'}</td>
 							<td class="tron-text-muted">{item.supplier ?? '—'}</td>
@@ -1271,7 +1281,7 @@
 				<tbody>
 					{#each filteredScannedItems as item (item.id)}
 						<tr class="cursor-pointer hover:bg-white/5" onclick={() => window.location.href = `/parts/${item.id}`}>
-							<td class="font-mono text-[var(--color-tron-cyan)]"><a href="/parts/{item.id}" class="hover:underline">{item.partNumber}</a></td>
+							<td><button type="button" class="font-mono text-[var(--color-tron-cyan)] hover:underline cursor-pointer" onclick={(e) => { e.stopPropagation(); openWithdraw(item); }}>{item.partNumber}</button></td>
 							<td>{item.name}</td>
 							<td class="tron-text-muted">{item.category ?? '—'}</td>
 							<td class="text-right font-mono {stockColor(item.stock)}">{item.stock}</td>
@@ -1291,4 +1301,92 @@
 		<p class="tron-text-muted text-xs mt-3">Parts with no transactions are hidden from this view.</p>
 	</TronCard>
 	{/if}
+
+{#if withdrawModal}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+		<div class="w-full max-w-md rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-6 shadow-xl">
+			<h2 class="text-lg font-bold text-[var(--color-tron-cyan)]">Withdraw Inventory</h2>
+
+			<div class="mt-3">
+				<p class="text-sm text-[var(--color-tron-text)]">
+					<span class="font-mono text-[var(--color-tron-cyan)]">{withdrawModal.partNumber}</span>
+					— {withdrawModal.name}
+				</p>
+				<p class="text-sm text-[var(--color-tron-text-secondary)]">
+					Current Stock: {withdrawModal.stock}
+				</p>
+			</div>
+
+			<form
+				method="POST"
+				action="?/withdraw"
+				use:enhance={() => {
+					withdrawing = true;
+					return async ({ result, update }) => {
+						withdrawing = false;
+						if (result.type === 'success') {
+							withdrawModal = null;
+							await update();
+						}
+					};
+				}}
+			>
+				<input type="hidden" name="partId" value={withdrawModal.id} />
+
+				<div class="mt-4">
+					<label class="block text-sm text-[var(--color-tron-text)]">
+						Quantity
+						<input
+							type="number"
+							name="quantity"
+							min="1"
+							step="1"
+							bind:value={withdrawQty}
+							class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)]"
+							placeholder="Enter quantity to withdraw"
+							required
+						/>
+					</label>
+				</div>
+
+				<div class="mt-3">
+					<label class="block text-sm text-[var(--color-tron-text)]">
+						Reason
+						<input
+							type="text"
+							name="reason"
+							bind:value={withdrawReason}
+							class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)]"
+							placeholder="e.g., Used in assembly, damaged, expired"
+							required
+						/>
+					</label>
+				</div>
+
+				<div class="mt-5 flex justify-end gap-3">
+					<button
+						type="button"
+						onclick={() => (withdrawModal = null)}
+						class="rounded px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]"
+					>
+						Cancel
+					</button>
+					<button
+						type="submit"
+						disabled={withdrawing || !withdrawQty || withdrawQty <= 0 || !withdrawReason.trim()}
+						class="rounded bg-[var(--color-tron-red)] px-4 py-2 text-sm font-semibold text-white transition-opacity disabled:opacity-30"
+					>
+						{withdrawing ? 'Withdrawing...' : 'Withdraw'}
+					</button>
+				</div>
+			</form>
+		</div>
+	</div>
+{/if}
+
+{#if form?.withdrawSuccess}
+	<div class="fixed bottom-4 right-4 z-50 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-3 text-sm text-green-400 shadow-lg">
+		{form.withdrawMessage}
+	</div>
+{/if}
 </div>
