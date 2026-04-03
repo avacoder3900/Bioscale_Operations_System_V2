@@ -380,33 +380,25 @@
 	let labeling = $state<string | null>(null);
 	let inducting = $state<string | null>(null);
 
-	async function inductFromImage(imageId: string, imageUrl: string) {
+	function extractCartridgeIdFromFilename(filename: string): string | null {
+		// Format: cartridge_capture_<CARTRIDGE_ID>_<SEQ>.jpg
+		const match = filename.match(/^cartridge_capture_(.+)_\d{3}\.jpg$/i);
+		if (match) return match[1];
+		// Fallback: cartridge_capture_<CARTRIDGE_ID>.jpg (no sequence)
+		const match2 = filename.match(/^cartridge_capture_(.+)\.jpg$/i);
+		if (match2) return match2[1];
+		return null;
+	}
+
+	async function inductFromImage(imageId: string, filename: string) {
 		inducting = imageId;
 		try {
-			// Load image and run jsQR to extract barcode
-			const img = new Image();
-			img.crossOrigin = 'anonymous';
-			await new Promise<void>((resolve, reject) => {
-				img.onload = () => resolve();
-				img.onerror = () => reject(new Error('Failed to load image'));
-				img.src = imageUrl;
-			});
-			const canvas = document.createElement('canvas');
-			canvas.width = img.naturalWidth;
-			canvas.height = img.naturalHeight;
-			const ctx = canvas.getContext('2d', { willReadFrequently: true });
-			if (!ctx) { inducting = null; return; }
-			ctx.drawImage(img, 0, 0);
-			const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-			const code = jsQR(imageData.data, canvas.width, canvas.height, { inversionAttempts: 'attemptBoth' });
-
-			if (!code || !code.data) {
-				alert('No QR code detected in this image');
+			const cartridgeId = extractCartridgeIdFromFilename(filename);
+			if (!cartridgeId) {
+				alert('Could not extract cartridge ID from filename: ' + filename);
 				inducting = null;
 				return;
 			}
-
-			const cartridgeId = code.data;
 
 			// Induct: create cartridge record if it doesn't exist
 			const inductRes = await fetch('/api/cv/induct-cartridge', {
@@ -1159,7 +1151,7 @@
 								<button
 									class="flex-1 border-l border-[var(--color-tron-border)] py-1.5 text-xs font-medium transition-colors {image.cartridgeTag?.cartridgeRecordId ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
 									disabled={inducting === image._id || !!image.cartridgeTag?.cartridgeRecordId}
-									onclick={() => inductFromImage(image._id, image.imageUrl)}
+									onclick={() => inductFromImage(image._id, image.filename)}
 								>{inducting === image._id ? '...' : image.cartridgeTag?.cartridgeRecordId ? '&#10003;' : '&#8689;'} Induct</button>
 							</div>
 						</div>
