@@ -1,13 +1,44 @@
 <script lang="ts">
 	let { data } = $props();
 	let activePhase = $state('all');
-	let enlargedUrl = $state<string | null>(null);
+	let enlargedIndex = $state<number>(-1);
 
 	const filteredInspections = $derived(
 		activePhase === 'all'
 			? data.inspections
 			: data.inspections.filter((i: any) => (i.phase || 'untagged') === activePhase)
 	);
+
+	// Build flat list of images with metadata for lightbox navigation
+	const imageList = $derived(
+		filteredInspections
+			.filter((i: any) => data.imageMap[i.imageId]?.imageUrl)
+			.map((i: any) => ({
+				url: data.imageMap[i.imageId].imageUrl,
+				phase: i.phase || 'untagged',
+				date: i.createdAt,
+				result: i.result,
+				confidence: i.confidenceScore
+			}))
+	);
+
+	const enlargedUrl = $derived(enlargedIndex >= 0 && enlargedIndex < imageList.length ? imageList[enlargedIndex].url : null);
+	const enlargedMeta = $derived(enlargedIndex >= 0 && enlargedIndex < imageList.length ? imageList[enlargedIndex] : null);
+
+	function openLightbox(imageUrl: string) {
+		const idx = imageList.findIndex((img: any) => img.url === imageUrl);
+		enlargedIndex = idx >= 0 ? idx : -1;
+	}
+
+	function lightboxPrev() { if (enlargedIndex > 0) enlargedIndex--; }
+	function lightboxNext() { if (enlargedIndex < imageList.length - 1) enlargedIndex++; }
+
+	function handleLightboxKey(e: KeyboardEvent) {
+		if (enlargedIndex < 0) return;
+		if (e.key === 'ArrowLeft') lightboxPrev();
+		else if (e.key === 'ArrowRight') lightboxNext();
+		else if (e.key === 'Escape') enlargedIndex = -1;
+	}
 
 	function fmtDate(d: string) {
 		return new Date(d).toLocaleString();
@@ -78,7 +109,7 @@
 					<!-- Image thumbnail -->
 					<div class="h-20 w-20 flex-shrink-0 overflow-hidden rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)]">
 						{#if image?.imageUrl}
-							<img src={image.imageUrl} alt="inspection" class="h-full w-full cursor-pointer object-cover" onclick={() => enlargedUrl = image.imageUrl} />
+							<img src={image.imageUrl} alt="inspection" class="h-full w-full cursor-pointer object-cover" onclick={() => openLightbox(image.imageUrl)} />
 						{:else}
 							<div class="flex h-full items-center justify-center text-xs text-[var(--color-tron-text-secondary)]">No img</div>
 						{/if}
@@ -119,10 +150,52 @@
 		</div>
 	{/if}
 
-	<!-- Enlarged image modal -->
-	{#if enlargedUrl}
-		<button class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm" onclick={() => enlargedUrl = null}>
-			<img src={enlargedUrl} alt="enlarged" class="max-h-[85vh] max-w-[90vw] rounded-lg object-contain shadow-2xl" />
-		</button>
+	<!-- Enlarged image modal with navigation -->
+	{#if enlargedUrl && enlargedMeta}
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm" onkeydown={handleLightboxKey} onclick={() => enlargedIndex = -1}>
+			<div class="relative flex max-h-[90vh] max-w-[92vw] flex-col items-center" onclick={(e) => e.stopPropagation()}>
+				<!-- Close button -->
+				<button onclick={() => enlargedIndex = -1} class="absolute -top-2 -right-2 z-10 rounded-full bg-[var(--color-tron-bg-secondary)] p-1.5 text-[var(--color-tron-text-secondary)] hover:text-white">
+					<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
+				</button>
+
+				<!-- Navigation + Image -->
+				<div class="flex items-center gap-3">
+					{#if enlargedIndex > 0}
+						<button onclick={lightboxPrev} class="rounded-lg bg-[var(--color-tron-bg-secondary)] p-2 text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">
+							<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
+						</button>
+					{:else}
+						<div class="w-10"></div>
+					{/if}
+
+					<img src={enlargedUrl} alt="enlarged" class="max-h-[75vh] max-w-[75vw] rounded-lg object-contain shadow-2xl" />
+
+					{#if enlargedIndex < imageList.length - 1}
+						<button onclick={lightboxNext} class="rounded-lg bg-[var(--color-tron-bg-secondary)] p-2 text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">
+							<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
+						</button>
+					{:else}
+						<div class="w-10"></div>
+					{/if}
+				</div>
+
+				<!-- Metadata bar -->
+				<div class="mt-3 flex items-center gap-3 rounded-lg bg-[var(--color-tron-bg-secondary)] px-4 py-2 text-sm">
+					<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-tron-text-secondary)]">{enlargedMeta.phase.replace(/_/g, ' ')}</span>
+					{#if enlargedMeta.result === 'pass'}
+						<span class="text-[var(--color-tron-green)]">PASS</span>
+					{:else if enlargedMeta.result === 'fail'}
+						<span class="text-[var(--color-tron-red)]">FAIL</span>
+					{/if}
+					{#if enlargedMeta.confidence != null}
+						<span class="text-[var(--color-tron-text-secondary)]">{Math.round(enlargedMeta.confidence * 100)}%</span>
+					{/if}
+					<span class="text-[var(--color-tron-text-secondary)]">{fmtDate(enlargedMeta.date)}</span>
+					<span class="text-xs text-[var(--color-tron-text-secondary)]">{enlargedIndex + 1} / {imageList.length}</span>
+				</div>
+			</div>
+		</div>
 	{/if}
 </div>
