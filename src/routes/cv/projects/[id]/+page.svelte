@@ -378,6 +378,68 @@
 
 	// Labels tab
 	let labeling = $state<string | null>(null);
+	let inducting = $state<string | null>(null);
+
+	async function inductFromImage(imageId: string, imageUrl: string) {
+		inducting = imageId;
+		try {
+			// Load image and run jsQR to extract barcode
+			const img = new Image();
+			img.crossOrigin = 'anonymous';
+			await new Promise<void>((resolve, reject) => {
+				img.onload = () => resolve();
+				img.onerror = () => reject(new Error('Failed to load image'));
+				img.src = imageUrl;
+			});
+			const canvas = document.createElement('canvas');
+			canvas.width = img.naturalWidth;
+			canvas.height = img.naturalHeight;
+			const ctx = canvas.getContext('2d', { willReadFrequently: true });
+			if (!ctx) { inducting = null; return; }
+			ctx.drawImage(img, 0, 0);
+			const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+			const code = jsQR(imageData.data, canvas.width, canvas.height, { inversionAttempts: 'attemptBoth' });
+
+			if (!code || !code.data) {
+				alert('No QR code detected in this image');
+				inducting = null;
+				return;
+			}
+
+			const cartridgeId = code.data;
+
+			// Induct: create cartridge record if it doesn't exist
+			const inductRes = await fetch('/api/cv/induct-cartridge', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ cartridgeId })
+			});
+			// 201 = created, 409 = already exists — both are fine
+			if (!inductRes.ok && inductRes.status !== 409) {
+				alert('Failed to induct cartridge');
+				inducting = null;
+				return;
+			}
+
+			// Link image to cartridge
+			const linkRes = await fetch(`/api/cv/images/${imageId}/link-cartridge`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ cartridgeRecordId: cartridgeId, phase: 'wax_filled' })
+			});
+			if (linkRes.ok) {
+				// Update local state
+				const imgObj = data.images.find((i: any) => i._id === imageId);
+				if (imgObj) {
+					imgObj.cartridgeTag = { cartridgeRecordId: cartridgeId, phase: 'wax_filled' };
+					data.images = [...data.images];
+				}
+			}
+		} catch (e: any) {
+			alert(`Induct failed: ${e.message || 'Unknown error'}`);
+		}
+		inducting = null;
+	}
 	let lightboxIndex = $state<number>(-1);
 	const lightboxImage = $derived(lightboxIndex >= 0 && lightboxIndex < data.images.length ? data.images[lightboxIndex] : null);
 	function openLightbox(imageId: string) {
@@ -1076,7 +1138,13 @@
 									{image.label === 'approved' ? 'GOOD' : 'DEFECT'}
 								</span>
 							{/if}
-							<!-- Label buttons -->
+							<!-- Linked badge -->
+							{#if image.cartridgeTag?.cartridgeRecordId}
+								<span class="absolute right-2 top-2 rounded-full bg-[var(--color-tron-cyan)]/20 px-2 py-0.5 text-[10px] font-semibold text-[var(--color-tron-cyan)]">
+									LINKED
+								</span>
+							{/if}
+							<!-- Label + Induct buttons -->
 							<div class="flex border-t border-[var(--color-tron-border)]">
 								<button
 									class="flex-1 py-1.5 text-xs font-medium transition-colors {image.label === 'approved' ? 'bg-[var(--color-tron-green)]/20 text-[var(--color-tron-green)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-green)]'}"
@@ -1088,6 +1156,11 @@
 									disabled={labeling === image._id}
 									onclick={() => toggleLabel(image._id, image.label, 'rejected')}
 								>&#10007; Defect</button>
+								<button
+									class="flex-1 border-l border-[var(--color-tron-border)] py-1.5 text-xs font-medium transition-colors {image.cartridgeTag?.cartridgeRecordId ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
+									disabled={inducting === image._id || !!image.cartridgeTag?.cartridgeRecordId}
+									onclick={() => inductFromImage(image._id, image.imageUrl)}
+								>{inducting === image._id ? '...' : image.cartridgeTag?.cartridgeRecordId ? '&#10003;' : '&#8689;'} Induct</button>
 							</div>
 						</div>
 					{/each}
