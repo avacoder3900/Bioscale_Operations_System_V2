@@ -1152,7 +1152,7 @@
 									class="flex-1 border-l border-[var(--color-tron-border)] py-1.5 text-xs font-medium transition-colors {image.cartridgeTag?.cartridgeRecordId ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
 									disabled={inducting === image._id || !!image.cartridgeTag?.cartridgeRecordId}
 									onclick={() => inductFromImage(image._id, image.filename)}
-								>{inducting === image._id ? '...' : image.cartridgeTag?.cartridgeRecordId ? '&#10003;' : '&#8689;'} Induct</button>
+								>{inducting === image._id ? '...' : 'Induct'}</button>
 							</div>
 						</div>
 					{/each}
