@@ -86,6 +86,10 @@
 		}
 	}
 
+	// Induct mode — auto-create cartridge records on scan
+	let inductMode = $state(false);
+	let inductMsg = $state('');
+
 	// QR scanning
 	let detectedQR = $state<string | null>(null);
 	let qrLookupResult = $state<any>(null);
@@ -139,21 +143,44 @@
 	let cartridgePhaseInfo = $state<any>(null);
 
 	async function lookupBarcode(code: string) {
+		inductMsg = '';
 		try {
 			const res = await fetch(`/api/cv/lookup-barcode?code=${encodeURIComponent(code)}`);
 			if (res.ok) {
 				qrLookupResult = await res.json();
-				// If it's a cartridge, also fetch phase advancement info
-				if (qrLookupResult.type === 'cartridge' && qrLookupResult._id) {
-					const phaseRes = await fetch(`/api/cv/lookup-cartridge?code=${encodeURIComponent(qrLookupResult._id)}`);
-					if (phaseRes.ok) {
-						cartridgePhaseInfo = await phaseRes.json();
-					}
+			} else {
+				qrLookupResult = { raw: code, type: 'unknown' };
+			}
+
+			// If not found and induct mode is on, auto-create the cartridge record
+			if (qrLookupResult.type === 'unknown' && inductMode) {
+				const inductRes = await fetch('/api/cv/induct-cartridge', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ cartridgeId: code })
+				});
+				if (inductRes.ok) {
+					const inducted = await inductRes.json();
+					qrLookupResult = { type: 'cartridge', _id: inducted._id, phase: 'wax_filled' };
+					inductMsg = `Inducted ${code} into system`;
+				} else if (inductRes.status === 409) {
+					// Already exists — re-lookup
+					const retryRes = await fetch(`/api/cv/lookup-barcode?code=${encodeURIComponent(code)}`);
+					if (retryRes.ok) qrLookupResult = await retryRes.json();
+				} else {
+					inductMsg = 'Induction failed';
+				}
+			}
+
+			// If it's a cartridge, fetch phase advancement info
+			if (qrLookupResult.type === 'cartridge' && qrLookupResult._id) {
+				const phaseRes = await fetch(`/api/cv/lookup-cartridge?code=${encodeURIComponent(qrLookupResult._id)}`);
+				if (phaseRes.ok) {
+					cartridgePhaseInfo = await phaseRes.json();
 				} else {
 					cartridgePhaseInfo = null;
 				}
 			} else {
-				qrLookupResult = { raw: code, type: 'unknown' };
 				cartridgePhaseInfo = null;
 			}
 		} catch {
@@ -747,8 +774,26 @@
 
 						<!-- Right: QR Info Panel -->
 						<div class="space-y-3">
-							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4">
-								<h4 class="mb-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">QR Code Scanner</h4>
+							<div class="rounded-lg border {inductMode ? 'border-[var(--color-tron-yellow)]' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-bg-primary)] p-4">
+								<div class="mb-3 flex items-center justify-between">
+									<h4 class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">QR Code Scanner</h4>
+									<button
+										onclick={() => { inductMode = !inductMode; inductMsg = ''; }}
+										class="rounded-lg px-2.5 py-1 text-xs font-medium transition-colors {inductMode ? 'bg-[var(--color-tron-yellow)]/20 text-[var(--color-tron-yellow)] border border-[var(--color-tron-yellow)]/40' : 'bg-[var(--color-tron-bg-tertiary)] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
+									>
+										{inductMode ? 'INDUCT ON' : 'INDUCT OFF'}
+									</button>
+								</div>
+								{#if inductMode}
+									<div class="mb-2 rounded border border-[var(--color-tron-yellow)]/30 bg-[var(--color-tron-yellow)]/10 px-2 py-1">
+										<p class="text-[10px] text-[var(--color-tron-yellow)]">Induct mode: unknown QR codes will be auto-created as new cartridge records</p>
+									</div>
+								{/if}
+								{#if inductMsg}
+									<div class="mb-2 rounded border border-[var(--color-tron-green)]/30 bg-[var(--color-tron-green)]/10 px-2 py-1">
+										<p class="text-xs text-[var(--color-tron-green)]">{inductMsg}</p>
+									</div>
+								{/if}
 								{#if detectedQR}
 									<div class="space-y-2">
 										<div class="rounded border border-[var(--color-tron-green)]/30 bg-[var(--color-tron-green)]/10 p-2">
