@@ -330,6 +330,19 @@
 
 	// Labels tab
 	let labeling = $state<string | null>(null);
+	let lightboxIndex = $state<number>(-1);
+	const lightboxImage = $derived(lightboxIndex >= 0 && lightboxIndex < data.images.length ? data.images[lightboxIndex] : null);
+	function openLightbox(imageId: string) {
+		lightboxIndex = data.images.findIndex((i: any) => i._id === imageId);
+	}
+	function lightboxPrev() { if (lightboxIndex > 0) lightboxIndex--; }
+	function lightboxNext() { if (lightboxIndex < data.images.length - 1) lightboxIndex++; }
+	function handleLightboxKey(e: KeyboardEvent) {
+		if (lightboxIndex < 0) return;
+		if (e.key === 'ArrowLeft') lightboxPrev();
+		else if (e.key === 'ArrowRight') lightboxNext();
+		else if (e.key === 'Escape') lightboxIndex = -1;
+	}
 
 	// Train tab
 	let training = $state(false);
@@ -966,7 +979,7 @@
 						<div class="group relative overflow-hidden rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)]">
 							<div class="aspect-square bg-[var(--color-tron-bg-tertiary)]">
 								{#if image.imageUrl}
-									<img src={image.imageUrl} alt={image.filename} class="h-full w-full object-cover" />
+									<img src={image.imageUrl} alt={image.filename} class="h-full w-full cursor-pointer object-cover" onclick={() => openLightbox(image._id)} />
 								{:else}
 									<div class="flex h-full items-center justify-center text-xs text-[var(--color-tron-text-secondary)]">No preview</div>
 								{/if}
@@ -1155,4 +1168,48 @@
 			</div>
 		{/if}
 	</div>
+
+	<!-- Photo lightbox -->
+	{#if lightboxImage}
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm" onkeydown={handleLightboxKey} onclick={() => lightboxIndex = -1}>
+			<div class="relative flex max-h-[90vh] max-w-[92vw] flex-col items-center" onclick={(e) => e.stopPropagation()}>
+				<button onclick={() => lightboxIndex = -1} class="absolute -top-2 -right-2 z-10 rounded-full bg-[var(--color-tron-bg-secondary)] p-1.5 text-[var(--color-tron-text-secondary)] hover:text-white">
+					<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
+				</button>
+				<div class="flex items-center gap-3">
+					{#if lightboxIndex > 0}
+						<button onclick={lightboxPrev} class="rounded-lg bg-[var(--color-tron-bg-secondary)] p-2 text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">
+							<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
+						</button>
+					{:else}
+						<div class="w-10"></div>
+					{/if}
+					<img src={lightboxImage.imageUrl} alt={lightboxImage.filename} class="max-h-[75vh] max-w-[75vw] rounded-lg object-contain shadow-2xl" />
+					{#if lightboxIndex < data.images.length - 1}
+						<button onclick={lightboxNext} class="rounded-lg bg-[var(--color-tron-bg-secondary)] p-2 text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">
+							<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
+						</button>
+					{:else}
+						<div class="w-10"></div>
+					{/if}
+				</div>
+				<div class="mt-3 flex items-center gap-3 rounded-lg bg-[var(--color-tron-bg-secondary)] px-4 py-2 text-sm">
+					<span class="text-[var(--color-tron-text-primary)]">{lightboxImage.filename}</span>
+					{#if lightboxImage.label === 'approved'}
+						<span class="text-[var(--color-tron-green)]">GOOD</span>
+					{:else if lightboxImage.label === 'rejected'}
+						<span class="text-[var(--color-tron-red)]">DEFECT</span>
+					{:else}
+						<span class="text-[var(--color-tron-text-secondary)]">Unlabeled</span>
+					{/if}
+					{#if lightboxImage.cartridgeTag?.phase}
+						<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-tron-text-secondary)]">{lightboxImage.cartridgeTag.phase.replace(/_/g, ' ')}</span>
+					{/if}
+					<span class="text-[var(--color-tron-text-secondary)]">{fmtDate(lightboxImage.capturedAt || lightboxImage.createdAt)}</span>
+					<span class="text-xs text-[var(--color-tron-text-secondary)]">{lightboxIndex + 1} / {data.images.length}</span>
+				</div>
+			</div>
+		</div>
+	{/if}
 </div>
