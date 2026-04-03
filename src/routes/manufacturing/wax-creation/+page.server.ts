@@ -1,7 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection';
 import { AuditLog, PartDefinition, InventoryTransaction } from '$lib/server/db/models';
-import { generateId } from '$lib/server/db/models';
+import { generateId } from '$lib/server/db/utils';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
