@@ -136,16 +136,29 @@
 		qrScanning = false;
 	}
 
+	let cartridgePhaseInfo = $state<any>(null);
+
 	async function lookupBarcode(code: string) {
 		try {
 			const res = await fetch(`/api/cv/lookup-barcode?code=${encodeURIComponent(code)}`);
 			if (res.ok) {
 				qrLookupResult = await res.json();
+				// If it's a cartridge, also fetch phase advancement info
+				if (qrLookupResult.type === 'cartridge' && qrLookupResult._id) {
+					const phaseRes = await fetch(`/api/cv/lookup-cartridge?code=${encodeURIComponent(qrLookupResult._id)}`);
+					if (phaseRes.ok) {
+						cartridgePhaseInfo = await phaseRes.json();
+					}
+				} else {
+					cartridgePhaseInfo = null;
+				}
 			} else {
 				qrLookupResult = { raw: code, type: 'unknown' };
+				cartridgePhaseInfo = null;
 			}
 		} catch {
 			qrLookupResult = { raw: code, type: 'unknown' };
+			cartridgePhaseInfo = null;
 		}
 	}
 
@@ -231,6 +244,7 @@
 		cameraReady = false;
 		detectedQR = null;
 		qrLookupResult = null;
+		cartridgePhaseInfo = null;
 	}
 
 	function capturePhoto() {
@@ -288,10 +302,17 @@
 			});
 			if (!putRes.ok) throw new Error('R2 upload failed');
 
+			const recordBody: Record<string, any> = { projectId: data.project._id, key, filename, contentType: 'image/jpeg', fileSize: file.size };
+			if (qrLookupResult?.type === 'cartridge' && qrLookupResult._id) {
+				recordBody.cartridgeTag = {
+					cartridgeRecordId: qrLookupResult._id,
+					phase: cartridgePhaseInfo?.nextPhase || qrLookupResult.phase || null
+				};
+			}
 			const recordRes = await fetch('/api/cv/images/record', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ projectId: data.project._id, key, filename, contentType: 'image/jpeg', fileSize: file.size })
+				body: JSON.stringify(recordBody)
 			});
 			if (!recordRes.ok) throw new Error('Record failed');
 			const recordData = await recordRes.json();
@@ -737,8 +758,28 @@
 										{#if qrLookupResult}
 											{#if qrLookupResult.type === 'cartridge'}
 												<div class="space-y-1 text-sm">
-													<p class="text-[var(--color-tron-text-primary)]">Cartridge: <span class="font-semibold text-[var(--color-tron-cyan)]">{qrLookupResult.barcode}</span></p>
-													{#if qrLookupResult.phase}<p class="text-[var(--color-tron-text-secondary)]">Phase: {qrLookupResult.phase}</p>{/if}
+													<p class="text-[var(--color-tron-text-primary)]">Cartridge: <span class="font-semibold text-[var(--color-tron-cyan)]">{qrLookupResult.barcode || qrLookupResult._id}</span></p>
+													{#if cartridgePhaseInfo}
+														{#if cartridgePhaseInfo.isNew}
+															<div class="rounded border border-[var(--color-tron-yellow)]/30 bg-[var(--color-tron-yellow)]/10 px-2 py-1">
+																<p class="text-xs font-semibold text-[var(--color-tron-yellow)]">New cartridge — capturing as {cartridgePhaseInfo.nextPhase.replace(/_/g, ' ')}</p>
+															</div>
+														{:else if cartridgePhaseInfo.isComplete}
+															<div class="rounded border border-[var(--color-tron-green)]/30 bg-[var(--color-tron-green)]/10 px-2 py-1">
+																<p class="text-xs font-semibold text-[var(--color-tron-green)]">Already released — additional photo</p>
+															</div>
+														{:else}
+															<div class="rounded border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-cyan)]/10 px-2 py-1">
+																<p class="text-xs text-[var(--color-tron-cyan)]">{cartridgePhaseInfo.currentPhase?.replace(/_/g, ' ')} → <span class="font-semibold">{cartridgePhaseInfo.nextPhase.replace(/_/g, ' ')}</span></p>
+															</div>
+														{/if}
+														<div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-tron-bg-tertiary)]">
+															<div class="h-full rounded-full bg-[var(--color-tron-cyan)]" style="width: {Math.round(((cartridgePhaseInfo.pipelineIndex + 1) / cartridgePhaseInfo.pipelineLength) * 100)}%"></div>
+														</div>
+														<p class="text-[10px] text-[var(--color-tron-text-secondary)]">{cartridgePhaseInfo.pipelineIndex + 1} / {cartridgePhaseInfo.pipelineLength} phases &middot; {cartridgePhaseInfo.previousImages.length} prior photo{cartridgePhaseInfo.previousImages.length !== 1 ? 's' : ''}</p>
+													{:else}
+														{#if qrLookupResult.phase}<p class="text-[var(--color-tron-text-secondary)]">Phase: {qrLookupResult.phase}</p>{/if}
+													{/if}
 													{#if qrLookupResult.lotNumber}<p class="text-[var(--color-tron-text-secondary)]">Lot: {qrLookupResult.lotNumber}</p>{/if}
 												</div>
 											{:else if qrLookupResult.type === 'lot'}
