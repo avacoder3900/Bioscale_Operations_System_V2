@@ -141,3 +141,16 @@ export function buildCocKey(lotNumber: string, ext: string, date?: Date): string
 	const dateStr = d.toISOString().slice(0, 10);
 	return `coc/${dateStr}/${lotNumber}.${ext}`;
 }
+
+/** Build the R2 object key for a DHR photo: cv/{projectId}/dhr/{cartridgeId}/{phase}/{timestamp}-{filename} */
+export function buildDhrKey(projectId: string, cartridgeId: string, phase: string, filename: string): string {
+	const ts = new Date().toISOString().replace(/[:.]/g, '-');
+	const safeFilename = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+	return `cv/${projectId}/dhr/${cartridgeId}/${phase}/${ts}-${safeFilename}`;
+}
+
+/** Build the R2 prefix for listing all photos of a cartridge: cv/{projectId}/dhr/{cartridgeId}/ */
+export function buildDhrPrefix(projectId: string, cartridgeId: string, phase?: string): string {
+	const base = `cv/${projectId}/dhr/${cartridgeId}`;
+	return phase ? `${base}/${phase}/` : `${base}/`;
+}

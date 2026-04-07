@@ -34,10 +34,23 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 		{ _id: cartridgeRecordId },
 		{ $push: { photos: {
 			imageId: params.id,
+			r2Key: (image as any).filePath || null,
 			phase: phase || 'wax_filled',
 			capturedAt: (image as any).capturedAt || (image as any).createdAt
 		}}}
 	);
 
-	return json({ success: true, cartridgeRecordId, imageId: params.id });
+	// Fetch updated cartridge for status feedback
+	const cartridge = await CartridgeRecord.findById(cartridgeRecordId)
+		.select('_id status photos')
+		.lean() as any;
+
+	return json({
+		success: true,
+		cartridgeRecordId,
+		imageId: params.id,
+		cartridgeExists: !!cartridge,
+		cartridgeStatus: cartridge?.status ?? null,
+		photoCount: cartridge?.photos?.length ?? 0
+	});
 };

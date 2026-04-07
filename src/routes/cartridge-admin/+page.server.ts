@@ -81,7 +81,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				inspectionStatus: c.reagentInspection?.status ?? null,
 				topSealBatchId: c.topSeal?.batchId ?? null,
 				coolingTrayId: c.waxStorage?.coolingTrayId ?? null,
-				ovenEntryTime: c.backing?.ovenEntryTime ?? null
+				ovenEntryTime: c.backing?.ovenEntryTime ?? null,
+				photoCount: (c.photos || []).length
 			};
 		}),
 		assayTypes: (assayTypes as any[]).map(a => ({ id: a._id, name: a.name })),
