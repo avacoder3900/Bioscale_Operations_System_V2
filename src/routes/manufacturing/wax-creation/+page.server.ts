@@ -1,7 +1,5 @@
 import { fail } from '@sveltejs/kit';
-import { connectDB } from '$lib/server/db/connection';
-import { AuditLog, PartDefinition, InventoryTransaction } from '$lib/server/db/models';
-import { generateId } from '$lib/server/db/utils';
+import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -9,6 +7,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
+	// Generate sequential lot number: WAX-YYYY-NNNN
 	const year = new Date().getFullYear();
 	const prefix = `WAX-${year}-`;
 	const lastBatch = await AuditLog.findOne({
@@ -17,20 +16,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 	}).sort({ changedAt: -1 }).lean();
 
 	let seq = 1;
-	if (lastBatch && lastBatch.newData?.lotNumber) {
-		const lastSeq = parseInt(lastBatch.newData.lotNumber.replace(prefix, ''), 10);
+	if (lastBatch && (lastBatch as any).newData?.lotNumber) {
+		const lastSeq = parseInt((lastBatch as any).newData.lotNumber.replace(prefix, ''), 10);
 		if (!isNaN(lastSeq)) seq = lastSeq + 1;
 	}
 	const lotNumber = `${prefix}${String(seq).padStart(4, '0')}`;
 
-	const waxParts = await PartDefinition.find({
-		partNumber: { $in: ['PT-CT-108', 'PT-CT-109', 'PT-CT-110'] }
-	}).select('partNumber name unitCost unitOfMeasure supplier').lean();
-
-	return {
-		lotNumber,
-		waxParts: JSON.parse(JSON.stringify(waxParts))
-	};
+	return { lotNumber };
 };
 
 export const actions: Actions = {
@@ -54,12 +46,13 @@ export const actions: Actions = {
 		}
 
 		const batchId = generateId();
+
 		await AuditLog.create({
 			_id: generateId(),
 			action: 'INSERT',
 			tableName: 'wax_creation_batch',
 			recordId: batchId,
-			changedBy: locals.user.username,
+			changedBy: locals.user!.username,
 			changedAt: new Date(),
 			newData: {
 				lotNumber,
@@ -73,39 +66,6 @@ export const actions: Actions = {
 				fridgeBarcode
 			}
 		});
-
-		// Record inventory consumption for raw materials
-		const waxParts = await PartDefinition.find({
-			partNumber: { $in: ['PT-CT-108', 'PT-CT-109', 'PT-CT-110'] }
-		}).lean();
-
-		const partMap = Object.fromEntries(waxParts.map(p => [p.partNumber, p]));
-		const now = new Date();
-		const consumptions = [
-			{ partNumber: 'PT-CT-108', quantity: -(nanodecaneWeight / 100) },
-			{ partNumber: 'PT-CT-109', quantity: -(actualWaxWeight / 453.6) },
-			{ partNumber: 'PT-CT-110', quantity: -(fullTubeCount + (partialTubeMl > 0 ? 1 : 0)) }
-		];
-
-		for (const c of consumptions) {
-			const part = partMap[c.partNumber];
-			if (!part) continue;
-			await InventoryTransaction.create({
-				_id: generateId(),
-				partDefinitionId: part._id,
-				transactionType: 'consumption',
-				quantity: c.quantity,
-				previousQuantity: part.inventoryCount,
-				newQuantity: (part.inventoryCount || 0) + c.quantity,
-				reason: `Wax creation batch ${lotNumber}`,
-				manufacturingStep: 'wax_filling',
-				manufacturingRunId: batchId,
-				performedBy: locals.user.username,
-				performedAt: now,
-				operatorId: locals.user._id,
-				operatorUsername: locals.user.username
-			});
-		}
 
 		return { success: true, batchId };
 	}

@@ -382,50 +382,69 @@ Dev is 157 commits ahead of master. It contains the bulk of the manufacturing pi
 
 ---
 
-## Phase 13: CV Capture Station + LIZA Image Processing (Mar 31, 2026)
+## Phase 13: Device Logging Pipeline (Mar 27–30, 2026)
 
-### Branch: `feature/cv-bims-integration`
+### Overview
+Built the BIMS side of the firmware device logging pipeline. Firmware v74 uploads session logs via Particle Cloud → AWS Lambda middleware → BIMS API. The Lambda parses firmware log text, extracts checkpoint/crash data, and POSTs structured data to BIMS endpoints. BIMS owns all writes (nanoid IDs, immutable middleware, Mongoose validation).
 
-**CV Capture Tab (Phase 1)**
-- Live USB camera capture in browser via `getUserMedia`
-- Camera auto-fallback on NotReadableError (skips built-in, finds USB camera)
-- Multi-capture session (camera stays live between saves)
-- Resume live feed after save (no black screen)
-- Images upload to R2 via Cloudflare Worker proxy
+### New Models (Tier 3 — Immutable)
+- **DeviceLog** (`device_logs`) — firmware session log uploads, 30-day TTL, unique sessionId index
+- **DeviceCrash** (`device_crashes`) — crash reports from checkpoint analysis, NO TTL (kept forever)
+- **WebhookLog** (`webhook_logs`) — Lambda request/response round-trips, 30-day TTL
 
-**R2 Worker Deploy**
-- Deployed `brevitest-r2-upload` Cloudflare Worker
-- Made GET requests public (so browser can render images)
-- Added `R2_WORKER_URL` + `R2_UPLOAD_SECRET` to Vercel env vars
-- Updated `.env.example` with R2 worker variables
+### Modified Model
+- **DeviceEvent** (`device_events`) — removed enum restriction on `eventType` (was `['validate', 'load_assay', 'upload', 'reset', 'error']`, now open String). Added 30-day TTL index on `createdAt`.
 
-**QR Code Scanning (Phase 2)**
-- Browser-side QR detection via `BarcodeDetector` API (500ms scan loop)
-- QR overlay on live feed (green=detected, red=not detected, display only)
-- Barcode lookup API: `GET /api/cv/lookup-barcode?code=...`
-- LIZA filename format: `cartridge_capture_{QRDATA}_{001}.jpg`
-- Keyboard shortcuts: Space (capture/save), Esc (retake)
+### API Endpoints (4 new, all under `/api/device/`)
+- `POST /api/device/logs` — session log ingestion (API key auth)
+- `POST /api/device/crashes` + `GET` — crash ingestion (API key) + dashboard queries (session auth, `device:read`)
+- `POST /api/device/webhook-logs` — webhook log ingestion (API key auth)
+- `POST /api/device/events` — catch-all Particle event archive (API key auth)
 
-**LIZA Image Processing Pipeline (Phase 3)**
-- Python CV worker: `/process-image` endpoint with exact LIZA `process_frame()` replica
-- 5-step pipeline: color correction, denoise, CLAHE, gamma, sharpen
-- Processing mode toggle: Full (LIZA 5-step) vs Raw (no processing)
-- Server-side processing triggered automatically after capture
-- Schema: `CvImage.processedPath`, `CvProject.captureSettings`
+### Shared Utility
+- `src/lib/checkpoint-codes.ts` — firmware checkpoint code → human-readable name mapping, crash category classification, `isInterruptedCheckpoint()` helper
 
-**PRDs Created**
-- `docs/prds/CV-CAPTURE-STATION.md`
-- `docs/prds/CV-IMAGE-PROCESSING.md`
-- `docs/prds/R2-WORKER-UPLOAD-PROXY.md`
+### Dashboard Pages
+- `/spu/[spuId]/diagnostics` — per-device diagnostics (linked from SPU detail page via "View Diagnostics" button, only shows when Particle device is linked)
+- `/admin/device-crashes` — fleet-wide crash dashboard with aggregation stats, multi-filter, paginated table
 
-### MAG-VAL: Magnetometer Validation Admin Override (2026-03-31)
-- **MAG-VAL-01 + MAG-VAL-02:** Admin override for failed magnetometer validation sessions
-- Added `override` subdocument to ValidationSession schema (by, at, reason, originalResult)
-- Added `overrideApproval` form action to `/validation/magnetometer/[sessionId]/+page.server.ts`
-- Requires admin:full permission + bcrypt password re-entry + reason (min 10 chars)
-- Updates both ValidationSession (overallPassed → true) and SPU record (status → overridden)
-- Full AuditLog trail with before/after snapshots
-- Load function updated to expose override state to frontend
-- Companion PRD: `docs/prds/DHR-VALIDATION-DISPLAY.md` (frontend display, separate branch)
-- Files changed: `validation-session.ts` (model), `[sessionId]/+page.server.ts` (action + load)
-- PRD: `docs/prds/MAG-VAL-ADMIN-OVERRIDE.md`
+### Unified Timeline View (primary diagnostics view)
+Stitches all 4 data sources into one chronological feed per device:
+- **Firmware log lines** — extracted from `device_logs.logLines[]`, each line positioned at wall-clock time
+- **Webhook round-trips** — from `webhook_logs`, expandable request/response
+- **Crash reports** — from `device_crashes`, expandable checkpoint sequence trail
+- **Raw events** — from `device_events`, muted styling
+
+### Key Technical Learnings
+
+**Timestamp computation for firmware lines:**
+The firmware `ms` values are millis since boot. The Lambda's `bootTime` field is unreliable — it falls back to `new Date()` (upload time) when it can't parse a boot time from the log text. Using `bootTime + ms` causes firmware lines to appear 20+ minutes in the future.
+
+**Correct formula:** `wallClock = uploadedAt - maxMsInChunk + line.ms`. This anchors the last line of each upload chunk at `uploadedAt` and works backwards. Firmware lines then correctly interleave with webhook/event entries that use server wall-clock time.
+
+**Upload chunks vs sessions:**
+The device uploads every ~60 seconds during idle. Each upload chunk gets metadata headers prepended (`======== UPLOAD METADATA ========`, `Boot #N | Device:...`, `Firmware: vN | Format: vN`). These are NOT separate boot sessions — multiple chunks share the same `bootCount`. The BIMS groups uploads by `bootCount` and only shows a `SESSION START` boundary when `bootCount` changes (actual reboot).
+
+**Metadata line filtering:**
+Upload metadata lines (UPLOAD METADATA, `====` separators, `Boot #N |`, `Firmware: vN |`) are filtered from the timeline and session log views. The middleware already extracts `firmwareVersion` and `bootCount` as top-level document fields, so data isn't lost.
+
+**Clock skew between sources:**
+Firmware `ms` timestamps are from the device's internal clock; webhook/event timestamps are from Lambda/Particle Cloud servers. There can be 1-3 seconds of skew. This doesn't affect debugging — the relative ordering within each source is always correct. The UI shows both the wall-clock time and the firmware `ms` offset for each entry.
+
+### PRD & Reference Docs
+- `docs/logging-middleware-update/BIMS-LOGGING-PRD.md` — full implementation spec
+- `docs/logging-middleware-update/CHANGES.md` — Lambda middleware changes
+- `docs/logging-middleware-update/index.mjs` — updated Lambda handler (reference copy)
+- `docs/logging-middleware-update/db-adapter.mjs` — updated db adapter with BIMS API forwarding (reference copy)
+- `docs/BIMS-UI-REQUIREMENTS.md` — UI data display requirements with sample documents
+- `docs/BIMS-UNIFIED-TIMELINE-SPEC.md` — unified timeline view spec
+
+### Utility Scripts
+- `scripts/cleanup-device-logs.ts` — wipes all logging data for device 219 (0a10aced202194944a0713b4) from all 4 collections. Run via `npx tsx scripts/cleanup-device-logs.ts`.
+
+### Deployment Order (for future reference)
+1. Deploy BIMS API endpoints first (this work)
+2. Set `BIMS_API_URL` and `BIMS_API_KEY` env vars on Lambda
+3. Deploy updated Lambda (`index.mjs` + `db-adapter.mjs`)
+4. Create Particle webhook for `device-log` events
+5. Deploy firmware with session log upload capability
