@@ -1,28 +1,20 @@
-import { getSamples, getCameras } from '$lib/server/cv-api';
-import { cvImageUrl } from '$lib/server/cv-api';
+import { redirect } from '@sveltejs/kit';
+import { connectDB } from '$lib/server/db/connection.js';
+import { CvProject } from '$lib/server/db/models/cv-project.js';
 import type { PageServerLoad } from './$types';
-import type { SampleResponse, CameraInfo } from '$lib/types/cv';
 
-export const load: PageServerLoad = async () => {
-	let samples: SampleResponse[] = [];
-	let cameras: CameraInfo[] = [];
-	let error: string | null = null;
+export const load: PageServerLoad = async ({ locals }) => {
+	if (!locals.user) redirect(302, '/login');
+	await connectDB();
 
-	try {
-		const [samplesResult, camerasResult] = await Promise.allSettled([
-			getSamples(0, 50),
-			getCameras()
-		]);
+	const projects = await CvProject.find({ modelStatus: 'trained' })
+		.select('_id name projectType modelStatus')
+		.sort({ name: 1 })
+		.lean();
 
-		if (samplesResult.status === 'fulfilled') samples = samplesResult.value;
-		if (camerasResult.status === 'fulfilled') cameras = camerasResult.value;
-
-		if (samplesResult.status === 'rejected' && camerasResult.status === 'rejected') {
-			error = 'Unable to connect to CV API.';
-		}
-	} catch (e) {
-		error = e instanceof Error ? e.message : 'Failed to load capture page data';
-	}
-
-	return { samples, cameras, error, cvBaseUrl: cvImageUrl('').replace('/api/v1/images//file', '') };
+	return {
+		projects: JSON.parse(JSON.stringify(projects))
+	};
 };
+
+export const config = { maxDuration: 60 };

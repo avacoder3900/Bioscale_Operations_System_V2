@@ -1,15 +1,20 @@
 import { json } from '@sveltejs/kit';
-import { pollInspection } from '$lib/server/cv-api';
+import { cvFetch } from '$lib/server/cv-api';
 import type { RequestHandler } from './$types';
+import type { InspectionResponse } from '$lib/types/cv';
 
 export const GET: RequestHandler = async ({ params, locals }) => {
-	if (!locals.user) return json({ error: 'Unauthorized' }, { status: 401 });
+	if (!locals.user) {
+		return json({ error: 'Unauthorized' }, { status: 401 });
+	}
 
 	try {
-		const result = await pollInspection(params.id);
-		return json(result);
-	} catch (e) {
-		const msg = e instanceof Error ? e.message : 'Poll failed';
-		return json({ error: msg }, { status: 500 });
+		const inspection = await cvFetch<InspectionResponse>(
+			`/api/inspections/${params.id}/poll`
+		);
+		return json(inspection);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : 'Poll failed';
+		return json({ error: message }, { status: 502 });
 	}
 };

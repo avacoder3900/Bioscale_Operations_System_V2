@@ -43,8 +43,8 @@ export interface InspectionResponse {
 	sample_id: string;
 	image_id: string;
 	inspection_type: string;
-	status: InspectionStatus;
-	result: InspectionResult;
+	status: 'pending' | 'processing' | 'complete' | 'failed';
+	result: 'pass' | 'fail' | null;
 	confidence_score: number | null;
 	defects: Defect[];
 	model_version: string;
@@ -74,18 +74,6 @@ export interface CameraInfo {
 	height: number;
 }
 
-export interface DashboardStats {
-	total_inspections: number;
-	pass_count: number;
-	fail_count: number;
-	pending_count: number;
-	pass_rate: number;
-	recent_inspections: InspectionResponse[];
-}
-
-export type InspectionStatus = 'pending' | 'processing' | 'complete' | 'failed';
-export type InspectionResult = 'pass' | 'fail' | null;
-
 export const CARTRIDGE_PHASES = [
 	'backing',
 	'wax_filled',
@@ -95,7 +83,7 @@ export const CARTRIDGE_PHASES = [
 	'oven_cured',
 	'qaqc_released',
 	'shipped',
-	'testing',
+	'underway',
 	'completed'
 ] as const;
 

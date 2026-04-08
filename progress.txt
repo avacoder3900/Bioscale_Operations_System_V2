@@ -382,7 +382,57 @@ Dev is 157 commits ahead of master. It contains the bulk of the manufacturing pi
 
 ---
 
-## Phase 13: Device Logging Pipeline (Mar 27–30, 2026)
+## Phase 13: CV Capture Station + LIZA Image Processing (Mar 31, 2026)
+
+### Branch: `feature/cv-bims-integration`
+
+**CV Capture Tab (Phase 1)**
+- Live USB camera capture in browser via `getUserMedia`
+- Camera auto-fallback on NotReadableError (skips built-in, finds USB camera)
+- Multi-capture session (camera stays live between saves)
+- Resume live feed after save (no black screen)
+- Images upload to R2 via Cloudflare Worker proxy
+
+**R2 Worker Deploy**
+- Deployed `brevitest-r2-upload` Cloudflare Worker
+- Made GET requests public (so browser can render images)
+- Added `R2_WORKER_URL` + `R2_UPLOAD_SECRET` to Vercel env vars
+- Updated `.env.example` with R2 worker variables
+
+**QR Code Scanning (Phase 2)**
+- Browser-side QR detection via `BarcodeDetector` API (500ms scan loop)
+- QR overlay on live feed (green=detected, red=not detected, display only)
+- Barcode lookup API: `GET /api/cv/lookup-barcode?code=...`
+- LIZA filename format: `cartridge_capture_{QRDATA}_{001}.jpg`
+- Keyboard shortcuts: Space (capture/save), Esc (retake)
+
+**LIZA Image Processing Pipeline (Phase 3)**
+- Python CV worker: `/process-image` endpoint with exact LIZA `process_frame()` replica
+- 5-step pipeline: color correction, denoise, CLAHE, gamma, sharpen
+- Processing mode toggle: Full (LIZA 5-step) vs Raw (no processing)
+- Server-side processing triggered automatically after capture
+- Schema: `CvImage.processedPath`, `CvProject.captureSettings`
+
+**PRDs Created**
+- `docs/prds/CV-CAPTURE-STATION.md`
+- `docs/prds/CV-IMAGE-PROCESSING.md`
+- `docs/prds/R2-WORKER-UPLOAD-PROXY.md`
+
+### MAG-VAL: Magnetometer Validation Admin Override (2026-03-31)
+- **MAG-VAL-01 + MAG-VAL-02:** Admin override for failed magnetometer validation sessions
+- Added `override` subdocument to ValidationSession schema (by, at, reason, originalResult)
+- Added `overrideApproval` form action to `/validation/magnetometer/[sessionId]/+page.server.ts`
+- Requires admin:full permission + bcrypt password re-entry + reason (min 10 chars)
+- Updates both ValidationSession (overallPassed → true) and SPU record (status → overridden)
+- Full AuditLog trail with before/after snapshots
+- Load function updated to expose override state to frontend
+- Companion PRD: `docs/prds/DHR-VALIDATION-DISPLAY.md` (frontend display, separate branch)
+- Files changed: `validation-session.ts` (model), `[sessionId]/+page.server.ts` (action + load)
+- PRD: `docs/prds/MAG-VAL-ADMIN-OVERRIDE.md`
+
+---
+
+## Phase 13b: Device Logging Pipeline (Mar 27–30, 2026)
 
 ### Overview
 Built the BIMS side of the firmware device logging pipeline. Firmware v74 uploads session logs via Particle Cloud → AWS Lambda middleware → BIMS API. The Lambda parses firmware log text, extracts checkpoint/crash data, and POSTs structured data to BIMS endpoints. BIMS owns all writes (nanoid IDs, immutable middleware, Mongoose validation).

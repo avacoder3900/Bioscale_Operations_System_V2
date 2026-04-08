@@ -1,38 +1,47 @@
-import { getAllInspections, getSamples } from '$lib/server/cv-api';
-import { cvImageUrl } from '$lib/server/cv-api';
+import { redirect } from '@sveltejs/kit';
+import { connectDB } from '$lib/server/db/connection.js';
+import { CvInspection } from '$lib/server/db/models/cv-inspection.js';
+import { CvProject } from '$lib/server/db/models/cv-project.js';
 import type { PageServerLoad } from './$types';
-import type { InspectionResponse, SampleResponse } from '$lib/types/cv';
 
-export const load: PageServerLoad = async ({ url }) => {
-	const skip = parseInt(url.searchParams.get('skip') || '0', 10);
-	const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+export const load: PageServerLoad = async ({ url, locals }) => {
+	if (!locals.user) redirect(302, '/login');
+	await connectDB();
 
-	let inspections: InspectionResponse[] = [];
-	let samples: SampleResponse[] = [];
-	let error: string | null = null;
+	const filterResult = url.searchParams.get('result') || '';
+	const filterProject = url.searchParams.get('projectId') || '';
+	const filterCartridge = url.searchParams.get('cartridge') || '';
+	const pageNum = parseInt(url.searchParams.get('page') || '1');
+	const pageSize = 20;
 
-	try {
-		const [inspResult, samplesResult] = await Promise.allSettled([
-			getAllInspections({ skip, limit }),
-			getSamples(0, 100)
-		]);
+	const filter: Record<string, unknown> = {};
+	if (filterResult) filter.result = filterResult;
+	if (filterProject) filter.projectId = filterProject;
+	if (filterCartridge) filter.cartridgeRecordId = { $regex: filterCartridge, $options: 'i' };
 
-		if (inspResult.status === 'fulfilled') inspections = inspResult.value;
-		if (samplesResult.status === 'fulfilled') samples = samplesResult.value;
+	const [inspections, total, projects] = await Promise.all([
+		CvInspection.find(filter)
+			.sort({ createdAt: -1 })
+			.skip((pageNum - 1) * pageSize)
+			.limit(pageSize)
+			.lean(),
+		CvInspection.countDocuments(filter),
+		CvProject.find().select('_id name').sort({ name: 1 }).lean()
+	]);
 
-		if (inspResult.status === 'rejected') {
-			error = 'Unable to load inspections from CV API.';
-		}
-	} catch (e) {
-		error = e instanceof Error ? e.message : 'Failed to load history';
+	// Build project name lookup
+	const projectMap: Record<string, string> = {};
+	for (const p of projects as any[]) {
+		projectMap[p._id] = p.name;
 	}
 
 	return {
-		inspections,
-		samples,
-		error,
-		skip,
-		limit,
-		cvBaseUrl: cvImageUrl('').replace('/api/v1/images//file', '')
+		inspections: JSON.parse(JSON.stringify(inspections)),
+		projects: JSON.parse(JSON.stringify(projects)),
+		projectMap,
+		filters: { result: filterResult, projectId: filterProject, cartridge: filterCartridge },
+		pagination: { page: pageNum, totalPages: Math.max(1, Math.ceil(total / pageSize)), total }
 	};
 };
+
+export const config = { maxDuration: 60 };

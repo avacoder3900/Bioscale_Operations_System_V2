@@ -1,51 +1,53 @@
-import { error } from '@sveltejs/kit';
-import { connectDB, CartridgeRecord } from '$lib/server/db';
-import { getImages, getInspectionsByCartridge, cvImageUrl } from '$lib/server/cv-api';
+import { redirect } from '@sveltejs/kit';
+import { connectDB } from '$lib/server/db/connection.js';
+import { CvInspection } from '$lib/server/db/models/cv-inspection.js';
+import { CvImage } from '$lib/server/db/models/cv-image.js';
+import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
 import type { PageServerLoad } from './$types';
-import type { ImageResponse, InspectionResponse } from '$lib/types/cv';
 
-export const load: PageServerLoad = async ({ params }) => {
-	const cartridgeId = params.id;
-
+export const load: PageServerLoad = async ({ params, locals }) => {
+	if (!locals.user) redirect(302, '/login');
 	await connectDB();
 
-	const cartridge = await CartridgeRecord.findById(cartridgeId).lean();
-	if (!cartridge) {
-		throw error(404, 'Cartridge not found');
-	}
+	const cartridgeId = params.id;
 
-	let images: ImageResponse[] = [];
-	let inspections: InspectionResponse[] = [];
-	let cvError: string | null = null;
-
+	// Load cartridge record
+	let cartridge: any = null;
 	try {
-		const [imagesResult, inspectionsResult] = await Promise.allSettled([
-			getImages({ cartridge_id: cartridgeId }),
-			getInspectionsByCartridge(cartridgeId)
-		]);
+		const doc = await CartridgeRecord.findById(cartridgeId).lean();
+		if (doc) cartridge = JSON.parse(JSON.stringify(doc));
+	} catch { /* may not exist */ }
 
-		if (imagesResult.status === 'fulfilled') images = imagesResult.value;
-		if (inspectionsResult.status === 'fulfilled') inspections = inspectionsResult.value;
+	// Load inspections for this cartridge
+	const inspections = await CvInspection.find({ cartridgeRecordId: cartridgeId })
+		.sort({ createdAt: -1 })
+		.lean();
 
-		if (imagesResult.status === 'rejected' && inspectionsResult.status === 'rejected') {
-			cvError = 'Unable to connect to CV API.';
-		}
-	} catch (e) {
-		cvError = e instanceof Error ? e.message : 'Failed to load CV data';
+	// Load related images
+	const imageIds = [...new Set((inspections as any[]).map(i => i.imageId).filter(Boolean))];
+	const images = imageIds.length > 0
+		? await CvImage.find({ _id: { $in: imageIds } }).lean()
+		: [];
+	const imageMap: Record<string, any> = {};
+	for (const img of images as any[]) {
+		imageMap[img._id] = img;
 	}
 
-	const cartridgeData = JSON.parse(JSON.stringify(cartridge));
+	// Group inspections by phase
+	const phases = [...new Set((inspections as any[]).map(i => i.phase || 'untagged'))];
+
+	const passCount = (inspections as any[]).filter(i => i.result === 'pass').length;
+	const failCount = (inspections as any[]).filter(i => i.result === 'fail').length;
 
 	return {
-		cartridge: {
-			_id: cartridgeData._id,
-			currentPhase: cartridgeData.currentPhase,
-			createdAt: cartridgeData.createdAt,
-			updatedAt: cartridgeData.updatedAt
-		},
-		images,
-		inspections,
-		cvError,
-		cvBaseUrl: cvImageUrl('').replace('/api/v1/images//file', '')
+		cartridgeId,
+		cartridge,
+		inspections: JSON.parse(JSON.stringify(inspections)),
+		imageMap: JSON.parse(JSON.stringify(imageMap)),
+		phases,
+		passCount,
+		failCount
 	};
 };
+
+export const config = { maxDuration: 60 };

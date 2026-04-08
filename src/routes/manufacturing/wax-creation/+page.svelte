@@ -1,10 +1,25 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 
+	interface WaxPart {
+		_id: string;
+		partNumber: string;
+		name: string;
+		unitCost: string;
+		unitOfMeasure: string;
+		supplier: string;
+	}
 	interface Props {
-		data: { lotNumber: string };
+		data: { lotNumber: string; waxParts: WaxPart[] };
 	}
 	let { data }: Props = $props();
+
+	const getPart = (pn: string) => data.waxParts.find(p => p.partNumber === pn);
+	const nonadecane = $derived(getPart('PT-CT-108'));
+	const microWax = $derived(getPart('PT-CT-109'));
+	const tubes15ml = $derived(getPart('PT-CT-110'));
+	const tubesUsed = $derived(fullTubeCount ? fullTubeCount + (partialTubeMl && partialTubeMl > 0 ? 1 : 0) : 0);
+
 
 	let currentStep = $state(1);
 	const totalSteps = 6;
@@ -121,6 +136,31 @@
 	<!-- Raw Materials Reference -->
 	{#if !completed}
 		<div class="mb-4 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+<<<<<<< HEAD
+			<h3 class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Raw Materials (from BIMS)</h3>
+			<div class="mt-2 grid grid-cols-3 gap-3 text-sm">
+				{#if nonadecane}
+					<div>
+						<span class="font-mono text-xs text-[var(--color-tron-cyan)]">{nonadecane.partNumber}</span>
+						<span class="block text-[var(--color-tron-text)]">{nonadecane.name}</span>
+						<span class="block text-xs text-[var(--color-tron-text-secondary)]">{nonadecane.supplier} — ${nonadecane.unitCost}/{nonadecane.unitOfMeasure}</span>
+					</div>
+				{/if}
+				{#if microWax}
+					<div>
+						<span class="font-mono text-xs text-[var(--color-tron-cyan)]">{microWax.partNumber}</span>
+						<span class="block text-[var(--color-tron-text)]">{microWax.name}</span>
+						<span class="block text-xs text-[var(--color-tron-text-secondary)]">{microWax.supplier} — ${microWax.unitCost}/{microWax.unitOfMeasure}</span>
+					</div>
+				{/if}
+				{#if tubes15ml}
+					<div>
+						<span class="font-mono text-xs text-[var(--color-tron-cyan)]">{tubes15ml.partNumber}</span>
+						<span class="block text-[var(--color-tron-text)]">{tubes15ml.name}</span>
+						<span class="block text-xs text-[var(--color-tron-text-secondary)]">{tubes15ml.supplier} — ${tubes15ml.unitCost}/{tubes15ml.unitOfMeasure}</span>
+					</div>
+				{/if}
+=======
 			<h3 class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Raw Materials</h3>
 			<div class="mt-2 grid grid-cols-2 gap-3 text-sm">
 				<div>
@@ -131,6 +171,7 @@
 					<span class="text-[var(--color-tron-text)]">Soft Microcrystalline Wax</span>
 					<span class="block text-xs text-[var(--color-tron-text-secondary)]">1 lb — Carmel ($17.17)</span>
 				</div>
+>>>>>>> f49aa992c5758aaf7834d21ee5899a931fdb8cd8
 			</div>
 		</div>
 	{/if}
@@ -411,9 +452,40 @@
 				</div>
 			</div>
 
+<<<<<<< HEAD
+			<!-- Materials Consumed -->
+			<div class="mt-4 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] p-3">
+				<h3 class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Materials Consumed</h3>
+				<div class="mt-2 space-y-1 text-sm">
+					{#if nonadecane}
+						<div class="flex justify-between">
+							<span class="text-[var(--color-tron-text)]"><span class="font-mono text-xs text-[var(--color-tron-cyan)]">{nonadecane.partNumber}</span> {nonadecane.name}</span>
+							<span class="text-[var(--color-tron-text-secondary)]">{nanodecaneWeight}g ({(nanodecaneWeight! / 100).toFixed(2)} bottles)</span>
+						</div>
+					{/if}
+					{#if microWax}
+						<div class="flex justify-between">
+							<span class="text-[var(--color-tron-text)]"><span class="font-mono text-xs text-[var(--color-tron-cyan)]">{microWax.partNumber}</span> {microWax.name}</span>
+							<span class="text-[var(--color-tron-text-secondary)]">{actualWaxWeight}g ({(actualWaxWeight! / 453.6).toFixed(4)} bags)</span>
+						</div>
+					{/if}
+					{#if tubes15ml}
+						<div class="flex justify-between">
+							<span class="text-[var(--color-tron-text)]"><span class="font-mono text-xs text-[var(--color-tron-cyan)]">{tubes15ml.partNumber}</span> {tubes15ml.name}</span>
+							<span class="text-[var(--color-tron-text-secondary)]">{tubesUsed} tubes</span>
+						</div>
+					{/if}
+				</div>
+			</div>
+
+			{#if saved}
+				<div class="mt-4 rounded border border-green-500/30 bg-green-500/10 p-3 text-sm font-semibold text-green-400">
+					Batch saved — inventory updated!
+=======
 			{#if saved}
 				<div class="mt-4 rounded border border-green-500/30 bg-green-500/10 p-3 text-sm font-semibold text-green-400">
 					Batch saved successfully!
+>>>>>>> f49aa992c5758aaf7834d21ee5899a931fdb8cd8
 				</div>
 			{:else}
 			<form method="POST" action="?/save" use:enhance={() => {

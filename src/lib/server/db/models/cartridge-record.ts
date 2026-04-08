@@ -116,7 +116,6 @@ const cartridgeRecordSchema = new Schema({
 	photos: [{
 		_id: false,
 		imageId: String,
-		r2Key: String,
 		phase: String,
 		capturedAt: Date
 	}],
@@ -137,7 +136,6 @@ cartridgeRecordSchema.index({ status: 1, 'reagentFilling.expirationDate': 1 });
 cartridgeRecordSchema.index({ 'testExecution.spu._id': 1 });
 cartridgeRecordSchema.index({ 'sample.subjectId': 1 });
 cartridgeRecordSchema.index({ 'testResult.status': 1 });
-cartridgeRecordSchema.index({ 'photos.imageId': 1 });
 
 applySacredMiddleware(cartridgeRecordSchema);
 
