@@ -43,7 +43,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			inventory: {
 				rawCartridges: { name: 'Raw Cartridges', quantity: 0, unit: 'pcs' },
 				barcodeLabels: { name: 'Barcode Labels', quantity: 0, unit: 'pcs' },
-				individualBacks: { name: 'Laser Cut Backs', quantity: 0, unit: 'pcs' }
+				individualBacks: { name: 'Laser Cut Backs', quantity: 0, unit: 'pcs' },
+				cutThermosealStrips: { name: 'Cut Thermoseal Strips', quantity: 0, unit: 'pcs' }
 			},
 			error: 'No backing process configuration found'
 		};
@@ -91,7 +92,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		inventory: {
 			rawCartridges: { name: 'Raw Cartridges', quantity: findQty(/raw.?cartridge|cartridge.?body/i), unit: 'pcs' },
 			barcodeLabels: { name: 'Barcode Labels', quantity: findQty(/barcode.?label|label/i), unit: 'pcs' },
-			individualBacks: { name: 'Laser Cut Backs', quantity: findQty(/laser.?cut|cut.?sub|substrate/i), unit: 'pcs' }
+			individualBacks: { name: 'Laser Cut Backs', quantity: findQty(/laser.?cut|cut.?sub|substrate/i), unit: 'pcs' },
+			cutThermosealStrips: { name: 'Cut Thermoseal Strips', quantity: findQty(/thermoseal|thermo.?seal/i), unit: 'pcs' }
 		}
 	};
 };
