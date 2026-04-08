@@ -136,7 +136,6 @@
 	<!-- Raw Materials Reference -->
 	{#if !completed}
 		<div class="mb-4 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
-<<<<<<< HEAD
 			<h3 class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Raw Materials (from BIMS)</h3>
 			<div class="mt-2 grid grid-cols-3 gap-3 text-sm">
 				{#if nonadecane}
@@ -160,18 +159,6 @@
 						<span class="block text-xs text-[var(--color-tron-text-secondary)]">{tubes15ml.supplier} — ${tubes15ml.unitCost}/{tubes15ml.unitOfMeasure}</span>
 					</div>
 				{/if}
-=======
-			<h3 class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Raw Materials</h3>
-			<div class="mt-2 grid grid-cols-2 gap-3 text-sm">
-				<div>
-					<span class="text-[var(--color-tron-text)]">n-Decane (nanodecane)</span>
-					<span class="block text-xs text-[var(--color-tron-text-secondary)]">100g bottle — Sigma-Aldrich ($113)</span>
-				</div>
-				<div>
-					<span class="text-[var(--color-tron-text)]">Soft Microcrystalline Wax</span>
-					<span class="block text-xs text-[var(--color-tron-text-secondary)]">1 lb — Carmel ($17.17)</span>
-				</div>
->>>>>>> f49aa992c5758aaf7834d21ee5899a931fdb8cd8
 			</div>
 		</div>
 	{/if}
@@ -452,7 +439,6 @@
 				</div>
 			</div>
 
-<<<<<<< HEAD
 			<!-- Materials Consumed -->
 			<div class="mt-4 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] p-3">
 				<h3 class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Materials Consumed</h3>
@@ -481,11 +467,6 @@
 			{#if saved}
 				<div class="mt-4 rounded border border-green-500/30 bg-green-500/10 p-3 text-sm font-semibold text-green-400">
 					Batch saved — inventory updated!
-=======
-			{#if saved}
-				<div class="mt-4 rounded border border-green-500/30 bg-green-500/10 p-3 text-sm font-semibold text-green-400">
-					Batch saved successfully!
->>>>>>> f49aa992c5758aaf7834d21ee5899a931fdb8cd8
 				</div>
 			{:else}
 			<form method="POST" action="?/save" use:enhance={() => {
