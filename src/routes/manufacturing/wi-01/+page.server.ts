@@ -7,7 +7,7 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, LotRecord, ProcessConfiguration, CartridgeRecord,
-	ManufacturingMaterial, ManufacturingMaterialTransaction,
+	ManufacturingMaterialTransaction,
 	PartDefinition, AuditLog, generateId
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
@@ -26,11 +26,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	await connectDB();
 
-	const [config, recentLots, materials, parts] = await Promise.all([
+	const [config, recentLots, parts] = await Promise.all([
 		ProcessConfiguration.findOne({ processType: PROCESS_TYPE }).lean(),
 		LotRecord.find({ 'processConfig.processType': PROCESS_TYPE })
 			.sort({ createdAt: -1 }).limit(20).lean(),
-		ManufacturingMaterial.find().lean(),
 		PartDefinition.find({ bomType: 'cartridge', isActive: true }).lean()
 	]);
 
@@ -51,14 +50,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 	}
 
 	const c = config as any;
-	const matMap = new Map((materials as any[]).map((m: any) => [m.name?.toLowerCase(), m]));
-	const partMap = new Map((parts as any[]).map((p: any) => [p.name?.toLowerCase(), p]));
+	const partByPN = new Map((parts as any[]).map((p: any) => [p.partNumber, p]));
 
-	const findQty = (regex: RegExp) => {
-		for (const [k, v] of matMap) if (regex.test(k)) return (v as any).currentQuantity ?? 0;
-		for (const [k, v] of partMap) if (regex.test(k)) return (v as any).inventoryCount ?? 0;
-		return 0;
-	};
+	const partQty = (pn: string) => (partByPN.get(pn) as any)?.inventoryCount ?? 0;
 
 	return {
 		config: {
@@ -90,10 +84,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 			finishTime: l.finishTime?.toISOString?.() ?? null
 		})),
 		inventory: {
-			rawCartridges: { name: 'Raw Cartridges', quantity: findQty(/raw.?cartridge|cartridge.?body/i), unit: 'pcs' },
-			barcodeLabels: { name: 'Barcode Labels', quantity: findQty(/barcode.?label|label/i), unit: 'pcs' },
-			individualBacks: { name: 'Laser Cut Backs', quantity: findQty(/laser.?cut|cut.?sub|substrate/i), unit: 'pcs' },
-			cutThermosealStrips: { name: 'Cut Thermoseal Strips', quantity: findQty(/thermoseal|thermo.?seal/i), unit: 'pcs' }
+			rawCartridges: { name: 'Raw Cartridges', quantity: partQty('PT-CT-104'), unit: 'pcs' },
+			barcodeLabels: { name: 'Barcode Labels', quantity: partQty('PT-CT-106'), unit: 'pcs' },
+			individualBacks: { name: 'Laser Cut Backs', quantity: partQty('PT-CT-112'), unit: 'pcs' },
+			cutThermosealStrips: { name: 'Cut Thermoseal Strips', quantity: partQty('PT-CT-111'), unit: 'pcs' }
 		}
 	};
 };
