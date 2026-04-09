@@ -47,6 +47,10 @@
 	let lotBarcode3 = $state('');
 	let lotId = $state('');
 	let actualCount = $state(1);
+	let scrapCount = $state(0);
+	let scrapReason = $state('');
+	let bucketBarcode = $state('');
+	let sessionNotes = $state('');
 	let handoffOpen = $state(false);
 	let handoffPrompt = $state('');
 
@@ -86,6 +90,10 @@
 		lotBarcode2 = '';
 		lotBarcode3 = '';
 		actualCount = 1;
+		scrapCount = 0;
+		scrapReason = '';
+		bucketBarcode = '';
+		sessionNotes = '';
 		handoffOpen = false;
 		handoffPrompt = '';
 	}
@@ -306,6 +314,16 @@
 					<p class="text-3xl font-bold text-[var(--color-tron-cyan)]">{plannedQty} <span class="text-base font-normal text-[var(--color-tron-text-secondary)]">cartridges planned</span></p>
 					<p class="text-xs text-[var(--color-tron-text-secondary)]">Lot: {lotId}</p>
 
+					<div class="mt-4 text-left">
+						<label class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Notes</label>
+						<textarea
+							bind:value={sessionNotes}
+							rows="3"
+							placeholder="Optional session notes..."
+							class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-sm text-[var(--color-tron-text)] placeholder:text-[var(--color-tron-text-secondary)]/50"
+						></textarea>
+					</div>
+
 					<button
 						type="button"
 						onclick={() => { step = 'confirm'; actualCount = plannedQty; }}
@@ -319,20 +337,68 @@
 				<!-- STEP 5: Confirm count & withdraw -->
 				<form method="POST" action="?/confirmComplete" use:enhance>
 					<input type="hidden" name="lotId" value={lotId} />
-					<div class="space-y-4 text-center">
-						<p class="text-lg font-semibold text-[var(--color-tron-text)]">How many cartridges did you make?</p>
-						<input
-							type="number"
-							name="actualCount"
-							bind:value={actualCount}
-							min="0"
-							max={data.config.maxBatchSize}
-							class="mx-auto block w-32 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-3 text-center text-2xl font-bold text-[var(--color-tron-text)]"
-						/>
-						<p class="text-xs text-[var(--color-tron-text-secondary)]">Planned: {plannedQty} — Adjust if different</p>
+					<input type="hidden" name="notes" value={sessionNotes} />
+					<div class="space-y-5">
+						<!-- Good cartridges -->
+						<div>
+							<p class="text-lg font-semibold text-[var(--color-tron-text)]">How many GOOD cartridges?</p>
+							<input
+								type="number"
+								name="actualCount"
+								bind:value={actualCount}
+								min="0"
+								max={data.config.maxBatchSize}
+								class="mt-2 mx-auto block w-32 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-3 text-center text-2xl font-bold text-[var(--color-tron-text)]"
+							/>
+							<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)] text-center">Planned: {plannedQty} — Adjust if different</p>
+						</div>
+
+						<!-- Scrapped cartridges -->
+						<div>
+							<p class="text-lg font-semibold text-[var(--color-tron-text)]">How many SCRAPPED?</p>
+							<input
+								type="number"
+								name="scrapCount"
+								bind:value={scrapCount}
+								min="0"
+								max={data.config.maxBatchSize}
+								class="mt-2 mx-auto block w-32 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-3 text-center text-2xl font-bold text-[var(--color-tron-text)]"
+							/>
+							{#if scrapCount > 0}
+								<div class="mt-2">
+									<label class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Scrap Reason (required)</label>
+									<input
+										type="text"
+										name="scrapReason"
+										bind:value={scrapReason}
+										required
+										placeholder="Why were these scrapped?"
+										class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-sm text-[var(--color-tron-text)] placeholder:text-[var(--color-tron-text-secondary)]/50"
+									/>
+								</div>
+							{/if}
+						</div>
+
+						<!-- Total consumed -->
+						<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3 text-center">
+							<p class="text-xs text-[var(--color-tron-text-secondary)]">Total consumed</p>
+							<p class="text-2xl font-bold text-[var(--color-tron-text)]">{actualCount + scrapCount}</p>
+						</div>
+
+						<!-- Bucket assignment -->
+						<div>
+							<p class="text-lg font-semibold text-[var(--color-tron-text)]">Bucket Assignment</p>
+							<input
+								type="text"
+								name="bucketBarcode"
+								bind:value={bucketBarcode}
+								placeholder="Scan bucket barcode"
+								class="mt-2 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)] placeholder:text-[var(--color-tron-text-secondary)]/50"
+							/>
+						</div>
 
 						{#if form?.confirmComplete && (form.confirmComplete as any).error}
-							<p class="text-sm text-[var(--color-tron-error)]">{(form.confirmComplete as any).error}</p>
+							<p class="text-sm text-[var(--color-tron-error)] text-center">{(form.confirmComplete as any).error}</p>
 						{/if}
 
 						<div class="flex justify-center gap-3 pt-2">
