@@ -191,9 +191,16 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const lotId = data.get('lotId') as string;
 		const actualCount = Number(data.get('actualCount') || 0);
+		const scrapCount = Number(data.get('scrapCount') || 0);
+		const scrapReason = (data.get('scrapReason') as string)?.trim() || '';
+		const bucketBarcode = (data.get('bucketBarcode') as string)?.trim() || '';
+		const notes = (data.get('notes') as string)?.trim() || '';
 
 		if (!lotId) return fail(400, { confirmComplete: { error: 'Lot ID required' } });
 		if (actualCount <= 0) return fail(400, { confirmComplete: { error: 'Count must be greater than 0' } });
+		if (scrapCount > 0 && !scrapReason) {
+			return fail(400, { confirmComplete: { error: 'Scrap reason is required when scrap count > 0' } });
+		}
 
 		const lot = await LotRecord.findById(lotId).lean() as any;
 		if (!lot) return fail(404, { confirmComplete: { error: 'Lot not found' } });
@@ -201,8 +208,9 @@ export const actions: Actions = {
 		const now = new Date();
 		const startTime = lot.startTime ?? now;
 		const cycleTime = Math.round((now.getTime() - startTime.getTime()) / 1000);
+		const totalConsumed = actualCount + scrapCount;
 
-		// Create CartridgeRecords
+		// Create CartridgeRecords (only for good units)
 		const cartridgeIds: string[] = [];
 		const cartridgeDocs = [];
 		for (let i = 0; i < actualCount; i++) {
@@ -232,23 +240,43 @@ export const actions: Actions = {
 				finishTime: now,
 				cycleTime,
 				quantityProduced: actualCount,
-				cartridgeIds
+				cartridgeIds,
+				scrapCount,
+				scrapReason: scrapReason || undefined,
+				bucketBarcode: bucketBarcode || undefined,
+				notes: notes || undefined
 			}
 		});
 
-		// Withdraw all 3 materials (1:1 ratio per cartridge)
+		// Withdraw all 3 materials — totalConsumed = good + scrapped
 		for (const cp of CONSUMED_PARTS) {
 			const partId = await resolvePartId(cp.partNumber);
 			await recordTransaction({
 				transactionType: 'consumption',
 				partDefinitionId: partId ?? undefined,
-				quantity: actualCount,
+				quantity: totalConsumed,
 				manufacturingStep: 'backing',
 				manufacturingRunId: lotId,
 				operatorId: locals.user._id,
 				operatorUsername: locals.user.username,
-				notes: `WI-01 Backing lot ${lotId}: ${actualCount}x ${cp.name} consumed`
+				notes: `WI-01 Backing lot ${lotId}: ${totalConsumed}x ${cp.name} consumed (${actualCount} good + ${scrapCount} scrapped)`
 			});
+
+			// Record separate scrap transaction if there were scrapped units
+			if (scrapCount > 0) {
+				await recordTransaction({
+					transactionType: 'scrap',
+					partDefinitionId: partId ?? undefined,
+					quantity: scrapCount,
+					manufacturingStep: 'backing',
+					manufacturingRunId: lotId,
+					operatorId: locals.user._id,
+					operatorUsername: locals.user.username,
+					scrapReason,
+					scrapCategory: 'other',
+					notes: `WI-01 Backing lot ${lotId}: ${scrapCount}x ${cp.name} scrapped — ${scrapReason}`
+				});
+			}
 		}
 
 		await AuditLog.create({
@@ -258,7 +286,15 @@ export const actions: Actions = {
 			action: 'UPDATE',
 			changedBy: locals.user?.username,
 			changedAt: new Date(),
-			newData: { actualCount, materialsConsumed: CONSUMED_PARTS.map(p => p.partNumber) }
+			newData: {
+				actualCount,
+				scrapCount,
+				scrapReason: scrapReason || undefined,
+				bucketBarcode: bucketBarcode || undefined,
+				notes: notes || undefined,
+				materialsConsumed: CONSUMED_PARTS.map(p => p.partNumber),
+				totalConsumed
+			}
 		});
 
 		const config = await ProcessConfiguration.findOne({ processType: PROCESS_TYPE }).lean() as any;
@@ -268,6 +304,40 @@ export const actions: Actions = {
 				handoffPrompt: config?.handoffPrompt ?? 'Backed cartridges ready for wax filling.'
 			}
 		};
+	},
+
+	/** Append a timestamped note to an in-progress lot */
+	addSessionNote: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const lotId = data.get('lotId') as string;
+		const note = (data.get('note') as string)?.trim() || '';
+
+		if (!lotId) return fail(400, { addSessionNote: { error: 'Lot ID required' } });
+		if (!note) return fail(400, { addSessionNote: { error: 'Note text is required' } });
+
+		const lot = await LotRecord.findById(lotId).lean() as any;
+		if (!lot) return fail(404, { addSessionNote: { error: 'Lot not found' } });
+
+		const timestamp = new Date().toISOString();
+		const entry = `[${timestamp}] (${locals.user.username}) ${note}`;
+		const updatedNotes = lot.notes ? `${lot.notes}\n${entry}` : entry;
+
+		await LotRecord.findByIdAndUpdate(lotId, { $set: { notes: updatedNotes } });
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'lot_records',
+			recordId: lotId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: new Date(),
+			newData: { noteAdded: entry }
+		});
+
+		return { addSessionNote: { success: true, notes: updatedNotes } };
 	},
 
 	/** Resume an in-progress lot */
