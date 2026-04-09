@@ -36,12 +36,14 @@ export const actions: Actions = {
 
 		for (let i = 0; i < quantity; i++) {
 			const barcode = await generateBarcode(prefix, 'cartridge');
-			// Small QR for 0.75" square — 64px is enough for scanning
-			const qr = await QRCode.toDataURL(barcode, {
+			// Use SVG string — no canvas dependency needed on serverless
+			const svgString = await QRCode.toString(barcode, {
+				type: 'svg',
 				width: 96,
 				margin: 0,
 				errorCorrectionLevel: 'M'
 			});
+			const qr = `data:image/svg+xml;base64,${Buffer.from(svgString).toString('base64')}`;
 			labels.push({ barcode, qr });
 		}
 
