@@ -33,6 +33,8 @@ export { WaxFillingRun } from './wax-filling-run.js';
 export { ProcessConfiguration } from './process-configuration.js';
 export { ManufacturingSettings } from './manufacturing-settings.js';
 export { LaserCutBatch } from './laser-cut-batch.js';
+export { BarcodeInventory } from './barcode-inventory.js';
+export { BarcodeSheetBatch } from './barcode-sheet-batch.js';
 export { ManufacturingMaterial } from './manufacturing-material.js';
 export { Equipment } from './equipment.js';
 export { EquipmentLocation } from './equipment-location.js';
