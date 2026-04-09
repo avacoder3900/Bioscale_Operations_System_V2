@@ -17,7 +17,7 @@
 	}
 
 	let { data, form }: Props = $props();
-	let quantity = $state(30);
+	let quantity = $state(80);
 	let prefix = $state('CART');
 	let generating = $state(false);
 
@@ -28,18 +28,20 @@
 
 <svelte:head>
 	<style>
-		/* ── Avery 94102: 30 labels/sheet, 3 cols × 10 rows ──
-		   Label: 2.625" wide × 1" tall
-		   Sheet: 8.5" × 11" with 0.5" top margin, 0.1875" side margins
-		   Column gap: 0.125" between columns
+		/* ── Avery 5167: 80 labels/sheet, 4 cols × 20 rows ──
+		   Label: 1.75" wide × 0.5" tall
+		   Sheet: 8.5" × 11"
+		   Top margin: 0.5"
+		   Side margin: 0.3125" (5/16")
+		   Horizontal gap: 0.3125" between columns
+		   No vertical gap between rows
 		*/
 		@media print {
-			/* Hide everything except the label sheet */
 			.no-print { display: none !important; }
 
 			@page {
 				size: letter;
-				margin: 0.5in 0.1875in 0.5in 0.1875in;
+				margin: 0.5in 0.3125in 0.5in 0.3125in;
 			}
 
 			body {
@@ -51,11 +53,11 @@
 
 			.label-sheet {
 				display: grid !important;
-				grid-template-columns: repeat(3, 2.625in);
-				grid-template-rows: repeat(10, 1in);
-				column-gap: 0.125in;
+				grid-template-columns: repeat(4, 1.75in);
+				grid-template-rows: repeat(20, 0.5in);
+				column-gap: 0.3125in;
 				row-gap: 0;
-				width: 8.125in;
+				width: 7.875in;
 				page-break-after: always;
 			}
 
@@ -64,34 +66,37 @@
 			}
 
 			.label-cell {
-				width: 2.625in;
-				height: 1in;
+				width: 1.75in;
+				height: 0.5in;
 				overflow: hidden;
 				display: flex;
 				align-items: center;
-				padding: 0.0625in 0.125in;
+				padding: 0.02in 0.04in;
 				box-sizing: border-box;
 			}
 
 			.label-cell img {
-				width: 0.75in !important;
-				height: 0.75in !important;
+				width: 0.4in !important;
+				height: 0.4in !important;
 				flex-shrink: 0;
 			}
 
 			.label-info {
-				margin-left: 0.1in;
+				margin-left: 0.06in;
+				overflow: hidden;
 			}
 
 			.label-info .barcode-text {
-				font-size: 8pt !important;
+				font-size: 6pt !important;
 				font-family: 'Courier New', monospace !important;
 				font-weight: bold !important;
+				white-space: nowrap;
 			}
 
 			.label-info .sub-text {
-				font-size: 6pt !important;
+				font-size: 4.5pt !important;
 				color: #666 !important;
+				white-space: nowrap;
 			}
 		}
 	</style>
@@ -100,7 +105,7 @@
 <!-- Controls — hidden when printing -->
 <div class="no-print space-y-6">
 	<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Print Barcode Labels</h1>
-	<p class="text-sm text-[var(--color-tron-text-secondary)]">Avery 94102 — {data.labelsPerSheet} labels per sheet (3 × 10)</p>
+	<p class="text-sm text-[var(--color-tron-text-secondary)]">Avery 5167 — {data.labelsPerSheet} labels per sheet (4 × 20)</p>
 
 	<form method="POST" action="?/generate" use:enhance={() => {
 		generating = true;
@@ -126,7 +131,7 @@
 					name="quantity"
 					bind:value={quantity}
 					min="1"
-					max="300"
+					max="800"
 					class="mt-1 w-24 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-sm text-[var(--color-tron-text)]"
 				/>
 			</div>
@@ -165,14 +170,14 @@
 
 		<!-- Preview (screen only) -->
 		<div class="mt-4 rounded border border-[var(--color-tron-border)] bg-white p-4 overflow-auto">
-			<p class="text-xs text-gray-400 mb-2">Preview (actual print uses Avery 94102 sizing)</p>
-			<div class="grid grid-cols-3 gap-1">
+			<p class="text-xs text-gray-400 mb-2">Preview — {form.labels.length} labels across {form.sheetsNeeded} sheet{form.sheetsNeeded !== 1 ? 's' : ''}</p>
+			<div class="grid grid-cols-4 gap-px">
 				{#each form.labels as label (label.barcode)}
-					<div class="flex items-center gap-2 border border-gray-200 rounded p-1">
-						<img src={label.qr} alt={label.barcode} class="w-12 h-12" />
+					<div class="flex items-center gap-1 border border-gray-200 p-0.5">
+						<img src={label.qr} alt={label.barcode} class="w-8 h-8" />
 						<div>
-							<p class="text-[10px] font-bold font-mono">{label.barcode}</p>
-							<p class="text-[8px] text-gray-500">Bioscale</p>
+							<p class="text-[8px] font-bold font-mono leading-tight">{label.barcode}</p>
+							<p class="text-[6px] text-gray-500 leading-tight">Bioscale</p>
 						</div>
 					</div>
 				{/each}
@@ -181,7 +186,7 @@
 	{/if}
 </div>
 
-<!-- Print layout — Avery 94102 sheets (only visible when printing) -->
+<!-- Print layout — Avery 5167 sheets (only visible when printing) -->
 {#if form?.labels && form.labels.length > 0}
 	{@const sheets = Array.from({ length: Math.ceil(form.labels.length / data.labelsPerSheet) }, (_, i) =>
 		form.labels.slice(i * data.labelsPerSheet, (i + 1) * data.labelsPerSheet)

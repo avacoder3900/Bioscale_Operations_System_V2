@@ -1,6 +1,6 @@
 /**
- * Print Barcodes — Generate cartridge barcode labels for Avery 94102 sheets.
- * 30 labels per sheet, 3 columns × 10 rows, each label 1" × 2⅝".
+ * Print Barcodes — Generate cartridge barcode labels for Avery 5167 sheets.
+ * 80 labels per sheet, 4 columns × 20 rows, each label 0.5" × 1.75".
  *
  * Flow: enter quantity → generate barcodes + QR codes → preview → print
  */
@@ -10,7 +10,7 @@ import { generateBarcode } from '$lib/server/services/barcode-generator';
 import QRCode from 'qrcode';
 import type { PageServerLoad, Actions } from './$types';
 
-const LABELS_PER_SHEET = 30;
+const LABELS_PER_SHEET = 80;
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
