@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { browser } from '$app/environment';
 
 	interface Label {
 		barcode: string;
@@ -22,13 +23,15 @@
 	let generating = $state(false);
 
 	// Printer settings
-	let printerIp = $state(localStorage?.getItem('printerIp') ?? '');
-	let printerName = $state(localStorage?.getItem('printerName') ?? '');
+	let printerIp = $state(browser ? localStorage.getItem('printerIp') ?? '' : '');
+	let printerName = $state(browser ? localStorage.getItem('printerName') ?? '' : '');
 	let showPrinterSetup = $state(false);
 
 	function savePrinter() {
-		localStorage?.setItem('printerIp', printerIp);
-		localStorage?.setItem('printerName', printerName);
+		if (browser) {
+			localStorage.setItem('printerIp', printerIp);
+			localStorage.setItem('printerName', printerName);
+		}
 		showPrinterSetup = false;
 	}
 
