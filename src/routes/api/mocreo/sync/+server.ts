@@ -15,7 +15,16 @@ export const POST: RequestHandler = async ({ request }) => {
 	requireAgentApiKey(request);
 	await connectDB();
 
-	const sensors = await fetchAllSensors();
+	let sensors: Awaited<ReturnType<typeof fetchAllSensors>>;
+	try {
+		sensors = await fetchAllSensors();
+	} catch (err: any) {
+		console.error('[MOCREO SYNC] fetchAllSensors failed:', err);
+		return json(
+			{ success: false, error: err?.message ?? String(err), stage: 'fetchAllSensors' },
+			{ status: 502 }
+		);
+	}
 	const results: Array<{
 		sensorId: string;
 		sensorName: string;
@@ -23,6 +32,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		humidity: number | null;
 		equipmentId: string | null;
 		alerts: string[];
+		error?: string;
 	}> = [];
 
 	// Build sensor→equipment mapping
@@ -140,7 +150,8 @@ export const POST: RequestHandler = async ({ request }) => {
 				equipmentId,
 				alerts: alertsCreated
 			});
-		} catch (err) {
+		} catch (err: any) {
+			const message = err?.message ?? String(err);
 			console.error(`[MOCREO SYNC] Error reading sensor ${sensor.thingName}:`, err);
 			results.push({
 				sensorId: sensor.thingName,
@@ -148,7 +159,8 @@ export const POST: RequestHandler = async ({ request }) => {
 				temperature: null,
 				humidity: null,
 				equipmentId,
-				alerts: ['error']
+				alerts: ['error'],
+				error: message
 			});
 		}
 	}
