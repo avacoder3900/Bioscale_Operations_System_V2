@@ -35,8 +35,12 @@
 			});
 
 			if (!resp.ok) {
-				const data = await resp.json();
-				error = data.error || 'Failed to generate barcodes';
+				try {
+					const data = await resp.json();
+					error = data.error || `Server error (${resp.status})`;
+				} catch {
+					error = `Server error (${resp.status})`;
+				}
 				return;
 			}
 

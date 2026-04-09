@@ -15,7 +15,7 @@
  */
 import { json } from '@sveltejs/kit';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
-import bwipjs from 'bwip-js';
+import * as bwipjs from 'bwip-js';
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { generateBarcode } from '$lib/server/services/barcode-generator';
 import type { RequestHandler } from './$types';
@@ -50,6 +50,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!locals.user) {
 		return json({ error: 'Unauthorized' }, { status: 401 });
 	}
+
+	try {
 
 	const body = await request.json();
 	const quantity = Number(body.quantity || 0);
@@ -149,4 +151,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			'Content-Disposition': `inline; filename="barcodes-${prefix}-${barcodes[0]}-to-${barcodes[barcodes.length - 1]}.pdf"`
 		}
 	});
+
+	} catch (err: any) {
+		console.error('[generate-pdf] Error:', err);
+		return json({ error: err?.message ?? 'PDF generation failed' }, { status: 500 });
+	}
 };
