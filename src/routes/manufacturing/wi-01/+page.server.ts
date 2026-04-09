@@ -191,15 +191,19 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const lotId = data.get('lotId') as string;
 		const actualCount = Number(data.get('actualCount') || 0);
-		const scrapCount = Number(data.get('scrapCount') || 0);
+		const scrapCartridge = Number(data.get('scrapCartridge') || 0);
+		const scrapThermoseal = Number(data.get('scrapThermoseal') || 0);
+		const scrapBarcode = Number(data.get('scrapBarcode') || 0);
 		const scrapReason = (data.get('scrapReason') as string)?.trim() || '';
 		const bucketBarcode = (data.get('bucketBarcode') as string)?.trim() || '';
 		const notes = (data.get('notes') as string)?.trim() || '';
 
+		const totalScrap = scrapCartridge + scrapThermoseal + scrapBarcode;
+
 		if (!lotId) return fail(400, { confirmComplete: { error: 'Lot ID required' } });
 		if (actualCount <= 0) return fail(400, { confirmComplete: { error: 'Count must be greater than 0' } });
-		if (scrapCount > 0 && !scrapReason) {
-			return fail(400, { confirmComplete: { error: 'Scrap reason is required when scrap count > 0' } });
+		if (totalScrap > 0 && !scrapReason) {
+			return fail(400, { confirmComplete: { error: 'Scrap reason is required when any parts are scrapped' } });
 		}
 
 		const lot = await LotRecord.findById(lotId).lean() as any;
@@ -208,7 +212,13 @@ export const actions: Actions = {
 		const now = new Date();
 		const startTime = lot.startTime ?? now;
 		const cycleTime = Math.round((now.getTime() - startTime.getTime()) / 1000);
-		const totalConsumed = actualCount + scrapCount;
+
+		// Per-part scrap counts: each material consumed = good + its scrap
+		const perPartScrap: Record<string, number> = {
+			'PT-CT-104': scrapCartridge,
+			'PT-CT-112': scrapThermoseal,
+			'PT-CT-106': scrapBarcode
+		};
 
 		// Create CartridgeRecords (only for good units)
 		const cartridgeIds: string[] = [];
@@ -241,40 +251,44 @@ export const actions: Actions = {
 				cycleTime,
 				quantityProduced: actualCount,
 				cartridgeIds,
-				scrapCount,
+				scrapCount: totalScrap,
+				scrapDetail: { cartridge: scrapCartridge, thermoseal: scrapThermoseal, barcode: scrapBarcode },
 				scrapReason: scrapReason || undefined,
 				bucketBarcode: bucketBarcode || undefined,
 				notes: notes || undefined
 			}
 		});
 
-		// Withdraw all 3 materials — totalConsumed = good + scrapped
+		// Withdraw each material: good count + that part's specific scrap
 		for (const cp of CONSUMED_PARTS) {
+			const partScrap = perPartScrap[cp.partNumber] ?? 0;
+			const consumed = actualCount + partScrap;
 			const partId = await resolvePartId(cp.partNumber);
+
 			await recordTransaction({
 				transactionType: 'consumption',
 				partDefinitionId: partId ?? undefined,
-				quantity: totalConsumed,
+				quantity: consumed,
 				manufacturingStep: 'backing',
 				manufacturingRunId: lotId,
 				operatorId: locals.user._id,
 				operatorUsername: locals.user.username,
-				notes: `WI-01 Backing lot ${lotId}: ${totalConsumed}x ${cp.name} consumed (${actualCount} good + ${scrapCount} scrapped)`
+				notes: `WI-01 lot ${lotId}: ${consumed}x ${cp.name} (${actualCount} good + ${partScrap} scrapped)`
 			});
 
-			// Record separate scrap transaction if there were scrapped units
-			if (scrapCount > 0) {
+			// Separate scrap transaction for this part if any were scrapped
+			if (partScrap > 0) {
 				await recordTransaction({
 					transactionType: 'scrap',
 					partDefinitionId: partId ?? undefined,
-					quantity: scrapCount,
+					quantity: partScrap,
 					manufacturingStep: 'backing',
 					manufacturingRunId: lotId,
 					operatorId: locals.user._id,
 					operatorUsername: locals.user.username,
 					scrapReason,
 					scrapCategory: 'other',
-					notes: `WI-01 Backing lot ${lotId}: ${scrapCount}x ${cp.name} scrapped — ${scrapReason}`
+					notes: `WI-01 lot ${lotId}: ${partScrap}x ${cp.name} scrapped — ${scrapReason}`
 				});
 			}
 		}
@@ -288,12 +302,11 @@ export const actions: Actions = {
 			changedAt: new Date(),
 			newData: {
 				actualCount,
-				scrapCount,
+				scrapDetail: { cartridge: scrapCartridge, thermoseal: scrapThermoseal, barcode: scrapBarcode },
 				scrapReason: scrapReason || undefined,
 				bucketBarcode: bucketBarcode || undefined,
 				notes: notes || undefined,
-				materialsConsumed: CONSUMED_PARTS.map(p => p.partNumber),
-				totalConsumed
+				materialsConsumed: CONSUMED_PARTS.map(p => p.partNumber)
 			}
 		});
 

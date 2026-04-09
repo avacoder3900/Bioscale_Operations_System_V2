@@ -23,6 +23,11 @@ const lotRecordSchema = new Schema({
 	desiredQuantity: Number,
 	quantityDiscrepancyReason: String,
 	scrapCount: { type: Number, default: 0 },
+	scrapDetail: {
+		cartridge: { type: Number, default: 0 },
+		thermoseal: { type: Number, default: 0 },
+		barcode: { type: Number, default: 0 }
+	},
 	scrapReason: String,
 	bucketBarcode: String,
 	notes: String,
