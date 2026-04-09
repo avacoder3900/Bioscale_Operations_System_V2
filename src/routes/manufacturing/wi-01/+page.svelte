@@ -47,10 +47,15 @@
 	let lotBarcode3 = $state('');
 	let lotId = $state('');
 	let actualCount = $state(1);
-	let scrapCount = $state(0);
+	let scrapCartridge = $state(0);
+	let scrapThermoseal = $state(0);
+	let scrapBarcode = $state(0);
 	let scrapReason = $state('');
 	let bucketBarcode = $state('');
 	let sessionNotes = $state('');
+
+	const totalScrap = $derived(scrapCartridge + scrapThermoseal + scrapBarcode);
+	const hasScrap = $derived(totalScrap > 0);
 	let handoffOpen = $state(false);
 	let handoffPrompt = $state('');
 
@@ -90,7 +95,9 @@
 		lotBarcode2 = '';
 		lotBarcode3 = '';
 		actualCount = 1;
-		scrapCount = 0;
+		scrapCartridge = 0;
+		scrapThermoseal = 0;
+		scrapBarcode = 0;
 		scrapReason = '';
 		bucketBarcode = '';
 		sessionNotes = '';
@@ -353,19 +360,44 @@
 							<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)] text-center">Planned: {plannedQty} — Adjust if different</p>
 						</div>
 
-						<!-- Scrapped cartridges -->
+						<!-- Per-part scrap -->
 						<div>
-							<p class="text-lg font-semibold text-[var(--color-tron-text)]">How many SCRAPPED?</p>
-							<input
-								type="number"
-								name="scrapCount"
-								bind:value={scrapCount}
-								min="0"
-								max={data.config.maxBatchSize}
-								class="mt-2 mx-auto block w-32 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-3 text-center text-2xl font-bold text-[var(--color-tron-text)]"
-							/>
-							{#if scrapCount > 0}
-								<div class="mt-2">
+							<p class="text-lg font-semibold text-[var(--color-tron-text)]">Scrapped Parts</p>
+							<p class="text-xs text-[var(--color-tron-text-secondary)]">Enter how many of each part were scrapped (0 if none)</p>
+							<div class="mt-3 grid grid-cols-3 gap-3">
+								<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3 text-center">
+									<p class="text-xs text-[var(--color-tron-text-secondary)]">Cartridges</p>
+									<input
+										type="number"
+										name="scrapCartridge"
+										bind:value={scrapCartridge}
+										min="0"
+										class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-2 py-2 text-center text-xl font-bold text-[var(--color-tron-text)]"
+									/>
+								</div>
+								<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3 text-center">
+									<p class="text-xs text-[var(--color-tron-text-secondary)]">Thermoseal</p>
+									<input
+										type="number"
+										name="scrapThermoseal"
+										bind:value={scrapThermoseal}
+										min="0"
+										class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-2 py-2 text-center text-xl font-bold text-[var(--color-tron-text)]"
+									/>
+								</div>
+								<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3 text-center">
+									<p class="text-xs text-[var(--color-tron-text-secondary)]">Barcodes</p>
+									<input
+										type="number"
+										name="scrapBarcode"
+										bind:value={scrapBarcode}
+										min="0"
+										class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-2 py-2 text-center text-xl font-bold text-[var(--color-tron-text)]"
+									/>
+								</div>
+							</div>
+							{#if hasScrap}
+								<div class="mt-3">
 									<label class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Scrap Reason (required)</label>
 									<input
 										type="text"
@@ -379,10 +411,23 @@
 							{/if}
 						</div>
 
-						<!-- Total consumed -->
-						<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3 text-center">
-							<p class="text-xs text-[var(--color-tron-text-secondary)]">Total consumed</p>
-							<p class="text-2xl font-bold text-[var(--color-tron-text)]">{actualCount + scrapCount}</p>
+						<!-- Summary -->
+						<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3">
+							<p class="text-xs text-[var(--color-tron-text-secondary)] text-center mb-2">Withdrawal Summary</p>
+							<div class="grid grid-cols-3 gap-2 text-center text-sm">
+								<div>
+									<p class="text-xs text-[var(--color-tron-text-secondary)]">Cartridges</p>
+									<p class="font-bold text-[var(--color-tron-text)]">{actualCount + scrapCartridge}</p>
+								</div>
+								<div>
+									<p class="text-xs text-[var(--color-tron-text-secondary)]">Thermoseal</p>
+									<p class="font-bold text-[var(--color-tron-text)]">{actualCount + scrapThermoseal}</p>
+								</div>
+								<div>
+									<p class="text-xs text-[var(--color-tron-text-secondary)]">Barcodes</p>
+									<p class="font-bold text-[var(--color-tron-text)]">{actualCount + scrapBarcode}</p>
+								</div>
+							</div>
 						</div>
 
 						<!-- Bucket assignment -->
