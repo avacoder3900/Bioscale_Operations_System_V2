@@ -88,6 +88,17 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			const labelX = MARGIN_LEFT + col * H_PITCH;
 			const labelY = PAGE_H - MARGIN_TOP - row * V_PITCH - LABEL_H;
 
+			// Draw label border (light gray dashed cut line)
+			page.drawRectangle({
+				x: labelX,
+				y: labelY,
+				width: LABEL_W,
+				height: LABEL_H,
+				borderColor: rgb(0.75, 0.75, 0.75),
+				borderWidth: 0.5,
+				color: undefined
+			});
+
 			// Center QR within label
 			const qrX = labelX + (LABEL_W - QR_SIZE) / 2;
 			const qrY = labelY + LABEL_H - QR_SIZE - 2; // 2pt from top
