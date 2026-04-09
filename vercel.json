@@ -1,8 +1,0 @@
-{
-  "crons": [
-    {
-      "path": "/api/mocreo/sync",
-      "schedule": "*/10 * * * *"
-    }
-  ]
-}
