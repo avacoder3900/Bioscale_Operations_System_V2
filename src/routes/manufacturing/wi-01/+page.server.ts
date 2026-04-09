@@ -1,13 +1,15 @@
 /**
  * WI-01: Cartridge Backing
- * Lot traceability: Input lots (raw cartridge, laser-cut back, barcode label)
- * → Output lot (LotRecord.qrCodeRef) → CartridgeRecord.backing.lotId
- * ISO 13485: input lot → output lot → cartridge IDs fully linked
+ * Simplified flow: Start → Qty + Scan Lots → Check Inventory → Work → Confirm → Withdraw
+ *
+ * Materials consumed per cartridge:
+ *   1x Cartridge (PT-CT-104)
+ *   1x Thermoseal Laser Cut Sheet (PT-CT-112)
+ *   1x Barcode (PT-CT-106)
  */
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, LotRecord, ProcessConfiguration, CartridgeRecord,
-	ManufacturingMaterialTransaction,
 	PartDefinition, AuditLog, generateId
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
@@ -15,6 +17,13 @@ import { nanoid } from 'nanoid';
 import type { PageServerLoad, Actions } from './$types';
 
 const PROCESS_TYPE = 'backing';
+
+// Part numbers consumed per cartridge (1:1 ratio each)
+const CONSUMED_PARTS = [
+	{ partNumber: 'PT-CT-104', name: 'Cartridge' },
+	{ partNumber: 'PT-CT-112', name: 'Thermoseal Laser Cut Sheet' },
+	{ partNumber: 'PT-CT-106', name: 'Barcode' }
+];
 
 function generateOutputLot(): string {
 	const now = new Date();
@@ -40,8 +49,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			lotStepEntries: [],
 			recentLots: [],
 			inventory: {
-				rawCartridges: { name: 'Raw Cartridges', quantity: 0, unit: 'pcs' },
-				barcodeLabels: { name: 'Barcode Labels', quantity: 0, unit: 'pcs' },
+				rawCartridges: { name: 'Cartridges', quantity: 0, unit: 'pcs' },
+				barcodeLabels: { name: 'Barcodes', quantity: 0, unit: 'pcs' },
 				individualBacks: { name: 'Laser Cut Backs', quantity: 0, unit: 'pcs' },
 				cutThermosealStrips: { name: 'Thermoseal Laser Cut Sheets', quantity: 0, unit: 'pcs' }
 			},
@@ -51,7 +60,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const c = config as any;
 	const partByPN = new Map((parts as any[]).map((p: any) => [p.partNumber, p]));
-
 	const partQty = (pn: string) => (partByPN.get(pn) as any)?.inventoryCount ?? 0;
 
 	return {
@@ -66,14 +74,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 				scanOrder: m.scanOrder ?? i + 1
 			}))
 		},
-		processSteps: (c.steps ?? []).map((s: any) => ({
-			id: String(s._id),
-			configId: String(c._id),
-			stepNumber: s.stepNumber ?? 0,
-			title: s.title ?? '',
-			description: s.description ?? null,
-			imageUrl: s.imageUrl ?? null
-		})),
+		processSteps: [],
 		lotStepEntries: [],
 		recentLots: (recentLots as any[]).map((l: any) => ({
 			lotId: String(l._id),
@@ -84,8 +85,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			finishTime: l.finishTime?.toISOString?.() ?? null
 		})),
 		inventory: {
-			rawCartridges: { name: 'Raw Cartridges', quantity: partQty('PT-CT-104'), unit: 'pcs' },
-			barcodeLabels: { name: 'Barcode Labels', quantity: partQty('PT-CT-106'), unit: 'pcs' },
+			rawCartridges: { name: 'Cartridges', quantity: partQty('PT-CT-104'), unit: 'pcs' },
+			barcodeLabels: { name: 'Barcodes', quantity: partQty('PT-CT-106'), unit: 'pcs' },
 			individualBacks: { name: 'Laser Cut Backs', quantity: partQty('PT-CT-112'), unit: 'pcs' },
 			cutThermosealStrips: { name: 'Thermoseal Laser Cut Sheets', quantity: partQty('PT-CT-112'), unit: 'pcs' }
 		}
@@ -93,32 +94,65 @@ export const load: PageServerLoad = async ({ locals }) => {
 };
 
 export const actions: Actions = {
-	/** Step 1: Bind output QR code → creates LotRecord with auto-generated output lot */
-	bindQR: async ({ request, locals }) => {
+	/**
+	 * Check inventory for the requested quantity, create lot, and start batch.
+	 * Validates that all 3 materials have enough stock before proceeding.
+	 */
+	checkAndStart: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 
 		const data = await request.formData();
-		const qrCodeRef = (data.get('qrCodeRef') as string)?.trim();
-		if (!qrCodeRef) return fail(400, { bindQR: { error: 'QR code required' } });
+		const quantity = Number(data.get('quantity') || 0);
+		const lot1 = (data.get('lot1') as string)?.trim() || '';
+		const lot2 = (data.get('lot2') as string)?.trim() || '';
+		const lot3 = (data.get('lot3') as string)?.trim() || '';
 
-		const existing = await LotRecord.findOne({ qrCodeRef }).lean() as any;
-		if (existing) {
-			// Resume in-progress lot
-			if (existing.status === 'In Progress') {
-				return { bindQR: { success: true, lotId: String(existing._id) } };
+		if (quantity <= 0) return fail(400, { checkAndStart: { error: 'Quantity must be greater than 0' } });
+
+		// Check inventory for all 3 consumed materials
+		const parts = await PartDefinition.find({
+			partNumber: { $in: CONSUMED_PARTS.map(p => p.partNumber) },
+			bomType: 'cartridge',
+			isActive: true
+		}).lean() as any[];
+
+		const partMap = new Map(parts.map((p: any) => [p.partNumber, p]));
+		const insufficient: { name: string; need: number; have: number }[] = [];
+
+		for (const cp of CONSUMED_PARTS) {
+			const part = partMap.get(cp.partNumber);
+			const have = part?.inventoryCount ?? 0;
+			if (have < quantity) {
+				insufficient.push({ name: cp.name, need: quantity, have });
 			}
-			return fail(400, { bindQR: { error: 'QR code already used for a completed lot' } });
 		}
 
+		if (insufficient.length > 0) {
+			return fail(400, {
+				checkAndStart: {
+					error: 'Insufficient inventory for this batch size',
+					insufficient
+				}
+			});
+		}
+
+		// Create lot record with auto-generated QR
 		const config = await ProcessConfiguration.findOne({ processType: PROCESS_TYPE }).lean() as any;
 		const lotId = generateId();
+		const qrCodeRef = `WI01-${nanoid(8).toUpperCase()}`;
 		const outputLotNumber = generateOutputLot();
+
+		const inputLots = [
+			{ materialName: 'Cartridge', barcode: lot1, scanOrder: 1, scannedAt: new Date() },
+			{ materialName: 'Thermoseal Laser Cut Sheet', barcode: lot2, scanOrder: 2, scannedAt: new Date() },
+			{ materialName: 'Barcode', barcode: lot3, scanOrder: 3, scannedAt: new Date() }
+		].filter(l => l.barcode);
 
 		await LotRecord.create({
 			_id: lotId,
 			qrCodeRef,
-			outputLotNumber,       // denormalized for quick lookup
+			outputLotNumber,
 			processConfig: config ? {
 				_id: config._id,
 				processName: config.processName,
@@ -127,6 +161,8 @@ export const actions: Actions = {
 			operator: { _id: locals.user._id, username: locals.user.username },
 			status: 'In Progress',
 			startTime: new Date(),
+			inputLots,
+			plannedQuantity: quantity,
 			stepEntries: [],
 			cartridgeIds: []
 		});
@@ -137,96 +173,39 @@ export const actions: Actions = {
 			recordId: lotId,
 			action: 'INSERT',
 			changedBy: locals.user?.username,
-			changedAt: new Date()
+			changedAt: new Date(),
+			newData: { quantity, inputLots: inputLots.map(l => l.barcode) }
 		});
 
-		return { bindQR: { success: true, lotId, outputLotNumber } };
+		return { checkAndStart: { success: true, lotId, plannedQty: quantity } };
 	},
 
-	/** Step 2: Record input lot barcodes (raw cartridge lot, laser-cut back lot, barcode label lot) */
-	setInputLots: async ({ request, locals }) => {
+	/**
+	 * Confirm batch completion: create CartridgeRecords + withdraw all 3 materials.
+	 * Each cartridge consumes 1x Cartridge, 1x Thermoseal, 1x Barcode.
+	 */
+	confirmComplete: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 
 		const data = await request.formData();
 		const lotId = data.get('lotId') as string;
-		if (!lotId) return fail(400, { setInputLots: { error: 'Lot ID required' } });
+		const actualCount = Number(data.get('actualCount') || 0);
+
+		if (!lotId) return fail(400, { confirmComplete: { error: 'Lot ID required' } });
+		if (actualCount <= 0) return fail(400, { confirmComplete: { error: 'Count must be greater than 0' } });
 
 		const lot = await LotRecord.findById(lotId).lean() as any;
-		if (!lot) return fail(404, { setInputLots: { error: 'Lot not found' } });
-
-		const config = await ProcessConfiguration.findOne({ processType: PROCESS_TYPE }).lean() as any;
-		const inputMaterials = config?.inputMaterials ?? [];
-
-		const inputLots = [];
-		for (let i = 0; i < 3; i++) {
-			const barcode = (data.get(`input${i + 1}`) as string)?.trim();
-			if (barcode) {
-				inputLots.push({
-					materialName: inputMaterials[i]?.name ?? `Input ${i + 1}`,
-					barcode,
-					partDefinitionId: inputMaterials[i]?.partDefinitionId ?? undefined,
-					scanOrder: i + 1,
-					scannedAt: new Date()
-				});
-			}
-		}
-
-		await LotRecord.findByIdAndUpdate(lotId, {
-			$set: { inputLots, updatedAt: new Date() }
-		});
-
-		return { setInputLots: { success: true } };
-	},
-
-	/** Step 3: Mark batch as started */
-	startBatch: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const lotId = data.get('lotId') as string;
-		if (!lotId) return fail(400, { startBatch: { error: 'Lot ID required' } });
-
-		await LotRecord.findByIdAndUpdate(lotId, {
-			$set: { status: 'In Progress', startTime: new Date() }
-		});
-
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'lot_records',
-			recordId: lotId,
-			action: 'UPDATE',
-			changedBy: locals.user?.username,
-			changedAt: new Date()
-		});
-
-		return { startBatch: { success: true } };
-	},
-
-	/** Step 4: Finish batch — create CartridgeRecords, link to lot, update inventory */
-	finishBatch: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const lotId = data.get('lotId') as string;
-		const quantity = Number(data.get('quantity') || 0);
-
-		if (!lotId) return fail(400, { finishBatch: { error: 'Lot ID required' } });
-		if (quantity <= 0) return fail(400, { finishBatch: { error: 'Quantity must be > 0' } });
-
-		const lot = await LotRecord.findById(lotId).lean() as any;
-		if (!lot) return fail(404, { finishBatch: { error: 'Lot not found' } });
+		if (!lot) return fail(404, { confirmComplete: { error: 'Lot not found' } });
 
 		const now = new Date();
 		const startTime = lot.startTime ?? now;
 		const cycleTime = Math.round((now.getTime() - startTime.getTime()) / 1000);
 
-		// Create CartridgeRecords for each unit produced, linking backing lot
+		// Create CartridgeRecords
 		const cartridgeIds: string[] = [];
 		const cartridgeDocs = [];
-		for (let i = 0; i < quantity; i++) {
+		for (let i = 0; i < actualCount; i++) {
 			const cid = generateId();
 			cartridgeIds.push(cid);
 			cartridgeDocs.push({
@@ -246,29 +225,31 @@ export const actions: Actions = {
 			await CartridgeRecord.insertMany(cartridgeDocs);
 		}
 
-		// Finalize the lot record
+		// Finalize lot
 		await LotRecord.findByIdAndUpdate(lotId, {
 			$set: {
 				status: 'Completed',
 				finishTime: now,
 				cycleTime,
-				quantityProduced: quantity,
+				quantityProduced: actualCount,
 				cartridgeIds
 			}
 		});
 
-		// Consume cartridges (PT-CT-104) from inventory
-		const cartridgePartId = await resolvePartId('PT-CT-104');
-		await recordTransaction({
-			transactionType: 'consumption',
-			partDefinitionId: cartridgePartId ?? undefined,
-			quantity,
-			manufacturingStep: 'backing',
-			manufacturingRunId: lotId,
-			operatorId: locals.user._id,
-			operatorUsername: locals.user.username,
-			notes: `WI-01 Backing lot ${lotId}: ${quantity} cartridges backed`
-		});
+		// Withdraw all 3 materials (1:1 ratio per cartridge)
+		for (const cp of CONSUMED_PARTS) {
+			const partId = await resolvePartId(cp.partNumber);
+			await recordTransaction({
+				transactionType: 'consumption',
+				partDefinitionId: partId ?? undefined,
+				quantity: actualCount,
+				manufacturingStep: 'backing',
+				manufacturingRunId: lotId,
+				operatorId: locals.user._id,
+				operatorUsername: locals.user.username,
+				notes: `WI-01 Backing lot ${lotId}: ${actualCount}x ${cp.name} consumed`
+			});
+		}
 
 		await AuditLog.create({
 			_id: generateId(),
@@ -276,122 +257,17 @@ export const actions: Actions = {
 			recordId: lotId,
 			action: 'UPDATE',
 			changedBy: locals.user?.username,
-			changedAt: new Date()
+			changedAt: new Date(),
+			newData: { actualCount, materialsConsumed: CONSUMED_PARTS.map(p => p.partNumber) }
 		});
 
 		const config = await ProcessConfiguration.findOne({ processType: PROCESS_TYPE }).lean() as any;
 		return {
-			finishBatch: {
+			confirmComplete: {
 				success: true,
-				lotId,
 				handoffPrompt: config?.handoffPrompt ?? 'Backed cartridges ready for wax filling.'
 			}
 		};
-	},
-
-	/** Add a step note / photo to the current lot */
-	addNote: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const lotId = data.get('lotId') as string;
-		const stepId = data.get('stepId') as string;
-		const note = (data.get('note') as string) || undefined;
-
-		if (!lotId) return fail(400, { addNote: { error: 'Lot ID required' } });
-
-		const entry = {
-			_id: generateId(),
-			stepId: stepId || undefined,
-			note,
-			operator: { _id: locals.user._id, username: locals.user.username },
-			completedAt: new Date()
-		};
-
-		const updated = await LotRecord.findByIdAndUpdate(
-			lotId,
-			{ $push: { stepEntries: entry } },
-			{ new: true }
-		).lean() as any;
-
-		const entries = (updated?.stepEntries ?? []).map((e: any) => ({
-			id: String(e._id),
-			lotId,
-			stepId: e.stepId ?? null,
-			note: e.note ?? null,
-			imageUrl: e.imageUrl ?? null,
-			operatorId: e.operator?._id ?? '',
-			operatorName: e.operator?.username ?? '',
-			createdAt: e.completedAt?.toISOString?.() ?? new Date().toISOString()
-		}));
-
-		return { addNote: { success: true, entries } };
-	},
-
-	/** Load existing step entries for a lot (resume flow) */
-	loadEntries: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const lotId = data.get('lotId') as string;
-		if (!lotId) return fail(400, { loadEntries: { error: 'Lot ID required' } });
-
-		const lot = await LotRecord.findById(lotId).lean() as any;
-		const entries = (lot?.stepEntries ?? []).map((e: any) => ({
-			id: String(e._id),
-			lotId,
-			stepId: e.stepId ?? null,
-			note: e.note ?? null,
-			imageUrl: e.imageUrl ?? null,
-			operatorId: e.operator?._id ?? '',
-			operatorName: e.operator?.username ?? '',
-			createdAt: e.completedAt?.toISOString?.() ?? new Date().toISOString()
-		}));
-
-		return { loadEntries: { success: true, entries } };
-	},
-
-	/** Add batch-level note */
-	addBatchNote: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const lotId = data.get('lotId') as string;
-		const note = (data.get('note') as string) || undefined;
-
-		if (!lotId) return fail(400, { addBatchNote: { error: 'Lot ID required' } });
-
-		const entry = {
-			_id: generateId(),
-			stepId: null,
-			note,
-			operator: { _id: locals.user._id, username: locals.user.username },
-			completedAt: new Date()
-		};
-
-		const updated = await LotRecord.findByIdAndUpdate(
-			lotId,
-			{ $push: { stepEntries: entry } },
-			{ new: true }
-		).lean() as any;
-
-		const batchNotes = (updated?.stepEntries ?? [])
-			.filter((e: any) => !e.stepId)
-			.map((e: any) => ({
-				id: String(e._id),
-				lotId,
-				stepId: null,
-				note: e.note ?? null,
-				imageUrl: e.imageUrl ?? null,
-				operatorId: e.operator?._id ?? '',
-				operatorName: e.operator?.username ?? '',
-				createdAt: e.completedAt?.toISOString?.() ?? new Date().toISOString()
-			}));
-
-		return { addBatchNote: { success: true, batchNotes } };
 	},
 
 	/** Resume an in-progress lot */
@@ -406,24 +282,14 @@ export const actions: Actions = {
 		const lot = await LotRecord.findById(lotId).lean() as any;
 		if (!lot) return fail(404, { resumeLot: { error: 'Lot not found' } });
 
-		// Determine which step to resume at
-		let resumeStep = 'qr';
-		if (lot.inputLots?.length > 0 && lot.startTime) resumeStep = 'work';
-		else if (lot.inputLots?.length > 0) resumeStep = 'start';
-		else resumeStep = 'inputs';
-
-		const entries = (lot.stepEntries ?? []).map((e: any) => ({
-			id: String(e._id),
-			lotId,
-			stepId: e.stepId ?? null,
-			note: e.note ?? null,
-			imageUrl: e.imageUrl ?? null,
-			operatorId: e.operator?._id ?? '',
-			operatorName: e.operator?.username ?? '',
-			createdAt: e.completedAt?.toISOString?.() ?? new Date().toISOString()
-		}));
-
-		return { resumeLot: { success: true, lotId, resumeStep, entries } };
+		return {
+			resumeLot: {
+				success: true,
+				lotId,
+				resumeStep: 'working',
+				plannedQty: lot.plannedQuantity ?? 1
+			}
+		};
 	}
 };
 
