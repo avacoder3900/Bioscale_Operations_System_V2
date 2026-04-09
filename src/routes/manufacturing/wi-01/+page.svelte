@@ -39,8 +39,8 @@
 
 	let { data, form }: Props = $props();
 
-	// Flow: start → setup → working → confirm
-	let step = $state<'start' | 'setup' | 'working' | 'confirm'>('start');
+	// Flow: start → scan → qty → working → confirm
+	let step = $state<'start' | 'scan' | 'qty' | 'working' | 'confirm'>('start');
 	let plannedQty = $state(1);
 	let lotBarcode1 = $state('');
 	let lotBarcode2 = $state('');
@@ -98,6 +98,13 @@
 			data.inventory.barcodeLabels.quantity
 		)
 	);
+
+	// Track which barcodes are scanned
+	const allScanned = $derived(
+		lotBarcode1.trim().length > 0 &&
+		lotBarcode2.trim().length > 0 &&
+		lotBarcode3.trim().length > 0
+	);
 </script>
 
 {#if data.error || !data.config}
@@ -151,7 +158,7 @@
 				{:else}
 					<button
 						type="button"
-						onclick={() => { step = 'setup'; }}
+						onclick={() => { step = 'scan'; }}
 						class="w-full rounded-lg bg-[var(--color-tron-cyan)] py-4 text-lg font-bold text-[var(--color-tron-bg-primary)] hover:opacity-90 transition-opacity"
 					>
 						Start New Batch
@@ -176,39 +183,93 @@
 					</div>
 				{/each}
 
-			{:else if step === 'setup'}
-				<!-- STEP 2: Qty + Scan Lots -->
-				<form method="POST" action="?/checkAndStart" use:enhance>
-					<div class="space-y-4">
+			{:else if step === 'scan'}
+				<!-- STEP 2: Scan all lot barcodes -->
+				<div class="space-y-4">
+					<p class="text-lg font-semibold text-[var(--color-tron-text)]">Scan Lot Barcodes</p>
+					<p class="text-xs text-[var(--color-tron-text-secondary)]">Scan all 3 material lot barcodes before proceeding.</p>
+
+					<div class="space-y-3">
 						<div>
-							<label class="block text-sm font-medium text-[var(--color-tron-text)]">How many cartridges?</label>
+							<label class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Cartridge Lot</label>
+							<div class="mt-1 flex items-center gap-2">
+								<input type="text" bind:value={lotBarcode1} class="flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]" placeholder="Scan cartridge lot barcode" />
+								{#if lotBarcode1.trim()}
+									<span class="text-green-400 text-lg">&#10003;</span>
+								{/if}
+							</div>
+						</div>
+						<div>
+							<label class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Thermoseal Laser Cut Sheet Lot</label>
+							<div class="mt-1 flex items-center gap-2">
+								<input type="text" bind:value={lotBarcode2} class="flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]" placeholder="Scan thermoseal lot barcode" />
+								{#if lotBarcode2.trim()}
+									<span class="text-green-400 text-lg">&#10003;</span>
+								{/if}
+							</div>
+						</div>
+						<div>
+							<label class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Barcode Label Lot</label>
+							<div class="mt-1 flex items-center gap-2">
+								<input type="text" bind:value={lotBarcode3} class="flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]" placeholder="Scan barcode label lot barcode" />
+								{#if lotBarcode3.trim()}
+									<span class="text-green-400 text-lg">&#10003;</span>
+								{/if}
+							</div>
+						</div>
+					</div>
+
+					<div class="flex gap-3 pt-2">
+						<button
+							type="button"
+							disabled={!allScanned}
+							onclick={() => { step = 'qty'; }}
+							class="rounded-lg bg-[var(--color-tron-cyan)] px-6 py-3 font-bold text-[var(--color-tron-bg-primary)] hover:opacity-90 transition-opacity disabled:opacity-30 disabled:cursor-not-allowed"
+						>
+							Next — Enter Quantity
+						</button>
+						<button type="button" onclick={() => { step = 'start'; lotBarcode1 = ''; lotBarcode2 = ''; lotBarcode3 = ''; }} class="rounded-lg border border-[var(--color-tron-border)] px-4 py-3 text-sm text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-text-secondary)]">
+							Cancel
+						</button>
+					</div>
+				</div>
+
+			{:else if step === 'qty'}
+				<!-- STEP 3: Enter quantity + check inventory + start -->
+				<form method="POST" action="?/checkAndStart" use:enhance>
+					<input type="hidden" name="lot1" value={lotBarcode1} />
+					<input type="hidden" name="lot2" value={lotBarcode2} />
+					<input type="hidden" name="lot3" value={lotBarcode3} />
+
+					<div class="space-y-4">
+						<p class="text-lg font-semibold text-[var(--color-tron-text)]">How many cartridges?</p>
+
+						<!-- Show scanned lots summary -->
+						<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3 text-xs space-y-1">
+							<div class="flex justify-between text-[var(--color-tron-text-secondary)]">
+								<span>Cartridge Lot</span>
+								<span class="font-mono text-[var(--color-tron-text)]">{lotBarcode1}</span>
+							</div>
+							<div class="flex justify-between text-[var(--color-tron-text-secondary)]">
+								<span>Thermoseal Lot</span>
+								<span class="font-mono text-[var(--color-tron-text)]">{lotBarcode2}</span>
+							</div>
+							<div class="flex justify-between text-[var(--color-tron-text-secondary)]">
+								<span>Barcode Lot</span>
+								<span class="font-mono text-[var(--color-tron-text)]">{lotBarcode3}</span>
+							</div>
+						</div>
+
+						<div>
 							<input
 								type="number"
 								name="quantity"
 								bind:value={plannedQty}
 								min="1"
 								max={data.config.maxBatchSize}
-								class="mt-1 w-32 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-lg text-[var(--color-tron-text)]"
+								class="w-32 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-3 text-2xl font-bold text-[var(--color-tron-text)]"
 							/>
-							<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">Max from inventory: {maxFromInventory}</p>
-						</div>
-
-						<div class="border-t border-[var(--color-tron-border)] pt-4">
-							<p class="text-sm font-medium text-[var(--color-tron-text)]">Scan lot barcodes</p>
-							<div class="mt-2 space-y-3">
-								<div>
-									<label class="block text-xs text-[var(--color-tron-text-secondary)]">Cartridge Lot</label>
-									<input type="text" name="lot1" bind:value={lotBarcode1} class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]" placeholder="Scan cartridge lot barcode" />
-								</div>
-								<div>
-									<label class="block text-xs text-[var(--color-tron-text-secondary)]">Thermoseal Laser Cut Sheet Lot</label>
-									<input type="text" name="lot2" bind:value={lotBarcode2} class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]" placeholder="Scan thermoseal lot barcode" />
-								</div>
-								<div>
-									<label class="block text-xs text-[var(--color-tron-text-secondary)]">Barcode Label Lot</label>
-									<input type="text" name="lot3" bind:value={lotBarcode3} class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]" placeholder="Scan barcode label lot barcode" />
-								</div>
-							</div>
+							<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">Max from inventory: {maxFromInventory} &middot; Max batch: {data.config.maxBatchSize}</p>
 						</div>
 
 						{#if form?.checkAndStart && (form.checkAndStart as any).error}
@@ -228,15 +289,15 @@
 							<button type="submit" class="rounded-lg bg-[var(--color-tron-cyan)] px-6 py-3 font-bold text-[var(--color-tron-bg-primary)] hover:opacity-90 transition-opacity">
 								Check Inventory & Start
 							</button>
-							<button type="button" onclick={() => { step = 'start'; }} class="rounded-lg border border-[var(--color-tron-border)] px-4 py-3 text-sm text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-text-secondary)]">
-								Cancel
+							<button type="button" onclick={() => { step = 'scan'; }} class="rounded-lg border border-[var(--color-tron-border)] px-4 py-3 text-sm text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-text-secondary)]">
+								Back
 							</button>
 						</div>
 					</div>
 				</form>
 
 			{:else if step === 'working'}
-				<!-- STEP 3: In Progress -->
+				<!-- STEP 4: In Progress — making cartridges -->
 				<div class="text-center space-y-4">
 					<div class="inline-flex h-16 w-16 items-center justify-center rounded-full bg-[var(--color-tron-cyan)]/20 text-3xl">
 						&#9881;
@@ -255,7 +316,7 @@
 				</div>
 
 			{:else if step === 'confirm'}
-				<!-- STEP 4: Confirm count & withdraw -->
+				<!-- STEP 5: Confirm count & withdraw -->
 				<form method="POST" action="?/confirmComplete" use:enhance>
 					<input type="hidden" name="lotId" value={lotId} />
 					<div class="space-y-4 text-center">
@@ -287,7 +348,7 @@
 			{/if}
 		</div>
 
-		<!-- Recent Batches (always visible) -->
+		<!-- Recent Batches (visible on start screen) -->
 		{#if data.recentLots.length > 0 && step === 'start'}
 			<div class="border-t border-[var(--color-tron-border)] pt-4">
 				<h2 class="text-sm font-medium text-[var(--color-tron-text-secondary)]">Recent Batches</h2>
