@@ -42,9 +42,9 @@ const MARGIN_LEFT = 0.375 * POINTS_PER_INCH;
 const H_PITCH = (PAGE_W - 2 * MARGIN_LEFT) / COLS;
 const V_PITCH = (PAGE_H - 2 * MARGIN_TOP) / ROWS;
 
-// QR code size within the label (50% of original)
-const QR_SIZE = 0.25 * POINTS_PER_INCH;  // 18pt
-const TEXT_SIZE = 3.5; // pt
+// QR code size within the label
+const QR_SIZE = 0.32 * POINTS_PER_INCH;  // ~23pt
+const TEXT_SIZE = 4; // pt
 const HEADER_SIZE = 5; // pt for "B" and "C" above QR
 
 export const POST: RequestHandler = async ({ request, locals }) => {
@@ -104,7 +104,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			// "B" and "C" header → QR code → full barcode text
 
 			// "B" and "C" above QR — centered
-			const headerText = 'B          C';
+			const headerText = 'B    C';
 			const headerW = font.widthOfTextAtSize(headerText, HEADER_SIZE);
 			const headerX = labelX + (LABEL_W - headerW) / 2;
 			const headerY = labelY + LABEL_H - HEADER_SIZE - 2;
