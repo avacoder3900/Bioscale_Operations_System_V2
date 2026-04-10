@@ -42,9 +42,10 @@ const MARGIN_LEFT = 0.375 * POINTS_PER_INCH;
 const H_PITCH = (PAGE_W - 2 * MARGIN_LEFT) / COLS;
 const V_PITCH = (PAGE_H - 2 * MARGIN_TOP) / ROWS;
 
-// QR code size within the label
-const QR_SIZE = 0.5 * POINTS_PER_INCH;  // 36pt — leaves room for text below
-const TEXT_SIZE = 4; // pt
+// QR code size within the label (50% of original)
+const QR_SIZE = 0.25 * POINTS_PER_INCH;  // 18pt
+const TEXT_SIZE = 3.5; // pt
+const HEADER_SIZE = 5; // pt for "B" and "C" above QR
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!locals.user) {
@@ -99,17 +100,33 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				color: undefined
 			});
 
-			// Center QR within label
-			const qrX = labelX + (LABEL_W - QR_SIZE) / 2;
-			const qrY = labelY + LABEL_H - QR_SIZE - 2; // 2pt from top
+			// Layout within label (top to bottom):
+			// "B" and "C" header → QR code → full barcode text
 
-			// Generate QR code as PNG buffer
+			// "B" and "C" above QR — centered
+			const headerText = 'B          C';
+			const headerW = font.widthOfTextAtSize(headerText, HEADER_SIZE);
+			const headerX = labelX + (LABEL_W - headerW) / 2;
+			const headerY = labelY + LABEL_H - HEADER_SIZE - 2;
+
+			page.drawText(headerText, {
+				x: headerX,
+				y: headerY,
+				size: HEADER_SIZE,
+				font,
+				color: rgb(0, 0, 0)
+			});
+
+			// QR code — centered below header
+			const qrX = labelX + (LABEL_W - QR_SIZE) / 2;
+			const qrY = headerY - QR_SIZE - 2;
+
 			const qrPng = await bwipjs.toBuffer({
 				bcid: 'qrcode',
 				text: barcode,
 				scale: 3,
-				width: 15,
-				height: 15,
+				width: 10,
+				height: 10,
 				includetext: false
 			});
 
@@ -121,7 +138,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				height: QR_SIZE
 			});
 
-			// Barcode text below QR
+			// Full barcode text below QR
 			const textWidth = font.widthOfTextAtSize(barcode, TEXT_SIZE);
 			const textX = labelX + (LABEL_W - textWidth) / 2;
 			const textY = qrY - TEXT_SIZE - 1;
