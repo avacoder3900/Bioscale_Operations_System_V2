@@ -43,7 +43,7 @@ const H_PITCH = (PAGE_W - 2 * MARGIN_LEFT) / COLS;
 const V_PITCH = (PAGE_H - 2 * MARGIN_TOP) / ROWS;
 
 // QR code size within the label
-const QR_SIZE = 0.32 * POINTS_PER_INCH;  // ~23pt
+const QR_SIZE = 0.40 * POINTS_PER_INCH;  // ~29pt
 const TEXT_SIZE = 4; // pt
 const HEADER_SIZE = 5; // pt for "B" and "C" above QR
 
