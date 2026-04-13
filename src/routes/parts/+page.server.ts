@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, PartDefinition, Integration, generateId, AuditLog } from '$lib/server/db';
+import { connectDB, PartDefinition, Integration, generateId, AuditLog, InventoryTransaction } from '$lib/server/db';
 import { syncPartsFromBox } from '$lib/server/box-sync';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -8,12 +8,34 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'inventory:read');
 	await connectDB();
 
-	const [allSpuParts, cartridgePartDocs, boxInteg] = await Promise.all([
+	// Look up PT-CT-101 so we can exclude viewer1's seeded thermoseal transactions
+	const thermosealPart = await PartDefinition.findOne({ partNumber: 'PT-CT-101' }).select('_id').lean() as any;
+	const thermosealPartId = thermosealPart?._id;
+
+	const [allSpuParts, cartridgePartDocs, boxInteg, txAgg] = await Promise.all([
 		PartDefinition.find({ $or: [{ bomType: 'spu' }, { bomType: { $exists: false } }] })
 			.sort({ sortOrder: 1, partNumber: 1 }).lean(),
 		PartDefinition.find({ bomType: 'cartridge', isActive: true })
 			.sort({ partNumber: 1 }).lean(),
-		Integration.findOne({ type: 'box' }).lean()
+		Integration.findOne({ type: 'box' }).lean(),
+		InventoryTransaction.aggregate([
+			{ $match: {
+				$nor: [
+					{ performedBy: { $in: ['contracttest', 'operator1', 'nick'] } },
+					...(thermosealPartId
+						? [{ performedBy: '6qL9_4SC4lYXTrMGZTAui', partDefinitionId: thermosealPartId }]
+						: [])
+				]
+			}},
+			{ $sort: { createdAt: 1 } },
+			{ $group: {
+				_id: '$partDefinitionId',
+				totalQuantity: { $sum: '$quantity' },
+				txCount: { $sum: 1 },
+				lastTxAt: { $max: '$createdAt' },
+				lastSource: { $last: '$source' }
+			}}
+		])
 	]);
 
 	// Split SPU parts into BOM and non-BOM
@@ -140,10 +162,41 @@ export const load: PageServerLoad = async ({ locals }) => {
 		barcode: p.barcode ?? null
 	}));
 
+	// Transaction-based scanned inventory
+	const txMap = new Map(txAgg.map((t: any) => [t._id, t]));
+	const allParts = [...(allSpuParts as any[]), ...(cartridgePartDocs as any[])];
+	const scannedItems = allParts
+		.filter((p: any) => txMap.has(p._id))
+		.map((p: any) => {
+			const tx = txMap.get(p._id)!;
+			const cost = parseFloat(p.unitCost) || null;
+			return {
+				id: p._id,
+				partNumber: p.partNumber ?? '',
+				name: p.name ?? '',
+				category: p.category ?? null,
+				stock: tx.totalQuantity,
+				unitCost: cost,
+				totalValue: cost ? cost * tx.totalQuantity : null,
+				txCount: tx.txCount,
+				lastTxAt: tx.lastTxAt,
+				lastSource: tx.lastSource ?? 'unknown'
+			};
+		})
+		.sort((a, b) => a.partNumber.localeCompare(b.partNumber));
+
+	const scannedSummary = {
+		totalParts: scannedItems.length,
+		totalTransactions: scannedItems.reduce((s, i) => s + i.txCount, 0),
+		totalValue: scannedItems.reduce((s, i) => s + (i.totalValue ?? 0), 0)
+	};
+
 	return {
 		items: itemsWithCost,
 		cartridgeParts,
 		nonBomItems,
+		scannedItems: JSON.parse(JSON.stringify(scannedItems)),
+		scannedSummary,
 		cartridgeBomSummary,
 		lowStockItems,
 		lowestInventory,
@@ -244,6 +297,69 @@ export const actions: Actions = {
 		});
 
 		return { success: true };
+	},
+
+	withdraw: async ({ request, locals }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+
+		const form = await request.formData();
+		const partId = form.get('partId')?.toString().trim();
+		const qtyStr = form.get('quantity')?.toString().trim();
+		const reason = form.get('reason')?.toString().trim();
+
+		if (!partId) return fail(400, { withdrawError: 'Select a part' });
+		if (!qtyStr || isNaN(Number(qtyStr)) || Number(qtyStr) <= 0) {
+			return fail(400, { withdrawError: 'Enter a valid quantity greater than 0' });
+		}
+		if (!reason) return fail(400, { withdrawError: 'Provide a reason' });
+
+		const quantity = Number(qtyStr);
+		const part = await PartDefinition.findById(partId).lean() as any;
+		if (!part) return fail(404, { withdrawError: 'Part not found' });
+
+		const balanceAgg = await InventoryTransaction.aggregate([
+			{ $match: { partDefinitionId: partId } },
+			{ $group: { _id: null, total: { $sum: '$quantity' } } }
+		]);
+		const previousQuantity = balanceAgg[0]?.total ?? 0;
+		const newQuantity = previousQuantity - quantity;
+
+		await InventoryTransaction.create({
+			_id: generateId(),
+			partDefinitionId: partId,
+			partNumber: part.partNumber,
+			transactionType: 'consumption',
+			quantity: -quantity,
+			previousQuantity,
+			newQuantity,
+			reason: `Withdraw: ${reason}`,
+			performedBy: locals.user!._id,
+			performedAt: new Date(),
+			operatorId: locals.user!._id,
+			operatorUsername: locals.user!.username,
+			notes: reason
+		});
+
+		await PartDefinition.updateOne(
+			{ _id: partId },
+			{ $inc: { inventoryCount: -quantity } }
+		);
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'inventory_transactions',
+			recordId: partId,
+			action: 'INSERT',
+			newData: { partNumber: part.partNumber, quantity: -quantity, reason },
+			changedAt: new Date(),
+			changedBy: locals.user!.username
+		});
+
+		return {
+			withdrawSuccess: true,
+			withdrawMessage: `Withdrew ${quantity} of ${part.partNumber} — ${part.name}. New stock: ${newQuantity}`
+		};
 	},
 
 	sync: async ({ locals }) => {

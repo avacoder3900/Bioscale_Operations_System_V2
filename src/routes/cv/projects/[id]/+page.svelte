@@ -1,15 +1,450 @@
 <script lang="ts">
+	import jsQR from 'jsqr';
 	let { data } = $props();
 	let activeTab = $state('import');
-	const tabs = ['Import', 'Labels', 'Train', 'Test', 'Review', 'Integrate'];
+	const tabs = ['Import', 'Capture', 'Labels', 'Train', 'Test', 'Review', 'Integrate'];
 
 	// Import tab
 	let uploading = $state(false);
 	let uploadMsg = $state('');
 	let dragOver = $state(false);
 
+	// Capture tab
+	let videoEl = $state<HTMLVideoElement | null>(null);
+	let canvasEl = $state<HTMLCanvasElement | null>(null);
+	let cameraStream = $state<MediaStream | null>(null);
+	let cameraError = $state('');
+	let cameraReady = $state(false);
+	let capturedImage = $state<string | null>(null);
+	let captureUploading = $state(false);
+	let captureMsg = $state('');
+	let captureCount = $state(0);
+	let availableCameras = $state<MediaDeviceInfo[]>([]);
+	let selectedCameraId = $state('');
+
+	// Processing mode (matches LIZA: full = post-processed, raw = no processing)
+	let processingMode = $state<'full' | 'raw'>(data.project.captureSettings?.mode || 'full');
+
+	// Camera settings (initialized from camera capabilities, not hardcoded)
+	let showSettings = $state(false);
+	let cameraCapabilities = $state<any>(null);
+	let camExposureComp = $state(50);
+	let camExposureTime = $state(250);
+	let camExposureMode = $state<'continuous' | 'manual'>('manual');
+	let camWhiteBalanceMode = $state<'continuous' | 'manual'>('manual');
+	let camWhiteBalance = $state(4000);
+	let camBrightness = $state(0);
+	let camContrast = $state(32);
+	let camSharpness = $state(3);
+	let camSaturation = $state(64);
+	let camZoom = $state(1);
+
+	async function loadCameraCapabilities() {
+		if (!cameraStream) return;
+		const track = cameraStream.getVideoTracks()[0];
+		if (!track) return;
+		try {
+			cameraCapabilities = track.getCapabilities();
+			// Read current settings from camera
+			const settings = track.getSettings() as any;
+			if (settings.exposureCompensation !== undefined) camExposureComp = settings.exposureCompensation;
+			if (settings.exposureTime !== undefined) camExposureTime = settings.exposureTime;
+			if (settings.exposureMode) camExposureMode = settings.exposureMode;
+			if (settings.whiteBalanceMode) camWhiteBalanceMode = settings.whiteBalanceMode;
+			if (settings.colorTemperature !== undefined) camWhiteBalance = settings.colorTemperature;
+			if (settings.brightness !== undefined) camBrightness = settings.brightness;
+			if (settings.contrast !== undefined) camContrast = settings.contrast;
+			if (settings.sharpness !== undefined) camSharpness = settings.sharpness;
+			if (settings.saturation !== undefined) camSaturation = settings.saturation;
+			if (settings.zoom !== undefined) camZoom = settings.zoom;
+		} catch { cameraCapabilities = null; }
+	}
+
+	async function applyCameraSettings() {
+		if (!cameraStream) return;
+		const track = cameraStream.getVideoTracks()[0];
+		if (!track || !cameraCapabilities) return;
+
+		const caps = cameraCapabilities;
+		const advanced: any = {};
+
+		if (caps.exposureMode) advanced.exposureMode = camExposureMode;
+		if (caps.exposureCompensation && camExposureMode === 'manual') advanced.exposureCompensation = camExposureComp;
+		if (caps.exposureTime && camExposureMode === 'manual') advanced.exposureTime = camExposureTime;
+		if (caps.whiteBalanceMode) advanced.whiteBalanceMode = camWhiteBalanceMode;
+		if (caps.colorTemperature && camWhiteBalanceMode === 'manual') advanced.colorTemperature = camWhiteBalance;
+		if (caps.brightness) advanced.brightness = camBrightness;
+		if (caps.contrast) advanced.contrast = camContrast;
+		if (caps.sharpness) advanced.sharpness = camSharpness;
+		if (caps.saturation) advanced.saturation = camSaturation;
+		if (caps.zoom) advanced.zoom = camZoom;
+
+		try {
+			await track.applyConstraints({ advanced: [advanced] });
+		} catch (e) {
+			console.warn('Could not apply camera settings:', e);
+		}
+	}
+
+	// Induct mode — auto-create cartridge records on scan
+	let inductMode = $state(false);
+	let inductMsg = $state('');
+
+	// QR scanning
+	let detectedQR = $state<string | null>(null);
+	let qrLookupResult = $state<any>(null);
+	let qrScanning = $state(false);
+	let qrScanTimer = $state<ReturnType<typeof setInterval> | null>(null);
+	let qrScanCanvas: HTMLCanvasElement | null = null;
+	let qrScanMethod = $state('');
+
+	async function startQRScanning() {
+		if (qrScanTimer) return;
+		qrScanCanvas = document.createElement('canvas');
+		qrScanning = true;
+		qrScanMethod = 'jsQR';
+
+		qrScanTimer = setInterval(() => {
+			if (!videoEl || !cameraReady || capturedImage || !qrScanCanvas) return;
+
+			try {
+				const w = videoEl.videoWidth;
+				const h = videoEl.videoHeight;
+				if (!w || !h) return;
+
+				qrScanCanvas.width = w;
+				qrScanCanvas.height = h;
+				const ctx = qrScanCanvas.getContext('2d', { willReadFrequently: true });
+				if (!ctx) return;
+				ctx.drawImage(videoEl, 0, 0, w, h);
+				const imageData = ctx.getImageData(0, 0, w, h);
+
+				const code = jsQR(imageData.data, w, h, { inversionAttempts: 'dontInvert' });
+				if (code && code.data) {
+					if (code.data !== detectedQR) {
+						detectedQR = code.data;
+						lookupBarcode(code.data);
+					}
+				}
+			} catch (e) {
+				console.warn('QR scan error:', e);
+			}
+		}, 500);
+	}
+
+	function stopQRScanning() {
+		if (qrScanTimer) {
+			clearInterval(qrScanTimer);
+			qrScanTimer = null;
+		}
+		qrScanning = false;
+	}
+
+	let cartridgePhaseInfo = $state<any>(null);
+
+	async function lookupBarcode(code: string) {
+		inductMsg = '';
+		try {
+			const res = await fetch(`/api/cv/lookup-barcode?code=${encodeURIComponent(code)}`);
+			if (res.ok) {
+				qrLookupResult = await res.json();
+			} else {
+				qrLookupResult = { raw: code, type: 'unknown' };
+			}
+
+			// If not found and induct mode is on, auto-create the cartridge record
+			if (qrLookupResult.type === 'unknown' && inductMode) {
+				const inductRes = await fetch('/api/cv/induct-cartridge', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ cartridgeId: code })
+				});
+				if (inductRes.ok) {
+					const inducted = await inductRes.json();
+					qrLookupResult = { type: 'cartridge', _id: inducted._id, phase: 'wax_filled' };
+					inductMsg = `Inducted ${code} into system`;
+				} else if (inductRes.status === 409) {
+					// Already exists — re-lookup
+					const retryRes = await fetch(`/api/cv/lookup-barcode?code=${encodeURIComponent(code)}`);
+					if (retryRes.ok) qrLookupResult = await retryRes.json();
+				} else {
+					inductMsg = 'Induction failed';
+				}
+			}
+
+			// If it's a cartridge, fetch phase advancement info
+			if (qrLookupResult.type === 'cartridge' && qrLookupResult._id) {
+				const phaseRes = await fetch(`/api/cv/lookup-cartridge?code=${encodeURIComponent(qrLookupResult._id)}`);
+				if (phaseRes.ok) {
+					cartridgePhaseInfo = await phaseRes.json();
+				} else {
+					cartridgePhaseInfo = null;
+				}
+			} else {
+				cartridgePhaseInfo = null;
+			}
+		} catch {
+			qrLookupResult = { raw: code, type: 'unknown' };
+			cartridgePhaseInfo = null;
+		}
+	}
+
+	// Keyboard shortcuts
+	function handleKeydown(e: KeyboardEvent) {
+		if (activeTab !== 'capture' || !cameraStream) return;
+		if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
+
+		if (e.code === 'Space') {
+			e.preventDefault();
+			if (capturedImage) {
+				saveCapture();
+			} else if (cameraReady) {
+				capturePhoto();
+			}
+		} else if (e.code === 'Escape') {
+			if (capturedImage) retakePhoto();
+		} else if (e.code === 'KeyS' && !e.ctrlKey && !e.metaKey) {
+			if (!cameraStream) startCamera();
+			else stopCamera();
+		}
+	}
+
+	async function loadCameras() {
+		try {
+			const devices = await navigator.mediaDevices.enumerateDevices();
+			availableCameras = devices.filter(d => d.kind === 'videoinput');
+			if (availableCameras.length > 0 && !selectedCameraId) {
+				selectedCameraId = availableCameras[0].deviceId;
+			}
+		} catch { /* ignore */ }
+	}
+
+	async function startCamera() {
+		cameraError = '';
+		cameraReady = false;
+		capturedImage = null;
+		captureMsg = '';
+		stopCamera();
+		try {
+			await loadCameras();
+			// Try selected camera first, then fall back to others
+			const camerasToTry = selectedCameraId
+				? [selectedCameraId, ...availableCameras.filter(c => c.deviceId !== selectedCameraId).map(c => c.deviceId)]
+				: availableCameras.map(c => c.deviceId);
+
+			let lastErr: any = null;
+			for (const deviceId of camerasToTry) {
+				try {
+					const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } });
+					selectedCameraId = deviceId;
+					cameraStream = stream;
+					// Wait for Svelte to render the video element, retry until it appears
+					for (let attempt = 0; attempt < 20; attempt++) {
+						await new Promise(r => setTimeout(r, 100));
+						if (videoEl) break;
+					}
+					if (videoEl) {
+						videoEl.srcObject = stream;
+						await videoEl.play().catch(() => {});
+						cameraReady = true;
+					}
+					await loadCameraCapabilities();
+					await applyCameraSettings();
+					startQRScanning();
+					return; // success
+				} catch (err) {
+					lastErr = err;
+				}
+			}
+			throw lastErr || new Error('No cameras available');
+		} catch (err: any) {
+			cameraError = err.message || 'Could not access camera. Check browser permissions.';
+		}
+	}
+
+	function stopCamera() {
+		stopQRScanning();
+		if (cameraStream) {
+			cameraStream.getTracks().forEach(t => t.stop());
+			cameraStream = null;
+		}
+		cameraReady = false;
+		detectedQR = null;
+		qrLookupResult = null;
+		cartridgePhaseInfo = null;
+	}
+
+	function capturePhoto() {
+		if (!videoEl || !canvasEl) return;
+		canvasEl.width = videoEl.videoWidth;
+		canvasEl.height = videoEl.videoHeight;
+		const ctx = canvasEl.getContext('2d');
+		if (!ctx) return;
+		ctx.drawImage(videoEl, 0, 0);
+		capturedImage = canvasEl.toDataURL('image/jpeg', 0.92);
+	}
+
+	async function resumeLiveFeed() {
+		capturedImage = null;
+		// Re-attach stream to video element after Svelte re-renders it
+		for (let attempt = 0; attempt < 20; attempt++) {
+			await new Promise(r => setTimeout(r, 100));
+			if (videoEl) break;
+		}
+		if (videoEl && cameraStream) {
+			videoEl.srcObject = cameraStream;
+			await videoEl.play().catch(() => {});
+			cameraReady = true;
+		}
+	}
+
+	function retakePhoto() {
+		resumeLiveFeed();
+	}
+
+	async function saveCapture() {
+		if (!capturedImage) return;
+		captureUploading = true;
+		captureMsg = '';
+		try {
+			const res = await fetch(capturedImage);
+			const blob = await res.blob();
+			const qrLabel = detectedQR ? detectedQR.replace(/[/\\:*?"<>|]/g, '_').slice(0, 60) : 'UNKNOWN';
+			const filename = `cartridge_capture_${qrLabel}_${String(captureCount + 1).padStart(3, '0')}.jpg`;
+			const file = new File([blob], filename, { type: 'image/jpeg' });
+
+			// Upload directly without using uploadFiles (which reloads the page)
+			const presignRes = await fetch('/api/cv/images/presign', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ projectId: data.project._id, filename, contentType: 'image/jpeg' })
+			});
+			if (!presignRes.ok) throw new Error('Presign failed');
+			const { uploadUrl, key, uploadSecret } = await presignRes.json();
+
+			const putRes = await fetch(uploadUrl, {
+				method: 'PUT',
+				headers: { 'Content-Type': 'image/jpeg', 'X-Upload-Secret': uploadSecret || '' },
+				body: file
+			});
+			if (!putRes.ok) throw new Error('R2 upload failed');
+
+			const recordBody: Record<string, any> = { projectId: data.project._id, key, filename, contentType: 'image/jpeg', fileSize: file.size };
+			if (qrLookupResult?.type === 'cartridge' && qrLookupResult._id) {
+				recordBody.cartridgeTag = {
+					cartridgeRecordId: qrLookupResult._id,
+					phase: cartridgePhaseInfo?.nextPhase || qrLookupResult.phase || null
+				};
+			}
+			const recordRes = await fetch('/api/cv/images/record', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(recordBody)
+			});
+			if (!recordRes.ok) throw new Error('Record failed');
+			const recordData = await recordRes.json();
+
+			captureCount++;
+			captureMsg = `Saved! (${captureCount} captured this session)`;
+			await resumeLiveFeed();
+
+			// Trigger server-side LIZA processing in background (non-blocking)
+			if (processingMode === 'full' && recordData.data?._id) {
+				fetch('/api/cv/process-image', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ imageId: recordData.data._id, mode: 'full' })
+				}).then(() => {
+					captureMsg = `Saved + processed! (${captureCount} this session)`;
+				}).catch(() => { /* processing failed silently — raw image is still saved */ });
+			}
+		} catch (err: any) {
+			captureMsg = `Save failed: ${err.message}`;
+		}
+		captureUploading = false;
+	}
+
+	// Clean up camera when leaving capture tab or page
+	$effect(() => {
+		if (activeTab !== 'capture') stopCamera();
+	});
+
+	// Keyboard shortcuts
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+		window.addEventListener('keydown', handleKeydown);
+		return () => window.removeEventListener('keydown', handleKeydown);
+	});
+
 	// Labels tab
 	let labeling = $state<string | null>(null);
+	let inducting = $state<string | null>(null);
+
+	function extractCartridgeIdFromFilename(filename: string): string | null {
+		// Format: cartridge_capture_<CARTRIDGE_ID>_<SEQ>.jpg
+		const match = filename.match(/^cartridge_capture_(.+)_\d{3}\.jpg$/i);
+		if (match) return match[1];
+		// Fallback: cartridge_capture_<CARTRIDGE_ID>.jpg (no sequence)
+		const match2 = filename.match(/^cartridge_capture_(.+)\.jpg$/i);
+		if (match2) return match2[1];
+		return null;
+	}
+
+	async function inductFromImage(imageId: string, filename: string) {
+		inducting = imageId;
+		try {
+			const cartridgeId = extractCartridgeIdFromFilename(filename);
+			if (!cartridgeId) {
+				alert('Could not extract cartridge ID from filename: ' + filename);
+				inducting = null;
+				return;
+			}
+
+			// Induct: create cartridge record if it doesn't exist
+			const inductRes = await fetch('/api/cv/induct-cartridge', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ cartridgeId })
+			});
+			// 201 = created, 409 = already exists — both are fine
+			if (!inductRes.ok && inductRes.status !== 409) {
+				alert('Failed to induct cartridge');
+				inducting = null;
+				return;
+			}
+
+			// Link image to cartridge
+			const linkRes = await fetch(`/api/cv/images/${imageId}/link-cartridge`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ cartridgeRecordId: cartridgeId, phase: 'wax_filled' })
+			});
+			if (linkRes.ok) {
+				// Update local state
+				const imgObj = data.images.find((i: any) => i._id === imageId);
+				if (imgObj) {
+					imgObj.cartridgeTag = { cartridgeRecordId: cartridgeId, phase: 'wax_filled' };
+					data.images = [...data.images];
+				}
+			}
+		} catch (e: any) {
+			alert(`Induct failed: ${e.message || 'Unknown error'}`);
+		}
+		inducting = null;
+	}
+	let lightboxIndex = $state<number>(-1);
+	const lightboxImage = $derived(lightboxIndex >= 0 && lightboxIndex < data.images.length ? data.images[lightboxIndex] : null);
+	function openLightbox(imageId: string) {
+		lightboxIndex = data.images.findIndex((i: any) => i._id === imageId);
+	}
+	function lightboxPrev() { if (lightboxIndex > 0) lightboxIndex--; }
+	function lightboxNext() { if (lightboxIndex < data.images.length - 1) lightboxIndex++; }
+	function handleLightboxKey(e: KeyboardEvent) {
+		if (lightboxIndex < 0) return;
+		if (e.key === 'ArrowLeft') lightboxPrev();
+		else if (e.key === 'ArrowRight') lightboxNext();
+		else if (e.key === 'Escape') lightboxIndex = -1;
+	}
 
 	// Train tab
 	let training = $state(false);
@@ -34,17 +469,46 @@
 		let count = 0;
 		let lastError = '';
 		for (const file of files) {
-			const fd = new FormData();
-			fd.append('file', file);
-			fd.append('projectId', data.project._id);
 			try {
-				const res = await fetch('/api/cv/images', { method: 'POST', body: fd });
-				if (res.ok) {
+				// Step 1: Get presigned URL
+				const presignRes = await fetch('/api/cv/images/presign', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ projectId: data.project._id, filename: file.name, contentType: file.type || 'image/jpeg' })
+				});
+				if (!presignRes.ok) {
+					const err = await presignRes.json().catch(() => ({}));
+					lastError = err.error || `Presign failed (${presignRes.status})`;
+					continue;
+				}
+				const { uploadUrl, key, uploadSecret } = await presignRes.json();
+
+				// Step 2: Upload to R2 via Cloudflare Worker proxy
+				const putRes = await fetch(uploadUrl, {
+					method: 'PUT',
+					headers: {
+						'Content-Type': file.type || 'image/jpeg',
+						'X-Upload-Secret': uploadSecret || ''
+					},
+					body: file
+				});
+				if (!putRes.ok) {
+					const errText = await putRes.text().catch(() => '');
+					lastError = `R2 upload failed (${putRes.status}): ${errText}`;
+					continue;
+				}
+
+				// Step 3: Create DB record
+				const recordRes = await fetch('/api/cv/images/record', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ projectId: data.project._id, key, filename: file.name, contentType: file.type || 'image/jpeg', fileSize: file.size })
+				});
+				if (recordRes.ok) {
 					count++;
 				} else {
-					const errJson = await res.json().catch(() => ({}));
-					lastError = errJson.error || `Upload failed (${res.status})`;
-					console.error('Upload error:', errJson);
+					const err = await recordRes.json().catch(() => ({}));
+					lastError = err.error || `Record failed (${recordRes.status})`;
 				}
 			} catch (e: any) {
 				lastError = e.message || 'Network error';
@@ -233,6 +697,418 @@
 				<p class="mt-3 text-center text-sm text-[var(--color-tron-green)]">{uploadMsg}</p>
 			{/if}
 
+		<!-- CAPTURE TAB -->
+		{:else if activeTab === 'capture'}
+			<div class="space-y-4">
+				{#if !cameraStream && !cameraError}
+					<div class="flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-[var(--color-tron-border)] py-16">
+						<svg class="mb-3 h-12 w-12 text-[var(--color-tron-text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+						</svg>
+						<p class="mb-4 text-[var(--color-tron-text-secondary)]">Connect a camera to capture images directly</p>
+						<button onclick={startCamera} class="rounded-lg bg-[var(--color-tron-cyan)] px-6 py-3 text-sm font-medium text-black hover:opacity-90">
+							Start Camera
+						</button>
+						<p class="mt-3 text-xs text-[var(--color-tron-text-secondary)]">Shortcuts: <kbd class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5">Space</kbd> capture/save &middot; <kbd class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5">Esc</kbd> retake</p>
+					</div>
+				{/if}
+
+				{#if cameraError}
+					<div class="rounded border border-[var(--color-tron-red)]/30 bg-[var(--color-tron-red)]/10 p-4 text-sm text-[var(--color-tron-red)]">
+						{cameraError}
+					</div>
+					<button onclick={startCamera} class="rounded-lg bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-black hover:opacity-90">
+						Retry
+					</button>
+				{/if}
+
+				{#if cameraStream}
+					<div class="grid gap-4 lg:grid-cols-[1fr_300px]">
+						<!-- Left: Camera feed -->
+						<div class="space-y-3">
+							<!-- Camera selector + Processing mode -->
+							<div class="flex flex-wrap items-center gap-4">
+								{#if availableCameras.length > 1}
+									<div class="flex items-center gap-2">
+										<label class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Camera</label>
+										<select
+											bind:value={selectedCameraId}
+											onchange={startCamera}
+											class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-tron-text-primary)]"
+										>
+											{#each availableCameras as cam, i}
+												<option value={cam.deviceId}>{cam.label || `Camera ${i + 1}`}</option>
+											{/each}
+										</select>
+									</div>
+								{/if}
+								<div class="flex items-center gap-2">
+									<label class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Processing</label>
+									<div class="flex rounded border border-[var(--color-tron-border)]">
+										<button
+											onclick={() => processingMode = 'full'}
+											class="px-3 py-1 text-xs font-medium transition-colors {processingMode === 'full' ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
+										>Full</button>
+										<button
+											onclick={() => processingMode = 'raw'}
+											class="border-l border-[var(--color-tron-border)] px-3 py-1 text-xs font-medium transition-colors {processingMode === 'raw' ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
+										>Raw</button>
+									</div>
+								</div>
+							</div>
+
+							<!-- Live feed / captured image -->
+							<div class="relative overflow-hidden rounded-lg border-2 border-[var(--color-tron-border)] bg-black">
+								{#if capturedImage}
+									<img src={capturedImage} alt="Captured" class="w-full" />
+								{:else}
+									<!-- svelte-ignore element_invalid_self_closing_tag -->
+									<video bind:this={videoEl} autoplay playsinline muted class="w-full" />
+								{/if}
+								<!-- QR status overlay (display only, like LIZA) -->
+								{#if cameraReady && !capturedImage}
+									<div class="absolute left-0 top-0 right-0 flex items-center justify-between p-2">
+										{#if detectedQR}
+											<span class="rounded bg-[var(--color-tron-green)]/80 px-2 py-1 text-xs font-bold text-black">QR: {detectedQR.slice(0, 50)}</span>
+										{:else}
+											<span class="rounded bg-[var(--color-tron-red)]/60 px-2 py-1 text-xs font-bold text-white">QR: NOT DETECTED</span>
+										{/if}
+									</div>
+									<div class="absolute bottom-0 left-0 right-0 flex items-center justify-between p-2">
+										<span class="rounded-full bg-[var(--color-tron-green)]/80 px-3 py-1 text-xs font-bold text-black">LIVE</span>
+										{#if captureCount > 0}
+											<span class="rounded-full bg-[var(--color-tron-cyan)]/80 px-3 py-1 text-xs font-bold text-black">{captureCount} captured</span>
+										{/if}
+									</div>
+								{/if}
+							</div>
+							<canvas bind:this={canvasEl} class="hidden"></canvas>
+
+							<!-- Controls -->
+							<div class="flex items-center justify-center gap-3">
+								{#if capturedImage}
+									<button
+										onclick={retakePhoto}
+										class="rounded-lg border border-[var(--color-tron-border)] px-6 py-3 text-sm font-medium text-[var(--color-tron-text-primary)] hover:bg-[var(--color-tron-bg-tertiary)]"
+									>
+										Retake <kbd class="ml-1 rounded bg-[var(--color-tron-bg-tertiary)] px-1 text-xs">Esc</kbd>
+									</button>
+									<button
+										onclick={saveCapture}
+										disabled={captureUploading}
+										class="rounded-lg bg-[var(--color-tron-green)] px-6 py-3 text-sm font-medium text-black hover:opacity-90 disabled:opacity-50"
+									>
+										{captureUploading ? 'Saving...' : 'Save to Project'} <kbd class="ml-1 rounded bg-black/20 px-1 text-xs">Space</kbd>
+									</button>
+								{:else}
+									<button
+										onclick={capturePhoto}
+										disabled={!cameraReady}
+										class="rounded-full bg-[var(--color-tron-cyan)] p-4 text-black shadow-lg transition-transform hover:scale-105 disabled:opacity-50"
+										title="Capture (Space)"
+									>
+										<svg class="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+											<circle cx="12" cy="12" r="10" stroke-width="2"/>
+											<circle cx="12" cy="12" r="4" fill="currentColor"/>
+										</svg>
+									</button>
+									<button
+										onclick={stopCamera}
+										class="rounded-lg border border-[var(--color-tron-border)] px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-red)]"
+									>
+										Stop Camera
+									</button>
+								{/if}
+							</div>
+
+							{#if captureMsg}
+								<p class="text-center text-sm text-[var(--color-tron-green)]">{captureMsg}</p>
+							{/if}
+						</div>
+
+						<!-- Right: QR Info Panel -->
+						<div class="space-y-3">
+							<div class="rounded-lg border {inductMode ? 'border-[var(--color-tron-yellow)]' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-bg-primary)] p-4">
+								<div class="mb-3 flex items-center justify-between">
+									<h4 class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">QR Code Scanner</h4>
+									<button
+										onclick={() => { inductMode = !inductMode; inductMsg = ''; }}
+										class="rounded-lg px-2.5 py-1 text-xs font-medium transition-colors {inductMode ? 'bg-[var(--color-tron-yellow)]/20 text-[var(--color-tron-yellow)] border border-[var(--color-tron-yellow)]/40' : 'bg-[var(--color-tron-bg-tertiary)] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
+									>
+										{inductMode ? 'INDUCT ON' : 'INDUCT OFF'}
+									</button>
+								</div>
+								{#if inductMode}
+									<div class="mb-2 rounded border border-[var(--color-tron-yellow)]/30 bg-[var(--color-tron-yellow)]/10 px-2 py-1">
+										<p class="text-[10px] text-[var(--color-tron-yellow)]">Induct mode: unknown QR codes will be auto-created as new cartridge records</p>
+									</div>
+								{/if}
+								{#if inductMsg}
+									<div class="mb-2 rounded border border-[var(--color-tron-green)]/30 bg-[var(--color-tron-green)]/10 px-2 py-1">
+										<p class="text-xs text-[var(--color-tron-green)]">{inductMsg}</p>
+									</div>
+								{/if}
+								{#if detectedQR}
+									<div class="space-y-2">
+										<div class="rounded border border-[var(--color-tron-green)]/30 bg-[var(--color-tron-green)]/10 p-2">
+											<p class="text-xs text-[var(--color-tron-text-secondary)]">Detected</p>
+											<p class="break-all font-mono text-sm text-[var(--color-tron-green)]">{detectedQR}</p>
+										</div>
+										{#if qrLookupResult}
+											{#if qrLookupResult.type === 'cartridge'}
+												<div class="space-y-1 text-sm">
+													<p class="text-[var(--color-tron-text-primary)]">Cartridge: <span class="font-semibold text-[var(--color-tron-cyan)]">{qrLookupResult.barcode || qrLookupResult._id}</span></p>
+													{#if cartridgePhaseInfo}
+														{#if cartridgePhaseInfo.isNew}
+															<div class="rounded border border-[var(--color-tron-yellow)]/30 bg-[var(--color-tron-yellow)]/10 px-2 py-1">
+																<p class="text-xs font-semibold text-[var(--color-tron-yellow)]">New cartridge — capturing as {cartridgePhaseInfo.nextPhase.replace(/_/g, ' ')}</p>
+															</div>
+														{:else if cartridgePhaseInfo.isComplete}
+															<div class="rounded border border-[var(--color-tron-green)]/30 bg-[var(--color-tron-green)]/10 px-2 py-1">
+																<p class="text-xs font-semibold text-[var(--color-tron-green)]">Already released — additional photo</p>
+															</div>
+														{:else}
+															<div class="rounded border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-cyan)]/10 px-2 py-1">
+																<p class="text-xs text-[var(--color-tron-cyan)]">{cartridgePhaseInfo.currentPhase?.replace(/_/g, ' ')} → <span class="font-semibold">{cartridgePhaseInfo.nextPhase.replace(/_/g, ' ')}</span></p>
+															</div>
+														{/if}
+														<div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-tron-bg-tertiary)]">
+															<div class="h-full rounded-full bg-[var(--color-tron-cyan)]" style="width: {Math.round(((cartridgePhaseInfo.pipelineIndex + 1) / cartridgePhaseInfo.pipelineLength) * 100)}%"></div>
+														</div>
+														<p class="text-[10px] text-[var(--color-tron-text-secondary)]">{cartridgePhaseInfo.pipelineIndex + 1} / {cartridgePhaseInfo.pipelineLength} phases &middot; {cartridgePhaseInfo.previousImages.length} prior photo{cartridgePhaseInfo.previousImages.length !== 1 ? 's' : ''}</p>
+													{:else}
+														{#if qrLookupResult.phase}<p class="text-[var(--color-tron-text-secondary)]">Phase: {qrLookupResult.phase}</p>{/if}
+													{/if}
+													{#if qrLookupResult.lotNumber}<p class="text-[var(--color-tron-text-secondary)]">Lot: {qrLookupResult.lotNumber}</p>{/if}
+												</div>
+											{:else if qrLookupResult.type === 'lot'}
+												<div class="space-y-1 text-sm">
+													<p class="text-[var(--color-tron-text-primary)]">Lot: <span class="font-semibold text-[var(--color-tron-cyan)]">{qrLookupResult.lotNumber}</span></p>
+													{#if qrLookupResult.status}<p class="text-[var(--color-tron-text-secondary)]">Status: {qrLookupResult.status}</p>{/if}
+												</div>
+											{:else if qrLookupResult.type === 'part'}
+												<div class="space-y-1 text-sm">
+													<p class="text-[var(--color-tron-text-primary)]">Part: <span class="font-semibold text-[var(--color-tron-cyan)]">{qrLookupResult.name}</span></p>
+													{#if qrLookupResult.barcode}<p class="text-[var(--color-tron-text-secondary)]">Barcode: {qrLookupResult.barcode}</p>{/if}
+												</div>
+											{:else}
+												<p class="text-xs text-[var(--color-tron-text-secondary)]">No matching record found in BIMS</p>
+											{/if}
+										{/if}
+									</div>
+								{:else}
+									<p class="text-sm text-[var(--color-tron-text-secondary)]">Point camera at a QR code to auto-identify cartridge, lot, or part.</p>
+								{/if}
+							</div>
+
+							<!-- Session stats -->
+							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4">
+								<h4 class="mb-2 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Session</h4>
+								<div class="grid grid-cols-2 gap-2 text-center">
+									<div>
+										<div class="text-xl font-bold text-[var(--color-tron-cyan)]">{captureCount}</div>
+										<div class="text-xs text-[var(--color-tron-text-secondary)]">Captured</div>
+									</div>
+									<div>
+										<div class="text-xl font-bold {detectedQR ? 'text-[var(--color-tron-green)]' : 'text-[var(--color-tron-text-secondary)]'}">{detectedQR ? 'YES' : 'NO'}</div>
+										<div class="text-xs text-[var(--color-tron-text-secondary)]">QR Lock</div>
+									</div>
+								</div>
+							</div>
+
+							<!-- Camera Settings (LIZA tuning panel) -->
+							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4">
+								<button onclick={() => showSettings = !showSettings} class="flex w-full items-center justify-between">
+									<h4 class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Camera Settings</h4>
+									<span class="text-xs text-[var(--color-tron-text-secondary)]">{showSettings ? '▲' : '▼'}</span>
+								</button>
+								{#if showSettings}
+									<div class="mt-3 space-y-3">
+										{#if !cameraCapabilities}
+											<p class="text-xs text-[var(--color-tron-text-secondary)]">No adjustable settings for this camera.</p>
+										{:else}
+											<!-- Exposure mode -->
+											{#if cameraCapabilities.exposureMode}
+												<div>
+													<div class="flex items-center justify-between text-xs">
+														<span class="text-[var(--color-tron-text-secondary)]">Exposure Mode</span>
+														<select bind:value={camExposureMode} onchange={applyCameraSettings}
+															class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-tron-text-primary)]">
+															<option value="continuous">Auto</option>
+															<option value="manual">Manual</option>
+														</select>
+													</div>
+												</div>
+											{/if}
+											{#if cameraCapabilities.exposureTime && camExposureMode === 'manual'}
+												<div>
+													<div class="flex items-center justify-between text-xs">
+														<span class="text-[var(--color-tron-text-secondary)]">Exposure Time</span>
+														<span class="font-mono text-[var(--color-tron-text-primary)]">{Math.round(camExposureTime)}</span>
+													</div>
+													<input type="range"
+														min={cameraCapabilities.exposureTime.min}
+														max={Math.min(cameraCapabilities.exposureTime.max, 2000)}
+														step={cameraCapabilities.exposureTime.step || 1}
+														bind:value={camExposureTime}
+														oninput={applyCameraSettings}
+														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+													/>
+												</div>
+											{/if}
+											{#if cameraCapabilities.exposureCompensation && camExposureMode === 'manual'}
+												<div>
+													<div class="flex items-center justify-between text-xs">
+														<span class="text-[var(--color-tron-text-secondary)]">Exposure Comp</span>
+														<span class="font-mono text-[var(--color-tron-text-primary)]">{camExposureComp}</span>
+													</div>
+													<input type="range"
+														min={cameraCapabilities.exposureCompensation.min}
+														max={cameraCapabilities.exposureCompensation.max}
+														step={cameraCapabilities.exposureCompensation.step || 1}
+														bind:value={camExposureComp}
+														oninput={applyCameraSettings}
+														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+													/>
+												</div>
+											{/if}
+											<!-- White Balance -->
+											{#if cameraCapabilities.whiteBalanceMode}
+												<div>
+													<div class="flex items-center justify-between text-xs">
+														<span class="text-[var(--color-tron-text-secondary)]">White Balance</span>
+														<select bind:value={camWhiteBalanceMode} onchange={applyCameraSettings}
+															class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-tron-text-primary)]">
+															<option value="continuous">Auto</option>
+															<option value="manual">Manual</option>
+														</select>
+													</div>
+												</div>
+											{/if}
+											{#if cameraCapabilities.colorTemperature && camWhiteBalanceMode === 'manual'}
+												<div>
+													<div class="flex items-center justify-between text-xs">
+														<span class="text-[var(--color-tron-text-secondary)]">Color Temp</span>
+														<span class="font-mono text-[var(--color-tron-text-primary)]">{camWhiteBalance}K</span>
+													</div>
+													<input type="range"
+														min={cameraCapabilities.colorTemperature.min}
+														max={cameraCapabilities.colorTemperature.max}
+														step={cameraCapabilities.colorTemperature.step || 1}
+														bind:value={camWhiteBalance}
+														oninput={applyCameraSettings}
+														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+													/>
+												</div>
+											{/if}
+											<!-- Image adjustments -->
+											{#if cameraCapabilities.brightness}
+												<div>
+													<div class="flex items-center justify-between text-xs">
+														<span class="text-[var(--color-tron-text-secondary)]">Brightness</span>
+														<span class="font-mono text-[var(--color-tron-text-primary)]">{camBrightness}</span>
+													</div>
+													<input type="range"
+														min={cameraCapabilities.brightness.min}
+														max={cameraCapabilities.brightness.max}
+														step={cameraCapabilities.brightness.step || 1}
+														bind:value={camBrightness}
+														oninput={applyCameraSettings}
+														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+													/>
+												</div>
+											{/if}
+											{#if cameraCapabilities.contrast}
+												<div>
+													<div class="flex items-center justify-between text-xs">
+														<span class="text-[var(--color-tron-text-secondary)]">Contrast</span>
+														<span class="font-mono text-[var(--color-tron-text-primary)]">{camContrast}</span>
+													</div>
+													<input type="range"
+														min={cameraCapabilities.contrast.min}
+														max={cameraCapabilities.contrast.max}
+														step={cameraCapabilities.contrast.step || 1}
+														bind:value={camContrast}
+														oninput={applyCameraSettings}
+														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+													/>
+												</div>
+											{/if}
+											{#if cameraCapabilities.saturation}
+												<div>
+													<div class="flex items-center justify-between text-xs">
+														<span class="text-[var(--color-tron-text-secondary)]">Saturation</span>
+														<span class="font-mono text-[var(--color-tron-text-primary)]">{camSaturation}</span>
+													</div>
+													<input type="range"
+														min={cameraCapabilities.saturation.min}
+														max={cameraCapabilities.saturation.max}
+														step={cameraCapabilities.saturation.step || 1}
+														bind:value={camSaturation}
+														oninput={applyCameraSettings}
+														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+													/>
+												</div>
+											{/if}
+											{#if cameraCapabilities.sharpness}
+												<div>
+													<div class="flex items-center justify-between text-xs">
+														<span class="text-[var(--color-tron-text-secondary)]">Sharpness</span>
+														<span class="font-mono text-[var(--color-tron-text-primary)]">{camSharpness}</span>
+													</div>
+													<input type="range"
+														min={cameraCapabilities.sharpness.min}
+														max={cameraCapabilities.sharpness.max}
+														step={cameraCapabilities.sharpness.step || 1}
+														bind:value={camSharpness}
+														oninput={applyCameraSettings}
+														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+													/>
+												</div>
+											{/if}
+											{#if cameraCapabilities.zoom && cameraCapabilities.zoom.max > 1}
+												<div>
+													<div class="flex items-center justify-between text-xs">
+														<span class="text-[var(--color-tron-text-secondary)]">Zoom</span>
+														<span class="font-mono text-[var(--color-tron-text-primary)]">{camZoom.toFixed(1)}x</span>
+													</div>
+													<input type="range"
+														min={cameraCapabilities.zoom.min}
+														max={cameraCapabilities.zoom.max}
+														step={cameraCapabilities.zoom.step || 0.1}
+														bind:value={camZoom}
+														oninput={applyCameraSettings}
+														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+													/>
+												</div>
+											{/if}
+											<button
+												onclick={() => { camExposureMode = 'manual'; camExposureComp = 50; camExposureTime = 250; camWhiteBalanceMode = 'manual'; camWhiteBalance = 4000; camBrightness = 0; camContrast = 32; camSharpness = 3; camSaturation = 64; camZoom = 1; applyCameraSettings(); }}
+												class="w-full rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]"
+											>
+												Reset to LIZA Defaults
+											</button>
+										{/if}
+										<div class="border-t border-[var(--color-tron-border)] pt-2">
+											<p class="text-xs text-[var(--color-tron-text-secondary)]">QR Scanner: <span class="font-mono text-[var(--color-tron-text-primary)]">{qrScanMethod || 'initializing...'}</span></p>
+										</div>
+									</div>
+								{/if}
+							</div>
+
+							<!-- Keyboard shortcuts -->
+							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4">
+								<h4 class="mb-2 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Shortcuts</h4>
+								<div class="space-y-1 text-xs">
+									<div class="flex justify-between"><span class="text-[var(--color-tron-text-secondary)]">Capture / Save</span><kbd class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[var(--color-tron-text-primary)]">Space</kbd></div>
+									<div class="flex justify-between"><span class="text-[var(--color-tron-text-secondary)]">Retake</span><kbd class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[var(--color-tron-text-primary)]">Esc</kbd></div>
+								</div>
+							</div>
+						</div>
+					</div>
+				{/if}
+			</div>
+
 		<!-- LABELS TAB -->
 		{:else if activeTab === 'labels'}
 			{#if data.images.length === 0}
@@ -243,7 +1119,7 @@
 						<div class="group relative overflow-hidden rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)]">
 							<div class="aspect-square bg-[var(--color-tron-bg-tertiary)]">
 								{#if image.imageUrl}
-									<img src={image.imageUrl} alt={image.filename} class="h-full w-full object-cover" />
+									<img src={image.imageUrl} alt={image.filename} class="h-full w-full cursor-pointer object-cover" onclick={() => openLightbox(image._id)} />
 								{:else}
 									<div class="flex h-full items-center justify-center text-xs text-[var(--color-tron-text-secondary)]">No preview</div>
 								{/if}
@@ -254,7 +1130,13 @@
 									{image.label === 'approved' ? 'GOOD' : 'DEFECT'}
 								</span>
 							{/if}
-							<!-- Label buttons -->
+							<!-- Linked badge -->
+							{#if image.cartridgeTag?.cartridgeRecordId}
+								<span class="absolute right-2 top-2 rounded-full bg-[var(--color-tron-cyan)]/20 px-2 py-0.5 text-[10px] font-semibold text-[var(--color-tron-cyan)]">
+									LINKED
+								</span>
+							{/if}
+							<!-- Label + Induct buttons -->
 							<div class="flex border-t border-[var(--color-tron-border)]">
 								<button
 									class="flex-1 py-1.5 text-xs font-medium transition-colors {image.label === 'approved' ? 'bg-[var(--color-tron-green)]/20 text-[var(--color-tron-green)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-green)]'}"
@@ -266,6 +1148,11 @@
 									disabled={labeling === image._id}
 									onclick={() => toggleLabel(image._id, image.label, 'rejected')}
 								>&#10007; Defect</button>
+								<button
+									class="flex-1 border-l border-[var(--color-tron-border)] py-1.5 text-xs font-medium transition-colors {image.cartridgeTag?.cartridgeRecordId ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
+									disabled={inducting === image._id || !!image.cartridgeTag?.cartridgeRecordId}
+									onclick={() => inductFromImage(image._id, image.filename)}
+								>{inducting === image._id ? '...' : 'Induct'}</button>
 							</div>
 						</div>
 					{/each}
@@ -432,4 +1319,48 @@
 			</div>
 		{/if}
 	</div>
+
+	<!-- Photo lightbox -->
+	{#if lightboxImage}
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm" onkeydown={handleLightboxKey} onclick={() => lightboxIndex = -1}>
+			<div class="relative flex max-h-[90vh] max-w-[92vw] flex-col items-center" onclick={(e) => e.stopPropagation()}>
+				<button onclick={() => lightboxIndex = -1} class="absolute -top-2 -right-2 z-10 rounded-full bg-[var(--color-tron-bg-secondary)] p-1.5 text-[var(--color-tron-text-secondary)] hover:text-white">
+					<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
+				</button>
+				<div class="flex items-center gap-3">
+					{#if lightboxIndex > 0}
+						<button onclick={lightboxPrev} class="rounded-lg bg-[var(--color-tron-bg-secondary)] p-2 text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">
+							<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
+						</button>
+					{:else}
+						<div class="w-10"></div>
+					{/if}
+					<img src={lightboxImage.imageUrl} alt={lightboxImage.filename} class="max-h-[75vh] max-w-[75vw] rounded-lg object-contain shadow-2xl" />
+					{#if lightboxIndex < data.images.length - 1}
+						<button onclick={lightboxNext} class="rounded-lg bg-[var(--color-tron-bg-secondary)] p-2 text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">
+							<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
+						</button>
+					{:else}
+						<div class="w-10"></div>
+					{/if}
+				</div>
+				<div class="mt-3 flex items-center gap-3 rounded-lg bg-[var(--color-tron-bg-secondary)] px-4 py-2 text-sm">
+					<span class="text-[var(--color-tron-text-primary)]">{lightboxImage.filename}</span>
+					{#if lightboxImage.label === 'approved'}
+						<span class="text-[var(--color-tron-green)]">GOOD</span>
+					{:else if lightboxImage.label === 'rejected'}
+						<span class="text-[var(--color-tron-red)]">DEFECT</span>
+					{:else}
+						<span class="text-[var(--color-tron-text-secondary)]">Unlabeled</span>
+					{/if}
+					{#if lightboxImage.cartridgeTag?.phase}
+						<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-tron-text-secondary)]">{lightboxImage.cartridgeTag.phase.replace(/_/g, ' ')}</span>
+					{/if}
+					<span class="text-[var(--color-tron-text-secondary)]">{fmtDate(lightboxImage.capturedAt || lightboxImage.createdAt)}</span>
+					<span class="text-xs text-[var(--color-tron-text-secondary)]">{lightboxIndex + 1} / {data.images.length}</span>
+				</div>
+			</div>
+		</div>
+	{/if}
 </div>

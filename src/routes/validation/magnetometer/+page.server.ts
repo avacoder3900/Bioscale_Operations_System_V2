@@ -45,6 +45,13 @@ export const actions: Actions = {
 
 		// Read the current magnet_validation variable (from a previous run_test)
 		try {
+			// Check device is online first to avoid wasting time on offline devices
+			const { getDevice } = await import('$lib/server/particle');
+			const deviceInfo = await getDevice(spu.particleLink.particleDeviceId);
+			if (!deviceInfo.online) {
+				return fail(400, { error: `Device is offline (last seen: ${deviceInfo.last_heard ? new Date(deviceInfo.last_heard).toLocaleString() : 'never'})` });
+			}
+
 			const varData = await getVariable(spu.particleLink.particleDeviceId, 'magnet_validation');
 			const rawResult = varData.result;
 			if (!rawResult || typeof rawResult !== 'string') {
@@ -90,22 +97,24 @@ export const actions: Actions = {
 				criteriaUsed: { minZ, maxZ }
 			});
 
-			// Update SPU validation record
+			// Update SPU DHR only when test passes
 			const magStatus = overallPassed ? 'passed' : 'failed';
-			await Spu.updateOne({ _id: spuId }, {
-				$set: {
-					'validation.magnetometer': {
-						status: magStatus,
-						sessionId,
-						completedAt: new Date(),
-						rawData: rawResult,
-						results: parsed,
-						failureReasons,
-						criteriaUsed: { minZ, maxZ }
-					},
-					qcStatus: magStatus
-				}
-			});
+			if (overallPassed) {
+				await Spu.updateOne({ _id: spuId }, {
+					$set: {
+						'validation.magnetometer': {
+							status: 'passed',
+							sessionId,
+							completedAt: new Date(),
+							rawData: rawResult,
+							results: parsed,
+							failureReasons: [],
+							criteriaUsed: { minZ, maxZ }
+						},
+						qcStatus: 'passed'
+					}
+				});
+			}
 
 			// Create audit log entry
 			await AuditLog.create({
@@ -128,9 +137,18 @@ export const actions: Actions = {
 				reason: `Magnetometer validation: ${magStatus.toUpperCase()}${failureReasons.length > 0 ? ' — ' + failureReasons.join('; ') : ''}`
 			});
 
-			redirect(303, `/validation/magnetometer/${sessionId}`);
+			return {
+				success: true,
+				sessionId,
+				spuUdi: spu.udi,
+				overallPassed,
+				failureReasons,
+				criteriaUsed: { minZ, maxZ },
+				magResults: parsed,
+				rawData: rawResult,
+				completedAt: new Date().toISOString()
+			};
 		} catch (err: any) {
-			if (err?.status === 303) throw err; // re-throw redirect
 			return fail(400, { error: `Failed: ${err instanceof Error ? err.message : String(err)}` });
 		}
 	},

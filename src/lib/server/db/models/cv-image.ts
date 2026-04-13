@@ -22,7 +22,18 @@ const cvImageSchema = new Schema({
 		notes: String,
 		_id: false
 	},
-	label: { type: String, enum: ['approved', 'rejected', null], default: null }
+	label: { type: String, enum: ['approved', 'rejected', null], default: null },
+	processedPath: String,
+	processingMode: { type: String, enum: ['full', 'raw', null] },
+	processingParams: {
+		redCorrection: { type: Number, default: 0.85 },
+		greenCorrection: { type: Number, default: 0.90 },
+		blueCorrection: { type: Number, default: 1.0 },
+		claheStrength: { type: Number, default: 2.0 },
+		gamma: { type: Number, default: 0.85 },
+		_id: false
+	},
+	processedAt: Date
 }, { timestamps: true });
 
 cvImageSchema.index({ sampleId: 1 });

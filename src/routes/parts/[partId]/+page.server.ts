@@ -214,6 +214,53 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
+	editTransaction: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'admin:full');
+		await connectDB();
+		const form = await request.formData();
+		const transactionId = form.get('transactionId')?.toString();
+		const newQuantity = Number(form.get('newQuantity'));
+		const reason = form.get('reason')?.toString() ?? 'Admin correction';
+		if (!transactionId) return fail(400, { error: 'Transaction ID required' });
+		if (isNaN(newQuantity)) return fail(400, { error: 'Invalid quantity' });
+
+		const txn = await InventoryTransaction.findById(transactionId).lean() as any;
+		if (!txn) return fail(404, { error: 'Transaction not found' });
+
+		const oldQty = txn.quantity ?? 0;
+		const diff = newQuantity - oldQty;
+
+		// Update the transaction
+		await InventoryTransaction.updateOne({ _id: transactionId }, {
+			$set: {
+				quantity: newQuantity,
+				newQuantity: (txn.previousQuantity ?? 0) + newQuantity,
+				notes: `${txn.notes || txn.reason || ''} [ADMIN EDIT: was ${oldQty}, now ${newQuantity}. Reason: ${reason}]`
+			}
+		});
+
+		// Adjust part inventory count by the difference
+		if (txn.partDefinitionId) {
+			await PartDefinition.updateOne({ _id: txn.partDefinitionId }, { $inc: { inventoryCount: diff } });
+		}
+
+		// Audit log
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'inventory_transactions',
+			recordId: transactionId,
+			action: 'UPDATE',
+			oldData: { quantity: oldQty },
+			newData: { quantity: newQuantity },
+			changedAt: new Date(),
+			changedBy: locals.user!.username,
+			changedFields: ['quantity'],
+			reason: `Admin correction: ${reason}`
+		});
+
+		return { editSuccess: true };
+	},
+
 	retractTransaction: async ({ request, locals, params }) => {
 		requirePermission(locals.user, 'inventory:write');
 		await connectDB();

@@ -8,6 +8,7 @@
 	let bulkMode = $state(false);
 	let selected = $state<Set<string>>(new Set());
 	let bulkLabeling = $state(false);
+	let fullscreen = $state(false);
 
 	function applyFilters() {
 		const params = new URLSearchParams();
@@ -156,11 +157,11 @@
 <!-- Lightbox -->
 {#if lightbox}
 	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4" role="dialog">
-		<button class="absolute right-4 top-4 text-2xl text-[var(--color-tron-text-secondary)] hover:text-white" onclick={() => lightbox = null}>&times;</button>
+		<button class="absolute right-4 top-4 text-2xl text-[var(--color-tron-text-secondary)] hover:text-white" onclick={() => { lightbox = null; fullscreen = false; }}>&times;</button>
 		<div class="flex max-h-[90vh] max-w-4xl flex-col gap-4 lg:flex-row">
 			<div class="flex-1">
 				{#if lightbox.imageUrl}
-					<img src={lightbox.imageUrl} alt={lightbox.filename} class="max-h-[70vh] rounded-lg object-contain" />
+					<img src={lightbox.imageUrl} alt={lightbox.filename} class="max-h-[70vh] cursor-pointer rounded-lg object-contain" onclick={() => fullscreen = true} />
 				{/if}
 			</div>
 			<div class="w-64 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
@@ -182,4 +183,11 @@
 			</div>
 		</div>
 	</div>
+{/if}
+
+<!-- Fullscreen image viewer -->
+{#if fullscreen && lightbox?.imageUrl}
+	<button class="fixed inset-0 z-[60] flex items-center justify-center bg-black/95 backdrop-blur-sm" onclick={() => fullscreen = false}>
+		<img src={lightbox.imageUrl} alt="fullscreen" class="max-h-[95vh] max-w-[95vw] object-contain" />
+	</button>
 {/if}

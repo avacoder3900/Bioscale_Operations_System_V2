@@ -225,6 +225,41 @@ export async function searchFiles(query: string): Promise<BoxItem[]> {
 	}));
 }
 
+/** Create a folder inside a parent Box folder. Returns { id, name }. */
+export async function createFolder(
+	parentFolderId: string,
+	folderName: string
+): Promise<{ id: string; name: string }> {
+	const res = await boxFetch('/folders', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			name: folderName,
+			parent: { id: parentFolderId }
+		})
+	});
+	const data = await res.json();
+	return { id: data.id, name: data.name };
+}
+
+/**
+ * Get or create a date-based COC folder inside the root COC folder.
+ * Structure: BOX_COC_FOLDER_ID / YYYY-MM-DD / files
+ * Returns the date folder's id.
+ */
+export async function getOrCreateDateFolder(
+	parentFolderId: string,
+	dateStr: string
+): Promise<{ id: string; name: string }> {
+	// List existing folders to check if date folder already exists
+	const { items } = await listFolder(parentFolderId);
+	const existing = items.find((i) => i.type === 'folder' && i.name === dateStr);
+	if (existing) {
+		return { id: existing.id, name: existing.name };
+	}
+	return createFolder(parentFolderId, dateStr);
+}
+
 /** Upload a file to a Box folder */
 export async function uploadFile(
 	folderId: string,

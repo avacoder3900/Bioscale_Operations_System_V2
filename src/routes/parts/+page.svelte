@@ -8,7 +8,7 @@
 
 	// Tab state from URL
 	const params = page.url.searchParams;
-	let activeTab = $state<'spu' | 'cartridge' | 'general'>(params.get('tab') === 'cartridge' ? 'cartridge' : params.get('tab') === 'general' ? 'general' : 'spu');
+	let activeTab = $state<'spu' | 'cartridge' | 'general' | 'scanned'>(params.get('tab') === 'cartridge' ? 'cartridge' : params.get('tab') === 'general' ? 'general' : params.get('tab') === 'scanned' ? 'scanned' : 'spu');
 
 	// Cartridge parts state
 	let cartSearchQuery = $state('');
@@ -58,7 +58,58 @@
 		return items;
 	});
 
-	function switchTab(tab: 'spu' | 'cartridge' | 'general') {
+	// Scanned inventory tab state
+	type ScannedSortColumn = 'partNumber' | 'name' | 'category' | 'stock' | 'unitCost' | 'totalValue' | 'txCount' | 'lastTxAt' | 'lastSource';
+	let scannedSortColumn = $state<ScannedSortColumn>('partNumber');
+	let scannedSortDirection = $state<SortDirection>('asc');
+	let scannedSearchQuery = $state('');
+
+	function toggleScannedSort(column: ScannedSortColumn) {
+		if (scannedSortColumn !== column) {
+			scannedSortColumn = column;
+			scannedSortDirection = 'asc';
+		} else if (scannedSortDirection === 'asc') {
+			scannedSortDirection = 'desc';
+		} else if (scannedSortDirection === 'desc') {
+			scannedSortDirection = null;
+		} else {
+			scannedSortDirection = 'asc';
+		}
+	}
+
+	let filteredScannedItems = $derived.by(() => {
+		let items = data.scannedItems ?? [];
+		if (scannedSearchQuery) {
+			const q = scannedSearchQuery.toLowerCase();
+			items = items.filter(
+				(i: any) =>
+					i.partNumber.toLowerCase().includes(q) ||
+					i.name.toLowerCase().includes(q) ||
+					i.category?.toLowerCase().includes(q)
+			);
+		}
+		if (scannedSortDirection) {
+			const dir = scannedSortDirection === 'asc' ? 1 : -1;
+			items = [...items].sort((a: Record<string, unknown>, b: Record<string, unknown>) => {
+				const av = a[scannedSortColumn];
+				const bv = b[scannedSortColumn];
+				if (av == null && bv == null) return 0;
+				if (av == null) return 1;
+				if (bv == null) return -1;
+				if (typeof av === 'string' && typeof bv === 'string') return av.localeCompare(bv) * dir;
+				return ((av as number) - (bv as number)) * dir;
+			});
+		}
+		return items;
+	});
+
+	function stockColor(stock: number): string {
+		if (stock <= 0) return 'text-[var(--color-tron-red)]';
+		if (stock <= 10) return 'text-yellow-400';
+		return '';
+	}
+
+	function switchTab(tab: 'spu' | 'cartridge' | 'general' | 'scanned') {
 		activeTab = tab;
 		const url = new URL(page.url);
 		url.searchParams.set('tab', tab);
@@ -257,6 +308,18 @@
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
 	}
 
+	// Withdraw modal state
+	let withdrawModal = $state<{ id: string; partNumber: string; name: string; stock: number } | null>(null);
+	let withdrawQty = $state<number | null>(null);
+	let withdrawReason = $state('');
+	let withdrawing = $state(false);
+
+	function openWithdraw(part: { id: string; partNumber: string; name: string; inventoryCount?: number; stock?: number }) {
+		withdrawModal = { id: part.id, partNumber: part.partNumber, name: part.name, stock: part.stock ?? part.inventoryCount ?? 0 };
+		withdrawQty = null;
+		withdrawReason = '';
+	}
+
 	function formatDate(date: Date | string | null): string {
 		if (!date) return '—';
 		return new Date(date).toLocaleDateString();
@@ -287,6 +350,13 @@
 		>
 			General Inventory
 			<span class="ml-1 text-xs">({data.nonBomItems?.length ?? 0})</span>
+		</button>
+		<button
+			class="px-4 py-2 text-sm font-medium transition-colors {activeTab === 'scanned' ? 'border-b-2 border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
+			onclick={() => switchTab('scanned')}
+		>
+			Scanned Inventory
+			<span class="ml-1 text-xs">({data.scannedItems?.length ?? 0})</span>
 		</button>
 	</div>
 
@@ -406,13 +476,11 @@
 								class="flex items-center justify-between rounded bg-[var(--color-tron-bg-primary)] px-2 py-1.5 text-xs"
 							>
 								<div class="min-w-0 flex-1">
-									<!-- eslint-disable svelte/no-navigation-without-resolve -->
-									<a
-										href="/parts/{item.id}"
-										class="font-mono text-[var(--color-tron-cyan)] hover:underline"
-										>{item.partNumber}</a
-									>
-									<!-- eslint-enable svelte/no-navigation-without-resolve -->
+									<button
+										type="button"
+										class="font-mono text-[var(--color-tron-cyan)] hover:underline cursor-pointer"
+										onclick={() => openWithdraw(item)}
+									>{item.partNumber}</button>
 									<div class="tron-text-muted truncate">{item.name}</div>
 								</div>
 								<div class="ml-2 text-right font-mono">
@@ -882,7 +950,7 @@
 						{@const isLow = (item.inventoryCount ?? 0) <= item.minimumStockLevel}
 						<tr>
 							<td>{item.name}</td>
-							<td class="font-mono text-[var(--color-tron-cyan)]">{item.partNumber}</td>
+							<td><button type="button" class="font-mono text-[var(--color-tron-cyan)] hover:underline cursor-pointer" onclick={() => openWithdraw(item)}>{item.partNumber}</button></td>
 							<td>
 								{#if item.category}
 									<TronBadge variant="neutral">{item.category}</TronBadge>
@@ -1093,7 +1161,7 @@
 					{#each filteredCartridgeParts as item (item.id)}
 						<tr class="cursor-pointer hover:bg-white/5" onclick={() => window.location.href = `/parts/${item.id}`}>
 							<td><a href="/parts/{item.id}" class="text-[var(--color-tron-cyan)] hover:underline">{item.name}</a></td>
-							<td class="font-mono text-[var(--color-tron-cyan)]"><a href="/parts/{item.id}" class="hover:underline">{item.partNumber}</a></td>
+							<td><button type="button" class="font-mono text-[var(--color-tron-cyan)] hover:underline cursor-pointer" onclick={(e) => { e.stopPropagation(); openWithdraw(item); }}>{item.partNumber}</button></td>
 							<td>
 								{#if item.category}
 									<TronBadge variant="neutral">{item.category}</TronBadge>
@@ -1156,7 +1224,7 @@
 				<tbody>
 					{#each data.nonBomItems ?? [] as item (item.id)}
 						<tr class="cursor-pointer hover:bg-white/5" onclick={() => window.location.href = `/parts/${item.id}`}>
-							<td class="font-mono text-[var(--color-tron-cyan)]"><a href="/parts/{item.id}" class="hover:underline">{item.partNumber}</a></td>
+							<td><button type="button" class="font-mono text-[var(--color-tron-cyan)] hover:underline cursor-pointer" onclick={(e) => { e.stopPropagation(); openWithdraw(item); }}>{item.partNumber}</button></td>
 							<td>{item.name}</td>
 							<td class="tron-text-muted">{item.category ?? '—'}</td>
 							<td class="tron-text-muted">{item.supplier ?? '—'}</td>
@@ -1170,4 +1238,155 @@
 		</div>
 	</TronCard>
 	{/if}
+
+	{#if activeTab === 'scanned'}
+	<TronCard>
+		<div class="mb-4">
+			<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">Scanned Inventory (Transaction-Based)</h3>
+			<p class="tron-text-muted text-xs mt-1">Only showing parts with barcode-scanned or logged transactions. Box-imported values are excluded.</p>
+		</div>
+
+		{#if data.scannedSummary}
+		<div class="flex gap-6 mb-4 text-xs">
+			<div><span class="tron-text-muted">Parts tracked:</span> <span class="font-mono text-[var(--color-tron-cyan)]">{data.scannedSummary.totalParts}</span></div>
+			<div><span class="tron-text-muted">Transactions:</span> <span class="font-mono text-[var(--color-tron-cyan)]">{data.scannedSummary.totalTransactions}</span></div>
+			<div><span class="tron-text-muted">Total value:</span> <span class="font-mono text-[var(--color-tron-cyan)]">{formatCurrency(data.scannedSummary.totalValue)}</span></div>
+		</div>
+		{/if}
+
+		<div class="mb-3">
+			<input
+				type="text"
+				placeholder="Search parts..."
+				class="tron-input w-full max-w-xs text-sm"
+				bind:value={scannedSearchQuery}
+			/>
+		</div>
+
+		<div class="overflow-x-auto">
+			<table class="tron-table">
+				<thead>
+					<tr>
+						<th class="cursor-pointer select-none" onclick={() => toggleScannedSort('partNumber')}>Part # {scannedSortColumn === 'partNumber' ? (scannedSortDirection === 'asc' ? '▲' : scannedSortDirection === 'desc' ? '▼' : '') : ''}</th>
+						<th class="cursor-pointer select-none" onclick={() => toggleScannedSort('name')}>Name {scannedSortColumn === 'name' ? (scannedSortDirection === 'asc' ? '▲' : scannedSortDirection === 'desc' ? '▼' : '') : ''}</th>
+						<th class="cursor-pointer select-none" onclick={() => toggleScannedSort('category')}>Category {scannedSortColumn === 'category' ? (scannedSortDirection === 'asc' ? '▲' : scannedSortDirection === 'desc' ? '▼' : '') : ''}</th>
+						<th class="cursor-pointer select-none text-right" onclick={() => toggleScannedSort('stock')}>Stock {scannedSortColumn === 'stock' ? (scannedSortDirection === 'asc' ? '▲' : scannedSortDirection === 'desc' ? '▼' : '') : ''}</th>
+						<th class="cursor-pointer select-none text-right" onclick={() => toggleScannedSort('unitCost')}>Unit Cost {scannedSortColumn === 'unitCost' ? (scannedSortDirection === 'asc' ? '▲' : scannedSortDirection === 'desc' ? '▼' : '') : ''}</th>
+						<th class="cursor-pointer select-none text-right" onclick={() => toggleScannedSort('totalValue')}>Total Value {scannedSortColumn === 'totalValue' ? (scannedSortDirection === 'asc' ? '▲' : scannedSortDirection === 'desc' ? '▼' : '') : ''}</th>
+						<th class="cursor-pointer select-none text-right" onclick={() => toggleScannedSort('txCount')}>Txns {scannedSortColumn === 'txCount' ? (scannedSortDirection === 'asc' ? '▲' : scannedSortDirection === 'desc' ? '▼' : '') : ''}</th>
+						<th class="cursor-pointer select-none" onclick={() => toggleScannedSort('lastTxAt')}>Last Transaction {scannedSortColumn === 'lastTxAt' ? (scannedSortDirection === 'asc' ? '▲' : scannedSortDirection === 'desc' ? '▼' : '') : ''}</th>
+						<th class="cursor-pointer select-none" onclick={() => toggleScannedSort('lastSource')}>Source {scannedSortColumn === 'lastSource' ? (scannedSortDirection === 'asc' ? '▲' : scannedSortDirection === 'desc' ? '▼' : '') : ''}</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each filteredScannedItems as item (item.id)}
+						<tr class="cursor-pointer hover:bg-white/5" onclick={() => window.location.href = `/parts/${item.id}`}>
+							<td><button type="button" class="font-mono text-[var(--color-tron-cyan)] hover:underline cursor-pointer" onclick={(e) => { e.stopPropagation(); openWithdraw(item); }}>{item.partNumber}</button></td>
+							<td>{item.name}</td>
+							<td class="tron-text-muted">{item.category ?? '—'}</td>
+							<td class="text-right font-mono {stockColor(item.stock)}">{item.stock}</td>
+							<td class="text-right font-mono">{formatCurrency(item.unitCost)}</td>
+							<td class="text-right font-mono">{formatCurrency(item.totalValue)}</td>
+							<td class="text-right font-mono">{item.txCount}</td>
+							<td class="tron-text-muted">{formatDate(item.lastTxAt)}</td>
+							<td><TronBadge>{item.lastSource}</TronBadge></td>
+						</tr>
+					{:else}
+						<tr><td colspan="9" class="tron-text-muted py-8 text-center">No scanned inventory data</td></tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+
+		<p class="tron-text-muted text-xs mt-3">Parts with no transactions are hidden from this view.</p>
+	</TronCard>
+	{/if}
+
+{#if withdrawModal}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+		<div class="w-full max-w-md rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-6 shadow-xl">
+			<h2 class="text-lg font-bold text-[var(--color-tron-cyan)]">Withdraw Inventory</h2>
+
+			<div class="mt-3">
+				<p class="text-sm text-[var(--color-tron-text)]">
+					<span class="font-mono text-[var(--color-tron-cyan)]">{withdrawModal.partNumber}</span>
+					— {withdrawModal.name}
+				</p>
+				<p class="text-sm text-[var(--color-tron-text-secondary)]">
+					Current Stock: {withdrawModal.stock}
+				</p>
+			</div>
+
+			<form
+				method="POST"
+				action="?/withdraw"
+				use:enhance={() => {
+					withdrawing = true;
+					return async ({ result, update }) => {
+						withdrawing = false;
+						if (result.type === 'success') {
+							withdrawModal = null;
+							await update();
+						}
+					};
+				}}
+			>
+				<input type="hidden" name="partId" value={withdrawModal.id} />
+
+				<div class="mt-4">
+					<label class="block text-sm text-[var(--color-tron-text)]">
+						Quantity
+						<input
+							type="number"
+							name="quantity"
+							min="1"
+							step="1"
+							bind:value={withdrawQty}
+							class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)]"
+							placeholder="Enter quantity to withdraw"
+							required
+						/>
+					</label>
+				</div>
+
+				<div class="mt-3">
+					<label class="block text-sm text-[var(--color-tron-text)]">
+						Reason
+						<input
+							type="text"
+							name="reason"
+							bind:value={withdrawReason}
+							class="mt-1 block w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)]"
+							placeholder="e.g., Used in assembly, damaged, expired"
+							required
+						/>
+					</label>
+				</div>
+
+				<div class="mt-5 flex justify-end gap-3">
+					<button
+						type="button"
+						onclick={() => (withdrawModal = null)}
+						class="rounded px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]"
+					>
+						Cancel
+					</button>
+					<button
+						type="submit"
+						disabled={withdrawing || !withdrawQty || withdrawQty <= 0 || !withdrawReason.trim()}
+						class="rounded bg-[var(--color-tron-red)] px-4 py-2 text-sm font-semibold text-white transition-opacity disabled:opacity-30"
+					>
+						{withdrawing ? 'Withdrawing...' : 'Withdraw'}
+					</button>
+				</div>
+			</form>
+		</div>
+	</div>
+{/if}
+
+{#if form?.withdrawSuccess}
+	<div class="fixed bottom-4 right-4 z-50 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-3 text-sm text-green-400 shadow-lg">
+		{form.withdrawMessage}
+	</div>
+{/if}
 </div>

@@ -182,8 +182,8 @@
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
 <GridBackground>
 	<div class="min-h-screen">
-		<!-- Header -->
-		<header class="border-b border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
+		<!-- Header — hidden on /cv routes (CV has its own layout header) -->
+		<header class="border-b border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]" class:hidden={$page.url.pathname.startsWith('/cv')}>
 			<div class="mx-auto px-4 sm:px-6 lg:px-8">
 				<div class="flex h-14 items-center justify-between">
 					<a href="/" class="flex shrink-0 items-center gap-2">

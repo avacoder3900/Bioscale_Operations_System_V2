@@ -35,3 +35,10 @@ export async function runInference(imageUrl: string, modelPath: string) {
 		body: JSON.stringify({ image_url: imageUrl, model_path: modelPath })
 	});
 }
+
+export async function processImage(imageUrl: string, outputKey: string, mode: 'full' | 'raw' = 'full', params?: Record<string, number>) {
+	return request('/process-image', {
+		method: 'POST',
+		body: JSON.stringify({ image_url: imageUrl, output_key: outputKey, mode, params: params || {} })
+	});
+}

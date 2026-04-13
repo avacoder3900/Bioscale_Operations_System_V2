@@ -113,6 +113,13 @@ const cartridgeRecordSchema = new Schema({
 	finalizedAt: Date, // ORPHANED: never written by any action
 	voidedAt: Date,
 	voidReason: String,
+	photos: [{
+		_id: false,
+		imageId: String,
+		phase: String,
+		capturedAt: Date
+	}],
+
 	corrections: [correctionSchema]
 }, { timestamps: true });
 

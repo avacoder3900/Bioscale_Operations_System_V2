@@ -16,6 +16,13 @@ const receivingLotSchema = new Schema({
 	inspectionPathway: { type: String, enum: ['coc', 'ip'], required: true },
 	cocDocumentUrl: String,
 	cocMeetsStandards: Boolean,
+	cocPhotos: [{
+		lotNumber: String,
+		r2Key: String,
+		fileUrl: String,
+		fileName: String,
+		uploadedAt: { type: Date, default: Date.now }
+	}],
 	ipResults: Schema.Types.Mixed, // { result, passRate, percentRequired }
 	ipRevisionId: String, // InspectionProcedureRevision._id
 	firstArticleInspection: { type: Boolean, default: false },

@@ -424,13 +424,15 @@
 				{ name: 'Spectrophotometer', key: 'spectrophotometer', icon: '🔬' }
 			] as test (test.key)}
 				{@const result = data.spu.validation?.[test.key]}
-				<div class="rounded-lg border p-3" style="border-color: {result?.status === 'passed' ? 'var(--color-tron-green)' : result?.status === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-border)'}; background: {result?.status === 'passed' ? 'rgba(0,255,100,0.05)' : result?.status === 'failed' ? 'rgba(255,0,0,0.05)' : 'var(--color-tron-bg-secondary)'};">
+				<div class="rounded-lg border p-3" style="border-color: {result?.status === 'passed' || result?.status === 'overridden' ? 'var(--color-tron-green)' : result?.status === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-border)'}; background: {result?.status === 'passed' || result?.status === 'overridden' ? 'rgba(0,255,100,0.05)' : result?.status === 'failed' ? 'rgba(255,0,0,0.05)' : 'var(--color-tron-bg-secondary)'};">
 					<div class="text-center">
 						<div class="text-lg">{test.icon}</div>
 						<div class="tron-text-primary text-xs font-bold mt-1">{test.name}</div>
 						<div class="mt-2">
 							{#if result?.status === 'passed'}
 								<span class="rounded-full px-2 py-0.5 text-xs font-bold" style="color: var(--color-tron-green); background: rgba(0,255,100,0.15);">PASS</span>
+							{:else if result?.status === 'overridden'}
+								<span class="rounded-full px-2 py-0.5 text-xs font-bold" style="color: var(--color-tron-yellow, #fbbf24); background: rgba(251,191,36,0.15);">OVERRIDDEN</span>
 							{:else if result?.status === 'failed'}
 								<span class="rounded-full px-2 py-0.5 text-xs font-bold" style="color: var(--color-tron-red); background: rgba(255,0,0,0.15);">FAIL</span>
 							{:else}
@@ -440,6 +442,9 @@
 						{#if result?.completedAt}
 							<div class="tron-text-muted text-[10px] mt-1">{formatDate(result.completedAt)}</div>
 						{/if}
+						{#if result?.sessionId}
+							<a href="/validation/{test.key}/{result.sessionId}" class="text-[10px] underline mt-1 block" style="color: var(--color-tron-cyan);">View Session</a>
+						{/if}
 					</div>
 					{#if result?.status === 'failed' && result?.failureReasons?.length > 0}
 						<div class="mt-2 border-t pt-2 space-y-1" style="border-color: var(--color-tron-border);">
@@ -448,10 +453,118 @@
 							{/each}
 						</div>
 					{/if}
+					{#if result?.status === 'overridden'}
+						<div class="mt-2 border-t pt-2" style="border-color: var(--color-tron-border);">
+							<div class="text-[10px]" style="color: var(--color-tron-yellow, #fbbf24);">Override by {result.overriddenBy?.username ?? 'admin'}</div>
+							{#if result.overrideReason}
+								<div class="tron-text-muted text-[10px] italic mt-0.5">"{result.overrideReason}"</div>
+							{/if}
+						</div>
+					{/if}
 				</div>
 			{/each}
 		</div>
 	</TronCard>
+
+	<!-- Validation Session History -->
+	{#if data.validationSessions?.length > 0}
+		<TronCard>
+			<h3 class="tron-text-primary mb-4 text-lg font-medium">Validation Session History</h3>
+			<div class="space-y-4">
+				{#each data.validationSessions as session (session.id)}
+					{@const typeLabel = session.type === 'mag' ? 'Magnetometer' : session.type === 'thermo' ? 'Thermocouple' : session.type ?? 'Unknown'}
+					{@const typeIcon = session.type === 'mag' ? '🧲' : session.type === 'thermo' ? '🌡️' : session.type === 'lux' ? '💡' : session.type === 'spec' ? '🔬' : '📋'}
+					<details class="rounded-lg border" style="border-color: {session.overallPassed ? 'var(--color-tron-green)' : session.override ? 'var(--color-tron-yellow, #fbbf24)' : session.status === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-border)'}; background: var(--color-tron-bg-secondary);">
+						<summary class="flex items-center justify-between p-3 cursor-pointer">
+							<div class="flex items-center gap-3">
+								<span class="text-lg">{typeIcon}</span>
+								<div>
+									<span class="tron-text-primary text-sm font-bold">{typeLabel}</span>
+									<span class="tron-text-muted text-xs ml-2">{formatDate(session.completedAt ?? session.startedAt)}</span>
+									<span class="tron-text-muted text-xs ml-2">by {session.operatorName}</span>
+								</div>
+							</div>
+							<div class="flex items-center gap-2">
+								{#if session.override}
+									<span class="rounded-full px-2 py-0.5 text-xs font-bold" style="color: var(--color-tron-yellow, #fbbf24); background: rgba(251,191,36,0.15);">OVERRIDDEN</span>
+								{:else if session.overallPassed}
+									<span class="rounded-full px-2 py-0.5 text-xs font-bold" style="color: var(--color-tron-green); background: rgba(0,255,100,0.15);">PASS</span>
+								{:else if session.status === 'failed'}
+									<span class="rounded-full px-2 py-0.5 text-xs font-bold" style="color: var(--color-tron-red); background: rgba(255,0,0,0.15);">FAIL</span>
+								{:else}
+									<span class="rounded-full px-2 py-0.5 text-xs font-bold tron-text-muted" style="background: rgba(128,128,128,0.15);">{session.status?.toUpperCase() ?? 'PENDING'}</span>
+								{/if}
+								<a href="/validation/{session.type === 'mag' ? 'magnetometer' : session.type === 'thermo' ? 'thermocouple' : session.type}/{session.id}" class="text-[10px] underline" style="color: var(--color-tron-cyan);" onclick={(e) => e.stopPropagation()}>View</a>
+							</div>
+						</summary>
+						<div class="border-t p-3 space-y-3" style="border-color: var(--color-tron-border);">
+							{#if session.override}
+								<div class="rounded p-2" style="background: rgba(251,191,36,0.08); border: 1px solid rgba(251,191,36,0.3);">
+									<div class="text-xs font-bold" style="color: var(--color-tron-yellow, #fbbf24);">Admin Override</div>
+									<div class="tron-text-muted text-xs mt-1">By: {session.override.by?.username ?? 'admin'} · {formatDate(session.override.at)}</div>
+									<div class="tron-text-muted text-xs italic mt-0.5">"{session.override.reason}"</div>
+								</div>
+							{/if}
+
+							{#if session.failureReasons?.length > 0}
+								<div class="space-y-1">
+									<div class="text-xs font-bold" style="color: var(--color-tron-red);">Failure Reasons:</div>
+									{#each session.failureReasons as reason}
+										<div class="text-[10px]" style="color: var(--color-tron-red);">✗ {reason}</div>
+									{/each}
+								</div>
+							{/if}
+
+							{#if session.criteriaUsed}
+								<div class="tron-text-muted text-xs">
+									Criteria: {#if session.criteriaUsed.minZ}Z range {session.criteriaUsed.minZ} – {session.criteriaUsed.maxZ}{/if}{#if session.criteriaUsed.minTemp}Temp {session.criteriaUsed.minTemp}°C – {session.criteriaUsed.maxTemp}°C{/if}
+								</div>
+							{/if}
+
+							{#if session.magResults?.length > 0}
+								<div class="overflow-x-auto">
+									<table class="tron-table text-xs">
+										<thead>
+											<tr>
+												<th>Well</th>
+												<th>Ch A (Z)</th>
+												<th>Ch B (Z)</th>
+												<th>Ch C (Z)</th>
+											</tr>
+										</thead>
+										<tbody>
+											{#each session.magResults as well}
+												<tr>
+													<td class="font-mono font-bold">{well.well}</td>
+													{#each ['A', 'B', 'C'] as ch}
+														{@const z = well[`ch${ch}_Z`]}
+														{@const inRange = z !== null && z !== undefined && session.criteriaUsed && z >= session.criteriaUsed.minZ && z <= session.criteriaUsed.maxZ}
+														<td class="font-mono" style="color: {z === null || z === undefined ? 'var(--color-tron-text-secondary)' : inRange ? 'var(--color-tron-green)' : 'var(--color-tron-red)'};">
+															{z !== null && z !== undefined ? z : '—'}
+															{#if z !== null && z !== undefined}
+																<span class="ml-1">{inRange ? '✓' : '✗'}</span>
+															{/if}
+														</td>
+													{/each}
+												</tr>
+											{/each}
+										</tbody>
+									</table>
+								</div>
+							{/if}
+
+							{#if session.rawData}
+								<details>
+									<summary class="tron-text-muted text-xs cursor-pointer hover:underline">Raw Device Output</summary>
+									<pre class="mt-2 text-[10px] tron-text-muted overflow-x-auto p-2 rounded" style="background: var(--color-tron-bg); white-space: pre-wrap; word-break: break-all;">{session.rawData}</pre>
+								</details>
+							{/if}
+						</div>
+					</details>
+				{/each}
+			</div>
+		</TronCard>
+	{/if}
 
 	<TronCard>
 		<h3 class="tron-text-primary mb-4 text-lg font-medium">Parts Traceability</h3>
