@@ -114,6 +114,15 @@
 		)
 	);
 
+	const LOW_INVENTORY_THRESHOLD = 100;
+	const lowInventoryItems = $derived(
+		[
+			data.inventory.rawCartridges,
+			data.inventory.cutThermosealStrips,
+			data.inventory.barcodeLabels
+		].filter((i) => i.quantity < LOW_INVENTORY_THRESHOLD)
+	);
+
 	// Track which barcodes are scanned
 	const allScanned = $derived(
 		lotBarcode1.trim().length > 0 &&
@@ -128,24 +137,42 @@
 	<div class="space-y-6">
 		<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">{data.config.processName}</h1>
 
+		{#if lowInventoryItems.length > 0}
+			<div class="rounded-lg border border-[var(--color-tron-yellow)]/50 bg-[var(--color-tron-yellow)]/10 p-3">
+				<p class="text-sm font-medium text-[var(--color-tron-yellow)]">⚠ Low inventory (below {LOW_INVENTORY_THRESHOLD}):</p>
+				<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
+					{lowInventoryItems.map((i) => `${i.name} (${i.quantity} ${i.unit})`).join(' · ')}
+				</p>
+			</div>
+		{/if}
+
 		<!-- Inventory Cards -->
 		<div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-				<p class="text-xs font-medium text-[var(--color-tron-text-secondary)]">{data.inventory.rawCartridges.name}</p>
+			<div class="rounded-lg border {data.inventory.rawCartridges.quantity < LOW_INVENTORY_THRESHOLD ? 'border-[var(--color-tron-yellow)]/60' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-surface)] p-4">
+				<p class="text-xs font-medium text-[var(--color-tron-text-secondary)]">
+					{data.inventory.rawCartridges.name}
+					{#if data.inventory.rawCartridges.quantity < LOW_INVENTORY_THRESHOLD}<span class="ml-1 rounded bg-[var(--color-tron-yellow)]/20 px-1 text-[10px] font-bold text-[var(--color-tron-yellow)]">LOW</span>{/if}
+				</p>
 				<p class="mt-1 text-2xl font-bold text-[var(--color-tron-text)]">
 					{data.inventory.rawCartridges.quantity}
 					<span class="text-sm font-normal text-[var(--color-tron-text-secondary)]">{data.inventory.rawCartridges.unit}</span>
 				</p>
 			</div>
-			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-				<p class="text-xs font-medium text-[var(--color-tron-text-secondary)]">{data.inventory.cutThermosealStrips.name}</p>
+			<div class="rounded-lg border {data.inventory.cutThermosealStrips.quantity < LOW_INVENTORY_THRESHOLD ? 'border-[var(--color-tron-yellow)]/60' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-surface)] p-4">
+				<p class="text-xs font-medium text-[var(--color-tron-text-secondary)]">
+					{data.inventory.cutThermosealStrips.name}
+					{#if data.inventory.cutThermosealStrips.quantity < LOW_INVENTORY_THRESHOLD}<span class="ml-1 rounded bg-[var(--color-tron-yellow)]/20 px-1 text-[10px] font-bold text-[var(--color-tron-yellow)]">LOW</span>{/if}
+				</p>
 				<p class="mt-1 text-2xl font-bold text-[var(--color-tron-text)]">
 					{data.inventory.cutThermosealStrips.quantity}
 					<span class="text-sm font-normal text-[var(--color-tron-text-secondary)]">{data.inventory.cutThermosealStrips.unit}</span>
 				</p>
 			</div>
-			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-				<p class="text-xs font-medium text-[var(--color-tron-text-secondary)]">{data.inventory.barcodeLabels.name}</p>
+			<div class="rounded-lg border {data.inventory.barcodeLabels.quantity < LOW_INVENTORY_THRESHOLD ? 'border-[var(--color-tron-yellow)]/60' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-surface)] p-4">
+				<p class="text-xs font-medium text-[var(--color-tron-text-secondary)]">
+					{data.inventory.barcodeLabels.name}
+					{#if data.inventory.barcodeLabels.quantity < LOW_INVENTORY_THRESHOLD}<span class="ml-1 rounded bg-[var(--color-tron-yellow)]/20 px-1 text-[10px] font-bold text-[var(--color-tron-yellow)]">LOW</span>{/if}
+				</p>
 				<p class="mt-1 text-2xl font-bold text-[var(--color-tron-text)]">
 					{data.inventory.barcodeLabels.quantity}
 					<span class="text-sm font-normal text-[var(--color-tron-text-secondary)]">{data.inventory.barcodeLabels.unit}</span>
@@ -208,7 +235,7 @@
 						<div>
 							<label class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Cartridge Lot</label>
 							<div class="mt-1 flex items-center gap-2">
-								<input type="text" bind:value={lotBarcode1} class="flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]" placeholder="Scan cartridge lot barcode" />
+								<input type="text" id="lotBarcode1" bind:value={lotBarcode1} onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); document.getElementById('lotBarcode2')?.focus(); } }} class="flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]" placeholder="Scan cartridge lot barcode" />
 								{#if lotBarcode1.trim()}
 									<span class="text-green-400 text-lg">&#10003;</span>
 								{/if}
@@ -217,7 +244,7 @@
 						<div>
 							<label class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Thermoseal Laser Cut Sheet Lot</label>
 							<div class="mt-1 flex items-center gap-2">
-								<input type="text" bind:value={lotBarcode2} class="flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]" placeholder="Scan thermoseal lot barcode" />
+								<input type="text" id="lotBarcode2" bind:value={lotBarcode2} onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); document.getElementById('lotBarcode3')?.focus(); } }} class="flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]" placeholder="Scan thermoseal lot barcode" />
 								{#if lotBarcode2.trim()}
 									<span class="text-green-400 text-lg">&#10003;</span>
 								{/if}
@@ -226,7 +253,7 @@
 						<div>
 							<label class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Barcode Label Lot</label>
 							<div class="mt-1 flex items-center gap-2">
-								<input type="text" bind:value={lotBarcode3} class="flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]" placeholder="Scan barcode label lot barcode" />
+								<input type="text" id="lotBarcode3" bind:value={lotBarcode3} class="flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]" placeholder="Scan barcode label lot barcode" />
 								{#if lotBarcode3.trim()}
 									<span class="text-green-400 text-lg">&#10003;</span>
 								{/if}
