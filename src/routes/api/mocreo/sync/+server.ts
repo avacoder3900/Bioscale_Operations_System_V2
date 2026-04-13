@@ -1,5 +1,6 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
+import { env } from '$env/dynamic/private';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import { connectDB, generateId, Equipment, TemperatureReading, TemperatureAlert, SensorConfig } from '$lib/server/db';
 import {
@@ -11,8 +12,18 @@ import {
 
 const OFFLINE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 
-export const POST: RequestHandler = async ({ request }) => {
+function authenticateSync(request: Request): void {
+	// Vercel Cron sends an Authorization header with CRON_SECRET
+	const authHeader = request.headers.get('authorization')?.replace('Bearer ', '');
+	if (env.CRON_SECRET && authHeader === env.CRON_SECRET) {
+		return; // Authenticated via Vercel Cron
+	}
+	// Fall back to agent API key auth
 	requireAgentApiKey(request);
+}
+
+async function runSync(request: Request) {
+	authenticateSync(request);
 	await connectDB();
 
 	let sensors: Awaited<ReturnType<typeof fetchAllSensors>>;
@@ -171,7 +182,13 @@ export const POST: RequestHandler = async ({ request }) => {
 		sensorCount: sensors.length,
 		results
 	});
-};
+}
+
+// GET: called by Vercel Cron every 5 minutes
+export const GET: RequestHandler = async ({ request }) => runSync(request);
+
+// POST: called by worker scripts and the openclaw agent
+export const POST: RequestHandler = async ({ request }) => runSync(request);
 
 async function checkLostConnection(sensorId: string, sensorName: string, eq: any, now: Date) {
 	// Only create if there isn't already an unacknowledged lost_connection alert for this sensor
