@@ -32,6 +32,27 @@ const lotRecordSchema = new Schema({
 	bucketBarcode: String,
 	notes: String,
 
+	// Oven placement — scanned at WI-01 confirm step. Used by wax filling
+	// to compute the minimum cure time before the bucket can be consumed.
+	ovenPlacement: {
+		ovenId: String,
+		ovenBarcode: String,
+		placedAt: Date,
+		placedBy: operatorRef
+	},
+
+	// Wax-filling consumption marker. Presence = bucket consumed (removed
+	// from the ready list). `overridden` flags an admin bypass of the
+	// minimum cure time; the override username + reason are audit-logged
+	// separately in audit_logs but kept here for quick display.
+	waxConsumed: {
+		at: Date,
+		by: operatorRef,
+		overridden: { type: Boolean, default: false },
+		overrideBy: operatorRef,
+		overrideReason: String
+	},
+
 	stepEntries: [{
 		_id: { type: String, default: () => generateId() },
 		stepId: String, stepNumber: Number, stepTitle: String,

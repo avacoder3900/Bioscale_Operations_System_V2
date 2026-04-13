@@ -10,7 +10,7 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, LotRecord, ProcessConfiguration, CartridgeRecord,
-	PartDefinition, AuditLog, generateId
+	PartDefinition, AuditLog, Equipment, BackingLot, generateId
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { nanoid } from 'nanoid';
@@ -35,11 +35,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	await connectDB();
 
-	const [config, recentLots, parts] = await Promise.all([
+	const [config, recentLots, parts, ovens] = await Promise.all([
 		ProcessConfiguration.findOne({ processType: PROCESS_TYPE }).lean(),
 		LotRecord.find({ 'processConfig.processType': PROCESS_TYPE })
 			.sort({ createdAt: -1 }).limit(20).lean(),
-		PartDefinition.find({ bomType: 'cartridge', isActive: true }).lean()
+		PartDefinition.find({ bomType: 'cartridge', isActive: true }).lean(),
+		Equipment.find({
+			equipmentType: 'oven',
+			status: { $in: ['active', 'available', 'in_use'] }
+		}).select('_id name barcode status').lean()
 	]);
 
 	if (!config) {
@@ -48,6 +52,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			processSteps: [],
 			lotStepEntries: [],
 			recentLots: [],
+			ovens: [],
 			inventory: {
 				rawCartridges: { name: 'Cartridges', quantity: 0, unit: 'pcs' },
 				barcodeLabels: { name: 'Barcodes', quantity: 0, unit: 'pcs' },
@@ -83,6 +88,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 			status: l.status ?? 'unknown',
 			createdAt: l.createdAt?.toISOString?.() ?? '',
 			finishTime: l.finishTime?.toISOString?.() ?? null
+		})),
+		ovens: (ovens as any[]).map((o: any) => ({
+			_id: String(o._id),
+			name: o.name ?? '',
+			barcode: o.barcode ?? '',
+			status: o.status ?? ''
 		})),
 		inventory: {
 			rawCartridges: { name: 'Cartridges', quantity: partQty('PT-CT-104'), unit: 'pcs' },
@@ -196,6 +207,7 @@ export const actions: Actions = {
 		const scrapBarcode = Number(data.get('scrapBarcode') || 0);
 		const scrapReason = (data.get('scrapReason') as string)?.trim() || '';
 		const bucketBarcode = (data.get('bucketBarcode') as string)?.trim() || '';
+		const ovenBarcode = (data.get('ovenBarcode') as string)?.trim() || '';
 		const notes = (data.get('notes') as string)?.trim() || '';
 
 		const totalScrap = scrapCartridge + scrapThermoseal + scrapBarcode;
@@ -204,6 +216,16 @@ export const actions: Actions = {
 		if (actualCount <= 0) return fail(400, { confirmComplete: { error: 'Count must be greater than 0' } });
 		if (totalScrap > 0 && !scrapReason) {
 			return fail(400, { confirmComplete: { error: 'Scrap reason is required when any parts are scrapped' } });
+		}
+		if (!bucketBarcode) return fail(400, { confirmComplete: { error: 'Bucket barcode is required' } });
+		if (!ovenBarcode) return fail(400, { confirmComplete: { error: 'Oven barcode is required' } });
+
+		const oven = await Equipment.findOne({
+			equipmentType: 'oven',
+			$or: [{ barcode: ovenBarcode }, { _id: ovenBarcode }]
+		}).lean() as any;
+		if (!oven) {
+			return fail(400, { confirmComplete: { error: `No oven found matching barcode "${ovenBarcode}"` } });
 		}
 
 		const lot = await LotRecord.findById(lotId).lean() as any;
@@ -243,6 +265,28 @@ export const actions: Actions = {
 			await CartridgeRecord.insertMany(cartridgeDocs);
 		}
 
+		// Register bucket as a BackingLot so it appears in wax-filling's
+		// "buckets in ovens" list. _id = scanned bucket barcode (that's what
+		// wax-filling's scanBackingLot expects to look up).
+		await BackingLot.findByIdAndUpdate(
+			bucketBarcode,
+			{
+				$setOnInsert: {
+					_id: bucketBarcode,
+					lotType: 'backing',
+					operator: { _id: locals.user._id, username: locals.user.username }
+				},
+				$set: {
+					ovenEntryTime: now,
+					ovenLocationId: String(oven._id),
+					ovenLocationName: oven.name ?? oven.barcode ?? '',
+					cartridgeCount: actualCount,
+					status: 'in_oven'
+				}
+			},
+			{ upsert: true, new: true }
+		);
+
 		// Finalize lot
 		await LotRecord.findByIdAndUpdate(lotId, {
 			$set: {
@@ -254,7 +298,14 @@ export const actions: Actions = {
 				scrapCount: totalScrap,
 				scrapDetail: { cartridge: scrapCartridge, thermoseal: scrapThermoseal, barcode: scrapBarcode },
 				scrapReason: scrapReason || undefined,
-				bucketBarcode: bucketBarcode || undefined,
+				bucketBarcode,
+				ovenEntryTime: now,
+				ovenPlacement: {
+					ovenId: String(oven._id),
+					ovenBarcode: oven.barcode ?? ovenBarcode,
+					placedAt: now,
+					placedBy: { _id: locals.user._id, username: locals.user.username }
+				},
 				notes: notes || undefined
 			}
 		});

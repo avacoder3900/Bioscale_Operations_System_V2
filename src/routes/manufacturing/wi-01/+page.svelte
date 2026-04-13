@@ -22,6 +22,7 @@
 			processSteps: any[];
 			lotStepEntries: any[];
 			recentLots: RecentLot[];
+			ovens?: { _id: string; name: string; barcode: string; status: string }[];
 			inventory: {
 				cutThermosealStrips: { name: string; quantity: number; unit: string };
 				rawCartridges: { name: string; quantity: number; unit: string };
@@ -52,6 +53,7 @@
 	let scrapBarcode = $state(0);
 	let scrapReason = $state('');
 	let bucketBarcode = $state('');
+	let ovenBarcode = $state('');
 	let sessionNotes = $state('');
 
 	const totalScrap = $derived(scrapCartridge + scrapThermoseal + scrapBarcode);
@@ -100,6 +102,7 @@
 		scrapBarcode = 0;
 		scrapReason = '';
 		bucketBarcode = '';
+		ovenBarcode = '';
 		sessionNotes = '';
 		handoffOpen = false;
 		handoffPrompt = '';
@@ -457,16 +460,40 @@
 							</div>
 						</div>
 
-						<!-- Bucket assignment -->
+						<!-- Bucket + Oven assignment -->
 						<div>
-							<p class="text-lg font-semibold text-[var(--color-tron-text)]">Bucket Assignment</p>
-							<input
-								type="text"
-								name="bucketBarcode"
-								bind:value={bucketBarcode}
-								placeholder="Scan bucket barcode"
-								class="mt-2 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)] placeholder:text-[var(--color-tron-text-secondary)]/50"
-							/>
+							<p class="text-lg font-semibold text-[var(--color-tron-text)]">Bucket & Oven Assignment</p>
+							<div class="mt-2 grid gap-2 sm:grid-cols-2">
+								<div>
+									<label class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Bucket</label>
+									<input
+										type="text"
+										id="bucketBarcode"
+										name="bucketBarcode"
+										bind:value={bucketBarcode}
+										onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); document.getElementById('ovenBarcode')?.focus(); } }}
+										placeholder="Scan bucket barcode"
+										class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)] placeholder:text-[var(--color-tron-text-secondary)]/50"
+									/>
+								</div>
+								<div>
+									<label class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Oven</label>
+									<input
+										type="text"
+										id="ovenBarcode"
+										name="ovenBarcode"
+										bind:value={ovenBarcode}
+										list="ovenList"
+										placeholder="Scan oven barcode"
+										class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)] placeholder:text-[var(--color-tron-text-secondary)]/50"
+									/>
+									<datalist id="ovenList">
+										{#each (data.ovens ?? []) as oven (oven._id)}
+											<option value={oven.barcode || oven._id}>{oven.name}</option>
+										{/each}
+									</datalist>
+								</div>
+							</div>
 						</div>
 
 						{#if form?.confirmComplete && (form.confirmComplete as any).error}

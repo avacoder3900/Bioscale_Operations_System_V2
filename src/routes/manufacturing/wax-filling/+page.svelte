@@ -48,7 +48,16 @@
 			} | null;
 			activeLotId: string | null;
 			activeLotCartridgeCount: number | null;
-			ovenLots: { lotId: string; ready: boolean; cartridgeCount: number }[];
+			ovenLots: {
+				lotId: string;
+				ready: boolean;
+				cartridgeCount: number;
+				ovenName?: string;
+				ovenId?: string;
+				elapsedMin?: number;
+				remainingMin?: number;
+				ovenEntryTime?: string | null;
+			}[];
 			minOvenTimeMin: number;
 			rejectionCodes: RejectionReasonCode[];
 			qcCartridges: {
@@ -153,6 +162,19 @@
 			if (!res.ok) {
 				const msg = json?.error ?? json?.data?.error ?? `Error ${res.status}`;
 				lotScanError = msg;
+				// If the server says the bucket is short of its oven time,
+				// stage an admin override: open the modal pre-loaded with
+				// this lot. On confirm, the modal resubmits scanBackingLot
+				// with adminUser/adminPass + override=true.
+				const payload = json?.data ?? json;
+				if (payload?.requiresOverride && payload?.lotId) {
+					pendingOverrideAction = 'scanBackingLot';
+					pendingOverrideData = {
+						lotBarcode: payload.lotId,
+						runId: data.runState.runId ?? '',
+						override: 'true'
+					};
+				}
 			} else {
 				const d = json?.data ?? json;
 				confirmedLotId = d?.lotId ?? lotScanInput.trim();
@@ -951,7 +973,23 @@
 							Scan the Avery lot barcode from the box. Lot must have been in the oven for ≥ {data.minOvenTimeMin} minutes.
 						</p>
 						{#if lotScanError}
-							<div class="rounded border border-red-500/30 bg-red-900/20 px-3 py-2 text-xs text-red-300">{lotScanError}</div>
+							<div class="rounded border border-red-500/30 bg-red-900/20 px-3 py-2 text-xs text-red-300">
+								{lotScanError}
+								{#if pendingOverrideAction === 'scanBackingLot'}
+									<div class="mt-2 flex flex-wrap items-center gap-2">
+										<button type="button"
+											onclick={() => { showOverrideModal = true; overrideError = ''; }}
+											class="rounded bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700">
+											Admin Override
+										</button>
+										<button type="button"
+											onclick={() => { lotScanError = ''; lotScanInput = ''; pendingOverrideAction = ''; pendingOverrideData = {}; }}
+											class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)]">
+											Pick another bucket
+										</button>
+									</div>
+								{/if}
+							</div>
 						{/if}
 						<div class="flex items-center gap-3">
 							<input
@@ -981,12 +1019,24 @@
 						<!-- Quick-pick from ready lots -->
 						{#if data.ovenLots.filter(l => l.ready).length > 0}
 							<div class="text-xs text-[var(--color-tron-text-secondary)]">
-								Ready lots:
+								<span class="text-green-400">Ready:</span>
 								{#each data.ovenLots.filter(l => l.ready) as ol}
 									<button type="button" onclick={() => { lotScanInput = ol.lotId; handleScanBackingLot(); }}
 										class="ml-1 font-mono text-[var(--color-tron-cyan)] underline hover:no-underline">
-										{ol.lotId}
+										{ol.lotId}{ol.ovenName ? ` @ ${ol.ovenName}` : ''}
 									</button>
+								{/each}
+							</div>
+						{/if}
+						<!-- Still curing -->
+						{#if data.ovenLots.filter(l => !l.ready).length > 0}
+							<div class="text-xs text-[var(--color-tron-text-secondary)]">
+								<span class="text-amber-400">Still curing:</span>
+								{#each data.ovenLots.filter(l => !l.ready) as ol}
+									<span class="ml-1 font-mono">
+										{ol.lotId}{ol.ovenName ? ` @ ${ol.ovenName}` : ''}
+										<span class="text-amber-400">— {ol.remainingMin ?? 0} min left</span>
+									</span>
 								{/each}
 							</div>
 						{/if}

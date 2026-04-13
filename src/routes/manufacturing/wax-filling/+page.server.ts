@@ -5,7 +5,26 @@ import {
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { isAdmin } from '$lib/server/permissions';
+import { User } from '$lib/server/db';
+import bcrypt from 'bcryptjs';
 import type { PageServerLoad, Actions } from './$types';
+
+/**
+ * Verify admin credentials for an override. Looks up the user by username,
+ * bcrypt-compares the password, and confirms admin permission. Returns the
+ * verified user on success or an error string on failure.
+ */
+async function verifyAdminOverride(username: string, password: string): Promise<
+	{ ok: true; user: { _id: string; username: string } } | { ok: false; error: string }
+> {
+	if (!username || !password) return { ok: false, error: 'Admin username and password are required.' };
+	const admin = await User.findOne({ username }).lean() as any;
+	if (!admin) return { ok: false, error: 'Invalid admin credentials.' };
+	const match = await bcrypt.compare(password, admin.passwordHash ?? '');
+	if (!match) return { ok: false, error: 'Invalid admin credentials.' };
+	if (!isAdmin(admin)) return { ok: false, error: 'User is not an admin.' };
+	return { ok: true, user: { _id: String(admin._id), username: admin.username } };
+}
 
 // Extend Vercel serverless timeout to 60s (default is 10s)
 export const config = { maxDuration: 60 };
@@ -198,10 +217,16 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 		const ovenLots = (backingLotsRaw as any[]).map((bl: any) => {
 			const entryTime = bl.ovenEntryTime ? new Date(bl.ovenEntryTime).getTime() : 0;
 			const elapsedMin = entryTime ? (now - entryTime) / 60000 : 0;
+			const remainingMin = Math.max(0, Math.ceil(minOvenTimeMin - elapsedMin));
 			return {
 				lotId: String(bl._id),
 				ready: elapsedMin >= minOvenTimeMin,
-				cartridgeCount: bl.cartridgeCount ?? 0
+				cartridgeCount: bl.cartridgeCount ?? 0,
+				ovenName: bl.ovenLocationName ?? '',
+				ovenId: bl.ovenLocationId ?? '',
+				elapsedMin: Math.floor(elapsedMin),
+				remainingMin,
+				ovenEntryTime: bl.ovenEntryTime ? new Date(bl.ovenEntryTime).toISOString() : null
 			};
 		});
 
@@ -254,36 +279,13 @@ export const actions: Actions = {
 		const lotBarcode = (data.get('lotBarcode') as string)?.trim();
 		const runId = (data.get('runId') as string)?.trim();
 		const override = data.get('override') === 'true';
+		const adminUser = (data.get('adminUser') as string)?.trim() ?? '';
+		const adminPass = (data.get('adminPass') as string) ?? '';
 
 		if (!lotBarcode) return fail(400, { error: 'Lot barcode is required' });
 
 		const settingsDoc = await ManufacturingSettings.findById('default').lean() as any;
 		const minOvenTimeMin: number = settingsDoc?.waxFilling?.minOvenTimeMin ?? 60;
-
-		// TEST OVERRIDE: skip lot lookup and oven check (admin only)
-		if (override) {
-			if (!isAdmin(locals.user)) {
-				return fail(403, { error: 'Override requires admin permission.' });
-			}
-			// Auto-create lot if it doesn't exist
-			const existing = await BackingLot.findById(lotBarcode).lean();
-			if (!existing) {
-				await BackingLot.create({
-					_id: lotBarcode,
-					lotType: 'backing',
-					ovenEntryTime: new Date(Date.now() - 120 * 60000), // 2 hours ago
-					operator: { _id: locals.user._id, username: locals.user.username },
-					cartridgeCount: 24,
-					status: 'ready'
-				});
-			} else {
-				await BackingLot.findByIdAndUpdate(lotBarcode, { $set: { status: 'ready' } });
-			}
-			if (runId) {
-				await WaxFillingRun.findByIdAndUpdate(runId, { $set: { activeLotId: lotBarcode } });
-			}
-			return { success: true, lotId: lotBarcode, overridden: true };
-		}
 
 		const lot = await BackingLot.findById(lotBarcode).lean() as any;
 		if (!lot) {
@@ -301,11 +303,51 @@ export const actions: Actions = {
 		const elapsedMin = (Date.now() - entryTime) / 60000;
 		const remainingMin = Math.ceil(Math.max(0, minOvenTimeMin - elapsedMin));
 
+		// Admin override path — requires re-auth (username + password). Any
+		// admin (permission `admin:full` or `admin:users`) can override; the
+		// event is recorded in audit_logs for traceability.
+		if (override) {
+			const verified = await verifyAdminOverride(adminUser, adminPass);
+			if (!verified.ok) {
+				return fail(403, { error: verified.error, remainingMin, lotId: lotBarcode, requiresOverride: true });
+			}
+			await BackingLot.findByIdAndUpdate(lotBarcode, { $set: { status: 'ready' } });
+			if (runId) {
+				await WaxFillingRun.findByIdAndUpdate(runId, { $set: { activeLotId: lotBarcode } });
+			}
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'backing_lots',
+				recordId: lotBarcode,
+				action: 'UPDATE',
+				changedBy: verified.user.username,
+				changedAt: new Date(),
+				reason: `Wax cure time override by admin — ${remainingMin} min remaining`,
+				newData: {
+					override: true,
+					operatorUsername: locals.user.username,
+					adminUsername: verified.user.username,
+					minOvenTimeMin,
+					elapsedMin: Math.floor(elapsedMin),
+					remainingMin
+				}
+			});
+			return {
+				success: true,
+				lotId: lotBarcode,
+				cartridgeCount: lot.cartridgeCount ?? 0,
+				elapsedMin: Math.floor(elapsedMin),
+				overridden: true,
+				overrideBy: verified.user.username
+			};
+		}
+
 		if (elapsedMin < minOvenTimeMin) {
 			return fail(400, {
-				error: `Lot not ready. ${remainingMin} minute${remainingMin === 1 ? '' : 's'} remaining (minimum ${minOvenTimeMin} min required).`,
+				error: `Lot not ready. ${remainingMin} minute${remainingMin === 1 ? '' : 's'} remaining (minimum ${minOvenTimeMin} min required). Wait, pick a bucket that has passed the timer, or get an admin to override.`,
 				remainingMin,
-				lotId: lotBarcode
+				lotId: lotBarcode,
+				requiresOverride: true
 			});
 		}
 
