@@ -30,6 +30,7 @@ export { ProductionRun } from './production-run.js';
 export { GeneratedBarcode } from './generated-barcode.js';
 export { ValidationSession } from './validation-session.js';
 export { WaxFillingRun } from './wax-filling-run.js';
+export { WaxBatch } from './wax-batch.js';
 export { ProcessConfiguration } from './process-configuration.js';
 export { ManufacturingSettings } from './manufacturing-settings.js';
 export { LaserCutBatch } from './laser-cut-batch.js';

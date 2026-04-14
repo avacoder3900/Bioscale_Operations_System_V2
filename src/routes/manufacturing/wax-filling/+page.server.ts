@@ -1,9 +1,11 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
-	Equipment, EquipmentLocation, AuditLog, BackingLot
+	Equipment, EquipmentLocation, AuditLog, BackingLot, WaxBatch, ReceivingLot
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
+
+const WAX_FILL_VOLUME_UL = 800; // μL deducted from the 15ml WaxBatch per run
 import { isAdmin } from '$lib/server/permissions';
 import { User } from '$lib/server/db';
 import bcrypt from 'bcryptjs';
@@ -968,18 +970,70 @@ export const actions: Actions = {
 			});
 		}
 
+		// Deduct 1 unit from the 2ml tube ReceivingLot (and from the part's inventoryCount via recordTransaction)
+		// run.waxTubeId now stores the scanned ReceivingLot.lotId (2ml tube lot barcode)
 		if (run?.waxTubeId) {
-			await Consumable.findByIdAndUpdate(run.waxTubeId, {
-				$set: { lastUsedAt: now },
-				$inc: { totalCartridgesFilled: cartridgeCount, totalRunsUsed: 1 },
-				$push: {
-					usageLog: {
-						_id: generateId(), usageType: 'wax_run', runId: run._id,
-						quantityChanged: cartridgeCount, operator: operatorRef,
-						notes: `Wax filling run complete — ${cartridgeCount} cartridges`, createdAt: now
-					}
+			const tubeLot = await ReceivingLot.findOne({ lotId: run.waxTubeId }).lean() as any;
+			if (tubeLot) {
+				await ReceivingLot.updateOne(
+					{ _id: tubeLot._id },
+					{ $inc: { quantity: -1 } }
+				);
+				if (tubeLot.part?._id) {
+					await recordTransaction({
+						transactionType: 'consumption',
+						partDefinitionId: tubeLot.part._id,
+						lotId: tubeLot._id,
+						quantity: 1,
+						manufacturingStep: 'wax_filling',
+						manufacturingRunId: run._id,
+						operatorId: locals.user._id,
+						operatorUsername: locals.user.username,
+						notes: `Wax filling run — 2ml incubator tube consumed (lot ${run.waxTubeId})`
+					});
 				}
-			});
+			} else {
+				// Legacy path: still support existing Consumable-based tube IDs
+				await Consumable.findByIdAndUpdate(run.waxTubeId, {
+					$set: { lastUsedAt: now },
+					$inc: { totalCartridgesFilled: cartridgeCount, totalRunsUsed: 1 },
+					$push: {
+						usageLog: {
+							_id: generateId(), usageType: 'wax_run', runId: run._id,
+							quantityChanged: cartridgeCount, operator: operatorRef,
+							notes: `Wax filling run complete — ${cartridgeCount} cartridges`, createdAt: now
+						}
+					}
+				});
+			}
+		}
+
+		// Deduct 800 μL from the scanned 15ml WaxBatch
+		// run.waxSourceLot stores the scanned WaxBatch.lotBarcode
+		if (run?.waxSourceLot) {
+			const batch = await WaxBatch.findOne({ lotBarcode: run.waxSourceLot }).lean() as any;
+			if (batch) {
+				const remainingBefore = batch.remainingVolumeUl ?? 0;
+				const remainingAfter = Math.max(0, remainingBefore - WAX_FILL_VOLUME_UL);
+				await WaxBatch.updateOne(
+					{ _id: batch._id },
+					{
+						$set: { remainingVolumeUl: remainingAfter },
+						$push: {
+							usageLog: {
+								_id: generateId(),
+								runId: run._id,
+								volumeChangedUl: -WAX_FILL_VOLUME_UL,
+								remainingBeforeUl: remainingBefore,
+								remainingAfterUl: remainingAfter,
+								operator: operatorRef,
+								notes: `Wax filling run — 800 μL consumed (${cartridgeCount} cartridges)`,
+								createdAt: now
+							}
+						}
+					}
+				);
+			}
 		}
 
 		await AuditLog.create({
