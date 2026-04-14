@@ -10,7 +10,7 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, LotRecord, ProcessConfiguration, CartridgeRecord,
-	PartDefinition, AuditLog, Equipment, BackingLot, generateId
+	PartDefinition, AuditLog, Equipment, BackingLot, ReceivingLot, generateId
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { nanoid } from 'nanoid';
@@ -24,6 +24,34 @@ const CONSUMED_PARTS = [
 	{ partNumber: 'PT-CT-112', name: 'Thermoseal Laser Cut Sheet' },
 	{ partNumber: 'PT-CT-106', name: 'Barcode' }
 ];
+
+/**
+ * Validate that a scanned lot barcode belongs to the expected part. Used
+ * inline during the scan step so operators cannot mis-scan a Cartridge
+ * lot into the Thermoseal slot (etc.).
+ *
+ * A lot is considered valid when a ReceivingLot exists with matching
+ * lotId and part.partNumber, and its status is not 'rejected'/'returned'.
+ */
+async function validateLotForPart(lotId: string, partNumber: string):
+	Promise<{ ok: true; lot: any } | { ok: false; reason: string }>
+{
+	if (!lotId) return { ok: false, reason: 'Barcode is empty.' };
+	const lot = await ReceivingLot.findOne({ lotId }).lean() as any;
+	if (!lot) {
+		return { ok: false, reason: `Lot "${lotId}" is not in the receiving system.` };
+	}
+	if (lot.part?.partNumber !== partNumber) {
+		return {
+			ok: false,
+			reason: `Lot "${lotId}" is ${lot.part?.partNumber ?? 'an unknown part'} — expected ${partNumber}.`
+		};
+	}
+	if (lot.status === 'rejected' || lot.status === 'returned') {
+		return { ok: false, reason: `Lot "${lotId}" has status "${lot.status}" and cannot be consumed.` };
+	}
+	return { ok: true, lot };
+}
 
 function generateOutputLot(): string {
 	const now = new Date();
@@ -106,6 +134,24 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 export const actions: Actions = {
 	/**
+	 * Validate a single scanned lot barcode against the part it should
+	 * belong to. Called inline from the scan step so a mis-scan never
+	 * reaches checkAndStart.
+	 */
+	validateLot: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+		const data = await request.formData();
+		const lotId = (data.get('lotId') as string)?.trim() ?? '';
+		const partNumber = (data.get('partNumber') as string)?.trim() ?? '';
+		const check = await validateLotForPart(lotId, partNumber);
+		if (!check.ok) {
+			return fail(400, { validateLot: { ok: false, partNumber, lotId, reason: check.reason } });
+		}
+		return { validateLot: { ok: true, partNumber, lotId, partName: check.lot.part?.name ?? '' } };
+	},
+
+	/**
 	 * Check inventory for the requested quantity, create lot, and start batch.
 	 * Validates that all 3 materials have enough stock before proceeding.
 	 */
@@ -120,6 +166,21 @@ export const actions: Actions = {
 		const lot3 = (data.get('lot3') as string)?.trim() || '';
 
 		if (quantity <= 0) return fail(400, { checkAndStart: { error: 'Quantity must be greater than 0' } });
+
+		// Defense-in-depth: re-validate each scanned lot matches the part it
+		// represents. The UI validates on scan, but we re-check here so a
+		// forged form submission can't slip through.
+		const scanChecks: Array<[string, string, string]> = [
+			['PT-CT-104', 'Cartridge', lot1],
+			['PT-CT-112', 'Thermoseal Laser Cut Sheet', lot2],
+			['PT-CT-106', 'Barcode', lot3]
+		];
+		for (const [partNumber, label, lotId] of scanChecks) {
+			const check = await validateLotForPart(lotId, partNumber);
+			if (!check.ok) {
+				return fail(400, { checkAndStart: { error: `${label}: ${check.reason}` } });
+			}
+		}
 
 		// Check inventory for all 3 consumed materials
 		const parts = await PartDefinition.find({

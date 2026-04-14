@@ -46,6 +46,58 @@
 	let lotBarcode1 = $state('');
 	let lotBarcode2 = $state('');
 	let lotBarcode3 = $state('');
+	let lotError1 = $state('');
+	let lotError2 = $state('');
+	let lotError3 = $state('');
+	let lotValid1 = $state(false);
+	let lotValid2 = $state(false);
+	let lotValid3 = $state(false);
+	let lotChecking = $state(0); // 1|2|3 while a check is in flight
+
+	async function validateLotScan(slot: 1 | 2 | 3) {
+		const partNumber = slot === 1 ? 'PT-CT-104' : slot === 2 ? 'PT-CT-112' : 'PT-CT-106';
+		const value = (slot === 1 ? lotBarcode1 : slot === 2 ? lotBarcode2 : lotBarcode3).trim();
+		const setErr = (m: string) => { if (slot === 1) lotError1 = m; else if (slot === 2) lotError2 = m; else lotError3 = m; };
+		const setValid = (v: boolean) => { if (slot === 1) lotValid1 = v; else if (slot === 2) lotValid2 = v; else lotValid3 = v; };
+		setErr(''); setValid(false);
+		if (!value) return false;
+		lotChecking = slot;
+		try {
+			const fd = new FormData();
+			fd.set('lotId', value);
+			fd.set('partNumber', partNumber);
+			const res = await fetch('?/validateLot', {
+				method: 'POST',
+				body: fd,
+				headers: { 'x-sveltekit-action': 'true' }
+			});
+			const json = await res.json();
+			const payload = json?.data ?? json;
+			const inner = payload?.validateLot ?? payload;
+			if (!res.ok || inner?.ok === false) {
+				setErr(inner?.reason ?? `Error ${res.status}`);
+				// Reject the scan: clear the field so the next scan overwrites it.
+				if (slot === 1) lotBarcode1 = '';
+				else if (slot === 2) lotBarcode2 = '';
+				else lotBarcode3 = '';
+				return false;
+			}
+			setValid(true);
+			return true;
+		} catch (e) {
+			setErr(e instanceof Error ? e.message : 'Validation failed');
+			return false;
+		} finally {
+			lotChecking = 0;
+		}
+	}
+
+	async function handleLotEnter(slot: 1 | 2 | 3) {
+		const ok = await validateLotScan(slot);
+		if (!ok) return;
+		const nextId = slot === 1 ? 'lotBarcode2' : slot === 2 ? 'lotBarcode3' : null;
+		if (nextId) document.getElementById(nextId)?.focus();
+	}
 	let lotId = $state('');
 	let actualCount = $state(1);
 	let scrapCartridge = $state(0);
@@ -238,8 +290,10 @@
 						<div>
 							<label class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Cartridge Lot</label>
 							<div class="mt-1 flex items-center gap-2">
-								<input type="text" id="lotBarcode1" bind:value={lotBarcode1} onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); document.getElementById('lotBarcode2')?.focus(); } }} class="flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]" placeholder="Scan cartridge lot barcode" />
-								{#if lotBarcode1.trim()}
+								<input type="text" id="lotBarcode1" bind:value={lotBarcode1} onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleLotEnter(1); } }} onblur={() => { if (lotBarcode1.trim() && !lotValid1) validateLotScan(1); }} class="flex-1 rounded border {lotError1 ? 'border-red-500' : lotValid1 ? 'border-green-500' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]" placeholder="Scan cartridge lot barcode" />
+								{#if lotChecking === 1}
+									<span class="text-[var(--color-tron-text-secondary)] text-sm">…</span>
+								{:else if lotValid1}
 									<span class="text-green-400 text-lg">&#10003;</span>
 								{/if}
 							</div>
@@ -247,8 +301,10 @@
 						<div>
 							<label class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Thermoseal Laser Cut Sheet Lot</label>
 							<div class="mt-1 flex items-center gap-2">
-								<input type="text" id="lotBarcode2" bind:value={lotBarcode2} onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); document.getElementById('lotBarcode3')?.focus(); } }} class="flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]" placeholder="Scan thermoseal lot barcode" />
-								{#if lotBarcode2.trim()}
+								<input type="text" id="lotBarcode2" bind:value={lotBarcode2} onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleLotEnter(2); } }} onblur={() => { if (lotBarcode2.trim() && !lotValid2) validateLotScan(2); }} class="flex-1 rounded border {lotError2 ? 'border-red-500' : lotValid2 ? 'border-green-500' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]" placeholder="Scan thermoseal lot barcode" />
+								{#if lotChecking === 2}
+									<span class="text-[var(--color-tron-text-secondary)] text-sm">…</span>
+								{:else if lotValid2}
 									<span class="text-green-400 text-lg">&#10003;</span>
 								{/if}
 							</div>
@@ -256,8 +312,10 @@
 						<div>
 							<label class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Barcode Label Lot</label>
 							<div class="mt-1 flex items-center gap-2">
-								<input type="text" id="lotBarcode3" bind:value={lotBarcode3} class="flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]" placeholder="Scan barcode label lot barcode" />
-								{#if lotBarcode3.trim()}
+								<input type="text" id="lotBarcode3" bind:value={lotBarcode3} onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleLotEnter(3); } }} onblur={() => { if (lotBarcode3.trim() && !lotValid3) validateLotScan(3); }} class="flex-1 rounded border {lotError3 ? 'border-red-500' : lotValid3 ? 'border-green-500' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]" placeholder="Scan barcode label lot barcode" />
+								{#if lotChecking === 3}
+									<span class="text-[var(--color-tron-text-secondary)] text-sm">…</span>
+								{:else if lotValid3}
 									<span class="text-green-400 text-lg">&#10003;</span>
 								{/if}
 							</div>
