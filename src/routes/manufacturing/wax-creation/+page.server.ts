@@ -1,5 +1,5 @@
 import { fail } from '@sveltejs/kit';
-import { connectDB, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, AuditLog, PartDefinition, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -22,7 +22,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 	}
 	const lotNumber = `${prefix}${String(seq).padStart(4, '0')}`;
 
-	return { lotNumber };
+	const waxParts = await PartDefinition.find({
+		partNumber: { $in: ['PT-CT-108', 'PT-CT-109', 'PT-CT-110'] }
+	})
+		.select('partNumber name unitCost unitOfMeasure supplier')
+		.lean();
+
+	return { lotNumber, waxParts: JSON.parse(JSON.stringify(waxParts)) };
 };
 
 export const actions: Actions = {
