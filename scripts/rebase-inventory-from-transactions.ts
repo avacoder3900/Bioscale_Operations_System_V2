@@ -1,25 +1,26 @@
 /**
  * Rebase every PartDefinition.inventoryCount to what the transaction
- * history says it should be.
+ * history says it should be, and delete a fixed list of fake parts
+ * that don't exist in real life.
  *
- *   - Parts with no transactions → inventoryCount = 0
- *   - Parts with transactions   → inventoryCount = signed sum per
- *     transaction type:
- *         receipt | creation    → +quantity
- *         consumption | scrap   → -quantity
- *         deduction             → -quantity
- *         retraction            → -quantity  (undoes a receipt)
- *         adjustment            → +quantity  (already signed by caller)
+ *   Step 1 — delete fake parts + their transactions:
+ *       PRT-HSG-001, PRT-OPT-001, PRT-BAT-001, PRT-LBL-001, PRT-PCB-001
  *
- * Signs match src/lib/server/services/inventory-transaction.ts so the
- * result equals replaying every transaction from a zero baseline.
+ *   Step 2 — for each remaining PartDefinition, set inventoryCount to:
+ *       - 0 if no transaction history
+ *       - max(0, signed sum of transactions) otherwise
+ *         (floored at 0 so a negative history doesn't produce negative stock)
+ *
+ *   Transaction signs mirror services/inventory-transaction.ts:
+ *       receipt | creation    → +quantity
+ *       consumption | scrap   → -quantity
+ *       deduction             → -quantity
+ *       retraction            → -quantity
+ *       adjustment            → +quantity  (already signed)
  *
  * Usage:
  *   npx tsx scripts/rebase-inventory-from-transactions.ts --dry-run
  *   npx tsx scripts/rebase-inventory-from-transactions.ts          # writes
- *
- * Always run --dry-run first. The script prints a per-part diff
- * (old → new) and never touches the InventoryTransaction collection.
  */
 import mongoose from 'mongoose';
 import * as dotenv from 'dotenv';
@@ -44,6 +45,28 @@ async function main() {
 
 	console.log(dryRun ? '=== DRY RUN ===\n' : '=== LIVE RUN ===\n');
 
+	// STEP 1 — delete fake parts and any transactions referencing them.
+	const FAKE_PART_NUMBERS = ['PRT-HSG-001', 'PRT-OPT-001', 'PRT-BAT-001', 'PRT-LBL-001', 'PRT-PCB-001'];
+	const fakeParts = await partCollection.find({ partNumber: { $in: FAKE_PART_NUMBERS } }).toArray();
+	const fakeIds = fakeParts.map((p) => p._id);
+
+	if (fakeParts.length === 0) {
+		console.log('STEP 1: no fake parts found (already deleted).\n');
+	} else {
+		const txToDelete = await txCollection.countDocuments({ partDefinitionId: { $in: fakeIds.map(String) } });
+		console.log('STEP 1 — fake parts to delete:');
+		for (const p of fakeParts) {
+			console.log(`  ${(p.partNumber ?? '').padEnd(14)} ${p.name ?? ''}   inventoryCount=${p.inventoryCount ?? 0}`);
+		}
+		console.log(`  → ${fakeParts.length} PartDefinitions + ${txToDelete} InventoryTransactions will be deleted.\n`);
+
+		if (!dryRun) {
+			await txCollection.deleteMany({ partDefinitionId: { $in: fakeIds.map(String) } });
+			await partCollection.deleteMany({ _id: { $in: fakeIds } });
+		}
+	}
+
+	// STEP 2 — rebase remaining parts from transaction history.
 	// Aggregate signed total per part from transactions.
 	const pipeline = [
 		{ $match: { partDefinitionId: { $exists: true, $ne: null } } },
@@ -72,8 +95,12 @@ async function main() {
 		byPart.set(String(row._id), { total: row.total, txCount: row.txCount });
 	}
 
-	// Walk every active part. Any part not in byPart gets reset to 0.
-	const parts = await partCollection.find({}).project({ _id: 1, partNumber: 1, name: 1, inventoryCount: 1 }).toArray();
+	// Walk every active part (excluding the fake ones we just deleted).
+	// Any part not in byPart gets reset to 0. All results are floored at 0.
+	const parts = await partCollection
+		.find({ partNumber: { $nin: FAKE_PART_NUMBERS } })
+		.project({ _id: 1, partNumber: 1, name: 1, inventoryCount: 1 })
+		.toArray();
 
 	let zeroedNoHistory = 0;
 	let rebasedWithHistory = 0;
@@ -83,7 +110,8 @@ async function main() {
 	for (const part of parts) {
 		const pid = String(part._id);
 		const rec = byPart.get(pid);
-		const newCount = rec ? rec.total : 0;
+		const rawCount = rec ? rec.total : 0;
+		const newCount = Math.max(0, rawCount); // floor at 0 — no negative inventory
 		const oldCount = part.inventoryCount ?? 0;
 
 		if (newCount === oldCount) {
