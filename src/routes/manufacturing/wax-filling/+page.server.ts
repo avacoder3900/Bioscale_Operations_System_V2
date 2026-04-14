@@ -4,12 +4,12 @@ import {
 	Equipment, EquipmentLocation, AuditLog, BackingLot, WaxBatch, ReceivingLot
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
-
-const WAX_FILL_VOLUME_UL = 800; // μL deducted from the 15ml WaxBatch per run
 import { isAdmin } from '$lib/server/permissions';
 import { User } from '$lib/server/db';
 import bcrypt from 'bcryptjs';
 import type { PageServerLoad, Actions } from './$types';
+
+const WAX_FILL_VOLUME_UL = 800; // μL deducted from the 15ml WaxBatch per run
 
 /**
  * Verify admin credentials for an override. Looks up the user by username,
