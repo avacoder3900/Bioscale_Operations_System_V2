@@ -25,7 +25,9 @@
       "Bash(git add:*)",
       "Bash(git commit -m ':*)",
       "Bash(git push:*)",
-      "Bash(git commit -m 'fix: move const declaration below imports in wax-filling:*)"
+      "Bash(git commit -m 'fix: move const declaration below imports in wax-filling:*)",
+      "Bash(node:*)",
+      "Bash(git commit -m 'feat: add Resend email foundation + notification settings UI:*)"
     ]
   }
 }

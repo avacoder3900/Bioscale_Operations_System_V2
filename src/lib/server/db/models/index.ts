@@ -62,6 +62,9 @@ export { ServiceTicket } from './service-ticket.js';
 // Sensor Configuration
 export { SensorConfig } from './sensor-config.js';
 
+// Notifications
+export { NotificationSettings } from './notification-settings.js';
+
 // Tier 3: Immutable Logs — Temperature
 export { TemperatureReading } from './temperature-reading.js';
 export { TemperatureAlert } from './temperature-alert.js';

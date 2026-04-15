@@ -7,12 +7,13 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 
 	const canManageUsers = hasPermission(locals.user, 'user:read');
 	const canManageRoles = hasPermission(locals.user, 'role:read');
+	const canManageAdmin = hasPermission(locals.user, 'admin:full');
 
-	if (!canManageUsers && !canManageRoles) {
+	if (!canManageUsers && !canManageRoles && !canManageAdmin) {
 		redirect(302, '/');
 	}
 
-	return { canManageUsers, canManageRoles };
+	return { canManageUsers, canManageRoles, canManageAdmin };
 };
 
 export const config = { maxDuration: 60 };
