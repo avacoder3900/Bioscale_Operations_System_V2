@@ -22,6 +22,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 			RESEND_API_KEY: detected('RESEND_API_KEY'),
 			RESEND_FROM_ADDRESS: { present: !!env.RESEND_FROM_ADDRESS, value: env.RESEND_FROM_ADDRESS ?? null },
 			ANTHROPIC_API_KEY: detected('ANTHROPIC_API_KEY'),
+			GEMINI_API_KEY: detected('GEMINI_API_KEY'),
 			AGENT_API_KEY: detected('AGENT_API_KEY'),
 			CRON_SECRET: detected('CRON_SECRET'),
 			MOCREO_EMAIL: { present: !!env.MOCREO_EMAIL },
