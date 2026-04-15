@@ -20,6 +20,7 @@
 		}
 		if (data.canManageAdmin) {
 			items.push({ href: '/admin/notifications', label: 'Notifications' });
+			items.push({ href: '/admin/ask-bims', label: 'Ask BIMS' });
 		}
 		return items;
 	});

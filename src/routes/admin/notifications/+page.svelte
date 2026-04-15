@@ -79,6 +79,12 @@
 	{#if form?.testError}
 		<div class="rounded-lg border border-red-500/40 bg-red-900/20 p-3 text-sm text-red-300">{form.testError}</div>
 	{/if}
+	{#if form?.previewSuccess}
+		<div class="rounded-lg border border-green-500/40 bg-green-900/20 p-3 text-sm text-green-300">{form.previewSuccess}</div>
+	{/if}
+	{#if form?.previewError}
+		<div class="rounded-lg border border-red-500/40 bg-red-900/20 p-3 text-sm text-red-300">{form.previewError}</div>
+	{/if}
 
 	<!-- Test email -->
 	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5">
@@ -112,6 +118,42 @@
 				{testing ? 'Sending…' : 'Send test'}
 			</button>
 		</form>
+	</div>
+
+	<!-- Preview alerts — see what each email looks like -->
+	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5">
+		<h2 class="text-base font-semibold text-[var(--color-tron-text)]">Preview alert templates</h2>
+		<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
+			Send a dummy version of each alert email to yourself so you can see what operators will receive.
+			Uses the email you entered above.
+		</p>
+		<div class="mt-3 grid gap-2 sm:grid-cols-2 md:grid-cols-3">
+			{#each [
+				{ type: 'temperatureAlert_high', label: 'High temp alert' },
+				{ type: 'temperatureAlert_low', label: 'Low temp alert' },
+				{ type: 'temperatureAlert_lost', label: 'Lost connection alert' },
+				{ type: 'lowWaxBatch', label: 'Low wax batch' },
+				{ type: 'lowInventory', label: 'Low inventory' },
+				{ type: 'runComplete', label: 'Run completed' },
+				{ type: 'runAborted', label: 'Run aborted' },
+				{ type: 'adminEvent', label: 'Admin event' }
+			] as preview (preview.type)}
+				<form method="POST" action="?/previewAlert" use:enhance>
+					<input type="hidden" name="alertType" value={preview.type} />
+					<input type="hidden" name="email" value={testEmail} />
+					<button
+						type="submit"
+						disabled={!testEmail}
+						class="w-full min-h-[44px] rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-3 py-2 text-xs text-[var(--color-tron-text)] transition-colors hover:border-[var(--color-tron-cyan)]/40 hover:text-[var(--color-tron-cyan)] disabled:opacity-40"
+					>
+						{preview.label}
+					</button>
+				</form>
+			{/each}
+		</div>
+		{#if !testEmail}
+			<p class="mt-2 text-xs text-[var(--color-tron-yellow)]">Enter an email above to enable preview buttons.</p>
+		{/if}
 	</div>
 
 	<!-- Main settings form -->
