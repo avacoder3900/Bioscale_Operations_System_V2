@@ -31,7 +31,8 @@
       "Bash(grep -E \"notifications\\\\.ts|email\\\\.ts|daily-digest|api\\\\\\\\\\\\\\\\cron\")",
       "Bash(git commit -m 'feat: wire notifications into events + daily digest cron:*)",
       "Bash(git commit --allow-empty -m 'chore: redeploy to pick up RESEND_API_KEY env var:*)",
-      "Bash(git commit -m 'chore: add /api/debug/env diagnostic endpoint:*)"
+      "Bash(git commit -m 'chore: add /api/debug/env diagnostic endpoint:*)",
+      "Bash(git commit -m 'feat: test buttons on wax prep 15ml + 2ml lot scan steps:*)"
     ]
   }
 }

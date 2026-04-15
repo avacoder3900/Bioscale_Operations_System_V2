@@ -259,6 +259,23 @@
 						/>
 					</div>
 				</div>
+				<button
+					type="button"
+					onclick={async () => {
+						const res = await fetch('/api/dev/test-data?type=wax-batch');
+						if (res.ok) {
+							const d = await res.json();
+							lotInput = d.lotBarcode;
+							await handleLotKeydown(new KeyboardEvent('keydown', { key: 'Enter' }));
+						} else {
+							const err = await res.json().catch(() => ({}));
+							lotError = err.error ?? 'Could not fetch/create test wax batch';
+						}
+					}}
+					class="mt-2 rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-orange)] hover:text-[var(--color-tron-orange)]"
+				>
+					Test
+				</button>
 				{#if lotError}
 					<div class="mt-3 rounded-lg border border-red-500/50 bg-red-900/20 p-3">
 						<p class="text-sm font-medium text-red-400">{lotError}</p>
@@ -371,6 +388,23 @@
 						/>
 					</div>
 				</div>
+				<button
+					type="button"
+					onclick={async () => {
+						const res = await fetch('/api/dev/test-data?type=receiving-lot');
+						if (res.ok) {
+							const d = await res.json();
+							tubeInput = d.lotId;
+							await handleTubeKeydown(new KeyboardEvent('keydown', { key: 'Enter' }));
+						} else {
+							const err = await res.json().catch(() => ({}));
+							tubeError = err.error ?? 'Could not fetch/create test receiving lot';
+						}
+					}}
+					class="mt-2 rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-orange)] hover:text-[var(--color-tron-orange)]"
+				>
+					Test
+				</button>
 				{#if tubeError}
 					<div class="rounded-lg border border-red-500/50 bg-red-900/20 p-3">
 						<p class="text-sm font-medium text-red-400">{tubeError}</p>
