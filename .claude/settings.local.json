@@ -35,7 +35,8 @@
       "Bash(git commit -m 'feat: test buttons on wax prep 15ml + 2ml lot scan steps:*)",
       "Bash(git commit --allow-empty -m 'chore: redeploy to pick up fixed RESEND_API_KEY env var:*)",
       "Bash(grep -E \"ask-bims|api\\\\\\\\\\\\\\\\agent\\\\\\\\\\\\\\\\ask|admin\\\\\\\\\\\\\\\\notifications\")",
-      "Bash(git commit -m 'feat: alert preview buttons + Ask BIMS chat assistant:*)"
+      "Bash(git commit -m 'feat: alert preview buttons + Ask BIMS chat assistant:*)",
+      "Bash(git commit -m 'chore: add ANTHROPIC_API_KEY to /api/debug/env check:*)"
     ]
   }
 }
