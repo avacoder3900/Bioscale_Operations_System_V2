@@ -27,7 +27,9 @@
       "Bash(git push:*)",
       "Bash(git commit -m 'fix: move const declaration below imports in wax-filling:*)",
       "Bash(node:*)",
-      "Bash(git commit -m 'feat: add Resend email foundation + notification settings UI:*)"
+      "Bash(git commit -m 'feat: add Resend email foundation + notification settings UI:*)",
+      "Bash(grep -E \"notifications\\\\.ts|email\\\\.ts|daily-digest|api\\\\\\\\\\\\\\\\cron\")",
+      "Bash(git commit -m 'feat: wire notifications into events + daily digest cron:*)"
     ]
   }
 }

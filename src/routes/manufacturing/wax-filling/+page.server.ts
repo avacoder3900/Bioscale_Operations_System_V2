@@ -6,6 +6,7 @@ import {
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { isAdmin } from '$lib/server/permissions';
 import { User } from '$lib/server/db';
+import { notifyLowWaxBatch, notifyRunLifecycle, shouldWarnLowWax } from '$lib/server/notifications';
 import bcrypt from 'bcryptjs';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -796,6 +797,11 @@ export const actions: Actions = {
 			newData: { status: 'aborted', abortReason: reason }
 		});
 
+		await notifyRunLifecycle({
+			runId, runType: 'wax_filling', status: 'cancelled',
+			operator: locals.user?.username, reason
+		});
+
 		return { success: true };
 	},
 
@@ -831,6 +837,11 @@ export const actions: Actions = {
 			changedBy: locals.user?.username,
 			changedAt: now,
 			newData: { status: 'aborted', abortReason: reason }
+		});
+
+		await notifyRunLifecycle({
+			runId, runType: 'wax_filling', status: 'aborted',
+			operator: locals.user?.username, reason
 		});
 
 		return { success: true };
@@ -1033,8 +1044,29 @@ export const actions: Actions = {
 						}
 					}
 				);
+				// Fire low-wax warning when this deduction crossed the threshold
+				// (only fire on the transition — don't spam every subsequent run)
+				if (await shouldWarnLowWax(remainingAfter) && !(await shouldWarnLowWax(remainingBefore))) {
+					await notifyLowWaxBatch({
+						_id: String(batch._id),
+						lotNumber: batch.lotNumber,
+						lotBarcode: batch.lotBarcode,
+						remainingVolumeUl: remainingAfter,
+						initialVolumeUl: batch.initialVolumeUl
+					});
+				}
 			}
 		}
+
+		// Notify run complete
+		await notifyRunLifecycle({
+			runId,
+			runType: 'wax_filling',
+			status: 'completed',
+			operator: locals.user?.username,
+			cartridgeCount,
+			robot: run?.robot?.name ?? run?.robot?._id
+		});
 
 		await AuditLog.create({
 			_id: generateId(),

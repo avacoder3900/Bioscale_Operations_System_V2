@@ -9,6 +9,7 @@ import {
 	rawToC,
 	rawToHumidity
 } from '$lib/server/services/mocreo';
+import { notifyTemperatureAlert } from '$lib/server/notifications';
 
 const OFFLINE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -72,7 +73,14 @@ async function runSync(request: Request) {
 			const sample = await fetchLatestReading(sensor.thingName);
 			if (!sample) {
 				// No reading — check for lost connection
-				await checkLostConnection(sensor.thingName, sensor.name, eq, now);
+				const created = await checkLostConnection(sensor.thingName, sensor.name, eq, now);
+				if (created) {
+					await notifyTemperatureAlert({
+						sensorId: sensor.thingName, sensorName: sensor.name,
+						alertType: 'lost_connection',
+						equipmentId, equipmentName: eq?.name ?? sensor.name, timestamp: now
+					});
+				}
 				results.push({
 					sensorId: sensor.thingName,
 					sensorName: sensor.name,
@@ -130,6 +138,11 @@ async function runSync(request: Request) {
 						timestamp: now
 					});
 					alertsCreated.push('low_temp');
+					await notifyTemperatureAlert({
+						sensorId: sensor.thingName, sensorName: sensor.name,
+						alertType: 'low_temp', threshold: minC, actualValue: temperature,
+						equipmentId, equipmentName: eqName, timestamp: now
+					});
 				}
 				if (maxC != null && temperature > maxC) {
 					await TemperatureAlert.create({
@@ -144,13 +157,25 @@ async function runSync(request: Request) {
 						timestamp: now
 					});
 					alertsCreated.push('high_temp');
+					await notifyTemperatureAlert({
+						sensorId: sensor.thingName, sensorName: sensor.name,
+						alertType: 'high_temp', threshold: maxC, actualValue: temperature,
+						equipmentId, equipmentName: eqName, timestamp: now
+					});
 				}
 			}
 
 			// Check for lost connection (reading is old)
 			if (now.getTime() - timestamp.getTime() > OFFLINE_THRESHOLD_MS) {
-				await checkLostConnection(sensor.thingName, sensor.name, eq, now);
+				const created = await checkLostConnection(sensor.thingName, sensor.name, eq, now);
 				alertsCreated.push('lost_connection');
+				if (created) {
+					await notifyTemperatureAlert({
+						sensorId: sensor.thingName, sensorName: sensor.name,
+						alertType: 'lost_connection',
+						equipmentId, equipmentName: eqName, timestamp: now
+					});
+				}
 			}
 
 			results.push({
@@ -190,14 +215,14 @@ export const GET: RequestHandler = async ({ request }) => runSync(request);
 // POST: called by worker scripts and the openclaw agent
 export const POST: RequestHandler = async ({ request }) => runSync(request);
 
-async function checkLostConnection(sensorId: string, sensorName: string, eq: any, now: Date) {
+async function checkLostConnection(sensorId: string, sensorName: string, eq: any, now: Date): Promise<boolean> {
 	// Only create if there isn't already an unacknowledged lost_connection alert for this sensor
 	const existing = await TemperatureAlert.findOne({
 		sensorId,
 		alertType: 'lost_connection',
 		acknowledged: false
 	});
-	if (existing) return;
+	if (existing) return false;
 
 	await TemperatureAlert.create({
 		_id: generateId(),
@@ -210,4 +235,5 @@ async function checkLostConnection(sensorId: string, sensorName: string, eq: any
 		equipmentName: eq?.name ?? null,
 		timestamp: now
 	});
+	return true;
 }
