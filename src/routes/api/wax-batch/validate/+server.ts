@@ -3,7 +3,7 @@ import { connectDB, ReceivingLot } from '$lib/server/db';
 import type { RequestHandler } from './$types';
 
 const FULL_TUBE_VOLUME_UL = 12000;
-const WAX_TUBE_PART_NUMBER = 'PT-CT-110';
+const WAX_TUBE_PART_NUMBER = 'PT-CT-114';
 
 /**
  * Validate a scanned 15ml wax tube lot barcode against receiving inventory.
