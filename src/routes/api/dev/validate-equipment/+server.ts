@@ -20,6 +20,16 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 		return json({ valid: true, id, name: (deck as any).name ?? id, status: (deck as any).status });
 	}
 
+	if (type === 'oven') {
+		const oven = await Equipment.findOne({ _id: id, equipmentType: 'oven' }).lean()
+			?? await Equipment.findOne({ barcode: id, equipmentType: 'oven' }).lean();
+		if (!oven) return json({ error: `Oven "${id}" does not exist. Register it in Equipment first.` }, { status: 404 });
+		if ((oven as any).status === 'retired' || (oven as any).status === 'offline') {
+			return json({ error: `Oven "${id}" is ${(oven as any).status}.` }, { status: 400 });
+		}
+		return json({ valid: true, id: (oven as any)._id, name: (oven as any).name ?? id, status: (oven as any).status });
+	}
+
 	if (type === 'tray') {
 		const tray = await Equipment.findOne({ _id: id, equipmentType: 'cooling_tray' }).lean();
 		if (!tray) return json({ error: `Tray "${id}" does not exist. Register it in Equipment → Decks & Trays first.` }, { status: 404 });

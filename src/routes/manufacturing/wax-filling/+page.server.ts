@@ -471,6 +471,7 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
 		const deckId = (data.get('deckId') as string) || undefined;
+		const ovenId = (data.get('ovenId') as string) || undefined;
 		const cartridgeScansRaw = data.get('cartridgeScans') as string;
 
 		let cartridgeIds: string[] = [];
@@ -519,6 +520,18 @@ export const actions: Actions = {
 			if ((deck as any).status === 'retired') return fail(400, { error: `Deck '${deckId}' is retired.` });
 		}
 
+		// Validate oven if provided
+		if (ovenId) {
+			const oven = await Equipment.findOne({
+				$or: [{ _id: ovenId }, { barcode: ovenId }],
+				equipmentType: 'oven'
+			}).lean();
+			if (!oven) return fail(400, { error: `Oven '${ovenId}' not found. Register it in Equipment first.` });
+			if ((oven as any).status === 'retired' || (oven as any).status === 'offline') {
+				return fail(400, { error: `Oven '${ovenId}' is ${(oven as any).status}.` });
+			}
+		}
+
 		const run = await WaxFillingRun.findById(runId).lean() as any;
 		if (!run) return fail(404, { error: 'Run not found' });
 
@@ -563,6 +576,7 @@ export const actions: Actions = {
 			$set: {
 				status: 'Loading',
 				deckId: deckId ?? run.deckId,
+				ovenId: ovenId ?? run.ovenId,
 				plannedCartridgeCount: cartridgeIds.length || run.plannedCartridgeCount
 			},
 			$addToSet: { cartridgeIds: { $each: cartridgeIds } }

@@ -359,6 +359,7 @@
 
 	function handleDeckLoadComplete(result: {
 		deckId: string;
+		ovenId: string;
 		cartridgeScans: { cartridgeId: string; backedLotId: string }[];
 		countMismatchReason?: string;
 	}) {
@@ -367,6 +368,7 @@
 			const formData: Record<string, string> = {
 				runId: data.runState.runId,
 				deckId: result.deckId,
+				ovenId: result.ovenId,
 				cartridgeScans: JSON.stringify(result.cartridgeScans)
 			};
 			if (result.countMismatchReason) {
@@ -1125,6 +1127,8 @@
 					readonly={isPreviewOrPast}
 					coolingConfirmedAt={previewParam ? null : (data.runState.coolingConfirmedAt ? new Date(data.runState.coolingConfirmedAt) : null)}
 					{coolingBypassed}
+					runId={data.runState.runId ?? ''}
+					lotId={data.runState.activeLotId ?? null}
 				/>
 			{:else}
 				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">
