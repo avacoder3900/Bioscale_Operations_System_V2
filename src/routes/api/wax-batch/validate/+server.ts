@@ -22,7 +22,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	}
 
 	const lot = await ReceivingLot.findOne({
-		$or: [{ lotId: barcode }, { bagBarcode: barcode }]
+		$or: [{ lotId: barcode }, { bagBarcode: barcode }, { lotNumber: barcode }]
 	}).lean() as any;
 
 	if (!lot) {

@@ -1027,7 +1027,11 @@ export const actions: Actions = {
 		const FULL_TUBE_VOLUME_UL = 12000;
 		if (run?.waxSourceLot) {
 			const waxLot = await ReceivingLot.findOne({
-				$or: [{ lotId: run.waxSourceLot }, { bagBarcode: run.waxSourceLot }]
+				$or: [
+					{ lotId: run.waxSourceLot },
+					{ bagBarcode: run.waxSourceLot },
+					{ lotNumber: run.waxSourceLot }
+				]
 			}).lean() as any;
 			if (waxLot) {
 				const consumedBefore = Number(waxLot.consumedUl ?? 0);
