@@ -358,6 +358,10 @@
 			Scanned Inventory
 			<span class="ml-1 text-xs">({data.scannedItems?.length ?? 0})</span>
 		</button>
+		<a
+			href="/parts/accession"
+			class="ml-auto inline-flex items-center gap-1 rounded-md border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-xs font-semibold text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-cyan)]/20"
+		>+ Part Accession</a>
 	</div>
 
 	{#if activeTab === 'spu'}
