@@ -1019,40 +1019,39 @@ export const actions: Actions = {
 			}
 		}
 
-		// Deduct 800 μL from the scanned 15ml WaxBatch
-		// run.waxSourceLot stores the scanned WaxBatch.lotBarcode
+		// Deduct 800 μL from the scanned 15ml wax tube ReceivingLot.
+		// run.waxSourceLot is the scanned ReceivingLot.lotId / bagBarcode.
+		// consumedUl tracks partial consumption; whole tubes are deducted from
+		// quantity (and part inventory via recordTransaction) once each 12000 μL
+		// crosses a tube boundary.
+		const FULL_TUBE_VOLUME_UL = 12000;
 		if (run?.waxSourceLot) {
-			const batch = await WaxBatch.findOne({ lotBarcode: run.waxSourceLot }).lean() as any;
-			if (batch) {
-				const remainingBefore = batch.remainingVolumeUl ?? 0;
-				const remainingAfter = Math.max(0, remainingBefore - WAX_FILL_VOLUME_UL);
-				await WaxBatch.updateOne(
-					{ _id: batch._id },
-					{
-						$set: { remainingVolumeUl: remainingAfter },
-						$push: {
-							usageLog: {
-								_id: generateId(),
-								runId: run._id,
-								volumeChangedUl: -WAX_FILL_VOLUME_UL,
-								remainingBeforeUl: remainingBefore,
-								remainingAfterUl: remainingAfter,
-								operator: operatorRef,
-								notes: `Wax filling run — 800 μL consumed (${cartridgeCount} cartridges)`,
-								createdAt: now
-							}
-						}
-					}
-				);
-				// Fire low-wax warning when this deduction crossed the threshold
-				// (only fire on the transition — don't spam every subsequent run)
-				if (await shouldWarnLowWax(remainingAfter) && !(await shouldWarnLowWax(remainingBefore))) {
-					await notifyLowWaxBatch({
-						_id: String(batch._id),
-						lotNumber: batch.lotNumber,
-						lotBarcode: batch.lotBarcode,
-						remainingVolumeUl: remainingAfter,
-						initialVolumeUl: batch.initialVolumeUl
+			const waxLot = await ReceivingLot.findOne({
+				$or: [{ lotId: run.waxSourceLot }, { bagBarcode: run.waxSourceLot }]
+			}).lean() as any;
+			if (waxLot) {
+				const consumedBefore = Number(waxLot.consumedUl ?? 0);
+				const capUl = Number(waxLot.quantity ?? 0) * FULL_TUBE_VOLUME_UL;
+				const consumedAfter = Math.min(capUl, consumedBefore + WAX_FILL_VOLUME_UL);
+				const tubesBefore = Math.floor(consumedBefore / FULL_TUBE_VOLUME_UL);
+				const tubesAfter = Math.floor(consumedAfter / FULL_TUBE_VOLUME_UL);
+				const tubesToDeduct = tubesAfter - tubesBefore;
+
+				const update: Record<string, unknown> = { $set: { consumedUl: consumedAfter } };
+				if (tubesToDeduct > 0) update.$inc = { quantity: -tubesToDeduct };
+				await ReceivingLot.updateOne({ _id: waxLot._id }, update);
+
+				if (tubesToDeduct > 0 && waxLot.part?._id) {
+					await recordTransaction({
+						transactionType: 'consumption',
+						partDefinitionId: waxLot.part._id,
+						lotId: waxLot._id,
+						quantity: tubesToDeduct,
+						manufacturingStep: 'wax_filling',
+						manufacturingRunId: run._id,
+						operatorId: locals.user!._id,
+						operatorUsername: locals.user!.username,
+						notes: `Wax filling — ${tubesToDeduct} × 15ml wax tube consumed (lot ${run.waxSourceLot})`
 					});
 				}
 			}
