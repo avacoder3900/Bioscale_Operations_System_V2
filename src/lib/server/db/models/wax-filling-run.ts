@@ -4,7 +4,7 @@ import { generateId } from '../utils.js';
 const waxFillingRunSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	robot: { _id: String, name: String },
-	deckId: String, waxSourceLot: String, waxTubeId: String, waxTubeTimestamp: Date,
+	deckId: String, ovenId: String, waxSourceLot: String, waxTubeId: String, waxTubeTimestamp: Date,
 	setupTimestamp: Date, runStartTime: Date, runEndTime: Date,
 	deckRemovedTime: Date, coolingConfirmedTime: Date,
 	coolingTrayId: String, ovenLocationId: String, coolingLocationId: String,

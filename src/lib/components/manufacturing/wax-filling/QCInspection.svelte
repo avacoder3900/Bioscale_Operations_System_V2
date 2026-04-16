@@ -11,9 +11,20 @@
 		readonly?: boolean;
 		coolingConfirmedAt?: Date | null;
 		coolingBypassed?: boolean;
+		runId?: string;
+		lotId?: string | null;
 	}
 
-	let { cartridges, rejectionCodes, onComplete, readonly: isReadonly = false, coolingConfirmedAt = null, coolingBypassed = false }: Props = $props();
+	let { cartridges, rejectionCodes, onComplete, readonly: isReadonly = false, coolingConfirmedAt = null, coolingBypassed = false, runId = '', lotId = null }: Props = $props();
+
+	const cvInspectionHref = $derived.by(() => {
+		const params = new URLSearchParams();
+		if (lotId) params.set('lotId', lotId);
+		if (runId) params.set('runId', runId);
+		if (acceptedIds.length > 0) params.set('cartridgeIds', acceptedIds.join(','));
+		params.set('source', 'wax_filling_qc');
+		return `/spu/manufacturing/cv-inspection?${params.toString()}`;
+	});
 
 	let rejected = new SvelteMap<string, string>();
 	let scanInput = $state('');
@@ -257,13 +268,22 @@
 		{/each}
 	</div>
 
-	<!-- Complete QC -->
-	<button
-		type="button"
-		onclick={handleComplete}
-		disabled={coolingGateBlocked}
-		class="min-h-[44px] w-full rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-6 py-3 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30 disabled:cursor-not-allowed disabled:opacity-40"
-	>
-		{coolingGateBlocked ? `Complete QC (cooling: ${coolingRemainingDisplay()})` : `Complete QC (${acceptedIds.length} accepted, ${rejected.size} rejected)`}
-	</button>
+	<!-- Complete QC + Launch CV Inspection -->
+	<div class="flex flex-col gap-3 sm:flex-row">
+		<button
+			type="button"
+			onclick={handleComplete}
+			disabled={coolingGateBlocked}
+			class="min-h-[44px] flex-1 rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-6 py-3 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30 disabled:cursor-not-allowed disabled:opacity-40"
+		>
+			{coolingGateBlocked ? `Complete QC (cooling: ${coolingRemainingDisplay()})` : `Complete QC (${acceptedIds.length} accepted, ${rejected.size} rejected)`}
+		</button>
+		<a
+			href={cvInspectionHref}
+			class="inline-flex min-h-[44px] items-center justify-center rounded-lg border border-[var(--color-tron-purple)]/50 bg-[var(--color-tron-purple)]/15 px-6 py-3 text-sm font-semibold text-[var(--color-tron-purple)] transition-all hover:bg-[var(--color-tron-purple)]/25 {acceptedIds.length === 0 ? 'pointer-events-none opacity-40' : ''}"
+			aria-disabled={acceptedIds.length === 0}
+		>
+			Launch CV Inspection →
+		</a>
+	</div>
 </div>
