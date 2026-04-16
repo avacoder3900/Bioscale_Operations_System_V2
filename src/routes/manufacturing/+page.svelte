@@ -267,14 +267,18 @@
 										{#each oven.lots as lot (lot.lotId)}
 											{@const lotOpen = expandedLots.has(lot.lotId)}
 											<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
-												<button
-													type="button"
-													class="flex w-full items-center justify-between px-3 py-2 text-left hover:bg-[var(--color-tron-bg-tertiary)]"
-													onclick={() => toggleLot(lot.lotId)}
-												>
-													<div class="flex items-center gap-2">
-														<span class="text-[var(--color-tron-cyan)] text-xs">{lotOpen ? '▼' : '▶'}</span>
-														<span class="font-mono text-xs font-semibold text-[var(--color-tron-text)]">{lot.lotId}</span>
+												<div class="flex items-center justify-between px-3 py-2">
+													<div class="flex min-w-0 items-center gap-2">
+														<button
+															type="button"
+															class="text-[var(--color-tron-cyan)] text-xs hover:text-[var(--color-tron-text)]"
+															onclick={() => toggleLot(lot.lotId)}
+															aria-label={lotOpen ? 'Collapse lot' : 'Expand lot'}
+														>{lotOpen ? '▼' : '▶'}</button>
+														<a
+															href="/manufacturing/lots/{lot.lotId}"
+															class="font-mono text-xs font-semibold text-[var(--color-tron-cyan)] hover:underline"
+														>{lot.lotId}</a>
 														<span class="text-[10px] text-[var(--color-tron-text-secondary)]">· {lot.cartridgeCount} cartridges</span>
 													</div>
 													{#if lot.isReady}
@@ -282,14 +286,14 @@
 													{:else}
 														<span class="text-[10px] text-[var(--color-tron-yellow)]">{lot.remainingMin} min left</span>
 													{/if}
-												</button>
+												</div>
 												{#if lotOpen}
 													<div class="border-t border-[var(--color-tron-border)] px-3 py-2 text-[11px] text-[var(--color-tron-text-secondary)] space-y-0.5">
 														<div>Status: <span class="text-[var(--color-tron-text)]">{lot.status}</span></div>
 														<div>Operator: <span class="text-[var(--color-tron-text)]">{lot.operatorUsername ?? '—'}</span></div>
 														<div>Elapsed: <span class="text-[var(--color-tron-text)]">{lot.elapsedMin} min</span></div>
 														<div>Entry: <span class="text-[var(--color-tron-text)]">{lot.ovenEntryTime ? new Date(lot.ovenEntryTime).toLocaleString() : '—'}</span></div>
-														<div class="pt-1"><a href="/manufacturing/lots/{lot.lotId}" class="text-[var(--color-tron-cyan)] hover:underline">→ Lot detail</a></div>
+														<div class="pt-1"><a href="/manufacturing/lots/{lot.lotId}" class="text-[var(--color-tron-cyan)] hover:underline">→ Open lot detail page</a></div>
 													</div>
 												{/if}
 											</div>
