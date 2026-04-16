@@ -17,14 +17,7 @@
 
 	let { cartridges, rejectionCodes, onComplete, readonly: isReadonly = false, coolingConfirmedAt = null, coolingBypassed = false, runId = '', lotId = null }: Props = $props();
 
-	const cvInspectionHref = $derived.by(() => {
-		const params = new URLSearchParams();
-		if (lotId) params.set('lotId', lotId);
-		if (runId) params.set('runId', runId);
-		if (acceptedIds.length > 0) params.set('cartridgeIds', acceptedIds.join(','));
-		params.set('source', 'wax_filling_qc');
-		return `/spu/manufacturing/cv-inspection?${params.toString()}`;
-	});
+	const cvInspectionHref = '/cv';
 
 	let rejected = new SvelteMap<string, string>();
 	let scanInput = $state('');
@@ -280,8 +273,7 @@
 		</button>
 		<a
 			href={cvInspectionHref}
-			class="inline-flex min-h-[44px] items-center justify-center rounded-lg border border-[var(--color-tron-purple)]/50 bg-[var(--color-tron-purple)]/15 px-6 py-3 text-sm font-semibold text-[var(--color-tron-purple)] transition-all hover:bg-[var(--color-tron-purple)]/25 {acceptedIds.length === 0 ? 'pointer-events-none opacity-40' : ''}"
-			aria-disabled={acceptedIds.length === 0}
+			class="inline-flex min-h-[44px] items-center justify-center rounded-lg border border-[var(--color-tron-purple)]/50 bg-[var(--color-tron-purple)]/15 px-6 py-3 text-sm font-semibold text-[var(--color-tron-purple)] transition-all hover:bg-[var(--color-tron-purple)]/25"
 		>
 			Launch CV Inspection →
 		</a>
