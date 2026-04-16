@@ -15,6 +15,7 @@ const waxBatchSchema = new Schema({
 	remainingVolumeUl: { type: Number, required: true },
 	fullTubeCount: { type: Number, required: true },
 	partialTubeMl: { type: Number, default: 0 },
+	sourceReceivingLotId: { type: String, index: true },
 	createdBy: { _id: String, username: String },
 	usageLog: {
 		type: [{
