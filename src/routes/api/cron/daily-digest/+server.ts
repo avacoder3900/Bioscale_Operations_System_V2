@@ -15,7 +15,7 @@ function authenticateDigest(request: Request): void {
 
 /**
  * Daily digest — rolls up the last 24 hours of alerts and events into one
- * email. Runs via Vercel Cron at 8am UTC daily. Manual trigger via GET/POST.
+ * email. Runs via Vercel Cron at 13:00 UTC daily (8am EST / 9am EDT). Manual trigger via GET/POST.
  */
 async function runDigest(request: Request) {
 	authenticateDigest(request);

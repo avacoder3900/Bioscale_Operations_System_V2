@@ -37,7 +37,22 @@
       "Bash(grep -E \"ask-bims|api\\\\\\\\\\\\\\\\agent\\\\\\\\\\\\\\\\ask|admin\\\\\\\\\\\\\\\\notifications\")",
       "Bash(git commit -m 'feat: alert preview buttons + Ask BIMS chat assistant:*)",
       "Bash(git commit -m 'chore: add ANTHROPIC_API_KEY to /api/debug/env check:*)",
-      "Bash(git commit -m 'feat: swap Ask BIMS backend from Anthropic to Google Gemini:*)"
+      "Bash(git commit -m 'feat: swap Ask BIMS backend from Anthropic to Google Gemini:*)",
+      "Bash(git commit --allow-empty -m 'chore: redeploy to pick up GEMINI_API_KEY env var:*)",
+      "Bash(ls -la /c/Users/nicho/Desktop/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2-1/.env*)",
+      "Bash(explorer C:\\\\Users\\\\nicho\\\\Desktop\\\\Bioscale_Operations_System_V2\\\\Bioscale_Operations_System_V2-1 *)",
+      "Bash(start notepad *)",
+      "Bash(npx tsx *)",
+      "Read(//tmp/**)",
+      "Bash(pandoc --version)",
+      "Bash(npx --yes md-to-pdf docs/assay-shape-report.md --launch-options '{\"args\":[\"--no-sandbox\"]}')",
+      "Bash(ls *)",
+      "Bash(explorer \"C:\\\\Users\\\\nicho\\\\Desktop\\\\Bioscale_Operations_System_V2\\\\Bioscale_Operations_System_V2-1\\\\docs\")",
+      "Bash(explorer /select,\"C:\\\\Users\\\\nicho\\\\Desktop\\\\Bioscale_Operations_System_V2\\\\Bioscale_Operations_System_V2-1\\\\docs\\\\assay-shape-report.pdf\")",
+      "Bash(npx --yes md-to-pdf docs/assay-normalization-report.md)",
+      "Bash(explorer /select,\"C:\\\\Users\\\\nicho\\\\Desktop\\\\Bioscale_Operations_System_V2\\\\Bioscale_Operations_System_V2-1\\\\docs\\\\assay-normalization-report.pdf\")",
+      "Bash(npx --yes md-to-pdf docs/opentron-control-analysis.md)",
+      "Bash(explorer /select,\"C:\\\\Users\\\\nicho\\\\Desktop\\\\Bioscale_Operations_System_V2\\\\Bioscale_Operations_System_V2-1\\\\docs\\\\opentron-control-analysis.pdf\")"
     ]
   }
 }

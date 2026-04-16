@@ -97,8 +97,12 @@ export const actions: Actions = {
 		const existing = await AssayDefinition.findOne({ skuCode }).lean();
 		if (existing) return fail(400, { error: `SKU code '${skuCode}' already exists` });
 
+		const { generateLegacyAssayId } = await import('$lib/server/assay-legacy-shape');
+		const _id = await generateLegacyAssayId(AssayDefinition as any);
 		await AssayDefinition.create({
-			name, skuCode, isActive: true, reagents: []
+			_id, name, skuCode,
+			hidden: true, protected: true,
+			isActive: true, reagents: []
 		});
 
 		return { success: true };
