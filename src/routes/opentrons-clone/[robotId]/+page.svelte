@@ -153,13 +153,29 @@
 </section>
 
 <div class="flex flex-wrap gap-2 mb-4 text-sm">
-	<a href={`/opentrons-clone/${data.robot._id}/protocols`} class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded">
-		Protocols →
-	</a>
-	<a href={`/opentrons-clone/${data.robot._id}/runs`} class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded">
-		Runs →
-	</a>
+	<a href={`/opentrons-clone/${data.robot._id}/protocols`} class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded">Protocols →</a>
+	<a href={`/opentrons-clone/${data.robot._id}/runs`} class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded">Runs →</a>
+	<a href={`/opentrons-clone/${data.robot._id}/labware`} class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded">Labware →</a>
+	<a href={`/opentrons-clone/${data.robot._id}/settings`} class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded">Settings →</a>
+	<a href={`/opentrons-clone/${data.robot._id}/data-files`} class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded">Data files →</a>
 </div>
+
+<section class="bg-white border rounded-lg p-4 mb-4">
+	<h3 class="font-semibold mb-2">Server logs</h3>
+	<p class="text-xs text-gray-500 mb-2">Download raw log files from the robot.</p>
+	<div class="flex flex-wrap gap-2 text-sm">
+		{#each ['api.log', 'server.log', 'serial.log', 'update_server.log'] as log (log)}
+			<a
+				href={`/api/opentrons-clone/robots/${data.robot._id}/logs/${log}?records=5000`}
+				target="_blank"
+				rel="noopener"
+				class="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded text-xs font-mono"
+			>
+				{log}
+			</a>
+		{/each}
+	</div>
+</section>
 
 <section class="bg-white border rounded-lg p-4 mb-4">
 	<h3 class="font-semibold mb-2">Instruments</h3>
