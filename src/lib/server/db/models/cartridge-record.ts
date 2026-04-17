@@ -35,7 +35,9 @@ const cartridgeRecordSchema = new Schema({
 		rejectionReason: String, operator: operatorRef, timestamp: Date, recordedAt: Date
 	},
 	waxStorage: {
-		location: String, coolingTrayId: String, operator: operatorRef, timestamp: Date, recordedAt: Date
+		location: String, coolingTrayId: String,
+		coolingLocationId: String, coolingLocationName: String,
+		operator: operatorRef, timestamp: Date, recordedAt: Date
 	},
 	reagentFilling: {
 		runId: String, robotId: String, robotName: String,
