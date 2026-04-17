@@ -134,7 +134,19 @@
 
 	<section class="bg-white border rounded-lg p-4 mb-4">
 		<h3 class="font-semibold mb-2">Start a run</h3>
-		<p class="text-sm text-gray-500">Run creation UI — coming in the next iteration (rows 12-18).</p>
+		<form method="POST" action="?/createRun" use:enhance>
+			<button
+				type="submit"
+				disabled={!data.online || !data.protocol}
+				class="px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-50"
+			>
+				Create run from this protocol
+			</button>
+			<p class="text-xs text-gray-500 mt-2">
+				This creates an idle run on the robot using the current analysis's runtime parameters. You'll
+				be redirected to the run detail page where you can press Play.
+			</p>
+		</form>
 	</section>
 
 	<section class="bg-white border rounded-lg p-4">

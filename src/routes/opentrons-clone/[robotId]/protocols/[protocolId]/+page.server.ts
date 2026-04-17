@@ -96,5 +96,31 @@ export const actions: Actions = {
 		}
 
 		throw redirect(303, `/opentrons-clone/${params.robotId}/protocols`);
+	},
+
+	createRun: async ({ params, locals }) => {
+		requirePermission(locals.user, 'manufacturing:write');
+		const robot = await getRobot(params.robotId);
+
+		let runId: string | null = null;
+		try {
+			const res = await fetch(`${robotBaseUrl(robot)}/runs`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json', 'opentrons-version': '*' },
+				body: JSON.stringify({ data: { protocolId: params.protocolId } }),
+				signal: AbortSignal.timeout(15_000)
+			});
+			if (!res.ok) {
+				const err = await res.json().catch(() => ({}));
+				return fail(res.status, { error: 'Run create failed', details: err });
+			}
+			const data = await res.json();
+			runId = data?.data?.id ?? null;
+		} catch (e) {
+			return fail(502, { error: `Robot unreachable: ${(e as Error).message}` });
+		}
+
+		if (runId) throw redirect(303, `/opentrons-clone/${params.robotId}/runs/${runId}`);
+		return fail(500, { error: 'Run created but no id returned' });
 	}
 };
