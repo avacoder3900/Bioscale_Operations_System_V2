@@ -164,7 +164,10 @@ export const actions: Actions = {
 			await CartridgeRecord.bulkWrite(bulkOps);
 		}
 
-		return { success: true };
+		// Run has been released to the QC queue — send the operator back to the
+		// Opentron Control homepage so they can start another run. QC + Storage
+		// can be picked up later from the post-OT-2 queue.
+		redirect(303, '/manufacturing/opentron-control');
 	},
 
 	completeQC: async ({ request, locals }) => {

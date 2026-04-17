@@ -97,12 +97,14 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 };
 
 export const actions: Actions = {
-	completeInspectionBatch: async ({ request, locals }) => {
+	completeInspectionBatch: async ({ request, locals, params }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		// Prefer the URL param — the form's hidden runId field has been unreliable
+		// in practice (empty on submit), producing a spurious "Run not found".
+		const runId = (data.get('runId') as string) || (params.runId as string);
 		const rejectedCartridgesRaw = data.get('rejectedCartridges') as string;
 		const now = new Date();
 
@@ -152,7 +154,10 @@ export const actions: Actions = {
 			});
 		}
 
-		return { success: true };
+		// Run has been released to the Top Sealing queue — send the operator back
+		// to the Opentron Control homepage so they can start another run. Top
+		// Sealing + Storage can be picked up later from the post-OT-2 queue.
+		redirect(303, '/manufacturing/opentron-control');
 	},
 
 	completeInspection: async ({ request, locals }) => {
