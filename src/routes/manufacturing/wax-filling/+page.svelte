@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { invalidateAll } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
 	import { page } from '$app/stores';
 	import SetupConfirmation from '$lib/components/manufacturing/wax-filling/SetupConfirmation.svelte';
 	import WaxPreparation from '$lib/components/manufacturing/wax-filling/WaxPreparation.svelte';
@@ -417,13 +417,16 @@
 		cancelReason = '';
 	}
 
-	function handleCoolingComplete(result: { trayId: string; coolingTimestamp: Date }) {
-		if (data.runState.runId) {
-			submitAction('confirmCooling', {
-				runId: data.runState.runId,
-				coolingTrayId: result.trayId
-			});
-		}
+	async function handleCoolingComplete(result: { trayId: string; coolingTimestamp: Date }) {
+		if (!data.runState.runId) return;
+		await submitAction('confirmCooling', {
+			runId: data.runState.runId,
+			coolingTrayId: result.trayId
+		});
+		// Final step of the wax run on this page — send operator back to
+		// Opentron Control so they can start another run. QC + Storage for
+		// this run live on the Opentron Control post-OT-2 queue.
+		if (!errorMsg) await goto('/manufacturing/opentron-control');
 	}
 
 	function handleQCComplete(result: {
