@@ -9,7 +9,7 @@ Living checklist. Update after every commit.
 | 1 — Audit `feature/opentrons-api-phase1-3` | ✅ done | `AUDIT.md` (on clone-ui branch) |
 | 2 — Create Step-1 branch | ✅ done | `dfcedcd` |
 | 3 — Ingest live OpenAPI spec | ✅ done | `685ba9b` |
-| 4 — Parity rows (see below) | 🟡 in progress | — |
+| 4 — Parity rows (see below) | ✅ done | rows 20, 24 parked (API gap / low-priority) |
 | 5 — Verify end-to-end against real robot | ⏳ blocked on user (physical robot access) | — |
 
 ## Parity rows (§4 of OPENTRONS-CLONE-PLAN.md)
@@ -42,15 +42,15 @@ Living checklist. Update after every commit.
 | 24 | Labware definitions | ⚠️ not in API | `GET /labware/definitions` is 404; `/labware/calibrations` removed. Per-run definitions only. |
 | 25 | Labware offsets (read) | ✅ | `/opentrons-clone/:r/labware` page + per-run block on run detail |
 | 26 | Labware offsets (per-run) | ✅ | Power-user form on run detail → `POST /runs/{id}/labware_offsets` |
-| 27 | Settings list | ⏳ | `GET /settings` |
-| 28 | Settings update | ⏳ | `POST /settings` |
-| 29 | Settings reset | ⏳ | `POST /settings/reset` |
-| 30 | Server logs download | ⏳ | confirm path from OpenAPI |
-| 31 | Error recovery policy | ⏳ | `GET/PATCH /errorRecovery/settings` |
-| 32 | Networking info | ⏳ | `GET /networking/status` |
-| 33 | Data files | ⏳ | `POST/GET/DELETE /dataFiles` |
-| 34 | Client data K/V | ⏳ | `PUT/GET/DELETE /clientData/{key}` |
-| 35 | System clock | ⏳ | `GET/PUT /system/time` |
+| 27 | Settings list | ✅ | `/opentrons-clone/:r/settings` — feature flags list |
+| 28 | Settings update | ✅ | Per-row Enable/Disable form action |
+| 29 | Settings reset | ✅ | Reset categories from `/settings/reset/options` |
+| 30 | Server logs download | ✅ | Robot detail: api/server/serial/update_server.log links, streamed via `/api/opentrons-clone/.../logs/:logId` |
+| 31 | Error recovery policy | ✅ | Toggle on settings page |
+| 32 | Networking info | ✅ | Interface table on settings page |
+| 33 | Data files | ✅ | `/opentrons-clone/:r/data-files` — list, upload, delete, download |
+| 34 | Client data K/V | ✅ | Lookup + PUT + DELETE forms on data-files page |
+| 35 | System clock | ✅ | Robot vs BIMS time + drift + Sync button on settings page |
 
 ## Commits on `feature/opentrons-clone-ui`
 
@@ -65,6 +65,8 @@ Living checklist. Update after every commit.
 - `b57554c` — PROGRESS update
 - `bf77ed0` — Task 4e controls (rows 21-23)
 - `72da5d9` — Task 4f labware (rows 24-26)
+- `d86d013` — PROGRESS update
+- `2371ef2` — Task 4g settings/logs/data-files/client-data/time (rows 27-35)
 
 ## Live robot facts (as of 2026-04-17)
 
