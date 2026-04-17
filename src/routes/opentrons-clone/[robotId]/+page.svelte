@@ -1,5 +1,8 @@
 <script lang="ts">
-	let { data } = $props();
+	import { enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
+
+	let { data, form } = $props();
 
 	const STALE_DAYS = 7;
 
@@ -54,6 +57,109 @@
 		Open the Opentrons App on the lab Mac to re-run the calibration wizards — BIMS is read-only for calibration.
 	</div>
 {/if}
+
+{#if form?.error}
+	<div class="bg-red-50 border border-red-300 text-red-900 rounded p-2 mb-3 text-sm">{form.error}</div>
+{:else if form?.success}
+	<div class="bg-green-50 border border-green-300 text-green-900 rounded p-2 mb-3 text-sm">{form.message ?? 'OK'}</div>
+{/if}
+
+<section class="bg-white border rounded-lg p-4 mb-4">
+	<h3 class="font-semibold mb-2">Controls</h3>
+	<div class="flex flex-wrap gap-2 items-center text-sm">
+		<form
+			method="POST"
+			action="?/home"
+			use:enhance={() => async ({ result }) => {
+				if (result.type === 'success') await invalidateAll();
+			}}
+			class="flex items-center gap-1"
+		>
+			<input type="hidden" name="target" value="robot" />
+			<button
+				type="submit"
+				disabled={!data.online}
+				class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded disabled:opacity-50"
+				onclick={(e) => {
+					if (!confirm('Home all axes? Robot will move.')) e.preventDefault();
+				}}
+			>
+				Home robot
+			</button>
+		</form>
+
+		<form
+			method="POST"
+			action="?/home"
+			use:enhance
+			class="flex items-center gap-1"
+		>
+			<input type="hidden" name="target" value="pipette" />
+			<input type="hidden" name="mount" value="left" />
+			<button
+				type="submit"
+				disabled={!data.online}
+				class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded disabled:opacity-50 text-xs"
+			>
+				Home left pipette
+			</button>
+		</form>
+
+		<form method="POST" action="?/home" use:enhance class="flex items-center gap-1">
+			<input type="hidden" name="target" value="pipette" />
+			<input type="hidden" name="mount" value="right" />
+			<button
+				type="submit"
+				disabled={!data.online}
+				class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded disabled:opacity-50 text-xs"
+			>
+				Home right pipette
+			</button>
+		</form>
+
+		<form
+			method="POST"
+			action="?/lights"
+			use:enhance={() => async ({ result }) => {
+				if (result.type === 'success') await invalidateAll();
+			}}
+			class="flex items-center gap-1"
+		>
+			<input type="hidden" name="on" value={data.lightsOn ? 'false' : 'true'} />
+			<button
+				type="submit"
+				disabled={!data.online}
+				class="px-3 py-1.5 {data.lightsOn ? 'bg-yellow-100 hover:bg-yellow-200' : 'bg-gray-100 hover:bg-gray-200'} rounded disabled:opacity-50"
+			>
+				{data.lightsOn ? 'Lights on' : 'Lights off'}
+			</button>
+		</form>
+
+		<form method="POST" action="?/identify" use:enhance class="flex items-center gap-1">
+			<input type="hidden" name="seconds" value="10" />
+			<button
+				type="submit"
+				disabled={!data.online}
+				class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded disabled:opacity-50"
+				title="Blink lights for 10s — useful to locate this robot among several"
+			>
+				Identify (blink 10s)
+			</button>
+		</form>
+	</div>
+	<p class="text-xs text-gray-500 mt-2">
+		Homing moves physical hardware. Make sure no labware is being touched and the deck is safe.
+	</p>
+</section>
+
+<div class="flex flex-wrap gap-2 mb-4 text-sm">
+	<a href={`/opentrons-clone/${data.robot._id}/protocols`} class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded">
+		Protocols →
+	</a>
+	<a href={`/opentrons-clone/${data.robot._id}/runs`} class="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded">
+		Runs →
+	</a>
+</div>
 
 <section class="bg-white border rounded-lg p-4 mb-4">
 	<h3 class="font-semibold mb-2">Instruments</h3>
