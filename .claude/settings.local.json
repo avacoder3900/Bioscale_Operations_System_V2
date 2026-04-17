@@ -82,7 +82,9 @@
       "Bash(npm init *)",
       "Bash(where winget *)",
       "Bash(where scoop *)",
-      "Bash(where choco *)"
+      "Bash(where choco *)",
+      "Bash(winget search *)",
+      "Bash(winget install *)"
     ]
   }
 }

@@ -1,13 +1,24 @@
 <script lang="ts">
+	import PostRunCooling from '$lib/components/manufacturing/wax-filling/PostRunCooling.svelte';
 	import QCInspection from '$lib/components/manufacturing/wax-filling/QCInspection.svelte';
 	import CompletionStorage from '$lib/components/manufacturing/wax-filling/CompletionStorage.svelte';
 
 	let { data, form } = $props();
 
-	const STAGES = ['QC', 'Storage'] as const;
+	const STAGES = ['Cooling', 'QC', 'Storage'] as const;
 	let currentStageIndex = $derived(
-		data.stage ? STAGES.indexOf(data.stage as typeof STAGES[number]) : 0
+		data.stage === 'Awaiting Removal' ? 0 :
+		data.stage === 'QC' ? 1 :
+		data.stage === 'Storage' ? 2 : 0
 	);
+
+	// Oven scan state — shown after PostRunCooling completes, before confirmCooling
+	let showOvenScan = $state(false);
+	let ovenScanInput = $state('');
+	let ovenScanError = $state('');
+	let ovenScanValidating = $state(false);
+	let ovenScanResult = $state<{ id: string; name: string } | null>(null);
+	let coolingTrayId = $state('');
 
 	let coolingBypassed = $state(false);
 	let coolingBypassPassword = $state('');
@@ -31,24 +42,65 @@
 	});
 
 	function submitForm(action: string, extra: Record<string, string> = {}) {
-		const form = document.createElement('form');
-		form.method = 'POST';
-		form.action = `?/${action}`;
-		form.style.display = 'none';
+		const f = document.createElement('form');
+		f.method = 'POST';
+		f.action = `?/${action}`;
+		f.style.display = 'none';
 
 		const addField = (name: string, value: string) => {
 			const input = document.createElement('input');
 			input.type = 'hidden';
 			input.name = name;
 			input.value = value;
-			form.appendChild(input);
+			f.appendChild(input);
 		};
 
 		addField('runId', data.runId);
 		for (const [k, v] of Object.entries(extra)) addField(k, v);
 
-		document.body.appendChild(form);
-		form.submit();
+		document.body.appendChild(f);
+		f.submit();
+	}
+
+	function handleCoolingComplete(result?: { trayId?: string }) {
+		// PostRunCooling finished — now scan the curing oven before advancing
+		coolingTrayId = result?.trayId ?? '';
+		showOvenScan = true;
+		ovenScanInput = '';
+		ovenScanError = '';
+		ovenScanResult = null;
+	}
+
+	async function handleOvenScanKeydown(e: KeyboardEvent) {
+		if (e.key !== 'Enter' || !ovenScanInput.trim()) return;
+		e.preventDefault();
+		const value = ovenScanInput.trim();
+		ovenScanInput = '';
+		ovenScanError = '';
+		ovenScanValidating = true;
+		try {
+			const res = await fetch(`/api/dev/validate-equipment?type=oven&id=${encodeURIComponent(value)}`);
+			const result = await res.json();
+			if (!res.ok || result.error) {
+				ovenScanError = result.error ?? `Oven "${value}" not found.`;
+			} else {
+				ovenScanResult = { id: result.id ?? value, name: result.name ?? value };
+			}
+		} catch {
+			ovenScanError = 'Validation failed';
+		} finally {
+			ovenScanValidating = false;
+		}
+	}
+
+	function confirmOvenAndAdvance() {
+		if (!ovenScanResult) return;
+		showOvenScan = false;
+		submitForm('confirmCooling', {
+			coolingTrayId,
+			ovenLocationId: ovenScanResult.id,
+			ovenLocationName: ovenScanResult.name
+		});
 	}
 
 	function handleQCComplete() {
@@ -84,7 +136,6 @@
 </script>
 
 <div class="mx-auto max-w-5xl space-y-6 p-4">
-	<!-- Header -->
 	<div class="flex items-center gap-3">
 		<a href="/manufacturing/opentron-control"
 			class="flex items-center justify-center rounded"
@@ -92,9 +143,7 @@
 			&#8592;
 		</a>
 		<div>
-			<h1 class="text-xl font-bold" style="color: var(--color-tron-cyan)">
-				Wax Post-Processing
-			</h1>
+			<h1 class="text-xl font-bold" style="color: var(--color-tron-cyan)">Wax Post-Processing</h1>
 			<p class="text-xs" style="color: var(--color-tron-text-secondary)">
 				Run {data.runId.slice(-8)} &middot; {data.robotName} &middot;
 				{data.runState.plannedCartridgeCount ?? '?'} cartridges
@@ -116,7 +165,7 @@
 					{isCurrent ? 'bg-[var(--color-tron-cyan)] text-black' :
 					 isPast ? 'bg-green-500/30 text-green-300' :
 					 'bg-[var(--color-tron-surface)] text-[var(--color-tron-text-secondary)]'}">
-					{#if isPast}&#10003;{:else}{i + 5}{/if}
+					{#if isPast}&#10003;{:else}{i + 4}{/if}
 				</div>
 				<span class="text-xs {isCurrent ? 'font-bold text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)]'}">{stage}</span>
 			</div>
@@ -128,8 +177,16 @@
 
 	<!-- Stage content -->
 	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] p-5">
-		{#if data.stage === 'QC'}
-			{@const qcCarts = data.qcCartridges.map((c: any) => ({
+		{#if data.stage === 'Awaiting Removal'}
+			<PostRunCooling
+				runEndTime={data.runState.deckRemovedTime ? new Date(data.runState.deckRemovedTime) : new Date()}
+				coolingWarningMin={data.settings.coolingWarningMin}
+				deckLockoutMin={data.settings.deckLockoutMin}
+				onComplete={handleCoolingComplete}
+				readonly={false}
+			/>
+		{:else if data.stage === 'QC'}
+			{@const qcCarts = data.qcCartridges.map((c) => ({
 				...c,
 				ovenEntryTime: c.ovenEntryTime ? new Date(c.ovenEntryTime) : null,
 				qcTimestamp: c.qcTimestamp ? new Date(c.qcTimestamp) : null,
@@ -178,8 +235,8 @@
 			{@const summary = {
 				runId: data.runId,
 				cartridgeCount: data.storageCartridges.length,
-				acceptedCount: data.storageCartridges.filter((c: any) => c.qcStatus === 'Accepted').length,
-				rejectedCount: data.storageCartridges.filter((c: any) => c.qcStatus === 'Rejected').length
+				acceptedCount: data.storageCartridges.filter((c) => c.qcStatus === 'Accepted').length,
+				rejectedCount: data.storageCartridges.filter((c) => c.qcStatus === 'Rejected').length
 			}}
 			<CompletionStorage
 				cartridges={data.storageCartridges}
@@ -192,3 +249,54 @@
 		{/if}
 	</div>
 </div>
+
+<!-- Oven Scan Modal — shown after PostRunCooling completes, before advancing to QC -->
+{#if showOvenScan}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+		<div class="mx-4 w-full max-w-md rounded-lg border border-amber-500/50 bg-[var(--color-tron-surface)] p-6 shadow-xl">
+			<h3 class="text-lg font-semibold text-amber-300">Place Deck in Oven</h3>
+			<p class="mt-2 text-sm text-[var(--color-tron-text-secondary)]">
+				Scan the oven barcode where the deck will be placed for post-wax curing.
+			</p>
+
+			{#if !ovenScanResult}
+				<div class="mt-4">
+					<input
+						type="text"
+						bind:value={ovenScanInput}
+						onkeydown={handleOvenScanKeydown}
+						placeholder="Scan oven barcode..."
+						disabled={ovenScanValidating}
+						class="min-h-[44px] w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] placeholder-[var(--color-tron-text-secondary)] focus:border-amber-400 focus:outline-none"
+					/>
+					{#if ovenScanError}
+						<p class="mt-2 text-sm text-red-400">{ovenScanError}</p>
+					{/if}
+					{#if ovenScanValidating}
+						<p class="mt-2 text-sm text-[var(--color-tron-text-secondary)]">Validating...</p>
+					{/if}
+				</div>
+			{:else}
+				<div class="mt-4 rounded-lg border border-green-500/30 bg-green-900/10 p-4">
+					<p class="text-sm text-green-400">Oven verified:</p>
+					<p class="mt-1 font-mono text-lg font-bold text-green-300">{ovenScanResult.name}</p>
+				</div>
+				<button
+					type="button"
+					onclick={confirmOvenAndAdvance}
+					class="mt-4 min-h-[44px] w-full rounded-lg border border-green-500/50 bg-green-900/20 px-6 py-3 text-sm font-bold text-green-300 transition-all hover:bg-green-900/30"
+				>
+					Confirm — Deck Placed in {ovenScanResult.name}
+				</button>
+			{/if}
+
+			<button
+				type="button"
+				onclick={() => { showOvenScan = false; }}
+				class="mt-3 w-full rounded-lg border border-[var(--color-tron-border)] px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] transition-colors hover:bg-[var(--color-tron-border)]/30"
+			>
+				Cancel
+			</button>
+		</div>
+	</div>
+{/if}

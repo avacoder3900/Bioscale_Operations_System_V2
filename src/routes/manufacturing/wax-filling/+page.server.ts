@@ -545,7 +545,9 @@ export const actions: Actions = {
 		// Get activeLotId from the run for traceability
 		const activeLotId: string | undefined = (run as any).activeLotId ?? undefined;
 
-		// Create CartridgeRecord stubs and link to this wax run
+		// Create CartridgeRecord stubs and link to this wax run.
+		// Also record baking oven exit: cartridges are leaving the baking oven
+		// (where they were placed during WI-01) and going onto the deck.
 		if (cartridgeIds.length > 0) {
 			const now = new Date();
 			const ops = cartridgeIds.map((cid: string, idx: number) => ({
@@ -560,6 +562,8 @@ export const actions: Actions = {
 						$set: {
 							status: 'wax_filling',
 							'backing.lotId': activeLotId ?? null,
+							// Record baking oven exit — cartridge is leaving the baking oven
+							'backing.ovenExitTime': now,
 							'waxFilling.runId': runId,
 							'waxFilling.deckId': deckId ?? null,
 							'waxFilling.robotId': run.robot?._id ?? null,
@@ -641,29 +645,11 @@ export const actions: Actions = {
 			}
 		}, { new: true }).lean() as any;
 
-		// Write ovenCure entry time to all cartridges in this run (WRITE-ONCE for entryTime)
-		if (run?.cartridgeIds?.length) {
-			const bulkOps = run.cartridgeIds.map((cid: string) => ({
-				updateOne: {
-					filter: { _id: cid, 'ovenCure.entryTime': { $exists: false } },
-					update: {
-						$set: {
-							'ovenCure.locationId': ovenLocationId ?? run.ovenLocationId ?? undefined,
-							'ovenCure.locationName': ovenLocationName ?? undefined,
-							'ovenCure.entryTime': now,
-							'ovenCure.operator': { _id: locals.user._id, username: locals.user.username },
-							'ovenCure.recordedAt': now
-						}
-					}
-				}
-			}));
-			await CartridgeRecord.bulkWrite(bulkOps);
-		}
-
-		// Robot is now free. The page's load function will no longer find this run
-		// as "active" (robotReleasedAt filters it out), so invalidateAll() will
-		// reset the page to "Start new run". The post-OT-2 steps (cooling/QC/
-		// storage) are accessible from Opentron Control.
+		// Robot is now free. ovenCure writes happen later on Opentron Control
+		// when the operator scans the curing oven at the "Deck Placed in Oven"
+		// step. The page's load function will no longer find this run as "active"
+		// (robotReleasedAt filters it out), so invalidateAll() will reset the
+		// page to "Start new run".
 		return { success: true };
 	},
 
