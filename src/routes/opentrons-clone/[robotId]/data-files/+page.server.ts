@@ -96,17 +96,20 @@ export const actions: Actions = {
 		const key = form.get('key')?.toString()?.trim();
 		const valueRaw = form.get('value')?.toString() ?? '';
 		if (!key) return fail(400, { error: 'key required' });
-		let parsed: unknown = valueRaw;
+		let parsed: unknown;
 		try {
 			parsed = JSON.parse(valueRaw);
 		} catch {
-			/* keep as string */
+			return fail(400, { error: 'value must be valid JSON (object expected)' });
+		}
+		if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+			return fail(400, { error: 'value must be a JSON object (OT-2 /clientData requires a dict)' });
 		}
 		try {
 			const res = await fetch(`${robotBaseUrl(robot)}/clientData/${encodeURIComponent(key)}`, {
 				method: 'PUT',
 				headers: { 'Content-Type': 'application/json', 'opentrons-version': '*' },
-				body: JSON.stringify(parsed),
+				body: JSON.stringify({ data: parsed }),
 				signal: AbortSignal.timeout(5_000)
 			});
 			if (!res.ok) {
