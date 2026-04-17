@@ -87,7 +87,8 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 		if (robotId) {
 			activeRun = await ReagentBatchRecord.findOne({
 				'robot._id': robotId,
-				status: { $nin: [...TERMINAL] }
+				status: { $nin: [...TERMINAL] },
+				robotReleasedAt: { $exists: false }
 			}).sort({ createdAt: -1 }).lean().catch(() => null);
 		}
 
@@ -177,12 +178,14 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			}))
 		];
 
-		// Check if this robot is blocked by an active wax filling run
+		// Check if this robot is blocked by an active wax filling run.
+		// Runs with robotReleasedAt set are post-OT-2 and don't block.
 		let robotBlocked: { process: 'wax'; runId: string | null } | null = null;
 		if (robotId) {
 			const waxRun = await WaxFillingRun.findOne({
 				'robot._id': robotId,
-				status: { $nin: ['completed', 'aborted', 'cancelled', 'voided'] }
+				status: { $nin: ['completed', 'aborted', 'cancelled', 'voided'] },
+				robotReleasedAt: { $exists: false }
 			}).lean().catch(() => null) as any;
 			if (waxRun) {
 				robotBlocked = { process: 'wax', runId: waxRun._id ? String(waxRun._id) : null };
@@ -223,10 +226,12 @@ export const actions: Actions = {
 		// Resolve robot name from layout data (if available)
 		const robotName = (data.get('robotName') as string) || robotId;
 
-		// Check for existing active run
+		// Check for existing active run. Runs with robotReleasedAt set are
+		// post-OT-2 (on Opentron Control) and don't block new runs.
 		const existing = await ReagentBatchRecord.findOne({
 			'robot._id': robotId,
-			status: { $nin: [...TERMINAL] }
+			status: { $nin: [...TERMINAL] },
+			robotReleasedAt: { $exists: false }
 		}).lean();
 		if (existing) return fail(400, { error: 'Robot already has an active run. Complete or cancel it first.' });
 

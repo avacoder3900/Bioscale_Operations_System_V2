@@ -84,7 +84,9 @@
       "Bash(where scoop *)",
       "Bash(where choco *)",
       "Bash(winget search *)",
-      "Bash(winget install *)"
+      "Bash(winget install *)",
+      "Bash(winget list *)",
+      "Bash(grep -rn 'ACTIVE_STAGES\\\\|status.*$in.*ACTIVE\\\\|status.*$nin.*TERMINAL\\\\|active.*run\\\\|robot.*_id.*status' /c/Users/nicho/Desktop/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2-1/src/routes/manufacturing/wax-filling/ /c/Users/nicho/Desktop/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2-1/src/routes/manufacturing/reagent-filling/)"
     ]
   }
 }

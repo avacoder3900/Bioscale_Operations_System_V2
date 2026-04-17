@@ -387,10 +387,12 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const robotId = (data.get('robotId') as string) ?? url.searchParams.get('robot') ?? '';
 
-		// Check for existing active run on this robot
+		// Check for existing active run on this robot. Runs with robotReleasedAt
+		// set are post-OT-2 (on Opentron Control) and don't block new runs.
 		const existingRun = await WaxFillingRun.findOne({
 			'robot._id': robotId,
-			status: { $in: [...ACTIVE_STAGES] }
+			status: { $in: [...ACTIVE_STAGES] },
+			robotReleasedAt: { $exists: false }
 		}).lean() as any;
 
 		if (existingRun) {
