@@ -106,6 +106,7 @@ export const actions: Actions = {
 		// in practice (empty on submit), producing a spurious "Run not found".
 		const runId = (data.get('runId') as string) || (params.runId as string);
 		const rejectedCartridgesRaw = data.get('rejectedCartridges') as string;
+		const trayId = ((data.get('trayId') as string | null) ?? '').trim() || undefined;
 		const now = new Date();
 
 		let rejectedCartridges: { cartridgeId: string; reason: string; status: string }[] = [];
@@ -127,9 +128,12 @@ export const actions: Actions = {
 				inspectedBy: { _id: locals.user._id, username: locals.user.username }, inspectedAt: now };
 		});
 
-		await ReagentBatchRecord.findByIdAndUpdate(runId, {
-			$set: { cartridgesFilled: updatedCartridges, status: 'Top Sealing' }
-		});
+		const updateFields: Record<string, any> = {
+			cartridgesFilled: updatedCartridges,
+			status: 'Top Sealing'
+		};
+		if (trayId) updateFields.trayId = trayId;
+		await ReagentBatchRecord.findByIdAndUpdate(runId, { $set: updateFields });
 
 		for (const rej of rejectedCartridges) {
 			await CartridgeRecord.findOneAndUpdate(

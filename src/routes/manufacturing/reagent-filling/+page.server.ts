@@ -553,6 +553,7 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const runId = await resolveRunId(data);
 		const rejectedCartridgesRaw = data.get('rejectedCartridges') as string;
+		const trayId = ((data.get('trayId') as string | null) ?? '').trim() || undefined;
 		const now = new Date();
 
 		let rejectedCartridges: { cartridgeId: string; reason: string; status: string }[] = [];
@@ -580,9 +581,12 @@ export const actions: Actions = {
 			return { ...cf, inspectionStatus: cf.inspectionStatus === 'Pending' ? 'Accepted' : cf.inspectionStatus, inspectedBy: { _id: locals.user._id, username: locals.user.username }, inspectedAt: now };
 		});
 
-		await ReagentBatchRecord.findByIdAndUpdate(runId, {
-			$set: { cartridgesFilled: updatedCartridges, status: 'Top Sealing' }
-		});
+		const updateFields: Record<string, any> = {
+			cartridgesFilled: updatedCartridges,
+			status: 'Top Sealing'
+		};
+		if (trayId) updateFields.trayId = trayId;
+		await ReagentBatchRecord.findByIdAndUpdate(runId, { $set: updateFields });
 
 		// Write reagentInspection to CartridgeRecord (WRITE-ONCE for rejected)
 		for (const rej of rejectedCartridges) {

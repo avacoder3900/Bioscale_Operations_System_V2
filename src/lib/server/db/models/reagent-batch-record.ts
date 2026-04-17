@@ -28,6 +28,9 @@ const reagentBatchRecordSchema = new Schema({
 	// no longer locks the robot — operators can start a new run while the
 	// post-OT-2 steps (inspection/sealing/storage) continue on Opentron Control.
 	robotReleasedAt: Date,
+	// Tray the cartridges sit on between Inspection and Top Sealing. Not a
+	// fridge/oven location — purely a holding surface.
+	trayId: String,
 	// status stores the current UI workflow stage or terminal state
 	status: {
 		type: String,

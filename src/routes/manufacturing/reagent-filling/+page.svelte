@@ -22,6 +22,53 @@
 	let cancelReason = $state('');
 	let showResetModal = $state(false);
 
+	// Tray scan sub-step — shown after Inspection's Complete button. The
+	// rejected list from Inspection is held locally until the operator
+	// scans the holding tray, then both fields submit together.
+	let pendingRejected = $state<null | { cartridgeRecordId: string; reasonCode: string }[]>(null);
+	let trayInput = $state('');
+	let trayError = $state('');
+	let trayValidating = $state(false);
+	let trayResult = $state<{ id: string; name: string } | null>(null);
+	let trayInputEl: HTMLInputElement | undefined = $state();
+
+	async function handleTrayKeydown(e: KeyboardEvent) {
+		if (e.key !== 'Enter' || !trayInput.trim()) return;
+		e.preventDefault();
+		const value = trayInput.trim();
+		trayInput = '';
+		trayError = '';
+		trayValidating = true;
+		try {
+			const res = await fetch(`/api/dev/validate-equipment?type=tray&id=${encodeURIComponent(value)}`);
+			const result = await res.json();
+			if (!res.ok || result.error) {
+				trayError = result.error ?? `Tray "${value}" not found.`;
+			} else {
+				trayResult = { id: result.id ?? value, name: result.name ?? value };
+			}
+		} catch {
+			trayError = 'Validation failed';
+		} finally {
+			trayValidating = false;
+		}
+	}
+
+	async function confirmTrayAndSubmit() {
+		if (!pendingRejected || !trayResult) return;
+		await submitForm('completeInspectionBatch', {
+			rejectedCartridges: JSON.stringify(pendingRejected),
+			trayId: trayResult.id
+		});
+		if (!errorMsg) await goto('/manufacturing/opentron-control');
+	}
+
+	function rescanTray() {
+		trayResult = null;
+		trayError = '';
+		setTimeout(() => trayInputEl?.focus(), 50);
+	}
+
 	// Admin override state
 	let showOverrideModal = $state(false);
 	let overrideUser = $state('');
@@ -515,21 +562,77 @@
 			readonly={isViewingPast}
 		/>
 
-	{:else if displayStage === 'Inspection'}
+	{:else if displayStage === 'Inspection' && pendingRejected === null}
 		<Inspection
 			cartridges={previewParam ? mockCartridges : data.cartridges}
 			rejectionCodes={previewParam ? mockRejectionCodes : data.rejectionCodes}
-			onComplete={async ({ rejectedCartridges }) => {
+			onComplete={({ rejectedCartridges }) => {
 				if (previewParam) { errorMsg = 'Actions disabled in preview mode'; return; }
-				await submitForm('completeInspectionBatch', { rejectedCartridges: JSON.stringify(rejectedCartridges) });
-				// Final step on this page — hand off to Opentron Control so the
-				// operator can start another run. Top Sealing + Storage for this
-				// run are picked up from the post-OT-2 queue there.
-				if (!errorMsg) await goto('/manufacturing/opentron-control');
+				// Buffer the rejected list and show the tray scan sub-step.
+				// The form submits once the tray has been validated.
+				pendingRejected = rejectedCartridges;
+				setTimeout(() => trayInputEl?.focus(), 100);
 			}}
 			readonly={isViewingPast}
 			focusPaused={showCancelModal || showResetModal || showOverrideModal}
 		/>
+
+	{:else if displayStage === 'Inspection' && pendingRejected !== null}
+		<!-- Tray scan sub-step: holding tray for cartridges between Inspection
+			and Top Sealing. Not a fridge/oven — just a flat surface. -->
+		<div class="space-y-5">
+			<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Scan Holding Tray</h2>
+			<p class="text-sm text-[var(--color-tron-text-secondary)]">
+				Place inspected cartridges on a tray and scan its barcode. The tray
+				holds them until Top Sealing on Opentron Control.
+			</p>
+
+			{#if !trayResult}
+				<div>
+					<input
+						bind:this={trayInputEl}
+						type="text"
+						bind:value={trayInput}
+						onkeydown={handleTrayKeydown}
+						placeholder="Scan tray barcode..."
+						disabled={trayValidating}
+						class="min-h-[44px] w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text)] placeholder-[var(--color-tron-text-secondary)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+						autocomplete="off"
+					/>
+					{#if trayError}<p class="mt-2 text-sm text-red-400">{trayError}</p>{/if}
+					{#if trayValidating}<p class="mt-2 text-sm text-[var(--color-tron-text-secondary)]">Validating...</p>{/if}
+				</div>
+				<button
+					type="button"
+					onclick={() => { pendingRejected = null; trayError = ''; trayInput = ''; }}
+					class="min-h-[36px] rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
+				>
+					← Back to Inspection
+				</button>
+			{:else}
+				<div class="rounded-lg border border-green-500/30 bg-green-900/10 p-4 text-center">
+					<p class="text-sm text-green-400">Tray verified:</p>
+					<p class="mt-1 font-mono text-xl font-bold text-green-300">{trayResult.name}</p>
+				</div>
+				<div class="flex gap-3">
+					<button
+						type="button"
+						onclick={rescanTray}
+						class="min-h-[44px] rounded-lg border border-[var(--color-tron-border)] px-4 py-3 text-sm text-[var(--color-tron-text-secondary)] transition-all hover:border-[var(--color-tron-cyan)]/30"
+					>
+						Re-scan
+					</button>
+					<button
+						type="button"
+						onclick={confirmTrayAndSubmit}
+						disabled={submitting}
+						class="min-h-[44px] flex-1 rounded-lg border border-green-500/50 bg-green-900/20 px-6 py-3 text-lg font-bold text-green-400 transition-all hover:bg-green-900/30 disabled:opacity-50"
+					>
+						{submitting ? 'Submitting...' : `Confirm — Cartridges on ${trayResult.name}`}
+					</button>
+				</div>
+			{/if}
+		</div>
 	{/if}
 
 	<!-- Cancel Run Modal -->
