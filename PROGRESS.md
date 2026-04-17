@@ -21,12 +21,12 @@ Living checklist. Update after every commit.
 | 3 | Instruments (pipettes) | ✅ | Robot detail page, `/instruments` |
 | 4 | Modules | ✅ | Robot detail page, `/modules` |
 | 5 | Calibration status (read-only + staleness) | ✅ | Robot detail page, deck + pipette offsets + tip length |
-| 6 | Protocol list | ⏳ | `/opentrons-clone/protocols` (next) |
-| 7 | Protocol upload | ⏳ | multipart `POST /protocols` |
-| 8 | Protocol detail | ⏳ | `GET /protocols/{id}` |
-| 9 | Protocol analysis | ⏳ | `GET /protocols/{id}/analyses` |
-| 10 | Protocol delete | ⏳ | `DELETE /protocols/{id}` |
-| 11 | Protocol file download | ⏳ | confirm path from OpenAPI |
+| 6 | Protocol list | ✅ | Per-robot `/opentrons-clone/:r/protocols`, live `GET /protocols` |
+| 7 | Protocol upload | ✅ | Multipart form action → `POST /protocols` on robot |
+| 8 | Protocol detail | ✅ | `/opentrons-clone/:r/protocols/:p` |
+| 9 | Protocol analysis | ✅ | Latest analysis inline — runtime params, pipettes, labware |
+| 10 | Protocol delete | ✅ | Form action → `DELETE /protocols/{id}` |
+| 11 | Protocol file download | ⚠️ partial | Raw `.py` not in OT-2 API 8.7.0. Exposed `asDocument` analysis JSON via `/api/opentrons-clone/robots/:r/protocols/:p/analysis/:a/document`. |
 | 12 | Runs list | ⏳ | `GET /runs` |
 | 13 | Run create | ⏳ | `POST /runs` with `{data: {protocolId}}` |
 | 14 | Run detail | ⏳ | `GET /runs/{id}` |
@@ -58,6 +58,8 @@ Living checklist. Update after every commit.
 - `685ba9b` — Task 3 typed client
 - `796361a` — Task 4a landing page (rows 1-2)
 - `a87bc66` — Task 4b robot detail (rows 3-5)
+- `e213175` — PROGRESS.md
+- `01c823b` — Task 4c protocols section (rows 6-11)
 
 ## Live robot facts (as of 2026-04-17)
 
