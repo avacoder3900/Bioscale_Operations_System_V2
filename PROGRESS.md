@@ -27,15 +27,15 @@ Living checklist. Update after every commit.
 | 9 | Protocol analysis | ✅ | Latest analysis inline — runtime params, pipettes, labware |
 | 10 | Protocol delete | ✅ | Form action → `DELETE /protocols/{id}` |
 | 11 | Protocol file download | ⚠️ partial | Raw `.py` not in OT-2 API 8.7.0. Exposed `asDocument` analysis JSON via `/api/opentrons-clone/robots/:r/protocols/:p/analysis/:a/document`. |
-| 12 | Runs list | ⏳ | `GET /runs` |
-| 13 | Run create | ⏳ | `POST /runs` with `{data: {protocolId}}` |
-| 14 | Run detail | ⏳ | `GET /runs/{id}` |
-| 15 | Run current state | ⏳ | `GET /runs/{id}/currentState` |
-| 16 | Run commands | ⏳ | `GET /runs/{id}/commands`, detail |
-| 17 | Run command errors | ⏳ | `GET /runs/{id}/commandErrors` |
-| 18 | Run actions | ⏳ | play/pause/stop/resume-from-recovery |
-| 19 | Run delete | ⏳ | `DELETE /runs/{id}` |
-| 20 | Enqueue command | ⏳ | `POST /runs/{id}/commands` |
+| 12 | Runs list | ✅ | `/opentrons-clone/:r/runs` |
+| 13 | Run create | ✅ | "Start a run" form action on protocol detail |
+| 14 | Run detail | ✅ | `/opentrons-clone/:r/runs/:id` |
+| 15 | Run current state | ✅ | Shown inline; 3s poll while active |
+| 16 | Run commands | ✅ | Paginated list, scrollable |
+| 17 | Run command errors | ✅ | Red banner when present |
+| 18 | Run actions | ✅ | play/pause/stop/resume-from-recovery buttons |
+| 19 | Run delete | ✅ | Danger-zone form action |
+| 20 | Enqueue command | ⏳ | `POST /runs/{id}/commands` (advanced; parked) |
 | 21 | Home robot | ⏳ | `POST /robot/home` |
 | 22 | Lights | ⏳ | `GET/POST /robot/lights` |
 | 23 | Identify (blink) | ⏳ | `POST /identify` |
@@ -60,6 +60,8 @@ Living checklist. Update after every commit.
 - `a87bc66` — Task 4b robot detail (rows 3-5)
 - `e213175` — PROGRESS.md
 - `01c823b` — Task 4c protocols section (rows 6-11)
+- `28e838f` — PROGRESS update
+- `4193c08` — Task 4d runs section (rows 12-19)
 
 ## Live robot facts (as of 2026-04-17)
 
