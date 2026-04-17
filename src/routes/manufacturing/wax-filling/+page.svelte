@@ -205,7 +205,7 @@
 	let pendingOverrideAction = $state('');
 	let pendingOverrideData = $state<Record<string, string>>({});
 
-	const STAGES = ['Setup', 'Loading', 'Running', 'Awaiting Removal', 'QC', 'Storage'] as const;
+	const STAGES = ['Setup', 'Loading', 'Running', 'Awaiting Removal'] as const;
 
 	// Optimistic stage: prevents UI flash when invalidateAll() returns stale/failed data
 	const ACTION_NEXT_STAGE: Record<string, string> = {
@@ -214,8 +214,6 @@
 		loadDeck: 'Loading',
 		startRun: 'Running',
 		confirmDeckRemoved: 'Awaiting Removal',
-		confirmCooling: 'QC',
-		completeQC: 'Storage',
 	};
 	let pendingStage = $state<string | null>(null);
 	let effectiveStage = $derived(pendingStage ?? (data.runState.hasActiveRun ? data.runState.stage : null));
@@ -247,11 +245,7 @@
 			case 'Running':
 				return '3. Run';
 			case 'Awaiting Removal':
-				return '4. Cool';
-			case 'QC':
-				return '5. QC';
-			case 'Storage':
-				return '6. Store';
+				return '4. Deck Removal';
 			default:
 				return stage;
 		}
