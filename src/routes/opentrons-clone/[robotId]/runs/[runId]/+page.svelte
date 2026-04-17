@@ -187,6 +187,49 @@
 		{/if}
 	</section>
 
+	<section class="bg-white border rounded-lg p-4 mb-4">
+		<h3 class="font-semibold mb-2">Labware offsets ({data.run.labwareOffsets?.length ?? 0} applied)</h3>
+		{#if data.run.labwareOffsets?.length}
+			<table class="w-full text-xs mb-3">
+				<thead class="text-gray-400 text-left">
+					<tr><th>Labware URI</th><th>Slot</th><th>Offset (x/y/z)</th></tr>
+				</thead>
+				<tbody>
+					{#each data.run.labwareOffsets as off (off.id)}
+						<tr class="border-t">
+							<td class="font-mono">{off.definitionUri}</td>
+							<td>{off.location?.slotName ?? '—'}</td>
+							<td class="font-mono">{off.vector ? `${off.vector.x.toFixed(2)} / ${off.vector.y.toFixed(2)} / ${off.vector.z.toFixed(2)}` : '—'}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		{/if}
+		<details class="text-sm">
+			<summary class="cursor-pointer text-gray-600">Apply a per-run offset (advanced)</summary>
+			<form method="POST" action="?/applyOffset" use:enhance class="mt-2 grid grid-cols-1 md:grid-cols-5 gap-2">
+				<input name="definitionUri" placeholder="opentrons/..." class="border rounded px-2 py-1 text-xs md:col-span-2" required />
+				<input name="slotName" placeholder="Slot (e.g. 1)" class="border rounded px-2 py-1 text-xs" required />
+				<div class="grid grid-cols-3 gap-1 md:col-span-2">
+					<input name="x" type="number" step="0.01" placeholder="x" class="border rounded px-2 py-1 text-xs" required />
+					<input name="y" type="number" step="0.01" placeholder="y" class="border rounded px-2 py-1 text-xs" required />
+					<input name="z" type="number" step="0.01" placeholder="z" class="border rounded px-2 py-1 text-xs" required />
+				</div>
+				<button
+					type="submit"
+					disabled={!data.online}
+					class="md:col-span-5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-xs rounded disabled:opacity-50 justify-self-start"
+				>
+					Apply offset
+				</button>
+			</form>
+			<p class="text-xs text-gray-500 mt-2">
+				The Opentrons App's Labware Position Check wizard is the normal way to find offset values. This form lets
+				power users apply known offsets without leaving BIMS.
+			</p>
+		</details>
+	</section>
+
 	<section class="bg-white border rounded-lg p-4">
 		<h3 class="font-semibold mb-2 text-red-700">Danger zone</h3>
 		<form method="POST" action="?/delete" use:enhance>

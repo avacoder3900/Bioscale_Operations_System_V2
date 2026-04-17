@@ -101,6 +101,40 @@ export const actions: Actions = {
 		}
 	},
 
+	applyOffset: async ({ params, request, locals }) => {
+		requirePermission(locals.user, 'manufacturing:write');
+		const robot = await getRobot(params.robotId);
+		const form = await request.formData();
+		const definitionUri = form.get('definitionUri')?.toString()?.trim();
+		const slotName = form.get('slotName')?.toString()?.trim();
+		const x = parseFloat(form.get('x')?.toString() ?? '0');
+		const y = parseFloat(form.get('y')?.toString() ?? '0');
+		const z = parseFloat(form.get('z')?.toString() ?? '0');
+		if (!definitionUri || !slotName || [x, y, z].some(Number.isNaN)) {
+			return fail(400, { error: 'definitionUri, slotName, and numeric x/y/z are required' });
+		}
+		try {
+			const res = await fetch(
+				`${robotBaseUrl(robot)}/runs/${encodeURIComponent(params.runId as string)}/labware_offsets`,
+				{
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json', 'opentrons-version': '*' },
+					body: JSON.stringify({
+						data: { definitionUri, location: { slotName }, vector: { x, y, z } }
+					}),
+					signal: AbortSignal.timeout(10_000)
+				}
+			);
+			if (!res.ok) {
+				const err = await res.json().catch(() => ({}));
+				return fail(res.status, { error: 'Apply offset failed', details: err });
+			}
+			return { success: true, message: `Offset applied for ${definitionUri} @ ${slotName}` };
+		} catch (e) {
+			return fail(502, { error: `Robot unreachable: ${(e as Error).message}` });
+		}
+	},
+
 	delete: async ({ params, locals }) => {
 		requirePermission(locals.user, 'manufacturing:write');
 		const robot = await getRobot(params.robotId);
