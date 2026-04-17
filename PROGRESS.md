@@ -36,12 +36,12 @@ Living checklist. Update after every commit.
 | 18 | Run actions | ✅ | play/pause/stop/resume-from-recovery buttons |
 | 19 | Run delete | ✅ | Danger-zone form action |
 | 20 | Enqueue command | ⏳ | `POST /runs/{id}/commands` (advanced; parked) |
-| 21 | Home robot | ⏳ | `POST /robot/home` |
-| 22 | Lights | ⏳ | `GET/POST /robot/lights` |
-| 23 | Identify (blink) | ⏳ | `POST /identify` |
-| 24 | Labware definitions | ⏳ | `GET /labware/definitions` |
-| 25 | Labware offsets (read) | ⏳ | `GET /labwareOffsets` |
-| 26 | Labware offsets (per-run) | ⏳ | `POST /runs/{id}/labware_offsets` |
+| 21 | Home robot | ✅ | Controls section on robot detail (robot + per-mount) |
+| 22 | Lights | ✅ | Toggle button reflecting current state |
+| 23 | Identify (blink) | ✅ | `POST /identify?seconds=10` |
+| 24 | Labware definitions | ⚠️ not in API | `GET /labware/definitions` is 404; `/labware/calibrations` removed. Per-run definitions only. |
+| 25 | Labware offsets (read) | ✅ | `/opentrons-clone/:r/labware` page + per-run block on run detail |
+| 26 | Labware offsets (per-run) | ✅ | Power-user form on run detail → `POST /runs/{id}/labware_offsets` |
 | 27 | Settings list | ⏳ | `GET /settings` |
 | 28 | Settings update | ⏳ | `POST /settings` |
 | 29 | Settings reset | ⏳ | `POST /settings/reset` |
@@ -62,6 +62,9 @@ Living checklist. Update after every commit.
 - `01c823b` — Task 4c protocols section (rows 6-11)
 - `28e838f` — PROGRESS update
 - `4193c08` — Task 4d runs section (rows 12-19)
+- `b57554c` — PROGRESS update
+- `bf77ed0` — Task 4e controls (rows 21-23)
+- `72da5d9` — Task 4f labware (rows 24-26)
 
 ## Live robot facts (as of 2026-04-17)
 
