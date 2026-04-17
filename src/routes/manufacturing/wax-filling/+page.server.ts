@@ -662,23 +662,50 @@ export const actions: Actions = {
 		const coolingTrayId = (data.get('coolingTrayId') as string) || undefined;
 		const now = new Date();
 
+		// Resolve the fridge this tray currently lives in (inferred from
+		// EquipmentLocation.currentPlacements). Degrades gracefully: if the
+		// tray has no placement, we still record the cooling but skip the
+		// fridge fields and log a warning.
+		let coolingLocationId: string | undefined;
+		let coolingLocationName: string | undefined;
+		if (coolingTrayId) {
+			const fridgeLoc = await EquipmentLocation.findOne({
+				locationType: 'fridge',
+				isActive: true,
+				currentPlacements: { $elemMatch: { itemId: coolingTrayId } }
+			}).lean().catch(() => null) as any;
+			if (fridgeLoc) {
+				coolingLocationId = String(fridgeLoc._id);
+				coolingLocationName = fridgeLoc.displayName ?? fridgeLoc.barcode ?? undefined;
+			} else {
+				console.warn(`[confirmCooling] No fridge placement found for tray ${coolingTrayId}`);
+			}
+		}
+
 		const update: Record<string, any> = { status: 'QC', coolingConfirmedTime: now, coolingConfirmedAt: now };
 		if (coolingTrayId) update.coolingTrayId = coolingTrayId;
+		if (coolingLocationId) update.coolingLocationId = coolingLocationId;
 
 		const run = await WaxFillingRun.findByIdAndUpdate(runId, { $set: update }, { new: true }).lean() as any;
 
 		// Record oven exit time on cartridges that have an ovenCure.entryTime
+		// and stamp the cooling fridge on each cartridge's waxStorage subdoc.
 		if (run?.cartridgeIds?.length) {
+			const waxStorageSet: Record<string, any> = {};
+			if (coolingTrayId) waxStorageSet['waxStorage.coolingTrayId'] = coolingTrayId;
+			if (coolingLocationId) waxStorageSet['waxStorage.coolingLocationId'] = coolingLocationId;
+			if (coolingLocationName) waxStorageSet['waxStorage.coolingLocationName'] = coolingLocationName;
+
 			const bulkOps = run.cartridgeIds.map((cid: string) => ({
 				updateOne: {
 					filter: { _id: cid, 'ovenCure.entryTime': { $exists: true }, 'ovenCure.exitTime': { $exists: false } },
-					update: { $set: { 'ovenCure.exitTime': now } }
+					update: { $set: { 'ovenCure.exitTime': now, ...waxStorageSet } }
 				}
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
 		}
 
-		return { success: true };
+		return { success: true, coolingLocationId, coolingLocationName };
 	},
 
 	/** Complete QC — inspect all cartridges and transition to Storage */
