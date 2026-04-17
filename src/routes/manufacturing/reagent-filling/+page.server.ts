@@ -213,6 +213,33 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 	}
 };
 
+/**
+ * Resolve the active run for a post-OT-2 action on this page.
+ *
+ * Why this exists: once completeRunFilling sets robotReleasedAt, the page's
+ * load filter excludes the run from activeRun, so `data.activeRunId` on the
+ * client becomes null and submitForm posts `runId=''`. The client page still
+ * optimistically shows Inspection/Top Sealing/Storage (pendingStage isn't
+ * cleared for those actions), so the operator clicks through and hits these
+ * actions with an empty runId — producing a spurious "Run not found".
+ *
+ * When runId from the form is empty, fall back to the most recent post-OT-2
+ * run for this robot. The client sends robotId in every submitForm call.
+ */
+const POST_OT2_STATUSES = ['Inspection', 'Top Sealing', 'Storage'];
+async function resolveRunId(data: FormData): Promise<string | null> {
+	const runId = (data.get('runId') as string | null)?.trim() ?? '';
+	if (runId) return runId;
+	const robotId = (data.get('robotId') as string | null)?.trim() ?? '';
+	if (!robotId) return null;
+	const run = await ReagentBatchRecord.findOne({
+		'robot._id': robotId,
+		status: { $in: POST_OT2_STATUSES },
+		robotReleasedAt: { $exists: true }
+	}).sort({ createdAt: -1 }).select('_id').lean() as any;
+	return run ? String(run._id) : null;
+}
+
 export const actions: Actions = {
 	/** Create a new run */
 	createRun: async ({ request, locals, url }) => {
@@ -524,7 +551,7 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveRunId(data);
 		const rejectedCartridgesRaw = data.get('rejectedCartridges') as string;
 		const now = new Date();
 
@@ -533,6 +560,7 @@ export const actions: Actions = {
 			try { rejectedCartridges = JSON.parse(rejectedCartridgesRaw); } catch { /* ignore */ }
 		}
 
+		if (!runId) return fail(404, { error: 'Run not found' });
 		const run = await ReagentBatchRecord.findById(runId).lean() as any;
 		if (!run) return fail(404, { error: 'Run not found' });
 
@@ -597,7 +625,8 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveRunId(data);
+		if (!runId) return fail(404, { error: 'Run not found' });
 		await ReagentBatchRecord.findByIdAndUpdate(runId, { $set: { status: 'Top Sealing' } });
 		return { success: true };
 	},
@@ -608,10 +637,11 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveRunId(data);
 		const topSealLotId = data.get('topSealLotId') as string;
 
 		if (!topSealLotId?.trim()) return fail(400, { error: 'Top seal lot ID is required' });
+		if (!runId) return fail(404, { error: 'Run not found' });
 
 		const batchId = generateId();
 		const now = new Date();
@@ -638,11 +668,12 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveRunId(data);
 		const batchId = data.get('batchId') as string;
 		const cartridgeRecordId = data.get('cartridgeRecordId') as string;
 
 		if (!cartridgeRecordId) return fail(400, { error: 'Cartridge ID required' });
+		if (!runId) return fail(404, { error: 'Run not found' });
 
 		// Mark cartridge in the sealBatch as scanned
 		await ReagentBatchRecord.findOneAndUpdate(
@@ -665,9 +696,11 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveRunId(data);
 		const batchId = data.get('batchId') as string;
 		const now = new Date();
+
+		if (!runId) return fail(404, { error: 'Run not found' });
 
 		const run = await ReagentBatchRecord.findOneAndUpdate(
 			{ _id: runId, 'sealBatches._id': batchId },
@@ -738,11 +771,12 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveRunId(data);
 		const cartridgeId = data.get('cartridgeId') as string;
 		const now = new Date();
 
 		if (!cartridgeId) return fail(400, { error: 'Cartridge ID required' });
+		if (!runId) return fail(404, { error: 'Run not found' });
 
 		// Update inspection status to Rejected in the run's cartridgesFilled
 		await ReagentBatchRecord.findOneAndUpdate(
@@ -771,7 +805,8 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveRunId(data);
+		if (!runId) return fail(404, { error: 'Run not found' });
 
 		await ReagentBatchRecord.findByIdAndUpdate(runId, { $set: { status: 'Storage' } });
 		return { success: true };
@@ -783,10 +818,12 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveRunId(data);
 		const cartridgeIdsRaw = data.get('cartridgeIds') as string;
 		const location = data.get('location') as string;
 		const now = new Date();
+
+		if (!runId) return fail(404, { error: 'Run not found' });
 
 		let cartridgeIds: string[] = [];
 		try { cartridgeIds = JSON.parse(cartridgeIdsRaw); } catch { /* ignore */ }
@@ -857,8 +894,10 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveRunId(data);
 		const now = new Date();
+
+		if (!runId) return fail(404, { error: 'Run not found' });
 
 		const run = await ReagentBatchRecord.findByIdAndUpdate(runId, {
 			$set: { status: 'Completed', finalizedAt: now, runEndTime: now }
