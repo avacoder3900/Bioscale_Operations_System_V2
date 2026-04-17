@@ -140,32 +140,9 @@
 		'scrapped'
 	] as const;
 
-	const stateTabs = [
-		{ key: null, label: 'All' },
-		{ key: 'draft', label: 'Draft' },
-		{ key: 'assembling', label: 'Assembling' },
-		{ key: 'assembled', label: 'Assembled' },
-		{ key: 'validating', label: 'Validating' },
-		{ key: 'validated', label: 'Validated' },
-		{ key: 'released-rnd', label: 'Released R&D' },
-		{ key: 'released-manufacturing', label: 'Released Mfg' },
-		{ key: 'released-field', label: 'Released Field' },
-		{ key: 'deployed', label: 'Deployed' },
-		{ key: 'servicing', label: 'Servicing' },
-		{ key: 'retired', label: 'Retired' },
-		{ key: 'voided', label: 'Voided' }
-	] as const;
-
-	let activeTab = $derived(data.stateFilter);
-
 	let totalCount = $derived(
 		Object.values(data.stateCounts).reduce((sum, c) => sum + c, 0)
 	);
-
-	function getTabCount(key: string | null): number {
-		if (key === null) return totalCount;
-		return data.stateCounts[key] ?? 0;
-	}
 
 	let filteredSpus = $derived.by(() => {
 		let result = data.spus;
@@ -1209,28 +1186,6 @@
 		{/if}
 	</TronCard>
 
-	<!-- Device State Tabs -->
-	<div class="flex flex-wrap gap-2">
-		{#each stateTabs as tab (tab.key)}
-			<a
-				href={tab.key ? `?state=${tab.key}` : '?'}
-				class="rounded-lg border px-4 py-2 text-sm font-medium transition-colors {activeTab === tab.key
-					? 'border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.15)] text-[var(--color-tron-cyan)]'
-					: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
-				style="min-height: 44px; display: inline-flex; align-items: center;"
-			>
-				{tab.label}
-				<span
-					class="ml-2 rounded-full px-2 py-0.5 text-xs {activeTab === tab.key
-						? 'bg-[rgba(0,255,255,0.2)]'
-						: 'bg-[rgba(255,255,255,0.05)]'}"
-				>
-					{getTabCount(tab.key)}
-				</span>
-			</a>
-		{/each}
-	</div>
-
 	<!-- SITE-22: Filter and Sort Controls -->
 	{#if data.spus.length > 0}
 		<TronCard>
@@ -1438,7 +1393,7 @@
 				</svg>
 				<h3 class="tron-text-primary mb-2 text-lg font-medium">No SPUs Found</h3>
 				<p class="tron-text-muted mb-4">
-					{#if activeTab}
+					{#if data.stateFilter}
 						No SPUs in this category. Use the UDI lookup above to register a new SPU.
 					{:else}
 						Get started by registering your first Sample Processing Unit using the UDI lookup above.
