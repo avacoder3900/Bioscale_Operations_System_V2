@@ -86,7 +86,9 @@
       "Bash(winget search *)",
       "Bash(winget install *)",
       "Bash(winget list *)",
-      "Bash(grep -rn 'ACTIVE_STAGES\\\\|status.*$in.*ACTIVE\\\\|status.*$nin.*TERMINAL\\\\|active.*run\\\\|robot.*_id.*status' /c/Users/nicho/Desktop/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2-1/src/routes/manufacturing/wax-filling/ /c/Users/nicho/Desktop/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2-1/src/routes/manufacturing/reagent-filling/)"
+      "Bash(grep -rn 'ACTIVE_STAGES\\\\|status.*$in.*ACTIVE\\\\|status.*$nin.*TERMINAL\\\\|active.*run\\\\|robot.*_id.*status' /c/Users/nicho/Desktop/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2-1/src/routes/manufacturing/wax-filling/ /c/Users/nicho/Desktop/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2-1/src/routes/manufacturing/reagent-filling/)",
+      "Bash(mkdir -p \"C:/Users/nicho/.claude/projects/C--Users-nicho-Desktop-Bioscale-Operations-System-V2-Bioscale-Operations-System-V2-opentrons-phase1-3/memory\")",
+      "Read(//c/Users/nicho/.claude/projects/C--Users-nicho-Desktop-Bioscale-Operations-System-V2-Bioscale-Operations-System-V2-opentrons-phase1-3/**)"
     ]
   }
 }

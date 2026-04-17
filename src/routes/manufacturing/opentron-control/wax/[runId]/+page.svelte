@@ -12,12 +12,6 @@
 		data.stage === 'Storage' ? 2 : 0
 	);
 
-	// Oven scan state — shown after PostRunCooling completes, before confirmCooling
-	let showOvenScan = $state(false);
-	let ovenScanInput = $state('');
-	let ovenScanError = $state('');
-	let ovenScanValidating = $state(false);
-	let ovenScanResult = $state<{ id: string; name: string } | null>(null);
 	let coolingTrayId = $state('');
 
 	let coolingBypassed = $state(false);
@@ -62,44 +56,12 @@
 		f.submit();
 	}
 
-	function handleCoolingComplete(result?: { trayId?: string }) {
-		// PostRunCooling finished — now scan the curing oven before advancing
-		coolingTrayId = result?.trayId ?? '';
-		showOvenScan = true;
-		ovenScanInput = '';
-		ovenScanError = '';
-		ovenScanResult = null;
-	}
-
-	async function handleOvenScanKeydown(e: KeyboardEvent) {
-		if (e.key !== 'Enter' || !ovenScanInput.trim()) return;
-		e.preventDefault();
-		const value = ovenScanInput.trim();
-		ovenScanInput = '';
-		ovenScanError = '';
-		ovenScanValidating = true;
-		try {
-			const res = await fetch(`/api/dev/validate-equipment?type=oven&id=${encodeURIComponent(value)}`);
-			const result = await res.json();
-			if (!res.ok || result.error) {
-				ovenScanError = result.error ?? `Oven "${value}" not found.`;
-			} else {
-				ovenScanResult = { id: result.id ?? value, name: result.name ?? value };
-			}
-		} catch {
-			ovenScanError = 'Validation failed';
-		} finally {
-			ovenScanValidating = false;
-		}
-	}
-
-	function confirmOvenAndAdvance() {
-		if (!ovenScanResult) return;
-		showOvenScan = false;
+	function handleCoolingComplete(result: { trayId: string; coolingTimestamp: Date; ovenLocationId?: string; ovenLocationName?: string }) {
+		// PostRunCooling now includes the oven scan — pass everything to confirmCooling
 		submitForm('confirmCooling', {
-			coolingTrayId,
-			ovenLocationId: ovenScanResult.id,
-			ovenLocationName: ovenScanResult.name
+			coolingTrayId: result.trayId ?? '',
+			ovenLocationId: result.ovenLocationId ?? '',
+			ovenLocationName: result.ovenLocationName ?? ''
 		});
 	}
 
@@ -250,53 +212,3 @@
 	</div>
 </div>
 
-<!-- Oven Scan Modal — shown after PostRunCooling completes, before advancing to QC -->
-{#if showOvenScan}
-	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-		<div class="mx-4 w-full max-w-md rounded-lg border border-amber-500/50 bg-[var(--color-tron-surface)] p-6 shadow-xl">
-			<h3 class="text-lg font-semibold text-amber-300">Place Deck in Oven</h3>
-			<p class="mt-2 text-sm text-[var(--color-tron-text-secondary)]">
-				Scan the oven barcode where the deck will be placed for post-wax curing.
-			</p>
-
-			{#if !ovenScanResult}
-				<div class="mt-4">
-					<input
-						type="text"
-						bind:value={ovenScanInput}
-						onkeydown={handleOvenScanKeydown}
-						placeholder="Scan oven barcode..."
-						disabled={ovenScanValidating}
-						class="min-h-[44px] w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] placeholder-[var(--color-tron-text-secondary)] focus:border-amber-400 focus:outline-none"
-					/>
-					{#if ovenScanError}
-						<p class="mt-2 text-sm text-red-400">{ovenScanError}</p>
-					{/if}
-					{#if ovenScanValidating}
-						<p class="mt-2 text-sm text-[var(--color-tron-text-secondary)]">Validating...</p>
-					{/if}
-				</div>
-			{:else}
-				<div class="mt-4 rounded-lg border border-green-500/30 bg-green-900/10 p-4">
-					<p class="text-sm text-green-400">Oven verified:</p>
-					<p class="mt-1 font-mono text-lg font-bold text-green-300">{ovenScanResult.name}</p>
-				</div>
-				<button
-					type="button"
-					onclick={confirmOvenAndAdvance}
-					class="mt-4 min-h-[44px] w-full rounded-lg border border-green-500/50 bg-green-900/20 px-6 py-3 text-sm font-bold text-green-300 transition-all hover:bg-green-900/30"
-				>
-					Confirm — Deck Placed in {ovenScanResult.name}
-				</button>
-			{/if}
-
-			<button
-				type="button"
-				onclick={() => { showOvenScan = false; }}
-				class="mt-3 w-full rounded-lg border border-[var(--color-tron-border)] px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] transition-colors hover:bg-[var(--color-tron-border)]/30"
-			>
-				Cancel
-			</button>
-		</div>
-	</div>
-{/if}
