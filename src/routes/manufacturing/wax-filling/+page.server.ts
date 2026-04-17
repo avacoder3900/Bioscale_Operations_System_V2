@@ -945,6 +945,36 @@ export const actions: Actions = {
 			return fail(400, { error: 'Invalid cartridge IDs' });
 		}
 
+		// Resolve the fridge for this batch: first try the storageLocation
+		// string (it may be an EquipmentLocation _id or barcode); if that
+		// misses, fall back to the tray's current placement.
+		let coolingLocationId: string | undefined;
+		let coolingLocationName: string | undefined;
+		if (location) {
+			const direct = await EquipmentLocation.findOne({
+				locationType: 'fridge',
+				isActive: true,
+				$or: [{ _id: location }, { barcode: location }]
+			}).lean().catch(() => null) as any;
+			if (direct) {
+				coolingLocationId = String(direct._id);
+				coolingLocationName = direct.displayName ?? direct.barcode ?? undefined;
+			}
+		}
+		if (!coolingLocationId && coolingTrayId) {
+			const byTray = await EquipmentLocation.findOne({
+				locationType: 'fridge',
+				isActive: true,
+				currentPlacements: { $elemMatch: { itemId: coolingTrayId } }
+			}).lean().catch(() => null) as any;
+			if (byTray) {
+				coolingLocationId = String(byTray._id);
+				coolingLocationName = byTray.displayName ?? byTray.barcode ?? undefined;
+			} else {
+				console.warn(`[recordBatchStorage] No fridge placement found for tray ${coolingTrayId}`);
+			}
+		}
+
 		const now = new Date();
 		if (cartridgeIds.length > 0) {
 			const bulkOps = cartridgeIds.map((cid: string) => ({
@@ -954,6 +984,8 @@ export const actions: Actions = {
 						$set: {
 							'waxStorage.location': location,
 							'waxStorage.coolingTrayId': coolingTrayId,
+							...(coolingLocationId ? { 'waxStorage.coolingLocationId': coolingLocationId } : {}),
+							...(coolingLocationName ? { 'waxStorage.coolingLocationName': coolingLocationName } : {}),
 							'waxStorage.operator': { _id: locals.user._id, username: locals.user.username },
 							'waxStorage.timestamp': now,
 							'waxStorage.recordedAt': now,
@@ -973,7 +1005,7 @@ export const actions: Actions = {
 					manufacturingStep: 'storage',
 					operatorId: locals.user._id,
 					operatorUsername: locals.user.username,
-					notes: `Wax storage: ${location}${coolingTrayId ? `, tray ${coolingTrayId}` : ''}`
+					notes: `Wax storage: ${location}${coolingTrayId ? `, tray ${coolingTrayId}` : ''}${coolingLocationName ? `, fridge ${coolingLocationName}` : ''}`
 				});
 			}
 
@@ -985,11 +1017,11 @@ export const actions: Actions = {
 				action: 'UPDATE',
 				changedBy: locals.user?.username,
 				changedAt: now,
-				newData: { status: 'wax_stored', location, count: cartridgeIds.length }
+				newData: { status: 'wax_stored', location, coolingLocationId, coolingLocationName, count: cartridgeIds.length }
 			});
 		}
 
-		return { success: true };
+		return { success: true, coolingLocationId, coolingLocationName };
 	},
 
 	/** Complete the full run */
