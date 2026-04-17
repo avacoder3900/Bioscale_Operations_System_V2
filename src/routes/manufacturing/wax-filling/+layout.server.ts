@@ -27,12 +27,13 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 
 		const [robots, activeRuns, activeReagentRuns] = await Promise.all([
 			Equipment.find({ equipmentType: 'robot', isActive: true }, { _id: 1, name: 1, robotSide: 1 }).sort({ name: 1 }).lean(),
+			// Only runs whose OT-2 hasn't finished count as locking a robot here.
 			WaxFillingRun.find(
-				{ status: { $in: ACTIVE_STAGES } },
+				{ status: { $in: ACTIVE_STAGES }, robotReleasedAt: { $exists: false } },
 				{ 'robot._id': 1, status: 1, runStartTime: 1, runEndTime: 1, deckId: 1 }
 			).lean(),
 			ReagentBatchRecord.find(
-				{ status: { $in: REAGENT_ACTIVE_STAGES } },
+				{ status: { $in: REAGENT_ACTIVE_STAGES }, robotReleasedAt: { $exists: false } },
 				{ 'robot._id': 1, status: 1 }
 			).lean().catch(() => [])
 		]);

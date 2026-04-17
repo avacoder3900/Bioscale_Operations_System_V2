@@ -24,6 +24,10 @@ const reagentBatchRecordSchema = new Schema({
 	}],
 
 	setupTimestamp: Date, runStartTime: Date, runEndTime: Date,
+	// Set when the OT-2 finishes (completeRunFilling). Once present, the run
+	// no longer locks the robot — operators can start a new run while the
+	// post-OT-2 steps (inspection/sealing/storage) continue on Opentron Control.
+	robotReleasedAt: Date,
 	// status stores the current UI workflow stage or terminal state
 	status: {
 		type: String,

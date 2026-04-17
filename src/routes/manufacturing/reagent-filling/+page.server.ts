@@ -446,7 +446,14 @@ export const actions: Actions = {
 		const now = new Date();
 
 		const run = await ReagentBatchRecord.findByIdAndUpdate(runId, {
-			$set: { status: 'Inspection', runEndTime: now }
+			$set: {
+				status: 'Inspection',
+				runEndTime: now,
+				// Robot is physically free as of now — releases the robot lock so
+				// the next wax/reagent run can start while inspection/sealing/
+				// storage continue detached on Opentron Control.
+				robotReleasedAt: now
+			}
 		}, { new: true }).lean() as any;
 
 		// Write reagentFilling phase to cartridges (WRITE-ONCE)
@@ -499,7 +506,8 @@ export const actions: Actions = {
 			newData: { status: 'Inspection' }
 		});
 
-		return { success: true };
+		// Hand off to Opentron Control for the post-OT-2 steps (inspect/seal/store).
+		throw redirect(303, `/manufacturing/opentron-control/reagent/${runId}`);
 	},
 
 	/** Complete inspection batch — mark cartridges and move to Top Sealing */
@@ -879,7 +887,7 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-	/** Cancel a run */
+	/** Cancel a run — only available before the OT-2 finishes */
 	cancelRun: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
@@ -888,6 +896,14 @@ export const actions: Actions = {
 		const runId = data.get('runId') as string;
 		const reason = (data.get('reason') as string) || 'Cancelled by operator';
 		const now = new Date();
+
+		// Once the OT-2 has finished (robotReleasedAt set), the run is committed
+		// and can no longer be cancelled. Per-cartridge rejection at inspection
+		// or sealing remains available.
+		const existing = await ReagentBatchRecord.findById(runId).select('robotReleasedAt').lean() as any;
+		if (existing?.robotReleasedAt) {
+			return fail(400, { error: 'Cannot cancel: the OT-2 has already completed this run. Reject individual cartridges at inspection or sealing instead.' });
+		}
 
 		await ReagentBatchRecord.findByIdAndUpdate(runId, {
 			$set: { status: 'Cancelled', abortReason: reason, runEndTime: now }

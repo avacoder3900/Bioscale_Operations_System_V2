@@ -102,16 +102,23 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 	try {
 		await connectDB();
 
-		// Load everything in parallel
+		// Load everything in parallel.
+		// Both active-run queries gate on robotReleasedAt: only runs where the
+		// OT-2 hasn't finished yet count as "robot in use". Post-OT-2 runs live
+		// on Opentron Control and don't lock the robot.
 		const [activeWaxRun, settingsDoc, activeTube, activeReagentRunRaw] = await Promise.all([
-			WaxFillingRun.findOne({ 'robot._id': robotId, status: { $in: [...ACTIVE_STAGES] } })
-				.sort({ createdAt: -1 }).lean(),
+			WaxFillingRun.findOne({
+				'robot._id': robotId,
+				status: { $in: [...ACTIVE_STAGES] },
+				robotReleasedAt: { $exists: false }
+			}).sort({ createdAt: -1 }).lean(),
 			ManufacturingSettings.findById('default').lean(),
 			Consumable.findOne({ type: 'incubator_tube', status: 'active' }).lean(),
-			// Check if a reagent run is active on this robot
+			// Check if a reagent run is active on this robot (also gated by robot release)
 			(await import('$lib/server/db')).ReagentBatchRecord.findOne({
 				'robot._id': robotId,
-				status: { $nin: ['completed', 'aborted', 'cancelled', 'Completed', 'Aborted', 'Cancelled'] }
+				status: { $nin: ['completed', 'aborted', 'cancelled', 'Completed', 'Aborted', 'Cancelled'] },
+				robotReleasedAt: { $exists: false }
 			}).lean().catch(() => null)
 		]);
 
@@ -626,6 +633,10 @@ export const actions: Actions = {
 			$set: {
 				status: 'Awaiting Removal',
 				deckRemovedTime: now,
+				// Robot is physically free as of now — releases the robot lock so a
+				// new wax/reagent run can start on the same OT-2 while the cooling/
+				// QC/storage steps continue detached on Opentron Control.
+				robotReleasedAt: now,
 				...(ovenLocationId ? { ovenLocationId } : {})
 			}
 		}, { new: true }).lean() as any;
@@ -649,7 +660,8 @@ export const actions: Actions = {
 			await CartridgeRecord.bulkWrite(bulkOps);
 		}
 
-		return { success: true };
+		// Hand off to Opentron Control for the post-OT-2 steps (cooling/QC/storage).
+		throw redirect(303, `/manufacturing/opentron-control/wax/${runId}`);
 	},
 
 	/** Confirm cooling — transition Awaiting Removal → QC; record oven exit */
@@ -776,7 +788,7 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-	/** Cancel / abort an active run */
+	/** Cancel / abort an active run — only available before the OT-2 finishes */
 	cancelRun: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
@@ -785,6 +797,14 @@ export const actions: Actions = {
 		const runId = data.get('runId') as string;
 		const reason = (data.get('reason') as string) || 'Cancelled by operator';
 		const now = new Date();
+
+		// Once the OT-2 has finished (robotReleasedAt set), the run is committed
+		// and can no longer be cancelled. Individual cartridges can still be
+		// rejected at QC; whole-run abort is no longer the right tool.
+		const existing = await WaxFillingRun.findById(runId).select('robotReleasedAt').lean() as any;
+		if (existing?.robotReleasedAt) {
+			return fail(400, { error: 'Cannot cancel: the OT-2 has already completed this run. Reject individual cartridges at QC instead.' });
+		}
 
 		await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
@@ -827,6 +847,14 @@ export const actions: Actions = {
 		const runId = data.get('runId') as string;
 		const reason = (data.get('reason') as string) || 'Aborted';
 		const now = new Date();
+
+		// Once the OT-2 has finished (robotReleasedAt set), abort is no longer
+		// available — same rule as cancelRun. Per-cartridge rejection at QC
+		// is the post-run path.
+		const existing = await WaxFillingRun.findById(runId).select('robotReleasedAt').lean() as any;
+		if (existing?.robotReleasedAt) {
+			return fail(400, { error: 'Cannot abort: the OT-2 has already completed this run. Reject individual cartridges at QC instead.' });
+		}
 
 		await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'aborted', abortReason: reason, runEndTime: now }

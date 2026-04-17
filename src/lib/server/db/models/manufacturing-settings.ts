@@ -8,7 +8,15 @@ const manufacturingSettingsSchema = new Schema({
 		heaterTempC: Number, waxPerDeckUl: Number, tubeCapacityUl: Number,
 		waxPerCartridgeUl: Number, cartridgesPerColumn: Number
 	},
-	reagentFilling: { fillTimePerCartridgeMin: Number, minCoolingTimeMin: Number },
+	reagentFilling: {
+		fillTimePerCartridgeMin: Number,
+		minCoolingTimeMin: Number,
+		// Top-seal deadline: minutes after run finishes before sealing is overdue.
+		// Warn-only (not blocking); operator can still seal past the deadline,
+		// but the queue row + per-run page show a red countdown and audit log
+		// records the lateness for QA correlation.
+		maxTimeBeforeSealMin: Number
+	},
 	general: {
 		topSealLengthPerCutFt: Number, defaultRollLengthFt: Number,
 		cartridgesPerLaserCutSheet: Number, sheetsPerLaserBatch: Number,

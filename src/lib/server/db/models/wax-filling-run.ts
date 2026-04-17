@@ -7,6 +7,10 @@ const waxFillingRunSchema = new Schema({
 	deckId: String, ovenId: String, waxSourceLot: String, waxTubeId: String, waxTubeTimestamp: Date,
 	setupTimestamp: Date, runStartTime: Date, runEndTime: Date,
 	deckRemovedTime: Date, coolingConfirmedTime: Date,
+	// Set when the OT-2 finishes (confirmDeckRemoved). Once present, the run
+	// no longer locks the robot — operators can start a new run while the
+	// post-OT-2 steps (cooling/QC/storage) continue on the Opentron Control page.
+	robotReleasedAt: Date,
 	coolingTrayId: String, ovenLocationId: String, coolingLocationId: String,
 	activeLotId: String,
 	status: String,

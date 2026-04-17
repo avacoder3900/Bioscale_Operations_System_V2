@@ -52,7 +52,15 @@
       "Bash(npx --yes md-to-pdf docs/assay-normalization-report.md)",
       "Bash(explorer /select,\"C:\\\\Users\\\\nicho\\\\Desktop\\\\Bioscale_Operations_System_V2\\\\Bioscale_Operations_System_V2-1\\\\docs\\\\assay-normalization-report.pdf\")",
       "Bash(npx --yes md-to-pdf docs/opentron-control-analysis.md)",
-      "Bash(explorer /select,\"C:\\\\Users\\\\nicho\\\\Desktop\\\\Bioscale_Operations_System_V2\\\\Bioscale_Operations_System_V2-1\\\\docs\\\\opentron-control-analysis.pdf\")"
+      "Bash(explorer /select,\"C:\\\\Users\\\\nicho\\\\Desktop\\\\Bioscale_Operations_System_V2\\\\Bioscale_Operations_System_V2-1\\\\docs\\\\opentron-control-analysis.pdf\")",
+      "Bash(mkdir -p \"/c/Users/nicho/Desktop/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2-1/src/routes/manufacturing/opentron-control/wax/[runId]\")",
+      "Bash(mkdir -p \"/c/Users/nicho/Desktop/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2-1/src/routes/manufacturing/opentron-control/reagent/[runId]\")",
+      "Bash(sed -n '17,40p' /c/Users/nicho/Desktop/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2-1/src/lib/components/manufacturing/reagent-filling/Inspection.svelte)",
+      "Bash(sed -n '20,45p' /c/Users/nicho/Desktop/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2-1/src/lib/components/manufacturing/reagent-filling/TopSealing.svelte)",
+      "Bash(sed -n '27,55p' /c/Users/nicho/Desktop/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2-1/src/lib/components/manufacturing/reagent-filling/CompletionStorage.svelte)",
+      "Bash(sed -n '1,30p' /c/Users/nicho/Desktop/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2-1/src/lib/components/manufacturing/reagent-filling/CompletionStorage.svelte)",
+      "Bash(sed -n '1,20p' /c/Users/nicho/Desktop/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2-1/src/lib/components/manufacturing/reagent-filling/Inspection.svelte)",
+      "Bash(sed -n '1,20p' /c/Users/nicho/Desktop/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2-1/src/lib/components/manufacturing/reagent-filling/TopSealing.svelte)"
     ]
   }
 }
