@@ -506,8 +506,11 @@ export const actions: Actions = {
 			newData: { status: 'Inspection' }
 		});
 
-		// Hand off to Opentron Control for the post-OT-2 steps (inspect/seal/store).
-		throw redirect(303, `/manufacturing/opentron-control/reagent/${runId}`);
+		// Robot is now free. The page's load function will no longer find this run
+		// as "active" (robotReleasedAt filters it out), so invalidateAll() will
+		// reset the page to "Start new run". The post-OT-2 steps (inspect/seal/
+		// store) are accessible from Opentron Control.
+		return { success: true };
 	},
 
 	/** Complete inspection batch — mark cartridges and move to Top Sealing */

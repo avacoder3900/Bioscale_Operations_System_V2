@@ -1,12 +1,10 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
-	import PostRunCooling from '$lib/components/manufacturing/wax-filling/PostRunCooling.svelte';
 	import QCInspection from '$lib/components/manufacturing/wax-filling/QCInspection.svelte';
 	import CompletionStorage from '$lib/components/manufacturing/wax-filling/CompletionStorage.svelte';
 
 	let { data, form } = $props();
 
-	const STAGES = ['Awaiting Removal', 'QC', 'Storage'] as const;
+	const STAGES = ['QC', 'Storage'] as const;
 	let currentStageIndex = $derived(
 		data.stage ? STAGES.indexOf(data.stage as typeof STAGES[number]) : 0
 	);
@@ -51,10 +49,6 @@
 
 		document.body.appendChild(form);
 		form.submit();
-	}
-
-	function handleCoolingComplete() {
-		submitForm('confirmCooling');
 	}
 
 	function handleQCComplete() {
@@ -122,7 +116,7 @@
 					{isCurrent ? 'bg-[var(--color-tron-cyan)] text-black' :
 					 isPast ? 'bg-green-500/30 text-green-300' :
 					 'bg-[var(--color-tron-surface)] text-[var(--color-tron-text-secondary)]'}">
-					{#if isPast}&#10003;{:else}{i + 4}{/if}
+					{#if isPast}&#10003;{:else}{i + 5}{/if}
 				</div>
 				<span class="text-xs {isCurrent ? 'font-bold text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)]'}">{stage}</span>
 			</div>
@@ -134,15 +128,7 @@
 
 	<!-- Stage content -->
 	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] p-5">
-		{#if data.stage === 'Awaiting Removal'}
-			<PostRunCooling
-				runEndTime={data.runState.deckRemovedTime ? new Date(data.runState.deckRemovedTime) : new Date()}
-				coolingWarningMin={data.settings.coolingWarningMin}
-				deckLockoutMin={data.settings.deckLockoutMin}
-				onComplete={handleCoolingComplete}
-				readonly={false}
-			/>
-		{:else if data.stage === 'QC'}
+		{#if data.stage === 'QC'}
 			{@const qcCarts = data.qcCartridges.map((c: any) => ({
 				...c,
 				ovenEntryTime: c.ovenEntryTime ? new Date(c.ovenEntryTime) : null,

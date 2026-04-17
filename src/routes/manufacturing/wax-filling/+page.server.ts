@@ -660,8 +660,11 @@ export const actions: Actions = {
 			await CartridgeRecord.bulkWrite(bulkOps);
 		}
 
-		// Hand off to Opentron Control for the post-OT-2 steps (cooling/QC/storage).
-		throw redirect(303, `/manufacturing/opentron-control/wax/${runId}`);
+		// Robot is now free. The page's load function will no longer find this run
+		// as "active" (robotReleasedAt filters it out), so invalidateAll() will
+		// reset the page to "Start new run". The post-OT-2 steps (cooling/QC/
+		// storage) are accessible from Opentron Control.
+		return { success: true };
 	},
 
 	/** Confirm cooling — transition Awaiting Removal → QC; record oven exit */

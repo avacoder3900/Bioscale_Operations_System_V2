@@ -20,11 +20,18 @@ export const config = { maxDuration: 60 };
 
 const WAX_FILL_VOLUME_UL = 800;
 
+/**
+ * Post-OT-2 stages on Opentron Control are QC and Storage only.
+ * "Awaiting Removal" runs haven't cooled yet — they stay in the queue
+ * until the 10 min cooling gate passes, then they advance to QC.
+ */
 function toStage(status: string | null | undefined): string | null {
 	if (!status) return null;
 	const map: Record<string, string> = {
-		'Awaiting Removal': 'Awaiting Removal', awaiting_removal: 'Awaiting Removal',
-		cooling: 'Awaiting Removal',
+		// Awaiting Removal maps to QC — the PostRunCooling step is skipped;
+		// the cooling gate in completeQC enforces the 10-min minimum.
+		'Awaiting Removal': 'QC', awaiting_removal: 'QC',
+		cooling: 'QC',
 		QC: 'QC', qc: 'QC',
 		Storage: 'Storage', storage: 'Storage',
 		completed: 'Storage'
@@ -36,9 +43,28 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!locals.user) redirect(302, '/login');
 	await connectDB();
 
-	const run = await WaxFillingRun.findById(params.runId).lean() as any;
+	let run = await WaxFillingRun.findById(params.runId).lean() as any;
 	if (!run) throw error(404, 'Wax run not found');
 	if (!run.robotReleasedAt) throw error(400, 'This run is still on the OT-2 — access it from the Wax Filling page');
+
+	// If still in Awaiting Removal, auto-advance to QC (records oven exit time).
+	// The 10-min cooling gate is enforced server-side by completeQC, not here.
+	if (run.status === 'Awaiting Removal' || run.status === 'awaiting_removal' || run.status === 'cooling') {
+		const now = new Date();
+		const update: Record<string, any> = { status: 'QC', coolingConfirmedTime: now, coolingConfirmedAt: now };
+		run = await WaxFillingRun.findByIdAndUpdate(params.runId, { $set: update }, { new: true }).lean() as any;
+
+		// Record oven exit time on cartridges
+		if (run?.cartridgeIds?.length) {
+			const bulkOps = run.cartridgeIds.map((cid: string) => ({
+				updateOne: {
+					filter: { _id: cid, 'ovenCure.entryTime': { $exists: true }, 'ovenCure.exitTime': { $exists: false } },
+					update: { $set: { 'ovenCure.exitTime': now } }
+				}
+			}));
+			await CartridgeRecord.bulkWrite(bulkOps);
+		}
+	}
 
 	const stage = toStage(run.status);
 	const settingsDoc = await ManufacturingSettings.findById('default').lean() as any;
@@ -124,33 +150,6 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 };
 
 export const actions: Actions = {
-	confirmCooling: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const runId = data.get('runId') as string;
-		const coolingTrayId = (data.get('coolingTrayId') as string) || undefined;
-		const now = new Date();
-
-		const update: Record<string, any> = { status: 'QC', coolingConfirmedTime: now, coolingConfirmedAt: now };
-		if (coolingTrayId) update.coolingTrayId = coolingTrayId;
-
-		const run = await WaxFillingRun.findByIdAndUpdate(runId, { $set: update }, { new: true }).lean() as any;
-
-		if (run?.cartridgeIds?.length) {
-			const bulkOps = run.cartridgeIds.map((cid: string) => ({
-				updateOne: {
-					filter: { _id: cid, 'ovenCure.entryTime': { $exists: true }, 'ovenCure.exitTime': { $exists: false } },
-					update: { $set: { 'ovenCure.exitTime': now } }
-				}
-			}));
-			await CartridgeRecord.bulkWrite(bulkOps);
-		}
-
-		return { success: true };
-	},
-
 	completeQC: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();

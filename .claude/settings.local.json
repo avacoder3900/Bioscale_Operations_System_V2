@@ -60,7 +60,29 @@
       "Bash(sed -n '27,55p' /c/Users/nicho/Desktop/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2-1/src/lib/components/manufacturing/reagent-filling/CompletionStorage.svelte)",
       "Bash(sed -n '1,30p' /c/Users/nicho/Desktop/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2-1/src/lib/components/manufacturing/reagent-filling/CompletionStorage.svelte)",
       "Bash(sed -n '1,20p' /c/Users/nicho/Desktop/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2-1/src/lib/components/manufacturing/reagent-filling/Inspection.svelte)",
-      "Bash(sed -n '1,20p' /c/Users/nicho/Desktop/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2-1/src/lib/components/manufacturing/reagent-filling/TopSealing.svelte)"
+      "Bash(sed -n '1,20p' /c/Users/nicho/Desktop/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2-1/src/lib/components/manufacturing/reagent-filling/TopSealing.svelte)",
+      "Bash(git worktree *)",
+      "Bash(git config *)",
+      "Bash(code *)",
+      "Bash(cp \"C:/Users/nicho/Downloads/Opentron API Integration into Inernal Management System.pdf\" \"C:/Users/nicho/Desktop/Opentron-Integration-Research/01_Opentron-API-Integration-PRD.pdf\")",
+      "Bash(cp \"C:/Users/nicho/Downloads/Telegram Desktop/OPENTRONS-COMPLETE-GUIDE.pdf\" \"C:/Users/nicho/Desktop/Opentron-Integration-Research/02_OPENTRONS-COMPLETE-GUIDE.pdf\")",
+      "Bash(cp \"C:/Users/nicho/Downloads/Telegram Desktop/OPENTRONS-FINAL-REPORT-2026-04-01.pdf\" \"C:/Users/nicho/Desktop/Opentron-Integration-Research/03_OPENTRONS-FINAL-REPORT.pdf\")",
+      "Bash(cp \"C:/Users/nicho/Downloads/Telegram Desktop/OPUS-FINAL-OPENTRONS-REPORT-2026-04-01.pdf\" \"C:/Users/nicho/Desktop/Opentron-Integration-Research/04_OPUS-FINAL-OPENTRONS-REPORT.pdf\")",
+      "Bash(cp \"C:/Users/nicho/Downloads/Telegram Desktop/opentrons-knowledge-base.md\" \"C:/Users/nicho/Desktop/Opentron-Integration-Research/05_opentrons-knowledge-base.md\")",
+      "Bash(pdfinfo \"01_Opentron-API-Integration-PRD.pdf\")",
+      "Bash(pdfinfo \"07_Opentron-Cheat-Sheet.pdf\")",
+      "Read(//mingw64/**)",
+      "Read(//c/Program Files/**)",
+      "Bash(python -c \"import fitz; print\\(fitz.__version__\\)\")",
+      "Bash(python -c \"import pdfplumber; print\\(pdfplumber.__version__\\)\")",
+      "Bash(cat)",
+      "Bash(npm ls *)",
+      "Bash(npm root *)",
+      "Bash(mkdir -p /tmp/pdfwork)",
+      "Bash(npm init *)",
+      "Bash(where winget *)",
+      "Bash(where scoop *)",
+      "Bash(where choco *)"
     ]
   }
 }
