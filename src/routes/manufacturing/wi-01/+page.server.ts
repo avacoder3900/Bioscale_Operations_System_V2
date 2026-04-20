@@ -314,6 +314,7 @@ export const actions: Actions = {
 				backing: {
 					lotId,
 					lotQrCode: lot.qrCodeRef,
+					ovenEntryTime: now,
 					operator: { _id: locals.user._id, username: locals.user.username },
 					recordedAt: now
 				},

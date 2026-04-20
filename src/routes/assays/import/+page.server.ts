@@ -1,6 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { connectDB, AssayDefinition, generateId } from '$lib/server/db';
+import { connectDB, AssayDefinition } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
+import { generateLegacyAssayId } from '$lib/server/assay-legacy-shape';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -65,13 +66,24 @@ export const actions: Actions = {
 
 		const created: string[] = [];
 		for (const item of toImport) {
+			// Preserve the imported doc's _id if it already matches the legacy
+			// A######## format; otherwise mint a new legacy-format ID.
+			const importedId = typeof item._id === 'string' ? item._id : undefined;
+			const idLooksLegacy = importedId && /^A[0-9A-F]{7}$/.test(importedId);
+			const _id = idLooksLegacy ? importedId! : await generateLegacyAssayId(AssayDefinition as any);
+
 			const assay = await AssayDefinition.create({
-				_id: generateId(),
+				_id,
 				name: item.name,
-				skuCode: item.skuCode,
+				// Legacy default is null; respect imported value if any.
+				skuCode: item.skuCode ?? null,
 				description: item.description,
 				duration: item.duration,
-				shelfLifeDays: item.shelfLifeDays,
+				// Pass through legacy markers from the source file verbatim — imports
+				// of a legacy export should round-trip exactly.
+				BCODE: item.BCODE ?? undefined,
+				hidden: item.hidden ?? true,
+				protected: item.protected ?? true,
 				isActive: true,
 				reagents: item.reagents ?? [],
 				versionHistory: []

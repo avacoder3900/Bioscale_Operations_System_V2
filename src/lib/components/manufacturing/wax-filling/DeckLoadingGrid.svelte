@@ -145,7 +145,9 @@
 		// Validation already done on Enter keydown
 		deckId = deckPendingValue;
 		deckPendingValue = '';
-		step = 'oven';
+		// Skip oven scan — deck is being REMOVED from oven, not placed into one.
+		// Oven scan happens at step 4 (deck removal) after the OT-2 run completes.
+		step = 'loading';
 	}
 
 	function rescanDeck() {

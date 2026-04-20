@@ -146,10 +146,17 @@ export const load: PageServerLoad = async ({ locals }) => {
 		};
 	});
 
-	const WAX_ACTIVE = ['Setup', 'Loading', 'Running', 'setup', 'loading', 'running'];
-	const WAX_DECK_FREE = ['Awaiting Removal', 'QC', 'Storage', 'awaiting_removal', 'qc', 'storage'];
-	const REAGENT_ACTIVE = ['Setup', 'Loading', 'Running', 'setup', 'loading', 'running'];
-	const REAGENT_DECK_FREE = ['Inspection', 'Top Sealing', 'Storage'];
+	// Filling-page-owned stages — while a run is in these, the operator is
+	// actively handling it on the wax-filling / reagent-filling page and the
+	// robot is "In Use". Mirrors the classification on Opentron Control.
+	const WAX_ACTIVE = ['Setup', 'Loading', 'Running', 'Awaiting Removal',
+		'setup', 'loading', 'running', 'awaiting_removal', 'cooling'];
+	const REAGENT_ACTIVE = ['Setup', 'Loading', 'Running', 'Inspection',
+		'setup', 'loading', 'running', 'inspection'];
+	// Post-OT-2 / on the Opentron Control queue — run still exists but robot
+	// is free for a new filling run.
+	const WAX_POST_OT2_QUEUED = ['QC', 'Storage', 'qc', 'storage'];
+	const REAGENT_POST_OT2_QUEUED = ['Top Sealing', 'Storage'];
 
 	const robotUtilMap = new Map<string, number>();
 	for (const r of [...(robotUtilWax as any[]), ...(robotUtilReagent as any[])]) {
@@ -166,19 +173,21 @@ export const load: PageServerLoad = async ({ locals }) => {
 		let robotPhysicallyFree: boolean;
 		if (waxRun && WAX_ACTIVE.includes(waxRun.status)) {
 			status = 'running_wax';
-			displayStatus = `Running — Wax Fill (${waxRun.status})`;
+			displayStatus = `In Use — Wax (${waxRun.status})`;
 			robotPhysicallyFree = false;
 		} else if (reagentRun && REAGENT_ACTIVE.includes(reagentRun.status)) {
 			status = 'running_reagent';
-			displayStatus = `Running — Reagent Fill (${reagentRun.status})`;
+			displayStatus = `In Use — Reagent (${reagentRun.status})`;
 			robotPhysicallyFree = false;
-		} else if (waxRun && WAX_DECK_FREE.includes(waxRun.status)) {
-			status = 'deck_free_wax';
-			displayStatus = `Robot Free — Wax run: ${waxRun.status}`;
+		} else if (waxRun && WAX_POST_OT2_QUEUED.includes(waxRun.status)) {
+			// Robot is free for a new run; the wax run is queued on Opentron
+			// Control for post-OT-2 handling.
+			status = 'available';
+			displayStatus = `Available — Wax queued (${waxRun.status})`;
 			robotPhysicallyFree = true;
-		} else if (reagentRun && REAGENT_DECK_FREE.includes(reagentRun.status)) {
-			status = 'deck_free_reagent';
-			displayStatus = `Robot Free — Reagent run: ${reagentRun.status}`;
+		} else if (reagentRun && REAGENT_POST_OT2_QUEUED.includes(reagentRun.status)) {
+			status = 'available';
+			displayStatus = `Available — Reagent queued (${reagentRun.status})`;
 			robotPhysicallyFree = true;
 		} else {
 			status = 'available';

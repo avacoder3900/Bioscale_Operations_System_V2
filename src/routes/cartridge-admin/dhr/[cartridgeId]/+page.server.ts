@@ -1,7 +1,8 @@
 import { error } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, CartridgeRecord, CvImage, CvInspection, InventoryTransaction, ReceivingLot } from '$lib/server/db';
+import { connectDB, CartridgeRecord, CvImage, CvInspection, InventoryTransaction, ReceivingLot, ManufacturingSettings } from '$lib/server/db';
 import { getSignedDownloadUrl } from '$lib/server/r2.js';
+import { getCartridgeTimings } from '$lib/utils/cartridge-timings';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -12,7 +13,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!cartridge) throw error(404, 'Cartridge not found');
 
 	// Parallel queries
-	const [images, inspections, transactions] = await Promise.all([
+	const [images, inspections, transactions, settingsDoc] = await Promise.all([
 		CvImage.find({ 'cartridgeTag.cartridgeRecordId': params.cartridgeId })
 			.sort({ capturedAt: 1 })
 			.lean(),
@@ -21,8 +22,17 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			.lean(),
 		InventoryTransaction.find({ cartridgeRecordId: params.cartridgeId })
 			.sort({ performedAt: 1 })
-			.lean()
+			.lean(),
+		ManufacturingSettings.findById('default').lean()
 	]);
+
+	// Informational-only timing metrics (cool time for wax, seal time for
+	// reagent). Pure derived — no writes, no gates.
+	const settings = settingsDoc as any;
+	const timings = getCartridgeTimings(cartridge, {
+		coolMin: settings?.waxFilling?.coolingWarningMin,
+		sealMin: settings?.reagentFilling?.maxTimeBeforeSealMin
+	});
 
 	// Generate signed R2 URLs for each image
 	const photos = await Promise.all(
@@ -168,7 +178,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			}))
 		)),
 		transactions: JSON.parse(JSON.stringify(transactions)),
-		linkedLots: JSON.parse(JSON.stringify(linkedLots))
+		linkedLots: JSON.parse(JSON.stringify(linkedLots)),
+		timings: JSON.parse(JSON.stringify(timings))
 	};
 };
 

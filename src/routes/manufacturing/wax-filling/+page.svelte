@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { invalidateAll } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
 	import { page } from '$app/stores';
 	import SetupConfirmation from '$lib/components/manufacturing/wax-filling/SetupConfirmation.svelte';
 	import WaxPreparation from '$lib/components/manufacturing/wax-filling/WaxPreparation.svelte';
@@ -205,7 +205,7 @@
 	let pendingOverrideAction = $state('');
 	let pendingOverrideData = $state<Record<string, string>>({});
 
-	const STAGES = ['Setup', 'Loading', 'Running', 'Awaiting Removal', 'QC', 'Storage'] as const;
+	const STAGES = ['Setup', 'Loading', 'Running', 'Awaiting Removal'] as const;
 
 	// Optimistic stage: prevents UI flash when invalidateAll() returns stale/failed data
 	const ACTION_NEXT_STAGE: Record<string, string> = {
@@ -214,8 +214,6 @@
 		loadDeck: 'Loading',
 		startRun: 'Running',
 		confirmDeckRemoved: 'Awaiting Removal',
-		confirmCooling: 'QC',
-		completeQC: 'Storage',
 	};
 	let pendingStage = $state<string | null>(null);
 	let effectiveStage = $derived(pendingStage ?? (data.runState.hasActiveRun ? data.runState.stage : null));
@@ -247,11 +245,7 @@
 			case 'Running':
 				return '3. Run';
 			case 'Awaiting Removal':
-				return '4. Cool';
-			case 'QC':
-				return '5. QC';
-			case 'Storage':
-				return '6. Store';
+				return '4. Deck Removal';
 			default:
 				return stage;
 		}
@@ -299,19 +293,74 @@
 			});
 			clearTimeout(timeout);
 			clearTimeout(slowTimer);
-			if (!res.ok) {
-				let serverError = `Action failed (HTTP ${res.status})`;
+			const text = await res.text();
+			if (!res.ok || text.includes('"type":"failure"')) {
+				// Parse SvelteKit action response. Handles three shapes:
+				//   fail(): {type: "failure", data: "[{\"error\":1},\"msg\"]"}
+				//   error(): {type: "error", error: {message: "..."}}
+				//   plain:  {error: "..."}
+				// Always coerces to a string — otherwise a raw object assigned
+				// to errorMsg renders as literal "[object Object]".
+				let serverError: string = `Action failed (HTTP ${res.status})`;
+				const toStr = (v: unknown): string | null => {
+					if (typeof v === 'string' && v.length > 0) return v;
+					if (v && typeof v === 'object') {
+						const msg = (v as any).message ?? (v as any).error;
+						if (typeof msg === 'string' && msg.length > 0) return msg;
+						try { return JSON.stringify(v); } catch { return null; }
+					}
+					return null;
+				};
 				try {
-					const text = await res.text();
-					const match = text.match(/error[^"]*"([^"]+)"/);
-					if (match?.[1]) serverError = match[1];
-				} catch { /* ignore parse error */ }
+					const json = JSON.parse(text);
+					if (json.type === 'failure' && json.data != null) {
+						if (typeof json.data === 'string') {
+							const parsed = JSON.parse(json.data);
+							if (Array.isArray(parsed)) {
+								for (let i = 1; i < parsed.length; i++) {
+									if (typeof parsed[i] === 'string' && parsed[i].length > 3) {
+										serverError = parsed[i];
+										break;
+									}
+								}
+							}
+						} else if (Array.isArray(json.data)) {
+							for (let i = 1; i < json.data.length; i++) {
+								if (typeof json.data[i] === 'string' && json.data[i].length > 3) {
+									serverError = json.data[i];
+									break;
+								}
+							}
+						} else {
+							const s = toStr((json.data as any).error ?? json.data);
+							if (s) serverError = s;
+						}
+					} else if (json.type === 'error' && json.error) {
+						const s = toStr(json.error);
+						if (s) serverError = s;
+					} else if (json.error) {
+						const s = toStr(json.error);
+						if (s) serverError = s;
+					}
+				} catch {
+					// Fallback: find the longest readable string in the body
+					const strings = text.match(/"([^"\\]{10,})"/g);
+					if (strings) {
+						const msg = strings[strings.length - 1].slice(1, -1);
+						if (msg && !msg.includes('{')) serverError = msg;
+					}
+				}
 				// Store failed loadDeck action for admin override
 				if (action === 'loadDeck') {
 					pendingOverrideAction = action;
 					pendingOverrideData = formData;
 				}
 				errorMsg = serverError;
+				// Scroll the error banner into view — on the deck grid the
+				// banner is above the fold and easy to miss otherwise.
+				requestAnimationFrame(() => {
+					document.querySelector('[data-error-banner]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+				});
 				await invalidateAll();
 				return;
 			}
@@ -423,13 +472,20 @@
 		cancelReason = '';
 	}
 
-	function handleCoolingComplete(result: { trayId: string; coolingTimestamp: Date }) {
-		if (data.runState.runId) {
-			submitAction('confirmCooling', {
-				runId: data.runState.runId,
-				coolingTrayId: result.trayId
-			});
-		}
+	async function handleCoolingComplete(result: { trayId: string; coolingTimestamp: Date }) {
+		// After confirmDeckRemoved sets robotReleasedAt, the load query filters
+		// the run out and data.runState.runId becomes null — so don't guard on
+		// it. The server falls back to looking up the run by robotId (which
+		// the load always returns).
+		await submitAction('confirmCooling', {
+			runId: data.runState.runId ?? '',
+			robotId: data.robotId,
+			coolingTrayId: result.trayId
+		});
+		// Final step of the wax run on this page — send operator back to
+		// Opentron Control so they can start another run. QC + Storage for
+		// this run live on the Opentron Control post-OT-2 queue.
+		if (!errorMsg) await goto('/manufacturing/opentron-control');
 	}
 
 	function handleQCComplete(result: {
@@ -644,7 +700,7 @@
 	{/if}
 
 	{#if errorMsg}
-		<div class="rounded border border-red-500/30 bg-red-900/30 px-4 py-3 text-sm text-red-300">
+		<div data-error-banner class="rounded border border-red-500/30 bg-red-900/30 px-4 py-3 text-sm text-red-300">
 			<div class="flex items-center justify-between gap-2">
 				<span>{errorMsg}</span>
 				<div class="flex shrink-0 items-center gap-2">

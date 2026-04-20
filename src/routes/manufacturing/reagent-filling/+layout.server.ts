@@ -21,17 +21,25 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 	try {
 		await connectDB();
 
-		const WAX_ACTIVE_STAGES = ['Setup', 'Loading', 'Running', 'Awaiting Removal', 'QC', 'Storage',
-			'setup', 'loading', 'running', 'awaiting_removal', 'cooling', 'qc', 'storage'];
+		// Stages where the operator is still actively handling this run on the
+		// filling page. A robot is "locked" during these — tabs show the stage
+		// badge, new runs are blocked, and Opentron Control shows "In Use".
+		// Once status moves past these (Top Sealing / Storage for reagent;
+		// QC / Storage for wax), the run goes to the post-OT-2 queue on
+		// Opentron Control and the robot becomes Available.
+		const REAGENT_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Inspection',
+			'setup', 'loading', 'running', 'inspection'];
+		const WAX_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Awaiting Removal',
+			'setup', 'loading', 'running', 'awaiting_removal', 'cooling'];
 
 		const [robots, activeRuns, activeWaxRuns] = await Promise.all([
 			Equipment.find({ equipmentType: 'robot', isActive: true }, { _id: 1, name: 1, robotSide: 1 }).sort({ name: 1 }).lean(),
 			ReagentBatchRecord.find(
-				{ status: { $nin: [...TERMINAL] } },
+				{ status: { $in: REAGENT_PAGE_OWNED } },
 				{ 'robot._id': 1, status: 1, runStartTime: 1, runEndTime: 1, cartridgeCount: 1, 'assayType.name': 1 }
 			).lean(),
 			WaxFillingRun.find(
-				{ status: { $in: WAX_ACTIVE_STAGES } },
+				{ status: { $in: WAX_PAGE_OWNED } },
 				{ 'robot._id': 1, status: 1 }
 			).lean().catch(() => [])
 		]);

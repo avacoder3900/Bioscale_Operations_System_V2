@@ -113,11 +113,15 @@ export const actions: Actions = {
 				subComponents: []
 			}));
 
+			const { generateLegacyAssayId } = await import('$lib/server/assay-legacy-shape');
+			const _id = await generateLegacyAssayId(AssayDefinition as any);
 			const newAssay = await AssayDefinition.create({
-				_id: generateId(),
+				_id,
 				name,
 				skuCode,
 				shelfLifeDays,
+				hidden: true,
+				protected: true,
 				isActive: true,
 				reagents
 			});

@@ -14,8 +14,16 @@ const assayDefinitionSchema = new Schema({
 	assayId: String,
 	name: { type: String, required: true },
 	description: String,
-	skuCode: { type: String, required: true },
+	skuCode: String,
 	duration: Number,
+	// Legacy: BCODE (uppercase) holds `{ deviceParams, code: [...] }`. Declared
+	// here so Mongoose preserves it on write — creation paths populate it via
+	// $lib/server/assay-legacy-shape.ts. The old lowercase `bcode` Buffer
+	// field below is orphaned (no writer, no legacy doc has it) and will be
+	// removed in a follow-up cleanup.
+	BCODE: Schema.Types.Mixed,
+	hidden: { type: Boolean, default: false },
+	protected: { type: Boolean, default: false },
 	bcode: Schema.Types.Buffer,
 	bcodeLength: Number,
 	checksum: Number,
@@ -50,7 +58,10 @@ const assayDefinitionSchema = new Schema({
 	metadata: Schema.Types.Mixed
 }, { timestamps: true });
 
-assayDefinitionSchema.index({ skuCode: 1 }, { unique: true });
+// skuCode is indexed but not unique: the 238 legacy docs all have null/absent
+// skuCode, so enforcing uniqueness here would block every write. Uniqueness
+// should be reintroduced as a partial index after legacy docs are backfilled.
+assayDefinitionSchema.index({ skuCode: 1 });
 assayDefinitionSchema.index({ isActive: 1 });
 assayDefinitionSchema.index({ name: 1 });
 

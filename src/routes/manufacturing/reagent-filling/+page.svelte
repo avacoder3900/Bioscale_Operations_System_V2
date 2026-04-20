@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { invalidateAll } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
 	import SetupConfirmation from '$lib/components/manufacturing/reagent-filling/SetupConfirmation.svelte';
 	import ReagentPreparation from '$lib/components/manufacturing/reagent-filling/ReagentPreparation.svelte';
 	import ReagentBatchScan from '$lib/components/manufacturing/reagent-filling/ReagentBatchScan.svelte';
@@ -11,8 +11,7 @@
 	import DeckLoadingGrid from '$lib/components/manufacturing/reagent-filling/DeckLoadingGrid.svelte';
 	import RunExecution from '$lib/components/manufacturing/reagent-filling/RunExecution.svelte';
 	import Inspection from '$lib/components/manufacturing/reagent-filling/Inspection.svelte';
-	import TopSealing from '$lib/components/manufacturing/reagent-filling/TopSealing.svelte';
-	import CompletionStorage from '$lib/components/manufacturing/reagent-filling/CompletionStorage.svelte';
+	// Top Sealing + Storage happen on Opentron Control post-OT-2 queue, not here.
 
 	let { data } = $props();
 
@@ -22,6 +21,53 @@
 	let showCancelModal = $state(false);
 	let cancelReason = $state('');
 	let showResetModal = $state(false);
+
+	// Tray scan sub-step — shown after Inspection's Complete button. The
+	// rejected list from Inspection is held locally until the operator
+	// scans the holding tray, then both fields submit together.
+	let pendingRejected = $state<null | { cartridgeRecordId: string; reasonCode: string }[]>(null);
+	let trayInput = $state('');
+	let trayError = $state('');
+	let trayValidating = $state(false);
+	let trayResult = $state<{ id: string; name: string } | null>(null);
+	let trayInputEl: HTMLInputElement | undefined = $state();
+
+	async function handleTrayKeydown(e: KeyboardEvent) {
+		if (e.key !== 'Enter' || !trayInput.trim()) return;
+		e.preventDefault();
+		const value = trayInput.trim();
+		trayInput = '';
+		trayError = '';
+		trayValidating = true;
+		try {
+			const res = await fetch(`/api/dev/validate-equipment?type=tray&id=${encodeURIComponent(value)}`);
+			const result = await res.json();
+			if (!res.ok || result.error) {
+				trayError = result.error ?? `Tray "${value}" not found.`;
+			} else {
+				trayResult = { id: result.id ?? value, name: result.name ?? value };
+			}
+		} catch {
+			trayError = 'Validation failed';
+		} finally {
+			trayValidating = false;
+		}
+	}
+
+	async function confirmTrayAndSubmit() {
+		if (!pendingRejected || !trayResult) return;
+		await submitForm('completeInspectionBatch', {
+			rejectedCartridges: JSON.stringify(pendingRejected),
+			trayId: trayResult.id
+		});
+		if (!errorMsg) await goto('/manufacturing/opentron-control');
+	}
+
+	function rescanTray() {
+		trayResult = null;
+		trayError = '';
+		setTimeout(() => trayInputEl?.focus(), 50);
+	}
 
 	// Admin override state
 	let showOverrideModal = $state(false);
@@ -40,7 +86,10 @@
 		}
 	});
 
-	const STAGES = ['Setup', 'Loading', 'Running', 'Inspection', 'Top Sealing', 'Storage'] as const;
+	// Reagent-filling page owns Setup → Load → Run → Inspection (4 stages).
+	// Top Sealing (5) and Storage (6) live on Opentron Control's post-OT-2
+	// queue, reached by clicking the run card after Inspection completes.
+	const STAGES = ['Setup', 'Loading', 'Running', 'Inspection'] as const;
 	type Stage = (typeof STAGES)[number];
 
 	// Optimistic stage: prevents UI flash when invalidateAll() returns stale/failed data
@@ -51,11 +100,6 @@
 		loadDeck: 'Loading',
 		startRun: 'Running',
 		completeRunFilling: 'Inspection',
-		completeInspectionBatch: 'Top Sealing',
-		completeInspection: 'Top Sealing',
-		transitionToStorage: 'Storage',
-		recordBatchStorage: 'Storage',
-		completeRun: 'Storage',
 	};
 	let pendingStage = $state<string | null>(null);
 
@@ -97,8 +141,6 @@
 			case 'Loading': return '2. Load';
 			case 'Running': return '3. Run';
 			case 'Inspection': return '4. Inspect';
-			case 'Top Sealing': return '5. Seal';
-			case 'Storage': return '6. Store';
 			default: return s;
 		}
 	}
@@ -207,82 +249,6 @@
 		}
 	}
 
-	// Lightweight scan action for rapid-fire scans (e.g. scanning cartridges into seal batch).
-	// reload=true forces full page reload on success (for stage transitions like createTopSealBatch).
-	// reload=false uses debounced invalidateAll (for individual cartridge scans during sealing).
-	let invalidateTimer: ReturnType<typeof setTimeout> | undefined;
-	function debouncedInvalidate() {
-		clearTimeout(invalidateTimer);
-		invalidateTimer = setTimeout(() => invalidateAll(), 500);
-	}
-
-	async function submitScanAction(action: string, extraData: Record<string, string> = {}, reload = false) {
-		if (previewParam) { showError('Actions disabled in preview mode'); return; }
-		errorMsg = '';
-		try {
-			const formData = new FormData();
-			formData.set('runId', data.activeRunId ?? '');
-			formData.set('robotId', data.robotId);
-			for (const [key, value] of Object.entries(extraData)) {
-				formData.set(key, value);
-			}
-			const res = await fetch(`?/${action}`, {
-				method: 'POST',
-				body: formData,
-				headers: { 'x-sveltekit-action': 'true' }
-			});
-			const text = await res.text();
-
-			if (!res.ok || text.includes('"type":"failure"')) {
-				let serverError = `Action failed (HTTP ${res.status})`;
-				try {
-					const json = JSON.parse(text);
-					if (json.type === 'failure' && json.data != null) {
-						if (typeof json.data === 'string') {
-							const parsed = JSON.parse(json.data);
-							if (Array.isArray(parsed)) {
-								for (let i = 1; i < parsed.length; i++) {
-									if (typeof parsed[i] === 'string' && parsed[i].length > 3) {
-										serverError = parsed[i];
-										break;
-									}
-								}
-							}
-						} else if (Array.isArray(json.data)) {
-							for (let i = 1; i < json.data.length; i++) {
-								if (typeof json.data[i] === 'string' && json.data[i].length > 3) {
-									serverError = json.data[i];
-									break;
-								}
-							}
-						} else if (json.data?.error) {
-							serverError = json.data.error;
-						}
-					}
-				} catch {
-					const strings = text.match(/"([^"\\]{10,})"/g);
-					if (strings) {
-						const msg = strings[strings.length - 1].slice(1, -1);
-						if (msg && !msg.includes('{')) serverError = msg;
-					}
-				}
-				showError(serverError);
-				return;
-			}
-
-			if (reload) {
-				// Try client-side refresh, fall back to full reload after 5s
-				const reloadTimer = setTimeout(() => window.location.reload(), 5000);
-				await invalidateAll();
-				clearTimeout(reloadTimer);
-			} else {
-				debouncedInvalidate();
-			}
-		} catch (e) {
-			showError(e instanceof Error ? e.message : 'Network error');
-		}
-	}
-
 	// Mock data for preview mode — fields match each component's expected interface
 	const mockCartridges = Array.from({ length: 8 }, (_, i) => ({
 		// Inspection expects: id, cartridgeId, deckPosition, inspectionStatus, inspectionReason
@@ -328,14 +294,6 @@
 				<button type="button" onclick={() => { previewStage = 'Inspection'; }}
 					class="rounded px-3 py-1.5 text-xs font-medium transition-colors {previewStage === 'Inspection' ? 'bg-[var(--color-tron-cyan)] text-white' : 'border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}">
 					4. Inspection
-				</button>
-				<button type="button" onclick={() => { previewStage = 'Top Sealing'; }}
-					class="rounded px-3 py-1.5 text-xs font-medium transition-colors {previewStage === 'Top Sealing' ? 'bg-[var(--color-tron-cyan)] text-white' : 'border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}">
-					5. Top Sealing
-				</button>
-				<button type="button" onclick={() => { previewStage = 'Storage'; }}
-					class="rounded px-3 py-1.5 text-xs font-medium transition-colors {previewStage === 'Storage' ? 'bg-[var(--color-tron-cyan)] text-white' : 'border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}">
-					6. Store
 				</button>
 			</div>
 		</div>
@@ -418,7 +376,7 @@
 					<a href="?preview" class="rounded border border-[var(--color-tron-orange)]/40 px-2 py-0.5 text-xs text-[var(--color-tron-orange)] hover:bg-[var(--color-tron-orange)]/10">
 						Preview
 					</a>
-					{#if stage === 'Loading' || stage === 'Running' || stage === 'Inspection' || stage === 'Top Sealing'}
+					{#if stage === 'Loading' || stage === 'Running' || stage === 'Inspection'}
 						<button
 							type="button"
 							onclick={() => { showResetModal = true; }}
@@ -604,80 +562,77 @@
 			readonly={isViewingPast}
 		/>
 
-	{:else if displayStage === 'Inspection'}
+	{:else if displayStage === 'Inspection' && pendingRejected === null}
 		<Inspection
 			cartridges={previewParam ? mockCartridges : data.cartridges}
 			rejectionCodes={previewParam ? mockRejectionCodes : data.rejectionCodes}
 			onComplete={({ rejectedCartridges }) => {
 				if (previewParam) { errorMsg = 'Actions disabled in preview mode'; return; }
-				submitForm('completeInspectionBatch', { rejectedCartridges: JSON.stringify(rejectedCartridges) });
+				// Buffer the rejected list and show the tray scan sub-step.
+				// The form submits once the tray has been validated.
+				pendingRejected = rejectedCartridges;
+				setTimeout(() => trayInputEl?.focus(), 100);
 			}}
 			readonly={isViewingPast}
 			focusPaused={showCancelModal || showResetModal || showOverrideModal}
 		/>
 
-	{:else if displayStage === 'Top Sealing'}
-		<TopSealing
-			acceptedCartridges={previewParam
-				? mockCartridges.filter((c) => c.inspectionStatus === 'Accepted')
-				: data.cartridges.filter((c) => c.inspectionStatus === 'Accepted' && !c.topSealBatchId)}
-			currentBatch={previewParam ? null : (data.currentSealBatch ? {
-			batchId: data.currentSealBatch.batchId,
-			topSealLotId: data.currentSealBatch.topSealLotId ?? '',
-			scannedCount: data.currentSealBatch.scannedCount ?? data.currentSealBatch.cartridgeIds?.length ?? 0,
-			totalTarget: data.currentSealBatch.totalTarget ?? 12,
-			firstScanTime: data.currentSealBatch.firstScanTime ? new Date(data.currentSealBatch.firstScanTime) : null,
-			elapsedSeconds: data.currentSealBatch.firstScanTime
-				? Math.round((Date.now() - new Date(data.currentSealBatch.firstScanTime).getTime()) / 1000)
-				: 0
-		} : null)}
-			onCreateBatch={(topSealLotId) => {
-				submitScanAction('createTopSealBatch', { topSealLotId }, true);
-			}}
-			onScanCartridge={(batchId, cartridgeRecordId) => {
-				submitScanAction('scanCartridgeForSeal', { batchId, cartridgeRecordId });
-			}}
-			onCompleteBatch={(batchId) => {
-				if (previewParam) { errorMsg = 'Actions disabled in preview mode'; return; }
-				submitForm('completeSealBatch', { batchId });
-			}}
-			onProceedToStorage={() => {
-				if (previewParam) { errorMsg = 'Actions disabled in preview mode'; return; }
-				submitForm('transitionToStorage');
-			}}
-			onRejectCartridge={(cartridgeId) => {
-				if (previewParam) { errorMsg = 'Actions disabled in preview mode'; return; }
-				submitForm('rejectAtSeal', { cartridgeId });
-			}}
-			readonly={isViewingPast}
-		/>
+	{:else if displayStage === 'Inspection' && pendingRejected !== null}
+		<!-- Tray scan sub-step: holding tray for cartridges between Inspection
+			and Top Sealing. Not a fridge/oven — just a flat surface. -->
+		<div class="space-y-5">
+			<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Scan Holding Tray</h2>
+			<p class="text-sm text-[var(--color-tron-text-secondary)]">
+				Place inspected cartridges on a tray and scan its barcode. The tray
+				holds them until Top Sealing on Opentron Control.
+			</p>
 
-	{:else if displayStage === 'Storage'}
-		{@const carts = previewParam ? mockCartridges : data.cartridges}
-		{@const accepted = carts.filter((c) => c.inspectionStatus === 'Accepted')}
-		{@const rejected = carts.filter((c) => c.inspectionStatus === 'Rejected')}
-		{@const qaqc = carts.filter((c) => c.inspectionStatus === 'QA/QC')}
-		<CompletionStorage
-			cartridges={carts}
-			runSummary={{
-				runId: previewParam ? 'RGF-PREVIEW' : (data.activeRunId ?? ''),
-				assayTypeName: previewParam ? 'Preview Assay' : (data.runState.assayTypeName ?? 'Unknown'),
-				cartridgeCount: carts.length,
-				acceptedCount: accepted.length,
-				rejectedCount: rejected.length,
-				qaqcCount: qaqc.length
-			}}
-			fridges={data.fridges}
-			onRecordStorage={(cartridgeIds, location) => {
-				if (previewParam) { errorMsg = 'Actions disabled in preview mode'; return; }
-				submitForm('recordBatchStorage', { cartridgeIds: JSON.stringify(cartridgeIds), location });
-			}}
-			onComplete={() => {
-				if (previewParam) { errorMsg = 'Actions disabled in preview mode'; return; }
-				submitForm('completeRun');
-			}}
-			readonly={isViewingPast}
-		/>
+			{#if !trayResult}
+				<div>
+					<input
+						bind:this={trayInputEl}
+						type="text"
+						bind:value={trayInput}
+						onkeydown={handleTrayKeydown}
+						placeholder="Scan tray barcode..."
+						disabled={trayValidating}
+						class="min-h-[44px] w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text)] placeholder-[var(--color-tron-text-secondary)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+						autocomplete="off"
+					/>
+					{#if trayError}<p class="mt-2 text-sm text-red-400">{trayError}</p>{/if}
+					{#if trayValidating}<p class="mt-2 text-sm text-[var(--color-tron-text-secondary)]">Validating...</p>{/if}
+				</div>
+				<button
+					type="button"
+					onclick={() => { pendingRejected = null; trayError = ''; trayInput = ''; }}
+					class="min-h-[36px] rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
+				>
+					← Back to Inspection
+				</button>
+			{:else}
+				<div class="rounded-lg border border-green-500/30 bg-green-900/10 p-4 text-center">
+					<p class="text-sm text-green-400">Tray verified:</p>
+					<p class="mt-1 font-mono text-xl font-bold text-green-300">{trayResult.name}</p>
+				</div>
+				<div class="flex gap-3">
+					<button
+						type="button"
+						onclick={rescanTray}
+						class="min-h-[44px] rounded-lg border border-[var(--color-tron-border)] px-4 py-3 text-sm text-[var(--color-tron-text-secondary)] transition-all hover:border-[var(--color-tron-cyan)]/30"
+					>
+						Re-scan
+					</button>
+					<button
+						type="button"
+						onclick={confirmTrayAndSubmit}
+						disabled={submitting}
+						class="min-h-[44px] flex-1 rounded-lg border border-green-500/50 bg-green-900/20 px-6 py-3 text-lg font-bold text-green-400 transition-all hover:bg-green-900/30 disabled:opacity-50"
+					>
+						{submitting ? 'Submitting...' : `Confirm — Cartridges on ${trayResult.name}`}
+					</button>
+				</div>
+			{/if}
+		</div>
 	{/if}
 
 	<!-- Cancel Run Modal -->

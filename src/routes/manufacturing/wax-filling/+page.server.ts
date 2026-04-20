@@ -7,6 +7,7 @@ import { recordTransaction, resolvePartId } from '$lib/server/services/inventory
 import { isAdmin } from '$lib/server/permissions';
 import { User } from '$lib/server/db';
 import { notifyLowWaxBatch, notifyRunLifecycle, shouldWarnLowWax } from '$lib/server/notifications';
+import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import bcrypt from 'bcryptjs';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -49,6 +50,15 @@ function toStage(status: string | null | undefined): string | null {
 
 const ACTIVE_STAGES = new Set(['Setup', 'Loading', 'Running', 'Awaiting Removal', 'QC', 'Storage',
 	'setup', 'loading', 'running', 'awaiting_removal', 'cooling', 'qc', 'storage']);
+
+// Stages where the operator is still working the run on THIS page — the
+// robot stays locked until status moves past 'Awaiting Removal' (i.e. until
+// the final "Confirm — Deck Placed in Oven" click transitions to QC). From
+// QC onward the run lives on the Opentron Control post-OT-2 queue.
+const PAGE_OWNED_STAGES = new Set(['Setup', 'Loading', 'Running', 'Awaiting Removal',
+	'setup', 'loading', 'running', 'awaiting_removal', 'cooling']);
+const REAGENT_PAGE_OWNED_STAGES = new Set(['Setup', 'Loading', 'Running', 'Inspection',
+	'setup', 'loading', 'running', 'inspection']);
 
 /** Safe-default empty state for error fallback */
 function emptyState(robotId: string, loadError: string | null = null) {
@@ -102,16 +112,27 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 	try {
 		await connectDB();
 
-		// Load everything in parallel
+		// Load everything in parallel.
+		// Both active-run queries gate on robotReleasedAt: only runs where the
+		// OT-2 hasn't finished yet count as "robot in use". Post-OT-2 runs live
+		// on Opentron Control and don't lock the robot.
 		const [activeWaxRun, settingsDoc, activeTube, activeReagentRunRaw] = await Promise.all([
-			WaxFillingRun.findOne({ 'robot._id': robotId, status: { $in: [...ACTIVE_STAGES] } })
-				.sort({ createdAt: -1 }).lean(),
+			// This page owns Setup → Awaiting Removal. After confirmCooling
+			// advances status to QC the run lives on Opentron Control, so
+			// activeWaxRun here is scoped to page-owned stages only.
+			WaxFillingRun.findOne({
+				'robot._id': robotId,
+				status: { $in: [...PAGE_OWNED_STAGES] }
+			}).sort({ createdAt: -1 }).lean(),
 			ManufacturingSettings.findById('default').lean(),
 			Consumable.findOne({ type: 'incubator_tube', status: 'active' }).lean(),
-			// Check if a reagent run is active on this robot
+			// A reagent run on the same robot blocks wax only while it's in
+			// reagent-filling-page-owned stages (Setup → Inspection). Once it
+			// passes Inspection it's on the Opentron Control queue and the
+			// robot is free for a new wax run.
 			(await import('$lib/server/db')).ReagentBatchRecord.findOne({
 				'robot._id': robotId,
-				status: { $nin: ['completed', 'aborted', 'cancelled', 'Completed', 'Aborted', 'Cancelled'] }
+				status: { $in: [...REAGENT_PAGE_OWNED_STAGES] }
 			}).lean().catch(() => null)
 		]);
 
@@ -272,6 +293,30 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 	}
 };
 
+/**
+ * Resolve the active wax run for a post-OT-2 action.
+ *
+ * Once confirmDeckRemoved sets robotReleasedAt, the page's load filter
+ * excludes the run, so data.runState.runId becomes null on the client. If
+ * the operator then clicks "Confirm — Deck Placed in Oven" in PostRunCooling,
+ * the handler would otherwise submit an empty runId. Fall back to looking
+ * up the most recent post-OT-2 wax run for this robot using the robotId
+ * the client also sends.
+ */
+const POST_OT2_WAX_STATUSES = ['Awaiting Removal', 'QC', 'Storage'];
+async function resolveWaxRunId(data: FormData): Promise<string | null> {
+	const runId = (data.get('runId') as string | null)?.trim() ?? '';
+	if (runId) return runId;
+	const robotId = (data.get('robotId') as string | null)?.trim() ?? '';
+	if (!robotId) return null;
+	const run = await WaxFillingRun.findOne({
+		'robot._id': robotId,
+		status: { $in: POST_OT2_WAX_STATUSES },
+		robotReleasedAt: { $exists: true }
+	}).sort({ createdAt: -1 }).select('_id').lean() as any;
+	return run ? String(run._id) : null;
+}
+
 export const actions: Actions = {
 	/** Scan backing lot barcode — validates oven time and associates lot with run */
 	scanBackingLot: async ({ request, locals }) => {
@@ -380,15 +425,12 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const robotId = (data.get('robotId') as string) ?? url.searchParams.get('robot') ?? '';
 
-		// Check for existing active run on this robot
-		const existingRun = await WaxFillingRun.findOne({
-			'robot._id': robotId,
-			status: { $in: [...ACTIVE_STAGES] }
-		}).lean() as any;
-
-		if (existingRun) {
-			return fail(400, { error: 'This robot already has an active wax filling run.' });
-		}
+		// Cross-process robot conflict check — blocks if ANY wax OR reagent run
+		// on this robot is in a page-owned stage. The partial unique index on
+		// wax_filling_runs catches within-collection races; this catches the
+		// cross-collection case (reagent already on this robot).
+		const robotErr = await checkRobotConflict(robotId);
+		if (robotErr) return fail(400, { error: robotErr });
 
 		const robotDoc = await Equipment.findOne({ _id: robotId, equipmentType: 'robot' }, { _id: 1, name: 1 }).lean() as any;
 		const run = await WaxFillingRun.create({
@@ -474,6 +516,9 @@ export const actions: Actions = {
 		const ovenId = (data.get('ovenId') as string) || undefined;
 		const cartridgeScansRaw = data.get('cartridgeScans') as string;
 
+		// Deck conflict check runs at scan time (see /api/dev/validate-equipment
+		// ?type=deck). No duplicate check here — this action is the commit.
+
 		let cartridgeIds: string[] = [];
 		if (cartridgeScansRaw) {
 			try {
@@ -538,7 +583,9 @@ export const actions: Actions = {
 		// Get activeLotId from the run for traceability
 		const activeLotId: string | undefined = (run as any).activeLotId ?? undefined;
 
-		// Create CartridgeRecord stubs and link to this wax run
+		// Create CartridgeRecord stubs and link to this wax run.
+		// Also record baking oven exit: cartridges are leaving the baking oven
+		// (where they were placed during WI-01) and going onto the deck.
 		if (cartridgeIds.length > 0) {
 			const now = new Date();
 			const ops = cartridgeIds.map((cid: string, idx: number) => ({
@@ -553,6 +600,8 @@ export const actions: Actions = {
 						$set: {
 							status: 'wax_filling',
 							'backing.lotId': activeLotId ?? null,
+							// Record baking oven exit — cartridge is leaving the baking oven
+							'backing.ovenExitTime': now,
 							'waxFilling.runId': runId,
 							'waxFilling.deckId': deckId ?? null,
 							'waxFilling.robotId': run.robot?._id ?? null,
@@ -626,29 +675,19 @@ export const actions: Actions = {
 			$set: {
 				status: 'Awaiting Removal',
 				deckRemovedTime: now,
+				// Robot is physically free as of now — releases the robot lock so a
+				// new wax/reagent run can start on the same OT-2 while the cooling/
+				// QC/storage steps continue detached on Opentron Control.
+				robotReleasedAt: now,
 				...(ovenLocationId ? { ovenLocationId } : {})
 			}
 		}, { new: true }).lean() as any;
 
-		// Write ovenCure entry time to all cartridges in this run (WRITE-ONCE for entryTime)
-		if (run?.cartridgeIds?.length) {
-			const bulkOps = run.cartridgeIds.map((cid: string) => ({
-				updateOne: {
-					filter: { _id: cid, 'ovenCure.entryTime': { $exists: false } },
-					update: {
-						$set: {
-							'ovenCure.locationId': ovenLocationId ?? run.ovenLocationId ?? undefined,
-							'ovenCure.locationName': ovenLocationName ?? undefined,
-							'ovenCure.entryTime': now,
-							'ovenCure.operator': { _id: locals.user._id, username: locals.user.username },
-							'ovenCure.recordedAt': now
-						}
-					}
-				}
-			}));
-			await CartridgeRecord.bulkWrite(bulkOps);
-		}
-
+		// Robot is now free. ovenCure writes happen later on Opentron Control
+		// when the operator scans the curing oven at the "Deck Placed in Oven"
+		// step. The page's load function will no longer find this run as "active"
+		// (robotReleasedAt filters it out), so invalidateAll() will reset the
+		// page to "Start new run".
 		return { success: true };
 	},
 
@@ -658,9 +697,14 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveWaxRunId(data);
 		const coolingTrayId = (data.get('coolingTrayId') as string) || undefined;
 		const now = new Date();
+
+		if (!runId) return fail(404, { error: 'Run not found' });
+
+		// Tray conflict runs at scan time (see /api/dev/validate-equipment
+		// ?type=tray). No duplicate check here.
 
 		const update: Record<string, any> = { status: 'QC', coolingConfirmedTime: now, coolingConfirmedAt: now };
 		if (coolingTrayId) update.coolingTrayId = coolingTrayId;
@@ -776,7 +820,7 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-	/** Cancel / abort an active run */
+	/** Cancel / abort an active run — only available before the OT-2 finishes */
 	cancelRun: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
@@ -785,6 +829,14 @@ export const actions: Actions = {
 		const runId = data.get('runId') as string;
 		const reason = (data.get('reason') as string) || 'Cancelled by operator';
 		const now = new Date();
+
+		// Once the OT-2 has finished (robotReleasedAt set), the run is committed
+		// and can no longer be cancelled. Individual cartridges can still be
+		// rejected at QC; whole-run abort is no longer the right tool.
+		const existing = await WaxFillingRun.findById(runId).select('robotReleasedAt').lean() as any;
+		if (existing?.robotReleasedAt) {
+			return fail(400, { error: 'Cannot cancel: the OT-2 has already completed this run. Reject individual cartridges at QC instead.' });
+		}
 
 		await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
@@ -827,6 +879,14 @@ export const actions: Actions = {
 		const runId = data.get('runId') as string;
 		const reason = (data.get('reason') as string) || 'Aborted';
 		const now = new Date();
+
+		// Once the OT-2 has finished (robotReleasedAt set), abort is no longer
+		// available — same rule as cancelRun. Per-cartridge rejection at QC
+		// is the post-run path.
+		const existing = await WaxFillingRun.findById(runId).select('robotReleasedAt').lean() as any;
+		if (existing?.robotReleasedAt) {
+			return fail(400, { error: 'Cannot abort: the OT-2 has already completed this run. Reject individual cartridges at QC instead.' });
+		}
 
 		await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
