@@ -38,6 +38,14 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const settingsDoc = await ManufacturingSettings.findById('default').lean() as any;
 	const maxTimeBeforeSealMin: number = settingsDoc?.reagentFilling?.maxTimeBeforeSealMin ?? 60;
 
+	// Resolve robot name — reagent records sometimes store only robot._id,
+	// leaving the header to render a raw nanoid.
+	let robotName = run.robot?.name ?? '';
+	if (!robotName && run.robot?._id) {
+		const robotDoc = await Equipment.findById(run.robot._id).select('name').lean() as any;
+		if (robotDoc?.name) robotName = robotDoc.name;
+	}
+
 	const rejectionCodes = (settingsDoc?.rejectionReasonCodes ?? [])
 		.filter((r: any) => !r.processType || r.processType === 'reagent')
 		.map((r: any, i: number) => ({
@@ -86,7 +94,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	return {
 		runId: String(run._id),
 		stage,
-		robotName: run.robot?.name ?? '',
+		robotName,
 		assayTypeName: run.assayType?.name ?? '',
 		cartridgesFilled: JSON.parse(JSON.stringify(cartridgesFilled)),
 		sealBatches: JSON.parse(JSON.stringify(sealBatches)),

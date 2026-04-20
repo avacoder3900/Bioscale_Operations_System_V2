@@ -119,7 +119,11 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		qcCartridges: JSON.parse(JSON.stringify(qcCartridges)),
 		storageCartridges: JSON.parse(JSON.stringify(storageCartridges)),
 		fridges: JSON.parse(JSON.stringify(fridges)),
-		robotName: run.robot?.name ?? ''
+		robotName: run.robot?.name
+			|| (run.robot?._id
+				? (await Equipment.findById(run.robot._id).select('name').lean() as any)?.name
+				: null)
+			|| ''
 	};
 };
 

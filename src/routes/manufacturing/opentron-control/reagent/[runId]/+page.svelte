@@ -53,8 +53,11 @@
 			}))
 	);
 
-	// Build current batch from sealBatches (find the in-progress one)
-	const currentBatch = $derived(() => {
+	// Build current batch from sealBatches (find the in-progress one).
+	// Note: $derived.by, NOT $derived(() => ...) — the bare form stores the
+	// function itself as the value, which the TopSealing component would then
+	// treat as truthy but destructure as all-undefined fields.
+	const currentBatch = $derived.by(() => {
 		const inProgress = data.sealBatches.find((b: any) => b.status === 'in_progress');
 		if (!inProgress) return null;
 		return {
