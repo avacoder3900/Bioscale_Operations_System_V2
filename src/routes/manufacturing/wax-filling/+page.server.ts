@@ -279,6 +279,30 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 	}
 };
 
+/**
+ * Resolve the active wax run for a post-OT-2 action.
+ *
+ * Once confirmDeckRemoved sets robotReleasedAt, the page's load filter
+ * excludes the run, so data.runState.runId becomes null on the client. If
+ * the operator then clicks "Confirm — Deck Placed in Oven" in PostRunCooling,
+ * the handler would otherwise submit an empty runId. Fall back to looking
+ * up the most recent post-OT-2 wax run for this robot using the robotId
+ * the client also sends.
+ */
+const POST_OT2_WAX_STATUSES = ['Awaiting Removal', 'QC', 'Storage'];
+async function resolveWaxRunId(data: FormData): Promise<string | null> {
+	const runId = (data.get('runId') as string | null)?.trim() ?? '';
+	if (runId) return runId;
+	const robotId = (data.get('robotId') as string | null)?.trim() ?? '';
+	if (!robotId) return null;
+	const run = await WaxFillingRun.findOne({
+		'robot._id': robotId,
+		status: { $in: POST_OT2_WAX_STATUSES },
+		robotReleasedAt: { $exists: true }
+	}).sort({ createdAt: -1 }).select('_id').lean() as any;
+	return run ? String(run._id) : null;
+}
+
 export const actions: Actions = {
 	/** Scan backing lot barcode — validates oven time and associates lot with run */
 	scanBackingLot: async ({ request, locals }) => {
@@ -661,9 +685,11 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveWaxRunId(data);
 		const coolingTrayId = (data.get('coolingTrayId') as string) || undefined;
 		const now = new Date();
+
+		if (!runId) return fail(404, { error: 'Run not found' });
 
 		const update: Record<string, any> = { status: 'QC', coolingConfirmedTime: now, coolingConfirmedAt: now };
 		if (coolingTrayId) update.coolingTrayId = coolingTrayId;

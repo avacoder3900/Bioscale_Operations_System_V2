@@ -418,9 +418,13 @@
 	}
 
 	async function handleCoolingComplete(result: { trayId: string; coolingTimestamp: Date }) {
-		if (!data.runState.runId) return;
+		// After confirmDeckRemoved sets robotReleasedAt, the load query filters
+		// the run out and data.runState.runId becomes null — so don't guard on
+		// it. The server falls back to looking up the run by robotId (which
+		// the load always returns).
 		await submitAction('confirmCooling', {
-			runId: data.runState.runId,
+			runId: data.runState.runId ?? '',
+			robotId: data.robotId,
 			coolingTrayId: result.trayId
 		});
 		// Final step of the wax run on this page — send operator back to
