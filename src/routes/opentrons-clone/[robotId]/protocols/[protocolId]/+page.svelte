@@ -271,6 +271,21 @@
 	</section>
 
 	<section class="bg-white border rounded-lg p-4 mb-4">
+		<h3 class="font-semibold mb-2">Labware Position Check</h3>
+		<p class="text-xs text-gray-500 mb-2">
+			Optional. Jog the pipette over each slot-based labware to capture
+			per-labware offsets that will be applied to the next run created from
+			this protocol.
+		</p>
+		<a
+			href={`/opentrons-clone/${data.robot._id}/protocols/${data.protocolId}/lpc`}
+			class="inline-block px-3 py-1.5 border text-sm rounded hover:bg-gray-100"
+		>
+			Run Labware Position Check →
+		</a>
+	</section>
+
+	<section class="bg-white border rounded-lg p-4 mb-4">
 		<h3 class="font-semibold mb-2">Start a run</h3>
 
 		{#if !a}
