@@ -34,8 +34,39 @@ function authenticateSync(request: Request): void {
 	requireAgentApiKey(request);
 }
 
-async function runSync(request: Request) {
-	authenticateSync(request);
+async function runSync(request: Request, url: URL) {
+	// Breadcrumb so Vercel logs show whether cron invocations arrive at all.
+	// A missing line here every 5 minutes = cron not firing (Vercel side).
+	const ua = request.headers.get('user-agent') ?? '';
+	const src = ua.startsWith('vercel-cron/')
+		? 'vercel-cron'
+		: request.headers.get('authorization')
+		? 'bearer'
+		: (request.headers.get('x-api-key') || request.headers.get('x-agent-api-key'))
+		? 'api-key'
+		: 'unknown';
+	console.log(`[MOCREO SYNC] start method=${request.method} src=${src} ua="${ua}"`);
+
+	// Health mode — no DB writes, no Mocreo fetch. Lets us verify auth + env
+	// config without triggering a full sync. Hit with ?health=1.
+	if (url.searchParams.get('health') === '1') {
+		authenticateSync(request);
+		const envCheck = {
+			MOCREO_EMAIL: !!env.MOCREO_EMAIL,
+			MOCREO_PASSWORD: !!env.MOCREO_PASSWORD,
+			CRON_SECRET: !!env.CRON_SECRET,
+			AGENT_API_KEY: !!env.AGENT_API_KEY,
+			MONGODB_URI: !!env.MONGODB_URI
+		};
+		return json({ ok: true, envCheck, authVia: src });
+	}
+
+	try {
+		authenticateSync(request);
+	} catch (err: any) {
+		console.error(`[MOCREO SYNC] auth failed src=${src}:`, err?.message ?? err);
+		throw err;
+	}
 	await connectDB();
 
 	let sensors: Awaited<ReturnType<typeof fetchAllSensors>>;
@@ -48,6 +79,7 @@ async function runSync(request: Request) {
 			{ status: 502 }
 		);
 	}
+	console.log(`[MOCREO SYNC] fetched ${sensors.length} sensors from Mocreo API`);
 	const results: Array<{
 		sensorId: string;
 		sensorName: string;
@@ -212,19 +244,25 @@ async function runSync(request: Request) {
 		}
 	}
 
+	const errored = results.filter((r) => r.error).length;
+	const noReading = results.filter((r) => r.alerts.includes('no_reading')).length;
+	console.log(`[MOCREO SYNC] done sensors=${sensors.length} errors=${errored} noReading=${noReading}`);
+
 	return json({
 		success: true,
 		syncedAt: now.toISOString(),
 		sensorCount: sensors.length,
+		errored,
+		noReading,
 		results
 	});
 }
 
 // GET: called by Vercel Cron every 5 minutes
-export const GET: RequestHandler = async ({ request }) => runSync(request);
+export const GET: RequestHandler = async ({ request, url }) => runSync(request, url);
 
 // POST: called by worker scripts and the openclaw agent
-export const POST: RequestHandler = async ({ request }) => runSync(request);
+export const POST: RequestHandler = async ({ request, url }) => runSync(request, url);
 
 async function checkLostConnection(sensorId: string, sensorName: string, eq: any, now: Date): Promise<boolean> {
 	// Only create if there isn't already an unacknowledged lost_connection alert for this sensor
