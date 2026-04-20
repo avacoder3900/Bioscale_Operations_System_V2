@@ -295,12 +295,22 @@
 			clearTimeout(slowTimer);
 			const text = await res.text();
 			if (!res.ok || text.includes('"type":"failure"')) {
-				// Parse SvelteKit action response — supports both plain JSON
-				// ({error: "..."}) and devalue-serialized failures
-				// ({type: "failure", data: "[{\"error\":1},\"...msg...\"]"}).
-				// The old regex choked on error messages that contained quotes
-				// (e.g. Deck "DECK-001" is on...), truncating to the first word.
-				let serverError = `Action failed (HTTP ${res.status})`;
+				// Parse SvelteKit action response. Handles three shapes:
+				//   fail(): {type: "failure", data: "[{\"error\":1},\"msg\"]"}
+				//   error(): {type: "error", error: {message: "..."}}
+				//   plain:  {error: "..."}
+				// Always coerces to a string — otherwise a raw object assigned
+				// to errorMsg renders as literal "[object Object]".
+				let serverError: string = `Action failed (HTTP ${res.status})`;
+				const toStr = (v: unknown): string | null => {
+					if (typeof v === 'string' && v.length > 0) return v;
+					if (v && typeof v === 'object') {
+						const msg = (v as any).message ?? (v as any).error;
+						if (typeof msg === 'string' && msg.length > 0) return msg;
+						try { return JSON.stringify(v); } catch { return null; }
+					}
+					return null;
+				};
 				try {
 					const json = JSON.parse(text);
 					if (json.type === 'failure' && json.data != null) {
@@ -321,11 +331,16 @@
 									break;
 								}
 							}
-						} else if (json.data?.error) {
-							serverError = json.data.error;
+						} else {
+							const s = toStr((json.data as any).error ?? json.data);
+							if (s) serverError = s;
 						}
+					} else if (json.type === 'error' && json.error) {
+						const s = toStr(json.error);
+						if (s) serverError = s;
 					} else if (json.error) {
-						serverError = json.error;
+						const s = toStr(json.error);
+						if (s) serverError = s;
 					}
 				} catch {
 					// Fallback: find the longest readable string in the body
