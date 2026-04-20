@@ -10,7 +10,22 @@ Living checklist. Update after every commit.
 | 2 — Create Step-1 branch | ✅ done | `dfcedcd` |
 | 3 — Ingest live OpenAPI spec | ✅ done | `685ba9b` |
 | 4 — Parity rows (see below) | ✅ done | rows 20, 24 parked (API gap / low-priority) |
-| 5 — Verify end-to-end against real robot | ⏳ blocked on user (physical robot access) | — |
+| 5 — Verify end-to-end against real robot | ✅ done (34/34 hidden-leaf) | `93a7acf`, `VERIFIED.md` |
+| 6 — Operator gate, nav link, dark mode, confirm dialogs, sort | ✅ done | `e968e4d` |
+
+## Step 1.5 — Production-readiness (DOMAIN-12)
+
+PRD: `docs/migration/prds/DOMAIN-12-OPENTRONS-CLONE-PROD-READY.md`
+
+| Story | Title | Status | Commit |
+|-------|-------|--------|--------|
+| OT-A | Runtime parameters form | ⏳ pending | — |
+| OT-B | Deck / labware setup checklist | ⏳ pending | — |
+| OT-C | Pipette attach confirmation | ⏳ pending | — |
+| OT-D1 | Maintenance-run session wrapper | ⏳ pending | — |
+| OT-D2 | LPC wizard UI | ⏳ pending | — |
+| OT-D3 | Offsets applied on run create | ⏳ pending | — |
+| OT-D4 | End-to-end verify + PRODUCTION-READY.md | ⏳ pending | — |
 
 ## Parity rows (§4 of OPENTRONS-CLONE-PLAN.md)
 
