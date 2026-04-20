@@ -13,7 +13,7 @@
 # Usage:
 #   ./scripts/ralph-driver.sh             # start the loop
 #   RALPH_MAX_ITERATIONS=20 ./...         # cap total iterations (default 20)
-#   RALPH_ITER_TIMEOUT=3600 ./...         # per-iteration timeout seconds (default 3600)
+#   RALPH_ITER_TIMEOUT=14400 ./...        # per-iteration timeout seconds (default 14400 = 4h)
 #   RALPH_DRY_RUN=1 ./...                 # print what would run, don't invoke claude
 
 set -euo pipefail
@@ -30,7 +30,7 @@ LOG_DIR="$REPO_ROOT/.ralph-logs"
 mkdir -p "$LOG_DIR"
 
 MAX_ITERATIONS="${RALPH_MAX_ITERATIONS:-20}"
-ITER_TIMEOUT="${RALPH_ITER_TIMEOUT:-3600}"
+ITER_TIMEOUT="${RALPH_ITER_TIMEOUT:-14400}"
 DRY_RUN="${RALPH_DRY_RUN:-0}"
 
 log() { printf '[ralph %s] %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }
