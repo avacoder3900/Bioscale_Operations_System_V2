@@ -34,6 +34,21 @@
 	const nonCsvParams = rtpParams.filter((p) => p.type !== 'csv_file');
 	const csvParams = rtpParams.filter((p) => p.type === 'csv_file');
 
+	type DeckLabware = {
+		id: string;
+		loadName: string;
+		displayName?: string | null;
+		namespace?: string | null;
+		location?: { slotName?: string | null; moduleId?: string | null; labwareId?: string | null };
+	};
+	const deckLabware: DeckLabware[] = ((a?.labware ?? []) as DeckLabware[]).filter(
+		(lw) => typeof lw.location?.slotName === 'string' && lw.location.slotName.length > 0
+	);
+	let deckChecked = $state<Record<string, boolean>>({});
+	const deckConfirmed = $derived(
+		deckLabware.length === 0 || deckLabware.every((lw) => deckChecked[lw.id] === true)
+	);
+
 	const analysisPending = a ? a.status === 'pending' : false;
 	const analysisHasErrors = (a?.errors?.length ?? 0) > 0;
 	const analysisReady = !!a && !analysisPending && !analysisHasErrors;
@@ -103,7 +118,13 @@
 	const csvBlocked = hasCsvParams && !data.dataFilesReachable;
 
 	const canCreateRun = $derived(
-		data.online && !!data.protocol && analysisReady && valuesValid && filesValid && !csvBlocked
+		data.online &&
+			!!data.protocol &&
+			analysisReady &&
+			valuesValid &&
+			filesValid &&
+			!csvBlocked &&
+			deckConfirmed
 	);
 
 	// Strip empty-string CSV selections; send only values that are populated.
@@ -220,6 +241,48 @@
 		<form method="POST" action="?/createRun" use:enhance>
 			<input type="hidden" name="rtpValues" value={rtpValuesJson} />
 			<input type="hidden" name="rtpFiles" value={rtpFilesJson} />
+
+			{#if analysisReady && deckLabware.length > 0}
+				<div class="space-y-2 mb-4">
+					<div class="flex items-center justify-between">
+						<h4 class="text-gray-700 font-medium text-xs">Deck setup ({deckLabware.length})</h4>
+						<button
+							type="button"
+							class="text-xs text-blue-600 hover:underline"
+							onclick={() => {
+								const next: Record<string, boolean> = {};
+								for (const lw of deckLabware) next[lw.id] = true;
+								deckChecked = next;
+							}}
+						>
+							Check all
+						</button>
+					</div>
+					<p class="text-xs text-gray-500">
+						Confirm each labware is physically on the deck before creating a run.
+					</p>
+					<ul class="border rounded divide-y">
+						{#each deckLabware as lw (lw.id)}
+							<li class="flex items-start gap-2 p-2">
+								<input
+									id={`deck-${lw.id}`}
+									type="checkbox"
+									class="mt-0.5"
+									checked={deckChecked[lw.id] === true}
+									onchange={(e) =>
+										(deckChecked[lw.id] = (e.target as HTMLInputElement).checked)}
+								/>
+								<label for={`deck-${lw.id}`} class="text-xs cursor-pointer">
+									<div class="font-medium">
+										Slot {lw.location?.slotName} — {lw.displayName ?? lw.loadName}
+									</div>
+									<div class="font-mono text-gray-400">{lw.loadName}</div>
+								</label>
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
 
 			{#if rtpParams.length > 0 && analysisReady}
 				<div class="space-y-3 mb-4">
