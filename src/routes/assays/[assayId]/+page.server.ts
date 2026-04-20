@@ -1,6 +1,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { hasPermission, requirePermission } from '$lib/server/permissions';
 import { connectDB, AssayDefinition, FirmwareCartridge, TestResult, AuditLog, generateId } from '$lib/server/db';
+import { generateLegacyAssayId } from '$lib/server/assay-legacy-shape';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -380,7 +381,7 @@ export const actions: Actions = {
 		const original = await AssayDefinition.findById(params.assayId).lean() as any;
 		if (!original) throw error(404, 'Assay not found');
 
-		const newId = generateId();
+		const newId = await generateLegacyAssayId(AssayDefinition as any);
 		const { _id, createdAt, updatedAt, lockedAt, lockedBy, versionHistory, ...rest } = original;
 		await AssayDefinition.create({
 			...rest,

@@ -1,7 +1,9 @@
 import { fail } from '@sveltejs/kit';
-import { connectDB, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, AuditLog, WaxBatch, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
+
+const FULL_TUBE_VOLUME_UL = 12000; // 12 ml per 15 ml tube (filled per wax-creation instructions)
 
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'manufacturing:read');
@@ -47,6 +49,21 @@ export const actions: Actions = {
 
 		const batchId = generateId();
 
+		// Calculate total wax volume in this batch (12ml per full tube + partial)
+		const initialVolumeUl = fullTubeCount * FULL_TUBE_VOLUME_UL + partialTubeMl * 1000;
+
+		// Create WaxBatch record for runtime volume tracking (scanned during wax-filling)
+		await WaxBatch.create({
+			_id: batchId,
+			lotNumber,
+			lotBarcode,
+			initialVolumeUl,
+			remainingVolumeUl: initialVolumeUl,
+			fullTubeCount,
+			partialTubeMl,
+			createdBy: { _id: locals.user!._id, username: locals.user!.username }
+		});
+
 		await AuditLog.create({
 			_id: generateId(),
 			action: 'INSERT',
@@ -63,7 +80,8 @@ export const actions: Actions = {
 				expectedTubes,
 				fullTubeCount,
 				partialTubeMl,
-				fridgeBarcode
+				fridgeBarcode,
+				initialVolumeUl
 			}
 		});
 

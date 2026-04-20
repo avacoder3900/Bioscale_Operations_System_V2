@@ -11,6 +11,7 @@ const receivingLotSchema = new Schema({
 		name: String
 	},
 	quantity: { type: Number, required: true },
+	consumedUl: { type: Number, default: 0 },
 	serialNumber: String,
 	operator: { _id: String, username: String },
 	inspectionPathway: { type: String, enum: ['coc', 'ip'], required: true },

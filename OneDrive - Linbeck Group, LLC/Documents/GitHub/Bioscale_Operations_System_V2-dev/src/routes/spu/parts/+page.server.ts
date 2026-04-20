@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, PartDefinition, BomItem, Integration, generateId } from '$lib/server/db';
+import { connectDB, PartDefinition, BomItem, Integration, AuditLog, generateId } from '$lib/server/db';
 import { syncPartsFromBox } from '$lib/server/box-sync';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -154,6 +154,38 @@ export const actions: Actions = {
 			createdBy: locals.user!._id
 		});
 		return { success: true };
+	},
+
+	withdrawCartridgePart: async ({ request, locals }) => {
+		requirePermission(locals.user, 'inventory:write');
+		await connectDB();
+		const form = await request.formData();
+		const id = form.get('id')?.toString();
+		const qty = Number(form.get('quantity'));
+		const reason = form.get('reason')?.toString().trim() || undefined;
+		if (!id) return fail(400, { error: 'Part id required' });
+		if (!Number.isFinite(qty) || qty <= 0) return fail(400, { error: 'Quantity must be a positive number' });
+
+		const bom = await BomItem.findById(id);
+		if (!bom) return fail(404, { error: 'Cartridge part not found' });
+
+		const before = bom.inventoryCount ?? 0;
+		const after = before - qty;
+		bom.inventoryCount = after;
+		await bom.save();
+
+		await AuditLog.create({
+			_id: generateId(),
+			action: 'withdraw',
+			resourceType: 'bom_item',
+			resourceId: bom._id,
+			userId: locals.user!._id,
+			username: locals.user!.username,
+			timestamp: new Date(),
+			details: { partNumber: bom.partNumber, quantity: qty, before, after, reason }
+		});
+
+		return { success: true, message: `Withdrew ${qty} of ${bom.partNumber} (remaining: ${after})` };
 	},
 
 	sync: async ({ locals }) => {

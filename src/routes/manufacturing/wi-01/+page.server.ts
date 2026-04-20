@@ -10,7 +10,7 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, LotRecord, ProcessConfiguration, CartridgeRecord,
-	PartDefinition, AuditLog, generateId
+	PartDefinition, AuditLog, Equipment, BackingLot, ReceivingLot, generateId
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { nanoid } from 'nanoid';
@@ -25,6 +25,34 @@ const CONSUMED_PARTS = [
 	{ partNumber: 'PT-CT-106', name: 'Barcode' }
 ];
 
+/**
+ * Validate that a scanned lot barcode belongs to the expected part. Used
+ * inline during the scan step so operators cannot mis-scan a Cartridge
+ * lot into the Thermoseal slot (etc.).
+ *
+ * A lot is considered valid when a ReceivingLot exists with matching
+ * lotId and part.partNumber, and its status is not 'rejected'/'returned'.
+ */
+async function validateLotForPart(lotId: string, partNumber: string):
+	Promise<{ ok: true; lot: any } | { ok: false; reason: string }>
+{
+	if (!lotId) return { ok: false, reason: 'Barcode is empty.' };
+	const lot = await ReceivingLot.findOne({ lotId }).lean() as any;
+	if (!lot) {
+		return { ok: false, reason: `Lot "${lotId}" is not in the receiving system.` };
+	}
+	if (lot.part?.partNumber !== partNumber) {
+		return {
+			ok: false,
+			reason: `Lot "${lotId}" is ${lot.part?.partNumber ?? 'an unknown part'} — expected ${partNumber}.`
+		};
+	}
+	if (lot.status === 'rejected' || lot.status === 'returned') {
+		return { ok: false, reason: `Lot "${lotId}" has status "${lot.status}" and cannot be consumed.` };
+	}
+	return { ok: true, lot };
+}
+
 function generateOutputLot(): string {
 	const now = new Date();
 	const ds = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
@@ -35,11 +63,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	await connectDB();
 
-	const [config, recentLots, parts] = await Promise.all([
+	const [config, recentLots, parts, ovens] = await Promise.all([
 		ProcessConfiguration.findOne({ processType: PROCESS_TYPE }).lean(),
 		LotRecord.find({ 'processConfig.processType': PROCESS_TYPE })
 			.sort({ createdAt: -1 }).limit(20).lean(),
-		PartDefinition.find({ bomType: 'cartridge', isActive: true }).lean()
+		PartDefinition.find({ bomType: 'cartridge', isActive: true }).lean(),
+		Equipment.find({
+			equipmentType: 'oven',
+			status: { $in: ['active', 'available', 'in_use'] }
+		}).select('_id name barcode status').lean()
 	]);
 
 	if (!config) {
@@ -48,6 +80,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			processSteps: [],
 			lotStepEntries: [],
 			recentLots: [],
+			ovens: [],
 			inventory: {
 				rawCartridges: { name: 'Cartridges', quantity: 0, unit: 'pcs' },
 				barcodeLabels: { name: 'Barcodes', quantity: 0, unit: 'pcs' },
@@ -84,6 +117,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 			createdAt: l.createdAt?.toISOString?.() ?? '',
 			finishTime: l.finishTime?.toISOString?.() ?? null
 		})),
+		ovens: (ovens as any[]).map((o: any) => ({
+			_id: String(o._id),
+			name: o.name ?? '',
+			barcode: o.barcode ?? '',
+			status: o.status ?? ''
+		})),
 		inventory: {
 			rawCartridges: { name: 'Cartridges', quantity: partQty('PT-CT-104'), unit: 'pcs' },
 			barcodeLabels: { name: 'Barcodes', quantity: partQty('PT-CT-106'), unit: 'pcs' },
@@ -94,6 +133,24 @@ export const load: PageServerLoad = async ({ locals }) => {
 };
 
 export const actions: Actions = {
+	/**
+	 * Validate a single scanned lot barcode against the part it should
+	 * belong to. Called inline from the scan step so a mis-scan never
+	 * reaches checkAndStart.
+	 */
+	validateLot: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+		const data = await request.formData();
+		const lotId = (data.get('lotId') as string)?.trim() ?? '';
+		const partNumber = (data.get('partNumber') as string)?.trim() ?? '';
+		const check = await validateLotForPart(lotId, partNumber);
+		if (!check.ok) {
+			return fail(400, { validateLot: { ok: false, partNumber, lotId, reason: check.reason } });
+		}
+		return { validateLot: { ok: true, partNumber, lotId, partName: check.lot.part?.name ?? '' } };
+	},
+
 	/**
 	 * Check inventory for the requested quantity, create lot, and start batch.
 	 * Validates that all 3 materials have enough stock before proceeding.
@@ -109,6 +166,21 @@ export const actions: Actions = {
 		const lot3 = (data.get('lot3') as string)?.trim() || '';
 
 		if (quantity <= 0) return fail(400, { checkAndStart: { error: 'Quantity must be greater than 0' } });
+
+		// Defense-in-depth: re-validate each scanned lot matches the part it
+		// represents. The UI validates on scan, but we re-check here so a
+		// forged form submission can't slip through.
+		const scanChecks: Array<[string, string, string]> = [
+			['PT-CT-104', 'Cartridge', lot1],
+			['PT-CT-112', 'Thermoseal Laser Cut Sheet', lot2],
+			['PT-CT-106', 'Barcode', lot3]
+		];
+		for (const [partNumber, label, lotId] of scanChecks) {
+			const check = await validateLotForPart(lotId, partNumber);
+			if (!check.ok) {
+				return fail(400, { checkAndStart: { error: `${label}: ${check.reason}` } });
+			}
+		}
 
 		// Check inventory for all 3 consumed materials
 		const parts = await PartDefinition.find({
@@ -196,6 +268,7 @@ export const actions: Actions = {
 		const scrapBarcode = Number(data.get('scrapBarcode') || 0);
 		const scrapReason = (data.get('scrapReason') as string)?.trim() || '';
 		const bucketBarcode = (data.get('bucketBarcode') as string)?.trim() || '';
+		const ovenBarcode = (data.get('ovenBarcode') as string)?.trim() || '';
 		const notes = (data.get('notes') as string)?.trim() || '';
 
 		const totalScrap = scrapCartridge + scrapThermoseal + scrapBarcode;
@@ -204,6 +277,16 @@ export const actions: Actions = {
 		if (actualCount <= 0) return fail(400, { confirmComplete: { error: 'Count must be greater than 0' } });
 		if (totalScrap > 0 && !scrapReason) {
 			return fail(400, { confirmComplete: { error: 'Scrap reason is required when any parts are scrapped' } });
+		}
+		if (!bucketBarcode) return fail(400, { confirmComplete: { error: 'Bucket barcode is required' } });
+		if (!ovenBarcode) return fail(400, { confirmComplete: { error: 'Oven barcode is required' } });
+
+		const oven = await Equipment.findOne({
+			equipmentType: 'oven',
+			$or: [{ barcode: ovenBarcode }, { _id: ovenBarcode }]
+		}).lean() as any;
+		if (!oven) {
+			return fail(400, { confirmComplete: { error: `No oven found matching barcode "${ovenBarcode}"` } });
 		}
 
 		const lot = await LotRecord.findById(lotId).lean() as any;
@@ -231,6 +314,7 @@ export const actions: Actions = {
 				backing: {
 					lotId,
 					lotQrCode: lot.qrCodeRef,
+					ovenEntryTime: now,
 					operator: { _id: locals.user._id, username: locals.user.username },
 					recordedAt: now
 				},
@@ -243,6 +327,28 @@ export const actions: Actions = {
 			await CartridgeRecord.insertMany(cartridgeDocs);
 		}
 
+		// Register bucket as a BackingLot so it appears in wax-filling's
+		// "buckets in ovens" list. _id = scanned bucket barcode (that's what
+		// wax-filling's scanBackingLot expects to look up).
+		await BackingLot.findByIdAndUpdate(
+			bucketBarcode,
+			{
+				$setOnInsert: {
+					_id: bucketBarcode,
+					lotType: 'backing',
+					operator: { _id: locals.user._id, username: locals.user.username }
+				},
+				$set: {
+					ovenEntryTime: now,
+					ovenLocationId: String(oven._id),
+					ovenLocationName: oven.name ?? oven.barcode ?? '',
+					cartridgeCount: actualCount,
+					status: 'in_oven'
+				}
+			},
+			{ upsert: true, new: true }
+		);
+
 		// Finalize lot
 		await LotRecord.findByIdAndUpdate(lotId, {
 			$set: {
@@ -254,7 +360,14 @@ export const actions: Actions = {
 				scrapCount: totalScrap,
 				scrapDetail: { cartridge: scrapCartridge, thermoseal: scrapThermoseal, barcode: scrapBarcode },
 				scrapReason: scrapReason || undefined,
-				bucketBarcode: bucketBarcode || undefined,
+				bucketBarcode,
+				ovenEntryTime: now,
+				ovenPlacement: {
+					ovenId: String(oven._id),
+					ovenBarcode: oven.barcode ?? ovenBarcode,
+					placedAt: now,
+					placedBy: { _id: locals.user._id, username: locals.user.username }
+				},
 				notes: notes || undefined
 			}
 		});

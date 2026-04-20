@@ -6,8 +6,12 @@ import type { LayoutServerLoad } from './$types';
 // Extend Vercel serverless timeout to 60s
 export const config = { maxDuration: 60 };
 
-const ACTIVE_STAGES = ['Setup', 'Loading', 'Running', 'Awaiting Removal', 'QC', 'Storage',
-	'setup', 'loading', 'running', 'awaiting_removal', 'cooling', 'qc', 'storage'];
+// Stages where the operator is still actively handling this run on the
+// wax-filling page (PostRunCooling runs during 'Awaiting Removal'). Once
+// status moves to QC / Storage, the run lives on the Opentron Control
+// post-OT-2 queue and the robot becomes Available for a new run.
+const WAX_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Awaiting Removal',
+	'setup', 'loading', 'running', 'awaiting_removal', 'cooling'];
 
 export const load: LayoutServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
@@ -22,17 +26,20 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 	try {
 		await connectDB();
 
-		const REAGENT_ACTIVE_STAGES = ['Setup', 'Loading', 'Running', 'Inspection', 'Top Sealing', 'Storage',
-			'setup', 'loading', 'running', 'inspection', 'top_sealing', 'storage'];
+		// Mirror of reagent-filling's layout: reagent runs lock the robot from
+		// wax until they pass Inspection (i.e. only Top Sealing / Storage free
+		// the robot).
+		const REAGENT_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Inspection',
+			'setup', 'loading', 'running', 'inspection'];
 
 		const [robots, activeRuns, activeReagentRuns] = await Promise.all([
 			Equipment.find({ equipmentType: 'robot', isActive: true }, { _id: 1, name: 1, robotSide: 1 }).sort({ name: 1 }).lean(),
 			WaxFillingRun.find(
-				{ status: { $in: ACTIVE_STAGES } },
+				{ status: { $in: WAX_PAGE_OWNED } },
 				{ 'robot._id': 1, status: 1, runStartTime: 1, runEndTime: 1, deckId: 1 }
 			).lean(),
 			ReagentBatchRecord.find(
-				{ status: { $in: REAGENT_ACTIVE_STAGES } },
+				{ status: { $in: REAGENT_PAGE_OWNED } },
 				{ 'robot._id': 1, status: 1 }
 			).lean().catch(() => [])
 		]);

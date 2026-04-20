@@ -16,7 +16,7 @@
 	interface Props {
 		availableLots: OvenLot[];
 		plannedCartridgeCount?: number | null;
-		onComplete: (data: { deckId: string; cartridgeScans: CartridgeScan[]; countMismatchReason?: string }) => void;
+		onComplete: (data: { deckId: string; ovenId: string; cartridgeScans: CartridgeScan[]; countMismatchReason?: string }) => void;
 		readonly?: boolean;
 		suppressFocus?: boolean;
 	}
@@ -37,10 +37,15 @@
 	const SCAN_ORDER = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24];
 	const TOTAL_POSITIONS = 24;
 
-	let step = $state<'deck' | 'loading'>('deck');
+	let step = $state<'deck' | 'oven' | 'loading'>('deck');
 	let deckId = $state('');
 	let deckInput = $state('');
 	let deckError = $state('');
+	let ovenId = $state('');
+	let ovenInput = $state('');
+	let ovenError = $state('');
+	let ovenPendingValue = $state('');
+	let ovenInputEl: HTMLInputElement | undefined = $state();
 	let cartridgeInput = $state('');
 	let scans = $state<CartridgeScan[]>([]);
 
@@ -140,12 +145,49 @@
 		// Validation already done on Enter keydown
 		deckId = deckPendingValue;
 		deckPendingValue = '';
+		// Skip oven scan — deck is being REMOVED from oven, not placed into one.
+		// Oven scan happens at step 4 (deck removal) after the OT-2 run completes.
 		step = 'loading';
 	}
 
 	function rescanDeck() {
 		deckPendingValue = '';
 		setTimeout(() => deckInputEl?.focus(), 50);
+	}
+
+	async function handleOvenKeydown(e: KeyboardEvent) {
+		if (isReadonly) return;
+		if (e.key === 'Enter' && ovenInput.trim()) {
+			e.preventDefault();
+			const value = ovenInput.trim();
+			ovenInput = '';
+			ovenError = '';
+			try {
+				const res = await fetch(`/api/dev/validate-equipment?type=oven&id=${encodeURIComponent(value)}`);
+				const result = await res.json();
+				if (!res.ok || result.error) {
+					ovenError = result.error ?? `Oven "${value}" not found.`;
+					playBeep(false);
+					return;
+				}
+				ovenPendingValue = result.id ?? value;
+				playBeep(true);
+			} catch {
+				ovenError = 'Validation service unavailable, cannot proceed';
+				playBeep(false);
+			}
+		}
+	}
+
+	function confirmOven() {
+		ovenId = ovenPendingValue;
+		ovenPendingValue = '';
+		step = 'loading';
+	}
+
+	function rescanOven() {
+		ovenPendingValue = '';
+		setTimeout(() => ovenInputEl?.focus(), 50);
 	}
 
 	async function handleCartridgeKeydown(e: KeyboardEvent) {
@@ -210,19 +252,19 @@
 			showMismatchModal = true;
 			return;
 		}
-		onComplete({ deckId, cartridgeScans: [...scans] });
+		onComplete({ deckId, ovenId, cartridgeScans: [...scans] });
 	}
 
 	function confirmMismatch() {
 		if (!mismatchReason.trim()) return;
 		showMismatchModal = false;
-		onComplete({ deckId, cartridgeScans: [...scans], countMismatchReason: mismatchReason.trim() });
+		onComplete({ deckId, ovenId, cartridgeScans: [...scans], countMismatchReason: mismatchReason.trim() });
 		mismatchReason = '';
 	}
 
 	function confirmPartialLoad() {
 		if (scans.length === 0) return;
-		onComplete({ deckId, cartridgeScans: [...scans] });
+		onComplete({ deckId, ovenId, cartridgeScans: [...scans] });
 	}
 
 	function undoLastScan() {
@@ -234,6 +276,10 @@
 
 	$effect(() => {
 		if (step === 'deck' && deckInputEl && !isReadonly && !suppressFocus && !deckPendingValue) deckInputEl.focus();
+	});
+
+	$effect(() => {
+		if (step === 'oven' && ovenInputEl && !isReadonly && !suppressFocus && !ovenPendingValue) ovenInputEl.focus();
 	});
 
 	$effect(() => {
@@ -331,6 +377,52 @@
 			{/if}
 			{#if deckError}
 				<p class="mt-2 text-sm text-[var(--color-tron-red)]">{deckError}</p>
+			{/if}
+		</div>
+	{:else if step === 'oven'}
+		<!-- Step 1b: Oven barcode scan — which oven this deck will go into -->
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5">
+			<p class="mb-3 text-xs text-[var(--color-tron-text-secondary)]">
+				Deck <span class="font-mono text-[var(--color-tron-cyan)]">{deckId}</span> confirmed. Scan the oven this deck will go into.
+			</p>
+			{#if !ovenPendingValue}
+				<div>
+					<label for="oven-barcode-input" class="tron-label">Scan Oven Barcode</label>
+					<input
+						bind:this={ovenInputEl}
+						id="oven-barcode-input"
+						type="text"
+						class="tron-input"
+						placeholder="Scan oven barcode..."
+						bind:value={ovenInput}
+						onkeydown={handleOvenKeydown}
+						autocomplete="off"
+					/>
+				</div>
+			{:else}
+				<div class="space-y-3">
+					<p class="text-sm text-[var(--color-tron-text-secondary)]">Scanned oven:</p>
+					<p class="font-mono text-lg font-semibold text-[var(--color-tron-cyan)]">{ovenPendingValue}</p>
+					<div class="flex gap-3">
+						<button
+							type="button"
+							onclick={rescanOven}
+							class="min-h-[44px] rounded-lg border border-[var(--color-tron-border)] px-4 py-3 text-sm text-[var(--color-tron-text-secondary)] transition-all hover:border-[var(--color-tron-cyan)]/30"
+						>
+							Re-scan
+						</button>
+						<button
+							type="button"
+							onclick={confirmOven}
+							class="min-h-[44px] flex-1 rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-6 py-3 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30"
+						>
+							Continue
+						</button>
+					</div>
+				</div>
+			{/if}
+			{#if ovenError}
+				<p class="mt-2 text-sm text-[var(--color-tron-red)]">{ovenError}</p>
 			{/if}
 		</div>
 	{:else}

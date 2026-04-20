@@ -26,12 +26,24 @@ export const actions: Actions = {
 			const userRecord = await User.findOne({ username }).lean();
 
 			if (!userRecord) {
+				const { notifyAdminEvent } = await import('$lib/server/notifications');
+				notifyAdminEvent({
+					event: 'login_failed',
+					summary: `Failed login attempt for unknown username "${username}"`,
+					detailsHtml: `<p>IP: ${event.getClientAddress?.() ?? 'unknown'}</p>`
+				}).catch(() => {});
 				return fail(400, { error: 'Invalid username or password' });
 			}
 
 			const validPassword = await bcrypt.compare(password, userRecord.passwordHash);
 
 			if (!validPassword) {
+				const { notifyAdminEvent } = await import('$lib/server/notifications');
+				notifyAdminEvent({
+					event: 'login_failed',
+					summary: `Failed login attempt for user "${username}"`,
+					detailsHtml: `<p>IP: ${event.getClientAddress?.() ?? 'unknown'}</p>`
+				}).catch(() => {});
 				return fail(400, { error: 'Invalid username or password' });
 			}
 

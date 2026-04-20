@@ -1,5 +1,6 @@
 import { json } from '@sveltejs/kit';
 import { connectDB, Equipment, EquipmentLocation, CartridgeRecord } from '$lib/server/db';
+import { checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ url, locals }) => {
@@ -17,13 +18,32 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 		const deck = await Equipment.findOne({ _id: id, equipmentType: 'deck' }).lean();
 		if (!deck) return json({ error: `Deck "${id}" does not exist. Register it in Equipment → Decks & Trays first.` }, { status: 404 });
 		if ((deck as any).status === 'retired') return json({ error: `Deck "${id}" is retired.` }, { status: 400 });
+		// In-use conflict — checked at scan time so the operator sees it
+		// immediately instead of on submit. `runId` query param lets the
+		// caller's own run be ignored (re-scan case).
+		const ignoreRunId = url.searchParams.get('runId')?.trim() || undefined;
+		const conflict = await checkDeckConflict(id, ignoreRunId);
+		if (conflict) return json({ error: conflict }, { status: 409 });
 		return json({ valid: true, id, name: (deck as any).name ?? id, status: (deck as any).status });
+	}
+
+	if (type === 'oven') {
+		const oven = await Equipment.findOne({ _id: id, equipmentType: 'oven' }).lean()
+			?? await Equipment.findOne({ barcode: id, equipmentType: 'oven' }).lean();
+		if (!oven) return json({ error: `Oven "${id}" does not exist. Register it in Equipment first.` }, { status: 404 });
+		if ((oven as any).status === 'retired' || (oven as any).status === 'offline') {
+			return json({ error: `Oven "${id}" is ${(oven as any).status}.` }, { status: 400 });
+		}
+		return json({ valid: true, id: (oven as any)._id, name: (oven as any).name ?? id, status: (oven as any).status });
 	}
 
 	if (type === 'tray') {
 		const tray = await Equipment.findOne({ _id: id, equipmentType: 'cooling_tray' }).lean();
 		if (!tray) return json({ error: `Tray "${id}" does not exist. Register it in Equipment → Decks & Trays first.` }, { status: 404 });
-		return json({ valid: true, id, status: (tray as any).status });
+		const ignoreRunId = url.searchParams.get('runId')?.trim() || undefined;
+		const conflict = await checkTrayConflict(id, ignoreRunId);
+		if (conflict) return json({ error: conflict }, { status: 409 });
+		return json({ valid: true, id, name: (tray as any).name ?? id, status: (tray as any).status });
 	}
 
 	if (type === 'fridge') {

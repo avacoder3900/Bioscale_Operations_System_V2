@@ -8,17 +8,28 @@
 
 	let { onComplete, readonly: isReadonly = false }: Props = $props();
 
-	let step = $state<1 | 2 | 3 | 4>(1);
+	// Step 1: Scan 15ml Wax Tube
+	// Step 2: Cartridge count
+	// Step 3: Scan 2ml Tube Lot Barcode
+	// Step 4: Fill with 800 microliters (confirm)
+	// Step 5: Confirm 2ml of wax placed in A3 (final — right before deck loading)
+	let step = $state<1 | 2 | 3 | 4 | 5>(1);
 	let sourceLot = $state('');
 	let plannedCartridgeCount = $state(24);
 	let tubeInput = $state('');
 	let tubeError = $state('');
 	let tubeSuccess = $state('');
 	let lotInput = $state('');
+	let lotError = $state('');
 	let lotInputEl: HTMLInputElement | undefined = $state();
 	let tubeInputEl: HTMLInputElement | undefined = $state();
 	let lotPendingValue = $state('');
 	let tubePendingValue = $state('');
+	let waxBatchInfo = $state<{ lotNumber: string; remainingVolumeUl: number } | null>(null);
+	let tubeLotInfo = $state<{ lotNumber: string; partNumber: string; partName: string; quantity: number } | null>(null);
+	let validating = $state(false);
+
+	const FILL_VOLUME_UL = 800;
 
 	function playBeep(success: boolean) {
 		try {
@@ -43,85 +54,142 @@
 		}
 	}
 
-	function confirmWaxPlaced() {
-		step = 2;
-	}
-
-	function handleLotKeydown(e: KeyboardEvent) {
+	async function handleLotKeydown(e: KeyboardEvent) {
 		if (e.key === 'Enter' && lotInput.trim()) {
 			e.preventDefault();
-			lotPendingValue = lotInput.trim();
+			const scanned = lotInput.trim();
 			lotInput = '';
-			playBeep(true);
+			lotError = '';
+			validating = true;
+			try {
+				const res = await fetch(`/api/wax-batch/validate?barcode=${encodeURIComponent(scanned)}`);
+				const body = await res.json();
+				if (!res.ok || body.error) {
+					lotError = body.error ?? 'Wax batch validation failed';
+					playBeep(false);
+					return;
+				}
+				if ((body.batch?.remainingVolumeUl ?? 0) < FILL_VOLUME_UL) {
+					lotError = `Batch ${body.batch.lotNumber} only has ${body.batch.remainingVolumeUl} μL remaining (need ${FILL_VOLUME_UL}).`;
+					playBeep(false);
+					return;
+				}
+				waxBatchInfo = {
+					lotNumber: body.batch.lotNumber,
+					remainingVolumeUl: body.batch.remainingVolumeUl
+				};
+				lotPendingValue = scanned;
+				playBeep(true);
+			} catch (err) {
+				lotError = 'Network error validating wax batch';
+				playBeep(false);
+			} finally {
+				validating = false;
+			}
 		}
 	}
 
 	function confirmLot() {
 		sourceLot = lotPendingValue;
 		lotPendingValue = '';
-		step = 3;
+		step = 2;
 	}
 
 	function rescanLot() {
 		lotPendingValue = '';
+		waxBatchInfo = null;
+		lotError = '';
 		setTimeout(() => lotInputEl?.focus(), 50);
 	}
 
 	function confirmCartridgeCount() {
 		if (plannedCartridgeCount < 1 || plannedCartridgeCount > 24) return;
-		step = 4;
+		step = 3;
 	}
 
-	function handleTubeKeydown(e: KeyboardEvent) {
+	async function handleTubeKeydown(e: KeyboardEvent) {
 		if (e.key === 'Enter' && tubeInput.trim()) {
 			e.preventDefault();
-			tubePendingValue = tubeInput.trim();
+			const scanned = tubeInput.trim();
+			tubeInput = '';
 			tubeError = '';
 			tubeSuccess = '';
-			tubeInput = '';
-			playBeep(true);
+			validating = true;
+			try {
+				const res = await fetch(`/api/receiving-lot/validate?barcode=${encodeURIComponent(scanned)}`);
+				const body = await res.json();
+				if (!res.ok || body.error) {
+					tubeError = body.error ?? '2ml tube lot validation failed';
+					playBeep(false);
+					return;
+				}
+				tubeLotInfo = {
+					lotNumber: body.lot.lotNumber ?? body.lot.lotId,
+					partNumber: body.lot.part?.partNumber ?? '',
+					partName: body.lot.part?.name ?? '',
+					quantity: body.lot.quantity
+				};
+				tubePendingValue = scanned;
+				playBeep(true);
+			} catch (err) {
+				tubeError = 'Network error validating tube lot';
+				playBeep(false);
+			} finally {
+				validating = false;
+			}
 		}
 	}
 
 	function confirmTube() {
-		onComplete({ sourceLot, tubeId: tubePendingValue, plannedCartridgeCount });
+		step = 4;
 	}
 
 	function rescanTube() {
 		tubePendingValue = '';
+		tubeLotInfo = null;
+		tubeError = '';
 		setTimeout(() => tubeInputEl?.focus(), 50);
 	}
 
+	function confirmFill() {
+		step = 5;
+	}
+
+	function confirmWaxPlaced() {
+		// Final step: complete the prep — deductions happen when the run completes
+		onComplete({ sourceLot, tubeId: tubePendingValue, plannedCartridgeCount });
+	}
+
 	function handleLotBlur() {
-		if (step === 2 && !lotPendingValue) setTimeout(() => lotInputEl?.focus(), 100);
+		if (step === 1 && !lotPendingValue) setTimeout(() => lotInputEl?.focus(), 100);
 	}
 
 	function handleTubeBlur() {
-		if (step === 4 && !tubePendingValue) setTimeout(() => tubeInputEl?.focus(), 100);
+		if (step === 3 && !tubePendingValue) setTimeout(() => tubeInputEl?.focus(), 100);
 	}
 
 	$effect(() => {
-		if (step === 2 && lotInputEl && !lotPendingValue) lotInputEl.focus();
+		if (step === 1 && lotInputEl && !lotPendingValue) lotInputEl.focus();
 	});
 
 	$effect(() => {
-		if (step === 4 && tubeInputEl && !tubePendingValue) tubeInputEl.focus();
+		if (step === 3 && tubeInputEl && !tubePendingValue) tubeInputEl.focus();
 	});
 </script>
 
 <div class="space-y-5">
 	<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Wax Preparation</h2>
 	<p class="text-sm text-[var(--color-tron-text-secondary)]">
-		Prepare wax source and incubator tube for the run.
+		Prepare wax source, 2ml incubator tube, and fill it before deck loading.
 	</p>
 
 	{#if isReadonly}
 		<p class="rounded border border-[var(--color-tron-yellow)]/30 bg-[var(--color-tron-yellow)]/5 px-3 py-2 text-xs text-[var(--color-tron-yellow)]">Read-only — viewing past stage</p>
 	{/if}
 
-	<!-- Step indicators (4 steps) -->
+	<!-- Step indicators (5 steps) -->
 	<div class="flex items-center gap-2">
-		{#each [1, 2, 3, 4] as s (s)}
+		{#each [1, 2, 3, 4, 5] as s (s)}
 			<div class="flex items-center gap-2">
 				<div
 					class="flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold {step > s
@@ -144,53 +212,15 @@
 						{s}
 					{/if}
 				</div>
-				{#if s < 4}
+				{#if s < 5}
 					<div class="h-px w-6 {step > s ? 'bg-green-500' : 'bg-[var(--color-tron-border)]'}"></div>
 				{/if}
 			</div>
 		{/each}
 	</div>
 
-	<!-- Step 1: Wax confirmation -->
+	<!-- Step 1: Scan 15ml Wax Tube -->
 	{#if step === 1}
-		<div
-			class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5"
-		>
-			<div class="flex items-start gap-3">
-				<svg
-					class="mt-0.5 h-6 w-6 shrink-0 text-amber-400"
-					fill="none"
-					viewBox="0 0 24 24"
-					stroke="currentColor"
-					stroke-width="1.5"
-				>
-					<path
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"
-					/>
-				</svg>
-				<div>
-					<p class="font-medium text-[var(--color-tron-text)]">
-						Is 2ml of wax placed in A3 of the incubator?
-					</p>
-					<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">
-						Confirm the wax is loaded before proceeding.
-					</p>
-				</div>
-			</div>
-			<button
-				type="button"
-				onclick={confirmWaxPlaced}
-				class="mt-4 min-h-[44px] w-full rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-6 py-3 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30"
-			>
-				Yes, Wax Is Placed
-			</button>
-		</div>
-	{/if}
-
-	<!-- Step 2: Source wax lot scan -->
-	{#if step === 2}
 		<div
 			class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5"
 		>
@@ -214,40 +244,53 @@
 						</svg>
 					</div>
 					<div class="flex-1">
-						<label for="wax-lot-input" class="tron-label">Scan Source Wax Lot</label>
+						<label for="wax-lot-input" class="tron-label">Scan 15ml Wax Tube</label>
 						<input
 							bind:this={lotInputEl}
 							id="wax-lot-input"
 							type="text"
-							class="tron-input"
-							placeholder="Scan wax lot barcode..."
+							class="tron-input {lotError ? 'tron-input-error' : ''}"
+							placeholder="Scan 15ml wax tube barcode..."
 							bind:value={lotInput}
 							onkeydown={handleLotKeydown}
 							onblur={handleLotBlur}
 							autocomplete="off"
+							disabled={validating}
 						/>
 					</div>
 				</div>
 				<button
 					type="button"
 					onclick={async () => {
-					const res = await fetch('/api/dev/test-data?type=oven-lot');
-					if (res.ok) {
-						const data = await res.json();
-						lotInput = data.lotId;
-						handleLotKeydown(new KeyboardEvent('keydown', { key: 'Enter' }));
-					} else {
-						alert('No test lots. Run POST /api/dev/seed-test-inventory first.');
-					}
-				}}
+						const res = await fetch('/api/dev/test-data?type=wax-batch');
+						if (res.ok) {
+							const d = await res.json();
+							lotInput = d.lotBarcode;
+							await handleLotKeydown(new KeyboardEvent('keydown', { key: 'Enter' }));
+						} else {
+							const err = await res.json().catch(() => ({}));
+							lotError = err.error ?? 'Could not fetch/create test wax batch';
+						}
+					}}
 					class="mt-2 rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-orange)] hover:text-[var(--color-tron-orange)]"
 				>
 					Test
 				</button>
+				{#if lotError}
+					<div class="mt-3 rounded-lg border border-red-500/50 bg-red-900/20 p-3">
+						<p class="text-sm font-medium text-red-400">{lotError}</p>
+					</div>
+				{/if}
 			{:else}
 				<div class="space-y-3">
-					<p class="text-sm text-[var(--color-tron-text-secondary)]">Scanned source wax lot:</p>
+					<p class="text-sm text-[var(--color-tron-text-secondary)]">Scanned 15ml wax tube:</p>
 					<p class="font-mono text-lg font-semibold text-[var(--color-tron-cyan)]">{lotPendingValue}</p>
+					{#if waxBatchInfo}
+						<div class="space-y-1 text-xs text-[var(--color-tron-text-secondary)]">
+							<div>Lot: <span class="font-mono text-[var(--color-tron-cyan)]">{waxBatchInfo.lotNumber}</span></div>
+							<div>Remaining: <span class="font-mono text-[var(--color-tron-cyan)]">{waxBatchInfo.remainingVolumeUl.toLocaleString()} μL</span></div>
+						</div>
+					{/if}
 					<div class="flex gap-3">
 						<button
 							type="button"
@@ -269,8 +312,8 @@
 		</div>
 	{/if}
 
-	<!-- Step 3: Planned cartridge count -->
-	{#if step === 3}
+	<!-- Step 2: Planned cartridge count -->
+	{#if step === 2}
 		<div
 			class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5"
 		>
@@ -299,14 +342,14 @@
 				</button>
 
 				<div class="text-xs text-[var(--color-tron-text-secondary)]">
-					Source lot: <span class="font-mono text-[var(--color-tron-cyan)]">{sourceLot}</span>
+					15ml wax tube: <span class="font-mono text-[var(--color-tron-cyan)]">{sourceLot}</span>
 				</div>
 			</div>
 		</div>
 	{/if}
 
-	<!-- Step 4: Incubator tube scan -->
-	{#if step === 4}
+	<!-- Step 3: Scan 2ml Tube Lot Barcode -->
+	{#if step === 3}
 		<div
 			class="space-y-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5"
 		>
@@ -330,23 +373,34 @@
 						</svg>
 					</div>
 					<div class="flex-1">
-						<label for="tube-input" class="tron-label">Scan Incubator Tube</label>
+						<label for="tube-input" class="tron-label">Scan 2ml Tube Lot Barcode</label>
 						<input
 							bind:this={tubeInputEl}
 							id="tube-input"
 							type="text"
 							class="tron-input {tubeError ? 'tron-input-error' : ''}"
-							placeholder="Scan incubator tube barcode..."
+							placeholder="Scan 2ml tube lot barcode..."
 							bind:value={tubeInput}
 							onkeydown={handleTubeKeydown}
 							onblur={handleTubeBlur}
 							autocomplete="off"
+							disabled={validating}
 						/>
 					</div>
 				</div>
 				<button
 					type="button"
-					onclick={() => { tubeInput = generateTestBarcode('ITUB'); handleTubeKeydown(new KeyboardEvent('keydown', { key: 'Enter' })); }}
+					onclick={async () => {
+						const res = await fetch('/api/dev/test-data?type=receiving-lot');
+						if (res.ok) {
+							const d = await res.json();
+							tubeInput = d.lotId;
+							await handleTubeKeydown(new KeyboardEvent('keydown', { key: 'Enter' }));
+						} else {
+							const err = await res.json().catch(() => ({}));
+							tubeError = err.error ?? 'Could not fetch/create test receiving lot';
+						}
+					}}
 					class="mt-2 rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-orange)] hover:text-[var(--color-tron-orange)]"
 				>
 					Test
@@ -363,8 +417,17 @@
 				{/if}
 			{:else}
 				<div class="space-y-3">
-					<p class="text-sm text-[var(--color-tron-text-secondary)]">Scanned incubator tube:</p>
+					<p class="text-sm text-[var(--color-tron-text-secondary)]">Scanned 2ml tube lot:</p>
 					<p class="font-mono text-lg font-semibold text-[var(--color-tron-cyan)]">{tubePendingValue}</p>
+					{#if tubeLotInfo}
+						<div class="space-y-1 text-xs text-[var(--color-tron-text-secondary)]">
+							{#if tubeLotInfo.partNumber}
+								<div>Part: <span class="font-mono text-[var(--color-tron-cyan)]">{tubeLotInfo.partNumber}</span> <span>{tubeLotInfo.partName}</span></div>
+							{/if}
+							<div>Lot: <span class="font-mono text-[var(--color-tron-cyan)]">{tubeLotInfo.lotNumber}</span></div>
+							<div>Quantity available: <span class="font-mono text-[var(--color-tron-cyan)]">{tubeLotInfo.quantity}</span></div>
+						</div>
+					{/if}
 					<div class="flex gap-3">
 						<button
 							type="button"
@@ -386,9 +449,91 @@
 
 			<!-- Reference info -->
 			<div class="space-y-1 text-xs text-[var(--color-tron-text-secondary)]">
-				<div>Source lot: <span class="font-mono text-[var(--color-tron-cyan)]">{sourceLot}</span></div>
+				<div>15ml wax tube: <span class="font-mono text-[var(--color-tron-cyan)]">{sourceLot}</span></div>
 				<div>Planned cartridges: <span class="font-mono text-[var(--color-tron-cyan)]">{plannedCartridgeCount}</span></div>
 			</div>
+		</div>
+	{/if}
+
+	<!-- Step 4: Fill with 800 microliters -->
+	{#if step === 4}
+		<div
+			class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5"
+		>
+			<div class="flex items-start gap-3">
+				<svg
+					class="mt-0.5 h-6 w-6 shrink-0 text-[var(--color-tron-cyan)]"
+					fill="none"
+					viewBox="0 0 24 24"
+					stroke="currentColor"
+					stroke-width="1.5"
+				>
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						d="M12 3v2m0 14v2m-9-9H1m22 0h-2M5.636 5.636l-1.414-1.414M19.778 19.778l-1.414-1.414M5.636 18.364l-1.414 1.414M19.778 4.222l-1.414 1.414M12 8a4 4 0 100 8 4 4 0 000-8z"
+					/>
+				</svg>
+				<div>
+					<p class="text-lg font-semibold text-[var(--color-tron-text)]">
+						Fill with 800 microliters
+					</p>
+					<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">
+						Pipette <span class="font-semibold text-[var(--color-tron-cyan)]">800 μL</span> from the 15ml wax tube into the 2ml incubator tube.
+					</p>
+				</div>
+			</div>
+
+			<div class="mt-4 space-y-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] p-3 text-xs text-[var(--color-tron-text-secondary)]">
+				<div>Source: <span class="font-mono text-[var(--color-tron-cyan)]">{sourceLot}</span> {#if waxBatchInfo}({waxBatchInfo.remainingVolumeUl.toLocaleString()} μL available){/if}</div>
+				<div>Destination: <span class="font-mono text-[var(--color-tron-cyan)]">{tubePendingValue}</span></div>
+			</div>
+
+			<button
+				type="button"
+				onclick={confirmFill}
+				class="mt-4 min-h-[44px] w-full rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-6 py-3 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30"
+			>
+				Confirm Fill Complete
+			</button>
+		</div>
+	{/if}
+
+	<!-- Step 5: Confirm 2ml of wax placed in A3 (right before deck loading) -->
+	{#if step === 5}
+		<div
+			class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5"
+		>
+			<div class="flex items-start gap-3">
+				<svg
+					class="mt-0.5 h-6 w-6 shrink-0 text-amber-400"
+					fill="none"
+					viewBox="0 0 24 24"
+					stroke="currentColor"
+					stroke-width="1.5"
+				>
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"
+					/>
+				</svg>
+				<div>
+					<p class="font-medium text-[var(--color-tron-text)]">
+						Is 2ml of wax placed in A3 of the incubator?
+					</p>
+					<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">
+						Confirm the filled 2ml tube is loaded before proceeding to deck loading.
+					</p>
+				</div>
+			</div>
+			<button
+				type="button"
+				onclick={confirmWaxPlaced}
+				class="mt-4 min-h-[44px] w-full rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-6 py-3 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30"
+			>
+				Yes, Wax Is Placed
+			</button>
 		</div>
 	{/if}
 </div>

@@ -4,7 +4,7 @@
 
 	interface Props {
 		children: Snippet;
-		data: { canManageUsers: boolean; canManageRoles: boolean };
+		data: { canManageUsers: boolean; canManageRoles: boolean; canManageAdmin: boolean };
 	}
 
 	let { children, data }: Props = $props();
@@ -17,6 +17,10 @@
 		}
 		if (data.canManageRoles) {
 			items.push({ href: '/admin/roles', label: 'Roles' });
+		}
+		if (data.canManageAdmin) {
+			items.push({ href: '/admin/notifications', label: 'Notifications' });
+			items.push({ href: '/admin/ask-bims', label: 'Ask BIMS' });
 		}
 		return items;
 	});

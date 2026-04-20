@@ -30,6 +30,7 @@ export { ProductionRun } from './production-run.js';
 export { GeneratedBarcode } from './generated-barcode.js';
 export { ValidationSession } from './validation-session.js';
 export { WaxFillingRun } from './wax-filling-run.js';
+export { WaxBatch } from './wax-batch.js';
 export { ProcessConfiguration } from './process-configuration.js';
 export { ManufacturingSettings } from './manufacturing-settings.js';
 export { LaserCutBatch } from './laser-cut-batch.js';
@@ -60,6 +61,9 @@ export { ServiceTicket } from './service-ticket.js';
 
 // Sensor Configuration
 export { SensorConfig } from './sensor-config.js';
+
+// Notifications
+export { NotificationSettings } from './notification-settings.js';
 
 // Tier 3: Immutable Logs — Temperature
 export { TemperatureReading } from './temperature-reading.js';

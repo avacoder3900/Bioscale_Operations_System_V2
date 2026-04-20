@@ -7,7 +7,7 @@
 		runEndTime: Date;
 		coolingWarningMin: number;
 		deckLockoutMin: number;
-		onComplete: (data: { trayId: string; coolingTimestamp: Date }) => void;
+		onComplete: (data: { trayId: string; coolingTimestamp: Date; ovenLocationId?: string; ovenLocationName?: string }) => void;
 		readonly?: boolean;
 		suppressFocus?: boolean;
 	}
@@ -17,13 +17,20 @@
 	let alarmPlaying = $state(false);
 	let alarmDismissed = $state(false);
 
-	type Step = 'scan_tray' | 'confirm_cooling' | 'place_deck';
+	type Step = 'scan_tray' | 'confirm_cooling' | 'place_deck' | 'scan_oven';
 
 	let step = $state<Step>('scan_tray');
 	let trayId = $state('');
 	let trayInput = $state('');
 	let trayPendingValue = $state('');
 	let coolingTimestamp = $state<Date | null>(null);
+
+	// Oven scan state for step 4 (scan oven before "Deck Placed in Oven")
+	let ovenInput = $state('');
+	let ovenError = $state('');
+	let ovenValidating = $state(false);
+	let ovenResult = $state<{ id: string; name: string } | null>(null);
+	let ovenInputEl: HTMLInputElement | undefined = $state();
 	let tick = $state(0);
 	let inputEl: HTMLInputElement | undefined = $state();
 
@@ -171,7 +178,39 @@
 
 	function handleDeckPlaced() {
 		if (!coolingTimestamp) return;
-		onComplete({ trayId, coolingTimestamp });
+		// Go to oven scan step before completing
+		step = 'scan_oven';
+		ovenInput = '';
+		ovenError = '';
+		ovenResult = null;
+		setTimeout(() => ovenInputEl?.focus(), 100);
+	}
+
+	async function handleOvenKeydown(e: KeyboardEvent) {
+		if (e.key !== 'Enter' || !ovenInput.trim()) return;
+		e.preventDefault();
+		const value = ovenInput.trim();
+		ovenInput = '';
+		ovenError = '';
+		ovenValidating = true;
+		try {
+			const res = await fetch(`/api/dev/validate-equipment?type=oven&id=${encodeURIComponent(value)}`);
+			const result = await res.json();
+			if (!res.ok || result.error) {
+				ovenError = result.error ?? `Oven "${value}" not found.`;
+			} else {
+				ovenResult = { id: result.id ?? value, name: result.name ?? value };
+			}
+		} catch {
+			ovenError = 'Validation failed';
+		} finally {
+			ovenValidating = false;
+		}
+	}
+
+	function confirmOvenPlacement() {
+		if (!coolingTimestamp || !ovenResult) return;
+		onComplete({ trayId, coolingTimestamp, ovenLocationId: ovenResult.id, ovenLocationName: ovenResult.name });
 	}
 </script>
 
@@ -376,6 +415,50 @@
 			>
 				Deck Placed in Oven
 			</button>
+		</div>
+	{/if}
+
+	<!-- Step 4: Scan oven barcode for curing -->
+	{#if step === 'scan_oven'}
+		<div class="space-y-4">
+			<div class="rounded-lg border border-amber-500/50 bg-amber-900/10 p-4 text-center">
+				<p class="text-lg font-bold text-amber-300">Scan Oven Barcode</p>
+				<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">
+					Scan the oven where the deck is being placed for post-wax curing.
+				</p>
+			</div>
+
+			{#if !ovenResult}
+				<div>
+					<input
+						bind:this={ovenInputEl}
+						type="text"
+						bind:value={ovenInput}
+						onkeydown={handleOvenKeydown}
+						placeholder="Scan oven barcode..."
+						disabled={ovenValidating}
+						class="min-h-[44px] w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text)] placeholder-[var(--color-tron-text-secondary)] focus:border-amber-400 focus:outline-none"
+					/>
+					{#if ovenError}
+						<p class="mt-2 text-sm text-red-400">{ovenError}</p>
+					{/if}
+					{#if ovenValidating}
+						<p class="mt-2 text-sm text-[var(--color-tron-text-secondary)]">Validating...</p>
+					{/if}
+				</div>
+			{:else}
+				<div class="rounded-lg border border-green-500/30 bg-green-900/10 p-4 text-center">
+					<p class="text-sm text-green-400">Oven verified:</p>
+					<p class="mt-1 font-mono text-xl font-bold text-green-300">{ovenResult.name}</p>
+				</div>
+				<button
+					type="button"
+					onclick={confirmOvenPlacement}
+					class="min-h-[44px] w-full rounded-lg border border-green-500/50 bg-green-900/20 px-8 py-4 text-lg font-bold text-green-400 transition-all hover:bg-green-900/30"
+				>
+					Confirm — Deck Placed in {ovenResult.name}
+				</button>
+			{/if}
 		</div>
 	{/if}
 </div>
