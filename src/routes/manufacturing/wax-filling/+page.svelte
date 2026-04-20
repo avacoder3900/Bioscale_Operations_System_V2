@@ -293,19 +293,59 @@
 			});
 			clearTimeout(timeout);
 			clearTimeout(slowTimer);
-			if (!res.ok) {
+			const text = await res.text();
+			if (!res.ok || text.includes('"type":"failure"')) {
+				// Parse SvelteKit action response — supports both plain JSON
+				// ({error: "..."}) and devalue-serialized failures
+				// ({type: "failure", data: "[{\"error\":1},\"...msg...\"]"}).
+				// The old regex choked on error messages that contained quotes
+				// (e.g. Deck "DECK-001" is on...), truncating to the first word.
 				let serverError = `Action failed (HTTP ${res.status})`;
 				try {
-					const text = await res.text();
-					const match = text.match(/error[^"]*"([^"]+)"/);
-					if (match?.[1]) serverError = match[1];
-				} catch { /* ignore parse error */ }
+					const json = JSON.parse(text);
+					if (json.type === 'failure' && json.data != null) {
+						if (typeof json.data === 'string') {
+							const parsed = JSON.parse(json.data);
+							if (Array.isArray(parsed)) {
+								for (let i = 1; i < parsed.length; i++) {
+									if (typeof parsed[i] === 'string' && parsed[i].length > 3) {
+										serverError = parsed[i];
+										break;
+									}
+								}
+							}
+						} else if (Array.isArray(json.data)) {
+							for (let i = 1; i < json.data.length; i++) {
+								if (typeof json.data[i] === 'string' && json.data[i].length > 3) {
+									serverError = json.data[i];
+									break;
+								}
+							}
+						} else if (json.data?.error) {
+							serverError = json.data.error;
+						}
+					} else if (json.error) {
+						serverError = json.error;
+					}
+				} catch {
+					// Fallback: find the longest readable string in the body
+					const strings = text.match(/"([^"\\]{10,})"/g);
+					if (strings) {
+						const msg = strings[strings.length - 1].slice(1, -1);
+						if (msg && !msg.includes('{')) serverError = msg;
+					}
+				}
 				// Store failed loadDeck action for admin override
 				if (action === 'loadDeck') {
 					pendingOverrideAction = action;
 					pendingOverrideData = formData;
 				}
 				errorMsg = serverError;
+				// Scroll the error banner into view — on the deck grid the
+				// banner is above the fold and easy to miss otherwise.
+				requestAnimationFrame(() => {
+					document.querySelector('[data-error-banner]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+				});
 				await invalidateAll();
 				return;
 			}
@@ -645,7 +685,7 @@
 	{/if}
 
 	{#if errorMsg}
-		<div class="rounded border border-red-500/30 bg-red-900/30 px-4 py-3 text-sm text-red-300">
+		<div data-error-banner class="rounded border border-red-500/30 bg-red-900/30 px-4 py-3 text-sm text-red-300">
 			<div class="flex items-center justify-between gap-2">
 				<span>{errorMsg}</span>
 				<div class="flex shrink-0 items-center gap-2">
