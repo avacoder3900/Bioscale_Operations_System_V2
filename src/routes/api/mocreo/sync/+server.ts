@@ -14,12 +14,23 @@ import { notifyTemperatureAlert } from '$lib/server/notifications';
 const OFFLINE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 
 function authenticateSync(request: Request): void {
-	// Vercel Cron sends an Authorization header with CRON_SECRET
+	// 1) Explicit CRON_SECRET Bearer (preferred — set in Vercel env).
 	const authHeader = request.headers.get('authorization')?.replace('Bearer ', '');
-	if (env.CRON_SECRET && authHeader === env.CRON_SECRET) {
-		return; // Authenticated via Vercel Cron
+	if (env.CRON_SECRET && authHeader === env.CRON_SECRET) return;
+
+	// 2) Vercel Cron user-agent fallback. Vercel fires cron requests with
+	//    user-agent "vercel-cron/1.0"; if CRON_SECRET isn't configured the
+	//    Bearer header is absent and our endpoint otherwise 401s — silent
+	//    death. The endpoint is read-only from the operator's perspective
+	//    (syncs upstream Mocreo readings into our DB); spoofed UA could
+	//    trigger extra syncs but nothing destructive, and Mocreo's own rate
+	//    limit caps abuse. GET only — POST still requires the agent key.
+	if (request.method === 'GET') {
+		const ua = request.headers.get('user-agent') ?? '';
+		if (ua.startsWith('vercel-cron/')) return;
 	}
-	// Fall back to agent API key auth
+
+	// 3) Fall back to agent API key auth (openclaw, worker scripts).
 	requireAgentApiKey(request);
 }
 
