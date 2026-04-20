@@ -40,18 +40,23 @@ export async function checkRobotConflict(robotId: string): Promise<string | null
 	return null;
 }
 
-/** Is this deck bound to any non-terminal wax OR reagent run? */
+/**
+ * Is this deck bound to any run that still physically has it?
+ * The deck is only truly "in use" during page-owned stages. Once status
+ * moves past the filling page (QC/Storage for wax, Top Sealing/Storage
+ * for reagent), the cartridges are off the deck and it's free for reuse.
+ */
 export async function checkDeckConflict(deckId: string, ignoreRunId?: string): Promise<string | null> {
 	if (!deckId) return null;
 	const [wax, reagent] = await Promise.all([
 		WaxFillingRun.findOne({
 			deckId,
-			status: { $in: WAX_NON_TERMINAL },
+			status: { $in: WAX_PAGE_OWNED },
 			...(ignoreRunId ? { _id: { $ne: ignoreRunId } } : {})
 		}).select('_id status').lean() as any,
 		ReagentBatchRecord.findOne({
 			deckId,
-			status: { $in: REAGENT_NON_TERMINAL },
+			status: { $in: REAGENT_PAGE_OWNED },
 			...(ignoreRunId ? { _id: { $ne: ignoreRunId } } : {})
 		}).select('_id status').lean() as any
 	]);

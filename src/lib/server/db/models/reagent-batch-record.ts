@@ -88,21 +88,22 @@ reagentBatchRecordSchema.index({ 'robot._id': 1 });
 reagentBatchRecordSchema.index({ status: 1, createdAt: -1 });
 reagentBatchRecordSchema.index({ 'cartridgesFilled.cartridgeId': 1 });
 
-// Non-terminal = run still has physical resources bound to it.
+// Robot + deck are held through the filling-page-owned stages only.
+// Once status passes those (Top Sealing / Storage), the deck is off and
+// free to reuse — but cartridges still sit on the holding tray through
+// Storage, so the tray uniqueness window is wider (non-terminal).
+const REAGENT_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Inspection',
+	'setup', 'loading', 'running', 'inspection'];
 const REAGENT_NON_TERMINAL = ['Setup', 'Loading', 'Running', 'Inspection', 'Top Sealing', 'Storage',
 	'setup', 'loading', 'running', 'inspection', 'top_sealing', 'storage'];
 
-// Partial unique indexes — one run per robot / deck / holding tray at a time.
-// Only enforced while non-terminal; indexes allow reuse after Completed /
-// Aborted / Cancelled. Cross-process uniqueness (wax vs reagent) is enforced
-// at the app layer in createRun / loadDeck / tray-scan actions.
 reagentBatchRecordSchema.index(
 	{ 'robot._id': 1 },
-	{ unique: true, partialFilterExpression: { status: { $in: REAGENT_NON_TERMINAL }, 'robot._id': { $exists: true } }, name: 'robot_active_unique' }
+	{ unique: true, partialFilterExpression: { status: { $in: REAGENT_PAGE_OWNED }, 'robot._id': { $exists: true } }, name: 'robot_active_unique' }
 );
 reagentBatchRecordSchema.index(
 	{ deckId: 1 },
-	{ unique: true, partialFilterExpression: { status: { $in: REAGENT_NON_TERMINAL }, deckId: { $exists: true } }, name: 'deck_active_unique' }
+	{ unique: true, partialFilterExpression: { status: { $in: REAGENT_PAGE_OWNED }, deckId: { $exists: true } }, name: 'deck_active_unique' }
 );
 reagentBatchRecordSchema.index(
 	{ trayId: 1 },
