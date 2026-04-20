@@ -118,10 +118,7 @@ export const actions: Actions = {
 		const run = await ReagentBatchRecord.findById(runId).lean() as any;
 		if (!run) return fail(404, { error: 'Run not found' });
 
-		if (trayId) {
-			const trayErr = await checkTrayConflict(trayId, runId);
-			if (trayErr) return fail(400, { error: trayErr });
-		}
+		// Tray conflict runs at scan time on the page. No duplicate check here.
 
 		const rejectedMap = new Map(rejectedCartridges.map((c: any) => [c.cartridgeId, c]));
 		const updatedCartridges = (run.cartridgesFilled ?? []).map((cf: any) => {

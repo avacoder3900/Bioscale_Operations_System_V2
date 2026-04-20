@@ -516,13 +516,8 @@ export const actions: Actions = {
 		const ovenId = (data.get('ovenId') as string) || undefined;
 		const cartridgeScansRaw = data.get('cartridgeScans') as string;
 
-		// Cross-process deck check — reject if this deck is already on another
-		// non-terminal wax OR reagent run. ignoreRunId lets the current run
-		// re-submit loadDeck without self-conflict.
-		if (deckId) {
-			const deckErr = await checkDeckConflict(deckId, runId);
-			if (deckErr) return fail(400, { error: deckErr });
-		}
+		// Deck conflict check runs at scan time (see /api/dev/validate-equipment
+		// ?type=deck). No duplicate check here — this action is the commit.
 
 		let cartridgeIds: string[] = [];
 		if (cartridgeScansRaw) {
@@ -708,12 +703,8 @@ export const actions: Actions = {
 
 		if (!runId) return fail(404, { error: 'Run not found' });
 
-		// Cross-process tray check — reject if this tray is already bound to
-		// another non-terminal wax or reagent run.
-		if (coolingTrayId) {
-			const trayErr = await checkTrayConflict(coolingTrayId, runId);
-			if (trayErr) return fail(400, { error: trayErr });
-		}
+		// Tray conflict runs at scan time (see /api/dev/validate-equipment
+		// ?type=tray). No duplicate check here.
 
 		const update: Record<string, any> = { status: 'QC', coolingConfirmedTime: now, coolingConfirmedAt: now };
 		if (coolingTrayId) update.coolingTrayId = coolingTrayId;

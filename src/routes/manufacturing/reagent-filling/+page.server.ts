@@ -358,12 +358,8 @@ export const actions: Actions = {
 		const cartridgeScansRaw = data.get('cartridgeScans') as string;
 		const adminUser = (data.get('adminUser') as string) || undefined;
 
-		// Cross-process deck check — reject if this deck is already on another
-		// non-terminal wax OR reagent run.
-		if (deckId) {
-			const deckErr = await checkDeckConflict(deckId, runId);
-			if (deckErr) return fail(400, { error: deckErr });
-		}
+		// Deck conflict check runs at scan time (see /api/dev/validate-equipment
+		// ?type=deck). No duplicate check here.
 
 		let cartridgeScans: { cartridgeId: string; deckPosition: number }[] = [];
 		if (cartridgeScansRaw) {
@@ -579,12 +575,8 @@ export const actions: Actions = {
 		const run = await ReagentBatchRecord.findById(runId).lean() as any;
 		if (!run) return fail(404, { error: 'Run not found' });
 
-		// Cross-process tray check — reject if this tray is already bound to
-		// another non-terminal wax or reagent run.
-		if (trayId) {
-			const trayErr = await checkTrayConflict(trayId, runId);
-			if (trayErr) return fail(400, { error: trayErr });
-		}
+		// Tray conflict runs at scan time (see /api/dev/validate-equipment
+		// ?type=tray). No duplicate check here.
 
 		// Build update for each cartridge's inspection status
 		const rejectedMap = new Map(rejectedCartridges.map((c: any) => [c.cartridgeId, c]));
