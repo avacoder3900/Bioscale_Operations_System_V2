@@ -82,13 +82,19 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			}))
 		}));
 
-		// Get reagent definitions for the active run's assay type (or all if no run)
+		// This page owns stages Setup → Loading → Running → Inspection.
+		// Pre-OT-2 stages have robotReleasedAt unset; Inspection is post-OT-2
+		// (completeRunFilling sets robotReleasedAt) but still renders here.
+		// The filter is status-based, not robotReleasedAt-based, so an
+		// Inspection run keeps loading its cartridges on this page after the
+		// OT-2 handoff. Top Sealing / Storage runs live on Opentron Control
+		// and must NOT match.
+		const PAGE_OWNED_STATUSES = ['Setup', 'Loading', 'Running', 'Inspection', 'setup', 'running'];
 		let activeRun: any = null;
 		if (robotId) {
 			activeRun = await ReagentBatchRecord.findOne({
 				'robot._id': robotId,
-				status: { $nin: [...TERMINAL] },
-				robotReleasedAt: { $exists: false }
+				status: { $in: PAGE_OWNED_STATUSES }
 			}).sort({ createdAt: -1 }).lean().catch(() => null);
 		}
 
