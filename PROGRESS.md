@@ -20,7 +20,7 @@ PRD: `docs/migration/prds/DOMAIN-12-OPENTRONS-CLONE-PROD-READY.md`
 | Story | Title | Status | Commit |
 |-------|-------|--------|--------|
 | OT-A | Runtime parameters form | ✅ done | `81c36e2` |
-| OT-B | Deck / labware setup checklist | ✅ done | (this commit) |
+| OT-B | Deck / labware setup checklist | ✅ done | `f83b938` |
 | OT-C | Pipette attach confirmation | ⏳ pending | — |
 | OT-D1 | Maintenance-run session wrapper | ⏳ pending | — |
 | OT-D2 | LPC wizard UI | ⏳ pending | — |
