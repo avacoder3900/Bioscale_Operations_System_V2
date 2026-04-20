@@ -10,6 +10,7 @@ import {
 	ManufacturingSettings, Equipment, EquipmentLocation, generateId, AuditLog
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
+import { checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import type { PageServerLoad, Actions } from './$types';
 
 export const config = { maxDuration: 60 };
@@ -116,6 +117,11 @@ export const actions: Actions = {
 
 		const run = await ReagentBatchRecord.findById(runId).lean() as any;
 		if (!run) return fail(404, { error: 'Run not found' });
+
+		if (trayId) {
+			const trayErr = await checkTrayConflict(trayId, runId);
+			if (trayErr) return fail(400, { error: trayErr });
+		}
 
 		const rejectedMap = new Map(rejectedCartridges.map((c: any) => [c.cartridgeId, c]));
 		const updatedCartridges = (run.cartridgesFilled ?? []).map((cf: any) => {

@@ -19,4 +19,24 @@ const waxFillingRunSchema = new Schema({
 	cartridgeIds: [String]
 }, { timestamps: true });
 
+// Non-terminal = run still has physical resources bound to it.
+const WAX_NON_TERMINAL = ['Setup', 'Loading', 'Running', 'Awaiting Removal', 'QC', 'Storage',
+	'setup', 'loading', 'running', 'awaiting_removal', 'cooling', 'qc', 'storage'];
+
+// Partial unique indexes — one run per robot / deck / cooling tray at a time.
+// Only enforced while the run is non-terminal; indexes allow reuse after
+// Completed / Aborted / Cancelled.
+waxFillingRunSchema.index(
+	{ 'robot._id': 1 },
+	{ unique: true, partialFilterExpression: { status: { $in: WAX_NON_TERMINAL }, 'robot._id': { $exists: true } }, name: 'robot_active_unique' }
+);
+waxFillingRunSchema.index(
+	{ deckId: 1 },
+	{ unique: true, partialFilterExpression: { status: { $in: WAX_NON_TERMINAL }, deckId: { $exists: true } }, name: 'deck_active_unique' }
+);
+waxFillingRunSchema.index(
+	{ coolingTrayId: 1 },
+	{ unique: true, partialFilterExpression: { status: { $in: WAX_NON_TERMINAL }, coolingTrayId: { $exists: true } }, name: 'tray_active_unique' }
+);
+
 export const WaxFillingRun = mongoose.models.WaxFillingRun || mongoose.model('WaxFillingRun', waxFillingRunSchema, 'wax_filling_runs');

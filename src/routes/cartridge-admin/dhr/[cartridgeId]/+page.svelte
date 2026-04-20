@@ -122,6 +122,43 @@
 		{/if}
 	</div>
 
+	<!-- Timing metrics (informational — cool time for wax, seal time for reagent) -->
+	{#if data.timings?.cool || data.timings?.seal}
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
+			<h2 class="mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Timing</h2>
+			<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+				{#if data.timings.cool}
+					<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] p-3">
+						<p class="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Wax Cool Time</p>
+						<p class="mt-1 text-xl font-bold {data.timings.cool.overThresholdMin ? 'text-[var(--color-tron-yellow)]' : 'text-[var(--color-tron-text)]'}">
+							{data.timings.cool.display}
+						</p>
+						<p class="mt-0.5 text-xs text-[var(--color-tron-text-secondary)]">
+							OT-2 fill end → cooled
+							{#if data.timings.cool.overThresholdMin}
+								&middot; <span class="text-[var(--color-tron-yellow)]">+{data.timings.cool.overThresholdMin} min over threshold</span>
+							{/if}
+						</p>
+					</div>
+				{/if}
+				{#if data.timings.seal}
+					<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] p-3">
+						<p class="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Reagent Seal Time</p>
+						<p class="mt-1 text-xl font-bold {data.timings.seal.overThresholdMin ? 'text-[var(--color-tron-yellow)]' : 'text-[var(--color-tron-text)]'}">
+							{data.timings.seal.display}
+						</p>
+						<p class="mt-0.5 text-xs text-[var(--color-tron-text-secondary)]">
+							OT-2 fill end → top seal
+							{#if data.timings.seal.overThresholdMin}
+								&middot; <span class="text-[var(--color-tron-yellow)]">+{data.timings.seal.overThresholdMin} min over threshold</span>
+							{/if}
+						</p>
+					</div>
+				{/if}
+			</div>
+		</div>
+	{/if}
+
 	<!-- Phase progress bar -->
 	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
 		<h2 class="mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Manufacturing Progress</h2>

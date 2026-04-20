@@ -7,6 +7,7 @@ import { recordTransaction, resolvePartId } from '$lib/server/services/inventory
 import { isAdmin } from '$lib/server/permissions';
 import { User } from '$lib/server/db';
 import { notifyLowWaxBatch, notifyRunLifecycle, shouldWarnLowWax } from '$lib/server/notifications';
+import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import bcrypt from 'bcryptjs';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -424,17 +425,12 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const robotId = (data.get('robotId') as string) ?? url.searchParams.get('robot') ?? '';
 
-		// Block a new wax run while any run on this robot is still in a
-		// wax-filling-page-owned stage (Setup → Awaiting Removal). Runs past
-		// that (QC / Storage) live on Opentron Control and don't block.
-		const existingRun = await WaxFillingRun.findOne({
-			'robot._id': robotId,
-			status: { $in: [...PAGE_OWNED_STAGES] }
-		}).lean() as any;
-
-		if (existingRun) {
-			return fail(400, { error: 'This robot already has an active wax filling run.' });
-		}
+		// Cross-process robot conflict check — blocks if ANY wax OR reagent run
+		// on this robot is in a page-owned stage. The partial unique index on
+		// wax_filling_runs catches within-collection races; this catches the
+		// cross-collection case (reagent already on this robot).
+		const robotErr = await checkRobotConflict(robotId);
+		if (robotErr) return fail(400, { error: robotErr });
 
 		const robotDoc = await Equipment.findOne({ _id: robotId, equipmentType: 'robot' }, { _id: 1, name: 1 }).lean() as any;
 		const run = await WaxFillingRun.create({
@@ -519,6 +515,14 @@ export const actions: Actions = {
 		const deckId = (data.get('deckId') as string) || undefined;
 		const ovenId = (data.get('ovenId') as string) || undefined;
 		const cartridgeScansRaw = data.get('cartridgeScans') as string;
+
+		// Cross-process deck check — reject if this deck is already on another
+		// non-terminal wax OR reagent run. ignoreRunId lets the current run
+		// re-submit loadDeck without self-conflict.
+		if (deckId) {
+			const deckErr = await checkDeckConflict(deckId, runId);
+			if (deckErr) return fail(400, { error: deckErr });
+		}
 
 		let cartridgeIds: string[] = [];
 		if (cartridgeScansRaw) {
@@ -703,6 +707,13 @@ export const actions: Actions = {
 		const now = new Date();
 
 		if (!runId) return fail(404, { error: 'Run not found' });
+
+		// Cross-process tray check — reject if this tray is already bound to
+		// another non-terminal wax or reagent run.
+		if (coolingTrayId) {
+			const trayErr = await checkTrayConflict(coolingTrayId, runId);
+			if (trayErr) return fail(400, { error: trayErr });
+		}
 
 		const update: Record<string, any> = { status: 'QC', coolingConfirmedTime: now, coolingConfirmedAt: now };
 		if (coolingTrayId) update.coolingTrayId = coolingTrayId;

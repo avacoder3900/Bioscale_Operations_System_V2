@@ -4,6 +4,7 @@ import {
 	ManufacturingSettings, WaxFillingRun, Equipment, EquipmentLocation, generateId, AuditLog
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
+import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import type { PageServerLoad, Actions } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -261,16 +262,12 @@ export const actions: Actions = {
 		// Resolve robot name from layout data (if available)
 		const robotName = (data.get('robotName') as string) || robotId;
 
-		// Block a new run while any run on this robot is still in a
-		// reagent-filling-page-owned stage (Setup → Inspection). Runs past
-		// Inspection (Top Sealing / Storage) live on the Opentron Control
-		// post-OT-2 queue and don't block starting a new filling run.
-		const existing = await ReagentBatchRecord.findOne({
-			'robot._id': robotId,
-			status: { $in: ['Setup', 'Loading', 'Running', 'Inspection',
-				'setup', 'loading', 'running', 'inspection'] }
-		}).lean();
-		if (existing) return fail(400, { error: 'Robot already has an active run. Complete or cancel it first.' });
+		// Cross-process robot conflict — blocks if ANY wax OR reagent run on
+		// this robot is in a page-owned stage. Partial unique index on the
+		// reagent_batch_records collection handles the within-collection race;
+		// this catches the cross-collection case (wax already on this robot).
+		const robotErr = await checkRobotConflict(robotId);
+		if (robotErr) return fail(400, { error: robotErr });
 
 		let assayRef = null;
 		if (assayTypeId) {
@@ -360,6 +357,13 @@ export const actions: Actions = {
 		const deckId = (data.get('deckId') as string) || undefined;
 		const cartridgeScansRaw = data.get('cartridgeScans') as string;
 		const adminUser = (data.get('adminUser') as string) || undefined;
+
+		// Cross-process deck check — reject if this deck is already on another
+		// non-terminal wax OR reagent run.
+		if (deckId) {
+			const deckErr = await checkDeckConflict(deckId, runId);
+			if (deckErr) return fail(400, { error: deckErr });
+		}
 
 		let cartridgeScans: { cartridgeId: string; deckPosition: number }[] = [];
 		if (cartridgeScansRaw) {
@@ -574,6 +578,13 @@ export const actions: Actions = {
 		if (!runId) return fail(404, { error: 'Run not found' });
 		const run = await ReagentBatchRecord.findById(runId).lean() as any;
 		if (!run) return fail(404, { error: 'Run not found' });
+
+		// Cross-process tray check — reject if this tray is already bound to
+		// another non-terminal wax or reagent run.
+		if (trayId) {
+			const trayErr = await checkTrayConflict(trayId, runId);
+			if (trayErr) return fail(400, { error: trayErr });
+		}
 
 		// Build update for each cartridge's inspection status
 		const rejectedMap = new Map(rejectedCartridges.map((c: any) => [c.cartridgeId, c]));

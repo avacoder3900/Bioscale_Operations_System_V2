@@ -88,6 +88,27 @@ reagentBatchRecordSchema.index({ 'robot._id': 1 });
 reagentBatchRecordSchema.index({ status: 1, createdAt: -1 });
 reagentBatchRecordSchema.index({ 'cartridgesFilled.cartridgeId': 1 });
 
+// Non-terminal = run still has physical resources bound to it.
+const REAGENT_NON_TERMINAL = ['Setup', 'Loading', 'Running', 'Inspection', 'Top Sealing', 'Storage',
+	'setup', 'loading', 'running', 'inspection', 'top_sealing', 'storage'];
+
+// Partial unique indexes — one run per robot / deck / holding tray at a time.
+// Only enforced while non-terminal; indexes allow reuse after Completed /
+// Aborted / Cancelled. Cross-process uniqueness (wax vs reagent) is enforced
+// at the app layer in createRun / loadDeck / tray-scan actions.
+reagentBatchRecordSchema.index(
+	{ 'robot._id': 1 },
+	{ unique: true, partialFilterExpression: { status: { $in: REAGENT_NON_TERMINAL }, 'robot._id': { $exists: true } }, name: 'robot_active_unique' }
+);
+reagentBatchRecordSchema.index(
+	{ deckId: 1 },
+	{ unique: true, partialFilterExpression: { status: { $in: REAGENT_NON_TERMINAL }, deckId: { $exists: true } }, name: 'deck_active_unique' }
+);
+reagentBatchRecordSchema.index(
+	{ trayId: 1 },
+	{ unique: true, partialFilterExpression: { status: { $in: REAGENT_NON_TERMINAL }, trayId: { $exists: true } }, name: 'tray_active_unique' }
+);
+
 applySacredMiddleware(reagentBatchRecordSchema);
 
 export const ReagentBatchRecord = mongoose.models.ReagentBatchRecord || mongoose.model('ReagentBatchRecord', reagentBatchRecordSchema, 'reagent_batch_records');
