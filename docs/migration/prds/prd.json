@@ -240,7 +240,7 @@
       "branch": "feature/opentrons-clone-ui",
       "dependencies": ["AUTH", "EQUIPMENT"],
       "stories": [
-        { "id": "OT-A", "title": "Runtime parameters form", "status": "pending" },
+        { "id": "OT-A", "title": "Runtime parameters form", "status": "done" },
         { "id": "OT-B", "title": "Deck / labware setup checklist", "status": "pending", "dependsOn": ["OT-A"] },
         { "id": "OT-C", "title": "Pipette attach confirmation", "status": "pending" },
         { "id": "OT-D1", "title": "Maintenance-run session wrapper + typed helpers", "status": "pending" },
