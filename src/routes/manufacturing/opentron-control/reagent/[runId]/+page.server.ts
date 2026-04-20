@@ -358,39 +358,57 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-	completeRun: async ({ request, locals }) => {
+	completeRun: async ({ request, locals, params }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = (data.get('runId') as string)?.trim() || (params.runId as string);
 		const now = new Date();
+
+		if (!runId) return fail(404, { error: 'Run not found' });
+
+		// Sacred middleware blocks findOneAndUpdate once finalizedAt is set,
+		// so if the user retries after a successful first complete the server
+		// would throw E500. Check upfront — if already Completed, just redirect
+		// like the first click would have.
+		const existing = await ReagentBatchRecord.findById(runId)
+			.select('status finalizedAt').lean() as any;
+		if (!existing) return fail(404, { error: 'Run not found' });
+		if (existing.status === 'Completed' || existing.finalizedAt) {
+			redirect(303, '/manufacturing/opentron-control');
+		}
 
 		const run = await ReagentBatchRecord.findByIdAndUpdate(runId, {
 			$set: { status: 'Completed', finalizedAt: now, runEndTime: now }
 		}, { new: true }).lean() as any;
 
-		if (run?.deckId) {
-			const cartridgeCount = run?.cartridgesFilled?.length ?? 0;
-			await Equipment.findByIdAndUpdate(run.deckId, {
-				$set: { lastUsed: now },
-				$push: {
-					usageLog: {
-						_id: generateId(), usageType: 'run_complete', runId: run._id,
-						quantityChanged: cartridgeCount,
-						operator: { _id: locals.user._id, username: locals.user.username },
-						notes: `Reagent filling run complete — ${cartridgeCount} cartridges filled`,
-						createdAt: now
+		// Equipment + audit writes are best-effort: if they fail we still want
+		// the redirect (the run is already completed in the source of truth).
+		try {
+			if (run?.deckId) {
+				const cartridgeCount = run?.cartridgesFilled?.length ?? 0;
+				await Equipment.findByIdAndUpdate(run.deckId, {
+					$set: { lastUsed: now },
+					$push: {
+						usageLog: {
+							_id: generateId(), usageType: 'run_complete', runId: run._id,
+							quantityChanged: cartridgeCount,
+							operator: { _id: locals.user._id, username: locals.user.username },
+							notes: `Reagent filling run complete — ${cartridgeCount} cartridges filled`,
+							createdAt: now
+						}
 					}
-				}
+				});
+			}
+			await AuditLog.create({
+				_id: generateId(), tableName: 'reagent_batch_records', recordId: runId,
+				action: 'UPDATE', changedBy: locals.user?.username, changedAt: now,
+				newData: { status: 'Completed' }
 			});
+		} catch (e) {
+			console.error('[completeRun] post-update side-effect failed:', e instanceof Error ? e.message : e);
 		}
 
-		await AuditLog.create({
-			_id: generateId(), tableName: 'reagent_batch_records', recordId: runId,
-			action: 'UPDATE', changedBy: locals.user?.username, changedAt: now,
-			newData: { status: 'Completed' }
-		});
-
-		throw redirect(303, '/manufacturing/opentron-control');
+		redirect(303, '/manufacturing/opentron-control');
 	}
 };
