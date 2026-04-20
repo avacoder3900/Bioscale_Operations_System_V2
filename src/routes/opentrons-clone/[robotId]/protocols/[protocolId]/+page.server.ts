@@ -28,8 +28,10 @@ export const load: PageServerLoad = async ({ params }) => {
 	let analyses: any[] = [];
 	let latestAnalysis: any = null;
 	let dataFiles: any[] = [];
+	let instruments: any[] = [];
 	let online = true;
 	let dataFilesReachable = true;
+	let instrumentsReachable = true;
 
 	try {
 		const detailRes = await (client as any).GET('/protocols/{protocolId}', {
@@ -73,6 +75,14 @@ export const load: PageServerLoad = async ({ params }) => {
 		dataFilesReachable = false;
 	}
 
+	try {
+		const res = await (client as any).GET('/instruments', {});
+		if (res.error !== undefined) instrumentsReachable = false;
+		else instruments = res.data?.data ?? [];
+	} catch {
+		instrumentsReachable = false;
+	}
+
 	return {
 		robot: JSON.parse(JSON.stringify(robot)),
 		protocolId: params.protocolId,
@@ -81,7 +91,9 @@ export const load: PageServerLoad = async ({ params }) => {
 		analyses: JSON.parse(JSON.stringify(analyses)),
 		latestAnalysis: JSON.parse(JSON.stringify(latestAnalysis)),
 		dataFiles: JSON.parse(JSON.stringify(dataFiles)),
-		dataFilesReachable
+		dataFilesReachable,
+		instruments: JSON.parse(JSON.stringify(instruments)),
+		instrumentsReachable
 	};
 };
 

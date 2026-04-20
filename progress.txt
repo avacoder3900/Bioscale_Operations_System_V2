@@ -501,3 +501,4 @@ Firmware `ms` timestamps are from the device's internal clock; webhook/event tim
 
 2026-04-20 OT-A — Runtime parameters form on protocol detail page; per-type inputs (number/bool/enum/csv), client+server validation, /dataFiles routed to runTimeParameterFiles, Create Run gated on analysis ready (commit 81c36e2). Verify 34/34 hidden-leaf.
 2026-04-20 OT-B — Deck setup checklist on protocol detail page; one row per analysis.labware[i] with slotName, Check-all button, Create Run gated until all ticked, zero-labware passes through. Client-only. Verify 34/34 hidden-leaf.
+2026-04-20 OT-C — Pipette attach confirmation on protocol detail page; compares analysis.pipettes vs /instruments per mount, red/green per-mount rows, Create Run gated on match, "Cannot verify — robot offline" when /instruments unreachable, zero-pipette protocols pass-through. Verify 34/34 hidden-leaf.

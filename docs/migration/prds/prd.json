@@ -242,7 +242,7 @@
       "stories": [
         { "id": "OT-A", "title": "Runtime parameters form", "status": "done" },
         { "id": "OT-B", "title": "Deck / labware setup checklist", "status": "done", "dependsOn": ["OT-A"] },
-        { "id": "OT-C", "title": "Pipette attach confirmation", "status": "pending" },
+        { "id": "OT-C", "title": "Pipette attach confirmation", "status": "done" },
         { "id": "OT-D1", "title": "Maintenance-run session wrapper + typed helpers", "status": "pending" },
         { "id": "OT-D2", "title": "LPC wizard UI (jog + step-size + progress)", "status": "pending", "dependsOn": ["OT-D1"] },
         { "id": "OT-D3", "title": "Persist LPC offsets + apply on run create", "status": "pending", "dependsOn": ["OT-D2", "OT-A"] },

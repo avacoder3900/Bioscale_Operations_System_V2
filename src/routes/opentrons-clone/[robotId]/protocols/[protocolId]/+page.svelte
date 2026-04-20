@@ -49,6 +49,48 @@
 		deckLabware.length === 0 || deckLabware.every((lw) => deckChecked[lw.id] === true)
 	);
 
+	type RequiredPipette = { id?: string; mount: 'left' | 'right'; pipetteName: string };
+	type AttachedInstrument = {
+		mount?: string;
+		instrumentName?: string | null;
+		instrumentModel?: string | null;
+		ok?: boolean;
+	};
+	const requiredPipettes: RequiredPipette[] = ((a?.pipettes ?? []) as any[])
+		.filter(
+			(p) =>
+				(p?.mount === 'left' || p?.mount === 'right') &&
+				typeof p?.pipetteName === 'string' &&
+				p.pipetteName.length > 0
+		)
+		.map((p) => ({ id: p.id, mount: p.mount, pipetteName: p.pipetteName }));
+
+	function findAttached(mount: 'left' | 'right'): AttachedInstrument | null {
+		const attached = (data.instruments as AttachedInstrument[]) ?? [];
+		return attached.find((i) => i.mount === mount) ?? null;
+	}
+
+	type PipetteCheck = {
+		mount: 'left' | 'right';
+		needed: string;
+		have: string | null;
+		matches: boolean;
+	};
+	const pipetteChecks: PipetteCheck[] = requiredPipettes.map((rp) => {
+		const attached = findAttached(rp.mount);
+		const have = attached?.instrumentName ?? null;
+		return {
+			mount: rp.mount,
+			needed: rp.pipetteName,
+			have,
+			matches: have === rp.pipetteName
+		};
+	});
+	const pipettesOk = $derived(
+		requiredPipettes.length === 0 ||
+			(data.instrumentsReachable && pipetteChecks.every((c) => c.matches))
+	);
+
 	const analysisPending = a ? a.status === 'pending' : false;
 	const analysisHasErrors = (a?.errors?.length ?? 0) > 0;
 	const analysisReady = !!a && !analysisPending && !analysisHasErrors;
@@ -124,7 +166,8 @@
 			valuesValid &&
 			filesValid &&
 			!csvBlocked &&
-			deckConfirmed
+			deckConfirmed &&
+			pipettesOk
 	);
 
 	// Strip empty-string CSV selections; send only values that are populated.
@@ -241,6 +284,52 @@
 		<form method="POST" action="?/createRun" use:enhance>
 			<input type="hidden" name="rtpValues" value={rtpValuesJson} />
 			<input type="hidden" name="rtpFiles" value={rtpFilesJson} />
+
+			{#if analysisReady && requiredPipettes.length > 0}
+				<div class="space-y-2 mb-4">
+					<div class="flex items-center justify-between">
+						<h4 class="text-gray-700 font-medium text-xs">Pipettes ({requiredPipettes.length})</h4>
+						{#if !data.instrumentsReachable}
+							<span class="text-xs text-red-700">Cannot verify — robot offline</span>
+						{:else if pipettesOk}
+							<span class="text-xs text-green-700">OK — pipettes match</span>
+						{:else}
+							<span class="text-xs text-red-700">Mismatch — swap the pipette</span>
+						{/if}
+					</div>
+					<ul class="border rounded divide-y">
+						{#each pipetteChecks as c (c.mount)}
+							<li class="flex items-start gap-2 p-2 text-xs">
+								{#if !data.instrumentsReachable}
+									<span class="text-red-700">⚠</span>
+									<div>
+										<div class="font-medium capitalize">{c.mount}</div>
+										<div class="font-mono text-gray-400">
+											needs {c.needed} — have ? (robot offline)
+										</div>
+									</div>
+								{:else if c.matches}
+									<span class="text-green-700">✓</span>
+									<div>
+										<div class="font-medium capitalize">{c.mount}</div>
+										<div class="font-mono text-gray-600">
+											needs {c.needed} — have {c.have}
+										</div>
+									</div>
+								{:else}
+									<span class="text-red-700">✗</span>
+									<div>
+										<div class="font-medium capitalize">{c.mount}</div>
+										<div class="font-mono text-red-700">
+											needs {c.needed} — have {c.have ?? '(empty)'}
+										</div>
+									</div>
+								{/if}
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
 
 			{#if analysisReady && deckLabware.length > 0}
 				<div class="space-y-2 mb-4">
