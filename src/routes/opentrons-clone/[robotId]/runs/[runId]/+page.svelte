@@ -112,6 +112,11 @@
 						type="submit"
 						disabled={!data.online}
 						class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-sm rounded disabled:opacity-50 capitalize"
+						onclick={(e) => {
+							if (actionType === 'play' && !confirm('Start the run? The robot will begin moving.')) e.preventDefault();
+							else if (actionType === 'stop' && !confirm('Stop the run? This cannot be undone.')) e.preventDefault();
+							else if (actionType === 'resume-from-recovery' && !confirm('Resume from recovery? The robot will resume motion.')) e.preventDefault();
+						}}
 					>
 						{actionType.replace(/-/g, ' ')}
 					</button>
@@ -219,6 +224,7 @@
 					type="submit"
 					disabled={!data.online}
 					class="md:col-span-5 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-xs rounded disabled:opacity-50 justify-self-start"
+					onclick={(e) => { if (!confirm('Apply this labware offset to the run?')) e.preventDefault(); }}
 				>
 					Apply offset
 				</button>

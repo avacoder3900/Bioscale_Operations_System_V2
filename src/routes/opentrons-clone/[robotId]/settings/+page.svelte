@@ -57,7 +57,12 @@
 	</dl>
 	<form method="POST" action="?/systemTime" use:enhance={() => async ({ result }) => { if (result.type === 'success') await invalidateAll(); }} class="flex items-center gap-2">
 		<input type="hidden" name="iso" value={new Date().toISOString()} />
-		<button type="submit" disabled={!data.online} class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-sm rounded disabled:opacity-50">
+		<button
+			type="submit"
+			disabled={!data.online}
+			class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-sm rounded disabled:opacity-50"
+			onclick={(e) => { if (!confirm("Overwrite the robot's system clock with BIMS time?")) e.preventDefault(); }}
+		>
 			Sync robot clock to BIMS time
 		</button>
 	</form>
@@ -78,6 +83,7 @@
 				type="submit"
 				disabled={!data.online}
 				class="px-3 py-1.5 {data.errorRecoveryEnabled ? 'bg-green-100 hover:bg-green-200' : 'bg-gray-100 hover:bg-gray-200'} text-sm rounded disabled:opacity-50"
+				onclick={(e) => { if (!confirm(data.errorRecoveryEnabled ? 'Disable error recovery? Recoverable errors will become fatal.' : 'Enable error recovery? Robot will pause on recoverable errors.')) e.preventDefault(); }}
 			>
 				{data.errorRecoveryEnabled ? 'Enabled — click to disable' : 'Disabled — click to enable'}
 			</button>
@@ -112,7 +118,12 @@
 							>
 								<input type="hidden" name="id" value={s.id} />
 								<input type="hidden" name="value" value={s.value ? 'false' : 'true'} />
-								<button type="submit" disabled={!data.online} class="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded text-xs disabled:opacity-50">
+								<button
+									type="submit"
+									disabled={!data.online}
+									class="px-2 py-0.5 bg-gray-100 hover:bg-gray-200 rounded text-xs disabled:opacity-50"
+									onclick={(e) => { if (!confirm(`${s.value ? 'Disable' : 'Enable'} "${s.title ?? s.id}"?`)) e.preventDefault(); }}
+								>
 									{s.value ? 'Disable' : 'Enable'}
 								</button>
 							</form>

@@ -129,7 +129,12 @@
 	>
 		<input name="key" placeholder="key" class="border rounded px-2 py-1 text-sm" required />
 		<input name="value" placeholder='value (JSON or string)' class="border rounded px-2 py-1 text-sm md:col-span-1" required />
-		<button type="submit" disabled={!data.online} class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-sm rounded disabled:opacity-50">
+		<button
+			type="submit"
+			disabled={!data.online}
+			class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-sm rounded disabled:opacity-50"
+			onclick={(e) => { if (!confirm('Write this value to robot clientData?')) e.preventDefault(); }}
+		>
 			PUT client data
 		</button>
 	</form>
@@ -147,7 +152,8 @@
 			class="px-3 py-1.5 bg-red-100 hover:bg-red-200 text-red-800 text-sm rounded disabled:opacity-50"
 			onclick={(e) => {
 				const k = (e.currentTarget as HTMLButtonElement).form?.key?.value;
-				if (!k && !confirm('Clear ALL client data on this robot?')) e.preventDefault();
+				const msg = k ? `Delete clientData[${k}]?` : 'Clear ALL client data on this robot?';
+				if (!confirm(msg)) e.preventDefault();
 			}}
 		>
 			DELETE

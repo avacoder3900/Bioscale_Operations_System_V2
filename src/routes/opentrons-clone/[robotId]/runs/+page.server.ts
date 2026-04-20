@@ -32,6 +32,12 @@ export const load: PageServerLoad = async ({ params, url }) => {
 		online = false;
 	}
 
+	runs.sort((a: any, b: any) => {
+		const ta = new Date(a?.createdAt ?? 0).getTime();
+		const tb = new Date(b?.createdAt ?? 0).getTime();
+		return tb - ta;
+	});
+
 	return {
 		robot: JSON.parse(JSON.stringify(robot)),
 		online,

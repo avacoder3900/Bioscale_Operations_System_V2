@@ -100,6 +100,7 @@
 				type="submit"
 				disabled={!data.online}
 				class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded disabled:opacity-50 text-xs"
+				onclick={(e) => { if (!confirm('Home left pipette? It will move.')) e.preventDefault(); }}
 			>
 				Home left pipette
 			</button>
@@ -112,6 +113,7 @@
 				type="submit"
 				disabled={!data.online}
 				class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded disabled:opacity-50 text-xs"
+				onclick={(e) => { if (!confirm('Home right pipette? It will move.')) e.preventDefault(); }}
 			>
 				Home right pipette
 			</button>
