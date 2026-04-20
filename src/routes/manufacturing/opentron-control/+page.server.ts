@@ -17,6 +17,19 @@ const TERMINAL_WAX = new Set(['completed', 'aborted', 'cancelled', 'voided',
 const TERMINAL_REAGENT = new Set(['completed', 'aborted', 'voided', 'cancelled',
 	'Completed', 'Aborted', 'Cancelled']);
 
+// Stages where the operator is still actively handling the run on the filling
+// page — the robot is "In Use" on the Opentron Control card until status
+// moves past these. Once past (QC/Storage for wax, Top Sealing/Storage for
+// reagent), the run appears in the respective post-OT-2 queue instead.
+const WAX_FILLING_PAGE_STAGES = new Set([
+	'Setup', 'Loading', 'Running', 'Awaiting Removal',
+	'setup', 'loading', 'running', 'awaiting_removal', 'cooling'
+]);
+const REAGENT_FILLING_PAGE_STAGES = new Set([
+	'Setup', 'Loading', 'Running', 'Inspection',
+	'setup', 'loading', 'running', 'inspection'
+]);
+
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:read');
@@ -48,16 +61,20 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	for (const r of allWaxRuns as any[]) {
 		const robotId = String(r.robot?._id ?? '');
-		if (!r.robotReleasedAt) {
+		// Robot is "locked" while the operator is still working the run on
+		// the wax-filling page (Setup → Awaiting Removal / PostRunCooling).
+		// Once status passes into QC / Storage, the run hits the post-OT-2
+		// queue here and the robot becomes Available.
+		if (WAX_FILLING_PAGE_STAGES.has(r.status)) {
 			robotActiveWax.set(robotId, r);
 		} else {
-			const releasedAt = new Date(r.robotReleasedAt).getTime();
+			const releasedAt = r.robotReleasedAt ? new Date(r.robotReleasedAt).getTime() : now;
 			waxQueue.push({
 				runId: String(r._id),
 				robotName: r.robot?.name ?? '',
 				status: r.status,
 				cartridgeCount: r.cartridgeIds?.length ?? r.plannedCartridgeCount ?? 0,
-				robotReleasedAt: new Date(r.robotReleasedAt).toISOString(),
+				robotReleasedAt: r.robotReleasedAt ? new Date(r.robotReleasedAt).toISOString() : null,
 				elapsedSinceReleasedMin: Math.floor((now - releasedAt) / 60000),
 				coolingConfirmedAt: r.coolingConfirmedTime ? new Date(r.coolingConfirmedTime).toISOString() : null,
 				operatorName: r.operator?.username ?? 'Unknown'
@@ -67,10 +84,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	for (const r of allReagentRuns as any[]) {
 		const robotId = String(r.robot?._id ?? '');
-		if (!r.robotReleasedAt) {
+		// Mirror for reagent: locked through Inspection, queued from Top
+		// Sealing onward.
+		if (REAGENT_FILLING_PAGE_STAGES.has(r.status)) {
 			robotActiveReagent.set(robotId, r);
 		} else {
-			const releasedAt = new Date(r.robotReleasedAt).getTime();
+			const releasedAt = r.robotReleasedAt ? new Date(r.robotReleasedAt).getTime() : now;
 			const sealDeadlineMs = releasedAt + maxTimeBeforeSealMin * 60000;
 			const sealOverdue = now > sealDeadlineMs;
 			const sealMinRemaining = sealOverdue ? 0 : Math.ceil((sealDeadlineMs - now) / 60000);
@@ -84,7 +103,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 				assayTypeName: r.assayType?.name ?? '',
 				cartridgeCount: total,
 				sealedCount: sealed,
-				robotReleasedAt: new Date(r.robotReleasedAt).toISOString(),
+				robotReleasedAt: r.robotReleasedAt ? new Date(r.robotReleasedAt).toISOString() : null,
 				elapsedSinceReleasedMin: Math.floor((now - releasedAt) / 60000),
 				sealMinRemaining,
 				sealOverdue,

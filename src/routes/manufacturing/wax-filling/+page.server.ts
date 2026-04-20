@@ -50,6 +50,15 @@ function toStage(status: string | null | undefined): string | null {
 const ACTIVE_STAGES = new Set(['Setup', 'Loading', 'Running', 'Awaiting Removal', 'QC', 'Storage',
 	'setup', 'loading', 'running', 'awaiting_removal', 'cooling', 'qc', 'storage']);
 
+// Stages where the operator is still working the run on THIS page — the
+// robot stays locked until status moves past 'Awaiting Removal' (i.e. until
+// the final "Confirm — Deck Placed in Oven" click transitions to QC). From
+// QC onward the run lives on the Opentron Control post-OT-2 queue.
+const PAGE_OWNED_STAGES = new Set(['Setup', 'Loading', 'Running', 'Awaiting Removal',
+	'setup', 'loading', 'running', 'awaiting_removal', 'cooling']);
+const REAGENT_PAGE_OWNED_STAGES = new Set(['Setup', 'Loading', 'Running', 'Inspection',
+	'setup', 'loading', 'running', 'inspection']);
+
 /** Safe-default empty state for error fallback */
 function emptyState(robotId: string, loadError: string | null = null) {
 	return {
@@ -107,18 +116,22 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 		// OT-2 hasn't finished yet count as "robot in use". Post-OT-2 runs live
 		// on Opentron Control and don't lock the robot.
 		const [activeWaxRun, settingsDoc, activeTube, activeReagentRunRaw] = await Promise.all([
+			// This page owns Setup → Awaiting Removal. After confirmCooling
+			// advances status to QC the run lives on Opentron Control, so
+			// activeWaxRun here is scoped to page-owned stages only.
 			WaxFillingRun.findOne({
 				'robot._id': robotId,
-				status: { $in: [...ACTIVE_STAGES] },
-				robotReleasedAt: { $exists: false }
+				status: { $in: [...PAGE_OWNED_STAGES] }
 			}).sort({ createdAt: -1 }).lean(),
 			ManufacturingSettings.findById('default').lean(),
 			Consumable.findOne({ type: 'incubator_tube', status: 'active' }).lean(),
-			// Check if a reagent run is active on this robot (also gated by robot release)
+			// A reagent run on the same robot blocks wax only while it's in
+			// reagent-filling-page-owned stages (Setup → Inspection). Once it
+			// passes Inspection it's on the Opentron Control queue and the
+			// robot is free for a new wax run.
 			(await import('$lib/server/db')).ReagentBatchRecord.findOne({
 				'robot._id': robotId,
-				status: { $nin: ['completed', 'aborted', 'cancelled', 'Completed', 'Aborted', 'Cancelled'] },
-				robotReleasedAt: { $exists: false }
+				status: { $in: [...REAGENT_PAGE_OWNED_STAGES] }
 			}).lean().catch(() => null)
 		]);
 
@@ -411,12 +424,12 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const robotId = (data.get('robotId') as string) ?? url.searchParams.get('robot') ?? '';
 
-		// Check for existing active run on this robot. Runs with robotReleasedAt
-		// set are post-OT-2 (on Opentron Control) and don't block new runs.
+		// Block a new wax run while any run on this robot is still in a
+		// wax-filling-page-owned stage (Setup → Awaiting Removal). Runs past
+		// that (QC / Storage) live on Opentron Control and don't block.
 		const existingRun = await WaxFillingRun.findOne({
 			'robot._id': robotId,
-			status: { $in: [...ACTIVE_STAGES] },
-			robotReleasedAt: { $exists: false }
+			status: { $in: [...PAGE_OWNED_STAGES] }
 		}).lean() as any;
 
 		if (existingRun) {
