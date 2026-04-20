@@ -246,7 +246,7 @@
         { "id": "OT-D1", "title": "Maintenance-run session wrapper + typed helpers", "status": "done" },
         { "id": "OT-D2", "title": "LPC wizard UI (jog + step-size + progress)", "status": "done", "dependsOn": ["OT-D1"] },
         { "id": "OT-D3", "title": "Persist LPC offsets + apply on run create", "status": "done", "dependsOn": ["OT-D2", "OT-A"] },
-        { "id": "OT-D4", "title": "End-to-end verification + PRODUCTION-READY.md", "status": "pending", "dependsOn": ["OT-A", "OT-B", "OT-C", "OT-D3"] }
+        { "id": "OT-D4", "title": "End-to-end verification + PRODUCTION-READY.md", "status": "done", "dependsOn": ["OT-A", "OT-B", "OT-C", "OT-D3"] }
       ]
     }
   ]

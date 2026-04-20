@@ -474,6 +474,149 @@ async function main() {
 		}
 	}
 
+	// ---- Production-readiness smoke test (rows 36-39) ----
+
+	// Row 36 — maintenance run lifecycle (create → get → delete)
+	let mrId: string | null = null;
+	try {
+		const create = await raw('POST', '/maintenance_runs', {
+			body: JSON.stringify({ data: {} }),
+			headers: { 'Content-Type': 'application/json' }
+		});
+		mrId = create.body?.data?.id ?? null;
+		if (!create.ok || !mrId) {
+			log(36, 'maintenance run lifecycle', false, `create status=${create.status}`);
+		} else {
+			const get = await raw('GET', `/maintenance_runs/${mrId}`);
+			const del = await raw('DELETE', `/maintenance_runs/${mrId}`);
+			log(
+				36,
+				'maintenance run lifecycle',
+				create.ok && get.ok && del.ok,
+				`create=${create.status} get=${get.status} delete=${del.status}`
+			);
+			mrId = null; // deleted; no cleanup needed
+		}
+	} catch (e) {
+		log(36, 'maintenance run lifecycle', false, (e as Error).message);
+	}
+
+	// Row 37 — maintenance run command validity (home, no physical motion beyond axes)
+	let mrId37: string | null = null;
+	try {
+		const create = await raw('POST', '/maintenance_runs', {
+			body: JSON.stringify({ data: {} }),
+			headers: { 'Content-Type': 'application/json' }
+		});
+		mrId37 = create.body?.data?.id ?? null;
+		if (!create.ok || !mrId37) {
+			log(37, 'maintenance command', false, `create status=${create.status}`);
+		} else {
+			const cmd = await raw(
+				'POST',
+				`/maintenance_runs/${mrId37}/commands?waitUntilComplete=true&timeout=60000`,
+				{
+					body: JSON.stringify({ data: { commandType: 'home', params: {} } }),
+					headers: { 'Content-Type': 'application/json' },
+					timeoutMs: 70_000
+				}
+			);
+			const status = cmd.body?.data?.status;
+			log(
+				37,
+				'maintenance command',
+				cmd.ok && (status === 'succeeded' || status === 'running'),
+				`cmd=${cmd.status} cmdStatus=${status}`
+			);
+		}
+	} catch (e) {
+		log(37, 'maintenance command', false, (e as Error).message);
+	} finally {
+		if (mrId37) {
+			try {
+				await raw('DELETE', `/maintenance_runs/${mrId37}`);
+			} catch {
+				// best-effort cleanup
+			}
+		}
+	}
+
+	// Row 38 — offsets atomic: POST /runs with a malformed offset → 4xx, no orphan run
+	try {
+		const runsBefore = await raw('GET', '/runs');
+		const countBefore = (runsBefore.body?.data ?? []).length;
+		const bogusBody = {
+			data: {
+				labwareOffsets: [
+					{
+						definitionUri: 'opentrons/opentrons_96_tiprack_300ul/1',
+						location: { slotName: '1' },
+						// vector with non-numeric field — schema should reject
+						vector: { x: 'not-a-number', y: 0, z: 0 }
+					}
+				]
+			}
+		};
+		const attempt = await raw('POST', '/runs', {
+			body: JSON.stringify(bogusBody),
+			headers: { 'Content-Type': 'application/json' }
+		});
+		const runsAfter = await raw('GET', '/runs');
+		const countAfter = (runsAfter.body?.data ?? []).length;
+		const rejected = !attempt.ok && attempt.status >= 400 && attempt.status < 500;
+		const noOrphan = countAfter === countBefore;
+		log(
+			38,
+			'offsets atomic (bogus → 4xx)',
+			rejected && noOrphan,
+			`attempt=${attempt.status} runsBefore=${countBefore} runsAfter=${countAfter}`
+		);
+		// Defensive cleanup if a run was somehow created despite the schema error
+		if (!noOrphan && attempt.body?.data?.id) {
+			await raw('DELETE', `/runs/${attempt.body.data.id}`);
+		}
+	} catch (e) {
+		log(38, 'offsets atomic (bogus → 4xx)', false, (e as Error).message);
+	}
+
+	// Row 39 — offsets happy path: POST /runs with a valid offset → 2xx + offset recorded + cleanup
+	let offsetRunId: string | null = null;
+	try {
+		const validBody = {
+			data: {
+				labwareOffsets: [
+					{
+						definitionUri: 'opentrons/opentrons_96_tiprack_300ul/1',
+						location: { slotName: '1' },
+						vector: { x: 0, y: 0, z: 0 }
+					}
+				]
+			}
+		};
+		const create = await raw('POST', '/runs', {
+			body: JSON.stringify(validBody),
+			headers: { 'Content-Type': 'application/json' }
+		});
+		offsetRunId = create.body?.data?.id ?? null;
+		const offsetsOnRun = (create.body?.data?.labwareOffsets ?? []).length;
+		log(
+			39,
+			'offsets applied on run create',
+			create.ok && !!offsetRunId && offsetsOnRun === 1,
+			`status=${create.status} runId=${offsetRunId} offsets=${offsetsOnRun}`
+		);
+	} catch (e) {
+		log(39, 'offsets applied on run create', false, (e as Error).message);
+	} finally {
+		if (offsetRunId) {
+			try {
+				await raw('DELETE', `/runs/${offsetRunId}`);
+			} catch {
+				// best-effort cleanup
+			}
+		}
+	}
+
 	// ---- Summary ----
 	const passed = results.filter((r) => r.pass).length;
 	const failed = results.filter((r) => !r.pass);
