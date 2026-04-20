@@ -13,6 +13,15 @@
 		if (minRemaining <= 15) return 'text-yellow-400';
 		return 'text-green-400';
 	}
+
+	/** Compact "MMM D, H:MMa" — e.g. "Apr 20, 1:23p". Falls back to elapsed if null. */
+	function formatFinished(iso: string | null, elapsedMin: number): string {
+		if (!iso) return `${elapsedMin} min ago`;
+		const d = new Date(iso);
+		const date = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+		const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }).replace(' ', '').toLowerCase();
+		return `${date}, ${time}`;
+	}
 </script>
 
 <div class="mx-auto max-w-7xl space-y-8 p-4">
@@ -89,6 +98,11 @@
 							<div>
 								<span class="font-mono text-sm font-bold" style="color: var(--color-tron-cyan)">{run.runId.slice(-8)}</span>
 								<p class="text-xs" style="color: var(--color-tron-text-secondary)">{run.robotName} &middot; {run.operatorName}</p>
+								<p class="mt-0.5 text-xs" style="color: var(--color-tron-text-secondary)">
+									{#if run.trayId}<span>Tray <span class="font-mono text-[var(--color-tron-text)]">{run.trayId}</span></span>{/if}
+									{#if run.trayId && run.fridgeLocation} &middot; {/if}
+									{#if run.fridgeLocation}<span>Fridge <span class="font-mono text-[var(--color-tron-text)]">{run.fridgeLocation}</span></span>{/if}
+								</p>
 							</div>
 							<div class="rounded bg-[var(--color-tron-cyan)]/10 px-2 py-1 text-xs font-medium" style="color: var(--color-tron-cyan)">
 								{run.status}
@@ -97,7 +111,7 @@
 						<div class="flex items-center gap-6 text-right">
 							<div>
 								<p class="text-sm font-bold" style="color: var(--color-tron-text)">{run.cartridgeCount} cartridges</p>
-								<p class="text-xs" style="color: var(--color-tron-text-secondary)">{run.elapsedSinceReleasedMin} min since OT-2 done</p>
+								<p class="text-xs" style="color: var(--color-tron-text-secondary)">OT-2 done {formatFinished(run.robotReleasedAt, run.elapsedSinceReleasedMin)}</p>
 							</div>
 							<svg class="h-5 w-5" style="color: var(--color-tron-text-secondary)" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
@@ -134,6 +148,11 @@
 							<div>
 								<span class="font-mono text-sm font-bold text-purple-300">{run.runId.slice(-8)}</span>
 								<p class="text-xs" style="color: var(--color-tron-text-secondary)">{run.robotName} &middot; {run.assayTypeName || 'Unknown assay'} &middot; {run.operatorName}</p>
+								<p class="mt-0.5 text-xs" style="color: var(--color-tron-text-secondary)">
+									{#if run.trayId}<span>Tray <span class="font-mono text-[var(--color-tron-text)]">{run.trayId}</span></span>{/if}
+									{#if run.trayId && run.fridgeLocation} &middot; {/if}
+									{#if run.fridgeLocation}<span>Fridge <span class="font-mono text-[var(--color-tron-text)]">{run.fridgeLocation}</span></span>{/if}
+								</p>
 							</div>
 							<div class="rounded bg-purple-500/10 px-2 py-1 text-xs font-medium text-purple-300">
 								{run.status}
@@ -142,7 +161,8 @@
 						<div class="flex items-center gap-6 text-right">
 							<div>
 								<p class="text-sm font-bold" style="color: var(--color-tron-text)">{run.sealedCount}/{run.cartridgeCount} sealed</p>
-								<p class="text-xs {sealUrgencyColor(run.sealOverdue, run.sealMinRemaining)}">
+								<p class="text-xs" style="color: var(--color-tron-text-secondary)">OT-2 done {formatFinished(run.robotReleasedAt, run.elapsedSinceReleasedMin)}</p>
+								<p class="mt-0.5 text-xs {sealUrgencyColor(run.sealOverdue, run.sealMinRemaining)}">
 									{#if run.sealOverdue}
 										OVERDUE — seal immediately
 									{:else}

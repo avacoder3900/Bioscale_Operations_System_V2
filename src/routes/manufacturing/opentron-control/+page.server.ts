@@ -5,7 +5,7 @@
 import { redirect } from '@sveltejs/kit';
 import {
 	connectDB, Equipment, WaxFillingRun, ReagentBatchRecord,
-	ManufacturingSettings
+	ManufacturingSettings, CartridgeRecord
 } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
@@ -53,6 +53,41 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const settings = settingsDoc as any ?? {};
 	const maxTimeBeforeSealMin: number = settings.reagentFilling?.maxTimeBeforeSealMin ?? 60;
 
+	// Robot ID → name map. Reagent runs sometimes only have robot._id set (no
+	// name embedded), so reagentQueue rows were rendering the raw ID.
+	const robotNameById = new Map<string, string>();
+	for (const r of robots as any[]) robotNameById.set(String(r._id), r.name ?? '');
+	const resolveRobotName = (run: any): string =>
+		run?.robot?.name || robotNameById.get(String(run?.robot?._id ?? '')) || 'Unknown';
+
+	// Batch-fetch storage locations for every wax run in the queue — one
+	// query for all cartridges, then group by runId. Used to show "stored
+	// in Fridge N" on each row when cartridges have been put away.
+	const waxRunIds = (allWaxRuns as any[])
+		.filter((r) => !WAX_FILLING_PAGE_STAGES.has(r.status))
+		.flatMap((r) => r.cartridgeIds ?? []);
+	const waxStorageByRun = new Map<string, Set<string>>();
+	if (waxRunIds.length > 0) {
+		const storedCarts = await CartridgeRecord.find(
+			{ _id: { $in: waxRunIds }, 'storage.fridgeName': { $exists: true } },
+			{ _id: 1, 'waxFilling.runId': 1, 'storage.fridgeName': 1, 'storage.locationId': 1 }
+		).lean() as any[];
+		for (const c of storedCarts) {
+			const rid = c.waxFilling?.runId ? String(c.waxFilling.runId) : null;
+			const fridge = c.storage?.fridgeName || c.storage?.locationId;
+			if (rid && fridge) {
+				if (!waxStorageByRun.has(rid)) waxStorageByRun.set(rid, new Set());
+				waxStorageByRun.get(rid)!.add(String(fridge));
+			}
+		}
+	}
+	const summarizeFridges = (set: Set<string> | undefined): string | null => {
+		if (!set || set.size === 0) return null;
+		const arr = [...set];
+		if (arr.length === 1) return arr[0];
+		return `${arr[0]} +${arr.length - 1}`;
+	};
+
 	// Classify runs: robot-locking (OT-2 still running) vs post-OT-2 (queue items)
 	const robotActiveWax = new Map<string, any>();
 	const robotActiveReagent = new Map<string, any>();
@@ -71,13 +106,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 			const releasedAt = r.robotReleasedAt ? new Date(r.robotReleasedAt).getTime() : now;
 			waxQueue.push({
 				runId: String(r._id),
-				robotName: r.robot?.name ?? '',
+				robotName: resolveRobotName(r),
 				status: r.status,
 				cartridgeCount: r.cartridgeIds?.length ?? r.plannedCartridgeCount ?? 0,
 				robotReleasedAt: r.robotReleasedAt ? new Date(r.robotReleasedAt).toISOString() : null,
 				elapsedSinceReleasedMin: Math.floor((now - releasedAt) / 60000),
 				coolingConfirmedAt: r.coolingConfirmedTime ? new Date(r.coolingConfirmedTime).toISOString() : null,
-				operatorName: r.operator?.username ?? 'Unknown'
+				operatorName: r.operator?.username ?? 'Unknown',
+				trayId: r.coolingTrayId ?? null,
+				fridgeLocation: summarizeFridges(waxStorageByRun.get(String(r._id)))
 			});
 		}
 	}
@@ -96,9 +133,16 @@ export const load: PageServerLoad = async ({ locals }) => {
 			const sealed = (r.cartridgesFilled ?? []).filter((c: any) => c.topSealBatchId).length;
 			const total = r.cartridgesFilled?.length ?? r.cartridgeCount ?? 0;
 
+			// Fridge(s) come from the run's own cartridgesFilled[].storageLocation
+			// — reagent stores that inline, no separate CartridgeRecord query needed.
+			const fridges = new Set<string>();
+			for (const cf of (r.cartridgesFilled ?? [])) {
+				if (cf.storageLocation) fridges.add(String(cf.storageLocation));
+			}
+
 			reagentQueue.push({
 				runId: String(r._id),
-				robotName: r.robot?.name ?? '',
+				robotName: resolveRobotName(r),
 				status: r.status,
 				assayTypeName: r.assayType?.name ?? '',
 				cartridgeCount: total,
@@ -108,7 +152,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 				sealMinRemaining,
 				sealOverdue,
 				maxTimeBeforeSealMin,
-				operatorName: r.operator?.username ?? 'Unknown'
+				operatorName: r.operator?.username ?? 'Unknown',
+				trayId: r.trayId ?? null,
+				fridgeLocation: summarizeFridges(fridges)
 			});
 		}
 	}
