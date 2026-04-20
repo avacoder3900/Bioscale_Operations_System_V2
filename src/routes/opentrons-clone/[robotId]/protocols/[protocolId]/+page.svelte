@@ -1,7 +1,58 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { onMount } from 'svelte';
+	import { page } from '$app/stores';
 
 	let { data, form } = $props();
+
+	type LpcOffset = {
+		definitionUri: string;
+		location: { slotName: string };
+		vector: { x: number; y: number; z: number };
+	};
+	let lpcOffsets = $state<LpcOffset[]>([]);
+
+	function isLpcOffset(raw: unknown): raw is LpcOffset {
+		if (raw === null || typeof raw !== 'object') return false;
+		const o = raw as Record<string, unknown>;
+		const loc = o.location as Record<string, unknown> | undefined;
+		const vec = o.vector as Record<string, unknown> | undefined;
+		return (
+			typeof o.definitionUri === 'string' &&
+			!!loc &&
+			typeof loc.slotName === 'string' &&
+			!!vec &&
+			typeof vec.x === 'number' &&
+			typeof vec.y === 'number' &&
+			typeof vec.z === 'number'
+		);
+	}
+
+	onMount(() => {
+		const sp = $page.url.searchParams;
+		if (sp.get('lpc') !== 'applied') return;
+		const key = `ot_lpc_offsets:${data.protocolId}`;
+		let raw: string | null = null;
+		try {
+			raw = sessionStorage.getItem(key);
+			if (raw) sessionStorage.removeItem(key);
+		} catch {
+			return;
+		}
+		if (!raw) return;
+		try {
+			const parsed: unknown = JSON.parse(raw);
+			if (Array.isArray(parsed) && parsed.every(isLpcOffset)) {
+				lpcOffsets = parsed as LpcOffset[];
+			}
+		} catch {
+			// malformed — drop silently
+		}
+	});
+
+	function clearLpcOffsets() {
+		lpcOffsets = [];
+	}
 
 	function fmtDate(iso: string | null | undefined): string {
 		if (!iso) return '—';
@@ -177,6 +228,7 @@
 			Object.fromEntries(Object.entries(files).filter(([, v]) => v !== ''))
 		)
 	);
+	const offsetsJson = $derived(lpcOffsets.length > 0 ? JSON.stringify(lpcOffsets) : '');
 </script>
 
 <div class="mb-4 flex items-center justify-between">
@@ -296,9 +348,36 @@
 			<p class="text-xs text-red-700 mb-2">Analysis has errors; cannot create a run from this protocol.</p>
 		{/if}
 
+		{#if lpcOffsets.length > 0}
+			<div class="bg-blue-50 border border-blue-300 text-blue-900 rounded p-2 mb-3 text-sm flex items-start justify-between gap-2">
+				<div>
+					<div class="font-medium">
+						{lpcOffsets.length} labware offset{lpcOffsets.length === 1 ? '' : 's'} from LPC will be applied
+					</div>
+					<ul class="text-xs font-mono text-blue-800 mt-1 max-h-24 overflow-y-auto">
+						{#each lpcOffsets as o, i (i)}
+							<li>
+								slot {o.location.slotName} · {o.definitionUri} · Δ(
+								{o.vector.x.toFixed(2)}, {o.vector.y.toFixed(2)}, {o.vector.z.toFixed(2)}
+								)
+							</li>
+						{/each}
+					</ul>
+				</div>
+				<button
+					type="button"
+					class="text-xs text-blue-700 hover:underline shrink-0"
+					onclick={clearLpcOffsets}
+				>
+					clear
+				</button>
+			</div>
+		{/if}
+
 		<form method="POST" action="?/createRun" use:enhance>
 			<input type="hidden" name="rtpValues" value={rtpValuesJson} />
 			<input type="hidden" name="rtpFiles" value={rtpFilesJson} />
+			<input type="hidden" name="offsets" value={offsetsJson} />
 
 			{#if analysisReady && requiredPipettes.length > 0}
 				<div class="space-y-2 mb-4">

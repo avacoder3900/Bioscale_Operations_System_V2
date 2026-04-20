@@ -224,6 +224,7 @@ export const actions: Actions = {
 		const form = await request.formData();
 		const rtpValuesRaw = form.get('rtpValues')?.toString() ?? '';
 		const rtpFilesRaw = form.get('rtpFiles')?.toString() ?? '';
+		const offsetsRaw = form.get('offsets')?.toString() ?? '';
 
 		let rtpValuesParsed: Record<string, unknown> = {};
 		let rtpFilesParsed: Record<string, unknown> = {};
@@ -247,6 +248,48 @@ export const actions: Actions = {
 				rtpFilesParsed = parsed as Record<string, unknown>;
 			} catch {
 				return fail(400, { error: 'rtpFiles must be valid JSON' });
+			}
+		}
+
+		type LegacyOffset = {
+			definitionUri: string;
+			location: { slotName: string };
+			vector: { x: number; y: number; z: number };
+		};
+		let labwareOffsets: LegacyOffset[] = [];
+		if (offsetsRaw) {
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(offsetsRaw);
+			} catch {
+				return fail(400, { error: 'offsets must be valid JSON' });
+			}
+			if (!Array.isArray(parsed)) {
+				return fail(400, { error: 'offsets must be a JSON array' });
+			}
+			for (const [i, raw] of parsed.entries()) {
+				if (raw === null || typeof raw !== 'object') {
+					return fail(400, { error: `offsets[${i}] must be an object` });
+				}
+				const o = raw as Record<string, unknown>;
+				const definitionUri = typeof o.definitionUri === 'string' ? o.definitionUri : '';
+				const loc = o.location as Record<string, unknown> | undefined;
+				const slotName =
+					loc && typeof loc.slotName === 'string' ? loc.slotName : '';
+				const vec = o.vector as Record<string, unknown> | undefined;
+				const x = vec && typeof vec.x === 'number' ? vec.x : NaN;
+				const y = vec && typeof vec.y === 'number' ? vec.y : NaN;
+				const z = vec && typeof vec.z === 'number' ? vec.z : NaN;
+				if (!definitionUri || !slotName || [x, y, z].some(Number.isNaN)) {
+					return fail(400, {
+						error: `offsets[${i}] requires definitionUri, location.slotName, and numeric vector.x/y/z`
+					});
+				}
+				labwareOffsets.push({
+					definitionUri,
+					location: { slotName },
+					vector: { x, y, z }
+				});
 			}
 		}
 
@@ -299,6 +342,7 @@ export const actions: Actions = {
 		const body: Record<string, unknown> = { protocolId: params.protocolId };
 		if (Object.keys(rtpValues).length > 0) body.runTimeParameterValues = rtpValues;
 		if (Object.keys(rtpFiles).length > 0) body.runTimeParameterFiles = rtpFiles;
+		if (labwareOffsets.length > 0) body.labwareOffsets = labwareOffsets;
 
 		let runId: string | null = null;
 		try {
