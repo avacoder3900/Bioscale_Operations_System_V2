@@ -100,7 +100,9 @@ while [ "$iteration" -lt "$MAX_ITERATIONS" ]; do
 
   log "  invoking claude (log: $LOG_FILE)"
   set +e
-  timeout "$ITER_TIMEOUT" claude \
+  # Portable timeout wrapper (macOS lacks GNU `timeout`); uses perl's alarm.
+  perl -e 'alarm shift @ARGV; exec @ARGV' "$ITER_TIMEOUT" \
+    claude \
     --permission-mode acceptEdits \
     --print \
     --output-format text \
