@@ -42,10 +42,15 @@
 		}))
 	);
 
-	// TopSealing expects CartridgeItem = { id, cartridgeId, deckPosition }
+	// TopSealing expects CartridgeItem = { id, cartridgeId, deckPosition }.
+	// Must exclude cartridges already bound to a seal batch — otherwise after
+	// scanCartridgeForSeal persists and invalidateAll() re-fetches, the now-
+	// sealed cartridge reappears in the Available Cartridges list and the
+	// "Top Sealed" button thinks there's still work to do. Mirror of the
+	// reagent-filling page's filter.
 	const sealCartridges = $derived(
 		data.cartridgesFilled
-			.filter((c: any) => c.inspectionStatus === 'Accepted')
+			.filter((c: any) => c.inspectionStatus === 'Accepted' && !c.topSealBatchId)
 			.map((c: any) => ({
 				id: c.cartridgeId,
 				cartridgeId: c.cartridgeId,
@@ -60,11 +65,16 @@
 	const currentBatch = $derived.by(() => {
 		const inProgress = data.sealBatches.find((b: any) => b.status === 'in_progress');
 		if (!inProgress) return null;
+		const scanned = inProgress.cartridgeIds?.length ?? 0;
+		// totalTarget = max size the batch could reach this run. Cap at 12
+		// (MAX_PER_BATCH in TopSealing). Include already-scanned + remaining
+		// unsealed so the slot grid shows the right number of positions.
+		const totalTarget = Math.min(12, scanned + sealCartridges.length);
 		return {
 			batchId: inProgress.batchId,
 			topSealLotId: inProgress.topSealLotId,
-			scannedCount: inProgress.cartridgeIds?.length ?? 0,
-			totalTarget: sealCartridges.length,
+			scannedCount: scanned,
+			totalTarget,
 			firstScanTime: null as Date | null,
 			elapsedSeconds: 0
 		};
