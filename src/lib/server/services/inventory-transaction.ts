@@ -1,5 +1,6 @@
 import { InventoryTransaction, PartDefinition } from '$lib/server/db/models/index.js';
 import { generateId } from '$lib/server/db/utils.js';
+import { notifyLowInventory, shouldWarnLowInventory } from '$lib/server/notifications';
 
 // Cache partDefinitionId lookups by partNumber (stable across requests in same process)
 const partNumberCache = new Map<string, string | null>();
@@ -59,6 +60,24 @@ export async function recordTransaction(params: RecordTransactionParams): Promis
 			{ _id: params.partDefinitionId },
 			{ $set: { inventoryCount: newQuantity } }
 		);
+
+		// Low inventory check — only fire on the transition into low state
+		if (params.transactionType === 'consumption' || params.transactionType === 'scrap') {
+			const minOrder = part?.minimumOrderQty;
+			if (minOrder && await shouldWarnLowInventory({ inventoryCount: newQuantity, minimumOrderQty: minOrder })) {
+				const wasAboveThreshold = !(await shouldWarnLowInventory({ inventoryCount: previousQuantity, minimumOrderQty: minOrder }));
+				if (wasAboveThreshold) {
+					await notifyLowInventory({
+						_id: String(params.partDefinitionId),
+						partNumber: part.partNumber,
+						name: part.name,
+						inventoryCount: newQuantity,
+						minimumOrderQty: minOrder,
+						unitOfMeasure: part.unitOfMeasure
+					});
+				}
+			}
+		}
 	}
 
 	const txId = generateId();

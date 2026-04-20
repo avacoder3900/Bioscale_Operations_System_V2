@@ -26,18 +26,22 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 	// Generate signed R2 URLs for photos that have r2Key or filePath
 	const photos = await Promise.all(
 		(images as any[]).map(async (img) => {
-			const r2Key = img.filePath || (cartridge.photos || []).find((p: any) => p.imageId === img._id)?.r2Key;
 			let url: string | null = null;
 			let thumbnailUrl: string | null = null;
 
-			if (r2Key) {
+			// Prioritize imageUrl (already public) over R2 signed URLs
+			if (img.imageUrl) {
+				url = img.imageUrl;
+			}
+
+			// Try to get signed URLs for private R2 paths if available
+			const r2Key = img.filePath || (cartridge.photos || []).find((p: any) => p.imageId === img._id)?.r2Key;
+			if (r2Key && !url) {
 				try { url = await getSignedDownloadUrl(r2Key); } catch { /* no-op */ }
 			}
 			if (img.thumbnailPath) {
 				try { thumbnailUrl = await getSignedDownloadUrl(img.thumbnailPath); } catch { /* no-op */ }
 			}
-			// Fallback to imageUrl if no R2 key
-			if (!url && img.imageUrl) url = img.imageUrl;
 
 			// Find matching inspection for this image
 			const inspection = (inspections as any[]).find(i => i.imageId === img._id);

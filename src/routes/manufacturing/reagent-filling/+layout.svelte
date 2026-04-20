@@ -43,8 +43,10 @@
 	function selectRobot(robotId: string) {
 		const url = new URL($page.url);
 		url.searchParams.set('robot', robotId);
+		// Use relative path (pathname + search) — passing a full URL to goto()
+		// has been observed to skip SPA navigation. Matches the wax-filling pattern.
 		// eslint-disable-next-line svelte/no-navigation-without-resolve -- URL built from current page
-		goto(url.toString(), { replaceState: true, invalidateAll: true });
+		goto(url.pathname + url.search, { invalidateAll: true });
 	}
 
 	function stageBadgeColor(stage: string | null): string {

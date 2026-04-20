@@ -4,6 +4,7 @@ import {
 	ManufacturingSettings, WaxFillingRun, Equipment, EquipmentLocation, generateId, AuditLog
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
+import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import type { PageServerLoad, Actions } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -82,12 +83,19 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			}))
 		}));
 
-		// Get reagent definitions for the active run's assay type (or all if no run)
+		// This page owns stages Setup → Loading → Running → Inspection.
+		// Pre-OT-2 stages have robotReleasedAt unset; Inspection is post-OT-2
+		// (completeRunFilling sets robotReleasedAt) but still renders here.
+		// The filter is status-based, not robotReleasedAt-based, so an
+		// Inspection run keeps loading its cartridges on this page after the
+		// OT-2 handoff. Top Sealing / Storage runs live on Opentron Control
+		// and must NOT match.
+		const PAGE_OWNED_STATUSES = ['Setup', 'Loading', 'Running', 'Inspection', 'setup', 'running'];
 		let activeRun: any = null;
 		if (robotId) {
 			activeRun = await ReagentBatchRecord.findOne({
 				'robot._id': robotId,
-				status: { $nin: [...TERMINAL] }
+				status: { $in: PAGE_OWNED_STATUSES }
 			}).sort({ createdAt: -1 }).lean().catch(() => null);
 		}
 
@@ -177,12 +185,16 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			}))
 		];
 
-		// Check if this robot is blocked by an active wax filling run
+		// Check if this robot is blocked by an active wax filling run. Only
+		// wax stages owned by the wax-filling page (Setup → Awaiting Removal
+		// / PostRunCooling) block — wax runs in QC / Storage live on the
+		// Opentron Control post-OT-2 queue and don't block.
 		let robotBlocked: { process: 'wax'; runId: string | null } | null = null;
 		if (robotId) {
 			const waxRun = await WaxFillingRun.findOne({
 				'robot._id': robotId,
-				status: { $nin: ['completed', 'aborted', 'cancelled', 'voided'] }
+				status: { $in: ['Setup', 'Loading', 'Running', 'Awaiting Removal',
+					'setup', 'loading', 'running', 'awaiting_removal', 'cooling'] }
 			}).lean().catch(() => null) as any;
 			if (waxRun) {
 				robotBlocked = { process: 'wax', runId: waxRun._id ? String(waxRun._id) : null };
@@ -210,6 +222,33 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 	}
 };
 
+/**
+ * Resolve the active run for a post-OT-2 action on this page.
+ *
+ * Why this exists: once completeRunFilling sets robotReleasedAt, the page's
+ * load filter excludes the run from activeRun, so `data.activeRunId` on the
+ * client becomes null and submitForm posts `runId=''`. The client page still
+ * optimistically shows Inspection/Top Sealing/Storage (pendingStage isn't
+ * cleared for those actions), so the operator clicks through and hits these
+ * actions with an empty runId — producing a spurious "Run not found".
+ *
+ * When runId from the form is empty, fall back to the most recent post-OT-2
+ * run for this robot. The client sends robotId in every submitForm call.
+ */
+const POST_OT2_STATUSES = ['Inspection', 'Top Sealing', 'Storage'];
+async function resolveRunId(data: FormData): Promise<string | null> {
+	const runId = (data.get('runId') as string | null)?.trim() ?? '';
+	if (runId) return runId;
+	const robotId = (data.get('robotId') as string | null)?.trim() ?? '';
+	if (!robotId) return null;
+	const run = await ReagentBatchRecord.findOne({
+		'robot._id': robotId,
+		status: { $in: POST_OT2_STATUSES },
+		robotReleasedAt: { $exists: true }
+	}).sort({ createdAt: -1 }).select('_id').lean() as any;
+	return run ? String(run._id) : null;
+}
+
 export const actions: Actions = {
 	/** Create a new run */
 	createRun: async ({ request, locals, url }) => {
@@ -223,12 +262,12 @@ export const actions: Actions = {
 		// Resolve robot name from layout data (if available)
 		const robotName = (data.get('robotName') as string) || robotId;
 
-		// Check for existing active run
-		const existing = await ReagentBatchRecord.findOne({
-			'robot._id': robotId,
-			status: { $nin: [...TERMINAL] }
-		}).lean();
-		if (existing) return fail(400, { error: 'Robot already has an active run. Complete or cancel it first.' });
+		// Cross-process robot conflict — blocks if ANY wax OR reagent run on
+		// this robot is in a page-owned stage. Partial unique index on the
+		// reagent_batch_records collection handles the within-collection race;
+		// this catches the cross-collection case (wax already on this robot).
+		const robotErr = await checkRobotConflict(robotId);
+		if (robotErr) return fail(400, { error: robotErr });
 
 		let assayRef = null;
 		if (assayTypeId) {
@@ -318,6 +357,9 @@ export const actions: Actions = {
 		const deckId = (data.get('deckId') as string) || undefined;
 		const cartridgeScansRaw = data.get('cartridgeScans') as string;
 		const adminUser = (data.get('adminUser') as string) || undefined;
+
+		// Deck conflict check runs at scan time (see /api/dev/validate-equipment
+		// ?type=deck). No duplicate check here.
 
 		let cartridgeScans: { cartridgeId: string; deckPosition: number }[] = [];
 		if (cartridgeScansRaw) {
@@ -446,7 +488,14 @@ export const actions: Actions = {
 		const now = new Date();
 
 		const run = await ReagentBatchRecord.findByIdAndUpdate(runId, {
-			$set: { status: 'Inspection', runEndTime: now }
+			$set: {
+				status: 'Inspection',
+				runEndTime: now,
+				// Robot is physically free as of now — releases the robot lock so
+				// the next wax/reagent run can start while inspection/sealing/
+				// storage continue detached on Opentron Control.
+				robotReleasedAt: now
+			}
 		}, { new: true }).lean() as any;
 
 		// Write reagentFilling phase to cartridges (WRITE-ONCE)
@@ -499,6 +548,10 @@ export const actions: Actions = {
 			newData: { status: 'Inspection' }
 		});
 
+		// Robot is now free. The page's load function will no longer find this run
+		// as "active" (robotReleasedAt filters it out), so invalidateAll() will
+		// reset the page to "Start new run". The post-OT-2 steps (inspect/seal/
+		// store) are accessible from Opentron Control.
 		return { success: true };
 	},
 
@@ -508,8 +561,9 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveRunId(data);
 		const rejectedCartridgesRaw = data.get('rejectedCartridges') as string;
+		const trayId = ((data.get('trayId') as string | null) ?? '').trim() || undefined;
 		const now = new Date();
 
 		let rejectedCartridges: { cartridgeId: string; reason: string; status: string }[] = [];
@@ -517,8 +571,12 @@ export const actions: Actions = {
 			try { rejectedCartridges = JSON.parse(rejectedCartridgesRaw); } catch { /* ignore */ }
 		}
 
+		if (!runId) return fail(404, { error: 'Run not found' });
 		const run = await ReagentBatchRecord.findById(runId).lean() as any;
 		if (!run) return fail(404, { error: 'Run not found' });
+
+		// Tray conflict runs at scan time (see /api/dev/validate-equipment
+		// ?type=tray). No duplicate check here.
 
 		// Build update for each cartridge's inspection status
 		const rejectedMap = new Map(rejectedCartridges.map((c: any) => [c.cartridgeId, c]));
@@ -536,9 +594,12 @@ export const actions: Actions = {
 			return { ...cf, inspectionStatus: cf.inspectionStatus === 'Pending' ? 'Accepted' : cf.inspectionStatus, inspectedBy: { _id: locals.user._id, username: locals.user.username }, inspectedAt: now };
 		});
 
-		await ReagentBatchRecord.findByIdAndUpdate(runId, {
-			$set: { cartridgesFilled: updatedCartridges, status: 'Top Sealing' }
-		});
+		const updateFields: Record<string, any> = {
+			cartridgesFilled: updatedCartridges,
+			status: 'Top Sealing'
+		};
+		if (trayId) updateFields.trayId = trayId;
+		await ReagentBatchRecord.findByIdAndUpdate(runId, { $set: updateFields });
 
 		// Write reagentInspection to CartridgeRecord (WRITE-ONCE for rejected)
 		for (const rej of rejectedCartridges) {
@@ -581,7 +642,8 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveRunId(data);
+		if (!runId) return fail(404, { error: 'Run not found' });
 		await ReagentBatchRecord.findByIdAndUpdate(runId, { $set: { status: 'Top Sealing' } });
 		return { success: true };
 	},
@@ -592,10 +654,11 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveRunId(data);
 		const topSealLotId = data.get('topSealLotId') as string;
 
 		if (!topSealLotId?.trim()) return fail(400, { error: 'Top seal lot ID is required' });
+		if (!runId) return fail(404, { error: 'Run not found' });
 
 		const batchId = generateId();
 		const now = new Date();
@@ -622,11 +685,12 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveRunId(data);
 		const batchId = data.get('batchId') as string;
 		const cartridgeRecordId = data.get('cartridgeRecordId') as string;
 
 		if (!cartridgeRecordId) return fail(400, { error: 'Cartridge ID required' });
+		if (!runId) return fail(404, { error: 'Run not found' });
 
 		// Mark cartridge in the sealBatch as scanned
 		await ReagentBatchRecord.findOneAndUpdate(
@@ -649,9 +713,11 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveRunId(data);
 		const batchId = data.get('batchId') as string;
 		const now = new Date();
+
+		if (!runId) return fail(404, { error: 'Run not found' });
 
 		const run = await ReagentBatchRecord.findOneAndUpdate(
 			{ _id: runId, 'sealBatches._id': batchId },
@@ -722,11 +788,12 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveRunId(data);
 		const cartridgeId = data.get('cartridgeId') as string;
 		const now = new Date();
 
 		if (!cartridgeId) return fail(400, { error: 'Cartridge ID required' });
+		if (!runId) return fail(404, { error: 'Run not found' });
 
 		// Update inspection status to Rejected in the run's cartridgesFilled
 		await ReagentBatchRecord.findOneAndUpdate(
@@ -755,7 +822,8 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveRunId(data);
+		if (!runId) return fail(404, { error: 'Run not found' });
 
 		await ReagentBatchRecord.findByIdAndUpdate(runId, { $set: { status: 'Storage' } });
 		return { success: true };
@@ -767,10 +835,12 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveRunId(data);
 		const cartridgeIdsRaw = data.get('cartridgeIds') as string;
 		const location = data.get('location') as string;
 		const now = new Date();
+
+		if (!runId) return fail(404, { error: 'Run not found' });
 
 		let cartridgeIds: string[] = [];
 		try { cartridgeIds = JSON.parse(cartridgeIdsRaw); } catch { /* ignore */ }
@@ -841,8 +911,10 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveRunId(data);
 		const now = new Date();
+
+		if (!runId) return fail(404, { error: 'Run not found' });
 
 		const run = await ReagentBatchRecord.findByIdAndUpdate(runId, {
 			$set: { status: 'Completed', finalizedAt: now, runEndTime: now }
@@ -879,7 +951,7 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-	/** Cancel a run */
+	/** Cancel a run — only available before the OT-2 finishes */
 	cancelRun: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
@@ -888,6 +960,14 @@ export const actions: Actions = {
 		const runId = data.get('runId') as string;
 		const reason = (data.get('reason') as string) || 'Cancelled by operator';
 		const now = new Date();
+
+		// Once the OT-2 has finished (robotReleasedAt set), the run is committed
+		// and can no longer be cancelled. Per-cartridge rejection at inspection
+		// or sealing remains available.
+		const existing = await ReagentBatchRecord.findById(runId).select('robotReleasedAt').lean() as any;
+		if (existing?.robotReleasedAt) {
+			return fail(400, { error: 'Cannot cancel: the OT-2 has already completed this run. Reject individual cartridges at inspection or sealing instead.' });
+		}
 
 		await ReagentBatchRecord.findByIdAndUpdate(runId, {
 			$set: { status: 'Cancelled', abortReason: reason, runEndTime: now }

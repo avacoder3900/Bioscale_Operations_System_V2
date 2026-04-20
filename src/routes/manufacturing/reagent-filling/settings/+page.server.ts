@@ -32,7 +32,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		return {
 			settings: {
 				minCoolingTimeMin: reagent.minCoolingTimeMin ?? 30,
-				fillTimePerCartridgeMin: reagent.fillTimePerCartridgeMin ?? 0.5
+				fillTimePerCartridgeMin: reagent.fillTimePerCartridgeMin ?? 0.5,
+				maxTimeBeforeSealMin: reagent.maxTimeBeforeSealMin ?? 60
 			},
 			assayTypes: (assayDefs as any[]).map((a) => ({
 				id: String(a._id),
@@ -52,7 +53,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	} catch (err) {
 		console.error('[REAGENT-FILLING SETTINGS] Load error:', err instanceof Error ? err.message : err);
 		return {
-			settings: { minCoolingTimeMin: 30, fillTimePerCartridgeMin: 0.5 },
+			settings: { minCoolingTimeMin: 30, fillTimePerCartridgeMin: 0.5, maxTimeBeforeSealMin: 60 },
 			assayTypes: [],
 			rejectionReasons: []
 		};
@@ -70,9 +71,12 @@ export const actions: Actions = {
 		const fillTime = data.get('fillTime') !== null ? Number(data.get('fillTime')) : null;
 		const coolingTime = data.get('coolingTime') !== null ? Number(data.get('coolingTime')) : null;
 
+		const sealDeadline = data.get('sealDeadline') !== null ? Number(data.get('sealDeadline')) : null;
+
 		const update: Record<string, any> = {};
 		if (fillTime !== null && !isNaN(fillTime)) update['reagentFilling.fillTimePerCartridgeMin'] = fillTime;
 		if (coolingTime !== null && !isNaN(coolingTime)) update['reagentFilling.minCoolingTimeMin'] = coolingTime;
+		if (sealDeadline !== null && !isNaN(sealDeadline)) update['reagentFilling.maxTimeBeforeSealMin'] = sealDeadline;
 
 		if (Object.keys(update).length > 0) {
 			update.updatedAt = new Date();
@@ -97,8 +101,12 @@ export const actions: Actions = {
 		const existing = await AssayDefinition.findOne({ skuCode }).lean();
 		if (existing) return fail(400, { error: `SKU code '${skuCode}' already exists` });
 
+		const { generateLegacyAssayId } = await import('$lib/server/assay-legacy-shape');
+		const _id = await generateLegacyAssayId(AssayDefinition as any);
 		await AssayDefinition.create({
-			name, skuCode, isActive: true, reagents: []
+			_id, name, skuCode,
+			hidden: true, protected: true,
+			isActive: true, reagents: []
 		});
 
 		return { success: true };

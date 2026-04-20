@@ -1,7 +1,12 @@
-import { redirect, fail } from '@sveltejs/kit';
-import { connectDB, LotRecord, BackingLot, Equipment, EquipmentLocation, ManufacturingSettings, AuditLog, generateId } from '$lib/server/db';
+import { redirect } from '@sveltejs/kit';
+import {
+	connectDB, WaxFillingRun, ReagentBatchRecord, CartridgeRecord,
+	BackingLot, LaserCutBatch, Consumable, LotRecord, ManufacturingSettings,
+	OpentronsRobot, ManufacturingMaterial, ShippingLot, BarcodeInventory,
+	Equipment, EquipmentLocation
+} from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
-import type { PageServerLoad, Actions } from './$types';
+import type { PageServerLoad } from './$types';
 
 export const config = { maxDuration: 60 };
 
@@ -10,158 +15,304 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
+	const now = Date.now();
 	const todayStart = new Date();
 	todayStart.setHours(0, 0, 0, 0);
 
-	const [recentLots, todayLots, activeBakingLots, equipOvens, locationOvens, settingsDoc] = await Promise.all([
-		LotRecord.find().sort({ createdAt: -1 }).limit(10).lean(),
-		LotRecord.find({ createdAt: { $gte: todayStart } }).lean(),
-		BackingLot.find({ status: { $in: ['in_oven', 'ready'] } }).sort({ ovenEntryTime: -1 }).lean(),
-		// Ovens from Equipment collection (primary source of truth)
+	const weekStart = new Date(todayStart);
+	weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+
+	const [
+		robots, settingsDoc, activeWaxRuns, activeReagentRuns,
+		backingLots, phaseCounts, equipOvens, locationOvens, recentLots
+	] = await Promise.all([
+		OpentronsRobot.find({}).select('_id name').lean(),
+		ManufacturingSettings.findById('default').lean(),
+		WaxFillingRun.find({
+			status: { $nin: ['completed', 'aborted', 'cancelled', 'voided',
+				'Completed', 'Aborted', 'Cancelled', 'Voided'] }
+		}).lean(),
+		ReagentBatchRecord.find({
+			status: { $nin: ['completed', 'aborted', 'cancelled', 'voided',
+				'Completed', 'Aborted', 'Cancelled'] }
+		}).lean(),
+		BackingLot.find({ status: { $in: ['in_oven', 'ready', 'created'] } })
+			.sort({ ovenEntryTime: -1 }).lean(),
+		CartridgeRecord.aggregate([{ $group: { _id: '$currentPhase', count: { $sum: 1 } } }]),
 		Equipment.find({ equipmentType: 'oven', status: { $ne: 'offline' } }).sort({ name: 1 }).lean(),
-		// Orphan EquipmentLocations of type oven (backward compat — should be empty after cleanup)
 		EquipmentLocation.find({ locationType: 'oven', isActive: true, parentEquipmentId: { $exists: false } }).lean(),
-		ManufacturingSettings.findById('default').lean()
+		LotRecord.find().sort({ createdAt: -1 }).limit(10).lean()
 	]);
-	// Merge into a single ovens list
-	const ovens = [
+
+	const settings = settingsDoc as any ?? {};
+	const minOvenTimeMin: number = settings?.waxFilling?.minOvenTimeMin ?? 60;
+	const robotStallWarningMin: number = settings?.general?.robotStallWarningMin ?? 90;
+	const refreshIntervalSec: number = settings?.general?.dashboardRefreshIntervalSec ?? 30;
+
+	const phaseMap = new Map<string, number>(
+		phaseCounts.map((p: any) => [p._id ?? 'unknown', p.count])
+	);
+
+	const [
+		waxRunsToday, reagentRunsToday, rejectedToday, producedToday,
+		waxRunsWeek, reagentRunsWeek, rejectedWeek, producedWeek,
+		robotUtilWax, robotUtilReagent
+	] = await Promise.all([
+		WaxFillingRun.aggregate([
+			{ $match: { createdAt: { $gte: todayStart } } },
+			{ $group: { _id: '$status', count: { $sum: 1 } } }
+		]),
+		ReagentBatchRecord.aggregate([
+			{ $match: { createdAt: { $gte: todayStart } } },
+			{ $group: { _id: '$status', count: { $sum: 1 } } }
+		]),
+		CartridgeRecord.countDocuments({ currentPhase: 'voided', updatedAt: { $gte: todayStart } }),
+		CartridgeRecord.countDocuments({
+			'reagentFilling.recordedAt': { $gte: todayStart },
+			currentPhase: { $in: ['reagent_filled', 'sealed', 'stored'] }
+		}),
+		WaxFillingRun.aggregate([
+			{ $match: { createdAt: { $gte: weekStart } } },
+			{ $group: { _id: '$status', count: { $sum: 1 } } }
+		]),
+		ReagentBatchRecord.aggregate([
+			{ $match: { createdAt: { $gte: weekStart } } },
+			{ $group: { _id: '$status', count: { $sum: 1 } } }
+		]),
+		CartridgeRecord.countDocuments({ currentPhase: 'voided', updatedAt: { $gte: weekStart } }),
+		CartridgeRecord.countDocuments({
+			'reagentFilling.recordedAt': { $gte: weekStart },
+			currentPhase: { $in: ['reagent_filled', 'sealed', 'stored'] }
+		}),
+		WaxFillingRun.aggregate([
+			{ $match: { createdAt: { $gte: todayStart }, runStartTime: { $exists: true } } },
+			{ $project: {
+				robotId: '$robot._id',
+				durationMs: { $subtract: [{ $ifNull: ['$runEndTime', new Date()] }, '$runStartTime'] }
+			} },
+			{ $group: { _id: '$robotId', totalMs: { $sum: '$durationMs' } } }
+		]),
+		ReagentBatchRecord.aggregate([
+			{ $match: { createdAt: { $gte: todayStart }, runStartTime: { $exists: true } } },
+			{ $project: {
+				robotId: '$robot._id',
+				durationMs: { $subtract: [{ $ifNull: ['$runEndTime', new Date()] }, '$runStartTime'] }
+			} },
+			{ $group: { _id: '$robotId', totalMs: { $sum: '$durationMs' } } }
+		])
+	]);
+
+	const enrichedBackingLots = (backingLots as any[]).map((bl: any) => {
+		const entryMs = bl.ovenEntryTime ? new Date(bl.ovenEntryTime).getTime() : 0;
+		const elapsedMin = entryMs ? (now - entryMs) / 60000 : 0;
+		return {
+			lotId: String(bl._id),
+			cartridgeCount: bl.cartridgeCount ?? 0,
+			status: bl.status ?? 'in_oven',
+			ovenLocationId: bl.ovenLocationId ?? null,
+			ovenLocationName: bl.ovenLocationName ?? null,
+			ovenEntryTime: bl.ovenEntryTime ? new Date(bl.ovenEntryTime).toISOString() : null,
+			elapsedMin: Math.floor(elapsedMin),
+			remainingMin: Math.max(0, Math.ceil(minOvenTimeMin - elapsedMin)),
+			isReady: elapsedMin >= minOvenTimeMin,
+			operatorUsername: bl.operator?.username ?? null
+		};
+	});
+
+	// Build ovens-with-contents: one row per oven Equipment/Location with its BackingLots inside
+	const ovenSources = [
 		...(equipOvens as any[]).map((e: any) => ({
-			_id: e._id,
+			id: String(e._id),
 			displayName: e.name ?? e.barcode ?? String(e._id),
 			barcode: e.barcode ?? ''
 		})),
 		...(locationOvens as any[]).map((o: any) => ({
-			_id: o._id,
+			id: String(o._id),
 			displayName: o.displayName ?? o.barcode ?? String(o._id),
 			barcode: o.barcode ?? ''
 		}))
 	];
 
-	// Build stats keyed by configId: { lotsToday, unitsToday }
-	const stats: Record<string, { lotsToday: number; unitsToday: number }> = {};
-	for (const lot of todayLots as any[]) {
-		const configId = lot.processConfig?._id;
-		if (!configId) continue;
-		if (!stats[configId]) stats[configId] = { lotsToday: 0, unitsToday: 0 };
-		stats[configId].lotsToday++;
-		stats[configId].unitsToday += lot.quantityProduced ?? 0;
-	}
-
-	const minOvenTimeMin: number = (settingsDoc as any)?.waxFilling?.minOvenTimeMin ?? 60;
-	const now = Date.now();
-
-	// Enrich backing lots with readiness
-	const bakingLots = (activeBakingLots as any[]).map((bl) => {
-		const entryMs = bl.ovenEntryTime ? new Date(bl.ovenEntryTime).getTime() : 0;
-		const elapsedMin = entryMs ? (now - entryMs) / 60000 : 0;
-		const remainingMin = Math.max(0, minOvenTimeMin - elapsedMin);
-		const isReady = elapsedMin >= minOvenTimeMin;
+	const ovensWithContents = ovenSources.map((oven) => {
+		const lotsInOven = enrichedBackingLots.filter((bl) => bl.ovenLocationId === oven.id);
+		const totalCartridges = lotsInOven.reduce((s, bl) => s + bl.cartridgeCount, 0);
+		const readyLotCount = lotsInOven.filter((l) => l.isReady).length;
 		return {
-			lotId: String(bl._id),
-			ovenEntryTime: bl.ovenEntryTime ? new Date(bl.ovenEntryTime).toISOString() : null,
-			ovenLocationId: bl.ovenLocationId ?? null,
-			ovenLocationName: bl.ovenLocationName ?? null,
-			cartridgeCount: bl.cartridgeCount ?? 0,
-			status: bl.status ?? 'in_oven',
-			operatorUsername: bl.operator?.username ?? null,
-			elapsedMin: Math.floor(elapsedMin),
-			remainingMin: Math.ceil(remainingMin),
-			isReady
+			...oven,
+			lots: lotsInOven,
+			lotCount: lotsInOven.length,
+			totalCartridges,
+			readyLotCount
 		};
 	});
 
-	return {
-		recentLots: recentLots.map((l: any) => ({
+	// Filling-page-owned stages — while a run is in these, the operator is
+	// actively handling it on the wax-filling / reagent-filling page and the
+	// robot is "In Use". Mirrors the classification on Opentron Control.
+	const WAX_ACTIVE = ['Setup', 'Loading', 'Running', 'Awaiting Removal',
+		'setup', 'loading', 'running', 'awaiting_removal', 'cooling'];
+	const REAGENT_ACTIVE = ['Setup', 'Loading', 'Running', 'Inspection',
+		'setup', 'loading', 'running', 'inspection'];
+	// Post-OT-2 / on the Opentron Control queue — run still exists but robot
+	// is free for a new filling run.
+	const WAX_POST_OT2_QUEUED = ['QC', 'Storage', 'qc', 'storage'];
+	const REAGENT_POST_OT2_QUEUED = ['Top Sealing', 'Storage'];
+
+	const robotUtilMap = new Map<string, number>();
+	for (const r of [...(robotUtilWax as any[]), ...(robotUtilReagent as any[])]) {
+		robotUtilMap.set(r._id, (robotUtilMap.get(r._id) ?? 0) + (r.totalMs ?? 0));
+	}
+
+	const robotStatuses = (robots as any[]).map((robot: any) => {
+		const robotId = String(robot._id);
+		const waxRun = (activeWaxRuns as any[]).find((r) => String(r.robot?._id) === robotId);
+		const reagentRun = (activeReagentRuns as any[]).find((r) => String(r.robot?._id) === robotId);
+
+		let status: string;
+		let displayStatus: string;
+		let robotPhysicallyFree: boolean;
+		if (waxRun && WAX_ACTIVE.includes(waxRun.status)) {
+			status = 'running_wax';
+			displayStatus = `In Use — Wax (${waxRun.status})`;
+			robotPhysicallyFree = false;
+		} else if (reagentRun && REAGENT_ACTIVE.includes(reagentRun.status)) {
+			status = 'running_reagent';
+			displayStatus = `In Use — Reagent (${reagentRun.status})`;
+			robotPhysicallyFree = false;
+		} else if (waxRun && WAX_POST_OT2_QUEUED.includes(waxRun.status)) {
+			// Robot is free for a new run; the wax run is queued on Opentron
+			// Control for post-OT-2 handling.
+			status = 'available';
+			displayStatus = `Available — Wax queued (${waxRun.status})`;
+			robotPhysicallyFree = true;
+		} else if (reagentRun && REAGENT_POST_OT2_QUEUED.includes(reagentRun.status)) {
+			status = 'available';
+			displayStatus = `Available — Reagent queued (${reagentRun.status})`;
+			robotPhysicallyFree = true;
+		} else {
+			status = 'available';
+			displayStatus = 'Available';
+			robotPhysicallyFree = true;
+		}
+
+		const activeRun = waxRun ?? reagentRun;
+		const runStartTime = activeRun?.runStartTime;
+		const elapsedMs = runStartTime ? now - new Date(runStartTime).getTime() : 0;
+		const lastUpdatedAt = activeRun?.updatedAt ? new Date(activeRun.updatedAt).getTime() : 0;
+		const minutesSinceUpdate = lastUpdatedAt ? (now - lastUpdatedAt) / 60000 : 0;
+
+		const utilizationMs = robotUtilMap.get(robotId) ?? 0;
+		const shiftHours = 8;
+		const utilizationPct = Math.min(100, Math.round((utilizationMs / (shiftHours * 3600000)) * 100));
+
+		return {
+			robotId,
+			name: robot.name ?? robotId,
+			status,
+			displayStatus,
+			utilizationPct,
+			utilizationHours: Math.round((utilizationMs / 3600000) * 10) / 10,
+			isStalled: !robotPhysicallyFree && minutesSinceUpdate > robotStallWarningMin,
+			minutesSinceUpdate: Math.floor(minutesSinceUpdate),
+			activeWaxRun: waxRun ? {
+				runId: String(waxRun._id),
+				stage: waxRun.status,
+				operatorUsername: waxRun.operator?.username ?? null,
+				cartridgeCount: waxRun.cartridgeIds?.length ?? waxRun.plannedCartridgeCount ?? 0,
+				elapsedMin: Math.floor(elapsedMs / 60000),
+				waxSourceLot: waxRun.waxSourceLot ?? null
+			} : null,
+			activeReagentRun: reagentRun ? {
+				runId: String(reagentRun._id),
+				stage: reagentRun.status,
+				operatorUsername: reagentRun.operator?.username ?? null,
+				assayTypeName: reagentRun.assayType?.name ?? null,
+				cartridgeCount: reagentRun.cartridgeCount ?? reagentRun.cartridgesFilled?.length ?? 0,
+				elapsedMin: Math.floor(elapsedMs / 60000)
+			} : null
+		};
+	});
+
+	const alerts: { level: string; message: string }[] = [];
+	for (const r of robotStatuses) {
+		if (r.isStalled) {
+			alerts.push({ level: 'red', message: `${r.name} run may be stalled — last update ${r.minutesSinceUpdate} min ago` });
+		}
+	}
+
+	const sumByStatus = (agg: any[], statuses: string[]) =>
+		agg.filter((a) => statuses.includes(a._id)).reduce((s, a) => s + a.count, 0);
+	const completedStatuses = ['completed', 'Completed'];
+	const activeStatuses = ['Setup', 'Loading', 'Running', 'setup', 'loading', 'running',
+		'Awaiting Removal', 'QC', 'Storage', 'Inspection', 'Top Sealing'];
+	const abortedStatuses = ['aborted', 'Aborted', 'cancelled', 'Cancelled'];
+
+	const yieldPercent = producedToday > 0
+		? Math.round(((producedToday - rejectedToday) / producedToday) * 1000) / 10
+		: 0;
+	const weeklyYieldPercent = producedWeek > 0
+		? Math.round(((producedWeek - rejectedWeek) / producedWeek) * 1000) / 10
+		: 0;
+
+	return JSON.parse(JSON.stringify({
+		robots: robotStatuses,
+		ovens: ovensWithContents,
+		pipeline: {
+			backing: {
+				inProgressLots: enrichedBackingLots.filter((bl) => !bl.isReady),
+				readyLots: enrichedBackingLots.filter((bl) => bl.isReady),
+				totalReadyCartridges: enrichedBackingLots.filter((bl) => bl.isReady).reduce((s, bl) => s + bl.cartridgeCount, 0),
+				backedTotal: phaseMap.get('backing') ?? 0
+			},
+			waxFilling: {
+				inProgress: phaseMap.get('wax_filling') ?? 0,
+				waxFilled: phaseMap.get('wax_filled') ?? 0,
+				waxStored: phaseMap.get('wax_stored') ?? 0
+			},
+			reagentFilling: {
+				inProgress: phaseMap.get('reagent_filling') ?? 0,
+				reagentFilled: phaseMap.get('reagent_filled') ?? 0,
+				sealed: phaseMap.get('sealed') ?? 0
+			},
+			storage: {
+				stored: phaseMap.get('stored') ?? 0,
+				voided: phaseMap.get('voided') ?? 0
+			}
+		},
+		todayStats: {
+			waxRuns: {
+				completed: sumByStatus(waxRunsToday, completedStatuses),
+				inProgress: sumByStatus(waxRunsToday, activeStatuses),
+				aborted: sumByStatus(waxRunsToday, abortedStatuses)
+			},
+			reagentRuns: {
+				completed: sumByStatus(reagentRunsToday, completedStatuses),
+				inProgress: sumByStatus(reagentRunsToday, activeStatuses),
+				aborted: sumByStatus(reagentRunsToday, abortedStatuses)
+			},
+			producedToday,
+			rejectedToday,
+			acceptedToday: producedToday - rejectedToday,
+			yieldPercent
+		},
+		weeklyStats: {
+			waxRuns: (waxRunsWeek as any[]).reduce((s: number, a: any) => s + a.count, 0),
+			reagentRuns: (reagentRunsWeek as any[]).reduce((s: number, a: any) => s + a.count, 0),
+			produced: producedWeek,
+			rejected: rejectedWeek,
+			yieldPercent: weeklyYieldPercent
+		},
+		recentLots: (recentLots as any[]).map((l: any) => ({
 			lotId: l._id,
-			qrCodeRef: l.qrCodeRef,
 			configId: l.processConfig?._id ?? '',
 			quantityProduced: l.quantityProduced ?? 0,
-			startTime: l.startTime ?? null,
 			finishTime: l.finishTime ?? null,
 			cycleTime: l.cycleTime ?? null,
 			status: l.status ?? 'unknown',
 			username: l.operator?.username ?? null
 		})),
-		stats,
-		bakingLots,
-		ovens: ovens.map((o: any) => ({
-			id: String(o._id),
-			displayName: o.displayName ?? o.name ?? o.barcode ?? String(o._id),
-			barcode: o.barcode ?? ''
-		})),
-		minOvenTimeMin
-	};
-};
-
-export const actions: Actions = {
-	/** Register a backing lot — places it in the oven, starts the timer */
-	registerBackingLot: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'manufacturing:write');
-		await connectDB();
-
-		const data = await request.formData();
-		const lotBarcode = (data.get('lotBarcode') as string)?.trim();
-		const ovenLocationId = (data.get('ovenLocationId') as string)?.trim() || undefined;
-		const cartridgeCountRaw = data.get('cartridgeCount') as string;
-
-		if (!lotBarcode) return fail(400, { error: 'Lot barcode is required', action: 'registerBackingLot' });
-		if (!cartridgeCountRaw || isNaN(Number(cartridgeCountRaw)) || Number(cartridgeCountRaw) <= 0) {
-			return fail(400, { error: 'Valid cartridge count is required', action: 'registerBackingLot' });
-		}
-		const cartridgeCount = Number(cartridgeCountRaw);
-
-		// Check if lot already exists
-		const existing = await BackingLot.findById(lotBarcode).lean();
-		if (existing) {
-			const bl = existing as any;
-			if (bl.status === 'consumed') {
-				// Allow re-register if consumed (edge case)
-			} else {
-				return fail(400, { error: `Lot "${lotBarcode}" is already registered (status: ${bl.status})`, action: 'registerBackingLot' });
-			}
-		}
-
-		// Look up oven name — check Equipment first (primary), then EquipmentLocation (backward compat)
-		let ovenLocationName: string | undefined;
-		if (ovenLocationId) {
-			const equipOven = await Equipment.findById(ovenLocationId, { name: 1, barcode: 1 }).lean() as any;
-			if (equipOven) {
-				ovenLocationName = equipOven.name ?? equipOven.barcode ?? ovenLocationId;
-			} else {
-				const locOven = await EquipmentLocation.findById(ovenLocationId, { displayName: 1, barcode: 1 }).lean() as any;
-				ovenLocationName = locOven?.displayName ?? locOven?.barcode ?? ovenLocationId;
-			}
-		}
-
-		const now = new Date();
-		await BackingLot.findByIdAndUpdate(
-			lotBarcode,
-			{
-				$set: {
-					_id: lotBarcode,
-					lotType: 'backing',
-					ovenEntryTime: now,
-					ovenLocationId: ovenLocationId ?? null,
-					ovenLocationName: ovenLocationName ?? null,
-					operator: { _id: locals.user._id, username: locals.user.username },
-					cartridgeCount,
-					status: 'in_oven'
-				}
-			},
-			{ upsert: true, new: true }
-		);
-
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'backing_lots',
-			recordId: lotBarcode,
-			action: 'INSERT',
-			changedBy: locals.user?.username,
-			changedAt: now,
-			newData: { lotBarcode, ovenLocationId, cartridgeCount, status: 'in_oven' }
-		});
-
-		return { success: true, lotBarcode, action: 'registerBackingLot' };
-	}
+		alerts,
+		minOvenTimeMin,
+		refreshIntervalSec
+	}));
 };

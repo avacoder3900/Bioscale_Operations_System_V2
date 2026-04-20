@@ -20,9 +20,17 @@ export const load: PageServerLoad = async ({ locals }) => {
 		description: r.robotSide ?? ''
 	}));
 
-	// Fetch active wax filling runs (not completed/aborted)
+	// Filling-page-owned stages — while a run is in these, the operator is
+	// actively handling it on the filling page and the robot is unavailable.
+	// Runs past these (QC/Storage wax; Top Sealing/Storage reagent) live on
+	// Opentron Control and don't block new filling runs.
+	const WAX_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Awaiting Removal',
+		'setup', 'loading', 'running', 'awaiting_removal', 'cooling'];
+	const REAGENT_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Inspection',
+		'setup', 'loading', 'running', 'inspection'];
+
 	const activeWaxRuns = await WaxFillingRun.find({
-		status: { $nin: ['completed', 'aborted', 'cancelled'] }
+		status: { $in: WAX_PAGE_OWNED }
 	}).lean();
 
 	// Build wax state per robot
@@ -39,7 +47,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	// Build reagent state per robot using ReagentBatchRecord model
 	const activeReagentRuns = await ReagentBatchRecord.find({
-		status: { $nin: ['completed', 'aborted', 'cancelled', 'Completed', 'Aborted', 'Cancelled'] }
+		status: { $in: REAGENT_PAGE_OWNED }
 	}).lean().catch(() => []);
 
 	const reagentState = robotList.map((robot) => {

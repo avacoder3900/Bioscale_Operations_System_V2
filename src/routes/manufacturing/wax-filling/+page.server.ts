@@ -1,11 +1,34 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
-	Equipment, EquipmentLocation, AuditLog, BackingLot
+	Equipment, EquipmentLocation, AuditLog, BackingLot, WaxBatch, ReceivingLot
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { isAdmin } from '$lib/server/permissions';
+import { User } from '$lib/server/db';
+import { notifyLowWaxBatch, notifyRunLifecycle, shouldWarnLowWax } from '$lib/server/notifications';
+import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
+import bcrypt from 'bcryptjs';
 import type { PageServerLoad, Actions } from './$types';
+
+const WAX_FILL_VOLUME_UL = 800; // μL deducted from the 15ml WaxBatch per run
+
+/**
+ * Verify admin credentials for an override. Looks up the user by username,
+ * bcrypt-compares the password, and confirms admin permission. Returns the
+ * verified user on success or an error string on failure.
+ */
+async function verifyAdminOverride(username: string, password: string): Promise<
+	{ ok: true; user: { _id: string; username: string } } | { ok: false; error: string }
+> {
+	if (!username || !password) return { ok: false, error: 'Admin username and password are required.' };
+	const admin = await User.findOne({ username }).lean() as any;
+	if (!admin) return { ok: false, error: 'Invalid admin credentials.' };
+	const match = await bcrypt.compare(password, admin.passwordHash ?? '');
+	if (!match) return { ok: false, error: 'Invalid admin credentials.' };
+	if (!isAdmin(admin)) return { ok: false, error: 'User is not an admin.' };
+	return { ok: true, user: { _id: String(admin._id), username: admin.username } };
+}
 
 // Extend Vercel serverless timeout to 60s (default is 10s)
 export const config = { maxDuration: 60 };
@@ -27,6 +50,15 @@ function toStage(status: string | null | undefined): string | null {
 
 const ACTIVE_STAGES = new Set(['Setup', 'Loading', 'Running', 'Awaiting Removal', 'QC', 'Storage',
 	'setup', 'loading', 'running', 'awaiting_removal', 'cooling', 'qc', 'storage']);
+
+// Stages where the operator is still working the run on THIS page — the
+// robot stays locked until status moves past 'Awaiting Removal' (i.e. until
+// the final "Confirm — Deck Placed in Oven" click transitions to QC). From
+// QC onward the run lives on the Opentron Control post-OT-2 queue.
+const PAGE_OWNED_STAGES = new Set(['Setup', 'Loading', 'Running', 'Awaiting Removal',
+	'setup', 'loading', 'running', 'awaiting_removal', 'cooling']);
+const REAGENT_PAGE_OWNED_STAGES = new Set(['Setup', 'Loading', 'Running', 'Inspection',
+	'setup', 'loading', 'running', 'inspection']);
 
 /** Safe-default empty state for error fallback */
 function emptyState(robotId: string, loadError: string | null = null) {
@@ -80,16 +112,27 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 	try {
 		await connectDB();
 
-		// Load everything in parallel
+		// Load everything in parallel.
+		// Both active-run queries gate on robotReleasedAt: only runs where the
+		// OT-2 hasn't finished yet count as "robot in use". Post-OT-2 runs live
+		// on Opentron Control and don't lock the robot.
 		const [activeWaxRun, settingsDoc, activeTube, activeReagentRunRaw] = await Promise.all([
-			WaxFillingRun.findOne({ 'robot._id': robotId, status: { $in: [...ACTIVE_STAGES] } })
-				.sort({ createdAt: -1 }).lean(),
+			// This page owns Setup → Awaiting Removal. After confirmCooling
+			// advances status to QC the run lives on Opentron Control, so
+			// activeWaxRun here is scoped to page-owned stages only.
+			WaxFillingRun.findOne({
+				'robot._id': robotId,
+				status: { $in: [...PAGE_OWNED_STAGES] }
+			}).sort({ createdAt: -1 }).lean(),
 			ManufacturingSettings.findById('default').lean(),
 			Consumable.findOne({ type: 'incubator_tube', status: 'active' }).lean(),
-			// Check if a reagent run is active on this robot
+			// A reagent run on the same robot blocks wax only while it's in
+			// reagent-filling-page-owned stages (Setup → Inspection). Once it
+			// passes Inspection it's on the Opentron Control queue and the
+			// robot is free for a new wax run.
 			(await import('$lib/server/db')).ReagentBatchRecord.findOne({
 				'robot._id': robotId,
-				status: { $nin: ['completed', 'aborted', 'cancelled', 'Completed', 'Aborted', 'Cancelled'] }
+				status: { $in: [...REAGENT_PAGE_OWNED_STAGES] }
 			}).lean().catch(() => null)
 		]);
 
@@ -198,10 +241,16 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 		const ovenLots = (backingLotsRaw as any[]).map((bl: any) => {
 			const entryTime = bl.ovenEntryTime ? new Date(bl.ovenEntryTime).getTime() : 0;
 			const elapsedMin = entryTime ? (now - entryTime) / 60000 : 0;
+			const remainingMin = Math.max(0, Math.ceil(minOvenTimeMin - elapsedMin));
 			return {
 				lotId: String(bl._id),
 				ready: elapsedMin >= minOvenTimeMin,
-				cartridgeCount: bl.cartridgeCount ?? 0
+				cartridgeCount: bl.cartridgeCount ?? 0,
+				ovenName: bl.ovenLocationName ?? '',
+				ovenId: bl.ovenLocationId ?? '',
+				elapsedMin: Math.floor(elapsedMin),
+				remainingMin,
+				ovenEntryTime: bl.ovenEntryTime ? new Date(bl.ovenEntryTime).toISOString() : null
 			};
 		});
 
@@ -244,6 +293,30 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 	}
 };
 
+/**
+ * Resolve the active wax run for a post-OT-2 action.
+ *
+ * Once confirmDeckRemoved sets robotReleasedAt, the page's load filter
+ * excludes the run, so data.runState.runId becomes null on the client. If
+ * the operator then clicks "Confirm — Deck Placed in Oven" in PostRunCooling,
+ * the handler would otherwise submit an empty runId. Fall back to looking
+ * up the most recent post-OT-2 wax run for this robot using the robotId
+ * the client also sends.
+ */
+const POST_OT2_WAX_STATUSES = ['Awaiting Removal', 'QC', 'Storage'];
+async function resolveWaxRunId(data: FormData): Promise<string | null> {
+	const runId = (data.get('runId') as string | null)?.trim() ?? '';
+	if (runId) return runId;
+	const robotId = (data.get('robotId') as string | null)?.trim() ?? '';
+	if (!robotId) return null;
+	const run = await WaxFillingRun.findOne({
+		'robot._id': robotId,
+		status: { $in: POST_OT2_WAX_STATUSES },
+		robotReleasedAt: { $exists: true }
+	}).sort({ createdAt: -1 }).select('_id').lean() as any;
+	return run ? String(run._id) : null;
+}
+
 export const actions: Actions = {
 	/** Scan backing lot barcode — validates oven time and associates lot with run */
 	scanBackingLot: async ({ request, locals }) => {
@@ -254,36 +327,13 @@ export const actions: Actions = {
 		const lotBarcode = (data.get('lotBarcode') as string)?.trim();
 		const runId = (data.get('runId') as string)?.trim();
 		const override = data.get('override') === 'true';
+		const adminUser = (data.get('adminUser') as string)?.trim() ?? '';
+		const adminPass = (data.get('adminPass') as string) ?? '';
 
 		if (!lotBarcode) return fail(400, { error: 'Lot barcode is required' });
 
 		const settingsDoc = await ManufacturingSettings.findById('default').lean() as any;
 		const minOvenTimeMin: number = settingsDoc?.waxFilling?.minOvenTimeMin ?? 60;
-
-		// TEST OVERRIDE: skip lot lookup and oven check (admin only)
-		if (override) {
-			if (!isAdmin(locals.user)) {
-				return fail(403, { error: 'Override requires admin permission.' });
-			}
-			// Auto-create lot if it doesn't exist
-			const existing = await BackingLot.findById(lotBarcode).lean();
-			if (!existing) {
-				await BackingLot.create({
-					_id: lotBarcode,
-					lotType: 'backing',
-					ovenEntryTime: new Date(Date.now() - 120 * 60000), // 2 hours ago
-					operator: { _id: locals.user._id, username: locals.user.username },
-					cartridgeCount: 24,
-					status: 'ready'
-				});
-			} else {
-				await BackingLot.findByIdAndUpdate(lotBarcode, { $set: { status: 'ready' } });
-			}
-			if (runId) {
-				await WaxFillingRun.findByIdAndUpdate(runId, { $set: { activeLotId: lotBarcode } });
-			}
-			return { success: true, lotId: lotBarcode, overridden: true };
-		}
 
 		const lot = await BackingLot.findById(lotBarcode).lean() as any;
 		if (!lot) {
@@ -301,11 +351,51 @@ export const actions: Actions = {
 		const elapsedMin = (Date.now() - entryTime) / 60000;
 		const remainingMin = Math.ceil(Math.max(0, minOvenTimeMin - elapsedMin));
 
+		// Admin override path — requires re-auth (username + password). Any
+		// admin (permission `admin:full` or `admin:users`) can override; the
+		// event is recorded in audit_logs for traceability.
+		if (override) {
+			const verified = await verifyAdminOverride(adminUser, adminPass);
+			if (!verified.ok) {
+				return fail(403, { error: verified.error, remainingMin, lotId: lotBarcode, requiresOverride: true });
+			}
+			await BackingLot.findByIdAndUpdate(lotBarcode, { $set: { status: 'ready' } });
+			if (runId) {
+				await WaxFillingRun.findByIdAndUpdate(runId, { $set: { activeLotId: lotBarcode } });
+			}
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'backing_lots',
+				recordId: lotBarcode,
+				action: 'UPDATE',
+				changedBy: verified.user.username,
+				changedAt: new Date(),
+				reason: `Wax cure time override by admin — ${remainingMin} min remaining`,
+				newData: {
+					override: true,
+					operatorUsername: locals.user.username,
+					adminUsername: verified.user.username,
+					minOvenTimeMin,
+					elapsedMin: Math.floor(elapsedMin),
+					remainingMin
+				}
+			});
+			return {
+				success: true,
+				lotId: lotBarcode,
+				cartridgeCount: lot.cartridgeCount ?? 0,
+				elapsedMin: Math.floor(elapsedMin),
+				overridden: true,
+				overrideBy: verified.user.username
+			};
+		}
+
 		if (elapsedMin < minOvenTimeMin) {
 			return fail(400, {
-				error: `Lot not ready. ${remainingMin} minute${remainingMin === 1 ? '' : 's'} remaining (minimum ${minOvenTimeMin} min required).`,
+				error: `Lot not ready. ${remainingMin} minute${remainingMin === 1 ? '' : 's'} remaining (minimum ${minOvenTimeMin} min required). Wait, pick a bucket that has passed the timer, or get an admin to override.`,
 				remainingMin,
-				lotId: lotBarcode
+				lotId: lotBarcode,
+				requiresOverride: true
 			});
 		}
 
@@ -335,15 +425,12 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const robotId = (data.get('robotId') as string) ?? url.searchParams.get('robot') ?? '';
 
-		// Check for existing active run on this robot
-		const existingRun = await WaxFillingRun.findOne({
-			'robot._id': robotId,
-			status: { $in: [...ACTIVE_STAGES] }
-		}).lean() as any;
-
-		if (existingRun) {
-			return fail(400, { error: 'This robot already has an active wax filling run.' });
-		}
+		// Cross-process robot conflict check — blocks if ANY wax OR reagent run
+		// on this robot is in a page-owned stage. The partial unique index on
+		// wax_filling_runs catches within-collection races; this catches the
+		// cross-collection case (reagent already on this robot).
+		const robotErr = await checkRobotConflict(robotId);
+		if (robotErr) return fail(400, { error: robotErr });
 
 		const robotDoc = await Equipment.findOne({ _id: robotId, equipmentType: 'robot' }, { _id: 1, name: 1 }).lean() as any;
 		const run = await WaxFillingRun.create({
@@ -426,7 +513,11 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
 		const deckId = (data.get('deckId') as string) || undefined;
+		const ovenId = (data.get('ovenId') as string) || undefined;
 		const cartridgeScansRaw = data.get('cartridgeScans') as string;
+
+		// Deck conflict check runs at scan time (see /api/dev/validate-equipment
+		// ?type=deck). No duplicate check here — this action is the commit.
 
 		let cartridgeIds: string[] = [];
 		if (cartridgeScansRaw) {
@@ -474,13 +565,27 @@ export const actions: Actions = {
 			if ((deck as any).status === 'retired') return fail(400, { error: `Deck '${deckId}' is retired.` });
 		}
 
+		// Validate oven if provided
+		if (ovenId) {
+			const oven = await Equipment.findOne({
+				$or: [{ _id: ovenId }, { barcode: ovenId }],
+				equipmentType: 'oven'
+			}).lean();
+			if (!oven) return fail(400, { error: `Oven '${ovenId}' not found. Register it in Equipment first.` });
+			if ((oven as any).status === 'retired' || (oven as any).status === 'offline') {
+				return fail(400, { error: `Oven '${ovenId}' is ${(oven as any).status}.` });
+			}
+		}
+
 		const run = await WaxFillingRun.findById(runId).lean() as any;
 		if (!run) return fail(404, { error: 'Run not found' });
 
 		// Get activeLotId from the run for traceability
 		const activeLotId: string | undefined = (run as any).activeLotId ?? undefined;
 
-		// Create CartridgeRecord stubs and link to this wax run
+		// Create CartridgeRecord stubs and link to this wax run.
+		// Also record baking oven exit: cartridges are leaving the baking oven
+		// (where they were placed during WI-01) and going onto the deck.
 		if (cartridgeIds.length > 0) {
 			const now = new Date();
 			const ops = cartridgeIds.map((cid: string, idx: number) => ({
@@ -495,6 +600,8 @@ export const actions: Actions = {
 						$set: {
 							status: 'wax_filling',
 							'backing.lotId': activeLotId ?? null,
+							// Record baking oven exit — cartridge is leaving the baking oven
+							'backing.ovenExitTime': now,
 							'waxFilling.runId': runId,
 							'waxFilling.deckId': deckId ?? null,
 							'waxFilling.robotId': run.robot?._id ?? null,
@@ -518,6 +625,7 @@ export const actions: Actions = {
 			$set: {
 				status: 'Loading',
 				deckId: deckId ?? run.deckId,
+				ovenId: ovenId ?? run.ovenId,
 				plannedCartridgeCount: cartridgeIds.length || run.plannedCartridgeCount
 			},
 			$addToSet: { cartridgeIds: { $each: cartridgeIds } }
@@ -567,29 +675,19 @@ export const actions: Actions = {
 			$set: {
 				status: 'Awaiting Removal',
 				deckRemovedTime: now,
+				// Robot is physically free as of now — releases the robot lock so a
+				// new wax/reagent run can start on the same OT-2 while the cooling/
+				// QC/storage steps continue detached on Opentron Control.
+				robotReleasedAt: now,
 				...(ovenLocationId ? { ovenLocationId } : {})
 			}
 		}, { new: true }).lean() as any;
 
-		// Write ovenCure entry time to all cartridges in this run (WRITE-ONCE for entryTime)
-		if (run?.cartridgeIds?.length) {
-			const bulkOps = run.cartridgeIds.map((cid: string) => ({
-				updateOne: {
-					filter: { _id: cid, 'ovenCure.entryTime': { $exists: false } },
-					update: {
-						$set: {
-							'ovenCure.locationId': ovenLocationId ?? run.ovenLocationId ?? undefined,
-							'ovenCure.locationName': ovenLocationName ?? undefined,
-							'ovenCure.entryTime': now,
-							'ovenCure.operator': { _id: locals.user._id, username: locals.user.username },
-							'ovenCure.recordedAt': now
-						}
-					}
-				}
-			}));
-			await CartridgeRecord.bulkWrite(bulkOps);
-		}
-
+		// Robot is now free. ovenCure writes happen later on Opentron Control
+		// when the operator scans the curing oven at the "Deck Placed in Oven"
+		// step. The page's load function will no longer find this run as "active"
+		// (robotReleasedAt filters it out), so invalidateAll() will reset the
+		// page to "Start new run".
 		return { success: true };
 	},
 
@@ -599,9 +697,14 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = await resolveWaxRunId(data);
 		const coolingTrayId = (data.get('coolingTrayId') as string) || undefined;
 		const now = new Date();
+
+		if (!runId) return fail(404, { error: 'Run not found' });
+
+		// Tray conflict runs at scan time (see /api/dev/validate-equipment
+		// ?type=tray). No duplicate check here.
 
 		const update: Record<string, any> = { status: 'QC', coolingConfirmedTime: now, coolingConfirmedAt: now };
 		if (coolingTrayId) update.coolingTrayId = coolingTrayId;
@@ -717,7 +820,7 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-	/** Cancel / abort an active run */
+	/** Cancel / abort an active run — only available before the OT-2 finishes */
 	cancelRun: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
@@ -726,6 +829,14 @@ export const actions: Actions = {
 		const runId = data.get('runId') as string;
 		const reason = (data.get('reason') as string) || 'Cancelled by operator';
 		const now = new Date();
+
+		// Once the OT-2 has finished (robotReleasedAt set), the run is committed
+		// and can no longer be cancelled. Individual cartridges can still be
+		// rejected at QC; whole-run abort is no longer the right tool.
+		const existing = await WaxFillingRun.findById(runId).select('robotReleasedAt').lean() as any;
+		if (existing?.robotReleasedAt) {
+			return fail(400, { error: 'Cannot cancel: the OT-2 has already completed this run. Reject individual cartridges at QC instead.' });
+		}
 
 		await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
@@ -750,6 +861,11 @@ export const actions: Actions = {
 			changedBy: locals.user?.username,
 			changedAt: now,
 			newData: { status: 'aborted', abortReason: reason }
+		});
+
+		await notifyRunLifecycle({
+			runId, runType: 'wax_filling', status: 'cancelled',
+			operator: locals.user?.username, reason
 		});
 
 		return { success: true };
@@ -764,6 +880,14 @@ export const actions: Actions = {
 		const reason = (data.get('reason') as string) || 'Aborted';
 		const now = new Date();
 
+		// Once the OT-2 has finished (robotReleasedAt set), abort is no longer
+		// available — same rule as cancelRun. Per-cartridge rejection at QC
+		// is the post-run path.
+		const existing = await WaxFillingRun.findById(runId).select('robotReleasedAt').lean() as any;
+		if (existing?.robotReleasedAt) {
+			return fail(400, { error: 'Cannot abort: the OT-2 has already completed this run. Reject individual cartridges at QC instead.' });
+		}
+
 		await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
 		});
@@ -787,6 +911,11 @@ export const actions: Actions = {
 			changedBy: locals.user?.username,
 			changedAt: now,
 			newData: { status: 'aborted', abortReason: reason }
+		});
+
+		await notifyRunLifecycle({
+			runId, runType: 'wax_filling', status: 'aborted',
+			operator: locals.user?.username, reason
 		});
 
 		return { success: true };
@@ -926,19 +1055,95 @@ export const actions: Actions = {
 			});
 		}
 
+		// Deduct 1 unit from the 2ml tube ReceivingLot (and from the part's inventoryCount via recordTransaction)
+		// run.waxTubeId now stores the scanned ReceivingLot.lotId (2ml tube lot barcode)
 		if (run?.waxTubeId) {
-			await Consumable.findByIdAndUpdate(run.waxTubeId, {
-				$set: { lastUsedAt: now },
-				$inc: { totalCartridgesFilled: cartridgeCount, totalRunsUsed: 1 },
-				$push: {
-					usageLog: {
-						_id: generateId(), usageType: 'wax_run', runId: run._id,
-						quantityChanged: cartridgeCount, operator: operatorRef,
-						notes: `Wax filling run complete — ${cartridgeCount} cartridges`, createdAt: now
-					}
+			const tubeLot = await ReceivingLot.findOne({ lotId: run.waxTubeId }).lean() as any;
+			if (tubeLot) {
+				await ReceivingLot.updateOne(
+					{ _id: tubeLot._id },
+					{ $inc: { quantity: -1 } }
+				);
+				if (tubeLot.part?._id) {
+					await recordTransaction({
+						transactionType: 'consumption',
+						partDefinitionId: tubeLot.part._id,
+						lotId: tubeLot._id,
+						quantity: 1,
+						manufacturingStep: 'wax_filling',
+						manufacturingRunId: run._id,
+						operatorId: locals.user._id,
+						operatorUsername: locals.user.username,
+						notes: `Wax filling run — 2ml incubator tube consumed (lot ${run.waxTubeId})`
+					});
 				}
-			});
+			} else {
+				// Legacy path: still support existing Consumable-based tube IDs
+				await Consumable.findByIdAndUpdate(run.waxTubeId, {
+					$set: { lastUsedAt: now },
+					$inc: { totalCartridgesFilled: cartridgeCount, totalRunsUsed: 1 },
+					$push: {
+						usageLog: {
+							_id: generateId(), usageType: 'wax_run', runId: run._id,
+							quantityChanged: cartridgeCount, operator: operatorRef,
+							notes: `Wax filling run complete — ${cartridgeCount} cartridges`, createdAt: now
+						}
+					}
+				});
+			}
 		}
+
+		// Deduct 800 μL from the scanned 15ml wax tube ReceivingLot.
+		// run.waxSourceLot is the scanned ReceivingLot.lotId / bagBarcode.
+		// consumedUl tracks partial consumption; whole tubes are deducted from
+		// quantity (and part inventory via recordTransaction) once each 12000 μL
+		// crosses a tube boundary.
+		const FULL_TUBE_VOLUME_UL = 12000;
+		if (run?.waxSourceLot) {
+			const waxLot = await ReceivingLot.findOne({
+				$or: [
+					{ lotId: run.waxSourceLot },
+					{ bagBarcode: run.waxSourceLot },
+					{ lotNumber: run.waxSourceLot }
+				]
+			}).lean() as any;
+			if (waxLot) {
+				const consumedBefore = Number(waxLot.consumedUl ?? 0);
+				const capUl = Number(waxLot.quantity ?? 0) * FULL_TUBE_VOLUME_UL;
+				const consumedAfter = Math.min(capUl, consumedBefore + WAX_FILL_VOLUME_UL);
+				const tubesBefore = Math.floor(consumedBefore / FULL_TUBE_VOLUME_UL);
+				const tubesAfter = Math.floor(consumedAfter / FULL_TUBE_VOLUME_UL);
+				const tubesToDeduct = tubesAfter - tubesBefore;
+
+				const update: Record<string, unknown> = { $set: { consumedUl: consumedAfter } };
+				if (tubesToDeduct > 0) update.$inc = { quantity: -tubesToDeduct };
+				await ReceivingLot.updateOne({ _id: waxLot._id }, update);
+
+				if (tubesToDeduct > 0 && waxLot.part?._id) {
+					await recordTransaction({
+						transactionType: 'consumption',
+						partDefinitionId: waxLot.part._id,
+						lotId: waxLot._id,
+						quantity: tubesToDeduct,
+						manufacturingStep: 'wax_filling',
+						manufacturingRunId: run._id,
+						operatorId: locals.user!._id,
+						operatorUsername: locals.user!.username,
+						notes: `Wax filling — ${tubesToDeduct} × 15ml wax tube consumed (lot ${run.waxSourceLot})`
+					});
+				}
+			}
+		}
+
+		// Notify run complete
+		await notifyRunLifecycle({
+			runId,
+			runType: 'wax_filling',
+			status: 'completed',
+			operator: locals.user?.username,
+			cartridgeCount,
+			robot: run?.robot?.name ?? run?.robot?._id
+		});
 
 		await AuditLog.create({
 			_id: generateId(),
