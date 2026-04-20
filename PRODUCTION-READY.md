@@ -54,7 +54,7 @@ test for the LPC infrastructure (OT-D1 → OT-D3).
 | OT-D1 | Typed maintenance-run wrapper + command-allowlist endpoints | `fe40eb7` |
 | OT-D2 | LPC wizard — jog pad, step-size, per-labware savePosition | `e77c362` |
 | OT-D3 | LPC offsets persisted and atomically applied on `POST /runs` | `6451487` |
-| OT-D4 | Verify-script rows 36–39 + this document | (this commit) |
+| OT-D4 | Verify-script rows 36–39 + this document | `d4dd4bc` |
 
 ---
 

@@ -25,7 +25,7 @@ PRD: `docs/migration/prds/DOMAIN-12-OPENTRONS-CLONE-PROD-READY.md`
 | OT-D1 | Maintenance-run session wrapper | ✅ done | `fe40eb7` |
 | OT-D2 | LPC wizard UI | ✅ done | `e77c362` |
 | OT-D3 | Offsets applied on run create | ✅ done | `6451487` |
-| OT-D4 | End-to-end verify + PRODUCTION-READY.md | ✅ done | (this commit) |
+| OT-D4 | End-to-end verify + PRODUCTION-READY.md | ✅ done | `d4dd4bc` |
 
 ## Parity rows (§4 of OPENTRONS-CLONE-PLAN.md)
 
