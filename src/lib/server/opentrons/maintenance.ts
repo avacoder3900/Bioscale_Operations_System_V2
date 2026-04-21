@@ -97,6 +97,12 @@ function formatRobotError(action: string, status: number | undefined, body: unkn
  */
 export async function createMaintenanceRun(robot: RobotEndpoint): Promise<MaintenanceRun> {
 	const client = rawClient(robot, DEFAULT_HTTP_TIMEOUT_MS);
+	// `as any`: openapi-fetch's generated types require `params.header['opentrons-version']`
+	// explicitly on every call. Our client.ts middleware injects that header for every
+	// request, so the callsite version is redundant but TS can't infer that. The `body`
+	// is still typed against the generated Create schemas — schema drift on the payload
+	// IS detected. What we lose is method/path mistyping, which `npm run check` would
+	// only catch on the cast-free path.
 	const res = await (client as any).POST('/maintenance_runs', {
 		body: { data: {} }
 	});

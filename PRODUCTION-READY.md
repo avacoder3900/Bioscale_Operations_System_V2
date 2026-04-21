@@ -42,6 +42,15 @@ npx tsx scripts/verify-opentrons-clone.ts hidden-leaf.local
 Rows 36–39 were added in OT-D4 as the HTTP-level production-readiness smoke
 test for the LPC infrastructure (OT-D1 → OT-D3).
 
+> **Scope of automated verification:** rows 36–39 exercise the HTTP contract
+> (session lifecycle, command enqueue, atomic offset rejection, and offset
+> payload reaching the run). They do NOT verify that a jog-button labeled
+> "+X" physically moves the gantry in the +X direction, nor that collected
+> offsets correspond to the operator's intended position. Axis/direction
+> correctness and per-labware positional accuracy require an operator at
+> the physical robot running through the manual walkthrough below before
+> the LPC wizard is signed off for production use.
+
 ---
 
 ## Production-readiness stories (Step 1.5)

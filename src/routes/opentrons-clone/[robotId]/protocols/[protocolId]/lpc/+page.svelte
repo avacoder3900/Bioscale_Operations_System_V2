@@ -474,6 +474,13 @@
 
 	onMount(() => {
 		window.addEventListener('beforeunload', beforeUnloadTearDown);
+		// Per PRD §7.5 AC #1: auto-create the maintenance run on page load
+		// when prerequisites are met. If prereqs aren't met (offline robot,
+		// pending analysis, analysis errors), stay in 'idle' so the gating
+		// message renders — operator fixes the upstream problem first.
+		if (canStart && phase === 'idle') {
+			void startWizard();
+		}
 	});
 	onDestroy(() => {
 		if (typeof window !== 'undefined') {
