@@ -119,6 +119,32 @@ export async function createMaintenanceRun(robot: RobotEndpoint): Promise<Mainte
 /**
  * Delete a maintenance run. Idempotent — 404s (run already gone) are swallowed.
  */
+/**
+ * Register a custom labware definition on an existing maintenance run.
+ *
+ * Maintenance runs don't inherit the protocol's uploaded labware — a fresh
+ * session starts with only the standard Opentrons labware registered. For
+ * any custom labware (Brevitest's cartridges, wax trays, etc.), we have to
+ * POST the full definition JSON into the session before `loadLabware` by
+ * namespace/loadName/version can succeed.
+ *
+ * @throws if the robot rejects the definition.
+ */
+export async function registerMaintenanceLabwareDefinition(
+	robot: RobotEndpoint,
+	runId: string,
+	definition: unknown
+): Promise<void> {
+	const client = rawClient(robot, DEFAULT_HTTP_TIMEOUT_MS);
+	const res = await (client as any).POST('/maintenance_runs/{runId}/labware_definitions', {
+		params: { path: { runId } },
+		body: { data: definition }
+	});
+	if (res.error !== undefined) {
+		throw formatRobotError('registerMaintenanceLabwareDefinition', res.response?.status, res.error);
+	}
+}
+
 export async function endMaintenanceRun(robot: RobotEndpoint, runId: string): Promise<void> {
 	const client = rawClient(robot, DEFAULT_HTTP_TIMEOUT_MS);
 	const res = await (client as any).DELETE('/maintenance_runs/{runId}', {

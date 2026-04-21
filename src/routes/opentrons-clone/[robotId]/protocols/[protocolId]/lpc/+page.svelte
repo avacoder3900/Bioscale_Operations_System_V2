@@ -142,6 +142,21 @@
 		return { namespace: parts[0], loadName: parts[1], version };
 	}
 
+	async function registerLabwareDef(runId: string, definition: unknown): Promise<void> {
+		const res = await fetch(
+			`/api/opentrons-clone/robots/${robotId}/maintenance/${encodeURIComponent(runId)}/labware-definitions`,
+			{
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(definition)
+			}
+		);
+		if (!res.ok) {
+			const body = await res.json().catch(() => ({}));
+			throw new Error(body?.error || `Failed to register labware definition (${res.status})`);
+		}
+	}
+
 	// --------------------------------------------------------------------------
 	// Wizard actions
 	// --------------------------------------------------------------------------
@@ -169,6 +184,18 @@
 			const pipId = (pipRes as { pipetteId?: string }).pipetteId;
 			if (!pipId) throw new Error('loadPipette did not return a pipetteId');
 			runtimePipetteId = pipId;
+
+			// Register any custom (non-standard) labware definitions onto the
+			// maintenance session first. Without this, loadLabware for a
+			// Brevitest cartridge / wax tray etc. will fail — the session
+			// only knows standard Opentrons labware out of the box.
+			const customDefs = (data as { customLabwareDefs?: Record<string, unknown> }).customLabwareDefs ?? {};
+			for (const lw of slotLabware) {
+				const def = customDefs[lw.definitionUri];
+				if (!def) continue;
+				busyLabel = `Registering labware ${lw.loadName}`;
+				await registerLabwareDef(createdId, def);
+			}
 
 			// Load every slot-based labware the protocol uses so we can moveToWell.
 			for (const lw of slotLabware) {
