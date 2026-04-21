@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 const LOCAL_ROOT = join(homedir(), 'Library', 'Application Support', 'Opentrons', 'protocols');
+const LOCAL_LABWARE_ROOT = join(homedir(), 'Library', 'Application Support', 'Opentrons', 'labware');
 
 const ROBOTS = [
 	{ name: 'Robot 1 (muddy-water / B14)', host: 'muddy-water.local' },
@@ -55,25 +56,55 @@ async function findLocalProtocols(): Promise<LocalProtocol[]> {
 	return results;
 }
 
+async function loadLabwareFiles(): Promise<Array<{ name: string; buf: Buffer }>> {
+	let entries;
+	try {
+		entries = await readdir(LOCAL_LABWARE_ROOT);
+	} catch {
+		return [];
+	}
+	const out: Array<{ name: string; buf: Buffer }> = [];
+	for (const e of entries) {
+		if (!e.endsWith('.json')) continue;
+		const full = join(LOCAL_LABWARE_ROOT, e);
+		try {
+			const buf = await readFile(full);
+			out.push({ name: e, buf });
+		} catch {
+			// skip
+		}
+	}
+	return out;
+}
+
 async function uploadOne(
 	host: string,
-	p: LocalProtocol
-): Promise<{ ok: boolean; status: number; protocolId?: string; error?: string }> {
+	p: LocalProtocol,
+	labwareFiles: Array<{ name: string; buf: Buffer }>
+): Promise<{ ok: boolean; status: number; protocolId?: string; files?: number; error?: string }> {
 	const buf = await readFile(p.fullPath);
 	const form = new FormData();
+	// Main .py file first
 	form.append('files', new Blob([buf], { type: 'text/x-python' }), p.filename);
+	// Every custom labware JSON alongside it so the robot can resolve
+	// load_labware() calls during analysis. The Opentrons desktop App
+	// bundles the entire local labware library with every protocol upload.
+	for (const lw of labwareFiles) {
+		form.append('files', new Blob([lw.buf], { type: 'application/json' }), lw.name);
+	}
+	const totalFiles = 1 + labwareFiles.length;
 	try {
 		const res = await fetch(`http://${host}:31950/protocols`, {
 			method: 'POST',
 			headers: { 'opentrons-version': '*' },
 			body: form,
-			signal: AbortSignal.timeout(60_000)
+			signal: AbortSignal.timeout(120_000)
 		});
 		const body = await res.json().catch(() => null as any);
-		if (!res.ok) return { ok: false, status: res.status, error: JSON.stringify(body).slice(0, 200) };
-		return { ok: true, status: res.status, protocolId: body?.data?.id };
+		if (!res.ok) return { ok: false, status: res.status, files: totalFiles, error: JSON.stringify(body).slice(0, 200) };
+		return { ok: true, status: res.status, protocolId: body?.data?.id, files: totalFiles };
 	} catch (e) {
-		return { ok: false, status: 0, error: (e as Error).message };
+		return { ok: false, status: 0, files: totalFiles, error: (e as Error).message };
 	}
 }
 
@@ -81,14 +112,16 @@ async function main() {
 	console.log(`\n=== Local → all robots  (mode: ${APPLY ? 'APPLY' : 'DRY RUN'}) ===\n`);
 
 	const locals = await findLocalProtocols();
-	console.log(`Local library: ${locals.length} .py file(s) across ${new Set(locals.map((l) => l.uuid)).size} folder(s)\n`);
+	const labware = await loadLabwareFiles();
+	console.log(`Local library: ${locals.length} .py file(s) + ${labware.length} custom labware .json file(s)\n`);
 	for (const l of locals) {
 		console.log(`  ${l.filename}  (${(l.bytes / 1024).toFixed(1)} KB, folder ${l.uuid.slice(0, 8)})`);
 	}
 
 	console.log(`\nTargets: ${ROBOTS.length} robots.`);
 	const totalOps = locals.length * ROBOTS.length;
-	console.log(`Planned operations: ${totalOps} uploads (${locals.length} × ${ROBOTS.length}).\n`);
+	console.log(`Planned operations: ${totalOps} uploads (${locals.length} × ${ROBOTS.length}).`);
+	console.log(`Each upload bundles the .py + all ${labware.length} labware JSONs (${1 + labware.length} files per upload).\n`);
 
 	if (!APPLY) {
 		console.log('Dry run only. Re-run with  UPLOAD_APPLY=1  to actually upload.\n');
@@ -102,10 +135,10 @@ async function main() {
 		console.log('─'.repeat(80));
 		for (const p of locals) {
 			process.stdout.write(`  ${p.filename.padEnd(65)} `);
-			const r = await uploadOne(robot.host, p);
+			const r = await uploadOne(robot.host, p, labware);
 			if (r.ok) {
 				ok++;
-				console.log(`OK  ${r.protocolId?.slice(0, 8)}…`);
+				console.log(`OK  ${r.protocolId?.slice(0, 8)}…  (${r.files} files)`);
 			} else {
 				failed++;
 				console.log(`FAIL (${r.status}) ${r.error ?? ''}`);
