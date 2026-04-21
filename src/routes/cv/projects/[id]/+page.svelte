@@ -1,5 +1,6 @@
 <script lang="ts">
 	import jsQR from 'jsqr';
+	import { tick } from 'svelte';
 	let { data } = $props();
 	let activeTab = $state('import');
 	const tabs = ['Import', 'Capture', 'Labels', 'Train', 'Test', 'Review', 'Integrate'];
@@ -379,6 +380,70 @@
 	// Labels tab
 	let labeling = $state<string | null>(null);
 	let inducting = $state<string | null>(null);
+
+	// Labels tab — barcode scan (feature 001-labels-barcode-scan)
+	let scanValue = $state('');
+	let scanError = $state('');
+	let scannedIds = $state<Set<string>>(new Set());
+	let matchOrder = $state<string[]>([]);
+	let scanInputEl = $state<HTMLInputElement | null>(null);
+	let matchTileEls: Record<string, HTMLDivElement> = {};
+
+	function captureNumFromFilename(name: string | null | undefined): number {
+		if (!name) return Number.MAX_SAFE_INTEGER;
+		const m = name.match(/_(\d+)\.[^.]+$/);
+		return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
+	}
+
+	const sortedImages = $derived.by(() => {
+		if (matchOrder.length === 0) return data.images;
+		const orderIdx = new Map(matchOrder.map((id, i) => [id, i] as const));
+		const matches: any[] = [];
+		const rest: any[] = [];
+		for (const img of data.images) {
+			if (orderIdx.has(img._id)) matches.push(img);
+			else rest.push(img);
+		}
+		matches.sort((a, b) => (orderIdx.get(a._id) ?? 0) - (orderIdx.get(b._id) ?? 0));
+		return [...matches, ...rest];
+	});
+
+	async function applyScan() {
+		const barcode = scanValue.trim();
+		if (!barcode) return;
+		const matches = data.images.filter(
+			(i: any) => typeof i.filename === 'string' && i.filename.includes(barcode)
+		);
+		if (matches.length === 0) {
+			scanError = `No images found for barcode ${barcode}`;
+			scannedIds = new Set();
+			matchOrder = [];
+			return;
+		}
+		scanError = '';
+		matches.sort(
+			(a: any, b: any) => captureNumFromFilename(a.filename) - captureNumFromFilename(b.filename)
+		);
+		scannedIds = new Set(matches.map((m: any) => m._id));
+		matchOrder = matches.map((m: any) => m._id);
+		scanValue = '';
+		await tick();
+		const first = matchTileEls[matchOrder[0]];
+		if (first) first.scrollIntoView({ behavior: 'smooth', block: 'start' });
+	}
+
+	function topBottomTag(imageId: string): 'TOP' | 'BOTTOM' | null {
+		const idx = matchOrder.indexOf(imageId);
+		if (idx < 0) return null;
+		return idx % 2 === 0 ? 'TOP' : 'BOTTOM';
+	}
+
+	// Auto-focus scan input when Labels tab opens
+	$effect(() => {
+		if (activeTab === 'labels') {
+			tick().then(() => scanInputEl?.focus());
+		}
+	});
 
 	function extractCartridgeIdFromFilename(filename: string): string | null {
 		// Format: cartridge_capture_<CARTRIDGE_ID>_<SEQ>.jpg
@@ -1111,12 +1176,44 @@
 
 		<!-- LABELS TAB -->
 		{:else if activeTab === 'labels'}
+			<!-- Barcode scan (feature 001-labels-barcode-scan) -->
+			<div class="mb-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3">
+				<label for="labels-barcode-scan" class="mb-1 block text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Scan cartridge barcode</label>
+				<div class="flex items-center gap-2">
+					<input
+						id="labels-barcode-scan"
+						bind:this={scanInputEl}
+						bind:value={scanValue}
+						onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyScan(); } }}
+						type="text"
+						autocomplete="off"
+						placeholder="Focus here and scan…"
+						class="flex-1 rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-3 py-2 font-mono text-sm text-[var(--color-tron-text-primary)] placeholder:text-[var(--color-tron-text-secondary)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+					/>
+					{#if matchOrder.length > 0}
+						<button
+							type="button"
+							class="rounded-md border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]"
+							onclick={() => { scannedIds = new Set(); matchOrder = []; scanError = ''; scanInputEl?.focus(); }}
+						>Clear</button>
+					{/if}
+				</div>
+				{#if scanError}
+					<p class="mt-2 text-xs text-[var(--color-tron-red)]">{scanError}</p>
+				{:else if matchOrder.length > 0}
+					<p class="mt-2 text-xs text-[var(--color-tron-cyan)]">{matchOrder.length} image{matchOrder.length === 1 ? '' : 's'} pinned at top.</p>
+				{/if}
+			</div>
+
 			{#if data.images.length === 0}
 				<p class="text-center text-[var(--color-tron-text-secondary)]">No images yet. Upload images in the Import tab.</p>
 			{:else}
 				<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-					{#each data.images as image (image._id)}
-						<div class="group relative overflow-hidden rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)]">
+					{#each sortedImages as image (image._id)}
+						<div
+							bind:this={matchTileEls[image._id]}
+							class="group relative overflow-hidden rounded-lg border bg-[var(--color-tron-bg-primary)] transition-all {scannedIds.has(image._id) ? 'border-[var(--color-tron-cyan)] ring-2 ring-[var(--color-tron-cyan)] animate-pulse' : 'border-[var(--color-tron-border)]'}"
+						>
 							<div class="aspect-square bg-[var(--color-tron-bg-tertiary)]">
 								{#if image.imageUrl}
 									<img src={image.imageUrl} alt={image.filename} class="h-full w-full cursor-pointer object-cover" onclick={() => openLightbox(image._id)} />
@@ -1124,8 +1221,13 @@
 									<div class="flex h-full items-center justify-center text-xs text-[var(--color-tron-text-secondary)]">No preview</div>
 								{/if}
 							</div>
-							<!-- Label badge -->
-							{#if image.label}
+							<!-- Scanned badge + TOP/BOTTOM tag -->
+							{#if scannedIds.has(image._id)}
+								<span class="absolute left-2 top-2 rounded-full bg-[var(--color-tron-cyan)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-black">
+									Scanned · {topBottomTag(image._id)}
+								</span>
+							{:else if image.label}
+								<!-- Label badge (only when not scanned, to avoid overlap) -->
 								<span class="absolute left-2 top-2 rounded-full px-2 py-0.5 text-xs font-semibold {image.label === 'approved' ? 'bg-[var(--color-tron-green)]/20 text-[var(--color-tron-green)]' : 'bg-[var(--color-tron-red)]/20 text-[var(--color-tron-red)]'}">
 									{image.label === 'approved' ? 'GOOD' : 'DEFECT'}
 								</span>
