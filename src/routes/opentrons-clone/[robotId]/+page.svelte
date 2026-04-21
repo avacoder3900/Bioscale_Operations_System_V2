@@ -222,7 +222,30 @@
 </section>
 
 <section class="bg-white border rounded-lg p-4 mb-4">
-	<h3 class="font-semibold mb-2">Calibration (read-only)</h3>
+	<h3 class="font-semibold mb-2">Calibration &amp; Wizards</h3>
+
+	<div class="bg-blue-50 border border-blue-200 text-blue-900 rounded p-3 mb-3 text-xs">
+		<strong class="block mb-1">How calibration works in BIMS</strong>
+		<p class="mb-2">
+			All calibration data is stored <em>on the robot itself</em> — not in BIMS.
+			This page reads the current values live from the robot and displays them below.
+			Whatever you see here is what the robot uses internally during every run,
+			regardless of whether the run was started from BIMS or the Opentrons desktop App.
+			Nothing is copied or duplicated; both tools are just windows into the robot's own records.
+		</p>
+		<p class="mb-2">
+			<strong>To change a calibration</strong> (pipette offset, tip length, or deck calibration),
+			open the <strong>Opentrons desktop App</strong> on the lab Mac and run the relevant wizard.
+			Once the wizard completes, the new value is active on the robot immediately.
+			Refresh this page to see it update here — every future run from BIMS automatically uses it.
+		</p>
+		<p class="mb-0">
+			<strong>Per-run labware offsets</strong> (LPC) <em>are</em> in BIMS —
+			use the "Run Labware Position Check" button on a protocol page to collect offsets for a specific run.
+			Those are different from the robot-wide calibrations shown below.
+		</p>
+	</div>
+
 	<div class="text-sm space-y-3">
 		<div>
 			<h4 class="font-medium text-gray-700 mb-1">Deck</h4>
