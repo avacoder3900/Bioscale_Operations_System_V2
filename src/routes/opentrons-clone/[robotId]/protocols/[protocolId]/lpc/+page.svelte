@@ -171,6 +171,14 @@
 			createdId = await createSession();
 			mrId = createdId;
 
+			// Home every axis before any coordinated motion. The OT-2 refuses
+			// savePosition / moveToWell if ANY axis is in an unknown position,
+			// including axes of the pipette we're not measuring with. Without
+			// this, the wizard errors on the very first savePosition with
+			// MustHomeError for the unused mount's plunger.
+			busyLabel = 'Homing robot';
+			await sendCommand(createdId, { commandType: 'home', params: {} }, 60_000);
+
 			// Load the first protocol pipette — LPC uses one "measuring" pipette.
 			// Multi-pipette protocols still get offsets from one pass; operators can
 			// rerun LPC after swapping the primary.
