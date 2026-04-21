@@ -76,7 +76,11 @@
 	let selectedTipRackId = $state<string>('');
 	let measureIdx = $state(0);
 	let initialPos = $state<{ x: number; y: number; z: number } | null>(null);
-	let jogStep = $state<0.1 | 1>(1);
+	// Jog step size in mm. Presets (0.1 / 1) are the common case; the
+	// operator can also type an exact amount. Safety-capped in the input.
+	const JOG_MIN_MM = 0.01;
+	const JOG_MAX_MM = 5;
+	let jogStep = $state<number>(1);
 	let offsets = $state<Record<string, Offset>>({});
 	let busy = $state(false);
 	let errorMsg = $state<string | null>(null);
@@ -306,12 +310,17 @@
 	async function jog(axis: 'x' | 'y' | 'z', sign: 1 | -1) {
 		if (!mrId || !runtimePipetteId || busy) return;
 		errorMsg = null;
+		// Runtime-clamp in case the input bypassed the min/max attributes
+		// (pasted number, programmatic change, whatever). Belt-and-suspenders
+		// on top of the input's min/max=0.01..5.
+		const step = Math.max(JOG_MIN_MM, Math.min(JOG_MAX_MM, Number(jogStep) || 0));
+		if (step === 0) return;
 		busy = true;
-		busyLabel = `Jog ${axis.toUpperCase()}${sign > 0 ? '+' : '-'}${jogStep}`;
+		busyLabel = `Jog ${axis.toUpperCase()}${sign > 0 ? '+' : '-'}${step} mm`;
 		try {
 			await sendCommand(mrId, {
 				commandType: 'moveRelative',
-				params: { pipetteId: runtimePipetteId, axis, distance: sign * jogStep }
+				params: { pipetteId: runtimePipetteId, axis, distance: sign * step }
 			});
 		} catch (e) {
 			errorMsg = (e as Error).message;
@@ -680,25 +689,54 @@
 					type="button"
 					class="px-2 py-1 text-xs border rounded {jogStep === s ? 'bg-blue-600 text-white' : 'hover:bg-gray-100'}"
 					disabled={busy}
-					onclick={() => (jogStep = s as 0.1 | 1)}
+					onclick={() => (jogStep = s)}
 				>
 					{s} mm
 				</button>
 			{/each}
+			<label class="flex items-center gap-1 text-xs text-gray-700 ml-2">
+				or exact:
+				<input
+					type="number"
+					min={JOG_MIN_MM}
+					max={JOG_MAX_MM}
+					step="0.01"
+					bind:value={jogStep}
+					disabled={busy}
+					class="w-20 px-2 py-1 text-xs border rounded"
+					aria-label="Custom jog step in mm"
+				/>
+				<span>mm</span>
+			</label>
+			{#if jogStep > 1}
+				<span class="text-xs text-yellow-600" title="Step sizes above 1mm can crash into labware if misdirected">
+					⚠ step &gt; 1 mm — jog cautiously
+				</span>
+			{/if}
 		</div>
 
-		<div class="inline-grid grid-cols-3 gap-2 mb-3" style="grid-template-columns: repeat(3, 64px);">
-			<span></span>
-			<button type="button" class="jog-btn" disabled={busy} onclick={() => jog('y', 1)} aria-label="Y plus">Y+</button>
-			<button type="button" class="jog-btn" disabled={busy} onclick={() => jog('z', 1)} aria-label="Z plus">Z+</button>
+		<div class="flex items-start gap-6 mb-3">
+			<!-- X / Y cross. Z is in a separate column to the right. -->
+			<div class="inline-grid gap-2" style="grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(3, 64px);">
+				<span></span>
+				<button type="button" class="jog-btn" disabled={busy} onclick={() => jog('y', 1)} aria-label="Y plus">Y+</button>
+				<span></span>
 
-			<button type="button" class="jog-btn" disabled={busy} onclick={() => jog('x', -1)} aria-label="X minus">X-</button>
-			<button type="button" class="jog-btn bg-slate-200" disabled={busy} onclick={safeLiftZ} aria-label="Safe lift Z">⇪Z</button>
-			<button type="button" class="jog-btn" disabled={busy} onclick={() => jog('x', 1)} aria-label="X plus">X+</button>
+				<button type="button" class="jog-btn" disabled={busy} onclick={() => jog('x', -1)} aria-label="X minus">X-</button>
+				<span></span>
+				<button type="button" class="jog-btn" disabled={busy} onclick={() => jog('x', 1)} aria-label="X plus">X+</button>
 
-			<span></span>
-			<button type="button" class="jog-btn" disabled={busy} onclick={() => jog('y', -1)} aria-label="Y minus">Y-</button>
-			<button type="button" class="jog-btn" disabled={busy} onclick={() => jog('z', -1)} aria-label="Z minus">Z-</button>
+				<span></span>
+				<button type="button" class="jog-btn" disabled={busy} onclick={() => jog('y', -1)} aria-label="Y minus">Y-</button>
+				<span></span>
+			</div>
+
+			<!-- Z column, separate from X/Y. -->
+			<div class="inline-grid gap-2" style="grid-template-columns: 64px; grid-template-rows: repeat(3, 64px);">
+				<button type="button" class="jog-btn" disabled={busy} onclick={() => jog('z', 1)} aria-label="Z plus">Z+</button>
+				<span></span>
+				<button type="button" class="jog-btn" disabled={busy} onclick={() => jog('z', -1)} aria-label="Z minus">Z-</button>
+			</div>
 		</div>
 
 		<div class="flex flex-wrap gap-2">
@@ -717,6 +755,15 @@
 				class="px-3 py-1.5 border text-sm rounded hover:bg-gray-100 disabled:opacity-50"
 			>
 				Back (re-measure previous)
+			</button>
+			<button
+				type="button"
+				disabled={busy}
+				onclick={safeLiftZ}
+				class="px-3 py-1.5 border text-sm rounded hover:bg-gray-100 disabled:opacity-50"
+				title="Lift the pipette Z to a safe height immediately — does not discard collected offsets"
+			>
+				Home Z (safe lift)
 			</button>
 			<button
 				type="button"
