@@ -4,7 +4,7 @@
 
 	let { data, form } = $props();
 
-	const STALE_DAYS = 7;
+	const STALE_DAYS = 60;
 
 	function daysSince(iso: string | null | undefined): number | null {
 		if (!iso) return null;
