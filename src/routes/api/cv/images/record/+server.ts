@@ -46,7 +46,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			{ $push: { photos: {
 				imageId: image._id,
 				phase: cartridgeTag.phase || null,
-				capturedAt: image.capturedAt
+				capturedAt: image.capturedAt,
+				r2Key: key,
+				r2Url: publicUrl
 			}}}
 		);
 	}

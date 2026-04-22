@@ -100,6 +100,28 @@ export function getR2Url(key: string): string {
 	return `${cfg.publicUrl}/${key}`;
 }
 
+export function slugifyProjectName(name: string): string {
+	const slug = name
+		.toLowerCase()
+		.trim()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '');
+	return slug || 'unnamed';
+}
+
+export function buildCvKey(projectName: string, id: string, ext: string): string {
+	return `cv/${slugifyProjectName(projectName)}/${id}.${ext}`;
+}
+
+export function buildCvThumbKey(projectName: string, id: string): string {
+	return `cv/${slugifyProjectName(projectName)}/thumbs/${id}.jpg`;
+}
+
+export function buildCvNamedKey(projectName: string, id: string, filename: string): string {
+	const safeName = filename.replace(/[^a-zA-Z0-9_\-\.]/g, '_').slice(0, 120);
+	return `cv/${slugifyProjectName(projectName)}/${id}_${safeName}`;
+}
+
 // --- Server-side operations (used by Python worker / scripts, not Vercel functions) ---
 // These use fetch() which works everywhere.
 

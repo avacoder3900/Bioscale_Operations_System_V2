@@ -3,7 +3,7 @@ import { connectDB } from '$lib/server/db/connection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { generateId } from '$lib/server/db/utils.js';
-import { uploadToR2, generateThumbnail, getR2Url } from '$lib/server/services/r2';
+import { uploadToR2, generateThumbnail, buildCvKey, buildCvThumbKey } from '$lib/server/services/r2';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
@@ -26,8 +26,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const buffer = Buffer.from(await file.arrayBuffer());
 		const id = generateId();
 		const ext = file.name.split('.').pop() || 'jpg';
-		const key = `cv/${projectId}/${id}.${ext}`;
-		const thumbKey = `cv/${projectId}/thumbs/${id}.jpg`;
+		const key = buildCvKey(project.name, id, ext);
+		const thumbKey = buildCvThumbKey(project.name, id);
 
 		// Upload original
 		const imageUrl = await uploadToR2(buffer, key, file.type || 'image/jpeg');

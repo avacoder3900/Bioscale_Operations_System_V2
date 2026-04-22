@@ -119,7 +119,9 @@ const cartridgeRecordSchema = new Schema({
 		_id: false,
 		imageId: String,
 		phase: String,
-		capturedAt: Date
+		capturedAt: Date,
+		r2Key: String,
+		r2Url: String
 	}],
 
 	corrections: [correctionSchema]
