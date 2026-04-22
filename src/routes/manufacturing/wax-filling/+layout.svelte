@@ -21,6 +21,13 @@
 
 	const BASE = '/manufacturing/wax-filling';
 
+	// Sub-routes that are robot-agnostic — they should render regardless of robot selection
+	let isRobotAgnosticRoute = $derived(
+		$page.url.pathname.startsWith(`${BASE}/settings`) ||
+			$page.url.pathname.startsWith(`${BASE}/oven-queue`) ||
+			$page.url.pathname.startsWith(`${BASE}/equipment`)
+	);
+
 	function isActive(path: string, currentPath: string, exact = false): boolean {
 		if (exact) return currentPath === path;
 		return currentPath.startsWith(path);
@@ -151,7 +158,7 @@
 		{/each}
 	</div>
 
-	{#if selectedRobotId}
+	{#if selectedRobotId || isRobotAgnosticRoute}
 		{@render children()}
 	{:else}
 		<!-- No robot selected — show robot selection cards -->
