@@ -90,13 +90,13 @@
 </script>
 
 <svelte:head>
-	<title>Part Accession — Barcode Registration</title>
+	<title>ROG — Barcode Registration</title>
 </svelte:head>
 
 <div class="max-w-6xl mx-auto p-6">
 	<div class="flex items-center justify-between mb-6">
 		<div>
-			<h1 class="text-2xl font-bold text-gray-900">Part Accession</h1>
+			<h1 class="text-2xl font-bold text-gray-900">ROG</h1>
 			<p class="text-sm text-gray-500 mt-1">Generate and assign QR code barcodes to parts</p>
 		</div>
 		<a href="/parts" class="text-sm text-blue-600 hover:text-blue-800">&larr; Back to Parts</a>
