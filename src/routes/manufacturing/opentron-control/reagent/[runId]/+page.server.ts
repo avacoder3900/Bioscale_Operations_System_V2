@@ -156,7 +156,9 @@ export const actions: Actions = {
 						'reagentInspection.operator': { _id: locals.user._id, username: locals.user.username },
 						'reagentInspection.timestamp': now,
 						'reagentInspection.recordedAt': now,
-						status: 'voided'
+						status: 'scrapped',
+						voidedAt: now,
+						voidReason: `Reagent inspection rejection: ${rej.reason ?? 'unspecified'}`
 					}
 				}
 			);
@@ -294,7 +296,7 @@ export const actions: Actions = {
 		);
 		await CartridgeRecord.findOneAndUpdate(
 			{ _id: cartridgeId },
-			{ $set: { status: 'voided', voidedAt: now, voidReason: 'Rejected at top sealing' } }
+			{ $set: { status: 'scrapped', voidedAt: now, voidReason: 'Rejected at top sealing' } }
 		);
 		return { success: true };
 	},
