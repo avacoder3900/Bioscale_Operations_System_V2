@@ -129,7 +129,12 @@
 	</div>
 
 	<!-- Top row: Shift summary stats -->
-	<div class="grid grid-cols-2 gap-3 lg:grid-cols-5">
+	<div class="grid grid-cols-2 gap-3 lg:grid-cols-6">
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3 text-center">
+			<div class="text-xs font-medium text-[var(--color-tron-text-secondary)] uppercase tracking-wide">Raw Cartridges</div>
+			<div class="mt-1 text-2xl font-bold text-[var(--color-tron-purple)]">{data.pipeline.backing.totalReadyCartridges}</div>
+			<div class="text-xs text-[var(--color-tron-text-secondary)]">backed &amp; ready</div>
+		</div>
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3 text-center">
 			<div class="text-xs font-medium text-[var(--color-tron-text-secondary)] uppercase tracking-wide">Started Today</div>
 			<div class="mt-1 text-2xl font-bold text-[var(--color-tron-cyan)]">{data.todayStats.waxRuns.completed + data.todayStats.waxRuns.inProgress + data.todayStats.waxRuns.aborted + data.todayStats.reagentRuns.completed + data.todayStats.reagentRuns.inProgress + data.todayStats.reagentRuns.aborted}</div>

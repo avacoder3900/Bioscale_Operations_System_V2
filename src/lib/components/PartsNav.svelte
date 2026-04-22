@@ -3,7 +3,7 @@
 	
 	const tabs = [
 		{ href: '/cartridge-admin', label: 'Cartridge Admin' },
-		{ href: '/receiving', label: 'Receiving' },
+		{ href: '/parts/accession', label: 'ROG' },
 		{ href: '/manufacturing/consumables', label: 'Consumables' },
 		{ href: '/bom/settings/mapping', label: 'BOM Mapping' }
 	];
