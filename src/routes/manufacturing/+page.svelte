@@ -120,12 +120,26 @@
 
 <div class="space-y-6 p-4 lg:p-6">
 	<!-- Header -->
-	<div class="flex items-center justify-between">
+	<div class="flex items-center justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)] tracking-wide">CART MFG DASHBOARD</h1>
 			<p class="text-sm text-[var(--color-tron-text-secondary)]">Manufacturing Line Master View</p>
 		</div>
-		<a href="/manufacturing" class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]">↻ Refresh</a>
+		<nav class="flex items-center gap-2 text-xs">
+			<a
+				href="/manufacturing/wax-filling/settings"
+				class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-[var(--color-tron-text-secondary)] transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
+			>
+				Wax Filling Settings
+			</a>
+			<a
+				href="/manufacturing/reagent-filling/settings"
+				class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-[var(--color-tron-text-secondary)] transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
+			>
+				Reagent Filling Settings
+			</a>
+			<a href="/manufacturing" class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]">↻ Refresh</a>
+		</nav>
 	</div>
 
 	<!-- Top row: Shift summary stats -->
