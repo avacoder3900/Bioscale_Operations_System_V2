@@ -75,7 +75,10 @@ export const actions: Actions = {
 			updatedAt: now
 		});
 
-		// Consume 1 roll per cutting run
+		// Consume 1 roll per cutting run (PT-CT-101) + produce the accepted
+		// strips (PT-CT-112). Previously the creation side was missing, so
+		// PT-CT-112.inventoryCount stayed at 0 no matter how many runs were
+		// recorded — WI-01's "Thermoseal Laser Cut Sheets" tile read 0.
 		const thermosealPartId = await resolvePartId('PT-CT-101');
 		if (thermosealPartId) {
 			await recordTransaction({
@@ -88,6 +91,20 @@ export const actions: Actions = {
 				operatorUsername: locals.user.username,
 				lotId: lotBarcode,
 				notes: `Cut thermoseal [${lotBarcode}]: 1 roll consumed → ${acceptedCount} strips accepted of ${expectedSheets} expected`
+			});
+		}
+
+		const stripPartId = await resolvePartId('PT-CT-112');
+		if (stripPartId && acceptedCount > 0) {
+			await recordTransaction({
+				transactionType: 'creation',
+				partDefinitionId: stripPartId,
+				quantity: acceptedCount,
+				manufacturingStep: 'cut_thermoseal',
+				manufacturingRunId: runId,
+				operatorId: locals.user._id,
+				operatorUsername: locals.user.username,
+				notes: `Cut thermoseal [${lotBarcode}]: produced ${acceptedCount} strips (${expectedSheets - acceptedCount} rejected of ${expectedSheets} expected)`
 			});
 		}
 
