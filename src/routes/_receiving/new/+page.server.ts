@@ -15,7 +15,8 @@ import {
 	generateLotNumber
 } from '$lib/server/db';
 import { env } from '$env/dynamic/private';
-import { uploadFile as r2Upload, buildCocKey } from '$lib/server/r2';
+import { buildCocKey } from '$lib/server/r2';
+import { uploadToR2 } from '$lib/server/services/r2';
 import { extractText } from '$lib/server/ocr';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -102,12 +103,24 @@ export const actions: Actions = {
 			}
 
 			const r2Key = buildCocKey(lotNumber, ext);
-			await r2Upload(r2Key, buffer, file.type || 'image/jpeg');
+			await uploadToR2(Buffer.from(buffer), r2Key, file.type || 'image/jpeg');
 			const fileUrl = `/api/r2/files/${r2Key}`;
 
 			return { success: true, cocUrl: fileUrl, cocR2Key: r2Key, cocLotNumber: lotNumber, cocFileName: `${lotNumber}.${ext}` };
 		} catch (err) {
-			return fail(500, { error: err instanceof Error ? err.message : 'Upload failed' });
+			console.error('[receiving/new] uploadCoc error:', err);
+			let message = err instanceof Error ? err.message : 'Upload failed';
+			const cause = (err as { cause?: unknown })?.cause;
+			if (cause) {
+				if (cause instanceof Error) {
+					message += ` — cause: ${cause.message}`;
+					const code = (cause as { code?: string }).code;
+					if (code) message += ` (${code})`;
+				} else {
+					message += ` — cause: ${JSON.stringify(cause)}`;
+				}
+			}
+			return fail(500, { error: message });
 		}
 	},
 

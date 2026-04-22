@@ -224,16 +224,17 @@ export const actions: Actions = {
 
 		const cartridge = await CartridgeRecord.findById(cartridgeId).lean() as any;
 		if (!cartridge) return fail(404, { error: 'Cartridge not found' });
-		if (cartridge.status === 'voided') {
+		if (cartridge.status === 'scrapped' || cartridge.status === 'voided') {
 			return fail(400, { error: 'Cartridge is already scrapped/voided' });
 		}
 
 		const now = new Date();
 
-		// Mark cartridge as scrapped (voided)
+		// Mark cartridge as scrapped — distinct status from 'voided' (which is
+		// reserved for operator-initiated inventory removals).
 		await CartridgeRecord.findByIdAndUpdate(cartridgeId, {
 			$set: {
-				status: 'voided',
+				status: 'scrapped',
 				voidedAt: now,
 				voidReason: `Scrapped: ${scrapCategory}${notes ? ` — ${notes}` : ''}`
 			}
@@ -259,7 +260,7 @@ export const actions: Actions = {
 			recordId: cartridgeId,
 			action: 'UPDATE',
 			oldData: { status: cartridge.status },
-			newData: { status: 'voided', voidReason: `Scrapped: ${scrapCategory}` },
+			newData: { status: 'scrapped', voidReason: `Scrapped: ${scrapCategory}` },
 			changedAt: now,
 			changedBy: locals.user._id,
 			reason: `QC scrap: ${scrapCategory}`
@@ -295,7 +296,7 @@ export const actions: Actions = {
 
 		const cartridge = await CartridgeRecord.findById(cartridgeId).lean() as any;
 		if (!cartridge) return fail(404, { error: 'Cartridge not found' });
-		if (cartridge.status !== 'voided') {
+		if (cartridge.status !== 'scrapped' && cartridge.status !== 'voided') {
 			return fail(400, { error: 'Cartridge is not in scrapped/voided state' });
 		}
 
@@ -330,7 +331,7 @@ export const actions: Actions = {
 			tableName: 'cartridge_records',
 			recordId: cartridgeId,
 			action: 'UPDATE',
-			oldData: { status: 'voided' },
+			oldData: { status: cartridge.status },
 			newData: { status: restoredPhase },
 			changedAt: now,
 			changedBy: locals.user._id,

@@ -39,7 +39,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const waxStored = await CartridgeRecord.countDocuments({ status: 'wax_stored' });
 	const reagentStored = await CartridgeRecord.countDocuments({ status: 'stored' });
 	const sealed = await CartridgeRecord.countDocuments({ status: 'sealed' });
-	const voided = await CartridgeRecord.countDocuments({ status: 'voided' });
+	// Count both 'scrapped' (QC rejects) and legacy 'voided' — same semantic
+	// bucket for the "not usable" cartridge count tile.
+	const voided = await CartridgeRecord.countDocuments({ status: { $in: ['scrapped', 'voided'] } });
 
 	// === Parts inventory (cartridge BOM) ===
 	const parts = await PartDefinition.find({ bomType: 'cartridge', isActive: true })

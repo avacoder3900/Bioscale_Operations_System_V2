@@ -1,6 +1,6 @@
 export const config = { maxDuration: 60 };
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, EquipmentLocation, Equipment, WaxFillingRun, ReagentBatchRecord, CartridgeRecord } from '$lib/server/db';
+import { connectDB, EquipmentLocation, Equipment, WaxFillingRun, ReagentBatchRecord, CartridgeRecord, BackingLot } from '$lib/server/db';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -37,8 +37,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		assignedRunId: t.assignedRunId ?? null
 	}));
 
-	// Compute occupant counts from CartridgeRecord
-	const [waxCounts, reagentCounts] = await Promise.all([
+	// Compute occupant counts from CartridgeRecord + BackingLot
+	const [waxCounts, reagentCounts, ovenCountsByName, ovenCountsById] = await Promise.all([
 		CartridgeRecord.aggregate([
 			{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored' } },
 			{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
@@ -46,11 +46,24 @@ export const load: PageServerLoad = async ({ locals }) => {
 		CartridgeRecord.aggregate([
 			{ $match: { 'storage.fridgeName': { $exists: true }, status: { $in: ['stored', 'reagent_filled'] } } },
 			{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
+		]).catch(() => []),
+		BackingLot.aggregate([
+			{ $match: { status: { $in: ['in_oven', 'ready'] }, ovenLocationName: { $exists: true, $ne: null } } },
+			{ $group: { _id: '$ovenLocationName', count: { $sum: '$cartridgeCount' } } }
+		]).catch(() => []),
+		BackingLot.aggregate([
+			{ $match: { status: { $in: ['in_oven', 'ready'] }, ovenLocationId: { $exists: true, $ne: null } } },
+			{ $group: { _id: '$ovenLocationId', count: { $sum: '$cartridgeCount' } } }
 		]).catch(() => [])
 	]);
 	const occupantMap = new Map<string, number>();
-	for (const c of [...waxCounts as any[], ...reagentCounts as any[]]) {
-		// Match by barcode or display name
+	for (const c of [
+		...(waxCounts as any[]),
+		...(reagentCounts as any[]),
+		...(ovenCountsByName as any[]),
+		...(ovenCountsById as any[])
+	]) {
+		// Match by barcode, display name, or equipment _id
 		occupantMap.set(c._id, (occupantMap.get(c._id) ?? 0) + c.count);
 	}
 
@@ -73,7 +86,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		if (!['fridge', 'oven', 'robot'].includes(equip.equipmentType)) continue;
 		const children = childLocMap.get(String(equip._id)) ?? [];
 		let occupants = 0;
-		const keys = [equip.barcode, equip.name].filter(Boolean);
+		// Match keys: equipment _id (for ovenLocationId), barcode, and display name
+		const keys = [String(equip._id), equip.barcode, equip.name].filter(Boolean);
 		for (const key of keys) occupants += occupantMap.get(key) ?? 0;
 		for (const child of children) {
 			const childKeys = [child.barcode, child.displayName].filter(Boolean);

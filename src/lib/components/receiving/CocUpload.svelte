@@ -1,14 +1,16 @@
 <script lang="ts">
 	interface Props {
-		onupload: (file: File) => void;
+		onupload: (file: File, manualLotNumber?: string) => void;
 		uploading?: boolean;
+		error?: string | null;
 	}
 
-	let { onupload, uploading = false }: Props = $props();
+	let { onupload, uploading = false, error = null }: Props = $props();
 
 	let selectedFile = $state<File | null>(null);
 	let dragOver = $state(false);
 	let previewUrl = $state<string | null>(null);
+	let manualLotNumber = $state('');
 
 	const ACCEPTED = '.pdf,.jpg,.jpeg,.png,.heic,.docx';
 	const isPdf = $derived(selectedFile?.type === 'application/pdf');
@@ -36,7 +38,7 @@
 	}
 
 	function submit() {
-		if (selectedFile) onupload(selectedFile);
+		if (selectedFile) onupload(selectedFile, manualLotNumber.trim() || undefined);
 	}
 </script>
 
@@ -68,6 +70,27 @@
 			<p class="tron-text-muted mt-1 text-xs">PDF, images, or Word documents</p>
 		{/if}
 	</div>
+
+	<!-- Manual lot number (optional; required if OCR can't read it) -->
+	{#if selectedFile}
+		<div>
+			<label for="coc-lot-number" class="tron-text-muted mb-1 block text-xs">
+				Lot Number <span class="tron-text-muted">(optional — will be extracted from COC if left blank)</span>
+			</label>
+			<input
+				id="coc-lot-number"
+				type="text"
+				bind:value={manualLotNumber}
+				placeholder="Enter manually if OCR can't read it"
+				class="tron-input w-full px-3 py-2 font-mono text-sm"
+			/>
+		</div>
+	{/if}
+
+	<!-- Error display -->
+	{#if error}
+		<div class="rounded bg-red-500/10 px-4 py-2 text-sm text-red-400">{error}</div>
+	{/if}
 
 	<!-- Preview -->
 	{#if selectedFile}
