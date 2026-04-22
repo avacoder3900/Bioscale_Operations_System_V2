@@ -258,6 +258,8 @@ export const actions: Actions = {
 		const rejectionReason = (data.get('rejectionReason') as string) || '';
 		const now = new Date();
 
+		// Wax rejects use status='scrapped' — distinct from generic 'voided'
+		// used for operator-initiated removals. Cartridge stays in the system.
 		await CartridgeRecord.findOneAndUpdate(
 			{ _id: cartridgeId, 'waxQc.recordedAt': { $exists: false } },
 			{
@@ -267,7 +269,9 @@ export const actions: Actions = {
 					'waxQc.operator': { _id: locals.user._id, username: locals.user.username },
 					'waxQc.timestamp': now,
 					'waxQc.recordedAt': now,
-					status: 'voided'
+					status: 'scrapped',
+					voidedAt: now,
+					voidReason: `Wax QC rejection: ${rejectionReason}`
 				}
 			}
 		);
