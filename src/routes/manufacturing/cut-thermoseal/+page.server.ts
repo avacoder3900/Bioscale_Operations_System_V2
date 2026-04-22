@@ -94,17 +94,22 @@ export const actions: Actions = {
 			});
 		}
 
-		const stripPartId = await resolvePartId('PT-CT-112');
-		if (stripPartId && acceptedCount > 0) {
+		// Roll → sheets. Output of this step is PT-CT-111 (Thermoseal Cut
+		// Sheet), which then goes into the laser-cutting step to become
+		// PT-CT-112 (Thermoseal Laser Cut Sheet). Earlier versions of this
+		// fix incorrectly wrote PT-CT-112 here — corrected per the BOM
+		// (PT-CT-111 → PT-CT-112).
+		const cutSheetPartId = await resolvePartId('PT-CT-111');
+		if (cutSheetPartId && acceptedCount > 0) {
 			await recordTransaction({
 				transactionType: 'creation',
-				partDefinitionId: stripPartId,
+				partDefinitionId: cutSheetPartId,
 				quantity: acceptedCount,
 				manufacturingStep: 'cut_thermoseal',
 				manufacturingRunId: runId,
 				operatorId: locals.user._id,
 				operatorUsername: locals.user.username,
-				notes: `Cut thermoseal [${lotBarcode}]: produced ${acceptedCount} strips (${expectedSheets - acceptedCount} rejected of ${expectedSheets} expected)`
+				notes: `Cut thermoseal [${lotBarcode}]: produced ${acceptedCount} cut sheets (${expectedSheets - acceptedCount} rejected of ${expectedSheets} expected)`
 			});
 		}
 

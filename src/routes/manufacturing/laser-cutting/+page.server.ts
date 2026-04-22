@@ -146,15 +146,49 @@ export const actions: Actions = {
 			}
 		}
 
-		// Record inventory transaction for laser cutting
-		await recordTransaction({
-			transactionType: 'creation',
-			quantity: outputSheetCount,
-			manufacturingStep: 'laser_cut',
-			operatorId: locals.user._id,
-			operatorUsername: locals.user.username,
-			notes: `Laser cut batch: ${inputSheetCount} input → ${outputSheetCount} output (${failureCount} failures)`
-		});
+		// Part-level inventory transactions — wire both legs to PartDefinition
+		// so WI-01 and the Parts page see the same number.
+		//
+		//   PT-CT-111 Thermoseal Cut Sheet      — consumed by inputSheetCount
+		//   PT-CT-112 Thermoseal Laser Cut Sht  — created by outputSheetCount × cartridgesPerLaserCutSheet (counted in strips)
+		//
+		// Previously this block just called recordTransaction with no
+		// partDefinitionId, which wrote an orphan transaction row and did not
+		// move any part's inventoryCount. The ManufacturingMaterial branch
+		// above (outputMaterial) is legacy/unused — kept for now in case it's
+		// referenced elsewhere, but PT-CT-112 is the source of truth.
+		const stripsPerSheet: number = general.cartridgesPerLaserCutSheet ?? 6;
+		const inputPartId = await resolvePartId('PT-CT-111');
+		const outputPartId = await resolvePartId('PT-CT-112');
+
+		if (inputPartId && inputSheetCount > 0) {
+			await recordTransaction({
+				transactionType: 'consumption',
+				partDefinitionId: inputPartId,
+				quantity: inputSheetCount,
+				manufacturingStep: 'laser_cut',
+				manufacturingRunId: outputLotId,
+				operatorId: locals.user._id,
+				operatorUsername: locals.user.username,
+				lotId: inputLotId || undefined,
+				notes: `Laser cut batch ${outputLotId}: consumed ${inputSheetCount} cut sheets`
+			});
+		}
+
+		if (outputPartId && outputSheetCount > 0) {
+			const stripsProduced = outputSheetCount * stripsPerSheet;
+			await recordTransaction({
+				transactionType: 'creation',
+				partDefinitionId: outputPartId,
+				quantity: stripsProduced,
+				manufacturingStep: 'laser_cut',
+				manufacturingRunId: outputLotId,
+				operatorId: locals.user._id,
+				operatorUsername: locals.user.username,
+				lotId: outputLotId,
+				notes: `Laser cut batch ${outputLotId}: produced ${outputSheetCount} sheets × ${stripsPerSheet} strips/sheet = ${stripsProduced} strips (${failureCount} sheet failures from ${inputSheetCount} input)`
+			});
+		}
 
 		// Audit log for batch record creation
 		const batchRecord = await LaserCutBatch.findOne({ operatorId: locals.user._id, outputLotId }).lean() as any;
