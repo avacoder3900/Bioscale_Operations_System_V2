@@ -15,7 +15,8 @@ import {
 	generateLotNumber
 } from '$lib/server/db';
 import { env } from '$env/dynamic/private';
-import { uploadFile as r2Upload, buildCocKey } from '$lib/server/r2';
+import { buildCocKey } from '$lib/server/r2';
+import { uploadToR2 } from '$lib/server/services/r2';
 import { extractText } from '$lib/server/ocr';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -102,7 +103,7 @@ export const actions: Actions = {
 			}
 
 			const r2Key = buildCocKey(lotNumber, ext);
-			await r2Upload(r2Key, buffer, file.type || 'image/jpeg');
+			await uploadToR2(Buffer.from(buffer), r2Key, file.type || 'image/jpeg');
 			const fileUrl = `/api/r2/files/${r2Key}`;
 
 			return { success: true, cocUrl: fileUrl, cocR2Key: r2Key, cocLotNumber: lotNumber, cocFileName: `${lotNumber}.${ext}` };
