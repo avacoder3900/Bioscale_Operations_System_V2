@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
+	import { enhance, deserialize } from '$app/forms';
 	import type { PageData, ActionData } from './$types';
 	import PartSelector from '$lib/components/receiving/PartSelector.svelte';
 	import CocUpload from '$lib/components/receiving/CocUpload.svelte';
@@ -32,6 +32,7 @@
 	let orderedQuantity = $state<number | null>(null);
 	let cocUrl = $state<string | null>(null);
 	let uploading = $state(false);
+	let cocError = $state<string | null>(null);
 
 	// Steps: 1=part+PO, 2=pathway (CoC upload / IP tool check), 3=IP inspection, 4=lot creation, 5=success
 	let step = $state(1);
@@ -138,24 +139,42 @@
 		// If failed, stay on step 3 — decision panel will render
 	}
 
-	function handleCocUpload(file: File) {
+	async function handleCocUpload(file: File, manualLotNumber?: string) {
 		if (!selectedPart) return;
 		uploading = true;
-		const fd = new FormData();
-		fd.append('cocFile', file);
-		fd.append('partId', selectedPart.id);
+		cocError = null;
+		try {
+			const fd = new FormData();
+			fd.append('cocFile', file);
+			fd.append('partId', selectedPart.id);
+			if (manualLotNumber) fd.append('cocLotNumber', manualLotNumber);
 
-		fetch('?/uploadCoc', { method: 'POST', body: fd })
-			.then((r) => r.json())
-			.then((result) => {
-				const actionData = result?.data?.[0] ?? result?.data ?? result;
-				if (actionData?.cocUrl) {
-					cocUrl = actionData.cocUrl;
+			const response = await fetch('?/uploadCoc', {
+				method: 'POST',
+				headers: { 'x-sveltekit-action': 'true' },
+				body: fd
+			});
+			const result = deserialize(await response.text());
+
+			if (result.type === 'success') {
+				const data = result.data as Record<string, unknown> | undefined;
+				if (data?.cocUrl) {
+					cocUrl = data.cocUrl as string;
 					step = 4;
+				} else {
+					cocError = 'Upload succeeded but no URL returned';
 				}
-			})
-			.catch(() => {})
-			.finally(() => (uploading = false));
+			} else if (result.type === 'failure') {
+				const data = result.data as Record<string, unknown> | undefined;
+				cocError = (data?.error as string) ?? 'Upload failed';
+			} else {
+				cocError = 'Upload failed';
+			}
+		} catch (err) {
+			cocError = err instanceof Error ? err.message : 'Upload failed';
+		} finally {
+			uploading = false;
+		}
 	}
 
 	// Step labels for indicator
@@ -283,7 +302,7 @@
 					<p class="tron-text-muted mb-4 text-sm">
 						Upload the supplier's Certificate of Conformity for this part.
 					</p>
-					<CocUpload onupload={handleCocUpload} {uploading} />
+					<CocUpload onupload={handleCocUpload} {uploading} error={cocError} />
 				</div>
 			{:else if !ipRevision}
 				<div class="tron-card p-6">
