@@ -1043,7 +1043,7 @@
 							{#each data.receivingLots as lot}
 								<tr class="border-b hover:bg-white/5" style="border-color: var(--color-tron-border);">
 									<td class="p-2">
-										<a href="/parts/accession" class="text-cyan-400 hover:underline font-mono text-xs">{lot.lotNumber}</a>
+										<a href="/parts/accession/{lot.id}" class="text-cyan-400 hover:underline font-mono text-xs">{lot.lotNumber}</a>
 									</td>
 									<td class="p-2 font-mono text-xs tron-text-muted">{lot.bagBarcode || lot.lotId || '—'}</td>
 									<td class="p-2 text-right tron-text-primary">{lot.quantity}</td>
