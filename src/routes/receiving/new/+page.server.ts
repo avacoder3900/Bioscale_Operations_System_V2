@@ -108,7 +108,19 @@ export const actions: Actions = {
 
 			return { success: true, cocUrl: fileUrl, cocR2Key: r2Key, cocLotNumber: lotNumber, cocFileName: `${lotNumber}.${ext}` };
 		} catch (err) {
-			return fail(500, { error: err instanceof Error ? err.message : 'Upload failed' });
+			console.error('[receiving/new] uploadCoc error:', err);
+			let message = err instanceof Error ? err.message : 'Upload failed';
+			const cause = (err as { cause?: unknown })?.cause;
+			if (cause) {
+				if (cause instanceof Error) {
+					message += ` — cause: ${cause.message}`;
+					const code = (cause as { code?: string }).code;
+					if (code) message += ` (${code})`;
+				} else {
+					message += ` — cause: ${JSON.stringify(cause)}`;
+				}
+			}
+			return fail(500, { error: message });
 		}
 	},
 
