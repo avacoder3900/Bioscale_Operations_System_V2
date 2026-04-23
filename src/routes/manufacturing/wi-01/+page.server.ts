@@ -294,6 +294,13 @@ export const actions: Actions = {
 
 		const lot = await LotRecord.findById(lotId).lean() as any;
 		if (!lot) return fail(404, { confirmComplete: { error: 'Lot not found' } });
+		if (lot.status === 'Completed') {
+			// Idempotency: a double-submit (e.g. SvelteKit action fetch retried)
+			// would otherwise produce duplicate consumption + scrap transactions.
+			// See inventory-transactions audit trail for the 2026-04-13
+			// KnvhBjHKSC0jStX1rQw4s lot that was superseded for this reason.
+			return fail(409, { confirmComplete: { error: 'Lot already completed' } });
+		}
 
 		const now = new Date();
 		const startTime = lot.startTime ?? now;
