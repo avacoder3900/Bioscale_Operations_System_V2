@@ -303,23 +303,24 @@ Every merged event emits `{ at: Date, kind: string, source: string, summary: str
 ### S9 — Legacy `/manufacturing/wax-filling` link cleanup
 **As an** operator **I want** every "Go to Wax Filling" link to route me to the current `/manufacturing/opentron-control` hub **so that** I'm never dropped on a dead or soft-orphaned page.
 
-**Scope:** 8 `.svelte` files carrying legacy `/manufacturing/wax-filling*` links. The `opentron-control` hub is the replacement for wax-filling and MUST NOT be touched.
+**Scope:** 7 `.svelte` files carrying legacy `/manufacturing/wax-filling*` links — 12 distinct call sites. The `opentron-control` hub is the replacement for wax-filling and MUST NOT be touched.
 
-**File-by-file mapping:**
+**File-by-file mapping (line numbers re-verified on dev 2026-04-23):**
 
-| File | Line(s) | Current link | Replace with |
-|---|---|---|---|
-| `src/routes/manufacturing/+page.svelte` | 130 | `/manufacturing/wax-filling/settings` | `/manufacturing/opentron-control/settings` (verify this route exists; if not, see note below) |
-| `src/routes/manufacturing/+page.svelte` | 236 | `/manufacturing/wax-filling?robot={robot.robotId}` | `/manufacturing/opentron-control?robot={robot.robotId}` |
-| `src/routes/manufacturing/+page.svelte` | 248 | `/manufacturing/wax-filling?robot={robot.robotId}` | `/manufacturing/opentron-control?robot={robot.robotId}` |
-| `src/routes/manufacturing/opentrons/+page.svelte` | 80 | `/manufacturing/wax-filling/settings` | `/manufacturing/opentron-control/settings` |
-| `src/routes/manufacturing/opentrons/+page.svelte` | 198 | ternary into `/manufacturing/wax-filling` or `/manufacturing/reagent-filling` | `/manufacturing/opentron-control?robot={robot.robotId}` (single target — opentron-control handles the process mode internally) |
-| `src/routes/manufacturing/opentrons/+page.svelte` | 206 | `/manufacturing/wax-filling?robot=` | `/manufacturing/opentron-control?robot={robot.robotId}` |
-| `src/routes/manufacturing/opentron-control/+page.svelte` | 66 | `/manufacturing/wax-filling?robot={robot.robotId}` | `/manufacturing/opentron-control/wax/new?robot={robot.robotId}` if that's the intent, otherwise remove the link (audit finding: this is a redundant self-link from the new hub back to the old page). **Sub-agent must ask reviewer in the PR description which interpretation is correct.** |
-| `src/routes/manufacturing/cart-mfg-dev/+page.svelte` | 173, 186 | `/manufacturing/wax-filling?robot=` | `/manufacturing/opentron-control?robot={robot.robotId}` |
-| `src/routes/manufacturing/reagent-filling/+layout.svelte` | 202 | `/manufacturing/wax-filling?robot=` | `/manufacturing/opentron-control?robot={robotState.robotId}` |
-| `src/routes/manufacturing/reagent-filling/+page.svelte` | 341 | `/manufacturing/wax-filling?robot={data.robotId}` | `/manufacturing/opentron-control?robot={data.robotId}` |
-| `src/routes/manufacturing/opentron-control/settings/+page.svelte` | 30 | `/manufacturing/wax-filling/settings` | internal nav back to `/manufacturing/opentron-control/settings` or remove (same ambiguity as opentron-control/+page.svelte:66 — ask in PR) |
+| # | File | Line | Current link | Replace with |
+|---|---|---|---|---|
+| 1 | `src/routes/manufacturing/+page.svelte` | 130 | `/manufacturing/wax-filling/settings` | `/manufacturing/opentron-control/settings` |
+| 2 | `src/routes/manufacturing/+page.svelte` | 236 | `/manufacturing/wax-filling?robot={robot.robotId}` | `/manufacturing/opentron-control?robot={robot.robotId}` |
+| 3 | `src/routes/manufacturing/+page.svelte` | 248 | `/manufacturing/wax-filling?robot={robot.robotId}` | `/manufacturing/opentron-control?robot={robot.robotId}` |
+| 4 | `src/routes/manufacturing/opentrons/+page.svelte` | 156 | `/manufacturing/wax-filling/settings` | `/manufacturing/opentron-control/settings` |
+| 5 | `src/routes/manufacturing/opentrons/+page.svelte` | 274 | ternary into `/manufacturing/wax-filling` or `/manufacturing/reagent-filling` | `/manufacturing/opentron-control?robot={robot.robotId}` (single target — opentron-control handles process mode internally) |
+| 6 | `src/routes/manufacturing/opentrons/+page.svelte` | 282 | `/manufacturing/wax-filling?robot=` | `/manufacturing/opentron-control?robot={robot.robotId}` |
+| 7 | `src/routes/manufacturing/opentron-control/+page.svelte` | 66 | `/manufacturing/wax-filling?robot={robot.robotId}` | **Ambiguous — ask in PR.** Either `/manufacturing/opentron-control/wax/new?robot={robot.robotId}` (if intent is new-run shortcut) or remove (self-link from hub to dead page). |
+| 8 | `src/routes/manufacturing/cart-mfg-dev/+page.svelte` | 173 | `/manufacturing/wax-filling?robot=` | `/manufacturing/opentron-control?robot={robot.robotId}` |
+| 9 | `src/routes/manufacturing/cart-mfg-dev/+page.svelte` | 186 | `/manufacturing/wax-filling?robot=` | `/manufacturing/opentron-control?robot={robot.robotId}` |
+| 10 | `src/routes/manufacturing/reagent-filling/+layout.svelte` | 202 | `/manufacturing/wax-filling?robot=` | `/manufacturing/opentron-control?robot={robotState.robotId}` |
+| 11 | `src/routes/manufacturing/reagent-filling/+page.svelte` | 341 | `/manufacturing/wax-filling?robot={data.robotId}` | `/manufacturing/opentron-control?robot={data.robotId}` |
+| 12 | `src/routes/manufacturing/opentron-control/settings/+page.svelte` | 30 | `/manufacturing/wax-filling/settings` | **Ambiguous — same as row 7.** Self-link from the new settings hub back to the legacy settings. Either internal nav to `/manufacturing/opentron-control/settings` (self) or remove. |
 
 **Explicitly out of scope (self-referential links inside the soft-orphaned wax-filling tree):** `src/routes/manufacturing/wax-filling/+layout.svelte`, `src/routes/manufacturing/wax-filling/settings/+page.svelte`, `src/routes/manufacturing/wax-filling/equipment/+page.svelte`. The wax-filling tree stays in place for the soak period; don't modify its internal nav.
 
@@ -329,7 +330,7 @@ Every merged event emits `{ at: Date, kind: string, source: string, summary: str
 
 **Acceptance criteria**
 - [ ] `grep -r "/manufacturing/wax-filling" src/routes/` returns only: (a) legacy component imports under `src/lib/components/manufacturing/wax-filling/`, (b) the wax-filling tree's own internal nav (out of scope for this story).
-- [ ] All 11 call sites updated per the mapping table.
+- [ ] All 12 call sites updated per the mapping table.
 - [ ] Manual click-test: root nav → manufacturing dashboard → every robot-related link lands on opentron-control.
 - [ ] `npm run check` + `npm run lint` + `npm run test:unit` pass.
 
