@@ -4,6 +4,7 @@ import {
 	Equipment, EquipmentLocation, AuditLog, BackingLot, WaxBatch, ReceivingLot, LotRecord
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
+import { resolveFridgeId } from '$lib/server/services/equipment-resolve';
 import { isAdmin } from '$lib/server/permissions';
 import { User } from '$lib/server/db';
 import { notifyLowWaxBatch, notifyRunLifecycle, shouldWarnLowWax } from '$lib/server/notifications';
@@ -798,13 +799,18 @@ export const actions: Actions = {
 		const runId = data.get('runId') as string;
 		const now = new Date();
 
-		// Server-side cooling timer check: minimum 10 minutes must pass after cooling confirmed
+		// Server-side cooling timer check: minimum cool-down before QC.
+		// Configurable via ManufacturingSettings.waxFilling.minCoolingBeforeQcMin
+		// (default 2 min). Editable from the wax-filling settings page.
 		const runBeforeQc = await WaxFillingRun.findById(runId).select('coolingConfirmedAt').lean() as any;
 		if (runBeforeQc?.coolingConfirmedAt) {
+			const settingsDocQc = await ManufacturingSettings.findById('default').select('waxFilling.minCoolingBeforeQcMin').lean() as any;
+			const minCoolMin = settingsDocQc?.waxFilling?.minCoolingBeforeQcMin ?? 2;
+			const minCoolMs = minCoolMin * 60 * 1000;
 			const elapsedMs = Date.now() - new Date(runBeforeQc.coolingConfirmedAt).getTime();
-			if (elapsedMs < 10 * 60 * 1000) {
-				const remainingMin = Math.ceil((10 * 60 * 1000 - elapsedMs) / 60000);
-				return fail(400, { error: `Cartridges must cool for at least 10 minutes before QC inspection. ${remainingMin} minute${remainingMin === 1 ? '' : 's'} remaining.` });
+			if (elapsedMs < minCoolMs) {
+				const remainingMin = Math.ceil((minCoolMs - elapsedMs) / 60000);
+				return fail(400, { error: `Cartridges must cool for at least ${minCoolMin} minute${minCoolMin === 1 ? '' : 's'} before QC inspection. ${remainingMin} minute${remainingMin === 1 ? '' : 's'} remaining.` });
 			}
 		}
 
@@ -1090,12 +1096,16 @@ export const actions: Actions = {
 		}
 
 		const now = new Date();
+		// S1a: resolve the scanned fridge reference to Equipment._id. See
+		// opentron-control/wax/[runId]/+page.server.ts for the same pattern.
+		const resolvedLocationId = await resolveFridgeId(location);
 		if (cartridgeIds.length > 0) {
 			const bulkOps = cartridgeIds.map((cid: string) => ({
 				updateOne: {
 					filter: { _id: cid, 'waxStorage.recordedAt': { $exists: false } },
 					update: {
 						$set: {
+							'waxStorage.locationId': resolvedLocationId,
 							'waxStorage.location': location,
 							'waxStorage.coolingTrayId': coolingTrayId,
 							'waxStorage.operator': { _id: locals.user._id, username: locals.user.username },

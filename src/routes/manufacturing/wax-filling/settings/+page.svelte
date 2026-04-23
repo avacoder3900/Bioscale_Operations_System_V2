@@ -17,6 +17,7 @@
 				removeDeckWarningMin: number;
 				coolingWarningMin: number;
 				deckLockoutMin: number;
+				minCoolingBeforeQcMin: number;
 				incubatorTempC: number;
 				heaterTempC: number;
 				waxPerDeckUl: number;
@@ -63,7 +64,8 @@
 				{ key: 'runDurationMin', label: 'Run Duration', unit: 'min', min: 1, max: 120 },
 				{ key: 'removeDeckWarningMin', label: 'Remove Deck Warning', unit: 'min', min: 1, max: 60 },
 				{ key: 'coolingWarningMin', label: 'Cooling Warning', unit: 'min', min: 1, max: 120 },
-				{ key: 'deckLockoutMin', label: 'Deck Lockout', unit: 'min', min: 1, max: 120 }
+				{ key: 'deckLockoutMin', label: 'Deck Lockout', unit: 'min', min: 1, max: 120 },
+				{ key: 'minCoolingBeforeQcMin', label: 'Min Cooling Before QC', unit: 'min', min: 0, max: 120 }
 			]
 		},
 		{

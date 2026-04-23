@@ -53,6 +53,10 @@
 					<div class="mt-1 font-mono text-lg" style="color: var(--color-tron-text)">{data.wax.coolingWarningMin} <span class="text-xs">min</span></div>
 				</div>
 				<div class="rounded border border-[var(--color-tron-border)] p-3">
+					<div class="text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Min cooling before QC</div>
+					<div class="mt-1 font-mono text-lg" style="color: var(--color-tron-text)">{data.wax.minCoolingBeforeQcMin} <span class="text-xs">min</span></div>
+				</div>
+				<div class="rounded border border-[var(--color-tron-border)] p-3">
 					<div class="text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Deck lockout</div>
 					<div class="mt-1 font-mono text-lg" style="color: var(--color-tron-text)">{data.wax.deckLockoutMin} <span class="text-xs">min</span></div>
 				</div>
