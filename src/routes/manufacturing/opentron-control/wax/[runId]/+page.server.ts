@@ -185,10 +185,16 @@ export const actions: Actions = {
 		const runBeforeQc = await WaxFillingRun.findById(runId).select('coolingConfirmedAt coolingConfirmedTime').lean() as any;
 		const confirmedAt = runBeforeQc?.coolingConfirmedAt ?? runBeforeQc?.coolingConfirmedTime;
 		if (confirmedAt) {
+			// Minimum cool-down before QC is configurable via
+			// ManufacturingSettings.waxFilling.minCoolingBeforeQcMin (default 2 min).
+			// Editable from the wax-filling settings page.
+			const settingsDocQc = await ManufacturingSettings.findById('default').select('waxFilling.minCoolingBeforeQcMin').lean() as any;
+			const minCoolMin = settingsDocQc?.waxFilling?.minCoolingBeforeQcMin ?? 2;
+			const minCoolMs = minCoolMin * 60 * 1000;
 			const elapsedMs = Date.now() - new Date(confirmedAt).getTime();
-			if (elapsedMs < 10 * 60 * 1000) {
-				const remainingMin = Math.ceil((10 * 60 * 1000 - elapsedMs) / 60000);
-				return fail(400, { error: `Cartridges must cool for at least 10 minutes. ${remainingMin} min remaining.` });
+			if (elapsedMs < minCoolMs) {
+				const remainingMin = Math.ceil((minCoolMs - elapsedMs) / 60000);
+				return fail(400, { error: `Cartridges must cool for at least ${minCoolMin} minute${minCoolMin === 1 ? '' : 's'}. ${remainingMin} min remaining.` });
 			}
 		}
 
