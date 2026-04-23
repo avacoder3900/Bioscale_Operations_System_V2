@@ -3,7 +3,6 @@ import {
 	connectDB, CartridgeRecord, ManualCartridgeRemoval, AuditLog, generateId
 } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
-import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 
 export const config = { maxDuration: 60 };
@@ -32,10 +31,19 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 export const actions: Actions = {
 	/**
-	 * Manually remove a group of wax-stored cartridges. Operators scan 1+
-	 * cartridges, provide a reason, and submit. Each cartridge is marked
-	 * scrapped and a scrap InventoryTransaction is written so the scrap audit
-	 * (see scripts/audit-scrap-tracking.ts) remains clean.
+	 * Manually check out (remove) one or more wax-stored cartridges.
+	 *
+	 * IMPORTANT: checkout is orthogonal to scrap/quality status. A cartridge
+	 * that was scrapped stays scrapped when checked out; a production-level
+	 * cartridge stays at its production status. This action records the
+	 * physical removal event only — it does NOT change CartridgeRecord.status
+	 * and does NOT write an InventoryTransaction (cartridges are not
+	 * inventoried as PartDefinitions; their raw materials were consumed at
+	 * WI-01 backing when they came into existence).
+	 *
+	 * Wax-stored eligibility is enforced here because that's the intended
+	 * point of checkout going forward; historical checkouts of completed
+	 * cartridges are handled via a one-off backfill script, not this action.
 	 */
 	removeWaxStoredCartridges: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
@@ -71,12 +79,11 @@ export const actions: Actions = {
 			if (c.status !== 'wax_stored') { issues.push(`${cid}: status is '${c.status}', expected 'wax_stored'`); }
 		}
 		if (issues.length > 0) {
-			return fail(400, { removeWaxStored: { error: `Cannot remove: ${issues.join('; ')}` } });
+			return fail(400, { removeWaxStored: { error: `Cannot check out: ${issues.join('; ')}` } });
 		}
 
 		const now = new Date();
 		const removalId = generateId();
-		const voidReason = `Manual wax-stored removal: ${reason}`;
 
 		await ManualCartridgeRemoval.create({
 			_id: removalId,
@@ -86,33 +93,19 @@ export const actions: Actions = {
 			removedAt: now
 		});
 
+		// AuditLog the checkout event per cartridge so the audit trail still
+		// shows who checked this cartridge out and when, without mutating
+		// its production status.
 		for (const cid of cartridgeIds) {
-			await CartridgeRecord.findByIdAndUpdate(cid, {
-				$set: { status: 'scrapped', voidedAt: now, voidReason }
-			});
-
-			await recordTransaction({
-				transactionType: 'scrap',
-				cartridgeRecordId: cid,
-				quantity: 1,
-				manufacturingStep: 'storage',
-				manufacturingRunId: removalId,
-				operatorId: locals.user._id,
-				operatorUsername: locals.user.username,
-				scrapReason: reason,
-				scrapCategory: 'other',
-				notes: `Manual wax-stored removal (group ${removalId}): ${reason}`
-			});
-
 			await AuditLog.create({
 				_id: generateId(),
 				tableName: 'cartridge_records',
 				recordId: cid,
-				action: 'UPDATE',
+				action: 'CHECKOUT',
 				changedBy: locals.user.username,
 				changedAt: now,
-				newData: { status: 'scrapped', voidedAt: now, voidReason, removalGroupId: removalId },
-				reason: voidReason
+				newData: { checkedOut: true, removalGroupId: removalId, reason },
+				reason: `Manual checkout: ${reason}`
 			});
 		}
 

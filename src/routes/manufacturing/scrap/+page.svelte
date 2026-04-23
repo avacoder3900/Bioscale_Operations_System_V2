@@ -83,10 +83,11 @@
 <div class="space-y-6">
 	<div class="flex items-center justify-between">
 		<div>
-			<h2 class="text-xl font-semibold text-[var(--color-tron-text)]">Cartridge Scrap</h2>
+			<h2 class="text-xl font-semibold text-[var(--color-tron-text)]">Cartridge Checkout</h2>
 			<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">
-				Scan one or more wax-stored cartridges, provide a reason, and remove them as a group.
-				Each removal is logged with operator, timestamp, and a scrap inventory transaction.
+				Scan one or more wax-stored cartridges, provide a reason, and check them out as a group.
+				Checkout records the physical removal event — it does not change the cartridge's production
+				or quality status. Each checkout is logged with operator and timestamp.
 			</p>
 		</div>
 		{#if scannedIds.length > 0 || reason}
@@ -188,7 +189,7 @@
 						id="manual-removal-reason"
 						bind:value={reason}
 						rows="4"
-						placeholder="Why are these cartridges being removed? (required)"
+						placeholder="Why are these cartridges being checked out? (required)"
 						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
 						disabled={submitting}
 					></textarea>
@@ -200,25 +201,25 @@
 					</div>
 				{:else if form?.removeWaxStored?.success}
 					<div class="rounded border border-emerald-500/50 bg-emerald-900/20 px-3 py-2 text-xs text-emerald-300">
-						Removed {form.removeWaxStored.count} cartridge{form.removeWaxStored.count === 1 ? '' : 's'}.
+						Checked out {form.removeWaxStored.count} cartridge{form.removeWaxStored.count === 1 ? '' : 's'}.
 					</div>
 				{/if}
 
 				<button
 					type="submit"
 					disabled={submitting || scannedIds.length === 0 || !reason.trim()}
-					class="rounded border border-[var(--color-tron-red)]/50 bg-red-900/20 px-4 py-2 text-sm font-medium text-red-300 hover:bg-red-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
+					class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-4 py-2 text-sm font-medium text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40 disabled:cursor-not-allowed"
 				>
-					{submitting ? 'Removing…' : `Remove ${scannedIds.length} cartridge${scannedIds.length === 1 ? '' : 's'}`}
+					{submitting ? 'Checking out…' : `Check Out ${scannedIds.length} cartridge${scannedIds.length === 1 ? '' : 's'}`}
 				</button>
 			</div>
 		</form>
 	</div>
 
 	<div>
-		<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">Recent Removals</h3>
+		<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">Recent Checkouts</h3>
 		{#if data.removalHistory.length === 0}
-			<p class="mt-2 text-xs text-[var(--color-tron-text-secondary)]">No manual removals yet.</p>
+			<p class="mt-2 text-xs text-[var(--color-tron-text-secondary)]">No checkouts yet.</p>
 		{:else}
 			<div class="mt-2 overflow-hidden rounded border border-[var(--color-tron-border)]">
 				<table class="w-full text-left text-xs">

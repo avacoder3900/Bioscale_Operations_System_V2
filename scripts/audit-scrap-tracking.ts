@@ -155,8 +155,11 @@ async function main() {
 	}
 
 	// -- (E) Orphan scrap transactions ----------------------------------------
-	console.log('\n[E] Orphan scrap txns — cartridgeRecordId not found or status≠scrapped');
-	const cartScrapTxns = await txns.find({ transactionType: 'scrap', cartridgeRecordId: { $exists: true, $ne: null } }).toArray();
+	// Retracted txns are excluded — they represent reversed/corrected writes
+	// (see scripts/fix-retract-superseded-lot-txns.ts and
+	// scripts/fix-revert-incorrect-checkout-scrap.ts).
+	console.log('\n[E] Orphan scrap txns — cartridgeRecordId not found or status≠scrapped (retracted excluded)');
+	const cartScrapTxns = await txns.find({ transactionType: 'scrap', cartridgeRecordId: { $exists: true, $ne: null }, retractedAt: { $exists: false } }).toArray();
 	let orphan = 0, wrongStatus = 0;
 	for (const t of cartScrapTxns as any[]) {
 		const c = await carts.findOne({ _id: t.cartridgeRecordId });
