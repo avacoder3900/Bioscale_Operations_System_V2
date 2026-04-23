@@ -9,7 +9,7 @@
  */
 import { redirect, fail } from '@sveltejs/kit';
 import {
-	connectDB, LotRecord, ProcessConfiguration, CartridgeRecord,
+	connectDB, LotRecord, ProcessConfiguration,
 	PartDefinition, AuditLog, Equipment, BackingLot, ReceivingLot, generateId
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
@@ -253,8 +253,11 @@ export const actions: Actions = {
 	},
 
 	/**
-	 * Confirm batch completion: create CartridgeRecords + withdraw all 3 materials.
-	 * Each cartridge consumes 1x Cartridge, 1x Thermoseal, 1x Barcode.
+	 * Confirm batch completion: register bucket in the oven + withdraw all 3 materials.
+	 * Each cartridge consumes 1x Cartridge, 1x Thermoseal, 1x Barcode. Individual
+	 * CartridgeRecords are NOT created here — the physical cartridges exist as
+	 * an aggregate count on the BackingLot until their UUIDs are scanned at
+	 * wax deck loading, which is the point of first individuation.
 	 */
 	confirmComplete: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
@@ -303,29 +306,14 @@ export const actions: Actions = {
 			'PT-CT-106': scrapBarcode
 		};
 
-		// Create CartridgeRecords (only for good units)
-		const cartridgeIds: string[] = [];
-		const cartridgeDocs = [];
-		for (let i = 0; i < actualCount; i++) {
-			const cid = generateId();
-			cartridgeIds.push(cid);
-			cartridgeDocs.push({
-				_id: cid,
-				backing: {
-					lotId,
-					lotQrCode: lot.qrCodeRef,
-					ovenEntryTime: now,
-					operator: { _id: locals.user._id, username: locals.user.username },
-					recordedAt: now
-				},
-				status: 'backing',
-				createdAt: now,
-				updatedAt: now
-			});
-		}
-		if (cartridgeDocs.length > 0) {
-			await CartridgeRecord.insertMany(cartridgeDocs);
-		}
+		// Intentionally no per-cartridge CartridgeRecord created here.
+		// A CartridgeRecord comes into existence when its UUID is first scanned
+		// at wax deck loading (see src/routes/manufacturing/wax-filling/+page.server.ts
+		// loadDeck), which is where the physical barcode is first tied to the
+		// individual cartridge. During the backing phase the cartridges are
+		// represented as an aggregate count on BackingLot.cartridgeCount; the
+		// material lineage lives on LotRecord and is copied onto each cartridge
+		// at the moment of scan.
 
 		// Register bucket as a BackingLot so it appears in wax-filling's
 		// "buckets in ovens" list. _id = scanned bucket barcode (that's what
@@ -349,14 +337,14 @@ export const actions: Actions = {
 			{ upsert: true, new: true }
 		);
 
-		// Finalize lot
+		// Finalize lot. cartridgeIds stays empty — individual cartridge records
+		// don't exist until their UUID is scanned at wax deck loading.
 		await LotRecord.findByIdAndUpdate(lotId, {
 			$set: {
 				status: 'Completed',
 				finishTime: now,
 				cycleTime,
 				quantityProduced: actualCount,
-				cartridgeIds,
 				scrapCount: totalScrap,
 				scrapDetail: { cartridge: scrapCartridge, thermoseal: scrapThermoseal, barcode: scrapBarcode },
 				scrapReason: scrapReason || undefined,

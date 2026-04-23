@@ -411,7 +411,11 @@ export const actions: Actions = {
 			inspectionStatus: 'Pending'
 		}));
 
-		// Create CartridgeRecord stubs
+		// Upsert CartridgeRecord stubs. In the normal flow these already exist
+		// (created at wax deck loading). For anomalous first-time scans at reagent
+		// filling we create a minimal record marked 'reagent_filling' so the doc
+		// always has a coherent status — never 'backing' (that's reserved for the
+		// pre-individuation aggregate count on BackingLot).
 		if (cartridgesFilled.length > 0) {
 			const ops = cartridgesFilled.map((cf: any) => ({
 				updateOne: {
@@ -419,9 +423,7 @@ export const actions: Actions = {
 					update: {
 						$setOnInsert: {
 							_id: cf.cartridgeId,
-							status: 'backing',
-							'backing.operator': { _id: locals.user._id, username: locals.user.username },
-							'backing.recordedAt': new Date()
+							status: 'reagent_filling'
 						}
 					},
 					upsert: true

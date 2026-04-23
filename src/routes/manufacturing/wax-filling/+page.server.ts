@@ -1,7 +1,7 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
-	Equipment, EquipmentLocation, AuditLog, BackingLot, WaxBatch, ReceivingLot
+	Equipment, EquipmentLocation, AuditLog, BackingLot, WaxBatch, ReceivingLot, LotRecord
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { isAdmin } from '$lib/server/permissions';
@@ -583,11 +583,57 @@ export const actions: Actions = {
 		// Get activeLotId from the run for traceability
 		const activeLotId: string | undefined = (run as any).activeLotId ?? undefined;
 
+		// Resolve the parent LotRecord so we can copy the raw-material lineage
+		// (cartridge blank / thermoseal / barcode-label input lot barcodes, plus
+		// the QR ref and oven placement recorded at WI-01) onto each scanned
+		// cartridge. This is the point at which a physical cartridge barcode
+		// becomes an individual CartridgeRecord — WI-01 only tracks the aggregate
+		// BackingLot up to this moment.
+		const parentLot = activeLotId
+			? await LotRecord.findOne({ bucketBarcode: activeLotId }).lean() as any
+			: null;
+		const backingInputLots = (parentLot?.inputLots ?? []) as Array<any>;
+		const backingInputLotByMaterial: Record<string, string | null> = {
+			cartridgeBlankLot: backingInputLots.find((l) => l.materialName === 'Cartridge')?.barcode ?? null,
+			thermosealLot: backingInputLots.find((l) => l.materialName === 'Thermoseal Laser Cut Sheet')?.barcode ?? null,
+			barcodeLabelLot: backingInputLots.find((l) => l.materialName === 'Barcode')?.barcode ?? null
+		};
+
 		// Create CartridgeRecord stubs and link to this wax run.
 		// Also record baking oven exit: cartridges are leaving the baking oven
 		// (where they were placed during WI-01) and going onto the deck.
 		if (cartridgeIds.length > 0) {
 			const now = new Date();
+
+			// Decrement FIRST with a conditional that refuses to over-pull.
+			// If the bucket doesn't have enough cartridges left, fail the whole
+			// loadDeck before we create any CartridgeRecord rows. This closes the
+			// race where two concurrent loadDecks could each pull past zero, and
+			// the gap where an operator scans more cartridges than the bucket
+			// holds — see the 2941bb67 incident (54-cart lot, 66 pulled).
+			if (activeLotId) {
+				const updatedLot = await BackingLot.findOneAndUpdate(
+					{ _id: activeLotId, cartridgeCount: { $gte: cartridgeIds.length } },
+					{ $inc: { cartridgeCount: -cartridgeIds.length } },
+					{ new: true }
+				).lean() as any;
+				if (!updatedLot) {
+					const current = await BackingLot.findById(activeLotId).select('cartridgeCount status').lean() as any;
+					return fail(400, {
+						error: `Backing lot ${activeLotId} has only ${current?.cartridgeCount ?? 0} cartridge(s) remaining (status=${current?.status ?? 'unknown'}) but ${cartridgeIds.length} were scanned. Load fewer cartridges or scan a different lot.`
+					});
+				}
+				if ((updatedLot.cartridgeCount ?? 0) <= 0) {
+					await BackingLot.findByIdAndUpdate(activeLotId, {
+						$set: { cartridgeCount: 0, status: 'consumed' }
+					});
+				}
+			}
+
+			// Lineage filters: the new backing.* fields are written only when
+			// they aren't already populated (so a re-scan of an existing cart
+			// after abort/rescan still gets its lineage stamped, but we don't
+			// stomp an existing record's lineage with a different lot).
 			const ops = cartridgeIds.map((cid: string, idx: number) => ({
 				updateOne: {
 					filter: { _id: cid },
@@ -602,6 +648,17 @@ export const actions: Actions = {
 							'backing.lotId': activeLotId ?? null,
 							// Record baking oven exit — cartridge is leaving the baking oven
 							'backing.ovenExitTime': now,
+							// Material lineage copied from the parent LotRecord. Using
+							// $set (not $setOnInsert) so a re-scan after abort still
+							// writes them. loadDeck already rejects cartridges that
+							// finished another wax run, so this can't clobber finished
+							// work.
+							'backing.lotQrCode': parentLot?.qrCodeRef ?? null,
+							'backing.ovenEntryTime': parentLot?.ovenEntryTime ?? null,
+							'backing.cartridgeBlankLot': backingInputLotByMaterial.cartridgeBlankLot,
+							'backing.thermosealLot': backingInputLotByMaterial.thermosealLot,
+							'backing.barcodeLabelLot': backingInputLotByMaterial.barcodeLabelLot,
+							'backing.parentLotRecordId': parentLot?._id ?? null,
 							'waxFilling.runId': runId,
 							'waxFilling.deckId': deckId ?? null,
 							'waxFilling.robotId': run.robot?._id ?? null,
@@ -617,6 +674,13 @@ export const actions: Actions = {
 				await CartridgeRecord.bulkWrite(ops);
 			} catch (err) {
 				console.error('[loadDeck] bulkWrite error:', err instanceof Error ? err.message : err);
+				// Roll back the BackingLot decrement so the bucket isn't silently
+				// drained by a failed load.
+				if (activeLotId) {
+					await BackingLot.findByIdAndUpdate(activeLotId, {
+						$inc: { cartridgeCount: cartridgeIds.length }
+					}).catch(() => {});
+				}
 				return fail(500, { error: `Failed to save cartridge records: ${err instanceof Error ? err.message : 'Unknown error'}` });
 			}
 		}
@@ -772,6 +836,24 @@ export const actions: Actions = {
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
 
+			// Write waxQc.status='Accepted' for every cartridge that wasn't rejected
+			// during QC. Rejects already carry waxQc.recordedAt (from rejectCartridge),
+			// so the recordedAt-not-set filter excludes them.
+			const acceptOps = run.cartridgeIds.map((cid: string) => ({
+				updateOne: {
+					filter: { _id: cid, 'waxQc.recordedAt': { $exists: false }, status: { $ne: 'scrapped' } },
+					update: {
+						$set: {
+							'waxQc.status': 'Accepted',
+							'waxQc.operator': { _id: locals.user._id, username: locals.user.username },
+							'waxQc.timestamp': now,
+							'waxQc.recordedAt': now
+						}
+					}
+				}
+			}));
+			await CartridgeRecord.bulkWrite(acceptOps);
+
 			// Record inventory transactions for each cartridge — consume wax (PT-CT-105)
 			const waxPartId = await resolvePartId('PT-CT-105');
 			for (const cid of run.cartridgeIds) {
@@ -838,20 +920,34 @@ export const actions: Actions = {
 			return fail(400, { error: 'Cannot cancel: the OT-2 has already completed this run. Reject individual cartridges at QC instead.' });
 		}
 
+		// Look up the run so we know which BackingLot to restore + how many to refund
+		const runBeforeCancel = await WaxFillingRun.findById(runId).select('activeLotId cartridgeIds').lean() as any;
+		const cancelRefundLotId: string | undefined = runBeforeCancel?.activeLotId ?? undefined;
+		const cancelScannedIds: string[] = (runBeforeCancel?.cartridgeIds ?? []) as string[];
+
 		await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
 		});
 
-		// Clean up cartridges that were in wax_filling phase for this run
-		await CartridgeRecord.bulkWrite([{
-			updateMany: {
-				filter: { 'waxFilling.runId': runId, status: 'wax_filling' },
-				update: {
-					$set: { status: 'backing' },
-					$unset: { waxFilling: '' }
-				}
-			}
-		}]);
+		// Cartridges scanned onto the deck never actually got wax-filled. Delete
+		// the CartridgeRecords so the same physical barcodes can be re-scanned
+		// on a future run. status='backing' is not a valid CartridgeRecord state
+		// post-WI-01-refactor (cartridges only individuate on wax scan).
+		if (cancelScannedIds.length > 0) {
+			await CartridgeRecord.deleteMany({
+				_id: { $in: cancelScannedIds },
+				'waxFilling.runId': runId,
+				status: 'wax_filling'
+			});
+		}
+
+		// Refund the BackingLot count so the bucket stays available for another run.
+		if (cancelRefundLotId && cancelScannedIds.length > 0) {
+			await BackingLot.findByIdAndUpdate(cancelRefundLotId, {
+				$inc: { cartridgeCount: cancelScannedIds.length },
+				$set: { status: 'ready' }
+			});
+		}
 
 		await AuditLog.create({
 			_id: generateId(),
@@ -860,7 +956,7 @@ export const actions: Actions = {
 			action: 'UPDATE',
 			changedBy: locals.user?.username,
 			changedAt: now,
-			newData: { status: 'aborted', abortReason: reason }
+			newData: { status: 'aborted', abortReason: reason, refundedToLot: cancelRefundLotId, refundedCount: cancelScannedIds.length }
 		});
 
 		await notifyRunLifecycle({
@@ -888,20 +984,30 @@ export const actions: Actions = {
 			return fail(400, { error: 'Cannot abort: the OT-2 has already completed this run. Reject individual cartridges at QC instead.' });
 		}
 
+		// Look up the run so we know which BackingLot to restore + how many to refund
+		const runBeforeAbort = await WaxFillingRun.findById(runId).select('activeLotId cartridgeIds').lean() as any;
+		const abortRefundLotId: string | undefined = runBeforeAbort?.activeLotId ?? undefined;
+		const abortScannedIds: string[] = (runBeforeAbort?.cartridgeIds ?? []) as string[];
+
 		await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
 		});
 
-		// Clean up cartridges that were in wax_filling phase for this run
-		await CartridgeRecord.bulkWrite([{
-			updateMany: {
-				filter: { 'waxFilling.runId': runId, status: 'wax_filling' },
-				update: {
-					$set: { status: 'backing' },
-					$unset: { waxFilling: '' }
-				}
-			}
-		}]);
+		// Same refund semantics as cancelRun — see comment there.
+		if (abortScannedIds.length > 0) {
+			await CartridgeRecord.deleteMany({
+				_id: { $in: abortScannedIds },
+				'waxFilling.runId': runId,
+				status: 'wax_filling'
+			});
+		}
+
+		if (abortRefundLotId && abortScannedIds.length > 0) {
+			await BackingLot.findByIdAndUpdate(abortRefundLotId, {
+				$inc: { cartridgeCount: abortScannedIds.length },
+				$set: { status: 'ready' }
+			});
+		}
 
 		await AuditLog.create({
 			_id: generateId(),
@@ -910,7 +1016,7 @@ export const actions: Actions = {
 			action: 'UPDATE',
 			changedBy: locals.user?.username,
 			changedAt: now,
-			newData: { status: 'aborted', abortReason: reason }
+			newData: { status: 'aborted', abortReason: reason, refundedToLot: abortRefundLotId, refundedCount: abortScannedIds.length }
 		});
 
 		await notifyRunLifecycle({

@@ -38,7 +38,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		}).lean(),
 		BackingLot.find({ status: { $in: ['in_oven', 'ready', 'created'] } })
 			.sort({ ovenEntryTime: -1 }).lean(),
-		CartridgeRecord.aggregate([{ $group: { _id: '$currentPhase', count: { $sum: 1 } } }]),
+		CartridgeRecord.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
 		Equipment.find({ equipmentType: 'oven', status: { $ne: 'offline' } }).sort({ name: 1 }).lean(),
 		EquipmentLocation.find({ locationType: 'oven', isActive: true, parentEquipmentId: { $exists: false } }).lean(),
 		LotRecord.find().sort({ createdAt: -1 }).limit(10).lean()
@@ -66,10 +66,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 			{ $match: { createdAt: { $gte: todayStart } } },
 			{ $group: { _id: '$status', count: { $sum: 1 } } }
 		]),
-		CartridgeRecord.countDocuments({ currentPhase: 'voided', updatedAt: { $gte: todayStart } }),
+		CartridgeRecord.countDocuments({ status: { $in: ['voided', 'scrapped'] }, updatedAt: { $gte: todayStart } }),
 		CartridgeRecord.countDocuments({
 			'reagentFilling.recordedAt': { $gte: todayStart },
-			currentPhase: { $in: ['reagent_filled', 'sealed', 'stored'] }
+			status: { $in: ['reagent_filled', 'sealed', 'stored'] }
 		}),
 		WaxFillingRun.aggregate([
 			{ $match: { createdAt: { $gte: weekStart } } },
@@ -79,10 +79,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 			{ $match: { createdAt: { $gte: weekStart } } },
 			{ $group: { _id: '$status', count: { $sum: 1 } } }
 		]),
-		CartridgeRecord.countDocuments({ currentPhase: 'voided', updatedAt: { $gte: weekStart } }),
+		CartridgeRecord.countDocuments({ status: { $in: ['voided', 'scrapped'] }, updatedAt: { $gte: weekStart } }),
 		CartridgeRecord.countDocuments({
 			'reagentFilling.recordedAt': { $gte: weekStart },
-			currentPhase: { $in: ['reagent_filled', 'sealed', 'stored'] }
+			status: { $in: ['reagent_filled', 'sealed', 'stored'] }
 		}),
 		WaxFillingRun.aggregate([
 			{ $match: { createdAt: { $gte: todayStart }, runStartTime: { $exists: true } } },

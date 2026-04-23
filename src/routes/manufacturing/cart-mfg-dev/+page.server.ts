@@ -61,7 +61,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const settings = settingsDoc as any ?? {};
 	const minOvenTimeMin: number = settings?.waxFilling?.minOvenTimeMin ?? 60;
-	const cartridgesPerSheet: number = settings?.general?.cartridgesPerLaserCutSheet ?? 13;
+	const cartridgesPerSheet: number = settings?.general?.cartridgesPerLaserCutSheet ?? 16;
 	const waxStorageMaxAgeDays: number = settings?.general?.waxStorageMaxAgeDays ?? 7;
 	const robotStallWarningMin: number = settings?.general?.robotStallWarningMin ?? 90;
 	const refreshIntervalSec: number = settings?.general?.dashboardRefreshIntervalSec ?? 30;

@@ -37,8 +37,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 		assignedRunId: t.assignedRunId ?? null
 	}));
 
-	// Compute occupant counts from CartridgeRecord + BackingLot
-	const [waxCounts, reagentCounts, ovenCountsByName, ovenCountsById] = await Promise.all([
+	// Compute occupant counts from CartridgeRecord + BackingLot.
+	//
+	// Ovens: individual CartridgeRecord docs don't exist during the backing
+	// phase — cartridges only become individuated when their UUID is scanned
+	// at wax deck loading. So oven occupancy is an aggregate read from
+	// BackingLot.cartridgeCount (decremented by wax-filling loadDeck).
+	const [waxCounts, reagentCounts, ovenCountsById] = await Promise.all([
 		CartridgeRecord.aggregate([
 			{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored' } },
 			{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
@@ -46,10 +51,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 		CartridgeRecord.aggregate([
 			{ $match: { 'storage.fridgeName': { $exists: true }, status: { $in: ['stored', 'reagent_filled'] } } },
 			{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
-		]).catch(() => []),
-		BackingLot.aggregate([
-			{ $match: { status: { $in: ['in_oven', 'ready'] }, ovenLocationName: { $exists: true, $ne: null } } },
-			{ $group: { _id: '$ovenLocationName', count: { $sum: '$cartridgeCount' } } }
 		]).catch(() => []),
 		BackingLot.aggregate([
 			{ $match: { status: { $in: ['in_oven', 'ready'] }, ovenLocationId: { $exists: true, $ne: null } } },
@@ -60,10 +61,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 	for (const c of [
 		...(waxCounts as any[]),
 		...(reagentCounts as any[]),
-		...(ovenCountsByName as any[]),
 		...(ovenCountsById as any[])
 	]) {
-		// Match by barcode, display name, or equipment _id
 		occupantMap.set(c._id, (occupantMap.get(c._id) ?? 0) + c.count);
 	}
 
