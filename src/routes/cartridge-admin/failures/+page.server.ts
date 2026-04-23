@@ -35,7 +35,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			.limit(PAGE_SIZE)
 			.lean(),
 		CartridgeRecord.countDocuments(filter),
-		AssayDefinition.find({ isActive: true }, { _id: 1, name: 1 }).lean()
+		AssayDefinition.find({ isActive: true, hidden: { $ne: true } }, { _id: 1, name: 1 }).lean()
 	]);
 
 	return {

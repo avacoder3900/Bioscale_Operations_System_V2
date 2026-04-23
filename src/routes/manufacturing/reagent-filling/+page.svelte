@@ -16,6 +16,7 @@
 	let { data } = $props();
 
 	let selectedAssayTypeId = $state('');
+	let isResearchRun = $state(false);
 	let errorMsg = $state('');
 	let submitting = $state(false);
 	let showCancelModal = $state(false);
@@ -358,7 +359,15 @@
 				reagentNames={data.reagentDefinitions}
 				{selectedAssayTypeId}
 				onSelectAssayType={(id) => { selectedAssayTypeId = id; }}
-				onComplete={() => submitForm('createRun', { assayTypeId: selectedAssayTypeId })}
+				isResearch={isResearchRun}
+				onSetResearch={(v) => {
+					isResearchRun = v;
+					if (v) selectedAssayTypeId = '';
+				}}
+				onComplete={() => submitForm('createRun', {
+					assayTypeId: isResearchRun ? '' : selectedAssayTypeId,
+					isResearch: isResearchRun ? 'true' : 'false'
+				})}
 			/>
 		</div>
 
@@ -500,7 +509,14 @@
 			reagentNames={data.reagentDefinitions}
 			selectedAssayTypeId={previewParam ? 'preview' : (data.runState.assayTypeName ?? 'selected')}
 			onSelectAssayType={previewParam ? () => {} : (id) => { selectedAssayTypeId = id; }}
-			onComplete={() => submitForm(stage ? 'confirmSetup' : 'createRun', stage ? {} : { assayTypeId: selectedAssayTypeId })}
+			isResearch={previewParam ? false : (data.runState.isResearch || isResearchRun)}
+			onSetResearch={previewParam ? () => {} : (v) => {
+				isResearchRun = v;
+				if (v) selectedAssayTypeId = '';
+			}}
+			onComplete={() => submitForm(stage ? 'confirmSetup' : 'createRun', stage
+				? { isResearch: isResearchRun ? 'true' : 'false' }
+				: { assayTypeId: isResearchRun ? '' : selectedAssayTypeId, isResearch: isResearchRun ? 'true' : 'false' })}
 			readonly={isViewingPast}
 		/>
 
@@ -553,7 +569,11 @@
 
 	{:else if displayStage === 'Running'}
 		<RunExecution
-			assayTypeName={previewParam ? 'Preview Assay' : (data.runState.assayTypeName ?? 'Unknown')}
+			assayTypeName={previewParam
+				? 'Preview Assay'
+				: (data.runState.isResearch
+					? 'Research Run'
+					: (data.runState.assayTypeName ?? 'Unknown'))}
 			cartridgeCount={previewParam ? 8 : (data.runState.cartridgeCount ?? 0)}
 			runStartTime={new Date(data.runState.runStartTime ?? Date.now())}
 			runEndTime={new Date(data.runState.runEndTime ?? (Date.now() + 600000))}

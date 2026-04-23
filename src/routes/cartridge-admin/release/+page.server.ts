@@ -11,7 +11,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	await connectDB();
 
 	const [assayTypes, lots, runs] = await Promise.all([
-		AssayDefinition.find({ isActive: true }, { _id: 1, name: 1 }).lean(),
+		AssayDefinition.find({ isActive: true, hidden: { $ne: true } }, { _id: 1, name: 1 }).lean(),
 		ShippingLot.find({ status: { $in: ['open', 'released'] } }).sort({ createdAt: -1 }).lean(),
 		ReagentBatchRecord.find(
 			{ status: 'completed', 'qcRelease.testResult': { $ne: 'pass' }, finalizedAt: { $exists: false } },

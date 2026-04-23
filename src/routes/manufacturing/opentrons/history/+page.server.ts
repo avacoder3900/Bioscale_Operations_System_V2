@@ -181,7 +181,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// Fetch filter option lists
 	const [robots, assayTypes] = await Promise.all([
 		Equipment.find({ equipmentType: 'robot', isActive: true }, { _id: 1, name: 1 }).lean(),
-		AssayDefinition.find({ isActive: true }, { _id: 1, name: 1 }).lean()
+		AssayDefinition.find({ isActive: true, hidden: { $ne: true } }, { _id: 1, name: 1 }).lean()
 	]);
 
 	// Build unique operators from current run set

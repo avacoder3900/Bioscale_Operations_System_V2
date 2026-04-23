@@ -270,7 +270,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					})(),
 					OpentronsRobot.find({ isActive: true }).select('name lastHealthOk').sort({ name: 1 }).lean(),
 					WaxFillingRun.find({ status: { $in: ['running', 'setup'] } }).select('robot status').lean(),
-					AssayDefinition.find({ isActive: true }).select('name skuCode').lean(),
+					AssayDefinition.find({ isActive: true, hidden: { $ne: true } }).select('name skuCode').lean(),
 					BomItem.find({ isActive: true, partNumber: { $regex: /^CRT-/ } }).select('partNumber name unitCost').lean(),
 					CartridgeRecord.aggregate([
 						{ $match: { createdAt: { $gte: sevenDaysAgo } } },

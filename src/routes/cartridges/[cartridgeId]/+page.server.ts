@@ -18,7 +18,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const [groups, firmwareRecord, assayTypes] = await Promise.all([
 		CartridgeGroup.find({}).lean(),
 		FirmwareCartridge.findOne({ cartridgeUuid: c.barcode }).lean() as any,
-		AssayDefinition.find({ isActive: true }, { _id: 1, name: 1, skuCode: 1 }).lean()
+		AssayDefinition.find({ isActive: true, hidden: { $ne: true } }, { _id: 1, name: 1, skuCode: 1 }).lean()
 	]);
 
 	// Firmware events for this cartridge's barcode
