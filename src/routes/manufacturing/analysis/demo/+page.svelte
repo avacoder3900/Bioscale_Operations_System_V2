@@ -247,23 +247,33 @@
 </script>
 
 <div class="mx-auto max-w-[1600px] space-y-6 p-4">
+	<!-- DEMO banner — fabricated data, NOT from Mongo, NOT persisted -->
+	<div class="rounded-lg border-2 border-amber-500/60 bg-amber-900/20 p-3">
+		<div class="flex items-center justify-between gap-3">
+			<div class="flex items-center gap-2 text-sm font-semibold text-amber-300">
+				<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+				DEMO MODE — fabricated data for preview only. Nothing here is in Mongo. Forms do not persist.
+			</div>
+			<a href="/manufacturing/analysis"
+				class="rounded border border-amber-500/50 bg-amber-900/30 px-3 py-1 text-xs font-medium text-amber-200 hover:bg-amber-900/50 whitespace-nowrap">
+				← Switch to Real Data
+			</a>
+		</div>
+	</div>
+
 	<!-- Header -->
 	<div class="flex items-center justify-between">
 		<div>
-			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Manufacturing Analysis</h1>
+			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Manufacturing Analysis <span class="ml-2 text-xs font-normal text-amber-400">[DEMO]</span></h1>
 			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
-				Unified time + failure + yield analysis across every process. Phase 1 — descriptive + SPC. Targets &amp; capability analysis turn on once spec limits are defined.
+				Seeded demo — 9 robots, 12 decks, 16 trays, 4 ovens, 6 fridges, 4 assays, 12 operators, ~745 runs across 30 days. Nothing below is in Mongo.
 			</p>
 		</div>
 		<div class="flex gap-2">
-			<a href="/manufacturing/analysis/demo"
-				class="rounded border border-amber-500/50 bg-amber-900/10 px-3 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-900/30 transition-colors">
-				View Demo Data →
-			</a>
-			<button onclick={() => downloadCsv('runs', data.runs)}
+			<button onclick={() => downloadCsv('runs-demo', data.runs)}
 				class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs font-medium hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)] transition-colors"
 				style="color: var(--color-tron-text)">
-				Export runs CSV
+				Export runs CSV (demo)
 			</button>
 		</div>
 	</div>
