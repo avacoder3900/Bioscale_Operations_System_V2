@@ -1,7 +1,7 @@
 import { redirect, fail } from '@sveltejs/kit';
 import bcrypt from 'bcryptjs';
 import {
-	connectDB, CartridgeRecord, WaxFillingRun, ReagentBatchRecord,
+	connectDB, CartridgeRecord, WaxFillingRun, ReagentBatchRecord, BackingLot,
 	ManufacturingMaterial, ManufacturingMaterialTransaction,
 	ManufacturingSettings, PartDefinition, User, AuditLog, generateId
 } from '$lib/server/db';
@@ -18,7 +18,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 		{ $group: { _id: '$status', count: { $sum: 1 } } }
 	]);
 	const phaseMap = new Map<string, number>(phaseCounts.map((p: any) => [p._id ?? 'unknown', p.count]));
-	const backedCount = await CartridgeRecord.countDocuments({ 'backing.recordedAt': { $exists: true } });
+	// "Backed" cartridges live as aggregate BackingLot.cartridgeCount, not as
+	// individual CartridgeRecord docs (they don't individuate until wax scan).
+	const backedAgg = await BackingLot.aggregate([
+		{ $match: { status: { $in: ['in_oven', 'ready'] } } },
+		{ $group: { _id: null, total: { $sum: '$cartridgeCount' } } }
+	]);
+	const backedCount = (backedAgg[0] as any)?.total ?? 0;
 
 	const waxStats = await WaxFillingRun.aggregate([
 		{ $match: { status: { $in: ['completed', 'Completed'] } } },
@@ -61,7 +67,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// === Settings ===
 	const settingsDoc = await ManufacturingSettings.findById('default').lean();
 	const general = (settingsDoc as any)?.general ?? {};
-	const cartridgesPerSheet = general.cartridgesPerLaserCutSheet ?? 13;
+	const cartridgesPerSheet = general.cartridgesPerLaserCutSheet ?? 16;
 
 	const laserCutPart = partsList.find((p) => /laser.?cut|substrate|thermoseal.?sheet/i.test(p.name));
 	const individualBacks = (laserCutPart?.inventoryCount ?? 0) * cartridgesPerSheet;

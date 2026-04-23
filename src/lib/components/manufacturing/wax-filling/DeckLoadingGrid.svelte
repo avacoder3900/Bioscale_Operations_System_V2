@@ -525,9 +525,10 @@
 									</span>
 									{#if scan}
 										<span
-											class="mt-0.5 max-w-full truncate px-0.5 font-mono text-[8px] text-green-300"
+											class="mt-0.5 w-full break-all px-0.5 font-mono text-[8px] leading-tight text-green-300"
+											title={scan.cartridgeId}
 										>
-											{scan.cartridgeId.length > 6 ? scan.cartridgeId.slice(-6) : scan.cartridgeId}
+											{scan.cartridgeId}
 										</span>
 									{/if}
 								</div>

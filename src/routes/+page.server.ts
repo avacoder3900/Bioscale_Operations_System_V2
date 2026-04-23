@@ -4,7 +4,7 @@ import { requirePermission } from '$lib/server/permissions';
 import {
 	connectDB, Spu, Batch, BomItem, ProductionRun, Customer, User, AuditLog, generateId,
 	LabCartridge, CartridgeGroup, CartridgeRecord, Equipment, EquipmentLocation,
-	OpentronsRobot, WaxFillingRun, ReagentBatchRecord, AssayDefinition, PartDefinition
+	OpentronsRobot, WaxFillingRun, ReagentBatchRecord, AssayDefinition, PartDefinition, BackingLot
 } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -223,6 +223,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 				const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped', 'linked', 'underway', 'completed'];
 				const phaseMap = new Map((phaseCounts as any[]).map((p: any) => [p._id, p.count]));
+				// 'backing' isn't a CartridgeRecord status anymore — aggregate BackingLot.
+				const backingAgg = await BackingLot.aggregate([
+					{ $match: { status: { $in: ['in_oven', 'ready'] } } },
+					{ $group: { _id: null, total: { $sum: '$cartridgeCount' } } }
+				]).catch(() => []);
+				phaseMap.set('backing', (backingAgg[0] as any)?.total ?? 0);
 
 				const qcMap = (arr: any[]) => {
 					const m: Record<string, number> = {};

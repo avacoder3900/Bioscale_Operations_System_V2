@@ -48,10 +48,16 @@ export const load: PageServerLoad = async ({ locals }) => {
 		{ _id: 1, barcode: 1, lotNumber: 1 }
 	).sort({ createdAt: -1 }).limit(500).lean();
 
-	// Get stored cartridges grouped by fridge (using storage.fridgeName — the field the rest of the system uses)
+	// Get stored cartridges grouped by fridge (using storage.fridgeName — the field the rest of the system uses).
+	// Status filter excludes terminal states (shipped/completed/voided/scrapped) whose
+	// storage.fridgeName is just a stale historical reference — the physical cartridge
+	// has long left the fridge. Matches the filter used on /equipment/activity.
 	const fridgeKeys = fridges.map((f) => f.barcode || f.displayName);
 	const storedCartridges = await CartridgeRecord.find(
-		{ 'storage.fridgeName': { $in: fridgeKeys } },
+		{
+			'storage.fridgeName': { $in: fridgeKeys },
+			status: { $in: ['stored', 'reagent_filled', 'released', 'linked'] }
+		},
 		{ _id: 1, 'storage.fridgeName': 1, 'storage.containerBarcode': 1, 'storage.storedAt': 1, 'storage.recordedAt': 1, status: 1 }
 	).lean();
 

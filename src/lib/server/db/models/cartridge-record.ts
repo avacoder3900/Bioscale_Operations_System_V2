@@ -19,9 +19,14 @@ const cartridgeRecordSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 
 	backing: {
-		lotId: String,
-		lotQrCode: String,
-		ovenEntryTime: Date,
+		lotId: String,               // BackingLot._id (bucket barcode)
+		parentLotRecordId: String,   // LotRecord._id — the WI-01 batch
+		lotQrCode: String,           // LotRecord.qrCodeRef
+		cartridgeBlankLot: String,   // PT-CT-104 input material lot
+		thermosealLot: String,       // PT-CT-112 input material lot
+		barcodeLabelLot: String,     // PT-CT-106 input material lot
+		ovenEntryTime: Date,         // when the bucket entered the backing oven
+		ovenExitTime: Date,          // when the cartridge left the bucket onto a deck
 		operator: operatorRef,
 		recordedAt: Date
 	},
@@ -103,7 +108,7 @@ const cartridgeRecordSchema = new Schema({
 	status: {
 		type: String,
 		enum: [
-			'backing', 'wax_filling', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected',
+			'backing', 'wax_filling', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filling', 'reagent_filled', 'inspected',
 			'sealed', 'cured', 'stored', 'released', 'shipped',
 			'linked', 'underway', 'completed', 'cancelled', 'scrapped', 'voided',
 			'packeted', 'transferred', 'refrigerated', 'received'

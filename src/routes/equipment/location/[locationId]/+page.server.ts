@@ -1,6 +1,6 @@
 export const config = { maxDuration: 60 };
 import { error } from '@sveltejs/kit';
-import { connectDB, Equipment, EquipmentLocation, CartridgeRecord, WaxFillingRun } from '$lib/server/db';
+import { connectDB, Equipment, EquipmentLocation, CartridgeRecord, WaxFillingRun, BackingLot } from '$lib/server/db';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
@@ -66,11 +66,17 @@ export const load: PageServerLoad = async ({ params }) => {
 	}
 	const uniqueMatchValues = [...new Set(matchValues)];
 
+	// Only count cartridges that are still active inventory. Once a cartridge
+	// ships/completes/voids/scraps, its waxStorage.location / storage.fridgeName
+	// is a stale historical reference — it's no longer physically in the fridge.
+	// Matches /equipment/activity + /cartridge-dashboard filters.
+	const ACTIVE_WAX = ['wax_stored'];
+	const ACTIVE_REAGENT = ['stored', 'reagent_filled', 'released', 'linked', 'inspected', 'sealed', 'cured'];
 	const [cartridgesRaw, waxRunsRaw] = await Promise.all([
 		CartridgeRecord.find({
 			$or: [
-				{ 'waxStorage.location': { $in: uniqueMatchValues } },
-				{ 'storage.fridgeName': { $in: uniqueMatchValues } }
+				{ 'waxStorage.location': { $in: uniqueMatchValues }, status: { $in: ACTIVE_WAX } },
+				{ 'storage.fridgeName': { $in: uniqueMatchValues }, status: { $in: ACTIVE_REAGENT } }
 			]
 		}).select({
 			_id: 1,
@@ -142,6 +148,26 @@ export const load: PageServerLoad = async ({ params }) => {
 		};
 	});
 
+	// Ovens hold aggregate BackingLot buckets, not individual cartridges.
+	// Cartridges don't exist as individual records during the backing phase;
+	// the bucket's cartridgeCount is the physical count. Surface one row per
+	// bucket in the inventory table so operators can see what's in the oven.
+	const backingLotsInOven: { lotId: string; cartridgeCount: number; enteredAt: string | null; status: string }[] = [];
+	if (isEquipment && locationType === 'oven') {
+		const lots = await BackingLot.find({
+			ovenLocationId: locationId,
+			status: { $in: ['in_oven', 'ready'] }
+		}).lean().catch(() => [] as any[]);
+		for (const bl of lots as any[]) {
+			backingLotsInOven.push({
+				lotId: String(bl._id),
+				cartridgeCount: bl.cartridgeCount ?? 0,
+				enteredAt: bl.ovenEntryTime ? new Date(bl.ovenEntryTime).toISOString() : null,
+				status: bl.status
+			});
+		}
+	}
+
 	const waxRuns = (waxRunsRaw as any[]).map((r) => ({
 		id: String(r._id),
 		status: r.status ?? null,
@@ -154,6 +180,7 @@ export const load: PageServerLoad = async ({ params }) => {
 
 	const waxCount = cartridges.filter((c) => c.storageType === 'wax').length;
 	const reagentCount = cartridges.filter((c) => c.storageType === 'reagent').length;
+	const backingCount = backingLotsInOven.reduce((s, b) => s + b.cartridgeCount, 0);
 
 	return {
 		location: {
@@ -167,11 +194,13 @@ export const load: PageServerLoad = async ({ params }) => {
 		},
 		cartridges,
 		waxRuns,
+		backingLots: backingLotsInOven,
 		stats: {
-			total: cartridges.length,
+			total: cartridges.length + backingCount,
 			waxCount,
 			reagentCount,
-			utilization: capacity ? Math.round((cartridges.length / capacity) * 100) : null
+			backingCount,
+			utilization: capacity ? Math.round(((cartridges.length + backingCount) / capacity) * 100) : null
 		}
 	};
 };
