@@ -1,5 +1,13 @@
 # PRD — Equipment Master-Controller Connectivity + Legacy Nav Cleanup
 
+> **Reconciliation status (end of day 2026-04-23):** Dev moved while this PRD was being drafted. Stories were re-verified against current `dev` HEAD. Net:
+> - **S1a, S1b, S3, S4, S6, S8** — unchanged, still needed as written.
+> - **S2** — narrowed. Schema fields already present; one writer (`opentron-control/wax/[runId]`) already writes both `locationId` + `locationName`. Only the resolver helper + migration + remaining-writer grep remain.
+> - **S5** — narrowed. `load()` is already DB-only (no Mocreo API calls); existing actions are `mapSensor` / `pingSensor` / `acknowledgeAlert` / `setThresholds`. Only the batch-refresh `?/refresh` action + UI button remain.
+> - **S7** — confirmed. All 3 orphan fields still present and still marked `ORPHANED` in `src/lib/server/db/models/cartridge-record.ts`: `waxFilling.transferTimeSeconds` (line 35), `storage.containerBarcode` (line 72), `finalizedAt` (line 122). No scope change.
+> - **S9** — line numbers refreshed; **12 call sites** (not 11) across 7 `.svelte` files after recent code drift. Mapping table updated below.
+> - **S1a carries an extra data-integrity wrinkle:** `src/routes/cartridge-admin/storage/+page.server.ts:119-120` currently writes `storage.locationId` as a **barcode string, not `Equipment._id`** (the field name lies). S1a's schema repurpose + S1b's migration must normalize or reset these legacy values rather than trusting them.
+
 ## Overview
 The Equipment page (`/equipment/*`) is intended to be the single source of truth for every piece of equipment — fridges, ovens, decks, trays, robots, temperature probes. The BIMS audit on 2026-04-23 confirmed it is a **metadata master** but NOT a **transaction master**: occupancy, locks, probe data, and history are joined inconsistently across consumer collections. This PRD fixes the connectivity so every consumer (cartridge storage, wax runs, backing lots, Mocreo readings, activity logs) joins the Equipment collection on a single canonical identifier — `Equipment._id` — with denormalized display fields kept in sync. It also retires the legacy `/manufacturing/wax-filling` links that still point operators to the merged-out pages.
 
@@ -109,27 +117,32 @@ Source: BIMS audit conducted 2026-04-23 (this repo, `dev` branch). Seven connect
 
 ---
 
-### S2 — Canonicalize oven references (`ovenCure.locationId`)
-**As a** BIMS developer **I want** `CartridgeRecord.ovenCure.locationId` to unambiguously hold `Equipment._id` **so that** oven-cure history joins cleanly to Equipment.
+### S2 — Canonicalize oven references (`ovenCure.locationId`) — NARROWED
+**As a** BIMS developer **I want** every `ovenCure.locationId` write to go through a single resolver so the field unambiguously holds `Equipment._id` **so that** oven-cure history joins cleanly to Equipment.
 
-**Scope:** `CartridgeRecord.ovenCure` subdoc only. Schema comment + writer normalization + migration.
+**What's already done on `dev` (do NOT redo):**
+- Schema fields `ovenCure.locationId` + `ovenCure.locationName` already exist in `src/lib/server/db/models/cartridge-record.ts` (line 64).
+- `src/routes/manufacturing/opentron-control/wax/[runId]/+page.server.ts:158-159` already writes both `ovenCure.locationId` and `ovenCure.locationName`. It takes an `ovenLocationId` parameter but does NOT normalize it through a resolver — so the written value may be a barcode, a name, or an `Equipment._id` depending on who called the action.
 
-**Schema changes:** add explicit comments to `ovenCure.locationId` ("Equipment._id, authoritative") and `ovenCure.locationName` ("denormalized display only, do not filter on").
+**Remaining scope:**
+- Add `resolveOvenId(barcodeOrName: string): Promise<string | null>` to the same helper module introduced by S1a (`src/lib/server/services/equipment-resolve.ts`), filtered to `equipmentType: 'oven'`.
+- Wrap the `ovenCure` write in `opentron-control/wax/[runId]/+page.server.ts:158-159` so the value passed to `locationId` is always an `Equipment._id`. Set `locationName` from the resolved Equipment record rather than trusting the caller.
+- Grep `grep -rn "ovenCure" src/routes/` in case other writers have landed on dev — if so, wrap them too.
+- Migration script `scripts/migrate-oven-cure-refs.ts`:
+  1. For each `CartridgeRecord` with `ovenCure.locationId` set, attempt to resolve it against the oven-typed Equipment map (by `_id`, `name`, or `barcode` — in that priority order).
+  2. If it resolves, rewrite `locationId` + `locationName` authoritatively.
+  3. If it doesn't, log to aggregate AuditLog as `MIGRATION_UNRESOLVED` — do not guess.
+  4. `--plan` / `--apply`, raw driver (bypass sacred middleware), one aggregate AuditLog per run.
 
-**Writer changes:** every action writing `ovenCure` resolves scanned barcode → `Equipment._id` via a new helper `resolveOvenId(barcodeOrName)` (same pattern as `resolveFridgeId`). Discover writers via `grep -r "ovenCure" src/routes/`.
-
-**Migration script** — `scripts/migrate-oven-cure-refs.ts`:
-1. Inspect current `ovenCure.locationId` per doc — may be `_id`, name, or barcode mixed.
-2. Resolve to `Equipment._id` (oven-typed only).
-3. Rewrite `locationId` authoritatively; set `locationName` from Equipment record.
-4. `--plan` / `--apply` flags, aggregate AuditLog, raw driver.
+**Schema documentation:** add inline comments at line 64 marking `locationId` as "Equipment._id, authoritative" and `locationName` as "denormalized display only".
 
 **Acceptance criteria**
-- [ ] All existing `ovenCure.locationId` values resolve to a live Equipment doc OR are logged as unresolved.
-- [ ] New writes verified via unit test to use `Equipment._id` from the helper.
+- [ ] `resolveOvenId` exported from `equipment-resolve.ts`; unit-tested for `_id` / `name` / `barcode` lookups.
+- [ ] `opentron-control/wax/[runId]/+page.server.ts` ovenCure write normalized through the helper.
+- [ ] Migration script runs idempotently; unresolved docs logged.
 - [ ] `npm run check` + `npm run lint` + `npm run test:unit` pass.
 
-**Estimated effort:** small (½ context window). **Depends on:** S1a (to share the resolver pattern).
+**Estimated effort:** small (½ context window). **Depends on:** S1a (shares the `equipment-resolve.ts` module).
 
 ---
 
