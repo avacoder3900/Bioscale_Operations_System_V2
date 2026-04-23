@@ -199,20 +199,22 @@ Source: BIMS audit conducted 2026-04-23 (this repo, `dev` branch). Seven connect
 
 ---
 
-### S5 — Temperature-probes page: DB-only reads + on-demand refresh
-**As an** operator **I want** the temperature-probes page to render instantly from the DB **so that** it doesn't hammer the Mocreo API on every page load.
+### S5 — Temperature-probes page: on-demand batch refresh — NARROWED
+**As an** operator **I want** a batch "Refresh all probes" button **so that** I can force-sync the fleet without waiting for the `*/5 * * * *` cron.
 
-**Scope:** `/equipment/temperature-probes/+page.server.ts` + `/+page.svelte` (single button addition).
+**What's already done on `dev` (do NOT redo):**
+- `load()` in `src/routes/equipment/temperature-probes/+page.server.ts` already reads DB-only — no live Mocreo API calls in the load function. Verified by grep.
+- Existing form actions: `mapSensor` (line 243), `pingSensor` (line 280 — per-sensor sync), `acknowledgeAlert` (line 364), `setThresholds` (line 393).
 
-**Changes:**
-- Remove the live Mocreo API fetch from `load()`. Read only from `temperature_readings`, `temperature_alerts`, and `Equipment.currentTemperatureC` / `lastTemperatureReadAt` (kept fresh by the `*/5 * * * *` cron).
-- Add a form action `?/refresh` that invokes `runMocreoSync()` on demand, then redirects back.
-- `.svelte` edit (authorized by this story): one "Refresh now" button bound to that action, ≥44px touch target, with loading state.
+**Remaining scope:**
+- Add a form action `?/refreshAll` (avoid collision with any existing `refresh` action) that invokes `runMocreoSync()` for the full sensor fleet and returns `{ synced, errored }` counts as a flash.
+- `.svelte` edit (authorized by this story): one "Refresh all probes" button bound to that action, ≥44px touch target, loading state, disabled while submitting. Place it near the existing per-sensor Ping controls so operators don't confuse the two.
+- Permission: same as the page load (operators who can see the page can trigger a batch sync).
 
 **Acceptance criteria**
-- [ ] Load-time HTTP calls to Mocreo: 0 (verified by grepping the file for `fetch('https://` or Mocreo SDK invocations in `load()`).
-- [ ] Manual refresh works and updates timestamps on the next render.
-- [ ] Cron sync continues to run `*/5 * * * *`.
+- [ ] `?/refreshAll` action exists, calls `runMocreoSync()`, returns counts on completion.
+- [ ] UI button present, loading state works, disabled during submit.
+- [ ] `load()` remains DB-only (no regression into API-hammering).
 - [ ] `npm run check` + `npm run lint` + `npm run test:unit` pass.
 
 **Estimated effort:** small (½ context window). **Depends on:** none.
