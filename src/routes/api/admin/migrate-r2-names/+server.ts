@@ -147,7 +147,11 @@ async function runMigrate(execute: boolean, projectFilter: string | undefined, l
 			} as LogEntry as any);
 		} catch (err: any) {
 			failed++;
-			failures.push({ imageId: String(img._id), oldKey, error: err.message || String(err) });
+			const cause = err.cause;
+			const detail = cause
+				? `${err.message} | cause: ${cause.code || cause.name || ''} ${cause.message || ''}`
+				: err.message || String(err);
+			failures.push({ imageId: String(img._id), oldKey, error: detail });
 		}
 	}
 
