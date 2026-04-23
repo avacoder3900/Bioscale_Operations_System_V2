@@ -45,6 +45,10 @@ const cartridgeRecordSchema = new Schema({
 	reagentFilling: {
 		runId: String, robotId: String, robotName: String,
 		assayType: { _id: String, name: String, skuCode: String },
+		// Research runs leave assayType null and flag the cartridge so downstream
+		// consumers can distinguish "missing assay data (research)" from "missing
+		// assay data (bug)".
+		isResearch: Boolean,
 		deckPosition: Number,
 		tubeRecords: [{ _id: false, wellPosition: Number, reagentName: String, sourceLotId: String, transferTubeId: String }],
 		operator: operatorRef, fillDate: Date, expirationDate: Date, recordedAt: Date

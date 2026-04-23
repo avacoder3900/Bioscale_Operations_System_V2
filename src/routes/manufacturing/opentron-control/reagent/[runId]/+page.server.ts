@@ -298,6 +298,20 @@ export const actions: Actions = {
 			{ _id: cartridgeId },
 			{ $set: { status: 'scrapped', voidedAt: now, voidReason: 'Rejected at top sealing' } }
 		);
+
+		await recordTransaction({
+			transactionType: 'scrap',
+			cartridgeRecordId: cartridgeId,
+			quantity: 1,
+			manufacturingStep: 'top_seal',
+			manufacturingRunId: runId,
+			operatorId: locals.user._id,
+			operatorUsername: locals.user.username,
+			scrapReason: 'Rejected at top sealing',
+			scrapCategory: 'seal_failure',
+			notes: 'Top seal rejection'
+		});
+
 		return { success: true };
 	},
 
