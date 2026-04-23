@@ -240,7 +240,7 @@ const stripsToday = // sum of usageLog cut entries since todayStart
 **Data source:**
 - `LaserCutBatch` collection — `src/routes/manufacturing/laser-cutting/+page.server.ts`
 - `ManufacturingMaterial` for current substrate inventory
-- `ManufacturingSettings.general.cartridgesPerLaserCutSheet` (default: 13)
+- `ManufacturingSettings.general.cartridgesPerLaserCutSheet` (default: 16)
 - Existing route: `/manufacturing/laser-cutting`
 
 **Inventory query:**
@@ -668,7 +668,7 @@ Since `.svelte` files are frozen, the expand/collapse behavior must be implement
 - → Top Seal Cutting Page
 
 **Laser Cut (expanded):**
-- Current inventory: N sheets, N×13 individual backs
+- Current inventory: N sheets, N×16 individual backs
 - Last 3 batches: input sheets, output backs, failures, operator
 - → Laser Cutting Page
 
@@ -1001,7 +1001,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     LaserCutBatch.findOne().sort({ createdAt: -1 }).lean()
   ]);
 
-  const cartridgesPerSheet: number = (settingsDoc as any)?.general?.cartridgesPerLaserCutSheet ?? 13;
+  const cartridgesPerSheet: number = (settingsDoc as any)?.general?.cartridgesPerLaserCutSheet ?? 16;
   const laserCutSheets: number = (laserCutMaterial as any)?.currentQuantity ?? 0;
   const individualBacks: number = laserCutSheets * cartridgesPerSheet;
 
@@ -1716,7 +1716,7 @@ Implement via `requirePermission(event, 'manufacturing:dashboard:read')` and `re
 |------|---------|---------|
 | `waxFilling.minOvenTimeMin` | 60 | Backing oven readiness |
 | `waxFilling.runDurationMin` | 45 | Estimated run time display |
-| `general.cartridgesPerLaserCutSheet` | 13 | Laser cut individual backs calc |
+| `general.cartridgesPerLaserCutSheet` | 16 | Laser cut individual backs calc |
 | `general.topSealLengthPerCutFt` | 0.5 | Top seal strips estimate |
 | `general.dashboardRefreshIntervalSec` | 30 | Auto-refresh interval (new) |
 | `general.waxStorageMaxAgeDays` | 7 | Fridge aging alert (new) |

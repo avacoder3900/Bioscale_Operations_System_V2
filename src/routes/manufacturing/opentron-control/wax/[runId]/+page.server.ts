@@ -219,6 +219,24 @@ export const actions: Actions = {
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
 
+			// Write waxQc.status='Accepted' for every cartridge that wasn't rejected
+			// during QC. Rejects already carry waxQc.recordedAt (from rejectCartridge),
+			// so the recordedAt-not-set filter excludes them.
+			const acceptOps = run.cartridgeIds.map((cid: string) => ({
+				updateOne: {
+					filter: { _id: cid, 'waxQc.recordedAt': { $exists: false }, status: { $ne: 'scrapped' } },
+					update: {
+						$set: {
+							'waxQc.status': 'Accepted',
+							'waxQc.operator': { _id: locals.user._id, username: locals.user.username },
+							'waxQc.timestamp': now,
+							'waxQc.recordedAt': now
+						}
+					}
+				}
+			}));
+			await CartridgeRecord.bulkWrite(acceptOps);
+
 			const waxPartId = await resolvePartId('PT-CT-105');
 			for (const cid of run.cartridgeIds) {
 				await recordTransaction({

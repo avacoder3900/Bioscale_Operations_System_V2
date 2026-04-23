@@ -157,7 +157,7 @@ export const actions: Actions = {
 		// move any part's inventoryCount. The ManufacturingMaterial branch
 		// above (outputMaterial) is legacy/unused — kept for now in case it's
 		// referenced elsewhere, but PT-CT-112 is the source of truth.
-		const stripsPerSheet: number = general.cartridgesPerLaserCutSheet ?? 6;
+		const stripsPerSheet: number = general.cartridgesPerLaserCutSheet ?? 16;
 		const inputPartId = await resolvePartId('PT-CT-111');
 		const outputPartId = await resolvePartId('PT-CT-112');
 
