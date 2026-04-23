@@ -691,3 +691,18 @@ for you to promote to main when you're ready."
 - Re-evaluate analytics tab set with user after real-world use — refine by
   removal, not addition
 
+
+---
+
+## Session 2026-04-23 — Equipment Audit, Inventory Ops, PRD Authoring
+
+Full transcript saved to `docs/SESSION-LOG-2026-04-23.md` (appended here as a dedicated file to avoid conflicts with parallel-terminal writes to this log).
+
+Headlines:
+- Authored PRD `docs/prds/PRD-EQUIPMENT-MASTER-CONNECTIVITY.md` covering 9 Ralph-executable stories to fix 7 Equipment connectivity disconnects + S9 legacy wax-filling link cleanup (11 call sites across 8 files).
+- DB ops: cartridgesPerLaserCutSheet 6 → 16; deleted 11 test cartridges from FRIDGE-001 (audit preserved); voided wax-filling run TF44Oxqs2RqL6KDI_yXBG with note; 2 placeholder receiving lots created earlier (PT-CT-104 qty 500, PT-CT-106 qty 400, awaiting real supplier barcode swap).
+- Audits: full UI connectivity audit (SPU sidebar 100% broken — 10 links; handoff brief produced for coworker), Equipment master-controller deep-dive (qualified NO — metadata master, not transaction master).
+- Branch `ralph/equipment-connectivity-prd` commit `3c354e7` pushed. PR URL: https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/new/ralph/equipment-connectivity-prd
+- Hard rule noted: NEVER push/merge to `main`. Stop at `master`.
+
+See `docs/SESSION-LOG-2026-04-23.md` for the full 16-section record including file paths, line numbers, DB end state, diagnostic scripts produced, and open items.
