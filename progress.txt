@@ -498,3 +498,196 @@ Firmware `ms` timestamps are from the device's internal clock; webhook/event tim
 3. Deploy updated Lambda (`index.mjs` + `db-adapter.mjs`)
 4. Create Particle webhook for `device-log` events
 5. Deploy firmware with session log upload capability
+
+
+================================================================================
+# 2026-04-22 → 2026-04-23 — Cartridge/Backing-Lot Refactor + Manufacturing Analytics
+================================================================================
+
+## Starting problem (2026-04-22)
+
+Dashboard was lying: Oven 1 showed 0 cartridges despite physically holding 83.
+"Backing cartridges" pipeline count stuck too high. Wax QC Yield stuck at 0%.
+
+## Root causes discovered
+
+1. **Oven tile hardcoded `count: 0`** in cartridge-dashboard/+page.server.ts:146-151.
+2. **BackingLot.cartridgeCount never decremented** — set once at WI-01 time, stayed
+   stale forever regardless of how many cartridges wax-filling pulled.
+3. **Two parallel CartridgeRecord pools** that never reconciled:
+   - WI-01 → nanoid-ID placeholders w/ `status='backing'` that were never consumed
+   - Wax-filling `loadDeck` → UUID records from scanned barcodes (different IDs)
+   Result: lineage fragmented, ghost counts inflated forever.
+4. **waxQc.status='Accepted' was never written** on the happy path — only the
+   reject path wrote `'Rejected'`. So "Wax QC Yield" KPI = 0 numerator.
+
+## Initial fixes (2026-04-22)
+
+Code changes:
+- `cartridge-dashboard/+page.server.ts`: oven tile now queries BackingLot sum
+- `wax-filling/+page.server.ts` `loadDeck`: decrements BackingLot.cartridgeCount,
+  marks `consumed` at zero, voids stale WI-01 placeholders on consumption
+- `wax-filling` + `opentron-control/wax/[runId]` `completeQC`: writes
+  `waxQc.status='Accepted'` for every non-rejected cart
+- `equipment/activity`, `equipment/location/[locationId]`, `cartridge-admin/storage`:
+  status filters + BackingLot-based oven counts
+- `manufacturing/consumables/+page.server.ts`: `backedCount` reads BackingLot sum
+
+Backfills applied:
+- 9,641 historical cartridges → `waxQc.status='Accepted'` (system-backfill tag)
+- 2 BackingLots → `status='consumed'`, `cartridgeCount=0`
+- 56 + 2 WI-01 nanoid placeholders voided
+- 27 final nanoid stubs deleted
+
+## Major redesign (2026-04-22 evening)
+
+User clarified intent: cartridges should only individuate when their barcode is
+FIRST SCANNED at wax deck loading. WI-01 should track raw-material lots and
+aggregate bucket counts, nothing per-cartridge.
+
+Refactor:
+- WI-01 no longer creates CartridgeRecord docs; only LotRecord + BackingLot
+- `loadDeck` resolves parent LotRecord via bucketBarcode and copies material
+  lineage (cartridgeBlankLot, thermosealLot, barcodeLabelLot, qrCodeRef,
+  ovenEntryTime) onto each scanned cartridge
+- CartridgeRecord schema extended: parentLotRecordId, lotQrCode, cartridgeBlankLot,
+  thermosealLot, barcodeLabelLot, ovenExitTime added to `backing` subdoc
+- Dashboards + oven tiles all use `BackingLot.cartridgeCount` as source of
+  truth instead of counting CartridgeRecords
+- Reagent-filling: removed defensive `$setOnInsert: status='backing'` orphan path
+
+Commit `97082dc` on dev → merged to master → main (deployed).
+
+## Thorough audit via Opus 4.7 subagent
+
+Full Mongo verification. Key findings:
+- BLOCKER-1: refactor committed but not yet deployed at time of audit. 98 today's
+  cartridges were missing the new lineage fields (fixed via follow-up backfill).
+- BLOCKER-2: lot `2941bb67` over-pulled — WI-01 recorded 54 cartridges, 66 were
+  actually pulled across 4 runs. Deployed code had no decrement to stop it.
+- HIGH-1: 133 + 88 cartridges with backing.lotId pointing at LotRecord._id
+  instead of the bucket barcode (legacy format).
+- HIGH-2: duplicate LotRecord on bucket 5b867012 (qty=1 vs qty=2, 2 days apart).
+- MEDIUM: 101 nanoid `_id` CartridgeRecord rows remaining (seed / test fixtures).
+- MEDIUM: 242 dangling `inventory_transactions.cartridgeRecordId` references.
+- MEDIUM: `manufacturing/+page.server.ts` still using dead `currentPhase` field.
+- R1: loadDeck `$inc` atomic but "≤0 → consumed" flip separate → transiently
+  negative cartridgeCount possible; no pre-check gate against over-pull.
+- R2: `system-backfill` operator stamp on 9,641 waxQc rows — compliance smell.
+- R3: cancelRun/abortRun still set `status='backing'` on cartridges (invalid
+  post-refactor).
+- R5: lineage fields written via `$setOnInsert` → re-scan never updates them.
+
+## Fixes for audit findings (2026-04-23)
+
+Code fixes (landed in `master` at `b8fcad7`, then into `main`):
+- `manufacturing/+page.server.ts`: `currentPhase` → `status`
+- `wax-filling/loadDeck`: atomic over-pull guard via conditional `findOneAndUpdate`
+  with `cartridgeCount: {$gte: N}` — fails with clear error if bucket lacks stock;
+  rollback on bulkWrite failure
+- `cancelRun` / `abortRun`: delete aborted CartridgeRecords + refund BackingLot
+  `cartridgeCount` — no more `status='backing'` revert
+- Lineage fields moved from `$setOnInsert` to `$set` so re-scans populate them
+- Reagent-filling bare-upsert now writes `status='reagent_filling'` on insert
+  (transient state instead of null). Added to enum.
+
+Data reconciliations:
+- 176 CartridgeRecord `backing.lotId` values remapped from LotRecord._id to bucket
+- 288 cartridges got retroactive material lineage
+- 55 CART-* seed orphans voided
+- 70 latest-WI-01 nanoid stubs deleted
+- 2 missing BackingLots (fde9a2aa, ffda9702) retro-created as status=consumed
+- Duplicate LotRecord KnvhBjHKSC0jStX1rQw4s marked Superseded
+- Lot V1BSHFzMXsNAxYiP59o6b: `actualConsumedCount: 66` field + `corrections[]`
+  entry + AuditLog RECONCILE row documenting the 12-cartridge over-pull with
+  root cause. **12 cartridges still need QA human review before shipping.**
+- AuditLog BACKFILL entry for the 9,641 waxQc rows with rationale + authorizer
+
+## Equipment settings viewer
+
+New route `/manufacturing/opentron-control/settings` — read-only card view of
+current wax + reagent filling settings (timers, temperatures, volumes) with
+links out to the existing admin-gated edit pages. Gear icon button added to
+the main Opentron Control header.
+
+## Manufacturing analytics page (ball of clay)
+
+New route `/manufacturing/analysis` (commit `f660442` on dev, merged to master
+at `b8fcad7`). User said "build everything, we'll refine by removal."
+
+Eleven tabs: Overview, Cycle Time, Yield & Failures, Material Flow, Compare,
+SPC Alerts, FMEA, Manual Input, All Runs, Reports & Export, DOE Planner.
+
+New Mongoose models:
+- `ProcessAnalyticsEvent` — manual observations/deviations/MSA/environmental/etc.
+- `SpecLimit` — per-(process, metric) LSL/USL/target/cpkMin, empty by default
+- `FmeaRecord` — S × O × D = RPN auto-computed on save
+- `SpcSignal` — Nelson rule hits with ack/close workflow
+- `CauseEffectDiagram` — 5M1E fishbone per process
+
+Data layer:
+- `src/lib/server/analytics/types.ts` — canonical ProcessType enum, shift inference
+- `src/lib/server/analytics/runs-feed.ts` — unified UnifiedRun view across
+  LotRecord, WaxFillingRun, ReagentBatchRecord, LaserCutBatch
+- `src/lib/server/analytics/stats.ts` — describe, histogram, Pareto, I-MR chart,
+  p-chart, Nelson rules 1-8, Cp/Cpk + DPMO + process sigma, one-way ANOVA,
+  two-sample t-test, linear regression, FPY/RTY
+
+Sub-page `/manufacturing/analysis/spec-limits` — admin-gated editor for setting
+LSL/USL/target per (process, metric) with required rationale field for 21 CFR
+820.250 regulatory traceability.
+
+Added nav link "Analysis" to manufacturing sidebar.
+
+Deps added: `simple-statistics`, `uplot`.
+
+Phase 1 intentionally leaves capability analysis (Cp/Cpk) disabled until spec
+limits are set empirically from stable baseline. FMEA / DOE analysis / Gage R&R
+stubs present but empty.
+
+## Compliance PDF
+
+Generated `summary.pdf` (US Letter, 101 KB) summarizing the refactor in
+human-readable form. Committed at root of repo + copied to Desktop as
+`BIMS-Cartridge-Refactor-Summary.pdf`.
+
+## CORE RULE established (2026-04-23)
+
+User clarified: even when they say "approve everything" / "all permissions
+allowed" / "execute without asking," **`main` is explicitly excluded**. Pushing
+to `main` requires its own per-action authorization referencing `main` or
+"production" or "deploy" directly.
+
+Memory updated:
+- `feedback_no_master_merge.md` — hard rule, supersedes autonomy memory for main
+- `feedback_autonomy.md` — clarified that blanket permission excludes main
+- MEMORY.md index — reflects CORE RULE prominently
+
+Claude workflow: edits → commit on dev → push dev → merge dev into master →
+push master → **STOP.** Hand off to user: "pushed to master at `<sha>` — ready
+for you to promote to main when you're ready."
+
+## Current branch state (end of session 2026-04-23)
+
+- `dev` at `f660442` (origin up to date)
+- `master` at `b8fcad7` (origin up to date) — includes all refactor + audit
+  fixes + analytics scaffolding
+- `main` at `87ceba7` — was pushed before the CORE RULE was established;
+  **from now on, user promotes main themselves**
+- Currently on `ralph/equipment-connectivity-prd` at `591c056` — snapshot of
+  in-progress equipment-connectivity work, pushed to origin
+
+## Known follow-ups
+
+- QA review of the 12 unaccounted cartridges from bucket `2941bb67` before any
+  ship
+- Once 30+ runs of each process have accumulated, set empirical spec limits
+  and turn on Cp/Cpk on the analytics page
+- Nightly job to auto-open SPC signals when Nelson rules trip on new data
+  (scaffold present; scheduler not yet wired)
+- Rejection-reason taxonomy: extend `rejectionReasonCodes` with
+  category/severity/costWeight for Pareto stacking
+- xlsx multi-sheet export on analytics Reports tab (dep already installed)
+- Re-evaluate analytics tab set with user after real-world use — refine by
+  removal, not addition
+
