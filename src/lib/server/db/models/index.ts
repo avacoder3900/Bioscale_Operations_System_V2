@@ -85,3 +85,10 @@ export { CvProject } from './cv-project.js';
 export { CvImage } from './cv-image.js';
 export { CvSample } from './cv-sample.js';
 export { CvInspection } from './cv-inspection.js';
+
+// Manufacturing Analytics
+export { ProcessAnalyticsEvent } from './process-analytics-event.js';
+export { SpecLimit } from './spec-limit.js';
+export { FmeaRecord } from './fmea-record.js';
+export { SpcSignal } from './spc-signal.js';
+export { CauseEffectDiagram } from './cause-effect-diagram.js';
