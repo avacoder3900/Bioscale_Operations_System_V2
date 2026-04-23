@@ -4,6 +4,7 @@ import {
 	Equipment, EquipmentLocation, AuditLog, BackingLot, WaxBatch, ReceivingLot, LotRecord
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
+import { resolveFridgeId } from '$lib/server/services/equipment-resolve';
 import { isAdmin } from '$lib/server/permissions';
 import { User } from '$lib/server/db';
 import { notifyLowWaxBatch, notifyRunLifecycle, shouldWarnLowWax } from '$lib/server/notifications';
@@ -1095,12 +1096,16 @@ export const actions: Actions = {
 		}
 
 		const now = new Date();
+		// S1a: resolve the scanned fridge reference to Equipment._id. See
+		// opentron-control/wax/[runId]/+page.server.ts for the same pattern.
+		const resolvedLocationId = await resolveFridgeId(location);
 		if (cartridgeIds.length > 0) {
 			const bulkOps = cartridgeIds.map((cid: string) => ({
 				updateOne: {
 					filter: { _id: cid, 'waxStorage.recordedAt': { $exists: false } },
 					update: {
 						$set: {
+							'waxStorage.locationId': resolvedLocationId,
 							'waxStorage.location': location,
 							'waxStorage.coolingTrayId': coolingTrayId,
 							'waxStorage.operator': { _id: locals.user._id, username: locals.user.username },

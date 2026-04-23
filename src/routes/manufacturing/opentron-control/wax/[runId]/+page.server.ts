@@ -13,6 +13,7 @@ import {
 	AuditLog, ReceivingLot
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
+import { resolveFridgeId } from '$lib/server/services/equipment-resolve';
 import { notifyRunLifecycle } from '$lib/server/notifications';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -330,12 +331,20 @@ export const actions: Actions = {
 		}
 
 		const now = new Date();
+		// S1a: resolve the scanned fridge reference to Equipment._id once per
+		// batch, then write it to waxStorage.locationId. Keep the raw scanned
+		// value in waxStorage.location as the denormalized display field so
+		// operators still see what they scanned. If resolution fails the write
+		// still happens with locationId=null — readers fall back to `location`
+		// until S1b back-fills.
+		const resolvedLocationId = await resolveFridgeId(location);
 		if (cartridgeIds.length > 0) {
 			const bulkOps = cartridgeIds.map((cid: string) => ({
 				updateOne: {
 					filter: { _id: cid, 'waxStorage.recordedAt': { $exists: false } },
 					update: {
 						$set: {
+							'waxStorage.locationId': resolvedLocationId,
 							'waxStorage.location': location,
 							'waxStorage.coolingTrayId': coolingTrayId,
 							'waxStorage.operator': { _id: locals.user._id, username: locals.user.username },
