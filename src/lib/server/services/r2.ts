@@ -139,6 +139,51 @@ export async function uploadToR2(buffer: Buffer, key: string, contentType: strin
 	return getR2Url(key);
 }
 
+/**
+ * Server-side copy within the bucket via S3 CopyObject (PUT with x-amz-copy-source).
+ * Signs the request with raw fetch, avoiding AWS SDK (TLS issues with R2 from Vercel).
+ */
+export async function copyInR2(sourceKey: string, destKey: string, expiresIn = 600): Promise<void> {
+	const cfg = getConfig();
+	const region = 'auto';
+	const service = 's3';
+	const method = 'PUT';
+	const now = new Date();
+	const { amzDate, dateStamp } = formatAmzDate(now);
+	const credential = `${cfg.accessKeyId}/${dateStamp}/${region}/${service}/aws4_request`;
+	const host = cfg.endpoint;
+	const copySource = `/${cfg.bucket}/${sourceKey.split('/').map(encodeURIComponent).join('/')}`;
+
+	const queryParams = new URLSearchParams({
+		'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+		'X-Amz-Credential': credential,
+		'X-Amz-Date': amzDate,
+		'X-Amz-Expires': String(expiresIn),
+		'X-Amz-SignedHeaders': 'host;x-amz-copy-source'
+	});
+
+	const canonicalUri = `/${cfg.bucket}/${destKey}`;
+	const canonicalQuery = queryParams.toString().split('&').sort().join('&');
+	const canonicalHeaders = `host:${host}\nx-amz-copy-source:${copySource}\n`;
+	const signedHeaders = 'host;x-amz-copy-source';
+	const payloadHash = 'UNSIGNED-PAYLOAD';
+	const canonicalRequest = [method, canonicalUri, canonicalQuery, canonicalHeaders, signedHeaders, payloadHash].join('\n');
+	const scope = `${dateStamp}/${region}/${service}/aws4_request`;
+	const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256Hex(canonicalRequest)].join('\n');
+	const signingKey = getSignatureKey(cfg.secretAccessKey, dateStamp, region, service);
+	const signature = createHmac('sha256', signingKey).update(stringToSign).digest('hex');
+	const url = `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+
+	const res = await fetch(url, {
+		method: 'PUT',
+		headers: { 'x-amz-copy-source': copySource }
+	});
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`R2 copy ${sourceKey} → ${destKey} failed (${res.status}): ${text}`);
+	}
+}
+
 export async function deleteFromR2(key: string): Promise<void> {
 	// For delete, generate a presigned DELETE URL
 	const cfg = getConfig();

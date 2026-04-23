@@ -20,9 +20,8 @@ import { connectDB } from '$lib/server/db/connection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
-import { S3Client, CopyObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { env } from '$env/dynamic/private';
-import { slugifyProjectName, getR2Url } from '$lib/server/services/r2';
+import { slugifyProjectName, getR2Url, copyInR2, deleteFromR2 } from '$lib/server/services/r2';
 import type { RequestHandler } from './$types';
 
 export const config = {
@@ -30,37 +29,7 @@ export const config = {
 	maxDuration: 300
 };
 
-const BUCKET = env.R2_BUCKET_NAME || 'brevitest-cv';
 const LOG_COLLECTION = 'r2_migration_log';
-
-let _s3: S3Client | null = null;
-function getS3(): S3Client {
-	if (_s3) return _s3;
-	_s3 = new S3Client({
-		region: 'auto',
-		endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-		credentials: {
-			accessKeyId: env.R2_ACCESS_KEY_ID!,
-			secretAccessKey: env.R2_SECRET_ACCESS_KEY!
-		},
-		forcePathStyle: true,
-		requestChecksumCalculation: 'WHEN_REQUIRED',
-		responseChecksumValidation: 'WHEN_REQUIRED'
-	});
-	return _s3;
-}
-
-async function r2Copy(oldKey: string, newKey: string): Promise<void> {
-	await getS3().send(new CopyObjectCommand({
-		Bucket: BUCKET,
-		CopySource: `/${BUCKET}/${oldKey.split('/').map(encodeURIComponent).join('/')}`,
-		Key: newKey
-	}));
-}
-
-async function r2Delete(key: string): Promise<void> {
-	await getS3().send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
-}
 
 type Mode = 'preview' | 'execute' | 'cleanup';
 
@@ -99,7 +68,6 @@ export const POST: RequestHandler = async ({ request }) => {
 async function runMigrate(execute: boolean, projectFilter: string | undefined, limit: number) {
 	const db = mongoose.connection.db!;
 
-	// Scope projects
 	const projQuery: any = {};
 	if (projectFilter) {
 		projQuery.$or = [{ _id: projectFilter }, { name: projectFilter }];
@@ -107,7 +75,6 @@ async function runMigrate(execute: boolean, projectFilter: string | undefined, l
 	const projects = await CvProject.find(projQuery).select('_id name').lean();
 	const projById = new Map(projects.map(p => [String(p._id), p]));
 
-	// Scope images (only ones that actually need migration)
 	const imgQuery: any = {};
 	if (projectFilter) imgQuery.projectId = { $in: projects.map(p => String(p._id)) };
 
@@ -152,9 +119,9 @@ async function runMigrate(execute: boolean, projectFilter: string | undefined, l
 		if (!execute) continue;
 
 		try {
-			await r2Copy(oldKey, newKey);
+			await copyInR2(oldKey, newKey);
 			if (oldThumb && newThumb) {
-				try { await r2Copy(oldThumb, newThumb); }
+				try { await copyInR2(oldThumb, newThumb); }
 				catch { newThumb = undefined; /* thumb copy is best-effort */ }
 			}
 
@@ -210,9 +177,9 @@ async function runCleanup(limit: number) {
 
 	for (const entry of pending) {
 		try {
-			await r2Delete(entry.oldKey);
+			await deleteFromR2(entry.oldKey);
 			if (entry.oldThumb) {
-				try { await r2Delete(entry.oldThumb); } catch { /* ignore thumb delete errors */ }
+				try { await deleteFromR2(entry.oldThumb); } catch { /* ignore thumb delete errors */ }
 			}
 			await col.updateOne({ _id: entry._id }, { $set: { oldKeyDeleted: true, oldThumbDeleted: true } });
 			deleted++;
