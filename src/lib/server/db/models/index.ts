@@ -74,6 +74,7 @@ export { AuditLog } from './audit-log.js';
 export { CalibrationRecord } from './calibration-record.js';
 export { ElectronicSignature } from './electronic-signature.js';
 export { InventoryTransaction } from './inventory-transaction.js';
+export { ManualCartridgeRemoval } from './manual-cartridge-removal.js';
 export { DeviceEvent } from './device-event.js';
 export { ManufacturingMaterialTransaction } from './manufacturing-material-transaction.js';
 export { DeviceLog } from './device-log.js';
