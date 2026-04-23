@@ -250,7 +250,10 @@ Source: BIMS audit conducted 2026-04-23 (this repo, `dev` branch). Seven connect
 ### S7 — Remove orphan schema fields
 **As a** BIMS developer **I want** fields that have never been written by any action removed from the schema **so that** the model doesn't lie about the data shape.
 
-**Scope:** `CartridgeRecord.waxFilling.transferTimeSeconds`, `CartridgeRecord.finalizedAt` (marked `ORPHANED: never written by any action` in the schema comments), `CartridgeRecord.storage.containerBarcode`.
+**Scope (all 3 confirmed present on dev as of 2026-04-23):**
+- `CartridgeRecord.waxFilling.transferTimeSeconds` — `src/lib/server/db/models/cartridge-record.ts:35`, marked `ORPHANED`.
+- `CartridgeRecord.storage.containerBarcode` — `src/lib/server/db/models/cartridge-record.ts:72`, marked `ORPHANED`.
+- `CartridgeRecord.finalizedAt` — `src/lib/server/db/models/cartridge-record.ts:122`, marked `ORPHANED`.
 
 **Note:** `storage.fridgeId` is NOT in this list — S1a repurposes it.
 
