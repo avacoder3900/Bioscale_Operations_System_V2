@@ -21,7 +21,7 @@ import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
 import { env } from '$env/dynamic/private';
-import { slugifyProjectName, getR2Url, copyInR2, deleteFromR2 } from '$lib/server/services/r2';
+import { slugifyProjectName, getR2Url, copyViaWorker, deleteViaWorker } from '$lib/server/services/r2';
 import type { RequestHandler } from './$types';
 
 export const config = {
@@ -119,9 +119,9 @@ async function runMigrate(execute: boolean, projectFilter: string | undefined, l
 		if (!execute) continue;
 
 		try {
-			await copyInR2(oldKey, newKey);
+			await copyViaWorker(oldKey, newKey);
 			if (oldThumb && newThumb) {
-				try { await copyInR2(oldThumb, newThumb); }
+				try { await copyViaWorker(oldThumb, newThumb); }
 				catch { newThumb = undefined; /* thumb copy is best-effort */ }
 			}
 
@@ -181,9 +181,9 @@ async function runCleanup(limit: number) {
 
 	for (const entry of pending) {
 		try {
-			await deleteFromR2(entry.oldKey);
+			await deleteViaWorker(entry.oldKey);
 			if (entry.oldThumb) {
-				try { await deleteFromR2(entry.oldThumb); } catch { /* ignore thumb delete errors */ }
+				try { await deleteViaWorker(entry.oldThumb); } catch { /* ignore thumb delete errors */ }
 			}
 			await col.updateOne({ _id: entry._id }, { $set: { oldKeyDeleted: true, oldThumbDeleted: true } });
 			deleted++;

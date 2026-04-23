@@ -140,8 +140,65 @@ export async function uploadToR2(buffer: Buffer, key: string, contentType: strin
 }
 
 /**
+ * Copy an object within the bucket by going through the Cloudflare Worker:
+ *   GET {R2_WORKER_URL}/file/{src} → buffer
+ *   PUT {R2_WORKER_URL}/upload/{dest} with X-Upload-Secret → writes to R2
+ *
+ * The Worker has a native R2 binding so it bypasses the TLS issues that
+ * fetch-from-Vercel-to-r2.cloudflarestorage.com hits.
+ */
+export async function copyViaWorker(sourceKey: string, destKey: string): Promise<void> {
+	const workerUrl = env.R2_WORKER_URL;
+	if (!workerUrl) throw new Error('R2_WORKER_URL not configured');
+	const uploadSecret = env.R2_UPLOAD_SECRET || 'brevitest-r2-upload-key-2026';
+
+	const dlUrl = `${workerUrl}/file/${encodeURIComponent(sourceKey)}`;
+	const dlRes = await fetch(dlUrl);
+	if (!dlRes.ok) {
+		throw new Error(`worker download ${sourceKey} → ${dlRes.status}`);
+	}
+	const body = Buffer.from(await dlRes.arrayBuffer());
+	const contentType = dlRes.headers.get('content-type') || 'application/octet-stream';
+
+	const ulUrl = `${workerUrl}/upload/${encodeURIComponent(destKey)}`;
+	const ulRes = await fetch(ulUrl, {
+		method: 'PUT',
+		headers: {
+			'Content-Type': contentType,
+			'X-Upload-Secret': uploadSecret
+		},
+		body
+	});
+	if (!ulRes.ok) {
+		const text = await ulRes.text().catch(() => '');
+		throw new Error(`worker upload ${destKey} → ${ulRes.status} ${text}`);
+	}
+}
+
+/**
+ * Delete an object via the Cloudflare Worker (DELETE /file/:key).
+ * Worker requires X-Upload-Secret for writes/deletes.
+ */
+export async function deleteViaWorker(key: string): Promise<void> {
+	const workerUrl = env.R2_WORKER_URL;
+	if (!workerUrl) throw new Error('R2_WORKER_URL not configured');
+	const uploadSecret = env.R2_UPLOAD_SECRET || 'brevitest-r2-upload-key-2026';
+
+	const url = `${workerUrl}/file/${encodeURIComponent(key)}`;
+	const res = await fetch(url, {
+		method: 'DELETE',
+		headers: { 'X-Upload-Secret': uploadSecret }
+	});
+	if (!res.ok && res.status !== 404) {
+		throw new Error(`worker delete ${key} → ${res.status}`);
+	}
+}
+
+/**
  * Server-side copy within the bucket via S3 CopyObject (PUT with x-amz-copy-source).
- * Signs the request with raw fetch, avoiding AWS SDK (TLS issues with R2 from Vercel).
+ * KNOWN ISSUE: this fails TLS handshake when called from Vercel Functions. Use
+ * copyViaWorker() from Vercel. This function is kept for scripts/Python workers
+ * that can talk to R2 directly.
  */
 export async function copyInR2(sourceKey: string, destKey: string, expiresIn = 600): Promise<void> {
 	const cfg = getConfig();
