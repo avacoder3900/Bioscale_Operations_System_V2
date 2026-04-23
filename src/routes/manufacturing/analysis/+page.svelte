@@ -349,6 +349,40 @@
 	{#if activeTab === 'overview'}
 		{@const o = data.overview}
 		<section class="space-y-4">
+			<!-- INCIDENT NOTE 2026-04-23 — cartridge tracking failure in FRIDGE-002.
+			     Flags the incident on the analytics overview and proposes concrete
+			     tracking improvements for team discussion. Remove or fold into a
+			     proper incident log once the process improvements land. -->
+			<div class="rounded-lg border border-red-500/50 bg-red-900/10 p-4">
+				<div class="flex items-start gap-3">
+					<svg class="mt-0.5 h-5 w-5 flex-shrink-0 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+					</svg>
+					<div class="flex-1 text-xs">
+						<div class="font-semibold text-red-300">Incident 2026-04-23 — cartridge tracking failure (20 ghosts in FRIDGE-002)</div>
+						<p class="mt-1 text-red-200/90">
+							A physical audit of FRIDGE-002 recovered 59 cartridges where Mongo records said 78 should be present. 20 cartridges had no physical counterpart. Breakdown:
+						</p>
+						<ul class="mt-2 list-inside list-disc space-y-0.5 text-red-200/80">
+							<li>10 from a 2026-04-16 wax run with no cooling tray assigned (7 days old; root cause unclear)</li>
+							<li>8 from a 2026-04-22 Robot 2 run (TRAY-002), attributed after-the-fact to "Zane Testing 4-21"</li>
+							<li>2 singletons from 2026-04-22 runs (TRAY-003 and TRAY-004)</li>
+						</ul>
+						<p class="mt-2 font-semibold text-red-300">These losses are not acceptable. Proposed future tracking:</p>
+						<ol class="mt-1 list-inside list-decimal space-y-0.5 text-red-200/80">
+							<li><span class="text-red-200">Daily fridge reconciliation scan</span> — single barcode-scan pass per fridge each morning; system emits a delta report against the last scan.</li>
+							<li><span class="text-red-200">Mandatory cooling-tray assignment</span> at the wax-storage step — reject the record if `waxStorage.coolingTrayId` is empty (eliminates the 2026-04-16 no-tray class of ghost).</li>
+							<li><span class="text-red-200">First-class "research / testing withdrawal" flow</span> — a named path for Zane-style testing so those cartridges never pass through the ghost/backfill state.</li>
+							<li><span class="text-red-200">Drift alarm</span> — automated email/Slack when Mongo's active count diverges from the last reconciliation scan by more than a configurable threshold.</li>
+							<li><span class="text-red-200">Exclude checked-out cartridges from active occupancy</span> — fridge-storage query should filter out anything in `manual_cartridge_removals` so dashboards show the real physical count, not the stale wax_stored count.</li>
+						</ol>
+						<p class="mt-2 text-red-300/70">
+							Team discussion scheduled — see Kanban task "Team discussion: FRIDGE-002 ghost-cartridge tracking failure" (QA Improvements, due Friday 2026-04-24).
+						</p>
+					</div>
+				</div>
+			</div>
+
 			<!-- KPI strip -->
 			<div class="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
 				<div class="rounded-lg border border-[var(--color-tron-border)] p-4 text-center">

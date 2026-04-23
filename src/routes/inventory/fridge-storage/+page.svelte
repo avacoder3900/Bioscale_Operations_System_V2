@@ -32,6 +32,28 @@
 		</div>
 	</div>
 
+	<!-- INCIDENT NOTE 2026-04-23 — Fridge-002 physical audit vs. Mongo showed
+	     a 20-cartridge gap (Mongo=78, physical count=59). All 20 have been
+	     logged as manual checkouts. Counts below may still include these
+	     until the occupancy query is patched to exclude `manual_cartridge_removals`.
+	     Tracking-failure discussion on the Kanban board, due Friday 2026-04-24. -->
+	<div class="rounded-lg border border-amber-500/50 bg-amber-900/10 p-4">
+		<div class="flex items-start gap-3">
+			<svg class="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+			</svg>
+			<div class="text-xs text-amber-200">
+				<div class="font-semibold text-amber-300">Tracking-failure notice — 2026-04-23</div>
+				<p class="mt-1">
+					A physical audit of FRIDGE-002 found 20 fewer cartridges than Mongo records indicate: 10 from a 2026-04-16 batch with no cooling tray assigned, 8 attributed to "Zane Testing 4-21", and 2 more from 2026-04-22 runs. All 20 are now logged as manual checkouts, but the active-occupancy count below may still include them until we patch the query to filter out `manual_cartridge_removals`.
+				</p>
+				<p class="mt-1 text-amber-300/80">
+					Follow-up discussion on the Kanban board (QA Improvements, due Friday 2026-04-24).
+				</p>
+			</div>
+		</div>
+	</div>
+
 	<!-- Summary cards -->
 	<div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 text-center">
