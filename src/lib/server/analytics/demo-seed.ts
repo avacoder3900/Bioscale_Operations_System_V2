@@ -127,15 +127,34 @@ function generateRuns(): DemoRun[] {
 	const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
 	const runs: DemoRun[] = [];
 
+	// Process mix is sized so cartridges flow coherently through the pipeline.
+	// Starting target: ~5,000 backed cartridges/month (∼167/day). Each downstream
+	// stage is sized to consume what the upstream stage accepted, minus ~1-5%
+	// attrition per stage. Numbers chosen so per-stage math passes
+	// scripts/audit-demo-consistency.ts.
+	//
+	//   WI-01 backed     ~5,040  (105 × 48)
+	//   Wax in            5,060  (230 × 22)       ≈ matches upstream
+	//   Wax accepted      ~4,810 (5% reject)
+	//   Reagent in        4,770  (265 × 18)
+	//   Reagent accepted  ~4,580 (4% reject)
+	//   Top-seal in       4,560  (190 × 24)
+	//   Top-seal out      ~4,470
+	//   QA-QC in          4,500  (150 × 30)
+	//
+	// Supporting (sheet production):
+	//   Laser cut         ~5,040  (63 × 80)     covers WI-01 thermoseal
+	//   Cut thermoseal    ~2,000  (40 × 50)     parallel/backup supply
+	//   Cut top seal      ~4,600  (92 × 50)     covers top-seal application
 	const processMix: { type: ProcessType; count: number; meanCycleMin: number; sdCycleMin: number; meanBatch: number }[] = [
-		{ type: 'wi-01', count: 90, meanCycleMin: 75, sdCycleMin: 12, meanBatch: 48 },
-		{ type: 'laser-cut', count: 60, meanCycleMin: 22, sdCycleMin: 4, meanBatch: 80 },
+		{ type: 'laser-cut', count: 63, meanCycleMin: 22, sdCycleMin: 4, meanBatch: 80 },
 		{ type: 'cut-thermoseal', count: 40, meanCycleMin: 14, sdCycleMin: 3, meanBatch: 50 },
-		{ type: 'cut-top-seal', count: 35, meanCycleMin: 12, sdCycleMin: 2, meanBatch: 50 },
-		{ type: 'wax', count: 310, meanCycleMin: 58, sdCycleMin: 9, meanBatch: 22 },
-		{ type: 'reagent', count: 140, meanCycleMin: 44, sdCycleMin: 8, meanBatch: 18 },
-		{ type: 'top-seal', count: 42, meanCycleMin: 18, sdCycleMin: 3, meanBatch: 24 },
-		{ type: 'qa-qc', count: 28, meanCycleMin: 26, sdCycleMin: 5, meanBatch: 30 }
+		{ type: 'cut-top-seal', count: 92, meanCycleMin: 12, sdCycleMin: 2, meanBatch: 50 },
+		{ type: 'wi-01', count: 105, meanCycleMin: 75, sdCycleMin: 12, meanBatch: 48 },
+		{ type: 'wax', count: 230, meanCycleMin: 58, sdCycleMin: 9, meanBatch: 22 },
+		{ type: 'reagent', count: 265, meanCycleMin: 44, sdCycleMin: 8, meanBatch: 18 },
+		{ type: 'top-seal', count: 180, meanCycleMin: 18, sdCycleMin: 3, meanBatch: 24 },
+		{ type: 'qa-qc', count: 140, meanCycleMin: 26, sdCycleMin: 5, meanBatch: 30 }
 	];
 
 	const cartridgeLots = ['PT-CT-104-A2', 'PT-CT-104-B7', 'PT-CT-104-C1'];

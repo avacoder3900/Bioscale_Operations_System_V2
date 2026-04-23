@@ -266,7 +266,7 @@
 		<div>
 			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Manufacturing Analysis <span class="ml-2 text-xs font-normal text-amber-400">[DEMO]</span></h1>
 			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
-				Seeded demo — 9 robots, 12 decks, 16 trays, 4 ovens, 6 fridges, 4 assays, 12 operators, ~745 runs across 30 days. Nothing below is in Mongo.
+				Seeded demo — 9 robots, 12 decks, 16 trays, 4 ovens, 6 fridges, 4 assays, 12 operators. 1,115 runs across 30 days moving ~4,100 cartridges end-to-end (backing → wax → reagent → top-seal → QA/QC) with coherent per-stage flow and ~89.6% rolled yield. Nothing below is in Mongo.
 			</p>
 		</div>
 		<div class="flex gap-2">
