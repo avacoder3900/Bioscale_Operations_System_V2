@@ -47,10 +47,26 @@ function randNorm(mean: number, stdDev: number) {
 // Static demo population
 // ============================================================================
 
+// Demo operators — first names rhyme with Nick / Nicholas / Alejandro,
+// last names rhyme with Cox / Valdez. Full names displayed everywhere.
 const OPERATOR_NAMES = [
-	'a.patel', 'j.nguyen', 'r.martinez', 'k.chen', 'm.jackson', 's.kowalski',
-	'l.oyelaran', 'd.foster', 'n.bellamy', 'c.silva', 'e.takahashi', 'b.rossi'
+	'Nick Fox',
+	'Rick Knox',
+	'Mick Cox',
+	'Vic Brooks',
+	'Nico Sanchez',
+	'Leandro Valdez',
+	'Alejandro Hernandez',
+	'Alessandro Gonzalez',
+	'Sandro Rodriguez',
+	'Evandro Fernandez',
+	'Dario Martinez',
+	'Armando Gutierrez'
 ];
+
+function operatorIdFor(name: string): string {
+	return 'op-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+}
 
 const ROBOT_NAMES = Array.from({ length: 9 }, (_, i) => `Robot ${i + 1}`);
 const DECK_IDS = Array.from({ length: 12 }, (_, i) => `DECK-${String(i + 1).padStart(3, '0')}`);
@@ -209,7 +225,7 @@ function generateRuns(): DemoRun[] {
 				processLabel: PROCESS_LABELS[mix.type],
 				status: abort ? 'aborted' : 'completed',
 				operator,
-				operatorId: `op-${operator}`,
+				operatorId: operatorIdFor(operator),
 				robotName,
 				robotId: robotName ? `robot-${robotName.toLowerCase().replace(/ /g, '-')}` : null,
 				deckId,
@@ -587,7 +603,7 @@ function build(): any {
 	// --- Filter options ---
 	const filterOptions = {
 		processes: Object.keys(PROCESS_LABELS).map(p => ({ id: p, label: PROCESS_LABELS[p as ProcessType] })),
-		operators: OPERATOR_NAMES.map(n => ({ id: `op-${n}`, username: n })),
+		operators: OPERATOR_NAMES.map(n => ({ id: operatorIdFor(n), username: n })),
 		robots: ROBOT_NAMES.map(n => ({ id: `robot-${n.toLowerCase().replace(/ /g, '-')}`, name: n })),
 		equipment: [
 			...DECK_IDS.map(d => ({ id: `eq-${d}`, name: d, type: 'deck' })),

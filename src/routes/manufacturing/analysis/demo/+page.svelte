@@ -38,13 +38,19 @@
 		return new Date(iso).toISOString().slice(0, 10);
 	}
 
-	let fromDate = $state<string>(toInputDate(data.filters.from));
-	let toDate = $state<string>(toInputDate(data.filters.to));
-	let selectedProcesses = $state<string[]>(data.filters.processTypes ?? []);
-	let selectedOperators = $state<string[]>(data.filters.operatorIds ?? []);
-	let selectedRobots = $state<string[]>(data.filters.robotIds ?? []);
-	let selectedShifts = $state<string[]>((data.filters.shifts as string[]) ?? []);
-	let inputLotBarcodes = $state<string>((data.filters.inputLotBarcodes ?? []).join(','));
+	// Defensive defaults — when data.locked is true, data.filters is undefined
+	const initialFilters: any = (data as any).filters ?? {};
+	let fromDate = $state<string>(toInputDate(initialFilters.from ?? null));
+	let toDate = $state<string>(toInputDate(initialFilters.to ?? null));
+	let selectedProcesses = $state<string[]>(initialFilters.processTypes ?? []);
+	let selectedOperators = $state<string[]>(initialFilters.operatorIds ?? []);
+	let selectedRobots = $state<string[]>(initialFilters.robotIds ?? []);
+	let selectedShifts = $state<string[]>((initialFilters.shifts as string[]) ?? []);
+	let inputLotBarcodes = $state<string>((initialFilters.inputLotBarcodes ?? []).join(','));
+
+	// Training-mode toggle (shows/hides the green "Training Guide" panels)
+	let trainingMode = $state(true);
+	let showGlossary = $state(false);
 
 	function applyFilters() {
 		const u = new URL(window.location.href);
@@ -246,6 +252,55 @@
 	const topCycleProcess = $derived((data.cycleTime ?? [])[0] ?? null);
 </script>
 
+{#if data.locked}
+	<!-- =================================================================== -->
+	<!-- PASSWORD LOCK — enter "processadmin" to unlock the training demo     -->
+	<!-- =================================================================== -->
+	<div class="mx-auto max-w-md space-y-4 p-8">
+		<div class="rounded-lg border-2 border-amber-500/60 bg-amber-900/10 p-6">
+			<div class="mb-3 flex items-center gap-2">
+				<svg class="h-6 w-6 text-amber-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+				<h1 class="text-xl font-bold text-amber-300">Analytics Demo — Training Mode</h1>
+			</div>
+			<p class="mb-4 text-sm" style="color: var(--color-tron-text-secondary)">
+				This is a guided walkthrough of the manufacturing analytics module. Everything on this page is fabricated — it's a safe sandbox to learn process-engineering statistics (Cp/Cpk, control charts, Pareto, ANOVA, FMEA, DOE) without touching production data.
+			</p>
+			<p class="mb-4 text-sm" style="color: var(--color-tron-text-secondary)">
+				Enter the training password to continue. Access lasts 24 hours per device.
+			</p>
+			<form method="POST" action="?/unlock" class="space-y-3">
+				<input type="password" name="password" required autofocus
+					placeholder="Training password"
+					class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm"
+					style="color: var(--color-tron-text)" />
+				<button type="submit"
+					class="w-full rounded border border-amber-500/50 bg-amber-500/20 px-4 py-2 text-sm font-medium text-amber-200 hover:bg-amber-500/30">
+					Unlock Training Session
+				</button>
+				{#if form?.error}
+					<p class="text-xs text-red-400">{form.error}</p>
+				{/if}
+			</form>
+			<div class="mt-4 border-t border-[var(--color-tron-border)] pt-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
+				<p><strong>What you'll find inside:</strong></p>
+				<ul class="mt-1 ml-4 list-disc space-y-0.5">
+					<li>Every tab annotated with "how to read this" training panels</li>
+					<li>Every statistical term (Cp, Cpk, DPMO, FPY, RTY, ANOVA, Nelson rules, RPN, DOE) explained in plain language</li>
+					<li>How each chart connects to the others</li>
+					<li>When a process engineer would use each tab in real work</li>
+				</ul>
+				<p class="mt-2 italic">
+					Nothing in this demo is written to the database. Forms render but don't persist.
+				</p>
+			</div>
+			<div class="mt-4 text-center">
+				<a href="/manufacturing/analysis" class="text-xs" style="color: var(--color-tron-text-secondary)">
+					← Back to the real analytics page
+				</a>
+			</div>
+		</div>
+	</div>
+{:else}
 <div class="mx-auto max-w-[1600px] space-y-6 p-4">
 	<!-- DEMO banner — fabricated data, NOT from Mongo, NOT persisted -->
 	<div class="rounded-lg border-2 border-amber-500/60 bg-amber-900/20 p-3">
@@ -264,19 +319,107 @@
 	<!-- Header -->
 	<div class="flex items-center justify-between">
 		<div>
-			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Manufacturing Analysis <span class="ml-2 text-xs font-normal text-amber-400">[DEMO]</span></h1>
+			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Manufacturing Analysis <span class="ml-2 text-xs font-normal text-amber-400">[DEMO · TRAINING]</span></h1>
 			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
 				Seeded demo — 9 robots, 12 decks, 16 trays, 4 ovens, 6 fridges, 4 assays, 12 operators. 1,115 runs across 30 days moving ~4,100 cartridges end-to-end (backing → wax → reagent → top-seal → QA/QC) with coherent per-stage flow and ~89.6% rolled yield. Nothing below is in Mongo.
 			</p>
 		</div>
-		<div class="flex gap-2">
+		<div class="flex flex-wrap gap-2">
+			<button onclick={() => { trainingMode = !trainingMode; }}
+				class="rounded border px-3 py-1.5 text-xs font-medium transition-colors"
+				class:bg-green-900={trainingMode}
+				style="border-color: {trainingMode ? '#10b981' : 'var(--color-tron-border)'}; color: {trainingMode ? '#86efac' : 'var(--color-tron-text)'}">
+				{trainingMode ? '📚 Training ON' : '📚 Training OFF'}
+			</button>
+			<button onclick={() => { showGlossary = !showGlossary; }}
+				class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs font-medium hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)] transition-colors"
+				style="color: var(--color-tron-text)">
+				{showGlossary ? 'Hide' : 'Show'} Glossary
+			</button>
 			<button onclick={() => downloadCsv('runs-demo', data.runs)}
 				class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs font-medium hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)] transition-colors"
 				style="color: var(--color-tron-text)">
 				Export runs CSV (demo)
 			</button>
+			<form method="POST" action="?/lock" class="inline">
+				<button class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs hover:border-red-500 hover:text-red-400">🔒 Lock</button>
+			</form>
 		</div>
 	</div>
+
+	<!-- ==================================================================== -->
+	<!-- TRAINING INTRO — always shown when Training ON, collapsible           -->
+	<!-- ==================================================================== -->
+	{#if trainingMode}
+		<section class="rounded-lg border-2 border-green-500/40 bg-green-950/20 p-5">
+			<h2 class="mb-3 text-lg font-semibold text-green-300">📚 Start Here — How This Whole Page Fits Together</h2>
+			<div class="grid gap-4 text-xs leading-relaxed md:grid-cols-2" style="color: var(--color-tron-text)">
+				<div>
+					<p class="mb-2"><strong class="text-green-300">The goal of this page:</strong> Turn raw manufacturing data into decisions. Every tab answers a different question a process engineer might ask on a Monday morning.</p>
+					<p class="mb-2"><strong class="text-green-300">Process engineering in one paragraph:</strong> Factories produce things. Things go right or wrong. Your job is to (a) measure what's happening, (b) tell whether the variation you see is "normal noise" or "something changed," (c) figure out the root cause when something did change, (d) fix it, and (e) prove the fix worked. This page is the measurement + detection + analysis layer of that loop.</p>
+					<p class="mb-2"><strong class="text-green-300">The two kinds of variation (most important concept on this page):</strong></p>
+					<ul class="ml-4 list-disc space-y-1">
+						<li><strong>Common cause</strong> — the normal jitter that's always there. Comes from dozens of tiny sources (ambient temp, operator-to-operator, tiny part differences). You can't eliminate it by firing someone or tweaking one knob; you'd have to redesign the process. Shows up as the width of your histogram.</li>
+						<li><strong>Special cause</strong> — something unusual happened. A tip got clogged, a new lot is different, a sensor drifted. You CAN chase it down and fix it. Shows up as a point outside the control limits.</li>
+					</ul>
+					<p class="mt-2">SPC (Statistical Process Control) is the set of tools that lets you tell these apart using data, not gut feel.</p>
+				</div>
+				<div>
+					<p class="mb-2"><strong class="text-green-300">How the tabs connect:</strong></p>
+					<ol class="ml-4 list-decimal space-y-1">
+						<li><strong>Overview</strong> — the 10,000-ft view. "How many cartridges, how is yield doing, are any alarms open?"</li>
+						<li><strong>Cycle Time</strong> — how long each stage takes. Tells you about capacity and variation.</li>
+						<li><strong>Yield &amp; Failures</strong> — what's going wrong and how often. Pareto chart narrows you to the top 1–3 issues.</li>
+						<li><strong>Material Flow</strong> — trace a bad cartridge back to its raw-material lots, or forward to the shipment.</li>
+						<li><strong>Compare</strong> — is the difference I see between two operators / two robots real, or is it just noise? ANOVA answers this.</li>
+						<li><strong>SPC Alerts</strong> — the automatic watchdog — yells when something goes off-pattern. Workflow: ack → investigate → close with root cause.</li>
+						<li><strong>FMEA</strong> — prospective (not reactive). "Here's everything that could go wrong; prioritize fixes before customers see them."</li>
+						<li><strong>Manual Input</strong> — capture things no sensor sees (operator observations, environmental notes, lab measurements, training events).</li>
+						<li><strong>All Runs</strong> — flat log, for exports + spot-checks.</li>
+						<li><strong>Reports &amp; Export</strong> — dump any dataset to CSV for Minitab / Excel / Python.</li>
+						<li><strong>DOE Planner</strong> — when you need to experiment on purpose: which knobs actually move the needle?</li>
+					</ol>
+					<p class="mt-2"><strong class="text-green-300">Your main loop on this page:</strong> Overview → spot an outlier → dig into Cycle Time or Yield &amp; Failures → use Compare / SPC Alerts to isolate the cause → record action in FMEA or Manual Input → verify on next week's Overview.</p>
+				</div>
+			</div>
+			<p class="mt-3 text-[11px] italic" style="color: var(--color-tron-text-secondary)">Toggle "Training OFF" at the top right to hide these green panels and see only the real page.</p>
+		</section>
+	{/if}
+
+	<!-- ==================================================================== -->
+	<!-- GLOSSARY — toggleable drawer                                          -->
+	<!-- ==================================================================== -->
+	{#if showGlossary}
+		<section class="rounded-lg border border-blue-500/40 bg-blue-950/20 p-5">
+			<h2 class="mb-3 text-lg font-semibold text-blue-300">🔤 Glossary — quick reference</h2>
+			<div class="grid gap-3 text-xs md:grid-cols-3" style="color: var(--color-tron-text)">
+				<div><strong class="text-blue-300">FPY (First Pass Yield)</strong><br>Of the units you inspected, what fraction passed on the first try. FPY = accepted / inspected.</div>
+				<div><strong class="text-blue-300">RTY (Rolled Throughput Yield)</strong><br>Multiply every stage's FPY together. RTY = FPY₁ × FPY₂ × … If each stage is 95%, five stages gives 77%. Stages compound; small losses add up fast.</div>
+				<div><strong class="text-blue-300">Scrap vs. Reject</strong><br>Scrap = physically unusable (trash). Reject = failed inspection (might be reworkable or destroyed). We track them separately so recovery programs can focus.</div>
+				<div><strong class="text-blue-300">Cycle Time</strong><br>Wall-clock duration of one run, start to finish. Drives throughput, operator scheduling, and whether one station is a bottleneck.</div>
+				<div><strong class="text-blue-300">Mean, Median, StdDev, IQR</strong><br>Mean = average. Median = middle value (robust to outliers). StdDev (σ) = typical distance from mean. IQR = middle 50% width (Q3−Q1). Compare mean vs median — if they're far apart you have skew.</div>
+				<div><strong class="text-blue-300">Histogram</strong><br>Bar chart of how often each value range occurred. Shape tells you: normal (bell) = healthy; skewed = constrained; bimodal (two humps) = you have two mixed populations.</div>
+				<div><strong class="text-blue-300">Control Chart (I-MR, X-bar/R, p-chart)</strong><br>Time series of a metric with a centerline and ±3σ limits. Points inside the limits = common-cause; points outside = special-cause, investigate. I-MR = Individuals + Moving Range (one measurement per time point). p-chart = proportion defective over time, for yes/no data.</div>
+				<div><strong class="text-blue-300">UCL / LCL (Upper/Lower Control Limits)</strong><br>Drawn at mean ± 3σ. Statistically 99.7% of points should fall inside if the process is stable. NOT spec limits — control limits come from the data itself.</div>
+				<div><strong class="text-blue-300">LSL / USL (Lower/Upper Spec Limits)</strong><br>The limits you (or the customer) set — what's acceptable. Very different from control limits. Always compare process mean + spread to spec, not to control limits.</div>
+				<div><strong class="text-blue-300">Cp (Potential Capability)</strong><br>Cp = (USL − LSL) / 6σ. "If the process were perfectly centered, how much room is there?" Cp ≥ 1.33 is the conventional "capable" threshold. Cp ignores where the mean actually is.</div>
+				<div><strong class="text-blue-300">Cpk (Actual Capability)</strong><br>Cpk = min{(USL − μ)/3σ, (μ − LSL)/3σ}. Accounts for how far off-center you are. Cpk ≤ Cp always. If Cp=2.0 but Cpk=0.6, you have plenty of room but you're hugging one spec limit — re-center and you're fine.</div>
+				<div><strong class="text-blue-300">Pp / Ppk</strong><br>Same formulas as Cp/Cpk, but using "long-term" σ from the full dataset rather than "within-subgroup" σ. For non-subgrouped I-MR data they're the same.</div>
+				<div><strong class="text-blue-300">DPMO</strong><br>Defects Per Million Opportunities. Scaled scrap rate. 3.4 DPMO = legendary Six Sigma quality (6σ capability + 1.5σ shift).</div>
+				<div><strong class="text-blue-300">Process Sigma</strong><br>How many standard deviations fit between your mean and your nearest spec. 3σ = ~66,807 DPMO. 6σ = ~3.4 DPMO. More sigmas = more room = fewer defects.</div>
+				<div><strong class="text-blue-300">Pareto Chart</strong><br>Bar chart sorted big-to-small with a cumulative % line. 80/20 rule — usually the top 2–3 bars explain 70–80% of defects. Tells you what to fix first.</div>
+				<div><strong class="text-blue-300">Nelson Rules</strong><br>8 patterns on a control chart that signal "something changed." Rule 1 = one point beyond 3σ. Rule 2 = 9 in a row on one side of the centerline. Rule 3 = 6 trending. Firing any rule = special-cause alert.</div>
+				<div><strong class="text-blue-300">ANOVA (Analysis of Variance)</strong><br>Statistical test: "are the means of these groups actually different, or am I just seeing noise?" Outputs F-statistic and p-value. p &lt; 0.05 means "yes, different."</div>
+				<div><strong class="text-blue-300">p-value</strong><br>"If there were really no difference, what's the chance I'd see data this extreme by accident?" Small p = effect is probably real. Threshold α = 0.05 is convention, not law.</div>
+				<div><strong class="text-blue-300">Cause-Effect / Ishikawa / Fishbone</strong><br>Brainstorming diagram that organizes possible root causes by 5M1E (Man, Machine, Material, Method, Measurement, Environment). Used for root-cause work.</div>
+				<div><strong class="text-blue-300">FMEA (Failure Mode and Effects Analysis)</strong><br>A table of "what could go wrong." For each row: <strong>Severity</strong> (how bad if it happens, 1–10), <strong>Occurrence</strong> (how often, 1–10), <strong>Detection</strong> (how likely you'd catch it before it leaves, 1–10). <strong>RPN = S×O×D</strong>. Sort descending, fix the top ones.</div>
+				<div><strong class="text-blue-300">DOE (Design of Experiments)</strong><br>Planned experiments — vary multiple factors at once to learn which matters. 2^k factorial = 2 levels of each of k factors. Always randomize run order to prevent drift from masquerading as an effect.</div>
+				<div><strong class="text-blue-300">Common Cause vs Special Cause</strong><br>Common = baseline noise, inherent to the process. Special = something unusual happened. Don't tamper with common cause (you'll make it worse); do chase special cause.</div>
+				<div><strong class="text-blue-300">Gage R&amp;R</strong><br>Measurement-system study. Tells you how much of the variation you see is the process itself vs. the measurement instrument + operator. High R&amp;R = your "data" is mostly noise, don't trust downstream analysis.</div>
+				<div><strong class="text-blue-300">SPC vs. Capability</strong><br>SPC (control charts) = "is the process stable over time?" Capability (Cp/Cpk) = "is a stable process meeting spec?" You need stability BEFORE capability makes sense.</div>
+			</div>
+		</section>
+	{/if}
 
 	<!-- Global filter bar -->
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]/40 p-4">
@@ -359,6 +502,25 @@
 	{#if activeTab === 'overview'}
 		{@const o = data.overview}
 		<section class="space-y-4">
+			{#if trainingMode}
+				<div class="rounded-lg border border-green-500/40 bg-green-950/10 p-4 text-xs leading-relaxed" style="color: var(--color-tron-text)">
+					<h3 class="mb-2 text-sm font-semibold text-green-300">📚 Training — Overview Tab</h3>
+					<p class="mb-2"><strong>What you're looking at:</strong> The top-level dashboard. Six KPI tiles, one yield-bar chart, one runs-per-process table, and an alert counter.</p>
+					<p class="mb-2"><strong>How to read the KPIs:</strong></p>
+					<ul class="ml-4 list-disc space-y-1">
+						<li><strong>Total Runs</strong> — every manufacturing run in the filter window (backing, wax, reagent, all of them). Gives you rough activity volume.</li>
+						<li><strong>Produced</strong> — accepted cartridges (or sheets, for cut stages). Counts only what passed.</li>
+						<li><strong>Scrapped</strong> — physically discarded. Usually happens at the backing step when a raw cartridge is damaged.</li>
+						<li><strong>Rejected</strong> — failed inspection. Tracked separately because rework may be possible.</li>
+						<li><strong>Overall FPY</strong> — First Pass Yield across every inspection. Green ≥ 95%, amber 80–94%, red &lt; 80%.</li>
+						<li><strong>RTY</strong> — Rolled Throughput Yield. Multiply every stage's FPY together. This is the KPI that matters most — it answers "if I start 100 cartridges at backing, how many make it to shipping without rework?"</li>
+					</ul>
+					<p class="mb-2 mt-2"><strong>Stage-yield bars</strong> show FPY per process. Each bar's height is the pass rate for that process alone; chaining them multiplicatively gives RTY. Watch for one stage being dramatically lower than the others — that's your "weakest link" and probably where to spend fix effort first.</p>
+					<p class="mb-2"><strong>Open SPC signals</strong> (amber box at bottom) = how many automated alerts are currently unresolved. Non-zero means "look at the SPC Alerts tab right now."</p>
+					<p><strong>Connects to:</strong> If FPY is trending down → Cycle Time + Yield &amp; Failures. If one stage is low → Compare (is it an operator? a robot?). If SPC signals are open → SPC Alerts tab.</p>
+					<p class="mt-2"><strong>Real-world use:</strong> Scan this every morning. 3 numbers matter: runs yesterday, today's RTY, open signals. If all green, move on to projects. If anything red, this is where your day starts.</p>
+				</div>
+			{/if}
 			<!-- KPI strip -->
 			<div class="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
 				<div class="rounded-lg border border-[var(--color-tron-border)] p-4 text-center">
@@ -432,6 +594,52 @@
 	<!-- ========================================================================== -->
 	{#if activeTab === 'cycle'}
 		<section class="space-y-5">
+			{#if trainingMode}
+				<div class="rounded-lg border border-green-500/40 bg-green-950/10 p-4 text-xs leading-relaxed" style="color: var(--color-tron-text)">
+					<h3 class="mb-2 text-sm font-semibold text-green-300">📚 Training — Cycle Time Tab</h3>
+					<p class="mb-2"><strong>What you're looking at:</strong> For each process, a 3-part view of cycle-time distribution — descriptive statistics, a histogram, and a control chart — plus capability indices (Cp/Cpk) when spec limits exist.</p>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">1. Descriptive statistics</p>
+					<ul class="ml-4 list-disc space-y-0.5">
+						<li><strong>Mean</strong> — arithmetic average. Sensitive to outliers.</li>
+						<li><strong>Median</strong> — middle value when sorted. Not pulled by outliers. If mean and median differ significantly, your data is skewed.</li>
+						<li><strong>StdDev (σ)</strong> — the "typical distance from the mean." Most data lives in mean ± 3σ.</li>
+						<li><strong>IQR (interquartile range)</strong> — middle 50% spread (Q3 − Q1). A non-parametric measure of variation; robust to outliers.</li>
+						<li><strong>Min / Max</strong> — extremes. Useful for spotting impossible values (e.g. negative cycle times mean a data bug).</li>
+					</ul>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">2. Histogram — the shape tells a story</p>
+					<ul class="ml-4 list-disc space-y-0.5">
+						<li><strong>Bell shape</strong> (approximately normal) — process behaving typically; classical SPC tools apply directly.</li>
+						<li><strong>Right-skewed</strong> (long tail right) — most runs fast, a few unusually slow. Very common for cycle times because hardware can jam but can't go faster than physics.</li>
+						<li><strong>Bimodal</strong> (two humps) — you have two populations mixed. E.g. two shifts, two robots, two operating modes. Separate them before analyzing.</li>
+						<li><strong>Flat / uniform</strong> — usually indicates a constraint that caps variation, or a bug in how you're binning.</li>
+					</ul>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">3. I-MR control chart (Individuals + Moving Range)</p>
+					<p class="mb-1">A time-series plot with three horizontal lines: centerline (mean), UCL (mean + 3σ), LCL (mean − 3σ). Each point is one run in time order.</p>
+					<ul class="ml-4 list-disc space-y-0.5">
+						<li>Points <em>inside</em> the limits = common-cause noise; do NOT react.</li>
+						<li>Points <em>outside</em> the limits = special cause; investigate that specific run.</li>
+						<li>The chart also applies <strong>Nelson rules</strong> (runs of points, trends, patterns) to catch smaller-magnitude shifts.</li>
+						<li>Red dots mark Nelson-rule hits. The list below names each rule triggered.</li>
+					</ul>
+					<p class="mt-1"><strong>Important — control limits are NOT spec limits.</strong> Control limits come from the data (what this process does). Spec limits come from design/customer (what this process should do). A perfectly capable process can be wildly out of control, and vice versa.</p>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">4. Capability indices (Cp, Cpk, DPMO, Process Sigma)</p>
+					<ul class="ml-4 list-disc space-y-0.5">
+						<li><strong>Cp</strong> = (USL − LSL) / 6σ. "Is there room between the spec walls for your process spread?" Ignores where the mean is.</li>
+						<li><strong>Cpk</strong> = min of (USL − μ)/3σ and (μ − LSL)/3σ. Same idea but penalizes being off-center. Cpk ≤ Cp always.</li>
+						<li><strong>Conventional targets:</strong> Cpk ≥ 1.33 = capable. Cpk ≥ 1.67 = highly capable. Cpk &lt; 1.0 = not capable, expect defects.</li>
+						<li><strong>DPMO</strong> — Defects Per Million Opportunities estimated from Cpk. 3.4 DPMO = six-sigma quality.</li>
+						<li><strong>Process Sigma</strong> — how many standard deviations fit between the mean and the nearest spec. A rephrased Cpk in σ-units.</li>
+						<li><strong>When the warning "n &lt; 30 — unreliable" appears:</strong> small-sample capability estimates are notoriously fragile. Don't make decisions off capability numbers with n &lt; 30; wait for more data.</li>
+					</ul>
+
+					<p class="mt-3"><strong>Connects to:</strong> If cycle time is drifting → SPC Alerts. If one process is much slower than target → Compare (which operator/robot?). If capability is poor → consider whether the process needs redesign (FMEA) or just recentering (easier).</p>
+					<p class="mt-2"><strong>Real-world use:</strong> The chart you live in as a process engineer. Weekly review: scan each process, look for Nelson rule hits, look at Cp/Cpk trending, identify the worst-performing stage and assign an improvement project.</p>
+				</div>
+			{/if}
 			{#if (data.cycleTime ?? []).length === 0}
 				<p class="text-xs" style="color: var(--color-tron-text-secondary)">No cycle-time data in the selected range.</p>
 			{:else}
@@ -540,6 +748,37 @@
 	<!-- ========================================================================== -->
 	{#if activeTab === 'failures'}
 		<section class="space-y-4">
+			{#if trainingMode}
+				<div class="rounded-lg border border-green-500/40 bg-green-950/10 p-4 text-xs leading-relaxed" style="color: var(--color-tron-text)">
+					<h3 class="mb-2 text-sm font-semibold text-green-300">📚 Training — Yield &amp; Failures Tab</h3>
+					<p class="mb-2"><strong>What you're looking at:</strong> Three connected views for defect analysis — a Pareto chart of reject reasons, a p-chart of defect rate over time, and editable cause-effect (fishbone) diagrams.</p>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">1. Pareto chart — the 80/20 rule</p>
+					<p class="mb-1">Bars sorted biggest-to-smallest, with a cumulative-% indicator on the right. The core insight: <strong>in any defect population, usually 2–3 reasons explain 70–80% of the defects.</strong> So if you want to move the needle on yield, don't boil the ocean — fix the top 3 bars.</p>
+					<p><strong>Named after Vilfredo Pareto</strong> (Italian economist who noticed 80% of Italy's land was owned by 20% of the people; Joseph Juran later applied it to quality). The rule isn't exact — sometimes it's 70/30, sometimes 90/10 — but the <em>pattern</em> (a few big issues + a long tail) is universal.</p>
+					<p class="mt-1"><strong>How to use it:</strong> The top bar is almost always your next improvement project. Pick the top 1–3 and build an FMEA entry or a corrective action.</p>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">2. p-chart (proportion defective)</p>
+					<p class="mb-1">A control chart for yes/no outcomes (this cartridge passed / didn't pass). One point per day; vertical axis = defect fraction; horizontal dashes per point = UCL/LCL specific to that day's sample size (variable sample size → variable limits).</p>
+					<p class="mb-1"><strong>Why a p-chart and not an I-MR?</strong> Defect rate is bounded (0 to 1) and depends on sample size — larger samples have tighter natural limits. The p-chart math accounts for that.</p>
+					<p><strong>How to read:</strong> Centerline = long-run average defect rate. Flat points = stable process. Points above UCL = a day with unusually high rejects. Multiple points above UCL = something shifted, investigate.</p>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">3. Cause-effect (Ishikawa / fishbone) diagrams</p>
+					<p class="mb-1">Brainstorming tool invented by Kaoru Ishikawa. Looks like a fish skeleton: the "head" is the problem statement (e.g. "Why do cartridges fail wax QC?"), and the "bones" are the six standard cause categories — <strong>5M1E: Man, Machine, Material, Method, Measurement, Environment.</strong></p>
+					<ul class="ml-4 list-disc space-y-0.5">
+						<li><strong>Man</strong> — operator skill, fatigue, training, shift effects.</li>
+						<li><strong>Machine</strong> — robot calibration, tooling wear, sensor drift.</li>
+						<li><strong>Material</strong> — raw material lot variation, supplier issues.</li>
+						<li><strong>Method</strong> — SOP gaps, procedure ambiguity, sequence issues.</li>
+						<li><strong>Measurement</strong> — inspection reliability, gage R&amp;R, human grading subjectivity.</li>
+						<li><strong>Environment</strong> — temperature, humidity, vibration, ambient cleanliness.</li>
+					</ul>
+					<p class="mt-1">Each cause can link to rejection codes — so you can go from "this Pareto bar is tall" → "which 5M1E buckets contribute?" → "write an action to address it."</p>
+
+					<p class="mt-3"><strong>Connects to:</strong> Top Pareto bar → new FMEA entry (treat as a failure mode). Cause-effect findings → FMEA occurrence scores. p-chart special-cause points → SPC Alerts signal. Operator patterns → Compare tab.</p>
+					<p class="mt-2"><strong>Real-world use:</strong> This is your "why did quality drop this week?" tab. Start with Pareto → pick top bar → open fishbone for that problem → narrow to one 5M1E cause → go look at the relevant raw data → write the action.</p>
+				</div>
+			{/if}
 			<!-- Pareto -->
 			<div class="rounded-lg border border-[var(--color-tron-border)] p-4">
 				<h3 class="mb-3 text-sm font-semibold" style="color: var(--color-tron-text)">Pareto — Rejection / Abort Reasons</h3>
@@ -635,6 +874,30 @@
 	<!-- ========================================================================== -->
 	{#if activeTab === 'material'}
 		<section class="space-y-4">
+			{#if trainingMode}
+				<div class="rounded-lg border border-green-500/40 bg-green-950/10 p-4 text-xs leading-relaxed" style="color: var(--color-tron-text)">
+					<h3 class="mb-2 text-sm font-semibold text-green-300">📚 Training — Material Flow Tab</h3>
+					<p class="mb-2"><strong>What you're looking at:</strong> A per-lot ledger showing which raw-material lot was consumed by which manufacturing runs, how many units were produced, how many were scrapped, and per-lot yield.</p>
+
+					<p class="mb-2"><strong>Why this matters (the regulatory reason):</strong> Medical device manufacturing requires bidirectional traceability. Given a defective shipped cartridge, you must be able to trace back to every raw-material lot that went into it (so you can bracket a recall). Given a recalled raw-material lot, you must be able to trace forward to every cartridge that consumed it (so you know what to pull from inventory/field). This tab is the engineering-friendly window into that linkage.</p>
+
+					<p class="mb-2"><strong>Why this matters (the engineering reason):</strong> Sometimes a yield drop is caused by <em>material lot variation</em> — a new lot arrives that's slightly different, and everything downstream wobbles. If you can line up a yield dip with a specific input lot, you've diagnosed the problem in minutes instead of weeks.</p>
+
+					<p class="mb-2"><strong>How to read the columns:</strong></p>
+					<ul class="ml-4 list-disc space-y-0.5">
+						<li><strong>Barcode</strong> — the scanned ID of the incoming material lot (e.g. a receiving lot, a wax tube, a backing bucket).</li>
+						<li><strong>Material</strong> — human-readable name.</li>
+						<li><strong>Runs</strong> — how many manufacturing runs consumed from this lot.</li>
+						<li><strong>Produced</strong> — total units made in those runs.</li>
+						<li><strong>Scrapped</strong> — of those, how many were physically discarded.</li>
+						<li><strong>Yield</strong> — (produced − scrapped) / produced. Quick health indicator per lot.</li>
+					</ul>
+
+					<p class="mt-2"><strong>Connects to:</strong> Low-yield lot → cross-check in Yield &amp; Failures (which reject codes spiked when this lot was running?). Suspicious lot → Manual Input event linking the lot to an investigation. Recall scenario → filter runs to "only runs that consumed lot X" and list every cartridge.</p>
+
+					<p class="mt-2"><strong>Real-world use:</strong> When an assay fails in the field three months after shipping, this is the tab you start from. Trace forward from the suspected input lot to every cartridge made from it, then to every customer site.</p>
+				</div>
+			{/if}
 			<div class="rounded-lg border border-[var(--color-tron-border)] p-4">
 				<h3 class="mb-3 text-sm font-semibold" style="color: var(--color-tron-text)">Input Lot Consumption</h3>
 				{#if data.materialFlow.lotUsage.length === 0}
@@ -672,6 +935,42 @@
 	<!-- ========================================================================== -->
 	{#if activeTab === 'compare'}
 		<section class="space-y-4">
+			{#if trainingMode}
+				<div class="rounded-lg border border-green-500/40 bg-green-950/10 p-4 text-xs leading-relaxed" style="color: var(--color-tron-text)">
+					<h3 class="mb-2 text-sm font-semibold text-green-300">📚 Training — Compare Tab</h3>
+					<p class="mb-2"><strong>What you're looking at:</strong> A statistical comparison of cycle time across operators and across robots, with a one-way ANOVA result telling you whether the differences are real or just noise.</p>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">The core question:</p>
+					<p class="mb-2">"Nick Fox's average run is 54 min; Alejandro Hernandez's is 59 min. Is he actually slower, or is that just random variation in 30 runs?" ANOVA answers this rigorously.</p>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">ANOVA — Analysis of Variance</p>
+					<p class="mb-1">Despite the name, ANOVA compares <em>means</em> of multiple groups. Intuition:</p>
+					<ul class="ml-4 list-disc space-y-0.5">
+						<li><strong>If groups are the same:</strong> variation between group means ≈ variation within each group. Ratio ≈ 1.</li>
+						<li><strong>If groups really differ:</strong> variation between group means &gt;&gt; variation within each group. Ratio &gt;&gt; 1.</li>
+						<li>That ratio is the <strong>F-statistic</strong>.</li>
+					</ul>
+
+					<p class="mt-2 mb-1 font-semibold text-green-300">Reading the output:</p>
+					<ul class="ml-4 list-disc space-y-0.5">
+						<li><strong>F</strong> — the test statistic (bigger = more evidence groups differ).</li>
+						<li><strong>df</strong> — degrees of freedom, two numbers: between-group (# groups − 1) and within-group (total n − # groups).</li>
+						<li><strong>p-value</strong> — probability of seeing an F this big by chance if all groups were truly identical.</li>
+						<li><strong>α = 0.05 convention</strong> — if p &lt; 0.05, we reject the "no difference" hypothesis. "Statistically significant."</li>
+						<li><strong>Important:</strong> "significant" ≠ "big." With enough data, tiny differences become significant. Always look at the actual means + spreads in context.</li>
+					</ul>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">Common pitfalls</p>
+					<ul class="ml-4 list-disc space-y-0.5">
+						<li><strong>Small n per group</strong> — with 2-3 runs per operator the test can't reliably detect anything. Aim for ≥ 10 per group.</li>
+						<li><strong>ANOVA assumes roughly normal data with similar variances.</strong> Heavy skew or one group with wildly different spread → consider Kruskal-Wallis (non-parametric) instead.</li>
+						<li><strong>Significant ≠ caused by.</strong> Operators may differ because they work different shifts, on different robots. Confounding.</li>
+					</ul>
+
+					<p class="mt-3"><strong>Connects to:</strong> Significant operator difference → check Manual Input for training records. Significant robot difference → SPC Alerts may have flagged the slower robot. Either way → decide if it's a fix target.</p>
+					<p class="mt-2"><strong>Real-world use:</strong> Before blaming a person, check the stats. Operator-to-operator variation is often explained by training level, shift, or workstation assignment — not skill. This tab helps you separate signal from story.</p>
+				</div>
+			{/if}
 			<div class="rounded-lg border border-[var(--color-tron-border)] p-4">
 				<h3 class="mb-3 text-sm font-semibold" style="color: var(--color-tron-text)">Cycle Time by Operator</h3>
 				{#if data.compare.operatorGroups.length === 0}
@@ -748,6 +1047,40 @@
 	<!-- ========================================================================== -->
 	{#if activeTab === 'spc'}
 		<section class="space-y-4">
+			{#if trainingMode}
+				<div class="rounded-lg border border-green-500/40 bg-green-950/10 p-4 text-xs leading-relaxed" style="color: var(--color-tron-text)">
+					<h3 class="mb-2 text-sm font-semibold text-green-300">📚 Training — SPC Alerts Tab</h3>
+					<p class="mb-2"><strong>What you're looking at:</strong> The automated watchdog. Whenever a Nelson rule trips on any control chart across the factory, a signal is automatically opened here. Think of it as the "check engine light" for the process.</p>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">The 8 Nelson rules (the rule numbers in the table)</p>
+					<p class="mb-1">Each rule is a pattern that's statistically rare if the process is truly stable. Seeing any one = investigate.</p>
+					<ul class="ml-4 list-disc space-y-0.5">
+						<li><strong>Rule 1</strong> — 1 point beyond 3σ. The obvious one: a big jump.</li>
+						<li><strong>Rule 2</strong> — 9 consecutive points on the same side of the centerline. A sustained shift, even if small.</li>
+						<li><strong>Rule 3</strong> — 6 points trending up or down. A drift — sensor aging, tooling wear.</li>
+						<li><strong>Rule 4</strong> — 14 points alternating up/down. Often indicates two processes mixed (shift effect, sample-swap bug).</li>
+						<li><strong>Rule 5</strong> — 2 of 3 points beyond 2σ on the same side. Near-miss cluster.</li>
+						<li><strong>Rule 6</strong> — 4 of 5 points beyond 1σ on the same side. Slower shift than rule 2 would catch.</li>
+						<li><strong>Rule 7</strong> — 15 points within 1σ. Suspicious — either the process truly tightened (check gage R&amp;R) or someone is filtering data.</li>
+						<li><strong>Rule 8</strong> — 8 points outside 1σ (both sides). Mixture — indicates sub-populations with different means.</li>
+					</ul>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">The signal workflow</p>
+					<ol class="ml-4 list-decimal space-y-0.5">
+						<li><strong>Open</strong> — just detected. Nobody has looked at it yet.</li>
+						<li><strong>Acknowledged</strong> — someone saw it and took ownership. Click "Ack."</li>
+						<li><strong>Investigating</strong> — root cause work in progress.</li>
+						<li><strong>Closed</strong> — root cause identified, corrective action taken, verification planned. Click "Close" and enter root cause + corrective action (both required — regulatory trace).</li>
+						<li><strong>Dismissed</strong> (admin only) — the signal was a false alarm or duplicate. Must supply a dismiss reason.</li>
+					</ol>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">Common cause vs. special cause (again)</p>
+					<p class="mb-1">This tab ONLY surfaces special-cause events. If you're seeing a lot of them and all chase down to "variation was always this wide" — your control limits are too tight (sample was small when limits were set). If you're seeing very few signals but yield is poor — you have a lot of common-cause variation; the process itself needs improvement, no amount of special-cause-chasing will fix it.</p>
+
+					<p class="mt-3"><strong>Connects to:</strong> Open signal → look at the Cycle Time tab for the referenced process to see the offending point on the chart. Root cause → feed into FMEA (update occurrence score). Closed signal → references become part of the compliance record (21 CFR 820.250).</p>
+					<p class="mt-2"><strong>Real-world use:</strong> Treat open + acknowledged signals like open bug tickets. Daily triage. Close with real root cause and corrective action — don't rubber-stamp close, because the accumulated evidence is what you'll cite in an audit.</p>
+				</div>
+			{/if}
 			<div class="grid grid-cols-2 gap-3 sm:grid-cols-5">
 				{#each Object.entries(data.spcSignals.byStatus) as [status, n]}
 					<div class="rounded border border-[var(--color-tron-border)] p-3 text-center">
@@ -820,6 +1153,40 @@
 	<!-- ========================================================================== -->
 	{#if activeTab === 'fmea'}
 		<section class="space-y-4">
+			{#if trainingMode}
+				<div class="rounded-lg border border-green-500/40 bg-green-950/10 p-4 text-xs leading-relaxed" style="color: var(--color-tron-text)">
+					<h3 class="mb-2 text-sm font-semibold text-green-300">📚 Training — FMEA Tab</h3>
+					<p class="mb-2"><strong>What you're looking at:</strong> A living register of "things that could go wrong with this process" — each with a risk score (RPN). Unlike the other tabs (which are reactive — analyzing what already happened), FMEA is <em>prospective</em>. It asks: before anything goes wrong, what's most at risk, and what are we doing about it?</p>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">FMEA = Failure Mode and Effects Analysis</p>
+					<p class="mb-1">Developed by NASA in the 1960s for Apollo. Now standard in medical devices (ISO 14971), automotive (AIAG-VDA), aerospace, and food. Every row is a <strong>failure mode</strong> — one specific way a process step could produce a bad outcome.</p>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">The three scores (1–10 each, multiplied together = RPN)</p>
+					<ul class="ml-4 list-disc space-y-1">
+						<li><strong>Severity (S)</strong> — if this failure <em>does</em> happen, how bad is it? 1 = barely noticeable, 10 = safety incident / customer harm / regulatory impact. Severity does NOT change based on how often it happens.</li>
+						<li><strong>Occurrence (O)</strong> — how often does this failure happen? 1 = once in 10+ years, 10 = every run. Use historical data if available.</li>
+						<li><strong>Detection (D)</strong> — if it happens, how likely are current controls to catch it before it reaches the customer? <strong>1 = almost certain to catch; 10 = almost certainly ships.</strong> Note this is inverted from intuition — high detection score is bad.</li>
+					</ul>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">RPN = S × O × D</p>
+					<p class="mb-1">Ranges 1 to 1000. The table sorts descending by RPN. <strong>Conventional action thresholds:</strong></p>
+					<ul class="ml-4 list-disc space-y-0.5">
+						<li><strong>RPN ≥ 200</strong> — high risk, action required with documented plan and due date.</li>
+						<li><strong>RPN 100–199</strong> — moderate risk, action strongly recommended.</li>
+						<li><strong>RPN &lt; 100</strong> — acceptable, but review annually.</li>
+					</ul>
+					<p class="mt-1"><strong>Watch out — RPN can hide severity.</strong> A score of S=10, O=1, D=2 gives RPN=20 but is a safety failure that ships if it happens. Many modern FMEAs use a "Critical" flag for any row with S=9 or S=10, regardless of RPN.</p>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">Classification (Safety / Quality / Compliance / Productivity)</p>
+					<p class="mb-1">Flag the type of risk. Safety rows go to regulatory review even at low RPN. Productivity rows can wait. Lets you filter the register by what matters to whom.</p>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">How FMEA drives action</p>
+					<p class="mb-1">High RPN → pick one of: (a) reduce Severity (redesign to eliminate the mode — expensive), (b) reduce Occurrence (fix the root cause so it doesn't happen — usually the target), (c) reduce Detection (add an inspection / sensor / automated check — cheaper, catches it but doesn't prevent it).</p>
+
+					<p class="mt-3"><strong>Connects to:</strong> Top Pareto bar (Yield &amp; Failures) → new FMEA entry. Closed SPC signal with a new root cause → update FMEA occurrence. Cause-effect diagram findings → FMEA rows.</p>
+					<p class="mt-2"><strong>Real-world use:</strong> Quarterly review cadence. Team walks through every high-RPN row, decides if action is on track. New failure mode observed in the field → add to FMEA with high Detection score (we didn't catch it) and work from there.</p>
+				</div>
+			{/if}
 			<div class="rounded-lg border border-[var(--color-tron-border)] p-4">
 				<h3 class="mb-3 text-sm font-semibold" style="color: var(--color-tron-text)">{fmeaEditingId ? 'Edit' : 'New'} FMEA Entry</h3>
 				<form method="POST" action="?/saveFmea" class="grid gap-3 md:grid-cols-2">
@@ -906,6 +1273,43 @@
 	<!-- ========================================================================== -->
 	{#if activeTab === 'manual'}
 		<section class="space-y-4">
+			{#if trainingMode}
+				<div class="rounded-lg border border-green-500/40 bg-green-950/10 p-4 text-xs leading-relaxed" style="color: var(--color-tron-text)">
+					<h3 class="mb-2 text-sm font-semibold text-green-300">📚 Training — Manual Input Tab</h3>
+					<p class="mb-2"><strong>What you're looking at:</strong> A structured way to log anything that doesn't come from a sensor. Sensors tell you cycle times, counts, weights. Humans tell you everything else — and humans still notice the most important stuff.</p>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">The event types — when to use each</p>
+					<ul class="ml-4 list-disc space-y-1">
+						<li><strong>Observation</strong> — anything noticed in passing. Low-stakes capture.</li>
+						<li><strong>Deviation</strong> — something went outside procedure. Regulatory: must be captured with severity.</li>
+						<li><strong>Environmental</strong> — ambient conditions (humidity, temp, vibration). Used for correlation studies.</li>
+						<li><strong>MSA Measurement</strong> — repeated measurements for a Gage R&amp;R or calibration study. Use the numeric value + unit.</li>
+						<li><strong>Corrective Action</strong> — the fix for a specific problem. Links to root cause.</li>
+						<li><strong>Preventive Action</strong> — change made to avoid a potential problem before it happens.</li>
+						<li><strong>Training</strong> — operator training event. Critical for regulatory records.</li>
+						<li><strong>Calibration</strong> — equipment calibration record (complements the Calibration module).</li>
+						<li><strong>Maintenance</strong> — PM event on a piece of equipment.</li>
+						<li><strong>Visual Defect</strong> — a defect someone spotted but isn't in the automated count. Often gets a rejection code.</li>
+						<li><strong>Rework</strong> — a unit that was repaired / reprocessed.</li>
+					</ul>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">Linking (why the "Linked run / lot / equipment" fields matter)</p>
+					<p class="mb-1">A standalone note is worth less than a note tied to a specific run ID, material lot, or machine. The links are what let you later pull up "everything that happened to lot X" or "every event on Robot 4" in one filter.</p>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">Numeric vs. Categorical values</p>
+					<ul class="ml-4 list-disc space-y-0.5">
+						<li><strong>Numeric</strong> (with unit) — for measurements you'll later analyze statistically. "Wax bead height = 2.35 mm." 20 of these from one operator is a Gage R&amp;R dataset.</li>
+						<li><strong>Categorical</strong> — for pass/fail, severity, named states. Useful for filtering.</li>
+						<li>Leave either blank if the event is just a note.</li>
+					</ul>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">Severity (Minor / Major / Critical)</p>
+					<p class="mb-1">Only required for deviations. Maps to regulatory escalation — Critical events often must be reported to QA within 24 hours.</p>
+
+					<p class="mt-3"><strong>Connects to:</strong> Every event writes an AuditLog row (compliance trace). Events tagged with rejection codes show up in the Yield &amp; Failures Pareto. MSA events feed eventual Gage R&amp;R analysis (Phase 3). Linked events surface on the relevant run / lot / equipment detail pages.</p>
+					<p class="mt-2"><strong>Real-world use:</strong> This is your factory's shared notebook. Every operator, every shift, every walk-through → a few taps capture the observation. In an audit, this log is worth its weight in gold.</p>
+				</div>
+			{/if}
 			<div class="rounded-lg border border-[var(--color-tron-border)] p-4">
 				<h3 class="mb-3 text-sm font-semibold" style="color: var(--color-tron-text)">New Event</h3>
 				<form method="POST" action="?/createManualEvent" class="grid gap-3 md:grid-cols-2">
@@ -1003,6 +1407,24 @@
 	<!-- ========================================================================== -->
 	{#if activeTab === 'runs'}
 		<section class="space-y-4">
+			{#if trainingMode}
+				<div class="rounded-lg border border-green-500/40 bg-green-950/10 p-4 text-xs leading-relaxed" style="color: var(--color-tron-text)">
+					<h3 class="mb-2 text-sm font-semibold text-green-300">📚 Training — All Runs Tab</h3>
+					<p class="mb-2"><strong>What you're looking at:</strong> The raw data. Every run in the filter window, flat. One row per run, sortable and exportable.</p>
+					<p class="mb-2"><strong>Why this tab exists:</strong> Every other tab is an aggregated view. Eventually you need to spot-check — "which specific run produced that outlier point?" This tab is the ground truth you drill down to.</p>
+					<p class="mb-2"><strong>Filtering:</strong> Uses the global filter bar at the top. Change dates, processes, operators, robots, shifts — this table updates.</p>
+					<p class="mb-2"><strong>Export:</strong> CSV button dumps the currently-filtered set into a spreadsheet. Great for Minitab / Excel / pandas.</p>
+					<p class="mb-2"><strong>The important columns:</strong></p>
+					<ul class="ml-4 list-disc space-y-0.5">
+						<li><strong>Cycle(min)</strong> — this is the number that drives the I-MR chart.</li>
+						<li><strong>Planned vs Actual</strong> — gap indicates mid-run scrap or abort.</li>
+						<li><strong>Accept / Reject / Scrap</strong> — feeds FPY + Pareto.</li>
+						<li><strong>Shift</strong> — derived from start time. Shifts often explain unexpected patterns.</li>
+					</ul>
+					<p class="mt-2"><strong>Connects to:</strong> Everything. This IS the data behind every chart on every other tab.</p>
+					<p class="mt-2"><strong>Real-world use:</strong> "The I-MR chart flagged a weird point on Tuesday. Which run was that?" → filter by date → scan the table. You can also use this as an operations log to see what each shift produced.</p>
+				</div>
+			{/if}
 			<div class="flex items-center justify-between">
 				<h3 class="text-sm font-semibold" style="color: var(--color-tron-text)">All Runs · {data.runs.length}</h3>
 				<button onclick={() => downloadCsv('runs', data.runs)} class="rounded border border-[var(--color-tron-border)] px-3 py-1 text-xs hover:border-[var(--color-tron-cyan)]">CSV</button>
@@ -1052,6 +1474,33 @@
 	<!-- ========================================================================== -->
 	{#if activeTab === 'export'}
 		<section class="space-y-4">
+			{#if trainingMode}
+				<div class="rounded-lg border border-green-500/40 bg-green-950/10 p-4 text-xs leading-relaxed" style="color: var(--color-tron-text)">
+					<h3 class="mb-2 text-sm font-semibold text-green-300">📚 Training — Reports &amp; Export Tab</h3>
+					<p class="mb-2"><strong>What you're looking at:</strong> One-click CSV dumps of every dataset on the page. Column names are stable, so saved Minitab / JMP / Excel analysis workbooks keep working across exports.</p>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">Why a process engineer exports data</p>
+					<ul class="ml-4 list-disc space-y-0.5">
+						<li><strong>Specialized stats</strong> — Minitab and JMP do capability studies, DOE analysis, and Gage R&amp;R with more bells and whistles than this page.</li>
+						<li><strong>Ad-hoc investigation</strong> — sometimes you want to ask a question the page doesn't answer ("runs with cycle time &gt;60 AND reject count &gt;2 AND operator Leandro Valdez"). SQL or Python on the CSV.</li>
+						<li><strong>Regulatory submissions</strong> — FDA / ISO audits want the data behind the dashboard. CSV is the universal format.</li>
+						<li><strong>Cross-site comparison</strong> — stack two CSVs from two facilities.</li>
+					</ul>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">Which export to use for what</p>
+					<ul class="ml-4 list-disc space-y-0.5">
+						<li><strong>All Runs</strong> — the big one. Starting point for any deep analysis.</li>
+						<li><strong>Manual Events</strong> — the narrative log. Useful as a supporting doc in audits.</li>
+						<li><strong>Pareto</strong> — already aggregated. Use for quarterly review slides.</li>
+						<li><strong>FMEA</strong> — the risk register. Your QA team wants this monthly.</li>
+						<li><strong>SPC Signals</strong> — the alert log. Useful for trend analysis ("are we catching more signals this month?").</li>
+						<li><strong>Material Flow</strong> — lot traceability snapshot.</li>
+					</ul>
+
+					<p class="mt-3"><strong>Connects to:</strong> Every tab's data is exportable. The filter bar applies.</p>
+					<p class="mt-2"><strong>Real-world use:</strong> End of quarter — export Pareto + FMEA + Runs. Load into Minitab. Run capability studies on the current cycle-time baseline (for spec-limit updates next quarter). Generate trend slides for the operations review.</p>
+				</div>
+			{/if}
 			<div class="rounded-lg border border-[var(--color-tron-border)] p-4">
 				<h3 class="mb-3 text-sm font-semibold" style="color: var(--color-tron-text)">Exports (current filter)</h3>
 				<div class="grid gap-2 sm:grid-cols-2 md:grid-cols-3">
@@ -1093,6 +1542,33 @@
 	<!-- ========================================================================== -->
 	{#if activeTab === 'doe'}
 		<section class="space-y-4">
+			{#if trainingMode}
+				<div class="rounded-lg border border-green-500/40 bg-green-950/10 p-4 text-xs leading-relaxed" style="color: var(--color-tron-text)">
+					<h3 class="mb-2 text-sm font-semibold text-green-300">📚 Training — DOE Planner Tab</h3>
+					<p class="mb-2"><strong>What you're looking at:</strong> A Design of Experiments (DOE) planner. Choose your factors, set their levels, pick replicates — the page generates a randomized run matrix you can use at the bench.</p>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">What is DOE, and why not just change one thing at a time?</p>
+					<p class="mb-1">The "intuitive" way to experiment is OFAT — One Factor At a Time. Try temperature 50 vs 60, pick the winner, then try humidity 30 vs 60 with that temperature. <strong>OFAT is statistically weak</strong> — it needs many runs, misses interactions, and the result depends on which factor you chose to test first.</p>
+					<p class="mb-1"><strong>DOE varies multiple factors simultaneously</strong> in a planned way so you can, in few runs, measure:</p>
+					<ul class="ml-4 list-disc space-y-0.5">
+						<li><strong>Main effects</strong> — how much each factor shifts the response on its own.</li>
+						<li><strong>Interactions</strong> — whether two factors matter more together than alone (e.g. "temp alone does nothing, humidity alone does nothing, but together they matter a lot").</li>
+					</ul>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">2^k Full Factorial — what the planner generates</p>
+					<p class="mb-1">k factors, each with 2 levels (low, high) → 2^k runs covers every combination. So 3 factors = 8 runs. 5 factors = 32 runs. Grows fast, which is why <em>fractional</em> designs exist (Phase 3).</p>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">Why randomize run order?</p>
+					<p class="mb-1">If you run in standard order (all low-temp first, then all high-temp), and something drifts during the experiment (ambient cooling, operator fatigue, reagent aging), the drift gets <em>confounded</em> with your factor — you can't tell effect from drift. Randomizing spreads any drift across all factor levels, turning drift into noise instead of bias.</p>
+
+					<p class="mt-3 mb-1 font-semibold text-green-300">Why replicates?</p>
+					<p class="mb-1">Single run per condition gives you the effect estimate but no estimate of the noise. Replicates (doing each condition 2+ times) give you noise, which gives you p-values, which lets you say "the effect is real, not random."</p>
+
+					<p class="mt-3"><strong>Connects to:</strong> Finished DOE responses go into Manual Input (numeric_value). Effects findings inform FMEA occurrence/detection scores. Spec limits (and hence Cp/Cpk) can be updated based on DOE-determined operating windows.</p>
+					<p class="mt-2"><strong>Real-world use:</strong> When you have 3-5 knobs on a new process and don't know which matter — DOE. Factors for wax filling might be: temperature, tip dispense speed, pre-heat time, tube fill level. 4 factors at 2 levels = 16 runs. Two replicates = 32 total runs = about a day of robot time. In exchange you get a statistical model of which factors matter and the best operating point.</p>
+					<p class="mt-2"><strong>Analysis not yet wired (Phase 3):</strong> Main-effects plot, interactions plot, standardized-effects Pareto, and response-surface designs (CCD, Box-Behnken) will land in a later phase. For now: export the run matrix, do the runs, capture responses via Manual Input, analyze externally in Minitab.</p>
+				</div>
+			{/if}
 			<div class="rounded-lg border border-[var(--color-tron-border)] p-4">
 				<h3 class="mb-3 text-sm font-semibold" style="color: var(--color-tron-text)">Full Factorial 2^k Planner</h3>
 				<div class="space-y-2">
@@ -1143,3 +1619,4 @@
 		</section>
 	{/if}
 </div>
+{/if}
