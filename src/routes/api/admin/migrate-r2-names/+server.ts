@@ -43,6 +43,7 @@ function getS3(): S3Client {
 			accessKeyId: env.R2_ACCESS_KEY_ID!,
 			secretAccessKey: env.R2_SECRET_ACCESS_KEY!
 		},
+		forcePathStyle: true,
 		requestChecksumCalculation: 'WHEN_REQUIRED',
 		responseChecksumValidation: 'WHEN_REQUIRED'
 	});
