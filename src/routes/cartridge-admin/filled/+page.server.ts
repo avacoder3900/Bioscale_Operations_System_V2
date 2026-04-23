@@ -34,7 +34,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			.limit(PAGE_SIZE)
 			.lean(),
 		CartridgeRecord.countDocuments(filter),
-		AssayDefinition.find({ isActive: true }, { _id: 1, name: 1 }).lean(),
+		AssayDefinition.find({ isActive: true, hidden: { $ne: true } }, { _id: 1, name: 1 }).lean(),
 		Customer.find({ status: 'active' }, { _id: 1, name: 1 }).lean(),
 		ShippingLot.find({ status: { $in: ['open', 'released'] } }).sort({ createdAt: -1 }).lean()
 	]);

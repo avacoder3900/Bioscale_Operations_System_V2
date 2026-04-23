@@ -14,6 +14,10 @@ const reagentBatchRecordSchema = new Schema({
 	runNumber: String,
 	robot: { _id: String, name: String, side: String },
 	assayType: { _id: String, name: String, skuCode: String },
+	// Research runs bypass the assay-required gate. When true, assayType stays
+	// null and downstream fields that would be populated from the assay are
+	// left blank. The cartridge flow still completes end-to-end.
+	isResearch: { type: Boolean, default: false },
 	operator: operatorRef,
 	deckId: String,
 
