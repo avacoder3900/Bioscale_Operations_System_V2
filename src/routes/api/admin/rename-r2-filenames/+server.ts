@@ -99,7 +99,7 @@ function isAlreadyRenamed(key: string): boolean {
 	return NEW_PATTERN_RE.test(key);
 }
 
-type Mode = 'preview' | 'execute' | 'cleanup' | 'discover-cartridges' | 'backfill-cartridges' | 'reconcile-mongo-to-r2' | 'dedupe-cvimages';
+type Mode = 'preview' | 'execute' | 'cleanup' | 'discover-cartridges' | 'backfill-cartridges' | 'reconcile-mongo-to-r2' | 'dedupe-cvimages' | 'dedupe-cartridge-photos';
 
 /**
  * Project-slug → CartridgeRecord.status enum value for cartridgeTag.phase.
@@ -150,8 +150,75 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (mode === 'backfill-cartridges') return json(await runBackfill(body.mode === 'backfill-cartridges' ? false : true, limit));
 	if (mode === 'reconcile-mongo-to-r2') return json(await runReconcile(Boolean((body as any).execute), limit));
 	if (mode === 'dedupe-cvimages') return json(await runDedupe(Boolean((body as any).execute), limit));
+	if (mode === 'dedupe-cartridge-photos') return json(await runDedupeCartridgePhotos(Boolean((body as any).execute), limit));
 	return json(await runRename(mode === 'execute', projectFilter, limit));
 };
+
+/**
+ * Remove duplicate entries from CartridgeRecord.photos[] where the same
+ * imageId appears multiple times. Keeps the first occurrence, drops the rest.
+ *
+ * Body: { mode: 'dedupe-cartridge-photos', execute?: boolean, limit? }
+ */
+async function runDedupeCartridgePhotos(execute: boolean, limit: number) {
+	const db = mongoose.connection.db!;
+	const cartridges = db.collection('cartridge_records');
+
+	const docs = await cartridges
+		.find({ photos: { $type: 'array', $ne: [] } })
+		.project({ _id: 1, photos: 1 })
+		.limit(limit)
+		.toArray();
+
+	let scanned = 0;
+	let cartridgesWithDupes = 0;
+	let cartridgesCleaned = 0;
+	let duplicatePhotosRemoved = 0;
+	const samples: any[] = [];
+	const failures: { cartridgeId: string; error: string }[] = [];
+
+	for (const c of docs) {
+		scanned++;
+		const photos: any[] = Array.isArray(c.photos) ? c.photos : [];
+		const seen = new Set<string>();
+		const deduped: any[] = [];
+		let removed = 0;
+		for (const p of photos) {
+			const id = p?.imageId;
+			if (!id) { deduped.push(p); continue; }
+			if (seen.has(id)) { removed++; continue; }
+			seen.add(id);
+			deduped.push(p);
+		}
+		if (removed === 0) continue;
+
+		cartridgesWithDupes++;
+		if (samples.length < 10) {
+			samples.push({ cartridgeId: String(c._id), before: photos.length, after: deduped.length, removed });
+		}
+
+		if (!execute) continue;
+
+		try {
+			await cartridges.updateOne({ _id: c._id as any }, { $set: { photos: deduped } });
+			cartridgesCleaned++;
+			duplicatePhotosRemoved += removed;
+		} catch (err: any) {
+			failures.push({ cartridgeId: String(c._id), error: err.message || String(err) });
+		}
+	}
+
+	return {
+		mode: 'dedupe-cartridge-photos',
+		execute,
+		scanned,
+		cartridgesWithDupes,
+		cartridgesCleaned,
+		duplicatePhotosRemoved,
+		samples,
+		failures: failures.slice(0, 10)
+	};
+}
 
 /**
  * Find CvImage docs that share a filePath (i.e. multiple Mongo records point to
