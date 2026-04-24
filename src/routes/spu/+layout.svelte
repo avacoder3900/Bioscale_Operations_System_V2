@@ -1,3 +1,4 @@
+<!-- Unfrozen per PRD-SPU-MFG-UNIFIED §9 Q1 — add Manufacturing nav link -->
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { page, navigating } from '$app/stores';
@@ -13,6 +14,7 @@
 			canAccessAssays: boolean;
 			canAccessDevices: boolean;
 			canAccessTestResults: boolean;
+			canAccessManufacturing: boolean;
 			canAccessAdmin: boolean;
 			isBoxConnected: boolean;
 			particleStatus: 'connected' | 'stale' | 'disconnected';
@@ -112,6 +114,7 @@
 	const filteredGroups = $derived.by(() => {
 		return navGroups.map(group => {
 			const filtered = group.items.filter(item => {
+				if (item.href === '/spu/manufacturing') return data.canAccessManufacturing;
 				if (item.href === '/spu/inventory/transactions') return data.canAccessInventory;
 				if (item.href === '/spu/cartridges') return data.canAccessCartridges;
 				if (item.href === '/spu/assays') return data.canAccessAssays;

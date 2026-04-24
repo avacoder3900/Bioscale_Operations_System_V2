@@ -44,6 +44,7 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 	const canAccessAssays = hasPermission(user, 'assay:read');
 	const canAccessDevices = hasPermission(user, 'device:read');
 	const canAccessTestResults = hasPermission(user, 'testResult:read');
+	const canAccessManufacturing = hasPermission(user, 'spu:read');
 	const canManageUsers = hasPermission(user, 'user:read');
 	const canManageRoles = hasPermission(user, 'role:read');
 
@@ -55,6 +56,7 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 		canAccessAssays,
 		canAccessDevices,
 		canAccessTestResults,
+		canAccessManufacturing,
 		canAccessAdmin: canManageUsers || canManageRoles,
 		isBoxConnected,
 		particleStatus
