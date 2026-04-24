@@ -1100,6 +1100,9 @@ export const actions: Actions = {
 		// opentron-control/wax/[runId]/+page.server.ts for the same pattern.
 		const resolvedLocationId = await resolveFridgeId(location);
 		if (cartridgeIds.length > 0) {
+			// Storage fields only — status stays 'wax_filled' until completeRun.
+			// Keeps reagent filling from picking up cartridges whose parent wax
+			// run is still open.
 			const bulkOps = cartridgeIds.map((cid: string) => ({
 				updateOne: {
 					filter: { _id: cid, 'waxStorage.recordedAt': { $exists: false } },
@@ -1110,8 +1113,8 @@ export const actions: Actions = {
 							'waxStorage.coolingTrayId': coolingTrayId,
 							'waxStorage.operator': { _id: locals.user._id, username: locals.user.username },
 							'waxStorage.timestamp': now,
-							'waxStorage.recordedAt': now,
-							status: 'wax_stored'
+							'waxStorage.recordedAt': now
+							// status intentionally NOT set — completeRun does the wax_stored flip.
 						}
 					}
 				}
@@ -1162,6 +1165,20 @@ export const actions: Actions = {
 		// Update consumable usage logs
 		const cartridgeCount = run?.cartridgeIds?.length ?? 0;
 		const operatorRef = { _id: locals.user._id, username: locals.user.username };
+
+		// Commit point: flip wax_filled → wax_stored for every cartridge that
+		// made it through fridge assignment. Mirrors the flip in
+		// opentron-control/wax/[runId]/+page.server.ts completeRun.
+		if (run?.cartridgeIds?.length) {
+			await CartridgeRecord.updateMany(
+				{
+					_id: { $in: run.cartridgeIds },
+					status: 'wax_filled',
+					'waxStorage.recordedAt': { $exists: true }
+				},
+				{ $set: { status: 'wax_stored' } }
+			);
+		}
 
 		if (run?.deckId) {
 			await Equipment.findByIdAndUpdate(run.deckId, {

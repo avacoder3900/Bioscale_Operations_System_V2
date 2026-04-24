@@ -65,8 +65,20 @@
 		});
 	}
 
-	function handleQCComplete() {
-		submitForm('completeQC');
+	function handleQCComplete(result?: { rejectedCartridges: { cartridgeId: string; reasonCode: string }[] }) {
+		// QCInspection passes the operator's in-page rejections here. Without
+		// forwarding this payload the server would silently accept every
+		// cartridge — see git history for the bug + fix.
+		const rejected = result?.rejectedCartridges ?? [];
+		submitForm('completeQC', { rejectedCartridges: JSON.stringify(rejected) });
+	}
+
+	function handleGoBack() {
+		const msg = data.stage === 'Storage'
+			? 'Go back to QC? This will clear all QC decisions on this run and delete the phantom wax_filling inventory transactions so you can redo inspection cleanly.'
+			: 'Go back to Cooling? This clears the cooling-confirmed timestamp and the cartridges’ ovenCure stamp.';
+		if (!confirm(msg)) return;
+		submitForm('goBack');
 	}
 
 	function handleRecordStorage(cartridgeIds: string[], location: string) {
@@ -104,13 +116,23 @@
 			style="min-height: 44px; min-width: 44px; color: var(--color-tron-text-secondary)">
 			&#8592;
 		</a>
-		<div>
+		<div class="flex-1">
 			<h1 class="text-xl font-bold" style="color: var(--color-tron-cyan)">Wax Post-Processing</h1>
 			<p class="text-xs" style="color: var(--color-tron-text-secondary)">
 				Run {data.runId.slice(-8)} &middot; {data.robotName} &middot;
 				{data.runState.plannedCartridgeCount ?? '?'} cartridges
 			</p>
 		</div>
+		{#if data.canGoBack && data.goBackTargetStage}
+			<button
+				type="button"
+				onclick={handleGoBack}
+				class="min-h-[44px] rounded-lg border border-amber-500/50 bg-amber-900/20 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-900/30"
+				title="Rewind this run by one stage. Disabled once any cartridge is in a fridge."
+			>
+				← Go Back to {data.goBackTargetStage}
+			</button>
+		{/if}
 	</div>
 
 	{#if form?.error}

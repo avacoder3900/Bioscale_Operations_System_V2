@@ -367,6 +367,61 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
+	/**
+	 * Save a batch-level operator note to every cartridge in the run. Overrides
+	 * any previous reagent_prep note on each cartridge (pull-then-push) so there
+	 * is at most one reagent_prep note per cartridge — idempotent across repeated
+	 * saves. Other phases' notes are untouched.
+	 */
+	recordBatchNote: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const runId = data.get('runId') as string;
+		const noteBody = ((data.get('noteBody') as string) ?? '').trim();
+
+		if (!runId) return fail(400, { error: 'runId is required' });
+		if (!noteBody) return fail(400, { error: 'Note body is empty' });
+
+		const run = await ReagentBatchRecord.findById(runId).select('cartridgesFilled').lean() as any;
+		if (!run) return fail(404, { error: 'Run not found' });
+
+		const cartridgeIds: string[] = (run.cartridgesFilled ?? [])
+			.map((cf: any) => cf.cartridgeId)
+			.filter(Boolean);
+
+		if (cartridgeIds.length === 0) {
+			return fail(400, { error: 'No cartridges loaded on this run yet — load the deck first.' });
+		}
+
+		const now = new Date();
+		const noteId = generateId();
+
+		// Two-step override: Mongo doesn't allow $pull + $push on the same field
+		// in one update. Pull first, then push the new entry on every cartridge.
+		await CartridgeRecord.updateMany(
+			{ _id: { $in: cartridgeIds } },
+			{ $pull: { notes: { phase: 'reagent_prep' } } }
+		);
+		await CartridgeRecord.updateMany(
+			{ _id: { $in: cartridgeIds } },
+			{
+				$push: {
+					notes: {
+						_id: noteId,
+						body: noteBody,
+						phase: 'reagent_prep',
+						author: { _id: locals.user._id, username: locals.user.username },
+						createdAt: now
+					}
+				}
+			}
+		);
+
+		return { success: true, noteId, cartridgeCount: cartridgeIds.length };
+	},
+
 	/** Load deck with cartridges */
 	loadDeck: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
@@ -406,11 +461,27 @@ export const actions: Actions = {
 			}
 
 			// Verify cartridges exist in system — they must have come through wax filling
-			const existingCartridges = await CartridgeRecord.find({ _id: { $in: scannedIds } }).select('_id').lean();
+			const existingCartridges = await CartridgeRecord.find({ _id: { $in: scannedIds } })
+				.select('_id status')
+				.lean();
 			const existingIds = new Set((existingCartridges as any[]).map((c: any) => String(c._id)));
 			const missingIds = scannedIds.filter((id: string) => !existingIds.has(id));
 			if (missingIds.length > 0) {
 				return fail(400, { error: `Cartridge ${missingIds[0]} not found. Must complete wax filling first.` });
+			}
+
+			// Hard state-machine gate: cartridge MUST be at status='wax_stored'
+			// before reagent filling can begin. This prevents the race where a
+			// cartridge has been fridge-assigned but the parent wax run isn't
+			// yet 'completed' — wax_stored status is set only at wax completeRun,
+			// so requiring it here is equivalent to "parent wax run is closed."
+			// Applies to both research and production reagent runs.
+			const notReady = (existingCartridges as any[]).filter((c: any) => c.status !== 'wax_stored');
+			if (notReady.length > 0) {
+				const details = notReady.map((c: any) => `${c._id} (status=${c.status ?? 'none'})`).join(', ');
+				return fail(400, {
+					error: `Cartridge(s) not ready for reagent filling — must be 'wax_stored' first. Complete the wax run (click "Complete Run" on its Storage page) before scanning: ${details}`
+				});
 			}
 		}
 

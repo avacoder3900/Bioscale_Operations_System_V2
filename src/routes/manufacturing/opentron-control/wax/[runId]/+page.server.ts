@@ -10,7 +10,7 @@ import { redirect, fail, error } from '@sveltejs/kit';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable,
 	ManufacturingSettings, generateId, Equipment, EquipmentLocation,
-	AuditLog, ReceivingLot
+	AuditLog, ReceivingLot, InventoryTransaction
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { resolveFridgeId } from '$lib/server/services/equipment-resolve';
@@ -83,6 +83,13 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		storageLocation: c.waxStorage?.location ?? null
 	}));
 
+	// Go-back is allowed from QC or Storage, as long as no cartridge has been
+	// committed to a fridge yet. Once waxStorage.recordedAt is set on any
+	// cartridge, the run is a one-way street — fridge placement is the commit.
+	const anyStored = (cartridgesRaw as any[]).some((c: any) => !!c.waxStorage?.recordedAt);
+	const canGoBack = (stage === 'QC' || stage === 'Storage') && !anyStored;
+	const goBackTargetStage = stage === 'Storage' ? 'QC' : stage === 'QC' ? 'Awaiting Removal' : null;
+
 	const [equipFridges, orphanFridges] = await Promise.all([
 		Equipment.find({ equipmentType: 'fridge', status: { $ne: 'offline' } }).lean().catch(() => []),
 		EquipmentLocation.find({ locationType: 'fridge', isActive: true, parentEquipmentId: { $exists: false } }).lean().catch(() => [])
@@ -120,6 +127,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		qcCartridges: JSON.parse(JSON.stringify(qcCartridges)),
 		storageCartridges: JSON.parse(JSON.stringify(storageCartridges)),
 		fridges: JSON.parse(JSON.stringify(fridges)),
+		canGoBack,
+		goBackTargetStage,
 		robotName: run.robot?.name
 			|| (run.robot?._id
 				? (await Equipment.findById(run.robot._id).select('name').lean() as any)?.name
@@ -181,7 +190,18 @@ export const actions: Actions = {
 
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
+		const rejectedRaw = (data.get('rejectedCartridges') as string) || '[]';
 		const now = new Date();
+
+		// Parse the rejections payload sent by QCInspection. Empty list is
+		// valid (= operator accepted everything).
+		let rejectedList: { cartridgeId: string; reasonCode: string }[] = [];
+		try {
+			const parsed = JSON.parse(rejectedRaw);
+			if (Array.isArray(parsed)) rejectedList = parsed;
+		} catch {
+			return fail(400, { error: 'Invalid rejectedCartridges payload' });
+		}
 
 		const runBeforeQc = await WaxFillingRun.findById(runId).select('coolingConfirmedAt coolingConfirmedTime').lean() as any;
 		const confirmedAt = runBeforeQc?.coolingConfirmedAt ?? runBeforeQc?.coolingConfirmedTime;
@@ -203,10 +223,52 @@ export const actions: Actions = {
 			$set: { status: 'Storage', runEndTime: now }
 		}, { new: true }).lean() as any;
 
+		// Apply operator rejections BEFORE the waxFilling/accept loops so the
+		// subsequent filters correctly exclude scrapped cartridges. Mirrors the
+		// per-cartridge rejectCartridge action (still kept for one-off rejects
+		// from other surfaces).
+		const rejectedIdSet = new Set<string>();
+		if (rejectedList.length > 0 && run?.cartridgeIds?.length) {
+			const validIds = new Set<string>((run.cartridgeIds as string[]).map(String));
+			for (const r of rejectedList) {
+				if (!validIds.has(String(r.cartridgeId))) continue;
+				rejectedIdSet.add(String(r.cartridgeId));
+				const reason = r.reasonCode || '';
+				await CartridgeRecord.findOneAndUpdate(
+					{ _id: r.cartridgeId, 'waxQc.recordedAt': { $exists: false } },
+					{
+						$set: {
+							'waxQc.status': 'Rejected',
+							'waxQc.rejectionReason': reason,
+							'waxQc.operator': { _id: locals.user._id, username: locals.user.username },
+							'waxQc.timestamp': now,
+							'waxQc.recordedAt': now,
+							status: 'scrapped',
+							voidedAt: now,
+							voidReason: `Wax QC rejection: ${reason}`
+						}
+					}
+				);
+				await recordTransaction({
+					transactionType: 'scrap',
+					cartridgeRecordId: r.cartridgeId,
+					quantity: 1,
+					manufacturingStep: 'wax_filling',
+					operatorId: locals.user._id,
+					operatorUsername: locals.user.username,
+					scrapReason: reason,
+					scrapCategory: 'wax_defect',
+					notes: `Wax QC rejection: ${reason}`
+				});
+			}
+		}
+
 		if (run?.cartridgeIds?.length) {
+			// Filter excludes scrapped cartridges so we don't stomp the
+			// rejection's status='scrapped' back to 'wax_filled'.
 			const bulkOps = run.cartridgeIds.map((cid: string) => ({
 				updateOne: {
-					filter: { _id: cid, 'waxFilling.recordedAt': { $exists: false } },
+					filter: { _id: cid, 'waxFilling.recordedAt': { $exists: false }, status: { $ne: 'scrapped' } },
 					update: {
 						$set: {
 							'waxFilling.runId': run._id,
@@ -227,8 +289,8 @@ export const actions: Actions = {
 			await CartridgeRecord.bulkWrite(bulkOps);
 
 			// Write waxQc.status='Accepted' for every cartridge that wasn't rejected
-			// during QC. Rejects already carry waxQc.recordedAt (from rejectCartridge),
-			// so the recordedAt-not-set filter excludes them.
+			// during QC. Rejects already carry waxQc.recordedAt (set above or from
+			// rejectCartridge), so the recordedAt-not-set filter excludes them.
 			const acceptOps = run.cartridgeIds.map((cid: string) => ({
 				updateOne: {
 					filter: { _id: cid, 'waxQc.recordedAt': { $exists: false }, status: { $ne: 'scrapped' } },
@@ -339,6 +401,10 @@ export const actions: Actions = {
 		// until S1b back-fills.
 		const resolvedLocationId = await resolveFridgeId(location);
 		if (cartridgeIds.length > 0) {
+			// Storage fields are written here (fridge, tray, operator, timestamp)
+			// but status stays at 'wax_filled' until completeRun commits the whole
+			// batch. This prevents reagent filling from picking up cartridges
+			// before the wax run is closed — see recent state-machine fix.
 			const bulkOps = cartridgeIds.map((cid: string) => ({
 				updateOne: {
 					filter: { _id: cid, 'waxStorage.recordedAt': { $exists: false } },
@@ -349,8 +415,8 @@ export const actions: Actions = {
 							'waxStorage.coolingTrayId': coolingTrayId,
 							'waxStorage.operator': { _id: locals.user._id, username: locals.user.username },
 							'waxStorage.timestamp': now,
-							'waxStorage.recordedAt': now,
-							status: 'wax_stored'
+							'waxStorage.recordedAt': now
+							// status intentionally NOT set — completeRun does the wax_stored flip.
 						}
 					}
 				}
@@ -397,6 +463,22 @@ export const actions: Actions = {
 
 		const cartridgeCount = run?.cartridgeIds?.length ?? 0;
 		const operatorRef = { _id: locals.user._id, username: locals.user.username };
+
+		// Commit point: flip every cartridge in the run that has its waxStorage
+		// recorded from status='wax_filled' → 'wax_stored'. This is the gate
+		// that prevents reagent filling from picking up cartridges before the
+		// wax run is explicitly completed. Filter on waxStorage.recordedAt so
+		// we don't promote cartridges that never made it through fridge assign.
+		if (run?.cartridgeIds?.length) {
+			await CartridgeRecord.updateMany(
+				{
+					_id: { $in: run.cartridgeIds },
+					status: 'wax_filled',
+					'waxStorage.recordedAt': { $exists: true }
+				},
+				{ $set: { status: 'wax_stored' } }
+			);
+		}
 
 		if (run?.deckId) {
 			await Equipment.findByIdAndUpdate(run.deckId, {
@@ -493,5 +575,118 @@ export const actions: Actions = {
 		});
 
 		throw redirect(303, '/manufacturing/opentron-control');
+	},
+
+	/**
+	 * Rewind the run one stage. Storage → QC undoes completeQC; QC → Awaiting
+	 * Removal undoes confirmCooling. Refuses if any cartridge is already in a
+	 * fridge — fridge placement is the commit point.
+	 */
+	goBack: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const runId = data.get('runId') as string;
+		const now = new Date();
+
+		const run = await WaxFillingRun.findById(runId).lean() as any;
+		if (!run) return fail(404, { error: 'Run not found' });
+
+		const cartIds: string[] = run.cartridgeIds ?? [];
+
+		const storedCount = cartIds.length
+			? await CartridgeRecord.countDocuments({
+				_id: { $in: cartIds },
+				'waxStorage.recordedAt': { $exists: true }
+			})
+			: 0;
+		if (storedCount > 0) {
+			return fail(400, { error: `Cannot go back — ${storedCount} cartridge${storedCount === 1 ? '' : 's'} already placed in a fridge. Storage is a commit point.` });
+		}
+
+		const current = run.status;
+		let targetStage: 'QC' | 'Awaiting Removal';
+
+		if (current === 'Storage' || current === 'storage') {
+			// Undo completeQC: revert waxQc, clear completeQC-written waxFilling
+			// fields, restore status to wax_filling, drop phantom wax_filling
+			// consumption transactions.
+			targetStage = 'QC';
+
+			await WaxFillingRun.updateOne(
+				{ _id: runId },
+				{ $set: { status: 'QC' }, $unset: { runEndTime: '' } }
+			);
+
+			if (cartIds.length > 0) {
+				await CartridgeRecord.updateMany(
+					{ _id: { $in: cartIds } },
+					{
+						$set: { status: 'wax_filling' },
+						$unset: {
+							waxQc: '',
+							voidedAt: '',
+							voidReason: '',
+							'waxFilling.waxTubeId': '',
+							'waxFilling.waxSourceLot': '',
+							'waxFilling.runStartTime': '',
+							'waxFilling.runEndTime': '',
+							'waxFilling.recordedAt': ''
+						}
+					}
+				);
+
+				// Delete the wax_filling consumption inventory_transactions written
+				// by completeQC for this run. No PartDefinition inventoryCount to
+				// restore — PT-CT-105 has no part_definitions row so the original
+				// writes had partDefinitionId=undefined and no inventoryCount was
+				// decremented. Also delete any scrap tx from the aborted QC's
+				// rejections so re-doing QC produces a clean tx history.
+				await InventoryTransaction.deleteMany({
+					manufacturingRunId: runId,
+					manufacturingStep: 'wax_filling',
+					transactionType: { $in: ['consumption', 'scrap'] },
+					cartridgeRecordId: { $in: cartIds }
+				});
+			}
+		} else if (current === 'QC' || current === 'qc') {
+			// Undo confirmCooling: revert cooling-confirmed marker and the
+			// ovenCure stamp we wrote at cooling time.
+			targetStage = 'Awaiting Removal';
+
+			await WaxFillingRun.updateOne(
+				{ _id: runId },
+				{
+					$set: { status: 'Awaiting Removal' },
+					$unset: { coolingConfirmedTime: '', coolingConfirmedAt: '' }
+				}
+			);
+
+			if (cartIds.length > 0) {
+				await CartridgeRecord.updateMany(
+					{ _id: { $in: cartIds } },
+					{ $unset: { ovenCure: '' } }
+				);
+			}
+		} else {
+			return fail(400, { error: `Cannot go back from stage "${current}".` });
+		}
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'wax_filling_runs',
+			recordId: runId,
+			action: 'GO_BACK',
+			changedBy: locals.user?.username,
+			changedAt: now,
+			newData: {
+				fromStage: current,
+				toStage: targetStage,
+				cartridgeCount: cartIds.length
+			}
+		});
+
+		return { success: true };
 	}
 };
