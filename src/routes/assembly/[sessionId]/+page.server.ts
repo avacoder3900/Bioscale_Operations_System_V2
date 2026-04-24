@@ -641,6 +641,150 @@ export const actions: Actions = {
 			spuId: session.spuId,
 			redirectTo: '/spu/' + session.spuId + '?fromBuild=1'
 		};
+	},
+
+	// SPU-MFG-05 — admin-only edit of a previously captured field.
+	// Writes an in-place update to AssemblySession.stepRecords[].fieldRecords[],
+	// mirrors to SPU.assembly.stepRecords[].fieldRecords[] (pre-finalization only —
+	// sacred middleware blocks any update after finalizedAt is set), and always
+	// pushes a corrections[] entry on the SPU (using collection.updateOne to
+	// bypass sacred middleware when the SPU is finalized — push to corrections[]
+	// is the sanctioned post-finalization audit trail per CLAUDE.md).
+	editField: async ({ request, locals, params }) => {
+		if (
+			!hasPermission(locals.user, 'admin:full') &&
+			!hasPermission(locals.user, 'spu:write-admin')
+		) {
+			return fail(403, { error: 'Admin permission required' });
+		}
+		await connectDB();
+
+		const form = await request.formData();
+		const fieldRecordId = form.get('fieldRecordId')?.toString();
+		const newValue = form.get('newValue')?.toString();
+		const reason = form.get('reason')?.toString()?.trim();
+
+		if (!fieldRecordId) return fail(400, { error: 'fieldRecordId is required' });
+		if (newValue === undefined || newValue === null)
+			return fail(400, { error: 'newValue is required' });
+		if (!reason || reason.length < 3)
+			return fail(400, { error: 'reason is required (min 3 characters)' });
+
+		const session = await AssemblySession.findById(params.sessionId);
+		if (!session) return fail(404, { error: 'Session not found' });
+		const s = session as any;
+
+		// Locate the fieldRecord across all stepRecords.
+		let targetStepRecord: any = null;
+		let targetFieldRecord: any = null;
+		for (const sr of s.stepRecords ?? []) {
+			const fr = (sr.fieldRecords ?? []).find((f: any) => f._id === fieldRecordId);
+			if (fr) {
+				targetStepRecord = sr;
+				targetFieldRecord = fr;
+				break;
+			}
+		}
+		if (!targetFieldRecord) return fail(404, { error: 'Field record not found' });
+
+		const previousValue = targetFieldRecord.fieldValue;
+		const fieldNameForMirror: string = targetFieldRecord.fieldName ?? '';
+		const stepNumberForMirror: number = targetStepRecord.stepNumber;
+
+		// Update the fieldRecord in-place on the AssemblySession.
+		targetFieldRecord.fieldValue = newValue;
+		targetFieldRecord.rawBarcodeData = newValue;
+		targetFieldRecord.capturedBy = locals.user!._id;
+		await session.save();
+
+		// Mirror to SPU.assembly.stepRecords[].fieldRecords[] by fieldName match within same step number.
+		// SPU sacred middleware blocks ALL updateOne/findOneAndUpdate mutations once finalizedAt is set,
+		// so we must check finalization first, skip the mirror if finalized, and use a raw collection
+		// update for the corrections push.
+		const spuId = s.spuId as string | undefined;
+		let mirrorSkippedDueToFinalized = false;
+
+		if (spuId) {
+			const spu = await Spu.findById(spuId).select('finalizedAt assembly.stepRecords').lean() as any;
+			const isFinalized = !!spu?.finalizedAt;
+
+			if (spu && !isFinalized && fieldNameForMirror) {
+				// Pre-finalization: update the matching fieldRecord via arrayFilters.
+				await Spu.updateOne(
+					{ _id: spuId },
+					{
+						$set: {
+							'assembly.stepRecords.$[sr].fieldRecords.$[fr].fieldValue': newValue,
+							'assembly.stepRecords.$[sr].fieldRecords.$[fr].rawBarcodeData': newValue
+						}
+					},
+					{
+						arrayFilters: [
+							{ 'sr.stepNumber': stepNumberForMirror },
+							{ 'fr.fieldName': fieldNameForMirror }
+						]
+					}
+				);
+			} else if (isFinalized) {
+				mirrorSkippedDueToFinalized = true;
+			}
+
+			// Always push a corrections entry to the SPU.
+			// If finalized, use .collection.updateOne to bypass the sacred middleware
+			// (corrections are the sanctioned post-finalization paper trail).
+			const correctionEntry = {
+				_id: generateId(),
+				fieldPath: `assembly.fieldRecord.${fieldRecordId}`,
+				previousValue,
+				correctedValue: newValue,
+				reason,
+				correctedBy: { _id: locals.user!._id, username: locals.user!.username },
+				correctedAt: new Date()
+			};
+
+			if (isFinalized) {
+				// Raw collection write bypasses sacred middleware — permitted for
+				// the corrections audit trail only. Cast filter because the native
+				// driver types expect ObjectId while this codebase uses string IDs.
+				await Spu.collection.updateOne(
+					{ _id: spuId as any },
+					{ $push: { corrections: correctionEntry } as any }
+				);
+			} else {
+				await Spu.updateOne(
+					{ _id: spuId },
+					{ $push: { corrections: correctionEntry } }
+				);
+			}
+
+			// AuditLog (immutable).
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'spus',
+				recordId: spuId,
+				action: 'UPDATE',
+				oldData: { fieldValue: previousValue },
+				newData: { fieldValue: newValue },
+				reason,
+				changedBy: locals.user?.username ?? locals.user?._id,
+				changedAt: new Date()
+			});
+		} else {
+			// No linked SPU — still log against the assembly session.
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'assembly_sessions',
+				recordId: params.sessionId,
+				action: 'UPDATE',
+				oldData: { fieldValue: previousValue },
+				newData: { fieldValue: newValue },
+				reason,
+				changedBy: locals.user?.username ?? locals.user?._id,
+				changedAt: new Date()
+			});
+		}
+
+		return { success: true, newValue, mirrorSkippedDueToFinalized };
 	}
 };
 
