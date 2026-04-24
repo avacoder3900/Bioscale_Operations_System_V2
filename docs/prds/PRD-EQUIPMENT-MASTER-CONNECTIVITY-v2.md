@@ -1,6 +1,6 @@
 # PRD v2 — Equipment Master-Controller Connectivity + Legacy Nav Cleanup
 
-> **Revision summary (2026-04-24):** v1 reconciled against `dev` HEAD `cb6ff0d`. Findings that forced a rewrite:
+> **Revision summary (2026-04-24, late):** v1 reconciled against `dev` HEAD `cb6ff0d`, then two fresh stories added on 2026-04-24 after a plain-English audit flagged a trip-wire in uncommitted "Go Back" code and a compliance-query gap in the 2026-04-23 checkout backfill. Findings that forced a rewrite:
 > - **S1a is partially live.** `resolveFridgeId` helper exists; 3 of 5 writers already use it. Only two reagent-side writers remain unnormalized. Scope narrowed accordingly.
 > - **S2 line number drifted** from 158-159 to 168-169 in the wax-opentron writer. Schema `ovenCure` block now at line 78 (was 64).
 > - **S7 line numbers drifted significantly** — `transferTimeSeconds` now at **line 47** (v1 said 35), `containerBarcode` now at **line 88** (v1 said 72), `finalizedAt` now at **line 138** (v1 said 122). Schema file has grown since the v1 audit.
@@ -11,8 +11,11 @@
 >   - **S10** — equipment hard-delete orphan guard.
 > - **S8 gains one merge source** — the `manual_cartridge_removals` collection, created 2026-04-23.
 > - **`getCheckedOutCartridgeIds()` filter** (added 2026-04-23, threaded through 9 occupancy queries) is orthogonal to this PRD — no conflict, no change needed. Document it so the activity feed in S8 references the collection correctly.
-> - **Freezer equipment type** — explicitly **out of scope.** Per user, fridges only; freezer as a distinct type is deferred to a future PRD.
+>> - **Freezer equipment type** — explicitly **out of scope.** Per user, fridges only; freezer as a distinct type is deferred to a future PRD.
 > - **Dependency graph** adds `S2 → S8`, `S2b → S4`, `S2c → S4`.
+> - **S11 and S12 added 2026-04-24 (post-audit):**
+>   - **S11** — backfill `action='CHECKOUT'` on the 30 post-completion removals whose audit rows currently carry `action='UPDATE'` (compliance-query gap).
+>   - **S12** — fix the Go Back action's `InventoryTransaction.deleteMany(...)` call at `opentron-control/wax/[runId]/+page.server.ts:646` (will throw on first use because `InventoryTransaction` has `applyImmutableMiddleware`). Swap to the retract-via-raw-driver pattern already used in `fix-retract-superseded-lot-txns.ts`. Both stories independent of the rest of the PRD — can run first.
 
 ## Overview
 The Equipment page (`/equipment/*`) is the intended single source of truth for every piece of equipment — fridges, ovens, decks, cooling trays, robots, temperature probes. The 2026-04-23 audit plus the 2026-04-24 follow-up confirmed it is a **metadata master** but NOT a **transaction master**: occupancy, locks, probe data, and history join inconsistently across consumer collections. This PRD makes every consumer join `equipment` on a single canonical identifier (`Equipment._id`) with denormalized display fields kept intentionally and transparently stale (historical snapshots, not live joins). It also retires the legacy `/manufacturing/wax-filling` links that still point operators to merged-out pages, puts guards on equipment deletion, and normalizes cooling-tray and deck references.
@@ -397,6 +400,90 @@ Every merged event emits `{ at: Date, kind: string, source: string, summary: str
 
 ---
 
+### S11 — NEW — Backfill `action='CHECKOUT'` on 30 legacy post-completion checkouts
+**As a** compliance-query author **I want** every manual-removal event to be findable with a single `action='CHECKOUT'` AuditLog filter **so that** queries don't silently miss the 30 cartridges that were backfilled on 2026-04-23 using the older `action='UPDATE'` tag.
+
+**Background:** The 2026-04-23 post-completion backfill (`scripts/fix-backfill-post-completion-manual-removals.ts`) and its companion revert (`scripts/fix-revert-incorrect-checkout-scrap.ts`) wrote AuditLog entries with `action='UPDATE'` because the CHECKOUT action label was introduced later in the same day. The 30 cartridges are findable (they each have a `ManualCartridgeRemoval` doc), but a compliance filter like `audit_logs.find({ action: 'CHECKOUT' })` misses them. The 20 FRIDGE-002 ghosts backfilled later the same day already use `action='CHECKOUT'` and are unaffected.
+
+**Target docs:** `manual_cartridge_removals.find({ 'operator.username': 'system-backfill-2026-04-23' })` → the 30 cartridges in `cartridgeIds[]`.
+
+**Script** — `scripts/fix-backfill-checkout-audit-tag.ts`:
+1. Query `manual_cartridge_removals` with the operator filter above. Confirm the count is 30; abort if not (sanity gate).
+2. For each removal doc, for each cartridge in `cartridgeIds`, write a new AuditLog:
+   - `tableName: 'cartridge_records'`, `recordId: <cartridgeId>`
+   - `action: 'CHECKOUT'`
+   - `changedBy: 'system-backfill-checkout-tag-2026-04-24'` (distinct from the original backfill user so the history is unambiguous)
+   - `changedAt`: copy the original `removedAt` from the removal doc (not `new Date()` — preserve temporal truth)
+   - `newData: { checkedOut: true, removalGroupId: <removal._id>, reason: <removal.reason>, backfilledTag: true, backfilledAt: <now> }`
+   - `reason: 'Backfill: CHECKOUT audit tag for 2026-04-23 post-completion removals'`
+3. Idempotent: skip if a `CHECKOUT` audit entry already exists for the (`recordId`, `removalGroupId`) pair. Re-running is a no-op.
+4. Aggregate AuditLog on `audit_logs` itself with `action: 'MIGRATION_CHECKOUT_TAG_BACKFILL'` + counts at run end.
+5. `--plan` / `--apply`.
+
+**Non-goals:**
+- Do NOT touch the existing `UPDATE` entries from the 2026-04-23 backfill — they're a valid record of the scrap-flip-then-revert sequence. Adding the `CHECKOUT` tag is additive, not corrective.
+- Do NOT back-tag the 20 FRIDGE-002 ghosts — they already have `action='CHECKOUT'`.
+
+**Acceptance criteria**
+- [ ] Script finds exactly 30 eligible cartridges.
+- [ ] After `--apply`, `audit_logs.countDocuments({ action: 'CHECKOUT', recordId: { $in: <30 ids> } })` returns 30.
+- [ ] Re-running the script writes 0 new docs.
+- [ ] `npm run check` + `npm run lint` + `npm run test:unit` pass.
+
+**Estimated effort:** small (½ context window). **Depends on:** none.
+
+---
+
+### S12 — NEW — Fix Go Back crash (retract inventory txns, don't delete)
+**As a** wax-filling operator **I want** the "Go Back to QC" button to work without throwing **so that** I can undo an accidentally-completed QC without losing the run.
+
+**Bug:** `src/routes/manufacturing/opentron-control/wax/[runId]/+page.server.ts:646-651` does
+```
+await InventoryTransaction.deleteMany({
+  manufacturingRunId: runId,
+  manufacturingStep: 'wax_filling',
+  transactionType: { $in: ['consumption', 'scrap'] },
+  cartridgeRecordId: { $in: cartIds }
+});
+```
+`InventoryTransaction` has `applyImmutableMiddleware` applied (`src/lib/server/db/middleware/immutable.ts:21` blocks `deleteMany` with `throw new Error('Immutable log documents cannot be deleted')`). The first click of Go Back from a Storage stage throws, rolls back the session, and the run is left in a half-rewound state.
+
+**Correction of audit PDF inaccuracy:** the audit PDF said Go Back (a) deletes from `audit_logs` and (b) doesn't write its own audit entry. Both are wrong — the delete targets `inventory_transactions`, and the action already writes an `action='GO_BACK'` AuditLog at lines 676-688. Only the delete needs fixing.
+
+**Fix:**
+1. Replace the `InventoryTransaction.deleteMany(...)` call with a retraction using the raw driver so the immutable middleware is bypassed:
+```
+await mongoose.connection.db.collection('inventory_transactions').updateMany(
+  {
+    manufacturingRunId: runId,
+    manufacturingStep: 'wax_filling',
+    transactionType: { $in: ['consumption', 'scrap'] },
+    cartridgeRecordId: { $in: cartIds },
+    retractedAt: { $exists: false }   // idempotent
+  },
+  {
+    $set: {
+      retractedBy: locals.user.username,
+      retractedAt: now,
+      retractionReason: `Go Back: ${current} → ${targetStage}`
+    }
+  }
+);
+```
+2. Confirm by re-running the scrap audit (`scripts/audit-scrap-tracking.ts`) that section [E] still excludes retracted txns (it does, as of 2026-04-23).
+3. No schema changes; no migration needed.
+4. Keep the existing `GO_BACK` AuditLog write — it's already correct.
+
+**Acceptance criteria**
+- [ ] Manual test: rewind a Storage-stage run to QC; verify no throw, run re-renders at QC, completeQC can be re-run.
+- [ ] The `inventory_transactions` docs previously written by `completeQC` for that run are now marked `retractedAt` with reason `Go Back: Storage → QC` (visible via Compass or a diag script).
+- [ ] Re-running Go Back on a run that's already at QC (no inventory txns to retract) is a no-op — `updateMany` matches 0 and the action still succeeds at the stage transition.
+- [ ] `npm run check` + `npm run lint` + `npm run test:unit` pass.
+
+**Estimated effort:** small (½ context window). **Depends on:** none.
+
+---
+
 ### S10 — NEW — Equipment delete orphan guard
 **As a** BIMS developer **I want** equipment deletion to fail safely when historical data still references the target **so that** we don't silently orphan cartridges, runs, or alerts.
 
@@ -444,10 +531,10 @@ S3  → S4    (canonical robot source before in-use computation)
 S1b → S8    (locationId populated before activity feed references it)
 S4  → S8    (lock-state used in event rows)
 
-S5, S6, S9: independent, no predecessors.
+S5, S6, S9, S11, S12: independent, no predecessors.
 ```
 
-**Recommended execution order:** S1a → S1b → S2 → S2b → S2c → S3 → S4 → S7 → S10 → S5 → S6 → S9 → S8.
+**Recommended execution order:** **S12 → S11** (fast, unblocks operators + closes compliance gap, no coupling) → S1a → S1b → S2 → S2b → S2c → S3 → S4 → S7 → S10 → S5 → S6 → S9 → S8.
 
 ## Ralph execution notes
 Each story is one sub-agent session unless marked otherwise. Sub-agent steps:
@@ -469,13 +556,15 @@ Each story is one sub-agent session unless marked otherwise. Sub-agent steps:
 - S10 regressions (false-positive refusals) → temporarily disable the `hasReferences()` gate while root-causing.
 - S9 is purely link-text — revert is a one-line-per-file `.svelte` revert.
 
-## Done definition (all 11 stories merged)
+## Done definition (all 13 stories merged)
 - Every page under `/equipment/*` joins `equipment` by `_id` for fridges, ovens, trays, decks, robots.
 - `grep -rn "waxStorage\.location['\"]?\s*:\s*" src/routes/` as a FILTER (not a write) returns zero matches.
 - `grep -rn "storage\.fridgeName['\"]?\s*:\s*" src/routes/` as a FILTER returns zero matches.
 - `grep -rn "coolingTrayId['\"]?\s*:\s*" src/routes/` as a FILTER returns zero matches.
 - `grep -rn "deckId['\"]?\s*:\s*" src/routes/` as a FILTER returns zero matches.
 - Every equipment delete action calls `hasReferences()` first.
+- Go Back action emits no "Immutable log" errors in logs; retracted-txn records exist for every historical Go Back invocation.
+- `audit_logs.countDocuments({ action: 'CHECKOUT' })` includes the 30 legacy post-completion cartridges.
 - `computeInUseState()` called from every "is this in use" rendering site.
 - `grep -r "/manufacturing/wax-filling" src/routes/` returns only in-tree-internal matches under `src/routes/manufacturing/wax-filling/`.
 - No `opentrons_robots` reads outside the deprecated model file + migration script.
@@ -494,6 +583,8 @@ Each story is one sub-agent session unless marked otherwise. Sub-agent steps:
 - S2b note about `'cooling_tray'` vs `'cooling-tray'` — verified against `src/lib/server/db/models/equipment.ts` enum and `src/lib/server/services/equipment-resolve.ts:23`.
 - Equipment hard-delete call confirmed at `/equipment/fridges-ovens/+page.server.ts:333`. `decks-trays` and `robots` confirmed to have NO equivalent delete action, narrowing S10's scope.
 - S9 line numbers in `opentrons/+page.svelte` verified: 80, 198, 206. Other S9 files carry unchanged v1 line numbers.
+- S12 bug confirmed: `InventoryTransaction.deleteMany` at `opentron-control/wax/[runId]/+page.server.ts:646` vs `applyImmutableMiddleware` blocking `deleteMany` at `src/lib/server/db/middleware/immutable.ts:21`. The audit PDF's claim that Go Back also skips its own audit write is incorrect — lines 676-688 of the same file write a `GO_BACK` AuditLog entry. S12 fixes only the delete call.
+- S11 target count verified before drafting: 30 manual_cartridge_removals docs exist with `operator.username='system-backfill-2026-04-23'`, and none of them currently have a sibling `action='CHECKOUT'` AuditLog (checked by pattern in the backfill-script source).
 
 **Logic coherence checks:**
 - Dependency graph has no cycles. Manually walked S1a → … → S8 longest chain.
