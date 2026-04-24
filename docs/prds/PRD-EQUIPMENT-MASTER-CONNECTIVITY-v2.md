@@ -450,29 +450,38 @@ await InventoryTransaction.deleteMany({
 
 **Correction of audit PDF inaccuracy:** the audit PDF said Go Back (a) deletes from `audit_logs` and (b) doesn't write its own audit entry. Both are wrong — the delete targets `inventory_transactions`, and the action already writes an `action='GO_BACK'` AuditLog at lines 676-688. Only the delete needs fixing.
 
+**Live-data state (verified 2026-04-24):** `audit_logs.find({ action: 'GO_BACK' })` returns 0 documents. The action has never been invoked in production, so **no retroactive data cleanup is needed** — purely a code fix.
+
+**Import state:** `mongoose` is NOT currently imported in this file (verified via grep). The fix must add `import mongoose from 'mongoose';` at the top of the imports block (alongside the existing `import { redirect, fail, error } from '@sveltejs/kit';`).
+
+**Twin-file note:** The file header comment claims "Actions here are functionally identical to the ones in wax-filling/+page.server.ts. If you fix a bug in one, fix it in the other too." — verified this action is an exception: `wax-filling/+page.server.ts` has NO `goBack` action (no grep hit). Fix only the opentron-control file.
+
 **Fix:**
-1. Replace the `InventoryTransaction.deleteMany(...)` call with a retraction using the raw driver so the immutable middleware is bypassed:
+1. Add `import mongoose from 'mongoose';` to the imports block.
+2. Replace the `InventoryTransaction.deleteMany(...)` call at lines 646-651 with a retraction using the raw driver (bypasses the immutable middleware). Match the existing code's `locals.user?.username` optional-chain pattern (used at line 681):
 ```
-await mongoose.connection.db.collection('inventory_transactions').updateMany(
+await mongoose.connection.db!.collection('inventory_transactions').updateMany(
   {
     manufacturingRunId: runId,
     manufacturingStep: 'wax_filling',
     transactionType: { $in: ['consumption', 'scrap'] },
     cartridgeRecordId: { $in: cartIds },
-    retractedAt: { $exists: false }   // idempotent
+    retractedAt: { $exists: false }   // idempotent re-run safety
   },
   {
     $set: {
-      retractedBy: locals.user.username,
+      retractedBy: locals.user?.username ?? 'unknown',
       retractedAt: now,
       retractionReason: `Go Back: ${current} → ${targetStage}`
     }
   }
 );
 ```
-2. Confirm by re-running the scrap audit (`scripts/audit-scrap-tracking.ts`) that section [E] still excludes retracted txns (it does, as of 2026-04-23).
-3. No schema changes; no migration needed.
-4. Keep the existing `GO_BACK` AuditLog write — it's already correct.
+3. Confirm by running `scripts/audit-scrap-tracking.ts` — section [E] already excludes retracted txns (`retractedAt: { $exists: false }` filter added 2026-04-23).
+4. No schema changes; no migration script needed.
+5. Keep the existing `GO_BACK` AuditLog write at lines 676-688 — it's already correct; the audit PDF's claim of a missing self-audit was incorrect.
+
+**Note for future maintainers:** if `PT-CT-105` ever gets a `PartDefinition` row, `completeQC`'s inventory writes will decrement `inventoryCount` for it. At that point, Go Back will ALSO need to emit compensating `adjustment` InventoryTransactions to restore the count (retracting alone doesn't touch `PartDefinition`). Currently safe because `PT-CT-105` has no PartDefinition and original writes had `partDefinitionId=undefined`.
 
 **Acceptance criteria**
 - [ ] Manual test: rewind a Storage-stage run to QC; verify no throw, run re-renders at QC, completeQC can be re-run.
@@ -584,7 +593,10 @@ Each story is one sub-agent session unless marked otherwise. Sub-agent steps:
 - Equipment hard-delete call confirmed at `/equipment/fridges-ovens/+page.server.ts:333`. `decks-trays` and `robots` confirmed to have NO equivalent delete action, narrowing S10's scope.
 - S9 line numbers in `opentrons/+page.svelte` verified: 80, 198, 206. Other S9 files carry unchanged v1 line numbers.
 - S12 bug confirmed: `InventoryTransaction.deleteMany` at `opentron-control/wax/[runId]/+page.server.ts:646` vs `applyImmutableMiddleware` blocking `deleteMany` at `src/lib/server/db/middleware/immutable.ts:21`. The audit PDF's claim that Go Back also skips its own audit write is incorrect — lines 676-688 of the same file write a `GO_BACK` AuditLog entry. S12 fixes only the delete call.
-- S11 target count verified before drafting: 30 manual_cartridge_removals docs exist with `operator.username='system-backfill-2026-04-23'`, and none of them currently have a sibling `action='CHECKOUT'` AuditLog (checked by pattern in the backfill-script source).
+- S12 live-data check (2026-04-24): `audit_logs.find({ action: 'GO_BACK' })` returned 0 docs — the action has never been invoked, so no half-rewound runs exist on dev and no retroactive cleanup is needed.
+- S12 import check: `mongoose` is NOT currently imported in the target file. Fix must add the import.
+- S12 twin-file check: despite the file header's "functionally identical" note, `wax-filling/+page.server.ts` has no `goBack` action (grep confirmed). S12 touches only `opentron-control/wax/[runId]/+page.server.ts`.
+- S11 target count verified live (`scripts/diag-s11-verify.ts`): 30 `manual_cartridge_removals` docs exist with `operator.username='system-backfill-2026-04-23'`, spanning 30 distinct cartridge IDs, with 0 existing `action='CHECKOUT'` AuditLog entries — clean idempotent baseline.
 
 **Logic coherence checks:**
 - Dependency graph has no cycles. Manually walked S1a → … → S8 longest chain.
