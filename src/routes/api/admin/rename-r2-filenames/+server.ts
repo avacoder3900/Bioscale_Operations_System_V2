@@ -189,11 +189,17 @@ async function runReconcile(execute: boolean, limit: number) {
 
 		let exists = false;
 		try {
-			const res = await fetch(checkUrl, { method: 'HEAD' });
-			exists = res.ok;
+			const res = await fetch(checkUrl, {
+				method: 'GET',
+				headers: { Range: 'bytes=0-0' }
+			});
+			// 200 OK (range ignored) or 206 Partial Content both mean the object exists.
+			exists = res.status === 200 || res.status === 206;
+			// Drain the body to free the socket.
+			try { await res.arrayBuffer(); } catch { /* ignore */ }
 		} catch (err: any) {
 			failed++;
-			failures.push({ imageId: String(img._id), error: `HEAD failed: ${err.message || err}` });
+			failures.push({ imageId: String(img._id), error: `GET failed: ${err.message || err}` });
 			continue;
 		}
 
