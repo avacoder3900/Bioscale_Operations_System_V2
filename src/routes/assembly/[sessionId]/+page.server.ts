@@ -509,6 +509,138 @@ export const actions: Actions = {
 			changedAt: new Date()
 		});
 		return { success: true };
+	},
+
+	// SPU-MFG-06: completeBuild — validates every required field on every step,
+	// transitions session -> completed, transitions SPU assembling -> assembled,
+	// pushes statusTransitions entry, audit-logs both records, returns redirect hint.
+	completeBuild: async ({ locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+
+		const session = await AssemblySession.findById(params.sessionId).lean() as any;
+		if (!session) return fail(404, { error: 'Session not found' });
+		if (session.status === 'completed') {
+			return fail(400, { error: 'Session already completed' });
+		}
+
+		// Load the WI version steps the same way the load function does.
+		let workInstructionSteps: any[] = [];
+		if (session.workInstructionId) {
+			const wi = await WorkInstruction.findById(session.workInstructionId).lean() as any;
+			if (wi) {
+				const currentVersion = (wi.versions ?? []).find(
+					(v: any) => v.version === wi.currentVersion
+				) ?? (wi.versions ?? []).slice(-1)[0];
+				workInstructionSteps = (currentVersion?.steps ?? []).map((step: any) => ({
+					id: step._id,
+					stepNumber: step.stepNumber ?? 0,
+					fieldDefinitions: (step.fieldDefinitions ?? [])
+						.slice()
+						.sort((a: any, b: any) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+						.map((fd: any) => ({
+							id: fd._id,
+							fieldName: fd.fieldName ?? '',
+							isRequired: fd.isRequired ?? false
+						}))
+				}));
+			}
+		}
+
+		// Index captured fieldRecords by stepFieldDefinitionId for O(1) lookup.
+		const capturedByFieldDefId = new Map<string, string>();
+		for (const sr of (session.stepRecords ?? [])) {
+			for (const fr of (sr.fieldRecords ?? [])) {
+				if (fr.stepFieldDefinitionId && fr.fieldValue !== undefined && fr.fieldValue !== null && fr.fieldValue !== '') {
+					capturedByFieldDefId.set(fr.stepFieldDefinitionId, fr.fieldValue);
+				}
+			}
+		}
+
+		// Verify every required field on every step has a captured fieldRecord with non-empty value.
+		const missing: { stepNumber: number; fieldName: string }[] = [];
+		for (const step of workInstructionSteps) {
+			for (const fd of (step.fieldDefinitions ?? [])) {
+				if (fd.isRequired && !capturedByFieldDefId.has(fd.id)) {
+					missing.push({ stepNumber: step.stepNumber, fieldName: fd.fieldName });
+				}
+			}
+		}
+		if (missing.length > 0) {
+			return fail(400, { error: 'Missing required fields', code: 'INCOMPLETE_BUILD', missing });
+		}
+
+		const now = new Date();
+		const operator = { _id: locals.user!._id, username: locals.user!.username };
+
+		// Update the AssemblySession.
+		await AssemblySession.updateOne(
+			{ _id: params.sessionId },
+			{
+				$set: {
+					status: 'completed',
+					completedAt: now,
+					completedBy: operator
+				}
+			}
+		);
+
+		// Transition the SPU (if linked).
+		if (session.spuId) {
+			const spu = await Spu.findById(session.spuId).lean() as any;
+			if (spu) {
+				const previousStatus = spu.status ?? null;
+				// Only forward-transition from 'assembling' -> 'assembled'. Don't regress later states.
+				const forwardStates = ['draft', 'assembling'];
+				const shouldTransitionStatus = forwardStates.includes(previousStatus);
+
+				const spuSet: any = {
+					assemblyStatus: 'completed',
+					'assembly.completedAt': now
+				};
+				const spuUpdate: any = { $set: spuSet };
+
+				if (shouldTransitionStatus) {
+					spuSet.status = 'assembled';
+					spuUpdate.$push = {
+						statusTransitions: {
+							_id: generateId(),
+							from: previousStatus,
+							to: 'assembled',
+							changedBy: operator,
+							changedAt: now,
+							reason: 'Assembly build completed'
+						}
+					};
+				}
+
+				await Spu.updateOne({ _id: session.spuId }, spuUpdate);
+
+				await AuditLog.create({
+					_id: generateId(),
+					tableName: 'spus',
+					recordId: session.spuId,
+					action: 'UPDATE',
+					changedBy: locals.user?.username ?? locals.user?._id,
+					changedAt: now
+				});
+			}
+		}
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assembly_sessions',
+			recordId: params.sessionId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username ?? locals.user?._id,
+			changedAt: now
+		});
+
+		return {
+			success: true,
+			spuId: session.spuId,
+			redirectTo: '/spu/' + session.spuId + '?fromBuild=1'
+		};
 	}
 };
 
