@@ -99,7 +99,25 @@ function isAlreadyRenamed(key: string): boolean {
 	return NEW_PATTERN_RE.test(key);
 }
 
-type Mode = 'preview' | 'execute' | 'cleanup' | 'discover-cartridges';
+type Mode = 'preview' | 'execute' | 'cleanup' | 'discover-cartridges' | 'backfill-cartridges';
+
+/**
+ * Project-slug → CartridgeRecord.status enum value for cartridgeTag.phase.
+ * Used to infer phase when backfilling. Projects that don't map to a specific
+ * stage (experiments, unlabelled) get null → skipped.
+ */
+const SLUG_TO_PHASE: Record<string, string | null> = {
+	'wax-filling': 'wax_filling',
+	'wax-filling-real': 'wax_filling',
+	'reagent-filling': 'reagent_filled',
+	'reagent-fill-4-7-1': 'reagent_filled',
+	'fill-1': 'reagent_filled',
+	'fill-2': 'reagent_filled',
+	'fill-3': 'reagent_filled',
+	'fill-4': 'reagent_filled',
+	'exp-270': null,
+	'exp-271': null
+};
 
 interface LogEntry {
 	_id: string;
@@ -129,8 +147,119 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	if (mode === 'cleanup') return json(await runCleanup(limit));
 	if (mode === 'discover-cartridges') return json(await runDiscover(limit));
+	if (mode === 'backfill-cartridges') return json(await runBackfill(body.mode === 'backfill-cartridges' ? false : true, limit));
 	return json(await runRename(mode === 'execute', projectFilter, limit));
 };
+
+/**
+ * Backfill CvImage.cartridgeTag for images that were captured with a UUID in
+ * their old filename matching a CartridgeRecord._id. Uses the rename log to
+ * recover the original UUID (current filePath is the renamed key).
+ *
+ * For each matched image:
+ *   - Sets cartridgeTag.cartridgeRecordId = UUID
+ *   - Sets cartridgeTag.phase from the project-slug map (if not already set)
+ *   - Ensures a corresponding entry in CartridgeRecord.photos[] (dedup by imageId)
+ *
+ * Projects without a reliable phase mapping (e.g. experiments) → skipped.
+ *
+ * Pass dryRun=true via { mode: 'backfill-cartridges', dryRun: true } ... actually
+ * for simplicity this is always write-mode; call with { limit: 5 } first as a spot-check.
+ */
+async function runBackfill(_writeMode: boolean, limit: number) {
+	const db = mongoose.connection.db!;
+	const cartridges = db.collection('cartridge_records');
+	const log = db.collection(LOG_COLLECTION);
+
+	// For each renamed image, pull its oldKey UUID + cartridgeRecordId candidate.
+	const entries = await log.find({}).limit(limit).toArray();
+
+	const samples: any[] = [];
+	let scanned = 0;
+	let updatedImages = 0;
+	let pushedPhotoRefs = 0;
+	let skippedNoUuid = 0;
+	let skippedNoCartridge = 0;
+	let skippedNoPhaseMap = 0;
+	let skippedAlreadyTagged = 0;
+	let failed = 0;
+	const failures: { imageId: string; error: string }[] = [];
+
+	for (const entry of entries) {
+		scanned++;
+		const oldKey = entry.oldKey as string;
+		const newKey = entry.newKey as string;
+		const imageId = String(entry.imageId);
+
+		const tail = oldKey.slice(oldKey.lastIndexOf('/') + 1);
+		const m = tail.match(/cartridge_capture_([A-Za-z0-9-]+?)_\d+\./);
+		if (!m) { skippedNoUuid++; continue; }
+		const uuid = m[1];
+
+		// Does a cartridge with this _id exist?
+		const cartridge = await cartridges.findOne({ _id: uuid as any }, { projection: { _id: 1 } });
+		if (!cartridge) { skippedNoCartridge++; continue; }
+
+		// Derive phase from the project slug in newKey/oldKey.
+		const projectSlug = newKey.replace(/^cv\//, '').split('/')[0];
+		const phase = SLUG_TO_PHASE[projectSlug];
+		if (phase === null || phase === undefined) { skippedNoPhaseMap++; continue; }
+
+		// Read current CvImage cartridgeTag.
+		const img = await CvImage.findById(imageId).select('cartridgeTag capturedAt filePath imageUrl').lean();
+		if (!img) { failed++; failures.push({ imageId, error: 'CvImage not found' }); continue; }
+
+		const currentTag: any = img.cartridgeTag || {};
+		const alreadyFullyTagged = currentTag.cartridgeRecordId === uuid && currentTag.phase;
+		if (alreadyFullyTagged) { skippedAlreadyTagged++; continue; }
+
+		try {
+			const newTag: any = {
+				cartridgeRecordId: uuid,
+				phase: currentTag.phase || phase,
+				labels: currentTag.labels || [],
+				notes: currentTag.notes || ''
+			};
+			await CvImage.updateOne({ _id: imageId }, { $set: { cartridgeTag: newTag } });
+			updatedImages++;
+
+			// Push into cartridge.photos[] if not already there.
+			const res = await cartridges.updateOne(
+				{ _id: uuid as any, 'photos.imageId': { $ne: imageId } },
+				{ $push: { photos: {
+					imageId,
+					phase: newTag.phase,
+					capturedAt: img.capturedAt || null,
+					r2Key: newKey,
+					r2Url: img.imageUrl || null
+				} as any } }
+			);
+			if (res.modifiedCount === 1) pushedPhotoRefs++;
+
+			if (samples.length < 5) {
+				samples.push({ imageId, uuid, projectSlug, phase: newTag.phase, newKey });
+			}
+		} catch (err: any) {
+			failed++;
+			failures.push({ imageId, error: err.message || String(err) });
+		}
+	}
+
+	return {
+		mode: 'backfill-cartridges',
+		scanned,
+		updatedImages,
+		pushedPhotoRefs,
+		skippedNoUuid,
+		skippedNoCartridge,
+		skippedNoPhaseMap,
+		skippedAlreadyTagged,
+		failed,
+		complete: scanned < limit,
+		samples,
+		failures: failures.slice(0, 10)
+	};
+}
 
 /**
  * For every CvImage whose filename contains a capture UUID, try to find any
