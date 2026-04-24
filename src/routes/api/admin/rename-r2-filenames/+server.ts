@@ -94,7 +94,7 @@ function parseCapture(filename: string): { barcode: string; ext: string } | null
  * Has this filePath already been renamed to the new pattern?
  * New pattern: ends with `{barcode}-{digits}-{stage}.{ext}`.
  */
-const NEW_PATTERN_RE = /\/[A-Za-z0-9-]+-\d{3,}-[a-z0-9-]+\.[a-z]+$/;
+const NEW_PATTERN_RE = /\/[A-Za-z0-9_-]+-\d{3,}-[a-z0-9-]+\.[a-z]+$/;
 function isAlreadyRenamed(key: string): boolean {
 	return NEW_PATTERN_RE.test(key);
 }
