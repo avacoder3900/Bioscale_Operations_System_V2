@@ -5,7 +5,7 @@ import { applyImmutableMiddleware } from '../middleware/immutable.js';
 const auditLogSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	tableName: String, recordId: String,
-	action: { type: String, enum: ['INSERT', 'UPDATE', 'DELETE', 'PHASE_ADVANCE'] },
+	action: { type: String, enum: ['INSERT', 'UPDATE', 'DELETE', 'PHASE_ADVANCE', 'CHECKOUT'] },
 	oldData: Schema.Types.Mixed, newData: Schema.Types.Mixed,
 	changedAt: { type: Date, default: Date.now }, changedBy: String,
 	changedFields: Schema.Types.Mixed, reason: String,
