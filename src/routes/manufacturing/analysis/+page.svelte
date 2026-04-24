@@ -374,8 +374,11 @@
 							<li><span class="text-red-200">Mandatory cooling-tray assignment</span> at the wax-storage step — reject the record if `waxStorage.coolingTrayId` is empty (eliminates the 2026-04-16 no-tray class of ghost).</li>
 							<li><span class="text-red-200">First-class "research / testing withdrawal" flow</span> — a named path for Zane-style testing so those cartridges never pass through the ghost/backfill state.</li>
 							<li><span class="text-red-200">Drift alarm</span> — automated email/Slack when Mongo's active count diverges from the last reconciliation scan by more than a configurable threshold.</li>
-							<li><span class="text-red-200">Exclude checked-out cartridges from active occupancy</span> — fridge-storage query should filter out anything in `manual_cartridge_removals` so dashboards show the real physical count, not the stale wax_stored count.</li>
 						</ol>
+						<p class="mt-2 font-semibold text-emerald-400">✓ Completed 2026-04-23:</p>
+						<ul class="mt-1 list-inside list-disc space-y-0.5 text-emerald-200/80">
+							<li>Checked-out cartridges now excluded from fridge/wax_storage occupancy queries across all dashboards (via `getCheckedOutCartridgeIds()` filter in `src/lib/server/checkout-utils.ts`). Quality status is still preserved on each cartridge.</li>
+						</ul>
 						<p class="mt-2 text-red-300/70">
 							Team discussion scheduled — see Kanban task "Team discussion: FRIDGE-002 ghost-cartridge tracking failure" (QA Improvements, due Friday 2026-04-24).
 						</p>

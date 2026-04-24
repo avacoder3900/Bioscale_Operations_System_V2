@@ -6,11 +6,17 @@ import {
 	LabCartridge, CartridgeGroup, CartridgeRecord, Equipment, EquipmentLocation,
 	OpentronsRobot, WaxFillingRun, ReagentBatchRecord, AssayDefinition, PartDefinition, BackingLot
 } from '$lib/server/db';
+import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
 	requirePermission(locals.user, 'spu:read');
 	await connectDB();
+
+	// Manually checked-out cartridges are physically removed from fridges
+	// but preserve their scrapped/accepted quality markers. Exclude them
+	// from every fridge/wax_stored occupancy aggregation below.
+	const checkedOutIds = await getCheckedOutCartridgeIds();
 
 	const stateFilter = url.searchParams.get('state');
 
@@ -203,11 +209,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				storageCounts = await (async () => {
 					const [waxCounts, reagentCounts] = await Promise.all([
 						CartridgeRecord.aggregate([
-							{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored' } },
+							{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored', _id: { $nin: checkedOutIds } } },
 							{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
 						]),
 						CartridgeRecord.aggregate([
-							{ $match: { 'storage.fridgeName': { $exists: true }, status: 'stored' } },
+							{ $match: { 'storage.fridgeName': { $exists: true }, status: 'stored', _id: { $nin: checkedOutIds } } },
 							{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
 						])
 					]);
@@ -254,11 +260,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					(async () => {
 						const [waxCounts, storedCounts] = await Promise.all([
 							CartridgeRecord.aggregate([
-								{ $match: { status: 'wax_stored', 'waxStorage.location': { $exists: true } } },
+								{ $match: { status: 'wax_stored', 'waxStorage.location': { $exists: true }, _id: { $nin: checkedOutIds } } },
 								{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
 							]),
 							CartridgeRecord.aggregate([
-								{ $match: { status: 'stored', 'storage.fridgeName': { $exists: true } } },
+								{ $match: { status: 'stored', 'storage.fridgeName': { $exists: true }, _id: { $nin: checkedOutIds } } },
 								{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
 							])
 						]);

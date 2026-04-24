@@ -1,11 +1,15 @@
 export const config = { maxDuration: 60 };
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, EquipmentLocation, Equipment, WaxFillingRun, ReagentBatchRecord, CartridgeRecord, BackingLot } from '$lib/server/db';
+import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'equipment:read');
 	await connectDB();
+
+	// Exclude manually checked-out cartridges from fridge occupancy counts
+	const checkedOutIds = await getCheckedOutCartridgeIds();
 
 	const [
 		deckDocs, trayDocs, locationDocs, equipmentDocs,
@@ -45,11 +49,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// BackingLot.cartridgeCount (decremented by wax-filling loadDeck).
 	const [waxCounts, reagentCounts, ovenCountsById] = await Promise.all([
 		CartridgeRecord.aggregate([
-			{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored' } },
+			{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored', _id: { $nin: checkedOutIds } } },
 			{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
 		]).catch(() => []),
 		CartridgeRecord.aggregate([
-			{ $match: { 'storage.fridgeName': { $exists: true }, status: { $in: ['stored', 'reagent_filled'] } } },
+			{ $match: { 'storage.fridgeName': { $exists: true }, status: { $in: ['stored', 'reagent_filled'] }, _id: { $nin: checkedOutIds } } },
 			{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
 		]).catch(() => []),
 		BackingLot.aggregate([

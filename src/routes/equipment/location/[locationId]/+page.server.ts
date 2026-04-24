@@ -1,10 +1,14 @@
 export const config = { maxDuration: 60 };
 import { error } from '@sveltejs/kit';
 import { connectDB, Equipment, EquipmentLocation, CartridgeRecord, WaxFillingRun, BackingLot } from '$lib/server/db';
+import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
 	await connectDB();
+
+	// Exclude manually checked-out cartridges from fridge/shelf occupancy
+	const checkedOutIds = await getCheckedOutCartridgeIds();
 
 	const { locationId } = params;
 
@@ -74,6 +78,7 @@ export const load: PageServerLoad = async ({ params }) => {
 	const ACTIVE_REAGENT = ['stored', 'reagent_filled', 'released', 'linked', 'inspected', 'sealed', 'cured'];
 	const [cartridgesRaw, waxRunsRaw] = await Promise.all([
 		CartridgeRecord.find({
+			_id: { $nin: checkedOutIds },
 			$or: [
 				{ 'waxStorage.location': { $in: uniqueMatchValues }, status: { $in: ACTIVE_WAX } },
 				{ 'storage.fridgeName': { $in: uniqueMatchValues }, status: { $in: ACTIVE_REAGENT } }

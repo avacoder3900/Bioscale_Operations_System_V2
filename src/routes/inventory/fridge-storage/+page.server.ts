@@ -1,10 +1,17 @@
 import { redirect } from '@sveltejs/kit';
 import { connectDB, CartridgeRecord, Equipment, EquipmentLocation } from '$lib/server/db';
+import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	await connectDB();
+
+	// Manual checkouts represent physical removal from the fridge; they must
+	// be excluded from active-occupancy queries even though the cartridge's
+	// status field is intentionally preserved (scrapped/accepted markers
+	// stay intact).
+	const checkedOut = await getCheckedOutCartridgeIds();
 
 	// Get parent fridges from Equipment collection
 	const equipDocs = await Equipment.find({ equipmentType: 'fridge' }).sort({ name: 1 }).lean().catch(() => []);
@@ -62,6 +69,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	// Get all stored cartridges (wax storage + reagent storage)
 	const storedCartridges = await CartridgeRecord.find({
+		_id: { $nin: checkedOut },
 		$or: [
 			{ 'waxStorage.location': { $exists: true, $ne: null }, status: 'wax_stored' },
 			{ 'storage.fridgeName': { $exists: true, $ne: null }, status: { $in: ['stored', 'reagent_filled'] } }
