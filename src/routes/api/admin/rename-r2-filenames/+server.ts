@@ -59,6 +59,25 @@ function shortStage(phase: string): string {
 }
 
 /**
+ * Infer a stage from the project slug (the part after `cv/`) when the image
+ * has no cartridgeTag.phase. Prefers the alias list; otherwise substring-matches
+ * common stage keywords. Falls back to the slug itself.
+ */
+const SLUG_STAGE_HINTS: Array<[RegExp, string]> = [
+	[/wax/, 'wax'],
+	[/reagent/, 'reagent'],
+	[/seal/, 'seal'],
+	[/cure/, 'cure'],
+	[/back/, 'backing']
+];
+function stageFromSlug(slug: string): string {
+	for (const [re, stage] of SLUG_STAGE_HINTS) {
+		if (re.test(slug)) return stage;
+	}
+	return slug;
+}
+
+/**
  * Parse a filename like
  *   "{nanoid}_cartridge_capture_{barcode}_{NNN}.jpg"
  * and extract the barcode and extension. The nanoid and capture sequence are dropped.
@@ -120,12 +139,8 @@ async function runRename(execute: boolean, projectFilter: string | undefined, li
 	const projects = await CvProject.find(projQuery).select('_id name').lean();
 	const projIds = projects.map(p => String(p._id));
 
-	// Pull all candidate images: must be in scope, must have cartridgeTag + capturedAt + filePath.
-	// Sort by capturedAt for stable sequence assignment.
-	const imgQuery: any = {
-		'cartridgeTag.phase': { $exists: true, $ne: null },
-		filePath: { $exists: true, $ne: null }
-	};
+	// Full rename: every image with a filePath. Sort by capturedAt for stable seq.
+	const imgQuery: any = { filePath: { $exists: true, $ne: null } };
 	if (projectFilter) imgQuery.projectId = { $in: projIds };
 
 	const images = await CvImage.find(imgQuery)
@@ -140,50 +155,70 @@ async function runRename(execute: boolean, projectFilter: string | undefined, li
 	let scanned = 0;
 	let processed = 0;
 	let skippedAlreadyRenamed = 0;
-	let skippedNoBarcode = 0;
-	let skippedNoCartridge = 0;
-	let skippedNoStage = 0;
+	let skippedNoPath = 0;
 	let failed = 0;
 	const failures: { imageId: string; oldKey: string; error: string }[] = [];
 	const stageHistogram: Record<string, number> = {};
+	const barcodeSourceHistogram = { capture: 0, nanoid: 0 };
+	const stageSourceHistogram = { phaseTag: 0, slugInference: 0 };
 
 	for (const img of images) {
 		scanned++;
 		if (processed >= limit) continue;
 
 		const oldKey = img.filePath as string;
-
+		if (!oldKey) { skippedNoPath++; continue; }
 		if (isAlreadyRenamed(oldKey)) { skippedAlreadyRenamed++; continue; }
 
-		const tag: any = img.cartridgeTag;
-		if (!tag?.cartridgeRecordId) { skippedNoCartridge++; continue; }
-		if (!tag.phase) { skippedNoStage++; continue; }
-
 		const tail = oldKey.slice(oldKey.lastIndexOf('/') + 1);
-		const parsed = parseCapture(tail);
-		if (!parsed) { skippedNoBarcode++; continue; }
+		const prefix = oldKey.slice(0, oldKey.lastIndexOf('/'));
+		const projectSlug = prefix.replace(/^cv\//, '').split('/')[0];
 
-		const stage = shortStage(String(tag.phase));
+		// Barcode: UUID from filename, or fall back to image _id.
+		const parsed = parseCapture(tail);
+		let barcode: string;
+		let ext: string;
+		if (parsed) {
+			barcode = parsed.barcode;
+			ext = parsed.ext;
+			barcodeSourceHistogram.capture++;
+		} else {
+			barcode = String(img._id);
+			const dot = tail.lastIndexOf('.');
+			ext = (dot >= 0 ? tail.slice(dot + 1) : 'jpg').toLowerCase();
+			barcodeSourceHistogram.nanoid++;
+		}
+
+		// Stage: cartridgeTag.phase alias, or infer from project slug.
+		const tag: any = img.cartridgeTag;
+		let stage: string;
+		if (tag?.phase) {
+			stage = shortStage(String(tag.phase));
+			stageSourceHistogram.phaseTag++;
+		} else {
+			stage = stageFromSlug(projectSlug);
+			stageSourceHistogram.slugInference++;
+		}
+
 		stageHistogram[stage] = (stageHistogram[stage] || 0) + 1;
-		const groupKey = `${parsed.barcode}::${stage}`;
+		const groupKey = `${barcode}::${stage}`;
 		const seq = (seqCounter.get(groupKey) || 0) + 1;
 		seqCounter.set(groupKey, seq);
 		const seqStr = String(seq).padStart(3, '0');
 
-		const prefix = oldKey.slice(0, oldKey.lastIndexOf('/'));
-		const newKey = `${prefix}/${parsed.barcode}-${seqStr}-${stage}.${parsed.ext}`;
+		const newKey = `${prefix}/${barcode}-${seqStr}-${stage}.${ext}`;
 
 		// Thumbnail: old thumbs live at `{prefix}/thumbs/{nanoid}.jpg`. Give them the same new stem + .jpg.
 		const oldThumb = img.thumbnailPath as string | undefined;
 		let newThumb: string | undefined;
 		if (oldThumb && oldThumb.includes('/thumbs/')) {
 			const thumbDir = oldThumb.slice(0, oldThumb.lastIndexOf('/'));
-			newThumb = `${thumbDir}/${parsed.barcode}-${seqStr}-${stage}.jpg`;
+			newThumb = `${thumbDir}/${barcode}-${seqStr}-${stage}.jpg`;
 		}
 
 		processed++;
 		if (samples.length < 5) {
-			samples.push({ phase: tag.phase, stage, barcode: parsed.barcode, seq: seqStr, oldKey, newKey });
+			samples.push({ phase: tag?.phase || null, stage, barcode, seq: seqStr, oldKey, newKey });
 		}
 
 		if (!execute) continue;
@@ -231,12 +266,12 @@ async function runRename(execute: boolean, projectFilter: string | undefined, li
 		scanned,
 		processed,
 		skippedAlreadyRenamed,
-		skippedNoCartridge,
-		skippedNoStage,
-		skippedNoBarcode,
+		skippedNoPath,
 		failed,
-		complete: scanned <= processed + skippedAlreadyRenamed + skippedNoCartridge + skippedNoStage + skippedNoBarcode,
+		complete: scanned <= processed + skippedAlreadyRenamed + skippedNoPath,
 		stageHistogram,
+		barcodeSourceHistogram,
+		stageSourceHistogram,
 		samples,
 		failures: failures.slice(0, 10)
 	};
