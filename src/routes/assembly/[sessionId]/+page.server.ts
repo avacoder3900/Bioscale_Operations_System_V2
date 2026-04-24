@@ -245,6 +245,62 @@ export const actions: Actions = {
 		const session = await AssemblySession.findById(params.sessionId);
 		if (!session) return fail(404, { error: 'Session not found' });
 		const s = session as any;
+
+		// SPU-MFG-04: server-side sequential lock check.
+		// Resolve the current WI step: prefer the passed assemblyStepRecordId (== workInstructionStepId),
+		// else fall back to the session's currentStepIndex.
+		const currentStepIndex: number = s.currentStepIndex ?? 0;
+		let currentWiStep: any = null;
+		let sortedFieldDefs: any[] = [];
+		if (s.workInstructionId) {
+			const wi = await WorkInstruction.findById(s.workInstructionId).lean() as any;
+			if (wi) {
+				const currentVersion = (wi.versions ?? []).find(
+					(v: any) => v.version === wi.currentVersion
+				) ?? (wi.versions ?? []).slice(-1)[0];
+				const wiSteps: any[] = currentVersion?.steps ?? [];
+				if (assemblyStepRecordId) {
+					currentWiStep = wiSteps.find((st: any) => st._id === assemblyStepRecordId) ?? null;
+				}
+				if (!currentWiStep) {
+					currentWiStep = wiSteps[currentStepIndex] ?? null;
+				}
+				if (currentWiStep) {
+					sortedFieldDefs = (currentWiStep.fieldDefinitions ?? [])
+						.slice()
+						.sort((a: any, b: any) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+				}
+			}
+		}
+
+		// Index already-captured field records by stepFieldDefinitionId.
+		const capturedByDefId = new Map<string, string>();
+		for (const sr of (s.stepRecords ?? [])) {
+			for (const fr of (sr.fieldRecords ?? [])) {
+				if (fr.stepFieldDefinitionId && fr.fieldValue !== undefined && fr.fieldValue !== null && fr.fieldValue !== '') {
+					capturedByDefId.set(fr.stepFieldDefinitionId, fr.fieldValue);
+				}
+			}
+		}
+
+		// Locate the target field within the sorted list.
+		const targetFieldIdx = sortedFieldDefs.findIndex((fd: any) => fd._id === stepFieldDefinitionId);
+		if (targetFieldIdx !== -1) {
+			const targetField = sortedFieldDefs[targetFieldIdx];
+			const targetSortOrder = targetField.sortOrder ?? 0;
+			// Verify every prior required field has a captured, non-empty value.
+			for (const fd of sortedFieldDefs) {
+				const fdSortOrder = fd.sortOrder ?? 0;
+				if (fdSortOrder >= targetSortOrder) continue;
+				if (fd.isRequired) {
+					const captured = capturedByDefId.get(fd._id);
+					if (!captured) {
+						return fail(400, { error: 'Prior required field not captured', code: 'SEQUENTIAL_LOCK' });
+					}
+				}
+			}
+		}
+
 		let stepRecord = (s.stepRecords ?? []).find(
 			(sr: any) => sr.workInstructionStepId === assemblyStepRecordId
 		);
@@ -264,7 +320,97 @@ export const actions: Actions = {
 			changedBy: locals.user?.username ?? locals.user?._id,
 			changedAt: new Date()
 		});
-		return { success: true, bomItemLinked: false };
+
+		// SPU-MFG-04: compute next focus coordinates AFTER successful capture.
+		// Refresh the captured index with the just-saved value.
+		capturedByDefId.set(stepFieldDefinitionId, rawValue);
+		let nextFieldIndex = -1;
+		let allRequiredOnStepCaptured = true;
+		if (sortedFieldDefs.length) {
+			for (let i = 0; i < sortedFieldDefs.length; i++) {
+				const fd = sortedFieldDefs[i];
+				if (fd.isRequired && !capturedByDefId.has(fd._id)) {
+					allRequiredOnStepCaptured = false;
+					if (nextFieldIndex === -1) nextFieldIndex = i;
+				}
+			}
+		}
+		const nextStepIndex = allRequiredOnStepCaptured ? currentStepIndex + 1 : currentStepIndex;
+
+		return { success: true, bomItemLinked: false, nextFieldIndex, nextStepIndex };
+	},
+
+	goToStep: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const stepIndexRaw = form.get('stepIndex')?.toString();
+		if (stepIndexRaw === undefined || stepIndexRaw === '')
+			return fail(400, { error: 'stepIndex required' });
+		const stepIndex = Number(stepIndexRaw);
+		if (!Number.isFinite(stepIndex) || !Number.isInteger(stepIndex) || stepIndex < 0)
+			return fail(400, { error: 'stepIndex must be a non-negative integer' });
+
+		const session = await AssemblySession.findById(params.sessionId);
+		if (!session) return fail(404, { error: 'Session not found' });
+		const s = session as any;
+		const fromStepIndex: number = s.currentStepIndex ?? 0;
+
+		// Load the WI steps so we can guard forward skips past incomplete steps.
+		let wiSteps: any[] = [];
+		if (s.workInstructionId) {
+			const wi = await WorkInstruction.findById(s.workInstructionId).lean() as any;
+			if (wi) {
+				const currentVersion = (wi.versions ?? []).find(
+					(v: any) => v.version === wi.currentVersion
+				) ?? (wi.versions ?? []).slice(-1)[0];
+				wiSteps = currentVersion?.steps ?? [];
+			}
+		}
+
+		// Forward-skip guard: only enforced when moving forward.
+		if (stepIndex > fromStepIndex) {
+			const isAdmin = hasPermission(locals.user, 'admin:full');
+			if (!isAdmin) {
+				// Index already-captured field records by stepFieldDefinitionId.
+				const capturedByDefId = new Map<string, string>();
+				for (const sr of (s.stepRecords ?? [])) {
+					for (const fr of (sr.fieldRecords ?? [])) {
+						if (fr.stepFieldDefinitionId && fr.fieldValue !== undefined && fr.fieldValue !== null && fr.fieldValue !== '') {
+							capturedByDefId.set(fr.stepFieldDefinitionId, fr.fieldValue);
+						}
+					}
+				}
+				// Check every step from fromStepIndex up to (but not including) stepIndex.
+				const upperBound = Math.min(stepIndex, wiSteps.length);
+				for (let i = fromStepIndex; i < upperBound; i++) {
+					const step = wiSteps[i];
+					if (!step) continue;
+					const fieldDefs: any[] = (step.fieldDefinitions ?? [])
+						.slice()
+						.sort((a: any, b: any) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+					for (const fd of fieldDefs) {
+						if (fd.isRequired && !capturedByDefId.has(fd._id)) {
+							return fail(400, { error: 'Cannot skip forward past incomplete step', code: 'FORWARD_SKIP_BLOCKED' });
+						}
+					}
+				}
+			}
+		}
+
+		s.currentStepIndex = stepIndex;
+		await session.save();
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'assembly_sessions',
+			recordId: params.sessionId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username ?? locals.user?._id,
+			changedAt: new Date()
+		});
+
+		return { success: true, currentStepIndex: stepIndex };
 	},
 
 	scanPart: async ({ request, locals, params }) => {
