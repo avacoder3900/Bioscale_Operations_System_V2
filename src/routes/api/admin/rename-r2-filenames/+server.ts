@@ -99,7 +99,7 @@ function isAlreadyRenamed(key: string): boolean {
 	return NEW_PATTERN_RE.test(key);
 }
 
-type Mode = 'preview' | 'execute' | 'cleanup' | 'discover-cartridges' | 'backfill-cartridges' | 'reconcile-mongo-to-r2';
+type Mode = 'preview' | 'execute' | 'cleanup' | 'discover-cartridges' | 'backfill-cartridges' | 'reconcile-mongo-to-r2' | 'dedupe-cvimages';
 
 /**
  * Project-slug → CartridgeRecord.status enum value for cartridgeTag.phase.
@@ -149,8 +149,86 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (mode === 'discover-cartridges') return json(await runDiscover(limit));
 	if (mode === 'backfill-cartridges') return json(await runBackfill(body.mode === 'backfill-cartridges' ? false : true, limit));
 	if (mode === 'reconcile-mongo-to-r2') return json(await runReconcile(Boolean((body as any).execute), limit));
+	if (mode === 'dedupe-cvimages') return json(await runDedupe(Boolean((body as any).execute), limit));
 	return json(await runRename(mode === 'execute', projectFilter, limit));
 };
+
+/**
+ * Find CvImage docs that share a filePath (i.e. multiple Mongo records point to
+ * the same R2 object, so the CV UI shows duplicates). Keep the oldest one per
+ * filePath, delete the rest, and strip the deleted imageIds from any
+ * CartridgeRecord.photos[] they appear in.
+ *
+ * Body: { mode: 'dedupe-cvimages', execute?: boolean, limit? }
+ *   - execute=false (default) → scan only.
+ *   - execute=true → delete duplicates.
+ */
+async function runDedupe(execute: boolean, limit: number) {
+	// Group by filePath, keeping count + per-doc info.
+	const groups = await CvImage.aggregate([
+		{ $match: { filePath: { $exists: true, $ne: null } } },
+		{ $group: {
+			_id: '$filePath',
+			count: { $sum: 1 },
+			docs: { $push: { id: '$_id', createdAt: '$createdAt', capturedAt: '$capturedAt' } }
+		}},
+		{ $match: { count: { $gt: 1 } } },
+		{ $limit: limit }
+	]);
+
+	let groupsFound = groups.length;
+	let duplicatesDeleted = 0;
+	let strippedCartridgeRefs = 0;
+	const samples: any[] = [];
+	const failures: { filePath: string; error: string }[] = [];
+
+	for (const g of groups) {
+		// Keep the oldest (earliest createdAt; fall back to _id lex order for ties).
+		const sorted = [...g.docs].sort((a: any, b: any) => {
+			const at = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+			const bt = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+			if (at !== bt) return at - bt;
+			return String(a.id).localeCompare(String(b.id));
+		});
+		const keep = sorted[0];
+		const remove = sorted.slice(1);
+
+		if (samples.length < 10) {
+			samples.push({
+				filePath: g._id,
+				total: g.count,
+				keep: keep.id,
+				delete: remove.map((r: any) => r.id)
+			});
+		}
+
+		if (!execute) continue;
+
+		for (const r of remove) {
+			try {
+				await CvImage.deleteOne({ _id: r.id });
+				duplicatesDeleted++;
+				const res = await CartridgeRecord.updateMany(
+					{ 'photos.imageId': r.id },
+					{ $pull: { photos: { imageId: r.id } } }
+				);
+				strippedCartridgeRefs += res.modifiedCount || 0;
+			} catch (err: any) {
+				failures.push({ filePath: g._id, error: err.message || String(err) });
+			}
+		}
+	}
+
+	return {
+		mode: 'dedupe-cvimages',
+		execute,
+		groupsFound,
+		duplicatesDeleted,
+		strippedCartridgeRefs,
+		samples,
+		failures: failures.slice(0, 10)
+	};
+}
 
 /**
  * Reconcile CvImage ↔ R2: delete CvImage documents whose filePath no longer
