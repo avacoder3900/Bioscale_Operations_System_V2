@@ -7,10 +7,11 @@
  * future refactor. If you fix a bug in one, fix it in the other too.
  */
 import { redirect, fail, error } from '@sveltejs/kit';
+import mongoose from 'mongoose';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable,
 	ManufacturingSettings, generateId, Equipment, EquipmentLocation,
-	AuditLog, ReceivingLot, InventoryTransaction
+	AuditLog, ReceivingLot
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { resolveFridgeId } from '$lib/server/services/equipment-resolve';
@@ -643,12 +644,22 @@ export const actions: Actions = {
 				// writes had partDefinitionId=undefined and no inventoryCount was
 				// decremented. Also delete any scrap tx from the aborted QC's
 				// rejections so re-doing QC produces a clean tx history.
-				await InventoryTransaction.deleteMany({
-					manufacturingRunId: runId,
-					manufacturingStep: 'wax_filling',
-					transactionType: { $in: ['consumption', 'scrap'] },
-					cartridgeRecordId: { $in: cartIds }
-				});
+				await mongoose.connection.db!.collection('inventory_transactions').updateMany(
+					{
+						manufacturingRunId: runId,
+						manufacturingStep: 'wax_filling',
+						transactionType: { $in: ['consumption', 'scrap'] },
+						cartridgeRecordId: { $in: cartIds },
+						retractedAt: { $exists: false }
+					},
+					{
+						$set: {
+							retractedBy: locals.user?.username ?? 'unknown',
+							retractedAt: now,
+							retractionReason: `Go Back: ${current} → ${targetStage}`
+						}
+					}
+				);
 			}
 		} else if (current === 'QC' || current === 'qc') {
 			// Undo confirmCooling: revert cooling-confirmed marker and the
