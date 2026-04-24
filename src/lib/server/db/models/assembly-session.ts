@@ -9,6 +9,7 @@ const assemblySessionSchema = new Schema({
 	status: { type: String, enum: ['in_progress', 'paused', 'completed'] },
 	currentStepIndex: Number,
 	startedAt: Date, pausedAt: Date, completedAt: Date,
+	completedBy: { _id: String, username: String },
 	workstationId: String, notes: String,
 	workInstructionId: String, workInstructionVersion: Number, workInstructionTitle: String,
 	stepRecords: [{
