@@ -67,20 +67,29 @@ export const load: PageServerLoad = async ({ locals }) => {
 		});
 	}
 
-	// Get all stored cartridges (wax storage + reagent storage)
+	// Fetch cartridges physically present in a fridge.
+	//  Three buckets serve two different operational purposes:
+	//    (1) wax_accepted  — status='wax_stored' + waxQc.status='Accepted'
+	//        (live inventory available for reagent fill)
+	//    (2) wax_scrapped  — status='scrapped' + waxStorage.location set + not
+	//        checked out; physically still occupying the fridge, QA quarantine
+	//    (3) reagent       — status∈{stored, reagent_filled} with storage.fridgeName set
 	const storedCartridges = await CartridgeRecord.find({
 		_id: { $nin: checkedOut },
 		$or: [
 			{ 'waxStorage.location': { $exists: true, $ne: null }, status: 'wax_stored' },
+			{ 'waxStorage.location': { $exists: true, $ne: null }, status: 'scrapped' },
 			{ 'storage.fridgeName': { $exists: true, $ne: null }, status: { $in: ['stored', 'reagent_filled'] } }
 		]
 	}).select({
 		_id: 1,
 		status: 1,
+		'waxQc.status': 1,
 		'waxStorage.location': 1,
 		'waxStorage.recordedAt': 1,
 		'waxStorage.operator': 1,
 		'waxFilling.runId': 1,
+		voidReason: 1,
 		'storage.fridgeName': 1,
 		'storage.recordedAt': 1,
 		'storage.operator': 1,
@@ -106,10 +115,17 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 		if (waxLoc && keyToFridge.has(waxLoc)) {
 			const idx = keyToFridge.get(waxLoc)!;
+			// wax_stored -> accepted bucket; scrapped -> quarantine bucket.
+			// A wax_stored cartridge without waxQc.status='Accepted' is an
+			// anomaly (shouldn't happen on the storage path) but we bucket it
+			// as "accepted" for display since the status is wax_stored.
+			const type = c.status === 'scrapped' ? 'wax_scrapped' : 'wax_accepted';
 			fridgeCartridges[idx].push({
 				id: String(c._id),
-				type: 'wax_filled',
+				type,
 				phase: c.status ?? 'wax_stored',
+				qc: c.waxQc?.status ?? null,
+				voidReason: c.voidReason ?? null,
 				location: waxLoc,
 				storedAt: c.waxStorage?.recordedAt ? new Date(c.waxStorage.recordedAt).toISOString() : null,
 				operator: c.waxStorage?.operator?.username ?? null,
@@ -124,6 +140,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 				id: String(c._id),
 				type: 'reagent_filled',
 				phase: c.status ?? 'stored',
+				qc: null,
+				voidReason: null,
 				location: reagentLoc,
 				storedAt: c.storage?.recordedAt ? new Date(c.storage.recordedAt).toISOString() : null,
 				operator: c.storage?.operator?.username ?? null,
@@ -135,27 +153,33 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const fridgeInventory = fridges.map((fridge, i) => {
 		const cartridges = fridgeCartridges[i];
+		const waxAcceptedCount = cartridges.filter((c: any) => c.type === 'wax_accepted').length;
+		const waxScrappedCount = cartridges.filter((c: any) => c.type === 'wax_scrapped').length;
+		const reagentCount = cartridges.filter((c: any) => c.type === 'reagent_filled').length;
 		return {
 			location: fridge.barcode || fridge.displayName,
 			fridgeId: fridge.id,
 			displayName: fridge.displayName,
 			isActive: fridge.isActive,
 			cartridges,
-			waxCount: cartridges.filter((c: any) => c.type === 'wax_filled').length,
-			reagentCount: cartridges.filter((c: any) => c.type === 'reagent_filled').length,
+			waxAcceptedCount,
+			waxScrappedCount,
+			reagentCount,
 			totalCount: cartridges.length
 		};
 	}).sort((a, b) => a.displayName.localeCompare(b.displayName));
 
-	const totalWax = fridgeInventory.reduce((sum, f) => sum + f.waxCount, 0);
+	const totalWaxAccepted = fridgeInventory.reduce((sum, f) => sum + f.waxAcceptedCount, 0);
+	const totalWaxScrapped = fridgeInventory.reduce((sum, f) => sum + f.waxScrappedCount, 0);
 	const totalReagent = fridgeInventory.reduce((sum, f) => sum + f.reagentCount, 0);
 
 	return {
 		fridgeInventory,
 		summary: {
 			totalFridges: fridges.length,
-			totalCartridges: totalWax + totalReagent,
-			totalWax,
+			totalCartridges: totalWaxAccepted + totalWaxScrapped + totalReagent,
+			totalWaxAccepted,
+			totalWaxScrapped,
 			totalReagent
 		}
 	};
