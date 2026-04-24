@@ -706,3 +706,28 @@ Headlines:
 - Hard rule noted: NEVER push/merge to `main`. Stop at `master`.
 
 See `docs/SESSION-LOG-2026-04-23.md` for the full 16-section record including file paths, line numbers, DB end state, diagnostic scripts produced, and open items.
+
+
+---
+
+## Session 2026-04-23 — Reagent Filling: Research-Run Mode + Hidden Assay Filter + Tube Consumption Fix
+
+Parallel terminal to the equipment-audit session above. Full audit briefing at `docs/audit-handoff-2026-04-23.md`.
+
+Headlines:
+- **Research run mode** added to reagent filling. Operator picks Production (assay required) or Research (no assay) at Setup. Research bypasses the assay-required gate and lets cartridges flow through filling → inspection → seal → cure → storage → link → test without any assay info. Schema: `ReagentBatchRecord.isResearch` + `CartridgeRecord.reagentFilling.isResearch` (no migration needed; undefined reads as false). Committed as `9bd7c12` on `dev`.
+- **Hidden assay filter** — applied `hidden: { $ne: true }` to 8 operator-facing AssayDefinition dropdowns (home dashboard, reagent-filling, opentrons history, cartridge detail, cartridge-admin {statistics, release, filled, failures}). Left admin/settings pages alone (they create assays with `hidden: true` and must see them). Memory note: `project_reagent_tube_consumption.md`.
+- **Inventory bug fix** — `completeRunFilling` was consuming 1× PT-CT-107 per cartridge (overstated). Now: flat 4 per run regardless of cartridge count. Applies to both production and research. TODO inline: scale by assay × batch when the real formula is decided.
+- **Mongo read-only finding** (`scripts/diag-finished-cartridge-fields.ts`): 583 cartridges are already in `status: 'linked'` with `reagentFilling.assayType = null` — proves the downstream link/test flow tolerates null assayType today, so research cartridges will flow identically.
+- **Branch chaos** — ~3 parallel terminals were pushing during this session. Eventually merged `ralph/equipment-connectivity-prd` → `dev` via commit `61e8c04` after ~10 attempts (each blocked by other terminals switching branches mid-operation and conflicting on `.claude/settings.local.json`). Final dev HEAD (end of session): `77bc5d7` with ralph fully merged in.
+- **⚠️ Master was pushed to by another terminal** (`787bb5b` + `26c8c56`) — violates the "never push to main/master" hard rule. Not this terminal. User needs to confirm if intentional.
+
+Files changed for the feature (all on dev):
+- `src/lib/server/db/models/reagent-batch-record.ts` — +`isResearch`
+- `src/lib/server/db/models/cartridge-record.ts` — +`reagentFilling.isResearch`
+- `src/lib/components/manufacturing/reagent-filling/SetupConfirmation.svelte` — Production/Research toggle, gate logic
+- `src/routes/manufacturing/reagent-filling/+page.svelte` — `isResearchRun` state threaded through createRun/confirmSetup
+- `src/routes/manufacturing/reagent-filling/+page.server.ts` — hidden filter, 3 actions wired, inventory fix
+- `src/routes/+page.server.ts`, `src/routes/cartridges/[cartridgeId]/+page.server.ts`, `src/routes/manufacturing/opentrons/history/+page.server.ts`, `src/routes/cartridge-admin/{statistics,release,filled,failures}/+page.server.ts` — hidden filter
+
+Handoff for tomorrow's audit: `docs/audit-handoff-2026-04-23.md` (commit `614b2fb`).
