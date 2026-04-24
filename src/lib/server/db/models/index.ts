@@ -28,6 +28,7 @@ export { AssemblySession } from './assembly-session.js';
 export { Batch } from './batch.js';
 export { ProductionRun } from './production-run.js';
 export { GeneratedBarcode } from './generated-barcode.js';
+export { UdiCounter } from './udi-counter.js';
 export { ValidationSession } from './validation-session.js';
 export { WaxFillingRun } from './wax-filling-run.js';
 export { WaxBatch } from './wax-batch.js';
