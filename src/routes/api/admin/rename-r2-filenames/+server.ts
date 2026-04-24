@@ -99,7 +99,7 @@ function isAlreadyRenamed(key: string): boolean {
 	return NEW_PATTERN_RE.test(key);
 }
 
-type Mode = 'preview' | 'execute' | 'cleanup';
+type Mode = 'preview' | 'execute' | 'cleanup' | 'discover-cartridges';
 
 interface LogEntry {
 	_id: string;
@@ -128,8 +128,94 @@ export const POST: RequestHandler = async ({ request }) => {
 	await connectDB();
 
 	if (mode === 'cleanup') return json(await runCleanup(limit));
+	if (mode === 'discover-cartridges') return json(await runDiscover(limit));
 	return json(await runRename(mode === 'execute', projectFilter, limit));
 };
+
+/**
+ * For every CvImage whose filename contains a capture UUID, try to find any
+ * CartridgeRecord field that equals that UUID. Report the distinct fields
+ * that match so we can decide whether a safe automated backfill is possible.
+ */
+async function runDiscover(limit: number) {
+	const db = mongoose.connection.db!;
+	const cartridges = db.collection('cartridge_records');
+
+	// Photos are already renamed; read UUIDs from the rename log's oldKey field.
+	const logEntries = await db.collection(LOG_COLLECTION).find({}).limit(limit).toArray();
+
+	const uuids = new Set<string>();
+	const uuidToImageId: Record<string, string[]> = {};
+	for (const entry of logEntries) {
+		const oldKey = entry.oldKey as string;
+		const tail = oldKey.slice(oldKey.lastIndexOf('/') + 1);
+		const m = tail.match(/cartridge_capture_([A-Za-z0-9-]+?)_\d+\./);
+		if (m) {
+			const uuid = m[1];
+			uuids.add(uuid);
+			(uuidToImageId[uuid] ||= []).push(String(entry.imageId));
+		}
+	}
+
+	// For each UUID, look it up across the entire cartridge_records collection
+	// using a full-document $expr regex — slow but thorough. Limit distinct UUIDs
+	// to avoid blowing past the function timeout.
+	const sample = [...uuids].slice(0, 20);
+	const results: { uuid: string; matches: { _id: string; fieldPath: string }[] }[] = [];
+
+	for (const uuid of sample) {
+		// $where is expensive; use a $or on likely text fields instead.
+		// Candidate fields where a cartridge-level barcode could live.
+		const q: any = { $or: [
+			{ _id: uuid },
+			{ 'backing.lotQrCode': uuid },
+			{ 'backing.lotId': uuid },
+			{ 'waxFilling.runId': uuid },
+			{ 'reagentFilling.runId': uuid },
+			{ 'storage.containerBarcode': uuid },
+			{ 'shipping.packageBarcode': uuid },
+			{ 'testExecution.spu.udi': uuid },
+			{ 'testExecution.spu._id': uuid }
+		]};
+		const matches = await cartridges.find(q).limit(5).project({ _id: 1 }).toArray();
+		if (matches.length) {
+			// Find which field matched by re-querying one-by-one (just for the report).
+			for (const m of matches) {
+				const doc = await cartridges.findOne({ _id: m._id as any });
+				if (!doc) continue;
+				const fieldPath = findFieldByValue(doc, uuid);
+				results.push({ uuid, matches: [{ _id: String(m._id), fieldPath: fieldPath || '(unknown)' }] });
+			}
+		}
+	}
+
+	return {
+		mode: 'discover-cartridges',
+		uuidsSampled: sample.length,
+		totalCapturedUuids: uuids.size,
+		matchesFound: results.length,
+		results
+	};
+}
+
+function findFieldByValue(obj: any, target: string, prefix = ''): string | null {
+	if (obj === null || obj === undefined) return null;
+	if (typeof obj === 'string') return obj === target ? prefix : null;
+	if (Array.isArray(obj)) {
+		for (let i = 0; i < obj.length; i++) {
+			const r = findFieldByValue(obj[i], target, `${prefix}[${i}]`);
+			if (r) return r;
+		}
+		return null;
+	}
+	if (typeof obj === 'object') {
+		for (const [k, v] of Object.entries(obj)) {
+			const r = findFieldByValue(v, target, prefix ? `${prefix}.${k}` : k);
+			if (r) return r;
+		}
+	}
+	return null;
+}
 
 async function runRename(execute: boolean, projectFilter: string | undefined, limit: number) {
 	const db = mongoose.connection.db!;
