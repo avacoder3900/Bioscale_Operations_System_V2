@@ -1,3 +1,4 @@
+<!-- Unfrozen per PRD-SPU-MFG-UNIFIED §9 Q1 — sequential lock + admin edit requires UI-layer changes scoped to this file. -->
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { TronCard, TronButton } from '$lib/components/ui';
@@ -15,6 +16,10 @@
 		options: unknown;
 		barcodeFieldMapping: string | null;
 		sortOrder: number;
+		currentValue?: string | null;
+		captureId?: string | null;
+		isLocked?: boolean;
+		editableByAdmin?: boolean;
 	}
 
 	let { data, form } = $props();
@@ -72,6 +77,29 @@
 			elapsedSeconds = Math.floor((Date.now() - startTime) / 1000);
 		}, 1000);
 		return () => clearInterval(interval);
+	});
+
+	// SPU-MFG-03: field input refs keyed by field.id, and admin edit dialog state.
+	let fieldInputRefs = $state<Record<string, HTMLInputElement | HTMLSelectElement | null>>({});
+	let editingFieldId = $state<string | null>(null);
+	let editNewValue = $state<Record<string, string>>({});
+	let editReason = $state<Record<string, string>>({});
+
+	// SPU-MFG-03: auto-focus the first unlocked+unfilled field on mount and after updates.
+	$effect(() => {
+		const focusStepIdx = (data.session as any)?.focusStepIndex ?? 0;
+		const focusFieldIdx = (data.session as any)?.focusFieldIndex ?? 0;
+		const steps = data.workInstructionSteps ?? [];
+		const step = steps[focusStepIdx];
+		if (!step) return;
+		const fields = step.fieldDefinitions ?? [];
+		const target = fields[focusFieldIdx];
+		if (!target) return;
+		const el = fieldInputRefs[target.id];
+		if (el && typeof el.focus === 'function') {
+			// Defer to next microtask to ensure DOM mount is complete.
+			queueMicrotask(() => el.focus());
+		}
 	});
 
 	function formatTime(seconds: number): string {
@@ -404,9 +432,77 @@
 
 							{#if isCaptured && capturedValue}
 								<!-- Show captured value -->
-								<div class="rounded bg-[var(--color-tron-bg-secondary)] p-2">
-									<p class="font-mono text-sm text-[var(--color-tron-green)]">{capturedValue}</p>
+								<div class="flex items-center gap-2">
+									<div class="flex-1 rounded bg-[var(--color-tron-bg-secondary)] p-2">
+										<p class="font-mono text-sm text-[var(--color-tron-green)]">{capturedValue}</p>
+									</div>
+									{#if field.editableByAdmin}
+										<button
+											type="button"
+											class="rounded border border-[var(--color-tron-cyan)] px-2 py-1 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10"
+											onclick={() => {
+												editingFieldId = editingFieldId === field.id ? null : field.id;
+												if (editingFieldId === field.id) {
+													editNewValue[field.id] = capturedValue ?? '';
+													editReason[field.id] = '';
+												}
+											}}
+											aria-label="Edit captured field (admin)"
+										>
+											Edit
+										</button>
+									{/if}
 								</div>
+								{#if field.editableByAdmin && editingFieldId === field.id}
+									<form
+										method="POST"
+										action="?/editField"
+										use:enhance
+										class="mt-2 space-y-2 rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-bg-tertiary)] p-3"
+									>
+										<input type="hidden" name="fieldRecordId" value={field.captureId ?? ''} />
+										<input type="hidden" name="stepFieldDefinitionId" value={field.id} />
+										<div>
+											<label class="tron-text-muted mb-1 block text-xs" for="edit-new-{field.id}"
+												>New Value</label
+											>
+											<input
+												id="edit-new-{field.id}"
+												type="text"
+												name="newValue"
+												class="tron-input w-full"
+												bind:value={editNewValue[field.id]}
+												required
+											/>
+										</div>
+										<div>
+											<label class="tron-text-muted mb-1 block text-xs" for="edit-reason-{field.id}"
+												>Reason</label
+											>
+											<textarea
+												id="edit-reason-{field.id}"
+												name="reason"
+												class="tron-input w-full"
+												rows="2"
+												bind:value={editReason[field.id]}
+												required
+											></textarea>
+										</div>
+										<div class="flex justify-end gap-2">
+											<button
+												type="button"
+												class="rounded border border-[var(--color-tron-border)] px-3 py-1 text-xs"
+												onclick={() => (editingFieldId = null)}
+											>
+												Cancel
+											</button>
+											<button type="submit" class="tron-btn-primary text-xs">Save</button>
+										</div>
+										{#if form?.error}
+											<p class="text-xs text-[var(--color-tron-red)]">{form.error}</p>
+										{/if}
+									</form>
+								{/if}
 							{:else}
 								<!-- Input for capturing -->
 								<form
@@ -442,14 +538,18 @@
 												type="text"
 												name="rawValue"
 												placeholder="Scan barcode or enter manually..."
-												class="tron-input flex-1"
+												class="tron-input flex-1 {field.isLocked
+													? 'cursor-not-allowed opacity-50'
+													: ''}"
 												bind:value={customFieldValues[field.id]}
+												bind:this={fieldInputRefs[field.id]}
+												disabled={field.isLocked}
 												required={field.isRequired}
 											/>
 											<button
 												type="submit"
 												class="tron-btn-primary"
-												disabled={customFieldSubmitting === field.id}
+												disabled={customFieldSubmitting === field.id || field.isLocked}
 											>
 												{customFieldSubmitting === field.id ? 'Saving...' : 'Capture'}
 											</button>
@@ -474,14 +574,18 @@
 												type="text"
 												name="rawValue"
 												placeholder="Enter value..."
-												class="tron-input flex-1"
+												class="tron-input flex-1 {field.isLocked
+													? 'cursor-not-allowed opacity-50'
+													: ''}"
 												bind:value={customFieldValues[field.id]}
+												bind:this={fieldInputRefs[field.id]}
+												disabled={field.isLocked}
 												required={field.isRequired}
 											/>
 											<button
 												type="submit"
 												class="tron-btn-primary"
-												disabled={customFieldSubmitting === field.id}
+												disabled={customFieldSubmitting === field.id || field.isLocked}
 											>
 												{customFieldSubmitting === field.id ? 'Saving...' : 'Save'}
 											</button>
@@ -492,14 +596,18 @@
 											<input
 												type="date"
 												name="rawValue"
-												class="tron-input flex-1"
+												class="tron-input flex-1 {field.isLocked
+													? 'cursor-not-allowed opacity-50'
+													: ''}"
 												bind:value={customFieldValues[field.id]}
+												bind:this={fieldInputRefs[field.id]}
+												disabled={field.isLocked}
 												required={field.isRequired}
 											/>
 											<button
 												type="submit"
 												class="tron-btn-primary"
-												disabled={customFieldSubmitting === field.id}
+												disabled={customFieldSubmitting === field.id || field.isLocked}
 											>
 												{customFieldSubmitting === field.id ? 'Saving...' : 'Save'}
 											</button>
@@ -510,8 +618,12 @@
 										<div class="flex gap-2">
 											<select
 												name="rawValue"
-												class="tron-select flex-1"
+												class="tron-select flex-1 {field.isLocked
+													? 'cursor-not-allowed opacity-50'
+													: ''}"
 												bind:value={customFieldValues[field.id]}
+												bind:this={fieldInputRefs[field.id]}
+												disabled={field.isLocked}
 												required={field.isRequired}
 											>
 												<option value="">Select...</option>
@@ -522,7 +634,7 @@
 											<button
 												type="submit"
 												class="tron-btn-primary"
-												disabled={customFieldSubmitting === field.id}
+												disabled={customFieldSubmitting === field.id || field.isLocked}
 											>
 												{customFieldSubmitting === field.id ? 'Saving...' : 'Save'}
 											</button>

@@ -39,17 +39,20 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 					partNumber: pr.partNumber ?? '',
 					quantity: pr.quantity ?? 1
 				})),
-				fieldDefinitions: (step.fieldDefinitions ?? []).map((fd: any) => ({
-					id: fd._id,
-					fieldName: fd.fieldName ?? '',
-					fieldLabel: fd.fieldLabel ?? fd.fieldName ?? '',
-					fieldType: fd.fieldType ?? 'manual_entry',
-					isRequired: fd.isRequired ?? false,
-					validationPattern: fd.validationPattern ?? null,
-					options: fd.options ?? null,
-					barcodeFieldMapping: fd.barcodeFieldMapping ?? null,
-					sortOrder: fd.sortOrder ?? 0
-				}))
+				fieldDefinitions: (step.fieldDefinitions ?? [])
+					.slice()
+					.sort((a: any, b: any) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+					.map((fd: any) => ({
+						id: fd._id,
+						fieldName: fd.fieldName ?? '',
+						fieldLabel: fd.fieldLabel ?? fd.fieldName ?? '',
+						fieldType: fd.fieldType ?? 'manual_entry',
+						isRequired: fd.isRequired ?? false,
+						validationPattern: fd.validationPattern ?? null,
+						options: fd.options ?? null,
+						barcodeFieldMapping: fd.barcodeFieldMapping ?? null,
+						sortOrder: fd.sortOrder ?? 0
+					}))
 			}));
 		}
 	}
@@ -138,6 +141,67 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 
 	const canRetract = hasPermission(locals.user, 'inventory:retract') || hasPermission(locals.user, 'admin:full');
 
+	// SPU-MFG-03: compute per-field lock/focus/admin flags at read time (not persisted).
+	const isAdmin = hasPermission(locals.user, 'admin:full') || hasPermission(locals.user, 'spu:write-admin');
+	const spuIsFinalized = !!sp?.finalizedAt;
+
+	// Index capturedFieldRecords by stepFieldDefinitionId for O(1) lookup.
+	const capturedByFieldDefId = new Map<string, { id: string; fieldValue: string }>();
+	for (const rec of capturedFieldRecords) {
+		if (rec.stepFieldDefinitionId) {
+			capturedByFieldDefId.set(rec.stepFieldDefinitionId, {
+				id: rec.id,
+				fieldValue: rec.fieldValue
+			});
+		}
+	}
+
+	// Enrich fieldDefinitions with currentValue, captureId, isLocked, editableByAdmin.
+	workInstructionSteps = workInstructionSteps.map((step: any) => {
+		let priorRequiredUnfilled = false;
+		const enrichedFields = step.fieldDefinitions.map((fd: any) => {
+			const captured = capturedByFieldDefId.get(fd.id) ?? null;
+			const currentValue: string | null = captured ? (captured.fieldValue ?? null) : null;
+			const captureId: string | null = captured ? captured.id : null;
+			const isLocked = priorRequiredUnfilled;
+			const editableByAdmin = currentValue !== null && !spuIsFinalized && isAdmin;
+			// Update the "priorRequiredUnfilled" state AFTER this field so it affects subsequent fields.
+			if (fd.isRequired && currentValue === null) {
+				priorRequiredUnfilled = true;
+			}
+			return {
+				...fd,
+				currentValue,
+				captureId,
+				isLocked,
+				editableByAdmin
+			};
+		});
+		return { ...step, fieldDefinitions: enrichedFields };
+	});
+
+	// Compute focus coordinates and final-step completion.
+	const lastIndex = Math.max(0, workInstructionSteps.length - 1);
+	const isStepAllRequiredCaptured = (step: any): boolean => {
+		const req = (step.fieldDefinitions ?? []).filter((f: any) => f.isRequired);
+		return req.every((f: any) => f.currentValue !== null);
+	};
+	let focusStepIndex = workInstructionSteps.findIndex((st: any) => !isStepAllRequiredCaptured(st));
+	if (focusStepIndex === -1) focusStepIndex = lastIndex;
+
+	const focusStep = workInstructionSteps[focusStepIndex];
+	let focusFieldIndex = 0;
+	if (focusStep) {
+		const idx = (focusStep.fieldDefinitions ?? []).findIndex(
+			(f: any) => f.currentValue === null && f.isLocked === false
+		);
+		focusFieldIndex = idx === -1 ? 0 : idx;
+	}
+
+	const isFinalStepComplete = workInstructionSteps.length > 0
+		? isStepAllRequiredCaptured(workInstructionSteps[lastIndex])
+		: false;
+
 	return {
 		session: {
 			id: s._id,
@@ -146,7 +210,11 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			currentStepIndex: s.currentStepIndex ?? 0,
 			startedAt: s.startedAt ?? s.createdAt,
 			completedAt: s.completedAt ?? null,
-			workInstructionId: s.workInstructionId ?? null
+			workInstructionId: s.workInstructionId ?? null,
+			focusStepIndex,
+			focusFieldIndex,
+			isFinalStepComplete,
+			isAdmin
 		},
 		spu: {
 			udi: sp?.udi ?? '',
