@@ -731,3 +731,68 @@ Files changed for the feature (all on dev):
 - `src/routes/+page.server.ts`, `src/routes/cartridges/[cartridgeId]/+page.server.ts`, `src/routes/manufacturing/opentrons/history/+page.server.ts`, `src/routes/cartridge-admin/{statistics,release,filled,failures}/+page.server.ts` — hidden filter
 
 Handoff for tomorrow's audit: `docs/audit-handoff-2026-04-23.md` (commit `614b2fb`).
+
+
+================================================================================
+# 2026-04-23 → 04-24 — Analytics Demo Page + Training Mode + Misc Fixes
+================================================================================
+
+Full handoff doc: `docs/SESSION-HANDOFF-2026-04-24-ANALYTICS-DEMO.md`.
+
+## Headlines
+
+- Built `/manufacturing/analysis/demo` — fabricated-data twin of the real
+  analytics page. Uses deterministic seeded RNG (seed=20260423) in
+  `src/lib/server/analytics/demo-seed.ts`. Cached at module scope, zero
+  Mongo writes. 1,115 runs across 30 days, ~4,100 cartridges end-to-end.
+- All form actions on the demo are no-ops that return a "demo mode — not
+  persisted" notice.
+- Rebalanced demo data flow so cartridge counts are physically coherent
+  stage-to-stage (wax was over-consuming WI-01 by 2,292 carts; top-seal +
+  QA-QC were tiny at 42+28). Final mix: 63/40/92/105/230/265/180/140.
+  Per-stage flow verified by `scripts/audit-demo-consistency.ts`.
+- Password gate on demo — cookie-based, 24-hour session, password
+  `processadmin`. httpOnly, sameSite=strict, secure. Lock/unlock actions
+  in `+page.server.ts`.
+- Training mode overlay — ON/OFF toggle, green training panels on every
+  tab, blue glossary drawer with 23 term definitions, Start Here intro
+  banner explaining common vs special cause as the key concept. Written
+  for a sophomore engineering student new to process engineering.
+  Covers Cp/Cpk/DPMO/FPY/RTY/Nelson rules/ANOVA/FMEA/DOE/etc.
+- Demo operators renamed: 12 full names — Nick Fox, Rick Knox, Mick Cox,
+  Vic Brooks, Nico Sanchez, Leandro Valdez, Alejandro Hernandez,
+  Alessandro Gonzalez, Sandro Rodriguez, Evandro Fernandez, Dario Martinez,
+  Armando Gutierrez. Real page untouched.
+- Configurable pre-QC cooldown — was hardcoded 10 min in two completeQC
+  actions, now `ManufacturingSettings.waxFilling.minCoolingBeforeQcMin`
+  with default 2 (seeded via `scripts/set-cooling-before-qc-2min.ts`).
+  Editable on wax-filling settings page. AuditLog written on seed.
+- WI-01 naming audit — read-only. Identified 28 code refs in 17 files,
+  65 doc refs, 26 script refs. Mongo fingerprint: 13 LotRecord qrCodeRefs
+  prefixed `WI01-`, 35 inventory_transactions with WI-01 notes, 16
+  backing-type LotRecords. DB layer already uses `'backing'` — obsolete
+  naming lives in URL path + enum key + QR prefix + comments. User said
+  wait for Friday to work through it; do not touch yet.
+- Deploy fix — Svelte compile error on the demo page. `min{(USL − μ)/3σ,
+  (μ − LSL)/3σ}` in the Cpk glossary entry — Svelte parses `{` as a
+  template expression. Rewrote as prose. Unblocks Vercel deploy. Commit
+  `1573df7`.
+
+## CORE RULE (lives in memory)
+
+`~/.claude/projects/.../memory/feedback_no_master_merge.md` — **never push
+to main**. Even when user says "all permissions allowed" or "approve
+everything," `main` is excluded. Promoting master → main is user-only.
+
+## Branch state end of session
+
+- `dev`    = `1573df7` (analytics demo + training + cooldown config + brace fix)
+- `master` = `b622586` (behind dev — merge dev → master as next step)
+- `main`   = `87ceba7` (OFF-LIMITS; user promotes)
+
+## Carry-forward compliance flag
+
+Lot `V1BSHFzMXsNAxYiP59o6b` / bucket `2941bb67`: WI-01 recorded 54
+cartridges; 66 actually pulled. 12 extras have unverified provenance.
+Documented via corrections[] + AuditLog RECONCILE. **Must not ship to
+customer without human QA review.** Carry this until closed.
