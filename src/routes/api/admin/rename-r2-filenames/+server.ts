@@ -99,7 +99,7 @@ function isAlreadyRenamed(key: string): boolean {
 	return NEW_PATTERN_RE.test(key);
 }
 
-type Mode = 'preview' | 'execute' | 'cleanup' | 'discover-cartridges' | 'backfill-cartridges';
+type Mode = 'preview' | 'execute' | 'cleanup' | 'discover-cartridges' | 'backfill-cartridges' | 'reconcile-mongo-to-r2';
 
 /**
  * Project-slug → CartridgeRecord.status enum value for cartridgeTag.phase.
@@ -148,8 +148,94 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (mode === 'cleanup') return json(await runCleanup(limit));
 	if (mode === 'discover-cartridges') return json(await runDiscover(limit));
 	if (mode === 'backfill-cartridges') return json(await runBackfill(body.mode === 'backfill-cartridges' ? false : true, limit));
+	if (mode === 'reconcile-mongo-to-r2') return json(await runReconcile(Boolean((body as any).execute), limit));
 	return json(await runRename(mode === 'execute', projectFilter, limit));
 };
+
+/**
+ * Reconcile CvImage ↔ R2: delete CvImage documents whose filePath no longer
+ * corresponds to an object in R2. Checks existence via a HEAD to the Worker's
+ * /file/ endpoint (public GET). Also strips orphaned entries from
+ * CartridgeRecord.photos[].
+ *
+ * Body: { mode: 'reconcile-mongo-to-r2', execute?: boolean, limit? }
+ *   - execute=false (default) → scan only, report what would be deleted.
+ *   - execute=true → actually delete orphan CvImages + strip cartridge refs.
+ */
+async function runReconcile(execute: boolean, limit: number) {
+	const workerUrl = env.R2_WORKER_URL;
+	if (!workerUrl) {
+		return { error: 'R2_WORKER_URL not configured' };
+	}
+
+	const images = await CvImage.find({ filePath: { $exists: true, $ne: null } })
+		.select('_id filePath')
+		.limit(limit)
+		.lean();
+
+	let scanned = 0;
+	let present = 0;
+	let orphaned = 0;
+	let deletedImages = 0;
+	let strippedCartridgeRefs = 0;
+	let failed = 0;
+	const orphanSamples: { imageId: string; filePath: string }[] = [];
+	const failures: { imageId: string; error: string }[] = [];
+
+	for (const img of images) {
+		scanned++;
+		const key = img.filePath as string;
+		const checkUrl = `${workerUrl}/file/${encodeURIComponent(key)}`;
+
+		let exists = false;
+		try {
+			const res = await fetch(checkUrl, { method: 'HEAD' });
+			exists = res.ok;
+		} catch (err: any) {
+			failed++;
+			failures.push({ imageId: String(img._id), error: `HEAD failed: ${err.message || err}` });
+			continue;
+		}
+
+		if (exists) { present++; continue; }
+
+		orphaned++;
+		if (orphanSamples.length < 10) {
+			orphanSamples.push({ imageId: String(img._id), filePath: key });
+		}
+
+		if (!execute) continue;
+
+		try {
+			await CvImage.deleteOne({ _id: img._id });
+			deletedImages++;
+
+			// Strip orphan photo refs from any cartridge that had this image.
+			const res = await CartridgeRecord.updateMany(
+				{ 'photos.imageId': img._id },
+				{ $pull: { photos: { imageId: img._id } } }
+			);
+			strippedCartridgeRefs += res.modifiedCount || 0;
+		} catch (err: any) {
+			failed++;
+			failures.push({ imageId: String(img._id), error: err.message || String(err) });
+		}
+	}
+
+	return {
+		mode: 'reconcile-mongo-to-r2',
+		execute,
+		scanned,
+		present,
+		orphaned,
+		deletedImages,
+		strippedCartridgeRefs,
+		failed,
+		complete: scanned < limit,
+		orphanSamples,
+		failures: failures.slice(0, 10)
+	};
+}
 
 /**
  * Backfill CvImage.cartridgeTag for images that were captured with a UUID in
@@ -223,18 +309,29 @@ async function runBackfill(_writeMode: boolean, limit: number) {
 			await CvImage.updateOne({ _id: imageId }, { $set: { cartridgeTag: newTag } });
 			updatedImages++;
 
-			// Push into cartridge.photos[] if not already there.
-			const res = await cartridges.updateOne(
-				{ _id: uuid as any, 'photos.imageId': { $ne: imageId } },
-				{ $push: { photos: {
-					imageId,
-					phase: newTag.phase,
-					capturedAt: img.capturedAt || null,
-					r2Key: newKey,
-					r2Url: img.imageUrl || null
-				} as any } }
+			// Push into cartridge.photos[] if not already there. Some legacy cartridge
+			// docs have photos stored as a non-array object; fetch-and-set handles both.
+			const photoEntry = {
+				imageId,
+				phase: newTag.phase,
+				capturedAt: img.capturedAt || null,
+				r2Key: newKey,
+				r2Url: img.imageUrl || null
+			};
+			const cartridgeDoc = await cartridges.findOne(
+				{ _id: uuid as any },
+				{ projection: { photos: 1 } }
 			);
-			if (res.modifiedCount === 1) pushedPhotoRefs++;
+			const existingPhotos = Array.isArray(cartridgeDoc?.photos) ? cartridgeDoc!.photos : [];
+			const alreadyIn = existingPhotos.some((p: any) => p?.imageId === imageId);
+			if (!alreadyIn) {
+				existingPhotos.push(photoEntry);
+				await cartridges.updateOne(
+					{ _id: uuid as any },
+					{ $set: { photos: existingPhotos } }
+				);
+				pushedPhotoRefs++;
+			}
 
 			if (samples.length < 5) {
 				samples.push({ imageId, uuid, projectSlug, phase: newTag.phase, newKey });
