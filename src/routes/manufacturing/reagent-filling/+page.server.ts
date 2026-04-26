@@ -5,6 +5,7 @@ import {
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
+import { resolveFridgeId } from '$lib/server/services/equipment-resolve';
 import type { PageServerLoad, Actions } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -851,20 +852,24 @@ export const actions: Actions = {
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
 
-			// Record top seal transactions — consume top seal (PT-CT-103)
-			const topSealPartId = await resolvePartId('PT-CT-103');
-			for (const cid of batch.cartridgeIds) {
+			// Consume 1 cut sheet (PT-CT-113) per batch — one sheet seals up
+			// to 12 cartridges. Previously this looped 1× PT-CT-103 per
+			// cartridge, which was wrong on two counts: (1) PT-CT-103 is the
+			// roll, already consumed at cut time; (2) consumption is
+			// per-sheet, not per-cartridge. Partial sheets still count as
+			// fully consumed — you can't un-peel a liner.
+			const cutSheetPartId = await resolvePartId('PT-CT-113');
+			if (cutSheetPartId) {
 				await recordTransaction({
 					transactionType: 'consumption',
-					partDefinitionId: topSealPartId ?? undefined,
-					cartridgeRecordId: cid,
+					partDefinitionId: cutSheetPartId,
 					quantity: 1,
 					manufacturingStep: 'top_seal',
 					manufacturingRunId: runId,
 					operatorId: locals.user._id,
 					operatorUsername: locals.user.username,
 					lotId: batch.topSealLotId ?? undefined,
-					notes: `Top seal applied (batch ${batchId})`
+					notes: `Top seal batch ${batchId}: 1 sheet consumed from lot ${batch.topSealLotId ?? 'unknown'} (${batch.cartridgeIds.length} cartridges sealed)`
 				});
 			}
 
@@ -960,6 +965,14 @@ export const actions: Actions = {
 		try { cartridgeIds = JSON.parse(cartridgeIdsRaw); } catch { /* ignore */ }
 
 		if (cartridgeIds.length > 0) {
+			// S1a: resolve the scanned fridge reference (barcode, name, or _id)
+			// to the canonical Equipment._id. Fail the action if unresolved so
+			// we don't write a raw string into the authoritative fridgeId field.
+			const resolvedFridgeId = await resolveFridgeId(location);
+			if (!resolvedFridgeId) {
+				return fail(400, { error: `Unknown fridge: ${location}` });
+			}
+
 			// Update storage location in cartridgesFilled
 			for (const cid of cartridgeIds) {
 				await ReagentBatchRecord.findOneAndUpdate(
@@ -979,8 +992,9 @@ export const actions: Actions = {
 					filter: { _id: cid, 'storage.recordedAt': { $exists: false } },
 					update: {
 						$set: {
-							'storage.fridgeName': location,   // barcode string — for fridgeName-based queries
-							'storage.locationId': location,   // same value — for locationId-based queries
+							'storage.fridgeName': location,              // raw input — denormalized display snapshot
+							'storage.fridgeId': resolvedFridgeId,        // Equipment._id (authoritative — S1a)
+							'storage.locationId': resolvedFridgeId,      // Equipment._id (kept in sync — S1a)
 							'storage.operator': { _id: locals.user._id, username: locals.user.username },
 							'storage.timestamp': now,
 							'storage.recordedAt': now,
