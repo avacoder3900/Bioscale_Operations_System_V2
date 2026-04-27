@@ -8,7 +8,10 @@
  *    via `findOneAndUpdate({ _id: prefix }, { $inc: { sequence: 1 } }, { upsert: true, new: true })`.
  *    This is a single atomic server-side op, so concurrent callers each observe
  *    a distinct post-increment sequence value.
- *  - Format: `<prefix>-<7-digit zero-padded sequence>` e.g. `SPU-0000001`.
+ *  - Format (Q5 resolved 2026-04-27): `<prefix>-NNNN-NNNN` where NNNN-NNNN is
+ *    an 8-digit zero-padded sequence split with a hyphen between digits 4 and 5.
+ *    Default prefix is `BT-M01`, so counter 1 → `BT-M01-0000-0001` and counter
+ *    10000 → `BT-M01-0001-0000`.
  *  - Bookkeeping: after the atomic increment, we insert a `GeneratedBarcode`
  *    row (`{ prefix, sequence, barcode: udi, type: 'spu-udi' }`) so the existing
  *    barcode-tracking pattern keeps working and acts as an emergency rebuild
@@ -19,11 +22,12 @@
  */
 import { GeneratedBarcode, UdiCounter } from './models/index.js';
 
-const DEFAULT_PREFIX = 'SPU';
-const SEQUENCE_PAD = 7;
+const DEFAULT_PREFIX = 'BT-M01';
+const SEQUENCE_PAD = 8;
 
 function formatUdi(prefix: string, sequence: number): string {
-	return `${prefix}-${String(sequence).padStart(SEQUENCE_PAD, '0')}`;
+	const padded = String(sequence).padStart(SEQUENCE_PAD, '0');
+	return `${prefix}-${padded.slice(0, 4)}-${padded.slice(4)}`;
 }
 
 /**

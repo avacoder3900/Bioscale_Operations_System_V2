@@ -55,10 +55,10 @@ beforeEach(() => {
 });
 
 describe('getNextUdi', () => {
-	it('returns a SPU-0000001 formatted UDI on first call with default prefix', async () => {
+	it('returns a BT-M01-0000-0001 formatted UDI on first call with default prefix', async () => {
 		const { udi, sequence } = await getNextUdi();
 		expect(sequence).toBe(1);
-		expect(udi).toBe('SPU-0000001');
+		expect(udi).toBe('BT-M01-0000-0001');
 	});
 
 	it('yields strictly increasing sequences on sequential calls', async () => {
@@ -68,9 +68,9 @@ describe('getNextUdi', () => {
 		expect(first.sequence).toBe(1);
 		expect(second.sequence).toBe(2);
 		expect(third.sequence).toBe(3);
-		expect(first.udi).toBe('SPU-0000001');
-		expect(second.udi).toBe('SPU-0000002');
-		expect(third.udi).toBe('SPU-0000003');
+		expect(first.udi).toBe('BT-M01-0000-0001');
+		expect(second.udi).toBe('BT-M01-0000-0002');
+		expect(third.udi).toBe('BT-M01-0000-0003');
 	});
 
 	it('records a GeneratedBarcode row of type "spu-udi" per call', async () => {
@@ -78,59 +78,71 @@ describe('getNextUdi', () => {
 		await getNextUdi('BATCH');
 		expect(createdBarcodes).toHaveLength(2);
 		expect(createdBarcodes[0]).toMatchObject({
-			prefix: 'SPU',
+			prefix: 'BT-M01',
 			sequence: 1,
-			barcode: 'SPU-0000001',
+			barcode: 'BT-M01-0000-0001',
 			type: 'spu-udi'
 		});
 		expect(createdBarcodes[1]).toMatchObject({
 			prefix: 'BATCH',
 			sequence: 1,
-			barcode: 'BATCH-0000001',
+			barcode: 'BATCH-0000-0001',
 			type: 'spu-udi'
 		});
 	});
 
 	it('keeps per-prefix sequences independent', async () => {
-		const a1 = await getNextUdi('SPU');
+		const a1 = await getNextUdi('BT-M01');
 		const b1 = await getNextUdi('ALT');
-		const a2 = await getNextUdi('SPU');
+		const a2 = await getNextUdi('BT-M01');
 		expect(a1.sequence).toBe(1);
 		expect(b1.sequence).toBe(1);
 		expect(a2.sequence).toBe(2);
-		expect(a1.udi).toBe('SPU-0000001');
-		expect(b1.udi).toBe('ALT-0000001');
-		expect(a2.udi).toBe('SPU-0000002');
+		expect(a1.udi).toBe('BT-M01-0000-0001');
+		expect(b1.udi).toBe('ALT-0000-0001');
+		expect(a2.udi).toBe('BT-M01-0000-0002');
+	});
+
+	it('crosses the 4-digit boundary at counter 10000 → BT-M01-0001-0000', async () => {
+		// Seed counter to 9999 so the next allocation lands on 10000 exactly.
+		counterStore.set('BT-M01', 9999);
+		expect(await peekNextUdi()).toBe('BT-M01-0001-0000');
+		const at = await getNextUdi();
+		expect(at.sequence).toBe(10000);
+		expect(at.udi).toBe('BT-M01-0001-0000');
+		const after = await getNextUdi();
+		expect(after.sequence).toBe(10001);
+		expect(after.udi).toBe('BT-M01-0001-0001');
 	});
 });
 
 describe('peekNextUdi', () => {
-	it('returns SPU-0000001 when no counter exists yet and does not create one', async () => {
+	it('returns BT-M01-0000-0001 when no counter exists yet and does not create one', async () => {
 		const preview = await peekNextUdi();
-		expect(preview).toBe('SPU-0000001');
+		expect(preview).toBe('BT-M01-0000-0001');
 		// No counter mutated.
-		expect(counterStore.has('SPU')).toBe(false);
+		expect(counterStore.has('BT-M01')).toBe(false);
 	});
 
 	it('does NOT advance the counter', async () => {
 		await getNextUdi(); // counter -> 1
 		const previewA = await peekNextUdi();
 		const previewB = await peekNextUdi();
-		expect(previewA).toBe('SPU-0000002');
-		expect(previewB).toBe('SPU-0000002');
+		expect(previewA).toBe('BT-M01-0000-0002');
+		expect(previewB).toBe('BT-M01-0000-0002');
 		// Subsequent real allocation must still receive sequence=2.
 		const next = await getNextUdi();
 		expect(next.sequence).toBe(2);
-		expect(next.udi).toBe('SPU-0000002');
+		expect(next.udi).toBe('BT-M01-0000-0002');
 	});
 
 	it('reflects the current prefix-scoped counter', async () => {
-		await getNextUdi('SPU');
-		await getNextUdi('SPU');
+		await getNextUdi('BT-M01');
+		await getNextUdi('BT-M01');
 		await getNextUdi('ALT');
-		expect(await peekNextUdi('SPU')).toBe('SPU-0000003');
-		expect(await peekNextUdi('ALT')).toBe('ALT-0000002');
-		expect(await peekNextUdi('NEW')).toBe('NEW-0000001');
+		expect(await peekNextUdi('BT-M01')).toBe('BT-M01-0000-0003');
+		expect(await peekNextUdi('ALT')).toBe('ALT-0000-0002');
+		expect(await peekNextUdi('NEW')).toBe('NEW-0000-0001');
 	});
 });
 
