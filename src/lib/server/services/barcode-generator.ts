@@ -1,5 +1,5 @@
 import { connectDB } from '$lib/server/db/connection';
-import { GeneratedBarcode } from '$lib/server/db/models';
+import { GeneratedBarcode, CartridgeRecord } from '$lib/server/db/models';
 import { generateId } from '$lib/server/db/utils';
 
 /**
@@ -30,4 +30,42 @@ export async function generateBarcode(prefix: string, type: string): Promise<str
  */
 export async function generatePartBarcode(): Promise<string> {
 	return generateBarcode('PART', 'part');
+}
+
+/**
+ * Generate a cartridge barcode: CART-000001, CART-000002, etc.
+ */
+export async function generateCartridgeBarcode(): Promise<string> {
+	return generateBarcode('CART', 'cartridge');
+}
+
+/**
+ * Mint a fresh batch of unique cartridge barcodes for printing.
+ *
+ * Uniqueness layers (defense-in-depth):
+ *   1. Atomic $inc on the prefix counter — guarantees the sequence never repeats.
+ *   2. unique index on GeneratedBarcode.barcode — DB-level rejection of duplicates.
+ *   3. Post-mint scan against CartridgeRecord.barcode — surfaces any historical
+ *      drift (e.g. legacy data created outside this generator).
+ *
+ * Throws if any minted barcode collides with an existing CartridgeRecord, so the
+ * caller can fail the print job before any sticker is produced.
+ */
+export async function mintCartridgeBarcodes(count: number): Promise<string[]> {
+	if (!Number.isInteger(count) || count < 1 || count > 800) {
+		throw new Error(`mintCartridgeBarcodes: count must be 1-800, got ${count}`);
+	}
+	await connectDB();
+	const minted: string[] = [];
+	for (let i = 0; i < count; i++) {
+		minted.push(await generateCartridgeBarcode());
+	}
+	const collisions = await CartridgeRecord.find({ barcode: { $in: minted } })
+		.select('barcode')
+		.lean();
+	if (collisions.length > 0) {
+		const dupes = (collisions as Array<{ barcode: string }>).map((c) => c.barcode).join(', ');
+		throw new Error(`Refusing to print: minted barcodes already exist on cartridges: ${dupes}`);
+	}
+	return minted;
 }
