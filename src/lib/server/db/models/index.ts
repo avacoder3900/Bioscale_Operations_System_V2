@@ -98,3 +98,7 @@ export { CauseEffectDiagram } from './cause-effect-diagram.js';
 // Scanner / Barcode Bridge
 export { ScannerEvent } from './scanner-event.js';
 export { ScannerTrigger } from './scanner-trigger.js';
+
+// Barcode Generation (print-barcodes)
+export { BarcodeInventory } from './barcode-inventory.js';
+export { BarcodeSheetBatch } from './barcode-sheet-batch.js';
