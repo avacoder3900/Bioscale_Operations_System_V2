@@ -461,6 +461,49 @@ export const actions: Actions = {
 		return { addSessionNote: { success: true, notes: updatedNotes } };
 	},
 
+	/**
+	 * Delete an in-progress lot. Only allowed when status='In Progress' —
+	 * completed lots are immutable (consumed inventory, registered BackingLot).
+	 * No inventory was withdrawn yet at the In Progress stage (withdrawal
+	 * happens in confirmComplete), so deletion just removes the LotRecord
+	 * stub and audit-logs the discard.
+	 */
+	deleteLot: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const lotId = data.get('lotId') as string;
+		if (!lotId) return fail(400, { deleteLot: { error: 'Lot ID required' } });
+
+		const lot = await LotRecord.findById(lotId).lean() as any;
+		if (!lot) return fail(404, { deleteLot: { error: 'Lot not found' } });
+		if (lot.status !== 'In Progress') {
+			return fail(400, { deleteLot: { error: `Cannot delete lot in status "${lot.status}". Only In Progress lots can be deleted.` } });
+		}
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'lot_records',
+			recordId: lotId,
+			action: 'DELETE',
+			changedBy: locals.user.username,
+			changedAt: new Date(),
+			oldData: {
+				status: lot.status,
+				plannedQuantity: lot.plannedQuantity,
+				operator: lot.operator,
+				inputLots: (lot.inputLots ?? []).map((l: any) => ({ materialName: l.materialName, barcode: l.barcode })),
+				startTime: lot.startTime
+			},
+			reason: 'Operator-initiated discard of in-progress backing batch'
+		});
+
+		await LotRecord.deleteOne({ _id: lotId });
+
+		return { deleteLot: { success: true, lotId } };
+	},
+
 	/** Resume an in-progress lot */
 	resumeLot: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
