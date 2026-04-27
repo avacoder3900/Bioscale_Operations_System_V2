@@ -100,6 +100,28 @@ export function getR2Url(key: string): string {
 	return `${cfg.publicUrl}/${key}`;
 }
 
+export function slugifyProjectName(name: string): string {
+	const slug = name
+		.toLowerCase()
+		.trim()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '');
+	return slug || 'unnamed';
+}
+
+export function buildCvKey(projectName: string, id: string, ext: string): string {
+	return `cv/${slugifyProjectName(projectName)}/${id}.${ext}`;
+}
+
+export function buildCvThumbKey(projectName: string, id: string): string {
+	return `cv/${slugifyProjectName(projectName)}/thumbs/${id}.jpg`;
+}
+
+export function buildCvNamedKey(projectName: string, id: string, filename: string): string {
+	const safeName = filename.replace(/[^a-zA-Z0-9_\-\.]/g, '_').slice(0, 120);
+	return `cv/${slugifyProjectName(projectName)}/${id}_${safeName}`;
+}
+
 // --- Server-side operations (used by Python worker / scripts, not Vercel functions) ---
 // These use fetch() which works everywhere.
 
@@ -115,6 +137,108 @@ export async function uploadToR2(buffer: Buffer, key: string, contentType: strin
 		throw new Error(`R2 upload failed (${res.status}): ${text}`);
 	}
 	return getR2Url(key);
+}
+
+/**
+ * Copy an object within the bucket by going through the Cloudflare Worker:
+ *   GET {R2_WORKER_URL}/file/{src} → buffer
+ *   PUT {R2_WORKER_URL}/upload/{dest} with X-Upload-Secret → writes to R2
+ *
+ * The Worker has a native R2 binding so it bypasses the TLS issues that
+ * fetch-from-Vercel-to-r2.cloudflarestorage.com hits.
+ */
+export async function copyViaWorker(sourceKey: string, destKey: string): Promise<void> {
+	const workerUrl = env.R2_WORKER_URL;
+	if (!workerUrl) throw new Error('R2_WORKER_URL not configured');
+	const uploadSecret = env.R2_UPLOAD_SECRET || 'brevitest-r2-upload-key-2026';
+
+	const dlUrl = `${workerUrl}/file/${encodeURIComponent(sourceKey)}`;
+	const dlRes = await fetch(dlUrl);
+	if (!dlRes.ok) {
+		throw new Error(`worker download ${sourceKey} → ${dlRes.status}`);
+	}
+	const body = Buffer.from(await dlRes.arrayBuffer());
+	const contentType = dlRes.headers.get('content-type') || 'application/octet-stream';
+
+	const ulUrl = `${workerUrl}/upload/${encodeURIComponent(destKey)}`;
+	const ulRes = await fetch(ulUrl, {
+		method: 'PUT',
+		headers: {
+			'Content-Type': contentType,
+			'X-Upload-Secret': uploadSecret
+		},
+		body
+	});
+	if (!ulRes.ok) {
+		const text = await ulRes.text().catch(() => '');
+		throw new Error(`worker upload ${destKey} → ${ulRes.status} ${text}`);
+	}
+}
+
+/**
+ * Delete an object via the Cloudflare Worker (DELETE /file/:key).
+ * Worker requires X-Upload-Secret for writes/deletes.
+ */
+export async function deleteViaWorker(key: string): Promise<void> {
+	const workerUrl = env.R2_WORKER_URL;
+	if (!workerUrl) throw new Error('R2_WORKER_URL not configured');
+	const uploadSecret = env.R2_UPLOAD_SECRET || 'brevitest-r2-upload-key-2026';
+
+	const url = `${workerUrl}/file/${encodeURIComponent(key)}`;
+	const res = await fetch(url, {
+		method: 'DELETE',
+		headers: { 'X-Upload-Secret': uploadSecret }
+	});
+	if (!res.ok && res.status !== 404) {
+		throw new Error(`worker delete ${key} → ${res.status}`);
+	}
+}
+
+/**
+ * Server-side copy within the bucket via S3 CopyObject (PUT with x-amz-copy-source).
+ * KNOWN ISSUE: this fails TLS handshake when called from Vercel Functions. Use
+ * copyViaWorker() from Vercel. This function is kept for scripts/Python workers
+ * that can talk to R2 directly.
+ */
+export async function copyInR2(sourceKey: string, destKey: string, expiresIn = 600): Promise<void> {
+	const cfg = getConfig();
+	const region = 'auto';
+	const service = 's3';
+	const method = 'PUT';
+	const now = new Date();
+	const { amzDate, dateStamp } = formatAmzDate(now);
+	const credential = `${cfg.accessKeyId}/${dateStamp}/${region}/${service}/aws4_request`;
+	const host = cfg.endpoint;
+	const copySource = `/${cfg.bucket}/${sourceKey.split('/').map(encodeURIComponent).join('/')}`;
+
+	const queryParams = new URLSearchParams({
+		'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+		'X-Amz-Credential': credential,
+		'X-Amz-Date': amzDate,
+		'X-Amz-Expires': String(expiresIn),
+		'X-Amz-SignedHeaders': 'host;x-amz-copy-source'
+	});
+
+	const canonicalUri = `/${cfg.bucket}/${destKey}`;
+	const canonicalQuery = queryParams.toString().split('&').sort().join('&');
+	const canonicalHeaders = `host:${host}\nx-amz-copy-source:${copySource}\n`;
+	const signedHeaders = 'host;x-amz-copy-source';
+	const payloadHash = 'UNSIGNED-PAYLOAD';
+	const canonicalRequest = [method, canonicalUri, canonicalQuery, canonicalHeaders, signedHeaders, payloadHash].join('\n');
+	const scope = `${dateStamp}/${region}/${service}/aws4_request`;
+	const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256Hex(canonicalRequest)].join('\n');
+	const signingKey = getSignatureKey(cfg.secretAccessKey, dateStamp, region, service);
+	const signature = createHmac('sha256', signingKey).update(stringToSign).digest('hex');
+	const url = `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+
+	const res = await fetch(url, {
+		method: 'PUT',
+		headers: { 'x-amz-copy-source': copySource }
+	});
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`R2 copy ${sourceKey} → ${destKey} failed (${res.status}): ${text}`);
+	}
 }
 
 export async function deleteFromR2(key: string): Promise<void> {

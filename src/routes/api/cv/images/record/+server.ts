@@ -4,8 +4,10 @@ import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
 import { generateId } from '$lib/server/db/utils.js';
-import { getR2Url } from '$lib/server/services/r2';
+import { getR2Url, deleteViaWorker } from '$lib/server/services/r2';
 import type { RequestHandler } from './$types';
+
+const PHOTOS_PER_STAGE = 2;
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
@@ -18,6 +20,21 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	const project = await CvProject.findById(projectId);
 	if (!project) return json({ error: 'Project not found' }, { status: 404 });
+
+	// Enforce per-cartridge per-stage photo cap. The file is already in R2 at
+	// this point (browser PUT'd via the Worker), so clean it up on rejection.
+	if (cartridgeTag?.cartridgeRecordId && cartridgeTag?.phase) {
+		const existing = await CvImage.countDocuments({
+			'cartridgeTag.cartridgeRecordId': cartridgeTag.cartridgeRecordId,
+			'cartridgeTag.phase': cartridgeTag.phase
+		});
+		if (existing >= PHOTOS_PER_STAGE) {
+			try { await deleteViaWorker(key); } catch { /* best-effort */ }
+			return json({
+				error: `Stage "${cartridgeTag.phase}" already has ${PHOTOS_PER_STAGE} photos for this cartridge. Delete one before adding another.`
+			}, { status: 409 });
+		}
+	}
 
 	const publicUrl = getR2Url(key);
 
@@ -46,7 +63,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			{ $push: { photos: {
 				imageId: image._id,
 				phase: cartridgeTag.phase || null,
-				capturedAt: image.capturedAt
+				capturedAt: image.capturedAt,
+				r2Key: key,
+				r2Url: publicUrl
 			}}}
 		);
 	}

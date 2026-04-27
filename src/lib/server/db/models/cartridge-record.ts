@@ -40,9 +40,11 @@ const cartridgeRecordSchema = new Schema({
 		rejectionReason: String, operator: operatorRef, timestamp: Date, recordedAt: Date
 	},
 	waxStorage: {
-		locationId: String,      // Equipment._id of the fridge (authoritative join key — S1a)
-		location: String,        // denormalized fridge name/barcode for display — do NOT use as a query filter
-		coolingTrayId: String,   // Equipment._id of the cooling tray
+		locationId: String,           // Equipment._id of the fridge (authoritative join key - S1a)
+		location: String,             // denormalized fridge name/barcode for display - do NOT use as a query filter
+		coolingTrayId: String,        // Equipment._id of the cooling tray
+		coolingLocationId: String,    // Equipment._id of the cooling fridge (resolved from tray placement)
+		coolingLocationName: String,  // denormalized cooling fridge name for display
 		operator: operatorRef, timestamp: Date, recordedAt: Date
 	},
 	reagentFilling: {
@@ -130,7 +132,9 @@ const cartridgeRecordSchema = new Schema({
 		_id: false,
 		imageId: String,
 		phase: String,
-		capturedAt: Date
+		capturedAt: Date,
+		r2Key: String,
+		r2Url: String
 	}],
 
 	corrections: [correctionSchema]

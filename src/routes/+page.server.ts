@@ -132,28 +132,6 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		stateCounts,
 		stateFilter,
 		fieldHints: { batchRecommended: true, ownerRecommended: false },
-		fleetSummary: (() => {
-			const spuList = spus.map((s: any) => ({
-				id: s._id, udi: s.udi, status: s.status ?? 'draft',
-				deviceState: s.deviceState ?? '', owner: s.owner ?? null,
-				ownerNotes: s.ownerNotes ?? null, batchId: s.batch?._id ?? null,
-				createdAt: s.createdAt ?? null, updatedAt: s.updatedAt ?? null,
-				finalizedAt: s.finalizedAt ?? null, qcStatus: s.qcStatus ?? 'pending',
-				qcDocumentUrl: s.qcDocumentUrl ?? null, assemblyStatus: s.assemblyStatus ?? 'created',
-				assignmentType: s.assignment?.type ?? null,
-				assignmentCustomerId: s.assignment?.customer?._id ?? null
-			}));
-			const rnd = spuList.filter((s) => s.assignmentType === 'rnd');
-			const manufacturing = spuList.filter((s) => s.assignmentType === 'manufacturing');
-			const unassigned = spuList.filter((s) => !s.assignmentType);
-			const customerGroups = customers
-				.map((c: any) => ({
-					customer: { id: c._id, name: c.name ?? '', customerType: c.customerType ?? '' },
-					spus: spuList.filter((s) => s.assignmentCustomerId === c._id)
-				}))
-				.filter((g) => g.spus.length > 0);
-			return { rnd, manufacturing, customers: customerGroups, unassigned };
-		})(),
 		activeCustomers: customers.map((c: any) => ({
 			id: c._id,
 			name: c.name ?? '',

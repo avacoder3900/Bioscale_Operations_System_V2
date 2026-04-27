@@ -41,6 +41,28 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 		}, { status: 400 });
 	}
 
+	// Melt-state gate: wax must be melted before filling. Ready when either
+	// confirmedMeltedAt is set (manual confirmation) or readyAt has elapsed
+	// (timer based on ManufacturingSettings.waxFilling.meltDurationMin).
+	const melt = lot.waxMelt;
+	const readyAtMs = melt?.readyAt ? new Date(melt.readyAt).getTime() : null;
+	const meltReady = !!(melt?.confirmedMeltedAt || (readyAtMs !== null && readyAtMs <= Date.now()));
+	if (!meltReady) {
+		const remainingMin = readyAtMs !== null
+			? Math.max(0, Math.ceil((readyAtMs - Date.now()) / 60_000))
+			: null;
+		const lotNumber = lot.lotNumber ?? lot.lotId ?? barcode;
+		return json({
+			error: melt?.startedAt
+				? `Wax lot ${lotNumber} still melting — ${remainingMin} min remaining.`
+				: `Wax lot ${lotNumber} has not been taken out to melt yet. Start melting before scanning.`,
+			remainingMin,
+			lotNumber,
+			lotId: String(lot._id),
+			needsMelting: true
+		}, { status: 400 });
+	}
+
 	const tubeCount = Number(lot.quantity ?? 0);
 	const consumedUl = Number(lot.consumedUl ?? 0);
 	const totalUl = tubeCount * FULL_TUBE_VOLUME_UL;
