@@ -81,6 +81,11 @@
 		submitForm('goBack');
 	}
 
+	function handleReassignStorage() {
+		if (!confirm('Reassign fridges? This clears all current fridge assignments on this run so you can pick again. The run stays in Storage stage and nothing is locked in until you click Complete Run.')) return;
+		submitForm('reassignStorage');
+	}
+
 	function handleRecordStorage(cartridgeIds: string[], location: string) {
 		submitForm('recordBatchStorage', {
 			cartridgeIds: JSON.stringify(cartridgeIds),
@@ -131,6 +136,15 @@
 				title="Rewind this run by one stage. Disabled once any cartridge is in a fridge."
 			>
 				← Go Back to {data.goBackTargetStage}
+			</button>
+		{:else if data.canReassignStorage}
+			<button
+				type="button"
+				onclick={handleReassignStorage}
+				class="min-h-[44px] rounded-lg border border-amber-500/50 bg-amber-900/20 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-900/30"
+				title="Clear current fridge assignments on this run and re-pick. The run stays in Storage stage and nothing is locked in until Complete Run."
+			>
+				← Reassign Fridges
 			</button>
 		{/if}
 	</div>

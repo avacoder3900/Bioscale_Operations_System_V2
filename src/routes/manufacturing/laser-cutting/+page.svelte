@@ -45,7 +45,10 @@
 
 	let showRecord = $state(false);
 	let showDefaults = $state(false);
-	let inputCount = $state(10);
+	// Start empty so the operator must explicitly type a value. Previously this
+	// pre-filled with 10, which let a misclick on Record Batch silently submit
+	// a 10-input run (see 2026-04-27 phantom LOT-DZCO incident).
+	let inputCount = $state<number | null>(null);
 	let failureCount = $state(0);
 	let failureNotes = $state('');
 	// LOT TRACEABILITY: Input lot barcode for substrate sheets
@@ -59,7 +62,7 @@
 	let defaultTools = $state(data.defaults.defaultLaserTools ?? '');
 	let defaultUrl = $state(data.defaults.defaultCuttingProgramLink ?? '');
 
-	const outputCount = $derived(Math.max(0, inputCount - failureCount));
+	const outputCount = $derived(Math.max(0, (inputCount ?? 0) - failureCount));
 </script>
 
 <div class="space-y-6">
@@ -162,7 +165,7 @@
 			use:enhance={() => {
 				return async ({ update }) => {
 					showRecord = false;
-					inputCount = 10;
+					inputCount = null;
 					failureCount = 0;
 					failureNotes = '';
 					inputLotId = '';

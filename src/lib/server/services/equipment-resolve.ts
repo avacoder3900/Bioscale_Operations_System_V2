@@ -20,7 +20,10 @@ import { Equipment } from '$lib/server/db/models/index.js';
  * meaningful.
  */
 
-type EquipmentType = 'fridge' | 'oven' | 'deck' | 'tray' | 'robot' | 'cooling-tray';
+// Schema enum is `'cooling_tray'` (underscore) not `'cooling-tray'` — the v1
+// type union had a dash-typo that would have made resolveByType('cooling-tray', ...)
+// match nothing. Fixed in S2b.
+type EquipmentType = 'fridge' | 'oven' | 'deck' | 'cooling_tray' | 'robot';
 
 const CACHE_LIMIT = 500;
 const cache = new Map<string, string | null>();
@@ -61,6 +64,21 @@ export function resolveFridgeId(barcodeOrName: string | null | undefined): Promi
 /** Resolve an oven reference to Equipment._id. Used by S2. */
 export function resolveOvenId(barcodeOrName: string | null | undefined): Promise<string | null> {
 	return resolveByType('oven', barcodeOrName);
+}
+
+/** Resolve a cooling tray reference to Equipment._id. Used by S2b. */
+export function resolveCoolingTrayId(barcodeOrName: string | null | undefined): Promise<string | null> {
+	return resolveByType('cooling_tray', barcodeOrName);
+}
+
+/** Resolve a deck reference to Equipment._id. Used by S2c. */
+export function resolveDeckId(barcodeOrName: string | null | undefined): Promise<string | null> {
+	return resolveByType('deck', barcodeOrName);
+}
+
+/** Resolve a robot reference to Equipment._id. Used by S3 / S4. */
+export function resolveRobotId(barcodeOrName: string | null | undefined): Promise<string | null> {
+	return resolveByType('robot', barcodeOrName);
 }
 
 /** Test-only: clear the cache between test cases. */

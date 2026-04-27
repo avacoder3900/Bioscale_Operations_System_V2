@@ -1,8 +1,12 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
+	import { enhance } from '$app/forms';
 
 	let { data, form } = $props();
+
+	// Notes tab — bound textarea state so we can clear it on submit
+	let newNoteBody = $state('');
 
 	// =========================================================================
 	// Tabs
@@ -16,6 +20,7 @@
 		{ id: 'spc', label: 'SPC Alerts' },
 		{ id: 'fmea', label: 'FMEA' },
 		{ id: 'manual', label: 'Manual Input' },
+		{ id: 'notes', label: 'Notes' },
 		{ id: 'runs', label: 'All Runs' },
 		{ id: 'export', label: 'Reports & Export' },
 		{ id: 'doe', label: 'DOE Planner' }
@@ -1020,6 +1025,90 @@
 							{/each}
 						</tbody>
 					</table>
+				{/if}
+			</div>
+		</section>
+	{/if}
+
+	<!-- ========================================================================== -->
+	<!-- TAB: NOTES — free-form operator notes for labor/time analysis              -->
+	<!-- ========================================================================== -->
+	{#if activeTab === 'notes'}
+		<section class="space-y-4">
+			<div>
+				<h3 class="text-sm font-semibold" style="color: var(--color-tron-text)">Operator Notes</h3>
+				<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
+					Free-form notes for labor time and observations. Operator + timestamp are tracked automatically.
+				</p>
+			</div>
+
+			<form
+				method="POST"
+				action="?/createAnalyticsNote"
+				use:enhance={() => {
+					return async ({ update }) => {
+						newNoteBody = '';
+						await update();
+					};
+				}}
+				class="space-y-2 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] p-3"
+			>
+				<label class="block text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">New note</label>
+				<textarea
+					name="body"
+					required
+					bind:value={newNoteBody}
+					rows="3"
+					placeholder="e.g. Spent 30 min on wax setup, robot needed re-calibration..."
+					class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-xs"
+				></textarea>
+				{#if form?.noteError}
+					<p class="text-[11px] text-red-400">{form.noteError}</p>
+				{/if}
+				{#if form?.noteSuccess}
+					<p class="text-[11px] text-green-400">Note saved.</p>
+				{/if}
+				<button type="submit" class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1 text-xs font-medium text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20">
+					Save Note
+				</button>
+			</form>
+
+			<div>
+				<p class="mb-2 text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
+					Recent ({data.analyticsNotes.length})
+				</p>
+				{#if data.analyticsNotes.length === 0}
+					<p class="text-xs" style="color: var(--color-tron-text-secondary)">No notes yet.</p>
+				{:else}
+					<div class="overflow-x-auto">
+						<table class="w-full text-xs">
+							<thead>
+								<tr class="border-b border-[var(--color-tron-border)] text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
+									<th class="px-2 py-1 text-left">When</th>
+									<th class="px-2 py-1 text-left">Operator</th>
+									<th class="px-2 py-1 text-left">Note</th>
+									<th class="px-2 py-1"></th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each data.analyticsNotes as n (n.id)}
+									<tr class="border-b border-[var(--color-tron-border)]/40 align-top">
+										<td class="px-2 py-1 whitespace-nowrap" style="color: var(--color-tron-text-secondary)">
+											{n.createdAt ? new Date(n.createdAt).toLocaleString() : '—'}
+										</td>
+										<td class="px-2 py-1 whitespace-nowrap font-mono">{n.operator}</td>
+										<td class="px-2 py-1 whitespace-pre-wrap">{n.body}</td>
+										<td class="px-2 py-1 whitespace-nowrap text-right">
+											<form method="POST" action="?/deleteAnalyticsNote" class="inline" use:enhance>
+												<input type="hidden" name="id" value={n.id} />
+												<button class="rounded border border-[var(--color-tron-border)] px-2 py-0.5 text-[10px] hover:border-red-500 hover:text-red-400">Delete</button>
+											</form>
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
 				{/if}
 			</div>
 		</section>

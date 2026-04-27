@@ -89,7 +89,12 @@ export { CvInspection } from './cv-inspection.js';
 
 // Manufacturing Analytics
 export { ProcessAnalyticsEvent } from './process-analytics-event.js';
+export { AnalyticsNote } from './analytics-note.js';
 export { SpecLimit } from './spec-limit.js';
 export { FmeaRecord } from './fmea-record.js';
 export { SpcSignal } from './spc-signal.js';
 export { CauseEffectDiagram } from './cause-effect-diagram.js';
+
+// Scanner / Barcode Bridge
+export { ScannerEvent } from './scanner-event.js';
+export { ScannerTrigger } from './scanner-trigger.js';

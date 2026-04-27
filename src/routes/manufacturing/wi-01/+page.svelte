@@ -270,12 +270,25 @@
 								<span class="font-mono text-sm text-[var(--color-tron-yellow)]">{ipLot.lotId}</span>
 								<span class="ml-2 text-xs text-[var(--color-tron-text-secondary)]">{ipLot.operatorName}</span>
 							</div>
-							<form method="POST" action="?/resumeLot" use:enhance>
-								<input type="hidden" name="lotId" value={ipLot.lotId} />
-								<button type="submit" class="rounded border border-[var(--color-tron-yellow)]/50 bg-[var(--color-tron-yellow)]/20 px-4 py-2 text-sm font-medium text-[var(--color-tron-yellow)] hover:bg-[var(--color-tron-yellow)]/30">
-									Resume
-								</button>
-							</form>
+							<div class="flex items-center gap-2">
+								<form method="POST" action="?/resumeLot" use:enhance>
+									<input type="hidden" name="lotId" value={ipLot.lotId} />
+									<button type="submit" class="rounded border border-[var(--color-tron-yellow)]/50 bg-[var(--color-tron-yellow)]/20 px-4 py-2 text-sm font-medium text-[var(--color-tron-yellow)] hover:bg-[var(--color-tron-yellow)]/30">
+										Resume
+									</button>
+								</form>
+								<form
+									method="POST"
+									action="?/deleteLot"
+									use:enhance
+									onsubmit={(e) => { if (!confirm(`Delete in-progress batch ${ipLot.lotId}? This cannot be undone. No inventory was withdrawn yet — only the empty batch record is removed.`)) e.preventDefault(); }}
+								>
+									<input type="hidden" name="lotId" value={ipLot.lotId} />
+									<button type="submit" class="rounded border border-red-500/50 bg-red-900/20 px-4 py-2 text-sm font-medium text-red-300 hover:bg-red-900/30" title="Discard this in-progress batch. Only allowed before completion.">
+										Delete
+									</button>
+								</form>
+							</div>
 						</div>
 					</div>
 				{/each}
