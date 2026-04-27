@@ -1,10 +1,11 @@
 import { redirect, fail } from '@sveltejs/kit';
+import mongoose from 'mongoose';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
 	Equipment, EquipmentLocation, AuditLog, BackingLot, WaxBatch, ReceivingLot, LotRecord
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
-import { resolveFridgeId } from '$lib/server/services/equipment-resolve';
+import { resolveFridgeId, resolveCoolingTrayId, resolveDeckId } from '$lib/server/services/equipment-resolve';
 import { isAdmin } from '$lib/server/permissions';
 import { User } from '$lib/server/db';
 import { notifyLowWaxBatch, notifyRunLifecycle, shouldWarnLowWax } from '$lib/server/notifications';
@@ -211,7 +212,12 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 		const storageCartridges = (storageCartridgesRaw as any[]).map((c: any) => ({
 			cartridgeId: String(c._id),
 			qcStatus: c.waxQc?.status ?? 'Accepted',
-			currentInventory: c.status ?? 'wax_stored',
+			// Derive UI "stored" state from waxStorage.recordedAt rather than
+			// status. status stays 'wax_filled' until completeRun (deferred
+			// commit, see 581c0d7) — but the UI needs to flip the moment
+			// recordBatchStorage runs so CompletionStorage transitions to its
+			// review state and Complete Run becomes clickable.
+			currentInventory: c.waxStorage?.recordedAt ? 'wax_stored' : (c.status ?? 'wax_filled'),
 			storageLocation: c.waxStorage?.location ?? null
 		}));
 
@@ -513,7 +519,11 @@ export const actions: Actions = {
 
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
-		const deckId = (data.get('deckId') as string) || undefined;
+		const deckIdRaw = (data.get('deckId') as string) || undefined;
+		// S2c: resolve deck reference to canonical Equipment._id at entry; all
+		// downstream writes (waxFilling.deckId on cartridges, WaxFillingRun.deckId)
+		// use the resolved value.
+		const deckId = deckIdRaw ? ((await resolveDeckId(deckIdRaw)) ?? deckIdRaw) : undefined;
 		const ovenId = (data.get('ovenId') as string) || undefined;
 		const cartridgeScansRaw = data.get('cartridgeScans') as string;
 
@@ -771,8 +781,16 @@ export const actions: Actions = {
 		// Tray conflict runs at scan time (see /api/dev/validate-equipment
 		// ?type=tray). No duplicate check here.
 
+		// S2b: resolve cooling tray to canonical Equipment._id
+		let resolvedTrayId: string | undefined;
+		if (coolingTrayId) {
+			const resolved = await resolveCoolingTrayId(coolingTrayId);
+			if (!resolved) return fail(400, { error: `Unknown cooling tray: ${coolingTrayId}` });
+			resolvedTrayId = resolved;
+		}
+
 		const update: Record<string, any> = { status: 'QC', coolingConfirmedTime: now, coolingConfirmedAt: now };
-		if (coolingTrayId) update.coolingTrayId = coolingTrayId;
+		if (resolvedTrayId) update.coolingTrayId = resolvedTrayId;
 
 		const run = await WaxFillingRun.findByIdAndUpdate(runId, { $set: update }, { new: true }).lean() as any;
 
@@ -1099,6 +1117,10 @@ export const actions: Actions = {
 		// S1a: resolve the scanned fridge reference to Equipment._id. See
 		// opentron-control/wax/[runId]/+page.server.ts for the same pattern.
 		const resolvedLocationId = await resolveFridgeId(location);
+		// S2b: pre-resolve cooling tray here (outside the .map below) because
+		// the map callback is sync and can't await — same pattern as the
+		// sibling opentron-control route.
+		const resolvedTrayId = coolingTrayId ? await resolveCoolingTrayId(coolingTrayId) : null;
 		if (cartridgeIds.length > 0) {
 			// Storage fields only — status stays 'wax_filled' until completeRun.
 			// Keeps reagent filling from picking up cartridges whose parent wax
@@ -1110,7 +1132,7 @@ export const actions: Actions = {
 						$set: {
 							'waxStorage.locationId': resolvedLocationId,
 							'waxStorage.location': location,
-							'waxStorage.coolingTrayId': coolingTrayId,
+							'waxStorage.coolingTrayId': resolvedTrayId ?? coolingTrayId,
 							'waxStorage.operator': { _id: locals.user._id, username: locals.user.username },
 							'waxStorage.timestamp': now,
 							'waxStorage.recordedAt': now
@@ -1145,6 +1167,64 @@ export const actions: Actions = {
 				newData: { status: 'wax_stored', location, count: cartridgeIds.length }
 			});
 		}
+
+		return { success: true };
+	},
+
+	/**
+	 * Clear waxStorage fields on every cartridge in the run so the operator can
+	 * re-pick fridges. Only allowed while the run is still in Storage stage —
+	 * once completeRun has flipped status to 'completed', the assignments are
+	 * locked. Mirrors the action in opentron-control/wax/[runId]/+page.server.ts
+	 * — fix bugs in both.
+	 */
+	reassignStorage: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const runId = data.get('runId') as string;
+		const now = new Date();
+
+		const run = await WaxFillingRun.findById(runId).lean() as any;
+		if (!run) return fail(404, { error: 'Run not found' });
+		if (run.status !== 'Storage' && run.status !== 'storage') {
+			return fail(400, { error: `Cannot reassign — run status is "${run.status}". Reassign is only allowed during Storage stage.` });
+		}
+
+		const cartIds: string[] = run.cartridgeIds ?? [];
+		if (cartIds.length === 0) return { success: true };
+
+		await CartridgeRecord.updateMany(
+			{ _id: { $in: cartIds } },
+			{ $unset: { waxStorage: '' } }
+		);
+
+		await mongoose.connection.db!.collection('inventory_transactions').updateMany(
+			{
+				cartridgeRecordId: { $in: cartIds },
+				manufacturingStep: 'storage',
+				transactionType: 'creation',
+				retractedAt: { $exists: false }
+			},
+			{
+				$set: {
+					retractedBy: locals.user?.username ?? 'unknown',
+					retractedAt: now,
+					retractionReason: 'Reassign storage — operator changing fridge selection'
+				}
+			}
+		);
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'cartridge_records',
+			recordId: cartIds[0] ?? 'batch',
+			action: 'REASSIGN_STORAGE',
+			changedBy: locals.user?.username,
+			changedAt: now,
+			newData: { runId, count: cartIds.length, reason: 'Operator-initiated reassignment' }
+		});
 
 		return { success: true };
 	},

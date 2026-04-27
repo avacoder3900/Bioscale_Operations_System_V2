@@ -14,7 +14,7 @@ import {
 	AuditLog, ReceivingLot
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
-import { resolveFridgeId } from '$lib/server/services/equipment-resolve';
+import { resolveFridgeId, resolveOvenId, resolveCoolingTrayId } from '$lib/server/services/equipment-resolve';
 import { notifyRunLifecycle } from '$lib/server/notifications';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -80,16 +80,25 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const storageCartridges = (cartridgesRaw as any[]).map((c: any) => ({
 		cartridgeId: String(c._id),
 		qcStatus: c.waxQc?.status ?? 'Accepted',
-		currentInventory: c.status ?? 'wax_stored',
+		// Derive UI "stored" state from waxStorage.recordedAt rather than status.
+		// status stays 'wax_filled' until completeRun (deferred commit, see
+		// 581c0d7), but the operator-facing UI needs to show storage as recorded
+		// the moment recordBatchStorage writes the fields — otherwise the
+		// CompletionStorage component never transitions to its review state and
+		// the Complete Run button stays disabled.
+		currentInventory: c.waxStorage?.recordedAt ? 'wax_stored' : (c.status ?? 'wax_filled'),
 		storageLocation: c.waxStorage?.location ?? null
 	}));
 
-	// Go-back is allowed from QC or Storage, as long as no cartridge has been
-	// committed to a fridge yet. Once waxStorage.recordedAt is set on any
-	// cartridge, the run is a one-way street — fridge placement is the commit.
+	// Go-back-to-QC is allowed only when no cartridge has been placed in a
+	// fridge yet — going back to QC would invalidate any storage assignments.
+	// Reassign-storage is the separate path for fixing fridge mistakes after
+	// recordBatchStorage; it stays in Storage stage and just clears waxStorage
+	// fields. completeRun is the true commit point.
 	const anyStored = (cartridgesRaw as any[]).some((c: any) => !!c.waxStorage?.recordedAt);
 	const canGoBack = (stage === 'QC' || stage === 'Storage') && !anyStored;
 	const goBackTargetStage = stage === 'Storage' ? 'QC' : stage === 'QC' ? 'Awaiting Removal' : null;
+	const canReassignStorage = stage === 'Storage' && anyStored;
 
 	const [equipFridges, orphanFridges] = await Promise.all([
 		Equipment.find({ equipmentType: 'fridge', status: { $ne: 'offline' } }).lean().catch(() => []),
@@ -130,6 +139,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		fridges: JSON.parse(JSON.stringify(fridges)),
 		canGoBack,
 		goBackTargetStage,
+		canReassignStorage,
 		robotName: run.robot?.name
 			|| (run.robot?._id
 				? (await Equipment.findById(run.robot._id).select('name').lean() as any)?.name
@@ -153,9 +163,36 @@ export const actions: Actions = {
 		const ovenLocationName = (data.get('ovenLocationName') as string) || undefined;
 		const now = new Date();
 
+		// Resolve oven reference to canonical Equipment._id (S2). The form may
+		// pass a barcode, name, or already-resolved _id; the helper handles all
+		// three. Fail the action if it doesn't resolve so we never store a
+		// raw string in the authoritative locationId field.
+		let resolvedOvenId: string | undefined;
+		let resolvedOvenName: string | undefined;
+		if (ovenLocationId) {
+			const resolved = await resolveOvenId(ovenLocationId);
+			if (!resolved) {
+				return fail(400, { error: `Unknown oven: ${ovenLocationId}` });
+			}
+			resolvedOvenId = resolved;
+			// Look up the canonical name from the Equipment record
+			const ovenDoc = await Equipment.findById(resolved).select('name barcode').lean() as any;
+			resolvedOvenName = ovenDoc?.name ?? ovenDoc?.barcode ?? ovenLocationName;
+		}
+
+		// S2b: resolve cooling tray to canonical Equipment._id
+		let resolvedTrayId: string | undefined;
+		if (coolingTrayId) {
+			const resolved = await resolveCoolingTrayId(coolingTrayId);
+			if (!resolved) {
+				return fail(400, { error: `Unknown cooling tray: ${coolingTrayId}` });
+			}
+			resolvedTrayId = resolved;
+		}
+
 		const update: Record<string, any> = { status: 'QC', coolingConfirmedTime: now, coolingConfirmedAt: now };
-		if (coolingTrayId) update.coolingTrayId = coolingTrayId;
-		if (ovenLocationId) update.ovenLocationId = ovenLocationId;
+		if (resolvedTrayId) update.coolingTrayId = resolvedTrayId;
+		if (resolvedOvenId) update.ovenLocationId = resolvedOvenId;
 
 		const run = await WaxFillingRun.findByIdAndUpdate(runId, { $set: update }, { new: true }).lean() as any;
 
@@ -166,8 +203,8 @@ export const actions: Actions = {
 					filter: { _id: cid, 'ovenCure.entryTime': { $exists: false } },
 					update: {
 						$set: {
-							'ovenCure.locationId': ovenLocationId ?? undefined,
-							'ovenCure.locationName': ovenLocationName ?? ovenLocationId ?? undefined,
+							'ovenCure.locationId': resolvedOvenId ?? undefined,
+							'ovenCure.locationName': resolvedOvenName ?? ovenLocationName ?? undefined,
 							'ovenCure.entryTime': now,
 							'ovenCure.exitTime': now,
 							'ovenCure.operator': { _id: locals.user._id, username: locals.user.username },
@@ -401,6 +438,8 @@ export const actions: Actions = {
 		// still happens with locationId=null — readers fall back to `location`
 		// until S1b back-fills.
 		const resolvedLocationId = await resolveFridgeId(location);
+		// S2b: resolve cooling tray here too so waxStorage.coolingTrayId is canonical Equipment._id
+		const resolvedTrayId = coolingTrayId ? await resolveCoolingTrayId(coolingTrayId) : null;
 		if (cartridgeIds.length > 0) {
 			// Storage fields are written here (fridge, tray, operator, timestamp)
 			// but status stays at 'wax_filled' until completeRun commits the whole
@@ -413,7 +452,7 @@ export const actions: Actions = {
 						$set: {
 							'waxStorage.locationId': resolvedLocationId,
 							'waxStorage.location': location,
-							'waxStorage.coolingTrayId': coolingTrayId,
+							'waxStorage.coolingTrayId': resolvedTrayId ?? coolingTrayId,
 							'waxStorage.operator': { _id: locals.user._id, username: locals.user.username },
 							'waxStorage.timestamp': now,
 							'waxStorage.recordedAt': now
@@ -446,6 +485,64 @@ export const actions: Actions = {
 				newData: { status: 'wax_stored', location, count: cartridgeIds.length }
 			});
 		}
+
+		return { success: true };
+	},
+
+	/**
+	 * Clear waxStorage fields on every cartridge in the run so the operator can
+	 * re-pick fridges. Only allowed while the run is still in Storage stage —
+	 * once completeRun has flipped status to 'completed', the assignments are
+	 * locked. Retracts the storage-creation transactions written by
+	 * recordBatchStorage so the audit trail stays clean.
+	 */
+	reassignStorage: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const runId = data.get('runId') as string;
+		const now = new Date();
+
+		const run = await WaxFillingRun.findById(runId).lean() as any;
+		if (!run) return fail(404, { error: 'Run not found' });
+		if (run.status !== 'Storage' && run.status !== 'storage') {
+			return fail(400, { error: `Cannot reassign — run status is "${run.status}". Reassign is only allowed during Storage stage.` });
+		}
+
+		const cartIds: string[] = run.cartridgeIds ?? [];
+		if (cartIds.length === 0) return { success: true };
+
+		await CartridgeRecord.updateMany(
+			{ _id: { $in: cartIds } },
+			{ $unset: { waxStorage: '' } }
+		);
+
+		await mongoose.connection.db!.collection('inventory_transactions').updateMany(
+			{
+				cartridgeRecordId: { $in: cartIds },
+				manufacturingStep: 'storage',
+				transactionType: 'creation',
+				retractedAt: { $exists: false }
+			},
+			{
+				$set: {
+					retractedBy: locals.user?.username ?? 'unknown',
+					retractedAt: now,
+					retractionReason: 'Reassign storage — operator changing fridge selection'
+				}
+			}
+		);
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'cartridge_records',
+			recordId: cartIds[0] ?? 'batch',
+			action: 'REASSIGN_STORAGE',
+			changedBy: locals.user?.username,
+			changedAt: now,
+			newData: { runId, count: cartIds.length, reason: 'Operator-initiated reassignment' }
+		});
 
 		return { success: true };
 	},
