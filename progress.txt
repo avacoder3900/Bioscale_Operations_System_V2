@@ -55,6 +55,50 @@ import { requireAgentApiKey } from '$lib/server/api-auth';
 3. Deploy from GitHub via Vercel (linked to the repo)
 No `npx vercel` from local working directory. All deployments must be traceable to a GitHub commit.
 
+### UDI Generator (SPU-MFG-01 / SPU-MFG-01b, 2026-04-27)
+Single source of truth: `src/lib/server/db/udi-generator.ts`.
+- Atomic next-sequence: `udi_counters` collection keyed by prefix (`_id = prefix`),
+  mutated via `findOneAndUpdate({ _id: prefix }, { $inc: { sequence: 1 } },
+  { upsert: true, new: true })` — one atomic op, race-safe under concurrency.
+- Format (PRD §9 Q5 resolved): `<prefix>-NNNN-NNNN`, an 8-digit zero-padded
+  sequence split with a hyphen between digits 4 and 5.
+  Default prefix `BT-M01`. Examples: counter 1 → `BT-M01-0000-0001`,
+  counter 10000 → `BT-M01-0001-0000`.
+- `getNextUdi(prefix?)` reserves and returns `{ udi, sequence }`. Mirror row
+  written to `GeneratedBarcode` for backward-compat / emergency rebuild
+  (duplicate-key on the mirror is tolerated — counter is source of truth).
+- `peekNextUdi(prefix?)` returns the *next* UDI without incrementing —
+  dashboard hint only, may race with a concurrent reservation.
+
+### Per-Field Lock + Focus (SPU-MFG-03)
+Server-driven sequential field locking on the assembly build page.
+- `+page.server.ts` load function computes per-field flags from the captured
+  `fieldRecords[]` snapshot:
+    - `isLocked: boolean` — true when an earlier required field on the same
+      step has no `fieldValue`.
+    - `currentValue: string | null` — captured scan, if any.
+    - `captureId: string | null` — `fieldRecord._id`, used by the admin
+      edit-in-place flow.
+    - `editableByAdmin: boolean` — true iff `currentValue` is set AND the
+      SPU is not finalized.
+- Session focus coords are computed (not persisted) on every load:
+    - `session.focusStepIndex` (== `currentStepIndex`).
+    - `session.focusFieldIndex` — the first unlocked + unfilled field on the
+      focus step.
+- The `.svelte` page consumes these keys directly. PRD §9 Q1 exception
+  granted for `src/routes/assembly/[sessionId]/+page.svelte` only.
+
+### .svelte Freeze Convention (as practiced on `spu-mfg-rework`)
+- NEW `.svelte` files for NEW routes are permitted (e.g. `/spu/manufacturing`,
+  `/spu/manufacturing/log`) — these are scaffolding for the new contract,
+  not modifications to the frozen UI.
+- MODIFICATIONS to pre-existing `.svelte` files require an explicit per-file
+  exception from the lead. So far: only the assembly build page
+  (`src/routes/assembly/[sessionId]/+page.svelte`) has been granted that
+  exception, for the lock/focus contract above.
+- All other behavioral changes are expressed via load-return shape, action
+  responses, and route redirects — never by editing frozen `.svelte`.
+
 ---
 
 ## Phase 1: Initial Build (Feb 27 – Mar 2, 2026)
