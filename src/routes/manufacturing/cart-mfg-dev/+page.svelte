@@ -215,8 +215,7 @@
 					</div>
 					<div class="mt-1 text-lg font-bold text-tron-text">{data.pipeline.printBarcodes.sheetsOnHand} <span class="text-xs font-normal text-tron-text-secondary">sheets</span></div>
 					<div class="text-xs text-tron-text-secondary">{data.pipeline.printBarcodes.labelsAvailable} labels</div>
-					<!-- Print Barcodes link — route not yet built -->
-								<span class="mt-2 block text-xs text-tron-text-secondary opacity-50">Print (coming soon)</span>
+					<a href="/manufacturing/print-barcodes" class="mt-2 block text-xs text-tron-cyan hover:underline" onclick={(e) => e.stopPropagation()}>&rarr; Print Barcodes</a>
 					{#if expandedCard === 'barcodes'}
 						<div class="mt-3 border-t border-tron-border pt-3">
 							<div class="text-xs text-tron-text-secondary mb-1">Recent Batches</div>
