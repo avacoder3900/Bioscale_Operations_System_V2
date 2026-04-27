@@ -29,6 +29,12 @@ export interface TempAlertPayload {
 	timestamp: Date;
 }
 
+export interface GatewayOutagePayload {
+	timestamp: Date;
+	totalSensors: number;
+	silentSensors: { sensorId: string; sensorName: string; equipmentName?: string | null }[];
+}
+
 export const notifyTemperatureAlert = safely(async (payload: TempAlertPayload) => {
 	await connectDB();
 
@@ -73,6 +79,37 @@ export const notifyTemperatureAlert = safely(async (payload: TempAlertPayload) =
 			preheader: `${payload.sensorName}${eqLabel}`,
 			bodyHtml,
 			ctaText: 'View alerts',
+			ctaUrl: `${process.env.BIMS_BASE_URL ?? ''}/equipment/temperature-probes`
+		})
+	});
+});
+
+export const notifyGatewayOutage = safely(async (payload: GatewayOutagePayload) => {
+	await connectDB();
+	const { enabled, emails } = await getNotificationRecipients('temperatureAlerts');
+	if (!enabled) return { sent: false, skipped: 'disabled' as const };
+	if (emails.length === 0) return { sent: false, skipped: 'no_recipients' as const };
+
+	const subject = `[BIMS] GATEWAY OUTAGE — ${payload.silentSensors.length} of ${payload.totalSensors} probes silent`;
+	const sensorRows = payload.silentSensors
+		.map(s => `<li><strong>${s.sensorName}</strong>${s.equipmentName ? ` — ${s.equipmentName}` : ''} <span style="font-family:monospace;color:#6b7280;">${s.sensorId}</span></li>`)
+		.join('');
+	const bodyHtml = `
+		<p>The Mocreo gateway appears to be offline — <strong>${payload.silentSensors.length} of ${payload.totalSensors}</strong> probes stopped reporting at the same time. This usually means a power loss, network outage, or gateway hardware issue at the building, NOT individual probe failures.</p>
+		<p style="margin-top:16px;"><strong>Affected probes:</strong></p>
+		<ul style="font-size:13px;">${sensorRows}</ul>
+		<p style="margin-top:16px;color:#f87171;"><strong>Important:</strong> probes that come back online will report whatever temperature they observe — if a fridge or freezer lost power and didn't restart, you will start seeing high-temperature alerts as soon as the gateway recovers. Inspect cold storage equipment in person.</p>
+	`;
+
+	return sendEmail({
+		to: emails,
+		subject,
+		tag: 'gateway_outage',
+		html: renderEmailHtml({
+			title: 'Gateway Outage',
+			preheader: subject,
+			bodyHtml,
+			ctaText: 'View probes',
 			ctaUrl: `${process.env.BIMS_BASE_URL ?? ''}/equipment/temperature-probes`
 		})
 	});

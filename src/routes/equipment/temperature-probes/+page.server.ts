@@ -2,6 +2,7 @@ export const config = { maxDuration: 60 };
 import { fail } from '@sveltejs/kit';
 import { connectDB, Equipment, TemperatureReading, TemperatureAlert, SensorConfig, generateId, AuditLog } from '$lib/server/db';
 import { isAdmin } from '$lib/server/permissions';
+import { runMocreoSync } from '$lib/server/services/mocreo-sync';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -145,6 +146,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			temperatureMinC: sc?.temperatureMinC ?? mapping?.temperatureMinC ?? null,
 			temperatureMaxC: sc?.temperatureMaxC ?? mapping?.temperatureMaxC ?? null,
 			alertsEnabled: sc?.alertsEnabled ?? true,
+			// hasThresholds=false means no high/low alerts will ever fire for this sensor —
+			// see mocreo-sync.ts threshold-check block. UI should flag these.
+			hasThresholds: ((sc?.temperatureMinC ?? mapping?.temperatureMinC) != null)
+				|| ((sc?.temperatureMaxC ?? mapping?.temperatureMaxC) != null),
 			isOffline,
 			stats24h: s24 ? {
 				min: Math.round(s24.min * 10) / 10,
@@ -181,6 +186,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			temperatureMinC: sc2?.temperatureMinC ?? mapping?.temperatureMinC ?? null,
 			temperatureMaxC: sc2?.temperatureMaxC ?? mapping?.temperatureMaxC ?? null,
 			alertsEnabled: sc2?.alertsEnabled ?? true,
+			hasThresholds: ((sc2?.temperatureMinC ?? mapping?.temperatureMinC) != null)
+				|| ((sc2?.temperatureMaxC ?? mapping?.temperatureMaxC) != null),
 			isOffline: true,
 			stats24h: null,
 			sparkline: []
@@ -418,5 +425,28 @@ export const actions: Actions = {
 		});
 
 		return { success: true };
+	},
+
+	/**
+	 * S5: batch "Refresh all probes" — invokes the same Mocreo sync routine
+	 * the cron uses, on operator demand. Returns counts as a flash so the
+	 * UI can confirm what happened.
+	 */
+	refreshAll: async ({ request, url, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Authentication required' });
+		await connectDB();
+		try {
+			const result: any = await runMocreoSync(request, url);
+			return {
+				refreshAll: {
+					success: true,
+					synced: result?.synced ?? result?.sensorsSynced ?? null,
+					errored: result?.errored ?? result?.errors ?? 0,
+					message: 'Mocreo fleet sync triggered'
+				}
+			};
+		} catch (e: any) {
+			return fail(500, { refreshAll: { error: e?.message ?? 'Sync failed' } });
+		}
 	}
 };
