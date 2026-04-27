@@ -89,6 +89,7 @@ export { CvInspection } from './cv-inspection.js';
 
 // Manufacturing Analytics
 export { ProcessAnalyticsEvent } from './process-analytics-event.js';
+export { AnalyticsNote } from './analytics-note.js';
 export { SpecLimit } from './spec-limit.js';
 export { FmeaRecord } from './fmea-record.js';
 export { SpcSignal } from './spc-signal.js';
