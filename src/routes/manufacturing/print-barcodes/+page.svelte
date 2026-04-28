@@ -15,6 +15,9 @@
 
 	const LABELS_PER_SHEET = 80;
 
+	// Cells reflect what the printed sheet will contain. Before a batch is
+	// minted, all cells are blank (just shows the empty sheet layout). After a
+	// successful mint, the operator's barcodes fill in starting at `skip`.
 	const cells = $derived.by<string[]>(() => {
 		const out = Array.from({ length: LABELS_PER_SHEET }, () => '');
 		if (form && 'success' in form && form.success && form.barcodes) {
@@ -25,6 +28,9 @@
 		}
 		return out;
 	});
+
+	const hasBatch = $derived(!!(form && 'success' in form && form.success && form.barcodes?.length));
+	const spotCheck = $derived(form && 'success' in form && form.success ? form.spotCheck : null);
 
 	function datamatrix(node: HTMLCanvasElement, code: string) {
 		const draw = (text: string) => {
@@ -48,32 +54,33 @@
 			}
 		};
 	}
-
-	$effect(() => {
-		if (form && 'success' in form && form.success && form.barcodes?.length) {
-			const id = setTimeout(() => window.print(), 500);
-			return () => clearTimeout(id);
-		}
-	});
 </script>
 
-<div class="p-6 print:p-0">
-	<div class="print:hidden mb-6 max-w-2xl">
-		<h1 class="text-2xl font-bold mb-2">Print Cartridge Barcodes</h1>
-		<p class="text-gray-600 mb-4 text-sm">
-			Avery 94102 — 8×10 grid, 80 labels per sheet (¾" square). Each print mints fresh
-			<code>CART-NNNNNN</code> barcodes; uniqueness is enforced atomically against existing cartridges.
-		</p>
+<div class="space-y-5 p-4 print:p-0">
+	<!-- Form + status — hidden when printing -->
+	<div class="print:hidden space-y-4">
+		<div>
+			<h1 class="text-xl font-semibold" style="color: var(--color-tron-cyan)">Print Cartridge Barcodes</h1>
+			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
+				Avery 94102 — 8&times;10 grid, 80 labels per sheet (¾&quot; square). Each print mints fresh
+				<code class="font-mono text-[11px]" style="color: var(--color-tron-cyan)">CART-NNNNNN</code>
+				barcodes; uniqueness is enforced atomically against existing cartridges.
+			</p>
+		</div>
 
-		<div class="bg-gray-50 border rounded p-4 mb-4 text-sm">
-			<div class="flex justify-between">
-				<span>Sheets on hand: <strong>{data.sheetsOnHand}</strong></span>
+		<!-- Inventory chip -->
+		<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3 text-sm">
+			<div class="flex items-center justify-between">
+				<span style="color: var(--color-tron-text)">
+					Sheets on hand: <strong class="font-mono" style="color: var(--color-tron-cyan)">{data.sheetsOnHand}</strong>
+				</span>
 				{#if data.sheetsOnHand <= data.alertThreshold}
-					<span class="text-red-600 font-semibold">Below alert threshold ({data.alertThreshold})</span>
+					<span class="font-semibold text-red-400">Below alert threshold ({data.alertThreshold})</span>
 				{/if}
 			</div>
 		</div>
 
+		<!-- Mint form -->
 		<form
 			method="POST"
 			action="?/print"
@@ -84,116 +91,168 @@
 					submitting = false;
 				};
 			}}
-			class="space-y-4"
+			class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-3"
 		>
-			<label class="block">
-				<span class="text-sm font-medium">Labels to print (1–80)</span>
-				<input
-					type="number"
-					name="count"
-					bind:value={count}
-					min="1"
-					max="80"
-					required
-					class="block mt-1 border rounded px-2 py-1 w-32"
-				/>
-			</label>
-			<label class="block">
-				<span class="text-sm font-medium">Skip first N positions (partial sheet)</span>
-				<input
-					type="number"
-					name="skip"
-					bind:value={skip}
-					min="0"
-					max="79"
-					required
-					class="block mt-1 border rounded px-2 py-1 w-32"
-				/>
-			</label>
-			<p class="text-xs text-gray-500">Skip + count must be ≤ 80.</p>
+			<div class="grid gap-3 sm:grid-cols-2">
+				<label class="block">
+					<span class="block text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Labels to print (1–80)</span>
+					<input
+						type="number"
+						name="count"
+						bind:value={count}
+						min="1"
+						max="80"
+						required
+						class="mt-1 w-32 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm font-mono"
+						style="color: var(--color-tron-text)"
+					/>
+				</label>
+				<label class="block">
+					<span class="block text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Skip first N positions (partial sheet)</span>
+					<input
+						type="number"
+						name="skip"
+						bind:value={skip}
+						min="0"
+						max="79"
+						required
+						class="mt-1 w-32 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm font-mono"
+						style="color: var(--color-tron-text)"
+					/>
+				</label>
+			</div>
+			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Skip + count must be ≤ 80.</p>
 
 			<button
 				type="submit"
 				disabled={submitting || skip + count > LABELS_PER_SHEET}
-				class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+				class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-4 py-2 text-sm font-medium hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-50"
+				style="color: var(--color-tron-cyan)"
 			>
-				{submitting ? 'Generating…' : `Generate ${count} & Print`}
+				{submitting ? 'Generating…' : `Generate ${count} & Preview`}
 			</button>
 		</form>
 
+		<!-- Error -->
 		{#if form && 'error' in form && form.error}
-			<div class="mt-4 p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm">
+			<div class="rounded border border-red-500/50 bg-red-900/20 p-3 text-sm text-red-300">
 				{form.error}
 			</div>
 		{/if}
 
-		{#if form && 'success' in form && form.success}
-			<div class="mt-4 p-3 bg-green-50 border border-green-200 rounded text-green-700 text-sm">
-				Minted {form.barcodes?.length} barcodes
-				(<code>{form.barcodes?.[0]}</code> … <code>{form.barcodes?.[form.barcodes.length - 1]}</code>).
-				Sheets remaining: {form.sheetsRemainingAfter}.
-				<button type="button" onclick={() => window.print()} class="ml-2 underline">Reprint sheet</button>
+		<!-- Success header + spot-check + Print button -->
+		{#if form && 'success' in form && form.success && form.barcodes?.length}
+			{@const barcodes = form.barcodes}
+			{@const skipPos = form.skip ?? 0}
+			<div class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 p-3 space-y-2">
+				<div class="text-sm" style="color: var(--color-tron-cyan)">
+					<strong>Minted {barcodes.length} barcode{barcodes.length === 1 ? '' : 's'}</strong>
+					&nbsp;<span class="font-mono text-xs">({barcodes[0]}</span>
+					&hellip;
+					<span class="font-mono text-xs">{barcodes[barcodes.length - 1]})</span>
+				</div>
+
+				{#if spotCheck}
+					{@const ok = spotCheck.collisions.length === 0}
+					<div class="text-xs" style="color: {ok ? 'var(--color-tron-text-secondary)' : '#fca5a5'}">
+						{#if ok}
+							✓ Spot-check passed: {spotCheck.sampleSize}/{spotCheck.sampleSize} random
+							barcode{spotCheck.sampleSize === 1 ? '' : 's'} verified unique against
+							<code class="font-mono">cartridge_records</code>.
+							The full batch was also exhaustively checked at mint time.
+						{:else}
+							✗ Spot-check FAILED: {spotCheck.collisions.length}/{spotCheck.sampleSize}
+							sampled barcodes already exist in <code class="font-mono">cartridge_records</code>:
+							<span class="font-mono">{spotCheck.collisions.join(', ')}</span>.
+							This should never happen — investigate before printing.
+						{/if}
+					</div>
+				{/if}
+
+				<div class="text-[11px]" style="color: var(--color-tron-text-secondary)">
+					Sheets remaining: <strong class="font-mono" style="color: var(--color-tron-text)">{form.sheetsRemainingAfter}</strong>.
+					Review the simulation below — your barcodes are placed at positions
+					{skipPos + 1}–{skipPos + barcodes.length} of 80.
+				</div>
+
+				<button
+					type="button"
+					onclick={() => window.print()}
+					class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-semibold text-black hover:opacity-90"
+				>
+					Print Sheet
+				</button>
 			</div>
 		{/if}
 
+		<!-- Recent batches -->
 		{#if data.recent.length > 0}
-			<details class="mt-6">
-				<summary class="cursor-pointer text-sm font-medium">Recent batches ({data.recent.length})</summary>
-				<table class="mt-2 text-xs w-full">
-					<thead class="text-left bg-gray-100">
-						<tr>
-							<th class="p-2">When</th>
-							<th class="p-2">Range</th>
-							<th class="p-2">Count</th>
-							<th class="p-2">By</th>
+			<details class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+				<summary class="cursor-pointer text-sm font-medium" style="color: var(--color-tron-text)">
+					Recent batches ({data.recent.length})
+				</summary>
+				<table class="mt-3 w-full text-xs">
+					<thead>
+						<tr class="border-b border-[var(--color-tron-border)] text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
+							<th class="px-2 py-1 text-left">When</th>
+							<th class="px-2 py-1 text-left">Range</th>
+							<th class="px-2 py-1 text-left">Count</th>
+							<th class="px-2 py-1 text-left">By</th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each data.recent as r}
-							<tr class="border-t">
-								<td class="p-2">{new Date(r.printedAt).toLocaleString()}</td>
-								<td class="p-2 font-mono">{r.firstBarcodeId} – {r.lastBarcodeId}</td>
-								<td class="p-2">{r.totalLabels}</td>
-								<td class="p-2">{r.printedBy?.username ?? '—'}</td>
+							<tr class="border-b border-[var(--color-tron-border)]/40">
+								<td class="px-2 py-1" style="color: var(--color-tron-text-secondary)">{new Date(r.printedAt).toLocaleString()}</td>
+								<td class="px-2 py-1 font-mono" style="color: var(--color-tron-text)">{r.firstBarcodeId} – {r.lastBarcodeId}</td>
+								<td class="px-2 py-1" style="color: var(--color-tron-text)">{r.totalLabels}</td>
+								<td class="px-2 py-1" style="color: var(--color-tron-text-secondary)">{r.printedBy?.username ?? '—'}</td>
 							</tr>
 						{/each}
 					</tbody>
 				</table>
 			</details>
 		{/if}
+
+		<!-- Preview header (only on screen) -->
+		<div class="pt-2" style="color: var(--color-tron-text-secondary)">
+			<p class="text-[10px] uppercase tracking-wider">
+				{hasBatch ? 'Preview — exact simulation of what will print' : 'Empty sheet layout (will fill once you mint)'}
+			</p>
+		</div>
 	</div>
 
-	{#if form && 'success' in form && form.success}
-		{#key form.batchId}
-			<div class="w-[8.5in] h-[11in] bg-gray-50 print:bg-white mx-auto outline print:outline-0">
-				<div class="py-[0.46in] px-[0.23in] grid grid-cols-8 grid-rows-10">
-					{#each cells as code, index (index)}
-						<div class="m-[0.125in] w-[0.75in] h-[0.75in] bg-white text-black pt-1 border print:border-0">
-							{#if code}
-								<div
-									style="margin:0 0.05in -0.07in 0.08in;font-weight:bold;font-family:courier;font-size:5px;"
-								>
-									<span class="m-0">A</span>
-									<span class="ml-[0.22in]">B</span>
-									<span class="ml-[0.22in]">C</span>
+	<!-- The actual sheet — visible on screen as a preview AND used as the
+	     print render. Keyed on batchId so re-mints get a fresh canvas. -->
+	{#key form && 'batchId' in form ? form.batchId : 'empty'}
+		<div class="mx-auto h-[11in] w-[8.5in] outline outline-1 outline-[var(--color-tron-border)] bg-white print:bg-white print:outline-0">
+			<div class="grid grid-cols-8 grid-rows-10 px-[0.23in] py-[0.46in]">
+				{#each cells as code, index (index)}
+					<div class="m-[0.125in] h-[0.75in] w-[0.75in] border border-[var(--color-tron-border)]/30 bg-white pt-1 text-black print:border-0">
+						{#if code}
+							<div
+								style="margin:0 0.05in -0.07in 0.08in;font-weight:bold;font-family:courier;font-size:5px;"
+							>
+								<span class="m-0">A</span>
+								<span class="ml-[0.22in]">B</span>
+								<span class="ml-[0.22in]">C</span>
+							</div>
+							<div style="padding:0.05in 0.15in 0 0.18in">
+								<div style="transform:scale(0.85)">
+									<canvas use:datamatrix={code}></canvas>
 								</div>
-								<div style="padding:0.05in 0.15in 0 0.18in">
-									<div style="transform:scale(0.85)">
-										<canvas use:datamatrix={code}></canvas>
-									</div>
+							</div>
+							<div>
+								<div class="px-1 text-center font-mono text-[3.5pt] leading-[1.1em]">
+									{code}
 								</div>
-								<div>
-									<div class="px-1 text-[3.5pt] leading-[1.1em] text-center font-mono">
-										{code}
-									</div>
-								</div>
-							{/if}
-						</div>
-					{/each}
-				</div>
+							</div>
+						{/if}
+					</div>
+				{/each}
 			</div>
-		{/key}
-	{/if}
+		</div>
+	{/key}
 </div>
 
 <style>

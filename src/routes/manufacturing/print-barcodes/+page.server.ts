@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection';
-import { AuditLog, BarcodeSheetBatch, BarcodeInventory } from '$lib/server/db/models';
+import { AuditLog, BarcodeSheetBatch, BarcodeInventory, CartridgeRecord } from '$lib/server/db/models';
 import { generateId } from '$lib/server/db/utils';
 import { requirePermission } from '$lib/server/permissions';
 import { mintCartridgeBarcodes } from '$lib/server/services/barcode-generator';
@@ -57,6 +57,22 @@ export const actions: Actions = {
 			return fail(409, { error: e instanceof Error ? e.message : 'Mint failed' });
 		}
 
+		// Visible spot-check: sample 5 random barcodes from the minted batch and
+		// query cartridge_records for any matches. mintCartridgeBarcodes already
+		// runs an exhaustive check internally, so this is belt-and-suspenders —
+		// surfaces a separate visible verification line in the UI.
+		const sampleSize = Math.min(5, barcodes.length);
+		const shuffled = [...barcodes].sort(() => Math.random() - 0.5);
+		const sample = shuffled.slice(0, sampleSize);
+		const sampleCollisions = await CartridgeRecord.find({ barcode: { $in: sample } })
+			.select('barcode')
+			.lean();
+		const spotCheck = {
+			sampleSize,
+			collisions: (sampleCollisions as Array<{ barcode: string }>).map((c) => c.barcode),
+			sample
+		};
+
 		const sheetsBefore = (await BarcodeInventory.findById('default').lean() as
 			| { avery94102SheetsOnHand?: number }
 			| null)?.avery94102SheetsOnHand ?? 0;
@@ -112,7 +128,8 @@ export const actions: Actions = {
 			barcodes,
 			skip,
 			printedAt: printedAt.toISOString(),
-			sheetsRemainingAfter: sheetsAfter
+			sheetsRemainingAfter: sheetsAfter,
+			spotCheck
 		};
 	}
 };
