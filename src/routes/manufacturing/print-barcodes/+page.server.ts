@@ -37,9 +37,13 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
+		const sheetsToPrint = Number(data.get('sheetsToPrint') ?? 1);
 		const count = Number(data.get('count') ?? LABELS_PER_SHEET);
 		const skip = Number(data.get('skip') ?? 0);
 
+		if (!Number.isInteger(sheetsToPrint) || sheetsToPrint < 1 || sheetsToPrint > 10) {
+			return fail(400, { error: `Sheets to print must be 1–10` });
+		}
 		if (!Number.isInteger(count) || count < 1 || count > LABELS_PER_SHEET) {
 			return fail(400, { error: `Count must be 1–${LABELS_PER_SHEET}` });
 		}
@@ -50,9 +54,13 @@ export const actions: Actions = {
 			return fail(400, { error: `Skip + count cannot exceed ${LABELS_PER_SHEET}` });
 		}
 
+		// First sheet has `count` labels (after `skip` blanks); each subsequent
+		// sheet is a full 80. Total mint = count + (sheetsToPrint - 1) * 80.
+		const totalLabels = count + (sheetsToPrint - 1) * LABELS_PER_SHEET;
+
 		let barcodes: string[];
 		try {
-			barcodes = await mintCartridgeBarcodes(count);
+			barcodes = await mintCartridgeBarcodes(totalLabels);
 		} catch (e) {
 			return fail(409, { error: e instanceof Error ? e.message : 'Mint failed' });
 		}
@@ -76,7 +84,7 @@ export const actions: Actions = {
 		const sheetsBefore = (await BarcodeInventory.findById('default').lean() as
 			| { avery94102SheetsOnHand?: number }
 			| null)?.avery94102SheetsOnHand ?? 0;
-		const sheetsAfter = Math.max(0, sheetsBefore - 1);
+		const sheetsAfter = Math.max(0, sheetsBefore - sheetsToPrint);
 
 		const batchId = generateId();
 		const printedAt = new Date();
@@ -84,9 +92,9 @@ export const actions: Actions = {
 
 		await BarcodeSheetBatch.create({
 			_id: batchId,
-			sheetsUsed: 1,
+			sheetsUsed: sheetsToPrint,
 			labelsPerSheet: LABELS_PER_SHEET,
-			totalLabels: count,
+			totalLabels,
 			barcodeIds: barcodes,
 			firstBarcodeId: barcodes[0],
 			lastBarcodeId: barcodes[barcodes.length - 1],
@@ -97,7 +105,7 @@ export const actions: Actions = {
 			sheetsRemainingBefore: sheetsBefore,
 			sheetsRemainingAfter: sheetsAfter,
 			status: 'printed',
-			labelsUsed: count
+			labelsUsed: totalLabels
 		});
 
 		await BarcodeInventory.findByIdAndUpdate(
@@ -112,8 +120,10 @@ export const actions: Actions = {
 			recordId: batchId,
 			action: 'INSERT',
 			newData: {
+				sheetsToPrint,
 				count,
 				skip,
+				totalLabels,
 				firstBarcodeId: barcodes[0],
 				lastBarcodeId: barcodes[barcodes.length - 1],
 				templateVersion: TEMPLATE_VERSION
@@ -127,6 +137,8 @@ export const actions: Actions = {
 			batchId,
 			barcodes,
 			skip,
+			firstSheetCount: count,
+			sheetsToPrint,
 			printedAt: printedAt.toISOString(),
 			sheetsRemainingAfter: sheetsAfter,
 			spotCheck

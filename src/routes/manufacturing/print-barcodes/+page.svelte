@@ -9,24 +9,42 @@
 	}
 	let { data, form }: Props = $props();
 
+	let sheetsToPrint = $state(1);
 	let count = $state(80);
 	let skip = $state(0);
 	let submitting = $state(false);
 
 	const LABELS_PER_SHEET = 80;
+	const totalLabels = $derived(count + (sheetsToPrint - 1) * LABELS_PER_SHEET);
 
-	// Cells reflect what the printed sheet will contain. Before a batch is
-	// minted, all cells are blank (just shows the empty sheet layout). After a
-	// successful mint, the operator's barcodes fill in starting at `skip`.
-	const cells = $derived.by<string[]>(() => {
-		const out = Array.from({ length: LABELS_PER_SHEET }, () => '');
-		if (form && 'success' in form && form.success && form.barcodes) {
-			const start = form.skip ?? 0;
-			form.barcodes.forEach((b, i) => {
-				if (start + i < LABELS_PER_SHEET) out[start + i] = b;
-			});
+	// Build N sheets (one cells[80] array per sheet) from the minted barcodes.
+	// First sheet honours the operator's `skip` + `firstSheetCount`; sheets 2..N
+	// are always full 80. Before a batch is minted, returns a single empty
+	// sheet so the operator sees the layout template.
+	const sheets = $derived.by<string[][]>(() => {
+		if (!form || !('success' in form) || !form.success || !form.barcodes?.length) {
+			return [Array.from({ length: LABELS_PER_SHEET }, () => '')];
 		}
-		return out;
+		const barcodes: string[] = form.barcodes;
+		const sheetCount = form.sheetsToPrint ?? 1;
+		const firstCount = form.firstSheetCount ?? barcodes.length;
+		const startSkip = form.skip ?? 0;
+		const result: string[][] = [];
+		let idx = 0;
+		for (let s = 0; s < sheetCount; s++) {
+			const cells = Array.from({ length: LABELS_PER_SHEET }, () => '');
+			if (s === 0) {
+				for (let i = 0; i < firstCount && startSkip + i < LABELS_PER_SHEET; i++) {
+					cells[startSkip + i] = barcodes[idx++];
+				}
+			} else {
+				for (let i = 0; i < LABELS_PER_SHEET && idx < barcodes.length; i++) {
+					cells[i] = barcodes[idx++];
+				}
+			}
+			result.push(cells);
+		}
+		return result;
 	});
 
 	const hasBatch = $derived(!!(form && 'success' in form && form.success && form.barcodes?.length));
@@ -93,9 +111,22 @@
 			}}
 			class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-3"
 		>
-			<div class="grid gap-3 sm:grid-cols-2">
+			<div class="grid gap-3 sm:grid-cols-3">
 				<label class="block">
-					<span class="block text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Labels to print (1–80)</span>
+					<span class="block text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Sheets to print (1–10)</span>
+					<input
+						type="number"
+						name="sheetsToPrint"
+						bind:value={sheetsToPrint}
+						min="1"
+						max="10"
+						required
+						class="mt-1 w-32 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm font-mono"
+						style="color: var(--color-tron-text)"
+					/>
+				</label>
+				<label class="block">
+					<span class="block text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Labels on first sheet (1–80)</span>
 					<input
 						type="number"
 						name="count"
@@ -121,7 +152,9 @@
 					/>
 				</label>
 			</div>
-			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Skip + count must be ≤ 80.</p>
+			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
+				Skip + first-sheet labels must be ≤ 80. Sheets 2–{sheetsToPrint} (if any) print full 80 each. Total: <strong class="font-mono" style="color: var(--color-tron-cyan)">{totalLabels}</strong> labels.
+			</p>
 
 			<button
 				type="submit"
@@ -129,7 +162,7 @@
 				class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-4 py-2 text-sm font-medium hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-50"
 				style="color: var(--color-tron-cyan)"
 			>
-				{submitting ? 'Generating…' : `Generate ${count} & Preview`}
+				{submitting ? 'Generating…' : `Generate ${totalLabels} & Preview`}
 			</button>
 		</form>
 
@@ -171,8 +204,7 @@
 
 				<div class="text-[11px]" style="color: var(--color-tron-text-secondary)">
 					Sheets remaining: <strong class="font-mono" style="color: var(--color-tron-text)">{form.sheetsRemainingAfter}</strong>.
-					Review the simulation below — your barcodes are placed at positions
-					{skipPos + 1}–{skipPos + barcodes.length} of 80.
+					Review the {form.sheetsToPrint ?? 1}-sheet simulation below — clicking Print Sheet will print all {form.sheetsToPrint ?? 1} pages in one job.
 				</div>
 
 				<button
@@ -217,40 +249,48 @@
 		<!-- Preview header (only on screen) -->
 		<div class="pt-2" style="color: var(--color-tron-text-secondary)">
 			<p class="text-[10px] uppercase tracking-wider">
-				{hasBatch ? 'Preview — exact simulation of what will print' : 'Empty sheet layout (will fill once you mint)'}
+				{hasBatch
+					? `Preview — exact simulation of ${sheets.length} sheet${sheets.length === 1 ? '' : 's'} that will print`
+					: 'Empty sheet layout (will fill once you mint)'}
 			</p>
 		</div>
 	</div>
 
-	<!-- The actual sheet — visible on screen as a preview AND used as the
-	     print render. Keyed on batchId so re-mints get a fresh canvas. -->
+	<!-- The actual sheets — visible on screen as a preview AND used as the
+	     print render. Keyed on batchId so re-mints get a fresh canvas.
+	     `print:break-after-page` on every sheet ensures the browser starts
+	     a new page after each (last sheet's break is a no-op). -->
 	{#key form && 'batchId' in form ? form.batchId : 'empty'}
-		<div class="mx-auto h-[11in] w-[8.5in] outline outline-1 outline-[var(--color-tron-border)] bg-white print:bg-white print:outline-0">
-			<div class="grid grid-cols-8 grid-rows-10 px-[0.23in] py-[0.46in]">
-				{#each cells as code, index (index)}
-					<div class="m-[0.125in] h-[0.75in] w-[0.75in] border border-[var(--color-tron-border)]/30 bg-white pt-1 text-black print:border-0">
-						{#if code}
-							<div
-								style="margin:0 0.05in -0.07in 0.08in;font-weight:bold;font-family:courier;font-size:5px;"
-							>
-								<span class="m-0">A</span>
-								<span class="ml-[0.22in]">B</span>
-								<span class="ml-[0.22in]">C</span>
+		<div class="space-y-4 print:space-y-0">
+			{#each sheets as sheetCells, sheetIdx (sheetIdx)}
+				<div class="mx-auto h-[11in] w-[8.5in] outline outline-1 outline-[var(--color-tron-border)] bg-white print:bg-white print:outline-0" style="break-after: page; page-break-after: always;">
+					<div class="grid grid-cols-8 grid-rows-10 px-[0.23in] py-[0.46in]">
+						{#each sheetCells as code, index (index)}
+							<div class="m-[0.125in] h-[0.75in] w-[0.75in] border border-[var(--color-tron-border)]/30 bg-white pt-1 text-black print:border-0">
+								{#if code}
+									<div
+										style="margin:0 0.05in -0.07in 0.08in;font-weight:bold;font-family:courier;font-size:5px;"
+									>
+										<span class="m-0">A</span>
+										<span class="ml-[0.22in]">B</span>
+										<span class="ml-[0.22in]">C</span>
+									</div>
+									<div style="padding:0.05in 0.15in 0 0.18in">
+										<div style="transform:scale(0.85)">
+											<canvas use:datamatrix={code}></canvas>
+										</div>
+									</div>
+									<div>
+										<div class="break-words px-1 text-center font-mono text-[3.5pt] leading-[1.1em]">
+											{code}
+										</div>
+									</div>
+								{/if}
 							</div>
-							<div style="padding:0.05in 0.15in 0 0.18in">
-								<div style="transform:scale(0.85)">
-									<canvas use:datamatrix={code}></canvas>
-								</div>
-							</div>
-							<div>
-								<div class="break-words px-1 text-center font-mono text-[3.5pt] leading-[1.1em]">
-									{code}
-								</div>
-							</div>
-						{/if}
+						{/each}
 					</div>
-				{/each}
-			</div>
+				</div>
+			{/each}
 		</div>
 	{/key}
 </div>
