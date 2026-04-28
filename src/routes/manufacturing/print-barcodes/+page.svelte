@@ -243,7 +243,7 @@
 								</div>
 							</div>
 							<div>
-								<div class="px-1 text-center font-mono text-[3.5pt] leading-[1.1em]">
+								<div class="break-words px-1 text-center font-mono text-[3.5pt] leading-[1.1em]">
 									{code}
 								</div>
 							</div>

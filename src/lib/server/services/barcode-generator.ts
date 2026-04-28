@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { connectDB } from '$lib/server/db/connection';
 import { GeneratedBarcode, CartridgeRecord } from '$lib/server/db/models';
 import { generateId } from '$lib/server/db/utils';
@@ -46,24 +47,22 @@ export async function generateCartridgeBarcode(): Promise<string> {
 /**
  * Mint a fresh batch of unique cartridge barcodes for printing.
  *
- * Uniqueness layers (defense-in-depth):
- *   1. Atomic $inc on the prefix counter — guarantees the sequence never repeats.
- *   2. unique index on GeneratedBarcode.barcode — DB-level rejection of duplicates.
- *   3. Post-mint scan against CartridgeRecord.barcode — surfaces any historical
- *      drift (e.g. legacy data created outside this generator).
+ * Format: UUID v4 (e.g. "5da7b3c5-4cba-4fe4-93b1-c17ad61efbbf"), matching
+ * the reference barcode sheet design. UUIDs avoid the counter-doc fragility
+ * of sequential ids: no shared state, no race conditions, and the v4
+ * collision probability across the entire device lifetime is negligible.
  *
- * Throws if any minted barcode collides with an existing CartridgeRecord, so the
- * caller can fail the print job before any sticker is produced.
+ * The CartridgeRecord scan is kept as defense-in-depth — surfaces any
+ * historical drift (e.g. legacy data ingested with overlapping ids), even
+ * though a UUID v4 collision against any finite corpus is astronomically
+ * improbable.
  */
 export async function mintCartridgeBarcodes(count: number): Promise<string[]> {
 	if (!Number.isInteger(count) || count < 1 || count > 800) {
 		throw new Error(`mintCartridgeBarcodes: count must be 1-800, got ${count}`);
 	}
 	await connectDB();
-	const minted: string[] = [];
-	for (let i = 0; i < count; i++) {
-		minted.push(await generateCartridgeBarcode());
-	}
+	const minted: string[] = Array.from({ length: count }, () => randomUUID());
 	const collisions = await CartridgeRecord.find({ barcode: { $in: minted } })
 		.select('barcode')
 		.lean();
