@@ -4,25 +4,29 @@ import { generateId } from '$lib/server/db/utils';
 
 /**
  * Generate a sequential barcode for a given prefix.
- * Uses atomic findOneAndUpdate to guarantee uniqueness.
- * Pattern: PREFIX-000001, PREFIX-000002, etc.
+ * Uses atomic findOneAndUpdate on a per-prefix counter doc to guarantee
+ * monotonically increasing sequences. Returns the formatted barcode string.
+ *
+ * Earlier versions of this function also wrote `barcode` onto the counter
+ * doc, which collided with the unique `barcode_1` index whenever the
+ * collection also held per-barcode tracking docs (validation routes write
+ * those; CART had 399 stale ones from a prior import). The barcode-write
+ * step is now removed — per-barcode tracking is the caller's responsibility
+ * if they need it (see validation/thermocouple/+page.server.ts).
+ *
+ * `sort: { sequence: -1 }` ensures we always increment the doc with the
+ * highest sequence (the counter), even when stale per-barcode docs exist
+ * for the same prefix.
  */
 export async function generateBarcode(prefix: string, type: string): Promise<string> {
 	await connectDB();
 	const doc = await GeneratedBarcode.findOneAndUpdate(
 		{ prefix },
-		{ $inc: { sequence: 1 } },
-		{ upsert: true, new: true, setDefaultsOnInsert: true }
+		{ $inc: { sequence: 1 }, $setOnInsert: { type } },
+		{ upsert: true, new: true, setDefaultsOnInsert: true, sort: { sequence: -1 } }
 	) as any;
 	const seq = doc.sequence ?? 1;
-	const barcode = `${prefix}-${String(seq).padStart(6, '0')}`;
-
-	// Store the generated barcode for lookup/uniqueness
-	await GeneratedBarcode.findByIdAndUpdate(doc._id, {
-		$set: { barcode, type }
-	});
-
-	return barcode;
+	return `${prefix}-${String(seq).padStart(6, '0')}`;
 }
 
 /**
