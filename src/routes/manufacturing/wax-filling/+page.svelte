@@ -563,8 +563,9 @@
 		}
 	}
 
-	// Cooling timer: block QC for 10 minutes after coolingConfirmedAt
-	const COOLING_REQUIRED_MS = 10 * 60 * 1000;
+	// Cooling timer: block QC after coolingConfirmedAt for the duration set in
+	// ManufacturingSettings.waxFilling.minCoolingBeforeQcMin (default 2 min).
+	const coolingRequiredMs = $derived((data.settings?.minCoolingBeforeQcMin ?? 2) * 60 * 1000);
 	let coolingTick = $state(0);
 	$effect(() => {
 		if (data.runState.stage === 'QC' && data.runState.coolingConfirmedAt && !coolingBypassed) {
@@ -575,10 +576,10 @@
 	const coolingConfirmedAt = $derived(data.runState.coolingConfirmedAt ? new Date(data.runState.coolingConfirmedAt) : null);
 	const coolingElapsedMs = $derived.by(() => {
 		void coolingTick;
-		if (coolingBypassed) return COOLING_REQUIRED_MS;
-		return coolingConfirmedAt ? Date.now() - coolingConfirmedAt.getTime() : COOLING_REQUIRED_MS;
+		if (coolingBypassed) return coolingRequiredMs;
+		return coolingConfirmedAt ? Date.now() - coolingConfirmedAt.getTime() : coolingRequiredMs;
 	});
-	const coolingRemainingMs = $derived(Math.max(0, COOLING_REQUIRED_MS - coolingElapsedMs));
+	const coolingRemainingMs = $derived(Math.max(0, coolingRequiredMs - coolingElapsedMs));
 	const coolingComplete = $derived(coolingRemainingMs === 0 || coolingBypassed);
 	const coolingCountdown = $derived.by(() => {
 		const totalSec = Math.ceil(coolingRemainingMs / 1000);
@@ -1185,6 +1186,7 @@
 					{coolingBypassed}
 					runId={data.runState.runId ?? ''}
 					lotId={data.runState.activeLotId ?? null}
+					coolingGateMin={data.settings?.minCoolingBeforeQcMin ?? 2}
 				/>
 			{:else}
 				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">

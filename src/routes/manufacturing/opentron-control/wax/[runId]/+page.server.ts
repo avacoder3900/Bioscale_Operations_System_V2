@@ -131,7 +131,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		},
 		settings: {
 			coolingWarningMin: wax.coolingWarningMin ?? 7,
-			deckLockoutMin: wax.deckLockoutMin ?? 25
+			deckLockoutMin: wax.deckLockoutMin ?? 25,
+			minCoolingBeforeQcMin: wax.minCoolingBeforeQcMin ?? 2
 		},
 		rejectionCodes,
 		qcCartridges: JSON.parse(JSON.stringify(qcCartridges)),

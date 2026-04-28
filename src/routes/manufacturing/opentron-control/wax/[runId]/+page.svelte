@@ -19,17 +19,21 @@
 	let coolingBypassError = $state('');
 	let showCoolingBypass = $state(false);
 
+	const coolingGateMs = $derived((data.settings?.minCoolingBeforeQcMin ?? 2) * 60 * 1000);
+
 	let coolingComplete = $derived(() => {
 		if (coolingBypassed) return true;
 		if (!data.runState.coolingConfirmedAt) return false;
 		const elapsed = Date.now() - new Date(data.runState.coolingConfirmedAt).getTime();
-		return elapsed >= 10 * 60 * 1000;
+		return elapsed >= coolingGateMs;
 	});
 
 	let coolingCountdown = $derived(() => {
-		if (!data.runState.coolingConfirmedAt) return '10:00';
+		const totalSec = Math.ceil(coolingGateMs / 1000);
+		const defaultDisplay = `${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, '0')}`;
+		if (!data.runState.coolingConfirmedAt) return defaultDisplay;
 		const elapsed = Date.now() - new Date(data.runState.coolingConfirmedAt).getTime();
-		const remaining = Math.max(0, 10 * 60 * 1000 - elapsed);
+		const remaining = Math.max(0, coolingGateMs - elapsed);
 		const m = Math.floor(remaining / 60000);
 		const s = Math.floor((remaining % 60000) / 1000);
 		return `${m}:${String(s).padStart(2, '0')}`;
@@ -223,6 +227,7 @@
 					{coolingBypassed}
 					runId={data.runId}
 					lotId={null}
+					coolingGateMin={data.settings?.minCoolingBeforeQcMin ?? 2}
 				/>
 			{:else}
 				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">

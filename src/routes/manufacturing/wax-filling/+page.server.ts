@@ -75,7 +75,8 @@ function emptyState(robotId: string, loadError: string | null = null) {
 		},
 		settings: {
 			runDurationMin: 45, removeDeckWarningMin: 5, coolingWarningMin: 7,
-			deckLockoutMin: 25, incubatorTempC: 37, heaterTempC: 65
+			deckLockoutMin: 25, incubatorTempC: 37, heaterTempC: 65,
+			minCoolingBeforeQcMin: 2
 		},
 		tubeData: null as null | {
 			tubeId: string; initialVolumeUl: number; remainingVolumeUl: number;
@@ -281,7 +282,8 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 				coolingWarningMin: wax.coolingWarningMin ?? 7,
 				deckLockoutMin: wax.deckLockoutMin ?? 25,
 				incubatorTempC: wax.incubatorTempC ?? 37,
-				heaterTempC: wax.heaterTempC ?? 65
+				heaterTempC: wax.heaterTempC ?? 65,
+				minCoolingBeforeQcMin: wax.minCoolingBeforeQcMin ?? 2
 			},
 			tubeData,
 			activeLotId,
