@@ -55,7 +55,7 @@
 			if (!text) return;
 			try {
 				bwipjs.toCanvas(node, {
-					bcid: 'datamatrix',
+					bcid: 'qrcode',
 					text,
 					scale: 3,
 					height: 7,
