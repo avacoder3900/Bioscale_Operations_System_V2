@@ -27,8 +27,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			).steps?.length ?? 0
 		: null;
 
-	const inProgressSpus = await Spu.find({
-		status: { $in: ['draft', 'assembling'] },
+	const candidateSpus = await Spu.find({
+		'statusTransitions.reason': 'auto_created_assembly_tab',
 		finalizedAt: null,
 		voidedAt: null
 	})
@@ -36,9 +36,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 		.limit(50)
 		.lean();
 
-	const spuIds = inProgressSpus.map((s: any) => s._id);
-	const latestSessionsRaw = spuIds.length
-		? await AssemblySession.find({ spuId: { $in: spuIds } })
+	const candidateIds = candidateSpus.map((s: any) => s._id);
+	const latestSessionsRaw = candidateIds.length
+		? await AssemblySession.find({ spuId: { $in: candidateIds } })
 				.sort({ startedAt: -1 })
 				.lean()
 		: [];
@@ -46,6 +46,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 	for (const s of latestSessionsRaw as any[]) {
 		if (!latestSessionBySpu.has(s.spuId)) latestSessionBySpu.set(s.spuId, s);
 	}
+
+	const inProgressSpus = (candidateSpus as any[]).filter((spu) => {
+		const sess = latestSessionBySpu.get(spu._id);
+		if (!sess) return true;
+		return sess.status !== 'completed' && !sess.completedAt;
+	});
 
 	const ownerIds = new Set<string>();
 	for (const s of inProgressSpus as any[]) {
