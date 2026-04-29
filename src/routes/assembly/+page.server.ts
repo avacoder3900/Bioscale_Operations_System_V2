@@ -50,82 +50,91 @@ export const load: PageServerLoad = async ({ locals }) => {
 export const actions: Actions = {
 	startNewBuild: async ({ request, locals }) => {
 		requirePermission(locals.user, 'spu:write');
-		await connectDB();
+		try {
+			await connectDB();
 
-		const form = await request.formData();
-		const buildRunId = form.get('buildRunId')?.toString() || undefined;
+			const form = await request.formData();
+			const buildRunId = form.get('buildRunId')?.toString() || undefined;
 
-		const recentDraft = await Spu.findOne({
-			createdBy: locals.user!._id,
-			status: 'draft',
-			assemblyStatus: 'created',
-			createdAt: { $gte: new Date(Date.now() - STALE_DRAFT_MS) }
-		}).lean();
-
-		let spuId: string;
-		let udi: string;
-
-		if (recentDraft) {
-			spuId = (recentDraft as any)._id;
-			udi = (recentDraft as any).udi;
-		} else {
-			udi = await generateNextSpuUdi({
-				_id: locals.user!._id,
-				username: locals.user!.username
-			});
-			spuId = generateId();
-
-			const now = new Date();
-			await Spu.create({
-				_id: spuId,
-				udi,
+			const recentDraft = await Spu.findOne({
+				createdBy: locals.user!._id,
 				status: 'draft',
 				assemblyStatus: 'created',
-				statusTransitions: [
-					{
-						_id: generateId(),
-						from: null,
-						to: 'draft',
-						changedBy: { _id: locals.user!._id, username: locals.user!.username },
-						changedAt: now,
-						reason: 'auto_created_assembly_tab'
-					}
-				],
-				createdBy: locals.user!._id
-			});
+				createdAt: { $gte: new Date(Date.now() - STALE_DRAFT_MS) }
+			}).lean();
 
-			if (buildRunId) {
-				await Spu.updateOne({ _id: spuId }, { $set: { 'batch._id': buildRunId } });
+			let spuId: string;
+			let udi: string;
+
+			if (recentDraft) {
+				spuId = (recentDraft as any)._id;
+				udi = (recentDraft as any).udi;
+			} else {
+				udi = await generateNextSpuUdi({
+					_id: locals.user!._id,
+					username: locals.user!.username
+				});
+				spuId = generateId();
+
+				const now = new Date();
+				await Spu.create({
+					_id: spuId,
+					udi,
+					status: 'draft',
+					assemblyStatus: 'created',
+					statusTransitions: [
+						{
+							_id: generateId(),
+							from: null,
+							to: 'draft',
+							changedBy: { _id: locals.user!._id, username: locals.user!.username },
+							changedAt: now,
+							reason: 'auto_created_assembly_tab'
+						}
+					],
+					createdBy: locals.user!._id
+				});
+
+				if (buildRunId) {
+					await Spu.updateOne({ _id: spuId }, { $set: { 'batch._id': buildRunId } });
+				}
+
+				await AuditLog.create({
+					_id: generateId(),
+					tableName: 'spus',
+					recordId: spuId,
+					action: 'INSERT',
+					changedBy: locals.user?.username ?? locals.user?._id,
+					changedAt: now,
+					newData: { event: 'auto_create_draft', udi, buildRunId: buildRunId ?? null }
+				});
 			}
 
-			await AuditLog.create({
-				_id: generateId(),
-				tableName: 'spus',
-				recordId: spuId,
-				action: 'INSERT',
-				changedBy: locals.user?.username ?? locals.user?._id,
-				changedAt: now,
-				newData: { event: 'auto_create_draft', udi, buildRunId: buildRunId ?? null }
+			const activeWi = await getActiveSpuWorkInstruction();
+
+			return {
+				startedBuild: {
+					spuId,
+					udi,
+					resumed: !!recentDraft,
+					workInstruction: activeWi
+						? {
+								id: (activeWi as any)._id,
+								title: (activeWi as any).title,
+								revision: (activeWi as any).revision ?? '',
+								currentVersion: (activeWi as any).currentVersion ?? 1
+							}
+						: null
+				}
+			};
+		} catch (err: any) {
+			const msg = err?.message ?? String(err);
+			const code = err?.code ?? err?.codeName ?? '';
+			console.error('[startNewBuild] failed:', err);
+			return fail(500, {
+				error: `startNewBuild failed: ${msg}${code ? ` [${code}]` : ''}`
 			});
 		}
-
-		const activeWi = await getActiveSpuWorkInstruction();
-
-		return {
-			startedBuild: {
-				spuId,
-				udi,
-				resumed: !!recentDraft,
-				workInstruction: activeWi
-					? {
-							id: (activeWi as any)._id,
-							title: (activeWi as any).title,
-							revision: (activeWi as any).revision ?? '',
-							currentVersion: (activeWi as any).currentVersion ?? 1
-						}
-					: null
-			}
-		};
 	},
 
 	openWorkInstruction: async ({ request, locals }) => {
