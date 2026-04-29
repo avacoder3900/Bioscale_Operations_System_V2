@@ -1,5 +1,6 @@
 import { connectDB } from '$lib/server/db/connection';
 import { GeneratedBarcode, Spu, AuditLog, generateId } from '$lib/server/db';
+import { nanoid } from 'nanoid';
 
 const PREFIX_KEY = 'SPU_BT_M01';
 const TYPE = 'spu';
@@ -30,8 +31,24 @@ async function highestExistingUdi(): Promise<{ group3: string; seq: number } | n
 	return best;
 }
 
+async function repairNullBarcodeRows(): Promise<void> {
+	const broken: any[] = await GeneratedBarcode.find({
+		$or: [{ barcode: null }, { barcode: { $exists: false } }]
+	})
+		.lean()
+		.limit(50);
+	for (const row of broken) {
+		await GeneratedBarcode.updateOne(
+			{ _id: row._id },
+			{ $set: { barcode: `__counter__${row.prefix ?? 'unknown'}_${nanoid(10)}` } }
+		);
+	}
+}
+
 export async function generateNextSpuUdi(actor?: { _id: string; username: string }): Promise<string> {
 	await connectDB();
+
+	await repairNullBarcodeRows();
 
 	const highest = await highestExistingUdi();
 	const group3 = highest?.group3 ?? '0000';
@@ -43,9 +60,13 @@ export async function generateNextSpuUdi(actor?: { _id: string; username: string
 		{ upsert: false }
 	);
 
+	const placeholderBarcode = `__counter__${PREFIX_KEY}_${nanoid(10)}`;
 	const counter = (await GeneratedBarcode.findOneAndUpdate(
 		{ prefix: PREFIX_KEY },
-		{ $inc: { sequence: 1 } },
+		{
+			$inc: { sequence: 1 },
+			$setOnInsert: { barcode: placeholderBarcode, type: TYPE }
+		},
 		{ upsert: true, new: true, setDefaultsOnInsert: true }
 	)) as any;
 
