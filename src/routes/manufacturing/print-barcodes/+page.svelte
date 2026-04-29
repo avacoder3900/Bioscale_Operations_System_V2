@@ -275,13 +275,18 @@
 										<span class="ml-[0.22in]">B</span>
 										<span class="ml-[0.22in]">C</span>
 									</div>
-									<div style="padding:0.05in 0.15in 0 0.18in">
+									<!-- Both barcode and UUID text are horizontally centered on B's
+									     center column. ABC starts at left:0.08in with 0.22in spacing,
+									     so B's center sits ~0.347in from cell-left (cell center is
+									     0.375in). Asymmetric padding (PR−PL=0.056in) shifts the
+									     centered content's midline to match B. -->
+									<div style="padding:0.05in 0.20in 0 0.14in;display:flex;justify-content:center">
 										<div style="transform:scale(0.85)">
 											<canvas use:datamatrix={code}></canvas>
 										</div>
 									</div>
-									<div>
-										<div class="break-words px-1 text-center font-mono text-[3.5pt] leading-[1.1em]">
+									<div style="padding:0 0.20in 0 0.14in">
+										<div class="break-words text-center font-mono text-[3.5pt] leading-[1.1em]">
 											{code}
 										</div>
 									</div>
