@@ -1,82 +1,82 @@
 import { connectDB } from '$lib/server/db/connection';
 import { GeneratedBarcode, Spu, AuditLog, generateId } from '$lib/server/db';
 
-const PREFIX = 'SPU';
+const PREFIX_KEY = 'SPU_BT_M01';
 const TYPE = 'spu';
-const PAD = 6;
+const PAD = 4;
+const FAMILY_PREFIX = 'BT-M01';
+const UDI_RE = /^BT-M01-(\d{4})-(\d{4})$/;
 const MAX_PROBE = 1000;
 
-async function highestExistingSpuSequence(): Promise<number> {
-	const re = new RegExp(`^${PREFIX}-(\\d+)$`);
-	const candidates: any[] = await Spu.find({ udi: { $regex: `^${PREFIX}-\\d+$` } }, { udi: 1 })
-		.lean()
-		.limit(0);
-	let max = 0;
-	for (const c of candidates) {
-		const m = (c.udi as string).match(re);
-		if (m) {
-			const n = parseInt(m[1], 10);
-			if (Number.isFinite(n) && n > max) max = n;
-		}
-	}
-	return max;
+function formatUdi(group3: string, seq: number): string {
+	return `${FAMILY_PREFIX}-${group3}-${String(seq).padStart(PAD, '0')}`;
 }
 
-async function bumpSequenceAtLeast(current: number, target: number): Promise<number> {
-	if (current >= target) return current;
-	const doc = (await GeneratedBarcode.findOneAndUpdate(
-		{ prefix: PREFIX },
-		{ $set: { sequence: target } },
-		{ upsert: true, new: true, setDefaultsOnInsert: true }
-	)) as any;
-	return doc.sequence ?? target;
+async function highestExistingUdi(): Promise<{ group3: string; seq: number } | null> {
+	const candidates: any[] = await Spu.find(
+		{ udi: { $regex: '^BT-M01-\\d{4}-\\d{4}$' } },
+		{ udi: 1 }
+	)
+		.lean()
+		.limit(0);
+	let best: { group3: string; seq: number } | null = null;
+	for (const c of candidates) {
+		const m = (c.udi as string).match(UDI_RE);
+		if (!m) continue;
+		const seq = parseInt(m[2], 10);
+		if (!Number.isFinite(seq)) continue;
+		if (!best || seq > best.seq) best = { group3: m[1], seq };
+	}
+	return best;
 }
 
 export async function generateNextSpuUdi(actor?: { _id: string; username: string }): Promise<string> {
 	await connectDB();
 
-	let doc = (await GeneratedBarcode.findOneAndUpdate(
-		{ prefix: PREFIX },
-		{ $inc: { sequence: 1 } },
+	const highest = await highestExistingUdi();
+	const group3 = highest?.group3 ?? '0000';
+	const startFloor = highest?.seq ?? 0;
+
+	const counter = (await GeneratedBarcode.findOneAndUpdate(
+		{ prefix: PREFIX_KEY },
+		{ $inc: { sequence: 1 }, $max: { sequence: startFloor + 1 } as any },
 		{ upsert: true, new: true, setDefaultsOnInsert: true }
 	)) as any;
-	let seq: number = doc.sequence ?? 1;
 
-	if (seq <= 1) {
-		const existingMax = await highestExistingSpuSequence();
-		if (existingMax > 0) {
-			seq = await bumpSequenceAtLeast(seq, existingMax + 1);
-		}
+	let seq: number = Math.max(counter.sequence ?? 1, startFloor + 1);
+
+	if ((counter.sequence ?? 0) < seq) {
+		await GeneratedBarcode.updateOne({ _id: counter._id }, { $set: { sequence: seq } });
 	}
 
-	let udi = `${PREFIX}-${String(seq).padStart(PAD, '0')}`;
+	let udi = formatUdi(group3, seq);
 	let probes = 0;
 	while (probes < MAX_PROBE) {
 		const collision = await Spu.exists({ udi });
 		if (!collision) break;
 		probes++;
 		const next = (await GeneratedBarcode.findOneAndUpdate(
-			{ prefix: PREFIX },
+			{ prefix: PREFIX_KEY },
 			{ $inc: { sequence: 1 } },
 			{ new: true }
 		)) as any;
 		seq = next.sequence;
-		udi = `${PREFIX}-${String(seq).padStart(PAD, '0')}`;
+		udi = formatUdi(group3, seq);
 	}
 	if (probes >= MAX_PROBE) throw new Error('Unable to allocate unique SPU UDI after probing');
 
-	await GeneratedBarcode.findByIdAndUpdate(doc._id, {
+	await GeneratedBarcode.findByIdAndUpdate(counter._id, {
 		$set: { barcode: udi, type: TYPE }
 	});
 
 	await AuditLog.create({
 		_id: generateId(),
 		tableName: 'generated_barcodes',
-		recordId: doc._id,
+		recordId: counter._id,
 		action: 'INSERT',
 		changedBy: actor?.username ?? actor?._id ?? 'system',
 		changedAt: new Date(),
-		newData: { allocated: udi, kind: 'spu_udi', probes }
+		newData: { allocated: udi, kind: 'spu_udi', group3, seq, probes }
 	});
 
 	return udi;
