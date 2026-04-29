@@ -1,7 +1,7 @@
 import mammoth from 'mammoth';
 import type { FieldDefinition, ParsedStep } from './spu-work-instruction';
 
-export const PARSER_VERSION = '1.0.0';
+export const PARSER_VERSION = '1.1.0';
 
 const PRIMARY_PART_RE = /\bPT-SPU-(\d{3,})\b/g;
 const ALT_PART_RE = /\b(SBA-SPU|IFU-SPU)-(\d{3,})\b/g;
@@ -50,18 +50,36 @@ async function extractText(
 	file: { buffer: Buffer; mimeType: string; originalName: string },
 	warnings: string[]
 ): Promise<string> {
+	const lowerName = file.originalName.toLowerCase();
 	const isDocx =
 		file.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-		file.originalName.toLowerCase().endsWith('.docx');
-	if (!isDocx) {
-		warnings.push(`Unsupported file type for v1 parser (${file.mimeType || file.originalName}); treating as plain text`);
-		return file.buffer.toString('utf8');
+		lowerName.endsWith('.docx');
+	const isPdf = file.mimeType === 'application/pdf' || lowerName.endsWith('.pdf');
+
+	if (isDocx) {
+		const result = await mammoth.extractRawText({ buffer: file.buffer });
+		if (result.messages?.length) {
+			for (const m of result.messages) warnings.push(`mammoth: ${m.message}`);
+		}
+		return result.value ?? '';
 	}
-	const result = await mammoth.extractRawText({ buffer: file.buffer });
-	if (result.messages?.length) {
-		for (const m of result.messages) warnings.push(`mammoth: ${m.message}`);
+
+	if (isPdf) {
+		const mod: any = await import('pdf-parse');
+		const PDFParse = mod.PDFParse ?? mod.default?.PDFParse ?? mod.default;
+		const data = new Uint8Array(file.buffer);
+		const parser = new PDFParse({ data });
+		const result: any = await parser.getText();
+		const pages: number | undefined = result?.numpages ?? result?.total ?? result?.pages?.length;
+		if (pages != null) warnings.push(`pdf: ${pages} page(s) parsed`);
+		const text: string = result?.text ?? '';
+		return text.replace(/\r\n/g, '\n');
 	}
-	return result.value ?? '';
+
+	warnings.push(
+		`Unsupported file type (${file.mimeType || file.originalName}); treating as plain text`
+	);
+	return file.buffer.toString('utf8');
 }
 
 function deriveTitle(text: string, fallback: string): string {

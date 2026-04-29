@@ -26,7 +26,7 @@
 			<div class="flex-1 space-y-2">
 				<p class="tron-text-primary font-medium">Upload Work Instructions</p>
 				<p class="tron-text-muted text-xs">
-					Parser scans the .docx for the patterns below and auto-generates barcode-scan fields for the entire WI. You confirm before induction.
+					Parser scans the .docx or .pdf for the patterns below and auto-generates barcode-scan fields for the entire WI. You confirm before induction.
 				</p>
 				<ul class="tron-text-muted ml-4 list-disc text-xs">
 					<li>

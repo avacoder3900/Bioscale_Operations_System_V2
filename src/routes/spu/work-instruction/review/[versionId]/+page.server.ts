@@ -10,7 +10,7 @@ import {
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params, url }) => {
-	requirePermission(locals.user, 'documents:write');
+	requirePermission(locals.user, 'spu:write');
 	await connectDB();
 
 	const versionId = params.versionId;
@@ -56,7 +56,7 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 
 export const actions: Actions = {
 	save: async ({ request, locals, params }) => {
-		requirePermission(locals.user, 'documents:write');
+		requirePermission(locals.user, 'spu:write');
 		await connectDB();
 
 		const versionId = params.versionId;
@@ -122,7 +122,7 @@ export const actions: Actions = {
 	},
 
 	induct: async ({ request, locals, params }) => {
-		requirePermission(locals.user, 'documents:write');
+		requirePermission(locals.user, 'spu:write');
 		await connectDB();
 
 		const versionId = params.versionId;
@@ -143,7 +143,7 @@ export const actions: Actions = {
 	},
 
 	reject: async ({ request, locals, params }) => {
-		requirePermission(locals.user, 'documents:write');
+		requirePermission(locals.user, 'spu:write');
 		await connectDB();
 
 		const versionId = params.versionId;

@@ -11,7 +11,7 @@ import type { Actions, PageServerLoad } from './$types';
 const MAX_BYTES = 25 * 1024 * 1024;
 
 export const load: PageServerLoad = async ({ locals }) => {
-	requirePermission(locals.user, 'documents:read');
+	requirePermission(locals.user, 'spu:read');
 	await connectDB();
 
 	const wi: any = await getSpuWorkInstructionDoc();
@@ -64,7 +64,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 export const actions: Actions = {
 	upload: async ({ request, locals }) => {
-		requirePermission(locals.user, 'documents:write');
+		requirePermission(locals.user, 'spu:write');
 		await connectDB();
 
 		const form = await request.formData();
@@ -77,18 +77,23 @@ export const actions: Actions = {
 			return fail(400, { error: `File too large (max ${MAX_BYTES / 1024 / 1024} MB)` });
 		}
 
-		const name = file.name || 'work-instruction.docx';
-		if (!name.toLowerCase().endsWith('.docx')) {
-			return fail(400, { error: 'Only .docx files are supported in v1' });
+		const name = file.name || 'work-instruction';
+		const lower = name.toLowerCase();
+		if (!lower.endsWith('.docx') && !lower.endsWith('.pdf')) {
+			return fail(400, { error: 'Only .docx and .pdf files are supported' });
 		}
 
 		const buffer = Buffer.from(await file.arrayBuffer());
+
+		const fallbackMime = lower.endsWith('.pdf')
+			? 'application/pdf'
+			: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
 		let parsed;
 		try {
 			parsed = await parseSpuWorkInstruction({
 				buffer,
-				mimeType: file.type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+				mimeType: file.type || fallbackMime,
 				originalName: name
 			});
 		} catch (err: any) {

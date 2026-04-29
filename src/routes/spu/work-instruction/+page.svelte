@@ -34,7 +34,7 @@
 	<TronCard>
 		<form method="POST" action="?/upload" enctype="multipart/form-data" use:enhance class="space-y-4">
 			<div>
-				<label class="tron-text-primary block text-sm font-medium" for="wi-file">Upload (.docx)</label>
+				<label class="tron-text-primary block text-sm font-medium" for="wi-file">Upload (.docx or .pdf)</label>
 				<p class="tron-text-muted text-xs">
 					Parser auto-extracts <code>PT-SPU-XXX</code> + <code>qty=X</code> and generates barcode fields. You confirm before induction.
 				</p>
@@ -43,7 +43,7 @@
 				id="wi-file"
 				type="file"
 				name="file"
-				accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+				accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.pdf,application/pdf"
 				required
 				class="block w-full text-sm"
 			/>
