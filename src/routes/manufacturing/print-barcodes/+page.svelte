@@ -306,5 +306,25 @@
 			size: 8.5in 11in;
 			margin: 0;
 		}
+		/* Hide app chrome (root layout top nav + manufacturing left sidebar)
+		   so only the barcode sheets reach the printer. Targeted globally
+		   because the chrome lives in parent layouts; the rules are only in
+		   the DOM while this page is mounted. */
+		:global(header) {
+			display: none !important;
+		}
+		:global(aside.mfg-sidebar) {
+			display: none !important;
+		}
+		/* Zero parent-layout padding so the sheet sits flush with the page
+		   edges. Without these the root <main> and manufacturing flex wrapper
+		   shift the sheet inward and break the Avery 94102 alignment. */
+		:global(main) {
+			padding: 0 !important;
+			margin: 0 !important;
+		}
+		:global(.min-w-0.flex-1) {
+			padding: 0 !important;
+		}
 	}
 </style>
