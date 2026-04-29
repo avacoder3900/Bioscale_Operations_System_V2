@@ -1,12 +1,17 @@
 import { redirect } from '@sveltejs/kit';
 import { connectDB, CartridgeRecord, LabCartridge, CartridgeGroup, Equipment, BackingLot } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
+import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'cartridge:read');
 	await connectDB();
+
+	// Exclude manually checked-out cartridges from active fridge/storage counts
+	// (they're physically gone but keep their scrapped/accepted status).
+	const checkedOutIds = await getCheckedOutCartridgeIds();
 
 	const now = new Date();
 	const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -83,11 +88,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// don't come into being until their UUID is scanned at wax deck loading.
 	const [waxStorageCounts, reagentStorageCounts, ovenOccupancyAgg] = await Promise.all([
 		CartridgeRecord.aggregate([
-			{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored' } },
+			{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored', _id: { $nin: checkedOutIds } } },
 			{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
 		]),
 		CartridgeRecord.aggregate([
-			{ $match: { 'storage.fridgeName': { $exists: true }, status: { $in: ['stored', 'reagent_filled'] } } },
+			{ $match: { 'storage.fridgeName': { $exists: true }, status: { $in: ['stored', 'reagent_filled'] }, _id: { $nin: checkedOutIds } } },
 			{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
 		]),
 		BackingLot.aggregate([

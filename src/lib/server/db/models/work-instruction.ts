@@ -41,4 +41,9 @@ const workInstructionSchema = new Schema({
 	createdBy: String
 }, { timestamps: true });
 
+workInstructionSchema.index(
+	{ documentType: 1, status: 1 },
+	{ unique: true, partialFilterExpression: { documentType: 'spu_creation', status: 'active' } }
+);
+
 export const WorkInstruction = mongoose.models.WorkInstruction || mongoose.model('WorkInstruction', workInstructionSchema, 'work_instructions');

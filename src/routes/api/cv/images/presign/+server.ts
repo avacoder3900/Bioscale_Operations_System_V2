@@ -3,7 +3,7 @@ import { connectDB } from '$lib/server/db/connection.js';
 import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { generateId } from '$lib/server/db/utils.js';
 import { env } from '$env/dynamic/private';
-import { getR2Url } from '$lib/server/services/r2';
+import { getR2Url, buildCvNamedKey } from '$lib/server/services/r2';
 import type { RequestHandler } from './$types';
 
 /**
@@ -24,10 +24,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!project) return json({ error: 'Project not found' }, { status: 404 });
 
 	const id = generateId();
-	const ext = filename.split('.').pop() || 'jpg';
 	// Use the original filename (which includes barcode from QR scan) with a unique prefix
-	const safeName = filename.replace(/[^a-zA-Z0-9_\-\.]/g, '_').slice(0, 120);
-	const key = `cv/${projectId}/${id}_${safeName}`;
+	const key = buildCvNamedKey(project.name, id, filename);
 
 	const workerUrl = env.R2_WORKER_URL;
 	if (!workerUrl) {

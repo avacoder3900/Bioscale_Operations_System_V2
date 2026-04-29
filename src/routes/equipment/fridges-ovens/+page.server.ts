@@ -2,12 +2,16 @@ export const config = { maxDuration: 60 };
 import { fail } from '@sveltejs/kit';
 import { connectDB, generateId, Equipment, EquipmentLocation, AuditLog, CartridgeRecord, TemperatureReading } from '$lib/server/db';
 import { isAdmin, requirePermission } from '$lib/server/permissions';
+import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'equipment:read');
 	try {
 		await connectDB();
+
+		// Exclude manually checked-out cartridges from fridge occupancy
+		const checkedOutIds = await getCheckedOutCartridgeIds();
 
 		const [equipmentDocs, locationDocs] = await Promise.all([
 			Equipment.find({ equipmentType: { $in: ['fridge', 'oven'] } }).sort({ name: 1 }).lean(),
@@ -26,6 +30,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 		// Fetch actual cartridge records stored in fridges (for counts + detail display)
 		const storedCartridges = await CartridgeRecord.find({
+			_id: { $nin: checkedOutIds },
 			$or: [
 				{ 'waxStorage.location': { $exists: true }, status: 'wax_stored' },
 				{ 'storage.fridgeName': { $exists: true }, status: 'stored' }

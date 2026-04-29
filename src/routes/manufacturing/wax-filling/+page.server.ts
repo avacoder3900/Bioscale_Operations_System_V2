@@ -4,6 +4,7 @@ import {
 	Equipment, EquipmentLocation, AuditLog, BackingLot, WaxBatch, ReceivingLot, LotRecord
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
+import { resolveFridgeId } from '$lib/server/services/equipment-resolve';
 import { isAdmin } from '$lib/server/permissions';
 import { User } from '$lib/server/db';
 import { notifyLowWaxBatch, notifyRunLifecycle, shouldWarnLowWax } from '$lib/server/notifications';
@@ -770,23 +771,50 @@ export const actions: Actions = {
 		// Tray conflict runs at scan time (see /api/dev/validate-equipment
 		// ?type=tray). No duplicate check here.
 
+		// Resolve the fridge this tray currently lives in (inferred from
+		// EquipmentLocation.currentPlacements). Degrades gracefully: if the
+		// tray has no placement, we still record the cooling but skip the
+		// fridge fields and log a warning.
+		let coolingLocationId: string | undefined;
+		let coolingLocationName: string | undefined;
+		if (coolingTrayId) {
+			const fridgeLoc = await EquipmentLocation.findOne({
+				locationType: 'fridge',
+				isActive: true,
+				currentPlacements: { $elemMatch: { itemId: coolingTrayId } }
+			}).lean().catch(() => null) as any;
+			if (fridgeLoc) {
+				coolingLocationId = String(fridgeLoc._id);
+				coolingLocationName = fridgeLoc.displayName ?? fridgeLoc.barcode ?? undefined;
+			} else {
+				console.warn(`[confirmCooling] No fridge placement found for tray ${coolingTrayId}`);
+			}
+		}
+
 		const update: Record<string, any> = { status: 'QC', coolingConfirmedTime: now, coolingConfirmedAt: now };
 		if (coolingTrayId) update.coolingTrayId = coolingTrayId;
+		if (coolingLocationId) update.coolingLocationId = coolingLocationId;
 
 		const run = await WaxFillingRun.findByIdAndUpdate(runId, { $set: update }, { new: true }).lean() as any;
 
 		// Record oven exit time on cartridges that have an ovenCure.entryTime
+		// and stamp the cooling fridge on each cartridge's waxStorage subdoc.
 		if (run?.cartridgeIds?.length) {
+			const waxStorageSet: Record<string, any> = {};
+			if (coolingTrayId) waxStorageSet['waxStorage.coolingTrayId'] = coolingTrayId;
+			if (coolingLocationId) waxStorageSet['waxStorage.coolingLocationId'] = coolingLocationId;
+			if (coolingLocationName) waxStorageSet['waxStorage.coolingLocationName'] = coolingLocationName;
+
 			const bulkOps = run.cartridgeIds.map((cid: string) => ({
 				updateOne: {
 					filter: { _id: cid, 'ovenCure.entryTime': { $exists: true }, 'ovenCure.exitTime': { $exists: false } },
-					update: { $set: { 'ovenCure.exitTime': now } }
+					update: { $set: { 'ovenCure.exitTime': now, ...waxStorageSet } }
 				}
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
 		}
 
-		return { success: true };
+		return { success: true, coolingLocationId, coolingLocationName };
 	},
 
 	/** Complete QC — inspect all cartridges and transition to Storage */
@@ -798,13 +826,18 @@ export const actions: Actions = {
 		const runId = data.get('runId') as string;
 		const now = new Date();
 
-		// Server-side cooling timer check: minimum 10 minutes must pass after cooling confirmed
+		// Server-side cooling timer check: minimum cool-down before QC.
+		// Configurable via ManufacturingSettings.waxFilling.minCoolingBeforeQcMin
+		// (default 2 min). Editable from the wax-filling settings page.
 		const runBeforeQc = await WaxFillingRun.findById(runId).select('coolingConfirmedAt').lean() as any;
 		if (runBeforeQc?.coolingConfirmedAt) {
+			const settingsDocQc = await ManufacturingSettings.findById('default').select('waxFilling.minCoolingBeforeQcMin').lean() as any;
+			const minCoolMin = settingsDocQc?.waxFilling?.minCoolingBeforeQcMin ?? 2;
+			const minCoolMs = minCoolMin * 60 * 1000;
 			const elapsedMs = Date.now() - new Date(runBeforeQc.coolingConfirmedAt).getTime();
-			if (elapsedMs < 10 * 60 * 1000) {
-				const remainingMin = Math.ceil((10 * 60 * 1000 - elapsedMs) / 60000);
-				return fail(400, { error: `Cartridges must cool for at least 10 minutes before QC inspection. ${remainingMin} minute${remainingMin === 1 ? '' : 's'} remaining.` });
+			if (elapsedMs < minCoolMs) {
+				const remainingMin = Math.ceil((minCoolMs - elapsedMs) / 60000);
+				return fail(400, { error: `Cartridges must cool for at least ${minCoolMin} minute${minCoolMin === 1 ? '' : 's'} before QC inspection. ${remainingMin} minute${remainingMin === 1 ? '' : 's'} remaining.` });
 			}
 		}
 
@@ -1089,19 +1122,58 @@ export const actions: Actions = {
 			return fail(400, { error: 'Invalid cartridge IDs' });
 		}
 
+		// Resolve the fridge for this batch: first try the storageLocation
+		// string (it may be an EquipmentLocation _id or barcode); if that
+		// misses, fall back to the tray's current placement.
+		let coolingLocationId: string | undefined;
+		let coolingLocationName: string | undefined;
+		if (location) {
+			const direct = await EquipmentLocation.findOne({
+				locationType: 'fridge',
+				isActive: true,
+				$or: [{ _id: location }, { barcode: location }]
+			}).lean().catch(() => null) as any;
+			if (direct) {
+				coolingLocationId = String(direct._id);
+				coolingLocationName = direct.displayName ?? direct.barcode ?? undefined;
+			}
+		}
+		if (!coolingLocationId && coolingTrayId) {
+			const byTray = await EquipmentLocation.findOne({
+				locationType: 'fridge',
+				isActive: true,
+				currentPlacements: { $elemMatch: { itemId: coolingTrayId } }
+			}).lean().catch(() => null) as any;
+			if (byTray) {
+				coolingLocationId = String(byTray._id);
+				coolingLocationName = byTray.displayName ?? byTray.barcode ?? undefined;
+			} else {
+				console.warn(`[recordBatchStorage] No fridge placement found for tray ${coolingTrayId}`);
+			}
+		}
+
 		const now = new Date();
+		// S1a: resolve the scanned fridge reference to Equipment._id. See
+		// opentron-control/wax/[runId]/+page.server.ts for the same pattern.
+		const resolvedLocationId = await resolveFridgeId(location);
 		if (cartridgeIds.length > 0) {
+			// Storage fields only — status stays 'wax_filled' until completeRun.
+			// Keeps reagent filling from picking up cartridges whose parent wax
+			// run is still open.
 			const bulkOps = cartridgeIds.map((cid: string) => ({
 				updateOne: {
 					filter: { _id: cid, 'waxStorage.recordedAt': { $exists: false } },
 					update: {
 						$set: {
+							'waxStorage.locationId': resolvedLocationId,
 							'waxStorage.location': location,
 							'waxStorage.coolingTrayId': coolingTrayId,
+							...(coolingLocationId ? { 'waxStorage.coolingLocationId': coolingLocationId } : {}),
+							...(coolingLocationName ? { 'waxStorage.coolingLocationName': coolingLocationName } : {}),
 							'waxStorage.operator': { _id: locals.user._id, username: locals.user.username },
 							'waxStorage.timestamp': now,
-							'waxStorage.recordedAt': now,
-							status: 'wax_stored'
+							'waxStorage.recordedAt': now
+							// status intentionally NOT set — completeRun does the wax_stored flip.
 						}
 					}
 				}
@@ -1117,7 +1189,7 @@ export const actions: Actions = {
 					manufacturingStep: 'storage',
 					operatorId: locals.user._id,
 					operatorUsername: locals.user.username,
-					notes: `Wax storage: ${location}${coolingTrayId ? `, tray ${coolingTrayId}` : ''}`
+					notes: `Wax storage: ${location}${coolingTrayId ? `, tray ${coolingTrayId}` : ''}${coolingLocationName ? `, fridge ${coolingLocationName}` : ''}`
 				});
 			}
 
@@ -1129,11 +1201,11 @@ export const actions: Actions = {
 				action: 'UPDATE',
 				changedBy: locals.user?.username,
 				changedAt: now,
-				newData: { status: 'wax_stored', location, count: cartridgeIds.length }
+				newData: { status: 'wax_stored', location, coolingLocationId, coolingLocationName, count: cartridgeIds.length }
 			});
 		}
 
-		return { success: true };
+		return { success: true, coolingLocationId, coolingLocationName };
 	},
 
 	/** Complete the full run */
@@ -1152,6 +1224,20 @@ export const actions: Actions = {
 		// Update consumable usage logs
 		const cartridgeCount = run?.cartridgeIds?.length ?? 0;
 		const operatorRef = { _id: locals.user._id, username: locals.user.username };
+
+		// Commit point: flip wax_filled → wax_stored for every cartridge that
+		// made it through fridge assignment. Mirrors the flip in
+		// opentron-control/wax/[runId]/+page.server.ts completeRun.
+		if (run?.cartridgeIds?.length) {
+			await CartridgeRecord.updateMany(
+				{
+					_id: { $in: run.cartridgeIds },
+					status: 'wax_filled',
+					'waxStorage.recordedAt': { $exists: true }
+				},
+				{ $set: { status: 'wax_stored' } }
+			);
+		}
 
 		if (run?.deckId) {
 			await Equipment.findByIdAndUpdate(run.deckId, {

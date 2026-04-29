@@ -6,12 +6,16 @@ import {
 	ManufacturingSettings, PartDefinition, User, AuditLog, generateId
 } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
+import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
+
+	// Exclude checked-out cartridges from inventory counts
+	const checkedOutIds = await getCheckedOutCartridgeIds();
 
 	// === Pipeline counts ===
 	const phaseCounts = await CartridgeRecord.aggregate([
@@ -42,9 +46,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 		status: { $nin: ['completed', 'Completed', 'aborted', 'Aborted', 'cancelled', 'Cancelled', 'voided'] }
 	});
 
-	const waxStored = await CartridgeRecord.countDocuments({ status: 'wax_stored' });
-	const reagentStored = await CartridgeRecord.countDocuments({ status: 'stored' });
-	const sealed = await CartridgeRecord.countDocuments({ status: 'sealed' });
+	const waxStored = await CartridgeRecord.countDocuments({ status: 'wax_stored', _id: { $nin: checkedOutIds } });
+	const reagentStored = await CartridgeRecord.countDocuments({ status: 'stored', _id: { $nin: checkedOutIds } });
+	const sealed = await CartridgeRecord.countDocuments({ status: 'sealed', _id: { $nin: checkedOutIds } });
 	// Count both 'scrapped' (QC rejects) and legacy 'voided' — same semantic
 	// bucket for the "not usable" cartridge count tile.
 	const voided = await CartridgeRecord.countDocuments({ status: { $in: ['scrapped', 'voided'] } });

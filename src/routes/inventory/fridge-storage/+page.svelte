@@ -1,8 +1,10 @@
 <script lang="ts">
 	let { data } = $props();
 
+	type FilterType = 'all' | 'wax_accepted' | 'wax_scrapped' | 'reagent_filled';
+
 	let expandedFridge = $state<string | null>(null);
-	let filterType = $state<'all' | 'wax_filled' | 'reagent_filled'>('all');
+	let filterType = $state<FilterType>('all');
 
 	function toggleFridge(location: string) {
 		expandedFridge = expandedFridge === location ? null : location;
@@ -14,13 +16,15 @@
 	}
 
 	function typeLabel(type: string): string {
-		return type === 'wax_filled' ? 'Wax Filled' : 'Reagent Filled';
+		if (type === 'wax_accepted') return 'Accepted Wax';
+		if (type === 'wax_scrapped') return 'Scrapped Wax';
+		return 'Reagent Filled';
 	}
 
 	function typeBadgeClass(type: string): string {
-		return type === 'wax_filled'
-			? 'bg-amber-900/30 text-amber-300 border border-amber-500/30'
-			: 'bg-purple-900/30 text-purple-300 border border-purple-500/30';
+		if (type === 'wax_accepted') return 'bg-amber-900/30 text-amber-300 border border-amber-500/30';
+		if (type === 'wax_scrapped') return 'bg-red-900/30 text-red-300 border border-red-500/30';
+		return 'bg-purple-900/30 text-purple-300 border border-purple-500/30';
 	}
 </script>
 
@@ -32,8 +36,32 @@
 		</div>
 	</div>
 
-	<!-- Summary cards -->
-	<div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+	<!-- INCIDENT NOTE 2026-04-23 — Fridge-002 physical audit showed 20 missing
+	     cartridges that Mongo still thought were present. All 20 logged as
+	     manual checkouts. Occupancy counts below now exclude checked-out
+	     cartridges via the getCheckedOutCartridgeIds() filter. Keep the
+	     notice as a visible record of the tracking failure until the Friday
+	     2026-04-24 team discussion wraps. -->
+	<div class="rounded-lg border border-amber-500/50 bg-amber-900/10 p-4">
+		<div class="flex items-start gap-3">
+			<svg class="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+			</svg>
+			<div class="text-xs text-amber-200">
+				<div class="font-semibold text-amber-300">Tracking-failure notice — 2026-04-23</div>
+				<p class="mt-1">
+					A physical audit of FRIDGE-002 found 20 fewer cartridges than Mongo records indicated: 10 from a 2026-04-16 batch with no cooling tray assigned, 8 attributed to "Zane Testing 4-21", and 2 more from 2026-04-22 runs. All 20 are logged as manual checkouts and are now excluded from the occupancy counts shown below.
+				</p>
+				<p class="mt-1 text-amber-300/80">
+					Follow-up discussion on the Kanban board (QA Improvements, due Friday 2026-04-24).
+				</p>
+			</div>
+		</div>
+	</div>
+
+	<!-- Summary cards — accepted and scrapped wax serve different purposes and
+	     are shown separately. Total = accepted + scrapped + reagent. -->
+	<div class="grid grid-cols-2 gap-3 sm:grid-cols-5">
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 text-center">
 			<div class="text-3xl font-bold text-[var(--color-tron-cyan)]">{data.summary.totalFridges}</div>
 			<div class="text-xs text-[var(--color-tron-text-secondary)]">Fridges</div>
@@ -43,8 +71,12 @@
 			<div class="text-xs text-[var(--color-tron-text-secondary)]">Total Stored</div>
 		</div>
 		<div class="rounded-lg border border-amber-500/30 bg-amber-900/10 p-4 text-center">
-			<div class="text-3xl font-bold text-amber-400">{data.summary.totalWax}</div>
-			<div class="text-xs text-amber-300/70">Wax Filled</div>
+			<div class="text-3xl font-bold text-amber-400">{data.summary.totalWaxAccepted}</div>
+			<div class="text-xs text-amber-300/70">Accepted Wax</div>
+		</div>
+		<div class="rounded-lg border border-red-500/30 bg-red-900/10 p-4 text-center">
+			<div class="text-3xl font-bold text-red-400">{data.summary.totalWaxScrapped}</div>
+			<div class="text-xs text-red-300/70">Scrapped Wax</div>
 		</div>
 		<div class="rounded-lg border border-purple-500/30 bg-purple-900/10 p-4 text-center">
 			<div class="text-3xl font-bold text-purple-400">{data.summary.totalReagent}</div>
@@ -53,15 +85,19 @@
 	</div>
 
 	<!-- Filter -->
-	<div class="flex items-center gap-2">
+	<div class="flex items-center gap-2 flex-wrap">
 		<span class="text-xs text-[var(--color-tron-text-secondary)]">Show:</span>
 		<button type="button" onclick={() => { filterType = 'all'; }}
 			class="rounded px-3 py-1.5 text-xs font-medium transition-colors {filterType === 'all' ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}">
 			All
 		</button>
-		<button type="button" onclick={() => { filterType = 'wax_filled'; }}
-			class="rounded px-3 py-1.5 text-xs font-medium transition-colors {filterType === 'wax_filled' ? 'bg-amber-900/30 text-amber-300' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}">
-			Wax Filled
+		<button type="button" onclick={() => { filterType = 'wax_accepted'; }}
+			class="rounded px-3 py-1.5 text-xs font-medium transition-colors {filterType === 'wax_accepted' ? 'bg-amber-900/30 text-amber-300' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}">
+			Accepted Wax
+		</button>
+		<button type="button" onclick={() => { filterType = 'wax_scrapped'; }}
+			class="rounded px-3 py-1.5 text-xs font-medium transition-colors {filterType === 'wax_scrapped' ? 'bg-red-900/30 text-red-300' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}">
+			Scrapped Wax
 		</button>
 		<button type="button" onclick={() => { filterType = 'reagent_filled'; }}
 			class="rounded px-3 py-1.5 text-xs font-medium transition-colors {filterType === 'reagent_filled' ? 'bg-purple-900/30 text-purple-300' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}">
@@ -96,9 +132,12 @@
 								{:else}
 									<h3 class="text-base font-semibold text-[var(--color-tron-text)]">{fridge.displayName}</h3>
 								{/if}
-								<div class="mt-0.5 flex items-center gap-3 text-xs text-[var(--color-tron-text-secondary)]">
-									{#if fridge.waxCount > 0}
-										<span class="rounded bg-amber-900/20 px-1.5 py-0.5 text-amber-300">{fridge.waxCount} wax</span>
+								<div class="mt-0.5 flex items-center gap-2 text-xs text-[var(--color-tron-text-secondary)] flex-wrap">
+									{#if fridge.waxAcceptedCount > 0}
+										<span class="rounded bg-amber-900/20 px-1.5 py-0.5 text-amber-300">{fridge.waxAcceptedCount} accepted</span>
+									{/if}
+									{#if fridge.waxScrappedCount > 0}
+										<span class="rounded bg-red-900/20 px-1.5 py-0.5 text-red-300">{fridge.waxScrappedCount} scrapped</span>
 									{/if}
 									{#if fridge.reagentCount > 0}
 										<span class="rounded bg-purple-900/20 px-1.5 py-0.5 text-purple-300">{fridge.reagentCount} reagent</span>
@@ -124,7 +163,15 @@
 						<div class="border-t border-[var(--color-tron-border)]">
 							{#if filteredCarts.length === 0}
 								<p class="px-4 py-3 text-sm text-[var(--color-tron-text-secondary)] italic">
-									{filterType === 'all' ? 'No cartridges stored' : `No ${filterType === 'wax_filled' ? 'wax filled' : 'reagent filled'} cartridges`}
+									{#if filterType === 'all'}
+										No cartridges stored
+									{:else if filterType === 'wax_accepted'}
+										No accepted wax cartridges
+									{:else if filterType === 'wax_scrapped'}
+										No scrapped wax cartridges
+									{:else}
+										No reagent filled cartridges
+									{/if}
 								</p>
 							{:else}
 								<!-- Column headers -->
@@ -132,7 +179,7 @@
 									<div class="col-span-3">Cartridge ID</div>
 									<div class="col-span-2">Type</div>
 									<div class="col-span-2">Phase</div>
-									<div class="col-span-2">Assay</div>
+									<div class="col-span-2">Assay / Reason</div>
 									<div class="col-span-2">Stored</div>
 									<div class="col-span-1">By</div>
 								</div>
@@ -144,7 +191,9 @@
 												<span class="rounded px-1.5 py-0.5 text-[10px] font-medium {typeBadgeClass(cart.type)}">{typeLabel(cart.type)}</span>
 											</div>
 											<div class="col-span-2 text-[var(--color-tron-text-secondary)]">{cart.phase}</div>
-											<div class="col-span-2 text-[var(--color-tron-text-secondary)] truncate">{cart.assayType ?? '—'}</div>
+											<div class="col-span-2 text-[var(--color-tron-text-secondary)] truncate" title={cart.type === 'wax_scrapped' ? (cart.voidReason ?? '') : (cart.assayType ?? '')}>
+												{cart.type === 'wax_scrapped' ? (cart.voidReason ?? '—') : (cart.assayType ?? '—')}
+											</div>
 											<div class="col-span-2 text-[var(--color-tron-text-secondary)]">{cart.storedAt ? new Date(cart.storedAt).toLocaleDateString() : '—'}</div>
 											<div class="col-span-1 text-[var(--color-tron-text-secondary)] truncate">{cart.operator ?? '—'}</div>
 										</div>

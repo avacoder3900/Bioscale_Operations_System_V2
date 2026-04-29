@@ -29,7 +29,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			status: 1, cartridgeCount: 1, 'operator._id': 1, 'operator.username': 1,
 			runStartTime: 1, cartridgesFilled: 1
 		}).lean(),
-		AssayDefinition.find({ isActive: true }, { _id: 1, name: 1 }).lean()
+		AssayDefinition.find({ isActive: true, hidden: { $ne: true } }, { _id: 1, name: 1 }).lean()
 	]);
 
 	const cs = cartridges as any[];

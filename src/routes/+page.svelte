@@ -5,7 +5,6 @@
 	import { TronCard, TronButton, TronBadge } from '$lib/components/ui';
 	import SpuStatusBadge from '$lib/components/spu/SpuStatusBadge.svelte';
 	import SpuDeviceStateBadge from '$lib/components/spu/SpuDeviceStateBadge.svelte';
-	import type { Spu } from '$lib/server/db/schema';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	let { data, form } = $props();
@@ -68,7 +67,6 @@
 	let expiringExpanded = $state(false);
 	let costExpanded = $state(false);
 	let expandedSpuId = $state<string | null>(null);
-	let collapsedSections = $state<Record<string, boolean>>({});
 	let showAssayInventory = $state(false);
 	let selectedSpus = new SvelteSet<string>();
 	let bulkState = $state('');
@@ -124,6 +122,7 @@
 	// SITE-22: Filtering and sorting state
 	let searchQuery = $state('');
 	let filterQcStatus = $state('all');
+	let filterStatus = $state('all');
 	// filterAssignment removed — release statuses replace assignment
 	let filterAssemblyStatus = $state('all');
 	let filterDateAfter = $state('');
@@ -141,32 +140,9 @@
 		'scrapped'
 	] as const;
 
-	const stateTabs = [
-		{ key: null, label: 'All' },
-		{ key: 'draft', label: 'Draft' },
-		{ key: 'assembling', label: 'Assembling' },
-		{ key: 'assembled', label: 'Assembled' },
-		{ key: 'validating', label: 'Validating' },
-		{ key: 'validated', label: 'Validated' },
-		{ key: 'released-rnd', label: 'Released R&D' },
-		{ key: 'released-manufacturing', label: 'Released Mfg' },
-		{ key: 'released-field', label: 'Released Field' },
-		{ key: 'deployed', label: 'Deployed' },
-		{ key: 'servicing', label: 'Servicing' },
-		{ key: 'retired', label: 'Retired' },
-		{ key: 'voided', label: 'Voided' }
-	] as const;
-
-	let activeTab = $derived(data.stateFilter);
-
 	let totalCount = $derived(
 		Object.values(data.stateCounts).reduce((sum, c) => sum + c, 0)
 	);
-
-	function getTabCount(key: string | null): number {
-		if (key === null) return totalCount;
-		return data.stateCounts[key] ?? 0;
-	}
 
 	let filteredSpus = $derived.by(() => {
 		let result = data.spus;
@@ -185,6 +161,11 @@
 		// QC Status filter
 		if (filterQcStatus !== 'all') {
 			result = result.filter((s) => s.qcStatus === filterQcStatus);
+		}
+
+		// SPU Status filter
+		if (filterStatus !== 'all') {
+			result = result.filter((s) => s.status === filterStatus);
 		}
 
 		// Assembly Status filter
@@ -221,6 +202,7 @@
 	let hasActiveFilters = $derived(
 		searchQuery.trim() !== '' ||
 			filterQcStatus !== 'all' ||
+			filterStatus !== 'all' ||
 			filterAssemblyStatus !== 'all' ||
 			filterDateAfter !== '' ||
 			filterDateBefore !== ''
@@ -229,6 +211,7 @@
 	function clearFilters() {
 		searchQuery = '';
 		filterQcStatus = 'all';
+		filterStatus = 'all';
 		filterAssemblyStatus = 'all';
 		filterDateAfter = '';
 		filterDateBefore = '';
@@ -946,8 +929,8 @@
 		<!-- SPU Build Capacity -->
 		<TronCard>
 			<div class="text-center">
-				<div class="mb-1 text-4xl font-bold {data.spuBuildCount > 0 ? 'text-[var(--color-tron-green)]' : 'text-[var(--color-tron-red)]'}">{data.spuBuildCount}</div>
-				<div class="tron-text-muted text-sm">SPUs Buildable with Current Inventory</div>
+				<div class="mb-0.5 text-2xl font-bold {data.spuBuildCount > 0 ? 'text-[var(--color-tron-green)]' : 'text-[var(--color-tron-red)]'}">{data.spuBuildCount}</div>
+				<div class="tron-text-muted text-xs">SPUs Buildable with Current Inventory</div>
 			</div>
 		</TronCard>
 
@@ -1171,27 +1154,26 @@
 
 	<!-- Active Production Runs -->
 	<TronCard>
-		<h3 class="tron-text-primary mb-4 text-lg font-bold">Active Production Runs</h3>
+		<h3 class="tron-text-primary mb-2 text-sm font-semibold">Active Production Runs</h3>
 		{#if data.activeRuns.length === 0}
-			<p class="tron-text-muted py-4 text-center text-sm">No active runs</p>
+			<p class="tron-text-muted py-2 text-center text-xs">No active runs</p>
 		{:else}
-			<div class="space-y-2">
+			<div class="space-y-1.5">
 				{#each data.activeRuns as run (run.id)}
 					<a
 						href="/documents/instructions/{run.workInstructionId}/run/{run.id}"
-						class="flex items-center justify-between rounded border border-[var(--color-tron-border)] p-3 transition-colors hover:border-[var(--color-tron-cyan)] hover:bg-[rgba(0,255,255,0.05)]"
-						style="min-height: 44px;"
+						class="flex items-center justify-between rounded border border-[var(--color-tron-border)] p-2 transition-colors hover:border-[var(--color-tron-cyan)] hover:bg-[rgba(0,255,255,0.05)]"
 					>
-						<div class="flex items-center gap-3">
-							<span class="font-mono text-sm text-[var(--color-tron-cyan)]">{run.runNumber}</span>
-							<span class="tron-text-muted text-sm">{run.workInstructionTitle}</span>
+						<div class="flex items-center gap-2">
+							<span class="font-mono text-xs text-[var(--color-tron-cyan)]">{run.runNumber}</span>
+							<span class="tron-text-muted text-xs">{run.workInstructionTitle}</span>
 						</div>
-						<div class="flex items-center gap-3">
-							<span class="tron-text-primary text-sm font-medium"
+						<div class="flex items-center gap-2">
+							<span class="tron-text-primary text-xs font-medium"
 								>{run.completedUnits}/{run.quantity} units</span
 							>
 							<span
-								class="rounded px-2 py-0.5 text-xs font-medium {run.status === 'in_progress'
+								class="rounded px-1.5 py-0.5 text-[10px] font-medium {run.status === 'in_progress'
 									? 'bg-[rgba(0,255,255,0.15)] text-[var(--color-tron-cyan)]'
 									: 'bg-[rgba(255,165,0,0.15)] text-[var(--color-tron-orange)]'}"
 							>
@@ -1203,123 +1185,6 @@
 			</div>
 		{/if}
 	</TronCard>
-
-	<!-- Fleet Organizer -->
-	{#if data.fleetSummary}
-		{@const fleet = data.fleetSummary}
-		<div>
-			<h3 class="tron-text-primary mb-3 text-lg font-bold">Fleet Organizer</h3>
-
-			{#snippet fleetSpuCard(s: Spu)}
-				<div
-					class="flex items-center justify-between gap-2 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2"
-				>
-					<div class="min-w-0">
-						<div class="truncate text-xs font-bold text-[var(--color-tron-cyan)] font-mono" title={s.udi}>
-							{s.udi}
-						</div>
-					</div>
-					<div class="flex items-center gap-2">
-						<span
-							class="rounded px-1.5 py-0.5 text-xs font-medium"
-							style="background: color-mix(in srgb, {qcColor(
-								s.qcStatus
-							)} 20%, transparent); color: {qcColor(s.qcStatus)};"
-						>
-							{s.qcStatus.charAt(0).toUpperCase() + s.qcStatus.slice(1)}
-						</span>
-						<SpuStatusBadge status={s.status} />
-					</div>
-				</div>
-			{/snippet}
-
-			{#snippet fleetSection(key: string, label: string, spuList: Spu[], badge?: string)}
-				{@const collapsed = collapsedSections[key] ?? false}
-				<TronCard>
-					<button
-						type="button"
-						class="flex w-full items-center justify-between"
-						onclick={() => (collapsedSections[key] = !collapsed)}
-					>
-						<div class="flex items-center gap-2">
-							<span class="tron-text-primary font-medium">{label}</span>
-							{#if badge}
-								<TronBadge variant="neutral">{badge}</TronBadge>
-							{/if}
-							<span
-								class="rounded-full bg-[var(--color-tron-cyan)] px-2 py-0.5 text-xs font-bold text-black"
-							>
-								{spuList.length}
-							</span>
-						</div>
-						<svg
-							class="h-4 w-4 text-[var(--color-tron-cyan)] transition-transform {collapsed
-								? ''
-								: 'rotate-180'}"
-							fill="none"
-							viewBox="0 0 24 24"
-							stroke="currentColor"
-						>
-							<path
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								stroke-width="2"
-								d="M19 9l-7 7-7-7"
-							/>
-						</svg>
-					</button>
-					{#if !collapsed}
-						<div class="mt-3 space-y-2">
-							{#if spuList.length > 0}
-								{#each spuList as s (s.id)}
-									{@render fleetSpuCard(s)}
-								{/each}
-							{:else}
-								<p class="tron-text-muted py-2 text-center text-sm italic">
-									No SPUs in this category
-								</p>
-							{/if}
-						</div>
-					{/if}
-				</TronCard>
-			{/snippet}
-
-			<div class="space-y-3">
-				{@render fleetSection('rnd', 'R&D', fleet.rnd)}
-				{@render fleetSection('manufacturing', 'Manufacturing', fleet.manufacturing)}
-				{#each fleet.customers as group (group.customer.id)}
-					{@render fleetSection(
-						`customer-${group.customer.id}`,
-						group.customer.name,
-						group.spus,
-						group.customer.customerType.toUpperCase()
-					)}
-				{/each}
-			</div>
-		</div>
-	{/if}
-
-	<!-- Device State Tabs -->
-	<div class="flex flex-wrap gap-2">
-		{#each stateTabs as tab (tab.key)}
-			<a
-				href={tab.key ? `?state=${tab.key}` : '?'}
-				class="rounded-lg border px-4 py-2 text-sm font-medium transition-colors {activeTab === tab.key
-					? 'border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.15)] text-[var(--color-tron-cyan)]'
-					: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
-				style="min-height: 44px; display: inline-flex; align-items: center;"
-			>
-				{tab.label}
-				<span
-					class="ml-2 rounded-full px-2 py-0.5 text-xs {activeTab === tab.key
-						? 'bg-[rgba(0,255,255,0.2)]'
-						: 'bg-[rgba(255,255,255,0.05)]'}"
-				>
-					{getTabCount(tab.key)}
-				</span>
-			</a>
-		{/each}
-	</div>
 
 	<!-- SITE-22: Filter and Sort Controls -->
 	{#if data.spus.length > 0}
@@ -1338,6 +1203,16 @@
 
 				<!-- Filter dropdowns row -->
 				<div class="flex flex-wrap items-end gap-3">
+					<div>
+						<label for="filter-status" class="tron-label text-xs">SPU Status</label>
+						<select id="filter-status" class="tron-select text-sm" bind:value={filterStatus}>
+							<option value="all">All ({totalCount})</option>
+							{#each STATUS_OPTIONS as s (s)}
+								<option value={s}>{s.replace(/-/g, ' ')} ({data.stateCounts[s] ?? 0})</option>
+							{/each}
+						</select>
+					</div>
+
 					<div>
 						<label for="filter-qc" class="tron-label text-xs">QC Status</label>
 						<select id="filter-qc" class="tron-select text-sm" bind:value={filterQcStatus}>
@@ -1518,7 +1393,7 @@
 				</svg>
 				<h3 class="tron-text-primary mb-2 text-lg font-medium">No SPUs Found</h3>
 				<p class="tron-text-muted mb-4">
-					{#if activeTab}
+					{#if data.stateFilter}
 						No SPUs in this category. Use the UDI lookup above to register a new SPU.
 					{:else}
 						Get started by registering your first Sample Processing Unit using the UDI lookup above.
@@ -1580,13 +1455,11 @@
 							class="w-full text-left"
 							onclick={() => (expandedSpuId = expandedSpuId === spuItem.id ? null : spuItem.id)}
 						>
-							<div class="mb-3 flex items-start justify-between pl-6">
-								<div>
-									<div class="truncate text-sm font-bold text-[var(--color-tron-cyan)] font-mono" title={spuItem.udi}>
-										{spuItem.udi}
-									</div>
+							<div class="mb-3 pl-6">
+								<div class="mb-2 truncate text-sm font-bold text-[var(--color-tron-cyan)] font-mono" title={spuItem.udi}>
+									{spuItem.udi}
 								</div>
-								<div class="flex gap-1.5">
+								<div class="flex flex-wrap gap-1.5">
 									<SpuDeviceStateBadge deviceState={spuItem.deviceState} />
 									<SpuStatusBadge status={spuItem.status} />
 								</div>
