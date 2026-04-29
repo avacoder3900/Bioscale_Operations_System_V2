@@ -105,7 +105,7 @@ export const actions: Actions = {
 				action: 'INSERT',
 				changedBy: locals.user?.username ?? locals.user?._id,
 				changedAt: now,
-				details: { event: 'auto_create_draft', udi, buildRunId: buildRunId ?? null }
+				newData: { event: 'auto_create_draft', udi, buildRunId: buildRunId ?? null }
 			});
 		}
 

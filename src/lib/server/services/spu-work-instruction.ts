@@ -132,7 +132,7 @@ export async function createSpuWiDraftVersion(input: {
 		action: 'UPDATE',
 		changedBy: input.preparedBy,
 		changedAt: new Date(),
-		details: { event: 'draft_version_created', version: nextVersion, versionId }
+		newData: { event: 'draft_version_created', version: nextVersion, versionId }
 	});
 
 	return { workInstructionId: wi._id, versionId, version: nextVersion };
@@ -184,7 +184,7 @@ export async function inductSpuWiVersion(
 		action: 'UPDATE',
 		changedBy: actor.username,
 		changedAt: new Date(),
-		details: { event: 'inducted', versionId, version: version.version }
+		newData: { event: 'inducted', versionId, version: version.version }
 	});
 }
 
@@ -207,7 +207,7 @@ export async function rejectSpuWiVersion(
 		action: 'UPDATE',
 		changedBy: actor.username,
 		changedAt: new Date(),
-		details: { event: 'rejected', versionId }
+		newData: { event: 'rejected', versionId }
 	});
 }
 

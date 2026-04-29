@@ -115,7 +115,7 @@ export const actions: Actions = {
 			action: 'UPDATE',
 			changedBy: locals.user!.username,
 			changedAt: new Date(),
-			details: { event: 'review_save', versionId }
+			newData: { event: 'review_save', versionId }
 		});
 
 		return { saved: true };
