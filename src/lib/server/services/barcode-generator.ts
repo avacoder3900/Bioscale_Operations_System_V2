@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { connectDB } from '$lib/server/db/connection';
-import { GeneratedBarcode, CartridgeRecord } from '$lib/server/db/models';
+import { GeneratedBarcode, CartridgeRecord, BarcodeSheetBatch } from '$lib/server/db/models';
 import { generateId } from '$lib/server/db/utils';
 
 /**
@@ -52,10 +52,16 @@ export async function generateCartridgeBarcode(): Promise<string> {
  * of sequential ids: no shared state, no race conditions, and the v4
  * collision probability across the entire device lifetime is negligible.
  *
- * The CartridgeRecord scan is kept as defense-in-depth — surfaces any
- * historical drift (e.g. legacy data ingested with overlapping ids), even
- * though a UUID v4 collision against any finite corpus is astronomically
- * improbable.
+ * Defense-in-depth checks (any one firing means something is very wrong):
+ *   1. Within-batch dedup: the minted set is checked against itself. UUID v4
+ *      has 122 bits of entropy so this should never trigger, but the
+ *      assertion is cheap and catches a broken random source immediately.
+ *   2. CartridgeRecord scan against `_id` — printed UUIDs end up as the
+ *      cartridge `_id` (see api/cv/induct-cartridge), so this is the field
+ *      that must not collide.
+ *   3. BarcodeSheetBatch scan against `barcodeIds` — catches any UUID
+ *      already minted for a prior print job, even if it never made it onto
+ *      a cartridge yet.
  */
 export async function mintCartridgeBarcodes(count: number): Promise<string[]> {
 	if (!Number.isInteger(count) || count < 1 || count > 800) {
@@ -63,12 +69,27 @@ export async function mintCartridgeBarcodes(count: number): Promise<string[]> {
 	}
 	await connectDB();
 	const minted: string[] = Array.from({ length: count }, () => randomUUID());
-	const collisions = await CartridgeRecord.find({ barcode: { $in: minted } })
-		.select('barcode')
+
+	if (new Set(minted).size !== minted.length) {
+		throw new Error('Refusing to print: minted batch contains duplicate UUIDs (random source compromised)');
+	}
+
+	const cartridgeCollisions = await CartridgeRecord.find({ _id: { $in: minted } })
+		.select('_id')
 		.lean();
-	if (collisions.length > 0) {
-		const dupes = (collisions as Array<{ barcode: string }>).map((c) => c.barcode).join(', ');
+	if (cartridgeCollisions.length > 0) {
+		const dupes = (cartridgeCollisions as Array<{ _id: string }>).map((c) => c._id).join(', ');
 		throw new Error(`Refusing to print: minted barcodes already exist on cartridges: ${dupes}`);
 	}
+
+	const priorBatchCollisions = await BarcodeSheetBatch.find({ barcodeIds: { $in: minted } })
+		.select('barcodeIds')
+		.lean();
+	if (priorBatchCollisions.length > 0) {
+		const all = (priorBatchCollisions as Array<{ barcodeIds: string[] }>).flatMap((b) => b.barcodeIds);
+		const dupes = minted.filter((m) => all.includes(m)).join(', ');
+		throw new Error(`Refusing to print: minted barcodes were already printed in a prior batch: ${dupes}`);
+	}
+
 	return minted;
 }

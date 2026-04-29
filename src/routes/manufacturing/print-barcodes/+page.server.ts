@@ -72,12 +72,12 @@ export const actions: Actions = {
 		const sampleSize = Math.min(5, barcodes.length);
 		const shuffled = [...barcodes].sort(() => Math.random() - 0.5);
 		const sample = shuffled.slice(0, sampleSize);
-		const sampleCollisions = await CartridgeRecord.find({ barcode: { $in: sample } })
-			.select('barcode')
+		const sampleCollisions = await CartridgeRecord.find({ _id: { $in: sample } })
+			.select('_id')
 			.lean();
 		const spotCheck = {
 			sampleSize,
-			collisions: (sampleCollisions as Array<{ barcode: string }>).map((c) => c.barcode),
+			collisions: (sampleCollisions as Array<{ _id: string }>).map((c) => c._id),
 			sample
 		};
 
