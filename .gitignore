@@ -22,3 +22,6 @@ Thumbs.db
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .env*.local
+
+# Vendored AGPL source (ERPNext + Frappe) — design reference only, not shipped
+reference/
