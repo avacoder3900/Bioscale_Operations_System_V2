@@ -37,16 +37,26 @@ export async function generateNextSpuUdi(actor?: { _id: string; username: string
 	const group3 = highest?.group3 ?? '0000';
 	const startFloor = highest?.seq ?? 0;
 
+	await GeneratedBarcode.updateOne(
+		{ prefix: PREFIX_KEY, sequence: { $lt: startFloor } },
+		{ $set: { sequence: startFloor } },
+		{ upsert: false }
+	);
+
 	const counter = (await GeneratedBarcode.findOneAndUpdate(
 		{ prefix: PREFIX_KEY },
-		{ $inc: { sequence: 1 }, $max: { sequence: startFloor + 1 } as any },
+		{ $inc: { sequence: 1 } },
 		{ upsert: true, new: true, setDefaultsOnInsert: true }
 	)) as any;
 
-	let seq: number = Math.max(counter.sequence ?? 1, startFloor + 1);
-
-	if ((counter.sequence ?? 0) < seq) {
-		await GeneratedBarcode.updateOne({ _id: counter._id }, { $set: { sequence: seq } });
+	let seq: number = counter.sequence ?? 1;
+	if (seq <= startFloor) {
+		const bumped = (await GeneratedBarcode.findByIdAndUpdate(
+			counter._id,
+			{ $set: { sequence: startFloor + 1 } },
+			{ new: true }
+		)) as any;
+		seq = bumped.sequence;
 	}
 
 	let udi = formatUdi(group3, seq);
