@@ -21,6 +21,42 @@
 		<p class="tron-text-muted">Allocate the next UDI and begin a new SPU build</p>
 	</div>
 
+	<TronCard>
+		<div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+			<div class="flex-1 space-y-2">
+				<p class="tron-text-primary font-medium">Upload Work Instructions</p>
+				<p class="tron-text-muted text-xs">
+					Parser scans the .docx for the patterns below and auto-generates barcode-scan fields for the entire WI. You confirm before induction.
+				</p>
+				<ul class="tron-text-muted ml-4 list-disc text-xs">
+					<li>
+						Part references: <code class="text-[var(--color-tron-cyan)]">PT-SPU-XXX</code>
+						(3+ digits)
+					</li>
+					<li>
+						Quantities: <code class="text-[var(--color-tron-cyan)]">qty=X</code>
+						(case-insensitive; defaults to <code>1</code> if absent)
+					</li>
+					<li>
+						One <code>barcode_scan</code> field per part-quantity unit
+						(e.g. <code>qty=2</code> → 2 scans for that part in that step)
+					</li>
+					<li>
+						Non-PT-SPU references (<code>SBA-SPU-…</code>, <code>IFU-SPU-…</code>) are
+						flagged for reviewer attention
+					</li>
+					<li>Step segmentation on numbered headings or <code>Step N</code> markers</li>
+				</ul>
+			</div>
+			<a
+				href="/spu/work-instruction"
+				class="self-start whitespace-nowrap rounded-lg bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-semibold text-black hover:opacity-90"
+			>
+				Upload Work Instructions
+			</a>
+		</div>
+	</TronCard>
+
 	{#if !startedBuild}
 		<TronCard>
 			<form method="POST" action="?/startNewBuild" use:enhance class="space-y-6">
