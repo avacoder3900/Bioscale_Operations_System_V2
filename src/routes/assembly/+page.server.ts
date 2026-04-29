@@ -16,11 +16,69 @@ export const load: PageServerLoad = async ({ locals }) => {
 		.limit(50)
 		.lean();
 
-	const userIds = [...new Set(sessions.map((s: any) => s.userId).filter(Boolean))];
-	const users = userIds.length ? await User.find({ _id: { $in: userIds } }, { username: 1 }).lean() : [];
+	const sessionUserIds = [...new Set(sessions.map((s: any) => s.userId).filter(Boolean))];
+
+	const activeWi: any = await getActiveSpuWorkInstruction();
+	const activeWiTotalSteps = activeWi
+		? (
+				(activeWi.versions ?? []).find((v: any) => v.version === activeWi.currentVersion) ?? {
+					steps: []
+				}
+			).steps?.length ?? 0
+		: null;
+
+	const inProgressSpus = await Spu.find({
+		status: { $in: ['draft', 'assembling'] },
+		finalizedAt: null,
+		voidedAt: null
+	})
+		.sort({ createdAt: -1 })
+		.limit(50)
+		.lean();
+
+	const spuIds = inProgressSpus.map((s: any) => s._id);
+	const latestSessionsRaw = spuIds.length
+		? await AssemblySession.find({ spuId: { $in: spuIds } })
+				.sort({ startedAt: -1 })
+				.lean()
+		: [];
+	const latestSessionBySpu = new Map<string, any>();
+	for (const s of latestSessionsRaw as any[]) {
+		if (!latestSessionBySpu.has(s.spuId)) latestSessionBySpu.set(s.spuId, s);
+	}
+
+	const ownerIds = new Set<string>();
+	for (const s of inProgressSpus as any[]) {
+		if (s.owner) ownerIds.add(s.owner);
+		if (s.createdBy) ownerIds.add(s.createdBy);
+	}
+	const allUserIds = [...new Set([...sessionUserIds, ...ownerIds])];
+	const users = allUserIds.length
+		? await User.find({ _id: { $in: allUserIds } }, { username: 1 }).lean()
+		: [];
 	const userMap = new Map(users.map((u: any) => [u._id, u.username]));
 
-	const activeWi = await getActiveSpuWorkInstruction();
+	const now = Date.now();
+	const inProgressBuilds = (inProgressSpus as any[]).map((spu) => {
+		const sess = latestSessionBySpu.get(spu._id);
+		const ownerKey = spu.owner ?? spu.createdBy ?? null;
+		const ownerUsername = ownerKey ? userMap.get(ownerKey) ?? ownerKey : null;
+		const createdAt = spu.createdAt ?? null;
+		const isStale =
+			!sess && createdAt && now - new Date(createdAt).getTime() > STALE_DRAFT_MS;
+		return {
+			spuId: spu._id,
+			udi: spu.udi,
+			status: spu.status,
+			assemblyStatus: spu.assemblyStatus ?? null,
+			ownerUsername,
+			currentStepIndex: sess?.currentStepIndex ?? null,
+			totalSteps: activeWiTotalSteps,
+			sessionId: sess?._id ?? null,
+			createdAt,
+			isStale: !!isStale
+		};
+	});
 
 	return {
 		sessions: sessions.map((s: any) => ({
@@ -41,9 +99,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 					title: (activeWi as any).title,
 					revision: (activeWi as any).revision ?? '',
 					currentVersion: (activeWi as any).currentVersion ?? 1,
-					effectiveDate: (activeWi as any).effectiveDate ?? null
+					effectiveDate: (activeWi as any).effectiveDate ?? null,
+					totalSteps: activeWiTotalSteps
 				}
-			: null
+			: null,
+		inProgressBuilds: JSON.parse(JSON.stringify(inProgressBuilds))
 	};
 };
 

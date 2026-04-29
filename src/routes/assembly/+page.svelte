@@ -6,9 +6,16 @@
 
 	const activeWi = $derived(data?.activeWorkInstruction ?? null);
 	const startedBuild = $derived((form as any)?.startedBuild ?? null);
+	const inProgress = $derived(data?.inProgressBuilds ?? []);
+
+	function stepLabel(b: any): string {
+		if (b.sessionId == null) return 'Not started';
+		const idx = (b.currentStepIndex ?? 0) + 1;
+		return b.totalSteps ? `Step ${idx} of ${b.totalSteps}` : `Step ${idx}`;
+	}
 </script>
 
-<div class="mx-auto max-w-2xl space-y-8">
+<div class="mx-auto max-w-4xl space-y-8">
 	<div class="text-center">
 		<h2 class="tron-text-primary mb-2 text-2xl font-bold">Start Assembly</h2>
 		<p class="tron-text-muted">Allocate the next UDI and begin a new SPU build</p>
@@ -100,4 +107,67 @@
 			</div>
 		</TronCard>
 	{/if}
+
+	<section class="space-y-3">
+		<div class="flex items-baseline justify-between">
+			<h3 class="tron-text-primary text-lg font-semibold">In-Progress Builds</h3>
+			<p class="tron-text-muted text-xs">{inProgress.length} unit{inProgress.length === 1 ? '' : 's'} on the line</p>
+		</div>
+
+		{#if inProgress.length === 0}
+			<TronCard>
+				<p class="tron-text-muted text-sm">No builds in progress.</p>
+			</TronCard>
+		{:else}
+			<div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+				{#each inProgress as b}
+					<TronCard>
+						<div class="space-y-3">
+							<div class="flex items-start justify-between gap-2">
+								<p class="tron-text-primary font-mono text-base font-bold">{b.udi}</p>
+								<div class="flex flex-shrink-0 gap-1">
+									<span class="rounded bg-[rgba(0,229,255,0.15)] px-2 py-0.5 text-xs uppercase tracking-wide text-[var(--color-tron-cyan)]">
+										{b.status}
+									</span>
+									{#if b.isStale}
+										<span class="rounded bg-[rgba(255,51,102,0.15)] px-2 py-0.5 text-xs uppercase tracking-wide text-[var(--color-tron-red)]">
+											Stale
+										</span>
+									{/if}
+								</div>
+							</div>
+							<div class="grid grid-cols-2 gap-2 text-xs">
+								<div>
+									<p class="tron-text-muted uppercase tracking-wide">Step</p>
+									<p class="tron-text-primary">{stepLabel(b)}</p>
+								</div>
+								<div>
+									<p class="tron-text-muted uppercase tracking-wide">Owner</p>
+									<p class="tron-text-primary">{b.ownerUsername ?? '—'}</p>
+								</div>
+							</div>
+							{#if b.sessionId}
+								<a
+									href="/assembly/{b.sessionId}"
+									class="block w-full rounded-lg border border-[var(--color-tron-cyan)] px-3 py-2 text-center text-xs text-[var(--color-tron-cyan)] hover:bg-[rgba(0,229,255,0.1)]"
+								>
+									Resume Build
+								</a>
+							{:else}
+								<form method="POST" action="?/openWorkInstruction" use:enhance>
+									<input type="hidden" name="spuId" value={b.spuId} />
+									<button
+										type="submit"
+										class="w-full rounded-lg bg-[var(--color-tron-cyan)] px-3 py-2 text-xs font-semibold text-black hover:opacity-90"
+									>
+										Continue to Work Instruction
+									</button>
+								</form>
+							{/if}
+						</div>
+					</TronCard>
+				{/each}
+			</div>
+		{/if}
+	</section>
 </div>
