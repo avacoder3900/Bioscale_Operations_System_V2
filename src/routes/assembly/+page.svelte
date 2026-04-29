@@ -48,6 +48,14 @@
 		</TronCard>
 
 		<TronCard>
+			<div class="space-y-2">
+				<p class="tron-text-muted text-xs uppercase tracking-wide">Build Details</p>
+				<p class="tron-text-primary text-sm">Placeholder — build details widget will populate here.</p>
+				<p class="tron-text-muted font-mono text-xs">SPU ID: {startedBuild.spuId}</p>
+			</div>
+		</TronCard>
+
+		<TronCard>
 			{#if startedBuild.workInstruction}
 				<div class="space-y-4">
 					<div>
