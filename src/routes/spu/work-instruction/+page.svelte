@@ -5,6 +5,37 @@
 	let { data, form } = $props();
 	let submitting = $state(false);
 	let clientError = $state<string | null>(null);
+	let stage = $state<string>('');
+	let selectedFile = $state<File | null>(null);
+	let httpStatus = $state<number | null>(null);
+	let timing = $state<{ startedAt?: number; finishedAt?: number }>({});
+
+	const VERCEL_LIMIT_BYTES = 4_500_000; // Vercel serverless body cap (~4.5 MB)
+	const SOFT_WARN_BYTES = 3_500_000;
+
+	function fmtBytes(b: number) {
+		if (b < 1024) return `${b} B`;
+		if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+		return `${(b / 1024 / 1024).toFixed(2)} MB`;
+	}
+
+	function onFileChange(e: Event) {
+		const input = e.currentTarget as HTMLInputElement;
+		selectedFile = input.files?.[0] ?? null;
+		clientError = null;
+		stage = '';
+		httpStatus = null;
+		timing = {};
+	}
+
+	let sizeWarning = $derived(
+		selectedFile && selectedFile.size > VERCEL_LIMIT_BYTES
+			? `File is ${fmtBytes(selectedFile.size)} — exceeds Vercel's 4.5 MB serverless upload limit. Use a smaller file or split the .docx; we'll need browser-direct R2 upload for files this size.`
+			: selectedFile && selectedFile.size > SOFT_WARN_BYTES
+				? `File is ${fmtBytes(selectedFile.size)} — close to Vercel's 4.5 MB limit, may 413.`
+				: null
+	);
+	let blockSubmit = $derived(!selectedFile || (selectedFile?.size ?? 0) > VERCEL_LIMIT_BYTES);
 </script>
 
 <div class="mx-auto max-w-3xl space-y-6 p-6">
@@ -40,17 +71,40 @@
 			enctype="multipart/form-data"
 			use:enhance={() => {
 				clientError = null;
+				httpStatus = null;
 				submitting = true;
+				stage = `Sending ${selectedFile ? fmtBytes(selectedFile.size) : '?'} to server…`;
+				timing = { startedAt: Date.now() };
 				return async ({ result, update }) => {
+					timing.finishedAt = Date.now();
 					try {
+						stage = 'Server replied; updating page…';
 						await update();
 					} catch (err: any) {
 						clientError = err?.message ?? 'Unknown client error';
 					}
-					submitting = false;
-					if (result?.type === 'error') {
-						clientError = `Server error: ${(result as any).error?.message ?? 'unknown'}`;
+
+					if (result?.type === 'failure') {
+						httpStatus = (result as any).status ?? null;
+						stage = `Server returned ${httpStatus} (form action failure)`;
+					} else if (result?.type === 'error') {
+						httpStatus = (result as any).status ?? null;
+						const errObj = (result as any).error ?? {};
+						const msg = errObj.message ?? JSON.stringify(errObj);
+						if (httpStatus === 413) {
+							clientError = `HTTP 413 Payload Too Large. Vercel's serverless function body limit is ~4.5 MB; your file is ${selectedFile ? fmtBytes(selectedFile.size) : '?'}. The request never reached our parser. Either use a smaller .docx or we need to add browser-direct R2 upload (presigned URL flow).`;
+						} else {
+							clientError = `HTTP ${httpStatus ?? '?'} error: ${msg}`;
+						}
+						stage = `Server returned ${httpStatus ?? 'error'}`;
+					} else if (result?.type === 'success') {
+						stage = 'Success — see result below';
+					} else if (result?.type === 'redirect') {
+						stage = `Redirect to ${(result as any).location}`;
+					} else {
+						stage = `Unknown result type: ${result?.type ?? 'undefined'}`;
 					}
+					submitting = false;
 				};
 			}}
 			class="space-y-4"
@@ -60,6 +114,9 @@
 				<p class="tron-text-muted text-xs">
 					Parser auto-extracts <code>PT-SPU-XXX</code> + <code>qty=X</code> and generates barcode fields. You confirm before induction.
 				</p>
+				<p class="tron-text-muted mt-1 text-xs">
+					Server limit: <span class="font-mono">4.5 MB</span> (Vercel serverless cap).
+				</p>
 			</div>
 			<input
 				id="wi-file"
@@ -68,15 +125,45 @@
 				accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.pdf,application/pdf"
 				required
 				disabled={submitting}
+				onchange={onFileChange}
 				class="block w-full text-sm"
 			/>
+			{#if selectedFile}
+				<div class="rounded-lg border border-white/10 bg-black/20 p-2 text-xs">
+					<p class="tron-text-primary">{selectedFile.name}</p>
+					<p class="tron-text-muted">
+						{fmtBytes(selectedFile.size)} · {selectedFile.type || 'unknown mime'}
+					</p>
+				</div>
+			{/if}
+			{#if sizeWarning}
+				<div class="rounded-lg border border-[var(--color-tron-orange,#ffaa00)] bg-[rgba(255,170,0,0.1)] p-3">
+					<p class="text-xs text-[var(--color-tron-orange,#ffaa00)]">{sizeWarning}</p>
+				</div>
+			{/if}
 			<button
 				type="submit"
-				disabled={submitting}
+				disabled={submitting || blockSubmit}
 				class="rounded-lg bg-[var(--color-tron-cyan)] px-4 py-2 font-semibold text-black hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
 			>
 				{submitting ? 'Parsing…' : 'Upload & Parse'}
 			</button>
+
+			{#if stage || timing.startedAt}
+				<div class="rounded-lg border border-white/10 bg-black/30 p-3 text-xs">
+					<p class="tron-text-primary mb-1 font-semibold">Pipeline status</p>
+					<p class="tron-text-muted">Stage: <span class="text-[var(--color-tron-cyan)]">{stage || '(idle)'}</span></p>
+					{#if httpStatus !== null}
+						<p class="tron-text-muted">HTTP status: <span class="font-mono text-[var(--color-tron-cyan)]">{httpStatus}</span></p>
+					{/if}
+					{#if timing.startedAt && timing.finishedAt}
+						<p class="tron-text-muted">
+							Round-trip: <span class="font-mono">{((timing.finishedAt - timing.startedAt) / 1000).toFixed(2)}s</span>
+						</p>
+					{/if}
+				</div>
+			{/if}
+
 			{#if (form as any)?.error}
 				<div class="rounded-lg border border-[var(--color-tron-red)] bg-[rgba(255,51,102,0.1)] p-3">
 					<p class="text-sm text-[var(--color-tron-red)]">{(form as any).error}</p>
