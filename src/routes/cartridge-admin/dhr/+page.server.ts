@@ -1,6 +1,6 @@
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, CartridgeRecord, CvImage } from '$lib/server/db';
-import { getSignedDownloadUrl } from '$lib/server/r2.js';
+import { getR2Url } from '$lib/server/services/r2';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -25,7 +25,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			.lean();
 
 		results = await Promise.all((cartridges as any[]).map(async (c) => {
-			const photoRefs = (c.photos || []) as Array<{ imageId: string; capturedAt: Date; r2Key?: string }>;
+			const photoRefs = (c.photos || []) as Array<{ imageId: string; capturedAt: Date; r2Key?: string; r2Url?: string }>;
 			let previewUrl: string | null = null;
 
 			if (photoRefs.length > 0) {
@@ -33,14 +33,15 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					new Date(b.capturedAt || 0).getTime() - new Date(a.capturedAt || 0).getTime()
 				)[0];
 
-				let key = newest.r2Key;
-				if (!key && newest.imageId) {
+				if (newest.r2Url) {
+					previewUrl = newest.r2Url;
+				} else if (newest.r2Key) {
+					previewUrl = getR2Url(newest.r2Key);
+				} else if (newest.imageId) {
 					const img = await CvImage.findById(newest.imageId).select('filePath thumbnailPath imageUrl').lean() as any;
-					key = img?.thumbnailPath || img?.filePath;
-					if (!key && img?.imageUrl) previewUrl = img.imageUrl;
-				}
-				if (key) {
-					try { previewUrl = await getSignedDownloadUrl(key); } catch { /* no-op */ }
+					if (img?.imageUrl) previewUrl = img.imageUrl;
+					else if (img?.thumbnailPath) previewUrl = getR2Url(img.thumbnailPath);
+					else if (img?.filePath) previewUrl = getR2Url(img.filePath);
 				}
 			}
 

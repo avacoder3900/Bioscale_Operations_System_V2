@@ -1,7 +1,7 @@
 import { error } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, CartridgeRecord, CvImage, CvInspection, InventoryTransaction, ReceivingLot, ManufacturingSettings } from '$lib/server/db';
-import { getSignedDownloadUrl } from '$lib/server/r2.js';
+import { getR2Url } from '$lib/server/services/r2';
 import { getCartridgeTimings } from '$lib/utils/cartridge-timings';
 import type { PageServerLoad } from './$types';
 
@@ -34,44 +34,33 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		sealMin: settings?.reagentFilling?.maxTimeBeforeSealMin
 	});
 
-	// Generate signed R2 URLs for each image (signed-first; legacy imageUrl is fallback)
-	const photos = await Promise.all(
-		(images as any[]).map(async (img) => {
-			let url: string | null = null;
-			let thumbnailUrl: string | null = null;
+	// Resolve photo URLs through the Cloudflare Worker proxy. Direct R2 endpoint
+	// is unreachable from browsers (TLS) so we use the same path the recorder
+	// already writes: imageUrl (already worker-routed) → getR2Url(filePath).
+	const photos = (images as any[]).map((img) => {
+		const r2Key = img.filePath
+			|| (cartridge.photos || []).find((p: any) => p.imageId === img._id)?.r2Key;
+		const url = img.imageUrl || (r2Key ? getR2Url(r2Key) : null);
+		const thumbnailUrl = img.thumbnailPath ? getR2Url(img.thumbnailPath) : url;
 
-			const r2Key = img.filePath
-				|| (cartridge.photos || []).find((p: any) => p.imageId === img._id)?.r2Key;
+		const inspection = (inspections as any[]).find(i => i.imageId === img._id);
 
-			if (r2Key) {
-				try { url = await getSignedDownloadUrl(r2Key); } catch { /* no-op */ }
-			}
-			if (!url && img.imageUrl) url = img.imageUrl;
-
-			if (img.thumbnailPath) {
-				try { thumbnailUrl = await getSignedDownloadUrl(img.thumbnailPath); } catch { /* no-op */ }
-			}
-			if (!thumbnailUrl && url) thumbnailUrl = url;
-
-			const inspection = (inspections as any[]).find(i => i.imageId === img._id);
-
-			return {
-				imageId: img._id,
-				phase: img.cartridgeTag?.phase || 'untagged',
-				labels: img.cartridgeTag?.labels || [],
-				notes: img.cartridgeTag?.notes || '',
-				capturedAt: img.capturedAt || img.createdAt,
-				url,
-				thumbnailUrl,
-				label: img.label || null,
-				inspectionResult: inspection?.result || null,
-				inspectionStatus: inspection?.status || null,
-				confidenceScore: inspection?.confidenceScore ?? null,
-				defects: inspection?.defects || [],
-				processingTimeMs: inspection?.processingTimeMs ?? null
-			};
-		})
-	);
+		return {
+			imageId: img._id,
+			phase: img.cartridgeTag?.phase || 'untagged',
+			labels: img.cartridgeTag?.labels || [],
+			notes: img.cartridgeTag?.notes || '',
+			capturedAt: img.capturedAt || img.createdAt,
+			url,
+			thumbnailUrl,
+			label: img.label || null,
+			inspectionResult: inspection?.result || null,
+			inspectionStatus: inspection?.status || null,
+			confidenceScore: inspection?.confidenceScore ?? null,
+			defects: inspection?.defects || [],
+			processingTimeMs: inspection?.processingTimeMs ?? null
+		};
+	});
 
 	// Build timeline phases
 	const timeline: any[] = [];
