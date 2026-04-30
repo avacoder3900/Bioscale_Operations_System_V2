@@ -1,6 +1,9 @@
 import cv2
 import time
 import os
+import io
+import urllib.request
+import uuid
 
 # ============================================================
 # LIZA DIAGNOSTIC - RAW CAPTURE WITH QR CODE IDENTIFICATION
@@ -19,6 +22,63 @@ EXPOSURE = -5
 # ============================================================
 # DO NOT CHANGE ANYTHING BELOW THIS LINE
 # ============================================================
+
+
+def _upload_to_bims(frame_bgr, qr_code, filename, processing_mode):
+    """Best-effort POST to /api/cv/capture-ingest. Local save is the safety net."""
+    base_url = os.environ.get("BIMS_BASE_URL")
+    api_key = os.environ.get("BIMS_AGENT_API_KEY")
+    if not base_url or not api_key:
+        return
+
+    ok, png_bytes = cv2.imencode(".png", frame_bgr)
+    if not ok:
+        print("Upload skipped: PNG encode failed.")
+        return
+
+    boundary = f"----CaptureBoundary{uuid.uuid4().hex}"
+    cr = b"\r\n"
+    fields = {
+        "qrCode": qr_code,
+        "phase": os.environ.get("BIMS_INGEST_PHASE", "wax_filled"),
+        "processingMode": processing_mode,
+    }
+    project_id = os.environ.get("BIMS_PROJECT_ID")
+    if project_id:
+        fields["projectId"] = project_id
+
+    body = io.BytesIO()
+    for name, value in fields.items():
+        body.write(f"--{boundary}{cr.decode()}".encode())
+        body.write(f'Content-Disposition: form-data; name="{name}"{cr.decode()}{cr.decode()}'.encode())
+        body.write(value.encode())
+        body.write(cr)
+    body.write(f"--{boundary}{cr.decode()}".encode())
+    body.write(
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"{cr.decode()}'.encode()
+    )
+    body.write(b"Content-Type: image/png" + cr + cr)
+    body.write(png_bytes.tobytes())
+    body.write(cr)
+    body.write(f"--{boundary}--{cr.decode()}".encode())
+
+    url = base_url.rstrip("/") + "/api/cv/capture-ingest"
+    req = urllib.request.Request(
+        url,
+        data=body.getvalue(),
+        method="POST",
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "x-agent-api-key": api_key,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payload = resp.read().decode("utf-8", errors="replace")
+            print(f"Uploaded to BIMS: {payload}")
+    except Exception as exc:
+        print(f"BIMS upload failed (local save retained): {exc}")
+
 
 os.makedirs(SAVE_FOLDER, exist_ok=True)
 
@@ -233,6 +293,7 @@ while True:
         # Save raw unmodified frame not display frame
         cv2.imwrite(filename, frame)
         print(f"Raw image saved: {filename}")
+        _upload_to_bims(frame, qr_label, os.path.basename(filename), "raw")
         image_counter += 1
 
     if key == ord('q'):

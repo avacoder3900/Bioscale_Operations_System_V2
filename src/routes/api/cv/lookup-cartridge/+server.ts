@@ -8,6 +8,7 @@ import { json, error } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
+import { getSignedDownloadUrl } from '$lib/server/r2.js';
 import type { RequestHandler } from './$types';
 
 const PHASE_PIPELINE = [
@@ -40,7 +41,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
 	// Find all cv_images tagged with this cartridge, sorted newest first
 	const previousImages = await CvImage.find({ 'cartridgeTag.cartridgeRecordId': code })
-		.select('_id cartridgeTag.phase capturedAt imageUrl')
+		.select('_id cartridgeTag.phase capturedAt filePath imageUrl')
 		.sort({ capturedAt: -1 })
 		.lean();
 
@@ -52,6 +53,22 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	const isNew = previousImages.length === 0;
 	const isComplete = currentPhase === 'qaqc_released';
 
+	const previousImagesPayload = await Promise.all(
+		(previousImages as any[]).map(async (img) => {
+			let url: string | null = null;
+			if (img.filePath) {
+				try { url = await getSignedDownloadUrl(img.filePath); } catch { /* no-op */ }
+			}
+			if (!url) url = img.imageUrl ?? null;
+			return {
+				id: img._id,
+				phase: img.cartridgeTag?.phase,
+				capturedAt: img.capturedAt,
+				url
+			};
+		})
+	);
+
 	return json({
 		cartridgeRecordId: cartridge ? (cartridge as any)._id : null,
 		currentPhase,
@@ -60,13 +77,6 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 		isComplete,
 		pipelineIndex: PHASE_PIPELINE.indexOf(nextPhase as any),
 		pipelineLength: PHASE_PIPELINE.length,
-		previousImages: JSON.parse(JSON.stringify(
-			previousImages.map((img: any) => ({
-				id: img._id,
-				phase: img.cartridgeTag?.phase,
-				capturedAt: img.capturedAt,
-				imageUrl: img.imageUrl
-			}))
-		))
+		previousImages: JSON.parse(JSON.stringify(previousImagesPayload))
 	});
 };

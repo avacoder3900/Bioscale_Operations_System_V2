@@ -34,26 +34,23 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		sealMin: settings?.reagentFilling?.maxTimeBeforeSealMin
 	});
 
-	// Generate signed R2 URLs for each image
+	// Generate signed R2 URLs for each image (signed-first; legacy imageUrl is fallback)
 	const photos = await Promise.all(
 		(images as any[]).map(async (img) => {
 			let url: string | null = null;
 			let thumbnailUrl: string | null = null;
 
-			// Prioritize imageUrl (already public) over R2 signed URLs
-			if (img.imageUrl) {
-				url = img.imageUrl;
-			}
+			const r2Key = img.filePath
+				|| (cartridge.photos || []).find((p: any) => p.imageId === img._id)?.r2Key;
 
-			// Try to get signed URLs for private R2 paths if available
-			const r2Key = img.filePath || (cartridge.photos || []).find((p: any) => p.imageId === img._id)?.r2Key;
-			if (r2Key && !url) {
+			if (r2Key) {
 				try { url = await getSignedDownloadUrl(r2Key); } catch { /* no-op */ }
 			}
+			if (!url && img.imageUrl) url = img.imageUrl;
+
 			if (img.thumbnailPath) {
 				try { thumbnailUrl = await getSignedDownloadUrl(img.thumbnailPath); } catch { /* no-op */ }
 			}
-			// Fall back to imageUrl for thumbnail if R2 signing failed
 			if (!thumbnailUrl && url) thumbnailUrl = url;
 
 			const inspection = (inspections as any[]).find(i => i.imageId === img._id);
