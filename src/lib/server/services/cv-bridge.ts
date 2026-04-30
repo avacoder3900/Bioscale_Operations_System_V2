@@ -29,10 +29,12 @@ export async function getTrainingStatus(projectId: string) {
 	return request(`/status?project_id=${encodeURIComponent(projectId)}`);
 }
 
-export async function runInference(imageUrl: string, modelPath: string) {
+export async function runInference(imageUrl: string, modelPath: string, confidenceThreshold?: number) {
+	const body: Record<string, any> = { image_url: imageUrl, model_path: modelPath };
+	if (typeof confidenceThreshold === 'number') body.confidence_threshold = confidenceThreshold;
 	return request('/infer', {
 		method: 'POST',
-		body: JSON.stringify({ image_url: imageUrl, model_path: modelPath })
+		body: JSON.stringify(body)
 	});
 }
 

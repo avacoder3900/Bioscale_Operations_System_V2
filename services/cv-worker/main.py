@@ -114,6 +114,7 @@ class TrainRequest(BaseModel):
 class InferRequest(BaseModel):
     image_url: str
     model_path: str  # R2 key to ONNX model
+    confidence_threshold: float | None = None  # Per-call override of CONFIDENCE_THRESHOLD env
 
 
 class TrainStatusResponse(BaseModel):
@@ -309,7 +310,8 @@ async def infer(req: InferRequest):
         if anomaly_score < 0 or anomaly_score > 1:
             anomaly_score = 1.0 / (1.0 + np.exp(-anomaly_score))
 
-        is_anomalous = anomaly_score >= CONFIDENCE_THRESHOLD
+        threshold = req.confidence_threshold if req.confidence_threshold is not None else CONFIDENCE_THRESHOLD
+        is_anomalous = anomaly_score >= threshold
         elapsed_ms = (time.time() - start) * 1000
 
         return {
@@ -317,6 +319,7 @@ async def infer(req: InferRequest):
             "confidence": round(1.0 - anomaly_score if not is_anomalous else anomaly_score, 4),
             "anomaly_score": round(anomaly_score, 4),
             "is_anomalous": is_anomalous,
+            "threshold": round(threshold, 4),
             "processing_time_ms": round(elapsed_ms, 1),
             "defects": [{"type": "anomaly", "location": "global", "severity": "high"}] if is_anomalous else [],
         }
