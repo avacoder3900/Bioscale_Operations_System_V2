@@ -1,22 +1,31 @@
 import mammoth from 'mammoth';
 import { nanoid } from 'nanoid';
 import { uploadToR2 } from './r2';
-import type { FieldDefinition, ParsedStep } from './spu-work-instruction';
+import type { FieldDefinition, ParsedPart } from './spu-work-instruction';
 
-export const PARSER_VERSION = '1.2.0';
+export const PARSER_VERSION = '2.0.0';
 
-const PRIMARY_PART_RE = /\bPT-SPU-(\d{3,})\b/g;
+// Matches "Friendly Name (PT-SPU-NNN) xN" with qty optional. Allows × or x.
+const PART_RE = /([^()<>\n]{0,80}?)\(\s*(PT-SPU-\d{3,})\s*\)(?:\s*[x×]\s*(\d+))?/gi;
+// Informational-only part families — surfaced as warnings, not turned into widgets.
 const ALT_PART_RE = /\b(SBA-SPU|IFU-SPU)-(\d{3,})\b/g;
-const QTY_RE = /qty\s*=\s*(\d+)/i;
 
-const STEP_HEADING_RE = /^\s*(?:#+\s*)?(?:step\s*)?(\d{1,3})[\).:\-\s]+(.{0,200})$/i;
-const NUMBERED_LINE_RE = /^\s*(\d{1,3})[\).:]\s+(.{1,200})$/;
-const IMG_MARKER_RE = /^\[\[IMG:(.+?)\]\]$/;
+const ALLOWED_TAGS = new Set([
+	'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+	'p', 'br', 'hr',
+	'strong', 'em', 'u', 'b', 'i', 's', 'strike', 'sub', 'sup', 'code', 'pre',
+	'ul', 'ol', 'li',
+	'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th',
+	'a', 'img', 'span', 'div', 'blockquote'
+]);
+
+type Hit = { partName: string; partNumber: string; quantity: number; segIdx: number };
 
 export type ParsedWorkInstruction = {
 	title?: string;
 	rawContent: string;
-	steps: ParsedStep[];
+	renderedHtml: string;
+	parts: ParsedPart[];
 	totalRequiredScans: number;
 	parserVersion: string;
 	warnings: string[];
@@ -28,41 +37,18 @@ export async function parseSpuWorkInstruction(file: {
 	originalName: string;
 }): Promise<ParsedWorkInstruction> {
 	const warnings: string[] = [];
-	const text = await extractText(file, warnings);
-	const steps = segmentSteps(text);
-	const parsedSteps: ParsedStep[] = steps.map((s, idx) => buildStep(s, idx + 1));
-
-	let runningSort = 0;
-	for (const step of parsedSteps) {
-		for (const f of step.fieldDefinitions) f.sortOrder = ++runningSort;
-	}
-
-	const totalRequiredScans = parsedSteps.reduce((n, s) => n + s.fieldDefinitions.length, 0);
-
-	return {
-		title: deriveTitle(text, file.originalName),
-		rawContent: text,
-		steps: parsedSteps,
-		totalRequiredScans,
-		parserVersion: PARSER_VERSION,
-		warnings
-	};
-}
-
-async function extractText(
-	file: { buffer: Buffer; mimeType: string; originalName: string },
-	warnings: string[]
-): Promise<string> {
 	const lowerName = file.originalName.toLowerCase();
 	const isDocx =
 		file.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
 		lowerName.endsWith('.docx');
-	const isPdf = file.mimeType === 'application/pdf' || lowerName.endsWith('.pdf');
+
+	let rawHtml: string;
+	let rawText: string;
 
 	if (isDocx) {
 		const parseId = nanoid(8);
 		let imgIndex = 0;
-		const failed: string[] = [];
+		const r2Failures: string[] = [];
 
 		const result = await mammoth.convertToHtml(
 			{ buffer: file.buffer },
@@ -75,10 +61,10 @@ async function extractText(
 						const idx = ++imgIndex;
 						const key = `wi/${parseId}/img-${String(idx).padStart(3, '0')}.${ext}`;
 						const url = await uploadToR2(Buffer.from(buf), key, ct);
-						return { src: url, alt: `image-${idx}` };
+						return { src: url, alt: `wi-image-${idx}` };
 					} catch (err: any) {
-						failed.push(err?.message ?? 'unknown');
-						return { src: '', alt: 'failed' };
+						r2Failures.push(err?.message ?? 'unknown');
+						return { src: '', alt: 'r2-upload-failed' };
 					}
 				})
 			}
@@ -86,168 +72,253 @@ async function extractText(
 		if (result.messages?.length) {
 			for (const m of result.messages) warnings.push(`mammoth: ${m.message}`);
 		}
-		if (failed.length) warnings.push(`r2 upload failures: ${failed.length} (${failed[0]})`);
-		return htmlToTextWithImageMarkers(result.value ?? '');
-	}
-
-	if (isPdf) {
+		if (r2Failures.length) {
+			warnings.push(`r2 upload failures: ${r2Failures.length} (${r2Failures[0]})`);
+		}
+		rawHtml = result.value ?? '';
+		const txt = await mammoth.extractRawText({ buffer: file.buffer });
+		rawText = txt.value ?? '';
+	} else if (file.mimeType === 'application/pdf' || lowerName.endsWith('.pdf')) {
 		const mod: any = await import('pdf-parse');
 		const PDFParse = mod.PDFParse ?? mod.default?.PDFParse ?? mod.default;
 		const data = new Uint8Array(file.buffer);
 		const parser = new PDFParse({ data });
 		const result: any = await parser.getText();
-		const pages: number | undefined = result?.numpages ?? result?.total ?? result?.pages?.length;
-		if (pages != null) warnings.push(`pdf: ${pages} page(s) parsed`);
-		warnings.push('pdf: image extraction not supported — use .docx if you need photos per step');
-		const text: string = result?.text ?? '';
-		return text.replace(/\r\n/g, '\n');
+		rawText = (result?.text ?? '').replace(/\r\n/g, '\n');
+		rawHtml = '<div>' + rawText.split(/\n{2,}/).map((p) => `<p>${escapeHtml(p)}</p>`).join('') + '</div>';
+		warnings.push('pdf: rendered as plain paragraphs; .docx recommended for layout fidelity');
+	} else {
+		rawText = file.buffer.toString('utf8');
+		rawHtml = `<pre>${escapeHtml(rawText)}</pre>`;
+		warnings.push(`unsupported file type ${file.mimeType || file.originalName}; rendered as plain text`);
 	}
 
-	warnings.push(
-		`Unsupported file type (${file.mimeType || file.originalName}); treating as plain text`
-	);
-	return file.buffer.toString('utf8');
-}
+	const sanitized = sanitizeHtml(rawHtml);
 
-function htmlToTextWithImageMarkers(html: string): string {
-	let text = html;
-	text = text.replace(/<img\b[^>]*\bsrc="([^"]+)"[^>]*\/?>/gi, '\n[[IMG:$1]]\n');
-	text = text.replace(/<\/?(?:p|h[1-6]|li|tr|td|th|br|div)[^>]*>/gi, '\n');
-	text = text.replace(/<[^>]+>/g, '');
-	text = text
-		.replace(/&nbsp;/g, ' ')
-		.replace(/&amp;/g, '&')
-		.replace(/&lt;/g, '<')
-		.replace(/&gt;/g, '>')
-		.replace(/&quot;/g, '"')
-		.replace(/&#39;/g, "'");
-	text = text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
-	return text;
-}
-
-function deriveTitle(text: string, fallback: string): string {
-	const firstNonEmpty = text
-		.split(/\r?\n/)
-		.find((l) => l.trim().length > 0 && !IMG_MARKER_RE.test(l.trim()));
-	if (firstNonEmpty && firstNonEmpty.trim().length < 120) return firstNonEmpty.trim();
-	return fallback.replace(/\.[a-z]+$/i, '');
-}
-
-type RawStep = { number: number; title: string; content: string; images: string[] };
-
-function segmentSteps(text: string): RawStep[] {
-	const lines = text.split(/\r?\n/);
-	const steps: RawStep[] = [];
-	let current: RawStep | null = null;
-	let preStepImages: string[] = [];
-
-	for (const raw of lines) {
-		const line = raw.replace(/ /g, ' ').trimEnd();
-		const trimmed = line.trim();
-
-		const imgMatch = trimmed.match(IMG_MARKER_RE);
-		if (imgMatch) {
-			const url = imgMatch[1];
-			if (!url) continue;
-			if (current) current.images.push(url);
-			else preStepImages.push(url);
-			continue;
-		}
-
-		if (!trimmed) {
-			if (current) current.content += '\n';
-			continue;
-		}
-
-		const heading = matchStepHeading(line);
-		if (heading) {
-			if (current) steps.push(current);
-			current = { number: heading.number, title: heading.title.trim(), content: '', images: [] };
-			continue;
-		}
-
-		if (current) current.content += line + '\n';
-	}
-	if (current) steps.push(current);
-
-	if (steps.length === 0) {
-		steps.push({ number: 1, title: 'Step 1', content: text, images: preStepImages });
-	} else if (preStepImages.length) {
-		steps[0].images = [...preStepImages, ...steps[0].images];
-	}
-
-	steps.forEach((s, i) => (s.number = i + 1));
-	return steps;
-}
-
-function matchStepHeading(line: string): { number: number; title: string } | null {
-	const t = line.trim();
-	if (/^step\s+\d+/i.test(t)) {
-		const m = t.match(/^step\s+(\d+)[\).:\-\s]+(.*)$/i);
-		if (m) return { number: parseInt(m[1], 10), title: m[2] || `Step ${m[1]}` };
-	}
-	if (/^#+\s+/.test(t)) {
-		const m = t.match(/^#+\s+(?:step\s*)?(\d+)?[\).:\-\s]*(.*)$/i);
-		if (m) return { number: parseInt(m[1] ?? '0', 10) || 0, title: m[2] || t };
-	}
-	const numbered = t.match(NUMBERED_LINE_RE);
-	if (numbered) return { number: parseInt(numbered[1], 10), title: numbered[2] };
-	return null;
-}
-
-function buildStep(raw: RawStep, fallbackNumber: number): ParsedStep {
-	const stepNumber = raw.number > 0 ? raw.number : fallbackNumber;
-	const content = raw.content.trim();
-	const warnings: string[] = [];
-
-	const partsMap = new Map<string, number>();
-	const haystack = `${raw.title}\n${content}`;
-
-	for (const m of haystack.matchAll(PRIMARY_PART_RE)) {
-		const pn = `PT-SPU-${m[1]}`;
-		const qty = extractAdjacentQty(haystack, m.index ?? 0) ?? 1;
-		partsMap.set(pn, (partsMap.get(pn) ?? 0) + qty);
-	}
-
-	for (const m of haystack.matchAll(ALT_PART_RE)) {
+	for (const m of rawText.matchAll(ALT_PART_RE)) {
 		warnings.push(`Non-PT-SPU reference found: ${m[0]} — confirm if part of build`);
 	}
 
-	const partRequirements = [...partsMap.entries()].map(([partNumber, quantity]) => ({
-		partNumber,
-		quantity
-	}));
+	const { html: htmlWithWidgets, parts } = injectPartWidgets(sanitized, warnings);
 
-	const fieldDefinitions: FieldDefinition[] = [];
-	for (const { partNumber, quantity } of partRequirements) {
-		for (let n = 1; n <= quantity; n++) {
-			fieldDefinitions.push({
-				fieldName: `${partNumber}_scan_${n}`.replace(/[^A-Za-z0-9_]/g, '_'),
-				fieldLabel: `Scan ${partNumber} (${n} of ${quantity})`,
-				fieldType: 'barcode_scan',
-				isRequired: true,
-				barcodeFieldMapping: partNumber,
-				sortOrder: 0
-			});
-		}
-	}
+	const title = deriveTitle(rawText, file.originalName);
+	const totalRequiredScans = parts.reduce((n, p) => n + p.fieldDefinitions.length, 0);
 
 	return {
-		stepNumber,
-		title: raw.title || `Step ${stepNumber}`,
-		content,
-		images: raw.images.length > 0 ? raw.images : undefined,
-		partRequirements,
-		fieldDefinitions,
+		title,
+		rawContent: rawText,
+		renderedHtml: htmlWithWidgets,
+		parts,
+		totalRequiredScans,
+		parserVersion: PARSER_VERSION,
 		warnings
 	};
 }
 
-function extractAdjacentQty(haystack: string, partIndex: number): number | null {
-	const window = haystack.slice(Math.max(0, partIndex - 80), Math.min(haystack.length, partIndex + 120));
-	const m = window.match(QTY_RE);
-	if (!m) return null;
-	const n = parseInt(m[1], 10);
-	if (Number.isNaN(n) || n < 1 || n > 999) return null;
-	return n;
+function deriveTitle(text: string, fallback: string): string {
+	const firstNonEmpty = text.split(/\r?\n/).find((l) => l.trim().length > 0);
+	if (firstNonEmpty && firstNonEmpty.trim().length < 120) return firstNonEmpty.trim();
+	return fallback.replace(/\.[a-z]+$/i, '');
+}
+
+function escapeHtml(s: string): string {
+	return s
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;')
+		.replace(/'/g, '&#39;');
+}
+
+// Strip <script>/<style>/<iframe> blocks and event-handler attributes; restrict
+// surviving tags to ALLOWED_TAGS. Trusted-author content (only spu:write users
+// can upload), so this is allowlist-based, not full DOMPurify.
+function sanitizeHtml(html: string): string {
+	let s = html;
+	s = s.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+	s = s.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '');
+	s = s.replace(/<iframe\b[^>]*>[\s\S]*?<\/iframe>/gi, '');
+	s = s.replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, '');
+	s = s.replace(/\s+on[a-z]+\s*=\s*"[^"]*"/gi, '');
+	s = s.replace(/\s+on[a-z]+\s*=\s*'[^']*'/gi, '');
+	s = s.replace(/(href|src)\s*=\s*"javascript:[^"]*"/gi, '$1="#"');
+	s = s.replace(/(href|src)\s*=\s*'javascript:[^']*'/gi, "$1='#'");
+	s = s.replace(/<\/?([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>/g, (match, tag) => {
+		return ALLOWED_TAGS.has(tag.toLowerCase()) ? match : '';
+	});
+	return s;
+}
+
+// Walk the sanitized HTML, find every "(PT-SPU-NNN) xN" pattern in TEXT (not
+// inside a tag), and insert a preview-mode barcode-scan widget block right
+// after the closest enclosing block element (paragraph, list item, or table).
+// Each match becomes a ParsedPart entry with N field definitions.
+function injectPartWidgets(
+	html: string,
+	warnings: string[]
+): { html: string; parts: ParsedPart[] } {
+	const parts: ParsedPart[] = [];
+
+	// Tokenize into <tag> | text segments to avoid matching inside attributes.
+	const segments = html.split(/(<[^>]+>)/);
+	const hits: Hit[] = [];
+
+	for (let i = 0; i < segments.length; i++) {
+		const seg = segments[i];
+		if (!seg || seg.startsWith('<')) continue;
+		PART_RE.lastIndex = 0;
+		let m: RegExpExecArray | null;
+		while ((m = PART_RE.exec(seg)) !== null) {
+			const partName = cleanPartName(m[1]);
+			const partNumber = m[2].toUpperCase();
+			const qtyStr = m[3];
+			let quantity = 1;
+			if (qtyStr) {
+				const n = parseInt(qtyStr, 10);
+				if (Number.isFinite(n) && n >= 1 && n <= 999) quantity = n;
+			} else {
+				warnings.push(`${partNumber}: no qty (xN) specified — defaulting to 1`);
+			}
+			hits.push({ partName, partNumber, quantity, segIdx: i });
+		}
+	}
+
+	if (hits.length === 0) return { html, parts: [] };
+
+	// Walk segments to figure out which block element each hit belongs to, so
+	// we can splice the widget after the block's closing tag rather than
+	// mid-paragraph (which would visually break flow).
+	const closeTagAfter = mapHitsToBlockEnd(segments, hits);
+
+	const widgetsByCloseIdx = new Map<number, string[]>();
+	for (let i = 0; i < hits.length; i++) {
+		const hit = hits[i];
+		const anchorId = `anchor-${nanoid(8)}`;
+		const fieldDefinitions = buildFieldDefinitions(hit.partNumber, hit.quantity);
+		parts.push({
+			anchorId,
+			partNumber: hit.partNumber,
+			partName: hit.partName,
+			quantity: hit.quantity,
+			fieldDefinitions
+		});
+		const widgetHtml = renderPreviewWidget({
+			anchorId,
+			partNumber: hit.partNumber,
+			partName: hit.partName,
+			quantity: hit.quantity
+		});
+		const target = closeTagAfter[i];
+		const list = widgetsByCloseIdx.get(target) ?? [];
+		list.push(widgetHtml);
+		widgetsByCloseIdx.set(target, list);
+	}
+
+	// Re-assemble, appending widget HTML after every flagged closing tag.
+	const out: string[] = [];
+	for (let i = 0; i < segments.length; i++) {
+		out.push(segments[i]);
+		const widgets = widgetsByCloseIdx.get(i);
+		if (widgets) for (const w of widgets) out.push(w);
+	}
+
+	return { html: out.join(''), parts };
+}
+
+const BLOCK_OPEN_RE = /^<(p|li|tr|table|h[1-6]|blockquote|div)\b/i;
+const BLOCK_CLOSE_RE = /^<\/(p|li|tr|table|h[1-6]|blockquote|div)\s*>/i;
+
+// For each hit, find the index of the closing tag of its enclosing block.
+// If a hit lives inside a <td> / <tr>, we walk OUT to the closing </table>
+// so the widget appears below the whole table (per the user's confirmation).
+function mapHitsToBlockEnd(segments: string[], hits: Hit[]): number[] {
+	const result: number[] = new Array(hits.length).fill(-1);
+	for (let h = 0; h < hits.length; h++) {
+		const hit = hits[h];
+		// Walk backward to find which block opened most recently.
+		const openStack: { tag: string; idx: number }[] = [];
+		for (let i = 0; i <= hit.segIdx; i++) {
+			const seg = segments[i];
+			if (!seg || !seg.startsWith('<')) continue;
+			const openM = seg.match(BLOCK_OPEN_RE);
+			const closeM = seg.match(BLOCK_CLOSE_RE);
+			if (openM) openStack.push({ tag: openM[1].toLowerCase(), idx: i });
+			else if (closeM) {
+				while (openStack.length && openStack[openStack.length - 1].tag !== closeM[1].toLowerCase()) {
+					openStack.pop();
+				}
+				openStack.pop();
+			}
+		}
+		// Pick the outermost block (table > tr > td > p) so widgets appear at
+		// the right granularity.
+		const enclosing = openStack[openStack.length - 1];
+		const targetTag = enclosing
+			? openStack.find((s) => s.tag === 'table')?.tag ?? enclosing.tag
+			: null;
+		if (!targetTag) {
+			result[h] = hit.segIdx;
+			continue;
+		}
+		// Walk forward from hit to find the matching close tag of targetTag.
+		let depth = 1;
+		let cursor = hit.segIdx + 1;
+		while (cursor < segments.length) {
+			const s = segments[cursor];
+			if (s && s.startsWith('<')) {
+				const oM = s.match(new RegExp(`^<${targetTag}\\b`, 'i'));
+				const cM = s.match(new RegExp(`^</${targetTag}\\s*>`, 'i'));
+				if (oM) depth++;
+				else if (cM) {
+					depth--;
+					if (depth === 0) break;
+				}
+			}
+			cursor++;
+		}
+		result[h] = cursor < segments.length ? cursor : hit.segIdx;
+	}
+	return result;
+}
+
+function cleanPartName(raw: string): string {
+	let s = (raw || '').replace(/[\s ]+/g, ' ').trim();
+	// Strip up to last sentence-ending punctuation so we don't carry prior sentences.
+	const sentenceEnd = Math.max(s.lastIndexOf('. '), s.lastIndexOf('! '), s.lastIndexOf('? '));
+	if (sentenceEnd >= 0 && sentenceEnd < s.length - 2) s = s.slice(sentenceEnd + 2);
+	// Drop common leading verbs and articles.
+	s = s.replace(/^(?:place|insert|attach|install|add|secure|use|the|a|an)\s+/i, '');
+	if (s.length > 60) s = s.slice(s.length - 60);
+	return s.trim();
+}
+
+function buildFieldDefinitions(partNumber: string, quantity: number): FieldDefinition[] {
+	const fields: FieldDefinition[] = [];
+	for (let n = 1; n <= quantity; n++) {
+		fields.push({
+			fieldName: `${partNumber}_scan_${n}`.replace(/[^A-Za-z0-9_]/g, '_'),
+			fieldLabel: `Scan ${partNumber} (${n} of ${quantity})`,
+			fieldType: 'barcode_scan',
+			isRequired: true,
+			barcodeFieldMapping: partNumber,
+			sortOrder: n
+		});
+	}
+	return fields;
+}
+
+function renderPreviewWidget(p: {
+	anchorId: string;
+	partNumber: string;
+	partName: string;
+	quantity: number;
+}): string {
+	const inputs: string[] = [];
+	for (let i = 1; i <= p.quantity; i++) {
+		inputs.push(
+			`<div class="bims-scan-widget__input"><label>Scan ${i} of ${p.quantity}</label><input type="text" disabled placeholder="(preview · scan in build page)" /></div>`
+		);
+	}
+	const headerLabel = p.partName ? `${p.partNumber} — ${escapeHtml(p.partName)} · qty ${p.quantity}` : `${p.partNumber} · qty ${p.quantity}`;
+	return `<div class="bims-scan-widget" data-anchor="${p.anchorId}" data-part="${p.partNumber}" data-qty="${p.quantity}"><div class="bims-scan-widget__header">${headerLabel}</div><div class="bims-scan-widget__inputs">${inputs.join('')}</div></div>`;
 }

@@ -14,14 +14,12 @@ export type FieldDefinition = {
 	sortOrder: number;
 };
 
-export type ParsedStep = {
-	stepNumber: number;
-	title: string;
-	content: string;
-	images?: string[];
-	partRequirements: Array<{ partNumber: string; quantity: number; partDefinitionId?: string; notes?: string }>;
+export type ParsedPart = {
+	anchorId: string;
+	partNumber: string;
+	partName: string;
+	quantity: number;
 	fieldDefinitions: FieldDefinition[];
-	warnings?: string[];
 };
 
 export async function getActiveSpuWorkInstruction() {
@@ -45,7 +43,8 @@ export async function createSpuWiDraftVersion(input: {
 	fileSize?: number;
 	mimeType?: string;
 	rawContent: string;
-	parsedSteps: ParsedStep[];
+	renderedHtml: string;
+	parts: ParsedPart[];
 	parserVersion: string;
 	preparedBy: string;
 }): Promise<{ workInstructionId: string; versionId: string; version: number }> {
@@ -81,37 +80,28 @@ export async function createSpuWiDraftVersion(input: {
 		version: nextVersion,
 		content: input.rawContent.slice(0, 200_000),
 		rawContent: input.rawContent,
+		renderedHtml: input.renderedHtml,
 		changeNotes: `Parser v${input.parserVersion}`,
 		parsedAt: new Date(),
 		parsedBy: input.preparedBy,
 		createdAt: new Date(),
-		steps: input.parsedSteps.map((s) => ({
+		parts: input.parts.map((p) => ({
 			_id: generateId(),
-			stepNumber: s.stepNumber,
-			title: s.title,
-			content: s.content,
-			images: s.images && s.images.length > 0 ? s.images : undefined,
-			requiresScan: (s.fieldDefinitions?.length ?? 0) > 0,
-			partRequirements: (s.partRequirements ?? []).map((p) => ({
-				_id: generateId(),
-				partNumber: p.partNumber,
-				partDefinitionId: p.partDefinitionId,
-				quantity: p.quantity,
-				notes: p.notes
-			})),
-			fieldDefinitions: (s.fieldDefinitions ?? []).map((f) => ({
+			anchorId: p.anchorId,
+			partNumber: p.partNumber,
+			partName: p.partName,
+			quantity: p.quantity,
+			fieldDefinitions: p.fieldDefinitions.map((f) => ({
 				_id: generateId(),
 				fieldName: f.fieldName,
 				fieldLabel: f.fieldLabel,
 				fieldType: f.fieldType,
 				isRequired: f.isRequired,
-				validationPattern: f.validationPattern,
-				options: f.options,
 				barcodeFieldMapping: f.barcodeFieldMapping,
 				sortOrder: f.sortOrder
-			})),
-			toolRequirements: []
-		}))
+			}))
+		})),
+		steps: []
 	};
 
 	await WorkInstruction.updateOne(
@@ -134,7 +124,7 @@ export async function createSpuWiDraftVersion(input: {
 		action: 'UPDATE',
 		changedBy: input.preparedBy,
 		changedAt: new Date(),
-		newData: { event: 'draft_version_created', version: nextVersion, versionId }
+		newData: { event: 'draft_version_created', version: nextVersion, versionId, partCount: input.parts.length }
 	});
 
 	return { workInstructionId: wi._id, versionId, version: nextVersion };
@@ -215,21 +205,25 @@ export async function rejectSpuWiVersion(
 
 function validateInductable(version: any): string[] {
 	const errs: string[] = [];
-	if (!Array.isArray(version.steps) || version.steps.length === 0) {
-		errs.push('No steps');
-		return errs;
+	if (!version.renderedHtml || typeof version.renderedHtml !== 'string' || version.renderedHtml.trim().length === 0) {
+		errs.push('No rendered document body');
 	}
-	for (const step of version.steps) {
-		const hasContent = !!step.content && step.content.trim().length > 0;
-		const hasParts = Array.isArray(step.partRequirements) && step.partRequirements.length > 0;
-		if (!hasContent && !hasParts) errs.push(`Step ${step.stepNumber}: empty`);
-
-		const seen = new Set<string>();
-		for (const f of step.fieldDefinitions ?? []) {
-			if (!f.fieldName || !f.fieldLabel) errs.push(`Step ${step.stepNumber}: field missing name/label`);
-			if (!f.barcodeFieldMapping) errs.push(`Step ${step.stepNumber}: field ${f.fieldName} missing mapping`);
-			if (seen.has(f.fieldName)) errs.push(`Step ${step.stepNumber}: duplicate field ${f.fieldName}`);
-			seen.add(f.fieldName);
+	if (!Array.isArray(version.parts) || version.parts.length === 0) {
+		errs.push('No parts detected — at least one (PT-SPU-NNN) reference required');
+	}
+	const seenAnchors = new Set<string>();
+	for (const p of version.parts ?? []) {
+		if (!p.anchorId) errs.push(`part ${p.partNumber}: missing anchorId`);
+		if (seenAnchors.has(p.anchorId)) errs.push(`duplicate anchorId ${p.anchorId}`);
+		seenAnchors.add(p.anchorId);
+		if (!p.partNumber || !/^PT-SPU-\d{3,}$/.test(p.partNumber)) {
+			errs.push(`invalid partNumber: ${p.partNumber}`);
+		}
+		if (!Number.isFinite(p.quantity) || p.quantity < 1 || p.quantity > 999) {
+			errs.push(`part ${p.partNumber}: invalid quantity ${p.quantity}`);
+		}
+		if (!Array.isArray(p.fieldDefinitions) || p.fieldDefinitions.length !== p.quantity) {
+			errs.push(`part ${p.partNumber}: expected ${p.quantity} field defs, got ${p.fieldDefinitions?.length ?? 0}`);
 		}
 	}
 	return errs;

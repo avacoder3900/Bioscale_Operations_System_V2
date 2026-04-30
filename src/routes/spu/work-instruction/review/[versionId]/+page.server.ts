@@ -26,13 +26,24 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 
 	const isActive = wi.currentVersion === version.version && wi.status === 'active';
 
-	const totalScans = (version.steps ?? []).reduce(
-		(n: number, s: any) => n + (s.fieldDefinitions ?? []).length,
-		0
-	);
+	// New v2 shape (parts[]) takes precedence; fall back to legacy steps[] if present.
+	const isNewShape = Array.isArray(version.parts) && version.parts.length > 0;
+	const totalScans = isNewShape
+		? (version.parts ?? []).reduce(
+				(n: number, p: any) => n + (p.fieldDefinitions ?? []).length,
+				0
+			)
+		: (version.steps ?? []).reduce(
+				(n: number, s: any) => n + (s.fieldDefinitions ?? []).length,
+				0
+			);
 	const distinctParts = new Set<string>();
-	for (const s of version.steps ?? []) {
-		for (const p of s.partRequirements ?? []) distinctParts.add(p.partNumber);
+	if (isNewShape) {
+		for (const p of version.parts ?? []) distinctParts.add(p.partNumber);
+	} else {
+		for (const s of version.steps ?? []) {
+			for (const p of s.partRequirements ?? []) distinctParts.add(p.partNumber);
+		}
 	}
 
 	return {
@@ -43,7 +54,9 @@ export const load: PageServerLoad = async ({ locals, params, url }) => {
 				id: version._id,
 				version: version.version,
 				parsedAt: version.parsedAt,
-				steps: version.steps ?? []
+				steps: version.steps ?? [],
+				parts: version.parts ?? [],
+				renderedHtml: version.renderedHtml ?? ''
 			})
 		),
 		summary: {

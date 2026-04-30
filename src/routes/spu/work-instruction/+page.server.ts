@@ -27,7 +27,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 					id: v._id,
 					version: v.version,
 					parsedAt: v.parsedAt,
-					stepCount: (v.steps ?? []).length,
+					partCount: (v.parts ?? []).length,
 					discarded: typeof v.changeNotes === 'string' && v.changeNotes.startsWith('discarded')
 				}))
 		: [];
@@ -49,9 +49,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 					JSON.stringify({
 						id: (activeVersion as any)._id,
 						version: (activeVersion as any).version,
-						stepCount: ((activeVersion as any).steps ?? []).length,
-						barcodeFieldCount: ((activeVersion as any).steps ?? []).reduce(
-							(n: number, s: any) => n + (s.fieldDefinitions ?? []).length,
+						partCount: ((activeVersion as any).parts ?? []).length,
+						barcodeFieldCount: ((activeVersion as any).parts ?? []).reduce(
+							(n: number, p: any) => n + (p.fieldDefinitions ?? []).length,
 							0
 						)
 					})
@@ -83,7 +83,6 @@ export const actions: Actions = {
 
 			if (!(file instanceof File) || file.size === 0) {
 				audit.failure = 'no-file';
-				console.log('[wi-upload] no file', audit);
 				return fail(400, { error: 'No file provided', audit });
 			}
 
@@ -119,8 +118,9 @@ export const actions: Actions = {
 					originalName: name
 				});
 				console.log('[wi-upload] parse complete', {
-					steps: parsed.steps.length,
+					parts: parsed.parts.length,
 					scans: parsed.totalRequiredScans,
+					htmlBytes: parsed.renderedHtml.length,
 					warnings: parsed.warnings.length
 				});
 			} catch (err: any) {
@@ -131,20 +131,12 @@ export const actions: Actions = {
 				return fail(400, { error: `Parse failed: ${err?.message ?? 'unknown error'}`, audit });
 			}
 
-			audit.parserStepCount = parsed.steps?.length ?? 0;
+			audit.parserPartCount = parsed.parts?.length ?? 0;
 			audit.parserScanCount = parsed.totalRequiredScans;
 			audit.parserWarnings = parsed.warnings;
 			audit.parserRawTextLength = parsed.rawContent.length;
-			audit.rawTextPreview = parsed.rawContent.slice(0, 800);
-
-			if (!parsed.steps?.length) {
-				audit.failure = 'no-steps';
-				console.log('[wi-upload] no steps', audit);
-				return fail(400, {
-					error: 'Parser produced no steps from this document',
-					audit
-				});
-			}
+			audit.parserRenderedHtmlLength = parsed.renderedHtml.length;
+			audit.rawTextPreview = parsed.rawContent.slice(0, 600);
 
 			let dbResult;
 			try {
@@ -154,7 +146,8 @@ export const actions: Actions = {
 					fileSize: file.size,
 					mimeType: file.type,
 					rawContent: parsed.rawContent,
-					parsedSteps: parsed.steps,
+					renderedHtml: parsed.renderedHtml,
+					parts: parsed.parts,
 					parserVersion: parsed.parserVersion,
 					preparedBy: locals.user!.username
 				});
@@ -175,7 +168,7 @@ export const actions: Actions = {
 
 			audit.completedAt = new Date().toISOString();
 			console.log('[wi-upload] success', {
-				steps: parsed.steps.length,
+				parts: parsed.parts.length,
 				wi: dbResult.workInstructionId,
 				version: dbResult.version
 			});
@@ -190,13 +183,11 @@ export const actions: Actions = {
 				parserVersion: parsed.parserVersion,
 				warnings: parsed.warnings,
 				totalRequiredScans: parsed.totalRequiredScans,
-				steps: parsed.steps.map((s) => ({
-					stepNumber: s.stepNumber,
-					title: s.title,
-					content: s.content,
-					images: s.images ?? [],
-					partRequirements: s.partRequirements,
-					fieldCount: s.fieldDefinitions.length
+				partCount: parsed.parts.length,
+				partsList: parsed.parts.map((p) => ({
+					partNumber: p.partNumber,
+					partName: p.partName,
+					quantity: p.quantity
 				})),
 				audit
 			};

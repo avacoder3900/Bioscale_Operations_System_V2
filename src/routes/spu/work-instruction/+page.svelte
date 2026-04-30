@@ -10,7 +10,7 @@
 	let httpStatus = $state<number | null>(null);
 	let timing = $state<{ startedAt?: number; finishedAt?: number }>({});
 
-	const VERCEL_LIMIT_BYTES = 4_500_000; // Vercel serverless body cap (~4.5 MB)
+	const VERCEL_LIMIT_BYTES = 4_500_000;
 	const SOFT_WARN_BYTES = 3_500_000;
 
 	function fmtBytes(b: number) {
@@ -30,7 +30,7 @@
 
 	let sizeWarning = $derived(
 		selectedFile && selectedFile.size > VERCEL_LIMIT_BYTES
-			? `File is ${fmtBytes(selectedFile.size)} — exceeds Vercel's 4.5 MB serverless upload limit. Use a smaller file or split the .docx; we'll need browser-direct R2 upload for files this size.`
+			? `File is ${fmtBytes(selectedFile.size)} — exceeds Vercel's 4.5 MB serverless upload limit. Use a smaller file or split the .docx.`
 			: selectedFile && selectedFile.size > SOFT_WARN_BYTES
 				? `File is ${fmtBytes(selectedFile.size)} — close to Vercel's 4.5 MB limit, may 413.`
 				: null
@@ -41,7 +41,10 @@
 <div class="mx-auto max-w-3xl space-y-6 p-6">
 	<header>
 		<h1 class="tron-text-primary text-2xl font-bold">SPU Work Instruction</h1>
-		<p class="tron-text-muted text-sm">One canonical work instruction governs every SPU build.</p>
+		<p class="tron-text-muted text-sm">
+			Upload a .docx — BIMS renders it 1:1 with barcode-scan widgets injected next to each
+			<code>(PT-SPU-NNN) xN</code> reference.
+		</p>
 	</header>
 
 	<TronCard>
@@ -51,13 +54,19 @@
 				<p class="tron-text-primary text-lg font-medium">{data.wi.title}</p>
 				<p class="tron-text-muted text-xs">
 					rev {data.wi.revision || '-'} · v{data.activeVersion.version} ·
-					{data.activeVersion.stepCount} steps · {data.activeVersion.barcodeFieldCount} scan fields
+					{data.activeVersion.partCount} parts · {data.activeVersion.barcodeFieldCount} scan fields
 				</p>
 				{#if data.wi.effectiveDate}
 					<p class="tron-text-muted text-xs">
 						Effective {new Date(data.wi.effectiveDate).toLocaleDateString()}
 					</p>
 				{/if}
+				<a
+					href="/spu/work-instruction/view/{data.activeVersion.id}?wi={data.wi.id}"
+					class="mt-2 inline-block text-xs text-[var(--color-tron-cyan)] hover:underline"
+				>
+					View rendered document →
+				</a>
 			</div>
 		{:else}
 			<p class="tron-text-muted text-sm">No active SPU work instruction. Upload a .docx to begin.</p>
@@ -84,25 +93,26 @@
 						clientError = err?.message ?? 'Unknown client error';
 					}
 
-					if (result?.type === 'failure') {
-						httpStatus = (result as any).status ?? null;
-						stage = `Server returned ${httpStatus} (form action failure)`;
-					} else if (result?.type === 'error') {
-						httpStatus = (result as any).status ?? null;
-						const errObj = (result as any).error ?? {};
+					const r = result as any;
+					if (r?.type === 'failure') {
+						httpStatus = r.status ?? null;
+						stage = `Server returned ${httpStatus} (form action failure — see Audit dump)`;
+					} else if (r?.type === 'error') {
+						httpStatus = r.status ?? null;
+						const errObj = r.error ?? {};
 						const msg = errObj.message ?? JSON.stringify(errObj);
 						if (httpStatus === 413) {
-							clientError = `HTTP 413 Payload Too Large. Vercel's serverless function body limit is ~4.5 MB; your file is ${selectedFile ? fmtBytes(selectedFile.size) : '?'}. The request never reached our parser. Either use a smaller .docx or we need to add browser-direct R2 upload (presigned URL flow).`;
+							clientError = `HTTP 413 Payload Too Large. Vercel's serverless body limit (~4.5 MB) was hit before our parser ran. Your file is ${selectedFile ? fmtBytes(selectedFile.size) : '?'}.`;
 						} else {
 							clientError = `HTTP ${httpStatus ?? '?'} error: ${msg}`;
 						}
 						stage = `Server returned ${httpStatus ?? 'error'}`;
-					} else if (result?.type === 'success') {
-						stage = 'Success — see result below';
-					} else if (result?.type === 'redirect') {
-						stage = `Redirect to ${(result as any).location}`;
+					} else if (r?.type === 'success') {
+						stage = 'Success';
+					} else if (r?.type === 'redirect') {
+						stage = `Redirect to ${r.location}`;
 					} else {
-						stage = `Unknown result type: ${result?.type ?? 'undefined'}`;
+						stage = `Unknown result type: ${r?.type ?? 'undefined'}`;
 					}
 					submitting = false;
 				};
@@ -110,10 +120,9 @@
 			class="space-y-4"
 		>
 			<div>
-				<label class="tron-text-primary block text-sm font-medium" for="wi-file">Upload (.docx or .pdf)</label>
-				<p class="tron-text-muted text-xs">
-					Parser auto-extracts <code>PT-SPU-XXX</code> + <code>qty=X</code> and generates barcode fields. You confirm before induction.
-				</p>
+				<label class="tron-text-primary block text-sm font-medium" for="wi-file">
+					Upload (.docx or .pdf)
+				</label>
 				<p class="tron-text-muted mt-1 text-xs">
 					Server limit: <span class="font-mono">4.5 MB</span> (Vercel serverless cap).
 				</p>
@@ -188,15 +197,18 @@
 		{#if (form as any)?.parsed}
 			{@const f = form as any}
 			<div class="mt-6 space-y-4 border-t border-white/10 pt-4">
-				<div class="rounded-lg border border-[var(--color-tron-cyan)] bg-[rgba(0,229,255,0.08)] p-3">
-					<p class="tron-text-primary text-sm font-semibold">
-						Parsed {f.fileName} — {f.steps.length} steps · {f.totalRequiredScans} barcode fields · v{f.version} (parser v{f.parserVersion})
+				<div class="rounded-lg border border-[var(--color-tron-cyan)] bg-[rgba(0,229,255,0.08)] p-4">
+					<p class="tron-text-primary text-base font-semibold">
+						Parsed {f.fileName}
+					</p>
+					<p class="tron-text-muted mt-1 text-xs">
+						{f.partCount} part references · {f.totalRequiredScans} barcode scans · v{f.version} (parser v{f.parserVersion})
 					</p>
 					<a
-						href="/spu/work-instruction/review/{f.versionId}?wi={f.workInstructionId}"
-						class="mt-1 inline-block text-xs text-[var(--color-tron-cyan)] hover:underline"
+						href="/spu/work-instruction/view/{f.versionId}?wi={f.workInstructionId}"
+						class="mt-3 inline-block rounded-lg bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-semibold text-black hover:opacity-90"
 					>
-						Open in review editor →
+						View rendered document →
 					</a>
 				</div>
 
@@ -211,55 +223,23 @@
 					</div>
 				{/if}
 
-				{#each f.steps as s}
+				{#if f.partsList && f.partsList.length > 0}
 					<div class="rounded-lg border border-white/10 p-3">
-						<p class="tron-text-primary text-sm font-semibold">
-							Step {s.stepNumber} — {s.title}
+						<p class="tron-text-muted mb-2 text-xs uppercase tracking-wide">
+							Parts detected (in document order)
 						</p>
-						<p class="tron-text-muted mt-1 text-xs">
-							{s.partRequirements.length} part requirement(s) · {s.fieldCount} barcode field(s) · {s.images.length} image(s)
-						</p>
-						{#if s.images.length > 0}
-							<div class="mt-2 flex flex-wrap gap-2">
-								{#each s.images as imgUrl}
-									<a href={imgUrl} target="_blank" rel="noopener noreferrer">
-										<img
-											src={imgUrl}
-											alt="step image"
-											loading="lazy"
-											class="h-24 w-auto rounded border border-white/10 object-contain"
-										/>
-									</a>
-								{/each}
-							</div>
-						{/if}
-						{#if s.content}
-							<pre class="tron-text-muted mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-black/30 p-2 text-xs">{s.content}</pre>
-						{:else}
-							<p class="tron-text-muted mt-2 text-xs italic">(no body text)</p>
-						{/if}
-						{#if s.partRequirements.length > 0}
-							<div class="mt-2 flex flex-wrap gap-1">
-								{#each s.partRequirements as p}
-									<span class="rounded bg-[var(--color-tron-bg-tertiary,rgba(255,255,255,0.05))] px-2 py-0.5 font-mono text-xs text-[var(--color-tron-cyan)]">
-										{p.partNumber} ×{p.quantity}
-									</span>
-								{/each}
-							</div>
-						{/if}
+						<ul class="space-y-1 text-xs">
+							{#each f.partsList as p, i}
+								<li class="flex items-baseline gap-2">
+									<span class="tron-text-muted w-6 text-right font-mono">{i + 1}.</span>
+									<span class="font-mono text-[var(--color-tron-cyan)]">{p.partNumber}</span>
+									<span class="tron-text-primary">{p.partName || '(unnamed)'}</span>
+									<span class="tron-text-muted">×{p.quantity}</span>
+								</li>
+							{/each}
+						</ul>
 					</div>
-				{/each}
-			</div>
-		{/if}
-
-		{#if data.activeVersion}
-			<div class="mt-4 border-t border-white/10 pt-4">
-				<a
-					href="/spu/work-instruction/review/{data.activeVersion.id}?wi={data.wi?.id}"
-					class="inline-block rounded-lg border border-[var(--color-tron-cyan)] px-4 py-2 text-sm text-[var(--color-tron-cyan)] hover:bg-[rgba(0,229,255,0.1)]"
-				>
-					Edit Active Version
-				</a>
+				{/if}
 			</div>
 		{/if}
 	</TronCard>
@@ -271,17 +251,17 @@
 				{#each data.draftVersions as v}
 					<li class="flex items-center justify-between">
 						<span class="tron-text-primary">
-							v{v.version} · {v.stepCount} steps
+							v{v.version} · {v.partCount} parts
 							{#if v.discarded}
 								<span class="ml-2 text-[var(--color-tron-red)]">(discarded)</span>
 							{/if}
 						</span>
 						{#if !v.discarded}
 							<a
-								href="/spu/work-instruction/review/{v.id}?wi={data.wi?.id}"
+								href="/spu/work-instruction/view/{v.id}?wi={data.wi?.id}"
 								class="text-xs text-[var(--color-tron-cyan)] hover:underline"
 							>
-								Review
+								View
 							</a>
 						{/if}
 					</li>
