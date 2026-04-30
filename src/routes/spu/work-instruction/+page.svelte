@@ -89,6 +89,15 @@
 			{/if}
 		</form>
 
+		{#if form}
+			<details class="mt-6 rounded-lg border border-white/10 bg-black/30 p-3">
+				<summary class="cursor-pointer text-xs font-semibold text-[var(--color-tron-cyan)]">
+					Audit dump (click to expand) — deployed parser v{data.parserVersion}
+				</summary>
+				<pre class="mt-2 max-h-96 overflow-auto whitespace-pre-wrap text-[10px] text-[var(--color-tron-text-secondary)]">{JSON.stringify(form, null, 2)}</pre>
+			</details>
+		{/if}
+
 		{#if (form as any)?.parsed}
 			{@const f = form as any}
 			<div class="mt-6 space-y-4 border-t border-white/10 pt-4">
