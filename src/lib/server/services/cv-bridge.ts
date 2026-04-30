@@ -3,10 +3,16 @@ import { env } from '$env/dynamic/private';
 const BASE_URL = env.CV_WORKER_URL || 'http://localhost:8000';
 
 async function request(path: string, options?: RequestInit) {
-	const res = await fetch(`${BASE_URL}${path}`, {
-		...options,
-		headers: { 'Content-Type': 'application/json', ...options?.headers }
-	});
+	let res: Response;
+	try {
+		res = await fetch(`${BASE_URL}${path}`, {
+			...options,
+			headers: { 'Content-Type': 'application/json', ...options?.headers }
+		});
+	} catch (err: any) {
+		const cause = err?.cause?.code ?? err?.cause?.message ?? '';
+		throw new Error(`CV worker unreachable at ${BASE_URL}${path} (${cause || err?.message || 'no connection'}). Set CV_WORKER_URL or start services/cv-worker.`);
+	}
 	if (!res.ok) {
 		const text = await res.text();
 		throw new Error(`CV worker error ${res.status}: ${text}`);
