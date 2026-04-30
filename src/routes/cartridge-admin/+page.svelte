@@ -260,6 +260,27 @@
 										<span class="ml-1 italic text-[var(--color-tron-text-secondary)]">Customer Assignment, Shipping, Results</span>
 									</div>
 								</div>
+								{#if c.notes && c.notes.length > 0}
+									<div class="mt-3 border-t border-[var(--color-tron-border)]/50 pt-3">
+										<div class="mb-1.5 text-xs font-semibold text-[var(--color-tron-text)]">Recent Notes</div>
+										<div class="space-y-1">
+											{#each c.notes as note}
+												{@const isWarn = note.phase === 'wax_flow_blocked'}
+												<div class="flex items-start gap-2 rounded border px-2 py-1 text-xs {isWarn ? 'border-amber-500/40 bg-amber-900/20 text-amber-200' : 'border-[var(--color-tron-border)]/50 bg-[var(--color-tron-bg)]/50 text-[var(--color-tron-text-secondary)]'}">
+													{#if isWarn}<span class="font-bold">⚠</span>{/if}
+													<div class="flex-1">
+														<div>{note.body}</div>
+														<div class="mt-0.5 text-[10px] text-[var(--color-tron-text-secondary)]">
+															{note.author ?? '—'}
+															{#if note.createdAt} • {new Date(note.createdAt).toLocaleString()}{/if}
+															{#if note.phase} • {note.phase}{/if}
+														</div>
+													</div>
+												</div>
+											{/each}
+										</div>
+									</div>
+								{/if}
 							</td>
 						</tr>
 					{/if}

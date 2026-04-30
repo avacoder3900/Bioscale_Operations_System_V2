@@ -100,7 +100,21 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				topSealBatchId: c.topSeal?.batchId ?? null,
 				coolingTrayId: c.waxStorage?.coolingTrayId ?? null,
 				ovenEntryTime: c.backing?.ovenEntryTime ?? null,
-				photoCount: (c.photos || []).length
+				photoCount: (c.photos || []).length,
+				// Most recent ~5 notes (newest first) so improper-order events
+				// from the wax-flow guard show up in the row expansion.
+				notes: ((c.notes ?? []) as any[])
+					.slice()
+					.sort((a: any, b: any) =>
+						new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime()
+					)
+					.slice(0, 5)
+					.map((n: any) => ({
+						body: n.body ?? '',
+						phase: n.phase ?? null,
+						author: n.author?.username ?? null,
+						createdAt: n.createdAt ?? null
+					}))
 			};
 		}),
 		assayTypes: (assayTypes as any[]).map(a => ({ id: a._id, name: a.name })),

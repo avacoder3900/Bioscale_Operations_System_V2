@@ -10,6 +10,7 @@ import { isAdmin } from '$lib/server/permissions';
 import { User } from '$lib/server/db';
 import { notifyLowWaxBatch, notifyRunLifecycle, shouldWarnLowWax } from '$lib/server/notifications';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
+import { protectLockedCarts } from '$lib/server/manufacturing/locked-cartridges';
 import bcrypt from 'bcryptjs';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -819,19 +820,29 @@ export const actions: Actions = {
 
 		// Record oven exit time on cartridges that have an ovenCure.entryTime
 		// and stamp the cooling fridge on each cartridge's waxStorage subdoc.
+		// Locked carts (linked/underway/completed/voided/scrapped) are skipped + logged.
 		if (run?.cartridgeIds?.length) {
-			const waxStorageSet: Record<string, any> = {};
-			if (coolingTrayId) waxStorageSet['waxStorage.coolingTrayId'] = coolingTrayId;
-			if (coolingLocationId) waxStorageSet['waxStorage.coolingLocationId'] = coolingLocationId;
-			if (coolingLocationName) waxStorageSet['waxStorage.coolingLocationName'] = coolingLocationName;
+			const { safeIds } = await protectLockedCarts(
+				run.cartridgeIds,
+				'confirmCooling',
+				runId,
+				{ _id: locals.user._id, username: locals.user.username }
+			);
 
-			const bulkOps = run.cartridgeIds.map((cid: string) => ({
-				updateOne: {
-					filter: { _id: cid, 'ovenCure.entryTime': { $exists: true }, 'ovenCure.exitTime': { $exists: false } },
-					update: { $set: { 'ovenCure.exitTime': now, ...waxStorageSet } }
-				}
-			}));
-			await CartridgeRecord.bulkWrite(bulkOps);
+			if (safeIds.length > 0) {
+				const waxStorageSet: Record<string, any> = {};
+				if (coolingTrayId) waxStorageSet['waxStorage.coolingTrayId'] = coolingTrayId;
+				if (coolingLocationId) waxStorageSet['waxStorage.coolingLocationId'] = coolingLocationId;
+				if (coolingLocationName) waxStorageSet['waxStorage.coolingLocationName'] = coolingLocationName;
+
+				const bulkOps = safeIds.map((cid: string) => ({
+					updateOne: {
+						filter: { _id: cid, 'ovenCure.entryTime': { $exists: true }, 'ovenCure.exitTime': { $exists: false } },
+						update: { $set: { 'ovenCure.exitTime': now, ...waxStorageSet } }
+					}
+				}));
+				await CartridgeRecord.bulkWrite(bulkOps);
+			}
 		}
 
 		return { success: true, coolingLocationId, coolingLocationName };
@@ -865,63 +876,73 @@ export const actions: Actions = {
 			$set: { status: 'Storage', runEndTime: now }
 		}, { new: true }).lean() as any;
 
-		// Write waxFilling phase to all cartridges (WRITE-ONCE)
+		// Write waxFilling phase to all cartridges (WRITE-ONCE).
+		// Locked carts (linked/underway/completed/voided/scrapped) are skipped + audited.
 		if (run?.cartridgeIds?.length) {
-			const bulkOps = run.cartridgeIds.map((cid: string) => ({
-				updateOne: {
-					filter: { _id: cid, 'waxFilling.recordedAt': { $exists: false } },
-					update: {
-						$set: {
-							'waxFilling.runId': run._id,
-							'waxFilling.robotId': run.robot?._id,
-							'waxFilling.robotName': run.robot?.name,
-							'waxFilling.deckId': run.deckId,
-							'waxFilling.waxTubeId': run.waxTubeId,
-							'waxFilling.waxSourceLot': run.waxSourceLot,
-							'waxFilling.operator': run.operator,
-							'waxFilling.runStartTime': run.runStartTime,
-							'waxFilling.runEndTime': now,
-							'waxFilling.recordedAt': now,
-							status: 'wax_filled'
+			const { safeIds } = await protectLockedCarts(
+				run.cartridgeIds,
+				'completeQC',
+				runId,
+				{ _id: locals.user._id, username: locals.user.username }
+			);
+
+			if (safeIds.length > 0) {
+				const bulkOps = safeIds.map((cid: string) => ({
+					updateOne: {
+						filter: { _id: cid, 'waxFilling.recordedAt': { $exists: false } },
+						update: {
+							$set: {
+								'waxFilling.runId': run._id,
+								'waxFilling.robotId': run.robot?._id,
+								'waxFilling.robotName': run.robot?.name,
+								'waxFilling.deckId': run.deckId,
+								'waxFilling.waxTubeId': run.waxTubeId,
+								'waxFilling.waxSourceLot': run.waxSourceLot,
+								'waxFilling.operator': run.operator,
+								'waxFilling.runStartTime': run.runStartTime,
+								'waxFilling.runEndTime': now,
+								'waxFilling.recordedAt': now,
+								status: 'wax_filled'
+							}
 						}
 					}
-				}
-			}));
-			await CartridgeRecord.bulkWrite(bulkOps);
+				}));
+				await CartridgeRecord.bulkWrite(bulkOps);
 
-			// Write waxQc.status='Accepted' for every cartridge that wasn't rejected
-			// during QC. Rejects already carry waxQc.recordedAt (from rejectCartridge),
-			// so the recordedAt-not-set filter excludes them.
-			const acceptOps = run.cartridgeIds.map((cid: string) => ({
-				updateOne: {
-					filter: { _id: cid, 'waxQc.recordedAt': { $exists: false }, status: { $ne: 'scrapped' } },
-					update: {
-						$set: {
-							'waxQc.status': 'Accepted',
-							'waxQc.operator': { _id: locals.user._id, username: locals.user.username },
-							'waxQc.timestamp': now,
-							'waxQc.recordedAt': now
+				// Write waxQc.status='Accepted' for every cartridge that wasn't rejected
+				// during QC. Rejects already carry waxQc.recordedAt (from rejectCartridge),
+				// so the recordedAt-not-set filter excludes them.
+				const acceptOps = safeIds.map((cid: string) => ({
+					updateOne: {
+						filter: { _id: cid, 'waxQc.recordedAt': { $exists: false }, status: { $ne: 'scrapped' } },
+						update: {
+							$set: {
+								'waxQc.status': 'Accepted',
+								'waxQc.operator': { _id: locals.user._id, username: locals.user.username },
+								'waxQc.timestamp': now,
+								'waxQc.recordedAt': now
+							}
 						}
 					}
-				}
-			}));
-			await CartridgeRecord.bulkWrite(acceptOps);
+				}));
+				await CartridgeRecord.bulkWrite(acceptOps);
 
-			// Record inventory transactions for each cartridge — consume wax (PT-CT-105)
-			const waxPartId = await resolvePartId('PT-CT-105');
-			for (const cid of run.cartridgeIds) {
-				await recordTransaction({
-					transactionType: 'consumption',
-					partDefinitionId: waxPartId ?? undefined,
-					cartridgeRecordId: cid,
-					lotId: run.waxSourceLot ?? undefined,
-					quantity: 1,
-					manufacturingStep: 'wax_filling',
-					manufacturingRunId: String(run._id),
-					operatorId: run.operator?._id,
-					operatorUsername: run.operator?.username,
-					notes: `Wax-filled cartridge created in run ${run._id}`
-				});
+				// Record inventory transactions for each cartridge — consume wax (PT-CT-105)
+				const waxPartId = await resolvePartId('PT-CT-105');
+				for (const cid of safeIds) {
+					await recordTransaction({
+						transactionType: 'consumption',
+						partDefinitionId: waxPartId ?? undefined,
+						cartridgeRecordId: cid,
+						lotId: run.waxSourceLot ?? undefined,
+						quantity: 1,
+						manufacturingStep: 'wax_filling',
+						manufacturingRunId: String(run._id),
+						operatorId: run.operator?._id,
+						operatorUsername: run.operator?.username,
+						notes: `Wax-filled cartridge created in run ${run._id}`
+					});
+				}
 			}
 		}
 
@@ -1090,6 +1111,20 @@ export const actions: Actions = {
 		const rejectionReason = (data.get('rejectionReason') as string) || '';
 		const now = new Date();
 
+		// If the cart is already linked/underway/completed/voided/scrapped,
+		// don't overwrite — log the attempt and refuse.
+		const { safeIds, blockedDetails } = await protectLockedCarts(
+			[cartridgeId],
+			'rejectCartridge',
+			undefined,
+			{ _id: locals.user._id, username: locals.user.username }
+		);
+		if (safeIds.length === 0) {
+			return fail(400, {
+				error: `Cannot reject — cartridge is at status="${blockedDetails[0]?.status}" (already in SPU testing or finalized). The attempt has been logged.`
+			});
+		}
+
 		// Wax rejects use status='scrapped' (distinct from the generic 'voided'
 		// used by operator-initiated removals). Cartridge stays in the system
 		// so inventory + traceability queries can still find it.
@@ -1172,6 +1207,19 @@ export const actions: Actions = {
 			}
 		}
 
+		// Locked carts (linked/underway/completed/voided/scrapped) skipped + audited.
+		// Derive runId from the first cart's waxFilling.runId for the audit log.
+		const firstCart = cartridgeIds[0]
+			? await CartridgeRecord.findById(cartridgeIds[0]).select('waxFilling.runId').lean() as any
+			: null;
+		const inferredRunId: string | undefined = firstCart?.waxFilling?.runId;
+		const { safeIds, blockedDetails } = await protectLockedCarts(
+			cartridgeIds,
+			'recordBatchStorage',
+			inferredRunId,
+			{ _id: locals.user._id, username: locals.user.username }
+		);
+
 		const now = new Date();
 		// S1a: resolve the scanned fridge reference to Equipment._id. See
 		// opentron-control/wax/[runId]/+page.server.ts for the same pattern.
@@ -1180,11 +1228,11 @@ export const actions: Actions = {
 		// the map callback is sync and can't await — same pattern as the
 		// sibling opentron-control route.
 		const resolvedTrayId = coolingTrayId ? await resolveCoolingTrayId(coolingTrayId) : null;
-		if (cartridgeIds.length > 0) {
+		if (safeIds.length > 0) {
 			// Storage fields only — status stays 'wax_filled' until completeRun.
 			// Keeps reagent filling from picking up cartridges whose parent wax
 			// run is still open.
-			const bulkOps = cartridgeIds.map((cid: string) => ({
+			const bulkOps = safeIds.map((cid: string) => ({
 				updateOne: {
 					filter: { _id: cid, 'waxStorage.recordedAt': { $exists: false } },
 					update: {
@@ -1205,7 +1253,7 @@ export const actions: Actions = {
 			await CartridgeRecord.bulkWrite(bulkOps);
 
 			// Record storage transactions
-			for (const cid of cartridgeIds) {
+			for (const cid of safeIds) {
 				await recordTransaction({
 					transactionType: 'creation',
 					cartridgeRecordId: cid,
@@ -1221,15 +1269,15 @@ export const actions: Actions = {
 			await AuditLog.create({
 				_id: generateId(),
 				tableName: 'cartridge_records',
-				recordId: cartridgeIds[0] ?? 'batch',
+				recordId: safeIds[0] ?? 'batch',
 				action: 'UPDATE',
 				changedBy: locals.user?.username,
 				changedAt: now,
-				newData: { status: 'wax_stored', location, coolingLocationId, coolingLocationName, count: cartridgeIds.length }
+				newData: { status: 'wax_stored', location, coolingLocationId, coolingLocationName, count: safeIds.length, skippedLockedCount: blockedDetails.length }
 			});
 		}
 
-		return { success: true, coolingLocationId, coolingLocationName };
+		return { success: true, coolingLocationId, coolingLocationName, skippedLockedCount: blockedDetails.length };
 	},
 
 	/**
@@ -1256,14 +1304,26 @@ export const actions: Actions = {
 		const cartIds: string[] = run.cartridgeIds ?? [];
 		if (cartIds.length === 0) return { success: true };
 
+		// Skip locked carts (linked/underway/completed/voided/scrapped) — clearing
+		// waxStorage on a cart already in SPU testing would invalidate downstream state.
+		const { safeIds, blockedDetails } = await protectLockedCarts(
+			cartIds,
+			'reassignStorage',
+			runId,
+			{ _id: locals.user._id, username: locals.user.username }
+		);
+		if (safeIds.length === 0) {
+			return { success: true, skippedLockedCount: blockedDetails.length };
+		}
+
 		await CartridgeRecord.updateMany(
-			{ _id: { $in: cartIds } },
+			{ _id: { $in: safeIds } },
 			{ $unset: { waxStorage: '' } }
 		);
 
 		await mongoose.connection.db!.collection('inventory_transactions').updateMany(
 			{
-				cartridgeRecordId: { $in: cartIds },
+				cartridgeRecordId: { $in: safeIds },
 				manufacturingStep: 'storage',
 				transactionType: 'creation',
 				retractedAt: { $exists: false }
@@ -1280,14 +1340,14 @@ export const actions: Actions = {
 		await AuditLog.create({
 			_id: generateId(),
 			tableName: 'cartridge_records',
-			recordId: cartIds[0] ?? 'batch',
+			recordId: safeIds[0] ?? 'batch',
 			action: 'REASSIGN_STORAGE',
 			changedBy: locals.user?.username,
 			changedAt: now,
-			newData: { runId, count: cartIds.length, reason: 'Operator-initiated reassignment' }
+			newData: { runId, count: safeIds.length, reason: 'Operator-initiated reassignment', skippedLockedCount: blockedDetails.length }
 		});
 
-		return { success: true };
+		return { success: true, skippedLockedCount: blockedDetails.length };
 	},
 
 	/** Complete the full run */
@@ -1310,7 +1370,15 @@ export const actions: Actions = {
 		// Commit point: flip wax_filled → wax_stored for every cartridge that
 		// made it through fridge assignment. Mirrors the flip in
 		// opentron-control/wax/[runId]/+page.server.ts completeRun.
+		// The status='wax_filled' filter already excludes locked carts; the
+		// helper call still runs so improper-order attempts are logged + visible.
 		if (run?.cartridgeIds?.length) {
+			await protectLockedCarts(
+				run.cartridgeIds,
+				'completeRun',
+				runId,
+				{ _id: locals.user._id, username: locals.user.username }
+			);
 			await CartridgeRecord.updateMany(
 				{
 					_id: { $in: run.cartridgeIds },
