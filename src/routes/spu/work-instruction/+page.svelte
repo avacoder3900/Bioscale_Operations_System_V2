@@ -3,6 +3,8 @@
 	import { TronCard } from '$lib/components/ui';
 
 	let { data, form } = $props();
+	let submitting = $state(false);
+	let clientError = $state<string | null>(null);
 </script>
 
 <div class="mx-auto max-w-3xl space-y-6 p-6">
@@ -32,7 +34,27 @@
 	</TronCard>
 
 	<TronCard>
-		<form method="POST" action="?/upload" enctype="multipart/form-data" use:enhance class="space-y-4">
+		<form
+			method="POST"
+			action="?/upload"
+			enctype="multipart/form-data"
+			use:enhance={() => {
+				clientError = null;
+				submitting = true;
+				return async ({ result, update }) => {
+					try {
+						await update();
+					} catch (err: any) {
+						clientError = err?.message ?? 'Unknown client error';
+					}
+					submitting = false;
+					if (result?.type === 'error') {
+						clientError = `Server error: ${(result as any).error?.message ?? 'unknown'}`;
+					}
+				};
+			}}
+			class="space-y-4"
+		>
 			<div>
 				<label class="tron-text-primary block text-sm font-medium" for="wi-file">Upload (.docx or .pdf)</label>
 				<p class="tron-text-muted text-xs">
@@ -45,17 +67,24 @@
 				name="file"
 				accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.pdf,application/pdf"
 				required
+				disabled={submitting}
 				class="block w-full text-sm"
 			/>
 			<button
 				type="submit"
-				class="rounded-lg bg-[var(--color-tron-cyan)] px-4 py-2 font-semibold text-black hover:opacity-90"
+				disabled={submitting}
+				class="rounded-lg bg-[var(--color-tron-cyan)] px-4 py-2 font-semibold text-black hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
 			>
-				Upload &amp; Parse
+				{submitting ? 'Parsing…' : 'Upload & Parse'}
 			</button>
 			{#if (form as any)?.error}
 				<div class="rounded-lg border border-[var(--color-tron-red)] bg-[rgba(255,51,102,0.1)] p-3">
 					<p class="text-sm text-[var(--color-tron-red)]">{(form as any).error}</p>
+				</div>
+			{/if}
+			{#if clientError}
+				<div class="rounded-lg border border-[var(--color-tron-red)] bg-[rgba(255,51,102,0.1)] p-3">
+					<p class="text-sm text-[var(--color-tron-red)]">{clientError}</p>
 				</div>
 			{/if}
 		</form>
