@@ -17,7 +17,7 @@ import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
 import { AuditLog } from '$lib/server/db/models/audit-log.js';
 import { generateId } from '$lib/server/db/utils.js';
-import { uploadToR2, getR2Url, buildCvNamedKey } from '$lib/server/services/r2';
+import { uploadViaWorker, getR2Url, buildCvNamedKey } from '$lib/server/services/r2';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import type { RequestHandler } from './$types';
 
@@ -50,7 +50,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	const key = buildCvNamedKey(project.name, id, filename);
 	const contentType = file.type || 'image/png';
 
-	await uploadToR2(buffer, key, contentType);
+	await uploadViaWorker(buffer, key, contentType);
 	const publicUrl = getR2Url(key);
 
 	const capturedAt = new Date();
