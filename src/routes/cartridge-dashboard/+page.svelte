@@ -62,6 +62,14 @@
 	const reagentYield = $derived(() => {
 		return reagentTotal > 0 ? (((data.reagentInspection['Accepted'] ?? 0) / reagentTotal) * 100).toFixed(1) : '—';
 	});
+
+	function runStatusClass(status: string): string {
+		const s = status.toLowerCase();
+		if (s === 'completed' || s === 'complete') return 'text-emerald-300 bg-emerald-900/40 border-emerald-500/30';
+		if (s === 'aborted' || s === 'cancelled') return 'text-red-300 bg-red-900/40 border-red-500/30';
+		if (s === 'running' || s === 'in progress') return 'text-green-300 bg-green-900/40 border-green-500/30';
+		return 'text-[var(--color-tron-text-secondary)] bg-[var(--color-tron-surface)] border-[var(--color-tron-border)]';
+	}
 </script>
 
 <div class="space-y-5">
@@ -262,6 +270,66 @@
 			{/if}
 		</div>
 	</div>
+
+	<!-- Last 7 days run history -->
+	<TronCard>
+		<div class="mb-3 flex items-center justify-between">
+			<div>
+				<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">Recent Runs (last 7 days)</h3>
+				<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Click a run ID to see every cartridge in it</p>
+			</div>
+			<a href="/manufacturing/opentrons/history" class="text-xs text-[var(--color-tron-cyan)] hover:underline">
+				Full history →
+			</a>
+		</div>
+		{#if data.recentRuns.length === 0}
+			<p class="text-center text-xs text-[var(--color-tron-text-secondary)] py-4">No wax or reagent runs in the last 7 days.</p>
+		{:else}
+			<div class="overflow-x-auto">
+				<table class="w-full text-xs">
+					<thead>
+						<tr class="border-b border-[var(--color-tron-border)] text-left text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">
+							<th class="px-2 py-1.5 font-medium">Run ID</th>
+							<th class="px-2 py-1.5 font-medium">Type</th>
+							<th class="px-2 py-1.5 font-medium">Status</th>
+							<th class="px-2 py-1.5 font-medium">Robot</th>
+							<th class="px-2 py-1.5 font-medium">Operator</th>
+							<th class="px-2 py-1.5 font-medium">Assay</th>
+							<th class="px-2 py-1.5 text-right font-medium">Carts</th>
+							<th class="px-2 py-1.5 font-medium">Started</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each data.recentRuns as run (run.runId + run.processType)}
+							<tr class="border-b border-[var(--color-tron-border)]/30 hover:bg-[var(--color-tron-surface)]/40">
+								<td class="px-2 py-1.5 font-mono">
+									<a href="/cartridge-admin?runId={run.runId}"
+										class="text-[var(--color-tron-cyan)] hover:underline"
+										title="Show all cartridges in this run"
+									>{run.runId}</a>
+								</td>
+								<td class="px-2 py-1.5">
+									<span class="rounded border px-1.5 py-0.5 text-[10px] font-medium {run.processType === 'wax' ? 'border-amber-500/30 bg-amber-900/40 text-amber-300' : 'border-blue-500/30 bg-blue-900/40 text-blue-300'}">
+										{run.processType === 'wax' ? 'Wax' : 'Reagent'}
+									</span>
+								</td>
+								<td class="px-2 py-1.5">
+									<span class="rounded border px-1.5 py-0.5 text-[10px] font-medium {runStatusClass(run.status)}">
+										{run.status}
+									</span>
+								</td>
+								<td class="px-2 py-1.5 text-[var(--color-tron-text-secondary)]">{run.robotName ?? '—'}</td>
+								<td class="px-2 py-1.5 text-[var(--color-tron-text-secondary)]">{run.operatorName ?? '—'}</td>
+								<td class="px-2 py-1.5 text-[var(--color-tron-text-secondary)]">{run.assayName ?? '—'}</td>
+								<td class="px-2 py-1.5 text-right font-mono text-[var(--color-tron-text)]">{run.cartridgeCount}</td>
+								<td class="px-2 py-1.5 text-[var(--color-tron-text-secondary)]">{formatRelative(run.startTime ?? run.createdAt)}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	</TronCard>
 
 	<!-- Expiring + Recent Row -->
 	<div class="grid gap-4 lg:grid-cols-2">

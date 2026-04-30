@@ -13,6 +13,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const assayTypeId = url.searchParams.get('assayTypeId') || '';
 	const lifecycleStage = url.searchParams.get('lifecycleStage') || '';
 	const operatorId = url.searchParams.get('operatorId') || '';
+	// runId matches either the wax run or the reagent run for this cartridge —
+	// whichever side it came from, the same input lets you pull every cart
+	// linked to that run. Deep-linkable from the run-history expansion and
+	// from the dashboard's recent-runs panel.
+	const runId = url.searchParams.get('runId') || '';
 	const pageNum = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10));
 	const pageSize = 25;
 
@@ -35,6 +40,19 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			{ 'backing.operator._id': operatorId }
 		];
 	}
+	if (runId) {
+		// Combine with any existing $or via $and so we don't clobber the search/operator branches
+		const runIdOr = [
+			{ 'waxFilling.runId': runId },
+			{ 'reagentFilling.runId': runId }
+		];
+		if (query.$or) {
+			query.$and = [{ $or: query.$or }, { $or: runIdOr }];
+			delete query.$or;
+		} else {
+			query.$or = runIdOr;
+		}
+	}
 
 	// Sort mapping
 	const sortMap: Record<string, string> = {
@@ -56,7 +74,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	]);
 
 	return {
-		filters: { search, sortBy, sortDir, assayTypeId, lifecycleStage, operatorId },
+		filters: { search, sortBy, sortDir, assayTypeId, lifecycleStage, operatorId, runId },
 		cartridges: (cartridges as any[]).map(c => {
 			// Find first available operator name across phases
 			const operatorName =

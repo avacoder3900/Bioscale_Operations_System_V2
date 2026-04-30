@@ -403,9 +403,17 @@
 										<!-- Cartridges -->
 										{#if expandedDetail.cartridges.length > 0}
 											<div>
-												<h4 class="mb-1 text-xs font-semibold text-[var(--color-tron-text)]">
-													Cartridges ({expandedDetail.cartridges.length})
-												</h4>
+												<div class="mb-1 flex items-center justify-between">
+													<h4 class="text-xs font-semibold text-[var(--color-tron-text)]">
+														Cartridges ({expandedDetail.cartridges.length})
+													</h4>
+													<a href="/cartridge-admin?runId={run.runId}"
+														class="text-xs text-[var(--color-tron-cyan)] hover:underline"
+														title="Open every cartridge in this run on the cartridge-admin view (shows current state, not just QC-time state)"
+													>
+														View all in cartridge-admin →
+													</a>
+												</div>
 												<div class="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
 													{#each expandedDetail.cartridges as cart (cart.cartridgeId)}
 														<div class="flex items-center gap-2 rounded border border-[var(--color-tron-border)]/50 bg-[var(--color-tron-surface)]/50 px-2 py-1 text-xs">

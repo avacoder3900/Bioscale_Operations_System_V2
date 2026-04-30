@@ -1,5 +1,5 @@
 import { redirect } from '@sveltejs/kit';
-import { connectDB, CartridgeRecord, LabCartridge, CartridgeGroup, Equipment, BackingLot } from '$lib/server/db';
+import { connectDB, CartridgeRecord, LabCartridge, CartridgeGroup, Equipment, BackingLot, WaxFillingRun, ReagentBatchRecord } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import type { PageServerLoad } from './$types';
@@ -32,7 +32,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 		labStatusCounts,
 		labTypeCounts,
 		labGroups,
-		labTotal
+		labTotal,
+		recentWaxRuns,
+		recentReagentRuns
 	] = await Promise.all([
 		// Manufacturing pipeline phase counts
 		CartridgeRecord.aggregate([
@@ -78,7 +80,18 @@ export const load: PageServerLoad = async ({ locals }) => {
 		LabCartridge.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
 		LabCartridge.aggregate([{ $group: { _id: '$cartridgeType', count: { $sum: 1 } } }]),
 		CartridgeGroup.find().lean(),
-		LabCartridge.countDocuments()
+		LabCartridge.countDocuments(),
+		// Last 7 days of wax + reagent runs — gives the dashboard a per-run
+		// activity view that links into /cartridge-admin?runId=... so the
+		// operator can see every cart in a run with its current state.
+		WaxFillingRun.find({ createdAt: { $gte: sevenDaysAgo } })
+			.sort({ createdAt: -1 })
+			.select('_id status robot operator cartridgeIds plannedCartridgeCount runStartTime runEndTime createdAt abortReason')
+			.lean(),
+		ReagentBatchRecord.find({ createdAt: { $gte: sevenDaysAgo } })
+			.sort({ createdAt: -1 })
+			.select('_id status robot operator assayType cartridgesFilled cartridgeCount runStartTime runEndTime createdAt abortReason')
+			.lean()
 	]);
 
 	// Storage distribution — merge wax storage (waxStorage.location) and reagent storage (storage.fridgeName)
@@ -139,6 +152,51 @@ export const load: PageServerLoad = async ({ locals }) => {
 	]);
 	const labGroupMap = new Map((labGroups as any[]).map((g: any) => [g._id, g]));
 
+	// Merge wax + reagent runs into one chronologically sorted list. Each entry
+	// is shaped to feed the dashboard's run-history card and to deep-link into
+	// /cartridge-admin?runId=... — same param the cartridge-admin filter reads.
+	type RecentRun = {
+		runId: string;
+		processType: 'wax' | 'reagent';
+		status: string;
+		robotName: string | null;
+		operatorName: string | null;
+		assayName: string | null;
+		cartridgeCount: number;
+		startTime: string | null;
+		endTime: string | null;
+		createdAt: string;
+		abortReason: string | null;
+	};
+	const recentRuns: RecentRun[] = [
+		...(recentWaxRuns as any[]).map((r: any): RecentRun => ({
+			runId: String(r._id),
+			processType: 'wax',
+			status: String(r.status ?? 'unknown'),
+			robotName: r.robot?.name ?? r.robot?._id ?? null,
+			operatorName: r.operator?.username ?? null,
+			assayName: null,
+			cartridgeCount: r.cartridgeIds?.length ?? r.plannedCartridgeCount ?? 0,
+			startTime: r.runStartTime ? new Date(r.runStartTime).toISOString() : null,
+			endTime: r.runEndTime ? new Date(r.runEndTime).toISOString() : null,
+			createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : '',
+			abortReason: r.abortReason ?? null
+		})),
+		...(recentReagentRuns as any[]).map((r: any): RecentRun => ({
+			runId: String(r._id),
+			processType: 'reagent',
+			status: String(r.status ?? 'unknown'),
+			robotName: r.robot?.name ?? r.robot?._id ?? null,
+			operatorName: r.operator?.username ?? null,
+			assayName: r.assayType?.name ?? null,
+			cartridgeCount: r.cartridgeCount ?? r.cartridgesFilled?.length ?? 0,
+			startTime: r.runStartTime ? new Date(r.runStartTime).toISOString() : null,
+			endTime: r.runEndTime ? new Date(r.runEndTime).toISOString() : null,
+			createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : '',
+			abortReason: r.abortReason ?? null
+		}))
+	].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
 	return {
 		// Manufacturing pipeline
 		pipeline: phaseOrder.map(phase => ({
@@ -182,6 +240,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			waxQc: c.waxQc?.status ?? null,
 			updatedAt: c.updatedAt
 		})),
+		recentRuns,
 		// Lab cartridges
 		lab: {
 			total: labTotal,
