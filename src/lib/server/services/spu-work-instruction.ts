@@ -18,6 +18,7 @@ export type ParsedStep = {
 	stepNumber: number;
 	title: string;
 	content: string;
+	images?: string[];
 	partRequirements: Array<{ partNumber: string; quantity: number; partDefinitionId?: string; notes?: string }>;
 	fieldDefinitions: FieldDefinition[];
 	warnings?: string[];
@@ -89,6 +90,7 @@ export async function createSpuWiDraftVersion(input: {
 			stepNumber: s.stepNumber,
 			title: s.title,
 			content: s.content,
+			images: s.images && s.images.length > 0 ? s.images : undefined,
 			requiresScan: (s.fieldDefinitions?.length ?? 0) > 0,
 			partRequirements: (s.partRequirements ?? []).map((p) => ({
 				_id: generateId(),

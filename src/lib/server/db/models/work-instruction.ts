@@ -19,6 +19,7 @@ const workInstructionSchema = new Schema({
 			_id: { type: String, default: () => generateId() },
 			stepNumber: Number, title: String, content: String,
 			imageData: String, imageContentType: String,
+			images: { type: [String], default: undefined },
 			requiresScan: Boolean, scanPrompt: String, notes: String,
 			partDefinitionId: String, partQuantity: { type: Number, default: 1 },
 			partRequirements: [{

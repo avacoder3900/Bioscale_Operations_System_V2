@@ -1,7 +1,9 @@
 import mammoth from 'mammoth';
+import { nanoid } from 'nanoid';
+import { uploadToR2 } from './r2';
 import type { FieldDefinition, ParsedStep } from './spu-work-instruction';
 
-export const PARSER_VERSION = '1.1.0';
+export const PARSER_VERSION = '1.2.0';
 
 const PRIMARY_PART_RE = /\bPT-SPU-(\d{3,})\b/g;
 const ALT_PART_RE = /\b(SBA-SPU|IFU-SPU)-(\d{3,})\b/g;
@@ -9,6 +11,7 @@ const QTY_RE = /qty\s*=\s*(\d+)/i;
 
 const STEP_HEADING_RE = /^\s*(?:#+\s*)?(?:step\s*)?(\d{1,3})[\).:\-\s]+(.{0,200})$/i;
 const NUMBERED_LINE_RE = /^\s*(\d{1,3})[\).:]\s+(.{1,200})$/;
+const IMG_MARKER_RE = /^\[\[IMG:(.+?)\]\]$/;
 
 export type ParsedWorkInstruction = {
 	title?: string;
@@ -57,11 +60,34 @@ async function extractText(
 	const isPdf = file.mimeType === 'application/pdf' || lowerName.endsWith('.pdf');
 
 	if (isDocx) {
-		const result = await mammoth.extractRawText({ buffer: file.buffer });
+		const parseId = nanoid(8);
+		let imgIndex = 0;
+		const failed: string[] = [];
+
+		const result = await mammoth.convertToHtml(
+			{ buffer: file.buffer },
+			{
+				convertImage: mammoth.images.imgElement(async (image: any) => {
+					try {
+						const buf = await image.read();
+						const ct: string = image.contentType || 'image/png';
+						const ext = (ct.split('/')[1] || 'png').toLowerCase().replace(/[^a-z0-9]/g, '') || 'png';
+						const idx = ++imgIndex;
+						const key = `wi/${parseId}/img-${String(idx).padStart(3, '0')}.${ext}`;
+						const url = await uploadToR2(Buffer.from(buf), key, ct);
+						return { src: url, alt: `image-${idx}` };
+					} catch (err: any) {
+						failed.push(err?.message ?? 'unknown');
+						return { src: '', alt: 'failed' };
+					}
+				})
+			}
+		);
 		if (result.messages?.length) {
 			for (const m of result.messages) warnings.push(`mammoth: ${m.message}`);
 		}
-		return result.value ?? '';
+		if (failed.length) warnings.push(`r2 upload failures: ${failed.length} (${failed[0]})`);
+		return htmlToTextWithImageMarkers(result.value ?? '');
 	}
 
 	if (isPdf) {
@@ -72,6 +98,7 @@ async function extractText(
 		const result: any = await parser.getText();
 		const pages: number | undefined = result?.numpages ?? result?.total ?? result?.pages?.length;
 		if (pages != null) warnings.push(`pdf: ${pages} page(s) parsed`);
+		warnings.push('pdf: image extraction not supported — use .docx if you need photos per step');
 		const text: string = result?.text ?? '';
 		return text.replace(/\r\n/g, '\n');
 	}
@@ -82,22 +109,52 @@ async function extractText(
 	return file.buffer.toString('utf8');
 }
 
+function htmlToTextWithImageMarkers(html: string): string {
+	let text = html;
+	text = text.replace(/<img\b[^>]*\bsrc="([^"]+)"[^>]*\/?>/gi, '\n[[IMG:$1]]\n');
+	text = text.replace(/<\/?(?:p|h[1-6]|li|tr|td|th|br|div)[^>]*>/gi, '\n');
+	text = text.replace(/<[^>]+>/g, '');
+	text = text
+		.replace(/&nbsp;/g, ' ')
+		.replace(/&amp;/g, '&')
+		.replace(/&lt;/g, '<')
+		.replace(/&gt;/g, '>')
+		.replace(/&quot;/g, '"')
+		.replace(/&#39;/g, "'");
+	text = text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+	return text;
+}
+
 function deriveTitle(text: string, fallback: string): string {
-	const firstNonEmpty = text.split(/\r?\n/).find((l) => l.trim().length > 0);
+	const firstNonEmpty = text
+		.split(/\r?\n/)
+		.find((l) => l.trim().length > 0 && !IMG_MARKER_RE.test(l.trim()));
 	if (firstNonEmpty && firstNonEmpty.trim().length < 120) return firstNonEmpty.trim();
 	return fallback.replace(/\.[a-z]+$/i, '');
 }
 
-type RawStep = { number: number; title: string; content: string };
+type RawStep = { number: number; title: string; content: string; images: string[] };
 
 function segmentSteps(text: string): RawStep[] {
 	const lines = text.split(/\r?\n/);
 	const steps: RawStep[] = [];
 	let current: RawStep | null = null;
+	let preStepImages: string[] = [];
 
 	for (const raw of lines) {
-		const line = raw.replace(/ /g, ' ').trimEnd();
-		if (!line.trim()) {
+		const line = raw.replace(/ /g, ' ').trimEnd();
+		const trimmed = line.trim();
+
+		const imgMatch = trimmed.match(IMG_MARKER_RE);
+		if (imgMatch) {
+			const url = imgMatch[1];
+			if (!url) continue;
+			if (current) current.images.push(url);
+			else preStepImages.push(url);
+			continue;
+		}
+
+		if (!trimmed) {
 			if (current) current.content += '\n';
 			continue;
 		}
@@ -105,7 +162,7 @@ function segmentSteps(text: string): RawStep[] {
 		const heading = matchStepHeading(line);
 		if (heading) {
 			if (current) steps.push(current);
-			current = { number: heading.number, title: heading.title.trim(), content: '' };
+			current = { number: heading.number, title: heading.title.trim(), content: '', images: [] };
 			continue;
 		}
 
@@ -114,7 +171,9 @@ function segmentSteps(text: string): RawStep[] {
 	if (current) steps.push(current);
 
 	if (steps.length === 0) {
-		steps.push({ number: 1, title: 'Step 1', content: text });
+		steps.push({ number: 1, title: 'Step 1', content: text, images: preStepImages });
+	} else if (preStepImages.length) {
+		steps[0].images = [...preStepImages, ...steps[0].images];
 	}
 
 	steps.forEach((s, i) => (s.number = i + 1));
@@ -177,6 +236,7 @@ function buildStep(raw: RawStep, fallbackNumber: number): ParsedStep {
 		stepNumber,
 		title: raw.title || `Step ${stepNumber}`,
 		content,
+		images: raw.images.length > 0 ? raw.images : undefined,
 		partRequirements,
 		fieldDefinitions,
 		warnings

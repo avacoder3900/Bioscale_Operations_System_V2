@@ -87,6 +87,26 @@
 					class="w-full rounded border border-white/10 bg-transparent px-2 py-1 text-xs"
 				></textarea>
 
+				{#if step.images && step.images.length > 0}
+					<div class="border-t border-white/10 pt-2">
+						<p class="tron-text-muted mb-2 text-xs uppercase tracking-wide">
+							Images ({step.images.length})
+						</p>
+						<div class="flex flex-wrap gap-2">
+							{#each step.images as imgUrl}
+								<a href={imgUrl} target="_blank" rel="noopener noreferrer">
+									<img
+										src={imgUrl}
+										alt="step illustration"
+										loading="lazy"
+										class="h-32 w-auto rounded border border-white/10 object-contain"
+									/>
+								</a>
+							{/each}
+						</div>
+					</div>
+				{/if}
+
 				<div class="border-t border-white/10 pt-2">
 					<div class="flex items-center justify-between">
 						<p class="tron-text-muted text-xs uppercase tracking-wide">Parts</p>
