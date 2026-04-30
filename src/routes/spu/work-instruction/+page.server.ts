@@ -104,7 +104,7 @@ export const actions: Actions = {
 			return fail(400, { error: 'Parser produced no steps from this document' });
 		}
 
-		const { workInstructionId, versionId } = await createSpuWiDraftVersion({
+		const { workInstructionId, versionId, version } = await createSpuWiDraftVersion({
 			title: parsed.title,
 			originalFileName: name,
 			fileSize: file.size,
@@ -115,7 +115,25 @@ export const actions: Actions = {
 			preparedBy: locals.user!.username
 		});
 
-		redirect(303, `/spu/work-instruction/review/${versionId}?wi=${workInstructionId}`);
+		return {
+			parsed: true,
+			workInstructionId,
+			versionId,
+			version,
+			fileName: name,
+			title: parsed.title ?? name,
+			parserVersion: parsed.parserVersion,
+			warnings: parsed.warnings,
+			totalRequiredScans: parsed.totalRequiredScans,
+			steps: parsed.steps.map((s) => ({
+				stepNumber: s.stepNumber,
+				title: s.title,
+				content: s.content,
+				images: s.images ?? [],
+				partRequirements: s.partRequirements,
+				fieldCount: s.fieldDefinitions.length
+			}))
+		};
 	}
 };
 

@@ -89,6 +89,73 @@
 			{/if}
 		</form>
 
+		{#if (form as any)?.parsed}
+			{@const f = form as any}
+			<div class="mt-6 space-y-4 border-t border-white/10 pt-4">
+				<div class="rounded-lg border border-[var(--color-tron-cyan)] bg-[rgba(0,229,255,0.08)] p-3">
+					<p class="tron-text-primary text-sm font-semibold">
+						Parsed {f.fileName} — {f.steps.length} steps · {f.totalRequiredScans} barcode fields · v{f.version} (parser v{f.parserVersion})
+					</p>
+					<a
+						href="/spu/work-instruction/review/{f.versionId}?wi={f.workInstructionId}"
+						class="mt-1 inline-block text-xs text-[var(--color-tron-cyan)] hover:underline"
+					>
+						Open in review editor →
+					</a>
+				</div>
+
+				{#if f.warnings && f.warnings.length > 0}
+					<div class="rounded-lg border border-[var(--color-tron-orange,#ffaa00)] bg-[rgba(255,170,0,0.08)] p-3">
+						<p class="tron-text-primary mb-1 text-xs font-semibold">Warnings ({f.warnings.length})</p>
+						<ul class="list-disc pl-5 text-xs text-[var(--color-tron-orange,#ffaa00)]">
+							{#each f.warnings as w}
+								<li>{w}</li>
+							{/each}
+						</ul>
+					</div>
+				{/if}
+
+				{#each f.steps as s}
+					<div class="rounded-lg border border-white/10 p-3">
+						<p class="tron-text-primary text-sm font-semibold">
+							Step {s.stepNumber} — {s.title}
+						</p>
+						<p class="tron-text-muted mt-1 text-xs">
+							{s.partRequirements.length} part requirement(s) · {s.fieldCount} barcode field(s) · {s.images.length} image(s)
+						</p>
+						{#if s.images.length > 0}
+							<div class="mt-2 flex flex-wrap gap-2">
+								{#each s.images as imgUrl}
+									<a href={imgUrl} target="_blank" rel="noopener noreferrer">
+										<img
+											src={imgUrl}
+											alt="step image"
+											loading="lazy"
+											class="h-24 w-auto rounded border border-white/10 object-contain"
+										/>
+									</a>
+								{/each}
+							</div>
+						{/if}
+						{#if s.content}
+							<pre class="tron-text-muted mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-black/30 p-2 text-xs">{s.content}</pre>
+						{:else}
+							<p class="tron-text-muted mt-2 text-xs italic">(no body text)</p>
+						{/if}
+						{#if s.partRequirements.length > 0}
+							<div class="mt-2 flex flex-wrap gap-1">
+								{#each s.partRequirements as p}
+									<span class="rounded bg-[var(--color-tron-bg-tertiary,rgba(255,255,255,0.05))] px-2 py-0.5 font-mono text-xs text-[var(--color-tron-cyan)]">
+										{p.partNumber} ×{p.quantity}
+									</span>
+								{/each}
+							</div>
+						{/if}
+					</div>
+				{/each}
+			</div>
+		{/if}
+
 		{#if data.activeVersion}
 			<div class="mt-4 border-t border-white/10 pt-4">
 				<a
