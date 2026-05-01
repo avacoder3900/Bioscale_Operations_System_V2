@@ -148,6 +148,7 @@ export const actions: Actions = {
 					rawContent: parsed.rawContent,
 					renderedHtml: parsed.renderedHtml,
 					parts: parsed.parts,
+					steps: parsed.steps,
 					parserVersion: parsed.parserVersion,
 					preparedBy: locals.user!.username
 				});

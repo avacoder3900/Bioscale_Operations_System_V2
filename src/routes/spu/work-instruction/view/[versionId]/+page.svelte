@@ -1,6 +1,38 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { onMount } from 'svelte';
 	let { data, form } = $props();
+
+	let articleEl: HTMLElement | undefined = $state();
+
+	function refreshGating(root: HTMLElement) {
+		const stepEls = Array.from(root.querySelectorAll<HTMLElement>('.bims-wi-step'));
+		let prevSatisfied = true;
+		for (const el of stepEls) {
+			const required = parseInt(el.dataset.requiredScans ?? '0', 10) || 0;
+			const inputs = el.querySelectorAll<HTMLInputElement>('.bims-wi-step__scan-input');
+			let filled = 0;
+			inputs.forEach((inp) => {
+				if (inp.value.trim().length > 0) filled++;
+			});
+			const locked = !prevSatisfied;
+			el.classList.toggle('is-locked', locked);
+			el.classList.toggle('is-complete', required > 0 && filled >= required);
+			inputs.forEach((inp) => {
+				inp.disabled = locked;
+			});
+			const stepSatisfied = required === 0 ? true : filled >= required;
+			if (!stepSatisfied) prevSatisfied = false;
+		}
+	}
+
+	onMount(() => {
+		if (!articleEl) return;
+		refreshGating(articleEl);
+		const handler = () => articleEl && refreshGating(articleEl);
+		articleEl.addEventListener('input', handler);
+		return () => articleEl?.removeEventListener('input', handler);
+	});
 </script>
 
 <svelte:head>
@@ -30,7 +62,7 @@
 		</div>
 	</header>
 
-	<article class="bims-wi-document">
+	<article class="bims-wi-document" bind:this={articleEl}>
 		{@html data.version.renderedHtml || '<p class="tron-text-muted">No rendered content for this version.</p>'}
 	</article>
 
@@ -182,5 +214,149 @@
 	:global(.bims-wi-document .bims-scan-widget__input input:disabled) {
 		opacity: 0.55;
 		cursor: not-allowed;
+	}
+
+	/* === Step-card layout (parser v3 procedure-table render) === */
+	:global(.bims-wi-document .bims-wi-steps) {
+		display: flex;
+		flex-direction: column;
+		gap: 1rem;
+	}
+	:global(.bims-wi-document .bims-wi-step) {
+		display: grid;
+		grid-template-columns: 96px minmax(0, 1.6fr) minmax(0, 1fr);
+		grid-template-areas: 'num instr image' 'scans scans scans';
+		gap: 0.9rem 1rem;
+		padding: 1rem;
+		border: 1px solid rgba(255, 255, 255, 0.12);
+		border-radius: 10px;
+		background: rgba(0, 0, 0, 0.25);
+		transition: opacity 0.2s ease, border-color 0.2s ease;
+	}
+	:global(.bims-wi-document .bims-wi-step.is-locked) {
+		opacity: 0.45;
+		pointer-events: none;
+	}
+	:global(.bims-wi-document .bims-wi-step.is-complete) {
+		border-color: var(--color-tron-cyan);
+		background: rgba(0, 229, 255, 0.06);
+	}
+	:global(.bims-wi-document .bims-wi-step__num) {
+		grid-area: num;
+		display: flex;
+		align-items: flex-start;
+		justify-content: center;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-weight: 700;
+		font-size: 1.05rem;
+		color: var(--color-tron-cyan);
+		padding-top: 0.2rem;
+		border-right: 1px solid rgba(255, 255, 255, 0.08);
+	}
+	:global(.bims-wi-document .bims-wi-step__num span) {
+		display: inline-block;
+		padding: 0.4rem 0.6rem;
+		background: rgba(0, 229, 255, 0.1);
+		border: 1px solid rgba(0, 229, 255, 0.3);
+		border-radius: 6px;
+	}
+	:global(.bims-wi-document .bims-wi-step__instructions) {
+		grid-area: instr;
+		font-size: 0.9rem;
+		line-height: 1.55;
+	}
+	:global(.bims-wi-document .bims-wi-step__instructions p:first-child) { margin-top: 0; }
+	:global(.bims-wi-document .bims-wi-step__instructions p:last-child) { margin-bottom: 0; }
+	:global(.bims-wi-document .bims-wi-step__parts) {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+		margin-top: 0.5rem;
+	}
+	:global(.bims-wi-document .bims-wi-step__part-chip) {
+		display: inline-flex;
+		align-items: baseline;
+		gap: 0.25em;
+		padding: 0.25em 0.55em;
+		background: rgba(0, 229, 255, 0.12);
+		border: 1px solid rgba(0, 229, 255, 0.35);
+		border-radius: 999px;
+		font-size: 0.78rem;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+	}
+	:global(.bims-wi-document .bims-wi-step__part-name) {
+		font-style: italic;
+		color: var(--color-tron-text-secondary, #b0c4d4);
+		font-family: inherit;
+	}
+	:global(.bims-wi-document .bims-wi-step__image) {
+		grid-area: image;
+		display: flex;
+		align-items: flex-start;
+		justify-content: center;
+	}
+	:global(.bims-wi-document .bims-wi-step__image img) {
+		max-width: 100%;
+		max-height: 280px;
+		object-fit: contain;
+		border-radius: 6px;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		margin: 0;
+	}
+	:global(.bims-wi-document .bims-wi-step__image--empty::before) {
+		content: '(no image)';
+		color: var(--color-tron-text-secondary, #6a7a85);
+		font-size: 0.75rem;
+		font-style: italic;
+	}
+	:global(.bims-wi-document .bims-wi-step__scans) {
+		grid-area: scans;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.6rem;
+		padding-top: 0.7rem;
+		border-top: 1px dashed rgba(255, 255, 255, 0.12);
+	}
+	:global(.bims-wi-document .bims-wi-step__scans--none) {
+		font-size: 0.75rem;
+		color: var(--color-tron-text-secondary, #8aa);
+		font-style: italic;
+	}
+	:global(.bims-wi-document .bims-wi-step__scan) {
+		flex: 1 1 220px;
+		min-width: 200px;
+	}
+	:global(.bims-wi-document .bims-wi-step__scan label) {
+		display: block;
+		font-size: 0.7rem;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: var(--color-tron-text-secondary, #8aa);
+		margin-bottom: 0.25rem;
+	}
+	:global(.bims-wi-document .bims-wi-step__scan-input) {
+		width: 100%;
+		background: rgba(0, 0, 0, 0.5);
+		border: 1px solid rgba(255, 255, 255, 0.18);
+		border-radius: 5px;
+		padding: 0.55em 0.75em;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 0.9rem;
+		color: var(--color-tron-text-primary, #e6f1ff);
+	}
+	:global(.bims-wi-document .bims-wi-step__scan-input:disabled) {
+		opacity: 0.4;
+		cursor: not-allowed;
+	}
+	:global(.bims-wi-document .bims-wi-step__scan-input:focus) {
+		outline: none;
+		border-color: var(--color-tron-cyan);
+		box-shadow: 0 0 0 2px rgba(0, 229, 255, 0.3);
+	}
+	@media (max-width: 720px) {
+		:global(.bims-wi-document .bims-wi-step) {
+			grid-template-columns: 64px 1fr;
+			grid-template-areas: 'num instr' 'image image' 'scans scans';
+		}
 	}
 </style>

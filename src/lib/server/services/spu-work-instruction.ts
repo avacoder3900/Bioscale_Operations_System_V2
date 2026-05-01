@@ -22,6 +22,16 @@ export type ParsedPart = {
 	fieldDefinitions: FieldDefinition[];
 };
 
+export type ParsedStepInput = {
+	stepNumber: number;
+	title: string;
+	content: string;
+	contentText: string;
+	parts: ParsedPart[];
+	images: string[];
+	fieldDefinitions: FieldDefinition[];
+};
+
 export async function getActiveSpuWorkInstruction() {
 	await connectDB();
 	return WorkInstruction.findOne({
@@ -45,6 +55,7 @@ export async function createSpuWiDraftVersion(input: {
 	rawContent: string;
 	renderedHtml: string;
 	parts: ParsedPart[];
+	steps?: ParsedStepInput[];
 	parserVersion: string;
 	preparedBy: string;
 }): Promise<{ workInstructionId: string; versionId: string; version: number }> {
@@ -101,7 +112,29 @@ export async function createSpuWiDraftVersion(input: {
 				sortOrder: f.sortOrder
 			}))
 		})),
-		steps: []
+		steps: (input.steps ?? []).map((s) => ({
+			_id: generateId(),
+			stepNumber: s.stepNumber,
+			title: s.title,
+			content: s.content,
+			images: s.images,
+			requiresScan: (s.fieldDefinitions ?? []).length > 0,
+			partRequirements: s.parts.map((p) => ({
+				_id: generateId(),
+				partNumber: p.partNumber,
+				quantity: p.quantity,
+				notes: p.partName
+			})),
+			fieldDefinitions: s.fieldDefinitions.map((f) => ({
+				_id: generateId(),
+				fieldName: f.fieldName,
+				fieldLabel: f.fieldLabel,
+				fieldType: f.fieldType,
+				isRequired: f.isRequired,
+				barcodeFieldMapping: f.barcodeFieldMapping,
+				sortOrder: f.sortOrder
+			}))
+		}))
 	};
 
 	await WorkInstruction.updateOne(
