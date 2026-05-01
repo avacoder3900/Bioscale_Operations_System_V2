@@ -1,6 +1,6 @@
 import mammoth from 'mammoth';
 import { nanoid } from 'nanoid';
-import { uploadToR2 } from './r2';
+import { uploadToR2, uploadViaWorker } from './r2';
 import type { FieldDefinition, ParsedPart } from './spu-work-instruction';
 
 export const PARSER_VERSION = '2.0.0';
@@ -54,17 +54,27 @@ export async function parseSpuWorkInstruction(file: {
 			{ buffer: file.buffer },
 			{
 				convertImage: mammoth.images.imgElement(async (image: any) => {
+					const buf = Buffer.from(await image.read());
+					const ct: string = image.contentType || 'image/png';
+					const ext = (ct.split('/')[1] || 'png').toLowerCase().replace(/[^a-z0-9]/g, '') || 'png';
+					const idx = ++imgIndex;
+					const key = `wi/${parseId}/img-${String(idx).padStart(3, '0')}.${ext}`;
+
+					// Try Worker upload first (Vercel-compatible). Fall back to direct S3v4
+					// (works in environments without TLS issues), then to inline base64 so
+					// the picture is *always* visible on screen even if storage is down.
 					try {
-						const buf = await image.read();
-						const ct: string = image.contentType || 'image/png';
-						const ext = (ct.split('/')[1] || 'png').toLowerCase().replace(/[^a-z0-9]/g, '') || 'png';
-						const idx = ++imgIndex;
-						const key = `wi/${parseId}/img-${String(idx).padStart(3, '0')}.${ext}`;
-						const url = await uploadToR2(Buffer.from(buf), key, ct);
+						const url = await uploadViaWorker(buf, key, ct);
 						return { src: url, alt: `wi-image-${idx}` };
-					} catch (err: any) {
-						r2Failures.push(err?.message ?? 'unknown');
-						return { src: '', alt: 'r2-upload-failed' };
+					} catch (workerErr: any) {
+						try {
+							const url = await uploadToR2(buf, key, ct);
+							return { src: url, alt: `wi-image-${idx}` };
+						} catch (s3Err: any) {
+							r2Failures.push(`img-${idx}: ${workerErr?.message ?? workerErr} / ${s3Err?.message ?? s3Err}`);
+							const dataUri = `data:${ct};base64,${buf.toString('base64')}`;
+							return { src: dataUri, alt: `wi-image-${idx}` };
+						}
 					}
 				})
 			}
@@ -73,7 +83,7 @@ export async function parseSpuWorkInstruction(file: {
 			for (const m of result.messages) warnings.push(`mammoth: ${m.message}`);
 		}
 		if (r2Failures.length) {
-			warnings.push(`r2 upload failures: ${r2Failures.length} (${r2Failures[0]})`);
+			warnings.push(`r2 upload failures: ${r2Failures.length} embedded inline (${r2Failures[0]})`);
 		}
 		rawHtml = result.value ?? '';
 		const txt = await mammoth.extractRawText({ buffer: file.buffer });
@@ -94,12 +104,13 @@ export async function parseSpuWorkInstruction(file: {
 	}
 
 	const sanitized = sanitizeHtml(rawHtml);
+	const cropped = cropToProcedure(sanitized, warnings);
 
 	for (const m of rawText.matchAll(ALT_PART_RE)) {
 		warnings.push(`Non-PT-SPU reference found: ${m[0]} — confirm if part of build`);
 	}
 
-	const { html: htmlWithWidgets, parts } = injectPartWidgets(sanitized, warnings);
+	const { html: htmlWithWidgets, parts } = injectPartWidgets(cropped, warnings);
 
 	const title = deriveTitle(rawText, file.originalName);
 	const totalRequiredScans = parts.reduce((n, p) => n + p.fieldDefinitions.length, 0);
@@ -128,6 +139,28 @@ function escapeHtml(s: string): string {
 		.replace(/>/g, '&gt;')
 		.replace(/"/g, '&quot;')
 		.replace(/'/g, '&#39;');
+}
+
+// Drop everything before the first "Procedure" section header so the rendered
+// document starts at the actual build steps. Falls back to the full sanitized
+// HTML (with a warning) when no procedure heading is found.
+function cropToProcedure(html: string, warnings: string[]): string {
+	const headingRe = /<h[1-6]\b[^>]*>([\s\S]*?)<\/h[1-6]>/gi;
+	const procRe = /^(?:\d+(?:\.\d+)*\.?\s*)?procedure\b/i;
+	let m: RegExpExecArray | null;
+	while ((m = headingRe.exec(html)) !== null) {
+		const text = m[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+		if (procRe.test(text)) return html.slice(m.index);
+	}
+	// Fallback: bold paragraph used as a pseudo-heading (e.g. <p><strong>Procedure</strong></p>).
+	const boldPRe = /<p\b[^>]*>\s*(?:<(?:strong|b)\b[^>]*>)?([\s\S]*?)(?:<\/(?:strong|b)>)?\s*<\/p>/gi;
+	const exactRe = /^(?:\d+(?:\.\d+)*\.?\s*)?procedure\s*:?\s*$/i;
+	while ((m = boldPRe.exec(html)) !== null) {
+		const text = m[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+		if (exactRe.test(text)) return html.slice(m.index);
+	}
+	warnings.push('No "Procedure" section heading found — rendered full document');
+	return html;
 }
 
 // Strip <script>/<style>/<iframe> blocks and event-handler attributes; restrict

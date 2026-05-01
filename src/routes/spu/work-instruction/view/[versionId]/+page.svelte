@@ -1,5 +1,6 @@
 <script lang="ts">
-	let { data } = $props();
+	import { enhance } from '$app/forms';
+	let { data, form } = $props();
 </script>
 
 <svelte:head>
@@ -32,6 +33,38 @@
 	<article class="bims-wi-document">
 		{@html data.version.renderedHtml || '<p class="tron-text-muted">No rendered content for this version.</p>'}
 	</article>
+
+	{#if (form as any)?.error}
+		<div class="rounded-lg border border-[var(--color-tron-red)] bg-[rgba(255,51,102,0.1)] p-3">
+			<p class="text-sm text-[var(--color-tron-red)]">{(form as any).error}</p>
+		</div>
+	{/if}
+
+	{#if data.canApprove && !data.isActive}
+		<div class="flex flex-wrap items-center gap-3 border-t border-white/10 pt-6">
+			<p class="tron-text-muted mr-auto text-xs">
+				Confirm this work instruction is correct, then activate it for the build floor.
+			</p>
+			<form method="POST" action="?/induct" use:enhance>
+				<input type="hidden" name="wiId" value={data.wiId} />
+				<button
+					type="submit"
+					class="rounded-lg bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-semibold text-black hover:opacity-90"
+				>
+					Confirm &amp; Activate
+				</button>
+			</form>
+			<form method="POST" action="?/reject" use:enhance>
+				<input type="hidden" name="wiId" value={data.wiId} />
+				<button
+					type="submit"
+					class="rounded-lg border border-[var(--color-tron-red)] px-4 py-2 text-sm text-[var(--color-tron-red)] hover:bg-[rgba(255,51,102,0.1)]"
+				>
+					Reject
+				</button>
+			</form>
+		</div>
+	{/if}
 </div>
 
 <style>
