@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/stores';
 	import bwipjs from 'bwip-js/browser';
 	import type { ActionData, PageData } from './$types';
 
@@ -13,6 +15,24 @@
 	let count = $state(80);
 	let skip = $state(0);
 	let submitting = $state(false);
+	let printing = $state(false);
+
+	// Print, then return to the empty mint form. afterprint fires when the
+	// browser's print dialog closes (whether the operator clicked Print or
+	// Cancel). Reloading the bare URL drops the action result so the same
+	// minted batch can't be reprinted by clicking again.
+	function printAndReset() {
+		if (printing) return;
+		printing = true;
+		const cleanup = () => {
+			window.removeEventListener('afterprint', cleanup);
+			goto($page.url.pathname, { invalidateAll: true, replaceState: true }).finally(() => {
+				printing = false;
+			});
+		};
+		window.addEventListener('afterprint', cleanup);
+		window.print();
+	}
 
 	const LABELS_PER_SHEET = 80;
 	const totalLabels = $derived(count + (sheetsToPrint - 1) * LABELS_PER_SHEET);
@@ -280,10 +300,11 @@
 
 				<button
 					type="button"
-					onclick={() => window.print()}
-					class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-semibold text-black hover:opacity-90"
+					onclick={printAndReset}
+					disabled={printing}
+					class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-semibold text-black hover:opacity-90 disabled:opacity-50"
 				>
-					Print Sheet
+					{printing ? 'Printing…' : 'Print Sheet'}
 				</button>
 			</div>
 		{/if}
