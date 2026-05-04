@@ -99,11 +99,15 @@
 		ctx.fillStyle = '#FFFFFF';
 		ctx.fillRect(0, 0, W, H);
 
-		const padX = 0.23 * DPI;
-		const padY = 0.46 * DPI;
 		const cellMargin = 0.125 * DPI;
 		const cellSize = 0.75 * DPI;
 		const cellPitch = cellSize + 2 * cellMargin; // 1.0" pitch
+		// Operator-tuned alignment shift to match physical Avery 94102 stickers:
+		// right 0.15×cell, down 0.10×cell (cell == one barcode's width).
+		const shiftX = 0.15 * cellSize;
+		const shiftY = 0.1 * cellSize;
+		const padX = 0.23 * DPI + shiftX;
+		const padY = 0.46 * DPI + shiftY;
 
 		ctx.textBaseline = 'top';
 		ctx.fillStyle = '#000000';
