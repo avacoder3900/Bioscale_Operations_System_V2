@@ -102,9 +102,10 @@
 		const cellMargin = 0.125 * DPI;
 		const cellSize = 0.75 * DPI;
 		const cellPitch = cellSize + 2 * cellMargin; // 1.0" pitch
-		// Operator-tuned alignment shift to match physical Avery 94102 stickers:
-		// right 0.15×cell, down 0.10×cell (cell == one barcode's width).
-		const shiftX = 0.15 * cellSize;
+		// Operator-tuned alignment shift to match physical Avery 94102 stickers
+		// (cell == one barcode's width). Y shift kept at 0.10*cell; X shift was
+		// 0.15*cell, then pulled back 25% → 0.1125*cell.
+		const shiftX = 0.1125 * cellSize;
 		const shiftY = 0.1 * cellSize;
 		const padX = 0.23 * DPI + shiftX;
 		const padY = 0.46 * DPI + shiftY;
@@ -361,7 +362,9 @@
 			{#each sheets as sheetCells, sheetIdx (sheetIdx)}
 				<div
 					class="mx-auto h-[11in] w-[8.5in] bg-white outline outline-1 outline-[var(--color-tron-border)] print:outline-0"
-					style="break-after: page; page-break-after: always;"
+					style={sheetIdx < sheets.length - 1
+						? 'break-after: page; page-break-after: always;'
+						: ''}
 				>
 					<img
 						src={sheetPng(sheetCells)}
