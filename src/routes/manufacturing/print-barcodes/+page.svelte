@@ -53,16 +53,26 @@
 	// Render each QR as inline SVG (vector) rather than <canvas>.
 	// Canvases serialise into the print PDF as raster images; 80 per sheet
 	// blows past HP-style printer PDF resource limits ("PDL PDF limitcheck").
+	//
+	// bwip-js's toSVG emits <svg viewBox="0 0 W H" ...> with NO width/height
+	// attributes. Inside our display:flex parent that means the SVG has no
+	// intrinsic size and collapses to 0×0. Inject width/height from the
+	// viewBox so it sizes correctly. (Canvas didn't have this problem
+	// because toCanvas sets canvas.width/height directly on the element.)
 	function svgFor(code: string): string {
 		if (!code) return '';
 		try {
-			return bwipjs.toSVG({
+			const raw = bwipjs.toSVG({
 				bcid: 'qrcode',
 				text: code,
 				scale: 3,
 				height: 7,
 				width: 7
 			});
+			return raw.replace(
+				/^<svg viewBox="0 0 (\S+) (\S+)"/,
+				'<svg viewBox="0 0 $1 $2" width="$1" height="$2"'
+			);
 		} catch (e) {
 			console.error('bwip-js failed for', code, e);
 			return '';
