@@ -33,6 +33,19 @@ export interface GatewayOutagePayload {
 	timestamp: Date;
 	totalSensors: number;
 	silentSensors: { sensorId: string; sensorName: string; equipmentName?: string | null }[];
+	// Reminder context — when present, the email is rendered as a re-notification
+	// rather than the initial outage alert. firstSeenAt is the original alert
+	// creation time; reminderNumber is 2 for the first reminder, 3 for the
+	// next, etc. (1 is the initial notification.)
+	firstSeenAt?: Date;
+	reminderNumber?: number;
+}
+
+export interface GatewayRecoveredPayload {
+	recoveredAt: Date;
+	firstSeenAt: Date;
+	totalReminders: number;
+	totalSensors: number;
 }
 
 export const notifyTemperatureAlert = safely(async (payload: TempAlertPayload) => {
@@ -90,12 +103,28 @@ export const notifyGatewayOutage = safely(async (payload: GatewayOutagePayload) 
 	if (!enabled) return { sent: false, skipped: 'disabled' as const };
 	if (emails.length === 0) return { sent: false, skipped: 'no_recipients' as const };
 
-	const subject = `[BIMS] GATEWAY OUTAGE — ${payload.silentSensors.length} of ${payload.totalSensors} probes silent`;
+	const isReminder = (payload.reminderNumber ?? 1) > 1;
+	const downForMin = payload.firstSeenAt
+		? Math.max(0, Math.round((payload.timestamp.getTime() - payload.firstSeenAt.getTime()) / 60000))
+		: 0;
+	const downLabel = downForMin >= 60
+		? `${Math.floor(downForMin / 60)}h ${downForMin % 60}m`
+		: `${downForMin}m`;
+
+	const subject = isReminder
+		? `[BIMS] GATEWAY STILL DOWN (reminder #${(payload.reminderNumber ?? 2) - 1}) — ${downLabel}, ${payload.silentSensors.length}/${payload.totalSensors} probes silent`
+		: `[BIMS] GATEWAY OUTAGE — ${payload.silentSensors.length} of ${payload.totalSensors} probes silent`;
+
 	const sensorRows = payload.silentSensors
 		.map(s => `<li><strong>${s.sensorName}</strong>${s.equipmentName ? ` — ${s.equipmentName}` : ''} <span style="font-family:monospace;color:#6b7280;">${s.sensorId}</span></li>`)
 		.join('');
+
+	const intro = isReminder
+		? `<p><strong>The Mocreo gateway is still offline</strong> — first seen ${payload.firstSeenAt?.toISOString() ?? 'unknown'} (${downLabel} ago). <strong>${payload.silentSensors.length} of ${payload.totalSensors}</strong> probes are still silent. This is reminder #${(payload.reminderNumber ?? 2) - 1}; reminders will repeat every 30 minutes until the gateway is back online.</p>`
+		: `<p>The Mocreo gateway appears to be offline — <strong>${payload.silentSensors.length} of ${payload.totalSensors}</strong> probes stopped reporting at the same time. This usually means a power loss, network outage, or gateway hardware issue at the building, NOT individual probe failures.</p>`;
+
 	const bodyHtml = `
-		<p>The Mocreo gateway appears to be offline — <strong>${payload.silentSensors.length} of ${payload.totalSensors}</strong> probes stopped reporting at the same time. This usually means a power loss, network outage, or gateway hardware issue at the building, NOT individual probe failures.</p>
+		${intro}
 		<p style="margin-top:16px;"><strong>Affected probes:</strong></p>
 		<ul style="font-size:13px;">${sensorRows}</ul>
 		<p style="margin-top:16px;color:#f87171;"><strong>Important:</strong> probes that come back online will report whatever temperature they observe — if a fridge or freezer lost power and didn't restart, you will start seeing high-temperature alerts as soon as the gateway recovers. Inspect cold storage equipment in person.</p>
@@ -104,9 +133,41 @@ export const notifyGatewayOutage = safely(async (payload: GatewayOutagePayload) 
 	return sendEmail({
 		to: emails,
 		subject,
-		tag: 'gateway_outage',
+		tag: isReminder ? 'gateway_outage_reminder' : 'gateway_outage',
 		html: renderEmailHtml({
-			title: 'Gateway Outage',
+			title: isReminder ? 'Gateway Still Offline' : 'Gateway Outage',
+			preheader: subject,
+			bodyHtml,
+			ctaText: 'View probes',
+			ctaUrl: `${process.env.BIMS_BASE_URL ?? ''}/equipment/temperature-probes`
+		})
+	});
+});
+
+export const notifyGatewayRecovered = safely(async (payload: GatewayRecoveredPayload) => {
+	await connectDB();
+	const { enabled, emails } = await getNotificationRecipients('temperatureAlerts');
+	if (!enabled) return { sent: false, skipped: 'disabled' as const };
+	if (emails.length === 0) return { sent: false, skipped: 'no_recipients' as const };
+
+	const downForMin = Math.max(0, Math.round((payload.recoveredAt.getTime() - payload.firstSeenAt.getTime()) / 60000));
+	const downLabel = downForMin >= 60
+		? `${Math.floor(downForMin / 60)}h ${downForMin % 60}m`
+		: `${downForMin}m`;
+
+	const subject = `[BIMS] Gateway recovered — was down ${downLabel}`;
+	const bodyHtml = `
+		<p>The Mocreo gateway is reporting again. The outage lasted <strong>${downLabel}</strong> (first seen ${payload.firstSeenAt.toISOString()}, recovered ${payload.recoveredAt.toISOString()}).</p>
+		<p>${payload.totalReminders > 0 ? `${payload.totalReminders} reminder email${payload.totalReminders === 1 ? '' : 's'} were sent during the outage.` : 'No reminders were sent.'}</p>
+		<p style="margin-top:16px;color:#f87171;"><strong>Verify cold storage:</strong> any fridge or freezer that lost power will start reporting whatever temperature it observes. If readings come in above threshold, inspect the affected equipment immediately and check whether contents are still safe.</p>
+	`;
+
+	return sendEmail({
+		to: emails,
+		subject,
+		tag: 'gateway_recovered',
+		html: renderEmailHtml({
+			title: 'Gateway Recovered',
 			preheader: subject,
 			bodyHtml,
 			ctaText: 'View probes',
