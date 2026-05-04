@@ -53,27 +53,20 @@
 	// Render each QR as inline SVG (vector) rather than <canvas>.
 	// Canvases serialise into the print PDF as raster images; 80 per sheet
 	// blows past HP-style printer PDF resource limits ("PDL PDF limitcheck").
-	function datamatrix(node: HTMLElement, code: string) {
-		const draw = (text: string) => {
-			if (!text) return;
-			try {
-				node.innerHTML = bwipjs.toSVG({
-					bcid: 'qrcode',
-					text,
-					scale: 3,
-					height: 7,
-					width: 7
-				});
-			} catch (e) {
-				console.error('bwip-js failed for', text, e);
-			}
-		};
-		draw(code);
-		return {
-			update(next: string) {
-				draw(next);
-			}
-		};
+	function svgFor(code: string): string {
+		if (!code) return '';
+		try {
+			return bwipjs.toSVG({
+				bcid: 'qrcode',
+				text: code,
+				scale: 3,
+				height: 7,
+				width: 7
+			});
+		} catch (e) {
+			console.error('bwip-js failed for', code, e);
+			return '';
+		}
 	}
 </script>
 
@@ -284,7 +277,7 @@
 									     0.375in). Asymmetric padding (PR−PL=0.056in) shifts the
 									     centered content's midline to match B. -->
 									<div style="padding:0.05in 0.20in 0 0.14in;display:flex;justify-content:center">
-										<div style="transform:scale(0.85)" use:datamatrix={code}></div>
+										<div style="transform:scale(0.85)">{@html svgFor(code)}</div>
 									</div>
 									<div style="padding:0 0.10in 0 0.04in">
 										<div class="break-words text-center font-mono text-[3.5pt] leading-[1.1em]">
