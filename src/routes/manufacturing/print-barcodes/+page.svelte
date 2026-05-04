@@ -50,37 +50,98 @@
 	const hasBatch = $derived(!!(form && 'success' in form && form.success && form.barcodes?.length));
 	const spotCheck = $derived(form && 'success' in form && form.success ? form.spotCheck : null);
 
-	// Render each QR as a PNG data URI inside an <img>. Avoids two earlier
-	// failure modes:
-	//   - Inline <canvas> elements: browser print pipeline rasterises each
-	//     at print resolution → ballooning PDF size + "PDL PDF limitcheck"
-	//     on HP-style printers.
-	//   - Inline SVG: each QR adds ~1000 vector path ops to the print PDF;
-	//     80/sheet still overflows old PostScript stack/path limits.
-	// A small PNG embedded in an <img> becomes a single PDF Image object,
-	// which every printer handles cheaply.
-	const qrCache = new Map<string, string>();
-	function qrPng(code: string): string {
-		if (!code) return '';
-		if (typeof document === 'undefined') return ''; // SSR no-op
-		const cached = qrCache.get(code);
+	// Render an entire sheet as a SINGLE PNG. Each sheet becomes one PDF
+	// Image object instead of 80+ — HP printers cap at ~50 images/page and
+	// trip "PDL PDF limitcheck" with per-cell rendering (whether canvas,
+	// SVG, or img+data-URI).
+	//
+	// Layout matches Avery 94102 exactly: 8x10 grid of 0.75" cells,
+	// 0.125" gutters, 0.23" horizontal page margin, 0.46" vertical.
+	const DPI = 300;
+	const sheetCache = new Map<string, string>();
+
+	function sheetPng(cells: string[]): string {
+		if (typeof document === 'undefined') return '';
+		if (!cells.some((c) => c)) return '';
+
+		const cacheKey = cells.join('|');
+		const cached = sheetCache.get(cacheKey);
 		if (cached) return cached;
-		try {
-			const canvas = document.createElement('canvas');
-			bwipjs.toCanvas(canvas, {
-				bcid: 'qrcode',
-				text: code,
-				scale: 3,
-				height: 7,
-				width: 7
-			});
-			const url = canvas.toDataURL('image/png');
-			qrCache.set(code, url);
-			return url;
-		} catch (e) {
-			console.error('bwip-js failed for', code, e);
-			return '';
+
+		const W = 8.5 * DPI;
+		const H = 11 * DPI;
+		const canvas = document.createElement('canvas');
+		canvas.width = W;
+		canvas.height = H;
+		const ctx = canvas.getContext('2d');
+		if (!ctx) return '';
+
+		ctx.fillStyle = '#FFFFFF';
+		ctx.fillRect(0, 0, W, H);
+
+		const padX = 0.23 * DPI;
+		const padY = 0.46 * DPI;
+		const cellMargin = 0.125 * DPI;
+		const cellSize = 0.75 * DPI;
+		const cellPitch = cellSize + 2 * cellMargin; // 1.0" pitch
+
+		ctx.textBaseline = 'top';
+		ctx.fillStyle = '#000000';
+
+		for (let i = 0; i < cells.length; i++) {
+			const code = cells[i];
+			if (!code) continue;
+
+			const col = i % 8;
+			const row = Math.floor(i / 8);
+			const cellLeft = padX + col * cellPitch + cellMargin;
+			const cellTop = padY + row * cellPitch + cellMargin;
+
+			// ABC labels (5px courier bold, top of cell, on B-column grid).
+			const abcFontPx = 5 * (DPI / 96);
+			ctx.font = `bold ${abcFontPx}px courier, monospace`;
+			ctx.textAlign = 'left';
+			const abcLeft = cellLeft + 0.08 * DPI;
+			const abcSpacing = 0.22 * DPI;
+			const abcY = cellTop;
+			ctx.fillText('A', abcLeft, abcY);
+			ctx.fillText('B', abcLeft + abcSpacing, abcY);
+			ctx.fillText('C', abcLeft + 2 * abcSpacing, abcY);
+
+			// QR code. Centered on B-column (cellLeft + 0.347" per existing
+			// alignment math). Sized to ~0.5" so it fits cell width with
+			// padding while staying scannable.
+			try {
+				const qrCanvas = document.createElement('canvas');
+				bwipjs.toCanvas(qrCanvas, {
+					bcid: 'qrcode',
+					text: code,
+					scale: 6,
+					height: 7,
+					width: 7
+				});
+				const qrSize = 0.5 * DPI;
+				const qrCenterX = cellLeft + 0.347 * DPI;
+				const qrTop = cellTop + 0.08 * DPI;
+				ctx.drawImage(qrCanvas, qrCenterX - qrSize / 2, qrTop, qrSize, qrSize);
+
+				// UUID text below QR — 3.5pt courier, two lines split at the
+				// midpoint, centered on B-column.
+				const textPx = 3.5 * (DPI / 72);
+				ctx.font = `${textPx}px courier, monospace`;
+				ctx.textAlign = 'center';
+				const textTop = qrTop + qrSize + 0.02 * DPI;
+				const half = Math.ceil(code.length / 2);
+				ctx.fillText(code.slice(0, half), qrCenterX, textTop);
+				ctx.fillText(code.slice(half), qrCenterX, textTop + textPx * 1.15);
+			} catch (e) {
+				console.error('bwip-js failed for', code, e);
+			}
 		}
+
+		const url = canvas.toDataURL('image/png');
+		sheetCache.set(cacheKey, url);
+		return url;
 	}
 </script>
 
@@ -273,35 +334,15 @@
 	{#key form && 'batchId' in form ? form.batchId : 'empty'}
 		<div class="print-area space-y-4 print:space-y-0">
 			{#each sheets as sheetCells, sheetIdx (sheetIdx)}
-				<div class="mx-auto h-[11in] w-[8.5in] outline outline-1 outline-[var(--color-tron-border)] bg-white print:bg-white print:outline-0" style="break-after: page; page-break-after: always;">
-					<div class="grid grid-cols-8 grid-rows-10 px-[0.23in] py-[0.46in]">
-						{#each sheetCells as code, index (index)}
-							<div class="m-[0.125in] h-[0.75in] w-[0.75in] border border-[var(--color-tron-border)]/30 bg-white pt-1 text-black print:border-0">
-								{#if code}
-									<div
-										style="margin:0 0.05in -0.07in 0.08in;font-weight:bold;font-family:courier;font-size:5px;"
-									>
-										<span class="m-0">A</span>
-										<span class="ml-[0.22in]">B</span>
-										<span class="ml-[0.22in]">C</span>
-									</div>
-									<!-- Both barcode and UUID text are horizontally centered on B's
-									     center column. ABC starts at left:0.08in with 0.22in spacing,
-									     so B's center sits ~0.347in from cell-left (cell center is
-									     0.375in). Asymmetric padding (PR−PL=0.056in) shifts the
-									     centered content's midline to match B. -->
-									<div style="padding:0.05in 0.20in 0 0.14in;display:flex;justify-content:center">
-										<img src={qrPng(code)} alt="" style="transform:scale(0.85);transform-origin:center;image-rendering:pixelated" />
-									</div>
-									<div style="padding:0 0.10in 0 0.04in">
-										<div class="break-words text-center font-mono text-[3.5pt] leading-[1.1em]">
-											{code}
-										</div>
-									</div>
-								{/if}
-							</div>
-						{/each}
-					</div>
+				<div
+					class="mx-auto h-[11in] w-[8.5in] bg-white outline outline-1 outline-[var(--color-tron-border)] print:outline-0"
+					style="break-after: page; page-break-after: always;"
+				>
+					<img
+						src={sheetPng(sheetCells)}
+						alt="Barcode sheet {sheetIdx + 1}"
+						style="display:block;width:100%;height:100%;image-rendering:pixelated"
+					/>
 				</div>
 			{/each}
 		</div>
@@ -314,32 +355,33 @@
 			size: 8.5in 11in;
 			margin: 0;
 		}
-		/* Hide every element on the page; restore visibility only for the
-		   sheet container and its descendants. Avoids enumerating each
-		   parent layout's chrome (header, sidebar, GridBackground, scanline
-		   overlay, flex wrappers) — anything outside .print-area is gone. */
-		:global(body *) {
-			visibility: hidden !important;
-		}
-		.print-area,
-		:global(.print-area *) {
-			visibility: visible !important;
-		}
-		/* Break out of every parent's padding / flex so the sheet aligns
-		   with the physical page origin (required for Avery 94102). */
-		.print-area {
-			position: absolute !important;
-			top: 0 !important;
-			left: 0 !important;
-			width: 100% !important;
-			margin: 0 !important;
-			padding: 0 !important;
+		/* display:none (not visibility:hidden) on chrome so it never enters
+		   the print stream — fewer PDF objects for the printer to parse,
+		   which matters for "PDL PDF limitcheck"-prone HP firmware. */
+		:global(header),
+		:global(aside.mfg-sidebar),
+		:global(.tron-scanlines) {
+			display: none !important;
 		}
 		:global(html),
 		:global(body) {
 			margin: 0 !important;
 			padding: 0 !important;
 			background: white !important;
+		}
+		:global(main) {
+			margin: 0 !important;
+			padding: 0 !important;
+		}
+		:global(.tron-grid-bg) {
+			background: white !important;
+		}
+		:global(.min-w-0.flex-1) {
+			padding: 0 !important;
+		}
+		.print-area {
+			margin: 0 !important;
+			padding: 0 !important;
 		}
 	}
 </style>
