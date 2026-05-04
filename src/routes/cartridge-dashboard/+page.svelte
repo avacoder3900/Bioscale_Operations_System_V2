@@ -230,11 +230,24 @@
 					<div class="space-y-1.5">
 						{#each data.storageDistribution as loc}
 							<a href="/equipment/location/{loc.locationId}" class="flex items-center justify-between rounded px-2 py-1.5 hover:bg-[var(--color-tron-surface)] transition-colors">
-								<div class="flex items-center gap-2">
+								<div class="flex min-w-0 flex-1 items-center gap-2">
 									<span class="text-sm">🧊</span>
-									<span class="text-xs text-[var(--color-tron-text)]">{loc.locationName}</span>
+									<span class="truncate text-xs text-[var(--color-tron-text)]">{loc.locationName}</span>
 								</div>
-								<div class="flex items-center gap-2">
+								<div class="flex items-center gap-2.5">
+									{#if loc.count > 0}
+										<span class="font-mono text-[10px] text-amber-300" title="Accepted wax">
+											<span class="font-bold">{loc.waxAcceptedCount ?? 0}</span>A
+										</span>
+										<span class="font-mono text-[10px] text-red-300" title="Scrapped wax">
+											<span class="font-bold">{loc.waxScrappedCount ?? 0}</span>S
+										</span>
+										{#if (loc.reagentCount ?? 0) > 0}
+											<span class="font-mono text-[10px] text-purple-300" title="Reagent stored">
+												<span class="font-bold">{loc.reagentCount}</span>R
+											</span>
+										{/if}
+									{/if}
 									<span class="text-xs font-mono font-bold text-[var(--color-tron-cyan)]">{loc.count}</span>
 									{#if loc.capacity}
 										<span class="text-[10px] text-[var(--color-tron-text-secondary)]">/ {loc.capacity}</span>

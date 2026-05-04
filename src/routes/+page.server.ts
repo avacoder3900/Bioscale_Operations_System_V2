@@ -234,11 +234,18 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				[fridgeCapacityAgg, allRobots, activeWaxRuns, allAssays,
 					cartridgeBomItems, dailyThroughputAgg, recentWaxRuns, recentReagentRuns, consumableCountsAgg
 				] = await Promise.all([
-					// Count ALL cartridges in fridges — both wax_stored (by waxStorage.location) and stored (by storage.fridgeName)
+					// Count ALL cartridges physically present in a fridge — wax_stored
+					// (post-QC), scrapped (QA quarantine, still occupies the slot), and
+					// reagent stored. Matches occupancy logic in /equipment/activity and
+					// /inventory/fridge-storage so capacity utilisation is consistent.
 					(async () => {
-						const [waxCounts, storedCounts] = await Promise.all([
+						const [waxCounts, scrappedCounts, storedCounts] = await Promise.all([
 							CartridgeRecord.aggregate([
 								{ $match: { status: 'wax_stored', 'waxStorage.location': { $exists: true }, _id: { $nin: checkedOutIds } } },
+								{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
+							]),
+							CartridgeRecord.aggregate([
+								{ $match: { status: 'scrapped', 'waxStorage.location': { $exists: true }, _id: { $nin: checkedOutIds } } },
 								{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
 							]),
 							CartridgeRecord.aggregate([
@@ -247,7 +254,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 							])
 						]);
 						const merged = new Map<string, number>();
-						for (const c of [...waxCounts as any[], ...storedCounts as any[]]) {
+						for (const c of [...waxCounts as any[], ...scrappedCounts as any[], ...storedCounts as any[]]) {
 							merged.set(c._id, (merged.get(c._id) ?? 0) + c.count);
 						}
 						return Array.from(merged.entries()).map(([k, v]) => ({ _id: k, count: v }));

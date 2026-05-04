@@ -94,14 +94,22 @@ export const load: PageServerLoad = async ({ locals }) => {
 			.lean()
 	]);
 
-	// Storage distribution — merge wax storage (waxStorage.location) and reagent storage (storage.fridgeName)
-	// Both fields store the fridge barcode string, not the equipment _id.
+	// Storage distribution — merge three fridge buckets so totals match the
+	// physical occupancy used elsewhere (/inventory/fridge-storage,
+	// /equipment/activity, /equipment/fridges-ovens):
+	//   wax_accepted (status='wax_stored')          — keyed by waxStorage.location
+	//   wax_scrapped (status='scrapped' + waxStorage.location set) — QA quarantine
+	//   reagent      (status∈{stored,reagent_filled}) — keyed by storage.fridgeName
 	// Oven occupancy reads from BackingLot: during backing phase cartridges
 	// only exist as an aggregate count on the lot — individual CartridgeRecords
 	// don't come into being until their UUID is scanned at wax deck loading.
-	const [waxStorageCounts, reagentStorageCounts, ovenOccupancyAgg] = await Promise.all([
+	const [waxAcceptedCountsAgg, waxScrappedCountsAgg, reagentStorageCounts, ovenOccupancyAgg] = await Promise.all([
 		CartridgeRecord.aggregate([
 			{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored', _id: { $nin: checkedOutIds } } },
+			{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
+		]),
+		CartridgeRecord.aggregate([
+			{ $match: { 'waxStorage.location': { $exists: true }, status: 'scrapped', _id: { $nin: checkedOutIds } } },
 			{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
 		]),
 		CartridgeRecord.aggregate([
@@ -116,8 +124,17 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const ovenOccupantMap = new Map<string, number>(
 		(ovenOccupancyAgg as any[]).map((o: any) => [String(o._id), o.count])
 	);
+	const waxAcceptedMap = new Map<string, number>(
+		(waxAcceptedCountsAgg as any[]).map((c: any) => [c._id, c.count])
+	);
+	const waxScrappedMap = new Map<string, number>(
+		(waxScrappedCountsAgg as any[]).map((c: any) => [c._id, c.count])
+	);
+	const reagentMap = new Map<string, number>(
+		(reagentStorageCounts as any[]).map((c: any) => [c._id, c.count])
+	);
 	const mergedCounts = new Map<string, number>();
-	for (const s of [...waxStorageCounts as any[], ...reagentStorageCounts as any[]]) {
+	for (const s of [...waxAcceptedCountsAgg as any[], ...waxScrappedCountsAgg as any[], ...reagentStorageCounts as any[]]) {
 		mergedCounts.set(s._id, (mergedCounts.get(s._id) ?? 0) + s.count);
 	}
 	const storageCounts = Array.from(mergedCounts.entries()).map(([k, v]) => ({ _id: k, count: v }));
@@ -213,10 +230,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 		storageDistribution: (fridges as any[]).map((f: any) => {
 			const label = f.name ?? f.barcode ?? String(f._id);
 			const key = f.barcode ?? f.name ?? String(f._id);
+			const lookup = (m: Map<string, number>) =>
+				m.get(key) ?? m.get(f.name) ?? m.get(f.barcode) ?? 0;
 			return {
 				locationId: String(f._id),
 				locationName: label,
-				count: mergedCounts.get(key) ?? mergedCounts.get(f.name) ?? mergedCounts.get(f.barcode) ?? 0,
+				count: lookup(mergedCounts),
+				waxAcceptedCount: lookup(waxAcceptedMap),
+				waxScrappedCount: lookup(waxScrappedMap),
+				reagentCount: lookup(reagentMap),
 				capacity: f.capacity ?? null
 			};
 		}),

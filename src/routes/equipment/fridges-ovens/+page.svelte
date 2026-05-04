@@ -12,6 +12,8 @@
 		notes: string | null;
 		createdAt: string;
 		occupantCount: number;
+		waxAcceptedCount?: number;
+		waxScrappedCount?: number;
 	}
 
 	interface EquipmentSensor {
@@ -332,6 +334,18 @@
 											/ {loc.capacity}
 										{/if}
 									</span>
+									{#if loc.locationType === 'fridge' && loc.occupantCount > 0}
+										{@const accepted = loc.waxAcceptedCount ?? 0}
+										{@const scrapped = loc.waxScrappedCount ?? 0}
+										{@const reagent = Math.max(0, loc.occupantCount - accepted - scrapped)}
+										<span class="inline-flex items-center gap-2 rounded border border-[var(--color-tron-border)] px-2 py-0.5">
+											<span class="text-amber-300"><span class="font-bold">{accepted}</span> Accepted</span>
+											<span class="text-red-300"><span class="font-bold">{scrapped}</span> Scrapped</span>
+											{#if reagent > 0}
+												<span class="text-purple-300"><span class="font-bold">{reagent}</span> Reagent</span>
+											{/if}
+										</span>
+									{/if}
 									{#if loc.capacity != null && loc.occupantCount >= loc.capacity}
 										<span class="rounded bg-amber-900/30 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">FULL</span>
 									{/if}
