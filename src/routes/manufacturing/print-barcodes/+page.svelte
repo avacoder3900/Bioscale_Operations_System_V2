@@ -50,11 +50,14 @@
 	const hasBatch = $derived(!!(form && 'success' in form && form.success && form.barcodes?.length));
 	const spotCheck = $derived(form && 'success' in form && form.success ? form.spotCheck : null);
 
-	function datamatrix(node: HTMLCanvasElement, code: string) {
+	// Render each QR as inline SVG (vector) rather than <canvas>.
+	// Canvases serialise into the print PDF as raster images; 80 per sheet
+	// blows past HP-style printer PDF resource limits ("PDL PDF limitcheck").
+	function datamatrix(node: HTMLElement, code: string) {
 		const draw = (text: string) => {
 			if (!text) return;
 			try {
-				bwipjs.toCanvas(node, {
+				node.innerHTML = bwipjs.toSVG({
 					bcid: 'qrcode',
 					text,
 					scale: 3,
@@ -261,7 +264,7 @@
 	     `print:break-after-page` on every sheet ensures the browser starts
 	     a new page after each (last sheet's break is a no-op). -->
 	{#key form && 'batchId' in form ? form.batchId : 'empty'}
-		<div class="space-y-4 print:space-y-0">
+		<div class="print-area space-y-4 print:space-y-0">
 			{#each sheets as sheetCells, sheetIdx (sheetIdx)}
 				<div class="mx-auto h-[11in] w-[8.5in] outline outline-1 outline-[var(--color-tron-border)] bg-white print:bg-white print:outline-0" style="break-after: page; page-break-after: always;">
 					<div class="grid grid-cols-8 grid-rows-10 px-[0.23in] py-[0.46in]">
@@ -281,11 +284,9 @@
 									     0.375in). Asymmetric padding (PR−PL=0.056in) shifts the
 									     centered content's midline to match B. -->
 									<div style="padding:0.05in 0.20in 0 0.14in;display:flex;justify-content:center">
-										<div style="transform:scale(0.85)">
-											<canvas use:datamatrix={code}></canvas>
-										</div>
+										<div style="transform:scale(0.85)" use:datamatrix={code}></div>
 									</div>
-									<div style="padding:0 0.20in 0 0.14in">
+									<div style="padding:0 0.10in 0 0.04in">
 										<div class="break-words text-center font-mono text-[3.5pt] leading-[1.1em]">
 											{code}
 										</div>
@@ -306,25 +307,32 @@
 			size: 8.5in 11in;
 			margin: 0;
 		}
-		/* Hide app chrome (root layout top nav + manufacturing left sidebar)
-		   so only the barcode sheets reach the printer. Targeted globally
-		   because the chrome lives in parent layouts; the rules are only in
-		   the DOM while this page is mounted. */
-		:global(header) {
-			display: none !important;
+		/* Hide every element on the page; restore visibility only for the
+		   sheet container and its descendants. Avoids enumerating each
+		   parent layout's chrome (header, sidebar, GridBackground, scanline
+		   overlay, flex wrappers) — anything outside .print-area is gone. */
+		:global(body *) {
+			visibility: hidden !important;
 		}
-		:global(aside.mfg-sidebar) {
-			display: none !important;
+		.print-area,
+		:global(.print-area *) {
+			visibility: visible !important;
 		}
-		/* Zero parent-layout padding so the sheet sits flush with the page
-		   edges. Without these the root <main> and manufacturing flex wrapper
-		   shift the sheet inward and break the Avery 94102 alignment. */
-		:global(main) {
-			padding: 0 !important;
+		/* Break out of every parent's padding / flex so the sheet aligns
+		   with the physical page origin (required for Avery 94102). */
+		.print-area {
+			position: absolute !important;
+			top: 0 !important;
+			left: 0 !important;
+			width: 100% !important;
 			margin: 0 !important;
-		}
-		:global(.min-w-0.flex-1) {
 			padding: 0 !important;
+		}
+		:global(html),
+		:global(body) {
+			margin: 0 !important;
+			padding: 0 !important;
+			background: white !important;
 		}
 	}
 </style>
