@@ -50,29 +50,33 @@
 	const hasBatch = $derived(!!(form && 'success' in form && form.success && form.barcodes?.length));
 	const spotCheck = $derived(form && 'success' in form && form.success ? form.spotCheck : null);
 
-	// Render each QR as inline SVG (vector) rather than <canvas>.
-	// Canvases serialise into the print PDF as raster images; 80 per sheet
-	// blows past HP-style printer PDF resource limits ("PDL PDF limitcheck").
-	//
-	// bwip-js's toSVG emits <svg viewBox="0 0 W H" ...> with NO width/height
-	// attributes. Inside our display:flex parent that means the SVG has no
-	// intrinsic size and collapses to 0×0. Inject width/height from the
-	// viewBox so it sizes correctly. (Canvas didn't have this problem
-	// because toCanvas sets canvas.width/height directly on the element.)
-	function svgFor(code: string): string {
+	// Render each QR as a PNG data URI inside an <img>. Avoids two earlier
+	// failure modes:
+	//   - Inline <canvas> elements: browser print pipeline rasterises each
+	//     at print resolution → ballooning PDF size + "PDL PDF limitcheck"
+	//     on HP-style printers.
+	//   - Inline SVG: each QR adds ~1000 vector path ops to the print PDF;
+	//     80/sheet still overflows old PostScript stack/path limits.
+	// A small PNG embedded in an <img> becomes a single PDF Image object,
+	// which every printer handles cheaply.
+	const qrCache = new Map<string, string>();
+	function qrPng(code: string): string {
 		if (!code) return '';
+		if (typeof document === 'undefined') return ''; // SSR no-op
+		const cached = qrCache.get(code);
+		if (cached) return cached;
 		try {
-			const raw = bwipjs.toSVG({
+			const canvas = document.createElement('canvas');
+			bwipjs.toCanvas(canvas, {
 				bcid: 'qrcode',
 				text: code,
 				scale: 3,
 				height: 7,
 				width: 7
 			});
-			return raw.replace(
-				/^<svg viewBox="0 0 (\S+) (\S+)"/,
-				'<svg viewBox="0 0 $1 $2" width="$1" height="$2"'
-			);
+			const url = canvas.toDataURL('image/png');
+			qrCache.set(code, url);
+			return url;
 		} catch (e) {
 			console.error('bwip-js failed for', code, e);
 			return '';
@@ -287,7 +291,7 @@
 									     0.375in). Asymmetric padding (PR−PL=0.056in) shifts the
 									     centered content's midline to match B. -->
 									<div style="padding:0.05in 0.20in 0 0.14in;display:flex;justify-content:center">
-										<div style="transform:scale(0.85)">{@html svgFor(code)}</div>
+										<img src={qrPng(code)} alt="" style="transform:scale(0.85);transform-origin:center;image-rendering:pixelated" />
 									</div>
 									<div style="padding:0 0.10in 0 0.04in">
 										<div class="break-words text-center font-mono text-[3.5pt] leading-[1.1em]">
