@@ -854,13 +854,23 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = (data.get('runId') as string)?.trim();
 		const now = new Date();
+
+		if (!runId) return fail(404, { error: 'Run not found' });
+
+		// Idempotency: if a prior click flipped status='Storage' but a
+		// downstream side-effect threw, re-firing would duplicate inventory
+		// rows + waxQc writes. Treat as success.
+		const runBeforeQc = await WaxFillingRun.findById(runId).select('coolingConfirmedAt status').lean() as any;
+		if (!runBeforeQc) return fail(404, { error: 'Run not found' });
+		if (runBeforeQc.status === 'Storage' || runBeforeQc.status === 'storage' || runBeforeQc.status === 'completed') {
+			return { success: true };
+		}
 
 		// Server-side cooling timer check: minimum cool-down before QC.
 		// Configurable via ManufacturingSettings.waxFilling.minCoolingBeforeQcMin
 		// (default 2 min). Editable from the wax-filling settings page.
-		const runBeforeQc = await WaxFillingRun.findById(runId).select('coolingConfirmedAt').lean() as any;
 		if (runBeforeQc?.coolingConfirmedAt) {
 			const settingsDocQc = await ManufacturingSettings.findById('default').select('waxFilling.minCoolingBeforeQcMin').lean() as any;
 			const minCoolMin = settingsDocQc?.waxFilling?.minCoolingBeforeQcMin ?? 2;
@@ -928,33 +938,41 @@ export const actions: Actions = {
 				await CartridgeRecord.bulkWrite(acceptOps);
 
 				// Record inventory transactions for each cartridge — consume wax (PT-CT-105)
-				const waxPartId = await resolvePartId('PT-CT-105');
-				for (const cid of safeIds) {
-					await recordTransaction({
-						transactionType: 'consumption',
-						partDefinitionId: waxPartId ?? undefined,
-						cartridgeRecordId: cid,
-						lotId: run.waxSourceLot ?? undefined,
-						quantity: 1,
-						manufacturingStep: 'wax_filling',
-						manufacturingRunId: String(run._id),
-						operatorId: run.operator?._id,
-						operatorUsername: run.operator?.username,
-						notes: `Wax-filled cartridge created in run ${run._id}`
-					});
+				try {
+					const waxPartId = await resolvePartId('PT-CT-105');
+					for (const cid of safeIds) {
+						await recordTransaction({
+							transactionType: 'consumption',
+							partDefinitionId: waxPartId ?? undefined,
+							cartridgeRecordId: cid,
+							lotId: run.waxSourceLot ?? undefined,
+							quantity: 1,
+							manufacturingStep: 'wax_filling',
+							manufacturingRunId: String(run._id),
+							operatorId: run.operator?._id,
+							operatorUsername: run.operator?.username,
+							notes: `Wax-filled cartridge created in run ${run._id}`
+						});
+					}
+				} catch (e) {
+					console.error('[completeQC] consumption recordTransaction failed:', e instanceof Error ? e.message : e);
 				}
 			}
 		}
 
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'wax_filling_runs',
-			recordId: runId,
-			action: 'UPDATE',
-			changedBy: locals.user?.username,
-			changedAt: now,
-			newData: { status: 'Storage' }
-		});
+		try {
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'wax_filling_runs',
+				recordId: runId,
+				action: 'UPDATE',
+				changedBy: locals.user?.username,
+				changedAt: now,
+				newData: { status: 'Storage' }
+			});
+		} catch (e) {
+			console.error('[completeQC] audit log failed:', e instanceof Error ? e.message : e);
+		}
 
 		return { success: true };
 	},
@@ -1356,8 +1374,19 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = (data.get('runId') as string)?.trim();
 		const now = new Date();
+
+		if (!runId) return fail(404, { error: 'Run not found' });
+
+		// Idempotency: if a prior click flipped status='completed' but a
+		// downstream side-effect threw, re-firing would double-count inventory
+		// and push duplicate audit rows. Treat as success.
+		const existingRun = await WaxFillingRun.findById(runId).select('status').lean() as any;
+		if (!existingRun) return fail(404, { error: 'Run not found' });
+		if (existingRun.status === 'completed') {
+			return { success: true };
+		}
 
 		const run = await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'completed', runEndTime: now }
@@ -1388,6 +1417,13 @@ export const actions: Actions = {
 				{ $set: { status: 'wax_stored' } }
 			);
 		}
+
+		// Best-effort tail: equipment usage log, inventory consumption,
+		// lifecycle notifications, audit log. Status is already 'completed'
+		// and cartridges are 'wax_stored' — a failure here doesn't undo the
+		// run, so log and let the operator see success instead of a 500 on
+		// a run that's already done.
+		try {
 
 		if (run?.deckId) {
 			await Equipment.findByIdAndUpdate(run.deckId, {
@@ -1501,6 +1537,10 @@ export const actions: Actions = {
 			changedAt: now,
 			newData: { status: 'completed', cartridgeCount }
 		});
+
+		} catch (e) {
+			console.error('[completeRun] post-update side-effect failed:', e instanceof Error ? e.message : e);
+		}
 
 		return { success: true };
 	}

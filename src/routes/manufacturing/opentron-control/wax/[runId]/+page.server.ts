@@ -233,14 +233,16 @@ export const actions: Actions = {
 		redirect(303, '/manufacturing/opentron-control');
 	},
 
-	completeQC: async ({ request, locals }) => {
+	completeQC: async ({ request, locals, params }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = (data.get('runId') as string)?.trim() || (params.runId as string);
 		const rejectedRaw = (data.get('rejectedCartridges') as string) || '[]';
 		const now = new Date();
+
+		if (!runId) return fail(404, { error: 'Run not found' });
 
 		// Parse the rejections payload sent by QCInspection. Empty list is
 		// valid (= operator accepted everything).
@@ -252,7 +254,14 @@ export const actions: Actions = {
 			return fail(400, { error: 'Invalid rejectedCartridges payload' });
 		}
 
-		const runBeforeQc = await WaxFillingRun.findById(runId).select('coolingConfirmedAt coolingConfirmedTime').lean() as any;
+		// Idempotency: if a prior click flipped status='Storage' but a
+		// downstream side-effect threw, re-firing would duplicate inventory
+		// rows + waxQc writes. Treat as success.
+		const runBeforeQc = await WaxFillingRun.findById(runId).select('coolingConfirmedAt coolingConfirmedTime status').lean() as any;
+		if (!runBeforeQc) return fail(404, { error: 'Run not found' });
+		if (runBeforeQc.status === 'Storage' || runBeforeQc.status === 'storage' || runBeforeQc.status === 'completed') {
+			return { success: true };
+		}
 		const confirmedAt = runBeforeQc?.coolingConfirmedAt ?? runBeforeQc?.coolingConfirmedTime;
 		if (confirmedAt) {
 			// Minimum cool-down before QC is configurable via
@@ -298,17 +307,21 @@ export const actions: Actions = {
 						}
 					}
 				);
-				await recordTransaction({
-					transactionType: 'scrap',
-					cartridgeRecordId: r.cartridgeId,
-					quantity: 1,
-					manufacturingStep: 'wax_filling',
-					operatorId: locals.user._id,
-					operatorUsername: locals.user.username,
-					scrapReason: reason,
-					scrapCategory: 'wax_defect',
-					notes: `Wax QC rejection: ${reason}`
-				});
+				try {
+					await recordTransaction({
+						transactionType: 'scrap',
+						cartridgeRecordId: r.cartridgeId,
+						quantity: 1,
+						manufacturingStep: 'wax_filling',
+						operatorId: locals.user._id,
+						operatorUsername: locals.user.username,
+						scrapReason: reason,
+						scrapCategory: 'wax_defect',
+						notes: `Wax QC rejection: ${reason}`
+					});
+				} catch (e) {
+					console.error('[completeQC] reject recordTransaction failed:', e instanceof Error ? e.message : e);
+				}
 			}
 		}
 
@@ -364,33 +377,41 @@ export const actions: Actions = {
 				}));
 				await CartridgeRecord.bulkWrite(acceptOps);
 
-				const waxPartId = await resolvePartId('PT-CT-105');
-				for (const cid of safeIds) {
-					await recordTransaction({
-						transactionType: 'consumption',
-						partDefinitionId: waxPartId ?? undefined,
-						cartridgeRecordId: cid,
-						lotId: run.waxSourceLot ?? undefined,
-						quantity: 1,
-						manufacturingStep: 'wax_filling',
-						manufacturingRunId: String(run._id),
-						operatorId: run.operator?._id,
-						operatorUsername: run.operator?.username,
-						notes: `Wax-filled cartridge created in run ${run._id}`
-					});
+				try {
+					const waxPartId = await resolvePartId('PT-CT-105');
+					for (const cid of safeIds) {
+						await recordTransaction({
+							transactionType: 'consumption',
+							partDefinitionId: waxPartId ?? undefined,
+							cartridgeRecordId: cid,
+							lotId: run.waxSourceLot ?? undefined,
+							quantity: 1,
+							manufacturingStep: 'wax_filling',
+							manufacturingRunId: String(run._id),
+							operatorId: run.operator?._id,
+							operatorUsername: run.operator?.username,
+							notes: `Wax-filled cartridge created in run ${run._id}`
+						});
+					}
+				} catch (e) {
+					console.error('[completeQC] consumption recordTransaction failed:', e instanceof Error ? e.message : e);
 				}
 			}
 		}
 
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'wax_filling_runs',
-			recordId: runId,
-			action: 'UPDATE',
-			changedBy: locals.user?.username,
-			changedAt: now,
-			newData: { status: 'Storage' }
-		});
+		try {
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'wax_filling_runs',
+				recordId: runId,
+				action: 'UPDATE',
+				changedBy: locals.user?.username,
+				changedAt: now,
+				newData: { status: 'Storage' }
+			});
+		} catch (e) {
+			console.error('[completeQC] audit log failed:', e instanceof Error ? e.message : e);
+		}
 
 		return { success: true };
 	},
@@ -604,13 +625,25 @@ export const actions: Actions = {
 		return { success: true, skippedLockedCount: blockedDetails.length };
 	},
 
-	completeRun: async ({ request, locals }) => {
+	completeRun: async ({ request, locals, params }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = (data.get('runId') as string)?.trim() || (params.runId as string);
 		const now = new Date();
+
+		if (!runId) return fail(404, { error: 'Run not found' });
+
+		// Idempotency: if a prior click flipped status='completed' but a
+		// downstream side-effect threw, re-firing would double-count inventory
+		// and push duplicate audit rows. Bail to the landing page like the
+		// first click would have.
+		const existingRun = await WaxFillingRun.findById(runId).select('status').lean() as any;
+		if (!existingRun) return fail(404, { error: 'Run not found' });
+		if (existingRun.status === 'completed') {
+			redirect(303, '/manufacturing/opentron-control');
+		}
 
 		const run = await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'completed', runEndTime: now }
@@ -644,101 +677,110 @@ export const actions: Actions = {
 			);
 		}
 
-		if (run?.deckId) {
-			await Equipment.findByIdAndUpdate(run.deckId, {
-				$set: { lastUsed: now },
-				$push: {
-					usageLog: {
-						_id: generateId(), usageType: 'run_complete', runId: run._id,
-						quantityChanged: cartridgeCount, operator: operatorRef,
-						notes: `Wax filling run complete — ${cartridgeCount} cartridges filled`, createdAt: now
-					}
-				}
-			});
-		}
-
-		if (run?.waxTubeId) {
-			const tubeLot = await ReceivingLot.findOne({ lotId: run.waxTubeId }).lean() as any;
-			if (tubeLot) {
-				await ReceivingLot.updateOne({ _id: tubeLot._id }, { $inc: { quantity: -1 } });
-				if (tubeLot.part?._id) {
-					await recordTransaction({
-						transactionType: 'consumption',
-						partDefinitionId: tubeLot.part._id,
-						lotId: tubeLot._id,
-						quantity: 1,
-						manufacturingStep: 'wax_filling',
-						manufacturingRunId: run._id,
-						operatorId: locals.user._id,
-						operatorUsername: locals.user.username,
-						notes: `Wax filling run — 2ml incubator tube consumed (lot ${run.waxTubeId})`
-					});
-				}
-			} else {
-				await Consumable.findByIdAndUpdate(run.waxTubeId, {
-					$set: { lastUsedAt: now },
-					$inc: { totalCartridgesFilled: cartridgeCount, totalRunsUsed: 1 },
+		// Best-effort tail: equipment usage log, inventory consumption,
+		// lifecycle notifications, audit log. Status is already 'completed'
+		// and cartridges are 'wax_stored' — a failure here doesn't undo the
+		// run, so log loudly and let the operator see the redirect instead
+		// of a 500 on a run that's already done.
+		try {
+			if (run?.deckId) {
+				await Equipment.findByIdAndUpdate(run.deckId, {
+					$set: { lastUsed: now },
 					$push: {
 						usageLog: {
-							_id: generateId(), usageType: 'wax_run', runId: run._id,
+							_id: generateId(), usageType: 'run_complete', runId: run._id,
 							quantityChanged: cartridgeCount, operator: operatorRef,
-							notes: `Wax filling run complete — ${cartridgeCount} cartridges`, createdAt: now
+							notes: `Wax filling run complete — ${cartridgeCount} cartridges filled`, createdAt: now
 						}
 					}
 				});
 			}
-		}
 
-		if (run?.waxSourceLot) {
-			const FULL_TUBE_VOLUME_UL = 12000;
-			const waxLot = await ReceivingLot.findOne({
-				$or: [{ lotId: run.waxSourceLot }, { bagBarcode: run.waxSourceLot }, { lotNumber: run.waxSourceLot }]
-			}).lean() as any;
-			if (waxLot) {
-				const consumedBefore = Number(waxLot.consumedUl ?? 0);
-				const capUl = Number(waxLot.quantity ?? 0) * FULL_TUBE_VOLUME_UL;
-				const consumedAfter = Math.min(capUl, consumedBefore + WAX_FILL_VOLUME_UL);
-				const tubesBefore = Math.floor(consumedBefore / FULL_TUBE_VOLUME_UL);
-				const tubesAfter = Math.floor(consumedAfter / FULL_TUBE_VOLUME_UL);
-				const tubesToDeduct = tubesAfter - tubesBefore;
-
-				const update: Record<string, unknown> = { $set: { consumedUl: consumedAfter } };
-				if (tubesToDeduct > 0) (update as any).$inc = { quantity: -tubesToDeduct };
-				await ReceivingLot.updateOne({ _id: waxLot._id }, update);
-
-				if (tubesToDeduct > 0 && waxLot.part?._id) {
-					await recordTransaction({
-						transactionType: 'consumption',
-						partDefinitionId: waxLot.part._id,
-						lotId: waxLot._id,
-						quantity: tubesToDeduct,
-						manufacturingStep: 'wax_filling',
-						manufacturingRunId: run._id,
-						operatorId: locals.user._id,
-						operatorUsername: locals.user.username,
-						notes: `Wax filling — ${tubesToDeduct} × 15ml wax tube consumed (lot ${run.waxSourceLot})`
+			if (run?.waxTubeId) {
+				const tubeLot = await ReceivingLot.findOne({ lotId: run.waxTubeId }).lean() as any;
+				if (tubeLot) {
+					await ReceivingLot.updateOne({ _id: tubeLot._id }, { $inc: { quantity: -1 } });
+					if (tubeLot.part?._id) {
+						await recordTransaction({
+							transactionType: 'consumption',
+							partDefinitionId: tubeLot.part._id,
+							lotId: tubeLot._id,
+							quantity: 1,
+							manufacturingStep: 'wax_filling',
+							manufacturingRunId: run._id,
+							operatorId: locals.user._id,
+							operatorUsername: locals.user.username,
+							notes: `Wax filling run — 2ml incubator tube consumed (lot ${run.waxTubeId})`
+						});
+					}
+				} else {
+					await Consumable.findByIdAndUpdate(run.waxTubeId, {
+						$set: { lastUsedAt: now },
+						$inc: { totalCartridgesFilled: cartridgeCount, totalRunsUsed: 1 },
+						$push: {
+							usageLog: {
+								_id: generateId(), usageType: 'wax_run', runId: run._id,
+								quantityChanged: cartridgeCount, operator: operatorRef,
+								notes: `Wax filling run complete — ${cartridgeCount} cartridges`, createdAt: now
+							}
+						}
 					});
 				}
 			}
+
+			if (run?.waxSourceLot) {
+				const FULL_TUBE_VOLUME_UL = 12000;
+				const waxLot = await ReceivingLot.findOne({
+					$or: [{ lotId: run.waxSourceLot }, { bagBarcode: run.waxSourceLot }, { lotNumber: run.waxSourceLot }]
+				}).lean() as any;
+				if (waxLot) {
+					const consumedBefore = Number(waxLot.consumedUl ?? 0);
+					const capUl = Number(waxLot.quantity ?? 0) * FULL_TUBE_VOLUME_UL;
+					const consumedAfter = Math.min(capUl, consumedBefore + WAX_FILL_VOLUME_UL);
+					const tubesBefore = Math.floor(consumedBefore / FULL_TUBE_VOLUME_UL);
+					const tubesAfter = Math.floor(consumedAfter / FULL_TUBE_VOLUME_UL);
+					const tubesToDeduct = tubesAfter - tubesBefore;
+
+					const update: Record<string, unknown> = { $set: { consumedUl: consumedAfter } };
+					if (tubesToDeduct > 0) (update as any).$inc = { quantity: -tubesToDeduct };
+					await ReceivingLot.updateOne({ _id: waxLot._id }, update);
+
+					if (tubesToDeduct > 0 && waxLot.part?._id) {
+						await recordTransaction({
+							transactionType: 'consumption',
+							partDefinitionId: waxLot.part._id,
+							lotId: waxLot._id,
+							quantity: tubesToDeduct,
+							manufacturingStep: 'wax_filling',
+							manufacturingRunId: run._id,
+							operatorId: locals.user._id,
+							operatorUsername: locals.user.username,
+							notes: `Wax filling — ${tubesToDeduct} × 15ml wax tube consumed (lot ${run.waxSourceLot})`
+						});
+					}
+				}
+			}
+
+			await notifyRunLifecycle({
+				runId, runType: 'wax_filling', status: 'completed',
+				operator: locals.user?.username, cartridgeCount,
+				robot: run?.robot?.name ?? run?.robot?._id
+			});
+
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'wax_filling_runs',
+				recordId: runId,
+				action: 'UPDATE',
+				changedBy: locals.user?.username,
+				changedAt: now,
+				newData: { status: 'completed', cartridgeCount }
+			});
+		} catch (e) {
+			console.error('[completeRun] post-update side-effect failed:', e instanceof Error ? e.message : e);
 		}
 
-		await notifyRunLifecycle({
-			runId, runType: 'wax_filling', status: 'completed',
-			operator: locals.user?.username, cartridgeCount,
-			robot: run?.robot?.name ?? run?.robot?._id
-		});
-
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'wax_filling_runs',
-			recordId: runId,
-			action: 'UPDATE',
-			changedBy: locals.user?.username,
-			changedAt: now,
-			newData: { status: 'completed', cartridgeCount }
-		});
-
-		throw redirect(303, '/manufacturing/opentron-control');
+		redirect(303, '/manufacturing/opentron-control');
 	},
 
 	/**
