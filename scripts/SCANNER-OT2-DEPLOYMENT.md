@@ -38,6 +38,18 @@ Python deps installed via `pip3 install --user`:
 - `pyserial` 3.5 (was already present)
 - `requests` 2.33.1 (newly installed)
 
+**OT-2 pip quirk** — `pip install --user` writes to `/var/user-packages/root/.local/...` instead of the standard `/root/.local/...` that Python's `USER_SITE` resolves to. Without a symlink, `import requests` fails inside scripts. Fixed once with:
+```bash
+ln -sf /var/user-packages/root/.local /root/.local
+```
+This is in place on R04. Re-apply if a firmware update wipes it.
+
+## Auth + heartbeat verified
+
+API key set on R04, daemon ran for ~14s, two heartbeats arrived in BIMS Mongo (`scanner_events` collection, `deviceId=ot2-r04-scanner`). End-to-end network/auth path works. Daemon is **not** currently running — manual start required for next test.
+
+To re-check what's in BIMS at any point: `npx tsx scripts/inspect-r04-scanner.ts`.
+
 ## SSH access
 
 Private key checked into this repo: `docs/brevitest-opentrons-files-4-21/ot2_ssh_key`.
@@ -55,8 +67,8 @@ scp -O -i /tmp/ot2_key <local> root@172.16.28.144:/data/scanner-bridge/
 
 ## Pending steps
 
-1. **Set the API key** — edit `/data/scanner-bridge/.env` on R04 and replace `PASTE_AGENT_API_KEY_HERE` with the real `AGENT_API_KEY` value from Vercel env vars.
-2. **Physical smoke test** — SSH to R04, run `/data/scanner-bridge/run.sh`, then in BIMS open `/manufacturing/opentron-control/scanner-test?deviceId=ot2-r04-scanner`. Heartbeats should appear within ~10s. Click "trigger" and point the scanner at any barcode.
+1. ~~Set the API key~~ — done. Real `AGENT_API_KEY` written to `/data/scanner-bridge/.env`.
+2. **Physical smoke test** — SSH to R04, run `/data/scanner-bridge/run.sh` (foreground), then in BIMS open `/manufacturing/opentron-control/scanner-test?deviceId=ot2-r04-scanner`. Heartbeats should appear within ~10s. Click "trigger" on the page and point the scanner at any barcode — the decoded value should land as a `scan` event.
 3. **Wire into wax/reagent UIs** — `source` enum on `ScannerEvent` already reserves `wax_filling` / `reagent_filling`; UI integration not done yet.
 4. **udev rule** for stable `/dev/scanner` symlink (resolves Particle/scanner collision).
 5. **systemd unit** so the bridge auto-starts on boot.
