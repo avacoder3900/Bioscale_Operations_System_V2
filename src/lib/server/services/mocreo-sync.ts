@@ -16,7 +16,7 @@ import {
 	rawToC,
 	rawToHumidity
 } from '$lib/server/services/mocreo';
-import { notifyTemperatureAlert, notifyGatewayOutage } from '$lib/server/notifications';
+import { notifyTemperatureAlert, notifyGatewayOutage, notifyGatewayRecovered } from '$lib/server/notifications';
 
 const OFFLINE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 // If this fraction of sensors go silent in the same sync, treat as a gateway/power
@@ -320,11 +320,14 @@ export async function runMocreoSync(request: Request, url: URL) {
 
 	// Gateway-wide outage: emit ONE consolidated alert + email instead of N
 	// per-sensor lost_connection notifications. Idempotent — only one unacked
-	// gateway_outage alert at a time.
+	// gateway_outage alert at a time. The 30-min mocreo-heartbeat cron handles
+	// reminder emails while the alert stays open; we just stamp lastNotifiedAt
+	// here so that timer starts at the correct moment.
 	if (isGatewayEvent) {
 		const existing = await TemperatureAlert.findOne({
 			alertType: 'gateway_outage',
-			acknowledged: false
+			acknowledged: false,
+			resolvedAt: { $exists: false }
 		});
 		if (!existing) {
 			await TemperatureAlert.create({
@@ -338,7 +341,9 @@ export async function runMocreoSync(request: Request, url: URL) {
 				equipmentName: 'Mocreo Gateway',
 				timestamp: now,
 				gatewayEvent: true,
-				affectedSensorIds: silentSensors.map((s) => s.thingName)
+				affectedSensorIds: silentSensors.map((s) => s.thingName),
+				lastNotifiedAt: now,
+				notificationCount: 1
 			});
 			await notifyGatewayOutage({
 				timestamp: now,
@@ -349,6 +354,34 @@ export async function runMocreoSync(request: Request, url: URL) {
 					equipmentName: sensorToEquipment.get(s.thingName)?.name ?? null
 				}))
 			});
+		}
+	} else {
+		// Recovery branch: most probes are reporting again, but an outage alert
+		// is still open. Auto-resolve and fire a one-shot recovery email so
+		// reminders stop and operators know to check cold storage. The 30-min
+		// heartbeat does the same, whichever fires first wins (the resolvedAt
+		// check above + here keeps the second one a no-op).
+		const open = await TemperatureAlert.findOne({
+			alertType: 'gateway_outage',
+			acknowledged: false,
+			resolvedAt: { $exists: false }
+		}).sort({ timestamp: -1 }).lean() as any;
+		if (open) {
+			await TemperatureAlert.updateOne({ _id: open._id }, {
+				$set: {
+					acknowledged: true,
+					acknowledgedAt: now,
+					resolvedAt: now,
+					resolvedReason: 'auto-resolved: gateway recovered (5-min sync)'
+				}
+			});
+			await notifyGatewayRecovered({
+				recoveredAt: now,
+				firstSeenAt: open.timestamp,
+				totalReminders: Math.max(0, (open.notificationCount ?? 1) - 1),
+				totalSensors: sensors.length
+			});
+			console.log(`[MOCREO SYNC] auto-resolved gateway_outage alert ${open._id}`);
 		}
 	}
 
