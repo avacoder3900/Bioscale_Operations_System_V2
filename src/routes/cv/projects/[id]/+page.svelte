@@ -88,7 +88,7 @@
 	}
 
 	// Induct mode — auto-create cartridge records on scan
-	let inductMode = $state(false);
+	let inductMode = $state(true);
 	let inductMsg = $state('');
 
 	// QR scanning
