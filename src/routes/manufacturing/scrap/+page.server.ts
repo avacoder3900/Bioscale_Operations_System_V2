@@ -1,6 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit';
 import {
-	connectDB, CartridgeRecord, ManualCartridgeRemoval, AuditLog, generateId
+	connectDB, CartridgeRecord, ManualCartridgeRemoval, BackingLot, AuditLog, generateId
 } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
@@ -20,7 +20,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const removalHistory = removals.map((r) => ({
 		id: String(r._id),
 		cartridgeIds: r.cartridgeIds ?? [],
-		cartridgeCount: (r.cartridgeIds ?? []).length,
+		// Pre-wax removals store an explicit count and no cartridgeIds; fall
+		// back to ids.length for legacy wax-stored entries.
+		cartridgeCount: typeof r.cartridgeCount === 'number'
+			? r.cartridgeCount
+			: (r.cartridgeIds ?? []).length,
+		backingLotId: r.backingLotId ?? null,
 		reason: r.reason ?? '',
 		operatorUsername: r.operator?.username ?? '',
 		removedAt: r.removedAt ? new Date(r.removedAt).toISOString() : ''
@@ -114,6 +119,103 @@ export const actions: Actions = {
 				success: true,
 				removalId,
 				count: cartridgeIds.length
+			}
+		};
+	},
+
+	/**
+	 * Manually remove (pre-wax) cartridges from a BackingLot bucket sitting in
+	 * an oven. CartridgeRecords don't exist yet at this stage — cartridges are
+	 * an aggregate count on BackingLot.cartridgeCount until their UUID is
+	 * scanned at wax deck loading. So this action mirrors the wax-filling
+	 * loadDeck pattern (atomic conditional decrement; mark consumed on drain)
+	 * without creating any CartridgeRecord rows.
+	 */
+	removeFromBackingLot: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+
+		const data = await request.formData();
+		const lotBarcode = ((data.get('lotBarcode') as string) ?? '').trim();
+		const countRaw = (data.get('count') as string) ?? '1';
+		const reason = ((data.get('reason') as string) ?? '').trim();
+
+		if (!lotBarcode) {
+			return fail(400, { removeBackingLot: { error: 'Scan the backing lot barcode' } });
+		}
+		const count = Number(countRaw);
+		if (!Number.isInteger(count) || count <= 0) {
+			return fail(400, { removeBackingLot: { error: 'Count must be a positive whole number' } });
+		}
+		if (!reason) {
+			return fail(400, { removeBackingLot: { error: 'Reason is required' } });
+		}
+
+		// Atomic conditional decrement — refuses to over-pull. Same pattern as
+		// wax-filling loadDeck so concurrent wax loads + manual checkouts can't
+		// drive cartridgeCount negative. See wax-filling/+page.server.ts:629.
+		const updatedLot = await BackingLot.findOneAndUpdate(
+			{ _id: lotBarcode, cartridgeCount: { $gte: count } },
+			{ $inc: { cartridgeCount: -count } },
+			{ new: true }
+		).lean() as any;
+
+		if (!updatedLot) {
+			const current = await BackingLot.findById(lotBarcode)
+				.select('cartridgeCount status').lean() as any;
+			if (!current) {
+				return fail(404, { removeBackingLot: { error: `Backing lot "${lotBarcode}" not found` } });
+			}
+			return fail(400, {
+				removeBackingLot: {
+					error: `Backing lot ${lotBarcode} has only ${current.cartridgeCount ?? 0} cartridge(s) remaining (status=${current.status ?? 'unknown'}); cannot remove ${count}.`
+				}
+			});
+		}
+
+		const now = new Date();
+		const remainingAfter = updatedLot.cartridgeCount ?? 0;
+
+		// Mirror loadDeck: when the bucket drains, mark the lot consumed so it
+		// drops out of the wax-filling "buckets in ovens" picker.
+		if (remainingAfter <= 0) {
+			await BackingLot.findByIdAndUpdate(lotBarcode, {
+				$set: { cartridgeCount: 0, status: 'consumed' }
+			});
+		}
+
+		const removalId = generateId();
+		await ManualCartridgeRemoval.create({
+			_id: removalId,
+			cartridgeIds: [],
+			cartridgeCount: count,
+			backingLotId: lotBarcode,
+			reason,
+			operator: { _id: locals.user._id, username: locals.user.username },
+			removedAt: now
+		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'backing_lots',
+			recordId: lotBarcode,
+			action: 'CHECKOUT',
+			changedBy: locals.user.username,
+			changedAt: now,
+			oldData: { cartridgeCount: remainingAfter + count },
+			newData: { cartridgeCount: remainingAfter, removalGroupId: removalId, count, reason },
+			reason: `Manual pre-wax removal: ${reason}`
+		});
+
+		return {
+			removeBackingLot: {
+				success: true,
+				removalId,
+				lotBarcode,
+				count,
+				remaining: remainingAfter,
+				consumed: remainingAfter <= 0
 			}
 		};
 	}

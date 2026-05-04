@@ -6,13 +6,17 @@
 		id: string;
 		cartridgeIds: string[];
 		cartridgeCount: number;
+		backingLotId: string | null;
 		reason: string;
 		operatorUsername: string;
 		removedAt: string;
 	}
 	interface Props {
 		data: { removalHistory: RemovalHistoryEntry[] };
-		form: { removeWaxStored?: { error?: string; success?: boolean; removalId?: string; count?: number } } | null;
+		form: {
+			removeWaxStored?: { error?: string; success?: boolean; removalId?: string; count?: number };
+			removeBackingLot?: { error?: string; success?: boolean; removalId?: string; lotBarcode?: string; count?: number; remaining?: number; consumed?: boolean };
+		} | null;
 	}
 	let { data, form }: Props = $props();
 
@@ -23,6 +27,13 @@
 	let lastScanError = $state('');
 	let scanInputEl: HTMLInputElement | undefined = $state();
 	let expandedGroupId = $state<string | null>(null);
+
+	// Pre-wax (backing-lot) removal form state
+	let blLotBarcode = $state('');
+	let blCount = $state(1);
+	let blReason = $state('');
+	let blSubmitting = $state(false);
+	let blLotInputEl: HTMLInputElement | undefined = $state();
 
 	function addScan() {
 		const v = scanInput.trim();
@@ -65,6 +76,21 @@
 				lastScanError = '';
 				await invalidateAll();
 				scanInputEl?.focus();
+			}
+		};
+	}
+
+	function submitBackingLotRemoval() {
+		return async ({ update }: { update: () => Promise<void> }) => {
+			blSubmitting = true;
+			await update();
+			blSubmitting = false;
+			if (form?.removeBackingLot?.success) {
+				blLotBarcode = '';
+				blCount = 1;
+				blReason = '';
+				await invalidateAll();
+				blLotInputEl?.focus();
 			}
 		};
 	}
@@ -216,6 +242,95 @@
 		</form>
 	</div>
 
+	<!-- Pre-wax removal: scan a BackingLot barcode + headcount. Cartridges at
+	     this stage have no individual UUID, so we just decrement the lot. -->
+	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6">
+		<div class="mb-4">
+			<h2 class="text-xl font-semibold text-[var(--color-tron-text)]">Pre-Wax Removal (Backing Lot)</h2>
+			<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">
+				Scan a backing-lot bucket barcode and enter how many cartridges to remove from the oven before wax filling.
+				This decrements the lot's headcount the same way wax-deck loading would, but creates no cartridge records.
+			</p>
+		</div>
+
+		<form
+			method="POST"
+			action="?/removeFromBackingLot"
+			use:enhance={submitBackingLotRemoval}
+			class="grid gap-4 lg:grid-cols-[1fr_1fr]"
+		>
+			<div class="flex flex-col gap-3">
+				<div>
+					<label for="backing-lot-scan" class="block text-xs font-medium text-[var(--color-tron-text-secondary)] uppercase tracking-wider">
+						Backing Lot Barcode
+					</label>
+					<input
+						bind:this={blLotInputEl}
+						bind:value={blLotBarcode}
+						id="backing-lot-scan"
+						name="lotBarcode"
+						type="text"
+						placeholder="Scan bucket barcode"
+						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm font-mono text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+						autocomplete="off"
+						disabled={blSubmitting}
+					/>
+				</div>
+				<div>
+					<label for="backing-lot-count" class="block text-xs font-medium text-[var(--color-tron-text-secondary)] uppercase tracking-wider">
+						Quantity to Remove
+					</label>
+					<input
+						bind:value={blCount}
+						id="backing-lot-count"
+						name="count"
+						type="number"
+						min="1"
+						step="1"
+						class="mt-1 w-32 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm tabular-nums text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+						disabled={blSubmitting}
+					/>
+				</div>
+			</div>
+
+			<div class="flex flex-col gap-3">
+				<div>
+					<label for="backing-lot-reason" class="block text-xs font-medium text-[var(--color-tron-text-secondary)] uppercase tracking-wider">
+						Reason
+					</label>
+					<textarea
+						id="backing-lot-reason"
+						name="reason"
+						bind:value={blReason}
+						rows="3"
+						placeholder="Why are these cartridges being removed before wax filling? (required)"
+						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+						disabled={blSubmitting}
+					></textarea>
+				</div>
+
+				{#if form?.removeBackingLot?.error}
+					<div class="rounded border border-[var(--color-tron-red)]/50 bg-red-900/20 px-3 py-2 text-xs text-red-300">
+						{form.removeBackingLot.error}
+					</div>
+				{:else if form?.removeBackingLot?.success}
+					<div class="rounded border border-emerald-500/50 bg-emerald-900/20 px-3 py-2 text-xs text-emerald-300">
+						Removed {form.removeBackingLot.count} cartridge{form.removeBackingLot.count === 1 ? '' : 's'} from {form.removeBackingLot.lotBarcode}.
+						{form.removeBackingLot.consumed ? 'Lot is now empty (status → consumed).' : `${form.removeBackingLot.remaining} remaining in lot.`}
+					</div>
+				{/if}
+
+				<button
+					type="submit"
+					disabled={blSubmitting || !blLotBarcode.trim() || !blReason.trim() || !(blCount > 0)}
+					class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-4 py-2 text-sm font-medium text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40 disabled:cursor-not-allowed"
+				>
+					{blSubmitting ? 'Removing…' : `Remove ${blCount > 0 ? blCount : ''} from Lot`}
+				</button>
+			</div>
+		</form>
+	</div>
+
 	<div>
 		<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">Recent Checkouts</h3>
 		{#if data.removalHistory.length === 0}
@@ -238,18 +353,28 @@
 								<td class="px-3 py-2 font-mono">{formatDate(entry.removedAt)}</td>
 								<td class="px-3 py-2">{entry.operatorUsername}</td>
 								<td class="px-3 py-2 text-right tabular-nums">{entry.cartridgeCount}</td>
-								<td class="px-3 py-2 text-[var(--color-tron-text-secondary)]">{entry.reason}</td>
+								<td class="px-3 py-2 text-[var(--color-tron-text-secondary)]">
+									{#if entry.backingLotId}
+										<span class="mr-2 rounded border border-amber-500/40 bg-amber-900/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-amber-300">Pre-wax</span>
+										<span class="font-mono text-[var(--color-tron-text)]">{entry.backingLotId}</span>
+										{#if entry.reason} — {entry.reason}{/if}
+									{:else}
+										{entry.reason}
+									{/if}
+								</td>
 								<td class="px-3 py-2">
-									<button
-										type="button"
-										onclick={() => toggleGroup(entry.id)}
-										class="text-[var(--color-tron-cyan)] hover:underline"
-									>
-										{expandedGroupId === entry.id ? 'Hide' : 'Cartridges'}
-									</button>
+									{#if entry.cartridgeIds.length > 0}
+										<button
+											type="button"
+											onclick={() => toggleGroup(entry.id)}
+											class="text-[var(--color-tron-cyan)] hover:underline"
+										>
+											{expandedGroupId === entry.id ? 'Hide' : 'Cartridges'}
+										</button>
+									{/if}
 								</td>
 							</tr>
-							{#if expandedGroupId === entry.id}
+							{#if expandedGroupId === entry.id && entry.cartridgeIds.length > 0}
 								<tr class="bg-[var(--color-tron-bg)]/40">
 									<td colspan="5" class="px-3 py-2">
 										<div class="flex flex-wrap gap-1">
