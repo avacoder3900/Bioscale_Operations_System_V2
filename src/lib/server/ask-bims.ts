@@ -5,15 +5,17 @@ import {
 	PartDefinition, Equipment, CartridgeRecord, ReagentBatchRecord
 } from './db';
 
-const MODEL = 'claude-sonnet-4-6';
+export type AskBimsModel = 'claude-haiku-4-5' | 'claude-sonnet-4-6' | 'claude-opus-4-7';
 
-// USD per million tokens (Sonnet 4.6, Anthropic 1P API)
-const PRICE = {
-	input: 3.0,
-	cacheWrite5m: 3.75,
-	cacheRead: 0.30,
-	output: 15.0
-} as const;
+export const ALLOWED_MODELS: AskBimsModel[] = ['claude-haiku-4-5', 'claude-sonnet-4-6', 'claude-opus-4-7'];
+export const DEFAULT_MODEL: AskBimsModel = 'claude-sonnet-4-6';
+
+// USD per million tokens (Anthropic 1P API rates as of 2026-05)
+const PRICING: Record<AskBimsModel, { input: number; cacheWrite5m: number; cacheRead: number; output: number }> = {
+	'claude-haiku-4-5':   { input: 1.0, cacheWrite5m: 1.25, cacheRead: 0.10, output: 5.0 },
+	'claude-sonnet-4-6':  { input: 3.0, cacheWrite5m: 3.75, cacheRead: 0.30, output: 15.0 },
+	'claude-opus-4-7':    { input: 5.0, cacheWrite5m: 6.25, cacheRead: 0.50, output: 25.0 }
+};
 
 let _client: Anthropic | null = null;
 function getClient(): Anthropic | null {
@@ -111,7 +113,40 @@ const TOOLS: Anthropic.Tool[] = [
 			type: 'object',
 			properties: {
 				equipmentType: { type: 'string', description: 'fridge, oven, deck, etc.' }
+			}
+		}
+	},
+	{
+		name: 'get_run_yield',
+		description: 'Yield breakdown (accepted/scrapped/pending QC) for a specific wax filling run by runId. Use when the user asks about yield, scrap rate, or QC results for a particular run.',
+		input_schema: {
+			type: 'object',
+			properties: {
+				runId: { type: 'string', description: 'WaxFillingRun _id' }
 			},
+			required: ['runId']
+		}
+	},
+	{
+		name: 'trace_cartridge',
+		description: 'Full lineage trace for a single cartridge: backing lot, wax run, wax lot, QC outcome, storage location, reagent run if any. Use for any "where did this cartridge come from" or "what lots went into this" question.',
+		input_schema: {
+			type: 'object',
+			properties: {
+				cartridgeId: { type: 'string', description: 'CartridgeRecord _id' }
+			},
+			required: ['cartridgeId']
+		}
+	},
+	{
+		name: 'count_cartridges_by_status',
+		description: 'Count cartridges grouped by status, optionally filtered to a recent time window. Use for "how many cartridges were made today" type questions.',
+		input_schema: {
+			type: 'object',
+			properties: {
+				sinceHours: { type: 'number', description: 'Only count cartridges created in the last N hours (default: all-time)' }
+			},
+			// cache_control on the last tool caches all tools + system together (when prefix ≥ 2048 tokens on Sonnet 4.6)
 			cache_control: { type: 'ephemeral' }
 		}
 	}
@@ -231,6 +266,104 @@ async function runTool(name: string, input: any): Promise<any> {
 				lastTemperatureReadAt: e.lastTemperatureReadAt
 			}));
 		}
+		case 'get_run_yield': {
+			const run = await WaxFillingRun.findById(input.runId).lean() as any;
+			if (!run) return { error: `Run not found: ${input.runId}` };
+			const cartridgeIds: string[] = run.cartridgeIds ?? [];
+			const carts = await CartridgeRecord.find({ _id: { $in: cartridgeIds } })
+				.select('_id status waxQc.status').lean() as any[];
+			const counts: Record<string, number> = {};
+			let accepted = 0, scrapped = 0, pendingQc = 0;
+			for (const c of carts) {
+				const s = c.status ?? 'unknown';
+				counts[s] = (counts[s] ?? 0) + 1;
+				const qc = c.waxQc?.status;
+				if (qc === 'accepted') accepted++;
+				else if (qc === 'scrapped' || qc === 'rejected') scrapped++;
+				else pendingQc++;
+			}
+			const total = cartridgeIds.length;
+			return {
+				runId: run._id,
+				runStatus: run.status,
+				cartridgeCount: total,
+				qc: {
+					accepted,
+					scrapped,
+					pendingQc,
+					yieldPct: total > 0 ? Math.round((accepted / total) * 1000) / 10 : null
+				},
+				cartridgeStatusCounts: counts,
+				operator: run.operator?.username,
+				robot: run.robot?.name,
+				runStartTime: run.runStartTime,
+				runEndTime: run.runEndTime
+			};
+		}
+		case 'trace_cartridge': {
+			const cart = await CartridgeRecord.findById(input.cartridgeId).lean() as any;
+			if (!cart) return { error: `Cartridge not found: ${input.cartridgeId}` };
+			let waxRun: any = null;
+			if (cart.waxFilling?.runId) {
+				waxRun = await WaxFillingRun.findById(cart.waxFilling.runId)
+					.select('_id status operator robot waxLotId waxBatchId runStartTime runEndTime').lean();
+			}
+			let waxBatch: any = null;
+			if (waxRun?.waxBatchId) {
+				waxBatch = await WaxBatch.findById(waxRun.waxBatchId)
+					.select('lotNumber lotBarcode createdAt').lean();
+			}
+			return {
+				cartridgeId: cart._id,
+				status: cart.status,
+				createdAt: cart.createdAt,
+				backing: {
+					lotId: cart.backing?.lotId,
+					inductedAt: cart.backing?.inductedAt,
+					inductedBy: cart.backing?.inductedBy?.username
+				},
+				waxFilling: waxRun ? {
+					runId: waxRun._id,
+					runStatus: waxRun.status,
+					operator: waxRun.operator?.username,
+					robot: waxRun.robot?.name,
+					runStartTime: waxRun.runStartTime,
+					runEndTime: waxRun.runEndTime,
+					waxLot: waxBatch ? { lotNumber: waxBatch.lotNumber, lotBarcode: waxBatch.lotBarcode } : null
+				} : null,
+				waxQc: cart.waxQc ? {
+					status: cart.waxQc.status,
+					inspector: cart.waxQc.inspector?.username,
+					inspectedAt: cart.waxQc.inspectedAt,
+					notes: cart.waxQc.notes
+				} : null,
+				waxStorage: cart.waxStorage ? {
+					location: cart.waxStorage.location,
+					storedAt: cart.waxStorage.storedAt
+				} : null,
+				reagentFilling: cart.reagentFilling ? {
+					runId: cart.reagentFilling.runId,
+					completedAt: cart.reagentFilling.completedAt
+				} : null
+			};
+		}
+		case 'count_cartridges_by_status': {
+			const filter: any = {};
+			if (input.sinceHours) {
+				filter.createdAt = { $gte: new Date(Date.now() - input.sinceHours * 3600e3) };
+			}
+			const agg = await CartridgeRecord.aggregate([
+				{ $match: filter },
+				{ $group: { _id: '$status', count: { $sum: 1 } } },
+				{ $sort: { count: -1 } }
+			]);
+			const total = agg.reduce((s: number, g: any) => s + g.count, 0);
+			return {
+				total,
+				byStatus: agg.map((g: any) => ({ status: g._id ?? 'unknown', count: g.count })),
+				windowHours: input.sinceHours ?? 'all-time'
+			};
+		}
 	}
 	return { error: `Unknown tool: ${name}` };
 }
@@ -260,23 +393,28 @@ export interface AskBimsResult {
 	answer: string;
 	toolCalls: Array<{ name: string; input: any; result: any }>;
 	usage?: AskBimsUsage;
+	model?: AskBimsModel;
 	error?: string;
 }
 
-function calcCost(u: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }): number {
+function calcCost(model: AskBimsModel, u: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }): number {
+	const p = PRICING[model];
 	return (
-		u.inputTokens * PRICE.input +
-		u.cacheWriteTokens * PRICE.cacheWrite5m +
-		u.cacheReadTokens * PRICE.cacheRead +
-		u.outputTokens * PRICE.output
+		u.inputTokens * p.input +
+		u.cacheWriteTokens * p.cacheWrite5m +
+		u.cacheReadTokens * p.cacheRead +
+		u.outputTokens * p.output
 	) / 1_000_000;
 }
 
+export interface AskBimsOpts {
+	model?: AskBimsModel;
+}
+
 /**
- * Agent loop using Anthropic tool-use. Accepts conversation history so the
- * caller can maintain a chat session.
+ * Agent loop using Anthropic tool-use. Accepts conversation history + an optional model override.
  */
-export async function askBims(history: AskBimsMessage[]): Promise<AskBimsResult> {
+export async function askBims(history: AskBimsMessage[], opts: AskBimsOpts = {}): Promise<AskBimsResult> {
 	const client = getClient();
 	if (!client) {
 		return { answer: '', toolCalls: [], error: 'ANTHROPIC_API_KEY not configured on the server.' };
@@ -284,6 +422,10 @@ export async function askBims(history: AskBimsMessage[]): Promise<AskBimsResult>
 	if (history.length === 0 || history[history.length - 1].role !== 'user') {
 		return { answer: '', toolCalls: [], error: 'Last message must be from user.' };
 	}
+
+	const model: AskBimsModel = ALLOWED_MODELS.includes(opts.model as AskBimsModel)
+		? (opts.model as AskBimsModel)
+		: DEFAULT_MODEL;
 
 	const messages: Anthropic.MessageParam[] = history.map(h => ({
 		role: h.role,
@@ -298,7 +440,7 @@ export async function askBims(history: AskBimsMessage[]): Promise<AskBimsResult>
 		let response: Anthropic.Message;
 		try {
 			response = await client.messages.create({
-				model: MODEL,
+				model,
 				max_tokens: 4096,
 				system: [
 					{
@@ -312,10 +454,10 @@ export async function askBims(history: AskBimsMessage[]): Promise<AskBimsResult>
 			});
 		} catch (err: any) {
 			if (err instanceof Anthropic.RateLimitError) {
-				return { answer: '', toolCalls, usage: { ...usage, estCostUsd: calcCost(usage) }, error: 'Anthropic rate limit hit. Please retry in a moment.' };
+				return { answer: '', toolCalls, model, usage: { ...usage, estCostUsd: calcCost(model, usage) }, error: 'Anthropic rate limit hit. Please retry in a moment.' };
 			}
 			if (err instanceof Anthropic.AuthenticationError) {
-				return { answer: '', toolCalls, error: 'ANTHROPIC_API_KEY is invalid.' };
+				return { answer: '', toolCalls, model, error: 'ANTHROPIC_API_KEY is invalid.' };
 			}
 			throw err;
 		}
@@ -336,7 +478,8 @@ export async function askBims(history: AskBimsMessage[]): Promise<AskBimsResult>
 			return {
 				answer: text,
 				toolCalls,
-				usage: { ...usage, estCostUsd: calcCost(usage) }
+				model,
+				usage: { ...usage, estCostUsd: calcCost(model, usage) }
 			};
 		}
 
@@ -368,7 +511,8 @@ export async function askBims(history: AskBimsMessage[]): Promise<AskBimsResult>
 	return {
 		answer: '',
 		toolCalls,
-		usage: { ...usage, estCostUsd: calcCost(usage) },
+		model,
+		usage: { ...usage, estCostUsd: calcCost(model, usage) },
 		error: 'Agent exceeded max iterations without a final answer.'
 	};
 }

@@ -1,4 +1,6 @@
 <script lang="ts">
+	type ModelId = 'claude-haiku-4-5' | 'claude-sonnet-4-6' | 'claude-opus-4-7';
+
 	interface Usage {
 		inputTokens: number;
 		outputTokens: number;
@@ -12,13 +14,22 @@
 		content: string;
 		toolCalls?: Array<{ name: string; input: any; result: any }>;
 		usage?: Usage;
+		model?: ModelId;
 		error?: string;
 	}
+
+	interface Props {
+		data: { canUseOpus: boolean };
+	}
+	let { data }: Props = $props();
 
 	let messages = $state<Message[]>([]);
 	let input = $state('');
 	let submitting = $state(false);
 	let listEl: HTMLDivElement | undefined = $state();
+	let model = $state<ModelId>('claude-sonnet-4-6');
+
+	const BUDGET_WARN_USD = 1.0;
 
 	const sessionTotals = $derived.by(() => {
 		let tokens = 0;
@@ -32,6 +43,12 @@
 		return { tokens, costUsd };
 	});
 
+	const MODEL_LABELS: Record<ModelId, string> = {
+		'claude-haiku-4-5': 'Haiku 4.5 — fastest, cheapest',
+		'claude-sonnet-4-6': 'Sonnet 4.6 — balanced (default)',
+		'claude-opus-4-7': 'Opus 4.7 — most capable (admin)'
+	};
+
 	function msgTokens(u: Usage): number {
 		return u.inputTokens + u.outputTokens + u.cacheReadTokens + u.cacheWriteTokens;
 	}
@@ -41,13 +58,19 @@
 		'What is the temperature of the CLIA Freezer right now?',
 		'Show me all runs from the last 24 hours',
 		'Which parts do I need to reorder?',
-		'Are there any unacknowledged temperature alerts?'
+		'Are there any unacknowledged temperature alerts?',
+		'How many cartridges did we make today?'
 	];
 
 	async function submit(e?: Event) {
 		e?.preventDefault();
 		const text = input.trim();
 		if (!text || submitting) return;
+
+		if (sessionTotals.costUsd >= BUDGET_WARN_USD) {
+			const ok = confirm(`This session has spent $${sessionTotals.costUsd.toFixed(2)}. Continue?`);
+			if (!ok) return;
+		}
 
 		const userMsg: Message = { role: 'user', content: text };
 		messages = [...messages, userMsg];
@@ -59,7 +82,8 @@
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({
-					history: messages.map(m => ({ role: m.role, content: m.content }))
+					history: messages.map(m => ({ role: m.role, content: m.content })),
+					model
 				})
 			});
 			const body = await res.json();
@@ -68,6 +92,7 @@
 				content: body.answer ?? '',
 				toolCalls: body.toolCalls,
 				usage: body.usage,
+				model: body.model,
 				error: body.error
 			};
 			messages = [...messages, assistantMsg];
@@ -100,7 +125,7 @@
 			{#if sessionTotals.tokens > 0}
 				<div class="text-right text-xs text-[var(--color-tron-text-secondary)]">
 					<div>Session: {sessionTotals.tokens.toLocaleString()} tokens</div>
-					<div class="font-mono text-[var(--color-tron-cyan)]">${sessionTotals.costUsd.toFixed(4)}</div>
+					<div class="font-mono {sessionTotals.costUsd >= BUDGET_WARN_USD ? 'text-[var(--color-tron-yellow)]' : 'text-[var(--color-tron-cyan)]'}">${sessionTotals.costUsd.toFixed(4)}</div>
 				</div>
 			{/if}
 			{#if messages.length > 0}
@@ -113,6 +138,22 @@
 				</button>
 			{/if}
 		</div>
+	</div>
+
+	<!-- Model selector -->
+	<div class="flex items-center gap-2 text-xs">
+		<label for="model-select" class="text-[var(--color-tron-text-secondary)]">Model:</label>
+		<select
+			id="model-select"
+			bind:value={model}
+			class="tron-input rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-2 py-1 text-xs text-[var(--color-tron-text)]"
+		>
+			<option value="claude-haiku-4-5">{MODEL_LABELS['claude-haiku-4-5']}</option>
+			<option value="claude-sonnet-4-6">{MODEL_LABELS['claude-sonnet-4-6']}</option>
+			{#if data.canUseOpus}
+				<option value="claude-opus-4-7">{MODEL_LABELS['claude-opus-4-7']}</option>
+			{/if}
+		</select>
 	</div>
 
 	<!-- Messages -->
@@ -162,7 +203,9 @@
 								{/if}
 								{#if msg.usage}
 									<div class="mt-2 flex justify-between gap-3 border-t border-[var(--color-tron-border)] pt-2 font-mono text-[10px] text-[var(--color-tron-text-secondary)]">
-										<span>{msgTokens(msg.usage).toLocaleString()} tok (in {msg.usage.inputTokens.toLocaleString()} · out {msg.usage.outputTokens.toLocaleString()}{msg.usage.cacheReadTokens > 0 ? ` · cache-rd ${msg.usage.cacheReadTokens.toLocaleString()}` : ''}{msg.usage.cacheWriteTokens > 0 ? ` · cache-wr ${msg.usage.cacheWriteTokens.toLocaleString()}` : ''})</span>
+										<span>
+											{msg.model ?? ''} · {msgTokens(msg.usage).toLocaleString()} tok (in {msg.usage.inputTokens.toLocaleString()} · out {msg.usage.outputTokens.toLocaleString()}{msg.usage.cacheReadTokens > 0 ? ` · cache-rd ${msg.usage.cacheReadTokens.toLocaleString()}` : ''}{msg.usage.cacheWriteTokens > 0 ? ` · cache-wr ${msg.usage.cacheWriteTokens.toLocaleString()}` : ''})
+										</span>
 										<span class="text-[var(--color-tron-cyan)]">${msg.usage.estCostUsd.toFixed(4)}</span>
 									</div>
 								{/if}

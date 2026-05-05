@@ -5,6 +5,7 @@
 	import { page, navigating } from '$app/stores';
 	import { enhance } from '$app/forms';
 	import GridBackground from '$lib/components/ui/GridBackground.svelte';
+	import AskBimsWidget from '$lib/components/ask-bims/AskBimsWidget.svelte';
 
 	interface Props {
 		children: Snippet;
@@ -371,3 +372,5 @@
 		</main>
 	</div>
 </GridBackground>
+
+<AskBimsWidget />
