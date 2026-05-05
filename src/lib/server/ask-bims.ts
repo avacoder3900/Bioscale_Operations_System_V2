@@ -1,5 +1,4 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { env } from '$env/dynamic/private';
 import {
 	connectDB, WaxBatch, WaxFillingRun, TemperatureAlert,
 	PartDefinition, Equipment, CartridgeRecord, ReagentBatchRecord,
@@ -21,8 +20,9 @@ const PRICING: Record<AskBimsModel, { input: number; cacheWrite5m: number; cache
 let _client: Anthropic | null = null;
 function getClient(): Anthropic | null {
 	if (_client) return _client;
-	if (!env.ANTHROPIC_API_KEY) return null;
-	_client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+	const apiKey = process.env.ANTHROPIC_API_KEY;
+	if (!apiKey) return null;
+	_client = new Anthropic({ apiKey });
 	return _client;
 }
 
