@@ -16,7 +16,7 @@
 
 export interface TestQuestion {
 	id: string;
-	category: 'wax' | 'temperature' | 'runs' | 'cartridges' | 'inventory' | 'equipment' | 'anti-overlap' | 'redirection';
+	category: 'wax' | 'temperature' | 'runs' | 'cartridges' | 'inventory' | 'equipment' | 'anti-overlap' | 'redirection' | 'phase2';
 	text: string;
 	requiredTools: string[];
 	forbiddenTools?: string[];
@@ -174,6 +174,36 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		text: 'What part was in receiving lot bag-12345?',
 		requiredTools: ['find_receiving_lot'],
 		forbiddenTools: ['find_part']
+	},
+
+	// === Phase 2 — operational coverage ===
+	{
+		id: 'phase2-active-runs',
+		category: 'phase2',
+		text: 'What runs are active right now?',
+		requiredTools: ['list_active_runs'],
+		forbiddenTools: ['list_recent_runs']
+	},
+	{
+		id: 'phase2-cartridges-in-storage',
+		category: 'phase2',
+		text: 'How many cartridges are currently in wax storage?',
+		requiredTools: ['list_cartridges_in_storage'],
+		notes: 'count_cartridges_by_status would also work but list_cartridges_in_storage is more specific.'
+	},
+	{
+		id: 'phase2-calibrations-due',
+		category: 'phase2',
+		text: 'What equipment is due for calibration in the next 30 days?',
+		requiredTools: ['list_calibrations_due'],
+		forbiddenTools: ['list_equipment']
+	},
+	{
+		id: 'phase2-temperature-history',
+		category: 'phase2',
+		text: 'Show me temperature history for the cartridge oven over the last 24 hours.',
+		requiredTools: ['get_temperature_history'],
+		forbiddenTools: ['get_current_temperatures', 'get_temperature_alerts']
 	},
 ];
 

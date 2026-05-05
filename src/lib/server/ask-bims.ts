@@ -2,8 +2,30 @@ import Anthropic from '@anthropic-ai/sdk';
 import {
 	connectDB, WaxBatch, WaxFillingRun, TemperatureAlert,
 	PartDefinition, Equipment, CartridgeRecord, ReagentBatchRecord,
-	ReceivingLot
+	ReceivingLot, CalibrationRecord, ServiceTicket, TemperatureReading,
+	WorkInstruction, LotRecord
 } from './db';
+
+/**
+ * Denied collections (principle #9 — never queryable through Ask BIMS):
+ *   - User, Session, InviteToken (auth)
+ *   - ElectronicSignature (legal artifact)
+ *   - Integration, WebhookLog (credentials/tokens)
+ *   - DeviceLog (may contain device tokens)
+ * Enforcement is structural: no tool below queries these collections. Adding a
+ * tool that touches them is a code-review block.
+ */
+
+/**
+ * Tool kill-switch — env var ASK_BIMS_DISABLED_TOOLS is a comma-separated list
+ * of tool names that will be filtered OUT before sending to Claude. Set this
+ * via Vercel env to disable a buggy tool without a code deploy.
+ * Example: ASK_BIMS_DISABLED_TOOLS=trace_cartridge,find_receiving_lot
+ */
+function getDisabledTools(): Set<string> {
+	const raw = process.env.ASK_BIMS_DISABLED_TOOLS ?? '';
+	return new Set(raw.split(',').map(s => s.trim()).filter(Boolean));
+}
 
 export type AskBimsModel = 'claude-haiku-4-5' | 'claude-sonnet-4-6' | 'claude-opus-4-7';
 
@@ -218,7 +240,71 @@ Use when: "how many cartridges did we make today", "current state of the floor",
 			type: 'object',
 			properties: {
 				sinceHours: { type: 'number', description: 'Only count cartridges created in the last N hours (default: all-time)' }
+			}
+		}
+	},
+	{
+		name: 'get_run_details',
+		description: `Full record for one wax-filling or reagent-filling run by runId. Includes operator, robot, deck, cartridge IDs, status, abort reasons, notes, runStart/runEnd.
+Source: WaxFillingRun OR ReagentBatchRecord (auto-detected by ID).
+
+Use when: "tell me about run X", "what happened in run Y", "details for runId Z".
+Don't use for: yield breakdown (use get_run_yield) or listing recent runs (use list_recent_runs).`,
+		input_schema: {
+			type: 'object',
+			properties: { runId: { type: 'string' } },
+			required: ['runId']
+		}
+	},
+	{
+		name: 'list_active_runs',
+		description: `Runs currently in non-terminal status across wax filling, reagent filling, and WI-01 backing.
+Source: WaxFillingRun + ReagentBatchRecord + LotRecord (statuses NOT in [completed, aborted, voided]).
+
+Use when: "what's running now", "active runs", "what's on the floor right now".`,
+		input_schema: { type: 'object', properties: {} }
+	},
+	{
+		name: 'list_cartridges_in_storage',
+		description: `Cartridges currently in wax_stored status, optionally filtered to a fridge.
+Source: CartridgeRecord with status=wax_stored.
+
+Use when: "what's in storage", "carts in the freezer", "stored carts in fridge X".`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				fridgeId: { type: 'string', description: 'Equipment._id of the fridge (optional)' },
+				limit: { type: 'number', description: 'Default 50, capped at 500' }
+			}
+		}
+	},
+	{
+		name: 'list_calibrations_due',
+		description: `Equipment with nextCalibrationDue within the window (default 30 days ahead).
+Source: CalibrationRecord (most recent per equipment).
+
+Use when: "what's due for calibration", "upcoming calibrations", "what needs recalibrating".`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				daysAhead: { type: 'number', description: 'Window in days (default 30)' },
+				equipmentType: { type: 'string', description: 'Filter by type — magnetometer, thermocouple, lux, spectrophotometer, etc.' }
+			}
+		}
+	},
+	{
+		name: 'get_temperature_history',
+		description: `Time-series temperature readings for one sensor, with min/max/avg summary and up to 50 sample points.
+Source: TemperatureReading (joined to Equipment by name).
+
+Use when: "temperature history of X", "show last 24h temps for fridge Y", "how stable was the temp".`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				equipmentName: { type: 'string', description: 'Sensor or equipment name (case-insensitive partial match)' },
+				sinceHours: { type: 'number', description: 'Window in hours (default 24, max 168)' }
 			},
+			required: ['equipmentName'],
 			cache_control: { type: 'ephemeral' }
 		}
 	}
@@ -634,6 +720,191 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 				sourceUrl: '/cartridge-admin'
 			};
 		}
+		case 'get_run_details': {
+			const runId = String(input.runId ?? '').trim();
+			if (!runId) return { error: 'runId required', source: 'WaxFillingRun', sourceUrl: '/manufacturing' };
+			let run: any = await WaxFillingRun.findById(runId).lean();
+			let runType = 'wax_filling';
+			if (!run) {
+				run = await ReagentBatchRecord.findById(runId).lean();
+				runType = 'reagent_filling';
+			}
+			if (!run) return { error: `Run not found: ${runId}`, source: 'WaxFillingRun + ReagentBatchRecord', sourceUrl: '/manufacturing' };
+			const integrityNotes: string[] = [];
+			if (runType === 'wax_filling' && !run.waxSourceLot) integrityNotes.push('waxSourceLot is null on this run — wax-source traceability incomplete.');
+			return {
+				runType,
+				runId: run._id,
+				status: run.status,
+				operator: run.operator?.username,
+				robot: run.robot?.name,
+				deckId: run.deckId,
+				cartridgeIds: (run.cartridgeIds ?? []).slice(0, 50),
+				cartridgeCount: run.cartridgeIds?.length ?? 0,
+				waxSourceLot: run.waxSourceLot ?? null,
+				assayType: run.assayType?.name,
+				notes: run.notes ?? [],
+				runStartTime: run.runStartTime,
+				runEndTime: run.runEndTime,
+				createdAt: run.createdAt,
+				source: runType === 'wax_filling' ? 'WaxFillingRun' : 'ReagentBatchRecord',
+				sourceUrl: `/cartridge-admin?runId=${encodeURIComponent(runId)}`,
+				dataIntegrityNotes: integrityNotes
+			};
+		}
+		case 'list_active_runs': {
+			const TERMINAL = ['completed', 'aborted', 'voided', 'archived'];
+			const waxRuns = await WaxFillingRun.find({ status: { $nin: TERMINAL } })
+				.select('_id status operator robot deckId waxSourceLot cartridgeIds runStartTime')
+				.sort({ runStartTime: -1 }).limit(20).lean() as any[];
+			const reagentRuns = await ReagentBatchRecord.find({ status: { $nin: TERMINAL } })
+				.select('_id status operator robot cartridgesFilled assayType')
+				.sort({ createdAt: -1 }).limit(20).lean().catch(() => []) as any[];
+			const lotRuns = await LotRecord.find({ status: { $nin: TERMINAL } })
+				.select('_id status processConfig outputLotNumber cartridgeIds')
+				.sort({ createdAt: -1 }).limit(20).lean().catch(() => []) as any[];
+			return {
+				waxFilling: waxRuns.map(r => ({
+					runId: r._id, status: r.status, robot: r.robot?.name,
+					operator: r.operator?.username, cartridgeCount: r.cartridgeIds?.length ?? 0,
+					runStartTime: r.runStartTime
+				})),
+				reagentFilling: reagentRuns.map(r => ({
+					runId: r._id, status: r.status, robot: r.robot?.name,
+					operator: r.operator?.username, assay: r.assayType?.name
+				})),
+				wi01Backing: lotRuns.map(r => ({
+					lotRecordId: r._id, status: r.status, outputLot: r.outputLotNumber,
+					cartridgeCount: r.cartridgeIds?.length ?? 0
+				})),
+				source: 'WaxFillingRun + ReagentBatchRecord + LotRecord (status not in completed/aborted/voided/archived)',
+				sourceUrl: '/manufacturing'
+			};
+		}
+		case 'list_cartridges_in_storage': {
+			const filter: any = { status: 'wax_stored' };
+			if (input.fridgeId) filter['waxStorage.locationId'] = input.fridgeId;
+			const limit = Math.min(input.limit ?? 50, 500);
+			const carts = await CartridgeRecord.find(filter)
+				.select('_id status waxStorage waxQc.status waxFilling.runId createdAt')
+				.sort({ 'waxStorage.storedAt': -1 })
+				.limit(limit + 1).lean() as any[];
+			const truncated = carts.length > limit;
+			return {
+				cartridges: carts.slice(0, limit).map(c => ({
+					cartridgeId: c._id,
+					qcStatus: c.waxQc?.status,
+					waxRunId: c.waxFilling?.runId,
+					storageLocation: c.waxStorage?.location,
+					storageFridgeId: c.waxStorage?.locationId,
+					storedAt: c.waxStorage?.storedAt
+				})),
+				totalReturned: Math.min(carts.length, limit),
+				truncated,
+				totalAvailable: truncated ? `>${limit}` : carts.length,
+				source: 'CartridgeRecord where status=wax_stored',
+				sourceUrl: '/cartridge-admin/storage'
+			};
+		}
+		case 'list_calibrations_due': {
+			const daysAhead = Math.min(Math.max(Number(input.daysAhead ?? 30), 1), 365);
+			const cutoff = new Date(Date.now() + daysAhead * 86400e3);
+			const filter: any = {
+				nextCalibrationDue: { $lte: cutoff }
+			};
+			const records = await CalibrationRecord.find(filter)
+				.select('_id equipmentId calibrationDate nextCalibrationDue status equipmentType')
+				.sort({ nextCalibrationDue: 1 })
+				.limit(100).lean() as any[];
+
+			let filtered = records;
+			if (input.equipmentType) {
+				filtered = records.filter(r => r.equipmentType === input.equipmentType);
+			}
+
+			// Hydrate equipment names
+			const equipmentIds = [...new Set(filtered.map(r => r.equipmentId).filter(Boolean))];
+			const equipment = await Equipment.find({ _id: { $in: equipmentIds } })
+				.select('_id name equipmentType').lean() as any[];
+			const eqMap = new Map(equipment.map(e => [e._id, e]));
+
+			return {
+				items: filtered.map(r => ({
+					equipmentId: r.equipmentId,
+					equipmentName: eqMap.get(r.equipmentId)?.name ?? 'unknown',
+					equipmentType: r.equipmentType ?? eqMap.get(r.equipmentId)?.equipmentType,
+					lastCalibrated: r.calibrationDate,
+					dueDate: r.nextCalibrationDue,
+					daysUntilDue: Math.round((new Date(r.nextCalibrationDue).getTime() - Date.now()) / 86400e3),
+					status: r.status
+				})),
+				windowDays: daysAhead,
+				source: 'CalibrationRecord where nextCalibrationDue <= now + windowDays',
+				sourceUrl: '/equipment/activity'
+			};
+		}
+		case 'get_temperature_history': {
+			const sensorName = String(input.equipmentName ?? '').trim();
+			if (!sensorName) return { error: 'equipmentName required', source: 'TemperatureReading', sourceUrl: '/equipment/activity' };
+			const sinceHours = Math.min(Math.max(Number(input.sinceHours ?? 24), 1), 168);
+
+			// Resolve equipment by name
+			const eq = await Equipment.findOne({ name: { $regex: sensorName, $options: 'i' } })
+				.select('_id name mocreoDeviceId temperatureMinC temperatureMaxC').lean() as any;
+			if (!eq) return {
+				error: `No equipment matching "${sensorName}"`,
+				source: 'Equipment + TemperatureReading',
+				sourceUrl: '/equipment/activity'
+			};
+
+			const since = new Date(Date.now() - sinceHours * 3600e3);
+			const readings = await TemperatureReading.find({
+				$or: [{ equipmentId: eq._id }, { sensorId: eq.mocreoDeviceId }],
+				timestamp: { $gte: since }
+			})
+				.select('temperature humidity timestamp')
+				.sort({ timestamp: -1 })
+				.limit(500).lean() as any[];
+
+			if (readings.length === 0) {
+				return {
+					equipmentName: eq.name,
+					windowHours: sinceHours,
+					readingCount: 0,
+					source: 'TemperatureReading',
+					sourceUrl: '/equipment/activity',
+					dataIntegrityNotes: [`No readings found for "${eq.name}" in the last ${sinceHours}h. Sensor may have lost connection or be misconfigured.`]
+				};
+			}
+
+			const temps = readings.map(r => r.temperature).filter((t: any) => typeof t === 'number');
+			const min = Math.min(...temps);
+			const max = Math.max(...temps);
+			const avg = temps.reduce((s, t) => s + t, 0) / temps.length;
+			const inSpec = eq.temperatureMinC != null
+				? temps.filter(t => t >= eq.temperatureMinC && t <= eq.temperatureMaxC).length
+				: null;
+			const samplePoints = readings.length > 50
+				? readings.filter((_, i) => i % Math.ceil(readings.length / 50) === 0).slice(0, 50)
+				: readings;
+
+			return {
+				equipmentName: eq.name,
+				windowHours: sinceHours,
+				readingCount: readings.length,
+				summary: {
+					minC: Math.round(min * 100) / 100,
+					maxC: Math.round(max * 100) / 100,
+					avgC: Math.round(avg * 100) / 100,
+					inSpecCount: inSpec,
+					inSpecPct: inSpec != null ? Math.round((inSpec / temps.length) * 1000) / 10 : null,
+					targetRange: eq.temperatureMinC != null ? `${eq.temperatureMinC} to ${eq.temperatureMaxC}°C` : null
+				},
+				samplePoints: samplePoints.map(r => ({ timestamp: r.timestamp, temperature: r.temperature })),
+				source: 'TemperatureReading',
+				sourceUrl: '/equipment/activity'
+			};
+		}
 	}
 	return { error: `Unknown tool: ${name}` };
 }
@@ -749,6 +1020,12 @@ export async function askBims(history: AskBimsMessage[], opts: AskBimsOpts = {})
 		content: h.content
 	}));
 
+	// Filter out disabled tools (env-flag kill-switch — principle #11)
+	const disabledTools = getDisabledTools();
+	const activeTools = disabledTools.size > 0
+		? TOOLS.filter(t => !disabledTools.has(t.name))
+		: TOOLS;
+
 	const toolCalls: AskBimsResult['toolCalls'] = [];
 	const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
 	const MAX_ITERATIONS = 8;
@@ -766,7 +1043,7 @@ export async function askBims(history: AskBimsMessage[], opts: AskBimsOpts = {})
 						cache_control: { type: 'ephemeral' }
 					}
 				],
-				tools: TOOLS,
+				tools: activeTools,
 				messages
 			});
 		} catch (err: any) {
