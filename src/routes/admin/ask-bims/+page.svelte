@@ -1,8 +1,17 @@
 <script lang="ts">
+	interface Usage {
+		inputTokens: number;
+		outputTokens: number;
+		cacheReadTokens: number;
+		cacheWriteTokens: number;
+		estCostUsd: number;
+	}
+
 	interface Message {
 		role: 'user' | 'assistant';
 		content: string;
 		toolCalls?: Array<{ name: string; input: any; result: any }>;
+		usage?: Usage;
 		error?: string;
 	}
 
@@ -10,6 +19,22 @@
 	let input = $state('');
 	let submitting = $state(false);
 	let listEl: HTMLDivElement | undefined = $state();
+
+	const sessionTotals = $derived.by(() => {
+		let tokens = 0;
+		let costUsd = 0;
+		for (const m of messages) {
+			if (m.usage) {
+				tokens += m.usage.inputTokens + m.usage.outputTokens + m.usage.cacheReadTokens + m.usage.cacheWriteTokens;
+				costUsd += m.usage.estCostUsd;
+			}
+		}
+		return { tokens, costUsd };
+	});
+
+	function msgTokens(u: Usage): number {
+		return u.inputTokens + u.outputTokens + u.cacheReadTokens + u.cacheWriteTokens;
+	}
 
 	const SAMPLE_PROMPTS = [
 		'What wax batches are running low?',
@@ -42,6 +67,7 @@
 				role: 'assistant',
 				content: body.answer ?? '',
 				toolCalls: body.toolCalls,
+				usage: body.usage,
 				error: body.error
 			};
 			messages = [...messages, assistantMsg];
@@ -70,15 +96,23 @@
 				Ask natural-language questions about manufacturing, inventory, temperature, and runs.
 			</p>
 		</div>
-		{#if messages.length > 0}
-			<button
-				type="button"
-				onclick={clearChat}
-				class="min-h-[44px] rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)]/30"
-			>
-				Clear chat
-			</button>
-		{/if}
+		<div class="flex items-center gap-3">
+			{#if sessionTotals.tokens > 0}
+				<div class="text-right text-xs text-[var(--color-tron-text-secondary)]">
+					<div>Session: {sessionTotals.tokens.toLocaleString()} tokens</div>
+					<div class="font-mono text-[var(--color-tron-cyan)]">${sessionTotals.costUsd.toFixed(4)}</div>
+				</div>
+			{/if}
+			{#if messages.length > 0}
+				<button
+					type="button"
+					onclick={clearChat}
+					class="min-h-[44px] rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)]/30"
+				>
+					Clear chat
+				</button>
+			{/if}
+		</div>
 	</div>
 
 	<!-- Messages -->
@@ -125,6 +159,12 @@
 											{/each}
 										</ul>
 									</details>
+								{/if}
+								{#if msg.usage}
+									<div class="mt-2 flex justify-between gap-3 border-t border-[var(--color-tron-border)] pt-2 font-mono text-[10px] text-[var(--color-tron-text-secondary)]">
+										<span>{msgTokens(msg.usage).toLocaleString()} tok (in {msg.usage.inputTokens.toLocaleString()} · out {msg.usage.outputTokens.toLocaleString()}{msg.usage.cacheReadTokens > 0 ? ` · cache-rd ${msg.usage.cacheReadTokens.toLocaleString()}` : ''}{msg.usage.cacheWriteTokens > 0 ? ` · cache-wr ${msg.usage.cacheWriteTokens.toLocaleString()}` : ''})</span>
+										<span class="text-[var(--color-tron-cyan)]">${msg.usage.estCostUsd.toFixed(4)}</span>
+									</div>
 								{/if}
 							{/if}
 						</div>

@@ -1,83 +1,93 @@
-import { GoogleGenerativeAI, SchemaType, type FunctionDeclaration, type Content } from '@google/generative-ai';
+import Anthropic from '@anthropic-ai/sdk';
 import { env } from '$env/dynamic/private';
 import {
 	connectDB, WaxBatch, WaxFillingRun, TemperatureAlert,
 	PartDefinition, Equipment, CartridgeRecord, ReagentBatchRecord
 } from './db';
 
-let _client: GoogleGenerativeAI | null = null;
-function getClient(): GoogleGenerativeAI | null {
+const MODEL = 'claude-sonnet-4-6';
+
+// USD per million tokens (Sonnet 4.6, Anthropic 1P API)
+const PRICE = {
+	input: 3.0,
+	cacheWrite5m: 3.75,
+	cacheRead: 0.30,
+	output: 15.0
+} as const;
+
+let _client: Anthropic | null = null;
+function getClient(): Anthropic | null {
 	if (_client) return _client;
-	if (!env.GEMINI_API_KEY) return null;
-	_client = new GoogleGenerativeAI(env.GEMINI_API_KEY);
+	if (!env.ANTHROPIC_API_KEY) return null;
+	_client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 	return _client;
 }
 
-const TOOLS: FunctionDeclaration[] = [
+const TOOLS: Anthropic.Tool[] = [
 	{
 		name: 'list_wax_batches',
 		description: 'List wax batches with optional filter for low remaining volume. Use this to answer questions about wax supply.',
-		parameters: {
-			type: SchemaType.OBJECT,
+		input_schema: {
+			type: 'object',
 			properties: {
-				maxRemainingUl: { type: SchemaType.NUMBER, description: 'Only return batches with remainingVolumeUl <= this value' },
-				limit: { type: SchemaType.NUMBER, description: 'Max results (default 20)' }
+				maxRemainingUl: { type: 'number', description: 'Only return batches with remainingVolumeUl <= this value' },
+				limit: { type: 'number', description: 'Max results (default 20)' }
 			}
 		}
 	},
 	{
 		name: 'get_temperature_alerts',
 		description: 'Recent temperature alerts (high_temp, low_temp, lost_connection) across all sensors.',
-		parameters: {
-			type: SchemaType.OBJECT,
+		input_schema: {
+			type: 'object',
 			properties: {
-				sinceHours: { type: SchemaType.NUMBER, description: 'Only alerts from the last N hours (default 24)' },
-				alertType: { type: SchemaType.STRING, description: 'One of: high_temp, low_temp, lost_connection' },
-				onlyUnacknowledged: { type: SchemaType.BOOLEAN, description: 'Only unacknowledged alerts' },
-				limit: { type: SchemaType.NUMBER }
+				sinceHours: { type: 'number', description: 'Only alerts from the last N hours (default 24)' },
+				alertType: { type: 'string', description: 'One of: high_temp, low_temp, lost_connection' },
+				onlyUnacknowledged: { type: 'boolean', description: 'Only unacknowledged alerts' },
+				limit: { type: 'number' }
 			}
 		}
 	},
 	{
 		name: 'get_current_temperatures',
 		description: 'Current temperature reading for each sensor/equipment. Useful for "what is the temperature of X right now".',
-		parameters: {
-			type: SchemaType.OBJECT,
+		input_schema: {
+			type: 'object',
 			properties: {
-				sensorName: { type: SchemaType.STRING, description: 'Optional filter by sensor/equipment name (case-insensitive partial match)' }
+				sensorName: { type: 'string', description: 'Optional filter by sensor/equipment name (case-insensitive partial match)' }
 			}
 		}
 	},
 	{
 		name: 'list_recent_runs',
 		description: 'Recent manufacturing runs (wax filling or reagent filling) with status, operator, cartridge count.',
-		parameters: {
-			type: SchemaType.OBJECT,
+		input_schema: {
+			type: 'object',
 			properties: {
-				runType: { type: SchemaType.STRING, description: 'One of: wax_filling, reagent_filling, any (default)' },
-				status: { type: SchemaType.STRING, description: 'Filter by status e.g. completed, aborted, running' },
-				sinceHours: { type: SchemaType.NUMBER, description: 'Default 24' },
-				limit: { type: SchemaType.NUMBER }
+				runType: { type: 'string', description: 'One of: wax_filling, reagent_filling, any (default)' },
+				status: { type: 'string', description: 'Filter by status e.g. completed, aborted, running' },
+				sinceHours: { type: 'number', description: 'Default 24' },
+				limit: { type: 'number' }
 			}
 		}
 	},
 	{
 		name: 'list_low_inventory_parts',
 		description: 'Parts with inventory below their reorder threshold. Useful for "what do I need to order".',
-		parameters: {
-			type: SchemaType.OBJECT,
+		input_schema: {
+			type: 'object',
 			properties: {
-				percentThreshold: { type: SchemaType.NUMBER, description: 'inventoryCount must be below minimumOrderQty * (1 + pct/100). Default 20%.' }
+				percentThreshold: { type: 'number', description: 'inventoryCount must be below minimumOrderQty * (1 + pct/100). Default 20%.' }
 			}
 		}
 	},
 	{
 		name: 'find_part',
 		description: 'Look up a part by partNumber, name, or barcode and return inventory, supplier, etc.',
-		parameters: {
-			type: SchemaType.OBJECT,
+		input_schema: {
+			type: 'object',
 			properties: {
-				query: { type: SchemaType.STRING, description: 'partNumber, name fragment, or barcode' }
+				query: { type: 'string', description: 'partNumber, name fragment, or barcode' }
 			},
 			required: ['query']
 		}
@@ -85,23 +95,24 @@ const TOOLS: FunctionDeclaration[] = [
 	{
 		name: 'find_cartridges',
 		description: 'Look up cartridge records by status or ID.',
-		parameters: {
-			type: SchemaType.OBJECT,
+		input_schema: {
+			type: 'object',
 			properties: {
-				cartridgeId: { type: SchemaType.STRING },
-				status: { type: SchemaType.STRING, description: 'e.g. backing, wax_filling, wax_stored, reagent_filled' },
-				limit: { type: SchemaType.NUMBER }
+				cartridgeId: { type: 'string' },
+				status: { type: 'string', description: 'e.g. backing, wax_filling, wax_stored, reagent_filled' },
+				limit: { type: 'number' }
 			}
 		}
 	},
 	{
 		name: 'list_equipment',
 		description: 'All equipment (fridges, ovens, decks) with current status and temperature if available.',
-		parameters: {
-			type: SchemaType.OBJECT,
+		input_schema: {
+			type: 'object',
 			properties: {
-				equipmentType: { type: SchemaType.STRING, description: 'fridge, oven, deck, etc.' }
-			}
+				equipmentType: { type: 'string', description: 'fridge, oven, deck, etc.' }
+			},
+			cache_control: { type: 'ephemeral' }
 		}
 	}
 ];
@@ -237,87 +248,127 @@ export interface AskBimsMessage {
 	content: string;
 }
 
+export interface AskBimsUsage {
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+	estCostUsd: number;
+}
+
 export interface AskBimsResult {
 	answer: string;
 	toolCalls: Array<{ name: string; input: any; result: any }>;
+	usage?: AskBimsUsage;
 	error?: string;
 }
 
+function calcCost(u: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }): number {
+	return (
+		u.inputTokens * PRICE.input +
+		u.cacheWriteTokens * PRICE.cacheWrite5m +
+		u.cacheReadTokens * PRICE.cacheRead +
+		u.outputTokens * PRICE.output
+	) / 1_000_000;
+}
+
 /**
- * Agent loop using Gemini function-calling. Accepts conversation history so
- * the caller can maintain a chat session.
+ * Agent loop using Anthropic tool-use. Accepts conversation history so the
+ * caller can maintain a chat session.
  */
 export async function askBims(history: AskBimsMessage[]): Promise<AskBimsResult> {
 	const client = getClient();
 	if (!client) {
-		return { answer: '', toolCalls: [], error: 'GEMINI_API_KEY not configured on the server.' };
+		return { answer: '', toolCalls: [], error: 'ANTHROPIC_API_KEY not configured on the server.' };
 	}
 	if (history.length === 0 || history[history.length - 1].role !== 'user') {
 		return { answer: '', toolCalls: [], error: 'Last message must be from user.' };
 	}
 
-	const model = client.getGenerativeModel({
-		model: 'gemini-2.0-flash',
-		systemInstruction: SYSTEM_PROMPT,
-		tools: [{ functionDeclarations: TOOLS }]
-	});
-
-	// Gemini uses content array with role/parts. Convert our history.
-	const contents: Content[] = history.map(h => ({
-		role: h.role === 'assistant' ? 'model' : 'user',
-		parts: [{ text: h.content }]
+	const messages: Anthropic.MessageParam[] = history.map(h => ({
+		role: h.role,
+		content: h.content
 	}));
 
 	const toolCalls: AskBimsResult['toolCalls'] = [];
+	const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
 	const MAX_ITERATIONS = 8;
 
 	for (let i = 0; i < MAX_ITERATIONS; i++) {
-		const result = await model.generateContent({ contents });
-		const response = result.response;
-		const candidate = response.candidates?.[0];
-		if (!candidate?.content?.parts) {
-			return { answer: '', toolCalls, error: 'No response from Gemini' };
+		let response: Anthropic.Message;
+		try {
+			response = await client.messages.create({
+				model: MODEL,
+				max_tokens: 4096,
+				system: [
+					{
+						type: 'text',
+						text: SYSTEM_PROMPT,
+						cache_control: { type: 'ephemeral' }
+					}
+				],
+				tools: TOOLS,
+				messages
+			});
+		} catch (err: any) {
+			if (err instanceof Anthropic.RateLimitError) {
+				return { answer: '', toolCalls, usage: { ...usage, estCostUsd: calcCost(usage) }, error: 'Anthropic rate limit hit. Please retry in a moment.' };
+			}
+			if (err instanceof Anthropic.AuthenticationError) {
+				return { answer: '', toolCalls, error: 'ANTHROPIC_API_KEY is invalid.' };
+			}
+			throw err;
 		}
 
-		const fnCalls = candidate.content.parts.filter(p => 'functionCall' in p && p.functionCall) as Array<{ functionCall: { name: string; args: any } }>;
+		usage.inputTokens += response.usage.input_tokens ?? 0;
+		usage.outputTokens += response.usage.output_tokens ?? 0;
+		usage.cacheReadTokens += response.usage.cache_read_input_tokens ?? 0;
+		usage.cacheWriteTokens += response.usage.cache_creation_input_tokens ?? 0;
 
-		if (fnCalls.length === 0) {
-			// Final answer — collect text parts
-			const text = candidate.content.parts
-				.map(p => ('text' in p ? p.text : ''))
-				.filter(Boolean)
+		const toolUseBlocks = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
+
+		if (response.stop_reason === 'end_turn' || toolUseBlocks.length === 0) {
+			const text = response.content
+				.filter((b): b is Anthropic.TextBlock => b.type === 'text')
+				.map(b => b.text)
 				.join('\n\n')
 				.trim();
-			return { answer: text, toolCalls };
+			return {
+				answer: text,
+				toolCalls,
+				usage: { ...usage, estCostUsd: calcCost(usage) }
+			};
 		}
 
-		// Append the model's function-call turn to history
-		contents.push({ role: 'model', parts: candidate.content.parts });
+		messages.push({ role: 'assistant', content: response.content });
 
-		// Execute each function call and build the response parts
-		const responseParts: any[] = [];
-		for (const fc of fnCalls) {
-			const { name, args } = fc.functionCall;
+		const toolResults: Anthropic.ToolResultBlockParam[] = [];
+		for (const block of toolUseBlocks) {
 			try {
-				const out = await runTool(name, args ?? {});
-				toolCalls.push({ name, input: args, result: out });
-				responseParts.push({
-					functionResponse: {
-						name,
-						response: { result: out }
-					}
+				const out = await runTool(block.name, block.input ?? {});
+				toolCalls.push({ name: block.name, input: block.input, result: out });
+				toolResults.push({
+					type: 'tool_result',
+					tool_use_id: block.id,
+					content: JSON.stringify(out)
 				});
 			} catch (err: any) {
-				responseParts.push({
-					functionResponse: {
-						name,
-						response: { error: err?.message ?? String(err) }
-					}
+				toolResults.push({
+					type: 'tool_result',
+					tool_use_id: block.id,
+					content: `Error: ${err?.message ?? String(err)}`,
+					is_error: true
 				});
 			}
 		}
-		contents.push({ role: 'user', parts: responseParts });
+
+		messages.push({ role: 'user', content: toolResults });
 	}
 
-	return { answer: '', toolCalls, error: 'Agent exceeded max iterations without a final answer.' };
+	return {
+		answer: '',
+		toolCalls,
+		usage: { ...usage, estCostUsd: calcCost(usage) },
+		error: 'Agent exceeded max iterations without a final answer.'
+	};
 }
