@@ -12,7 +12,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	const page = Math.max(1, Number(url.searchParams.get('page') ?? 1));
 	const search = url.searchParams.get('search') ?? '';
-	const assayTypeId = url.searchParams.get('assayTypeId') ?? '';
+	// Frozen +page.svelte sends `assayType`; older callers/bookmarks use
+	// `assayTypeId`. Read both so the dropdown filter actually applies.
+	const assayTypeId =
+		url.searchParams.get('assayType') ?? url.searchParams.get('assayTypeId') ?? '';
 	const sortBy = url.searchParams.get('sortBy') ?? 'createdAt';
 	const sortDir = url.searchParams.get('sortDir') ?? 'desc';
 

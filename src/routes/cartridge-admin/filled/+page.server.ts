@@ -12,8 +12,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	const page = Math.max(1, Number(url.searchParams.get('page') ?? 1));
 	const search = url.searchParams.get('search') ?? '';
-	const assayTypeId = url.searchParams.get('assayTypeId') ?? '';
-	const lifecycleStage = url.searchParams.get('lifecycleStage') ?? '';
+	// Frozen +page.svelte sends `assayType` and `stage`; older callers/bookmarks
+	// use `assayTypeId` and `lifecycleStage`. Read both so the dropdowns work.
+	const assayTypeId =
+		url.searchParams.get('assayType') ?? url.searchParams.get('assayTypeId') ?? '';
+	const lifecycleStage =
+		url.searchParams.get('stage') ?? url.searchParams.get('lifecycleStage') ?? '';
 	const sortBy = url.searchParams.get('sortBy') ?? 'createdAt';
 	const sortDir = url.searchParams.get('sortDir') ?? 'desc';
 
