@@ -205,6 +205,14 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		requiredTools: ['get_temperature_history'],
 		forbiddenTools: ['get_current_temperatures', 'get_temperature_alerts']
 	},
+
+	// === Phase 3 — genealogy + integrity ===
+	{
+		id: 'phase3-data-integrity',
+		category: 'phase2',
+		text: 'Run a data integrity check on the system.',
+		requiredTools: ['check_data_integrity']
+	},
 ];
 
 export function questionsByCategory(): Record<string, TestQuestion[]> {

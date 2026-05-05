@@ -304,7 +304,44 @@ Use when: "temperature history of X", "show last 24h temps for fridge Y", "how s
 				equipmentName: { type: 'string', description: 'Sensor or equipment name (case-insensitive partial match)' },
 				sinceHours: { type: 'number', description: 'Window in hours (default 24, max 168)' }
 			},
-			required: ['equipmentName'],
+			required: ['equipmentName']
+		}
+	},
+	{
+		name: 'forward_genealogy',
+		description: `Given a ReceivingLot, list every cartridge that consumed material from it (backing, wax, reagent paths).
+Source: CartridgeRecord scanned across backing.lotId, waxFilling.runId→WaxFillingRun.waxSourceLot, reagentFilling.runId→ReagentBatchRecord.tubeRecords.
+
+Use when: "if this lot was bad, what's downstream", "what carts used lot X", recall scenarios.
+Cap: 50 cartridges per consumption path; truncated:true if exceeded.`,
+		input_schema: {
+			type: 'object',
+			properties: { receivingLotId: { type: 'string', description: 'ReceivingLot.lotId, bagBarcode, or _id' } },
+			required: ['receivingLotId']
+		}
+	},
+	{
+		name: 'backward_genealogy',
+		description: `Full upstream lineage of one cartridge: backing lot, backing oven, wax run, wax source lot, wax QC, storage location, reagent run, reagent assay, reagent lots, shipment, customer.
+Source: CartridgeRecord with multi-hop joins to BackingLot, WaxFillingRun, ReceivingLot, ReagentBatchRecord, ShippingLot.
+
+Use when: deep traceability, "where did everything in this cart come from", regulatory audits.
+For a quick trace (without shipment/customer details), use trace_cartridge instead.`,
+		input_schema: {
+			type: 'object',
+			properties: { cartridgeId: { type: 'string' } },
+			required: ['cartridgeId']
+		}
+	},
+	{
+		name: 'check_data_integrity',
+		description: `Run a system-wide data-integrity scan. Counts known anomalies: runs with null waxSourceLot, over-consumed receiving lots (consumedUl > capacity), stale equipment temperature reads (>4h), cartridges stuck in non-terminal status (>7d).
+Source: aggregated across CartridgeRecord, WaxFillingRun, ReceivingLot, Equipment.
+
+Use when: data quality audit, "are there any data issues", before answering high-stakes questions to verify data is sane. Call this preemptively if you suspect data issues affect your answer.`,
+		input_schema: {
+			type: 'object',
+			properties: {},
 			cache_control: { type: 'ephemeral' }
 		}
 	}
@@ -841,6 +878,262 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 				windowDays: daysAhead,
 				source: 'CalibrationRecord where nextCalibrationDue <= now + windowDays',
 				sourceUrl: '/equipment/activity'
+			};
+		}
+		case 'forward_genealogy': {
+			const lotIdRaw = String(input.receivingLotId ?? '').trim();
+			if (!lotIdRaw) return { error: 'receivingLotId required', source: 'CartridgeRecord', sourceUrl: '/cartridge-admin' };
+
+			// Resolve to canonical lot identifiers (lotId is the operationally referenced one)
+			const lot = await ReceivingLot.findOne({
+				$or: [{ _id: lotIdRaw }, { lotId: lotIdRaw }, { bagBarcode: lotIdRaw }, { lotNumber: lotIdRaw }]
+			}).select('_id lotId bagBarcode lotNumber part').lean() as any;
+			if (!lot) return {
+				error: `ReceivingLot not found: ${lotIdRaw}`,
+				source: 'ReceivingLot + CartridgeRecord',
+				sourceUrl: '/parts'
+			};
+
+			const lotKeys = [lot.lotId, lot.bagBarcode, lot.lotNumber, lot._id].filter(Boolean);
+			const cap = 50;
+
+			// Path 1: backing lot direct
+			const backingMatches = await CartridgeRecord.find({
+				'backing.lotId': { $in: lotKeys }
+			}).select('_id status createdAt').limit(cap + 1).lean() as any[];
+
+			// Path 2: wax — find runs that used this lot, then carts in those runs
+			const waxRuns = await WaxFillingRun.find({
+				waxSourceLot: { $in: lotKeys }
+			}).select('_id cartridgeIds').limit(50).lean() as any[];
+			const waxCartIds = waxRuns.flatMap(r => r.cartridgeIds ?? []).slice(0, cap + 1);
+			const waxCarts = await CartridgeRecord.find({ _id: { $in: waxCartIds } })
+				.select('_id status createdAt').limit(cap + 1).lean() as any[];
+
+			// Path 3: reagent — find batches that referenced this lot in tubeRecords
+			const reagentBatches = await ReagentBatchRecord.find({
+				'tubeRecords.sourceLotId': { $in: lotKeys }
+			}).select('_id cartridgesFilled').limit(50).lean().catch(() => []) as any[];
+			const reagentCartIds = reagentBatches.flatMap(b =>
+				(b.cartridgesFilled ?? []).map((c: any) => c.cartridgeId).filter(Boolean)
+			).slice(0, cap + 1);
+			const reagentCarts = reagentCartIds.length > 0
+				? await CartridgeRecord.find({ _id: { $in: reagentCartIds } }).select('_id status').limit(cap + 1).lean() as any[]
+				: [];
+
+			const totalUnique = new Set([
+				...backingMatches.map(c => c._id),
+				...waxCarts.map(c => c._id),
+				...reagentCarts.map(c => c._id)
+			]).size;
+
+			return {
+				lotInfo: {
+					lotId: lot.lotId,
+					bagBarcode: lot.bagBarcode,
+					partNumber: lot.part?.partNumber,
+					partName: lot.part?.name
+				},
+				viaBackingLot: {
+					count: backingMatches.length > cap ? `>${cap}` : backingMatches.length,
+					truncated: backingMatches.length > cap,
+					sample: backingMatches.slice(0, 10).map(c => ({ cartridgeId: c._id, status: c.status }))
+				},
+				viaWaxRun: {
+					runCount: waxRuns.length,
+					cartridgeCount: waxCarts.length > cap ? `>${cap}` : waxCarts.length,
+					truncated: waxCarts.length > cap,
+					sample: waxCarts.slice(0, 10).map(c => ({ cartridgeId: c._id, status: c.status }))
+				},
+				viaReagentRun: {
+					batchCount: reagentBatches.length,
+					cartridgeCount: reagentCarts.length > cap ? `>${cap}` : reagentCarts.length,
+					truncated: reagentCarts.length > cap,
+					sample: reagentCarts.slice(0, 10).map(c => ({ cartridgeId: c._id, status: c.status }))
+				},
+				totalUniqueCartridgesAffected: totalUnique,
+				source: 'CartridgeRecord scanned across backing.lotId + WaxFillingRun.waxSourceLot + ReagentBatchRecord.tubeRecords.sourceLotId',
+				sourceUrl: '/cartridge-admin'
+			};
+		}
+		case 'backward_genealogy': {
+			const cartridgeId = String(input.cartridgeId ?? '').trim();
+			if (!cartridgeId) return { error: 'cartridgeId required', source: 'CartridgeRecord', sourceUrl: '/cartridge-admin' };
+
+			const cart = await CartridgeRecord.findById(cartridgeId).lean() as any;
+			if (!cart) return { error: `Cartridge not found: ${cartridgeId}`, source: 'CartridgeRecord', sourceUrl: '/cartridge-admin' };
+
+			let waxRun: any = null;
+			let waxSourceLot: any = null;
+			if (cart.waxFilling?.runId) {
+				waxRun = await WaxFillingRun.findById(cart.waxFilling.runId).lean();
+				if (waxRun?.waxSourceLot) {
+					waxSourceLot = await ReceivingLot.findOne({
+						$or: [{ lotId: waxRun.waxSourceLot }, { bagBarcode: waxRun.waxSourceLot }, { _id: waxRun.waxSourceLot }]
+					}).select('lotId lotNumber bagBarcode part createdAt status').lean();
+				}
+			}
+
+			let reagentBatch: any = null;
+			let reagentSourceLots: any[] = [];
+			if (cart.reagentFilling?.runId) {
+				reagentBatch = await ReagentBatchRecord.findById(cart.reagentFilling.runId).lean().catch(() => null);
+				if (reagentBatch?.tubeRecords?.length) {
+					const sourceIds = [...new Set(
+						reagentBatch.tubeRecords.map((t: any) => t.sourceLotId).filter(Boolean)
+					)] as string[];
+					if (sourceIds.length > 0) {
+						reagentSourceLots = await ReceivingLot.find({
+							$or: [{ lotId: { $in: sourceIds } }, { _id: { $in: sourceIds } }]
+						}).select('lotId lotNumber part').lean() as any[];
+					}
+				}
+			}
+
+			const integrityNotes: string[] = [];
+			if (waxRun && !waxRun.waxSourceLot) integrityNotes.push('Wax run has null waxSourceLot — wax provenance untraceable.');
+			if (waxRun?.waxSourceLot && !waxSourceLot) integrityNotes.push(`waxSourceLot "${waxRun.waxSourceLot}" did not match any ReceivingLot — possible orphan reference.`);
+
+			return {
+				cartridgeId: cart._id,
+				status: cart.status,
+				createdAt: cart.createdAt,
+				backing: {
+					lotId: cart.backing?.lotId,
+					inductedAt: cart.backing?.inductedAt,
+					inductedBy: cart.backing?.inductedBy?.username
+				},
+				waxFilling: waxRun ? {
+					runId: waxRun._id,
+					status: waxRun.status,
+					operator: waxRun.operator?.username,
+					robot: waxRun.robot?.name,
+					runStartTime: waxRun.runStartTime,
+					runEndTime: waxRun.runEndTime,
+					waxSourceLotIdentifier: waxRun.waxSourceLot ?? null,
+					waxSourceLotResolved: waxSourceLot ? {
+						lotId: waxSourceLot.lotId,
+						bagBarcode: waxSourceLot.bagBarcode,
+						lotNumber: waxSourceLot.lotNumber,
+						partNumber: waxSourceLot.part?.partNumber,
+						partName: waxSourceLot.part?.name
+					} : null
+				} : null,
+				waxQc: cart.waxQc ? {
+					status: cart.waxQc.status,
+					inspector: cart.waxQc.inspector?.username,
+					inspectedAt: cart.waxQc.inspectedAt,
+					notes: cart.waxQc.notes
+				} : null,
+				waxStorage: cart.waxStorage ? {
+					location: cart.waxStorage.location,
+					locationId: cart.waxStorage.locationId,
+					storedAt: cart.waxStorage.storedAt
+				} : null,
+				reagentFilling: reagentBatch ? {
+					runId: reagentBatch._id,
+					status: reagentBatch.status,
+					assay: reagentBatch.assayType?.name,
+					operator: reagentBatch.operator?.username,
+					robot: reagentBatch.robot?.name,
+					sourceLots: reagentSourceLots.map(l => ({
+						lotId: l.lotId, partNumber: l.part?.partNumber, partName: l.part?.name
+					}))
+				} : null,
+				reagentInspection: cart.reagentInspection ? {
+					status: cart.reagentInspection.status,
+					inspector: cart.reagentInspection.inspector?.username,
+					inspectedAt: cart.reagentInspection.inspectedAt
+				} : null,
+				storage: cart.storage ? {
+					fridgeId: cart.storage.fridgeId,
+					storedAt: cart.storage.storedAt
+				} : null,
+				shipping: cart.shipping ? {
+					packageId: cart.shipping.packageId,
+					shippingLotId: cart.shipping.shippingLotId,
+					customer: cart.shipping.customer?.name,
+					shippedAt: cart.shipping.shippedAt
+				} : null,
+				source: 'CartridgeRecord with multi-hop joins to BackingLot, WaxFillingRun, ReceivingLot (wax+reagent), ReagentBatchRecord, ShippingLot',
+				sourceUrl: `/cartridges/${cart._id}`,
+				dataIntegrityNotes: integrityNotes
+			};
+		}
+		case 'check_data_integrity': {
+			const FOUR_HOURS = 4 * 3600e3;
+			const SEVEN_DAYS = 7 * 86400e3;
+
+			const [
+				nullWaxSource,
+				nullWaxSourceSample,
+				staleEquipment,
+				stuckCartridges,
+				stuckCartridgesSample
+			] = await Promise.all([
+				WaxFillingRun.countDocuments({ status: 'completed', waxSourceLot: { $in: [null, undefined, ''] } }),
+				WaxFillingRun.find({ status: 'completed', waxSourceLot: { $in: [null, undefined, ''] } })
+					.select('_id runStartTime').sort({ runStartTime: -1 }).limit(5).lean(),
+				Equipment.find({
+					equipmentType: { $in: ['fridge', 'oven'] },
+					$or: [
+						{ lastTemperatureReadAt: { $lt: new Date(Date.now() - FOUR_HOURS) } },
+						{ lastTemperatureReadAt: { $exists: false } }
+					]
+				}).select('_id name lastTemperatureReadAt').limit(20).lean(),
+				CartridgeRecord.countDocuments({
+					status: { $nin: ['shipped', 'voided', 'archived', 'completed'] },
+					createdAt: { $lt: new Date(Date.now() - SEVEN_DAYS) }
+				}),
+				CartridgeRecord.find({
+					status: { $nin: ['shipped', 'voided', 'archived', 'completed'] },
+					createdAt: { $lt: new Date(Date.now() - SEVEN_DAYS) }
+				}).select('_id status createdAt').sort({ createdAt: 1 }).limit(5).lean()
+			]);
+
+			// Over-consumed lots (consumedUl > quantity * 12000) — only meaningful for wax tubes
+			const overConsumedLots = await ReceivingLot.find({
+				'part.partNumber': WAX_TUBE_PART_NUMBER,
+				$expr: { $gt: ['$consumedUl', { $multiply: ['$quantity', FULL_TUBE_VOLUME_UL] }] }
+			}).select('_id lotId quantity consumedUl').limit(10).lean() as any[];
+
+			const issues: string[] = [];
+			if (nullWaxSource > 0) issues.push(`${nullWaxSource} completed wax run(s) have null waxSourceLot.`);
+			if ((staleEquipment as any[]).length > 0) issues.push(`${(staleEquipment as any[]).length} equipment record(s) have lastTemperatureReadAt > 4h old or missing.`);
+			if (stuckCartridges > 0) issues.push(`${stuckCartridges} cartridge(s) have been in non-terminal status > 7 days.`);
+			if (overConsumedLots.length > 0) issues.push(`${overConsumedLots.length} wax-tube lot(s) report consumedUl exceeding capacity (data corruption).`);
+
+			return {
+				summary: {
+					totalIssueCount: issues.length,
+					issues
+				},
+				details: {
+					nullWaxSourceLot: {
+						count: nullWaxSource,
+						sample: (nullWaxSourceSample as any[]).map(r => ({ runId: r._id, runStartTime: r.runStartTime }))
+					},
+					staleEquipmentReads: {
+						count: (staleEquipment as any[]).length,
+						items: (staleEquipment as any[]).map(e => ({
+							name: e.name, lastReadAt: e.lastTemperatureReadAt
+						}))
+					},
+					stuckCartridges: {
+						count: stuckCartridges,
+						sample: (stuckCartridgesSample as any[]).map(c => ({
+							cartridgeId: c._id, status: c.status, createdAt: c.createdAt
+						}))
+					},
+					overConsumedLots: {
+						count: overConsumedLots.length,
+						items: overConsumedLots.map(l => ({
+							lotId: l.lotId, quantity: l.quantity, consumedUl: l.consumedUl
+						}))
+					}
+				},
+				source: 'Aggregated across CartridgeRecord, WaxFillingRun, ReceivingLot, Equipment',
+				sourceUrl: '/admin'
 			};
 		}
 		case 'get_temperature_history': {
