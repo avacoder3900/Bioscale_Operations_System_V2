@@ -122,14 +122,30 @@ Caveat: PartDefinition.inventoryCount is a denormalized counter; the operational
 	},
 	{
 		name: 'find_part',
-		description: `Look up a part by partNumber, name, or barcode.
-Source: PartDefinition model.
+		description: `Look up a PartDefinition (the part catalog: PT-CT-XXX) by partNumber, name, or barcode.
+Source: PartDefinition model — items in the part catalog ONLY.
 
-Use when: "tell me about part X", "what's PT-CT-104", "lookup barcode YYY".`,
+Use when: "tell me about PT-CT-104", "what's part X", "lookup barcode YYY" where YYY is a part barcode.
+Don't use for: receiving-lot IDs (UUID-style like 74b942a2-...) or wax tube lots — those are NOT part definitions and won't be found here. Use find_receiving_lot for those.`,
 		input_schema: {
 			type: 'object',
 			properties: {
-				query: { type: 'string', description: 'partNumber, name fragment, or barcode' }
+				query: { type: 'string', description: 'partNumber (PT-CT-XXX), name fragment, or part barcode — NOT a UUID lot ID' }
+			},
+			required: ['query']
+		}
+	},
+	{
+		name: 'find_receiving_lot',
+		description: `Look up a ReceivingLot by lotId (often UUID), bagBarcode, or lotNumber. Returns part info, quantity, consumption, status, supplier lot, receiving date.
+Source: ReceivingLot model — physical received material lots, NOT the part catalog.
+
+Use when: user mentions a UUID-style ID, a bag barcode, or asks "is lot X real / what's in lot X / who supplied lot X".
+Don't use for: part catalog questions (use find_part for PT-CT-XXX entries).`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				query: { type: 'string', description: 'lotId, bagBarcode, or lotNumber — case-sensitive' }
 			},
 			required: ['query']
 		}
@@ -388,6 +404,16 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 		}
 		case 'find_part': {
 			const q = input.query;
+			// Detect UUID-style queries — those are ReceivingLot IDs, not parts
+			const looksLikeUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(q);
+			if (looksLikeUuid) {
+				return {
+					parts: [],
+					source: 'PartDefinition model — query rejected',
+					sourceUrl: '/parts',
+					dataIntegrityNotes: [`The query "${q}" looks like a ReceivingLot ID (UUID), not a part number. find_part queries the part catalog only. Use find_receiving_lot to look up this lot.`]
+				};
+			}
 			const parts = await PartDefinition.find({
 				$or: [
 					{ partNumber: { $regex: q, $options: 'i' } },
@@ -405,6 +431,45 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 				})),
 				source: 'PartDefinition model',
 				sourceUrl: first ? `/parts/${first._id}` : '/parts'
+			};
+		}
+		case 'find_receiving_lot': {
+			const q = String(input.query ?? '').trim();
+			if (!q) return { error: 'query required', source: 'ReceivingLot', sourceUrl: '/parts' };
+			const lot = await ReceivingLot.findOne({
+				$or: [
+					{ lotId: q },
+					{ bagBarcode: q },
+					{ lotNumber: q }
+				]
+			})
+				.select('_id lotId lotNumber bagBarcode quantity consumedUl status part createdAt')
+				.lean() as any;
+			if (!lot) {
+				return {
+					found: false,
+					query: q,
+					source: 'ReceivingLot model — searched lotId, bagBarcode, lotNumber',
+					sourceUrl: '/parts',
+					dataIntegrityNotes: [`No ReceivingLot matches "${q}". This could be a typo, a legacy/deleted lot, or a lot recorded in a manufacturing run that was never inducted via receiving.`]
+				};
+			}
+			const tubeCount = Number(lot.quantity ?? 0);
+			const consumedUl = Number(lot.consumedUl ?? 0);
+			const isWaxTube = lot.part?.partNumber === WAX_TUBE_PART_NUMBER;
+			return {
+				found: true,
+				lotId: lot.lotId,
+				lotNumber: lot.lotNumber,
+				bagBarcode: lot.bagBarcode,
+				part: lot.part ? { partNumber: lot.part.partNumber, name: lot.part.name } : null,
+				quantity: tubeCount,
+				consumedUl,
+				remainingVolumeUl: isWaxTube ? Math.max(0, tubeCount * FULL_TUBE_VOLUME_UL - consumedUl) : null,
+				status: lot.status,
+				createdAt: lot.createdAt,
+				source: 'ReceivingLot model',
+				sourceUrl: '/parts'
 			};
 		}
 		case 'find_cartridges': {
@@ -622,7 +687,11 @@ D. **Anti-guessing.** If the user asks about specific BIMS data, USE A TOOL. Nev
 
 E. **On broad questions** ("what's going on?", "how's the floor?"): pick 2-3 targeted tools (e.g., list_recent_runs + get_temperature_alerts + count_cartridges_by_status). Do not call 5+. If you find yourself wanting to call many tools, ask the user to narrow the question instead.
 
-F. **When parameters matter.** Tools with optional parameters benefit from useful defaults: pass sinceHours when asked about "today" or "recent", pass status filters when the user mentions a stage, pass limits when they want "top N." Don't call a tool with no parameters and then re-call with parameters when you realize it returned too much.`;
+F. **When parameters matter.** Tools with optional parameters benefit from useful defaults: pass sinceHours when asked about "today" or "recent", pass status filters when the user mentions a stage, pass limits when they want "top N." Don't call a tool with no parameters and then re-call with parameters when you realize it returned too much.
+
+G. **NEVER re-call the same tool in one turn.** Before calling a tool, check whether you've already called it in this conversation turn — even with slightly different parameters. If yes, USE THE PRIOR RESULT. If you genuinely need a refined query, you have one shot to get the parameters right; calling list_recent_runs twice in a row is a bug.
+
+H. **UUID-style IDs are ReceivingLot IDs, not parts.** A string like 74b942a2-16a5-4ae4-aa91-917d3ecc146a is a ReceivingLot._id (or a similar UUID-style barcode). Use find_receiving_lot, NOT find_part. find_part queries the PT-CT-XXX catalog and will return nothing for UUID lookups, which then leads to false-positive "lot not found" warnings. Recognize UUIDs by their shape (8-4-4-4-12 hex with dashes).`;
 
 export interface AskBimsMessage {
 	role: 'user' | 'assistant';
