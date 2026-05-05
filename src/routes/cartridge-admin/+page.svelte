@@ -126,6 +126,15 @@
 				<option value={run.id} selected={data.filters.runId === run.id}>{formatRunOption(run)}</option>
 			{/each}
 		</select>
+
+		<select onchange={(e) => updateFilters({ pageSize: e.currentTarget.value })}
+			class="min-h-[44px] rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text)]"
+			title="Cartridges per page"
+		>
+			{#each [25, 50, 100, 200] as size (size)}
+				<option value={String(size)} selected={data.pageSize === size}>Show {size}</option>
+			{/each}
+		</select>
 	</div>
 
 	{#if data.filters.runId}
