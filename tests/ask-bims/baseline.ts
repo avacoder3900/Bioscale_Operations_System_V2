@@ -104,8 +104,10 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		id: 'cart-stored',
 		category: 'cartridges',
 		text: 'Show me cartridges currently in wax storage.',
-		requiredTools: ['find_cartridges'],
-		forbiddenTools: ['count_cartridges_by_status', 'get_run_yield']
+		requiredTools: [], // either find_cartridges OR list_cartridges_in_storage is acceptable
+		forbiddenTools: ['count_cartridges_by_status', 'get_run_yield', 'trace_cartridge'],
+		notes: 'Either find_cartridges(status=wax_stored) or list_cartridges_in_storage works. Both are correct; assertion is purely on forbiddenTools.',
+		expectedAnswerPhrases: [/storage|stored|fridge|cart/i]
 	},
 
 	// === Inventory ===
