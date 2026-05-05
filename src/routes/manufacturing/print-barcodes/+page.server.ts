@@ -1,40 +1,46 @@
 import { fail } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection';
-import { AuditLog, BarcodeSheetBatch, BarcodeInventory, CartridgeRecord, PartDefinition, InventoryTransaction } from '$lib/server/db/models';
+import { AuditLog, BarcodeSheetBatch, BarcodeInventory, CartridgeRecord, PartDefinition } from '$lib/server/db/models';
 import { generateId } from '$lib/server/db/utils';
 import { requirePermission } from '$lib/server/permissions';
 import { mintCartridgeBarcodes } from '$lib/server/services/barcode-generator';
+import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import type { Actions, PageServerLoad } from './$types';
 
 const TEMPLATE_VERSION = 'avery-94102-v1';
 const LABELS_PER_SHEET = 80;
 
-// Inventory part numbers wired to the print flow:
-//   - TEMPLATE_SHEET_PART_NUMBER: blank Avery 94102 sheets the operator
-//     loads into the printer. One sheet is consumed per page printed.
-//     Auto-upserted on first "Add to inventory" so the part exists in
-//     the catalog without a manual seed step. Mirrors
-//     BarcodeInventory.avery94102SheetsOnHand (kept in sync below) so
-//     the cart-mfg-dev dashboard's existing readers don't break.
-//   - PRINTED_BARCODE_PART_NUMBER: the printed barcode label (1 per
-//     cartridge), already wired into WI-01 cartridge-back as a consumed
-//     material. Each printed label increments this part's inventory.
-const TEMPLATE_SHEET_PART_NUMBER = 'PT-CT-115';
-const PRINTED_BARCODE_PART_NUMBER = 'PT-CT-106';
+// Inventory wiring:
+//   PT-CT-106 "Barcodes" is the single existing part with all the ROG /
+//   accessioning / lot-tracking / cart-mfg-dev alert plumbing already
+//   wired up. Both sides of the print operation hit it:
+//     - input  (sheetsToPrint sheets fed in)  → consumption
+//     - output (totalLabels printed labels)   → creation
+//   Net change per print: +(totalLabels − sheetsToPrint), i.e. +79 per
+//   full sheet — the sheet → 80 labels conversion expressed in a single
+//   inventory line. WI-01 cartridge-back continues to consume 1 unit per
+//   cartridge and its `if (have < quantity)` check is unaffected because
+//   a confirmed print only ever increases PT-CT-106 inventory net.
+const BARCODE_PART_NUMBER = 'PT-CT-106';
 
-async function ensureTemplateSheetPart(): Promise<{ _id: string; inventoryCount: number }> {
-	const existing = await PartDefinition.findOne({ partNumber: TEMPLATE_SHEET_PART_NUMBER }).lean() as any;
+async function ensureBarcodePart(): Promise<{ _id: string; inventoryCount: number; partNumber: string; name: string }> {
+	const existing = await PartDefinition.findOne({ partNumber: BARCODE_PART_NUMBER }).lean() as any;
 	if (existing) return existing;
+	// Defensive auto-upsert: PT-CT-106 should already exist (WI-01 reads
+	// it as a consumed material), but if a fresh environment hasn't been
+	// seeded, create it here so the print flow doesn't 500. Seed inventory
+	// from the legacy BarcodeInventory.avery94102SheetsOnHand counter so
+	// existing on-hand sheets aren't dropped on the floor.
 	const inv = await BarcodeInventory.findById('default').lean() as { avery94102SheetsOnHand?: number } | null;
 	const seedQty = inv?.avery94102SheetsOnHand ?? 0;
 	const created = await PartDefinition.create({
 		_id: generateId(),
-		partNumber: TEMPLATE_SHEET_PART_NUMBER,
-		name: 'Barcode Template Sheets',
-		description: 'Avery 94102 blank sticker sheets (80 labels/sheet) used to print cartridge barcodes',
+		partNumber: BARCODE_PART_NUMBER,
+		name: 'Barcodes',
+		description: 'Avery 94102 barcode stickers — printed in-house and consumed 1-per-cartridge at WI-01 cartridge back',
 		category: 'consumable',
 		bomType: 'cartridge',
-		unitOfMeasure: 'sheet',
+		unitOfMeasure: 'label',
 		inventoryCount: seedQty,
 		isActive: true
 	});
@@ -138,10 +144,13 @@ export const actions: Actions = {
 	},
 
 	// Operator confirmed "Add to inventory" after the print dialog closed.
-	// Persists the BarcodeSheetBatch, decrements blank sheets (PT-CT-115 +
-	// BarcodeInventory mirror), and increments printed-label stock
-	// (PT-CT-106) — the part WI-01 cartridge-back consumes. Each step
-	// gets an InventoryTransaction for the audit trail.
+	// Single-part accounting on PT-CT-106 "Barcodes": the sheet input is
+	// recorded as `consumption` and the printed-label output as `creation`,
+	// both against the same part. Net effect on inventoryCount per sheet is
+	// +(LABELS_PER_SHEET − 1) so WI-01 cartridge-back's `if (have < quantity)`
+	// availability check is never starved by a confirmed print. Uses the
+	// shared recordTransaction helper (same path as WI-01, ROG, etc.) so
+	// transaction rows + low-inventory notifications stay consistent.
 	addToInventory: async ({ request, locals }) => {
 		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
@@ -179,21 +188,15 @@ export const actions: Actions = {
 		const user = locals.user!;
 		const batchId = generateId();
 
-		// Read current inventory levels (for transaction record + audit)
-		const templatePart = await ensureTemplateSheetPart();
-		const printedPart = await PartDefinition.findOne({ partNumber: PRINTED_BARCODE_PART_NUMBER }).lean() as
-			| { _id: string; inventoryCount?: number }
-			| null;
-
+		// Resolve PT-CT-106 (creates it on first run if a fresh env hasn't
+		// been seeded) and snapshot current inventory levels.
+		const barcodePart = await ensureBarcodePart();
+		const partInvBefore = barcodePart.inventoryCount ?? 0;
 		const inv = await BarcodeInventory.findById('default').lean() as
 			| { avery94102SheetsOnHand?: number }
 			| null;
-		const sheetsBefore = inv?.avery94102SheetsOnHand ?? templatePart.inventoryCount ?? 0;
+		const sheetsBefore = inv?.avery94102SheetsOnHand ?? 0;
 		const sheetsAfter = Math.max(0, sheetsBefore - sheetsToPrint);
-		const templateBefore = templatePart.inventoryCount ?? sheetsBefore;
-		const templateAfter = Math.max(0, templateBefore - sheetsToPrint);
-		const labelsBefore = printedPart?.inventoryCount ?? 0;
-		const labelsAfter = labelsBefore + totalLabels;
 
 		await BarcodeSheetBatch.create({
 			_id: batchId,
@@ -213,59 +216,44 @@ export const actions: Actions = {
 			labelsUsed: 0
 		});
 
-		// Decrement blank-sheet stock — both the BarcodeInventory mirror
-		// (still read by cart-mfg-dev) and the PT-CT-115 part definition.
+		// Keep the legacy avery94102SheetsOnHand counter in step so the
+		// cart-mfg-dev "Barcode sheets low" alert continues to fire.
 		await BarcodeInventory.findByIdAndUpdate(
 			'default',
 			{ $set: { avery94102SheetsOnHand: sheetsAfter } },
 			{ upsert: true }
 		);
-		await PartDefinition.findByIdAndUpdate(
-			templatePart._id,
-			{ $set: { inventoryCount: templateAfter } }
-		);
 
-		// Increment printed-label stock (PT-CT-106) so WI-01 cartridge-back
-		// has labels to consume. Skip silently if the part isn't in the
-		// catalog (unusual — it's a core BOM part — but we don't want to
-		// brick the print flow over it).
-		if (printedPart) {
-			await PartDefinition.findByIdAndUpdate(
-				printedPart._id,
-				{ $set: { inventoryCount: labelsAfter } }
-			);
-		}
-
-		// InventoryTransactions for the paper trail
-		const baseTx = {
-			performedBy: user._id,
-			performedAt: printedAt,
+		// Two transactions on the same part — recordTransaction handles
+		// previousQuantity/newQuantity walk + inventoryCount $set + low-
+		// inventory notification, so this matches the path WI-01 and ROG
+		// already use.
+		await recordTransaction({
+			transactionType: 'consumption',
+			partDefinitionId: barcodePart._id,
+			quantity: sheetsToPrint,
+			manufacturingStep: 'backing',
+			manufacturingRunId: batchId,
 			operatorId: user._id,
 			operatorUsername: user.username,
-			manufacturingStep: 'backing' as const
-		};
-		await InventoryTransaction.create({
-			_id: generateId(),
-			partDefinitionId: templatePart._id,
-			transactionType: 'consumption',
-			quantity: -sheetsToPrint,
-			previousQuantity: templateBefore,
-			newQuantity: templateAfter,
-			reason: `Printed barcode batch ${batchId} (${sheetsToPrint} sheet${sheetsToPrint === 1 ? '' : 's'})`,
-			...baseTx
+			notes: `Print barcode batch ${batchId}: ${sheetsToPrint} sheet${sheetsToPrint === 1 ? '' : 's'} consumed`
 		});
-		if (printedPart) {
-			await InventoryTransaction.create({
-				_id: generateId(),
-				partDefinitionId: printedPart._id,
-				transactionType: 'creation',
-				quantity: totalLabels,
-				previousQuantity: labelsBefore,
-				newQuantity: labelsAfter,
-				reason: `Printed barcode batch ${batchId} (${totalLabels} label${totalLabels === 1 ? '' : 's'})`,
-				...baseTx
-			});
-		}
+		await recordTransaction({
+			transactionType: 'creation',
+			partDefinitionId: barcodePart._id,
+			quantity: totalLabels,
+			manufacturingStep: 'backing',
+			manufacturingRunId: batchId,
+			operatorId: user._id,
+			operatorUsername: user.username,
+			notes: `Print barcode batch ${batchId}: ${totalLabels} label${totalLabels === 1 ? '' : 's'} printed`
+		});
+
+		// Read back the post-update inventory for the audit log.
+		const partAfterDoc = await PartDefinition.findById(barcodePart._id).select('inventoryCount').lean() as
+			| { inventoryCount?: number }
+			| null;
+		const partInvAfter = partAfterDoc?.inventoryCount ?? partInvBefore - sheetsToPrint + totalLabels;
 
 		await AuditLog.create({
 			_id: generateId(),
@@ -280,10 +268,11 @@ export const actions: Actions = {
 				firstBarcodeId: barcodes[0],
 				lastBarcodeId: barcodes[barcodes.length - 1],
 				templateVersion: TEMPLATE_VERSION,
-				templateSheetsBefore: templateBefore,
-				templateSheetsAfter: templateAfter,
-				printedLabelsBefore: labelsBefore,
-				printedLabelsAfter: labelsAfter
+				partNumber: barcodePart.partNumber,
+				partInventoryBefore: partInvBefore,
+				partInventoryAfter: partInvAfter,
+				sheetsOnHandBefore: sheetsBefore,
+				sheetsOnHandAfter: sheetsAfter
 			},
 			changedAt: printedAt,
 			changedBy: user.username
@@ -293,7 +282,7 @@ export const actions: Actions = {
 			added: true,
 			batchId,
 			sheetsRemainingAfter: sheetsAfter,
-			labelsAfter,
+			labelsAfter: partInvAfter,
 			totalLabels
 		};
 	}

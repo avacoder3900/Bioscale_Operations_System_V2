@@ -407,25 +407,26 @@
 </div>
 
 <!-- "Add to inventory?" modal — fires after the print dialog closes.
-     Yes:  POST /?/addToInventory with the minted barcodes; deducts a
-           Barcode Template Sheet (PT-CT-115) per page printed and
-           credits the printed labels into PT-CT-106 (the part WI-01
-           cartridge-back consumes).
+     Yes:  POST /?/addToInventory with the minted barcodes. Records both
+           sides of the print against PT-CT-106 "Barcodes" (the existing
+           BOM part with full ROG / accessioning / lot wiring): sheet
+           input as consumption, printed labels as creation. Net is
+           positive so WI-01 cartridge-back's inventory check is never
+           starved by a print.
      No:   discards the minted batch (UUIDs are stateless; nothing to
            clean up) and resets the page. -->
 {#if showAddPrompt && form && 'barcodes' in form && form.barcodes?.length}
+	{@const f = form as { barcodes: string[]; sheetsToPrint?: number; skip?: number; firstSheetCount?: number }}
 	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 print:hidden">
 		<div class="w-full max-w-md rounded-lg border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-surface)] p-5 shadow-2xl">
 			<h3 class="text-lg font-semibold" style="color: var(--color-tron-cyan)">Add to inventory?</h3>
 			<p class="mt-2 text-sm" style="color: var(--color-tron-text)">
-				Confirming will deduct
-				<strong class="font-mono">{form.sheetsToPrint ?? 1}</strong>
-				sheet{(form.sheetsToPrint ?? 1) === 1 ? '' : 's'} from
-				<strong>Barcode Template Sheets</strong>
-				and add
-				<strong class="font-mono">{form.barcodes.length}</strong>
-				printed barcode{form.barcodes.length === 1 ? '' : 's'} to the
-				<strong>cartridge-back</strong> stock (PT-CT-106).
+				Confirming will record
+				<strong class="font-mono">{f.sheetsToPrint ?? 1}</strong>
+				sheet{(f.sheetsToPrint ?? 1) === 1 ? '' : 's'} consumed and
+				<strong class="font-mono">{f.barcodes.length}</strong>
+				printed label{f.barcodes.length === 1 ? '' : 's'} produced against
+				<strong>Barcodes (PT-CT-106)</strong> — the part WI-01 cartridge-back consumes.
 			</p>
 			<p class="mt-2 text-xs" style="color: var(--color-tron-text-secondary)">
 				Choose <em>No</em> if the print failed, was cancelled, or you don't want to count this batch.
@@ -459,11 +460,11 @@
 					};
 				}}
 			>
-				<input type="hidden" name="sheetsToPrint" value={form.sheetsToPrint ?? 1} />
-				<input type="hidden" name="totalLabels" value={form.barcodes.length} />
-				<input type="hidden" name="skip" value={form.skip ?? 0} />
-				<input type="hidden" name="firstSheetCount" value={form.firstSheetCount ?? form.barcodes.length} />
-				<input type="hidden" name="barcodes" value={form.barcodes.join(',')} />
+				<input type="hidden" name="sheetsToPrint" value={f.sheetsToPrint ?? 1} />
+				<input type="hidden" name="totalLabels" value={f.barcodes.length} />
+				<input type="hidden" name="skip" value={f.skip ?? 0} />
+				<input type="hidden" name="firstSheetCount" value={f.firstSheetCount ?? f.barcodes.length} />
+				<input type="hidden" name="barcodes" value={f.barcodes.join(',')} />
 
 				<button
 					type="button"
