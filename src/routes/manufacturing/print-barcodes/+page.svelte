@@ -16,22 +16,30 @@
 	let skip = $state(0);
 	let submitting = $state(false);
 	let printing = $state(false);
+	let showAddPrompt = $state(false);
+	let confirming = $state(false);
+	let addError = $state<string | null>(null);
 
-	// Print, then return to the empty mint form. afterprint fires when the
-	// browser's print dialog closes (whether the operator clicked Print or
-	// Cancel). Reloading the bare URL drops the action result so the same
-	// minted batch can't be reprinted by clicking again.
+	// Print, then prompt "Add to inventory?". afterprint fires when the
+	// browser's print dialog closes (Print or Cancel). Showing the prompt
+	// here — rather than committing on Generate — means cancelled prints
+	// don't waste sheets, and a fresh form is shown only after the operator
+	// confirms or discards the batch.
 	function printAndReset() {
 		if (printing) return;
 		printing = true;
 		const cleanup = () => {
 			window.removeEventListener('afterprint', cleanup);
-			goto($page.url.pathname, { invalidateAll: true, replaceState: true }).finally(() => {
-				printing = false;
-			});
+			printing = false;
+			showAddPrompt = true;
 		};
 		window.addEventListener('afterprint', cleanup);
 		window.print();
+	}
+
+	async function discardAndReset() {
+		showAddPrompt = false;
+		await goto($page.url.pathname, { invalidateAll: true, replaceState: true });
 	}
 
 	const LABELS_PER_SHEET = 80;
@@ -113,6 +121,11 @@
 		ctx.textBaseline = 'top';
 		ctx.fillStyle = '#000000';
 
+		// Operator-tuned shrink applied to every drawn element so QR + text
+		// occupy 85% of their previous footprint while their visual centers
+		// stay exactly where they were before.
+		const SHRINK = 0.85;
+
 		for (let i = 0; i < cells.length; i++) {
 			const code = cells[i];
 			if (!code) continue;
@@ -122,20 +135,30 @@
 			const cellLeft = padX + col * cellPitch + cellMargin;
 			const cellTop = padY + row * cellPitch + cellMargin;
 
-			// ABC labels (5px courier bold, top of cell, on B-column grid).
-			const abcFontPx = 5 * (DPI / 96);
-			ctx.font = `bold ${abcFontPx}px courier, monospace`;
+			// ABC labels (top of cell, on B-column grid). Centers preserved
+			// from the un-shrunk geometry; size scaled by SHRINK.
+			const abcFullPx = 5 * (DPI / 96);
+			const abcPx = abcFullPx * SHRINK;
+			const abcCharW = 0.6; // courier monospace char-width as fraction of font size
+			ctx.font = `bold ${abcPx}px courier, monospace`;
 			ctx.textAlign = 'left';
 			const abcLeft = cellLeft + 0.08 * DPI;
 			const abcSpacing = 0.22 * DPI;
-			const abcY = cellTop;
-			ctx.fillText('A', abcLeft, abcY);
-			ctx.fillText('B', abcLeft + abcSpacing, abcY);
-			ctx.fillText('C', abcLeft + 2 * abcSpacing, abcY);
+			// Pre-shrink each char top-left was (abcLeft + n*abcSpacing, cellTop).
+			// Center: (abcLeft + n*abcSpacing + abcCharW*abcFullPx/2, cellTop + abcFullPx/2).
+			// To preserve those centers with the smaller font, shift the new
+			// top-left right + down by half the size delta.
+			const abcShiftX = (abcCharW * (abcFullPx - abcPx)) / 2;
+			const abcShiftY = (abcFullPx - abcPx) / 2;
+			const abcY = cellTop + abcShiftY;
+			ctx.fillText('A', abcLeft + abcShiftX, abcY);
+			ctx.fillText('B', abcLeft + abcSpacing + abcShiftX, abcY);
+			ctx.fillText('C', abcLeft + 2 * abcSpacing + abcShiftX, abcY);
 
 			// QR code. Centered on B-column (cellLeft + 0.347" per existing
-			// alignment math). Sized to ~0.5" so it fits cell width with
-			// padding while staying scannable.
+			// alignment math). Old footprint top-left was (qrCenterX - qrFull/2, qrTop)
+			// → center at (qrCenterX, qrTop + qrFull/2). Shrink in place by
+			// keeping the center constant.
 			try {
 				const qrCanvas = document.createElement('canvas');
 				bwipjs.toCanvas(qrCanvas, {
@@ -145,17 +168,23 @@
 					height: 7,
 					width: 7
 				});
-				const qrSize = 0.5 * DPI;
+				const qrFullSize = 0.5 * DPI;
+				const qrSize = qrFullSize * SHRINK;
 				const qrCenterX = cellLeft + 0.347 * DPI;
-				const qrTop = cellTop + 0.08 * DPI;
-				ctx.drawImage(qrCanvas, qrCenterX - qrSize / 2, qrTop, qrSize, qrSize);
+				const qrCenterY = cellTop + 0.08 * DPI + qrFullSize / 2;
+				ctx.drawImage(qrCanvas, qrCenterX - qrSize / 2, qrCenterY - qrSize / 2, qrSize, qrSize);
 
-				// UUID text below QR — 3.5pt courier, two lines split at the
-				// midpoint, centered on B-column.
-				const textPx = 3.5 * (DPI / 72);
+				// UUID text below QR — two lines centered on B-column. Old
+				// block ran from oldTextTop (= qrTop + qrFullSize + 0.02") to
+				// oldTextTop + textFullPx*2.15 (line 2 bottom, with 1.15 line
+				// gap). Preserve the block's vertical center; shrink size.
+				const textFullPx = 3.5 * (DPI / 72);
+				const textPx = textFullPx * SHRINK;
+				const oldTextTop = cellTop + 0.08 * DPI + qrFullSize + 0.02 * DPI;
+				const textCenterY = oldTextTop + textFullPx * 1.075; // line gap 1.15 → block height = font * 2.15
+				const textTop = textCenterY - textPx * 1.075;
 				ctx.font = `${textPx}px courier, monospace`;
 				ctx.textAlign = 'center';
-				const textTop = qrTop + qrSize + 0.02 * DPI;
 				const half = Math.ceil(code.length / 2);
 				ctx.fillText(code.slice(0, half), qrCenterX, textTop);
 				ctx.fillText(code.slice(half), qrCenterX, textTop + textPx * 1.15);
@@ -357,7 +386,7 @@
 	     print render. Keyed on batchId so re-mints get a fresh canvas.
 	     `print:break-after-page` on every sheet ensures the browser starts
 	     a new page after each (last sheet's break is a no-op). -->
-	{#key form && 'batchId' in form ? form.batchId : 'empty'}
+	{#key form && 'barcodes' in form && form.barcodes?.length ? form.barcodes[0] : 'empty'}
 		<div class="print-area space-y-4 print:space-y-0">
 			{#each sheets as sheetCells, sheetIdx (sheetIdx)}
 				<div
@@ -376,6 +405,86 @@
 		</div>
 	{/key}
 </div>
+
+<!-- "Add to inventory?" modal — fires after the print dialog closes.
+     Yes:  POST /?/addToInventory with the minted barcodes; deducts a
+           Barcode Template Sheet (PT-CT-115) per page printed and
+           credits the printed labels into PT-CT-106 (the part WI-01
+           cartridge-back consumes).
+     No:   discards the minted batch (UUIDs are stateless; nothing to
+           clean up) and resets the page. -->
+{#if showAddPrompt && form && 'barcodes' in form && form.barcodes?.length}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 print:hidden">
+		<div class="w-full max-w-md rounded-lg border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-surface)] p-5 shadow-2xl">
+			<h3 class="text-lg font-semibold" style="color: var(--color-tron-cyan)">Add to inventory?</h3>
+			<p class="mt-2 text-sm" style="color: var(--color-tron-text)">
+				Confirming will deduct
+				<strong class="font-mono">{form.sheetsToPrint ?? 1}</strong>
+				sheet{(form.sheetsToPrint ?? 1) === 1 ? '' : 's'} from
+				<strong>Barcode Template Sheets</strong>
+				and add
+				<strong class="font-mono">{form.barcodes.length}</strong>
+				printed barcode{form.barcodes.length === 1 ? '' : 's'} to the
+				<strong>cartridge-back</strong> stock (PT-CT-106).
+			</p>
+			<p class="mt-2 text-xs" style="color: var(--color-tron-text-secondary)">
+				Choose <em>No</em> if the print failed, was cancelled, or you don't want to count this batch.
+			</p>
+
+			{#if addError}
+				<div class="mt-3 rounded border border-red-500/50 bg-red-900/20 p-2 text-xs text-red-300">
+					{addError}
+				</div>
+			{/if}
+
+			<form
+				method="POST"
+				action="?/addToInventory"
+				class="mt-4 flex justify-end gap-2"
+				use:enhance={() => {
+					confirming = true;
+					addError = null;
+					return async ({ result, update }) => {
+						if (result.type === 'success') {
+							showAddPrompt = false;
+							confirming = false;
+							await update({ reset: true });
+							await goto($page.url.pathname, { invalidateAll: true, replaceState: true });
+						} else if (result.type === 'failure') {
+							addError = (result.data as any)?.addError ?? 'Failed to add to inventory';
+							confirming = false;
+						} else {
+							confirming = false;
+						}
+					};
+				}}
+			>
+				<input type="hidden" name="sheetsToPrint" value={form.sheetsToPrint ?? 1} />
+				<input type="hidden" name="totalLabels" value={form.barcodes.length} />
+				<input type="hidden" name="skip" value={form.skip ?? 0} />
+				<input type="hidden" name="firstSheetCount" value={form.firstSheetCount ?? form.barcodes.length} />
+				<input type="hidden" name="barcodes" value={form.barcodes.join(',')} />
+
+				<button
+					type="button"
+					onclick={discardAndReset}
+					disabled={confirming}
+					class="rounded border border-[var(--color-tron-border)] px-4 py-2 text-sm font-medium hover:border-[var(--color-tron-text-secondary)] disabled:opacity-50"
+					style="color: var(--color-tron-text-secondary)"
+				>
+					No, discard
+				</button>
+				<button
+					type="submit"
+					disabled={confirming}
+					class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-semibold text-black hover:opacity-90 disabled:opacity-50"
+				>
+					{confirming ? 'Adding…' : 'Yes, add to inventory'}
+				</button>
+			</form>
+		</div>
+	</div>
+{/if}
 
 <style>
 	@media print {
