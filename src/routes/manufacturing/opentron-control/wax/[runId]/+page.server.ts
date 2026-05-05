@@ -11,7 +11,7 @@ import mongoose from 'mongoose';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable,
 	ManufacturingSettings, generateId, Equipment, EquipmentLocation,
-	AuditLog, ReceivingLot
+	AuditLog, ReceivingLot, WaxBatch
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { resolveFridgeId, resolveOvenId, resolveCoolingTrayId } from '$lib/server/services/equipment-resolve';
@@ -788,6 +788,42 @@ export const actions: Actions = {
 							notes: `Wax filling — ${tubesToDeduct} × 15ml wax tube consumed (lot ${run.waxSourceLot})`
 						});
 					}
+				}
+
+				// Decrement the in-house WaxBatch volume tracker — Ask BIMS and
+				// the daily low-wax digest read this field, so without the
+				// decrement they always show 100% remaining no matter how many
+				// runs ship. Match by both lotBarcode (scannable label) and
+				// lotNumber (WAX-YYYY-NNNN). Runs scanning a ReceivingLot-only
+				// barcode won't match and this is a no-op. Mirrors the parallel
+				// block in wax-filling/+page.server.ts completeRun.
+				const waxBatch = await WaxBatch.findOne({
+					$or: [
+						{ lotBarcode: run.waxSourceLot },
+						{ lotNumber: run.waxSourceLot }
+					]
+				}).select('_id remainingVolumeUl').lean() as any;
+				if (waxBatch) {
+					const remainingBefore = Number(waxBatch.remainingVolumeUl ?? 0);
+					const remainingAfter = Math.max(0, remainingBefore - WAX_FILL_VOLUME_UL);
+					await WaxBatch.updateOne(
+						{ _id: waxBatch._id },
+						{
+							$set: { remainingVolumeUl: remainingAfter },
+							$push: {
+								usageLog: {
+									_id: generateId(),
+									runId,
+									volumeChangedUl: -(remainingBefore - remainingAfter),
+									remainingBeforeUl: remainingBefore,
+									remainingAfterUl: remainingAfter,
+									operator: operatorRef,
+									notes: `Wax filling run complete — ${cartridgeCount} cartridges`,
+									createdAt: now
+								}
+							}
+						}
+					);
 				}
 			}
 

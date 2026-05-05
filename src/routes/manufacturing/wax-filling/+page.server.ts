@@ -1599,6 +1599,44 @@ export const actions: Actions = {
 					});
 				}
 			}
+
+			// Decrement the in-house WaxBatch volume tracker (parallel to the
+			// ReceivingLot update above). WaxBatch is created by wax-creation
+			// and is the source Ask BIMS / daily-digest read for remaining
+			// wax volumes — without this decrement, those surfaces drift and
+			// always show 100% remaining no matter how many runs ship. Match
+			// against both lotBarcode (scannable label) and lotNumber
+			// (WAX-YYYY-NNNN) since either may have been the scanned value.
+			// Runs that scanned a ReceivingLot-only barcode won't match here
+			// and the block is a no-op.
+			const waxBatch = await WaxBatch.findOne({
+				$or: [
+					{ lotBarcode: run.waxSourceLot },
+					{ lotNumber: run.waxSourceLot }
+				]
+			}).select('_id remainingVolumeUl').lean() as any;
+			if (waxBatch) {
+				const remainingBefore = Number(waxBatch.remainingVolumeUl ?? 0);
+				const remainingAfter = Math.max(0, remainingBefore - WAX_FILL_VOLUME_UL);
+				await WaxBatch.updateOne(
+					{ _id: waxBatch._id },
+					{
+						$set: { remainingVolumeUl: remainingAfter },
+						$push: {
+							usageLog: {
+								_id: generateId(),
+								runId,
+								volumeChangedUl: -(remainingBefore - remainingAfter),
+								remainingBeforeUl: remainingBefore,
+								remainingAfterUl: remainingAfter,
+								operator: operatorRef,
+								notes: `Wax filling run complete — ${cartridgeCount} cartridges`,
+								createdAt: now
+							}
+						}
+					}
+				);
+			}
 		}
 
 		// Notify run complete
