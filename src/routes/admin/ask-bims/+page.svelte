@@ -27,7 +27,7 @@
 	let input = $state('');
 	let submitting = $state(false);
 	let listEl: HTMLDivElement | undefined = $state();
-	let model = $state<ModelId>('claude-sonnet-4-6');
+	let model = $state<ModelId>('claude-haiku-4-5');
 
 	const BUDGET_WARN_USD = 1.0;
 
@@ -44,9 +44,9 @@
 	});
 
 	const MODEL_LABELS: Record<ModelId, string> = {
-		'claude-haiku-4-5': 'Haiku 4.5 — fastest, cheapest',
-		'claude-sonnet-4-6': 'Sonnet 4.6 — balanced (default)',
-		'claude-opus-4-7': 'Opus 4.7 — most capable (admin)'
+		'claude-haiku-4-5': 'Haiku 4.5 — default, fastest, cheapest',
+		'claude-sonnet-4-6': 'Sonnet 4.6 — sharper for complex reasoning',
+		'claude-opus-4-7': 'Opus 4.7 — deepest analysis (admin only)'
 	};
 
 	function msgTokens(u: Usage): number {

@@ -57,7 +57,11 @@ export function redactPii(text: string): string {
 export type AskBimsModel = 'claude-haiku-4-5' | 'claude-sonnet-4-6' | 'claude-opus-4-7';
 
 export const ALLOWED_MODELS: AskBimsModel[] = ['claude-haiku-4-5', 'claude-sonnet-4-6', 'claude-opus-4-7'];
-export const DEFAULT_MODEL: AskBimsModel = 'claude-sonnet-4-6';
+// Default flipped from Sonnet to Haiku based on 13-prompt × 3-model comparison
+// (2026-05-05): Haiku gave operationally-equivalent answers on 11/13 prompts
+// at 3-5× lower cost. See tests/ask-bims/comprehensive-results.json for the
+// raw evidence and scripts/comprehensive-compare.ts to reproduce.
+export const DEFAULT_MODEL: AskBimsModel = 'claude-haiku-4-5';
 
 // USD per million tokens (Anthropic 1P API rates as of 2026-05)
 const PRICING: Record<AskBimsModel, { input: number; cacheWrite5m: number; cacheRead: number; output: number }> = {
@@ -429,6 +433,25 @@ Use when: "how long will X last", "runway for Y", "do we have enough Z for next 
 				windowDays: { type: 'number', description: 'Days of history for burn-rate calc (default 14)' }
 			},
 			required: ['partNumber']
+		}
+	},
+	{
+		name: 'bulk_run_yields',
+		description: `Yield breakdown across MANY wax filling runs in ONE call. Returns one row per run with operator, robot, runEndTime, cartridge counts (accepted/scrapped/pendingQc/total), and yieldPct.
+Source: WaxFillingRun + CartridgeRecord aggregated server-side.
+
+Use INSTEAD of calling get_run_yield in a loop. Saves 10-25× on questions like "yield by robot last week", "yield trend", "compare runs".
+Use when: any multi-run yield question, trend analysis, robot/operator comparison.
+Don't use for: single-run yield (use get_run_yield).`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				sinceDays: { type: 'number', description: 'Window in days (default 14, max 90)' },
+				robot: { type: 'string', description: 'Optional filter — robot name' },
+				operator: { type: 'string', description: 'Optional filter — operator username' },
+				status: { type: 'string', description: 'Optional filter — run status (default: completed)' },
+				limit: { type: 'number', description: 'Max runs returned (default 100, max 500)' }
+			}
 		}
 	},
 	{
@@ -1481,6 +1504,126 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 					: 0,
 				source: 'PartDefinition.inventoryCount + ReceivingLot accepted sum + InventoryTransaction window',
 				sourceUrl: `/parts/${part._id}`,
+				dataIntegrityNotes: integrityNotes
+			};
+		}
+		case 'bulk_run_yields': {
+			const days = Math.min(Math.max(Number(input.sinceDays ?? 14), 1), 90);
+			const since = new Date(Date.now() - days * 86400e3);
+			const limit = Math.min(Math.max(Number(input.limit ?? 100), 1), 500);
+
+			const runFilter: any = {
+				status: input.status ?? 'completed',
+				createdAt: { $gte: since }
+			};
+			if (input.robot) runFilter['robot.name'] = input.robot;
+			if (input.operator) runFilter['operator.username'] = input.operator;
+
+			const runs = await WaxFillingRun.find(runFilter)
+				.select('_id robot operator runStartTime runEndTime cartridgeIds waxSourceLot status')
+				.sort({ runEndTime: -1, createdAt: -1 })
+				.limit(limit + 1)
+				.lean() as any[];
+			const truncated = runs.length > limit;
+			const trimmed = runs.slice(0, limit);
+
+			// Aggregate cartridge QC counts in one query for ALL runs
+			const allCartIds = trimmed.flatMap(r => r.cartridgeIds ?? []);
+			const cartAgg = allCartIds.length > 0
+				? await CartridgeRecord.aggregate([
+					{ $match: { _id: { $in: allCartIds } } },
+					{
+						$group: {
+							_id: '$waxFilling.runId',
+							total: { $sum: 1 },
+							accepted: { $sum: { $cond: [{ $eq: ['$waxQc.status', 'accepted'] }, 1, 0] } },
+							scrapped: { $sum: {
+								$cond: [{ $or: [
+									{ $eq: ['$waxQc.status', 'scrapped'] },
+									{ $eq: ['$waxQc.status', 'rejected'] }
+								] }, 1, 0]
+							} },
+							pendingQc: { $sum: { $cond: [{
+								$or: [
+									{ $eq: ['$waxQc.status', null] },
+									{ $eq: ['$waxQc.status', 'pending'] },
+									{ $eq: ['$waxQc.status', 'Pending'] },
+									{ $not: ['$waxQc.status'] }
+								]
+							}, 1, 0] } }
+						}
+					}
+				])
+				: [];
+			const aggMap = new Map(cartAgg.map((g: any) => [g._id, g]));
+
+			const integrityNotes: string[] = [];
+			let nullSourceCount = 0;
+			let zeroQcCount = 0;
+
+			const items = trimmed.map(r => {
+				const agg = aggMap.get(r._id) ?? { total: 0, accepted: 0, scrapped: 0, pendingQc: 0 };
+				const total = (r.cartridgeIds ?? []).length;
+				const yieldPct = (agg.accepted + agg.scrapped) > 0
+					? Math.round((agg.accepted / (agg.accepted + agg.scrapped)) * 1000) / 10
+					: null;
+				if (!r.waxSourceLot) nullSourceCount++;
+				if (agg.accepted === 0 && agg.scrapped === 0 && total > 0) zeroQcCount++;
+				return {
+					runId: r._id,
+					robot: r.robot?.name,
+					operator: r.operator?.username,
+					runStartTime: r.runStartTime,
+					runEndTime: r.runEndTime,
+					cartridgeCount: total,
+					accepted: agg.accepted,
+					scrapped: agg.scrapped,
+					pendingQc: agg.pendingQc,
+					yieldPct,
+					waxSourceLot: r.waxSourceLot ?? null
+				};
+			});
+
+			if (nullSourceCount > 0) integrityNotes.push(`${nullSourceCount}/${trimmed.length} runs have null waxSourceLot — wax-source traceability incomplete for those.`);
+			if (zeroQcCount > 0) integrityNotes.push(`${zeroQcCount}/${trimmed.length} runs have ZERO QC decisions recorded (accepted=0 AND scrapped=0). Yield % is null for these — QC may not be entered yet, or workflow may have skipped QC step.`);
+			if (truncated) integrityNotes.push(`Result truncated at ${limit}. Pass a smaller window or stricter filter to narrow.`);
+
+			// Aggregates by robot, since "yield by robot" is the most common downstream slice
+			const byRobot: Record<string, { runs: number; carts: number; accepted: number; scrapped: number }> = {};
+			for (const it of items) {
+				const k = it.robot ?? 'unknown';
+				const r = byRobot[k] ?? { runs: 0, carts: 0, accepted: 0, scrapped: 0 };
+				r.runs++;
+				r.carts += it.cartridgeCount;
+				r.accepted += it.accepted;
+				r.scrapped += it.scrapped;
+				byRobot[k] = r;
+			}
+			const byRobotArr = Object.entries(byRobot).map(([robot, agg]) => ({
+				robot,
+				runs: agg.runs,
+				cartridges: agg.carts,
+				accepted: agg.accepted,
+				scrapped: agg.scrapped,
+				yieldPct: (agg.accepted + agg.scrapped) > 0
+					? Math.round((agg.accepted / (agg.accepted + agg.scrapped)) * 1000) / 10
+					: null
+			}));
+
+			return {
+				windowDays: days,
+				totalRuns: items.length,
+				runs: items,
+				byRobotSummary: byRobotArr,
+				totals: {
+					cartridges: items.reduce((s, i) => s + i.cartridgeCount, 0),
+					accepted: items.reduce((s, i) => s + i.accepted, 0),
+					scrapped: items.reduce((s, i) => s + i.scrapped, 0),
+					pendingQc: items.reduce((s, i) => s + i.pendingQc, 0)
+				},
+				truncated,
+				source: 'WaxFillingRun + single CartridgeRecord aggregation (replaces N×get_run_yield calls)',
+				sourceUrl: '/cartridge-admin',
 				dataIntegrityNotes: integrityNotes
 			};
 		}

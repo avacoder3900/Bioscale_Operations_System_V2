@@ -43,7 +43,7 @@
 	let messages = $state<Message[]>([]);
 	let input = $state('');
 	let submitting = $state(false);
-	let model = $state<ModelId>('claude-sonnet-4-6');
+	let model = $state<ModelId>('claude-haiku-4-5');
 	let listEl: HTMLDivElement | undefined = $state();
 
 	// Reliability tier — circuit breaker + degraded-status tracking
@@ -94,9 +94,9 @@
 	});
 
 	const MODEL_LABELS: Record<ModelId, string> = {
-		'claude-haiku-4-5': 'Haiku · fast',
-		'claude-sonnet-4-6': 'Sonnet · default',
-		'claude-opus-4-7': 'Opus · admin'
+		'claude-haiku-4-5': 'Haiku · default · fast',
+		'claude-sonnet-4-6': 'Sonnet · sharper',
+		'claude-opus-4-7': 'Opus · admin · deepest'
 	};
 
 	function msgTokens(u: Usage): number {
