@@ -7,8 +7,19 @@
 	let { data } = $props();
 
 	let searchInput = $state(data.filters.search ?? '');
-	let runIdInput = $state(data.filters.runId ?? '');
 	let expandedId = $state<string | null>(null);
+
+	function formatRunOption(run: { processType: string; operator: string | null; startedAt: string | null; id: string }): string {
+		const when = run.startedAt
+			? new Date(run.startedAt).toLocaleString(undefined, {
+				month: 'short', day: 'numeric', year: 'numeric',
+				hour: 'numeric', minute: '2-digit'
+			})
+			: '—';
+		const op = run.operator ?? 'unknown';
+		const proc = run.processType === 'wax' ? 'Wax' : 'Reagent';
+		return `${when} • ${op} • ${proc}`;
+	}
 
 	const STAGES: LifecycleStage[] = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed', 'voided'];
 
@@ -49,12 +60,7 @@
 		updateFilters({ search: searchInput || undefined });
 	}
 
-	function applyRunIdFilter() {
-		updateFilters({ runId: runIdInput.trim() || undefined });
-	}
-
 	function clearRunIdFilter() {
-		runIdInput = '';
 		updateFilters({ runId: undefined });
 	}
 
@@ -111,19 +117,15 @@
 			{/each}
 		</select>
 
-		<div class="flex gap-1">
-			<input
-				bind:value={runIdInput}
-				onkeydown={(e) => { if (e.key === 'Enter') applyRunIdFilter(); }}
-				placeholder="Run ID (wax or reagent)..."
-				class="min-h-[44px] w-56 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm font-mono text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
-			/>
-			<button type="button" onclick={applyRunIdFilter}
-				class="min-h-[44px] rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-3 py-2 text-sm font-medium text-[var(--color-tron-cyan)]"
-			>
-				Filter Run
-			</button>
-		</div>
+		<select onchange={(e) => updateFilters({ runId: e.currentTarget.value || undefined })}
+			class="min-h-[44px] w-72 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text)]"
+			title="Filter cartridges by wax or reagent run"
+		>
+			<option value="">All Runs</option>
+			{#each data.recentRuns as run (run.id)}
+				<option value={run.id} selected={data.filters.runId === run.id}>{formatRunOption(run)}</option>
+			{/each}
+		</select>
 	</div>
 
 	{#if data.filters.runId}
@@ -224,7 +226,7 @@
 						<td class="px-3 py-2 font-mono text-xs text-[var(--color-tron-text-secondary)]">
 							{#if c.waxRunId}
 								<button type="button"
-									onclick={(e) => { e.stopPropagation(); runIdInput = c.waxRunId; updateFilters({ runId: c.waxRunId }); }}
+									onclick={(e) => { e.stopPropagation(); updateFilters({ runId: c.waxRunId }); }}
 									class="hover:text-[var(--color-tron-cyan)] hover:underline"
 									title="Show all cartridges in this wax run"
 								>{c.waxRunId}</button>
@@ -233,7 +235,7 @@
 						<td class="px-3 py-2 font-mono text-xs text-[var(--color-tron-text-secondary)]">
 							{#if c.reagentRunId}
 								<button type="button"
-									onclick={(e) => { e.stopPropagation(); runIdInput = c.reagentRunId; updateFilters({ runId: c.reagentRunId }); }}
+									onclick={(e) => { e.stopPropagation(); updateFilters({ runId: c.reagentRunId }); }}
 									class="hover:text-[var(--color-tron-cyan)] hover:underline"
 									title="Show all cartridges in this reagent run"
 								>{c.reagentRunId}</button>
