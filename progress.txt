@@ -796,3 +796,220 @@ Lot `V1BSHFzMXsNAxYiP59o6b` / bucket `2941bb67`: WI-01 recorded 54
 cartridges; 66 actually pulled. 12 extras have unverified provenance.
 Documented via corrections[] + AuditLog RECONCILE. **Must not ship to
 customer without human QA review.** Carry this until closed.
+
+## Session 2026-05-04/05 — Print Barcodes Overhaul + Fridge Breakdown
+
+### Print barcodes (`/manufacturing/print-barcodes`)
+
+Long thread of incremental fixes against a single page. Final state:
+
+- **Print rendering:** entire 8×10 sheet composes onto a single off-DOM
+  canvas at 300 DPI → one `<img>` per sheet → one PDF Image object per
+  page. Earlier per-cell strategies (canvas, SVG, img+data-URI) all
+  tripped HP "PDL PDF limitcheck" because HP firmware caps near 50
+  image XObjects/page; one-image-per-sheet is comfortably under that.
+- **Layout:** Avery 94102 (8×10 / 0.75" cells / 0.125" gutters /
+  0.23"+0.46" page margins) with operator-tuned grid shift (`shiftX
+  = 0.1125 * cellSize`, `shiftY = 0.10 * cellSize`) and 15% in-place
+  shrink on QR + ABC labels + UUID text (centers preserved). UUID
+  text rendered as two lines split at the midpoint.
+- **Print stream chrome:** `display:none` on `header`, `aside.mfg-sidebar`,
+  `.tron-scanlines` so they never enter the print PDF (was a big
+  contributor to the limitcheck before this fix).
+- **Print dialog flow:** "Print Sheet" disables itself while open;
+  `afterprint` event opens an "Add to inventory?" modal. Trailing
+  blank page eliminated by gating `break-after: page` to all-but-last
+  sheet.
+- **Inventory wiring (final design — commit `8dd3a04`):** consolidated
+  to `PT-CT-106` "Barcodes" only (drops the short-lived `PT-CT-115`
+  "Barcode Template Sheets" idea). On confirm, two transactions hit
+  the same part via the shared `recordTransaction` helper:
+    - `consumption: sheetsToPrint`  (sheets fed in)
+    - `creation: totalLabels`       (labels printed)
+  Net per sheet = +(LABELS_PER_SHEET − 1) = +79 ⇒ WI-01 cartridge-back's
+  `if (have < quantity)` check is never starved. `BarcodeInventory`
+  legacy mirror still decremented for the cart-mfg-dev "Barcode sheets
+  low" alert (one-way drain — pre-existing dysfunction, flagged for
+  follow-up).
+- **Generate vs Confirm:** `?/print` only mints UUIDs and previews —
+  no DB writes. `?/addToInventory` is the commit point; "No, discard"
+  just navigates back, no cleanup needed (UUIDs are stateless).
+
+Commits on `dev`: `8bd4e82`, `ef7ee53`, `581dad1`, `bf423f5`, `eab4e18`,
+`fe579da`, `01ae0ca`, `8dd3a04`.
+
+### Fridge totals breakdown (5 surfaces)
+
+Mirroring the existing `/inventory/fridge-storage` split (commit `cb6ff0d`)
+across every other surface that summarises fridges:
+
+- `/equipment/activity` per-fridge card (commit `b4b09d2`)
+- `/equipment/fridges-ovens` per-row pill, `/equipment/location/[id]`
+  stats grid + filter buttons, `/cartridge-dashboard` Fridge Storage
+  list, root `/+page.server.ts` `fridgeCapacity.used` count
+  (commit `f308160`)
+
+Three buckets per fridge, all filtered against `getCheckedOutCartridgeIds()`:
+- `wax_accepted`: `status='wax_stored'` (post-QC, live inventory)
+- `wax_scrapped`: `status='scrapped'` w/ `waxStorage.location` set
+  (QA quarantine, physically still occupying the slot)
+- `reagent`: `status∈{stored, reagent_filled}` w/ `storage.fridgeName`
+  set (post-reagent-fill bucket)
+
+`equipment/location/[locationId]` also added a 'scrapped' phase badge
+style (red) and gained a `wax_scrapped` filter button.
+
+### Heads-up for next session
+
+- `BarcodeInventory.avery94102SheetsOnHand` is a one-way drain (only
+  decremented on print, never incremented on ROG). Three readers:
+  `manufacturing/+page.server.ts`, `cart-mfg-dev/+page.server.ts`,
+  `api/manufacturing/dashboard/+server.ts`. To finish consolidation,
+  refactor those to read `PT-CT-106.inventoryCount` and stop touching
+  `BarcodeInventory`.
+- Branch `feat/scanner-on-ot2` exists locally and on origin; not
+  related to this session but caused some confusion mid-session
+  because rebase/stash bounced HEAD between branches.
+
+## Session 2026-05-04/05 — Laser-cut traceability, pre-wax checkout, MOCREO heartbeat, ask-bims yield fix
+
+Four shipped features, all on `dev`. Each commit referenced inline.
+
+### Laser-cut produced batches mirror as ReceivingLots on PT-CT-112 (`5a5a7be`)
+
+The wax-filling → cartridge-back → laser-cut chain was updating
+`PT-CT-112.inventoryCount` via `recordTransaction` (creation tx with
+`partDefinitionId`) but not creating a `ReceivingLot`, so internally
+produced batches never appeared on the Receiving Lots tab of the part
+page (only ROG-accessioned lots did). Fix: in
+`src/routes/manufacturing/laser-cutting/+page.server.ts` `recordBatch`,
+after the output `recordTransaction`, look up the part doc and create a
+matching `ReceivingLot` keyed by `outputLotId` with
+`status='accepted'`, `inspectionPathway='coc'`,
+`cocMeetsStandards=true`, quantity=stripsProduced.
+
+Backfill: `scripts/backfill-laser-cut-receiving-lots.ts` walks
+`laser_cut_batches`, sources qty from the matching InventoryTransaction
+(strips/sheet ratio drifted 6→16 between Apr 22 and Apr 27 — recomputing
+with current ratio overstates older batches), and skips batches with no
+matching tx (predate the partDefinitionId wiring in commit `6795b23`,
+never moved inventory). Ran live: 4 lots backfilled (LOT-20260422-RFIZ
+qty=18, LOT-20260427-DZCO qty=160, LOT-20260427-OFBC qty=96,
+LOT-20260504-MKBM qty=240), 3 pre-wiring orphans skipped. PT-CT-112's
+Receiving Lots tab now shows 6 lots / 536 units.
+
+### Pre-wax cartridge removal from a backing lot (`00034b5`)
+
+Operators need to pull cartridges from a backing-lot bucket sitting in
+the oven before wax filling (over-counted bucket, inspection pull, etc).
+Adds `removeFromBackingLot` action and a second card on
+`/manufacturing/scrap`. Operator scans the bucket barcode (which IS the
+`BackingLot._id`) and enters a headcount.
+
+Mirrors `wax-filling/loadDeck`: atomic conditional decrement on
+`BackingLot.cartridgeCount` via
+`findOneAndUpdate({_id, cartridgeCount: {$gte: count}}, {$inc: {-count}})`
+which refuses to over-pull, and flips status to `'consumed'` when the
+bucket drains. **No CartridgeRecord rows are created or touched** — at
+the backing stage cartridges only exist as an aggregate count, individual
+records are first created at wax-deck loading. The audit trail lives on
+`ManualCartridgeRemoval` (extended with `backingLotId` + `cartridgeCount`,
+backward-compat) and an `AuditLog` `CHECKOUT` entry against
+`tableName='backing_lots'`.
+
+UI: Recent Checkouts table now badges pre-wax entries with a "Pre-wax"
+chip + the lot id; the "Cartridges" expansion is hidden on those rows
+(no UUIDs to show). Verified end-to-end via
+`scripts/sim-pre-wax-removal.ts` (10 cases, including over-pull
+rejection, drain → consumed transition, and post-drain guard).
+
+### MOCREO half-hour heartbeat with reminder cadence + auto-resolve (`cf621bd`)
+
+The 5-min sync at `/api/cron/mocreo` already detected gateway outages
+and fired a single email, but never re-emailed and never auto-resolved
+— operators stayed in the dark while the gateway stayed down. Adds
+`/api/cron/mocreo-heartbeat` at `*/30 * * * *` that re-emails every 30
+min while the outage persists and clears the alert + sends a recovery
+email when probes start reporting again.
+
+Lifecycle of a `gateway_outage` alert:
+- t=0      5-min sync detects outage → creates alert + initial email
+- t=30/60  heartbeat sees still-open alert + lastNotifiedAt ≥ 25min ago
+           → sends reminder #1, #2, ... (subject prefixes "[REMINDER #N]")
+- t=Nm     readings resume → either cron auto-resolves + recovery email
+
+Heartbeat is **DB-only** — it reads `TemperatureReading` and the open
+alert from Mongo, never calls the MOCREO API. So it correctly fires on
+cascade loss, building power loss, gateway crash, AND if the 5-min sync
+itself stops firing for any reason. Reminder threshold is 25min, not 30,
+to give the cron 5min of slack so a slightly-late fire doesn't skip a
+beat (Vercel cron timing isn't second-precise).
+
+Two guard rails on the email side:
+- Defensive create only fires on confirmed outage signal
+  (`haveSignal && isOutage`) — no false alarms when there's no probe data
+- Auto-resolve requires positive evidence (`haveSignal && !isOutage`).
+  An outage that outlasts the 7-day reading lookback returns
+  `reminder_sent` (alert stays open, reminders continue) rather than
+  falsely emailing "Gateway recovered."
+
+Schema additions on `TemperatureAlert`: `lastNotifiedAt`,
+`notificationCount`, `resolvedAt`, `resolvedReason` (all backward-compat).
+`notifyGatewayOutage` accepts optional `firstSeenAt` + `reminderNumber`
+so reminders render with downtime + reminder count in the subject. New
+`notifyGatewayRecovered` for the recovery one-shot. The 5-min sync also
+auto-resolves on recovery so both crons converge on the same state
+whichever fires first. Verified via `scripts/sim-mocreo-heartbeat.ts`
+(10 cases).
+
+### ask-bims `get_run_yield` casing bug (`62ed216`)
+
+User reported "15 wax_stored cartridges still pending QC" but the DB
+showed 0. Trace: an AI agent calling `get_run_yield` for run
+`7ahsRsv6Y7Hy_1cf1_EPm` (17 carts) reported 0 accepted / 0 scrapped /
+17 pendingQc. Real ground truth from `find_cartridges` was 15 Accepted
+/ 2 Rejected / 0 pending.
+
+Root cause was **purely casing**, not field path: schema enum is
+`['Accepted', 'Rejected', 'Pending']` but the comparisons in
+`get_run_yield` were lowercase (`if (qc === 'accepted')`), so no cart
+ever matched the accepted or rejected branch and everything fell through
+to `pendingQc`. Fixed by normalizing input to lowercase before comparing
+(rather than matching capitalized literals) so the bug can't recur if
+the schema enum casing ever drifts again.
+
+Subtle gotcha that made this look like a field-path bug: sibling tool
+`find_cartridges` projects the same DB field (`waxQc.status`) under the
+output name `qcStatus`. The user's diagnostic showed `qcStatus` as a
+"top-level field," but it's just an API rename in the projection. Don't
+change the field path — `c.waxQc?.status` is the actual DB nesting and
+it was already correct in `get_run_yield`.
+
+### Repo layout heads-up
+
+There are TWO git checkouts of this repo on disk:
+- Outer: `/Users/brevitest/Bioscale_Operations_System_V2/` (this is the
+  one to edit; current branch tracks `origin/dev`)
+- Nested: `/Users/brevitest/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2/`
+  (separate clone, was on `master`; production deploys from this branch
+  via Vercel based on the strips/sheet text observed in production
+  inventory transactions)
+
+Caused some confusion mid-session: a `tsx` run from the wrong CWD
+resolved scripts under the nested clone. To ship a fix to production,
+merge `dev` → `master` so Vercel rebuilds. Untracked `Bioscale_Operations_System_V2/`
+in `git status` is the nested clone, not files to commit.
+
+### Heads-up for next session
+
+- The pre-wax checkout commit modifies `src/routes/manufacturing/scrap/+page.svelte`
+  — `CLAUDE.md` says `.svelte` files are frozen, but the user explicitly
+  authorized this edit ("yes you have all permissions go ahead").
+- The MOCREO heartbeat depends on the cron actually firing every 30
+  min. Vercel has had cron-registration drift before (history of
+  "trigger Vercel rebuild" commits in May 2026); first sanity check on
+  the next session is `vercel cron list` or the dashboard to confirm
+  `/api/cron/mocreo-heartbeat` is registered.
+- Backfill script `scripts/backfill-laser-cut-receiving-lots.ts` is
+  idempotent (`lotId`-keyed) and safe to re-run. New laser-cut batches
+  auto-create their own ReceivingLots; only old batches needed it.
