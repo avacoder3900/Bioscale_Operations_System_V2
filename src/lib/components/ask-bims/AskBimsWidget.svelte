@@ -287,7 +287,7 @@
 	.ask-bims-pill {
 		position: fixed;
 		bottom: 1.25rem;
-		right: 1.25rem;
+		left: 1.25rem;
 		z-index: 40;
 		display: inline-flex;
 		align-items: center;
@@ -321,7 +321,7 @@
 	.ask-bims-panel {
 		position: fixed;
 		bottom: 1.25rem;
-		right: 1.25rem;
+		left: 1.25rem;
 		z-index: 40;
 		width: 22rem;
 		max-width: calc(100vw - 2.5rem);
