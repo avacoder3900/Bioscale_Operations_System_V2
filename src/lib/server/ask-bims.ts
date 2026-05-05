@@ -453,9 +453,11 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 			for (const c of carts) {
 				const s = c.status ?? 'unknown';
 				counts[s] = (counts[s] ?? 0) + 1;
-				const qc = c.waxQc?.status;
+				// Schema enum is 'Accepted' | 'Rejected' | 'Pending' (capitalized).
+				// Normalize so legacy lowercase data still buckets correctly.
+				const qc = String(c.waxQc?.status ?? '').toLowerCase();
 				if (qc === 'accepted') accepted++;
-				else if (qc === 'scrapped' || qc === 'rejected') scrapped++;
+				else if (qc === 'rejected' || qc === 'scrapped') scrapped++;
 				else pendingQc++;
 			}
 			const total = cartridgeIds.length;
