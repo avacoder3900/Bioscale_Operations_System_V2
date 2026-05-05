@@ -144,13 +144,15 @@ Caveat: lastTemperatureReadAt may be stale if a sensor lost connection — surfa
 		description: `Recent manufacturing runs (wax filling and reagent filling).
 Source: WaxFillingRun and ReagentBatchRecord models.
 
-Use when: "recent runs", "what ran today", "show aborted runs", "what's running right now".`,
+Use when: "recent runs", "what ran today", "show aborted runs", "what's running right now".
+
+IMPORTANT: Default sinceHours is 168 (one week) — large enough that "most recent X" questions resolve in one call. If this returns no matching runs, ACCEPT the result and tell the user. Do NOT call this tool again with a wider window — that's an anti-redundancy violation.`,
 		input_schema: {
 			type: 'object',
 			properties: {
 				runType: { type: 'string', description: 'wax_filling | reagent_filling | any (default)' },
 				status: { type: 'string', description: 'completed | aborted | running | etc' },
-				sinceHours: { type: 'number', description: 'Default 24' },
+				sinceHours: { type: 'number', description: 'Default 168 (one week). Use 24 only when user explicitly asks about today.' },
 				limit: { type: 'number' }
 			}
 		}
@@ -573,7 +575,7 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 			};
 		}
 		case 'list_recent_runs': {
-			const sinceHours = input.sinceHours ?? 24;
+			const sinceHours = input.sinceHours ?? 168;
 			const since = new Date(Date.now() - sinceHours * 3600e3);
 			const limit = Math.min(input.limit ?? 20, 50);
 			const filter: any = { createdAt: { $gte: since } };
@@ -1672,7 +1674,9 @@ E. **On broad questions** ("what's going on?", "how's the floor?"): pick 2-3 tar
 
 F. **When parameters matter.** Tools with optional parameters benefit from useful defaults: pass sinceHours when asked about "today" or "recent", pass status filters when the user mentions a stage, pass limits when they want "top N." Don't call a tool with no parameters and then re-call with parameters when you realize it returned too much.
 
-G. **NEVER re-call the same tool in one turn.** Before calling a tool, check whether you've already called it in this conversation turn — even with slightly different parameters. If yes, USE THE PRIOR RESULT. If you genuinely need a refined query, you have one shot to get the parameters right; calling list_recent_runs twice in a row is a bug.
+G. **NEVER re-call the same tool in one turn.** Before calling a tool, check whether you've already called it in this conversation turn — even with slightly different parameters. If yes, USE THE PRIOR RESULT.
+
+   Concrete example of the bug: you call list_recent_runs(sinceHours=24), get no matches, then call list_recent_runs(sinceHours=168) hoping for more. That's a violation — the second call burns tokens and is detected as anti-redundancy. INSTEAD: pass a generous window on your first call (the tool's default is one week), accept whatever comes back, and tell the user "no recent runs in the past week" if nothing matches. Two calls to the same tool in one turn is ALWAYS a bug.
 
 H. **UUID-style IDs are ReceivingLot IDs, not parts.** A string like 74b942a2-16a5-4ae4-aa91-917d3ecc146a is a ReceivingLot._id (or a similar UUID-style barcode). Use find_receiving_lot, NOT find_part. find_part queries the PT-CT-XXX catalog and will return nothing for UUID lookups, which then leads to false-positive "lot not found" warnings. Recognize UUIDs by their shape (8-4-4-4-12 hex with dashes).`;
 
