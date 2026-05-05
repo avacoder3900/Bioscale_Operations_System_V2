@@ -190,13 +190,32 @@
 							{:else}
 								<div style="white-space: pre-wrap;">{msg.content}</div>
 								{#if msg.toolCalls && msg.toolCalls.length > 0}
+									{@const integrityNotes = msg.toolCalls.flatMap((tc: any) => tc.result?.dataIntegrityNotes ?? [])}
+									{#if integrityNotes.length > 0}
+										<div class="mt-2 rounded border border-[var(--color-tron-yellow)]/40 bg-[var(--color-tron-yellow)]/10 px-2 py-1.5 text-xs text-[var(--color-tron-yellow)]">
+											<div class="font-semibold">⚠ Data integrity notes</div>
+											<ul class="mt-1 list-disc pl-4 text-[var(--color-tron-text-secondary)]">
+												{#each integrityNotes as note (note)}
+													<li>{note}</li>
+												{/each}
+											</ul>
+										</div>
+									{/if}
 									<details class="mt-2 text-xs text-[var(--color-tron-text-secondary)]">
 										<summary class="cursor-pointer hover:text-[var(--color-tron-cyan)]">
 											Queried {msg.toolCalls.length} data source{msg.toolCalls.length > 1 ? 's' : ''}
 										</summary>
-										<ul class="mt-1 list-disc pl-5 font-mono">
+										<ul class="mt-1 list-disc pl-5">
 											{#each msg.toolCalls as tc (tc.name + JSON.stringify(tc.input))}
-												<li>{tc.name}({JSON.stringify(tc.input)})</li>
+												<li>
+													<span class="font-mono">{tc.name}</span>
+													{#if tc.result?.sourceUrl}
+														<a href={tc.result.sourceUrl} class="ml-2 text-[var(--color-tron-cyan)] hover:underline">Verify in BIMS →</a>
+													{/if}
+													{#if tc.result?.source}
+														<div class="pl-4 text-[10px] text-[var(--color-tron-text-secondary)]">{tc.result.source}</div>
+													{/if}
+												</li>
 											{/each}
 										</ul>
 									</details>

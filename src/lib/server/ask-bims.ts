@@ -2,7 +2,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { env } from '$env/dynamic/private';
 import {
 	connectDB, WaxBatch, WaxFillingRun, TemperatureAlert,
-	PartDefinition, Equipment, CartridgeRecord, ReagentBatchRecord
+	PartDefinition, Equipment, CartridgeRecord, ReagentBatchRecord,
+	ReceivingLot
 } from './db';
 
 export type AskBimsModel = 'claude-haiku-4-5' | 'claude-sonnet-4-6' | 'claude-opus-4-7';
@@ -25,49 +26,81 @@ function getClient(): Anthropic | null {
 	return _client;
 }
 
+// Domain constants — keep in sync with manufacturing/wax-filling code paths
+const WAX_TUBE_PART_NUMBER = 'PT-CT-114';
+const FULL_TUBE_VOLUME_UL = 12000;
+
 const TOOLS: Anthropic.Tool[] = [
 	{
-		name: 'list_wax_batches',
-		description: 'List wax batches with optional filter for low remaining volume. Use this to answer questions about wax supply.',
+		name: 'get_wax_tube_inventory',
+		description: `**Source of truth** for current 15ml wax tube inventory.
+Queries: ReceivingLot where part.partNumber = ${WAX_TUBE_PART_NUMBER} and status in (accepted, in_progress). Computes per-lot remaining volume from quantity × ${FULL_TUBE_VOLUME_UL} μL minus consumedUl.
+
+Use when: "how much wax do we have", "wax inventory", "wax runway", "will we run out of wax", "what wax is in stock".
+Don't use for: in-house produced wax production records — those live in WaxBatch (see list_legacy_wax_batches).`,
 		input_schema: {
 			type: 'object',
 			properties: {
-				maxRemainingUl: { type: 'number', description: 'Only return batches with remainingVolumeUl <= this value' },
-				limit: { type: 'number', description: 'Max results (default 20)' }
+				maxRemainingUl: { type: 'number', description: 'Only return lots with remainingVolumeUl <= this' },
+				limit: { type: 'number', description: 'Max results (default 20, capped at 50)' }
+			}
+		}
+	},
+	{
+		name: 'list_legacy_wax_batches',
+		description: `**Legacy / non-authoritative** — in-house wax production records from the WaxBatch model. Most BIMS deployments have migrated to ReceivingLot-tracked tubes; these records are largely orphan or test data unless the operator explicitly mentions in-house wax production.
+
+Use only when: user explicitly asks about in-house wax production OR about a specific WAX-... batch number.
+Don't use for: general "how much wax do we have" — use get_wax_tube_inventory instead.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				maxRemainingUl: { type: 'number' },
+				limit: { type: 'number' }
 			}
 		}
 	},
 	{
 		name: 'get_temperature_alerts',
-		description: 'Recent temperature alerts (high_temp, low_temp, lost_connection) across all sensors.',
+		description: `Temperature alerts (high_temp, low_temp, lost_connection) raised by Mocreo sensors and other temperature-monitored equipment.
+Source: TemperatureAlert model.
+
+Use when: "temperature alerts", "what's out of spec", "what alerted today", "unacknowledged alerts".`,
 		input_schema: {
 			type: 'object',
 			properties: {
 				sinceHours: { type: 'number', description: 'Only alerts from the last N hours (default 24)' },
 				alertType: { type: 'string', description: 'One of: high_temp, low_temp, lost_connection' },
-				onlyUnacknowledged: { type: 'boolean', description: 'Only unacknowledged alerts' },
+				onlyUnacknowledged: { type: 'boolean' },
 				limit: { type: 'number' }
 			}
 		}
 	},
 	{
 		name: 'get_current_temperatures',
-		description: 'Current temperature reading for each sensor/equipment. Useful for "what is the temperature of X right now".',
+		description: `Current temperature reading per fridge/oven.
+Source: Equipment model — currentTemperatureC field, populated from Mocreo sync.
+
+Use when: "what is the temperature of X right now", "current temps", "is fridge X at the right temp".
+Caveat: lastTemperatureReadAt may be stale if a sensor lost connection — surface that in the answer.`,
 		input_schema: {
 			type: 'object',
 			properties: {
-				sensorName: { type: 'string', description: 'Optional filter by sensor/equipment name (case-insensitive partial match)' }
+				sensorName: { type: 'string', description: 'Optional partial name match (case-insensitive)' }
 			}
 		}
 	},
 	{
 		name: 'list_recent_runs',
-		description: 'Recent manufacturing runs (wax filling or reagent filling) with status, operator, cartridge count.',
+		description: `Recent manufacturing runs (wax filling and reagent filling).
+Source: WaxFillingRun and ReagentBatchRecord models.
+
+Use when: "recent runs", "what ran today", "show aborted runs", "what's running right now".`,
 		input_schema: {
 			type: 'object',
 			properties: {
-				runType: { type: 'string', description: 'One of: wax_filling, reagent_filling, any (default)' },
-				status: { type: 'string', description: 'Filter by status e.g. completed, aborted, running' },
+				runType: { type: 'string', description: 'wax_filling | reagent_filling | any (default)' },
+				status: { type: 'string', description: 'completed | aborted | running | etc' },
 				sinceHours: { type: 'number', description: 'Default 24' },
 				limit: { type: 'number' }
 			}
@@ -75,17 +108,24 @@ const TOOLS: Anthropic.Tool[] = [
 	},
 	{
 		name: 'list_low_inventory_parts',
-		description: 'Parts with inventory below their reorder threshold. Useful for "what do I need to order".',
+		description: `Parts with inventory below their reorder threshold.
+Source: PartDefinition.inventoryCount vs PartDefinition.minimumOrderQty.
+
+Use when: "what do I need to reorder", "low inventory", "running low".
+Caveat: PartDefinition.inventoryCount is a denormalized counter; the operational truth for any specific part is the sum of accepted ReceivingLots minus consumption.`,
 		input_schema: {
 			type: 'object',
 			properties: {
-				percentThreshold: { type: 'number', description: 'inventoryCount must be below minimumOrderQty * (1 + pct/100). Default 20%.' }
+				percentThreshold: { type: 'number', description: 'inventoryCount <= minimumOrderQty * (1 + pct/100). Default 20%.' }
 			}
 		}
 	},
 	{
 		name: 'find_part',
-		description: 'Look up a part by partNumber, name, or barcode and return inventory, supplier, etc.',
+		description: `Look up a part by partNumber, name, or barcode.
+Source: PartDefinition model.
+
+Use when: "tell me about part X", "what's PT-CT-104", "lookup barcode YYY".`,
 		input_schema: {
 			type: 'object',
 			properties: {
@@ -96,29 +136,39 @@ const TOOLS: Anthropic.Tool[] = [
 	},
 	{
 		name: 'find_cartridges',
-		description: 'Look up cartridge records by status or ID.',
+		description: `Find cartridges by ID, status, or runId.
+Source: CartridgeRecord model.
+
+Use when: "find cart X", "show cartridges in status Y", "cartridges from run Z".`,
 		input_schema: {
 			type: 'object',
 			properties: {
 				cartridgeId: { type: 'string' },
-				status: { type: 'string', description: 'e.g. backing, wax_filling, wax_stored, reagent_filled' },
+				status: { type: 'string', description: 'backing | wax_filling | wax_stored | reagent_filled | etc.' },
+				runId: { type: 'string', description: 'Filter to cartridges produced by a specific WaxFillingRun' },
 				limit: { type: 'number' }
 			}
 		}
 	},
 	{
 		name: 'list_equipment',
-		description: 'All equipment (fridges, ovens, decks) with current status and temperature if available.',
+		description: `Equipment registry (fridges, ovens, decks, robots).
+Source: Equipment model.
+
+Use when: "list equipment", "what fridges do we have", "is robot X online".`,
 		input_schema: {
 			type: 'object',
 			properties: {
-				equipmentType: { type: 'string', description: 'fridge, oven, deck, etc.' }
+				equipmentType: { type: 'string', description: 'fridge | oven | deck | robot | etc.' }
 			}
 		}
 	},
 	{
 		name: 'get_run_yield',
-		description: 'Yield breakdown (accepted/scrapped/pending QC) for a specific wax filling run by runId. Use when the user asks about yield, scrap rate, or QC results for a particular run.',
+		description: `Yield breakdown (accepted/scrapped/pending QC) for a wax filling run.
+Source: WaxFillingRun + CartridgeRecord.waxQc.status for each cartridgeId in the run.
+
+Use when: "yield on run X", "scrap rate for run Y", "QC results for run Z".`,
 		input_schema: {
 			type: 'object',
 			properties: {
@@ -129,43 +179,117 @@ const TOOLS: Anthropic.Tool[] = [
 	},
 	{
 		name: 'trace_cartridge',
-		description: 'Full lineage trace for a single cartridge: backing lot, wax run, wax lot, QC outcome, storage location, reagent run if any. Use for any "where did this cartridge come from" or "what lots went into this" question.',
+		description: `Full lineage trace for a single cartridge — backing lot, wax run, wax source lot, QC outcome, storage location, reagent run if any.
+Source: CartridgeRecord + joined data from WaxFillingRun, WaxBatch (legacy), ReceivingLot.
+
+Use when: "trace cart X", "where did this cart come from", "what lots went into cart Y".
+Caveat: waxFilling.waxSourceLot is optional in WaxFillingRun and may be null on older runs — flag this if encountered.`,
 		input_schema: {
 			type: 'object',
 			properties: {
-				cartridgeId: { type: 'string', description: 'CartridgeRecord _id' }
+				cartridgeId: { type: 'string' }
 			},
 			required: ['cartridgeId']
 		}
 	},
 	{
 		name: 'count_cartridges_by_status',
-		description: 'Count cartridges grouped by status, optionally filtered to a recent time window. Use for "how many cartridges were made today" type questions.',
+		description: `Count cartridges grouped by status, optionally filtered to a recent time window.
+Source: CartridgeRecord aggregation.
+
+Use when: "how many cartridges did we make today", "current state of the floor", "cart counts".`,
 		input_schema: {
 			type: 'object',
 			properties: {
 				sinceHours: { type: 'number', description: 'Only count cartridges created in the last N hours (default: all-time)' }
 			},
-			// cache_control on the last tool caches all tools + system together (when prefix ≥ 2048 tokens on Sonnet 4.6)
 			cache_control: { type: 'ephemeral' }
 		}
 	}
 ];
 
-async function runTool(name: string, input: any): Promise<any> {
+interface ToolResult {
+	[key: string]: unknown;
+	source?: string;
+	sourceUrl?: string;
+	dataIntegrityNotes?: string[];
+}
+
+async function runTool(name: string, input: any): Promise<ToolResult> {
 	await connectDB();
 	switch (name) {
-		case 'list_wax_batches': {
+		case 'get_wax_tube_inventory': {
+			const filter: any = { 'part.partNumber': WAX_TUBE_PART_NUMBER, status: { $in: ['accepted', 'in_progress'] } };
+			const limit = Math.min(input.limit ?? 20, 50);
+			const lots = await ReceivingLot.find(filter)
+				.select('lotId lotNumber bagBarcode quantity consumedUl status part createdAt')
+				.sort({ createdAt: -1 })
+				.limit(limit)
+				.lean() as any[];
+
+			let totalRemainingUl = 0;
+			let totalTubesRemaining = 0;
+			const items = lots.map(l => {
+				const tubeCount = Number(l.quantity ?? 0);
+				const consumedUl = Number(l.consumedUl ?? 0);
+				const totalUl = tubeCount * FULL_TUBE_VOLUME_UL;
+				const remainingUl = Math.max(0, totalUl - consumedUl);
+				const tubesUsed = Math.floor(consumedUl / FULL_TUBE_VOLUME_UL);
+				const tubesRemaining = Math.max(0, tubeCount - tubesUsed);
+				totalRemainingUl += remainingUl;
+				totalTubesRemaining += tubesRemaining;
+				return {
+					lotId: l.lotId,
+					lotNumber: l.lotNumber,
+					bagBarcode: l.bagBarcode,
+					tubesOriginal: tubeCount,
+					tubesRemaining,
+					remainingVolumeUl: remainingUl,
+					initialVolumeUl: totalUl,
+					consumedUl,
+					status: l.status,
+					createdAt: l.createdAt
+				};
+			});
+
+			const filtered = input.maxRemainingUl != null ? items.filter(i => i.remainingVolumeUl <= input.maxRemainingUl) : items;
+
+			return {
+				lots: filtered,
+				summary: {
+					lotCount: filtered.length,
+					totalTubesRemaining,
+					totalRemainingUl
+				},
+				source: `ReceivingLot where part.partNumber=${WAX_TUBE_PART_NUMBER}, status in (accepted, in_progress)`,
+				sourceUrl: '/parts'
+			};
+		}
+		case 'list_legacy_wax_batches': {
 			const filter: any = {};
 			if (input.maxRemainingUl != null) filter.remainingVolumeUl = { $lte: input.maxRemainingUl };
 			const limit = Math.min(input.limit ?? 20, 50);
 			const batches = await WaxBatch.find(filter).sort({ remainingVolumeUl: 1 }).limit(limit).lean() as any[];
-			return batches.map(b => ({
-				lotNumber: b.lotNumber, lotBarcode: b.lotBarcode,
-				remainingVolumeUl: b.remainingVolumeUl, initialVolumeUl: b.initialVolumeUl,
-				fullTubeCount: b.fullTubeCount,
-				createdAt: b.createdAt, createdBy: b.createdBy?.username
-			}));
+
+			const notes: string[] = [];
+			if (batches.length > 0) {
+				notes.push('WaxBatch records are legacy / in-house production. They are NOT the source of truth for current operational wax inventory — that lives in ReceivingLot for PT-CT-114 tubes. Only treat these as authoritative if the user explicitly asked about in-house wax production.');
+			}
+
+			return {
+				batches: batches.map(b => ({
+					lotNumber: b.lotNumber,
+					lotBarcode: b.lotBarcode,
+					remainingVolumeUl: b.remainingVolumeUl,
+					initialVolumeUl: b.initialVolumeUl,
+					fullTubeCount: b.fullTubeCount,
+					createdAt: b.createdAt,
+					createdBy: b.createdBy?.username
+				})),
+				source: 'WaxBatch model — LEGACY in-house wax production records',
+				sourceUrl: '/parts',
+				dataIntegrityNotes: notes
+			};
 		}
 		case 'get_temperature_alerts': {
 			const filter: any = {};
@@ -175,23 +299,42 @@ async function runTool(name: string, input: any): Promise<any> {
 			if (input.onlyUnacknowledged) filter.acknowledged = false;
 			const limit = Math.min(input.limit ?? 20, 100);
 			const alerts = await TemperatureAlert.find(filter).sort({ timestamp: -1 }).limit(limit).lean() as any[];
-			return alerts.map(a => ({
-				sensorName: a.sensorName, alertType: a.alertType,
-				threshold: a.threshold, actualValue: a.actualValue,
-				equipmentName: a.equipmentName,
-				acknowledged: a.acknowledged, timestamp: a.timestamp
-			}));
+			return {
+				alerts: alerts.map(a => ({
+					sensorName: a.sensorName, alertType: a.alertType,
+					threshold: a.threshold, actualValue: a.actualValue,
+					equipmentName: a.equipmentName,
+					acknowledged: a.acknowledged, timestamp: a.timestamp
+				})),
+				source: 'TemperatureAlert model',
+				sourceUrl: '/equipment/activity'
+			};
 		}
 		case 'get_current_temperatures': {
 			const eqFilter: any = { equipmentType: { $in: ['fridge', 'oven'] }, currentTemperatureC: { $exists: true } };
 			if (input.sensorName) eqFilter.name = { $regex: input.sensorName, $options: 'i' };
 			const eq = await Equipment.find(eqFilter).select('name currentTemperatureC lastTemperatureReadAt temperatureMinC temperatureMaxC').lean() as any[];
-			return eq.map(e => ({
-				name: e.name,
-				currentTemperatureC: e.currentTemperatureC,
-				lastReadAt: e.lastTemperatureReadAt,
-				targetRange: e.temperatureMinC != null ? `${e.temperatureMinC} to ${e.temperatureMaxC}°C` : null
-			}));
+
+			const notes: string[] = [];
+			const stale = eq.filter(e => {
+				if (!e.lastTemperatureReadAt) return true;
+				return Date.now() - new Date(e.lastTemperatureReadAt).getTime() > 60 * 60 * 1000; // > 1 hour
+			});
+			if (stale.length > 0) {
+				notes.push(`${stale.length} equipment record(s) have lastTemperatureReadAt > 1 hour old — sensor may have lost connection. Names: ${stale.map(e => e.name).join(', ')}`);
+			}
+
+			return {
+				equipment: eq.map(e => ({
+					name: e.name,
+					currentTemperatureC: e.currentTemperatureC,
+					lastReadAt: e.lastTemperatureReadAt,
+					targetRange: e.temperatureMinC != null ? `${e.temperatureMinC} to ${e.temperatureMaxC}°C` : null
+				})),
+				source: 'Equipment.currentTemperatureC (synced from Mocreo)',
+				sourceUrl: '/equipment/activity',
+				dataIntegrityNotes: notes
+			};
 		}
 		case 'list_recent_runs': {
 			const sinceHours = input.sinceHours ?? 24;
@@ -202,16 +345,28 @@ async function runTool(name: string, input: any): Promise<any> {
 
 			const waxRuns = input.runType === 'reagent_filling' ? [] : await WaxFillingRun.find(filter).sort({ createdAt: -1 }).limit(limit).lean();
 			const reagentRuns = input.runType === 'wax_filling' ? [] : await ReagentBatchRecord.find(filter).sort({ createdAt: -1 }).limit(limit).lean().catch(() => []);
+
+			const wf = (waxRuns as any[]).map(r => ({
+				runId: r._id, status: r.status, robot: r.robot?.name,
+				operator: r.operator?.username, cartridgeCount: r.cartridgeIds?.length ?? 0,
+				waxSourceLot: r.waxSourceLot ?? null,
+				runStartTime: r.runStartTime, runEndTime: r.runEndTime
+			}));
+			const notes: string[] = [];
+			const nullSource = wf.filter(r => r.status === 'completed' && !r.waxSourceLot);
+			if (nullSource.length > 0) {
+				notes.push(`${nullSource.length} completed wax run(s) have null waxSourceLot — wax-source traceability is incomplete for these. RunIds: ${nullSource.map(r => r.runId).slice(0, 5).join(', ')}${nullSource.length > 5 ? '…' : ''}`);
+			}
+
 			return {
-				waxFilling: (waxRuns as any[]).map(r => ({
-					runId: r._id, status: r.status, robot: r.robot?.name,
-					operator: r.operator?.username, cartridgeCount: r.cartridgeIds?.length ?? 0,
-					runStartTime: r.runStartTime, runEndTime: r.runEndTime
-				})),
+				waxFilling: wf,
 				reagentFilling: (reagentRuns as any[]).map(r => ({
 					runId: r._id, status: r.status, robot: r.robot?.name,
 					operator: r.operator?.username
-				}))
+				})),
+				source: 'WaxFillingRun + ReagentBatchRecord',
+				sourceUrl: '/manufacturing',
+				dataIntegrityNotes: notes
 			};
 		}
 		case 'list_low_inventory_parts': {
@@ -224,7 +379,12 @@ async function runTool(name: string, input: any): Promise<any> {
 					]
 				}
 			}).select('partNumber name inventoryCount minimumOrderQty unitOfMeasure supplier').limit(50).lean() as any[];
-			return parts;
+			return {
+				parts,
+				source: 'PartDefinition.inventoryCount vs minimumOrderQty',
+				sourceUrl: '/parts',
+				dataIntegrityNotes: ['inventoryCount is a denormalized counter on PartDefinition. For high-stakes decisions, verify against ReceivingLot data on the linked /parts page.']
+			};
 		}
 		case 'find_part': {
 			const q = input.query;
@@ -235,40 +395,56 @@ async function runTool(name: string, input: any): Promise<any> {
 					{ barcode: q }
 				]
 			}).limit(10).lean() as any[];
-			return parts.map(p => ({
-				partNumber: p.partNumber, name: p.name, inventoryCount: p.inventoryCount,
-				unitOfMeasure: p.unitOfMeasure, supplier: p.supplier, minimumOrderQty: p.minimumOrderQty,
-				barcode: p.barcode
-			}));
+			const first = parts[0];
+			return {
+				parts: parts.map(p => ({
+					partId: p._id,
+					partNumber: p.partNumber, name: p.name, inventoryCount: p.inventoryCount,
+					unitOfMeasure: p.unitOfMeasure, supplier: p.supplier, minimumOrderQty: p.minimumOrderQty,
+					barcode: p.barcode
+				})),
+				source: 'PartDefinition model',
+				sourceUrl: first ? `/parts/${first._id}` : '/parts'
+			};
 		}
 		case 'find_cartridges': {
 			const filter: any = {};
 			if (input.cartridgeId) filter._id = input.cartridgeId;
 			if (input.status) filter.status = input.status;
+			if (input.runId) filter['waxFilling.runId'] = input.runId;
 			const limit = Math.min(input.limit ?? 20, 50);
 			const carts = await CartridgeRecord.find(filter).sort({ createdAt: -1 }).limit(limit).lean() as any[];
-			return carts.map(c => ({
-				cartridgeId: c._id, status: c.status,
-				backingLot: c.backing?.lotId,
-				waxRunId: c.waxFilling?.runId,
-				qcStatus: c.waxQc?.status,
-				storageLocation: c.waxStorage?.location,
-				createdAt: c.createdAt
-			}));
+			const single = carts.length === 1 ? carts[0] : null;
+			return {
+				cartridges: carts.map(c => ({
+					cartridgeId: c._id, status: c.status,
+					backingLot: c.backing?.lotId,
+					waxRunId: c.waxFilling?.runId,
+					qcStatus: c.waxQc?.status,
+					storageLocation: c.waxStorage?.location,
+					createdAt: c.createdAt
+				})),
+				source: 'CartridgeRecord model',
+				sourceUrl: single ? `/cartridges/${single._id}` : '/cartridge-admin'
+			};
 		}
 		case 'list_equipment': {
 			const filter: any = {};
 			if (input.equipmentType) filter.equipmentType = input.equipmentType;
 			const eq = await Equipment.find(filter).select('name equipmentType status currentTemperatureC lastTemperatureReadAt').lean() as any[];
-			return eq.map(e => ({
-				name: e.name, type: e.equipmentType, status: e.status,
-				currentTemperatureC: e.currentTemperatureC,
-				lastTemperatureReadAt: e.lastTemperatureReadAt
-			}));
+			return {
+				equipment: eq.map(e => ({
+					name: e.name, type: e.equipmentType, status: e.status,
+					currentTemperatureC: e.currentTemperatureC,
+					lastTemperatureReadAt: e.lastTemperatureReadAt
+				})),
+				source: 'Equipment model',
+				sourceUrl: '/equipment/activity'
+			};
 		}
 		case 'get_run_yield': {
 			const run = await WaxFillingRun.findById(input.runId).lean() as any;
-			if (!run) return { error: `Run not found: ${input.runId}` };
+			if (!run) return { error: `Run not found: ${input.runId}`, source: 'WaxFillingRun', sourceUrl: '/manufacturing' };
 			const cartridgeIds: string[] = run.cartridgeIds ?? [];
 			const carts = await CartridgeRecord.find({ _id: { $in: cartridgeIds } })
 				.select('_id status waxQc.status').lean() as any[];
@@ -283,6 +459,10 @@ async function runTool(name: string, input: any): Promise<any> {
 				else pendingQc++;
 			}
 			const total = cartridgeIds.length;
+			const notes: string[] = [];
+			if (!run.waxSourceLot) {
+				notes.push('This run has null waxSourceLot — wax-source traceability is incomplete.');
+			}
 			return {
 				runId: run._id,
 				runStatus: run.status,
@@ -296,22 +476,40 @@ async function runTool(name: string, input: any): Promise<any> {
 				cartridgeStatusCounts: counts,
 				operator: run.operator?.username,
 				robot: run.robot?.name,
+				waxSourceLot: run.waxSourceLot ?? null,
 				runStartTime: run.runStartTime,
-				runEndTime: run.runEndTime
+				runEndTime: run.runEndTime,
+				source: 'WaxFillingRun + CartridgeRecord.waxQc',
+				sourceUrl: `/cartridge-admin?runId=${encodeURIComponent(String(run._id))}`,
+				dataIntegrityNotes: notes
 			};
 		}
 		case 'trace_cartridge': {
 			const cart = await CartridgeRecord.findById(input.cartridgeId).lean() as any;
-			if (!cart) return { error: `Cartridge not found: ${input.cartridgeId}` };
+			if (!cart) return { error: `Cartridge not found: ${input.cartridgeId}`, source: 'CartridgeRecord', sourceUrl: '/cartridge-admin' };
 			let waxRun: any = null;
 			if (cart.waxFilling?.runId) {
 				waxRun = await WaxFillingRun.findById(cart.waxFilling.runId)
-					.select('_id status operator robot waxLotId waxBatchId runStartTime runEndTime').lean();
+					.select('_id status operator robot waxSourceLot waxBatchId runStartTime runEndTime').lean();
 			}
-			let waxBatch: any = null;
+			let waxLot: any = null;
+			if (waxRun?.waxSourceLot) {
+				waxLot = await ReceivingLot.findOne({
+					$or: [
+						{ lotId: waxRun.waxSourceLot },
+						{ bagBarcode: waxRun.waxSourceLot },
+						{ lotNumber: waxRun.waxSourceLot }
+					]
+				}).select('lotId lotNumber bagBarcode part createdAt').lean();
+			}
+			let legacyWaxBatch: any = null;
 			if (waxRun?.waxBatchId) {
-				waxBatch = await WaxBatch.findById(waxRun.waxBatchId)
+				legacyWaxBatch = await WaxBatch.findById(waxRun.waxBatchId)
 					.select('lotNumber lotBarcode createdAt').lean();
+			}
+			const notes: string[] = [];
+			if (waxRun && !waxRun.waxSourceLot) {
+				notes.push('This cartridge\'s wax run has null waxSourceLot — wax provenance cannot be traced upstream.');
 			}
 			return {
 				cartridgeId: cart._id,
@@ -329,7 +527,9 @@ async function runTool(name: string, input: any): Promise<any> {
 					robot: waxRun.robot?.name,
 					runStartTime: waxRun.runStartTime,
 					runEndTime: waxRun.runEndTime,
-					waxLot: waxBatch ? { lotNumber: waxBatch.lotNumber, lotBarcode: waxBatch.lotBarcode } : null
+					waxSourceLot: waxRun.waxSourceLot ?? null,
+					waxReceivingLot: waxLot ? { lotId: waxLot.lotId, lotNumber: waxLot.lotNumber, bagBarcode: waxLot.bagBarcode } : null,
+					legacyWaxBatch: legacyWaxBatch ? { lotNumber: legacyWaxBatch.lotNumber, lotBarcode: legacyWaxBatch.lotBarcode } : null
 				} : null,
 				waxQc: cart.waxQc ? {
 					status: cart.waxQc.status,
@@ -344,7 +544,10 @@ async function runTool(name: string, input: any): Promise<any> {
 				reagentFilling: cart.reagentFilling ? {
 					runId: cart.reagentFilling.runId,
 					completedAt: cart.reagentFilling.completedAt
-				} : null
+				} : null,
+				source: 'CartridgeRecord joined to WaxFillingRun, ReceivingLot (wax tube), WaxBatch (legacy)',
+				sourceUrl: `/cartridges/${cart._id}`,
+				dataIntegrityNotes: notes
 			};
 		}
 		case 'count_cartridges_by_status': {
@@ -361,7 +564,9 @@ async function runTool(name: string, input: any): Promise<any> {
 			return {
 				total,
 				byStatus: agg.map((g: any) => ({ status: g._id ?? 'unknown', count: g.count })),
-				windowHours: input.sinceHours ?? 'all-time'
+				windowHours: input.sinceHours ?? 'all-time',
+				source: 'CartridgeRecord aggregation',
+				sourceUrl: '/cartridge-admin'
 			};
 		}
 	}
@@ -374,7 +579,26 @@ You have tools to query the BIMS mongo database. Use them liberally to ground ev
 
 Be concise and direct. Use bullet points or short tables when listing multiple items. If the user asks a vague question, ask a short clarifying question instead of guessing. Always include relevant IDs (lot numbers, run IDs, barcodes) so the user can follow up.
 
-Temperatures are in Celsius. Wax volumes are in microliters (μL). Currency is USD.`;
+Temperatures are in Celsius. Wax volumes are in microliters (μL). Currency is USD.
+
+ACCURACY DISCIPLINE — read carefully:
+
+1. **Pick the right tool.** Tool descriptions tell you WHAT each tool queries (model + filter) and WHEN to use it. They also tell you when NOT to use a tool. If two tools could answer a question, prefer the one that says "Source of truth" for that domain. Never guess which tool to use — read the description.
+
+2. **Surface inconsistencies; do not paper over them.** When data appears suspicious, do not report one piece as fact while ignoring the contradiction. Examples:
+   - An inventory record with no consumption history despite many active runs in the same period
+   - Runs with null source-tracking fields (e.g., waxSourceLot null)
+   - Equipment with stale temperature readings (lastReadAt > 1 hour old)
+   - Two tools giving conflicting numbers
+   Frame answers as: "I found X, but Y is inconsistent with that — the operational truth is likely Z" rather than just "X."
+
+3. **Honor dataIntegrityNotes.** Tool results may include a dataIntegrityNotes array. These are warnings about the underlying data — surface them in your answer, do not bury them.
+
+4. **Cite sources.** Every tool result includes a source field (what model/filter was queried) and a sourceUrl. Mention the source naturally and refer the user to the URL when they might want to verify.
+
+5. **Confidence calibration.** If your answer relies on optional or often-null fields, say so explicitly. "Based on the runs that recorded a source lot — N runs had this field empty and were excluded." Don't pretend partial data is complete.
+
+6. **Don't trust counters; trust events.** Denormalized counters (PartDefinition.inventoryCount, dashboard summaries) drift. For high-stakes questions, prefer tools that aggregate from event tables (transactions, lots, runs) over tools that read pre-computed totals.`;
 
 export interface AskBimsMessage {
 	role: 'user' | 'assistant';

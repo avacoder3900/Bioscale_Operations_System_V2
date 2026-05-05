@@ -217,11 +217,27 @@
 								{:else}
 									<div style="white-space: pre-wrap;">{msg.content}</div>
 									{#if msg.toolCalls && msg.toolCalls.length > 0}
+										{@const integrityNotes = msg.toolCalls.flatMap((tc: any) => tc.result?.dataIntegrityNotes ?? [])}
+										{#if integrityNotes.length > 0}
+											<div class="mt-1 rounded border border-[var(--color-tron-yellow)]/40 bg-[var(--color-tron-yellow)]/10 px-2 py-1 text-[10px] text-[var(--color-tron-yellow)]">
+												<div class="font-semibold">⚠ Integrity</div>
+												<ul class="mt-1 list-disc pl-3 text-[var(--color-tron-text-secondary)]">
+													{#each integrityNotes as note (note)}
+														<li>{note}</li>
+													{/each}
+												</ul>
+											</div>
+										{/if}
 										<details class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">
 											<summary class="cursor-pointer">Queried {msg.toolCalls.length} source{msg.toolCalls.length > 1 ? 's' : ''}</summary>
-											<ul class="mt-1 list-disc pl-4 font-mono">
+											<ul class="mt-1 list-disc pl-4">
 												{#each msg.toolCalls as tc (tc.name + JSON.stringify(tc.input))}
-													<li class="break-all">{tc.name}</li>
+													<li class="break-all">
+														<span class="font-mono">{tc.name}</span>
+														{#if tc.result?.sourceUrl}
+															<a href={tc.result.sourceUrl} class="ml-1 text-[var(--color-tron-cyan)] hover:underline">→ verify</a>
+														{/if}
+													</li>
 												{/each}
 											</ul>
 										</details>
