@@ -3,7 +3,7 @@ import {
 	connectDB, WaxBatch, WaxFillingRun, TemperatureAlert,
 	PartDefinition, Equipment, CartridgeRecord, ReagentBatchRecord,
 	ReceivingLot, CalibrationRecord, ServiceTicket, TemperatureReading,
-	WorkInstruction, LotRecord, InventoryTransaction
+	WorkInstruction, LotRecord, InventoryTransaction, AskBimsCostLog
 } from './db';
 
 /**
@@ -35,6 +35,107 @@ function getDisabledTools(): Set<string> {
  * Override via env: ASK_BIMS_MAX_COST_OPUS (USD).
  */
 const MAX_COST_OPUS_USD = Number(process.env.ASK_BIMS_MAX_COST_OPUS ?? 5);
+
+/**
+ * Per-user-per-day spend caps. When a user hits their cap on a model, new
+ * requests on that model are rejected with a 429 until midnight (server local).
+ * The workspace cap is the sum of ALL users' spend; if hit, NO requests on
+ * any model proceed until midnight.
+ *
+ * Override via env:
+ *   ASK_BIMS_DAILY_CAP_HAIKU_USD  (default 1)
+ *   ASK_BIMS_DAILY_CAP_SONNET_USD (default 2)
+ *   ASK_BIMS_DAILY_CAP_OPUS_USD   (default 5)
+ *   ASK_BIMS_DAILY_CAP_WORKSPACE_USD (default 20)
+ */
+export const DAILY_CAPS = {
+	'claude-haiku-4-5':   Number(process.env.ASK_BIMS_DAILY_CAP_HAIKU_USD ?? 1),
+	'claude-sonnet-4-6':  Number(process.env.ASK_BIMS_DAILY_CAP_SONNET_USD ?? 2),
+	'claude-opus-4-7':    Number(process.env.ASK_BIMS_DAILY_CAP_OPUS_USD ?? 5)
+} as const;
+export const WORKSPACE_DAILY_CAP_USD = Number(process.env.ASK_BIMS_DAILY_CAP_WORKSPACE_USD ?? 20);
+
+function startOfTodayUtc(): Date {
+	const d = new Date();
+	d.setUTCHours(0, 0, 0, 0);
+	return d;
+}
+
+/**
+ * Check whether a user is allowed to make a request right now. Returns null
+ * if allowed, or a {reason, capUsd, spentUsd} object if rejected.
+ *
+ * Should be called from the API endpoint BEFORE invoking askBims.
+ */
+export interface CapDenial {
+	scope: 'user' | 'workspace';
+	model?: AskBimsModel;
+	capUsd: number;
+	spentUsd: number;
+	resetsAt: string;
+}
+
+export async function checkDailyCap(userId: string, model: AskBimsModel): Promise<CapDenial | null> {
+	await connectDB();
+	const since = startOfTodayUtc();
+	const tomorrow = new Date(since.getTime() + 86400e3);
+
+	const [userOnModel, workspace] = await Promise.all([
+		AskBimsCostLog.aggregate([
+			{ $match: { userId, model, timestamp: { $gte: since } } },
+			{ $group: { _id: null, total: { $sum: '$costUsd' } } }
+		]),
+		AskBimsCostLog.aggregate([
+			{ $match: { timestamp: { $gte: since } } },
+			{ $group: { _id: null, total: { $sum: '$costUsd' } } }
+		])
+	]);
+
+	const userSpent = userOnModel[0]?.total ?? 0;
+	const userCap = DAILY_CAPS[model];
+	if (userSpent >= userCap) {
+		return { scope: 'user', model, capUsd: userCap, spentUsd: userSpent, resetsAt: tomorrow.toISOString() };
+	}
+
+	const workspaceSpent = workspace[0]?.total ?? 0;
+	if (workspaceSpent >= WORKSPACE_DAILY_CAP_USD) {
+		return { scope: 'workspace', capUsd: WORKSPACE_DAILY_CAP_USD, spentUsd: workspaceSpent, resetsAt: tomorrow.toISOString() };
+	}
+
+	return null;
+}
+
+async function logCostTelemetry(entry: {
+	userId: string;
+	username?: string;
+	model: AskBimsModel;
+	usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number };
+	costUsd: number;
+	toolCallCount: number;
+	uniqueToolCount: number;
+	durationMs: number;
+	errorClass?: string;
+}): Promise<void> {
+	try {
+		await AskBimsCostLog.create({
+			userId: entry.userId,
+			username: entry.username,
+			timestamp: new Date(),
+			model: entry.model,
+			inputTokens: entry.usage.inputTokens,
+			outputTokens: entry.usage.outputTokens,
+			cacheReadTokens: entry.usage.cacheReadTokens,
+			cacheWriteTokens: entry.usage.cacheWriteTokens,
+			costUsd: entry.costUsd,
+			toolCallCount: entry.toolCallCount,
+			uniqueToolCount: entry.uniqueToolCount,
+			durationMs: entry.durationMs,
+			errorClass: entry.errorClass
+		});
+	} catch (err) {
+		console.error('[ASK-BIMS] cost log write failed (non-fatal):', err);
+	}
+}
 
 /**
  * PII redaction — currently a no-op stub. The roadmap (Phase 6.1) calls for
@@ -1856,12 +1957,41 @@ function calcCost(model: AskBimsModel, u: { inputTokens: number; outputTokens: n
 
 export interface AskBimsOpts {
 	model?: AskBimsModel;
+	userId?: string;
+	username?: string;
 }
 
 /**
  * Agent loop using Anthropic tool-use. Accepts conversation history + an optional model override.
  */
 export async function askBims(history: AskBimsMessage[], opts: AskBimsOpts = {}): Promise<AskBimsResult> {
+	const t0 = Date.now();
+	const result = await runAgentLoop(history, opts);
+
+	// Log cost telemetry — fire-and-forget, never blocks response.
+	if (opts.userId) {
+		void logCostTelemetry({
+			userId: opts.userId,
+			username: opts.username,
+			model: result.model ?? (opts.model ?? DEFAULT_MODEL),
+			usage: {
+				inputTokens: result.usage?.inputTokens ?? 0,
+				outputTokens: result.usage?.outputTokens ?? 0,
+				cacheReadTokens: result.usage?.cacheReadTokens ?? 0,
+				cacheWriteTokens: result.usage?.cacheWriteTokens ?? 0
+			},
+			costUsd: result.usage?.estCostUsd ?? 0,
+			toolCallCount: result.toolCalls.length,
+			uniqueToolCount: new Set(result.toolCalls.map(tc => tc.name)).size,
+			durationMs: Date.now() - t0,
+			errorClass: result.error ? 'agent_error' : undefined
+		});
+	}
+
+	return result;
+}
+
+async function runAgentLoop(history: AskBimsMessage[], opts: AskBimsOpts): Promise<AskBimsResult> {
 	const client = getClient();
 	if (!client) {
 		return { answer: '', toolCalls: [], error: 'ANTHROPIC_API_KEY not configured on the server.' };

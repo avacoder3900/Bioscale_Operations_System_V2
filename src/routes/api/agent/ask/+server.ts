@@ -1,6 +1,9 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { json, error } from '@sveltejs/kit';
-import { askBims, ALLOWED_MODELS, DEFAULT_MODEL, type AskBimsMessage, type AskBimsModel } from '$lib/server/ask-bims';
+import {
+	askBims, ALLOWED_MODELS, DEFAULT_MODEL,
+	checkDailyCap, type AskBimsMessage, type AskBimsModel
+} from '$lib/server/ask-bims';
 import { hasPermission } from '$lib/server/permissions';
 import type { RequestHandler } from './$types';
 
@@ -17,6 +20,7 @@ const ADMIN_ONLY_MODELS: AskBimsModel[] = ['claude-opus-4-7'];
  *   - 'service_unavailable' (retryable — Anthropic 5xx, network)
  *   - 'bad_request' (permanent — malformed request)
  *   - 'permission' (permanent — user lacks admin:full for Opus etc.)
+ *   - 'daily_cap' (permanent until midnight — user or workspace daily cap hit)
  *   - 'internal' (uncategorized server error)
  */
 export const POST: RequestHandler = async ({ request, locals }) => {
@@ -46,13 +50,30 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		}, { status: 403 });
 	}
 
+	// Daily cap check — runs BEFORE the (potentially expensive) Anthropic call.
+	const userId = locals.user._id as string;
+	const username = locals.user.username as string;
+	const cap = await checkDailyCap(userId, model);
+	if (cap) {
+		const message = cap.scope === 'workspace'
+			? `Workspace daily cap of $${cap.capUsd.toFixed(2)} reached ($${cap.spentUsd.toFixed(2)} spent). Resets at midnight UTC.`
+			: `Your daily cap on ${cap.model} of $${cap.capUsd.toFixed(2)} is reached ($${cap.spentUsd.toFixed(2)} spent). Try a cheaper model or wait until midnight UTC.`;
+		return json({
+			answer: '', toolCalls: [],
+			error: message,
+			errorClass: 'daily_cap',
+			retryable: false,
+			cap
+		}, { status: 429 });
+	}
+
 	const history: AskBimsMessage[] = body.history.map((m: any) => ({
 		role: m.role === 'assistant' ? 'assistant' : 'user',
 		content: String(m.content ?? '')
 	}));
 
 	try {
-		const result = await askBims(history, { model });
+		const result = await askBims(history, { model, userId, username });
 		return json(result);
 	} catch (err: any) {
 		console.error('[ASK-BIMS] error:', err);
