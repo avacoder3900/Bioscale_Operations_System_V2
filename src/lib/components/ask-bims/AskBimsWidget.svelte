@@ -22,6 +22,9 @@
 
 	const HIDDEN_PREFIXES = ['/login', '/logout', '/invite', '/cv'];
 	const BUDGET_WARN_USD = 1.0;
+	const CIRCUIT_THRESHOLD = 5;
+	const CIRCUIT_WINDOW_MS = 60_000;
+	const CIRCUIT_COOLDOWN_MS = 5 * 60_000;
 
 	const visible = $derived.by(() => {
 		const user = $page.data?.user;
@@ -42,6 +45,41 @@
 	let submitting = $state(false);
 	let model = $state<ModelId>('claude-sonnet-4-6');
 	let listEl: HTMLDivElement | undefined = $state();
+
+	// Reliability tier — circuit breaker + degraded-status tracking
+	let failureTimes = $state<number[]>([]);
+	let circuitOpenUntil = $state<number | null>(null);
+	let degradedReason = $state<string | null>(null);
+	let healthChecked = $state(false);
+
+	function recordFailure(reason: string) {
+		const now = Date.now();
+		failureTimes = [...failureTimes.filter(t => now - t < CIRCUIT_WINDOW_MS), now];
+		degradedReason = reason;
+		if (failureTimes.length >= CIRCUIT_THRESHOLD) {
+			circuitOpenUntil = now + CIRCUIT_COOLDOWN_MS;
+			failureTimes = [];
+		}
+	}
+
+	function recordSuccess() {
+		failureTimes = [];
+		degradedReason = null;
+	}
+
+	async function checkHealth() {
+		try {
+			const res = await fetch('/api/agent/ask/health');
+			const body = await res.json();
+			if (!body.ok) {
+				degradedReason = body.apiKeyConfigured
+					? 'Authentication issue'
+					: 'Ask BIMS is not configured on this server';
+			}
+		} catch {
+			degradedReason = 'Network error reaching Ask BIMS';
+		}
+	}
 
 	const sessionTotals = $derived.by(() => {
 		let tokens = 0;
@@ -69,6 +107,19 @@
 		e?.preventDefault();
 		const text = input.trim();
 		if (!text || submitting) return;
+
+		// Circuit breaker check — if open and not yet expired, reject
+		if (circuitOpenUntil != null) {
+			if (Date.now() < circuitOpenUntil) {
+				const minutesLeft = Math.ceil((circuitOpenUntil - Date.now()) / 60_000);
+				messages = [...messages, {
+					role: 'assistant', content: '',
+					error: `Ask BIMS is in cooldown after multiple failures. Try again in ~${minutesLeft} min.`
+				}];
+				return;
+			}
+			circuitOpenUntil = null; // cooldown expired
+		}
 
 		if (sessionTotals.costUsd >= BUDGET_WARN_USD) {
 			const ok = confirm(`This Ask BIMS session has spent $${sessionTotals.costUsd.toFixed(2)}. Continue?`);
@@ -98,8 +149,15 @@
 				model: body.model,
 				error: body.error
 			}];
+			if (body.error) {
+				recordFailure(body.error);
+			} else {
+				recordSuccess();
+			}
 		} catch (err: any) {
-			messages = [...messages, { role: 'assistant', content: '', error: err?.message ?? String(err) }];
+			const reason = err?.message ?? String(err);
+			messages = [...messages, { role: 'assistant', content: '', error: reason }];
+			recordFailure(reason);
 		} finally {
 			submitting = false;
 			setTimeout(() => listEl?.scrollTo({ top: listEl.scrollHeight, behavior: 'smooth' }), 50);
@@ -108,6 +166,10 @@
 
 	function toggleOpen() {
 		isOpen = !isOpen;
+		if (isOpen && !healthChecked) {
+			healthChecked = true;
+			checkHealth();
+		}
 	}
 
 	function clearChat() {
@@ -140,7 +202,17 @@
 		</button>
 	{:else}
 		<!-- Expanded panel -->
-		<div class="ask-bims-panel" role="dialog" aria-label="Ask BIMS chat">
+		<div class="ask-bims-panel {circuitOpenUntil != null && Date.now() < circuitOpenUntil ? 'is-circuit-open' : ''}" role="dialog" aria-label="Ask BIMS chat">
+			<!-- Status banner (degraded service or circuit open) -->
+			{#if degradedReason || (circuitOpenUntil != null && Date.now() < circuitOpenUntil)}
+				<div class="ask-bims-banner">
+					{#if circuitOpenUntil != null && Date.now() < circuitOpenUntil}
+						⚠ Cooldown active — too many recent failures. Retry in {Math.ceil((circuitOpenUntil - Date.now()) / 60_000)} min.
+					{:else}
+						⚠ {degradedReason}
+					{/if}
+				</div>
+			{/if}
 			<!-- Header -->
 			<div class="ask-bims-header">
 				<div class="flex items-center gap-2">
@@ -366,5 +438,38 @@
 		padding: 0.625rem 0.75rem;
 		border-top: 1px solid var(--color-tron-border);
 		background: var(--color-tron-bg-tertiary);
+	}
+
+	.ask-bims-banner {
+		padding: 0.5rem 0.75rem;
+		font-size: 0.6875rem;
+		color: var(--color-tron-yellow);
+		background: rgba(250, 204, 21, 0.08);
+		border-bottom: 1px solid rgba(250, 204, 21, 0.3);
+	}
+
+	.ask-bims-panel.is-circuit-open {
+		opacity: 0.85;
+	}
+
+	/* Mobile: full bottom-sheet on small screens */
+	@media (max-width: 600px) {
+		.ask-bims-panel {
+			bottom: 0;
+			left: 0;
+			right: 0;
+			width: 100vw;
+			max-width: 100vw;
+			height: 80vh;
+			max-height: 80vh;
+			border-radius: 1rem 1rem 0 0;
+			border-bottom: none;
+		}
+		.ask-bims-pill {
+			bottom: 1rem;
+			left: 1rem;
+			padding: 0.5rem 0.875rem;
+			font-size: 0.75rem;
+		}
 	}
 </style>
