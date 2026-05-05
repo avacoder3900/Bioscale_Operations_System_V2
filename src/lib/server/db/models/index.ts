@@ -102,3 +102,6 @@ export { ScannerTrigger } from './scanner-trigger.js';
 // Barcode Generation (print-barcodes)
 export { BarcodeInventory } from './barcode-inventory.js';
 export { BarcodeSheetBatch } from './barcode-sheet-batch.js';
+
+// Ask BIMS — system anomaly tracking (Phase 8.1)
+export { BimsAnomaly } from './bims-anomaly.js';

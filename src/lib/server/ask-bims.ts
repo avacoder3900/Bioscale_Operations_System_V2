@@ -27,6 +27,33 @@ function getDisabledTools(): Set<string> {
 	return new Set(raw.split(',').map(s => s.trim()).filter(Boolean));
 }
 
+/**
+ * Per-question cost cap, in USD. Defense in depth on top of MAX_ITERATIONS and
+ * max_tokens. Opus 4.7 is the only model expensive enough to justify a cap on
+ * realistic questions; Haiku/Sonnet floor at fractions of a cent.
+ *
+ * Override via env: ASK_BIMS_MAX_COST_OPUS (USD).
+ */
+const MAX_COST_OPUS_USD = Number(process.env.ASK_BIMS_MAX_COST_OPUS ?? 5);
+
+/**
+ * PII redaction — currently a no-op stub. The roadmap (Phase 6.1) calls for
+ * NER-based redaction OR an allowlist-based approach; either needs design
+ * work before being safe. Until then, conversation logging is OFF.
+ *
+ * When PII policy is decided, replace this function body and start logging
+ * (see `AgentConversationLog` model — TBD per D7 schema-addition contract).
+ */
+export function redactPii(text: string): string {
+	if (process.env.ASK_BIMS_PII_REDACTION_ENABLED === '1') {
+		// TODO Phase 6.1 — implement NER or allowlist redaction.
+		// For now, conservative passthrough rather than risk over-redacting
+		// operationally meaningful terms ("Robot Two", "QC Pending", etc.)
+		return text;
+	}
+	return text;
+}
+
 export type AskBimsModel = 'claude-haiku-4-5' | 'claude-sonnet-4-6' | 'claude-opus-4-7';
 
 export const ALLOWED_MODELS: AskBimsModel[] = ['claude-haiku-4-5', 'claude-sonnet-4-6', 'claude-opus-4-7'];
@@ -1745,6 +1772,21 @@ export async function askBims(history: AskBimsMessage[], opts: AskBimsOpts = {})
 		usage.outputTokens += response.usage.output_tokens ?? 0;
 		usage.cacheReadTokens += response.usage.cache_read_input_tokens ?? 0;
 		usage.cacheWriteTokens += response.usage.cache_creation_input_tokens ?? 0;
+
+		// Per-question cost cap (defense in depth on top of MAX_ITERATIONS).
+		// Only Opus is expensive enough to plausibly hit this on a real question.
+		if (model === 'claude-opus-4-7') {
+			const costSoFar = calcCost(model, usage);
+			if (costSoFar > MAX_COST_OPUS_USD) {
+				return {
+					answer: '',
+					toolCalls,
+					model,
+					usage: { ...usage, estCostUsd: costSoFar },
+					error: `Per-question cost cap of $${MAX_COST_OPUS_USD.toFixed(2)} exceeded on Opus. Consider rephrasing the question more narrowly or switching to Sonnet.`
+				};
+			}
+		}
 
 		const toolUseBlocks = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
 
