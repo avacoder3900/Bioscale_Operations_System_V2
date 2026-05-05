@@ -155,6 +155,23 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			.lean()
 		: [];
 
+	// Operator-entered notes attached to this cartridge (mirrored from the
+	// run-level note write). Append-only; sorted oldest first.
+	const cartridgeNotes = (cartridge.notes ?? [])
+		.slice()
+		.sort((a: any, b: any) => {
+			const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+			const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+			return ta - tb;
+		})
+		.map((n: any) => ({
+			id: n._id,
+			body: n.body ?? '',
+			phase: n.phase ?? '',
+			author: n.author?.username ?? null,
+			createdAt: n.createdAt ? new Date(n.createdAt).toISOString() : null
+		}));
+
 	return {
 		cartridge: JSON.parse(JSON.stringify({
 			cartridgeId: cartridge._id,
@@ -164,6 +181,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			createdAt: cartridge.createdAt,
 			updatedAt: cartridge.updatedAt
 		})),
+		notes: cartridgeNotes,
 		timeline: JSON.parse(JSON.stringify(timeline)),
 		photos: JSON.parse(JSON.stringify(photos)),
 		inspections: JSON.parse(JSON.stringify(

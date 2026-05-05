@@ -172,6 +172,31 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Merge wax + reagent runs into one chronologically sorted list. Each entry
 	// is shaped to feed the dashboard's run-history card and to deep-link into
 	// /cartridge-admin?runId=... — same param the cartridge-admin filter reads.
+	type RunNoteSummary = {
+		count: number;
+		lastBody: string | null;
+		lastPhase: string | null;
+		lastAuthor: string | null;
+		lastCreatedAt: string | null;
+	};
+	const summarizeNotes = (notes: any[] | undefined): RunNoteSummary => {
+		const arr = (notes ?? []) as any[];
+		if (arr.length === 0) {
+			return { count: 0, lastBody: null, lastPhase: null, lastAuthor: null, lastCreatedAt: null };
+		}
+		const sorted = arr.slice().sort((a, b) =>
+			new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime()
+		);
+		const last = sorted[0];
+		return {
+			count: arr.length,
+			lastBody: last.body ?? null,
+			lastPhase: last.phase ?? null,
+			lastAuthor: last.author?.username ?? null,
+			lastCreatedAt: last.createdAt ? new Date(last.createdAt).toISOString() : null
+		};
+	};
+
 	type RecentRun = {
 		runId: string;
 		processType: 'wax' | 'reagent';
@@ -184,6 +209,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		endTime: string | null;
 		createdAt: string;
 		abortReason: string | null;
+		notes: RunNoteSummary;
 	};
 	const recentRuns: RecentRun[] = [
 		...(recentWaxRuns as any[]).map((r: any): RecentRun => ({
@@ -197,7 +223,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			startTime: r.runStartTime ? new Date(r.runStartTime).toISOString() : null,
 			endTime: r.runEndTime ? new Date(r.runEndTime).toISOString() : null,
 			createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : '',
-			abortReason: r.abortReason ?? null
+			abortReason: r.abortReason ?? null,
+			notes: summarizeNotes(r.notes)
 		})),
 		...(recentReagentRuns as any[]).map((r: any): RecentRun => ({
 			runId: String(r._id),
@@ -210,7 +237,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			startTime: r.runStartTime ? new Date(r.runStartTime).toISOString() : null,
 			endTime: r.runEndTime ? new Date(r.runEndTime).toISOString() : null,
 			createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : '',
-			abortReason: r.abortReason ?? null
+			abortReason: r.abortReason ?? null,
+			notes: summarizeNotes(r.notes)
 		}))
 	].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 

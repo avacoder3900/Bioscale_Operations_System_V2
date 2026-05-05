@@ -157,6 +157,34 @@
 		<div class="rounded-lg border border-red-500/50 bg-red-900/20 p-3 text-sm text-red-300">{form.error}</div>
 	{/if}
 
+	{#if data.runNotes && data.runNotes.length > 0}
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3">
+			<h2 class="mb-2 text-xs font-semibold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
+				Run Notes ({data.runNotes.length})
+			</h2>
+			<div class="space-y-2">
+				{#each data.runNotes as note (note.id)}
+					<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2">
+						<div class="mb-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wider">
+							<span class="rounded bg-[var(--color-tron-cyan)]/20 px-1.5 py-0.5 font-medium text-[var(--color-tron-cyan)]">
+								{note.phase}
+							</span>
+							{#if note.author}
+								<span style="color: var(--color-tron-text-secondary)">{note.author}</span>
+							{/if}
+							{#if note.createdAt}
+								<span style="color: var(--color-tron-text-secondary); opacity: 0.6">
+									{new Date(note.createdAt).toLocaleString()}
+								</span>
+							{/if}
+						</div>
+						<p class="whitespace-pre-wrap text-sm" style="color: var(--color-tron-text)">{note.body}</p>
+					</div>
+				{/each}
+			</div>
+		</div>
+	{/if}
+
 	<!-- Step indicator -->
 	<div class="flex items-center gap-2">
 		{#each STAGES as stage, i (stage)}

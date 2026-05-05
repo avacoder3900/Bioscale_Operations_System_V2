@@ -27,10 +27,40 @@
 		fridges?: FridgeOption[];
 		onRecordStorage: (cartridgeIds: string[], location: string) => void;
 		onComplete: () => void;
+		onSaveNote?: (noteBody: string) => Promise<{ ok: boolean; error?: string; cartridgeCount?: number }>;
+		existingNote?: string;
 		readonly?: boolean;
 	}
 
-	let { cartridges, runSummary, fridges = [], onRecordStorage, onComplete, readonly: isReadonly = false }: Props = $props();
+	let { cartridges, runSummary, fridges = [], onRecordStorage, onComplete, onSaveNote, existingNote = '', readonly: isReadonly = false }: Props = $props();
+
+	// Operator-entered run note — saved against the wax run AND every cartridge
+	// in the run via the recordWaxRunNote action. Re-saving overwrites the
+	// previous wax_run note. Save is independent of clicking Complete Run.
+	let noteBody = $state(existingNote);
+	let noteSaving = $state(false);
+	let noteError = $state('');
+	let noteSavedAt = $state<Date | null>(null);
+	let noteSavedCount = $state(0);
+
+	async function saveNote() {
+		if (!onSaveNote || !noteBody.trim() || noteSaving) return;
+		noteSaving = true;
+		noteError = '';
+		try {
+			const result = await onSaveNote(noteBody.trim());
+			if (!result.ok) {
+				noteError = result.error ?? 'Failed to save note';
+			} else {
+				noteSavedAt = new Date();
+				noteSavedCount = result.cartridgeCount ?? 0;
+			}
+		} catch (e) {
+			noteError = e instanceof Error ? e.message : 'Failed to save note';
+		} finally {
+			noteSaving = false;
+		}
+	}
 
 	// Per-cartridge storage assignments (local state before submit)
 	let assignments = $state(new SvelteMap<string, string>());
@@ -253,6 +283,56 @@
 						{/if}
 					</div>
 				{/each}
+			</div>
+		</div>
+	{/if}
+
+	<!-- Run note — append-only metadata. Saves to the run AND every cartridge
+		 in the run. Re-saving overwrites. Independent of clicking Complete Run. -->
+	{#if onSaveNote && !isReadonly}
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
+			<div class="mb-2 flex items-center justify-between">
+				<label for="wax-run-note" class="text-xs font-medium text-[var(--color-tron-text-secondary)]">
+					Run Note (optional)
+				</label>
+				{#if runSummary.cartridgeCount > 0}
+					<span class="text-[10px] text-[var(--color-tron-text-secondary)]/70">
+						Applies to {runSummary.cartridgeCount} cartridge{runSummary.cartridgeCount === 1 ? '' : 's'}
+					</span>
+				{/if}
+			</div>
+			<textarea
+				id="wax-run-note"
+				bind:value={noteBody}
+				rows="3"
+				disabled={noteSaving}
+				placeholder="Anything the operator wants attached to this run before completing..."
+				class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] placeholder-[var(--color-tron-text-secondary)]/50 focus:border-[var(--color-tron-cyan)] focus:outline-none disabled:opacity-50"
+			></textarea>
+			<div class="mt-2 flex items-center justify-between gap-3">
+				<div class="text-xs">
+					{#if noteError}
+						<span class="text-red-400">{noteError}</span>
+					{:else if noteSaving}
+						<span class="text-[var(--color-tron-cyan)] animate-pulse">Saving...</span>
+					{:else if noteSavedAt}
+						<span class="text-green-400">
+							Saved to run + {noteSavedCount} cartridge{noteSavedCount === 1 ? '' : 's'} at {noteSavedAt.toLocaleTimeString()}
+						</span>
+					{:else if existingNote}
+						<span class="text-[var(--color-tron-text-secondary)]/60">Existing note loaded — edit + Save to overwrite.</span>
+					{:else}
+						<span class="text-[var(--color-tron-text-secondary)]/60">Save anytime — re-saving overwrites the previous note.</span>
+					{/if}
+				</div>
+				<button
+					type="button"
+					onclick={saveNote}
+					disabled={!noteBody.trim() || noteSaving}
+					class="min-h-[36px] rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-4 py-1.5 text-xs font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30 disabled:cursor-not-allowed disabled:opacity-40"
+				>
+					{noteSaving ? 'Saving...' : 'Save Note'}
+				</button>
 			</div>
 		</div>
 	{/if}

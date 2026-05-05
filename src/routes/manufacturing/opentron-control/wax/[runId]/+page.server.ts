@@ -114,6 +114,19 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		}))
 	];
 
+	const runNotes = ((run.notes ?? []) as any[])
+		.slice()
+		.sort((a: any, b: any) =>
+			new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime()
+		)
+		.map((n: any) => ({
+			id: String(n._id ?? ''),
+			body: n.body ?? '',
+			phase: n.phase ?? '',
+			author: n.author?.username ?? null,
+			createdAt: n.createdAt ? new Date(n.createdAt).toISOString() : null
+		}));
+
 	return {
 		runId: String(run._id),
 		stage,
@@ -146,7 +159,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			|| (run.robot?._id
 				? (await Equipment.findById(run.robot._id).select('name').lean() as any)?.name
 				: null)
-			|| ''
+			|| '',
+		runNotes
 	};
 };
 
@@ -484,6 +498,22 @@ export const actions: Actions = {
 		let cartridgeIds: string[] = [];
 		try { cartridgeIds = JSON.parse(cartridgeIdsRaw); } catch {
 			return fail(400, { error: 'Invalid cartridge IDs' });
+		}
+
+		// Guard: completeQC must have landed before storage. If any cart is still
+		// at status='wax_filling', writing waxStorage now would leave it stranded
+		// — completeRun's wax_filled→wax_stored flip is filtered on status, so the
+		// cart would sit at 'wax_filling' with waxStorage set forever. Caused a
+		// 37-cart incident on 2026-05-04 when completeQC 500'd mid-action.
+		const stillFilling = await CartridgeRecord.find({
+			_id: { $in: cartridgeIds },
+			status: 'wax_filling'
+		}).select('_id').lean() as any[];
+		if (stillFilling.length > 0) {
+			const idList = stillFilling.map(c => c._id).join(', ');
+			return fail(400, {
+				error: `Cannot record storage — ${stillFilling.length} cartridge${stillFilling.length === 1 ? '' : 's'} still at status 'wax_filling' (completeQC did not land). Re-run QC inspection before assigning a fridge. Stuck IDs: ${idList.slice(0, 300)}`
+			});
 		}
 
 		// Locked carts (linked/underway/completed/voided/scrapped) are skipped

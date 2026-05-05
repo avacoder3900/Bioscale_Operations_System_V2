@@ -93,6 +93,19 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const sealOverdue = Date.now() > sealDeadlineMs;
 	const sealMinRemaining = sealOverdue ? 0 : Math.ceil((sealDeadlineMs - Date.now()) / 60000);
 
+	const runNotes = ((run.notes ?? []) as any[])
+		.slice()
+		.sort((a: any, b: any) =>
+			new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime()
+		)
+		.map((n: any) => ({
+			id: String(n._id ?? ''),
+			body: n.body ?? '',
+			phase: n.phase ?? '',
+			author: n.author?.username ?? null,
+			createdAt: n.createdAt ? new Date(n.createdAt).toISOString() : null
+		}));
+
 	return {
 		runId: String(run._id),
 		stage,
@@ -104,7 +117,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		fridges: JSON.parse(JSON.stringify(fridges)),
 		sealDeadline: { sealOverdue, sealMinRemaining, maxTimeBeforeSealMin },
 		cartridgeCount: run.cartridgesFilled?.length ?? run.cartridgeCount ?? 0,
-		cartridgesPerSheet
+		cartridgesPerSheet,
+		runNotes
 	};
 };
 

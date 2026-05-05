@@ -151,6 +151,13 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 		const run = activeWaxRun as any;
 		const stage = run ? toStage(run.status) : null;
 
+		// Existing wax_run note body, if the operator has already saved one on
+		// this run — pre-populates the textarea on reload so they can keep
+		// editing without losing context.
+		const existingWaxRunNote = run
+			? ((run.notes ?? []).find((n: any) => n.phase === 'wax_run')?.body ?? '')
+			: '';
+
 		// Build runState
 		const runState = run
 			? {
@@ -164,9 +171,10 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 				waxSourceLot: run.waxSourceLot ?? null,
 				coolingTrayId: run.coolingTrayId ?? null,
 				plannedCartridgeCount: run.plannedCartridgeCount ?? run.cartridgeIds?.length ?? null,
-				coolingConfirmedAt: run.coolingConfirmedTime ? new Date(run.coolingConfirmedTime).toISOString() : null
+				coolingConfirmedAt: run.coolingConfirmedTime ? new Date(run.coolingConfirmedTime).toISOString() : null,
+				existingWaxRunNote
 			}
-			: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckRemovedTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null, coolingConfirmedAt: null };
+			: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckRemovedTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null, coolingConfirmedAt: null, existingWaxRunNote: '' };
 
 		// Tube data
 		const tube = activeTube as any;
@@ -1195,6 +1203,22 @@ export const actions: Actions = {
 			return fail(400, { error: 'Invalid cartridge IDs' });
 		}
 
+		// Guard: completeQC must have landed before storage. If any cart is still
+		// at status='wax_filling', writing waxStorage now would leave it stranded
+		// — completeRun's wax_filled→wax_stored flip is filtered on status, so the
+		// cart would sit at 'wax_filling' with waxStorage set forever. Caused a
+		// 37-cart incident on 2026-05-04 when completeQC 500'd mid-action.
+		const stillFilling = await CartridgeRecord.find({
+			_id: { $in: cartridgeIds },
+			status: 'wax_filling'
+		}).select('_id').lean() as any[];
+		if (stillFilling.length > 0) {
+			const idList = stillFilling.map(c => c._id).join(', ');
+			return fail(400, {
+				error: `Cannot record storage — ${stillFilling.length} cartridge${stillFilling.length === 1 ? '' : 's'} still at status 'wax_filling' (completeQC did not land). Re-run QC inspection before assigning a fridge. Stuck IDs: ${idList.slice(0, 300)}`
+			});
+		}
+
 		// Resolve the fridge for this batch: first try the storageLocation
 		// string (it may be an EquipmentLocation _id or barcode); if that
 		// misses, fall back to the tray's current placement.
@@ -1366,6 +1390,65 @@ export const actions: Actions = {
 		});
 
 		return { success: true, skippedLockedCount: blockedDetails.length };
+	},
+
+	/**
+	 * Save an operator-entered note against the wax run. Append-only metadata —
+	 * does NOT mutate run status, cartridge status, or any lifecycle field. The
+	 * note is mirrored to every cartridge currently on the run (phase='wax_run')
+	 * AND to WaxFillingRun.notes[] so run-history surfaces can read run.notes
+	 * directly. At most one wax_run note per cartridge — re-saving overwrites.
+	 */
+	recordWaxRunNote: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const runId = data.get('runId') as string;
+		const noteBody = ((data.get('noteBody') as string) ?? '').trim();
+
+		if (!runId) return fail(400, { error: 'runId is required' });
+		if (!noteBody) return fail(400, { error: 'Note body is empty' });
+
+		const run = await WaxFillingRun.findById(runId).select('cartridgeIds').lean() as any;
+		if (!run) return fail(404, { error: 'Run not found' });
+
+		const cartridgeIds: string[] = (run.cartridgeIds ?? []).filter(Boolean);
+
+		const now = new Date();
+		const noteId = generateId();
+		const noteEntry = {
+			_id: noteId,
+			body: noteBody,
+			phase: 'wax_run',
+			author: { _id: locals.user._id, username: locals.user.username },
+			createdAt: now
+		};
+
+		// Pull then push: a single wax_run note exists per cartridge AND on the
+		// run document. Re-saves overwrite — operator can refine the note up
+		// until they click Complete Run.
+		const cartridgeOps = cartridgeIds.length > 0 ? [
+			CartridgeRecord.updateMany(
+				{ _id: { $in: cartridgeIds } },
+				{ $pull: { notes: { phase: 'wax_run' } } }
+			),
+			CartridgeRecord.updateMany(
+				{ _id: { $in: cartridgeIds } },
+				{ $push: { notes: noteEntry } }
+			)
+		] : [];
+
+		await Promise.all([
+			WaxFillingRun.updateOne({ _id: runId }, { $pull: { notes: { phase: 'wax_run' } } }),
+			...cartridgeOps.slice(0, 1)
+		]);
+		await Promise.all([
+			WaxFillingRun.updateOne({ _id: runId }, { $push: { notes: noteEntry } }),
+			...cartridgeOps.slice(1)
+		]);
+
+		return { success: true, noteId, cartridgeCount: cartridgeIds.length };
 	},
 
 	/** Complete the full run */

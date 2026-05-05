@@ -382,6 +382,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 							}}
 						]);
 						const qc = qcAgg[0] ?? { passed: 0, failed: 0 };
+						const notes = (r.notes ?? []) as any[];
+						const lastNote = notes.length > 0
+							? notes.slice().sort((a: any, b: any) =>
+								new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime()
+							)[0]
+							: null;
 						return {
 							id: r._id,
 							status: r.status,
@@ -389,11 +395,21 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 							cartridgeCount: r.cartridgeIds?.length ?? r.plannedCartridgeCount ?? 0,
 							passedCount: qc.passed,
 							failedCount: qc.failed,
-							date: r.createdAt
+							date: r.createdAt,
+							noteCount: notes.length,
+							lastNoteBody: lastNote?.body ?? null,
+							lastNotePhase: lastNote?.phase ?? null,
+							lastNoteAuthor: lastNote?.author?.username ?? null
 						};
 					})),
 					recentReagentRuns: (recentReagentRuns as any[]).map((r: any) => {
 						const carts = r.cartridgesFilled ?? [];
+						const notes = (r.notes ?? []) as any[];
+						const lastNote = notes.length > 0
+							? notes.slice().sort((a: any, b: any) =>
+								new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime()
+							)[0]
+							: null;
 						return {
 							id: r._id,
 							status: r.status,
@@ -402,7 +418,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 							cartridgeCount: r.cartridgeCount ?? carts.length ?? 0,
 							passedCount: carts.filter((c: any) => c.inspectionStatus === 'Accepted').length,
 							failedCount: carts.filter((c: any) => c.inspectionStatus === 'Rejected').length,
-							date: r.createdAt
+							date: r.createdAt,
+							noteCount: notes.length,
+							lastNoteBody: lastNote?.body ?? null,
+							lastNotePhase: lastNote?.phase ?? null,
+							lastNoteAuthor: lastNote?.author?.username ?? null
 						};
 					}),
 					bomCostPerCartridge: {

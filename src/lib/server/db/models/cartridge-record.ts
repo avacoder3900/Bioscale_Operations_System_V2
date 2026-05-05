@@ -137,6 +137,17 @@ const cartridgeRecordSchema = new Schema({
 		r2Url: String
 	}],
 
+	// Operator-entered notes attached to this cartridge. Written by phase-scoped
+	// actions (e.g. recordBatchNote at reagent prep). At most one note per
+	// (cartridge, phase) — the action pulls then pushes so re-saves overwrite.
+	notes: [{
+		_id: { type: String, default: () => generateId() },
+		body: String,
+		phase: String,
+		author: operatorRef,
+		createdAt: Date
+	}],
+
 	corrections: [correctionSchema]
 }, { timestamps: true });
 

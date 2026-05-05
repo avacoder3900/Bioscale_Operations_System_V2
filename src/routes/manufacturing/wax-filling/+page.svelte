@@ -28,7 +28,7 @@
 				coolingTrayId: string | null;
 				plannedCartridgeCount: number | null;
 				coolingConfirmedAt: string | null;
-				coolingConfirmedAt: string | null;
+				existingWaxRunNote?: string;
 			};
 			settings: {
 				runDurationMin: number;
@@ -1209,6 +1209,53 @@
 				fridges={data.fridges}
 				onRecordStorage={handleRecordStorage}
 				onComplete={handleCompleteRun}
+				existingNote={data.runState.existingWaxRunNote ?? ''}
+				onSaveNote={async (noteBody) => {
+					// Independent fetch — bypasses submitForm so the page doesn't
+					// reload the stage on save. Calls recordWaxRunNote which writes
+					// the note to WaxFillingRun.notes[] AND every cartridge in the run.
+					try {
+						const formData = new FormData();
+						formData.set('runId', data.runState.runId ?? '');
+						formData.set('noteBody', noteBody);
+						const res = await fetch('?/recordWaxRunNote', {
+							method: 'POST',
+							body: formData,
+							headers: { 'x-sveltekit-action': 'true' }
+						});
+						const text = await res.text();
+						if (!res.ok || text.includes('"type":"failure"')) {
+							let err = `HTTP ${res.status}`;
+							try {
+								const json = JSON.parse(text);
+								if (json.type === 'failure' && json.data) {
+									const parsed = typeof json.data === 'string' ? JSON.parse(json.data) : json.data;
+									if (Array.isArray(parsed)) {
+										for (let i = 1; i < parsed.length; i++) {
+											if (typeof parsed[i] === 'string' && parsed[i].length > 3) { err = parsed[i]; break; }
+										}
+									}
+								}
+							} catch { /* fallthrough with HTTP code */ }
+							return { ok: false, error: err };
+						}
+						let cartridgeCount = storageCarts.length;
+						try {
+							const json = JSON.parse(text);
+							const parsed = typeof json.data === 'string' ? JSON.parse(json.data) : json.data;
+							if (Array.isArray(parsed)) {
+								const obj = parsed[0];
+								if (obj && typeof obj === 'object' && 'cartridgeCount' in obj) {
+									const idx = (obj as Record<string, number>).cartridgeCount;
+									if (typeof idx === 'number' && parsed[idx] != null) cartridgeCount = Number(parsed[idx]);
+								}
+							}
+						} catch { /* keep fallback count */ }
+						return { ok: true, cartridgeCount };
+					} catch (e) {
+						return { ok: false, error: e instanceof Error ? e.message : 'Network error' };
+					}
+				}}
 				readonly={isPreviewOrPast}
 			/>
 		{/if}

@@ -558,26 +558,38 @@
 						<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Recent Wax Runs</h3>
 						<div class="space-y-1.5">
 							{#each cd.recentRuns as run}
-								<div class="flex items-center justify-between text-xs">
-									<div class="flex items-center gap-2 min-w-0">
-										<span class="rounded px-1.5 py-0.5 text-[10px] font-medium {run.status === 'completed' ? 'bg-[rgba(34,197,94,0.15)] text-green-400' : run.status === 'running' ? 'bg-[rgba(0,255,255,0.15)] text-[var(--color-tron-cyan)]' : run.status === 'aborted' ? 'bg-[rgba(239,68,68,0.15)] text-red-400' : 'bg-[rgba(255,255,255,0.05)] text-[var(--color-tron-text-secondary)]'}">{run.status}</span>
-										<span class="text-[var(--color-tron-text)] truncate">{run.robotName}</span>
+								<a href="/cartridge-admin?runId={run.id}" class="block rounded px-1 py-0.5 hover:bg-[var(--color-tron-surface)]/40">
+									<div class="flex items-center justify-between text-xs">
+										<div class="flex items-center gap-2 min-w-0">
+											<span class="rounded px-1.5 py-0.5 text-[10px] font-medium {run.status === 'completed' ? 'bg-[rgba(34,197,94,0.15)] text-green-400' : run.status === 'running' ? 'bg-[rgba(0,255,255,0.15)] text-[var(--color-tron-cyan)]' : run.status === 'aborted' ? 'bg-[rgba(239,68,68,0.15)] text-red-400' : 'bg-[rgba(255,255,255,0.05)] text-[var(--color-tron-text-secondary)]'}">{run.status}</span>
+											<span class="text-[var(--color-tron-text)] truncate">{run.robotName}</span>
+										</div>
+										<div class="flex items-center gap-3 shrink-0">
+											{#if run.passedCount > 0 || run.failedCount > 0}
+												<div class="flex items-center gap-1.5">
+													{#if run.passedCount > 0}
+														<span class="text-[10px] font-medium text-green-400">✓{run.passedCount}</span>
+													{/if}
+													{#if run.failedCount > 0}
+														<span class="text-[10px] font-medium text-red-400">✗{run.failedCount}</span>
+													{/if}
+												</div>
+											{/if}
+											<span class="font-mono text-[var(--color-tron-cyan)]">{run.cartridgeCount}</span>
+											<span class="text-[var(--color-tron-text-secondary)]">{formatDate(run.date)}</span>
+										</div>
 									</div>
-									<div class="flex items-center gap-3 shrink-0">
-										{#if run.passedCount > 0 || run.failedCount > 0}
-											<div class="flex items-center gap-1.5">
-												{#if run.passedCount > 0}
-													<span class="text-[10px] font-medium text-green-400">✓{run.passedCount}</span>
-												{/if}
-												{#if run.failedCount > 0}
-													<span class="text-[10px] font-medium text-red-400">✗{run.failedCount}</span>
-												{/if}
-											</div>
-										{/if}
-										<span class="font-mono text-[var(--color-tron-cyan)]">{run.cartridgeCount}</span>
-										<span class="text-[var(--color-tron-text-secondary)]">{formatDate(run.date)}</span>
-									</div>
-								</div>
+									{#if run.noteCount && run.noteCount > 0}
+										<div class="mt-1 flex items-start gap-1.5 text-[10px]">
+											<span class="shrink-0 rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 px-1 py-0.5 text-[var(--color-tron-cyan)]">
+												{run.noteCount} note{run.noteCount === 1 ? '' : 's'}
+											</span>
+											<span class="truncate text-[var(--color-tron-text-secondary)]" title={run.lastNoteBody}>
+												{run.lastNoteBody}
+											</span>
+										</div>
+									{/if}
+								</a>
 							{/each}
 						</div>
 					</TronCard>
@@ -589,27 +601,39 @@
 						<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Recent Reagent Runs</h3>
 						<div class="space-y-1.5">
 							{#each cd.recentReagentRuns as run}
-								<div class="flex items-center justify-between text-xs">
-									<div class="flex items-center gap-2 min-w-0">
-										<span class="rounded px-1.5 py-0.5 text-[10px] font-medium {run.status === 'Completed' || run.status === 'completed' ? 'bg-[rgba(34,197,94,0.15)] text-green-400' : run.status === 'Running' || run.status === 'running' ? 'bg-[rgba(0,255,255,0.15)] text-[var(--color-tron-cyan)]' : run.status === 'Aborted' || run.status === 'aborted' || run.status === 'Cancelled' ? 'bg-[rgba(239,68,68,0.15)] text-red-400' : 'bg-[rgba(255,255,255,0.05)] text-[var(--color-tron-text-secondary)]'}">{run.status}</span>
-										<span class="text-[var(--color-tron-text)] truncate">{run.robotName}</span>
-										<span class="rounded border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-cyan)]/10 px-1 py-0.5 text-[9px] text-[var(--color-tron-cyan)]">{run.assayName}</span>
+								<a href="/cartridge-admin?runId={run.id}" class="block rounded px-1 py-0.5 hover:bg-[var(--color-tron-surface)]/40">
+									<div class="flex items-center justify-between text-xs">
+										<div class="flex items-center gap-2 min-w-0">
+											<span class="rounded px-1.5 py-0.5 text-[10px] font-medium {run.status === 'Completed' || run.status === 'completed' ? 'bg-[rgba(34,197,94,0.15)] text-green-400' : run.status === 'Running' || run.status === 'running' ? 'bg-[rgba(0,255,255,0.15)] text-[var(--color-tron-cyan)]' : run.status === 'Aborted' || run.status === 'aborted' || run.status === 'Cancelled' ? 'bg-[rgba(239,68,68,0.15)] text-red-400' : 'bg-[rgba(255,255,255,0.05)] text-[var(--color-tron-text-secondary)]'}">{run.status}</span>
+											<span class="text-[var(--color-tron-text)] truncate">{run.robotName}</span>
+											<span class="rounded border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-cyan)]/10 px-1 py-0.5 text-[9px] text-[var(--color-tron-cyan)]">{run.assayName}</span>
+										</div>
+										<div class="flex items-center gap-3 shrink-0">
+											{#if run.passedCount > 0 || run.failedCount > 0}
+												<div class="flex items-center gap-1.5">
+													{#if run.passedCount > 0}
+														<span class="text-[10px] font-medium text-green-400">✓{run.passedCount}</span>
+													{/if}
+													{#if run.failedCount > 0}
+														<span class="text-[10px] font-medium text-red-400">✗{run.failedCount}</span>
+													{/if}
+												</div>
+											{/if}
+											<span class="font-mono text-[var(--color-tron-cyan)]">{run.cartridgeCount}</span>
+											<span class="text-[var(--color-tron-text-secondary)]">{formatDate(run.date)}</span>
+										</div>
 									</div>
-									<div class="flex items-center gap-3 shrink-0">
-										{#if run.passedCount > 0 || run.failedCount > 0}
-											<div class="flex items-center gap-1.5">
-												{#if run.passedCount > 0}
-													<span class="text-[10px] font-medium text-green-400">✓{run.passedCount}</span>
-												{/if}
-												{#if run.failedCount > 0}
-													<span class="text-[10px] font-medium text-red-400">✗{run.failedCount}</span>
-												{/if}
-											</div>
-										{/if}
-										<span class="font-mono text-[var(--color-tron-cyan)]">{run.cartridgeCount}</span>
-										<span class="text-[var(--color-tron-text-secondary)]">{formatDate(run.date)}</span>
-									</div>
-								</div>
+									{#if run.noteCount && run.noteCount > 0}
+										<div class="mt-1 flex items-start gap-1.5 text-[10px]">
+											<span class="shrink-0 rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 px-1 py-0.5 text-[var(--color-tron-cyan)]">
+												{run.noteCount} note{run.noteCount === 1 ? '' : 's'}
+											</span>
+											<span class="truncate text-[var(--color-tron-text-secondary)]" title={run.lastNoteBody}>
+												{run.lastNoteBody}
+											</span>
+										</div>
+									{/if}
+								</a>
 							{/each}
 						</div>
 					</TronCard>

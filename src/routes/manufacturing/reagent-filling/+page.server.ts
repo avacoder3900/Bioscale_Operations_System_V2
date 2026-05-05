@@ -399,26 +399,39 @@ export const actions: Actions = {
 		const now = new Date();
 		const noteId = generateId();
 
+		const noteEntry = {
+			_id: noteId,
+			body: noteBody,
+			phase: 'reagent_prep',
+			author: { _id: locals.user._id, username: locals.user.username },
+			createdAt: now
+		};
+
 		// Two-step override: Mongo doesn't allow $pull + $push on the same field
-		// in one update. Pull first, then push the new entry on every cartridge.
-		await CartridgeRecord.updateMany(
-			{ _id: { $in: cartridgeIds } },
-			{ $pull: { notes: { phase: 'reagent_prep' } } }
-		);
-		await CartridgeRecord.updateMany(
-			{ _id: { $in: cartridgeIds } },
-			{
-				$push: {
-					notes: {
-						_id: noteId,
-						body: noteBody,
-						phase: 'reagent_prep',
-						author: { _id: locals.user._id, username: locals.user.username },
-						createdAt: now
-					}
-				}
-			}
-		);
+		// in one update. Pull first, then push the new entry on every cartridge
+		// AND on the run document — a single reagent_prep note exists in both
+		// places, so run-history surfaces can read run.notes directly without
+		// touching cartridges.
+		await Promise.all([
+			CartridgeRecord.updateMany(
+				{ _id: { $in: cartridgeIds } },
+				{ $pull: { notes: { phase: 'reagent_prep' } } }
+			),
+			ReagentBatchRecord.updateOne(
+				{ _id: runId },
+				{ $pull: { notes: { phase: 'reagent_prep' } } }
+			)
+		]);
+		await Promise.all([
+			CartridgeRecord.updateMany(
+				{ _id: { $in: cartridgeIds } },
+				{ $push: { notes: noteEntry } }
+			),
+			ReagentBatchRecord.updateOne(
+				{ _id: runId },
+				{ $push: { notes: noteEntry } }
+			)
+		]);
 
 		return { success: true, noteId, cartridgeCount: cartridgeIds.length };
 	},

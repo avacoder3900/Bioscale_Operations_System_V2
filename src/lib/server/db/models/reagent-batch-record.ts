@@ -82,6 +82,18 @@ const reagentBatchRecordSchema = new Schema({
 		createdAt: Date
 	},
 
+	// Free-text operator notes attached to the run. Append-only metadata —
+	// never gates state transitions. Mirrored to each cartridge's notes[]
+	// at write time so the same note appears on the run AND on every
+	// cartridge in the run. phase tags the workflow point (e.g. 'reagent_prep').
+	notes: [{
+		_id: { type: String, default: () => generateId() },
+		body: String,
+		phase: String,
+		author: operatorRef,
+		createdAt: Date
+	}],
+
 	finalizedAt: Date, voidedAt: Date, voidReason: String,
 	corrections: [correctionSchema]
 }, { timestamps: true });

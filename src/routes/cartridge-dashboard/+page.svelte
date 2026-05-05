@@ -310,6 +310,7 @@
 							<th class="px-2 py-1.5 font-medium">Assay</th>
 							<th class="px-2 py-1.5 text-right font-medium">Carts</th>
 							<th class="px-2 py-1.5 font-medium">Started</th>
+							<th class="px-2 py-1.5 font-medium">Notes</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -336,6 +337,17 @@
 								<td class="px-2 py-1.5 text-[var(--color-tron-text-secondary)]">{run.assayName ?? '—'}</td>
 								<td class="px-2 py-1.5 text-right font-mono text-[var(--color-tron-text)]">{run.cartridgeCount}</td>
 								<td class="px-2 py-1.5 text-[var(--color-tron-text-secondary)]">{formatRelative(run.startTime ?? run.createdAt)}</td>
+								<td class="px-2 py-1.5">
+									{#if run.notes && run.notes.count > 0}
+										<span class="inline-block max-w-[200px] truncate rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 px-1.5 py-0.5 text-[10px] text-[var(--color-tron-cyan)]"
+											title={run.notes.lastBody ?? ''}
+										>
+											{run.notes.count} · {run.notes.lastBody}
+										</span>
+									{:else}
+										<span class="text-[var(--color-tron-text-secondary)]/40">—</span>
+									{/if}
+								</td>
 							</tr>
 						{/each}
 					</tbody>

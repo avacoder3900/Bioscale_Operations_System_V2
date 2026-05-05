@@ -131,7 +131,13 @@
 			<span>
 				Filtered to cartridges in run
 				<span class="font-mono font-semibold">{data.filters.runId}</span>
-				(matches wax or reagent run ID)
+				{#if data.activeRunMeta}
+					<span class="ml-2 rounded bg-[var(--color-tron-cyan)]/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wider">
+						{data.activeRunMeta.processType}
+					</span>
+				{:else}
+					(matches wax or reagent run ID)
+				{/if}
 			</span>
 			<button type="button" onclick={clearRunIdFilter}
 				class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-0.5 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20"
@@ -139,6 +145,35 @@
 				Clear
 			</button>
 		</div>
+
+		<!-- Run-level operator notes (when this is a real run id) -->
+		{#if data.activeRunNotes && data.activeRunNotes.length > 0}
+			<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3">
+				<h3 class="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">
+					Run Notes ({data.activeRunNotes.length})
+				</h3>
+				<div class="space-y-2">
+					{#each data.activeRunNotes as note (note.id)}
+						<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2">
+							<div class="mb-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wider">
+								<span class="rounded bg-[var(--color-tron-cyan)]/20 px-1.5 py-0.5 font-medium text-[var(--color-tron-cyan)]">
+									{note.phase}
+								</span>
+								{#if note.author}
+									<span class="text-[var(--color-tron-text-secondary)]">{note.author}</span>
+								{/if}
+								{#if note.createdAt}
+									<span class="text-[var(--color-tron-text-secondary)]/60">
+										{new Date(note.createdAt).toLocaleString()}
+									</span>
+								{/if}
+							</div>
+							<p class="whitespace-pre-wrap text-sm text-[var(--color-tron-text)]">{note.body}</p>
+						</div>
+					{/each}
+				</div>
+			</div>
+		{/if}
 	{/if}
 
 	<p class="text-xs text-[var(--color-tron-text-secondary)]">
