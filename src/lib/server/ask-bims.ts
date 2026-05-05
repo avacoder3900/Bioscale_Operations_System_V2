@@ -3,7 +3,7 @@ import {
 	connectDB, WaxBatch, WaxFillingRun, TemperatureAlert,
 	PartDefinition, Equipment, CartridgeRecord, ReagentBatchRecord,
 	ReceivingLot, CalibrationRecord, ServiceTicket, TemperatureReading,
-	WorkInstruction, LotRecord
+	WorkInstruction, LotRecord, InventoryTransaction
 } from './db';
 
 /**
@@ -341,7 +341,77 @@ Source: aggregated across CartridgeRecord, WaxFillingRun, ReceivingLot, Equipmen
 Use when: data quality audit, "are there any data issues", before answering high-stakes questions to verify data is sane. Call this preemptively if you suspect data issues affect your answer.`,
 		input_schema: {
 			type: 'object',
-			properties: {},
+			properties: {}
+		}
+	},
+	{
+		name: 'production_throughput',
+		description: `Daily cartridge throughput — counts cartridges that entered each phase (backing, wax filling, QC accepted, reagent filled, shipped) per day over a window.
+Source: CartridgeRecord aggregation by phase-transition timestamps.
+
+Use when: "throughput trend", "how many carts per day this week", "are we keeping up".`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				sinceDays: { type: 'number', description: 'Window in days (default 7, max 90)' }
+			}
+		}
+	},
+	{
+		name: 'temperature_excursion_summary',
+		description: `Time out-of-spec, # of alerts, and longest excursion for one piece of equipment over a window.
+Source: TemperatureReading + Equipment.temperatureMin/Max + TemperatureAlert.
+
+Use when: "how often was X out of spec", "temperature stability of Y", "excursions on Z this week".`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				equipmentName: { type: 'string', description: 'Equipment name (case-insensitive partial match)' },
+				sinceDays: { type: 'number', description: 'Window in days (default 7, max 30)' }
+			},
+			required: ['equipmentName']
+		}
+	},
+	{
+		name: 'inventory_burn_rate',
+		description: `Consumption velocity (units/day) for one part over a window, with stdev and projected days-to-empty given current inventory.
+Source: InventoryTransaction (consumption events) + PartDefinition.inventoryCount.
+
+Use when: "how fast are we using X", "burn rate for Y", "when will we run out of Z".`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				partNumber: { type: 'string', description: 'PT-CT-XXX style part number' },
+				sinceDays: { type: 'number', description: 'Window in days (default 14, max 90)' }
+			},
+			required: ['partNumber']
+		}
+	},
+	{
+		name: 'runway',
+		description: `Projected days-to-stockout for one part — combines current inventory (PartDefinition.inventoryCount or ReceivingLot sum) with inventory_burn_rate calculation.
+Source: PartDefinition + InventoryTransaction.
+
+Use when: "how long will X last", "runway for Y", "do we have enough Z for next month".`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				partNumber: { type: 'string' },
+				windowDays: { type: 'number', description: 'Days of history for burn-rate calc (default 14)' }
+			},
+			required: ['partNumber']
+		}
+	},
+	{
+		name: 'whats_blocking_run',
+		description: `Diagnostic — for one wax run currently in non-terminal status, identifies what's blocking forward progress: deck locked? cooling tray locked? wax source consumed? waiting on QC?
+Source: WaxFillingRun + Equipment + ReceivingLot + CartridgeRecord.waxQc.
+
+Use when: "why isn't run X moving", "what's blocking run Y", "stuck run".`,
+		input_schema: {
+			type: 'object',
+			properties: { runId: { type: 'string' } },
+			required: ['runId'],
 			cache_control: { type: 'ephemeral' }
 		}
 	}
@@ -1134,6 +1204,328 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 				},
 				source: 'Aggregated across CartridgeRecord, WaxFillingRun, ReceivingLot, Equipment',
 				sourceUrl: '/admin'
+			};
+		}
+		case 'production_throughput': {
+			const days = Math.min(Math.max(Number(input.sinceDays ?? 7), 1), 90);
+			const since = new Date(Date.now() - days * 86400e3);
+
+			const buildCount = (matchExpr: any) => CartridgeRecord.aggregate([
+				{ $match: matchExpr },
+				{
+					$group: {
+						_id: {
+							$dateToString: { format: '%Y-%m-%d', date: matchExpr._dateField }
+						},
+						count: { $sum: 1 }
+					}
+				},
+				{ $sort: { _id: 1 } }
+			]);
+
+			// Simpler: aggregate by createdAt for "carts created" — proxies for backing
+			const created = await CartridgeRecord.aggregate([
+				{ $match: { createdAt: { $gte: since } } },
+				{
+					$group: {
+						_id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+						count: { $sum: 1 }
+					}
+				},
+				{ $sort: { _id: 1 } }
+			]);
+
+			// Wax filled today: cart has waxFilling.recordedAt within window
+			const waxed = await CartridgeRecord.aggregate([
+				{ $match: { 'waxFilling.recordedAt': { $gte: since } } },
+				{
+					$group: {
+						_id: { $dateToString: { format: '%Y-%m-%d', date: '$waxFilling.recordedAt' } },
+						count: { $sum: 1 }
+					}
+				},
+				{ $sort: { _id: 1 } }
+			]);
+
+			const accepted = await CartridgeRecord.aggregate([
+				{ $match: { 'waxQc.recordedAt': { $gte: since }, 'waxQc.status': 'accepted' } },
+				{
+					$group: {
+						_id: { $dateToString: { format: '%Y-%m-%d', date: '$waxQc.recordedAt' } },
+						count: { $sum: 1 }
+					}
+				},
+				{ $sort: { _id: 1 } }
+			]);
+
+			const totalCreated = created.reduce((s, d) => s + d.count, 0);
+			const totalWaxed = waxed.reduce((s, d) => s + d.count, 0);
+			const totalAccepted = accepted.reduce((s, d) => s + d.count, 0);
+
+			return {
+				windowDays: days,
+				totals: {
+					cartridgesCreated: totalCreated,
+					cartridgesWaxed: totalWaxed,
+					cartridgesAccepted: totalAccepted,
+					yieldPct: totalWaxed > 0 ? Math.round((totalAccepted / totalWaxed) * 1000) / 10 : null
+				},
+				dailyCreated: created.map((d: any) => ({ date: d._id, count: d.count })),
+				dailyWaxed: waxed.map((d: any) => ({ date: d._id, count: d.count })),
+				dailyAccepted: accepted.map((d: any) => ({ date: d._id, count: d.count })),
+				source: 'CartridgeRecord aggregation by createdAt + waxFilling.recordedAt + waxQc.recordedAt',
+				sourceUrl: '/cartridge-admin'
+			};
+		}
+		case 'temperature_excursion_summary': {
+			const sensorName = String(input.equipmentName ?? '').trim();
+			if (!sensorName) return { error: 'equipmentName required', source: 'TemperatureReading', sourceUrl: '/equipment/activity' };
+			const days = Math.min(Math.max(Number(input.sinceDays ?? 7), 1), 30);
+			const since = new Date(Date.now() - days * 86400e3);
+
+			const eq = await Equipment.findOne({ name: { $regex: sensorName, $options: 'i' } })
+				.select('_id name mocreoDeviceId temperatureMinC temperatureMaxC').lean() as any;
+			if (!eq) return {
+				error: `No equipment matching "${sensorName}"`,
+				source: 'Equipment',
+				sourceUrl: '/equipment/activity'
+			};
+			if (eq.temperatureMinC == null || eq.temperatureMaxC == null) {
+				return {
+					equipmentName: eq.name,
+					error: 'No temperature thresholds configured for this equipment.',
+					source: 'Equipment.temperatureMinC/MaxC',
+					sourceUrl: '/equipment/activity'
+				};
+			}
+
+			const readings = await TemperatureReading.find({
+				$or: [{ equipmentId: eq._id }, { sensorId: eq.mocreoDeviceId }],
+				timestamp: { $gte: since }
+			}).select('temperature timestamp').sort({ timestamp: 1 }).lean() as any[];
+
+			const alerts = await TemperatureAlert.countDocuments({
+				$or: [{ equipmentId: eq._id }, { sensorId: eq.mocreoDeviceId }],
+				timestamp: { $gte: since }
+			});
+
+			let outOfSpecMinutes = 0;
+			let longestExcursionMin = 0;
+			let currentExcursion = 0;
+			let prevTime: Date | null = null;
+			for (const r of readings) {
+				const inSpec = r.temperature >= eq.temperatureMinC && r.temperature <= eq.temperatureMaxC;
+				if (prevTime && !inSpec) {
+					const gapMin = (new Date(r.timestamp).getTime() - prevTime.getTime()) / 60000;
+					if (gapMin <= 30) {
+						outOfSpecMinutes += gapMin;
+						currentExcursion += gapMin;
+						if (currentExcursion > longestExcursionMin) longestExcursionMin = currentExcursion;
+					}
+				} else {
+					currentExcursion = 0;
+				}
+				prevTime = new Date(r.timestamp);
+			}
+
+			return {
+				equipmentName: eq.name,
+				windowDays: days,
+				targetRange: `${eq.temperatureMinC} to ${eq.temperatureMaxC}°C`,
+				readingCount: readings.length,
+				alertCount: alerts,
+				outOfSpecMinutes: Math.round(outOfSpecMinutes),
+				longestExcursionMinutes: Math.round(longestExcursionMin),
+				inSpecPct: readings.length > 0
+					? Math.round((readings.filter(r => r.temperature >= eq.temperatureMinC && r.temperature <= eq.temperatureMaxC).length / readings.length) * 1000) / 10
+					: null,
+				source: 'TemperatureReading + TemperatureAlert + Equipment thresholds',
+				sourceUrl: '/equipment/activity'
+			};
+		}
+		case 'inventory_burn_rate': {
+			const partNumber = String(input.partNumber ?? '').trim();
+			if (!partNumber) return { error: 'partNumber required', source: 'InventoryTransaction', sourceUrl: '/parts' };
+			const days = Math.min(Math.max(Number(input.sinceDays ?? 14), 1), 90);
+			const since = new Date(Date.now() - days * 86400e3);
+
+			const part = await PartDefinition.findOne({ partNumber }).select('_id partNumber name inventoryCount').lean() as any;
+			if (!part) return { error: `Part not found: ${partNumber}`, source: 'PartDefinition', sourceUrl: '/parts' };
+
+			const txns = await InventoryTransaction.find({
+				partDefinitionId: part._id,
+				transactionType: 'consumption',
+				createdAt: { $gte: since }
+			}).select('quantity createdAt').lean() as any[];
+
+			const totalConsumed = txns.reduce((s, t) => s + (Number(t.quantity) || 0), 0);
+			const dailyRate = totalConsumed / days;
+
+			// Daily counts for stdev
+			const byDay: Map<string, number> = new Map();
+			for (const t of txns) {
+				const key = new Date(t.createdAt).toISOString().slice(0, 10);
+				byDay.set(key, (byDay.get(key) ?? 0) + Number(t.quantity));
+			}
+			const counts = Array.from(byDay.values());
+			const mean = counts.length ? counts.reduce((s, x) => s + x, 0) / counts.length : 0;
+			const variance = counts.length ? counts.reduce((s, x) => s + (x - mean) ** 2, 0) / counts.length : 0;
+			const stdev = Math.sqrt(variance);
+
+			const projectedDays = dailyRate > 0 && part.inventoryCount > 0
+				? Math.round(part.inventoryCount / dailyRate)
+				: null;
+
+			return {
+				partNumber: part.partNumber,
+				partName: part.name,
+				windowDays: days,
+				transactionCount: txns.length,
+				totalConsumed,
+				dailyRate: Math.round(dailyRate * 100) / 100,
+				dailyStdev: Math.round(stdev * 100) / 100,
+				currentInventoryCount: part.inventoryCount,
+				projectedDaysToEmpty: projectedDays,
+				source: 'InventoryTransaction (consumption events) + PartDefinition.inventoryCount',
+				sourceUrl: `/parts/${part._id}`,
+				dataIntegrityNotes: txns.length === 0
+					? [`No consumption transactions for ${partNumber} in the last ${days} days. Either no usage or the transaction stream is broken.`]
+					: []
+			};
+		}
+		case 'runway': {
+			const partNumber = String(input.partNumber ?? '').trim();
+			if (!partNumber) return { error: 'partNumber required', source: 'PartDefinition + InventoryTransaction', sourceUrl: '/parts' };
+			const windowDays = Math.min(Math.max(Number(input.windowDays ?? 14), 1), 60);
+			const since = new Date(Date.now() - windowDays * 86400e3);
+
+			const part = await PartDefinition.findOne({ partNumber }).select('_id partNumber name inventoryCount minimumOrderQty').lean() as any;
+			if (!part) return { error: `Part not found: ${partNumber}`, source: 'PartDefinition', sourceUrl: '/parts' };
+
+			const txns = await InventoryTransaction.find({
+				partDefinitionId: part._id,
+				transactionType: 'consumption',
+				createdAt: { $gte: since }
+			}).select('quantity').lean() as any[];
+
+			const totalConsumed = txns.reduce((s, t) => s + (Number(t.quantity) || 0), 0);
+			const dailyRate = totalConsumed / windowDays;
+
+			// Cross-check with ReceivingLot accepted quantities
+			const lots = await ReceivingLot.find({
+				'part._id': part._id,
+				status: { $in: ['accepted', 'in_progress'] }
+			}).select('quantity consumedUl').lean() as any[];
+
+			const lotInventory = lots.reduce((s, l) => s + (Number(l.quantity) || 0), 0);
+			const projectedFromCounter = dailyRate > 0 && part.inventoryCount > 0
+				? Math.round(part.inventoryCount / dailyRate)
+				: null;
+			const projectedFromLots = dailyRate > 0 && lotInventory > 0
+				? Math.round(lotInventory / dailyRate)
+				: null;
+
+			const integrityNotes: string[] = [];
+			if (part.inventoryCount !== lotInventory) {
+				integrityNotes.push(`PartDefinition.inventoryCount (${part.inventoryCount}) does not match ReceivingLot accepted quantity sum (${lotInventory}). Counter may have drifted.`);
+			}
+			if (dailyRate === 0) {
+				integrityNotes.push('No consumption recorded in the window — runway estimate not reliable.');
+			}
+
+			return {
+				partNumber: part.partNumber,
+				partName: part.name,
+				windowDays,
+				dailyConsumptionRate: Math.round(dailyRate * 100) / 100,
+				inventory: {
+					perCounter: part.inventoryCount,
+					perReceivingLots: lotInventory
+				},
+				projectedDaysRemaining: {
+					perCounter: projectedFromCounter,
+					perReceivingLots: projectedFromLots
+				},
+				reorderThreshold: part.minimumOrderQty,
+				belowReorderInDays: dailyRate > 0 && part.inventoryCount > part.minimumOrderQty
+					? Math.round((part.inventoryCount - part.minimumOrderQty) / dailyRate)
+					: 0,
+				source: 'PartDefinition.inventoryCount + ReceivingLot accepted sum + InventoryTransaction window',
+				sourceUrl: `/parts/${part._id}`,
+				dataIntegrityNotes: integrityNotes
+			};
+		}
+		case 'whats_blocking_run': {
+			const runId = String(input.runId ?? '').trim();
+			if (!runId) return { error: 'runId required', source: 'WaxFillingRun', sourceUrl: '/manufacturing' };
+
+			const run = await WaxFillingRun.findById(runId).lean() as any;
+			if (!run) return { error: `Run not found: ${runId}`, source: 'WaxFillingRun', sourceUrl: '/manufacturing' };
+
+			const TERMINAL = ['completed', 'aborted', 'voided', 'archived'];
+			if (TERMINAL.includes((run.status ?? '').toLowerCase())) {
+				return {
+					runId: run._id,
+					status: run.status,
+					blocked: false,
+					reason: `Run is in terminal status (${run.status}) — not blocked, just done.`,
+					source: 'WaxFillingRun',
+					sourceUrl: `/cartridge-admin?runId=${encodeURIComponent(runId)}`
+				};
+			}
+
+			const blockers: string[] = [];
+
+			// Check deck
+			if (run.deckId) {
+				const otherDeckRuns = await WaxFillingRun.findOne({
+					_id: { $ne: run._id },
+					deckId: run.deckId,
+					status: { $nin: TERMINAL }
+				}).select('_id status').lean() as any;
+				if (otherDeckRuns) blockers.push(`Deck ${run.deckId} also held by run ${otherDeckRuns._id} (status=${otherDeckRuns.status}).`);
+			}
+
+			// Check wax source
+			if (run.waxSourceLot) {
+				const lot = await ReceivingLot.findOne({
+					$or: [{ lotId: run.waxSourceLot }, { bagBarcode: run.waxSourceLot }]
+				}).select('quantity consumedUl status').lean() as any;
+				if (!lot) blockers.push(`waxSourceLot "${run.waxSourceLot}" does not match any ReceivingLot — wax source unidentified.`);
+				else {
+					const totalUl = (lot.quantity || 0) * FULL_TUBE_VOLUME_UL;
+					const remaining = totalUl - (lot.consumedUl || 0);
+					if (remaining <= 0) blockers.push(`waxSourceLot is depleted (consumedUl=${lot.consumedUl} >= total=${totalUl}).`);
+				}
+			} else {
+				blockers.push('waxSourceLot is null — run cannot proceed without a recorded wax source.');
+			}
+
+			// Check QC pending
+			const cartridgeIds = run.cartridgeIds ?? [];
+			if (cartridgeIds.length > 0) {
+				const pendingQc = await CartridgeRecord.countDocuments({
+					_id: { $in: cartridgeIds },
+					$or: [
+						{ 'waxQc.status': { $in: [null, undefined, 'pending', 'Pending'] } },
+						{ waxQc: { $exists: false } }
+					]
+				});
+				if (pendingQc > 0 && (run.status ?? '').toLowerCase().includes('qc')) {
+					blockers.push(`${pendingQc} of ${cartridgeIds.length} cartridges still pending QC.`);
+				}
+			}
+
+			return {
+				runId: run._id,
+				status: run.status,
+				blocked: blockers.length > 0,
+				blockers,
+				cartridgeCount: cartridgeIds.length,
+				waxSourceLot: run.waxSourceLot ?? null,
+				deckId: run.deckId ?? null,
+				source: 'WaxFillingRun + Equipment (deck) + ReceivingLot (wax source) + CartridgeRecord (QC)',
+				sourceUrl: `/cartridge-admin?runId=${encodeURIComponent(runId)}`
 			};
 		}
 		case 'get_temperature_history': {

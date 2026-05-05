@@ -213,6 +213,20 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		text: 'Run a data integrity check on the system.',
 		requiredTools: ['check_data_integrity']
 	},
+
+	// === Phase 4+5 — time-series + predictive ===
+	{
+		id: 'phase4-throughput',
+		category: 'phase2',
+		text: 'How many cartridges did we make per day this week?',
+		requiredTools: ['production_throughput']
+	},
+	{
+		id: 'phase5-runway',
+		category: 'phase2',
+		text: 'How long will our PT-CT-104 inventory last at current consumption rates?',
+		requiredTools: ['runway']
+	},
 ];
 
 export function questionsByCategory(): Record<string, TestQuestion[]> {
