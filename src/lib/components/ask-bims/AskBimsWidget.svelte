@@ -272,7 +272,7 @@
 		position: fixed;
 		bottom: 1.25rem;
 		right: 1.25rem;
-		z-index: 9999;
+		z-index: 40;
 		display: inline-flex;
 		align-items: center;
 		gap: 0.5rem;
@@ -306,7 +306,7 @@
 		position: fixed;
 		bottom: 1.25rem;
 		right: 1.25rem;
-		z-index: 9999;
+		z-index: 40;
 		width: 22rem;
 		max-width: calc(100vw - 2.5rem);
 		height: 32rem;
