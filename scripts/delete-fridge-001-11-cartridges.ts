@@ -61,7 +61,7 @@ async function main() {
 		changedBy: 'jacob',
 		reason: 'User-directed removal of 11 wax-stored cartridges from FRIDGE-001 on 2026-04-23 (hard delete from mongo)'
 	}));
-	const auditRes = await db.collection('audit_logs').insertMany(auditDocs as any);
+	const auditRes = await db.collection('audit_log').insertMany(auditDocs as any);
 	console.log(`AuditLog DELETE entries inserted: ${auditRes.insertedCount}`);
 
 	// Now delete via raw driver (bypasses Mongoose sacred middleware)

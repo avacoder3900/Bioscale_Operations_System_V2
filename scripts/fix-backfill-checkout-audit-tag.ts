@@ -3,10 +3,10 @@
  *
  * Context: On 2026-04-23 a batch of 30 cartridges was marked as manually
  * removed via scripts/fix-backfill-post-completion-manual-removals.ts. That
- * script wrote audit_logs rows with action='UPDATE' because the 'CHECKOUT'
+ * script wrote audit_log rows with action='UPDATE' because the 'CHECKOUT'
  * action label was introduced later the same day (commit 0e8140e added it
  * to the enum). As a result, any compliance filter such as
- *   audit_logs.find({ action: 'CHECKOUT' })
+ *   audit_log.find({ action: 'CHECKOUT' })
  * will miss those 30 cartridges.
  *
  * This script is ADDITIVE — it does not mutate the existing UPDATE audit
@@ -61,7 +61,7 @@ async function main() {
 	await mongoose.connect(URI);
 	const db = mongoose.connection.db!;
 	const removalsCol = db.collection('manual_cartridge_removals');
-	const auditsCol = db.collection('audit_logs');
+	const auditsCol = db.collection('audit_log');
 
 	// Step 1: fetch the 30 target removal docs. Scope strictly by operator.username.
 	const removals = await removalsCol
@@ -177,7 +177,7 @@ async function main() {
 	if (inserted > 0) {
 		await auditsCol.insertOne({
 			_id: generateId(),
-			tableName: 'audit_logs',
+			tableName: 'audit_log',
 			recordId: MIGRATION_META_ID,
 			action: 'MIGRATION_CHECKOUT_TAG_BACKFILL',
 			changedBy: TAG_OPERATOR,

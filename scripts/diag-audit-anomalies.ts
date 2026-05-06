@@ -24,7 +24,7 @@ async function main() {
 	if (sample) console.log('  sample waxQc shape:', JSON.stringify((sample as any).waxQc));
 
 	console.log('\n=== BACKFILL AUDIT ENTRY ===');
-	const backfillAudit = await db.collection('audit_logs').findOne({ _id: 'aiUsESm2QKWzO7JIuSaiN' } as any);
+	const backfillAudit = await db.collection('audit_log').findOne({ _id: 'aiUsESm2QKWzO7JIuSaiN' } as any);
 	if (backfillAudit) {
 		const a: any = backfillAudit;
 		console.log(`  _id: ${a._id}`);

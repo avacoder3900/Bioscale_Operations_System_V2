@@ -52,7 +52,7 @@ async function addPlaceholderLot(opts: {
 	const txns = db.collection('inventory_transactions');
 	const mfgMat = db.collection('manufacturing_materials');
 	const mfgTxn = db.collection('manufacturing_material_transactions');
-	const audit = db.collection('audit_logs');
+	const audit = db.collection('audit_log');
 
 	const part = await parts.findOne({ partNumber: opts.partNumber });
 	if (!part) throw new Error(`PartDefinition ${opts.partNumber} not found`);

@@ -23,7 +23,7 @@ async function main() {
 	const lotRecords = db.collection('lot_records');
 	const matTxn = db.collection('material_transactions');
 	const invTxn = db.collection('inventory_transactions');
-	const auditLogs = db.collection('audit_logs');
+	const auditLogs = db.collection('audit_log');
 	const waxRuns = db.collection('wax_filling_runs');
 
 	// ============================================================
@@ -244,7 +244,7 @@ async function main() {
 	for (const id of auditRefs) {
 		if (id && !existingIds.has(String(id)) && String(id) !== 'batch') auditDangling.push(String(id));
 	}
-	console.log(`audit_logs.recordId (cartridge_records) referencing non-existent cart: ${auditDangling.length}`);
+	console.log(`audit_log.recordId (cartridge_records) referencing non-existent cart: ${auditDangling.length}`);
 	if (auditDangling.length) console.log(`  Sample: ${auditDangling.slice(0, 10).join(', ')}`);
 
 	// CV inspections / photos

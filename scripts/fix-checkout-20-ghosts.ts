@@ -72,7 +72,7 @@ async function checkoutGroup(
 	console.log(`  ${ids.length} cartridges`);
 	const carts = db.collection('cartridge_records');
 	const removals = db.collection('manual_cartridge_removals');
-	const audits = db.collection('audit_logs');
+	const audits = db.collection('audit_log');
 
 	// Pre-check: confirm each is currently wax_stored and not already in a ManualCartridgeRemoval
 	const docs = await carts.find({ _id: { $in: ids } }).project({ _id: 1, status: 1 }).toArray();

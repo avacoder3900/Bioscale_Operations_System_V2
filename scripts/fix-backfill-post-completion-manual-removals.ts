@@ -51,7 +51,7 @@ async function main() {
 	const carts = db.collection('cartridge_records');
 	const removals = db.collection('manual_cartridge_removals');
 	const txns = db.collection('inventory_transactions');
-	const audits = db.collection('audit_logs');
+	const audits = db.collection('audit_log');
 
 	// Pre-check: what's the current status of each listed ID?
 	const docs = await carts.find({ _id: { $in: unique } }).project({ _id: 1, status: 1, waxStorage: 1 }).toArray() as any[];

@@ -21,7 +21,7 @@ async function main() {
 	}
 
 	// Audit logs with reason prefix "QC scrap:"
-	const audits = await db.collection('audit_logs').find({ reason: /^QC scrap:/ }).toArray();
+	const audits = await db.collection('audit_log').find({ reason: /^QC scrap:/ }).toArray();
 	console.log(`\nAudit log entries from scrapCartridge action: ${audits.length}`);
 
 	await mongoose.disconnect();

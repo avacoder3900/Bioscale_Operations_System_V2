@@ -52,7 +52,7 @@ async function main() {
 
 	console.log('=== 3. AuditLog RECONCILE entry ===\n');
 	const audit = await db
-		.collection('audit_logs')
+		.collection('audit_log')
 		.find({ tableName: 'backing_lots', recordId: LOT_ID, action: 'RECONCILE' })
 		.sort({ changedAt: -1 })
 		.toArray();

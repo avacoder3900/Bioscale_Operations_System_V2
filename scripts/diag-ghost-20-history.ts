@@ -2,7 +2,7 @@
  * For the 20 FRIDGE-002 "ghost" cartridges (Mongo says wax_stored, user
  * couldn't find physically), check whether any of them have any signs of
  * having progressed past wax_stored: downstream fields populated, prior
- * status changes in audit_logs, or presence in downstream collections.
+ * status changes in audit_log, or presence in downstream collections.
  */
 import mongoose from 'mongoose';
 import * as dotenv from 'dotenv';
@@ -77,9 +77,9 @@ async function main() {
 	}
 	console.log(`\n  Summary: ${anyProgressed}/${docs.length} have any downstream fields populated.`);
 
-	// 2. Check audit_logs for any status change history
+	// 2. Check audit_log for any status change history
 	console.log(`\n[2] AuditLog history — any status changes?`);
-	const audits = await db.collection('audit_logs').find({
+	const audits = await db.collection('audit_log').find({
 		tableName: 'cartridge_records',
 		recordId: { $in: GHOSTS }
 	}).sort({ changedAt: 1 }).toArray() as any[];

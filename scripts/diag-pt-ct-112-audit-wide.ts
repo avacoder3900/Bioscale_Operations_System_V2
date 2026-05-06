@@ -18,9 +18,9 @@ async function main() {
 	const todayStart = new Date();
 	todayStart.setHours(0, 0, 0, 0);
 
-	// 1. ALL audit_logs from today (any table)
-	const audits = await db.collection('audit_logs').find({ changedAt: { $gte: todayStart } }).sort({ changedAt: -1 }).toArray();
-	console.log(`=== ALL audit_logs from today (${audits.length}) ===`);
+	// 1. ALL audit_log from today (any table)
+	const audits = await db.collection('audit_log').find({ changedAt: { $gte: todayStart } }).sort({ changedAt: -1 }).toArray();
+	console.log(`=== ALL audit_log from today (${audits.length}) ===`);
 	for (const a of audits as any[]) {
 		const json = JSON.stringify(a);
 		const mentionsPart = json.includes('PT-CT-112') || json.includes(partId);

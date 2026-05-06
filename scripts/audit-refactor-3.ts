@@ -15,7 +15,7 @@ async function main() {
 	const cartridges = db.collection('cartridge_records');
 	const waxRuns = db.collection('wax_filling_runs');
 	const invTxn = db.collection('inventory_transactions');
-	const audit = db.collection('audit_logs');
+	const audit = db.collection('audit_log');
 
 	// Last few waxFilling.recordedAt dates
 	console.log('== Most recent wax runs ==');

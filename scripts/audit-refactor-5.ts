@@ -63,8 +63,8 @@ async function main() {
 		console.log(`  waxStorage.location=${sample.waxStorage?.location}`);
 		console.log(`  created=${sample.createdAt}`);
 		// Look for audit log entries
-		const audits = await db.collection('audit_logs').find({ recordId: sample._id }).sort({ changedAt: 1 }).limit(5).toArray();
-		console.log(`  audit_logs: ${audits.length} entries`);
+		const audits = await db.collection('audit_log').find({ recordId: sample._id }).sort({ changedAt: 1 }).limit(5).toArray();
+		console.log(`  audit_log: ${audits.length} entries`);
 		for (const a of audits) {
 			const aa = a as any;
 			console.log(`    ${aa.changedAt} ${aa.action} by=${aa.changedBy}`);

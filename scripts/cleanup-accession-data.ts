@@ -34,7 +34,7 @@ async function main() {
 
 	const receivingLots = db.collection('receiving_lots');
 	const partDefinitions = db.collection('part_definitions');
-	const auditLogs = db.collection('audit_logs');
+	const auditLogs = db.collection('audit_log');
 
 	// Step 1: Find and fix/delete the concatenated barcode lot
 	console.log('\n--- Step 1: Fix concatenated barcode lot ---');

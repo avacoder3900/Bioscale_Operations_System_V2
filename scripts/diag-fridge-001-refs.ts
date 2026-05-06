@@ -60,13 +60,13 @@ async function main() {
 	const invTx = await db.collection('inventory_transactions').countDocuments({ cartridgeRecordId: { $in: IDS } });
 	console.log(`  inventory_transactions by cartridgeRecordId: ${invTx}`);
 
-	const auditByRecord = await db.collection('audit_logs').countDocuments({
+	const auditByRecord = await db.collection('audit_log').countDocuments({
 		$or: [
 			{ recordId: { $in: IDS } },
 			{ 'newData.cartridgeId': { $in: IDS } }
 		]
 	});
-	console.log(`  audit_logs referencing these ids: ${auditByRecord}`);
+	console.log(`  audit_log referencing these ids: ${auditByRecord}`);
 
 	// Are their backing lots also a concern?
 	if (backingLotIds.size > 0) {

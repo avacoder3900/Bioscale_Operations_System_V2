@@ -55,7 +55,7 @@ async function main() {
 		);
 		console.log(`APPLIED — transferTimeSeconds.modified=${r1.modifiedCount}  containerBarcode.modified=${r2.modifiedCount}  finalizedAt.modified=${r3.modifiedCount}`);
 
-		await db.collection('audit_logs').insertOne({
+		await db.collection('audit_log').insertOne({
 			_id: generateId(),
 			tableName: 'cartridge_records',
 			recordId: 'migration-orphan-scrub-2026-04-24',

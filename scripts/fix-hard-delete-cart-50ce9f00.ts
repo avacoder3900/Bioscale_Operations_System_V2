@@ -7,7 +7,7 @@
  * Does NOT refund consumed inventory (PartDefinition.inventoryCount,
  * BackingLot.cartridgeCount) — operator instruction.
  *
- * Leaves ONE audit_logs row documenting the hard-delete so the trail of
+ * Leaves ONE audit_log row documenting the hard-delete so the trail of
  * deletion itself is preserved.
  *
  * Uses raw driver to bypass sacred + immutable middleware.
@@ -32,13 +32,13 @@ async function main() {
 		reagentRun: await db.collection('reagent_batch_records').countDocuments({ _id: REAGENT_RUN } as any),
 		invTxns: await db.collection('inventory_transactions').countDocuments({ cartridgeRecordId: CID }),
 		inWaxRun: await db.collection('wax_filling_runs').countDocuments({ _id: WAX_RUN, cartridgeIds: CID } as any),
-		auditRows: await db.collection('audit_logs').countDocuments({ recordId: CID })
+		auditRows: await db.collection('audit_log').countDocuments({ recordId: CID })
 	};
 	console.log(`  cartridge_records: ${pre.cart}`);
 	console.log(`  reagent_batch_records (vn8D): ${pre.reagentRun}`);
 	console.log(`  inventory_transactions: ${pre.invTxns}`);
 	console.log(`  wax_filling_run (2y2f) contains cart: ${pre.inWaxRun ? 'yes' : 'no'}`);
-	console.log(`  audit_logs rows for cart: ${pre.auditRows}`);
+	console.log(`  audit_log rows for cart: ${pre.auditRows}`);
 
 	// Capture a snapshot of the cart's content BEFORE delete so we can embed
 	// it in the HARD_DELETE audit row.
@@ -71,7 +71,7 @@ async function main() {
 	// Raw driver insert so sacred middleware on AuditLog (if any) doesn't
 	// interfere. AuditLog is immutable-append, but insert is allowed.
 	const auditId = nanoid();
-	await db.collection('audit_logs').insertOne({
+	await db.collection('audit_log').insertOne({
 		_id: auditId,
 		tableName: 'cartridge_records',
 		recordId: CID,
@@ -100,7 +100,7 @@ async function main() {
 			}
 		}
 	});
-	console.log(`  audit_logs HARD_DELETE row inserted: ${auditId}`);
+	console.log(`  audit_log HARD_DELETE row inserted: ${auditId}`);
 
 	console.log('\n=== AFTER ===');
 	const post = {
@@ -108,13 +108,13 @@ async function main() {
 		reagentRun: await db.collection('reagent_batch_records').countDocuments({ _id: REAGENT_RUN } as any),
 		invTxns: await db.collection('inventory_transactions').countDocuments({ cartridgeRecordId: CID }),
 		inWaxRun: await db.collection('wax_filling_runs').countDocuments({ _id: WAX_RUN, cartridgeIds: CID } as any),
-		auditRows: await db.collection('audit_logs').countDocuments({ recordId: CID })
+		auditRows: await db.collection('audit_log').countDocuments({ recordId: CID })
 	};
 	console.log(`  cartridge_records: ${post.cart}  (expect 0)`);
 	console.log(`  reagent_batch_records (vn8D): ${post.reagentRun}  (expect 0)`);
 	console.log(`  inventory_transactions: ${post.invTxns}  (expect 0)`);
 	console.log(`  wax_filling_run (2y2f) contains cart: ${post.inWaxRun ? 'yes' : 'no'}  (expect no)`);
-	console.log(`  audit_logs rows for cart: ${post.auditRows}  (expect 1 — the HARD_DELETE row)`);
+	console.log(`  audit_log rows for cart: ${post.auditRows}  (expect 1 — the HARD_DELETE row)`);
 
 	const ok = post.cart === 0 && post.reagentRun === 0 && post.invTxns === 0 && post.inWaxRun === 0 && post.auditRows === 1;
 	console.log(`\n${ok ? '✓ clean' : '✗ check above counts'}`);

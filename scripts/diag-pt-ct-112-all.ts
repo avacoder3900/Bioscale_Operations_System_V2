@@ -22,13 +22,13 @@ async function main() {
 	}
 	console.log('');
 
-	const auditLogs = await db.collection('audit_logs').find({
+	const auditLogs = await db.collection('audit_log').find({
 		$or: [
 			{ tableName: 'part_definitions', recordId: partDef?._id },
 			{ tableName: 'receiving_lots', 'newData.part._id': partDef?._id }
 		]
 	}).sort({ changedAt: -1 }).limit(10).toArray();
-	console.log(`Recent audit_logs touching PT-CT-112:`);
+	console.log(`Recent audit_log touching PT-CT-112:`);
 	for (const a of auditLogs as any[]) {
 		console.log(`  ${a.changedAt?.toISOString?.()} ${a.action} ${a.tableName}/${a.recordId} by=${a.changedBy}`);
 		if (a.newData) console.log(`    newData=${JSON.stringify(a.newData).slice(0, 200)}`);

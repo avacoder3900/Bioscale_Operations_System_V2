@@ -72,7 +72,7 @@ async function main() {
 
 	// Also check audit log for backing/oven entries
 	console.log('\n=== AuditLog entries (last 3h) with oven/backing in action or details ===');
-	const audits = await db.collection('audit_logs').find({
+	const audits = await db.collection('audit_log').find({
 		timestamp: { $gte: since3h },
 		$or: [
 			{ action: /backing|oven|wi-?01|bucket/i },

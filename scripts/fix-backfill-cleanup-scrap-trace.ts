@@ -44,7 +44,7 @@ async function main() {
 	const db = mongoose.connection.db!;
 	const carts = db.collection('cartridge_records');
 	const txns = db.collection('inventory_transactions');
-	const audits = db.collection('audit_logs');
+	const audits = db.collection('audit_log');
 
 	const cleanupCarts = await carts.find({
 		status: 'scrapped',

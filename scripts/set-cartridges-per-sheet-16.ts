@@ -15,7 +15,7 @@ async function main() {
 	await mongoose.connect(URI);
 	const db = mongoose.connection.db!;
 	const col = db.collection('manufacturing_settings');
-	const audit = db.collection('audit_logs');
+	const audit = db.collection('audit_log');
 
 	const before = await col.findOne({ _id: 'default' });
 	const oldValue = (before as any)?.general?.cartridgesPerLaserCutSheet ?? null;

@@ -71,15 +71,15 @@ async function main() {
 	}
 	console.log('');
 
-	// audit_logs today re-checked
-	const audits = await db.collection('audit_logs').find({
+	// audit_log today re-checked
+	const audits = await db.collection('audit_log').find({
 		changedAt: { $gte: todayStart },
 		$or: [
 			{ tableName: 'laser_cut_batches' },
 			{ tableName: 'thermoseal_cutting_runs' }
 		]
 	}).sort({ changedAt: 1 }).toArray();
-	console.log(`audit_logs for laser/cut tables today (${audits.length}):`);
+	console.log(`audit_log for laser/cut tables today (${audits.length}):`);
 	for (const a of audits as any[]) {
 		console.log(`  ${a.changedAt?.toISOString?.()} ${a.action} ${a.tableName}/${a.recordId} by=${a.changedBy}`);
 	}

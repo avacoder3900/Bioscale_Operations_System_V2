@@ -13,8 +13,8 @@ dotenv.config();
 async function main() {
 	await mongoose.connect(process.env.MONGODB_URI!);
 	const db = mongoose.connection.db!;
-	const audits = await db.collection('audit_logs').find({ action: 'GO_BACK' }).toArray() as any[];
-	console.log(`GO_BACK audit entries in audit_logs: ${audits.length}`);
+	const audits = await db.collection('audit_log').find({ action: 'GO_BACK' }).toArray() as any[];
+	console.log(`GO_BACK audit entries in audit_log: ${audits.length}`);
 	for (const a of audits) {
 		console.log(`  ${a._id}  at=${a.changedAt?.toISOString?.()}  by=${a.changedBy}  run=${a.recordId}  ${JSON.stringify(a.newData)}`);
 	}

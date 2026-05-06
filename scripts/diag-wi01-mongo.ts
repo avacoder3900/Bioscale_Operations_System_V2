@@ -43,7 +43,7 @@ dotenv.config();
 	}
 
 	console.log('\n=== AuditLog rows referencing WI-01 in reason or newData ===');
-	const auditHits = await db.collection('audit_logs').countDocuments({
+	const auditHits = await db.collection('audit_log').countDocuments({
 		$or: [
 			{ reason: /WI-?01/i },
 			{ 'newData.notes': /WI-?01/i }

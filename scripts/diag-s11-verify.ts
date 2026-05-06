@@ -13,7 +13,7 @@ async function main() {
 	for (const r of removals) for (const cid of r.cartridgeIds ?? []) cartIds.add(cid);
 	console.log(`distinct cartridge IDs in those removals: ${cartIds.size}`);
 
-	const checkoutAudits = await db.collection('audit_logs').countDocuments({
+	const checkoutAudits = await db.collection('audit_log').countDocuments({
 		action: 'CHECKOUT',
 		recordId: { $in: Array.from(cartIds) }
 	});

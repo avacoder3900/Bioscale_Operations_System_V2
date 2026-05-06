@@ -75,7 +75,7 @@ async function main() {
 	for (const u of runUnresolved.slice(0, 5)) console.log(`  run   ${u._id} value="${u.value}"`);
 
 	if (MODE === 'apply') {
-		await db.collection('audit_logs').insertOne({
+		await db.collection('audit_log').insertOne({
 			_id: generateId(),
 			tableName: 'multi',
 			recordId: 'migration-cooling-tray-2026-04-24',

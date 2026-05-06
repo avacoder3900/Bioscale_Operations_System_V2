@@ -133,7 +133,7 @@ async function main() {
 	}
 
 	if (MODE === 'apply') {
-		await db.collection('audit_logs').insertOne({
+		await db.collection('audit_log').insertOne({
 			_id: generateId(),
 			tableName: 'cartridge_records',
 			recordId: 'migration-fridge-refs-2026-04-24',

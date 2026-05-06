@@ -76,7 +76,7 @@ async function main() {
 
 	// Finally — AuditLog coverage on this reagent run
 	console.log(`\n=== AUDIT LOGS for reagent run ${REAGENT_RUN} ===`);
-	const runAudits = await db.collection('audit_logs').find({ recordId: REAGENT_RUN }).sort({ changedAt: 1 }).toArray();
+	const runAudits = await db.collection('audit_log').find({ recordId: REAGENT_RUN }).sort({ changedAt: 1 }).toArray();
 	for (const l of runAudits as any[]) {
 		const when = l.changedAt instanceof Date ? l.changedAt.toISOString() : l.changedAt;
 		console.log(`  ${when}  action=${l.action}  changedBy=${l.changedBy}`);

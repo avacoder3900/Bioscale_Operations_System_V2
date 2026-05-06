@@ -114,7 +114,7 @@ async function main() {
 	}
 
 	// 4) AuditLog entry
-	await db.collection('audit_logs').insertOne({
+	await db.collection('audit_log').insertOne({
 		_id: gen(),
 		tableName: 'wax_filling_runs',
 		recordId: RUN_ID,

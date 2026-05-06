@@ -35,7 +35,7 @@ async function main() {
 		}
 	);
 
-	await db.collection('audit_logs').insertOne({
+	await db.collection('audit_log').insertOne({
 		_id: nanoid(21),
 		tableName: 'wax_filling_runs',
 		recordId: RUN_ID,

@@ -93,7 +93,7 @@ async function main() {
 	}
 
 	// 3) Also write audit_log entry for the fix
-	await db.collection('audit_logs').insertOne({
+	await db.collection('audit_log').insertOne({
 		_id: new mongoose.Types.ObjectId().toString(),
 		tableName: 'inventory_transactions',
 		recordId: LOT_ID,

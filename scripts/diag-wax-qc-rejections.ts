@@ -40,7 +40,7 @@ async function main() {
 
 	// Audit log entries for this run
 	console.log('\n=== AuditLog entries referencing this run ===');
-	const audits = await db.collection('audit_logs').find(
+	const audits = await db.collection('audit_log').find(
 		{ $or: [{ recordId: RUN_ID }, { 'newData.runId': RUN_ID }] }
 	).sort({ changedAt: 1 }).toArray();
 	for (const a of audits as any[]) {
@@ -49,7 +49,7 @@ async function main() {
 
 	// Audit log entries referencing any of the cartridge ids
 	console.log('\n=== AuditLog entries referencing any cartridge id (first 40) ===');
-	const cartAudits = await db.collection('audit_logs').find(
+	const cartAudits = await db.collection('audit_log').find(
 		{ $or: [{ recordId: { $in: cartIds } }, { 'newData.cartridgeId': { $in: cartIds } }] }
 	).sort({ changedAt: 1 }).limit(40).toArray();
 	for (const a of cartAudits as any[]) {

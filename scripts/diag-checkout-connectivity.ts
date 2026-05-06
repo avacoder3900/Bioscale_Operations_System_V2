@@ -123,7 +123,7 @@ async function main() {
 	console.log('\n' + '='.repeat(72));
 	console.log(' 5. AuditLog entries for these IDs');
 	console.log('='.repeat(72));
-	const audits = await db.collection('audit_logs').find({
+	const audits = await db.collection('audit_log').find({
 		tableName: 'cartridge_records',
 		recordId: { $in: ids }
 	}).sort({ changedAt: 1 }).toArray() as any[];

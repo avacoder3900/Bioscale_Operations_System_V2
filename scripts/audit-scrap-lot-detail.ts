@@ -25,7 +25,7 @@ async function main() {
 	}
 
 	// All audit logs for this lot
-	const audits = await db.collection('audit_logs').find({ tableName: 'lot_records', recordId: lotId }).sort({ changedAt: 1 }).toArray();
+	const audits = await db.collection('audit_log').find({ tableName: 'lot_records', recordId: lotId }).sort({ changedAt: 1 }).toArray();
 	console.log(`\n${audits.length} audit_log entries for this lot:`);
 	for (const a of audits as any[]) {
 		console.log(`  ${a.changedAt?.toISOString?.()}  ${a.action}  by=${a.changedBy}  newData=${JSON.stringify(a.newData)?.slice(0, 120)}`);

@@ -6,7 +6,7 @@
  *
  * Calling protectLockedCarts() at the top of any wax-flow write action:
  *   1. Finds the locked carts in the target list
- *   2. Inserts an IMPROPER_ORDER_BLOCKED audit_logs row per blocked cart
+ *   2. Inserts an IMPROPER_ORDER_BLOCKED audit_log row per blocked cart
  *   3. Pushes a visible note onto cartridge.notes[] (rendered in cart-admin)
  *   4. Returns only the cart IDs that are safe to write to
  *

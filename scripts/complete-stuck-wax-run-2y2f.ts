@@ -151,7 +151,7 @@ const FULL_TUBE_VOLUME_UL = 12000;
 	}
 
 	// --- 7. AuditLog ---
-	await db.collection('audit_logs').insertOne({
+	await db.collection('audit_log').insertOne({
 		_id: nanoid(),
 		tableName: 'wax_filling_runs',
 		recordId: RUN_ID,

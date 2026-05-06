@@ -73,7 +73,7 @@ async function main() {
 	for (const u of unresolved.slice(0, 10)) console.log(`  ${u._id}  loc="${u.value}"`);
 
 	if (MODE === 'apply') {
-		await db.collection('audit_logs').insertOne({
+		await db.collection('audit_log').insertOne({
 			_id: generateId(),
 			tableName: 'cartridge_records',
 			recordId: 'migration-oven-cure-2026-04-24',

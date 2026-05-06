@@ -1,6 +1,6 @@
 /**
  * AuditLog Mongoose model maps to collection 'audit_log' (singular).
- * Earlier diagnostics queried 'audit_logs' (plural). Check both.
+ * Earlier diagnostics queried 'audit_log' (plural). Check both.
  */
 import mongoose from 'mongoose';
 import * as dotenv from 'dotenv';
@@ -12,7 +12,7 @@ async function main() {
 	const todayStart = new Date();
 	todayStart.setHours(0, 0, 0, 0);
 
-	for (const name of ['audit_log', 'audit_logs']) {
+	for (const name of ['audit_log', 'audit_log']) {
 		const exists = await db.listCollections({ name }).toArray();
 		const count = exists.length ? await db.collection(name).countDocuments() : 0;
 		const today = exists.length

@@ -10,15 +10,15 @@ async function main() {
 	console.log(`PT-CT-112 partDef._id=${id}, current inventoryCount=${partDef?.inventoryCount}`);
 	console.log(`updatedAt=${(partDef as any)?.updatedAt?.toISOString?.()}\n`);
 
-	// All audit_logs mentioning this id anywhere
-	const audits = await db.collection('audit_logs').find({
+	// All audit_log mentioning this id anywhere
+	const audits = await db.collection('audit_log').find({
 		$or: [
 			{ recordId: id },
 			{ 'newData.partNumber': 'PT-CT-112' },
 			{ 'newData._id': id }
 		]
 	}).sort({ changedAt: -1 }).limit(20).toArray();
-	console.log(`audit_logs mentioning PT-CT-112 or its id (last 20):`);
+	console.log(`audit_log mentioning PT-CT-112 or its id (last 20):`);
 	for (const a of audits as any[]) {
 		console.log(`  ${a.changedAt?.toISOString?.()} ${a.action} ${a.tableName}/${a.recordId} by=${a.changedBy}`);
 		if (a.newData) console.log(`    newData=${JSON.stringify(a.newData).slice(0, 300)}`);

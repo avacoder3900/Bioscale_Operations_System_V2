@@ -39,8 +39,8 @@ async function main() {
 		console.log(`  corrections[] entries: ${((lotV1 as any).corrections || []).length}`);
 		console.log(`  status: ${(lotV1 as any).status}`);
 	}
-	const reconcileAudit = await db.collection('audit_logs').countDocuments({ recordId: 'V1BSHFzMXsNAxYiP59o6b', action: 'RECONCILE' });
-	console.log(`  audit_logs RECONCILE rows: ${reconcileAudit}`);
+	const reconcileAudit = await db.collection('audit_log').countDocuments({ recordId: 'V1BSHFzMXsNAxYiP59o6b', action: 'RECONCILE' });
+	console.log(`  audit_log RECONCILE rows: ${reconcileAudit}`);
 
 	// ─── Backfill counts vs docs ──────────────────────────────────────────────
 	console.log('\n=== BACKFILL COUNT VERIFICATION ===');
@@ -49,13 +49,13 @@ async function main() {
 	const acceptedBackfill = await db.collection('cartridge_records').countDocuments({ 'waxQc.status': 'Accepted', 'waxQc.operator': 'system-backfill' });
 	const acceptedBackfillAlt = await db.collection('cartridge_records').countDocuments({ 'waxQc.operator': 'system-backfill' });
 	console.log(`waxQc Accepted by system-backfill: ${acceptedBackfill}  (all ops w/ that operator: ${acceptedBackfillAlt})`);
-	const waxBackfillAudit = await db.collection('audit_logs').findOne({ _id: 'aiUsESm2QKWzO7JIuSaiN' } as any);
+	const waxBackfillAudit = await db.collection('audit_log').findOne({ _id: 'aiUsESm2QKWzO7JIuSaiN' } as any);
 	console.log(`  audit row aiUsESm2QKWzO7JIuSaiN present: ${!!waxBackfillAudit}`);
 
 	// 4 retracted txns on superseded lot KnvhBjHKSC0jStX1rQw4s
 	const retracted = await db.collection('inventory_transactions').countDocuments({ manufacturingRunId: 'KnvhBjHKSC0jStX1rQw4s', retractedAt: { $exists: true } });
 	const adjustments = await db.collection('inventory_transactions').countDocuments({ manufacturingRunId: 'KnvhBjHKSC0jStX1rQw4s', transactionType: 'adjustment' });
-	const retractAudit = await db.collection('audit_logs').countDocuments({ recordId: 'KnvhBjHKSC0jStX1rQw4s', action: 'RETRACT' });
+	const retractAudit = await db.collection('audit_log').countDocuments({ recordId: 'KnvhBjHKSC0jStX1rQw4s', action: 'RETRACT' });
 	console.log(`Superseded lot KnvhBjHKSC0jStX1rQw4s:`);
 	console.log(`  retracted txns:  ${retracted}  (doc says 4)`);
 	console.log(`  adjustment txns: ${adjustments}  (doc says 4)`);
@@ -63,7 +63,7 @@ async function main() {
 
 	// 90 backfilled scrap txns + 90 audit logs
 	const scrapBackfill = await db.collection('inventory_transactions').countDocuments({ transactionType: 'scrap', operatorUsername: 'system-audit-backfill-2026-04-23' });
-	const scrapBackfillAudit = await db.collection('audit_logs').countDocuments({ changedBy: 'system-audit-backfill-2026-04-23' });
+	const scrapBackfillAudit = await db.collection('audit_log').countDocuments({ changedBy: 'system-audit-backfill-2026-04-23' });
 	console.log(`Cleanup backfill:`);
 	console.log(`  scrap txns by system-audit-backfill-2026-04-23: ${scrapBackfill}  (doc says 90)`);
 	console.log(`  audit rows by same: ${scrapBackfillAudit}  (doc says 90)`);

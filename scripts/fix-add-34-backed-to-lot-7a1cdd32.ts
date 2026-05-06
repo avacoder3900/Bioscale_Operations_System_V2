@@ -107,7 +107,7 @@ async function main() {
 	}
 
 	// 5. Audit log entry
-	await db.collection('audit_logs').insertOne({
+	await db.collection('audit_log').insertOne({
 		_id: (await import('nanoid')).nanoid(),
 		tableName: 'backing_lots',
 		recordId: LOT_ID,

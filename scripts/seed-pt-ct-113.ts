@@ -33,7 +33,7 @@ async function main() {
 	await mongoose.connect(URI);
 	const db = mongoose.connection.db!;
 	const parts = db.collection('part_definitions');
-	const audit = db.collection('audit_logs');
+	const audit = db.collection('audit_log');
 
 	const existing = await parts.findOne({ partNumber: PART.partNumber });
 	if (existing) {

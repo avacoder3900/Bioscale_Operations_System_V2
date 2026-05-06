@@ -37,7 +37,7 @@ async function main() {
 	const txns = db.collection('inventory_transactions');
 	const mfgMat = db.collection('manufacturing_materials');
 	const mfgTxn = db.collection('manufacturing_material_transactions');
-	const audit = db.collection('audit_logs');
+	const audit = db.collection('audit_log');
 
 	const part = await parts.findOne({ partNumber: TARGET_PART_NUMBER }) as any;
 	if (!part) throw new Error(`PartDefinition ${TARGET_PART_NUMBER} not found`);

@@ -371,7 +371,7 @@ export const actions: Actions = {
 
 		// Admin override path — requires re-auth (username + password). Any
 		// admin (permission `admin:full` or `admin:users`) can override; the
-		// event is recorded in audit_logs for traceability.
+		// event is recorded in audit_log for traceability.
 		if (override) {
 			const verified = await verifyAdminOverride(adminUser, adminPass);
 			if (!verified.ok) {

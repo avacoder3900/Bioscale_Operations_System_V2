@@ -26,7 +26,7 @@ async function main() {
 	console.log('\n=== SIGNAL 2: Reagent runs with zero AuditLog entries ===');
 	const allReagent = await db.collection('reagent_batch_records').find({}).project({ _id: 1, status: 1, isResearch: 1, runEndTime: 1, 'cartridgesFilled': 1, 'operator.username': 1, setupTimestamp: 1 }).toArray();
 	const auditedIds = new Set<string>();
-	const auditRows = await db.collection('audit_logs').find({ tableName: 'reagent_batch_records' }).project({ recordId: 1 }).toArray();
+	const auditRows = await db.collection('audit_log').find({ tableName: 'reagent_batch_records' }).project({ recordId: 1 }).toArray();
 	for (const a of auditRows as any[]) auditedIds.add(String(a.recordId));
 	const ghostRuns = (allReagent as any[]).filter((r) => !auditedIds.has(String(r._id)));
 	console.log(`Total reagent runs: ${allReagent.length}`);

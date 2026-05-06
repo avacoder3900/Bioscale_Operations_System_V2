@@ -18,7 +18,7 @@ async function main() {
 	}
 
 	console.log('\n=== AUDIT LOG WITH ACTION=CHECKOUT ===');
-	const checkoutAudits = await db.collection('audit_logs').countDocuments({ action: 'CHECKOUT' });
+	const checkoutAudits = await db.collection('audit_log').countDocuments({ action: 'CHECKOUT' });
 	console.log(`audit rows with action='CHECKOUT': ${checkoutAudits}`);
 
 	console.log('\n=== WAX QC REJECT RECONCILIATION (memory note) ===');

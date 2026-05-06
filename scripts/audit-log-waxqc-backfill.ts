@@ -35,7 +35,7 @@ import { nanoid } from 'nanoid';
 			authorizedAt: now.toISOString()
 		}
 	};
-	await db.collection('audit_logs').insertOne(entry);
+	await db.collection('audit_log').insertOne(entry);
 	console.log(`AuditLog entry written: ${entry._id}`);
 	console.log(`  scope=${accepted} cartridges`);
 

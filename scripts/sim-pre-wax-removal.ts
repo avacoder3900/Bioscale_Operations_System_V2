@@ -85,7 +85,7 @@ async function removeFromBackingLot(
 		updatedAt: now
 	});
 
-	await db.collection('audit_logs').insertOne({
+	await db.collection('audit_log').insertOne({
 		_id: generateId(),
 		tableName: 'backing_lots',
 		recordId: lotBarcode,
@@ -160,7 +160,7 @@ async function main() {
 		if (removal1.reason !== 'sim test 1') fail(`removal.reason mismatch`);
 		pass('ManualCartridgeRemoval has correct fields (backingLotId, cartridgeCount=3, ids=[], reason)');
 
-		const audit1 = await db.collection('audit_logs').findOne({
+		const audit1 = await db.collection('audit_log').findOne({
 			tableName: 'backing_lots', recordId: SIM_LOT_ID, 'newData.removalGroupId': r1.removalId
 		});
 		if (!audit1) fail('AuditLog CHECKOUT entry not written');
@@ -238,14 +238,14 @@ async function main() {
 		console.log(`final BackingLot: cartridgeCount=${finalLot?.cartridgeCount}, status=${finalLot?.status}`);
 		const removalCount = await db.collection('manual_cartridge_removals').countDocuments({ backingLotId: SIM_LOT_ID });
 		console.log(`ManualCartridgeRemoval rows for sim lot: ${removalCount}`);
-		const auditCount = await db.collection('audit_logs').countDocuments({ tableName: 'backing_lots', recordId: SIM_LOT_ID });
+		const auditCount = await db.collection('audit_log').countDocuments({ tableName: 'backing_lots', recordId: SIM_LOT_ID });
 		console.log(`AuditLog rows for sim lot: ${auditCount}`);
 	} finally {
 		// Cleanup: delete simulated artifacts
 		console.log('\n--- Cleanup ---');
 		await db.collection('backing_lots').deleteOne({ _id: SIM_LOT_ID });
 		const delRemovals = await db.collection('manual_cartridge_removals').deleteMany({ backingLotId: SIM_LOT_ID });
-		const delAudits = await db.collection('audit_logs').deleteMany({ tableName: 'backing_lots', recordId: SIM_LOT_ID });
+		const delAudits = await db.collection('audit_log').deleteMany({ tableName: 'backing_lots', recordId: SIM_LOT_ID });
 		console.log(`Deleted: 1 BackingLot, ${delRemovals.deletedCount} ManualCartridgeRemovals, ${delAudits.deletedCount} AuditLogs`);
 	}
 

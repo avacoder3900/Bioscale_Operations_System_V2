@@ -22,7 +22,7 @@ async function main() {
 
 	// 2. AuditLog history (chronological)
 	console.log('\n─── AUDIT_LOGS (chronological) ───');
-	const logs = await db.collection('audit_logs').find({ recordId: CID }).sort({ changedAt: 1 }).toArray();
+	const logs = await db.collection('audit_log').find({ recordId: CID }).sort({ changedAt: 1 }).toArray();
 	console.log(`count: ${logs.length}`);
 	for (const l of logs as any[]) {
 		const when = l.changedAt instanceof Date ? l.changedAt.toISOString() : l.changedAt;

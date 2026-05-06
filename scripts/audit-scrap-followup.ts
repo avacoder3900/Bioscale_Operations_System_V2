@@ -2,7 +2,7 @@
  * Follow-up diagnostics for two flags raised by audit-scrap-tracking.ts:
  *  1. Why does backing-step consumption sum exceed (quantityProduced+scrap)?
  *     PT-CT-104 off by 4, PT-CT-112 off by 2, PT-CT-106 off by 2.
- *  2. When/how were the 90 cleanup-scrap cartridges written? Check audit_logs.
+ *  2. When/how were the 90 cleanup-scrap cartridges written? Check audit_log.
  *  3. Any *production* reject paths (wax/reagent/top-seal) actually used yet?
  */
 import mongoose from 'mongoose';
@@ -84,7 +84,7 @@ async function main() {
 	for (const [d, n] of Object.entries(byDay)) console.log(`    ${d}: ${n}`);
 
 	// Audit log entries for these cartridges
-	const auditHits = await db.collection('audit_logs').aggregate([
+	const auditHits = await db.collection('audit_log').aggregate([
 		{ $match: { tableName: 'cartridge_records', recordId: { $in: cleanupCarts.map((c: any) => c._id) } } },
 		{ $group: { _id: '$changedBy', n: { $sum: 1 } } }
 	]).toArray();
