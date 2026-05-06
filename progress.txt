@@ -1311,3 +1311,105 @@ declared-but-uninstalled packages (`resend`, `simple-statistics`,
 CLAUDE.md claiming Mongoose 8. The full 8-phase remediation plan is
 in chat history. Not yet started — user prioritised the checkout +
 consolidation work first.
+
+## Session 2026-05-06 (cont. 2) — 271-error remediation, all 8 phases shipped
+
+User authorised editing `.svelte` files for this remediation despite
+the CLAUDE.md "UI is frozen" rule. End state: `npm run check` reports
+0 errors (was 271). Single commit `6dcd6a7`, 69 files changed, +432 /
+-282 lines. Mongoose upgrade to 9.2.3 confirmed intentional;
+CLAUDE.md updated to match.
+
+### Phase recap
+
+1. **`npm install`** — 4 declared-but-uninstalled packages were
+   missing from `node_modules`, cascading errors across importing
+   files. Reinstall cleared 69 errors in one shot.
+
+2. **Dead-reference fixups** — `r2Upload` in `_receiving/new` was a
+   misnamed `uploadToR2` with arg-order swap. `parts/[partId]/+page.svelte`
+   referenced `IpRevisionHistory` + `IpFormDefinitionEditor` +
+   `currentRevision` without imports/derivations.
+
+3. **Schema drift in load functions (the big category, 115+ errors)**
+   — 15 hot-spot routes had load functions hand-crafting narrow
+   projections that dropped fields the templates still read. Fields
+   all existed on the underlying Mongoose models — server-side
+   projections were the only thing missing. Touched: cartridge-admin/
+   release, /failures, /filled, /statistics, /sku-management;
+   customers/[id]; assembly/[sessionId]; assays/[assayId]/assign;
+   assays/import; cartridges/analysis;
+   documents/instructions/[id]/run/[runId]; cartridges/[cartridgeId];
+   parts/+page; equipment/robots; equipment/activity.
+
+4. **Type alignment** — Dropped `LifecycleStage` casing constraint
+   in cartridge-admin/failures + /filled (UI uses post-state
+   PascalCase, not pipeline lowercase). Added `'assay_loaded'` and
+   `'testing'` to `LifecycleStage`. Mongoose 9 hook signature
+   regression in `user.ts` (`.pre('deleteOne'/'deleteMany'/
+   'findOneAndDelete')` now mistyped) — cast through `any` since
+   runtime hooks still fire correctly. Fixed `r2.ts` `fetch(buffer)`
+   by wrapping in `Uint8Array` (newer Node `fetch` doesn't accept
+   Node `Buffer` directly). Added `'cut_top_seal'` to
+   `inventory-transaction` enum. Widened `TronButton` variant union
+   to include `'ghost'`.
+
+5. **Native-driver casts (Mongoose ObjectId vs nanoid string)** —
+   New helpers `byId(id)` / `asId(id)` in
+   `src/lib/server/db/native-helpers.ts`. Replaced 13 sites across
+   6 files where raw `db.collection(...)` calls hit the
+   `Type 'string' is not assignable to type 'Condition<ObjectId>'`
+   problem. Single source of cast.
+
+6. **Possibly-undefined guards** — `locals.user!` non-null
+   assertions in actions where `requirePermission` already narrows
+   but TypeScript doesn't propagate (manufacturing/wax-filling,
+   /reagent-filling, /opentron-control/reagent, equipment/decks-trays,
+   qa-qc). Optional-chaining for scattered `form.failures` /
+   `data.spu` reads.
+
+7. **Implicit-any annotations** — `(x: any)` on ~30 callback
+   parameters across ~10 .svelte files. Pure type hygiene.
+
+8. **Last-mile** — Reordered `$derived` `tubesUsed` below the
+   `$state` variables it referenced in wax-creation. Expanded
+   wax-filling `runState` type to include `activeLotId`. Expanded
+   wax/reagent `RobotRunState` with `activeProcess?` field. Added
+   missing `WaxCartridgeRecord` export to `schema.ts`. The
+   stubborn `equipment/activity` errors turned out to be the
+   .svelte's OWN `Props` interface declaring a narrow `locations`
+   shape — server-side fixes never propagated because the .svelte
+   was overriding. Widened the Props interface to match.
+
+### Important pattern: .svelte Props interfaces win over PageData
+
+`equipment/activity/+page.svelte` and several other components
+declare their own `interface Props { data: { ... } }` block that
+shadows the auto-generated PageData type. If you widen a load
+function and the .svelte STILL shows "property X doesn't exist",
+check whether the .svelte is type-asserting its data shape locally.
+
+### byId() / asId() helper
+
+`src/lib/server/db/native-helpers.ts` is the new home for raw
+MongoDB driver casts. Mongoose models are typed correctly for
+nanoid `_id`s, but native-driver calls
+(`db.collection('foo').findOne({ _id: stringId })`) hit
+`Type 'string' is not assignable to type 'Condition<ObjectId>'`.
+Use `byId(id)` for filters, `asId(id)` for `_id` fields in
+`insertOne` payloads.
+
+### Heads-up for next session
+
+- Build + contract test gates not yet run at time of writing this
+  note — needed before the dev → master merge.
+- Phase 3 surfaced real data into templates that previously got
+  `undefined`. Hidden bugs in date formatters / number math could
+  trip on those routes. Worth a 5-minute smoke test of each fixed
+  page.
+- The nested checkout `Bioscale_Operations_System_V2/Bioscale_Operations_System_V2/`
+  is what Vercel ships from. Today's changes are only on the outer
+  copy and only on `dev`. Production needs a `dev → master` merge
+  to pick them up.
+- `vercel.json` cron addition for `/api/cron/cartridge-cleanup-reminder`
+  remains uncommitted (separate workstream — left untouched).

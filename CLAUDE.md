@@ -4,7 +4,7 @@
 
 ## Stack
 - **Framework:** SvelteKit 2 + Svelte 5
-- **Database:** MongoDB Atlas + Mongoose 8
+- **Database:** MongoDB Atlas + Mongoose 9
 - **Language:** TypeScript (strict mode)
 - **Styling:** Tailwind CSS
 - **Auth:** Cookie-based sessions, bcrypt password hashing
