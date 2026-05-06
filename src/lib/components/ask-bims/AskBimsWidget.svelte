@@ -284,6 +284,14 @@
 {/if}
 
 <style>
+	/* Never show the floating widget on print pages — was leaking into
+	   /manufacturing/print-barcodes' bottom-left corner. */
+	@media print {
+		.ask-bims-pill,
+		.ask-bims-panel {
+			display: none !important;
+		}
+	}
 	.ask-bims-pill {
 		position: fixed;
 		bottom: 1.25rem;

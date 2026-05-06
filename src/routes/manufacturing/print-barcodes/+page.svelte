@@ -110,11 +110,13 @@
 		const cellMargin = 0.125 * DPI;
 		const cellSize = 0.75 * DPI;
 		const cellPitch = cellSize + 2 * cellMargin; // 1.0" pitch
-		// Operator-tuned alignment shift to match physical Avery 94102 stickers
-		// (cell == one barcode's width). Y shift kept at 0.10*cell; X shift was
-		// 0.15*cell, then pulled back 25% → 0.1125*cell.
-		const shiftX = 0.1125 * cellSize;
-		const shiftY = 0.1 * cellSize;
+		// Operator-tuned alignment shift to match physical Avery 94102
+		// stickers. History on a 2550×3300 px sheet:
+		//   start →  shiftX = +25.3 px,  shiftY = +22.5 px  (0.1125c, 0.10c)
+		//   nudge →  shiftX = +0.3  px,  shiftY = +7.5  px  (−25 left, −15 up)
+		// Stored as raw pixels now so further nudges read cleanly.
+		const shiftX = 0.3125;
+		const shiftY = 7.5;
 		const padX = 0.23 * DPI + shiftX;
 		const padY = 0.46 * DPI + shiftY;
 
