@@ -57,7 +57,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			fridgeId: c.storage?.fridgeId ?? c.storage?.locationId ?? null,
 			storageContainerBarcode: c.storage?.containerBarcode ?? null,
 			expirationDate: c.reagentFilling?.expirationDate ?? null,
-			operatorName: c.reagentInspection?.inspectedBy?.username
+			operatorName: c.reagentInspection?.operator?.username
 				?? c.reagentFilling?.operator?.username
 				?? null,
 			createdAt: c.createdAt

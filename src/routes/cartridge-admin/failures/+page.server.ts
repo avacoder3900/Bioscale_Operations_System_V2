@@ -59,8 +59,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			inspectionStatus: c.reagentInspection?.status ?? null,
 			storageLocation: c.storage?.fridgeName ?? c.waxStorage?.location ?? null,
 			topSealBatchId: c.topSeal?.batchId ?? null,
-			operatorName: c.reagentInspection?.inspectedBy?.username
-				?? c.waxQc?.inspector?.username
+			operatorName: c.reagentInspection?.operator?.username
+				?? c.waxQc?.operator?.username
 				?? c.waxFilling?.operator?.username
 				?? null,
 			createdAt: c.createdAt
