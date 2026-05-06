@@ -1013,3 +1013,76 @@ in `git status` is the nested clone, not files to commit.
 - Backfill script `scripts/backfill-laser-cut-receiving-lots.ts` is
   idempotent (`lotId`-keyed) and safe to re-run. New laser-cut batches
   auto-create their own ReceivingLots; only old batches needed it.
+
+## Session 2026-05-06 — Cart-MFG Checkout: Status-Agnostic Removal + Count Consistency
+
+### Problem
+
+Operator reported: cart-MFG manual checkout page rejected 5 cartridges
+with "status is 'completed', expected 'wax_stored'" plus 1 "not found".
+The 5 had moved past wax_stored into completed (already QC'd) — system
+recorded a state the cart never physically reached. Operator needed a
+way to physically remove them from inventory regardless of current
+status, without overwriting any production state.
+
+### Resolution
+
+`src/routes/manufacturing/scrap/+page.server.ts` `removeWaxStoredCartridges`
+action: dropped the wax_stored eligibility gate. Validate existence
+only — any status (wax_stored, scrapped, completed, etc.) is now
+checkout-eligible. Status is preserved on checkout. The action records
+the physical-removal event in `ManualCartridgeRemoval`, plus a
+per-cartridge `AuditLog` entry that captures `statusAtCheckout` so the
+audit trail self-describes. Form action name kept (UI compat).
+
+### Count consistency sweep
+
+`getCheckedOutCartridgeIds()` was already in place at
+`src/lib/server/checkout-utils.ts` and applied to ~10 location-based
+counts (fridge/oven occupancy). It was MISSING from every status-based
+count. Patched all of them so a manual checkout drops the cart from
+EVERY count simultaneously:
+- `routes/manufacturing/+page.server.ts` — phaseCounts, rejectedToday/Week, producedToday/Week
+- `routes/cartridge-dashboard/+page.server.ts` — phase/QC/inspection/7-day/assay
+- `routes/manufacturing/consumables/+page.server.ts` — phaseCounts + voided/scrapped tile
+- `lib/server/ask-bims.ts` — count_cartridges_by_status, get_run_yield
+- `lib/server/analytics/runs-feed.ts` — per-run QC aggregation
+- `routes/+page.server.ts` — already done in earlier f4062f5 commit
+
+### Skipped on purpose
+
+`lib/server/services/equipment-status.ts:hasReferences` is the
+delete-orphan guard. A checked-out cartridge still has a
+`waxStorage.locationId` field referencing the fridge — that reference
+must still block fridge deletion (otherwise checkouts would let you
+delete equipment that has historical refs). Live equipment occupancy
+queries already filter (in `/equipment/activity` etc.).
+
+Pre-wax (BackingLot) checkout was already correct via atomic decrement
+in `removeFromBackingLot` action.
+
+### Pattern: any new cartridge count query MUST filter
+
+Going forward, every aggregation/count over `CartridgeRecord` that
+represents "currently in the system" must include `_id: { $nin:
+checkedOutIds }` where `checkedOutIds = await getCheckedOutCartridgeIds()`.
+Otherwise checked-out carts double-count. The exception is queries
+that intentionally include historical references (delete-orphan
+guards, audit reports).
+
+### Heads-up for next session
+
+- The user authorized a sweep to fix all 271 svelte-check errors, but
+  paused that work to commit the checkout fix first. A comprehensive
+  remediation plan was generated (8 phases, see chat history) — Phase
+  1 is `npm install` (4 declared-but-uninstalled packages: resend,
+  simple-statistics, @anthropic-ai/sdk, bwip-js).
+- Mongoose 9.2.3 is installed but `CLAUDE.md` says Mongoose 8 — three
+  errors in `user.ts:108-114` are from Mongoose 9's new
+  deleteOne/deleteMany overloads. Worth confirming the upgrade was
+  intentional before remediating those.
+- `vercel.json` has an uncommitted addition for
+  `/api/cron/cartridge-cleanup-reminder` paired with an untracked
+  route folder `src/routes/api/cron/cartridge-cleanup-reminder/` — not
+  from this session, looks like in-progress work the user has on a
+  separate workstream.
