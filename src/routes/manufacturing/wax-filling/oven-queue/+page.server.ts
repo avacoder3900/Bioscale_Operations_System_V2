@@ -1,6 +1,7 @@
 import { redirect, fail } from '@sveltejs/kit';
 import { connectDB, WaxFillingRun, ManufacturingSettings, ReceivingLot, AuditLog, generateId } from '$lib/server/db';
 import { isAdmin as checkAdmin } from '$lib/server/permissions';
+import { COMPLETED } from '$lib/server/manufacturing/run-statuses';
 import type { PageServerLoad, Actions } from './$types';
 
 export const config = { maxDuration: 60 };
@@ -45,9 +46,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 		const [settingsDoc, completedRuns, waxLots] = await Promise.all([
 			ManufacturingSettings.findById('default').lean(),
-			// Runs that have entered the oven (have ovenLocationId set and are completed/storage)
+			// Runs that have entered the oven — have ovenLocationId set, AND are
+			// either completed or currently in the Storage stage. Both casings
+			// of "Storage" appear historically, and COMPLETED covers both
+			// 'completed' and 'Completed' so reagent collection wouldn't slip
+			// through the gap if reused here.
 			WaxFillingRun.find({
-				status: { $in: ['completed', 'storage', 'Storage'] },
+				status: { $in: [...COMPLETED, 'storage', 'Storage'] },
 				ovenLocationId: { $exists: true, $ne: null }
 			}).sort({ runEndTime: -1 }).limit(50).lean(),
 			ReceivingLot.find({

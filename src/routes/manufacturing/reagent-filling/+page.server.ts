@@ -5,6 +5,7 @@ import {
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
+import { WAX_PAGE_OWNED } from '$lib/server/manufacturing/run-statuses';
 import { resolveFridgeId } from '$lib/server/services/equipment-resolve';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -200,8 +201,7 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 		if (robotId) {
 			const waxRun = await WaxFillingRun.findOne({
 				'robot._id': robotId,
-				status: { $in: ['Setup', 'Loading', 'Running', 'Awaiting Removal',
-					'setup', 'loading', 'running', 'awaiting_removal', 'cooling'] }
+				status: { $in: WAX_PAGE_OWNED }
 			}).lean().catch(() => null) as any;
 			if (waxRun) {
 				robotBlocked = { process: 'wax', runId: waxRun._id ? String(waxRun._id) : null };
