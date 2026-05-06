@@ -1267,3 +1267,47 @@ wax-filling settings page.
   re-check the timer too, not just trust `activeLotId`. Current
   state is UI-gated, which is fine for normal use but not a defence
   in depth. Worth a follow-up if/when audit risk surfaces.
+
+## Session 2026-05-06 (cont.) — Audit-log dual-collection consolidation
+
+While verifying the cart-MFG checkout went through cleanly, found Mongo
+had TWO audit collections side-by-side:
+- `audit_log` (singular, 10,643 entries) — wired to the AuditLog
+  Mongoose model at `src/lib/server/db/models/audit-log.ts:28`. All
+  production app code writes here.
+- `audit_logs` (plural, 269 entries) — created entirely by hand-run
+  scripts in `/scripts` that called `db.collection('audit_logs')`
+  directly, bypassing the model. ~95% of plural entries are from
+  `system-*` script-author tags.
+
+Production was always correct. The plural was pure script drift.
+
+Resolution:
+1. `scripts/consolidate-audit-logs.ts` (new) — migration tool with
+   `--dry-run` and `--execute` flags. Dry-run confirmed 0 `_id`
+   collisions; `--execute` copied all 269 plural entries into singular
+   (singular grew 10644 → 10913) and dropped the plural collection.
+2. Sed-replaced `audit_logs` → `audit_log` across 53 script files and
+   3 src/ comment references. Without this step, the next run of any
+   diagnostic script would silently re-create the plural collection.
+3. Two new diagnostic scripts saved:
+   `scripts/verify-recent-checkout.ts` and
+   `scripts/verify-checkout-audit-log.ts` — useful for future post-
+   checkout sanity passes.
+
+Commit: `c1ba3fa chore(audit-log): consolidate dual audit_log/audit_logs
+collections into one`. 58 files changed (53 script renames + 3 src/
+comment edits + migration tool + 2 diag scripts).
+
+Going forward: AuditLog collection name is `audit_log` (singular). The
+Mongoose model is the only sanctioned writer. If a one-off script must
+use the raw driver, it MUST use `'audit_log'` not `'audit_logs'`.
+
+### Tangentially observed but NOT acted on
+
+While categorising the 271 svelte-check errors (work paused), saw 4
+declared-but-uninstalled packages (`resend`, `simple-statistics`,
+`@anthropic-ai/sdk`, `bwip-js`) and Mongoose 9.2.3 installed despite
+CLAUDE.md claiming Mongoose 8. The full 8-phase remediation plan is
+in chat history. Not yet started — user prioritised the checkout +
+consolidation work first.
