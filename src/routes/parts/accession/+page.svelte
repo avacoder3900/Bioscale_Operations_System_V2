@@ -170,15 +170,11 @@
 		<a href="/parts" class="text-sm text-[var(--color-tron-cyan)] hover:text-cyan-300">&larr; Back to Parts</a>
 	</div>
 
-	<!-- Section nav -->
+	<!-- Section nav — receiving workflow only -->
 	<nav class="flex flex-wrap gap-2 mb-6 text-sm">
 		<a href="#quick-scan" class="px-3 py-1.5 bg-[var(--color-tron-bg-card)] border border-[var(--color-tron-border)] text-[var(--color-tron-text)] rounded-lg hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]">Quick Scan</a>
 		<a href="#lot-history" class="px-3 py-1.5 bg-[var(--color-tron-bg-card)] border border-[var(--color-tron-border)] text-[var(--color-tron-text)] rounded-lg hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]">Lot History ({data.lots?.length ?? 0})</a>
-		<a href="#register-barcodes" class="px-3 py-1.5 bg-[var(--color-tron-bg-card)] border border-[var(--color-tron-border)] text-[var(--color-tron-text)] rounded-lg hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]">Register Barcodes</a>
-		{#if data.unregistered.length > 0}
-			<a href="#unregistered" class="px-3 py-1.5 bg-amber-500/10 border border-amber-400/40 text-amber-300 rounded-lg hover:border-amber-300">Unregistered ({data.unregistered.length})</a>
-		{/if}
-		<a href="#registered" class="px-3 py-1.5 bg-[var(--color-tron-bg-card)] border border-[var(--color-tron-border)] text-[var(--color-tron-text)] rounded-lg hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]">Registered ({data.registered.length})</a>
+		<span class="text-xs text-[var(--color-tron-text-secondary)] self-center ml-2">↓ Barcode admin below</span>
 	</nav>
 
 	<!-- Progress Summary -->
@@ -260,7 +256,7 @@
 	<section id="quick-scan" class="bg-[var(--color-tron-bg-card)] border border-[var(--color-tron-border)] rounded-lg shadow mb-6 scroll-mt-4 border-l-4 border-l-[var(--color-tron-green)]">
 		<div class="p-4 border-b border-[var(--color-tron-border)]">
 			<h2 class="text-lg font-semibold text-[var(--color-tron-cyan)]">📦 Quick Scan Receiving</h2>
-			<p class="text-sm text-[var(--color-tron-text-secondary)] mt-1">Scan part → scan bag → enter quantity. Press Enter between fields.</p>
+			<p class="text-sm text-[var(--color-tron-text-secondary)] mt-1">Select a part (scan <em>or</em> pick from the list) → scan bag → enter quantity. Press Enter between fields.</p>
 		</div>
 		<div class="p-4">
 			<form method="POST" action="?/quickScan" use:enhance={() => {
@@ -275,44 +271,62 @@
 					}
 				};
 			}}>
-				<!-- Step 1: Scan part barcode (primary entry point, autofocus) -->
+				<!-- Step 1: Select part — scan barcode OR pick from dropdown (both set qsPartId) -->
 				<div class="mb-4">
-					<label for="qs-part-scan" class="block text-sm font-semibold text-[var(--color-tron-text)] mb-1">
-						<span class="inline-flex items-center justify-center w-5 h-5 mr-1 bg-cyan-500/20 text-[var(--color-tron-cyan)] rounded-full text-xs">1</span>
-						Scan Part Barcode
-					</label>
-					<div class="flex items-center gap-3">
-						<input
-							id="qs-part-scan"
-							type="text"
-							bind:this={qsPartScanInput}
-							bind:value={qsPartScan}
-							onkeydown={handlePartScan}
-							onfocus={() => { qsPartScan = ''; qsPartScanStatus = 'idle'; qsPartScanInfo = ''; }}
-							autofocus
-							placeholder="Scan or type part barcode, then press Enter"
-							class="flex-1 bg-[var(--color-tron-bg-secondary)] text-[var(--color-tron-text)] placeholder:text-[var(--color-tron-text-secondary)] border-2 border-[var(--color-tron-border)] rounded-lg px-3 py-2.5 text-base focus:ring-2 focus:ring-[var(--color-tron-cyan)] focus:border-[var(--color-tron-cyan)] outline-none"
-						/>
-						<div class="text-sm w-72 shrink-0">
-							{#if qsPartScanStatus === 'checking'}<span class="text-[var(--color-tron-text-secondary)]">Checking…</span>{/if}
-							{#if qsPartScanStatus === 'found'}<span class="text-green-300 font-semibold">✓ {qsPartScanInfo}</span>{/if}
-							{#if qsPartScanStatus === 'not-found'}<span class="text-red-300">✗ {qsPartScanInfo}</span>{/if}
+					<div class="flex items-baseline gap-2 mb-1">
+						<label for="qs-part-scan" class="text-sm font-semibold text-[var(--color-tron-text)]">
+							<span class="inline-flex items-center justify-center w-5 h-5 mr-1 bg-cyan-500/20 text-[var(--color-tron-cyan)] rounded-full text-xs">1</span>
+							Select Part
+						</label>
+						<span class="text-xs text-[var(--color-tron-text-secondary)]">— scan the part barcode <strong class="text-[var(--color-tron-cyan)]">or</strong> pick from the list. Either method selects the part.</span>
+					</div>
+					<div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-stretch">
+						<!-- Method A: scan -->
+						<div class="md:col-span-6">
+							<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)] mb-1">A · Scan part barcode</p>
+							<input
+								id="qs-part-scan"
+								type="text"
+								bind:this={qsPartScanInput}
+								bind:value={qsPartScan}
+								onkeydown={handlePartScan}
+								onfocus={() => { qsPartScan = ''; qsPartScanStatus = 'idle'; qsPartScanInfo = ''; }}
+								autofocus
+								placeholder="Scan or type part barcode, then press Enter"
+								class="w-full bg-[var(--color-tron-bg-secondary)] text-[var(--color-tron-text)] placeholder:text-[var(--color-tron-text-secondary)] border-2 border-[var(--color-tron-border)] rounded-lg px-3 py-2.5 text-base focus:ring-2 focus:ring-[var(--color-tron-cyan)] focus:border-[var(--color-tron-cyan)] outline-none"
+							/>
+							<div class="text-xs mt-1 min-h-[1rem]">
+								{#if qsPartScanStatus === 'checking'}<span class="text-[var(--color-tron-text-secondary)]">Checking…</span>{/if}
+								{#if qsPartScanStatus === 'found'}<span class="text-green-300 font-semibold">✓ {qsPartScanInfo}</span>{/if}
+								{#if qsPartScanStatus === 'not-found'}<span class="text-red-300">✗ {qsPartScanInfo}</span>{/if}
+							</div>
+						</div>
+						<!-- OR divider -->
+						<div class="hidden md:flex md:col-span-1 flex-col items-center justify-center">
+							<div class="flex-1 w-px bg-[var(--color-tron-border)]"></div>
+							<span class="my-2 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[var(--color-tron-cyan)] bg-[var(--color-tron-bg-card)] border border-[var(--color-tron-border)] rounded-full">or</span>
+							<div class="flex-1 w-px bg-[var(--color-tron-border)]"></div>
+						</div>
+						<div class="md:hidden text-center text-xs font-bold uppercase tracking-wider text-[var(--color-tron-cyan)]">— or —</div>
+						<!-- Method B: dropdown -->
+						<div class="md:col-span-5">
+							<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)] mb-1">B · Pick from list</p>
+							<select id="qs-part" name="partId" bind:value={qsPartId} required class="w-full bg-[var(--color-tron-bg-secondary)] text-[var(--color-tron-text)] border-2 border-[var(--color-tron-border)] rounded-lg px-3 py-2.5 text-base focus:ring-2 focus:ring-[var(--color-tron-cyan)] focus:border-[var(--color-tron-cyan)] outline-none">
+								<option value="">Select a part by part number…</option>
+								{#each [...data.registered, ...data.unregistered] as part}
+									<option value={part.id}>{part.partNumber} — {part.name}</option>
+								{/each}
+							</select>
+							<div class="text-xs mt-1 min-h-[1rem]">
+								{#if qsPartId && qsPartScanStatus !== 'found'}<span class="text-green-300">✓ Selected from list</span>{/if}
+							</div>
 						</div>
 					</div>
 				</div>
 
-				<!-- Steps 2-4: bag barcode, qty, notes -->
+				<!-- Steps 2-4: bag barcode, qty, button -->
 				<div class="grid grid-cols-1 md:grid-cols-12 gap-3">
-					<div class="md:col-span-4">
-						<label for="qs-part" class="block text-sm font-medium text-[var(--color-tron-text)] mb-1">Part (auto-filled by scan)</label>
-						<select id="qs-part" name="partId" bind:value={qsPartId} required class="w-full bg-[var(--color-tron-bg-secondary)] text-[var(--color-tron-text)] border border-[var(--color-tron-border)] rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[var(--color-tron-cyan)] focus:border-[var(--color-tron-cyan)] outline-none">
-							<option value="">Select a part…</option>
-							{#each [...data.registered, ...data.unregistered] as part}
-								<option value={part.id}>{part.partNumber} — {part.name}</option>
-							{/each}
-						</select>
-					</div>
-					<div class="md:col-span-4">
+					<div class="md:col-span-6">
 						<label for="qs-barcode" class="block text-sm font-medium text-[var(--color-tron-text)] mb-1">
 							<span class="inline-flex items-center justify-center w-5 h-5 mr-1 bg-cyan-500/20 text-[var(--color-tron-cyan)] rounded-full text-xs">2</span>
 							Bag Barcode
@@ -340,7 +354,7 @@
 							<p class="text-xs text-green-300 mt-1">Barcode is available</p>
 						{/if}
 					</div>
-					<div class="md:col-span-2">
+					<div class="md:col-span-3">
 						<label for="qs-qty" class="block text-sm font-medium text-[var(--color-tron-text)] mb-1">
 							<span class="inline-flex items-center justify-center w-5 h-5 mr-1 bg-cyan-500/20 text-[var(--color-tron-cyan)] rounded-full text-xs">3</span>
 							Quantity
@@ -357,7 +371,7 @@
 							class="w-full bg-[var(--color-tron-bg-secondary)] text-[var(--color-tron-text)] placeholder:text-[var(--color-tron-text-secondary)] border border-[var(--color-tron-border)] rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-[var(--color-tron-cyan)] focus:border-[var(--color-tron-cyan)] outline-none"
 						/>
 					</div>
-					<div class="md:col-span-2 flex items-end">
+					<div class="md:col-span-3 flex items-end">
 						<button
 							type="submit"
 							class="w-full px-4 py-2 bg-[var(--color-tron-green)] text-black text-sm font-semibold rounded-lg hover:brightness-110 disabled:bg-white/10 disabled:text-[var(--color-tron-text-secondary)] disabled:cursor-not-allowed"
@@ -500,11 +514,17 @@
 		{/if}
 	</section>
 
+	<!-- ===== Barcode Administration (setup tasks — not part of receiving workflow) ===== -->
+	<div class="mt-10 mb-4 pb-3 border-b-2 border-dashed border-[var(--color-tron-border)]">
+		<h2 class="text-base font-bold uppercase tracking-[0.2em] text-[var(--color-tron-text-secondary)]">Barcode Administration</h2>
+		<p class="text-xs text-[var(--color-tron-text-secondary)] mt-1 max-w-2xl">Setup tasks performed before receiving. Use these to assign physical barcode labels to parts so operators can scan them during Quick Scan above.</p>
+	</div>
+
 	<!-- ===== Register Part Barcodes ===== -->
 	<section id="register-barcodes" class="bg-[var(--color-tron-bg-card)] border border-[var(--color-tron-border)] rounded-lg shadow mb-6 scroll-mt-4">
 		<div class="p-4 border-b border-[var(--color-tron-border)]">
 			<h2 class="text-lg font-semibold text-[var(--color-tron-cyan)]">📋 Register Part Barcodes</h2>
-			<p class="text-sm text-[var(--color-tron-text-secondary)] mt-1">Scan your own physical barcode labels and link them to parts</p>
+			<p class="text-sm text-[var(--color-tron-text-secondary)] mt-1">Pair a part with its physical barcode label — a one-time setup per part SKU. Once registered, that part can be auto-selected by scan during receiving.</p>
 		</div>
 		<div class="p-4">
 			<form method="POST" action="?/registerBarcode" use:enhance={() => {
@@ -586,8 +606,11 @@
 	<!-- ===== Unregistered Parts ===== -->
 	{#if data.unregistered.length > 0}
 		<section id="unregistered" class="bg-[var(--color-tron-bg-card)] border border-[var(--color-tron-border)] rounded-lg shadow mb-6 scroll-mt-4">
-			<div class="flex items-center justify-between p-4 border-b border-[var(--color-tron-border)]">
-				<h2 class="text-lg font-semibold text-[var(--color-tron-cyan)]">Unregistered Parts ({data.unregistered.length})</h2>
+			<div class="flex items-start justify-between p-4 border-b border-[var(--color-tron-border)] gap-4">
+				<div>
+					<h2 class="text-lg font-semibold text-[var(--color-tron-cyan)]">Unregistered Parts ({data.unregistered.length})</h2>
+					<p class="text-sm text-[var(--color-tron-text-secondary)] mt-1">Parts with no barcode yet — they cannot be received by scan until a barcode is assigned. Use "Assign All" to auto-generate system barcodes.</p>
+				</div>
 				{#if !showAssignAllConfirm}
 					<button onclick={() => showAssignAllConfirm = true} class="px-4 py-2 bg-[var(--color-tron-cyan)] text-black text-sm font-semibold rounded-lg hover:brightness-110" style="box-shadow: 0 0 10px rgba(0, 212, 255, 0.4);">Assign All Barcodes</button>
 				{:else}
@@ -645,8 +668,11 @@
 
 	<!-- ===== Registered Parts ===== -->
 	<section id="registered" class="bg-[var(--color-tron-bg-card)] border border-[var(--color-tron-border)] rounded-lg shadow scroll-mt-4">
-		<div class="flex items-center justify-between p-4 border-b border-[var(--color-tron-border)]">
-			<h2 class="text-lg font-semibold text-[var(--color-tron-cyan)]">Registered Parts ({data.registered.length})</h2>
+		<div class="flex items-start justify-between p-4 border-b border-[var(--color-tron-border)] gap-4">
+			<div>
+				<h2 class="text-lg font-semibold text-[var(--color-tron-cyan)]">Registered Parts ({data.registered.length})</h2>
+				<p class="text-sm text-[var(--color-tron-text-secondary)] mt-1">Parts that already have a barcode and are ready to be received. Print QR labels for the warehouse or export the catalog as CSV.</p>
+			</div>
 			{#if data.registered.length > 0}
 				<div class="flex gap-2">
 					<form method="POST" action="?/exportLabels" use:enhance={() => {
