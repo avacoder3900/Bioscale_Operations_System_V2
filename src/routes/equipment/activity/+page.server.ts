@@ -2,6 +2,7 @@ export const config = { maxDuration: 60 };
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, EquipmentLocation, Equipment, WaxFillingRun, ReagentBatchRecord, CartridgeRecord, BackingLot } from '$lib/server/db';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
+import { WAX_FILLING_ACTIVE, REAGENT_FILLING_ACTIVE } from '$lib/server/manufacturing/run-statuses';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -20,8 +21,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		Equipment.find({ equipmentType: 'cooling_tray' }).lean(),
 		EquipmentLocation.find({ isActive: true }).lean(),
 		Equipment.find({ isActive: { $ne: false } }).lean(),
-		WaxFillingRun.find({ status: { $in: ['setup', 'running'] } }).sort({ createdAt: -1 }).lean(),
-		ReagentBatchRecord.find({ status: { $in: ['setup', 'running'] } }).sort({ createdAt: -1 }).lean(),
+		WaxFillingRun.find({ status: { $in: WAX_FILLING_ACTIVE } }).sort({ createdAt: -1 }).lean(),
+		ReagentBatchRecord.find({ status: { $in: REAGENT_FILLING_ACTIVE } }).sort({ createdAt: -1 }).lean(),
 		WaxFillingRun.find().sort({ createdAt: -1 }).limit(50).lean(),
 		ReagentBatchRecord.find().sort({ createdAt: -1 }).limit(50).lean()
 	]);

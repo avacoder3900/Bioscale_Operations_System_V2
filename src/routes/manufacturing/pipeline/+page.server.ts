@@ -15,6 +15,7 @@ import {
 } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
+import { ANY_TERMINAL } from '$lib/server/manufacturing/run-statuses';
 import type { PageServerLoad } from './$types';
 
 export const config = { maxDuration: 60 };
@@ -163,10 +164,10 @@ async function loadBacking(now: Date): Promise<PipelineRow[]> {
 
 async function loadWaxFill(now: Date): Promise<PipelineRow[]> {
 	const runs = await WaxFillingRun.find({
-		// WaxFillingRun uses 'completed', ReagentBatchRecord uses 'Completed';
-		// abort/cancel come in both cases historically. Normalise via $nin
-		// against every observed terminal value.
-		status: { $nin: ['completed', 'Completed', 'aborted', 'Aborted', 'cancelled', 'Cancelled', 'voided', 'Voided'] }
+		// Excludes every terminal value (both casings) from
+		// $lib/server/manufacturing/run-statuses — wax runs lean lowercase,
+		// reagent runs lean capitalized.
+		status: { $nin: ANY_TERMINAL }
 	}).sort({ runStartTime: -1 }).lean() as any[];
 
 	return runs.map((r: any) => ({
@@ -228,10 +229,10 @@ async function loadCooling(now: Date, checkedOutIds: string[]): Promise<Pipeline
 
 async function loadReagent(now: Date): Promise<PipelineRow[]> {
 	const runs = await ReagentBatchRecord.find({
-		// WaxFillingRun uses 'completed', ReagentBatchRecord uses 'Completed';
-		// abort/cancel come in both cases historically. Normalise via $nin
-		// against every observed terminal value.
-		status: { $nin: ['completed', 'Completed', 'aborted', 'Aborted', 'cancelled', 'Cancelled', 'voided', 'Voided'] }
+		// Excludes every terminal value (both casings) from
+		// $lib/server/manufacturing/run-statuses — wax runs lean lowercase,
+		// reagent runs lean capitalized.
+		status: { $nin: ANY_TERMINAL }
 	}).sort({ runStartTime: -1 }).lean() as any[];
 
 	return runs.map((r: any) => ({

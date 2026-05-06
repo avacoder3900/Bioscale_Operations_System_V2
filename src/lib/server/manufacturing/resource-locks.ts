@@ -14,17 +14,10 @@
  * All helpers return null on success or an error message string on conflict.
  */
 import { WaxFillingRun, ReagentBatchRecord } from '$lib/server/db';
-
-const WAX_NON_TERMINAL = ['Setup', 'Loading', 'Running', 'Awaiting Removal', 'QC', 'Storage',
-	'setup', 'loading', 'running', 'awaiting_removal', 'cooling', 'qc', 'storage'];
-
-const REAGENT_NON_TERMINAL = ['Setup', 'Loading', 'Running', 'Inspection', 'Top Sealing', 'Storage',
-	'setup', 'loading', 'running', 'inspection', 'top_sealing', 'storage'];
-
-const WAX_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Awaiting Removal',
-	'setup', 'loading', 'running', 'awaiting_removal', 'cooling'];
-const REAGENT_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Inspection',
-	'setup', 'loading', 'running', 'inspection'];
+import {
+	WAX_PAGE_OWNED, REAGENT_PAGE_OWNED,
+	WAX_NON_TERMINAL, REAGENT_NON_TERMINAL
+} from './run-statuses';
 
 /** Is any wax OR reagent run on this robot in a page-owned stage? */
 export async function checkRobotConflict(robotId: string): Promise<string | null> {
