@@ -114,9 +114,10 @@
 		// stickers. History on a 2550×3300 px sheet:
 		//   start →  shiftX = +25.3 px,  shiftY = +22.5 px  (0.1125c, 0.10c)
 		//   nudge →  shiftX = +0.3  px,  shiftY = +7.5  px  (−25 left, −15 up)
+		//   half-y → shiftY = +15   px                       (only 7.5 up vs start)
 		// Stored as raw pixels now so further nudges read cleanly.
 		const shiftX = 0.3125;
-		const shiftY = 7.5;
+		const shiftY = 15;
 		const padX = 0.23 * DPI + shiftX;
 		const padY = 0.46 * DPI + shiftY;
 
