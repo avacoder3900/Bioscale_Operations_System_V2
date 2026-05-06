@@ -1408,7 +1408,10 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 			]);
 
 			const accepted = await CartridgeRecord.aggregate([
-				{ $match: { 'waxQc.recordedAt': { $gte: since }, 'waxQc.status': 'accepted' } },
+				// Schema enum is capitalized 'Accepted'/'Rejected'/'Pending' but legacy
+				// data may be lowercase — normalize via $toLower (mirrors get_run_yield fix).
+				{ $match: { 'waxQc.recordedAt': { $gte: since } } },
+				{ $match: { $expr: { $eq: [{ $toLower: '$waxQc.status' }, 'accepted'] } } },
 				{
 					$group: {
 						_id: { $dateToString: { format: '%Y-%m-%d', date: '$waxQc.recordedAt' } },
@@ -1635,30 +1638,39 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 			const truncated = runs.length > limit;
 			const trimmed = runs.slice(0, limit);
 
-			// Aggregate cartridge QC counts in one query for ALL runs
+			// Aggregate cartridge QC counts in one query for ALL runs.
+			// Filter out checked-out cartridges (matches dev's pattern in
+			// get_run_yield and count_cartridges_by_status — see commit 03f5535).
 			const allCartIds = trimmed.flatMap(r => r.cartridgeIds ?? []);
+			const checkedOutIdsBulk = await getCheckedOutCartridgeIds();
 			const cartAgg = allCartIds.length > 0
 				? await CartridgeRecord.aggregate([
-					{ $match: { _id: { $in: allCartIds } } },
+					{ $match: { _id: { $in: allCartIds, $nin: checkedOutIdsBulk } } },
 					{
 						$group: {
 							_id: '$waxFilling.runId',
 							total: { $sum: 1 },
-							accepted: { $sum: { $cond: [{ $eq: ['$waxQc.status', 'accepted'] }, 1, 0] } },
-							scrapped: { $sum: {
-								$cond: [{ $or: [
-									{ $eq: ['$waxQc.status', 'scrapped'] },
-									{ $eq: ['$waxQc.status', 'rejected'] }
-								] }, 1, 0]
-							} },
-							pendingQc: { $sum: { $cond: [{
-								$or: [
-									{ $eq: ['$waxQc.status', null] },
-									{ $eq: ['$waxQc.status', 'pending'] },
-									{ $eq: ['$waxQc.status', 'Pending'] },
-									{ $not: ['$waxQc.status'] }
-								]
-							}, 1, 0] } }
+							// Schema enum is capitalized ('Accepted'/'Rejected'/'Pending') but
+							// legacy data may be lowercase. Normalize via $toLower so casing
+							// drift can't reintroduce the get_run_yield bug here too.
+							accepted: { $sum: { $cond: [
+								{ $eq: [{ $toLower: { $ifNull: ['$waxQc.status', ''] } }, 'accepted'] },
+								1, 0
+							] } },
+							scrapped: { $sum: { $cond: [
+								{ $in: [
+									{ $toLower: { $ifNull: ['$waxQc.status', ''] } },
+									['scrapped', 'rejected']
+								] },
+								1, 0
+							] } },
+							pendingQc: { $sum: { $cond: [
+								{ $or: [
+									{ $eq: [{ $ifNull: ['$waxQc.status', ''] }, ''] },
+									{ $eq: [{ $toLower: { $ifNull: ['$waxQc.status', ''] } }, 'pending'] }
+								] },
+								1, 0
+							] } }
 						}
 					}
 				])
