@@ -674,7 +674,15 @@
 				<p class="text-sm text-[var(--color-tron-text-secondary)] mt-1">Parts that already have a barcode and are ready to be received. Print QR labels for the warehouse or export the catalog as CSV.</p>
 			</div>
 			{#if data.registered.length > 0}
-				<div class="flex gap-2">
+				<div class="flex gap-2 flex-wrap justify-end">
+					<a
+						href="/parts/accession/replicate-print"
+						class="px-4 py-2 bg-[var(--color-tron-cyan)] text-black text-sm font-semibold rounded-lg hover:brightness-110"
+						style="box-shadow: 0 0 10px rgba(0, 212, 255, 0.4);"
+						title="Print an Avery 94102 sheet with N replicates of each selected part"
+					>
+						Print Replicate Sheet
+					</a>
 					<form method="POST" action="?/exportLabels" use:enhance={() => {
 						return async ({ result }) => {
 							if (result.type === 'success' && result.data?.html) {
