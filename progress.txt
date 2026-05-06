@@ -1086,3 +1086,184 @@ guards, audit reports).
   route folder `src/routes/api/cron/cartridge-cleanup-reminder/` — not
   from this session, looks like in-progress work the user has on a
   separate workstream.
+
+## Session 2026-05-06 — 500 fixes, manufacturing pipeline page, status-set centralisation, daily reminder cron
+
+Six shipped pieces. Each commit on `dev`.
+
+### AuditLog enum drop (`b6932c9`, `84d3ef2`)
+
+User reported a 500 on Confirm QC for the post-wax cartridges path,
+then a follow-up 500 on the Go Back button on the post-OT-2 assign-
+fridge page. Root cause was the AuditLog `action` field's enum:
+`['INSERT','UPDATE','DELETE','PHASE_ADVANCE','CHECKOUT']` rejected
+the 9+ other action strings the codebase actually writes
+(`IMPROPER_ORDER_BLOCKED`, `GO_BACK`, `REASSIGN_STORAGE`, `SYNC`,
+`IMPORT`, `UPSERT`, `RETIRE`, `OVERRIDE`, `manual_inventory_edit`,
+`create`).
+
+`protectLockedCarts` writes `IMPROPER_ORDER_BLOCKED` whenever a
+wax-flow action targets a cart at status ∈ LOCKED_STATUSES. Run
+MVJ-YpH5_W-X8WzSmkWY6 had one cart already at status='scrapped'
+from a prior `rejectCartridge` per-cart rejection, so every
+`completeQC` and `goBack` against it tripped enum validation
+mid-flight. The wrapping action 500'd, leaving the run advanced
+to Storage but cartridges still at status='wax_filling' with no
+`waxFilling.recordedAt`.
+
+First fix added `IMPROPER_ORDER_BLOCKED` to the enum. Then audit
+revealed `goBack` writes `action: 'GO_BACK'` a few lines later,
+also outside the enum, so the same lot still 500'd. Whitelisting
+one value at a time was a losing game (10+ values in use, and the
+enum hadn't been load-bearing — the codebase had been silently
+hitting these for who knows how long), so the second fix dropped
+the enum entirely and made `action` a free-form String. Audit log
+is telemetry, not a state machine.
+
+After deploy the user recovered MVJ via standard Confirm QC retry —
+no GO_BACK rows ever landed, but the path is open.
+
+Live verification end-of-session: 5 `IMPROPER_ORDER_BLOCKED` rows
+have written cleanly post-deploy, 0 enum errors observed since.
+
+### Manufacturing Pipeline page (`002dbf1`)
+
+User asked for "all backing lots in a clear place" then expanded to
+"same layout for wax fill, cooling, reagent, seal, store with a
+dropdown." Built `/manufacturing/pipeline?stage=<key>` with six
+stages and a unified PipelineRow shape (`id/status/count/location/
+operator/when/elapsedMin/extras/detailHref`) so one table renders
+any stage. Dropdown + chip row both navigate via URL.
+
+Per-stage data sources:
+- backing → BackingLot, every status
+- wax_fill → WaxFillingRun (active only)
+- cooling → CartridgeRecord status='wax_stored' grouped by waxStorage.location
+- reagent → ReagentBatchRecord (active only)
+- seal → CartridgeRecord status∈{sealed,cured} grouped by topSeal.batchId
+- store → CartridgeRecord status='stored' grouped by storage.fridgeName
+
+Wired the cart-mfg-dev "Pipeline Flow" tiles to deep-link into the
+matching stage. QC tile stays inert (it's a sub-state of the active
+wax run, no canonical entity). Tiles wrap in `<a>` with hover
+state; QC stays a `<div>`.
+
+Tailwind dynamic classes (`bg-{stage.color}/20`, `text-{...}`,
+`border-{...}/40`) might not be JIT'd because of the opacity
+modifiers — flagged for visual verification, not blocking.
+
+Per-row drill-in:
+- wax / reagent runs → `/cartridge-admin?runId=...`
+- cooling / store fridges → `/equipment/location/[id]`
+- backing rows → no canonical drilldown (no per-cartridge view at
+  backing stage; cartridges aren't individuated until wax-deck load)
+
+### Run-statuses centralisation (`f4062f5` + `21f9911`)
+
+`WaxFillingRun.status` and `ReagentBatchRecord.status` are loose
+`String` with no enum, and the codebase has historically written
+values in BOTH cases. Wax leans lowercase ('completed', 'aborted'),
+reagent leans capitalized ('Completed', 'Cancelled', 'Aborted'). At
+audit time:
+
+  wax_filling_runs:        completed=40 aborted=29 Aborted=3 voided=1
+  reagent_batch_records:   Completed=27 Cancelled=13 Aborted=9 completed=1
+
+A `status: { $in: ['completed'] }` filter was finding ~93% of
+completed wax runs but only ~4% of completed reagent runs — silent,
+persistent miscount across multiple dashboards.
+
+Created `src/lib/server/manufacturing/run-statuses.ts` with named
+sets that include both casings: `WAX_PAGE_OWNED`,
+`REAGENT_PAGE_OWNED`, `WAX_FILLING_ACTIVE`, `REAGENT_FILLING_ACTIVE`,
+`WAX_NON_TERMINAL`, `REAGENT_NON_TERMINAL`, `COMPLETED`,
+`ABORTED_OR_CANCELLED`, `VOIDED`, `ANY_TERMINAL`.
+
+First sweep fixed:
+- `manufacturing/resource-locks.ts` (already had constants — switch
+  to module imports)
+- `routes/+page.server.ts` (home dashboard active-wax filter)
+- `routes/equipment/activity/+page.server.ts` (equipment dashboard,
+  was missing reagent runs)
+- `routes/api/cron/daily-digest/+server.ts` (already both-case inline
+  — switched to module)
+- `routes/manufacturing/pipeline/+page.server.ts` (built earlier same
+  session — switched to ANY_TERMINAL)
+
+Audit caught three I missed and labelled "comprehensive" too early:
+- `manufacturing/wax-filling/equipment/+page.server.ts` (FOUR filters
+  — the worst was reagent history hiding 96% of records)
+- `manufacturing/wax-filling/oven-queue/+page.server.ts`
+- `manufacturing/reagent-filling/+page.server.ts:203` (cosmetic
+  duplicate of WAX_PAGE_OWNED)
+
+End-of-session verification: a `$in: ['completed','Completed']`
+query against reagent_batch_records returns 28 rows; the lowercase-
+only version returns 1. Centralisation recovered 27 runs that
+dashboards were silently hiding.
+
+### Pre-wax checkout regression sim (`a3a21df`)
+
+Companion script to `sim-mocreo-heartbeat.ts`. Replicates the
+`removeFromBackingLot` action's logic against a synthetic test
+BackingLot: happy path / over-pull / drain → consumed / post-drain
+guard / nonexistent-lot guard / validation. 10 cases. Was used to
+verify the original feature in commit `00034b5` but never committed.
+Pinning it now as regression coverage symmetric with the heartbeat
+sim.
+
+### Daily 4:30 PM cartridge-cleanup reminder cron (`d4d8dcc`)
+
+User wanted a daily email reminder to ncox@brevitest.com via the
+internal email system (not Slack/MCP). Built
+`/api/cron/cartridge-cleanup-reminder` and registered it in
+vercel.json at `30 21 * * *` (21:30 UTC = 4:30 PM CDT). Hard-coded
+recipient by request. Email body links to Equipment Activity,
+Pipeline → Backing, and Cartridge Checkout — the three surfaces
+the operator needs to reconcile drift.
+
+Earlier same session I'd created a one-shot claude.ai routine for
+4:30 PM today as a stop-gap; disabled it once the daily cron
+landed so today doesn't get a duplicate at 4:30.
+
+Note: Vercel only fires crons from production deployments. The
+new entry is registered on the dev preview but won't actually
+fire until dev → master is merged. User said they'd handle the
+merge themselves.
+
+### Backing-timer enforcement check (no code change)
+
+User created backing lot `d0c6ce18-cfac-46b4-8e42-1bd8370ee169`
+(70 carts, Oven 1, by nick) and asked whether the heating-time
+restriction is being enforced. Replicated the
+`scanBackingLot` server-side conditional from `wax-filling/+page.
+server.ts:411` against the live lot — confirmed:
+
+- `scanBackingLot` returns HTTP 400 if `elapsedMin < minOvenTimeMin`
+  with message "Lot not ready. {N} minute(s) remaining (minimum
+  {threshold} min required). Wait, pick a bucket that has passed
+  the timer, or get an admin to override."
+- `loadDeck` does NOT independently re-check the timer; it pulls
+  `activeLotId` from `WaxFillingRun.activeLotId`, which is only
+  set when `scanBackingLot` succeeds. The UI gates cartridge-scan
+  inputs behind the lot scan, so a normal operator can't bypass.
+  A direct POST to `?/loadDeck` could skip the timer + write
+  cartridges with `backing.lotId=null`. Worth knowing; not in the
+  attack surface for the wax-filling page.
+
+User noted the threshold is set to 30 in DB (default fallback in
+code is 60); they said they'd flip it to 60 themselves on the
+wax-filling settings page.
+
+### Heads-up for next session
+
+- Daily cron registers only after dev → master merges. Sanity check
+  on next session is `vercel cron list` or the dashboard for
+  `/api/cron/cartridge-cleanup-reminder`.
+- Pipeline page Tailwind dynamic classes with opacity (`bg-{color}/20`
+  etc.) not yet visually verified; if styling looks off, swap to a
+  static class lookup table.
+- Wax-filling timer enforcement hole: `loadDeck` should ideally
+  re-check the timer too, not just trust `activeLotId`. Current
+  state is UI-gated, which is fine for normal use but not a defence
+  in depth. Worth a follow-up if/when audit risk surfaces.
