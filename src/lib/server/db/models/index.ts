@@ -87,6 +87,12 @@ export { CvImage } from './cv-image.js';
 export { CvSample } from './cv-sample.js';
 export { CvInspection } from './cv-inspection.js';
 
+// SO-ARM101 Robot Arm
+export { RobotArm } from './robot-arm.js';
+export { RobotArmServo } from './robot-arm-servo.js';
+export { RobotArmRun } from './robot-arm-run.js';
+export { RobotArmDataset } from './robot-arm-dataset.js';
+
 // Manufacturing Analytics
 export { ProcessAnalyticsEvent } from './process-analytics-event.js';
 export { SpecLimit } from './spec-limit.js';
