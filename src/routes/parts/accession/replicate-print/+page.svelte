@@ -50,19 +50,24 @@
 			.filter((p): p is (typeof data.registered)[number] => Boolean(p))
 	);
 
+	// Each cell carries the barcode plus the part identity, so the renderer
+	// can print "what part is this label" under the QR (instead of a
+	// redundant UUID like the cartridge sheet).
+	type Cell = { barcode: string; partNumber: string; partName: string } | null;
+
 	// Build the 80-cell array: each selected part gets `replicates` consecutive cells.
-	const cells = $derived.by<string[]>(() => {
-		const out: string[] = Array.from({ length: LABELS_PER_SHEET }, () => '');
+	const cells = $derived.by<Cell[]>(() => {
+		const out: Cell[] = Array.from({ length: LABELS_PER_SHEET }, () => null);
 		let i = 0;
 		for (const part of orderedSelected) {
 			for (let r = 0; r < replicates && i < LABELS_PER_SHEET; r++) {
-				out[i++] = part.barcode;
+				out[i++] = { barcode: part.barcode, partNumber: part.partNumber, partName: part.name };
 			}
 		}
 		return out;
 	});
 
-	const totalLabels = $derived(cells.filter((c) => c).length);
+	const totalLabels = $derived(cells.filter((c) => c !== null).length);
 
 	function generate() {
 		if (selectedIds.length === 0) return;
@@ -87,6 +92,11 @@
 		window.print();
 	}
 
+	function truncateForCell(s: string, maxChars: number): string {
+		if (s.length <= maxChars) return s;
+		return s.slice(0, Math.max(1, maxChars - 1)) + '…';
+	}
+
 	// ─── Avery 94102 sheet renderer ────────────────────────────────────────────
 	// Ported verbatim from /manufacturing/print-barcodes/+page.svelte so the
 	// physical alignment + shrink + ABC labels + QR + UUID typography are
@@ -94,11 +104,11 @@
 	const DPI = 300;
 	const sheetCache = new Map<string, string>();
 
-	function sheetPng(c: string[]): string {
+	function sheetPng(c: Cell[]): string {
 		if (typeof document === 'undefined') return '';
-		if (!c.some((x) => x)) return '';
+		if (!c.some((x) => x !== null)) return '';
 
-		const cacheKey = c.join('|');
+		const cacheKey = c.map((x) => (x ? `${x.barcode}#${x.partNumber}` : '')).join('|');
 		const cached = sheetCache.get(cacheKey);
 		if (cached) return cached;
 
@@ -127,8 +137,9 @@
 		const SHRINK = 0.85;
 
 		for (let i = 0; i < c.length; i++) {
-			const code = c[i];
-			if (!code) continue;
+			const cell = c[i];
+			if (!cell) continue;
+			const code = cell.barcode;
 
 			const col = i % 8;
 			const row = Math.floor(i / 8);
@@ -164,16 +175,30 @@
 				const qrCenterY = cellTop + 0.08 * DPI + qrFullSize / 2;
 				ctx.drawImage(qrCanvas, qrCenterX - qrSize / 2, qrCenterY - qrSize / 2, qrSize, qrSize);
 
+				// Two-line label below QR identifying which PART this sticker is for
+				// (replaces the cartridge sheet's redundant split-UUID text). Same
+				// vertical block geometry — preserves alignment with the rest of the
+				// stickers on the sheet.
 				const textFullPx = 3.5 * (DPI / 72);
 				const textPx = textFullPx * SHRINK;
 				const oldTextTop = cellTop + 0.08 * DPI + qrFullSize + 0.02 * DPI;
 				const textCenterY = oldTextTop + textFullPx * 1.075;
 				const textTop = textCenterY - textPx * 1.075;
-				ctx.font = `${textPx}px courier, monospace`;
 				ctx.textAlign = 'center';
-				const half = Math.ceil(code.length / 2);
-				ctx.fillText(code.slice(0, half), qrCenterX, textTop);
-				ctx.fillText(code.slice(half), qrCenterX, textTop + textPx * 1.15);
+
+				// Line 1: Part number (bold, fits comfortably — typical PT-XXX
+				// codes are well under the ~26-char monospace budget at this size).
+				ctx.font = `bold ${textPx}px courier, monospace`;
+				const partNumberLine = cell.partNumber || code;
+				ctx.fillText(truncateForCell(partNumberLine, 26), qrCenterX, textTop);
+
+				// Line 2: Part name (slightly smaller so longer names fit; truncated).
+				const namePx = textPx * 0.9;
+				ctx.font = `${namePx}px Arial, sans-serif`;
+				const nameLine = cell.partName ?? '';
+				if (nameLine) {
+					ctx.fillText(truncateForCell(nameLine, 30), qrCenterX, textTop + textPx * 1.15);
+				}
 			} catch (e) {
 				console.error('bwip-js failed for', code, e);
 			}
