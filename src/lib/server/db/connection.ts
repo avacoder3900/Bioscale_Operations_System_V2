@@ -1,5 +1,9 @@
 import mongoose from 'mongoose';
-import { env } from '$env/dynamic/private';
+
+// Use process.env directly so this module can be imported from non-SvelteKit
+// contexts (test scripts, CLI tools). In SvelteKit production runtime,
+// process.env is populated identically to $env/dynamic/private — both are
+// thin wrappers over Node's process.env on Vercel.
 
 let connected = false;
 
@@ -9,10 +13,11 @@ export async function connectDB() {
 		connected = true;
 		return;
 	}
-	if (!env.MONGODB_URI) {
+	const uri = process.env.MONGODB_URI;
+	if (!uri) {
 		throw new Error('MONGODB_URI is not set');
 	}
-	await mongoose.connect(env.MONGODB_URI, {
+	await mongoose.connect(uri, {
 		serverSelectionTimeoutMS: 5000,
 		connectTimeoutMS: 5000,
 		socketTimeoutMS: 10000,
