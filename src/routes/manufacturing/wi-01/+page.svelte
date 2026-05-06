@@ -52,6 +52,12 @@
 	let lotValid1 = $state(false);
 	let lotValid2 = $state(false);
 	let lotValid3 = $state(false);
+	// Per-lot remaining count after a successful scan — surfaces the actual
+	// number of cartridges this lot can cover (vs the part-total inventory
+	// shown in the cards above, which spans every lot).
+	let lotRemaining1 = $state<number | null>(null);
+	let lotRemaining2 = $state<number | null>(null);
+	let lotRemaining3 = $state<number | null>(null);
 	let lotChecking = $state(0); // 1|2|3 while a check is in flight
 
 	async function validateLotScan(slot: 1 | 2 | 3) {
@@ -59,7 +65,8 @@
 		const value = (slot === 1 ? lotBarcode1 : slot === 2 ? lotBarcode2 : lotBarcode3).trim();
 		const setErr = (m: string) => { if (slot === 1) lotError1 = m; else if (slot === 2) lotError2 = m; else lotError3 = m; };
 		const setValid = (v: boolean) => { if (slot === 1) lotValid1 = v; else if (slot === 2) lotValid2 = v; else lotValid3 = v; };
-		setErr(''); setValid(false);
+		const setRemaining = (n: number | null) => { if (slot === 1) lotRemaining1 = n; else if (slot === 2) lotRemaining2 = n; else lotRemaining3 = n; };
+		setErr(''); setValid(false); setRemaining(null);
 		if (!value) return false;
 		lotChecking = slot;
 		try {
@@ -83,6 +90,7 @@
 				return false;
 			}
 			setValid(true);
+			setRemaining(typeof inner?.lotRemaining === 'number' ? inner.lotRemaining : null);
 			return true;
 		} catch (e) {
 			setErr(e instanceof Error ? e.message : 'Validation failed');
@@ -310,6 +318,13 @@
 									<span class="text-green-400 text-lg">&#10003;</span>
 								{/if}
 							</div>
+							{#if lotError1}
+								<p class="mt-1 text-xs text-red-400">{lotError1}</p>
+							{:else if lotValid1 && lotRemaining1 !== null}
+								<p class="mt-1 text-xs {lotRemaining1 < plannedQty ? 'text-[var(--color-tron-yellow)]' : 'text-[var(--color-tron-text-secondary)]'}">
+									Lot has <span class="font-mono font-bold text-[var(--color-tron-text)]">{lotRemaining1}</span> cartridges remaining{#if lotRemaining1 < plannedQty} — below requested {plannedQty}{/if}
+								</p>
+							{/if}
 						</div>
 						<div>
 							<label class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Thermoseal Laser Cut Sheet Lot</label>
@@ -321,6 +336,13 @@
 									<span class="text-green-400 text-lg">&#10003;</span>
 								{/if}
 							</div>
+							{#if lotError2}
+								<p class="mt-1 text-xs text-red-400">{lotError2}</p>
+							{:else if lotValid2 && lotRemaining2 !== null}
+								<p class="mt-1 text-xs {lotRemaining2 < plannedQty ? 'text-[var(--color-tron-yellow)]' : 'text-[var(--color-tron-text-secondary)]'}">
+									Lot has <span class="font-mono font-bold text-[var(--color-tron-text)]">{lotRemaining2}</span> sheets remaining{#if lotRemaining2 < plannedQty} — below requested {plannedQty}{/if}
+								</p>
+							{/if}
 						</div>
 						<div>
 							<label class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Barcode Label Lot</label>
@@ -332,6 +354,13 @@
 									<span class="text-green-400 text-lg">&#10003;</span>
 								{/if}
 							</div>
+							{#if lotError3}
+								<p class="mt-1 text-xs text-red-400">{lotError3}</p>
+							{:else if lotValid3 && lotRemaining3 !== null}
+								<p class="mt-1 text-xs {lotRemaining3 < plannedQty ? 'text-[var(--color-tron-yellow)]' : 'text-[var(--color-tron-text-secondary)]'}">
+									Lot has <span class="font-mono font-bold text-[var(--color-tron-text)]">{lotRemaining3}</span> labels remaining{#if lotRemaining3 < plannedQty} — below requested {plannedQty}{/if}
+								</p>
+							{/if}
 						</div>
 					</div>
 
