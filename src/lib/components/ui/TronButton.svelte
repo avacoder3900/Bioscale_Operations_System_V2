@@ -4,7 +4,7 @@
 
 	interface Props extends HTMLButtonAttributes {
 		children: Snippet;
-		variant?: 'default' | 'primary' | 'danger';
+		variant?: 'default' | 'primary' | 'danger' | 'ghost';
 		class?: string;
 	}
 
@@ -22,7 +22,9 @@
 			? 'tron-button-primary'
 			: variant === 'danger'
 				? 'tron-button-danger'
-				: 'tron-button'
+				: variant === 'ghost'
+					? 'tron-button-ghost'
+					: 'tron-button'
 	);
 </script>
 

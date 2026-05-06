@@ -73,7 +73,10 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			bomData: {
 				id: b._id,
 				quantityPerUnit: b.quantityPerUnit ?? 1,
-				unitCost: b.unitCost ?? null
+				unitCost: b.unitCost ?? null,
+				supplier: b.supplier ?? null,
+				expirationDate: b.expirationDate ?? null,
+				hazardClass: b.hazardClass ?? null
 			}
 		};
 	});

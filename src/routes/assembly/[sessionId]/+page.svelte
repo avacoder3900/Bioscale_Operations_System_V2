@@ -38,7 +38,7 @@
 	let currentWiStepIndex = $derived(() => {
 		if (!hasWorkInstructions) return 0;
 		// Find first incomplete step
-		const completedStepIds = new Set(data.completedStepRecords.map((r) => r.workInstructionStepId));
+		const completedStepIds = new Set(data.completedStepRecords.map((r: any) => r.workInstructionStepId));
 		const index = data.workInstructionSteps.findIndex((s) => !completedStepIds.has(s.id));
 		return index === -1 ? data.workInstructionSteps.length : index;
 	});
@@ -81,21 +81,21 @@
 	}
 
 	function isPartScanned(partId: string): boolean {
-		return data.scannedParts.some((sp) => sp.partDefinitionId === partId);
+		return data.scannedParts.some((sp: any) => sp.partDefinitionId === partId);
 	}
 
 	function getPartLotNumber(partId: string): string | undefined {
-		return data.scannedParts.find((sp) => sp.partDefinitionId === partId)?.lotNumber ?? undefined;
+		return data.scannedParts.find((sp: any) => sp.partDefinitionId === partId)?.lotNumber ?? undefined;
 	}
 
 	function isWiStepCompleted(stepId: string): boolean {
-		return data.completedStepRecords.some((r) => r.workInstructionStepId === stepId);
+		return data.completedStepRecords.some((r: any) => r.workInstructionStepId === stepId);
 	}
 
 	function getWiStepScanData(
 		stepId: string
 	): { lotNumber: string | null; partNumber: string | null } | null {
-		const record = data.completedStepRecords.find((r) => r.workInstructionStepId === stepId);
+		const record = data.completedStepRecords.find((r: any) => r.workInstructionStepId === stepId);
 		return record
 			? { lotNumber: record.scannedLotNumber, partNumber: record.scannedPartNumber }
 			: null;
@@ -150,16 +150,16 @@
 	}
 
 	function isCustomFieldCaptured(fieldDefId: string): boolean {
-		return data.capturedFieldRecords.some((r) => r.stepFieldDefinitionId === fieldDefId);
+		return data.capturedFieldRecords.some((r: any) => r.stepFieldDefinitionId === fieldDefId);
 	}
 
 	function getCapturedFieldValue(fieldDefId: string): string | null {
-		const record = data.capturedFieldRecords.find((r) => r.stepFieldDefinitionId === fieldDefId);
+		const record = data.capturedFieldRecords.find((r: any) => r.stepFieldDefinitionId === fieldDefId);
 		return record?.fieldValue ?? null;
 	}
 
 	function isFieldBomLinked(fieldDefId: string): boolean {
-		const record = data.capturedFieldRecords.find((r) => r.stepFieldDefinitionId === fieldDefId);
+		const record = data.capturedFieldRecords.find((r: any) => r.stepFieldDefinitionId === fieldDefId);
 		return !!record?.bomItemId;
 	}
 
@@ -200,7 +200,7 @@
 	function getCurrentAssemblyStepRecordId(): string | null {
 		if (!currentWiStep) return null;
 		const record = data.completedStepRecords.find(
-			(r) => r.workInstructionStepId === currentWiStep?.id
+			(r: any) => r.workInstructionStepId === currentWiStep?.id
 		);
 		// If step not complete, we need to check if there's a pending record
 		// For now, return null if step not started
@@ -218,7 +218,7 @@
 	function getQuantityToDeduct(partId: string): number {
 		if (hasWorkInstructions && currentWiStep) {
 			const partReq = currentWiStep.partRequirements.find(
-				(r) => getPartDefinitionForNumber(r.partNumber)?.id === partId
+				(r: any) => getPartDefinitionForNumber(r.partNumber)?.id === partId
 			);
 			return partReq?.quantity ?? 1;
 		}

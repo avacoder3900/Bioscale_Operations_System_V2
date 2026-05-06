@@ -63,12 +63,17 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const expiringSoon = cs
 		.filter((c) => c.expirationDate && new Date(c.expirationDate) <= in30 && new Date(c.expirationDate) >= now && c.status !== 'disposed')
 		.slice(0, 10)
-		.map((c) => ({
-			id: c._id,
-			barcode: c.barcode ?? '',
-			lotNumber: c.lotNumber ?? '',
-			expirationDate: c.expirationDate
-		}));
+		.map((c) => {
+			const groupId = (c as any).groupId;
+			return {
+				id: c._id,
+				barcode: c.barcode ?? '',
+				lotNumber: c.lotNumber ?? '',
+				expirationDate: c.expirationDate,
+				cartridgeType: (c as any).cartridgeType ?? null,
+				groupName: groupId ? ((groupList.find((g: any) => g._id === groupId) as any)?.name ?? null) : null
+			};
+		});
 
 	// Usage stats
 	const usageLogEntries = cs.flatMap((c) => c.usageLog ?? []);
@@ -81,7 +86,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const activeUsers = [...userMap.entries()]
 		.sort(([, a], [, b]) => b - a)
 		.slice(0, 10)
-		.map(([username, actionCount]) => ({ username, actionCount }));
+		.map(([username, actionCount]) => ({ username, actionCount, count: actionCount }));
 
 	// Group breakdown
 	const groupMap = new Map(groupList.map((g: any) => [g._id, g]));

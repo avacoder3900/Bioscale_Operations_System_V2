@@ -104,15 +104,15 @@ userSchema.index({ 'roleHistory.roleId': 1 });
 userSchema.index({ 'trainingRecords.documentId': 1 });
 
 // Sacred document — users use deactivation pattern, not finalizedAt
-// Don't apply standard sacred middleware (no finalizedAt), but block deletes
-userSchema.pre('deleteOne', function (next: (err?: Error) => void) {
+// Don't apply standard sacred middleware (no finalizedAt), but block deletes.
+// Cast through `any` because Mongoose 9's `.pre()` hook overloads no longer
+// accept these query-method strings as a literal-typed first arg, even though
+// they are still valid hook names at runtime.
+const blockDelete = function (next: (err?: Error) => void) {
 	return next(new Error('User documents cannot be deleted — deactivate instead'));
-});
-userSchema.pre('deleteMany', function (next: (err?: Error) => void) {
-	return next(new Error('User documents cannot be deleted — deactivate instead'));
-});
-userSchema.pre('findOneAndDelete', function (next: (err?: Error) => void) {
-	return next(new Error('User documents cannot be deleted — deactivate instead'));
-});
+};
+(userSchema.pre as any)('deleteOne', blockDelete);
+(userSchema.pre as any)('deleteMany', blockDelete);
+(userSchema.pre as any)('findOneAndDelete', blockDelete);
 
 export const User = mongoose.models.User || mongoose.model('User', userSchema, 'users');

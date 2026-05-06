@@ -4,7 +4,9 @@
 	import { page } from '$app/state';
 	import { TronCard, TronButton, TronBadge } from '$lib/components/ui';
 
-	let { data, form } = $props();
+	let { data, form: _form } = $props();
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const form = _form as any;
 
 	// Tab state
 	let activeTab = $state<'devices' | 'fwcartridges' | 'events'>(

@@ -55,10 +55,13 @@
 	let scanInputEl: HTMLInputElement | undefined = $state();
 	let scanError = $state('');
 	let submitting = $state(false);
-	let batchData: { lotId: string; cartridgeCount?: number; tubes: { wellPosition: number; reagentName: string; tubeId: string }[] } | null = $state(null);
+	type BatchData = { lotId: string; cartridgeCount?: number; tubes: { wellPosition: number; reagentName: string; tubeId: string }[] };
+	let batchData = $state<BatchData | null>(null);
 	let fetchingBatch = $state(false);
 	let countMismatch = $derived(
-		batchData?.cartridgeCount != null && cartridgeCount > 0 && batchData.cartridgeCount !== cartridgeCount
+		(batchData as BatchData | null)?.cartridgeCount != null
+			&& cartridgeCount > 0
+			&& (batchData as BatchData).cartridgeCount !== cartridgeCount
 	);
 
 	const activeWells = $derived(

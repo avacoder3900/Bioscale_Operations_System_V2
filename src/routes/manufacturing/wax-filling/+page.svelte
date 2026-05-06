@@ -29,6 +29,7 @@
 				plannedCartridgeCount: number | null;
 				coolingConfirmedAt: string | null;
 				existingWaxRunNote?: string;
+				activeLotId?: string | null;
 			};
 			settings: {
 				runDurationMin: number;
@@ -37,6 +38,7 @@
 				deckLockoutMin: number;
 				incubatorTempC: number;
 				heaterTempC: number;
+				minCoolingBeforeQcMin?: number;
 			};
 			tubeData: {
 				tubeId: string;
@@ -205,7 +207,7 @@
 	let pendingOverrideAction = $state('');
 	let pendingOverrideData = $state<Record<string, string>>({});
 
-	const STAGES = ['Setup', 'Loading', 'Running', 'Awaiting Removal'] as const;
+	const STAGES = ['Setup', 'Loading', 'Running', 'Awaiting Removal', 'QC', 'Storage'] as const;
 
 	// Optimistic stage: prevents UI flash when invalidateAll() returns stale/failed data
 	const ACTION_NEXT_STAGE: Record<string, string> = {

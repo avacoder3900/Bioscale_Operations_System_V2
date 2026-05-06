@@ -131,7 +131,7 @@
 		const current = $page.url.pathname;
 		for (const group of filteredGroups) {
 			for (const item of group.items) {
-				const match = item.href === '/spu' ? current === '/spu' : current.startsWith(item.href);
+				const match = item.href === '/spu' ? (current as string) === '/spu' : current.startsWith(item.href);
 				if (match) {
 					expandedGroups.add(group.label);
 					break;
@@ -158,7 +158,7 @@
 		const current = $page.url.pathname;
 		for (const item of allNavItems) {
 			if (item.href === '/spu') {
-				if (current === '/spu') return item.label;
+				if ((current as string) === '/spu') return item.label;
 			} else if (current.startsWith(item.href)) {
 				return item.label;
 			}

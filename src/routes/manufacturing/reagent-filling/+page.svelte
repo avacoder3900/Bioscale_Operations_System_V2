@@ -356,7 +356,7 @@
 			</div>
 			<SetupConfirmation
 				assayTypes={data.assayTypes}
-				reagentNames={data.reagentDefinitions}
+				reagentNames={data.reagentDefinitions as any}
 				{selectedAssayTypeId}
 				onSelectAssayType={(id) => { selectedAssayTypeId = id; }}
 				isResearch={isResearchRun}
@@ -506,7 +506,7 @@
 	{#if displayStage === 'Setup'}
 		<SetupConfirmation
 			assayTypes={data.assayTypes}
-			reagentNames={data.reagentDefinitions}
+			reagentNames={data.reagentDefinitions as any}
 			selectedAssayTypeId={previewParam ? 'preview' : (data.runState.assayTypeName ?? 'selected')}
 			onSelectAssayType={previewParam ? () => {} : (id) => { selectedAssayTypeId = id; }}
 			isResearch={previewParam ? false : (data.runState.isResearch || isResearchRun)}
@@ -532,7 +532,7 @@
 	{:else if displayStage === 'Loading' && data.cartridges.length > 0 && !reagentBatchConfirmed}
 		<!-- Step 2: Deck loaded — now scan reagent batch barcode -->
 		<ReagentPreparation
-			reagentDefinitions={data.reagentDefinitions}
+			reagentDefinitions={data.reagentDefinitions as any}
 			cartridgeCount={data.cartridges.length}
 			onComplete={(tubes) => {
 				reagentBatchBarcode = tubes[0]?.sourceLotId ?? '';

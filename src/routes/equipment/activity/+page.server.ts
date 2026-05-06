@@ -101,7 +101,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 	}
 
 	// Locations: show Equipment as parent entries, plus orphan EquipmentLocations
-	const locations: any[] = [];
+	type LocationRow = {
+		id: string; barcode: string; locationType: string; displayName: string;
+		isActive: boolean; capacity: number | null;
+		occupantCount: number; waxAcceptedCount: number; waxScrappedCount: number;
+	};
+	const locations: LocationRow[] = [];
 	const sumKeys = (map: Map<string, number>, keys: string[]) =>
 		keys.reduce((acc, k) => acc + (map.get(k) ?? 0), 0);
 	for (const equip of equipmentDocs as any[]) {
@@ -218,22 +223,41 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	// Robots from equipment collection
 	const robotDocs = (equipmentDocs as any[]).filter(e => e.equipmentType === 'robot');
-	const robots = robotDocs.map((r: any) => ({
+	const robots: { robotId: string; name: string; status: string }[] = robotDocs.map((r: any) => ({
 		robotId: String(r._id),
 		name: r.name ?? String(r._id),
 		status: r.status ?? 'active'
 	}));
 
-	return {
+	type LocationOut = {
+		id: string; barcode: string; locationType: string; displayName: string;
+		isActive: boolean; capacity: number | null;
+		occupantCount: number; waxAcceptedCount: number; waxScrappedCount: number;
+	};
+	type RobotOut = { robotId: string; name: string; status: string };
+	type ReturnShape = {
+		decks: typeof decks;
+		trays: typeof trays;
+		locations: LocationOut[];
+		equipmentTemps: typeof equipmentTemps;
+		placements: typeof placements;
+		activeWaxRuns: typeof activeWaxRuns;
+		activeReagentRuns: typeof activeReagentRuns;
+		waxRunHistory: typeof waxRunHistory;
+		reagentRunHistory: typeof reagentRunHistory;
+		robots: RobotOut[];
+	};
+	const result: ReturnShape = {
 		decks,
 		trays,
-		locations,
+		locations: locations as LocationOut[],
 		equipmentTemps,
 		placements,
 		activeWaxRuns,
 		activeReagentRuns,
 		waxRunHistory,
 		reagentRunHistory,
-		robots
+		robots: robots as RobotOut[]
 	};
+	return result;
 };

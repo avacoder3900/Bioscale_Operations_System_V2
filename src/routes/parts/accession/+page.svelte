@@ -213,10 +213,10 @@
 					{/each}
 				</div>
 			{/if}
-			{#if form.failures?.length > 0}
+			{#if (form.failures?.length ?? 0) > 0}
 				<div class="mt-2">
-					<p class="text-red-600 text-sm font-medium">{form.failures.length} failed:</p>
-					{#each form.failures as f}
+					<p class="text-red-600 text-sm font-medium">{form.failures!.length} failed:</p>
+					{#each form.failures! as f}
 						<p class="text-red-600 text-xs">{f.partNumber}: {f.error}</p>
 					{/each}
 				</div>

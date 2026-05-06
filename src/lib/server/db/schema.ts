@@ -50,3 +50,10 @@ export interface RejectionReasonCode {
 	processType: string;
 	sortOrder: number;
 }
+
+/** Cartridge as displayed in wax-filling QC UI (loose shape — fields vary by phase) */
+export interface WaxCartridgeRecord {
+	cartridgeId: string;
+	status?: string;
+	[key: string]: unknown;
+}

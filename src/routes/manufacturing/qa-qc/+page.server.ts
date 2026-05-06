@@ -144,7 +144,7 @@ export const actions: Actions = {
 		await ReagentBatchRecord.findByIdAndUpdate(releaseId, {
 			$set: {
 				'qcRelease.testResult': normalizedResult,
-				'qcRelease.testedBy': { _id: locals.user._id, username: locals.user.username },
+				'qcRelease.testedBy': { _id: locals.user!._id, username: locals.user!.username },
 				'qcRelease.testedAt': now,
 				'qcRelease.notes': notes
 			}
@@ -163,7 +163,7 @@ export const actions: Actions = {
 						$set: {
 							'qaqcRelease.shippingLotId': shippingLotId,
 							'qaqcRelease.testResult': normalizedResult,
-							'qaqcRelease.testedBy': { _id: locals.user._id, username: locals.user.username },
+							'qaqcRelease.testedBy': { _id: locals.user!._id, username: locals.user!.username },
 							'qaqcRelease.testedAt': now,
 							'qaqcRelease.notes': notes,
 							'qaqcRelease.recordedAt': now,

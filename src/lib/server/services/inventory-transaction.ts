@@ -23,7 +23,7 @@ export interface RecordTransactionParams {
 	lotId?: string;
 	cartridgeRecordId?: string;
 	quantity: number;
-	manufacturingStep?: 'cut_thermoseal' | 'laser_cut' | 'backing' | 'wax_filling' | 'reagent_filling' | 'top_seal' | 'storage' | 'qa_qc' | 'scrap';
+	manufacturingStep?: 'cut_thermoseal' | 'laser_cut' | 'backing' | 'wax_filling' | 'reagent_filling' | 'top_seal' | 'cut_top_seal' | 'storage' | 'qa_qc' | 'scrap';
 	manufacturingRunId?: string;
 	operatorId?: string;
 	operatorUsername?: string;

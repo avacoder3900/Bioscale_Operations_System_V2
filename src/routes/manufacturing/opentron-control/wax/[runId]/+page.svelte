@@ -216,7 +216,7 @@
 				readonly={false}
 			/>
 		{:else if data.stage === 'QC'}
-			{@const qcCarts = data.qcCartridges.map((c) => ({
+			{@const qcCarts = data.qcCartridges.map((c: any) => ({
 				...c,
 				ovenEntryTime: c.ovenEntryTime ? new Date(c.ovenEntryTime) : null,
 				qcTimestamp: c.qcTimestamp ? new Date(c.qcTimestamp) : null,
@@ -266,8 +266,8 @@
 			{@const summary = {
 				runId: data.runId,
 				cartridgeCount: data.storageCartridges.length,
-				acceptedCount: data.storageCartridges.filter((c) => c.qcStatus === 'Accepted').length,
-				rejectedCount: data.storageCartridges.filter((c) => c.qcStatus === 'Rejected').length
+				acceptedCount: data.storageCartridges.filter((c: any) => c.qcStatus === 'Accepted').length,
+				rejectedCount: data.storageCartridges.filter((c: any) => c.qcStatus === 'Rejected').length
 			}}
 			<CompletionStorage
 				cartridges={data.storageCartridges}

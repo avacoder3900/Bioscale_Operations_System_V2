@@ -16,7 +16,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	// Fetch cartridges that haven't had an assay loaded yet
 	const cartridges = await CartridgeRecord.find(
 		{ 'assayLoaded.recordedAt': { $exists: false } },
-		{ _id: 1, barcode: 1, lotNumber: 1 }
+		{ _id: 1, barcode: 1, lotNumber: 1, status: 1, cartridgeType: 1 }
 	).sort({ createdAt: -1 }).limit(200).lean();
 
 	return {
@@ -26,10 +26,12 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			name: assay.name,
 			skuCode: assay.skuCode ?? null
 		},
-		cartridges: cartridges.map((c: any): { id: string; barcode: string; lotNumber: string } => ({
+		cartridges: cartridges.map((c: any) => ({
 			id: c._id,
 			barcode: c.barcode ?? '',
-			lotNumber: c.lotNumber ?? ''
+			lotNumber: c.lotNumber ?? '',
+			status: c.status ?? 'unknown',
+			cartridgeType: c.cartridgeType ?? null
 		}))
 	};
 };
@@ -43,7 +45,7 @@ export const actions: Actions = {
 		const assay = await AssayDefinition.findById(params.assayId, {
 			_id: 1, name: 1, skuCode: 1
 		}).lean() as any;
-		if (!assay) return fail(404, { error: 'Assay not found', assigned: 0, errors: [] });
+		if (!assay) return fail(404, { error: 'Assay not found', assigned: 0, errors: [] as string[] });
 
 		const data = await request.formData();
 		const cartridgeIds = (data.get('cartridgeIds') as string)?.split(',').filter(Boolean) ?? [];
@@ -68,10 +70,10 @@ export const actions: Actions = {
 			const assigned = result.modifiedCount;
 			const skipped = cartridgeIds.length - assigned;
 			if (skipped > 0) errors.push(`${skipped} cartridge(s) were already assigned or not found`);
-			return { assigned, errors };
+			return { success: true, assigned, errors };
 		}
 
-		return { assigned: 0, errors: [] as string[] };
+		return { success: true, assigned: 0, errors: [] as string[] };
 	}
 };
 

@@ -30,13 +30,28 @@ export const actions: Actions = {
 		// Support both single assay and array of assays
 		const items: any[] = Array.isArray(parsed) ? parsed : [parsed];
 
-		const previews = items.map((item, idx) => ({
-			idx,
-			name: item.name ?? 'Unnamed',
-			skuCode: item.skuCode ?? null,
-			description: item.description ?? null,
-			reagentCount: (item.reagents ?? []).length
-		}));
+		const previews = items.map((item, idx) => {
+			const bcode = typeof item.BCODE === 'string' ? item.BCODE : null;
+			const reagents = (item.reagents ?? []) as any[];
+			const instructionCount = reagents.reduce(
+				(s: number, r: any) => s + (Array.isArray(r?.instructions) ? r.instructions.length : 0),
+				0
+			);
+			return {
+				idx,
+				name: item.name ?? 'Unnamed',
+				skuCode: item.skuCode ?? null,
+				description: item.description ?? null,
+				reagentCount: reagents.length,
+				instructionCount,
+				bcode,
+				bcodeLength: bcode?.length ?? 0,
+				checksum: typeof item.checksum === 'number' ? item.checksum : 0,
+				existingId: typeof item._id === 'string' ? item._id : null,
+				valid: typeof item.name === 'string' && item.name.length > 0,
+				error: typeof item.name === 'string' && item.name.length > 0 ? null : 'Missing name'
+			};
+		});
 
 		return { previews, rawJson: text, importResult: null };
 	},
@@ -92,7 +107,13 @@ export const actions: Actions = {
 		}
 
 		return {
-			importResult: { count: created.length, ids: created },
+			importResult: {
+				count: created.length,
+				ids: created,
+				imported: created.length,
+				skipped: items.length - created.length,
+				errors: [] as { name: string; error: string }[]
+			},
 			previews: [],
 			rawJson: ''
 		};

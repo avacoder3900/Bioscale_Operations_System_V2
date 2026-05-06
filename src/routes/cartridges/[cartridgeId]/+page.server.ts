@@ -68,7 +68,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			cartridgeType: c.cartridgeType ?? null,
 			status: c.status ?? 'available',
 			groupId: c.groupId ?? null,
-			group: group ? { id: (group as any)._id, name: (group as any).name ?? '' } : null,
+			group: group ? { id: (group as any)._id, name: (group as any).name ?? '', color: (group as any).color ?? null } : null,
 			manufacturer: c.manufacturer ?? null,
 			expirationDate: c.expirationDate ?? null,
 			receivedDate: c.receivedDate ?? null,

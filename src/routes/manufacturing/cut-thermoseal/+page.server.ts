@@ -1,5 +1,6 @@
 import { redirect, fail } from '@sveltejs/kit';
 import { connectDB, AuditLog, PartDefinition, generateId } from '$lib/server/db';
+import { byId, asId } from '$lib/server/db/native-helpers';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import type { PageServerLoad, Actions } from './$types';
 import mongoose from 'mongoose';
@@ -15,7 +16,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const [runs, thermosealPart, settingsDoc] = await Promise.all([
 		getCollection().find({}).sort({ createdAt: -1 }).limit(50).toArray(),
 		PartDefinition.findOne({ partNumber: 'PT-CT-101' }).lean(),
-		mongoose.connection.db!.collection('manufacturing_settings').findOne({ _id: 'default' })
+		mongoose.connection.db!.collection('manufacturing_settings').findOne(byId('default'))
 	]);
 
 	const defaultExpectedStrips = (settingsDoc as any)?.thermosealCutting?.expectedStripsPerRoll ?? 114;
@@ -64,7 +65,7 @@ export const actions: Actions = {
 		const runId = generateId();
 
 		await getCollection().insertOne({
-			_id: runId,
+			_id: asId(runId),
 			lotBarcode,
 			expectedSheets,
 			acceptedCount,
@@ -139,7 +140,7 @@ export const actions: Actions = {
 		if (newValue <= 0) return fail(400, { settingsError: 'Value must be > 0' });
 
 		await mongoose.connection.db!.collection('manufacturing_settings').updateOne(
-			{ _id: 'default' },
+			byId('default'),
 			{ $set: { 'thermosealCutting.expectedStripsPerRoll': newValue, updatedAt: new Date() } },
 			{ upsert: true }
 		);

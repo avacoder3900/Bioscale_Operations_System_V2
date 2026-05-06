@@ -64,7 +64,7 @@
 	let chartReadings = $derived(data.readings);
 
 	function getChartData(channelKey: string) {
-		return chartReadings.map((r) => {
+		return chartReadings.map((r: any) => {
 			const fieldMap: Record<string, number | null> = {
 				f1: r.f1,
 				f2: r.f2,

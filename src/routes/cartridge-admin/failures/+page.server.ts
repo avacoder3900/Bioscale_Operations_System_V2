@@ -49,8 +49,20 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			assayTypeName: c.reagentFilling?.assayType?.name ?? null,
 			reagentInspectionStatus: c.reagentInspection?.status ?? null,
 			reagentInspectionReason: c.reagentInspection?.reason ?? null,
-			waxQcStatus: (c as any).waxQc?.status ?? null,
-			waxQcReason: (c as any).waxQc?.rejectionReason ?? null,
+			waxQcStatus: c.waxQc?.status ?? null,
+			waxQcReason: c.waxQc?.rejectionReason ?? null,
+			waxStatus: c.waxQc?.status ?? null,
+			waxRunId: c.waxFilling?.runId ?? null,
+			reagentRunId: c.reagentFilling?.runId ?? null,
+			backedLotId: c.backing?.lotId ?? null,
+			coolingTrayId: c.waxStorage?.coolingTrayId ?? null,
+			inspectionStatus: c.reagentInspection?.status ?? null,
+			storageLocation: c.storage?.fridgeName ?? c.waxStorage?.location ?? null,
+			topSealBatchId: c.topSeal?.batchId ?? null,
+			operatorName: c.reagentInspection?.inspectedBy?.username
+				?? c.waxQc?.inspector?.username
+				?? c.waxFilling?.operator?.username
+				?? null,
 			createdAt: c.createdAt
 		})),
 		total,

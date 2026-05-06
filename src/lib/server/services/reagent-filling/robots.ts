@@ -20,4 +20,5 @@ export interface ReagentRobotRunState {
 		cartridgeCount: number;
 		assayTypeName: string | null;
 	}[];
+	activeProcess?: 'wax' | 'reagent' | null;
 }

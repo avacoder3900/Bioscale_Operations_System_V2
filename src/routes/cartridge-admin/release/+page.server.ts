@@ -15,7 +15,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 		ShippingLot.find({ status: { $in: ['open', 'released'] } }).sort({ createdAt: -1 }).lean(),
 		ReagentBatchRecord.find(
 			{ status: 'completed', 'qcRelease.testResult': { $ne: 'pass' }, finalizedAt: { $exists: false } },
-			{ _id: 1, runNumber: 1, 'assayType._id': 1, 'assayType.name': 1, cartridgeCount: 1 }
+			{
+				_id: 1, runNumber: 1, 'assayType._id': 1, 'assayType.name': 1,
+				cartridgeCount: 1, runEndTime: 1, 'operator.username': 1,
+				'cartridgesFilled.inspectionStatus': 1, 'cartridgesFilled.cartridgeId': 1,
+				'qcRelease.qaqcCartridgeIds': 1
+			}
 		).sort({ createdAt: -1 }).lean()
 	]);
 
@@ -44,13 +49,26 @@ export const load: PageServerLoad = async ({ locals }) => {
 			releasedAt: l.releasedAt ?? null,
 			createdAt: l.createdAt
 		})),
-		releasableRuns: (runs as any[]).map((r: any) => ({
-			runId: r._id,
-			runNumber: r.runNumber ?? '',
-			assayTypeId: r.assayType?._id ?? null,
-			assayTypeName: r.assayType?.name ?? null,
-			cartridgeCount: r.cartridgeCount ?? 0
-		})),
+		releasableRuns: (runs as any[]).map((r: any) => {
+			const filled = (r.cartridgesFilled ?? []) as any[];
+			const acceptedCount = filled.filter((c) => c.inspectionStatus === 'Accepted').length;
+			const rejectedCount = filled.filter((c) => c.inspectionStatus === 'Rejected').length;
+			const qaqcCartridgeIds = (r.qcRelease?.qaqcCartridgeIds ?? []) as string[];
+			return {
+				runId: r._id,
+				runNumber: r.runNumber ?? '',
+				assayTypeId: r.assayType?._id ?? null,
+				assayTypeName: r.assayType?.name ?? null,
+				cartridgeCount: r.cartridgeCount ?? 0,
+				totalCartridges: filled.length || (r.cartridgeCount ?? 0),
+				acceptedCount,
+				rejectedCount,
+				qaqcCount: qaqcCartridgeIds.length,
+				qaqcCartridgeIds,
+				runEndTime: r.runEndTime ?? null,
+				operatorName: r.operator?.username ?? null
+			};
+		}),
 		releases,
 		lotId: null,
 		action: null

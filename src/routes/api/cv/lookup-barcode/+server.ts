@@ -6,6 +6,7 @@
  */
 import { json, error } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
+import { byId } from '$lib/server/db/native-helpers';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ url, locals }) => {
@@ -21,7 +22,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
 	// Try CartridgeRecord first (most common on manufacturing floor)
 	const cartridge = await db.collection('cartridge_records').findOne({
-		$or: [{ barcode: code }, { _id: code }]
+		$or: [{ barcode: code }, byId(code)]
 	});
 	if (cartridge) {
 		return json({
@@ -36,7 +37,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
 	// Try LotRecord
 	const lot = await db.collection('lot_records').findOne({
-		$or: [{ lotNumber: code }, { _id: code }, { qrCodeRef: code }]
+		$or: [{ lotNumber: code }, byId(code), { qrCodeRef: code }]
 	});
 	if (lot) {
 		return json({
@@ -50,7 +51,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
 	// Try PartDefinition
 	const part = await db.collection('part_definitions').findOne({
-		$or: [{ barcode: code }, { _id: code }, { partNumber: code }]
+		$or: [{ barcode: code }, byId(code), { partNumber: code }]
 	});
 	if (part) {
 		return json({

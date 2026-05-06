@@ -46,6 +46,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			useSingleCost: a.useSingleCost ?? false,
 			isActive: a.isActive ?? true,
 			lockedAt: a.lockedAt ?? null,
+			cartridgeCount: a.cartridgeCount ?? 0,
 			reagents: (a.reagents ?? []).map((r: any): Reagent => ({
 				id: r._id,
 				wellPosition: r.wellPosition ?? null,

@@ -14,6 +14,17 @@
 		occupantCount: number;
 		waxAcceptedCount?: number;
 		waxScrappedCount?: number;
+		cartridges?: Array<{
+			id: string;
+			status?: string;
+			assayName?: string | null;
+			placedAt?: string | null;
+			storageType?: string | null;
+			assayType?: string | null;
+			waxQcStatus?: string | null;
+			storedAt?: string | null;
+			operator?: string | null;
+		}>;
 	}
 
 	interface EquipmentSensor {
@@ -477,7 +488,7 @@
 												<a href="/cartridges/{cart.id}" class="font-mono text-[var(--color-tron-cyan)] hover:underline">{cart.id}</a>
 											</td>
 											<td class="px-3 py-1.5">
-												<span class="inline-flex rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase {storageTypeBadge(cart.storageType)}">
+												<span class="inline-flex rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase {storageTypeBadge(cart.storageType ?? '')}">
 													{cart.storageType}
 												</span>
 											</td>
@@ -491,7 +502,7 @@
 													<span class="text-[var(--color-tron-text-secondary)]">—</span>
 												{/if}
 											</td>
-											<td class="px-3 py-1.5 text-[var(--color-tron-text-secondary)]">{formatStoredDate(cart.storedAt)}</td>
+											<td class="px-3 py-1.5 text-[var(--color-tron-text-secondary)]">{formatStoredDate(cart.storedAt ?? null)}</td>
 											<td class="px-3 py-1.5 text-[var(--color-tron-text)]">{cart.operator ?? '—'}</td>
 										</tr>
 									{/each}

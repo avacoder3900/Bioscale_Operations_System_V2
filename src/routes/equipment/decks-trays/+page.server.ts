@@ -220,7 +220,7 @@ export const actions: Actions = {
 		if (!password) return fail(400, { error: 'Password is required' });
 
 		// Verify password
-		const user = await User.findById(locals.user._id).lean() as any;
+		const user = await User.findById(locals.user!._id).lean() as any;
 		if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
 			return fail(401, { error: 'Invalid password' });
 		}
@@ -262,7 +262,7 @@ export const actions: Actions = {
 		if (!password) return fail(400, { error: 'Password is required' });
 
 		// Verify password
-		const user = await User.findById(locals.user._id).lean() as any;
+		const user = await User.findById(locals.user!._id).lean() as any;
 		if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
 			return fail(401, { error: 'Invalid password' });
 		}

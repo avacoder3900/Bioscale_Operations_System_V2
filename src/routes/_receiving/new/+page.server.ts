@@ -268,7 +268,7 @@ export const actions: Actions = {
 				const buffer = await file.arrayBuffer();
 				const ext = file.name.split('.').pop() ?? 'jpg';
 				const r2Key = `lots/${lotId}/photos/lot-photo-${Date.now()}.${ext}`;
-				await r2Upload(r2Key, buffer, file.type || 'image/jpeg');
+				await uploadToR2(Buffer.from(buffer), r2Key, file.type || 'image/jpeg');
 				photoUrls.push(`/api/r2/files/${r2Key}`);
 			} catch {
 				// Skip failed uploads silently
@@ -281,7 +281,7 @@ export const actions: Actions = {
 				const buffer = await file.arrayBuffer();
 				const ext = file.name.split('.').pop() ?? 'bin';
 				const r2Key = `lots/${lotId}/docs/lot-doc-${Date.now()}.${ext}`;
-				await r2Upload(r2Key, buffer, file.type || 'application/octet-stream');
+				await uploadToR2(Buffer.from(buffer), r2Key, file.type || 'application/octet-stream');
 				docUrls.push(`/api/r2/files/${r2Key}`);
 			} catch {
 				// Skip failed uploads silently

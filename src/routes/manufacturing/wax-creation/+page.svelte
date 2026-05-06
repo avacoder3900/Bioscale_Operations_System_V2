@@ -14,11 +14,10 @@
 	}
 	let { data }: Props = $props();
 
-	const getPart = (pn: string) => data.waxParts.find(p => p.partNumber === pn);
+	const getPart = (pn: string) => data.waxParts.find((p: any) => p.partNumber === pn);
 	const nonadecane = $derived(getPart('PT-CT-108'));
 	const microWax = $derived(getPart('PT-CT-109'));
 	const tubes15ml = $derived(getPart('PT-CT-110'));
-	const tubesUsed = $derived(fullTubeCount ? fullTubeCount + (partialTubeMl && partialTubeMl > 0 ? 1 : 0) : 0);
 
 
 	let currentStep = $state(1);
@@ -56,6 +55,7 @@
 	const expectedTubes = $derived(expectedTotalMl ? Math.floor(expectedTotalMl / 12) : 0);
 	let fullTubeCount = $state<number | null>(null);
 	let partialTubeMl = $state<number | null>(null);
+	const tubesUsed = $derived(fullTubeCount ? fullTubeCount + (partialTubeMl && partialTubeMl > 0 ? 1 : 0) : 0);
 	let fridgeBarcode = $state('');
 	let tubesLabeledAndStored = $state(false);
 

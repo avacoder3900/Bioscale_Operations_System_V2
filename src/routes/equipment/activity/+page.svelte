@@ -5,7 +5,8 @@
 		data: {
 			decks: { deckId: string; status: string; currentRobotId: string | null; lastUsed: string | null }[];
 			trays: { trayId: string; status: string; assignedRunId: string | null }[];
-			locations: { id: string; barcode: string; locationType: string; displayName: string; isActive: boolean; capacity: number | null }[];
+			locations: { id: string; barcode: string; locationType: string; displayName: string; isActive: boolean; capacity: number | null; occupantCount: number; waxAcceptedCount: number; waxScrappedCount: number }[];
+			robots: { robotId: string; name: string; status: string }[];
 			equipmentTemps: Record<string, number | null>;
 			placements: { locationId: string; locationType: string; displayName: string; itemType: string; itemId: string }[];
 			activeWaxRuns: { runId: string; robotId: string; deckId: string | null; coolingTrayId: string | null; status: string }[];

@@ -13,8 +13,15 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!customer) error(404, 'Customer not found');
 
 	const assignedSpus = await Spu.find({ 'assignment.customer._id': params.id })
-		.select({ _id: 1, udi: 1, deviceState: 1, 'assignment.type': 1 })
+		.select({ _id: 1, udi: 1, deviceState: 1, qcStatus: 1, createdAt: 1, 'assignment.type': 1 })
 		.lean();
+
+	const customerNotes = (customer.notes ?? []).map((n: any) => ({
+		id: n._id,
+		content: n.noteText ?? '',
+		createdAt: n.createdAt,
+		createdByUsername: n.createdBy?.username ?? 'Unknown'
+	}));
 
 	return {
 		customer: {
@@ -27,25 +34,29 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			contactName: customer.contactName ?? null,
 			address: customer.address ?? null,
 			createdAt: customer.createdAt,
-			updatedAt: customer.updatedAt
+			updatedAt: customer.updatedAt,
+			notes: customerNotes
 		},
 		spus: (assignedSpus as any[]).map((s) => ({
 			id: s._id,
 			udi: s.udi,
+			shortId: typeof s._id === 'string' ? s._id.slice(0, 8) : String(s._id ?? '').slice(0, 8),
 			deviceState: s.deviceState ?? 'unknown',
+			qcStatus: s.qcStatus ?? 'pending',
+			createdAt: s.createdAt ?? null,
 			assignmentType: s.assignment?.type ?? ''
 		})),
-		notes: (customer.notes ?? []).map((n: any) => ({
-			id: n._id,
-			content: n.noteText ?? '',
-			createdAt: n.createdAt,
-			createdByUsername: n.createdBy?.username ?? 'Unknown'
-		})),
+		notes: customerNotes,
 		orderHistory: [] as {
 			id: string;
 			orderNumber: string;
 			status: string;
 			createdAt: Date;
+			barcode: string | null;
+			cartridgeCount: number;
+			trackingNumber: string | null;
+			carrier: string | null;
+			shippedAt: Date | null;
 		}[]
 	};
 };

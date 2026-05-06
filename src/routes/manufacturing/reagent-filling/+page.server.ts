@@ -290,7 +290,7 @@ export const actions: Actions = {
 			robot: { _id: robotId, name: robotName },
 			assayType: assayRef,
 			isResearch,
-			operator: { _id: locals.user._id, username: locals.user.username },
+			operator: { _id: locals.user!._id, username: locals.user!.username },
 			status: 'Loading',
 			tubeRecords: [],
 			cartridgesFilled: [],
@@ -403,7 +403,7 @@ export const actions: Actions = {
 			_id: noteId,
 			body: noteBody,
 			phase: 'reagent_prep',
-			author: { _id: locals.user._id, username: locals.user.username },
+			author: { _id: locals.user!._id, username: locals.user!.username },
 			createdAt: now
 		};
 
@@ -700,11 +700,11 @@ export const actions: Actions = {
 					...cf,
 					inspectionStatus: rejected.status ?? 'Rejected',
 					inspectionReason: rejected.reason ?? null,
-					inspectedBy: { _id: locals.user._id, username: locals.user.username },
+					inspectedBy: { _id: locals.user!._id, username: locals.user!.username },
 					inspectedAt: now
 				};
 			}
-			return { ...cf, inspectionStatus: cf.inspectionStatus === 'Pending' ? 'Accepted' : cf.inspectionStatus, inspectedBy: { _id: locals.user._id, username: locals.user.username }, inspectedAt: now };
+			return { ...cf, inspectionStatus: cf.inspectionStatus === 'Pending' ? 'Accepted' : cf.inspectionStatus, inspectedBy: { _id: locals.user!._id, username: locals.user!.username }, inspectedAt: now };
 		});
 
 		const updateFields: Record<string, any> = {
@@ -722,7 +722,7 @@ export const actions: Actions = {
 					$set: {
 						'reagentInspection.status': rej.status ?? 'Rejected',
 						'reagentInspection.reason': rej.reason ?? undefined,
-						'reagentInspection.operator': { _id: locals.user._id, username: locals.user.username },
+						'reagentInspection.operator': { _id: locals.user!._id, username: locals.user!.username },
 						'reagentInspection.timestamp': now,
 						'reagentInspection.recordedAt': now,
 						status: 'scrapped',
@@ -783,7 +783,7 @@ export const actions: Actions = {
 				sealBatches: {
 					_id: batchId,
 					topSealLotId: topSealLotId.trim(),
-					operator: { _id: locals.user._id, username: locals.user.username },
+					operator: { _id: locals.user!._id, username: locals.user!.username },
 					firstScanTime: now,
 					cartridgeIds: [],
 					status: 'in_progress'
@@ -855,7 +855,7 @@ export const actions: Actions = {
 						$set: {
 							'topSeal.batchId': batchId,
 							'topSeal.topSealLotId': batch.topSealLotId,
-							'topSeal.operator': { _id: locals.user._id, username: locals.user.username },
+							'topSeal.operator': { _id: locals.user!._id, username: locals.user!.username },
 							'topSeal.timestamp': now,
 							'topSeal.recordedAt': now,
 							status: 'sealed'
@@ -921,7 +921,7 @@ export const actions: Actions = {
 				$set: {
 					'cartridgesFilled.$.inspectionStatus': 'Rejected',
 					'cartridgesFilled.$.inspectionReason': 'Rejected at top sealing',
-					'cartridgesFilled.$.inspectedBy': { _id: locals.user._id, username: locals.user.username },
+					'cartridgesFilled.$.inspectedBy': { _id: locals.user!._id, username: locals.user!.username },
 					'cartridgesFilled.$.inspectedAt': now
 				}
 			}
@@ -1008,7 +1008,7 @@ export const actions: Actions = {
 							'storage.fridgeName': location,              // raw input — denormalized display snapshot
 							'storage.fridgeId': resolvedFridgeId,        // Equipment._id (authoritative — S1a)
 							'storage.locationId': resolvedFridgeId,      // Equipment._id (kept in sync — S1a)
-							'storage.operator': { _id: locals.user._id, username: locals.user.username },
+							'storage.operator': { _id: locals.user!._id, username: locals.user!.username },
 							'storage.timestamp': now,
 							'storage.recordedAt': now,
 							status: 'stored'
@@ -1071,7 +1071,7 @@ export const actions: Actions = {
 						_id: generateId(),
 						usageType: 'run_complete', runId: run._id,
 						quantityChanged: cartridgeCount,
-						operator: { _id: locals.user._id, username: locals.user.username },
+						operator: { _id: locals.user!._id, username: locals.user!.username },
 						notes: `Reagent filling run complete — ${cartridgeCount} cartridges filled`,
 						createdAt: now
 					}

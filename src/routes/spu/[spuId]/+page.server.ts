@@ -4,6 +4,7 @@ import {
 	connectDB, Spu, Batch, User, Customer, AssemblySession,
 	ElectronicSignature, AuditLog, ParticleDevice, ValidationSession, generateId
 } from '$lib/server/db';
+import { byId } from '$lib/server/db/native-helpers';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -387,7 +388,7 @@ export const actions: Actions = {
 		if (spu.finalizedAt) return fail(400, { error: 'Cannot delete a finalized SPU' });
 
 		// Use direct collection delete to bypass sacred middleware
-		await Spu.collection.deleteOne({ _id: params.spuId });
+		await Spu.collection.deleteOne(byId(params.spuId));
 
 		// Audit log
 		await AuditLog.create({

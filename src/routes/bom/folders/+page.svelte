@@ -2,7 +2,9 @@
 	import { enhance } from '$app/forms';
 	import { TronCard, TronButton, TronInput } from '$lib/components/ui';
 
-	let { data, form } = $props();
+	let { data, form: _form } = $props();
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const form = _form as any;
 
 	let showCreateModal = $state(false);
 	let creating = $state(false);

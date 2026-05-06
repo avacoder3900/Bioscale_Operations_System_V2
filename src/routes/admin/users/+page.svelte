@@ -281,7 +281,7 @@
 												name="roleId"
 												class="min-h-[36px] rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm text-[var(--color-tron-text)]"
 											>
-												{#each data.roles.filter((r) => !u.roles.some((ur) => ur.id === r.id)) as role (role.id)}
+												{#each data.roles.filter((r: any) => !u.roles.some((ur: any) => ur.id === r.id)) as role (role.id)}
 													<option value={role.id}>{role.name}</option>
 												{/each}
 											</select>

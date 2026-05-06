@@ -129,7 +129,7 @@ export async function uploadToR2(buffer: Buffer, key: string, contentType: strin
 	const url = getPresignedUploadUrl(key, contentType, 600);
 	const res = await fetch(url, {
 		method: 'PUT',
-		body: buffer,
+		body: new Uint8Array(buffer),
 		headers: { 'Content-Type': contentType }
 	});
 	if (!res.ok) {

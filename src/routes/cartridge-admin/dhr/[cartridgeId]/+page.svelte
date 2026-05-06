@@ -22,7 +22,7 @@
 	});
 
 	// Available phase filters (only phases that have photos)
-	const phasesWithPhotos = $derived([...new Set(data.photos.map((p: any) => p.phase))]);
+	const phasesWithPhotos: string[] = $derived(Array.from(new Set(data.photos.map((p: any) => String(p.phase ?? '')))));
 
 	// Filtered photos
 	const filteredPhotos = $derived.by(() => {

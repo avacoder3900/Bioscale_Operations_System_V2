@@ -453,7 +453,7 @@ export const actions: Actions = {
 		const robotDoc = await Equipment.findOne({ _id: robotId, equipmentType: 'robot' }, { _id: 1, name: 1 }).lean() as any;
 		const run = await WaxFillingRun.create({
 			robot: { _id: robotId, name: robotDoc?.name ?? robotId },
-			operator: { _id: locals.user._id, username: locals.user.username },
+			operator: { _id: locals.user!._id, username: locals.user!.username },
 			status: 'Setup',
 			cartridgeIds: [],
 			setupTimestamp: new Date()
@@ -662,7 +662,7 @@ export const actions: Actions = {
 					update: {
 						$setOnInsert: {
 							_id: cid,
-							'backing.operator': { _id: locals.user._id, username: locals.user.username },
+							'backing.operator': { _id: locals.user!._id, username: locals.user!.username },
 							'backing.recordedAt': now
 						},
 						$set: {
@@ -686,7 +686,7 @@ export const actions: Actions = {
 							'waxFilling.robotId': run.robot?._id ?? null,
 							'waxFilling.robotName': run.robot?.name ?? null,
 							'waxFilling.deckPosition': idx + 1,
-							'waxFilling.operator': { _id: locals.user._id, username: locals.user.username }
+							'waxFilling.operator': { _id: locals.user!._id, username: locals.user!.username }
 						}
 					},
 					upsert: true
@@ -834,7 +834,7 @@ export const actions: Actions = {
 				run.cartridgeIds,
 				'confirmCooling',
 				runId,
-				{ _id: locals.user._id, username: locals.user.username }
+				{ _id: locals.user!._id, username: locals.user!.username }
 			);
 
 			if (safeIds.length > 0) {
@@ -901,7 +901,7 @@ export const actions: Actions = {
 				run.cartridgeIds,
 				'completeQC',
 				runId,
-				{ _id: locals.user._id, username: locals.user.username }
+				{ _id: locals.user!._id, username: locals.user!.username }
 			);
 
 			if (safeIds.length > 0) {
@@ -936,7 +936,7 @@ export const actions: Actions = {
 						update: {
 							$set: {
 								'waxQc.status': 'Accepted',
-								'waxQc.operator': { _id: locals.user._id, username: locals.user.username },
+								'waxQc.operator': { _id: locals.user!._id, username: locals.user!.username },
 								'waxQc.timestamp': now,
 								'waxQc.recordedAt': now
 							}
@@ -1143,7 +1143,7 @@ export const actions: Actions = {
 			[cartridgeId],
 			'rejectCartridge',
 			undefined,
-			{ _id: locals.user._id, username: locals.user.username }
+			{ _id: locals.user!._id, username: locals.user!.username }
 		);
 		if (safeIds.length === 0) {
 			return fail(400, {
@@ -1160,7 +1160,7 @@ export const actions: Actions = {
 				$set: {
 					'waxQc.status': 'Rejected',
 					'waxQc.rejectionReason': rejectionReason,
-					'waxQc.operator': { _id: locals.user._id, username: locals.user.username },
+					'waxQc.operator': { _id: locals.user!._id, username: locals.user!.username },
 					'waxQc.timestamp': now,
 					'waxQc.recordedAt': now,
 					status: 'scrapped',
@@ -1259,7 +1259,7 @@ export const actions: Actions = {
 			cartridgeIds,
 			'recordBatchStorage',
 			inferredRunId,
-			{ _id: locals.user._id, username: locals.user.username }
+			{ _id: locals.user!._id, username: locals.user!.username }
 		);
 
 		const now = new Date();
@@ -1284,7 +1284,7 @@ export const actions: Actions = {
 							'waxStorage.coolingTrayId': resolvedTrayId ?? coolingTrayId,
 							...(coolingLocationId ? { 'waxStorage.coolingLocationId': coolingLocationId } : {}),
 							...(coolingLocationName ? { 'waxStorage.coolingLocationName': coolingLocationName } : {}),
-							'waxStorage.operator': { _id: locals.user._id, username: locals.user.username },
+							'waxStorage.operator': { _id: locals.user!._id, username: locals.user!.username },
 							'waxStorage.timestamp': now,
 							'waxStorage.recordedAt': now
 							// status intentionally NOT set — completeRun does the wax_stored flip.
@@ -1352,7 +1352,7 @@ export const actions: Actions = {
 			cartIds,
 			'reassignStorage',
 			runId,
-			{ _id: locals.user._id, username: locals.user.username }
+			{ _id: locals.user!._id, username: locals.user!.username }
 		);
 		if (safeIds.length === 0) {
 			return { success: true, skippedLockedCount: blockedDetails.length };
@@ -1421,7 +1421,7 @@ export const actions: Actions = {
 			_id: noteId,
 			body: noteBody,
 			phase: 'wax_run',
-			author: { _id: locals.user._id, username: locals.user.username },
+			author: { _id: locals.user!._id, username: locals.user!.username },
 			createdAt: now
 		};
 
@@ -1477,7 +1477,7 @@ export const actions: Actions = {
 
 		// Update consumable usage logs
 		const cartridgeCount = run?.cartridgeIds?.length ?? 0;
-		const operatorRef = { _id: locals.user._id, username: locals.user.username };
+		const operatorRef = { _id: locals.user!._id, username: locals.user!.username };
 
 		// Commit point: flip wax_filled → wax_stored for every cartridge that
 		// made it through fridge assignment. Mirrors the flip in
@@ -1489,7 +1489,7 @@ export const actions: Actions = {
 				run.cartridgeIds,
 				'completeRun',
 				runId,
-				{ _id: locals.user._id, username: locals.user.username }
+				{ _id: locals.user!._id, username: locals.user!.username }
 			);
 			await CartridgeRecord.updateMany(
 				{

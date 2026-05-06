@@ -24,7 +24,9 @@ export type LifecycleStage =
 	| 'packeted'
 	| 'transferred'
 	| 'refrigerated'
-	| 'received';
+	| 'received'
+	| 'assay_loaded'
+	| 'testing';
 
 export const LIFECYCLE_STAGES: LifecycleStage[] = [
 	'backing',

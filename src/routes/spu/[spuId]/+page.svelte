@@ -3,7 +3,9 @@
 	import { TronCard, TronBadge, TronButton } from '$lib/components/ui';
 	import SpuStatusBadge from '$lib/components/spu/SpuStatusBadge.svelte';
 
-	let { data, form } = $props();
+	let { data, form: _form } = $props();
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const form = _form as any;
 
 	let showStateForm = $state(false);
 	let updatingState = $state(false);
@@ -423,7 +425,7 @@
 				{ name: 'Lux', key: 'lux', icon: '💡' },
 				{ name: 'Spectrophotometer', key: 'spectrophotometer', icon: '🔬' }
 			] as test (test.key)}
-				{@const result = data.spu.validation?.[test.key]}
+				{@const result = (data.spu.validation as any)?.[test.key]}
 				<div class="rounded-lg border p-3" style="border-color: {result?.status === 'passed' || result?.status === 'overridden' ? 'var(--color-tron-green)' : result?.status === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-border)'}; background: {result?.status === 'passed' || result?.status === 'overridden' ? 'rgba(0,255,100,0.05)' : result?.status === 'failed' ? 'rgba(255,0,0,0.05)' : 'var(--color-tron-bg-secondary)'};">
 					<div class="text-center">
 						<div class="text-lg">{test.icon}</div>

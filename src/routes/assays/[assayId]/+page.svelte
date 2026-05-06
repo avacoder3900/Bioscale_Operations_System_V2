@@ -804,7 +804,7 @@
 						Active Reagents
 					</dt>
 					<dd class="text-2xl font-bold" style="color: var(--color-tron-cyan, #00ffff)">
-						{data.assay.reagents.filter(r => r.isActive).length}
+						{data.assay.reagents.filter((r: any) => r.isActive).length}
 					</dd>
 				</div>
 				<div class="rounded p-3" style="background: var(--color-tron-bg-secondary, #1f2937)">
@@ -812,7 +812,7 @@
 						Calculated BOM Cost
 					</dt>
 					<dd class="text-2xl font-bold" style="color: var(--color-tron-green, #39ff14)">
-						${data.assay.reagents.filter(r => r.isActive).reduce((sum, r) => sum + reagentCost(r), 0).toFixed(4)}
+						${data.assay.reagents.filter((r: any) => r.isActive).reduce((sum: number, r: any) => sum + reagentCost(r), 0).toFixed(4)}
 					</dd>
 				</div>
 				<div class="rounded p-3" style="background: var(--color-tron-bg-secondary, #1f2937)">
@@ -823,7 +823,7 @@
 						{#if data.assay.useSingleCost && data.assay.bomCostOverride}
 							${data.assay.bomCostOverride}
 						{:else}
-							${data.assay.reagents.filter(r => r.isActive).reduce((sum, r) => sum + reagentCost(r), 0).toFixed(4)}
+							${data.assay.reagents.filter((r: any) => r.isActive).reduce((sum: number, r: any) => sum + reagentCost(r), 0).toFixed(4)}
 						{/if}
 					</dd>
 				</div>
@@ -905,7 +905,7 @@
 				<p style="color: var(--color-tron-text-secondary, #9ca3af)">No reagents defined. Add one above.</p>
 			{:else}
 				<div class="space-y-2">
-					{#each data.assay.reagents.slice().sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)) as reagent (reagent.id)}
+					{#each data.assay.reagents.slice().sort((a: any, b: any) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)) as reagent (reagent.id)}
 						<div
 							class="rounded"
 							style="border: 1px solid {reagent.isActive ? 'var(--color-tron-border, #374151)' : '#374151'}; background: var(--color-tron-bg-secondary, #1f2937); opacity: {reagent.isActive ? '1' : '0.6'}"
@@ -1099,7 +1099,7 @@
 								<!-- Sub-components -->
 								{#if expandedReagents.has(reagent.id) && reagent.subComponents.length > 0}
 									<div class="mx-3 mb-3 space-y-1">
-										{#each reagent.subComponents.slice().sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)) as sub (sub.id)}
+										{#each reagent.subComponents.slice().sort((a: any, b: any) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)) as sub (sub.id)}
 											<div
 												class="rounded p-3"
 												style="background: color-mix(in srgb, var(--color-tron-surface, #111827) 80%, transparent); border-left: 2px solid var(--color-tron-cyan, #00ffff)"

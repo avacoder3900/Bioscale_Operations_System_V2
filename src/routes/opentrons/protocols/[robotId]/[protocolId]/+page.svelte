@@ -18,11 +18,11 @@
 		data.analysis?.status ?? data.protocol?.analysisStatus ?? data.dbRecord?.analysisStatus ?? 'pending'
 	);
 
-	const parameters = $derived(data.analysis?.runTimeParameters ?? []);
-	const pipettes = $derived(data.analysis?.pipettes ?? []);
-	const labware = $derived(data.analysis?.labware ?? []);
-	const liquids = $derived(data.analysis?.liquids ?? []);
-	const commands = $derived(data.analysis?.commands ?? []);
+	const parameters = $derived((data.analysis as any)?.runTimeParameters ?? []);
+	const pipettes = $derived((data.analysis as any)?.pipettes ?? []);
+	const labware = $derived((data.analysis as any)?.labware ?? []);
+	const liquids = $derived((data.analysis as any)?.liquids ?? []);
+	const commands = $derived((data.analysis as any)?.commands ?? []);
 
 	function formatDate(iso: string): string {
 		if (!iso) return 'N/A';
@@ -30,19 +30,19 @@
 		return `${d.getMonth() + 1}/${d.getDate()}/${String(d.getFullYear()).slice(2)} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
 	}
 
-	function formatParamDefault(param: typeof parameters[0]): string {
+	function formatParamDefault(param: any): string {
 		if (param.type === 'bool') return param.default ? 'On' : 'Off';
 		if (param.choices?.length) {
-			const match = param.choices.find((c) => c.value === param.default);
+			const match = param.choices.find((c: any) => c.value === param.default);
 			return match?.displayName ?? String(param.default);
 		}
 		return String(param.default);
 	}
 
-	function formatParamRange(param: typeof parameters[0]): string {
+	function formatParamRange(param: any): string {
 		if (param.type === 'bool') return 'On/Off';
 		if (param.choices?.length) {
-			return param.choices.map((c) => c.displayName).join(', ');
+			return param.choices.map((c: any) => c.displayName).join(', ');
 		}
 		if (param.min !== undefined && param.max !== undefined) {
 			return `${param.min}–${param.max}`;
@@ -53,8 +53,8 @@
 	// Aggregate labware counts
 	const labwareSummary = $derived(() => {
 		const counts: Record<string, { name: string; count: number }> = {};
-		for (const lw of labware) {
-			const name = lw.displayName || lw.loadName;
+		for (const lw of labware as any[]) {
+			const name = (lw as any).displayName || lw.loadName;
 			const existing = counts[name];
 			if (existing) {
 				existing.count++;
@@ -160,7 +160,7 @@
 			<h3 class="mb-3 text-sm font-medium text-[var(--color-tron-text-secondary)]">Deck Map</h3>
 			<div class="mx-auto grid w-fit grid-cols-3 gap-1.5">
 				{#each [10, 11, 12, 7, 8, 9, 4, 5, 6, 1, 2, 3] as slot (slot)}
-					{@const occupied = labware.some((lw) => lw.location?.slotName === String(slot))}
+					{@const occupied = labware.some((lw: any) => lw.location?.slotName === String(slot))}
 					<div
 						class="flex h-12 w-14 items-center justify-center rounded border text-xs font-medium {occupied
 							? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/10 text-[var(--color-tron-cyan)]'
@@ -317,7 +317,7 @@
 											<span class="flex items-center gap-2">
 												<span
 													class="h-3 w-3 rounded-full"
-													style="background-color: {liquid.displayColor || '#6b7280'}"
+													style="background-color: {(liquid as any).displayColor || '#6b7280'}"
 												></span>
 												<span class="text-[var(--color-tron-text)]">{liquid.displayName}</span>
 											</span>
