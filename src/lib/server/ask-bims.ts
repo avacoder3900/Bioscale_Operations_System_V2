@@ -5,6 +5,7 @@ import {
 	PartDefinition, Equipment, CartridgeRecord, ReagentBatchRecord,
 	ReceivingLot
 } from './db';
+import { getCheckedOutCartridgeIds } from './checkout-utils';
 
 export type AskBimsModel = 'claude-haiku-4-5' | 'claude-sonnet-4-6' | 'claude-opus-4-7';
 
@@ -446,8 +447,10 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 			const run = await WaxFillingRun.findById(input.runId).lean() as any;
 			if (!run) return { error: `Run not found: ${input.runId}`, source: 'WaxFillingRun', sourceUrl: '/manufacturing' };
 			const cartridgeIds: string[] = run.cartridgeIds ?? [];
-			const carts = await CartridgeRecord.find({ _id: { $in: cartridgeIds } })
-				.select('_id status waxQc.status').lean() as any[];
+			const checkedOutIds = await getCheckedOutCartridgeIds();
+			const carts = await CartridgeRecord.find({
+				_id: { $in: cartridgeIds, $nin: checkedOutIds }
+			}).select('_id status waxQc.status').lean() as any[];
 			const counts: Record<string, number> = {};
 			let accepted = 0, scrapped = 0, pendingQc = 0;
 			for (const c of carts) {
@@ -557,6 +560,8 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 			if (input.sinceHours) {
 				filter.createdAt = { $gte: new Date(Date.now() - input.sinceHours * 3600e3) };
 			}
+			const checkedOutIds = await getCheckedOutCartridgeIds();
+			filter._id = { $nin: checkedOutIds };
 			const agg = await CartridgeRecord.aggregate([
 				{ $match: filter },
 				{ $group: { _id: '$status', count: { $sum: 1 } } },

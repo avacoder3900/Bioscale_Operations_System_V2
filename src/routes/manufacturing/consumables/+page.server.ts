@@ -19,6 +19,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	// === Pipeline counts ===
 	const phaseCounts = await CartridgeRecord.aggregate([
+		{ $match: { _id: { $nin: checkedOutIds } } },
 		{ $group: { _id: '$status', count: { $sum: 1 } } }
 	]);
 	const phaseMap = new Map<string, number>(phaseCounts.map((p: any) => [p._id ?? 'unknown', p.count]));
@@ -51,7 +52,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const sealed = await CartridgeRecord.countDocuments({ status: 'sealed', _id: { $nin: checkedOutIds } });
 	// Count both 'scrapped' (QC rejects) and legacy 'voided' — same semantic
 	// bucket for the "not usable" cartridge count tile.
-	const voided = await CartridgeRecord.countDocuments({ status: { $in: ['scrapped', 'voided'] } });
+	const voided = await CartridgeRecord.countDocuments({ status: { $in: ['scrapped', 'voided'] }, _id: { $nin: checkedOutIds } });
 
 	// === Parts inventory (cartridge BOM) ===
 	const parts = await PartDefinition.find({ bomType: 'cartridge', isActive: true })

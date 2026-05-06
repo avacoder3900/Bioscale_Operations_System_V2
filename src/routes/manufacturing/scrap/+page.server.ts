@@ -36,19 +36,18 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 export const actions: Actions = {
 	/**
-	 * Manually check out (remove) one or more wax-stored cartridges.
+	 * Manually check out (remove) one or more cartridges from any post-wax
+	 * status. Checkout is orthogonal to quality status: a scrapped cartridge
+	 * stays scrapped, a completed cartridge stays completed. This action
+	 * records the physical removal event only — it does NOT change
+	 * CartridgeRecord.status. Every count query that observes a cartridge's
+	 * current state is responsible for excluding checked-out IDs via
+	 * getCheckedOutCartridgeIds() so the cartridge drops out of fridge,
+	 * oven, phase, and QC counts simultaneously.
 	 *
-	 * IMPORTANT: checkout is orthogonal to scrap/quality status. A cartridge
-	 * that was scrapped stays scrapped when checked out; a production-level
-	 * cartridge stays at its production status. This action records the
-	 * physical removal event only — it does NOT change CartridgeRecord.status
-	 * and does NOT write an InventoryTransaction (cartridges are not
-	 * inventoried as PartDefinitions; their raw materials were consumed at
-	 * WI-01 backing when they came into existence).
-	 *
-	 * Wax-stored eligibility is enforced here because that's the intended
-	 * point of checkout going forward; historical checkouts of completed
-	 * cartridges are handled via a one-off backfill script, not this action.
+	 * Form action name is preserved (removeWaxStoredCartridges) for UI
+	 * compatibility, but eligibility is now status-agnostic — any existing
+	 * cartridge can be checked out.
 	 */
 	removeWaxStoredCartridges: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
@@ -70,18 +69,17 @@ export const actions: Actions = {
 			return fail(400, { removeWaxStored: { error: 'Reason is required' } });
 		}
 
-		// Validate eligibility: each cartridge must exist and be status='wax_stored'.
-		// Fail the whole group on any mismatch so operators get a clear failure
-		// mode rather than a silent partial-success.
+		// Validate existence only — status is preserved on checkout, so any
+		// status is eligible (wax_stored, scrapped, completed, etc.). Fail
+		// the whole group on any "not found" so operators see a clear
+		// failure mode rather than a silent partial-success.
 		const cartridges = await CartridgeRecord.find({ _id: { $in: cartridgeIds } })
 			.select('_id status')
 			.lean() as any[];
 		const byId = new Map(cartridges.map((c) => [c._id, c]));
 		const issues: string[] = [];
 		for (const cid of cartridgeIds) {
-			const c = byId.get(cid);
-			if (!c) { issues.push(`${cid}: not found`); continue; }
-			if (c.status !== 'wax_stored') { issues.push(`${cid}: status is '${c.status}', expected 'wax_stored'`); }
+			if (!byId.has(cid)) issues.push(`${cid}: not found`);
 		}
 		if (issues.length > 0) {
 			return fail(400, { removeWaxStored: { error: `Cannot check out: ${issues.join('; ')}` } });
@@ -100,8 +98,10 @@ export const actions: Actions = {
 
 		// AuditLog the checkout event per cartridge so the audit trail still
 		// shows who checked this cartridge out and when, without mutating
-		// its production status.
+		// its production status. Capture status at checkout time so the
+		// removal record is self-describing in the audit history.
 		for (const cid of cartridgeIds) {
+			const statusAtCheckout = byId.get(cid)?.status ?? null;
 			await AuditLog.create({
 				_id: generateId(),
 				tableName: 'cartridge_records',
@@ -109,7 +109,7 @@ export const actions: Actions = {
 				action: 'CHECKOUT',
 				changedBy: locals.user.username,
 				changedAt: now,
-				newData: { checkedOut: true, removalGroupId: removalId, reason },
+				newData: { checkedOut: true, removalGroupId: removalId, reason, statusAtCheckout },
 				reason: `Manual checkout: ${reason}`
 			});
 		}

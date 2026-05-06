@@ -38,41 +38,42 @@ export const load: PageServerLoad = async ({ locals }) => {
 	] = await Promise.all([
 		// Manufacturing pipeline phase counts
 		CartridgeRecord.aggregate([
-			{ $match: { status: { $ne: null } } },
+			{ $match: { status: { $ne: null }, _id: { $nin: checkedOutIds } } },
 			{ $group: { _id: '$status', count: { $sum: 1 } } },
 			{ $sort: { count: -1 } }
 		]),
-		CartridgeRecord.countDocuments({ status: { $ne: 'voided' } }),
-		CartridgeRecord.countDocuments({ status: 'voided' }),
+		CartridgeRecord.countDocuments({ status: { $ne: 'voided' }, _id: { $nin: checkedOutIds } }),
+		CartridgeRecord.countDocuments({ status: 'voided', _id: { $nin: checkedOutIds } }),
 		// Wax QC pass/fail
 		CartridgeRecord.aggregate([
-			{ $match: { 'waxQc.status': { $exists: true } } },
+			{ $match: { 'waxQc.status': { $exists: true }, _id: { $nin: checkedOutIds } } },
 			{ $group: { _id: '$waxQc.status', count: { $sum: 1 } } }
 		]),
 		// Reagent inspection pass/fail
 		CartridgeRecord.aggregate([
-			{ $match: { 'reagentInspection.status': { $exists: true } } },
+			{ $match: { 'reagentInspection.status': { $exists: true }, _id: { $nin: checkedOutIds } } },
 			{ $group: { _id: '$reagentInspection.status', count: { $sum: 1 } } }
 		]),
 		// Recent activity (last 20 updated)
-		CartridgeRecord.find()
+		CartridgeRecord.find({ _id: { $nin: checkedOutIds } })
 			.sort({ updatedAt: -1 })
 			.limit(15)
 			.lean(),
 		// Expiring within 30 days (reagent fill expiration)
 		CartridgeRecord.find({
 			'reagentFilling.expirationDate': { $lte: thirtyDaysFromNow, $gte: now },
-			status: { $nin: ['voided', 'completed', 'shipped'] }
+			status: { $nin: ['voided', 'completed', 'shipped'] },
+			_id: { $nin: checkedOutIds }
 		}).sort({ 'reagentFilling.expirationDate': 1 }).limit(10).lean(),
 		// Fridge storage locations
 		Equipment.find({ equipmentType: 'fridge', status: { $ne: 'offline' } }).lean().catch(() => []),
 		// Oven/heater equipment
 		Equipment.find({ equipmentType: 'oven', status: { $ne: 'offline' } }).lean().catch(() => []),
 		// Weekly production (created in last 7 days)
-		CartridgeRecord.countDocuments({ createdAt: { $gte: sevenDaysAgo } }),
+		CartridgeRecord.countDocuments({ createdAt: { $gte: sevenDaysAgo }, _id: { $nin: checkedOutIds } }),
 		// Assay type breakdown
 		CartridgeRecord.aggregate([
-			{ $match: { 'reagentFilling.assayType.name': { $exists: true } } },
+			{ $match: { 'reagentFilling.assayType.name': { $exists: true }, _id: { $nin: checkedOutIds } } },
 			{ $group: { _id: '$reagentFilling.assayType.name', count: { $sum: 1 } } },
 			{ $sort: { count: -1 } }
 		]),

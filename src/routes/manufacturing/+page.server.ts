@@ -5,6 +5,7 @@ import {
 	OpentronsRobot, ManufacturingMaterial, ShippingLot, BarcodeInventory,
 	Equipment, EquipmentLocation
 } from '$lib/server/db';
+import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
@@ -14,6 +15,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
+
+	// Manually checked-out cartridges drop out of every phase/QC count below
+	// so the dashboard stays consistent with fridge/oven occupancy.
+	const checkedOutIds = await getCheckedOutCartridgeIds();
 
 	const now = Date.now();
 	const todayStart = new Date();
@@ -38,7 +43,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 		}).lean(),
 		BackingLot.find({ status: { $in: ['in_oven', 'ready', 'created'] } })
 			.sort({ ovenEntryTime: -1 }).lean(),
-		CartridgeRecord.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
+		CartridgeRecord.aggregate([
+			{ $match: { _id: { $nin: checkedOutIds } } },
+			{ $group: { _id: '$status', count: { $sum: 1 } } }
+		]),
 		Equipment.find({ equipmentType: 'oven', status: { $ne: 'offline' } }).sort({ name: 1 }).lean(),
 		EquipmentLocation.find({ locationType: 'oven', isActive: true, parentEquipmentId: { $exists: false } }).lean(),
 		LotRecord.find().sort({ createdAt: -1 }).limit(10).lean()
@@ -66,10 +74,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 			{ $match: { createdAt: { $gte: todayStart } } },
 			{ $group: { _id: '$status', count: { $sum: 1 } } }
 		]),
-		CartridgeRecord.countDocuments({ status: { $in: ['voided', 'scrapped'] }, updatedAt: { $gte: todayStart } }),
+		CartridgeRecord.countDocuments({ status: { $in: ['voided', 'scrapped'] }, updatedAt: { $gte: todayStart }, _id: { $nin: checkedOutIds } }),
 		CartridgeRecord.countDocuments({
 			'reagentFilling.recordedAt': { $gte: todayStart },
-			status: { $in: ['reagent_filled', 'sealed', 'stored'] }
+			status: { $in: ['reagent_filled', 'sealed', 'stored'] },
+			_id: { $nin: checkedOutIds }
 		}),
 		WaxFillingRun.aggregate([
 			{ $match: { createdAt: { $gte: weekStart } } },
@@ -79,10 +88,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 			{ $match: { createdAt: { $gte: weekStart } } },
 			{ $group: { _id: '$status', count: { $sum: 1 } } }
 		]),
-		CartridgeRecord.countDocuments({ status: { $in: ['voided', 'scrapped'] }, updatedAt: { $gte: weekStart } }),
+		CartridgeRecord.countDocuments({ status: { $in: ['voided', 'scrapped'] }, updatedAt: { $gte: weekStart }, _id: { $nin: checkedOutIds } }),
 		CartridgeRecord.countDocuments({
 			'reagentFilling.recordedAt': { $gte: weekStart },
-			status: { $in: ['reagent_filled', 'sealed', 'stored'] }
+			status: { $in: ['reagent_filled', 'sealed', 'stored'] },
+			_id: { $nin: checkedOutIds }
 		}),
 		WaxFillingRun.aggregate([
 			{ $match: { createdAt: { $gte: todayStart }, runStartTime: { $exists: true } } },
