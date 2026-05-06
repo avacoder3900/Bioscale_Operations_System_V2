@@ -162,12 +162,22 @@
 
 <div class="max-w-6xl mx-auto p-6 text-[var(--color-tron-text)]">
 	<!-- Header -->
-	<div class="flex items-center justify-between mb-4">
+	<div class="flex items-start justify-between mb-4 gap-4">
 		<div>
 			<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)] tracking-wide">ROG — Part Receiving</h1>
 			<p class="text-sm text-[var(--color-tron-text-secondary)] mt-1">Scan inventory in, register part barcodes, and review recent lots</p>
 		</div>
-		<a href="/parts" class="text-sm text-[var(--color-tron-cyan)] hover:text-cyan-300">&larr; Back to Parts</a>
+		<div class="flex items-center gap-3 shrink-0">
+			<a
+				href="/parts/accession/replicate-print"
+				class="px-4 py-2 bg-[var(--color-tron-cyan)] text-black text-sm font-semibold rounded-lg hover:brightness-110 whitespace-nowrap"
+				style="box-shadow: 0 0 10px rgba(0, 212, 255, 0.4);"
+				title="Print an Avery 94102 sheet with N replicates of each selected part"
+			>
+				🖨 Print Replicate Sheet
+			</a>
+			<a href="/parts" class="text-sm text-[var(--color-tron-cyan)] hover:text-cyan-300 whitespace-nowrap">&larr; Back to Parts</a>
+		</div>
 	</div>
 
 	<!-- Section nav — receiving workflow only -->
