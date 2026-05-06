@@ -33,7 +33,7 @@
 	let triggerError = $state<string | null>(null);
 	let pollErrorCount = $state(0);
 
-	const HEARTBEAT_OFFLINE_MS = 30_000; // 30s without heartbeat → offline
+	const HEARTBEAT_OFFLINE_MS = 60_000; // 60s without heartbeat → offline (Vercel cold-start can stall a heartbeat ~5-15s)
 
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
 	let clockTimer: ReturnType<typeof setInterval> | null = null;

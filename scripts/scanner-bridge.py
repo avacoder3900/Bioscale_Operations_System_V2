@@ -85,7 +85,7 @@ def _post_event(payload: dict) -> bool:
             f"{BIMS_BASE_URL}/api/agent/scanner/event",
             headers={"x-agent-api-key": API_KEY, "Content-Type": "application/json"},
             data=json.dumps(payload),
-            timeout=5,
+            timeout=10,
         )
         if r.status_code >= 400:
             log.warning("event POST %s: %s", r.status_code, r.text[:200])
@@ -102,7 +102,7 @@ def _claim_triggers(max_n: int = 5) -> list:
             f"{BIMS_BASE_URL}/api/agent/scanner/triggers",
             headers={"x-agent-api-key": API_KEY, "Content-Type": "application/json"},
             data=json.dumps({"deviceId": DEVICE_ID, "max": max_n}),
-            timeout=5,
+            timeout=10,
         )
         if r.status_code >= 400:
             log.warning("trigger poll %s: %s", r.status_code, r.text[:200])
