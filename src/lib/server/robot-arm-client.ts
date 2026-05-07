@@ -81,8 +81,21 @@ export interface RecordingMeta {
 	modified: string;
 }
 
+export interface PortInfo {
+	port: string;
+	present: boolean;
+	in_use: boolean;
+}
+
+export interface PortStatus {
+	leader: PortInfo;
+	follower: PortInfo;
+	active: { run_id: string; kind: string } | null;
+}
+
 export const robotArm = {
 	getActive: () => robotArmFetch<ActiveSession>('/sessions/active'),
+	getPortStatus: () => robotArmFetch<PortStatus>('/ports/status'),
 	stop: () => robotArmFetch<{ stopped_run_id: string | null }>('/sessions/stop', { method: 'POST' }),
 	startTeleop: (body: { rate_hz?: number; duration_s?: number; triggered_by?: TriggeredBy }) =>
 		robotArmFetch<SessionStarted>('/teleop/start', { method: 'POST', body }),

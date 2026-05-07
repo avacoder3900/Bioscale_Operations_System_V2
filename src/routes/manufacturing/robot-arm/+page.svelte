@@ -13,6 +13,15 @@
 
 	let active = $derived(isActive(data.active) ? data.active : null);
 	let connectError = $derived(isError(data.active) ? data.active.error : null);
+	let ports = $derived(data.portStatus);
+
+	let leaderReady = $derived(!!ports?.leader.present);
+	let followerReady = $derived(!!ports?.follower.present);
+	let bothReady = $derived(leaderReady && followerReady && !connectError);
+
+	let showAdvanced = $state(false);
+	let showRecord = $state(false);
+	let showReplay = $state(false);
 
 	function statusColor(status: string): string {
 		if (status === 'running' || status === 'pending') return 'text-yellow-400';
@@ -32,9 +41,23 @@
 			.toLowerCase();
 		return `${date}, ${time}`;
 	}
+
+	function portPillStyle(p: { present: boolean; in_use: boolean } | undefined): string {
+		if (!p) return 'border-gray-500/40 bg-gray-900/20 text-gray-400';
+		if (p.in_use) return 'border-yellow-500/50 bg-yellow-900/20 text-yellow-300';
+		if (p.present) return 'border-green-500/50 bg-green-900/20 text-green-300';
+		return 'border-red-500/50 bg-red-900/20 text-red-300';
+	}
+
+	function portPillLabel(p: { present: boolean; in_use: boolean } | undefined): string {
+		if (!p) return 'unknown';
+		if (p.in_use) return 'in use';
+		if (p.present) return 'connected';
+		return 'not detected';
+	}
 </script>
 
-<div class="mx-auto max-w-6xl space-y-8 p-4">
+<div class="mx-auto max-w-6xl space-y-6 p-4">
 	<div class="flex items-center justify-between">
 		<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Robot Arm</h1>
 		<a
@@ -46,30 +69,58 @@
 		</a>
 	</div>
 
-	<!-- Connection / active session banner -->
-	{#if connectError}
-		<div class="rounded border border-red-500/40 bg-red-900/10 p-3 text-sm">
-			<p class="font-medium text-red-400">Cannot reach robot-arm Pi</p>
-			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">{connectError}</p>
-			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
-				Check that ROBOT_ARM_BASE_URL is set in BIMS .env and the Pi is up.
-			</p>
+	<!-- Port status pills -->
+	<div class="flex flex-wrap gap-3">
+		<div
+			class="flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium {portPillStyle(
+				ports?.leader
+			)}"
+		>
+			<span
+				class="inline-block h-2 w-2 rounded-full {ports?.leader.in_use
+					? 'bg-yellow-400'
+					: ports?.leader.present
+						? 'bg-green-400'
+						: 'bg-red-400'}"
+			></span>
+			<span>Leader</span>
+			<span class="font-mono text-xs opacity-70"
+				>{ports?.leader.port || '—'}</span
+			>
+			<span class="text-xs opacity-80">· {portPillLabel(ports?.leader)}</span>
 		</div>
-	{:else if active}
-		<div class="rounded border border-yellow-500/40 bg-yellow-900/10 p-3 text-sm">
-			<p style="color: var(--color-tron-text)">
-				<span class="font-medium text-yellow-400">{active.kind}</span> session active
-				<span class="ml-2 font-mono text-xs" style="color: var(--color-tron-text-secondary)"
-					>{active.run_id}</span
-				>
+		<div
+			class="flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium {portPillStyle(
+				ports?.follower
+			)}"
+		>
+			<span
+				class="inline-block h-2 w-2 rounded-full {ports?.follower.in_use
+					? 'bg-yellow-400'
+					: ports?.follower.present
+						? 'bg-green-400'
+						: 'bg-red-400'}"
+			></span>
+			<span>Follower</span>
+			<span class="font-mono text-xs opacity-70"
+				>{ports?.follower.port || '—'}</span
+			>
+			<span class="text-xs opacity-80">· {portPillLabel(ports?.follower)}</span>
+		</div>
+	</div>
+
+	<!-- Connect-error banner (only if Pi unreachable) -->
+	{#if connectError || !ports}
+		<div class="rounded border border-red-500/40 bg-red-900/10 p-3 text-sm">
+			<p class="font-medium text-red-400">Cannot reach robot-arm server</p>
+			{#if connectError}
+				<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
+					{connectError}
+				</p>
+			{/if}
+			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
+				Check that ROBOT_ARM_BASE_URL is set in BIMS .env and the server is running.
 			</p>
-			<form method="POST" action="?/stop" class="mt-2">
-				<button
-					type="submit"
-					class="rounded border border-red-500/50 bg-red-900/20 px-3 py-1 text-xs font-medium text-red-300 hover:bg-red-900/40"
-					>Stop session</button
-				>
-			</form>
 		</div>
 	{/if}
 
@@ -91,161 +142,218 @@
 		</div>
 	{/if}
 
-	<!-- Quick controls -->
-	<section>
-		<h2
-			class="mb-3 text-sm font-bold uppercase tracking-wider"
-			style="color: var(--color-tron-text-secondary)"
+	<!-- Hero: GO or STOP -->
+	{#if active}
+		<div
+			class="rounded-xl border-2 border-yellow-500/60 bg-yellow-900/10 p-6 text-center shadow-lg"
 		>
-			Controls
-		</h2>
-		<div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-			<!-- Teleop -->
-			<form
-				method="POST"
-				action="?/startTeleop"
-				class="space-y-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4"
+			<p class="text-xs uppercase tracking-widest text-yellow-400">Session active</p>
+			<p class="mt-1 text-2xl font-bold capitalize" style="color: var(--color-tron-text)">
+				{active.kind} running
+			</p>
+			<p
+				class="mt-1 font-mono text-xs"
+				style="color: var(--color-tron-text-secondary)"
 			>
-				<div>
-					<h3 class="font-semibold" style="color: var(--color-tron-cyan)">Leader → Follower</h3>
-					<p class="text-xs" style="color: var(--color-tron-text-secondary)">
-						Backdrive the leader; follower mirrors live.
-					</p>
-				</div>
-				<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-					Rate (Hz)
-					<input
-						type="number"
-						name="rate_hz"
-						value="10"
-						min="1"
-						max="60"
-						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
-						style="color: var(--color-tron-text)"
-					/>
-				</label>
-				<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-					Duration (s, blank = until stopped)
-					<input
-						type="number"
-						name="duration_s"
-						placeholder="e.g. 60"
-						min="1"
-						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
-						style="color: var(--color-tron-text)"
-					/>
-				</label>
+				{active.run_id}
+			</p>
+			<form method="POST" action="?/stop" class="mt-4">
 				<button
 					type="submit"
-					disabled={!!active || !!connectError}
-					class="w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-2 text-sm font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:cursor-not-allowed disabled:opacity-40"
-					style="color: var(--color-tron-cyan)">Start teleop</button
+					class="w-full max-w-sm rounded-lg border-2 border-red-500 bg-red-900/40 px-6 py-4 text-2xl font-bold text-red-200 shadow-lg transition-all hover:bg-red-900/60 active:scale-95"
 				>
+					STOP
+				</button>
 			</form>
+			<p class="mt-3 text-xs" style="color: var(--color-tron-text-secondary)">
+				Stops the loop on the server and disables follower torque.
+			</p>
+		</div>
+	{:else}
+		<div
+			class="rounded-xl border-2 border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-surface)] p-6 text-center"
+		>
+			<p
+				class="text-xs uppercase tracking-widest"
+				style="color: var(--color-tron-text-secondary)"
+			>
+				Leader → Follower teleop
+			</p>
+			<p class="mt-1 text-lg font-semibold" style="color: var(--color-tron-text)">
+				Backdrive the leader. Follower mirrors live at 10&nbsp;Hz.
+			</p>
+			<form method="POST" action="?/startTeleop" class="mt-4">
+				{#if showAdvanced}
+					<div class="mb-3 grid grid-cols-2 gap-3 text-left text-xs">
+						<label style="color: var(--color-tron-text-secondary)">
+							Rate (Hz)
+							<input
+								type="number"
+								name="rate_hz"
+								value="10"
+								min="1"
+								max="60"
+								class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
+								style="color: var(--color-tron-text)"
+							/>
+						</label>
+						<label style="color: var(--color-tron-text-secondary)">
+							Duration (s, blank = until stopped)
+							<input
+								type="number"
+								name="duration_s"
+								placeholder="e.g. 60"
+								min="1"
+								class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
+								style="color: var(--color-tron-text)"
+							/>
+						</label>
+					</div>
+				{/if}
+				<button
+					type="submit"
+					disabled={!bothReady}
+					class="w-full max-w-sm rounded-lg border-2 border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/10 px-6 py-4 text-3xl font-bold shadow-lg transition-all hover:bg-[var(--color-tron-cyan)]/25 active:scale-95 disabled:cursor-not-allowed disabled:border-gray-600 disabled:bg-gray-900/30 disabled:text-gray-500 disabled:shadow-none"
+					style={bothReady ? 'color: var(--color-tron-cyan)' : ''}
+				>
+					GO
+				</button>
+			</form>
+			<button
+				type="button"
+				onclick={() => (showAdvanced = !showAdvanced)}
+				class="mt-3 text-xs underline transition-colors hover:text-[var(--color-tron-cyan)]"
+				style="color: var(--color-tron-text-secondary)"
+			>
+				{showAdvanced ? 'Hide options' : 'Advanced options'}
+			</button>
+			{#if !bothReady && !connectError && ports}
+				<p class="mt-2 text-xs text-red-400">
+					{!leaderReady && !followerReady
+						? 'Both COM ports not detected on server.'
+						: !leaderReady
+							? `Leader port ${ports.leader.port} not detected.`
+							: `Follower port ${ports.follower.port} not detected.`}
+				</p>
+			{/if}
+		</div>
+	{/if}
 
+	<!-- Secondary: Record / Replay -->
+	{#if !active}
+		<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
 			<!-- Record -->
-			<form
-				method="POST"
-				action="?/startRecord"
-				class="space-y-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4"
-			>
-				<div>
-					<h3 class="font-semibold" style="color: var(--color-tron-cyan)">Record run</h3>
-					<p class="text-xs" style="color: var(--color-tron-text-secondary)">
-						Teleop + capture frames to JSONL.
-					</p>
-				</div>
-				<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-					Run name
-					<input
-						type="text"
-						name="name"
-						placeholder="e.g. movementtest1"
-						required
-						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
-						style="color: var(--color-tron-text)"
-					/>
-				</label>
-				<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-					Rate (Hz)
-					<input
-						type="number"
-						name="rate_hz"
-						value="10"
-						min="1"
-						max="60"
-						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
-						style="color: var(--color-tron-text)"
-					/>
-				</label>
-				<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-					Duration (s, blank = until stopped)
-					<input
-						type="number"
-						name="duration_s"
-						placeholder="e.g. 30"
-						min="1"
-						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
-						style="color: var(--color-tron-text)"
-					/>
-				</label>
+			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 				<button
-					type="submit"
-					disabled={!!active || !!connectError}
-					class="w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-2 text-sm font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:cursor-not-allowed disabled:opacity-40"
-					style="color: var(--color-tron-cyan)">Start recording</button
+					type="button"
+					onclick={() => (showRecord = !showRecord)}
+					class="flex w-full items-center justify-between text-left"
 				>
-			</form>
+					<div>
+						<h3 class="font-semibold" style="color: var(--color-tron-cyan)">Record run</h3>
+						<p class="text-xs" style="color: var(--color-tron-text-secondary)">
+							Teleop and capture frames for replay later.
+						</p>
+					</div>
+					<span
+						class="text-lg transition-transform {showRecord ? 'rotate-90' : ''}"
+						style="color: var(--color-tron-text-secondary)">›</span
+					>
+				</button>
+				{#if showRecord}
+					<form method="POST" action="?/startRecord" class="mt-3 space-y-2">
+						<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
+							Run name
+							<input
+								type="text"
+								name="name"
+								placeholder="e.g. movementtest1"
+								required
+								class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
+								style="color: var(--color-tron-text)"
+							/>
+						</label>
+						<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
+							Duration (s, blank = until stopped)
+							<input
+								type="number"
+								name="duration_s"
+								placeholder="e.g. 30"
+								min="1"
+								class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
+								style="color: var(--color-tron-text)"
+							/>
+						</label>
+						<input type="hidden" name="rate_hz" value="10" />
+						<button
+							type="submit"
+							disabled={!bothReady}
+							class="w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-2 text-sm font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:cursor-not-allowed disabled:opacity-40"
+							style="color: var(--color-tron-cyan)">Start recording</button
+						>
+					</form>
+				{/if}
+			</div>
 
 			<!-- Replay -->
-			<form
-				method="POST"
-				action="?/startReplay"
-				class="space-y-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4"
-			>
-				<div>
-					<h3 class="font-semibold" style="color: var(--color-tron-cyan)">Replay saved run</h3>
-					<p class="text-xs" style="color: var(--color-tron-text-secondary)">
-						Drive follower from a recording.
-					</p>
-				</div>
-				<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-					Recording (Pi path)
-					<select
-						name="source"
-						required
-						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
-						style="color: var(--color-tron-text)"
-					>
-						<option value="">— pick one —</option>
-						{#each data.piRecordings as r (r.path)}
-							<option value={r.path}>{r.name}</option>
-						{/each}
-					</select>
-				</label>
-				<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-					Loops
-					<input
-						type="number"
-						name="loops"
-						value="1"
-						min="1"
-						max="100"
-						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
-						style="color: var(--color-tron-text)"
-					/>
-				</label>
+			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 				<button
-					type="submit"
-					disabled={!!active || !!connectError || data.piRecordings.length === 0}
-					class="w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-2 text-sm font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:cursor-not-allowed disabled:opacity-40"
-					style="color: var(--color-tron-cyan)">Start replay</button
+					type="button"
+					onclick={() => (showReplay = !showReplay)}
+					class="flex w-full items-center justify-between text-left"
 				>
-			</form>
+					<div>
+						<h3 class="font-semibold" style="color: var(--color-tron-cyan)">Replay saved run</h3>
+						<p class="text-xs" style="color: var(--color-tron-text-secondary)">
+							{data.piRecordings.length} recording{data.piRecordings.length === 1 ? '' : 's'} on server.
+						</p>
+					</div>
+					<span
+						class="text-lg transition-transform {showReplay ? 'rotate-90' : ''}"
+						style="color: var(--color-tron-text-secondary)">›</span
+					>
+				</button>
+				{#if showReplay}
+					<form method="POST" action="?/startReplay" class="mt-3 space-y-2">
+						<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
+							Recording
+							<select
+								name="source"
+								required
+								class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
+								style="color: var(--color-tron-text)"
+							>
+								<option value="">— pick one —</option>
+								{#each data.piRecordings as r (r.path)}
+									<option value={r.path}>{r.name}</option>
+								{/each}
+							</select>
+						</label>
+						<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
+							Loops
+							<input
+								type="number"
+								name="loops"
+								value="1"
+								min="1"
+								max="100"
+								class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
+								style="color: var(--color-tron-text)"
+							/>
+						</label>
+						<button
+							type="submit"
+							disabled={!bothReady || data.piRecordings.length === 0}
+							class="w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-2 text-sm font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:cursor-not-allowed disabled:opacity-40"
+							style="color: var(--color-tron-cyan)">Start replay</button
+						>
+					</form>
+				{/if}
+			</div>
 		</div>
-	</section>
+	{/if}
 
-	<!-- Arms -->
+	<!-- Arms (collapsed-feel: just below the action area) -->
 	<section>
 		<h2
 			class="mb-3 text-sm font-bold uppercase tracking-wider"
@@ -337,18 +445,5 @@
 				</table>
 			</div>
 		{/if}
-	</section>
-
-	<!-- Datasets summary -->
-	<section>
-		<h2
-			class="mb-3 text-sm font-bold uppercase tracking-wider"
-			style="color: var(--color-tron-text-secondary)"
-		>
-			Datasets
-		</h2>
-		<p class="text-sm" style="color: var(--color-tron-text-secondary)">
-			{data.datasetCount} recorded session{data.datasetCount === 1 ? '' : 's'} on disk.
-		</p>
 	</section>
 </div>

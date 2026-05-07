@@ -20,6 +20,14 @@ async function safeActive() {
 	}
 }
 
+async function safePortStatus() {
+	try {
+		return await robotArm.getPortStatus();
+	} catch {
+		return null;
+	}
+}
+
 async function safeRecordings() {
 	try {
 		const res = await robotArm.listRecordings();
@@ -34,7 +42,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
-	const [arms, recentRuns, datasetCount, active, piRecordings] = await Promise.all([
+	const [arms, recentRuns, datasetCount, active, piRecordings, portStatus] = await Promise.all([
 		RobotArm.find({ isActive: true })
 			.select('_id role serialNumber comPort modelName voltage firmwareVersion')
 			.sort({ role: 1 })
@@ -46,7 +54,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			.lean(),
 		RobotArmDataset.countDocuments({}),
 		safeActive(),
-		safeRecordings()
+		safeRecordings(),
+		safePortStatus()
 	]);
 
 	return {
@@ -54,7 +63,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		recentRuns: JSON.parse(JSON.stringify(recentRuns)),
 		datasetCount,
 		active,
-		piRecordings
+		piRecordings,
+		portStatus
 	};
 };
 
