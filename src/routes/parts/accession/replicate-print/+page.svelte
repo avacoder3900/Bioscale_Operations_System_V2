@@ -400,6 +400,52 @@
 				{generated ? 'Preview — exact simulation of the sheet that will print' : 'Pick parts and generate to preview the sheet'}
 			</p>
 		</div>
+
+		<!-- On-screen legend: which part is at which sheet position. The text printed
+		     under each QR is small at print scale, so this table gives a quick
+		     visual cross-check before clicking Print. -->
+		{#if generated && orderedSelected.length > 0}
+			<div
+				class="rounded border p-3"
+				style="background: var(--color-tron-bg-card); border-color: var(--color-tron-border)"
+			>
+				<p class="text-[10px] uppercase tracking-wider mb-2" style="color: var(--color-tron-text-secondary)">
+					Sheet legend — verify before printing
+				</p>
+				<div class="overflow-x-auto">
+					<table class="w-full text-sm">
+						<thead style="background: var(--color-tron-bg-secondary)">
+							<tr>
+								<th class="text-left p-2 text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">#</th>
+								<th class="text-left p-2 text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Cells</th>
+								<th class="text-left p-2 text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Rows</th>
+								<th class="text-left p-2 text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Part #</th>
+								<th class="text-left p-2 text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Name</th>
+								<th class="text-left p-2 text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Barcode</th>
+								<th class="text-right p-2 text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Qty</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each orderedSelected as part, idx}
+								{@const startCell = idx * replicates}
+								{@const endCell = startCell + replicates - 1}
+								{@const startRow = Math.floor(startCell / 8) + 1}
+								{@const endRow = Math.floor(endCell / 8) + 1}
+								<tr class="border-t" style="border-color: var(--color-tron-border); color: var(--color-tron-text)">
+									<td class="p-2 font-mono text-xs" style="color: var(--color-tron-cyan)">{idx + 1}</td>
+									<td class="p-2 font-mono text-xs" style="color: var(--color-tron-text-secondary)">{startCell + 1}–{endCell + 1}</td>
+									<td class="p-2 font-mono text-xs" style="color: var(--color-tron-text-secondary)">{startRow === endRow ? `R${startRow}` : `R${startRow}–R${endRow}`}</td>
+									<td class="p-2 font-mono text-xs">{part.partNumber}</td>
+									<td class="p-2">{part.name}</td>
+									<td class="p-2 font-mono text-xs" style="color: var(--color-tron-text-secondary)">{part.barcode}</td>
+									<td class="p-2 text-right font-mono text-xs">{replicates}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		{/if}
 	</div>
 
 	<!-- The actual sheet — visible on screen and used as the print render. -->
