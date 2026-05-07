@@ -341,6 +341,25 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		forbiddenTools: ['trace_cartridge', 'backward_genealogy'],
 		expectedAnswerPhrases: [/cart|result|not found|no cartridge/i],
 		notes: 'Phase E1 — find_research_cartridge for research-side fields (result, analysis, reagentChain, rawData). Should NOT route to trace_cartridge/backward_genealogy (those are mfg lineage). UUID may not exist in DB — graceful "not found" is acceptable.'
+	},
+
+	// === Phase E2: reagent catalog + inventory tools ===
+	{
+		id: 'research-list-antibodies',
+		category: 'research',
+		text: 'What antibody types do we have in the reagent catalog?',
+		requiredTools: ['list_reagent_catalog'],
+		forbiddenTools: ['list_low_inventory_parts', 'find_part'],
+		expectedAnswerPhrases: [/antibody|antibodies|catalog/i],
+		notes: 'Phase E2 — list_reagent_catalog with category=antibody. Should NOT route to part-catalog tools (list_low_inventory_parts/find_part are for the BIMS PartDefinition catalog, not the research reagent catalog).'
+	},
+	{
+		id: 'research-inventory-by-variant',
+		category: 'research',
+		text: 'How much Active Beads — Cortisol do we have on hand, broken down by variant?',
+		requiredTools: ['count_inventory_by_variant'],
+		expectedAnswerPhrases: [/variant|cortisol|active bead/i],
+		notes: 'Phase E2 — by-variant rollup. Agent should first find_reagent_catalog to get the catalogId, then count_inventory_by_variant to get the per-variant counts. Critical: list_reagent_inventory without a variantKey filter would silently pool different antibody clones — that\'s why count_inventory_by_variant exists.'
 	}
 ];
 

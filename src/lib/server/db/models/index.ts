@@ -61,6 +61,8 @@ export { ServiceTicket } from './service-ticket.js';
 
 // Research-v2 collections — shared Mongo Atlas, BIMS reads only via Ask BIMS tools.
 export { Experiment } from './experiment.js';
+export { ReagentCatalog } from './reagent-catalog.js';
+export { ReagentInventory } from './reagent-inventory.js';
 
 // Sensor Configuration
 export { SensorConfig } from './sensor-config.js';

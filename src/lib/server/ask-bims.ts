@@ -4,7 +4,7 @@ import {
 	PartDefinition, Equipment, CartridgeRecord, ReagentBatchRecord,
 	ReceivingLot, CalibrationRecord, ServiceTicket, TemperatureReading,
 	WorkInstruction, LotRecord, InventoryTransaction, AskBimsCostLog,
-	Experiment
+	Experiment, ReagentCatalog, ReagentInventory
 } from './db';
 import { getCheckedOutCartridgeIds } from './checkout-utils';
 import { TIER_1_REFERENCE } from './ask-bims-tier1';
@@ -680,6 +680,92 @@ Result includes a defensive note when any cartridge carries the legacy currentPh
 				armIndex: { type: 'number', description: 'Arm index (0-based)' }
 			},
 			required: ['experimentId', 'armIndex']
+		}
+	},
+	{
+		name: 'list_reagent_catalog',
+		description: `List entries from the research-v2 reagent type registry (catalog of stock + prepared reagents, with parent/variant tree).
+Source: ReagentCatalog model. Each entry: name, parentId (variant tree), type ('stock' | 'prepared'), category, manufacturer, default concentration, variants[], protocolDefinitionId.
+
+Use when: "what antibodies do we have", "list active beads variants", "stock chemicals in catalog", browsing the reagent type registry.
+Don't use for: physical items in the lab (use list_reagent_inventory); a single catalog entry by ID (use find_reagent_catalog); how to MAKE a prepared reagent (use find_protocol).
+
+Caps: 50 results. variants[].parameterValues are immutable per DOMAIN-26 — never edit; create a new variant.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				category: { type: 'string', description: 'Optional — antibody | bead | buffer | chemical | QD | linker | protein | etc.' },
+				type: { type: 'string', description: 'Optional — stock | prepared' },
+				hasVariants: { type: 'boolean', description: 'Optional — true to include only entries with at least one variant' },
+				limit: { type: 'number', description: 'Max results (default 30, max 50)' }
+			}
+		}
+	},
+	{
+		name: 'find_reagent_catalog',
+		description: `Look up a reagent catalog entry by _id (nanoid) or name fragment. Returns full entry including variants.
+Source: ReagentCatalog model.
+
+Use when: user asks about a specific reagent type — "tell me about Active Beads — Cortisol", "what variants of BSA do we have".
+Don't use for: a physical inventory item (use find_reagent_inventory); listing the whole catalog (use list_reagent_catalog).`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				query: { type: 'string', description: 'Catalog _id (nanoid) OR name fragment (case-insensitive)' }
+			},
+			required: ['query']
+		}
+	},
+	{
+		name: 'list_reagent_inventory',
+		description: `List physical reagent items (the lab's actual barcoded bottles/tubes/vials).
+Source: ReagentInventory model. Each item: _id is the UUID barcode, catalogId→catalog entry, variantKey, type, status (active/depleted/expired/discarded), volume, location, expirationDate, preparedFromExecutionId.
+
+Use when: "what's expiring in the next 30 days", "active items of catalog X", "what bead variants do we have on hand", physical-stock questions.
+Don't use for: catalog entries (use list_reagent_catalog); a single item by barcode (use find_reagent_inventory); per-variant counts/rollups (use count_inventory_by_variant — required to avoid pooling different antibody clones).
+
+Defaults: status='active'. Pass status='all' for everything. Caps: 50 results.
+
+Variant rule: when filtering by catalogId, ALSO pass variantKey when the user mentions a specific variant — different variants are different reagents and should never be pooled.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				catalogId: { type: 'string', description: 'Optional — filter to one catalog entry' },
+				variantKey: { type: 'string', description: 'Optional — filter to one variant within a catalog (use with catalogId)' },
+				status: { type: 'string', description: 'active | depleted | expired | discarded | all (default: active)' },
+				nearExpiryDays: { type: 'number', description: 'Optional — only items expiring within this many days (active only)' },
+				limit: { type: 'number', description: 'Max results (default 30, max 50)' }
+			}
+		}
+	},
+	{
+		name: 'find_reagent_inventory',
+		description: `Look up a single physical reagent item by its UUID barcode. Resolves catalogName and variantLabel via a join to ReagentCatalog so the answer surfaces both the type and the specific variant.
+Source: ReagentInventory + ReagentCatalog.
+
+Use when: "what's in inventory item X", "scan barcode Y", any single-item lookup.
+Don't use for: catalog entries (use find_reagent_catalog); listing many items (use list_reagent_inventory).`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				barcode: { type: 'string', description: 'UUID barcode (the inventory item _id)' }
+			},
+			required: ['barcode']
+		}
+	},
+	{
+		name: 'count_inventory_by_variant',
+		description: `Aggregate inventory counts for one catalog entry, GROUPED BY variantKey + status. The right tool for "how much of variant X do we have" — never use list_reagent_inventory + manual count for this, because rolling up by catalogId without variantKey would pool different variants together (per DOMAIN-26 immutability rule).
+Source: ReagentInventory aggregate by (variantKey, status).
+
+Use when: "inventory by variant for catalog X", "how many active items per variant", catalog-level rollups.
+Don't use for: catalog metadata (use find_reagent_catalog); listing individual items (use list_reagent_inventory).`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				catalogId: { type: 'string', description: 'ReagentCatalog _id to roll up' }
+			},
+			required: ['catalogId']
 		}
 	},
 	{
@@ -2281,6 +2367,237 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 				cartridgeCount: items.length,
 				cartridges: items,
 				source: 'Experiment.arms[armIndex].cartridges joined with CartridgeRecord by barcode',
+				dataIntegrityNotes: notes
+			};
+		}
+		case 'list_reagent_catalog': {
+			const filter: any = {};
+			if (input.category) filter.category = input.category;
+			if (input.type) filter.type = input.type;
+			if (input.hasVariants) filter['variants.0'] = { $exists: true };
+			const limit = Math.min(Math.max(Number(input.limit ?? 30), 1), 50);
+			const entries = await ReagentCatalog.find(filter)
+				.select('_id name parentId type category subcategory manufacturer catalogNumber defaultConcentration defaultConcentrationUnit storageConditions description tags protocolDefinitionId variants')
+				.sort({ category: 1, name: 1 })
+				.limit(limit + 1)
+				.lean() as any[];
+			const truncated = entries.length > limit;
+			return {
+				catalog: entries.slice(0, limit).map(e => ({
+					_id: e._id,
+					name: e.name,
+					parentId: e.parentId,
+					type: e.type,
+					category: e.category,
+					subcategory: e.subcategory,
+					manufacturer: e.manufacturer,
+					catalogNumber: e.catalogNumber,
+					defaultConcentration: e.defaultConcentration,
+					defaultConcentrationUnit: e.defaultConcentrationUnit,
+					storageConditions: e.storageConditions,
+					description: e.description,
+					protocolDefinitionId: e.protocolDefinitionId,
+					variantCount: Array.isArray(e.variants) ? e.variants.length : 0,
+					activeVariantCount: Array.isArray(e.variants) ? e.variants.filter((v: any) => v.isActive !== false).length : 0
+				})),
+				totalReturned: Math.min(entries.length, limit),
+				truncated,
+				source: 'ReagentCatalog model — research-v2 collection',
+				dataIntegrityNotes: []
+			};
+		}
+		case 'find_reagent_catalog': {
+			const q = String(input.query ?? '').trim();
+			if (!q) return { error: 'query required', source: 'ReagentCatalog' };
+			let entry = await ReagentCatalog.findById(q).lean().catch(() => null) as any;
+			if (!entry) {
+				const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+				entry = await ReagentCatalog.findOne({ name: { $regex: escaped, $options: 'i' } }).lean() as any;
+			}
+			if (!entry) {
+				return {
+					found: false,
+					query: q,
+					source: 'ReagentCatalog model',
+					dataIntegrityNotes: [`No catalog entry matched "${q}". Try a name fragment or the entry _id (nanoid).`]
+				};
+			}
+			return {
+				found: true,
+				_id: entry._id,
+				name: entry.name,
+				parentId: entry.parentId,
+				type: entry.type,
+				category: entry.category,
+				subcategory: entry.subcategory,
+				manufacturer: entry.manufacturer,
+				catalogNumber: entry.catalogNumber,
+				defaultConcentration: entry.defaultConcentration,
+				defaultConcentrationUnit: entry.defaultConcentrationUnit,
+				molecularWeight: entry.molecularWeight,
+				storageConditions: entry.storageConditions,
+				costPerUnit: entry.costPerUnit,
+				costUnitDescription: entry.costUnitDescription,
+				description: entry.description,
+				tags: entry.tags,
+				protocolDefinitionId: entry.protocolDefinitionId,
+				variants: Array.isArray(entry.variants) ? entry.variants.map((v: any) => ({
+					key: v.key,
+					label: v.label,
+					description: v.description,
+					parameterValues: v.parameterValues,
+					isActive: v.isActive !== false,
+					createdAt: v.createdAt
+				})) : [],
+				source: 'ReagentCatalog model',
+				dataIntegrityNotes: []
+			};
+		}
+		case 'list_reagent_inventory': {
+			const statusInput = input.status ? String(input.status).trim() : 'active';
+			const statusFilter = statusInput === 'all' ? null : statusInput;
+			const filter: any = {};
+			if (input.catalogId) filter.catalogId = input.catalogId;
+			if (input.variantKey) filter.variantKey = input.variantKey;
+			if (statusFilter) filter.status = statusFilter;
+			if (input.nearExpiryDays) {
+				const days = Math.max(Number(input.nearExpiryDays), 1);
+				const cutoff = new Date(Date.now() + days * 86400e3).toISOString().slice(0, 10);
+				const today = new Date().toISOString().slice(0, 10);
+				filter.expirationDate = { $gte: today, $lte: cutoff };
+				if (!statusFilter) filter.status = 'active';
+			}
+			const limit = Math.min(Math.max(Number(input.limit ?? 30), 1), 50);
+			const items = await ReagentInventory.find(filter)
+				.select('_id catalogId catalogName variantKey type manufacturerLotId catalogNumber manufacturer receivedDate expirationDate preparedFromExecutionId preparedDate concentration concentrationUnit volume initialVolume location status notes')
+				.sort({ status: 1, expirationDate: 1, enteredDate: -1 })
+				.limit(limit + 1)
+				.lean() as any[];
+			const truncated = items.length > limit;
+			return {
+				inventory: items.slice(0, limit),
+				totalReturned: Math.min(items.length, limit),
+				truncated,
+				appliedFilters: { catalogId: input.catalogId, variantKey: input.variantKey, status: statusFilter, nearExpiryDays: input.nearExpiryDays },
+				source: 'ReagentInventory model — research-v2 collection',
+				dataIntegrityNotes: input.catalogId && !input.variantKey
+					? ['catalogId without variantKey: results pool ALL variants of this catalog into one list. If the user asked about a specific variant, re-call with variantKey set; for catalog-level rollups use count_inventory_by_variant instead.']
+					: []
+			};
+		}
+		case 'find_reagent_inventory': {
+			const barcode = String(input.barcode ?? '').trim();
+			if (!barcode) return { error: 'barcode required', source: 'ReagentInventory' };
+			const item = await ReagentInventory.findById(barcode).lean() as any;
+			if (!item) {
+				return {
+					found: false,
+					barcode,
+					source: 'ReagentInventory model',
+					dataIntegrityNotes: [`No inventory item with barcode "${barcode}".`]
+				};
+			}
+			let variantLabel: string | null = null;
+			let parentCatalog: any = null;
+			if (item.catalogId) {
+				parentCatalog = await ReagentCatalog.findById(item.catalogId)
+					.select('name type category subcategory variants')
+					.lean() as any;
+				if (parentCatalog?.variants && item.variantKey) {
+					const variant = parentCatalog.variants.find((v: any) => v.key === item.variantKey);
+					if (variant) variantLabel = variant.label;
+				}
+			}
+			const notes: string[] = [];
+			if (item.catalogId && !parentCatalog) {
+				notes.push(`catalogId "${item.catalogId}" did not resolve to a ReagentCatalog entry — orphan catalog reference.`);
+			}
+			if (item.variantKey && parentCatalog && !variantLabel) {
+				notes.push(`variantKey "${item.variantKey}" did not match any variant in catalog "${parentCatalog.name}". Variant may have been deactivated or removed.`);
+			}
+			return {
+				found: true,
+				barcode: item._id,
+				catalogId: item.catalogId,
+				catalogName: item.catalogName ?? parentCatalog?.name,
+				variantKey: item.variantKey,
+				variantLabel,
+				type: item.type,
+				manufacturerLotId: item.manufacturerLotId,
+				catalogNumber: item.catalogNumber,
+				manufacturer: item.manufacturer,
+				receivedDate: item.receivedDate,
+				expirationDate: item.expirationDate,
+				preparedFromExecutionId: item.preparedFromExecutionId,
+				preparedDate: item.preparedDate,
+				preparedBy: item.preparedBy,
+				concentration: item.concentration,
+				concentrationUnit: item.concentrationUnit,
+				volume: item.volume,
+				initialVolume: item.initialVolume,
+				location: item.location,
+				status: item.status,
+				inspectionCount: Array.isArray(item.inspections) ? item.inspections.length : 0,
+				notes: item.notes,
+				source: 'ReagentInventory + ReagentCatalog (variant resolved)',
+				dataIntegrityNotes: notes
+			};
+		}
+		case 'count_inventory_by_variant': {
+			const catalogId = String(input.catalogId ?? '').trim();
+			if (!catalogId) return { error: 'catalogId required', source: 'ReagentInventory' };
+			const catalog = await ReagentCatalog.findById(catalogId)
+				.select('name type variants')
+				.lean() as any;
+			if (!catalog) {
+				return {
+					error: `Catalog entry "${catalogId}" not found.`,
+					source: 'ReagentCatalog'
+				};
+			}
+			const agg = await ReagentInventory.aggregate([
+				{ $match: { catalogId } },
+				{
+					$group: {
+						_id: { variantKey: '$variantKey', status: '$status' },
+						count: { $sum: 1 },
+						totalVolume: { $sum: { $ifNull: ['$volume', 0] } }
+					}
+				}
+			]);
+			const variantMap = new Map<string, any>();
+			for (const row of agg) {
+				const key = row._id.variantKey ?? '';
+				const status = row._id.status ?? 'unknown';
+				if (!variantMap.has(key)) variantMap.set(key, { variantKey: key, label: null, byStatus: {}, totals: { count: 0, totalVolume: 0 } });
+				const entry = variantMap.get(key);
+				entry.byStatus[status] = { count: row.count, totalVolume: row.totalVolume };
+				entry.totals.count += row.count;
+				entry.totals.totalVolume += row.totalVolume;
+			}
+			const declaredVariants = Array.isArray(catalog.variants) ? catalog.variants : [];
+			for (const v of declaredVariants) {
+				if (!variantMap.has(v.key)) {
+					variantMap.set(v.key, { variantKey: v.key, label: v.label, byStatus: {}, totals: { count: 0, totalVolume: 0 } });
+				} else {
+					variantMap.get(v.key).label = v.label;
+				}
+			}
+			const variants = [...variantMap.values()].sort((a, b) =>
+				(b.totals.count - a.totals.count) || String(a.variantKey).localeCompare(String(b.variantKey))
+			);
+			const totalCount = variants.reduce((s, v) => s + v.totals.count, 0);
+			const noVariantBucket = variants.find(v => v.variantKey === '');
+			const notes: string[] = [];
+			if (noVariantBucket && declaredVariants.length > 0) {
+				notes.push(`${noVariantBucket.totals.count} inventory item(s) for "${catalog.name}" have no variantKey but the catalog has ${declaredVariants.length} declared variants — these are legacy items from before variant tracking; encourage operators to assign a variant.`);
+			}
+			return {
+				catalog: { _id: catalogId, name: catalog.name, type: catalog.type },
+				totalCount,
+				variants,
+				declaredVariantCount: declaredVariants.length,
+				source: 'ReagentInventory aggregate by (variantKey, status); catalog metadata from ReagentCatalog.variants',
 				dataIntegrityNotes: notes
 			};
 		}
