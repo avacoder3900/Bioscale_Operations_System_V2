@@ -35,7 +35,7 @@ Filled in as the research streams complete. Status as of 2026-05-07:
 
 | Workstream | Detailed plan doc | Status |
 |---|---|---|
-| ERP integration | `docs/erp-integration-master-plan.md` | ⏳ research agent running (largest scope, longest doc) |
+| ERP integration | `docs/erp-integration-master-plan.md` | ✅ written 2026-05-07 — synthesizes 13 deep-dive chapters into a 10-phase buildout |
 | Ask BIMS markdown context | `docs/ask-bims-markdown-context.md` | ✅ written 2026-05-07 |
 | Scanner automation | `docs/scanner-automation-plan.md` | ✅ written 2026-05-07 |
 | Opentrons integration | `docs/opentrons-integration-plan.md` | ✅ written 2026-05-07 |
