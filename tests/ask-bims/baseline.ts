@@ -399,6 +399,17 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		requiredTools: ['trace_reagent_chain'],
 		expectedAnswerPhrases: [/not found|no cartridge|empty|no chain|deferred|attach/i],
 		notes: 'Phase E4 — graceful empty-state handling. Either "cartridge not found" (most likely) or "reagentChain is empty" with the explanation that the attach UI is deferred per Jacob.'
+	},
+
+	// === Phase E5: samples + analytes + analysis profiles + calibrated analyses ===
+	{
+		id: 'research-list-analytes',
+		category: 'research',
+		text: 'What analytes do we measure and what are their reference ranges?',
+		requiredTools: ['list_analytes'],
+		forbiddenTools: ['list_low_inventory_parts', 'find_part', 'list_reagent_catalog'],
+		expectedAnswerPhrases: [/analyte|reference range|units|measure/i],
+		notes: 'Phase E5 — list_analytes returns research-side measurement targets with units, dynamicRange, lod, loq, referenceRange. Should NOT route to part-catalog or reagent-catalog tools.'
 	}
 ];
 

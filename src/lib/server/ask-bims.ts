@@ -5,7 +5,8 @@ import {
 	ReceivingLot, CalibrationRecord, ServiceTicket, TemperatureReading,
 	WorkInstruction, LotRecord, InventoryTransaction, AskBimsCostLog,
 	Experiment, ReagentCatalog, ReagentInventory,
-	ProtocolDefinition, ProtocolExecution
+	ProtocolDefinition, ProtocolExecution,
+	Sample, Analyte, AnalysisProfile, CalibratedAnalysis
 } from './db';
 import { getCheckedOutCartridgeIds } from './checkout-utils';
 import { TIER_1_REFERENCE } from './ask-bims-tier1';
@@ -839,6 +840,71 @@ Don't use for: listing many executions (use list_protocol_executions); the proto
 				executionId: { type: 'string', description: 'ProtocolExecution _id (nanoid)' }
 			},
 			required: ['executionId']
+		}
+	},
+	{
+		name: 'list_samples',
+		description: `List experiment samples (research-v2). Each sample: experimentId, analyteId+name, sampleNumber, concentration, diluent, matrix, description.
+Source: Sample model.
+
+Use when: "samples in experiment X", "samples for analyte Y", "what's been collected", sample-registry questions.
+Don't use for: cartridge sample fields (use find_research_cartridge — that returns the cart's sample sub-doc).`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				experimentId: { type: 'string', description: 'Optional — filter to one experiment' },
+				analyteId: { type: 'string', description: 'Optional — filter to one analyte' },
+				limit: { type: 'number', description: 'Max results (default 50, max 200)' }
+			}
+		}
+	},
+	{
+		name: 'list_analytes',
+		description: `List the analytes registered in research-v2 (what the lab measures).
+Source: Analyte model. Each: name, units, dynamicRange{low,high}, lod, loq, referenceRange{low,high}, description.
+
+Use when: "what do we measure", "list analytes", "what's the LOD for X", reference-range questions.
+Don't use for: sample concentrations (use list_samples); the assay BCODE catalog (use find_part for PT-CT-XXX).`,
+		input_schema: { type: 'object', properties: {} }
+	},
+	{
+		name: 'list_analysis_profiles',
+		description: `List analysis profiles (raw-data processing configs).
+Source: AnalysisProfile model. Each profile sets sumColumns (default f1..f8 + clear + nir), denominatorColumn (f3), ratioNumerators (f5,f7), output columns and channels.
+
+Use when: "what analysis profiles exist", "how do we process spectro data", "configured ratios for X assay".
+Don't use for: actual analysis runs on a cartridge (those live on the cart's analysis field — use find_research_cartridge); calibrated analyses (use list_calibrated_analyses).`,
+		input_schema: { type: 'object', properties: {} }
+	},
+	{
+		name: 'list_calibrated_analyses',
+		description: `List calibrated analyses — calibration overlays on AnalysisProfile that apply per-cartridge channel exclusions and a correction exponent.
+Source: CalibratedAnalysis model. Each: name, baseProfileId, cartridgeIds[], excludedChannels[], beadBarcode, tracerBarcode, correctionExponent, results, lastRunAt.
+
+Use when: "what calibration runs do we have", "recent calibrated analyses", calibration-history questions.
+Don't use for: a single calibration run by name (use find_calibrated_analysis); the underlying analysis profile (use list_analysis_profiles).`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				name: { type: 'string', description: 'Optional — filter by name fragment (case-insensitive)' },
+				sinceDays: { type: 'number', description: 'Optional — only runs with lastRunAt within this many days' },
+				limit: { type: 'number', description: 'Max results (default 30, max 50)' }
+			}
+		}
+	},
+	{
+		name: 'find_calibrated_analysis',
+		description: `Look up a single calibrated analysis by _id (nanoid) or name fragment.
+Source: CalibratedAnalysis model.
+
+Use when: "show me calibrated analysis X", "what cartridges and channel exclusions are in calibration Y".
+Don't use for: listing many (use list_calibrated_analyses); the base profile (use list_analysis_profiles).`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				query: { type: 'string', description: 'CalibratedAnalysis _id (nanoid) OR name fragment (case-insensitive)' }
+			},
+			required: ['query']
 		}
 	},
 	{
@@ -2905,6 +2971,124 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 				declaredVariantCount: declaredVariants.length,
 				source: 'ReagentInventory aggregate by (variantKey, status); catalog metadata from ReagentCatalog.variants',
 				dataIntegrityNotes: notes
+			};
+		}
+		case 'list_samples': {
+			const filter: any = {};
+			if (input.experimentId) filter.experimentId = input.experimentId;
+			if (input.analyteId) filter.analyteId = input.analyteId;
+			const limit = Math.min(Math.max(Number(input.limit ?? 50), 1), 200);
+			const samples = await Sample.find(filter)
+				.select('_id experimentId sampleNumber concentration diluent matrix analyteId analyteName description')
+				.sort({ experimentId: 1, sampleNumber: 1 })
+				.limit(limit + 1)
+				.lean() as any[];
+			const truncated = samples.length > limit;
+			return {
+				samples: samples.slice(0, limit),
+				totalReturned: Math.min(samples.length, limit),
+				truncated,
+				source: 'Sample model — research-v2 collection',
+				dataIntegrityNotes: []
+			};
+		}
+		case 'list_analytes': {
+			const analytes = await Analyte.find()
+				.select('_id name units dynamicRange lod loq referenceRange description')
+				.sort({ name: 1 })
+				.lean() as any[];
+			return {
+				analytes,
+				totalReturned: analytes.length,
+				source: 'Analyte model — research-v2 collection',
+				dataIntegrityNotes: []
+			};
+		}
+		case 'list_analysis_profiles': {
+			const profiles = await AnalysisProfile.find()
+				.select('_id name description scanGroupDetection scanGroupLabels sumColumns denominatorColumn ratioNumerators ratioScanGroups outputColumns outputScanGroups outputChannels')
+				.sort({ name: 1 })
+				.lean() as any[];
+			return {
+				profiles,
+				totalReturned: profiles.length,
+				source: 'AnalysisProfile model — research-v2 collection',
+				dataIntegrityNotes: []
+			};
+		}
+		case 'list_calibrated_analyses': {
+			const filter: any = {};
+			if (input.name) {
+				const escaped = String(input.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+				filter.name = { $regex: escaped, $options: 'i' };
+			}
+			if (input.sinceDays) {
+				const cutoff = new Date(Date.now() - Number(input.sinceDays) * 86400e3).toISOString();
+				filter.lastRunAt = { $gte: cutoff };
+			}
+			const limit = Math.min(Math.max(Number(input.limit ?? 30), 1), 50);
+			const items = await CalibratedAnalysis.find(filter)
+				.select('_id name description baseProfileId cartridgeIds beadBarcode tracerBarcode correctionExponent lastRunAt lastRunBy createdAt')
+				.sort({ lastRunAt: -1, createdAt: -1 })
+				.limit(limit + 1)
+				.lean() as any[];
+			const truncated = items.length > limit;
+			return {
+				calibratedAnalyses: items.slice(0, limit).map((c: any) => ({
+					_id: c._id,
+					name: c.name,
+					description: c.description,
+					baseProfileId: c.baseProfileId,
+					cartridgeCount: Array.isArray(c.cartridgeIds) ? c.cartridgeIds.length : 0,
+					beadBarcode: c.beadBarcode,
+					tracerBarcode: c.tracerBarcode,
+					correctionExponent: c.correctionExponent,
+					lastRunAt: c.lastRunAt,
+					lastRunBy: c.lastRunBy,
+					createdAt: c.createdAt
+				})),
+				totalReturned: Math.min(items.length, limit),
+				truncated,
+				source: 'CalibratedAnalysis model — research-v2 collection',
+				dataIntegrityNotes: []
+			};
+		}
+		case 'find_calibrated_analysis': {
+			const q = String(input.query ?? '').trim();
+			if (!q) return { error: 'query required', source: 'CalibratedAnalysis' };
+			let item = await CalibratedAnalysis.findById(q).lean().catch(() => null) as any;
+			if (!item) {
+				const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+				item = await CalibratedAnalysis.findOne({ name: { $regex: escaped, $options: 'i' } })
+					.sort({ lastRunAt: -1 })
+					.lean() as any;
+			}
+			if (!item) {
+				return {
+					found: false,
+					query: q,
+					source: 'CalibratedAnalysis model',
+					dataIntegrityNotes: [`No calibrated analysis matched "${q}". Try a name fragment or the _id.`]
+				};
+			}
+			return {
+				found: true,
+				_id: item._id,
+				name: item.name,
+				description: item.description,
+				baseProfileId: item.baseProfileId,
+				cartridgeIds: item.cartridgeIds,
+				cartridgeCount: Array.isArray(item.cartridgeIds) ? item.cartridgeIds.length : 0,
+				excludedChannels: item.excludedChannels,
+				beadBarcode: item.beadBarcode,
+				tracerBarcode: item.tracerBarcode,
+				correctionExponent: item.correctionExponent,
+				resultsPresent: !!item.results,
+				lastRunAt: item.lastRunAt,
+				lastRunBy: item.lastRunBy,
+				createdAt: item.createdAt,
+				source: 'CalibratedAnalysis model',
+				dataIntegrityNotes: []
 			};
 		}
 		case 'trace_reagent_chain': {

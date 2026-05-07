@@ -65,6 +65,10 @@ export { ReagentCatalog } from './reagent-catalog.js';
 export { ReagentInventory } from './reagent-inventory.js';
 export { ProtocolDefinition } from './protocol-definition.js';
 export { ProtocolExecution } from './protocol-execution.js';
+export { Sample } from './sample.js';
+export { Analyte } from './analyte.js';
+export { AnalysisProfile } from './analysis-profile.js';
+export { CalibratedAnalysis } from './calibrated-analysis.js';
 
 // Sensor Configuration
 export { SensorConfig } from './sensor-config.js';
