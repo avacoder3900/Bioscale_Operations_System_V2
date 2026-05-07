@@ -8,6 +8,7 @@ import {
 import { getCheckedOutCartridgeIds } from './checkout-utils';
 import { TIER_1_REFERENCE } from './ask-bims-tier1';
 import { searchDocs } from './docs-search';
+import { lookupEquipment } from './equipment-datasheets';
 
 /**
  * Denied collections (principle #9 — never queryable through Ask BIMS):
@@ -607,6 +608,25 @@ When grounding an answer in a result, cite as: "Per WI-XX (v<N>, effective YYYY-
 				limit: { type: 'number', description: 'Max WIs returned (default 5, max 20)' }
 			},
 			required: ['query']
+		}
+	},
+	{
+		name: 'lookup_equipment_datasheet',
+		description: `Look up equipment specs (size, power, location, manufacturer datasheet URL) from the BT and Fannin equipment lists.
+Source: data/equipment-datasheets/*.csv (bundled at build time). Each row has Tag # (e.g. B-01, F-12, E-94), Equipment name, Bench/Floor, Location, dimensions (W/D/H), Power (V), Watts, Amps, Generator flag, Notes, Total Linch, Datasheet URL, and (Fannin only) Status / Confidence % / Claude Comments.
+
+Use when: "what's the power draw for fridge X", "spec sheet for the Nuaire incubator", "where is equipment B-04 located", "is this on the generator", "which lab has the biosafety cabinet".
+Don't use for: live equipment temperature/status (use get_current_temperatures or list_equipment); calibration history (use list_calibrations_due); generic equipment registry (use list_equipment).
+
+PDFs are NOT bundled in this phase — manufacturer datasheets are linked via the Datasheet URL field on each row. Pass that URL through verbatim when citing.
+
+Caps: 10 results, 500ms timeout. If the query is too broad and matches everything, narrow to a Tag # or a distinctive equipment-name word.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				equipmentName: { type: 'string', description: 'Equipment name fragment, Tag # (e.g. "B-01", "F-12"), or any cell value (case-insensitive substring across all columns)' }
+			},
+			required: ['equipmentName']
 		}
 	}
 ];
@@ -1938,6 +1958,29 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 				truncated: result.truncated,
 				corpusFiles: result.corpusFiles,
 				source: 'docs/ tree (markdown files; allowlist excludes session/handoff/PRDs)',
+				dataIntegrityNotes: notes
+			};
+		}
+		case 'lookup_equipment_datasheet': {
+			const q = String(input.equipmentName ?? '').trim();
+			if (!q) return { error: 'equipmentName required', source: 'data/equipment-datasheets/*.csv', sourceUrl: undefined };
+			const result = lookupEquipment(q);
+			const notes: string[] = [];
+			if (result.queryNormalized.length < 2) notes.push('Query must be at least 2 characters.');
+			if (result.timedOut) notes.push('Lookup timed out at 500ms. Try a more distinctive query.');
+			if (result.truncated) notes.push(`${result.totalAvailable} matches but capped at ${result.totalReturned}. Add the Tag # or a distinctive word to narrow.`);
+			if (result.matches.length === 0 && result.queryNormalized.length >= 2) {
+				notes.push(`No equipment matched "${q}" across ${result.corpusFiles.join(', ')}. Try a Tag # (B-XX/E-XX/F-XX), a manufacturer name, or a distinctive keyword.`);
+			}
+			notes.push('PDF datasheets are not bundled in this phase. The Datasheet URL field on each row is the manufacturer-hosted spec sheet — surface it when citing.');
+			return {
+				equipment: result.matches,
+				totalReturned: result.totalReturned,
+				totalAvailable: result.totalAvailable,
+				truncated: result.truncated,
+				corpusFiles: result.corpusFiles,
+				source: 'data/equipment-datasheets/*.csv (bundled BT + Fannin equipment lists)',
+				sourceUrl: undefined,
 				dataIntegrityNotes: notes
 			};
 		}

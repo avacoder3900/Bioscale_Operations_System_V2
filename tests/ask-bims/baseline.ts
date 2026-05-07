@@ -16,7 +16,7 @@
 
 export interface TestQuestion {
 	id: string;
-	category: 'wax' | 'temperature' | 'runs' | 'cartridges' | 'inventory' | 'equipment' | 'anti-overlap' | 'redirection' | 'phase2' | 'inline-ref' | 'docs' | 'work-instructions';
+	category: 'wax' | 'temperature' | 'runs' | 'cartridges' | 'inventory' | 'equipment' | 'anti-overlap' | 'redirection' | 'phase2' | 'inline-ref' | 'docs' | 'work-instructions' | 'datasheets';
 	text: string;
 	requiredTools: string[];
 	forbiddenTools?: string[];
@@ -301,6 +301,26 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		requiredTools: ['search_work_instructions'],
 		expectedAnswerPhrases: [/PT-CT-114/i],
 		notes: 'Phase C — find by partNumber filter. Agent should pass partNumber=PT-CT-114 to narrow. Result enumerates WIs whose current-version steps have that part requirement.'
+	},
+
+	// === Equipment datasheets (Phase D — lookup_equipment_datasheet tool) ===
+	{
+		id: 'datasheet-by-tag',
+		category: 'datasheets',
+		text: 'What are the specs on equipment B-01?',
+		requiredTools: ['lookup_equipment_datasheet'],
+		forbiddenTools: ['list_equipment', 'get_current_temperatures'],
+		expectedAnswerPhrases: [/B-?01/i, /fridge|refrigerator|cooler/i],
+		notes: 'Phase D — lookup by Tag # (B-01 = tall glass door fridge in BT). Should NOT route to list_equipment (live registry, no datasheet specs).'
+	},
+	{
+		id: 'datasheet-by-name',
+		category: 'datasheets',
+		text: 'Where is the biosafety cabinet located and what is its power draw?',
+		requiredTools: ['lookup_equipment_datasheet'],
+		forbiddenTools: ['list_equipment'],
+		expectedAnswerPhrases: [/biosafety|safety cabinet/i, /tissue|culture|F-?01|location/i],
+		notes: 'Phase D — fuzzy name match returns Fannin F-01 row (Tissue Culture lab, 120V/1150W/10A). Datasheet URL should be surfaced.'
 	}
 ];
 
