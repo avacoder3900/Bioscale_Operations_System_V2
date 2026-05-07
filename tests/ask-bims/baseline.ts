@@ -16,7 +16,7 @@
 
 export interface TestQuestion {
 	id: string;
-	category: 'wax' | 'temperature' | 'runs' | 'cartridges' | 'inventory' | 'equipment' | 'anti-overlap' | 'redirection' | 'phase2' | 'inline-ref' | 'docs';
+	category: 'wax' | 'temperature' | 'runs' | 'cartridges' | 'inventory' | 'equipment' | 'anti-overlap' | 'redirection' | 'phase2' | 'inline-ref' | 'docs' | 'work-instructions';
 	text: string;
 	requiredTools: string[];
 	forbiddenTools?: string[];
@@ -274,6 +274,33 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		requiredTools: ['search_documentation'],
 		expectedAnswerPhrases: [/AUDIT-CHECK|audit.check/i],
 		notes: 'Phase B — exercises search_documentation by doc-title reference. Answer should cite the file and surface at least one fix from the audit summary.'
+	},
+
+	// === Work instructions search (Phase C — search_work_instructions tool) ===
+	{
+		id: 'wi-search-by-number',
+		category: 'work-instructions',
+		text: 'What does WI-01 cover?',
+		requiredTools: ['search_work_instructions'],
+		forbiddenTools: ['search_documentation'],
+		expectedAnswerPhrases: [/WI-?01/i],
+		notes: 'Phase C — find by document number. Should NOT route to search_documentation (markdown corpus); WIs live in their own model.'
+	},
+	{
+		id: 'wi-search-by-keyword',
+		category: 'work-instructions',
+		text: 'Show me the work instruction for thermoseal cutting.',
+		requiredTools: ['search_work_instructions'],
+		expectedAnswerPhrases: [/thermoseal|seal/i],
+		notes: 'Phase C — find by step keyword. Tool searches step title/content for "thermoseal".'
+	},
+	{
+		id: 'wi-search-by-part',
+		category: 'work-instructions',
+		text: 'Which work instructions require part PT-CT-114?',
+		requiredTools: ['search_work_instructions'],
+		expectedAnswerPhrases: [/PT-CT-114/i],
+		notes: 'Phase C — find by partNumber filter. Agent should pass partNumber=PT-CT-114 to narrow. Result enumerates WIs whose current-version steps have that part requirement.'
 	}
 ];
 

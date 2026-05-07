@@ -577,12 +577,34 @@ Use when: "why isn't run X moving", "what's blocking run Y", "stuck run".`,
 Source: docs/ tree, markdown only — allowlist excludes session/handoff/transactional notes and PRDs (PRDs describe intended work, not necessarily shipped — high hallucination risk).
 
 Use when: "why does X work this way", "what was the recent fix for Y", "where is Z documented", design-history questions, or when the user references a doc title.
-Don't use for: live data queries (use the data tools); operator SOP step lookups (use search_work_instructions when available — Phase C); inlined TIER 1 facts you can answer from the system reference directly (don't double-fetch).
+Don't use for: live data queries (use the data tools); operator SOP step lookups (use search_work_instructions); inlined TIER 1 facts you can answer from the system reference directly (don't double-fetch).
 Caps: 5 results max, 200 chars per snippet, 500ms timeout. If a cap fires, the result includes a dataIntegrityNotes hint — narrow the query.`,
 		input_schema: {
 			type: 'object',
 			properties: {
 				query: { type: 'string', description: 'Search phrase (min 3 chars). Substring match, case-insensitive — try a distinctive phrase from a doc title or the body' }
+			},
+			required: ['query']
+		}
+	},
+	{
+		name: 'search_work_instructions',
+		description: `Search work instructions (manufacturing SOPs) by document number, title, step content, or required part.
+Source: WorkInstruction model — versioned procedures with steps, part requirements, tool requirements, and capture fields.
+
+Use when: "what does WI-08 step 4 require", "show me the backing procedure", "which WIs need part PT-CT-XYZ", any operator-SOP question.
+Don't use for: controlled-doc design notes (use search_documentation); completed run details (use get_run_details); BCODE assay definitions (find_part / list_equipment for the catalog side).
+
+Default status filter is 'active'. Pass status='all' to include drafts and retired versions.
+
+When grounding an answer in a result, cite as: "Per WI-XX (v<N>, effective YYYY-MM-DD) step <Y>: ..." — surface document number, version, effective date, and step number.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				query: { type: 'string', description: 'WI document number (e.g. "WI-01"), title fragment, or step keyword' },
+				partNumber: { type: 'string', description: 'Optional — filter to WIs whose current-version steps require this part (e.g. PT-CT-114)' },
+				status: { type: 'string', description: 'one of: active | draft | retired | all (default: active)' },
+				limit: { type: 'number', description: 'Max WIs returned (default 5, max 20)' }
 			},
 			required: ['query']
 		}
@@ -1917,6 +1939,90 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 				corpusFiles: result.corpusFiles,
 				source: 'docs/ tree (markdown files; allowlist excludes session/handoff/PRDs)',
 				dataIntegrityNotes: notes
+			};
+		}
+		case 'search_work_instructions': {
+			const q = String(input.query ?? '').trim();
+			if (!q) return { error: 'query required', source: 'WorkInstruction', sourceUrl: '/documents/instructions' };
+			const partNumber = input.partNumber ? String(input.partNumber).trim() : null;
+			const statusInput = input.status ? String(input.status).trim() : 'active';
+			const status = statusInput === 'all' ? null : statusInput;
+			const limit = Math.min(Math.max(Number(input.limit ?? 5), 1), 20);
+
+			// Escape regex special chars before building the filter.
+			const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+			const re = { $regex: escaped, $options: 'i' };
+
+			const filter: any = {
+				$or: [
+					{ documentNumber: re },
+					{ title: re },
+					{ 'versions.steps.title': re },
+					{ 'versions.steps.content': re }
+				]
+			};
+			if (status) filter.status = status;
+			if (partNumber) filter['versions.steps.partRequirements.partNumber'] = partNumber;
+
+			const wis = await WorkInstruction.find(filter)
+				.select('_id documentNumber title status currentVersion effectiveDate category versions')
+				.limit(limit + 1)
+				.lean() as any[];
+			const truncated = wis.length > limit;
+			const trimmed = wis.slice(0, limit);
+
+			const lower = q.toLowerCase();
+			const items = trimmed.map((wi: any) => {
+				const versions: any[] = wi.versions ?? [];
+				const currentVer = versions.find(v => v.version === wi.currentVersion) ?? versions[versions.length - 1];
+				const matchedSteps: any[] = [];
+				if (currentVer?.steps) {
+					for (const step of currentVer.steps) {
+						const titleMatch = String(step.title ?? '').toLowerCase().includes(lower);
+						const contentMatch = String(step.content ?? '').toLowerCase().includes(lower);
+						const partMatch = !!partNumber && Array.isArray(step.partRequirements)
+							&& step.partRequirements.some((p: any) => p.partNumber === partNumber);
+						if (titleMatch || contentMatch || partMatch) {
+							const contentStr = String(step.content ?? '');
+							matchedSteps.push({
+								stepNumber: step.stepNumber,
+								title: step.title,
+								contentSnippet: contentStr ? contentStr.slice(0, 200) + (contentStr.length > 200 ? '…' : '') : null,
+								requiresScan: step.requiresScan ?? false,
+								partRequirements: Array.isArray(step.partRequirements)
+									? step.partRequirements.map((p: any) => ({ partNumber: p.partNumber, quantity: p.quantity }))
+									: [],
+								reason: titleMatch ? 'title match' : contentMatch ? 'content match' : 'part requirement match'
+							});
+						}
+					}
+				}
+				return {
+					documentNumber: wi.documentNumber,
+					title: wi.title,
+					status: wi.status,
+					currentVersion: wi.currentVersion,
+					effectiveDate: wi.effectiveDate,
+					category: wi.category,
+					matchedSteps,
+					fullStepCount: currentVer?.steps?.length ?? 0,
+					sourceUrl: `/documents/instructions/${wi._id}`
+				};
+			});
+
+			const integrityNotes: string[] = [];
+			if (items.length === 0) {
+				integrityNotes.push(`No work instructions matched "${q}"${partNumber ? ` with partNumber=${partNumber}` : ''}${status ? ` and status=${status}` : ''}. Try a broader query, drop the partNumber filter, or use status='all' to include drafts and retired versions.`);
+			}
+			if (truncated) integrityNotes.push(`Result count capped at ${limit} — narrow the query for more.`);
+
+			return {
+				workInstructions: items,
+				totalReturned: items.length,
+				truncated,
+				source: 'WorkInstruction model — searched documentNumber/title/step.title/step.content/step.partRequirements.partNumber',
+				sourceUrl: '/documents/instructions',
+				dataIntegrityNotes: integrityNotes
 			};
 		}
 	}
