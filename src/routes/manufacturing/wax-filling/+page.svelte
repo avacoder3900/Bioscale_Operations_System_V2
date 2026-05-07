@@ -1113,6 +1113,8 @@
 					onComplete={handleDeckLoadComplete}
 					readonly={isPreviewOrPast}
 					suppressFocus={showCancelModal || showOverrideModal}
+					robotId={data.robotId}
+					runId={data.runState.runId ?? null}
 				/>
 			{:else}
 				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">

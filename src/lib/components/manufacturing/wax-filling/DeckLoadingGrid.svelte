@@ -19,9 +19,15 @@
 		onComplete: (data: { deckId: string; ovenId: string; cartridgeScans: CartridgeScan[]; countMismatchReason?: string }) => void;
 		readonly?: boolean;
 		suppressFocus?: boolean;
+		// OpentronsRobot._id (or legacy Equipment robot id) — when set, the
+		// "Scan Cartridges" button drives the gantry-mounted scanner via
+		// /api/scanner/sweep using this robot's default position set.
+		robotId?: string | null;
+		// Optional run id used as contextRef on the scanner trigger.
+		runId?: string | null;
 	}
 
-	let { availableLots, plannedCartridgeCount = null, onComplete, readonly: isReadonly = false, suppressFocus = false }: Props = $props();
+	let { availableLots, plannedCartridgeCount = null, onComplete, readonly: isReadonly = false, suppressFocus = false, robotId = null, runId = null }: Props = $props();
 
 	// 8 rows × 3 cols, vertical snake: Col1 down, Col2 up, Col3 down
 	const GRID_ROWS = [
@@ -190,50 +196,110 @@
 		setTimeout(() => ovenInputEl?.focus(), 50);
 	}
 
+	async function processScannedCartridge(scanned: string): Promise<{ ok: boolean; error?: string }> {
+		if (isFull || scans.length >= TOTAL_POSITIONS) {
+			return { ok: false, error: `Deck is full (${TOTAL_POSITIONS} max)` };
+		}
+		if (scans.some((s) => s.cartridgeId === scanned)) {
+			return { ok: false, error: `Cartridge "${scanned}" already scanned in this session` };
+		}
+		if (!currentLot) {
+			return { ok: false, error: 'No available oven-ready lots' };
+		}
+		try {
+			const res = await fetch(`/api/dev/validate-equipment?type=cartridge&id=${encodeURIComponent(scanned)}`);
+			const result = await res.json();
+			if (!res.ok || result.error) {
+				return { ok: false, error: result.error ?? `Cartridge "${scanned}" validation failed` };
+			}
+		} catch {
+			return { ok: false, error: 'Validation service unavailable, cannot proceed' };
+		}
+		scans = [...scans, { cartridgeId: scanned, backedLotId: currentLot.lotId }];
+		return { ok: true };
+	}
+
 	async function handleCartridgeKeydown(e: KeyboardEvent) {
 		if (isReadonly) return;
 		if (e.key === 'Enter' && cartridgeInput.trim()) {
 			e.preventDefault();
 			const scanned = cartridgeInput.trim();
 			cartridgeInput = '';
-
-			if (isFull || scans.length >= TOTAL_POSITIONS) {
+			const r = await processScannedCartridge(scanned);
+			if (r.ok) {
+				deckError = '';
+				playBeep(true);
+			} else {
+				deckError = r.error ?? 'Scan failed';
 				playBeep(false);
-				deckError = `Deck is full (${TOTAL_POSITIONS} max)`;
+			}
+		}
+	}
+
+	let sweepInFlight = $state(false);
+	let sweepProgress = $state<string | null>(null);
+
+	async function autoSweepCartridges() {
+		if (isReadonly) return;
+		if (!robotId) {
+			deckError = 'No robot configured for this run — cannot auto-scan.';
+			return;
+		}
+		if (isFull || !currentLot) {
+			deckError = isFull ? `Deck is full (${TOTAL_POSITIONS} max)` : 'No available oven-ready lots';
+			return;
+		}
+		deckError = '';
+		sweepProgress = 'Driving robot to scan positions…';
+		sweepInFlight = true;
+		try {
+			const res = await fetch('/api/scanner/sweep', {
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					robotId,
+					source: 'wax_filling',
+					contextRef: runId ?? undefined
+				})
+			});
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				deckError = (body?.message ?? body?.error ?? `Sweep failed (HTTP ${res.status})`).toString();
+				playBeep(false);
 				return;
 			}
+			const incomingScans: Array<{ slotIndex: number; barcode: string }> = body?.scans ?? [];
+			const sweepErrors: Array<{ slotIndex: number; message: string }> = body?.errors ?? [];
 
-			// Check for duplicate in current session
-			if (scans.some((s) => s.cartridgeId === scanned)) {
-				playBeep(false);
-				deckError = `Cartridge "${scanned}" already scanned in this session`;
-				return;
-			}
-
-			if (!currentLot) {
-				playBeep(false);
-				deckError = 'No available oven-ready lots';
-				return;
-			}
-
-			// Validate cartridge against MongoDB (check not already processed)
-			try {
-				const res = await fetch(`/api/dev/validate-equipment?type=cartridge&id=${encodeURIComponent(scanned)}`);
-				const result = await res.json();
-				if (!res.ok || result.error) {
+			let added = 0;
+			for (const s of incomingScans) {
+				if (isFull || scans.length >= TOTAL_POSITIONS) break;
+				sweepProgress = `Recording slot ${s.slotIndex + 1}…`;
+				const r = await processScannedCartridge(s.barcode);
+				if (r.ok) {
+					added++;
+				} else {
+					deckError = `Slot ${s.slotIndex + 1}: ${r.error ?? 'unknown error'}`;
 					playBeep(false);
-					deckError = result.error ?? `Cartridge "${scanned}" validation failed`;
 					return;
 				}
-			} catch {
-				playBeep(false);
-				deckError = 'Validation service unavailable, cannot proceed';
-				return;
 			}
 
-			deckError = '';
-			scans = [...scans, { cartridgeId: scanned, backedLotId: currentLot.lotId }];
-			playBeep(true);
+			if (sweepErrors.length > 0) {
+				const summary = sweepErrors.map((e) => `slot ${e.slotIndex + 1}: ${e.message}`).join('; ');
+				deckError = `${added} scanned. ${sweepErrors.length} slot(s) failed: ${summary}`;
+				playBeep(false);
+			} else {
+				sweepProgress = `Captured ${added} cartridge(s).`;
+				playBeep(true);
+			}
+		} catch (e) {
+			deckError = e instanceof Error ? e.message : String(e);
+			playBeep(false);
+		} finally {
+			sweepInFlight = false;
+			setTimeout(() => { sweepProgress = null; }, 4000);
 		}
 	}
 
@@ -456,7 +522,32 @@
 				</div>
 			{/if}
 
-			<!-- Scan input -->
+			<!-- Auto-sweep button (gantry-mounted scanner) -->
+			{#if !isFull && !isReadonly && robotId}
+				<div class="rounded-lg border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/5 p-4">
+					<div class="flex items-center justify-between gap-3">
+						<div>
+							<div class="text-sm font-semibold" style="color: var(--color-tron-cyan)">Scan Cartridges</div>
+							<div class="text-[11px]" style="color: var(--color-tron-text-secondary)">
+								Drive the OT-2 to each taught position and read every barcode automatically.
+							</div>
+						</div>
+						<button
+							type="button"
+							onclick={autoSweepCartridges}
+							disabled={sweepInFlight}
+							class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-2 text-sm font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40"
+						>
+							{sweepInFlight ? 'Scanning…' : 'Scan Cartridges'}
+						</button>
+					</div>
+					{#if sweepProgress}
+						<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">{sweepProgress}</p>
+					{/if}
+				</div>
+			{/if}
+
+			<!-- Manual scan input (fallback / handheld) -->
 			{#if !isFull}
 				<div
 					class="flex items-center gap-3 rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-surface)] p-4"
