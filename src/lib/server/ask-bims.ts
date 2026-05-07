@@ -4,7 +4,8 @@ import {
 	PartDefinition, Equipment, CartridgeRecord, ReagentBatchRecord,
 	ReceivingLot, CalibrationRecord, ServiceTicket, TemperatureReading,
 	WorkInstruction, LotRecord, InventoryTransaction, AskBimsCostLog,
-	Experiment, ReagentCatalog, ReagentInventory
+	Experiment, ReagentCatalog, ReagentInventory,
+	ProtocolDefinition, ProtocolExecution
 } from './db';
 import { getCheckedOutCartridgeIds } from './checkout-utils';
 import { TIER_1_REFERENCE } from './ask-bims-tier1';
@@ -766,6 +767,78 @@ Don't use for: catalog metadata (use find_reagent_catalog); listing individual i
 				catalogId: { type: 'string', description: 'ReagentCatalog _id to roll up' }
 			},
 			required: ['catalogId']
+		}
+	},
+	{
+		name: 'list_protocols',
+		description: `List protocol definitions (the lab's versioned recipes — Excel-imported via the protocol parser).
+Source: ProtocolDefinition model. Status enum: draft / active / archived.
+
+Use when: "what active protocols do we have", "list conjugation protocols", "which protocols make X reagent", browsing the recipe library.
+Don't use for: a specific protocol by name (use find_protocol); execution records (use list_protocol_executions).
+
+Defaults: returns active protocols sorted by updatedAt desc. Pass status='all' for everything. Caps: 50 results.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				category: { type: 'string', description: 'Optional — conjugation | fill | QD-synthesis | quantification | etc.' },
+				status: { type: 'string', description: 'draft | active | archived | all (default: active)' },
+				outputCatalogId: { type: 'string', description: 'Optional — only protocols whose outputCatalogId matches' },
+				limit: { type: 'number', description: 'Max results (default 30, max 50)' }
+			}
+		}
+	},
+	{
+		name: 'find_protocol',
+		description: `Look up a single protocol definition by _id (nanoid) or name fragment. Returns full structure: parameters, materials, steps, version history.
+Source: ProtocolDefinition.
+
+Critical caveat surfaced as dataIntegrityNotes: cellMap is currently EMPTY on every live protocol — protocols were extracted before the parser shipped. Editing input parameters does NOT cascade through formulas; reagent amounts stay at static-extracted values. Re-extraction is needed per protocol. Bug doc: docs/protocol-extraction-cellmap-bug.md.
+
+Use when: "show me protocol X", "what's in Active Beads v2", "how to make {reagent}".
+Don't use for: listing many protocols (use list_protocols); execution records (use list_protocol_executions or get_protocol_execution_details).`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				query: { type: 'string', description: 'Protocol _id (nanoid) OR name fragment (case-insensitive)' }
+			},
+			required: ['query']
+		}
+	},
+	{
+		name: 'list_protocol_executions',
+		description: `List records of protocol executions (lab notebook entries — every time a protocol was actually run).
+Source: ProtocolExecution model. Status enum: in_progress / completed / aborted.
+
+Use when: "recent executions of protocol X", "what was Jacob running today", "completed Active Beads runs this week", history queries.
+Don't use for: protocol definitions (use list_protocols); a single execution's details (use get_protocol_execution_details); the resulting inventory items (use find_reagent_inventory on the output barcodes).
+
+Filterable by definitionId (one protocol's runs), variantKey (one variant's runs), status, sinceDays window, executedBy (user _id). Caps: 50 results.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				definitionId: { type: 'string', description: 'Optional — only executions of this protocol' },
+				variantKey: { type: 'string', description: 'Optional — only executions targeting this variant' },
+				status: { type: 'string', description: 'Optional — in_progress | completed | aborted' },
+				sinceDays: { type: 'number', description: 'Optional — only executions started within this window' },
+				executedBy: { type: 'string', description: 'Optional — user _id (nanoid)' },
+				limit: { type: 'number', description: 'Max results (default 30, max 50)' }
+			}
+		}
+	},
+	{
+		name: 'get_protocol_execution_details',
+		description: `Full record for one protocol execution by _id. Includes parameter values used, materials scanned (with their inventory barcodes), step records, and output aliquots produced.
+Source: ProtocolExecution + ProtocolDefinition (joined for definition name + version).
+
+Use when: "what happened in execution X", "what materials went into Y", "show me the step record for Z".
+Don't use for: listing many executions (use list_protocol_executions); the protocol's recipe (use find_protocol).`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				executionId: { type: 'string', description: 'ProtocolExecution _id (nanoid)' }
+			},
+			required: ['executionId']
 		}
 	},
 	{
@@ -2540,6 +2613,216 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 				inspectionCount: Array.isArray(item.inspections) ? item.inspections.length : 0,
 				notes: item.notes,
 				source: 'ReagentInventory + ReagentCatalog (variant resolved)',
+				dataIntegrityNotes: notes
+			};
+		}
+		case 'list_protocols': {
+			const filter: any = {};
+			if (input.category) filter.category = input.category;
+			const statusInput = input.status ? String(input.status).trim() : 'active';
+			if (statusInput !== 'all') filter.status = statusInput;
+			if (input.outputCatalogId) filter.outputCatalogId = input.outputCatalogId;
+			const limit = Math.min(Math.max(Number(input.limit ?? 30), 1), 50);
+			const protocols = await ProtocolDefinition.find(filter)
+				.select('_id name version status category description outputCatalogId outputType updatedAt cellMap sourceSpreadsheet')
+				.sort({ updatedAt: -1 })
+				.limit(limit + 1)
+				.lean() as any[];
+			const truncated = protocols.length > limit;
+			let cellMapEmptyCount = 0;
+			const items = protocols.slice(0, limit).map(p => {
+				const cellMapKeyCount = p.cellMap && typeof p.cellMap === 'object' ? Object.keys(p.cellMap).length : 0;
+				if (cellMapKeyCount === 0) cellMapEmptyCount++;
+				return {
+					_id: p._id,
+					name: p.name,
+					version: p.version,
+					status: p.status,
+					category: p.category,
+					description: p.description,
+					outputCatalogId: p.outputCatalogId,
+					outputType: p.outputType,
+					sourceSpreadsheet: p.sourceSpreadsheet,
+					cellMapKeyCount,
+					updatedAt: p.updatedAt
+				};
+			});
+			const notes: string[] = [];
+			if (cellMapEmptyCount > 0) {
+				notes.push(`${cellMapEmptyCount} protocol(s) have an empty cellMap — formula propagation does NOT work on those (live cellMap bug per docs/protocol-extraction-cellmap-bug.md). Reagent amounts stay at static-extracted values regardless of input parameter edits. Re-extraction needed.`);
+			}
+			return {
+				protocols: items,
+				totalReturned: items.length,
+				truncated,
+				source: 'ProtocolDefinition model — research-v2 collection',
+				dataIntegrityNotes: notes
+			};
+		}
+		case 'find_protocol': {
+			const q = String(input.query ?? '').trim();
+			if (!q) return { error: 'query required', source: 'ProtocolDefinition' };
+			let p = await ProtocolDefinition.findById(q).lean().catch(() => null) as any;
+			if (!p) {
+				const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+				p = await ProtocolDefinition.findOne({ name: { $regex: escaped, $options: 'i' } })
+					.sort({ updatedAt: -1 })
+					.lean() as any;
+			}
+			if (!p) {
+				return {
+					found: false,
+					query: q,
+					source: 'ProtocolDefinition model',
+					dataIntegrityNotes: [`No protocol matched "${q}". Try a name fragment or the protocol _id.`]
+				};
+			}
+			const cellMapKeyCount = p.cellMap && typeof p.cellMap === 'object' ? Object.keys(p.cellMap).length : 0;
+			const notes: string[] = [];
+			if (cellMapKeyCount === 0) {
+				notes.push(`cellMap is EMPTY on this protocol — formula propagation is broken. Editing input parameters does NOT cascade through reagent amounts. Per docs/protocol-extraction-cellmap-bug.md, the parser fix is shipped but live protocols still need re-extraction.`);
+			}
+			return {
+				found: true,
+				_id: p._id,
+				name: p.name,
+				version: p.version,
+				status: p.status,
+				category: p.category,
+				description: p.description,
+				outputCatalogId: p.outputCatalogId,
+				outputType: p.outputType,
+				parameters: Array.isArray(p.parameters) ? p.parameters : [],
+				materials: Array.isArray(p.materials) ? p.materials : [],
+				steps: Array.isArray(p.steps) ? p.steps.map((s: any) => ({
+					number: s.number,
+					title: s.title,
+					instructions: s.instructions,
+					substepCount: Array.isArray(s.substeps) ? s.substeps.length : 0,
+					reagentCount: Array.isArray(s.reagents) ? s.reagents.length : 0,
+					duration: s.duration,
+					checkpoint: s.checkpoint,
+					qcRequired: s.qcRequired
+				})) : [],
+				versionHistoryCount: Array.isArray(p.versionHistory) ? p.versionHistory.length : 0,
+				cellMapKeyCount,
+				sourceSpreadsheet: p.sourceSpreadsheet,
+				importedAt: p.importedAt,
+				importedBy: p.importedBy,
+				updatedAt: p.updatedAt,
+				source: 'ProtocolDefinition model',
+				dataIntegrityNotes: notes
+			};
+		}
+		case 'list_protocol_executions': {
+			const filter: any = {};
+			if (input.definitionId) filter.definitionId = input.definitionId;
+			if (input.variantKey) filter.variantKey = input.variantKey;
+			if (input.status) filter.status = input.status;
+			if (input.executedBy) filter.executedBy = input.executedBy;
+			if (input.sinceDays) {
+				const cutoff = new Date(Date.now() - Number(input.sinceDays) * 86400e3).toISOString();
+				filter.startedAt = { $gte: cutoff };
+			}
+			const limit = Math.min(Math.max(Number(input.limit ?? 30), 1), 50);
+			const execs = await ProtocolExecution.find(filter)
+				.select('_id definitionId definitionName definitionVersion variantKey executedBy executedByName startedAt completedAt status outputs outputInventoryId experimentId')
+				.sort({ startedAt: -1 })
+				.limit(limit + 1)
+				.lean() as any[];
+			const truncated = execs.length > limit;
+			return {
+				executions: execs.slice(0, limit).map(e => ({
+					_id: e._id,
+					definitionId: e.definitionId,
+					definitionName: e.definitionName,
+					definitionVersion: e.definitionVersion,
+					variantKey: e.variantKey,
+					executedBy: e.executedBy,
+					executedByName: e.executedByName,
+					startedAt: e.startedAt,
+					completedAt: e.completedAt,
+					status: e.status,
+					outputCount: Array.isArray(e.outputs) ? e.outputs.length : 0,
+					primaryOutputBarcode: Array.isArray(e.outputs) && e.outputs[0]?.barcode ? e.outputs[0].barcode : (e.outputInventoryId || null),
+					experimentId: e.experimentId
+				})),
+				totalReturned: Math.min(execs.length, limit),
+				truncated,
+				source: 'ProtocolExecution model — research-v2 collection',
+				dataIntegrityNotes: []
+			};
+		}
+		case 'get_protocol_execution_details': {
+			const id = String(input.executionId ?? '').trim();
+			if (!id) return { error: 'executionId required', source: 'ProtocolExecution' };
+			const exec = await ProtocolExecution.findById(id).lean() as any;
+			if (!exec) {
+				return {
+					found: false,
+					executionId: id,
+					source: 'ProtocolExecution model',
+					dataIntegrityNotes: [`No execution found with _id "${id}".`]
+				};
+			}
+			let definition: any = null;
+			if (exec.definitionId) {
+				definition = await ProtocolDefinition.findById(exec.definitionId)
+					.select('_id name version status outputCatalogId category')
+					.lean() as any;
+			}
+			const notes: string[] = [];
+			if (exec.definitionId && !definition) {
+				notes.push(`definitionId "${exec.definitionId}" did not resolve — protocol may have been deleted. The denormalized definitionName/version on the execution still tells you what was run.`);
+			}
+			const outputs = Array.isArray(exec.outputs) ? exec.outputs : [];
+			const materialsUsed = Array.isArray(exec.materialsUsed) ? exec.materialsUsed : [];
+			const stepRecords = Array.isArray(exec.stepRecords) ? exec.stepRecords : [];
+			return {
+				found: true,
+				_id: exec._id,
+				definitionId: exec.definitionId,
+				definitionName: exec.definitionName,
+				definitionVersion: exec.definitionVersion,
+				definitionResolved: definition ? {
+					name: definition.name,
+					currentVersion: definition.version,
+					status: definition.status,
+					outputCatalogId: definition.outputCatalogId,
+					category: definition.category
+				} : null,
+				variantKey: exec.variantKey,
+				executedBy: exec.executedBy,
+				executedByName: exec.executedByName,
+				startedAt: exec.startedAt,
+				completedAt: exec.completedAt,
+				status: exec.status,
+				experimentId: exec.experimentId,
+				parameterValues: exec.parameterValues,
+				materialsUsed: materialsUsed.map((m: any) => ({
+					key: m.key,
+					inventoryId: m.inventoryId,
+					catalogName: m.catalogName,
+					actualConcentration: m.actualConcentration,
+					amountUsed: m.amountUsed,
+					unit: m.unit,
+					scannedAt: m.scannedAt
+				})),
+				stepRecords: stepRecords.map((s: any) => ({
+					stepNumber: s.stepNumber,
+					completedAt: s.completedAt,
+					completedBy: s.completedBy,
+					skipped: s.skipped,
+					skipReason: s.skipReason,
+					notes: s.notes
+				})),
+				outputs: outputs.map((o: any) => ({
+					barcode: o.barcode,
+					volume: o.volume,
+					notes: o.notes,
+					createdAt: o.createdAt
+				})),
+				source: 'ProtocolExecution + ProtocolDefinition (joined)',
 				dataIntegrityNotes: notes
 			};
 		}

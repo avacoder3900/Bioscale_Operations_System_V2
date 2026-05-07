@@ -360,6 +360,26 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		requiredTools: ['count_inventory_by_variant'],
 		expectedAnswerPhrases: [/variant|cortisol|active bead/i],
 		notes: 'Phase E2 — by-variant rollup. Agent should first find_reagent_catalog to get the catalogId, then count_inventory_by_variant to get the per-variant counts. Critical: list_reagent_inventory without a variantKey filter would silently pool different antibody clones — that\'s why count_inventory_by_variant exists.'
+	},
+
+	// === Phase E3: protocol research tools ===
+	{
+		id: 'research-list-active-protocols',
+		category: 'research',
+		text: 'What active conjugation protocols do we have?',
+		requiredTools: ['list_protocols'],
+		forbiddenTools: ['search_documentation', 'find_protocol'],
+		expectedAnswerPhrases: [/conjugation|protocol/i],
+		notes: 'Phase E3 — list_protocols with category=conjugation. Should NOT route to search_documentation (markdown corpus, not structured protocols). find_protocol is for single-protocol lookups.'
+	},
+	{
+		id: 'research-find-protocol-cellmap-warning',
+		category: 'research',
+		text: 'Show me the Active Beads v2 protocol details.',
+		requiredTools: ['find_protocol'],
+		forbiddenTools: ['list_protocols', 'list_protocol_executions'],
+		expectedAnswerPhrases: [/active beads|protocol|step|parameter|cellMap|formula/i],
+		notes: 'Phase E3 — find_protocol surfaces the cellMap-empty integrity gap when applicable. The agent should mention parameter cascading is broken on this protocol if cellMap is empty (per docs/protocol-extraction-cellmap-bug.md).'
 	}
 ];
 

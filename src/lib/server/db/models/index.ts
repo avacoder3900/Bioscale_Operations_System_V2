@@ -63,6 +63,8 @@ export { ServiceTicket } from './service-ticket.js';
 export { Experiment } from './experiment.js';
 export { ReagentCatalog } from './reagent-catalog.js';
 export { ReagentInventory } from './reagent-inventory.js';
+export { ProtocolDefinition } from './protocol-definition.js';
+export { ProtocolExecution } from './protocol-execution.js';
 
 // Sensor Configuration
 export { SensorConfig } from './sensor-config.js';
