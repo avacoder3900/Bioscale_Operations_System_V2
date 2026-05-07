@@ -16,7 +16,7 @@
 
 export interface TestQuestion {
 	id: string;
-	category: 'wax' | 'temperature' | 'runs' | 'cartridges' | 'inventory' | 'equipment' | 'anti-overlap' | 'redirection' | 'phase2';
+	category: 'wax' | 'temperature' | 'runs' | 'cartridges' | 'inventory' | 'equipment' | 'anti-overlap' | 'redirection' | 'phase2' | 'inline-ref';
 	text: string;
 	requiredTools: string[];
 	forbiddenTools?: string[];
@@ -229,6 +229,34 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		text: 'How long will our PT-CT-104 inventory last at current consumption rates?',
 		requiredTools: ['runway']
 	},
+
+	// === Inline reference (Phase A — TIER 1 grounding) ===
+	{
+		id: 'inline-ref-sacred-rule',
+		category: 'inline-ref',
+		text: "Why can't I edit a finalized cartridge's rawData?",
+		requiredTools: [],
+		forbiddenTools: ['find_cartridges', 'trace_cartridge', 'check_data_integrity', 'count_cartridges_by_status'],
+		expectedAnswerPhrases: [/sacred/i, /correction/i, /finaliz/i],
+		notes: 'Phase A — pure tier-rule question. Should answer from inlined DATA-REFERENCE §1 + sacred middleware semantics, no tool calls. Forbidden tools cover the most likely over-fetch traps.'
+	},
+	{
+		id: 'inline-ref-integrity-gap',
+		category: 'inline-ref',
+		text: 'How accurate is the wax-source-lot tracking on recent wax runs?',
+		requiredTools: [],
+		expectedAnswerPhrases: [/null|missing|incomplete|orphan|untraceable/i, /waxSourceLot|wax source|source lot/i],
+		notes: 'Phase A — integrity-gap awareness. Either grounds in §4 directly OR uses list_recent_runs/check_data_integrity to confirm and surface the dataIntegrityNotes. Both paths are acceptable; assertion is on the answer mentioning the gap.'
+	},
+	{
+		id: 'inline-ref-schema-relationship',
+		category: 'inline-ref',
+		text: 'What field links a cartridge_records document to its wax filling run?',
+		requiredTools: [],
+		forbiddenTools: ['find_cartridges', 'trace_cartridge', 'list_recent_runs'],
+		expectedAnswerPhrases: [/waxFilling/i, /runId|wax_filling_runs|WaxFillingRun/i],
+		notes: 'Phase A — pure schema-relationship recall. Should answer from inlined §2 (cartridge_records line) without fetching any data. Forbidden tools cover over-fetching for what is fundamentally a schema question.'
+	}
 ];
 
 export function questionsByCategory(): Record<string, TestQuestion[]> {

@@ -6,6 +6,7 @@ import {
 	WorkInstruction, LotRecord, InventoryTransaction, AskBimsCostLog
 } from './db';
 import { getCheckedOutCartridgeIds } from './checkout-utils';
+import { TIER_1_REFERENCE } from './ask-bims-tier1';
 
 /**
  * Denied collections (principle #9 — never queryable through Ask BIMS):
@@ -1908,6 +1909,8 @@ ACCURACY DISCIPLINE — read carefully:
 
 6. **Don't trust counters; trust events.** Denormalized counters (PartDefinition.inventoryCount, dashboard summaries) drift. For high-stakes questions, prefer tools that aggregate from event tables.
 
+7. **Cite the inline BIMS DATA REFERENCE when grounding.** A condensed reference doc is inlined above (53 BIMS collections + 11 research-only, tier rules, integrity gaps, lifecycle, permissions). When the answer specifically grounds in §1 (tier rules), §4 (known integrity gaps), or a non-obvious schema relationship from §2, cite it briefly: e.g., "Per DATA-REFERENCE §1, cartridge_records is sacred — corrections only via the corrections[] append-only array after finalize." If a §4 integrity gap plausibly affects the answer, surface it explicitly even if no tool result called it out — that's exactly what §4 is for. Do NOT cite §3 (lifecycle); phase ordering is general operational knowledge.
+
 TOOL SELECTION HEURISTICS — use this to choose the right tool, the first time:
 
 A. **Plan before you call.** Read the user's question. Decide: (1) does this need a tool, or is it a general concept question? (2) what's the SMALLEST set of tools that gives a complete answer? Each extra call adds cost, latency, and noise. Calling 5 tools when 1 works is a failure.
@@ -2045,6 +2048,13 @@ async function runAgentLoop(history: AskBimsMessage[], opts: AskBimsOpts): Promi
 				model,
 				max_tokens: 4096,
 				system: [
+					{
+						// Stable schema/lifecycle/integrity reference — cached first so
+						// system-prompt edits don't invalidate it. Cite per rule 7.
+						type: 'text',
+						text: TIER_1_REFERENCE,
+						cache_control: { type: 'ephemeral' }
+					},
 					{
 						type: 'text',
 						text: SYSTEM_PROMPT,
