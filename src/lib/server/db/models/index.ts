@@ -59,6 +59,9 @@ export { ParticleDevice } from './particle-device.js';
 export { WorkflowViolation } from './workflow-violation.js';
 export { ServiceTicket } from './service-ticket.js';
 
+// Research-v2 collections — shared Mongo Atlas, BIMS reads only via Ask BIMS tools.
+export { Experiment } from './experiment.js';
+
 // Sensor Configuration
 export { SensorConfig } from './sensor-config.js';
 

@@ -16,7 +16,7 @@
 
 export interface TestQuestion {
 	id: string;
-	category: 'wax' | 'temperature' | 'runs' | 'cartridges' | 'inventory' | 'equipment' | 'anti-overlap' | 'redirection' | 'phase2' | 'inline-ref' | 'docs' | 'work-instructions' | 'datasheets';
+	category: 'wax' | 'temperature' | 'runs' | 'cartridges' | 'inventory' | 'equipment' | 'anti-overlap' | 'redirection' | 'phase2' | 'inline-ref' | 'docs' | 'work-instructions' | 'datasheets' | 'research';
 	text: string;
 	requiredTools: string[];
 	forbiddenTools?: string[];
@@ -321,6 +321,26 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		forbiddenTools: ['list_equipment'],
 		expectedAnswerPhrases: [/biosafety|safety cabinet/i, /tissue|culture|F-?01|location/i],
 		notes: 'Phase D — fuzzy name match returns Fannin F-01 row (Tissue Culture lab, 120V/1150W/10A). Datasheet URL should be surfaced.'
+	},
+
+	// === Research-side Phase E1: experiment + cartridge research tools ===
+	{
+		id: 'research-experiments-underway',
+		category: 'research',
+		text: 'What research experiments are currently underway?',
+		requiredTools: ['list_experiments'],
+		forbiddenTools: ['find_cartridges', 'list_recent_runs', 'list_active_runs'],
+		expectedAnswerPhrases: [/experiment/i],
+		notes: 'Phase E1 — list_experiments with implicit status=underway filter. Should NOT route to find_cartridges or list_active_runs (those are mfg-side, not research experiments).'
+	},
+	{
+		id: 'research-cart-result',
+		category: 'research',
+		text: 'What is the test result and analysis status for cartridge 5da7b3c5-4cba-4fe4-93b1-c17ad61efbbf?',
+		requiredTools: ['find_research_cartridge'],
+		forbiddenTools: ['trace_cartridge', 'backward_genealogy'],
+		expectedAnswerPhrases: [/cart|result|not found|no cartridge/i],
+		notes: 'Phase E1 — find_research_cartridge for research-side fields (result, analysis, reagentChain, rawData). Should NOT route to trace_cartridge/backward_genealogy (those are mfg lineage). UUID may not exist in DB — graceful "not found" is acceptable.'
 	}
 ];
 

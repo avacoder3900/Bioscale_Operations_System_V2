@@ -3,7 +3,8 @@ import {
 	connectDB, WaxBatch, WaxFillingRun, TemperatureAlert,
 	PartDefinition, Equipment, CartridgeRecord, ReagentBatchRecord,
 	ReceivingLot, CalibrationRecord, ServiceTicket, TemperatureReading,
-	WorkInstruction, LotRecord, InventoryTransaction, AskBimsCostLog
+	WorkInstruction, LotRecord, InventoryTransaction, AskBimsCostLog,
+	Experiment
 } from './db';
 import { getCheckedOutCartridgeIds } from './checkout-utils';
 import { TIER_1_REFERENCE } from './ask-bims-tier1';
@@ -627,6 +628,78 @@ Caps: 10 results, 500ms timeout. If the query is too broad and matches everythin
 				equipmentName: { type: 'string', description: 'Equipment name fragment, Tag # (e.g. "B-01", "F-12"), or any cell value (case-insensitive substring across all columns)' }
 			},
 			required: ['equipmentName']
+		}
+	},
+	{
+		name: 'list_experiments',
+		description: `List research experiments from the shared Mongo (research-v2 app's collection — read-only from BIMS).
+Source: Experiment model (collection: experiments). Status enum: draft / underway / completed.
+
+Use when: "what experiments are running", "recent research", "experiments in the Wellness program", broad research-side overview.
+Don't use for: a specific experiment by name (use find_experiment); arm-level cartridges (use get_experiment_arm_cartridges); a single research cartridge's data (use find_research_cartridge).
+
+Defaults: returns up to 20 most-recently-updated. No status/program filter applied unless specified.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				program: { type: 'string', description: 'Optional — filter by program name (e.g., "Wellness", "Fluorescence Platform")' },
+				status: { type: 'string', description: 'Optional — one of: draft | underway | completed' },
+				sinceDays: { type: 'number', description: 'Optional — only experiments updated within this window' },
+				limit: { type: 'number', description: 'Max results (default 20, max 50)' }
+			}
+		}
+	},
+	{
+		name: 'find_experiment',
+		description: `Look up a single research experiment by _id (nanoid) or name fragment.
+Source: Experiment model. Returns full experiment with arm summaries (name, assay, cartridge count per arm) but NOT individual arm cartridges — call get_experiment_arm_cartridges for that.
+
+Use when: user mentions a specific experiment name or ID.
+Don't use for: listing many experiments (use list_experiments); the cartridges in a specific arm (use get_experiment_arm_cartridges).`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				query: { type: 'string', description: 'Experiment _id (nanoid) OR a name fragment (case-insensitive)' }
+			},
+			required: ['query']
+		}
+	},
+	{
+		name: 'get_experiment_arm_cartridges',
+		description: `Given an experiment ID + arm index, list every cartridge in that arm joined with its CartridgeRecord status, raw-data presence, and result.
+Source: Experiment.arms[armIndex].cartridges joined to CartridgeRecord by barcode.
+
+Use when: "what carts are in arm 2 of experiment X", "which cartridges in this arm are completed", "show me the results so far on arm Y".
+Don't use for: cartridges across many experiments (use find_cartridges with experiment filter); a single cartridge deep-dive (use find_research_cartridge).
+
+Result includes a defensive note when any cartridge carries the legacy currentPhase field instead of status — the BIMS currentPhase→status migration is incomplete in 12 files.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				experimentId: { type: 'string', description: 'Experiment _id (nanoid)' },
+				armIndex: { type: 'number', description: 'Arm index (0-based)' }
+			},
+			required: ['experimentId', 'armIndex']
+		}
+	},
+	{
+		name: 'find_research_cartridge',
+		description: `Single-cartridge deep-dive on the research-side fields: rawData presence, readouts, result, analysis, reagentChain, testExecution, testResult, sample.
+Source: CartridgeRecord projection (research fields only — does NOT return manufacturing sub-objects like backing/waxFilling/reagentFilling). For mfg lineage use trace_cartridge or backward_genealogy.
+
+Use when: "what's the test result for cart X", "show me the rawData / analysis for cart Y", "which assay was loaded on Z", any research-side question about one cartridge.
+Don't use for: manufacturing lineage (use trace_cartridge or backward_genealogy); a list of cartridges (use find_cartridges); arm membership (use get_experiment_arm_cartridges).
+
+Defensive query: handles both 'status' and legacy 'currentPhase' fields. Surfaces dataIntegrityNotes when:
+- the cartridge uses legacy currentPhase (migration incomplete)
+- finalizedAt is unset on a 'completed' cartridge (FREEZE-02 pending — Lambda doesn't stamp finalizedAt yet)
+- reagentChain[] is empty (per Jacob, the attach UI is deferred — no traceability for now)`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				barcode: { type: 'string', description: 'CartridgeRecord _id (the UUID barcode)' }
+			},
+			required: ['barcode']
 		}
 	}
 ];
@@ -2066,6 +2139,212 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 				source: 'WorkInstruction model — searched documentNumber/title/step.title/step.content/step.partRequirements.partNumber',
 				sourceUrl: '/documents/instructions',
 				dataIntegrityNotes: integrityNotes
+			};
+		}
+		case 'list_experiments': {
+			const filter: any = {};
+			if (input.program) filter.program = input.program;
+			if (input.status) filter.status = input.status;
+			if (input.sinceDays) {
+				filter.updatedAt = { $gte: new Date(Date.now() - Number(input.sinceDays) * 86400e3) };
+			}
+			const limit = Math.min(Math.max(Number(input.limit ?? 20), 1), 50);
+			const exps = await Experiment.find(filter)
+				.select('_id name program status folderId description nextSerialNumber arms updatedAt')
+				.sort({ updatedAt: -1 })
+				.limit(limit + 1)
+				.lean() as any[];
+			const truncated = exps.length > limit;
+			return {
+				experiments: exps.slice(0, limit).map(e => ({
+					_id: e._id,
+					name: e.name,
+					program: e.program,
+					status: e.status,
+					folderId: e.folderId,
+					description: e.description,
+					armCount: Array.isArray(e.arms) ? e.arms.length : 0,
+					cartridgeCount: Array.isArray(e.arms)
+						? e.arms.reduce((s: number, a: any) => s + (Array.isArray(a.cartridges) ? a.cartridges.length : 0), 0)
+						: 0,
+					updatedAt: e.updatedAt
+				})),
+				totalReturned: Math.min(exps.length, limit),
+				truncated,
+				totalAvailable: truncated ? `>${limit}` : exps.length,
+				source: 'Experiment model — research-v2 collection (shared Mongo, BIMS reads only)',
+				dataIntegrityNotes: []
+			};
+		}
+		case 'find_experiment': {
+			const q = String(input.query ?? '').trim();
+			if (!q) return { error: 'query required', source: 'Experiment' };
+			let exp = await Experiment.findById(q).lean().catch(() => null) as any;
+			if (!exp) {
+				const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+				exp = await Experiment.findOne({ name: { $regex: escaped, $options: 'i' } }).lean() as any;
+			}
+			if (!exp) {
+				return {
+					found: false,
+					query: q,
+					source: 'Experiment model',
+					dataIntegrityNotes: [`No experiment found matching "${q}". Try a name fragment or the experiment _id (nanoid).`]
+				};
+			}
+			return {
+				found: true,
+				_id: exp._id,
+				name: exp.name,
+				program: exp.program,
+				status: exp.status,
+				description: exp.description,
+				folderId: exp.folderId,
+				nextSerialNumber: exp.nextSerialNumber,
+				arms: (Array.isArray(exp.arms) ? exp.arms : []).map((a: any, i: number) => ({
+					armIndex: i,
+					name: a.name,
+					description: a.description,
+					assayId: a.assayId,
+					assayName: a.assayName,
+					cartridgeCount: Array.isArray(a.cartridges) ? a.cartridges.length : 0
+				})),
+				selected: exp.selected,
+				updatedAt: exp.updatedAt,
+				source: 'Experiment model — research-v2 collection',
+				dataIntegrityNotes: []
+			};
+		}
+		case 'get_experiment_arm_cartridges': {
+			const expId = String(input.experimentId ?? '').trim();
+			const armIdx = Number(input.armIndex ?? -1);
+			if (!expId) return { error: 'experimentId required', source: 'Experiment + CartridgeRecord' };
+			if (!Number.isFinite(armIdx) || armIdx < 0) return { error: 'armIndex required (>= 0)', source: 'Experiment + CartridgeRecord' };
+			const exp = await Experiment.findById(expId)
+				.select('_id name program arms')
+				.lean() as any;
+			if (!exp) return { error: `Experiment not found: ${expId}`, source: 'Experiment' };
+			const arms = Array.isArray(exp.arms) ? exp.arms : [];
+			if (armIdx >= arms.length) {
+				return {
+					error: `Arm index ${armIdx} out of range — experiment "${exp.name}" has ${arms.length} arms (0..${arms.length - 1}).`,
+					source: 'Experiment'
+				};
+			}
+			const arm = arms[armIdx];
+			const armCartridges = Array.isArray(arm.cartridges) ? arm.cartridges : [];
+			const barcodes = armCartridges.map((c: any) => c.barcode).filter(Boolean);
+			const carts = barcodes.length > 0
+				? await CartridgeRecord.find({ _id: { $in: barcodes } })
+					.select('_id status currentPhase rawData result analysis testExecution createdAt finalizedAt')
+					.lean() as any[]
+				: [];
+			const cartMap = new Map((carts as any[]).map(c => [c._id, c]));
+			let phaseLegacyCount = 0;
+			const items = armCartridges.map((c: any) => {
+				const cart = cartMap.get(c.barcode);
+				const status = cart?.status ?? cart?.currentPhase ?? null;
+				if (cart && !cart.status && cart.currentPhase) phaseLegacyCount++;
+				return {
+					barcode: c.barcode,
+					armStatus: c.status,
+					quantity: c.quantity,
+					sampleId: c.sampleId,
+					sampleLabel: c.sampleLabel,
+					cartridgeRecord: cart ? {
+						status,
+						hasRawData: !!cart.rawData,
+						hasAnalysis: !!cart.analysis,
+						result: cart.result,
+						finalizedAt: cart.finalizedAt,
+						createdAt: cart.createdAt
+					} : null
+				};
+			});
+			const notes: string[] = [];
+			if (phaseLegacyCount > 0) {
+				notes.push(`${phaseLegacyCount} cartridge(s) carry legacy 'currentPhase' field — migration to 'status' is incomplete in 12 BIMS files. Treating currentPhase as status.`);
+			}
+			const missingCount = items.filter((i: { cartridgeRecord: unknown }) => !i.cartridgeRecord).length;
+			if (missingCount > 0) {
+				notes.push(`${missingCount} arm-listed barcode(s) had no matching CartridgeRecord — research arm references a barcode that was never inducted into BIMS.`);
+			}
+			return {
+				experiment: { _id: exp._id, name: exp.name, program: exp.program },
+				arm: {
+					armIndex: armIdx,
+					name: arm.name,
+					description: arm.description,
+					assayId: arm.assayId,
+					assayName: arm.assayName
+				},
+				cartridgeCount: items.length,
+				cartridges: items,
+				source: 'Experiment.arms[armIndex].cartridges joined with CartridgeRecord by barcode',
+				dataIntegrityNotes: notes
+			};
+		}
+		case 'find_research_cartridge': {
+			const barcode = String(input.barcode ?? '').trim();
+			if (!barcode) return { error: 'barcode required', source: 'CartridgeRecord' };
+			const cart = await CartridgeRecord.findById(barcode)
+				.select('_id status currentPhase assayId assayName assay device experiment arm program rawData readouts result reagentChain analysis testExecution sample testResult priorStatus checkpoints createdAt updatedAt finalizedAt')
+				.lean() as any;
+			if (!cart) {
+				return {
+					found: false,
+					barcode,
+					source: 'CartridgeRecord (research-side projection)',
+					sourceUrl: `/cartridges/${barcode}`,
+					dataIntegrityNotes: [`No cartridge found with barcode "${barcode}".`]
+				};
+			}
+			const effectiveStatus = cart.status ?? cart.currentPhase ?? null;
+			const notes: string[] = [];
+			if (!cart.status && cart.currentPhase) {
+				notes.push(`Cartridge carries legacy 'currentPhase' field instead of 'status' — currentPhase→status migration is incomplete in 12 BIMS files. Treating currentPhase as status.`);
+			}
+			if (!cart.finalizedAt && effectiveStatus === 'completed') {
+				notes.push('Cartridge is in completed status but finalizedAt is unset — Lambda FREEZE-02 (stamping finalizedAt on completion) is pending. Sacred middleware is not actually freezing this record yet.');
+			}
+			if (effectiveStatus === 'underway' && (!cart.assayId || !cart.assay)) {
+				notes.push('Cartridge is underway but assayId/assay snapshot is missing — Lambda validate-cartridge may have failed to populate.');
+			}
+			if (Array.isArray(cart.reagentChain) && cart.reagentChain.length === 0) {
+				notes.push('reagentChain[] is empty — no protocol-execution traceability for this cartridge. Per Jacob, the reagentChain attach UI is deferred; no backfill of existing carts.');
+			}
+			return {
+				found: true,
+				barcode: cart._id,
+				status: effectiveStatus,
+				priorStatus: cart.priorStatus,
+				assayId: cart.assayId,
+				assayName: cart.assayName,
+				program: cart.program,
+				experiment: cart.experiment,
+				arm: cart.arm,
+				hasRawData: !!cart.rawData,
+				readouts: cart.readouts,
+				result: cart.result,
+				analysisStatus: cart.analysis ? 'present' : 'absent',
+				reagentChain: Array.isArray(cart.reagentChain) ? cart.reagentChain.map((r: any) => ({
+					executionId: r.executionId,
+					protocolName: r.protocolName,
+					outputBarcode: r.outputBarcode,
+					verified: r.verified
+				})) : [],
+				testExecution: cart.testExecution ? {
+					spuId: cart.testExecution.spu?._id,
+					executedAt: cart.testExecution.executedAt
+				} : null,
+				sample: cart.sample,
+				testResultStatus: cart.testResult?.status,
+				finalizedAt: cart.finalizedAt,
+				createdAt: cart.createdAt,
+				updatedAt: cart.updatedAt,
+				source: 'CartridgeRecord projected to research fields (rawData, analysis, reagentChain, testExecution, testResult)',
+				sourceUrl: `/cartridges/${cart._id}`,
+				dataIntegrityNotes: notes
 			};
 		}
 	}
