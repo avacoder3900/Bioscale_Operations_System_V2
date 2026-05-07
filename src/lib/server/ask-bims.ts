@@ -7,6 +7,7 @@ import {
 } from './db';
 import { getCheckedOutCartridgeIds } from './checkout-utils';
 import { TIER_1_REFERENCE } from './ask-bims-tier1';
+import { searchDocs } from './docs-search';
 
 /**
  * Denied collections (principle #9 — never queryable through Ask BIMS):
@@ -568,6 +569,22 @@ Use when: "why isn't run X moving", "what's blocking run Y", "stuck run".`,
 			properties: { runId: { type: 'string' } },
 			required: ['runId'],
 			cache_control: { type: 'ephemeral' }
+		}
+	},
+	{
+		name: 'search_documentation',
+		description: `Full-text search across BIMS engineering docs (design notes, audits, manufacturing-flow analyses, recent fixes).
+Source: docs/ tree, markdown only — allowlist excludes session/handoff/transactional notes and PRDs (PRDs describe intended work, not necessarily shipped — high hallucination risk).
+
+Use when: "why does X work this way", "what was the recent fix for Y", "where is Z documented", design-history questions, or when the user references a doc title.
+Don't use for: live data queries (use the data tools); operator SOP step lookups (use search_work_instructions when available — Phase C); inlined TIER 1 facts you can answer from the system reference directly (don't double-fetch).
+Caps: 5 results max, 200 chars per snippet, 500ms timeout. If a cap fires, the result includes a dataIntegrityNotes hint — narrow the query.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				query: { type: 'string', description: 'Search phrase (min 3 chars). Substring match, case-insensitive — try a distinctive phrase from a doc title or the body' }
+			},
+			required: ['query']
 		}
 	}
 ];
@@ -1881,6 +1898,25 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 				samplePoints: samplePoints.map(r => ({ timestamp: r.timestamp, temperature: r.temperature })),
 				source: 'TemperatureReading',
 				sourceUrl: '/equipment/activity'
+			};
+		}
+		case 'search_documentation': {
+			const q = String(input.query ?? '').trim();
+			const result = searchDocs(q);
+			const notes: string[] = [];
+			if (result.queryLength < 3) notes.push('Query must be at least 3 characters.');
+			if (result.timedOut) notes.push('Search timed out at 500ms. Try a more distinctive query.');
+			if (result.truncated) notes.push('Result count capped at 5 — narrow the query for more.');
+			if (result.matches.length === 0 && result.queryLength >= 3) {
+				notes.push(`No matches across ${result.corpusFiles} allowlisted doc files. Try a different phrase, or verify the doc title.`);
+			}
+			return {
+				matches: result.matches,
+				totalReturned: result.matches.length,
+				truncated: result.truncated,
+				corpusFiles: result.corpusFiles,
+				source: 'docs/ tree (markdown files; allowlist excludes session/handoff/PRDs)',
+				dataIntegrityNotes: notes
 			};
 		}
 	}

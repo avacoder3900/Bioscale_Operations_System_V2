@@ -16,7 +16,7 @@
 
 export interface TestQuestion {
 	id: string;
-	category: 'wax' | 'temperature' | 'runs' | 'cartridges' | 'inventory' | 'equipment' | 'anti-overlap' | 'redirection' | 'phase2' | 'inline-ref';
+	category: 'wax' | 'temperature' | 'runs' | 'cartridges' | 'inventory' | 'equipment' | 'anti-overlap' | 'redirection' | 'phase2' | 'inline-ref' | 'docs';
 	text: string;
 	requiredTools: string[];
 	forbiddenTools?: string[];
@@ -256,6 +256,24 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		forbiddenTools: ['find_cartridges', 'trace_cartridge', 'list_recent_runs'],
 		expectedAnswerPhrases: [/waxFilling/i, /runId|wax_filling_runs|WaxFillingRun/i],
 		notes: 'Phase A — pure schema-relationship recall. Should answer from inlined §2 (cartridge_records line) without fetching any data. Forbidden tools cover over-fetching for what is fundamentally a schema question.'
+	},
+
+	// === Docs search (Phase B — search_documentation tool) ===
+	{
+		id: 'docs-search-mfg-flow-gap',
+		category: 'docs',
+		text: 'According to the manufacturing flow audit, what is the issue with laser cutting?',
+		requiredTools: ['search_documentation'],
+		expectedAnswerPhrases: [/laser/i, /isolated|disconnect|no link|missing|broken/i, /MANUFACTURING-FLOW-AUDIT|manufacturing.flow.audit/i],
+		notes: 'Phase B — exercises search_documentation against a known fact in MANUFACTURING-FLOW-AUDIT.md (gap #1: LaserCutBatch is isolated). Answer should cite the file path or title.'
+	},
+	{
+		id: 'docs-search-recent-fixes',
+		category: 'docs',
+		text: 'What recent manufacturing fixes are documented in our AUDIT-CHECK-SUMMARY?',
+		requiredTools: ['search_documentation'],
+		expectedAnswerPhrases: [/AUDIT-CHECK|audit.check/i],
+		notes: 'Phase B — exercises search_documentation by doc-title reference. Answer should cite the file and surface at least one fix from the audit summary.'
 	}
 ];
 
