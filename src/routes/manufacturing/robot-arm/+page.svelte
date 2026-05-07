@@ -24,13 +24,22 @@
 <div class="mx-auto max-w-6xl space-y-8 p-4">
 	<div class="flex items-center justify-between">
 		<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Robot Arm</h1>
-		<a
-			href="/manufacturing/robot-arm/runs"
-			class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs font-medium transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
-			style="color: var(--color-tron-text)"
-		>
-			Full run log →
-		</a>
+		<div class="flex gap-2">
+			<a
+				href="/manufacturing/robot-arm/control"
+				class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20"
+				style="color: var(--color-tron-cyan)"
+			>
+				Remote control →
+			</a>
+			<a
+				href="/manufacturing/robot-arm/runs"
+				class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs font-medium transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
+				style="color: var(--color-tron-text)"
+			>
+				Full run log →
+			</a>
+		</div>
 	</div>
 
 	<!-- Arms -->
