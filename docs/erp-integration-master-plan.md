@@ -4,7 +4,7 @@ Status: SYNTHESIS & READY TO COMMIT (2026-05-07)
 
 ## TL;DR
 
-BIMS has 85 Mongoose models (MES/QMS/manufacturing, zero financial layer). The deep-dive docs (docs/erpnext-deep-dive/, 13 chapters, April 2026) remain authoritative. This plan:
+BIMS has 86 Mongoose models (MES/QMS/manufacturing, zero financial layer). The deep-dive docs (docs/erpnext-deep-dive/, 13 chapters, April 2026) remain authoritative. This plan:
 
 1. Reconciles research with post-Ask-BIMS reality (85 models, 4 Vercel crons, 24 Ask BIMS tools)
 2. Commits 10-phase buildout: Foundations → Stock Ledger + GL → Buying + Selling → Manufacturing → Cutover
@@ -14,7 +14,7 @@ BIMS has 85 Mongoose models (MES/QMS/manufacturing, zero financial layer). The d
 
 ## Key Reconciliation
 
-- **Models:** 84 claimed → 85 actual (added AskBimsCostLog, BimsAnomaly post-audit). Both Tier-3 immutable; plan absorbs.
+- **Models:** 84 claimed (April research) → 86 actual today (added AskBimsCostLog, BimsAnomaly post-audit, plus 1 other). All new models are Tier-3 immutable; plan absorbs.
 - **Crons:** 2 claimed → 4 actual (mocreo, heartbeat, daily-digest, cartridge-cleanup). Vercel pattern prod-ready.
 - **Ask BIMS:** 23 tools → 24 tools; cost caps + daily spend tracking live. Phase 6+ unlocks 5–10 financial tools.
 - **Deep-dive research:** Still authoritative. Zero design drift.

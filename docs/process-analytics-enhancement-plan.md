@@ -13,7 +13,7 @@ This plan upgrades BIMS process analytics from a static reporting surface into a
 
 ### 1.1 Statistical toolkit (`src/lib/server/analytics/stats.ts`)
 
-14 core pure functions, well separated from data fetching:
+12 core pure functions, well separated from data fetching:
 
 | Function | Purpose | Current consumers |
 |---|---|---|
