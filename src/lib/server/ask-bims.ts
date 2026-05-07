@@ -842,6 +842,29 @@ Don't use for: listing many executions (use list_protocol_executions); the proto
 		}
 	},
 	{
+		name: 'trace_reagent_chain',
+		description: `**The grail tool.** Given a cartridge barcode, walks the full reagent provenance chain end-to-end: cartridge → reagentChain[] → ProtocolExecution → materialsUsed inventory items → recurse on prepared items → terminate at stock items (purchased reagents). Returns a tree with every protocol execution, every input barcode, and every stock manufacturer in the lineage.
+Source: CartridgeRecord.reagentChain → ProtocolExecution → ReagentInventory (recursive on preparedFromExecutionId).
+
+Use when: "what physical reagents went into cartridge X", "trace the provenance of cart Y", "list every stock chemical in cart Z's lineage", recall scenarios, regulatory traceability.
+Don't use for: manufacturing lineage like backing/wax/reagent runs (use backward_genealogy or trace_cartridge); a single execution's details (use get_protocol_execution_details); a single inventory item (use find_reagent_inventory).
+
+Caps: default depth 8 (max 12), 200 total nodes visited, cycle-protected. Surfaces dataIntegrityNotes when:
+- reagentChain[] is empty on the cartridge (most carts today — per Jacob, the attach UI is deferred; no backfill)
+- an executionId or inventoryId fails to resolve (orphan reference)
+- the depth or node cap is hit
+
+This is what makes Ask BIMS recall-grade for compliance: with one call you can answer "what stock products are downstream of supplier lot X if it's recalled?".`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				cartridgeBarcode: { type: 'string', description: 'CartridgeRecord _id (UUID barcode)' },
+				maxDepth: { type: 'number', description: 'Optional — recursion depth cap (default 8, max 12)' }
+			},
+			required: ['cartridgeBarcode']
+		}
+	},
+	{
 		name: 'find_research_cartridge',
 		description: `Single-cartridge deep-dive on the research-side fields: rawData presence, readouts, result, analysis, reagentChain, testExecution, testResult, sample.
 Source: CartridgeRecord projection (research fields only — does NOT return manufacturing sub-objects like backing/waxFilling/reagentFilling). For mfg lineage use trace_cartridge or backward_genealogy.
@@ -2881,6 +2904,196 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 				variants,
 				declaredVariantCount: declaredVariants.length,
 				source: 'ReagentInventory aggregate by (variantKey, status); catalog metadata from ReagentCatalog.variants',
+				dataIntegrityNotes: notes
+			};
+		}
+		case 'trace_reagent_chain': {
+			const barcode = String(input.cartridgeBarcode ?? '').trim();
+			if (!barcode) return { error: 'cartridgeBarcode required', source: 'CartridgeRecord + ProtocolExecution + ReagentInventory' };
+			const maxDepth = Math.min(Math.max(Number(input.maxDepth ?? 8), 1), 12);
+			const NODE_CAP = 200;
+
+			const cart = await CartridgeRecord.findById(barcode)
+				.select('_id status currentPhase reagentChain finalizedAt')
+				.lean() as any;
+			if (!cart) {
+				return {
+					found: false,
+					cartridgeBarcode: barcode,
+					source: 'CartridgeRecord.reagentChain → ProtocolExecution → ReagentInventory (recursive)',
+					dataIntegrityNotes: [`No cartridge found with barcode "${barcode}".`]
+				};
+			}
+			const chain: any[] = Array.isArray(cart.reagentChain) ? cart.reagentChain : [];
+			if (chain.length === 0) {
+				return {
+					found: true,
+					cartridgeBarcode: cart._id,
+					cartridgeStatus: cart.status ?? cart.currentPhase ?? null,
+					reagentChain: [],
+					trace: [],
+					nodesVisited: 0,
+					truncated: false,
+					depthReached: 0,
+					source: 'CartridgeRecord.reagentChain → ProtocolExecution → ReagentInventory (recursive)',
+					dataIntegrityNotes: [
+						'reagentChain[] is empty on this cartridge. Per Jacob, the reagentChain attach UI is deferred until the variant + execution flow is exercised end-to-end with real lab work — no backfill of existing cartridges. Most cartridges today will return an empty chain. The schema field exists so future writes have somewhere to land.'
+					]
+				};
+			}
+
+			const visitedExecutions = new Set<string>();
+			const visitedInventory = new Set<string>();
+			let nodeCount = 0;
+			let truncatedFlag = false;
+			let maxDepthSeen = 0;
+			const orphanRefs: string[] = [];
+
+			async function traceInventory(inventoryId: string, depth: number): Promise<any> {
+				if (!inventoryId) return null;
+				if (depth > maxDepthSeen) maxDepthSeen = depth;
+				if (visitedInventory.has(inventoryId)) {
+					return { inventoryId, repeated: true };
+				}
+				if (depth > maxDepth) {
+					truncatedFlag = true;
+					return { inventoryId, depthCapped: true };
+				}
+				if (nodeCount >= NODE_CAP) {
+					truncatedFlag = true;
+					return { inventoryId, nodeCapped: true };
+				}
+				visitedInventory.add(inventoryId);
+				nodeCount++;
+
+				const item = await ReagentInventory.findById(inventoryId)
+					.select('_id catalogId catalogName variantKey type manufacturer manufacturerLotId catalogNumber preparedFromExecutionId preparedDate preparedBy volume status receivedDate expirationDate')
+					.lean() as any;
+				if (!item) {
+					orphanRefs.push(`inventoryId "${inventoryId}" did not resolve`);
+					return { inventoryId, error: 'inventory not found' };
+				}
+
+				let producedBy: any = null;
+				if (item.type === 'prepared' && item.preparedFromExecutionId) {
+					producedBy = await traceExecution(item.preparedFromExecutionId, depth + 1);
+				}
+
+				return {
+					inventoryId: item._id,
+					catalogId: item.catalogId,
+					catalogName: item.catalogName,
+					variantKey: item.variantKey,
+					type: item.type,
+					manufacturer: item.manufacturer,
+					manufacturerLotId: item.manufacturerLotId,
+					catalogNumber: item.catalogNumber,
+					preparedDate: item.preparedDate,
+					preparedBy: item.preparedBy,
+					volume: item.volume,
+					status: item.status,
+					receivedDate: item.receivedDate,
+					expirationDate: item.expirationDate,
+					producedBy
+				};
+			}
+
+			async function traceExecution(executionId: string, depth: number): Promise<any> {
+				if (!executionId) return null;
+				if (depth > maxDepthSeen) maxDepthSeen = depth;
+				if (visitedExecutions.has(executionId)) {
+					return { executionId, repeated: true };
+				}
+				if (depth > maxDepth) {
+					truncatedFlag = true;
+					return { executionId, depthCapped: true };
+				}
+				if (nodeCount >= NODE_CAP) {
+					truncatedFlag = true;
+					return { executionId, nodeCapped: true };
+				}
+				visitedExecutions.add(executionId);
+				nodeCount++;
+
+				const exec = await ProtocolExecution.findById(executionId)
+					.select('_id definitionId definitionName definitionVersion variantKey executedBy executedByName startedAt completedAt status outputs materialsUsed')
+					.lean() as any;
+				if (!exec) {
+					orphanRefs.push(`executionId "${executionId}" did not resolve`);
+					return { executionId, error: 'execution not found' };
+				}
+
+				const materialsUsed: any[] = Array.isArray(exec.materialsUsed) ? exec.materialsUsed : [];
+				const inputs: any[] = [];
+				for (const m of materialsUsed) {
+					const node = await traceInventory(m?.inventoryId, depth + 1);
+					if (node) {
+						inputs.push({
+							key: m?.key,
+							catalogName: m?.catalogName,
+							amountUsed: m?.amountUsed,
+							unit: m?.unit,
+							scannedAt: m?.scannedAt,
+							inventory: node
+						});
+					}
+				}
+				const outputs: any[] = Array.isArray(exec.outputs) ? exec.outputs : [];
+
+				return {
+					executionId: exec._id,
+					definitionId: exec.definitionId,
+					protocolName: exec.definitionName,
+					definitionVersion: exec.definitionVersion,
+					variantKey: exec.variantKey,
+					executedBy: exec.executedByName ?? exec.executedBy,
+					startedAt: exec.startedAt,
+					completedAt: exec.completedAt,
+					status: exec.status,
+					outputs: outputs.map((o: any) => ({ barcode: o.barcode, volume: o.volume })),
+					inputs
+				};
+			}
+
+			const trace: any[] = [];
+			for (const entry of chain) {
+				if (!entry?.executionId) continue;
+				const node = await traceExecution(entry.executionId, 1);
+				if (node) {
+					trace.push({
+						chainEntry: {
+							executionId: entry.executionId,
+							protocolName: entry.protocolName,
+							outputBarcode: entry.outputBarcode,
+							verified: entry.verified
+						},
+						execution: node
+					});
+				}
+			}
+
+			const notes: string[] = [];
+			if (truncatedFlag) {
+				notes.push(`Trace truncated — hit depth cap ${maxDepth} or node cap ${NODE_CAP}. Increase maxDepth (max 12) for deeper chains, or query a specific protocol execution with get_protocol_execution_details.`);
+			}
+			if (orphanRefs.length > 0) {
+				notes.push(`Orphan references encountered (${orphanRefs.length}): ${orphanRefs.slice(0, 5).join('; ')}${orphanRefs.length > 5 ? '…' : ''}. These point to a deleted protocol execution or inventory item; the chain tree shows them as { error: '...' } leaves.`);
+			}
+			const unverifiedCount = chain.filter((c: any) => !c.verified).length;
+			if (unverifiedCount > 0) {
+				notes.push(`${unverifiedCount}/${chain.length} reagentChain entries on this cartridge have verified=false. Per the soft enforcement gate (DOMAIN-17 PE-05), unverified entries don't block the cartridge run today, but flag the chain as not fully validated.`);
+			}
+
+			return {
+				found: true,
+				cartridgeBarcode: cart._id,
+				cartridgeStatus: cart.status ?? cart.currentPhase ?? null,
+				reagentChainEntryCount: chain.length,
+				nodesVisited: nodeCount,
+				maxDepthReached: maxDepthSeen,
+				truncated: truncatedFlag,
+				trace,
+				source: 'CartridgeRecord.reagentChain → ProtocolExecution.materialsUsed → ReagentInventory.preparedFromExecutionId (recursive, cycle-protected)',
 				dataIntegrityNotes: notes
 			};
 		}

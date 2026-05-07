@@ -380,6 +380,25 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		forbiddenTools: ['list_protocols', 'list_protocol_executions'],
 		expectedAnswerPhrases: [/active beads|protocol|step|parameter|cellMap|formula/i],
 		notes: 'Phase E3 — find_protocol surfaces the cellMap-empty integrity gap when applicable. The agent should mention parameter cascading is broken on this protocol if cellMap is empty (per docs/protocol-extraction-cellmap-bug.md).'
+	},
+
+	// === Phase E4: trace_reagent_chain (recursive grail tool) ===
+	{
+		id: 'research-trace-reagent-chain',
+		category: 'research',
+		text: 'Trace the full reagent provenance for cartridge 5da7b3c5-4cba-4fe4-93b1-c17ad61efbbf — which stock chemicals are upstream of it?',
+		requiredTools: ['trace_reagent_chain'],
+		forbiddenTools: ['trace_cartridge', 'backward_genealogy', 'find_research_cartridge'],
+		expectedAnswerPhrases: [/reagent|provenance|chain|stock|empty|deferred|attach/i],
+		notes: 'Phase E4 — recursive reagent traceability. NOT trace_cartridge/backward_genealogy (those are mfg-side lineage). Most carts return empty chain today per Jacob\'s deferred attach UI; the agent should surface that data integrity note clearly.'
+	},
+	{
+		id: 'research-trace-empty-chain-awareness',
+		category: 'research',
+		text: 'For cart abc-not-real-test-id, what protocol executions produced its reagents?',
+		requiredTools: ['trace_reagent_chain'],
+		expectedAnswerPhrases: [/not found|no cartridge|empty|no chain|deferred|attach/i],
+		notes: 'Phase E4 — graceful empty-state handling. Either "cartridge not found" (most likely) or "reagentChain is empty" with the explanation that the attach UI is deferred per Jacob.'
 	}
 ];
 
