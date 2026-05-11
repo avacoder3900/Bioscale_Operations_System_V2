@@ -19,7 +19,16 @@ import type { PageServerLoad, Actions } from './$types';
 
 export const config = { maxDuration: 60 };
 
-const DEFAULT_DEVICE_ID = 'lab-mac-scanner-1';
+// Scanner deviceId convention: ot2-<slot>-scanner (e.g., ot2-b07-scanner).
+// Slot is encoded in the OpentronsRobot.name field as the trailing R-or-B
+// + two digits token ("Robot 3 B07" → b07). Bridge daemons on each OT-2
+// poll for triggers under this id, so getting it right is what makes
+// Test Scan actually reach the scanner.
+function deviceIdForRobot(robotName: string | undefined): string {
+	const match = (robotName ?? '').match(/\b([A-Z]\d{2})\b/);
+	const slot = match?.[1]?.toLowerCase();
+	return slot ? `ot2-${slot}-scanner` : 'unknown-scanner';
+}
 
 export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!locals.user) redirect(302, '/login');
@@ -37,7 +46,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	return {
 		set: JSON.parse(JSON.stringify(set)),
 		robot: JSON.parse(JSON.stringify(robot)),
-		defaultDeviceId: DEFAULT_DEVICE_ID
+		defaultDeviceId: deviceIdForRobot(robot.name)
 	};
 };
 
