@@ -39,11 +39,12 @@
 		_id: string;
 		sensorId: string;
 		sensorName: string;
-		alertType: 'high_temp' | 'low_temp' | 'lost_connection';
+		alertType: 'high_temp' | 'low_temp' | 'lost_connection' | 'gateway_outage';
 		threshold: number | null;
 		actualValue: number | null;
 		equipmentName: string | null;
 		timestamp: string;
+		affectedSensorIds?: string[];
 	}
 
 	interface Props {
@@ -136,6 +137,7 @@
 			case 'high_temp': return 'HIGH TEMP';
 			case 'low_temp': return 'LOW TEMP';
 			case 'lost_connection': return 'LOST CONNECTION';
+			case 'gateway_outage': return 'GATEWAY OUTAGE';
 			default: return type;
 		}
 	}
@@ -285,25 +287,38 @@
 	<div class="mb-6 space-y-2">
 		{#each data.alerts as alert (alert._id)}
 			<div class="rounded-lg border {
-				alert.alertType === 'lost_connection'
+				alert.alertType === 'gateway_outage'
+					? 'border-red-500 bg-red-950/50 ring-1 ring-red-500/40'
+					: alert.alertType === 'lost_connection'
 					? 'border-amber-500/50 bg-amber-950/30'
 					: 'border-red-500/50 bg-red-950/30'
 			} px-4 py-3 flex items-center justify-between">
 				<div class="flex items-center gap-3">
 					<span class="text-xs font-bold px-2 py-0.5 rounded {
-						alert.alertType === 'lost_connection'
+						alert.alertType === 'gateway_outage'
+							? 'bg-red-500/30 text-red-200'
+							: alert.alertType === 'lost_connection'
 							? 'bg-amber-500/20 text-amber-300'
 							: 'bg-red-500/20 text-red-300'
 					}">
 						{alertLabel(alert.alertType)}
 					</span>
 					<span class="text-sm text-[var(--color-tron-text)]">
-						{alert.sensorName || alert.sensorId}
-						{#if alert.equipmentName}
-							<span class="text-[var(--color-tron-text-secondary)]">({alert.equipmentName})</span>
+						{#if alert.alertType === 'gateway_outage'}
+							<strong>Mocreo Gateway offline</strong>
+						{:else}
+							{alert.sensorName || alert.sensorId}
+							{#if alert.equipmentName}
+								<span class="text-[var(--color-tron-text-secondary)]">({alert.equipmentName})</span>
+							{/if}
 						{/if}
 					</span>
-					{#if alert.alertType === 'lost_connection'}
+					{#if alert.alertType === 'gateway_outage'}
+						<span class="text-sm font-mono text-red-200">
+							{alert.affectedSensorIds?.length ?? 0} probe{(alert.affectedSensorIds?.length ?? 0) === 1 ? '' : 's'} silent
+						</span>
+						<span class="text-xs text-[var(--color-tron-text-secondary)]">— inspect cold storage in person</span>
+					{:else if alert.alertType === 'lost_connection'}
 						<span class="text-sm font-mono text-amber-300">Sensor not responding</span>
 					{:else if alert.actualValue != null}
 						<span class="text-sm font-mono text-red-300">{alert.actualValue.toFixed(1)}°C</span>

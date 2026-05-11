@@ -23,6 +23,10 @@ const OFFLINE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 // event and emit ONE consolidated notification instead of N per-sensor emails.
 // 0.5 = half or more.
 const GATEWAY_OUTAGE_FRACTION = 0.5;
+// Hysteresis band on temp-alert auto-resolve: a probe must be at least this far
+// inside its threshold to be considered "recovered." Prevents email churn from
+// a fridge oscillating ±0.3°C around its max threshold every sync.
+const TEMP_RECOVERY_HYSTERESIS_C = 0.5;
 
 function authenticateSync(request: Request): void {
 	// 1) Explicit CRON_SECRET Bearer (preferred — set in Vercel env).
@@ -238,42 +242,99 @@ export async function runMocreoSync(request: Request, url: URL) {
 
 			if (alertsEnabled && temperature != null) {
 				if (minC != null && temperature < minC) {
-					await TemperatureAlert.create({
-						_id: generateId(),
+					// Idempotent: only create + email if there isn't already an
+					// open low_temp alert for this sensor. Without this guard the
+					// 5-min sync would email every cycle for an ongoing excursion.
+					const existing = await TemperatureAlert.findOne({
 						sensorId: sensor.thingName,
-						sensorName: sensor.name,
 						alertType: 'low_temp',
-						threshold: minC,
-						actualValue: temperature,
-						equipmentId,
-						equipmentName: eqName,
-						timestamp: now
+						acknowledged: false,
+						resolvedAt: { $exists: false }
 					});
-					alertsCreated.push('low_temp');
-					await notifyTemperatureAlert({
-						sensorId: sensor.thingName, sensorName: sensor.name,
-						alertType: 'low_temp', threshold: minC, actualValue: temperature,
-						equipmentId, equipmentName: eqName, timestamp: now
-					});
+					if (!existing) {
+						await TemperatureAlert.create({
+							_id: generateId(),
+							sensorId: sensor.thingName,
+							sensorName: sensor.name,
+							alertType: 'low_temp',
+							threshold: minC,
+							actualValue: temperature,
+							equipmentId,
+							equipmentName: eqName,
+							timestamp: now
+						});
+						alertsCreated.push('low_temp');
+						await notifyTemperatureAlert({
+							sensorId: sensor.thingName, sensorName: sensor.name,
+							alertType: 'low_temp', threshold: minC, actualValue: temperature,
+							equipmentId, equipmentName: eqName, timestamp: now
+						});
+					}
+				} else if (minC != null && temperature >= minC + TEMP_RECOVERY_HYSTERESIS_C) {
+					// Auto-resolve any open low_temp alert when temp recovers past
+					// the hysteresis band. Silent — operators see live status on
+					// the dashboard; no recovery email to avoid oscillation spam.
+					await TemperatureAlert.updateOne(
+						{
+							sensorId: sensor.thingName,
+							alertType: 'low_temp',
+							acknowledged: false,
+							resolvedAt: { $exists: false }
+						},
+						{
+							$set: {
+								acknowledged: true,
+								acknowledgedAt: now,
+								resolvedAt: now,
+								resolvedReason: `auto-resolved: temperature recovered (${temperature.toFixed(1)}°C, threshold ${minC}°C)`
+							}
+						}
+					);
 				}
+
 				if (maxC != null && temperature > maxC) {
-					await TemperatureAlert.create({
-						_id: generateId(),
+					const existing = await TemperatureAlert.findOne({
 						sensorId: sensor.thingName,
-						sensorName: sensor.name,
 						alertType: 'high_temp',
-						threshold: maxC,
-						actualValue: temperature,
-						equipmentId,
-						equipmentName: eqName,
-						timestamp: now
+						acknowledged: false,
+						resolvedAt: { $exists: false }
 					});
-					alertsCreated.push('high_temp');
-					await notifyTemperatureAlert({
-						sensorId: sensor.thingName, sensorName: sensor.name,
-						alertType: 'high_temp', threshold: maxC, actualValue: temperature,
-						equipmentId, equipmentName: eqName, timestamp: now
-					});
+					if (!existing) {
+						await TemperatureAlert.create({
+							_id: generateId(),
+							sensorId: sensor.thingName,
+							sensorName: sensor.name,
+							alertType: 'high_temp',
+							threshold: maxC,
+							actualValue: temperature,
+							equipmentId,
+							equipmentName: eqName,
+							timestamp: now
+						});
+						alertsCreated.push('high_temp');
+						await notifyTemperatureAlert({
+							sensorId: sensor.thingName, sensorName: sensor.name,
+							alertType: 'high_temp', threshold: maxC, actualValue: temperature,
+							equipmentId, equipmentName: eqName, timestamp: now
+						});
+					}
+				} else if (maxC != null && temperature <= maxC - TEMP_RECOVERY_HYSTERESIS_C) {
+					await TemperatureAlert.updateOne(
+						{
+							sensorId: sensor.thingName,
+							alertType: 'high_temp',
+							acknowledged: false,
+							resolvedAt: { $exists: false }
+						},
+						{
+							$set: {
+								acknowledged: true,
+								acknowledgedAt: now,
+								resolvedAt: now,
+								resolvedReason: `auto-resolved: temperature recovered (${temperature.toFixed(1)}°C, threshold ${maxC}°C)`
+							}
+						}
+					);
 				}
 			}
 
@@ -289,6 +350,26 @@ export async function runMocreoSync(request: Request, url: URL) {
 						equipmentId, equipmentName: eqName, timestamp: now
 					});
 				}
+			} else {
+				// Probe is reporting fresh data — auto-resolve any open
+				// lost_connection alert. Silent (no recovery email per probe;
+				// the gateway-wide recovery email handles the bulk case).
+				await TemperatureAlert.updateOne(
+					{
+						sensorId: sensor.thingName,
+						alertType: 'lost_connection',
+						acknowledged: false,
+						resolvedAt: { $exists: false }
+					},
+					{
+						$set: {
+							acknowledged: true,
+							acknowledgedAt: now,
+							resolvedAt: now,
+							resolvedReason: 'auto-resolved: probe reporting again'
+						}
+					}
+				);
 			}
 
 			results.push({
