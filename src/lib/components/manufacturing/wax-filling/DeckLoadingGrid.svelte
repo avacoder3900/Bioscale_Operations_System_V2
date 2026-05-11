@@ -231,17 +231,16 @@
 				error: `Slot ${targetSlot + 1} is already filled — enable override to replace.`
 			};
 		}
-		// Duplicate-in-session check skips the slot we're about to write to (so
-		// an override that re-scans the same cartridge into the same slot is a
-		// no-op rather than an error).
-		if (!opts.override) {
-			const dupIndex = scans.findIndex((s, i) => s?.cartridgeId === scanned && i !== targetSlot);
-			if (dupIndex >= 0) {
-				return {
-					ok: false,
-					error: `Cartridge "${scanned}" already scanned in this session (slot ${dupIndex + 1})`
-				};
-			}
+		// Duplicate-in-other-slots check always runs, even with override. We
+		// exclude the target slot itself so re-scanning the same cartridge into
+		// the same slot is a no-op rather than an error; but the same cartridge
+		// in a different slot is still rejected, override or not.
+		const dupIndex = scans.findIndex((s, i) => s?.cartridgeId === scanned && i !== targetSlot);
+		if (dupIndex >= 0) {
+			return {
+				ok: false,
+				error: `Cartridge "${scanned}" already scanned in this session (slot ${dupIndex + 1})`
+			};
 		}
 		if (!currentLot) {
 			return { ok: false, error: 'No available oven-ready lots' };
@@ -258,11 +257,15 @@
 		const next = scans.slice();
 		next[targetSlot] = { cartridgeId: scanned, backedLotId: currentLot.lotId };
 		scans = next;
-		// Clear failed-slot flag now that this slot has a valid scan.
+		// Clear failed-slot flag + remove from the visible failures list now
+		// that this slot has a valid scan.
 		if (failedSlots.has(targetSlot)) {
 			const fs = new SvelteSet(failedSlots);
 			fs.delete(targetSlot);
 			failedSlots = fs;
+		}
+		if (sweepFailures.some((f) => f.slotIndex === targetSlot)) {
+			sweepFailures = sweepFailures.filter((f) => f.slotIndex !== targetSlot);
 		}
 		return { ok: true };
 	}
@@ -740,7 +743,7 @@
 							/>
 							<label class="mt-2 flex items-center gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
 								<input type="checkbox" bind:checked={expandedOverride} class="accent-[var(--color-tron-cyan)]" />
-								Override (allow replacing the cartridge already in this slot and bypass session-duplicate check)
+								Override (allow replacing the cartridge currently in this slot)
 							</label>
 							{#if expandedError}
 								<p class="mt-2 text-[11px] text-red-300">{expandedError}</p>

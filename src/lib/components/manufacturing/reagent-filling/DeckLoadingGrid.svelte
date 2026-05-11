@@ -138,14 +138,16 @@
 				error: `Slot ${targetSlot + 1} is already filled — enable override to replace.`
 			};
 		}
-		if (!opts.override) {
-			const dupIndex = scans.findIndex((s, i) => s?.cartridgeId === scanned && i !== targetSlot);
-			if (dupIndex >= 0) {
-				return {
-					ok: false,
-					error: `Cartridge "${scanned}" already scanned (slot ${dupIndex + 1})`
-				};
-			}
+		// Duplicate-in-other-slots check always runs, even with override. The
+		// target slot itself is excluded so re-scanning the same cartridge into
+		// the same slot is a no-op; same cartridge in a different slot is still
+		// rejected regardless of override.
+		const dupIndex = scans.findIndex((s, i) => s?.cartridgeId === scanned && i !== targetSlot);
+		if (dupIndex >= 0) {
+			return {
+				ok: false,
+				error: `Cartridge "${scanned}" already scanned (slot ${dupIndex + 1})`
+			};
 		}
 		try {
 			const res = await fetch(`/api/dev/validate-equipment?type=cartridge&id=${encodeURIComponent(scanned)}&context=reagent`);
@@ -163,6 +165,9 @@
 			const fs = new SvelteSet(failedSlots);
 			fs.delete(targetSlot);
 			failedSlots = fs;
+		}
+		if (sweepFailures.some((f) => f.slotIndex === targetSlot)) {
+			sweepFailures = sweepFailures.filter((f) => f.slotIndex !== targetSlot);
 		}
 		return { ok: true };
 	}
@@ -522,7 +527,7 @@
 							/>
 							<label class="mt-2 flex items-center gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
 								<input type="checkbox" bind:checked={expandedOverride} class="accent-[var(--color-tron-cyan)]" />
-								Override (allow replacing the cartridge already in this slot and bypass session-duplicate check)
+								Override (allow replacing the cartridge currently in this slot)
 							</label>
 							{#if expandedError}
 								<p class="mt-2 text-[11px] text-red-300">{expandedError}</p>
