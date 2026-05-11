@@ -13,11 +13,39 @@
  * narrow its query if it hits any of these.
  */
 
-const DOCS = import.meta.glob('/docs/**/*.md', {
-	query: '?raw',
-	import: 'default',
-	eager: true
-}) as Record<string, string>;
+import * as nodeFs from 'node:fs';
+import * as nodePath from 'node:path';
+
+// Vite bundles the docs at build time via import.meta.glob. Under raw Node
+// (e.g. `npx tsx scripts/test-ask-bims.ts`), import.meta.glob isn't a function,
+// so fall back to a synchronous filesystem walk rooted at process.cwd()/docs.
+// The fallback path is dead code in Vite builds.
+function loadDocsFromFs(): Record<string, string> {
+	const root = nodePath.resolve(process.cwd(), 'docs');
+	const out: Record<string, string> = {};
+	if (!nodeFs.existsSync(root)) return out;
+	const walk = (dir: string) => {
+		for (const entry of nodeFs.readdirSync(dir, { withFileTypes: true })) {
+			const full = nodePath.join(dir, entry.name);
+			if (entry.isDirectory()) walk(full);
+			else if (entry.isFile() && entry.name.endsWith('.md')) {
+				const rel = '/docs/' + nodePath.relative(root, full).split(nodePath.sep).join('/');
+				out[rel] = nodeFs.readFileSync(full, 'utf8');
+			}
+		}
+	};
+	walk(root);
+	return out;
+}
+
+const DOCS: Record<string, string> =
+	typeof (import.meta as unknown as { glob?: unknown }).glob === 'function'
+		? (import.meta.glob('/docs/**/*.md', {
+				query: '?raw',
+				import: 'default',
+				eager: true
+		  }) as Record<string, string>)
+		: loadDocsFromFs();
 
 const BLOCKED_PATTERNS: RegExp[] = [
 	/SESSION-LOG/i,

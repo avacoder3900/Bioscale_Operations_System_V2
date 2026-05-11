@@ -13,11 +13,35 @@
  * `Tag #` cell, then everything below is data.
  */
 
-const CSV_FILES = import.meta.glob('/data/equipment-datasheets/*.csv', {
-	query: '?raw',
-	import: 'default',
-	eager: true
-}) as Record<string, string>;
+import * as nodeFs from 'node:fs';
+import * as nodePath from 'node:path';
+
+// Vite bundles the CSVs at build time via import.meta.glob. Under raw Node
+// (e.g. `npx tsx scripts/test-ask-bims.ts`), .glob isn't a function — fall back
+// to a synchronous read from process.cwd()/data/equipment-datasheets/.
+function loadCsvsFromFs(): Record<string, string> {
+	const root = nodePath.resolve(process.cwd(), 'data/equipment-datasheets');
+	const out: Record<string, string> = {};
+	if (!nodeFs.existsSync(root)) return out;
+	for (const entry of nodeFs.readdirSync(root, { withFileTypes: true })) {
+		if (entry.isFile() && entry.name.toLowerCase().endsWith('.csv')) {
+			out['/data/equipment-datasheets/' + entry.name] = nodeFs.readFileSync(
+				nodePath.join(root, entry.name),
+				'utf8'
+			);
+		}
+	}
+	return out;
+}
+
+const CSV_FILES: Record<string, string> =
+	typeof (import.meta as unknown as { glob?: unknown }).glob === 'function'
+		? (import.meta.glob('/data/equipment-datasheets/*.csv', {
+				query: '?raw',
+				import: 'default',
+				eager: true
+		  }) as Record<string, string>)
+		: loadCsvsFromFs();
 
 export interface EquipmentRow {
 	source: string; // bundled filename, e.g. 'BT' or 'Fannin'
