@@ -541,6 +541,11 @@
 							{sweepInFlight ? 'Scanning…' : 'Scan Cartridges'}
 						</button>
 					</div>
+					<p class="mt-2 rounded border border-amber-500/30 bg-amber-900/15 px-2 py-1 text-[11px] text-amber-200/90">
+						Auto-scan only works when BIMS is running on a Mac on the lab LAN (e.g.
+						<span class="font-mono">localhost:5176</span>). The cloud deploy can't reach the OT-2's
+						private-network address. Handheld scan input below works from any deployment.
+					</p>
 					{#if sweepProgress}
 						<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">{sweepProgress}</p>
 					{/if}
