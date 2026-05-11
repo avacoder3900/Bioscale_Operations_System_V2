@@ -57,9 +57,18 @@ import {
 export const config = { maxDuration: 300 };
 
 const VALID_SOURCES = new Set(['wax_filling', 'reagent_filling', 'manual', 'test']);
-const DEFAULT_DEVICE_ID = 'lab-mac-scanner-1';
 const SCAN_WAIT_TIMEOUT_MS = 15_000;
 const SCAN_POLL_INTERVAL_MS = 200;
+
+// Scanner deviceId convention: ot2-<slot>-scanner, where slot is the trailing
+// R/B + two digits in the OpentronsRobot.name field ("Robot 3 B07" → b07).
+// Bridge daemons on each OT-2 poll triggers under this id, so this has to
+// match the robot the sweep is targeting.
+function deviceIdForRobot(robotName: string | undefined): string {
+	const match = (robotName ?? '').match(/\b([A-Z]\d{2})\b/);
+	const slot = match?.[1]?.toLowerCase();
+	return slot ? `ot2-${slot}-scanner` : 'unknown-scanner';
+}
 
 async function waitForScanEvent(
 	deviceId: string,
@@ -100,19 +109,24 @@ async function waitForScanEvent(
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!locals.user) error(401, 'Not authenticated');
 	requirePermission(locals.user, 'manufacturing:write');
+	const user = locals.user; // narrowed for use inside async closures below
 
 	const body = await request.json().catch(() => ({} as any));
 	const robotId = body?.robotId?.toString().trim();
 	const positionSetId = body?.positionSetId?.toString().trim() || null;
-	const deviceId = body?.deviceId?.toString().trim() || DEFAULT_DEVICE_ID;
 	const source = VALID_SOURCES.has(body?.source) ? body.source : 'manual';
 	const contextRef = body?.contextRef?.toString() || undefined;
+	const rawMaxSlots = Number(body?.maxSlots);
+	const maxSlotsRequested =
+		Number.isFinite(rawMaxSlots) && rawMaxSlots > 0 ? Math.floor(rawMaxSlots) : null;
 
 	if (!robotId) error(400, 'robotId required');
 
 	const robot = await resolveRobot(robotId);
 	if (!robot) error(404, 'Robot not found');
 	const opentronsRobotId = robot._id as string;
+	const deviceId =
+		body?.deviceId?.toString().trim() || deviceIdForRobot(robot.name as string | undefined);
 
 	await connectDB();
 
@@ -123,19 +137,25 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!set) error(404, positionSetId ? 'Position set not found' : 'No default position set for this robot — teach one first');
 	if (set.robotId !== opentronsRobotId) error(400, 'Position set does not belong to this robot');
 
-	// Verify all slots have been taught.
+	const slotsToWalk = Math.min(
+		set.positionCount,
+		maxSlotsRequested ?? set.positionCount
+	);
+
+	// Verify all slots we plan to walk have been taught (slots beyond
+	// slotsToWalk can stay unfilled without blocking).
 	const positionsBySlot = new Map<number, { x: number; y: number; z: number }>();
 	for (const p of set.positions ?? []) {
 		positionsBySlot.set(p.slotIndex, { x: p.x, y: p.y, z: p.z });
 	}
 	const missing: number[] = [];
-	for (let i = 0; i < set.positionCount; i++) {
+	for (let i = 0; i < slotsToWalk; i++) {
 		if (!positionsBySlot.has(i)) missing.push(i);
 	}
 	if (missing.length > 0) {
 		error(
 			400,
-			`Position set "${set.title}" is incomplete — slots not taught: ${missing.join(', ')}`
+			`Position set "${set.title}" is incomplete — slots not taught (0..${slotsToWalk - 1}): ${missing.join(', ')}`
 		);
 	}
 
@@ -177,8 +197,24 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// 2. Home before sweep.
 		await home(robot, runId);
 
+		// Trigger + wait once. Used inside the per-slot retry loop below.
+		const triggerAndWait = async () => {
+			const triggerInsertedAt = new Date();
+			const trigger = await ScannerTrigger.create({
+				_id: generateId(),
+				deviceId,
+				requestedBy: user._id,
+				requestedByUsername: user.username,
+				source,
+				contextRef,
+				requestedAt: triggerInsertedAt,
+				consumedAt: null
+			});
+			return waitForScanEvent(deviceId, trigger._id, triggerInsertedAt);
+		};
+
 		// 3. Walk slots in order.
-		for (let slotIndex = 0; slotIndex < set.positionCount; slotIndex++) {
+		for (let slotIndex = 0; slotIndex < slotsToWalk; slotIndex++) {
 			const pos = positionsBySlot.get(slotIndex)!;
 
 			try {
@@ -191,19 +227,15 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				continue;
 			}
 
-			const triggerInsertedAt = new Date();
-			const trigger = await ScannerTrigger.create({
-				_id: generateId(),
-				deviceId,
-				requestedBy: locals.user._id,
-				requestedByUsername: locals.user.username,
-				source,
-				contextRef,
-				requestedAt: triggerInsertedAt,
-				consumedAt: null
-			});
+			// First attempt. If it fails (scanner error or empty payload), retry
+			// exactly once before recording the failure and moving on.
+			let result = await triggerAndWait();
+			let attempts = 1;
+			if (!(result.ok && result.barcode)) {
+				result = await triggerAndWait();
+				attempts = 2;
+			}
 
-			const result = await waitForScanEvent(deviceId, trigger._id, triggerInsertedAt);
 			if (result.ok && result.barcode) {
 				scans.push({
 					slotIndex,
@@ -215,7 +247,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 					scannedAt: result.receivedAt ?? new Date()
 				});
 			} else {
-				errors.push({ slotIndex, message: result.errorMessage ?? 'unknown scanner failure' });
+				errors.push({
+					slotIndex,
+					message: `${result.errorMessage ?? 'unknown scanner failure'} (after ${attempts} attempt${attempts === 1 ? '' : 's'})`
+				});
 			}
 		}
 
@@ -248,6 +283,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			deviceId,
 			source,
 			contextRef,
+			slotsWalked: slotsToWalk,
 			scanCount: scans.length,
 			errorCount: errors.length,
 			abortReason,
@@ -267,6 +303,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		positionSetId: set._id,
 		title: set.title,
 		positionCount: set.positionCount,
+		slotsWalked: slotsToWalk,
 		scans,
 		errors,
 		abortReason,
