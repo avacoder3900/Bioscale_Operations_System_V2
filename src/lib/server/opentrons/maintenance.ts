@@ -21,7 +21,10 @@ export type RobotRef = { ip: string; port?: number | null };
 
 /** Open a new maintenance run. Returns the run id. */
 export async function openMaintenanceRun(robot: RobotRef): Promise<{ runId: string }> {
-	const res = await robotPost(robot as any, '/maintenance_runs', {});
+	// OT-2 maintenance_runs endpoint is JSON:API style — requires the `data`
+	// envelope even when there are no attributes. Empty body returns
+	// `Field required` at /data.
+	const res = await robotPost(robot as any, '/maintenance_runs', { data: {} });
 	if (!res.ok) {
 		const body = await res.json().catch(() => ({}));
 		throw new Error(
@@ -82,20 +85,30 @@ export async function sendMaintenanceCommand(
  * a per-run pipetteId — that id is what subsequent motion commands need.
  */
 export async function discoverPipette(
-	robot: RobotRef
+	robot: RobotRef,
+	preferredMount?: 'left' | 'right' | null
 ): Promise<{ pipetteName: string; mount: 'left' | 'right' } | null> {
 	try {
 		const res = await robotGet(robot as any, '/pipettes');
 		if (!res.ok) return null;
 		const body = (await res.json()) as Record<string, { name?: string; model?: string }>;
-		// /pipettes returns { left: {name|model, ...}, right: {...} }
-		const left = body?.left;
-		const right = body?.right;
-		if (left?.name) return { pipetteName: left.name, mount: 'left' };
-		if (right?.name) return { pipetteName: right.name, mount: 'right' };
-		// Fall back to model field if name is absent
-		if (left?.model) return { pipetteName: left.model, mount: 'left' };
-		if (right?.model) return { pipetteName: right.model, mount: 'right' };
+		// /pipettes returns { left: {name|model, ...}, right: {...} }. We need the
+		// `name` (technical id like 'p20_single_gen2'); `model` is also accepted
+		// as a fallback. Honor preferredMount when both mounts are populated.
+		const mounts: Array<'left' | 'right'> =
+			preferredMount === 'left'
+				? ['left', 'right']
+				: preferredMount === 'right'
+					? ['right', 'left']
+					: ['left', 'right'];
+		for (const m of mounts) {
+			const entry = body?.[m];
+			if (entry?.name) return { pipetteName: entry.name, mount: m };
+		}
+		for (const m of mounts) {
+			const entry = body?.[m];
+			if (entry?.model) return { pipetteName: entry.model, mount: m };
+		}
 		return null;
 	} catch (e) {
 		// Log the underlying reason (ECONNREFUSED etc.) so the failure path is

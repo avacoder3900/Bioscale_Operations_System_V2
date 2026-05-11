@@ -29,16 +29,19 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!robot) error(404, 'Robot not found');
 
 	const body = await request.json().catch(() => ({} as any));
-	let pipetteName: string | undefined = body?.pipetteName;
-	let mount: 'left' | 'right' | undefined = body?.mount;
+	const requestedMount: 'left' | 'right' | undefined = body?.mount;
+	// We deliberately do NOT trust body.pipetteName (which originates from the
+	// set document and may be a human-readable label like "20 microliter").
+	// Instead, always resolve the technical pipette `name` from the live OT-2
+	// /pipettes endpoint, honoring requestedMount as a preference.
+	let pipetteName: string | undefined;
+	let mount: 'left' | 'right' | undefined = requestedMount;
 
 	try {
-		if (!pipetteName || !mount) {
-			const discovered = await discoverPipette(robot);
-			if (discovered) {
-				pipetteName = pipetteName ?? discovered.pipetteName;
-				mount = mount ?? discovered.mount;
-			}
+		const discovered = await discoverPipette(robot, requestedMount ?? null);
+		if (discovered) {
+			pipetteName = discovered.pipetteName;
+			mount = discovered.mount;
 		}
 
 		const { runId } = await openMaintenanceRun(robot);
