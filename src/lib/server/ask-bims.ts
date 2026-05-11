@@ -3401,9 +3401,15 @@ E. **On broad questions** ("what's going on?", "how's the floor?"): pick 2-3 tar
 
 F. **When parameters matter.** Tools with optional parameters benefit from useful defaults: pass sinceHours when asked about "today" or "recent", pass status filters when the user mentions a stage, pass limits when they want "top N." Don't call a tool with no parameters and then re-call with parameters when you realize it returned too much.
 
-G. **NEVER re-call the same tool in one turn.** Before calling a tool, check whether you've already called it in this conversation turn — even with slightly different parameters. If yes, USE THE PRIOR RESULT.
+G. **NEVER re-call the same tool in one turn, and don't chain browse→find→re-find sequences.** Before calling a tool, check whether you've already called it in this conversation turn — even with different parameters or a different query string. If yes, USE THE PRIOR RESULT.
 
-   Concrete example of the bug: you call list_recent_runs(sinceHours=24), get no matches, then call list_recent_runs(sinceHours=168) hoping for more. That's a violation — the second call burns tokens and is detected as anti-redundancy. INSTEAD: pass a generous window on your first call (the tool's default is one week), accept whatever comes back, and tell the user "no recent runs in the past week" if nothing matches. Two calls to the same tool in one turn is ALWAYS a bug.
+   Concrete failure modes (ALL of these are anti-redundancy violations):
+   - You call list_recent_runs(sinceHours=24), get no matches, then call list_recent_runs(sinceHours=168) hoping for more. Fix: pass a generous window on your FIRST call.
+   - You call search_documentation(query='X'), get thin results, then call search_documentation(query='Y') hoping for better matches. Fix: pick your best query first time. If results are weak, return them and tell the user "no strong matches — try refining with a different keyword" rather than burning tokens on a second call.
+   - You call search_work_instructions(query='WI-01'), get a hit with matchedSteps[], then call search_work_instructions(query='WI-01 backing') to drill in. Fix: the first call ALREADY returned the WI with its matched steps and full step count. Use what you got.
+   - You call find_protocol(query='Active Beads v2') and don't get an exact match, then call list_protocols to browse, then call find_protocol AGAIN with an ID from the browse result. Fix: if find_protocol doesn't match, return the closest-fit info to the user with a "did you mean…" — do NOT chain to list_protocols then back to find_protocol.
+
+   Two calls to the same tool in one turn is ALWAYS a bug. Plan your single best call and accept whatever comes back.
 
 H. **UUID-style IDs are ReceivingLot IDs, not parts.** A string like 74b942a2-16a5-4ae4-aa91-917d3ecc146a is a ReceivingLot._id (or a similar UUID-style barcode). Use find_receiving_lot, NOT find_part. find_part queries the PT-CT-XXX catalog and will return nothing for UUID lookups, which then leads to false-positive "lot not found" warnings. Recognize UUIDs by their shape (8-4-4-4-12 hex with dashes).`;
 
@@ -3499,6 +3505,10 @@ async function runAgentLoop(history: AskBimsMessage[], opts: AskBimsOpts): Promi
 		: TOOLS;
 
 	const toolCalls: AskBimsResult['toolCalls'] = [];
+	// Per-turn tool-name dedup enforcement (Rule G). Tracks which tools have
+	// already run in this turn so the loop can short-circuit a second call
+	// with a synthetic refusal instead of re-executing.
+	const calledToolNames = new Set<string>();
 	const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
 	const MAX_ITERATIONS = 8;
 
@@ -3575,6 +3585,25 @@ async function runAgentLoop(history: AskBimsMessage[], opts: AskBimsOpts): Promi
 
 		const toolResults: Anthropic.ToolResultBlockParam[] = [];
 		for (const block of toolUseBlocks) {
+			// Rule G enforcement — block second call to a tool already run this turn.
+			// Synthetic refusal goes back to the model so it adapts instead of crashing.
+			// We deliberately do NOT push refused attempts to `toolCalls` — they didn't
+			// execute, and the public surface should reflect what actually ran.
+			if (calledToolNames.has(block.name)) {
+				const refusal = {
+					error: `Anti-redundancy guard tripped: '${block.name}' was already called earlier in this turn. Per Rule G, do not re-call the same tool with different parameters. Return the prior result to the user, refine on the next user message, or pick a different tool.`,
+					skipped: true,
+					ruleViolation: 'anti-redundancy'
+				};
+				toolResults.push({
+					type: 'tool_result',
+					tool_use_id: block.id,
+					content: JSON.stringify(refusal),
+					is_error: true
+				});
+				continue;
+			}
+			calledToolNames.add(block.name);
 			try {
 				const out = await runTool(block.name, block.input ?? {});
 				toolCalls.push({ name: block.name, input: block.input, result: out });
