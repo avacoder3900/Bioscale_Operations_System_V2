@@ -345,8 +345,53 @@ export const actions: Actions = {
 		const lotBarcode = (data.get('lotBarcode') as string)?.trim();
 		const runId = (data.get('runId') as string)?.trim();
 		const override = data.get('override') === 'true';
+		const testMode = data.get('testMode') === 'true';
 		const adminUser = (data.get('adminUser') as string)?.trim() ?? '';
 		const adminPass = (data.get('adminPass') as string) ?? '';
+
+		// Test mode: synthesize a backing lot so the wax flow can be run
+		// end-to-end without touching real BackingLot inventory. The lot id
+		// is deterministic per run so re-clicks during testing reuse the
+		// same row rather than piling up. No admin re-auth required.
+		if (testMode) {
+			if (!runId) return fail(400, { error: 'runId required for test mode' });
+			const testLotId = `TEST-LOT-${runId}`;
+			const existing = await BackingLot.findById(testLotId).lean() as any;
+			if (existing) {
+				await BackingLot.findByIdAndUpdate(testLotId, {
+					$set: {
+						status: 'ready',
+						cartridgeCount: 24
+					}
+				});
+			} else {
+				await BackingLot.create({
+					_id: testLotId,
+					lotType: 'backing',
+					ovenEntryTime: new Date(),
+					status: 'ready',
+					cartridgeCount: 24,
+					operator: { _id: locals.user._id, username: locals.user.username }
+				});
+			}
+			await WaxFillingRun.findByIdAndUpdate(runId, { $set: { activeLotId: testLotId } });
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'backing_lots',
+				recordId: testLotId,
+				action: existing ? 'UPDATE' : 'INSERT',
+				changedBy: locals.user.username,
+				changedAt: new Date(),
+				reason: 'Test mode — synthetic backing lot for end-to-end test (no real inventory impact)',
+				newData: { testMode: true, runId, lotId: testLotId, cartridgeCount: 24 }
+			});
+			return {
+				success: true,
+				lotId: testLotId,
+				cartridgeCount: 24,
+				testMode: true
+			};
+		}
 
 		if (!lotBarcode) return fail(400, { error: 'Lot barcode is required' });
 
