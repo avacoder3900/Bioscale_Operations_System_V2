@@ -179,20 +179,19 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// 1. Open maintenance run + ensure a pipette is loaded for motion.
 		({ runId } = await openMaintenanceRun(robot));
 
-		const pipetteName = set.pipetteName as string | undefined;
-		const pipetteMount = (set.pipetteMount as 'left' | 'right' | undefined) ?? 'left';
-
-		if (pipetteName && pipetteMount) {
-			pipetteId = await loadPipetteInRun(robot, runId, pipetteName, pipetteMount);
-		} else {
-			const discovered = await discoverPipette(robot);
-			if (!discovered) {
-				throw new Error(
-					'No pipette mounted on the robot — sweep requires a pipette as the motion reference axis. Configure pipetteName/mount on the position set.'
-				);
-			}
-			pipetteId = await loadPipetteInRun(robot, runId, discovered.pipetteName, discovered.mount);
+		// Always resolve the technical pipette name from the live OT-2 /pipettes
+		// endpoint. set.pipetteName is free-form and may contain a human label
+		// like "Gantry" or "20 microliter" — loadPipette only accepts the
+		// OT-2's enum names (`p20_single_gen2`, etc.). The set's pipetteMount
+		// is used as a preference when both mounts are populated.
+		const preferredMount = (set.pipetteMount as 'left' | 'right' | undefined) ?? undefined;
+		const discovered = await discoverPipette(robot, preferredMount ?? null);
+		if (!discovered) {
+			throw new Error(
+				'No pipette mounted on the robot — sweep requires a pipette as the motion reference axis. Mount a pipette on the OT-2 before running a sweep.'
+			);
 		}
+		pipetteId = await loadPipetteInRun(robot, runId, discovered.pipetteName, discovered.mount);
 
 		// 2. Home before sweep.
 		await home(robot, runId);
