@@ -14,6 +14,7 @@
 	interface Props {
 		data: {
 			robotId: string;
+			robotName: string;
 			loadError: string | null;
 			robotBlocked: { process: 'reagent'; runId: string | null } | null;
 			runState: {
@@ -760,7 +761,7 @@
 					</svg>
 				</div>
 				<h2 class="text-xl font-semibold text-[var(--color-tron-text)]">
-					{data.robotId === 'robot-1' ? 'Robot 1' : 'Robot 2'} — Wax Filling
+					{data.robotName} — Wax Filling
 				</h2>
 				<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">
 					Start a new wax filling run on this robot.

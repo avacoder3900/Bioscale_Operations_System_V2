@@ -67,6 +67,7 @@ const REAGENT_PAGE_OWNED_STAGES = new Set(['Setup', 'Loading', 'Running', 'Inspe
 function emptyState(robotId: string, loadError: string | null = null) {
 	return {
 		robotId,
+		robotName: 'Wax Filling',
 		loadError,
 		robotBlocked: null as { process: 'reagent'; runId: string | null } | null,
 		runState: {
@@ -280,8 +281,13 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			? { process: 'reagent' as const, runId: activeReagentRunRaw._id ? String(activeReagentRunRaw._id) : null }
 			: null;
 
+		const robotName =
+			(layoutData.robots as any[] | undefined)?.find((r) => r.robotId === robotId)?.name ??
+			'Wax Filling';
+
 		return {
 			robotId,
+			robotName,
 			loadError: null,
 			robotBlocked,
 			runState,
