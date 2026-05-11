@@ -59,7 +59,7 @@ export async function sendMaintenanceCommand(
 	commandType: string,
 	params: Record<string, unknown>,
 	opts: { waitUntilComplete?: boolean; timeoutMs?: number } = {}
-): Promise<unknown> {
+): Promise<any> {
 	const waitUntilComplete = opts.waitUntilComplete ?? true;
 	const timeoutMs = opts.timeoutMs ?? 30_000;
 	const qs = new URLSearchParams();
@@ -75,7 +75,19 @@ export async function sendMaintenanceCommand(
 			(body as any)?.errors?.[0]?.detail ?? `Robot returned ${res.status} on command ${commandType}`
 		);
 	}
-	return res.json();
+	// CRITICAL: the OT-2 returns HTTP 201 even when a command failed; the
+	// per-command status lives at body.data.status. A "failed" status with
+	// no http error here is the difference between a sweep that silently
+	// no-ops the gantry and one that fails loudly. Detect it.
+	const body: any = await res.json();
+	const innerStatus = body?.data?.status;
+	if (innerStatus === 'failed') {
+		const err = body?.data?.error ?? {};
+		const detail = err.detail ?? err.errorType ?? 'unknown command failure';
+		const type = err.errorType ? `[${err.errorType}] ` : '';
+		throw new Error(`${commandType} failed: ${type}${detail}`);
+	}
+	return body;
 }
 
 /**
