@@ -1413,3 +1413,119 @@ Use `byId(id)` for filters, `asId(id)` for `_id` fields in
   to pick them up.
 - `vercel.json` cron addition for `/api/cron/cartridge-cleanup-reminder`
   remains uncommitted (separate workstream — left untouched).
+
+## Session 2026-05-11 — Scanner phase-0 end-to-end on B07 + fleet rollout
+
+End-to-end success: gantry-mounted Waveshare scanner on OT-2 B07 now
+teaches positions, sweeps them, and feeds barcodes into wax/reagent
+filling. Cloned the position set to R04 and B14 as a starting point.
+
+### Bridge & hardware (B07)
+- Bridge daemon (`scanner-bridge.py`) running on B07 as PID 32558 against
+  `https://bioscale-operations-system-mongodb.vercel.app`. Heartbeats
+  every 10s land in `scanner_events` (deviceId=`ot2-b07-scanner`).
+- USB cable reseating mid-session shifted the device between `/dev/ttyACM0`
+  and `/dev/ttyACM1`. Solved permanently with a udev rule installed at
+  `/etc/udev/rules.d/99-bims-scanner.rules` (VID:PID `0218:0212`,
+  serial `2027300413413333`) → pins to `/dev/scanner`. `.env` now reads
+  `SCANNER_SERIAL_PORT=/dev/scanner`. Root remounted ro afterwards.
+
+### Teach UI fixes (commits on `feat/scanner-phase-0`)
+- `3c21e98 fix(scanner-teach): surface real fetch errors instead of bare "fetch failed"`
+  Proxy wraps fetch to expose `err.cause.code` + URL. Server logs the
+  underlying reason via console.warn. Client api() augments network errors
+  with the URL.
+- `19ef4ca fix(scanner-teach): two bugs blocking Open Maintenance Run`
+  (1) OT-2 `/maintenance_runs` requires `{ data: {} }` envelope, not `{}`.
+  (2) `loadPipette` rejected display-name strings like "20 microliter" —
+  resolve the canonical name from live `/pipettes` instead of trusting
+  the set's stored `pipetteName`; respect the set's `pipetteMount`.
+- `21bcef5 fix(scanner-teach): derive deviceId from robot name`
+  Was hardcoded `lab-mac-scanner-1`. Now derived via regex on robot.name
+  (`Robot 3 B07` → `ot2-b07-scanner`).
+
+### Settings list UX
+- `c69ec41 feat(scanner-teach): per-card delete on the settings list`
+  Each set card gets an inline `×` button posting to the per-set
+  deleteSet action, with a confirmation prompt and an inline failure
+  banner. Avoids navigating into each set to clean up.
+
+### Position extrapolation
+- `scripts/extrapolate-scanner-positions.ts` — pops slots 8-23 from
+  slots 0-7 using `x + 148 mm * column`, preserving Y and Z. Used on
+  B07's "Barcode Locations" set after the operator taught the first 8.
+- Snake-numbered deck: col 0 = slots 1-8 top→bot; col 1 = 9-16 bot→top;
+  col 2 = 17-24 top→bot. Same-row slots are colinear in Y. Source
+  column was alternating-X (~3 vs ~75) intentionally; extrapolation
+  preserves the alternation.
+
+### Filling pages — auto-scan + per-slot rescan + override
+- `ab7e620 feat(scanner): note localhost-only auto-scan on wax + reagent grids`
+  Amber notice under the Scan Cartridges card. Vercel can't route to
+  the OT-2's private LAN — auto-scan only works from BIMS running on
+  a Mac on the lab network.
+- `bc26bb6 feat(scanner-sweep): maxSlots cap + retry-once + correct deviceId default`
+  `/api/scanner/sweep` accepts body.maxSlots; per-slot trigger retries
+  once before recording failure; default deviceId derived from robot
+  name. Audit + response include slotsWalked.
+- `49b22cc feat(wax-filling): per-slot rescans, override, sweep count + retry-aware grid`
+  Wax DeckLoadingGrid: scans state now sparse Array<scan|null> length 24
+  (slotIndex matches deck position). Count input next to Scan Cartridges
+  button (default = plannedCartridgeCount). Sweep no longer aborts on
+  per-slot failures — collects them into sweepFailures, surfaces summary,
+  red-borders affected tiles. Tiles are now buttons. Click opens inline
+  rescan panel with handheld-friendly input + Override checkbox + Close.
+- `18827f0 feat(reagent-filling): mirror per-slot rescans, override, count + retry from wax`
+  Same refactor on reagent grid.
+- `56ded5e fix(filling-grids): tighten override semantics + clear stale failure list`
+  Audit-found bugs: override was bypassing cross-slot duplicate check
+  (user-intent was only "replace what's in this slot"); manual rescan
+  cleared red border but not the failures list. Fixed both grids.
+
+### Fleet rollout
+- `scripts/clone-scanner-position-set.ts` — clones a set to N target
+  robots, optionally `--default`. Dry-run by default.
+- Cloned B07's "Barcode Locations" (set `Lla0SH0yOb65-MdtTgQeL`,
+  24/24 taught, default) to R04 (new id `0Ap8akXDCBCGICM2a9BsF`) and
+  B14 (new id `yhYsOi6NjAKjvC-1EmiiE`), each marked default for its
+  robot. R04 and B14 had no prior sets.
+- **Coordinates are verbatim from B07.** Different OT-2s drift in deck
+  calibration, so R04 and B14 should be jog-verified before relying on
+  auto-sweep in production.
+
+### Diagnostic scripts (committed)
+- `scripts/inspect-scanner-events.ts` — parameterized replacement for
+  the deprecated `inspect-r04-scanner.ts` (hardcoded deviceId). Accepts
+  `<deviceId> [limit]`.
+- `scripts/extrapolate-scanner-positions.ts` — see above.
+- `scripts/clone-scanner-position-set.ts` — see above.
+
+### Local dev setup gotcha
+- `npm run dev` doesn't load `.env` into `process.env`. Must run as
+  `set -a; source .env; set +a; npm run dev` or the server 500s on
+  every request with "MONGODB_URI is not set". Worth fixing in
+  package.json eventually (e.g. add `dotenv -e .env -- vite dev`).
+
+### Pending / next session
+- Jog-verify the cloned position sets on R04 and B14 against their
+  real decks. Differences will likely require a re-teach of column 0
+  + a re-run of `extrapolate-scanner-positions.ts`.
+- Consider moving the OT-2 fetches client-side so the Vercel deploy
+  can also run sweep/jog (browser is on the LAN; Vercel isn't).
+  ~30 min refactor of the teach + grids; un-blocks "Scan Cartridges"
+  from the public URL.
+- Per-set `pipetteName` is stored free-form on the model (we saw
+  "20 microliter" sneak in). Could add a dropdown in the set-creation
+  form constrained to the OT-2 enum (`p20_single_gen2`, etc.) — but
+  the sweep + teach now resolve canonical names from live `/pipettes`
+  on the fly, so this is cosmetic.
+- systemd unit for the bridge daemon on B07 still deferred; recovery
+  after reboot is manual (`cd /data/scanner-bridge && nohup ./run.sh &`).
+
+### Branch state end of session
+- All work on `feat/scanner-phase-0`. 9 commits ahead of `origin/dev`.
+  Local `dev` was fast-forwarded to `origin/dev` (was 23 behind at
+  session start). Vercel dev preview was rebuilt earlier with an
+  empty commit.
+- Not merged to `dev` yet — `feat/scanner-phase-0` is the integration
+  branch for this whole workstream.
