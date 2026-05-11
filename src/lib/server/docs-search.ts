@@ -109,6 +109,19 @@ export function searchDocs(query: string): DocSearchResult {
 	const matches: DocSearchMatch[] = [];
 	const queryLower = trimmed.toLowerCase();
 
+	// AND-of-words matching: split the query on whitespace and require every
+	// token to appear in the line (case-insensitive). Matches the behavior of
+	// rg / grep -e / most search UIs. The agent often asks multi-word questions
+	// ("laser cutting manufacturing flow audit") that don't appear as literal
+	// substrings anywhere; AND-of-words finds the relevant line if every word
+	// is present, regardless of order. Falls back to single-substring search
+	// when the query is one word.
+	const tokens = queryLower.split(/\s+/).filter((t) => t.length > 0);
+	const lineMatches = (lineLower: string): boolean => {
+		if (tokens.length <= 1) return lineLower.includes(queryLower);
+		return tokens.every((t) => lineLower.includes(t));
+	};
+
 	for (const [path, content] of Object.entries(DOCS)) {
 		if (Date.now() - startedAt > TIMEOUT_MS) {
 			return {
@@ -124,11 +137,14 @@ export function searchDocs(query: string): DocSearchResult {
 
 		const lines = content.split('\n');
 		for (let i = 0; i < lines.length; i++) {
-			if (lines[i].toLowerCase().includes(queryLower)) {
+			const lineLower = lines[i].toLowerCase();
+			if (lineMatches(lineLower)) {
+				// Snippet anchored on the first token's hit so it's most relevant.
+				const anchor = tokens[0] ?? queryLower;
 				matches.push({
 					file: path,
 					lineNo: i + 1,
-					snippet: buildSnippet(lines[i], queryLower)
+					snippet: buildSnippet(lines[i], anchor)
 				});
 				break; // one snippet per file
 			}

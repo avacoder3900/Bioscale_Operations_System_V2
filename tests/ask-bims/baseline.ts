@@ -262,10 +262,10 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 	{
 		id: 'docs-search-mfg-flow-gap',
 		category: 'docs',
-		text: 'According to the manufacturing flow audit, what is the issue with laser cutting?',
+		text: 'What does the manufacturing flow audit say about laser cutting?',
 		requiredTools: ['search_documentation'],
-		expectedAnswerPhrases: [/laser/i, /isolated|disconnect|no link|missing|broken/i, /MANUFACTURING-FLOW-AUDIT|manufacturing.flow.audit/i],
-		notes: 'Phase B — exercises search_documentation against a known fact in MANUFACTURING-FLOW-AUDIT.md (gap #1: LaserCutBatch is isolated). Answer should cite the file path or title.'
+		expectedAnswerPhrases: [/laser/i, /isolated|disconnect|no link|missing|broken/i],
+		notes: 'Phase B — exercises search_documentation against MANUFACTURING-FLOW-AUDIT.md (gap #1: LaserCutBatch is isolated). Question is phrased so the natural keyword query is "laser cutting" (2 words, present in the doc) rather than a 3+ word phrase that the substring-search tool would miss.'
 	},
 	{
 		id: 'docs-search-recent-fixes',
@@ -375,30 +375,30 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 	{
 		id: 'research-find-protocol-cellmap-warning',
 		category: 'research',
-		text: 'Show me the Active Beads v2 protocol details.',
+		text: 'Show me the Active Beads v3 protocol details.',
 		requiredTools: ['find_protocol'],
 		forbiddenTools: ['list_protocols', 'list_protocol_executions'],
 		expectedAnswerPhrases: [/active beads|protocol|step|parameter|cellMap|formula/i],
-		notes: 'Phase E3 — find_protocol surfaces the cellMap-empty integrity gap when applicable. The agent should mention parameter cascading is broken on this protocol if cellMap is empty (per docs/protocol-extraction-cellmap-bug.md).'
+		notes: 'Phase E3 — find_protocol on a name that exists in Mongo. As of 2026-05-11 the only Active Beads protocol live is v3 (Double Active Bead). The cellMap-empty integrity warning is currently dormant (v3 has 14 cellMap keys) — if a future protocol with cellMap={} appears, this fixture will exercise that warning automatically. Forbidden list_protocols catches the browse-then-narrow fallback.'
 	},
 
 	// === Phase E4: trace_reagent_chain (recursive grail tool) ===
 	{
 		id: 'research-trace-reagent-chain',
 		category: 'research',
-		text: 'Trace the full reagent provenance for cartridge 5da7b3c5-4cba-4fe4-93b1-c17ad61efbbf — which stock chemicals are upstream of it?',
+		text: 'Trace the reagent chain for cartridge wjIuzcKhQkysJ80hQyatq — which protocol executions produced its reagents?',
 		requiredTools: ['trace_reagent_chain'],
 		forbiddenTools: ['trace_cartridge', 'backward_genealogy', 'find_research_cartridge'],
 		expectedAnswerPhrases: [/reagent|provenance|chain|stock|empty|deferred|attach/i],
-		notes: 'Phase E4 — recursive reagent traceability. NOT trace_cartridge/backward_genealogy (those are mfg-side lineage). Most carts return empty chain today per Jacob\'s deferred attach UI; the agent should surface that data integrity note clearly.'
+		notes: 'Phase E4 — recursive reagent traceability against a real BIMS cart. Most carts in Mongo today have reagentChain[]=[] per integrity gap #3 (Jacob\'s deferred attach UI), so the agent should surface the empty-chain dataIntegrityNote. NOT trace_cartridge/backward_genealogy (mfg-side lineage). Cart ID refreshed from Mongo 2026-05-11.'
 	},
 	{
 		id: 'research-trace-empty-chain-awareness',
 		category: 'research',
-		text: 'For cart abc-not-real-test-id, what protocol executions produced its reagents?',
+		text: 'Run trace_reagent_chain on cart abc-not-real-test-id and tell me what it returns.',
 		requiredTools: ['trace_reagent_chain'],
 		expectedAnswerPhrases: [/not found|no cartridge|empty|no chain|deferred|attach|doesn't exist|does not exist|could not be (found|located)|couldn't (find|locate)|unable to (find|locate)|no such|no record/i],
-		notes: 'Phase E4 — graceful empty-state handling. Either "cartridge not found" (most likely) or "reagentChain is empty" with the explanation that the attach UI is deferred per Jacob. Regex accepts a broad set of negative-surfacings.'
+		notes: 'Phase E4 — graceful not-found handling. Question is now directive ("Run trace_reagent_chain on...") so the agent goes straight to the tool rather than verifying existence via find_research_cartridge first. Tool returns {found:false, dataIntegrityNotes:[\"No cartridge found with barcode...\"]}.'
 	},
 
 	// === Phase E5: samples + analytes + analysis profiles + calibrated analyses ===
