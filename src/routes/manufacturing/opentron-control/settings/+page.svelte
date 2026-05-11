@@ -1,4 +1,7 @@
 <script lang="ts">
+	import { enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
+
 	let { data, form } = $props();
 
 	type Robot = { _id: string; name: string; ip?: string; robotSide?: string; robotModel?: string };
@@ -13,6 +16,15 @@
 		pipetteName?: string;
 		updatedAt?: string;
 	};
+
+	let deletingId = $state<string | null>(null);
+	let deleteError = $state<string | null>(null);
+
+	function confirmDelete(s: PositionSet) {
+		const taught = s.positions?.length ?? 0;
+		const detail = `${s.title} (${taught} taught)${s.isDefault ? ' — currently default' : ''}`;
+		return confirm(`Delete "${detail}"? This cannot be undone.`);
+	}
 
 	const robots = $derived((data.robots ?? []) as Robot[]);
 	const positionSets = $derived((data.positionSets ?? []) as PositionSet[]);
@@ -275,6 +287,10 @@
 			</form>
 		{/if}
 
+		{#if deleteError}
+			<p class="mb-3 rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{deleteError}</p>
+		{/if}
+
 		{#if robots.length === 0}
 			<p class="rounded border border-[var(--color-tron-border)] p-3 text-xs" style="color: var(--color-tron-text-secondary)">
 				No active OT-2 robots are registered. Add one under <a class="underline" href="/opentrons/devices">Opentrons → Devices</a> first.
@@ -301,25 +317,61 @@
 						{:else}
 							<div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
 								{#each sets as s (s._id)}
-									<a
-										href={`/manufacturing/opentron-control/settings/scanner-positions/${s._id}`}
-										class="block rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3 transition-colors hover:border-[var(--color-tron-cyan)]/50"
-									>
-										<div class="flex items-center justify-between">
-											<span class="font-medium" style="color: var(--color-tron-text)">{s.title}</span>
-											{#if s.isDefault}
-												<span class="rounded bg-[var(--color-tron-cyan)]/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[var(--color-tron-cyan)]">default</span>
-											{/if}
-										</div>
-										<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-											{progressLabel(s)} · {s.pipetteMount ?? 'left'} mount{s.pipetteName ? ` · ${s.pipetteName}` : ''}
-										</div>
-										{#if s.updatedAt}
-											<div class="mt-0.5 text-[10px]" style="color: var(--color-tron-text-secondary)">
-												Last edit: {fmtTime(s.updatedAt)}
+									<div class="relative">
+										<a
+											href={`/manufacturing/opentron-control/settings/scanner-positions/${s._id}`}
+											class="block rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3 pr-10 transition-colors hover:border-[var(--color-tron-cyan)]/50"
+										>
+											<div class="flex items-center justify-between gap-2">
+												<span class="font-medium" style="color: var(--color-tron-text)">{s.title}</span>
+												{#if s.isDefault}
+													<span class="rounded bg-[var(--color-tron-cyan)]/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-[var(--color-tron-cyan)]">default</span>
+												{/if}
 											</div>
-										{/if}
-									</a>
+											<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
+												{progressLabel(s)} · {s.pipetteMount ?? 'left'} mount{s.pipetteName ? ` · ${s.pipetteName}` : ''}
+											</div>
+											{#if s.updatedAt}
+												<div class="mt-0.5 text-[10px]" style="color: var(--color-tron-text-secondary)">
+													Last edit: {fmtTime(s.updatedAt)}
+												</div>
+											{/if}
+										</a>
+										<form
+											method="POST"
+											action={`/manufacturing/opentron-control/settings/scanner-positions/${s._id}?/deleteSet`}
+											class="absolute right-1.5 top-1.5"
+											use:enhance={({ cancel }) => {
+												if (!confirmDelete(s)) {
+													cancel();
+													return;
+												}
+												deletingId = s._id;
+												deleteError = null;
+												return async ({ result, update }) => {
+													deletingId = null;
+													if (result.type === 'error' || result.type === 'failure') {
+														deleteError =
+															(result as any)?.data?.error ??
+															(result as any)?.error?.message ??
+															'Failed to delete set';
+													}
+													await update();
+													await invalidateAll();
+												};
+											}}
+										>
+											<button
+												type="submit"
+												title="Delete set"
+												aria-label={`Delete ${s.title}`}
+												disabled={deletingId === s._id}
+												class="rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:border-red-400/60 hover:text-red-300 disabled:opacity-40"
+											>
+												{deletingId === s._id ? '…' : '×'}
+											</button>
+										</form>
+									</div>
 								{/each}
 							</div>
 						{/if}
