@@ -62,11 +62,19 @@
 	}
 
 	async function api(path: string, init?: RequestInit): Promise<any> {
-		const res = await fetch(path, {
-			...init,
-			credentials: 'same-origin',
-			headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) }
-		});
+		const method = init?.method ?? 'GET';
+		let res: Response;
+		try {
+			res = await fetch(path, {
+				...init,
+				credentials: 'same-origin',
+				headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) }
+			});
+		} catch (e: any) {
+			// Browser-side fetch threw before getting a response (offline, DNS,
+			// CORS, server crashed). Include the URL so diagnosis isn't blind.
+			throw new Error(`${method} ${path} — network error: ${e?.message ?? 'fetch failed'}`);
+		}
 		const text = await res.text();
 		let body: any = null;
 		try {
@@ -75,8 +83,12 @@
 			body = text;
 		}
 		if (!res.ok) {
-			const msg = (body && typeof body === 'object' && body.message) || body || `HTTP ${res.status}`;
-			throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+			const inner =
+				(body && typeof body === 'object' && body.message) ||
+				body ||
+				`HTTP ${res.status}`;
+			const innerStr = typeof inner === 'string' ? inner : JSON.stringify(inner);
+			throw new Error(`${method} ${path} → HTTP ${res.status}: ${innerStr}`);
 		}
 		return body;
 	}

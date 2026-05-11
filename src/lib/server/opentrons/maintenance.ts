@@ -97,7 +97,11 @@ export async function discoverPipette(
 		if (left?.model) return { pipetteName: left.model, mount: 'left' };
 		if (right?.model) return { pipetteName: right.model, mount: 'right' };
 		return null;
-	} catch {
+	} catch (e) {
+		// Log the underlying reason (ECONNREFUSED etc.) so the failure path is
+		// visible in Vercel function logs; we still return null so the caller can
+		// proceed to openMaintenanceRun, which will surface the same error.
+		console.warn('[discoverPipette] failed:', e instanceof Error ? e.message : e);
 		return null;
 	}
 }

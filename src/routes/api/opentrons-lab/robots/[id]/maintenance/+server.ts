@@ -32,15 +32,15 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	let pipetteName: string | undefined = body?.pipetteName;
 	let mount: 'left' | 'right' | undefined = body?.mount;
 
-	if (!pipetteName || !mount) {
-		const discovered = await discoverPipette(robot);
-		if (discovered) {
-			pipetteName = pipetteName ?? discovered.pipetteName;
-			mount = mount ?? discovered.mount;
-		}
-	}
-
 	try {
+		if (!pipetteName || !mount) {
+			const discovered = await discoverPipette(robot);
+			if (discovered) {
+				pipetteName = pipetteName ?? discovered.pipetteName;
+				mount = mount ?? discovered.mount;
+			}
+		}
+
 		const { runId } = await openMaintenanceRun(robot);
 		let pipetteId: string | undefined;
 		if (pipetteName && mount) {
