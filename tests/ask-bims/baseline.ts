@@ -397,8 +397,8 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		category: 'research',
 		text: 'For cart abc-not-real-test-id, what protocol executions produced its reagents?',
 		requiredTools: ['trace_reagent_chain'],
-		expectedAnswerPhrases: [/not found|no cartridge|empty|no chain|deferred|attach/i],
-		notes: 'Phase E4 — graceful empty-state handling. Either "cartridge not found" (most likely) or "reagentChain is empty" with the explanation that the attach UI is deferred per Jacob.'
+		expectedAnswerPhrases: [/not found|no cartridge|empty|no chain|deferred|attach|doesn't exist|does not exist|could not be (found|located)|couldn't (find|locate)|unable to (find|locate)|no such|no record/i],
+		notes: 'Phase E4 — graceful empty-state handling. Either "cartridge not found" (most likely) or "reagentChain is empty" with the explanation that the attach UI is deferred per Jacob. Regex accepts a broad set of negative-surfacings.'
 	},
 
 	// === Phase E5: samples + analytes + analysis profiles + calibrated analyses ===

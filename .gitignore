@@ -25,3 +25,6 @@ vite.config.ts.timestamp-*
 
 # Vendored AGPL source (ERPNext + Frappe) — design reference only, not shipped
 reference/
+
+# Ask BIMS local test harness logs
+tests/ask-bims/acceptance-run-*.log

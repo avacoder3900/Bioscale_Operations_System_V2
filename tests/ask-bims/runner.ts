@@ -108,6 +108,10 @@ export async function runSuite(
 				process.stdout.write(` ✗\n`);
 				for (const f of r.failures) console.log(`      - ${f}`);
 				console.log(`      tools=[${r.toolsCalled.join(', ')}]`);
+				// Show the actual answer so we can tell whether the failure is a real
+				// regression or an over-strict assertion. Truncate to avoid spam.
+				const snippet = r.answer.length > 300 ? r.answer.slice(0, 300) + '…' : r.answer;
+				console.log(`      answer="${snippet.replace(/\n/g, ' ')}"`);
 			}
 		} catch (err: any) {
 			results.push({
