@@ -287,8 +287,17 @@
 		}
 	}
 
+	type SweepLogEntry = { ts: string; level: 'info' | 'warn' | 'error'; message: string; slotIndex?: number | null };
+
 	let sweepInFlight = $state(false);
 	let sweepProgress = $state<string | null>(null);
+	let currentSweepRunId = $state<string | null>(null);
+	let sweepStatus = $state<'running' | 'paused' | 'cancelled' | 'completed' | 'errored' | null>(null);
+	let sweepLog = $state<SweepLogEntry[]>([]);
+	let slotsTotal = $state(0);
+	let slotsDone = $state(0);
+	let currentSlotIdx = $state<number | null>(null);
+	let controlBusy = $state(false);
 
 	async function autoSweepCartridges() {
 		if (isReadonly) return;
@@ -302,11 +311,16 @@
 		}
 		const cap = Math.max(1, Math.min(TOTAL_POSITIONS, Math.floor(sweepCount)));
 		deckError = '';
-		sweepProgress = `Driving robot to scan ${cap} position${cap === 1 ? '' : 's'}…`;
+		sweepProgress = `Starting sweep on ${cap} position${cap === 1 ? '' : 's'}…`;
 		sweepInFlight = true;
-		// Reset prior per-slot failure state — a new sweep starts fresh.
+		// Reset prior per-slot state — a new sweep starts fresh.
 		failedSlots = new SvelteSet();
 		sweepFailures = [];
+		sweepLog = [];
+		slotsTotal = cap;
+		slotsDone = 0;
+		currentSlotIdx = null;
+		sweepStatus = 'running';
 
 		try {
 			const res = await fetch('/api/scanner/sweep', {
@@ -324,53 +338,125 @@
 			if (!res.ok) {
 				deckError = (body?.message ?? body?.error ?? `Sweep failed (HTTP ${res.status})`).toString();
 				playBeep(false);
+				sweepInFlight = false;
+				sweepStatus = null;
 				return;
 			}
-			const incomingScans: Array<{ slotIndex: number; barcode: string }> = body?.scans ?? [];
-			const sweepErrors: Array<{ slotIndex: number; message: string }> = body?.errors ?? [];
-
-			// Place barcodes at their actual slotIndex. Collect every failure
-			// (server-side scanner errors + client-side validation failures) so
-			// the user sees the full picture instead of one fatal error.
-			const failures: Array<{ slotIndex: number; message: string }> = [];
-			const failedSet = new SvelteSet<number>();
-
-			for (const err of sweepErrors) {
-				failures.push(err);
-				failedSet.add(err.slotIndex);
-			}
-
-			let added = 0;
-			for (const s of incomingScans) {
-				sweepProgress = `Recording slot ${s.slotIndex + 1}…`;
-				const r = await processScannedCartridge(s.barcode, { slotIndex: s.slotIndex });
-				if (r.ok) {
-					added++;
-				} else {
-					failures.push({
-						slotIndex: s.slotIndex,
-						message: r.error ?? 'validation failed'
-					});
-					failedSet.add(s.slotIndex);
-				}
-			}
-
-			failedSlots = failedSet;
-			sweepFailures = failures.sort((a, b) => a.slotIndex - b.slotIndex);
-
-			if (failures.length > 0) {
-				deckError = `Captured ${added}/${cap}. ${failures.length} slot${failures.length === 1 ? '' : 's'} need manual rescan — click the red tiles below.`;
-				playBeep(false);
-			} else {
-				sweepProgress = `Captured ${added}/${cap} cartridges.`;
-				playBeep(true);
-			}
+			currentSweepRunId = body.sweepRunId as string;
+			slotsTotal = body.slotsTotal ?? cap;
+			await pollSweepUntilDone(currentSweepRunId);
 		} catch (e) {
 			deckError = e instanceof Error ? e.message : String(e);
 			playBeep(false);
-		} finally {
 			sweepInFlight = false;
-			setTimeout(() => { sweepProgress = null; }, 4000);
+		}
+	}
+
+	// Track which slots we've already absorbed from the server side so each
+	// poll only processes the deltas. validate-equipment is per-slot and we
+	// don't want to refire it 100 times for a slot the server already returned.
+	let absorbedScanSlots = $state<Set<number>>(new Set());
+	let absorbedErrorSlots = $state<Set<number>>(new Set());
+
+	async function pollSweepUntilDone(sweepRunId: string): Promise<void> {
+		// Poll every ~500ms until status is terminal.
+		while (true) {
+			let state: any;
+			try {
+				const r = await fetch(`/api/scanner/sweep/${sweepRunId}`, { credentials: 'same-origin' });
+				if (!r.ok) {
+					deckError = `Live status poll failed (HTTP ${r.status})`;
+					break;
+				}
+				state = await r.json();
+			} catch (e) {
+				deckError = e instanceof Error ? e.message : 'Live status poll failed';
+				break;
+			}
+
+			sweepStatus = state.status;
+			slotsDone = state.slotsDone ?? 0;
+			currentSlotIdx = state.currentSlotIndex ?? null;
+			sweepLog = (state.log ?? []) as SweepLogEntry[];
+			sweepProgress = state.status === 'paused'
+				? 'Paused.'
+				: `${state.slotsDone ?? 0} / ${state.slotsTotal ?? slotsTotal}`;
+
+			// Absorb any newly-arrived scans through the per-slot validator so
+			// they show up live on the deck grid.
+			for (const sc of state.scans ?? []) {
+				if (absorbedScanSlots.has(sc.slotIndex)) continue;
+				absorbedScanSlots.add(sc.slotIndex);
+				const r = await processScannedCartridge(sc.barcode, { slotIndex: sc.slotIndex });
+				if (!r.ok) {
+					const newFailed = new SvelteSet(failedSlots);
+					newFailed.add(sc.slotIndex);
+					failedSlots = newFailed;
+					sweepFailures = [
+						...sweepFailures.filter((f) => f.slotIndex !== sc.slotIndex),
+						{ slotIndex: sc.slotIndex, message: r.error ?? 'validation failed' }
+					].sort((a, b) => a.slotIndex - b.slotIndex);
+				}
+			}
+
+			// Absorb new errors from the server (scanner failures, move-to failures).
+			for (const err of state.errors ?? []) {
+				if (absorbedErrorSlots.has(err.slotIndex)) continue;
+				absorbedErrorSlots.add(err.slotIndex);
+				const newFailed = new SvelteSet(failedSlots);
+				newFailed.add(err.slotIndex);
+				failedSlots = newFailed;
+				sweepFailures = [
+					...sweepFailures.filter((f) => f.slotIndex !== err.slotIndex),
+					{ slotIndex: err.slotIndex, message: err.message }
+				].sort((a, b) => a.slotIndex - b.slotIndex);
+			}
+
+			if (['completed', 'cancelled', 'errored'].includes(state.status)) {
+				sweepInFlight = false;
+				const cap2 = state.slotsTotal ?? slotsTotal;
+				if (state.status === 'completed' && sweepFailures.length === 0) {
+					sweepProgress = `Captured ${state.scans?.length ?? 0}/${cap2} cartridges.`;
+					playBeep(true);
+				} else if (state.status === 'cancelled') {
+					deckError = `Cancelled. ${state.scans?.length ?? 0}/${cap2} captured before stop.`;
+					playBeep(false);
+				} else if (state.status === 'errored') {
+					deckError = state.abortReason ?? 'Sweep ended with an error.';
+					playBeep(false);
+				} else if (sweepFailures.length > 0) {
+					deckError = `Captured ${(state.scans?.length ?? 0) - sweepFailures.length}/${cap2}. ${sweepFailures.length} slot${sweepFailures.length === 1 ? '' : 's'} need manual rescan — click the red tiles below.`;
+					playBeep(false);
+				}
+				setTimeout(() => {
+					sweepProgress = null;
+				}, 4000);
+				return;
+			}
+
+			await new Promise((r) => setTimeout(r, 500));
+		}
+		sweepInFlight = false;
+	}
+
+	async function sendSweepControl(action: 'pause' | 'resume' | 'cancel') {
+		if (!currentSweepRunId || controlBusy) return;
+		controlBusy = true;
+		try {
+			const r = await fetch(`/api/scanner/sweep/${currentSweepRunId}`, {
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ action })
+			});
+			if (!r.ok) {
+				const b = await r.json().catch(() => ({}));
+				deckError = b?.message ?? `Control "${action}" failed (HTTP ${r.status})`;
+			}
+		} catch (e) {
+			deckError = e instanceof Error ? e.message : `Control "${action}" failed`;
+		} finally {
+			controlBusy = false;
 		}
 	}
 
@@ -709,6 +795,89 @@
 								{/each}
 							</ul>
 						</div>
+					{/if}
+				</div>
+			{/if}
+
+			<!-- Live sweep status — visible while a sweep is in flight or just finished -->
+			{#if currentSweepRunId && (sweepInFlight || sweepStatus === 'paused' || (sweepStatus && slotsDone > 0))}
+				<div class="rounded-lg border border-[var(--color-tron-cyan)]/40 bg-black/20 p-4">
+					<div class="flex items-center justify-between gap-3">
+						<div class="flex items-center gap-3">
+							<span class="rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider
+								{sweepStatus === 'running' ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' :
+								sweepStatus === 'paused' ? 'bg-amber-500/20 text-amber-300' :
+								sweepStatus === 'cancelled' ? 'bg-red-500/20 text-red-300' :
+								sweepStatus === 'errored' ? 'bg-red-500/30 text-red-200' :
+								'bg-green-500/20 text-green-300'}">
+								{sweepStatus ?? 'idle'}
+							</span>
+							<span class="text-xs" style="color: var(--color-tron-text-secondary)">
+								Slot {slotsDone}/{slotsTotal}{currentSlotIdx !== null ? ` · at slot ${currentSlotIdx + 1}` : ''}
+							</span>
+						</div>
+						<div class="flex items-center gap-2">
+							{#if sweepStatus === 'running'}
+								<button
+									type="button"
+									onclick={() => sendSweepControl('pause')}
+									disabled={controlBusy}
+									class="rounded border border-amber-500/60 bg-amber-900/20 px-3 py-1 text-xs font-semibold text-amber-300 hover:bg-amber-900/40 disabled:opacity-40"
+								>
+									Pause
+								</button>
+							{:else if sweepStatus === 'paused'}
+								<button
+									type="button"
+									onclick={() => sendSweepControl('resume')}
+									disabled={controlBusy}
+									class="rounded border border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/15 px-3 py-1 text-xs font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40"
+								>
+									Resume
+								</button>
+							{/if}
+							{#if sweepStatus === 'running' || sweepStatus === 'paused'}
+								<button
+									type="button"
+									onclick={() => sendSweepControl('cancel')}
+									disabled={controlBusy}
+									class="rounded border border-red-500/60 bg-red-900/20 px-3 py-1 text-xs font-semibold text-red-300 hover:bg-red-900/40 disabled:opacity-40"
+								>
+									Cancel
+								</button>
+							{/if}
+						</div>
+					</div>
+					<!-- Progress bar -->
+					<div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-black/40">
+						<div
+							class="h-full transition-all
+								{sweepStatus === 'cancelled' || sweepStatus === 'errored'
+									? 'bg-red-500/70'
+									: sweepStatus === 'completed'
+										? 'bg-green-500/70'
+										: 'bg-[var(--color-tron-cyan)]'}"
+							style="width: {slotsTotal > 0 ? Math.min(100, (slotsDone / slotsTotal) * 100) : 0}%"
+						></div>
+					</div>
+					<!-- Live log -->
+					{#if sweepLog.length > 0}
+						<details open class="mt-3">
+							<summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
+								Log ({sweepLog.length})
+							</summary>
+							<div class="mt-1 max-h-48 overflow-y-auto rounded border border-[var(--color-tron-border)] bg-black/40 p-2 font-mono text-[10px] leading-tight">
+								{#each sweepLog.slice(-100) as entry, i (i)}
+									<div class="
+										{entry.level === 'error' ? 'text-red-300' :
+										entry.level === 'warn' ? 'text-amber-300' :
+										'text-[var(--color-tron-text-secondary)]'}">
+										<span class="opacity-50">[{new Date(entry.ts).toLocaleTimeString()}]</span>
+										{entry.message}
+									</div>
+								{/each}
+							</div>
+						</details>
 					{/if}
 				</div>
 			{/if}
