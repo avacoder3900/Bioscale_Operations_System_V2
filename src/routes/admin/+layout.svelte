@@ -22,13 +22,14 @@
 			items.push({ href: '/admin/notifications', label: 'Notifications' });
 			items.push({ href: '/admin/ask-bims', label: 'Ask BIMS' });
 			items.push({ href: '/admin/ask-bims/cost', label: 'Ask BIMS Cost' });
+			items.push({ href: '/admin/ask-bims/feedback', label: 'Ask BIMS Feedback' });
 		}
 		return items;
 	});
 
 	function isActive(href: string): boolean {
 		// Exact match for /admin/ask-bims so the parent tab doesn't also light up
-		// when on /admin/ask-bims/cost.
+		// when on /admin/ask-bims/cost or /admin/ask-bims/feedback.
 		if (href === '/admin/ask-bims') {
 			return $page.url.pathname === '/admin/ask-bims';
 		}

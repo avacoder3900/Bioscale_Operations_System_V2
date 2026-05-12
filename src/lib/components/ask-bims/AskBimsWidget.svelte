@@ -2,6 +2,8 @@
 	import { page } from '$app/stores';
 
 	type ModelId = 'claude-haiku-4-5' | 'claude-sonnet-4-6' | 'claude-opus-4-7';
+	type Confidence = 'high' | 'partial' | 'degraded';
+	type FeedbackState = 'idle' | 'comment-open' | 'sending' | 'sent';
 
 	interface Usage {
 		inputTokens: number;
@@ -18,6 +20,11 @@
 		usage?: Usage;
 		model?: ModelId;
 		error?: string;
+		responseId?: string;
+		confidence?: Confidence;
+		feedbackState?: FeedbackState;
+		feedbackRating?: 'up' | 'down';
+		feedbackComment?: string;
 	}
 
 	const HIDDEN_PREFIXES = ['/login', '/logout', '/invite', '/cv'];
@@ -147,7 +154,10 @@
 				toolCalls: body.toolCalls,
 				usage: body.usage,
 				model: body.model,
-				error: body.error
+				error: body.error,
+				responseId: body.responseId,
+				confidence: body.confidence,
+				feedbackState: 'idle'
 			}];
 			if (body.error) {
 				recordFailure(body.error);
@@ -174,6 +184,57 @@
 
 	function clearChat() {
 		messages = [];
+	}
+
+	// --- Feedback (thumbs up/down) ---
+
+	function previousUserQuestion(idx: number): string {
+		// Look backward from this assistant message to find the user turn that
+		// produced it. Most direct: the immediately-preceding user message.
+		for (let i = idx - 1; i >= 0; i--) {
+			if (messages[i].role === 'user') return messages[i].content;
+		}
+		return '';
+	}
+
+	async function sendFeedback(idx: number, rating: 'up' | 'down', comment?: string) {
+		const msg = messages[idx];
+		if (!msg || !msg.responseId) return;
+		const question = previousUserQuestion(idx);
+		if (!question) return;
+
+		messages[idx] = { ...msg, feedbackState: 'sending', feedbackRating: rating };
+
+		try {
+			const res = await fetch('/api/agent/ask/feedback', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					responseId: msg.responseId,
+					rating,
+					comment: comment?.trim() || undefined,
+					question,
+					answer: msg.content,
+					toolsUsed: msg.toolCalls?.map(tc => tc.name) ?? [],
+					model: msg.model,
+					confidence: msg.confidence
+				})
+			});
+			if (!res.ok) {
+				// Quietly revert — feedback is non-critical, no need to interrupt the user.
+				messages[idx] = { ...msg, feedbackState: 'idle' };
+				return;
+			}
+			messages[idx] = { ...msg, feedbackState: 'sent', feedbackRating: rating, feedbackComment: comment };
+		} catch {
+			messages[idx] = { ...msg, feedbackState: 'idle' };
+		}
+	}
+
+	function openCommentBox(idx: number) {
+		const msg = messages[idx];
+		if (!msg) return;
+		messages[idx] = { ...msg, feedbackState: 'comment-open', feedbackRating: 'down', feedbackComment: '' };
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
@@ -317,7 +378,70 @@
 									{#if msg.usage}
 										<div class="mt-1 flex justify-between gap-2 border-t border-[var(--color-tron-border)] pt-1 font-mono text-[9px] text-[var(--color-tron-text-secondary)]">
 											<span>{msgTokens(msg.usage).toLocaleString()} tok</span>
+											{#if msg.confidence}
+												<span
+													class="rounded px-1.5 py-0.5 font-mono text-[9px] font-semibold"
+													class:bg-emerald-500={msg.confidence === 'high'}
+													class:text-emerald-50={msg.confidence === 'high'}
+													class:bg-yellow-500={msg.confidence === 'partial'}
+													class:text-yellow-50={msg.confidence === 'partial'}
+													class:bg-red-500={msg.confidence === 'degraded'}
+													class:text-red-50={msg.confidence === 'degraded'}
+													title="Confidence based on what the underlying data returned. High = clean, partial = some gap or truncation, degraded = a known data caveat was surfaced."
+												>
+													{msg.confidence}
+												</span>
+											{/if}
 											<span class="text-[var(--color-tron-cyan)]">${msg.usage.estCostUsd.toFixed(4)}</span>
+										</div>
+									{/if}
+									<!-- Thumbs feedback -->
+									{#if msg.role === 'assistant' && !msg.error && msg.responseId}
+										<div class="mt-1.5 flex items-center gap-2 border-t border-[var(--color-tron-border)] pt-1.5 text-[10px]">
+											{#if msg.feedbackState === 'sent'}
+												<span class="text-[var(--color-tron-text-secondary)]">
+													{msg.feedbackRating === 'up' ? '👍 Thanks — noted.' : '👎 Thanks — we\'ll look at this.'}
+												</span>
+											{:else if msg.feedbackState === 'comment-open'}
+												<input
+													type="text"
+													bind:value={messages[i].feedbackComment}
+													placeholder="What was wrong? (optional)"
+													class="flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-[10px] text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)]/60 focus:outline-none"
+													onkeydown={(e) => { if (e.key === 'Enter') sendFeedback(i, 'down', messages[i].feedbackComment); }}
+												/>
+												<button
+													type="button"
+													onclick={() => sendFeedback(i, 'down', messages[i].feedbackComment)}
+													disabled={msg.feedbackState === 'sending'}
+													class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-2 py-0.5 text-[10px] font-semibold text-[var(--color-tron-cyan)]"
+													title="Send feedback"
+												>
+													Send
+												</button>
+											{:else if msg.feedbackState === 'sending'}
+												<span class="text-[var(--color-tron-text-secondary)]">Sending…</span>
+											{:else}
+												<span class="text-[var(--color-tron-text-secondary)]">Was this useful?</span>
+												<button
+													type="button"
+													onclick={() => sendFeedback(i, 'up')}
+													class="rounded px-1.5 py-0.5 hover:bg-emerald-500/20"
+													title="Yes, this was useful"
+													aria-label="Thumbs up"
+												>
+													👍
+												</button>
+												<button
+													type="button"
+													onclick={() => openCommentBox(i)}
+													class="rounded px-1.5 py-0.5 hover:bg-red-500/20"
+													title="Not useful — tell us why"
+													aria-label="Thumbs down"
+												>
+													👎
+												</button>
+											{/if}
 										</div>
 									{/if}
 								{/if}

@@ -96,7 +96,19 @@ const QUESTIONS: AcceptanceQ[] = [
 	{ id: 'S11.1', section: '11 — Tool selection / anti-overlap', question: "What's going on the floor right now?", intent: 'Broad question — should pick 2-3 tools max, not 5+.' },
 	{ id: 'S11.2', section: '11 — Tool selection / anti-overlap', question: 'Is the cartridge oven on right now?', intent: 'Must call a tool; should NOT guess from prior knowledge.' },
 	{ id: 'S11.3', section: '11 — Tool selection / anti-overlap', question: 'Show me cart wjIuzcKhQkysJ80hQyatq and trace its lineage.', intent: 'Should go straight to trace_cartridge, not pre-call find_cartridges.' },
-	{ id: 'S11.4', section: '11 — Tool selection / anti-overlap', question: 'How many carts today AND what runs aborted?', intent: 'Two tools, no double-calls. count_cartridges_by_status + list_recent_runs.' }
+	{ id: 'S11.4', section: '11 — Tool selection / anti-overlap', question: 'How many carts today AND what runs aborted?', intent: 'Two tools, no double-calls. count_cartridges_by_status + list_recent_runs.' },
+
+	// === Section 12 — New tools from the autonomous build (Phases 1-4) ===
+	{ id: 'S12.1', section: '12 — Chemical inventory (Phase 2)', question: 'Where do we keep the methanol?', intent: 'lookup_chemical — should return location + owning org, surface dual-stocking note if both orgs have it.' },
+	{ id: 'S12.2', section: '12 — Chemical inventory (Phase 2)', question: 'How much sodium azide do we have?', intent: 'lookup_chemical — BT regulated chemical; should surface hazard class.' },
+	{ id: 'S12.3', section: '12 — Chemical inventory (Phase 2)', question: 'Find any flammable chemicals over 1 gallon.', intent: 'lookup_chemical with hazardClass filter — exercises the FLAM class + quantity reading.' },
+	{ id: 'S12.4', section: '12 — Chemical inventory (Phase 2)', question: 'Tell me about chemical C-042.', intent: 'lookup_chemical by inventory code (C-NNN = Brevitest).' },
+	{ id: 'S12.5', section: '12 — Chemical inventory (Phase 2)', question: 'Do we have DMSO in the lab?', intent: 'lookup_chemical — DMSO is on the dual-stocked list; must surface the "both orgs keep their own" warning.' },
+
+	{ id: 'S12.6', section: '12 — Floor plan (Phase 3)', question: 'Where is Fridge 3?', intent: 'find_location — should return spatial description, not just a tag.' },
+	{ id: 'S12.7', section: '12 — Floor plan (Phase 3)', question: "What's in the Tissue Culture zone?", intent: 'find_location with zone name — should list equipment + chemicals in that zone.' },
+	{ id: 'S12.8', section: '12 — Floor plan (Phase 3)', question: 'Where are the OT-2 robots located?', intent: 'find_location with fuzzy equipment name — should resolve to Manufacturing zone.' },
+	{ id: 'S12.9', section: '12 — Floor plan (Phase 3)', question: 'Which side of the lab is the cartridge oven on?', intent: 'find_location — natural-language spatial question.' }
 ];
 
 const QUOTE_PREFIX = '> ';
