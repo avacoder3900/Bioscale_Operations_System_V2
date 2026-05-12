@@ -185,7 +185,12 @@ export async function jog(
 	);
 }
 
-/** Move to absolute deck coordinates. */
+/**
+ * Move to absolute deck coordinates. forceDirect defaults to true here
+ * because scanner sweeps don't pick up tips, don't transport liquid, and
+ * don't otherwise need the safety-arc routing — direct point-to-point cuts
+ * ~0.5-1s off every slot transition.
+ */
 export async function moveTo(
 	robot: RobotRef,
 	runId: string,
@@ -193,6 +198,7 @@ export async function moveTo(
 	coords: { x: number; y: number; z: number },
 	opts: { minimumZHeight?: number; forceDirect?: boolean } = {}
 ): Promise<void> {
+	const forceDirect = opts.forceDirect ?? true;
 	await sendMaintenanceCommand(
 		robot,
 		runId,
@@ -201,7 +207,7 @@ export async function moveTo(
 			pipetteId,
 			coordinates: coords,
 			...(opts.minimumZHeight !== undefined ? { minimumZHeight: opts.minimumZHeight } : {}),
-			...(opts.forceDirect !== undefined ? { forceDirect: opts.forceDirect } : {})
+			forceDirect
 		},
 		{ waitUntilComplete: true, timeoutMs: 30_000 }
 	);

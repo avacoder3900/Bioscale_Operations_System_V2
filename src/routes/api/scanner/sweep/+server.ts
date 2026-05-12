@@ -50,8 +50,10 @@ import {
 export const config = { maxDuration: 300 };
 
 const VALID_SOURCES = new Set(['wax_filling', 'reagent_filling', 'manual', 'test']);
+// Drop to 50ms so a finished scan flips state inside <100ms instead of up
+// to 200ms. Tightens average per-slot time by ~75ms on a happy path.
 const SCAN_WAIT_TIMEOUT_MS = 15_000;
-const SCAN_POLL_INTERVAL_MS = 200;
+const SCAN_POLL_INTERVAL_MS = 50;
 const PAUSE_POLL_INTERVAL_MS = 500;
 
 // Scanner deviceId convention: ot2-<slot>-scanner, where slot is the trailing
