@@ -7,8 +7,12 @@ import {
 	Experiment, ReagentCatalog, ReagentInventory,
 	ProtocolDefinition, ProtocolExecution,
 	Sample, Analyte, AnalysisProfile, CalibratedAnalysis,
+	WorkflowViolation, ValidationSession, ApprovalRequest,
+	DeviceEvent, ScannerEvent, ShippingLot, ShippingPackage,
+	User, Document, AssayDefinition,
 	generateId
 } from './db';
+import { hasPermission } from './permissions';
 import { getCheckedOutCartridgeIds } from './checkout-utils';
 import { TIER_1_REFERENCE } from './ask-bims-tier1';
 import { searchDocs } from './docs-search';
@@ -994,6 +998,203 @@ Defensive query: handles both 'status' and legacy 'currentPhase' fields. Surface
 			},
 			required: ['barcode']
 		}
+	},
+	// === Phase 6.1 — Operational coverage ===
+	{
+		name: 'list_workflow_violations',
+		description: `Pulls the SOP-deviation log we keep on every run — anything an operator did out-of-order, anything that ran outside the documented procedure, anything that got flagged for follow-up.
+Source: WorkflowViolation model.
+
+Use when: "what runs deviated from the SOP this week", "show me open violations", "any high-severity workflow issues", deviation review prep.
+Don't use for: cartridge scrap reasons (use scrap_pareto or find_cartridges); approval requests for change control (use list_open_approval_requests).
+
+Defaults: last 7 days, all severities, all statuses. Newest first. Hard cap 50.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				sinceDays: { type: 'number', description: 'Window in days (default 7, max 90)' },
+				severity: { type: 'string', description: 'Optional — low | medium | high' },
+				status: { type: 'string', description: 'Optional — open | resolved (open = resolved=false)' },
+				limit: { type: 'number', description: 'Max results (default 50, max 50)' }
+			}
+		}
+	},
+	{
+		name: 'list_validation_sessions',
+		description: `Equipment validation runs — thermocouple checks, magnetometer calibrations, spectrophotometer validations, etc. Each session has a pass/fail outcome and the criteria it was checked against.
+Source: ValidationSession model.
+
+Use when: "has SPU-42 been validated this quarter", "show me failed thermocouple validations", "recent magnetometer checks", validation history per SPU.
+Don't use for: routine calibration schedules (use list_calibrations_due); manufacturing run QC (use get_run_yield).
+
+Defaults: last 30 days, all SPUs, all validation types, all statuses. Newest first. Hard cap 50.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				spuId: { type: 'string', description: 'Optional — SPU _id to filter to one device' },
+				type: { type: 'string', description: 'Optional — validation type (thermocouple, magnetometer, spectrophotometer, etc.)' },
+				status: { type: 'string', description: 'Optional — pending | in_progress | running | completed | failed | timed_out' },
+				sinceDays: { type: 'number', description: 'Window in days (default 30, max 365)' },
+				limit: { type: 'number', description: 'Max results (default 50, max 50)' }
+			}
+		}
+	},
+	{
+		name: 'list_open_approval_requests',
+		description: `Change-control approvals waiting on review — scrap approvals, deviation sign-offs, config changes, anything routed through our approval workflow that hasn't been decided yet.
+Source: ApprovalRequest model where status is pending or in_review.
+
+Use when: "what approvals are pending my review", "show me open scrap approvals", "any urgent change requests".
+Don't use for: workflow deviations themselves (use list_workflow_violations); calibration records (use list_calibrations_due).
+
+Defaults: newest first. Hard cap 50.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				targetType: { type: 'string', description: 'Optional — changeType filter: code | configuration | infrastructure | process | documentation | database' },
+				requestType: { type: 'string', description: 'Optional — same as targetType (alias)' },
+				limit: { type: 'number', description: 'Max results (default 50, max 50)' }
+			}
+		}
+	},
+	{
+		name: 'equipment_uptime',
+		description: `How much of a window a fridge or oven actually stayed in spec — uptime percentage, in-range count, out-of-range count, and how many gaps in the data (no reading for over an hour).
+Source: TemperatureReading joined to Equipment thresholds (temperatureMinC/MaxC).
+
+Use when: "what percent of last 30 days was Fridge 3 in range", "uptime for the cartridge oven", "how reliable is this equipment".
+Don't use for: current temperature (use get_current_temperatures); excursion duration totals (use temperature_excursion_summary); calibration status (use list_calibrations_due).
+
+Defaults: last 30 days. Equipment thresholds must be configured or no in-spec answer is possible — surfaces that as a limit if missing.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				equipmentName: { type: 'string', description: 'Equipment name fragment (case-insensitive)' },
+				sinceDays: { type: 'number', description: 'Window in days (default 30, max 90)' }
+			},
+			required: ['equipmentName']
+		}
+	},
+	{
+		name: 'list_open_service_tickets',
+		description: `Equipment that's currently broken or in service — open or in-progress service tickets, sorted newest first.
+Source: ServiceTicket model where status not in [closed].
+
+Use when: "what equipment is currently broken", "open service tickets", "any high-priority repairs pending".
+Don't use for: calibration due dates (use list_calibrations_due); equipment that's just powered off (use list_equipment).
+
+Defaults: newest first. Hard cap 50.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				equipmentType: { type: 'string', description: 'Optional — filter by SPU/equipment type if known' },
+				sinceDays: { type: 'number', description: 'Only tickets created within this window (default: all open regardless of age)' },
+				limit: { type: 'number', description: 'Max results (default 50, max 50)' }
+			}
+		}
+	},
+	{
+		name: 'recent_device_events',
+		description: `Recent device events from SPUs and Particle devices — assay loads, validations, uploads, resets, errors.
+Source: DeviceEvent model (TTL-trimmed to 30 days).
+
+Use when: "what did device X do recently", "show me recent device errors", "any error events in the last hour".
+Don't use for: barcode scanner activity (use recent_scanner_events); equipment temperature alerts (use get_temperature_alerts).
+
+Defaults: last 24 hours, all devices, all event types. Hard cap 100.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				deviceId: { type: 'string', description: 'Optional — filter to one device by _id or serial' },
+				eventType: { type: 'string', description: 'Optional — validate | load_assay | upload | reset | error | etc.' },
+				sinceHours: { type: 'number', description: 'Window in hours (default 24, max 720)' },
+				limit: { type: 'number', description: 'Max results (default 100, max 100)' }
+			}
+		}
+	},
+	{
+		name: 'recent_scanner_events',
+		description: `Recent barcode-scanner activity — scans, heartbeats, errors, trigger consumption events. Helpful for "why did the scanner go quiet" diagnostics.
+Source: ScannerEvent model.
+
+Use when: "why did the scanner go quiet", "scanner heartbeats today", "recent scan errors", "what did the scanner pick up in the last hour".
+Don't use for: device events from SPUs/Particle (use recent_device_events); the bridge daemon's internal state (it's not stored).
+
+Defaults: last 60 minutes, all devices, all event types. Hard cap 100.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				deviceId: { type: 'string', description: 'Optional — filter to one scanner' },
+				sinceMinutes: { type: 'number', description: 'Window in minutes (default 60, max 1440)' },
+				limit: { type: 'number', description: 'Max results (default 100, max 100)' }
+			}
+		}
+	},
+	{
+		name: 'list_open_shipping_lots',
+		description: `Shipping lots that aren't out the door yet — open, testing, or released but not yet shipped. Tells you what we owe customers and what's gated on what.
+Source: ShippingLot model where status in [open, testing, released].
+
+Use when: "what lots are waiting to ship", "any shipping lots in testing", "show me released-but-unshipped lots".
+Don't use for: tracking a specific package (use find_shipping_package); cartridges currently in a shipping lot (use find_cartridges with the lot ID).
+
+Defaults: newest first.`,
+		input_schema: {
+			type: 'object',
+			properties: {}
+		}
+	},
+	{
+		name: 'find_shipping_package',
+		description: `Find a shipping package by tracking number, package _id, or by a cartridge barcode that's inside it.
+Source: ShippingPackage model.
+
+Use when: "where is package <tracking>", "find shipment for cart X", "what's in package Y".
+Don't use for: the parent shipping lot's status (use list_open_shipping_lots); cartridge lineage (use trace_cartridge or backward_genealogy).
+
+Hard cap 10.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				query: { type: 'string', description: 'Tracking number, package _id, package barcode, or cartridge barcode' }
+			},
+			required: ['query']
+		}
+	},
+	{
+		name: 'get_user_training',
+		description: `Training-record lookup for one user — every WI/document they've been trained on, who trained them, and when.
+Source: User.trainingRecords[] subdoc array.
+
+ADMIN-GATED. Requires admin:full permission on the caller. If the caller isn't admin, the tool returns a clean refusal — it does NOT leak training data.
+
+Use when: "has Nick been trained on WI-01", "list training records for user X" — and only when the operator asking is an admin.
+Don't use for: lookup by document (use list_recent_document_changes); WI content (use search_work_instructions).`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				username: { type: 'string', description: 'Username to look up' }
+			},
+			required: ['username']
+		}
+	},
+	{
+		name: 'list_recent_document_changes',
+		description: `Controlled documents that have had a new revision in the recent window — shows the doc and its newest revision metadata so you can spot what's moved.
+Source: Document model with revisions[] filtered by recent createdAt timestamps.
+
+Use when: "which controlled docs changed this week", "recent SOP updates", "any new revisions waiting for approval".
+Don't use for: WI step content (use search_work_instructions); training-record questions (use get_user_training — admin only).
+
+Defaults: last 7 days. Hard cap 30.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				sinceDays: { type: 'number', description: 'Window in days (default 7, max 90)' },
+				status: { type: 'string', description: 'Optional — draft | in_review | approved (filters the document\'s overall status, not the revision)' },
+				limit: { type: 'number', description: 'Max results (default 30, max 30)' }
+			}
+		}
 	}
 ];
 
@@ -1004,7 +1205,13 @@ interface ToolResult {
 	dataIntegrityNotes?: string[];
 }
 
-async function runTool(name: string, input: any): Promise<ToolResult> {
+interface ToolContext {
+	userId?: string;
+	username?: string;
+	isAdmin?: boolean;
+}
+
+async function runTool(name: string, input: any, ctx: ToolContext = {}): Promise<ToolResult> {
 	await connectDB();
 	switch (name) {
 		case 'get_wax_tube_inventory': {
@@ -3417,6 +3624,419 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 				dataIntegrityNotes: notes
 			};
 		}
+		// === Phase 6.1 — Operational coverage ===
+		case 'list_workflow_violations': {
+			const days = Math.min(Math.max(Number(input.sinceDays ?? 7), 1), 90);
+			const limit = Math.min(Math.max(Number(input.limit ?? 50), 1), 50);
+			const filter: any = { timestamp: { $gte: new Date(Date.now() - days * 86400e3) } };
+			if (input.severity) filter.severity = String(input.severity);
+			if (input.status) {
+				if (String(input.status).toLowerCase() === 'open') filter.resolved = false;
+				else if (String(input.status).toLowerCase() === 'resolved') filter.resolved = true;
+			}
+			const violations = await WorkflowViolation.find(filter)
+				.sort({ timestamp: -1 })
+				.limit(limit + 1)
+				.lean() as any[];
+			const truncated = violations.length > limit;
+			return {
+				violations: violations.slice(0, limit).map(v => ({
+					_id: v._id,
+					type: v.type,
+					taskId: v.taskId,
+					assignee: v.assignee,
+					description: v.description,
+					severity: v.severity,
+					resolved: v.resolved,
+					resolvedAt: v.resolvedAt,
+					resolvedBy: v.resolvedBy,
+					timestamp: v.timestamp
+				})),
+				totalReturned: Math.min(violations.length, limit),
+				truncated,
+				windowDays: days,
+				source: 'WorkflowViolation model',
+				sourceUrl: '/admin/workflow-violations'
+			};
+		}
+		case 'list_validation_sessions': {
+			const days = Math.min(Math.max(Number(input.sinceDays ?? 30), 1), 365);
+			const limit = Math.min(Math.max(Number(input.limit ?? 50), 1), 50);
+			const filter: any = { createdAt: { $gte: new Date(Date.now() - days * 86400e3) } };
+			if (input.spuId) filter.spuId = String(input.spuId);
+			if (input.type) filter.type = String(input.type);
+			if (input.status) filter.status = String(input.status);
+			const sessions = await ValidationSession.find(filter)
+				.select('_id type spuId status startedAt completedAt overallPassed failureReasons userId barcode createdAt')
+				.sort({ createdAt: -1 })
+				.limit(limit + 1)
+				.lean() as any[];
+			const truncated = sessions.length > limit;
+			return {
+				validationSessions: sessions.slice(0, limit).map(s => ({
+					_id: s._id,
+					type: s.type,
+					spuId: s.spuId,
+					status: s.status,
+					startedAt: s.startedAt,
+					completedAt: s.completedAt,
+					overallPassed: s.overallPassed,
+					failureReasons: s.failureReasons,
+					userId: s.userId,
+					barcode: s.barcode,
+					createdAt: s.createdAt
+				})),
+				totalReturned: Math.min(sessions.length, limit),
+				truncated,
+				windowDays: days,
+				source: 'ValidationSession model',
+				sourceUrl: '/admin/validation-sessions'
+			};
+		}
+		case 'list_open_approval_requests': {
+			const limit = Math.min(Math.max(Number(input.limit ?? 50), 1), 50);
+			const filter: any = { status: { $in: ['pending', 'in_review'] } };
+			const typeFilter = input.targetType ?? input.requestType;
+			if (typeFilter) filter.changeType = String(typeFilter);
+			const requests = await ApprovalRequest.find(filter)
+				.select('_id requesterId changeTitle changeDescription changeType priority status dueDate approvedAt approvedBy createdAt updatedAt')
+				.sort({ createdAt: -1 })
+				.limit(limit + 1)
+				.lean() as any[];
+			const truncated = requests.length > limit;
+			return {
+				requests: requests.slice(0, limit).map(r => ({
+					_id: r._id,
+					requesterId: r.requesterId,
+					changeTitle: r.changeTitle,
+					changeDescription: r.changeDescription,
+					changeType: r.changeType,
+					priority: r.priority,
+					status: r.status,
+					dueDate: r.dueDate,
+					createdAt: r.createdAt,
+					updatedAt: r.updatedAt
+				})),
+				totalReturned: Math.min(requests.length, limit),
+				truncated,
+				source: 'ApprovalRequest model where status in [pending, in_review]',
+				sourceUrl: '/admin/approvals'
+			};
+		}
+		case 'equipment_uptime': {
+			const nameQuery = String(input.equipmentName ?? '').trim();
+			if (!nameQuery) return { error: 'equipmentName required', source: 'TemperatureReading + Equipment', sourceUrl: '/equipment/activity' };
+			const days = Math.min(Math.max(Number(input.sinceDays ?? 30), 1), 90);
+			const since = new Date(Date.now() - days * 86400e3);
+
+			const eq = await Equipment.findOne({ name: { $regex: nameQuery, $options: 'i' } })
+				.select('_id name mocreoDeviceId temperatureMinC temperatureMaxC').lean() as any;
+			if (!eq) return {
+				error: `No equipment matching "${nameQuery}"`,
+				source: 'Equipment',
+				sourceUrl: '/equipment/activity'
+			};
+			const notes: string[] = [];
+			if (eq.temperatureMinC == null || eq.temperatureMaxC == null) {
+				notes.push(`We don't have a target temperature range recorded for ${eq.name}, so I can't compute an in-spec percentage. The reading count is still useful for gap detection.`);
+			}
+
+			const readings = await TemperatureReading.find({
+				$or: [{ equipmentId: eq._id }, { sensorId: eq.mocreoDeviceId }],
+				timestamp: { $gte: since }
+			}).select('temperature timestamp').sort({ timestamp: 1 }).lean() as any[];
+
+			let inRange = 0;
+			let outOfRange = 0;
+			for (const r of readings) {
+				if (eq.temperatureMinC == null || eq.temperatureMaxC == null) continue;
+				if (typeof r.temperature !== 'number') continue;
+				if (r.temperature >= eq.temperatureMinC && r.temperature <= eq.temperatureMaxC) inRange++;
+				else outOfRange++;
+			}
+
+			// Gap detection — a gap is no reading for > 1 hour between consecutive readings.
+			let gapCount = 0;
+			let prev: Date | null = null;
+			for (const r of readings) {
+				const t = new Date(r.timestamp);
+				if (prev) {
+					const minutes = (t.getTime() - prev.getTime()) / 60000;
+					if (minutes > 60) gapCount++;
+				}
+				prev = t;
+			}
+			// Also flag leading/trailing gap from since→first reading, last→now.
+			if (readings.length > 0) {
+				const firstGap = (new Date(readings[0].timestamp).getTime() - since.getTime()) / 60000;
+				if (firstGap > 60) gapCount++;
+				const lastGap = (Date.now() - new Date(readings[readings.length - 1].timestamp).getTime()) / 60000;
+				if (lastGap > 60) gapCount++;
+			}
+
+			const totalEvaluated = inRange + outOfRange;
+			const uptimePct = totalEvaluated > 0 ? Math.round((inRange / totalEvaluated) * 1000) / 10 : null;
+
+			return {
+				equipmentName: eq.name,
+				windowDays: days,
+				targetRange: eq.temperatureMinC != null ? `${eq.temperatureMinC} to ${eq.temperatureMaxC}°C` : null,
+				totalReadings: readings.length,
+				inRangeCount: inRange,
+				outOfRangeCount: outOfRange,
+				gapCount,
+				uptimePct,
+				source: 'TemperatureReading + Equipment.temperatureMinC/MaxC',
+				sourceUrl: '/equipment/activity',
+				dataIntegrityNotes: notes
+			};
+		}
+		case 'list_open_service_tickets': {
+			const limit = Math.min(Math.max(Number(input.limit ?? 50), 1), 50);
+			const filter: any = { status: { $nin: ['closed'] } };
+			if (input.sinceDays) {
+				const days = Math.min(Math.max(Number(input.sinceDays), 1), 365);
+				filter.createdAt = { $gte: new Date(Date.now() - days * 86400e3) };
+			}
+			const tickets = await ServiceTicket.find(filter)
+				.sort({ createdAt: -1 })
+				.limit(limit + 1)
+				.lean() as any[];
+			const truncated = tickets.length > limit;
+			return {
+				tickets: tickets.slice(0, limit).map(t => ({
+					_id: t._id,
+					spuId: t.spuId,
+					spuSerialNumber: t.spuSerialNumber,
+					title: t.title,
+					description: t.description,
+					priority: t.priority,
+					status: t.status,
+					assignedTo: t.assignedTo?.username,
+					createdBy: t.createdBy?.username,
+					createdAt: t.createdAt,
+					updatedAt: t.updatedAt
+				})),
+				totalReturned: Math.min(tickets.length, limit),
+				truncated,
+				source: 'ServiceTicket model where status != closed',
+				sourceUrl: '/admin/service-tickets'
+			};
+		}
+		case 'recent_device_events': {
+			const hours = Math.min(Math.max(Number(input.sinceHours ?? 24), 1), 720);
+			const limit = Math.min(Math.max(Number(input.limit ?? 100), 1), 100);
+			const filter: any = { createdAt: { $gte: new Date(Date.now() - hours * 3600e3) } };
+			if (input.deviceId) filter.deviceId = String(input.deviceId);
+			if (input.eventType) filter.eventType = String(input.eventType);
+			const events = await DeviceEvent.find(filter)
+				.select('_id deviceId eventType cartridgeUuid success errorMessage createdAt')
+				.sort({ createdAt: -1 })
+				.limit(limit + 1)
+				.lean() as any[];
+			const truncated = events.length > limit;
+			return {
+				events: events.slice(0, limit).map(e => ({
+					_id: e._id,
+					deviceId: e.deviceId,
+					eventType: e.eventType,
+					cartridgeUuid: e.cartridgeUuid,
+					success: e.success,
+					errorMessage: e.errorMessage,
+					createdAt: e.createdAt
+				})),
+				totalReturned: Math.min(events.length, limit),
+				truncated,
+				windowHours: hours,
+				source: 'DeviceEvent model (TTL-trimmed at 30 days)',
+				sourceUrl: '/admin/device-events'
+			};
+		}
+		case 'recent_scanner_events': {
+			const minutes = Math.min(Math.max(Number(input.sinceMinutes ?? 60), 1), 1440);
+			const limit = Math.min(Math.max(Number(input.limit ?? 100), 1), 100);
+			const filter: any = { receivedAt: { $gte: new Date(Date.now() - minutes * 60e3) } };
+			if (input.deviceId) filter.deviceId = String(input.deviceId);
+			const events = await ScannerEvent.find(filter)
+				.select('_id deviceId eventType barcode source contextRef errorMessage receivedAt')
+				.sort({ receivedAt: -1 })
+				.limit(limit + 1)
+				.lean() as any[];
+			const truncated = events.length > limit;
+			return {
+				events: events.slice(0, limit).map(e => ({
+					_id: e._id,
+					deviceId: e.deviceId,
+					eventType: e.eventType,
+					barcode: e.barcode,
+					source: e.source,
+					contextRef: e.contextRef,
+					errorMessage: e.errorMessage,
+					receivedAt: e.receivedAt
+				})),
+				totalReturned: Math.min(events.length, limit),
+				truncated,
+				windowMinutes: minutes,
+				source: 'ScannerEvent model',
+				sourceUrl: '/admin/scanner-events'
+			};
+		}
+		case 'list_open_shipping_lots': {
+			const lots = await ShippingLot.find({
+				status: { $in: ['open', 'testing', 'released'] }
+			})
+				.select('_id assayType customer status cartridgeCount releasedAt releasedBy notes createdAt updatedAt')
+				.sort({ createdAt: -1 })
+				.limit(50)
+				.lean() as any[];
+			return {
+				shippingLots: lots.map(l => ({
+					_id: l._id,
+					assay: l.assayType?.name,
+					customer: l.customer?.name,
+					status: l.status,
+					cartridgeCount: l.cartridgeCount,
+					releasedAt: l.releasedAt,
+					releasedBy: l.releasedBy,
+					notes: l.notes,
+					createdAt: l.createdAt
+				})),
+				totalReturned: lots.length,
+				source: 'ShippingLot model where status in [open, testing, released]',
+				sourceUrl: '/shipping'
+			};
+		}
+		case 'find_shipping_package': {
+			const q = String(input.query ?? '').trim();
+			if (!q) return { error: 'query required', source: 'ShippingPackage', sourceUrl: '/shipping' };
+			const packages = await ShippingPackage.find({
+				$or: [
+					{ _id: q },
+					{ trackingNumber: q },
+					{ barcode: q },
+					{ 'cartridges.cartridgeId': q }
+				]
+			})
+				.select('_id barcode customer trackingNumber carrier status packedBy packedAt shippedAt deliveredAt cartridges notes')
+				.limit(10)
+				.lean() as any[];
+			if (packages.length === 0) {
+				return {
+					found: false,
+					query: q,
+					source: 'ShippingPackage model',
+					sourceUrl: '/shipping',
+					dataIntegrityNotes: [`No shipping package matched "${q}". Could be a typo, a package that never got tracking entered, or a cartridge that wasn't packed yet.`]
+				};
+			}
+			return {
+				found: true,
+				packages: packages.map(p => ({
+					_id: p._id,
+					barcode: p.barcode,
+					customer: p.customer?.name,
+					trackingNumber: p.trackingNumber,
+					carrier: p.carrier,
+					status: p.status,
+					packedBy: p.packedBy,
+					packedAt: p.packedAt,
+					shippedAt: p.shippedAt,
+					deliveredAt: p.deliveredAt,
+					cartridgeCount: Array.isArray(p.cartridges) ? p.cartridges.length : 0,
+					cartridges: Array.isArray(p.cartridges)
+						? p.cartridges.slice(0, 20).map((c: any) => ({ cartridgeId: c.cartridgeId, addedAt: c.addedAt }))
+						: [],
+					notes: p.notes
+				})),
+				totalReturned: packages.length,
+				source: 'ShippingPackage model (searched _id, trackingNumber, barcode, cartridges.cartridgeId)',
+				sourceUrl: '/shipping'
+			};
+		}
+		case 'get_user_training': {
+			if (!ctx.isAdmin) {
+				return {
+					error: 'Training records are admin-only. Ask an admin to look this up.',
+					source: 'User.trainingRecords (admin-gated)',
+					sourceUrl: '/admin/users'
+				};
+			}
+			const username = String(input.username ?? '').trim();
+			if (!username) return { error: 'username required', source: 'User.trainingRecords', sourceUrl: '/admin/users' };
+			const user = await User.findOne({ username: { $regex: `^${username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' } })
+				.select('_id username firstName lastName trainingRecords')
+				.lean() as any;
+			if (!user) {
+				return {
+					found: false,
+					username,
+					source: 'User.trainingRecords',
+					sourceUrl: '/admin/users',
+					dataIntegrityNotes: [`No user found with username "${username}".`]
+				};
+			}
+			const records = Array.isArray(user.trainingRecords) ? user.trainingRecords : [];
+			return {
+				found: true,
+				username: user.username,
+				fullName: [user.firstName, user.lastName].filter(Boolean).join(' '),
+				trainingCount: records.length,
+				trainingRecords: records.map((r: any) => ({
+					documentId: r.documentId,
+					documentTitle: r.documentTitle,
+					documentRevision: r.documentRevision,
+					trainedAt: r.trainedAt,
+					trainer: r.trainerId?.username,
+					signatureId: r.signatureId,
+					notes: r.notes
+				})),
+				source: 'User.trainingRecords[] subdoc array (admin-gated)',
+				sourceUrl: '/admin/users'
+			};
+		}
+		case 'list_recent_document_changes': {
+			const days = Math.min(Math.max(Number(input.sinceDays ?? 7), 1), 90);
+			const limit = Math.min(Math.max(Number(input.limit ?? 30), 1), 30);
+			const since = new Date(Date.now() - days * 86400e3);
+			const filter: any = { 'revisions.createdAt': { $gte: since } };
+			if (input.status) filter.status = String(input.status);
+			const docs = await Document.find(filter)
+				.select('_id documentNumber title category currentRevision status effectiveDate revisions')
+				.sort({ updatedAt: -1 })
+				.limit(limit + 1)
+				.lean() as any[];
+			const truncated = docs.length > limit;
+			return {
+				documents: docs.slice(0, limit).map(d => {
+					const recentRevs = (Array.isArray(d.revisions) ? d.revisions : [])
+						.filter((r: any) => r.createdAt && new Date(r.createdAt) >= since)
+						.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+					const newest = recentRevs[0];
+					return {
+						_id: d._id,
+						documentNumber: d.documentNumber,
+						title: d.title,
+						category: d.category,
+						status: d.status,
+						currentRevision: d.currentRevision,
+						effectiveDate: d.effectiveDate,
+						newestRevisionInWindow: newest ? {
+							revision: newest.revision,
+							status: newest.status,
+							changeDescription: newest.changeDescription,
+							createdAt: newest.createdAt,
+							approvedAt: newest.approvedAt
+						} : null,
+						revisionCountInWindow: recentRevs.length
+					};
+				}),
+				totalReturned: Math.min(docs.length, limit),
+				truncated,
+				windowDays: days,
+				source: 'Document.revisions[] filtered to recent createdAt',
+				sourceUrl: '/documents'
+			};
+		}
 	}
 	return { error: `Unknown tool: ${name}` };
 }
@@ -3634,6 +4254,12 @@ export interface AskBimsOpts {
 	temperature?: number;
 	userId?: string;
 	username?: string;
+	/**
+	 * Whether the caller has admin:full permission. Threaded into runTool so
+	 * admin-gated tools (e.g. get_user_training) can reject non-admin callers
+	 * cleanly rather than leak data. Optional — defaults to false (non-admin).
+	 */
+	isAdmin?: boolean;
 }
 
 /**
@@ -3804,7 +4430,11 @@ async function runAgentLoop(history: AskBimsMessage[], opts: AskBimsOpts): Promi
 			}
 			calledToolNames.add(block.name);
 			try {
-				const out = await runTool(block.name, block.input ?? {});
+				const out = await runTool(block.name, block.input ?? {}, {
+					userId: opts.userId,
+					username: opts.username,
+					isAdmin: opts.isAdmin
+				});
 				toolCalls.push({ name: block.name, input: block.input, result: out });
 				toolResults.push({
 					type: 'tool_result',

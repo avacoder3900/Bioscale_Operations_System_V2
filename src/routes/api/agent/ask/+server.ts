@@ -73,7 +73,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	}));
 
 	try {
-		const result = await askBims(history, { model, userId, username });
+		const isAdmin = hasPermission(locals.user, 'admin:full');
+		const result = await askBims(history, { model, userId, username, isAdmin });
 		return json(result);
 	} catch (err: any) {
 		console.error('[ASK-BIMS] error:', err);

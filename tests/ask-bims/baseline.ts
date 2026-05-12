@@ -16,7 +16,7 @@
 
 export interface TestQuestion {
 	id: string;
-	category: 'wax' | 'temperature' | 'runs' | 'cartridges' | 'inventory' | 'equipment' | 'anti-overlap' | 'redirection' | 'phase2' | 'inline-ref' | 'docs' | 'work-instructions' | 'datasheets' | 'research';
+	category: 'wax' | 'temperature' | 'runs' | 'cartridges' | 'inventory' | 'equipment' | 'anti-overlap' | 'redirection' | 'phase2' | 'inline-ref' | 'docs' | 'work-instructions' | 'datasheets' | 'research' | 'phase6' | 'phase6-chem' | 'phase6-analytics';
 	text: string;
 	requiredTools: string[];
 	forbiddenTools?: string[];
@@ -466,6 +466,96 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		forbiddenTools: ['list_low_inventory_parts', 'find_part', 'list_reagent_catalog'],
 		expectedAnswerPhrases: [/analyte|reference range|units|measure/i],
 		notes: 'Phase E5 — list_analytes returns research-side measurement targets with units, dynamicRange, lod, loq, referenceRange. Should NOT route to part-catalog or reagent-catalog tools.'
+	},
+
+	// === Phase 6.1 — Operational coverage (Bucket 1) ===
+	{
+		id: 'phase6-workflow-violations',
+		category: 'phase6',
+		text: 'What workflow violations have we logged in the last week?',
+		requiredTools: ['list_workflow_violations'],
+		forbiddenTools: ['list_open_approval_requests', 'check_data_integrity'],
+		notes: 'Phase 6.1.1 — SOP-deviation log over the default 7-day window.'
+	},
+	{
+		id: 'phase6-validation-sessions',
+		category: 'phase6',
+		text: 'Show me recent thermocouple validation sessions.',
+		requiredTools: ['list_validation_sessions'],
+		forbiddenTools: ['list_calibrations_due'],
+		notes: 'Phase 6.1.2 — agent should pass type=thermocouple as a filter, NOT route to list_calibrations_due.'
+	},
+	{
+		id: 'phase6-open-approvals',
+		category: 'phase6',
+		text: 'What approval requests are pending review right now?',
+		requiredTools: ['list_open_approval_requests'],
+		forbiddenTools: ['list_workflow_violations'],
+		notes: 'Phase 6.1.3 — open change-control approvals.'
+	},
+	{
+		id: 'phase6-equipment-uptime',
+		category: 'phase6',
+		text: 'What percent of the last 30 days was the cartridge oven in range?',
+		requiredTools: ['equipment_uptime'],
+		forbiddenTools: ['get_current_temperatures', 'temperature_excursion_summary'],
+		notes: 'Phase 6.1.4 — uptime% over a 30-day window joined to Equipment thresholds.'
+	},
+	{
+		id: 'phase6-open-service-tickets',
+		category: 'phase6',
+		text: 'What equipment is currently broken or in service?',
+		requiredTools: ['list_open_service_tickets'],
+		forbiddenTools: ['list_equipment', 'list_calibrations_due'],
+		notes: 'Phase 6.1.5 — open ServiceTickets, sorted newest first.'
+	},
+	{
+		id: 'phase6-device-events',
+		category: 'phase6',
+		text: 'Any device errors in the last hour?',
+		requiredTools: ['recent_device_events'],
+		forbiddenTools: ['get_temperature_alerts', 'recent_scanner_events'],
+		notes: 'Phase 6.1.6 — recent DeviceEvent rows; agent should narrow with eventType=error.'
+	},
+	{
+		id: 'phase6-scanner-events',
+		category: 'phase6',
+		text: 'Why did the scanner go quiet — any recent events?',
+		requiredTools: ['recent_scanner_events'],
+		forbiddenTools: ['recent_device_events'],
+		notes: 'Phase 6.1.7 — ScannerEvent activity over the default 60-minute window.'
+	},
+	{
+		id: 'phase6-open-shipping-lots',
+		category: 'phase6',
+		text: 'What shipping lots are waiting to go out?',
+		requiredTools: ['list_open_shipping_lots'],
+		forbiddenTools: ['find_shipping_package', 'find_cartridges'],
+		notes: 'Phase 6.1.8 — ShippingLots with non-shipped status.'
+	},
+	{
+		id: 'phase6-find-package',
+		category: 'phase6',
+		text: 'Find the shipping package for cartridge wjIuzcKhQkysJ80hQyatq.',
+		requiredTools: ['find_shipping_package'],
+		forbiddenTools: ['trace_cartridge', 'backward_genealogy'],
+		notes: 'Phase 6.1.9 — find_shipping_package by inner cartridgeId. Cart may not be in any package — graceful not-found is acceptable.'
+	},
+	{
+		id: 'phase6-user-training-non-admin',
+		category: 'phase6',
+		text: 'Has user nick been trained on WI-01?',
+		requiredTools: ['get_user_training'],
+		expectedAnswerPhrases: [/admin|permission|requires|can'?t|cannot|not allowed/i],
+		notes: 'Phase 6.1.10 — admin-gated tool. Default test harness has no admin context, so tool should return a clean refusal. Either the agent calls the tool and surfaces the refusal naturally, OR the agent declines up front — both are acceptable.'
+	},
+	{
+		id: 'phase6-document-changes',
+		category: 'phase6',
+		text: 'Which controlled documents changed this week?',
+		requiredTools: ['list_recent_document_changes'],
+		forbiddenTools: ['search_work_instructions', 'search_documentation'],
+		notes: 'Phase 6.1.11 — Document.revisions[] within window. Should NOT route to WI/markdown search tools.'
 	}
 ];
 
