@@ -337,12 +337,17 @@ async function runSweepBackground(ctx: RunSweepCtx): Promise<void> {
 			: abortReason
 				? 'errored'
 				: 'completed';
+	// When the user cancelled mid-wedge, abortReason here is whatever HTTP
+	// timeout the worker happened to unblock on — useless to read in the
+	// history page. Normalise it to the user-intent string for cancels.
+	const finalAbortReason =
+		finalStatus === 'cancelled' ? 'cancelled by operator' : abortReason ?? null;
 
 	await OpentronsScannerSweepRun.findByIdAndUpdate(sweepRunId, {
 		$set: {
 			status: finalStatus,
 			completedAt,
-			abortReason: abortReason ?? null,
+			abortReason: finalAbortReason,
 			pauseRequested: false,
 			cancelRequested: false,
 			currentSlotIndex: null
