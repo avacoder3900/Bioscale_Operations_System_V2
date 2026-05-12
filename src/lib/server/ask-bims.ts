@@ -17,7 +17,7 @@ import { getCheckedOutCartridgeIds } from './checkout-utils';
 import { TIER_1_REFERENCE } from './ask-bims-tier1';
 import { searchDocs } from './docs-search';
 import { lookupEquipment } from './equipment-datasheets';
-import { lookupChemical } from './chemical-inventory';
+import { lookupChemical, checkCompatibility } from './chemical-inventory';
 import { resolveLocation, getTagMapSize } from './floor-plan';
 import { summarizeFromAnomalies, computeSummary } from './integrity-scan';
 
@@ -1194,6 +1194,59 @@ Defaults: last 7 days. Hard cap 30.`,
 				status: { type: 'string', description: 'Optional — draft | in_review | approved (filters the document\'s overall status, not the revision)' },
 				limit: { type: 'number', description: 'Max results (default 30, max 30)' }
 			}
+		}
+	},
+	// === Phase 6.2 — Chemical & floor-plan extensions ===
+	{
+		name: 'chemical_hazard_summary',
+		description: `**The hazard tool.** Hazard rundown for one or several chemicals — pulls the IFC hazard class, NFPA codes, storage code, and (if you pass multiple chemicals) checks pairwise storage compatibility against the well-known chemistry rules (flammable + oxidizer, acid + base, oxidizer + organics, water-reactive isolation, HTX/azide full-isolation).
+Source: shared-lab chemical inventory CSVs + a small built-in compatibility matrix.
+
+Use ALWAYS when the operator asks about hazards, hazard class, storage compatibility, "can these share a shelf", "is X safe near Y", "what hazards apply to chemical X". Use this INSTEAD of lookup_chemical for hazard-flavored questions even when only one chemical is named — this tool surfaces the structured hazard profile (NFPA, classification notes, SDS URL) plus compatibility, which lookup_chemical does not.
+Don't use for: where the chemical is right now without a hazard angle (use lookup_chemical); usage history (use chemical_burn_rate).
+
+Pass a single name/code/CAS, OR a comma-separated list of names/codes/CAS numbers. If two or more chemicals come back, pairwise compatibility is computed and flagged.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				query: { type: 'string', description: 'Chemical name fragment, CAS number, inventory code (C-NNN / D-NNN), or comma-separated list of any of those.' }
+			},
+			required: ['query']
+		}
+	},
+	{
+		name: 'chemicals_in_protocol',
+		description: `Materials list for a research protocol — what prepared reagents it consumes, and the raw chemicals behind those reagents WHEN that link exists.
+Source: ProtocolDefinition.materials[] → ReagentCatalog → optional chemical-inventory link.
+
+Use when: "what raw chemicals does the Active Beads v3 protocol consume", "what's in the materials list for protocol X", "trace a protocol back to chemicals".
+Don't use for: protocol steps (use find_protocol); reagent inventory items (use list_reagent_inventory); cartridge-level provenance (use trace_reagent_chain).
+
+LIMIT: protocols reference prepared reagents in the catalog, not raw chemicals directly. If a catalog entry doesn't carry a chemical-inventory link, we surface the prepared reagent plus a clear note that the chain to raw chemicals isn't recorded yet.
+
+Hard cap 50 materials per protocol.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				protocolId: { type: 'string', description: 'ProtocolDefinition _id (nanoid) OR protocol name fragment' }
+			},
+			required: ['protocolId']
+		}
+	},
+	{
+		name: 'chemical_burn_rate',
+		description: `How fast we're going through a chemical — current stock, observed usage rate, and days of runway at that rate.
+Source: chemical inventory + receiving/usage history. **Limitation:** raw-chemical consumption tracking isn't wired into BIMS yet (no transaction stream for C-NNN / D-NNN items). For chemicals without usage data, we surface current stock and a clear note that runway can't be projected until we add tracking.
+
+Use when: "how fast are we burning through IPA", "when will we run out of methanol", "do we need to reorder DMSO this month".
+Don't use for: part-catalog burn rate (use inventory_burn_rate); reagent inventory runway (no equivalent tool today).`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				query: { type: 'string', description: 'Chemical name fragment, CAS, or inventory code (C-NNN / D-NNN)' },
+				sinceDays: { type: 'number', description: 'Window for usage rate (default 30, max 365). Currently unused because consumption tracking isn\'t live; passed through to be ready when it is.' }
+			},
+			required: ['query']
 		}
 	}
 ];
@@ -2558,10 +2611,18 @@ async function runTool(name: string, input: any, ctx: ToolContext = {}): Promise
 			};
 
 			const result = resolveLocation(q);
-			const notes: string[] = [...result.notes];
 			const knownTagCount = getTagMapSize();
 
+			// Clean tag/zone resolution → return found:true with no integrity
+			// notes so confidence stays high.
+			// Equipment-name fuzzy match that resolved → also clean.
+			// Unresolved → return found:false with the not-found reason in a
+			// dedicated field. notFoundReason is NOT a dataIntegrityNote, so
+			// confidence stays high for "I looked, didn't see it" answers.
+			const resolved = result.matchedAs !== 'unresolved' && result.zone !== null;
+
 			return {
+				found: resolved,
 				matchedAs: result.matchedAs,
 				zone: result.zone ? {
 					id: result.zone.id,
@@ -2580,9 +2641,10 @@ async function runTool(name: string, input: any, ctx: ToolContext = {}): Promise
 				equipmentInZone: result.equipmentInZone,
 				equipmentInZoneCount: result.equipmentInZone.length,
 				knownTagCount,
+				notFoundReason: result.notFoundReason,
 				source: 'data/equipment-datasheets/*.csv (tag→zone via Location column) + floor-plan.ts (zone definitions)',
 				sourceUrl: undefined,
-				dataIntegrityNotes: notes
+				dataIntegrityNotes: result.notes
 			};
 		}
 		case 'search_work_instructions': {
@@ -3992,6 +4054,154 @@ async function runTool(name: string, input: any, ctx: ToolContext = {}): Promise
 				})),
 				source: 'User.trainingRecords[] subdoc array (admin-gated)',
 				sourceUrl: '/admin/users'
+			};
+		}
+		case 'chemical_hazard_summary': {
+			const raw = String(input.query ?? '').trim();
+			if (!raw) return { error: 'query required', source: 'chemical-inventory CSVs', sourceUrl: undefined };
+			const queries = raw.split(',').map(q => q.trim()).filter(Boolean);
+
+			// One lookup per query term — collect best match (first hit) for each.
+			const collected: any[] = [];
+			const unresolved: string[] = [];
+			for (const q of queries) {
+				const r = lookupChemical(q, { limit: 1 });
+				if (r.matches.length > 0) collected.push(r.matches[0]);
+				else unresolved.push(q);
+			}
+
+			const hazardEntries = collected.map(c => ({
+				tag: c.tag,
+				name: c.name,
+				cas: c.cas,
+				hazardClass: c.hazardClass,
+				physicalState: c.physicalState,
+				storageCode: c.storageCode,
+				primaryChemicalName: c.primaryChemicalName,
+				org: c.org,
+				quantityOnHand: c.quantityOnHand,
+				nfpa: c.fields['NFPA (H/F/R/Spec)'] ?? null,
+				classificationNotes: c.fields['Classification Notes'] ?? null,
+				inventoryLink: c.inventoryLink
+			}));
+
+			// Pairwise compatibility check only when 2+ chemicals were queried.
+			let compatibility: any = null;
+			if (collected.length >= 2) {
+				compatibility = checkCompatibility(collected);
+			}
+
+			const notFoundReason = unresolved.length > 0
+				? `Couldn't match: ${unresolved.join(', ')}. Try a different name fragment, the inventory code (C-NNN / D-NNN), or the CAS number.`
+				: null;
+
+			return {
+				found: hazardEntries.length > 0,
+				queries,
+				chemicals: hazardEntries,
+				compatibility,
+				notFoundReason,
+				source: 'chemical-inventory CSVs + built-in storage-compatibility matrix',
+				sourceUrl: undefined,
+				dataIntegrityNotes: []
+			};
+		}
+		case 'chemicals_in_protocol': {
+			const q = String(input.protocolId ?? '').trim();
+			if (!q) return { error: 'protocolId required', source: 'ProtocolDefinition + ReagentCatalog', sourceUrl: undefined };
+
+			// Resolve by _id or by name fragment.
+			let protocol = await ProtocolDefinition.findById(q).lean().catch(() => null) as any;
+			if (!protocol) {
+				const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+				protocol = await ProtocolDefinition.findOne({ name: { $regex: escaped, $options: 'i' } })
+					.sort({ updatedAt: -1 })
+					.lean() as any;
+			}
+			if (!protocol) {
+				return {
+					found: false,
+					query: q,
+					source: 'ProtocolDefinition + ReagentCatalog',
+					dataIntegrityNotes: [`No protocol matched "${q}". Try a name fragment or the protocol _id.`]
+				};
+			}
+
+			const materials = Array.isArray(protocol.materials) ? protocol.materials.slice(0, 50) : [];
+			const catalogIds = [...new Set(materials.map((m: any) => m?.catalogId).filter(Boolean))] as string[];
+
+			const catalogEntries = catalogIds.length > 0
+				? await ReagentCatalog.find({ _id: { $in: catalogIds } })
+					.select('_id name type category subcategory manufacturer catalogNumber description tags')
+					.lean() as any[]
+				: [];
+			const catalogMap = new Map(catalogEntries.map(e => [e._id, e]));
+
+			let unlinkedCount = 0;
+			const items = materials.map((m: any) => {
+				const entry = m.catalogId ? catalogMap.get(m.catalogId) : null;
+				if (entry) unlinkedCount += 0;
+				return {
+					key: m.key,
+					catalogId: m.catalogId,
+					catalogName: entry?.name ?? m.catalogName ?? null,
+					type: entry?.type ?? null,
+					category: entry?.category ?? null,
+					amount: m.amount,
+					unit: m.unit,
+					manufacturer: entry?.manufacturer ?? null,
+					catalogNumber: entry?.catalogNumber ?? null,
+					// We don't currently link catalog entries to raw chemicals; null here is expected.
+					rawChemicalLink: null
+				};
+			});
+
+			const notes: string[] = [];
+			notes.push('Protocols list prepared reagents from the research catalog — they don\'t link to raw chemicals (C-NNN / D-NNN) automatically. To see what raw chemicals back a prepared reagent, look up its protocolDefinitionId chain manually or use trace_reagent_chain on a cartridge that consumed it.');
+
+			return {
+				found: true,
+				protocolId: protocol._id,
+				protocolName: protocol.name,
+				protocolVersion: protocol.version,
+				protocolStatus: protocol.status,
+				materialsCount: materials.length,
+				materials: items,
+				source: 'ProtocolDefinition.materials[] joined to ReagentCatalog (no raw-chemical link yet)',
+				sourceUrl: `/research/protocols/${protocol._id}`,
+				dataIntegrityNotes: notes
+			};
+		}
+		case 'chemical_burn_rate': {
+			const q = String(input.query ?? '').trim();
+			if (!q) return { error: 'query required', source: 'chemical-inventory CSVs', sourceUrl: undefined };
+
+			const r = lookupChemical(q, { limit: 1 });
+			if (r.matches.length === 0) {
+				return {
+					found: false,
+					query: q,
+					source: 'chemical-inventory CSVs',
+					dataIntegrityNotes: [`Couldn't find a chemical matching "${q}". Try a name fragment, the inventory code (C-NNN / D-NNN), or the CAS number.`]
+				};
+			}
+			const c = r.matches[0];
+			return {
+				found: true,
+				tag: c.tag,
+				name: c.name,
+				org: c.org,
+				cas: c.cas,
+				hazardClass: c.hazardClass,
+				currentQuantity: c.quantityOnHand,
+				storageCode: c.storageCode,
+				consumptionRate: null,
+				daysRemaining: null,
+				source: 'chemical-inventory CSVs (consumption tracking not yet wired into BIMS)',
+				sourceUrl: undefined,
+				dataIntegrityNotes: [
+					'Raw-chemical consumption (C-NNN / D-NNN items) isn\'t tracked in BIMS yet — there\'s no transaction stream for bottle pulls or bench usage. Current quantity is what the CSV inventory says we have; we can\'t project days-of-runway until usage logging ships.'
+				]
 			};
 		}
 		case 'list_recent_document_changes': {

@@ -556,6 +556,51 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		requiredTools: ['list_recent_document_changes'],
 		forbiddenTools: ['search_work_instructions', 'search_documentation'],
 		notes: 'Phase 6.1.11 — Document.revisions[] within window. Should NOT route to WI/markdown search tools.'
+	},
+
+	// === Phase 6.2 — Chemical & floor-plan extensions (Bucket 3) ===
+	{
+		id: 'phase6-chem-hazard-single',
+		category: 'phase6-chem',
+		text: 'What hazards apply to chemical C-002?',
+		requiredTools: ['chemical_hazard_summary'],
+		forbiddenTools: ['lookup_chemical'],
+		expectedAnswerPhrases: [/methotrexate|HTX|toxic|cytotoxic|hazard/i],
+		notes: 'Phase 6.2.1 — single-chemical hazard rundown. C-002 is methotrexate (HTX).'
+	},
+	{
+		id: 'phase6-chem-compat',
+		category: 'phase6-chem',
+		text: 'Is methanol safe to store next to sodium hydroxide?',
+		requiredTools: ['chemical_hazard_summary'],
+		expectedAnswerPhrases: [/methanol|sodium hydroxide|flam|cor|acid|base|incompat|safe|separate|isolat/i],
+		notes: 'Phase 6.2.1 — pairwise compatibility check. Methanol (FLAM) + NaOH (COR/base) should trip the flammable-vs-corrosive rule.'
+	},
+	{
+		id: 'phase6-chem-burn-rate',
+		category: 'phase6-chem',
+		text: 'How fast are we burning through IPA?',
+		requiredTools: ['chemical_burn_rate'],
+		expectedAnswerPhrases: [/IPA|isopropyl|track|consumption|usage|not (yet )?(tracked|wired|recorded)|runway/i],
+		notes: 'Phase 6.2.3 — chemical_burn_rate. Should surface current stock + limitation note that raw-chemical consumption isn\'t tracked yet.'
+	},
+	{
+		id: 'phase6-chem-in-protocol',
+		category: 'phase6-chem',
+		text: 'What materials does the Active Beads v3 protocol consume?',
+		requiredTools: ['chemicals_in_protocol'],
+		forbiddenTools: ['find_protocol', 'search_documentation'],
+		expectedAnswerPhrases: [/active bead|material|reagent|protocol/i],
+		notes: 'Phase 6.2.2 — chemicals_in_protocol. Should surface materials list + note that the chain to raw chemicals isn\'t wired.'
+	},
+	{
+		id: 'phase6-floor-plan-clean',
+		category: 'phase6-chem',
+		text: 'Where is fridge B-01?',
+		requiredTools: ['find_location'],
+		forbiddenTools: ['list_equipment', 'get_current_temperatures'],
+		expectedAnswerPhrases: [/B-?01|manufacturing|fridge/i],
+		notes: 'Phase 6.2.4 — clean tag→zone resolution. Should return no dataIntegrityNotes after the polish, so confidence stays high.'
 	}
 ];
 

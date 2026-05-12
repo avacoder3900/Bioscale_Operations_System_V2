@@ -232,6 +232,17 @@ export interface LocationResolveResult {
 	zone: Zone | null;
 	tagEntry: TagToZoneEntry | null; // when matchedAs === 'tag'
 	equipmentInZone: Array<{ tag: string; equipmentName: string; rawLocation: string; source: string }>;
+	/**
+	 * Operator-facing message for "nothing matched" or "found-but-no-zone".
+	 * Distinct from data-integrity notes: this is a routine search outcome, not
+	 * evidence of broken data, so it should not push answer confidence to
+	 * degraded. The find_location case handler surfaces this separately.
+	 */
+	notFoundReason: string | null;
+	/**
+	 * Genuine data-integrity concerns about the floor-plan corpus (e.g. a tag
+	 * exists in the CSV but with no Location column). Pushed as dataIntegrityNotes.
+	 */
 	notes: string[];
 }
 
@@ -246,10 +257,11 @@ export function resolveLocation(query: string): LocationResolveResult {
 		zone: null,
 		tagEntry: null,
 		equipmentInZone: [],
+		notFoundReason: null,
 		notes: []
 	};
 	if (!q) {
-		result.notes.push('Query was empty.');
+		result.notFoundReason = 'Query was empty.';
 		return result;
 	}
 
@@ -291,10 +303,16 @@ export function resolveLocation(query: string): LocationResolveResult {
 				return result;
 			}
 		}
-		result.notes.push(`Found ${equipResult.matches.length} equipment match(es) for "${q}" but none have a resolvable Location column. Check the equipment CSV.`);
+		// Found equipment in the CSV but its Location column is blank — that's
+		// a genuine data gap worth surfacing as a dataIntegrityNote.
+		result.notes.push(`Found ${equipResult.matches.length} equipment match(es) for "${q}" but none have a Location column filled in. The floor-plan CSV needs that row updated.`);
+		return result;
 	}
 
-	result.notes.push(`Nothing matched "${q}". Try an equipment tag (B-NN, F-NN, E-NN), a zone name (Tissue Culture, Open Lab, Manufacturing, R&D, Prototyping), or an equipment name.`);
+	// Nothing matched. This is a routine not-found, NOT a data-integrity issue —
+	// surface it as notFoundReason so the agent can phrase a clean "I don't see
+	// that" without dropping confidence.
+	result.notFoundReason = `Nothing matched "${q}". Try an equipment tag (B-NN, F-NN, E-NN), a zone name (Tissue Culture, Open Lab, Manufacturing, R&D, Prototyping), or an equipment name.`;
 	return result;
 }
 

@@ -188,6 +188,121 @@ export interface ChemicalLookupOpts {
 	limit?: number;
 }
 
+/**
+ * Storage-compatibility matrix — small set of well-known chemistry rules.
+ * Used by chemical_hazard_summary to flag when two chemicals from a query
+ * shouldn't share a shelf.
+ *
+ * Hazard codes match the IFC Hazard Class column in our CSVs:
+ *   FLAM  flammable liquid/solid
+ *   OX    oxidizer
+ *   COR   corrosive (acid or base — we infer subtype from CAS / primary name)
+ *   HTX   highly toxic (methotrexate, azides, organomercurials — full isolation)
+ *   TOX   toxic
+ *   WR    water-reactive (we infer from primary name when present)
+ */
+export interface IncompatibilityRule {
+	when: (a: HazardProfile, b: HazardProfile) => boolean;
+	reason: string;
+}
+
+interface HazardProfile {
+	codes: string[];
+	primaryNameLower: string;
+	itemLower: string;
+}
+
+function profileFor(row: ChemicalRow): HazardProfile {
+	const codes = (row.hazardClass ?? '')
+		.split(/[;,\s]+/)
+		.map((c) => c.trim().toUpperCase())
+		.filter(Boolean);
+	return {
+		codes,
+		primaryNameLower: (row.primaryChemicalName ?? '').toLowerCase(),
+		itemLower: (row.name ?? '').toLowerCase()
+	};
+}
+
+const IS_ACID = (p: HazardProfile): boolean =>
+	p.codes.includes('COR') &&
+	/(acid|hcl|hno3|h2so4|hydrochloric|sulfuric|nitric|phosphoric|acetic|formic|tcep|trifluoroacetic)/i.test(p.primaryNameLower + ' ' + p.itemLower);
+
+const IS_BASE = (p: HazardProfile): boolean =>
+	p.codes.includes('COR') &&
+	/(naoh|koh|hydroxide|ammonia|amine|sodium hydroxide|potassium hydroxide|imidazole|tris|ethanolamine|tetraborate)/i.test(p.primaryNameLower + ' ' + p.itemLower);
+
+const IS_WATER_REACTIVE = (p: HazardProfile): boolean =>
+	/(metal sodium|metal potassium|lithium aluminum|aluminum chloride|magnesium powder|calcium hydride|water-reactive|reacts with water)/i.test(p.primaryNameLower + ' ' + p.itemLower);
+
+const IS_AZIDE = (p: HazardProfile): boolean =>
+	/azide/i.test(p.primaryNameLower + ' ' + p.itemLower);
+
+const IS_CYTOTOXIC = (p: HazardProfile): boolean =>
+	p.codes.includes('HTX') ||
+	/(methotrexate|cytotoxic|antineoplastic|thimerosal|organomercury)/i.test(p.primaryNameLower + ' ' + p.itemLower);
+
+export const INCOMPATIBILITY_RULES: IncompatibilityRule[] = [
+	{
+		when: (a, b) => a.codes.includes('FLAM') && b.codes.includes('OX'),
+		reason: 'Flammable + oxidizer: fire risk on contact. Store on separate shelves with secondary containment.'
+	},
+	{
+		when: (a, b) => a.codes.includes('OX') && /organic|alcohol|ipa|methanol|ethanol|glycerol|dmso|toluene|acetone|hexane/i.test(b.primaryNameLower + ' ' + b.itemLower),
+		reason: 'Oxidizer + organic: spontaneous ignition risk. Keep oxidizers away from any organic solvent or fuel.'
+	},
+	{
+		when: (a, b) => IS_ACID(a) && IS_BASE(b),
+		reason: 'Acid + base: violent neutralization, heat release, splash risk. Store in separate corrosive cabinets.'
+	},
+	{
+		when: (a, b) => IS_WATER_REACTIVE(a) && /(water|aqueous|buffer|saline|pbs)/i.test(b.primaryNameLower + ' ' + b.itemLower),
+		reason: 'Water-reactive + aqueous source: violent reaction with humidity or splash. Keep in desiccated isolation.'
+	},
+	{
+		when: (a, b) => IS_CYTOTOXIC(a),
+		reason: 'Highly toxic (HTX) chemicals like methotrexate and organomercurials get full isolation — separate cabinet, separate spill kit, no co-storage with general inventory.'
+	},
+	{
+		when: (a, b) => IS_AZIDE(a),
+		reason: 'Sodium azide isolates entirely — never near acids (forms hydrazoic acid, explosive) or heavy-metal plumbing (forms shock-sensitive azides).'
+	},
+	{
+		when: (a, b) => a.codes.includes('FLAM') && b.codes.includes('COR') && IS_ACID(b),
+		reason: 'Flammable + concentrated acid: acids can ignite or accelerate decomposition. Use separate flammables cabinet.'
+	}
+];
+
+export interface CompatibilityCheck {
+	compatible: boolean;
+	pairwise: Array<{ a: string; b: string; reason: string }>;
+}
+
+export function checkCompatibility(rows: ChemicalRow[]): CompatibilityCheck {
+	const profiles = rows.map((r) => ({ row: r, profile: profileFor(r) }));
+	const pairwise: Array<{ a: string; b: string; reason: string }> = [];
+	for (let i = 0; i < profiles.length; i++) {
+		for (let j = 0; j < profiles.length; j++) {
+			if (i === j) continue;
+			const a = profiles[i];
+			const b = profiles[j];
+			for (const rule of INCOMPATIBILITY_RULES) {
+				if (rule.when(a.profile, b.profile)) {
+					const label = (x: { row: ChemicalRow }) =>
+						`${x.row.tag}${x.row.name ? ` (${x.row.name})` : ''}`;
+					const entry = { a: label(a), b: label(b), reason: rule.reason };
+					// De-dup: don't add (a,b) if we already have (b,a) with same reason.
+					if (!pairwise.some((p) => p.a === entry.b && p.b === entry.a && p.reason === entry.reason)) {
+						pairwise.push(entry);
+					}
+					break;
+				}
+			}
+		}
+	}
+	return { compatible: pairwise.length === 0, pairwise };
+}
+
 export function lookupChemical(query: string, opts: ChemicalLookupOpts = {}): ChemicalLookupResult {
 	const q = (query ?? '').trim();
 	const limit = Math.min(Math.max(Number(opts.limit ?? DEFAULT_LIMIT), 1), MAX_LIMIT);
