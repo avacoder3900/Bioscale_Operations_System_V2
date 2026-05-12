@@ -3,10 +3,14 @@ import { nanoid } from 'nanoid';
 import { uploadToR2, uploadViaWorker } from './r2';
 import type { FieldDefinition, ParsedPart } from './spu-work-instruction';
 
-export const PARSER_VERSION = '3.1.0';
+export const PARSER_VERSION = '3.1.1';
 
-// Matches "Friendly Name (PT-SPU-NNN) xN" with qty optional. Allows × or x.
-const PART_RE = /([^()<>\n]{0,80}?)\(\s*(PT-SPU-\d{3,})\s*\)(?:\s*[x×]\s*(\d+))?/gi;
+// Matches "Friendly Name (PT-SPU-NNN) xN" with qty optional. The whitespace
+// between `)`, the multiplier (`x` / `X` / `×` / `*`), and the digits is
+// tolerant: any run of space / tab / newline / nbsp characters is accepted, so
+// authors can split the qty marker across lines or tabs in the .docx without
+// breaking detection.
+const PART_RE = /([^()<>\n]{0,80}?)\(\s*(PT-SPU-\d{3,})\s*\)\s*(?:[x×*]\s*(\d+))?/gi;
 // Informational-only part families — surfaced as warnings, not turned into widgets.
 const ALT_PART_RE = /\b(SBA-SPU|IFU-SPU)-(\d{3,})\b/g;
 
@@ -268,9 +272,14 @@ function extractStepsFromTable(
 
 		// Concatenate every cell after the step-number cell verbatim. Common case
 		// is a single instruction cell, but if the author keeps a separate image
-		// column we want it inline rather than dropped.
-		const instructionHtml = cells.slice(1).join('').trim();
-		const instructionText = stripTags(instructionHtml).replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+		// (or qty) column we want it inline rather than dropped. A literal space
+		// between cells keeps "(PT-SPU-001)" and a following "x2" cell from
+		// fusing into "(PT-SPU-001)x2" when the regex tries to find the qty.
+		const instructionHtml = cells.slice(1).join(' ').trim();
+		const instructionText = stripTags(instructionHtml)
+			.replace(/&nbsp;/g, ' ')
+			.replace(/\s+/g, ' ')
+			.trim();
 
 		// Collect any image URLs that live inside the row so /review can still
 		// show them, but DO NOT strip them from instructionHtml — they stay where
