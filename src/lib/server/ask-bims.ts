@@ -13,6 +13,7 @@ import { TIER_1_REFERENCE } from './ask-bims-tier1';
 import { searchDocs } from './docs-search';
 import { lookupEquipment } from './equipment-datasheets';
 import { lookupChemical } from './chemical-inventory';
+import { resolveLocation, getTagMapSize } from './floor-plan';
 import { summarizeFromAnomalies, computeSummary } from './integrity-scan';
 
 /**
@@ -632,6 +633,24 @@ Caps: 10 results, 500ms timeout. If the query is too broad and matches everythin
 				equipmentName: { type: 'string', description: 'Equipment name fragment, Tag # (e.g. "B-01", "F-12"), or any cell value (case-insensitive substring across all columns)' }
 			},
 			required: ['equipmentName']
+		}
+	},
+	{
+		name: 'find_location',
+		description: `Resolve an equipment tag, zone name, or "where is X" question into a spatial description of the new shared Houston lab.
+Source: data/equipment-datasheets/ (tag→zone via the Location column) + the codified floor plan inside src/lib/server/floor-plan.ts.
+
+Use when: "where is fridge 3", "what's near the cartridge oven", "show me everything in tissue culture", "which side of the lab is the OT-2 on", "where do I find B-01".
+
+Returns the zone (Tissue Culture, Open Lab, Manufacturing, R&D, Prototyping, Inventory, or Office), a plain-English position description (north wall, lower-left, etc.), the owning org (Brevitest or Fannin), and a list of other equipment that lives in the same zone.
+
+Don't use for: live equipment status (use list_equipment); manufacturer datasheets or power draw (use lookup_equipment_datasheet); generic internet questions about lab layout.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				query: { type: 'string', description: 'Equipment tag (B-NN, F-NN, E-NN), zone name (Tissue Culture, Open Lab, Manufacturing, R&D, Prototyping), or an equipment-name fragment.' }
+			},
+			required: ['query']
 		}
 	},
 	{
@@ -2318,6 +2337,42 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 				matchedOrgs: result.matchedOrgs,
 				corpusFiles: result.corpusFiles,
 				source: 'data/chemical-inventory/*.csv (bundled Brevitest + Fannin chemical lists)',
+				sourceUrl: undefined,
+				dataIntegrityNotes: notes
+			};
+		}
+		case 'find_location': {
+			const q = String(input.query ?? '').trim();
+			if (!q) return {
+				error: 'query required',
+				source: 'data/equipment-datasheets/*.csv + floor-plan.ts',
+				sourceUrl: undefined
+			};
+
+			const result = resolveLocation(q);
+			const notes: string[] = [...result.notes];
+			const knownTagCount = getTagMapSize();
+
+			return {
+				matchedAs: result.matchedAs,
+				zone: result.zone ? {
+					id: result.zone.id,
+					name: result.zone.name,
+					owningOrg: result.zone.owningOrg,
+					position: result.zone.position,
+					description: result.zone.description,
+					band: result.zone.band
+				} : null,
+				tag: result.tagEntry ? {
+					tag: q.toUpperCase(),
+					equipmentName: result.tagEntry.equipmentName,
+					rawLocation: result.tagEntry.rawLocation,
+					source: result.tagEntry.source
+				} : null,
+				equipmentInZone: result.equipmentInZone,
+				equipmentInZoneCount: result.equipmentInZone.length,
+				knownTagCount,
+				source: 'data/equipment-datasheets/*.csv (tag→zone via Location column) + floor-plan.ts (zone definitions)',
 				sourceUrl: undefined,
 				dataIntegrityNotes: notes
 			};

@@ -359,6 +359,26 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		notes: 'Phase 2 — CAS-number lookup. 67-56-1 is methanol; matches both C-013 (Methanol neat) and C-017 (Coomassie reagent that contains methanol). Should NOT route to part-catalog.'
 	},
 
+	// === Floor plan (Phase 3 — find_location tool) ===
+	{
+		id: 'location-by-tag',
+		category: 'datasheets',
+		text: 'Where is fridge B-01?',
+		requiredTools: ['find_location'],
+		forbiddenTools: ['list_equipment', 'get_current_temperatures'],
+		expectedAnswerPhrases: [/B-?01|manufacturing|fridge/i],
+		notes: 'Phase 3 — tag-based resolution. B-01 (tall glass door fridge) lives in Manufacturing per the BT CSV. Should NOT route to list_equipment.'
+	},
+	{
+		id: 'location-by-zone',
+		category: 'datasheets',
+		text: "What's in tissue culture?",
+		requiredTools: ['find_location'],
+		forbiddenTools: ['list_equipment'],
+		expectedAnswerPhrases: [/tissue culture|biosafety|F-?01|fannin/i],
+		notes: 'Phase 3 — zone-based listing. Tissue Culture is the Fannin-owned enclosed room with the biosafety cabinet (F-01). Should NOT route to list_equipment (live registry, no zone semantics).'
+	},
+
 	// === Research-side Phase E1: experiment + cartridge research tools ===
 	{
 		id: 'research-experiments-underway',
