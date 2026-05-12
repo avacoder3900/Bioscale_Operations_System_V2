@@ -24,11 +24,18 @@ export function robotBaseUrl(robot: { ip: string; port?: number | null }): strin
 // Node's undici surfaces the real reason (ECONNREFUSED, ETIMEDOUT, ENOTFOUND, ...)
 // on err.cause, not err.message. Without unwrapping it the caller only sees
 // "fetch failed", which is useless for diagnosing why the robot is unreachable.
+//
+// A 30-second per-request abort signal guards against wedged Node keepalive
+// sockets that can leave a sweep stuck mid-call when the OT-2 or network
+// blips. 30s matches the OT-2's own per-command waitUntilComplete timeout —
+// any single HTTP hop hanging past that is a stuck socket, not a slow move.
 async function robotFetch(url: string, init: RequestInit & { method?: string } = {}): Promise<Response> {
+	const method = init.method ?? 'GET';
+	const ac = new AbortController();
+	const timer = setTimeout(() => ac.abort(new Error('robotFetch timeout after 30s')), 30_000);
 	try {
-		return await fetch(url, init);
+		return await fetch(url, { ...init, signal: ac.signal });
 	} catch (e: any) {
-		const method = init.method ?? 'GET';
 		const cause = e?.cause;
 		const causeCode = (cause as any)?.code;
 		const causeMsg = cause instanceof Error ? cause.message : cause ? String(cause) : '';
@@ -36,6 +43,8 @@ async function robotFetch(url: string, init: RequestInit & { method?: string } =
 			? ` — ${causeCode ? `[${causeCode}] ` : ''}${causeMsg}`
 			: '';
 		throw new Error(`${method} ${url} failed: ${e?.message ?? 'unknown'}${causePart}`);
+	} finally {
+		clearTimeout(timer);
 	}
 }
 
