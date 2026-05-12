@@ -3,14 +3,15 @@ import { nanoid } from 'nanoid';
 import { uploadToR2, uploadViaWorker } from './r2';
 import type { FieldDefinition, ParsedPart } from './spu-work-instruction';
 
-export const PARSER_VERSION = '3.1.1';
+export const PARSER_VERSION = '3.1.2';
 
-// Matches "Friendly Name (PT-SPU-NNN) xN" with qty optional. The whitespace
-// between `)`, the multiplier (`x` / `X` / `×` / `*`), and the digits is
-// tolerant: any run of space / tab / newline / nbsp characters is accepted, so
-// authors can split the qty marker across lines or tabs in the .docx without
-// breaking detection.
-const PART_RE = /([^()<>\n]{0,80}?)\(\s*(PT-SPU-\d{3,})\s*\)\s*(?:[x×*]\s*(\d+))?/gi;
+// Matches "Friendly Name (PT-SPU-NNN) x N" with qty optional. A multiplier
+// (`x` / `X` / `×` / `*`) followed by AT LEAST ONE whitespace character then
+// digits is required to capture qty — otherwise digits glued to the multiplier
+// (e.g. "x120 tooth pulley") would be mis-read as a qty of 120 when in fact
+// the 120 belongs to the next sentence's description. Spaces, tabs, newlines,
+// and nbsp all count as the required separator.
+const PART_RE = /([^()<>\n]{0,80}?)\(\s*(PT-SPU-\d{3,})\s*\)\s*(?:[x×*]\s+(\d+))?/gi;
 // Informational-only part families — surfaced as warnings, not turned into widgets.
 const ALT_PART_RE = /\b(SBA-SPU|IFU-SPU)-(\d{3,})\b/g;
 
@@ -304,7 +305,7 @@ function extractStepsFromTable(
 				const n = parseInt(pm[3], 10);
 				if (Number.isFinite(n) && n >= 1 && n <= 999) quantity = n;
 			} else {
-				warnings.push(`Step ${stepNumber} ${partNumber}: no qty (xN) — defaulting to 1`);
+				warnings.push(`Step ${stepNumber} ${partNumber}: no qty (need "x N" with a space before the number) — defaulting to 1`);
 			}
 			parts.push({
 				anchorId: `anchor-${nanoid(8)}`,
@@ -411,7 +412,7 @@ function injectPartWidgets(
 				const n = parseInt(qtyStr, 10);
 				if (Number.isFinite(n) && n >= 1 && n <= 999) quantity = n;
 			} else {
-				warnings.push(`${partNumber}: no qty (xN) specified — defaulting to 1`);
+				warnings.push(`${partNumber}: no qty (need "x N" with a space before the number) — defaulting to 1`);
 			}
 			hits.push({ partName, partNumber, quantity, segIdx: i });
 		}
