@@ -28,3 +28,6 @@ reference/
 
 # Ask BIMS local test harness logs
 tests/ask-bims/acceptance-run-*.log
+
+# Ask BIMS generated answer sheets for human grading (output, not source)
+docs/ask-bims-acceptance-answers-*.md

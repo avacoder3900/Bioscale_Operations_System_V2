@@ -78,6 +78,7 @@ async function main() {
 	console.log(`\n${'='.repeat(60)}`);
 	console.log(`Summary: ${summary.passed}/${summary.results.length} passed, ${summary.failed} failed`);
 	console.log(`Total cost: $${summary.totalCostUsd.toFixed(4)}`);
+	console.log(`Avg tool calls/Q: ${summary.avgToolCalls.toFixed(2)} (max ${summary.maxToolCalls}` + (summary.maxToolCallsQuestionId ? ` on ${summary.maxToolCallsQuestionId}` : '') + `, zero-tool: ${summary.zeroToolCount})`);
 	if (summary.halted) console.log(`⚠ HALTED — cost ceiling reached`);
 
 	// Per-category breakdown

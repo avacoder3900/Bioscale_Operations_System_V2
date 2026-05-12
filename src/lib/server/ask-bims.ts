@@ -3426,12 +3426,77 @@ export interface AskBimsUsage {
 	estCostUsd: number;
 }
 
+/**
+ * Coarse confidence signal derived from tool results, not from logprobs.
+ *
+ *   high     — every tool returned a clean payload; no integrity notes, no
+ *              truncation, no not-found, no errors.
+ *   partial  — at least one tool returned truncated results, an empty match,
+ *              or a "not found" — the answer is incomplete but not unreliable.
+ *   degraded — at least one tool surfaced dataIntegrityNotes with content,
+ *              or any tool errored. Caller should phrase the answer cautiously
+ *              and surface why.
+ *
+ * The widget should render this as a badge next to the answer. The system
+ * prompt instructs Claude to qualify language at non-high confidence.
+ */
+export type AskBimsConfidence = 'high' | 'partial' | 'degraded';
+
 export interface AskBimsResult {
 	answer: string;
 	toolCalls: Array<{ name: string; input: any; result: any }>;
 	usage?: AskBimsUsage;
 	model?: AskBimsModel;
+	confidence?: AskBimsConfidence;
+	confidenceReasons?: string[];
 	error?: string;
+}
+
+/**
+ * Walk every tool result and derive a coarse confidence + the specific
+ * signals that drove it. Heuristic, not probabilistic — but the agent
+ * harness guide's recommendation: "ground confidence in concrete tool-output
+ * conditions, not in the model's self-report."
+ */
+function inferConfidence(toolCalls: AskBimsResult['toolCalls']): { confidence: AskBimsConfidence; reasons: string[] } {
+	const reasons: string[] = [];
+	let degraded = false;
+	let partial = false;
+
+	for (const tc of toolCalls) {
+		const r = tc.result;
+		if (!r || typeof r !== 'object') continue;
+
+		const notes = (r as any).dataIntegrityNotes;
+		if (Array.isArray(notes) && notes.length > 0) {
+			degraded = true;
+			reasons.push(`${tc.name} surfaced ${notes.length} dataIntegrityNote(s)`);
+		}
+		if ((r as any).error) {
+			degraded = true;
+			reasons.push(`${tc.name} returned an error`);
+		}
+		if ((r as any).skipped) {
+			// Anti-redundancy guard refusal — informational, not a confidence hit.
+			continue;
+		}
+		if ((r as any).truncated === true) {
+			partial = true;
+			reasons.push(`${tc.name} truncated its result`);
+		}
+		if ((r as any).found === false) {
+			partial = true;
+			reasons.push(`${tc.name} returned not-found`);
+		}
+		if ((r as any).timedOut === true) {
+			partial = true;
+			reasons.push(`${tc.name} timed out`);
+		}
+	}
+
+	if (degraded) return { confidence: 'degraded', reasons };
+	if (partial) return { confidence: 'partial', reasons };
+	return { confidence: 'high', reasons };
 }
 
 function calcCost(model: AskBimsModel, u: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number }): number {
@@ -3446,6 +3511,12 @@ function calcCost(model: AskBimsModel, u: { inputTokens: number; outputTokens: n
 
 export interface AskBimsOpts {
 	model?: AskBimsModel;
+	/**
+	 * Sampling temperature override. Production leaves this undefined (Anthropic
+	 * default), but the test harness passes 0 for deterministic regression
+	 * detection — per Agent Harness Engineering Guide 2026.
+	 */
+	temperature?: number;
 	userId?: string;
 	username?: string;
 }
@@ -3518,6 +3589,7 @@ async function runAgentLoop(history: AskBimsMessage[], opts: AskBimsOpts): Promi
 			response = await client.messages.create({
 				model,
 				max_tokens: 4096,
+				...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
 				system: [
 					{
 						// Stable schema/lifecycle/integrity reference — cached first so
@@ -3560,6 +3632,8 @@ async function runAgentLoop(history: AskBimsMessage[], opts: AskBimsOpts): Promi
 					toolCalls,
 					model,
 					usage: { ...usage, estCostUsd: costSoFar },
+					confidence: 'degraded',
+					confidenceReasons: ['Per-question Opus cost cap hit before the agent could finish.'],
 					error: `Per-question cost cap of $${MAX_COST_OPUS_USD.toFixed(2)} exceeded on Opus. Consider rephrasing the question more narrowly or switching to Sonnet.`
 				};
 			}
@@ -3573,11 +3647,14 @@ async function runAgentLoop(history: AskBimsMessage[], opts: AskBimsOpts): Promi
 				.map(b => b.text)
 				.join('\n\n')
 				.trim();
+			const conf = inferConfidence(toolCalls);
 			return {
 				answer: text,
 				toolCalls,
 				model,
-				usage: { ...usage, estCostUsd: calcCost(model, usage) }
+				usage: { ...usage, estCostUsd: calcCost(model, usage) },
+				confidence: conf.confidence,
+				confidenceReasons: conf.reasons
 			};
 		}
 
@@ -3630,6 +3707,8 @@ async function runAgentLoop(history: AskBimsMessage[], opts: AskBimsOpts): Promi
 		toolCalls,
 		model,
 		usage: { ...usage, estCostUsd: calcCost(model, usage) },
+		confidence: 'degraded',
+		confidenceReasons: [`Agent exhausted MAX_ITERATIONS=${MAX_ITERATIONS} without producing a final answer.`],
 		error: 'Agent exceeded max iterations without a final answer.'
 	};
 }
