@@ -39,7 +39,7 @@
 	<title>WI v{data.version.version} · {data.wiTitle ?? ''}</title>
 </svelte:head>
 
-<div class="mx-auto max-w-4xl space-y-6 p-6">
+<div class="mx-auto max-w-7xl space-y-6 p-6">
 	<header class="flex items-start justify-between gap-4">
 		<div>
 			<a href="/spu/work-instruction" class="text-xs text-[var(--color-tron-cyan)] hover:underline">
@@ -216,18 +216,17 @@
 		cursor: not-allowed;
 	}
 
-	/* === Step-card layout (parser v3 procedure-table render) === */
+	/* === Procedure step rows (parser v3.1: doc on left, scans on right) === */
 	:global(.bims-wi-document .bims-wi-steps) {
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
+		gap: 0.75rem;
 	}
 	:global(.bims-wi-document .bims-wi-step) {
 		display: grid;
-		grid-template-columns: 96px minmax(0, 1.6fr) minmax(0, 1fr);
-		grid-template-areas: 'num instr image' 'scans scans scans';
-		gap: 0.9rem 1rem;
-		padding: 1rem;
+		grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr);
+		gap: 1rem;
+		padding: 0.85rem 1rem;
 		border: 1px solid rgba(255, 255, 255, 0.12);
 		border-radius: 10px;
 		background: rgba(0, 0, 0, 0.25);
@@ -241,90 +240,60 @@
 		border-color: var(--color-tron-cyan);
 		background: rgba(0, 229, 255, 0.06);
 	}
+	:global(.bims-wi-document .bims-wi-step__doc) {
+		display: grid;
+		grid-template-columns: 64px minmax(0, 1fr);
+		gap: 0.75rem;
+		align-items: start;
+		min-width: 0;
+	}
 	:global(.bims-wi-document .bims-wi-step__num) {
-		grid-area: num;
-		display: flex;
-		align-items: flex-start;
-		justify-content: center;
 		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 		font-weight: 700;
-		font-size: 1.05rem;
+		font-size: 1rem;
 		color: var(--color-tron-cyan);
-		padding-top: 0.2rem;
-		border-right: 1px solid rgba(255, 255, 255, 0.08);
-	}
-	:global(.bims-wi-document .bims-wi-step__num span) {
-		display: inline-block;
-		padding: 0.4rem 0.6rem;
+		padding: 0.3rem 0.5rem;
 		background: rgba(0, 229, 255, 0.1);
 		border: 1px solid rgba(0, 229, 255, 0.3);
 		border-radius: 6px;
+		text-align: center;
+		align-self: start;
 	}
-	:global(.bims-wi-document .bims-wi-step__instructions) {
-		grid-area: instr;
-		font-size: 0.9rem;
+	:global(.bims-wi-document .bims-wi-step__num p) { margin: 0; }
+	:global(.bims-wi-document .bims-wi-step__instruction) {
+		font-size: 0.95rem;
 		line-height: 1.55;
+		min-width: 0;
 	}
-	:global(.bims-wi-document .bims-wi-step__instructions p:first-child) { margin-top: 0; }
-	:global(.bims-wi-document .bims-wi-step__instructions p:last-child) { margin-bottom: 0; }
-	:global(.bims-wi-document .bims-wi-step__parts) {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.4rem;
-		margin-top: 0.5rem;
-	}
-	:global(.bims-wi-document .bims-wi-step__part-chip) {
-		display: inline-flex;
-		align-items: baseline;
-		gap: 0.25em;
-		padding: 0.25em 0.55em;
-		background: rgba(0, 229, 255, 0.12);
-		border: 1px solid rgba(0, 229, 255, 0.35);
-		border-radius: 999px;
-		font-size: 0.78rem;
-		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-	}
-	:global(.bims-wi-document .bims-wi-step__part-name) {
-		font-style: italic;
-		color: var(--color-tron-text-secondary, #b0c4d4);
-		font-family: inherit;
-	}
-	:global(.bims-wi-document .bims-wi-step__image) {
-		grid-area: image;
-		display: flex;
-		align-items: flex-start;
-		justify-content: center;
-	}
-	:global(.bims-wi-document .bims-wi-step__image img) {
+	:global(.bims-wi-document .bims-wi-step__instruction p:first-child) { margin-top: 0; }
+	:global(.bims-wi-document .bims-wi-step__instruction p:last-child) { margin-bottom: 0; }
+	:global(.bims-wi-document .bims-wi-step__instruction img) {
 		max-width: 100%;
-		max-height: 280px;
-		object-fit: contain;
-		border-radius: 6px;
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		margin: 0;
-	}
-	:global(.bims-wi-document .bims-wi-step__image--empty::before) {
-		content: '(no image)';
-		color: var(--color-tron-text-secondary, #6a7a85);
-		font-size: 0.75rem;
-		font-style: italic;
+		height: auto;
+		margin: 0.5em 0;
 	}
 	:global(.bims-wi-document .bims-wi-step__scans) {
-		grid-area: scans;
 		display: flex;
-		flex-wrap: wrap;
-		gap: 0.6rem;
-		padding-top: 0.7rem;
-		border-top: 1px dashed rgba(255, 255, 255, 0.12);
+		flex-direction: column;
+		gap: 0.5rem;
+		padding-left: 1rem;
+		border-left: 1px dashed rgba(255, 255, 255, 0.12);
 	}
 	:global(.bims-wi-document .bims-wi-step__scans--none) {
-		font-size: 0.75rem;
+		align-items: flex-start;
+		justify-content: center;
 		color: var(--color-tron-text-secondary, #8aa);
-		font-style: italic;
 	}
-	:global(.bims-wi-document .bims-wi-step__scan) {
-		flex: 1 1 220px;
-		min-width: 200px;
+	:global(.bims-wi-document .bims-wi-step__no-scans) {
+		display: inline-block;
+		padding: 0.3rem 0.6rem;
+		font-size: 0.72rem;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		font-style: italic;
+		border: 1px dashed rgba(255, 255, 255, 0.2);
+		border-radius: 999px;
+		color: var(--color-tron-text-secondary, #8aa);
 	}
 	:global(.bims-wi-document .bims-wi-step__scan label) {
 		display: block;
@@ -353,10 +322,15 @@
 		border-color: var(--color-tron-cyan);
 		box-shadow: 0 0 0 2px rgba(0, 229, 255, 0.3);
 	}
-	@media (max-width: 720px) {
+	@media (max-width: 900px) {
 		:global(.bims-wi-document .bims-wi-step) {
-			grid-template-columns: 64px 1fr;
-			grid-template-areas: 'num instr' 'image image' 'scans scans';
+			grid-template-columns: 1fr;
+		}
+		:global(.bims-wi-document .bims-wi-step__scans) {
+			padding-left: 0;
+			border-left: 0;
+			padding-top: 0.7rem;
+			border-top: 1px dashed rgba(255, 255, 255, 0.12);
 		}
 	}
 </style>

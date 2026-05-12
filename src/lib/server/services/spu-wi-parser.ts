@@ -3,7 +3,7 @@ import { nanoid } from 'nanoid';
 import { uploadToR2, uploadViaWorker } from './r2';
 import type { FieldDefinition, ParsedPart } from './spu-work-instruction';
 
-export const PARSER_VERSION = '3.0.0';
+export const PARSER_VERSION = '3.1.0';
 
 // Matches "Friendly Name (PT-SPU-NNN) xN" with qty optional. Allows × or x.
 const PART_RE = /([^()<>\n]{0,80}?)\(\s*(PT-SPU-\d{3,})\s*\)(?:\s*[x×]\s*(\d+))?/gi;
@@ -26,6 +26,7 @@ export type ParsedStep = {
 	title: string;
 	content: string;
 	contentText: string;
+	numCellHtml: string;
 	parts: ParsedPart[];
 	images: string[];
 	fieldDefinitions: FieldDefinition[];
@@ -129,7 +130,10 @@ export async function parseSpuWorkInstruction(file: {
 	if (tableExtraction) {
 		steps = tableExtraction.steps;
 		parts = steps.flatMap((s) => s.parts);
-		renderedHtml = renderStepCardsHtml(steps);
+		renderedHtml =
+			tableExtraction.preTableHtml +
+			renderStepRowsHtml(steps) +
+			tableExtraction.postTableHtml;
 	} else {
 		warnings.push('No procedure table detected — falling back to inline widget render');
 		const inline = injectPartWidgets(cropped, warnings);
@@ -210,19 +214,34 @@ function sanitizeHtml(html: string): string {
 }
 
 // Find the first <table> in the cropped Procedure HTML and treat its rows as
-// steps. Expected column shape: [Step #] | [Instructions w/ (PT-SPU-NNN) xN] |
-// [Picture]. The first row is auto-skipped if it looks like a header (first
-// cell is non-numeric and matches /step/i).
+// steps. The first cell is the step number; the remaining cells (typically just
+// one — the instruction — but possibly more) are concatenated verbatim as the
+// instruction HTML so the operator sees exactly what the author wrote. Images
+// inside the instruction cell are preserved inline (not relocated to a
+// separate image cell).
 //
-// Returns null if no usable table is found, signalling a fallback render.
-function extractStepsFromTable(html: string, warnings: string[]): { steps: ParsedStep[] } | null {
-	const tableMatch = html.match(/<table\b[^>]*>([\s\S]*?)<\/table>/i);
+// Returns null if no usable table is found, signalling a fallback render. Also
+// returns the HTML before and after the table so non-table content (headings,
+// intro paragraphs) renders untouched around the synthesized step rows.
+function extractStepsFromTable(
+	html: string,
+	warnings: string[]
+): { steps: ParsedStep[]; preTableHtml: string; postTableHtml: string } | null {
+	const tableRe = /<table\b[^>]*>[\s\S]*?<\/table>/i;
+	const tableMatch = html.match(tableRe);
 	if (!tableMatch) return null;
+	const tableStart = tableMatch.index ?? 0;
+	const tableEnd = tableStart + tableMatch[0].length;
+	const preTableHtml = html.slice(0, tableStart);
+	const postTableHtml = html.slice(tableEnd);
+
+	const innerMatch = tableMatch[0].match(/<table\b[^>]*>([\s\S]*?)<\/table>/i);
+	const inner = innerMatch ? innerMatch[1] : '';
 
 	const rowRe = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
 	const rawRows: string[] = [];
 	let rm: RegExpExecArray | null;
-	while ((rm = rowRe.exec(tableMatch[1])) !== null) rawRows.push(rm[1]);
+	while ((rm = rowRe.exec(inner)) !== null) rawRows.push(rm[1]);
 	if (rawRows.length === 0) return null;
 
 	const cellRe = /<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi;
@@ -236,7 +255,8 @@ function extractStepsFromTable(html: string, warnings: string[]): { steps: Parse
 		while ((cm = cellRe.exec(rawRows[r])) !== null) cells.push(cm[1]);
 		if (cells.length < 2) continue;
 
-		const stepCellText = stripTags(cells[0]).trim();
+		const stepCellHtml = cells[0] ?? '';
+		const stepCellText = stripTags(stepCellHtml).trim();
 		const numMatch = stepCellText.match(/\d+/);
 
 		// Header row heuristic: first row, no number in step cell, and cell text
@@ -246,20 +266,21 @@ function extractStepsFromTable(html: string, warnings: string[]): { steps: Parse
 		stepCounter++;
 		const stepNumber = numMatch ? parseInt(numMatch[0], 10) : stepCounter;
 
-		// Instruction = cell 1. Strip nested <img> so they live only in the image cell.
-		const instructionCellRaw = cells[1] ?? '';
-		const instructionHtml = stripImages(instructionCellRaw).trim();
+		// Concatenate every cell after the step-number cell verbatim. Common case
+		// is a single instruction cell, but if the author keeps a separate image
+		// column we want it inline rather than dropped.
+		const instructionHtml = cells.slice(1).join('').trim();
 		const instructionText = stripTags(instructionHtml).replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
 
-		// Image URLs: collect from any cell beyond the step-number cell.
+		// Collect any image URLs that live inside the row so /review can still
+		// show them, but DO NOT strip them from instructionHtml — they stay where
+		// the author put them.
 		const imageUrls: string[] = [];
 		const imgSrcRe = /<img\b[^>]*\bsrc\s*=\s*"([^"]+)"/gi;
-		for (let i = 1; i < cells.length; i++) {
-			imgSrcRe.lastIndex = 0;
-			let im: RegExpExecArray | null;
-			while ((im = imgSrcRe.exec(cells[i])) !== null) {
-				if (im[1] && !imageUrls.includes(im[1])) imageUrls.push(im[1]);
-			}
+		imgSrcRe.lastIndex = 0;
+		let im: RegExpExecArray | null;
+		while ((im = imgSrcRe.exec(instructionHtml)) !== null) {
+			if (im[1] && !imageUrls.includes(im[1])) imageUrls.push(im[1]);
 		}
 
 		// Detect parts in this step's instruction text.
@@ -294,6 +315,7 @@ function extractStepsFromTable(html: string, warnings: string[]): { steps: Parse
 			title,
 			content: instructionHtml,
 			contentText: instructionText,
+			numCellHtml: stepCellHtml,
 			parts,
 			images: imageUrls,
 			fieldDefinitions
@@ -301,37 +323,29 @@ function extractStepsFromTable(html: string, warnings: string[]): { steps: Parse
 	}
 
 	if (steps.length === 0) return null;
-	return { steps };
-}
-
-function stripImages(html: string): string {
-	return html.replace(/<img\b[^>]*>/gi, '');
+	return { steps, preTableHtml, postTableHtml };
 }
 
 function stripTags(html: string): string {
 	return html.replace(/<[^>]+>/g, '');
 }
 
-// Render the structured step cards. Each <section.bims-wi-step> carries the
-// step number and a count of required scans so the viewer's gating script can
-// unlock subsequent steps only after all current scans are filled.
-function renderStepCardsHtml(steps: ParsedStep[]): string {
-	const cards: string[] = ['<div class="bims-wi-steps">'];
+// Render the procedure as 2-column rows: left = the original step content
+// (step-number cell + instruction cell HTML) preserved verbatim from the
+// source .docx; right = barcode scan inputs for that step's parts, or a "No
+// scans required" chip when the step has no part references.
+//
+// Each row carries data-required-scans so the viewer's gating script can lock
+// subsequent rows until the current row's scans are filled.
+function renderStepRowsHtml(steps: ParsedStep[]): string {
+	const out: string[] = ['<div class="bims-wi-steps">'];
 	for (const step of steps) {
-		const partChips = step.parts.length
-			? `<div class="bims-wi-step__parts">${step.parts
-					.map(
-						(p) =>
-							`<span class="bims-wi-step__part-chip"><span class="bims-wi-step__part-num">${escapeHtml(p.partNumber)}</span> × <span class="bims-wi-step__part-qty">${p.quantity}</span>${p.partName ? `<em class="bims-wi-step__part-name"> ${escapeHtml(p.partName)}</em>` : ''}</span>`
-					)
-					.join('')}</div>`
-			: '';
-
-		const imagesHtml = step.images.length
-			? `<div class="bims-wi-step__image">${step.images
-					.map((u) => `<img src="${escapeAttr(u)}" alt="step ${step.stepNumber}" loading="lazy" />`)
-					.join('')}</div>`
-			: '<div class="bims-wi-step__image bims-wi-step__image--empty"></div>';
+		const numCell = step.numCellHtml && stripTags(step.numCellHtml).trim().length > 0
+			? step.numCellHtml
+			: `<p>${step.stepNumber}</p>`;
+		const instructionCell = step.content && step.content.trim().length > 0
+			? step.content
+			: `<p>${escapeHtml(step.title)}</p>`;
 
 		const scanInputs: string[] = [];
 		let totalScans = 0;
@@ -346,14 +360,14 @@ function renderStepCardsHtml(steps: ParsedStep[]): string {
 		}
 		const scansBlock = scanInputs.length
 			? `<div class="bims-wi-step__scans" data-required-scans="${totalScans}">${scanInputs.join('')}</div>`
-			: `<div class="bims-wi-step__scans bims-wi-step__scans--none" data-required-scans="0"><span>No barcode scans required for this step.</span></div>`;
+			: `<div class="bims-wi-step__scans bims-wi-step__scans--none" data-required-scans="0"><span class="bims-wi-step__no-scans">No scans required</span></div>`;
 
-		cards.push(
-			`<section class="bims-wi-step" data-step="${step.stepNumber}" data-required-scans="${totalScans}"><div class="bims-wi-step__num"><span>Step ${step.stepNumber}</span></div><div class="bims-wi-step__instructions">${step.content || `<p>${escapeHtml(step.title)}</p>`}${partChips}</div>${imagesHtml}${scansBlock}</section>`
+		out.push(
+			`<section class="bims-wi-step" data-step="${step.stepNumber}" data-required-scans="${totalScans}"><div class="bims-wi-step__doc"><div class="bims-wi-step__num">${numCell}</div><div class="bims-wi-step__instruction">${instructionCell}</div></div>${scansBlock}</section>`
 		);
 	}
-	cards.push('</div>');
-	return cards.join('');
+	out.push('</div>');
+	return out.join('');
 }
 
 function escapeAttr(s: string): string {
