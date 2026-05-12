@@ -601,6 +601,40 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		forbiddenTools: ['list_equipment', 'get_current_temperatures'],
 		expectedAnswerPhrases: [/B-?01|manufacturing|fridge/i],
 		notes: 'Phase 6.2.4 — clean tag→zone resolution. Should return no dataIntegrityNotes after the polish, so confidence stays high.'
+	},
+
+	// === Phase 6.3 — Manufacturing analytics ===
+	{
+		id: 'phase6-yield-trend-by-robot',
+		category: 'phase6-analytics',
+		text: 'Is one of our robots yielding worse than the others this month?',
+		requiredTools: ['yield_trends_by_robot'],
+		forbiddenTools: ['bulk_run_yields', 'get_run_yield'],
+		notes: 'Phase 6.3.1 — yield trend per robot over default 30 days.'
+	},
+	{
+		id: 'phase6-scrap-pareto',
+		category: 'phase6-analytics',
+		text: 'Rank the scrap reasons for the last 30 days.',
+		requiredTools: ['scrap_pareto'],
+		forbiddenTools: ['find_cartridges', 'count_cartridges_by_status'],
+		notes: 'Phase 6.3.2 — top scrap reasons aggregated across voidReason / waxQc.rejectionReason / qaqcRelease.notes.'
+	},
+	{
+		id: 'phase6-assay-cross-ref',
+		category: 'phase6-analytics',
+		text: 'Which shipments used reagent batches for the Cortisol assay?',
+		requiredTools: ['assay_lot_cross_reference'],
+		forbiddenTools: ['forward_genealogy', 'trace_cartridge'],
+		notes: 'Phase 6.3.3 — assay → reagent batches → shipments. Cortisol may or may not exist; graceful not-found is acceptable.'
+	},
+	{
+		id: 'phase6-cycle-time',
+		category: 'phase6-analytics',
+		text: 'What is the p50 cycle time across our process types?',
+		requiredTools: ['production_cycle_time'],
+		forbiddenTools: ['get_run_details'],
+		notes: 'Phase 6.3.4 — p50/p90/max cycle time from LotRecord.cycleTime. Phrasing explicitly asks for p50 to anchor on the analytics tool rather than letting the agent fall back to per-run inspection if LotRecord.cycleTime is sparse in real data.'
 	}
 ];
 

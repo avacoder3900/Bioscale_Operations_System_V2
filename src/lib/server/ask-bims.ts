@@ -1234,6 +1234,75 @@ Hard cap 50 materials per protocol.`,
 		}
 	},
 	{
+		name: 'yield_trends_by_robot',
+		description: `Yield trend grouped by robot, per day, over a recent window. Helpful for "is Robot 2 yielding worse than Robot 1 over the last month" or for spotting a robot that started drifting.
+Source: WaxFillingRun + CartridgeRecord.waxQc aggregated server-side.
+
+Use when: "yield trend by robot", "is one robot yielding worse than the others lately", "robot comparison this month", multi-robot trend analysis.
+Don't use for: yield on a single run (use get_run_yield); a bulk dump of every run (use bulk_run_yields).
+
+Defaults: last 30 days, all robots. Hard cap 90 days history.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				robotName: { type: 'string', description: 'Optional — narrow to one robot' },
+				sinceDays: { type: 'number', description: 'Window in days (default 30, max 90)' }
+			}
+		}
+	},
+	{
+		name: 'scrap_pareto',
+		description: `Top scrap reasons over a recent window, ranked by cartridge count. Pulls reasons from every place we record them (wax QC rejection notes, QA/QC scrap notes, top-level voidReason) and tags each row by source. Optionally slices by robot or operator instead of reason.
+Source: CartridgeRecord where status in [scrapped, voided] within the window.
+
+Use when: "rank scrap reasons for last 30 days", "biggest sources of scrap this month", "is one operator scrapping more than others", root-cause review prep.
+Don't use for: a single run's yield (use get_run_yield); production volume trends (use production_throughput).
+
+Defaults: last 30 days, byField=reason. Hard cap 20 rows.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				sinceDays: { type: 'number', description: 'Window in days (default 30, max 365)' },
+				byField: { type: 'string', description: 'Group by: reason (default) | robot | operator' }
+			}
+		}
+	},
+	{
+		name: 'assay_lot_cross_reference',
+		description: `For one assay, walk the chain from reagent batches → cartridges filled with those batches → shipments those carts went into. Tells you which customers got which lot of which assay.
+Source: AssayDefinition → ReagentBatchRecord.assayType → CartridgeRecord.reagentFilling.runId → ShippingLot/ShippingPackage.
+
+Use when: "which shipments used reagent batches for Cortisol", "what customers got assay X last quarter", recall-impact analysis on an assay.
+Don't use for: a single cartridge's lineage (use trace_cartridge); recall analysis on a raw input lot (use forward_genealogy).
+
+Defaults: last 90 days. Hard cap 50 batches.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				assayName: { type: 'string', description: 'Assay name fragment (case-insensitive)' },
+				sinceDays: { type: 'number', description: 'Window in days (default 90, max 365)' }
+			},
+			required: ['assayName']
+		}
+	},
+	{
+		name: 'production_cycle_time',
+		description: `Cycle-time stats (p50, p90, max) by process type over a window — how long wax filling, reagent filling, and other LotRecord-tracked processes actually take.
+Source: LotRecord.cycleTime aggregated by processConfig.processType.
+
+Use when: "how long is wax filling actually taking these days", "p90 cycle time on reagent filling", "is anything trending slower this month".
+Don't use for: a single run's start/end times (use get_run_details); recent runs list (use list_recent_runs).
+
+Defaults: last 30 days, all process types. Hard cap 90 days history.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				processType: { type: 'string', description: 'Optional — filter to one process type' },
+				sinceDays: { type: 'number', description: 'Window in days (default 30, max 90)' }
+			}
+		}
+	},
+	{
 		name: 'chemical_burn_rate',
 		description: `How fast we're going through a chemical — current stock, observed usage rate, and days of runway at that rate.
 Source: chemical inventory + receiving/usage history. **Limitation:** raw-chemical consumption tracking isn't wired into BIMS yet (no transaction stream for C-NNN / D-NNN items). For chemicals without usage data, we surface current stock and a clear note that runway can't be projected until we add tracking.
@@ -4170,6 +4239,299 @@ async function runTool(name: string, input: any, ctx: ToolContext = {}): Promise
 				source: 'ProtocolDefinition.materials[] joined to ReagentCatalog (no raw-chemical link yet)',
 				sourceUrl: `/research/protocols/${protocol._id}`,
 				dataIntegrityNotes: notes
+			};
+		}
+		case 'yield_trends_by_robot': {
+			const days = Math.min(Math.max(Number(input.sinceDays ?? 30), 1), 90);
+			const since = new Date(Date.now() - days * 86400e3);
+
+			const runFilter: any = {
+				status: 'completed',
+				createdAt: { $gte: since }
+			};
+			if (input.robotName) runFilter['robot.name'] = { $regex: String(input.robotName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+
+			const runs = await WaxFillingRun.find(runFilter)
+				.select('_id robot runEndTime cartridgeIds createdAt')
+				.lean() as any[];
+
+			const checkedOutIds = await getCheckedOutCartridgeIds();
+			const allCartIds = runs.flatMap(r => r.cartridgeIds ?? []);
+			const cartAgg = allCartIds.length > 0
+				? await CartridgeRecord.aggregate([
+					{ $match: { _id: { $in: allCartIds, $nin: checkedOutIds } } },
+					{
+						$group: {
+							_id: '$waxFilling.runId',
+							accepted: { $sum: { $cond: [
+								{ $eq: [{ $toLower: { $ifNull: ['$waxQc.status', ''] } }, 'accepted'] },
+								1, 0
+							] } },
+							scrapped: { $sum: { $cond: [
+								{ $in: [{ $toLower: { $ifNull: ['$waxQc.status', ''] } }, ['scrapped', 'rejected']] },
+								1, 0
+							] } }
+						}
+					}
+				])
+				: [];
+			const aggMap = new Map(cartAgg.map((g: any) => [g._id, g]));
+
+			// Daily bucket per robot.
+			interface Bucket { accepted: number; scrapped: number; runs: number; }
+			const byRobotByDay = new Map<string, Map<string, Bucket>>();
+			for (const r of runs) {
+				const robot = r.robot?.name ?? 'unknown';
+				const dateKey = new Date(r.runEndTime ?? r.createdAt).toISOString().slice(0, 10);
+				const agg = aggMap.get(r._id) ?? { accepted: 0, scrapped: 0 };
+				if (!byRobotByDay.has(robot)) byRobotByDay.set(robot, new Map());
+				const dayMap = byRobotByDay.get(robot)!;
+				const b = dayMap.get(dateKey) ?? { accepted: 0, scrapped: 0, runs: 0 };
+				b.accepted += agg.accepted;
+				b.scrapped += agg.scrapped;
+				b.runs += 1;
+				dayMap.set(dateKey, b);
+			}
+
+			const byRobot: any[] = [];
+			for (const [robot, dayMap] of byRobotByDay.entries()) {
+				const daily: any[] = [];
+				let totalAccepted = 0;
+				let totalScrapped = 0;
+				let totalRuns = 0;
+				for (const [date, b] of dayMap.entries()) {
+					const total = b.accepted + b.scrapped;
+					daily.push({
+						date,
+						accepted: b.accepted,
+						scrapped: b.scrapped,
+						runs: b.runs,
+						yieldPct: total > 0 ? Math.round((b.accepted / total) * 1000) / 10 : null
+					});
+					totalAccepted += b.accepted;
+					totalScrapped += b.scrapped;
+					totalRuns += b.runs;
+				}
+				daily.sort((a, b) => a.date.localeCompare(b.date));
+				const overallTotal = totalAccepted + totalScrapped;
+				byRobot.push({
+					robot,
+					runs: totalRuns,
+					accepted: totalAccepted,
+					scrapped: totalScrapped,
+					overallYieldPct: overallTotal > 0 ? Math.round((totalAccepted / overallTotal) * 1000) / 10 : null,
+					daily
+				});
+			}
+			byRobot.sort((a, b) => b.runs - a.runs);
+
+			return {
+				windowDays: days,
+				robots: byRobot,
+				totalRuns: runs.length,
+				source: 'WaxFillingRun + CartridgeRecord.waxQc aggregated by robot per day',
+				sourceUrl: '/cartridge-admin'
+			};
+		}
+		case 'scrap_pareto': {
+			const days = Math.min(Math.max(Number(input.sinceDays ?? 30), 1), 365);
+			const byField = String(input.byField ?? 'reason').toLowerCase();
+			const since = new Date(Date.now() - days * 86400e3);
+
+			const carts = await CartridgeRecord.find({
+				status: { $in: ['scrapped', 'voided'] },
+				updatedAt: { $gte: since }
+			})
+				.select('_id status voidReason waxQc waxFilling reagentFilling qaqcRelease updatedAt')
+				.lean() as any[];
+
+			// Extract a reason + source-tag for each scrapped cart.
+			interface ScrapRow { reason: string; source: string; robot: string; operator: string; }
+			const rows: ScrapRow[] = carts.map(c => {
+				let reason = 'unspecified';
+				let source = 'unknown';
+				if (c.voidReason) {
+					reason = String(c.voidReason).trim() || 'unspecified';
+					source = 'top-level void';
+				} else if (c.waxQc?.rejectionReason) {
+					reason = String(c.waxQc.rejectionReason).trim() || 'unspecified';
+					source = 'wax QC';
+				} else if (c.qaqcRelease?.notes) {
+					reason = String(c.qaqcRelease.notes).trim() || 'unspecified';
+					source = 'QA/QC release';
+				}
+				return {
+					reason,
+					source,
+					robot: c.waxFilling?.robotName ?? c.reagentFilling?.robotName ?? 'unknown',
+					operator: c.waxQc?.operator?.username ?? c.waxFilling?.operator?.username ?? 'unknown'
+				};
+			});
+
+			// Bucket by the chosen field.
+			const groupKey = byField === 'robot' ? 'robot' : byField === 'operator' ? 'operator' : 'reason';
+			const counts = new Map<string, { count: number; sources: Set<string> }>();
+			for (const r of rows) {
+				const key = (r as any)[groupKey] || 'unspecified';
+				const e = counts.get(key) ?? { count: 0, sources: new Set() };
+				e.count += 1;
+				e.sources.add(r.source);
+				counts.set(key, e);
+			}
+			const total = rows.length;
+			const ranked = [...counts.entries()].map(([key, e]) => ({
+				[groupKey]: key,
+				count: e.count,
+				percentOfTotal: total > 0 ? Math.round((e.count / total) * 1000) / 10 : 0,
+				sourceFields: [...e.sources]
+			})).sort((a, b) => b.count - a.count).slice(0, 20);
+
+			return {
+				windowDays: days,
+				byField: groupKey,
+				totalScrapped: total,
+				ranked,
+				source: 'CartridgeRecord (scrapped + voided) — reasons aggregated from voidReason, waxQc.rejectionReason, qaqcRelease.notes',
+				sourceUrl: '/cartridge-admin'
+			};
+		}
+		case 'assay_lot_cross_reference': {
+			const assayQuery = String(input.assayName ?? '').trim();
+			if (!assayQuery) return { error: 'assayName required', source: 'AssayDefinition + ReagentBatchRecord + ShippingLot', sourceUrl: undefined };
+			const days = Math.min(Math.max(Number(input.sinceDays ?? 90), 1), 365);
+			const since = new Date(Date.now() - days * 86400e3);
+
+			const escaped = assayQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+			// Find the assay definition(s) matching the name.
+			const assays = await AssayDefinition.find({
+				name: { $regex: escaped, $options: 'i' }
+			}).select('_id name skuCode').limit(5).lean() as any[];
+
+			if (assays.length === 0) {
+				return {
+					found: false,
+					query: assayQuery,
+					source: 'AssayDefinition',
+					dataIntegrityNotes: [`No assay matched "${assayQuery}". Try the full assay name or its SKU code.`]
+				};
+			}
+			const assayIds = assays.map(a => a._id);
+
+			// Reagent batches that targeted those assays in window.
+			const batches = await ReagentBatchRecord.find({
+				'assayType._id': { $in: assayIds },
+				createdAt: { $gte: since }
+			})
+				.select('_id runNumber assayType robot operator runStartTime runEndTime cartridgesFilled status')
+				.sort({ runStartTime: -1 })
+				.limit(50)
+				.lean() as any[];
+
+			const cartridgeIds = batches.flatMap(b =>
+				(b.cartridgesFilled ?? []).map((c: any) => c.cartridgeId).filter(Boolean)
+			);
+			// Shipments containing those carts.
+			const packages = cartridgeIds.length > 0
+				? await ShippingPackage.find({ 'cartridges.cartridgeId': { $in: cartridgeIds } })
+					.select('_id customer trackingNumber status shippedAt cartridges')
+					.limit(100)
+					.lean() as any[]
+				: [];
+
+			// Map cart → shipment(s).
+			const cartToShipments = new Map<string, any[]>();
+			for (const p of packages) {
+				for (const c of p.cartridges ?? []) {
+					if (!c.cartridgeId) continue;
+					if (!cartToShipments.has(c.cartridgeId)) cartToShipments.set(c.cartridgeId, []);
+					cartToShipments.get(c.cartridgeId)!.push({
+						packageId: p._id,
+						customer: p.customer?.name,
+						trackingNumber: p.trackingNumber,
+						status: p.status,
+						shippedAt: p.shippedAt
+					});
+				}
+			}
+
+			return {
+				found: true,
+				assayQuery,
+				matchedAssays: assays.map(a => ({ _id: a._id, name: a.name, skuCode: a.skuCode })),
+				windowDays: days,
+				batchCount: batches.length,
+				batches: batches.map(b => ({
+					_id: b._id,
+					runNumber: b.runNumber,
+					assayName: b.assayType?.name,
+					robot: b.robot?.name,
+					operator: b.operator?.username,
+					status: b.status,
+					runStartTime: b.runStartTime,
+					runEndTime: b.runEndTime,
+					cartridgeCount: Array.isArray(b.cartridgesFilled) ? b.cartridgesFilled.length : 0,
+					shipments: [...new Set(
+						(b.cartridgesFilled ?? [])
+							.map((c: any) => c.cartridgeId)
+							.filter(Boolean)
+							.flatMap((cid: string) => (cartToShipments.get(cid) ?? []).map(s => `${s.customer ?? 'unknown'} (${s.trackingNumber ?? 'no tracking'})`))
+					)].slice(0, 10)
+				})),
+				source: 'AssayDefinition → ReagentBatchRecord → ShippingPackage via cartridge IDs',
+				sourceUrl: '/shipping'
+			};
+		}
+		case 'production_cycle_time': {
+			const days = Math.min(Math.max(Number(input.sinceDays ?? 30), 1), 90);
+			const since = new Date(Date.now() - days * 86400e3);
+
+			const filter: any = {
+				cycleTime: { $gt: 0 },
+				finishTime: { $gte: since }
+			};
+			if (input.processType) filter['processConfig.processType'] = String(input.processType);
+
+			const records = await LotRecord.find(filter)
+				.select('cycleTime processConfig finishTime')
+				.lean() as any[];
+
+			interface Bucket { values: number[]; }
+			const byType = new Map<string, Bucket>();
+			for (const r of records) {
+				const type = r.processConfig?.processType ?? 'unknown';
+				if (!byType.has(type)) byType.set(type, { values: [] });
+				byType.get(type)!.values.push(Number(r.cycleTime));
+			}
+
+			const percentile = (sorted: number[], p: number): number => {
+				if (sorted.length === 0) return 0;
+				const idx = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
+				return sorted[idx];
+			};
+
+			const byProcess: any[] = [];
+			for (const [type, b] of byType.entries()) {
+				const sorted = b.values.sort((a, x) => a - x);
+				const p50 = percentile(sorted, 50);
+				const p90 = percentile(sorted, 90);
+				const maxV = sorted[sorted.length - 1];
+				byProcess.push({
+					processType: type,
+					sampleCount: sorted.length,
+					p50Seconds: p50,
+					p90Seconds: p90,
+					maxSeconds: maxV
+				});
+			}
+			byProcess.sort((a, b) => b.sampleCount - a.sampleCount);
+
+			return {
+				windowDays: days,
+				processCount: byProcess.length,
+				byProcess,
+				source: 'LotRecord.cycleTime aggregated by processConfig.processType',
+				sourceUrl: '/manufacturing'
 			};
 		}
 		case 'chemical_burn_rate': {
