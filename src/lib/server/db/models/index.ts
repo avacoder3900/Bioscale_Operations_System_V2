@@ -119,3 +119,6 @@ export { BimsAnomaly } from './bims-anomaly.js';
 
 // Ask BIMS — per-question cost telemetry (Phase 6.5; powers /admin/ask-bims/cost)
 export { AskBimsCostLog } from './ask-bims-cost-log.js';
+
+// Ask BIMS — thumbs feedback (server side; widget UI is a follow-up)
+export { AskBimsFeedback } from './ask-bims-feedback.js';

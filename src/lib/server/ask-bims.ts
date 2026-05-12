@@ -6,7 +6,8 @@ import {
 	WorkInstruction, LotRecord, InventoryTransaction, AskBimsCostLog,
 	Experiment, ReagentCatalog, ReagentInventory,
 	ProtocolDefinition, ProtocolExecution,
-	Sample, Analyte, AnalysisProfile, CalibratedAnalysis
+	Sample, Analyte, AnalysisProfile, CalibratedAnalysis,
+	generateId
 } from './db';
 import { getCheckedOutCartridgeIds } from './checkout-utils';
 import { TIER_1_REFERENCE } from './ask-bims-tier1';
@@ -3551,6 +3552,12 @@ export interface AskBimsUsage {
 export type AskBimsConfidence = 'high' | 'partial' | 'degraded';
 
 export interface AskBimsResult {
+	/**
+	 * Stable identifier for this specific answer. The widget passes this back
+	 * to /api/agent/ask/feedback when the operator clicks thumbs up/down so
+	 * the feedback row can reference exactly which answer was rated.
+	 */
+	responseId: string;
 	answer: string;
 	toolCalls: Array<{ name: string; input: any; result: any }>;
 	usage?: AskBimsUsage;
@@ -3660,12 +3667,17 @@ export async function askBims(history: AskBimsMessage[], opts: AskBimsOpts = {})
 }
 
 async function runAgentLoop(history: AskBimsMessage[], opts: AskBimsOpts): Promise<AskBimsResult> {
+	// Stable id for THIS answer. Surfaced in AskBimsResult.responseId so the
+	// widget can pass it to /api/agent/ask/feedback when the operator clicks
+	// thumbs up/down. Generated up front so every return path shares one id.
+	const responseId = generateId();
+
 	const client = getClient();
 	if (!client) {
-		return { answer: '', toolCalls: [], error: 'ANTHROPIC_API_KEY not configured on the server.' };
+		return { responseId, answer: '', toolCalls: [], error: 'ANTHROPIC_API_KEY not configured on the server.' };
 	}
 	if (history.length === 0 || history[history.length - 1].role !== 'user') {
-		return { answer: '', toolCalls: [], error: 'Last message must be from user.' };
+		return { responseId, answer: '', toolCalls: [], error: 'Last message must be from user.' };
 	}
 
 	const model: AskBimsModel = ALLOWED_MODELS.includes(opts.model as AskBimsModel)
@@ -3717,10 +3729,10 @@ async function runAgentLoop(history: AskBimsMessage[], opts: AskBimsOpts): Promi
 			});
 		} catch (err: any) {
 			if (err instanceof Anthropic.RateLimitError) {
-				return { answer: '', toolCalls, model, usage: { ...usage, estCostUsd: calcCost(model, usage) }, error: 'Anthropic rate limit hit. Please retry in a moment.' };
+				return { responseId, answer: '', toolCalls, model, usage: { ...usage, estCostUsd: calcCost(model, usage) }, error: 'Anthropic rate limit hit. Please retry in a moment.' };
 			}
 			if (err instanceof Anthropic.AuthenticationError) {
-				return { answer: '', toolCalls, model, error: 'ANTHROPIC_API_KEY is invalid.' };
+				return { responseId, answer: '', toolCalls, model, error: 'ANTHROPIC_API_KEY is invalid.' };
 			}
 			throw err;
 		}
@@ -3736,6 +3748,7 @@ async function runAgentLoop(history: AskBimsMessage[], opts: AskBimsOpts): Promi
 			const costSoFar = calcCost(model, usage);
 			if (costSoFar > MAX_COST_OPUS_USD) {
 				return {
+					responseId,
 					answer: '',
 					toolCalls,
 					model,
@@ -3757,6 +3770,7 @@ async function runAgentLoop(history: AskBimsMessage[], opts: AskBimsOpts): Promi
 				.trim();
 			const conf = inferConfidence(toolCalls);
 			return {
+				responseId,
 				answer: text,
 				toolCalls,
 				model,
@@ -3811,6 +3825,7 @@ async function runAgentLoop(history: AskBimsMessage[], opts: AskBimsOpts): Promi
 	}
 
 	return {
+		responseId,
 		answer: '',
 		toolCalls,
 		model,
