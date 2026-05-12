@@ -215,6 +215,13 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		text: 'Run a data integrity check on the system.',
 		requiredTools: ['check_data_integrity']
 	},
+	{
+		id: 'phase3-data-integrity-summary',
+		category: 'phase2',
+		text: 'Summarize the latest data integrity findings for me.',
+		requiredTools: ['check_data_integrity'],
+		notes: 'Phase 1 — exercises the cron-backed path. The tool now reads from bims_anomalies (or falls back to recompute) and returns the same shape as before. Answer should mention any of the seven checks (null wax source / stale temp / stuck cartridges / over-consumed lots / orphan refs / counter drift / legacy status).'
+	},
 
 	// === Phase 4+5 — time-series + predictive ===
 	{

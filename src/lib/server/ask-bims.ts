@@ -12,6 +12,7 @@ import { getCheckedOutCartridgeIds } from './checkout-utils';
 import { TIER_1_REFERENCE } from './ask-bims-tier1';
 import { searchDocs } from './docs-search';
 import { lookupEquipment } from './equipment-datasheets';
+import { summarizeFromAnomalies, computeSummary } from './integrity-scan';
 
 /**
  * Denied collections (principle #9 — never queryable through Ask BIMS):
@@ -476,8 +477,8 @@ For a quick trace (without shipment/customer details), use trace_cartridge inste
 	},
 	{
 		name: 'check_data_integrity',
-		description: `Run a system-wide data-integrity scan. Counts known anomalies: runs with null waxSourceLot, over-consumed receiving lots (consumedUl > capacity), stale equipment temperature reads (>4h), cartridges stuck in non-terminal status (>7d).
-Source: aggregated across CartridgeRecord, WaxFillingRun, ReceivingLot, Equipment.
+		description: `Surface the latest data-integrity findings. Reads from the bims_anomalies collection that the daily cron (07:00 UTC) writes — fast and consistent across the day. If the collection is empty (first run or cron hasn't ticked), falls back to a live recompute.
+Covers seven checks: runs with null waxSourceLot, over-consumed receiving lots (consumedUl > capacity), stale equipment temperature reads (>4h), cartridges stuck in non-terminal status (>7d), orphan reagent-batch tube references, drift between PartDefinition.inventoryCount and accepted ReceivingLot totals, and legacy v1 cartridge status names that should have been migrated.
 
 Use when: data quality audit, "are there any data issues", before answering high-stakes questions to verify data is sane. Call this preemptively if you suspect data issues affect your answer.`,
 		input_schema: {
@@ -1672,78 +1673,32 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 			};
 		}
 		case 'check_data_integrity': {
-			const FOUR_HOURS = 4 * 3600e3;
-			const SEVEN_DAYS = 7 * 86400e3;
-
-			const [
-				nullWaxSource,
-				nullWaxSourceSample,
-				staleEquipment,
-				stuckCartridges,
-				stuckCartridgesSample
-			] = await Promise.all([
-				WaxFillingRun.countDocuments({ status: 'completed', waxSourceLot: { $in: [null, undefined, ''] } }),
-				WaxFillingRun.find({ status: 'completed', waxSourceLot: { $in: [null, undefined, ''] } })
-					.select('_id runStartTime').sort({ runStartTime: -1 }).limit(5).lean(),
-				Equipment.find({
-					equipmentType: { $in: ['fridge', 'oven'] },
-					$or: [
-						{ lastTemperatureReadAt: { $lt: new Date(Date.now() - FOUR_HOURS) } },
-						{ lastTemperatureReadAt: { $exists: false } }
-					]
-				}).select('_id name lastTemperatureReadAt').limit(20).lean(),
-				CartridgeRecord.countDocuments({
-					status: { $nin: ['shipped', 'voided', 'archived', 'completed'] },
-					createdAt: { $lt: new Date(Date.now() - SEVEN_DAYS) }
-				}),
-				CartridgeRecord.find({
-					status: { $nin: ['shipped', 'voided', 'archived', 'completed'] },
-					createdAt: { $lt: new Date(Date.now() - SEVEN_DAYS) }
-				}).select('_id status createdAt').sort({ createdAt: 1 }).limit(5).lean()
-			]);
-
-			// Over-consumed lots (consumedUl > quantity * 12000) — only meaningful for wax tubes
-			const overConsumedLots = await ReceivingLot.find({
-				'part.partNumber': WAX_TUBE_PART_NUMBER,
-				$expr: { $gt: ['$consumedUl', { $multiply: ['$quantity', FULL_TUBE_VOLUME_UL] }] }
-			}).select('_id lotId quantity consumedUl').limit(10).lean() as any[];
-
-			const issues: string[] = [];
-			if (nullWaxSource > 0) issues.push(`${nullWaxSource} completed wax run(s) have null waxSourceLot.`);
-			if ((staleEquipment as any[]).length > 0) issues.push(`${(staleEquipment as any[]).length} equipment record(s) have lastTemperatureReadAt > 4h old or missing.`);
-			if (stuckCartridges > 0) issues.push(`${stuckCartridges} cartridge(s) have been in non-terminal status > 7 days.`);
-			if (overConsumedLots.length > 0) issues.push(`${overConsumedLots.length} wax-tube lot(s) report consumedUl exceeding capacity (data corruption).`);
+			// Prefer the persisted findings written by the daily cron — they're
+			// fast (no aggregations) and consistent across the day. Fall back to
+			// a live recompute if the collection has no rows yet (first run /
+			// cron hasn't ticked).
+			let summary = await summarizeFromAnomalies();
+			let sourceLabel = 'bims_anomalies (persisted daily scan at 07:00 UTC)';
+			if (!summary) {
+				summary = await computeSummary();
+				sourceLabel = 'live recompute — daily scan has not run yet';
+			}
 
 			return {
 				summary: {
-					totalIssueCount: issues.length,
-					issues
+					totalIssueCount: summary.totalIssueCount,
+					issues: summary.issues
 				},
 				details: {
-					nullWaxSourceLot: {
-						count: nullWaxSource,
-						sample: (nullWaxSourceSample as any[]).map(r => ({ runId: r._id, runStartTime: r.runStartTime }))
-					},
-					staleEquipmentReads: {
-						count: (staleEquipment as any[]).length,
-						items: (staleEquipment as any[]).map(e => ({
-							name: e.name, lastReadAt: e.lastTemperatureReadAt
-						}))
-					},
-					stuckCartridges: {
-						count: stuckCartridges,
-						sample: (stuckCartridgesSample as any[]).map(c => ({
-							cartridgeId: c._id, status: c.status, createdAt: c.createdAt
-						}))
-					},
-					overConsumedLots: {
-						count: overConsumedLots.length,
-						items: overConsumedLots.map(l => ({
-							lotId: l.lotId, quantity: l.quantity, consumedUl: l.consumedUl
-						}))
-					}
+					nullWaxSourceLot: summary.byKind.nullWaxSourceLot,
+					staleEquipmentReads: summary.byKind.staleEquipmentReads,
+					stuckCartridges: summary.byKind.stuckCartridges,
+					overConsumedLots: summary.byKind.overConsumedLots,
+					orphanLotReferences: summary.byKind.orphanLotReferences,
+					counterDrift: summary.byKind.counterDrift,
+					legacyStatusCarriers: summary.byKind.legacyStatusCarriers
 				},
-				source: 'Aggregated across CartridgeRecord, WaxFillingRun, ReceivingLot, Equipment',
+				source: sourceLabel,
 				sourceUrl: '/admin'
 			};
 		}

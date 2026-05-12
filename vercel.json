@@ -15,6 +15,10 @@
     {
       "path": "/api/cron/cartridge-cleanup-reminder",
       "schedule": "30 21 * * *"
+    },
+    {
+      "path": "/api/cron/bims-anomaly-scan",
+      "schedule": "0 7 * * *"
     }
   ]
 }
