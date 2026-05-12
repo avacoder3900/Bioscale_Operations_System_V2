@@ -12,6 +12,7 @@ import { getCheckedOutCartridgeIds } from './checkout-utils';
 import { TIER_1_REFERENCE } from './ask-bims-tier1';
 import { searchDocs } from './docs-search';
 import { lookupEquipment } from './equipment-datasheets';
+import { lookupChemical } from './chemical-inventory';
 import { summarizeFromAnomalies, computeSummary } from './integrity-scan';
 
 /**
@@ -631,6 +632,29 @@ Caps: 10 results, 500ms timeout. If the query is too broad and matches everythin
 				equipmentName: { type: 'string', description: 'Equipment name fragment, Tag # (e.g. "B-01", "F-12"), or any cell value (case-insensitive substring across all columns)' }
 			},
 			required: ['equipmentName']
+		}
+	},
+	{
+		name: 'lookup_chemical',
+		description: `Search the shared-lab chemical inventory by name, CAS number, or tag (C-XXX for Brevitest, D-XXX for Fannin).
+Source: data/chemical-inventory/brevitest.csv (149 rows) + fannin.csv (55 rows). Each row has Inventory Code, Item, Current On Hand, CAS #, IFC Hazard Class, Physical State, HMIS Qty/Units, NFPA codes, Primary Chemical Name, Storage Code, Classification Notes, Inventory Link.
+
+Use when: "where's the methanol", "how much sodium azide do we have", "what's chemical C-042", "find any chemicals with CAS 67-56-1", "list HTX chemicals".
+
+Returns up to 10 matching chemicals with name, CAS, hazard class, quantity on hand, storage code, and owning org (Brevitest or Fannin).
+
+When the same chemical is stocked by BOTH orgs (about a dozen — DMSO, IPA, ethanol, PBS, NaOH, BSA, glycerol, agarose, DTT, TCEP, NaCl, sucrose) the result surfaces a dual-stocking note in dataIntegrityNotes so the operator knows to confirm which bottle they want — the two bottles may have different lot numbers, opening dates, or storage locations.
+
+Don't use for: prepared reagents in the research catalog (use list_reagent_catalog/list_reagent_inventory); part-catalog items like PT-CT-114 (use find_part); equipment specs (use lookup_equipment_datasheet).`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				query: { type: 'string', description: 'Chemical name fragment, CAS number, or inventory code (C-NNN / D-NNN). Case-insensitive substring or AND-of-words match.' },
+				hazardClass: { type: 'string', description: 'Optional filter — IFC hazard code such as "HTX", "TOX", "FLAM", "OX", "COR".' },
+				org: { type: 'string', enum: ['brevitest', 'fannin', 'all'], description: 'Default: all. Restrict to one org\'s stock.' },
+				limit: { type: 'number', description: 'Max results (default 10, max 25).' }
+			},
+			required: ['query']
 		}
 	},
 	{
@@ -2256,6 +2280,44 @@ async function runTool(name: string, input: any): Promise<ToolResult> {
 				truncated: result.truncated,
 				corpusFiles: result.corpusFiles,
 				source: 'data/equipment-datasheets/*.csv (bundled BT + Fannin equipment lists)',
+				sourceUrl: undefined,
+				dataIntegrityNotes: notes
+			};
+		}
+		case 'lookup_chemical': {
+			const q = String(input.query ?? '').trim();
+			if (!q) return {
+				error: 'query required',
+				source: 'data/chemical-inventory/*.csv',
+				sourceUrl: undefined
+			};
+			const hazardClass = input.hazardClass ? String(input.hazardClass).trim() : undefined;
+			const org = input.org ? String(input.org).trim() as ('brevitest' | 'fannin' | 'all') : undefined;
+			const limit = input.limit !== undefined ? Number(input.limit) : undefined;
+
+			const result = lookupChemical(q, { hazardClass, org, limit });
+			const notes: string[] = [];
+			if (result.queryNormalized.length < 2) notes.push('Query must be at least 2 characters.');
+			if (result.timedOut) notes.push('Lookup timed out at 500ms. Try a more distinctive query.');
+			if (result.truncated) {
+				notes.push(`${result.totalAvailable} matches but capped at ${result.totalReturned}. Add an Inventory Code (C-NNN / D-NNN) or a hazardClass filter to narrow.`);
+			}
+			if (result.matches.length === 0 && result.queryNormalized.length >= 2) {
+				notes.push(`No chemicals matched "${q}" across ${result.corpusFiles.join(', ')}. Try a CAS number, an Inventory Code (C-NNN / D-NNN), or a distinctive name fragment.`);
+			}
+			if (result.dualStocked.length > 0) {
+				const names = result.dualStocked.join(', ');
+				notes.push(`Both Brevitest and Fannin keep their own stock of: ${names}. Make sure you're reaching for the right bottle — they may have different lot numbers, opening dates, or storage locations.`);
+			}
+
+			return {
+				chemicals: result.matches,
+				totalReturned: result.totalReturned,
+				totalAvailable: result.totalAvailable,
+				truncated: result.truncated,
+				matchedOrgs: result.matchedOrgs,
+				corpusFiles: result.corpusFiles,
+				source: 'data/chemical-inventory/*.csv (bundled Brevitest + Fannin chemical lists)',
 				sourceUrl: undefined,
 				dataIntegrityNotes: notes
 			};

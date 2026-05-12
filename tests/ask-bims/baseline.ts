@@ -330,6 +330,35 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		notes: 'Phase D — fuzzy name match returns Fannin F-01 row (Tissue Culture lab, 120V/1150W/10A). Datasheet URL should be surfaced.'
 	},
 
+	// === Chemical inventory (Phase 2 — lookup_chemical tool) ===
+	{
+		id: 'chemical-by-name',
+		category: 'datasheets',
+		text: 'Where is the methanol stored and how much do we have?',
+		requiredTools: ['lookup_chemical'],
+		forbiddenTools: ['find_part', 'list_reagent_catalog', 'list_reagent_inventory'],
+		expectedAnswerPhrases: [/methanol/i, /C-?013|brevitest|fannin|flammable|F1B|TOX/i],
+		notes: 'Phase 2 — name-based lookup. C-013 Methanol (1L + 1L) lives in Brevitest. Should NOT route to part-catalog or reagent-catalog tools.'
+	},
+	{
+		id: 'chemical-by-tag',
+		category: 'datasheets',
+		text: 'Tell me about chemical C-042.',
+		requiredTools: ['lookup_chemical'],
+		forbiddenTools: ['find_part', 'find_receiving_lot'],
+		expectedAnswerPhrases: [/glycerol|C-?042/i],
+		notes: 'Phase 2 — Inventory Code lookup. C-042 is Glycerol (Brevitest). Glycerol is dual-stocked with Fannin, so the answer may surface that note as well.'
+	},
+	{
+		id: 'chemical-by-cas',
+		category: 'datasheets',
+		text: 'Do we have anything on file with CAS 67-56-1?',
+		requiredTools: ['lookup_chemical'],
+		forbiddenTools: ['find_part', 'search_documentation'],
+		expectedAnswerPhrases: [/67-56-1|methanol|C-?013|C-?017/i],
+		notes: 'Phase 2 — CAS-number lookup. 67-56-1 is methanol; matches both C-013 (Methanol neat) and C-017 (Coomassie reagent that contains methanol). Should NOT route to part-catalog.'
+	},
+
 	// === Research-side Phase E1: experiment + cartridge research tools ===
 	{
 		id: 'research-experiments-underway',
