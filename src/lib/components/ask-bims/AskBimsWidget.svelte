@@ -347,6 +347,22 @@
 		return '';
 	}
 
+	// L.4 — auto-rephrase. When thumbs-down lands, give the operator a one-click
+	// path to re-ask the same question with a hint nudging the agent toward a
+	// different tool path. The original thumbs-down POST still goes through
+	// (so the review queue captures the verdict); rephrase is purely a
+	// recovery option.
+	async function rephraseLastQuestion(idx: number) {
+		if (submitting) return;
+		const question = previousUserQuestion(idx);
+		if (!question) return;
+		// Append a hint that the prior answer was rated wrong. Agent rule 7
+		// already covers safety-critical leading; this hint targets the wrong-
+		// answer recovery path specifically.
+		input = `${question}\n\n(prior answer marked incorrect — try a different angle or tool path)`;
+		await submit();
+	}
+
 	async function sendFeedback(idx: number, rating: 'up' | 'down', comment?: string) {
 		const msg = messages[idx];
 		if (!msg || !msg.responseId) return;
@@ -560,6 +576,29 @@
 								{#if msg.error}
 									<div class="text-red-400">Error: {msg.error}</div>
 								{:else}
+									{#if msg.toolCalls && msg.toolCalls.length > 0}
+										{@const hazardReasons = msg.toolCalls.flatMap((tc: any) => (
+											tc.result?.safetyCritical === true && Array.isArray(tc.result?.safetyCriticalReasons)
+												? tc.result.safetyCriticalReasons as string[]
+												: []
+										))}
+										{#if hazardReasons.length > 0}
+											<!-- L.3 — Hazard banner. Rendered ABOVE the answer so operators see
+												 it before the rest of the response. Server-set safetyCritical
+												 from K.6 (HTX chemicals, overdue calibrations, etc). -->
+											<div class="mb-2 rounded-md border-2 border-amber-500 bg-amber-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-amber-200">
+												<div class="flex items-center gap-1 text-amber-300">
+													<span class="text-base leading-none">⚠</span>
+													<span class="uppercase tracking-wide">Safety-critical</span>
+												</div>
+												<ul class="mt-1 list-disc pl-4 font-normal">
+													{#each hazardReasons as reason (reason)}
+														<li>{reason}</li>
+													{/each}
+												</ul>
+											</div>
+										{/if}
+									{/if}
 									<div style="white-space: pre-wrap;">{msg.content}</div>
 									{#if msg.toolCalls && msg.toolCalls.length > 0}
 										{@const integrityNotes = msg.toolCalls.flatMap((tc: any) => tc.result?.dataIntegrityNotes ?? [])}
@@ -614,6 +653,18 @@
 												<span class="text-[var(--color-tron-text-secondary)]">
 													{msg.feedbackRating === 'up' ? '👍 Thanks — noted.' : '👎 Thanks — we\'ll look at this.'}
 												</span>
+												{#if msg.feedbackRating === 'down'}
+													<!-- L.4 — auto-rephrase recovery -->
+													<button
+														type="button"
+														onclick={() => rephraseLastQuestion(i)}
+														disabled={submitting}
+														class="ml-auto rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/15 px-2 py-0.5 text-[10px] font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40"
+														title="Try the same question again with a hint to use a different tool path"
+													>
+														Try again
+													</button>
+												{/if}
 											{:else if msg.feedbackState === 'comment-open'}
 												<input
 													type="text"
