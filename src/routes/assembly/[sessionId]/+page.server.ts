@@ -100,6 +100,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const capturedFieldRecords = stepRecords.flatMap((sr: any) =>
 		(sr.fieldRecords ?? []).map((fr: any) => ({
 			id: fr._id,
+			workInstructionStepId: sr.workInstructionStepId ?? null,
 			stepFieldDefinitionId: fr.stepFieldDefinitionId ?? null,
 			fieldName: fr.fieldName ?? '',
 			fieldValue: fr.fieldValue ?? '',
@@ -203,36 +204,107 @@ export const actions: Actions = {
 		requirePermission(locals.user, 'spu:write');
 		await connectDB();
 		const form = await request.formData();
-		const barcode = form.get('barcode')?.toString();
-		const partDefinitionId = form.get('partDefinitionId')?.toString();
+		const barcode = form.get('barcode')?.toString()?.trim();
+		const expectedPartNumber = form.get('expectedPartNumber')?.toString()?.trim() || null;
+		const qtyRaw = parseInt(form.get('qty')?.toString() ?? '1', 10);
+		const qty = Number.isFinite(qtyRaw) && qtyRaw >= 1 ? qtyRaw : 1;
 		const workInstructionStepId = form.get('workInstructionStepId')?.toString();
 		if (!barcode) return fail(400, { error: 'Barcode required' });
+
+		// 1. Barcode must exist in BOM. If no PartDefinition has this barcode, reject.
+		const scannedPartDef: any = await PartDefinition.findOne({ barcode, isActive: true }).lean();
+		if (!scannedPartDef) {
+			return fail(400, {
+				error: `Barcode "${barcode}" is not in the BOM — scan rejected.`,
+				expectedPartNumber
+			});
+		}
+
+		// 2. If the step expects a specific part, the scanned barcode must map to it.
+		if (expectedPartNumber && scannedPartDef.partNumber !== expectedPartNumber) {
+			return fail(400, {
+				error: `Wrong part — step expects ${expectedPartNumber} but scanned barcode is ${scannedPartDef.partNumber}.`,
+				expectedPartNumber,
+				scannedPartNumber: scannedPartDef.partNumber
+			});
+		}
+
 		const session = await AssemblySession.findById(params.sessionId);
 		if (!session) return fail(404, { error: 'Session not found' });
 		const s = session as any;
 		const lotNumber = barcode;
-		let partDef: any = partDefinitionId ? await PartDefinition.findById(partDefinitionId).lean() : null;
+
+		// Find or create the stepRecord; add a fieldRecord for this scan so the
+		// client can tell which parts in a multi-part step have been scanned.
+		let stepRecordId: string | null = null;
 		if (workInstructionStepId) {
 			if (!s.stepRecords) s.stepRecords = [];
-			const existingRecord = s.stepRecords.find((sr: any) => sr.workInstructionStepId === workInstructionStepId);
-			if (!existingRecord) {
-				s.stepRecords.push({ _id: generateId(), workInstructionStepId, stepNumber: s.stepRecords.length + 1, scannedLotNumber: lotNumber, scannedPartNumber: partDef?.partNumber ?? '', completedAt: new Date(), completedBy: { _id: locals.user!._id, username: locals.user!.username } });
+			let stepRecord = s.stepRecords.find((sr: any) => sr.workInstructionStepId === workInstructionStepId);
+			if (!stepRecord) {
+				stepRecord = {
+					_id: generateId(),
+					workInstructionStepId,
+					stepNumber: s.stepRecords.length + 1,
+					fieldRecords: []
+				};
+				s.stepRecords.push(stepRecord);
 			}
+			stepRecord.fieldRecords = stepRecord.fieldRecords ?? [];
+			stepRecord.fieldRecords.push({
+				_id: generateId(),
+				fieldName: `scan_${scannedPartDef.partNumber}`,
+				fieldValue: barcode,
+				rawBarcodeData: barcode,
+				bomItemId: scannedPartDef.partNumber,
+				scannedAt: new Date(),
+				capturedBy: locals.user!._id
+			});
+			// Most-recent scan metadata kept on the stepRecord for legacy displays.
+			stepRecord.scannedLotNumber = lotNumber;
+			stepRecord.scannedPartNumber = scannedPartDef.partNumber;
+			stepRecord.completedAt = new Date();
+			stepRecord.completedBy = { _id: locals.user!._id, username: locals.user!.username };
+			stepRecordId = stepRecord._id;
 		} else {
 			s.currentStepIndex = (s.currentStepIndex ?? 0) + 1;
 		}
 		await session.save();
-		let inventoryDeduction = null;
+
+		// Decrement inventory by qty atomically; log the transaction.
+		const prevQty = scannedPartDef.inventoryCount ?? 0;
+		const newQty = Math.max(0, prevQty - qty);
+		await PartDefinition.updateOne({ _id: scannedPartDef._id }, { $inc: { inventoryCount: -qty } });
+		await InventoryTransaction.create({
+			_id: generateId(),
+			partDefinitionId: scannedPartDef._id,
+			assemblySessionId: params.sessionId,
+			assemblyStepRecordId: stepRecordId,
+			transactionType: 'deduction',
+			quantity: -qty,
+			previousQuantity: prevQty,
+			newQuantity: newQty,
+			reason: `Assembly scan for SPU ${s.spuId}${workInstructionStepId ? ` (step ${workInstructionStepId})` : ''}`,
+			performedBy: locals.user!.username,
+			performedAt: new Date()
+		});
+
 		if (s.spuId) {
-			await Spu.updateOne({ _id: s.spuId }, { $push: { parts: { _id: generateId(), partDefinitionId: partDefinitionId ?? null, partNumber: partDef?.partNumber ?? '', partName: partDef?.name ?? '', lotNumber, barcodeData: barcode, scannedAt: new Date(), scannedBy: { _id: locals.user!._id, username: locals.user!.username } } } });
-			if (partDefinitionId && partDef) {
-				const prevQty = (partDef as any).inventoryCount ?? 0;
-				const newQty = Math.max(0, prevQty - 1);
-				await PartDefinition.updateOne({ _id: partDefinitionId }, { $inc: { inventoryCount: -1 } });
-				await InventoryTransaction.create({ _id: generateId(), partDefinitionId, assemblySessionId: params.sessionId, transactionType: 'deduction', quantity: -1, previousQuantity: prevQty, newQuantity: newQty, reason: `Assembly scan for SPU ${s.spuId}`, performedBy: locals.user!.username, performedAt: new Date() });
-				inventoryDeduction = { previousQuantity: prevQty, newQuantity: newQty };
-			}
+			await Spu.updateOne({ _id: s.spuId }, {
+				$push: {
+					parts: {
+						_id: generateId(),
+						partDefinitionId: scannedPartDef._id,
+						partNumber: scannedPartDef.partNumber,
+						partName: scannedPartDef.name,
+						lotNumber,
+						barcodeData: barcode,
+						scannedAt: new Date(),
+						scannedBy: { _id: locals.user!._id, username: locals.user!.username }
+					}
+				}
+			});
 		}
+
 		await AuditLog.create({
 			_id: generateId(),
 			tableName: 'assembly_sessions',
@@ -241,7 +313,12 @@ export const actions: Actions = {
 			changedBy: locals.user?.username ?? locals.user?._id,
 			changedAt: new Date()
 		});
-		return { success: true, inventoryDeduction };
+
+		return {
+			success: true,
+			scannedPartNumber: scannedPartDef.partNumber,
+			inventoryDeduction: { previousQuantity: prevQty, newQuantity: newQty, quantity: qty }
+		};
 	},
 
 	retractInventory: async ({ request, locals, params }) => {

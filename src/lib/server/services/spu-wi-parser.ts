@@ -3,7 +3,7 @@ import { nanoid } from 'nanoid';
 import { uploadToR2, uploadViaWorker } from './r2';
 import type { FieldDefinition, ParsedPart } from './spu-work-instruction';
 
-export const PARSER_VERSION = '3.1.4';
+export const PARSER_VERSION = '3.2.0';
 
 // Matches "Friendly Name (PT-SPU-NNN) xN" (or "x N") with qty optional.
 // Our SPU WIs author qty as "x1" / "x2" / "x3" — multiplier glued to a small
@@ -373,13 +373,12 @@ function renderStepRowsHtml(steps: ParsedStep[]): string {
 		const scanInputs: string[] = [];
 		let totalScans = 0;
 		for (const p of step.parts) {
-			for (let i = 1; i <= p.quantity; i++) {
-				totalScans++;
-				const fieldName = `step_${step.stepNumber}_${p.partNumber.replace(/[^A-Za-z0-9]/g, '_')}_${i}`;
-				scanInputs.push(
-					`<div class="bims-wi-step__scan"><label>Scan ${escapeHtml(p.partNumber)} (${i} of ${p.quantity})</label><input type="text" class="bims-wi-step__scan-input" name="${fieldName}" data-step="${step.stepNumber}" data-part="${escapeAttr(p.partNumber)}" data-required="true" placeholder="Scan barcode" autocomplete="off" /></div>`
-				);
-			}
+			totalScans++;
+			const fieldName = `step_${step.stepNumber}_${p.partNumber.replace(/[^A-Za-z0-9]/g, '_')}`;
+			const qtyLabel = p.quantity > 1 ? ` × ${p.quantity}` : '';
+			scanInputs.push(
+				`<div class="bims-wi-step__scan"><label>Scan ${escapeHtml(p.partNumber)}${qtyLabel}</label><input type="text" class="bims-wi-step__scan-input" name="${fieldName}" data-step="${step.stepNumber}" data-part="${escapeAttr(p.partNumber)}" data-qty="${p.quantity}" data-required="true" placeholder="Scan barcode" autocomplete="off" /></div>`
+			);
 		}
 		const scansBlock = scanInputs.length
 			? `<div class="bims-wi-step__scans" data-required-scans="${totalScans}">${scanInputs.join('')}</div>`
@@ -540,19 +539,20 @@ function cleanPartName(raw: string): string {
 	return s.trim();
 }
 
+// One field definition per part — the qty is conveyed by the part's `quantity`
+// (and rendered as "× N" in the label). The build page validates the scanned
+// barcode against `barcodeFieldMapping` (the expected part number) and
+// decrements inventory by N atomically on accept.
 function buildFieldDefinitions(partNumber: string, quantity: number): FieldDefinition[] {
-	const fields: FieldDefinition[] = [];
-	for (let n = 1; n <= quantity; n++) {
-		fields.push({
-			fieldName: `${partNumber}_scan_${n}`.replace(/[^A-Za-z0-9_]/g, '_'),
-			fieldLabel: `Scan ${partNumber} (${n} of ${quantity})`,
-			fieldType: 'barcode_scan',
-			isRequired: true,
-			barcodeFieldMapping: partNumber,
-			sortOrder: n
-		});
-	}
-	return fields;
+	const qtyLabel = quantity > 1 ? ` × ${quantity}` : '';
+	return [{
+		fieldName: `${partNumber}_scan`.replace(/[^A-Za-z0-9_]/g, '_'),
+		fieldLabel: `Scan ${partNumber}${qtyLabel}`,
+		fieldType: 'barcode_scan',
+		isRequired: true,
+		barcodeFieldMapping: partNumber,
+		sortOrder: 1
+	}];
 }
 
 function renderPreviewWidget(p: {
@@ -561,12 +561,10 @@ function renderPreviewWidget(p: {
 	partName: string;
 	quantity: number;
 }): string {
-	const inputs: string[] = [];
-	for (let i = 1; i <= p.quantity; i++) {
-		inputs.push(
-			`<div class="bims-scan-widget__input"><label>Scan ${i} of ${p.quantity}</label><input type="text" disabled placeholder="(preview · scan in build page)" /></div>`
-		);
-	}
+	const qtyLabel = p.quantity > 1 ? ` × ${p.quantity}` : '';
+	const inputs: string[] = [
+		`<div class="bims-scan-widget__input"><label>Scan ${escapeHtml(p.partNumber)}${qtyLabel}</label><input type="text" disabled placeholder="(preview · scan in build page)" /></div>`
+	];
 	const headerLabel = p.partName ? `${p.partNumber} — ${escapeHtml(p.partName)} · qty ${p.quantity}` : `${p.partNumber} · qty ${p.quantity}`;
 	return `<div class="bims-scan-widget" data-anchor="${p.anchorId}" data-part="${p.partNumber}" data-qty="${p.quantity}"><div class="bims-scan-widget__header">${headerLabel}</div><div class="bims-scan-widget__inputs">${inputs.join('')}</div></div>`;
 }
