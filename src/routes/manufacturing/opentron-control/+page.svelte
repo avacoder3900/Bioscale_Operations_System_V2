@@ -42,6 +42,18 @@
 				</svg>
 				Scanner Test
 			</a>
+			<a href="/manufacturing/opentron-control/sweeps"
+				title="Scan Cartridges sweep history"
+				aria-label="Sweep history"
+				class="inline-flex items-center gap-2 rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs font-medium hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)] transition-colors"
+				style="color: var(--color-tron-text)">
+				<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+					<path d="M3 12a9 9 0 1 0 3-6.7" />
+					<path d="M3 4v5h5" />
+					<path d="M12 7v5l3 2" />
+				</svg>
+				Sweeps
+			</a>
 			<a href="/manufacturing/opentron-control/settings"
 				title="View wax + reagent filling settings"
 				aria-label="Settings"

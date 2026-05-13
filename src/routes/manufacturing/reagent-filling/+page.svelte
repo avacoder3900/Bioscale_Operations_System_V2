@@ -527,6 +527,8 @@
 				submitForm('loadDeck', { deckId, cartridgeScans: JSON.stringify(cartridgeScans) })}
 			readonly={isViewingPast}
 			focusPaused={showCancelModal}
+			robotId={data.robotId}
+			runId={data.activeRunId ?? null}
 		/>
 
 	{:else if displayStage === 'Loading' && data.cartridges.length > 0 && !reagentBatchConfirmed}

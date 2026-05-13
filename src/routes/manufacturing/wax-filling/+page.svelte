@@ -14,6 +14,7 @@
 	interface Props {
 		data: {
 			robotId: string;
+			robotName: string;
 			loadError: string | null;
 			robotBlocked: { process: 'reagent'; runId: string | null } | null;
 			runState: {
@@ -131,7 +132,10 @@
 	let lotScanError = $state('');
 	let lotScanSuccess = $state(false);
 	let lotScanSubmitting = $state(false);
-	let lotOverride = $state(false);
+	// Test mode — synthesizes a TEST-LOT-<runId> BackingLot server-side so
+	// the wax flow can be run end-to-end without consuming real inventory.
+	// Distinct from the admin cure-time override (which targets a real lot).
+	let testMode = $state(false);
 	// confirmed lot — once scanned OK, set from server response or existing activeLotId
 	let confirmedLotId = $state<string | null>(data.activeLotId ?? null);
 	let confirmedLotCount = $state<number | null>(data.activeLotCartridgeCount ?? null);
@@ -146,7 +150,10 @@
 	});
 
 	async function handleScanBackingLot() {
-		if (!lotScanInput.trim() || !data.runState.runId) return;
+		if (!data.runState.runId) return;
+		// In test mode the lot barcode is synthesized server-side; we don't
+		// require the input to be non-empty.
+		if (!testMode && !lotScanInput.trim()) return;
 		lotScanSubmitting = true;
 		lotScanError = '';
 		lotScanSuccess = false;
@@ -154,7 +161,7 @@
 			const fd = new FormData();
 			fd.set('lotBarcode', lotScanInput.trim());
 			fd.set('runId', data.runState.runId);
-			if (lotOverride) fd.set('override', 'true');
+			if (testMode) fd.set('testMode', 'true');
 			const res = await fetch('?/scanBackingLot', {
 				method: 'POST',
 				body: fd,
@@ -754,7 +761,7 @@
 					</svg>
 				</div>
 				<h2 class="text-xl font-semibold text-[var(--color-tron-text)]">
-					{data.robotId === 'robot-1' ? 'Robot 1' : 'Robot 2'} — Wax Filling
+					{data.robotName} — Wax Filling
 				</h2>
 				<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">
 					Start a new wax filling run on this robot.
@@ -1056,26 +1063,28 @@
 							<input
 								type="text"
 								class="tron-input flex-1"
-								placeholder="Scan lot barcode..."
+								placeholder={testMode ? 'Test mode — barcode is ignored, lot will be synthesized' : 'Scan lot barcode...'}
 								bind:value={lotScanInput}
 								onkeydown={handleLotScanKeydown}
 								autocomplete="off"
 								autofocus
-								disabled={lotScanSubmitting}
+								disabled={lotScanSubmitting || testMode}
 							/>
 							<button
 								type="button"
 								onclick={handleScanBackingLot}
-								disabled={lotScanSubmitting || !lotScanInput.trim()}
-								class="min-h-[44px] rounded-lg bg-[var(--color-tron-cyan)] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-50"
+								disabled={lotScanSubmitting || (!testMode && !lotScanInput.trim())}
+								class="min-h-[44px] rounded-lg {testMode ? 'bg-amber-500' : 'bg-[var(--color-tron-cyan)]'} px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:opacity-80 disabled:opacity-50"
 							>
-								{lotScanSubmitting ? 'Checking...' : 'Verify'}
+								{lotScanSubmitting ? 'Checking...' : testMode ? 'Start Test Lot' : 'Verify'}
 							</button>
 						</div>
-						<!-- Test override toggle -->
-						<label class="flex items-center gap-2 text-xs text-amber-400 cursor-pointer">
-							<input type="checkbox" bind:checked={lotOverride} class="rounded" />
-							Test Override (skip oven time check, auto-create lot)
+						<!-- Test mode toggle -->
+						<label class="flex items-start gap-2 text-xs text-amber-400 cursor-pointer">
+							<input type="checkbox" bind:checked={testMode} class="mt-0.5 rounded" />
+							<span>
+								Test Mode — synthesize a <span class="font-mono">TEST-LOT-{'{'}runId{'}'}</span> backing lot so the wax flow can be exercised end-to-end without consuming real inventory. Real BackingLot records and cure-time checks are bypassed; the test lot's 24-cartridge count is decremented during deck-loading. No admin re-auth needed.
+							</span>
 						</label>
 						<!-- Quick-pick from ready lots -->
 						{#if data.ovenLots.filter(l => l.ready).length > 0}
@@ -1113,6 +1122,8 @@
 					onComplete={handleDeckLoadComplete}
 					readonly={isPreviewOrPast}
 					suppressFocus={showCancelModal || showOverrideModal}
+					robotId={data.robotId}
+					runId={data.runState.runId ?? null}
 				/>
 			{:else}
 				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">

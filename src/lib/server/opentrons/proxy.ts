@@ -21,10 +21,37 @@ export function robotBaseUrl(robot: { ip: string; port?: number | null }): strin
 	return `http://${robot.ip}:${port}`;
 }
 
+// Node's undici surfaces the real reason (ECONNREFUSED, ETIMEDOUT, ENOTFOUND, ...)
+// on err.cause, not err.message. Without unwrapping it the caller only sees
+// "fetch failed", which is useless for diagnosing why the robot is unreachable.
+//
+// A 30-second per-request abort signal guards against wedged Node keepalive
+// sockets that can leave a sweep stuck mid-call when the OT-2 or network
+// blips. 30s matches the OT-2's own per-command waitUntilComplete timeout —
+// any single HTTP hop hanging past that is a stuck socket, not a slow move.
+async function robotFetch(url: string, init: RequestInit & { method?: string } = {}): Promise<Response> {
+	const method = init.method ?? 'GET';
+	const ac = new AbortController();
+	const timer = setTimeout(() => ac.abort(new Error('robotFetch timeout after 30s')), 30_000);
+	try {
+		return await fetch(url, { ...init, signal: ac.signal });
+	} catch (e: any) {
+		const cause = e?.cause;
+		const causeCode = (cause as any)?.code;
+		const causeMsg = cause instanceof Error ? cause.message : cause ? String(cause) : '';
+		const causePart = causeMsg
+			? ` — ${causeCode ? `[${causeCode}] ` : ''}${causeMsg}`
+			: '';
+		throw new Error(`${method} ${url} failed: ${e?.message ?? 'unknown'}${causePart}`);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
 /** Proxy a GET request to the robot */
 export async function robotGet(robot: any, path: string): Promise<Response> {
 	const url = `${robotBaseUrl(robot)}${path}`;
-	return fetch(url, {
+	return robotFetch(url, {
 		headers: { 'opentrons-version': '3' }
 	});
 }
@@ -32,7 +59,7 @@ export async function robotGet(robot: any, path: string): Promise<Response> {
 /** Proxy a POST request to the robot */
 export async function robotPost(robot: any, path: string, body?: unknown): Promise<Response> {
 	const url = `${robotBaseUrl(robot)}${path}`;
-	return fetch(url, {
+	return robotFetch(url, {
 		method: 'POST',
 		headers: {
 			'Content-Type': 'application/json',
@@ -45,7 +72,7 @@ export async function robotPost(robot: any, path: string, body?: unknown): Promi
 /** Proxy a PATCH request to the robot */
 export async function robotPatch(robot: any, path: string, body?: unknown): Promise<Response> {
 	const url = `${robotBaseUrl(robot)}${path}`;
-	return fetch(url, {
+	return robotFetch(url, {
 		method: 'PATCH',
 		headers: {
 			'Content-Type': 'application/json',
@@ -58,7 +85,7 @@ export async function robotPatch(robot: any, path: string, body?: unknown): Prom
 /** Proxy a DELETE request to the robot */
 export async function robotDelete(robot: any, path: string): Promise<Response> {
 	const url = `${robotBaseUrl(robot)}${path}`;
-	return fetch(url, {
+	return robotFetch(url, {
 		method: 'DELETE',
 		headers: { 'opentrons-version': '3' }
 	});

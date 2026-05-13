@@ -38,6 +38,8 @@ export { ManufacturingMaterial } from './manufacturing-material.js';
 export { Equipment } from './equipment.js';
 export { EquipmentLocation } from './equipment-location.js';
 export { OpentronsRobot } from './opentrons-robot.js';
+export { OpentronsScannerPositionSet } from './opentrons-scanner-position-set.js';
+export { OpentronsScannerSweepRun } from './opentrons-scanner-sweep-run.js';
 export { Consumable } from './consumable.js';
 export { BomItem } from './bom-item.js';
 export { PartDefinition } from './part-definition.js';
