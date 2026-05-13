@@ -1,26 +1,33 @@
 /**
  * POST /api/agent/ask/feedback
  *
- * Records a thumbs up/down rating on a specific Ask BIMS answer. The widget
- * sends the responseId from the AskBimsResult it's already showing, plus the
- * rating, plus an optional comment (for thumbs down). Session-cookie auth —
- * same surface as POST /api/agent/ask.
+ * Records an operator signal on a specific Ask BIMS answer. Two kinds of
+ * signal, can coexist on one POST:
  *
- * The widget UI piece is a follow-up (.svelte change, out of scope for this
- * build). This endpoint is the server half — it's safe to wire buttons in
- * later without touching server code.
+ *   1. rating: 'up' | 'down'   — thumbs verdict ("this answer was wrong/right")
+ *   2. flagged: true            — "Claude, look at this later" (review queue)
+ *
+ * At least ONE of (rating, flagged) must be present. comment/flagReason are
+ * optional free-text — the widget should let the operator type a one-liner
+ * for either signal.
+ *
+ * Session-cookie auth — same surface as POST /api/agent/ask.
  *
  * Body shape:
  *   {
  *     responseId: string,           // from AskBimsResult.responseId
- *     rating: 'up' | 'down',
- *     comment?: string,             // optional, only meaningful on 'down'
+ *     rating?: 'up' | 'down',       // optional if flagged=true
+ *     comment?: string,             // optional free-text on rating
+ *     flagged?: boolean,            // optional, true to add to review queue
+ *     flagReason?: string,          // optional free-text on flag
  *     question: string,             // the user message that produced the answer
  *     answer: string,               // the assistant's final text
  *     toolsUsed?: string[],         // tool names from result.toolCalls
  *     model?: 'claude-haiku-4-5' | 'claude-sonnet-4-6' | 'claude-opus-4-7',
  *     confidence?: 'high' | 'partial' | 'degraded'
  *   }
+ *
+ * Returns: { ok: true, id: <row _id>, flagged: boolean, rating: 'up'|'down'|null }
  */
 import { json, error } from '@sveltejs/kit';
 import { connectDB, AskBimsFeedback } from '$lib/server/db';
@@ -34,11 +41,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	const responseId = typeof body.responseId === 'string' ? body.responseId.trim() : '';
 	const rating = body.rating === 'up' || body.rating === 'down' ? body.rating : null;
+	const flagged = body.flagged === true;
 	const question = typeof body.question === 'string' ? body.question : '';
 	const answer = typeof body.answer === 'string' ? body.answer : '';
 
 	if (!responseId) return json({ error: 'responseId required' }, { status: 400 });
-	if (!rating) return json({ error: "rating must be 'up' or 'down'" }, { status: 400 });
+	if (!rating && !flagged) {
+		return json({ error: "at least one of rating ('up'|'down') or flagged (true) required" }, { status: 400 });
+	}
 	if (!question || !answer) return json({ error: 'question and answer required' }, { status: 400 });
 
 	const toolsUsed = Array.isArray(body.toolsUsed)
@@ -53,6 +63,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	const comment = typeof body.comment === 'string' && body.comment.trim()
 		? body.comment.trim()
 		: null;
+	const flagReason = typeof body.flagReason === 'string' && body.flagReason.trim()
+		? body.flagReason.trim()
+		: null;
 
 	await connectDB();
 	const row = await AskBimsFeedback.create({
@@ -66,8 +79,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		model,
 		confidence,
 		rating,
-		comment
+		comment,
+		flagged,
+		flagReason
 	});
 
-	return json({ ok: true, id: row._id });
+	return json({ ok: true, id: row._id, flagged, rating });
 };
