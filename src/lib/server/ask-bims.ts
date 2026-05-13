@@ -158,6 +158,8 @@ async function logConversationTelemetry(entry: {
 	costUsd: number;
 	durationMs: number;
 	errorClass?: string;
+	confidence?: AskBimsConfidence;
+	confidenceReasons?: string[];
 }): Promise<void> {
 	try {
 		await AskBimsConversationLog.create({
@@ -177,7 +179,9 @@ async function logConversationTelemetry(entry: {
 			uniqueToolCount: new Set(entry.toolCalls.map(tc => tc.name)).size,
 			costUsd: entry.costUsd,
 			durationMs: entry.durationMs,
-			errorClass: entry.errorClass
+			errorClass: entry.errorClass,
+			confidence: entry.confidence ?? null,
+			confidenceReasons: entry.confidenceReasons ?? []
 		});
 	} catch (err) {
 		console.error('[ASK-BIMS] conversation log write failed (non-fatal):', err);
@@ -5807,7 +5811,9 @@ export async function askBims(history: AskBimsMessage[], opts: AskBimsOpts = {})
 				toolCalls: result.toolCalls,
 				costUsd,
 				durationMs,
-				errorClass: result.error ? 'agent_error' : undefined
+				errorClass: result.error ? 'agent_error' : undefined,
+				confidence: result.confidence,
+				confidenceReasons: result.confidenceReasons
 			});
 		}
 	}

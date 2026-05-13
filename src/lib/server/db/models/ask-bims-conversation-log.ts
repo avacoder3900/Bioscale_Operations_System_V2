@@ -62,6 +62,14 @@ const askBimsConversationLogSchema = new Schema(
 		durationMs: Number,
 		errorClass: String,
 
+		// Confidence signal at answer-time (Phase M.3, 2026-05-13). Derived from
+		// tool-result conditions by inferConfidence(). Stored here so the
+		// calibration analysis can cross-reference with thumbs feedback to spot
+		// "high confidence + thumbs down" patterns — the signature of a
+		// mis-calibrated inference rule.
+		confidence: { type: String, enum: ['high', 'partial', 'degraded', null], default: null },
+		confidenceReasons: { type: [String], default: [] },
+
 		// Thumbs feedback — populated after the fact by /api/agent/ask/feedback
 		feedback: { type: String, enum: ['up', 'down', null], default: null },
 		feedbackAt: Date,
