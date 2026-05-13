@@ -228,6 +228,119 @@
 		printAnswer(question, msg.content, msg.responseId, msg.model);
 	}
 
+	// === M.1 — Voice input (Whisper transcription) ===
+	// Mic button uses MediaRecorder to capture audio, POSTs to
+	// /api/agent/transcribe, and fills the input with the result. The
+	// operator confirms by clicking "Ask" — we deliberately do NOT auto-fire.
+	let recording = $state(false);
+	let recordingStartMs = $state<number | null>(null);
+	let recordingMs = $state(0);
+	let voiceError = $state<string | null>(null);
+	let voiceSubmitting = $state(false);
+	let mediaRecorderRef: any = null;
+	let audioStreamRef: MediaStream | null = null;
+	let audioChunks: Blob[] = [];
+	let recordingTickHandle: any = null;
+
+	const voiceSupported = $derived.by<boolean>(() => {
+		if (typeof window === 'undefined') return false;
+		return !!(window.navigator?.mediaDevices?.getUserMedia) && typeof (window as any).MediaRecorder !== 'undefined';
+	});
+
+	async function startRecording() {
+		if (recording || submitting || voiceSubmitting) return;
+		if (!voiceSupported) {
+			voiceError = 'Voice input not supported in this browser.';
+			return;
+		}
+		voiceError = null;
+		audioChunks = [];
+		try {
+			audioStreamRef = await navigator.mediaDevices.getUserMedia({ audio: true });
+		} catch (err: any) {
+			voiceError = err?.name === 'NotAllowedError'
+				? 'Microphone permission denied.'
+				: 'Could not access the microphone.';
+			return;
+		}
+		const Rec = (window as any).MediaRecorder;
+		let mr: any;
+		try {
+			// Prefer webm/opus where supported; let the browser pick a fallback otherwise.
+			const preferred = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
+			const supported = preferred.find(t => Rec.isTypeSupported?.(t));
+			mr = supported ? new Rec(audioStreamRef, { mimeType: supported }) : new Rec(audioStreamRef);
+		} catch (err: any) {
+			cleanupStream();
+			voiceError = 'Could not start recording.';
+			return;
+		}
+		mediaRecorderRef = mr;
+		mr.ondataavailable = (e: any) => { if (e?.data?.size > 0) audioChunks.push(e.data); };
+		mr.onstop = handleStop;
+		mr.start();
+		recording = true;
+		recordingStartMs = Date.now();
+		recordingMs = 0;
+		recordingTickHandle = setInterval(() => {
+			if (recordingStartMs != null) recordingMs = Date.now() - recordingStartMs;
+		}, 200);
+	}
+
+	function stopRecording() {
+		if (!recording || !mediaRecorderRef) return;
+		try { mediaRecorderRef.stop(); } catch {}
+	}
+
+	function cleanupStream() {
+		if (recordingTickHandle) { clearInterval(recordingTickHandle); recordingTickHandle = null; }
+		if (audioStreamRef) {
+			for (const track of audioStreamRef.getTracks()) track.stop();
+			audioStreamRef = null;
+		}
+		mediaRecorderRef = null;
+		recording = false;
+		recordingStartMs = null;
+		recordingMs = 0;
+	}
+
+	async function handleStop() {
+		const chunks = audioChunks;
+		audioChunks = [];
+		const mime = mediaRecorderRef?.mimeType || 'audio/webm';
+		cleanupStream();
+		if (chunks.length === 0) return;
+		const blob = new Blob(chunks, { type: mime });
+		// Skip ultra-short blobs (likely accidental taps under ~0.4s).
+		if (blob.size < 4_000) {
+			voiceError = 'That clip was too short — try holding the button a beat longer.';
+			return;
+		}
+		await postTranscription(blob, mime.includes('webm') ? 'audio.webm' : 'audio.ogg');
+	}
+
+	async function postTranscription(blob: Blob, filename: string) {
+		voiceSubmitting = true;
+		voiceError = null;
+		try {
+			const fd = new FormData();
+			fd.append('audio', blob, filename);
+			const res = await fetch('/api/agent/transcribe', { method: 'POST', body: fd });
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok || !body?.text) {
+				voiceError = body?.error ?? `Transcription failed (HTTP ${res.status}).`;
+				return;
+			}
+			// Append to existing input if there was a partial draft, otherwise replace.
+			const existing = input.trim();
+			input = existing ? `${existing} ${body.text}` : body.text;
+		} catch (err: any) {
+			voiceError = err?.message ?? 'Could not reach voice service.';
+		} finally {
+			voiceSubmitting = false;
+		}
+	}
+
 	// Reliability tier — circuit breaker + degraded-status tracking
 	let failureTimes = $state<number[]>([]);
 	let circuitOpenUntil = $state<number | null>(null);
@@ -932,17 +1045,50 @@
 
 			<!-- Input -->
 			{#if !viewingBookmarks}
+			{#if voiceError}
+				<div class="px-3 pt-1.5 text-[10px] text-red-400">{voiceError}</div>
+			{/if}
 			<form onsubmit={submit} class="ask-bims-input-row">
 				<input
 					type="text"
 					bind:value={input}
-					placeholder="Ask BIMS…"
-					disabled={submitting}
+					placeholder={recording ? 'Listening…' : (voiceSubmitting ? 'Transcribing…' : 'Ask BIMS…')}
+					disabled={submitting || recording || voiceSubmitting}
 					class="flex-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-2 py-1.5 text-xs text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)]/60 focus:outline-none"
 				/>
+				{#if voiceSupported}
+					<!-- M.1 — Voice input -->
+					{#if recording}
+						<button
+							type="button"
+							onclick={stopRecording}
+							class="ask-bims-mic ask-bims-mic-recording"
+							title="Stop recording ({(recordingMs / 1000).toFixed(1)}s)"
+							aria-label="Stop recording"
+						>
+							<svg viewBox="0 0 24 24" fill="currentColor" class="h-4 w-4">
+								<rect x="7" y="7" width="10" height="10" rx="1.5" />
+							</svg>
+						</button>
+					{:else}
+						<button
+							type="button"
+							onclick={startRecording}
+							disabled={submitting || voiceSubmitting}
+							class="ask-bims-mic"
+							title="Hold to dictate"
+							aria-label="Start voice input"
+						>
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z" />
+								<path stroke-linecap="round" stroke-linejoin="round" d="M19 10v2a7 7 0 01-14 0v-2M12 19v4M8 23h8" />
+							</svg>
+						</button>
+					{/if}
+				{/if}
 				<button
 					type="submit"
-					disabled={submitting || !input.trim()}
+					disabled={submitting || recording || voiceSubmitting || !input.trim()}
 					class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-3 py-1.5 text-xs font-semibold text-[var(--color-tron-cyan)] disabled:opacity-40"
 				>
 					{submitting ? '…' : 'Ask'}
@@ -1076,6 +1222,37 @@
 	.ask-bims-chip:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
+	}
+
+	.ask-bims-mic {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		padding: 0.375rem;
+		border-radius: 0.375rem;
+		border: 1px solid var(--color-tron-border);
+		background: var(--color-tron-bg-tertiary);
+		color: var(--color-tron-text-secondary);
+		cursor: pointer;
+		transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+	}
+	.ask-bims-mic:hover {
+		color: var(--color-tron-cyan);
+		border-color: rgba(34, 211, 238, 0.6);
+	}
+	.ask-bims-mic:disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
+	}
+	.ask-bims-mic-recording {
+		color: #f87171;
+		border-color: rgba(248, 113, 113, 0.6);
+		background: rgba(248, 113, 113, 0.15);
+		animation: askBimsMicPulse 1.2s ease-in-out infinite;
+	}
+	@keyframes askBimsMicPulse {
+		0%, 100% { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.5); }
+		50% { box-shadow: 0 0 0 4px rgba(248, 113, 113, 0); }
 	}
 
 	.ask-bims-banner {

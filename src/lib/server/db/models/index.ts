@@ -127,3 +127,6 @@ export { AskBimsConversationLog } from './ask-bims-conversation-log.js';
 
 // Ask BIMS — thumbs feedback (server side; widget UI is a follow-up)
 export { AskBimsFeedback } from './ask-bims-feedback.js';
+
+// Ask BIMS — voice transcription cost telemetry (Phase M.1, 2026-05-13)
+export { AskBimsTranscribeLog } from './ask-bims-transcribe-log.js';
