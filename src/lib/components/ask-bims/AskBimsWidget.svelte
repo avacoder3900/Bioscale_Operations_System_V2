@@ -140,6 +140,94 @@
 		try { localStorage.setItem('askBimsHelpDismissed', '1'); } catch {}
 	}
 
+	// L.6 — saved answers / bookmarks. Stored in localStorage under
+	// `askBimsBookmarks`. Each entry is a frozen snapshot at save time;
+	// reopening it does NOT replay the agent, it just shows the saved text.
+	interface Bookmark {
+		id: string;
+		savedAt: string;
+		question: string;
+		answer: string;
+		responseId?: string;
+		model?: string;
+	}
+	let bookmarks = $state<Bookmark[]>([]);
+	let viewingBookmarks = $state(false);
+
+	function loadBookmarks() {
+		try {
+			const raw = localStorage.getItem('askBimsBookmarks');
+			if (!raw) { bookmarks = []; return; }
+			const parsed = JSON.parse(raw);
+			bookmarks = Array.isArray(parsed) ? parsed : [];
+		} catch { bookmarks = []; }
+	}
+
+	function saveBookmarks() {
+		try { localStorage.setItem('askBimsBookmarks', JSON.stringify(bookmarks)); } catch {}
+	}
+
+	function bookmarkAnswer(idx: number) {
+		const msg = messages[idx];
+		if (!msg || msg.role !== 'assistant' || !msg.content) return;
+		const question = previousUserQuestion(idx);
+		if (!question) return;
+		// Dedup on responseId so a double-click doesn't pile up duplicates.
+		if (msg.responseId && bookmarks.some(b => b.responseId === msg.responseId)) return;
+		const entry: Bookmark = {
+			id: msg.responseId ?? `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+			savedAt: new Date().toISOString(),
+			question,
+			answer: msg.content,
+			responseId: msg.responseId,
+			model: msg.model
+		};
+		bookmarks = [entry, ...bookmarks].slice(0, 50);
+		saveBookmarks();
+	}
+
+	function deleteBookmark(id: string) {
+		bookmarks = bookmarks.filter(b => b.id !== id);
+		saveBookmarks();
+	}
+
+	// L.7 — print-friendly view. Opens a small new window with just the
+	// question + answer + citation footer, then triggers print(). The new
+	// window is closed by the user, not by us, so they can also save-as-PDF.
+	function printAnswer(question: string, answer: string, responseId?: string, model?: string) {
+		const ts = new Date().toISOString();
+		const safeQ = (question ?? '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c] as string));
+		const safeA = (answer ?? '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c] as string));
+		const cite = `Cited: BIMS Ask, ${ts}${responseId ? `, response ${responseId}` : ''}${model ? `, model ${model}` : ''}`;
+		const html = `<!doctype html><html><head><meta charset="utf-8"><title>BIMS Ask — printable answer</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 7in; margin: 0.75in auto; color: #111; line-height: 1.45; }
+  h1 { font-size: 14pt; margin: 0 0 0.5em; }
+  .q { font-weight: 600; margin: 0 0 0.25em; }
+  .a { white-space: pre-wrap; font-size: 11pt; }
+  .cite { margin-top: 1.5em; padding-top: 0.5em; border-top: 1px solid #999; font-size: 9pt; color: #555; font-family: ui-monospace, monospace; }
+  @media print { @page { margin: 0.6in; } }
+</style></head><body>
+  <h1>BIMS Ask — printable answer</h1>
+  <p class="q">Q: ${safeQ}</p>
+  <div class="a">${safeA}</div>
+  <div class="cite">${cite}</div>
+  <script>window.addEventListener('load', () => setTimeout(() => window.print(), 100));<\/script>
+</body></html>`;
+		const w = window.open('', '_blank', 'width=700,height=820');
+		if (!w) return;
+		w.document.open();
+		w.document.write(html);
+		w.document.close();
+	}
+
+	function printMessage(idx: number) {
+		const msg = messages[idx];
+		if (!msg || msg.role !== 'assistant') return;
+		const question = previousUserQuestion(idx);
+		printAnswer(question, msg.content, msg.responseId, msg.model);
+	}
+
 	// Reliability tier — circuit breaker + degraded-status tracking
 	let failureTimes = $state<number[]>([]);
 	let circuitOpenUntil = $state<number | null>(null);
@@ -268,7 +356,13 @@
 			healthChecked = true;
 			checkHealth();
 			try { helpDismissed = localStorage.getItem('askBimsHelpDismissed') === '1'; } catch {}
+			loadBookmarks();
 		}
+	}
+
+	function toggleBookmarksView() {
+		viewingBookmarks = !viewingBookmarks;
+		if (viewingBookmarks) loadBookmarks();
 	}
 
 	// L.1 — page-aware quick-action chips. Each chip is a one-shot question
@@ -496,7 +590,18 @@
 					{/if}
 				</div>
 				<div class="flex items-center gap-1">
-					{#if messages.length > 0}
+					<button
+						type="button"
+						onclick={toggleBookmarksView}
+						class="rounded p-1 text-xs hover:text-[var(--color-tron-cyan)] {viewingBookmarks ? 'text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)]'}"
+						title={viewingBookmarks ? 'Back to chat' : 'Bookmarks'}
+						aria-label="Toggle bookmarks"
+					>
+						<svg viewBox="0 0 24 24" fill={viewingBookmarks ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" class="h-4 w-4">
+							<path stroke-linecap="round" stroke-linejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+						</svg>
+					</button>
+					{#if messages.length > 0 && !viewingBookmarks}
 						<button
 							type="button"
 							onclick={clearChat}
@@ -538,8 +643,43 @@
 				</select>
 			</div>
 
-			<!-- Messages -->
+			<!-- Messages OR bookmarks view -->
 			<div bind:this={listEl} class="ask-bims-messages">
+				{#if viewingBookmarks}
+					<!-- L.6 — saved bookmarks list -->
+					{#if bookmarks.length === 0}
+						<div class="py-4 text-center text-xs text-[var(--color-tron-text-secondary)]">
+							<p>No saved answers yet.</p>
+							<p class="mt-2 text-[10px]">Tap the bookmark icon on any answer to save it.</p>
+						</div>
+					{:else}
+						{#each bookmarks as bm (bm.id)}
+							<div class="mb-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-3 py-2 text-xs text-[var(--color-tron-text)]">
+								<div class="mb-1 flex items-center justify-between gap-2">
+									<span class="font-mono text-[9px] text-[var(--color-tron-text-secondary)]">{new Date(bm.savedAt).toLocaleString()}</span>
+									<div class="flex items-center gap-1">
+										<button
+											type="button"
+											onclick={() => printAnswer(bm.question, bm.answer, bm.responseId, bm.model)}
+											class="rounded px-1 py-0.5 text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]"
+											title="Print this answer"
+											aria-label="Print bookmark"
+										>🖨</button>
+										<button
+											type="button"
+											onclick={() => deleteBookmark(bm.id)}
+											class="rounded px-1 py-0.5 text-[10px] text-[var(--color-tron-text-secondary)] hover:text-red-400"
+											title="Delete bookmark"
+											aria-label="Delete bookmark"
+										>✕</button>
+									</div>
+								</div>
+								<div class="mb-1 text-[10px] font-semibold text-[var(--color-tron-text-secondary)]">Q: {bm.question}</div>
+								<div style="white-space: pre-wrap;">{bm.answer}</div>
+							</div>
+						{/each}
+					{/if}
+				{:else}
 				{#if !helpDismissed && messages.length === 0}
 					<!-- L.2 — first-open help banner. One-time per browser session. -->
 					<div class="mb-3 rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 px-2.5 py-2 text-[10px] text-[var(--color-tron-text)]">
@@ -706,8 +846,26 @@
 												</button>
 												<button
 													type="button"
+													onclick={() => bookmarkAnswer(i)}
+													class="ml-auto rounded px-1.5 py-0.5 hover:bg-[var(--color-tron-cyan)]/20"
+													title="Save this answer to bookmarks"
+													aria-label="Save to bookmarks"
+												>
+													🔖
+												</button>
+												<button
+													type="button"
+													onclick={() => printMessage(i)}
+													class="rounded px-1.5 py-0.5 hover:bg-[var(--color-tron-cyan)]/20"
+													title="Print this answer"
+													aria-label="Print this answer"
+												>
+													🖨
+												</button>
+												<button
+													type="button"
 													onclick={() => openFlagBox(i)}
-													class="ml-auto rounded px-1.5 py-0.5 hover:bg-amber-500/20"
+													class="rounded px-1.5 py-0.5 hover:bg-amber-500/20"
 													title="Flag for review — Claude will look at this later"
 													aria-label="Flag for review"
 												>
@@ -752,9 +910,11 @@
 						</div>
 					{/if}
 				{/if}
+				{/if}
 			</div>
 
 			<!-- L.1 — page-aware quick-action chips. One click fills + fires. -->
+			{#if !viewingBookmarks}
 			<div class="ask-bims-chips">
 				{#each chipSet as chip (chip)}
 					<button
@@ -768,8 +928,10 @@
 					</button>
 				{/each}
 			</div>
+			{/if}
 
 			<!-- Input -->
+			{#if !viewingBookmarks}
 			<form onsubmit={submit} class="ask-bims-input-row">
 				<input
 					type="text"
@@ -786,6 +948,7 @@
 					{submitting ? '…' : 'Ask'}
 				</button>
 			</form>
+			{/if}
 		</div>
 	{/if}
 {/if}
