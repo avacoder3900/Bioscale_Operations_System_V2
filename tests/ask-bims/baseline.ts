@@ -862,6 +862,25 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		forbiddenTools: ['find_cartridges', 'trace_cartridge'],
 		expectedAnswerPhrases: [/run|abort|today|none|0|no runs/i],
 		notes: 'K.5 — entity-type mismatch case. Page is a cartridge but the question is about runs; pageContext should be IGNORED, agent should NOT silently call find_cartridges with the page id.'
+	},
+
+	// === Phase L — explain mode + safety-critical leading ===
+	{
+		id: 'explain-cartridge-narrative',
+		category: 'operator-experience',
+		text: 'walk me through cartridge 5da7b3c5-4cba-4fe4-93b1-c17ad61efbbf',
+		requiredTools: ['trace_cartridge'],
+		forbiddenTools: ['backward_genealogy', 'find_cartridges'],
+		expectedAnswerPhrases: [/back|wax|stor|status|not found|no cart/i],
+		notes: 'New-idea #3 (cartridge explain mode). "Walk me through" framing must route to trace_cartridge (which now ships an `explain` bullet array) — NOT to deeper backward_genealogy or to find_cartridges first.'
+	},
+	{
+		id: 'safety-critical-htx-lead',
+		category: 'operator-experience',
+		text: 'tell me about methotrexate',
+		requiredTools: ['lookup_chemical'],
+		expectedAnswerPhrases: [/(safety[\s-]?critical|htx|isolation|toxic|hazard|⚠)/i],
+		notes: 'K.6 + L.3 — HTX chemical query must surface the safety-critical hazard prominently (per system-prompt rule 7). The lookup_chemical result now ships safetyCritical:true with reasons; the answer must lead with that, not bury it.'
 	}
 ];
 

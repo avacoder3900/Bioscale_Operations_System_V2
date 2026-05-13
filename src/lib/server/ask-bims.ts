@@ -1937,6 +1937,52 @@ async function runTool(name: string, input: any, ctx: ToolContext = {}): Promise
 			if (waxRun && !waxRun.waxSourceLot) {
 				notes.push('This cartridge\'s wax run has null waxSourceLot — wax provenance cannot be traced upstream.');
 			}
+
+			// Operator-friendly "explain" bullets — new-idea #3 (cartridge explain
+			// mode). Translates the raw lineage into the kind of story a coworker
+			// would tell: "Backed by Maria on Tuesday using lot 24a-7. Wax-filled
+			// on Robot 1 with PT-CT-114 lot 9c1-4. Passed QC. Stored on rack B2."
+			// The agent should prefer these strings verbatim when the user says
+			// "explain", "walk me through", or "tell the story" of a cart.
+			const fmtDate = (d: any): string => {
+				if (!d) return '';
+				try { return new Date(d).toISOString().slice(0, 10); } catch { return ''; }
+			};
+			const explain: string[] = [];
+			if (cart.backing?.inductedAt || cart.backing?.lotId) {
+				const who = cart.backing?.inductedBy?.username ? ` by ${cart.backing.inductedBy.username}` : '';
+				const when = cart.backing?.inductedAt ? ` on ${fmtDate(cart.backing.inductedAt)}` : '';
+				const lot = cart.backing?.lotId ? ` from backing lot ${cart.backing.lotId}` : '';
+				explain.push(`Backed${who}${when}${lot}.`);
+			}
+			if (waxRun) {
+				const who = waxRun.operator?.username ? ` by ${waxRun.operator.username}` : '';
+				const robot = waxRun.robot?.name ? ` on ${waxRun.robot.name}` : '';
+				const when = waxRun.runStartTime ? ` on ${fmtDate(waxRun.runStartTime)}` : '';
+				const lot = waxLot?.lotId ? ` using wax lot ${waxLot.lotId}` : (waxRun.waxSourceLot ? ` using wax lot ${waxRun.waxSourceLot}` : '');
+				explain.push(`Wax-filled${who}${robot}${when}${lot} (run ${waxRun._id}, ${waxRun.status}).`);
+			}
+			if (cart.waxQc) {
+				const verdict = cart.waxQc.status === 'accepted' || cart.waxQc.status === 'pass'
+					? 'Passed wax QC'
+					: cart.waxQc.status === 'rejected' || cart.waxQc.status === 'fail'
+						? 'Failed wax QC'
+						: `Wax QC: ${cart.waxQc.status}`;
+				const who = cart.waxQc.inspector?.username ? ` (${cart.waxQc.inspector.username})` : '';
+				const when = cart.waxQc.inspectedAt ? ` on ${fmtDate(cart.waxQc.inspectedAt)}` : '';
+				explain.push(`${verdict}${who}${when}.`);
+			}
+			if (cart.waxStorage) {
+				const where = cart.waxStorage.location ? ` at ${cart.waxStorage.location}` : '';
+				const when = cart.waxStorage.storedAt ? ` since ${fmtDate(cart.waxStorage.storedAt)}` : '';
+				explain.push(`Stored${where}${when}.`);
+			}
+			if (cart.reagentFilling?.runId) {
+				const when = cart.reagentFilling.completedAt ? ` on ${fmtDate(cart.reagentFilling.completedAt)}` : '';
+				explain.push(`Reagent-filled${when} (run ${cart.reagentFilling.runId}).`);
+			}
+			explain.push(`Current status: ${cart.status ?? 'unknown'}.`);
+
 			return {
 				cartridgeId: cart._id,
 				status: cart.status,
@@ -1971,6 +2017,7 @@ async function runTool(name: string, input: any, ctx: ToolContext = {}): Promise
 					runId: cart.reagentFilling.runId,
 					completedAt: cart.reagentFilling.completedAt
 				} : null,
+				explain,
 				source: 'CartridgeRecord joined to WaxFillingRun, ReceivingLot (wax tube), WaxBatch (legacy)',
 				sourceUrl: `/cartridges/${cart._id}`,
 				dataIntegrityNotes: notes
@@ -5527,7 +5574,9 @@ OPERATOR EXPERIENCE — how to shape the answer to match how the operator works:
    - Calibration overdue → lead with "equipment locked out" before listing the due date.
    - Never invent a safetyCritical claim. If no tool returned \`safetyCritical: true\`, do not fabricate a hazard banner.
 
-8. **Page context.** When the user's message is preceded by a \`## CURRENT PAGE\` block, that's the widget telling you where the operator is in BIMS — path, optional title, optional entityType + entityId. Treat it as quiet context, NOT as the question itself.
+8. **Explain mode (cartridge walkthrough).** When the user says "explain this cartridge", "walk me through this cart", "what's the story", "summarize the history", or similar narrative framing, call \`trace_cartridge\` and use its \`explain\` array verbatim as a bulleted story. Do not paraphrase the explain bullets — they're written for the operator and follow the lab vocabulary. If \`explain\` is missing or empty, fall back to assembling the same story from the raw lineage fields. Do not use explain mode for terse "what's the status" questions — those still get the direct count/status answer per rule 1.
+
+9. **Page context.** When the user's message is preceded by a \`## CURRENT PAGE\` block, that's the widget telling you where the operator is in BIMS — path, optional title, optional entityType + entityId. Treat it as quiet context, NOT as the question itself.
    - If the question contains a short pronoun ("this", "that", "it", "the cart", "the run", "this lot") AND \`entityType\`/\`entityId\` is present AND the pronoun's category matches \`entityType\`, resolve the pronoun to \`entityId\` and call the appropriate tool with that id. Example: page is \`/spu/cartridge/abc123\`, user asks "what's wrong with this?" → call \`find_cartridge\` (or \`trace_cartridge\`) with \`abc123\`.
    - If \`entityType\` does NOT match the pronoun's category (page is a cartridge, user asks "who finalized the run?"), IGNORE \`pageContext\` and treat the question as a normal lookup. Do not silently substitute the wrong id.
    - If the question is fully specified (has its own id or doesn't reference the page entity), just answer the question; \`pageContext\` is informational only. Never volunteer "I see you're on page X" — operators know what page they're on.
