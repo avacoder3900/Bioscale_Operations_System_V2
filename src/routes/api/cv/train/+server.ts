@@ -17,8 +17,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const project = await CvProject.findById(projectId).lean() as any;
 		if (!project) return json({ error: 'Project not found' }, { status: 404 });
 
-		// Gather labeled images
-		const images = await CvImage.find({ projectId, label: { $ne: null } })
+		// Master model trains on labeled images aggregated across every project.
+		// Per-project models train only on their own labeled images.
+		const imageQuery: Record<string, any> = { label: { $ne: null } };
+		if (!project.isMasterModel) imageQuery.projectId = projectId;
+
+		const images = await CvImage.find(imageQuery)
 			.select('imageUrl label')
 			.lean() as any[];
 

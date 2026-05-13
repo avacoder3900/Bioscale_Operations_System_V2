@@ -21,6 +21,41 @@
 		return `${when} • ${op} • ${proc}`;
 	}
 
+	type DhrPhoto = { imageId: string; phase: string | null; capturedAt: string | null; url: string | null; thumbnailUrl: string | null; label?: string | null; inspectionResult?: string | null; confidenceScore?: number | null };
+	type DhrTimeline = { step: string; timestamp: string | null; operator: string | null; details: Record<string, any>; lotIds: string[]; photos: DhrPhoto[] };
+	type DhrDetails = {
+		cartridge: { cartridgeId: string; status: string; voidedAt?: string | null; voidReason?: string | null; createdAt?: string; updatedAt?: string };
+		timeline: DhrTimeline[];
+		photos: DhrPhoto[];
+		inspections: Array<{ inspectionId: string; phase: string; result: string; confidenceScore?: number; defects?: string[]; completedAt?: string }>;
+		transactions: any[];
+		linkedLots: Array<{ _id: string; lotId?: string; lotNumber?: string; part?: any; status?: string }>;
+	};
+
+	const detailCache = $state<Record<string, DhrDetails | 'loading' | 'error'>>({});
+	let lightboxUrl = $state<string | null>(null);
+
+	async function expandRow(cartridgeId: string) {
+		expandedId = expandedId === cartridgeId ? null : cartridgeId;
+		if (expandedId !== cartridgeId) return;
+		if (detailCache[cartridgeId]) return;
+		detailCache[cartridgeId] = 'loading';
+		try {
+			const res = await fetch(`/api/cartridge-admin/dhr/${encodeURIComponent(cartridgeId)}`);
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			const body = await res.json();
+			detailCache[cartridgeId] = body as DhrDetails;
+		} catch {
+			detailCache[cartridgeId] = 'error';
+		}
+	}
+
+	function fmtDate(value: string | null | undefined): string {
+		if (!value) return '—';
+		const d = new Date(value);
+		return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString();
+	}
+
 	const STAGES: LifecycleStage[] = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed', 'voided'];
 
 	function stageLabel(stage: string): string {
@@ -227,7 +262,7 @@
 				{#each data.cartridges as c (c.cartridgeId)}
 					<tr
 						class="cursor-pointer border-b border-[var(--color-tron-border)]/50 hover:bg-[var(--color-tron-surface)]/50"
-						onclick={() => { expandedId = expandedId === c.cartridgeId ? null : c.cartridgeId; }}
+						onclick={() => expandRow(c.cartridgeId)}
 					>
 						<td class="px-3 py-2 font-mono text-xs text-[var(--color-tron-text)]">{c.cartridgeId}</td>
 						<td class="px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">{c.backedLotId}</td>
@@ -276,35 +311,16 @@
 					{#if expandedId === c.cartridgeId}
 						<tr>
 							<td colspan="10" class="bg-[var(--color-tron-surface)]/50 px-4 py-3">
-								<div class="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
-									<div>
-										<span class="text-[var(--color-tron-text-secondary)]">Wax Status:</span>
-										<span class="ml-1 text-[var(--color-tron-text)]">{c.waxStatus}</span>
-									</div>
-									<div>
-										<span class="text-[var(--color-tron-text-secondary)]">Wax QC:</span>
-										<span class="ml-1 text-[var(--color-tron-text)]">{c.waxQcStatus}</span>
-									</div>
-									<div>
-										<span class="text-[var(--color-tron-text-secondary)]">Inspection:</span>
-										<span class="ml-1 text-[var(--color-tron-text)]">{c.inspectionStatus ?? 'N/A'}</span>
-									</div>
-									<div>
-										<span class="text-[var(--color-tron-text-secondary)]">Top Seal Batch:</span>
-										<span class="ml-1 font-mono text-[var(--color-tron-text)]">{c.topSealBatchId ?? 'N/A'}</span>
-									</div>
-									<div>
-										<span class="text-[var(--color-tron-text-secondary)]">Cooling Tray:</span>
-										<span class="ml-1 text-[var(--color-tron-text)]">{c.coolingTrayId ?? 'N/A'}</span>
-									</div>
-									<div>
-										<span class="text-[var(--color-tron-text-secondary)]">Oven Entry:</span>
-										<span class="ml-1 text-[var(--color-tron-text)]">{c.ovenEntryTime ? new Date(c.ovenEntryTime).toLocaleString() : 'N/A'}</span>
-									</div>
-									<div class="col-span-2">
-										<span class="text-[var(--color-tron-text-secondary)]">Future:</span>
-										<span class="ml-1 italic text-[var(--color-tron-text-secondary)]">Customer Assignment, Shipping, Results</span>
-									</div>
+								<!-- Always-available summary metadata (from list query) -->
+								<div class="mb-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+									<div><span class="text-[var(--color-tron-text-secondary)]">Wax Status:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.waxStatus ?? 'N/A'}</span></div>
+									<div><span class="text-[var(--color-tron-text-secondary)]">Wax QC:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.waxQcStatus ?? 'N/A'}</span></div>
+									<div><span class="text-[var(--color-tron-text-secondary)]">Inspection:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.inspectionStatus ?? 'N/A'}</span></div>
+									<div><span class="text-[var(--color-tron-text-secondary)]">Top Seal Batch:</span> <span class="ml-1 font-mono text-[var(--color-tron-text)]">{c.topSealBatchId ?? 'N/A'}</span></div>
+									<div><span class="text-[var(--color-tron-text-secondary)]">Cooling Tray:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.coolingTrayId ?? 'N/A'}</span></div>
+									<div><span class="text-[var(--color-tron-text-secondary)]">Oven Entry:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.ovenEntryTime ? new Date(c.ovenEntryTime).toLocaleString() : 'N/A'}</span></div>
+									<div><span class="text-[var(--color-tron-text-secondary)]">Photos:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.photoCount}</span></div>
+									<div><a class="text-[var(--color-tron-cyan)] underline" href="/cartridge-admin/dhr/{c.cartridgeId}">Full DHR &rarr;</a></div>
 								</div>
 								{#if c.notes && c.notes.length > 0}
 									<div class="mt-3 border-t border-[var(--color-tron-border)]/50 pt-3">
@@ -326,6 +342,102 @@
 											{/each}
 										</div>
 									</div>
+								{/if}
+
+								{#if detailCache[c.cartridgeId] === 'loading'}
+									<div class="py-4 text-xs text-[var(--color-tron-text-secondary)]">Loading photos and timeline...</div>
+								{:else if detailCache[c.cartridgeId] === 'error'}
+									<div class="py-4 text-xs text-[var(--color-tron-error)]">Failed to load DHR detail. <a class="underline" href="/cartridge-admin/dhr/{c.cartridgeId}">Open full DHR</a></div>
+								{:else if detailCache[c.cartridgeId]}
+									{@const det = detailCache[c.cartridgeId] as DhrDetails}
+
+									<!-- Photo strip -->
+									{#if det.photos && det.photos.length > 0}
+										<div class="mb-4">
+											<div class="mb-2 text-xs font-semibold text-[var(--color-tron-text-secondary)]">PHOTOS ({det.photos.length})</div>
+											<div class="flex flex-wrap gap-2">
+												{#each det.photos as p (p.imageId)}
+													{#if p.url}
+														<button type="button" onclick={(e) => { e.stopPropagation(); lightboxUrl = p.url; }} class="group relative">
+															<img src={p.thumbnailUrl ?? p.url} alt="cartridge photo {p.phase ?? ''}" class="h-20 w-20 rounded border border-[var(--color-tron-border)] object-cover group-hover:border-[var(--color-tron-cyan)]" loading="lazy" />
+															<span class="absolute bottom-0 left-0 right-0 truncate bg-black/60 px-1 py-0.5 text-[10px] text-white">{p.phase ?? 'untagged'}</span>
+														</button>
+													{/if}
+												{/each}
+											</div>
+										</div>
+									{/if}
+
+									<!-- Timeline / phase metadata -->
+									{#if det.timeline && det.timeline.length > 0}
+										<div class="mb-4">
+											<div class="mb-2 text-xs font-semibold text-[var(--color-tron-text-secondary)]">TIMELINE</div>
+											<div class="space-y-2">
+												{#each det.timeline as t}
+													<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]/30 p-2">
+														<div class="flex items-center justify-between text-xs">
+															<span class="font-semibold text-[var(--color-tron-text)]">{t.step.replace(/_/g, ' ')}</span>
+															<span class="text-[var(--color-tron-text-secondary)]">{fmtDate(t.timestamp)}</span>
+														</div>
+														{#if t.operator}
+															<div class="text-[11px] text-[var(--color-tron-text-secondary)]">Operator: {t.operator}</div>
+														{/if}
+														{#if t.details}
+															<div class="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] sm:grid-cols-3">
+																{#each Object.entries(t.details) as [k, v]}
+																	{#if v !== null && v !== undefined && v !== ''}
+																		<div>
+																			<span class="text-[var(--color-tron-text-secondary)]">{k}:</span>
+																			<span class="ml-1 text-[var(--color-tron-text)]">{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
+																		</div>
+																	{/if}
+																{/each}
+															</div>
+														{/if}
+														{#if t.photos && t.photos.length > 0}
+															<div class="mt-2 flex flex-wrap gap-1">
+																{#each t.photos as ph (ph.imageId)}
+																	{#if ph.url}
+																		<button type="button" onclick={(e) => { e.stopPropagation(); lightboxUrl = ph.url; }}>
+																			<img src={ph.thumbnailUrl ?? ph.url} alt="phase photo" class="h-12 w-12 rounded border border-[var(--color-tron-border)] object-cover" loading="lazy" />
+																		</button>
+																	{/if}
+																{/each}
+															</div>
+														{/if}
+													</div>
+												{/each}
+											</div>
+										</div>
+									{/if}
+
+									<!-- Inspections + linked lots -->
+									{#if det.inspections && det.inspections.length > 0}
+										<div class="mb-3">
+											<div class="mb-1 text-xs font-semibold text-[var(--color-tron-text-secondary)]">INSPECTIONS</div>
+											<ul class="text-[11px]">
+												{#each det.inspections as ins}
+													<li class="text-[var(--color-tron-text)]">{ins.phase}: {ins.result} {ins.confidenceScore !== undefined ? `(${ins.confidenceScore})` : ''} — {fmtDate(ins.completedAt)}</li>
+												{/each}
+											</ul>
+										</div>
+									{/if}
+									{#if det.linkedLots && det.linkedLots.length > 0}
+										<div class="mb-2">
+											<div class="mb-1 text-xs font-semibold text-[var(--color-tron-text-secondary)]">LINKED LOTS</div>
+											<ul class="text-[11px]">
+												{#each det.linkedLots as lot}
+													<li class="text-[var(--color-tron-text)]">{lot.lotNumber ?? lot.lotId ?? lot._id} {lot.status ? `(${lot.status})` : ''}</li>
+												{/each}
+											</ul>
+										</div>
+									{/if}
+
+									{#if det.cartridge?.voidedAt}
+										<div class="mt-2 rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">
+											Voided {fmtDate(det.cartridge.voidedAt)} — {det.cartridge.voidReason ?? 'no reason given'}
+										</div>
+									{/if}
 								{/if}
 							</td>
 						</tr>
@@ -365,3 +477,9 @@
 		</div>
 	{/if}
 </div>
+
+{#if lightboxUrl}
+	<button type="button" onclick={() => lightboxUrl = null} class="fixed inset-0 z-50 flex items-center justify-center bg-black/80" aria-label="Close photo">
+		<img src={lightboxUrl} alt="cartridge photo" class="max-h-[90vh] max-w-[90vw] rounded shadow-2xl" />
+	</button>
+{/if}

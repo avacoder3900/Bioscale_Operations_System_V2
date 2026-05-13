@@ -15,10 +15,22 @@ const workInstructionSchema = new Schema({
 		_id: { type: String, default: () => generateId() },
 		version: Number, content: String, rawContent: String,
 		changeNotes: String, parsedAt: Date, parsedBy: String, createdAt: Date,
+		renderedHtml: String,
+		parts: [{
+			_id: { type: String, default: () => generateId() },
+			anchorId: String, partNumber: String, partName: String, quantity: Number,
+			fieldDefinitions: [{
+				_id: { type: String, default: () => generateId() },
+				fieldName: String, fieldLabel: String,
+				fieldType: { type: String, enum: ['barcode_scan', 'manual_entry', 'date_picker', 'dropdown'] },
+				isRequired: Boolean, barcodeFieldMapping: String, sortOrder: Number
+			}]
+		}],
 		steps: [{
 			_id: { type: String, default: () => generateId() },
 			stepNumber: Number, title: String, content: String,
 			imageData: String, imageContentType: String,
+			images: { type: [String], default: undefined },
 			requiresScan: Boolean, scanPrompt: String, notes: String,
 			partDefinitionId: String, partQuantity: { type: Number, default: 1 },
 			partRequirements: [{
@@ -40,5 +52,10 @@ const workInstructionSchema = new Schema({
 	}],
 	createdBy: String
 }, { timestamps: true });
+
+workInstructionSchema.index(
+	{ documentType: 1, status: 1 },
+	{ unique: true, partialFilterExpression: { documentType: 'spu_creation', status: 'active' } }
+);
 
 export const WorkInstruction = mongoose.models.WorkInstruction || mongoose.model('WorkInstruction', workInstructionSchema, 'work_instructions');

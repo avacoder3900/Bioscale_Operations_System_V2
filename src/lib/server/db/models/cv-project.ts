@@ -5,6 +5,9 @@ const cvProjectSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	name: { type: String, required: true },
 	description: String,
+	purpose: String,
+	confidenceThreshold: { type: Number, default: 0.5, min: 0, max: 1 },
+	isMasterModel: { type: Boolean, default: false },
 	projectType: { type: String, enum: ['classification', 'anomaly_detection', 'object_detection'] },
 	tags: [String],
 	phases: [String],
@@ -32,5 +35,10 @@ const cvProjectSchema = new Schema({
 
 cvProjectSchema.index({ projectType: 1 });
 cvProjectSchema.index({ modelStatus: 1 });
+// Only one project can be the master model. Sparse + partial filter so non-master rows don't collide.
+cvProjectSchema.index(
+	{ isMasterModel: 1 },
+	{ unique: true, partialFilterExpression: { isMasterModel: true } }
+);
 
 export const CvProject = mongoose.models.CvProject || mongoose.model('CvProject', cvProjectSchema, 'cv_projects');

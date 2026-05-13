@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import { connectDB, CartridgeRecord, CvImage, CvInspection, InventoryTransaction, ReceivingLot } from '$lib/server/db';
-import { getSignedDownloadUrl } from '$lib/server/r2.js';
+import { getR2Url } from '$lib/server/services/r2';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ locals, params }) => {
@@ -23,42 +23,27 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 			.lean()
 	]);
 
-	// Generate signed R2 URLs for photos that have r2Key or filePath
-	const photos = await Promise.all(
-		(images as any[]).map(async (img) => {
-			let url: string | null = null;
-			let thumbnailUrl: string | null = null;
+	// Resolve photo URLs through the Cloudflare Worker proxy.
+	const photos = (images as any[]).map((img) => {
+		const r2Key = img.filePath
+			|| (cartridge.photos || []).find((p: any) => p.imageId === img._id)?.r2Key;
+		const url = img.imageUrl || (r2Key ? getR2Url(r2Key) : null);
+		const thumbnailUrl = img.thumbnailPath ? getR2Url(img.thumbnailPath) : url;
 
-			// Prioritize imageUrl (already public) over R2 signed URLs
-			if (img.imageUrl) {
-				url = img.imageUrl;
-			}
+		const inspection = (inspections as any[]).find(i => i.imageId === img._id);
 
-			// Try to get signed URLs for private R2 paths if available
-			const r2Key = img.filePath || (cartridge.photos || []).find((p: any) => p.imageId === img._id)?.r2Key;
-			if (r2Key && !url) {
-				try { url = await getSignedDownloadUrl(r2Key); } catch { /* no-op */ }
-			}
-			if (img.thumbnailPath) {
-				try { thumbnailUrl = await getSignedDownloadUrl(img.thumbnailPath); } catch { /* no-op */ }
-			}
-
-			// Find matching inspection for this image
-			const inspection = (inspections as any[]).find(i => i.imageId === img._id);
-
-			return {
-				imageId: img._id,
-				phase: img.cartridgeTag?.phase || null,
-				labels: img.cartridgeTag?.labels || [],
-				capturedAt: img.capturedAt || img.createdAt,
-				url,
-				thumbnailUrl,
-				label: img.label || null,
-				inspectionResult: inspection?.result || null,
-				confidenceScore: inspection?.confidenceScore || null
-			};
-		})
-	);
+		return {
+			imageId: img._id,
+			phase: img.cartridgeTag?.phase || null,
+			labels: img.cartridgeTag?.labels || [],
+			capturedAt: img.capturedAt || img.createdAt,
+			url,
+			thumbnailUrl,
+			label: img.label || null,
+			inspectionResult: inspection?.result || null,
+			confidenceScore: inspection?.confidenceScore || null
+		};
+	});
 
 	// Build timeline from cartridge phases
 	const timeline: any[] = [];

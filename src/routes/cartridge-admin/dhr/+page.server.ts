@@ -1,5 +1,6 @@
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, CartridgeRecord } from '$lib/server/db';
+import { connectDB, CartridgeRecord, CvImage } from '$lib/server/db';
+import { getR2Url } from '$lib/server/services/r2';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -23,12 +24,35 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			.limit(20)
 			.lean();
 
-		results = (cartridges as any[]).map(c => ({
-			cartridgeId: c._id,
-			status: c.status ?? 'unknown',
-			assayType: c.reagentFilling?.assayType?.name ?? null,
-			photoCount: (c.photos || []).length,
-			createdAt: c.createdAt
+		results = await Promise.all((cartridges as any[]).map(async (c) => {
+			const photoRefs = (c.photos || []) as Array<{ imageId: string; capturedAt: Date; r2Key?: string; r2Url?: string }>;
+			let previewUrl: string | null = null;
+
+			if (photoRefs.length > 0) {
+				const newest = [...photoRefs].sort((a, b) =>
+					new Date(b.capturedAt || 0).getTime() - new Date(a.capturedAt || 0).getTime()
+				)[0];
+
+				if (newest.r2Url) {
+					previewUrl = newest.r2Url;
+				} else if (newest.r2Key) {
+					previewUrl = getR2Url(newest.r2Key);
+				} else if (newest.imageId) {
+					const img = await CvImage.findById(newest.imageId).select('filePath thumbnailPath imageUrl').lean() as any;
+					if (img?.imageUrl) previewUrl = img.imageUrl;
+					else if (img?.thumbnailPath) previewUrl = getR2Url(img.thumbnailPath);
+					else if (img?.filePath) previewUrl = getR2Url(img.filePath);
+				}
+			}
+
+			return {
+				cartridgeId: c._id,
+				status: c.status ?? 'unknown',
+				assayType: c.reagentFilling?.assayType?.name ?? null,
+				photoCount: photoRefs.length,
+				previewUrl,
+				createdAt: c.createdAt
+			};
 		}));
 	}
 

@@ -140,6 +140,33 @@ export async function uploadToR2(buffer: Buffer, key: string, contentType: strin
 }
 
 /**
+ * Upload a buffer to R2 by going through the Cloudflare Worker.
+ *   PUT {R2_WORKER_URL}/upload/{key} with X-Upload-Secret → writes to R2
+ * Use this from Node runtimes (Vercel functions, dev server) where direct
+ * fetch to *.r2.cloudflarestorage.com fails the TLS handshake.
+ */
+export async function uploadViaWorker(buffer: Buffer, key: string, contentType: string): Promise<string> {
+	const workerUrl = env.R2_WORKER_URL;
+	if (!workerUrl) throw new Error('R2_WORKER_URL not configured');
+	const uploadSecret = env.R2_UPLOAD_SECRET || 'brevitest-r2-upload-key-2026';
+
+	const url = `${workerUrl}/upload/${encodeURIComponent(key)}`;
+	const res = await fetch(url, {
+		method: 'PUT',
+		headers: {
+			'Content-Type': contentType,
+			'X-Upload-Secret': uploadSecret
+		},
+		body: buffer
+	});
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`worker upload ${key} → ${res.status} ${text}`);
+	}
+	return getR2Url(key);
+}
+
+/**
  * Copy an object within the bucket by going through the Cloudflare Worker:
  *   GET {R2_WORKER_URL}/file/{src} → buffer
  *   PUT {R2_WORKER_URL}/upload/{dest} with X-Upload-Secret → writes to R2

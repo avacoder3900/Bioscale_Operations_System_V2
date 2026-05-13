@@ -39,9 +39,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			status: 'processing'
 		});
 
-		// Call Python worker
+		// Call Python worker; pass per-project threshold so pass/fail uses the
+		// configured value rather than the worker's env default.
 		const modelPath = `cv/${projectId}/models/model.onnx`;
-		const result = await runInference(image.imageUrl, modelPath);
+		const result = await runInference(image.imageUrl, modelPath, project.confidenceThreshold);
 
 		// Update inspection with result
 		await CvInspection.findByIdAndUpdate(inspectionId, {
