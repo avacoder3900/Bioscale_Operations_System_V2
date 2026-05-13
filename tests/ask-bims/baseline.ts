@@ -16,12 +16,24 @@
 
 export interface TestQuestion {
 	id: string;
-	category: 'wax' | 'temperature' | 'runs' | 'cartridges' | 'inventory' | 'equipment' | 'anti-overlap' | 'redirection' | 'phase2' | 'inline-ref' | 'docs' | 'work-instructions' | 'datasheets' | 'research' | 'phase6' | 'phase6-chem' | 'phase6-analytics' | 'read-only-guard' | 'operator-experience';
+	category: 'wax' | 'temperature' | 'runs' | 'cartridges' | 'inventory' | 'equipment' | 'anti-overlap' | 'redirection' | 'phase2' | 'inline-ref' | 'docs' | 'work-instructions' | 'datasheets' | 'research' | 'phase6' | 'phase6-chem' | 'phase6-analytics' | 'read-only-guard' | 'operator-experience' | 'page-context';
 	text: string;
 	requiredTools: string[];
 	forbiddenTools?: string[];
 	expectedAnswerPhrases?: RegExp[];
 	notes?: string;
+	/**
+	 * Optional simulated widget pageContext. When set, the runner threads it
+	 * through askBims() just like the live endpoint does. Used by page-context
+	 * fixtures (Phase K) to verify pronoun resolution and entity-type
+	 * mismatch handling.
+	 */
+	pageContext?: {
+		path: string;
+		title?: string;
+		entityType?: string;
+		entityId?: string;
+	};
 }
 
 export const BASELINE_QUESTIONS: TestQuestion[] = [
@@ -799,6 +811,57 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		requiredTools: ['shift_summary'],
 		expectedAnswerPhrases: [/8|shift|hour|window|run|cart/i],
 		notes: 'Phase J.5 alternate framing — "catch me up" + time window must also route to shift_summary, not to individual tools.'
+	},
+
+	// === Phase K — PAGE CONTEXT fixtures (2026-05-13) ===
+	// Verify the agent uses the widget's pageContext block to resolve pronouns
+	// to the page entity, AND ignores pageContext when the question subject
+	// doesn't match entityType.
+	{
+		id: 'pagectx-cartridge-pronoun',
+		category: 'page-context',
+		text: "what's wrong with this cartridge?",
+		pageContext: {
+			path: '/cartridges/5da7b3c5-4cba-4fe4-93b1-c17ad61efbbf',
+			entityType: 'cartridge',
+			entityId: '5da7b3c5-4cba-4fe4-93b1-c17ad61efbbf'
+		},
+		// Either find_cartridges (the cart-lookup tool) OR trace_cartridge (lineage)
+		// is acceptable — both resolve to the page entityId. The runner asserts on
+		// requiredTools as an AND list, so we list the more common path. The
+		// expectedAnswerPhrases regex covers either route by allowing the id.
+		requiredTools: ['find_cartridges'],
+		forbiddenTools: ['list_recent_runs', 'count_cartridges_by_status'],
+		expectedAnswerPhrases: [/cart|5da7b3c5|not found|no cart|barcode/i],
+		notes: 'K.5 — pageContext on a cartridge route. "this cartridge" should resolve to entityId and call find_cartridges (or trace_cartridge) directly. Allowed answer phrasing covers both the cart-found and cart-not-found paths.'
+	},
+	{
+		id: 'pagectx-run-pronoun',
+		category: 'page-context',
+		text: 'who finalized it?',
+		pageContext: {
+			path: '/manufacturing/opentron-control/wax/run-abc-123',
+			entityType: 'wax_filling_run',
+			entityId: 'run-abc-123'
+		},
+		requiredTools: ['get_run_details'],
+		forbiddenTools: ['find_cartridges', 'count_cartridges_by_status', 'list_recent_runs'],
+		expectedAnswerPhrases: [/run|finaliz|not found|operator|completed|abc-123/i],
+		notes: 'K.5 — pageContext on a wax-filling-run route. "it" should resolve to entityId and call get_run_details. Must NOT default to list_recent_runs.'
+	},
+	{
+		id: 'pagectx-entity-mismatch',
+		category: 'page-context',
+		text: 'what runs aborted today?',
+		pageContext: {
+			path: '/cartridges/5da7b3c5-4cba-4fe4-93b1-c17ad61efbbf',
+			entityType: 'cartridge',
+			entityId: '5da7b3c5-4cba-4fe4-93b1-c17ad61efbbf'
+		},
+		requiredTools: ['list_recent_runs'],
+		forbiddenTools: ['find_cartridges', 'trace_cartridge'],
+		expectedAnswerPhrases: [/run|abort|today|none|0|no runs/i],
+		notes: 'K.5 — entity-type mismatch case. Page is a cartridge but the question is about runs; pageContext should be IGNORED, agent should NOT silently call find_cartridges with the page id.'
 	}
 ];
 

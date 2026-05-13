@@ -33,6 +33,82 @@
 	const CIRCUIT_WINDOW_MS = 60_000;
 	const CIRCUIT_COOLDOWN_MS = 5 * 60_000;
 
+	type EntityType =
+		| 'cartridge' | 'run' | 'wax_filling_run' | 'wax_batch' | 'reagent_run'
+		| 'lot' | 'receiving_lot' | 'part' | 'equipment' | 'document'
+		| 'work_instruction' | 'anomaly' | 'experiment' | 'protocol';
+
+	interface PageContext {
+		path: string;
+		title?: string;
+		entityType?: EntityType;
+		entityId?: string;
+	}
+
+	/**
+	 * Parse a BIMS pathname into an entity type + id when the route matches
+	 * a known shape. Server side does its own validation, so this list can
+	 * stay practical rather than exhaustive — unknown routes simply produce
+	 * { path } with no entity, which the agent treats as informational only.
+	 */
+	function parsePathnameToEntity(pathname: string): { entityType?: EntityType; entityId?: string } {
+		const segs = pathname.split('/').filter(Boolean);
+		if (segs.length < 2) return {};
+		const id = segs[segs.length - 1];
+		// /cartridges/{id} or /cartridge-admin/dhr/{id}
+		if (segs[0] === 'cartridges' && segs.length === 2) return { entityType: 'cartridge', entityId: id };
+		if (segs[0] === 'cartridge-admin' && segs[1] === 'dhr' && segs.length === 3) {
+			return { entityType: 'cartridge', entityId: id };
+		}
+		// /manufacturing/opentron-control/wax/{runId} | /reagent/{runId}
+		if (segs[0] === 'manufacturing' && segs[1] === 'opentron-control' && segs[2] === 'wax' && segs.length === 4) {
+			return { entityType: 'wax_filling_run', entityId: id };
+		}
+		if (segs[0] === 'manufacturing' && segs[1] === 'opentron-control' && segs[2] === 'reagent' && segs.length === 4) {
+			return { entityType: 'reagent_run', entityId: id };
+		}
+		// /manufacturing/lots/{lotId} | /_receiving/{lotId} | /parts/accession/{lotId}
+		if (segs[0] === 'manufacturing' && segs[1] === 'lots' && segs.length === 3) {
+			return { entityType: 'receiving_lot', entityId: id };
+		}
+		if (segs[0] === '_receiving' && segs.length === 2) {
+			return { entityType: 'receiving_lot', entityId: id };
+		}
+		if (segs[0] === 'parts' && segs[1] === 'accession' && segs.length === 3) {
+			return { entityType: 'receiving_lot', entityId: id };
+		}
+		// /parts/{partId}
+		if (segs[0] === 'parts' && segs.length === 2) return { entityType: 'part', entityId: id };
+		// /batches/{batchId} — wax batch (legacy in-house wax)
+		if (segs[0] === 'batches' && segs.length === 2) return { entityType: 'wax_batch', entityId: id };
+		// /documents/instructions/{id} → work_instruction (handle BEFORE /documents/{id})
+		if (segs[0] === 'documents' && segs[1] === 'instructions' && segs.length >= 3) {
+			return { entityType: 'work_instruction', entityId: segs[2] };
+		}
+		if (segs[0] === 'documents' && segs.length === 2) return { entityType: 'document', entityId: id };
+		// /opentrons/runs/{runId} → run
+		if (segs[0] === 'opentrons' && segs[1] === 'runs' && segs.length === 3) {
+			return { entityType: 'run', entityId: id };
+		}
+		// /devices/{deviceId} → equipment
+		if (segs[0] === 'devices' && segs.length === 2) return { entityType: 'equipment', entityId: id };
+		// /equipment/location/{locationId} — leave entity untyped (location, not a single piece of equipment)
+		// /spu/{spuId} — SPU device under test, treat as equipment
+		if (segs[0] === 'spu' && segs.length === 2) return { entityType: 'equipment', entityId: id };
+		return {};
+	}
+
+	function currentPageContext(): PageContext {
+		const path = $page.url.pathname;
+		const title = typeof document !== 'undefined' ? document.title : undefined;
+		const { entityType, entityId } = parsePathnameToEntity(path);
+		const ctx: PageContext = { path };
+		if (title) ctx.title = title;
+		if (entityType) ctx.entityType = entityType;
+		if (entityId) ctx.entityId = entityId;
+		return ctx;
+	}
+
 	const visible = $derived.by(() => {
 		const user = $page.data?.user;
 		if (!user) return false;
@@ -144,7 +220,8 @@
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({
 					history: messages.map(m => ({ role: m.role, content: m.content })),
-					model
+					model,
+					pageContext: currentPageContext()
 				})
 			});
 			const body = await res.json();

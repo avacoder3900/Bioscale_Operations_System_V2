@@ -11,7 +11,7 @@
  * Tracks total spend across the suite so we can guard against runaway costs.
  */
 
-import { askBims, type AskBimsModel } from '../../src/lib/server/ask-bims.js';
+import { askBims, type AskBimsModel, type AskBimsPageContext } from '../../src/lib/server/ask-bims.js';
 import type { TestQuestion } from './baseline.js';
 
 export interface TestResult {
@@ -30,7 +30,11 @@ export async function runQuestion(q: TestQuestion, model: AskBimsModel): Promise
 	const t0 = Date.now();
 	// temperature=0 in the harness: minimize sampling variance so regressions
 	// are deterministic. Production calls leave temperature at the SDK default.
-	const result = await askBims([{ role: 'user', content: q.text }], { model, temperature: 0 });
+	const result = await askBims([{ role: 'user', content: q.text }], {
+		model,
+		temperature: 0,
+		pageContext: q.pageContext as AskBimsPageContext | undefined
+	});
 	const durationMs = Date.now() - t0;
 
 	const failures: string[] = [];
