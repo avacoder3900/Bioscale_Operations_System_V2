@@ -2105,17 +2105,31 @@ async function runTool(name: string, input: any, ctx: ToolContext = {}): Promise
 				.select('_id name equipmentType').lean() as any[];
 			const eqMap = new Map(equipment.map(e => [e._id, e]));
 
+			const items = filtered.map(r => ({
+				equipmentId: r.equipmentId,
+				equipmentName: eqMap.get(r.equipmentId)?.name ?? 'unknown',
+				equipmentType: r.equipmentType ?? eqMap.get(r.equipmentId)?.equipmentType,
+				lastCalibrated: r.calibrationDate,
+				dueDate: r.nextCalibrationDue,
+				daysUntilDue: Math.round((new Date(r.nextCalibrationDue).getTime() - Date.now()) / 86400e3),
+				status: r.status
+			}));
+
+			// Phase K.6 — safetyCritical when any equipment is OVERDUE (negative
+			// daysUntilDue). Equipment in this state can't be used per QMS rules
+			// until re-calibrated; the operator needs to see this prominently,
+			// not buried under upcoming-due items.
+			const overdue = items.filter(it => it.daysUntilDue < 0);
+			const safetyCritical = overdue.length > 0;
+			const safetyCriticalReasons = overdue.map(it =>
+				`${it.equipmentName} (${it.equipmentId}): calibration ${Math.abs(it.daysUntilDue)} day${Math.abs(it.daysUntilDue) === 1 ? '' : 's'} overdue — equipment is locked out until recalibrated.`
+			);
+
 			return {
-				items: filtered.map(r => ({
-					equipmentId: r.equipmentId,
-					equipmentName: eqMap.get(r.equipmentId)?.name ?? 'unknown',
-					equipmentType: r.equipmentType ?? eqMap.get(r.equipmentId)?.equipmentType,
-					lastCalibrated: r.calibrationDate,
-					dueDate: r.nextCalibrationDue,
-					daysUntilDue: Math.round((new Date(r.nextCalibrationDue).getTime() - Date.now()) / 86400e3),
-					status: r.status
-				})),
+				items,
 				windowDays: daysAhead,
+				safetyCritical,
+				safetyCriticalReasons,
 				source: 'CalibrationRecord where nextCalibrationDue <= now + windowDays',
 				sourceUrl: '/equipment/activity'
 			};
@@ -2914,6 +2928,27 @@ async function runTool(name: string, input: any, ctx: ToolContext = {}): Promise
 				notes.push(`Both Brevitest and Fannin keep their own stock of: ${names}. Make sure you're reaching for the right bottle — they may have different lot numbers, opening dates, or storage locations.`);
 			}
 
+			// Phase K.6 — safetyCritical flag. Set when any returned chemical has a
+			// hazard code that requires immediate operator caution (HTX = highly
+			// toxic, OX2 = strong oxidizer, FLAM in F1B class = flammable >1 gal,
+			// or matches azide/water-reactive patterns). The widget renders these
+			// with a distinct hazard banner; the agent leads the answer with the
+			// hazard rather than burying it.
+			const safetyCriticalReasons: string[] = [];
+			for (const row of result.matches) {
+				const codes = (row.hazardClass ?? '').toUpperCase();
+				const probe = `${row.name} ${row.primaryChemicalName}`.toLowerCase();
+				if (codes.includes('HTX')) {
+					safetyCriticalReasons.push(`${row.tag} ${row.name}: HTX (highly toxic) — full isolation required.`);
+				} else if (/azide/.test(probe)) {
+					safetyCriticalReasons.push(`${row.tag} ${row.name}: azide — never co-locate with acids or heavy metals.`);
+				} else if (codes.includes('OX2')) {
+					safetyCriticalReasons.push(`${row.tag} ${row.name}: strong oxidizer (OX2) — keep away from organics and flammables.`);
+				} else if (/(metal sodium|metal potassium|lithium aluminum|calcium hydride|water-reactive|reacts with water)/.test(probe)) {
+					safetyCriticalReasons.push(`${row.tag} ${row.name}: water-reactive — desiccated isolation, no aqueous co-location.`);
+				}
+			}
+
 			return {
 				chemicals: result.matches,
 				totalReturned: result.totalReturned,
@@ -2921,6 +2956,8 @@ async function runTool(name: string, input: any, ctx: ToolContext = {}): Promise
 				truncated: result.truncated,
 				matchedOrgs: result.matchedOrgs,
 				corpusFiles: result.corpusFiles,
+				safetyCritical: safetyCriticalReasons.length > 0,
+				safetyCriticalReasons,
 				source: 'data/chemical-inventory/*.csv (bundled Brevitest + Fannin chemical lists)',
 				sourceUrl: undefined,
 				dataIntegrityNotes: notes
@@ -5485,7 +5522,12 @@ OPERATOR EXPERIENCE — how to shape the answer to match how the operator works:
 
 6. **Citation mode.** If the user says "cite this", "for the record", "I need this for an audit", "FDA reference", or asks the answer be formatted for paper records, append a single line at the bottom: \`Cited: BIMS Ask, <ISO timestamp UTC>, response <responseId>, model <model name>\`. The responseId is in your runtime context; use the current UTC ISO timestamp. This is a formatting addition only — never invent values to make a citation look fuller.
 
-7. **Page context.** When the user's message is preceded by a \`## CURRENT PAGE\` block, that's the widget telling you where the operator is in BIMS — path, optional title, optional entityType + entityId. Treat it as quiet context, NOT as the question itself.
+7. **Safety-critical results lead the answer.** When any tool result contains \`safetyCritical: true\`, the answer MUST open with the hazard line(s) from \`safetyCriticalReasons\` — not bury them mid-paragraph, not summarize them away. Format: a leading line like "⚠ Safety-critical: <reason>" before any other content, then the rest of the answer. The widget will render these prominently; do not also reformat them into a code block.
+   - HTX chemicals (methotrexate, sodium azide, organomercurials) → lead with isolation requirement before mentioning storage code or quantity.
+   - Calibration overdue → lead with "equipment locked out" before listing the due date.
+   - Never invent a safetyCritical claim. If no tool returned \`safetyCritical: true\`, do not fabricate a hazard banner.
+
+8. **Page context.** When the user's message is preceded by a \`## CURRENT PAGE\` block, that's the widget telling you where the operator is in BIMS — path, optional title, optional entityType + entityId. Treat it as quiet context, NOT as the question itself.
    - If the question contains a short pronoun ("this", "that", "it", "the cart", "the run", "this lot") AND \`entityType\`/\`entityId\` is present AND the pronoun's category matches \`entityType\`, resolve the pronoun to \`entityId\` and call the appropriate tool with that id. Example: page is \`/spu/cartridge/abc123\`, user asks "what's wrong with this?" → call \`find_cartridge\` (or \`trace_cartridge\`) with \`abc123\`.
    - If \`entityType\` does NOT match the pronoun's category (page is a cartridge, user asks "who finalized the run?"), IGNORE \`pageContext\` and treat the question as a normal lookup. Do not silently substitute the wrong id.
    - If the question is fully specified (has its own id or doesn't reference the page entity), just answer the question; \`pageContext\` is informational only. Never volunteer "I see you're on page X" — operators know what page they're on.
