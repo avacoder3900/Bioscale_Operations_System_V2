@@ -132,6 +132,14 @@
 	let model = $state<ModelId>('claude-haiku-4-5');
 	let listEl: HTMLDivElement | undefined = $state();
 
+	// L.2 — first-open help banner. Persists dismissal in localStorage so the
+	// operator only sees it once per browser session.
+	let helpDismissed = $state(false);
+	function dismissHelp() {
+		helpDismissed = true;
+		try { localStorage.setItem('askBimsHelpDismissed', '1'); } catch {}
+	}
+
 	// Reliability tier — circuit breaker + degraded-status tracking
 	let failureTimes = $state<number[]>([]);
 	let circuitOpenUntil = $state<number | null>(null);
@@ -259,7 +267,69 @@
 		if (isOpen && !healthChecked) {
 			healthChecked = true;
 			checkHealth();
+			try { helpDismissed = localStorage.getItem('askBimsHelpDismissed') === '1'; } catch {}
 		}
+	}
+
+	// L.1 — page-aware quick-action chips. Each chip is a one-shot question
+	// that fills the input and fires. The chip set adapts to entityType from
+	// the current page, falling back to a generic "what's going on" set when
+	// we're not on a recognized entity route.
+	const chipSet = $derived.by<string[]>(() => {
+		const ctx = $page.url ? parsePathnameToEntity($page.url.pathname) : {};
+		switch (ctx.entityType) {
+			case 'cartridge':
+				return [
+					"Why is this cartridge stuck?",
+					"Show this cartridge's genealogy",
+					"What's the QC status?",
+					"Where is this part physically?"
+				];
+			case 'run':
+			case 'wax_filling_run':
+			case 'reagent_run':
+				return [
+					"What's blocking this run?",
+					"Who finalized it?",
+					"Show parts consumed in this run",
+					"Were there spec deviations?"
+				];
+			case 'receiving_lot':
+			case 'lot':
+				return [
+					"Where is this lot stored?",
+					"What cartridges used this lot?",
+					"Is it expiring soon?",
+					"Forward genealogy from this lot"
+				];
+			case 'part':
+				return [
+					"How much of this part do we have?",
+					"What's the reorder threshold?",
+					"Recent receiving lots for this part",
+					"Where is it physically?"
+				];
+			case 'equipment':
+				return [
+					"Is this equipment calibrated?",
+					"Recent service tickets",
+					"Current temperature",
+					"What runs used this equipment today?"
+				];
+			default:
+				return [
+					"What's blocked today?",
+					"Today's anomalies",
+					"Shift summary",
+					"What can you do?"
+				];
+		}
+	});
+
+	function fireChip(text: string) {
+		if (submitting) return;
+		input = text;
+		submit();
 	}
 
 	function clearChat() {
@@ -454,10 +524,30 @@
 
 			<!-- Messages -->
 			<div bind:this={listEl} class="ask-bims-messages">
+				{#if !helpDismissed && messages.length === 0}
+					<!-- L.2 — first-open help banner. One-time per browser session. -->
+					<div class="mb-3 rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 px-2.5 py-2 text-[10px] text-[var(--color-tron-text)]">
+						<div class="flex items-start justify-between gap-2">
+							<div>
+								I can help with cartridges, runs, equipment, chemicals, anomalies, and shift summaries. Try a suggestion below — or just ask.
+							</div>
+							<button
+								type="button"
+								onclick={dismissHelp}
+								class="-mr-1 -mt-0.5 rounded p-0.5 text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]"
+								title="Dismiss"
+								aria-label="Dismiss help banner"
+							>
+								<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-3 w-3">
+									<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+								</svg>
+							</button>
+						</div>
+					</div>
+				{/if}
 				{#if messages.length === 0}
-					<div class="py-4 text-center text-xs text-[var(--color-tron-text-secondary)]">
+					<div class="py-3 text-center text-xs text-[var(--color-tron-text-secondary)]">
 						<p>Ask about wax, runs, temps, inventory, cartridges.</p>
-						<p class="mt-2 text-[10px]">Examples:<br>"What's running low?"<br>"Trace cartridge ABC123"<br>"How many carts did we make today?"</p>
 					</div>
 				{:else}
 					{#each messages as msg, i (i)}
@@ -613,6 +703,21 @@
 				{/if}
 			</div>
 
+			<!-- L.1 — page-aware quick-action chips. One click fills + fires. -->
+			<div class="ask-bims-chips">
+				{#each chipSet as chip (chip)}
+					<button
+						type="button"
+						onclick={() => fireChip(chip)}
+						disabled={submitting}
+						class="ask-bims-chip"
+						title={chip}
+					>
+						{chip}
+					</button>
+				{/each}
+			</div>
+
 			<!-- Input -->
 			<form onsubmit={submit} class="ask-bims-input-row">
 				<input
@@ -725,6 +830,38 @@
 		padding: 0.625rem 0.75rem;
 		border-top: 1px solid var(--color-tron-border);
 		background: var(--color-tron-bg-tertiary);
+	}
+
+	.ask-bims-chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem;
+		padding: 0.375rem 0.625rem 0.25rem;
+		border-top: 1px solid var(--color-tron-border);
+		background: var(--color-tron-bg-secondary);
+	}
+	.ask-bims-chip {
+		font-size: 0.6875rem;
+		line-height: 1;
+		padding: 0.3125rem 0.5rem;
+		border-radius: 999px;
+		border: 1px solid var(--color-tron-border);
+		background: var(--color-tron-bg-tertiary);
+		color: var(--color-tron-text);
+		cursor: pointer;
+		transition: border-color 0.15s ease, background 0.15s ease;
+		white-space: nowrap;
+		max-width: 100%;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+	.ask-bims-chip:hover {
+		border-color: rgba(34, 211, 238, 0.6);
+		background: rgba(34, 211, 238, 0.08);
+	}
+	.ask-bims-chip:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
 	}
 
 	.ask-bims-banner {
