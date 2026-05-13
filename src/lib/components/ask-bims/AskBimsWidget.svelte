@@ -1267,8 +1267,11 @@
 		opacity: 0.85;
 	}
 
-	/* Mobile: full bottom-sheet on small screens */
-	@media (max-width: 600px) {
+	/* Mobile + small tablets (portrait): full bottom-sheet, give it room for
+	   the iOS / Android home indicator via env() safe areas. The 768px cutoff
+	   covers iPad mini portrait and all smaller; iPad Pro landscape stays a
+	   floating panel. */
+	@media (max-width: 768px) {
 		.ask-bims-panel {
 			bottom: 0;
 			left: 0;
@@ -1279,12 +1282,35 @@
 			max-height: 80vh;
 			border-radius: 1rem 1rem 0 0;
 			border-bottom: none;
+			padding-bottom: env(safe-area-inset-bottom, 0);
 		}
 		.ask-bims-pill {
-			bottom: 1rem;
+			bottom: calc(1rem + env(safe-area-inset-bottom, 0));
 			left: 1rem;
 			padding: 0.5rem 0.875rem;
 			font-size: 0.75rem;
 		}
+		.ask-bims-messages { padding: 1rem; }
+		.ask-bims-input-row { padding: 0.75rem; gap: 0.5rem; }
+	}
+
+	/* Touch devices (iPad on the lab floor, kiosk tablets). Bump tap targets
+	   and font sizes for arm's-length reading; affects desktop touch laptops
+	   too, which is fine. */
+	@media (pointer: coarse) {
+		/* Min tap target ~44px on the things operators reach for most. */
+		.ask-bims-chip {
+			font-size: 0.8125rem;
+			padding: 0.5rem 0.75rem;
+			line-height: 1.1;
+		}
+		.ask-bims-mic { padding: 0.625rem; }
+		.ask-bims-input-row input { padding: 0.625rem 0.625rem; font-size: 0.875rem; }
+		.ask-bims-input-row button[type="submit"] { padding: 0.625rem 1rem; font-size: 0.875rem; min-width: 4rem; }
+		.ask-bims-header button { padding: 0.5rem; }
+		/* Per-message action buttons (thumbs, flag, bookmark, print) — bump
+		   from px-1.5 py-0.5 (~22px) to roughly 36px so big fingers don't
+		   mis-hit the neighbor. */
+		.ask-bims-messages button[aria-label] { min-width: 2.25rem; min-height: 2.25rem; }
 	}
 </style>
