@@ -10,8 +10,11 @@ import {
 	WorkflowViolation, ValidationSession, ApprovalRequest,
 	DeviceEvent, ScannerEvent, ShippingLot, ShippingPackage,
 	User, Document, AssayDefinition,
+	SpecLimit, FmeaRecord, BimsAnomaly, AskBimsConversationLog,
 	generateId
 } from './db';
+import { loadUnifiedRuns } from './analytics/runs-feed';
+import { capability, tTest, linearRegression } from './analytics/stats';
 import { hasPermission } from './permissions';
 import { getCheckedOutCartridgeIds } from './checkout-utils';
 import { TIER_1_REFERENCE } from './ask-bims-tier1';
@@ -118,6 +121,67 @@ export async function checkDailyCap(userId: string, model: AskBimsModel): Promis
 	}
 
 	return null;
+}
+
+/**
+ * Compress a tool's input/result into short previews safe for storage in the
+ * conversation log. We DON'T want heavy result payloads (50KB JSON dumps) to
+ * land in Mongo — just enough so the log is browseable.
+ */
+function previewToolPayload(payload: unknown, charCap = 240): string {
+	if (payload == null) return '';
+	try {
+		const s = typeof payload === 'string' ? payload : JSON.stringify(payload);
+		if (s.length <= charCap) return s;
+		return s.slice(0, charCap) + '…';
+	} catch {
+		return '[unserializable]';
+	}
+}
+
+/**
+ * Conversation telemetry — captures the actual question + answer + tool trail.
+ * Fire-and-forget like logCostTelemetry. Joined to AskBimsCostLog by
+ * responseId so the admin history view can render cost + content together.
+ *
+ * PII redaction (redactPii) is currently a no-op pending policy. When the
+ * policy lands, swap in NER/allowlist redaction; this site is the gate.
+ */
+async function logConversationTelemetry(entry: {
+	responseId: string;
+	userId: string;
+	username?: string;
+	model: AskBimsModel;
+	question: string;
+	answer: string;
+	toolCalls: Array<{ name: string; input: unknown; result: unknown }>;
+	costUsd: number;
+	durationMs: number;
+	errorClass?: string;
+}): Promise<void> {
+	try {
+		await AskBimsConversationLog.create({
+			responseId: entry.responseId,
+			userId: entry.userId,
+			username: entry.username,
+			timestamp: new Date(),
+			model: entry.model,
+			question: redactPii(entry.question),
+			answer: redactPii(entry.answer),
+			toolCalls: entry.toolCalls.map(tc => ({
+				name: tc.name,
+				inputPreview: previewToolPayload(tc.input, 160),
+				resultPreview: previewToolPayload(tc.result, 320)
+			})),
+			toolCallCount: entry.toolCalls.length,
+			uniqueToolCount: new Set(entry.toolCalls.map(tc => tc.name)).size,
+			costUsd: entry.costUsd,
+			durationMs: entry.durationMs,
+			errorClass: entry.errorClass
+		});
+	} catch (err) {
+		console.error('[ASK-BIMS] conversation log write failed (non-fatal):', err);
+	}
 }
 
 async function logCostTelemetry(entry: {
@@ -959,6 +1023,152 @@ Don't use for: listing many (use list_calibrated_analyses); the base profile (us
 				query: { type: 'string', description: 'CalibratedAnalysis _id (nanoid) OR name fragment (case-insensitive)' }
 			},
 			required: ['query']
+		}
+	},
+	{
+		name: 'get_capability_trend',
+		description: `Rolling Cp/Cpk over time for a process+metric, with regression slope on the Cpk series. Bins by week (default) or day.
+Source: loadUnifiedRuns() + SpecLimit + capability() per bin + linearRegression on Cpk.
+
+Use when: "is our wax-yield Cpk improving", "capability trend for cycle time", "are we drifting on Cpk".
+Don't use for: a single-point Cpk vs target (use cpk_vs_target); raw run lists (use list_recent_runs); per-segment yield (use yield_trends_by_robot or yield_breakdown if available).
+
+Metric: cycleTime | yield | acceptedCount.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				processType: { type: 'string', description: 'wi-01 | wax | reagent | laser-cut | etc.' },
+				metric: { type: 'string', description: 'cycleTime | yield | acceptedCount' },
+				sinceDays: { type: 'number', description: 'Window in days (default 30, min 7, max 365)' },
+				granularity: { type: 'string', description: 'week (default) | day' }
+			},
+			required: ['processType', 'metric']
+		}
+	},
+	{
+		name: 'cpk_vs_target',
+		description: `Current Cp/Cpk for a process+metric versus a target Cpk, with a suggestion: shift the mean (off-center) or reduce variation (sigma).
+Source: loadUnifiedRuns() over recent window + SpecLimit + capability().
+
+Use when: "are we meeting Cpk target for X", "how far are we from 1.33 on cycle time", "what's the gap to target".
+Don't use for: trend over time (use get_capability_trend); raw values (use list_recent_runs or temperature_excursion_summary).`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				processType: { type: 'string' },
+				metric: { type: 'string', description: 'cycleTime | yield | acceptedCount' },
+				targetCpk: { type: 'number', description: 'Default 1.33 (industry-standard "process is capable" threshold)' },
+				sinceDays: { type: 'number', description: 'Window for current Cpk (default 30, min 7, max 365)' }
+			},
+			required: ['processType', 'metric']
+		}
+	},
+	{
+		name: 'shift_correlation',
+		description: `Two-sample t-test of a metric (cycleTime, yield) between day shifts (morning + afternoon) and night shifts. Returns t, p-value, group means, significance flag.
+Source: loadUnifiedRuns() bucketed by inferShift(startTime); tTest from analytics/stats.
+
+Use when: "do night shifts have higher cycle time", "is yield different at night", "is shift a driver".
+Don't use for: arbitrary segment comparisons (no tool for that yet — surfacing two-shift correlation is the v1).`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				metric: { type: 'string', description: 'cycleTime | yield (default cycleTime)' },
+				sinceDays: { type: 'number', description: 'Default 30, min 7, max 365' },
+				processType: { type: 'string', description: 'Optional — filter to one process' }
+			}
+		}
+	},
+	{
+		name: 'fmea_risk_query',
+		description: `List FMEA records sorted by RPN (Risk Priority Number, descending). Optionally filter by minimum RPN threshold or status.
+Source: FmeaRecord model.
+
+Use when: "what are our highest-risk failure modes", "list open FMEAs above RPN 100", "FMEA risk heatmap data".
+Don't use for: SPC signal investigation (use check_data_integrity or anomaly tools); CAPA/NC lookups (those models aren't built yet).`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				rpnThreshold: { type: 'number', description: 'Minimum RPN to include (default 0)' },
+				statusFilter: { type: 'string', description: 'Optional — draft | active | retired | etc.' },
+				limit: { type: 'number', description: 'Max records (default 20, max 100)' }
+			}
+		}
+	},
+	{
+		name: 'forecast_capability_impact',
+		description: `Sensitivity analysis on Cp/Cpk — "if sigma drops X%, what's the new Cpk?". Recomputes capability with scaled sigma and/or shifted mean on the current dataset.
+Source: loadUnifiedRuns() over 30 days + SpecLimit + capability() recomputed with synthetic values.
+
+Use when: "if we cut variation in half, what Cpk would we hit", "would centering the process meet target", what-if analysis.
+Don't use for: actual current Cpk (use cpk_vs_target); historical trend (use get_capability_trend).`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				processType: { type: 'string' },
+				metric: { type: 'string', description: 'cycleTime | yield' },
+				scenario: {
+					type: 'object',
+					description: '{sigmaReductionPct?: number (0-100), meanShift?: number (±)} — at least one required',
+					properties: {
+						sigmaReductionPct: { type: 'number' },
+						meanShift: { type: 'number' }
+					}
+				}
+			},
+			required: ['processType', 'metric']
+		}
+	},
+	{
+		name: 'bulk_temperature_summary',
+		description: `Temperature summary for MANY equipment names in one call. Returns per-equipment min/max/avg, in-spec count, alert count over the window. Replaces N×temperature_excursion_summary iteration.
+Source: Equipment + TemperatureReading + TemperatureAlert (per name).
+
+Use when: "summarize temps across all fridges", "compare freezer stability across units", any multi-equipment temp question.
+Don't use for: a single equipment (use temperature_excursion_summary); current spot temperature (use get_current_temperatures); time-series detail (use get_temperature_history).
+
+Caps: 20 equipment names per call. Window 1-30 days (default 7).`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				equipmentNames: { type: 'array', items: { type: 'string' }, description: 'Array of equipment name fragments (case-insensitive partial match each)' },
+				sinceDays: { type: 'number', description: 'Window in days (default 7, min 1, max 30)' }
+			},
+			required: ['equipmentNames']
+		}
+	},
+	{
+		name: 'bulk_cartridge_status',
+		description: `Status snapshot for MANY cartridge barcodes in one call. Returns per-cart status (or currentPhase fallback), finalizedAt, result, QC sub-statuses, plus an aggregate statusCounts roll-up.
+Source: CartridgeRecord projection by _id array.
+
+Use when: "status of these 30 carts", "what's the QC outcome on this batch", multi-cart status checks.
+Don't use for: a single cartridge deep-dive (use trace_cartridge / find_research_cartridge); cartridges-by-query (use find_cartridges with status filter).
+
+Caps: 100 barcodes per call.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				barcodes: { type: 'array', items: { type: 'string' }, description: 'Array of cartridge barcodes (UUIDs)' }
+			},
+			required: ['barcodes']
+		}
+	},
+	{
+		name: 'find_runs_by_operator',
+		description: `Recent runs filtered by operator name (case-insensitive substring across all process types). Closes the gap that previously made Opus refuse operator-history questions ("what carts did Nick make today?").
+Source: loadUnifiedRuns() + post-filter on run.operator regex.
+
+Use when: "what has {{operator}} run lately", "{{operator}}'s yield this week", any operator-history question.
+Don't use for: a single run's detail (use get_run_details); recent runs across all operators (use list_recent_runs).`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				operator: { type: 'string', description: 'Operator name or username fragment (case-insensitive)' },
+				sinceDays: { type: 'number', description: 'Default 7, min 1, max 90' },
+				processType: { type: 'string', description: 'Optional — wi-01 | wax | reagent | laser-cut | etc.' }
+			},
+			required: ['operator']
 		}
 	},
 	{
@@ -3518,6 +3728,420 @@ async function runTool(name: string, input: any, ctx: ToolContext = {}): Promise
 				dataIntegrityNotes: []
 			};
 		}
+		case 'get_capability_trend': {
+			const processType = String(input.processType ?? '').trim();
+			const metric = String(input.metric ?? 'cycleTime').trim();
+			const sinceDays = Math.min(Math.max(Number(input.sinceDays ?? 30), 7), 365);
+			const granularity = input.granularity === 'day' ? 'day' : 'week';
+			if (!processType) return { error: 'processType required', source: 'UnifiedRuns + SpecLimit' };
+
+			const since = new Date(Date.now() - sinceDays * 86400e3);
+			const runs = await loadUnifiedRuns({
+				from: since, to: new Date(),
+				processTypes: [processType] as any,
+				operatorIds: null, robotIds: null, equipmentIds: null,
+				assayIds: null, inputLotBarcodes: null, shifts: null
+			});
+
+			const valueOf = (r: any): number | null => {
+				if (metric === 'cycleTime') return r.cycleTimeMin;
+				if (metric === 'yield' && r.actualCount && r.acceptedCount != null) return r.acceptedCount / r.actualCount;
+				if (metric === 'acceptedCount') return r.acceptedCount;
+				return null;
+			};
+			const keyOf = (d: Date): string => {
+				if (granularity === 'day') return d.toISOString().slice(0, 10);
+				// ISO week-ish: year-Wnn
+				const year = d.getUTCFullYear();
+				const start = Date.UTC(year, 0, 1);
+				const dayOfYear = Math.floor((d.getTime() - start) / 86400000);
+				const week = Math.floor(dayOfYear / 7) + 1;
+				return `${year}-W${String(week).padStart(2, '0')}`;
+			};
+
+			const bins = new Map<string, number[]>();
+			for (const r of runs) {
+				const t = r.endTime ?? r.startTime ?? r.createdAt;
+				const v = valueOf(r);
+				if (!t || v == null || !Number.isFinite(v)) continue;
+				const k = keyOf(new Date(t));
+				if (!bins.has(k)) bins.set(k, []);
+				bins.get(k)!.push(v);
+			}
+
+			const spec = await SpecLimit.findOne({ processType, metric }).lean().catch(() => null) as any;
+			const LSL = spec?.lsl ?? null;
+			const USL = spec?.usl ?? null;
+
+			const trend = [...bins.entries()]
+				.sort(([a], [b]) => a.localeCompare(b))
+				.map(([period, values]) => {
+					const cap = capability(values, { LSL, USL });
+					return { period, n: cap.n, mean: cap.mean, sigma: cap.stdDev, cp: cap.cp, cpk: cap.cpk };
+				});
+
+			const cpkSeries: [number, number][] = trend
+				.map((t, i) => [i, t.cpk ?? NaN] as [number, number])
+				.filter(([, v]) => Number.isFinite(v));
+			const slope = cpkSeries.length >= 2 ? linearRegression(cpkSeries) : null;
+
+			const notes: string[] = [];
+			if (!spec) notes.push(`No SpecLimit configured for processType=${processType} metric=${metric}. Cp/Cpk return null without spec limits — n/mean/sigma still computed per bin.`);
+			if (trend.length < 3) notes.push(`Only ${trend.length} bin(s) of data — trend regression is unreliable; widen sinceDays or change granularity.`);
+
+			return {
+				processType, metric, windowDays: sinceDays, granularity,
+				specLimits: { LSL, USL, source: spec ? 'SpecLimit model' : 'not configured' },
+				trend,
+				slope: slope?.slope ?? null,
+				slopeR2: slope?.r2 ?? null,
+				direction: slope?.slope != null ? (slope.slope > 0 ? 'improving' : slope.slope < 0 ? 'degrading' : 'flat') : null,
+				source: 'loadUnifiedRuns() + SpecLimit + capability() per bin + linearRegression on Cpk',
+				dataIntegrityNotes: notes
+			};
+		}
+		case 'cpk_vs_target': {
+			const processType = String(input.processType ?? '').trim();
+			const metric = String(input.metric ?? '').trim();
+			const targetCpk = Number(input.targetCpk ?? 1.33);
+			const sinceDays = Math.min(Math.max(Number(input.sinceDays ?? 30), 7), 365);
+			if (!processType || !metric) return { error: 'processType + metric required', source: 'UnifiedRuns + SpecLimit + capability()' };
+
+			const since = new Date(Date.now() - sinceDays * 86400e3);
+			const runs = await loadUnifiedRuns({
+				from: since, to: new Date(),
+				processTypes: [processType] as any,
+				operatorIds: null, robotIds: null, equipmentIds: null,
+				assayIds: null, inputLotBarcodes: null, shifts: null
+			});
+			const values: number[] = [];
+			for (const r of runs) {
+				if (metric === 'cycleTime' && r.cycleTimeMin != null) values.push(r.cycleTimeMin);
+				else if (metric === 'yield' && r.actualCount && r.acceptedCount != null) values.push(r.acceptedCount / r.actualCount);
+				else if (metric === 'acceptedCount' && r.acceptedCount != null) values.push(r.acceptedCount);
+			}
+
+			const spec = await SpecLimit.findOne({ processType, metric }).lean().catch(() => null) as any;
+			const cap = capability(values, { LSL: spec?.lsl ?? null, USL: spec?.usl ?? null });
+
+			const cpkDelta = cap.cpk != null ? cap.cpk - targetCpk : null;
+			const meetsTarget = cap.cpk != null && cap.cpk >= targetCpk;
+			let suggestion = '';
+			if (cap.cpk == null) {
+				suggestion = 'No Cpk computed — needs spec limits and ≥2 data points.';
+			} else if (meetsTarget) {
+				suggestion = `Target met (Cpk ${cap.cpk.toFixed(2)} ≥ ${targetCpk}). Consider tightening spec or raising target.`;
+			} else if (cap.cp != null && cap.cp >= targetCpk) {
+				suggestion = `Process is spread-capable (Cp ${cap.cp.toFixed(2)} meets target) but off-center. Shift the mean toward (LSL+USL)/2 to lift Cpk without reducing variation.`;
+			} else if (cap.cp != null && cap.stdDev != null && cap.stdDev > 0) {
+				const sigmaRatio = targetCpk > 0 ? cap.cp / targetCpk : 1;
+				const sigmaReductionPct = Math.max(0, (1 - sigmaRatio) * 100);
+				suggestion = `Process needs variation reduction. Approximate σ reduction to reach Cp=${targetCpk}: ~${sigmaReductionPct.toFixed(1)}%.`;
+			} else {
+				suggestion = 'Insufficient data to recommend a path — collect more measurements.';
+			}
+
+			const notes: string[] = [];
+			if (!spec) notes.push(`No SpecLimit for processType=${processType} metric=${metric}. Configure spec limits to enable Cp/Cpk.`);
+
+			return {
+				processType, metric, targetCpk, windowDays: sinceDays,
+				n: cap.n, mean: cap.mean, sigma: cap.stdDev,
+				cp: cap.cp, cpk: cap.cpk,
+				cpkDelta, meetsTarget,
+				dpmo: cap.dpmo,
+				suggestion,
+				source: 'loadUnifiedRuns() + SpecLimit + capability()',
+				dataIntegrityNotes: notes
+			};
+		}
+		case 'shift_correlation': {
+			const metric = String(input.metric ?? 'cycleTime').trim();
+			const sinceDays = Math.min(Math.max(Number(input.sinceDays ?? 30), 7), 365);
+			const processType = input.processType ? String(input.processType).trim() : null;
+
+			const since = new Date(Date.now() - sinceDays * 86400e3);
+			const runs = await loadUnifiedRuns({
+				from: since, to: new Date(),
+				processTypes: (processType ? [processType] : null) as any,
+				operatorIds: null, robotIds: null, equipmentIds: null,
+				assayIds: null, inputLotBarcodes: null, shifts: null
+			});
+
+			const dayVals: number[] = [];
+			const nightVals: number[] = [];
+			for (const r of runs) {
+				if (!r.startTime) continue;
+				let v: number | null = null;
+				if (metric === 'cycleTime' && r.cycleTimeMin != null) v = r.cycleTimeMin;
+				else if (metric === 'yield' && r.actualCount && r.acceptedCount != null) v = r.acceptedCount / r.actualCount;
+				if (v == null) continue;
+				const h = new Date(r.startTime).getHours();
+				if (h >= 6 && h < 22) dayVals.push(v);
+				else nightVals.push(v);
+			}
+
+			const notes: string[] = [];
+			if (dayVals.length < 2 || nightVals.length < 2) notes.push(`Insufficient data for t-test (day n=${dayVals.length}, night n=${nightVals.length}; need ≥2 per side). Widen window or drop the processType filter.`);
+
+			const test = tTest(dayVals, nightVals);
+			const significant = test.pValue != null && test.pValue < 0.05;
+
+			return {
+				metric, windowDays: sinceDays, processType,
+				day: { n: dayVals.length, mean: test.meanA },
+				night: { n: nightVals.length, mean: test.meanB },
+				tStat: test.t, pValue: test.pValue, df: test.df,
+				significant,
+				interpretation: significant
+					? `Day vs night difference in ${metric} is statistically significant (p=${test.pValue!.toFixed(4)} < 0.05). Worth investigating root cause (different operators, lighting, temperature, supply quality at night).`
+					: (test.pValue != null ? `No significant day/night difference in ${metric} (p=${test.pValue.toFixed(4)}). Shift is not a primary driver.` : 'Could not compute t-test — insufficient data.'),
+				source: 'loadUnifiedRuns() bucketed by start-hour (day 06:00-22:00, night 22:00-06:00) + tTest()',
+				dataIntegrityNotes: notes
+			};
+		}
+		case 'fmea_risk_query': {
+			const rpnThreshold = Number(input.rpnThreshold ?? 0);
+			const statusFilter = input.statusFilter ? String(input.statusFilter).trim() : null;
+			const limit = Math.min(Math.max(Number(input.limit ?? 20), 1), 100);
+
+			const filter: any = {};
+			if (rpnThreshold > 0) filter.rpn = { $gte: rpnThreshold };
+			if (statusFilter) filter.status = statusFilter;
+
+			const records = await FmeaRecord.find(filter)
+				.sort({ rpn: -1 })
+				.limit(limit + 1)
+				.lean() as any[];
+			const truncated = records.length > limit;
+
+			return {
+				records: records.slice(0, limit).map(r => ({
+					_id: r._id,
+					processType: r.processType,
+					failureMode: r.failureMode,
+					effect: r.effect,
+					cause: r.cause,
+					severity: r.severity,
+					occurrence: r.occurrence,
+					detection: r.detection,
+					rpn: r.rpn,
+					status: r.status,
+					recommendedAction: r.recommendedAction,
+					actionOwner: r.actionOwner,
+					actionDueDate: r.actionDueDate,
+					updatedAt: r.updatedAt
+				})),
+				totalReturned: Math.min(records.length, limit),
+				truncated,
+				rpnThreshold,
+				statusFilter,
+				source: 'FmeaRecord sorted by rpn desc',
+				sourceUrl: '/manufacturing/analysis',
+				dataIntegrityNotes: records.length === 0 ? ['No FMEA records matched. Try lowering rpnThreshold or dropping the status filter.'] : []
+			};
+		}
+		case 'forecast_capability_impact': {
+			const processType = String(input.processType ?? '').trim();
+			const metric = String(input.metric ?? '').trim();
+			if (!processType || !metric) return { error: 'processType + metric required', source: 'UnifiedRuns + SpecLimit + capability()' };
+			const scenario = input.scenario ?? {};
+			const sigmaReductionPct = Math.max(0, Math.min(99, Number(scenario.sigmaReductionPct ?? 0)));
+			const meanShift = Number(scenario.meanShift ?? 0);
+
+			const since = new Date(Date.now() - 30 * 86400e3);
+			const runs = await loadUnifiedRuns({
+				from: since, to: new Date(),
+				processTypes: [processType] as any,
+				operatorIds: null, robotIds: null, equipmentIds: null,
+				assayIds: null, inputLotBarcodes: null, shifts: null
+			});
+			const values: number[] = [];
+			for (const r of runs) {
+				if (metric === 'cycleTime' && r.cycleTimeMin != null) values.push(r.cycleTimeMin);
+				else if (metric === 'yield' && r.actualCount && r.acceptedCount != null) values.push(r.acceptedCount / r.actualCount);
+			}
+			const spec = await SpecLimit.findOne({ processType, metric }).lean().catch(() => null) as any;
+			const current = capability(values, { LSL: spec?.lsl ?? null, USL: spec?.usl ?? null });
+			if (current.stdDev == null || current.mean == null) {
+				return {
+					error: 'Insufficient current data to forecast — need ≥2 measurements with current sigma.',
+					processType, metric,
+					source: 'UnifiedRuns 30-day window'
+				};
+			}
+
+			const sigmaMul = 1 - sigmaReductionPct / 100;
+			const newMean = current.mean + meanShift;
+			const forecastValues = values.map(v => newMean + (v - current.mean!) * sigmaMul);
+			const forecast = capability(forecastValues, { LSL: spec?.lsl ?? null, USL: spec?.usl ?? null });
+
+			return {
+				processType, metric,
+				scenario: { sigmaReductionPct, meanShift },
+				current: { n: current.n, mean: current.mean, sigma: current.stdDev, cp: current.cp, cpk: current.cpk },
+				forecast: { n: forecast.n, mean: forecast.mean, sigma: forecast.stdDev, cp: forecast.cp, cpk: forecast.cpk },
+				cpkDelta: (forecast.cpk ?? 0) - (current.cpk ?? 0),
+				cpDelta: (forecast.cp ?? 0) - (current.cp ?? 0),
+				source: 'capability(synthetic-values) where synthetic = newMean + (v - mean) × (1 - sigmaReductionPct/100)',
+				dataIntegrityNotes: spec ? [] : ['No SpecLimit configured — Cp/Cpk return null. Forecast only shows mean/sigma changes.']
+			};
+		}
+		case 'bulk_temperature_summary': {
+			const names: string[] = Array.isArray(input.equipmentNames)
+				? input.equipmentNames.map((n: any) => String(n).trim()).filter(Boolean)
+				: [];
+			if (names.length === 0) return { error: 'equipmentNames array required (≥1)', source: 'Equipment + TemperatureReading + TemperatureAlert' };
+			if (names.length > 20) return { error: 'Max 20 equipment names per call', source: 'Equipment + TemperatureReading + TemperatureAlert' };
+			const sinceDays = Math.min(Math.max(Number(input.sinceDays ?? 7), 1), 30);
+			const since = new Date(Date.now() - sinceDays * 86400e3);
+
+			const items = await Promise.all(names.map(async (name: string) => {
+				const eq = await Equipment.findOne({ name: { $regex: name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } })
+					.select('_id name mocreoDeviceId temperatureMinC temperatureMaxC').lean() as any;
+				if (!eq) return { query: name, found: false };
+
+				const [readings, alertCount] = await Promise.all([
+					TemperatureReading.find({
+						$or: [{ equipmentId: eq._id }, { sensorId: eq.mocreoDeviceId }],
+						timestamp: { $gte: since }
+					}).select('temperature').lean() as any,
+					TemperatureAlert.countDocuments({
+						$or: [{ equipmentId: eq._id }, { sensorId: eq.mocreoDeviceId }],
+						timestamp: { $gte: since }
+					})
+				]);
+				const temps = (readings as any[]).map(r => r.temperature).filter((t: any) => typeof t === 'number');
+				if (temps.length === 0) {
+					return { query: name, equipmentName: eq.name, found: true, readingCount: 0, alertCount };
+				}
+				const min = Math.min(...temps), max = Math.max(...temps);
+				const avg = temps.reduce((s: number, t: number) => s + t, 0) / temps.length;
+				const inSpec = eq.temperatureMinC != null && eq.temperatureMaxC != null
+					? temps.filter((t: number) => t >= eq.temperatureMinC && t <= eq.temperatureMaxC).length
+					: null;
+				return {
+					query: name,
+					equipmentName: eq.name,
+					found: true,
+					readingCount: temps.length,
+					minC: Math.round(min * 100) / 100,
+					maxC: Math.round(max * 100) / 100,
+					avgC: Math.round(avg * 100) / 100,
+					targetRange: eq.temperatureMinC != null ? `${eq.temperatureMinC} to ${eq.temperatureMaxC}°C` : null,
+					inSpecCount: inSpec,
+					inSpecPct: inSpec != null ? Math.round((inSpec / temps.length) * 1000) / 10 : null,
+					alertCount
+				};
+			}));
+
+			return {
+				windowDays: sinceDays,
+				equipmentCount: items.length,
+				items,
+				source: 'Equipment + TemperatureReading + TemperatureAlert (per name)',
+				sourceUrl: '/equipment/activity',
+				dataIntegrityNotes: items.filter(i => !i.found).length > 0
+					? [`${items.filter(i => !i.found).length} of ${items.length} names did not match any Equipment record.`]
+					: []
+			};
+		}
+		case 'bulk_cartridge_status': {
+			const barcodes: string[] = Array.isArray(input.barcodes)
+				? input.barcodes.map((b: any) => String(b).trim()).filter(Boolean)
+				: [];
+			if (barcodes.length === 0) return { error: 'barcodes array required (≥1)', source: 'CartridgeRecord' };
+			if (barcodes.length > 100) return { error: 'Max 100 barcodes per call', source: 'CartridgeRecord' };
+
+			const carts = await CartridgeRecord.find({ _id: { $in: barcodes } })
+				.select('_id status currentPhase finalizedAt result waxQc.status reagentInspection.status testResult.status createdAt')
+				.lean() as any[];
+			const found = new Map((carts as any[]).map(c => [c._id, c]));
+
+			let legacyCount = 0;
+			const items = barcodes.map(b => {
+				const c = found.get(b);
+				if (!c) return { barcode: b, found: false };
+				const status = c.status ?? c.currentPhase ?? null;
+				if (!c.status && c.currentPhase) legacyCount++;
+				return {
+					barcode: b,
+					found: true,
+					status,
+					finalizedAt: c.finalizedAt ?? null,
+					result: c.result ?? null,
+					waxQcStatus: c.waxQc?.status ?? null,
+					reagentInspectionStatus: c.reagentInspection?.status ?? null,
+					testResultStatus: c.testResult?.status ?? null,
+					createdAt: c.createdAt
+				};
+			});
+			const statusCounts: Record<string, number> = {};
+			for (const it of items) {
+				if (it.found && it.status) statusCounts[it.status] = (statusCounts[it.status] ?? 0) + 1;
+			}
+
+			const notes: string[] = [];
+			const notFound = barcodes.length - carts.length;
+			if (notFound > 0) notes.push(`${notFound} of ${barcodes.length} barcodes had no CartridgeRecord (typo, not yet inducted, or research-only barcode never assigned to a cart).`);
+			if (legacyCount > 0) notes.push(`${legacyCount} cartridge(s) carry legacy 'currentPhase' — migration to 'status' still incomplete in 12 BIMS files. Treated as status.`);
+
+			return {
+				totalRequested: barcodes.length,
+				totalFound: carts.length,
+				notFound,
+				statusCounts,
+				cartridges: items,
+				source: 'CartridgeRecord projection by _id $in barcodes (defensive status||currentPhase)',
+				sourceUrl: '/cartridge-admin',
+				dataIntegrityNotes: notes
+			};
+		}
+		case 'find_runs_by_operator': {
+			const operator = String(input.operator ?? '').trim();
+			if (!operator) return { error: 'operator required', source: 'UnifiedRuns' };
+			const sinceDays = Math.min(Math.max(Number(input.sinceDays ?? 7), 1), 90);
+			const processType = input.processType ? String(input.processType).trim() : null;
+			const since = new Date(Date.now() - sinceDays * 86400e3);
+
+			const runs = await loadUnifiedRuns({
+				from: since, to: new Date(),
+				processTypes: (processType ? [processType] : null) as any,
+				operatorIds: null, robotIds: null, equipmentIds: null,
+				assayIds: null, inputLotBarcodes: null, shifts: null
+			});
+			const lower = operator.toLowerCase();
+			const matching = runs.filter(r => r.operator && r.operator.toLowerCase().includes(lower));
+
+			const byProcess: Record<string, number> = {};
+			for (const r of matching) byProcess[r.processType] = (byProcess[r.processType] ?? 0) + 1;
+
+			return {
+				operator,
+				windowDays: sinceDays,
+				processType,
+				totalReturned: matching.length,
+				byProcess,
+				runs: matching.slice(0, 50).map(r => ({
+					runId: r.runId,
+					processType: r.processType,
+					status: r.status,
+					operator: r.operator,
+					robot: r.robotName,
+					startTime: r.startTime,
+					endTime: r.endTime,
+					cycleTimeMin: r.cycleTimeMin,
+					actualCount: r.actualCount,
+					acceptedCount: r.acceptedCount,
+					rejectedCount: r.rejectedCount
+				})),
+				truncated: matching.length > 50,
+				source: 'loadUnifiedRuns() + case-insensitive substring match on run.operator',
+				dataIntegrityNotes: matching.length === 0
+					? [`No runs matched operator "${operator}" in the last ${sinceDays} days. Try a different spelling, drop the processType filter, or widen sinceDays.`]
+					: []
+			};
+		}
 		case 'trace_reagent_chain': {
 			const barcode = String(input.cartridgeBarcode ?? '').trim();
 			if (!barcode) return { error: 'cartridgeBarcode required', source: 'CartridgeRecord + ProtocolExecution + ReagentInventory' };
@@ -4856,25 +5480,47 @@ export interface AskBimsOpts {
 export async function askBims(history: AskBimsMessage[], opts: AskBimsOpts = {}): Promise<AskBimsResult> {
 	const t0 = Date.now();
 	const result = await runAgentLoop(history, opts);
+	const durationMs = Date.now() - t0;
 
 	// Log cost telemetry — fire-and-forget, never blocks response.
 	if (opts.userId) {
+		const model = result.model ?? (opts.model ?? DEFAULT_MODEL);
+		const costUsd = result.usage?.estCostUsd ?? 0;
 		void logCostTelemetry({
 			userId: opts.userId,
 			username: opts.username,
-			model: result.model ?? (opts.model ?? DEFAULT_MODEL),
+			model,
 			usage: {
 				inputTokens: result.usage?.inputTokens ?? 0,
 				outputTokens: result.usage?.outputTokens ?? 0,
 				cacheReadTokens: result.usage?.cacheReadTokens ?? 0,
 				cacheWriteTokens: result.usage?.cacheWriteTokens ?? 0
 			},
-			costUsd: result.usage?.estCostUsd ?? 0,
+			costUsd,
 			toolCallCount: result.toolCalls.length,
 			uniqueToolCount: new Set(result.toolCalls.map(tc => tc.name)).size,
-			durationMs: Date.now() - t0,
+			durationMs,
 			errorClass: result.error ? 'agent_error' : undefined
 		});
+
+		// Conversation telemetry — captures the actual question + answer + tool
+		// trail. Joined to the cost log by responseId. redactPii is no-op pending
+		// policy; raw text is stored so future ETL is clean.
+		const lastUserMsg = [...history].reverse().find(m => m.role === 'user');
+		if (lastUserMsg) {
+			void logConversationTelemetry({
+				responseId: result.responseId,
+				userId: opts.userId,
+				username: opts.username,
+				model,
+				question: lastUserMsg.content,
+				answer: result.answer ?? '',
+				toolCalls: result.toolCalls,
+				costUsd,
+				durationMs,
+				errorClass: result.error ? 'agent_error' : undefined
+			});
+		}
 	}
 
 	return result;

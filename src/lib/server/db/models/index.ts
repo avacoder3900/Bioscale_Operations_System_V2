@@ -120,5 +120,10 @@ export { BimsAnomaly } from './bims-anomaly.js';
 // Ask BIMS — per-question cost telemetry (Phase 6.5; powers /admin/ask-bims/cost)
 export { AskBimsCostLog } from './ask-bims-cost-log.js';
 
+// Ask BIMS — full conversation telemetry (Final push; question/answer/tool-calls).
+// PII redaction (redactPii in ask-bims.ts) stays no-op pending policy; this
+// collection captures raw content so future ETL is clean.
+export { AskBimsConversationLog } from './ask-bims-conversation-log.js';
+
 // Ask BIMS — thumbs feedback (server side; widget UI is a follow-up)
 export { AskBimsFeedback } from './ask-bims-feedback.js';
