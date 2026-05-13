@@ -4,6 +4,7 @@
 	type ModelId = 'claude-haiku-4-5' | 'claude-sonnet-4-6' | 'claude-opus-4-7';
 	type Confidence = 'high' | 'partial' | 'degraded';
 	type FeedbackState = 'idle' | 'comment-open' | 'sending' | 'sent';
+	type FlagState = 'idle' | 'open' | 'sending' | 'sent';
 
 	interface Usage {
 		inputTokens: number;
@@ -25,6 +26,8 @@
 		feedbackState?: FeedbackState;
 		feedbackRating?: 'up' | 'down';
 		feedbackComment?: string;
+		flagState?: FlagState;
+		flagReason?: string;
 	}
 
 	const HIDDEN_PREFIXES = ['/login', '/logout', '/invite', '/cv'];
@@ -314,6 +317,48 @@
 		messages[idx] = { ...msg, feedbackState: 'comment-open', feedbackRating: 'down', feedbackComment: '' };
 	}
 
+	// --- Flag for review (separate from thumbs) ---
+	// Server-side ready since 2026-05-13. Each flagged row lives in the
+	// /admin/ask-bims/review queue until a Claude session sweeps it.
+	function openFlagBox(idx: number) {
+		const msg = messages[idx];
+		if (!msg) return;
+		messages[idx] = { ...msg, flagState: 'open', flagReason: '' };
+	}
+
+	async function sendFlag(idx: number, reason?: string) {
+		const msg = messages[idx];
+		if (!msg || !msg.responseId) return;
+		const question = previousUserQuestion(idx);
+		if (!question) return;
+
+		messages[idx] = { ...msg, flagState: 'sending', flagReason: reason };
+
+		try {
+			const res = await fetch('/api/agent/ask/feedback', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					responseId: msg.responseId,
+					flagged: true,
+					flagReason: reason?.trim() || undefined,
+					question,
+					answer: msg.content,
+					toolsUsed: msg.toolCalls?.map(tc => tc.name) ?? [],
+					model: msg.model,
+					confidence: msg.confidence
+				})
+			});
+			if (!res.ok) {
+				messages[idx] = { ...msg, flagState: 'idle' };
+				return;
+			}
+			messages[idx] = { ...msg, flagState: 'sent', flagReason: reason };
+		} catch {
+			messages[idx] = { ...msg, flagState: 'idle' };
+		}
+	}
+
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape' && isOpen) {
 			isOpen = false;
@@ -518,8 +563,41 @@
 												>
 													👎
 												</button>
+												<button
+													type="button"
+													onclick={() => openFlagBox(i)}
+													class="ml-auto rounded px-1.5 py-0.5 hover:bg-amber-500/20"
+													title="Flag for review — Claude will look at this later"
+													aria-label="Flag for review"
+												>
+													🚩
+												</button>
 											{/if}
 										</div>
+										<!-- Flag for review (independent of thumbs) -->
+										{#if msg.flagState === 'open'}
+											<div class="mt-1.5 flex items-center gap-2 text-[10px]">
+												<input
+													type="text"
+													bind:value={messages[i].flagReason}
+													placeholder="Why flag this? (optional)"
+													class="flex-1 rounded border border-amber-500/40 bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-[10px] text-[var(--color-tron-text)] focus:border-amber-500/80 focus:outline-none"
+													onkeydown={(e) => { if (e.key === 'Enter') sendFlag(i, messages[i].flagReason); }}
+												/>
+												<button
+													type="button"
+													onclick={() => sendFlag(i, messages[i].flagReason)}
+													class="rounded border border-amber-500/50 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-amber-300"
+													title="Flag for review"
+												>
+													Flag
+												</button>
+											</div>
+										{:else if msg.flagState === 'sending'}
+											<div class="mt-1.5 text-[10px] text-[var(--color-tron-text-secondary)]">Flagging…</div>
+										{:else if msg.flagState === 'sent'}
+											<div class="mt-1.5 text-[10px] text-amber-300">🚩 Flagged — Claude will look at this in the next session.</div>
+										{/if}
 									{/if}
 								{/if}
 							</div>
