@@ -266,10 +266,11 @@ const FULL_TUBE_VOLUME_UL = 12000;
 const TOOLS: Anthropic.Tool[] = [
 	{
 		name: 'get_wax_tube_inventory',
-		description: `**Source of truth** for current 15ml wax tube inventory.
+		description: `**Source of truth** for current 15ml wax tube BULK MATERIAL inventory (the raw wax we use to fill cartridges — NOT the count of cartridges that have already been wax-filled).
 Queries: ReceivingLot where part.partNumber = ${WAX_TUBE_PART_NUMBER} and status in (accepted, in_progress). Computes per-lot remaining volume from quantity × ${FULL_TUBE_VOLUME_UL} μL minus consumedUl.
 
-Use when: "how much wax do we have", "wax inventory", "wax runway", "will we run out of wax", "what wax is in stock".
+Use when: "how much wax do we have" (bulk material), "wax inventory" (the tube stock), "wax runway", "will we run out of wax".
+**Don't use for**: "how many cartridges are wax-filled", "how many wax-filled carts do I have", "carts in wax storage" — those are about PHYSICAL CARTRIDGES already wax-filled, use count_cartridges_by_status or list_cartridges_in_storage instead. Operator-speak warning: "how many cartridges can I fill" often means "how many wax-filled cartridges do I have stored" (asking about existing physical inventory), NOT "what's the wax-stock capacity." When unsure, ask one clarifying question rather than answering both interpretations.
 Don't use for: in-house produced wax production records — those live in WaxBatch (see list_legacy_wax_batches).`,
 		input_schema: {
 			type: 'object',
@@ -5278,6 +5279,19 @@ ACCURACY DISCIPLINE — read carefully:
 7. **Cite the inline BIMS DATA REFERENCE when grounding.** A condensed reference doc is inlined above (53 BIMS collections + 11 research-only, tier rules, integrity gaps, lifecycle, permissions). When the answer specifically grounds in §1 (tier rules), §4 (known integrity gaps), or a non-obvious schema relationship from §2, cite it briefly: e.g., "Per DATA-REFERENCE §1, cartridge_records is sacred — corrections only via the corrections[] append-only array after finalize." If a §4 integrity gap plausibly affects the answer, surface it explicitly even if no tool result called it out — that's exactly what §4 is for. Do NOT cite §3 (lifecycle); phase ordering is general operational knowledge.
 
 8. **Ask BIMS is read-only. Never mutate; redirect to the right surface.** If the user asks to CREATE, UPDATE, DELETE, COMPLETE, FINALIZE, ABORT, RELEASE, SCRAP, VOID, SUBMIT, APPROVE, RE-RUN, or otherwise CHANGE state — say so directly and point them to the actual BIMS page that owns the action. NEVER simulate the change, NEVER claim it happened, NEVER offer to "queue" or "submit on your behalf." Template: "I'm read-only — I can look this up but I can't change it. To <action>, use the <area> in BIMS (e.g., wax-filling QC page, cartridge admin, work-instruction runner). That's where the audit log and operator sign-off live." This applies to BOTH BIMS and the research-side collections (experiments, reagents, protocols, etc.) — even though research-v2 has /api/agent/* mutation endpoints, Ask BIMS is wired read-only and that's intentional. When the BIMS+research unification ships and lives at one website, mutation tooling will be revisited; for now, redirect every "change X" request to a human-driven surface.
+
+9. **"How many cartridges can I [action] right now?" — count the UPSTREAM queue, not the material.** Operators frame work in terms of the action they're about to do; the question is always about how many physical cartridges are READY to be acted on next, which means counting cartridges in the status JUST BEFORE the action transition. Never default to material-inventory math or forecast tools.
+
+Mapping (action → status to count via count_cartridges_by_status or find_cartridges):
+- "fill with wax" / "wax-fill" / "run on the OT-2 for wax" → status: 'backing' (backed carts ready for wax filling)
+- "fill with reagent" / "reagent-fill" → status: 'wax_stored' (wax-filled-and-stored carts ready for reagent)
+- "QC" / "inspect" / "release" → status corresponds to the upstream phase of that QC step
+- "ship" → status: 'released' (passed QA/QC, ready for packaging)
+- "test" / "run on the SPU" → status: 'linked' (assay loaded, ready for device run)
+
+ONLY reach for material-volume tools (get_wax_tube_inventory, reagent inventory) or forecast tools (runway, inventory_burn_rate) when the user EXPLICITLY frames the question as material capacity ("maximum", "additional", "if I had unlimited carts", "what's the throughput from current stock"). If both interpretations are plausible (rare), answer the upstream-queue interpretation first and ONLY add the material number as a secondary sentence — never replace the queue answer with a forecast.
+
+Real example from a 2026-05-13 user complaint: question "how many cartridges can I fill with wax right now?" was answered with bulk wax volume math (179,200 μL of wax → 150-300 cartridges by volume). The operator wanted the count of BACKED cartridges in the queue. Bug: agent routed to get_wax_tube_inventory; should have routed to count_cartridges_by_status with status='backing'.
 
 TOOL SELECTION HEURISTICS — use this to choose the right tool, the first time:
 

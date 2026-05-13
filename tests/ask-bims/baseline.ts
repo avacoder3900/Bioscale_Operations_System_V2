@@ -655,6 +655,44 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		forbiddenTools: ['list_protocols', 'find_protocol', 'list_protocol_executions'],
 		expectedAnswerPhrases: [/read.only|can'?t (create|change|add)|cannot (create|change|add)/i, /protocol|page|ui|operator|manually/i],
 		notes: 'Tests rule 8 against the cross-app research-v2 surface. Even though research-v2 has /api/agent/protocols/create, Ask BIMS is intentionally NOT wired to call it — agent should redirect to the protocol management page rather than simulate or claim creation.'
+	},
+
+	// === "How many can I X" upstream-queue routing (system prompt rule 9, added after 2026-05-13 user complaint) ===
+	{
+		id: 'how-many-can-i-fill-with-wax-upstream',
+		category: 'cartridges',
+		text: 'how many cartridges can i fill with wax right now?',
+		requiredTools: ['count_cartridges_by_status'],
+		forbiddenTools: ['get_wax_tube_inventory', 'runway', 'inventory_burn_rate'],
+		expectedAnswerPhrases: [/backing|backed|ready (for|to)? ?(wax|fill)|status.*backing|backed cart/i],
+		notes: 'Rule 9 — operator question "how many can I fill with wax" maps to "how many BACKED cartridges are queued for wax filling" (status=backing, the upstream of the wax-fill action). NOT bulk wax volume math (the 2026-05-13 bug) and NOT count of already-wax-filled (one phase further along).'
+	},
+	{
+		id: 'how-many-can-i-reagent-fill-upstream',
+		category: 'cartridges',
+		text: 'how many cartridges are ready for reagent filling?',
+		requiredTools: ['count_cartridges_by_status'],
+		forbiddenTools: ['list_reagent_inventory', 'count_inventory_by_variant'],
+		expectedAnswerPhrases: [/wax.?stored|wax_stored|ready|reagent fill/i],
+		notes: 'Rule 9 — different action, same pattern. "Ready for reagent filling" = wax-stored cartridges (the upstream queue). Should NOT route to reagent inventory tools.'
+	},
+	{
+		id: 'how-many-can-i-ship-upstream',
+		category: 'cartridges',
+		text: 'how many cartridges can I ship right now?',
+		requiredTools: ['count_cartridges_by_status'],
+		forbiddenTools: ['list_open_shipping_lots', 'find_shipping_package'],
+		expectedAnswerPhrases: [/released|ready (to|for) ship|shippable/i],
+		notes: 'Rule 9 — "can I ship" = released cartridges (passed QA/QC, in shipping queue). Should NOT route to shipping lot tools (those are about packages already in flight).'
+	},
+	{
+		id: 'how-many-explicit-capacity-forecast',
+		category: 'cartridges',
+		text: 'Assuming we had unlimited backed cartridges, what is the maximum number of wax fills my current wax stock could support?',
+		requiredTools: ['get_wax_tube_inventory'],
+		forbiddenTools: ['count_cartridges_by_status'],
+		expectedAnswerPhrases: [/wax|stock|μL|microl|tube|estimate|capacity|additional|maximum/i],
+		notes: 'Counter-fixture for rule 9 — EXPLICIT capacity framing ("unlimited backed cartridges", "maximum", "current stock could support") routes correctly to get_wax_tube_inventory. Pins that the rule does not over-collapse into "always count physical queue regardless of phrasing."'
 	}
 ];
 
