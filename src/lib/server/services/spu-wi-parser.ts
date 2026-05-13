@@ -3,17 +3,22 @@ import { nanoid } from 'nanoid';
 import { uploadToR2, uploadViaWorker } from './r2';
 import type { FieldDefinition, ParsedPart } from './spu-work-instruction';
 
-export const PARSER_VERSION = '3.1.3';
+export const PARSER_VERSION = '3.1.4';
 
 // Matches "Friendly Name (PT-SPU-NNN) xN" (or "x N") with qty optional.
-// Our SPU WIs author qty as "x1" / "x2" — multiplier glued to a small integer
-// — so whitespace between the multiplier and the digits is OPTIONAL. We bound
-// the qty to 1–2 digits + a word boundary so a runaway description like
-// "(PT-SPU-024)x120 tooth pulley" isn't mis-read as qty=120 (the greedy
-// `\d{1,2}` matches "12", then `\b` fails because the next char is the digit
-// "0", so the entire qty group fails and the part is captured with no qty,
-// triggering a "no qty" warning rather than a silent corruption).
-const PART_RE = /([^()<>\n]{0,80}?)\(\s*(PT-SPU-\d{3,})\s*\)\s*(?:[x×*]\s*(\d{1,2})\b)?/gi;
+// Our SPU WIs author qty as "x1" / "x2" / "x3" — multiplier glued to a small
+// integer — and also glue the next part's name on with no whitespace after
+// stripTags joins paragraph boundaries (e.g. "x3Cylindrical Magnets"). So:
+//   • whitespace between the multiplier and digits is OPTIONAL
+//   • the qty is bounded to 1–2 digits, AND the negative lookahead `(?!\d)`
+//     refuses to capture when the next character is another digit
+// That negative lookahead is what prevents "(PT-SPU-024)x120 tooth pulley"
+// from being mis-read as qty=120: greedy `\d{1,2}` tries "12", `(?!\d)` fails
+// because the next char is "0"; backtracks to "1", fails again on "2"; whole
+// qty group is dropped and we emit a "no qty" warning instead of silent
+// corruption. Glued-letter cases like "x3Cylindrical" still match correctly
+// because "C" is not a digit.
+const PART_RE = /([^()<>\n]{0,80}?)\(\s*(PT-SPU-\d{3,})\s*\)\s*(?:[x×*]\s*(\d{1,2})(?!\d))?/gi;
 // Informational-only part families — surfaced as warnings, not turned into widgets.
 const ALT_PART_RE = /\b(SBA-SPU|IFU-SPU)-(\d{3,})\b/g;
 
@@ -338,8 +343,14 @@ function extractStepsFromTable(
 	return { steps, preTableHtml, postTableHtml };
 }
 
+// Replace block-level tag boundaries with a space FIRST so that
+// `<p>A</p><p>B</p>` becomes `A B`, not `AB`. Otherwise paragraph breaks in the
+// source .docx glue text together ("picture.Note:", "x3Cylindrical Magnets")
+// and downstream regex parsing fails on the merged tokens.
 function stripTags(html: string): string {
-	return html.replace(/<[^>]+>/g, '');
+	return html
+		.replace(/<\/?(?:p|div|li|tr|td|th|h[1-6]|br|hr|blockquote|table|thead|tbody|tfoot|ul|ol|pre)\b[^>]*>/gi, ' ')
+		.replace(/<[^>]+>/g, '');
 }
 
 // Render the procedure as 2-column rows: left = the original step content
