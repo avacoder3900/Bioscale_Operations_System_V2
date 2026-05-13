@@ -299,7 +299,8 @@ Don't use for: general "how much wax do we have" — use get_wax_tube_inventory 
 		description: `Temperature alerts (high_temp, low_temp, lost_connection) raised by Mocreo sensors and other temperature-monitored equipment.
 Source: TemperatureAlert model.
 
-Use when: "temperature alerts", "what's out of spec", "what alerted today", "unacknowledged alerts".`,
+Use when: "temperature alerts", "what's out of spec", "what alerted today", "unacknowledged alerts".
+Don't use for: spot/current temperature reading (use get_current_temperatures); historical temperature trend or time-series (use get_temperature_history or temperature_excursion_summary); equipment reliability rollup (use equipment_uptime).`,
 		input_schema: {
 			type: 'object',
 			properties: {
@@ -316,6 +317,7 @@ Use when: "temperature alerts", "what's out of spec", "what alerted today", "una
 Source: Equipment model — currentTemperatureC field, populated from Mocreo sync.
 
 Use when: "what is the temperature of X right now", "current temps", "is fridge X at the right temp".
+Don't use for: temperature ALERTS / events (use get_temperature_alerts); time-series history (use get_temperature_history); out-of-spec rollup (use temperature_excursion_summary); multi-equipment summary (use bulk_temperature_summary).
 Caveat: lastTemperatureReadAt may be stale if a sensor lost connection — surface that in the answer.`,
 		input_schema: {
 			type: 'object',
@@ -330,6 +332,7 @@ Caveat: lastTemperatureReadAt may be stale if a sensor lost connection — surfa
 Source: WaxFillingRun and ReagentBatchRecord models.
 
 Use when: "recent runs", "what ran today", "show aborted runs", "what's running right now".
+Don't use for: yield on a specific run (use get_run_yield); multi-run yield trend (use bulk_run_yields or yield_trends_by_robot); active runs in non-terminal status specifically (use list_active_runs — it filters terminal statuses); operator-filtered history (use find_runs_by_operator); single run's blocker diagnosis (use whats_blocking_run).
 
 IMPORTANT: Default sinceHours is 168 (one week) — large enough that "most recent X" questions resolve in one call. If this returns no matching runs, ACCEPT the result and tell the user. Do NOT call this tool again with a wider window — that's an anti-redundancy violation.`,
 		input_schema: {
@@ -347,7 +350,8 @@ IMPORTANT: Default sinceHours is 168 (one week) — large enough that "most rece
 		description: `Parts with inventory below their reorder threshold.
 Source: PartDefinition.inventoryCount vs PartDefinition.minimumOrderQty.
 
-Use when: "what do I need to reorder", "low inventory", "running low".
+Use when: "what do I need to reorder", "low inventory", "running low" (about PT-CT-XXX parts in the BIMS part catalog).
+Don't use for: a specific part by name/number (use find_part); chemical inventory (C-XXX / D-XXX codes — use lookup_chemical); research-side reagents (use list_reagent_inventory); single-lot consumption / runway forecast (use runway or inventory_burn_rate); count of cartridges ready for a phase transition (use count_cartridges_by_status — see rule 9).
 Caveat: PartDefinition.inventoryCount is a denormalized counter; the operational truth for any specific part is the sum of accepted ReceivingLots minus consumption.`,
 		input_schema: {
 			type: 'object',
@@ -391,7 +395,8 @@ Don't use for: part catalog questions (use find_part for PT-CT-XXX entries).`,
 		description: `Find cartridges by ID, status, or runId.
 Source: CartridgeRecord model.
 
-Use when: "find cart X", "show cartridges in status Y", "cartridges from run Z".`,
+Use when: "find cart X" (by barcode), "show cartridges in status Y", "cartridges from run Z".
+Don't use for: counts/aggregates (use count_cartridges_by_status — it returns numbers, not lists); cartridges in storage specifically (use list_cartridges_in_storage); mfg lineage trace (use trace_cartridge or backward_genealogy); research-side fields like rawData/result (use find_research_cartridge); multi-barcode status snapshot (use bulk_cartridge_status); "how many can I [action]" upstream-queue questions (use count_cartridges_by_status per rule 9).`,
 		input_schema: {
 			type: 'object',
 			properties: {
@@ -407,7 +412,8 @@ Use when: "find cart X", "show cartridges in status Y", "cartridges from run Z".
 		description: `Equipment registry (fridges, ovens, decks, robots).
 Source: Equipment model.
 
-Use when: "list equipment", "what fridges do we have", "is robot X online".`,
+Use when: "list equipment", "what fridges do we have", "is robot X online" — the live equipment REGISTRY.
+Don't use for: current temperature reading (use get_current_temperatures); spec sheet / datasheet URL / dimensions (use lookup_equipment_datasheet); physical floor location (use find_location); reliability/uptime rollup (use equipment_uptime); calibration history (use list_calibrations_due); open service tickets (use list_open_service_tickets).`,
 		input_schema: {
 			type: 'object',
 			properties: {
@@ -420,7 +426,8 @@ Use when: "list equipment", "what fridges do we have", "is robot X online".`,
 		description: `Yield breakdown (accepted/scrapped/pending QC) for a wax filling run.
 Source: WaxFillingRun + CartridgeRecord.waxQc.status for each cartridgeId in the run.
 
-Use when: "yield on run X", "scrap rate for run Y", "QC results for run Z".`,
+Use when: "yield on run X" (single run), "scrap rate for run Y", "QC results for run Z" — when the user names ONE specific run.
+Don't use for: yield across many runs / trend (use bulk_run_yields); yield per robot over time (use yield_trends_by_robot); scrap root-cause Pareto (use scrap_pareto); throughput in units/day (use production_throughput); cycle time analysis (use production_cycle_time).`,
 		input_schema: {
 			type: 'object',
 			properties: {
@@ -434,7 +441,8 @@ Use when: "yield on run X", "scrap rate for run Y", "QC results for run Z".`,
 		description: `Full lineage trace for a single cartridge — backing lot, wax run, wax source lot, QC outcome, storage location, reagent run if any.
 Source: CartridgeRecord + joined data from WaxFillingRun, WaxBatch (legacy), ReceivingLot.
 
-Use when: "trace cart X", "where did this cart come from", "what lots went into cart Y".
+Use when: "trace cart X" (quick mfg lineage — backing lot, wax run, wax source lot, QC, storage, reagent run if any).
+Don't use for: deep traceability with shipment + customer (use backward_genealogy); reagent chain to stock chemicals (use trace_reagent_chain — research-side); given a LOT find downstream carts (use forward_genealogy); single cart's research-side test result / analysis / rawData (use find_research_cartridge); cartridge status lookup only (use find_cartridges or bulk_cartridge_status).
 Caveat: waxFilling.waxSourceLot is optional in WaxFillingRun and may be null on older runs — flag this if encountered.`,
 		input_schema: {
 			type: 'object',
@@ -449,7 +457,8 @@ Caveat: waxFilling.waxSourceLot is optional in WaxFillingRun and may be null on 
 		description: `Count cartridges grouped by status, optionally filtered to a recent time window.
 Source: CartridgeRecord aggregation.
 
-Use when: "how many cartridges did we make today", "current state of the floor", "cart counts".`,
+Use when: "how many cartridges did we make today", "current state of the floor", "cart counts", and per rule 9 **"how many cartridges can I [action] right now"** (count the upstream-queue status, e.g. status='backing' for "fill with wax", status='wax_stored' for "reagent-fill", status='released' for "ship").
+Don't use for: a list of specific cartridges (use find_cartridges); cartridges in storage specifically (use list_cartridges_in_storage — pre-filtered to 'wax_stored'); multi-barcode lookup (use bulk_cartridge_status); WAX VOLUME / material inventory (use get_wax_tube_inventory — different concept, see rule 9).`,
 		input_schema: {
 			type: 'object',
 			properties: {
@@ -475,7 +484,8 @@ Don't use for: yield breakdown (use get_run_yield) or listing recent runs (use l
 		description: `Runs currently in non-terminal status across wax filling, reagent filling, and WI-01 backing.
 Source: WaxFillingRun + ReagentBatchRecord + LotRecord (statuses NOT in [completed, aborted, voided]).
 
-Use when: "what's running now", "active runs", "what's on the floor right now".`,
+Use when: "what's running now", "active runs", "what's on the floor right now" — runs in non-terminal status (excludes completed/aborted/voided/archived).
+Don't use for: historical runs / "what ran today" (use list_recent_runs — wider window including terminal); single-run blocker diagnosis (use whats_blocking_run); yield on those runs (use get_run_yield single or bulk_run_yields multi); operator-filtered (use find_runs_by_operator).`,
 		input_schema: { type: 'object', properties: {} }
 	},
 	{
@@ -483,7 +493,8 @@ Use when: "what's running now", "active runs", "what's on the floor right now".`
 		description: `Cartridges currently in wax_stored status, optionally filtered to a fridge.
 Source: CartridgeRecord with status=wax_stored.
 
-Use when: "what's in storage", "carts in the freezer", "stored carts in fridge X".`,
+Use when: "what's in storage", "carts in the freezer", "stored carts in fridge X" — pre-filtered to CartridgeRecord.status='wax_stored'.
+Don't use for: generic cartridge filter (use find_cartridges with status filter — supports any status); count-only (use count_cartridges_by_status); reagent/chemical inventory in a fridge (use list_reagent_inventory or lookup_chemical respectively); current fridge TEMP (use get_current_temperatures); equipment registry (use list_equipment).`,
 		input_schema: {
 			type: 'object',
 			properties: {
@@ -497,7 +508,8 @@ Use when: "what's in storage", "carts in the freezer", "stored carts in fridge X
 		description: `Equipment with nextCalibrationDue within the window (default 30 days ahead).
 Source: CalibrationRecord (most recent per equipment).
 
-Use when: "what's due for calibration", "upcoming calibrations", "what needs recalibrating".`,
+Use when: "what's due for calibration", "upcoming calibrations", "what needs recalibrating" — equipment with nextCalibrationDue within the window.
+Don't use for: calibration history (the most-recent record per equipment is implicit, but use find_validation_session for full session detail); equipment registry / online status (use list_equipment); SPU validation specifically (use list_validation_sessions); generic service requests (use list_open_service_tickets).`,
 		input_schema: {
 			type: 'object',
 			properties: {
@@ -511,7 +523,8 @@ Use when: "what's due for calibration", "upcoming calibrations", "what needs rec
 		description: `Time-series temperature readings for one sensor, with min/max/avg summary and up to 50 sample points.
 Source: TemperatureReading (joined to Equipment by name).
 
-Use when: "temperature history of X", "show last 24h temps for fridge Y", "how stable was the temp".`,
+Use when: "temperature history of X", "show last 24h temps for fridge Y", "how stable was the temp" — time-series for ONE equipment.
+Don't use for: current spot reading (use get_current_temperatures); alert events (use get_temperature_alerts); out-of-spec rollup summary (use temperature_excursion_summary); MULTI-equipment comparison (use bulk_temperature_summary); reliability/uptime percentage (use equipment_uptime).`,
 		input_schema: {
 			type: 'object',
 			properties: {
@@ -526,7 +539,8 @@ Use when: "temperature history of X", "show last 24h temps for fridge Y", "how s
 		description: `Given a ReceivingLot, list every cartridge that consumed material from it (backing, wax, reagent paths).
 Source: CartridgeRecord scanned across backing.lotId, waxFilling.runId→WaxFillingRun.waxSourceLot, reagentFilling.runId→ReagentBatchRecord.tubeRecords.
 
-Use when: "if this lot was bad, what's downstream", "what carts used lot X", recall scenarios.
+Use when: "if this lot was bad, what's downstream", "what carts used lot X", recall scenarios — given a ReceivingLot, list every cart that consumed it.
+Don't use for: backward direction (given a CART, find lots — use trace_cartridge or backward_genealogy); reagent chain to stock chemicals (use trace_reagent_chain); lot lookup itself (use find_receiving_lot); cross-referencing assay → shipments (use assay_lot_cross_reference).
 Cap: 50 cartridges per consumption path; truncated:true if exceeded.`,
 		input_schema: {
 			type: 'object',
@@ -539,7 +553,8 @@ Cap: 50 cartridges per consumption path; truncated:true if exceeded.`,
 		description: `Full upstream lineage of one cartridge: backing lot, backing oven, wax run, wax source lot, wax QC, storage location, reagent run, reagent assay, reagent lots, shipment, customer.
 Source: CartridgeRecord with multi-hop joins to BackingLot, WaxFillingRun, ReceivingLot, ReagentBatchRecord, ShippingLot.
 
-Use when: deep traceability, "where did everything in this cart come from", regulatory audits.
+Use when: deep traceability, "where did everything in this cart come from", regulatory audits — full upstream including shipment + customer.
+Don't use for: lightweight trace (use trace_cartridge — faster, no shipment/customer joins); reagent chain to stock chemicals (use trace_reagent_chain); downstream impact from a lot (use forward_genealogy); single cart's research-side data only (use find_research_cartridge).
 For a quick trace (without shipment/customer details), use trace_cartridge instead.`,
 		input_schema: {
 			type: 'object',
@@ -552,7 +567,8 @@ For a quick trace (without shipment/customer details), use trace_cartridge inste
 		description: `Surface the latest data-integrity findings. Reads from the bims_anomalies collection that the daily cron (07:00 UTC) writes — fast and consistent across the day. If the collection is empty (first run or cron hasn't ticked), falls back to a live recompute.
 Covers seven checks: runs with null waxSourceLot, over-consumed receiving lots (consumedUl > capacity), stale equipment temperature reads (>4h), cartridges stuck in non-terminal status (>7d), orphan reagent-batch tube references, drift between PartDefinition.inventoryCount and accepted ReceivingLot totals, and legacy v1 cartridge status names that should have been migrated.
 
-Use when: data quality audit, "are there any data issues", before answering high-stakes questions to verify data is sane. Call this preemptively if you suspect data issues affect your answer.`,
+Use when: data quality audit, "are there any data issues", before answering high-stakes questions to verify data is sane. Call this preemptively if you suspect data issues affect your answer.
+Don't use for: persistent anomaly history (use list_recent_anomalies — that surface is fed by the daily cron and tracks lifecycle); a specific workflow deviation (use list_workflow_violations); a single cart's integrity (use trace_cartridge or find_research_cartridge — those emit their own dataIntegrityNotes); FMEA risk ranking (use fmea_risk_query).`,
 		input_schema: {
 			type: 'object',
 			properties: {}
@@ -563,7 +579,8 @@ Use when: data quality audit, "are there any data issues", before answering high
 		description: `Daily cartridge throughput — counts cartridges that entered each phase (backing, wax filling, QC accepted, reagent filled, shipped) per day over a window.
 Source: CartridgeRecord aggregation by phase-transition timestamps.
 
-Use when: "throughput trend", "how many carts per day this week", "are we keeping up".`,
+Use when: "throughput trend", "how many carts per day this week", "are we keeping up" — daily phase-entry counts (backing, wax filling, QC accepted, reagent filled, shipped).
+Don't use for: cycle-time per process (use production_cycle_time); yield % over time (use yield_trends_by_robot or bulk_run_yields); single run's count (use get_run_details); count of cartridges in a CURRENT status (use count_cartridges_by_status).`,
 		input_schema: {
 			type: 'object',
 			properties: {
@@ -576,7 +593,8 @@ Use when: "throughput trend", "how many carts per day this week", "are we keepin
 		description: `Time out-of-spec, # of alerts, and longest excursion for one piece of equipment over a window.
 Source: TemperatureReading + Equipment.temperatureMin/Max + TemperatureAlert.
 
-Use when: "how often was X out of spec", "temperature stability of Y", "excursions on Z this week".`,
+Use when: "how often was X out of spec", "temperature stability of Y", "excursions on Z this week" — minutes-out-of-spec + longest excursion for ONE equipment.
+Don't use for: current spot reading (use get_current_temperatures); alert events list (use get_temperature_alerts); full time-series sample points (use get_temperature_history); MULTI-equipment comparison (use bulk_temperature_summary); reliability percentage (use equipment_uptime).`,
 		input_schema: {
 			type: 'object',
 			properties: {
@@ -591,7 +609,8 @@ Use when: "how often was X out of spec", "temperature stability of Y", "excursio
 		description: `Consumption velocity (units/day) for one part over a window, with stdev and projected days-to-empty given current inventory.
 Source: InventoryTransaction (consumption events) + PartDefinition.inventoryCount.
 
-Use when: "how fast are we using X", "burn rate for Y", "when will we run out of Z".`,
+Use when: "how fast are we using X", "burn rate for Y", "when will we run out of Z" — units-per-day consumption + stdev + projected days-to-empty for a PT-CT-XXX part.
+Don't use for: chemical inventory (use chemical_burn_rate for C-XXX/D-XXX codes); current stock snapshot (use find_part); reorder list (use list_low_inventory_parts); finer runway with ReceivingLot cross-check (use runway).`,
 		input_schema: {
 			type: 'object',
 			properties: {
@@ -606,7 +625,8 @@ Use when: "how fast are we using X", "burn rate for Y", "when will we run out of
 		description: `Projected days-to-stockout for one part — combines current inventory (PartDefinition.inventoryCount or ReceivingLot sum) with inventory_burn_rate calculation.
 Source: PartDefinition + InventoryTransaction.
 
-Use when: "how long will X last", "runway for Y", "do we have enough Z for next month".`,
+Use when: "how long will X last", "runway for Y", "do we have enough Z for next month" — projected days-to-stockout with ReceivingLot cross-check.
+Don't use for: chemical runway (use chemical_burn_rate); raw burn rate without inventory cross-check (use inventory_burn_rate); reorder threshold list (use list_low_inventory_parts); WAX-specific runway (use get_wax_tube_inventory — it has wax-tube semantics).`,
 		input_schema: {
 			type: 'object',
 			properties: {
@@ -640,7 +660,8 @@ Don't use for: single-run yield (use get_run_yield).`,
 		description: `Diagnostic — for one wax run currently in non-terminal status, identifies what's blocking forward progress: deck locked? cooling tray locked? wax source consumed? waiting on QC?
 Source: WaxFillingRun + Equipment + ReceivingLot + CartridgeRecord.waxQc.
 
-Use when: "why isn't run X moving", "what's blocking run Y", "stuck run".`,
+Use when: "why isn't run X moving", "what's blocking run Y", "stuck run" — single non-terminal wax run, diagnoses deck/cooling-tray/wax-source/QC blockers.
+Don't use for: completed runs (use get_run_details); finding which runs are running (use list_active_runs); broad health audit (use check_data_integrity); reagent-fill blockers (this tool is wax-specific).`,
 		input_schema: {
 			type: 'object',
 			properties: { runId: { type: 'string' } },

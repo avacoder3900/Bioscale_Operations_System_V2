@@ -693,6 +693,44 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		forbiddenTools: ['count_cartridges_by_status'],
 		expectedAnswerPhrases: [/wax|stock|μL|microl|tube|estimate|capacity|additional|maximum/i],
 		notes: 'Counter-fixture for rule 9 — EXPLICIT capacity framing ("unlimited backed cartridges", "maximum", "current stock could support") routes correctly to get_wax_tube_inventory. Pins that the rule does not over-collapse into "always count physical queue regardless of phrasing."'
+	},
+
+	// === Anti-routing collision fixtures (added 2026-05-13 after the wax bug audit identified 21 routing-blind tools) ===
+	{
+		id: 'collision-where-is-chemical',
+		category: 'datasheets',
+		text: 'where is the methanol?',
+		requiredTools: ['lookup_chemical'],
+		forbiddenTools: ['find_location', 'list_equipment', 'lookup_equipment_datasheet', 'find_reagent_inventory'],
+		expectedAnswerPhrases: [/methanol|C-?013|brevitest|location|stored/i],
+		notes: 'Collision class 1 ("where is X"). Operator asking about chemical location should route to lookup_chemical, NOT find_location (floor plan for equipment) or list_equipment.'
+	},
+	{
+		id: 'collision-current-temp-not-alert',
+		category: 'temperature',
+		text: 'what temperature is fridge 3 at right now?',
+		requiredTools: ['get_current_temperatures'],
+		forbiddenTools: ['get_temperature_alerts', 'get_temperature_history', 'temperature_excursion_summary'],
+		expectedAnswerPhrases: [/fridge|temperature|°C|degree|current|right now/i],
+		notes: 'Collision class 8 ("is fridge X reliable") — spot reading routes to get_current_temperatures. Alerts/history/excursion tools are tempting but wrong for this phrasing.'
+	},
+	{
+		id: 'collision-yield-multi-run-not-single',
+		category: 'runs',
+		text: 'what is our wax-fill yield trend this week?',
+		requiredTools: ['bulk_run_yields'],
+		forbiddenTools: ['get_run_yield', 'production_throughput'],
+		expectedAnswerPhrases: [/yield|wax|run|trend|week/i],
+		notes: 'Collision class 4 ("yield on X"). Multi-run trend → bulk_run_yields (or yield_trends_by_robot). NOT get_run_yield (single-run only) and NOT production_throughput (counts not yield%).'
+	},
+	{
+		id: 'collision-trace-light-not-deep',
+		category: 'cartridges',
+		text: 'trace cartridge 5da7b3c5-4cba-4fe4-93b1-c17ad61efbbf',
+		requiredTools: ['trace_cartridge'],
+		forbiddenTools: ['backward_genealogy', 'trace_reagent_chain', 'forward_genealogy'],
+		expectedAnswerPhrases: [/cart|trace|lineage|backing|wax|not found|no cart/i],
+		notes: 'Collision class 3 ("trace cart X"). Unqualified "trace" → trace_cartridge (lightweight mfg lineage). Deep audit needs explicit framing → backward_genealogy. Reagent chain needs "reagent" keyword → trace_reagent_chain.'
 	}
 ];
 
