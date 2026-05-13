@@ -108,7 +108,30 @@ const QUESTIONS: AcceptanceQ[] = [
 	{ id: 'S12.6', section: '12 — Floor plan (Phase 3)', question: 'Where is Fridge 3?', intent: 'find_location — should return spatial description, not just a tag.' },
 	{ id: 'S12.7', section: '12 — Floor plan (Phase 3)', question: "What's in the Tissue Culture zone?", intent: 'find_location with zone name — should list equipment + chemicals in that zone.' },
 	{ id: 'S12.8', section: '12 — Floor plan (Phase 3)', question: 'Where are the OT-2 robots located?', intent: 'find_location with fuzzy equipment name — should resolve to Manufacturing zone.' },
-	{ id: 'S12.9', section: '12 — Floor plan (Phase 3)', question: 'Which side of the lab is the cartridge oven on?', intent: 'find_location — natural-language spatial question.' }
+	{ id: 'S12.9', section: '12 — Floor plan (Phase 3)', question: 'Which side of the lab is the cartridge oven on?', intent: 'find_location — natural-language spatial question.' },
+
+	// === Section 13 — Phase 6.1 operational coverage ===
+	{ id: 'S13.1', section: '13 — Phase 6.1: operational coverage', question: 'What workflow violations have we logged this week?', intent: 'list_workflow_violations — default 7-day window.' },
+	{ id: 'S13.2', section: '13 — Phase 6.1: operational coverage', question: 'Show me recent thermocouple validation sessions.', intent: 'list_validation_sessions filtered by type.' },
+	{ id: 'S13.3', section: '13 — Phase 6.1: operational coverage', question: 'What approval requests are pending review right now?', intent: 'list_open_approval_requests.' },
+	{ id: 'S13.4', section: '13 — Phase 6.1: operational coverage', question: 'What percent of the last 30 days was the cartridge oven in range?', intent: 'equipment_uptime computes in-spec % + gap detection.' },
+	{ id: 'S13.5', section: '13 — Phase 6.1: operational coverage', question: 'What equipment is currently broken or in service?', intent: 'list_open_service_tickets.' },
+	{ id: 'S13.6', section: '13 — Phase 6.1: operational coverage', question: 'Any device errors in the last hour?', intent: 'recent_device_events with eventType=error.' },
+	{ id: 'S13.7', section: '13 — Phase 6.1: operational coverage', question: 'Why did the scanner go quiet — any recent events?', intent: 'recent_scanner_events over default 60-minute window.' },
+	{ id: 'S13.8', section: '13 — Phase 6.1: operational coverage', question: 'What shipping lots are waiting to go out?', intent: 'list_open_shipping_lots.' },
+	{ id: 'S13.9', section: '13 — Phase 6.1: operational coverage', question: 'Which controlled documents changed this week?', intent: 'list_recent_document_changes.' },
+
+	// === Section 14 — Phase 6.2 chemical extensions ===
+	{ id: 'S14.1', section: '14 — Phase 6.2: chemical extensions', question: 'What hazards apply to chemical C-002?', intent: 'chemical_hazard_summary — single chemical (methotrexate, HTX).' },
+	{ id: 'S14.2', section: '14 — Phase 6.2: chemical extensions', question: 'Is methanol safe to store next to sodium hydroxide?', intent: 'chemical_hazard_summary pairwise compatibility.' },
+	{ id: 'S14.3', section: '14 — Phase 6.2: chemical extensions', question: 'How fast are we burning through IPA?', intent: 'chemical_burn_rate — should surface limitation note about missing consumption tracking.' },
+	{ id: 'S14.4', section: '14 — Phase 6.2: chemical extensions', question: 'What materials does the Active Beads v3 protocol consume?', intent: 'chemicals_in_protocol — surfaces protocol materials + limitation note re: raw-chemical link.' },
+
+	// === Section 15 — Phase 6.3 manufacturing analytics ===
+	{ id: 'S15.1', section: '15 — Phase 6.3: manufacturing analytics', question: 'Is one of our robots yielding worse than the others this month?', intent: 'yield_trends_by_robot — per-day per-robot yield over 30 days.' },
+	{ id: 'S15.2', section: '15 — Phase 6.3: manufacturing analytics', question: 'Rank the scrap reasons for the last 30 days.', intent: 'scrap_pareto — top reasons aggregated across all sources.' },
+	{ id: 'S15.3', section: '15 — Phase 6.3: manufacturing analytics', question: 'Which shipments used reagent batches for the Cortisol assay?', intent: 'assay_lot_cross_reference — assay → batches → shipments.' },
+	{ id: 'S15.4', section: '15 — Phase 6.3: manufacturing analytics', question: 'What is the p50 cycle time across our process types?', intent: 'production_cycle_time from LotRecord.cycleTime.' }
 ];
 
 const QUOTE_PREFIX = '> ';

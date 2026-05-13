@@ -1065,7 +1065,7 @@ Source: TemperatureReading joined to Equipment thresholds (temperatureMinC/MaxC)
 Use when: "what percent of last 30 days was Fridge 3 in range", "uptime for the cartridge oven", "how reliable is this equipment".
 Don't use for: current temperature (use get_current_temperatures); excursion duration totals (use temperature_excursion_summary); calibration status (use list_calibrations_due).
 
-Defaults: last 30 days. Equipment thresholds must be configured or no in-spec answer is possible — surfaces that as a limit if missing.`,
+Defaults: last 30 days. If we haven't set a target temperature range for that fridge/oven, we surface that limit cleanly and just report reading count + gap count.`,
 		input_schema: {
 			type: 'object',
 			properties: {
@@ -1087,7 +1087,7 @@ Defaults: newest first. Hard cap 50.`,
 		input_schema: {
 			type: 'object',
 			properties: {
-				equipmentType: { type: 'string', description: 'Optional — filter by SPU/equipment type if known' },
+				equipmentType: { type: 'string', description: 'Optional — filter to tickets on a specific equipment type when the operator names one' },
 				sinceDays: { type: 'number', description: 'Only tickets created within this window (default: all open regardless of age)' },
 				limit: { type: 'number', description: 'Max results (default 50, max 50)' }
 			}
@@ -1095,8 +1095,8 @@ Defaults: newest first. Hard cap 50.`,
 	},
 	{
 		name: 'recent_device_events',
-		description: `Recent device events from SPUs and Particle devices — assay loads, validations, uploads, resets, errors.
-Source: DeviceEvent model (TTL-trimmed to 30 days).
+		description: `Recent device events from SPUs and Particle devices — assay loads, validations, uploads, resets, errors. Events older than 30 days are auto-trimmed so this is short-term diagnostic data, not deep history.
+Source: DeviceEvent model (TTL = 30 days).
 
 Use when: "what did device X do recently", "show me recent device errors", "any error events in the last hour".
 Don't use for: barcode scanner activity (use recent_scanner_events); equipment temperature alerts (use get_temperature_alerts).
@@ -1146,7 +1146,7 @@ Defaults: newest first.`,
 	},
 	{
 		name: 'find_shipping_package',
-		description: `Find a shipping package by tracking number, package _id, or by a cartridge barcode that's inside it.
+		description: `Find a shipping package by tracking number, the package's own barcode, or by a cartridge barcode that's inside it.
 Source: ShippingPackage model.
 
 Use when: "where is package <tracking>", "find shipment for cart X", "what's in package Y".
@@ -1156,7 +1156,7 @@ Hard cap 10.`,
 		input_schema: {
 			type: 'object',
 			properties: {
-				query: { type: 'string', description: 'Tracking number, package _id, package barcode, or cartridge barcode' }
+				query: { type: 'string', description: 'Tracking number, package barcode, or a cartridge barcode inside the package' }
 			},
 			required: ['query']
 		}
@@ -1252,7 +1252,7 @@ Defaults: last 30 days, all robots. Hard cap 90 days history.`,
 	},
 	{
 		name: 'scrap_pareto',
-		description: `Top scrap reasons over a recent window, ranked by cartridge count. Pulls reasons from every place we record them (wax QC rejection notes, QA/QC scrap notes, top-level voidReason) and tags each row by source. Optionally slices by robot or operator instead of reason.
+		description: `Top scrap reasons over a recent window, ranked by cartridge count. Pulls reasons from every place we record them — wax-QC rejection notes, QA/QC scrap notes, and the cart-level void reason — and tags each row by source. Optionally slices by robot or operator instead of reason.
 Source: CartridgeRecord where status in [scrapped, voided] within the window.
 
 Use when: "rank scrap reasons for last 30 days", "biggest sources of scrap this month", "is one operator scrapping more than others", root-cause review prep.
