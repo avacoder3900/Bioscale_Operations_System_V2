@@ -579,9 +579,14 @@ Use when: "why isn't run X moving", "what's blocking run Y", "stuck run".`,
 		input_schema: {
 			type: 'object',
 			properties: { runId: { type: 'string' } },
-			required: ['runId'],
-			cache_control: { type: 'ephemeral' }
-		}
+			required: ['runId']
+		},
+		// Cache breakpoint at the end of the original BIMS tool core (principle #10
+		// — cache-aware partitioning). Phase B+ tools land after this in the
+		// "evolving" tier — description changes there don't invalidate this prefix.
+		// Per Anthropic SDK, cache_control belongs on the Tool object, not inside
+		// input_schema (the prior placement was silently a no-op).
+		cache_control: { type: 'ephemeral' }
 	},
 	{
 		name: 'search_documentation',
@@ -871,7 +876,7 @@ Filterable by definitionId (one protocol's runs), variantKey (one variant's runs
 				variantKey: { type: 'string', description: 'Optional — only executions targeting this variant' },
 				status: { type: 'string', description: 'Optional — in_progress | completed | aborted' },
 				sinceDays: { type: 'number', description: 'Optional — only executions started within this window' },
-				executedBy: { type: 'string', description: 'Optional — user _id (nanoid)' },
+				executedBy: { type: 'string', description: 'Optional — user _id (nanoid, exactly 21 url-safe chars) OR a name fragment (anything else; matched case-insensitive against executedByName)' },
 				limit: { type: 'number', description: 'Max results (default 30, max 50)' }
 			}
 		}
@@ -3219,7 +3224,18 @@ async function runTool(name: string, input: any, ctx: ToolContext = {}): Promise
 			if (input.definitionId) filter.definitionId = input.definitionId;
 			if (input.variantKey) filter.variantKey = input.variantKey;
 			if (input.status) filter.status = input.status;
-			if (input.executedBy) filter.executedBy = input.executedBy;
+			if (input.executedBy) {
+				// Nanoid pattern is exactly 21 url-safe chars. Anything else is
+				// treated as a name fragment regex against executedByName — friendlier
+				// for operators who say "Nick" or "Jacob" rather than the user _id.
+				const v = String(input.executedBy);
+				if (/^[A-Za-z0-9_-]{21}$/.test(v)) {
+					filter.executedBy = v;
+				} else {
+					const escaped = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+					filter.executedByName = { $regex: escaped, $options: 'i' };
+				}
+			}
 			if (input.sinceDays) {
 				const cutoff = new Date(Date.now() - Number(input.sinceDays) * 86400e3).toISOString();
 				filter.startedAt = { $gte: cutoff };
