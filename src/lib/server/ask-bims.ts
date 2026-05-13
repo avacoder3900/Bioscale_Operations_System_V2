@@ -5485,6 +5485,12 @@ OPERATOR EXPERIENCE — how to shape the answer to match how the operator works:
 
 6. **Citation mode.** If the user says "cite this", "for the record", "I need this for an audit", "FDA reference", or asks the answer be formatted for paper records, append a single line at the bottom: \`Cited: BIMS Ask, <ISO timestamp UTC>, response <responseId>, model <model name>\`. The responseId is in your runtime context; use the current UTC ISO timestamp. This is a formatting addition only — never invent values to make a citation look fuller.
 
+7. **Page context.** When the user's message is preceded by a \`## CURRENT PAGE\` block, that's the widget telling you where the operator is in BIMS — path, optional title, optional entityType + entityId. Treat it as quiet context, NOT as the question itself.
+   - If the question contains a short pronoun ("this", "that", "it", "the cart", "the run", "this lot") AND \`entityType\`/\`entityId\` is present AND the pronoun's category matches \`entityType\`, resolve the pronoun to \`entityId\` and call the appropriate tool with that id. Example: page is \`/spu/cartridge/abc123\`, user asks "what's wrong with this?" → call \`find_cartridge\` (or \`trace_cartridge\`) with \`abc123\`.
+   - If \`entityType\` does NOT match the pronoun's category (page is a cartridge, user asks "who finalized the run?"), IGNORE \`pageContext\` and treat the question as a normal lookup. Do not silently substitute the wrong id.
+   - If the question is fully specified (has its own id or doesn't reference the page entity), just answer the question; \`pageContext\` is informational only. Never volunteer "I see you're on page X" — operators know what page they're on.
+   - Never invent a pageContext value. If \`entityId\` is missing but \`entityType\` is set, only the page-area generalization is usable — ask for the id rather than guessing.
+
 ---
 
 VOICE & PHRASING — how your answers should sound to the operator reading them:
@@ -5623,6 +5629,27 @@ function calcCost(model: AskBimsModel, u: { inputTokens: number; outputTokens: n
 	) / 1_000_000;
 }
 
+/**
+ * Page-context payload threaded from the widget. The widget captures the
+ * current URL/title on open and parses common BIMS routes into an entity
+ * type + id, so short follow-ups like "what's wrong with this?" can resolve
+ * "this" without the user repeating the cartridge/run/lot id.
+ *
+ * Surfaced into the agent by prepending a `## CURRENT PAGE` block to the
+ * last user message. Kept off the system prompt deliberately so the cached
+ * system prompt stays stable across navigation.
+ *
+ * Optional in every shape — missing pageContext is the no-op path.
+ */
+export interface AskBimsPageContext {
+	path: string;
+	title?: string;
+	entityType?: 'cartridge' | 'run' | 'wax_filling_run' | 'wax_batch' | 'reagent_run' |
+		'lot' | 'receiving_lot' | 'part' | 'equipment' | 'document' | 'work_instruction' |
+		'anomaly' | 'experiment' | 'protocol';
+	entityId?: string;
+}
+
 export interface AskBimsOpts {
 	model?: AskBimsModel;
 	/**
@@ -5639,6 +5666,10 @@ export interface AskBimsOpts {
 	 * cleanly rather than leak data. Optional — defaults to false (non-admin).
 	 */
 	isAdmin?: boolean;
+	/**
+	 * Optional page context from the widget. See AskBimsPageContext for shape.
+	 */
+	pageContext?: AskBimsPageContext;
 }
 
 /**
@@ -5715,6 +5746,25 @@ async function runAgentLoop(history: AskBimsMessage[], opts: AskBimsOpts): Promi
 		role: h.role,
 		content: h.content
 	}));
+
+	// Prepend a small CURRENT PAGE block to the FINAL user message when pageContext
+	// is supplied. Keeps the system prompt cacheable while still threading page
+	// context into the turn. Validated shape: at minimum a path; entityType/Id are
+	// optional. We bail silently on bad shapes (handled upstream too).
+	if (opts.pageContext && typeof opts.pageContext.path === 'string' && opts.pageContext.path.length > 0) {
+		const pc = opts.pageContext;
+		const lines: string[] = ['## CURRENT PAGE', `path: ${pc.path}`];
+		if (pc.title) lines.push(`title: ${pc.title}`);
+		if (pc.entityType) lines.push(`entityType: ${pc.entityType}`);
+		if (pc.entityId) lines.push(`entityId: ${pc.entityId}`);
+		const block = lines.join('\n') + '\n\n';
+		for (let i = messages.length - 1; i >= 0; i--) {
+			if (messages[i].role === 'user' && typeof messages[i].content === 'string') {
+				messages[i] = { role: 'user', content: block + (messages[i].content as string) };
+				break;
+			}
+		}
+	}
 
 	// Filter out disabled tools (env-flag kill-switch — principle #11)
 	const disabledTools = getDisabledTools();

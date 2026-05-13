@@ -2,12 +2,37 @@ import Anthropic from '@anthropic-ai/sdk';
 import { json, error } from '@sveltejs/kit';
 import {
 	askBims, ALLOWED_MODELS, DEFAULT_MODEL,
-	checkDailyCap, type AskBimsMessage, type AskBimsModel
+	checkDailyCap, type AskBimsMessage, type AskBimsModel,
+	type AskBimsPageContext
 } from '$lib/server/ask-bims';
 import { hasPermission } from '$lib/server/permissions';
 import type { RequestHandler } from './$types';
 
 const ADMIN_ONLY_MODELS: AskBimsModel[] = ['claude-opus-4-7'];
+
+const PAGE_CTX_ENTITY_TYPES = new Set<NonNullable<AskBimsPageContext['entityType']>>([
+	'cartridge', 'run', 'wax_filling_run', 'wax_batch', 'reagent_run',
+	'lot', 'receiving_lot', 'part', 'equipment', 'document', 'work_instruction',
+	'anomaly', 'experiment', 'protocol'
+]);
+
+function parsePageContext(raw: unknown): AskBimsPageContext | undefined {
+	if (!raw || typeof raw !== 'object') return undefined;
+	const obj = raw as Record<string, unknown>;
+	const path = typeof obj.path === 'string' ? obj.path : '';
+	if (!path || path.length > 500) return undefined;
+	const out: AskBimsPageContext = { path };
+	if (typeof obj.title === 'string' && obj.title.length > 0 && obj.title.length <= 200) {
+		out.title = obj.title;
+	}
+	if (typeof obj.entityType === 'string' && PAGE_CTX_ENTITY_TYPES.has(obj.entityType as any)) {
+		out.entityType = obj.entityType as AskBimsPageContext['entityType'];
+	}
+	if (typeof obj.entityId === 'string' && obj.entityId.length > 0 && obj.entityId.length <= 200) {
+		out.entityId = obj.entityId;
+	}
+	return out;
+}
 
 /**
  * POST /api/agent/ask
@@ -72,9 +97,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		content: String(m.content ?? '')
 	}));
 
+	// Optional page context from the widget. Validate shape conservatively;
+	// a bad shape is dropped silently rather than failing the whole request,
+	// since pageContext is a convenience signal, never required for an answer.
+	const pageContext = parsePageContext(body.pageContext);
+
 	try {
 		const isAdmin = hasPermission(locals.user, 'admin:full');
-		const result = await askBims(history, { model, userId, username, isAdmin });
+		const result = await askBims(history, { model, userId, username, isAdmin, pageContext });
 		return json(result);
 	} catch (err: any) {
 		console.error('[ASK-BIMS] error:', err);
