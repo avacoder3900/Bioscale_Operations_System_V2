@@ -1554,6 +1554,24 @@ Don't use for: part-catalog burn rate (use inventory_burn_rate); reagent invento
 			},
 			required: ['query']
 		}
+	},
+	{
+		name: 'shift_summary',
+		description: `Operator shift-handover digest — one call that returns everything someone walking onto the floor (or wrapping up EOD) needs to know.
+
+Source: aggregates ProductionRun, WaxFillingRun, BimsAnomaly, CalibrationRecord, ReceivingLot, ManualCartridgeRemoval over the shift window.
+
+Use when: "shift summary", "shift handover", "end of day summary", "what happened today", "catch me up", "what changed on this shift", "give me the rundown".
+Don't use for: a specific run's status (use whats_blocking_run / get_run_details); a specific cartridge (use find_cartridge / trace_cartridge); a specific anomaly (use find_bims_anomaly). This is the wide-angle digest, not the focused lookup.
+
+Window convention (matches OPERATOR EXPERIENCE rule 3): default windowHours=8 = one shift. "today" = call with windowHours=8 from 06:00 site-local. Always state the window in the answer.`,
+		input_schema: {
+			type: 'object',
+			properties: {
+				windowHours: { type: 'number', description: 'How far back to look (default 8 = one shift; max 24)' },
+				site: { type: 'string', description: 'Optional site filter: BT | Fannin | both (default both)' }
+			}
+		}
 	}
 ];
 
@@ -5271,6 +5289,100 @@ async function runTool(name: string, input: any, ctx: ToolContext = {}): Promise
 				sourceUrl: '/documents'
 			};
 		}
+		case 'shift_summary': {
+			const hours = Math.min(Math.max(Number(input.windowHours ?? 8), 1), 24);
+			const since = new Date(Date.now() - hours * 3600e3);
+			const now = new Date();
+
+			const [waxRuns, reagentRuns, anomalies, overdueCals, expiringLots, scrappedCarts] = await Promise.all([
+				WaxFillingRun.find({ $or: [{ startedAt: { $gte: since } }, { updatedAt: { $gte: since } }] })
+					.select('_id status startedAt completedAt blockReason cartridgeIds')
+					.sort({ startedAt: -1 })
+					.limit(50)
+					.lean() as any,
+				ReagentBatchRecord.find({ $or: [{ startedAt: { $gte: since } }, { updatedAt: { $gte: since } }] })
+					.select('_id status startedAt completedAt blockReason cartridgeIds')
+					.sort({ startedAt: -1 })
+					.limit(50)
+					.lean() as any,
+				BimsAnomaly.find({ status: { $ne: 'resolved' } })
+					.select('_id title summary severity firstSeenAt')
+					.sort({ severity: -1, firstSeenAt: -1 })
+					.limit(20)
+					.lean() as any,
+				CalibrationRecord.find({ nextDueAt: { $lte: now } })
+					.select('_id equipmentTag equipmentName nextDueAt')
+					.sort({ nextDueAt: 1 })
+					.limit(20)
+					.lean() as any,
+				ReceivingLot.find({
+					status: 'accepted',
+					expiryDate: { $gte: now, $lte: new Date(Date.now() + 14 * 86400e3) }
+				})
+					.select('_id partNumber lotNumber expiryDate')
+					.sort({ expiryDate: 1 })
+					.limit(20)
+					.lean() as any,
+				CartridgeRecord.countDocuments({
+					status: 'scrapped',
+					updatedAt: { $gte: since }
+				})
+			]);
+
+			const allRuns: any[] = [...(waxRuns as any[]), ...(reagentRuns as any[])];
+			const runsCompleted = allRuns.filter((r: any) =>
+				r.completedAt && new Date(r.completedAt) >= since && r.status === 'completed'
+			).length;
+			const runsStarted = allRuns.filter((r: any) =>
+				r.startedAt && new Date(r.startedAt) >= since
+			).length;
+			const runsBlocked = allRuns
+				.filter((r: any) => r.status === 'blocked' || r.status === 'aborted' || r.blockReason)
+				.slice(0, 10)
+				.map((r: any) => ({
+					runId: r._id,
+					status: r.status,
+					blockReason: r.blockReason ?? null,
+					cartridgeCount: Array.isArray(r.cartridgeIds) ? r.cartridgeIds.length : 0
+				}));
+
+			const integrityNotes: string[] = [];
+			if (allRuns.length === 0) {
+				integrityNotes.push(`No run activity in the last ${hours}h — verify operators are logging into BIMS or check /spu/runs directly.`);
+			}
+
+			return {
+				windowStart: since.toISOString(),
+				windowEnd: now.toISOString(),
+				windowHours: hours,
+				runsCompleted,
+				runsStarted,
+				runsBlocked,
+				anomaliesOpen: (anomalies as any[]).map((a: any) => ({
+					anomalyId: a._id,
+					title: a.title,
+					summary: a.summary,
+					severity: a.severity,
+					firstSeenAt: a.firstSeenAt
+				})),
+				equipmentOutOfCal: (overdueCals as any[]).map((c: any) => ({
+					tag: c.equipmentTag,
+					name: c.equipmentName,
+					dueAt: c.nextDueAt,
+					daysOverdue: Math.floor((now.getTime() - new Date(c.nextDueAt).getTime()) / 86400e3)
+				})),
+				chemicalsExpiringSoon: (expiringLots as any[]).map((l: any) => ({
+					partNumber: l.partNumber,
+					lotNumber: l.lotNumber,
+					expiryDate: l.expiryDate,
+					daysToExpiry: Math.floor((new Date(l.expiryDate).getTime() - now.getTime()) / 86400e3)
+				})),
+				scrappedCartridges: scrappedCarts,
+				dataIntegrityNotes: integrityNotes.length > 0 ? integrityNotes : undefined,
+				source: 'Aggregated: WaxFillingRun + ReagentBatchRecord + BimsAnomaly + CalibrationRecord + ReceivingLot + CartridgeRecord',
+				sourceUrl: '/spu/runs'
+			};
+		}
 	}
 	return { error: `Unknown tool: ${name}` };
 }
@@ -5354,6 +5466,24 @@ G. **NEVER re-call the same tool in one turn, and don't chain browse→find→re
    Two calls to the same tool in one turn is ALWAYS a bug. Plan your single best call and accept whatever comes back.
 
 H. **UUID-style IDs are ReceivingLot IDs, not parts.** A string like 74b942a2-16a5-4ae4-aa91-917d3ecc146a is a ReceivingLot._id (or a similar UUID-style barcode). Use find_receiving_lot, NOT find_part. find_part queries the PT-CT-XXX catalog and will return nothing for UUID lookups, which then leads to false-positive "lot not found" warnings. Recognize UUIDs by their shape (8-4-4-4-12 hex with dashes).
+
+---
+
+OPERATOR EXPERIENCE — how to shape the answer to match how the operator works:
+
+1. **Lead with the number.** For quantitative questions ("how many", "how much", "when", "what percent"), start the answer with the digit + unit, then one short line of context, then the IDs + verify link. Operators on the floor are scanning for the number first; if you bury it in a paragraph they miss it.
+   - BAD: "Looking at the cartridge records, I can see that there are currently a number of cartridges in the backing status, specifically 47 of them, which are ready for wax filling."
+   - GOOD: "47 backed cartridges ready for wax fill. From runs in the last 5 days; see /spu/cartridge?status=backing."
+
+2. **Disambiguate site (BT vs Fannin).** Equipment and chemicals exist at both sites. If the user doesn't specify and the result returns hits on both sides, surface both with their org prefix (BT uses B-XX floor / E-XX bench; Fannin uses B-XX floor / F-XX bench). If only one side has it, lead with the site name. If both sides have it and the answer would be different per site, ask "BT or Fannin?" before answering.
+
+3. **Time windows: name the window explicitly.** "Today" means since 06:00 site-local (shift start). "This shift" means since 06:00 if the current time is before 18:00, since 18:00 otherwise. "Recent" without qualifier = last 24 hours. Always state the window in the answer ("from 06:00 today", "in the last 24 hours") so the operator knows what's included.
+
+4. **Multi-turn pronoun coherence.** When the user's follow-up says "it", "that one", "the run", "the cartridge", resolve to the primary entity from the previous turn's tool result. If the prior turn had multiple entities of the same type (e.g., 5 cartridges listed), ask: "Which one — by ID or position in the list?" Never silently pick one.
+
+5. **Next-step proactivity.** After answering, if the result clearly reveals a blocked workflow OR an obvious next action, surface it under a short \`Next step:\` line. Examples: "Next step: scan PT-CT-114 from the rack to start the wax fill." / "Next step: the cartridge oven calibration is 3 days overdue — open /equipment/calibrations to log it." Do NOT invent steps for purely informational questions ("what is a backing lot?" gets no next step).
+
+6. **Citation mode.** If the user says "cite this", "for the record", "I need this for an audit", "FDA reference", or asks the answer be formatted for paper records, append a single line at the bottom: \`Cited: BIMS Ask, <ISO timestamp UTC>, response <responseId>, model <model name>\`. The responseId is in your runtime context; use the current UTC ISO timestamp. This is a formatting addition only — never invent values to make a citation look fuller.
 
 ---
 

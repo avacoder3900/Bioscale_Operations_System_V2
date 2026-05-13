@@ -16,7 +16,7 @@
 
 export interface TestQuestion {
 	id: string;
-	category: 'wax' | 'temperature' | 'runs' | 'cartridges' | 'inventory' | 'equipment' | 'anti-overlap' | 'redirection' | 'phase2' | 'inline-ref' | 'docs' | 'work-instructions' | 'datasheets' | 'research' | 'phase6' | 'phase6-chem' | 'phase6-analytics' | 'read-only-guard';
+	category: 'wax' | 'temperature' | 'runs' | 'cartridges' | 'inventory' | 'equipment' | 'anti-overlap' | 'redirection' | 'phase2' | 'inline-ref' | 'docs' | 'work-instructions' | 'datasheets' | 'research' | 'phase6' | 'phase6-chem' | 'phase6-analytics' | 'read-only-guard' | 'operator-experience';
 	text: string;
 	requiredTools: string[];
 	forbiddenTools?: string[];
@@ -731,6 +731,74 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		forbiddenTools: ['backward_genealogy', 'trace_reagent_chain', 'forward_genealogy'],
 		expectedAnswerPhrases: [/cart|trace|lineage|backing|wax|not found|no cart/i],
 		notes: 'Collision class 3 ("trace cart X"). Unqualified "trace" → trace_cartridge (lightweight mfg lineage). Deep audit needs explicit framing → backward_genealogy. Reagent chain needs "reagent" keyword → trace_reagent_chain.'
+	},
+
+	// === Phase J — OPERATOR EXPERIENCE rules (added 2026-05-12 from operator-perspective audit) ===
+	{
+		id: 'operator-number-first',
+		category: 'operator-experience',
+		text: 'how many backed cartridges do we have?',
+		requiredTools: ['count_cartridges_by_status'],
+		expectedAnswerPhrases: [/^\s*\*{0,2}\d+/, /backed|backing|cart/i],
+		notes: 'Rule 1 (lead with the number). Quantitative question — answer must START with a digit (optionally inside markdown bold), not with a sentence preamble.'
+	},
+	{
+		id: 'operator-site-disambiguation-ambiguous',
+		category: 'operator-experience',
+		text: 'where is the centrifuge?',
+		requiredTools: ['lookup_equipment_datasheet'],
+		expectedAnswerPhrases: [/BT|Brevitest|Fannin|both|B-?\d|F-?\d|E-?\d|which (site|org|lab)/i],
+		notes: 'Rule 2 (site disambiguation). Both BT and Fannin have centrifuges — answer must either ask "BT or Fannin?", list both with prefix labels, or otherwise make site disambiguation explicit.'
+	},
+	{
+		id: 'operator-today-window-stated',
+		category: 'operator-experience',
+		text: 'what ran today?',
+		requiredTools: ['list_recent_runs'],
+		expectedAnswerPhrases: [/today|06:00|since|window|last \d+|past \d+|24[\s-]?h|hour/i],
+		notes: 'Rule 3 (time windows: name the window). When the user says "today" the answer must explicitly state the window it used (06:00 today, last 24h, etc.) so the operator knows what is and isn\'t included.'
+	},
+	{
+		id: 'operator-next-step-blocked-run',
+		category: 'operator-experience',
+		text: 'what is blocking the most recent wax run?',
+		requiredTools: ['whats_blocking_run'],
+		expectedAnswerPhrases: [/(next step|to (fix|unblock|resolve|continue|complete))/i],
+		notes: 'Rule 5 (next-step proactivity). A blocked-run answer must surface a concrete next action. Informational questions (e.g. "what is a backing lot?") should NOT surface a fake next step — see operator-next-step-not-informational counter-fixture.'
+	},
+	{
+		id: 'operator-next-step-not-informational',
+		category: 'operator-experience',
+		text: 'what is a backing lot in BIMS?',
+		requiredTools: [],
+		expectedAnswerPhrases: [/backing|lot|cart/i],
+		forbiddenTools: ['whats_blocking_run'],
+		notes: 'Counter-fixture for rule 5. Purely conceptual / educational question — the agent must NOT fabricate a "Next step:" line. (We don\'t hard-assert the absence of that phrase because the conceptual answer could legitimately end with "you can see backing lots at /spu/backing-lot.")'
+	},
+	{
+		id: 'operator-citation-mode',
+		category: 'operator-experience',
+		text: 'how many cartridges shipped in the last 30 days? cite this for the record.',
+		requiredTools: ['list_recent_runs'],
+		expectedAnswerPhrases: [/cited|response\s*[a-z0-9]|BIMS Ask|UTC|\d{4}-\d{2}-\d{2}/i],
+		notes: 'Rule 6 (citation mode). Explicit "cite this for the record" triggers the citation footer line. The answer must include either the literal "Cited:" prefix, a responseId reference, or an ISO date — verifying the citation footer rendered.'
+	},
+	{
+		id: 'operator-shift-summary',
+		category: 'operator-experience',
+		text: 'give me the shift summary',
+		requiredTools: ['shift_summary'],
+		forbiddenTools: ['list_recent_runs', 'get_temperature_alerts', 'list_open_anomalies'],
+		expectedAnswerPhrases: [/shift|window|run|anomal|cart|cal|hour/i],
+		notes: 'Phase J.5 — shift_summary is the canonical wide-angle digest. Must NOT chain 5 individual tools; one call returns everything.'
+	},
+	{
+		id: 'operator-shift-summary-eod',
+		category: 'operator-experience',
+		text: 'catch me up on the last 8 hours',
+		requiredTools: ['shift_summary'],
+		expectedAnswerPhrases: [/8|shift|hour|window|run|cart/i],
+		notes: 'Phase J.5 alternate framing — "catch me up" + time window must also route to shift_summary, not to individual tools.'
 	}
 ];
 
