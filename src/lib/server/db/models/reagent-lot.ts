@@ -74,6 +74,7 @@ const observationSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	promptKey: String,
 	body: String,
+	concern: { type: Boolean, default: false },
 	enteredBy: operatorRef,
 	enteredAt: Date,
 	updatedAt: Date
@@ -86,6 +87,7 @@ const stepEntrySchema = new Schema({
 	stepTitle: String,
 	startedAt: Date,
 	completedAt: Date,
+	completedBy: operatorRef,
 	qcReadings: { type: [qcReadingSchema], default: [] },
 	observations: { type: [observationSchema], default: [] },
 	note: String,

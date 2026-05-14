@@ -50,6 +50,7 @@
 	// Working state for the active step (initialized from saved entry on step change)
 	let readings = $state<Record<string, any>>({});
 	let observations = $state<Record<string, string>>({});
+	let observationConcerns = $state<Record<string, boolean>>({});
 	let stepNote = $state('');
 	// `dirty` flips to true when the operator touches an input. Cleared when
 	// the step entry is saved or when activeStep changes (re-init from saved).
@@ -64,11 +65,14 @@
 		}
 		readings = next;
 		const obsNext: Record<string, string> = {};
+		const concernNext: Record<string, boolean> = {};
 		for (const p of activeStep.observationPrompts ?? []) {
 			const saved = activeEntry?.observations?.find((o: any) => o.promptKey === p.key);
 			obsNext[p.key] = saved?.body ?? '';
+			concernNext[p.key] = !!saved?.concern;
 		}
 		observations = obsNext;
+		observationConcerns = concernNext;
 		stepNote = activeEntry?.note ?? '';
 		dirty = false;
 	});
@@ -172,16 +176,14 @@
 		if (!activeStep) return '[]';
 		return JSON.stringify(
 			(activeStep.observationPrompts ?? [])
-				.filter((p: any) => observations[p.key])
+				.filter((p: any) => observations[p.key] || observationConcerns[p.key])
 				.map((p: any) => {
-					// Echo the saved _id so the server doesn't regenerate one
-					// on every save — keeps the observation's identity stable
-					// for audit and future per-observation edit/delete actions.
 					const saved = activeEntry?.observations?.find((o: any) => o.promptKey === p.key);
 					return {
 						_id: saved?._id,
 						promptKey: p.key,
-						body: observations[p.key]
+						body: observations[p.key] ?? '',
+						concern: !!observationConcerns[p.key]
 					};
 				})
 		);
@@ -208,6 +210,54 @@
 	function fmtDate(d: string | Date | null | undefined): string {
 		return d ? new Date(d).toLocaleString() : '—';
 	}
+
+	function fmtDuration(ms: number): string {
+		if (!Number.isFinite(ms) || ms < 0) return '—';
+		const sec = Math.floor(ms / 1000);
+		if (sec < 60) return `${sec}s`;
+		const min = Math.floor(sec / 60);
+		if (min < 60) return `${min} min`;
+		const hr = Math.floor(min / 60);
+		const rem = min % 60;
+		if (hr < 24) return rem ? `${hr}h ${rem}m` : `${hr}h`;
+		const days = Math.floor(hr / 24);
+		const remHr = hr % 24;
+		return remHr ? `${days}d ${remHr}h` : `${days}d`;
+	}
+
+	function elapsedBetween(start: string | Date | null | undefined, end: string | Date | null | undefined): string {
+		if (!start || !end) return '—';
+		return fmtDuration(new Date(end).getTime() - new Date(start).getTime());
+	}
+
+	// Live clock tick — only when the lot is in_progress, so the active step's
+	// elapsed counter updates without HMR. Cleared automatically by Svelte on
+	// component unmount or status change.
+	let now = $state(Date.now());
+	$effect(() => {
+		if (!isEditable || isVoided || isFinalized) return;
+		const t = setInterval(() => { now = Date.now(); }, 1000);
+		return () => clearInterval(t);
+	});
+
+	// Quick-log mode — toggleable; persists during the session only.
+	// Minimal first-pass: stacked-vertical view of every step with a note
+	// textarea and a mark-complete checkbox per step. QC reading + observation
+	// inputs stay in step-by-step mode because their UI is per-checkpoint.
+	let quickLogMode = $state(false);
+	let quickNotes = $state<Record<string, string>>({});
+	let quickComplete = $state<Record<string, boolean>>({});
+	$effect(() => {
+		const n: Record<string, string> = {};
+		const c: Record<string, boolean> = {};
+		for (const s of template.steps ?? []) {
+			const e = lot.stepEntries?.find((x: any) => x.stepKey === s.key);
+			n[s.key] = e?.note ?? '';
+			c[s.key] = !!e?.completedAt;
+		}
+		quickNotes = n;
+		quickComplete = c;
+	});
 </script>
 
 <div class="space-y-3">
@@ -220,12 +270,18 @@
 			<h1 class="mt-1 text-xl font-semibold text-[var(--color-tron-text)]">
 				{template.name} <span class="text-sm text-[var(--color-tron-text-secondary)]">v{lot.templateVersion}</span>
 			</h1>
-			<div class="mt-1 flex items-center gap-2 text-xs text-[var(--color-tron-text-secondary)]">
+			<div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--color-tron-text-secondary)]">
 				<span class="font-mono">{lot.lotBarcode}</span>
 				<span>·</span>
-				<span>{lot.operator?.username ?? '—'}</span>
+				<span>operator <strong class="text-[var(--color-tron-text)]">{lot.operator?.username ?? '—'}</strong></span>
 				<span>·</span>
 				<span>started {fmtDate(lot.startedAt)}</span>
+				{#if lot.finalizedAt}
+					<span>· finalized {fmtDate(lot.finalizedAt)}</span>
+					<span>· elapsed <strong class="text-[var(--color-tron-text)]">{elapsedBetween(lot.startedAt, lot.finalizedAt)}</strong></span>
+				{:else if isEditable}
+					<span>· running <strong class="text-[var(--color-tron-cyan)]">{fmtDuration(now - new Date(lot.startedAt).getTime())}</strong></span>
+				{/if}
 				<span class="rounded px-2 py-0.5 text-xs {statusClass(lot.status)}">{lot.status}</span>
 				{#if lot.flags?.length}
 					<span class="rounded bg-amber-500/15 px-2 py-0.5 text-xs text-amber-400">
@@ -236,6 +292,12 @@
 		</div>
 		<div class="flex items-center gap-2">
 			{#if isEditable}
+				<button type="button"
+					onclick={() => quickLogMode = !quickLogMode}
+					class="rounded-md border border-[var(--color-tron-border)] px-3 py-1.5 text-xs {quickLogMode ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)]'} hover:bg-[var(--color-tron-surface)]"
+					title="Toggle between step-by-step runner and a single stacked form (good for catching up on a lot you didn't record live)">
+					{quickLogMode ? '↻ Step-by-step' : '⇣ Quick log'}
+				</button>
 				<form method="POST" action="?/finalize" use:enhance>
 					<button type="submit"
 						class="rounded-md bg-emerald-500/20 px-3 py-1.5 text-sm font-medium text-emerald-300 hover:bg-emerald-500/30">
@@ -306,6 +368,7 @@
 					{@const entry = lot.stepEntries.find((e: any) => e.stepKey === s.key)}
 					{@const done = entry?.completedAt}
 					{@const flagged = entry?.flagged}
+					{@const stepDuration = done ? elapsedBetween(entry.startedAt, entry.completedAt) : null}
 					<li>
 						<a href={`?step=${s.key}`}
 							class="block rounded-md px-2 py-1.5 text-xs transition-colors
@@ -316,11 +379,19 @@
 								<span class="font-mono opacity-60">{s.number}.</span>
 								<span class="grow truncate">{s.title}</span>
 								{#if flagged}
-									<span class="h-1.5 w-1.5 rounded-full bg-amber-400" title="flagged readings"></span>
+									<span class="h-1.5 w-1.5 rounded-full bg-amber-400" title="flagged readings or operator concern"></span>
 								{:else if done}
 									<span class="text-emerald-400">✓</span>
 								{/if}
 							</div>
+							{#if stepDuration}
+								<div class="ml-4 mt-0.5 text-[10px] opacity-60">
+									{stepDuration}
+									{#if entry.completedBy?.username && entry.completedBy.username !== lot.operator?.username}
+										· {entry.completedBy.username}
+									{/if}
+								</div>
+							{/if}
 						</a>
 					</li>
 				{/each}
@@ -353,7 +424,78 @@
 
 		<!-- Main step body -->
 		<section class="space-y-3 rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] p-4">
-			{#if activeStepKey === '__overview__'}
+			{#if quickLogMode}
+				<div class="flex items-center justify-between">
+					<h2 class="text-base font-semibold text-[var(--color-tron-text)]">Quick Log</h2>
+					<p class="text-xs text-[var(--color-tron-text-secondary)]">
+						Stacked view — drop notes + mark steps complete fast.
+						For QC checkpoint readings + observations, switch back to step-by-step.
+					</p>
+				</div>
+				{#each template.steps as s}
+					{@const entry = lot.stepEntries.find((e: any) => e.stepKey === s.key)}
+					{@const done = entry?.completedAt}
+					<form method="POST" action="?/saveStep" use:enhance
+						class="rounded-md border {done ? 'border-emerald-500/30 bg-emerald-500/[0.03]' : 'border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]'} p-2 space-y-2">
+						<input type="hidden" name="stepKey" value={s.key} />
+						<input type="hidden" name="stepNumber" value={s.number} />
+						<input type="hidden" name="stepTitle" value={s.title} />
+						<input type="hidden" name="readings" value="[]" />
+						<input type="hidden" name="observations" value="[]" />
+
+						<div class="flex items-center justify-between gap-2">
+							<div class="text-sm font-semibold text-[var(--color-tron-text)]">
+								<span class="font-mono opacity-60">{s.number}.</span>
+								{s.title}
+								{#if entry?.flagged}
+									<span class="ml-1 text-amber-300">⚠</span>
+								{/if}
+							</div>
+							{#if done}
+								<span class="text-[10px] text-emerald-400">
+									✓ {fmtDate(entry.completedAt)}
+									{#if entry.completedBy?.username}· {entry.completedBy.username}{/if}
+									{#if entry.startedAt}· {elapsedBetween(entry.startedAt, entry.completedAt)}{/if}
+								</span>
+							{/if}
+						</div>
+
+						{#if s.timing && (s.timing.durationMinutes || s.timing.intervalMinutes || s.timing.temperatureC !== undefined || s.timing.rpm)}
+							<div class="flex flex-wrap gap-2 text-[10px] text-[var(--color-tron-cyan)]">
+								{#if s.timing.durationMinutes}<span>⏱ {s.timing.durationMinutes} min</span>{/if}
+								{#if s.timing.intervalMinutes}<span>↻ every {s.timing.intervalMinutes} min</span>{/if}
+								{#if s.timing.temperatureC !== undefined}<span>🌡 {s.timing.temperatureC}°C</span>{/if}
+								{#if s.timing.rpm}<span>⟳ {s.timing.rpm} rpm</span>{/if}
+							</div>
+						{/if}
+
+						<details class="text-xs">
+							<summary class="cursor-pointer text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">
+								Instructions
+							</summary>
+							<div class="mt-1 whitespace-pre-wrap text-[var(--color-tron-text)]">{s.instructions}</div>
+						</details>
+
+						<textarea name="note" rows="2" bind:value={quickNotes[s.key]}
+							placeholder={`Notes for step ${s.number}…`}
+							disabled={!isEditable}
+							class="w-full resize-y rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm text-[var(--color-tron-text)]"></textarea>
+
+						{#if isEditable}
+							<div class="flex items-center justify-between">
+								<label class="flex items-center gap-2 text-xs text-[var(--color-tron-text)]">
+									<input type="checkbox" name="markCompleted" bind:checked={quickComplete[s.key]} />
+									Mark complete
+								</label>
+								<button type="submit"
+									class="rounded-md bg-[var(--color-tron-cyan)]/20 px-2 py-1 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/30">
+									Save step {s.number}
+								</button>
+							</div>
+						{/if}
+					</form>
+				{/each}
+			{:else if activeStepKey === '__overview__'}
 				<h2 class="text-base font-semibold text-[var(--color-tron-text)]">Setup &amp; Lineage</h2>
 				<p class="text-xs text-[var(--color-tron-text-secondary)]">
 					Everything here stays editable until the lot is finalized. Nothing is required — leave blanks
@@ -473,18 +615,53 @@
 					{/if}
 				</form>
 
+				{#snippet lineageNode(node: any, depth: number)}
+					<div class="ml-{depth * 4} pl-2 border-l border-[var(--color-tron-border)] py-1">
+						<div class="flex flex-wrap items-center gap-2 text-xs">
+							{#if node.materialKey}
+								<span class="rounded bg-[var(--color-tron-surface)] px-1.5 py-0.5 text-[10px] text-[var(--color-tron-text-secondary)]">{node.materialKey}</span>
+							{/if}
+							<a href={`/manufacturing/reagent-lots/${node._id}`} class="font-mono text-[var(--color-tron-cyan)] hover:underline">{node.lotBarcode}</a>
+							<span class="text-[var(--color-tron-text-secondary)]">— {node.templateName}</span>
+							<span class="text-[10px] text-[var(--color-tron-text-secondary)]">{node.operator} · {node.status}</span>
+							{#if node.startedAt && node.finalizedAt}
+								<span class="text-[10px] text-[var(--color-tron-text-secondary)]">· elapsed {elapsedBetween(node.startedAt, node.finalizedAt)}</span>
+							{/if}
+						</div>
+						{#if node.depthCapped}
+							<div class="text-[10px] text-[var(--color-tron-text-secondary)] italic">↻ depth cap reached — open the lot to see further ancestry</div>
+						{/if}
+						{#each node.children as child}
+							{@render lineageNode(child, depth + 1)}
+						{/each}
+					</div>
+				{/snippet}
+
+				{#if data.lineage?.children?.length}
+					<div>
+						<h3 class="text-xs font-semibold uppercase tracking-wide text-[var(--color-tron-text-secondary)]">Lineage Tree</h3>
+						<p class="text-[10px] text-[var(--color-tron-text-secondary)] mb-1">Walks upstream through every prepared-material parent, capped at depth 4.</p>
+						<div class="rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-2">
+							{#each data.lineage.children as child}
+								{@render lineageNode(child, 0)}
+							{/each}
+						</div>
+					</div>
+				{/if}
+
 				<div>
 					<h3 class="text-xs font-semibold uppercase tracking-wide text-[var(--color-tron-text-secondary)]">Flags</h3>
 					{#if lot.flags?.length}
 						<ul class="mt-1 space-y-1 text-sm">
 							{#each lot.flags as f}
 								<li class="rounded-md border border-amber-500/40 bg-amber-500/5 px-2 py-1 text-xs text-amber-200">
-									Step {f.stepKey} · {f.reason}
+									{#if f.source === 'observation'}🚩{:else}⚠{/if}
+									Step {f.stepKey ?? '—'} · {f.reason}
 								</li>
 							{/each}
 						</ul>
 					{:else}
-						<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">No out-of-range readings recorded.</p>
+						<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">No out-of-range readings or concerns recorded.</p>
 					{/if}
 				</div>
 
@@ -595,30 +772,59 @@
 							{/if}
 						</h2>
 						{#if activeEntry?.completedAt}
-							<span class="text-xs text-emerald-400">✓ completed {fmtDate(activeEntry.completedAt)}</span>
+							<div class="text-right text-xs">
+								<div class="text-emerald-400">✓ completed {fmtDate(activeEntry.completedAt)}</div>
+								<div class="text-[var(--color-tron-text-secondary)]">
+									duration {elapsedBetween(activeEntry.startedAt, activeEntry.completedAt)}
+									{#if activeEntry.completedBy?.username}
+										· by {activeEntry.completedBy.username}
+									{/if}
+								</div>
+							</div>
 						{/if}
 					</div>
+
+					{#if activeStep.timing && (activeStep.timing.durationMinutes || activeStep.timing.intervalMinutes || activeStep.timing.temperatureC !== undefined || activeStep.timing.rpm)}
+						{@const expectedMs = (activeStep.timing.durationMinutes ?? 0) * 60_000}
+						{@const stepElapsed = activeEntry?.startedAt && !activeEntry?.completedAt ? now - new Date(activeEntry.startedAt).getTime() : null}
+						<div class="rounded-md border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/5 p-2 text-xs text-[var(--color-tron-text)]">
+							<div class="flex flex-wrap gap-3 text-[var(--color-tron-text)]">
+								{#if activeStep.timing.durationMinutes}
+									<span>⏱ Expected duration: <strong class="text-[var(--color-tron-cyan)]">{activeStep.timing.durationMinutes} min</strong></span>
+								{/if}
+								{#if activeStep.timing.intervalMinutes}
+									<span>↻ Check every <strong class="text-[var(--color-tron-cyan)]">{activeStep.timing.intervalMinutes} min</strong></span>
+								{/if}
+								{#if activeStep.timing.temperatureC !== undefined}
+									<span>🌡 <strong class="text-[var(--color-tron-cyan)]">{activeStep.timing.temperatureC} °C</strong></span>
+								{/if}
+								{#if activeStep.timing.rpm}
+									<span>⟳ <strong class="text-[var(--color-tron-cyan)]">{activeStep.timing.rpm} rpm</strong></span>
+								{/if}
+								{#if activeStep.timing.notes}
+									<span class="text-[var(--color-tron-text-secondary)]">— {activeStep.timing.notes}</span>
+								{/if}
+							</div>
+							{#if stepElapsed !== null}
+								{@const remainingMs = expectedMs - stepElapsed}
+								<div class="mt-1 flex items-center gap-2">
+									<span>Step started {fmtDate(activeEntry.startedAt)} ·</span>
+									<strong class={remainingMs < 0 ? 'text-amber-300' : 'text-[var(--color-tron-cyan)]'}>
+										{fmtDuration(stepElapsed)} elapsed
+									</strong>
+									{#if expectedMs > 0}
+										<span class="text-[var(--color-tron-text-secondary)]">
+											({remainingMs > 0 ? `${fmtDuration(remainingMs)} remaining` : `${fmtDuration(-remainingMs)} over`})
+										</span>
+									{/if}
+								</div>
+							{/if}
+						</div>
+					{/if}
 
 					<div class="rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3 text-sm text-[var(--color-tron-text)] whitespace-pre-wrap">
 						{activeStep.instructions}
 					</div>
-
-					{#if activeStep.timing}
-						<div class="flex flex-wrap gap-3 text-xs text-[var(--color-tron-text-secondary)]">
-							{#if activeStep.timing.durationMinutes}
-								<span>⏱ Duration: <strong class="text-[var(--color-tron-text)]">{activeStep.timing.durationMinutes} min</strong></span>
-							{/if}
-							{#if activeStep.timing.intervalMinutes}
-								<span>↻ Check every <strong class="text-[var(--color-tron-text)]">{activeStep.timing.intervalMinutes} min</strong></span>
-							{/if}
-							{#if activeStep.timing.temperatureC !== undefined}
-								<span>🌡 Temp: <strong class="text-[var(--color-tron-text)]">{activeStep.timing.temperatureC} °C</strong></span>
-							{/if}
-							{#if activeStep.timing.rpm}
-								<span>↻ RPM: <strong class="text-[var(--color-tron-text)]">{activeStep.timing.rpm}</strong></span>
-							{/if}
-						</div>
-					{/if}
 
 					{#if activeStep.reagents?.length}
 						<div>
@@ -688,8 +894,14 @@
 							<h3 class="text-xs font-semibold uppercase tracking-wide text-[var(--color-tron-text-secondary)]">Qualitative Observations</h3>
 							<div class="mt-1 space-y-2">
 								{#each activeStep.observationPrompts as p}
-									<div>
-										<label class="block text-xs text-[var(--color-tron-text-secondary)]" for={`o-${p.key}`}>{p.label}</label>
+									<div class="rounded-md border {observationConcerns[p.key] ? 'border-amber-500/60 bg-amber-500/5' : 'border-transparent'} p-1">
+										<div class="flex items-center justify-between gap-2">
+											<label class="text-xs text-[var(--color-tron-text-secondary)]" for={`o-${p.key}`}>{p.label}</label>
+											<label class="flex items-center gap-1 text-[10px] text-amber-300" title="Mark this observation as a concern — bubbles up to the lot's flag count">
+												<input type="checkbox" bind:checked={observationConcerns[p.key]} disabled={!isEditable} onchange={markDirty} />
+												flag as concern
+											</label>
+										</div>
 										<textarea id={`o-${p.key}`} rows="2" bind:value={observations[p.key]} disabled={!isEditable} oninput={markDirty}
 											placeholder={p.helpText ?? ''}
 											class="w-full resize-y rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm text-[var(--color-tron-text)]"></textarea>

@@ -18,7 +18,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const [lots, templates] = await Promise.all([
 		ReagentLot.find(query)
 			.select(
-				'_id lotBarcode templateName templateSlug templateVersion operator status startedAt finalizedAt flags finalOutputs createdAt'
+				'_id lotBarcode templateName templateSlug templateVersion operator status startedAt finalizedAt voidedAt flags finalOutputs createdAt'
 			)
 			.sort({ createdAt: -1 })
 			.limit(200)

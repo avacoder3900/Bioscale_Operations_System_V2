@@ -11,6 +11,54 @@ import {
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
+/**
+ * Recursive upstream-lot walk. Builds the lineage tree the detail page
+ * renders. Capped at depth=4 and tracks seen ids to short-circuit cycles
+ * (theoretical — shouldn't happen but cheap safety).
+ */
+type LineageNode = {
+	_id: string;
+	lotBarcode: string;
+	templateName: string;
+	templateSlug: string;
+	operator: string;
+	status: string;
+	startedAt: string | null;
+	finalizedAt: string | null;
+	materialKey?: string;
+	children: LineageNode[];
+	depthCapped?: boolean;
+};
+
+async function buildLineage(lot: any, depth = 0, seen = new Set<string>()): Promise<LineageNode> {
+	const node: LineageNode = {
+		_id: String(lot._id),
+		lotBarcode: lot.lotBarcode,
+		templateName: lot.templateName,
+		templateSlug: lot.templateSlug,
+		operator: lot.operator?.username ?? '—',
+		status: lot.status,
+		startedAt: lot.startedAt ?? null,
+		finalizedAt: lot.finalizedAt ?? null,
+		children: []
+	};
+	if (depth >= 4) {
+		node.depthCapped = true;
+		return node;
+	}
+	seen.add(String(lot._id));
+	for (const il of lot.inputLots ?? []) {
+		if (il.source !== 'reagent_lot' || !il.sourceId) continue;
+		if (seen.has(il.sourceId)) continue;
+		const parent = await ReagentLot.findById(il.sourceId).lean();
+		if (!parent) continue;
+		const child = await buildLineage(parent, depth + 1, seen);
+		child.materialKey = il.materialKey;
+		node.children.push(child);
+	}
+	return node;
+}
+
 export const load: PageServerLoad = async ({ params, locals }) => {
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
@@ -21,9 +69,6 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	const template = await ReagentProtocolTemplate.findById((lot as any).templateId).lean();
 	if (!template) throw error(404, 'Protocol template not found for this lot');
 
-	// Candidate finalized lots for the Setup tab's input-lot dropdowns —
-	// used when an operator wants to swap which upstream lot feeds a
-	// prepared material after the lot has already started.
 	const candidateLots = await ReagentLot.find({
 		status: 'finalized',
 		_id: { $ne: (lot as any)._id }
@@ -33,10 +78,13 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		.limit(200)
 		.lean();
 
+	const lineage = await buildLineage(lot);
+
 	return {
 		lot: JSON.parse(JSON.stringify(lot)),
 		template: JSON.parse(JSON.stringify(template)),
-		candidateLots: JSON.parse(JSON.stringify(candidateLots))
+		candidateLots: JSON.parse(JSON.stringify(candidateLots)),
+		lineage: JSON.parse(JSON.stringify(lineage))
 	};
 };
 
@@ -148,6 +196,7 @@ export const actions: Actions = {
 			stepTitle,
 			startedAt,
 			completedAt: markCompleted ? now : existing?.completedAt,
+			completedBy: markCompleted ? operator : existing?.completedBy,
 			qcReadings: readings.map((r: any) => ({
 				...r,
 				enteredBy: operator,
@@ -157,12 +206,13 @@ export const actions: Actions = {
 				_id: o._id ?? generateId(),
 				promptKey: o.promptKey,
 				body: o.body,
+				concern: !!o.concern,
 				enteredBy: operator,
 				enteredAt: o.enteredAt ? new Date(o.enteredAt) : now,
 				updatedAt: now
 			})),
 			note,
-			flagged
+			flagged: flagged || observations.some((o: any) => o.concern && o.body?.trim())
 		};
 
 		// Rebuild step entries: replace existing entry or append.
@@ -171,7 +221,8 @@ export const actions: Actions = {
 		next.sort((a: any, b: any) => (a.stepNumber ?? 0) - (b.stepNumber ?? 0));
 		lot.stepEntries = next;
 
-		// Rebuild flags list — drop existing flags from this step, re-add from current readings.
+		// Rebuild flags list — drop existing flags from this step, re-add from current readings
+		// + any operator-flagged "concern" observations.
 		const otherFlags = (lot.flags ?? []).filter((f: any) => f.stepKey !== stepKey);
 		const newFlags = readings
 			.filter((r: any) => r.flag === 'out-of-range')
@@ -183,7 +234,17 @@ export const actions: Actions = {
 				reason: `${r.label ?? r.checkpointKey} = ${r.value}${r.unit ?? ''} outside expected range`,
 				createdAt: now
 			}));
-		lot.flags = [...otherFlags, ...newFlags];
+		const concernFlags = observations
+			.filter((o: any) => o.concern && o.body?.trim())
+			.map((o: any) => ({
+				_id: generateId(),
+				source: 'observation',
+				stepKey,
+				checkpointKey: o.promptKey,
+				reason: `Operator-flagged concern${o.promptKey ? ` (${o.promptKey})` : ''}: ${o.body}`,
+				createdAt: now
+			}));
+		lot.flags = [...otherFlags, ...newFlags, ...concernFlags];
 
 		await lot.save();
 

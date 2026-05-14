@@ -17,6 +17,34 @@
 		return new Date(d).toLocaleString();
 	}
 
+	function fmtDuration(ms: number): string {
+		if (!Number.isFinite(ms) || ms < 0) return '—';
+		const sec = Math.floor(ms / 1000);
+		if (sec < 60) return `${sec}s`;
+		const min = Math.floor(sec / 60);
+		if (min < 60) return `${min} min`;
+		const hr = Math.floor(min / 60);
+		const rem = min % 60;
+		if (hr < 24) return rem ? `${hr}h ${rem}m` : `${hr}h`;
+		const days = Math.floor(hr / 24);
+		const remHr = hr % 24;
+		return remHr ? `${days}d ${remHr}h` : `${days}d`;
+	}
+
+	let nowTick = $state(Date.now());
+	$effect(() => {
+		const t = setInterval(() => { nowTick = Date.now(); }, 30_000);
+		return () => clearInterval(t);
+	});
+
+	function elapsedLabel(lot: any): string {
+		if (!lot.startedAt) return '—';
+		const start = new Date(lot.startedAt).getTime();
+		if (lot.finalizedAt) return fmtDuration(new Date(lot.finalizedAt).getTime() - start);
+		if (lot.status === 'voided' || lot.status === 'deleted') return '—';
+		return fmtDuration(nowTick - start);
+	}
+
 	function statusClass(s: string): string {
 		switch (s) {
 			case 'in_progress': return 'bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]';
@@ -86,6 +114,7 @@
 					<th class="px-3 py-2 text-left">Protocol</th>
 					<th class="px-3 py-2 text-left">Operator</th>
 					<th class="px-3 py-2 text-left">Started</th>
+					<th class="px-3 py-2 text-left">Elapsed</th>
 					<th class="px-3 py-2 text-left">Status</th>
 					<th class="px-3 py-2 text-right">Flags</th>
 					<th class="px-3 py-2 text-right">Output</th>
@@ -105,6 +134,7 @@
 						</td>
 						<td class="px-3 py-2">{lot.operator?.username ?? '—'}</td>
 						<td class="px-3 py-2">{fmtDate(lot.startedAt)}</td>
+						<td class="px-3 py-2 font-mono text-xs">{elapsedLabel(lot)}</td>
 						<td class="px-3 py-2">
 							<span class="rounded px-2 py-0.5 text-xs {statusClass(lot.status)}">{lot.status}</span>
 						</td>
@@ -130,7 +160,7 @@
 					</tr>
 				{:else}
 					<tr>
-						<td colspan="7" class="px-3 py-8 text-center text-sm text-[var(--color-tron-text-secondary)]">
+						<td colspan="8" class="px-3 py-8 text-center text-sm text-[var(--color-tron-text-secondary)]">
 							No lots yet. <a href="/manufacturing/reagent-lots/new" class="text-[var(--color-tron-cyan)] hover:underline">Start your first one</a>.
 						</td>
 					</tr>
