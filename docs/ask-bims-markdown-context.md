@@ -327,3 +327,36 @@ After Phase 1.6 operator interviews:
 - [ ] `tests/ask-bims/baseline.ts` extended with 5 doc-grounded fixtures
 
 This design balances quick wins (TIER 1 inline) with maintainability (TIER 2 via search tool) and risk mitigation (TIER 3 deferred). 2-week ship target. Iterate based on Phase 1.6 interviews.
+
+---
+
+## 10. Scope expansion notes (post-design)
+
+Phases A–D landed as planned (commits `3100287`, `3a950d9`, `77b307b`, `0f7b682`).
+
+**Phase E** was added mid-build to bundle cross-repo research-side tools into
+the same branch — direct shared-Mongo queries against the 11 research-only
+collections (Experiment, Sample, Analyte, AnalysisProfile, CalibratedAnalysis,
+ReagentCatalog, ReagentInventory, ProtocolDefinition, ProtocolExecution).
+Split into 5 vertical-slice commits:
+
+- **E1** (`e9d0cba`) — experiment + research-cart tools (4 tools)
+- **E2** (`2f15cc8`) — reagent catalog + inventory tools (5 tools, variant-aware)
+- **E3** (`280b147`) — protocol definition + execution tools (4 tools, cellMap-empty warning)
+- **E4** (`a676899`) — `trace_reagent_chain` recursive grail tool
+- **E5** (`89cf603`) — samples + analytes + analysis profiles + calibrated analyses (5 tools)
+
+Total Phase E: 19 tools / 9 new Mongoose models (all `strict: false` read-only mirrors).
+
+**Phase 1–6.4** followed (separate work on the same branch) — daily integrity scan,
+chemical inventory, floor-plan tool, thumbs feedback plumbing + UI, 11 operational
+gap-fillers, 4 manufacturing analytics, voice/phrasing polish, AND-of-words
+docs search upgrade, Node-fs fallback for the test harness, code-level
+anti-redundancy guard. See git log for the full series.
+
+**Final-push fill-in** closes remaining gaps: cache-breakpoint placement fix,
+`executedByName` regex on `list_protocol_executions`, 5 missing analytics tools
+(`get_capability_trend`, `cpk_vs_target`, `shift_correlation`, `fmea_risk_query`,
+`forecast_capability_impact`), bulk aggregators (`bulk_temperature_summary`,
+`bulk_cartridge_status`), `find_runs_by_operator`, and conversation logging
+(`AskBimsConversationLog` model — PII redaction stays no-op pending policy).

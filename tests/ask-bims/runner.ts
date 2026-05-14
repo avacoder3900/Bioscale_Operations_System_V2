@@ -11,7 +11,7 @@
  * Tracks total spend across the suite so we can guard against runaway costs.
  */
 
-import { askBims, type AskBimsModel } from '../../src/lib/server/ask-bims.js';
+import { askBims, type AskBimsModel, type AskBimsPageContext } from '../../src/lib/server/ask-bims.js';
 import type { TestQuestion } from './baseline.js';
 
 export interface TestResult {
@@ -28,7 +28,13 @@ export interface TestResult {
 
 export async function runQuestion(q: TestQuestion, model: AskBimsModel): Promise<TestResult> {
 	const t0 = Date.now();
-	const result = await askBims([{ role: 'user', content: q.text }], { model });
+	// temperature=0 in the harness: minimize sampling variance so regressions
+	// are deterministic. Production calls leave temperature at the SDK default.
+	const result = await askBims([{ role: 'user', content: q.text }], {
+		model,
+		temperature: 0,
+		pageContext: q.pageContext as AskBimsPageContext | undefined
+	});
 	const durationMs = Date.now() - t0;
 
 	const failures: string[] = [];
@@ -81,10 +87,22 @@ export async function runQuestion(q: TestQuestion, model: AskBimsModel): Promise
 	};
 }
 
+export interface SuiteSummary {
+	results: TestResult[];
+	passed: number;
+	failed: number;
+	totalCostUsd: number;
+	halted: boolean;
+	avgToolCalls: number;
+	maxToolCalls: number;
+	maxToolCallsQuestionId: string | null;
+	zeroToolCount: number;
+}
+
 export async function runSuite(
 	questions: TestQuestion[],
 	opts: { model?: AskBimsModel; maxCostUsd?: number } = {}
-): Promise<{ results: TestResult[]; passed: number; failed: number; totalCostUsd: number; halted: boolean }> {
+): Promise<SuiteSummary> {
 	const model = opts.model ?? 'claude-sonnet-4-6';
 	const maxCost = opts.maxCostUsd ?? 2;
 	const results: TestResult[] = [];
@@ -108,6 +126,10 @@ export async function runSuite(
 				process.stdout.write(` ✗\n`);
 				for (const f of r.failures) console.log(`      - ${f}`);
 				console.log(`      tools=[${r.toolsCalled.join(', ')}]`);
+				// Show the actual answer so we can tell whether the failure is a real
+				// regression or an over-strict assertion. Truncate to avoid spam.
+				const snippet = r.answer.length > 300 ? r.answer.slice(0, 300) + '…' : r.answer;
+				console.log(`      answer="${snippet.replace(/\n/g, ' ')}"`);
 			}
 		} catch (err: any) {
 			results.push({
@@ -128,5 +150,32 @@ export async function runSuite(
 
 	const passed = results.filter(r => r.passed).length;
 	const failed = results.length - passed;
-	return { results, passed, failed, totalCostUsd: totalCost, halted };
+
+	// Trajectory metrics — per Agent Harness Engineering Guide 2026: track tool
+	// usage shape, not just pass/fail. Surfaces patterns like "an agent that
+	// passes but burns 8 tool calls per question."
+	const totalToolCalls = results.reduce((s, r) => s + r.toolCallCount, 0);
+	const avgToolCalls = results.length > 0 ? totalToolCalls / results.length : 0;
+	let maxToolCalls = 0;
+	let maxToolCallsQuestionId: string | null = null;
+	let zeroToolCount = 0;
+	for (const r of results) {
+		if (r.toolCallCount > maxToolCalls) {
+			maxToolCalls = r.toolCallCount;
+			maxToolCallsQuestionId = r.id;
+		}
+		if (r.toolCallCount === 0) zeroToolCount++;
+	}
+
+	return {
+		results,
+		passed,
+		failed,
+		totalCostUsd: totalCost,
+		halted,
+		avgToolCalls,
+		maxToolCalls,
+		maxToolCallsQuestionId,
+		zeroToolCount
+	};
 }

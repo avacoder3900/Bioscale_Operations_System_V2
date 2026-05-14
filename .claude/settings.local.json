@@ -91,7 +91,25 @@
       "Read(//c/Users/nicho/.claude/projects/C--Users-nicho-Desktop-Bioscale-Operations-System-V2-Bioscale-Operations-System-V2-opentrons-phase1-3/**)",
       "Bash(git commit -m ' *)",
       "Bash(grep -E '$set|update')",
-      "Bash(git branch *)"
+      "Bash(git branch *)",
+      "PowerShell(gh auth *)",
+      "PowerShell(npm run *)",
+      "Read(//c/Users/nicho/Desktop/Bioscale_Operations_System_V2/**)",
+      "PowerShell(npx tsx scripts/test-ask-bims.ts --model haiku --category inline-ref --max-cost 0.10 2>&1 | Select-Object -Last 80)",
+      "Bash(git commit *)",
+      "Bash(grep -E \"\\\\.csv$\")",
+      "Read(//c/Users/nicho/Desktop/Equipment Lists & Datasheets//**)",
+      "Bash(cp \"/c/Users/nicho/Desktop/Equipment Lists & Datasheets/Equipment Lists - BT - Final With Table Locations.csv\" \"data/equipment-datasheets/BT.csv\")",
+      "Bash(cp \"/c/Users/nicho/Desktop/Equipment Lists & Datasheets/Fannin Lab Equipment List_filled_v5.csv\" \"data/equipment-datasheets/Fannin.csv\")",
+      "PowerShell(@\\( \"ANTHROPIC_API_KEY\", \"MONGODB_URI\" \\) | ForEach-Object { $v = [Environment]::GetEnvironmentVariable\\($_, \"User\"\\); $p = [Environment]::GetEnvironmentVariable\\($_, \"Process\"\\); \"$_ user=$\\([bool]$v\\) process=$\\([bool]$p\\)\" })",
+      "WebSearch",
+      "WebFetch(domain:www.anthropic.com)",
+      "WebFetch(domain:arxiv.org)",
+      "WebFetch(domain:qubittool.com)",
+      "WebFetch(domain:explore.n1n.ai)",
+      "WebFetch(domain:www.contextstudios.ai)",
+      "WebFetch(domain:medium.com)",
+      "PowerShell(Start-Process \"docs/ask-bims-acceptance-answers-2026-05-12T15-07-41-non-high-confidence.md\")"
     ]
   }
 }

@@ -61,6 +61,17 @@ export { ParticleDevice } from './particle-device.js';
 export { WorkflowViolation } from './workflow-violation.js';
 export { ServiceTicket } from './service-ticket.js';
 
+// Research-v2 collections — shared Mongo Atlas, BIMS reads only via Ask BIMS tools.
+export { Experiment } from './experiment.js';
+export { ReagentCatalog } from './reagent-catalog.js';
+export { ReagentInventory } from './reagent-inventory.js';
+export { ProtocolDefinition } from './protocol-definition.js';
+export { ProtocolExecution } from './protocol-execution.js';
+export { Sample } from './sample.js';
+export { Analyte } from './analyte.js';
+export { AnalysisProfile } from './analysis-profile.js';
+export { CalibratedAnalysis } from './calibrated-analysis.js';
+
 // Sensor Configuration
 export { SensorConfig } from './sensor-config.js';
 
@@ -116,3 +127,14 @@ export { BimsAnomaly } from './bims-anomaly.js';
 
 // Ask BIMS — per-question cost telemetry (Phase 6.5; powers /admin/ask-bims/cost)
 export { AskBimsCostLog } from './ask-bims-cost-log.js';
+
+// Ask BIMS — full conversation telemetry (Final push; question/answer/tool-calls).
+// PII redaction (redactPii in ask-bims.ts) stays no-op pending policy; this
+// collection captures raw content so future ETL is clean.
+export { AskBimsConversationLog } from './ask-bims-conversation-log.js';
+
+// Ask BIMS — thumbs feedback (server side; widget UI is a follow-up)
+export { AskBimsFeedback } from './ask-bims-feedback.js';
+
+// Ask BIMS — voice transcription cost telemetry (Phase M.1, 2026-05-13)
+export { AskBimsTranscribeLog } from './ask-bims-transcribe-log.js';
