@@ -83,6 +83,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			comment: r.comment,
 			flagged: r.flagged,
 			flagReason: r.flagReason,
+			degradedNote: r.degradedNote ?? null,
+			degradedReasons: r.degradedReasons ?? [],
 			reviewedAt: r.reviewedAt,
 			reviewedBy: r.reviewedBy,
 			// Tool trail with previews from the conversation log (when present)

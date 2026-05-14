@@ -41,6 +41,16 @@ const askBimsFeedbackSchema = new Schema({
 	flagged: { type: Boolean, default: false, index: true },
 	flagReason: { type: String, default: null },
 
+	// Degraded-answer operator note. Captured when the operator investigates a
+	// degraded-confidence answer and either (a) explains why the caveat is
+	// benign ("shift break, no runs expected") or (b) provides a correction
+	// to log against the underlying data gap. degradedReasons is the snapshot
+	// of confidenceReasons at the moment of capture, so the review queue can
+	// still see what the operator was responding to even after upstream
+	// tool results have rolled off.
+	degradedNote: { type: String, default: null },
+	degradedReasons: { type: [String], default: [] },
+
 	// Resolution lifecycle for the flagged queue — admin marks "reviewed" after
 	// looking at it. Lets the queue surface only un-reviewed items by default.
 	reviewedAt: { type: Date, default: null },

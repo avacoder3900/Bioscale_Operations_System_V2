@@ -24,8 +24,14 @@
  *     answer: string,               // the assistant's final text
  *     toolsUsed?: string[],         // tool names from result.toolCalls
  *     model?: 'claude-haiku-4-5' | 'claude-sonnet-4-6' | 'claude-opus-4-7',
- *     confidence?: 'high' | 'partial' | 'degraded'
+ *     confidence?: 'high' | 'partial' | 'degraded',
+ *     degradedNote?: string,        // operator's investigation note on a degraded answer
+ *     degradedReasons?: string[]    // snapshot of confidenceReasons at capture time
  *   }
+ *
+ * A degradedNote counts as a third signal kind alongside rating and flagged —
+ * if it's the only signal present, the row is auto-flagged so it surfaces in
+ * the existing /admin/ask-bims/review queue.
  *
  * Returns: { ok: true, id: <row _id>, flagged: boolean, rating: 'up'|'down'|null }
  */
@@ -41,13 +47,21 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	const responseId = typeof body.responseId === 'string' ? body.responseId.trim() : '';
 	const rating = body.rating === 'up' || body.rating === 'down' ? body.rating : null;
-	const flagged = body.flagged === true;
 	const question = typeof body.question === 'string' ? body.question : '';
 	const answer = typeof body.answer === 'string' ? body.answer : '';
+	const degradedNote = typeof body.degradedNote === 'string' && body.degradedNote.trim()
+		? body.degradedNote.trim()
+		: null;
+	const degradedReasons = Array.isArray(body.degradedReasons)
+		? body.degradedReasons.filter((r: unknown) => typeof r === 'string').slice(0, 20)
+		: [];
+	// A degradedNote auto-flags the row so the existing review queue picks it up
+	// without operators having to also click the flag button.
+	const flagged = body.flagged === true || degradedNote !== null;
 
 	if (!responseId) return json({ error: 'responseId required' }, { status: 400 });
-	if (!rating && !flagged) {
-		return json({ error: "at least one of rating ('up'|'down') or flagged (true) required" }, { status: 400 });
+	if (!rating && !flagged && !degradedNote) {
+		return json({ error: "at least one of rating ('up'|'down'), flagged (true), or degradedNote required" }, { status: 400 });
 	}
 	if (!question || !answer) return json({ error: 'question and answer required' }, { status: 400 });
 
@@ -81,8 +95,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		rating,
 		comment,
 		flagged,
-		flagReason
+		flagReason,
+		degradedNote,
+		degradedReasons
 	});
 
-	return json({ ok: true, id: row._id, flagged, rating });
+	return json({ ok: true, id: row._id, flagged, rating, degradedNoteSaved: degradedNote !== null });
 };

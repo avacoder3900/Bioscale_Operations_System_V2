@@ -5,6 +5,7 @@
 	type Confidence = 'high' | 'partial' | 'degraded';
 	type FeedbackState = 'idle' | 'comment-open' | 'sending' | 'sent';
 	type FlagState = 'idle' | 'open' | 'sending' | 'sent';
+	type DegradedNoteState = 'idle' | 'open' | 'sending' | 'sent';
 
 	interface Usage {
 		inputTokens: number;
@@ -23,11 +24,14 @@
 		error?: string;
 		responseId?: string;
 		confidence?: Confidence;
+		confidenceReasons?: string[];
 		feedbackState?: FeedbackState;
 		feedbackRating?: 'up' | 'down';
 		feedbackComment?: string;
 		flagState?: FlagState;
 		flagReason?: string;
+		degradedNoteState?: DegradedNoteState;
+		degradedNoteText?: string;
 	}
 
 	const HIDDEN_PREFIXES = ['/login', '/logout', '/invite', '/cv'];
@@ -446,7 +450,9 @@
 				error: body.error,
 				responseId: body.responseId,
 				confidence: body.confidence,
-				feedbackState: 'idle'
+				confidenceReasons: Array.isArray(body.confidenceReasons) ? body.confidenceReasons : [],
+				feedbackState: 'idle',
+				degradedNoteState: 'idle'
 			}];
 			if (body.error) {
 				recordFailure(body.error);
@@ -649,6 +655,52 @@
 			messages[idx] = { ...msg, flagState: 'sent', flagReason: reason };
 		} catch {
 			messages[idx] = { ...msg, flagState: 'idle' };
+		}
+	}
+
+	// --- Degraded-answer operator note ---
+	// Surfaces only on confidence === 'degraded'. The operator either explains
+	// the caveat is benign ("shift break") or provides a correction. The note
+	// posts to /api/agent/ask/feedback with the snapshot of confidenceReasons,
+	// which auto-flags the row into the existing review queue.
+	function openDegradedNoteBox(idx: number) {
+		const msg = messages[idx];
+		if (!msg) return;
+		messages[idx] = { ...msg, degradedNoteState: 'open', degradedNoteText: '' };
+	}
+
+	async function sendDegradedNote(idx: number, note: string) {
+		const msg = messages[idx];
+		if (!msg || !msg.responseId) return;
+		const trimmed = note?.trim();
+		if (!trimmed) return;
+		const question = previousUserQuestion(idx);
+		if (!question) return;
+
+		messages[idx] = { ...msg, degradedNoteState: 'sending', degradedNoteText: trimmed };
+
+		try {
+			const res = await fetch('/api/agent/ask/feedback', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					responseId: msg.responseId,
+					degradedNote: trimmed,
+					degradedReasons: msg.confidenceReasons ?? [],
+					question,
+					answer: msg.content,
+					toolsUsed: msg.toolCalls?.map(tc => tc.name) ?? [],
+					model: msg.model,
+					confidence: msg.confidence
+				})
+			});
+			if (!res.ok) {
+				messages[idx] = { ...msg, degradedNoteState: 'open' };
+				return;
+			}
+			messages[idx] = { ...msg, degradedNoteState: 'sent', degradedNoteText: trimmed };
+		} catch {
+			messages[idx] = { ...msg, degradedNoteState: 'open' };
 		}
 	}
 
@@ -863,6 +915,69 @@
 														<li>{note}</li>
 													{/each}
 												</ul>
+											</div>
+										{/if}
+										{#if msg.confidence === 'degraded'}
+											<!-- Degraded-answer operator-note prompt. Surfaces the
+												 confidenceReasons that flipped the badge to red, and
+												 invites the operator to log an investigation note that
+												 lands in /admin/ask-bims/review. -->
+											<div class="mt-1 rounded border border-red-500/40 bg-red-500/10 px-2 py-1.5 text-[10px] text-red-200">
+												<div class="font-semibold text-red-300">Why this is marked degraded</div>
+												{#if msg.confidenceReasons && msg.confidenceReasons.length > 0}
+													<ul class="mt-1 list-disc pl-3 text-[var(--color-tron-text-secondary)]">
+														{#each msg.confidenceReasons as reason (reason)}
+															<li>{reason}</li>
+														{/each}
+													</ul>
+												{:else}
+													<div class="mt-0.5 text-[var(--color-tron-text-secondary)]">A tool surfaced a data caveat or returned an error.</div>
+												{/if}
+												{#if msg.degradedNoteState === 'sent'}
+													<div class="mt-1.5 text-emerald-300">
+														✓ Note saved — added to review queue.
+														{#if msg.degradedNoteText}
+															<div class="mt-0.5 italic text-[var(--color-tron-text-secondary)]">"{msg.degradedNoteText}"</div>
+														{/if}
+													</div>
+												{:else if msg.degradedNoteState === 'open' || msg.degradedNoteState === 'sending'}
+													<div class="mt-1.5 flex items-start gap-1.5">
+														<textarea
+															bind:value={messages[i].degradedNoteText}
+															placeholder="Investigated. What did you find? (e.g. shift break — no runs expected; OR confirmed gap, lot XYZ wasn't logged)"
+															rows="2"
+															disabled={msg.degradedNoteState === 'sending'}
+															class="flex-1 resize-none rounded border border-red-500/30 bg-[var(--color-tron-bg-tertiary)] px-2 py-1 text-[10px] text-[var(--color-tron-text)] focus:border-red-500/70 focus:outline-none disabled:opacity-50"
+															onkeydown={(e) => {
+																if (e.key === 'Enter' && !e.shiftKey) {
+																	e.preventDefault();
+																	sendDegradedNote(i, messages[i].degradedNoteText ?? '');
+																}
+															}}
+														></textarea>
+														<button
+															type="button"
+															onclick={() => sendDegradedNote(i, messages[i].degradedNoteText ?? '')}
+															disabled={msg.degradedNoteState === 'sending' || !(messages[i].degradedNoteText ?? '').trim()}
+															class="rounded border border-red-500/50 bg-red-500/20 px-2 py-1 text-[10px] font-semibold text-red-200 hover:bg-red-500/30 disabled:opacity-40"
+															title="Save note to review queue"
+														>
+															{msg.degradedNoteState === 'sending' ? 'Saving…' : 'Save'}
+														</button>
+													</div>
+												{:else}
+													<div class="mt-1.5 flex items-center gap-2 text-[10px]">
+														<span class="text-[var(--color-tron-text-secondary)]">Please investigate and add a note for the record.</span>
+														<button
+															type="button"
+															onclick={() => openDegradedNoteBox(i)}
+															class="ml-auto rounded border border-red-500/50 bg-red-500/15 px-2 py-0.5 text-[10px] font-semibold text-red-200 hover:bg-red-500/25"
+															title="Add an operator note explaining the caveat or providing a correction"
+														>
+															Add note
+														</button>
+													</div>
+												{/if}
 											</div>
 										{/if}
 										<details class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">
