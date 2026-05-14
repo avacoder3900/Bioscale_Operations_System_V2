@@ -137,10 +137,13 @@ const reagentLotSchema = new Schema(
 		finalizedAt: Date,
 		voidedAt: Date,
 		voidReason: String,
+		deletedAt: Date,
+		deletedBy: operatorRef,
+		deleteReason: String,
 
 		status: {
 			type: String,
-			enum: ['in_progress', 'finalized', 'voided'],
+			enum: ['in_progress', 'finalized', 'voided', 'deleted'],
 			default: 'in_progress'
 		},
 

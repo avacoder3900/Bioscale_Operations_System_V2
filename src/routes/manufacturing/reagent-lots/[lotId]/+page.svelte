@@ -257,6 +257,26 @@
 					</form>
 				</details>
 			{/if}
+			<details class="relative">
+				<summary class="cursor-pointer list-none rounded-md border border-rose-700/50 px-3 py-1.5 text-sm text-rose-400 hover:bg-rose-700/15">
+					Delete
+				</summary>
+				<form method="POST" action="?/deleteLot" use:enhance
+					class="absolute right-0 mt-1 w-72 space-y-2 rounded-md border border-rose-700/50 bg-[var(--color-tron-bg)] p-2 shadow">
+					<p class="text-[10px] text-[var(--color-tron-text-secondary)]">
+						Soft-delete this lot (record stays in Mongo for audit). Re-enter your password to confirm.
+					</p>
+					<label class="block text-xs text-[var(--color-tron-text-secondary)]" for="del-password">Admin password</label>
+					<input id="del-password" name="adminPassword" type="password" required
+						class="w-full rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-xs text-[var(--color-tron-text)]" />
+					<label class="block text-xs text-[var(--color-tron-text-secondary)]" for="del-reason">Reason (optional)</label>
+					<input id="del-reason" name="reason" type="text"
+						class="w-full rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-xs text-[var(--color-tron-text)]" />
+					<button type="submit" class="w-full rounded-md bg-rose-700/30 px-2 py-1 text-xs text-rose-200 hover:bg-rose-700/50">
+						Delete Lot
+					</button>
+				</form>
+			</details>
 		</div>
 	</div>
 

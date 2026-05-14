@@ -27,7 +27,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			// Voided lots are excluded from the picker but can still be
 			// loaded by id (selectedLots query below) if their _id was
 			// passed in the URL — keeps share links resilient.
-			candidateLots = await ReagentLot.find({ templateSlug: slug, status: { $ne: 'voided' } })
+			candidateLots = await ReagentLot.find({ templateSlug: slug, status: { $nin: ['voided', 'deleted'] } })
 				.select('_id lotBarcode templateVersion operator status startedAt finalizedAt')
 				.sort({ createdAt: -1 })
 				.limit(100)

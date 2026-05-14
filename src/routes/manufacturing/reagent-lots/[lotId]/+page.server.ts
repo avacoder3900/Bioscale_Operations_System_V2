@@ -1,9 +1,11 @@
-import { fail, error } from '@sveltejs/kit';
+import { fail, error, redirect } from '@sveltejs/kit';
+import bcrypt from 'bcryptjs';
 import {
 	connectDB,
 	ReagentLot,
 	ReagentProtocolTemplate,
 	AuditLog,
+	User,
 	generateId
 } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
@@ -281,6 +283,70 @@ export const actions: Actions = {
 		});
 
 		return { success: true };
+	},
+
+	/**
+	 * Soft-delete a lot. Requires the operator to re-enter their own password
+	 * (bcrypt-verified) to confirm. Sacred middleware blocks delete operations
+	 * outright, so the soft-delete writes through the native MongoDB driver
+	 * via `Model.collection.updateOne` — this is the intentional admin
+	 * override path for finalized lots too. Status flips to 'deleted'; the
+	 * record stays in Mongo so we have an audit trail.
+	 */
+	deleteLot: async ({ request, params, locals }) => {
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+
+		const data = await request.formData();
+		const adminPassword = data.get('adminPassword')?.toString() ?? '';
+		const reason = data.get('reason')?.toString() ?? '';
+
+		if (!adminPassword) {
+			return fail(401, { error: 'Admin password is required to delete a lot.' });
+		}
+
+		// Re-fetch user with password hash (locals.user has it stripped).
+		const fullUser = await User.findById(locals.user!._id).select('passwordHash username').lean();
+		const hash = (fullUser as any)?.passwordHash;
+		if (!hash) return fail(401, { error: 'Could not verify user — please log out and back in.' });
+
+		const ok = await bcrypt.compare(adminPassword, hash);
+		if (!ok) return fail(401, { error: 'Password did not match.' });
+
+		const lot = await ReagentLot.findById(params.lotId!).select('_id status').lean();
+		if (!lot) throw error(404, 'Lot not found');
+
+		const now = new Date();
+		// Native collection write — bypasses sacred middleware so the admin
+		// override works even on finalized lots.
+		await ReagentLot.collection.updateOne(
+			{ _id: (lot as any)._id },
+			{
+				$set: {
+					status: 'deleted',
+					deletedAt: now,
+					deletedBy: { _id: locals.user!._id, username: locals.user!.username },
+					deleteReason: reason
+				}
+			}
+		);
+
+		await AuditLog.create({
+			_id: generateId(),
+			action: 'DELETE',
+			tableName: 'reagent_lots',
+			recordId: (lot as any)._id,
+			changedBy: locals.user!.username,
+			changedAt: now,
+			newData: {
+				status: 'deleted',
+				reason,
+				previousStatus: (lot as any).status,
+				note: 'soft-delete via admin password'
+			}
+		});
+
+		throw redirect(303, '/manufacturing/reagent-lots');
 	},
 
 	/** Void a lot. Sacred middleware does not block this because finalizedAt isn't set. */

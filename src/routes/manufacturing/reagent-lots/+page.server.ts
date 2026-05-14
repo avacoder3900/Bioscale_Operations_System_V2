@@ -10,7 +10,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const templateSlugFilter = url.searchParams.get('template') ?? 'all';
 
 	const query: Record<string, unknown> = {};
-	if (statusFilter !== 'all') query.status = statusFilter;
+	// Hide deleted by default — surface them only when explicitly filtered.
+	if (statusFilter === 'all') query.status = { $ne: 'deleted' };
+	else query.status = statusFilter;
 	if (templateSlugFilter !== 'all') query.templateSlug = templateSlugFilter;
 
 	const [lots, templates] = await Promise.all([

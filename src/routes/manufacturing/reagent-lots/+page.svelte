@@ -5,10 +5,11 @@
 	let { data }: Props = $props();
 
 	const statusOptions = [
-		{ value: 'all', label: 'All statuses' },
+		{ value: 'all', label: 'All statuses (excl. deleted)' },
 		{ value: 'in_progress', label: 'In progress' },
 		{ value: 'finalized', label: 'Finalized' },
-		{ value: 'voided', label: 'Voided' }
+		{ value: 'voided', label: 'Voided' },
+		{ value: 'deleted', label: 'Deleted (admin)' }
 	];
 
 	function fmtDate(d: string | Date | null | undefined): string {
@@ -21,6 +22,7 @@
 			case 'in_progress': return 'bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]';
 			case 'finalized': return 'bg-emerald-500/15 text-emerald-400';
 			case 'voided': return 'bg-rose-500/15 text-rose-400';
+			case 'deleted': return 'bg-rose-900/40 text-rose-300 line-through';
 			default: return 'bg-[var(--color-tron-surface)] text-[var(--color-tron-text-secondary)]';
 		}
 	}
