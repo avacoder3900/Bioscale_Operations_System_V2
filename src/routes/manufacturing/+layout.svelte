@@ -15,6 +15,7 @@
 		{ href: '/manufacturing/laser-cutting', label: 'Laser Cut', icon: 'M13 10V3L4 14h7v7l9-11h-7z' },
 		{ href: '/manufacturing/wi-01', label: 'Cartridge Back', icon: 'M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10' },
 		{ href: '/manufacturing/wax-creation', label: 'Wax Creation', icon: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM12 7v5m-2.5-2.5h5' },
+		{ href: '/manufacturing/reagent-lots', label: 'Reagent Lots', icon: 'M9 2v6M15 2v6M9 8h6M7 8h10a2 2 0 012 2v9a3 3 0 01-3 3H8a3 3 0 01-3-3v-9a2 2 0 012-2z' },
 		{ href: '/manufacturing/opentron-control', label: 'Opentron Control', icon: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z' },
 		{ href: '/manufacturing/qa-qc', label: 'QA/QC', icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z' },
 		{ href: '/manufacturing/top-seal-cutting', label: 'Cut Top Seal', icon: 'M4 6h16M4 12h16M4 18h7' },

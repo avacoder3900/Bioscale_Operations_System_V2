@@ -1,7 +1,8 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, ReagentBatchRecord, AssayDefinition, CartridgeRecord, Consumable,
-	ManufacturingSettings, WaxFillingRun, Equipment, EquipmentLocation, generateId, AuditLog
+	ManufacturingSettings, WaxFillingRun, Equipment, EquipmentLocation, generateId, AuditLog,
+	ReagentLot
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
@@ -37,6 +38,7 @@ function emptyReagentState(robotId: string, loadError?: string) {
 			hasActiveRun: false, stage: null, assayTypeName: null, isResearch: false,
 			cartridgeCount: 0, runStartTime: null, runEndTime: null
 		},
+		activeReagentLots: {} as Record<string, any[]>,
 		assayTypes: [] as { id: string; name: string; skuCode: string | null; isActive: boolean; reagents: { wellPosition: number; reagentName: string }[] }[],
 		reagentDefinitions: [] as { id: string; reagentName: string; wellPosition: number | null; volumeMicroliters: number | null; isActive: boolean }[],
 		cartridges: [] as any[],
@@ -175,6 +177,37 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			volume: t.volumeMicroliters ?? 0
 		}));
 
+		// Finalized ReagentLots eligible to feed cartridge fills, grouped by
+		// protocol slug. UI dropdown wire-up is pending (see TODO below) —
+		// the data is here so the picker can land without a second backend pass.
+		// TODO(reagent-qc): wire `activeReagentLots[slug]` into a dropdown on the
+		// ReagentPreparation tube rows so the operator picks a finalized lot per
+		// reagent type instead of typing a freeform lotId. Then on
+		// completeRunFilling, decrement `remainingVolume` on each chosen lot by
+		// (cartridgesFilled * wellVolume) — currently left untouched per user
+		// direction 2026-05-14.
+		const finalizedLots = await ReagentLot.find({ status: 'finalized' })
+			.select('_id lotBarcode templateSlug templateName templateVersion finalOutputs operator finalizedAt')
+			.sort({ finalizedAt: -1 })
+			.limit(200)
+			.lean()
+			.catch(() => []);
+		const activeReagentLots: Record<string, any[]> = {};
+		for (const l of finalizedLots as any[]) {
+			const slug = l.templateSlug ?? 'unknown';
+			if (!activeReagentLots[slug]) activeReagentLots[slug] = [];
+			activeReagentLots[slug].push({
+				_id: String(l._id),
+				lotBarcode: l.lotBarcode,
+				templateName: l.templateName,
+				templateVersion: l.templateVersion,
+				concentration: l.finalOutputs?.concentration ?? null,
+				concentrationUnit: l.finalOutputs?.concentrationUnit ?? null,
+				operator: l.operator?.username ?? null,
+				finalizedAt: l.finalizedAt ?? null
+			});
+		}
+
 		// Fridges for storage selection — use parent Equipment records
 		const [equipFridges, orphanFridges] = await Promise.all([
 			Equipment.find({ equipmentType: 'fridge', status: { $ne: 'offline' } }).lean().catch(() => []),
@@ -220,7 +253,8 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			currentSealBatch,
 			rejectionCodes,
 			tubes,
-			fridges
+			fridges,
+			activeReagentLots
 		};
 	} catch (err) {
 		console.error('[REAGENT-FILLING PAGE] Load error:', err instanceof Error ? err.message : err);
