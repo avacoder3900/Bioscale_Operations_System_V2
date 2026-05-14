@@ -45,12 +45,20 @@
 		(selectedTemplate as any)?.materials?.filter((m: any) => m.type === 'prepared') ?? []
 	);
 
+	const stockMaterials = $derived(
+		(selectedTemplate as any)?.materials?.filter((m: any) => m.type === 'stock' || m.type === 'reused') ?? []
+	);
+
+	// Per-material stock barcode + concentration override entered by operator.
+	// Both optional — leaving blank means "use template defaults".
+	let stockEntries = $state<Record<string, { barcode: string; concentration: string }>>({});
+
 	function buildSubmitPayload() {
 		const params = Object.entries(parameterValues).map(([key, value]) => {
 			const def = (selectedTemplate as any).parameters?.find((p: any) => p.key === key);
 			return { key, value: def?.type === 'number' ? Number(value) : value, unit: def?.unit };
 		});
-		const lots = Object.entries(inputLotPicks)
+		const fromPrepared = Object.entries(inputLotPicks)
 			.filter(([, v]) => v && v.sourceId)
 			.map(([materialKey, v]) => ({
 				materialKey,
@@ -58,7 +66,19 @@
 				sourceId: v.sourceId,
 				label: v.label
 			}));
-		return { params: JSON.stringify(params), lots: JSON.stringify(lots) };
+		const fromStock = Object.entries(stockEntries)
+			.filter(([, v]) => v && (v.barcode?.trim() || v.concentration?.trim()))
+			.map(([materialKey, v]) => {
+				const m = (selectedTemplate as any)?.materials?.find((mm: any) => mm.key === materialKey);
+				return {
+					materialKey,
+					source: 'manual',
+					barcode: v.barcode?.trim() || undefined,
+					concentration: v.concentration?.trim() ? Number(v.concentration) : undefined,
+					concentrationUnit: m?.defaultConcentrationUnit
+				};
+			});
+		return { params: JSON.stringify(params), lots: JSON.stringify([...fromPrepared, ...fromStock]) };
 	}
 </script>
 
@@ -94,10 +114,10 @@
 
 		<div class="rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] p-4 space-y-3">
 			<h2 class="text-sm font-semibold text-[var(--color-tron-text)]">2. Lot Barcode</h2>
-			<input type="text" name="lotBarcode" bind:value={lotBarcode} required
+			<input type="text" name="lotBarcode" bind:value={lotBarcode}
 				class="w-full rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1.5 font-mono text-sm text-[var(--color-tron-text)]" />
 			<p class="text-xs text-[var(--color-tron-text-secondary)]">
-				Auto-generated. Replace if scanning an existing physical barcode.
+				Auto-suggested — overwrite or scan an existing label. Editable later from the lot's Overview tab.
 			</p>
 		</div>
 
@@ -158,6 +178,45 @@
 					</div>
 				{/each}
 			</div>
+		{/if}
+
+		{#if selectedTemplate && stockMaterials.length}
+			<details class="rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] p-4">
+				<summary class="cursor-pointer text-sm font-semibold text-[var(--color-tron-text)]">
+					5. Stock Materials <span class="text-xs font-normal text-[var(--color-tron-text-secondary)]">— optional barcodes &amp; concentration overrides</span>
+				</summary>
+				<div class="mt-3 space-y-2">
+					<p class="text-xs text-[var(--color-tron-text-secondary)]">
+						Scan or type the supplier-lot barcode for any stock reagent you want traced.
+						Override the concentration if the CofA differs from the template default. All optional — blank uses defaults.
+					</p>
+					{#each stockMaterials as m}
+						{@const entry = stockEntries[m.key] ?? { barcode: '', concentration: '' }}
+						<div class="grid grid-cols-[1fr_auto_auto] gap-2 rounded-md bg-[var(--color-tron-surface)] p-2">
+							<div class="text-xs">
+								<div class="font-semibold text-[var(--color-tron-text)]">{m.label}</div>
+								<div class="text-[10px] text-[var(--color-tron-text-secondary)]">
+									default: {m.defaultConcentration ?? '—'} {m.defaultConcentrationUnit ?? ''}
+								</div>
+							</div>
+							<input type="text" placeholder="scan/type barcode"
+								oninput={(e) => {
+									const v = (e.target as HTMLInputElement).value;
+									stockEntries[m.key] = { ...(stockEntries[m.key] ?? { barcode: '', concentration: '' }), barcode: v };
+								}}
+								value={entry.barcode}
+								class="w-44 rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 font-mono text-xs text-[var(--color-tron-text)]" />
+							<input type="number" step="any" placeholder={m.defaultConcentration ? `${m.defaultConcentration}` : 'conc'}
+								oninput={(e) => {
+									const v = (e.target as HTMLInputElement).value;
+									stockEntries[m.key] = { ...(stockEntries[m.key] ?? { barcode: '', concentration: '' }), concentration: v };
+								}}
+								value={entry.concentration}
+								class="w-24 rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 font-mono text-xs text-[var(--color-tron-text)]" />
+						</div>
+					{/each}
+				</div>
+			</details>
 		{/if}
 
 		<input type="hidden" name="parameterValues" value={buildSubmitPayload().params} />

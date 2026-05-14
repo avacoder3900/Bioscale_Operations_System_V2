@@ -61,19 +61,24 @@ export const actions: Actions = {
 
 		const data = await request.formData();
 		const templateId = data.get('templateId')?.toString();
-		const lotBarcode = data.get('lotBarcode')?.toString();
+		let lotBarcode = data.get('lotBarcode')?.toString().trim();
 		const parameterValuesJson = data.get('parameterValues')?.toString() ?? '[]';
 		const inputLotsJson = data.get('inputLots')?.toString() ?? '[]';
 
-		if (!templateId || !lotBarcode) {
-			return fail(400, { error: 'Template and lot barcode are required.' });
+		if (!templateId) {
+			return fail(400, { error: 'Pick a protocol to start a lot.' });
 		}
 
 		const template = await ReagentProtocolTemplate.findById(templateId).lean();
 		if (!template) return fail(400, { error: 'Template not found.' });
 
+		// Auto-fill barcode if blank — operator can edit later. Collision
+		// guard: if the typed barcode already exists, fall back to a new
+		// auto-generated one so we never reject the operator on duplicates
+		// (per "nothing required, nothing locked").
+		if (!lotBarcode) lotBarcode = await nextLotBarcode();
 		const existing = await ReagentLot.findOne({ lotBarcode }).select('_id').lean();
-		if (existing) return fail(400, { error: 'A lot with that barcode already exists. Pick a fresh one.' });
+		if (existing) lotBarcode = await nextLotBarcode();
 
 		let parameterValues: any[] = [];
 		let inputLots: any[] = [];

@@ -82,6 +82,79 @@
 		if (!ok) nav.cancel();
 	});
 
+	// — Setup-tab editable state (lot barcode, parameters, input lots, stock barcodes) —
+	// Initialized from the saved lot on load; the operator can change anything
+	// until the lot is finalized. Stock entries are layered on top of any
+	// existing inputLot for that material (so editing preserves prior values).
+	const preparedMaterials = $derived(
+		(template.materials ?? []).filter((m: any) => m.type === 'prepared')
+	);
+	const stockMaterials = $derived(
+		(template.materials ?? []).filter((m: any) => m.type === 'stock' || m.type === 'reused')
+	);
+	function candidatesFor(material: any) {
+		const allowed: string[] = material?.canSourceFromSlugs ?? [];
+		if (!allowed.length) return [];
+		return (data.candidateLots ?? []).filter((c: any) => allowed.includes(c.templateSlug));
+	}
+
+	let editedLotBarcode = $state(lot.lotBarcode ?? '');
+	let editedParams = $state<Record<string, any>>({});
+	let editedPreparedPicks = $state<Record<string, { sourceId: string; label: string }>>({});
+	let editedStockEntries = $state<Record<string, { barcode: string; concentration: string }>>({});
+
+	$effect(() => {
+		// Initialize once from the lot snapshot — re-runs when lot reloads after save.
+		editedLotBarcode = lot.lotBarcode ?? '';
+		const pNext: Record<string, any> = {};
+		for (const p of template.parameters ?? []) {
+			const saved = (lot.parameterValues ?? []).find((v: any) => v.key === p.key);
+			pNext[p.key] = saved?.value ?? p.defaultValue ?? '';
+		}
+		editedParams = pNext;
+		const prepNext: Record<string, { sourceId: string; label: string }> = {};
+		const stockNext: Record<string, { barcode: string; concentration: string }> = {};
+		for (const il of lot.inputLots ?? []) {
+			if (il.source === 'reagent_lot' && il.sourceId) {
+				prepNext[il.materialKey] = { sourceId: il.sourceId, label: il.label ?? '' };
+			} else if (il.source === 'manual' || il.source === 'receiving_lot') {
+				stockNext[il.materialKey] = {
+					barcode: il.barcode ?? '',
+					concentration: il.concentration != null ? String(il.concentration) : ''
+				};
+			}
+		}
+		editedPreparedPicks = prepNext;
+		editedStockEntries = stockNext;
+	});
+
+	function buildSetupParamsPayload(): string {
+		return JSON.stringify(
+			Object.entries(editedParams).map(([key, value]) => {
+				const def = template.parameters?.find((p: any) => p.key === key);
+				return { key, value: def?.type === 'number' && value !== '' ? Number(value) : value, unit: def?.unit };
+			})
+		);
+	}
+	function buildSetupInputLotsPayload(): string {
+		const prep = Object.entries(editedPreparedPicks)
+			.filter(([, v]) => v && v.sourceId)
+			.map(([materialKey, v]) => ({ materialKey, source: 'reagent_lot', sourceId: v.sourceId, label: v.label }));
+		const stock = Object.entries(editedStockEntries)
+			.filter(([, v]) => v && (v.barcode?.trim() || v.concentration?.trim()))
+			.map(([materialKey, v]) => {
+				const m = template.materials?.find((mm: any) => mm.key === materialKey);
+				return {
+					materialKey,
+					source: 'manual',
+					barcode: v.barcode?.trim() || undefined,
+					concentration: v.concentration?.trim() ? Number(v.concentration) : undefined,
+					concentrationUnit: m?.defaultConcentrationUnit
+				};
+			});
+		return JSON.stringify([...prep, ...stock]);
+	}
+
 	function buildReadingsPayload(): string {
 		if (!activeStep) return '[]';
 		return JSON.stringify(
@@ -253,7 +326,7 @@
 						{activeStepKey === '__overview__'
 							? 'bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]'
 							: 'text-[var(--color-tron-text-secondary)] hover:bg-[var(--color-tron-surface)] hover:text-[var(--color-tron-text)]'}">
-					Overview &amp; Lineage
+					Setup &amp; Lineage
 				</a>
 			</div>
 		</aside>
@@ -261,38 +334,124 @@
 		<!-- Main step body -->
 		<section class="space-y-3 rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] p-4">
 			{#if activeStepKey === '__overview__'}
-				<h2 class="text-base font-semibold text-[var(--color-tron-text)]">Overview &amp; Lineage</h2>
+				<h2 class="text-base font-semibold text-[var(--color-tron-text)]">Setup &amp; Lineage</h2>
+				<p class="text-xs text-[var(--color-tron-text-secondary)]">
+					Everything here stays editable until the lot is finalized. Nothing is required — leave blanks
+					where you don't have data and add a note instead.
+				</p>
 
-				<div class="grid gap-4 sm:grid-cols-2">
+				<form method="POST" action="?/saveSetup" use:enhance class="space-y-4">
+					<input type="hidden" name="parameterValues" value={buildSetupParamsPayload()} />
+					<input type="hidden" name="inputLots" value={buildSetupInputLotsPayload()} />
+
 					<div>
-						<h3 class="text-xs font-semibold uppercase tracking-wide text-[var(--color-tron-text-secondary)]">Key Parameters</h3>
-						<dl class="mt-1 space-y-0.5 text-sm">
-							{#each lot.parameterValues as p}
-								<div class="flex justify-between gap-2 text-[var(--color-tron-text)]">
-									<dt class="text-[var(--color-tron-text-secondary)]">{p.key}</dt>
-									<dd class="font-mono">{p.value}{p.unit ? ` ${p.unit}` : ''}</dd>
-								</div>
-							{/each}
-						</dl>
+						<label for="setup-lot-barcode" class="block text-xs font-semibold uppercase tracking-wide text-[var(--color-tron-text-secondary)]">Lot Barcode</label>
+						<input id="setup-lot-barcode" name="lotBarcode" type="text"
+							bind:value={editedLotBarcode} disabled={!isEditable}
+							class="mt-1 w-full max-w-sm rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 font-mono text-sm text-[var(--color-tron-text)]" />
 					</div>
 
-					<div>
-						<h3 class="text-xs font-semibold uppercase tracking-wide text-[var(--color-tron-text-secondary)]">Input Lots</h3>
-						{#if lot.inputLots?.length}
-							<ul class="mt-1 space-y-1 text-sm">
-								{#each lot.inputLots as il}
-									<li class="flex justify-between gap-2 text-[var(--color-tron-text)]">
-										<span class="text-[var(--color-tron-text-secondary)]">{il.materialKey}</span>
-										<a href={`/manufacturing/reagent-lots/${il.sourceId}`}
-											class="font-mono text-[var(--color-tron-cyan)] hover:underline">{il.label}</a>
-									</li>
+					{#if template.parameters?.length}
+						<div>
+							<h3 class="text-xs font-semibold uppercase tracking-wide text-[var(--color-tron-text-secondary)]">Key Parameters</h3>
+							<div class="mt-1 grid gap-2 sm:grid-cols-2">
+								{#each template.parameters as p}
+									<div>
+										<label for={`sp-${p.key}`} class="block text-xs text-[var(--color-tron-text-secondary)]">
+											{p.label} {#if p.unit}<span class="opacity-60">({p.unit})</span>{/if}
+										</label>
+										<input id={`sp-${p.key}`}
+											type={p.type === 'number' ? 'number' : 'text'} step="any"
+											bind:value={editedParams[p.key]} disabled={!isEditable}
+											class="w-full rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm text-[var(--color-tron-text)]" />
+									</div>
 								{/each}
-							</ul>
-						{:else}
-							<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">No upstream lots — stock-fed run.</p>
-						{/if}
-					</div>
-				</div>
+							</div>
+						</div>
+					{/if}
+
+					{#if preparedMaterials.length}
+						<div>
+							<h3 class="text-xs font-semibold uppercase tracking-wide text-[var(--color-tron-text-secondary)]">Upstream Lots (Prepared Materials)</h3>
+							<div class="mt-1 space-y-1">
+								{#each preparedMaterials as m}
+									{@const cands = candidatesFor(m)}
+									<div class="grid grid-cols-[1fr_2fr] items-center gap-2 rounded-md bg-[var(--color-tron-surface)] p-2">
+										<div class="text-xs font-semibold text-[var(--color-tron-text)]">{m.label}</div>
+										{#if cands.length}
+											<select disabled={!isEditable}
+												onchange={(e) => {
+													const val = (e.target as HTMLSelectElement).value;
+													if (val) {
+														const lotc = data.candidateLots.find((l: any) => l._id === val);
+														editedPreparedPicks[m.key] = { sourceId: val, label: lotc?.lotBarcode ?? '' };
+													} else {
+														delete editedPreparedPicks[m.key];
+														editedPreparedPicks = { ...editedPreparedPicks };
+													}
+												}}
+												class="rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-xs text-[var(--color-tron-text)]">
+												<option value="">— no upstream lot —</option>
+												{#each cands as c}
+													<option value={c._id} selected={editedPreparedPicks[m.key]?.sourceId === c._id}>
+														{c.lotBarcode} ({c.templateName})
+													</option>
+												{/each}
+											</select>
+										{:else}
+											<p class="text-[10px] text-[var(--color-tron-text-secondary)]">No upstream protocol declared — log in a note instead.</p>
+										{/if}
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
+
+					{#if stockMaterials.length}
+						<div>
+							<h3 class="text-xs font-semibold uppercase tracking-wide text-[var(--color-tron-text-secondary)]">Stock Materials</h3>
+							<p class="text-[10px] text-[var(--color-tron-text-secondary)]">
+								Optional — scan or type a supplier-lot barcode and/or override the concentration. Blank uses template defaults.
+							</p>
+							<div class="mt-1 space-y-1">
+								{#each stockMaterials as m}
+									{@const entry = editedStockEntries[m.key] ?? { barcode: '', concentration: '' }}
+									<div class="grid grid-cols-[1fr_auto_auto] items-center gap-2 rounded-md bg-[var(--color-tron-surface)] p-2">
+										<div class="text-xs">
+											<div class="font-semibold text-[var(--color-tron-text)]">{m.label}</div>
+											<div class="text-[10px] text-[var(--color-tron-text-secondary)]">
+												default: {m.defaultConcentration ?? '—'} {m.defaultConcentrationUnit ?? ''}
+											</div>
+										</div>
+										<input type="text" placeholder="scan/type barcode"
+											value={entry.barcode} disabled={!isEditable}
+											oninput={(e) => {
+												const v = (e.target as HTMLInputElement).value;
+												editedStockEntries[m.key] = { ...(editedStockEntries[m.key] ?? { barcode: '', concentration: '' }), barcode: v };
+											}}
+											class="w-44 rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 font-mono text-xs text-[var(--color-tron-text)]" />
+										<input type="number" step="any" placeholder={m.defaultConcentration ? `${m.defaultConcentration}` : 'conc'}
+											value={entry.concentration} disabled={!isEditable}
+											oninput={(e) => {
+												const v = (e.target as HTMLInputElement).value;
+												editedStockEntries[m.key] = { ...(editedStockEntries[m.key] ?? { barcode: '', concentration: '' }), concentration: v };
+											}}
+											class="w-24 rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 font-mono text-xs text-[var(--color-tron-text)]" />
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
+
+					{#if isEditable}
+						<div class="flex justify-end">
+							<button type="submit"
+								class="rounded-md bg-[var(--color-tron-cyan)]/20 px-3 py-1.5 text-sm text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/30">
+								Save Setup
+							</button>
+						</div>
+					{/if}
+				</form>
 
 				<div>
 					<h3 class="text-xs font-semibold uppercase tracking-wide text-[var(--color-tron-text-secondary)]">Flags</h3>

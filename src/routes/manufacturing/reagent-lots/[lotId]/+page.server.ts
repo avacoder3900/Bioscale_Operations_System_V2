@@ -19,9 +19,22 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	const template = await ReagentProtocolTemplate.findById((lot as any).templateId).lean();
 	if (!template) throw error(404, 'Protocol template not found for this lot');
 
+	// Candidate finalized lots for the Setup tab's input-lot dropdowns —
+	// used when an operator wants to swap which upstream lot feeds a
+	// prepared material after the lot has already started.
+	const candidateLots = await ReagentLot.find({
+		status: 'finalized',
+		_id: { $ne: (lot as any)._id }
+	})
+		.select('_id lotBarcode templateName templateSlug')
+		.sort({ finalizedAt: -1 })
+		.limit(200)
+		.lean();
+
 	return {
 		lot: JSON.parse(JSON.stringify(lot)),
-		template: JSON.parse(JSON.stringify(template))
+		template: JSON.parse(JSON.stringify(template)),
+		candidateLots: JSON.parse(JSON.stringify(candidateLots))
 	};
 };
 
@@ -42,6 +55,53 @@ async function ensureLot(lotId: string) {
 }
 
 export const actions: Actions = {
+	/**
+	 * Update lot-level setup: lot barcode, key parameters, input/stock lots.
+	 * R&D flexibility — every field is editable while the lot is in_progress.
+	 * Nothing is required; blanks are preserved. Sacred middleware locks
+	 * mutations once `finalizedAt` is set.
+	 */
+	saveSetup: async ({ request, params, locals }) => {
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const lot = await ensureLot(params.lotId!);
+		const blocked = notEditable(lot);
+		if (blocked) return blocked;
+
+		const data = await request.formData();
+		const lotBarcode = data.get('lotBarcode')?.toString().trim();
+		const parameterValuesJson = data.get('parameterValues')?.toString() ?? '[]';
+		const inputLotsJson = data.get('inputLots')?.toString() ?? '[]';
+
+		if (lotBarcode && lotBarcode !== lot.lotBarcode) {
+			const dup = await ReagentLot.findOne({ lotBarcode, _id: { $ne: lot._id } }).select('_id').lean();
+			if (!dup) lot.lotBarcode = lotBarcode;
+		}
+
+		try {
+			const params = JSON.parse(parameterValuesJson);
+			const inputs = JSON.parse(inputLotsJson);
+			lot.parameterValues = params;
+			lot.inputLots = inputs.map((i: any) => ({ ...i, recordedAt: i.recordedAt ?? new Date() }));
+		} catch {
+			return fail(400, { error: 'Malformed setup payload.' });
+		}
+
+		await lot.save();
+
+		await AuditLog.create({
+			_id: generateId(),
+			action: 'UPDATE',
+			tableName: 'reagent_lots',
+			recordId: lot._id,
+			changedBy: locals.user!.username,
+			changedAt: new Date(),
+			newData: { setupUpdated: true }
+		});
+
+		return { success: true };
+	},
+
 	/** Upsert a step entry (qc readings, observations, note, completed flag). */
 	saveStep: async ({ request, params, locals }) => {
 		requirePermission(locals.user, 'manufacturing:write');
