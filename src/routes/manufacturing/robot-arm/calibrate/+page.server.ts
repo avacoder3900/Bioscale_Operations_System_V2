@@ -11,8 +11,7 @@
  * operator can verify alignment before pressing GO on the control page.
  */
 import { fail, redirect } from '@sveltejs/kit';
-import { connectDB } from '$lib/server/db/connection';
-import { AuditLog, generateId } from '$lib/server/db/models';
+import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { robotArm } from '$lib/server/robot-arm-client';
 import type { Actions, PageServerLoad } from './$types';
