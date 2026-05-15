@@ -621,7 +621,7 @@
 					<table class="w-full text-left text-sm">
 						<thead>
 							<tr class="border-b border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]">
-								<th class="px-3 py-2">Lot ID</th>
+								<th class="px-3 py-2">Bucket Barcode</th>
 								<th class="px-3 py-2">Qty</th>
 								<th class="px-3 py-2">Operator</th>
 								<th class="px-3 py-2">Status</th>
@@ -635,7 +635,7 @@
 										<a
 											href="/manufacturing/lots/{lot.lotId}"
 											class="text-[var(--color-tron-cyan)] hover:underline"
-										>{lot.lotId}</a>
+										>{lot.bucketBarcode ?? '(in progress)'}</a>
 									</td>
 									<td class="px-3 py-2 text-[var(--color-tron-text)]">{lot.quantityProduced}</td>
 									<td class="px-3 py-2 text-[var(--color-tron-text)]">{lot.operatorName}</td>

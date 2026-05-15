@@ -5,6 +5,7 @@
 		data: {
 			lot: {
 				lotId: string;
+				bucketBarcode: string | null;
 				configId: string;
 				qrCodeRef: string;
 				quantityProduced: number;
@@ -38,7 +39,16 @@
 	{#if !data.lot}
 		<p class="text-lg font-semibold text-[var(--color-tron-error)]">Lot not found.</p>
 	{:else}
-		<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Lot {data.lot.lotId}</h1>
+		<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">
+			Lot {data.lot.bucketBarcode ?? data.lot.lotId}
+		</h1>
+
+		{#if data.lot.bucketBarcode}
+			<div class="rounded-lg border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-bg-secondary)] p-4">
+				<div class="text-xs text-[var(--color-tron-text-secondary)]">Bucket Barcode (scan / copy)</div>
+				<div class="mt-1 select-all font-mono text-2xl font-bold text-[var(--color-tron-cyan)]">{data.lot.bucketBarcode}</div>
+			</div>
+		{/if}
 
 		<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">

@@ -112,6 +112,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		lotStepEntries: [],
 		recentLots: (recentLots as any[]).map((l: any) => ({
 			lotId: String(l._id),
+			bucketBarcode: l.bucketBarcode ?? null,
 			quantityProduced: l.quantityProduced ?? 0,
 			operatorName: l.operator?.username ?? 'unknown',
 			status: l.status ?? 'unknown',

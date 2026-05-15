@@ -14,6 +14,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	return {
 		lot: {
 			lotId: String(lot._id),
+			bucketBarcode: lot.bucketBarcode ?? null,
 			configId: lot.processConfig?.processName ?? lot.processConfig?._id ?? '',
 			qrCodeRef: lot.qrCodeRef ?? '',
 			quantityProduced: lot.quantityProduced ?? 0,
