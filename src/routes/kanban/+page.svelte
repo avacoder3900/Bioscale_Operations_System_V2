@@ -103,6 +103,23 @@
 		collapsed = next;
 	}
 
+	/**
+	 * Per-project Backlog fold state. Initialized with every project ID so backlog
+	 * defaults to collapsed everywhere — backlog tends to be the tallest column
+	 * and dominates the project section's height when expanded.
+	 */
+	let collapsedBacklogs = $state(new Set<string | null>(data.projects.map((p) => p.id)));
+
+	function toggleBacklog(projectId: string | null) {
+		const next = new Set(collapsedBacklogs);
+		if (next.has(projectId)) {
+			next.delete(projectId);
+		} else {
+			next.add(projectId);
+		}
+		collapsedBacklogs = next;
+	}
+
 	async function handleDrop(taskId: string, newStatus: string) {
 		dragError = '';
 		try {
@@ -277,6 +294,9 @@
 								config={col}
 								tasks={grouped[col.key] ?? []}
 								onDrop={handleDrop}
+								collapsible={col.key === 'backlog'}
+								collapsed={col.key === 'backlog' && collapsedBacklogs.has(group.id)}
+								onToggleCollapse={col.key === 'backlog' ? () => toggleBacklog(group.id) : undefined}
 							/>
 						{/each}
 					</div>
