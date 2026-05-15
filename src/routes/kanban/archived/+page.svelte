@@ -5,6 +5,78 @@
 
 	let { data, form } = $props();
 
+	type SortKey = 'title' | 'project' | 'assignee' | 'status' | 'completed';
+	type SortDir = 'asc' | 'desc';
+
+	let sortColumn = $state<SortKey | null>(null);
+	let sortDirection = $state<SortDir>('asc');
+
+	const statusOrder: Record<string, number> = {
+		backlog: 0,
+		ready: 2,
+		wip: 3,
+		waiting: 4,
+		done: 5
+	};
+
+	let sortedTasks = $derived.by(() => {
+		if (!sortColumn) return data.tasks;
+
+		const col = sortColumn;
+		const dir = sortDirection === 'asc' ? 1 : -1;
+
+		return [...data.tasks].sort((a, b) => {
+			let av: number | string = '';
+			let bv: number | string = '';
+
+			switch (col) {
+				case 'title':
+					av = a.title.toLowerCase();
+					bv = b.title.toLowerCase();
+					break;
+				case 'project':
+					av = (a.projectName ?? 'zzz').toLowerCase();
+					bv = (b.projectName ?? 'zzz').toLowerCase();
+					break;
+				case 'assignee':
+					av = (a.assigneeName ?? 'zzz').toLowerCase();
+					bv = (b.assigneeName ?? 'zzz').toLowerCase();
+					break;
+				case 'status':
+					av = statusOrder[a.status] ?? 0;
+					bv = statusOrder[b.status] ?? 0;
+					break;
+				case 'completed':
+					av = a.statusChangedAt ? new Date(a.statusChangedAt).getTime() : Number.MAX_SAFE_INTEGER;
+					bv = b.statusChangedAt ? new Date(b.statusChangedAt).getTime() : Number.MAX_SAFE_INTEGER;
+					break;
+			}
+
+			if (av < bv) return -1 * dir;
+			if (av > bv) return 1 * dir;
+			return 0;
+		});
+	});
+
+	function handleSort(col: SortKey) {
+		if (sortColumn === col) {
+			if (sortDirection === 'asc') {
+				sortDirection = 'desc';
+			} else {
+				sortColumn = null;
+				sortDirection = 'asc';
+			}
+		} else {
+			sortColumn = col;
+			sortDirection = 'asc';
+		}
+	}
+
+	function sortIcon(col: SortKey): string {
+		if (sortColumn !== col) return '';
+		return sortDirection === 'asc' ? ' ▲' : ' ▼';
+	}
+
 	function formatDate(date: string | Date | null): string {
 		if (!date) return '—';
 		return new Date(date).toLocaleDateString('en-US', {
@@ -53,15 +125,25 @@
 			<table class="w-full text-sm">
 				<thead>
 					<tr style="background: var(--color-tron-surface); border-bottom: 1px solid var(--color-tron-border);">
-						<th class="px-4 py-3 text-left font-medium" style="color: var(--color-tron-text-muted);">Title</th>
-						<th class="px-4 py-3 text-left font-medium" style="color: var(--color-tron-text-muted);">Project</th>
-						<th class="px-4 py-3 text-left font-medium" style="color: var(--color-tron-text-muted);">Assignee</th>
-						<th class="px-4 py-3 text-left font-medium" style="color: var(--color-tron-text-muted);">Status</th>
-						<th class="px-4 py-3 text-left font-medium" style="color: var(--color-tron-text-muted);">Archived</th>
+						<th class="cursor-pointer select-none px-4 py-3 text-left font-medium" style="color: var(--color-tron-text-muted);" onclick={() => handleSort('title')}>
+							Title{sortIcon('title')}
+						</th>
+						<th class="cursor-pointer select-none px-4 py-3 text-left font-medium" style="color: var(--color-tron-text-muted);" onclick={() => handleSort('project')}>
+							Project{sortIcon('project')}
+						</th>
+						<th class="cursor-pointer select-none px-4 py-3 text-left font-medium" style="color: var(--color-tron-text-muted);" onclick={() => handleSort('assignee')}>
+							Assignee{sortIcon('assignee')}
+						</th>
+						<th class="cursor-pointer select-none px-4 py-3 text-left font-medium" style="color: var(--color-tron-text-muted);" onclick={() => handleSort('status')}>
+							Status{sortIcon('status')}
+						</th>
+						<th class="cursor-pointer select-none px-4 py-3 text-left font-medium" style="color: var(--color-tron-text-muted);" onclick={() => handleSort('completed')}>
+							Completed{sortIcon('completed')}
+						</th>
 					</tr>
 				</thead>
 				<tbody>
-					{#each data.tasks as task, i}
+					{#each sortedTasks as task, i (task.id)}
 						<tr style="background: {i % 2 === 0 ? 'var(--color-tron-surface)' : 'color-mix(in srgb, var(--color-tron-surface) 30%, transparent)'}; border-bottom: 1px solid var(--color-tron-border);">
 							<td class="px-4 py-3">
 								<a
@@ -82,7 +164,7 @@
 								<TaskStatusBadge status={task.status ?? 'backlog'} />
 							</td>
 							<td class="px-4 py-3" style="color: var(--color-tron-text-muted);">
-								{formatDate(task.archivedAt)}
+								{formatDate(task.statusChangedAt)}
 							</td>
 						</tr>
 					{/each}
