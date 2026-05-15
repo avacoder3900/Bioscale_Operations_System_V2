@@ -1728,3 +1728,27 @@ Null `statusChangedAt` sorts to the bottom via `Number.MAX_SAFE_INTEGER`.
 - `src/routes/kanban/archived/+page.svelte` — sort state, sortedTasks
   derivation, header click handlers, header sort indicators, column rename.
 - Commit `b3198c1`. Pushed to `feature/kanban-improvement`.
+
+### Follow-up — Backlog accordion on board view (same session)
+
+Backlog column is now collapsible per project, defaulting to collapsed.
+The motivation: backlog is the tallest column and dominates the project
+section's vertical height. With backlog folded, the project's row is
+sized by the tallest of Ready / WIP / Waiting / Done — much more
+information-dense.
+
+`KanbanColumn.svelte` gained three optional props — `collapsible`,
+`collapsed`, `onToggleCollapse` — that are backward-compatible (default
+false / undefined → behavior identical to before). When `collapsible`,
+the header gets a chevron button that rotates 90° when collapsed. The
+outer column div still receives drop events when collapsed, so dragging
+a task onto a folded backlog header still works.
+
+`/kanban/+page.svelte` tracks fold state per project in a new
+`collapsedBacklogs: Set<string | null>` state, initialized from
+`data.projects` (= all backlogs collapsed at mount).
+
+- `src/lib/components/kanban/KanbanColumn.svelte` — collapsible props,
+  chevron, gated task list render
+- `src/routes/kanban/+page.svelte` — collapsedBacklogs state, toggleBacklog,
+  prop passthrough on the per-column `<KanbanColumn>` call
