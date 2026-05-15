@@ -631,7 +631,12 @@
 						<tbody>
 							{#each data.recentLots as lot (lot.lotId)}
 								<tr class="border-b border-[var(--color-tron-border)]">
-									<td class="px-3 py-2 font-mono text-xs text-[var(--color-tron-cyan)]">{lot.lotId}</td>
+									<td class="px-3 py-2 font-mono text-xs">
+										<a
+											href="/manufacturing/lots/{lot.lotId}"
+											class="text-[var(--color-tron-cyan)] hover:underline"
+										>{lot.lotId}</a>
+									</td>
 									<td class="px-3 py-2 text-[var(--color-tron-text)]">{lot.quantityProduced}</td>
 									<td class="px-3 py-2 text-[var(--color-tron-text)]">{lot.operatorName}</td>
 									<td class="px-3 py-2 text-[var(--color-tron-text)]">{lot.status}</td>
