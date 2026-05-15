@@ -1660,3 +1660,52 @@ admin re-auth required. Real BackingLot inventory untouched.
   for this whole workstream.
 - Vercel dev preview points at master via the nested checkout. Local
   dev server is the only path that can reach the OT-2.
+
+## Session 2026-05-15 — Kanban auto-archive (PRD + implementation)
+
+### Headline
+Per-task Archive button on `/kanban/task/[taskId]` was 404-ing (the
+`?/archive` form action did not exist server-side). Wired the action,
+hardened the existing `/api/cron/archive-done-tasks` endpoint so Vercel
+Cron can actually call it, scheduled it weekly (Sunday 23:00 CDT / Monday
+04:00 UTC), and added a one-shot cleanup script that ran a full sweep of
+existing done tasks regardless of age.
+
+### Decisions (confirmed with Jacob)
+- Schedule: `0 4 * * 1` UTC = Sunday 11 PM CDT. Board is clean Monday AM.
+- Cron min-age: 24h since `statusChangedAt`. Stops a task marked done at
+  10:59 PM Sunday from disappearing 60 seconds later.
+- Per-task archive: done-only. Non-done tasks return `fail(400)` and the
+  task is unchanged. (UI is frozen, so the button stays visible — server
+  is source of truth.)
+
+### Files changed
+- `docs/prds/KANBAN-AUTO-ARCHIVE.md` — new PRD
+- `src/routes/kanban/task/[taskId]/+page.server.ts` — added `archive` action
+  with done-status guard, activityLog push, and AuditLog row
+- `src/routes/api/cron/archive-done-tasks/+server.ts` — added GET, 3-mode
+  auth (CRON_SECRET / `vercel-cron/*` UA / agent API key), 24h min-age
+  filter on `statusChangedAt`
+- `vercel.json` — added cron entry at `0 4 * * 1`
+- `scripts/archive-done-tasks-cleanup.ts` — one-shot manual archive of
+  all `status: 'done', archived: false` tasks (no min-age) with single
+  `audit_log` row recording the bulk operation
+
+### Validation
+- `npm run check`: 26 pre-existing ERRORS (missing optional deps + unrelated
+  implicit-anys) and 416 warnings. Zero new errors in changed files.
+- Cleanup script run: archived all currently-done tasks (see audit_log
+  row `recordId: 'manual-cleanup'`, `changedBy: 'system-manual'`).
+
+### Branch state
+- All on `feature/kanban-improvement`, branched off freshly-pulled `dev`.
+- 4 feature files + this progress entry + cleanup script committed and
+  pushed. Carryover stray `s` in `docs/BIMS-UNIFIED-TIMELINE-SPEC.md` left
+  unstaged (Jacob editing in the IDE).
+
+### Next session
+- Verify Vercel cron dashboard shows the new job after deploy.
+- Monday AM after first scheduled run: confirm `audit_log` has the
+  `cron-bulk` row and the board is clean.
+- Open question: do we want a one-click "unarchive" affordance on
+  `/kanban/archived`? Currently archive is one-way through the UI.

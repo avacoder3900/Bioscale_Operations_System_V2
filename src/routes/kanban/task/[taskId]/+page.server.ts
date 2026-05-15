@@ -211,6 +211,41 @@ export const actions: Actions = {
 		// Tags are just strings — add to the task
 		await KanbanTask.updateOne({ _id: params.taskId }, { $addToSet: { tags: name.trim() } });
 		return { success: true };
+	},
+
+	archive: async ({ locals, params }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
+		await connectDB();
+
+		const task = await KanbanTask.findById(params.taskId).lean() as any;
+		if (!task) return fail(404, { error: 'Task not found' });
+		if (task.archived) return fail(400, { error: 'Task is already archived' });
+		if (task.status !== 'done') return fail(400, { error: 'Only done tasks can be archived' });
+
+		await KanbanTask.updateOne({ _id: params.taskId }, {
+			$set: { archived: true, archivedAt: new Date() },
+			$push: {
+				activityLog: {
+					_id: generateId(),
+					action: 'archived',
+					details: { fromStatus: task.status },
+					createdAt: new Date(),
+					createdBy: locals.user._id
+				}
+			}
+		});
+
+		await AuditLog.create({
+			tableName: 'kanban_tasks',
+			recordId: params.taskId,
+			action: 'UPDATE',
+			oldData: { archived: false },
+			newData: { archived: true },
+			changedBy: locals.user.username ?? locals.user._id
+		});
+
+		return { success: true };
 	}
 };
 
