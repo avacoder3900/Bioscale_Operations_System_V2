@@ -1752,3 +1752,35 @@ a task onto a folded backlog header still works.
   chevron, gated task list render
 - `src/routes/kanban/+page.svelte` — collapsedBacklogs state, toggleBacklog,
   prop passthrough on the per-column `<KanbanColumn>` call
+
+### Follow-up — Persistent collapse state on board (same session)
+
+Project section fold + backlog accordion fold are now stored on the
+KanbanProject document. Global, not per-user: every kanban:read user
+sees the same state, every kanban:write user can change it. The change
+survives refresh and is shared across all users on next refresh.
+
+Schema additions on `kanban_projects`:
+- `collapsed: Boolean` — defaults `false` (project section starts expanded)
+- `backlogCollapsed: Boolean` — defaults `true` (backlog starts collapsed)
+
+Legacy projects without the fields fall through to those defaults via
+normalization in the layout load (`p.collapsed === true`,
+`p.backlogCollapsed !== false`). The earlier "auto-collapse projects with
+no tasks" heuristic was removed per Jacob's decision — explicit state
+only.
+
+Persistence API: `POST /api/kanban/projects/[id]/ui-state` with body
+`{ collapsed?: boolean, backlogCollapsed?: boolean }`. Partial updates
+allowed. Requires `kanban:write`. No audit log entry — UI state is not
+data, just a presentation toggle.
+
+Client pattern: optimistic update in the local Set, fire-and-forget POST,
+revert on non-ok response. No global error banner since the failure
+mode is invisible (user just sees the chevron snap back).
+
+- `src/lib/server/db/models/kanban-project.ts` — two new schema fields
+- `src/routes/kanban/+layout.server.ts` — normalize into definite booleans
+- `src/routes/api/kanban/projects/[id]/ui-state/+server.ts` — new endpoint
+- `src/routes/kanban/+page.svelte` — drop heuristic, init from DB,
+  async toggle handlers with optimistic+revert

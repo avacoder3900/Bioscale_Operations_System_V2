@@ -17,7 +17,12 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		projects: projects.map((p) => ({
 			id: p._id, name: p.name, description: p.description ?? null,
 			color: p.color, isActive: p.isActive, sortOrder: p.sortOrder,
-			createdBy: p.createdBy ?? null
+			createdBy: p.createdBy ?? null,
+			// Default-aware normalization: collapsed defaults to false (expanded),
+			// backlogCollapsed defaults to true (collapsed). Legacy projects with
+			// missing fields fall through to these defaults.
+			collapsed: p.collapsed === true,
+			backlogCollapsed: p.backlogCollapsed !== false
 		})),
 		users: users.map((u) => ({ id: u._id, username: u.username }))
 	};
