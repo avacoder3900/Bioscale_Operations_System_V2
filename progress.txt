@@ -1709,3 +1709,22 @@ existing done tasks regardless of age.
   `cron-bulk` row and the board is clean.
 - Open question: do we want a one-click "unarchive" affordance on
   `/kanban/archived`? Currently archive is one-way through the UI.
+
+### Follow-up — Archived view UX (same session)
+
+After deploying, swapped the Archive table's last column from "Archived"
+(archivedAt) to "Completed" (statusChangedAt). Reasoning: once a task is
+in the archive, the timestamp Jacob actually wants is "when did we finish
+this," not "when did the cron sweep it up." Since archiving doesn't change
+`status` (the field flips `archived: true` but leaves `status: 'done'`
+intact), `statusChangedAt` on an archived task is necessarily the moment
+it moved to done.
+
+Added click-to-sort on all five archive column headers (Title, Project,
+Assignee, Status, Completed). Three-state cycle per header: asc → desc →
+cleared. Matches the existing pattern on `/kanban/list/+page.svelte`.
+Null `statusChangedAt` sorts to the bottom via `Number.MAX_SAFE_INTEGER`.
+
+- `src/routes/kanban/archived/+page.svelte` — sort state, sortedTasks
+  derivation, header click handlers, header sort indicators, column rename.
+- Commit `b3198c1`. Pushed to `feature/kanban-improvement`.
