@@ -8,6 +8,9 @@ const kanbanProjectSchema = new Schema({
 	color: { type: String, default: '#3b82f6' },
 	sortOrder: { type: Number, default: 0 },
 	isActive: { type: Boolean, default: true },
+	// UI persistence. Global state — shared across users.
+	collapsed: { type: Boolean, default: false },        // project section fold on /kanban
+	backlogCollapsed: { type: Boolean, default: true },  // backlog accordion fold per project
 	createdAt: { type: Date, default: Date.now },
 	createdBy: String
 }, { timestamps: false });

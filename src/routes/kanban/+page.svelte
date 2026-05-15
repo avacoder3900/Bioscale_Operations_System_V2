@@ -87,37 +87,76 @@
 		return grouped;
 	}
 
-	/** Track which project sections are collapsed */
+	/**
+	 * Project section + backlog accordion collapse state are both persisted
+	 * server-side on KanbanProject (collapsed / backlogCollapsed fields).
+	 * Global state: every user sees and writes the same value. Optimistic
+	 * update + revert on API failure.
+	 *
+	 * Defaults from server-side normalization:
+	 *   - collapsed: false (project sections start expanded)
+	 *   - backlogCollapsed: true (backlogs start collapsed)
+	 */
 	let collapsed = $state(new Set<string | null>(
-		data.projects.filter((p) => !filteredTasks.some((t) => t.projectId === p.id)).map((p) => p.id)
+		data.projects.filter((p) => p.collapsed).map((p) => p.id)
 	));
 
-	function toggleCollapse(projectId: string | null) {
-		const next = new Set(collapsed);
-		const key = projectId;
-		if (next.has(key)) {
-			next.delete(key);
-		} else {
-			next.add(key);
+	let collapsedBacklogs = $state(new Set<string | null>(
+		data.projects.filter((p) => p.backlogCollapsed).map((p) => p.id)
+	));
+
+	async function persistProjectUiState(
+		projectId: string,
+		payload: { collapsed?: boolean; backlogCollapsed?: boolean }
+	): Promise<boolean> {
+		try {
+			const res = await fetch(`/api/kanban/projects/${projectId}/ui-state`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(payload)
+			});
+			return res.ok;
+		} catch {
+			return false;
 		}
-		collapsed = next;
 	}
 
-	/**
-	 * Per-project Backlog fold state. Initialized with every project ID so backlog
-	 * defaults to collapsed everywhere — backlog tends to be the tallest column
-	 * and dominates the project section's height when expanded.
-	 */
-	let collapsedBacklogs = $state(new Set<string | null>(data.projects.map((p) => p.id)));
+	async function toggleCollapse(projectId: string | null) {
+		if (projectId === null) return;
+		const wasCollapsed = collapsed.has(projectId);
+		const newState = !wasCollapsed;
 
-	function toggleBacklog(projectId: string | null) {
-		const next = new Set(collapsedBacklogs);
-		if (next.has(projectId)) {
-			next.delete(projectId);
-		} else {
-			next.add(projectId);
+		const next = new Set(collapsed);
+		if (newState) next.add(projectId);
+		else next.delete(projectId);
+		collapsed = next;
+
+		const ok = await persistProjectUiState(projectId, { collapsed: newState });
+		if (!ok) {
+			const revert = new Set(collapsed);
+			if (wasCollapsed) revert.add(projectId);
+			else revert.delete(projectId);
+			collapsed = revert;
 		}
+	}
+
+	async function toggleBacklog(projectId: string | null) {
+		if (projectId === null) return;
+		const wasCollapsed = collapsedBacklogs.has(projectId);
+		const newState = !wasCollapsed;
+
+		const next = new Set(collapsedBacklogs);
+		if (newState) next.add(projectId);
+		else next.delete(projectId);
 		collapsedBacklogs = next;
+
+		const ok = await persistProjectUiState(projectId, { backlogCollapsed: newState });
+		if (!ok) {
+			const revert = new Set(collapsedBacklogs);
+			if (wasCollapsed) revert.add(projectId);
+			else revert.delete(projectId);
+			collapsedBacklogs = revert;
+		}
 	}
 
 	async function handleDrop(taskId: string, newStatus: string) {
