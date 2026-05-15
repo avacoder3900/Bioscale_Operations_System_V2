@@ -55,6 +55,14 @@ def download_from_r2(key: str) -> bytes:
 def upload_to_r2(data: bytes, key: str, content_type: str = "application/octet-stream"):
     _s3_client().put_object(Bucket=R2_BUCKET_NAME, Key=key, Body=data, ContentType=content_type)
 
+
+def _fetch_url(url: str, timeout: int = 30) -> bytes:
+    """HTTP GET with a real User-Agent so Cloudflare workers don't 403 us."""
+    import urllib.request
+    req = urllib.request.Request(url, headers={"User-Agent": "BIMS-CV-Worker/1.0 (+anomalib)"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
 # ---------------------------------------------------------------------------
 # Image preprocessing (matches iCast inference_service.py)
 # ---------------------------------------------------------------------------
@@ -170,9 +178,8 @@ def _run_training(req: TrainRequest):
             try:
                 data = download_from_r2(key)
             except Exception:
-                # Try downloading via HTTP if it's a full URL
-                import urllib.request
-                data = urllib.request.urlopen(url).read()
+                # Fall back to HTTP fetch — cv worker URL or any other public URL.
+                data = _fetch_url(url)
 
             dest = normal_dir if label == "approved" else abnormal_dir
             dest_file = dest / f"img_{i:04d}.jpg"
@@ -195,12 +202,13 @@ def _run_training(req: TrainRequest):
         accelerator = "mps" if torch.backends.mps.is_available() else "cpu"
 
         model = Padim()
+        # anomalib >=2.x dropped `image_size` from Folder; the datamodule
+        # uses the model's expected transform (PaDiM with resnet18 → 256×256).
         datamodule = Folder(
             name=project_id,
             root=project_dir,
             normal_dir="good",
             abnormal_dir="bad",
-            image_size=(256, 256),
             train_batch_size=4,
             eval_batch_size=4,
         )
@@ -294,8 +302,7 @@ async def infer(req: InferRequest):
         try:
             image_data = download_from_r2(key)
         except Exception:
-            import urllib.request
-            image_data = urllib.request.urlopen(req.image_url).read()
+            image_data = _fetch_url(req.image_url)
 
         # Preprocess and run
         start = time.time()
@@ -405,8 +412,7 @@ async def process_image(req: ProcessRequest):
     try:
         image_data = download_from_r2(key)
     except Exception:
-        import urllib.request
-        image_data = urllib.request.urlopen(req.image_url).read()
+        image_data = _fetch_url(req.image_url)
 
     # Decode image
     img_array = np.frombuffer(image_data, np.uint8)

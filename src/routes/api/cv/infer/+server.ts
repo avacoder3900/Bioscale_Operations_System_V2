@@ -28,7 +28,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			return json({ error: 'Project model is not trained' }, { status: 400 });
 		}
 
-		// Create pending inspection
 		const inspectionId = generateId();
 		await CvInspection.create({
 			_id: inspectionId,
@@ -39,25 +38,35 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			status: 'processing'
 		});
 
-		// Call Python worker; pass per-project threshold so pass/fail uses the
-		// configured value rather than the worker's env default.
-		const modelPath = `cv/${projectId}/models/model.onnx`;
-		const result = await runInference(image.imageUrl, modelPath, project.confidenceThreshold);
+		try {
+			const result = await runInference(image.imageUrl, projectId, project.confidenceThreshold);
 
-		// Update inspection with result
-		await CvInspection.findByIdAndUpdate(inspectionId, {
-			status: 'complete',
-			result: result.result,
-			confidenceScore: result.confidence,
-			defects: result.defects || [],
-			modelVersion: project.modelVersion,
-			processingTimeMs: result.processing_time_ms,
-			completedAt: new Date()
-		});
+			await CvInspection.findByIdAndUpdate(inspectionId, {
+				status: 'complete',
+				result: result.result,
+				confidenceScore: result.confidence,
+				percentConfidence: result.percentConfidence,
+				passProbability: result.passProbability,
+				threshold: result.threshold,
+				defects: result.defects,
+				modelVersion: project.modelVersion,
+				processingTimeMs: result.processing_time_ms,
+				completedAt: new Date()
+			});
+		} catch (inferErr: any) {
+			await CvInspection.findByIdAndUpdate(inspectionId, {
+				status: 'failed',
+				processingTimeMs: 0,
+				completedAt: new Date()
+			});
+			throw inferErr;
+		}
 
 		const inspection = await CvInspection.findById(inspectionId).lean();
 		return json({ data: JSON.parse(JSON.stringify(inspection)) });
 	} catch (err: any) {
-		return json({ error: err.message }, { status: 500 });
+		return json({ error: err?.message ?? 'Inference failed' }, { status: 500 });
 	}
 };
+
+export const config = { maxDuration: 60 };

@@ -23,6 +23,8 @@ const cvImageSchema = new Schema({
 		_id: false
 	},
 	label: { type: String, enum: ['approved', 'rejected', null], default: null },
+	embedding: { type: [Number], default: undefined },
+	embeddingVersion: String,
 	processedPath: String,
 	processingMode: { type: String, enum: ['full', 'raw', null] },
 	processingParams: {
@@ -38,5 +40,6 @@ const cvImageSchema = new Schema({
 
 cvImageSchema.index({ sampleId: 1 });
 cvImageSchema.index({ label: 1 });
+cvImageSchema.index({ projectId: 1, label: 1 });
 
 export const CvImage = mongoose.models.CvImage || mongoose.model('CvImage', cvImageSchema, 'cv_images');
