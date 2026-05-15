@@ -60,13 +60,22 @@
 <div class="mx-auto max-w-6xl space-y-6 p-4">
 	<div class="flex items-center justify-between">
 		<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Robot Arm</h1>
-		<a
-			href="/manufacturing/robot-arm/runs"
-			class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs font-medium transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
-			style="color: var(--color-tron-text)"
-		>
-			Full run log →
-		</a>
+		<div class="flex items-center gap-2">
+			<a
+				href="/manufacturing/robot-arm/calibrate"
+				class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs font-medium transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
+				style="color: var(--color-tron-text)"
+			>
+				Calibrate →
+			</a>
+			<a
+				href="/manufacturing/robot-arm/runs"
+				class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs font-medium transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
+				style="color: var(--color-tron-text)"
+			>
+				Full run log →
+			</a>
+		</div>
 	</div>
 
 	<!-- Port status pills -->
@@ -108,6 +117,15 @@
 			<span class="text-xs opacity-80">· {portPillLabel(ports?.follower)}</span>
 		</div>
 	</div>
+
+	<!-- Port-mismatch diagnosis (host can self-suggest the fix when COM
+	     numbers don't match config). Hidden when ports line up. -->
+	{#if ports?.diagnosis}
+		<div class="rounded border border-yellow-500/40 bg-yellow-900/10 p-3 text-sm">
+			<p class="font-medium text-yellow-400">Port mismatch</p>
+			<p class="mt-1 text-xs text-yellow-200/80">{ports.diagnosis}</p>
+		</div>
+	{/if}
 
 	<!-- Connect-error banner (only if Pi unreachable) -->
 	{#if connectError || !ports}

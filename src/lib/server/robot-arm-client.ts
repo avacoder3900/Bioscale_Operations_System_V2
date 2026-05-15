@@ -6,7 +6,7 @@
 import { env } from '$env/dynamic/private';
 
 interface FetchOptions {
-	method?: 'GET' | 'POST';
+	method?: 'GET' | 'POST' | 'DELETE';
 	body?: unknown;
 	timeoutMs?: number;
 }
@@ -87,10 +87,45 @@ export interface PortInfo {
 	in_use: boolean;
 }
 
+export interface PortCandidate {
+	port: string;
+	serial_number: string;
+	vid_pid: string;
+	description: string;
+	expected_role: 'leader' | 'follower' | null;
+}
+
 export interface PortStatus {
 	leader: PortInfo;
 	follower: PortInfo;
 	active: { run_id: string; kind: string } | null;
+	candidates?: PortCandidate[];
+	diagnosis?: string;
+}
+
+export interface SyncZeroRecord {
+	version: string;
+	captured_at: string;
+	captured_by: TriggeredBy | null;
+	joint_names: string[];
+	leader_positions: number[];
+	follower_positions: number[];
+	follower_min: number[];
+	follower_max: number[];
+}
+
+export interface CalibrationStatus {
+	saved: SyncZeroRecord | null;
+	live: {
+		leader_positions: (number | null)[];
+		follower_positions: (number | null)[];
+		joint_names: string[];
+	} | null;
+	deltas: {
+		leader: (number | null)[];
+		follower: (number | null)[];
+	} | null;
+	live_error?: string;
 }
 
 export const robotArm = {
@@ -108,5 +143,22 @@ export const robotArm = {
 	startReplay: (body: { source: string; loops?: number; triggered_by?: TriggeredBy }) =>
 		robotArmFetch<SessionStarted>('/replay/start', { method: 'POST', body }),
 	listRecordings: () => robotArmFetch<{ recordings: RecordingMeta[] }>('/recordings'),
-	health: () => robotArmFetch<{ status: string; service: string; version: string }>('/health')
+	health: () => robotArmFetch<{ status: string; service: string; version: string }>('/health'),
+
+	getCalibration: (opts: { live?: boolean } = {}) =>
+		robotArmFetch<CalibrationStatus>(
+			`/calibrate/sync${opts.live ? '?live=true' : ''}`,
+			{ timeoutMs: opts.live ? 15000 : 5000 }
+		),
+	captureCalibration: (body: { triggered_by?: TriggeredBy } = {}) =>
+		robotArmFetch<SyncZeroRecord>('/calibrate/sync', {
+			method: 'POST',
+			body,
+			timeoutMs: 15000
+		}),
+	clearCalibration: () =>
+		robotArmFetch<{ removed: boolean }>('/calibrate/sync', {
+			method: 'DELETE',
+			timeoutMs: 5000
+		})
 };
