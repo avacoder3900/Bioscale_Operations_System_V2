@@ -2,8 +2,8 @@
 	import jsQR from 'jsqr';
 	import { tick } from 'svelte';
 	let { data } = $props();
-	let activeTab = $state('import');
-	const tabs = ['Import', 'Capture', 'Labels', 'Train', 'Test', 'Review', 'Integrate'];
+	let activeTab = $state('capture');
+	const tabs = ['Import', 'Capture', 'Labels', 'Train', 'Review', 'Integrate'];
 
 	// Import tab
 	let uploading = $state(false);
@@ -27,7 +27,6 @@
 	let processingMode = $state<'full' | 'raw'>(data.project.captureSettings?.mode || 'full');
 
 	// Camera settings (initialized from camera capabilities, not hardcoded)
-	let showSettings = $state(false);
 	let cameraCapabilities = $state<any>(null);
 	let camExposureComp = $state(50);
 	let camExposureTime = $state(250);
@@ -190,9 +189,9 @@
 		}
 	}
 
-	// Keyboard shortcuts
+	// Keyboard shortcuts — active whenever the camera is running, regardless of tab
 	function handleKeydown(e: KeyboardEvent) {
-		if (activeTab !== 'capture' || !cameraStream) return;
+		if (!cameraStream) return;
 		if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
 
 		if (e.code === 'Space') {
@@ -365,9 +364,9 @@
 		captureUploading = false;
 	}
 
-	// Clean up camera when leaving capture tab or page
+	// Stop camera only when leaving the page (unmount). Camera stays live across tabs.
 	$effect(() => {
-		if (activeTab !== 'capture') stopCamera();
+		return () => stopCamera();
 	});
 
 	// Keyboard shortcuts
@@ -516,11 +515,6 @@
 	let trainStatus = $state<any>(null);
 	let trainPollTimer = $state<ReturnType<typeof setInterval> | null>(null);
 
-	// Test tab
-	let testFile = $state<File | null>(null);
-	let testing = $state(false);
-	let testResult = $state<any>(null);
-
 	const statusColors: Record<string, string> = {
 		untrained: 'var(--color-tron-text-secondary)',
 		training: 'var(--color-tron-yellow)',
@@ -647,38 +641,26 @@
 		}, 3000);
 	}
 
-	async function runTest() {
-		if (!testFile) return;
-		testing = true;
-		testResult = null;
-		// First upload the test image
-		const fd = new FormData();
-		fd.append('file', testFile);
-		fd.append('projectId', data.project._id);
-		try {
-			const uploadRes = await fetch('/api/cv/images', { method: 'POST', body: fd });
-			const uploadJson = await uploadRes.json();
-			if (!uploadRes.ok) { testResult = { error: uploadJson.error }; testing = false; return; }
-
-			// Run inference
-			const inferRes = await fetch('/api/cv/infer', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ imageId: uploadJson.data._id, projectId: data.project._id })
-			});
-			testResult = (await inferRes.json()).data || (await inferRes.json());
-		} catch (err: any) {
-			testResult = { error: err.message };
-		}
-		testing = false;
-	}
-
 	function fmtDate(d: string) {
 		return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 	}
+
+	function resetCameraDefaults() {
+		camExposureMode = 'manual';
+		camExposureComp = 50;
+		camExposureTime = 250;
+		camWhiteBalanceMode = 'manual';
+		camWhiteBalance = 4000;
+		camBrightness = 0;
+		camContrast = 32;
+		camSharpness = 3;
+		camSaturation = 64;
+		camZoom = 1;
+		applyCameraSettings();
+	}
 </script>
 
-<div class="space-y-6">
+<div class="space-y-4">
 	<!-- Header -->
 	<div class="flex items-center justify-between">
 		<div>
@@ -720,53 +702,30 @@
 		</div>
 	</div>
 
-	<!-- Tab Bar -->
-	<div class="flex gap-1 overflow-x-auto rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-1">
-		{#each tabs as tab}
-			<button
-				class="whitespace-nowrap rounded-md px-4 py-2 text-sm font-medium transition-colors {activeTab === tab.toLowerCase() ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
-				onclick={() => activeTab = tab.toLowerCase()}
-			>
-				{tab}
-			</button>
-		{/each}
-	</div>
+	<!-- 3-pane workspace: vertical tabs | camera + tab content | camera settings -->
+	<div class="grid grid-cols-1 gap-4 lg:grid-cols-[160px_minmax(0,1fr)_320px]">
 
-	<!-- Tab Content -->
-	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-6">
-
-		<!-- IMPORT TAB -->
-		{#if activeTab === 'import'}
-			<div
-				class="flex min-h-[200px] flex-col items-center justify-center rounded-lg border-2 border-dashed transition-colors {dragOver ? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/5' : 'border-[var(--color-tron-border)]'}"
-				role="button"
-				tabindex="0"
-				ondragover={(e) => { e.preventDefault(); dragOver = true; }}
-				ondragleave={() => dragOver = false}
-				ondrop={handleDrop}
-			>
-				<svg class="mb-3 h-12 w-12 text-[var(--color-tron-text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
-				</svg>
-				<p class="mb-2 text-[var(--color-tron-text-primary)]">Drag & drop images here</p>
-				<p class="mb-4 text-sm text-[var(--color-tron-text-secondary)]">or click to browse</p>
-				<label class="cursor-pointer rounded-lg bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-black hover:opacity-90">
-					Browse Files
-					<input type="file" accept="image/*" multiple class="hidden" onchange={handleFileInput} />
-				</label>
+		<!-- LEFT: vertical tab navigation -->
+		<nav class="self-start rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-2 lg:sticky lg:top-4">
+			<div class="flex flex-row gap-1 overflow-x-auto lg:flex-col lg:overflow-visible">
+				{#each tabs as tab}
+					<button
+						class="whitespace-nowrap rounded-md px-3 py-2 text-left text-sm font-medium transition-colors {activeTab === tab.toLowerCase() ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
+						onclick={() => activeTab = tab.toLowerCase()}
+					>
+						{tab}
+					</button>
+				{/each}
 			</div>
-			{#if uploading}
-				<p class="mt-3 text-center text-sm text-[var(--color-tron-yellow)]">Uploading...</p>
-			{/if}
-			{#if uploadMsg}
-				<p class="mt-3 text-center text-sm text-[var(--color-tron-green)]">{uploadMsg}</p>
-			{/if}
+		</nav>
 
-		<!-- CAPTURE TAB -->
-		{:else if activeTab === 'capture'}
-			<div class="space-y-4">
+		<!-- MIDDLE: persistent camera + tab-switched content -->
+		<div class="min-w-0 space-y-4">
+
+			<!-- Persistent camera panel -->
+			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
 				{#if !cameraStream && !cameraError}
-					<div class="flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-[var(--color-tron-border)] py-16">
+					<div class="flex flex-col items-center justify-center py-12">
 						<svg class="mb-3 h-12 w-12 text-[var(--color-tron-text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
 						</svg>
@@ -774,7 +733,7 @@
 						<button onclick={startCamera} class="rounded-lg bg-[var(--color-tron-cyan)] px-6 py-3 text-sm font-medium text-black hover:opacity-90">
 							Start Camera
 						</button>
-						<p class="mt-3 text-xs text-[var(--color-tron-text-secondary)]">Shortcuts: <kbd class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5">Space</kbd> capture/save &middot; <kbd class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5">Esc</kbd> retake</p>
+						<p class="mt-3 text-xs text-[var(--color-tron-text-secondary)]">Camera stays live across tabs. Shortcuts: <kbd class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5">Space</kbd> capture/save · <kbd class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5">Esc</kbd> retake</p>
 					</div>
 				{/if}
 
@@ -782,191 +741,223 @@
 					<div class="rounded border border-[var(--color-tron-red)]/30 bg-[var(--color-tron-red)]/10 p-4 text-sm text-[var(--color-tron-red)]">
 						{cameraError}
 					</div>
-					<button onclick={startCamera} class="rounded-lg bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-black hover:opacity-90">
+					<button onclick={startCamera} class="mt-3 rounded-lg bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-black hover:opacity-90">
 						Retry
 					</button>
 				{/if}
 
 				{#if cameraStream}
-					<div class="grid gap-4 lg:grid-cols-[1fr_300px]">
-						<!-- Left: Camera feed -->
-						<div class="space-y-3">
-							<!-- Camera selector + Processing mode -->
-							<div class="flex flex-wrap items-center gap-4">
-								{#if availableCameras.length > 1}
-									<div class="flex items-center gap-2">
-										<label class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Camera</label>
-										<select
-											bind:value={selectedCameraId}
-											onchange={startCamera}
-											class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-tron-text-primary)]"
-										>
-											{#each availableCameras as cam, i}
-												<option value={cam.deviceId}>{cam.label || `Camera ${i + 1}`}</option>
-											{/each}
-										</select>
-									</div>
-								{/if}
+					<div class="space-y-3">
+						<!-- Camera selector + processing mode -->
+						<div class="flex flex-wrap items-center gap-4">
+							{#if availableCameras.length > 1}
 								<div class="flex items-center gap-2">
-									<label class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Processing</label>
-									<div class="flex rounded border border-[var(--color-tron-border)]">
-										<button
-											onclick={() => processingMode = 'full'}
-											class="px-3 py-1 text-xs font-medium transition-colors {processingMode === 'full' ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
-										>Full</button>
-										<button
-											onclick={() => processingMode = 'raw'}
-											class="border-l border-[var(--color-tron-border)] px-3 py-1 text-xs font-medium transition-colors {processingMode === 'raw' ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
-										>Raw</button>
-									</div>
+									<label class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Camera</label>
+									<select
+										bind:value={selectedCameraId}
+										onchange={startCamera}
+										class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-tron-text-primary)]"
+									>
+										{#each availableCameras as cam, i}
+											<option value={cam.deviceId}>{cam.label || `Camera ${i + 1}`}</option>
+										{/each}
+									</select>
+								</div>
+							{/if}
+							<div class="flex items-center gap-2">
+								<label class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Processing</label>
+								<div class="flex rounded border border-[var(--color-tron-border)]">
+									<button
+										onclick={() => processingMode = 'full'}
+										class="px-3 py-1 text-xs font-medium transition-colors {processingMode === 'full' ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
+									>Full</button>
+									<button
+										onclick={() => processingMode = 'raw'}
+										class="border-l border-[var(--color-tron-border)] px-3 py-1 text-xs font-medium transition-colors {processingMode === 'raw' ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
+									>Raw</button>
 								</div>
 							</div>
+						</div>
 
-							<!-- Live feed / captured image -->
-							<div class="relative overflow-hidden rounded-lg border-2 border-[var(--color-tron-border)] bg-black">
-								{#if capturedImage}
-									<img src={capturedImage} alt="Captured" class="w-full" />
-								{:else}
-									<!-- svelte-ignore element_invalid_self_closing_tag -->
-									<video bind:this={videoEl} autoplay playsinline muted class="w-full" />
-								{/if}
-								<!-- QR status overlay (display only, like LIZA) -->
-								{#if cameraReady && !capturedImage}
-									<div class="absolute left-0 top-0 right-0 flex items-center justify-between p-2">
-										{#if detectedQR}
-											<span class="rounded bg-[var(--color-tron-green)]/80 px-2 py-1 text-xs font-bold text-black">QR: {detectedQR.slice(0, 50)}</span>
-										{:else}
-											<span class="rounded bg-[var(--color-tron-red)]/60 px-2 py-1 text-xs font-bold text-white">QR: NOT DETECTED</span>
-										{/if}
-									</div>
-									<div class="absolute bottom-0 left-0 right-0 flex items-center justify-between p-2">
-										<span class="rounded-full bg-[var(--color-tron-green)]/80 px-3 py-1 text-xs font-bold text-black">LIVE</span>
-										{#if captureCount > 0}
-											<span class="rounded-full bg-[var(--color-tron-cyan)]/80 px-3 py-1 text-xs font-bold text-black">{captureCount} captured</span>
-										{/if}
-									</div>
-								{/if}
-							</div>
-							<canvas bind:this={canvasEl} class="hidden"></canvas>
+						<!-- Live feed / captured image -->
+						<div class="relative overflow-hidden rounded-lg border-2 border-[var(--color-tron-border)] bg-black">
+							{#if capturedImage}
+								<img src={capturedImage} alt="Captured" class="w-full" />
+							{:else}
+								<!-- svelte-ignore element_invalid_self_closing_tag -->
+								<video bind:this={videoEl} autoplay playsinline muted class="w-full" />
+							{/if}
+							{#if cameraReady && !capturedImage}
+								<div class="absolute left-0 top-0 right-0 flex items-center justify-between p-2">
+									{#if detectedQR}
+										<span class="rounded bg-[var(--color-tron-green)]/80 px-2 py-1 text-xs font-bold text-black">QR: {detectedQR.slice(0, 50)}</span>
+									{:else}
+										<span class="rounded bg-[var(--color-tron-red)]/60 px-2 py-1 text-xs font-bold text-white">QR: NOT DETECTED</span>
+									{/if}
+								</div>
+								<div class="absolute bottom-0 left-0 right-0 flex items-center justify-between p-2">
+									<span class="rounded-full bg-[var(--color-tron-green)]/80 px-3 py-1 text-xs font-bold text-black">LIVE</span>
+									{#if captureCount > 0}
+										<span class="rounded-full bg-[var(--color-tron-cyan)]/80 px-3 py-1 text-xs font-bold text-black">{captureCount} captured</span>
+									{/if}
+								</div>
+							{/if}
+						</div>
+						<canvas bind:this={canvasEl} class="hidden"></canvas>
 
-							<!-- Controls -->
-							<div class="flex items-center justify-center gap-3">
-								{#if capturedImage}
-									<button
-										onclick={retakePhoto}
-										class="rounded-lg border border-[var(--color-tron-border)] px-6 py-3 text-sm font-medium text-[var(--color-tron-text-primary)] hover:bg-[var(--color-tron-bg-tertiary)]"
-									>
-										Retake <kbd class="ml-1 rounded bg-[var(--color-tron-bg-tertiary)] px-1 text-xs">Esc</kbd>
-									</button>
-									<button
-										onclick={saveCapture}
-										disabled={captureUploading}
-										class="rounded-lg bg-[var(--color-tron-green)] px-6 py-3 text-sm font-medium text-black hover:opacity-90 disabled:opacity-50"
-									>
-										{captureUploading ? 'Saving...' : 'Save to Project'} <kbd class="ml-1 rounded bg-black/20 px-1 text-xs">Space</kbd>
-									</button>
-								{:else}
-									<button
-										onclick={capturePhoto}
-										disabled={!cameraReady}
-										class="rounded-full bg-[var(--color-tron-cyan)] p-4 text-black shadow-lg transition-transform hover:scale-105 disabled:opacity-50"
-										title="Capture (Space)"
-									>
-										<svg class="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-											<circle cx="12" cy="12" r="10" stroke-width="2"/>
-											<circle cx="12" cy="12" r="4" fill="currentColor"/>
-										</svg>
-									</button>
-									<button
-										onclick={stopCamera}
-										class="rounded-lg border border-[var(--color-tron-border)] px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-red)]"
-									>
-										Stop Camera
-									</button>
-								{/if}
-							</div>
-
-							{#if captureMsg}
-								<p class="text-center text-sm text-[var(--color-tron-green)]">{captureMsg}</p>
+						<!-- Controls -->
+						<div class="flex items-center justify-center gap-3">
+							{#if capturedImage}
+								<button
+									onclick={retakePhoto}
+									class="rounded-lg border border-[var(--color-tron-border)] px-6 py-3 text-sm font-medium text-[var(--color-tron-text-primary)] hover:bg-[var(--color-tron-bg-tertiary)]"
+								>
+									Retake <kbd class="ml-1 rounded bg-[var(--color-tron-bg-tertiary)] px-1 text-xs">Esc</kbd>
+								</button>
+								<button
+									onclick={saveCapture}
+									disabled={captureUploading}
+									class="rounded-lg bg-[var(--color-tron-green)] px-6 py-3 text-sm font-medium text-black hover:opacity-90 disabled:opacity-50"
+								>
+									{captureUploading ? 'Saving...' : 'Save to Project'} <kbd class="ml-1 rounded bg-black/20 px-1 text-xs">Space</kbd>
+								</button>
+							{:else}
+								<button
+									onclick={capturePhoto}
+									disabled={!cameraReady}
+									class="rounded-full bg-[var(--color-tron-cyan)] p-4 text-black shadow-lg transition-transform hover:scale-105 disabled:opacity-50"
+									title="Capture (Space)"
+								>
+									<svg class="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+										<circle cx="12" cy="12" r="10" stroke-width="2"/>
+										<circle cx="12" cy="12" r="4" fill="currentColor"/>
+									</svg>
+								</button>
+								<button
+									onclick={stopCamera}
+									class="rounded-lg border border-[var(--color-tron-border)] px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-red)]"
+								>
+									Stop Camera
+								</button>
 							{/if}
 						</div>
 
-						<!-- Right: QR Info Panel -->
-						<div class="space-y-3">
-							<div class="rounded-lg border {inductMode ? 'border-[var(--color-tron-yellow)]' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-bg-primary)] p-4">
-								<div class="mb-3 flex items-center justify-between">
-									<h4 class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">QR Code Scanner</h4>
-									<button
-										onclick={() => { inductMode = !inductMode; inductMsg = ''; }}
-										class="rounded-lg px-2.5 py-1 text-xs font-medium transition-colors {inductMode ? 'bg-[var(--color-tron-yellow)]/20 text-[var(--color-tron-yellow)] border border-[var(--color-tron-yellow)]/40' : 'bg-[var(--color-tron-bg-tertiary)] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
-									>
-										{inductMode ? 'INDUCT ON' : 'INDUCT OFF'}
-									</button>
-								</div>
-								{#if inductMode}
-									<div class="mb-2 rounded border border-[var(--color-tron-yellow)]/30 bg-[var(--color-tron-yellow)]/10 px-2 py-1">
-										<p class="text-[10px] text-[var(--color-tron-yellow)]">Induct mode: unknown QR codes will be auto-created as new cartridge records</p>
-									</div>
-								{/if}
-								{#if inductMsg}
-									<div class="mb-2 rounded border border-[var(--color-tron-green)]/30 bg-[var(--color-tron-green)]/10 px-2 py-1">
-										<p class="text-xs text-[var(--color-tron-green)]">{inductMsg}</p>
-									</div>
-								{/if}
-								{#if detectedQR}
-									<div class="space-y-2">
-										<div class="rounded border border-[var(--color-tron-green)]/30 bg-[var(--color-tron-green)]/10 p-2">
-											<p class="text-xs text-[var(--color-tron-text-secondary)]">Detected</p>
-											<p class="break-all font-mono text-sm text-[var(--color-tron-green)]">{detectedQR}</p>
-										</div>
-										{#if qrLookupResult}
-											{#if qrLookupResult.type === 'cartridge'}
-												<div class="space-y-1 text-sm">
-													<p class="text-[var(--color-tron-text-primary)]">Cartridge: <span class="font-semibold text-[var(--color-tron-cyan)]">{qrLookupResult.barcode || qrLookupResult._id}</span></p>
-													{#if cartridgePhaseInfo}
-														{#if cartridgePhaseInfo.isNew}
-															<div class="rounded border border-[var(--color-tron-yellow)]/30 bg-[var(--color-tron-yellow)]/10 px-2 py-1">
-																<p class="text-xs font-semibold text-[var(--color-tron-yellow)]">New cartridge — capturing as {cartridgePhaseInfo.nextPhase.replace(/_/g, ' ')}</p>
-															</div>
-														{:else if cartridgePhaseInfo.isComplete}
-															<div class="rounded border border-[var(--color-tron-green)]/30 bg-[var(--color-tron-green)]/10 px-2 py-1">
-																<p class="text-xs font-semibold text-[var(--color-tron-green)]">Already released — additional photo</p>
-															</div>
-														{:else}
-															<div class="rounded border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-cyan)]/10 px-2 py-1">
-																<p class="text-xs text-[var(--color-tron-cyan)]">{cartridgePhaseInfo.currentPhase?.replace(/_/g, ' ')} → <span class="font-semibold">{cartridgePhaseInfo.nextPhase.replace(/_/g, ' ')}</span></p>
-															</div>
-														{/if}
-														<div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-tron-bg-tertiary)]">
-															<div class="h-full rounded-full bg-[var(--color-tron-cyan)]" style="width: {Math.round(((cartridgePhaseInfo.pipelineIndex + 1) / cartridgePhaseInfo.pipelineLength) * 100)}%"></div>
-														</div>
-														<p class="text-[10px] text-[var(--color-tron-text-secondary)]">{cartridgePhaseInfo.pipelineIndex + 1} / {cartridgePhaseInfo.pipelineLength} phases &middot; {cartridgePhaseInfo.previousImages.length} prior photo{cartridgePhaseInfo.previousImages.length !== 1 ? 's' : ''}</p>
-													{:else}
-														{#if qrLookupResult.phase}<p class="text-[var(--color-tron-text-secondary)]">Phase: {qrLookupResult.phase}</p>{/if}
-													{/if}
-													{#if qrLookupResult.lotNumber}<p class="text-[var(--color-tron-text-secondary)]">Lot: {qrLookupResult.lotNumber}</p>{/if}
-												</div>
-											{:else if qrLookupResult.type === 'lot'}
-												<div class="space-y-1 text-sm">
-													<p class="text-[var(--color-tron-text-primary)]">Lot: <span class="font-semibold text-[var(--color-tron-cyan)]">{qrLookupResult.lotNumber}</span></p>
-													{#if qrLookupResult.status}<p class="text-[var(--color-tron-text-secondary)]">Status: {qrLookupResult.status}</p>{/if}
-												</div>
-											{:else if qrLookupResult.type === 'part'}
-												<div class="space-y-1 text-sm">
-													<p class="text-[var(--color-tron-text-primary)]">Part: <span class="font-semibold text-[var(--color-tron-cyan)]">{qrLookupResult.name}</span></p>
-													{#if qrLookupResult.barcode}<p class="text-[var(--color-tron-text-secondary)]">Barcode: {qrLookupResult.barcode}</p>{/if}
-												</div>
-											{:else}
-												<p class="text-xs text-[var(--color-tron-text-secondary)]">No matching record found in BIMS</p>
-											{/if}
-										{/if}
-									</div>
-								{:else}
-									<p class="text-sm text-[var(--color-tron-text-secondary)]">Point camera at a QR code to auto-identify cartridge, lot, or part.</p>
-								{/if}
-							</div>
+						{#if captureMsg}
+							<p class="text-center text-sm text-[var(--color-tron-green)]">{captureMsg}</p>
+						{/if}
+					</div>
+				{/if}
+			</div>
 
-							<!-- Session stats -->
+			<!-- Tab-switched secondary content -->
+			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-6">
+
+				<!-- IMPORT TAB -->
+				{#if activeTab === 'import'}
+					<div
+						class="flex min-h-[200px] flex-col items-center justify-center rounded-lg border-2 border-dashed transition-colors {dragOver ? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/5' : 'border-[var(--color-tron-border)]'}"
+						role="button"
+						tabindex="0"
+						ondragover={(e) => { e.preventDefault(); dragOver = true; }}
+						ondragleave={() => dragOver = false}
+						ondrop={handleDrop}
+					>
+						<svg class="mb-3 h-12 w-12 text-[var(--color-tron-text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+						</svg>
+						<p class="mb-2 text-[var(--color-tron-text-primary)]">Drag & drop images here</p>
+						<p class="mb-4 text-sm text-[var(--color-tron-text-secondary)]">or click to browse</p>
+						<label class="cursor-pointer rounded-lg bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-black hover:opacity-90">
+							Browse Files
+							<input type="file" accept="image/*" multiple class="hidden" onchange={handleFileInput} />
+						</label>
+					</div>
+					{#if uploading}
+						<p class="mt-3 text-center text-sm text-[var(--color-tron-yellow)]">Uploading...</p>
+					{/if}
+					{#if uploadMsg}
+						<p class="mt-3 text-center text-sm text-[var(--color-tron-green)]">{uploadMsg}</p>
+					{/if}
+
+				<!-- CAPTURE TAB — QR scanner + session info (camera itself is persistent above) -->
+				{:else if activeTab === 'capture'}
+					<div class="grid gap-3 sm:grid-cols-2">
+						<!-- QR Scanner panel -->
+						<div class="rounded-lg border {inductMode ? 'border-[var(--color-tron-yellow)]' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-bg-primary)] p-4">
+							<div class="mb-3 flex items-center justify-between">
+								<h4 class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">QR Code Scanner</h4>
+								<button
+									onclick={() => { inductMode = !inductMode; inductMsg = ''; }}
+									class="rounded-lg px-2.5 py-1 text-xs font-medium transition-colors {inductMode ? 'bg-[var(--color-tron-yellow)]/20 text-[var(--color-tron-yellow)] border border-[var(--color-tron-yellow)]/40' : 'bg-[var(--color-tron-bg-tertiary)] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
+								>
+									{inductMode ? 'INDUCT ON' : 'INDUCT OFF'}
+								</button>
+							</div>
+							{#if inductMode}
+								<div class="mb-2 rounded border border-[var(--color-tron-yellow)]/30 bg-[var(--color-tron-yellow)]/10 px-2 py-1">
+									<p class="text-[10px] text-[var(--color-tron-yellow)]">Induct mode: unknown QR codes will be auto-created as new cartridge records</p>
+								</div>
+							{/if}
+							{#if inductMsg}
+								<div class="mb-2 rounded border border-[var(--color-tron-green)]/30 bg-[var(--color-tron-green)]/10 px-2 py-1">
+									<p class="text-xs text-[var(--color-tron-green)]">{inductMsg}</p>
+								</div>
+							{/if}
+							{#if detectedQR}
+								<div class="space-y-2">
+									<div class="rounded border border-[var(--color-tron-green)]/30 bg-[var(--color-tron-green)]/10 p-2">
+										<p class="text-xs text-[var(--color-tron-text-secondary)]">Detected</p>
+										<p class="break-all font-mono text-sm text-[var(--color-tron-green)]">{detectedQR}</p>
+									</div>
+									{#if qrLookupResult}
+										{#if qrLookupResult.type === 'cartridge'}
+											<div class="space-y-1 text-sm">
+												<p class="text-[var(--color-tron-text-primary)]">Cartridge: <span class="font-semibold text-[var(--color-tron-cyan)]">{qrLookupResult.barcode || qrLookupResult._id}</span></p>
+												{#if cartridgePhaseInfo}
+													{#if cartridgePhaseInfo.isNew}
+														<div class="rounded border border-[var(--color-tron-yellow)]/30 bg-[var(--color-tron-yellow)]/10 px-2 py-1">
+															<p class="text-xs font-semibold text-[var(--color-tron-yellow)]">New cartridge — capturing as {cartridgePhaseInfo.nextPhase.replace(/_/g, ' ')}</p>
+														</div>
+													{:else if cartridgePhaseInfo.isComplete}
+														<div class="rounded border border-[var(--color-tron-green)]/30 bg-[var(--color-tron-green)]/10 px-2 py-1">
+															<p class="text-xs font-semibold text-[var(--color-tron-green)]">Already released — additional photo</p>
+														</div>
+													{:else}
+														<div class="rounded border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-cyan)]/10 px-2 py-1">
+															<p class="text-xs text-[var(--color-tron-cyan)]">{cartridgePhaseInfo.currentPhase?.replace(/_/g, ' ')} → <span class="font-semibold">{cartridgePhaseInfo.nextPhase.replace(/_/g, ' ')}</span></p>
+														</div>
+													{/if}
+													<div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-tron-bg-tertiary)]">
+														<div class="h-full rounded-full bg-[var(--color-tron-cyan)]" style="width: {Math.round(((cartridgePhaseInfo.pipelineIndex + 1) / cartridgePhaseInfo.pipelineLength) * 100)}%"></div>
+													</div>
+													<p class="text-[10px] text-[var(--color-tron-text-secondary)]">{cartridgePhaseInfo.pipelineIndex + 1} / {cartridgePhaseInfo.pipelineLength} phases &middot; {cartridgePhaseInfo.previousImages.length} prior photo{cartridgePhaseInfo.previousImages.length !== 1 ? 's' : ''}</p>
+												{:else}
+													{#if qrLookupResult.phase}<p class="text-[var(--color-tron-text-secondary)]">Phase: {qrLookupResult.phase}</p>{/if}
+												{/if}
+												{#if qrLookupResult.lotNumber}<p class="text-[var(--color-tron-text-secondary)]">Lot: {qrLookupResult.lotNumber}</p>{/if}
+											</div>
+										{:else if qrLookupResult.type === 'lot'}
+											<div class="space-y-1 text-sm">
+												<p class="text-[var(--color-tron-text-primary)]">Lot: <span class="font-semibold text-[var(--color-tron-cyan)]">{qrLookupResult.lotNumber}</span></p>
+												{#if qrLookupResult.status}<p class="text-[var(--color-tron-text-secondary)]">Status: {qrLookupResult.status}</p>{/if}
+											</div>
+										{:else if qrLookupResult.type === 'part'}
+											<div class="space-y-1 text-sm">
+												<p class="text-[var(--color-tron-text-primary)]">Part: <span class="font-semibold text-[var(--color-tron-cyan)]">{qrLookupResult.name}</span></p>
+												{#if qrLookupResult.barcode}<p class="text-[var(--color-tron-text-secondary)]">Barcode: {qrLookupResult.barcode}</p>{/if}
+											</div>
+										{:else}
+											<p class="text-xs text-[var(--color-tron-text-secondary)]">No matching record found in BIMS</p>
+										{/if}
+									{/if}
+								</div>
+							{:else}
+								<p class="text-sm text-[var(--color-tron-text-secondary)]">Point camera at a QR code to auto-identify cartridge, lot, or part.</p>
+							{/if}
+						</div>
+
+						<!-- Session stats + shortcuts -->
+						<div class="space-y-3">
 							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4">
 								<h4 class="mb-2 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Session</h4>
 								<div class="grid grid-cols-2 gap-2 text-center">
@@ -980,446 +971,397 @@
 									</div>
 								</div>
 							</div>
-
-							<!-- Camera Settings (LIZA tuning panel) -->
-							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4">
-								<button onclick={() => showSettings = !showSettings} class="flex w-full items-center justify-between">
-									<h4 class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Camera Settings</h4>
-									<span class="text-xs text-[var(--color-tron-text-secondary)]">{showSettings ? '▲' : '▼'}</span>
-								</button>
-								{#if showSettings}
-									<div class="mt-3 space-y-3">
-										{#if !cameraCapabilities}
-											<p class="text-xs text-[var(--color-tron-text-secondary)]">No adjustable settings for this camera.</p>
-										{:else}
-											<!-- Exposure mode -->
-											{#if cameraCapabilities.exposureMode}
-												<div>
-													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">Exposure Mode</span>
-														<select bind:value={camExposureMode} onchange={applyCameraSettings}
-															class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-tron-text-primary)]">
-															<option value="continuous">Auto</option>
-															<option value="manual">Manual</option>
-														</select>
-													</div>
-												</div>
-											{/if}
-											{#if cameraCapabilities.exposureTime && camExposureMode === 'manual'}
-												<div>
-													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">Exposure Time</span>
-														<span class="font-mono text-[var(--color-tron-text-primary)]">{Math.round(camExposureTime)}</span>
-													</div>
-													<input type="range"
-														min={cameraCapabilities.exposureTime.min}
-														max={Math.min(cameraCapabilities.exposureTime.max, 2000)}
-														step={cameraCapabilities.exposureTime.step || 1}
-														bind:value={camExposureTime}
-														oninput={applyCameraSettings}
-														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
-													/>
-												</div>
-											{/if}
-											{#if cameraCapabilities.exposureCompensation && camExposureMode === 'manual'}
-												<div>
-													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">Exposure Comp</span>
-														<span class="font-mono text-[var(--color-tron-text-primary)]">{camExposureComp}</span>
-													</div>
-													<input type="range"
-														min={cameraCapabilities.exposureCompensation.min}
-														max={cameraCapabilities.exposureCompensation.max}
-														step={cameraCapabilities.exposureCompensation.step || 1}
-														bind:value={camExposureComp}
-														oninput={applyCameraSettings}
-														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
-													/>
-												</div>
-											{/if}
-											<!-- White Balance -->
-											{#if cameraCapabilities.whiteBalanceMode}
-												<div>
-													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">White Balance</span>
-														<select bind:value={camWhiteBalanceMode} onchange={applyCameraSettings}
-															class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-tron-text-primary)]">
-															<option value="continuous">Auto</option>
-															<option value="manual">Manual</option>
-														</select>
-													</div>
-												</div>
-											{/if}
-											{#if cameraCapabilities.colorTemperature && camWhiteBalanceMode === 'manual'}
-												<div>
-													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">Color Temp</span>
-														<span class="font-mono text-[var(--color-tron-text-primary)]">{camWhiteBalance}K</span>
-													</div>
-													<input type="range"
-														min={cameraCapabilities.colorTemperature.min}
-														max={cameraCapabilities.colorTemperature.max}
-														step={cameraCapabilities.colorTemperature.step || 1}
-														bind:value={camWhiteBalance}
-														oninput={applyCameraSettings}
-														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
-													/>
-												</div>
-											{/if}
-											<!-- Image adjustments -->
-											{#if cameraCapabilities.brightness}
-												<div>
-													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">Brightness</span>
-														<span class="font-mono text-[var(--color-tron-text-primary)]">{camBrightness}</span>
-													</div>
-													<input type="range"
-														min={cameraCapabilities.brightness.min}
-														max={cameraCapabilities.brightness.max}
-														step={cameraCapabilities.brightness.step || 1}
-														bind:value={camBrightness}
-														oninput={applyCameraSettings}
-														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
-													/>
-												</div>
-											{/if}
-											{#if cameraCapabilities.contrast}
-												<div>
-													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">Contrast</span>
-														<span class="font-mono text-[var(--color-tron-text-primary)]">{camContrast}</span>
-													</div>
-													<input type="range"
-														min={cameraCapabilities.contrast.min}
-														max={cameraCapabilities.contrast.max}
-														step={cameraCapabilities.contrast.step || 1}
-														bind:value={camContrast}
-														oninput={applyCameraSettings}
-														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
-													/>
-												</div>
-											{/if}
-											{#if cameraCapabilities.saturation}
-												<div>
-													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">Saturation</span>
-														<span class="font-mono text-[var(--color-tron-text-primary)]">{camSaturation}</span>
-													</div>
-													<input type="range"
-														min={cameraCapabilities.saturation.min}
-														max={cameraCapabilities.saturation.max}
-														step={cameraCapabilities.saturation.step || 1}
-														bind:value={camSaturation}
-														oninput={applyCameraSettings}
-														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
-													/>
-												</div>
-											{/if}
-											{#if cameraCapabilities.sharpness}
-												<div>
-													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">Sharpness</span>
-														<span class="font-mono text-[var(--color-tron-text-primary)]">{camSharpness}</span>
-													</div>
-													<input type="range"
-														min={cameraCapabilities.sharpness.min}
-														max={cameraCapabilities.sharpness.max}
-														step={cameraCapabilities.sharpness.step || 1}
-														bind:value={camSharpness}
-														oninput={applyCameraSettings}
-														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
-													/>
-												</div>
-											{/if}
-											{#if cameraCapabilities.zoom && cameraCapabilities.zoom.max > 1}
-												<div>
-													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">Zoom</span>
-														<span class="font-mono text-[var(--color-tron-text-primary)]">{camZoom.toFixed(1)}x</span>
-													</div>
-													<input type="range"
-														min={cameraCapabilities.zoom.min}
-														max={cameraCapabilities.zoom.max}
-														step={cameraCapabilities.zoom.step || 0.1}
-														bind:value={camZoom}
-														oninput={applyCameraSettings}
-														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
-													/>
-												</div>
-											{/if}
-											<button
-												onclick={() => { camExposureMode = 'manual'; camExposureComp = 50; camExposureTime = 250; camWhiteBalanceMode = 'manual'; camWhiteBalance = 4000; camBrightness = 0; camContrast = 32; camSharpness = 3; camSaturation = 64; camZoom = 1; applyCameraSettings(); }}
-												class="w-full rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]"
-											>
-												Reset to LIZA Defaults
-											</button>
-										{/if}
-										<div class="border-t border-[var(--color-tron-border)] pt-2">
-											<p class="text-xs text-[var(--color-tron-text-secondary)]">QR Scanner: <span class="font-mono text-[var(--color-tron-text-primary)]">{qrScanMethod || 'initializing...'}</span></p>
-										</div>
-									</div>
-								{/if}
-							</div>
-
-							<!-- Keyboard shortcuts -->
 							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4">
 								<h4 class="mb-2 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Shortcuts</h4>
 								<div class="space-y-1 text-xs">
 									<div class="flex justify-between"><span class="text-[var(--color-tron-text-secondary)]">Capture / Save</span><kbd class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[var(--color-tron-text-primary)]">Space</kbd></div>
 									<div class="flex justify-between"><span class="text-[var(--color-tron-text-secondary)]">Retake</span><kbd class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[var(--color-tron-text-primary)]">Esc</kbd></div>
+									<div class="flex justify-between"><span class="text-[var(--color-tron-text-secondary)]">Toggle camera</span><kbd class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[var(--color-tron-text-primary)]">S</kbd></div>
 								</div>
 							</div>
 						</div>
 					</div>
-				{/if}
-			</div>
 
-		<!-- LABELS TAB -->
-		{:else if activeTab === 'labels'}
-			<!-- Barcode scan (feature 001-labels-barcode-scan) -->
-			<div class="mb-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3">
-				<label for="labels-barcode-scan" class="mb-1 block text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Scan cartridge barcode</label>
-				<div class="flex items-center gap-2">
-					<input
-						id="labels-barcode-scan"
-						bind:this={scanInputEl}
-						bind:value={scanValue}
-						onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyScan(); } }}
-						type="text"
-						autocomplete="off"
-						placeholder="Focus here and scan…"
-						class="flex-1 rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-3 py-2 font-mono text-sm text-[var(--color-tron-text-primary)] placeholder:text-[var(--color-tron-text-secondary)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
-					/>
-					{#if matchOrder.length > 0}
-						<button
-							type="button"
-							class="rounded-md border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]"
-							onclick={() => { scannedIds = new Set(); matchOrder = []; scanError = ''; scanInputEl?.focus(); }}
-						>Clear</button>
-					{/if}
-				</div>
-				{#if scanError}
-					<p class="mt-2 text-xs text-[var(--color-tron-red)]">{scanError}</p>
-				{:else if matchOrder.length > 0}
-					<p class="mt-2 text-xs text-[var(--color-tron-cyan)]">{matchOrder.length} image{matchOrder.length === 1 ? '' : 's'} pinned at top.</p>
-				{/if}
-			</div>
-
-			{#if data.images.length === 0}
-				<p class="text-center text-[var(--color-tron-text-secondary)]">No images yet. Upload images in the Import tab.</p>
-			{:else}
-				<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-					{#each sortedImages as image (image._id)}
-						<div
-							bind:this={matchTileEls[image._id]}
-							class="group relative overflow-hidden rounded-lg border bg-[var(--color-tron-bg-primary)] transition-all {scannedIds.has(image._id) ? 'border-[var(--color-tron-cyan)] ring-2 ring-[var(--color-tron-cyan)] animate-pulse' : 'border-[var(--color-tron-border)]'}"
-						>
-							<div class="aspect-square bg-[var(--color-tron-bg-tertiary)]">
-								{#if image.imageUrl}
-									<img src={image.imageUrl} alt={image.filename} class="h-full w-full cursor-pointer object-cover" onclick={() => openLightbox(image._id)} />
-								{:else}
-									<div class="flex h-full items-center justify-center text-xs text-[var(--color-tron-text-secondary)]">No preview</div>
-								{/if}
-							</div>
-							<!-- Scanned badge + TOP/BOTTOM tag -->
-							{#if scannedIds.has(image._id)}
-								<span class="absolute left-2 top-2 rounded-full bg-[var(--color-tron-cyan)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-black">
-									Scanned · {topBottomTag(image._id)}
-								</span>
-							{:else if image.label}
-								<!-- Label badge (only when not scanned, to avoid overlap) -->
-								<span class="absolute left-2 top-2 rounded-full px-2 py-0.5 text-xs font-semibold {image.label === 'approved' ? 'bg-[var(--color-tron-green)]/20 text-[var(--color-tron-green)]' : 'bg-[var(--color-tron-red)]/20 text-[var(--color-tron-red)]'}">
-									{image.label === 'approved' ? 'GOOD' : 'DEFECT'}
-								</span>
+				<!-- LABELS TAB -->
+				{:else if activeTab === 'labels'}
+					<!-- Barcode scan -->
+					<div class="mb-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3">
+						<label for="labels-barcode-scan" class="mb-1 block text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Scan cartridge barcode</label>
+						<div class="flex items-center gap-2">
+							<input
+								id="labels-barcode-scan"
+								bind:this={scanInputEl}
+								bind:value={scanValue}
+								onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyScan(); } }}
+								type="text"
+								autocomplete="off"
+								placeholder="Focus here and scan…"
+								class="flex-1 rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-3 py-2 font-mono text-sm text-[var(--color-tron-text-primary)] placeholder:text-[var(--color-tron-text-secondary)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+							/>
+							{#if matchOrder.length > 0}
+								<button
+									type="button"
+									class="rounded-md border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]"
+									onclick={() => { scannedIds = new Set(); matchOrder = []; scanError = ''; scanInputEl?.focus(); }}
+								>Clear</button>
 							{/if}
-							<!-- Linked badge -->
-							{#if image.cartridgeTag?.cartridgeRecordId}
-								<span class="absolute right-2 top-2 rounded-full bg-[var(--color-tron-cyan)]/20 px-2 py-0.5 text-[10px] font-semibold text-[var(--color-tron-cyan)]">
-									LINKED
-								</span>
-							{/if}
-							<!-- Label + Induct buttons -->
-							<div class="flex border-t border-[var(--color-tron-border)]">
-								<button
-									class="flex-1 py-1.5 text-xs font-medium transition-colors {image.label === 'approved' ? 'bg-[var(--color-tron-green)]/20 text-[var(--color-tron-green)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-green)]'}"
-									disabled={labeling === image._id}
-									onclick={() => toggleLabel(image._id, image.label, 'approved')}
-								>&#10003; Good</button>
-								<button
-									class="flex-1 border-l border-[var(--color-tron-border)] py-1.5 text-xs font-medium transition-colors {image.label === 'rejected' ? 'bg-[var(--color-tron-red)]/20 text-[var(--color-tron-red)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-red)]'}"
-									disabled={labeling === image._id}
-									onclick={() => toggleLabel(image._id, image.label, 'rejected')}
-								>&#10007; Defect</button>
-								<button
-									class="flex-1 border-l border-[var(--color-tron-border)] py-1.5 text-xs font-medium transition-colors {image.cartridgeTag?.cartridgeRecordId ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
-									disabled={inducting === image._id || !!image.cartridgeTag?.cartridgeRecordId}
-									onclick={() => inductFromImage(image._id, image.filename)}
-								>{inducting === image._id ? '...' : 'Induct'}</button>
-							</div>
 						</div>
-					{/each}
-				</div>
-			{/if}
-
-		<!-- TRAIN TAB -->
-		{:else if activeTab === 'train'}
-			<div class="space-y-6">
-				<div class="grid grid-cols-3 gap-4">
-					<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4 text-center">
-						<div class="text-2xl font-bold text-[var(--color-tron-green)]">{data.labelStats.approved}</div>
-						<div class="text-xs text-[var(--color-tron-text-secondary)]">Good Images</div>
-					</div>
-					<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4 text-center">
-						<div class="text-2xl font-bold text-[var(--color-tron-red)]">{data.labelStats.rejected}</div>
-						<div class="text-xs text-[var(--color-tron-text-secondary)]">Defect Images</div>
-					</div>
-					<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4 text-center">
-						<div class="text-2xl font-bold text-[var(--color-tron-text-secondary)]">{data.labelStats.unlabeled}</div>
-						<div class="text-xs text-[var(--color-tron-text-secondary)]">Unlabeled</div>
-					</div>
-				</div>
-
-				{#if trainStatus}
-					<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4">
-						<div class="mb-2 flex items-center justify-between text-sm">
-							<span class="text-[var(--color-tron-text-primary)]">Training Status</span>
-							<span class="font-semibold" style="color: {trainStatus.status === 'complete' ? 'var(--color-tron-green)' : trainStatus.status === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-yellow)'}">{trainStatus.status?.toUpperCase()}</span>
-						</div>
-						{#if trainStatus.progress !== undefined}
-							<div class="mb-2 h-2 overflow-hidden rounded-full bg-[var(--color-tron-bg-tertiary)]">
-								<div class="h-full rounded-full bg-gradient-to-r from-[var(--color-tron-cyan)] to-[var(--color-tron-green)] transition-all" style="width: {Math.round(trainStatus.progress * 100)}%"></div>
-							</div>
-						{/if}
-						{#if trainStatus.message}
-							<p class="text-xs text-[var(--color-tron-text-secondary)]">{trainStatus.message}</p>
+						{#if scanError}
+							<p class="mt-2 text-xs text-[var(--color-tron-red)]">{scanError}</p>
+						{:else if matchOrder.length > 0}
+							<p class="mt-2 text-xs text-[var(--color-tron-cyan)]">{matchOrder.length} image{matchOrder.length === 1 ? '' : 's'} pinned at top.</p>
 						{/if}
 					</div>
-				{/if}
 
-				<button
-					class="w-full rounded-lg bg-[var(--color-tron-cyan)] px-4 py-3 text-sm font-medium text-black hover:opacity-90 disabled:opacity-50"
-					disabled={training || (data.labelStats.approved + data.labelStats.rejected) < 5}
-					onclick={startTraining}
-				>
-					{#if training}Training in Progress...{:else}Start Training{/if}
-				</button>
-				{#if (data.labelStats.approved + data.labelStats.rejected) < 5}
-					<p class="text-center text-xs text-[var(--color-tron-text-secondary)]">Need at least 5 labeled images to start training.</p>
-				{/if}
-			</div>
-
-		<!-- TEST TAB -->
-		{:else if activeTab === 'test'}
-			<div class="space-y-4">
-				{#if data.project.modelStatus !== 'trained'}
-					<p class="text-center text-[var(--color-tron-text-secondary)]">Train a model first before running tests.</p>
-				{:else}
-					<div>
-						<label class="mb-1 block text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Test Image</label>
-						<input type="file" accept="image/*" class="w-full text-sm text-[var(--color-tron-text-primary)]" onchange={(e) => { const t = e.target as HTMLInputElement; testFile = t.files?.[0] || null; }} />
-					</div>
-					<button
-						class="rounded-lg bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-black hover:opacity-90 disabled:opacity-50"
-						disabled={!testFile || testing}
-						onclick={runTest}
-					>
-						{testing ? 'Running Inference...' : 'Run Test'}
-					</button>
-
-					{#if testResult}
-						{#if testResult.error}
-							<div class="rounded border border-[var(--color-tron-red)]/30 bg-[var(--color-tron-red)]/10 p-4 text-sm text-[var(--color-tron-red)]">{testResult.error}</div>
-						{:else}
-							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-6 text-center">
-								<div class="mb-2 text-4xl font-bold {testResult.result === 'pass' ? 'text-[var(--color-tron-green)]' : 'text-[var(--color-tron-red)]'}">
-									{testResult.result?.toUpperCase()}
-								</div>
-								<div class="text-sm text-[var(--color-tron-text-secondary)]">
-									Confidence: <span class="font-semibold text-[var(--color-tron-text-primary)]">{Math.round((testResult.confidenceScore || 0) * 100)}%</span>
-								</div>
-								{#if testResult.processingTimeMs}
-									<div class="text-xs text-[var(--color-tron-text-secondary)]">{Math.round(testResult.processingTimeMs)}ms</div>
-								{/if}
-							</div>
-						{/if}
-					{/if}
-				{/if}
-			</div>
-
-		<!-- REVIEW TAB -->
-		{:else if activeTab === 'review'}
-			{#if data.inspections.length === 0}
-				<p class="text-center text-[var(--color-tron-text-secondary)]">No inspections yet.</p>
-			{:else}
-				<div class="overflow-x-auto">
-					<table class="w-full">
-						<thead>
-							<tr class="border-b border-[var(--color-tron-border)] text-left">
-								<th class="px-4 py-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Result</th>
-								<th class="px-4 py-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Confidence</th>
-								<th class="px-4 py-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Status</th>
-								<th class="px-4 py-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Phase</th>
-								<th class="px-4 py-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Date</th>
-							</tr>
-						</thead>
-						<tbody class="divide-y divide-[var(--color-tron-border)]">
-							{#each data.inspections as insp (insp._id)}
-								<tr class="transition-colors hover:bg-[var(--color-tron-bg-tertiary)]">
-									<td class="px-4 py-2">
-										{#if insp.result}
-											<span class="rounded-full px-2 py-0.5 text-xs font-semibold {insp.result === 'pass' ? 'bg-[var(--color-tron-green)]/20 text-[var(--color-tron-green)]' : 'bg-[var(--color-tron-red)]/20 text-[var(--color-tron-red)]'}">
-												{insp.result.toUpperCase()}
-											</span>
+					{#if data.images.length === 0}
+						<p class="text-center text-[var(--color-tron-text-secondary)]">No images yet. Upload images in the Import tab.</p>
+					{:else}
+						<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+							{#each sortedImages as image (image._id)}
+								<div
+									bind:this={matchTileEls[image._id]}
+									class="group relative overflow-hidden rounded-lg border bg-[var(--color-tron-bg-primary)] transition-all {scannedIds.has(image._id) ? 'border-[var(--color-tron-cyan)] ring-2 ring-[var(--color-tron-cyan)] animate-pulse' : 'border-[var(--color-tron-border)]'}"
+								>
+									<div class="aspect-square bg-[var(--color-tron-bg-tertiary)]">
+										{#if image.imageUrl}
+											<img src={image.imageUrl} alt={image.filename} class="h-full w-full cursor-pointer object-cover" onclick={() => openLightbox(image._id)} />
 										{:else}
-											<span class="text-xs text-[var(--color-tron-text-secondary)]">—</span>
+											<div class="flex h-full items-center justify-center text-xs text-[var(--color-tron-text-secondary)]">No preview</div>
 										{/if}
-									</td>
-									<td class="px-4 py-2 text-sm text-[var(--color-tron-text-primary)]">{insp.confidenceScore ? Math.round(insp.confidenceScore * 100) + '%' : '—'}</td>
-									<td class="px-4 py-2 text-sm text-[var(--color-tron-text-secondary)]">{insp.status}</td>
-									<td class="px-4 py-2 text-sm text-[var(--color-tron-text-secondary)]">{insp.phase || '—'}</td>
-									<td class="px-4 py-2 text-sm text-[var(--color-tron-text-secondary)]">{fmtDate(insp.createdAt)}</td>
-								</tr>
+									</div>
+									{#if scannedIds.has(image._id)}
+										<span class="absolute left-2 top-2 rounded-full bg-[var(--color-tron-cyan)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-black">
+											Scanned · {topBottomTag(image._id)}
+										</span>
+									{:else if image.label}
+										<span class="absolute left-2 top-2 rounded-full px-2 py-0.5 text-xs font-semibold {image.label === 'approved' ? 'bg-[var(--color-tron-green)]/20 text-[var(--color-tron-green)]' : 'bg-[var(--color-tron-red)]/20 text-[var(--color-tron-red)]'}">
+											{image.label === 'approved' ? 'GOOD' : 'DEFECT'}
+										</span>
+									{/if}
+									{#if image.cartridgeTag?.cartridgeRecordId}
+										<span class="absolute right-2 top-2 rounded-full bg-[var(--color-tron-cyan)]/20 px-2 py-0.5 text-[10px] font-semibold text-[var(--color-tron-cyan)]">
+											LINKED
+										</span>
+									{/if}
+									<div class="flex border-t border-[var(--color-tron-border)]">
+										<button
+											class="flex-1 py-1.5 text-xs font-medium transition-colors {image.label === 'approved' ? 'bg-[var(--color-tron-green)]/20 text-[var(--color-tron-green)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-green)]'}"
+											disabled={labeling === image._id}
+											onclick={() => toggleLabel(image._id, image.label, 'approved')}
+										>&#10003; Good</button>
+										<button
+											class="flex-1 border-l border-[var(--color-tron-border)] py-1.5 text-xs font-medium transition-colors {image.label === 'rejected' ? 'bg-[var(--color-tron-red)]/20 text-[var(--color-tron-red)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-red)]'}"
+											disabled={labeling === image._id}
+											onclick={() => toggleLabel(image._id, image.label, 'rejected')}
+										>&#10007; Defect</button>
+										<button
+											class="flex-1 border-l border-[var(--color-tron-border)] py-1.5 text-xs font-medium transition-colors {image.cartridgeTag?.cartridgeRecordId ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
+											disabled={inducting === image._id || !!image.cartridgeTag?.cartridgeRecordId}
+											onclick={() => inductFromImage(image._id, image.filename)}
+										>{inducting === image._id ? '...' : 'Induct'}</button>
+									</div>
+								</div>
 							{/each}
-						</tbody>
-					</table>
-				</div>
-			{/if}
+						</div>
+					{/if}
 
-		<!-- INTEGRATE TAB -->
-		{:else if activeTab === 'integrate'}
-			<div class="space-y-4">
-				<h3 class="text-lg font-semibold text-[var(--color-tron-text-primary)]">API Endpoints</h3>
-				<div class="space-y-2 text-sm">
-					{#each [
-						['GET', `/api/cv/projects/${data.project._id}`, 'Get project details'],
-						['GET', `/api/cv/projects/${data.project._id}/images`, 'List project images'],
-						['POST', '/api/cv/images', 'Upload image (multipart, projectId required)'],
-						['PATCH', '/api/cv/images/:id/label', 'Set image label (approved/rejected)'],
-						['POST', '/api/cv/train', 'Start training (projectId in body)'],
-						['GET', `/api/cv/train?projectId=${data.project._id}`, 'Poll training status'],
-						['POST', '/api/cv/infer', 'Run inference (imageId + projectId in body)']
-					] as [method, path, desc]}
-						<div class="flex items-start gap-3 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3">
-							<span class="rounded bg-[var(--color-tron-cyan)]/20 px-2 py-0.5 text-xs font-bold text-[var(--color-tron-cyan)]">{method}</span>
-							<div>
-								<code class="text-xs text-[var(--color-tron-text-primary)]">{path}</code>
-								<p class="text-xs text-[var(--color-tron-text-secondary)]">{desc}</p>
+				<!-- TRAIN TAB -->
+				{:else if activeTab === 'train'}
+					<div class="space-y-6">
+						<div class="grid grid-cols-3 gap-4">
+							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4 text-center">
+								<div class="text-2xl font-bold text-[var(--color-tron-green)]">{data.labelStats.approved}</div>
+								<div class="text-xs text-[var(--color-tron-text-secondary)]">Good Images</div>
+							</div>
+							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4 text-center">
+								<div class="text-2xl font-bold text-[var(--color-tron-red)]">{data.labelStats.rejected}</div>
+								<div class="text-xs text-[var(--color-tron-text-secondary)]">Defect Images</div>
+							</div>
+							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4 text-center">
+								<div class="text-2xl font-bold text-[var(--color-tron-text-secondary)]">{data.labelStats.unlabeled}</div>
+								<div class="text-xs text-[var(--color-tron-text-secondary)]">Unlabeled</div>
 							</div>
 						</div>
-					{/each}
-				</div>
 
-				<h3 class="mt-6 text-lg font-semibold text-[var(--color-tron-text-primary)]">Manufacturing Gate Integration</h3>
-				<p class="text-sm text-[var(--color-tron-text-secondary)]">
-					To use this CV project as a manufacturing quality gate, call the inference endpoint at each production phase.
-					Images with a "fail" result can automatically block the cartridge from proceeding to the next phase.
-				</p>
-				<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3">
-					<p class="mb-1 text-xs text-[var(--color-tron-text-secondary)]">Project ID</p>
-					<code class="text-sm text-[var(--color-tron-cyan)]">{data.project._id}</code>
-				</div>
+						{#if trainStatus}
+							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4">
+								<div class="mb-2 flex items-center justify-between text-sm">
+									<span class="text-[var(--color-tron-text-primary)]">Training Status</span>
+									<span class="font-semibold" style="color: {trainStatus.status === 'complete' ? 'var(--color-tron-green)' : trainStatus.status === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-yellow)'}">{trainStatus.status?.toUpperCase()}</span>
+								</div>
+								{#if trainStatus.progress !== undefined}
+									<div class="mb-2 h-2 overflow-hidden rounded-full bg-[var(--color-tron-bg-tertiary)]">
+										<div class="h-full rounded-full bg-gradient-to-r from-[var(--color-tron-cyan)] to-[var(--color-tron-green)] transition-all" style="width: {Math.round(trainStatus.progress * 100)}%"></div>
+									</div>
+								{/if}
+								{#if trainStatus.message}
+									<p class="text-xs text-[var(--color-tron-text-secondary)]">{trainStatus.message}</p>
+								{/if}
+							</div>
+						{/if}
+
+						<button
+							class="w-full rounded-lg bg-[var(--color-tron-cyan)] px-4 py-3 text-sm font-medium text-black hover:opacity-90 disabled:opacity-50"
+							disabled={training || (data.labelStats.approved + data.labelStats.rejected) < 5}
+							onclick={startTraining}
+						>
+							{#if training}Training in Progress...{:else}Start Training{/if}
+						</button>
+						{#if (data.labelStats.approved + data.labelStats.rejected) < 5}
+							<p class="text-center text-xs text-[var(--color-tron-text-secondary)]">Need at least 5 labeled images to start training.</p>
+						{/if}
+					</div>
+
+				<!-- REVIEW TAB -->
+				{:else if activeTab === 'review'}
+					{#if data.inspections.length === 0}
+						<p class="text-center text-[var(--color-tron-text-secondary)]">No inspections yet.</p>
+					{:else}
+						<div class="overflow-x-auto">
+							<table class="w-full">
+								<thead>
+									<tr class="border-b border-[var(--color-tron-border)] text-left">
+										<th class="px-4 py-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Result</th>
+										<th class="px-4 py-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Confidence</th>
+										<th class="px-4 py-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Status</th>
+										<th class="px-4 py-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Phase</th>
+										<th class="px-4 py-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Date</th>
+									</tr>
+								</thead>
+								<tbody class="divide-y divide-[var(--color-tron-border)]">
+									{#each data.inspections as insp (insp._id)}
+										<tr class="transition-colors hover:bg-[var(--color-tron-bg-tertiary)]">
+											<td class="px-4 py-2">
+												{#if insp.result}
+													<span class="rounded-full px-2 py-0.5 text-xs font-semibold {insp.result === 'pass' ? 'bg-[var(--color-tron-green)]/20 text-[var(--color-tron-green)]' : 'bg-[var(--color-tron-red)]/20 text-[var(--color-tron-red)]'}">
+														{insp.result.toUpperCase()}
+													</span>
+												{:else}
+													<span class="text-xs text-[var(--color-tron-text-secondary)]">—</span>
+												{/if}
+											</td>
+											<td class="px-4 py-2 text-sm text-[var(--color-tron-text-primary)]">{insp.confidenceScore ? Math.round(insp.confidenceScore * 100) + '%' : '—'}</td>
+											<td class="px-4 py-2 text-sm text-[var(--color-tron-text-secondary)]">{insp.status}</td>
+											<td class="px-4 py-2 text-sm text-[var(--color-tron-text-secondary)]">{insp.phase || '—'}</td>
+											<td class="px-4 py-2 text-sm text-[var(--color-tron-text-secondary)]">{fmtDate(insp.createdAt)}</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					{/if}
+
+				<!-- INTEGRATE TAB -->
+				{:else if activeTab === 'integrate'}
+					<div class="space-y-4">
+						<h3 class="text-lg font-semibold text-[var(--color-tron-text-primary)]">API Endpoints</h3>
+						<div class="space-y-2 text-sm">
+							{#each [
+								['GET', `/api/cv/projects/${data.project._id}`, 'Get project details'],
+								['GET', `/api/cv/projects/${data.project._id}/images`, 'List project images'],
+								['POST', '/api/cv/images', 'Upload image (multipart, projectId required)'],
+								['PATCH', '/api/cv/images/:id/label', 'Set image label (approved/rejected)'],
+								['POST', '/api/cv/train', 'Start training (projectId in body)'],
+								['GET', `/api/cv/train?projectId=${data.project._id}`, 'Poll training status'],
+								['POST', '/api/cv/infer', 'Run inference (imageId + projectId in body)']
+							] as [method, path, desc]}
+								<div class="flex items-start gap-3 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3">
+									<span class="rounded bg-[var(--color-tron-cyan)]/20 px-2 py-0.5 text-xs font-bold text-[var(--color-tron-cyan)]">{method}</span>
+									<div>
+										<code class="text-xs text-[var(--color-tron-text-primary)]">{path}</code>
+										<p class="text-xs text-[var(--color-tron-text-secondary)]">{desc}</p>
+									</div>
+								</div>
+							{/each}
+						</div>
+
+						<h3 class="mt-6 text-lg font-semibold text-[var(--color-tron-text-primary)]">Manufacturing Gate Integration</h3>
+						<p class="text-sm text-[var(--color-tron-text-secondary)]">
+							To use this CV project as a manufacturing quality gate, call the inference endpoint at each production phase.
+							Images with a "fail" result can automatically block the cartridge from proceeding to the next phase.
+						</p>
+						<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3">
+							<p class="mb-1 text-xs text-[var(--color-tron-text-secondary)]">Project ID</p>
+							<code class="text-sm text-[var(--color-tron-cyan)]">{data.project._id}</code>
+						</div>
+					</div>
+				{/if}
 			</div>
-		{/if}
+		</div>
+
+		<!-- RIGHT: persistent camera settings -->
+		<aside class="self-start space-y-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4 lg:sticky lg:top-4">
+			<h4 class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Camera Settings</h4>
+			{#if !cameraStream}
+				<p class="text-xs text-[var(--color-tron-text-secondary)]">Start the camera to adjust settings.</p>
+			{:else if !cameraCapabilities}
+				<p class="text-xs text-[var(--color-tron-text-secondary)]">No adjustable settings for this camera.</p>
+			{:else}
+				<div class="space-y-3">
+					{#if cameraCapabilities.exposureMode}
+						<div>
+							<div class="flex items-center justify-between text-xs">
+								<span class="text-[var(--color-tron-text-secondary)]">Exposure Mode</span>
+								<select bind:value={camExposureMode} onchange={applyCameraSettings}
+									class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-tron-text-primary)]">
+									<option value="continuous">Auto</option>
+									<option value="manual">Manual</option>
+								</select>
+							</div>
+						</div>
+					{/if}
+					{#if cameraCapabilities.exposureTime && camExposureMode === 'manual'}
+						<div>
+							<div class="flex items-center justify-between text-xs">
+								<span class="text-[var(--color-tron-text-secondary)]">Exposure Time</span>
+								<span class="font-mono text-[var(--color-tron-text-primary)]">{Math.round(camExposureTime)}</span>
+							</div>
+							<input type="range"
+								min={cameraCapabilities.exposureTime.min}
+								max={Math.min(cameraCapabilities.exposureTime.max, 2000)}
+								step={cameraCapabilities.exposureTime.step || 1}
+								bind:value={camExposureTime}
+								oninput={applyCameraSettings}
+								class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+							/>
+						</div>
+					{/if}
+					{#if cameraCapabilities.exposureCompensation && camExposureMode === 'manual'}
+						<div>
+							<div class="flex items-center justify-between text-xs">
+								<span class="text-[var(--color-tron-text-secondary)]">Exposure Comp</span>
+								<span class="font-mono text-[var(--color-tron-text-primary)]">{camExposureComp}</span>
+							</div>
+							<input type="range"
+								min={cameraCapabilities.exposureCompensation.min}
+								max={cameraCapabilities.exposureCompensation.max}
+								step={cameraCapabilities.exposureCompensation.step || 1}
+								bind:value={camExposureComp}
+								oninput={applyCameraSettings}
+								class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+							/>
+						</div>
+					{/if}
+					{#if cameraCapabilities.whiteBalanceMode}
+						<div>
+							<div class="flex items-center justify-between text-xs">
+								<span class="text-[var(--color-tron-text-secondary)]">White Balance</span>
+								<select bind:value={camWhiteBalanceMode} onchange={applyCameraSettings}
+									class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-tron-text-primary)]">
+									<option value="continuous">Auto</option>
+									<option value="manual">Manual</option>
+								</select>
+							</div>
+						</div>
+					{/if}
+					{#if cameraCapabilities.colorTemperature && camWhiteBalanceMode === 'manual'}
+						<div>
+							<div class="flex items-center justify-between text-xs">
+								<span class="text-[var(--color-tron-text-secondary)]">Color Temp</span>
+								<span class="font-mono text-[var(--color-tron-text-primary)]">{camWhiteBalance}K</span>
+							</div>
+							<input type="range"
+								min={cameraCapabilities.colorTemperature.min}
+								max={cameraCapabilities.colorTemperature.max}
+								step={cameraCapabilities.colorTemperature.step || 1}
+								bind:value={camWhiteBalance}
+								oninput={applyCameraSettings}
+								class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+							/>
+						</div>
+					{/if}
+					{#if cameraCapabilities.brightness}
+						<div>
+							<div class="flex items-center justify-between text-xs">
+								<span class="text-[var(--color-tron-text-secondary)]">Brightness</span>
+								<span class="font-mono text-[var(--color-tron-text-primary)]">{camBrightness}</span>
+							</div>
+							<input type="range"
+								min={cameraCapabilities.brightness.min}
+								max={cameraCapabilities.brightness.max}
+								step={cameraCapabilities.brightness.step || 1}
+								bind:value={camBrightness}
+								oninput={applyCameraSettings}
+								class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+							/>
+						</div>
+					{/if}
+					{#if cameraCapabilities.contrast}
+						<div>
+							<div class="flex items-center justify-between text-xs">
+								<span class="text-[var(--color-tron-text-secondary)]">Contrast</span>
+								<span class="font-mono text-[var(--color-tron-text-primary)]">{camContrast}</span>
+							</div>
+							<input type="range"
+								min={cameraCapabilities.contrast.min}
+								max={cameraCapabilities.contrast.max}
+								step={cameraCapabilities.contrast.step || 1}
+								bind:value={camContrast}
+								oninput={applyCameraSettings}
+								class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+							/>
+						</div>
+					{/if}
+					{#if cameraCapabilities.saturation}
+						<div>
+							<div class="flex items-center justify-between text-xs">
+								<span class="text-[var(--color-tron-text-secondary)]">Saturation</span>
+								<span class="font-mono text-[var(--color-tron-text-primary)]">{camSaturation}</span>
+							</div>
+							<input type="range"
+								min={cameraCapabilities.saturation.min}
+								max={cameraCapabilities.saturation.max}
+								step={cameraCapabilities.saturation.step || 1}
+								bind:value={camSaturation}
+								oninput={applyCameraSettings}
+								class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+							/>
+						</div>
+					{/if}
+					{#if cameraCapabilities.sharpness}
+						<div>
+							<div class="flex items-center justify-between text-xs">
+								<span class="text-[var(--color-tron-text-secondary)]">Sharpness</span>
+								<span class="font-mono text-[var(--color-tron-text-primary)]">{camSharpness}</span>
+							</div>
+							<input type="range"
+								min={cameraCapabilities.sharpness.min}
+								max={cameraCapabilities.sharpness.max}
+								step={cameraCapabilities.sharpness.step || 1}
+								bind:value={camSharpness}
+								oninput={applyCameraSettings}
+								class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+							/>
+						</div>
+					{/if}
+					{#if cameraCapabilities.zoom && cameraCapabilities.zoom.max > 1}
+						<div>
+							<div class="flex items-center justify-between text-xs">
+								<span class="text-[var(--color-tron-text-secondary)]">Zoom</span>
+								<span class="font-mono text-[var(--color-tron-text-primary)]">{camZoom.toFixed(1)}x</span>
+							</div>
+							<input type="range"
+								min={cameraCapabilities.zoom.min}
+								max={cameraCapabilities.zoom.max}
+								step={cameraCapabilities.zoom.step || 0.1}
+								bind:value={camZoom}
+								oninput={applyCameraSettings}
+								class="mt-1 w-full accent-[var(--color-tron-cyan)]"
+							/>
+						</div>
+					{/if}
+					<button
+						onclick={resetCameraDefaults}
+						class="w-full rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]"
+					>
+						Reset to LIZA Defaults
+					</button>
+				</div>
+			{/if}
+			<div class="border-t border-[var(--color-tron-border)] pt-2">
+				<p class="text-xs text-[var(--color-tron-text-secondary)]">QR Scanner: <span class="font-mono text-[var(--color-tron-text-primary)]">{qrScanMethod || 'initializing...'}</span></p>
+			</div>
+		</aside>
 	</div>
 
 	<!-- Photo lightbox -->
