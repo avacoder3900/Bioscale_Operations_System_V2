@@ -4,6 +4,13 @@
 	import KpiCard from '$lib/components/kanban/KpiCard.svelte';
 	import CfdChart from '$lib/components/kanban/CfdChart.svelte';
 	import WipTimelineWidget from '$lib/components/kanban/WipTimelineWidget.svelte';
+	import ThroughputChart from '$lib/components/kanban/ThroughputChart.svelte';
+	import CycleScatterChart from '$lib/components/kanban/CycleScatterChart.svelte';
+	import AgingWipChart from '$lib/components/kanban/AgingWipChart.svelte';
+	import TimeInStatusChart from '$lib/components/kanban/TimeInStatusChart.svelte';
+	import PerProjectTable from '$lib/components/kanban/PerProjectTable.svelte';
+	import PerAssigneeTable from '$lib/components/kanban/PerAssigneeTable.svelte';
+	import SourceMixDonut from '$lib/components/kanban/SourceMixDonut.svelte';
 
 	let { data } = $props();
 
@@ -101,13 +108,24 @@
 	<!-- Daily WIP Timeline — PRD KANBAN-WIP-TIMELINE -->
 	<WipTimelineWidget data={data.analytics.wipTimeline} />
 
-	<!-- Flow charts placeholder — KANBAN-ANALYTICS-FLOW-CHARTS PRD -->
-	<section class="rounded-lg border border-dashed border-[var(--color-tron-border)] p-6">
-		<p class="tron-text-muted text-sm">Throughput / Cycle / Aging / Time-in-Status — PRD KANBAN-ANALYTICS-FLOW-CHARTS</p>
+	<!-- Flow charts — PRD KANBAN-ANALYTICS-FLOW-CHARTS -->
+	<section class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+		<ThroughputChart points={data.analytics.throughput} />
+		<CycleScatterChart block={data.analytics.cycleScatter} />
+		<AgingWipChart rows={data.analytics.agingWip} />
+		<TimeInStatusChart rows={data.analytics.timeInStatus} />
 	</section>
 
-	<!-- Breakdowns placeholder — KANBAN-ANALYTICS-BREAKDOWNS PRD -->
-	<section class="rounded-lg border border-dashed border-[var(--color-tron-border)] p-6">
-		<p class="tron-text-muted text-sm">Per-project / Per-assignee / Source mix — PRD KANBAN-ANALYTICS-BREAKDOWNS</p>
+	<!-- Breakdowns — PRD KANBAN-ANALYTICS-BREAKDOWNS -->
+	<section class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+		<div class="lg:col-span-1">
+			<PerProjectTable rows={data.analytics.perProject} />
+		</div>
+		<div class="lg:col-span-1">
+			<PerAssigneeTable rows={data.analytics.perAssignee} />
+		</div>
+		<div class="lg:col-span-1">
+			<SourceMixDonut slices={data.analytics.sourceMix} />
+		</div>
 	</section>
 </div>
