@@ -22,11 +22,17 @@ async function main() {
 
 	const grp = db.collection('cartridge_groups');
 	const fw = db.collection('firmware_cartridges');
-	const [labCount, recCount, grpCount, fwCount] = await Promise.all([
+	const cvImg = db.collection('cv_images');
+	const cvProj = db.collection('cv_projects');
+	const cvInsp = db.collection('cv_inspections');
+	const [labCount, recCount, grpCount, fwCount, cvImgCount, cvProjCount, cvInspCount] = await Promise.all([
 		lab.countDocuments(),
 		rec.countDocuments(),
 		grp.countDocuments(),
-		fw.countDocuments()
+		fw.countDocuments(),
+		cvImg.countDocuments(),
+		cvProj.countDocuments(),
+		cvInsp.countDocuments()
 	]);
 
 	console.log('=== COUNTS ===');
@@ -34,7 +40,30 @@ async function main() {
 	console.log(`cartridge_records:     ${recCount}`);
 	console.log(`cartridge_groups:      ${grpCount}`);
 	console.log(`firmware_cartridges:   ${fwCount}`);
+	console.log(`cv_images:             ${cvImgCount}`);
+	console.log(`cv_projects:           ${cvProjCount}`);
+	console.log(`cv_inspections:        ${cvInspCount}`);
 	console.log();
+
+	if (cvImgCount > 0) {
+		const withTag = await cvImg.countDocuments({ 'cartridgeTag.cartridgeRecordId': { $exists: true, $ne: null } });
+		const withProjectId = await cvImg.countDocuments({ projectId: { $exists: true, $ne: null } });
+		const withLabel = await cvImg.countDocuments({ label: { $ne: null } });
+		const orphanedTag = await cvImg.countDocuments({ 'cartridgeTag.cartridgeRecordId': { $exists: true, $ne: null }, 'cartridgeTag.cartridgeRecordId': { $nin: await rec.distinct('_id') } });
+		console.log('=== cv_images breakdown ===');
+		console.log(`  Have cartridgeTag.cartridgeRecordId: ${withTag}`);
+		console.log(`  Have projectId:                      ${withProjectId}`);
+		console.log(`  Have label (approved/rejected):      ${withLabel}`);
+		console.log();
+
+		const projectBreakdown = await cvImg.aggregate([
+			{ $group: { _id: '$projectId', count: { $sum: 1 } } },
+			{ $sort: { count: -1 } }
+		]).toArray();
+		console.log('=== cv_images by project ===');
+		for (const p of projectBreakdown) console.log(`  ${p._id ?? '(null)'}: ${p.count}`);
+		console.log();
+	}
 
 	if (labCount === 0) {
 		console.log('lab_cartridges is EMPTY — clearly dead code.');
