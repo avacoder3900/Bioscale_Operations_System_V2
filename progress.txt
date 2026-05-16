@@ -1972,3 +1972,45 @@ imports). Zero new errors from this work.
 ### Session end state
 
 Branch feature/kanban-improvement at 16 commits. PR-ready.
+
+### Follow-up — Analytics page polish round (same session)
+
+After the initial 7-PRD analytics build-out, a series of UX refinements
+based on real testing on the deploy:
+
+- 2ee0880  `noScroll: true` on day-tab + range-selector navigation —
+  clicking either no longer bounces the page back to the top.
+- 0061fc8  Task title column added to the right of each WIP-timeline
+  lane. Each row now shows the project-color-dot + name(s) of tasks
+  occupying that slot, filling the previously-empty right side of the
+  chart on wide screens.
+- 2adba48  Source mix donut split into TWO charts:
+   - "Manual vs Agent" (binary) — how the task entered the system.
+   - "Created by" — who originated each task (resolved usernames).
+  Layout tidied: flow charts (2x2) → mix donuts (2 cols) → tables
+  (2 cols). Dropped the awkward 3-col bottom row.
+  Renamed "Aging WIP" → "Aging Tasks" since the chart includes any
+  non-done stage past its warning threshold, not just status=wip.
+- e56fc49  Analytics nav moved to 2nd position (Board → Analytics →
+  List → Projects → Archive).
+- e2a70b2  WIP-timeline x-axis labels switched from military
+  (7..12..17) to 12-hour (7a..12p..5p) with am/pm suffix.
+- 3823d4b  WIP-timeline:
+   - DD/MM/YY date label to the left of S M T W R F S tabs.
+   - Cyan "now" line marches across the chart, visible only on today's
+     view. Recomputes every minute.
+   - Server caps still-in-WIP intervals at `now` — future-day charts
+     render empty for currently-in-WIP tasks (no fake "predicted"
+     activity). Past-day charts unaffected.
+
+Known caveat documented for Creator Mix: if the agent records tasks
+under its own user account rather than the requesting human's account,
+agent-mediated tasks cluster under that agent user. Will revisit if/when
+Jacob sees this pattern.
+
+Confirmed semantics in conversation:
+- Cycle time = first `→ wip` to first `→ done`, single window, no
+  resets even if a task bounces through `waiting` between them.
+- Aging Tasks chart = aging in any non-done stage past its warning
+  threshold (stage-specific thresholds defined in src/lib/shared/
+  kanban-aging.ts).
