@@ -1937,3 +1937,38 @@ Foundation implementation kicked off (PRD KANBAN-ANALYTICS-FOUNDATION):
 `npm run check`: 11 errors (down from 26 — chart.js types resolved
 several pre-existing missing-module errors), 0 new errors from changed
 files.
+
+### Follow-up — Full analytics page build-out (same session)
+
+All 7 kanban analytics PRDs implemented end to end:
+
+1. FOUNDATION  (commit 2ed1738) — route, nav, aggregator, chart lib
+2. KPI-CARDS   (commit f5afc3e) — 6 cards + shared aging module
+3. CFD         (commit 3133117) — daily stacked area, activityLog replay
+4. WIP-LIMIT   (commit c71da35) — hard cap, modal, admin UI
+5. WIP-TIMELINE (commit f278641) — daily grid w/ day tabs + 30s polling
+6. FLOW-CHARTS (commit e2d3f51) — throughput, scatter, aging, time-in-stage
+7. BREAKDOWNS  (commit e2d3f51) — per-project, per-assignee, source mix
+
+`/kanban/analytics` is now a live, end-to-end dashboard with:
+- Date-range selector (7d/30d/90d/all) in the header
+- 6 headline KPI cards
+- Cumulative flow diagram (stacked area)
+- Daily WIP Timeline grid (the hero feature — each user has wipLimit
+  lanes of 15-min cells, day-tab navigation, polls every 30s,
+  click cell → task detail)
+- 2x2 grid: throughput + cycle scatter + aging-WIP + time-in-status
+- 3-column row: per-project table + per-assignee table + source mix donut
+
+WIP hard cap (PRD 4) is enforced in all three move paths (board action,
+task detail move/update, API endpoint). Hitting the cap surfaces a modal
+listing the assignee's current WIP. Admin UI at /admin/users now has a
+WIP limit input per user, with its own updateWipLimit action and audit row.
+
+`npm run check`: 11 errors (project baseline — chart.js install actually
+*reduced* errors from 26 to 11 by resolving previously missing-module
+imports). Zero new errors from this work.
+
+### Session end state
+
+Branch feature/kanban-improvement at 16 commits. PR-ready.
