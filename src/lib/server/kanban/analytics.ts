@@ -6,7 +6,7 @@
  * returned shape with their specific blocks.
  */
 import { connectDB, KanbanTask, User } from '$lib/server/db';
-import { agingThresholds } from '$lib/shared/kanban-aging';
+import { agingThresholds, agingSeverity, type AgingSeverity } from '$lib/shared/kanban-aging';
 
 export type AnalyticsRange = '7d' | '30d' | '90d' | 'all';
 
@@ -64,6 +64,74 @@ export type WipTimelineData = {
 	people: WipTimelinePerson[];
 };
 
+export type ThroughputPoint = {
+	weekStart: string; // YYYY-MM-DD
+	total: number;
+};
+
+export type CycleScatterPoint = {
+	taskId: string;
+	title: string;
+	completedAt: string;
+	cycleTimeDays: number;
+	projectColor: string;
+};
+
+export type CycleScatterBlock = {
+	points: CycleScatterPoint[];
+	p50: number | null;
+	p85: number | null;
+	p95: number | null;
+};
+
+export type AgingWipRow = {
+	taskId: string;
+	title: string;
+	status: string;
+	daysInStatus: number;
+	severity: AgingSeverity;
+	statusColor: string;
+};
+
+export type TimeInStatusSegment = {
+	status: string;
+	days: number;
+	color: string;
+};
+
+export type TimeInStatusRow = {
+	taskId: string;
+	title: string;
+	totalDays: number;
+	segments: TimeInStatusSegment[];
+};
+
+export type PerProjectRow = {
+	id: string;
+	name: string;
+	color: string;
+	active: number;
+	doneInRange: number;
+	medianCycleDays: number | null;
+	wip: number;
+	aging: number;
+};
+
+export type PerAssigneeRow = {
+	id: string;
+	username: string;
+	active: number;
+	doneInRange: number;
+	loadScore: number;
+	wip: number;
+	aging: number;
+};
+
+export type SourceMixSlice = {
+	source: string;
+	count: number;
+};
+
 export type AnalyticsData = {
 	range: AnalyticsRange;
 	since: Date | null;
@@ -75,6 +143,13 @@ export type AnalyticsData = {
 	kpi: KpiBlock;
 	cfd: CfdPoint[];
 	wipTimeline: WipTimelineData;
+	throughput: ThroughputPoint[];
+	cycleScatter: CycleScatterBlock;
+	agingWip: AgingWipRow[];
+	timeInStatus: TimeInStatusRow[];
+	perProject: PerProjectRow[];
+	perAssignee: PerAssigneeRow[];
+	sourceMix: SourceMixSlice[];
 };
 
 export function rangeToSince(range: AnalyticsRange): Date | null {
@@ -440,15 +515,242 @@ async function computeWipTimeline(allTasks: any[], dayStartMs: number, day: stri
 	};
 }
 
+const STATUS_COLORS: Record<string, string> = {
+	backlog: '#a0a0a0',
+	ready: '#00d4ff',
+	wip: '#ff6600',
+	waiting: '#ff3366',
+	done: '#00ff88'
+};
+
+const SIZE_WEIGHTS: Record<string, number> = { short: 1, medium: 2, long: 4 };
+
+function getCompletionMs(task: any): number | null {
+	const log: any[] = task.activityLog ?? [];
+	const doneEntry = log.find((e) => e.action === 'status_change' && e.details?.to === 'done');
+	if (doneEntry) return new Date(doneEntry.createdAt).getTime();
+	if (task.status === 'done') {
+		return new Date(task.statusChangedAt ?? task.archivedAt ?? task.updatedAt ?? task.createdAt).getTime();
+	}
+	return null;
+}
+
+function isoMondayOf(ms: number): string {
+	const d = new Date(ms);
+	const dow = d.getUTCDay(); // 0..6
+	const diffToMonday = (dow + 6) % 7;
+	d.setUTCDate(d.getUTCDate() - diffToMonday);
+	d.setUTCHours(0, 0, 0, 0);
+	return d.toISOString().slice(0, 10);
+}
+
+function computeThroughput(allTasks: any[], since: Date | null): ThroughputPoint[] {
+	const buckets = new Map<string, number>();
+	const startMs = since?.getTime() ?? Date.now() - 90 * MS_PER_DAY;
+	for (const t of allTasks) {
+		if (t.status !== 'done') continue;
+		const ms = getCompletionMs(t);
+		if (ms === null || ms < startMs) continue;
+		const wk = isoMondayOf(ms);
+		buckets.set(wk, (buckets.get(wk) ?? 0) + 1);
+	}
+	return [...buckets.entries()]
+		.sort(([a], [b]) => (a < b ? -1 : 1))
+		.map(([weekStart, total]) => ({ weekStart, total }));
+}
+
+function computeCycleScatter(allTasks: any[], since: Date | null): CycleScatterBlock {
+	const points: CycleScatterPoint[] = [];
+	const sinceMs = since?.getTime() ?? 0;
+	for (const t of allTasks) {
+		if (t.status !== 'done') continue;
+		const ct = computeCycleTimeDays(t);
+		if (ct === null) continue;
+		const completedAtMs = getCompletionMs(t);
+		if (completedAtMs === null || completedAtMs < sinceMs) continue;
+		points.push({
+			taskId: t._id,
+			title: t.title,
+			completedAt: new Date(completedAtMs).toISOString(),
+			cycleTimeDays: Math.round(ct * 10) / 10,
+			projectColor: t.project?.color ?? '#888'
+		});
+	}
+	const cycleTimes = points.map((p) => p.cycleTimeDays);
+	return {
+		points,
+		p50: percentile(cycleTimes, 50),
+		p85: percentile(cycleTimes, 85),
+		p95: percentile(cycleTimes, 95)
+	};
+}
+
+function computeAgingWip(allTasks: any[]): AgingWipRow[] {
+	const rows: AgingWipRow[] = [];
+	for (const t of allTasks) {
+		if (t.archived || t.status === 'done') continue;
+		const days = daysSince(t.statusChangedAt);
+		if (days === null) continue;
+		const severity = agingSeverity(t.status, days);
+		if (severity === 'normal') continue;
+		rows.push({
+			taskId: t._id,
+			title: t.title,
+			status: t.status,
+			daysInStatus: days,
+			severity,
+			statusColor: STATUS_COLORS[t.status] ?? '#888'
+		});
+	}
+	rows.sort((a, b) => b.daysInStatus - a.daysInStatus);
+	return rows.slice(0, 20);
+}
+
+function computeTimeInStatus(allTasks: any[], since: Date | null): TimeInStatusRow[] {
+	const sinceMs = since?.getTime() ?? 0;
+	const rows: TimeInStatusRow[] = [];
+	for (const t of allTasks) {
+		if (t.status !== 'done') continue;
+		const completedAtMs = getCompletionMs(t);
+		if (completedAtMs === null || completedAtMs < sinceMs) continue;
+
+		const log: any[] = t.activityLog ?? [];
+		const transitions = log
+			.filter((e) => e.action === 'status_change' && e.details?.to)
+			.map((e) => ({ to: e.details.to as string, t: new Date(e.createdAt).getTime() }))
+			.sort((a, b) => a.t - b.t);
+		if (transitions.length === 0) continue;
+
+		const durations = new Map<string, number>();
+		let prevStatus = 'backlog';
+		let prevTime = new Date(t.createdAt).getTime();
+		for (const tr of transitions) {
+			const dur = tr.t - prevTime;
+			durations.set(prevStatus, (durations.get(prevStatus) ?? 0) + dur);
+			prevStatus = tr.to;
+			prevTime = tr.t;
+		}
+
+		const segments: TimeInStatusSegment[] = [...durations.entries()]
+			.filter(([, ms]) => ms > 0)
+			.map(([status, ms]) => ({
+				status,
+				days: Math.round((ms / MS_PER_DAY) * 10) / 10,
+				color: STATUS_COLORS[status] ?? '#888'
+			}));
+		const totalDays = segments.reduce((acc, s) => acc + s.days, 0);
+		if (totalDays <= 0) continue;
+		rows.push({ taskId: t._id, title: t.title, totalDays, segments });
+	}
+	rows.sort((a, b) => b.totalDays - a.totalDays);
+	return rows.slice(0, 20);
+}
+
+function computePerProject(allTasks: any[], since: Date | null, allProjects: any[]): PerProjectRow[] {
+	const sinceMs = since?.getTime() ?? 0;
+	const rows: PerProjectRow[] = [];
+	for (const p of allProjects) {
+		const ofProject = allTasks.filter((t: any) => t.project?._id === p._id);
+		const active = ofProject.filter((t: any) => !t.archived && t.status !== 'done').length;
+		const doneInRange = ofProject.filter((t: any) => {
+			if (t.status !== 'done') return false;
+			const ms = getCompletionMs(t);
+			return ms !== null && ms >= sinceMs;
+		}).length;
+		const wip = ofProject.filter((t: any) => !t.archived && t.status === 'wip').length;
+		const aging = ofProject.filter((t: any) => {
+			if (t.archived || t.status === 'done') return false;
+			const days = daysSince(t.statusChangedAt);
+			return days !== null && agingSeverity(t.status, days) !== 'normal';
+		}).length;
+		const cycleTimes = ofProject
+			.filter((t: any) => {
+				if (t.status !== 'done') return false;
+				const ms = getCompletionMs(t);
+				return ms !== null && ms >= sinceMs;
+			})
+			.map((t: any) => computeCycleTimeDays(t))
+			.filter((x): x is number => x !== null);
+		const medianCycleDays = percentile(cycleTimes, 50);
+		rows.push({
+			id: p._id,
+			name: p.name,
+			color: p.color ?? '#888',
+			active,
+			doneInRange,
+			medianCycleDays,
+			wip,
+			aging
+		});
+	}
+	rows.sort((a, b) => b.doneInRange - a.doneInRange);
+	return rows;
+}
+
+function computePerAssignee(allTasks: any[], since: Date | null): PerAssigneeRow[] {
+	const sinceMs = since?.getTime() ?? 0;
+	const byUser = new Map<string, { username: string; tasks: any[] }>();
+	for (const t of allTasks) {
+		const id = t.assignee?._id ?? '__unassigned__';
+		const name = t.assignee?.username ?? '— Unassigned —';
+		if (!byUser.has(id)) byUser.set(id, { username: name, tasks: [] });
+		byUser.get(id)!.tasks.push(t);
+	}
+	const rows: PerAssigneeRow[] = [];
+	for (const [id, { username, tasks }] of byUser) {
+		const activeTasks = tasks.filter((t: any) => !t.archived && t.status !== 'done');
+		const active = activeTasks.length;
+		const doneInRange = tasks.filter((t: any) => {
+			if (t.status !== 'done') return false;
+			const ms = getCompletionMs(t);
+			return ms !== null && ms >= sinceMs;
+		}).length;
+		const wip = tasks.filter((t: any) => !t.archived && t.status === 'wip').length;
+		const aging = tasks.filter((t: any) => {
+			if (t.archived || t.status === 'done') return false;
+			const days = daysSince(t.statusChangedAt);
+			return days !== null && agingSeverity(t.status, days) !== 'normal';
+		}).length;
+		const loadScore = activeTasks.reduce(
+			(acc: number, t: any) => acc + (SIZE_WEIGHTS[t.taskLength ?? 'medium'] ?? 2),
+			0
+		);
+		rows.push({ id, username, active, doneInRange, loadScore, wip, aging });
+	}
+	rows.sort((a, b) => {
+		if (a.id === '__unassigned__') return 1;
+		if (b.id === '__unassigned__') return -1;
+		return b.loadScore - a.loadScore;
+	});
+	return rows;
+}
+
+function computeSourceMix(allTasks: any[], since: Date | null): SourceMixSlice[] {
+	const sinceMs = since?.getTime() ?? 0;
+	const counts = new Map<string, number>();
+	for (const t of allTasks) {
+		const ref = new Date(t.createdAt).getTime();
+		if (ref < sinceMs) continue;
+		const src = t.source ?? 'manual';
+		counts.set(src, (counts.get(src) ?? 0) + 1);
+	}
+	return [...counts.entries()]
+		.map(([source, count]) => ({ source, count }))
+		.sort((a, b) => b.count - a.count);
+}
+
 export async function loadAnalyticsData(range: AnalyticsRange, dayRaw: string | null = null): Promise<AnalyticsData> {
 	await connectDB();
 	const since = rangeToSince(range);
 
-	const [activeTasks, archivedInRange] = await Promise.all([
+	const { KanbanProject } = await import('$lib/server/db');
+
+	const [activeTasks, archivedInRange, allProjects] = await Promise.all([
 		KanbanTask.find({ archived: false }).lean(),
 		since
 			? KanbanTask.find({ archived: true, archivedAt: { $gte: since } }).lean()
-			: KanbanTask.find({ archived: true }).lean()
+			: KanbanTask.find({ archived: true }).lean(),
+		KanbanProject.find({ isActive: true }).lean()
 	]);
 
 	const allTasks = [...activeTasks, ...archivedInRange];
@@ -467,7 +769,14 @@ export async function loadAnalyticsData(range: AnalyticsRange, dayRaw: string | 
 		},
 		kpi: computeKpi(allTasks, since),
 		cfd: computeCfd(allTasks, since),
-		wipTimeline
+		wipTimeline,
+		throughput: computeThroughput(allTasks, since),
+		cycleScatter: computeCycleScatter(allTasks, since),
+		agingWip: computeAgingWip(allTasks),
+		timeInStatus: computeTimeInStatus(allTasks, since),
+		perProject: computePerProject(allTasks, since, allProjects),
+		perAssignee: computePerAssignee(allTasks, since),
+		sourceMix: computeSourceMix(allTasks, since)
 	};
 }
 
