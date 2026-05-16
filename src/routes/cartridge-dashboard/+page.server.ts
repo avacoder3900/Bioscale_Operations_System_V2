@@ -143,7 +143,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Phase pipeline order for display. 'backing' isn't a CartridgeRecord status
 	// anymore (cartridges don't exist as individuals during backing) — take that
 	// count from BackingLot.cartridgeCount aggregated across in_oven + ready lots.
-	const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped', 'linked', 'underway', 'completed'];
+	const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped'];
 	const phaseMap = new Map((phaseCounts as any[]).map((p: any) => [p._id, p.count]));
 	const backingPipelineCount = (ovenOccupancyAgg as any[]).reduce((s, o: any) => s + (o.count ?? 0), 0);
 	phaseMap.set('backing', backingPipelineCount);
