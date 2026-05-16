@@ -1,38 +1,38 @@
 import { json, error } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
-import { CvProject } from '$lib/server/db/models/cv-project.js';
 import type { RequestHandler } from './$types';
 
+/**
+ * PATCH /api/cv/images/[id]/label
+ *
+ * Sets the qcLabel on an image. After the refactor, labels live on the image
+ * directly — no project annotatedCount counters to maintain (projects derive
+ * their stats from member queries).
+ */
 export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
 	await connectDB();
 
-	try {
-		const body = await request.json();
-		const { label } = body;
-		if (label !== 'approved' && label !== 'rejected' && label !== null) {
-			return json({ error: 'label must be "approved", "rejected", or null' }, { status: 400 });
-		}
+	const body = await request.json();
+	// Accept both `qcLabel` (new) and `label` (legacy callers).
+	const qcLabel = body.qcLabel ?? body.label ?? null;
 
-		const image = await CvImage.findById(params.id).lean() as any;
-		if (!image) return json({ error: 'Image not found' }, { status: 404 });
-
-		const oldLabel = image.label;
-		await CvImage.findByIdAndUpdate(params.id, { label });
-
-		// Update annotatedCount on project
-		const wasLabeled = oldLabel === 'approved' || oldLabel === 'rejected';
-		const isLabeled = label === 'approved' || label === 'rejected';
-
-		if (!wasLabeled && isLabeled) {
-			await CvProject.findByIdAndUpdate(image.projectId, { $inc: { annotatedCount: 1 } });
-		} else if (wasLabeled && !isLabeled) {
-			await CvProject.findByIdAndUpdate(image.projectId, { $inc: { annotatedCount: -1 } });
-		}
-
-		return json({ success: true, label });
-	} catch (err: any) {
-		return json({ error: err.message }, { status: 500 });
+	if (qcLabel !== 'approved' && qcLabel !== 'rejected' && qcLabel !== null) {
+		return json({ error: 'qcLabel must be "approved", "rejected", or null' }, { status: 400 });
 	}
+
+	const image = await CvImage.findById(params.id);
+	if (!image) return json({ error: 'Image not found' }, { status: 404 });
+
+	await CvImage.updateOne(
+		{ _id: params.id },
+		{ $set: {
+			qcLabel,
+			qcLabeledBy: qcLabel ? { _id: locals.user._id, username: locals.user.username } : null,
+			qcLabeledAt: qcLabel ? new Date() : null
+		}}
+	);
+
+	return json({ success: true, qcLabel });
 };

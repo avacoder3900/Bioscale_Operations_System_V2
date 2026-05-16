@@ -1,8 +1,11 @@
 /**
  * GET /api/cv/lookup-cartridge?code=CART-000123
  *
- * Looks up a cartridge by QR code and returns its CV phase history.
- * Queries cv_images for prior photos, determines the next phase in the pipeline.
+ * Validates a scanned QR. Returns 404 if cartridge doesn't exist (induction
+ * is gone — capture endpoints reject orphan scans).
+ *
+ * Used by the new /capture page after the operator scans: if the cartridge
+ * is valid, the page makes it the sticky context for subsequent photos.
  */
 import { json, error } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
@@ -10,23 +13,6 @@ import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
 import { getR2Url } from '$lib/server/services/r2';
 import type { RequestHandler } from './$types';
-
-const PHASE_PIPELINE = [
-	'wax_filled',
-	'reagent_filled',
-	'inspected',
-	'sealed',
-	'oven_cured',
-	'qaqc_released'
-] as const;
-
-function getNextPhase(currentPhase: string | null): string {
-	if (!currentPhase) return PHASE_PIPELINE[0];
-	const idx = PHASE_PIPELINE.indexOf(currentPhase as any);
-	if (idx === -1) return PHASE_PIPELINE[0];
-	if (idx >= PHASE_PIPELINE.length - 1) return currentPhase; // already complete
-	return PHASE_PIPELINE[idx + 1];
-}
 
 export const GET: RequestHandler = async ({ url, locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
@@ -36,38 +22,35 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
 	await connectDB();
 
-	// Check if cartridge record exists
-	const cartridge = await CartridgeRecord.findById(code).select('_id status').lean();
+	const cartridge = await CartridgeRecord.findById(code)
+		.select('_id status photoSequence')
+		.lean() as any;
 
-	// Find all cv_images tagged with this cartridge, sorted newest first
-	const previousImages = await CvImage.find({ 'cartridgeTag.cartridgeRecordId': code })
-		.select('_id cartridgeTag.phase capturedAt filePath imageUrl')
+	if (!cartridge) {
+		return json({ error: `Cartridge ${code} not found in BIMS` }, { status: 404 });
+	}
+
+	// Recent photos for this cartridge — informational, helps the capture UI
+	// show "you've already captured N photos of this cart" to the operator.
+	const recentPhotos = await CvImage.find({ 'cartridgeTag.cartridgeRecordId': code })
+		.select('_id cartridgeImageNumber cartridgeTag.phase capturedAt filePath imageUrl qcLabel')
 		.sort({ capturedAt: -1 })
+		.limit(20)
 		.lean();
 
-	const currentPhase = previousImages.length > 0
-		? (previousImages[0] as any).cartridgeTag?.phase || null
-		: null;
-
-	const nextPhase = getNextPhase(currentPhase);
-	const isNew = previousImages.length === 0;
-	const isComplete = currentPhase === 'qaqc_released';
-
-	const previousImagesPayload = (previousImages as any[]).map((img) => ({
+	const photosPayload = (recentPhotos as any[]).map((img) => ({
 		id: img._id,
+		cartridgeImageNumber: img.cartridgeImageNumber,
 		phase: img.cartridgeTag?.phase,
+		qcLabel: img.qcLabel,
 		capturedAt: img.capturedAt,
 		url: img.imageUrl || (img.filePath ? getR2Url(img.filePath) : null)
 	}));
 
 	return json({
-		cartridgeRecordId: cartridge ? (cartridge as any)._id : null,
-		currentPhase,
-		nextPhase,
-		isNew,
-		isComplete,
-		pipelineIndex: PHASE_PIPELINE.indexOf(nextPhase as any),
-		pipelineLength: PHASE_PIPELINE.length,
-		previousImages: JSON.parse(JSON.stringify(previousImagesPayload))
+		cartridgeRecordId: cartridge._id,
+		status: cartridge.status,
+		photoCount: cartridge.photoSequence ?? 0,
+		recentPhotos: JSON.parse(JSON.stringify(photosPayload))
 	});
 };

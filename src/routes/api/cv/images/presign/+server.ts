@@ -7,25 +7,33 @@ import { getR2Url, buildCvNamedKey } from '$lib/server/services/r2';
 import type { RequestHandler } from './$types';
 
 /**
- * Returns upload info for the browser.
- * Instead of a presigned R2 URL (which has TLS issues),
- * we return the Cloudflare Worker URL for direct upload.
+ * Returns upload info for the browser. After the cartridge-first refactor,
+ * projectId is optional. If absent, files land under a generic captures prefix.
+ *
+ * Returns the Cloudflare Worker URL for direct browser upload (avoids R2 TLS
+ * issues with direct browser PUTs).
  */
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
 	await connectDB();
 
 	const { projectId, filename, contentType } = await request.json();
-	if (!projectId || !filename || !contentType) {
-		return json({ error: 'projectId, filename, and contentType are required' }, { status: 400 });
+	if (!filename || !contentType) {
+		return json({ error: 'filename and contentType are required' }, { status: 400 });
 	}
 
-	const project = await CvProject.findById(projectId);
-	if (!project) return json({ error: 'Project not found' }, { status: 404 });
+	// Project is optional now. If provided, validate it exists (so legacy callers
+	// still get the right key prefix).
+	let projectName: string = 'captures';
+	if (projectId) {
+		const project = await CvProject.findById(projectId).select('name').lean() as any;
+		if (project?.name) {
+			projectName = project.name;
+		}
+	}
 
 	const id = generateId();
-	// Use the original filename (which includes barcode from QR scan) with a unique prefix
-	const key = buildCvNamedKey(project.name, id, filename);
+	const key = buildCvNamedKey(projectName, id, filename);
 
 	const workerUrl = env.R2_WORKER_URL;
 	if (!workerUrl) {

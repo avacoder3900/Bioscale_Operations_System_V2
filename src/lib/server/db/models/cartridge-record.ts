@@ -134,8 +134,13 @@ const cartridgeRecordSchema = new Schema({
 		phase: String,
 		capturedAt: Date,
 		r2Key: String,
-		r2Url: String
+		r2Url: String,
+		cartridgeImageNumber: String
 	}],
+
+	// Atomic counter for cartridgeImageNumber generation.
+	// $inc'd at capture time so concurrent captures never collide.
+	photoSequence: { type: Number, default: 0 },
 
 	// Operator-entered notes attached to this cartridge. Written by phase-scoped
 	// actions (e.g. recordBatchNote at reagent prep). At most one note per

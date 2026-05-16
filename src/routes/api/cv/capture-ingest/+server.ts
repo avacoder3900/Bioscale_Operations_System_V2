@@ -1,25 +1,32 @@
 /**
  * POST /api/cv/capture-ingest
  *
- * Agent-keyed multipart upload from the Python capture scripts (camera_capture.py).
- * Uploads the image to R2, creates a CvImage doc with cartridgeTag, and
- * mirrors the link onto CartridgeRecord.photos[] when the cartridge exists.
+ * Agent-keyed multipart upload from the Python capture scripts
+ * (camera_capture.py and camera_capture_NO_POST_PROCESSING.py).
  *
- * This is the bench/Python equivalent of the browser presign+record flow; both
- * end up writing the same shape so DHR/search/lookup-cartridge resolve photos
- * consistently.
+ * Backwards-compatible contract for the old lab scripts:
+ *  - Still accepts the same multipart fields they send today
+ *  - `projectId` is silently ignored (refactor moved CvImage off projects)
+ *  - `qrCode` is the cartridgeRecordId
+ *  - `phase` is required
+ *
+ * New behavior:
+ *  - Rejects with 400 if the QR doesn't match an existing CartridgeRecord.
+ *    Induction is gone — the scripts can no longer auto-create cartridges.
  */
-import { json, error } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
+import { json } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
-import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
 import { AuditLog } from '$lib/server/db/models/audit-log.js';
 import { generateId } from '$lib/server/db/utils.js';
 import { uploadViaWorker, getR2Url, buildCvNamedKey } from '$lib/server/services/r2';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import type { RequestHandler } from './$types';
+
+function pad(n: number): string {
+	return String(n).padStart(3, '0');
+}
 
 export const POST: RequestHandler = async ({ request }) => {
 	requireAgentApiKey(request);
@@ -31,23 +38,31 @@ export const POST: RequestHandler = async ({ request }) => {
 	const phase = formData.get('phase')?.toString().trim() || 'wax_filled';
 	const cameraIndexRaw = formData.get('cameraIndex')?.toString();
 	const processingMode = formData.get('processingMode')?.toString() as 'full' | 'raw' | undefined;
-	const projectIdInput = formData.get('projectId')?.toString().trim();
+	// Legacy projectId — silently ignored after the refactor.
+	// const _legacyProjectId = formData.get('projectId');
 
 	if (!file) return json({ error: 'file is required' }, { status: 400 });
 	if (!qrCode) return json({ error: 'qrCode is required' }, { status: 400 });
 
-	const projectId = projectIdInput || env.CV_DEFAULT_PROJECT_ID;
-	if (!projectId) {
-		return json({ error: 'projectId is required (or set CV_DEFAULT_PROJECT_ID)' }, { status: 400 });
+	// Reject orphan scans — cartridge must exist.
+	// Atomically bump photoSequence to mint cartridgeImageNumber.
+	const updated = await CartridgeRecord.findOneAndUpdate(
+		{ _id: qrCode },
+		{ $inc: { photoSequence: 1 } },
+		{ new: true, projection: { photoSequence: 1 } }
+	).lean() as any;
+
+	if (!updated) {
+		return json({ error: `Cartridge ${qrCode} not found in BIMS` }, { status: 400 });
 	}
 
-	const project = await CvProject.findById(projectId).lean() as any;
-	if (!project) return json({ error: 'Project not found' }, { status: 404 });
+	const seq = updated.photoSequence;
+	const cartridgeImageNumber = `${qrCode}_${pad(seq)}`;
 
 	const buffer = Buffer.from(await file.arrayBuffer());
 	const id = generateId();
-	const filename = file.name || `cartridge_${qrCode}_${id}.png`;
-	const key = buildCvNamedKey(project.name, id, filename);
+	const filename = file.name || `${cartridgeImageNumber}.png`;
+	const key = buildCvNamedKey('captures', id, filename);
 	const contentType = file.type || 'image/png';
 
 	await uploadViaWorker(buffer, key, contentType);
@@ -56,7 +71,6 @@ export const POST: RequestHandler = async ({ request }) => {
 	const capturedAt = new Date();
 	const image = await CvImage.create({
 		_id: id,
-		projectId,
 		filename,
 		filePath: key,
 		fileSizeBytes: buffer.length,
@@ -64,25 +78,21 @@ export const POST: RequestHandler = async ({ request }) => {
 		capturedAt,
 		imageUrl: publicUrl,
 		processingMode: processingMode === 'raw' || processingMode === 'full' ? processingMode : undefined,
-		cartridgeTag: { cartridgeRecordId: qrCode, phase }
+		cartridgeTag: { cartridgeRecordId: qrCode, phase },
+		cartridgeImageNumber
 	});
 
-	await CvProject.findByIdAndUpdate(projectId, { $inc: { imageCount: 1 } });
-
-	const cartridge = await CartridgeRecord.findById(qrCode).select('_id').lean();
-	if (cartridge) {
-		await CartridgeRecord.updateOne(
-			{ _id: qrCode },
-			{ $push: { photos: { imageId: id, phase, capturedAt, r2Key: key, r2Url: publicUrl } } }
-		);
-	}
+	await CartridgeRecord.updateOne(
+		{ _id: qrCode },
+		{ $push: { photos: { imageId: id, phase, capturedAt, r2Key: key, r2Url: publicUrl, cartridgeImageNumber } } }
+	);
 
 	await AuditLog.create({
 		_id: generateId(),
 		tableName: 'cv_images',
 		recordId: id,
 		action: 'INSERT',
-		newData: { source: 'capture-ingest', cartridgeRecordId: qrCode, phase, key, processingMode },
+		newData: { source: 'capture-ingest', cartridgeRecordId: qrCode, phase, key, cartridgeImageNumber, processingMode },
 		changedAt: capturedAt,
 		changedBy: 'cv-capture-agent',
 		reason: 'capture-ingest'
@@ -90,9 +100,9 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	return json({
 		imageId: id,
+		cartridgeImageNumber,
 		key,
-		cartridgeRecordId: cartridge ? qrCode : null,
-		cartridgeLinked: !!cartridge,
+		cartridgeRecordId: qrCode,
 		phase
 	}, { status: 201 });
 };
