@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
+	import KpiCard from '$lib/components/kanban/KpiCard.svelte';
 
 	let { data } = $props();
 
@@ -16,6 +17,13 @@
 		params.set('range', key);
 		goto(`/kanban/analytics?${params.toString()}`, { replaceState: true });
 	}
+
+	function fmt(value: number | null, suffix = ''): string {
+		if (value === null) return '—';
+		return `${Math.round(value * 10) / 10}${suffix}`;
+	}
+
+	let kpi = $derived(data.analytics.kpi);
 </script>
 
 <div class="space-y-6">
@@ -45,9 +53,44 @@
 		</div>
 	</div>
 
-	<!-- KPI cards placeholder — KANBAN-ANALYTICS-KPI-CARDS PRD -->
-	<section class="rounded-lg border border-dashed border-[var(--color-tron-border)] p-6">
-		<p class="tron-text-muted text-sm">KPI cards row — PRD KANBAN-ANALYTICS-KPI-CARDS</p>
+	<!-- KPI cards row — PRD KANBAN-ANALYTICS-KPI-CARDS -->
+	<section class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+		<KpiCard
+			label="Active tasks"
+			value={String(kpi.activeTasks)}
+			subline="not archived, not done"
+			accent="#00d4ff"
+		/>
+		<KpiCard
+			label="Throughput"
+			value={String(kpi.throughputInRange)}
+			subline="completed in range"
+			accent="#00ff88"
+		/>
+		<KpiCard
+			label="Median cycle"
+			value={kpi.medianCycleTimeDays === null ? '—' : fmt(kpi.medianCycleTimeDays, 'd')}
+			subline={kpi.p85CycleTimeDays === null ? 'no completions' : `85th: ${fmt(kpi.p85CycleTimeDays, 'd')}`}
+			accent="#a855f7"
+		/>
+		<KpiCard
+			label="WIP right now"
+			value={String(kpi.wipCount)}
+			subline="across {kpi.wipAssignees} {kpi.wipAssignees === 1 ? 'person' : 'people'}"
+			accent="#ff6600"
+		/>
+		<KpiCard
+			label="Stuck in Waiting"
+			value={String(kpi.waitingCount)}
+			subline={kpi.oldestWaitingDays === null ? 'none' : `oldest: ${kpi.oldestWaitingDays}d`}
+			accent="#ff3366"
+		/>
+		<KpiCard
+			label="Aging tasks"
+			value={String(kpi.agingCount)}
+			subline="{kpi.criticalAgingCount} critical"
+			accent="#f59e0b"
+		/>
 	</section>
 
 	<!-- CFD placeholder — KANBAN-ANALYTICS-CFD PRD -->
