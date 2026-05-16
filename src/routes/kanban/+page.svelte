@@ -3,11 +3,25 @@
 	import TronButton from '$lib/components/ui/TronButton.svelte';
 	import KanbanColumn from '$lib/components/kanban/KanbanColumn.svelte';
 	import CreateTaskModal from '$lib/components/kanban/CreateTaskModal.svelte';
+	import WipLimitModal from '$lib/components/kanban/WipLimitModal.svelte';
 
 	let { data, form } = $props();
 	let showCreateModal = $state(false);
 	let dragError = $state('');
 	let showMyTasks = $state(false);
+	let wipLimitInfo = $state<{
+		assignee: string;
+		assigneeId: string;
+		limit: number;
+		currentCount: number;
+		currentTasks: { _id: string; title: string }[];
+	} | null>(null);
+
+	// Surface WIP-limit blocks from form actions (arrow buttons).
+	$effect(() => {
+		const err = (form as any)?.wipLimitError;
+		if (err && err.kind === 'wip_limit_exceeded') wipLimitInfo = err;
+	});
 
 	// Filter tasks based on toggle
 	let filteredTasks = $derived(
@@ -194,6 +208,10 @@
 				body: JSON.stringify({ taskId, newStatus })
 			});
 			const result = await res.json();
+			if (res.status === 409 && result.kind === 'wip_limit_exceeded') {
+				wipLimitInfo = result;
+				return;
+			}
 			if (!result.success) {
 				dragError = result.error ?? 'Failed to move task';
 			}
@@ -379,4 +397,9 @@
 		defaultProjectId={createModalProjectId}
 		onclose={() => { showCreateModal = false; createModalProjectId = undefined; }}
 	/>
+{/if}
+
+<!-- WIP limit hit modal -->
+{#if wipLimitInfo}
+	<WipLimitModal info={wipLimitInfo} onclose={() => (wipLimitInfo = null)} />
 {/if}
