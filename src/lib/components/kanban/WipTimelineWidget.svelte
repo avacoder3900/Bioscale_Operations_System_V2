@@ -178,21 +178,43 @@
 							<div class="flex-1">
 								{#each lanesToShow as lane (lane.laneIndex)}
 									{@const cells = cellsForLane(lane)}
-									<div
-										class="mb-0.5 flex"
-										class:opacity-100={!lane.isOverflow}
-									>
-										{#each cells as cell, i}
-											{@const isOverflowCell = i === 0 || i === 45}
-											<a
-												href={cell ? `/kanban/task/${cell.taskId}` : undefined}
-												title={cell ? `${cell.taskTitle}\n${formatRange(cell)}` : ''}
-												class="block h-5 shrink-0 border-r border-[var(--color-tron-bg-primary)] transition-opacity hover:opacity-80"
-												style="width: {isOverflowCell ? '32px' : '18px'}; background: {cell
-													? cell.projectColor
-													: 'rgba(160,160,160,0.08)'}; {lane.isOverflow && cell ? 'outline: 1px solid var(--color-tron-red);' : ''}"
-											></a>
-										{/each}
+									{@const titles = laneTasks(lane)}
+									<div class="mb-0.5 flex items-center gap-3">
+										<!-- Cell grid -->
+										<div
+											class="flex"
+											class:opacity-100={!lane.isOverflow}
+										>
+											{#each cells as cell, i}
+												{@const isOverflowCell = i === 0 || i === 45}
+												<a
+													href={cell ? `/kanban/task/${cell.taskId}` : undefined}
+													title={cell ? `${cell.taskTitle}\n${formatRange(cell)}` : ''}
+													class="block h-5 shrink-0 border-r border-[var(--color-tron-bg-primary)] transition-opacity hover:opacity-80"
+													style="width: {isOverflowCell ? '32px' : '18px'}; background: {cell
+														? cell.projectColor
+														: 'rgba(160,160,160,0.08)'}; {lane.isOverflow && cell ? 'outline: 1px solid var(--color-tron-red);' : ''}"
+												></a>
+											{/each}
+										</div>
+
+										<!-- Task titles to the right of the cells -->
+										<div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
+											{#each titles as seg (seg.taskId)}
+												<a
+													href="/kanban/task/{seg.taskId}"
+													class="inline-flex items-center gap-1 text-[10px] hover:underline"
+													style="color: {seg.projectColor};"
+													title={seg.taskTitle}
+												>
+													<span class="h-1.5 w-1.5 shrink-0 rounded-full" style="background: {seg.projectColor};"></span>
+													<span class="max-w-[240px] truncate">{seg.taskTitle}</span>
+												</a>
+											{/each}
+											{#if titles.length === 0}
+												<span class="tron-text-muted text-[9px] italic opacity-50">— empty slot —</span>
+											{/if}
+										</div>
 									</div>
 								{/each}
 							</div>
