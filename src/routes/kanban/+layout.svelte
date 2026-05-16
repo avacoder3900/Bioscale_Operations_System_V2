@@ -32,6 +32,11 @@
 			href: '/kanban/archived',
 			label: 'Archive',
 			icon: 'M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4'
+		},
+		{
+			href: '/kanban/analytics',
+			label: 'Analytics',
+			icon: 'M3 3v18h18M7 17l4-4 4 4 6-6'
 		}
 	];
 

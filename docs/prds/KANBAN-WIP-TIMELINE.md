@@ -54,7 +54,7 @@ A full-width grid widget on `/kanban/analytics` showing one day at a time: each 
 - **`< 7 AM` overflow** on the left: any WIP duration that occurred in the 0:00–6:59 window of the chart day, OR any carry-over from prior days where the task was still in WIP at the start of the chart day.
 - **`≥ 6 PM` overflow** on the right: any WIP duration that occurred 18:00 or later, OR any continuation into the next day (rendered as filled to indicate the task was still in WIP when the chart day ended).
 
-> **Note for confirmation**: Jacob wrote the bucket list starting at `7:15`. Assuming that was a list typo and the first regular bucket is `7:00`. PRD locks in 7:00 as the start; flag during review if `7:15` was intentional.
+> **Confirmed 2026-05-15**: first regular bucket is `7:00`. The `< 7 AM` overflow catches anything strictly before 7:00.
 
 ### 3. Lane assignment (within a person's WIP-limit rows)
 
@@ -163,8 +163,7 @@ Tasks with no assignee but in WIP on the chart day get aggregated under "— Una
 - **Lane assignment edge case**: extremely rapid wip → other → wip flips on the same task in the same day could create many small segments. Acceptable as-is.
 - **Rollback**: hide the widget; data block stays unused.
 
-## Open questions for review
+## Open questions (deferred — not blocking implementation)
 
-- **First regular bucket**: 7:00 or 7:15? PRD locks 7:00 — Jacob confirm.
 - **Overflow lane behavior**: render in red above normal lanes (PRD default), or suppress entirely and only show violations on a separate "WIP violations" KPI card?
 - **Should `< 7 AM` carry-over also indicate the originating prior day** (e.g., dotted hatch + tooltip showing "started 3:00 PM Tuesday")? Default: tooltip only.
