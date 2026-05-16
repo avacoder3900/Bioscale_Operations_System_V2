@@ -25,6 +25,15 @@ export type KpiBlock = {
 	criticalAgingCount: number;
 };
 
+export type CfdPoint = {
+	date: string; // YYYY-MM-DD
+	backlog: number;
+	ready: number;
+	wip: number;
+	waiting: number;
+	done: number;
+};
+
 export type AnalyticsData = {
 	range: AnalyticsRange;
 	since: Date | null;
@@ -34,6 +43,7 @@ export type AnalyticsData = {
 		archivedInRange: number;
 	};
 	kpi: KpiBlock;
+	cfd: CfdPoint[];
 };
 
 export function rangeToSince(range: AnalyticsRange): Date | null {
@@ -157,6 +167,72 @@ function computeKpi(allTasks: any[], since: Date | null): KpiBlock {
 	};
 }
 
+/**
+ * Status of a task at a given point in time. Built by replaying the task's
+ * activityLog (sorted, status_change entries only) up to `atMs`. Tasks default
+ * to 'backlog' if no transition has occurred yet (matches schema default).
+ * Archived tasks count as 'done' once archivedAt is in the past.
+ */
+function getTaskStatusAt(task: any, atMs: number): string | null {
+	const createdAt = new Date(task.createdAt).getTime();
+	if (atMs < createdAt) return null;
+
+	if (task.archived) {
+		const archivedAt = task.archivedAt ? new Date(task.archivedAt).getTime() : null;
+		if (archivedAt !== null && atMs >= archivedAt) return 'done';
+	}
+
+	const log: any[] = task.activityLog ?? [];
+	const transitions = log
+		.filter((e) => e.action === 'status_change' && e.details?.to)
+		.map((e) => ({ to: e.details.to as string, t: new Date(e.createdAt).getTime() }))
+		.sort((a, b) => a.t - b.t);
+
+	let lastKnown = 'backlog';
+	for (const tr of transitions) {
+		if (tr.t > atMs) break;
+		lastKnown = tr.to;
+	}
+	return lastKnown;
+}
+
+function computeCfd(allTasks: any[], since: Date | null): CfdPoint[] {
+	const now = Date.now();
+	let start: number;
+	if (since) {
+		start = since.getTime();
+	} else {
+		// 'all' — find earliest createdAt or fall back to 30 days ago
+		const earliest = allTasks.reduce((min, t) => {
+			const c = new Date(t.createdAt).getTime();
+			return min === null || c < min ? c : min;
+		}, null as number | null);
+		start = earliest ?? now - 30 * MS_PER_DAY;
+	}
+	const totalSpanDays = Math.ceil((now - start) / MS_PER_DAY);
+	const stepDays = totalSpanDays > 180 ? 7 : 1; // weekly for long ranges
+
+	const points: CfdPoint[] = [];
+	for (let d = start; d <= now; d += stepDays * MS_PER_DAY) {
+		const endOfDay = new Date(d);
+		endOfDay.setHours(23, 59, 59, 999);
+		const eod = endOfDay.getTime();
+
+		const counts = { backlog: 0, ready: 0, wip: 0, waiting: 0, done: 0 };
+		for (const t of allTasks) {
+			const status = getTaskStatusAt(t, eod);
+			if (!status) continue;
+			if (status in counts) counts[status as keyof typeof counts]++;
+		}
+
+		points.push({
+			date: endOfDay.toISOString().slice(0, 10),
+			...counts
+		});
+	}
+	return points;
+}
+
 export async function loadAnalyticsData(range: AnalyticsRange): Promise<AnalyticsData> {
 	await connectDB();
 	const since = rangeToSince(range);
@@ -179,6 +255,7 @@ export async function loadAnalyticsData(range: AnalyticsRange): Promise<Analytic
 			active,
 			archivedInRange: archivedInRange.length
 		},
-		kpi: computeKpi(allTasks, since)
+		kpi: computeKpi(allTasks, since),
+		cfd: computeCfd(allTasks, since)
 	};
 }
