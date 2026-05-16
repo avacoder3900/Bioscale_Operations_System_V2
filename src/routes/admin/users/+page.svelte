@@ -364,6 +364,41 @@
 											>
 										</form>
 									</div>
+
+									<!-- Kanban WIP Limit -->
+									<div>
+										<p
+											class="mb-2 text-xs font-medium text-[var(--color-tron-text-secondary)]"
+										>
+											Kanban WIP Limit
+											<span class="ml-1 opacity-60">(hard cap — 0 disables WIP entirely)</span>
+										</p>
+										<form
+											method="POST"
+											action="?/updateWipLimit"
+											use:enhance
+											class="flex gap-2"
+										>
+											<input
+												type="hidden"
+												name="userId"
+												value={u.id}
+											/>
+											<input
+												name="wipLimit"
+												type="number"
+												min="0"
+												max="50"
+												value={u.wipLimit}
+												class="min-h-[36px] w-24 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm text-[var(--color-tron-text)]"
+											/>
+											<button
+												type="submit"
+												class="min-h-[36px] rounded border border-[var(--color-tron-border)] px-3 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]"
+												>Save</button
+											>
+										</form>
+									</div>
 								</div>
 							</td>
 						</tr>
