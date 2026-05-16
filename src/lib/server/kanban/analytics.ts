@@ -5,7 +5,7 @@
  * activityLog builds the normalized timeline. Sibling widget PRDs extend the
  * returned shape with their specific blocks.
  */
-import { connectDB, KanbanTask } from '$lib/server/db';
+import { connectDB, KanbanTask, User } from '$lib/server/db';
 import { agingThresholds } from '$lib/shared/kanban-aging';
 
 export type AnalyticsRange = '7d' | '30d' | '90d' | 'all';
@@ -34,6 +34,36 @@ export type CfdPoint = {
 	done: number;
 };
 
+export type WipSegment = {
+	taskId: string;
+	taskTitle: string;
+	projectColor: string;
+	startBucket: number; // 0=before 7am, 1..44=regular 15-min cells (7:00..17:45), 45=after 6pm
+	endBucket: number;   // exclusive; fill cells [startBucket, endBucket)
+	startUtc: string;
+	endUtc: string | null;
+};
+
+export type WipLane = {
+	laneIndex: number;
+	isOverflow: boolean;
+	segments: WipSegment[];
+};
+
+export type WipTimelinePerson = {
+	userId: string;
+	username: string;
+	wipLimit: number;
+	lanes: WipLane[];
+};
+
+export type WipTimelineData = {
+	day: string; // YYYY-MM-DD
+	dayStartUtc: string;
+	dayEndUtc: string;
+	people: WipTimelinePerson[];
+};
+
 export type AnalyticsData = {
 	range: AnalyticsRange;
 	since: Date | null;
@@ -44,6 +74,7 @@ export type AnalyticsData = {
 	};
 	kpi: KpiBlock;
 	cfd: CfdPoint[];
+	wipTimeline: WipTimelineData;
 };
 
 export function rangeToSince(range: AnalyticsRange): Date | null {
@@ -233,7 +264,183 @@ function computeCfd(allTasks: any[], since: Date | null): CfdPoint[] {
 	return points;
 }
 
-export async function loadAnalyticsData(range: AnalyticsRange): Promise<AnalyticsData> {
+/**
+ * Compute the 0-45 bucket index for a UTC ms timestamp relative to the chart
+ * day's start (local midnight in UTC). 0 = before 7 AM overflow, 1..44 =
+ * regular 15-min cells (7:00..17:45 → 1..44), 45 = after 6 PM overflow.
+ * Returns 46 if the timestamp falls past end-of-day (used as an exclusive
+ * upper bound when a wip interval extends into the next day).
+ */
+function bucketIndexFor(ms: number, dayStartMs: number): number {
+	const dayEndMs = dayStartMs + 24 * 3600_000;
+	if (ms < dayStartMs) return 0; // carry-over from prior day
+	if (ms >= dayEndMs) return 46;
+	const offsetMs = ms - dayStartMs;
+	const sevenAm = 7 * 3600_000;
+	const sixPm = 18 * 3600_000;
+	if (offsetMs < sevenAm) return 0;
+	if (offsetMs >= sixPm) return 45;
+	const minutesFrom7 = (offsetMs - sevenAm) / 60_000;
+	return 1 + Math.floor(minutesFrom7 / 15);
+}
+
+/**
+ * Walk a task's activityLog to extract every [enterWipMs, exitWipMs] interval.
+ * If the task is currently in wip with no later transition, exitWipMs is null
+ * (caller clips it to `now` when rendering today's chart).
+ */
+function extractWipIntervals(task: any): { enterMs: number; exitMs: number | null }[] {
+	const log: any[] = task.activityLog ?? [];
+	const transitions = log
+		.filter((e) => e.action === 'status_change' && e.details?.to)
+		.map((e) => ({ to: e.details.to as string, from: e.details.from as string | undefined, t: new Date(e.createdAt).getTime() }))
+		.sort((a, b) => a.t - b.t);
+
+	const intervals: { enterMs: number; exitMs: number | null }[] = [];
+	let openEnter: number | null = null;
+	for (const tr of transitions) {
+		if (tr.to === 'wip' && openEnter === null) openEnter = tr.t;
+		else if (tr.to !== 'wip' && openEnter !== null) {
+			intervals.push({ enterMs: openEnter, exitMs: tr.t });
+			openEnter = null;
+		}
+	}
+	// Still in WIP if the last transition into wip wasn't matched by a transition out.
+	if (openEnter !== null && task.status === 'wip') {
+		intervals.push({ enterMs: openEnter, exitMs: null });
+	}
+	return intervals;
+}
+
+function parseDayParam(raw: string | null): { day: string; dayStartMs: number } {
+	const d = raw ? new Date(raw + 'T00:00:00Z') : new Date();
+	if (!raw) {
+		// Default to today UTC midnight
+		d.setUTCHours(0, 0, 0, 0);
+	}
+	const day = d.toISOString().slice(0, 10);
+	return { day, dayStartMs: d.getTime() };
+}
+
+function assignLanes(
+	segments: WipSegment[],
+	wipLimit: number
+): WipLane[] {
+	// Greedy interval coloring: sort by start, place in lowest free lane.
+	const sorted = [...segments].sort((a, b) => a.startBucket - b.startBucket);
+	const lanes: WipSegment[][] = Array.from({ length: wipLimit }, () => []);
+	const overflow: WipSegment[][] = [];
+
+	for (const seg of sorted) {
+		let placed = false;
+		for (let i = 0; i < lanes.length; i++) {
+			const lane = lanes[i];
+			const last = lane[lane.length - 1];
+			if (!last || last.endBucket <= seg.startBucket) {
+				lane.push(seg);
+				placed = true;
+				break;
+			}
+		}
+		if (!placed) {
+			// Find overflow lane with no conflict
+			let placedInOverflow = false;
+			for (const oLane of overflow) {
+				const last = oLane[oLane.length - 1];
+				if (!last || last.endBucket <= seg.startBucket) {
+					oLane.push(seg);
+					placedInOverflow = true;
+					break;
+				}
+			}
+			if (!placedInOverflow) overflow.push([seg]);
+		}
+	}
+
+	return [
+		...lanes.map((segs, i) => ({ laneIndex: i, isOverflow: false, segments: segs })),
+		...overflow.map((segs, i) => ({ laneIndex: wipLimit + i, isOverflow: true, segments: segs }))
+	];
+}
+
+async function computeWipTimeline(allTasks: any[], dayStartMs: number, day: string): Promise<WipTimelineData> {
+	const dayEndMs = dayStartMs + 24 * 3600_000;
+	const now = Date.now();
+	const effectiveEndMs = Math.min(dayEndMs, day === new Date().toISOString().slice(0, 10) ? now : dayEndMs);
+
+	// Build per-assignee segment list
+	type AccPerson = { userId: string; username: string; segments: WipSegment[] };
+	const byAssignee = new Map<string, AccPerson>();
+
+	for (const task of allTasks) {
+		const assigneeId = task.assignee?._id;
+		const assigneeName = task.assignee?.username ?? '— Unassigned —';
+		const projectColor = task.project?.color ?? '#888888';
+
+		const intervals = extractWipIntervals(task);
+		for (const iv of intervals) {
+			const enter = iv.enterMs;
+			const exit = iv.exitMs ?? effectiveEndMs;
+			// Skip intervals that don't overlap with today
+			if (exit <= dayStartMs) continue;
+			if (enter >= dayEndMs) continue;
+
+			const clippedStart = Math.max(enter, dayStartMs);
+			const clippedEnd = Math.min(exit, dayEndMs);
+
+			const seg: WipSegment = {
+				taskId: task._id,
+				taskTitle: task.title,
+				projectColor,
+				startBucket: bucketIndexFor(clippedStart, dayStartMs),
+				endBucket: bucketIndexFor(clippedEnd, dayStartMs),
+				startUtc: new Date(iv.enterMs).toISOString(),
+				endUtc: iv.exitMs ? new Date(iv.exitMs).toISOString() : null
+			};
+
+			const key = assigneeId ?? '__unassigned__';
+			if (!byAssignee.has(key)) {
+				byAssignee.set(key, { userId: key, username: assigneeName, segments: [] });
+			}
+			byAssignee.get(key)!.segments.push(seg);
+		}
+	}
+
+	// Resolve wipLimit per user
+	const userIds = [...byAssignee.keys()].filter((k) => k !== '__unassigned__');
+	const userDocs = userIds.length
+		? ((await User.find({ _id: { $in: userIds } }).select('_id username wipLimit').lean()) as any[])
+		: [];
+	const userMap = new Map(userDocs.map((u) => [u._id, u]));
+
+	const people: WipTimelinePerson[] = [];
+	for (const [key, acc] of byAssignee.entries()) {
+		const userDoc = userMap.get(key);
+		const wipLimit = userDoc ? (typeof userDoc.wipLimit === 'number' ? userDoc.wipLimit : 3) : 0;
+		people.push({
+			userId: key,
+			username: userDoc?.username ?? acc.username,
+			wipLimit,
+			lanes: assignLanes(acc.segments, wipLimit)
+		});
+	}
+
+	// Sort: real users by name, unassigned last
+	people.sort((a, b) => {
+		if (a.userId === '__unassigned__') return 1;
+		if (b.userId === '__unassigned__') return -1;
+		return a.username.localeCompare(b.username);
+	});
+
+	return {
+		day,
+		dayStartUtc: new Date(dayStartMs).toISOString(),
+		dayEndUtc: new Date(dayEndMs).toISOString(),
+		people
+	};
+}
+
+export async function loadAnalyticsData(range: AnalyticsRange, dayRaw: string | null = null): Promise<AnalyticsData> {
 	await connectDB();
 	const since = rangeToSince(range);
 
@@ -247,6 +454,9 @@ export async function loadAnalyticsData(range: AnalyticsRange): Promise<Analytic
 	const allTasks = [...activeTasks, ...archivedInRange];
 	const active = activeTasks.filter((t: any) => t.status !== 'done').length;
 
+	const { day, dayStartMs } = parseDayParam(dayRaw);
+	const wipTimeline = await computeWipTimeline(allTasks, dayStartMs, day);
+
 	return {
 		range,
 		since,
@@ -256,6 +466,19 @@ export async function loadAnalyticsData(range: AnalyticsRange): Promise<Analytic
 			archivedInRange: archivedInRange.length
 		},
 		kpi: computeKpi(allTasks, since),
-		cfd: computeCfd(allTasks, since)
+		cfd: computeCfd(allTasks, since),
+		wipTimeline
 	};
 }
+
+/**
+ * Lightweight wrapper for polling — returns just the WIP timeline block.
+ * Used by /api/kanban/wip-timeline.
+ */
+export async function loadWipTimeline(dayRaw: string | null): Promise<WipTimelineData> {
+	await connectDB();
+	const { day, dayStartMs } = parseDayParam(dayRaw);
+	const tasks = (await KanbanTask.find({}).lean()) as any[];
+	return computeWipTimeline(tasks, dayStartMs, day);
+}
+

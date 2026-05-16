@@ -10,7 +10,8 @@ export const load: PageServerLoad = async ({ locals, url, depends }) => {
 	depends('kanban:analytics');
 
 	const range = parseRange(url.searchParams.get('range'));
-	const analytics = await loadAnalyticsData(range);
+	const day = url.searchParams.get('day');
+	const analytics = await loadAnalyticsData(range, day);
 
 	return { analytics };
 };

@@ -3,6 +3,7 @@
 	import { page } from '$app/stores';
 	import KpiCard from '$lib/components/kanban/KpiCard.svelte';
 	import CfdChart from '$lib/components/kanban/CfdChart.svelte';
+	import WipTimelineWidget from '$lib/components/kanban/WipTimelineWidget.svelte';
 
 	let { data } = $props();
 
@@ -97,10 +98,8 @@
 	<!-- CFD — PRD KANBAN-ANALYTICS-CFD -->
 	<CfdChart points={data.analytics.cfd} />
 
-	<!-- WIP Timeline placeholder — KANBAN-WIP-TIMELINE PRD -->
-	<section class="rounded-lg border border-dashed border-[var(--color-tron-border)] p-6">
-		<p class="tron-text-muted text-sm">Daily WIP Timeline — PRD KANBAN-WIP-TIMELINE</p>
-	</section>
+	<!-- Daily WIP Timeline — PRD KANBAN-WIP-TIMELINE -->
+	<WipTimelineWidget data={data.analytics.wipTimeline} />
 
 	<!-- Flow charts placeholder — KANBAN-ANALYTICS-FLOW-CHARTS PRD -->
 	<section class="rounded-lg border border-dashed border-[var(--color-tron-border)] p-6">
