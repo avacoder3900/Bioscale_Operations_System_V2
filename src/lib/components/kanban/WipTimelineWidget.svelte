@@ -104,6 +104,18 @@
 		const end = seg.endUtc ? new Date(seg.endUtc).toLocaleString() : 'still in WIP';
 		return `${start} → ${end}`;
 	}
+
+	/** Distinct task titles in a lane, preserving order of first appearance. */
+	function laneTasks(lane: WipLane): WipSegment[] {
+		const seen = new Set<string>();
+		const out: WipSegment[] = [];
+		for (const seg of lane.segments) {
+			if (seen.has(seg.taskId)) continue;
+			seen.add(seg.taskId);
+			out.push(seg);
+		}
+		return out;
+	}
 </script>
 
 <div class="tron-card p-4">
