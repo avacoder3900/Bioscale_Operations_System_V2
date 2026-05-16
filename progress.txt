@@ -1820,3 +1820,29 @@ Fix in `persistProjectUiState`:
   retried (won't be fixed by retrying auth/validation failures).
 
 Single ~15-line change in `src/routes/kanban/+page.svelte`.
+
+### Follow-up — Stale layout data on within-kanban navigation (same session)
+
+Jacob hit a different bug: fold state didn't persist when navigating
+between sibling kanban routes (/kanban → /kanban/list → /kanban). Worked
+fine on hard refresh or cross-layout navigation.
+
+Root cause: SvelteKit caches `+layout.server.ts` data and doesn't re-run
+the load function on sibling-route navigations. So `data.projects`
+stayed stale (pre-click `collapsed` values) even after the DB POST
+succeeded. On return to /kanban, the page component re-mounted and
+the `$state(...)` Set initializer read the stale cached layout data.
+
+Fix:
+- `kanban/+layout.server.ts` — `depends('kanban:projects')` tags the
+  layout for explicit invalidation.
+- `kanban/+page.svelte` — `invalidate('kanban:projects')` after each
+  successful UI-state POST. Layout re-runs in the background, so the
+  next time the page remounts (sibling-route navigation), its $state
+  initializer reads fresh `data.projects`.
+
+Note: $state initializers only run once at mount — they don't re-run
+when `data` changes during the component's lifetime. That's intentional
+here: the optimistic local state IS the source of truth while the page
+is open. The invalidation ensures the SERVER data catches up so future
+remounts start from the correct baseline.
