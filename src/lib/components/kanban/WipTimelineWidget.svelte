@@ -54,7 +54,7 @@
 	function setDay(iso: string) {
 		const params = new URLSearchParams($page.url.searchParams);
 		params.set('day', iso);
-		goto(`/kanban/analytics?${params.toString()}`, { replaceState: true });
+		goto(`/kanban/analytics?${params.toString()}`, { replaceState: true, noScroll: true });
 	}
 
 	// Poll every 30s. Pause when tab hidden.
