@@ -132,6 +132,12 @@ export type SourceMixSlice = {
 	count: number;
 };
 
+export type CreatorMixSlice = {
+	userId: string;
+	username: string;
+	count: number;
+};
+
 export type AnalyticsData = {
 	range: AnalyticsRange;
 	since: Date | null;
@@ -150,6 +156,7 @@ export type AnalyticsData = {
 	perProject: PerProjectRow[];
 	perAssignee: PerAssigneeRow[];
 	sourceMix: SourceMixSlice[];
+	creatorMix: CreatorMixSlice[];
 };
 
 export function rangeToSince(range: AnalyticsRange): Date | null {
@@ -725,17 +732,53 @@ function computePerAssignee(allTasks: any[], since: Date | null): PerAssigneeRow
 	return rows;
 }
 
+/**
+ * Binary source mix: how did the task enter the system?
+ * `manual` = direct UI; `agent` = any non-manual source (agent API, telegram,
+ * meeting synthesis, operations-trigger, etc.).
+ */
 function computeSourceMix(allTasks: any[], since: Date | null): SourceMixSlice[] {
+	const sinceMs = since?.getTime() ?? 0;
+	let manual = 0;
+	let agent = 0;
+	for (const t of allTasks) {
+		const ref = new Date(t.createdAt).getTime();
+		if (ref < sinceMs) continue;
+		const src = t.source ?? 'manual';
+		if (src === 'manual') manual++;
+		else agent++;
+	}
+	return [
+		{ source: 'manual', count: manual },
+		{ source: 'agent', count: agent }
+	].filter((s) => s.count > 0);
+}
+
+/**
+ * Creator mix: who originated each task? Groups by `createdBy` user ID
+ * (resolved to username via the supplied map). NB: if the agent records its
+ * own user ID on agent-created tasks, those bucket together as that user
+ * rather than the human who triggered the agent.
+ */
+function computeCreatorMix(
+	allTasks: any[],
+	since: Date | null,
+	usernameMap: Map<string, string>
+): CreatorMixSlice[] {
 	const sinceMs = since?.getTime() ?? 0;
 	const counts = new Map<string, number>();
 	for (const t of allTasks) {
 		const ref = new Date(t.createdAt).getTime();
 		if (ref < sinceMs) continue;
-		const src = t.source ?? 'manual';
-		counts.set(src, (counts.get(src) ?? 0) + 1);
+		const uid = t.createdBy ?? 'unknown';
+		counts.set(uid, (counts.get(uid) ?? 0) + 1);
 	}
 	return [...counts.entries()]
-		.map(([source, count]) => ({ source, count }))
+		.map(([userId, count]) => ({
+			userId,
+			username: usernameMap.get(userId) ?? userId,
+			count
+		}))
 		.sort((a, b) => b.count - a.count);
 }
 
@@ -755,6 +798,13 @@ export async function loadAnalyticsData(range: AnalyticsRange, dayRaw: string | 
 
 	const allTasks = [...activeTasks, ...archivedInRange];
 	const active = activeTasks.filter((t: any) => t.status !== 'done').length;
+
+	// Resolve createdBy user IDs to usernames for the Creator Mix chart.
+	const creatorIds = [...new Set(allTasks.map((t: any) => t.createdBy).filter(Boolean))] as string[];
+	const creatorDocs = creatorIds.length
+		? ((await User.find({ _id: { $in: creatorIds } }).select('_id username').lean()) as any[])
+		: [];
+	const usernameMap = new Map<string, string>(creatorDocs.map((u: any) => [u._id, u.username]));
 
 	const { day, dayStartMs } = parseDayParam(dayRaw);
 	const wipTimeline = await computeWipTimeline(allTasks, dayStartMs, day);
@@ -776,7 +826,8 @@ export async function loadAnalyticsData(range: AnalyticsRange, dayRaw: string | 
 		timeInStatus: computeTimeInStatus(allTasks, since),
 		perProject: computePerProject(allTasks, since, allProjects),
 		perAssignee: computePerAssignee(allTasks, since),
-		sourceMix: computeSourceMix(allTasks, since)
+		sourceMix: computeSourceMix(allTasks, since),
+		creatorMix: computeCreatorMix(allTasks, since, usernameMap)
 	};
 }
 

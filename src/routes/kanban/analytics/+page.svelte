@@ -11,6 +11,7 @@
 	import PerProjectTable from '$lib/components/kanban/PerProjectTable.svelte';
 	import PerAssigneeTable from '$lib/components/kanban/PerAssigneeTable.svelte';
 	import SourceMixDonut from '$lib/components/kanban/SourceMixDonut.svelte';
+	import CreatorMixDonut from '$lib/components/kanban/CreatorMixDonut.svelte';
 
 	let { data } = $props();
 
@@ -116,16 +117,15 @@
 		<TimeInStatusChart rows={data.analytics.timeInStatus} />
 	</section>
 
-	<!-- Breakdowns — PRD KANBAN-ANALYTICS-BREAKDOWNS -->
-	<section class="grid grid-cols-1 gap-4 lg:grid-cols-3">
-		<div class="lg:col-span-1">
-			<PerProjectTable rows={data.analytics.perProject} />
-		</div>
-		<div class="lg:col-span-1">
-			<PerAssigneeTable rows={data.analytics.perAssignee} />
-		</div>
-		<div class="lg:col-span-1">
-			<SourceMixDonut slices={data.analytics.sourceMix} />
-		</div>
+	<!-- Mix donuts — origin (manual vs agent) + creator (who) -->
+	<section class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+		<SourceMixDonut slices={data.analytics.sourceMix} />
+		<CreatorMixDonut slices={data.analytics.creatorMix} />
+	</section>
+
+	<!-- Breakdown tables — PRD KANBAN-ANALYTICS-BREAKDOWNS -->
+	<section class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+		<PerProjectTable rows={data.analytics.perProject} />
+		<PerAssigneeTable rows={data.analytics.perAssignee} />
 	</section>
 </div>
