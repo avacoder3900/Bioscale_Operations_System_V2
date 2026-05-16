@@ -24,7 +24,7 @@
 	function setRange(key: '7d' | '30d' | '90d' | 'all') {
 		const params = new URLSearchParams($page.url.searchParams);
 		params.set('range', key);
-		goto(`/kanban/analytics?${params.toString()}`, { replaceState: true });
+		goto(`/kanban/analytics?${params.toString()}`, { replaceState: true, noScroll: true });
 	}
 
 	function fmt(value: number | null, suffix = ''): string {
