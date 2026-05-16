@@ -22,6 +22,7 @@ import { AuditLog } from '$lib/server/db/models/audit-log.js';
 import { generateId } from '$lib/server/db/utils.js';
 import { uploadViaWorker, getR2Url, buildCvNamedKey } from '$lib/server/services/r2';
 import { requireAgentApiKey } from '$lib/server/api-auth';
+import { runPhaseInference } from '$lib/server/cv/run-inference';
 import type { RequestHandler } from './$types';
 
 function pad(n: number): string {
@@ -97,6 +98,15 @@ export const POST: RequestHandler = async ({ request }) => {
 		changedBy: 'cv-capture-agent',
 		reason: 'capture-ingest'
 	});
+
+	// Fire-and-forget phase-X auto-inference for any project deployed at this phase.
+	runPhaseInference({
+		imageId: id,
+		imageUrl: publicUrl,
+		cartridgeRecordId: qrCode,
+		phase,
+		triggeredBy: 'auto-on-capture'
+	}).catch(err => console.error('[capture-ingest] phase-inference failed:', err));
 
 	return json({
 		imageId: id,

@@ -29,6 +29,7 @@ import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
 import { generateId } from '$lib/server/db/utils.js';
 import { uploadViaWorker, getR2Url, buildCvNamedKey } from '$lib/server/services/r2';
 import { hasPermission } from '$lib/server/permissions';
+import { runPhaseInference } from '$lib/server/cv/run-inference';
 import type { RequestHandler } from './$types';
 
 function pad(n: number): string {
@@ -99,7 +100,16 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		{ $push: { photos: { imageId, phase, capturedAt, r2Key: key, r2Url: publicUrl, cartridgeImageNumber } } }
 	);
 
-	// TODO (PRD 3 Phase 4): fire-and-forget phase-X auto-inference.
+	// Fire-and-forget: any project deploying at this phase runs inference.
+	// Errors are swallowed inside runPhaseInference — capture response always
+	// succeeds regardless of inference state.
+	runPhaseInference({
+		imageId,
+		imageUrl: publicUrl,
+		cartridgeRecordId: cartridgeId,
+		phase,
+		triggeredBy: 'auto-on-capture'
+	}).catch(err => console.error('[capture] phase-inference failed:', err));
 
 	return json({
 		imageId,
