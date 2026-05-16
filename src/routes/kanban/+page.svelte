@@ -109,12 +109,29 @@
 		projectId: string,
 		payload: { collapsed?: boolean; backlogCollapsed?: boolean }
 	): Promise<boolean> {
+		const url = `/api/kanban/projects/${projectId}/ui-state`;
+		const opts: RequestInit = {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(payload),
+			// Survive page unload — fold a bunch of chevrons then navigate away
+			// and the in-flight POSTs still complete instead of getting dropped.
+			keepalive: true
+		};
+
 		try {
-			const res = await fetch(`/api/kanban/projects/${projectId}/ui-state`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(payload)
-			});
+			const res = await fetch(url, opts);
+			if (res.ok) return true;
+			// 4xx won't be fixed by retry (auth, validation). 5xx might be a
+			// Vercel cold-start or transient blip — fall through to retry.
+			if (res.status < 500) return false;
+		} catch {
+			// Network error — fall through to retry.
+		}
+
+		await new Promise((r) => setTimeout(r, 500));
+		try {
+			const res = await fetch(url, opts);
 			return res.ok;
 		} catch {
 			return false;
