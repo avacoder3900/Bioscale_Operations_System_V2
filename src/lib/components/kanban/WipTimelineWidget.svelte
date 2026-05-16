@@ -87,15 +87,21 @@
 	}
 
 	// Pre-built bucket labels: 0=before, 1..44=7:00..17:45, 45=after.
+	// 12-hour format with am/pm suffix; only the on-the-hour cells get labeled.
+	function hourLabel(h24: number): string {
+		const ampm = h24 < 12 ? 'a' : 'p';
+		const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+		return `${h12}${ampm}`;
+	}
 	const headerLabels: string[] = (() => {
-		const arr: string[] = ['<7'];
+		const arr: string[] = ['<7a'];
 		for (let i = 0; i < 44; i++) {
 			const totalMin = 7 * 60 + i * 15;
 			const h = Math.floor(totalMin / 60);
 			const m = totalMin % 60;
-			arr.push(m === 0 ? `${h}` : '');
+			arr.push(m === 0 ? hourLabel(h) : '');
 		}
-		arr.push('>6');
+		arr.push('>6p');
 		return arr;
 	})();
 
