@@ -1,1468 +1,381 @@
 <script lang="ts">
-	import jsQR from 'jsqr';
-	import { tick } from 'svelte';
-	let { data } = $props();
-	let activeTab = $state('import');
-	const tabs = ['Import', 'Capture', 'Labels', 'Train', 'Test', 'Review', 'Integrate'];
+	import { enhance } from '$app/forms';
 
-	// Import tab
-	let uploading = $state(false);
-	let uploadMsg = $state('');
-	let dragOver = $state(false);
+	let { data, form } = $props();
 
-	// Capture tab
-	let videoEl = $state<HTMLVideoElement | null>(null);
-	let canvasEl = $state<HTMLCanvasElement | null>(null);
-	let cameraStream = $state<MediaStream | null>(null);
-	let cameraError = $state('');
-	let cameraReady = $state(false);
-	let capturedImage = $state<string | null>(null);
-	let captureUploading = $state(false);
-	let captureMsg = $state('');
-	let captureCount = $state(0);
-	let availableCameras = $state<MediaDeviceInfo[]>([]);
-	let selectedCameraId = $state('');
+	type Tab = 'members' | 'composition' | 'deployment' | 'history';
+	let activeTab = $state<Tab>('members');
 
-	// Processing mode (matches LIZA: full = post-processed, raw = no processing)
-	let processingMode = $state<'full' | 'raw'>(data.project.captureSettings?.mode || 'full');
+	let submitting = $state(false);
 
-	// Camera settings (initialized from camera capabilities, not hardcoded)
-	let showSettings = $state(false);
-	let cameraCapabilities = $state<any>(null);
-	let camExposureComp = $state(50);
-	let camExposureTime = $state(250);
-	let camExposureMode = $state<'continuous' | 'manual'>('manual');
-	let camWhiteBalanceMode = $state<'continuous' | 'manual'>('manual');
-	let camWhiteBalance = $state(4000);
-	let camBrightness = $state(0);
-	let camContrast = $state(32);
-	let camSharpness = $state(3);
-	let camSaturation = $state(64);
-	let camZoom = $state(1);
+	// Composition picker state
+	let composedOfSelections = $state<Set<string>>(new Set(data.project.composedOf));
+	let liveCompositionToggle = $state(data.project.isLiveComposition);
 
-	async function loadCameraCapabilities() {
-		if (!cameraStream) return;
-		const track = cameraStream.getVideoTracks()[0];
-		if (!track) return;
-		try {
-			cameraCapabilities = track.getCapabilities();
-			// Read current settings from camera
-			const settings = track.getSettings() as any;
-			if (settings.exposureCompensation !== undefined) camExposureComp = settings.exposureCompensation;
-			if (settings.exposureTime !== undefined) camExposureTime = settings.exposureTime;
-			if (settings.exposureMode) camExposureMode = settings.exposureMode;
-			if (settings.whiteBalanceMode) camWhiteBalanceMode = settings.whiteBalanceMode;
-			if (settings.colorTemperature !== undefined) camWhiteBalance = settings.colorTemperature;
-			if (settings.brightness !== undefined) camBrightness = settings.brightness;
-			if (settings.contrast !== undefined) camContrast = settings.contrast;
-			if (settings.sharpness !== undefined) camSharpness = settings.sharpness;
-			if (settings.saturation !== undefined) camSaturation = settings.saturation;
-			if (settings.zoom !== undefined) camZoom = settings.zoom;
-		} catch { cameraCapabilities = null; }
+	// Deployment state
+	let deploySelections = $state<Set<string>>(new Set(data.project.deployAtPhases));
+	let activeVersion = $state<string>(data.project.activeModelVersion ?? '');
+	let shadowVersion = $state<string>(data.project.shadowModelVersion ?? '');
+
+	function toggleSet<T>(set: Set<T>, val: T): Set<T> {
+		const next = new Set(set);
+		if (next.has(val)) next.delete(val); else next.add(val);
+		return next;
 	}
 
-	async function applyCameraSettings() {
-		if (!cameraStream) return;
-		const track = cameraStream.getVideoTracks()[0];
-		if (!track || !cameraCapabilities) return;
-
-		const caps = cameraCapabilities;
-		const advanced: any = {};
-
-		if (caps.exposureMode) advanced.exposureMode = camExposureMode;
-		if (caps.exposureCompensation && camExposureMode === 'manual') advanced.exposureCompensation = camExposureComp;
-		if (caps.exposureTime && camExposureMode === 'manual') advanced.exposureTime = camExposureTime;
-		if (caps.whiteBalanceMode) advanced.whiteBalanceMode = camWhiteBalanceMode;
-		if (caps.colorTemperature && camWhiteBalanceMode === 'manual') advanced.colorTemperature = camWhiteBalance;
-		if (caps.brightness) advanced.brightness = camBrightness;
-		if (caps.contrast) advanced.contrast = camContrast;
-		if (caps.sharpness) advanced.sharpness = camSharpness;
-		if (caps.saturation) advanced.saturation = camSaturation;
-		if (caps.zoom) advanced.zoom = camZoom;
-
-		try {
-			await track.applyConstraints({ advanced: [advanced] });
-		} catch (e) {
-			console.warn('Could not apply camera settings:', e);
-		}
-	}
-
-	// Induct mode — auto-create cartridge records on scan
-	let inductMode = $state(true);
-	let inductMsg = $state('');
-
-	// QR scanning
-	let detectedQR = $state<string | null>(null);
-	let qrLookupResult = $state<any>(null);
-	let qrScanning = $state(false);
-	let qrScanTimer = $state<ReturnType<typeof setInterval> | null>(null);
-	let qrScanCanvas: HTMLCanvasElement | null = null;
-	let qrScanMethod = $state('');
-
-	async function startQRScanning() {
-		if (qrScanTimer) return;
-		qrScanCanvas = document.createElement('canvas');
-		qrScanning = true;
-		qrScanMethod = 'jsQR';
-
-		qrScanTimer = setInterval(() => {
-			if (!videoEl || !cameraReady || capturedImage || !qrScanCanvas) return;
-
-			try {
-				const w = videoEl.videoWidth;
-				const h = videoEl.videoHeight;
-				if (!w || !h) return;
-
-				qrScanCanvas.width = w;
-				qrScanCanvas.height = h;
-				const ctx = qrScanCanvas.getContext('2d', { willReadFrequently: true });
-				if (!ctx) return;
-				ctx.drawImage(videoEl, 0, 0, w, h);
-				const imageData = ctx.getImageData(0, 0, w, h);
-
-				const code = jsQR(imageData.data, w, h, { inversionAttempts: 'dontInvert' });
-				if (code && code.data) {
-					if (code.data !== detectedQR) {
-						detectedQR = code.data;
-						lookupBarcode(code.data);
-					}
-				}
-			} catch (e) {
-				console.warn('QR scan error:', e);
-			}
-		}, 500);
-	}
-
-	function stopQRScanning() {
-		if (qrScanTimer) {
-			clearInterval(qrScanTimer);
-			qrScanTimer = null;
-		}
-		qrScanning = false;
-	}
-
-	let cartridgePhaseInfo = $state<any>(null);
-
-	async function lookupBarcode(code: string) {
-		inductMsg = '';
-		try {
-			const res = await fetch(`/api/cv/lookup-barcode?code=${encodeURIComponent(code)}`);
-			if (res.ok) {
-				qrLookupResult = await res.json();
-			} else {
-				qrLookupResult = { raw: code, type: 'unknown' };
-			}
-
-			// If not found and induct mode is on, auto-create the cartridge record
-			if (qrLookupResult.type === 'unknown' && inductMode) {
-				const inductRes = await fetch('/api/cv/induct-cartridge', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ cartridgeId: code })
-				});
-				if (inductRes.ok) {
-					const inducted = await inductRes.json();
-					qrLookupResult = { type: 'cartridge', _id: inducted._id, phase: 'wax_filled' };
-					inductMsg = `Inducted ${code} into system`;
-				} else if (inductRes.status === 409) {
-					// Already exists — re-lookup
-					const retryRes = await fetch(`/api/cv/lookup-barcode?code=${encodeURIComponent(code)}`);
-					if (retryRes.ok) qrLookupResult = await retryRes.json();
-				} else {
-					inductMsg = 'Induction failed';
-				}
-			}
-
-			// If it's a cartridge, fetch phase advancement info
-			if (qrLookupResult.type === 'cartridge' && qrLookupResult._id) {
-				const phaseRes = await fetch(`/api/cv/lookup-cartridge?code=${encodeURIComponent(qrLookupResult._id)}`);
-				if (phaseRes.ok) {
-					cartridgePhaseInfo = await phaseRes.json();
-				} else {
-					cartridgePhaseInfo = null;
-				}
-			} else {
-				cartridgePhaseInfo = null;
-			}
-		} catch {
-			qrLookupResult = { raw: code, type: 'unknown' };
-			cartridgePhaseInfo = null;
-		}
-	}
-
-	// Keyboard shortcuts
-	function handleKeydown(e: KeyboardEvent) {
-		if (activeTab !== 'capture' || !cameraStream) return;
-		if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
-
-		if (e.code === 'Space') {
-			e.preventDefault();
-			if (capturedImage) {
-				saveCapture();
-			} else if (cameraReady) {
-				capturePhoto();
-			}
-		} else if (e.code === 'Escape') {
-			if (capturedImage) retakePhoto();
-		} else if (e.code === 'KeyS' && !e.ctrlKey && !e.metaKey) {
-			if (!cameraStream) startCamera();
-			else stopCamera();
-		}
-	}
-
-	async function loadCameras() {
-		try {
-			const devices = await navigator.mediaDevices.enumerateDevices();
-			availableCameras = devices.filter(d => d.kind === 'videoinput');
-			if (availableCameras.length > 0 && !selectedCameraId) {
-				selectedCameraId = availableCameras[0].deviceId;
-			}
-		} catch { /* ignore */ }
-	}
-
-	async function startCamera() {
-		cameraError = '';
-		cameraReady = false;
-		capturedImage = null;
-		captureMsg = '';
-		stopCamera();
-		try {
-			await loadCameras();
-			// Try selected camera first, then fall back to others
-			const camerasToTry = selectedCameraId
-				? [selectedCameraId, ...availableCameras.filter(c => c.deviceId !== selectedCameraId).map(c => c.deviceId)]
-				: availableCameras.map(c => c.deviceId);
-
-			let lastErr: any = null;
-			for (const deviceId of camerasToTry) {
-				try {
-					const stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } });
-					selectedCameraId = deviceId;
-					cameraStream = stream;
-					// Wait for Svelte to render the video element, retry until it appears
-					for (let attempt = 0; attempt < 20; attempt++) {
-						await new Promise(r => setTimeout(r, 100));
-						if (videoEl) break;
-					}
-					if (videoEl) {
-						videoEl.srcObject = stream;
-						await videoEl.play().catch(() => {});
-						cameraReady = true;
-					}
-					await loadCameraCapabilities();
-					await applyCameraSettings();
-					startQRScanning();
-					return; // success
-				} catch (err) {
-					lastErr = err;
-				}
-			}
-			throw lastErr || new Error('No cameras available');
-		} catch (err: any) {
-			cameraError = err.message || 'Could not access camera. Check browser permissions.';
-		}
-	}
-
-	function stopCamera() {
-		stopQRScanning();
-		if (cameraStream) {
-			cameraStream.getTracks().forEach(t => t.stop());
-			cameraStream = null;
-		}
-		cameraReady = false;
-		detectedQR = null;
-		qrLookupResult = null;
-		cartridgePhaseInfo = null;
-	}
-
-	function capturePhoto() {
-		if (!videoEl || !canvasEl) return;
-		canvasEl.width = videoEl.videoWidth;
-		canvasEl.height = videoEl.videoHeight;
-		const ctx = canvasEl.getContext('2d');
-		if (!ctx) return;
-		ctx.drawImage(videoEl, 0, 0);
-		capturedImage = canvasEl.toDataURL('image/jpeg', 0.92);
-	}
-
-	async function resumeLiveFeed() {
-		capturedImage = null;
-		// Re-attach stream to video element after Svelte re-renders it
-		for (let attempt = 0; attempt < 20; attempt++) {
-			await new Promise(r => setTimeout(r, 100));
-			if (videoEl) break;
-		}
-		if (videoEl && cameraStream) {
-			videoEl.srcObject = cameraStream;
-			await videoEl.play().catch(() => {});
-			cameraReady = true;
-		}
-	}
-
-	function retakePhoto() {
-		resumeLiveFeed();
-	}
-
-	async function saveCapture() {
-		if (!capturedImage) return;
-		captureUploading = true;
-		captureMsg = '';
-		try {
-			const res = await fetch(capturedImage);
-			const blob = await res.blob();
-			const qrLabel = detectedQR ? detectedQR.replace(/[/\\:*?"<>|]/g, '_').slice(0, 60) : 'UNKNOWN';
-			const filename = `cartridge_capture_${qrLabel}_${String(captureCount + 1).padStart(3, '0')}.jpg`;
-			const file = new File([blob], filename, { type: 'image/jpeg' });
-
-			// Upload directly without using uploadFiles (which reloads the page)
-			const presignRes = await fetch('/api/cv/images/presign', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ projectId: data.project._id, filename, contentType: 'image/jpeg' })
-			});
-			if (!presignRes.ok) throw new Error('Presign failed');
-			const { uploadUrl, key, uploadSecret } = await presignRes.json();
-
-			const putRes = await fetch(uploadUrl, {
-				method: 'PUT',
-				headers: { 'Content-Type': 'image/jpeg', 'X-Upload-Secret': uploadSecret || '' },
-				body: file
-			});
-			if (!putRes.ok) throw new Error('R2 upload failed');
-
-			const recordBody: Record<string, any> = { projectId: data.project._id, key, filename, contentType: 'image/jpeg', fileSize: file.size };
-			if (qrLookupResult?.type === 'cartridge' && qrLookupResult._id) {
-				recordBody.cartridgeTag = {
-					cartridgeRecordId: qrLookupResult._id,
-					phase: cartridgePhaseInfo?.nextPhase || qrLookupResult.phase || null
-				};
-			}
-			const recordRes = await fetch('/api/cv/images/record', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(recordBody)
-			});
-			if (!recordRes.ok) throw new Error('Record failed');
-			const recordData = await recordRes.json();
-
-			captureCount++;
-			captureMsg = `Saved! (${captureCount} captured this session)`;
-			await resumeLiveFeed();
-
-			// Trigger server-side LIZA processing in background (non-blocking)
-			if (processingMode === 'full' && recordData.data?._id) {
-				fetch('/api/cv/process-image', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ imageId: recordData.data._id, mode: 'full' })
-				}).then(() => {
-					captureMsg = `Saved + processed! (${captureCount} this session)`;
-				}).catch(() => { /* processing failed silently — raw image is still saved */ });
-			}
-		} catch (err: any) {
-			captureMsg = `Save failed: ${err.message}`;
-		}
-		captureUploading = false;
-	}
-
-	// Clean up camera when leaving capture tab or page
-	$effect(() => {
-		if (activeTab !== 'capture') stopCamera();
-	});
-
-	// Keyboard shortcuts
-	$effect(() => {
-		if (typeof window === 'undefined') return;
-		window.addEventListener('keydown', handleKeydown);
-		return () => window.removeEventListener('keydown', handleKeydown);
-	});
-
-	// Labels tab
-	let labeling = $state<string | null>(null);
-	let inducting = $state<string | null>(null);
-
-	// Labels tab — barcode scan (feature 001-labels-barcode-scan)
-	let scanValue = $state('');
-	let scanError = $state('');
-	let scannedIds = $state<Set<string>>(new Set());
-	let matchOrder = $state<string[]>([]);
-	let scanInputEl = $state<HTMLInputElement | null>(null);
-	let matchTileEls: Record<string, HTMLDivElement> = {};
-
-	function captureNumFromFilename(name: string | null | undefined): number {
-		if (!name) return Number.MAX_SAFE_INTEGER;
-		const m = name.match(/_(\d+)\.[^.]+$/);
-		return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
-	}
-
-	const sortedImages = $derived.by(() => {
-		if (matchOrder.length === 0) return data.images;
-		const orderIdx = new Map(matchOrder.map((id, i) => [id, i] as const));
-		const matches: any[] = [];
-		const rest: any[] = [];
-		for (const img of data.images) {
-			if (orderIdx.has(img._id)) matches.push(img);
-			else rest.push(img);
-		}
-		matches.sort((a, b) => (orderIdx.get(a._id) ?? 0) - (orderIdx.get(b._id) ?? 0));
-		return [...matches, ...rest];
-	});
-
-	async function applyScan() {
-		const barcode = scanValue.trim();
-		if (!barcode) return;
-		const matches = data.images.filter(
-			(i: any) => typeof i.filename === 'string' && i.filename.includes(barcode)
-		);
-		if (matches.length === 0) {
-			scanError = `No images found for barcode ${barcode}`;
-			scannedIds = new Set();
-			matchOrder = [];
-			return;
-		}
-		scanError = '';
-		matches.sort(
-			(a: any, b: any) => captureNumFromFilename(a.filename) - captureNumFromFilename(b.filename)
-		);
-		scannedIds = new Set(matches.map((m: any) => m._id));
-		matchOrder = matches.map((m: any) => m._id);
-		scanValue = '';
-		await tick();
-		const first = matchTileEls[matchOrder[0]];
-		if (first) first.scrollIntoView({ behavior: 'smooth', block: 'start' });
-	}
-
-	function topBottomTag(imageId: string): 'TOP' | 'BOTTOM' | null {
-		const idx = matchOrder.indexOf(imageId);
-		if (idx < 0) return null;
-		return idx % 2 === 0 ? 'TOP' : 'BOTTOM';
-	}
-
-	// Auto-focus scan input when Labels tab opens
-	$effect(() => {
-		if (activeTab === 'labels') {
-			tick().then(() => scanInputEl?.focus());
-		}
-	});
-
-	function extractCartridgeIdFromFilename(filename: string): string | null {
-		// Format: cartridge_capture_<CARTRIDGE_ID>_<SEQ>.jpg
-		const match = filename.match(/^cartridge_capture_(.+)_\d{3}\.jpg$/i);
-		if (match) return match[1];
-		// Fallback: cartridge_capture_<CARTRIDGE_ID>.jpg (no sequence)
-		const match2 = filename.match(/^cartridge_capture_(.+)\.jpg$/i);
-		if (match2) return match2[1];
-		return null;
-	}
-
-	async function inductFromImage(imageId: string, filename: string) {
-		inducting = imageId;
-		try {
-			const cartridgeId = extractCartridgeIdFromFilename(filename);
-			if (!cartridgeId) {
-				alert('Could not extract cartridge ID from filename: ' + filename);
-				inducting = null;
-				return;
-			}
-
-			// Induct: create cartridge record if it doesn't exist
-			const inductRes = await fetch('/api/cv/induct-cartridge', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ cartridgeId })
-			});
-			// 201 = created, 409 = already exists — both are fine
-			if (!inductRes.ok && inductRes.status !== 409) {
-				alert('Failed to induct cartridge');
-				inducting = null;
-				return;
-			}
-
-			// Link image to cartridge
-			const linkRes = await fetch(`/api/cv/images/${imageId}/link-cartridge`, {
-				method: 'PATCH',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ cartridgeRecordId: cartridgeId, phase: 'wax_filled' })
-			});
-			if (linkRes.ok) {
-				// Update local state
-				const imgObj = data.images.find((i: any) => i._id === imageId);
-				if (imgObj) {
-					imgObj.cartridgeTag = { cartridgeRecordId: cartridgeId, phase: 'wax_filled' };
-					data.images = [...data.images];
-				}
-			}
-		} catch (e: any) {
-			alert(`Induct failed: ${e.message || 'Unknown error'}`);
-		}
-		inducting = null;
-	}
-	let lightboxIndex = $state<number>(-1);
-	const lightboxImage = $derived(lightboxIndex >= 0 && lightboxIndex < data.images.length ? data.images[lightboxIndex] : null);
-	function openLightbox(imageId: string) {
-		lightboxIndex = data.images.findIndex((i: any) => i._id === imageId);
-	}
-	function lightboxPrev() { if (lightboxIndex > 0) lightboxIndex--; }
-	function lightboxNext() { if (lightboxIndex < data.images.length - 1) lightboxIndex++; }
-	function handleLightboxKey(e: KeyboardEvent) {
-		if (lightboxIndex < 0) return;
-		if (e.key === 'ArrowLeft') lightboxPrev();
-		else if (e.key === 'ArrowRight') lightboxNext();
-		else if (e.key === 'Escape') lightboxIndex = -1;
-	}
-
-	// Train tab
-	let training = $state(false);
-	let trainStatus = $state<any>(null);
-	let trainPollTimer = $state<ReturnType<typeof setInterval> | null>(null);
-
-	// Test tab
-	let testFile = $state<File | null>(null);
-	let testing = $state(false);
-	let testResult = $state<any>(null);
-
-	const statusColors: Record<string, string> = {
-		untrained: 'var(--color-tron-text-secondary)',
-		training: 'var(--color-tron-yellow)',
-		trained: 'var(--color-tron-green)',
-		failed: 'var(--color-tron-red)'
-	};
-
-	async function uploadFiles(files: FileList | File[]) {
-		uploading = true;
-		uploadMsg = '';
-		let count = 0;
-		let lastError = '';
-		for (const file of files) {
-			try {
-				// Step 1: Get presigned URL
-				const presignRes = await fetch('/api/cv/images/presign', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ projectId: data.project._id, filename: file.name, contentType: file.type || 'image/jpeg' })
-				});
-				if (!presignRes.ok) {
-					const err = await presignRes.json().catch(() => ({}));
-					lastError = err.error || `Presign failed (${presignRes.status})`;
-					continue;
-				}
-				const { uploadUrl, key, uploadSecret } = await presignRes.json();
-
-				// Step 2: Upload to R2 via Cloudflare Worker proxy
-				const putRes = await fetch(uploadUrl, {
-					method: 'PUT',
-					headers: {
-						'Content-Type': file.type || 'image/jpeg',
-						'X-Upload-Secret': uploadSecret || ''
-					},
-					body: file
-				});
-				if (!putRes.ok) {
-					const errText = await putRes.text().catch(() => '');
-					lastError = `R2 upload failed (${putRes.status}): ${errText}`;
-					continue;
-				}
-
-				// Step 3: Create DB record
-				const recordRes = await fetch('/api/cv/images/record', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ projectId: data.project._id, key, filename: file.name, contentType: file.type || 'image/jpeg', fileSize: file.size })
-				});
-				if (recordRes.ok) {
-					count++;
-				} else {
-					const err = await recordRes.json().catch(() => ({}));
-					lastError = err.error || `Record failed (${recordRes.status})`;
-				}
-			} catch (e: any) {
-				lastError = e.message || 'Network error';
-				console.error('Upload exception:', e);
-			}
-		}
-		uploadMsg = count > 0
-			? `Uploaded ${count} image${count !== 1 ? 's' : ''}${lastError ? ` (${files.length - count} failed: ${lastError})` : ''}`
-			: `Upload failed: ${lastError || 'Unknown error'}`;
-		uploading = false;
-		if (count > 0) setTimeout(() => location.reload(), 800);
-	}
-
-	function handleDrop(e: DragEvent) {
-		e.preventDefault();
-		dragOver = false;
-		if (e.dataTransfer?.files.length) uploadFiles(e.dataTransfer.files);
-	}
-
-	function handleFileInput(e: Event) {
-		const input = e.target as HTMLInputElement;
-		if (input.files?.length) uploadFiles(input.files);
-	}
-
-	async function toggleLabel(imageId: string, current: string | null, newLabel: string) {
-		labeling = imageId;
-		const label = current === newLabel ? null : newLabel;
-		try {
-			await fetch(`/api/cv/images/${imageId}/label`, {
-				method: 'PATCH',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ label })
-			});
-			const img = data.images.find((i: any) => i._id === imageId);
-			if (img) img.label = label;
-			data.images = [...data.images]; // trigger reactivity
-		} catch { /* skip */ }
-		labeling = null;
-	}
-
-	async function startTraining() {
-		training = true;
-		try {
-			const res = await fetch('/api/cv/train', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ projectId: data.project._id })
-			});
-			const json = await res.json();
-			if (!res.ok) { trainStatus = { status: 'failed', message: json.error }; training = false; return; }
-			trainStatus = { status: 'training', progress: 0, message: 'Training started...' };
-			pollTraining();
-		} catch (err: any) {
-			trainStatus = { status: 'failed', message: err.message };
-			training = false;
-		}
-	}
-
-	function pollTraining() {
-		trainPollTimer = setInterval(async () => {
-			try {
-				const res = await fetch(`/api/cv/train?projectId=${data.project._id}`);
-				const json = await res.json();
-				trainStatus = json.data;
-				if (trainStatus.status === 'complete' || trainStatus.status === 'failed') {
-					clearInterval(trainPollTimer!);
-					trainPollTimer = null;
-					training = false;
-				}
-			} catch { /* retry */ }
-		}, 3000);
-	}
-
-	async function runTest() {
-		if (!testFile) return;
-		testing = true;
-		testResult = null;
-		// First upload the test image
-		const fd = new FormData();
-		fd.append('file', testFile);
-		fd.append('projectId', data.project._id);
-		try {
-			const uploadRes = await fetch('/api/cv/images', { method: 'POST', body: fd });
-			const uploadJson = await uploadRes.json();
-			if (!uploadRes.ok) { testResult = { error: uploadJson.error }; testing = false; return; }
-
-			// Run inference
-			const inferRes = await fetch('/api/cv/infer', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ imageId: uploadJson.data._id, projectId: data.project._id })
-			});
-			testResult = (await inferRes.json()).data || (await inferRes.json());
-		} catch (err: any) {
-			testResult = { error: err.message };
-		}
-		testing = false;
-	}
-
-	function fmtDate(d: string) {
-		return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+	function fmt(d: string | Date | null): string {
+		if (!d) return '—';
+		return new Date(d).toLocaleString();
 	}
 </script>
 
-<div class="space-y-6">
-	<!-- Header -->
-	<div class="flex items-center justify-between">
+<div class="space-y-4">
+	<header class="flex flex-wrap items-start justify-between gap-3">
 		<div>
-			<a href="/cv" class="text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">&larr; All Projects</a>
-			<h2 class="text-2xl font-bold text-[var(--color-tron-cyan)]">{data.project.name}</h2>
-			{#if data.project.description}
-				<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">{data.project.description}</p>
-			{/if}
+			<a href="/cv/projects" class="text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">← all projects</a>
+			<h1 class="mt-1 text-2xl font-bold text-[var(--color-tron-cyan)]">{data.project.name}</h1>
+			{#if data.project.description}<p class="text-sm text-[var(--color-tron-text-secondary)]">{data.project.description}</p>{/if}
 		</div>
-		<span
-			class="rounded-full px-3 py-1 text-sm font-semibold"
-			style="color: {statusColors[data.project.modelStatus]}; background: color-mix(in srgb, {statusColors[data.project.modelStatus]} 20%, transparent)"
-		>
-			{data.project.modelStatus?.toUpperCase()}
-		</span>
+		<div class="text-right text-xs text-[var(--color-tron-text-secondary)]">
+			<div>created {fmt(data.project.createdAt)}</div>
+			<div>updated {fmt(data.project.updatedAt)}</div>
+		</div>
+	</header>
+
+	{#if form?.error}
+		<div class="rounded border border-[var(--color-tron-red,#ff3366)] bg-[rgba(255,51,102,0.08)] p-3 text-sm text-[var(--color-tron-red,#ff3366)]">{form.error}</div>
+	{/if}
+	{#if form?.success}
+		<div class="rounded border border-[var(--color-tron-green,#39ff14)] bg-[rgba(57,255,20,0.08)] p-3 text-sm text-[var(--color-tron-green,#39ff14)]">Saved.</div>
+	{/if}
+
+	<!-- Summary bar -->
+	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3">
+		<div class="grid gap-3 sm:grid-cols-4">
+			<div>
+				<div class="text-xs uppercase text-[var(--color-tron-text-secondary)]">Members</div>
+				<div class="font-mono text-lg text-[var(--color-tron-cyan)]">{data.effectiveTotal}</div>
+				<div class="text-[10px] text-[var(--color-tron-text-secondary)]">
+					{data.project.memberCount} direct
+					{#if data.liveAdditionCount > 0} + {data.liveAdditionCount} via composition{/if}
+				</div>
+			</div>
+			<div>
+				<div class="text-xs uppercase text-[var(--color-tron-text-secondary)]">Labels</div>
+				<div class="font-mono text-lg">
+					<span class="text-[var(--color-tron-green,#39ff14)]">{data.labelStats.approved}</span> /
+					<span class="text-[var(--color-tron-red,#ff3366)]">{data.labelStats.rejected}</span>
+				</div>
+				<div class="text-[10px] text-[var(--color-tron-text-secondary)]">approved / rejected · {data.labelStats.unlabeled} unlabeled</div>
+			</div>
+			<div>
+				<div class="text-xs uppercase text-[var(--color-tron-text-secondary)]">Active model</div>
+				<div class="font-mono text-sm text-[var(--color-tron-green,#39ff14)]">{data.project.activeModelVersion ?? '—'}</div>
+				{#if data.project.shadowModelVersion}
+					<div class="text-[10px] text-[var(--color-tron-cyan)]">shadow: {data.project.shadowModelVersion}</div>
+				{/if}
+			</div>
+			<div>
+				<div class="text-xs uppercase text-[var(--color-tron-text-secondary)]">Deploys at</div>
+				<div class="flex flex-wrap gap-1 text-xs">
+					{#each data.project.deployAtPhases as ph (ph)}
+						<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5">{ph}</span>
+					{:else}
+						<span class="text-[10px] text-[var(--color-tron-text-secondary)]">no phases configured</span>
+					{/each}
+				</div>
+			</div>
+		</div>
 	</div>
 
-	<!-- Stats Bar -->
-	<div class="grid grid-cols-2 gap-3 sm:grid-cols-5">
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3 text-center">
-			<div class="text-xl font-bold text-[var(--color-tron-text-primary)]">{data.project.imageCount || 0}</div>
-			<div class="text-xs text-[var(--color-tron-text-secondary)]">Images</div>
-		</div>
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3 text-center">
-			<div class="text-xl font-bold text-[var(--color-tron-green)]">{data.labelStats.approved}</div>
-			<div class="text-xs text-[var(--color-tron-text-secondary)]">Approved</div>
-		</div>
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3 text-center">
-			<div class="text-xl font-bold text-[var(--color-tron-red)]">{data.labelStats.rejected}</div>
-			<div class="text-xs text-[var(--color-tron-text-secondary)]">Rejected</div>
-		</div>
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3 text-center">
-			<div class="text-xl font-bold text-[var(--color-tron-text-secondary)]">{data.labelStats.unlabeled}</div>
-			<div class="text-xs text-[var(--color-tron-text-secondary)]">Unlabeled</div>
-		</div>
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3 text-center">
-			<div class="text-xl font-bold text-[var(--color-tron-purple)]">{data.inspections.length}</div>
-			<div class="text-xs text-[var(--color-tron-text-secondary)]">Inspections</div>
-		</div>
-	</div>
-
-	<!-- Tab Bar -->
-	<div class="flex gap-1 overflow-x-auto rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-1">
-		{#each tabs as tab}
+	<!-- Tabs -->
+	<div class="flex gap-1 border-b border-[var(--color-tron-border)]">
+		{#each ['members', 'composition', 'deployment', 'history'] as t (t)}
 			<button
-				class="whitespace-nowrap rounded-md px-4 py-2 text-sm font-medium transition-colors {activeTab === tab.toLowerCase() ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
-				onclick={() => activeTab = tab.toLowerCase()}
+				type="button"
+				class="px-4 py-2 text-sm font-medium
+					{activeTab === t
+						? 'border-b-2 border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]'
+						: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
+				onclick={() => (activeTab = t as Tab)}
 			>
-				{tab}
+				{t.charAt(0).toUpperCase() + t.slice(1)}
 			</button>
 		{/each}
 	</div>
 
-	<!-- Tab Content -->
-	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-6">
+	{#if activeTab === 'members'}
+		<div class="space-y-3">
+			<div class="flex items-center justify-between text-sm">
+				<div class="text-[var(--color-tron-text-secondary)]">
+					Showing first {data.previewImages.length} of {data.effectiveTotal} effective members.
+				</div>
+				<a href="/cv/label" class="rounded bg-[var(--color-tron-cyan)] px-3 py-1.5 text-xs font-medium text-[var(--color-tron-bg-primary)]">
+					Add images via /cv/label
+				</a>
+			</div>
 
-		<!-- IMPORT TAB -->
-		{#if activeTab === 'import'}
-			<div
-				class="flex min-h-[200px] flex-col items-center justify-center rounded-lg border-2 border-dashed transition-colors {dragOver ? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/5' : 'border-[var(--color-tron-border)]'}"
-				role="button"
-				tabindex="0"
-				ondragover={(e) => { e.preventDefault(); dragOver = true; }}
-				ondragleave={() => dragOver = false}
-				ondrop={handleDrop}
-			>
-				<svg class="mb-3 h-12 w-12 text-[var(--color-tron-text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
-				</svg>
-				<p class="mb-2 text-[var(--color-tron-text-primary)]">Drag & drop images here</p>
-				<p class="mb-4 text-sm text-[var(--color-tron-text-secondary)]">or click to browse</p>
-				<label class="cursor-pointer rounded-lg bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-black hover:opacity-90">
-					Browse Files
-					<input type="file" accept="image/*" multiple class="hidden" onchange={handleFileInput} />
+			{#if data.previewImages.length === 0}
+				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-12 text-center">
+					<p class="text-[var(--color-tron-text-secondary)]">No members yet.</p>
+					<p class="mt-2 text-xs text-[var(--color-tron-text-secondary)]">
+						Use <a class="text-[var(--color-tron-cyan)] underline" href="/cv/label">/cv/label</a> to assemble a training set, or set up live composition under the Composition tab.
+					</p>
+				</div>
+			{:else}
+				<div class="grid gap-3 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+					{#each data.previewImages as img (img.id)}
+						<div class="overflow-hidden rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
+							{#if img.thumbnailUrl}
+								<img src={img.thumbnailUrl} alt={img.cartridgeImageNumber ?? 'capture'} class="aspect-square w-full object-cover" />
+							{:else}
+								<div class="aspect-square w-full bg-[var(--color-tron-bg-tertiary)]"></div>
+							{/if}
+							<div class="p-2 text-xs">
+								<div class="truncate font-mono text-[var(--color-tron-cyan)]">{img.cartridgeImageNumber ?? '—'}</div>
+								<div class="flex items-center justify-between text-[var(--color-tron-text-secondary)]">
+									<span class="truncate">{img.phase ?? '—'}</span>
+									{#if img.qcLabel === 'approved'}<span class="text-[var(--color-tron-green,#39ff14)]">✓</span>
+									{:else if img.qcLabel === 'rejected'}<span class="text-[var(--color-tron-red,#ff3366)]">✗</span>{/if}
+								</div>
+								{#if data.project.members.includes(img.id)}
+									<form
+										method="POST"
+										action="?/removeMember"
+										class="mt-1"
+										use:enhance={() => {
+											submitting = true;
+											return async ({ update }) => {
+												await update();
+												submitting = false;
+											};
+										}}
+									>
+										<input type="hidden" name="imageId" value={img.id} />
+										<button type="submit" disabled={submitting} class="w-full rounded border border-[var(--color-tron-red,#ff3366)] px-1.5 py-0.5 text-[10px] text-[var(--color-tron-red,#ff3366)] disabled:opacity-40">
+											Remove
+										</button>
+									</form>
+								{:else}
+									<div class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)] italic">via composition</div>
+								{/if}
+							</div>
+						</div>
+					{/each}
+				</div>
+			{/if}
+		</div>
+
+	{:else if activeTab === 'composition'}
+		<form
+			method="POST"
+			action="?/updateComposition"
+			use:enhance={() => {
+				submitting = true;
+				return async ({ update }) => {
+					await update();
+					submitting = false;
+				};
+			}}
+			class="space-y-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4"
+		>
+			<div>
+				<label class="flex items-center gap-2 text-sm">
+					<input type="checkbox" name="isLiveComposition" bind:checked={liveCompositionToggle} />
+					<span class="text-[var(--color-tron-text)]">Live composition</span>
 				</label>
-			</div>
-			{#if uploading}
-				<p class="mt-3 text-center text-sm text-[var(--color-tron-yellow)]">Uploading...</p>
-			{/if}
-			{#if uploadMsg}
-				<p class="mt-3 text-center text-sm text-[var(--color-tron-green)]">{uploadMsg}</p>
-			{/if}
-
-		<!-- CAPTURE TAB -->
-		{:else if activeTab === 'capture'}
-			<div class="space-y-4">
-				{#if !cameraStream && !cameraError}
-					<div class="flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-[var(--color-tron-border)] py-16">
-						<svg class="mb-3 h-12 w-12 text-[var(--color-tron-text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
-						</svg>
-						<p class="mb-4 text-[var(--color-tron-text-secondary)]">Connect a camera to capture images directly</p>
-						<button onclick={startCamera} class="rounded-lg bg-[var(--color-tron-cyan)] px-6 py-3 text-sm font-medium text-black hover:opacity-90">
-							Start Camera
-						</button>
-						<p class="mt-3 text-xs text-[var(--color-tron-text-secondary)]">Shortcuts: <kbd class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5">Space</kbd> capture/save &middot; <kbd class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5">Esc</kbd> retake</p>
-					</div>
-				{/if}
-
-				{#if cameraError}
-					<div class="rounded border border-[var(--color-tron-red)]/30 bg-[var(--color-tron-red)]/10 p-4 text-sm text-[var(--color-tron-red)]">
-						{cameraError}
-					</div>
-					<button onclick={startCamera} class="rounded-lg bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-black hover:opacity-90">
-						Retry
-					</button>
-				{/if}
-
-				{#if cameraStream}
-					<div class="grid gap-4 lg:grid-cols-[1fr_300px]">
-						<!-- Left: Camera feed -->
-						<div class="space-y-3">
-							<!-- Camera selector + Processing mode -->
-							<div class="flex flex-wrap items-center gap-4">
-								{#if availableCameras.length > 1}
-									<div class="flex items-center gap-2">
-										<label class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Camera</label>
-										<select
-											bind:value={selectedCameraId}
-											onchange={startCamera}
-											class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-tron-text-primary)]"
-										>
-											{#each availableCameras as cam, i}
-												<option value={cam.deviceId}>{cam.label || `Camera ${i + 1}`}</option>
-											{/each}
-										</select>
-									</div>
-								{/if}
-								<div class="flex items-center gap-2">
-									<label class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Processing</label>
-									<div class="flex rounded border border-[var(--color-tron-border)]">
-										<button
-											onclick={() => processingMode = 'full'}
-											class="px-3 py-1 text-xs font-medium transition-colors {processingMode === 'full' ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
-										>Full</button>
-										<button
-											onclick={() => processingMode = 'raw'}
-											class="border-l border-[var(--color-tron-border)] px-3 py-1 text-xs font-medium transition-colors {processingMode === 'raw' ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
-										>Raw</button>
-									</div>
-								</div>
-							</div>
-
-							<!-- Live feed / captured image -->
-							<div class="relative overflow-hidden rounded-lg border-2 border-[var(--color-tron-border)] bg-black">
-								{#if capturedImage}
-									<img src={capturedImage} alt="Captured" class="w-full" />
-								{:else}
-									<!-- svelte-ignore element_invalid_self_closing_tag -->
-									<video bind:this={videoEl} autoplay playsinline muted class="w-full" />
-								{/if}
-								<!-- QR status overlay (display only, like LIZA) -->
-								{#if cameraReady && !capturedImage}
-									<div class="absolute left-0 top-0 right-0 flex items-center justify-between p-2">
-										{#if detectedQR}
-											<span class="rounded bg-[var(--color-tron-green)]/80 px-2 py-1 text-xs font-bold text-black">QR: {detectedQR.slice(0, 50)}</span>
-										{:else}
-											<span class="rounded bg-[var(--color-tron-red)]/60 px-2 py-1 text-xs font-bold text-white">QR: NOT DETECTED</span>
-										{/if}
-									</div>
-									<div class="absolute bottom-0 left-0 right-0 flex items-center justify-between p-2">
-										<span class="rounded-full bg-[var(--color-tron-green)]/80 px-3 py-1 text-xs font-bold text-black">LIVE</span>
-										{#if captureCount > 0}
-											<span class="rounded-full bg-[var(--color-tron-cyan)]/80 px-3 py-1 text-xs font-bold text-black">{captureCount} captured</span>
-										{/if}
-									</div>
-								{/if}
-							</div>
-							<canvas bind:this={canvasEl} class="hidden"></canvas>
-
-							<!-- Controls -->
-							<div class="flex items-center justify-center gap-3">
-								{#if capturedImage}
-									<button
-										onclick={retakePhoto}
-										class="rounded-lg border border-[var(--color-tron-border)] px-6 py-3 text-sm font-medium text-[var(--color-tron-text-primary)] hover:bg-[var(--color-tron-bg-tertiary)]"
-									>
-										Retake <kbd class="ml-1 rounded bg-[var(--color-tron-bg-tertiary)] px-1 text-xs">Esc</kbd>
-									</button>
-									<button
-										onclick={saveCapture}
-										disabled={captureUploading}
-										class="rounded-lg bg-[var(--color-tron-green)] px-6 py-3 text-sm font-medium text-black hover:opacity-90 disabled:opacity-50"
-									>
-										{captureUploading ? 'Saving...' : 'Save to Project'} <kbd class="ml-1 rounded bg-black/20 px-1 text-xs">Space</kbd>
-									</button>
-								{:else}
-									<button
-										onclick={capturePhoto}
-										disabled={!cameraReady}
-										class="rounded-full bg-[var(--color-tron-cyan)] p-4 text-black shadow-lg transition-transform hover:scale-105 disabled:opacity-50"
-										title="Capture (Space)"
-									>
-										<svg class="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-											<circle cx="12" cy="12" r="10" stroke-width="2"/>
-											<circle cx="12" cy="12" r="4" fill="currentColor"/>
-										</svg>
-									</button>
-									<button
-										onclick={stopCamera}
-										class="rounded-lg border border-[var(--color-tron-border)] px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-red)]"
-									>
-										Stop Camera
-									</button>
-								{/if}
-							</div>
-
-							{#if captureMsg}
-								<p class="text-center text-sm text-[var(--color-tron-green)]">{captureMsg}</p>
-							{/if}
-						</div>
-
-						<!-- Right: QR Info Panel -->
-						<div class="space-y-3">
-							<div class="rounded-lg border {inductMode ? 'border-[var(--color-tron-yellow)]' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-bg-primary)] p-4">
-								<div class="mb-3 flex items-center justify-between">
-									<h4 class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">QR Code Scanner</h4>
-									<button
-										onclick={() => { inductMode = !inductMode; inductMsg = ''; }}
-										class="rounded-lg px-2.5 py-1 text-xs font-medium transition-colors {inductMode ? 'bg-[var(--color-tron-yellow)]/20 text-[var(--color-tron-yellow)] border border-[var(--color-tron-yellow)]/40' : 'bg-[var(--color-tron-bg-tertiary)] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
-									>
-										{inductMode ? 'INDUCT ON' : 'INDUCT OFF'}
-									</button>
-								</div>
-								{#if inductMode}
-									<div class="mb-2 rounded border border-[var(--color-tron-yellow)]/30 bg-[var(--color-tron-yellow)]/10 px-2 py-1">
-										<p class="text-[10px] text-[var(--color-tron-yellow)]">Induct mode: unknown QR codes will be auto-created as new cartridge records</p>
-									</div>
-								{/if}
-								{#if inductMsg}
-									<div class="mb-2 rounded border border-[var(--color-tron-green)]/30 bg-[var(--color-tron-green)]/10 px-2 py-1">
-										<p class="text-xs text-[var(--color-tron-green)]">{inductMsg}</p>
-									</div>
-								{/if}
-								{#if detectedQR}
-									<div class="space-y-2">
-										<div class="rounded border border-[var(--color-tron-green)]/30 bg-[var(--color-tron-green)]/10 p-2">
-											<p class="text-xs text-[var(--color-tron-text-secondary)]">Detected</p>
-											<p class="break-all font-mono text-sm text-[var(--color-tron-green)]">{detectedQR}</p>
-										</div>
-										{#if qrLookupResult}
-											{#if qrLookupResult.type === 'cartridge'}
-												<div class="space-y-1 text-sm">
-													<p class="text-[var(--color-tron-text-primary)]">Cartridge: <span class="font-semibold text-[var(--color-tron-cyan)]">{qrLookupResult.barcode || qrLookupResult._id}</span></p>
-													{#if cartridgePhaseInfo}
-														{#if cartridgePhaseInfo.isNew}
-															<div class="rounded border border-[var(--color-tron-yellow)]/30 bg-[var(--color-tron-yellow)]/10 px-2 py-1">
-																<p class="text-xs font-semibold text-[var(--color-tron-yellow)]">New cartridge — capturing as {cartridgePhaseInfo.nextPhase.replace(/_/g, ' ')}</p>
-															</div>
-														{:else if cartridgePhaseInfo.isComplete}
-															<div class="rounded border border-[var(--color-tron-green)]/30 bg-[var(--color-tron-green)]/10 px-2 py-1">
-																<p class="text-xs font-semibold text-[var(--color-tron-green)]">Already released — additional photo</p>
-															</div>
-														{:else}
-															<div class="rounded border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-cyan)]/10 px-2 py-1">
-																<p class="text-xs text-[var(--color-tron-cyan)]">{cartridgePhaseInfo.currentPhase?.replace(/_/g, ' ')} → <span class="font-semibold">{cartridgePhaseInfo.nextPhase.replace(/_/g, ' ')}</span></p>
-															</div>
-														{/if}
-														<div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-tron-bg-tertiary)]">
-															<div class="h-full rounded-full bg-[var(--color-tron-cyan)]" style="width: {Math.round(((cartridgePhaseInfo.pipelineIndex + 1) / cartridgePhaseInfo.pipelineLength) * 100)}%"></div>
-														</div>
-														<p class="text-[10px] text-[var(--color-tron-text-secondary)]">{cartridgePhaseInfo.pipelineIndex + 1} / {cartridgePhaseInfo.pipelineLength} phases &middot; {cartridgePhaseInfo.previousImages.length} prior photo{cartridgePhaseInfo.previousImages.length !== 1 ? 's' : ''}</p>
-													{:else}
-														{#if qrLookupResult.phase}<p class="text-[var(--color-tron-text-secondary)]">Phase: {qrLookupResult.phase}</p>{/if}
-													{/if}
-													{#if qrLookupResult.lotNumber}<p class="text-[var(--color-tron-text-secondary)]">Lot: {qrLookupResult.lotNumber}</p>{/if}
-												</div>
-											{:else if qrLookupResult.type === 'lot'}
-												<div class="space-y-1 text-sm">
-													<p class="text-[var(--color-tron-text-primary)]">Lot: <span class="font-semibold text-[var(--color-tron-cyan)]">{qrLookupResult.lotNumber}</span></p>
-													{#if qrLookupResult.status}<p class="text-[var(--color-tron-text-secondary)]">Status: {qrLookupResult.status}</p>{/if}
-												</div>
-											{:else if qrLookupResult.type === 'part'}
-												<div class="space-y-1 text-sm">
-													<p class="text-[var(--color-tron-text-primary)]">Part: <span class="font-semibold text-[var(--color-tron-cyan)]">{qrLookupResult.name}</span></p>
-													{#if qrLookupResult.barcode}<p class="text-[var(--color-tron-text-secondary)]">Barcode: {qrLookupResult.barcode}</p>{/if}
-												</div>
-											{:else}
-												<p class="text-xs text-[var(--color-tron-text-secondary)]">No matching record found in BIMS</p>
-											{/if}
-										{/if}
-									</div>
-								{:else}
-									<p class="text-sm text-[var(--color-tron-text-secondary)]">Point camera at a QR code to auto-identify cartridge, lot, or part.</p>
-								{/if}
-							</div>
-
-							<!-- Session stats -->
-							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4">
-								<h4 class="mb-2 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Session</h4>
-								<div class="grid grid-cols-2 gap-2 text-center">
-									<div>
-										<div class="text-xl font-bold text-[var(--color-tron-cyan)]">{captureCount}</div>
-										<div class="text-xs text-[var(--color-tron-text-secondary)]">Captured</div>
-									</div>
-									<div>
-										<div class="text-xl font-bold {detectedQR ? 'text-[var(--color-tron-green)]' : 'text-[var(--color-tron-text-secondary)]'}">{detectedQR ? 'YES' : 'NO'}</div>
-										<div class="text-xs text-[var(--color-tron-text-secondary)]">QR Lock</div>
-									</div>
-								</div>
-							</div>
-
-							<!-- Camera Settings (LIZA tuning panel) -->
-							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4">
-								<button onclick={() => showSettings = !showSettings} class="flex w-full items-center justify-between">
-									<h4 class="text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Camera Settings</h4>
-									<span class="text-xs text-[var(--color-tron-text-secondary)]">{showSettings ? '▲' : '▼'}</span>
-								</button>
-								{#if showSettings}
-									<div class="mt-3 space-y-3">
-										{#if !cameraCapabilities}
-											<p class="text-xs text-[var(--color-tron-text-secondary)]">No adjustable settings for this camera.</p>
-										{:else}
-											<!-- Exposure mode -->
-											{#if cameraCapabilities.exposureMode}
-												<div>
-													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">Exposure Mode</span>
-														<select bind:value={camExposureMode} onchange={applyCameraSettings}
-															class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-tron-text-primary)]">
-															<option value="continuous">Auto</option>
-															<option value="manual">Manual</option>
-														</select>
-													</div>
-												</div>
-											{/if}
-											{#if cameraCapabilities.exposureTime && camExposureMode === 'manual'}
-												<div>
-													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">Exposure Time</span>
-														<span class="font-mono text-[var(--color-tron-text-primary)]">{Math.round(camExposureTime)}</span>
-													</div>
-													<input type="range"
-														min={cameraCapabilities.exposureTime.min}
-														max={Math.min(cameraCapabilities.exposureTime.max, 2000)}
-														step={cameraCapabilities.exposureTime.step || 1}
-														bind:value={camExposureTime}
-														oninput={applyCameraSettings}
-														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
-													/>
-												</div>
-											{/if}
-											{#if cameraCapabilities.exposureCompensation && camExposureMode === 'manual'}
-												<div>
-													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">Exposure Comp</span>
-														<span class="font-mono text-[var(--color-tron-text-primary)]">{camExposureComp}</span>
-													</div>
-													<input type="range"
-														min={cameraCapabilities.exposureCompensation.min}
-														max={cameraCapabilities.exposureCompensation.max}
-														step={cameraCapabilities.exposureCompensation.step || 1}
-														bind:value={camExposureComp}
-														oninput={applyCameraSettings}
-														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
-													/>
-												</div>
-											{/if}
-											<!-- White Balance -->
-											{#if cameraCapabilities.whiteBalanceMode}
-												<div>
-													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">White Balance</span>
-														<select bind:value={camWhiteBalanceMode} onchange={applyCameraSettings}
-															class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-tron-text-primary)]">
-															<option value="continuous">Auto</option>
-															<option value="manual">Manual</option>
-														</select>
-													</div>
-												</div>
-											{/if}
-											{#if cameraCapabilities.colorTemperature && camWhiteBalanceMode === 'manual'}
-												<div>
-													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">Color Temp</span>
-														<span class="font-mono text-[var(--color-tron-text-primary)]">{camWhiteBalance}K</span>
-													</div>
-													<input type="range"
-														min={cameraCapabilities.colorTemperature.min}
-														max={cameraCapabilities.colorTemperature.max}
-														step={cameraCapabilities.colorTemperature.step || 1}
-														bind:value={camWhiteBalance}
-														oninput={applyCameraSettings}
-														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
-													/>
-												</div>
-											{/if}
-											<!-- Image adjustments -->
-											{#if cameraCapabilities.brightness}
-												<div>
-													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">Brightness</span>
-														<span class="font-mono text-[var(--color-tron-text-primary)]">{camBrightness}</span>
-													</div>
-													<input type="range"
-														min={cameraCapabilities.brightness.min}
-														max={cameraCapabilities.brightness.max}
-														step={cameraCapabilities.brightness.step || 1}
-														bind:value={camBrightness}
-														oninput={applyCameraSettings}
-														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
-													/>
-												</div>
-											{/if}
-											{#if cameraCapabilities.contrast}
-												<div>
-													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">Contrast</span>
-														<span class="font-mono text-[var(--color-tron-text-primary)]">{camContrast}</span>
-													</div>
-													<input type="range"
-														min={cameraCapabilities.contrast.min}
-														max={cameraCapabilities.contrast.max}
-														step={cameraCapabilities.contrast.step || 1}
-														bind:value={camContrast}
-														oninput={applyCameraSettings}
-														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
-													/>
-												</div>
-											{/if}
-											{#if cameraCapabilities.saturation}
-												<div>
-													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">Saturation</span>
-														<span class="font-mono text-[var(--color-tron-text-primary)]">{camSaturation}</span>
-													</div>
-													<input type="range"
-														min={cameraCapabilities.saturation.min}
-														max={cameraCapabilities.saturation.max}
-														step={cameraCapabilities.saturation.step || 1}
-														bind:value={camSaturation}
-														oninput={applyCameraSettings}
-														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
-													/>
-												</div>
-											{/if}
-											{#if cameraCapabilities.sharpness}
-												<div>
-													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">Sharpness</span>
-														<span class="font-mono text-[var(--color-tron-text-primary)]">{camSharpness}</span>
-													</div>
-													<input type="range"
-														min={cameraCapabilities.sharpness.min}
-														max={cameraCapabilities.sharpness.max}
-														step={cameraCapabilities.sharpness.step || 1}
-														bind:value={camSharpness}
-														oninput={applyCameraSettings}
-														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
-													/>
-												</div>
-											{/if}
-											{#if cameraCapabilities.zoom && cameraCapabilities.zoom.max > 1}
-												<div>
-													<div class="flex items-center justify-between text-xs">
-														<span class="text-[var(--color-tron-text-secondary)]">Zoom</span>
-														<span class="font-mono text-[var(--color-tron-text-primary)]">{camZoom.toFixed(1)}x</span>
-													</div>
-													<input type="range"
-														min={cameraCapabilities.zoom.min}
-														max={cameraCapabilities.zoom.max}
-														step={cameraCapabilities.zoom.step || 0.1}
-														bind:value={camZoom}
-														oninput={applyCameraSettings}
-														class="mt-1 w-full accent-[var(--color-tron-cyan)]"
-													/>
-												</div>
-											{/if}
-											<button
-												onclick={() => { camExposureMode = 'manual'; camExposureComp = 50; camExposureTime = 250; camWhiteBalanceMode = 'manual'; camWhiteBalance = 4000; camBrightness = 0; camContrast = 32; camSharpness = 3; camSaturation = 64; camZoom = 1; applyCameraSettings(); }}
-												class="w-full rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]"
-											>
-												Reset to LIZA Defaults
-											</button>
-										{/if}
-										<div class="border-t border-[var(--color-tron-border)] pt-2">
-											<p class="text-xs text-[var(--color-tron-text-secondary)]">QR Scanner: <span class="font-mono text-[var(--color-tron-text-primary)]">{qrScanMethod || 'initializing...'}</span></p>
-										</div>
-									</div>
-								{/if}
-							</div>
-
-							<!-- Keyboard shortcuts -->
-							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4">
-								<h4 class="mb-2 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Shortcuts</h4>
-								<div class="space-y-1 text-xs">
-									<div class="flex justify-between"><span class="text-[var(--color-tron-text-secondary)]">Capture / Save</span><kbd class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[var(--color-tron-text-primary)]">Space</kbd></div>
-									<div class="flex justify-between"><span class="text-[var(--color-tron-text-secondary)]">Retake</span><kbd class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[var(--color-tron-text-primary)]">Esc</kbd></div>
-								</div>
-							</div>
-						</div>
-					</div>
-				{/if}
-			</div>
-
-		<!-- LABELS TAB -->
-		{:else if activeTab === 'labels'}
-			<!-- Barcode scan (feature 001-labels-barcode-scan) -->
-			<div class="mb-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3">
-				<label for="labels-barcode-scan" class="mb-1 block text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Scan cartridge barcode</label>
-				<div class="flex items-center gap-2">
-					<input
-						id="labels-barcode-scan"
-						bind:this={scanInputEl}
-						bind:value={scanValue}
-						onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyScan(); } }}
-						type="text"
-						autocomplete="off"
-						placeholder="Focus here and scan…"
-						class="flex-1 rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-3 py-2 font-mono text-sm text-[var(--color-tron-text-primary)] placeholder:text-[var(--color-tron-text-secondary)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
-					/>
-					{#if matchOrder.length > 0}
-						<button
-							type="button"
-							class="rounded-md border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]"
-							onclick={() => { scannedIds = new Set(); matchOrder = []; scanError = ''; scanInputEl?.focus(); }}
-						>Clear</button>
-					{/if}
-				</div>
-				{#if scanError}
-					<p class="mt-2 text-xs text-[var(--color-tron-red)]">{scanError}</p>
-				{:else if matchOrder.length > 0}
-					<p class="mt-2 text-xs text-[var(--color-tron-cyan)]">{matchOrder.length} image{matchOrder.length === 1 ? '' : 's'} pinned at top.</p>
-				{/if}
-			</div>
-
-			{#if data.images.length === 0}
-				<p class="text-center text-[var(--color-tron-text-secondary)]">No images yet. Upload images in the Import tab.</p>
-			{:else}
-				<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-					{#each sortedImages as image (image._id)}
-						<div
-							bind:this={matchTileEls[image._id]}
-							class="group relative overflow-hidden rounded-lg border bg-[var(--color-tron-bg-primary)] transition-all {scannedIds.has(image._id) ? 'border-[var(--color-tron-cyan)] ring-2 ring-[var(--color-tron-cyan)] animate-pulse' : 'border-[var(--color-tron-border)]'}"
-						>
-							<div class="aspect-square bg-[var(--color-tron-bg-tertiary)]">
-								{#if image.imageUrl}
-									<img src={image.imageUrl} alt={image.filename} class="h-full w-full cursor-pointer object-cover" onclick={() => openLightbox(image._id)} />
-								{:else}
-									<div class="flex h-full items-center justify-center text-xs text-[var(--color-tron-text-secondary)]">No preview</div>
-								{/if}
-							</div>
-							<!-- Scanned badge + TOP/BOTTOM tag -->
-							{#if scannedIds.has(image._id)}
-								<span class="absolute left-2 top-2 rounded-full bg-[var(--color-tron-cyan)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-black">
-									Scanned · {topBottomTag(image._id)}
-								</span>
-							{:else if image.label}
-								<!-- Label badge (only when not scanned, to avoid overlap) -->
-								<span class="absolute left-2 top-2 rounded-full px-2 py-0.5 text-xs font-semibold {image.label === 'approved' ? 'bg-[var(--color-tron-green)]/20 text-[var(--color-tron-green)]' : 'bg-[var(--color-tron-red)]/20 text-[var(--color-tron-red)]'}">
-									{image.label === 'approved' ? 'GOOD' : 'DEFECT'}
-								</span>
-							{/if}
-							<!-- Linked badge -->
-							{#if image.cartridgeTag?.cartridgeRecordId}
-								<span class="absolute right-2 top-2 rounded-full bg-[var(--color-tron-cyan)]/20 px-2 py-0.5 text-[10px] font-semibold text-[var(--color-tron-cyan)]">
-									LINKED
-								</span>
-							{/if}
-							<!-- Label + Induct buttons -->
-							<div class="flex border-t border-[var(--color-tron-border)]">
-								<button
-									class="flex-1 py-1.5 text-xs font-medium transition-colors {image.label === 'approved' ? 'bg-[var(--color-tron-green)]/20 text-[var(--color-tron-green)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-green)]'}"
-									disabled={labeling === image._id}
-									onclick={() => toggleLabel(image._id, image.label, 'approved')}
-								>&#10003; Good</button>
-								<button
-									class="flex-1 border-l border-[var(--color-tron-border)] py-1.5 text-xs font-medium transition-colors {image.label === 'rejected' ? 'bg-[var(--color-tron-red)]/20 text-[var(--color-tron-red)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-red)]'}"
-									disabled={labeling === image._id}
-									onclick={() => toggleLabel(image._id, image.label, 'rejected')}
-								>&#10007; Defect</button>
-								<button
-									class="flex-1 border-l border-[var(--color-tron-border)] py-1.5 text-xs font-medium transition-colors {image.cartridgeTag?.cartridgeRecordId ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
-									disabled={inducting === image._id || !!image.cartridgeTag?.cartridgeRecordId}
-									onclick={() => inductFromImage(image._id, image.filename)}
-								>{inducting === image._id ? '...' : 'Induct'}</button>
-							</div>
-						</div>
-					{/each}
-				</div>
-			{/if}
-
-		<!-- TRAIN TAB -->
-		{:else if activeTab === 'train'}
-			<div class="space-y-6">
-				<div class="grid grid-cols-3 gap-4">
-					<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4 text-center">
-						<div class="text-2xl font-bold text-[var(--color-tron-green)]">{data.labelStats.approved}</div>
-						<div class="text-xs text-[var(--color-tron-text-secondary)]">Good Images</div>
-					</div>
-					<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4 text-center">
-						<div class="text-2xl font-bold text-[var(--color-tron-red)]">{data.labelStats.rejected}</div>
-						<div class="text-xs text-[var(--color-tron-text-secondary)]">Defect Images</div>
-					</div>
-					<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4 text-center">
-						<div class="text-2xl font-bold text-[var(--color-tron-text-secondary)]">{data.labelStats.unlabeled}</div>
-						<div class="text-xs text-[var(--color-tron-text-secondary)]">Unlabeled</div>
-					</div>
-				</div>
-
-				{#if trainStatus}
-					<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4">
-						<div class="mb-2 flex items-center justify-between text-sm">
-							<span class="text-[var(--color-tron-text-primary)]">Training Status</span>
-							<span class="font-semibold" style="color: {trainStatus.status === 'complete' ? 'var(--color-tron-green)' : trainStatus.status === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-yellow)'}">{trainStatus.status?.toUpperCase()}</span>
-						</div>
-						{#if trainStatus.progress !== undefined}
-							<div class="mb-2 h-2 overflow-hidden rounded-full bg-[var(--color-tron-bg-tertiary)]">
-								<div class="h-full rounded-full bg-gradient-to-r from-[var(--color-tron-cyan)] to-[var(--color-tron-green)] transition-all" style="width: {Math.round(trainStatus.progress * 100)}%"></div>
-							</div>
-						{/if}
-						{#if trainStatus.message}
-							<p class="text-xs text-[var(--color-tron-text-secondary)]">{trainStatus.message}</p>
-						{/if}
-					</div>
-				{/if}
-
-				<button
-					class="w-full rounded-lg bg-[var(--color-tron-cyan)] px-4 py-3 text-sm font-medium text-black hover:opacity-90 disabled:opacity-50"
-					disabled={training || (data.labelStats.approved + data.labelStats.rejected) < 5}
-					onclick={startTraining}
-				>
-					{#if training}Training in Progress...{:else}Start Training{/if}
-				</button>
-				{#if (data.labelStats.approved + data.labelStats.rejected) < 5}
-					<p class="text-center text-xs text-[var(--color-tron-text-secondary)]">Need at least 5 labeled images to start training.</p>
-				{/if}
-			</div>
-
-		<!-- TEST TAB -->
-		{:else if activeTab === 'test'}
-			<div class="space-y-4">
-				{#if data.project.modelStatus !== 'trained'}
-					<p class="text-center text-[var(--color-tron-text-secondary)]">Train a model first before running tests.</p>
-				{:else}
-					<div>
-						<label class="mb-1 block text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Test Image</label>
-						<input type="file" accept="image/*" class="w-full text-sm text-[var(--color-tron-text-primary)]" onchange={(e) => { const t = e.target as HTMLInputElement; testFile = t.files?.[0] || null; }} />
-					</div>
-					<button
-						class="rounded-lg bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-black hover:opacity-90 disabled:opacity-50"
-						disabled={!testFile || testing}
-						onclick={runTest}
-					>
-						{testing ? 'Running Inference...' : 'Run Test'}
-					</button>
-
-					{#if testResult}
-						{#if testResult.error}
-							<div class="rounded border border-[var(--color-tron-red)]/30 bg-[var(--color-tron-red)]/10 p-4 text-sm text-[var(--color-tron-red)]">{testResult.error}</div>
-						{:else}
-							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-6 text-center">
-								<div class="mb-2 text-4xl font-bold {testResult.result === 'pass' ? 'text-[var(--color-tron-green)]' : 'text-[var(--color-tron-red)]'}">
-									{testResult.result?.toUpperCase()}
-								</div>
-								<div class="text-sm text-[var(--color-tron-text-secondary)]">
-									Confidence: <span class="font-semibold text-[var(--color-tron-text-primary)]">{Math.round((testResult.confidenceScore || 0) * 100)}%</span>
-								</div>
-								{#if testResult.processingTimeMs}
-									<div class="text-xs text-[var(--color-tron-text-secondary)]">{Math.round(testResult.processingTimeMs)}ms</div>
-								{/if}
-							</div>
-						{/if}
-					{/if}
-				{/if}
-			</div>
-
-		<!-- REVIEW TAB -->
-		{:else if activeTab === 'review'}
-			{#if data.inspections.length === 0}
-				<p class="text-center text-[var(--color-tron-text-secondary)]">No inspections yet.</p>
-			{:else}
-				<div class="overflow-x-auto">
-					<table class="w-full">
-						<thead>
-							<tr class="border-b border-[var(--color-tron-border)] text-left">
-								<th class="px-4 py-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Result</th>
-								<th class="px-4 py-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Confidence</th>
-								<th class="px-4 py-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Status</th>
-								<th class="px-4 py-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Phase</th>
-								<th class="px-4 py-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Date</th>
-							</tr>
-						</thead>
-						<tbody class="divide-y divide-[var(--color-tron-border)]">
-							{#each data.inspections as insp (insp._id)}
-								<tr class="transition-colors hover:bg-[var(--color-tron-bg-tertiary)]">
-									<td class="px-4 py-2">
-										{#if insp.result}
-											<span class="rounded-full px-2 py-0.5 text-xs font-semibold {insp.result === 'pass' ? 'bg-[var(--color-tron-green)]/20 text-[var(--color-tron-green)]' : 'bg-[var(--color-tron-red)]/20 text-[var(--color-tron-red)]'}">
-												{insp.result.toUpperCase()}
-											</span>
-										{:else}
-											<span class="text-xs text-[var(--color-tron-text-secondary)]">—</span>
-										{/if}
-									</td>
-									<td class="px-4 py-2 text-sm text-[var(--color-tron-text-primary)]">{insp.confidenceScore ? Math.round(insp.confidenceScore * 100) + '%' : '—'}</td>
-									<td class="px-4 py-2 text-sm text-[var(--color-tron-text-secondary)]">{insp.status}</td>
-									<td class="px-4 py-2 text-sm text-[var(--color-tron-text-secondary)]">{insp.phase || '—'}</td>
-									<td class="px-4 py-2 text-sm text-[var(--color-tron-text-secondary)]">{fmtDate(insp.createdAt)}</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
-			{/if}
-
-		<!-- INTEGRATE TAB -->
-		{:else if activeTab === 'integrate'}
-			<div class="space-y-4">
-				<h3 class="text-lg font-semibold text-[var(--color-tron-text-primary)]">API Endpoints</h3>
-				<div class="space-y-2 text-sm">
-					{#each [
-						['GET', `/api/cv/projects/${data.project._id}`, 'Get project details'],
-						['GET', `/api/cv/projects/${data.project._id}/images`, 'List project images'],
-						['POST', '/api/cv/images', 'Upload image (multipart, projectId required)'],
-						['PATCH', '/api/cv/images/:id/label', 'Set image label (approved/rejected)'],
-						['POST', '/api/cv/train', 'Start training (projectId in body)'],
-						['GET', `/api/cv/train?projectId=${data.project._id}`, 'Poll training status'],
-						['POST', '/api/cv/infer', 'Run inference (imageId + projectId in body)']
-					] as [method, path, desc]}
-						<div class="flex items-start gap-3 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3">
-							<span class="rounded bg-[var(--color-tron-cyan)]/20 px-2 py-0.5 text-xs font-bold text-[var(--color-tron-cyan)]">{method}</span>
-							<div>
-								<code class="text-xs text-[var(--color-tron-text-primary)]">{path}</code>
-								<p class="text-xs text-[var(--color-tron-text-secondary)]">{desc}</p>
-							</div>
-						</div>
-					{/each}
-				</div>
-
-				<h3 class="mt-6 text-lg font-semibold text-[var(--color-tron-text-primary)]">Manufacturing Gate Integration</h3>
-				<p class="text-sm text-[var(--color-tron-text-secondary)]">
-					To use this CV project as a manufacturing quality gate, call the inference endpoint at each production phase.
-					Images with a "fail" result can automatically block the cartridge from proceeding to the next phase.
+				<p class="ml-6 text-xs text-[var(--color-tron-text-secondary)]">
+					When on, this project's effective members union with every selected child project's current members at training time. When off, composedOf is informational only — members[] is the frozen training set.
 				</p>
-				<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3">
-					<p class="mb-1 text-xs text-[var(--color-tron-text-secondary)]">Project ID</p>
-					<code class="text-sm text-[var(--color-tron-cyan)]">{data.project._id}</code>
+			</div>
+			<div>
+				<div class="mb-2 text-xs uppercase text-[var(--color-tron-text-secondary)]">Compose from</div>
+				{#if data.otherProjects.length === 0}
+					<p class="text-xs text-[var(--color-tron-text-secondary)]">No other projects exist yet.</p>
+				{:else}
+					<div class="grid gap-1 sm:grid-cols-2">
+						{#each data.otherProjects as p (p.id)}
+							{@const checked = composedOfSelections.has(p.id)}
+							<label class="flex items-center gap-2 rounded border border-[var(--color-tron-border)] p-2 text-sm">
+								<input
+									type="checkbox"
+									name="composedOf"
+									value={p.id}
+									{checked}
+									onchange={() => (composedOfSelections = toggleSet(composedOfSelections, p.id))}
+								/>
+								<span class="flex-1 truncate text-[var(--color-tron-text)]">{p.name}</span>
+								<span class="text-xs text-[var(--color-tron-text-secondary)]">{p.memberCount}</span>
+							</label>
+						{/each}
+					</div>
+				{/if}
+			</div>
+			<button type="submit" disabled={submitting} class="rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-[var(--color-tron-bg-primary)] disabled:opacity-40">
+				{submitting ? 'Saving…' : 'Save composition'}
+			</button>
+		</form>
+
+	{:else if activeTab === 'deployment'}
+		<form
+			method="POST"
+			action="?/updateDeployment"
+			use:enhance={() => {
+				submitting = true;
+				return async ({ update }) => {
+					await update();
+					submitting = false;
+				};
+			}}
+			class="space-y-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4"
+		>
+			<div>
+				<div class="mb-2 text-xs uppercase text-[var(--color-tron-text-secondary)]">Deploy at phases</div>
+				<p class="mb-2 text-xs text-[var(--color-tron-text-secondary)]">
+					When a capture lands at any selected phase and this project has an active model, the model runs inference automatically.
+				</p>
+				<div class="grid gap-2 sm:grid-cols-3">
+					{#each data.observedPhases as ph (ph)}
+						{@const checked = deploySelections.has(ph)}
+						<label class="flex items-center gap-2 rounded border border-[var(--color-tron-border)] p-2 text-sm">
+							<input
+								type="checkbox"
+								name="phase"
+								value={ph}
+								{checked}
+								onchange={() => (deploySelections = toggleSet(deploySelections, ph))}
+							/>
+							<span>{ph}</span>
+						</label>
+					{/each}
 				</div>
 			</div>
-		{/if}
-	</div>
 
-	<!-- Photo lightbox -->
-	{#if lightboxImage}
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm" onkeydown={handleLightboxKey} onclick={() => lightboxIndex = -1}>
-			<div class="relative flex max-h-[90vh] max-w-[92vw] flex-col items-center" onclick={(e) => e.stopPropagation()}>
-				<button onclick={() => lightboxIndex = -1} class="absolute -top-2 -right-2 z-10 rounded-full bg-[var(--color-tron-bg-secondary)] p-1.5 text-[var(--color-tron-text-secondary)] hover:text-white">
-					<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
+			<div class="grid gap-3 sm:grid-cols-2">
+				<div>
+					<label for="d-active" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Active model version</label>
+					<select id="d-active" name="activeModelVersion" bind:value={activeVersion} class="tron-input w-full">
+						<option value="">— none —</option>
+						{#each data.project.trainedModels as m (m.version)}
+							<option value={m.version}>{m.version} (n={m.sampleCount ?? '?'})</option>
+						{/each}
+					</select>
+				</div>
+				<div>
+					<label for="d-shadow" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Shadow model version</label>
+					<select id="d-shadow" name="shadowModelVersion" bind:value={shadowVersion} class="tron-input w-full">
+						<option value="">— none —</option>
+						{#each data.project.trainedModels as m (m.version)}
+							<option value={m.version}>{m.version}</option>
+						{/each}
+					</select>
+				</div>
+			</div>
+
+			<div class="flex gap-2">
+				<button type="submit" disabled={submitting} class="rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-[var(--color-tron-bg-primary)] disabled:opacity-40">
+					{submitting ? 'Saving…' : 'Save deployment'}
 				</button>
-				<div class="flex items-center gap-3">
-					{#if lightboxIndex > 0}
-						<button onclick={lightboxPrev} class="rounded-lg bg-[var(--color-tron-bg-secondary)] p-2 text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">
-							<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
-						</button>
-					{:else}
-						<div class="w-10"></div>
-					{/if}
-					<img src={lightboxImage.imageUrl} alt={lightboxImage.filename} class="max-h-[75vh] max-w-[75vw] rounded-lg object-contain shadow-2xl" />
-					{#if lightboxIndex < data.images.length - 1}
-						<button onclick={lightboxNext} class="rounded-lg bg-[var(--color-tron-bg-secondary)] p-2 text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">
-							<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
-						</button>
-					{:else}
-						<div class="w-10"></div>
-					{/if}
-				</div>
-				<div class="mt-3 flex items-center gap-3 rounded-lg bg-[var(--color-tron-bg-secondary)] px-4 py-2 text-sm">
-					<span class="text-[var(--color-tron-text-primary)]">{lightboxImage.filename}</span>
-					{#if lightboxImage.label === 'approved'}
-						<span class="text-[var(--color-tron-green)]">GOOD</span>
-					{:else if lightboxImage.label === 'rejected'}
-						<span class="text-[var(--color-tron-red)]">DEFECT</span>
-					{:else}
-						<span class="text-[var(--color-tron-text-secondary)]">Unlabeled</span>
-					{/if}
-					{#if lightboxImage.cartridgeTag?.phase}
-						<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-tron-text-secondary)]">{lightboxImage.cartridgeTag.phase.replace(/_/g, ' ')}</span>
-					{/if}
-					<span class="text-[var(--color-tron-text-secondary)]">{fmtDate(lightboxImage.capturedAt || lightboxImage.createdAt)}</span>
-					<span class="text-xs text-[var(--color-tron-text-secondary)]">{lightboxIndex + 1} / {data.images.length}</span>
-				</div>
+			</div>
+		</form>
+
+	{:else if activeTab === 'history'}
+		<div class="space-y-4">
+			<div>
+				<h3 class="mb-2 text-sm font-semibold uppercase text-[var(--color-tron-text-secondary)]">Trained models</h3>
+				{#if data.project.trainedModels.length === 0}
+					<p class="text-sm text-[var(--color-tron-text-secondary)]">No models trained yet.</p>
+				{:else}
+					<div class="overflow-x-auto rounded border border-[var(--color-tron-border)]">
+						<table class="w-full text-sm">
+							<thead class="bg-[var(--color-tron-bg-tertiary)] text-xs uppercase text-[var(--color-tron-text-secondary)]">
+								<tr>
+									<th class="px-3 py-2 text-left">Version</th>
+									<th class="px-3 py-2 text-left">Trained at</th>
+									<th class="px-3 py-2 text-left">By</th>
+									<th class="px-3 py-2 text-right">Samples</th>
+									<th class="px-3 py-2 text-right">Threshold</th>
+									<th class="px-3 py-2"></th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each data.project.trainedModels as m (m.version)}
+									<tr class="border-t border-[var(--color-tron-border)]">
+										<td class="px-3 py-2 font-mono text-[var(--color-tron-cyan)]">{m.version}</td>
+										<td class="px-3 py-2 text-[var(--color-tron-text-secondary)]">{fmt(m.trainedAt)}</td>
+										<td class="px-3 py-2 text-[var(--color-tron-text-secondary)]">{m.trainedBy?.username ?? '—'}</td>
+										<td class="px-3 py-2 text-right">{m.sampleCount ?? '—'}</td>
+										<td class="px-3 py-2 text-right">{m.confidenceThreshold ?? '—'}</td>
+										<td class="px-3 py-2 text-right text-xs">
+											{#if m.version === data.project.activeModelVersion}<span class="text-[var(--color-tron-green,#39ff14)]">ACTIVE</span>{/if}
+											{#if m.version === data.project.shadowModelVersion}<span class="text-[var(--color-tron-cyan)]">SHADOW</span>{/if}
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{/if}
+			</div>
+
+			<div>
+				<h3 class="mb-2 text-sm font-semibold uppercase text-[var(--color-tron-text-secondary)]">Recent inspections</h3>
+				{#if data.recentInspections.length === 0}
+					<p class="text-sm text-[var(--color-tron-text-secondary)]">No inspections have been recorded for this project yet.</p>
+				{:else}
+					<div class="overflow-x-auto rounded border border-[var(--color-tron-border)]">
+						<table class="w-full text-sm">
+							<thead class="bg-[var(--color-tron-bg-tertiary)] text-xs uppercase text-[var(--color-tron-text-secondary)]">
+								<tr>
+									<th class="px-3 py-2 text-left">When</th>
+									<th class="px-3 py-2 text-left">Cartridge</th>
+									<th class="px-3 py-2 text-left">Phase</th>
+									<th class="px-3 py-2 text-left">Version</th>
+									<th class="px-3 py-2 text-left">Result</th>
+									<th class="px-3 py-2 text-right">Confidence</th>
+									<th class="px-3 py-2"></th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each data.recentInspections as r (r._id)}
+									<tr class="border-t border-[var(--color-tron-border)]">
+										<td class="px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">{fmt(r.triggeredAt ?? r.completedAt ?? r.createdAt)}</td>
+										<td class="px-3 py-2 font-mono text-[var(--color-tron-cyan)]">{r.cartridgeRecordId}</td>
+										<td class="px-3 py-2">{r.phase}</td>
+										<td class="px-3 py-2 font-mono text-xs">{r.modelVersion ?? '—'}</td>
+										<td class="px-3 py-2">
+											{#if r.result === 'pass'}<span class="text-[var(--color-tron-green,#39ff14)]">PASS</span>
+											{:else if r.result === 'fail'}<span class="text-[var(--color-tron-red,#ff3366)]">FAIL</span>
+											{:else}<span class="text-[var(--color-tron-text-secondary)]">{r.status}</span>{/if}
+										</td>
+										<td class="px-3 py-2 text-right">{r.confidenceScore != null ? (r.confidenceScore * 100).toFixed(1) + '%' : '—'}</td>
+										<td class="px-3 py-2 text-xs">{r.isShadow ? 'shadow' : ''}</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{/if}
 			</div>
 		</div>
 	{/if}
+
+	<!-- Danger zone -->
+	<div class="mt-6 rounded-lg border border-[var(--color-tron-red,#ff3366)] bg-[rgba(255,51,102,0.05)] p-3">
+		<div class="flex items-center justify-between">
+			<div>
+				<div class="text-sm font-medium text-[var(--color-tron-red,#ff3366)]">Delete project</div>
+				<div class="text-xs text-[var(--color-tron-text-secondary)]">Removes this project. Member images are NOT deleted.</div>
+			</div>
+			<form method="POST" action="?/deleteProject">
+				<button
+					type="submit"
+					onclick={(e) => { if (!confirm('Delete this project? Images are kept.')) e.preventDefault(); }}
+					class="rounded border border-[var(--color-tron-red,#ff3366)] px-3 py-1.5 text-xs font-medium text-[var(--color-tron-red,#ff3366)]"
+				>
+					Delete
+				</button>
+			</form>
+		</div>
+	</div>
 </div>
