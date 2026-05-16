@@ -1873,3 +1873,42 @@ Side errand: 16 cartridge records flipped stored → completed via
 `scripts/oneoff-cartridge-stored-to-completed.ts` (unstaged).
 
 One-time manual archive run: 298 done kanban tasks archived.
+
+### Follow-up — Kanban Analytics PRDs (same session)
+
+Drafted 7 PRDs covering the analytics page build-out and the WIP system:
+
+1. `docs/prds/KANBAN-ANALYTICS-FOUNDATION.md` — /kanban/analytics route,
+   permissions, date-range URL param, chart.js + svelte-chartjs decision,
+   shared `loadAnalyticsData()` aggregator, nav link.
+2. `docs/prds/KANBAN-ANALYTICS-KPI-CARDS.md` — 6 headline cards (Active,
+   Throughput, Median cycle, WIP, Stuck in Waiting, Aging). Aging
+   thresholds extracted to shared module so card + analytics can't drift.
+3. `docs/prds/KANBAN-ANALYTICS-CFD.md` — cumulative flow diagram, daily
+   stacked area, computed by replaying activityLog[] across all tasks.
+4. `docs/prds/KANBAN-ANALYTICS-FLOW-CHARTS.md` — throughput bar, cycle
+   time scatter w/ p50/p85/p95 lines, aging WIP, time-in-status breakdown.
+5. `docs/prds/KANBAN-ANALYTICS-BREAKDOWNS.md` — per-project table,
+   per-assignee table w/ load score, source mix donut.
+6. `docs/prds/KANBAN-WIP-TIMELINE.md` — the headline daily timeline.
+   Y axis is one person per group, each person contributes `wipLimit`
+   stacked rows. X axis: 44 15-min buckets (7:00 AM – 5:45 PM) + two
+   overflow buckets (< 7 AM, ≥ 6 PM). Cells fill with project color
+   when WIP task overlaps. Carry-over from prior day starts in left
+   overflow. Day tabs S M T W R F S. Polls every 30s. Includes overflow
+   "violation lanes" in red for retrospective WIP-cap breaches.
+7. `docs/prds/KANBAN-WIP-LIMIT-ENFORCEMENT.md` — hard cap on move-to-wip
+   via shared `assertWipLimitOk()` guard. 409 on violation, modal listing
+   the assignee's current WIP tasks. New `User.wipLimit` field (default 3).
+   Admin UI add to user edit form.
+
+Suggested implementation order:
+- Foundation → KPI Cards → CFD → WIP Limit Enforcement → WIP Timeline →
+  Flow Charts → Breakdowns
+
+Foundation is the only hard prerequisite. WIP-Timeline benefits from
+having the enforcement PRD shipped first (so violation lanes have meaning).
+
+Open items flagged in PRDs:
+- Confirm first X-axis bucket is 7:00 vs 7:15 (Jacob wrote 7:15).
+- Admin override permission for WIP limit — out of v1, follow-up.
