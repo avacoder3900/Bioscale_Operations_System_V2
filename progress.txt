@@ -1805,3 +1805,18 @@ Script left in the repo as a historical record (matches the existing
 `complete-stuck-wax-run-2y2f.ts` / `delete-fridge-001-11-cartridges.ts`
 pattern) but currently **unstaged** — Jacob said to handle it separately
 from the kanban feature branch.
+
+### Follow-up — Persistence reliability (same session)
+
+Jacob tested the deploy and reported "only some of the project horizontal
+swim lanes persisted" after folding several then navigating away.
+Diagnosis: fire-and-forget POSTs got orphaned when the page unmounted
+mid-flight — fast ones completed, slow ones (Vercel cold-start) got
+dropped.
+
+Fix in `persistProjectUiState`:
+- `keepalive: true` on the fetch — POST survives page unload.
+- Retry once after 500ms on 5xx or network error. 4xx errors aren't
+  retried (won't be fixed by retrying auth/validation failures).
+
+Single ~15-line change in `src/routes/kanban/+page.svelte`.
