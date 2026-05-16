@@ -4,33 +4,30 @@
 
 	ChartJS.register(Title, Tooltip, Legend, ArcElement);
 
-	interface SourceMixSlice {
-		source: string;
+	interface CreatorMixSlice {
+		userId: string;
+		username: string;
 		count: number;
 	}
 
 	interface Props {
-		slices: SourceMixSlice[];
+		slices: CreatorMixSlice[];
 	}
 
 	let { slices }: Props = $props();
 
-	const palette: Record<string, string> = {
-		manual: '#a0a0a0',
-		agent: '#00d4ff'
-	};
-
-	const labelMap: Record<string, string> = {
-		manual: 'Manual (UI)',
-		agent: 'Agent-mediated'
-	};
+	// Stable rotating palette — assigns each creator a distinct color by index.
+	const palette = [
+		'#00d4ff', '#ff6600', '#00ff88', '#a855f7', '#ff3366',
+		'#f59e0b', '#3b82f6', '#22d3ee', '#fb7185', '#84cc16'
+	];
 
 	let chartData = $derived({
-		labels: slices.map((s) => labelMap[s.source] ?? s.source),
+		labels: slices.map((s) => s.username),
 		datasets: [
 			{
 				data: slices.map((s) => s.count),
-				backgroundColor: slices.map((s) => palette[s.source] ?? '#666'),
+				backgroundColor: slices.map((_, i) => palette[i % palette.length]),
 				borderColor: 'var(--color-tron-bg-primary)',
 				borderWidth: 2
 			}
@@ -50,7 +47,7 @@
 </script>
 
 <div class="tron-card p-4">
-	<h3 class="tron-text-primary mb-3 text-sm font-bold">Manual vs Agent ({total})</h3>
+	<h3 class="tron-text-primary mb-3 text-sm font-bold">Created by ({total})</h3>
 	{#if slices.length === 0}
 		<p class="tron-text-muted text-xs">No tasks created in range.</p>
 	{:else}

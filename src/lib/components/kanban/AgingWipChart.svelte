@@ -18,7 +18,7 @@
 </script>
 
 <div class="tron-card p-4">
-	<h3 class="tron-text-primary mb-3 text-sm font-bold">Aging WIP (top 20)</h3>
+	<h3 class="tron-text-primary mb-3 text-sm font-bold">Aging Tasks (top 20)</h3>
 	{#if rows.length === 0}
 		<p class="tron-text-muted text-xs">No aging tasks.</p>
 	{:else}
