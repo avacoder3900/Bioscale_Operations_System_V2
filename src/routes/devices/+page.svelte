@@ -9,8 +9,8 @@
 	const form = _form as any;
 
 	// Tab state
-	let activeTab = $state<'devices' | 'fwcartridges' | 'events'>(
-		(page.url.searchParams.get('tab') as 'devices' | 'fwcartridges' | 'events') || 'devices'
+	let activeTab = $state<'devices' | 'events'>(
+		(page.url.searchParams.get('tab') as 'devices' | 'events') || 'devices'
 	);
 
 	// Form visibility
@@ -18,7 +18,7 @@
 	let editingDeviceId = $state<string | null>(null);
 	let submitting = $state(false);
 
-	function switchTab(tab: 'devices' | 'fwcartridges' | 'events') {
+	function switchTab(tab: 'devices' | 'events') {
 		activeTab = tab;
 		const url = new URL(page.url);
 		url.searchParams.set('tab', tab);
@@ -60,20 +60,9 @@
 		}
 	}
 
-	function getCartridgeStatusVariant(status: string): 'success' | 'info' | 'warning' | 'error' | 'neutral' {
-		switch (status) {
-			case 'active': return 'success';
-			case 'pending': return 'info';
-			case 'used': return 'warning';
-			case 'expired': return 'error';
-			default: return 'neutral';
-		}
-	}
-
 	// Active tab total for pagination
 	let activeTabTotal = $derived(
 		activeTab === 'devices' ? (data.pagination?.devicesTotal ?? 0) :
-		activeTab === 'fwcartridges' ? (data.pagination?.fwCartridgesTotal ?? 0) :
 		(data.events?.length ?? 0)
 	);
 </script>
@@ -92,21 +81,13 @@
 	{/if}
 
 	<!-- Stats Cards -->
-	<div class="grid gap-4 sm:grid-cols-3">
+	<div class="grid gap-4 sm:grid-cols-2">
 		<TronCard>
 			<div class="text-center">
 				<div class="font-mono text-3xl font-bold text-[var(--color-tron-cyan)]">
 					{data.pagination?.devicesTotal ?? 0}
 				</div>
 				<div class="tron-text-muted text-sm">Total Devices</div>
-			</div>
-		</TronCard>
-		<TronCard>
-			<div class="text-center">
-				<div class="font-mono text-3xl font-bold text-[var(--color-tron-green)]">
-					{data.pagination?.fwCartridgesTotal ?? 0}
-				</div>
-				<div class="tron-text-muted text-sm">FW Cartridges</div>
 			</div>
 		</TronCard>
 		<TronCard>
@@ -128,14 +109,6 @@
 			onclick={() => switchTab('devices')}
 		>
 			Devices
-		</button>
-		<button
-			class="px-4 py-2 text-sm font-medium transition-colors {activeTab === 'fwcartridges'
-				? 'border-b-2 border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]'
-				: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
-			onclick={() => switchTab('fwcartridges')}
-		>
-			FW Cartridges
 		</button>
 		<button
 			class="px-4 py-2 text-sm font-medium transition-colors {activeTab === 'events'
@@ -252,50 +225,6 @@
 						{:else}
 							<tr>
 								<td colspan="7" class="tron-text-muted text-center">No devices registered yet.</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
-		</TronCard>
-	{/if}
-
-	<!-- FW Cartridges Tab -->
-	{#if activeTab === 'fwcartridges'}
-		<TronCard>
-			<div class="overflow-x-auto">
-				<table class="tron-table">
-					<thead>
-						<tr>
-							<th>UUID</th>
-							<th>Assay ID</th>
-							<th>Status</th>
-							<th>Lot #</th>
-							<th>Serial #</th>
-							<th>Site</th>
-							<th>Program</th>
-							<th>Experiment</th>
-							<th>Qty</th>
-							<th>Created</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each data.firmwareCartridges ?? [] as cart (cart.id)}
-							<tr>
-								<td class="font-mono text-xs text-[var(--color-tron-cyan)]">{cart.cartridgeUuid}</td>
-								<td>{cart.assayId ?? '—'}</td>
-								<td><TronBadge variant={getCartridgeStatusVariant(cart.status)}>{cart.status}</TronBadge></td>
-								<td class="font-mono text-xs">{cart.lotNumber ?? '—'}</td>
-								<td class="font-mono text-xs">{cart.serialNumber ?? '—'}</td>
-								<td>{cart.siteId ?? '—'}</td>
-								<td>{cart.program ?? '—'}</td>
-								<td>{cart.experiment ?? '—'}</td>
-								<td class="text-center">{cart.quantity ?? '—'}</td>
-								<td class="tron-text-muted text-xs">{formatDate(cart.createdAt)}</td>
-							</tr>
-						{:else}
-							<tr>
-								<td colspan="10" class="tron-text-muted text-center">No firmware cartridges found.</td>
 							</tr>
 						{/each}
 					</tbody>

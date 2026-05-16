@@ -719,23 +719,6 @@
 					</TronCard>
 				</div>
 
-				{#if cd.lab && cd.lab.total > 0}
-					<TronCard>
-						<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Lab Cartridges</h3>
-						<div class="grid gap-3 sm:grid-cols-3">
-							<div class="text-center">
-								<div class="text-xl font-bold text-[var(--color-tron-cyan)]">{cd.lab.total}</div>
-								<div class="text-[10px] text-[var(--color-tron-text-secondary)] uppercase">Total</div>
-							</div>
-							{#each cd.lab.statusCounts as s}
-								<div class="text-center">
-									<div class="text-xl font-bold text-[var(--color-tron-text)]">{s.count}</div>
-									<div class="text-[10px] text-[var(--color-tron-text-secondary)] capitalize">{s.status?.replace(/_/g, ' ') ?? '—'}</div>
-								</div>
-							{/each}
-						</div>
-					</TronCard>
-				{/if}
 			</div>
 		{:else if !cartCollapsed}
 			<div class="px-4 pb-4">

@@ -365,7 +365,7 @@
 				<div class="space-y-1.5">
 					{#each data.expiringSoon as c}
 						{@const days = daysUntil(c.expirationDate)}
-						<a href="/cartridges/{c.id}" class="flex items-center justify-between rounded px-2 py-1.5 hover:bg-[var(--color-tron-surface)] transition-colors">
+						<a href="/cartridge-admin/dhr/{c.id}" class="flex items-center justify-between rounded px-2 py-1.5 hover:bg-[var(--color-tron-surface)] transition-colors">
 							<div class="flex items-center gap-2">
 								<span class="font-mono text-xs text-[var(--color-tron-text)]">{c.id.slice(-8)}</span>
 								<span class="text-xs text-[var(--color-tron-text-secondary)]">{c.assay}</span>
@@ -384,7 +384,7 @@
 			<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Recent Activity</h3>
 			<div class="space-y-1">
 				{#each data.recentActivity as c}
-					<a href="/cartridges/{c.id}" class="flex items-center justify-between rounded px-2 py-1.5 hover:bg-[var(--color-tron-surface)] transition-colors">
+					<a href="/cartridge-admin/dhr/{c.id}" class="flex items-center justify-between rounded px-2 py-1.5 hover:bg-[var(--color-tron-surface)] transition-colors">
 						<div class="flex items-center gap-2">
 							<div class="h-2 w-2 rounded-full" style="background: {phaseColor(c.phase)}"></div>
 							<span class="font-mono text-xs text-[var(--color-tron-text)]">{c.id.slice(-8)}</span>
@@ -406,22 +406,4 @@
 		</TronCard>
 	</div>
 
-	<!-- Lab Cartridges (if any) -->
-	{#if data.lab.total > 0}
-		<TronCard>
-			<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Lab Cartridges</h3>
-			<div class="grid gap-3 sm:grid-cols-3">
-				<div class="text-center">
-					<div class="text-xl font-bold text-[var(--color-tron-cyan)]">{data.lab.total}</div>
-					<div class="text-[10px] text-[var(--color-tron-text-secondary)] uppercase">Total</div>
-				</div>
-				{#each data.lab.statusCounts as s}
-					<div class="text-center">
-						<div class="text-xl font-bold text-[var(--color-tron-text)]">{s.count}</div>
-						<div class="text-[10px] text-[var(--color-tron-text-secondary)] capitalize">{s.status?.replace(/_/g, ' ') ?? '—'}</div>
-					</div>
-				{/each}
-			</div>
-		</TronCard>
-	{/if}
 </div>

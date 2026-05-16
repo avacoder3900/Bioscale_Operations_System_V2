@@ -1,5 +1,5 @@
 import { redirect } from '@sveltejs/kit';
-import { connectDB, CartridgeRecord, LabCartridge, CartridgeGroup, Equipment, BackingLot, WaxFillingRun, ReagentBatchRecord } from '$lib/server/db';
+import { connectDB, CartridgeRecord, Equipment, BackingLot, WaxFillingRun, ReagentBatchRecord } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import type { PageServerLoad } from './$types';
@@ -29,10 +29,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 		ovens,
 		weeklyProduction,
 		assayBreakdown,
-		labStatusCounts,
-		labTypeCounts,
-		labGroups,
-		labTotal,
 		recentWaxRuns,
 		recentReagentRuns
 	] = await Promise.all([
@@ -77,11 +73,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 			{ $group: { _id: '$reagentFilling.assayType.name', count: { $sum: 1 } } },
 			{ $sort: { count: -1 } }
 		]),
-		// Lab cartridges (existing)
-		LabCartridge.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]),
-		LabCartridge.aggregate([{ $group: { _id: '$cartridgeType', count: { $sum: 1 } } }]),
-		CartridgeGroup.find().lean(),
-		LabCartridge.countDocuments(),
 		// Last 7 days of wax + reagent runs — gives the dashboard a per-run
 		// activity view that links into /cartridge-admin?runId=... so the
 		// operator can see every cart in a run with its current state.
@@ -162,13 +153,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 		for (const item of arr) m[item._id] = item.count;
 		return m;
 	};
-
-	// Lab group counts
-	const labGroupCounts = await LabCartridge.aggregate([
-		{ $match: { groupId: { $ne: null } } },
-		{ $group: { _id: '$groupId', count: { $sum: 1 } } }
-	]);
-	const labGroupMap = new Map((labGroups as any[]).map((g: any) => [g._id, g]));
 
 	// Merge wax + reagent runs into one chronologically sorted list. Each entry
 	// is shaped to feed the dashboard's run-history card and to deep-link into
@@ -291,17 +275,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			waxQc: c.waxQc?.status ?? null,
 			updatedAt: c.updatedAt
 		})),
-		recentRuns,
-		// Lab cartridges
-		lab: {
-			total: labTotal,
-			statusCounts: (labStatusCounts as any[]).map((s: any) => ({ status: s._id, count: s.count })),
-			typeCounts: (labTypeCounts as any[]).map((t: any) => ({ type: t._id, count: t.count })),
-			groupSummary: (labGroupCounts as any[]).map((g: any) => {
-				const group = labGroupMap.get(g._id) as any;
-				return { groupName: group?.name ?? 'Unknown', color: group?.color, count: g.count };
-			})
-		}
+		recentRuns
 	};
 };
 

@@ -3,7 +3,7 @@ import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import {
 	connectDB, Spu, Batch, BomItem, ProductionRun, Customer, User, AuditLog, generateId,
-	LabCartridge, CartridgeGroup, CartridgeRecord, Equipment, EquipmentLocation,
+	CartridgeRecord, Equipment, EquipmentLocation,
 	OpentronsRobot, WaxFillingRun, ReagentBatchRecord, AssayDefinition, PartDefinition, BackingLot
 } from '$lib/server/db';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
@@ -149,7 +149,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				const [
 					phaseCounts, totalMfg, totalVoided, waxQcCounts, reagentInspCounts,
 					recentCartridges, expiringCartridges, fridges, ovens, weeklyProduction,
-					assayBreakdown, labStatusCounts, labTypeCounts, labGroups, labTotal
+					assayBreakdown
 				] = await Promise.all([
 					CartridgeRecord.aggregate([
 						{ $match: { status: { $ne: null }, _id: { $nin: checkedOutIds } } },
@@ -179,11 +179,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 						{ $match: { 'reagentFilling.assayType.name': { $exists: true }, _id: { $nin: checkedOutIds } } },
 						{ $group: { _id: '$reagentFilling.assayType.name', count: { $sum: 1 } } },
 						{ $sort: { count: -1 } }
-					]).catch(() => []),
-					LabCartridge.aggregate([{ $group: { _id: '$status', count: { $sum: 1 } } }]).catch(() => []),
-					LabCartridge.aggregate([{ $group: { _id: '$cartridgeType', count: { $sum: 1 } } }]).catch(() => []),
-					CartridgeGroup.find().lean().catch(() => []),
-					LabCartridge.countDocuments().catch(() => 0)
+					]).catch(() => [])
 				]);
 
 				storageCounts = await (async () => {
@@ -221,12 +217,6 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					for (const item of arr) m[item._id] = item.count;
 					return m;
 				};
-
-				const labGroupCounts = await LabCartridge.aggregate([
-					{ $match: { groupId: { $ne: null } } },
-					{ $group: { _id: '$groupId', count: { $sum: 1 } } }
-				]);
-				const labGroupMap = new Map((labGroups as any[]).map((g: any) => [g._id, g]));
 
 				// ── New dashboard queries (each wrapped to prevent one failure from killing all) ──
 				let fridgeCapacityAgg: any[] = [], allRobots: any[] = [], activeWaxRuns: any[] = [];
@@ -334,15 +324,6 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 						waxQc: c.waxQc?.status ?? null,
 						updatedAt: c.updatedAt
 					})),
-					lab: {
-						total: labTotal,
-						statusCounts: (labStatusCounts as any[]).map((s: any) => ({ status: s._id, count: s.count })),
-						typeCounts: (labTypeCounts as any[]).map((t: any) => ({ type: t._id, count: t.count })),
-						groupSummary: (labGroupCounts as any[]).map((g: any) => {
-							const group = labGroupMap.get(g._id) as any;
-							return { groupName: group?.name ?? 'Unknown', color: group?.color, count: g.count };
-						})
-					},
 					fridgeCapacity: (fridges as any[]).map((f: any) => {
 						const key = f.barcode ?? f.name ?? String(f._id);
 						const agg = (fridgeCapacityAgg as any[]).find((a: any) => a._id === key || a._id === f.name || a._id === f.barcode);
