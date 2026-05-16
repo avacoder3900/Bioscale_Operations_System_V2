@@ -1846,3 +1846,30 @@ when `data` changes during the component's lifetime. That's intentional
 here: the optimistic local state IS the source of truth while the page
 is open. The invalidation ensures the SERVER data catches up so future
 remounts start from the correct baseline.
+
+### Follow-up — Nav cleanup on kanban layout (same session)
+
+Removed "Main Site" link and "Logout" form from the kanban header nav.
+They were duplicate affordances — the global app navigation already
+covers both. Cleanup also drops the now-unused `enhance` import and
+`loggingOut` state from the layout.
+
+- `src/routes/kanban/+layout.svelte` — 50 lines deleted.
+
+### Session end state
+
+`feature/kanban-improvement` is at 9 commits on top of `dev`:
+- d0fd483  feat: kanban auto-archive (PRD + per-task fix + cron)
+- b3198c1  feat: archived view Completed column + sortable headers
+- 88b7c1b  docs: progress entry
+- 32cbaf2  feat: collapsible backlog (default collapsed)
+- a223f8e  feat: persist project + backlog collapse globally
+- dd36550  docs: cartridge one-off entry
+- d172251  fix: keepalive + retry on UI-state POSTs
+- 8938e9f  fix: invalidate layout after UI-state POST (sibling-route cache bug)
+- a0071b9  chore: remove Main Site + Logout from kanban nav
+
+Side errand: 16 cartridge records flipped stored → completed via
+`scripts/oneoff-cartridge-stored-to-completed.ts` (unstaged).
+
+One-time manual archive run: 298 done kanban tasks archived.
