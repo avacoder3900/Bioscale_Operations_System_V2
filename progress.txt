@@ -1660,3 +1660,83 @@ admin re-auth required. Real BackingLot inventory untouched.
   for this whole workstream.
 - Vercel dev preview points at master via the nested checkout. Local
   dev server is the only path that can reach the OT-2.
+
+
+## Session 2026-05-15/16 — CV Refactor (cartridge-first)
+
+### Worktree
+- New worktree at `C:/Users/jacobq/Documents/GitHub/Bioscale_Operations_System_V2-cv` on branch `feature/cv-followups` (from `origin/dev`).
+- Setup commits:
+  - `2378f28` chore(cart-dashboard): drop linked/underway/completed from pipeline graphic.
+  - `1073cdb` chore(cv): wipe all cv_projects, null projectId on all images — cartridge-first reset. Includes one-time `scripts/wipe-cv-projects-cartridge-first.ts` and full pre-wipe ledger at `docs/CV-PROJECT-LEDGER-2026-05-16T02-41-34.md` (27 projects, 1445 images).
+- Pre-existing on dev: LabCartridge / CartridgeGroup / FirmwareCartridge models and dead routes deleted (LabCartridge collection was empty; FirmwareCartridge also empty but referenced by /devices + /assays/[id] tabs which were also trimmed). Sidebar Cartridge Registry entries removed from main + SPU layouts.
+
+### Architectural pivot
+- Old model: CvImage.projectId required → image existed FOR a project. Induction auto-created CartridgeRecord when CV saw a new QR.
+- New model: image identity = cartridge + phase + capturedAt. Projects became composable training sets that own (and deploy) a model. Induction is gone.
+- Mongo state after migration: cv_projects=0, cv_images=1445 (projectId nulled, label→qcLabel, cartridgeImageNumber minted for the 581 with cartridge tags), cv_inspections=0, cartridge_records.photoSequence initialized on all 11,607.
+
+### PRDs
+- `docs/prds/CV-REFACTOR-1-IMAGE-MODEL.md` — schema diff for CvImage / CvProject / CvInspection / CartridgeRecord, migration plan, endpoint impact.
+- `docs/prds/CV-REFACTOR-2-CAPTURE-PIPELINE.md` — hardware scanner sticky-context flow, /capture page, inline manufacturing buttons, R&D forensic capture.
+- `docs/prds/CV-REFACTOR-3-PROJECT-AS-MODEL.md` — composability rules, append-only versioning, phase-X auto-inference, A/B shadow mode.
+- `docs/prds/CV-REFACTOR-4-ADMIN-UIS.md` — /cv/stream chronological feed, /cv/label search-driven labeling, /cv/projects rebuild with 4 tabs.
+
+### Schema changes (commit `398f02c`)
+- CvImage: dropped projectId + sampleId. cartridgeTag.{cartridgeRecordId, phase} now required. Added cartridgeImageNumber, capturedBy, qcLabel (renamed from label), qcLabeledBy, qcLabeledAt.
+- CvProject: added members[], composedOf[], isLiveComposition, deployAtPhases[], trainedModels[] (append-only), activeModelVersion, shadowModelVersion. Dropped isMasterModel, imageCount, annotatedCount, phases, labels, projectType, modelStatus, modelVersion, top-level confidenceThreshold.
+- CvInspection: required modelVersion + modelPath + isShadow + phase + cartridgeRecordId. Added triggeredBy, triggeredAt.
+- CartridgeRecord: added photoSequence atomic counter. Added cartridgeImageNumber to photos[] subdoc.
+- Migration: `scripts/migrate-cv-image-model.ts` is idempotent (dry-run by default, --apply to commit).
+
+### Capture endpoints (commit `398f02c`)
+- POST /api/cv/capture (new) — multipart cartridge-first capture. Validates cartridge, mints sequence number atomically, uploads via R2 worker.
+- POST /api/cv/images/record — projectId now optional, cartridgeTag required, 2-photo-per-stage cap dropped (operator captures front/back/side).
+- POST /api/cv/images/presign — projectId optional; defaults R2 key prefix to `cv/captures/...`.
+- POST /api/cv/capture-ingest — silently ignores legacy projectId from Python scripts; rejects orphan scans (cartridge must exist; no auto-induct).
+- PATCH /api/cv/images/[id]/link-cartridge — retroactive legacy-image linking, orphan-reject, 409 if already tagged.
+- PATCH /api/cv/images/[id]/label — uses qcLabel now; no longer maintains CvProject.annotatedCount.
+- GET /api/cv/lookup-cartridge — returns 404 on missing cartridge; no more auto-phase-advancement.
+- DELETED: /api/cv/induct-cartridge.
+
+### Admin UIs (commits `65d1ebe`, `b848bf8`)
+- /capture — dedicated capture station with hardware-scanner sticky context. Hidden autofocused input receives barcode wedge keystrokes (refocused every 500ms); Enter resolves cartridge; Space (or button) snapshots video and POSTs to /api/cv/capture. Just-captured strip with thumbnails. Phase dropdown.
+- /cv/stream — chronological feed of every CvImage. Filter by phase, cartridge id (regex), date range, qcLabel. Lightbox with keyboard navigation. Replaces /cv/gallery.
+- /cv/label — search-driven labeling. Filter cartridges by assay / wax run / reagent run / operator / status / date / image phase / qcLabel state. Two-stage Mongo query (CartridgeRecord match → CvImage restrict). Bulk approve / reject / clear-label and Add-selected-to-project actions. Audit-logged.
+- /cv/projects (list) — project cards, "+ New project" inline form.
+- /cv/projects/[id] (rebuilt) — tabs: Members | Composition | Deployment | History. Members shows preview + remove-from-direct-members. Composition supports composedOf with isLiveComposition toggle; cycle guard. Deployment: deployAtPhases checkboxes + activeModelVersion/shadowModelVersion selects + clear-shadow action. History: trainedModels table + recent CvInspection rows (active vs shadow).
+- /cv → 302 redirect to /cv/stream (was dashboard).
+- CV layout nav updated.
+- CaptureButton component at `src/lib/components/cv/CaptureButton.svelte` — drop-in for inline manufacturing capture (not yet wired into wax-fill / reagent-fill / top-seal pages).
+
+### Deleted routes (broken under new schema)
+- /cv/gallery, /cv/inspect, /cv/history, /cv/master, /cv/training, /cv/cartridge/[id].
+
+### Inference loop (commit `163a8c4`)
+- `src/lib/server/cv/resolve-project-members.ts` — recursive composition resolver (MAX_DEPTH=5, cycle-safe). Returns { direct, composed, all, cycleSkipped }. Only recurses when isLiveComposition===true.
+- `src/lib/server/cv/run-inference.ts` — `runInferenceForProject` runs active + (optional) shadow model against one image; creates CvInspection records (isShadow flag distinguishes). `runPhaseInference` finds every project deploying at a given phase and fans out.
+- POST /api/cv/train — pulls members via resolver, filters to qcLabel != null, mints version `{iso}_{4-char}`, writes new trainedModels[] entry BEFORE worker fires, modelOutputKey = `cv/{projectId}/models/{version}.onnx` (never overwrites). Does NOT auto-promote.
+- POST /api/cv/infer — manual one-off inference path. Optional `version` to test a non-active version. Skips shadow on manual override.
+- /api/cv/capture and /api/cv/capture-ingest now fire `runPhaseInference()` fire-and-forget after creating the image doc. Errors logged but never block the capture response.
+
+### Type check
+- 11 svelte-check errors at every checkpoint; all pre-existing (r2.ts Buffer overload, AskBimsWidget literal-type comparison, assembly/[sessionId] implicit-any params, wi-01 bucketBarcode). Zero introduced by this refactor.
+
+### What still needs work
+- CV worker integration not end-to-end verified. CV_WORKER_URL env var must be set on Vercel; if worker is down, training and inference 502 but capture still succeeds.
+- CaptureButton not wired into manufacturing pages (one-line drop-in per WI page; deferred so operator can pick placement).
+- Python `camera_capture.py` scripts still POST to /api/cv/capture-ingest with the same payload — works, BUT they now reject if the scanned cartridge doesn't exist in BIMS. Bench operators may need to register cartridges upstream first.
+- R&D forensic capture path (`/cv/forensic-capture`, phase=post_run) is in PRD 2 but not built. Use /capture with phase=post_run as a workaround for now.
+- No CV contract tests yet (whole CV stack has zero tests — was true before refactor, still true).
+
+### Reference docs added
+- `docs/CV-PROJECT-LEDGER-2026-05-16T02-41-34.md` — pre-wipe ledger of all 27 deleted projects + their 1445 images (snapshot of project→image membership; reconstructible by hand if needed).
+- `docs/CV-REFACTOR-HANDOFF.md` — Monday quick-start: what's live, what's deferred, how to test each piece.
+
+### Commit chain on feature/cv-followups
+- 2378f28 chore(cart-dashboard): drop linked/underway/completed phases
+- 1073cdb chore(cv): wipe all cv_projects, null projectId
+- 398f02c feat(cv): cartridge-first refactor — PRDs + schema + capture endpoints
+- 65d1ebe feat(cv): /cv/stream + /capture (hardware scanner)
+- b848bf8 feat(cv): /cv/label + /cv/projects rebuild + dead route cleanup
+- 163a8c4 feat(cv): inference loop — versioned training + phase-X auto-inference + A/B shadow
