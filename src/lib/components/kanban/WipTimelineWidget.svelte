@@ -111,6 +111,63 @@
 		return `${start} → ${end}`;
 	}
 
+	/** Format YYYY-MM-DD → DD/MM/YY for the date label next to day tabs. */
+	function formatDayShort(iso: string): string {
+		const [y, m, d] = iso.split('-');
+		return `${d}/${m}/${y.slice(2)}`;
+	}
+
+	/** Today in the browser's local timezone, YYYY-MM-DD. Used to gate the "now" line. */
+	function todayLocal(): string {
+		const d = new Date();
+		const y = d.getFullYear();
+		const m = String(d.getMonth() + 1).padStart(2, '0');
+		const day = String(d.getDate()).padStart(2, '0');
+		return `${y}-${m}-${day}`;
+	}
+
+	let isToday = $derived(data.day === todayLocal());
+
+	// Position of the "now" line in pixels from the left edge of the inner grid.
+	// Recomputed every minute (and on mount) so the line marches across the day.
+	const LABEL_WIDTH_PX = 128; // matches `w-32` on the person-label column
+	const OVERFLOW_CELL_PX = 32;
+	const REGULAR_CELL_PX = 18;
+
+	function computeNowLeftPx(): number {
+		const n = new Date();
+		const minutesFromMidnight = n.getHours() * 60 + n.getMinutes();
+		const sevenAm = 7 * 60;
+		const sixPm = 18 * 60;
+
+		// Before 7 AM — position within the "<7a" overflow cell
+		if (minutesFromMidnight < sevenAm) {
+			const frac = minutesFromMidnight / sevenAm;
+			return LABEL_WIDTH_PX + frac * OVERFLOW_CELL_PX;
+		}
+		// After 6 PM — position within the ">6p" overflow cell
+		if (minutesFromMidnight >= sixPm) {
+			const overflowSpan = 24 * 60 - sixPm;
+			const frac = Math.min(1, (minutesFromMidnight - sixPm) / overflowSpan);
+			return LABEL_WIDTH_PX + OVERFLOW_CELL_PX + 44 * REGULAR_CELL_PX + frac * OVERFLOW_CELL_PX;
+		}
+		// In the regular 7am-6pm window
+		const minutesFrom7 = minutesFromMidnight - sevenAm;
+		return LABEL_WIDTH_PX + OVERFLOW_CELL_PX + (minutesFrom7 / 15) * REGULAR_CELL_PX;
+	}
+
+	let nowLeftPx = $state(0);
+	let nowTickTimer: ReturnType<typeof setInterval> | null = null;
+	onMount(() => {
+		nowLeftPx = computeNowLeftPx();
+		nowTickTimer = setInterval(() => {
+			nowLeftPx = computeNowLeftPx();
+		}, 60_000); // every minute
+	});
+	onDestroy(() => {
+		if (nowTickTimer) clearInterval(nowTickTimer);
+	});
+
 	/** Distinct task titles in a lane, preserving order of first appearance. */
 	function laneTasks(lane: WipLane): WipSegment[] {
 		const seen = new Set<string>();
@@ -127,20 +184,25 @@
 <div class="tron-card p-4">
 	<div class="mb-3 flex items-center justify-between">
 		<h3 class="tron-text-primary text-sm font-bold">Daily WIP Timeline</h3>
-		<div class="flex gap-1">
-			{#each weekDays as d}
-				{@const active = data.day === d.iso}
-				<button
-					type="button"
-					class="h-7 w-7 rounded text-[10px] font-bold transition-all {active
-						? 'bg-[var(--color-tron-cyan)] text-[var(--color-tron-bg-primary)]'
-						: 'border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
-					title={d.iso}
-					onclick={() => setDay(d.iso)}
-				>
-					{d.label}
-				</button>
-			{/each}
+		<div class="flex items-center gap-3">
+			<span class="text-xs font-mono tron-text-muted" title={data.day}>
+				{formatDayShort(data.day)}
+			</span>
+			<div class="flex gap-1">
+				{#each weekDays as d}
+					{@const active = data.day === d.iso}
+					<button
+						type="button"
+						class="h-7 w-7 rounded text-[10px] font-bold transition-all {active
+							? 'bg-[var(--color-tron-cyan)] text-[var(--color-tron-bg-primary)]'
+							: 'border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
+						title={d.iso}
+						onclick={() => setDay(d.iso)}
+					>
+						{d.label}
+					</button>
+				{/each}
+			</div>
 		</div>
 	</div>
 
@@ -150,7 +212,15 @@
 		</p>
 	{:else}
 		<div class="overflow-x-auto">
-			<div class="inline-block min-w-full">
+			<div class="relative inline-block min-w-full">
+				{#if isToday}
+					<!-- "Now" line — vertical marker at the current time, only on today's chart. -->
+					<div
+						class="pointer-events-none absolute top-6 bottom-0 w-px"
+						style="left: {nowLeftPx}px; background: var(--color-tron-cyan); z-index: 5; box-shadow: 0 0 6px var(--color-tron-cyan);"
+						title="Now"
+					></div>
+				{/if}
 				<!-- Header row -->
 				<div class="flex border-b border-[var(--color-tron-border)] pb-1 text-[9px] text-[var(--color-tron-text-secondary)]">
 					<div class="sticky left-0 w-32 shrink-0 pr-2 text-right">time →</div>

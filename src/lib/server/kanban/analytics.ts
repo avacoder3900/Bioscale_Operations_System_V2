@@ -448,7 +448,6 @@ function assignLanes(
 async function computeWipTimeline(allTasks: any[], dayStartMs: number, day: string): Promise<WipTimelineData> {
 	const dayEndMs = dayStartMs + 24 * 3600_000;
 	const now = Date.now();
-	const effectiveEndMs = Math.min(dayEndMs, day === new Date().toISOString().slice(0, 10) ? now : dayEndMs);
 
 	// Build per-assignee segment list
 	type AccPerson = { userId: string; username: string; segments: WipSegment[] };
@@ -462,13 +461,18 @@ async function computeWipTimeline(allTasks: any[], dayStartMs: number, day: stri
 		const intervals = extractWipIntervals(task);
 		for (const iv of intervals) {
 			const enter = iv.enterMs;
-			const exit = iv.exitMs ?? effectiveEndMs;
+			// Cap still-in-WIP intervals at `now`, not the chart day's end. This
+			// stops future-day views from showing "predicted" activity for tasks
+			// that are currently still in WIP. Past-day views still fill normally
+			// since `now` will be > that day's dayEndMs.
+			const exit = iv.exitMs ?? now;
 			// Skip intervals that don't overlap with today
 			if (exit <= dayStartMs) continue;
 			if (enter >= dayEndMs) continue;
 
 			const clippedStart = Math.max(enter, dayStartMs);
 			const clippedEnd = Math.min(exit, dayEndMs);
+			if (clippedEnd <= clippedStart) continue;
 
 			const seg: WipSegment = {
 				taskId: task._id,
