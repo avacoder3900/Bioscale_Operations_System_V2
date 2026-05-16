@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { invalidateAll } from '$app/navigation';
+	import { invalidate, invalidateAll } from '$app/navigation';
 	import TronButton from '$lib/components/ui/TronButton.svelte';
 	import KanbanColumn from '$lib/components/kanban/KanbanColumn.svelte';
 	import CreateTaskModal from '$lib/components/kanban/CreateTaskModal.svelte';
@@ -121,7 +121,12 @@
 
 		try {
 			const res = await fetch(url, opts);
-			if (res.ok) return true;
+			if (res.ok) {
+				// Refresh the layout's cached projects so sibling-route navigation
+				// (/kanban → /kanban/list → /kanban) sees the new value.
+				invalidate('kanban:projects');
+				return true;
+			}
 			// 4xx won't be fixed by retry (auth, validation). 5xx might be a
 			// Vercel cold-start or transient blip — fall through to retry.
 			if (res.status < 500) return false;
@@ -132,7 +137,11 @@
 		await new Promise((r) => setTimeout(r, 500));
 		try {
 			const res = await fetch(url, opts);
-			return res.ok;
+			if (res.ok) {
+				invalidate('kanban:projects');
+				return true;
+			}
+			return false;
 		} catch {
 			return false;
 		}

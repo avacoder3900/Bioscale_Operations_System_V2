@@ -3,9 +3,16 @@ import { requirePermission } from '$lib/server/permissions';
 import { connectDB, KanbanProject, User } from '$lib/server/db';
 import type { LayoutServerLoad } from './$types';
 
-export const load: LayoutServerLoad = async ({ locals }) => {
+export const load: LayoutServerLoad = async ({ locals, depends }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'kanban:read');
+
+	// Tag for `invalidate('kanban:projects')` calls from the client so this
+	// layout re-runs after a UI-state POST mutates KanbanProject. Without this,
+	// the layout's `data.projects` would stay stale across sibling-route
+	// navigations (e.g., /kanban → /kanban/list → /kanban) because SvelteKit
+	// caches layout data by default.
+	depends('kanban:projects');
 
 	await connectDB();
 
