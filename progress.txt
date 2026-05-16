@@ -1912,3 +1912,28 @@ having the enforcement PRD shipped first (so violation lanes have meaning).
 Open items flagged in PRDs:
 - Confirm first X-axis bucket is 7:00 vs 7:15 (Jacob wrote 7:15).
 - Admin override permission for WIP limit — out of v1, follow-up.
+
+### Follow-up — PRD finalization + Foundation scaffold (same session)
+
+PRDs finalized after Jacob's confirmations:
+- WIP-TIMELINE: first regular bucket is 7:00 (confirmed).
+- WIP-LIMIT-ENFORCEMENT: nobody (including admins) bypasses the limit;
+  user-edit form lives at `/admin/users` not `/spu/admin/users/[id]`.
+
+Foundation implementation kicked off (PRD KANBAN-ANALYTICS-FOUNDATION):
+- `npm install chart.js svelte-chartjs` — 317 packages added.
+- `src/lib/server/kanban/analytics.ts` — shared aggregator with
+  `AnalyticsRange`, `loadAnalyticsData()`, range parsing. Returns
+  `{ range, since, taskCount }` scaffold; sibling PRDs will extend.
+- `src/routes/kanban/analytics/+page.server.ts` — load function with
+  `requirePermission('kanban:read')`, `depends('kanban:analytics')`,
+  range param parsing.
+- `src/routes/kanban/analytics/+page.svelte` — page shell with date
+  range selector (7d/30d/90d/All) and 5 dashed-border placeholder
+  sections labeled by sibling PRD.
+- `src/routes/kanban/+layout.svelte` — Analytics nav link added after
+  Archive.
+
+`npm run check`: 11 errors (down from 26 — chart.js types resolved
+several pre-existing missing-module errors), 0 new errors from changed
+files.

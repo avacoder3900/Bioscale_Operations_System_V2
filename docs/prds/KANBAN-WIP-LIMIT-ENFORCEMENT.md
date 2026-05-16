@@ -19,7 +19,7 @@ Block any move-to-`wip` action that would push the assignee over their `wipLimit
 - Limits on backlog / ready / waiting counts. Only `wip` is capped.
 - Per-project WIP limits (different projects might warrant different caps — out of scope).
 - Soft warnings or "are you sure" confirmations — this is a hard block.
-- Bypass mechanism for admins. (Easy follow-up; not in v1.)
+- Bypass mechanism — **nobody** can override the limit, including admins. Decision confirmed 2026-05-15.
 
 ## Scope
 
@@ -82,9 +82,9 @@ Component: `src/lib/components/kanban/WipLimitModal.svelte`. Triggered from boar
 
 ### 4. Admin UI
 
-Add a `wipLimit` field to the user edit form in `src/routes/spu/admin/users/[id]/+page.svelte` (or wherever user editing lives — confirm before wiring). Number input, default 3, range 0–50. Audit-logged like other user changes.
+Add a `wipLimit` field to the user edit form in `src/routes/admin/users/+page.svelte` (or wherever user editing lives — confirm before wiring). Number input, default 3, range 0–50. Audit-logged like other user changes.
 
-> Confirmation needed: location of user-edit form. Per memory it's `src/routes/spu/admin/users/+page.server.ts`. PRD assumes that's right.
+> **Confirmed 2026-05-15**: admin lives at `src/routes/admin/users/+page.{svelte,server.ts}` — a single page with form actions for create/update/deactivate. Add a new `updateWipLimit` action (kept separate from `updateProfile` because wipLimit is kanban-specific, not contact info).
 
 ## Decisions
 
@@ -92,7 +92,7 @@ Add a `wipLimit` field to the user edit form in `src/routes/spu/admin/users/[id]
 - **Unassigned tasks bypass the check**. No assignee → no quota to enforce.
 - **Idempotent re-move** (clicking move-to-wip on a task already in wip): the `_id: { $ne: taskId }` exclusion in the count makes this a no-op rather than a 409.
 - **HTTP status**: 409 Conflict — accurate semantics for "current state prevents this action."
-- **No bypass in v1**. Admin override is a separate PRD if needed.
+- **No bypass for anyone, ever.** Even admins are blocked. Confirmed 2026-05-15.
 
 ## Acceptance criteria
 
@@ -118,8 +118,8 @@ Add a `wipLimit` field to the user edit form in `src/routes/spu/admin/users/[id]
 | `src/routes/api/kanban/move/+server.ts` | Call guard in POST handler |
 | `src/routes/kanban/+page.svelte` | Show modal on 409 from drag-drop fetch |
 | `src/lib/components/kanban/WipLimitModal.svelte` | New |
-| `src/routes/spu/admin/users/[id]/+page.svelte` (or equivalent) | Add wipLimit number input |
-| `src/routes/spu/admin/users/[id]/+page.server.ts` | Accept + validate `wipLimit` field; audit-log |
+| `src/routes/admin/users/+page.svelte` (or equivalent) | Add wipLimit number input |
+| `src/routes/admin/users/+page.server.ts` | Accept + validate `wipLimit` field; audit-log |
 | `docs/prds/KANBAN-WIP-LIMIT-ENFORCEMENT.md` | This doc |
 
 ## Risk / rollback
@@ -128,7 +128,6 @@ Add a `wipLimit` field to the user edit form in `src/routes/spu/admin/users/[id]
 - **Race condition**: two simultaneous moves could both pass the check then both write, exceeding the limit by 1. Mitigation: use a Mongo `findOneAndUpdate` with a count predicate, or accept the rare race (re-checked on next page load). Acceptable for v1.
 - **Rollback**: remove `assertWipLimitOk()` calls. Schema field stays unused.
 
-## Open questions
+## Open questions (deferred — not blocking implementation)
 
-- **Admin override**: should a permission `kanban:admin` allow bypassing the limit? Currently the permission exists in SECURITY.md but is never used. Easy to wire as a follow-up.
 - **Modal copy**: should it suggest WHICH of the current WIP tasks to move? (E.g., highlight oldest.) v1: just list them.
