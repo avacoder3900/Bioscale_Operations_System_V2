@@ -4,6 +4,7 @@ import {
 	connectDB,
 	ReagentLot,
 	ReagentProtocolTemplate,
+	ReagentInventory,
 	AuditLog,
 	User,
 	generateId
@@ -15,6 +16,17 @@ import type { PageServerLoad, Actions } from './$types';
  * Recursive upstream-lot walk. Builds the lineage tree the detail page
  * renders. Capped at depth=4 and tracks seen ids to short-circuit cycles
  * (theoretical — shouldn't happen but cheap safety).
+ *
+ * Cross-mode traversal: when an input is of source 'reagent_inventory', we
+ * fetch the inventory row and follow whichever parent backlink it has:
+ *  - preparedFromReagentLotId → recurse into another ReagentLot (BIMS)
+ *  - preparedFromExecutionId → render a leaf labelled with the research-v2
+ *    execution id (we don't recurse into research-v2 executions from here
+ *    because their structure differs; cross-app lineage UI can drill in
+ *    via the traceability API).
+ *  - Neither set → render as stock/manual leaf.
+ *
+ * Source 'stock' / 'receiving_lot' / 'manual' render as leaves with no recursion.
  */
 type LineageNode = {
 	_id: string;
@@ -26,6 +38,10 @@ type LineageNode = {
 	startedAt: string | null;
 	finalizedAt: string | null;
 	materialKey?: string;
+	// For non-reagent_lot leaves: tag what kind of upstream this is so the UI
+	// can render appropriately (e.g., "research-v2 execution", "stock vial").
+	leafKind?: 'inventory_stock' | 'inventory_research_v2' | 'stock' | 'receiving_lot' | 'manual';
+	leafLabel?: string;
 	children: LineageNode[];
 	depthCapped?: boolean;
 };
@@ -48,13 +64,91 @@ async function buildLineage(lot: any, depth = 0, seen = new Set<string>()): Prom
 	}
 	seen.add(String(lot._id));
 	for (const il of lot.inputLots ?? []) {
-		if (il.source !== 'reagent_lot' || !il.sourceId) continue;
+		if (!il.sourceId) continue;
 		if (seen.has(il.sourceId)) continue;
-		const parent = await ReagentLot.findById(il.sourceId).lean();
-		if (!parent) continue;
-		const child = await buildLineage(parent, depth + 1, seen);
-		child.materialKey = il.materialKey;
-		node.children.push(child);
+
+		if (il.source === 'reagent_lot') {
+			const parent = await ReagentLot.findById(il.sourceId).lean();
+			if (!parent) continue;
+			const child = await buildLineage(parent, depth + 1, seen);
+			child.materialKey = il.materialKey;
+			node.children.push(child);
+			continue;
+		}
+
+		if (il.source === 'reagent_inventory') {
+			const inv = (await ReagentInventory.findById(il.sourceId).lean()) as any;
+			if (!inv) continue;
+			seen.add(String(il.sourceId));
+
+			// Prefer the BIMS-lot backlink; if present, recurse into that lot.
+			if (inv.preparedFromReagentLotId) {
+				if (seen.has(inv.preparedFromReagentLotId)) continue;
+				const parent = await ReagentLot.findById(inv.preparedFromReagentLotId).lean();
+				if (parent) {
+					const child = await buildLineage(parent, depth + 1, seen);
+					child.materialKey = il.materialKey;
+					node.children.push(child);
+					continue;
+				}
+			}
+
+			// Research-v2 origin: render as a leaf with enough metadata to
+			// link out via the traceability API. We don't recurse into
+			// ProtocolExecution from here.
+			if (inv.preparedFromExecutionId) {
+				node.children.push({
+					_id: String(il.sourceId),
+					lotBarcode: String(il.sourceId),
+					templateName: inv.catalogName ?? il.label ?? '(research-v2 prep)',
+					templateSlug: '',
+					operator: inv.preparedBy ?? '—',
+					status: inv.status ?? 'active',
+					startedAt: null,
+					finalizedAt: null,
+					materialKey: il.materialKey,
+					leafKind: 'inventory_research_v2',
+					leafLabel: `Prepared via research-v2 execution ${inv.preparedFromExecutionId}`,
+					children: []
+				});
+				continue;
+			}
+
+			// Inventory row exists but has no upstream prep — treat as stock vial.
+			node.children.push({
+				_id: String(il.sourceId),
+				lotBarcode: String(il.sourceId),
+				templateName: inv.catalogName ?? il.label ?? '(stock vial)',
+				templateSlug: '',
+				operator: inv.enteredBy ?? '—',
+				status: inv.status ?? 'active',
+				startedAt: null,
+				finalizedAt: null,
+				materialKey: il.materialKey,
+				leafKind: 'inventory_stock',
+				leafLabel: inv.manufacturerLotId
+					? `Stock vial (mfr lot ${inv.manufacturerLotId})`
+					: 'Stock vial',
+				children: []
+			});
+			continue;
+		}
+
+		// 'stock' / 'receiving_lot' / 'manual' — render as leaf with no recursion.
+		node.children.push({
+			_id: String(il.sourceId),
+			lotBarcode: il.barcode ?? String(il.sourceId),
+			templateName: il.label ?? il.source ?? '(input)',
+			templateSlug: '',
+			operator: '—',
+			status: '',
+			startedAt: null,
+			finalizedAt: null,
+			materialKey: il.materialKey,
+			leafKind: il.source as 'stock' | 'receiving_lot' | 'manual',
+			leafLabel: il.label ?? il.source ?? '',
+			children: []
+		});
 	}
 	return node;
 }
@@ -80,11 +174,22 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 
 	const lineage = await buildLineage(lot);
 
+	// Output inventory tubes produced by this lot (finalize creates these).
+	// Two-way lookup: outputs[] subdoc on the lot AND reverse-lookup against
+	// reagent_inventory for completeness (covers aliquots added post-finalize).
+	const outputTubes = await ReagentInventory.find({ preparedFromReagentLotId: (lot as any)._id })
+		.select(
+			'_id catalogId catalogName concentration concentrationUnit volume initialVolume status location preparedDate preparedBy source'
+		)
+		.sort({ createdAt: 1 })
+		.lean();
+
 	return {
 		lot: JSON.parse(JSON.stringify(lot)),
 		template: JSON.parse(JSON.stringify(template)),
 		candidateLots: JSON.parse(JSON.stringify(candidateLots)),
-		lineage: JSON.parse(JSON.stringify(lineage))
+		lineage: JSON.parse(JSON.stringify(lineage)),
+		outputTubes: JSON.parse(JSON.stringify(outputTubes))
 	};
 };
 
@@ -320,15 +425,145 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-	/** Finalize the lot — sacred middleware locks further mutations. */
-	finalize: async ({ params, locals }) => {
+	/**
+	 * Finalize the lot. Physical barcode flow:
+	 *  - Operator has labelled 0+ output tubes with physical barcodes.
+	 *  - Form submits `outputs` as a JSON array of
+	 *    { barcode, outputSpecKey?, concentration?, concentrationUnit?,
+	 *      volume?, volumeUnit?, notes? }.
+	 *  - For each entry with a non-empty barcode, this action creates a
+	 *    ReagentInventory row (`_id = barcode`, `type='prepared'`,
+	 *    `preparedFromReagentLotId = lot._id`, `source='bims'`, catalog
+	 *    resolved from template.outputSpec(s)).
+	 *  - Empty outputs[] is valid (lot finalizes without producing any
+	 *    tubes — e.g., a failed run that still needs to be locked).
+	 *  - Then status flips to 'finalized', finalizedAt is set, and sacred
+	 *    middleware locks subsequent mutations except via corrections[].
+	 *
+	 * Catalog resolution per output:
+	 *   - If output.outputSpecKey is provided, match against
+	 *     template.outputSpecs[].key for catalogId.
+	 *   - Otherwise fall back to template.outputSpec.catalogId.
+	 *   - If neither resolves, output is rejected (operator must finish
+	 *     authoring the template before finalizing real lots against it).
+	 */
+	finalize: async ({ request, params, locals }) => {
 		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
 		const lot = await ensureLot(params.lotId!);
 		if (lot.status === 'finalized') return { success: true, alreadyFinal: true };
 		if (lot.status === 'voided') return fail(400, { error: 'Cannot finalize a voided lot.' });
 
+		const data = await request.formData();
+		const outputsJson = data.get('outputs')?.toString() ?? '[]';
+		let outputs: Array<{
+			barcode?: string;
+			outputSpecKey?: string;
+			concentration?: number;
+			concentrationUnit?: string;
+			volume?: number;
+			volumeUnit?: string;
+			notes?: string;
+		}> = [];
+		try {
+			const parsed = JSON.parse(outputsJson);
+			if (!Array.isArray(parsed)) throw new Error('outputs must be an array');
+			outputs = parsed;
+		} catch (e) {
+			return fail(400, { error: `Malformed outputs payload: ${(e as Error).message}` });
+		}
+
+		// Filter to non-empty barcodes only — empties are dropped, not errors.
+		const tubes = outputs
+			.map((o) => ({ ...o, barcode: o.barcode?.trim() ?? '' }))
+			.filter((o) => o.barcode.length > 0);
+
+		// Validate uniqueness within the submission.
+		const seen = new Set<string>();
+		for (const t of tubes) {
+			if (seen.has(t.barcode)) {
+				return fail(400, { error: `Duplicate barcode in submission: ${t.barcode}` });
+			}
+			seen.add(t.barcode);
+		}
+
+		// Resolve catalog for each tube before any writes.
+		const template = await ReagentProtocolTemplate.findById((lot as any).templateId).lean();
+		if (!template) {
+			return fail(400, { error: 'Template missing — cannot resolve output catalog.' });
+		}
+		const outputSpecs = ((template as any).outputSpecs ?? []) as Array<{
+			key: string;
+			catalogId?: string;
+		}>;
+		const fallbackCatalogId = (template as any).outputSpec?.catalogId ?? '';
+
+		const resolved: Array<{ tube: (typeof tubes)[number]; catalogId: string }> = [];
+		for (const tube of tubes) {
+			let catalogId = '';
+			if (tube.outputSpecKey) {
+				const spec = outputSpecs.find((s) => s.key === tube.outputSpecKey);
+				catalogId = spec?.catalogId ?? '';
+			}
+			if (!catalogId) catalogId = fallbackCatalogId;
+			if (!catalogId) {
+				return fail(400, {
+					error: `Cannot resolve catalogId for output barcode ${tube.barcode}. Template's outputSpec(s) need a catalogId.`
+				});
+			}
+			resolved.push({ tube, catalogId });
+		}
+
+		// Validate barcodes aren't already in inventory.
+		if (resolved.length > 0) {
+			const existing = await ReagentInventory.find({ _id: { $in: resolved.map((r) => r.tube.barcode) } })
+				.select('_id')
+				.lean();
+			if (existing.length > 0) {
+				const dupes = existing.map((e: any) => e._id).join(', ');
+				return fail(400, { error: `Barcodes already exist in inventory: ${dupes}` });
+			}
+		}
+
 		const now = new Date();
+		const operatorRefDoc = { _id: locals.user!._id, username: locals.user!.username };
+
+		// Create inventory rows BEFORE locking the lot. If any insert fails,
+		// the lot stays in_progress and the operator can retry.
+		for (const { tube, catalogId } of resolved) {
+			await ReagentInventory.create({
+				_id: tube.barcode,
+				catalogId,
+				catalogName: '', // backfill from catalog lookup is a follow-up; not blocking
+				type: 'prepared',
+				preparedFromReagentLotId: lot._id,
+				preparedDate: now.toISOString().slice(0, 10),
+				preparedBy: locals.user!.username,
+				concentration: tube.concentration,
+				concentrationUnit: tube.concentrationUnit ?? '',
+				volume: tube.volume,
+				initialVolume: tube.volume,
+				status: 'active',
+				source: 'bims',
+				notes: tube.notes ?? '',
+				enteredBy: locals.user!.username,
+				enteredDate: now.toISOString().slice(0, 10)
+			});
+		}
+
+		// Stamp outputs[] on the lot for self-contained record-keeping.
+		lot.outputs = resolved.map(({ tube, catalogId }) => ({
+			barcode: tube.barcode,
+			outputSpecKey: tube.outputSpecKey ?? '',
+			catalogId,
+			concentration: tube.concentration,
+			concentrationUnit: tube.concentrationUnit ?? '',
+			volume: tube.volume,
+			volumeUnit: tube.volumeUnit ?? '',
+			notes: tube.notes ?? '',
+			createdAt: now
+		})) as any;
+
 		lot.status = 'finalized';
 		lot.finalizedAt = now;
 		await lot.save();
@@ -340,10 +575,32 @@ export const actions: Actions = {
 			recordId: lot._id,
 			changedBy: locals.user!.username,
 			changedAt: now,
-			newData: { status: 'finalized' }
+			newData: {
+				status: 'finalized',
+				outputCount: resolved.length,
+				outputBarcodes: resolved.map((r) => r.tube.barcode)
+			}
 		});
 
-		return { success: true };
+		// One audit row per inventory row created — symmetrical to other
+		// inventory write paths.
+		for (const { tube } of resolved) {
+			await AuditLog.create({
+				_id: generateId(),
+				action: 'CREATE',
+				tableName: 'reagent_inventory',
+				recordId: tube.barcode,
+				changedBy: locals.user!.username,
+				changedAt: now,
+				newData: {
+					preparedFromReagentLotId: lot._id,
+					source: 'bims',
+					trigger: 'lot_finalize'
+				}
+			});
+		}
+
+		return { success: true, outputsCreated: resolved.length };
 	},
 
 	/**

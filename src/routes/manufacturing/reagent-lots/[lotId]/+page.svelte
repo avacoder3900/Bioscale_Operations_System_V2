@@ -56,6 +56,81 @@
 	// the step entry is saved or when activeStep changes (re-init from saved).
 	let dirty = $state(false);
 
+	// Finalize barcode-capture state. Chemists physically label output tubes
+	// then scan their barcodes here. One row per tube. Empty barcodes are
+	// dropped at submit. Zero rows = finalize a failed run (no inventory
+	// created, lot still locks). Each tube can map to a different output spec
+	// when the template declares outputSpecs[]; defaults to the first when
+	// only one spec exists.
+	type PendingTube = {
+		barcode: string;
+		outputSpecKey: string;
+		concentration: string;
+		concentrationUnit: string;
+		volume: string;
+		volumeUnit: string;
+		notes: string;
+	};
+	function blankTube(defaults: { specKey?: string; concUnit?: string; volUnit?: string } = {}): PendingTube {
+		return {
+			barcode: '',
+			outputSpecKey: defaults.specKey ?? '',
+			concentration: '',
+			concentrationUnit: defaults.concUnit ?? '',
+			volume: '',
+			volumeUnit: defaults.volUnit ?? '',
+			notes: ''
+		};
+	}
+	let pendingTubes = $state<PendingTube[]>([blankTube()]);
+
+	const outputSpecs = $derived(
+		((template.outputSpecs ?? []) as Array<{
+			key: string;
+			productName?: string;
+			catalogId?: string;
+			concentrationUnit?: string;
+			volumeUnit?: string;
+		}>)
+	);
+	const hasMultipleSpecs = $derived(outputSpecs.length > 1);
+	const defaultSpecKey = $derived(outputSpecs[0]?.key ?? '');
+	const defaultConcUnit = $derived(
+		outputSpecs[0]?.concentrationUnit ?? template.outputSpec?.concentrationUnit ?? ''
+	);
+	const defaultVolUnit = $derived(
+		outputSpecs[0]?.volumeUnit ?? template.outputSpec?.volumeUnit ?? ''
+	);
+
+	// Build the JSON payload from current pendingTubes, filtering blank barcodes.
+	const outputsPayload = $derived(
+		pendingTubes
+			.map((t) => ({ ...t, barcode: (t.barcode ?? '').trim() }))
+			.filter((t) => t.barcode.length > 0)
+			.map((t) => ({
+				barcode: t.barcode,
+				outputSpecKey: t.outputSpecKey || defaultSpecKey || '',
+				concentration: t.concentration === '' ? undefined : Number(t.concentration),
+				concentrationUnit: t.concentrationUnit || defaultConcUnit || '',
+				volume: t.volume === '' ? undefined : Number(t.volume),
+				volumeUnit: t.volumeUnit || defaultVolUnit || '',
+				notes: t.notes || ''
+			}))
+	);
+	const outputsJson = $derived(JSON.stringify(outputsPayload));
+	const tubeCount = $derived(outputsPayload.length);
+
+	function addTubeRow() {
+		pendingTubes = [
+			...pendingTubes,
+			blankTube({ specKey: defaultSpecKey, concUnit: defaultConcUnit, volUnit: defaultVolUnit })
+		];
+	}
+	function removeTubeRow(idx: number) {
+		pendingTubes = pendingTubes.filter((_, i) => i !== idx);
+		if (pendingTubes.length === 0) pendingTubes = [blankTube()];
+	}
+
 	$effect(() => {
 		if (!activeStep) return;
 		const next: Record<string, any> = {};
@@ -298,12 +373,111 @@
 					title="Toggle between step-by-step runner and a single stacked form (good for catching up on a lot you didn't record live)">
 					{quickLogMode ? '↻ Step-by-step' : '⇣ Quick log'}
 				</button>
-				<form method="POST" action="?/finalize" use:enhance>
-					<button type="submit"
-						class="rounded-md bg-emerald-500/20 px-3 py-1.5 text-sm font-medium text-emerald-300 hover:bg-emerald-500/30">
+				<details class="relative">
+					<summary class="cursor-pointer list-none rounded-md bg-emerald-500/20 px-3 py-1.5 text-sm font-medium text-emerald-300 hover:bg-emerald-500/30">
 						Finalize Lot
-					</button>
-				</form>
+					</summary>
+					<form method="POST" action="?/finalize" use:enhance
+						class="absolute right-0 z-10 mt-1 w-[420px] space-y-3 rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] p-3 shadow-lg">
+						<div>
+							<p class="text-xs font-semibold uppercase tracking-wide text-[var(--color-tron-text)]">Output tubes</p>
+							<p class="mt-1 text-[11px] text-[var(--color-tron-text-secondary)]">
+								Scan the barcode of each physically labelled output tube. Each scanned
+								barcode becomes a row in reagent inventory linked back to this lot.
+								Leave empty for a failed run (lot still finalizes, no inventory created).
+							</p>
+						</div>
+
+						{#each pendingTubes as tube, idx (idx)}
+							<div class="space-y-1.5 rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-2">
+								<div class="flex items-center gap-2">
+									<span class="text-[10px] text-[var(--color-tron-text-secondary)]">Tube {idx + 1}</span>
+									<input
+										type="text"
+										placeholder="Scan or type barcode"
+										bind:value={pendingTubes[idx].barcode}
+										class="flex-1 rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-xs text-[var(--color-tron-text)]" />
+									{#if pendingTubes.length > 1 || pendingTubes[0].barcode}
+										<button type="button" onclick={() => removeTubeRow(idx)}
+											class="rounded-md border border-rose-500/40 px-1.5 py-0.5 text-[10px] text-rose-300 hover:bg-rose-500/10">
+											✕
+										</button>
+									{/if}
+								</div>
+
+								{#if hasMultipleSpecs}
+									<div>
+										<label class="block text-[10px] text-[var(--color-tron-text-secondary)]" for="spec-{idx}">Output spec</label>
+										<select id="spec-{idx}" bind:value={pendingTubes[idx].outputSpecKey}
+											class="w-full rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-xs text-[var(--color-tron-text)]">
+											{#each outputSpecs as s}
+												<option value={s.key}>{s.productName ?? s.key}</option>
+											{/each}
+										</select>
+									</div>
+								{/if}
+
+								<div class="grid grid-cols-2 gap-1.5">
+									<div>
+										<label class="block text-[10px] text-[var(--color-tron-text-secondary)]" for="conc-{idx}">Conc</label>
+										<input id="conc-{idx}" type="number" step="any"
+											bind:value={pendingTubes[idx].concentration}
+											placeholder="—"
+											class="w-full rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-1.5 py-1 text-xs text-[var(--color-tron-text)]" />
+									</div>
+									<div>
+										<label class="block text-[10px] text-[var(--color-tron-text-secondary)]" for="cunit-{idx}">Unit</label>
+										<input id="cunit-{idx}" type="text"
+											bind:value={pendingTubes[idx].concentrationUnit}
+											placeholder={defaultConcUnit || 'mg/mL'}
+											class="w-full rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-1.5 py-1 text-xs text-[var(--color-tron-text)]" />
+									</div>
+									<div>
+										<label class="block text-[10px] text-[var(--color-tron-text-secondary)]" for="vol-{idx}">Vol</label>
+										<input id="vol-{idx}" type="number" step="any"
+											bind:value={pendingTubes[idx].volume}
+											placeholder="—"
+											class="w-full rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-1.5 py-1 text-xs text-[var(--color-tron-text)]" />
+									</div>
+									<div>
+										<label class="block text-[10px] text-[var(--color-tron-text-secondary)]" for="vunit-{idx}">Unit</label>
+										<input id="vunit-{idx}" type="text"
+											bind:value={pendingTubes[idx].volumeUnit}
+											placeholder={defaultVolUnit || 'mL'}
+											class="w-full rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-1.5 py-1 text-xs text-[var(--color-tron-text)]" />
+									</div>
+								</div>
+
+								<div>
+									<label class="block text-[10px] text-[var(--color-tron-text-secondary)]" for="notes-{idx}">Tube notes</label>
+									<input id="notes-{idx}" type="text"
+										bind:value={pendingTubes[idx].notes}
+										placeholder="optional"
+										class="w-full rounded-md border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-1.5 py-1 text-xs text-[var(--color-tron-text)]" />
+								</div>
+							</div>
+						{/each}
+
+						<button type="button" onclick={addTubeRow}
+							class="w-full rounded-md border border-[var(--color-tron-border)] px-2 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:bg-[var(--color-tron-surface)]">
+							+ Add another tube
+						</button>
+
+						<!-- Hidden field carrying the filtered, validated payload. -->
+						<input type="hidden" name="outputs" value={outputsJson} />
+
+						<button type="submit"
+							class="w-full rounded-md bg-emerald-500/20 px-2 py-1.5 text-sm font-medium text-emerald-300 hover:bg-emerald-500/30">
+							{#if tubeCount === 0}
+								Finalize with no output (failed run)
+							{:else if tubeCount === 1}
+								Finalize &amp; register 1 tube
+							{:else}
+								Finalize &amp; register {tubeCount} tubes
+							{/if}
+						</button>
+					</form>
+				</details>
 				<details class="relative">
 					<summary class="cursor-pointer list-none rounded-md border border-rose-500/40 px-3 py-1.5 text-sm text-rose-300 hover:bg-rose-500/10">
 						Void

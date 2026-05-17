@@ -27,13 +27,41 @@ const parameterValueSchema = new Schema(
 const inputLotSchema = new Schema(
 	{
 		materialKey: String,
-		source: { type: String, enum: ['reagent_lot', 'stock', 'receiving_lot', 'manual'] },
+		// 'reagent_lot' = upstream BIMS ReagentLot (direct denormalized pointer).
+		// 'reagent_inventory' = upstream inventory tube barcode (could resolve
+		//   to either a BIMS lot via preparedFromReagentLotId or a research-v2
+		//   execution via preparedFromExecutionId — buildLineage handles both).
+		// 'stock' = stock material scanned (vendor barcode, no upstream prep).
+		// 'receiving_lot' = inbound receiving lot record.
+		// 'manual' = ad-hoc entry, no traceable source.
+		source: {
+			type: String,
+			enum: ['reagent_lot', 'reagent_inventory', 'stock', 'receiving_lot', 'manual']
+		},
 		sourceId: String,
 		label: String,
 		barcode: String,
 		concentration: Number,
 		concentrationUnit: String,
 		recordedAt: Date
+	},
+	{ _id: false }
+);
+
+// Material that was actually scanned/consumed during execution. Distinct from
+// inputLots[] which captures parent-lot lineage (often a subset of materials).
+// materialsUsed[] is comprehensive — every barcode the operator scanned into a
+// step, with the snapshot of inventory state at scan time.
+const materialUsedSchema = new Schema(
+	{
+		key: String, // materialKey from template
+		inventoryId: String, // ReagentInventory._id (barcode) that was scanned
+		catalogName: String, // denormalized for display
+		actualConcentration: Number,
+		amountUsed: Number,
+		unit: String,
+		scannedAt: Date,
+		scannedBy: { _id: String, username: String }
 	},
 	{ _id: false }
 );
@@ -91,7 +119,13 @@ const stepEntrySchema = new Schema({
 	qcReadings: { type: [qcReadingSchema], default: [] },
 	observations: { type: [observationSchema], default: [] },
 	note: String,
-	flagged: { type: Boolean, default: false }
+	flagged: { type: Boolean, default: false },
+	// Skipped step capture (carried over from research-v2 ProtocolExecution).
+	// When a step is legitimately skipped (e.g., "pellet already clean, second
+	// wash not needed"), record skipped=true + skipReason for the lineage.
+	skipped: { type: Boolean, default: false },
+	skipReason: String,
+	actualVolumes: { type: Schema.Types.Mixed, default: undefined }
 });
 
 const lotNoteSchema = new Schema({
@@ -152,10 +186,17 @@ const reagentLotSchema = new Schema(
 		parameterValues: { type: [parameterValueSchema], default: [] },
 		inputLots: { type: [inputLotSchema], default: [] },
 		materialsConsumed: { type: [materialConsumedSchema], default: [] },
+		// Comprehensive scan log — every barcode scanned into any step during
+		// the run. inputLots[] is the curated lineage; materialsUsed[] is the
+		// raw activity log. Both useful, neither subsumes the other.
+		materialsUsed: { type: [materialUsedSchema], default: [] },
 
 		stepEntries: { type: [stepEntrySchema], default: [] },
 		postProtocolReadings: { type: [qcReadingSchema], default: [] },
 
+		// Lot-level summary the chemist records before finalize. Kept singular
+		// for back-compat with the 19 finalized lots that populated it under
+		// the prior schema. NEW per-tube barcoded outputs go in outputs[] below.
 		finalOutputs: {
 			concentration: Number,
 			concentrationUnit: String,
@@ -163,6 +204,32 @@ const reagentLotSchema = new Schema(
 			volumeUnit: String,
 			costEstimate: Number,
 			notes: String
+		},
+
+		// Per-tube output records, populated at finalize. One entry per
+		// physical tube the chemist labelled and scanned. Each entry triggers
+		// creation of a corresponding ReagentInventory row at finalize time.
+		// outputSpecKey points back to template.outputSpecs[].key when the
+		// template declared multiple output kinds (e.g., conjugate vs
+		// supernatant); empty when the template has only outputSpec.
+		outputs: {
+			type: [
+				new Schema(
+					{
+						barcode: { type: String, required: true },
+						outputSpecKey: String,
+						catalogId: String, // copied from template at finalize for audit
+						concentration: Number,
+						concentrationUnit: String,
+						volume: Number,
+						volumeUnit: String,
+						notes: String,
+						createdAt: { type: Date, default: () => new Date() }
+					},
+					{ _id: false }
+				)
+			],
+			default: []
 		},
 
 		lotNotes: { type: [lotNoteSchema], default: [] },
@@ -187,6 +254,8 @@ reagentLotSchema.index({ templateId: 1, status: 1 });
 reagentLotSchema.index({ templateSlug: 1, status: 1, createdAt: -1 });
 reagentLotSchema.index({ 'operator._id': 1 });
 reagentLotSchema.index({ status: 1, createdAt: -1 });
+reagentLotSchema.index({ 'outputs.barcode': 1 });
+reagentLotSchema.index({ 'inputLots.sourceId': 1 });
 
 applySacredMiddleware(reagentLotSchema);
 
