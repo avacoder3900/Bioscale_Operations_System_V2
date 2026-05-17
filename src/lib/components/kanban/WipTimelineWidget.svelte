@@ -111,10 +111,10 @@
 		return `${start} → ${end}`;
 	}
 
-	/** Format YYYY-MM-DD → DD/MM/YY for the date label next to day tabs. */
+	/** Format YYYY-MM-DD → MM/DD/YY for the date label next to day tabs. */
 	function formatDayShort(iso: string): string {
 		const [y, m, d] = iso.split('-');
-		return `${d}/${m}/${y.slice(2)}`;
+		return `${m}/${d}/${y.slice(2)}`;
 	}
 
 	/** Today in the browser's local timezone, YYYY-MM-DD. Used to gate the "now" line. */
