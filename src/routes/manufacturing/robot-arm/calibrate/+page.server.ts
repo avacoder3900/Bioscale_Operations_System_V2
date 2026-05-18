@@ -5,7 +5,7 @@
  * Once captured, every teleop/record session starts from that calibrated
  * neutral instead of locking neutrals to whatever pose the arms are in
  * at GO time. The host side persists this to calibrations/sync_zero.json
- * on alejandros-pc; nothing about it lives in MongoDB.
+ * on the Pi (arm-pi); nothing about it lives in MongoDB.
  *
  * Live deltas (current minus saved) are read on every page load so the
  * operator can verify alignment before pressing GO on the control page.
