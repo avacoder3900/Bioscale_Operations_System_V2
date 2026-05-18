@@ -39,6 +39,14 @@
 	// Submission lock so Space-spam doesn't fire multiple POSTs in flight
 	let submitting = $state(false);
 
+	// 2-photo workflow per cartridge: photo 1 = front, photo 2 = back.
+	// After both are taken, the next capture attempt opens the retake dialog.
+	type SessionPhoto = { id: string; cartridgeImageNumber: string };
+	let sessionPhotos = $state<SessionPhoto[]>([]);
+	let showRetakeDialog = $state(false);
+	let retakeInProgress = $state(false);
+	const PHOTOS_PER_CARTRIDGE = 2;
+
 	let refocusInterval: ReturnType<typeof setInterval> | null = null;
 
 	async function refreshCameras() {
@@ -109,6 +117,9 @@
 			cartridgeStatus = data.status ?? null;
 			cartridgePhotoCount = data.photoCount ?? 0;
 			scannedAt = Date.now();
+			sessionPhotos = [];
+			retakeInProgress = false;
+			showRetakeDialog = false;
 			flashBanner('ok', `Locked on ${cartridgeId} — ${cartridgePhotoCount} prior photos`);
 		} catch (e) {
 			flashBanner('err', e instanceof Error ? e.message : 'Lookup failed');
@@ -130,6 +141,10 @@
 		if (submitting) return;
 		if (!cartridgeId) {
 			flashBanner('err', 'Scan a cartridge first');
+			return;
+		}
+		if (sessionPhotos.length >= PHOTOS_PER_CARTRIDGE) {
+			showRetakeDialog = true;
 			return;
 		}
 		if (!videoEl || !stream) {
@@ -172,7 +187,14 @@
 			};
 			recentCaptures = [cap, ...recentCaptures].slice(0, 10);
 			cartridgePhotoCount += 1;
-			flashBanner('ok', `Captured ${result.cartridgeImageNumber}`, 1800);
+			sessionPhotos = [...sessionPhotos, { id: result.imageId, cartridgeImageNumber: result.cartridgeImageNumber }];
+			const retakeComplete = retakeInProgress && sessionPhotos.length >= PHOTOS_PER_CARTRIDGE;
+			if (retakeComplete) {
+				flashBanner('ok', 'Retake complete — ready for next cartridge', 2400);
+				setTimeout(() => clearCartridgeForNext(), 100);
+			} else {
+				flashBanner('ok', `Captured ${result.cartridgeImageNumber} (${sessionPhotos.length}/${PHOTOS_PER_CARTRIDGE})`, 1800);
+			}
 		} catch (e) {
 			flashBanner('err', e instanceof Error ? e.message : 'Capture failed');
 		} finally {
@@ -180,6 +202,48 @@
 			// Refocus the scanner input so the next scan still wedges correctly.
 			scanInputEl?.focus();
 		}
+	}
+
+	async function retakeAll() {
+		showRetakeDialog = false;
+		const ids = sessionPhotos.map(p => p.id);
+		sessionPhotos = [];
+		retakeInProgress = true;
+		for (const id of ids) {
+			try {
+				await fetch(`/api/cv/images/${id}`, { method: 'DELETE' });
+			} catch { /* best effort */ }
+		}
+		recentCaptures = recentCaptures.filter(c => !ids.includes(c.id));
+		flashBanner('info', 'Retake all — capture 2 new photos');
+	}
+
+	async function retakeSecond() {
+		showRetakeDialog = false;
+		const second = sessionPhotos[1];
+		if (!second) return;
+		sessionPhotos = [sessionPhotos[0]];
+		retakeInProgress = true;
+		try {
+			await fetch(`/api/cv/images/${second.id}`, { method: 'DELETE' });
+		} catch { /* best effort */ }
+		recentCaptures = recentCaptures.filter(c => c.id !== second.id);
+		flashBanner('info', 'Retake 2nd — capture the back photo');
+	}
+
+	function cancelRetake() {
+		showRetakeDialog = false;
+	}
+
+	function clearCartridgeForNext() {
+		cartridgeId = null;
+		cartridgeStatus = null;
+		cartridgePhotoCount = 0;
+		sessionPhotos = [];
+		retakeInProgress = false;
+		showRetakeDialog = false;
+		scanInput = '';
+		scanInputEl?.focus();
 	}
 
 	function onScanKeydown(e: KeyboardEvent) {
@@ -192,12 +256,18 @@
 	}
 
 	function onGlobalKeydown(e: KeyboardEvent) {
-		// Space anywhere = capture (except in input fields)
+		if (e.key !== ' ') return;
 		const target = e.target as HTMLElement;
-		if (e.key === ' ' && target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && target.tagName !== 'SELECT') {
+		// The hidden scanner-wedge input is kept focused by refocusScanner(),
+		// so without this exception Space never reaches capturePhoto.
+		if (target === scanInputEl) {
 			e.preventDefault();
 			capturePhoto();
+			return;
 		}
+		if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') return;
+		e.preventDefault();
+		capturePhoto();
 	}
 
 	function refocusScanner() {
@@ -234,7 +304,7 @@
 			<div>
 				<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">Capture Station</h1>
 				<p class="text-xs text-[var(--color-tron-text-secondary)]">
-					Scan a cartridge with the USB scanner. Press Space to capture. Scan a new code to switch cartridge.
+					Scan a cartridge with the USB scanner. Press Space to capture the front, then again for the back. Scan a new code to switch cartridge.
 				</p>
 			</div>
 			<div class="text-xs text-[var(--color-tron-text-secondary)]">
@@ -305,12 +375,49 @@
 				disabled={submitting || !cartridgeId || !stream}
 				class="rounded bg-[var(--color-tron-cyan)] px-6 py-3 text-lg font-bold text-[var(--color-tron-bg-primary)] disabled:opacity-40"
 			>
-				{submitting ? 'Capturing…' : '📷 Capture (Space)'}
+				{submitting ? 'Capturing…' : sessionPhotos.length >= PHOTOS_PER_CARTRIDGE ? '↺ Retake (Space)' : `📷 Capture ${sessionPhotos.length + 1} of ${PHOTOS_PER_CARTRIDGE} (Space)`}
 			</button>
 			<div class="text-xs text-[var(--color-tron-text-secondary)]">
 				This session: {recentCaptures.length} photo{recentCaptures.length === 1 ? '' : 's'}
 			</div>
 		</div>
+
+		<!-- Retake dialog — opens when operator presses Space after the 2nd photo -->
+		{#if showRetakeDialog}
+			<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
+				<div class="w-full max-w-md rounded-lg border border-[var(--color-tron-cyan)] bg-[var(--color-tron-bg-secondary)] p-6 space-y-4">
+					<h2 class="text-lg font-bold text-[var(--color-tron-cyan)]">Retake photos?</h2>
+					<p class="text-sm text-[var(--color-tron-text-secondary)]">
+						This cartridge already has its {PHOTOS_PER_CARTRIDGE} photos. Choose what to retake — the replaced photo(s) will be deleted.
+					</p>
+					<div class="grid gap-2">
+						<button
+							type="button"
+							onclick={retakeAll}
+							class="rounded border border-[var(--color-tron-red,#ff3366)] bg-[rgba(255,51,102,0.08)] px-4 py-3 text-left text-sm text-[var(--color-tron-red,#ff3366)] hover:bg-[rgba(255,51,102,0.15)]"
+						>
+							<div class="font-bold">↺ Retake both</div>
+							<div class="text-xs opacity-80">Deletes both photos. Capture 2 new ones.</div>
+						</button>
+						<button
+							type="button"
+							onclick={retakeSecond}
+							class="rounded border border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.08)] px-4 py-3 text-left text-sm text-[var(--color-tron-cyan)] hover:bg-[rgba(0,255,255,0.15)]"
+						>
+							<div class="font-bold">↺ Retake only the back (2nd photo)</div>
+							<div class="text-xs opacity-80">Deletes the 2nd photo. Capture one new one.</div>
+						</button>
+						<button
+							type="button"
+							onclick={cancelRetake}
+							class="rounded border border-[var(--color-tron-border)] px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] hover:bg-[var(--color-tron-bg-primary)]"
+						>
+							Cancel
+						</button>
+					</div>
+				</div>
+			</div>
+		{/if}
 
 		<!-- Hidden scanner-wedge input — autofocused; refocuses every 500ms -->
 		<input
