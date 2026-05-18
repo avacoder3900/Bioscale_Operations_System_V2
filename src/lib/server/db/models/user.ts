@@ -33,6 +33,12 @@ const userSchema = new Schema({
 	invitedBy: String,
 	age: Number,
 
+	// Hard cap on concurrent WIP tasks the user can be assigned. Enforced
+	// server-side in src/lib/server/kanban/wip-limit.ts. Default 3 follows
+	// common kanban convention. Set 0 to block all WIP for a user (e.g. on leave).
+	wipLimit: { type: Number, default: 3, min: 0, max: 50 },
+
+
 	roles: [{
 		_id: false,
 		roleId: String,

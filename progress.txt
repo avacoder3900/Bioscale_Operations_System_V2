@@ -1662,6 +1662,7 @@ admin re-auth required. Real BackingLot inventory untouched.
   dev server is the only path that can reach the OT-2.
 
 
+
 ## Session 2026-05-15/16 — CV Refactor (cartridge-first)
 
 ### Worktree
@@ -1740,3 +1741,358 @@ admin re-auth required. Real BackingLot inventory untouched.
 - 65d1ebe feat(cv): /cv/stream + /capture (hardware scanner)
 - b848bf8 feat(cv): /cv/label + /cv/projects rebuild + dead route cleanup
 - 163a8c4 feat(cv): inference loop — versioned training + phase-X auto-inference + A/B shadow
+
+
+## Session 2026-05-15 — Kanban auto-archive (PRD + implementation)
+
+### Headline
+Per-task Archive button on `/kanban/task/[taskId]` was 404-ing (the
+`?/archive` form action did not exist server-side). Wired the action,
+hardened the existing `/api/cron/archive-done-tasks` endpoint so Vercel
+Cron can actually call it, scheduled it weekly (Sunday 23:00 CDT / Monday
+04:00 UTC), and added a one-shot cleanup script that ran a full sweep of
+existing done tasks regardless of age.
+
+### Decisions (confirmed with Jacob)
+- Schedule: `0 4 * * 1` UTC = Sunday 11 PM CDT. Board is clean Monday AM.
+- Cron min-age: 24h since `statusChangedAt`. Stops a task marked done at
+  10:59 PM Sunday from disappearing 60 seconds later.
+- Per-task archive: done-only. Non-done tasks return `fail(400)` and the
+  task is unchanged. (UI is frozen, so the button stays visible — server
+  is source of truth.)
+
+### Files changed
+- `docs/prds/KANBAN-AUTO-ARCHIVE.md` — new PRD
+- `src/routes/kanban/task/[taskId]/+page.server.ts` — added `archive` action
+  with done-status guard, activityLog push, and AuditLog row
+- `src/routes/api/cron/archive-done-tasks/+server.ts` — added GET, 3-mode
+  auth (CRON_SECRET / `vercel-cron/*` UA / agent API key), 24h min-age
+  filter on `statusChangedAt`
+- `vercel.json` — added cron entry at `0 4 * * 1`
+- `scripts/archive-done-tasks-cleanup.ts` — one-shot manual archive of
+  all `status: 'done', archived: false` tasks (no min-age) with single
+  `audit_log` row recording the bulk operation
+
+### Validation
+- `npm run check`: 26 pre-existing ERRORS (missing optional deps + unrelated
+  implicit-anys) and 416 warnings. Zero new errors in changed files.
+- Cleanup script run: archived all currently-done tasks (see audit_log
+  row `recordId: 'manual-cleanup'`, `changedBy: 'system-manual'`).
+
+### Branch state
+- All on `feature/kanban-improvement`, branched off freshly-pulled `dev`.
+- 4 feature files + this progress entry + cleanup script committed and
+  pushed. Carryover stray `s` in `docs/BIMS-UNIFIED-TIMELINE-SPEC.md` left
+  unstaged (Jacob editing in the IDE).
+
+### Next session
+- Verify Vercel cron dashboard shows the new job after deploy.
+- Monday AM after first scheduled run: confirm `audit_log` has the
+  `cron-bulk` row and the board is clean.
+- Open question: do we want a one-click "unarchive" affordance on
+  `/kanban/archived`? Currently archive is one-way through the UI.
+
+### Follow-up — Archived view UX (same session)
+
+After deploying, swapped the Archive table's last column from "Archived"
+(archivedAt) to "Completed" (statusChangedAt). Reasoning: once a task is
+in the archive, the timestamp Jacob actually wants is "when did we finish
+this," not "when did the cron sweep it up." Since archiving doesn't change
+`status` (the field flips `archived: true` but leaves `status: 'done'`
+intact), `statusChangedAt` on an archived task is necessarily the moment
+it moved to done.
+
+Added click-to-sort on all five archive column headers (Title, Project,
+Assignee, Status, Completed). Three-state cycle per header: asc → desc →
+cleared. Matches the existing pattern on `/kanban/list/+page.svelte`.
+Null `statusChangedAt` sorts to the bottom via `Number.MAX_SAFE_INTEGER`.
+
+- `src/routes/kanban/archived/+page.svelte` — sort state, sortedTasks
+  derivation, header click handlers, header sort indicators, column rename.
+- Commit `b3198c1`. Pushed to `feature/kanban-improvement`.
+
+### Follow-up — Backlog accordion on board view (same session)
+
+Backlog column is now collapsible per project, defaulting to collapsed.
+The motivation: backlog is the tallest column and dominates the project
+section's vertical height. With backlog folded, the project's row is
+sized by the tallest of Ready / WIP / Waiting / Done — much more
+information-dense.
+
+`KanbanColumn.svelte` gained three optional props — `collapsible`,
+`collapsed`, `onToggleCollapse` — that are backward-compatible (default
+false / undefined → behavior identical to before). When `collapsible`,
+the header gets a chevron button that rotates 90° when collapsed. The
+outer column div still receives drop events when collapsed, so dragging
+a task onto a folded backlog header still works.
+
+`/kanban/+page.svelte` tracks fold state per project in a new
+`collapsedBacklogs: Set<string | null>` state, initialized from
+`data.projects` (= all backlogs collapsed at mount).
+
+- `src/lib/components/kanban/KanbanColumn.svelte` — collapsible props,
+  chevron, gated task list render
+- `src/routes/kanban/+page.svelte` — collapsedBacklogs state, toggleBacklog,
+  prop passthrough on the per-column `<KanbanColumn>` call
+
+### Follow-up — Persistent collapse state on board (same session)
+
+Project section fold + backlog accordion fold are now stored on the
+KanbanProject document. Global, not per-user: every kanban:read user
+sees the same state, every kanban:write user can change it. The change
+survives refresh and is shared across all users on next refresh.
+
+Schema additions on `kanban_projects`:
+- `collapsed: Boolean` — defaults `false` (project section starts expanded)
+- `backlogCollapsed: Boolean` — defaults `true` (backlog starts collapsed)
+
+Legacy projects without the fields fall through to those defaults via
+normalization in the layout load (`p.collapsed === true`,
+`p.backlogCollapsed !== false`). The earlier "auto-collapse projects with
+no tasks" heuristic was removed per Jacob's decision — explicit state
+only.
+
+Persistence API: `POST /api/kanban/projects/[id]/ui-state` with body
+`{ collapsed?: boolean, backlogCollapsed?: boolean }`. Partial updates
+allowed. Requires `kanban:write`. No audit log entry — UI state is not
+data, just a presentation toggle.
+
+Client pattern: optimistic update in the local Set, fire-and-forget POST,
+revert on non-ok response. No global error banner since the failure
+mode is invisible (user just sees the chevron snap back).
+
+- `src/lib/server/db/models/kanban-project.ts` — two new schema fields
+- `src/routes/kanban/+layout.server.ts` — normalize into definite booleans
+- `src/routes/api/kanban/projects/[id]/ui-state/+server.ts` — new endpoint
+- `src/routes/kanban/+page.svelte` — drop heuristic, init from DB,
+  async toggle handlers with optimistic+revert
+
+### Side errand — One-off cartridge status flip (same session)
+
+Mid-session, Jacob asked for a quick programmatic fix unrelated to the
+kanban work: flip status from `stored` → `completed` on 16 specific
+cartridge records (UUIDs hard-coded into the script).
+
+`scripts/oneoff-cartridge-stored-to-completed.ts` does this with safety
+guards: skips records that are missing, not currently `stored`, or have
+`finalizedAt` set. Bypasses Mongoose sacred middleware by using raw
+`db.collection('cartridge_records').updateOne(...)` — the explicit
+finalizedAt check substitutes for that safeguard. One `audit_log` row
+per cartridge (`tableName: 'cartridge_records'`, `oldData: {status: 'stored'}`,
+`newData: {status: 'completed'}`, `changedBy: 'system-manual'`).
+
+Result: 16 updated, 0 missing, 0 wrong status, 0 finalized.
+
+Script left in the repo as a historical record (matches the existing
+`complete-stuck-wax-run-2y2f.ts` / `delete-fridge-001-11-cartridges.ts`
+pattern) but currently **unstaged** — Jacob said to handle it separately
+from the kanban feature branch.
+
+### Follow-up — Persistence reliability (same session)
+
+Jacob tested the deploy and reported "only some of the project horizontal
+swim lanes persisted" after folding several then navigating away.
+Diagnosis: fire-and-forget POSTs got orphaned when the page unmounted
+mid-flight — fast ones completed, slow ones (Vercel cold-start) got
+dropped.
+
+Fix in `persistProjectUiState`:
+- `keepalive: true` on the fetch — POST survives page unload.
+- Retry once after 500ms on 5xx or network error. 4xx errors aren't
+  retried (won't be fixed by retrying auth/validation failures).
+
+Single ~15-line change in `src/routes/kanban/+page.svelte`.
+
+### Follow-up — Stale layout data on within-kanban navigation (same session)
+
+Jacob hit a different bug: fold state didn't persist when navigating
+between sibling kanban routes (/kanban → /kanban/list → /kanban). Worked
+fine on hard refresh or cross-layout navigation.
+
+Root cause: SvelteKit caches `+layout.server.ts` data and doesn't re-run
+the load function on sibling-route navigations. So `data.projects`
+stayed stale (pre-click `collapsed` values) even after the DB POST
+succeeded. On return to /kanban, the page component re-mounted and
+the `$state(...)` Set initializer read the stale cached layout data.
+
+Fix:
+- `kanban/+layout.server.ts` — `depends('kanban:projects')` tags the
+  layout for explicit invalidation.
+- `kanban/+page.svelte` — `invalidate('kanban:projects')` after each
+  successful UI-state POST. Layout re-runs in the background, so the
+  next time the page remounts (sibling-route navigation), its $state
+  initializer reads fresh `data.projects`.
+
+Note: $state initializers only run once at mount — they don't re-run
+when `data` changes during the component's lifetime. That's intentional
+here: the optimistic local state IS the source of truth while the page
+is open. The invalidation ensures the SERVER data catches up so future
+remounts start from the correct baseline.
+
+### Follow-up — Nav cleanup on kanban layout (same session)
+
+Removed "Main Site" link and "Logout" form from the kanban header nav.
+They were duplicate affordances — the global app navigation already
+covers both. Cleanup also drops the now-unused `enhance` import and
+`loggingOut` state from the layout.
+
+- `src/routes/kanban/+layout.svelte` — 50 lines deleted.
+
+### Session end state
+
+`feature/kanban-improvement` is at 9 commits on top of `dev`:
+- d0fd483  feat: kanban auto-archive (PRD + per-task fix + cron)
+- b3198c1  feat: archived view Completed column + sortable headers
+- 88b7c1b  docs: progress entry
+- 32cbaf2  feat: collapsible backlog (default collapsed)
+- a223f8e  feat: persist project + backlog collapse globally
+- dd36550  docs: cartridge one-off entry
+- d172251  fix: keepalive + retry on UI-state POSTs
+- 8938e9f  fix: invalidate layout after UI-state POST (sibling-route cache bug)
+- a0071b9  chore: remove Main Site + Logout from kanban nav
+
+Side errand: 16 cartridge records flipped stored → completed via
+`scripts/oneoff-cartridge-stored-to-completed.ts` (unstaged).
+
+One-time manual archive run: 298 done kanban tasks archived.
+
+### Follow-up — Kanban Analytics PRDs (same session)
+
+Drafted 7 PRDs covering the analytics page build-out and the WIP system:
+
+1. `docs/prds/KANBAN-ANALYTICS-FOUNDATION.md` — /kanban/analytics route,
+   permissions, date-range URL param, chart.js + svelte-chartjs decision,
+   shared `loadAnalyticsData()` aggregator, nav link.
+2. `docs/prds/KANBAN-ANALYTICS-KPI-CARDS.md` — 6 headline cards (Active,
+   Throughput, Median cycle, WIP, Stuck in Waiting, Aging). Aging
+   thresholds extracted to shared module so card + analytics can't drift.
+3. `docs/prds/KANBAN-ANALYTICS-CFD.md` — cumulative flow diagram, daily
+   stacked area, computed by replaying activityLog[] across all tasks.
+4. `docs/prds/KANBAN-ANALYTICS-FLOW-CHARTS.md` — throughput bar, cycle
+   time scatter w/ p50/p85/p95 lines, aging WIP, time-in-status breakdown.
+5. `docs/prds/KANBAN-ANALYTICS-BREAKDOWNS.md` — per-project table,
+   per-assignee table w/ load score, source mix donut.
+6. `docs/prds/KANBAN-WIP-TIMELINE.md` — the headline daily timeline.
+   Y axis is one person per group, each person contributes `wipLimit`
+   stacked rows. X axis: 44 15-min buckets (7:00 AM – 5:45 PM) + two
+   overflow buckets (< 7 AM, ≥ 6 PM). Cells fill with project color
+   when WIP task overlaps. Carry-over from prior day starts in left
+   overflow. Day tabs S M T W R F S. Polls every 30s. Includes overflow
+   "violation lanes" in red for retrospective WIP-cap breaches.
+7. `docs/prds/KANBAN-WIP-LIMIT-ENFORCEMENT.md` — hard cap on move-to-wip
+   via shared `assertWipLimitOk()` guard. 409 on violation, modal listing
+   the assignee's current WIP tasks. New `User.wipLimit` field (default 3).
+   Admin UI add to user edit form.
+
+Suggested implementation order:
+- Foundation → KPI Cards → CFD → WIP Limit Enforcement → WIP Timeline →
+  Flow Charts → Breakdowns
+
+Foundation is the only hard prerequisite. WIP-Timeline benefits from
+having the enforcement PRD shipped first (so violation lanes have meaning).
+
+Open items flagged in PRDs:
+- Confirm first X-axis bucket is 7:00 vs 7:15 (Jacob wrote 7:15).
+- Admin override permission for WIP limit — out of v1, follow-up.
+
+### Follow-up — PRD finalization + Foundation scaffold (same session)
+
+PRDs finalized after Jacob's confirmations:
+- WIP-TIMELINE: first regular bucket is 7:00 (confirmed).
+- WIP-LIMIT-ENFORCEMENT: nobody (including admins) bypasses the limit;
+  user-edit form lives at `/admin/users` not `/spu/admin/users/[id]`.
+
+Foundation implementation kicked off (PRD KANBAN-ANALYTICS-FOUNDATION):
+- `npm install chart.js svelte-chartjs` — 317 packages added.
+- `src/lib/server/kanban/analytics.ts` — shared aggregator with
+  `AnalyticsRange`, `loadAnalyticsData()`, range parsing. Returns
+  `{ range, since, taskCount }` scaffold; sibling PRDs will extend.
+- `src/routes/kanban/analytics/+page.server.ts` — load function with
+  `requirePermission('kanban:read')`, `depends('kanban:analytics')`,
+  range param parsing.
+- `src/routes/kanban/analytics/+page.svelte` — page shell with date
+  range selector (7d/30d/90d/All) and 5 dashed-border placeholder
+  sections labeled by sibling PRD.
+- `src/routes/kanban/+layout.svelte` — Analytics nav link added after
+  Archive.
+
+`npm run check`: 11 errors (down from 26 — chart.js types resolved
+several pre-existing missing-module errors), 0 new errors from changed
+files.
+
+### Follow-up — Full analytics page build-out (same session)
+
+All 7 kanban analytics PRDs implemented end to end:
+
+1. FOUNDATION  (commit 2ed1738) — route, nav, aggregator, chart lib
+2. KPI-CARDS   (commit f5afc3e) — 6 cards + shared aging module
+3. CFD         (commit 3133117) — daily stacked area, activityLog replay
+4. WIP-LIMIT   (commit c71da35) — hard cap, modal, admin UI
+5. WIP-TIMELINE (commit f278641) — daily grid w/ day tabs + 30s polling
+6. FLOW-CHARTS (commit e2d3f51) — throughput, scatter, aging, time-in-stage
+7. BREAKDOWNS  (commit e2d3f51) — per-project, per-assignee, source mix
+
+`/kanban/analytics` is now a live, end-to-end dashboard with:
+- Date-range selector (7d/30d/90d/all) in the header
+- 6 headline KPI cards
+- Cumulative flow diagram (stacked area)
+- Daily WIP Timeline grid (the hero feature — each user has wipLimit
+  lanes of 15-min cells, day-tab navigation, polls every 30s,
+  click cell → task detail)
+- 2x2 grid: throughput + cycle scatter + aging-WIP + time-in-status
+- 3-column row: per-project table + per-assignee table + source mix donut
+
+WIP hard cap (PRD 4) is enforced in all three move paths (board action,
+task detail move/update, API endpoint). Hitting the cap surfaces a modal
+listing the assignee's current WIP. Admin UI at /admin/users now has a
+WIP limit input per user, with its own updateWipLimit action and audit row.
+
+`npm run check`: 11 errors (project baseline — chart.js install actually
+*reduced* errors from 26 to 11 by resolving previously missing-module
+imports). Zero new errors from this work.
+
+### Session end state
+
+Branch feature/kanban-improvement at 16 commits. PR-ready.
+
+### Follow-up — Analytics page polish round (same session)
+
+After the initial 7-PRD analytics build-out, a series of UX refinements
+based on real testing on the deploy:
+
+- 2ee0880  `noScroll: true` on day-tab + range-selector navigation —
+  clicking either no longer bounces the page back to the top.
+- 0061fc8  Task title column added to the right of each WIP-timeline
+  lane. Each row now shows the project-color-dot + name(s) of tasks
+  occupying that slot, filling the previously-empty right side of the
+  chart on wide screens.
+- 2adba48  Source mix donut split into TWO charts:
+   - "Manual vs Agent" (binary) — how the task entered the system.
+   - "Created by" — who originated each task (resolved usernames).
+  Layout tidied: flow charts (2x2) → mix donuts (2 cols) → tables
+  (2 cols). Dropped the awkward 3-col bottom row.
+  Renamed "Aging WIP" → "Aging Tasks" since the chart includes any
+  non-done stage past its warning threshold, not just status=wip.
+- e56fc49  Analytics nav moved to 2nd position (Board → Analytics →
+  List → Projects → Archive).
+- e2a70b2  WIP-timeline x-axis labels switched from military
+  (7..12..17) to 12-hour (7a..12p..5p) with am/pm suffix.
+- 3823d4b  WIP-timeline:
+   - DD/MM/YY date label to the left of S M T W R F S tabs.
+   - Cyan "now" line marches across the chart, visible only on today's
+     view. Recomputes every minute.
+   - Server caps still-in-WIP intervals at `now` — future-day charts
+     render empty for currently-in-WIP tasks (no fake "predicted"
+     activity). Past-day charts unaffected.
+
+Known caveat documented for Creator Mix: if the agent records tasks
+under its own user account rather than the requesting human's account,
+agent-mediated tasks cluster under that agent user. Will revisit if/when
+Jacob sees this pattern.
+
+Confirmed semantics in conversation:
+- Cycle time = first `→ wip` to first `→ done`, single window, no
+  resets even if a task bounces through `waiting` between them.
+- Aging Tasks chart = aging in any non-done stage past its warning
+  threshold (stage-specific thresholds defined in src/lib/shared/
+  kanban-aging.ts).
