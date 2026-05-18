@@ -49,6 +49,14 @@
 
 	let refocusInterval: ReturnType<typeof setInterval> | null = null;
 
+	// Camera-driven auto-scan: periodically detects QR codes in the live video feed.
+	// New code → handleScan('auto') locks the cartridge + starts a fresh photo session.
+	// Same code as currently locked → no-op. The USB handheld scanner still works in parallel.
+	let scanLoopInterval: ReturnType<typeof setInterval> | null = null;
+	let barcodeDetector: any = null;
+	let lastAutoScanCode: string | null = null;
+	const AUTO_SCAN_INTERVAL_MS = 2000;
+
 	async function refreshCameras() {
 		try {
 			const devices = await navigator.mediaDevices.enumerateDevices();
@@ -98,9 +106,12 @@
 		if (videoEl) videoEl.srcObject = null;
 	}
 
-	async function handleScan(rawCode: string) {
+	async function handleScan(rawCode: string, source: 'handheld' | 'auto' = 'handheld') {
 		const code = rawCode.trim();
 		if (!code) return;
+		// Auto-scan re-detects the locked cartridge every tick — skip to preserve
+		// the in-flight 2-photo session. Handheld re-scans are intentional and proceed.
+		if (source === 'auto' && code === cartridgeId) return;
 
 		try {
 			const res = await fetch(`/api/cv/lookup-cartridge?code=${encodeURIComponent(code)}`);
@@ -280,19 +291,57 @@
 		}
 	}
 
+	function initBarcodeDetector() {
+		if (typeof window === 'undefined') return;
+		const w = window as any;
+		if (!w.BarcodeDetector) {
+			console.warn('[capture] BarcodeDetector unavailable in this browser — auto-scan disabled, USB scanner still works');
+			return;
+		}
+		try {
+			barcodeDetector = new w.BarcodeDetector({ formats: ['qr_code', 'data_matrix', 'code_128', 'code_39'] });
+		} catch (e) {
+			console.warn('[capture] BarcodeDetector init failed:', e);
+		}
+	}
+
+	async function autoScanTick() {
+		if (!barcodeDetector || !videoEl || !stream || submitting || showRetakeDialog) return;
+		if (videoEl.videoWidth === 0) return;
+		try {
+			const barcodes = await barcodeDetector.detect(videoEl);
+			if (!barcodes || barcodes.length === 0) {
+				// Lost sight of code; allow re-trigger next time the same code reappears.
+				lastAutoScanCode = null;
+				return;
+			}
+			const code = (barcodes[0].rawValue || '').trim();
+			if (!code) return;
+			if (code === lastAutoScanCode) return;     // Same code seen last tick.
+			lastAutoScanCode = code;
+			if (code === cartridgeId) return;          // Already locked on this cartridge.
+			await handleScan(code, 'auto');
+		} catch {
+			// Detector throws on some frames; swallow and keep the loop alive.
+		}
+	}
+
 	onMount(() => {
 		(async () => {
 			await refreshCameras();
 			await startCamera();
+			initBarcodeDetector();
 			scanInputEl?.focus();
 		})();
 		refocusInterval = setInterval(refocusScanner, 500);
+		scanLoopInterval = setInterval(autoScanTick, AUTO_SCAN_INTERVAL_MS);
 	});
 
 	onDestroy(() => {
 		stopCamera();
 		if (bannerTimer) clearTimeout(bannerTimer);
 		if (refocusInterval) clearInterval(refocusInterval);
+		if (scanLoopInterval) clearInterval(scanLoopInterval);
 	});
 </script>
 
@@ -304,7 +353,7 @@
 			<div>
 				<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">Capture Station</h1>
 				<p class="text-xs text-[var(--color-tron-text-secondary)]">
-					Scan a cartridge with the USB scanner. Press Space to capture the front, then again for the back. Scan a new code to switch cartridge.
+					Hold a cartridge in front of the camera (auto-scans every 2s) or use the USB scanner. Press Space to capture front, then back. Show the next cartridge to switch.
 				</p>
 			</div>
 			<div class="text-xs text-[var(--color-tron-text-secondary)]">
