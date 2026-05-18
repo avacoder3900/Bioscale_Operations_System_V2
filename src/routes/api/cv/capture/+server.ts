@@ -52,6 +52,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	const cameraIndexRaw = formData.get('cameraIndex')?.toString();
 	const processingMode = formData.get('processingMode')?.toString() as 'full' | 'raw' | undefined;
 
+	// Optional R&D forensic context — only set when /cv/forensic-capture sends them.
+	const runId = formData.get('runId')?.toString().trim() || undefined;
+	const sessionId = formData.get('sessionId')?.toString().trim() || undefined;
+	const forensicNotes = formData.get('forensicNotes')?.toString().trim() || undefined;
+	const forensic = (runId || sessionId || forensicNotes)
+		? { runId, sessionId, notes: forensicNotes }
+		: undefined;
+
 	if (!file) return json({ error: 'file is required' }, { status: 400 });
 	if (!cartridgeId) return json({ error: 'cartridgeId is required' }, { status: 400 });
 	if (!phase) return json({ error: 'phase is required' }, { status: 400 });
@@ -92,7 +100,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		imageUrl: publicUrl,
 		processingMode: processingMode === 'raw' || processingMode === 'full' ? processingMode : undefined,
 		cartridgeTag: { cartridgeRecordId: cartridgeId, phase },
-		cartridgeImageNumber
+		cartridgeImageNumber,
+		...(forensic ? { metadata: { forensic } } : {})
 	});
 
 	await CartridgeRecord.updateOne(
