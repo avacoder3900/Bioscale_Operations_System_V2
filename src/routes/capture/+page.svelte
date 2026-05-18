@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import jsQR from 'jsqr';
 
 	let { data } = $props();
 
@@ -49,13 +50,15 @@
 
 	let refocusInterval: ReturnType<typeof setInterval> | null = null;
 
-	// Camera-driven auto-scan: periodically detects QR codes in the live video feed.
+	// Camera-driven auto-scan: jsQR decodes the live video feed every ~2s.
 	// New code → handleScan('auto') locks the cartridge + starts a fresh photo session.
 	// Same code as currently locked → no-op. The USB handheld scanner still works in parallel.
+	// jsQR is the universal path because Chrome's native BarcodeDetector is not exposed on Windows.
 	let scanLoopInterval: ReturnType<typeof setInterval> | null = null;
-	let barcodeDetector: any = null;
+	let scanCanvas: HTMLCanvasElement | null = null;
 	let lastAutoScanCode: string | null = null;
 	const AUTO_SCAN_INTERVAL_MS = 2000;
+	const SCAN_DOWNSAMPLE_WIDTH = 640;  // jsQR scales linearly with pixel count; 640 wide is enough for typical QRs
 
 	async function refreshCameras() {
 		try {
@@ -291,46 +294,43 @@
 		}
 	}
 
-	function initBarcodeDetector() {
-		if (typeof window === 'undefined') return;
-		const w = window as any;
-		if (!w.BarcodeDetector) {
-			console.warn('[capture] BarcodeDetector unavailable in this browser — auto-scan disabled, USB scanner still works');
+	function autoScanTick() {
+		if (!videoEl || !stream || submitting || showRetakeDialog) return;
+		if (videoEl.videoWidth === 0) return;
+
+		if (!scanCanvas) scanCanvas = document.createElement('canvas');
+		const scale = SCAN_DOWNSAMPLE_WIDTH / videoEl.videoWidth;
+		scanCanvas.width = SCAN_DOWNSAMPLE_WIDTH;
+		scanCanvas.height = Math.round(videoEl.videoHeight * scale);
+		const ctx = scanCanvas.getContext('2d', { willReadFrequently: true });
+		if (!ctx) return;
+		ctx.drawImage(videoEl, 0, 0, scanCanvas.width, scanCanvas.height);
+		let imageData: ImageData;
+		try {
+			imageData = ctx.getImageData(0, 0, scanCanvas.width, scanCanvas.height);
+		} catch { return; }
+
+		let result;
+		try {
+			result = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
+		} catch { return; }
+
+		if (!result?.data) {
+			lastAutoScanCode = null;  // Lost sight of code; allow re-trigger next appearance.
 			return;
 		}
-		try {
-			barcodeDetector = new w.BarcodeDetector({ formats: ['qr_code', 'data_matrix', 'code_128', 'code_39'] });
-		} catch (e) {
-			console.warn('[capture] BarcodeDetector init failed:', e);
-		}
-	}
-
-	async function autoScanTick() {
-		if (!barcodeDetector || !videoEl || !stream || submitting || showRetakeDialog) return;
-		if (videoEl.videoWidth === 0) return;
-		try {
-			const barcodes = await barcodeDetector.detect(videoEl);
-			if (!barcodes || barcodes.length === 0) {
-				// Lost sight of code; allow re-trigger next time the same code reappears.
-				lastAutoScanCode = null;
-				return;
-			}
-			const code = (barcodes[0].rawValue || '').trim();
-			if (!code) return;
-			if (code === lastAutoScanCode) return;     // Same code seen last tick.
-			lastAutoScanCode = code;
-			if (code === cartridgeId) return;          // Already locked on this cartridge.
-			await handleScan(code, 'auto');
-		} catch {
-			// Detector throws on some frames; swallow and keep the loop alive.
-		}
+		const code = result.data.trim();
+		if (!code) return;
+		if (code === lastAutoScanCode) return;     // Same code seen last tick.
+		lastAutoScanCode = code;
+		if (code === cartridgeId) return;          // Already locked on this cartridge.
+		handleScan(code, 'auto').catch(() => null);
 	}
 
 	onMount(() => {
 		(async () => {
 			await refreshCameras();
 			await startCamera();
-			initBarcodeDetector();
 			scanInputEl?.focus();
 		})();
 		refocusInterval = setInterval(refocusScanner, 500);
