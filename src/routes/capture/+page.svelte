@@ -30,6 +30,11 @@
 	let selectedStationId = $state<string | null>(null);
 	let ws: WebSocket | null = null;
 	let pc: RTCPeerConnection | null = null;
+	// Tracked separately so beforeunload + teardown can release the right
+	// station even if selectedStationId has already flipped away.
+	let lockedStationId: string | null = null;
+	let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+	const STATION_HEARTBEAT_MS = 60_000;
 
 	// Status / messaging
 	let banner = $state<{ kind: 'ok' | 'err' | 'info'; text: string } | null>(null);
@@ -134,6 +139,7 @@
 	}
 
 	function teardownStation() {
+		if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
 		if (pc) { try { pc.close(); } catch { /* */ } pc = null; }
 		if (ws) { try { ws.close(); } catch { /* */ } ws = null; }
 		if (stream) {
@@ -141,6 +147,12 @@
 			stream = null;
 		}
 		if (videoEl) videoEl.srcObject = null;
+		if (lockedStationId) {
+			const releaseId = lockedStationId;
+			lockedStationId = null;
+			fetch(`/api/cv/stations/${encodeURIComponent(releaseId)}/lock`, { method: 'DELETE' })
+				.catch(() => null);
+		}
 	}
 
 	async function connectToStation(stationId: string) {
@@ -148,6 +160,27 @@
 		if (!station) {
 			flashBanner('err', `Station ${stationId} not found`);
 			selectedStationId = null;
+			return;
+		}
+
+		// Hard one-operator-per-station lock. 409 means another user holds it.
+		try {
+			const lockRes = await fetch(`/api/cv/stations/${encodeURIComponent(stationId)}/lock`, { method: 'POST' });
+			if (lockRes.status === 409) {
+				const body = await lockRes.json().catch(() => ({}));
+				const heldBy = body?.heldBy;
+				const since = heldBy?.since ? new Date(heldBy.since).toLocaleString() : 'earlier';
+				flashBanner('err', `Station already in use by ${heldBy?.username ?? 'another operator'} since ${since}. Pick another station.`);
+				selectedStationId = null;
+				await startCamera();
+				return;
+			}
+			if (!lockRes.ok) throw new Error(`HTTP ${lockRes.status}`);
+			lockedStationId = stationId;
+		} catch (e) {
+			flashBanner('err', `Failed to claim station lock: ${e instanceof Error ? e.message : e}`);
+			selectedStationId = null;
+			await startCamera();
 			return;
 		}
 
@@ -161,6 +194,7 @@
 		} catch (e) {
 			flashBanner('err', `Failed to fetch station token: ${e instanceof Error ? e.message : e}`);
 			selectedStationId = null;
+			teardownStation();
 			await startCamera();
 			return;
 		}
@@ -168,6 +202,16 @@
 		const url = `wss://${station.hostname}/ws?token=${encodeURIComponent(token)}`;
 		const sock = new WebSocket(url);
 		ws = sock;
+
+		sock.onopen = () => {
+			// Heartbeat keeps the BIMS operator-lock alive (5-min server timeout)
+			// and lets the Pi notice the operator went away cleanly.
+			heartbeatInterval = setInterval(() => {
+				if (sock.readyState === WebSocket.OPEN) {
+					try { sock.send(JSON.stringify({ cmd: 'ping' })); } catch { /* */ }
+				}
+			}, STATION_HEARTBEAT_MS);
+		};
 
 		sock.onerror = () => flashBanner('err', `Station ${station.name}: WebSocket error`);
 		sock.onclose = () => {
@@ -465,6 +509,16 @@
 		handleScan(code, 'auto').catch(() => null);
 	}
 
+	function onBeforeUnload() {
+		if (lockedStationId) {
+			// keepalive lets the DELETE finish after the page unloads.
+			fetch(`/api/cv/stations/${encodeURIComponent(lockedStationId)}/lock`, {
+				method: 'DELETE',
+				keepalive: true
+			}).catch(() => null);
+		}
+	}
+
 	onMount(() => {
 		(async () => {
 			await refreshCameras();
@@ -473,9 +527,11 @@
 		})();
 		refocusInterval = setInterval(refocusScanner, 500);
 		scanLoopInterval = setInterval(autoScanTick, AUTO_SCAN_INTERVAL_MS);
+		window.addEventListener('beforeunload', onBeforeUnload);
 	});
 
 	onDestroy(() => {
+		window.removeEventListener('beforeunload', onBeforeUnload);
 		teardownStation();
 		stopCamera();
 		if (bannerTimer) clearTimeout(bannerTimer);
