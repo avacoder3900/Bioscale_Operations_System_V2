@@ -1,8 +1,9 @@
 """bims-capture-agent — Pi-side service entry point.
 
-Phase 1 implements only the HTTP /health endpoint used by BIMS for station
-discovery. WebSocket signaling, camera, scanner, and LED handlers land in
-later phases (see docs/prds/PI-CAPTURE-STATION.md §5).
+HTTP /health for station discovery + WebSocket /ws for the per-operator
+session. /ws carries WebRTC SDP offer/answer + ICE candidates (Phase 2)
+and (Phase 3) scanner events. Scanner + LED modules wire in over the
+same socket. See docs/prds/PI-CAPTURE-STATION.md §5.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import time
 from pathlib import Path
 
 from aiohttp import WSMsgType, web
+from aiortc import RTCIceCandidate, RTCPeerConnection, RTCSessionDescription
 from dotenv import load_dotenv
 
 # Local sibling module — agent.py is run as a script, not as a package member.
@@ -57,16 +59,60 @@ async def health(_request: web.Request) -> web.Response:
     )
 
 
-async def websocket(request: web.Request) -> web.WebSocketResponse:
-    expected = os.environ.get("STATION_TOKEN", "")
-    presented = request.headers.get("X-Station-Token", "")
-    peer = request.remote or "?"
+def _ws_token_ok(request: web.Request) -> bool:
+    """Validate STATION_TOKEN from header or query string.
 
+    Browser WebSocket constructors can't set custom headers, so the BIMS
+    frontend passes the token in ?token=<value>. Native clients (curl,
+    Python test rigs) can still use the X-Station-Token header.
+    """
+    expected = os.environ.get("STATION_TOKEN", "")
+    if not expected:
+        return False
+    header = request.headers.get("X-Station-Token", "")
+    query = request.query.get("token", "")
+    return header == expected or query == expected
+
+
+def _parse_ice_candidate(payload: dict) -> RTCIceCandidate | None:
+    """Decode the candidate dict the browser ships over the WS into aiortc form.
+
+    The browser sends RTCIceCandidateInit-shaped objects:
+      {candidate: "candidate:...", sdpMid: "0", sdpMLineIndex: 0}
+    aiortc.RTCIceCandidate wants the parsed SDP a-line components.
+    """
+    cand_str = payload.get("candidate") or ""
+    if not cand_str.startswith("candidate:"):
+        return None
+    # SDP candidate line layout, RFC 5245 §15.1:
+    # candidate:<foundation> <component> <transport> <priority> <ip> <port>
+    # typ <type> [raddr <ip> rport <port>] ...
+    parts = cand_str[len("candidate:"):].split()
+    if len(parts) < 8 or parts[6] != "typ":
+        return None
+    try:
+        return RTCIceCandidate(
+            foundation=parts[0],
+            component=int(parts[1]),
+            protocol=parts[2].lower(),
+            priority=int(parts[3]),
+            ip=parts[4],
+            port=int(parts[5]),
+            type=parts[7],
+            sdpMid=payload.get("sdpMid"),
+            sdpMLineIndex=payload.get("sdpMLineIndex"),
+        )
+    except (ValueError, IndexError):
+        return None
+
+
+async def websocket(request: web.Request) -> web.WebSocketResponse:
+    peer = request.remote or "?"
     ws = web.WebSocketResponse()
 
-    if not expected or presented != expected:
+    if not _ws_token_ok(request):
         await ws.prepare(request)
-        log.info("ws reject %s — bad/missing X-Station-Token", peer)
+        log.info("ws reject %s — bad/missing station token", peer)
         # 4401 is an application-private close code mirroring HTTP 401.
         await ws.close(code=4401, message=b"unauthorized")
         return ws
@@ -81,6 +127,18 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
             "agent_version": __version__,
         }
     )
+
+    # One peer connection per WebSocket session. Closed on disconnect.
+    pc: RTCPeerConnection | None = None
+
+    async def teardown_pc() -> None:
+        nonlocal pc
+        if pc is not None:
+            try:
+                await pc.close()
+            except Exception:
+                log.exception("error closing peer connection for %s", peer)
+            pc = None
 
     try:
         async for msg in ws:
@@ -99,11 +157,68 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
                 elif cmd == "close":
                     await ws.close(code=1000, message=b"client requested")
                     break
+                elif cmd == "sdp_offer":
+                    sdp = payload.get("sdp")
+                    if not sdp:
+                        log.warning("ws %s sdp_offer missing sdp field", peer)
+                        continue
+                    await teardown_pc()
+                    pc = RTCPeerConnection()
+
+                    @pc.on("connectionstatechange")
+                    async def _on_pc_state() -> None:
+                        if pc is not None:
+                            log.info(
+                                "ws %s pc state -> %s",
+                                peer,
+                                pc.connectionState,
+                            )
+
+                    track = camera_mod.get_camera_track()
+                    if track is None:
+                        await ws.send_json(
+                            {
+                                "event": "error",
+                                "code": "no_camera",
+                                "message": "camera not available",
+                            }
+                        )
+                        await teardown_pc()
+                        continue
+                    pc.addTrack(track)
+
+                    await pc.setRemoteDescription(
+                        RTCSessionDescription(sdp=sdp, type="offer")
+                    )
+                    answer = await pc.createAnswer()
+                    await pc.setLocalDescription(answer)
+                    # aiortc gathers all ICE candidates synchronously during
+                    # setLocalDescription, so the answer SDP carries them
+                    # inline — no separate trickle from the agent is needed.
+                    await ws.send_json(
+                        {
+                            "event": "sdp_answer",
+                            "sdp": pc.localDescription.sdp,
+                        }
+                    )
+                elif cmd == "ice_candidate":
+                    candidate_payload = payload.get("candidate")
+                    if pc is None or not isinstance(candidate_payload, dict):
+                        continue
+                    candidate = _parse_ice_candidate(candidate_payload)
+                    if candidate is None:
+                        log.debug("ws %s skipped unparseable ICE candidate", peer)
+                        continue
+                    try:
+                        await pc.addIceCandidate(candidate)
+                    except Exception:
+                        log.exception("ws %s failed to add ICE candidate", peer)
                 else:
-                    log.debug("ws %s unhandled cmd=%r (Phase 1 stub)", peer, cmd)
+                    log.debug("ws %s unhandled cmd=%r", peer, cmd)
             elif msg.type == WSMsgType.ERROR:
                 log.warning("ws %s error: %s", peer, ws.exception())
     finally:
+        await teardown_pc()
         log.info("ws disconnect %s", peer)
 
     return ws
