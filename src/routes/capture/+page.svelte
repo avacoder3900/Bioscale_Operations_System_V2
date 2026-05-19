@@ -26,8 +26,10 @@
 
 	// Remote Pi capture station. null = local USB camera (today's path).
 	// A real id swaps the video source to a WebRTC stream from that Pi —
-	// see onStationChange() and the WebRTC client added in a follow-up.
+	// see onStationChange() and connectToStation().
 	let selectedStationId = $state<string | null>(null);
+	let ws: WebSocket | null = null;
+	let pc: RTCPeerConnection | null = null;
 
 	// Status / messaging
 	let banner = $state<{ kind: 'ok' | 'err' | 'info'; text: string } | null>(null);
@@ -115,14 +117,124 @@
 	}
 
 	// Swap the video source when the operator picks a remote Pi station.
-	// Phase 2 of the station rollout — drops the local camera; the WebRTC
-	// client (added in the next commit) attaches the remote MediaStream.
-	// Going back to "(Local)" restores the USB-camera path verbatim.
+	// Drops the local camera, fetches the station token, opens a /ws
+	// WebSocket to the Pi, negotiates WebRTC, and attaches the remote
+	// MediaStream to videoEl. Going back to "(Local)" tears everything
+	// down and restores the USB-camera path verbatim. jsQR auto-scan +
+	// capturePhoto both read from `videoEl` and gate on `stream`, so we
+	// assign the remote MediaStream into `stream` to keep them working
+	// unchanged.
 	async function onStationChange() {
+		teardownStation();
 		if (selectedStationId) {
-			stopCamera();
+			await connectToStation(selectedStationId);
 		} else {
 			await startCamera();
+		}
+	}
+
+	function teardownStation() {
+		if (pc) { try { pc.close(); } catch { /* */ } pc = null; }
+		if (ws) { try { ws.close(); } catch { /* */ } ws = null; }
+		if (stream) {
+			stream.getTracks().forEach(t => t.stop());
+			stream = null;
+		}
+		if (videoEl) videoEl.srcObject = null;
+	}
+
+	async function connectToStation(stationId: string) {
+		const station = data.stations.find((s: { _id: string }) => s._id === stationId);
+		if (!station) {
+			flashBanner('err', `Station ${stationId} not found`);
+			selectedStationId = null;
+			return;
+		}
+
+		let token: string;
+		try {
+			const tokRes = await fetch(`/api/cv/stations/${encodeURIComponent(stationId)}/token`);
+			if (!tokRes.ok) throw new Error(`HTTP ${tokRes.status}`);
+			const tokBody = await tokRes.json();
+			token = tokBody.token;
+			if (!token) throw new Error('empty token');
+		} catch (e) {
+			flashBanner('err', `Failed to fetch station token: ${e instanceof Error ? e.message : e}`);
+			selectedStationId = null;
+			await startCamera();
+			return;
+		}
+
+		const url = `wss://${station.hostname}/ws?token=${encodeURIComponent(token)}`;
+		const sock = new WebSocket(url);
+		ws = sock;
+
+		sock.onerror = () => flashBanner('err', `Station ${station.name}: WebSocket error`);
+		sock.onclose = () => {
+			// If the user is still on this station, surface that the link dropped.
+			if (selectedStationId === stationId) {
+				flashBanner('err', `Station ${station.name}: connection closed`);
+			}
+		};
+
+		sock.onmessage = async (ev) => {
+			let msg: any;
+			try { msg = JSON.parse(ev.data); } catch { return; }
+
+			if (msg.event === 'hello') {
+				try {
+					await startWebRtcOffer(sock);
+				} catch (e) {
+					flashBanner('err', `WebRTC offer failed: ${e instanceof Error ? e.message : e}`);
+				}
+				return;
+			}
+
+			if (msg.event === 'sdp_answer' && pc && msg.sdp) {
+				try {
+					await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+				} catch (e) {
+					flashBanner('err', `setRemoteDescription failed: ${e instanceof Error ? e.message : e}`);
+				}
+				return;
+			}
+
+			if (msg.event === 'ice_candidate' && pc && msg.candidate) {
+				try {
+					await pc.addIceCandidate(msg.candidate);
+				} catch { /* best effort — late candidates are okay to drop */ }
+				return;
+			}
+		};
+	}
+
+	async function startWebRtcOffer(sock: WebSocket) {
+		const peer = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+		pc = peer;
+
+		// Receive-only — the Pi sends video, we don't send anything back.
+		peer.addTransceiver('video', { direction: 'recvonly' });
+
+		peer.ontrack = (event) => {
+			const remoteStream = event.streams[0];
+			if (!remoteStream) return;
+			stream = remoteStream;
+			if (videoEl) {
+				videoEl.srcObject = remoteStream;
+				videoEl.play().catch(() => null);
+			}
+		};
+
+		peer.onicecandidate = (event) => {
+			if (event.candidate && sock.readyState === WebSocket.OPEN) {
+				sock.send(JSON.stringify({ cmd: 'ice_candidate', candidate: event.candidate.toJSON() }));
+			}
+		};
+
+		const offer = await peer.createOffer();
+		await peer.setLocalDescription(offer);
+		if (sock.readyState === WebSocket.OPEN) {
+			sock.send(JSON.stringify({ cmd: 'sdp_offer', sdp: offer.sdp }));
 		}
 	}
 
@@ -355,6 +467,7 @@
 	});
 
 	onDestroy(() => {
+		teardownStation();
 		stopCamera();
 		if (bannerTimer) clearTimeout(bannerTimer);
 		if (refocusInterval) clearInterval(refocusInterval);
