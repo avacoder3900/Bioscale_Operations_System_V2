@@ -30,8 +30,7 @@ const captureStationSchema = new Schema({
 	mode: { type: String, enum: ['free', 'assigned'], default: 'free' },
 	assignedPhase: String,
 	currentOperator: currentOperatorSchema,
-	// bcrypt hash of the station auth token. Plaintext is returned once
-	// at registration and never stored.
+	// plaintext station auth token; returned to authenticated operators on demand.
 	token: String,
 	createdBy: operatorRefSchema
 }, { timestamps: true });

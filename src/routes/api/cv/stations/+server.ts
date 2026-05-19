@@ -6,7 +6,6 @@
  */
 import { json, error } from '@sveltejs/kit';
 import { randomBytes } from 'node:crypto';
-import bcrypt from 'bcryptjs';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CaptureStation } from '$lib/server/db/models/capture-station.js';
 import { AuditLog } from '$lib/server/db/models/audit-log.js';
@@ -76,9 +75,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		return json({ _id: existing._id } satisfies Pick<RegisterStationResponse, '_id'>);
 	}
 
-	// First-time registration — mint a fresh token, return plaintext ONCE.
+	// First-time registration — mint a fresh token. Plaintext-at-rest: the
+	// browser needs it to auth the Pi WebSocket via query string, so we can't
+	// store a one-way hash. The token is .select('-token')-excluded from list
+	// responses and only revealed via the dedicated /api/cv/stations/[id]/token
+	// endpoint to authenticated operators.
 	const plaintextToken = randomBytes(32).toString('base64');
-	const tokenHash = await bcrypt.hash(plaintextToken, 10);
 
 	const _id = generateId();
 	await CaptureStation.create({
@@ -91,7 +93,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		status: 'online',
 		mode: 'free',
 		lastSeenAt: now,
-		token: tokenHash,
+		token: plaintextToken,
 		createdBy: { _id: locals.user._id, username: locals.user.username },
 		createdAt: now
 	});
