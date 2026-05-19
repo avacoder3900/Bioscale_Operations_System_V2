@@ -18,8 +18,9 @@ from aiohttp import WSMsgType, web
 from aiortc import RTCIceCandidate, RTCPeerConnection, RTCSessionDescription
 from dotenv import load_dotenv
 
-# Local sibling module — agent.py is run as a script, not as a package member.
+# Local sibling modules — agent.py is run as a script, not as a package member.
 import camera as camera_mod  # noqa: E402
+import scanner as scanner_mod  # noqa: E402
 
 __version__ = "0.1.0"
 
@@ -51,7 +52,7 @@ async def health(_request: web.Request) -> web.Response:
             "station_name": os.environ.get("STATION_NAME", ""),
             "agent_version": __version__,
             "camera_ok": camera_mod.is_available(),
-            "scanner_ok": False,
+            "scanner_ok": scanner_mod.is_available(),
             "led_ok": False,
             "robot_arm_ok": False,
             "uptime_s": int(time.monotonic() - _started_at),
@@ -224,10 +225,15 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
+async def _on_startup(_app: web.Application) -> None:
+    await scanner_mod.start()
+
+
 def build_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/health", health)
     app.router.add_get("/ws", websocket)
+    app.on_startup.append(_on_startup)
     return app
 
 
