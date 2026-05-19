@@ -24,6 +24,11 @@
 	let selectedCameraId = $state<string | null>(null);
 	let cameraError = $state<string | null>(null);
 
+	// Remote Pi capture station. null = local USB camera (today's path).
+	// A real id swaps the video source to a WebRTC stream from that Pi —
+	// see onStationChange() and the WebRTC client added in a follow-up.
+	let selectedStationId = $state<string | null>(null);
+
 	// Status / messaging
 	let banner = $state<{ kind: 'ok' | 'err' | 'info'; text: string } | null>(null);
 	let bannerTimer: ReturnType<typeof setTimeout> | null = null;
@@ -107,6 +112,18 @@
 			stream = null;
 		}
 		if (videoEl) videoEl.srcObject = null;
+	}
+
+	// Swap the video source when the operator picks a remote Pi station.
+	// Phase 2 of the station rollout — drops the local camera; the WebRTC
+	// client (added in the next commit) attaches the remote MediaStream.
+	// Going back to "(Local)" restores the USB-camera path verbatim.
+	async function onStationChange() {
+		if (selectedStationId) {
+			stopCamera();
+		} else {
+			await startCamera();
+		}
 	}
 
 	async function handleScan(rawCode: string, source: 'handheld' | 'auto' = 'handheld') {
@@ -390,6 +407,15 @@
 					<select id="phase-sel" bind:value={phase} class="tron-input">
 						{#each data.phases as p (p)}
 							<option value={p}>{p}</option>
+						{/each}
+					</select>
+				</div>
+				<div>
+					<label for="station-sel" class="block text-xs uppercase text-[var(--color-tron-text-secondary)]">Station</label>
+					<select id="station-sel" bind:value={selectedStationId} onchange={() => onStationChange()} class="tron-input">
+						<option value={null}>(Local)</option>
+						{#each data.stations as s (s._id)}
+							<option value={s._id}>{s.name}</option>
 						{/each}
 					</select>
 				</div>
