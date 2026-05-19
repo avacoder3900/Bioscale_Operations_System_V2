@@ -16,6 +16,9 @@ from pathlib import Path
 from aiohttp import WSMsgType, web
 from dotenv import load_dotenv
 
+# Local sibling module — agent.py is run as a script, not as a package member.
+import camera as camera_mod  # noqa: E402
+
 __version__ = "0.1.0"
 
 _HERE = Path(__file__).resolve().parent
@@ -45,7 +48,7 @@ async def health(_request: web.Request) -> web.Response:
             "station_id": os.environ.get("STATION_ID", ""),
             "station_name": os.environ.get("STATION_NAME", ""),
             "agent_version": __version__,
-            "camera_ok": False,
+            "camera_ok": camera_mod.is_available(),
             "scanner_ok": False,
             "led_ok": False,
             "robot_arm_ok": False,
@@ -116,6 +119,10 @@ def build_app() -> web.Application:
 def main() -> None:
     port = int(os.environ.get("PORT", "8765"))
     log.info("starting bims-capture-agent v%s on 0.0.0.0:%d", __version__, port)
+    if camera_mod.probe():
+        log.info("camera ready")
+    else:
+        log.warning("camera not available — /health will report camera_ok=false")
     web.run_app(build_app(), host="0.0.0.0", port=port, print=None)
 
 
