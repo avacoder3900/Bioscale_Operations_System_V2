@@ -8,11 +8,13 @@ same socket. See docs/prds/PI-CAPTURE-STATION.md §5.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import time
 from pathlib import Path
+from typing import Set
 
 from aiohttp import WSMsgType, web
 from aiortc import RTCIceCandidate, RTCPeerConnection, RTCSessionDescription
@@ -39,6 +41,17 @@ logging.basicConfig(
 log = logging.getLogger("bims-capture-agent")
 
 _started_at = time.monotonic()
+
+# Connected operator browsers. Scanner events fan out to every member.
+#
+# PRD §11 says the multi-tenant invariant is "one operator per station at a
+# time" — but that lock is enforced server-side by BIMS on station-select
+# (POST /api/cv/stations/[id]/lock). The Pi has no view into who's logged
+# in, so we broadcast to every authenticated WS peer. If a second tab from
+# the same operator connects (legitimate per PRD §6.3), both see the scan;
+# if a misbehaving second operator somehow bypasses the BIMS lock, they
+# also see scans — but they shouldn't be connected in the first place.
+_ws_clients: Set[web.WebSocketResponse] = set()
 
 
 def _bool_env(name: str) -> bool:
@@ -119,7 +132,8 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
         return ws
 
     await ws.prepare(request)
-    log.info("ws connect %s", peer)
+    _ws_clients.add(ws)
+    log.info("ws connect %s (clients=%d)", peer, len(_ws_clients))
 
     await ws.send_json(
         {
@@ -220,13 +234,49 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
                 log.warning("ws %s error: %s", peer, ws.exception())
     finally:
         await teardown_pc()
-        log.info("ws disconnect %s", peer)
+        _ws_clients.discard(ws)
+        log.info("ws disconnect %s (clients=%d)", peer, len(_ws_clients))
 
     return ws
 
 
-async def _on_startup(_app: web.Application) -> None:
+async def _broadcast_scans() -> None:
+    """Forward each barcode scan to every connected WebSocket client.
+
+    Each send is guarded so one dead client can't stall the broadcast for
+    the rest. Dead clients are dropped from the set on the next handler
+    iteration when their /ws coroutine unwinds.
+    """
+    queue = scanner_mod.event_queue()
+    while True:
+        code = await queue.get()
+        message = {"event": "scan", "code": code, "ts": int(time.time() * 1000)}
+        for ws in list(_ws_clients):
+            if ws.closed:
+                _ws_clients.discard(ws)
+                continue
+            try:
+                await ws.send_json(message)
+            except Exception:
+                log.exception("failed to forward scan to a client; dropping")
+                _ws_clients.discard(ws)
+
+
+async def _on_startup(app: web.Application) -> None:
     await scanner_mod.start()
+    app["scan_broadcaster"] = asyncio.create_task(
+        _broadcast_scans(), name="bims-scan-broadcaster"
+    )
+
+
+async def _on_cleanup(app: web.Application) -> None:
+    task = app.get("scan_broadcaster")
+    if task is not None:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
 
 
 def build_app() -> web.Application:
@@ -234,6 +284,7 @@ def build_app() -> web.Application:
     app.router.add_get("/health", health)
     app.router.add_get("/ws", websocket)
     app.on_startup.append(_on_startup)
+    app.on_cleanup.append(_on_cleanup)
     return app
 
 
