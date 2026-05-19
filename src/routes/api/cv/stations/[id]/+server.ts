@@ -25,7 +25,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
 	await connectDB();
 
-	const station = await CaptureStation.findById(params.id).select('-token').lean();
+	const station = await CaptureStation.findById(params.id).select('-jwtSecret').lean();
 	if (!station) return json({ error: 'Station not found' }, { status: 404 });
 
 	return json({ data: JSON.parse(JSON.stringify(station)) });
@@ -61,11 +61,11 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 		}
 	}
 
-	const previous = await CaptureStation.findById(params.id).select('-token').lean() as any;
+	const previous = await CaptureStation.findById(params.id).select('-jwtSecret').lean() as any;
 	if (!previous) return json({ error: 'Station not found' }, { status: 404 });
 
 	const station = await CaptureStation.findByIdAndUpdate(params.id, update, { new: true })
-		.select('-token')
+		.select('-jwtSecret')
 		.lean();
 	if (!station) return json({ error: 'Station not found' }, { status: 404 });
 
@@ -89,7 +89,7 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
 	requireCvOrManufacturing(locals.user);
 	await connectDB();
 
-	const station = await CaptureStation.findById(params.id).select('-token').lean() as any;
+	const station = await CaptureStation.findById(params.id).select('-jwtSecret').lean() as any;
 	if (!station) return json({ error: 'Station not found' }, { status: 404 });
 
 	await CaptureStation.deleteOne({ _id: params.id });

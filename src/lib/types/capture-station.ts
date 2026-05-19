@@ -48,8 +48,12 @@ export interface RegisterStationRequest {
 
 export interface RegisterStationResponse {
 	_id: string;
-	/** Plaintext station token — returned ONCE on initial registration only. */
-	token: string;
+	/**
+	 * HS256 signing secret used by the Pi to verify short-lived browser→Pi
+	 * auth JWTs. Returned ONCE on initial registration; rotated only by
+	 * re-registering the station.
+	 */
+	jwtSecret: string;
 }
 
 export type LockStationResponse =

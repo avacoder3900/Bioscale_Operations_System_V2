@@ -19,7 +19,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 	await connectDB();
 
 	const stations = await CaptureStation.find()
-		.select('-token')
+		.select('-jwtSecret')
 		.sort({ name: 1 })
 		.lean();
 
@@ -71,16 +71,16 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			reason: 're-register'
 		});
 
-		// Existing station — no token returned. Pi keeps the one it has on disk.
+		// Existing station — no jwtSecret returned. Pi keeps the one it has on disk.
 		return json({ _id: existing._id } satisfies Pick<RegisterStationResponse, '_id'>);
 	}
 
-	// First-time registration — mint a fresh token. Plaintext-at-rest: the
-	// browser needs it to auth the Pi WebSocket via query string, so we can't
-	// store a one-way hash. The token is .select('-token')-excluded from list
-	// responses and only revealed via the dedicated /api/cv/stations/[id]/token
-	// endpoint to authenticated operators.
-	const plaintextToken = randomBytes(32).toString('base64');
+	// First-time registration — mint a fresh HS256 signing secret. Plaintext at
+	// rest: the Pi holds the same secret and uses it to verify the short-lived
+	// JWTs that the browser mints on demand via /api/cv/stations/[id]/token.
+	// The secret is .select('-jwtSecret')-excluded from list responses and
+	// never returned again after this registration call.
+	const jwtSecret = randomBytes(32).toString('base64');
 
 	const _id = generateId();
 	await CaptureStation.create({
@@ -93,7 +93,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		status: 'online',
 		mode: 'free',
 		lastSeenAt: now,
-		token: plaintextToken,
+		jwtSecret,
 		createdBy: { _id: locals.user._id, username: locals.user.username },
 		createdAt: now
 	});
@@ -109,6 +109,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		reason: 'register'
 	});
 
-	const payload: RegisterStationResponse = { _id, token: plaintextToken };
+	const payload: RegisterStationResponse = { _id, jwtSecret };
 	return json(payload, { status: 201 });
 };

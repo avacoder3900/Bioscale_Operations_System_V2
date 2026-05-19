@@ -30,8 +30,9 @@ const captureStationSchema = new Schema({
 	mode: { type: String, enum: ['free', 'assigned'], default: 'free' },
 	assignedPhase: String,
 	currentOperator: currentOperatorSchema,
-	// plaintext station auth token; returned to authenticated operators on demand.
-	token: String,
+	// HS256 signing secret for short-lived browser→Pi auth JWTs.
+	// Plaintext at rest; rotated by re-registering the station.
+	jwtSecret: String,
 	createdBy: operatorRefSchema
 }, { timestamps: true });
 
