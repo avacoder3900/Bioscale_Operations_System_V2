@@ -205,6 +205,15 @@
 				} catch { /* best effort — late candidates are okay to drop */ }
 				return;
 			}
+
+			// Pi scanner forwards each Enter-terminated read as a single event.
+			// Funnel into the same handleScan path the local USB scanner uses;
+			// 'auto' source debounces same-cartridge re-fires (matches jsQR
+			// behavior so a scan that's already locked is a no-op).
+			if (msg.event === 'scan' && typeof msg.code === 'string') {
+				handleScan(msg.code, 'auto').catch(() => null);
+				return;
+			}
 		};
 	}
 
