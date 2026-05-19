@@ -1,25 +1,42 @@
 /**
- * GET /api/cv/stations/[id]/token — reveal the station auth token to an
- * authenticated operator so the browser can pass it in the WSS query string
- * when connecting to the Pi.
+ * GET /api/cv/stations/[id]/token — mint a 5-min HS256 JWT signed with the
+ * station's jwtSecret. The browser passes it in the wss://<station>/ws
+ * query string; the Pi verifies the signature with the same secret it
+ * received at registration.
  *
- * Token is plaintext-at-rest (see refactor at a35d48da). Any logged-in
- * operator can fetch it — the upstream operator-lock on the station
- * prevents two browsers from claiming the same station concurrently.
+ * The signing secret never leaves BIMS after registration. JWT carries
+ * operator identity claims so the Pi can attribute the connection in its
+ * own logs.
  */
 import { json, error } from '@sveltejs/kit';
+import jwt from 'jsonwebtoken';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CaptureStation } from '$lib/server/db/models/capture-station.js';
 import { AuditLog } from '$lib/server/db/models/audit-log.js';
 import { generateId } from '$lib/server/db/utils.js';
 import type { RequestHandler } from './$types';
 
+const JWT_TTL_MINUTES = 5;
+
 export const GET: RequestHandler = async ({ params, locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
 	await connectDB();
 
-	const station = await CaptureStation.findById(params.id).select('token').lean() as any;
+	const station = await CaptureStation.findById(params.id).select('jwtSecret').lean() as any;
 	if (!station) return json({ error: 'Station not found' }, { status: 404 });
+	if (!station.jwtSecret) {
+		return json({ error: 'Station has no signing secret — re-register the Pi' }, { status: 409 });
+	}
+
+	const token = jwt.sign(
+		{
+			stationId: station._id,
+			operatorId: locals.user._id,
+			operatorUsername: locals.user.username
+		},
+		station.jwtSecret,
+		{ algorithm: 'HS256', expiresIn: `${JWT_TTL_MINUTES}m` }
+	);
 
 	await AuditLog.create({
 		_id: generateId(),
@@ -28,8 +45,9 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 		action: 'READ',
 		changedAt: new Date(),
 		changedBy: locals.user.username,
-		reason: 'token_fetch'
+		reason: 'jwt_mint',
+		newData: { ttlMinutes: JWT_TTL_MINUTES }
 	});
 
-	return json({ token: station.token });
+	return json({ token });
 };
