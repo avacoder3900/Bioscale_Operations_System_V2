@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 from typing import Set
 
+import jwt as pyjwt
 from aiohttp import WSMsgType, web
 from aiortc import RTCIceCandidate, RTCPeerConnection, RTCSessionDescription
 from dotenv import load_dotenv
@@ -73,19 +74,57 @@ async def health(_request: web.Request) -> web.Response:
     )
 
 
-def _ws_token_ok(request: web.Request) -> bool:
-    """Validate STATION_TOKEN from header or query string.
+class _AuthOutcome:
+    __slots__ = ("ok", "claims", "close_code", "close_reason")
 
-    Browser WebSocket constructors can't set custom headers, so the BIMS
-    frontend passes the token in ?token=<value>. Native clients (curl,
-    Python test rigs) can still use the X-Station-Token header.
+    def __init__(
+        self,
+        ok: bool,
+        *,
+        claims: dict | None = None,
+        close_code: int = 4401,
+        close_reason: bytes = b"unauthorized",
+    ) -> None:
+        self.ok = ok
+        self.claims = claims or {}
+        self.close_code = close_code
+        self.close_reason = close_reason
+
+
+def _ws_authenticate(request: web.Request) -> _AuthOutcome:
+    """Verify the per-session JWT presented on /ws.
+
+    The BIMS frontend hands the operator a station-scoped HS256 JWT minted
+    server-side and forwards it in ?token=<jwt>. Native clients (test rigs,
+    curl) may use the X-Station-Token header instead — browsers can't set
+    custom headers on the WebSocket constructor, but everything else can.
+
+    Signing secret comes from STATION_JWT_SECRET, written into station.env
+    during station registration. An empty secret is a configuration error
+    and we reject all connections rather than fail open.
     """
-    expected = os.environ.get("STATION_TOKEN", "")
-    if not expected:
-        return False
-    header = request.headers.get("X-Station-Token", "")
-    query = request.query.get("token", "")
-    return header == expected or query == expected
+    secret = os.environ.get("STATION_JWT_SECRET", "")
+    if not secret:
+        log.warning(
+            "STATION_JWT_SECRET is empty — rejecting all /ws connections"
+        )
+        return _AuthOutcome(False, close_reason=b"server misconfigured")
+
+    presented = request.query.get("token") or request.headers.get(
+        "X-Station-Token", ""
+    )
+    if not presented:
+        return _AuthOutcome(False, close_reason=b"missing token")
+
+    try:
+        claims = pyjwt.decode(presented, secret, algorithms=["HS256"])
+    except pyjwt.ExpiredSignatureError:
+        return _AuthOutcome(False, close_reason=b"token expired")
+    except pyjwt.InvalidTokenError as exc:
+        log.info("ws reject %s — invalid JWT: %s", request.remote or "?", exc)
+        return _AuthOutcome(False, close_reason=b"unauthorized")
+
+    return _AuthOutcome(True, claims=claims)
 
 
 def _parse_ice_candidate(payload: dict) -> RTCIceCandidate | None:
@@ -124,16 +163,22 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
     peer = request.remote or "?"
     ws = web.WebSocketResponse()
 
-    if not _ws_token_ok(request):
+    auth = _ws_authenticate(request)
+    if not auth.ok:
         await ws.prepare(request)
-        log.info("ws reject %s — bad/missing station token", peer)
         # 4401 is an application-private close code mirroring HTTP 401.
-        await ws.close(code=4401, message=b"unauthorized")
+        await ws.close(code=auth.close_code, message=auth.close_reason)
         return ws
 
     await ws.prepare(request)
     _ws_clients.add(ws)
-    log.info("ws connect %s (clients=%d)", peer, len(_ws_clients))
+    operator = auth.claims.get("operatorUsername") or auth.claims.get("sub") or "?"
+    log.info(
+        "ws connect %s operator=%s (clients=%d)",
+        peer,
+        operator,
+        len(_ws_clients),
+    )
 
     await ws.send_json(
         {
