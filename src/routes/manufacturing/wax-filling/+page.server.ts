@@ -617,11 +617,15 @@ export const actions: Actions = {
 			return fail(400, { error: `Duplicate barcode(s) scanned: ${[...new Set(dupes)].join(', ')}` });
 		}
 
-		// Check if any of these cartridges are already in another active wax run
+		// Check if any of these cartridges are already in another active wax run.
+		// Excludes cartridges whose waxFilling.runId is *this* run so a retry of a
+		// half-completed loadDeck (cartridges written, run update missed) doesn't
+		// dead-end the operator with "already processed" — the second submission
+		// is idempotent for the same runId.
 		if (cartridgeIds.length > 0) {
 			const alreadyInUse = await CartridgeRecord.find({
 				_id: { $in: cartridgeIds },
-				'waxFilling.runId': { $exists: true },
+				'waxFilling.runId': { $exists: true, $ne: runId },
 				status: { $nin: [null, 'backing', 'voided'] }
 			}).select('_id status waxFilling.runId').lean();
 
@@ -758,15 +762,31 @@ export const actions: Actions = {
 			}
 		}
 
-		await WaxFillingRun.findByIdAndUpdate(runId, {
-			$set: {
-				status: 'Loading',
-				deckId: deckId ?? run.deckId,
-				ovenId: ovenId ?? run.ovenId,
-				plannedCartridgeCount: cartridgeIds.length || run.plannedCartridgeCount
-			},
-			$addToSet: { cartridgeIds: { $each: cartridgeIds } }
-		});
+		// The cartridge bulkWrite above stamps each cart with waxFilling.runId,
+		// but the run itself doesn't know about them until this $addToSet lands.
+		// If this update silently fails (driver timeout, etc.), the cartridges
+		// are marooned: status=wax_filling pointing at a run with empty
+		// cartridgeIds — invisible in every wax-filling UI. Surface that
+		// failure loudly so the operator can retry (which is now safe due to
+		// the alreadyInUse same-run exclusion above).
+		try {
+			const updatedRun = await WaxFillingRun.findByIdAndUpdate(runId, {
+				$set: {
+					status: 'Loading',
+					deckId: deckId ?? run.deckId,
+					ovenId: ovenId ?? run.ovenId,
+					plannedCartridgeCount: cartridgeIds.length || run.plannedCartridgeCount
+				},
+				$addToSet: { cartridgeIds: { $each: cartridgeIds } }
+			}, { new: true });
+			if (!updatedRun) {
+				console.error(`[loadDeck] WaxFillingRun ${runId} update returned null — run not found`);
+				return fail(500, { error: `Run ${runId} could not be updated (not found). Cartridges were saved — click Confirm Load again to retry.` });
+			}
+		} catch (err) {
+			console.error('[loadDeck] WaxFillingRun update failed:', err instanceof Error ? err.message : err);
+			return fail(500, { error: `Failed to attach cartridges to run: ${err instanceof Error ? err.message : 'Unknown error'}. Cartridges were saved — click Confirm Load again to retry.` });
+		}
 
 		return { success: true };
 	},
