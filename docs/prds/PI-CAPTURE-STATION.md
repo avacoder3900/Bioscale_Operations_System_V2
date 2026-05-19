@@ -145,19 +145,33 @@ Cheaper to implement, but no inter-frame compression — bandwidth-heavy at the 
 // src/lib/server/db/models/capture-station.ts
 const captureStationSchema = new Schema({
   _id: { type: String, default: () => generateId() },
-  name: { type: String, required: true },          // human label: "Wax Fill Bench 1"
-  hostname: { type: String, required: true },      // cap-pi-1.local
-  ipAddress: String,                                // last-known IP for mDNS-less fallback
+  name: { type: String, required: true },          // "Wax Fill Bench 1"
+  hostname: { type: String, required: true },      // cap-pi-1.<yourdomain> (Cloudflare-Tunnel URL)
+  ipAddress: String,                                // last-known LAN IP for debug fallback
   location: String,                                 // free-text floor location
   agentVersion: String,                             // last-seen `bims-capture-agent` version
-  lastSeenAt: Date,                                 // bumped by health polling
+  lastSeenAt: Date,                                 // bumped by /health poll
   status: { type: String, enum: ['online', 'offline', 'degraded'] },
   capabilities: {
     camera: Boolean,
     scanner: Boolean,
-    led: Boolean
+    led: Boolean,
+    robotArm: Boolean              // forward-compat (Phase 7+); see §13
   },
-  defaultPhase: String,                             // station's default capture phase (optional)
+  // Mode controls whether the operator can pick the capture phase or the station
+  // is locked to one. "free" = operator-selectable; "assigned" = phase is fixed
+  // to `assignedPhase` and the dropdown on /capture is read-only while this
+  // station is selected.
+  mode: { type: String, enum: ['free', 'assigned'], default: 'free' },
+  assignedPhase: String,            // required when mode === 'assigned'
+  // Current-operator lock: hard limit of one operator per station at a time.
+  // One operator may hold sessions on multiple stations simultaneously.
+  // Cleared on disconnect or by an explicit release call.
+  currentOperator: {
+    _id: String,
+    username: String,
+    since: Date
+  },
   createdBy: { _id: String, username: String },
   createdAt: Date
 });
@@ -183,6 +197,8 @@ const captureStationSchema = new Schema({
   - Routes WebSocket `{event:'scan'}` messages into the existing `handleScan(code, 'auto')` path.
 - Selecting `(Local)`: unchanged — uses workstation camera/scanner as today.
 - Add an **LED** toggle near the camera selector — sends `{cmd:'led', state:'on'|'off'}` over WebSocket.
+- **Mode-driven phase lock.** When a station with `mode === 'assigned'` is selected, the phase dropdown is set to `assignedPhase` and disabled. When `mode === 'free'`, the dropdown stays interactive.
+- **Operator lock.** On station-select, the page calls `POST /api/cv/stations/[id]/lock` with the current user. If the station already has a `currentOperator` that isn't this user, the call returns 409 and the page shows a banner: "Station already in use by {username} since {since}." Same operator on a different tab/window: re-uses the existing lock. Lock is released on `beforeunload` or after a 5-minute heartbeat timeout.
 
 ### 6.4 New admin page — `/cv/stations`
 
@@ -197,10 +213,11 @@ Plain table: name · hostname · status · agent version · last seen · actions
 1. Flash the pre-built `bims-capture-pi.img` to an SD card.
 2. Boot the Pi with Ethernet plugged in (first time only).
 3. SSH in (default user `bims`, key-baked into the image), run `setup-station.sh`:
-   - Prompts: station name ("Wax Fill Bench 1"), BIMS server URL, manufacturing WiFi SSID + password.
+   - Prompts: station name ("Wax Fill Bench 1"), BIMS server URL, manufacturing WiFi SSID + password, Cloudflare Tunnel token (one per station, generated from the Cloudflare dashboard).
    - Writes `/etc/bims/station.env`.
+   - Installs and registers `cloudflared` as a systemd service — the station becomes reachable at `https://cap-pi-<name>.<yourdomain>` within ~30s.
    - Enables and starts `bims-capture-agent` systemd service.
-   - Agent POSTs to `<BIMS>/api/cv/stations` to register itself.
+   - Agent POSTs to `<BIMS>/api/cv/stations` to register itself, including its Cloudflare hostname.
 4. Operator unplugs Ethernet, mounts the station, plugs in power.
 5. Station auto-joins WiFi on boot, registers as `online` to BIMS.
 
@@ -223,9 +240,9 @@ Target: under 15 minutes from "factory-fresh Pi" to "registered and streaming."
 ## 8. Security
 
 - Manufacturing LAN is treated as trusted.
-- Pi WebSocket requires a shared secret in `X-Station-Token` header, set in `station.env`. BIMS supplies the token at registration time and stores it in `CaptureStation.token` (hashed).
+- Pi WebSocket requires a shared secret in the `X-Station-Token` header, set in `station.env`. BIMS supplies the token at registration time and stores it in `CaptureStation.token` (hashed).
 - BIMS endpoints `/api/cv/stations*` require `cv:write` or `manufacturing:write` (parity with `/api/cv/capture`).
-- TLS: signaling WebSocket should be `wss://` because the BIMS page is served over HTTPS (mixed-content blocking). Self-signed certs on the Pi, root CA fingerprint distributed via `setup-station.sh` and pinned in the page.
+- **TLS via Cloudflare Tunnel.** Each Pi runs the `cloudflared` daemon, which publishes the station at a stable HTTPS URL (e.g. `https://cap-pi-1.<yourdomain>`). TLS termination is handled by Cloudflare; no self-signed cert dance, no mixed-content blocking against the BIMS HTTPS origin, and the tunnel traverses NAT/VLANs — Pi network topology is independent of the operator workstation's network. Trade-off: ~10 ms added latency and dependency on Cloudflare being reachable. Acceptable because BIMS already runs on Cloudflare R2.
 - LED commands aren't safety-critical for power damage but ARE relevant for UV exposure — see Section 11.
 
 ---
@@ -280,15 +297,19 @@ Target: under 15 minutes from "factory-fresh Pi" to "registered and streaming."
 
 ## 11. Open Questions & Risks
 
-### Open questions
+### Resolved decisions (2026-05-19)
 
-1. **LED interface.** Vendor site was 503 at PRD draft; need to verify whether the IO Rodeo 365nm board takes a TTL trigger, USB serial, or I2C — and what supply voltage it needs separately from the Pi. Affects Phase 4 code and BOM.
-2. **Camera model.** Same USB camera the floor uses today, or a Pi-specific UVC camera?
-3. **Network topology.** Are Pis on the same LAN/VLAN as the operator workstations? If different, mDNS won't cross — need static-hostname/DNS setup.
-4. **TLS between browser and Pi.** Self-signed cert per Pi, root-CA fingerprint distributed via `setup-station.sh`? Or a single shared cert + DNS wildcard?
-5. **Default phase per station.** Each Pi lives at one manufacturing step (wax-fill bench, QC bench, etc.). Should the station carry a `defaultPhase` that auto-fills the `/capture` phase dropdown when selected?
-6. **Multi-tenant.** What if two operator workstations connect to the same Pi simultaneously? WebRTC is 1:1 — second connection kicks the first with a banner warning.
-7. **Where do Pi-agent commits live?** New `services/bims-capture-agent/` inside the BIMS repo, or a separate repo (e.g. `avacoder3900/bims-capture-agent`)?
+- **Camera model.** Same USB camera used at the operator workstation today. Confirm exact model via `lsusb` on a test Pi before fleet rollout.
+- **Network topology.** Pi runs on the manufacturing WiFi in production. Initial config session uses an Ethernet cable from the operator's computer for SSH-only purposes. The Cloudflare Tunnel decision below means Pi network topology is independent of the operator workstation's network anyway, so VLAN boundaries don't matter.
+- **TLS strategy.** Cloudflare Tunnel per Pi — see §8.
+- **Station modes.** Stations are operator-selectable and interchangeable on `/capture`. Each station has `mode: 'free' | 'assigned'`. Free = operator picks the phase; assigned = phase is locked to `assignedPhase` and the `/capture` dropdown becomes read-only when this station is selected. See §6.1.
+- **Multi-tenant.** Hard lock: one operator per station at a time via `CaptureStation.currentOperator`. One operator may hold sessions on multiple stations simultaneously. Second-operator connect attempt is rejected with a banner identifying who currently holds the station.
+- **Pi-agent code location.** Inside the BIMS repo at `services/bims-capture-agent/`. Same `feature/cv-followups` family for initial development; merges with the rest of CV refactor.
+
+### Still open
+
+- **Pi 5 onboard WiFi presence.** Spec says Pi 5 ships with dual-band 2.4/5 GHz WiFi + BT 5.0 onboard. Verify on the actual unit before committing the fleet — quick check with `iwconfig` after first boot. If for any reason a unit lacks onboard WiFi, a USB WiFi dongle adds ~$10.
+- **LED electrical interface.** IO Rodeo vendor page was 503 at PRD draft. Pull the 365 nm board datasheet before Phase 4 to decide whether the BOM needs a GPIO MOSFET driver, or whether the board takes USB serial / I2C. Affects Phase 4 code structure too.
 
 ### Risks
 
@@ -317,11 +338,32 @@ Target: under 15 minutes from "factory-fresh Pi" to "registered and streaming."
 
 ---
 
-## 13. Out of Scope (this PRD)
+## 13. Forward Compatibility — Robot Arm
 
-- Multi-camera per station (one camera + one scanner + one LED, only).
+Each station's `CaptureStation.capabilities.robotArm: Boolean` is reserved for a future phase that adds a cartridge-handling robot arm at the same Pi. When that phase arrives, the architecture in §4 holds — the Pi can host the arm alongside the camera/scanner/LED without re-platforming:
+
+- The same `bims-capture-agent` process gains an `arm.py` module that drives the arm. The existing `project_robot_arm_workspace` work would inform the controller (likely SO-ARM101 over half-duplex serial via CH343, individual-read mode per the existing `feedback_robot_arm_syncread` memory).
+- New WebSocket commands: `{cmd: 'arm', action: 'pickup'|'place'|'home', position: 'A1'|...}`.
+- New BIMS endpoint: `POST /api/cv/stations/[id]/arm` that the operator UI on `/capture` calls.
+- New UI block on `/capture`, visible only when `capabilities.robotArm === true`: pick-and-place controls + a queue of pending arm operations.
+
+Implementation is **explicitly deferred** until the 2-photo capture flow is stable in production. This PRD does NOT cover arm wiring, kinematics, end-effector selection, safety interlocks for the arm, or BIMS-side queueing of arm operations. Those are a future PRD.
+
+What this PRD DOES do to enable future arm work:
+
+- BOM reserves a free USB port on the powered hub (4-port hub specified when only 3 are needed today).
+- BOM reserves CPU headroom: Pi 5 4 GB is specified, with the option to upgrade to 8 GB if arm pathfinding moves on-Pi.
+- The agent's HTTP/WebSocket server is structured one-module-per-peripheral (`camera.py`, `scanner.py`, `led.py`) so adding `arm.py` doesn't require rewriting the others.
+- `robotArm` is captured as a station capability flag in the schema from day 1, so the UI can conditionally render arm controls without a schema migration later.
+
+---
+
+## 14. Out of Scope (this PRD)
+
+- Multi-camera per station (one camera + one scanner + one optional LED + one future-arm, only).
 - Cellular / off-LAN deployment.
 - Per-cartridge automated lighting profiles (turn LED on/off at specific phases).
 - Pi-side ML inference (BIMS-side cv-worker handles inference today, unchanged).
 - Audio capture.
 - Operator-facing screen attached to the Pi (it's headless; the browser is the UI).
+- Robot arm integration details (see §13 — covered by a future PRD).
