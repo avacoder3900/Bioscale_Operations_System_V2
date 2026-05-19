@@ -23,12 +23,49 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	await connectDB();
 
 	const cartridge = await CartridgeRecord.findById(code)
-		.select('_id status photoSequence')
+		.select('_id status photoSequence assayLoaded testExecution testResult sample')
 		.lean() as any;
 
 	if (!cartridge) {
 		return json({ error: `Cartridge ${code} not found in BIMS` }, { status: 404 });
 	}
+
+	// Denormalized "last test" summary — used by /cv/forensic-capture to show
+	// the operator what they're looking at before they take a forensic photo.
+	// Each cartridge has at most one test execution, so this is "the test" not
+	// "the latest of many."
+	const lastTest = (cartridge.assayLoaded || cartridge.testExecution || cartridge.testResult || cartridge.sample)
+		? {
+			assay: cartridge.assayLoaded?.assay ?? null,
+			assayLoadedAt: cartridge.assayLoaded?.loadedAt ?? null,
+			spu: cartridge.testExecution?.spu
+				? {
+					_id: cartridge.testExecution.spu._id,
+					udi: cartridge.testExecution.spu.udi,
+					firmwareVersion: cartridge.testExecution.spu.firmwareVersion ?? null
+				}
+				: null,
+			executedAt: cartridge.testExecution?.executedAt ?? null,
+			executedBy: cartridge.testExecution?.operator ?? null,
+			result: cartridge.testResult
+				? {
+					status: cartridge.testResult.status ?? null,
+					analyte: cartridge.testResult.analyte ?? null,
+					value: cartridge.testResult.value ?? null,
+					unit: cartridge.testResult.unit ?? null,
+					interpretation: cartridge.testResult.interpretation ?? null,
+					completedAt: cartridge.testResult.completedAt ?? null
+				}
+				: null,
+			sample: cartridge.sample
+				? {
+					subjectId: cartridge.sample.subjectId ?? null,
+					sampleType: cartridge.sample.sampleType ?? null,
+					collectedAt: cartridge.sample.collectedAt ?? null
+				}
+				: null
+		}
+		: null;
 
 	// Recent photos for this cartridge — informational, helps the capture UI
 	// show "you've already captured N photos of this cart" to the operator.
@@ -51,6 +88,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 		cartridgeRecordId: cartridge._id,
 		status: cartridge.status,
 		photoCount: cartridge.photoSequence ?? 0,
-		recentPhotos: JSON.parse(JSON.stringify(photosPayload))
+		recentPhotos: JSON.parse(JSON.stringify(photosPayload)),
+		lastTest: JSON.parse(JSON.stringify(lastTest))
 	});
 };

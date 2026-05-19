@@ -6,16 +6,38 @@
 	// Phase is locked for forensic capture — these images are always post-run R&D.
 	const PHASE = 'post_run';
 
-	// Sticky cartridge context
+	// Sticky cartridge context — set by the most recent successful scan.
 	let cartridgeId = $state<string | null>(null);
 	let cartridgeStatus = $state<string | null>(null);
 	let cartridgePhotoCount = $state<number>(0);
 	let scannedAt = $state<number | null>(null);
 
-	// Forensic context — optional fields tying captures to a test run / session.
-	// Stored on CvImage.metadata.forensic by the capture endpoint.
-	let runId = $state('');
-	let sessionId = $state('');
+	// Last-test details, populated from /api/cv/lookup-cartridge. null until a
+	// scan succeeds, or when the scanned cartridge has no test data yet.
+	type LastTest = {
+		assay: { _id?: string; name?: string; skuCode?: string } | null;
+		assayLoadedAt: string | null;
+		spu: { _id?: string; udi?: string; firmwareVersion?: string | null } | null;
+		executedAt: string | null;
+		executedBy: { _id?: string; username?: string } | null;
+		result: {
+			status?: string | null;
+			analyte?: string | null;
+			value?: number | null;
+			unit?: string | null;
+			interpretation?: string | null;
+			completedAt?: string | null;
+		} | null;
+		sample: {
+			subjectId?: string | null;
+			sampleType?: string | null;
+			collectedAt?: string | null;
+		} | null;
+	};
+	let lastTest = $state<LastTest | null>(null);
+
+	// Forensic notes — the primary input for each photo. Persisted under
+	// CvImage.metadata.forensic.notes by /api/cv/capture.
 	let forensicNotes = $state('');
 
 	// Scanner-wedge buffer
@@ -46,6 +68,11 @@
 	let submitting = $state(false);
 
 	let refocusInterval: ReturnType<typeof setInterval> | null = null;
+
+	function fmtDate(d: string | null | undefined): string {
+		if (!d) return '—';
+		try { return new Date(d).toLocaleString(); } catch { return String(d); }
+	}
 
 	async function refreshCameras() {
 		try {
@@ -98,6 +125,12 @@
 		const code = rawCode.trim();
 		if (!code) return;
 
+		// Switching cartridges — clear forensic-context state so notes from a
+		// previous cartridge don't bleed into the next one's photos.
+		if (cartridgeId && cartridgeId !== code) {
+			forensicNotes = '';
+		}
+
 		try {
 			const res = await fetch(`/api/cv/lookup-cartridge?code=${encodeURIComponent(code)}`);
 			if (!res.ok) {
@@ -106,12 +139,14 @@
 				cartridgeId = null;
 				cartridgeStatus = null;
 				cartridgePhotoCount = 0;
+				lastTest = null;
 				return;
 			}
-			const data = await res.json();
-			cartridgeId = data.cartridgeRecordId;
-			cartridgeStatus = data.status ?? null;
-			cartridgePhotoCount = data.photoCount ?? 0;
+			const payload = await res.json();
+			cartridgeId = payload.cartridgeRecordId;
+			cartridgeStatus = payload.status ?? null;
+			cartridgePhotoCount = payload.photoCount ?? 0;
+			lastTest = payload.lastTest ?? null;
 			scannedAt = Date.now();
 			flashBanner('ok', `Locked on ${cartridgeId} — ${cartridgePhotoCount} prior photos`);
 		} catch (e) {
@@ -147,10 +182,6 @@
 			form.append('file', blob, `forensic.jpg`);
 			form.append('cartridgeId', cartridgeId);
 			form.append('phase', PHASE);
-			// Only send forensic fields when the operator filled them in — endpoint
-			// treats them as optional and stashes them under metadata.forensic.
-			if (runId.trim()) form.append('runId', runId.trim());
-			if (sessionId.trim()) form.append('sessionId', sessionId.trim());
 			if (forensicNotes.trim()) form.append('forensicNotes', forensicNotes.trim());
 
 			const res = await fetch('/api/cv/capture', { method: 'POST', body: form });
@@ -234,7 +265,7 @@
 			<div>
 				<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">Forensic Capture <span class="text-sm font-normal text-[var(--color-tron-text-secondary)]">(R&amp;D)</span></h1>
 				<p class="text-xs text-[var(--color-tron-text-secondary)]">
-					Post-run failure-analysis photography. Scan a cartridge, press Space to capture.
+					Post-run failure-analysis photography. Scan a cartridge, type your observation, press Space to capture.
 				</p>
 			</div>
 			<div class="text-xs text-[var(--color-tron-text-secondary)]">
@@ -242,13 +273,12 @@
 			</div>
 		</header>
 
-		<!-- R&D mode banner — non-dismissable, distinguishes from manufacturing QC capture -->
+		<!-- R&D banner -->
 		<div class="rounded border border-[var(--color-tron-yellow,#facc15)] bg-[rgba(250,204,21,0.08)] p-3 text-sm text-[var(--color-tron-yellow,#facc15)]">
 			<strong>R&amp;D forensic capture.</strong> These images are for failure analysis, not manufacturing QC. Phase is locked to <code class="font-mono">post_run</code>.
-			Tag with a <code class="font-mono">runId</code> or <code class="font-mono">sessionId</code> below if you want to tie photos to a specific test run.
 		</div>
 
-		<!-- Banner -->
+		<!-- Flash banner -->
 		{#if banner}
 			<div class="rounded border p-3 text-sm
 				{banner.kind === 'ok' ? 'border-[var(--color-tron-green,#39ff14)] bg-[rgba(57,255,20,0.08)] text-[var(--color-tron-green,#39ff14)]' : ''}
@@ -258,7 +288,24 @@
 			</div>
 		{/if}
 
-		<!-- Context bar -->
+		<!-- NOTES HERO — primary input for the operator. Notes are attached to the next photo captured. -->
+		<div class="rounded-lg border border-[var(--color-tron-cyan)] bg-[var(--color-tron-bg-secondary)] p-4">
+			<div class="mb-2 flex items-center justify-between">
+				<label for="forensic-notes" class="text-xs uppercase tracking-wider text-[var(--color-tron-cyan)]">Observation / Notes</label>
+				<span class="text-[10px] text-[var(--color-tron-text-secondary)]">
+					Attached to every photo until you scan a new cartridge or clear.
+				</span>
+			</div>
+			<textarea
+				id="forensic-notes"
+				bind:value={forensicNotes}
+				rows="3"
+				placeholder="What failed, what you're looking at, angle, suspected cause…"
+				class="w-full resize-y rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-sm text-[var(--color-tron-text-primary)] placeholder:text-[var(--color-tron-text-secondary)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+			></textarea>
+		</div>
+
+		<!-- Context bar: cartridge | phase | camera -->
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
 			<div class="flex flex-wrap items-center gap-4">
 				<div class="flex-1 min-w-[200px]">
@@ -285,34 +332,107 @@
 					</select>
 				</div>
 			</div>
-
-			<!-- Forensic context (optional) -->
-			<div class="mt-3 grid gap-3 sm:grid-cols-3">
-				<div>
-					<label for="run-id" class="block text-xs uppercase text-[var(--color-tron-text-secondary)]">Run ID <span class="text-[10px] text-[var(--color-tron-text-secondary)]">(optional)</span></label>
-					<input id="run-id" bind:value={runId} type="text" autocomplete="off" placeholder="e.g. RUN-2026-05-18-001" class="tron-input w-full font-mono" />
-				</div>
-				<div>
-					<label for="session-id" class="block text-xs uppercase text-[var(--color-tron-text-secondary)]">Session ID <span class="text-[10px] text-[var(--color-tron-text-secondary)]">(optional)</span></label>
-					<input id="session-id" bind:value={sessionId} type="text" autocomplete="off" placeholder="e.g. assay session id" class="tron-input w-full font-mono" />
-				</div>
-				<div>
-					<label for="forensic-notes" class="block text-xs uppercase text-[var(--color-tron-text-secondary)]">Notes <span class="text-[10px] text-[var(--color-tron-text-secondary)]">(optional)</span></label>
-					<input id="forensic-notes" bind:value={forensicNotes} type="text" autocomplete="off" placeholder="failure symptom, angle, etc." class="tron-input w-full" />
-				</div>
-			</div>
 		</div>
 
-		<!-- Camera -->
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-black p-2">
-			{#if cameraError}
-				<div class="aspect-video flex items-center justify-center text-[var(--color-tron-red,#ff3366)]">
-					{cameraError}
-				</div>
-			{:else}
-				<!-- svelte-ignore a11y_media_has_caption -->
-				<video bind:this={videoEl} class="aspect-video w-full rounded" playsinline autoplay muted></video>
-			{/if}
+		<!-- Main two-column area: camera (left) + last test details (right) -->
+		<div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+			<!-- Camera -->
+			<div class="rounded-lg border border-[var(--color-tron-border)] bg-black p-2">
+				{#if cameraError}
+					<div class="aspect-video flex items-center justify-center text-[var(--color-tron-red,#ff3366)]">
+						{cameraError}
+					</div>
+				{:else}
+					<!-- svelte-ignore a11y_media_has_caption -->
+					<video bind:this={videoEl} class="aspect-video w-full rounded" playsinline autoplay muted></video>
+				{/if}
+			</div>
+
+			<!-- Last-test detail panel -->
+			<aside class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
+				<h3 class="mb-3 text-xs uppercase tracking-wider text-[var(--color-tron-cyan)]">Last Test</h3>
+				{#if !cartridgeId}
+					<p class="text-xs text-[var(--color-tron-text-secondary)]">
+						Scan a cartridge to see its test details here.
+					</p>
+				{:else if !lastTest}
+					<p class="text-xs text-[var(--color-tron-text-secondary)]">
+						No test execution recorded for this cartridge yet.
+					</p>
+				{:else}
+					<dl class="space-y-2 text-xs">
+						<!-- Assay -->
+						<div>
+							<dt class="text-[var(--color-tron-text-secondary)] uppercase tracking-wider text-[10px]">Assay</dt>
+							<dd class="font-mono text-[var(--color-tron-text-primary)]">{lastTest.assay?.name ?? '—'}</dd>
+							{#if lastTest.assay?.skuCode}
+								<dd class="text-[var(--color-tron-text-secondary)]">{lastTest.assay.skuCode}</dd>
+							{/if}
+						</div>
+
+						<!-- SPU -->
+						<div>
+							<dt class="text-[var(--color-tron-text-secondary)] uppercase tracking-wider text-[10px]">SPU UDI</dt>
+							<dd class="break-all font-mono text-[var(--color-tron-cyan)]">{lastTest.spu?.udi ?? '—'}</dd>
+							{#if lastTest.spu?.firmwareVersion}
+								<dd class="text-[var(--color-tron-text-secondary)]">fw {lastTest.spu.firmwareVersion}</dd>
+							{/if}
+						</div>
+
+						<!-- Executed -->
+						<div>
+							<dt class="text-[var(--color-tron-text-secondary)] uppercase tracking-wider text-[10px]">Executed</dt>
+							<dd class="text-[var(--color-tron-text-primary)]">{fmtDate(lastTest.executedAt)}</dd>
+							{#if lastTest.executedBy?.username}
+								<dd class="text-[var(--color-tron-text-secondary)]">by {lastTest.executedBy.username}</dd>
+							{/if}
+						</div>
+
+						<!-- Result -->
+						{#if lastTest.result}
+							<div>
+								<dt class="text-[var(--color-tron-text-secondary)] uppercase tracking-wider text-[10px]">Result</dt>
+								<dd class="text-[var(--color-tron-text-primary)]">
+									{#if lastTest.result.status}
+										<span class="rounded px-1.5 py-0.5 font-mono text-[10px]
+											{lastTest.result.status === 'completed' ? 'bg-[var(--color-tron-green,#39ff14)]/20 text-[var(--color-tron-green,#39ff14)]' : ''}
+											{lastTest.result.status === 'failed' ? 'bg-[var(--color-tron-red,#ff3366)]/20 text-[var(--color-tron-red,#ff3366)]' : ''}
+											{lastTest.result.status === 'invalid' ? 'bg-[var(--color-tron-red,#ff3366)]/20 text-[var(--color-tron-red,#ff3366)]' : ''}
+											{lastTest.result.status === 'pending' ? 'bg-[var(--color-tron-yellow,#facc15)]/20 text-[var(--color-tron-yellow,#facc15)]' : ''}">
+											{lastTest.result.status}
+										</span>
+									{/if}
+								</dd>
+								{#if lastTest.result.analyte}
+									<dd class="text-[var(--color-tron-text-secondary)]">{lastTest.result.analyte}{lastTest.result.value != null ? `: ${lastTest.result.value}${lastTest.result.unit ?? ''}` : ''}</dd>
+								{/if}
+								{#if lastTest.result.interpretation}
+									<dd class="text-[var(--color-tron-text-primary)]">{lastTest.result.interpretation}</dd>
+								{/if}
+								{#if lastTest.result.completedAt}
+									<dd class="text-[var(--color-tron-text-secondary)]">{fmtDate(lastTest.result.completedAt)}</dd>
+								{/if}
+							</div>
+						{/if}
+
+						<!-- Sample -->
+						{#if lastTest.sample}
+							<div>
+								<dt class="text-[var(--color-tron-text-secondary)] uppercase tracking-wider text-[10px]">Sample</dt>
+								{#if lastTest.sample.subjectId}
+									<dd class="font-mono text-[var(--color-tron-text-primary)]">{lastTest.sample.subjectId}</dd>
+								{/if}
+								{#if lastTest.sample.sampleType}
+									<dd class="text-[var(--color-tron-text-secondary)]">{lastTest.sample.sampleType}</dd>
+								{/if}
+								{#if lastTest.sample.collectedAt}
+									<dd class="text-[var(--color-tron-text-secondary)]">collected {fmtDate(lastTest.sample.collectedAt)}</dd>
+								{/if}
+							</div>
+						{/if}
+					</dl>
+				{/if}
+			</aside>
 		</div>
 
 		<!-- Action bar -->
