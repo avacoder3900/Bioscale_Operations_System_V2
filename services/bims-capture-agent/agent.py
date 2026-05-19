@@ -7,12 +7,13 @@ later phases (see docs/prds/PI-CAPTURE-STATION.md §5).
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
 from pathlib import Path
 
-from aiohttp import web
+from aiohttp import WSMsgType, web
 from dotenv import load_dotenv
 
 __version__ = "0.1.0"
@@ -53,9 +54,62 @@ async def health(_request: web.Request) -> web.Response:
     )
 
 
+async def websocket(request: web.Request) -> web.WebSocketResponse:
+    expected = os.environ.get("STATION_TOKEN", "")
+    presented = request.headers.get("X-Station-Token", "")
+    peer = request.remote or "?"
+
+    ws = web.WebSocketResponse()
+
+    if not expected or presented != expected:
+        await ws.prepare(request)
+        log.info("ws reject %s — bad/missing X-Station-Token", peer)
+        # 4401 is an application-private close code mirroring HTTP 401.
+        await ws.close(code=4401, message=b"unauthorized")
+        return ws
+
+    await ws.prepare(request)
+    log.info("ws connect %s", peer)
+
+    await ws.send_json(
+        {
+            "event": "hello",
+            "station_id": os.environ.get("STATION_ID", ""),
+            "agent_version": __version__,
+        }
+    )
+
+    try:
+        async for msg in ws:
+            if msg.type == WSMsgType.TEXT:
+                try:
+                    payload = json.loads(msg.data)
+                except json.JSONDecodeError:
+                    log.warning("ws %s sent non-JSON frame", peer)
+                    continue
+
+                cmd = payload.get("cmd")
+                if cmd == "ping":
+                    await ws.send_json(
+                        {"event": "pong", "ts": int(time.time() * 1000)}
+                    )
+                elif cmd == "close":
+                    await ws.close(code=1000, message=b"client requested")
+                    break
+                else:
+                    log.debug("ws %s unhandled cmd=%r (Phase 1 stub)", peer, cmd)
+            elif msg.type == WSMsgType.ERROR:
+                log.warning("ws %s error: %s", peer, ws.exception())
+    finally:
+        log.info("ws disconnect %s", peer)
+
+    return ws
+
+
 def build_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/health", health)
+    app.router.add_get("/ws", websocket)
     return app
 
 
