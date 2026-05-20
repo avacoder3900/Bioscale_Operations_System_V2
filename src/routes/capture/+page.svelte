@@ -88,8 +88,8 @@
 		try {
 			const constraints: MediaStreamConstraints = {
 				video: selectedCameraId
-					? { deviceId: { exact: selectedCameraId }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60, min: 30 } }
-					: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60, min: 30 } },
+					? { deviceId: { exact: selectedCameraId }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60, min: 30 } }
+					: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60, min: 30 } },
 				audio: false
 			};
 			stream = await navigator.mediaDevices.getUserMedia(constraints);
