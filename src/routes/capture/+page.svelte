@@ -88,11 +88,40 @@
 		try {
 			const constraints: MediaStreamConstraints = {
 				video: selectedCameraId
-					? { deviceId: { exact: selectedCameraId }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60, min: 30 } }
-					: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60, min: 30 } },
+					? { deviceId: { exact: selectedCameraId }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } }
+					: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
 				audio: false
 			};
 			stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+			// LIZA tuning panel from camera_capture.py — the production-validated
+			// setup for this hardware. Manual exposure / focus / WB are the
+			// latency-relevant ones (no auto-adjust pumping between frames).
+			// Settings the camera doesn't support are silently skipped by the
+			// `advanced` array, so this is safe across different webcams.
+			const track = stream.getVideoTracks()[0];
+			if (track) {
+				try {
+					await track.applyConstraints({
+						advanced: [
+							{
+								exposureMode: 'manual',
+								exposureCompensation: -5,
+								focusMode: 'manual',
+								whiteBalanceMode: 'manual',
+								colorTemperature: 4000,
+								brightness: 128,
+								contrast: 128,
+								saturation: 128,
+								sharpness: 128
+							} as MediaTrackConstraintSet
+						]
+					});
+				} catch (e) {
+					console.warn('[capture] LIZA tuning applyConstraints skipped:', e);
+				}
+			}
+
 			if (videoEl) {
 				videoEl.srcObject = stream;
 				await videoEl.play();
