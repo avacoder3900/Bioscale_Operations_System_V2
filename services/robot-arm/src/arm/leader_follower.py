@@ -181,10 +181,13 @@ class LeaderFollowerSession:
         next_tick = time.time()
         while not self._cancel.is_set():
             leader_pos = self.leader.sync_read_positions()
-            # Leader joints in multi-turn mode can read > 4095; the
-            # follower can't mirror those past its mechanical end,
-            # so just clamp. Calibration / offset handling is TODO.
-            goals = {sid: _clamp(p, POS_MIN, POS_MAX) for sid, p in leader_pos.items()}
+            # Multi-turn joints (typically the wrist roll on SO-100
+            # leaders) report position values past 4095 — that's the
+            # encoder counting full rotations. The follower can only
+            # cover one turn, so we wrap to the angular position
+            # within the current rotation. Python `%` handles negative
+            # multi-turn values too (-1 % 4096 == 4095).
+            goals = {sid: int(p) % 4096 for sid, p in leader_pos.items()}
             self.follower.sync_write_positions(goals)
 
             if self.kind == "record":
