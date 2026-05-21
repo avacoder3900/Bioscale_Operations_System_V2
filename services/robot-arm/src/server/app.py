@@ -68,6 +68,12 @@ BIMS_WEBHOOK_URL = os.environ.get(
     "BIMS_WEBHOOK_URL", "http://localhost:5177/api/robot-arm/webhook"
 )
 
+# Background ping every N seconds so /health can flip leader_connected /
+# follower_connected to false when the bus is dead — without this, a
+# USB unplug leaves the FastAPI port handles open and /health stays
+# falsely positive. See NEXT_STEPS.md #6.
+LIVENESS_PROBE_INTERVAL_S = float(os.environ.get("ROBOT_ARM_PROBE_INTERVAL_S", "5"))
+
 
 class _State:
     leader: Optional[ArmDriver] = None
@@ -75,6 +81,9 @@ class _State:
     lock: Optional[asyncio.Lock] = None  # serializes blocking driver calls (follower)
     active_session: Optional[LeaderFollowerSession] = None
     session_lock: Optional[asyncio.Lock] = None  # serializes /start /stop
+    leader_alive: bool = False
+    follower_alive: bool = False
+    probe_tasks: list = []  # asyncio.Task; populated in lifespan
 
 
 state = _State()
@@ -99,6 +108,42 @@ def _emit_to_bims(event: dict) -> None:
         print(f"[webhook] post failed: {exc}")
 
 
+async def _liveness_probe(driver_attr: str, alive_attr: str, lock: Optional[asyncio.Lock]) -> None:
+    """Ping driver.servo_ids[0] every LIVENESS_PROBE_INTERVAL_S; flip alive flag on failure.
+
+    Skipped while a session is active — the session's own bus traffic
+    serves as the liveness signal, and a concurrent probe would race
+    with sync_read/sync_write on the same port. On the follower we
+    share state.lock with direct-control endpoints; the leader has no
+    direct-control surface so no lock is required.
+    """
+    while True:
+        try:
+            await asyncio.sleep(LIVENESS_PROBE_INTERVAL_S)
+            driver = getattr(state, driver_attr)
+            if driver is None:
+                setattr(state, alive_attr, False)
+                continue
+            sess = state.active_session
+            if sess is not None and sess.is_active():
+                continue
+            try:
+                if lock is not None:
+                    async with lock:
+                        await asyncio.to_thread(driver.ping, driver.servo_ids[0])
+                else:
+                    await asyncio.to_thread(driver.ping, driver.servo_ids[0])
+                if not getattr(state, alive_attr):
+                    print(f"[arm-server] {driver_attr} probe recovered")
+                setattr(state, alive_attr, True)
+            except Exception as exc:
+                if getattr(state, alive_attr):
+                    print(f"[arm-server] {driver_attr} probe failed: {exc}")
+                setattr(state, alive_attr, False)
+        except asyncio.CancelledError:
+            return
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     leader_port = os.environ.get("LEADER_PORT", DEFAULT_LEADER_PORT)
@@ -108,12 +153,14 @@ async def lifespan(_: FastAPI):
     # Follower is required; leader is best-effort (CLI/jog still works without it).
     state.follower = ArmDriver(port=follower_port, baud=baud)
     state.follower.open()
+    state.follower_alive = True
     print(f"[arm-server] FOLLOWER open on {follower_port} @ {baud}")
     try:
         state.leader = ArmDriver(port=leader_port, baud=baud)
         state.leader.open()
         # ping at least one servo to confirm the bus is alive
         state.leader.ping(state.leader.servo_ids[0])
+        state.leader_alive = True
         print(f"[arm-server] LEADER   open on {leader_port} @ {baud}")
     except Exception as exc:
         if state.leader is not None:
@@ -122,14 +169,25 @@ async def lifespan(_: FastAPI):
             except Exception:
                 pass
         state.leader = None
+        state.leader_alive = False
         print(f"[arm-server] LEADER unavailable: {exc}  (teleop/record will 503)")
 
     state.lock = asyncio.Lock()
     state.session_lock = asyncio.Lock()
 
+    # Background liveness probes — one per port. follower probe shares
+    # state.lock with direct-control endpoints; leader has no shared lock.
+    state.probe_tasks = [
+        asyncio.create_task(_liveness_probe("leader", "leader_alive", None)),
+        asyncio.create_task(_liveness_probe("follower", "follower_alive", state.lock)),
+    ]
+
     try:
         yield
     finally:
+        for t in state.probe_tasks:
+            t.cancel()
+        await asyncio.gather(*state.probe_tasks, return_exceptions=True)
         # graceful: if a session is still running, ask it to stop
         if state.active_session is not None and state.active_session.is_active():
             print("[arm-server] cancelling active session on shutdown...")
@@ -299,8 +357,12 @@ async def health() -> dict:
         "status": "ok",
         "service": "bims-robot-arm",
         "version": SERVICE_VERSION,
-        "leader_connected": state.leader is not None,
-        "follower_connected": state.follower is not None,
+        # Reflect the last liveness-probe result, not just "did we open at boot."
+        # Probe runs every LIVENESS_PROBE_INTERVAL_S; a USB unplug shows up
+        # within that window.
+        "leader_connected": state.leader is not None and state.leader_alive,
+        "follower_connected": state.follower is not None and state.follower_alive,
+        "probe_interval_s": LIVENESS_PROBE_INTERVAL_S,
         "active_session": state.active_session.run_id
         if state.active_session and state.active_session.is_active()
         else None,
