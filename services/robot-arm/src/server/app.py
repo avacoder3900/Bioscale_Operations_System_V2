@@ -183,6 +183,42 @@ def _webhook_drainer() -> None:
         _webhook_queue.task_done()
 
 
+def _resolve_port(env_path: str, env_serial: str, default_path: str) -> str:
+    """Pick a serial-port device node.
+
+    Priority:
+      1. Chip-serial match (env var like LEADER_CHIP_SERIAL=5C4C126959)
+         — scan pyserial's list_ports for a device whose serial_number
+         matches; return its node. Survives cable reseats that renumber
+         /dev/cu.usbmodem*.
+      2. Explicit device path (env var LEADER_PORT=/dev/cu.usbmodem...)
+         — used as-is.
+      3. Hard-coded default (DEFAULT_LEADER_PORT etc.).
+
+    See NEXT_STEPS.md #3.
+    """
+    serial_target = os.environ.get(env_serial, "").strip()
+    if serial_target:
+        try:
+            from serial.tools import list_ports
+        except Exception as exc:
+            print(f"[arm-server] {env_serial} set but pyserial.list_ports unavailable: {exc}")
+        else:
+            for p in list_ports.comports():
+                # pyserial's serial_number is the chip's USB serial. macOS
+                # device nodes look like /dev/cu.usbmodem<serial><iface#>
+                # so we substring-match to be robust to the trailing digit.
+                sn = (p.serial_number or "").strip()
+                if sn and (sn == serial_target or serial_target in sn or sn in serial_target):
+                    print(f"[arm-server] {env_serial}={serial_target} resolved to {p.device}")
+                    return p.device
+            print(
+                f"[arm-server] {env_serial}={serial_target} not found among "
+                f"{[p.device for p in list_ports.comports()]}; falling back"
+            )
+    return os.environ.get(env_path, default_path)
+
+
 async def _liveness_probe(driver_attr: str, alive_attr: str, lock: Optional[asyncio.Lock]) -> None:
     """Ping driver.servo_ids[0] every LIVENESS_PROBE_INTERVAL_S; flip alive flag on failure.
 
@@ -221,8 +257,8 @@ async def _liveness_probe(driver_attr: str, alive_attr: str, lock: Optional[asyn
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    leader_port = os.environ.get("LEADER_PORT", DEFAULT_LEADER_PORT)
-    follower_port = os.environ.get("FOLLOWER_PORT", DEFAULT_FOLLOWER_PORT)
+    leader_port = _resolve_port("LEADER_PORT", "LEADER_CHIP_SERIAL", DEFAULT_LEADER_PORT)
+    follower_port = _resolve_port("FOLLOWER_PORT", "FOLLOWER_CHIP_SERIAL", DEFAULT_FOLLOWER_PORT)
     baud = int(os.environ.get("ROBOT_ARM_BAUD", str(DEFAULT_BAUD)))
 
     # Follower is required; leader is best-effort (CLI/jog still works without it).
