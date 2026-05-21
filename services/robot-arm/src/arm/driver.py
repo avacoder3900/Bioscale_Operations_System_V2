@@ -10,6 +10,7 @@ Used by both scripts/teleop_cli.py and the FastAPI server.
 
 from __future__ import annotations
 
+import fcntl
 from dataclasses import dataclass
 import scservo_sdk as scs
 
@@ -69,13 +70,32 @@ class ArmDriver:
             return
         if not self._port.openPort():
             raise RuntimeError(f"could not open {self.port_name}")
+        # Advisory exclusive lock on the underlying FD. Without this, the
+        # FastAPI server and an ad-hoc CLI (teleop_cli, ping_servos) can
+        # both open the same /dev/cu.usbmodem* and silently clobber each
+        # other's writes — see NEXT_STEPS.md #2. POSIX flock; macOS + Linux.
+        try:
+            fcntl.flock(self._port.ser.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError) as exc:
+            self._port.closePort()
+            raise RuntimeError(
+                f"could not lock {self.port_name}: another process owns it ({exc})"
+            ) from exc
         if not self._port.setBaudRate(self.baud):
+            self._release_lock()
             self._port.closePort()
             raise RuntimeError(f"could not set baud {self.baud}")
         self._open = True
 
+    def _release_lock(self) -> None:
+        try:
+            fcntl.flock(self._port.ser.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+
     def close(self) -> None:
         if self._open:
+            self._release_lock()
             self._port.closePort()
             self._open = False
 
