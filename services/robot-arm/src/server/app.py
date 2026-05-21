@@ -36,6 +36,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import queue
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -89,12 +91,45 @@ class _State:
 state = _State()
 
 
+# Webhook delivery is async on a dedicated daemon thread so a slow BIMS
+# can't slow the 30 Hz teleop loop. Producers (the session thread,
+# `_emit_to_bims`) push events to _webhook_queue; the drainer thread
+# POSTs with retry + exponential backoff. Queue is bounded so a long
+# BIMS outage doesn't grow memory unboundedly — overflow drops the
+# oldest event and logs (events are advisory; the run record itself is
+# rebuildable from the final terminal event). See NEXT_STEPS.md #7.
+WEBHOOK_QUEUE_MAX = int(os.environ.get("ROBOT_ARM_WEBHOOK_QUEUE_MAX", "256"))
+WEBHOOK_RETRY_DELAYS_S = [1.0, 2.0, 4.0]
+_webhook_queue: "queue.Queue[dict]" = queue.Queue(maxsize=WEBHOOK_QUEUE_MAX)
+_webhook_stop = threading.Event()
+_webhook_thread: Optional[threading.Thread] = None
+
+
 def _emit_to_bims(event: dict) -> None:
-    """Sync HTTP POST to BIMS — runs inside the session's worker thread."""
-    api_key = os.environ.get("AGENT_API_KEY", "")
-    if not api_key:
-        print(f"[webhook] AGENT_API_KEY not set — dropping event {event.get('type')}")
-        return
+    """Producer: enqueue an event for the drainer thread to POST.
+
+    Called from the session thread. Never blocks more than a no-op queue
+    put. On overflow, drops the oldest queued event to make room — the
+    most recent event is more useful for live state than a stale one.
+    """
+    if _webhook_queue.full():
+        try:
+            dropped = _webhook_queue.get_nowait()
+            print(
+                f"[webhook] queue full ({WEBHOOK_QUEUE_MAX}); dropped oldest event "
+                f"{dropped.get('type')} for run {dropped.get('run_id')}",
+                flush=True,
+            )
+        except queue.Empty:
+            pass
+    try:
+        _webhook_queue.put_nowait(event)
+    except queue.Full:
+        print(f"[webhook] failed to enqueue event {event.get('type')}", flush=True)
+
+
+def _webhook_post_once(event: dict, api_key: str) -> tuple[bool, str]:
+    """One POST attempt. Returns (ok, reason). Caller handles retry."""
     try:
         with httpx.Client(timeout=5.0) as client:
             resp = client.post(
@@ -102,10 +137,50 @@ def _emit_to_bims(event: dict) -> None:
                 json={"run_id": event["run_id"], "event": event},
                 headers={"x-agent-api-key": api_key},
             )
-            if resp.status_code >= 400:
-                print(f"[webhook] {resp.status_code}: {resp.text[:200]}")
+        if resp.status_code < 400:
+            return True, ""
+        # 4xx is a client error — retrying won't help (auth, bad payload,
+        # finalized run). Don't burn retry budget on it.
+        if 400 <= resp.status_code < 500:
+            return False, f"client error {resp.status_code}: {resp.text[:200]}"
+        return False, f"server error {resp.status_code}: {resp.text[:200]}"
     except Exception as exc:
-        print(f"[webhook] post failed: {exc}")
+        return False, f"exception: {exc}"
+
+
+def _webhook_drainer() -> None:
+    """Background daemon: pop events, POST with retry."""
+    api_key = os.environ.get("AGENT_API_KEY", "")
+    if not api_key:
+        print("[webhook] AGENT_API_KEY not set — drainer running but every event will drop")
+    while not _webhook_stop.is_set():
+        try:
+            event = _webhook_queue.get(timeout=0.5)
+        except queue.Empty:
+            continue
+        if not api_key:
+            print(f"[webhook] no api key — dropping event {event.get('type')}", flush=True)
+            _webhook_queue.task_done()
+            continue
+        ok, reason = _webhook_post_once(event, api_key)
+        if not ok:
+            # 4xx -> don't retry; 5xx / network -> retry with backoff
+            if reason.startswith("client error"):
+                print(f"[webhook] {reason}; not retrying (event {event.get('type')})", flush=True)
+            else:
+                for delay in WEBHOOK_RETRY_DELAYS_S:
+                    if _webhook_stop.wait(delay):
+                        break
+                    ok, reason = _webhook_post_once(event, api_key)
+                    if ok:
+                        break
+                if not ok:
+                    print(
+                        f"[webhook] gave up after {len(WEBHOOK_RETRY_DELAYS_S)} retries "
+                        f"on {event.get('type')} for {event.get('run_id')}: {reason}",
+                        flush=True,
+                    )
+        _webhook_queue.task_done()
 
 
 async def _liveness_probe(driver_attr: str, alive_attr: str, lock: Optional[asyncio.Lock]) -> None:
@@ -182,6 +257,14 @@ async def lifespan(_: FastAPI):
         asyncio.create_task(_liveness_probe("follower", "follower_alive", state.lock)),
     ]
 
+    # Webhook drainer thread — async POSTs so slow BIMS doesn't block the 30 Hz loop.
+    global _webhook_thread
+    _webhook_stop.clear()
+    _webhook_thread = threading.Thread(
+        target=_webhook_drainer, name="bims-webhook-drainer", daemon=True
+    )
+    _webhook_thread.start()
+
     try:
         yield
     finally:
@@ -192,6 +275,15 @@ async def lifespan(_: FastAPI):
         if state.active_session is not None and state.active_session.is_active():
             print("[arm-server] cancelling active session on shutdown...")
             state.active_session.stop(timeout=3.0)
+        # Drain webhook queue with a short window so terminal events make it out.
+        _webhook_stop.set()
+        if _webhook_thread is not None:
+            _webhook_thread.join(timeout=3.0)
+            if _webhook_thread.is_alive():
+                print(
+                    f"[webhook] drainer didn't finish in 3 s — "
+                    f"{_webhook_queue.qsize()} event(s) dropped"
+                )
         if state.follower is not None:
             state.follower.close()
         if state.leader is not None:
