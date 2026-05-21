@@ -2,7 +2,8 @@ import { redirect, fail } from '@sveltejs/kit';
 import mongoose from 'mongoose';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
-	Equipment, EquipmentLocation, AuditLog, BackingLot, WaxBatch, ReceivingLot, LotRecord
+	Equipment, EquipmentLocation, AuditLog, BackingLot, WaxBatch, ReceivingLot, LotRecord,
+	OpentronsRobot
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { resolveFridgeId, resolveCoolingTrayId, resolveDeckId } from '$lib/server/services/equipment-resolve';
@@ -11,6 +12,7 @@ import { User } from '$lib/server/db';
 import { notifyLowWaxBatch, notifyRunLifecycle, shouldWarnLowWax } from '$lib/server/notifications';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import { protectLockedCarts, LOCKED_STATUSES } from '$lib/server/manufacturing/locked-cartridges';
+import { getRobot, robotGet, robotPost } from '$lib/server/opentrons/proxy';
 import bcrypt from 'bcryptjs';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -73,7 +75,9 @@ function emptyState(robotId: string, loadError: string | null = null) {
 		runState: {
 			hasActiveRun: false, runId: null, stage: null,
 			runStartTime: null, runEndTime: null,
-			deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null
+			deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null,
+			opentronsRunId: null as string | null,
+			protocolParameters: null as Record<string, unknown> | null
 		},
 		settings: {
 			runDurationMin: 45, removeDeckWarningMin: 5, coolingWarningMin: 7,
@@ -91,7 +95,20 @@ function emptyState(robotId: string, loadError: string | null = null) {
 		qcCartridges: [] as any[],
 		storageCartridges: [] as any[],
 		lockedCartridges: [] as { cartridgeId: string; status: string }[],
-		fridges: [] as { id: string; displayName: string; barcode: string }[]
+		fridges: [] as { id: string; displayName: string; barcode: string }[],
+		robotProtocols: [] as Array<{
+			opentronsProtocolId: string;
+			protocolName: string;
+			protocolType: string | null;
+			analysisStatus: string | null;
+			parametersSchema: any;
+		}>,
+		opentronsRobotId: robotId,
+		lastTipState: null as null | {
+			nextTipIndex: number | null;
+			hostname: string | null;
+			capturedAt: string | null;
+		}
 	};
 }
 
@@ -122,7 +139,7 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 		// Both active-run queries gate on robotReleasedAt: only runs where the
 		// OT-2 hasn't finished yet count as "robot in use". Post-OT-2 runs live
 		// on Opentron Control and don't lock the robot.
-		const [activeWaxRun, settingsDoc, activeTube, activeReagentRunRaw] = await Promise.all([
+		const [activeWaxRun, settingsDoc, activeTube, activeReagentRunRaw, robotDoc, lastTipRun] = await Promise.all([
 			// This page owns Setup → Awaiting Removal. After confirmCooling
 			// advances status to QC the run lives on Opentron Control, so
 			// activeWaxRun here is scoped to page-owned stages only.
@@ -139,7 +156,17 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			(await import('$lib/server/db')).ReagentBatchRecord.findOne({
 				'robot._id': robotId,
 				status: { $in: [...REAGENT_PAGE_OWNED_STAGES] }
-			}).lean().catch(() => null)
+			}).lean().catch(() => null),
+			// Robot's uploaded protocols + parameter schemas — the Start Run
+			// panel renders the parameter form from these. Mongoose returns
+			// the protocols subdoc array along with the rest of the doc.
+			OpentronsRobot.findById(robotId).lean().catch(() => null),
+			// Most recent wax run on this robot whose OT-2 completion was
+			// captured. Feeds the tip-tracker readout pre-run.
+			WaxFillingRun.findOne({
+				'robot._id': robotId,
+				'pipetteTipState.after.nextTipIndex': { $exists: true }
+			}).sort({ runEndTime: -1 }).select('pipetteTipState').lean().catch(() => null)
 		]);
 
 		const wax = (settingsDoc as any)?.waxFilling ?? {};
@@ -174,9 +201,38 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 				coolingTrayId: run.coolingTrayId ?? null,
 				plannedCartridgeCount: run.plannedCartridgeCount ?? run.cartridgeIds?.length ?? null,
 				coolingConfirmedAt: run.coolingConfirmedTime ? new Date(run.coolingConfirmedTime).toISOString() : null,
-				existingWaxRunNote
+				existingWaxRunNote,
+				// OT-2 linkage — set by startRun once the protocol run is created
+				// on the robot. Absent during Setup/Loading; present once Running.
+				opentronsRunId: run.opentronsRunId ?? null,
+				// Mirror the parameter set the operator chose for this run so the
+				// page can show "what we asked the robot to do" after the fact.
+				protocolParameters: run.protocolParameters ?? null
 			}
-			: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckRemovedTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null, coolingConfirmedAt: null, existingWaxRunNote: '' };
+			: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckRemovedTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null, coolingConfirmedAt: null, existingWaxRunNote: '', opentronsRunId: null, protocolParameters: null };
+
+		// Robot's uploaded protocols, projected to what the Start Run panel
+		// needs (id, name, type, parameter schema). Empty list if the robot
+		// hasn't been hydrated by an /opentrons devices visit yet.
+		const robotProtocols = ((robotDoc as any)?.protocols ?? []).map((p: any) => ({
+			opentronsProtocolId: p.opentronsProtocolId ?? null,
+			protocolName: p.protocolName ?? '',
+			protocolType: p.protocolType ?? null,
+			analysisStatus: p.analysisStatus ?? null,
+			parametersSchema: p.parametersSchema ?? null
+		})).filter((p: any) => p.opentronsProtocolId);
+
+		// Last known tip state for this robot — derived from the most recent
+		// completed wax run. null on first-ever use; protocol falls back to A1.
+		const lastTipState = (lastTipRun as any)?.pipetteTipState?.after
+			? {
+				nextTipIndex: (lastTipRun as any).pipetteTipState.after.nextTipIndex ?? null,
+				hostname: (lastTipRun as any).pipetteTipState.after.hostname ?? null,
+				capturedAt: (lastTipRun as any).pipetteTipState.after.capturedAt
+					? new Date((lastTipRun as any).pipetteTipState.after.capturedAt).toISOString()
+					: null
+			}
+			: null;
 
 		// Tube data
 		const tube = activeTube as any;
@@ -321,7 +377,17 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			storageCartridges,
 			lockedCartridges,
 			fridges,
-			minOvenTimeMin
+			minOvenTimeMin,
+			// --- OT-2 Start Run panel inputs ---
+			// The robot's uploaded protocols (with parameter schemas) for the
+			// picker. Empty if the robot hasn't been hydrated.
+			robotProtocols,
+			// The robot's _id so the embedded run controller knows which OT-2
+			// to drive (the existing runState only carries the wax run id).
+			opentronsRobotId: robotId,
+			// Last completed run's post-run tip-tracker snapshot (if any),
+			// to seed the "next tip / tips remaining" readout on the panel.
+			lastTipState
 		};
 	} catch (err) {
 		console.error('[WAX-FILLING PAGE] Load error:', err instanceof Error ? err.message : err);
@@ -804,17 +870,156 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-	/** Start the robot run */
+	/**
+	 * Start the robot run.
+	 *
+	 * Three-step handshake with the OT-2:
+	 *   1. Read the operator's chosen parameters from the form, coerce each
+	 *      value back to its native type using the protocol's parameter schema.
+	 *   2. POST /runs on the robot to create the run with runTimeParameterValues.
+	 *   3. POST /runs/<rid>/actions {actionType:'play'} to start execution.
+	 *
+	 * Then stamp the WaxFillingRun with what we asked for + linkage:
+	 *   - protocolParameters: the exact values used (Mixed)
+	 *   - opentronsRunId: the robot's run UUID (for monitoring + autoadvance)
+	 *   - pipetteTipState.before: carried over from the previous run's `after`
+	 *
+	 * Status transitions setup→Running atomically with the OT-2 work — if
+	 * the robot rejects the run, the wax run stays in its prior stage.
+	 */
 	startRun: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
-		const now = new Date();
+		const opentronsProtocolId = data.get('opentronsProtocolId')?.toString();
+		if (!runId) return fail(400, { error: 'runId is required' });
+		if (!opentronsProtocolId) return fail(400, { error: 'opentronsProtocolId is required (pick a protocol)' });
 
+		const run = await WaxFillingRun.findById(runId).lean() as any;
+		if (!run) return fail(404, { error: 'Wax filling run not found' });
+		const robotId = run.robot?._id;
+		if (!robotId) return fail(400, { error: 'Wax run has no robot assigned' });
+
+		const robot = await getRobot(robotId);
+		if (!robot) return fail(404, { error: `Robot ${robotId} not found / not active` });
+
+		// Resolve the protocol on the robot to coerce form-string values to
+		// their native types (int/float/bool). Form fields all arrive as
+		// strings; the OT-2 API expects e.g. true (bool) not "true" (str).
+		const robotDoc = await OpentronsRobot.findById(robotId).lean() as any;
+		const protocol = (robotDoc?.protocols ?? []).find(
+			(p: any) => p.opentronsProtocolId === opentronsProtocolId
+		);
+		if (!protocol) {
+			return fail(400, {
+				error: `Protocol ${opentronsProtocolId} isn't uploaded to this robot. Upload it via /opentrons/devices first.`
+			});
+		}
+
+		const paramSchema = (protocol.parametersSchema ?? []) as Array<{
+			variableName: string;
+			type?: 'int' | 'float' | 'bool' | 'str';
+			default?: unknown;
+		}>;
+
+		const runTimeParameterValues: Record<string, number | string | boolean> = {};
+		const protocolParameters: Record<string, number | string | boolean> = {};
+		for (const def of paramSchema) {
+			const raw = data.get(`param_${def.variableName}`);
+			if (raw === null) {
+				// Operator didn't override; use protocol default.
+				if (def.default !== undefined && def.default !== null) {
+					runTimeParameterValues[def.variableName] = def.default as any;
+					protocolParameters[def.variableName] = def.default as any;
+				}
+				continue;
+			}
+			let value: number | string | boolean;
+			const s = raw.toString();
+			if (def.type === 'bool') value = s === 'true' || s === 'on';
+			else if (def.type === 'int') value = parseInt(s, 10);
+			else if (def.type === 'float') value = parseFloat(s);
+			else value = s;
+			runTimeParameterValues[def.variableName] = value;
+			protocolParameters[def.variableName] = value;
+		}
+
+		// Create the OT-2 run.
+		let opentronsRunId: string;
+		try {
+			const createRes = await robotPost(robot, '/runs', {
+				data: {
+					protocolId: opentronsProtocolId,
+					...(Object.keys(runTimeParameterValues).length ? { runTimeParameterValues } : {})
+				}
+			});
+			if (!createRes.ok) {
+				const body = await createRes.json().catch(() => ({}));
+				const detail = (body as any).errors?.[0]?.detail ?? `Robot returned ${createRes.status}`;
+				return fail(502, { error: `Couldn't create run on robot: ${detail}` });
+			}
+			const createBody = await createRes.json();
+			opentronsRunId = createBody?.data?.id;
+			if (!opentronsRunId) {
+				return fail(502, { error: 'Robot returned no run id' });
+			}
+		} catch (err) {
+			return fail(502, {
+				error: `Couldn't reach robot: ${err instanceof Error ? err.message : 'unknown'}`
+			});
+		}
+
+		// Start execution.
+		try {
+			const playRes = await robotPost(robot, `/runs/${opentronsRunId}/actions`, {
+				data: { actionType: 'play' }
+			});
+			if (!playRes.ok) {
+				const body = await playRes.json().catch(() => ({}));
+				const detail = (body as any).errors?.[0]?.detail ?? `Robot returned ${playRes.status}`;
+				return fail(502, {
+					error: `Created run ${opentronsRunId} but couldn't start it: ${detail}. Operator can play it from the device page.`
+				});
+			}
+		} catch (err) {
+			return fail(502, {
+				error: `Created run ${opentronsRunId} but couldn't start it: ${err instanceof Error ? err.message : 'unknown'}`
+			});
+		}
+
+		// Carry the previous run's tip state forward as this run's "before"
+		// snapshot. If the operator checked tiprack_refilled, the protocol
+		// will reset to index 0 — record that intent so post-run consumed
+		// math is sane (we treat refilled-mid-flight separately).
+		const prevTipRun = await WaxFillingRun.findOne({
+			'robot._id': robotId,
+			'pipetteTipState.after.nextTipIndex': { $exists: true },
+			_id: { $ne: runId }
+		}).sort({ runEndTime: -1 }).select('pipetteTipState').lean() as any;
+
+		const refilled = protocolParameters.tiprack_refilled === true;
+		const beforeSnap = refilled
+			? { nextTipIndex: 0, hostname: prevTipRun?.pipetteTipState?.after?.hostname ?? null, capturedAt: new Date() }
+			: prevTipRun?.pipetteTipState?.after
+				? {
+					nextTipIndex: prevTipRun.pipetteTipState.after.nextTipIndex ?? 0,
+					hostname: prevTipRun.pipetteTipState.after.hostname ?? null,
+					capturedAt: new Date()
+				}
+				: { nextTipIndex: 0, hostname: null, capturedAt: new Date() };
+
+		const now = new Date();
 		await WaxFillingRun.findByIdAndUpdate(runId, {
-			$set: { status: 'Running', runStartTime: now }
+			$set: {
+				status: 'Running',
+				runStartTime: now,
+				opentronsRunId,
+				protocolParameters,
+				'pipetteTipState.before': beforeSnap,
+				'pipetteTipState.rackRefilledDuringRun': refilled
+			}
 		});
 
 		await AuditLog.create({
@@ -824,10 +1029,115 @@ export const actions: Actions = {
 			action: 'UPDATE',
 			changedBy: locals.user?.username,
 			changedAt: now,
-			newData: { status: 'Running' }
+			newData: {
+				status: 'Running',
+				opentronsRunId,
+				protocolParameters,
+				pipetteTipBefore: beforeSnap.nextTipIndex
+			}
 		});
 
-		return { success: true };
+		return { success: true, opentronsRunId };
+	},
+
+	/**
+	 * Record the OT-2 run as finished (called by the client when the embedded
+	 * controller observes status → succeeded / stopped / failed).
+	 *
+	 * Pulls the run's commands list from the robot, scans the protocol's
+	 * `TIP TRACKER` comments to find the last reported next-tip index, and
+	 * stamps pipetteTipState.after on the WaxFillingRun along with consumed
+	 * count. Wax-filling status itself is unchanged — the operator still
+	 * has to physically remove the deck and click "Deck Removed".
+	 */
+	recordRunFinished: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const runId = data.get('runId') as string;
+		const finalStatus = (data.get('finalStatus')?.toString() ?? '').toLowerCase();
+		if (!runId) return fail(400, { error: 'runId is required' });
+
+		const run = await WaxFillingRun.findById(runId).lean() as any;
+		if (!run) return fail(404, { error: 'Wax filling run not found' });
+		if (!run.opentronsRunId) return fail(400, { error: 'This wax run has no OT-2 run linked' });
+		if (run.pipetteTipState?.after?.nextTipIndex != null) {
+			// Idempotent: already recorded. Return success without re-fetching.
+			return { success: true, alreadyRecorded: true };
+		}
+
+		const robot = await getRobot(run.robot?._id);
+		if (!robot) return fail(404, { error: 'Robot no longer reachable' });
+
+		// Pull commands. The OT-2 paginates — request a large pageLength to
+		// get everything in one round-trip for a typical wax run (well under
+		// 10k commands).
+		let nextTipIndex: number | null = null;
+		let hostname: string | null = null;
+		let pickUpTipCount = 0;
+		try {
+			const cmdRes = await robotGet(
+				robot,
+				`/runs/${run.opentronsRunId}/commands?cursor=0&pageLength=10000`
+			);
+			if (cmdRes.ok) {
+				const cmdBody = await cmdRes.json();
+				const commands = (cmdBody.data ?? []) as Array<{
+					commandType: string;
+					params?: { message?: string };
+				}>;
+				for (const cmd of commands) {
+					if (cmd.commandType === 'pickUpTip') pickUpTipCount += 1;
+					if (cmd.commandType === 'comment' && cmd.params?.message) {
+						// "TIP TRACKER: consumed tip A37 — next tip will be A38 (index 24)"
+						// "TIP TRACKER: starting from tip A37 (index 24)"
+						const m = cmd.params.message.match(/TIP TRACKER:[\s\S]*?\(index (\d+)\)/);
+						if (m) nextTipIndex = parseInt(m[1], 10);
+					}
+				}
+			}
+		} catch (err) {
+			console.error('[WAX-FILLING] recordRunFinished: command fetch failed:', err);
+			// Fall through — still stamp partial state.
+		}
+
+		const now = new Date();
+		const before = run.pipetteTipState?.before?.nextTipIndex ?? 0;
+		const refilledMidRun = !!run.pipetteTipState?.rackRefilledDuringRun;
+		// If the rack was refilled mid-run, consumed = (96 - before) + (final index).
+		// Otherwise just the delta.
+		const finalIndex = nextTipIndex ?? before + pickUpTipCount;
+		const consumed = refilledMidRun
+			? Math.max(0, 96 - before) + finalIndex
+			: Math.max(0, finalIndex - before);
+
+		await WaxFillingRun.findByIdAndUpdate(runId, {
+			$set: {
+				'pipetteTipState.after': {
+					nextTipIndex: finalIndex,
+					hostname: hostname ?? run.pipetteTipState?.before?.hostname ?? null,
+					capturedAt: now
+				},
+				'pipetteTipState.consumed': consumed
+			}
+		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'wax_filling_runs',
+			recordId: runId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: now,
+			newData: {
+				opentronsRunFinalStatus: finalStatus || 'unknown',
+				pipetteTipAfter: finalIndex,
+				pipetteTipConsumed: consumed
+			}
+		});
+
+		return { success: true, consumed, nextTipIndex: finalIndex };
 	},
 
 	/** Confirm deck removed — transition Running → Awaiting Removal; record oven entry */
