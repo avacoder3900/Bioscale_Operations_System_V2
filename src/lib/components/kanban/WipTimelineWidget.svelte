@@ -190,20 +190,26 @@
 		const sevenAm = 7 * 60;
 		const sixPm = 18 * 60;
 
-		// Before 7 AM — position within the "<7a" overflow cell
+		// Snap the line to 15-minute boundaries so it advances in the same
+		// discrete steps as the cell grid. The line sits at the LEFT edge of
+		// the cell representing "now" — same x as the right edge of the most
+		// recently completed cell, which is where a still-in-WIP bar ends.
+
+		// Before 7 AM — collapsed into the "<7a" overflow cell. Pin to the
+		// right edge of that cell as soon as midnight passes; before midnight
+		// of the chart day, leave at the left edge of the overflow.
 		if (minutesFromMidnight < sevenAm) {
-			const frac = minutesFromMidnight / sevenAm;
-			return LABEL_WIDTH_PX + frac * OVERFLOW_CELL_PX;
+			return LABEL_WIDTH_PX + OVERFLOW_CELL_PX;
 		}
-		// After 6 PM — position within the ">6p" overflow cell
+		// After 6 PM — collapsed into the ">6p" overflow cell. Park the line
+		// at the right edge of that cell.
 		if (minutesFromMidnight >= sixPm) {
-			const overflowSpan = 24 * 60 - sixPm;
-			const frac = Math.min(1, (minutesFromMidnight - sixPm) / overflowSpan);
-			return LABEL_WIDTH_PX + OVERFLOW_CELL_PX + 44 * REGULAR_CELL_PX + frac * OVERFLOW_CELL_PX;
+			return LABEL_WIDTH_PX + OVERFLOW_CELL_PX + 44 * REGULAR_CELL_PX + OVERFLOW_CELL_PX;
 		}
-		// In the regular 7am-6pm window
+		// Regular 7am-6pm window — snap to 15-min grid.
 		const minutesFrom7 = minutesFromMidnight - sevenAm;
-		return LABEL_WIDTH_PX + OVERFLOW_CELL_PX + (minutesFrom7 / 15) * REGULAR_CELL_PX;
+		const completedQuarters = Math.floor(minutesFrom7 / 15);
+		return LABEL_WIDTH_PX + OVERFLOW_CELL_PX + completedQuarters * REGULAR_CELL_PX;
 	}
 
 	let nowLeftPx = $state(0);
