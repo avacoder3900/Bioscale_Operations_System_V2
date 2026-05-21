@@ -4,6 +4,20 @@ Snapshot as of 2026-05-21, branch `feature/arm-protocols` (off `dev` at `d3cf5af
 Captures everything queued for the arm work so the next session can pick up
 without spelunking through chat history.
 
+> **2026-05-21 backlog sweep — shipped on this branch:**
+> #1 driver `_check` (on `dev` as 1f7daa3, not yet on `feature/arm-protocols`);
+> #2 fcntl serial port lock; #3 chip-serial port auto-resolve;
+> #6 periodic liveness probe (`/health` reflects last probe); #7 webhook
+> queue + retry/backoff. **Provenance gateway**: recording sidecar
+> (`.meta.json`) + `RobotArmRun.{lotId, manufacturingStep,
+> recordedDuringRunId}` + webhook stamping. **Pre-flight**:
+> `POST /replay/preflight` + opt-in `enforce_preflight` on `/replay/start`.
+> **Wax pilot scaffold**: `WaxFillingRun.armRunId` + `POST
+> /api/robot-arm/trigger-replay` that ties an arm replay to a wax (or
+> generic) parent and stamps the back-ref. **Lot view**: `GET
+> /api/robot-arm/runs-for-lot?lotId=...` returns BIMS runs joined with
+> Pi-side recording sidecars. **Still open**: items below.
+
 ---
 
 ## What works today
@@ -111,7 +125,22 @@ cd services/robot-arm
 
 ### BIMS UI improvements (mostly server-side already wired)
 
-- Refresh recordings list automatically after `/record/start` completes (currently needs a page reload).
+- Refresh recordings list automatically after `/record/start` completes
+  (currently needs a page reload). **Blocked by frozen-svelte rule** —
+  the fix is one `use:enhance` + `invalidateAll()` on the control page
+  form. The server-side data refresh is already there; just needs the
+  client to ask for it.
+- Add lot / step / parent-run-id form inputs on the control page so
+  operators can stamp provenance at start time. The server actions
+  already accept those formData fields (`lot_id`,
+  `manufacturing_step`, `recorded_during_run_id`) — UI just needs to
+  surface them.
+- Build the "Arm recordings for lot X" view (e.g.
+  `/manufacturing/robot-arm/by-lot/[lotId]`) on top of the existing
+  `GET /api/robot-arm/runs-for-lot?lotId=...` endpoint.
+- Wire the wax pilot's "play arm replay" button: a POST to
+  `/api/robot-arm/trigger-replay` with `parent.type='wax'` and the
+  active wax `runId`. Stamps `WaxFillingRun.armRunId` automatically.
 - Show live position telemetry on the page during a session — a 6-bar status of where each joint is.
 - "Stop" button while a session is active is already there; verify it works with the new POST `/sessions/stop` endpoint.
 - Run history page (`/manufacturing/robot-arm/runs`) is on `feature/bims-protocol-runner` but not on `dev`. Either cherry-pick or rewrite.
