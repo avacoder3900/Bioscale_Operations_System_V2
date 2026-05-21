@@ -379,6 +379,9 @@ class TeleopStartRequest(BaseModel):
     rate_hz: Optional[int] = Field(None, ge=1, le=100)
     duration_s: Optional[float] = Field(None, ge=0.1)
     triggered_by: Optional[dict] = None
+    lot_id: Optional[str] = None
+    manufacturing_step: Optional[str] = None
+    recorded_during_run_id: Optional[str] = None
 
 
 class RecordStartRequest(BaseModel):
@@ -386,12 +389,18 @@ class RecordStartRequest(BaseModel):
     rate_hz: Optional[int] = Field(None, ge=1, le=100)
     duration_s: Optional[float] = Field(None, ge=0.1)
     triggered_by: Optional[dict] = None
+    lot_id: Optional[str] = None
+    manufacturing_step: Optional[str] = None
+    recorded_during_run_id: Optional[str] = None
 
 
 class ReplayStartRequest(BaseModel):
     source: str = Field(..., min_length=1)
     loops: Optional[int] = Field(1, ge=1, le=100)
     triggered_by: Optional[dict] = None
+    lot_id: Optional[str] = None
+    manufacturing_step: Optional[str] = None
+    recorded_during_run_id: Optional[str] = None
 
 
 class PoseInfo(BaseModel):
@@ -694,12 +703,20 @@ async def _start_session(kind: str, params: dict, triggered_by: Optional[dict]) 
         return {"run_id": run_id, "kind": kind}
 
 
+def _provenance(req) -> dict:
+    return {
+        "lot_id": req.lot_id,
+        "manufacturing_step": req.manufacturing_step,
+        "recorded_during_run_id": req.recorded_during_run_id,
+    }
+
+
 @app.post("/teleop/start", dependencies=[Depends(require_api_key)])
 async def teleop_start(req: TeleopStartRequest) -> dict:
     _leader_required()
     return await _start_session(
         "teleop",
-        {"rate_hz": req.rate_hz, "duration_s": req.duration_s},
+        {"rate_hz": req.rate_hz, "duration_s": req.duration_s, **_provenance(req)},
         req.triggered_by,
     )
 
@@ -709,7 +726,12 @@ async def record_start(req: RecordStartRequest) -> dict:
     _leader_required()
     return await _start_session(
         "record",
-        {"name": req.name, "rate_hz": req.rate_hz, "duration_s": req.duration_s},
+        {
+            "name": req.name,
+            "rate_hz": req.rate_hz,
+            "duration_s": req.duration_s,
+            **_provenance(req),
+        },
         req.triggered_by,
     )
 
@@ -718,7 +740,7 @@ async def record_start(req: RecordStartRequest) -> dict:
 async def replay_start(req: ReplayStartRequest) -> dict:
     return await _start_session(
         "replay",
-        {"source": req.source, "loops": req.loops},
+        {"source": req.source, "loops": req.loops, **_provenance(req)},
         req.triggered_by,
     )
 
@@ -778,6 +800,9 @@ async def recordings() -> dict:
                 "modified": time.strftime(
                     "%Y-%m-%dT%H:%M:%S", time.localtime(r["modified"])
                 ),
+                # Sidecar meta (lot/step/operator/...) when present; null
+                # for legacy recordings without a sidecar.
+                "meta": r.get("meta"),
             }
         )
     return {"recordings": out}

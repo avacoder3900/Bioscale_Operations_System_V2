@@ -70,6 +70,15 @@ class LeaderFollowerSession:
         self.recording_name: Optional[str] = params.get("name")  # record only
         self.source: Optional[str] = params.get("source")  # replay only
         self.loops: int = int(params.get("loops") or 1)
+        # Provenance (all optional). Propagated to the recording sidecar
+        # AND stamped on the BIMS RobotArmRun via the start webhook event,
+        # so a recording on disk and the matching MongoDB run can be
+        # cross-referenced by lot.
+        self.lot_id: Optional[str] = (params.get("lot_id") or None)
+        self.manufacturing_step: Optional[str] = (params.get("manufacturing_step") or None)
+        self.recorded_during_run_id: Optional[str] = (
+            params.get("recorded_during_run_id") or None
+        )
 
         self._cancel = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -92,6 +101,10 @@ class LeaderFollowerSession:
                 "loops": self.loops if self.kind == "replay" else None,
                 "source": self.source if self.kind == "replay" else None,
                 "name": self.recording_name if self.kind == "record" else None,
+                # Provenance — webhook receiver stamps these on RobotArmRun
+                "lot_id": self.lot_id,
+                "manufacturing_step": self.manufacturing_step,
+                "recorded_during_run_id": self.recorded_during_run_id,
             },
         )
         self._thread = threading.Thread(
@@ -211,11 +224,29 @@ class LeaderFollowerSession:
                 next_tick = time.time()
 
         # Persist on either graceful end or cancel — partial takes
-        # are still useful for debugging / curating later.
+        # are still useful for debugging / curating later. Always write
+        # a meta sidecar so even ad-hoc recordings carry rate + start
+        # time + operator; lot/step are optional.
         if self.kind == "record" and self.frames:
             if not self.recording_name:
                 self.recording_name = f"unnamed-{int(self.started_at or time.time())}"
-            path = save_recording(self.recording_name, self.frames)
+            started_iso = (
+                datetime.fromtimestamp(self.started_at, tz=timezone.utc).isoformat()
+                if self.started_at
+                else None
+            )
+            meta = {
+                "lot_id": self.lot_id,
+                "manufacturing_step": self.manufacturing_step,
+                "recorded_during_run_id": self.recorded_during_run_id,
+                "operator": (self.triggered_by or {}).get("username")
+                if self.triggered_by
+                else None,
+                "started_at_iso": started_iso,
+                "rate_hz": self.rate_hz,
+                "run_id": self.run_id,
+            }
+            path = save_recording(self.recording_name, self.frames, meta=meta)
             self.recording_path = str(path)
             self.frames_written = len(self.frames)
 
