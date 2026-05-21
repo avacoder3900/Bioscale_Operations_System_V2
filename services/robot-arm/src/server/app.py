@@ -57,6 +57,7 @@ from arm.driver import (
 )
 from arm.leader_follower import LeaderFollowerSession
 from arm.recordings import list_recordings as list_recordings_files
+from arm.recordings import load_recording as load_recording_file
 
 POSE_FILE = Path(
     os.environ.get("BIMS_ARM_POSE_FILE", str(Path.home() / ".bims-arm" / "poses.json"))
@@ -401,6 +402,27 @@ class ReplayStartRequest(BaseModel):
     lot_id: Optional[str] = None
     manufacturing_step: Optional[str] = None
     recorded_during_run_id: Optional[str] = None
+    # When true the server runs the preflight check inline and rejects
+    # the start with 409 if it fails. tolerance_steps is forwarded to
+    # the check. Off by default to preserve legacy behavior.
+    enforce_preflight: bool = False
+    preflight_tolerance_steps: Optional[int] = Field(None, ge=0, le=POS_MAX)
+
+
+class PreflightRequest(BaseModel):
+    source: str = Field(..., min_length=1)
+    tolerance_steps: int = Field(50, ge=0, le=POS_MAX)
+
+
+class PreflightResult(BaseModel):
+    ready: bool
+    leader_alive: bool
+    follower_alive: bool
+    expected: dict[int, int]
+    actual: dict[int, int]
+    deltas: dict[int, int]
+    tolerance_steps: int
+    issues: list[str]
 
 
 class PoseInfo(BaseModel):
@@ -736,8 +758,58 @@ async def record_start(req: RecordStartRequest) -> dict:
     )
 
 
+async def _run_preflight(source: str, tolerance_steps: int) -> PreflightResult:
+    """Read first frame of `source` and compare against current follower pose."""
+    follower = _follower()
+    frames = await asyncio.to_thread(load_recording_file, source)
+    if not frames:
+        raise HTTPException(status_code=400, detail=f"recording '{source}' is empty")
+    raw_first = frames[0].get("positions", {}) or {}
+    expected = {int(sid): int(p) for sid, p in raw_first.items()}
+    actual = await _with_follower(follower.get_positions)
+    deltas = {sid: int(actual.get(sid, 0)) - expected.get(sid, 0) for sid in expected}
+    issues: list[str] = []
+    if not state.follower_alive:
+        issues.append("follower liveness probe last failed")
+    over = {sid: d for sid, d in deltas.items() if abs(d) > tolerance_steps}
+    if over:
+        issues.append(
+            f"joints {sorted(over.keys())} exceed {tolerance_steps}-step tolerance "
+            f"(deltas {over}) — operator must home the follower first"
+        )
+    return PreflightResult(
+        ready=not issues,
+        leader_alive=state.leader_alive,
+        follower_alive=state.follower_alive,
+        expected=expected,
+        actual=actual,
+        deltas=deltas,
+        tolerance_steps=tolerance_steps,
+        issues=issues,
+    )
+
+
+@app.post(
+    "/replay/preflight",
+    response_model=PreflightResult,
+    dependencies=[Depends(require_api_key)],
+)
+async def replay_preflight(req: PreflightRequest) -> PreflightResult:
+    return await _run_preflight(req.source, req.tolerance_steps)
+
+
 @app.post("/replay/start", dependencies=[Depends(require_api_key)])
 async def replay_start(req: ReplayStartRequest) -> dict:
+    if req.enforce_preflight:
+        pre = await _run_preflight(
+            req.source,
+            req.preflight_tolerance_steps if req.preflight_tolerance_steps is not None else 50,
+        )
+        if not pre.ready:
+            raise HTTPException(
+                status_code=409,
+                detail={"preflight_failed": True, "issues": pre.issues, "deltas": pre.deltas},
+            )
     return await _start_session(
         "replay",
         {"source": req.source, "loops": req.loops, **_provenance(req)},

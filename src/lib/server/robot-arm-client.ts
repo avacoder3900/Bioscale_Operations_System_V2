@@ -101,6 +101,17 @@ interface ProvenanceFields {
 	recorded_during_run_id?: string;
 }
 
+export interface PreflightResult {
+	ready: boolean;
+	leader_alive: boolean;
+	follower_alive: boolean;
+	expected: Record<string, number>;
+	actual: Record<string, number>;
+	deltas: Record<string, number>;
+	tolerance_steps: number;
+	issues: string[];
+}
+
 export interface PortInfo {
 	port: string;
 	present: boolean;
@@ -129,8 +140,16 @@ export const robotArm = {
 		} & ProvenanceFields
 	) => robotArmFetch<SessionStarted>('/record/start', { method: 'POST', body }),
 	startReplay: (
-		body: { source: string; loops?: number; triggered_by?: TriggeredBy } & ProvenanceFields
+		body: {
+			source: string;
+			loops?: number;
+			triggered_by?: TriggeredBy;
+			enforce_preflight?: boolean;
+			preflight_tolerance_steps?: number;
+		} & ProvenanceFields
 	) => robotArmFetch<SessionStarted>('/replay/start', { method: 'POST', body }),
+	preflightReplay: (body: { source: string; tolerance_steps?: number }) =>
+		robotArmFetch<PreflightResult>('/replay/preflight', { method: 'POST', body }),
 	listRecordings: () => robotArmFetch<{ recordings: RecordingMeta[] }>('/recordings'),
 	health: () => robotArmFetch<{ status: string; service: string; version: string }>('/health')
 };
