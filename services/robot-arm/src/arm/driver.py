@@ -41,11 +41,43 @@ class ServoState:
     error: int
 
 
+# STS3215 status byte bits — set by the servo to report its own state.
+# Returned alongside successful comm operations; the data on the wire is
+# still valid. Treat as informational, not fatal.
+_SERVO_ERR_BITS = {
+    0x01: "voltage",
+    0x02: "angle_limit",
+    0x04: "overheat",
+    0x08: "range",
+    0x10: "checksum",
+    0x20: "overload",
+    0x40: "instruction",
+}
+
+
+def _decode_servo_err(err: int) -> str:
+    bits = [name for bit, name in _SERVO_ERR_BITS.items() if err & bit]
+    return ",".join(bits) if bits else f"0x{err:02x}"
+
+
 def _check(comm: int, err: int, op: str) -> None:
+    """Raise on bus comm errors; log servo status bytes without raising.
+
+    Earlier versions raised on any non-zero status byte, which broke
+    follower recovery — e.g. OVERLOAD (0x20) is set after the servo
+    clears an overload condition and the next successful write still
+    carries that bit. The op completed; the data is valid; the servo is
+    just reporting its state (see NEXT_STEPS.md #1). Bus comm errors
+    (COMM_TX_FAIL, COMM_RX_TIMEOUT, etc.) mean nothing happened on the
+    wire and must still raise.
+    """
     if comm != scs.COMM_SUCCESS:
         raise RuntimeError(f"{op}: comm error {comm}")
     if err != 0:
-        raise RuntimeError(f"{op}: servo error 0x{err:02x}")
+        print(
+            f"[arm-driver] {op}: servo status {_decode_servo_err(err)} (0x{err:02x})",
+            flush=True,
+        )
 
 
 class ArmDriver:
