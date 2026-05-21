@@ -31,7 +31,11 @@ const robotArmRunSchema = new Schema(
 		triggeredBy: { _id: String, username: String },
 		startedAt: Date,
 		endedAt: Date,
+		// Provenance — populated from the first webhook event's extras so a
+		// recording on disk and the matching RobotArmRun can be cross-referenced.
 		lotId: { type: String, index: true },
+		manufacturingStep: { type: String, index: true },
+		recordedDuringRunId: { type: String, index: true },
 		// Mode-specific parameters (loosely typed by design — the run.type narrows it).
 		parameters: Schema.Types.Mixed,
 		result: Schema.Types.Mixed,
@@ -45,6 +49,8 @@ const robotArmRunSchema = new Schema(
 
 robotArmRunSchema.index({ status: 1, createdAt: -1 });
 robotArmRunSchema.index({ type: 1, createdAt: -1 });
+// "all arm runs for lot X, newest first" — supports the lot-keyed view
+robotArmRunSchema.index({ lotId: 1, createdAt: -1 });
 
 applySacredMiddleware(robotArmRunSchema, 'finalizedAt');
 

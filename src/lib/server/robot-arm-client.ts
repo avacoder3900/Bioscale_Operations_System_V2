@@ -74,11 +74,31 @@ export interface SessionStarted {
 	kind: 'teleop' | 'record' | 'replay';
 }
 
+export interface RecordingSidecar {
+	schema_version: number;
+	frame_count: number;
+	lot_id?: string;
+	manufacturing_step?: string;
+	recorded_during_run_id?: string;
+	operator?: string;
+	started_at_iso?: string;
+	rate_hz?: number;
+	run_id?: string;
+}
+
 export interface RecordingMeta {
 	name: string;
 	path: string;
 	size_bytes: number;
 	modified: string;
+	// Provenance sidecar; null for legacy recordings without one.
+	meta?: RecordingSidecar | null;
+}
+
+interface ProvenanceFields {
+	lot_id?: string;
+	manufacturing_step?: string;
+	recorded_during_run_id?: string;
 }
 
 export interface PortInfo {
@@ -97,16 +117,20 @@ export const robotArm = {
 	getActive: () => robotArmFetch<ActiveSession>('/sessions/active'),
 	getPortStatus: () => robotArmFetch<PortStatus>('/ports/status'),
 	stop: () => robotArmFetch<{ stopped_run_id: string | null }>('/sessions/stop', { method: 'POST' }),
-	startTeleop: (body: { rate_hz?: number; duration_s?: number; triggered_by?: TriggeredBy }) =>
-		robotArmFetch<SessionStarted>('/teleop/start', { method: 'POST', body }),
-	startRecord: (body: {
-		name: string;
-		rate_hz?: number;
-		duration_s?: number;
-		triggered_by?: TriggeredBy;
-	}) => robotArmFetch<SessionStarted>('/record/start', { method: 'POST', body }),
-	startReplay: (body: { source: string; loops?: number; triggered_by?: TriggeredBy }) =>
-		robotArmFetch<SessionStarted>('/replay/start', { method: 'POST', body }),
+	startTeleop: (
+		body: { rate_hz?: number; duration_s?: number; triggered_by?: TriggeredBy } & ProvenanceFields
+	) => robotArmFetch<SessionStarted>('/teleop/start', { method: 'POST', body }),
+	startRecord: (
+		body: {
+			name: string;
+			rate_hz?: number;
+			duration_s?: number;
+			triggered_by?: TriggeredBy;
+		} & ProvenanceFields
+	) => robotArmFetch<SessionStarted>('/record/start', { method: 'POST', body }),
+	startReplay: (
+		body: { source: string; loops?: number; triggered_by?: TriggeredBy } & ProvenanceFields
+	) => robotArmFetch<SessionStarted>('/replay/start', { method: 'POST', body }),
 	listRecordings: () => robotArmFetch<{ recordings: RecordingMeta[] }>('/recordings'),
 	health: () => robotArmFetch<{ status: string; service: string; version: string }>('/health')
 };

@@ -84,12 +84,18 @@ export const POST: RequestHandler = async ({ request }) => {
 				{ status: 400 }
 			);
 		}
+		// Stamp provenance from the first event's extras. The Pi emits these
+		// on the {kind}.start event; legacy events without them simply leave
+		// the fields unset.
 		run = await RobotArmRun.create({
 			runId,
 			type: inferredType,
 			status: 'running',
 			startedAt: eventAt,
 			triggeredBy: (event.triggered_by as { _id: string; username: string }) ?? undefined,
+			lotId: (event.lot_id as string | undefined) ?? undefined,
+			manufacturingStep: (event.manufacturing_step as string | undefined) ?? undefined,
+			recordedDuringRunId: (event.recorded_during_run_id as string | undefined) ?? undefined,
 			parameters: event.parameters ?? undefined,
 			events: [{ at: eventAt, type: eventType, payload: event }]
 		});
