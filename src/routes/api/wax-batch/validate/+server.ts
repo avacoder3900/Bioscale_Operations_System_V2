@@ -10,7 +10,7 @@ const WAX_TUBE_PART_NUMBER = 'PT-CT-114';
  *
  *   1. ReceivingLot — purchased / received tubes. Remaining volume is computed
  *      from lot.quantity × 12000 μL minus lot.consumedUl. Must be PT-CT-114.
- *   2. WaxBatch — in-house wax produced via /manufacturing/wax-creation.
+ *   2. WaxBatch — in-house wax produced via /manufacturing/cart-mfg/wax-creation.
  *      Used only when no ReceivingLot matches the barcode. Remaining volume
  *      comes directly from the WaxBatch document (kept in sync by completeRun).
  *

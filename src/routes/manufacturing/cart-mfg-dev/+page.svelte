@@ -54,7 +54,7 @@
 	});
 
 	// Pipeline stage data for flow visualization. `stageSlug` deep-links each
-	// tile to /manufacturing/pipeline?stage=<slug>; QC has no dedicated page
+	// tile to /manufacturing/cart-mfg/pipeline?stage=<slug>; QC has no dedicated page
 	// yet so it stays inert.
 	const pipelineStages = $derived(() => [
 		{ label: 'Backing', count: data.pipeline.backing.backedTotal, sub: `${data.pipeline.backing.totalReadyCartridges} ready`, color: 'tron-purple', stageSlug: 'backing' },
@@ -128,7 +128,7 @@
 				<div class="flex-1 min-w-[100px] text-center">
 					{#if stage.stageSlug}
 						<a
-							href="/manufacturing/pipeline?stage={stage.stageSlug}"
+							href="/manufacturing/cart-mfg/pipeline?stage={stage.stageSlug}"
 							class="block rounded-lg bg-tron-bg-tertiary border border-tron-border p-3 h-full flex flex-col justify-center transition-colors hover:border-tron-cyan/60 hover:bg-tron-bg-tertiary/70"
 							title="View {stage.label} pipeline rows"
 						>
@@ -181,7 +181,7 @@
 							<div class="flex justify-between"><span class="text-tron-text-secondary">Wax Lot</span><span class="text-tron-text">{robot.activeWaxRun.waxSourceLot}</span></div>
 						{/if}
 					</div>
-					<a href="/manufacturing/wax-filling?robot={robot.robotId}" class="mt-3 block text-xs text-tron-cyan hover:underline">&rarr; Go to Wax Filling</a>
+					<a href="/manufacturing/cart-mfg/wax-filling?robot={robot.robotId}" class="mt-3 block text-xs text-tron-cyan hover:underline">&rarr; Go to Wax Filling</a>
 				{:else if robot.activeReagentRun}
 					<div class="space-y-1 text-xs text-tron-text-secondary">
 						<div class="flex justify-between"><span class="text-tron-text-secondary">Run</span><span class="text-tron-text">Reagent &middot; {robot.activeReagentRun.stage}</span></div>
@@ -190,12 +190,12 @@
 						<div class="flex justify-between"><span class="text-tron-text-secondary">Assay</span><span class="text-tron-text">{robot.activeReagentRun.assayTypeName ?? 'N/A'}</span></div>
 						<div class="flex justify-between"><span class="text-tron-text-secondary">Cartridges</span><span class="text-tron-text">{robot.activeReagentRun.cartridgeCount}</span></div>
 					</div>
-					<a href="/manufacturing/reagent-filling?robot={robot.robotId}" class="mt-3 block text-xs text-tron-cyan hover:underline">&rarr; Go to Reagent Filling</a>
+					<a href="/manufacturing/cart-mfg/reagent-filling?robot={robot.robotId}" class="mt-3 block text-xs text-tron-cyan hover:underline">&rarr; Go to Reagent Filling</a>
 				{:else}
 					<div class="text-xs text-tron-text-secondary mb-2">No active run</div>
 					<div class="flex gap-3">
-						<a href="/manufacturing/wax-filling?robot={robot.robotId}" class="text-xs text-tron-cyan hover:underline">&#9654; Start Wax</a>
-						<a href="/manufacturing/reagent-filling?robot={robot.robotId}" class="text-xs text-tron-cyan hover:underline">&#9654; Start Reagent</a>
+						<a href="/manufacturing/cart-mfg/wax-filling?robot={robot.robotId}" class="text-xs text-tron-cyan hover:underline">&#9654; Start Wax</a>
+						<a href="/manufacturing/cart-mfg/reagent-filling?robot={robot.robotId}" class="text-xs text-tron-cyan hover:underline">&#9654; Start Reagent</a>
 					</div>
 				{/if}
 
@@ -253,7 +253,7 @@
 					</div>
 					<div class="mt-1 text-lg font-bold text-tron-text">{data.pipeline.topSeal.rollCount} <span class="text-xs font-normal text-tron-text-secondary">rolls</span></div>
 					<div class="text-xs text-tron-text-secondary">~{data.pipeline.topSeal.stripsAvailableApprox} strips</div>
-					<a href="/manufacturing/top-seal-cutting" class="mt-2 block text-xs text-tron-cyan hover:underline" onclick={(e) => e.stopPropagation()}>&rarr; Cutting</a>
+					<a href="/manufacturing/cart-mfg/top-seal-cutting" class="mt-2 block text-xs text-tron-cyan hover:underline" onclick={(e) => e.stopPropagation()}>&rarr; Cutting</a>
 					{#if expandedCard === 'topseal'}
 						<div class="mt-3 border-t border-tron-border pt-3">
 							{#each data.pipeline.topSeal.activeRolls ?? [] as roll}
@@ -274,7 +274,7 @@
 					<span class="text-xs font-semibold uppercase text-tron-text-secondary">Laser Cut</span>
 					<div class="mt-1 text-lg font-bold text-tron-text">{data.pipeline.laserCut.sheetsOnHand} <span class="text-xs font-normal text-tron-text-secondary">sheets</span></div>
 					<div class="text-xs text-tron-text-secondary">{data.pipeline.laserCut.individualBacks} backs</div>
-					<a href="/manufacturing/laser-cutting" class="mt-2 block text-xs text-tron-cyan hover:underline" onclick={(e) => e.stopPropagation()}>&rarr; Laser Cut</a>
+					<a href="/manufacturing/cart-mfg/laser-cutting" class="mt-2 block text-xs text-tron-cyan hover:underline" onclick={(e) => e.stopPropagation()}>&rarr; Laser Cut</a>
 					{#if expandedCard === 'lasercut'}
 						<div class="mt-3 border-t border-tron-border pt-3 text-xs text-tron-text-secondary">
 							{data.pipeline.laserCut.sheetsOnHand} &times; {data.pipeline.laserCut.cartridgesPerSheet} = {data.pipeline.laserCut.individualBacks}
@@ -296,7 +296,7 @@
 					</div>
 					<div class="mt-1 text-lg font-bold text-tron-text">{data.pipeline.backing.backedTotal} <span class="text-xs font-normal text-tron-text-secondary">backed</span></div>
 					<div class="text-xs text-tron-text-secondary">{data.pipeline.backing.totalReadyCartridges} ready &middot; {data.pipeline.backing.inProgressLots?.length ?? 0} in oven</div>
-					<a href="/manufacturing/wi-01" class="mt-2 block text-xs text-tron-cyan hover:underline" onclick={(e) => e.stopPropagation()}>&rarr; WI-01</a>
+					<a href="/manufacturing/cart-mfg/wi-01" class="mt-2 block text-xs text-tron-cyan hover:underline" onclick={(e) => e.stopPropagation()}>&rarr; WI-01</a>
 					{#if expandedCard === 'backing'}
 						<div class="mt-3 border-t border-tron-border pt-3">
 							{#each [...(data.pipeline.backing.readyLots ?? []), ...(data.pipeline.backing.inProgressLots ?? [])] as lot}

@@ -37,8 +37,8 @@ async function runReminder(request: Request) {
 		<h2 style="color:#fff;font-size:16px;margin-top:24px;">Quick checklist</h2>
 		<ol style="padding-left:18px;line-height:1.6;">
 			<li><strong>Each fridge</strong> — count cartridges physically present, compare to <a href="${env.BIMS_BASE_URL ?? ''}/equipment/activity" style="color:#60a5fa;">Equipment Activity</a> and <a href="${env.BIMS_BASE_URL ?? ''}/inventory/fridge-storage" style="color:#60a5fa;">Fridge Storage</a> (split: wax_accepted / wax_scrapped / reagent).</li>
-			<li><strong>Each oven</strong> — count cartridges in each backing-lot bucket, compare to <a href="${env.BIMS_BASE_URL ?? ''}/manufacturing/pipeline?stage=backing" style="color:#60a5fa;">Pipeline → Backing</a>.</li>
-			<li><strong>Adjust deltas</strong> — backing-lot fixes via <a href="${env.BIMS_BASE_URL ?? ''}/manufacturing/scrap" style="color:#60a5fa;">Cartridge Checkout</a> (Pre-Wax Removal section); fridge fixes via the wax-stored Checkout section on the same page.</li>
+			<li><strong>Each oven</strong> — count cartridges in each backing-lot bucket, compare to <a href="${env.BIMS_BASE_URL ?? ''}/manufacturing/cart-mfg/pipeline?stage=backing" style="color:#60a5fa;">Pipeline → Backing</a>.</li>
+			<li><strong>Adjust deltas</strong> — backing-lot fixes via <a href="${env.BIMS_BASE_URL ?? ''}/manufacturing/cart-mfg/scrap" style="color:#60a5fa;">Cartridge Checkout</a> (Pre-Wax Removal section); fridge fixes via the wax-stored Checkout section on the same page.</li>
 		</ol>
 
 		<p style="color:#9ca3af;font-size:12px;margin-top:24px;">Sent automatically every day at 4:30 PM CDT. To stop, disable the <code>cartridge-cleanup-reminder</code> cron in <code>vercel.json</code>.</p>
@@ -53,7 +53,7 @@ async function runReminder(request: Request) {
 			preheader: 'Audit physical fridge + oven counts against BIMS and reconcile.',
 			bodyHtml,
 			ctaText: 'Open Cartridge Checkout',
-			ctaUrl: `${env.BIMS_BASE_URL ?? ''}/manufacturing/scrap`
+			ctaUrl: `${env.BIMS_BASE_URL ?? ''}/manufacturing/cart-mfg/scrap`
 		})
 	});
 

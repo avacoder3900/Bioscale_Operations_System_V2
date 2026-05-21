@@ -3,7 +3,7 @@
  *
  * Generates a full analytics-page data payload filled with fabricated runs,
  * operators, equipment, FMEA entries, SPC signals, etc. Shape matches the
- * real /manufacturing/analysis load function's return so the same
+ * real /manufacturing/cart-mfg/analysis load function's return so the same
  * +page.svelte can render it verbatim.
  *
  * Deterministic (seeded RNG) so the view is stable across reloads and
