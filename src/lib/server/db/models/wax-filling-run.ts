@@ -48,7 +48,15 @@ const waxFillingRunSchema = new Schema({
 		after:  { nextTipIndex: Number, hostname: String, capturedAt: Date },
 		consumed: Number,
 		rackRefilledDuringRun: Boolean
-	}
+	},
+
+	// --- Robot-arm transfer step (optional, inserted between OT-2 dispense
+	// and scanner sweep on the wax pilot). When the arm-replay protocol step
+	// fires, the resulting RobotArmRun.runId is stamped here so the wax run
+	// is queryable by arm activity and vice-versa. Single ref by design —
+	// only one arm transfer per wax run for now; if the pilot expands to
+	// multiple transfers we'll widen this to an array.
+	armRunId: { type: String, index: true }
 }, { timestamps: true });
 
 // Robot + deck are held through the filling-page-owned stages only.
