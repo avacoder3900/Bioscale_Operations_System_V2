@@ -11,7 +11,9 @@ export const load: PageServerLoad = async ({ locals, url, depends }) => {
 
 	const range = parseRange(url.searchParams.get('range'));
 	const day = url.searchParams.get('day');
-	const analytics = await loadAnalyticsData(range, day);
+	const tzRaw = url.searchParams.get('tz');
+	const tzOffsetMin = tzRaw !== null && Number.isFinite(Number(tzRaw)) ? Number(tzRaw) : 0;
+	const analytics = await loadAnalyticsData(range, day, tzOffsetMin);
 
 	return { analytics };
 };

@@ -37,42 +37,89 @@
 
 	let { data }: Props = $props();
 
-	// Day tabs — show current week (Sunday-anchored).
+	// Day tabs — show current week (Sunday-anchored) in the viewer's local time.
+	// Using UTC drifts the label by one day for CT users between 7pm and midnight.
 	let weekDays = $derived.by(() => {
 		const today = new Date();
-		const dow = today.getUTCDay(); // 0=Sun..6=Sat
+		const dow = today.getDay(); // 0=Sun..6=Sat, local
 		const sunday = new Date(today);
-		sunday.setUTCDate(today.getUTCDate() - dow);
+		sunday.setDate(today.getDate() - dow);
 		const labels = ['S', 'M', 'T', 'W', 'R', 'F', 'S'];
 		return labels.map((l, i) => {
 			const d = new Date(sunday);
-			d.setUTCDate(sunday.getUTCDate() + i);
-			return { label: l, iso: d.toISOString().slice(0, 10) };
+			d.setDate(sunday.getDate() + i);
+			const y = d.getFullYear();
+			const m = String(d.getMonth() + 1).padStart(2, '0');
+			const day = String(d.getDate()).padStart(2, '0');
+			return { label: l, iso: `${y}-${m}-${day}` };
 		});
 	});
 
 	function setDay(iso: string) {
 		const params = new URLSearchParams($page.url.searchParams);
 		params.set('day', iso);
+		params.set('tz', String(new Date().getTimezoneOffset()));
 		goto(`/kanban/analytics?${params.toString()}`, { replaceState: true, noScroll: true });
 	}
 
-	// Poll every 30s. Pause when tab hidden.
+	// On mount, anchor the chart to the viewer's local timezone. The server
+	// otherwise buckets against UTC midnight, which drifts segments by the tz
+	// offset (visible as bars stretching ~5h past the now-line for CT users).
+	function ensureTzParam() {
+		const current = $page.url.searchParams.get('tz');
+		const wanted = String(new Date().getTimezoneOffset());
+		if (current === wanted) return;
+		const params = new URLSearchParams($page.url.searchParams);
+		params.set('tz', wanted);
+		goto(`/kanban/analytics?${params.toString()}`, { replaceState: true, noScroll: true });
+	}
+
+	// Pseudo-push refresh: poll a tiny watermark endpoint every 2s. When the
+	// most-recent kanban_task updatedAt advances past what we've seen, pull
+	// fresh data. Also refresh whenever the tab regains focus. The 30s safety
+	// poll covers edge cases where mtime doesn't update for some reason.
 	let pollTimer: ReturnType<typeof setInterval> | null = null;
-	function startPolling() {
-		if (pollTimer) clearInterval(pollTimer);
+	let mtimeTimer: ReturnType<typeof setInterval> | null = null;
+	let lastMtime = $state(0);
+
+	async function checkMtime() {
+		if (document.hidden) return;
+		try {
+			const res = await fetch('/api/kanban/wip-mtime');
+			if (!res.ok) return;
+			const { mtime } = (await res.json()) as { mtime: number };
+			if (mtime > lastMtime) {
+				lastMtime = mtime;
+				invalidateAll();
+			}
+		} catch {
+			// Network blip — next tick will retry.
+		}
+	}
+
+	function handleVisibility() {
+		if (!document.hidden) {
+			// Returned to tab — force a refresh immediately.
+			checkMtime();
+			invalidateAll();
+		}
+	}
+
+	onMount(() => {
+		ensureTzParam();
+		// Seed lastMtime so the first poll doesn't trigger a redundant refresh.
+		checkMtime();
+		mtimeTimer = setInterval(checkMtime, 2_000);
 		pollTimer = setInterval(() => {
 			if (!document.hidden) invalidateAll();
 		}, 30_000);
-	}
-	function stopPolling() {
-		if (pollTimer) {
-			clearInterval(pollTimer);
-			pollTimer = null;
-		}
-	}
-	onMount(startPolling);
-	onDestroy(stopPolling);
+		document.addEventListener('visibilitychange', handleVisibility);
+	});
+	onDestroy(() => {
+		if (pollTimer) clearInterval(pollTimer);
+		if (mtimeTimer) clearInterval(mtimeTimer);
+		document.removeEventListener('visibilitychange', handleVisibility);
+	});
 
 	// Build a lookup from bucket index → segment for each lane.
 	function cellsForLane(lane: WipLane) {
@@ -168,11 +215,17 @@
 		if (nowTickTimer) clearInterval(nowTickTimer);
 	});
 
-	/** Distinct task titles in a lane, preserving order of first appearance. */
+	/**
+	 * Task titles for the right-side label column. Only currently-active WIP
+	 * tasks (endUtc === null) appear here — ended-today tasks still paint
+	 * their cells but their title is reachable via the cell hover tooltip.
+	 * Keeps the column from accumulating stale completed work across the day.
+	 */
 	function laneTasks(lane: WipLane): WipSegment[] {
 		const seen = new Set<string>();
 		const out: WipSegment[] = [];
 		for (const seg of lane.segments) {
+			if (seg.endUtc !== null) continue;
 			if (seen.has(seg.taskId)) continue;
 			seen.add(seg.taskId);
 			out.push(seg);

@@ -12,6 +12,8 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	requirePermission(locals.user, 'kanban:read');
 
 	const day = url.searchParams.get('day');
-	const data = await loadWipTimeline(day);
+	const tzRaw = url.searchParams.get('tz');
+	const tzOffsetMin = tzRaw !== null && Number.isFinite(Number(tzRaw)) ? Number(tzRaw) : 0;
+	const data = await loadWipTimeline(day, tzOffsetMin);
 	return json(data);
 };

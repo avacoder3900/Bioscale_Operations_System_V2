@@ -394,28 +394,55 @@ function extractWipIntervals(task: any): { enterMs: number; exitMs: number | nul
 	return intervals;
 }
 
-function parseDayParam(raw: string | null): { day: string; dayStartMs: number } {
-	const d = raw ? new Date(raw + 'T00:00:00Z') : new Date();
-	if (!raw) {
-		// Default to today UTC midnight
-		d.setUTCHours(0, 0, 0, 0);
+/**
+ * Resolve `?day=YYYY-MM-DD` against the viewer's local clock. `tzOffsetMin` is
+ * `Date.prototype.getTimezoneOffset()` from the browser — minutes that local
+ * time lags UTC (e.g. +300 for CDT, +360 for CST). dayStartMs comes back as the
+ * UTC instant of local-midnight, so segment bucketing lines up with the
+ * client's headers and now-line.
+ */
+function parseDayParam(
+	raw: string | null,
+	tzOffsetMin: number = 0
+): { day: string; dayStartMs: number } {
+	if (raw) {
+		const utcMidnight = Date.parse(`${raw}T00:00:00Z`);
+		return { day: raw, dayStartMs: utcMidnight + tzOffsetMin * 60_000 };
 	}
-	const day = d.toISOString().slice(0, 10);
-	return { day, dayStartMs: d.getTime() };
+	// No raw — figure out the viewer's local date.
+	const nowUtc = Date.now();
+	const localShifted = new Date(nowUtc - tzOffsetMin * 60_000);
+	const y = localShifted.getUTCFullYear();
+	const m = String(localShifted.getUTCMonth() + 1).padStart(2, '0');
+	const d = String(localShifted.getUTCDate()).padStart(2, '0');
+	const day = `${y}-${m}-${d}`;
+	const utcMidnight = Date.parse(`${day}T00:00:00Z`);
+	return { day, dayStartMs: utcMidnight + tzOffsetMin * 60_000 };
 }
 
 function assignLanes(
 	segments: WipSegment[],
 	wipLimit: number
 ): WipLane[] {
-	// Greedy interval coloring: sort by start, place in lowest free lane.
+	// Unassigned (wipLimit=0) is special: render one lane per segment so they
+	// stay visible. There's no cap to honor here.
+	if (wipLimit === 0) {
+		const sorted = [...segments].sort((a, b) => a.startBucket - b.startBucket);
+		return sorted.map((seg, i) => ({ laneIndex: i, isOverflow: false, segments: [seg] }));
+	}
+
+	// Always return exactly `wipLimit` lanes. Greedy non-overlapping placement
+	// in the lowest-numbered free lane. If every lane has a conflicting segment,
+	// stack inside the lane whose last segment ended earliest — this is the
+	// "combo slot" behavior: two tasks share a row, the older one ended and
+	// the newer one started later. KANBAN-WIP-LIMIT-ENFORCEMENT caps live WIP
+	// at wipLimit, so true simultaneous overlap should be impossible.
 	const sorted = [...segments].sort((a, b) => a.startBucket - b.startBucket);
 	const lanes: WipSegment[][] = Array.from({ length: wipLimit }, () => []);
-	const overflow: WipSegment[][] = [];
 
 	for (const seg of sorted) {
 		let placed = false;
-		for (let i = 0; i < lanes.length; i++) {
+		for (let i = 0; i < wipLimit; i++) {
 			const lane = lanes[i];
 			const last = lane[lane.length - 1];
 			if (!last || last.endBucket <= seg.startBucket) {
@@ -425,24 +452,20 @@ function assignLanes(
 			}
 		}
 		if (!placed) {
-			// Find overflow lane with no conflict
-			let placedInOverflow = false;
-			for (const oLane of overflow) {
-				const last = oLane[oLane.length - 1];
-				if (!last || last.endBucket <= seg.startBucket) {
-					oLane.push(seg);
-					placedInOverflow = true;
-					break;
+			let bestLane = 0;
+			let bestEnd = lanes[0][lanes[0].length - 1]!.endBucket;
+			for (let i = 1; i < wipLimit; i++) {
+				const lastEnd = lanes[i][lanes[i].length - 1]!.endBucket;
+				if (lastEnd < bestEnd) {
+					bestLane = i;
+					bestEnd = lastEnd;
 				}
 			}
-			if (!placedInOverflow) overflow.push([seg]);
+			lanes[bestLane].push(seg);
 		}
 	}
 
-	return [
-		...lanes.map((segs, i) => ({ laneIndex: i, isOverflow: false, segments: segs })),
-		...overflow.map((segs, i) => ({ laneIndex: wipLimit + i, isOverflow: true, segments: segs }))
-	];
+	return lanes.map((segs, i) => ({ laneIndex: i, isOverflow: false, segments: segs }));
 }
 
 async function computeWipTimeline(allTasks: any[], dayStartMs: number, day: string): Promise<WipTimelineData> {
@@ -490,6 +513,17 @@ async function computeWipTimeline(allTasks: any[], dayStartMs: number, day: stri
 			}
 			byAssignee.get(key)!.segments.push(seg);
 		}
+	}
+
+	// Also surface "active kanban participants" who happen to have zero WIP
+	// segments today — anyone assigned to a non-archived, non-done task. They
+	// render as wipLimit empty lanes, signalling "room to take another."
+	for (const task of allTasks) {
+		if (task.archived || task.status === 'done') continue;
+		const id = task.assignee?._id;
+		if (!id) continue;
+		if (byAssignee.has(id)) continue;
+		byAssignee.set(id, { userId: id, username: task.assignee.username ?? id, segments: [] });
 	}
 
 	// Resolve wipLimit per user
@@ -786,7 +820,11 @@ function computeCreatorMix(
 		.sort((a, b) => b.count - a.count);
 }
 
-export async function loadAnalyticsData(range: AnalyticsRange, dayRaw: string | null = null): Promise<AnalyticsData> {
+export async function loadAnalyticsData(
+	range: AnalyticsRange,
+	dayRaw: string | null = null,
+	tzOffsetMin: number = 0
+): Promise<AnalyticsData> {
 	await connectDB();
 	const since = rangeToSince(range);
 
@@ -810,7 +848,7 @@ export async function loadAnalyticsData(range: AnalyticsRange, dayRaw: string | 
 		: [];
 	const usernameMap = new Map<string, string>(creatorDocs.map((u: any) => [u._id, u.username]));
 
-	const { day, dayStartMs } = parseDayParam(dayRaw);
+	const { day, dayStartMs } = parseDayParam(dayRaw, tzOffsetMin);
 	const wipTimeline = await computeWipTimeline(allTasks, dayStartMs, day);
 
 	return {
@@ -839,9 +877,12 @@ export async function loadAnalyticsData(range: AnalyticsRange, dayRaw: string | 
  * Lightweight wrapper for polling — returns just the WIP timeline block.
  * Used by /api/kanban/wip-timeline.
  */
-export async function loadWipTimeline(dayRaw: string | null): Promise<WipTimelineData> {
+export async function loadWipTimeline(
+	dayRaw: string | null,
+	tzOffsetMin: number = 0
+): Promise<WipTimelineData> {
 	await connectDB();
-	const { day, dayStartMs } = parseDayParam(dayRaw);
+	const { day, dayStartMs } = parseDayParam(dayRaw, tzOffsetMin);
 	const tasks = (await KanbanTask.find({}).lean()) as any[];
 	return computeWipTimeline(tasks, dayStartMs, day);
 }
