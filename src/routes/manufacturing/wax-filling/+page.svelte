@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
+	import { enhance, deserialize } from '$app/forms';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { page } from '$app/stores';
 	import SetupConfirmation from '$lib/components/manufacturing/wax-filling/SetupConfirmation.svelte';
@@ -88,6 +88,10 @@
 				currentInventory: string;
 				storageLocation: string | null;
 			}[];
+			lockedCartridges?: {
+				cartridgeId: string;
+				status: string;
+			}[];
 			fridges: {
 				id: string;
 				displayName: string;
@@ -101,6 +105,11 @@
 	let submitting = $state(false);
 	let submittingTooLong = $state(false);
 	let errorMsg = $state('');
+	// Post-action notice for carts the wax-flow guard (protectLockedCarts)
+	// silently skipped during a write. Surfaced as an amber banner the operator
+	// must dismiss so a "200 OK" no longer masks a partial write. Reset on the
+	// next submitAction call.
+	let skippedNotice = $state<{ count: number; carts: { cartridgeId: string; status: string }[]; action: string } | null>(null);
 	let coolingBypassed = $state(false);
 	let showCoolingBypass = $state(false);
 	let coolingBypassPassword = $state('');
@@ -280,6 +289,7 @@
 		submitting = true;
 		submittingTooLong = false;
 		errorMsg = '';
+		skippedNotice = null;
 		pendingOverrideAction = '';
 		pendingOverrideData = {};
 
@@ -372,6 +382,28 @@
 				});
 				await invalidateAll();
 				return;
+			}
+			// Surface any carts the server silently skipped because they're now
+			// linked/underway/completed/voided/scrapped (LOCKED_STATUSES). The
+			// action returns 200 with skippedLockedCount on the payload — without
+			// this we'd assume success and the operator would never know.
+			try {
+				const result = deserialize(text);
+				if (result.type === 'success' && result.data) {
+					const d = result.data as {
+						skippedLockedCount?: number;
+						skippedCarts?: { cartridgeId: string; status: string }[];
+					};
+					if ((d.skippedLockedCount ?? 0) > 0 && d.skippedCarts?.length) {
+						skippedNotice = {
+							count: d.skippedLockedCount!,
+							carts: d.skippedCarts,
+							action
+						};
+					}
+				}
+			} catch {
+				// Best-effort — if devalue parse fails we still proceed.
 			}
 			// Optimistic stage update — show the expected next stage immediately
 			if (action in ACTION_NEXT_STAGE) {
@@ -706,6 +738,32 @@
 				class="mt-2 rounded border border-amber-500/50 px-3 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-900/30">
 				Retry
 			</button>
+		</div>
+	{/if}
+
+	{#if skippedNotice}
+		<div class="rounded border border-amber-500/40 bg-amber-900/20 px-4 py-3 text-sm text-amber-200">
+			<div class="flex items-start justify-between gap-3">
+				<div class="min-w-0 flex-1">
+					<p class="font-semibold text-amber-200">
+						{skippedNotice.count} cartridge{skippedNotice.count === 1 ? ' was' : 's were'} skipped on "{skippedNotice.action}"
+					</p>
+					<p class="mt-1 text-xs text-amber-200/80">
+						These carts are linked to an SPU run (or are otherwise terminal). The other carts in this batch were written normally — you can still Complete Run for them.
+					</p>
+					<div class="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-3">
+						{#each skippedNotice.carts as sc (sc.cartridgeId)}
+							<div class="rounded bg-amber-900/30 px-2 py-1 text-[11px]">
+								<span class="font-mono">{sc.cartridgeId.slice(-12)}</span>
+								<span class="ml-2 text-amber-200/70">{sc.status}</span>
+							</div>
+						{/each}
+					</div>
+				</div>
+				<button type="button" class="shrink-0 text-amber-300 underline" onclick={() => { skippedNotice = null; }}>
+					Dismiss
+				</button>
+			</div>
 		</div>
 	{/if}
 
@@ -1220,6 +1278,7 @@
 				cartridges={storageCarts}
 				runSummary={summary}
 				fridges={data.fridges}
+				lockedCartridges={previewParam ? [] : (data.lockedCartridges ?? [])}
 				onRecordStorage={handleRecordStorage}
 				onComplete={handleCompleteRun}
 				existingNote={data.runState.existingWaxRunNote ?? ''}

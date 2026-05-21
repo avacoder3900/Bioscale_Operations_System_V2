@@ -157,6 +157,27 @@
 		<div class="rounded-lg border border-red-500/50 bg-red-900/20 p-3 text-sm text-red-300">{form.error}</div>
 	{/if}
 
+	{#if form?.skippedLockedCount && form.skippedLockedCount > 0}
+		<div class="rounded-lg border border-amber-500/40 bg-amber-900/20 p-3 text-sm text-amber-200">
+			<p class="font-semibold">
+				{form.skippedLockedCount} cartridge{form.skippedLockedCount === 1 ? ' was' : 's were'} skipped on the last write
+			</p>
+			<p class="mt-1 text-xs text-amber-200/80">
+				These carts are linked to an SPU run (or are otherwise terminal). The remaining carts in this batch were written normally — you can still Complete Run for them.
+			</p>
+			{#if form.skippedCarts && form.skippedCarts.length > 0}
+				<div class="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-3">
+					{#each form.skippedCarts as sc (sc.cartridgeId)}
+						<div class="rounded bg-amber-900/30 px-2 py-1 text-[11px]">
+							<span class="font-mono">{sc.cartridgeId.slice(-12)}</span>
+							<span class="ml-2 text-amber-200/70">{sc.status}</span>
+						</div>
+					{/each}
+				</div>
+			{/if}
+		</div>
+	{/if}
+
 	{#if data.runNotes && data.runNotes.length > 0}
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3">
 			<h2 class="mb-2 text-xs font-semibold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
@@ -273,6 +294,7 @@
 				cartridges={data.storageCartridges}
 				runSummary={summary}
 				fridges={data.fridges}
+				lockedCartridges={data.lockedCartridges ?? []}
 				onRecordStorage={handleRecordStorage}
 				onComplete={handleCompleteRun}
 				readonly={false}

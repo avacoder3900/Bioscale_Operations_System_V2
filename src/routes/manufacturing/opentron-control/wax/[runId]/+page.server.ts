@@ -16,7 +16,7 @@ import {
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { resolveFridgeId, resolveOvenId, resolveCoolingTrayId } from '$lib/server/services/equipment-resolve';
 import { notifyRunLifecycle } from '$lib/server/notifications';
-import { protectLockedCarts } from '$lib/server/manufacturing/locked-cartridges';
+import { protectLockedCarts, LOCKED_STATUSES } from '$lib/server/manufacturing/locked-cartridges';
 import type { PageServerLoad, Actions } from './$types';
 
 export const config = { maxDuration: 60 };
@@ -78,18 +78,26 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		updatedAt: c.updatedAt ? new Date(c.updatedAt).toISOString() : ''
 	}));
 
-	const storageCartridges = (cartridgesRaw as any[]).map((c: any) => ({
-		cartridgeId: String(c._id),
-		qcStatus: c.waxQc?.status ?? 'Accepted',
-		// Derive UI "stored" state from waxStorage.recordedAt rather than status.
-		// status stays 'wax_filled' until completeRun (deferred commit, see
-		// 581c0d7), but the operator-facing UI needs to show storage as recorded
-		// the moment recordBatchStorage writes the fields — otherwise the
-		// CompletionStorage component never transitions to its review state and
-		// the Complete Run button stays disabled.
-		currentInventory: c.waxStorage?.recordedAt ? 'wax_stored' : (c.status ?? 'wax_filled'),
-		storageLocation: c.waxStorage?.location ?? null
-	}));
+	// Split off carts the wax flow can't touch any more (relinked to an SPU,
+	// already completed, voided, scrapped). See wax-filling/+page.server.ts for
+	// the matching split — keep them in sync.
+	const lockedCartridges = (cartridgesRaw as any[])
+		.filter((c: any) => (LOCKED_STATUSES as readonly string[]).includes(c.status))
+		.map((c: any) => ({ cartridgeId: String(c._id), status: c.status }));
+	const storageCartridges = (cartridgesRaw as any[])
+		.filter((c: any) => !(LOCKED_STATUSES as readonly string[]).includes(c.status))
+		.map((c: any) => ({
+			cartridgeId: String(c._id),
+			qcStatus: c.waxQc?.status ?? 'Accepted',
+			// Derive UI "stored" state from waxStorage.recordedAt rather than status.
+			// status stays 'wax_filled' until completeRun (deferred commit, see
+			// 581c0d7), but the operator-facing UI needs to show storage as recorded
+			// the moment recordBatchStorage writes the fields — otherwise the
+			// CompletionStorage component never transitions to its review state and
+			// the Complete Run button stays disabled.
+			currentInventory: c.waxStorage?.recordedAt ? 'wax_stored' : (c.status ?? 'wax_filled'),
+			storageLocation: c.waxStorage?.location ?? null
+		}));
 
 	// Go-back-to-QC is allowed only when no cartridge has been placed in a
 	// fridge yet — going back to QC would invalidate any storage assignments.
@@ -151,6 +159,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		rejectionCodes,
 		qcCartridges: JSON.parse(JSON.stringify(qcCartridges)),
 		storageCartridges: JSON.parse(JSON.stringify(storageCartridges)),
+		lockedCartridges: JSON.parse(JSON.stringify(lockedCartridges)),
 		fridges: JSON.parse(JSON.stringify(fridges)),
 		canGoBack,
 		goBackTargetStage,
@@ -582,7 +591,11 @@ export const actions: Actions = {
 			});
 		}
 
-		return { success: true, skippedLockedCount: blockedDetails.length };
+		return {
+			success: true,
+			skippedLockedCount: blockedDetails.length,
+			skippedCarts: blockedDetails.map((b) => ({ cartridgeId: b._id, status: b.status }))
+		};
 	},
 
 	/**
@@ -618,7 +631,11 @@ export const actions: Actions = {
 			{ _id: locals.user._id, username: locals.user.username }
 		);
 		if (safeIds.length === 0) {
-			return { success: true, skippedLockedCount: blockedDetails.length };
+			return {
+				success: true,
+				skippedLockedCount: blockedDetails.length,
+				skippedCarts: blockedDetails.map((b) => ({ cartridgeId: b._id, status: b.status }))
+			};
 		}
 
 		await CartridgeRecord.updateMany(
@@ -652,7 +669,11 @@ export const actions: Actions = {
 			newData: { runId, count: safeIds.length, reason: 'Operator-initiated reassignment', skippedLockedCount: blockedDetails.length }
 		});
 
-		return { success: true, skippedLockedCount: blockedDetails.length };
+		return {
+			success: true,
+			skippedLockedCount: blockedDetails.length,
+			skippedCarts: blockedDetails.map((b) => ({ cartridgeId: b._id, status: b.status }))
+		};
 	},
 
 	completeRun: async ({ request, locals, params }) => {

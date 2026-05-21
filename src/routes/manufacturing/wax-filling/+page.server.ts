@@ -10,7 +10,7 @@ import { isAdmin } from '$lib/server/permissions';
 import { User } from '$lib/server/db';
 import { notifyLowWaxBatch, notifyRunLifecycle, shouldWarnLowWax } from '$lib/server/notifications';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
-import { protectLockedCarts } from '$lib/server/manufacturing/locked-cartridges';
+import { protectLockedCarts, LOCKED_STATUSES } from '$lib/server/manufacturing/locked-cartridges';
 import bcrypt from 'bcryptjs';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -90,6 +90,7 @@ function emptyState(robotId: string, loadError: string | null = null) {
 		rejectionCodes: [] as any[],
 		qcCartridges: [] as any[],
 		storageCartridges: [] as any[],
+		lockedCartridges: [] as { cartridgeId: string; status: string }[],
 		fridges: [] as { id: string; displayName: string; barcode: string }[]
 	};
 }
@@ -220,17 +221,28 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			? await CartridgeRecord.find({ 'waxFilling.runId': String(run._id) }).lean().catch(() => [])
 			: [];
 
-		const storageCartridges = (storageCartridgesRaw as any[]).map((c: any) => ({
-			cartridgeId: String(c._id),
-			qcStatus: c.waxQc?.status ?? 'Accepted',
-			// Derive UI "stored" state from waxStorage.recordedAt rather than
-			// status. status stays 'wax_filled' until completeRun (deferred
-			// commit, see 581c0d7) — but the UI needs to flip the moment
-			// recordBatchStorage runs so CompletionStorage transitions to its
-			// review state and Complete Run becomes clickable.
-			currentInventory: c.waxStorage?.recordedAt ? 'wax_stored' : (c.status ?? 'wax_filled'),
-			storageLocation: c.waxStorage?.location ?? null
-		}));
+		// Split off carts the wax flow can't touch any more (relinked to an SPU,
+		// already completed, voided, scrapped). protectLockedCarts will silently
+		// filter them out of every wax-flow write, so showing them in the
+		// "needs storage" list strands the run forever. Surface them separately
+		// so the operator sees what was pulled off the run and can still
+		// Complete Run for the rest.
+		const lockedCartridges = (storageCartridgesRaw as any[])
+			.filter((c: any) => (LOCKED_STATUSES as readonly string[]).includes(c.status))
+			.map((c: any) => ({ cartridgeId: String(c._id), status: c.status }));
+		const storageCartridges = (storageCartridgesRaw as any[])
+			.filter((c: any) => !(LOCKED_STATUSES as readonly string[]).includes(c.status))
+			.map((c: any) => ({
+				cartridgeId: String(c._id),
+				qcStatus: c.waxQc?.status ?? 'Accepted',
+				// Derive UI "stored" state from waxStorage.recordedAt rather than
+				// status. status stays 'wax_filled' until completeRun (deferred
+				// commit, see 581c0d7) — but the UI needs to flip the moment
+				// recordBatchStorage runs so CompletionStorage transitions to its
+				// review state and Complete Run becomes clickable.
+				currentInventory: c.waxStorage?.recordedAt ? 'wax_stored' : (c.status ?? 'wax_filled'),
+				storageLocation: c.waxStorage?.location ?? null
+			}));
 
 		// Fridges for storage selection — use parent Equipment records
 		const [equipFridges, orphanFridges] = await Promise.all([
@@ -307,6 +319,7 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			rejectionCodes,
 			qcCartridges,
 			storageCartridges,
+			lockedCartridges,
 			fridges,
 			minOvenTimeMin
 		};
@@ -1390,7 +1403,13 @@ export const actions: Actions = {
 			});
 		}
 
-		return { success: true, coolingLocationId, coolingLocationName, skippedLockedCount: blockedDetails.length };
+		return {
+			success: true,
+			coolingLocationId,
+			coolingLocationName,
+			skippedLockedCount: blockedDetails.length,
+			skippedCarts: blockedDetails.map((b) => ({ cartridgeId: b._id, status: b.status }))
+		};
 	},
 
 	/**
@@ -1426,7 +1445,11 @@ export const actions: Actions = {
 			{ _id: locals.user!._id, username: locals.user!.username }
 		);
 		if (safeIds.length === 0) {
-			return { success: true, skippedLockedCount: blockedDetails.length };
+			return {
+				success: true,
+				skippedLockedCount: blockedDetails.length,
+				skippedCarts: blockedDetails.map((b) => ({ cartridgeId: b._id, status: b.status }))
+			};
 		}
 
 		await CartridgeRecord.updateMany(
@@ -1460,7 +1483,11 @@ export const actions: Actions = {
 			newData: { runId, count: safeIds.length, reason: 'Operator-initiated reassignment', skippedLockedCount: blockedDetails.length }
 		});
 
-		return { success: true, skippedLockedCount: blockedDetails.length };
+		return {
+			success: true,
+			skippedLockedCount: blockedDetails.length,
+			skippedCarts: blockedDetails.map((b) => ({ cartridgeId: b._id, status: b.status }))
+		};
 	},
 
 	/**
