@@ -62,17 +62,21 @@
 		goto(`/kanban/analytics?${params.toString()}`, { replaceState: true, noScroll: true });
 	}
 
-	// On mount, anchor the chart to the viewer's local timezone. The server
-	// otherwise buckets against UTC midnight, which drifts segments by the tz
-	// offset (visible as bars stretching ~5h past the now-line for CT users).
-	function ensureTzParam() {
+	// Anchor the chart to the viewer's local timezone. The server otherwise
+	// buckets against UTC midnight, which drifts segments by the tz offset —
+	// at 3:32pm CT that puts bars in the ">6pm" overflow, visibly stretching
+	// past the now-line. Runs as a $effect so it re-fires whenever the URL
+	// loses the tz param (e.g. clicking the "Analytics" nav link while
+	// already on this page strips the search string but doesn't remount).
+	$effect(() => {
+		if (typeof window === 'undefined') return;
 		const current = $page.url.searchParams.get('tz');
 		const wanted = String(new Date().getTimezoneOffset());
 		if (current === wanted) return;
 		const params = new URLSearchParams($page.url.searchParams);
 		params.set('tz', wanted);
 		goto(`/kanban/analytics?${params.toString()}`, { replaceState: true, noScroll: true });
-	}
+	});
 
 	// Pseudo-push refresh: poll a tiny watermark endpoint every 2s. When the
 	// most-recent kanban_task updatedAt advances past what we've seen, pull
@@ -106,7 +110,6 @@
 	}
 
 	onMount(() => {
-		ensureTzParam();
 		// Seed lastMtime so the first poll doesn't trigger a redundant refresh.
 		checkMtime();
 		mtimeTimer = setInterval(checkMtime, 2_000);
