@@ -21,6 +21,11 @@
 		barcode: string;
 	}
 
+	interface LockedCartridge {
+		cartridgeId: string;
+		status: string;
+	}
+
 	interface Props {
 		cartridges: CartridgeItem[];
 		runSummary: RunSummary;
@@ -30,9 +35,21 @@
 		onSaveNote?: (noteBody: string) => Promise<{ ok: boolean; error?: string; cartridgeCount?: number }>;
 		existingNote?: string;
 		readonly?: boolean;
+		lockedCartridges?: LockedCartridge[];
 	}
 
-	let { cartridges, runSummary, fridges = [], onRecordStorage, onComplete, onSaveNote, existingNote = '', readonly: isReadonly = false }: Props = $props();
+	let { cartridges, runSummary, fridges = [], onRecordStorage, onComplete, onSaveNote, existingNote = '', readonly: isReadonly = false, lockedCartridges = [] }: Props = $props();
+
+	// Friendly status labels for the locked-carts panel. The lock statuses come
+	// from LOCKED_STATUSES in src/lib/server/manufacturing/locked-cartridges.ts
+	// — keep these labels in sync.
+	const LOCKED_LABELS: Record<string, string> = {
+		linked: 'linked to SPU run',
+		underway: 'currently in SPU run',
+		completed: 'already completed (SPU run finished)',
+		voided: 'voided',
+		scrapped: 'scrapped'
+	};
 
 	// Operator-entered run note — saved against the wax run AND every cartridge
 	// in the run via the recordWaxRunNote action. Re-saving overwrites the
@@ -137,6 +154,31 @@
 	<p class="text-sm text-[var(--color-tron-text-secondary)]">
 		Run <span class="font-mono text-[var(--color-tron-cyan)]">{runSummary.runId}</span>
 	</p>
+
+	<!-- Locked-cart panel: carts that were on this run but were pulled off
+		 (relinked to an SPU, voided, scrapped, etc). The wax-flow guard
+		 (protectLockedCarts) blocks any write to these, so we surface them
+		 here as informational rather than letting them strand the Storage
+		 stage. The Complete Run gate ignores them — operator can finish the
+		 rest of the run normally. -->
+	{#if lockedCartridges.length > 0}
+		<div class="rounded-lg border border-amber-500/50 bg-amber-900/15 p-3">
+			<p class="text-xs font-semibold text-amber-300">
+				{lockedCartridges.length} cartridge{lockedCartridges.length === 1 ? '' : 's'} removed from this run — won't be stored here
+			</p>
+			<p class="mt-1 text-[11px] text-amber-300/80">
+				These were re-linked to an SPU run or otherwise moved on. They'll be skipped automatically; Complete Run will still work for the remaining {cartridges.length}.
+			</p>
+			<div class="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-3">
+				{#each lockedCartridges as lc (lc.cartridgeId)}
+					<div class="rounded bg-amber-900/25 px-2 py-1 text-[11px]">
+						<span class="font-mono text-amber-200">{lc.cartridgeId.slice(-8)}</span>
+						<span class="ml-2 text-amber-300/70">{LOCKED_LABELS[lc.status] ?? lc.status}</span>
+					</div>
+				{/each}
+			</div>
+		</div>
+	{/if}
 
 	<!-- Run summary -->
 	<div class="grid grid-cols-3 gap-3">
