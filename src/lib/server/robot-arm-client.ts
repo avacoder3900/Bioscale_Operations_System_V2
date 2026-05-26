@@ -112,6 +112,30 @@ export interface PreflightResult {
 	issues: string[];
 }
 
+export interface JogCalibration {
+	joints: Record<string, { zero_step: number; sign: number }>;
+	axes_map: { x: string; y: string; z: string };
+	axes_sign: { x: number; y: number; z: number };
+}
+
+export interface ArmPose {
+	x_mm: number;
+	y_mm: number;
+	z_mm: number;
+	joint_angles_deg: Record<string, number>;
+	joint_steps: Record<string, number>;
+	calibration_source: string;
+	calibration: JogCalibration;
+}
+
+export interface JogCartesianResult {
+	requested: { dx_mm: number; dy_mm: number; dz_mm: number };
+	before: ArmPose;
+	after_target: ArmPose;
+	goal_steps: Record<string, number>;
+	clamped: Record<string, number>;
+}
+
 export interface PortInfo {
 	port: string;
 	present: boolean;
@@ -150,6 +174,16 @@ export const robotArm = {
 	) => robotArmFetch<SessionStarted>('/replay/start', { method: 'POST', body }),
 	preflightReplay: (body: { source: string; tolerance_steps?: number }) =>
 		robotArmFetch<PreflightResult>('/replay/preflight', { method: 'POST', body }),
+	getPose: () => robotArmFetch<ArmPose>('/pose'),
+	jogCartesian: (body: { dx_mm: number; dy_mm: number; dz_mm: number; max_step_delta?: number }) =>
+		robotArmFetch<JogCartesianResult>('/jog/cartesian', { method: 'POST', body }),
+	reloadJogCalibration: () =>
+		robotArmFetch<{ calibration_source: string; calibration: JogCalibration }>(
+			'/jog/reload-calibration',
+			{ method: 'POST' }
+		),
+	setTorque: (enable: boolean) =>
+		robotArmFetch<{ enabled: boolean }>('/torque', { method: 'POST', body: { enable } }),
 	listRecordings: () => robotArmFetch<{ recordings: RecordingMeta[] }>('/recordings'),
 	health: () => robotArmFetch<{ status: string; service: string; version: string }>('/health')
 };
