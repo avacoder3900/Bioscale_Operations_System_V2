@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
 	Equipment, EquipmentLocation, AuditLog, BackingLot, WaxBatch, ReceivingLot, LotRecord,
-	OpentronsRobot
+	OpentronsRobot, ManualCartridgeRemoval
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { resolveFridgeId, resolveCoolingTrayId, resolveDeckId } from '$lib/server/services/equipment-resolve';
@@ -1394,6 +1394,79 @@ export const actions: Actions = {
 		});
 
 		return { success: true };
+	},
+
+	/**
+	 * Close out a BackingLot bucket with leftover cartridgeCount.
+	 *
+	 * loadDeck only flips status='consumed' when cartridgeCount drains to 0,
+	 * so partial buckets that the operator doesn't fully use stay 'ready'
+	 * forever and inflate Backing tile counts on the cart-mfg dashboard.
+	 * This action mirrors scrap/removeFromBackingLot but always closes the
+	 * full remainder in one shot.
+	 */
+	closeBucket: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const lotId = ((data.get('lotId') as string) ?? '').trim();
+		const reason = ((data.get('reason') as string) ?? '').trim();
+		if (!lotId) return fail(400, { error: 'Missing lotId' });
+		if (!reason) return fail(400, { error: 'Reason is required' });
+
+		const lot = await BackingLot.findById(lotId).select('cartridgeCount status').lean() as any;
+		if (!lot) return fail(404, { error: `Backing lot "${lotId}" not found` });
+		if (lot.status === 'consumed') {
+			return fail(400, { error: `Lot ${lotId} is already consumed` });
+		}
+
+		// Refuse if any cart from this lot is still mid-backing (shouldn't
+		// happen — wax-fill stamps status='wax_filling' on every cart it
+		// pulls — but a stranded 'backing' record would indicate a real
+		// bucket in the oven that this action shouldn't quietly wipe).
+		const stillBacking = await CartridgeRecord.countDocuments({
+			'backing.lotId': lotId,
+			status: 'backing'
+		});
+		if (stillBacking > 0) {
+			return fail(409, {
+				error: `${stillBacking} cartridge(s) from lot ${lotId} are still in status='backing'. Resolve those first.`
+			});
+		}
+
+		const remainder = lot.cartridgeCount ?? 0;
+		const now = new Date();
+
+		await BackingLot.findByIdAndUpdate(lotId, {
+			$set: { cartridgeCount: 0, status: 'consumed' }
+		});
+
+		const removalId = generateId();
+		if (remainder > 0) {
+			await ManualCartridgeRemoval.create({
+				_id: removalId,
+				cartridgeIds: [],
+				cartridgeCount: remainder,
+				backingLotId: lotId,
+				reason,
+				operator: { _id: locals.user._id, username: locals.user.username },
+				removedAt: now
+			});
+		}
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'backing_lots',
+			recordId: lotId,
+			action: 'CLOSE_BUCKET',
+			changedBy: locals.user.username,
+			changedAt: now,
+			oldData: { cartridgeCount: remainder, status: lot.status },
+			newData: { cartridgeCount: 0, status: 'consumed', removalGroupId: remainder > 0 ? removalId : null, reason }
+		});
+
+		return { closeBucket: { success: true, lotId, remainder } };
 	},
 
 	/** Cancel / abort an active run — only available before the OT-2 finishes */

@@ -166,6 +166,13 @@
 	let confirmedLotId = $state<string | null>(data.activeLotId ?? null);
 	let confirmedLotCount = $state<number | null>(data.activeLotCartridgeCount ?? null);
 
+	// "Close bucket" affordance — lets the operator zero out a partial bucket
+	// so the lot drops out of dashboard "ready" counts instead of stranding
+	// in status='ready' indefinitely.
+	let closeBucketOpen = $state(false);
+	let closeBucketReason = $state('');
+	let closeBucketMsg = $state('');
+
 	// Keep confirmedLotId in sync if server already has one (e.g. after page reload)
 	$effect(() => {
 		if (data.activeLotId && !confirmedLotId) {
@@ -501,6 +508,23 @@
 		if (data.runState.runId) {
 			submitAction('resetToLoading', { runId: data.runState.runId });
 		}
+	}
+
+	async function handleCloseBucket() {
+		const lotId = confirmedLotId ?? data.activeLotId;
+		if (!lotId) return;
+		const reason = closeBucketReason.trim();
+		if (!reason) {
+			closeBucketMsg = 'Reason is required';
+			return;
+		}
+		closeBucketMsg = '';
+		await submitAction('closeBucket', { lotId, reason });
+		closeBucketOpen = false;
+		closeBucketReason = '';
+		confirmedLotId = null;
+		confirmedLotCount = null;
+		lotScanSuccess = false;
 	}
 
 	function handleAborted(result: {
@@ -1113,11 +1137,50 @@
 							{#if confirmedLotCount}
 								<span class="text-xs text-[var(--color-tron-text-secondary)]">({confirmedLotCount} cartridges)</span>
 							{/if}
-							<button type="button" onclick={() => { confirmedLotId = null; confirmedLotCount = null; lotScanSuccess = false; lotScanError = ''; }}
-								class="ml-auto text-xs text-[var(--color-tron-text-secondary)] underline hover:text-[var(--color-tron-text)]">
-								Change
-							</button>
+							<div class="ml-auto flex items-center gap-3">
+								<button type="button" onclick={() => { closeBucketOpen = !closeBucketOpen; closeBucketMsg = ''; }}
+									class="text-xs text-amber-400 underline hover:text-amber-300"
+									disabled={submitting}>
+									Close bucket
+								</button>
+								<button type="button" onclick={() => { confirmedLotId = null; confirmedLotCount = null; lotScanSuccess = false; lotScanError = ''; closeBucketOpen = false; }}
+									class="text-xs text-[var(--color-tron-text-secondary)] underline hover:text-[var(--color-tron-text)]">
+									Change
+								</button>
+							</div>
 						</div>
+						{#if closeBucketOpen}
+							<div class="mt-2 rounded border border-amber-500/40 bg-amber-900/10 p-3 space-y-2">
+								<p class="text-xs text-amber-300">
+									Marks this bucket consumed and drops the remaining {confirmedLotCount ?? '?'} cartridge(s).
+									Use when the bucket has leftovers you don't plan to wax-fill.
+								</p>
+								<input
+									type="text"
+									class="tron-input w-full text-sm"
+									placeholder="Reason (required) — e.g. 'leftover from short run', 'damaged carts'"
+									bind:value={closeBucketReason}
+									disabled={submitting}
+								/>
+								{#if closeBucketMsg}
+									<div class="text-xs text-red-400">{closeBucketMsg}</div>
+								{/if}
+								<div class="flex justify-end gap-2">
+									<button type="button"
+										onclick={() => { closeBucketOpen = false; closeBucketReason = ''; closeBucketMsg = ''; }}
+										class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)]"
+										disabled={submitting}>
+										Cancel
+									</button>
+									<button type="button"
+										onclick={handleCloseBucket}
+										class="rounded bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+										disabled={submitting || !closeBucketReason.trim()}>
+										Confirm close
+									</button>
+								</div>
+							</div>
+						{/if}
 					{:else}
 						<p class="text-xs text-[var(--color-tron-text-secondary)]">
 							Scan the Avery lot barcode from the box. Lot must have been in the oven for ≥ {data.minOvenTimeMin} minutes.
