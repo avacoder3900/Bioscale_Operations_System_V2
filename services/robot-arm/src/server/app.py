@@ -55,6 +55,7 @@ from arm.driver import (
     ArmDriver,
     ServoState,
 )
+from arm.kinematics import JOG_SERVO_IDS, get_kinematics
 from arm.leader_follower import LeaderFollowerSession
 from arm.recordings import list_recordings as list_recordings_files
 from arm.recordings import load_recording as load_recording_file
@@ -680,6 +681,101 @@ async def delete_pose(name: str) -> dict:
 
 
 # --- leader-follower sessions: teleop / record / replay ---------------------
+
+
+# ---------------------------------------------------------------------------
+# Cartesian jog: read current follower pose, solve IK for an (x,y,z) delta in
+# mm, clamp per-joint step delta to a safe max, write goals. The kinematics
+# module owns the URDF + calibration; we just stitch read/IK/write.
+# ---------------------------------------------------------------------------
+
+
+class JogCartesianRequest(BaseModel):
+    dx_mm: float = Field(0.0, ge=-100.0, le=100.0)
+    dy_mm: float = Field(0.0, ge=-100.0, le=100.0)
+    dz_mm: float = Field(0.0, ge=-100.0, le=100.0)
+    # Per-joint step delta cap. Default 80 steps ≈ 7° per call — protects
+    # against IK solutions that swing a joint wildly when the target is near
+    # a singularity. If clamped, the actual move is smaller than requested.
+    max_step_delta: int = Field(80, ge=1, le=POS_MAX)
+
+
+class JogCartesianResponse(BaseModel):
+    requested: dict  # {dx_mm, dy_mm, dz_mm}
+    before: dict     # full fk() pose
+    after_target: dict  # what fk says we should land at (pre-clamp)
+    goal_steps: dict[int, int]  # what we actually wrote (post-clamp)
+    clamped: dict[int, int]  # per-joint clamp amount in steps (0 if not clamped)
+
+
+@app.get("/pose", dependencies=[Depends(require_api_key)])
+async def get_pose() -> dict:
+    """Current follower end-effector pose (mm) + joint state + calibration source."""
+    follower = _follower()
+    positions = await _with_follower(follower.get_positions)
+    k = get_kinematics()
+    pose_steps = {sid: int(positions[sid]) for sid in JOG_SERVO_IDS if sid in positions}
+    fk = k.fk(pose_steps)
+    return {
+        **fk,
+        "calibration_source": k.calibration_source,
+        "calibration": k.calibration,
+    }
+
+
+@app.post("/jog/cartesian", dependencies=[Depends(require_api_key)])
+async def jog_cartesian(req: JogCartesianRequest) -> JogCartesianResponse:
+    follower = _follower()
+    if state.active_session is not None and state.active_session.is_active():
+        raise HTTPException(
+            status_code=409,
+            detail=f"a {state.active_session.kind} session is active — stop it first",
+        )
+    # Torque must be on or the arm won't hold its commanded pose.
+    torques = await _with_follower(follower.get_torques)
+    off = [sid for sid in JOG_SERVO_IDS if not torques.get(sid, False)]
+    if off:
+        raise HTTPException(status_code=409, detail=f"torque off on {off} — turn on before jog")
+
+    positions = await _with_follower(follower.get_positions)
+    pose_steps = {sid: int(positions[sid]) for sid in JOG_SERVO_IDS}
+    k = get_kinematics()
+    before = k.fk(pose_steps)
+
+    target_steps = k.ik_for_delta(pose_steps, req.dx_mm, req.dy_mm, req.dz_mm)
+    after_target = k.fk(target_steps)
+
+    # Per-joint clamp: cap |Δ| at max_step_delta. If we clamp, the arm reaches
+    # somewhere short of the requested target — caller can re-issue the same
+    # jog to step the rest of the way.
+    clamped: dict[int, int] = {}
+    goals: dict[int, int] = {}
+    for sid in JOG_SERVO_IDS:
+        delta = target_steps[sid] - pose_steps[sid]
+        if abs(delta) > req.max_step_delta:
+            limited = req.max_step_delta if delta > 0 else -req.max_step_delta
+            goals[sid] = pose_steps[sid] + limited
+            clamped[sid] = abs(delta) - req.max_step_delta
+        else:
+            goals[sid] = target_steps[sid]
+            clamped[sid] = 0
+
+    await _with_follower(follower.set_positions, goals)
+
+    return JogCartesianResponse(
+        requested={"dx_mm": req.dx_mm, "dy_mm": req.dy_mm, "dz_mm": req.dz_mm},
+        before=before,
+        after_target=after_target,
+        goal_steps=goals,
+        clamped=clamped,
+    )
+
+
+@app.post("/jog/reload-calibration", dependencies=[Depends(require_api_key)])
+async def reload_jog_calibration() -> dict:
+    k = get_kinematics()
+    source = k.load_calibration()
+    return {"calibration_source": source, "calibration": k.calibration}
 
 
 def _new_run_id() -> str:
