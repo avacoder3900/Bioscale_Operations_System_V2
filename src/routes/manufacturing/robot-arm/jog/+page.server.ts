@@ -93,12 +93,45 @@ export const actions: Actions = {
 		}
 	},
 
+	jogJoint: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		const data = await request.formData();
+		const sid = parseInt(data.get('sid')?.toString() ?? '', 10);
+		const delta = parseInt(data.get('delta_steps')?.toString() ?? '', 10);
+		if (!Number.isFinite(sid) || sid < 1 || sid > 6) {
+			return fail(400, { error: 'sid must be 1..6' });
+		}
+		if (!Number.isFinite(delta) || delta === 0) {
+			return fail(400, { error: 'delta_steps must be a non-zero integer' });
+		}
+		try {
+			const r = await robotArm.jogJoint(sid, delta);
+			return { success: `J${sid} ${delta > 0 ? '+' : ''}${delta} → ${r.goal}` };
+		} catch (err) {
+			const msg = (err as Error).message;
+			const status = msg.includes('robot-arm 409') ? 409 : 502;
+			return fail(status, { error: msg });
+		}
+	},
+
 	reloadCalibration: async ({ locals }) => {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
 		requirePermission(locals.user, 'manufacturing:write');
 		try {
 			const result = await robotArm.reloadJogCalibration();
 			return { success: `calibration reloaded from ${result.calibration_source}` };
+		} catch (err) {
+			return fail(502, { error: (err as Error).message });
+		}
+	},
+
+	resetBacklash: async ({ locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		try {
+			await robotArm.resetBacklash();
+			return { success: 'backlash state cleared (next jog treated as first move)' };
 		} catch (err) {
 			return fail(502, { error: (err as Error).message });
 		}

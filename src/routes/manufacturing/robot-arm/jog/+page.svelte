@@ -8,6 +8,8 @@
 	let stepMm = $state(5);
 	// Per-joint step delta cap for IK safety; rarely needs tweaking.
 	let maxStepDelta = $state(80);
+	// Step size for per-joint single-step jog. 1 step ≈ 0.088° ≈ 0.3 mm at the tip.
+	let jointStep = $state(1);
 	// Auto-refresh pose every 2 s so the operator sees live drift / movement.
 	let polling = $state(true);
 	let pollHandle: ReturnType<typeof setInterval> | null = null;
@@ -180,6 +182,62 @@
 		</p>
 	</section>
 
+	<!-- Per-joint single-step jog (precision fallback for the last 0.3 mm) -->
+	<section
+		class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4"
+	>
+		<div class="mb-3 flex items-center justify-between">
+			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
+				Per-joint single-step
+			</h2>
+			<label class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
+				step
+				<input
+					type="number"
+					bind:value={jointStep}
+					min="1"
+					max="100"
+					class="w-16 rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
+					style="color: var(--color-tron-text)"
+				/>
+			</label>
+		</div>
+		<div class="grid grid-cols-5 gap-2">
+			{#each [1, 2, 3, 4, 5] as sid (sid)}
+				<div class="flex flex-col gap-1">
+					<form method="POST" action="?/jogJoint" use:enhance>
+						<input type="hidden" name="sid" value={sid} />
+						<input type="hidden" name="delta_steps" value={jointStep} />
+						<button
+							type="submit"
+							disabled={sessionActive || !pose}
+							class="w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-2 py-2 font-mono text-sm transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40"
+							style="color: var(--color-tron-cyan)"
+						>
+							J{sid} +
+						</button>
+					</form>
+					<form method="POST" action="?/jogJoint" use:enhance>
+						<input type="hidden" name="sid" value={sid} />
+						<input type="hidden" name="delta_steps" value={-jointStep} />
+						<button
+							type="submit"
+							disabled={sessionActive || !pose}
+							class="w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-2 py-2 font-mono text-sm transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40"
+							style="color: var(--color-tron-cyan)"
+						>
+							J{sid} −
+						</button>
+					</form>
+				</div>
+			{/each}
+		</div>
+		<p class="mt-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
+			±{jointStep} step ≈ {(jointStep * 360 / 4096).toFixed(2)}° at the joint, ~{(jointStep * 0.3).toFixed(2)} mm
+			at the tip near full extension. Use this when Cartesian IK rounds your nudge to nothing.
+		</p>
+	</section>
+
 	<!-- Torque + calibration controls -->
 	<section class="grid grid-cols-2 gap-3 text-xs">
 		<form method="POST" action="?/torqueOn" use:enhance>
@@ -202,13 +260,30 @@
 		</form>
 	</section>
 
-	<form method="POST" action="?/reloadCalibration" use:enhance>
-		<button
-			type="submit"
-			class="w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-3 py-2 text-xs transition-colors hover:bg-black/50"
-			style="color: var(--color-tron-text-secondary)"
-		>
-			Reload calibration from ~/.bims-arm/jog-calibration.json
-		</button>
-	</form>
+	<div class="grid grid-cols-2 gap-3">
+		<form method="POST" action="?/reloadCalibration" use:enhance>
+			<button
+				type="submit"
+				class="w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-3 py-2 text-xs transition-colors hover:bg-black/50"
+				style="color: var(--color-tron-text-secondary)"
+			>
+				Reload calibration JSON
+			</button>
+		</form>
+		<form method="POST" action="?/resetBacklash" use:enhance>
+			<button
+				type="submit"
+				class="w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-3 py-2 text-xs transition-colors hover:bg-black/50"
+				style="color: var(--color-tron-text-secondary)"
+			>
+				Reset backlash state
+			</button>
+		</form>
+	</div>
+	<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
+		Backlash compensation is on by default — when a joint reverses direction, the server
+		automatically over-shoots by ~10 steps (per-joint override in jog-calibration.json under
+		<code>backlash_steps</code>) so gear slack is consumed before the arm tip moves. Reset
+		after manually hand-poseing with torque off so the next jog isn't treated as a reversal.
+	</p>
 </div>

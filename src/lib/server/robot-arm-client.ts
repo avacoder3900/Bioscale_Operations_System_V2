@@ -134,6 +134,7 @@ export interface JogCartesianResult {
 	after_target: ArmPose;
 	goal_steps: Record<string, number>;
 	clamped: Record<string, number>;
+	backlash_applied: Record<string, number>;
 }
 
 export interface PortInfo {
@@ -175,8 +176,15 @@ export const robotArm = {
 	preflightReplay: (body: { source: string; tolerance_steps?: number }) =>
 		robotArmFetch<PreflightResult>('/replay/preflight', { method: 'POST', body }),
 	getPose: () => robotArmFetch<ArmPose>('/pose'),
-	jogCartesian: (body: { dx_mm: number; dy_mm: number; dz_mm: number; max_step_delta?: number }) =>
-		robotArmFetch<JogCartesianResult>('/jog/cartesian', { method: 'POST', body }),
+	jogCartesian: (body: {
+		dx_mm: number;
+		dy_mm: number;
+		dz_mm: number;
+		max_step_delta?: number;
+		backlash_comp?: boolean;
+	}) => robotArmFetch<JogCartesianResult>('/jog/cartesian', { method: 'POST', body }),
+	resetBacklash: () =>
+		robotArmFetch<{ reset: boolean }>('/jog/reset-backlash', { method: 'POST' }),
 	reloadJogCalibration: () =>
 		robotArmFetch<{ calibration_source: string; calibration: JogCalibration }>(
 			'/jog/reload-calibration',
@@ -184,6 +192,11 @@ export const robotArm = {
 		),
 	setTorque: (enable: boolean) =>
 		robotArmFetch<{ enabled: boolean }>('/torque', { method: 'POST', body: { enable } }),
+	jogJoint: (sid: number, delta_steps: number, speed?: number) =>
+		robotArmFetch<{ id: number; goal: number }>(`/servos/${sid}/jog`, {
+			method: 'POST',
+			body: { delta_steps, ...(speed !== undefined ? { speed } : {}) }
+		}),
 	listRecordings: () => robotArmFetch<{ recordings: RecordingMeta[] }>('/recordings'),
 	health: () => robotArmFetch<{ status: string; service: string; version: string }>('/health')
 };

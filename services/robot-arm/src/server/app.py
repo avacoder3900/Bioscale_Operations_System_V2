@@ -55,6 +55,7 @@ from arm.driver import (
     ArmDriver,
     ServoState,
 )
+from arm.backlash import get_backlash
 from arm.kinematics import JOG_SERVO_IDS, get_kinematics
 from arm.leader_follower import LeaderFollowerSession
 from arm.recordings import list_recordings as list_recordings_files
@@ -698,14 +699,18 @@ class JogCartesianRequest(BaseModel):
     # against IK solutions that swing a joint wildly when the target is near
     # a singularity. If clamped, the actual move is smaller than requested.
     max_step_delta: int = Field(80, ge=1, le=POS_MAX)
+    # Apply backlash compensation on direction reversal. On by default —
+    # major repeatability win for the plastic gear train.
+    backlash_comp: bool = True
 
 
 class JogCartesianResponse(BaseModel):
     requested: dict  # {dx_mm, dy_mm, dz_mm}
     before: dict     # full fk() pose
     after_target: dict  # what fk says we should land at (pre-clamp)
-    goal_steps: dict[int, int]  # what we actually wrote (post-clamp)
+    goal_steps: dict[int, int]  # what we actually wrote (post-clamp + backlash)
     clamped: dict[int, int]  # per-joint clamp amount in steps (0 if not clamped)
+    backlash_applied: dict[int, int]  # per-joint compensation steps (signed)
 
 
 @app.get("/pose", dependencies=[Depends(require_api_key)])
@@ -749,16 +754,26 @@ async def jog_cartesian(req: JogCartesianRequest) -> JogCartesianResponse:
     # somewhere short of the requested target — caller can re-issue the same
     # jog to step the rest of the way.
     clamped: dict[int, int] = {}
-    goals: dict[int, int] = {}
+    clamped_targets: dict[int, int] = {}
     for sid in JOG_SERVO_IDS:
         delta = target_steps[sid] - pose_steps[sid]
         if abs(delta) > req.max_step_delta:
             limited = req.max_step_delta if delta > 0 else -req.max_step_delta
-            goals[sid] = pose_steps[sid] + limited
+            clamped_targets[sid] = pose_steps[sid] + limited
             clamped[sid] = abs(delta) - req.max_step_delta
         else:
-            goals[sid] = target_steps[sid]
+            clamped_targets[sid] = target_steps[sid]
             clamped[sid] = 0
+
+    # Backlash compensation: on direction reversal, overshoot by per-joint
+    # backlash_steps so the gear slack is eaten and the output shaft hits target.
+    if req.backlash_comp:
+        goals, backlash_applied = get_backlash().compensate(
+            pose_steps, clamped_targets, k.calibration
+        )
+    else:
+        goals = clamped_targets
+        backlash_applied = {sid: 0 for sid in JOG_SERVO_IDS}
 
     await _with_follower(follower.set_positions, goals)
 
@@ -768,7 +783,16 @@ async def jog_cartesian(req: JogCartesianRequest) -> JogCartesianResponse:
         after_target=after_target,
         goal_steps=goals,
         clamped=clamped,
+        backlash_applied=backlash_applied,
     )
+
+
+@app.post("/jog/reset-backlash", dependencies=[Depends(require_api_key)])
+async def reset_backlash() -> dict:
+    """Clear per-joint last-direction state. Use after a manual move (hand-pose
+    with torque off) where the next jog's "reversal" detection would be wrong."""
+    get_backlash().reset()
+    return {"reset": True}
 
 
 @app.post("/jog/reload-calibration", dependencies=[Depends(require_api_key)])
