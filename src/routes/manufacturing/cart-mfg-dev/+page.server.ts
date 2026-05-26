@@ -51,7 +51,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			.sort({ ovenEntryTime: -1 }).lean(),
 		Promise.resolve(null),
 		CartridgeRecord.aggregate([
-			{ $group: { _id: '$currentPhase', count: { $sum: 1 } } }
+			{ $group: { _id: '$status', count: { $sum: 1 } } }
 		]),
 		Consumable.find({ type: 'top_seal_roll', status: 'active' })
 			.select('_id barcode remainingLengthFt initialLengthFt').lean(),
@@ -92,12 +92,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 			{ $group: { _id: '$status', count: { $sum: 1 } } }
 		]),
 		CartridgeRecord.countDocuments({
-			currentPhase: 'voided',
+			status: 'voided',
 			updatedAt: { $gte: todayStart }
 		}),
 		CartridgeRecord.countDocuments({
 			'reagentFilling.recordedAt': { $gte: todayStart },
-			currentPhase: { $in: ['reagent_filled', 'sealed', 'stored'] }
+			status: { $in: ['reagent_filled', 'sealed', 'stored'] }
 		}),
 		// Weekly
 		WaxFillingRun.aggregate([
@@ -109,22 +109,22 @@ export const load: PageServerLoad = async ({ locals }) => {
 			{ $group: { _id: '$status', count: { $sum: 1 } } }
 		]),
 		CartridgeRecord.countDocuments({
-			currentPhase: 'voided',
+			status: 'voided',
 			updatedAt: { $gte: weekStart }
 		}),
 		CartridgeRecord.countDocuments({
 			'reagentFilling.recordedAt': { $gte: weekStart },
-			currentPhase: { $in: ['reagent_filled', 'sealed', 'stored'] }
+			status: { $in: ['reagent_filled', 'sealed', 'stored'] }
 		}),
 		// Rejection reasons
 		CartridgeRecord.aggregate([
-			{ $match: { currentPhase: 'voided', 'waxQc.recordedAt': { $gte: weekStart } } },
+			{ $match: { status: 'voided', 'waxQc.recordedAt': { $gte: weekStart } } },
 			{ $group: { _id: '$waxQc.rejectionReason', count: { $sum: 1 } } },
 			{ $sort: { count: -1 } },
 			{ $limit: 5 }
 		]),
 		CartridgeRecord.aggregate([
-			{ $match: { currentPhase: 'voided', 'reagentInspection.recordedAt': { $gte: weekStart } } },
+			{ $match: { status: 'voided', 'reagentInspection.recordedAt': { $gte: weekStart } } },
 			{ $group: { _id: '$reagentInspection.reason', count: { $sum: 1 } } },
 			{ $sort: { count: -1 } },
 			{ $limit: 5 }
@@ -162,7 +162,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		]),
 		// Oldest wax stored
 		CartridgeRecord.findOne(
-			{ currentPhase: 'wax_stored', _id: { $nin: checkedOutIds } },
+			{ status: 'wax_stored', _id: { $nin: checkedOutIds } },
 			{ 'waxStorage.timestamp': 1 }
 		).sort({ 'waxStorage.timestamp': 1 }).lean()
 	]);
