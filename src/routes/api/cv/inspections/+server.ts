@@ -14,12 +14,14 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	const status = url.searchParams.get('status');
 	const result = url.searchParams.get('result');
 	const cartridgeRecordId = url.searchParams.get('cartridgeRecordId');
+	const imageId = url.searchParams.get('imageId');
 
 	if (projectId) filter.projectId = projectId;
 	if (sampleId) filter.sampleId = sampleId;
 	if (status) filter.status = status;
 	if (result) filter.result = result;
 	if (cartridgeRecordId) filter.cartridgeRecordId = cartridgeRecordId;
+	if (imageId) filter.imageId = imageId;
 
 	const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 200);
 	const skip = parseInt(url.searchParams.get('skip') || '0');

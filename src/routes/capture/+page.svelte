@@ -45,9 +45,68 @@
 		bannerTimer = setTimeout(() => { banner = null; }, ms);
 	}
 
-	// Just-captured strip (newest first, max 10)
-	type Capture = { id: string; cartridgeImageNumber: string; phase: string; capturedAt: number; url: string | null };
+	// Just-captured strip (newest first, max 10). `inference` is filled in
+	// async after capture — runPhaseInference is fire-and-forget on the server,
+	// so we poll /api/cv/inspections?imageId=X until status flips.
+	type InferenceState =
+		| { status: 'pending' | 'running' }
+		| { status: 'completed'; result: 'pass' | 'fail'; confidence: number | null }
+		| { status: 'failed'; errorMessage?: string }
+		| { status: 'none' };
+	type Capture = {
+		id: string;
+		cartridgeImageNumber: string;
+		phase: string;
+		capturedAt: number;
+		url: string | null;
+		inference: InferenceState;
+	};
 	let recentCaptures = $state<Capture[]>([]);
+
+	function patchInference(imageId: string, inf: InferenceState) {
+		recentCaptures = recentCaptures.map(c => c.id === imageId ? { ...c, inference: inf } : c);
+	}
+
+	// Poll /api/cv/inspections until the (production, non-shadow) inspection for
+	// this capture lands in a terminal state. If nothing exists after MAX_POLL_MS
+	// we assume no project is deployed at this phase ('none').
+	const POLL_INTERVAL_MS = 1500;
+	const MAX_POLL_MS = 20000;
+	async function pollInference(imageId: string) {
+		const startedAt = Date.now();
+		let sawAny = false;
+		while (Date.now() - startedAt < MAX_POLL_MS) {
+			await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+			// Stop if the capture got deleted by a retake.
+			if (!recentCaptures.find(c => c.id === imageId)) return;
+			try {
+				const res = await fetch(`/api/cv/inspections?imageId=${encodeURIComponent(imageId)}&limit=10`);
+				if (!res.ok) continue;
+				const body = await res.json();
+				const inspections: any[] = body?.data ?? [];
+				const prod = inspections.find((i: any) => !i.isShadow) ?? inspections[0];
+				if (!prod) continue;
+				sawAny = true;
+				if (prod.status === 'completed') {
+					patchInference(imageId, {
+						status: 'completed',
+						result: prod.result,
+						confidence: typeof prod.confidenceScore === 'number' ? prod.confidenceScore : null
+					});
+					return;
+				}
+				if (prod.status === 'failed') {
+					patchInference(imageId, { status: 'failed', errorMessage: prod.errorMessage });
+					return;
+				}
+				patchInference(imageId, { status: 'running' });
+			} catch { /* network blip — keep polling */ }
+		}
+		patchInference(imageId, sawAny
+			? { status: 'failed', errorMessage: 'Inference timed out' }
+			: { status: 'none' }
+		);
+	}
 
 	// Submission lock so Space-spam doesn't fire multiple POSTs in flight
 	let submitting = $state(false);
@@ -419,15 +478,18 @@
 			}
 			const result = await res.json();
 
-			// Push to recent captures
+			// Push to recent captures. Inference starts as 'pending'; pollInference
+			// runs in the background and patches the entry when the result lands.
 			const cap: Capture = {
 				id: result.imageId,
 				cartridgeImageNumber: result.cartridgeImageNumber,
 				phase: result.phase,
 				capturedAt: Date.now(),
-				url: result.imageUrl
+				url: result.imageUrl,
+				inference: { status: 'pending' }
 			};
 			recentCaptures = [cap, ...recentCaptures].slice(0, 10);
+			pollInference(result.imageId).catch(() => null);
 			cartridgePhotoCount += 1;
 			sessionPhotos = [...sessionPhotos, { id: result.imageId, cartridgeImageNumber: result.cartridgeImageNumber }];
 			const retakeComplete = retakeInProgress && sessionPhotos.length >= PHOTOS_PER_CARTRIDGE;
@@ -743,6 +805,23 @@
 							{/if}
 							<div class="mt-1 font-mono text-[var(--color-tron-cyan)] truncate w-32">{cap.cartridgeImageNumber}</div>
 							<div class="text-[var(--color-tron-text-secondary)] truncate w-32">{cap.phase}</div>
+							<div class="mt-1 w-32">
+								{#if cap.inference.status === 'pending' || cap.inference.status === 'running'}
+									<span class="inline-block animate-pulse rounded bg-[rgba(0,255,255,0.15)] px-1.5 py-0.5 text-[10px] text-[var(--color-tron-cyan)]">Inferring…</span>
+								{:else if cap.inference.status === 'completed' && cap.inference.result === 'pass'}
+									<span class="inline-block rounded bg-[var(--color-tron-green,#39ff14)] px-1.5 py-0.5 text-[10px] font-bold text-black">
+										PASS{cap.inference.confidence != null ? ' ' + Math.round(cap.inference.confidence * 100) + '%' : ''}
+									</span>
+								{:else if cap.inference.status === 'completed' && cap.inference.result === 'fail'}
+									<span class="inline-block rounded bg-[var(--color-tron-red,#ff3366)] px-1.5 py-0.5 text-[10px] font-bold text-white">
+										FAIL{cap.inference.confidence != null ? ' ' + Math.round(cap.inference.confidence * 100) + '%' : ''}
+									</span>
+								{:else if cap.inference.status === 'failed'}
+									<span class="inline-block rounded bg-[var(--color-tron-red,#ff3366)] px-1.5 py-0.5 text-[10px] text-white" title={cap.inference.errorMessage ?? ''}>ERR</span>
+								{:else}
+									<span class="inline-block rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[10px] text-[var(--color-tron-text-secondary)]" title="No project is deployed at this phase — set one up under /cv/projects/[id] Deployment.">no model</span>
+								{/if}
+							</div>
 						</div>
 					{/each}
 				</div>
