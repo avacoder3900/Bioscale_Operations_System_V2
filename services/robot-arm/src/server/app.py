@@ -57,6 +57,8 @@ from arm.driver import (
 )
 from arm.backlash import get_backlash
 from arm.kinematics import JOG_SERVO_IDS, get_kinematics
+from arm.telemetry import log_move, tail as tail_move_log
+from arm.verified_move import MoveResult, verified_move
 from arm.leader_follower import LeaderFollowerSession
 from arm.recordings import list_recordings as list_recordings_files
 from arm.recordings import load_recording as load_recording_file
@@ -542,6 +544,85 @@ async def list_servos() -> list[ServoStateResponse]:
     return [_state_to_response(s, torques.get(s.id, False)) for s in states]
 
 
+# Heuristic thresholds for /arm/health — calibrate against real data, not gospel.
+HEALTH_TEMP_HOT_C = 55       # STS3215 derates above ~60°C
+HEALTH_TEMP_WARM_C = 48
+HEALTH_LOAD_HIGH = 600       # |load| out of ~1000 ≈ servo working hard
+HEALTH_VOLTAGE_LOW = 11.5    # 12V supply nominal; <11.5 = drooping
+HEALTH_VOLTAGE_HIGH = 13.0   # above this means supply set wrong
+
+
+def _joint_health(s, torque: bool) -> dict:
+    """Decorate a raw ServoState with derived health flags."""
+    flags: list[str] = []
+    if s.temperature >= HEALTH_TEMP_HOT_C:
+        flags.append("hot")
+    elif s.temperature >= HEALTH_TEMP_WARM_C:
+        flags.append("warm")
+    if abs(s.load) >= HEALTH_LOAD_HIGH:
+        flags.append("high_load")
+    if s.voltage < HEALTH_VOLTAGE_LOW:
+        flags.append("undervolt")
+    elif s.voltage > HEALTH_VOLTAGE_HIGH:
+        flags.append("overvolt")
+    if not torque:
+        flags.append("torque_off")
+    return {
+        "id": s.id,
+        "position": s.position,
+        "load": s.load,
+        "speed": s.speed,
+        "voltage": s.voltage,
+        "temperature": s.temperature,
+        "torque": torque,
+        "flags": flags,
+    }
+
+
+@app.get("/arm/health", dependencies=[Depends(require_api_key)])
+async def arm_health() -> dict:
+    """Per-joint snapshot + overall rollup. Use this before commanding work
+    so we don't ask a 55°C overloaded motor to do something heavy."""
+    follower = _follower()
+    states = await asyncio.to_thread(follower.list_states)
+    torques = await asyncio.to_thread(follower.get_torques)
+    joints = [_joint_health(s, torques.get(s.id, False)) for s in sorted(states, key=lambda x: x.id)]
+
+    # Roll-up: fault if any hot/undervolt/overvolt; warn if any warm/high_load.
+    fault_flags = {"hot", "undervolt", "overvolt"}
+    warn_flags = {"warm", "high_load"}
+    overall = "ok"
+    for j in joints:
+        for f in j["flags"]:
+            if f in fault_flags:
+                overall = "fault"
+                break
+            if f in warn_flags and overall == "ok":
+                overall = "warn"
+        if overall == "fault":
+            break
+
+    return {
+        "overall": overall,
+        "joints": joints,
+        "leader_alive": state.leader_alive,
+        "follower_alive": state.follower_alive,
+        "thresholds": {
+            "temp_warm_c": HEALTH_TEMP_WARM_C,
+            "temp_hot_c": HEALTH_TEMP_HOT_C,
+            "load_high": HEALTH_LOAD_HIGH,
+            "voltage_low": HEALTH_VOLTAGE_LOW,
+            "voltage_high": HEALTH_VOLTAGE_HIGH,
+        },
+    }
+
+
+@app.get("/arm/move-log", dependencies=[Depends(require_api_key)])
+async def get_move_log(n: int = 50) -> dict:
+    """Most-recent n move telemetry records (newest first)."""
+    return {"records": tail_move_log(n)}
+
+
 @app.get(
     "/servos/{sid}",
     response_model=ServoStateResponse,
@@ -584,9 +665,23 @@ async def set_all_positions(req: MoveAllRequest) -> dict:
     off = [sid for sid, on in torques.items() if not on]
     if off:
         raise HTTPException(status_code=409, detail=f"torque off on {off}")
-    goals = dict(zip(follower.servo_ids, req.positions))
-    await _with_follower(follower.set_positions, goals, speed=req.speed)
-    return {"goals": goals}
+    speed_val = req.speed if req.speed is not None else 0
+    # verified_move replaces the old "write + hope" pattern: it polls position
+    # + load, classifies arrival vs stall, retries with progressively stronger
+    # remedies, and logs the result to ~/.bims-arm/move-log.jsonl no matter what.
+    result: MoveResult = await _with_follower(
+        verified_move, follower, list(req.positions), speed_val, "set_positions"
+    )
+    return {
+        "goals": dict(zip(follower.servo_ids, req.positions)),
+        "success": result.success,
+        "achieved": result.achieved,
+        "residuals": result.residuals,
+        "peak_loads": result.peak_loads,
+        "duration_ms": result.duration_ms,
+        "attempts": result.attempts,
+        "failure_reason": result.failure_reason,
+    }
 
 
 @app.post("/home", dependencies=[Depends(require_api_key)])
@@ -666,9 +761,21 @@ async def goto_pose(name: str) -> dict:
     if off:
         raise HTTPException(status_code=409, detail=f"torque off on {off}")
     positions = poses[name]["positions"]
-    goals = dict(zip(follower.servo_ids, positions))
-    await _with_follower(follower.set_positions, goals)
-    return {"name": name, "moving_to": positions}
+    result: MoveResult = await _with_follower(
+        verified_move, follower, list(positions), 0, "pose_move",
+        log_extras={"pose_name": name},
+    )
+    return {
+        "name": name,
+        "moving_to": positions,
+        "success": result.success,
+        "achieved": result.achieved,
+        "residuals": result.residuals,
+        "peak_loads": result.peak_loads,
+        "duration_ms": result.duration_ms,
+        "attempts": result.attempts,
+        "failure_reason": result.failure_reason,
+    }
 
 
 @app.delete("/poses/{name}", dependencies=[Depends(require_api_key)])
