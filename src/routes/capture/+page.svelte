@@ -324,8 +324,16 @@
 		const code = rawCode.trim();
 		if (!code) return;
 		// Auto-scan re-detects the locked cartridge every tick — skip to preserve
-		// the in-flight 2-photo session. Handheld re-scans are intentional and proceed.
+		// the in-flight 2-photo session.
 		if (source === 'auto' && code === cartridgeId) return;
+
+		// Handheld re-scan of the currently locked cartridge with at least one
+		// photo taken → operator wants a do-over. Open the retake dialog instead
+		// of re-locking (which would silently reset the session and lose context).
+		if (source === 'handheld' && code === cartridgeId && sessionPhotos.length > 0) {
+			showRetakeDialog = true;
+			return;
+		}
 
 		try {
 			const res = await fetch(`/api/cv/lookup-cartridge?code=${encodeURIComponent(code)}`);
@@ -346,6 +354,15 @@
 			retakeInProgress = false;
 			showRetakeDialog = false;
 			flashBanner('ok', `Locked on ${cartridgeId} — ${cartridgePhotoCount} prior photos`);
+
+			// Auto-capture photo #1 (front) on successful lock. Photo #2 (back) is
+			// still manual via Space / capture button — preserves the front/back
+			// 2-photo semantics. Small delay so the operator sees the lock toast
+			// before the camera flash, and so capturePhoto's `!cartridgeId` guard
+			// reads the just-assigned value.
+			if (videoEl && stream && cartridgeId) {
+				setTimeout(() => { capturePhoto().catch(() => null); }, 250);
+			}
 		} catch (e) {
 			flashBanner('err', e instanceof Error ? e.message : 'Lookup failed');
 		}
@@ -577,7 +594,7 @@
 			<div>
 				<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">Capture Station</h1>
 				<p class="text-xs text-[var(--color-tron-text-secondary)]">
-					Hold a cartridge in front of the camera (auto-scans every 2s) or use the USB scanner. Press Space to capture front, then back. Show the next cartridge to switch.
+					Hold a cartridge in front of the camera (auto-scans every 2s) or use the USB scanner. Front photo captures automatically on scan; press Space for the back photo. Re-scan the same cartridge to open the retake dialog.
 				</p>
 			</div>
 			<div class="text-xs text-[var(--color-tron-text-secondary)]">

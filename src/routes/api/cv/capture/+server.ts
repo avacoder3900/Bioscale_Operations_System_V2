@@ -45,83 +45,91 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	await connectDB();
 
-	const formData = await request.formData();
-	const file = formData.get('file') as File | null;
-	const cartridgeId = formData.get('cartridgeId')?.toString().trim();
-	const phase = formData.get('phase')?.toString().trim();
-	const cameraIndexRaw = formData.get('cameraIndex')?.toString();
-	const processingMode = formData.get('processingMode')?.toString() as 'full' | 'raw' | undefined;
+	try {
+		const formData = await request.formData();
+		const file = formData.get('file') as File | null;
+		const cartridgeId = formData.get('cartridgeId')?.toString().trim();
+		const phase = formData.get('phase')?.toString().trim();
+		const cameraIndexRaw = formData.get('cameraIndex')?.toString();
+		const processingMode = formData.get('processingMode')?.toString() as 'full' | 'raw' | undefined;
 
-	// Optional R&D forensic notes — only set when /cv/forensic-capture sends one.
-	const forensicNotes = formData.get('forensicNotes')?.toString().trim() || undefined;
-	const forensic = forensicNotes ? { notes: forensicNotes } : undefined;
+		// Optional R&D forensic notes — only set when /cv/forensic-capture sends one.
+		const forensicNotes = formData.get('forensicNotes')?.toString().trim() || undefined;
+		const forensic = forensicNotes ? { notes: forensicNotes } : undefined;
 
-	if (!file) return json({ error: 'file is required' }, { status: 400 });
-	if (!cartridgeId) return json({ error: 'cartridgeId is required' }, { status: 400 });
-	if (!phase) return json({ error: 'phase is required' }, { status: 400 });
+		if (!file) return json({ error: 'file is required' }, { status: 400 });
+		if (!cartridgeId) return json({ error: 'cartridgeId is required' }, { status: 400 });
+		if (!phase) return json({ error: 'phase is required' }, { status: 400 });
 
-	// Atomic $inc serves double duty: validates cartridge exists AND mints a
-	// race-free sequence number. null updated = cartridge doesn't exist.
-	const updated = await CartridgeRecord.findOneAndUpdate(
-		{ _id: cartridgeId },
-		{ $inc: { photoSequence: 1 } },
-		{ new: true, projection: { photoSequence: 1 } }
-	).lean() as any;
+		// Atomic $inc serves double duty: validates cartridge exists AND mints a
+		// race-free sequence number. null updated = cartridge doesn't exist.
+		const updated = await CartridgeRecord.findOneAndUpdate(
+			{ _id: cartridgeId },
+			{ $inc: { photoSequence: 1 } },
+			{ new: true, projection: { photoSequence: 1 } }
+		).lean() as any;
 
-	if (!updated) {
-		return json({ error: `Cartridge ${cartridgeId} not found in BIMS` }, { status: 400 });
+		if (!updated) {
+			return json({ error: `Cartridge ${cartridgeId} not found in BIMS` }, { status: 400 });
+		}
+
+		const seq = updated.photoSequence;
+		const cartridgeImageNumber = `${cartridgeId}_${pad(seq)}`;
+
+		const buffer = Buffer.from(await file.arrayBuffer());
+		const imageId = generateId();
+		const filenameFromClient = file.name || `${cartridgeImageNumber}.jpg`;
+		const key = buildCvNamedKey('captures', imageId, `${cartridgeImageNumber}-${filenameFromClient}`);
+		const contentType = file.type || 'image/jpeg';
+
+		await uploadViaWorker(buffer, key, contentType);
+		const publicUrl = getR2Url(key);
+
+		const capturedAt = new Date();
+		await CvImage.create({
+			_id: imageId,
+			filename: filenameFromClient,
+			filePath: key,
+			fileSizeBytes: buffer.length,
+			cameraIndex: cameraIndexRaw ? Number.parseInt(cameraIndexRaw, 10) : undefined,
+			capturedAt,
+			capturedBy: { _id: locals.user._id, username: locals.user.username },
+			imageUrl: publicUrl,
+			processingMode: processingMode === 'raw' || processingMode === 'full' ? processingMode : undefined,
+			cartridgeTag: { cartridgeRecordId: cartridgeId, phase },
+			cartridgeImageNumber,
+			...(forensic ? { metadata: { forensic } } : {})
+		});
+
+		await CartridgeRecord.updateOne(
+			{ _id: cartridgeId },
+			{ $push: { photos: { imageId, phase, capturedAt, r2Key: key, r2Url: publicUrl, cartridgeImageNumber } } }
+		);
+
+		// Fire-and-forget: any project deploying at this phase runs inference.
+		// Errors are swallowed inside runPhaseInference — capture response always
+		// succeeds regardless of inference state.
+		runPhaseInference({
+			imageId,
+			imageUrl: publicUrl,
+			cartridgeRecordId: cartridgeId,
+			phase,
+			triggeredBy: 'auto-on-capture'
+		}).catch(err => console.error('[capture] phase-inference failed:', err));
+
+		return json({
+			imageId,
+			cartridgeImageNumber,
+			cartridgeRecordId: cartridgeId,
+			phase,
+			imageUrl: publicUrl,
+			filePath: key
+		}, { status: 201 });
+	} catch (e: any) {
+		// Surface the underlying error to the operator UI instead of a bare 500.
+		// Typical culprits: R2_WORKER_URL missing, R2_UPLOAD_SECRET wrong, R2 worker
+		// returning non-2xx. Server log keeps the full stack for ops triage.
+		console.error('[api/cv/capture] failed:', e);
+		return json({ error: e?.message ?? 'Capture failed' }, { status: 500 });
 	}
-
-	const seq = updated.photoSequence;
-	const cartridgeImageNumber = `${cartridgeId}_${pad(seq)}`;
-
-	const buffer = Buffer.from(await file.arrayBuffer());
-	const imageId = generateId();
-	const filenameFromClient = file.name || `${cartridgeImageNumber}.jpg`;
-	const key = buildCvNamedKey('captures', imageId, `${cartridgeImageNumber}-${filenameFromClient}`);
-	const contentType = file.type || 'image/jpeg';
-
-	await uploadViaWorker(buffer, key, contentType);
-	const publicUrl = getR2Url(key);
-
-	const capturedAt = new Date();
-	await CvImage.create({
-		_id: imageId,
-		filename: filenameFromClient,
-		filePath: key,
-		fileSizeBytes: buffer.length,
-		cameraIndex: cameraIndexRaw ? Number.parseInt(cameraIndexRaw, 10) : undefined,
-		capturedAt,
-		capturedBy: { _id: locals.user._id, username: locals.user.username },
-		imageUrl: publicUrl,
-		processingMode: processingMode === 'raw' || processingMode === 'full' ? processingMode : undefined,
-		cartridgeTag: { cartridgeRecordId: cartridgeId, phase },
-		cartridgeImageNumber,
-		...(forensic ? { metadata: { forensic } } : {})
-	});
-
-	await CartridgeRecord.updateOne(
-		{ _id: cartridgeId },
-		{ $push: { photos: { imageId, phase, capturedAt, r2Key: key, r2Url: publicUrl, cartridgeImageNumber } } }
-	);
-
-	// Fire-and-forget: any project deploying at this phase runs inference.
-	// Errors are swallowed inside runPhaseInference — capture response always
-	// succeeds regardless of inference state.
-	runPhaseInference({
-		imageId,
-		imageUrl: publicUrl,
-		cartridgeRecordId: cartridgeId,
-		phase,
-		triggeredBy: 'auto-on-capture'
-	}).catch(err => console.error('[capture] phase-inference failed:', err));
-
-	return json({
-		imageId,
-		cartridgeImageNumber,
-		cartridgeRecordId: cartridgeId,
-		phase,
-		imageUrl: publicUrl,
-		filePath: key
-	}, { status: 201 });
 };
