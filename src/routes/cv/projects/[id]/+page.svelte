@@ -38,9 +38,7 @@
 		</div>
 		<div class="flex flex-col items-end gap-2">
 			<a
-				href={data.project.deployAtPhases[0]
-					? `/capture?phase=${encodeURIComponent(data.project.deployAtPhases[0])}`
-					: '/capture'}
+				href={`/capture?projectId=${encodeURIComponent(data.project.id)}${data.project.deployAtPhases[0] ? `&phase=${encodeURIComponent(data.project.deployAtPhases[0])}` : ''}`}
 				class="rounded bg-[var(--color-tron-green,#39ff14)] px-4 py-2 text-sm font-medium text-black"
 				title={data.project.activeModelVersion
 					? `Inference will auto-run for this project at phase ${data.project.deployAtPhases.join(', ') || '(none deployed)'}`

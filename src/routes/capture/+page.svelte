@@ -10,8 +10,9 @@
 	let cartridgePhotoCount = $state<number>(0);
 	let scannedAt = $state<number | null>(null);
 
-	// Phase selection
-	let phase = $state<string>('wax_filled');
+	// Phase selection — server preselects from ?phase= URL param when arriving
+	// from a project's "Capture cartridges" deep link, otherwise defaults.
+	let phase = $state<string>(data.initialPhase ?? 'wax_filled');
 
 	// Scanner-wedge buffer
 	let scanInput = $state('');
@@ -659,6 +660,30 @@
 				Operator: <span class="text-[var(--color-tron-cyan)]">{data.user.username}</span>
 			</div>
 		</header>
+
+		<!-- Project context banner — only when arrived from /cv/projects/[id] -->
+		{#if data.projectContext}
+			{@const pc = data.projectContext}
+			{@const willRun = !!pc.activeModelVersion && pc.deployAtPhases.includes(phase)}
+			<div class="rounded-lg border p-3 text-sm
+				{willRun
+					? 'border-[var(--color-tron-green,#39ff14)] bg-[rgba(57,255,20,0.05)]'
+					: 'border-[var(--color-tron-red,#ff3366)] bg-[rgba(255,51,102,0.05)]'}">
+				<div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+					<span class="text-[var(--color-tron-text-secondary)]">Capturing for project:</span>
+					<a href={`/cv/projects/${pc.id}`} class="font-semibold text-[var(--color-tron-cyan)] hover:underline">{pc.name}</a>
+					{#if !pc.activeModelVersion}
+						<span class="text-[var(--color-tron-red,#ff3366)]">— no active model on this project. Train + promote one under the project's Deployment tab before inference will run.</span>
+					{:else if !pc.deployAtPhases.includes(phase)}
+						<span class="text-[var(--color-tron-red,#ff3366)]">
+							— this project deploys at {pc.deployAtPhases.length > 0 ? pc.deployAtPhases.join(', ') : '(no phases)'}, not "{phase}". Change the phase below OR add "{phase}" to deployAtPhases on the project.
+						</span>
+					{:else}
+						<span class="text-[var(--color-tron-green,#39ff14)]">— ✓ inference will run (model v{pc.activeModelVersion}) for captures at "{phase}".</span>
+					{/if}
+				</div>
+			</div>
+		{/if}
 
 		<!-- Banner -->
 		{#if banner}
