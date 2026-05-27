@@ -379,20 +379,18 @@
 		}
 	}
 
+	const SCAN_TO_CAPTURE_DELAY_MS = 1000;
+
 	async function handleScan(rawCode: string, source: 'handheld' | 'auto' = 'handheld') {
 		const code = rawCode.trim();
 		if (!code) return;
-		// Auto-scan re-detects the locked cartridge every tick — skip to preserve
-		// the in-flight 2-photo session.
-		if (source === 'auto' && code === cartridgeId) return;
 
-		// Handheld re-scan of the currently locked cartridge with at least one
-		// photo taken → operator wants a do-over. Open the retake dialog instead
-		// of re-locking (which would silently reset the session and lose context).
-		if (source === 'handheld' && code === cartridgeId && sessionPhotos.length > 0) {
-			showRetakeDialog = true;
-			return;
-		}
+		// Same code as currently locked → strict no-op for ANY source.
+		// Subsumes the old auto-scan dedupe AND the handheld-retake branch:
+		// double-triggering the wedge scanner or leaving a cartridge in frame
+		// must never re-capture or pop the retake dialog. Retakes are explicit
+		// via the dialog that opens on the 3rd manual capture attempt.
+		if (code === cartridgeId) return;
 
 		try {
 			const res = await fetch(`/api/cv/lookup-cartridge?code=${encodeURIComponent(code)}`);
@@ -414,13 +412,11 @@
 			showRetakeDialog = false;
 			flashBanner('ok', `Locked on ${cartridgeId} — ${cartridgePhotoCount} prior photos`);
 
-			// Auto-capture photo #1 (front) on successful lock. Photo #2 (back) is
-			// still manual via Space / capture button — preserves the front/back
-			// 2-photo semantics. Small delay so the operator sees the lock toast
-			// before the camera flash, and so capturePhoto's `!cartridgeId` guard
-			// reads the just-assigned value.
+			// Auto-capture photo #1 (front) after a 1s pause so the operator has
+			// time to settle the cartridge in frame. Photo #2 (back) stays manual
+			// via Space / capture button.
 			if (videoEl && stream && cartridgeId) {
-				setTimeout(() => { capturePhoto().catch(() => null); }, 250);
+				setTimeout(() => { capturePhoto().catch(() => null); }, SCAN_TO_CAPTURE_DELAY_MS);
 			}
 		} catch (e) {
 			flashBanner('err', e instanceof Error ? e.message : 'Lookup failed');
@@ -656,7 +652,7 @@
 			<div>
 				<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">Capture Station</h1>
 				<p class="text-xs text-[var(--color-tron-text-secondary)]">
-					Hold a cartridge in front of the camera (auto-scans every 2s) or use the USB scanner. Front photo captures automatically on scan; press Space for the back photo. Re-scan the same cartridge to open the retake dialog.
+					Hold a cartridge in front of the camera (auto-scans every 2s) or use the USB scanner. Front photo captures 1s after a new scan; press Space for the back photo. Re-scanning the same cartridge does nothing — show a different cartridge to advance.
 				</p>
 			</div>
 			<div class="text-xs text-[var(--color-tron-text-secondary)]">
