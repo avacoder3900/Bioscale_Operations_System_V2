@@ -67,12 +67,33 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		}
 	}
 
+	// Phase → deployed-projects map. Drives the always-on inference indicator
+	// so the operator can see — BEFORE they capture — whether the currently
+	// selected phase has any model wired up. Empty array for a phase means
+	// captures at that phase will write CvImage rows but no CvInspection rows.
+	const allDeployed = await CvProject.find({
+		activeModelVersion: { $ne: null },
+		deployAtPhases: { $exists: true, $not: { $size: 0 } }
+	}).select('_id name activeModelVersion deployAtPhases').lean() as any[];
+
+	const deploymentsByPhase: Record<string, Array<{ id: string; name: string; version: string }>> = {};
+	for (const p of allDeployed) {
+		for (const ph of p.deployAtPhases ?? []) {
+			(deploymentsByPhase[ph] ??= []).push({
+				id: p._id,
+				name: p.name ?? '(unnamed project)',
+				version: p.activeModelVersion
+			});
+		}
+	}
+
 	return {
 		phases,
 		stations: JSON.parse(JSON.stringify(stations)),
 		user: { _id: locals.user._id, username: locals.user.username },
 		initialPhase,
-		projectContext
+		projectContext,
+		deploymentsByPhase
 	};
 };
 

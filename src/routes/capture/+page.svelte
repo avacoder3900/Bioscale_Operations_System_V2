@@ -14,6 +14,12 @@
 	// from a project's "Capture cartridges" deep link, otherwise defaults.
 	let phase = $state<string>(data.initialPhase ?? 'wax_filled');
 
+	// Which projects (active model + this phase in deployAtPhases) will run
+	// inference for captures at the current phase. Updates reactively when
+	// the operator changes the phase dropdown.
+	type DeployedProject = { id: string; name: string; version: string };
+	let deployedHere = $derived<DeployedProject[]>(data.deploymentsByPhase?.[phase] ?? []);
+
 	// Scanner-wedge buffer
 	let scanInput = $state('');
 	let scanInputEl: HTMLInputElement | null = null;
@@ -380,17 +386,14 @@
 		}
 	}
 
-	const SCAN_TO_CAPTURE_DELAY_MS = 1000;
-
 	async function handleScan(rawCode: string, source: 'handheld' | 'auto' = 'handheld') {
 		const code = rawCode.trim();
 		if (!code) return;
 
 		// Same code as currently locked → strict no-op for ANY source.
-		// Subsumes the old auto-scan dedupe AND the handheld-retake branch:
-		// double-triggering the wedge scanner or leaving a cartridge in frame
-		// must never re-capture or pop the retake dialog. Retakes are explicit
-		// via the dialog that opens on the 3rd manual capture attempt.
+		// Operator has to scan a DIFFERENT cartridge to advance, which is what
+		// they want — re-scanning a cartridge already in front of them should
+		// not retrigger anything.
 		if (code === cartridgeId) return;
 
 		try {
@@ -411,14 +414,12 @@
 			sessionPhotos = [];
 			retakeInProgress = false;
 			showRetakeDialog = false;
-			flashBanner('ok', `Locked on ${cartridgeId} — ${cartridgePhotoCount} prior photos`);
-
-			// Auto-capture photo #1 (front) after a 1s pause so the operator has
-			// time to settle the cartridge in frame. Photo #2 (back) stays manual
-			// via Space / capture button.
-			if (videoEl && stream && cartridgeId) {
-				setTimeout(() => { capturePhoto().catch(() => null); }, SCAN_TO_CAPTURE_DELAY_MS);
-			}
+			flashBanner('ok', `Locked on ${cartridgeId} — ${cartridgePhotoCount} prior photos · press Space (×2) for front+back`);
+			// Photos are entirely manual now — operator presses Space or clicks
+			// the capture button for photo 1, then again for photo 2. Auto-capture
+			// on scan was introducing a race when scans came in fast: the timer
+			// would fire after the cartridgeId had already shifted to the next
+			// scan, attributing the photo to the wrong cartridge.
 		} catch (e) {
 			flashBanner('err', e instanceof Error ? e.message : 'Lookup failed');
 		}
@@ -653,13 +654,37 @@
 			<div>
 				<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">Capture Station</h1>
 				<p class="text-xs text-[var(--color-tron-text-secondary)]">
-					Hold a cartridge in front of the camera (auto-scans every 2s) or use the USB scanner. Front photo captures 1s after a new scan; press Space for the back photo. Re-scanning the same cartridge does nothing — show a different cartridge to advance.
+					Scan a cartridge (USB scanner or hold a QR in view) to lock it. Then press Space (or click capture) twice — once for the front photo, once for the back. Re-scanning the same cartridge does nothing; show a different cartridge to advance.
 				</p>
 			</div>
 			<div class="text-xs text-[var(--color-tron-text-secondary)]">
 				Operator: <span class="text-[var(--color-tron-cyan)]">{data.user.username}</span>
 			</div>
 		</header>
+
+		<!-- Always-on phase inference indicator. Tells the operator BEFORE they
+		     capture whether anything will run inference. Updates reactively as
+		     the operator changes the phase dropdown via $derived deployedHere. -->
+		<div class="rounded border p-2 text-xs
+			{deployedHere.length > 0
+				? 'border-[var(--color-tron-green,#39ff14)] bg-[rgba(57,255,20,0.05)]'
+				: 'border-[var(--color-tron-text-secondary)] bg-[var(--color-tron-bg-secondary)]'}">
+			{#if deployedHere.length > 0}
+				<span class="text-[var(--color-tron-green,#39ff14)]">✓ Inference active</span>
+				<span class="text-[var(--color-tron-text-secondary)]"> at phase</span>
+				<span class="font-mono text-[var(--color-tron-cyan)]">{phase}</span>
+				<span class="text-[var(--color-tron-text-secondary)]"> — </span>
+				{#each deployedHere as d, i (d.id)}
+					{#if i > 0}, {/if}
+					<a href={`/cv/projects/${d.id}`} class="text-[var(--color-tron-cyan)] hover:underline">{d.name}</a>
+					<span class="font-mono text-[10px] text-[var(--color-tron-text-secondary)]">v{d.version}</span>
+				{/each}
+			{:else}
+				<span class="text-[var(--color-tron-text-secondary)]">No project deploys at phase</span>
+				<span class="font-mono text-[var(--color-tron-cyan)]">{phase}</span>
+				<span class="text-[var(--color-tron-text-secondary)]"> — captures will save but no PASS/FAIL inference will run. Wire one up under <a href="/cv/projects" class="text-[var(--color-tron-cyan)] hover:underline">/cv/projects</a> → Deployment tab.</span>
+			{/if}
+		</div>
 
 		<!-- Project context banner — only when arrived from /cv/projects/[id] -->
 		{#if data.projectContext}
