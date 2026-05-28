@@ -241,34 +241,91 @@ Should return JSON, NOT a 502. (502 = port 8765 nothing listening — agent isn'
 
 ---
 
-## Phase 6 — Start the agent
+## Phase 6 — Install as a systemd service
 
-For the first test, run in the foreground so you can see startup logs:
+Run the agent under systemd so it auto-starts on boot, restarts on crash, and survives SSH disconnects.
+
+### 6.1 Create the `bims` system user
+
+The included `bims-capture-agent.service` unit runs as `User=bims`. Create that user and add it to the groups that own the camera/scanner device nodes:
 
 ```bash
-cd ~/bims-capture-agent/services/bims-capture-agent
-sudo .venv/bin/python agent.py
+sudo groupadd -r bims
+sudo useradd -r -g bims -G input,video -s /usr/sbin/nologin -d /opt/bims-capture-agent -M bims
 ```
 
-Why `sudo`? Two reasons:
-- `/etc/bims/station.env` is mode `0600` root-owned (the `bims` group doesn't exist yet)
-- `/dev/input/event*` and `/dev/video*` access without supplementary groups
+`input` group owns `/dev/input/event*` (scanner). `video` group owns `/dev/video*` (camera). `-s /usr/sbin/nologin` makes the account uninteractive. `-M -d` sets the home dir without creating it (so the symlink in 6.2 is what answers).
 
-You should see:
+### 6.2 Symlink `/opt/bims-capture-agent` → home checkout
+
+The service unit's `WorkingDirectory` and `ExecStart` are pinned to `/opt/bims-capture-agent`. Rather than copying files, symlink to the home checkout so `git pull` updates the live agent.
+
+```bash
+sudo ln -s /home/<user>/bims-capture-agent/services/bims-capture-agent /opt/bims-capture-agent
+sudo chmod o+x /home/<user>
 ```
+
+The `chmod o+x` lets the `bims` user traverse the home directory to reach the agent files. If `ls -la /opt/bims-capture-agent/.venv/bin/python` doesn't show the python binary readable + executable by other, run `sudo chmod -R o+rX /home/<user>/bims-capture-agent`.
+
+### 6.3 Fix env-file permissions
+
+`setup-station.sh` installed `/etc/bims/station.env` with mode `0600 root:root` because the `bims` group didn't exist yet. Now it does — grant read access:
+
+```bash
+sudo chown root:bims /etc/bims/station.env
+sudo chmod 0640 /etc/bims/station.env
+```
+
+### 6.4 Install + enable + start the unit
+
+```bash
+sudo cp /opt/bims-capture-agent/bims-capture-agent.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now bims-capture-agent
+```
+
+`enable --now` does both: enables on-boot startup AND starts the service immediately.
+
+### 6.5 Verify it's healthy
+
+```bash
+sudo systemctl status bims-capture-agent --no-pager
+sudo journalctl -u bims-capture-agent -n 30 --no-pager
+```
+
+Look for:
+```
+Active: active (running)
 INFO bims-capture-agent: starting bims-capture-agent v0.1.0 on 0.0.0.0:8765
 INFO bims-capture-agent.camera: camera opened: 1280x720 native, target 1280x720 @ 15 fps
 INFO bims-capture-agent: camera ready
 INFO bims-capture-agent.scanner: scanner reading from /dev/input/event5 (USBScn Chip USBScn Module)
 ```
 
-If you see `STATION_JWT_SECRET is empty — rejecting all /ws connections`, the env file isn't being loaded (Phase 4.3 didn't land properly).
+You may see a cosmetic warning `Invalid URL, ignoring: docs/prds/PI-CAPTURE-STATION.md` — that's systemd parsing the `Documentation=` field's space-separated values as two URLs and rejecting the relative path. Harmless.
 
-**Verification check #6:** in another shell (laptop or second SSH):
+If you see `STATION_JWT_SECRET is empty — rejecting all /ws connections`, the env file isn't being loaded or the `bims` user can't read it (Phase 6.3 didn't take).
+
+**Verification check #6:** from the laptop:
 ```
 curl.exe -s https://<pi-cv-name>.<tailnet>.ts.net/health
 ```
 Returns JSON with `camera_ok: true`, `scanner_ok: true`.
+
+### 6.6 Day-to-day operations
+
+| Operation | Command |
+|---|---|
+| Tail live logs | `sudo journalctl -u bims-capture-agent -f` |
+| Last N log lines | `sudo journalctl -u bims-capture-agent -n 50 --no-pager` |
+| Restart agent | `sudo systemctl restart bims-capture-agent` |
+| Stop agent | `sudo systemctl stop bims-capture-agent` |
+| Start agent | `sudo systemctl start bims-capture-agent` |
+| Disable on boot | `sudo systemctl disable bims-capture-agent` |
+| Update code | `cd ~/bims-capture-agent && git pull origin bims-capture-agent && sudo systemctl restart bims-capture-agent` |
+| Inspect unit | `sudo systemctl cat bims-capture-agent` |
+
+If you change the `.service` file itself, run `sudo systemctl daemon-reload` before `restart`.
 
 ---
 
@@ -396,12 +453,16 @@ If something breaks (rebooted Pi, network changed, agent died, env edited by acc
    ```
    If either is missing, replug the USB cable.
 
-5. **Start the agent**
+5. **Check the systemd service**
    ```bash
-   cd ~/bims-capture-agent/services/bims-capture-agent
-   sudo .venv/bin/python agent.py
+   sudo systemctl status bims-capture-agent --no-pager
    ```
-   Watch for the camera-ready + scanner-ready log lines.
+   If `Active: active (running)` and the log lines show camera + scanner ready, you're done. If it's `failed` or stopped, restart it:
+   ```bash
+   sudo systemctl restart bims-capture-agent
+   sudo journalctl -u bims-capture-agent -n 30 --no-pager
+   ```
+   The last command surfaces the startup error if it failed.
 
 6. **Verify from laptop**
    ```powershell
@@ -409,7 +470,7 @@ If something breaks (rebooted Pi, network changed, agent died, env edited by acc
    ```
    Returns JSON with `camera_ok: true`, `scanner_ok: true`.
 
-7. **Open /capture, pick the station, see the stream.** If the video panel is black with no error after ~5 seconds: known issue, restart the agent (step 5).
+7. **Open /capture, pick the station, see the stream.** If the video panel is black with no error after ~5 seconds: known issue, restart the agent (`sudo systemctl restart bims-capture-agent`).
 
 ---
 
@@ -434,7 +495,8 @@ Two `true` matches (for `camera_ok` and `scanner_ok`) means the agent is alive a
 
 ## Things not yet done (planned phases)
 
-- **systemd service install** — currently the agent must be run by hand from an SSH terminal. Installing the included `bims-capture-agent.service` to `/etc/systemd/system/`, creating the `bims` user/group, and `systemctl enable --now bims-capture-agent` makes the agent survive reboots and SSH disconnects. (Tracked in the broader PRD as Phase 5.)
-- **Self-registration** — Phase 5 of `setup-station.sh` is planned to automate the BIMS registration step. Today it's manual via DevTools fetch.
+- **Self-registration** — Phase 5 of `setup-station.sh` is planned to automate the BIMS registration step. Today it's manual via DevTools fetch, and the returned `STATION_JWT_SECRET` is hand-pasted into `/etc/bims/station.env`.
+- **Cloudflare Tunnel install** — Phase 5 placeholder in `setup-station.sh`. Tailscale Serve covers the current "tailnet-only" topology; Cloudflare Tunnel would be needed if BIMS is required to call into the Pi from Vercel (it can't reach tailnet IPs).
 - **LED control** (Phase 4 of agent PRD) — `led.py` not yet implemented.
+- **BIMS admin UI for stations** — no `/admin/stations` route exists; registration, listing, and de-provisioning all happen via API or direct Mongo today.
 - **Robot arm support** (planned, no PRD scope yet).
