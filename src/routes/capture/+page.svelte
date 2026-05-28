@@ -227,6 +227,7 @@
 	async function onStationChange() {
 		teardownStation();
 		if (selectedStationId) {
+			cameraError = null;
 			await connectToStation(selectedStationId);
 		} else {
 			await startCamera();
