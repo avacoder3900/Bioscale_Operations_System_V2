@@ -389,12 +389,9 @@
 	async function handleScan(rawCode: string, source: 'handheld' | 'auto' = 'handheld') {
 		const code = rawCode.trim();
 		if (!code) return;
-
-		// Same code as currently locked → strict no-op for ANY source.
-		// Operator has to scan a DIFFERENT cartridge to advance, which is what
-		// they want — re-scanning a cartridge already in front of them should
-		// not retrigger anything.
-		if (code === cartridgeId) return;
+		// Auto-scan re-detects the locked cartridge every tick — skip to preserve
+		// the in-flight 2-photo session. Handheld re-scans are intentional and proceed.
+		if (source === 'auto' && code === cartridgeId) return;
 
 		try {
 			const res = await fetch(`/api/cv/lookup-cartridge?code=${encodeURIComponent(code)}`);
@@ -414,12 +411,7 @@
 			sessionPhotos = [];
 			retakeInProgress = false;
 			showRetakeDialog = false;
-			flashBanner('ok', `Locked on ${cartridgeId} — ${cartridgePhotoCount} prior photos · press Space (×2) for front+back`);
-			// Photos are entirely manual now — operator presses Space or clicks
-			// the capture button for photo 1, then again for photo 2. Auto-capture
-			// on scan was introducing a race when scans came in fast: the timer
-			// would fire after the cartridgeId had already shifted to the next
-			// scan, attributing the photo to the wrong cartridge.
+			flashBanner('ok', `Locked on ${cartridgeId} — ${cartridgePhotoCount} prior photos`);
 		} catch (e) {
 			flashBanner('err', e instanceof Error ? e.message : 'Lookup failed');
 		}
@@ -654,7 +646,7 @@
 			<div>
 				<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">Capture Station</h1>
 				<p class="text-xs text-[var(--color-tron-text-secondary)]">
-					Scan a cartridge (USB scanner or hold a QR in view) to lock it. Then press Space (or click capture) twice — once for the front photo, once for the back. Re-scanning the same cartridge does nothing; show a different cartridge to advance.
+					Hold a cartridge in front of the camera (auto-scans every 2s) or use the USB scanner. Press Space to capture front, then back. Show the next cartridge to switch.
 				</p>
 			</div>
 			<div class="text-xs text-[var(--color-tron-text-secondary)]">
