@@ -20,6 +20,21 @@ Validated against `bims-capture-agent` branch, commit `f1109e8b` and later.
 - GitHub access to `avacoder3900/Bioscale_Operations_System_V2`
 - BIMS V2 deployment on Vercel, with a user that has `cv:write` or `manufacturing:write` permission
 
+## BIMS-side env vars
+
+A handful of env vars must be set on the BIMS Vercel deployment for fleet operations. These pair with values written into `/etc/bims/station.env` on each Pi.
+
+| Vercel env var | Pi env var | Purpose | How to generate |
+|---|---|---|---|
+| `STATION_AGENT_KEY` | `STATION_AGENT_KEY` | Shared fleet secret for Pi → BIMS calls (self-registration, heartbeat, status sweep). Bearer-style, in header `x-station-agent-key`. | `openssl rand -base64 32` once. Use the same value on Vercel AND every Pi in the fleet. |
+| `AGENT_API_KEY` | (n/a for capture stations) | Existing — used by scanner-bridge daemon and other agent APIs. Distinct from `STATION_AGENT_KEY` so the two can rotate independently. | (already in place) |
+
+**Setting on Vercel:** Project → Settings → Environment Variables. Apply to Production AND Preview (preview deploys will 401 the Pi otherwise). Redeploy after setting.
+
+**Setting on each Pi:** edit `/etc/bims/station.env`, paste the same value into `STATION_AGENT_KEY=`. Restart the agent (`sudo systemctl restart bims-capture-agent`). `setup-station.sh` writes a placeholder line on first run — the operator fills in the value once per Pi.
+
+**Rotation:** generate a new value, set it on Vercel, redeploy, then update every Pi's env file and restart each agent. Old agents will start getting 401s as soon as Vercel rolls; coordinate the cut-over.
+
 ---
 
 ## Phase 1 — Get the Pi online

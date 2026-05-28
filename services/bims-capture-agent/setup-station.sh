@@ -60,6 +60,13 @@ STATION_TOKEN=${station_token}
 BIMS_URL=${bims_url}
 WIFI_SSID=${wifi_ssid}
 CLOUDFLARE_TUNNEL_TOKEN=${cf_token}
+# Shared fleet secret used by the agent to authenticate to BIMS for
+# self-registration (POST /api/cv/stations/register) and heartbeats
+# (POST /api/cv/stations/[id]/heartbeat). Must match the
+# STATION_AGENT_KEY env var on the BIMS deployment. Paste the value
+# here after first boot — see services/bims-capture-agent/RUNBOOK.md
+# § "BIMS-side env vars".
+STATION_AGENT_KEY=
 PORT=8765
 EOF
 
