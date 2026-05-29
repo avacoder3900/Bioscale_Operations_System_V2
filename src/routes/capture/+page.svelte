@@ -52,6 +52,11 @@
 		bannerTimer = setTimeout(() => { banner = null; }, ms);
 	}
 
+	// Story E2: persistent banner shown when the operator's currently-selected
+	// station goes offline. flashBanner above is transient (3.5 s) and not
+	// the right fit for "the station you're using just died — pick another."
+	let stationDownAt = $state<{ name: string; at: number } | null>(null);
+
 	// Just-captured strip (newest first, max 10). `inference` is filled in
 	// async after capture — runPhaseInference is fire-and-forget on the server,
 	// so we poll /api/cv/inspections?imageId=X until status flips.
@@ -226,6 +231,9 @@
 	// unchanged.
 	async function onStationChange() {
 		teardownStation();
+		// Story E2: clear any stale station-down banner now that the operator
+		// has acknowledged it by changing the dropdown.
+		stationDownAt = null;
 		if (selectedStationId) {
 			cameraError = null;
 			await connectToStation(selectedStationId);
@@ -312,8 +320,12 @@
 		sock.onerror = () => flashBanner('err', `Station ${station.name}: WebSocket error`);
 		sock.onclose = () => {
 			// If the user is still on this station, surface that the link dropped.
+			// Story E2: also raise the persistent "station down" banner so the
+			// operator knows they need to pick another rather than wondering
+			// why captures stopped working.
 			if (selectedStationId === stationId) {
 				flashBanner('err', `Station ${station.name}: connection closed`);
+				stationDownAt = { name: station.name, at: Date.now() };
 			}
 		};
 
@@ -710,6 +722,16 @@
 				{banner.kind === 'err' ? 'border-[var(--color-tron-red,#ff3366)] bg-[rgba(255,51,102,0.08)] text-[var(--color-tron-red,#ff3366)]' : ''}
 				{banner.kind === 'info' ? 'border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.08)] text-[var(--color-tron-cyan)]' : ''}">
 				{banner.text}
+			</div>
+		{/if}
+
+		<!-- Station-down banner (story E2). Persistent — only cleared when the
+		     operator changes the station dropdown. Different from the transient
+		     `banner` above because the operator needs time to read and act. -->
+		{#if stationDownAt}
+			<div class="rounded border border-[var(--color-tron-yellow,#facc15)] bg-[rgba(250,204,21,0.08)] p-3 text-sm text-[var(--color-tron-yellow,#facc15)]">
+				<span class="font-semibold">Station {stationDownAt.name} went offline at {new Date(stationDownAt.at).toLocaleTimeString()}.</span>
+				<span class="ml-2 text-[var(--color-tron-text-secondary)]">Pick another station from the dropdown above, or wait for this one to come back online.</span>
 			</div>
 		{/if}
 
