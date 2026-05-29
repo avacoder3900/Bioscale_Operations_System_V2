@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Set
 
 import jwt as pyjwt
-from aiohttp import WSMsgType, web
+from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 from aiortc import RTCIceCandidate, RTCPeerConnection, RTCSessionDescription
 from dotenv import load_dotenv
 
@@ -285,6 +285,75 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
+async def _heartbeat_loop() -> None:
+    """Phone home to BIMS every HEARTBEAT_INTERVAL_S so the dashboard
+    knows we're alive.
+
+    POST /api/cv/stations/{STATION_ID}/heartbeat with the same payload
+    shape as /health (cameraOk, scannerOk, ledOk, uptimeS, agentVersion).
+    BIMS bumps lastSeenAt + status; the read-time deriveStatus helper
+    coerces a station to 'offline' if three consecutive heartbeats are
+    missed (90 s threshold).
+
+    Logs network/HTTP failures at WARNING and keeps looping — a transient
+    BIMS outage or DNS hiccup must not knock the agent over.
+
+    Per docs/prds/PI-STATION-ADMIN-AND-LIFECYCLE.md story C3.
+    """
+    bims_url = os.environ.get("BIMS_URL", "").rstrip("/")
+    station_id = os.environ.get("STATION_ID", "").strip()
+    agent_key = os.environ.get("STATION_AGENT_KEY", "").strip()
+
+    if not bims_url or not station_id or not agent_key:
+        log.warning(
+            "heartbeat disabled — missing one of BIMS_URL / STATION_ID / "
+            "STATION_AGENT_KEY"
+        )
+        return
+
+    interval_s = float(os.environ.get("HEARTBEAT_INTERVAL_S", "30"))
+    url = f"{bims_url}/api/cv/stations/{station_id}/heartbeat"
+    headers = {
+        "Content-Type": "application/json",
+        "x-station-agent-key": agent_key,
+    }
+
+    log.info(
+        "heartbeat loop starting — every %.0fs to %s", interval_s, url
+    )
+
+    timeout = ClientTimeout(total=10)
+    async with ClientSession(timeout=timeout) as session:
+        while True:
+            body = {
+                "cameraOk": camera_mod.is_available(),
+                "scannerOk": scanner_mod.is_available(),
+                "ledOk": False,
+                "uptimeS": int(time.monotonic() - _started_at),
+                "agentVersion": __version__,
+            }
+            try:
+                async with session.post(url, json=body, headers=headers) as resp:
+                    if resp.status == 204:
+                        log.debug("heartbeat ok")
+                    else:
+                        text = await resp.text()
+                        log.warning(
+                            "heartbeat returned HTTP %d: %s",
+                            resp.status,
+                            text[:200],
+                        )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.warning("heartbeat failed: %s", exc)
+
+            try:
+                await asyncio.sleep(interval_s)
+            except asyncio.CancelledError:
+                raise
+
+
 async def _broadcast_scans() -> None:
     """Forward each barcode scan to every connected WebSocket client.
 
@@ -312,16 +381,20 @@ async def _on_startup(app: web.Application) -> None:
     app["scan_broadcaster"] = asyncio.create_task(
         _broadcast_scans(), name="bims-scan-broadcaster"
     )
+    app["heartbeat"] = asyncio.create_task(
+        _heartbeat_loop(), name="bims-heartbeat"
+    )
 
 
 async def _on_cleanup(app: web.Application) -> None:
-    task = app.get("scan_broadcaster")
-    if task is not None:
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):
-            pass
+    for key in ("scan_broadcaster", "heartbeat"):
+        task = app.get(key)
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 def build_app() -> web.Application:
