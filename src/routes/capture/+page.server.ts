@@ -8,7 +8,7 @@
 import { redirect } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
-import { CaptureStation } from '$lib/server/db/models/capture-station.js';
+import { CaptureStation, deriveStatus } from '$lib/server/db/models/capture-station.js';
 import { CvProject } from '$lib/server/db/models/cv-project.js';
 import type { PageServerLoad } from './$types';
 
@@ -30,12 +30,18 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const distinctPhases = await CvImage.distinct('cartridgeTag.phase');
 	const phases = Array.from(new Set([...DEFAULT_PHASES, ...(distinctPhases as string[]).filter(Boolean)])).sort();
 
-	// Online Pi capture stations for the station dropdown. Token is never sent
-	// to the page payload — operator fetches it on demand via /api/cv/stations/[id]/token.
-	const stations = await CaptureStation.find({ status: 'online' })
-		.select('_id name hostname capabilities mode assignedPhase')
+	// Pi capture stations for the station dropdown. Token is never sent to the
+	// page payload — operator fetches it on demand via /api/cv/stations/[id]/token.
+	// Pull every station, apply C4 stale-derivation, then filter to 'online'.
+	// Avoids the prior bug where a stored status of 'online' kept a long-dead
+	// Pi visible in the dropdown until something else updated it.
+	const stationsRaw = await CaptureStation.find()
+		.select('_id name hostname capabilities mode assignedPhase status lastSeenAt')
 		.sort({ name: 1 })
 		.lean();
+	const stations = stationsRaw
+		.map((s: any) => ({ ...s, status: deriveStatus(s) }))
+		.filter((s: any) => s.status === 'online');
 
 	// Optional deep-link context: arriving from /cv/projects/[id] via the
 	// "Capture cartridges →" button. ?phase= preselects the phase dropdown,

@@ -7,7 +7,7 @@
 import { json, error } from '@sveltejs/kit';
 import { randomBytes } from 'node:crypto';
 import { connectDB } from '$lib/server/db/connection.js';
-import { CaptureStation } from '$lib/server/db/models/capture-station.js';
+import { CaptureStation, deriveStatus } from '$lib/server/db/models/capture-station.js';
 import { AuditLog } from '$lib/server/db/models/audit-log.js';
 import { generateId } from '$lib/server/db/utils.js';
 import { hasPermission } from '$lib/server/permissions';
@@ -23,7 +23,12 @@ export const GET: RequestHandler = async ({ locals }) => {
 		.sort({ name: 1 })
 		.lean();
 
-	return json({ data: JSON.parse(JSON.stringify(stations)) });
+	// Apply C4 stale-derivation so callers always see the freshest possible
+	// view. Sweep job (C5) materializes this back to Mongo periodically; in
+	// between sweeps the read-time pass is what keeps the dropdown accurate.
+	const decorated = stations.map((s: any) => ({ ...s, status: deriveStatus(s) }));
+
+	return json({ data: JSON.parse(JSON.stringify(decorated)) });
 };
 
 export const POST: RequestHandler = async ({ request, locals }) => {

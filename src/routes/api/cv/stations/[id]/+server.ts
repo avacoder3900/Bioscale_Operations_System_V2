@@ -7,7 +7,7 @@
  */
 import { json, error } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
-import { CaptureStation } from '$lib/server/db/models/capture-station.js';
+import { CaptureStation, deriveStatus } from '$lib/server/db/models/capture-station.js';
 import { AuditLog } from '$lib/server/db/models/audit-log.js';
 import { generateId } from '$lib/server/db/utils.js';
 import { hasPermission } from '$lib/server/permissions';
@@ -25,10 +25,11 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
 	await connectDB();
 
-	const station = await CaptureStation.findById(params.id).select('-jwtSecret').lean();
+	const station = await CaptureStation.findById(params.id).select('-jwtSecret').lean() as any;
 	if (!station) return json({ error: 'Station not found' }, { status: 404 });
 
-	return json({ data: JSON.parse(JSON.stringify(station)) });
+	const decorated = { ...station, status: deriveStatus(station) };
+	return json({ data: JSON.parse(JSON.stringify(decorated)) });
 };
 
 export const PATCH: RequestHandler = async ({ params, request, locals }) => {

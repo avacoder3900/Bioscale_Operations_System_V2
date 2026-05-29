@@ -57,3 +57,34 @@ const captureStationSchema = new Schema({
 captureStationSchema.index({ hostname: 1 }, { unique: true });
 
 export const CaptureStation = mongoose.models.CaptureStation || mongoose.model('CaptureStation', captureStationSchema, 'capture_stations');
+
+/**
+ * Heartbeat freshness window — three missed 30 s heartbeats. A station whose
+ * lastSeenAt is older than this is treated as offline regardless of the
+ * stored status field.
+ */
+export const STALE_THRESHOLD_MS = 90_000;
+
+type StatusInput =
+	| { lastSeenAt?: Date | string | null; status?: string | null }
+	| null
+	| undefined;
+
+/**
+ * Pure status-from-snapshot derivation. Read-time only — does not mutate.
+ *
+ *   - lastSeenAt missing → 'offline' (never registered or never heartbeated)
+ *   - lastSeenAt older than STALE_THRESHOLD_MS → 'offline'
+ *   - otherwise the stored status, defaulting to 'online' when unset.
+ *
+ * Per docs/prds/PI-STATION-ADMIN-AND-LIFECYCLE.md story C4. Story C5
+ * materializes the derivation back to Mongo on a schedule so admin list
+ * filters can rely on the stored field.
+ */
+export function deriveStatus(doc: StatusInput): 'online' | 'offline' | 'degraded' {
+	if (!doc?.lastSeenAt) return 'offline';
+	const ageMs = Date.now() - new Date(doc.lastSeenAt).getTime();
+	if (ageMs > STALE_THRESHOLD_MS) return 'offline';
+	if (doc.status === 'degraded') return 'degraded';
+	return 'online';
+}
