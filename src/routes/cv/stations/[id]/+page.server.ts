@@ -36,6 +36,9 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 
 	await connectDB();
 
+	// Story F3: the "Restart agent" button is shown only to cv:admin.
+	const canRestart = hasPermission(locals.user, 'cv:admin');
+
 	const raw = (await CaptureStation.findById(params.id)
 		.select('-jwtSecret')
 		.lean()) as Record<string, any> | null;
@@ -101,7 +104,8 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			changedFields: a.changedFields ?? null,
 			newData: a.newData ?? null,
 			oldData: a.oldData ?? null
-		}))
+		})),
+		canRestart
 	};
 };
 

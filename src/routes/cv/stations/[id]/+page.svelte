@@ -4,6 +4,83 @@
 	let { data, form } = $props();
 
 	let confirmingDelete = $state(false);
+	let restarting = $state(false);
+	let restartMessage = $state<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+	async function restartAgent() {
+		if (restarting) return;
+		restarting = true;
+		restartMessage = null;
+
+		try {
+			// Mint an admin-claim JWT via the existing token endpoint.
+			// hasPermission(cv:admin) on the server side adds the admin: true
+			// claim (story F2). The Pi's admin_restart handler (F1) checks it.
+			const tokRes = await fetch(`/api/cv/stations/${encodeURIComponent(data.station.id)}/token`);
+			if (!tokRes.ok) throw new Error(`token mint HTTP ${tokRes.status}`);
+			const { token } = await tokRes.json();
+			if (!token) throw new Error('empty token');
+
+			const url = `wss://${data.station.hostname}/ws?token=${encodeURIComponent(token)}`;
+			const sock = new WebSocket(url);
+
+			const done = new Promise<void>((resolve, reject) => {
+				let helloSeen = false;
+				const timeout = setTimeout(() => {
+					try { sock.close(); } catch { /* */ }
+					reject(new Error('agent did not respond within 10 s'));
+				}, 10_000);
+
+				sock.onopen = () => { /* wait for hello */ };
+
+				sock.onmessage = (ev) => {
+					let msg: any;
+					try { msg = JSON.parse(ev.data); } catch { return; }
+					if (msg.event === 'hello' && !helloSeen) {
+						helloSeen = true;
+						try {
+							sock.send(JSON.stringify({ cmd: 'admin_restart' }));
+						} catch (e) {
+							clearTimeout(timeout);
+							reject(e instanceof Error ? e : new Error(String(e)));
+						}
+					} else if (msg.event === 'restart_pending') {
+						clearTimeout(timeout);
+						resolve();
+					} else if (msg.event === 'error') {
+						clearTimeout(timeout);
+						reject(new Error(`${msg.code ?? 'error'}: ${msg.message ?? 'unknown'}`));
+					}
+				};
+
+				sock.onerror = () => {
+					clearTimeout(timeout);
+					reject(new Error('WebSocket error'));
+				};
+
+				sock.onclose = () => {
+					// Pi closes the socket as part of the restart flow. If we
+					// haven't seen restart_pending yet by the time the close
+					// arrives, treat it as a failure.
+					clearTimeout(timeout);
+					if (!helloSeen) reject(new Error('socket closed before hello'));
+				};
+			});
+
+			await done;
+			restartMessage = {
+				kind: 'ok',
+				text: 'Restart command sent. Agent will be back online in ~5 s.'
+			};
+		} catch (e) {
+			restartMessage = {
+				kind: 'err',
+				text: `Restart failed: ${e instanceof Error ? e.message : String(e)}`
+			};
+		} finally {
+			restarting = false;
+		}
+	}
 
 	function statusColor(status: string): string {
 		if (status === 'online') return 'var(--color-tron-green,#39ff14)';
@@ -171,6 +248,35 @@
 			</div>
 		</form>
 	</div>
+
+	{#if data.canRestart}
+		<!-- Remote restart (story F3, admin-only) -->
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
+			<h2 class="text-sm font-semibold uppercase text-[var(--color-tron-text-secondary)]">Remote restart</h2>
+			<p class="mt-2 text-xs text-[var(--color-tron-text-secondary)]">
+				Restart the bims-capture-agent service on the Pi. Use this when the operator reports a
+				black/frozen video stream (the singleton-track RTP wedge — see RUNBOOK known issues). The agent
+				is back within ~5 s; the operator must re-select the station to reconnect.
+			</p>
+			{#if restartMessage}
+				<div
+					class="mt-2 rounded p-2 text-xs"
+					style="background:{restartMessage.kind === 'ok' ? 'rgba(57,255,20,0.08)' : 'rgba(255,51,102,0.08)'};
+					       color:{restartMessage.kind === 'ok' ? 'var(--color-tron-green,#39ff14)' : 'var(--color-tron-red,#ff3366)'}"
+				>
+					{restartMessage.text}
+				</div>
+			{/if}
+			<button
+				type="button"
+				onclick={restartAgent}
+				disabled={restarting}
+				class="mt-3 rounded border border-[var(--color-tron-cyan)] px-3 py-1 text-xs text-[var(--color-tron-cyan)] hover:bg-[rgba(0,255,255,0.08)] disabled:opacity-40"
+			>
+				{restarting ? 'Restarting…' : 'Restart agent'}
+			</button>
+		</div>
+	{/if}
 
 	<!-- Rotate secret -->
 	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
