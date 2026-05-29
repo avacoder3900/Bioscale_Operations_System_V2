@@ -56,6 +56,52 @@ export interface RegisterStationResponse {
 	jwtSecret: string;
 }
 
+/**
+ * Pi-side self-registration payload. Sent by setup-station.sh and (on
+ * subsequent boots) the agent itself. Distinct from RegisterStationRequest
+ * because (a) it's authenticated by STATION_AGENT_KEY rather than a BIMS
+ * user session, (b) it carries an optional stationId hint so the Pi's
+ * locally-generated UUID can be used as the BIMS-side _id, and (c) it
+ * supports an explicit secret-rotation flag.
+ */
+export interface RegisterAgentRequest {
+	stationId?: string;
+	name: string;
+	hostname: string;
+	ipAddress?: string;
+	capabilities: CaptureStationCapabilities;
+	agentVersion?: string;
+	/**
+	 * When true on a re-registration call, mints a fresh jwtSecret and
+	 * returns it. Default false — re-registrations preserve the existing
+	 * secret so the Pi's local copy in /etc/bims/station.env stays valid.
+	 */
+	regenerateSecret?: boolean;
+}
+
+export interface RegisterAgentResponse {
+	_id: string;
+	/**
+	 * Present on first-time registration, or on re-registration with
+	 * regenerateSecret: true. Absent on re-registration without rotation —
+	 * the Pi already has the secret on disk.
+	 */
+	jwtSecret?: string;
+}
+
+/**
+ * Per-Pi liveness + capability snapshot. Mirrors the body of /health on
+ * the Pi agent. Sent every HEARTBEAT_INTERVAL_S (default 30s) to
+ * POST /api/cv/stations/[id]/heartbeat.
+ */
+export interface HeartbeatRequest {
+	cameraOk: boolean;
+	scannerOk: boolean;
+	ledOk: boolean;
+	uptimeS: number;
+	agentVersion?: string;
+}
+
 export type LockStationResponse =
 	| { ok: true }
 	| { ok: false; heldBy: { username: string; since: string | Date } };
