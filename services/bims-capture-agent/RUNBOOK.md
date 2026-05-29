@@ -314,6 +314,19 @@ sudo systemctl enable --now bims-capture-agent
 
 `enable --now` does both: enables on-boot startup AND starts the service immediately.
 
+### 6.4a Install the sudoers drop-in for admin remote restart
+
+Story F1 (BIMS admin "Restart agent" button) requires the `bims` user to run `systemctl restart bims-capture-agent` without a password. Install the drop-in:
+
+```bash
+sudo install -m 0440 -o root -g root \
+    /opt/bims-capture-agent/sudoers.d/bims-capture-agent \
+    /etc/sudoers.d/bims-capture-agent
+sudo visudo -c -f /etc/sudoers.d/bims-capture-agent
+```
+
+`visudo -c` validates the syntax before sudo trusts it. If you skip the install, the admin "Restart agent" button still works in the BIMS UI but the Pi rejects the command at sudo (you'll see `sudo: a password is required` in journalctl) and stays running.
+
 ### 6.5 Verify it's healthy
 
 ```bash

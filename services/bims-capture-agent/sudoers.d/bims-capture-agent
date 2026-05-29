@@ -1,0 +1,18 @@
+# sudoers drop-in for the bims-capture-agent service.
+#
+# Install with:
+#   sudo install -m 0440 -o root -g root \
+#       /opt/bims-capture-agent/sudoers.d/bims-capture-agent \
+#       /etc/sudoers.d/bims-capture-agent
+#
+# This lets the `bims` user (the systemd User= for bims-capture-agent.service)
+# restart its own systemd unit without a password. The /ws admin_restart
+# handler in agent.py (story F1) shells out to systemctl when an
+# admin-claim JWT requests a restart — that's the one-button workaround
+# for the WebRTC singleton-track wedge documented in RUNBOOK known
+# failure modes.
+#
+# Only this exact command is allowed; the `bims` user cannot escalate
+# beyond restarting its own service.
+bims ALL=(root) NOPASSWD: /bin/systemctl restart bims-capture-agent
+bims ALL=(root) NOPASSWD: /usr/bin/systemctl restart bims-capture-agent

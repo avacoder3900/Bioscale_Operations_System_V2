@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
 import time
 from pathlib import Path
 from typing import Set
@@ -217,6 +218,47 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
                 elif cmd == "close":
                     await ws.close(code=1000, message=b"client requested")
                     break
+                elif cmd == "admin_restart":
+                    # Story F1: BIMS admin asks the agent to restart itself.
+                    # The known-good workaround for the singleton-track RTP
+                    # wedge — one click on /cv/stations/[id] beats SSH + sudo
+                    # systemctl restart from every operator.
+                    if not auth.claims.get("admin"):
+                        await ws.send_json(
+                            {
+                                "event": "error",
+                                "code": "forbidden",
+                                "message": "admin claim required",
+                            }
+                        )
+                        continue
+                    log.warning(
+                        "admin restart requested by operator=%s peer=%s",
+                        operator,
+                        peer,
+                    )
+                    await ws.send_json(
+                        {
+                            "event": "restart_pending",
+                            "ts": int(time.time() * 1000),
+                        }
+                    )
+                    await ws.close(code=1000, message=b"restart")
+                    # Detach so systemctl can kill this process without
+                    # waiting on us. The /etc/sudoers.d/bims-capture-agent
+                    # drop-in lets the bims user run this one command
+                    # without a password. systemd brings us back within 5s.
+                    subprocess.Popen(  # noqa: S603,S607
+                        [
+                            "sudo",
+                            "-n",
+                            "systemctl",
+                            "restart",
+                            "bims-capture-agent",
+                        ],
+                        start_new_session=True,
+                    )
+                    return ws
                 elif cmd == "sdp_offer":
                     sdp = payload.get("sdp")
                     if not sdp:
