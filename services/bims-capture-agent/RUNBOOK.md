@@ -165,67 +165,80 @@ sudo bash setup-station.sh
 Answer the prompts:
 - **Station name** — friendly label, e.g. `Wax Fill Bench 1`
 - **BIMS server URL** — the Vercel deployment URL, **using the branch-alias URL** (no build hash): `https://bioscale-operations-system-mongodb-git-bims-capture-agent-brevitest.vercel.app`. Branch-alias URLs are stable across deploys; build-hash URLs go stale.
+- **STATION_AGENT_KEY** — paste the value from the BIMS Vercel env (see "BIMS-side env vars" above). Leave blank only if you intend to register manually — the wizard will then skip the self-register call.
+- **Tailscale FQDN** — defaults to whatever `tailscale status` reports for this node, e.g. `alejandrospi-cv.tailf65a70.ts.net`. Accept the default unless you're routing through a non-Tailscale hostname.
 - **Station token** — leave blank to auto-generate
 - **WiFi SSID** — informational only, just for documentation in the env file
 - **Cloudflare Tunnel token** — leave blank (Phase 5 placeholder)
 
-The script writes `/etc/bims/station.env`.
+The script writes `/etc/bims/station.env`, then **POSTs to BIMS /api/cv/stations/register and appends the returned `STATION_JWT_SECRET`** to the env file. No DevTools step required.
 
 **Verification check #3:**
 ```bash
 sudo cat /etc/bims/station.env
 ```
-Confirm `STATION_ID`, `STATION_NAME`, `STATION_TOKEN`, `BIMS_URL`, `PORT=8765` are all populated.
+Confirm `STATION_ID`, `STATION_NAME`, `STATION_TOKEN`, `BIMS_URL`, `STATION_AGENT_KEY`, `STATION_JWT_SECRET`, `PORT=8765` are all populated. The script prints "registered (201)" or "already registered (200)" right before its closing summary — make sure you saw one of those.
 
 ---
 
-## Phase 4 — Register the station with BIMS
+## Phase 4 — Registration verification
 
-BIMS needs a `CaptureStation` document so the `/capture` page can offer the station in its dropdown. There is no admin UI for this yet — register via DevTools fetch.
+Phase 3 already registered the station via `setup-station.sh`. This phase is just confirmation + the manual fallback procedure when the script's self-register step is skipped or fails.
 
-### 4.1 Open BIMS and log in
+### 4.1 Confirm the station shows up in BIMS
 
-In a browser, go to the BIMS V2 deployment URL. Log in as a user with `cv:write` or `manufacturing:write` permission.
+From the laptop:
+```powershell
+curl.exe -s https://<bims-url>/api/cv/stations | python -m json.tool
+```
+(or visit `/cv/stations` in the browser — the admin list page added in story D1.)
 
-### 4.2 POST to /api/cv/stations
+The new station should appear with `status: "online"` and `lastSeenAt` within the last 30 seconds (heartbeat cadence).
 
-Press **F12** → Console tab, and paste:
+### 4.2 Manual fallback — register from DevTools
+
+Use this only if the self-register step in `setup-station.sh` failed (network blip, wrong key, BIMS deploy broken) AND you can't re-run the script.
+
+Open BIMS in a browser, log in as a user with `cv:write` or `manufacturing:write` permission. Press **F12** → Console, paste:
 
 ```javascript
 fetch('/api/cv/stations', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
-    name: 'CV station test 1',                                    // match STATION_NAME
-    hostname: '<pi-cv-name>.<tailnet>.ts.net',                    // full Tailscale FQDN
+    name: 'CV station test 1',
+    hostname: '<pi-cv-name>.<tailnet>.ts.net',
     capabilities: { camera: true, scanner: true, led: false, robotArm: false },
     agentVersion: '0.1.0'
   })
 }).then(r => r.json()).then(j => console.log(JSON.stringify(j, null, 2)))
 ```
 
-You'll get back one of:
-- `{ "_id": "...", "jwtSecret": "..." }` — **first-time registration succeeded** — copy the `jwtSecret`
-- `{ "_id": "..." }` — already registered (only `_id`, no jwtSecret returned)
-- `{ "error": "..." }` — permission or validation error
-
-If you already registered and lost the jwtSecret, you'll need to re-register with a different hostname OR delete the existing CaptureStation document from MongoDB to start fresh.
-
-### 4.3 Add the JWT secret to the Pi env
-
-On the Pi, append the secret to the env file. **Use single quotes** because the secret usually contains `/` and `=`:
-
+Copy the `jwtSecret` from the response. On the Pi, append it:
 ```bash
 echo 'STATION_JWT_SECRET=<paste secret>' | sudo tee -a /etc/bims/station.env
+sudo systemctl restart bims-capture-agent
 ```
 
-If a previous attempt added the wrong secret, edit with `sudo nano /etc/bims/station.env` and replace the line.
+### 4.3 Manual fallback — rotate the secret
 
-**Verification check #4:**
+If a Pi's `STATION_JWT_SECRET` is suspected compromised or you want to rotate proactively:
+
 ```bash
-sudo grep STATION_JWT_SECRET /etc/bims/station.env
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -H "x-station-agent-key: $STATION_AGENT_KEY" \
+  -d '{
+    "stationId": "<existing station _id>",
+    "name": "<existing name>",
+    "hostname": "<existing hostname>",
+    "capabilities": { "camera": true, "scanner": true, "led": false, "robotArm": false },
+    "regenerateSecret": true
+  }' \
+  "$BIMS_URL/api/cv/stations/register"
 ```
-Should print a single line with the secret.
+
+Returns a fresh `jwtSecret`. Update `/etc/bims/station.env` and restart the agent. (An admin can also do this from the BIMS UI — see `/cv/stations/[id]` once story D2 lands.)
 
 ---
 
@@ -420,6 +433,17 @@ sudo evtest /dev/input/by-id/usb-USBScn_Chip_USBScn_Module_*-event-kbd
 ### `setup-station.sh: line 48: uuidgen: command not found`
 
 **Fix:** `sudo apt install -y uuid-runtime`, then re-run `setup-station.sh`.
+
+### `setup-station.sh` fails at the self-registration step
+
+The script POSTs to `${BIMS_URL}/api/cv/stations/register` after writing the env file. It surfaces the failure category in its output. Match the cause:
+
+| Message | Cause | Fix |
+|---|---|---|
+| `network error reaching <url>` | DNS, no internet, or BIMS_URL typo | confirm the URL works from the Pi: `curl -sS $BIMS_URL/api/cv/stations | head` |
+| `401 unauthorized` | wrong `STATION_AGENT_KEY` | confirm the value on Vercel and the wizard input match; re-run the script |
+| `registration failed (HTTP 5xx)` | BIMS deploy on a broken commit, or Mongo unreachable | check Vercel logs; if needed, fall back to manual register per Phase 4.2 |
+| `STATION_AGENT_KEY was blank — self-registration skipped` | wizard left blank (intentional or accidental) | fill the value in `/etc/bims/station.env` and re-run, OR follow Phase 4.2 |
 
 ### Sourcing `/etc/bims/station.env` from bash errors with `command not found`
 
