@@ -30,18 +30,28 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const distinctPhases = await CvImage.distinct('cartridgeTag.phase');
 	const phases = Array.from(new Set([...DEFAULT_PHASES, ...(distinctPhases as string[]).filter(Boolean)])).sort();
 
-	// Pi capture stations for the station dropdown. Token is never sent to the
-	// page payload — operator fetches it on demand via /api/cv/stations/[id]/token.
-	// Pull every station, apply C4 stale-derivation, then filter to 'online'.
-	// Avoids the prior bug where a stored status of 'online' kept a long-dead
-	// Pi visible in the dropdown until something else updated it.
+	// Pi capture stations for the station dropdown. Story E1: return ALL
+	// stations (not just online) so the operator can see why an option is
+	// unavailable. The dropdown renders status badges and disables anything
+	// that's offline or held by another operator. Tokens are never sent in
+	// the payload — operator fetches one on demand via /api/cv/stations/[id]/token.
 	const stationsRaw = await CaptureStation.find()
-		.select('_id name hostname capabilities mode assignedPhase status lastSeenAt')
+		.select(
+			'_id name hostname capabilities mode assignedPhase status lastSeenAt currentOperator'
+		)
 		.sort({ name: 1 })
 		.lean();
-	const stations = stationsRaw
-		.map((s: any) => ({ ...s, status: deriveStatus(s) }))
-		.filter((s: any) => s.status === 'online');
+	const stations = stationsRaw.map((s: any) => ({
+		...s,
+		status: deriveStatus(s),
+		currentOperator: s.currentOperator
+			? {
+					_id: s.currentOperator._id ?? null,
+					username: s.currentOperator.username ?? null,
+					since: s.currentOperator.since ?? null
+				}
+			: null
+	}));
 
 	// Optional deep-link context: arriving from /cv/projects/[id] via the
 	// "Capture cartridges →" button. ?phase= preselects the phase dropdown,

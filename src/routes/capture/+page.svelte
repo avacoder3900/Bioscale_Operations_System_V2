@@ -740,7 +740,16 @@
 					<select id="station-sel" bind:value={selectedStationId} onchange={() => onStationChange()} class="tron-input">
 						<option value={null}>(Local)</option>
 						{#each data.stations as s (s._id)}
-							<option value={s._id}>{s.name}</option>
+							{@const badge = s.status === 'online' ? '🟢' : s.status === 'degraded' ? '🟡' : '🔴'}
+							{@const heldByOther = s.currentOperator && s.currentOperator._id && s.currentOperator._id !== data.user._id}
+							{@const offline = s.status !== 'online' && s.status !== 'degraded'}
+							{@const disabled = offline || heldByOther}
+							<option value={s._id} disabled={disabled}>
+								{badge}
+								{s.name}
+								{#if offline}(offline){/if}
+								{#if heldByOther}(in use by {s.currentOperator.username}){/if}
+							</option>
 						{/each}
 					</select>
 				</div>
