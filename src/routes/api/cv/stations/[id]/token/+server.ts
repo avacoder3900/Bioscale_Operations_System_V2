@@ -14,6 +14,7 @@ import { connectDB } from '$lib/server/db/connection.js';
 import { CaptureStation } from '$lib/server/db/models/capture-station.js';
 import { AuditLog } from '$lib/server/db/models/audit-log.js';
 import { generateId } from '$lib/server/db/utils.js';
+import { hasPermission } from '$lib/server/permissions';
 import type { RequestHandler } from './$types';
 
 const JWT_TTL_MINUTES = 5;
@@ -28,11 +29,17 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 		return json({ error: 'Station has no signing secret — re-register the Pi' }, { status: 409 });
 	}
 
+	// Story F2: admin: true is asserted in the claim only when the user has
+	// cv:admin. The Pi gates remote-control commands (story F1 admin_restart)
+	// on this claim; ordinary capture sessions ignore it.
+	const isAdmin = hasPermission(locals.user, 'cv:admin');
+
 	const token = jwt.sign(
 		{
 			stationId: station._id,
 			operatorId: locals.user._id,
-			operatorUsername: locals.user.username
+			operatorUsername: locals.user.username,
+			...(isAdmin ? { admin: true } : {})
 		},
 		station.jwtSecret,
 		{ algorithm: 'HS256', expiresIn: `${JWT_TTL_MINUTES}m` }
@@ -46,7 +53,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 		changedAt: new Date(),
 		changedBy: locals.user.username,
 		reason: 'jwt_mint',
-		newData: { ttlMinutes: JWT_TTL_MINUTES }
+		newData: { ttlMinutes: JWT_TTL_MINUTES, admin: isAdmin }
 	});
 
 	return json({ token });
