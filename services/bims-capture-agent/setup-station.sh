@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # setup-station.sh — first-boot configuration for a BIMS capture station.
 #
-# Phase 1 scope: write /etc/bims/station.env from operator-provided values.
-# cloudflared installation and /api/cv/stations self-registration land in
-# Phase 5 per docs/prds/PI-CAPTURE-STATION.md §7.1.
+# Writes /etc/bims/station.env from operator-provided values, then calls
+# the BIMS self-register endpoint (per
+# docs/prds/PI-STATION-ADMIN-AND-LIFECYCLE.md story B2) to mint a
+# jwtSecret and persist it back to the env file. cloudflared install
+# is still deferred per the V1 PRD §7.1; Tailscale Serve covers TLS
+# termination in the current production topology.
 set -euo pipefail
 
 ENV_FILE="/etc/bims/station.env"
@@ -30,6 +33,27 @@ read -r -p "BIMS server URL (e.g. https://bims.example.com): " bims_url
 while [[ -z "$bims_url" ]]; do
     read -r -p "BIMS URL is required: " bims_url
 done
+
+# STATION_AGENT_KEY is the shared fleet secret matching the env var on the
+# BIMS deployment. Without it, the self-registration call below fails and
+# the operator has to register manually. Prompt blank-allowed because some
+# operators set the env file out-of-band before running this script.
+read -r -p "STATION_AGENT_KEY (from BIMS Vercel env, leave blank to skip self-register): " station_agent_key
+
+# Tailscale FQDN is what the operator's browser dials to reach the Pi over
+# wss://. Probe `tailscale status` for the canonical name; fall back to the
+# Linux hostname if Tailscale isn't installed yet.
+default_fqdn="$(hostname)"
+if command -v tailscale >/dev/null 2>&1; then
+    ts_fqdn="$(tailscale status --json 2>/dev/null \
+        | python3 -c 'import sys,json; d=json.load(sys.stdin); print((d.get("Self",{}).get("DNSName","")).rstrip("."))' \
+        2>/dev/null || true)"
+    if [[ -n "$ts_fqdn" ]]; then
+        default_fqdn="$ts_fqdn"
+    fi
+fi
+read -r -p "Tailscale FQDN [$default_fqdn]: " station_hostname
+station_hostname="${station_hostname:-$default_fqdn}"
 
 read -r -p "Station token (leave blank to generate): " station_token
 if [[ -z "$station_token" ]]; then
@@ -66,7 +90,7 @@ CLOUDFLARE_TUNNEL_TOKEN=${cf_token}
 # STATION_AGENT_KEY env var on the BIMS deployment. Paste the value
 # here after first boot — see services/bims-capture-agent/RUNBOOK.md
 # § "BIMS-side env vars".
-STATION_AGENT_KEY=
+STATION_AGENT_KEY=${station_agent_key}
 PORT=8765
 EOF
 
@@ -81,9 +105,87 @@ else
 fi
 rm -f "$tmp"
 
-cat <<EOF
+echo
+echo "Wrote ${ENV_FILE}."
 
-Wrote ${ENV_FILE}.
+# ---------------------------------------------------------------------------
+# Self-registration (story B2). Skipped if STATION_AGENT_KEY is empty.
+# 201 → first-time, parse jwtSecret out of body and append to env file.
+# 200 → already registered, BIMS keeps the existing secret; do nothing.
+# anything else → print body, exit non-zero so the operator can re-run.
+# ---------------------------------------------------------------------------
+if [[ -z "$station_agent_key" ]]; then
+    cat <<EOF
+
+STATION_AGENT_KEY was blank — self-registration skipped. Either:
+  - edit ${ENV_FILE} to set STATION_AGENT_KEY and re-run this script, OR
+  - register manually per RUNBOOK §4 "Manual re-registration".
+EOF
+else
+    echo
+    echo "Registering with BIMS at ${bims_url}/api/cv/stations/register ..."
+
+    register_body=$(cat <<JSON
+{
+  "stationId": "${station_id}",
+  "name": "${station_name}",
+  "hostname": "${station_hostname}",
+  "capabilities": { "camera": true, "scanner": true, "led": false, "robotArm": false },
+  "agentVersion": "0.1.0"
+}
+JSON
+)
+
+    register_tmp="$(mktemp)"
+    register_status=$(curl -sS -o "$register_tmp" -w '%{http_code}' \
+        -X POST \
+        -H 'Content-Type: application/json' \
+        -H "x-station-agent-key: ${station_agent_key}" \
+        --data "$register_body" \
+        "${bims_url%/}/api/cv/stations/register" || echo "000")
+
+    case "$register_status" in
+        201)
+            jwt_secret="$(python3 -c 'import sys,json; print(json.load(sys.stdin).get("jwtSecret",""))' < "$register_tmp" 2>/dev/null || true)"
+            if [[ -z "$jwt_secret" ]]; then
+                echo "  registration returned 201 but no jwtSecret found in response body:"
+                cat "$register_tmp"
+                rm -f "$register_tmp"
+                exit 1
+            fi
+            # Append STATION_JWT_SECRET. We append rather than rewrite so a
+            # re-run that hits 200 (already-registered) leaves the existing
+            # line in place — there's nothing in the 200 response to write.
+            echo "STATION_JWT_SECRET=${jwt_secret}" >> "$ENV_FILE"
+            echo "  registered (201) — STATION_JWT_SECRET written to ${ENV_FILE}."
+            ;;
+        200)
+            echo "  already registered (200) — STATION_JWT_SECRET in ${ENV_FILE} kept as-is."
+            echo "  (to rotate the secret, edit setup-station.sh or POST register with regenerateSecret: true)"
+            ;;
+        401)
+            echo "  401 unauthorized — STATION_AGENT_KEY does not match the BIMS value."
+            echo "  Fix: confirm the key on Vercel matches what was entered, then re-run."
+            cat "$register_tmp"
+            rm -f "$register_tmp"
+            exit 1
+            ;;
+        000)
+            echo "  network error reaching ${bims_url} — check BIMS_URL and connectivity."
+            rm -f "$register_tmp"
+            exit 1
+            ;;
+        *)
+            echo "  registration failed (HTTP ${register_status}):"
+            cat "$register_tmp"
+            rm -f "$register_tmp"
+            exit 1
+            ;;
+    esac
+    rm -f "$register_tmp"
+fi
+
+cat <<EOF
 
 Next steps:
   1. Install the agent at /opt/bims-capture-agent (clone repo + create venv).
@@ -91,6 +193,6 @@ Next steps:
        sudo systemctl daemon-reload
        sudo systemctl enable --now bims-capture-agent
   3. Verify with:  curl http://localhost:8765/health
-  4. Phase 5 will install cloudflared and self-register with BIMS.
+  4. Confirm registration: curl ${bims_url}/api/cv/stations | python3 -m json.tool
 
 EOF
