@@ -4,6 +4,8 @@ Step-by-step guide for bringing a Raspberry Pi 5 capture station from a blank SD
 
 Validated against `bims-capture-agent` branch, commit `f1109e8b` and later.
 
+> **Shortcut:** if you already have Tailscale installed + auth'd on the Pi, you can skip the manual phase walkthrough below and run `provision-station.sh` for a one-shot setup. See § "One-shot provisioning" near the end.
+
 ---
 
 ## Hardware baseline
@@ -544,6 +546,67 @@ curl.exe -s https://<pi-cv-name>.<tailnet>.ts.net/health | findstr "true"
 Two `true` matches (for `camera_ok` and `scanner_ok`) means the agent is alive and seeing both devices.
 
 ---
+
+## One-shot provisioning
+
+For an experienced operator (you've done this once and know it works), `provision-station.sh` replays Phases 3-6 plus Tailscale Serve as a single idempotent script. Phases 1-2 (Pi + Tailscale) still need to be done by hand because Tailscale auth requires opening a URL in a browser.
+
+### Prerequisites
+
+- Pi booted from a freshly-flashed SD card (Phase 1)
+- SSH access (Phase 1.4)
+- Tailscale installed + auth'd (Phase 2). The script verifies but doesn't install Tailscale because the auth step is interactive.
+- Sparse-checkout of the agent — **the script does this for you** (so a remote operator can run it without first manually cloning the repo)
+- `STATION_AGENT_KEY` set on Vercel (BIMS-side prerequisite)
+
+### The "remote operator runs everything via SSH" flow
+
+1. Operator SSHes into the Pi as `<user>` (typically `brevitest`).
+2. Install Tailscale and auth:
+   ```bash
+   curl -fsSL https://tailscale.com/install.sh | sh
+   sudo tailscale up --hostname=<pi-cv-name> --ssh
+   ```
+   Open the auth URL in a browser, approve.
+3. Fetch the provision script (sparse-checkout just this one file, in case the repo is private and the operator has only an HTTPS token):
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/avacoder3900/Bioscale_Operations_System_V2/bims-capture-agent/services/bims-capture-agent/provision-station.sh -o /tmp/provision-station.sh
+   ```
+   (If the repo is private and curl 404s, copy the file in via `scp` from your laptop instead.)
+4. Run it with env vars:
+   ```bash
+   sudo BIMS_URL='https://<vercel-deployment-url>' \
+        STATION_AGENT_KEY='<paste-from-vercel-env>' \
+        STATION_NAME='Wax Fill Bench 1' \
+        WIFI_SSID='Fannin_WIFI' \
+        bash /tmp/provision-station.sh
+   ```
+5. Wait ~3-10 min (the slow step is `pip install aiortc + opencv-python`).
+6. The script prints `provision-station.sh: DONE.` and emits station ID + Tailscale URL.
+7. In BIMS, refresh `/cv/stations`. New station should appear with `status: online` within 30 s.
+
+### Idempotent
+
+Safe to re-run if anything failed mid-way. Each phase checks before acting:
+
+- apt install → noop if packages present
+- git checkout → `git pull` instead of fresh init
+- venv → noop if `.venv/` exists
+- env file → leaves in place if present; remove `/etc/bims/station.env` to force rewrite
+- BIMS register → skipped if `STATION_JWT_SECRET` is already set
+- bims user → noop if user exists
+- symlink → `ln -sfn` (replaces atomically)
+- systemd → daemon-reload picks up any unit change
+
+### Reusable across stations
+
+The script takes no Pi-specific arguments except via env vars, so spinning up the second / third / Nth Pi is:
+
+```bash
+sudo BIMS_URL='...' STATION_AGENT_KEY='...' STATION_NAME='Wax Fill Bench 2' bash provision-station.sh
+```
+
+with a fresh station name. The agent self-registers under that name; everything else is automatic.
 
 ## Things not yet done (planned phases)
 
