@@ -20,6 +20,7 @@ from typing import Optional
 
 import cv2
 from aiortc import VideoStreamTrack
+from aiortc.contrib.media import MediaRelay
 from av import VideoFrame
 
 log = logging.getLogger("bims-capture-agent.camera")
@@ -41,6 +42,7 @@ _FRAME_INTERVAL = 1.0 / _TARGET_FPS
 
 _track_lock = threading.Lock()
 _track: Optional["CameraTrack"] = None
+_relay: Optional[MediaRelay] = None
 _camera_ok = False
 
 
@@ -126,9 +128,11 @@ class CameraTrack(VideoStreamTrack):
                 self._cap = None
 
 
-def get_camera_track() -> Optional[CameraTrack]:
-    """Lazy singleton — first call opens the camera, later calls reuse it."""
-    global _track, _camera_ok
+def _ensure_source_track() -> Optional[CameraTrack]:
+    """Lazy singleton source track — only one cv2.VideoCapture handle is
+    ever opened, since /dev/video0 can't be opened concurrently. New PCs
+    get fresh proxies from the MediaRelay below."""
+    global _track, _relay, _camera_ok
     with _track_lock:
         if _track is None:
             try:
@@ -142,16 +146,35 @@ def get_camera_track() -> Optional[CameraTrack]:
                 _camera_ok = False
                 return None
             _track = candidate
+            _relay = MediaRelay()
             _camera_ok = True
         return _track
 
 
+def get_camera_track():
+    """Return a fresh subscriber track from the MediaRelay, suitable for
+    pc.addTrack(). Each call returns a NEW track wrapping the singleton
+    cv2 source — fixes the wedge where re-adding the singleton track to
+    a new PC produced a "live" but muted track with no RTP flow.
+
+    Per aiortc docs (https://aiortc.readthedocs.io/en/latest/helpers.html):
+        Subscribers can be added by calling .subscribe() and the relay
+        will forward media to each one.
+
+    Returns None when the camera failed to open.
+    """
+    source = _ensure_source_track()
+    if source is None or _relay is None:
+        return None
+    return _relay.subscribe(source)
+
+
 def is_available() -> bool:
-    """True after a successful get_camera_track(); used by /health."""
+    """True after a successful camera open; used by /health."""
     return _camera_ok
 
 
 def probe() -> bool:
     """Open the camera once at startup so /health can answer accurately."""
-    get_camera_track()
+    _ensure_source_track()
     return _camera_ok
