@@ -413,12 +413,14 @@ Each successful scan beeps once. After this, the scanner remembers continuous mo
 **Cause:** the page tries local camera on mount, fails (laptop has no webcam), sets `cameraError`. Until commit `f1109e8b`, this error wasn't cleared when switching to a remote station, so the video element never rendered.
 **Fix:** ensure you're on `bims-capture-agent` commit `f1109e8b` or later. If you are, pick the Pi station from the dropdown — the error clears automatically.
 
-### Video element renders, stream is black, no errors
+### Video element renders, stream is black, no errors ✅ FIXED
 
-**Symptom:** black panel, `getVideoTracks()[0].muted === true`, no `RTCInboundRtpVideoStream` in `chrome://webrtc-internals`.
-**Cause:** aiortc's singleton camera track ends up in a state where new peer connections negotiate cleanly but no RTP flows. Happens after multiple page refreshes / station-switches accumulate stale peer connections on the agent.
-**Workaround:** **restart the agent.** `Ctrl+C` the agent process, re-run `sudo .venv/bin/python agent.py`, refresh `/capture`, re-select the Pi station. Stream resumes.
-**Root cause / proper fix:** needs work in `agent.py`'s `teardown_pc` to properly release track subscriptions, OR change `addTrack` ordering relative to `setRemoteDescription`. Coordinate with Jacob.
+**Status:** resolved in commit `9ffdb1cd` (camera.py now uses `aiortc.contrib.media.MediaRelay` so each new browser session gets a fresh subscriber track instead of sharing a wedged singleton).
+
+If you encounter the symptom on a Pi running an older agent (pre-`9ffdb1cd`), the workaround was:
+- `sudo systemctl restart bims-capture-agent` (or run `python restart-pi.py` from the laptop, which hits the F1 admin_restart WS path), then refresh `/capture`.
+
+For Pis running `9ffdb1cd` or later, refreshing the browser should "just work" — repeatedly connecting, switching, refreshing no longer wedges the track.
 
 ### Vercel `/capture` returns 500 with "window is not defined"
 
