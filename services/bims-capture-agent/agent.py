@@ -218,6 +218,53 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
                 elif cmd == "close":
                     await ws.close(code=1000, message=b"client requested")
                     break
+                elif cmd == "get_camera_params":
+                    # Remote camera tuning: browser asks for current values
+                    # to populate slider defaults on first open. Returns
+                    # every CAP_PROP the agent knows about, with whatever
+                    # value cv2 reports back (often 0 for unsupported props,
+                    # which the UI can use to skip / hide the slider).
+                    params = camera_mod.get_camera_params()
+                    await ws.send_json(
+                        {
+                            "event": "camera_params",
+                            "params": params,
+                            "known": camera_mod.known_param_names(),
+                        }
+                    )
+                elif cmd == "set_camera_param":
+                    # Adjust one CAP_PROP and echo back the value the
+                    # camera reports after the set (may differ from the
+                    # request due to driver clamping). Browser updates its
+                    # slider position to the actual value.
+                    prop = payload.get("prop")
+                    value = payload.get("value")
+                    if not isinstance(prop, str) or not isinstance(value, (int, float)):
+                        await ws.send_json(
+                            {
+                                "event": "error",
+                                "code": "bad_set_camera_param",
+                                "message": "prop (string) and value (number) required",
+                            }
+                        )
+                        continue
+                    actual = camera_mod.set_camera_param(prop, float(value))
+                    if actual is None:
+                        await ws.send_json(
+                            {
+                                "event": "error",
+                                "code": "set_camera_param_failed",
+                                "message": f"prop {prop!r} unknown or set rejected",
+                            }
+                        )
+                    else:
+                        await ws.send_json(
+                            {
+                                "event": "camera_param_set",
+                                "prop": prop,
+                                "value": actual,
+                            }
+                        )
                 elif cmd == "admin_restart":
                     # Story F1: BIMS admin asks the agent to restart itself.
                     # The known-good workaround for the singleton-track RTP

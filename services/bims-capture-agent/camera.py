@@ -40,6 +40,27 @@ _TARGET_HEIGHT = 720
 _TARGET_FPS = 15
 _FRAME_INTERVAL = 1.0 / _TARGET_FPS
 
+# Friendly-name → (cv2.CAP_PROP_*, value-type, [min, max], rough-typical-range)
+# Operators send {prop: "exposure", value: -5}; we map to the cv2 enum here
+# so the WS protocol stays human-readable. Min/max are advisory — different
+# USB cameras advertise wildly different ranges, so we clamp here just for
+# UI safety and let the camera reject out-of-range values silently.
+CAMERA_PROPS: dict[str, tuple[int, str, float, float]] = {
+    "brightness": (cv2.CAP_PROP_BRIGHTNESS, "int", 0, 255),
+    "contrast": (cv2.CAP_PROP_CONTRAST, "int", 0, 255),
+    "saturation": (cv2.CAP_PROP_SATURATION, "int", 0, 255),
+    "hue": (cv2.CAP_PROP_HUE, "int", -180, 180),
+    "gain": (cv2.CAP_PROP_GAIN, "int", 0, 255),
+    "exposure": (cv2.CAP_PROP_EXPOSURE, "int", -13, 0),
+    "auto_exposure": (cv2.CAP_PROP_AUTO_EXPOSURE, "int", 1, 3),  # 1=manual, 3=auto
+    "autofocus": (cv2.CAP_PROP_AUTOFOCUS, "int", 0, 1),
+    "focus": (cv2.CAP_PROP_FOCUS, "int", 0, 255),
+    "auto_wb": (cv2.CAP_PROP_AUTO_WB, "int", 0, 1),
+    "wb_temperature": (cv2.CAP_PROP_WB_TEMPERATURE, "int", 2800, 6500),
+    "sharpness": (cv2.CAP_PROP_SHARPNESS, "int", 0, 255),
+    "gamma": (cv2.CAP_PROP_GAMMA, "int", 1, 500),
+}
+
 _track_lock = threading.Lock()
 _track: Optional["CameraTrack"] = None
 _relay: Optional[MediaRelay] = None
@@ -127,6 +148,46 @@ class CameraTrack(VideoStreamTrack):
             finally:
                 self._cap = None
 
+    # ---------------- camera parameter set/get -------------------------
+    def get_param(self, name: str) -> Optional[float]:
+        """Read one CAP_PROP value from the underlying cv2 capture."""
+        if self._cap is None or name not in CAMERA_PROPS:
+            return None
+        cv_prop, _, _, _ = CAMERA_PROPS[name]
+        try:
+            return float(self._cap.get(cv_prop))
+        except Exception:
+            log.exception("camera get_param(%s) failed", name)
+            return None
+
+    def get_all_params(self) -> dict[str, float]:
+        """Read every known CAP_PROP. Returns name → value. Skips props
+        the driver reports as 0 AND known to be camera-specific (some
+        drivers silently return 0 for unsupported properties)."""
+        out: dict[str, float] = {}
+        for name in CAMERA_PROPS:
+            val = self.get_param(name)
+            if val is not None:
+                out[name] = val
+        return out
+
+    def set_param(self, name: str, value: float) -> Optional[float]:
+        """Write one CAP_PROP and return the value the camera reports back
+        after the set (which may be clamped or rejected). Returns None if
+        the prop isn't recognized or the cv2 call failed."""
+        if self._cap is None or name not in CAMERA_PROPS:
+            return None
+        cv_prop, _, lo, hi = CAMERA_PROPS[name]
+        clamped = max(lo, min(hi, value))
+        try:
+            self._cap.set(cv_prop, clamped)
+            actual = float(self._cap.get(cv_prop))
+            log.info("camera set %s=%s (actual=%s)", name, clamped, actual)
+            return actual
+        except Exception:
+            log.exception("camera set_param(%s, %s) failed", name, value)
+            return None
+
 
 def _ensure_source_track() -> Optional[CameraTrack]:
     """Lazy singleton source track — only one cv2.VideoCapture handle is
@@ -178,3 +239,28 @@ def probe() -> bool:
     """Open the camera once at startup so /health can answer accurately."""
     _ensure_source_track()
     return _camera_ok
+
+
+# ----------------- module-level param helpers -----------------------
+def get_camera_params() -> dict[str, float]:
+    """Snapshot of every known camera parameter as a name → value dict.
+    Used by the BIMS UI to populate slider defaults on first open."""
+    source = _ensure_source_track()
+    if source is None:
+        return {}
+    return source.get_all_params()
+
+
+def set_camera_param(name: str, value: float) -> Optional[float]:
+    """Adjust one camera parameter. Returns the value the camera reports
+    back (which may differ from what was requested due to driver clamping).
+    Returns None if the prop name is unknown or the set failed."""
+    source = _ensure_source_track()
+    if source is None:
+        return None
+    return source.set_param(name, value)
+
+
+def known_param_names() -> list[str]:
+    """List of friendly-name keys the UI can offer as sliders."""
+    return list(CAMERA_PROPS.keys())

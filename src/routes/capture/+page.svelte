@@ -57,6 +57,48 @@
 	// the right fit for "the station you're using just died — pick another."
 	let stationDownAt = $state<{ name: string; at: number } | null>(null);
 
+	// Remote-camera tuning panel — only meaningful when a Pi station is the
+	// active video source. cameraParams is populated by the WS handler for
+	// {event: 'camera_params'} which the agent sends after we POST a
+	// {cmd: 'get_camera_params'}; slider changes get throttled per-prop and
+	// fire {cmd: 'set_camera_param', prop, value} back.
+	let cameraParams = $state<Record<string, number>>({});
+	let cameraParamsKnown = $state<string[]>([]);
+	let cameraParamsExpanded = $state(false);
+	const cameraParamThrottle: Record<string, ReturnType<typeof setTimeout>> = {};
+	const CAMERA_PARAM_THROTTLE_MS = 100;
+	const CAMERA_PARAM_LABELS: Record<string, { label: string; min: number; max: number; step?: number }> = {
+		brightness: { label: 'Brightness', min: 0, max: 255 },
+		contrast: { label: 'Contrast', min: 0, max: 255 },
+		saturation: { label: 'Saturation', min: 0, max: 255 },
+		hue: { label: 'Hue', min: -180, max: 180 },
+		gain: { label: 'Gain', min: 0, max: 255 },
+		exposure: { label: 'Exposure', min: -13, max: 0 },
+		auto_exposure: { label: 'Auto Exposure (1=manual, 3=auto)', min: 1, max: 3, step: 1 },
+		autofocus: { label: 'Autofocus', min: 0, max: 1, step: 1 },
+		focus: { label: 'Focus', min: 0, max: 255 },
+		auto_wb: { label: 'Auto WB', min: 0, max: 1, step: 1 },
+		wb_temperature: { label: 'WB Temperature (K)', min: 2800, max: 6500 },
+		sharpness: { label: 'Sharpness', min: 0, max: 255 },
+		gamma: { label: 'Gamma', min: 1, max: 500 }
+	};
+
+	function setCameraParam(prop: string, value: number) {
+		if (!ws || ws.readyState !== WebSocket.OPEN) return;
+		// Optimistic local update so the slider feels responsive; the WS
+		// response will overwrite with the actual value the camera accepted.
+		cameraParams = { ...cameraParams, [prop]: value };
+		if (cameraParamThrottle[prop]) clearTimeout(cameraParamThrottle[prop]);
+		cameraParamThrottle[prop] = setTimeout(() => {
+			try {
+				ws?.send(JSON.stringify({ cmd: 'set_camera_param', prop, value }));
+			} catch {
+				/* socket may have closed mid-throttle; next slider event will retry */
+			}
+			delete cameraParamThrottle[prop];
+		}, CAMERA_PARAM_THROTTLE_MS);
+	}
+
 	// Just-captured strip (newest first, max 10). `inference` is filled in
 	// async after capture — runPhaseInference is fire-and-forget on the server,
 	// so we poll /api/cv/inspections?imageId=X until status flips.
@@ -251,6 +293,13 @@
 			stream = null;
 		}
 		if (videoEl) videoEl.srcObject = null;
+		// Clear the remote-camera tuning panel; new station's WS will
+		// repopulate from its own camera. Cancel any throttled sends so a
+		// stale prop write doesn't hit the next station.
+		cameraParams = {};
+		cameraParamsKnown = [];
+		for (const t of Object.values(cameraParamThrottle)) clearTimeout(t);
+		for (const k of Object.keys(cameraParamThrottle)) delete cameraParamThrottle[k];
 		if (lockedStationId) {
 			const releaseId = lockedStationId;
 			lockedStationId = null;
@@ -339,6 +388,21 @@
 				} catch (e) {
 					flashBanner('err', `WebRTC offer failed: ${e instanceof Error ? e.message : e}`);
 				}
+				// Request current camera params so the settings panel can
+				// populate slider defaults from what the camera actually
+				// reports rather than from the LABELS map mins.
+				try { sock.send(JSON.stringify({ cmd: 'get_camera_params' })); } catch { /* */ }
+				return;
+			}
+
+			if (msg.event === 'camera_params' && msg.params) {
+				cameraParams = msg.params;
+				cameraParamsKnown = Array.isArray(msg.known) ? msg.known : Object.keys(msg.params);
+				return;
+			}
+
+			if (msg.event === 'camera_param_set' && typeof msg.prop === 'string') {
+				cameraParams = { ...cameraParams, [msg.prop]: msg.value };
 				return;
 			}
 
@@ -842,6 +906,58 @@
 				<video bind:this={videoEl} class="aspect-video w-full rounded" playsinline autoplay muted></video>
 			{/if}
 		</div>
+
+		<!-- Remote camera tuning (Pi station only). Collapsible to keep the
+		     main capture flow uncluttered; expand when an operator needs to
+		     dial in exposure / focus / white balance for the room. -->
+		{#if selectedStationId && cameraParamsKnown.length > 0}
+			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
+				<button
+					type="button"
+					onclick={() => (cameraParamsExpanded = !cameraParamsExpanded)}
+					class="flex w-full items-center justify-between rounded-t-lg px-4 py-2 text-left text-sm font-medium text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-bg-tertiary)]"
+				>
+					<span>🎛 Camera settings (Pi station)</span>
+					<svg
+						class="h-4 w-4 transition-transform {cameraParamsExpanded ? 'rotate-180' : ''}"
+						fill="none"
+						viewBox="0 0 24 24"
+						stroke="currentColor"
+					>
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+					</svg>
+				</button>
+				{#if cameraParamsExpanded}
+					<div class="grid gap-3 border-t border-[var(--color-tron-border)] p-4 sm:grid-cols-2">
+						{#each cameraParamsKnown as prop (prop)}
+							{@const cfg = CAMERA_PARAM_LABELS[prop]}
+							{#if cfg}
+								<div>
+									<div class="flex items-baseline justify-between gap-2">
+										<label for={`cp-${prop}`} class="text-xs text-[var(--color-tron-text-secondary)]">
+											{cfg.label}
+										</label>
+										<span class="font-mono text-xs text-[var(--color-tron-cyan)]">
+											{cameraParams[prop] ?? '?'}
+										</span>
+									</div>
+									<input
+										id={`cp-${prop}`}
+										type="range"
+										min={cfg.min}
+										max={cfg.max}
+										step={cfg.step ?? 1}
+										value={cameraParams[prop] ?? cfg.min}
+										oninput={(e) => setCameraParam(prop, Number((e.currentTarget as HTMLInputElement).value))}
+										class="w-full"
+									/>
+								</div>
+							{/if}
+						{/each}
+					</div>
+				{/if}
+			</div>
+		{/if}
 
 		<!-- Action bar -->
 		<div class="flex items-center justify-between gap-3">
