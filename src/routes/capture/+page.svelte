@@ -402,9 +402,28 @@
 	async function handleScan(rawCode: string, source: 'handheld' | 'auto' = 'handheld') {
 		const code = rawCode.trim();
 		if (!code) return;
-		// Auto-scan re-detects the locked cartridge every tick — skip to preserve
-		// the in-flight 2-photo session. Handheld re-scans are intentional and proceed.
-		if (source === 'auto' && code === cartridgeId) return;
+
+		// Same code as currently locked → no-op for any source. (Was previously
+		// limited to 'auto'; handheld re-scans used to silently re-lock + reset
+		// the session. With lock-until-done that's the wrong default — the
+		// only legitimate re-trigger of the same code is "operator wants the
+		// retake dialog," which they reach via Capture-after-2-photos instead.)
+		if (code === cartridgeId) return;
+
+		// Lock-until-done guard: a cartridge is locked AND the 2-photo session
+		// is still in progress → ignore any DIFFERENT scan code. Stops wedge
+		// re-reads and jsQR sightings of other cartridges from stomping on the
+		// in-flight workflow. Operator must finish photos OR click "Release"
+		// (clearCartridgeForNext) before a new cartridge can lock.
+		if (cartridgeId && sessionPhotos.length < PHOTOS_PER_CARTRIDGE) {
+			if (source === 'handheld') {
+				// Intentional trigger pull — operator deserves feedback.
+				flashBanner('info', `Still on ${cartridgeId} (${sessionPhotos.length}/${PHOTOS_PER_CARTRIDGE} photos). Finish or click "Release lock" to scan a new cartridge.`, 2800);
+			}
+			// jsQR / Pi-scanner 'auto' sources are silently ignored — they fire
+			// continuously, so toasts would spam.
+			return;
+		}
 
 		try {
 			const res = await fetch(`/api/cv/lookup-cartridge?code=${encodeURIComponent(code)}`);
@@ -659,7 +678,7 @@
 			<div>
 				<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">Capture Station</h1>
 				<p class="text-xs text-[var(--color-tron-text-secondary)]">
-					Hold a cartridge in front of the camera (auto-scans every 2s) or use the USB scanner. Press Space to capture front, then back. Show the next cartridge to switch.
+					Scan or hold a cartridge in front of the camera to lock it. Press Space (×2) for front + back. While locked, other scans are ignored — finish the 2 photos or click "Release lock" to switch cartridges.
 				</p>
 			</div>
 			<div class="text-xs text-[var(--color-tron-text-secondary)]">
@@ -741,10 +760,23 @@
 				<div class="flex-1 min-w-[200px]">
 					<div class="text-xs uppercase text-[var(--color-tron-text-secondary)]">Cartridge</div>
 					{#if cartridgeId}
-						<div class="font-mono text-lg text-[var(--color-tron-green,#39ff14)]">🟢 {cartridgeId}</div>
-						<div class="text-xs text-[var(--color-tron-text-secondary)]">
-							{cartridgeStatus ?? 'unknown'} · {cartridgePhotoCount} prior photo{cartridgePhotoCount === 1 ? '' : 's'}
+						<div class="flex items-center gap-2">
+							<span class="font-mono text-lg text-[var(--color-tron-green,#39ff14)]">🟢 {cartridgeId}</span>
+							{#if sessionPhotos.length < PHOTOS_PER_CARTRIDGE}
+								<span class="rounded bg-[rgba(255,215,0,0.15)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-tron-yellow,#ffd700)]" title="Other scans are ignored until you take {PHOTOS_PER_CARTRIDGE} photos or click Release.">🔒 LOCKED</span>
+							{/if}
 						</div>
+						<div class="text-xs text-[var(--color-tron-text-secondary)]">
+							{cartridgeStatus ?? 'unknown'} · {cartridgePhotoCount} prior · session {sessionPhotos.length}/{PHOTOS_PER_CARTRIDGE}
+						</div>
+						<button
+							type="button"
+							onclick={clearCartridgeForNext}
+							class="mt-1 rounded border border-[var(--color-tron-border)] px-2 py-0.5 text-[10px] uppercase text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
+							title="Release the lock so you can scan a different cartridge before finishing this one"
+						>
+							Release lock
+						</button>
 					{:else}
 						<div class="font-mono text-lg text-[var(--color-tron-red,#ff3366)]">⚠ Scan to start</div>
 					{/if}
