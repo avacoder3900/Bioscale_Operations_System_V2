@@ -657,11 +657,17 @@
 		})();
 		refocusInterval = setInterval(refocusScanner, 500);
 		scanLoopInterval = setInterval(autoScanTick, AUTO_SCAN_INTERVAL_MS);
-		window.addEventListener('beforeunload', onBeforeUnload);
+		if (typeof window !== 'undefined') {
+			window.addEventListener('beforeunload', onBeforeUnload);
+		}
 	});
 
 	onDestroy(() => {
-		window.removeEventListener('beforeunload', onBeforeUnload);
+		// Svelte 5 invokes onDestroy during SSR teardown (#close_render), so
+		// guard the window access — server has no window object.
+		if (typeof window !== 'undefined') {
+			window.removeEventListener('beforeunload', onBeforeUnload);
+		}
 		teardownStation();
 		stopCamera();
 		if (bannerTimer) clearTimeout(bannerTimer);
