@@ -656,7 +656,14 @@
 			scanInputEl?.focus();
 		})();
 		refocusInterval = setInterval(refocusScanner, 500);
-		scanLoopInterval = setInterval(autoScanTick, AUTO_SCAN_INTERVAL_MS);
+		// Continuous jsQR auto-scan disabled per operator request — the 2 s
+		// camera-driven scan loop was overriding workflows when the wedge
+		// scanner was in continuous mode (double reads, ambient triggers).
+		// Single-scan flow now: every lock is an explicit wedge trigger pull
+		// (or a Pi-station scan event, which is already one-shot per Enter).
+		// autoScanTick + scanCanvas + lastAutoScanCode are kept but unwired;
+		// flip this back on with `setInterval(autoScanTick, …)` if you want
+		// continuous behavior again.
 		if (typeof window !== 'undefined') {
 			window.addEventListener('beforeunload', onBeforeUnload);
 		}
@@ -684,7 +691,7 @@
 			<div>
 				<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">Capture Station</h1>
 				<p class="text-xs text-[var(--color-tron-text-secondary)]">
-					Scan or hold a cartridge in front of the camera to lock it. Press Space (×2) for front + back. While locked, other scans are ignored — finish the 2 photos or click "Release lock" to switch cartridges.
+					Pull the USB scanner trigger to lock a cartridge. Press Space (×2) for front + back photos. While locked, other scans are ignored — finish both photos or click "Release lock" to switch cartridges.
 				</p>
 			</div>
 			<div class="text-xs text-[var(--color-tron-text-secondary)]">
