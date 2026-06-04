@@ -37,10 +37,20 @@ export const GET: RequestHandler = async ({ url, request }) => {
 		labels[img.imageUrl] = img.label;
 	}
 
+	// Hand the runner its model-upload target so it needs no R2 creds of its own.
+	// Images download via their public URLs; the trained model uploads through the
+	// same Cloudflare Worker the capture flow uses. R2 creds stay only in Vercel.
+	const modelKey = `cv/${projectId}/models/model.onnx`;
+	const workerUrl = env.R2_WORKER_URL;
+	if (!workerUrl) return json({ error: 'R2_WORKER_URL not configured' }, { status: 500 });
+
 	return json({
 		projectId,
 		confidenceThreshold: project.confidenceThreshold ?? 0.5,
 		imageUrls,
-		labels
+		labels,
+		modelKey,
+		modelUploadUrl: `${workerUrl}/upload/${encodeURIComponent(modelKey)}`,
+		modelUploadSecret: env.R2_UPLOAD_SECRET || 'brevitest-r2-upload-key-2026'
 	});
 };

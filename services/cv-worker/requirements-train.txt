@@ -1,7 +1,6 @@
-# Minimal deps for the CI trainer (train_cli.py). Excludes the FastAPI/uvicorn/
-# opencv/onnxruntime bits the long-lived worker needs but the one-shot CLI does
-# not — keeps the GitHub Actions install fast. anomalib pulls torch + pillow +
-# numpy transitively.
+# Minimal deps for the CI trainer (train_cli.py). No boto3/R2 SDK — the runner
+# uses plain HTTP (urllib) for image download + model upload, so it needs no R2
+# creds. Excludes the FastAPI/uvicorn/opencv/onnxruntime bits the long-lived
+# worker needs. anomalib pulls torch + pillow + numpy transitively.
 torch>=2.2.0
 anomalib>=1.0.0
-boto3>=1.34.0
