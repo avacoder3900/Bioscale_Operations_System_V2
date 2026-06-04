@@ -3,6 +3,7 @@ import { env } from '$env/dynamic/private';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
+import { getR2Url } from '$lib/server/services/r2';
 import type { RequestHandler } from './$types';
 
 /**
@@ -25,17 +26,21 @@ export const GET: RequestHandler = async ({ url, request }) => {
 		.lean()) as any;
 	if (!project) return json({ error: 'Project not found' }, { status: 404 });
 
+	const totalImages = await CvImage.countDocuments({ projectId });
 	const images = (await CvImage.find({ projectId, label: { $ne: null } })
-		.select('imageUrl label')
+		.select('imageUrl filePath label')
 		.lean()) as any[];
 
 	const labels: Record<string, string> = {};
 	const imageUrls: string[] = [];
 	for (const img of images) {
-		if (!img.imageUrl) continue;
-		imageUrls.push(img.imageUrl);
-		labels[img.imageUrl] = img.label;
+		// Fall back to building the public URL from filePath if imageUrl is unset.
+		const u = img.imageUrl || (img.filePath ? getR2Url(img.filePath) : null);
+		if (!u) continue;
+		imageUrls.push(u);
+		labels[u] = img.label;
 	}
+	const approved = Object.values(labels).filter((l) => l === 'approved').length;
 
 	// Hand the runner its model-upload target so it needs no R2 creds of its own.
 	// Images download via their public URLs; the trained model uploads through the
@@ -47,6 +52,7 @@ export const GET: RequestHandler = async ({ url, request }) => {
 	return json({
 		projectId,
 		confidenceThreshold: project.confidenceThreshold ?? 0.5,
+		counts: { totalImages, labeled: imageUrls.length, approved },
 		imageUrls,
 		labels,
 		modelKey,
