@@ -1,13 +1,13 @@
 import { json, error } from '@sveltejs/kit';
+import { env } from '$env/dynamic/private';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { CvInspection } from '$lib/server/db/models/cv-inspection.js';
 import { generateId } from '$lib/server/db/utils.js';
-import { runInference } from '$lib/server/services/cv-bridge';
 import type { RequestHandler } from './$types';
 
-export const POST: RequestHandler = async ({ request, locals }) => {
+export const POST: RequestHandler = async ({ request, locals, url, fetch }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
 	await connectDB();
 
@@ -39,11 +39,30 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			status: 'processing'
 		});
 
-		// Call Python worker
-		const modelPath = `cv/${projectId}/models/model.onnx`;
-		const result = await runInference(image.imageUrl, modelPath);
+		// Call the co-located Vercel Python function (same deployment, same origin).
+		// CV_INFER_URL can override (e.g. local dev pointing at a running worker).
+		const inferUrl = env.CV_INFER_URL || `${url.origin}/api/ml/infer`;
+		const res = await fetch(inferUrl, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				...(env.ML_INFER_SECRET ? { 'x-ml-secret': env.ML_INFER_SECRET } : {})
+			},
+			body: JSON.stringify({
+				image_url: image.imageUrl,
+				model_path: `cv/${projectId}/models/model.onnx`,
+				threshold: project.confidenceThreshold ?? 0.5
+			})
+		});
 
-		// Update inspection with result
+		if (!res.ok) {
+			const text = await res.text();
+			await CvInspection.findByIdAndUpdate(inspectionId, { status: 'failed' });
+			return json({ error: `Inference failed (${res.status}): ${text}` }, { status: 502 });
+		}
+
+		const result = await res.json();
+
 		await CvInspection.findByIdAndUpdate(inspectionId, {
 			status: 'complete',
 			result: result.result,

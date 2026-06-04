@@ -13,6 +13,8 @@ const cvProjectSchema = new Schema({
 	annotatedCount: { type: Number, default: 0 },
 	modelStatus: { type: String, enum: ['untrained', 'training', 'trained', 'failed'], default: 'untrained' },
 	modelVersion: String,
+	// Anomaly-score cutoff for pass/fail at inference time (0..1).
+	confidenceThreshold: { type: Number, default: 0.5, min: 0, max: 1 },
 	captureSettings: {
 		mode: { type: String, enum: ['full', 'raw'], default: 'full' },
 		exposure: { type: Number, default: -5 },

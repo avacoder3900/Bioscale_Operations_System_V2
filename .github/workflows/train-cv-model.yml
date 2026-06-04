@@ -1,0 +1,53 @@
+name: Train CV Model
+
+# Ephemeral training runner. BIMS fires a repository_dispatch (type:
+# train-cv-model) from the "Train" button; GitHub spins up this runner, trains a
+# PaDiM model, uploads model.onnx to R2, reports back to BIMS, then the runner is
+# destroyed. No always-on host. Can also be run by hand from the Actions tab.
+
+on:
+  repository_dispatch:
+    types: [train-cv-model]
+  workflow_dispatch:
+    inputs:
+      projectId:
+        description: CV project id to train
+        required: true
+        type: string
+
+concurrency:
+  # Never train the same project twice at once; a newer request wins.
+  group: train-cv-${{ github.event.client_payload.projectId || github.event.inputs.projectId }}
+  cancel-in-progress: true
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve project id
+        id: vars
+        run: |
+          PID="${{ github.event.client_payload.projectId || github.event.inputs.projectId }}"
+          if [ -z "$PID" ]; then echo "No projectId provided" >&2; exit 1; fi
+          echo "projectId=$PID" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r services/cv-worker/requirements.txt
+
+      - name: Train model
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          BIMS_URL: ${{ secrets.BIMS_URL }}
+          TRAIN_CALLBACK_SECRET: ${{ secrets.TRAIN_CALLBACK_SECRET }}
+        run: python services/cv-worker/train_cli.py --project-id "${{ steps.vars.outputs.projectId }}"
