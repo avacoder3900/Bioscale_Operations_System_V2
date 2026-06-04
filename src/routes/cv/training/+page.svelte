@@ -24,7 +24,7 @@
 				trainingProject = null;
 				return;
 			}
-			trainStatus[projectId] = { status: 'training', progress: 0, message: 'Started...' };
+			trainStatus[projectId] = { status: 'training', message: 'Dispatched to CI runner…' };
 			pollStatus(projectId);
 		} catch (err: any) {
 			trainStatus[projectId] = { status: 'failed', message: err.message };
@@ -33,18 +33,30 @@
 	}
 
 	function pollStatus(projectId: string) {
+		// Training runs on a GitHub Actions runner; we poll the project's
+		// modelStatus, which the runner flips to 'trained'/'failed' via the
+		// train-complete callback. (No live progress % from CI.)
 		const timer = setInterval(async () => {
 			try {
 				const res = await fetch(`/api/cv/train?projectId=${projectId}`);
 				const json = await res.json();
-				trainStatus[projectId] = json.data;
+				const modelStatus = json.data?.modelStatus;
+				trainStatus[projectId] = {
+					status: modelStatus,
+					message:
+						modelStatus === 'trained'
+							? 'Training complete'
+							: modelStatus === 'failed'
+								? 'Training failed — check the Actions run'
+								: 'Training on CI runner…'
+				};
 				trainStatus = { ...trainStatus };
-				if (json.data.status === 'complete' || json.data.status === 'failed') {
+				if (modelStatus === 'trained' || modelStatus === 'failed') {
 					clearInterval(timer);
 					trainingProject = null;
 				}
 			} catch { /* retry */ }
-		}, 3000);
+		}, 5000);
 	}
 </script>
 
@@ -116,7 +128,7 @@
 					<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3">
 						<div class="mb-1 flex items-center justify-between text-xs">
 							<span class="text-[var(--color-tron-text-secondary)]">{status.message || ''}</span>
-							<span class="font-semibold" style="color: {status.status === 'complete' ? 'var(--color-tron-green)' : status.status === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-yellow)'}">
+							<span class="font-semibold" style="color: {status.status === 'trained' ? 'var(--color-tron-green)' : status.status === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-yellow)'}">
 								{status.status?.toUpperCase()}
 							</span>
 						</div>
