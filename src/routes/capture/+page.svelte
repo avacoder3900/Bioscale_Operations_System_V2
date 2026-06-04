@@ -655,7 +655,12 @@
 			capturePhoto();
 			return;
 		}
-		if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') return;
+		if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') {
+			// Space on a focused control (e.g. a camera-settings slider) must not
+			// scroll the page. Swallow it without triggering a capture.
+			e.preventDefault();
+			return;
+		}
 		e.preventDefault();
 		capturePhoto();
 	}
@@ -663,9 +668,14 @@
 	function refocusScanner() {
 		// Keep scanner input always focused so wedge keystrokes land in it.
 		if (scanInputEl && document.activeElement !== scanInputEl) {
-			// Don't steal focus from the camera selector or phase dropdown.
+			// Don't steal focus from the camera selector, phase dropdown, or any
+			// other focused input (e.g. the camera-settings sliders). Stealing
+			// focus back to the hidden scanner input mid-interaction yanks the
+			// slider thumb and scrolls the page to the refocused element —
+			// "the screen moves on its own." scanInputEl is itself an INPUT, but
+			// the activeElement !== scanInputEl guard above already excludes it.
 			const active = document.activeElement as HTMLElement;
-			if (active?.tagName === 'SELECT' || active?.tagName === 'BUTTON') return;
+			if (active?.tagName === 'SELECT' || active?.tagName === 'BUTTON' || active?.tagName === 'INPUT') return;
 			scanInputEl.focus();
 		}
 	}
