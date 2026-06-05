@@ -31,3 +31,9 @@ tests/ask-bims/acceptance-run-*.log
 
 # Ask BIMS generated answer sheets for human grading (output, not source)
 docs/ask-bims-acceptance-answers-*.md
+
+# Python cache + venv for services/bims-capture-agent/ (Pi-side service)
+__pycache__/
+*.pyc
+services/bims-capture-agent/.venv/
+services/bims-capture-agent/.env

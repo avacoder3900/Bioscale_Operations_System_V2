@@ -36,9 +36,20 @@
 			<h1 class="mt-1 text-2xl font-bold text-[var(--color-tron-cyan)]">{data.project.name}</h1>
 			{#if data.project.description}<p class="text-sm text-[var(--color-tron-text-secondary)]">{data.project.description}</p>{/if}
 		</div>
-		<div class="text-right text-xs text-[var(--color-tron-text-secondary)]">
-			<div>created {fmt(data.project.createdAt)}</div>
-			<div>updated {fmt(data.project.updatedAt)}</div>
+		<div class="flex flex-col items-end gap-2">
+			<a
+				href={`/capture?projectId=${encodeURIComponent(data.project.id)}${data.project.deployAtPhases[0] ? `&phase=${encodeURIComponent(data.project.deployAtPhases[0])}` : ''}`}
+				class="rounded bg-[var(--color-tron-green,#39ff14)] px-4 py-2 text-sm font-medium text-black"
+				title={data.project.activeModelVersion
+					? `Inference will auto-run for this project at phase ${data.project.deployAtPhases.join(', ') || '(none deployed)'}`
+					: 'No active model yet — capture will save images but not run inference for this project'}
+			>
+				Capture cartridges →
+			</a>
+			<div class="text-right text-xs text-[var(--color-tron-text-secondary)]">
+				<div>created {fmt(data.project.createdAt)}</div>
+				<div>updated {fmt(data.project.updatedAt)}</div>
+			</div>
 		</div>
 	</header>
 
@@ -46,7 +57,9 @@
 		<div class="rounded border border-[var(--color-tron-red,#ff3366)] bg-[rgba(255,51,102,0.08)] p-3 text-sm text-[var(--color-tron-red,#ff3366)]">{form.error}</div>
 	{/if}
 	{#if form?.success}
-		<div class="rounded border border-[var(--color-tron-green,#39ff14)] bg-[rgba(57,255,20,0.08)] p-3 text-sm text-[var(--color-tron-green,#39ff14)]">Saved.</div>
+		<div class="rounded border border-[var(--color-tron-green,#39ff14)] bg-[rgba(57,255,20,0.08)] p-3 text-sm text-[var(--color-tron-green,#39ff14)]">
+			{form.message ?? 'Saved.'}
+		</div>
 	{/if}
 
 	<!-- Summary bar -->
@@ -281,6 +294,45 @@
 
 	{:else if activeTab === 'history'}
 		<div class="space-y-4">
+			<div class="flex flex-wrap items-end justify-between gap-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
+				<div>
+					<h3 class="text-sm font-semibold uppercase text-[var(--color-tron-text-secondary)]">Train a new model</h3>
+					<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
+						Trains PaDiM on the labeled images in this project's effective member set. Needs ≥ 5 labeled images. Append-only — every run produces a new version. Promote it under the Deployment tab.
+					</p>
+					<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
+						Currently: <span class="font-mono text-[var(--color-tron-green,#39ff14)]">{data.labelStats.approved}</span> approved, <span class="font-mono text-[var(--color-tron-red,#ff3366)]">{data.labelStats.rejected}</span> rejected, {data.labelStats.unlabeled} unlabeled.
+					</p>
+				</div>
+				<form
+					method="POST"
+					action="?/train"
+					use:enhance={() => {
+						submitting = true;
+						return async ({ update }) => {
+							await update();
+							submitting = false;
+						};
+					}}
+					class="flex items-end gap-2"
+				>
+					<div>
+						<label for="train-threshold" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Confidence threshold</label>
+						<input id="train-threshold" name="confidenceThreshold" type="number" step="0.01" min="0" max="1" value="0.5" class="tron-input w-28" />
+					</div>
+					<button
+						type="submit"
+						disabled={submitting || data.labelStats.approved + data.labelStats.rejected < 5}
+						class="rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-[var(--color-tron-bg-primary)] disabled:opacity-40"
+						title={data.labelStats.approved + data.labelStats.rejected < 5
+							? 'Need at least 5 labeled images before training'
+							: 'Kick off training on the cv-worker'}
+					>
+						{submitting ? 'Starting…' : 'Train new version'}
+					</button>
+				</form>
+			</div>
+
 			<div>
 				<h3 class="mb-2 text-sm font-semibold uppercase text-[var(--color-tron-text-secondary)]">Trained models</h3>
 				{#if data.project.trainedModels.length === 0}

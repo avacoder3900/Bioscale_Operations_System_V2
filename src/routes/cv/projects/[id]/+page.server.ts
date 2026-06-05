@@ -3,8 +3,7 @@
  *   - Members:     view/add/remove member imageIds
  *   - Composition: composedOf + isLiveComposition
  *   - Deployment:  deployAtPhases, activeModelVersion, shadowModelVersion
- *   - History:     trainedModels[] table + recent inspections
- *   - Training:    (deferred to PRD 3 Phase 2)
+ *   - History:     trainedModels[] table + recent inspections + train button
  */
 import { error, fail, redirect } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
@@ -203,6 +202,31 @@ export const actions: Actions = {
 		await connectDB();
 		await CvProject.findByIdAndDelete(params.id);
 		redirect(303, '/cv/projects');
+	},
+
+	train: async ({ params, locals, fetch, request }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		const form = await request.formData();
+		const rawThreshold = form.get('confidenceThreshold')?.toString();
+		const confidenceThreshold = rawThreshold ? Number(rawThreshold) : undefined;
+
+		const resp = await fetch('/api/cv/train', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ projectId: params.id, confidenceThreshold })
+		});
+		const data = await resp.json().catch(() => ({}));
+		if (!resp.ok) {
+			return fail(resp.status, {
+				error: data?.error ?? `Training failed (HTTP ${resp.status})`,
+				section: 'train'
+			});
+		}
+		return {
+			success: true,
+			section: 'train',
+			message: `Training kicked off — version ${data.version} (${data.sampleCount} labeled samples). Worker is processing; refresh the History tab in ~1 min.`
+		};
 	}
 };
 

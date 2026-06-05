@@ -1,0 +1,21 @@
+[Unit]
+Description=BIMS Capture Agent (Pi-side station service)
+Documentation=https://github.com/avacoder3900/Bioscale_Operations_System_V2 docs/prds/PI-CAPTURE-STATION.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bims
+Group=bims
+SupplementaryGroups=input video
+EnvironmentFile=/etc/bims/station.env
+WorkingDirectory=/opt/bims-capture-agent
+ExecStart=/opt/bims-capture-agent/.venv/bin/python /opt/bims-capture-agent/agent.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
