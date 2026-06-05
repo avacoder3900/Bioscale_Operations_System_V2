@@ -64,6 +64,12 @@
 	// fire {cmd: 'set_camera_param', prop, value} back.
 	let cameraParams = $state<Record<string, number>>({});
 	let cameraParamsKnown = $state<string[]>([]);
+	// Real per-control ranges from the agent (V4L2 where available, advisory
+	// fallback otherwise). Drives slider min/max/step so the thumb can actually
+	// reach the camera's true limits. source: 'v4l2' = camera's real range,
+	// 'fallback' = our guess.
+	type CamRange = { min: number; max: number; step?: number; default?: number; source?: string };
+	let cameraParamRanges = $state<Record<string, CamRange>>({});
 	let cameraParamsExpanded = $state(false);
 	const cameraParamThrottle: Record<string, ReturnType<typeof setTimeout>> = {};
 	const CAMERA_PARAM_THROTTLE_MS = 100;
@@ -307,6 +313,7 @@
 		// stale prop write doesn't hit the next station.
 		cameraParams = {};
 		cameraParamsKnown = [];
+		cameraParamRanges = {};
 		for (const t of Object.values(cameraParamThrottle)) clearTimeout(t);
 		for (const k of Object.keys(cameraParamThrottle)) delete cameraParamThrottle[k];
 		// Drop any in-flight scan trigger — it belonged to the old station.
@@ -410,6 +417,7 @@
 			if (msg.event === 'camera_params' && msg.params) {
 				cameraParams = msg.params;
 				cameraParamsKnown = Array.isArray(msg.known) ? msg.known : Object.keys(msg.params);
+				cameraParamRanges = msg.ranges && typeof msg.ranges === 'object' ? msg.ranges : {};
 				return;
 			}
 
@@ -1032,28 +1040,38 @@
 					<div class="grid gap-3 border-t border-[var(--color-tron-border)] p-4 sm:grid-cols-2">
 						{#each cameraParamsKnown as prop (prop)}
 							{@const cfg = CAMERA_PARAM_LABELS[prop]}
-							{#if cfg}
-								<div>
-									<div class="flex items-baseline justify-between gap-2">
-										<label for={`cp-${prop}`} class="text-xs text-[var(--color-tron-text-secondary)]">
-											{cfg.label}
-										</label>
-										<span class="font-mono text-xs text-[var(--color-tron-cyan)]">
-											{cameraParams[prop] ?? '?'}
-										</span>
-									</div>
-									<input
-										id={`cp-${prop}`}
-										type="range"
-										min={cfg.min}
-										max={cfg.max}
-										step={cfg.step ?? 1}
-										value={cameraParams[prop] ?? cfg.min}
-										oninput={(e) => setCameraParam(prop, Number((e.currentTarget as HTMLInputElement).value))}
-										class="w-full"
-									/>
+							{@const r = cameraParamRanges[prop]}
+							{@const lo = r?.min ?? cfg?.min ?? 0}
+							{@const hi = r?.max ?? cfg?.max ?? 255}
+							{@const step = r?.step ?? cfg?.step ?? 1}
+							{@const label = cfg?.label ?? prop}
+							<div>
+								<div class="flex items-baseline justify-between gap-2">
+									<label for={`cp-${prop}`} class="text-xs text-[var(--color-tron-text-secondary)]">
+										{label}
+									</label>
+									<span class="font-mono text-xs text-[var(--color-tron-cyan)]">
+										{cameraParams[prop] ?? '?'}
+									</span>
 								</div>
-							{/if}
+								<input
+									id={`cp-${prop}`}
+									type="range"
+									min={lo}
+									max={hi}
+									{step}
+									value={cameraParams[prop] ?? lo}
+									oninput={(e) => setCameraParam(prop, Number((e.currentTarget as HTMLInputElement).value))}
+									class="w-full"
+								/>
+								<!-- Real editable bounds so the operator can see what's adjustable.
+								     "camera" = true V4L2 range, "default" = advisory fallback. -->
+								<div class="flex justify-between text-[10px] text-[var(--color-tron-text-secondary)]">
+									<span class="font-mono">{lo}</span>
+									<span>{r ? (r.source === 'v4l2' ? 'camera range' : 'default range') : 'default range'}</span>
+									<span class="font-mono">{hi}</span>
+								</div>
+							</div>
 						{/each}
 					</div>
 				{/if}
