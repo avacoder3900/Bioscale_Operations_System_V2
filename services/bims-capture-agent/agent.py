@@ -256,6 +256,10 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
                             "event": "camera_params",
                             "params": params,
                             "known": camera_mod.known_param_names(),
+                            # Real per-control min/max/step (from V4L2 when
+                            # available) so the sliders span the camera's true
+                            # editable range, not our advisory guess.
+                            "ranges": camera_mod.get_camera_ranges(),
                         }
                     )
                 elif cmd == "set_camera_param":
