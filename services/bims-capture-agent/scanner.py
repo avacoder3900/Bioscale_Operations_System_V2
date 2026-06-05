@@ -73,6 +73,25 @@ def event_queue() -> "asyncio.Queue[str]":
     return _event_queue
 
 
+def drain_pending() -> int:
+    """Discard every scan currently sitting in the queue; return the count
+    dropped.
+
+    Called when an operator arms a fresh trigger (Space on the capture page).
+    A barcode the scanner read seconds earlier — an ambient sighting, a
+    double-read — must not satisfy the new request, so we flush the queue
+    and let the *next* physical read be the one that fires scan → capture.
+    """
+    dropped = 0
+    while True:
+        try:
+            _event_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+        dropped += 1
+    return dropped
+
+
 def _find_device() -> Optional["evdev.InputDevice"]:
     if evdev is None:
         return None

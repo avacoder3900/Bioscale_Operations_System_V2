@@ -55,6 +55,14 @@ _started_at = time.monotonic()
 # also see scans — but they shouldn't be connected in the first place.
 _ws_clients: Set[web.WebSocketResponse] = set()
 
+# Set by a {cmd: "trigger_scan"} from the operator's browser (Space on the
+# capture page). The next barcode the scanner emits is broadcast tagged
+# triggered=True so the UI knows it's the answer to that Space-press and can
+# run scan → auto-capture. A single global flag mirrors the broadcast model
+# in _broadcast_scans: the BIMS one-operator-per-station lock (PRD §11)
+# guarantees at most one driving client, so per-client arming buys nothing.
+_scan_armed = False
+
 
 def _bool_env(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
@@ -218,6 +226,24 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
                 elif cmd == "close":
                     await ws.close(code=1000, message=b"client requested")
                     break
+                elif cmd == "trigger_scan":
+                    # Operator pressed Space: arm the agent so the *next*
+                    # barcode read is forwarded tagged triggered=True, and
+                    # drop any reads already queued so a stale sighting can't
+                    # satisfy this trigger. The Waveshare is a keyboard-wedge
+                    # (input-only over HID) — we can't electrically pulse its
+                    # trigger — so "trigger_scan" means "the next physical read
+                    # belongs to this Space-press."
+                    global _scan_armed
+                    dropped = scanner_mod.drain_pending()
+                    _scan_armed = True
+                    await ws.send_json(
+                        {
+                            "event": "scan_armed",
+                            "dropped": dropped,
+                            "ts": int(time.time() * 1000),
+                        }
+                    )
                 elif cmd == "get_camera_params":
                     # Remote camera tuning: browser asks for current values
                     # to populate slider defaults on first open. Returns
@@ -450,10 +476,22 @@ async def _broadcast_scans() -> None:
     the rest. Dead clients are dropped from the set on the next handler
     iteration when their /ws coroutine unwinds.
     """
+    global _scan_armed
     queue = scanner_mod.event_queue()
     while True:
         code = await queue.get()
-        message = {"event": "scan", "code": code, "ts": int(time.time() * 1000)}
+        # Consume the armed flag: this read is the answer to the operator's
+        # Space-press, so tag it and disarm. Untriggered reads (a direct pull
+        # of the scanner's own trigger) broadcast with triggered=False and the
+        # UI treats them as a plain cartridge lock.
+        triggered = _scan_armed
+        _scan_armed = False
+        message = {
+            "event": "scan",
+            "code": code,
+            "triggered": triggered,
+            "ts": int(time.time() * 1000),
+        }
         for ws in list(_ws_clients):
             if ws.closed:
                 _ws_clients.discard(ws)

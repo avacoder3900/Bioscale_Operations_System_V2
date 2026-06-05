@@ -173,6 +173,15 @@
 	let retakeInProgress = $state(false);
 	const PHOTOS_PER_CARTRIDGE = 2;
 
+	// Remote scan-then-capture (Pi station only). Space sends {cmd:'trigger_scan'}
+	// to the agent, which forwards the next physical read tagged triggered=true;
+	// the WS handler then locks the cartridge AND auto-fires the photo. This flag
+	// gates the handler + the Space key so one press maps to exactly one
+	// scan→capture, and the timer recovers if no barcode is ever read.
+	let awaitingTriggeredScan = $state(false);
+	let triggerScanTimer: ReturnType<typeof setTimeout> | null = null;
+	const TRIGGER_SCAN_TIMEOUT_MS = 6000;
+
 	let refocusInterval: ReturnType<typeof setInterval> | null = null;
 
 	// Camera-driven auto-scan: jsQR decodes the live video feed every ~2s.
@@ -300,6 +309,9 @@
 		cameraParamsKnown = [];
 		for (const t of Object.values(cameraParamThrottle)) clearTimeout(t);
 		for (const k of Object.keys(cameraParamThrottle)) delete cameraParamThrottle[k];
+		// Drop any in-flight scan trigger — it belonged to the old station.
+		awaitingTriggeredScan = false;
+		if (triggerScanTimer) { clearTimeout(triggerScanTimer); triggerScanTimer = null; }
 		if (lockedStationId) {
 			const releaseId = lockedStationId;
 			lockedStationId = null;
@@ -423,11 +435,19 @@
 			}
 
 			// Pi scanner forwards each Enter-terminated read as a single event.
-			// Funnel into the same handleScan path the local USB scanner uses;
-			// 'auto' source debounces same-cartridge re-fires (matches jsQR
-			// behavior so a scan that's already locked is a no-op).
+			// Two paths:
+			//  • triggered (operator pressed Space → {cmd:'trigger_scan'}): lock
+			//    the cartridge AND auto-capture the photo. msg.triggered comes
+			//    from the agent; awaitingTriggeredScan is the local fallback for
+			//    agents that predate trigger tagging.
+			//  • untriggered (a direct pull of the scanner's own trigger): plain
+			//    cartridge lock via the same 'auto' path the local wedge uses.
 			if (msg.event === 'scan' && typeof msg.code === 'string') {
-				handleScan(msg.code, 'auto').catch(() => null);
+				if (awaitingTriggeredScan || msg.triggered) {
+					triggeredScanCapture(msg.code).catch(() => null);
+				} else {
+					handleScan(msg.code, 'auto').catch(() => null);
+				}
 				return;
 			}
 		};
@@ -463,16 +483,21 @@
 		}
 	}
 
-	async function handleScan(rawCode: string, source: 'handheld' | 'auto' = 'handheld') {
+	// Returns the locked cartridge id when a cartridge is (or stays) locked and
+	// ready to photograph, or null when nothing should be captured (empty code,
+	// lookup failure, or a different scan rejected mid-session by lock-until-done).
+	// triggeredScanCapture relies on this to decide whether to auto-fire the photo.
+	async function handleScan(rawCode: string, source: 'handheld' | 'auto' | 'triggered' = 'handheld'): Promise<string | null> {
 		const code = rawCode.trim();
-		if (!code) return;
+		if (!code) return null;
 
 		// Same code as currently locked → no-op for any source. (Was previously
 		// limited to 'auto'; handheld re-scans used to silently re-lock + reset
 		// the session. With lock-until-done that's the wrong default — the
 		// only legitimate re-trigger of the same code is "operator wants the
 		// retake dialog," which they reach via Capture-after-2-photos instead.)
-		if (code === cartridgeId) return;
+		// We still return the locked id so a triggered re-scan can capture.
+		if (code === cartridgeId) return cartridgeId;
 
 		// Lock-until-done guard: a cartridge is locked AND the 2-photo session
 		// is still in progress → ignore any DIFFERENT scan code. Stops wedge
@@ -480,13 +505,13 @@
 		// in-flight workflow. Operator must finish photos OR click "Release"
 		// (clearCartridgeForNext) before a new cartridge can lock.
 		if (cartridgeId && sessionPhotos.length < PHOTOS_PER_CARTRIDGE) {
-			if (source === 'handheld') {
-				// Intentional trigger pull — operator deserves feedback.
+			if (source !== 'auto') {
+				// Intentional trigger pull / Space-press — operator deserves feedback.
 				flashBanner('info', `Still on ${cartridgeId} (${sessionPhotos.length}/${PHOTOS_PER_CARTRIDGE} photos). Finish or click "Release lock" to scan a new cartridge.`, 2800);
 			}
 			// jsQR / Pi-scanner 'auto' sources are silently ignored — they fire
 			// continuously, so toasts would spam.
-			return;
+			return null;
 		}
 
 		try {
@@ -497,7 +522,7 @@
 				cartridgeId = null;
 				cartridgeStatus = null;
 				cartridgePhotoCount = 0;
-				return;
+				return null;
 			}
 			const data = await res.json();
 			cartridgeId = data.cartridgeRecordId;
@@ -508,9 +533,70 @@
 			retakeInProgress = false;
 			showRetakeDialog = false;
 			flashBanner('ok', `Locked on ${cartridgeId} — ${cartridgePhotoCount} prior photos`);
+			return cartridgeId;
 		} catch (e) {
 			flashBanner('err', e instanceof Error ? e.message : 'Lookup failed');
+			return null;
 		}
+	}
+
+	function isStationLive(): boolean {
+		return !!selectedStationId && !!ws && ws.readyState === WebSocket.OPEN;
+	}
+
+	// Space on a live Pi station. Decides between "scan first, then capture" and
+	// "just capture the next photo":
+	//  • No cartridge locked (or the previous session is finished) → trigger a
+	//    fresh scan; the WS handler auto-captures once it locks.
+	//  • Mid-session (front already shot, back pending) → capture directly. The
+	//    cartridge identity is already established, and the barcode is usually
+	//    hidden on the back, so forcing a re-scan would just stall.
+	//  • Both photos done → open the retake dialog (same as local).
+	function onStationSpace() {
+		if (submitting || awaitingTriggeredScan) return;
+		// Already locked — either a sensing/auto read picked the cartridge up
+		// before Space, or it's mid-session. The scan half of "scan → photo"
+		// already happened, so just capture; after both photos Space reaches the
+		// retake dialog (same as local).
+		if (cartridgeId) {
+			if (sessionPhotos.length >= PHOTOS_PER_CARTRIDGE) showRetakeDialog = true;
+			else capturePhoto();
+			return;
+		}
+		// Nothing locked yet → arm a scan; the WS handler auto-captures once a
+		// barcode locks the cartridge.
+		requestTriggeredScan();
+	}
+
+	function requestTriggeredScan() {
+		if (!isStationLive()) {
+			flashBanner('err', 'Station not connected — pick a station or wait for it to reconnect.');
+			return;
+		}
+		try {
+			ws!.send(JSON.stringify({ cmd: 'trigger_scan' }));
+		} catch {
+			flashBanner('err', 'Failed to reach station — try again.');
+			return;
+		}
+		awaitingTriggeredScan = true;
+		flashBanner('info', 'Scanning… present the cartridge barcode', TRIGGER_SCAN_TIMEOUT_MS);
+		if (triggerScanTimer) clearTimeout(triggerScanTimer);
+		triggerScanTimer = setTimeout(() => {
+			if (awaitingTriggeredScan) {
+				awaitingTriggeredScan = false;
+				flashBanner('err', 'No barcode scanned — press Space to try again.');
+			}
+		}, TRIGGER_SCAN_TIMEOUT_MS);
+	}
+
+	// A triggered scan landed: lock the cartridge, then auto-fire the photo.
+	async function triggeredScanCapture(code: string) {
+		awaitingTriggeredScan = false;
+		if (triggerScanTimer) { clearTimeout(triggerScanTimer); triggerScanTimer = null; }
+		const locked = await handleScan(code, 'triggered');
+		if (!locked) return; // lookup failed, or a different cartridge was rejected mid-session
+		await capturePhoto();
 	}
 
 	function snapshotFrame(): Blob | null {
@@ -648,21 +734,20 @@
 	function onGlobalKeydown(e: KeyboardEvent) {
 		if (e.key !== ' ') return;
 		const target = e.target as HTMLElement;
-		// The hidden scanner-wedge input is kept focused by refocusScanner(),
-		// so without this exception Space never reaches capturePhoto.
-		if (target === scanInputEl) {
-			e.preventDefault();
-			capturePhoto();
-			return;
-		}
-		if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') {
-			// Space on a focused control (e.g. a camera-settings slider) must not
-			// scroll the page. Swallow it without triggering a capture.
+		// Space on a real focused control (camera-settings slider, a <select>)
+		// must scroll-suppress but not trigger the workflow. The hidden
+		// scanner-wedge input — kept focused by refocusScanner() — is the
+		// exception: it stands in for "the page" so our keys still fire.
+		if (target !== scanInputEl &&
+			(target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')) {
 			e.preventDefault();
 			return;
 		}
 		e.preventDefault();
-		capturePhoto();
+		// On a Pi station, Space scans first then auto-captures; locally it just
+		// captures the cartridge that's already wedge-scanned.
+		if (selectedStationId) onStationSpace();
+		else capturePhoto();
 	}
 
 	function refocusScanner() {
@@ -754,6 +839,7 @@
 		if (bannerTimer) clearTimeout(bannerTimer);
 		if (refocusInterval) clearInterval(refocusInterval);
 		if (scanLoopInterval) clearInterval(scanLoopInterval);
+		if (triggerScanTimer) clearTimeout(triggerScanTimer);
 	});
 </script>
 
@@ -767,6 +853,11 @@
 				<p class="text-xs text-[var(--color-tron-text-secondary)]">
 					Pull the USB scanner trigger to lock a cartridge. Press Space (×2) for front + back photos. While locked, other scans are ignored — finish both photos or click "Release lock" to switch cartridges.
 				</p>
+				{#if selectedStationId}
+					<p class="text-xs text-[var(--color-tron-cyan)]">
+						Pi station: press Space to scan the barcode — the front photo is taken automatically once it locks. Press Space again for the back.
+					</p>
+				{/if}
 			</div>
 			<div class="text-xs text-[var(--color-tron-text-secondary)]">
 				Operator: <span class="text-[var(--color-tron-cyan)]">{data.user.username}</span>
@@ -973,11 +1064,19 @@
 		<div class="flex items-center justify-between gap-3">
 			<button
 				type="button"
-				onclick={capturePhoto}
-				disabled={submitting || !cartridgeId || !stream}
+				onclick={() => (selectedStationId ? onStationSpace() : capturePhoto())}
+				disabled={submitting || awaitingTriggeredScan || !stream || (!selectedStationId && !cartridgeId)}
 				class="rounded bg-[var(--color-tron-cyan)] px-6 py-3 text-lg font-bold text-[var(--color-tron-bg-primary)] disabled:opacity-40"
 			>
-				{submitting ? 'Capturing…' : sessionPhotos.length >= PHOTOS_PER_CARTRIDGE ? '↺ Retake (Space)' : `📷 Capture ${sessionPhotos.length + 1} of ${PHOTOS_PER_CARTRIDGE} (Space)`}
+				{submitting
+					? 'Capturing…'
+					: awaitingTriggeredScan
+						? 'Scanning…'
+						: sessionPhotos.length >= PHOTOS_PER_CARTRIDGE
+							? '↺ Retake (Space)'
+							: selectedStationId && !cartridgeId
+								? '⎵ Scan + Capture (Space)'
+								: `📷 Capture ${sessionPhotos.length + 1} of ${PHOTOS_PER_CARTRIDGE} (Space)`}
 			</button>
 			<div class="text-xs text-[var(--color-tron-text-secondary)]">
 				This session: {recentCaptures.length} photo{recentCaptures.length === 1 ? '' : 's'}
