@@ -251,6 +251,11 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
                     # value cv2 reports back (often 0 for unsupported props,
                     # which the UI can use to skip / hide the slider).
                     params = camera_mod.get_camera_params()
+                    # Cached after startup-warm, so this is normally instant.
+                    # Run it off-loop anyway as a safety net: a cold-cache call
+                    # would shell out to v4l2-ctl and must never block the loop
+                    # mid-stream. Safe in a thread — it doesn't touch cv2.
+                    ranges = await asyncio.to_thread(camera_mod.get_camera_ranges)
                     await ws.send_json(
                         {
                             "event": "camera_params",
@@ -259,7 +264,7 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
                             # Real per-control min/max/step (from V4L2 when
                             # available) so the sliders span the camera's true
                             # editable range, not our advisory guess.
-                            "ranges": camera_mod.get_camera_ranges(),
+                            "ranges": ranges,
                         }
                     )
                 elif cmd == "set_camera_param":
@@ -509,6 +514,16 @@ async def _broadcast_scans() -> None:
 
 async def _on_startup(app: web.Application) -> None:
     await scanner_mod.start()
+    # Warm the V4L2 control-range cache off the event loop, before we accept
+    # any client. get_camera_ranges() shells out to `v4l2-ctl` the first time;
+    # if that ran inline during a session (it's triggered by get_camera_params
+    # on connect) it blocked the loop long enough to stall WebRTC and drop the
+    # video ~1s after it started. Warming here makes the in-session call a cache
+    # hit. v4l2-ctl doesn't touch the cv2 capture, so a worker thread is safe.
+    try:
+        await asyncio.to_thread(camera_mod.get_camera_ranges)
+    except Exception:
+        log.exception("warming camera ranges failed (non-fatal)")
     app["scan_broadcaster"] = asyncio.create_task(
         _broadcast_scans(), name="bims-scan-broadcaster"
     )
