@@ -63,6 +63,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const skip = (pageNum - 1) * PAGE_SIZE;
 	const sort = { [sortField]: sortOrder } as Record<string, 1 | -1>;
 
+	type RunNote = {
+		id: string; body: string; phase: string;
+		author: string | null; createdAt: string | null;
+	};
 	type RunRow = {
 		runId: string; processType: 'wax' | 'reagent'; robotId: string;
 		operatorId: string; operatorName: string | null;
@@ -71,7 +75,16 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		acceptedCartridges: number; rejectedCartridges: number;
 		startTime: string | null; endTime: string | null;
 		createdAt: string; abortReason: string | null;
+		notes: RunNote[];
 	};
+
+	const mapNotes = (raw: any[]): RunNote[] => (raw ?? []).map((n: any) => ({
+		id: String(n._id ?? ''),
+		body: n.body ?? '',
+		phase: n.phase ?? '',
+		author: n.author?.username ?? null,
+		createdAt: n.createdAt ? new Date(n.createdAt).toISOString() : null
+	}));
 
 	let runs: RunRow[] = [];
 	let total = 0;
@@ -97,7 +110,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			startTime: r.runStartTime ? new Date(r.runStartTime).toISOString() : null,
 			endTime: r.runEndTime ? new Date(r.runEndTime).toISOString() : null,
 			createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : '',
-			abortReason: r.abortReason ?? null
+			abortReason: r.abortReason ?? null,
+			notes: mapNotes(r.notes)
 		}));
 
 		if (processType === 'wax') {
@@ -135,7 +149,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				startTime: r.runStartTime ? new Date(r.runStartTime).toISOString() : null,
 				endTime: r.runEndTime ? new Date(r.runEndTime).toISOString() : null,
 				createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : '',
-				abortReason: r.abortReason ?? null
+				abortReason: r.abortReason ?? null,
+				notes: mapNotes(r.notes)
 			};
 		});
 
@@ -181,7 +196,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// Fetch filter option lists
 	const [robots, assayTypes] = await Promise.all([
 		Equipment.find({ equipmentType: 'robot', isActive: true }, { _id: 1, name: 1 }).lean(),
-		AssayDefinition.find({ isActive: true }, { _id: 1, name: 1 }).lean()
+		AssayDefinition.find({ isActive: true, hidden: { $ne: true } }, { _id: 1, name: 1 }).lean()
 	]);
 
 	// Build unique operators from current run set

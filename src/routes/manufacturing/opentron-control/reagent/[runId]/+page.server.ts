@@ -11,6 +11,7 @@ import {
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
+import { resolveFridgeId } from '$lib/server/services/equipment-resolve';
 import type { PageServerLoad, Actions } from './$types';
 
 export const config = { maxDuration: 60 };
@@ -37,6 +38,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const stage = toStage(run.status);
 	const settingsDoc = await ManufacturingSettings.findById('default').lean() as any;
 	const maxTimeBeforeSealMin: number = settingsDoc?.reagentFilling?.maxTimeBeforeSealMin ?? 60;
+	const cartridgesPerSheet: number = settingsDoc?.topSealCutting?.cartridgesPerSheet ?? 12;
 
 	// Resolve robot name — reagent records sometimes store only robot._id,
 	// leaving the header to render a raw nanoid.
@@ -91,6 +93,19 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const sealOverdue = Date.now() > sealDeadlineMs;
 	const sealMinRemaining = sealOverdue ? 0 : Math.ceil((sealDeadlineMs - Date.now()) / 60000);
 
+	const runNotes = ((run.notes ?? []) as any[])
+		.slice()
+		.sort((a: any, b: any) =>
+			new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime()
+		)
+		.map((n: any) => ({
+			id: String(n._id ?? ''),
+			body: n.body ?? '',
+			phase: n.phase ?? '',
+			author: n.author?.username ?? null,
+			createdAt: n.createdAt ? new Date(n.createdAt).toISOString() : null
+		}));
+
 	return {
 		runId: String(run._id),
 		stage,
@@ -101,7 +116,9 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		rejectionCodes,
 		fridges: JSON.parse(JSON.stringify(fridges)),
 		sealDeadline: { sealOverdue, sealMinRemaining, maxTimeBeforeSealMin },
-		cartridgeCount: run.cartridgesFilled?.length ?? run.cartridgeCount ?? 0
+		cartridgeCount: run.cartridgesFilled?.length ?? run.cartridgeCount ?? 0,
+		cartridgesPerSheet,
+		runNotes
 	};
 };
 
@@ -133,10 +150,10 @@ export const actions: Actions = {
 			const rejected = rejectedMap.get(cf.cartridgeId);
 			if (rejected) {
 				return { ...cf, inspectionStatus: rejected.status ?? 'Rejected', inspectionReason: rejected.reason ?? null,
-					inspectedBy: { _id: locals.user._id, username: locals.user.username }, inspectedAt: now };
+					inspectedBy: { _id: locals.user!._id, username: locals.user!.username }, inspectedAt: now };
 			}
 			return { ...cf, inspectionStatus: cf.inspectionStatus === 'Pending' ? 'Accepted' : cf.inspectionStatus,
-				inspectedBy: { _id: locals.user._id, username: locals.user.username }, inspectedAt: now };
+				inspectedBy: { _id: locals.user!._id, username: locals.user!.username }, inspectedAt: now };
 		});
 
 		const updateFields: Record<string, any> = {
@@ -153,7 +170,7 @@ export const actions: Actions = {
 					$set: {
 						'reagentInspection.status': rej.status ?? 'Rejected',
 						'reagentInspection.reason': rej.reason ?? undefined,
-						'reagentInspection.operator': { _id: locals.user._id, username: locals.user.username },
+						'reagentInspection.operator': { _id: locals.user!._id, username: locals.user!.username },
 						'reagentInspection.timestamp': now,
 						'reagentInspection.recordedAt': now,
 						status: 'scrapped',
@@ -198,7 +215,7 @@ export const actions: Actions = {
 			$push: {
 				sealBatches: {
 					_id: batchId, topSealLotId: topSealLotId.trim(),
-					operator: { _id: locals.user._id, username: locals.user.username },
+					operator: { _id: locals.user!._id, username: locals.user!.username },
 					firstScanTime: new Date(), cartridgeIds: [], status: 'in_progress'
 				}
 			}
@@ -247,7 +264,7 @@ export const actions: Actions = {
 					update: {
 						$set: {
 							'topSeal.batchId': batchId, 'topSeal.topSealLotId': batch.topSealLotId,
-							'topSeal.operator': { _id: locals.user._id, username: locals.user.username },
+							'topSeal.operator': { _id: locals.user!._id, username: locals.user!.username },
 							'topSeal.timestamp': now, 'topSeal.recordedAt': now, status: 'sealed'
 						}
 					}
@@ -255,13 +272,18 @@ export const actions: Actions = {
 			}));
 			await CartridgeRecord.bulkWrite(bulkOps);
 
-			const topSealPartId = await resolvePartId('PT-CT-103');
-			for (const cid of batch.cartridgeIds) {
+			// Consume 1 cut sheet (PT-CT-113) per batch — mirrors reagent-filling
+			// completeSealBatch fix. Replaces the prior per-cartridge PT-CT-103
+			// loop, which double-counted (rolls are consumed at cut time; sheets
+			// are consumed here, once per batch, regardless of cartridge count).
+			const cutSheetPartId = await resolvePartId('PT-CT-113');
+			if (cutSheetPartId) {
 				await recordTransaction({
-					transactionType: 'consumption', partDefinitionId: topSealPartId ?? undefined,
-					cartridgeRecordId: cid, quantity: 1, manufacturingStep: 'top_seal',
+					transactionType: 'consumption', partDefinitionId: cutSheetPartId,
+					quantity: 1, manufacturingStep: 'top_seal',
 					manufacturingRunId: runId, operatorId: locals.user._id, operatorUsername: locals.user.username,
-					lotId: batch.topSealLotId ?? undefined, notes: `Top seal applied (batch ${batchId})`
+					lotId: batch.topSealLotId ?? undefined,
+					notes: `Top seal batch ${batchId}: 1 sheet consumed from lot ${batch.topSealLotId ?? 'unknown'} (${batch.cartridgeIds.length} cartridges sealed)`
 				});
 			}
 
@@ -289,7 +311,7 @@ export const actions: Actions = {
 				$set: {
 					'cartridgesFilled.$.inspectionStatus': 'Rejected',
 					'cartridgesFilled.$.inspectionReason': 'Rejected at top sealing',
-					'cartridgesFilled.$.inspectedBy': { _id: locals.user._id, username: locals.user.username },
+					'cartridgesFilled.$.inspectedBy': { _id: locals.user!._id, username: locals.user!.username },
 					'cartridgesFilled.$.inspectedAt': now
 				}
 			}
@@ -298,6 +320,20 @@ export const actions: Actions = {
 			{ _id: cartridgeId },
 			{ $set: { status: 'scrapped', voidedAt: now, voidReason: 'Rejected at top sealing' } }
 		);
+
+		await recordTransaction({
+			transactionType: 'scrap',
+			cartridgeRecordId: cartridgeId,
+			quantity: 1,
+			manufacturingStep: 'top_seal',
+			manufacturingRunId: runId,
+			operatorId: locals.user._id,
+			operatorUsername: locals.user.username,
+			scrapReason: 'Rejected at top sealing',
+			scrapCategory: 'seal_failure',
+			notes: 'Top seal rejection'
+		});
+
 		return { success: true };
 	},
 
@@ -323,6 +359,14 @@ export const actions: Actions = {
 		try { cartridgeIds = JSON.parse(cartridgeIdsRaw); } catch { /* ignore */ }
 
 		if (cartridgeIds.length > 0) {
+			// S1a: resolve the scanned fridge reference (barcode, name, or _id)
+			// to the canonical Equipment._id. Fail the action if unresolved so
+			// we don't write a raw string into the authoritative fridgeId field.
+			const resolvedFridgeId = await resolveFridgeId(location);
+			if (!resolvedFridgeId) {
+				return fail(400, { error: `Unknown fridge: ${location}` });
+			}
+
 			for (const cid of cartridgeIds) {
 				await ReagentBatchRecord.findOneAndUpdate(
 					{ _id: runId, 'cartridgesFilled.cartridgeId': cid },
@@ -334,8 +378,10 @@ export const actions: Actions = {
 					filter: { _id: cid, 'storage.recordedAt': { $exists: false } },
 					update: {
 						$set: {
-							'storage.fridgeName': location, 'storage.locationId': location,
-							'storage.operator': { _id: locals.user._id, username: locals.user.username },
+							'storage.fridgeName': location,              // raw input — denormalized display snapshot
+							'storage.fridgeId': resolvedFridgeId,        // Equipment._id (authoritative — S1a)
+							'storage.locationId': resolvedFridgeId,      // Equipment._id (kept in sync — S1a)
+							'storage.operator': { _id: locals.user!._id, username: locals.user!.username },
 							'storage.timestamp': now, 'storage.recordedAt': now, status: 'stored'
 						}
 					}
@@ -395,7 +441,7 @@ export const actions: Actions = {
 						usageLog: {
 							_id: generateId(), usageType: 'run_complete', runId: run._id,
 							quantityChanged: cartridgeCount,
-							operator: { _id: locals.user._id, username: locals.user.username },
+							operator: { _id: locals.user!._id, username: locals.user!.username },
 							notes: `Reagent filling run complete — ${cartridgeCount} cartridges filled`,
 							createdAt: now
 						}

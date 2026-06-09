@@ -2,6 +2,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, KanbanTask, KanbanProject, AuditLog } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
 import { requirePermission } from '$lib/server/permissions';
+import { checkWipLimit } from '$lib/server/kanban/wip-limit';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -111,6 +112,12 @@ export const actions: Actions = {
 
 		const task = await KanbanTask.findById(taskId) as any;
 		if (!task) return fail(400, { error: 'Task not found' });
+
+		// Hard WIP-limit cap. Skip if already in wip (idempotent re-move).
+		if (newStatus === 'wip' && task.status !== 'wip') {
+			const check = await checkWipLimit(task.assignee?._id ?? null, taskId);
+			if (!check.ok) return fail(409, { wipLimitError: check });
+		}
 
 		const oldStatus = task.status;
 		const update: any = {

@@ -1389,7 +1389,7 @@
 {/if}
 
 {#if form?.withdrawSuccess}
-	<div class="fixed bottom-4 right-4 z-50 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-3 text-sm text-green-400 shadow-lg">
+	<div class="fixed bottom-20 right-4 z-50 rounded-lg border border-green-500/30 bg-green-500/10 px-4 py-3 text-sm text-green-400 shadow-lg">
 		{form.withdrawMessage}
 	</div>
 {/if}

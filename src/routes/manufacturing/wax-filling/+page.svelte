@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
+	import { enhance, deserialize } from '$app/forms';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { page } from '$app/stores';
 	import SetupConfirmation from '$lib/components/manufacturing/wax-filling/SetupConfirmation.svelte';
@@ -14,6 +14,7 @@
 	interface Props {
 		data: {
 			robotId: string;
+			robotName: string;
 			loadError: string | null;
 			robotBlocked: { process: 'reagent'; runId: string | null } | null;
 			runState: {
@@ -28,7 +29,8 @@
 				coolingTrayId: string | null;
 				plannedCartridgeCount: number | null;
 				coolingConfirmedAt: string | null;
-				coolingConfirmedAt: string | null;
+				existingWaxRunNote?: string;
+				activeLotId?: string | null;
 			};
 			settings: {
 				runDurationMin: number;
@@ -37,6 +39,7 @@
 				deckLockoutMin: number;
 				incubatorTempC: number;
 				heaterTempC: number;
+				minCoolingBeforeQcMin?: number;
 			};
 			tubeData: {
 				tubeId: string;
@@ -85,6 +88,10 @@
 				currentInventory: string;
 				storageLocation: string | null;
 			}[];
+			lockedCartridges?: {
+				cartridgeId: string;
+				status: string;
+			}[];
 			fridges: {
 				id: string;
 				displayName: string;
@@ -98,6 +105,11 @@
 	let submitting = $state(false);
 	let submittingTooLong = $state(false);
 	let errorMsg = $state('');
+	// Post-action notice for carts the wax-flow guard (protectLockedCarts)
+	// silently skipped during a write. Surfaced as an amber banner the operator
+	// must dismiss so a "200 OK" no longer masks a partial write. Reset on the
+	// next submitAction call.
+	let skippedNotice = $state<{ count: number; carts: { cartridgeId: string; status: string }[]; action: string } | null>(null);
 	let coolingBypassed = $state(false);
 	let showCoolingBypass = $state(false);
 	let coolingBypassPassword = $state('');
@@ -129,7 +141,10 @@
 	let lotScanError = $state('');
 	let lotScanSuccess = $state(false);
 	let lotScanSubmitting = $state(false);
-	let lotOverride = $state(false);
+	// Test mode — synthesizes a TEST-LOT-<runId> BackingLot server-side so
+	// the wax flow can be run end-to-end without consuming real inventory.
+	// Distinct from the admin cure-time override (which targets a real lot).
+	let testMode = $state(false);
 	// confirmed lot — once scanned OK, set from server response or existing activeLotId
 	let confirmedLotId = $state<string | null>(data.activeLotId ?? null);
 	let confirmedLotCount = $state<number | null>(data.activeLotCartridgeCount ?? null);
@@ -144,7 +159,10 @@
 	});
 
 	async function handleScanBackingLot() {
-		if (!lotScanInput.trim() || !data.runState.runId) return;
+		if (!data.runState.runId) return;
+		// In test mode the lot barcode is synthesized server-side; we don't
+		// require the input to be non-empty.
+		if (!testMode && !lotScanInput.trim()) return;
 		lotScanSubmitting = true;
 		lotScanError = '';
 		lotScanSuccess = false;
@@ -152,7 +170,7 @@
 			const fd = new FormData();
 			fd.set('lotBarcode', lotScanInput.trim());
 			fd.set('runId', data.runState.runId);
-			if (lotOverride) fd.set('override', 'true');
+			if (testMode) fd.set('testMode', 'true');
 			const res = await fetch('?/scanBackingLot', {
 				method: 'POST',
 				body: fd,
@@ -205,7 +223,7 @@
 	let pendingOverrideAction = $state('');
 	let pendingOverrideData = $state<Record<string, string>>({});
 
-	const STAGES = ['Setup', 'Loading', 'Running', 'Awaiting Removal'] as const;
+	const STAGES = ['Setup', 'Loading', 'Running', 'Awaiting Removal', 'QC', 'Storage'] as const;
 
 	// Optimistic stage: prevents UI flash when invalidateAll() returns stale/failed data
 	const ACTION_NEXT_STAGE: Record<string, string> = {
@@ -271,6 +289,7 @@
 		submitting = true;
 		submittingTooLong = false;
 		errorMsg = '';
+		skippedNotice = null;
 		pendingOverrideAction = '';
 		pendingOverrideData = {};
 
@@ -363,6 +382,28 @@
 				});
 				await invalidateAll();
 				return;
+			}
+			// Surface any carts the server silently skipped because they're now
+			// linked/underway/completed/voided/scrapped (LOCKED_STATUSES). The
+			// action returns 200 with skippedLockedCount on the payload — without
+			// this we'd assume success and the operator would never know.
+			try {
+				const result = deserialize(text);
+				if (result.type === 'success' && result.data) {
+					const d = result.data as {
+						skippedLockedCount?: number;
+						skippedCarts?: { cartridgeId: string; status: string }[];
+					};
+					if ((d.skippedLockedCount ?? 0) > 0 && d.skippedCarts?.length) {
+						skippedNotice = {
+							count: d.skippedLockedCount!,
+							carts: d.skippedCarts,
+							action
+						};
+					}
+				}
+			} catch {
+				// Best-effort — if devalue parse fails we still proceed.
 			}
 			// Optimistic stage update — show the expected next stage immediately
 			if (action in ACTION_NEXT_STAGE) {
@@ -563,8 +604,9 @@
 		}
 	}
 
-	// Cooling timer: block QC for 10 minutes after coolingConfirmedAt
-	const COOLING_REQUIRED_MS = 10 * 60 * 1000;
+	// Cooling timer: block QC after coolingConfirmedAt for the duration set in
+	// ManufacturingSettings.waxFilling.minCoolingBeforeQcMin (default 2 min).
+	const coolingRequiredMs = $derived((data.settings?.minCoolingBeforeQcMin ?? 2) * 60 * 1000);
 	let coolingTick = $state(0);
 	$effect(() => {
 		if (data.runState.stage === 'QC' && data.runState.coolingConfirmedAt && !coolingBypassed) {
@@ -575,10 +617,10 @@
 	const coolingConfirmedAt = $derived(data.runState.coolingConfirmedAt ? new Date(data.runState.coolingConfirmedAt) : null);
 	const coolingElapsedMs = $derived.by(() => {
 		void coolingTick;
-		if (coolingBypassed) return COOLING_REQUIRED_MS;
-		return coolingConfirmedAt ? Date.now() - coolingConfirmedAt.getTime() : COOLING_REQUIRED_MS;
+		if (coolingBypassed) return coolingRequiredMs;
+		return coolingConfirmedAt ? Date.now() - coolingConfirmedAt.getTime() : coolingRequiredMs;
 	});
-	const coolingRemainingMs = $derived(Math.max(0, COOLING_REQUIRED_MS - coolingElapsedMs));
+	const coolingRemainingMs = $derived(Math.max(0, coolingRequiredMs - coolingElapsedMs));
 	const coolingComplete = $derived(coolingRemainingMs === 0 || coolingBypassed);
 	const coolingCountdown = $derived.by(() => {
 		const totalSec = Math.ceil(coolingRemainingMs / 1000);
@@ -699,6 +741,32 @@
 		</div>
 	{/if}
 
+	{#if skippedNotice}
+		<div class="rounded border border-amber-500/40 bg-amber-900/20 px-4 py-3 text-sm text-amber-200">
+			<div class="flex items-start justify-between gap-3">
+				<div class="min-w-0 flex-1">
+					<p class="font-semibold text-amber-200">
+						{skippedNotice.count} cartridge{skippedNotice.count === 1 ? ' was' : 's were'} skipped on "{skippedNotice.action}"
+					</p>
+					<p class="mt-1 text-xs text-amber-200/80">
+						These carts are linked to an SPU run (or are otherwise terminal). The other carts in this batch were written normally — you can still Complete Run for them.
+					</p>
+					<div class="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-3">
+						{#each skippedNotice.carts as sc (sc.cartridgeId)}
+							<div class="rounded bg-amber-900/30 px-2 py-1 text-[11px]">
+								<span class="font-mono">{sc.cartridgeId.slice(-12)}</span>
+								<span class="ml-2 text-amber-200/70">{sc.status}</span>
+							</div>
+						{/each}
+					</div>
+				</div>
+				<button type="button" class="shrink-0 text-amber-300 underline" onclick={() => { skippedNotice = null; }}>
+					Dismiss
+				</button>
+			</div>
+		</div>
+	{/if}
+
 	{#if errorMsg}
 		<div data-error-banner class="rounded border border-red-500/30 bg-red-900/30 px-4 py-3 text-sm text-red-300">
 			<div class="flex items-center justify-between gap-2">
@@ -751,7 +819,7 @@
 					</svg>
 				</div>
 				<h2 class="text-xl font-semibold text-[var(--color-tron-text)]">
-					{data.robotId === 'robot-1' ? 'Robot 1' : 'Robot 2'} — Wax Filling
+					{data.robotName} — Wax Filling
 				</h2>
 				<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">
 					Start a new wax filling run on this robot.
@@ -1053,26 +1121,28 @@
 							<input
 								type="text"
 								class="tron-input flex-1"
-								placeholder="Scan lot barcode..."
+								placeholder={testMode ? 'Test mode — barcode is ignored, lot will be synthesized' : 'Scan lot barcode...'}
 								bind:value={lotScanInput}
 								onkeydown={handleLotScanKeydown}
 								autocomplete="off"
 								autofocus
-								disabled={lotScanSubmitting}
+								disabled={lotScanSubmitting || testMode}
 							/>
 							<button
 								type="button"
 								onclick={handleScanBackingLot}
-								disabled={lotScanSubmitting || !lotScanInput.trim()}
-								class="min-h-[44px] rounded-lg bg-[var(--color-tron-cyan)] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-50"
+								disabled={lotScanSubmitting || (!testMode && !lotScanInput.trim())}
+								class="min-h-[44px] rounded-lg {testMode ? 'bg-amber-500' : 'bg-[var(--color-tron-cyan)]'} px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:opacity-80 disabled:opacity-50"
 							>
-								{lotScanSubmitting ? 'Checking...' : 'Verify'}
+								{lotScanSubmitting ? 'Checking...' : testMode ? 'Start Test Lot' : 'Verify'}
 							</button>
 						</div>
-						<!-- Test override toggle -->
-						<label class="flex items-center gap-2 text-xs text-amber-400 cursor-pointer">
-							<input type="checkbox" bind:checked={lotOverride} class="rounded" />
-							Test Override (skip oven time check, auto-create lot)
+						<!-- Test mode toggle -->
+						<label class="flex items-start gap-2 text-xs text-amber-400 cursor-pointer">
+							<input type="checkbox" bind:checked={testMode} class="mt-0.5 rounded" />
+							<span>
+								Test Mode — synthesize a <span class="font-mono">TEST-LOT-{'{'}runId{'}'}</span> backing lot so the wax flow can be exercised end-to-end without consuming real inventory. Real BackingLot records and cure-time checks are bypassed; the test lot's 24-cartridge count is decremented during deck-loading. No admin re-auth needed.
+							</span>
 						</label>
 						<!-- Quick-pick from ready lots -->
 						{#if data.ovenLots.filter(l => l.ready).length > 0}
@@ -1110,6 +1180,8 @@
 					onComplete={handleDeckLoadComplete}
 					readonly={isPreviewOrPast}
 					suppressFocus={showCancelModal || showOverrideModal}
+					robotId={data.robotId}
+					runId={data.runState.runId ?? null}
 				/>
 			{:else}
 				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">
@@ -1185,6 +1257,7 @@
 					{coolingBypassed}
 					runId={data.runState.runId ?? ''}
 					lotId={data.runState.activeLotId ?? null}
+					coolingGateMin={data.settings?.minCoolingBeforeQcMin ?? 2}
 				/>
 			{:else}
 				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">
@@ -1205,8 +1278,56 @@
 				cartridges={storageCarts}
 				runSummary={summary}
 				fridges={data.fridges}
+				lockedCartridges={previewParam ? [] : (data.lockedCartridges ?? [])}
 				onRecordStorage={handleRecordStorage}
 				onComplete={handleCompleteRun}
+				existingNote={data.runState.existingWaxRunNote ?? ''}
+				onSaveNote={async (noteBody) => {
+					// Independent fetch — bypasses submitForm so the page doesn't
+					// reload the stage on save. Calls recordWaxRunNote which writes
+					// the note to WaxFillingRun.notes[] AND every cartridge in the run.
+					try {
+						const formData = new FormData();
+						formData.set('runId', data.runState.runId ?? '');
+						formData.set('noteBody', noteBody);
+						const res = await fetch('?/recordWaxRunNote', {
+							method: 'POST',
+							body: formData,
+							headers: { 'x-sveltekit-action': 'true' }
+						});
+						const text = await res.text();
+						if (!res.ok || text.includes('"type":"failure"')) {
+							let err = `HTTP ${res.status}`;
+							try {
+								const json = JSON.parse(text);
+								if (json.type === 'failure' && json.data) {
+									const parsed = typeof json.data === 'string' ? JSON.parse(json.data) : json.data;
+									if (Array.isArray(parsed)) {
+										for (let i = 1; i < parsed.length; i++) {
+											if (typeof parsed[i] === 'string' && parsed[i].length > 3) { err = parsed[i]; break; }
+										}
+									}
+								}
+							} catch { /* fallthrough with HTTP code */ }
+							return { ok: false, error: err };
+						}
+						let cartridgeCount = storageCarts.length;
+						try {
+							const json = JSON.parse(text);
+							const parsed = typeof json.data === 'string' ? JSON.parse(json.data) : json.data;
+							if (Array.isArray(parsed)) {
+								const obj = parsed[0];
+								if (obj && typeof obj === 'object' && 'cartridgeCount' in obj) {
+									const idx = (obj as Record<string, number>).cartridgeCount;
+									if (typeof idx === 'number' && parsed[idx] != null) cartridgeCount = Number(parsed[idx]);
+								}
+							}
+						} catch { /* keep fallback count */ }
+						return { ok: true, cartridgeCount };
+					} catch (e) {
+						return { ok: false, error: e instanceof Error ? e.message : 'Network error' };
+					}
+				}}
 				readonly={isPreviewOrPast}
 			/>
 		{/if}

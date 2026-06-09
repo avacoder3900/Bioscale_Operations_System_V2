@@ -3,8 +3,6 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { SvelteSet } from 'svelte/reactivity';
-	import type { LifecycleStage } from '$lib/server/services/cartridge-admin/queries';
-
 	let { data } = $props();
 
 	let searchInput = $state(data.filters.search ?? '');
@@ -16,7 +14,7 @@
 	let feedbackType = $state<'success' | 'error'>('success');
 	let showCustomerAssign = $state<string | null>(null);
 
-	const FILLED_STAGES: LifecycleStage[] = ['Inspected', 'Top Sealed', 'Stored'];
+	const FILLED_STAGES: ('Inspected' | 'Top Sealed' | 'Stored')[] = ['Inspected', 'Top Sealed', 'Stored'];
 
 	const stageColors: Record<string, string> = {
 		Inspected: 'bg-yellow-900/50 text-yellow-300 border-yellow-500/30',

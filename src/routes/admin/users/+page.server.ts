@@ -22,6 +22,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			lastName: u.lastName ?? null,
 			phone: u.phone ?? null,
 			isActive: u.isActive,
+			wipLimit: typeof u.wipLimit === 'number' ? u.wipLimit : 3,
 			lastLoginAt: u.lastLoginAt ?? null,
 			createdAt: u.createdAt,
 			roles: (u.roles ?? []).map((r: any): { id: string; name: string } => ({ id: r.roleId, name: r.roleName }))
@@ -71,6 +72,32 @@ export const actions: Actions = {
 		}
 		await User.updateOne({ _id: userId }, { $set: updates });
 		await AuditLog.create({ _id: generateId(), tableName: 'users', recordId: userId, action: 'UPDATE', changedBy: locals.user?.username, changedAt: new Date() });
+		return { success: true };
+	},
+
+	updateWipLimit: async ({ request, locals }) => {
+		requirePermission(locals.user, 'user:write');
+		await connectDB();
+		const form = await request.formData();
+		const userId = form.get('userId')?.toString();
+		const raw = form.get('wipLimit')?.toString();
+		if (!userId || raw == null) return fail(400, { error: 'User ID and wipLimit required' });
+
+		const wipLimit = Number(raw);
+		if (!Number.isInteger(wipLimit) || wipLimit < 0 || wipLimit > 50) {
+			return fail(400, { error: 'wipLimit must be an integer 0–50' });
+		}
+
+		await User.updateOne({ _id: userId }, { $set: { wipLimit } });
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'users',
+			recordId: userId,
+			action: 'UPDATE',
+			newData: { wipLimit },
+			changedBy: locals.user?.username,
+			changedAt: new Date()
+		});
 		return { success: true };
 	},
 

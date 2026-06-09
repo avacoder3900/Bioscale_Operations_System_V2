@@ -16,21 +16,52 @@
 	interface Props {
 		reagentDefinitions: ReagentDef[];
 		onComplete: (tubes: TubeRecord[]) => void;
+		onSaveNote?: (noteBody: string) => Promise<{ ok: boolean; error?: string; cartridgeCount?: number }>;
 		readonly?: boolean;
 		cartridgeCount?: number;
 	}
 
-	let { reagentDefinitions, onComplete, readonly: isReadonly = false, cartridgeCount = 0 }: Props = $props();
+	let { reagentDefinitions, onComplete, onSaveNote, readonly: isReadonly = false, cartridgeCount = 0 }: Props = $props();
+
+	// Operator-entered batch note — saved against every cartridge currently
+	// loaded on the run via the recordBatchNote action.
+	let noteBody = $state('');
+	let noteSaving = $state(false);
+	let noteError = $state('');
+	let noteSavedAt = $state<Date | null>(null);
+	let noteSavedCount = $state(0);
+
+	async function saveNote() {
+		if (!onSaveNote || !noteBody.trim() || noteSaving) return;
+		noteSaving = true;
+		noteError = '';
+		try {
+			const result = await onSaveNote(noteBody.trim());
+			if (!result.ok) {
+				noteError = result.error ?? 'Failed to save note';
+			} else {
+				noteSavedAt = new Date();
+				noteSavedCount = result.cartridgeCount ?? 0;
+			}
+		} catch (e) {
+			noteError = e instanceof Error ? e.message : 'Failed to save note';
+		} finally {
+			noteSaving = false;
+		}
+	}
 
 	let batchBarcode = $state('');
 	let scanInput = $state('');
 	let scanInputEl: HTMLInputElement | undefined = $state();
 	let scanError = $state('');
 	let submitting = $state(false);
-	let batchData: { lotId: string; cartridgeCount?: number; tubes: { wellPosition: number; reagentName: string; tubeId: string }[] } | null = $state(null);
+	type BatchData = { lotId: string; cartridgeCount?: number; tubes: { wellPosition: number; reagentName: string; tubeId: string }[] };
+	let batchData = $state<BatchData | null>(null);
 	let fetchingBatch = $state(false);
 	let countMismatch = $derived(
-		batchData?.cartridgeCount != null && cartridgeCount > 0 && batchData.cartridgeCount !== cartridgeCount
+		(batchData as BatchData | null)?.cartridgeCount != null
+			&& cartridgeCount > 0
+			&& (batchData as BatchData).cartridgeCount !== cartridgeCount
 	);
 
 	const activeWells = $derived(
@@ -210,6 +241,54 @@
 					{/each}
 				</div>
 			</div>
+
+			<!-- Batch note — applied to every cartridge in the run. Re-saving
+				 overwrites the prior reagent_prep note (action is idempotent). -->
+			{#if onSaveNote && !isReadonly}
+				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
+					<div class="mb-2 flex items-center justify-between">
+						<label for="batch-note" class="text-xs font-medium text-[var(--color-tron-text-secondary)]">
+							Batch Note (optional)
+						</label>
+						{#if cartridgeCount > 0}
+							<span class="text-[10px] text-[var(--color-tron-text-secondary)]/70">
+								Applies to {cartridgeCount} cartridge{cartridgeCount === 1 ? '' : 's'}
+							</span>
+						{/if}
+					</div>
+					<textarea
+						id="batch-note"
+						bind:value={noteBody}
+						rows="3"
+						disabled={noteSaving}
+						placeholder="Anything the operator wants attached to every cartridge in this batch..."
+						class="w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] placeholder-[var(--color-tron-text-secondary)]/50 focus:border-[var(--color-tron-cyan)] focus:outline-none disabled:opacity-50"
+					></textarea>
+					<div class="mt-2 flex items-center justify-between gap-3">
+						<div class="text-xs">
+							{#if noteError}
+								<span class="text-red-400">{noteError}</span>
+							{:else if noteSaving}
+								<span class="text-[var(--color-tron-cyan)] animate-pulse">Saving...</span>
+							{:else if noteSavedAt}
+								<span class="text-green-400">
+									Saved to {noteSavedCount} cartridge{noteSavedCount === 1 ? '' : 's'} at {noteSavedAt.toLocaleTimeString()}
+								</span>
+							{:else}
+								<span class="text-[var(--color-tron-text-secondary)]/60">Save anytime — re-saving overwrites the previous note.</span>
+							{/if}
+						</div>
+						<button
+							type="button"
+							onclick={saveNote}
+							disabled={!noteBody.trim() || noteSaving || cartridgeCount === 0}
+							class="min-h-[36px] rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-4 py-1.5 text-xs font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30 disabled:cursor-not-allowed disabled:opacity-40"
+						>
+							{noteSaving ? 'Saving...' : 'Save Note'}
+						</button>
+					</div>
+				</div>
+			{/if}
 		</div>
 
 		<!-- Confirm button -->

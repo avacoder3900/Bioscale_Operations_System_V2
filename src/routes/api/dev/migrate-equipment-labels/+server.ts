@@ -15,6 +15,7 @@
 import { json } from '@sveltejs/kit';
 import mongoose from 'mongoose';
 import { connectDB } from '$lib/server/db';
+import { byId } from '$lib/server/db/native-helpers';
 import { isAdmin } from '$lib/server/permissions';
 import type { RequestHandler } from './$types';
 
@@ -131,7 +132,7 @@ export const POST: RequestHandler = async ({ locals, url }) => {
 	let equipOk = 0;
 	for (const u of updates) {
 		const res = await equipment.updateOne(
-			{ _id: u._id },
+			byId(u._id),
 			{ $set: { name: u.after.name, barcode: u.after.barcode, updatedAt: new Date() } }
 		);
 		if (res.modifiedCount) equipOk++;
@@ -139,7 +140,7 @@ export const POST: RequestHandler = async ({ locals, url }) => {
 	let childOk = 0;
 	for (const c of childUpdates) {
 		const res = await locations.updateOne(
-			{ _id: c._id },
+			byId(c._id),
 			{ $set: { barcode: c.after, updatedAt: new Date() } }
 		);
 		if (res.modifiedCount) childOk++;

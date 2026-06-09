@@ -47,7 +47,7 @@ import { nanoid } from 'nanoid';
 			$set: { actualConsumedCount: uuidPulled, reconciledAt: now }
 		}
 	);
-	await db.collection('audit_logs').insertOne({
+	await db.collection('audit_log').insertOne({
 		_id: nanoid(),
 		tableName: 'lot_records',
 		recordId: overPullLotId,
@@ -79,7 +79,7 @@ import { nanoid } from 'nanoid';
 				}
 			}
 		);
-		await db.collection('audit_logs').insertOne({
+		await db.collection('audit_log').insertOne({
 			_id: nanoid(),
 			tableName: 'lot_records',
 			recordId: older._id,

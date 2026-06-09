@@ -1,5 +1,5 @@
 import { redirect } from '@sveltejs/kit';
-import { connectDB, FirmwareDevice, FirmwareCartridge, DeviceEvent } from '$lib/server/db';
+import { connectDB, FirmwareDevice, DeviceEvent } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -13,11 +13,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const page = parseInt(url.searchParams.get('page') || '1');
 	const limit = 50;
 
-	const [devices, devicesTotal, fwCartridges, fwCartridgesTotal, recentEvents] = await Promise.all([
+	const [devices, devicesTotal, recentEvents] = await Promise.all([
 		FirmwareDevice.find().sort({ lastSeen: -1 }).skip((page - 1) * limit).limit(limit).lean(),
 		FirmwareDevice.countDocuments(),
-		FirmwareCartridge.find().sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
-		FirmwareCartridge.countDocuments(),
 		DeviceEvent.find().sort({ createdAt: -1 }).limit(100).lean()
 	]);
 
@@ -33,22 +31,6 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			metadata: d.metadata,
 			createdAt: d.createdAt
 		})),
-		firmwareCartridges: fwCartridges.map((c: any) => ({
-			id: c._id,
-			cartridgeUuid: c.cartridgeUuid,
-			assayId: c.assayId,
-			status: c.status,
-			lotNumber: c.lotNumber,
-			expirationDate: c.expirationDate,
-			serialNumber: c.serialNumber,
-			siteId: c.siteId,
-			program: c.program,
-			experiment: c.experiment,
-			arm: c.arm,
-			quantity: c.quantity,
-			testResultId: c.testResultId,
-			createdAt: c.createdAt
-		})),
 		events: recentEvents.map((e: any) => ({
 			id: e._id,
 			deviceId: e.deviceId,
@@ -61,8 +43,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		pagination: {
 			page, limit,
 			devicesTotal,
-			fwCartridgesTotal,
-			hasNext: tab === 'devices' ? page * limit < devicesTotal : page * limit < fwCartridgesTotal,
+			hasNext: page * limit < devicesTotal,
 			hasPrev: page > 1
 		}
 	};

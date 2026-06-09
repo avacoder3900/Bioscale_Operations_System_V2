@@ -13,34 +13,26 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 
 	return {
 		lot: {
-			id: lot._id,
-			qrCodeRef: lot.qrCodeRef,
-			processConfig: lot.processConfig ?? null,
-			operator: lot.operator ?? null,
-			inputLots: lot.inputLots ?? null,
-			quantityProduced: lot.quantityProduced ?? null,
-			desiredQuantity: lot.desiredQuantity ?? null,
-			quantityDiscrepancyReason: lot.quantityDiscrepancyReason ?? null,
-			startTime: lot.startTime ?? null,
-			finishTime: lot.finishTime ?? null,
-			cycleTime: lot.cycleTime ?? null,
-			ovenEntryTime: lot.ovenEntryTime ?? null,
-			wiRevision: lot.wiRevision ?? null,
+			lotId: String(lot._id),
+			bucketBarcode: lot.bucketBarcode ?? null,
+			configId: lot.processConfig?.processName ?? lot.processConfig?._id ?? '',
+			qrCodeRef: lot.qrCodeRef ?? '',
+			quantityProduced: lot.quantityProduced ?? 0,
 			status: lot.status ?? null,
-			cartridgeIds: lot.cartridgeIds ?? [],
-			createdAt: lot.createdAt,
-			updatedAt: lot.updatedAt
+			startTime: lot.startTime ? new Date(lot.startTime).toISOString() : null,
+			finishTime: lot.finishTime ? new Date(lot.finishTime).toISOString() : null,
+			cycleTime: lot.cycleTime ?? null,
+			createdAt: lot.createdAt ? new Date(lot.createdAt).toISOString() : ''
 		},
-		steps: (lot.stepEntries ?? []).map((s: any) => ({
-			id: s._id,
-			stepId: s.stepId ?? null,
-			stepNumber: s.stepNumber ?? null,
-			stepTitle: s.stepTitle ?? null,
-			note: s.note ?? null,
-			imageUrl: s.imageUrl ?? null,
-			operator: s.operator ?? null,
-			completedAt: s.completedAt ?? null
-		}))
+		batchNotes: (lot.stepEntries ?? [])
+			.filter((s: any) => s.note || s.imageUrl)
+			.map((s: any) => ({
+				id: String(s._id),
+				note: s.note ?? null,
+				imageUrl: s.imageUrl ?? null,
+				operatorName: s.operator?.username ?? 'unknown',
+				createdAt: s.completedAt ? new Date(s.completedAt).toISOString() : ''
+			}))
 	};
 };
 

@@ -5,7 +5,8 @@
 		data: {
 			decks: { deckId: string; status: string; currentRobotId: string | null; lastUsed: string | null }[];
 			trays: { trayId: string; status: string; assignedRunId: string | null }[];
-			locations: { id: string; barcode: string; locationType: string; displayName: string; isActive: boolean; capacity: number | null }[];
+			locations: { id: string; barcode: string; locationType: string; displayName: string; isActive: boolean; capacity: number | null; occupantCount: number; waxAcceptedCount: number; waxScrappedCount: number }[];
+			robots: { robotId: string; name: string; status: string }[];
 			equipmentTemps: Record<string, number | null>;
 			placements: { locationId: string; locationType: string; displayName: string; itemType: string; itemId: string }[];
 			activeWaxRuns: { runId: string; robotId: string; deckId: string | null; coolingTrayId: string | null; status: string }[];
@@ -285,9 +286,25 @@
 							</div>
 							<div class="min-h-[40px] rounded-lg border border-blue-500/10 bg-blue-950/30 p-2">
 								{#if fridge.occupantCount > 0}
-									<div class="flex items-center justify-center gap-2 py-1">
-										<span class="text-2xl font-bold text-blue-200">{fridge.occupantCount}</span>
-										<span class="text-xs text-blue-300/60">cartridges stored</span>
+									{@const reagentCount = Math.max(
+										0,
+										fridge.occupantCount - (fridge.waxAcceptedCount ?? 0) - (fridge.waxScrappedCount ?? 0)
+									)}
+									<div class="flex items-center justify-around gap-2 py-1">
+										<div class="text-center">
+											<div class="text-xl font-bold text-amber-300">{fridge.waxAcceptedCount ?? 0}</div>
+											<div class="text-[9px] uppercase tracking-wider text-amber-400/60">Accepted</div>
+										</div>
+										<div class="text-center">
+											<div class="text-xl font-bold text-red-300">{fridge.waxScrappedCount ?? 0}</div>
+											<div class="text-[9px] uppercase tracking-wider text-red-400/60">Scrapped</div>
+										</div>
+										{#if reagentCount > 0}
+											<div class="text-center">
+												<div class="text-xl font-bold text-purple-300">{reagentCount}</div>
+												<div class="text-[9px] uppercase tracking-wider text-purple-400/60">Reagent</div>
+											</div>
+										{/if}
 									</div>
 								{:else if items.length === 0}
 									<p class="py-1 text-center text-[11px] text-blue-300/30">Empty</p>

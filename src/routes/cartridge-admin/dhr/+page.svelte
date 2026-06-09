@@ -106,12 +106,17 @@
 							</td>
 							<td class="px-4 py-3 text-center">
 								{#if row.photoCount > 0}
-									<span class="inline-flex items-center gap-1 rounded bg-[var(--color-tron-cyan)]/10 px-2 py-0.5 text-xs text-[var(--color-tron-cyan)]">
-										<svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-											<path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-										</svg>
-										{row.photoCount}
-									</span>
+									<div class="inline-flex items-center gap-2">
+										{#if row.previewUrl}
+											<img src={row.previewUrl} alt="cartridge preview" class="h-10 w-10 rounded border border-[var(--color-tron-border)] object-cover" loading="lazy" />
+										{/if}
+										<span class="inline-flex items-center gap-1 rounded bg-[var(--color-tron-cyan)]/10 px-2 py-0.5 text-xs text-[var(--color-tron-cyan)]">
+											<svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+												<path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+											</svg>
+											{row.photoCount}
+										</span>
+									</div>
 								{:else}
 									<span class="text-xs text-[var(--color-tron-text-secondary)]">---</span>
 								{/if}

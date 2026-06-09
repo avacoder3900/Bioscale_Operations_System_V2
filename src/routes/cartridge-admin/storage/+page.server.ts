@@ -2,6 +2,7 @@ import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, CartridgeRecord, Equipment, EquipmentLocation, AuditLog, generateId } from '$lib/server/db';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';
+import { resolveFridgeId } from '$lib/server/services/equipment-resolve';
 import type { PageServerLoad, Actions } from './$types';
 
 type StoredCartridge = {

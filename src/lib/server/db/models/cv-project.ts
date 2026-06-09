@@ -1,18 +1,43 @@
 import mongoose, { Schema } from 'mongoose';
 import { generateId } from '../utils.js';
 
+const operatorRef = { _id: String, username: String };
+
 const cvProjectSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	name: { type: String, required: true },
 	description: String,
-	projectType: { type: String, enum: ['classification', 'anomaly_detection', 'object_detection'] },
+	purpose: String,
 	tags: [String],
-	phases: [String],
-	labels: [{ name: String, color: String, _id: false }],
-	imageCount: { type: Number, default: 0 },
-	annotatedCount: { type: Number, default: 0 },
-	modelStatus: { type: String, enum: ['untrained', 'training', 'trained', 'failed'], default: 'untrained' },
-	modelVersion: String,
+
+	// Training-set composition
+	members: { type: [String], default: [] },              // explicit imageIds (snapshot mode)
+	composedOf: { type: [String], default: [] },           // projectIds (live mode unions their members at read)
+	isLiveComposition: { type: Boolean, default: false },  // false = members[] frozen, true = composedOf flattens at read
+
+	// Deployment — phases where this project's active model runs inference
+	deployAtPhases: { type: [String], default: [] },
+
+	// Versioned model registry — append-only. Never overwrite a trainedModels entry.
+	trainedModels: [{
+		_id: false,
+		version: { type: String, required: true },              // e.g. "2026-05-16T14-30-00_a3f8"
+		modelPath: { type: String, required: true },            // R2 key for the ONNX
+		trainedAt: { type: Date, required: true },
+		trainedBy: operatorRef,
+		sampleCount: Number,                                     // labeled image count used
+		sampleSnapshot: [String],                                // imageIds frozen at training (for replay)
+		confidenceThreshold: { type: Number, default: 0.5 },
+		notes: String
+	}],
+
+	// Production decision-maker. null = no model deployed yet.
+	activeModelVersion: { type: String, default: null },
+
+	// Optional shadow model — runs in parallel for evaluation, does NOT decide production.
+	shadowModelVersion: { type: String, default: null },
+
+	// Capture settings (LIZA params) — retained for any project that drives a capture station.
 	captureSettings: {
 		mode: { type: String, enum: ['full', 'raw'], default: 'full' },
 		exposure: { type: Number, default: -5 },
@@ -30,7 +55,7 @@ const cvProjectSchema = new Schema({
 	}
 }, { timestamps: true });
 
-cvProjectSchema.index({ projectType: 1 });
-cvProjectSchema.index({ modelStatus: 1 });
+cvProjectSchema.index({ name: 1 });
+cvProjectSchema.index({ deployAtPhases: 1 });
 
 export const CvProject = mongoose.models.CvProject || mongoose.model('CvProject', cvProjectSchema, 'cv_projects');

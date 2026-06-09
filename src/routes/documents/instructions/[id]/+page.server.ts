@@ -28,8 +28,8 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	const parts = await PartDefinition.find({ isActive: true })
 		.select('_id name partNumber').limit(200).lean() as any[];
 
-	const isAdmin = locals.user?.roles?.includes('admin') ?? false;
-	const canEdit = isAdmin || (locals.user?.roles?.includes('operator') ?? false);
+	const isAdmin = locals.user?.roles?.some((r: any) => r.roleName === 'admin') ?? false;
+	const canEdit = isAdmin || (locals.user?.roles?.some((r: any) => r.roleName === 'operator') ?? false);
 
 	// Active runs with unit details
 	const activeRuns = runs

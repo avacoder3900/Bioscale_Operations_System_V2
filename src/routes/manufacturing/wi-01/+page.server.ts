@@ -10,7 +10,8 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, LotRecord, ProcessConfiguration,
-	PartDefinition, AuditLog, Equipment, BackingLot, ReceivingLot, generateId
+	PartDefinition, AuditLog, Equipment, BackingLot, ReceivingLot,
+	InventoryTransaction, generateId
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { nanoid } from 'nanoid';
@@ -111,6 +112,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		lotStepEntries: [],
 		recentLots: (recentLots as any[]).map((l: any) => ({
 			lotId: String(l._id),
+			bucketBarcode: l.bucketBarcode ?? null,
 			quantityProduced: l.quantityProduced ?? 0,
 			operatorName: l.operator?.username ?? 'unknown',
 			status: l.status ?? 'unknown',
@@ -148,7 +150,32 @@ export const actions: Actions = {
 		if (!check.ok) {
 			return fail(400, { validateLot: { ok: false, partNumber, lotId, reason: check.reason } });
 		}
-		return { validateLot: { ok: true, partNumber, lotId, partName: check.lot.part?.name ?? '' } };
+
+		// Per-lot remaining = lot.quantity - sum of consumption/scrap transactions
+		// against this lotId. Without this, the inventory cards above show the
+		// part-total (e.g. 1550 across all PT-CT-104 lots) and the operator has
+		// no way to tell whether THIS lot can cover their planned batch.
+		// Aggregating raw quantity field with Math.abs handles both sign
+		// conventions historically used by recordTransaction.
+		const consumed = await InventoryTransaction.aggregate([
+			{ $match: { lotId, transactionType: { $in: ['consumption', 'scrap'] } } },
+			{ $group: { _id: null, total: { $sum: '$quantity' } } }
+		]);
+		const consumedAbs = Math.abs((consumed[0] as any)?.total ?? 0);
+		const lotQty = Number(check.lot.quantity ?? 0);
+		const lotRemaining = Math.max(0, lotQty - consumedAbs);
+
+		return {
+			validateLot: {
+				ok: true,
+				partNumber,
+				lotId,
+				partName: check.lot.part?.name ?? '',
+				lotQuantity: lotQty,
+				lotConsumed: consumedAbs,
+				lotRemaining
+			}
+		};
 	},
 
 	/**
@@ -294,6 +321,13 @@ export const actions: Actions = {
 
 		const lot = await LotRecord.findById(lotId).lean() as any;
 		if (!lot) return fail(404, { confirmComplete: { error: 'Lot not found' } });
+		if (lot.status === 'Completed') {
+			// Idempotency: a double-submit (e.g. SvelteKit action fetch retried)
+			// would otherwise produce duplicate consumption + scrap transactions.
+			// See inventory-transactions audit trail for the 2026-04-13
+			// KnvhBjHKSC0jStX1rQw4s lot that was superseded for this reason.
+			return fail(409, { confirmComplete: { error: 'Lot already completed' } });
+		}
 
 		const now = new Date();
 		const startTime = lot.startTime ?? now;
@@ -360,21 +394,34 @@ export const actions: Actions = {
 			}
 		});
 
+		// Build a materialName → input ReceivingLot barcode map from the
+		// LotRecord we created at checkAndStart. Each consumption / scrap tx
+		// gets the actual input lot stamped on it so per-lot remaining math
+		// works AND the inventory-transactions UI can show "consumed from
+		// lot X." Until this fix, lotId was never written and per-lot
+		// remaining always equaled the original lot quantity.
+		const inputLotByMaterial: Record<string, string | undefined> = {};
+		for (const il of (lot.inputLots ?? []) as Array<{ materialName?: string; barcode?: string }>) {
+			if (il?.materialName && il?.barcode) inputLotByMaterial[il.materialName] = il.barcode;
+		}
+
 		// Withdraw each material: good count + that part's specific scrap
 		for (const cp of CONSUMED_PARTS) {
 			const partScrap = perPartScrap[cp.partNumber] ?? 0;
 			const consumed = actualCount + partScrap;
 			const partId = await resolvePartId(cp.partNumber);
+			const inputLotBarcode = inputLotByMaterial[cp.name];
 
 			await recordTransaction({
 				transactionType: 'consumption',
 				partDefinitionId: partId ?? undefined,
+				lotId: inputLotBarcode,
 				quantity: consumed,
 				manufacturingStep: 'backing',
 				manufacturingRunId: lotId,
 				operatorId: locals.user._id,
 				operatorUsername: locals.user.username,
-				notes: `WI-01 lot ${lotId}: ${consumed}x ${cp.name} (${actualCount} good + ${partScrap} scrapped)`
+				notes: `WI-01 lot ${lotId}: ${consumed}x ${cp.name} (${actualCount} good + ${partScrap} scrapped) from input lot ${inputLotBarcode ?? '(unknown)'}`
 			});
 
 			// Separate scrap transaction for this part if any were scrapped
@@ -382,6 +429,7 @@ export const actions: Actions = {
 				await recordTransaction({
 					transactionType: 'scrap',
 					partDefinitionId: partId ?? undefined,
+					lotId: inputLotBarcode,
 					quantity: partScrap,
 					manufacturingStep: 'backing',
 					manufacturingRunId: lotId,
@@ -389,7 +437,7 @@ export const actions: Actions = {
 					operatorUsername: locals.user.username,
 					scrapReason,
 					scrapCategory: 'other',
-					notes: `WI-01 lot ${lotId}: ${partScrap}x ${cp.name} scrapped — ${scrapReason}`
+					notes: `WI-01 lot ${lotId}: ${partScrap}x ${cp.name} scrapped from input lot ${inputLotBarcode ?? '(unknown)'} — ${scrapReason}`
 				});
 			}
 		}
@@ -452,6 +500,49 @@ export const actions: Actions = {
 		});
 
 		return { addSessionNote: { success: true, notes: updatedNotes } };
+	},
+
+	/**
+	 * Delete an in-progress lot. Only allowed when status='In Progress' —
+	 * completed lots are immutable (consumed inventory, registered BackingLot).
+	 * No inventory was withdrawn yet at the In Progress stage (withdrawal
+	 * happens in confirmComplete), so deletion just removes the LotRecord
+	 * stub and audit-logs the discard.
+	 */
+	deleteLot: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const lotId = data.get('lotId') as string;
+		if (!lotId) return fail(400, { deleteLot: { error: 'Lot ID required' } });
+
+		const lot = await LotRecord.findById(lotId).lean() as any;
+		if (!lot) return fail(404, { deleteLot: { error: 'Lot not found' } });
+		if (lot.status !== 'In Progress') {
+			return fail(400, { deleteLot: { error: `Cannot delete lot in status "${lot.status}". Only In Progress lots can be deleted.` } });
+		}
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'lot_records',
+			recordId: lotId,
+			action: 'DELETE',
+			changedBy: locals.user.username,
+			changedAt: new Date(),
+			oldData: {
+				status: lot.status,
+				plannedQuantity: lot.plannedQuantity,
+				operator: lot.operator,
+				inputLots: (lot.inputLots ?? []).map((l: any) => ({ materialName: l.materialName, barcode: l.barcode })),
+				startTime: lot.startTime
+			},
+			reason: 'Operator-initiated discard of in-progress backing batch'
+		});
+
+		await LotRecord.deleteOne({ _id: lotId });
+
+		return { deleteLot: { success: true, lotId } };
 	},
 
 	/** Resume an in-progress lot */

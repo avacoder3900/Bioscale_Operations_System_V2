@@ -1,13 +1,16 @@
 import { redirect, fail } from '@sveltejs/kit';
+import mongoose from 'mongoose';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
 	Equipment, EquipmentLocation, AuditLog, BackingLot, WaxBatch, ReceivingLot, LotRecord
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
+import { resolveFridgeId, resolveCoolingTrayId, resolveDeckId } from '$lib/server/services/equipment-resolve';
 import { isAdmin } from '$lib/server/permissions';
 import { User } from '$lib/server/db';
 import { notifyLowWaxBatch, notifyRunLifecycle, shouldWarnLowWax } from '$lib/server/notifications';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
+import { protectLockedCarts, LOCKED_STATUSES } from '$lib/server/manufacturing/locked-cartridges';
 import bcrypt from 'bcryptjs';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -64,6 +67,7 @@ const REAGENT_PAGE_OWNED_STAGES = new Set(['Setup', 'Loading', 'Running', 'Inspe
 function emptyState(robotId: string, loadError: string | null = null) {
 	return {
 		robotId,
+		robotName: 'Wax Filling',
 		loadError,
 		robotBlocked: null as { process: 'reagent'; runId: string | null } | null,
 		runState: {
@@ -73,7 +77,8 @@ function emptyState(robotId: string, loadError: string | null = null) {
 		},
 		settings: {
 			runDurationMin: 45, removeDeckWarningMin: 5, coolingWarningMin: 7,
-			deckLockoutMin: 25, incubatorTempC: 37, heaterTempC: 65
+			deckLockoutMin: 25, incubatorTempC: 37, heaterTempC: 65,
+			minCoolingBeforeQcMin: 2
 		},
 		tubeData: null as null | {
 			tubeId: string; initialVolumeUl: number; remainingVolumeUl: number;
@@ -85,6 +90,7 @@ function emptyState(robotId: string, loadError: string | null = null) {
 		rejectionCodes: [] as any[],
 		qcCartridges: [] as any[],
 		storageCartridges: [] as any[],
+		lockedCartridges: [] as { cartridgeId: string; status: string }[],
 		fridges: [] as { id: string; displayName: string; barcode: string }[]
 	};
 }
@@ -147,6 +153,13 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 		const run = activeWaxRun as any;
 		const stage = run ? toStage(run.status) : null;
 
+		// Existing wax_run note body, if the operator has already saved one on
+		// this run — pre-populates the textarea on reload so they can keep
+		// editing without losing context.
+		const existingWaxRunNote = run
+			? ((run.notes ?? []).find((n: any) => n.phase === 'wax_run')?.body ?? '')
+			: '';
+
 		// Build runState
 		const runState = run
 			? {
@@ -160,9 +173,10 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 				waxSourceLot: run.waxSourceLot ?? null,
 				coolingTrayId: run.coolingTrayId ?? null,
 				plannedCartridgeCount: run.plannedCartridgeCount ?? run.cartridgeIds?.length ?? null,
-				coolingConfirmedAt: run.coolingConfirmedTime ? new Date(run.coolingConfirmedTime).toISOString() : null
+				coolingConfirmedAt: run.coolingConfirmedTime ? new Date(run.coolingConfirmedTime).toISOString() : null,
+				existingWaxRunNote
 			}
-			: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckRemovedTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null, coolingConfirmedAt: null };
+			: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckRemovedTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null, coolingConfirmedAt: null, existingWaxRunNote: '' };
 
 		// Tube data
 		const tube = activeTube as any;
@@ -207,12 +221,28 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			? await CartridgeRecord.find({ 'waxFilling.runId': String(run._id) }).lean().catch(() => [])
 			: [];
 
-		const storageCartridges = (storageCartridgesRaw as any[]).map((c: any) => ({
-			cartridgeId: String(c._id),
-			qcStatus: c.waxQc?.status ?? 'Accepted',
-			currentInventory: c.status ?? 'wax_stored',
-			storageLocation: c.waxStorage?.location ?? null
-		}));
+		// Split off carts the wax flow can't touch any more (relinked to an SPU,
+		// already completed, voided, scrapped). protectLockedCarts will silently
+		// filter them out of every wax-flow write, so showing them in the
+		// "needs storage" list strands the run forever. Surface them separately
+		// so the operator sees what was pulled off the run and can still
+		// Complete Run for the rest.
+		const lockedCartridges = (storageCartridgesRaw as any[])
+			.filter((c: any) => (LOCKED_STATUSES as readonly string[]).includes(c.status))
+			.map((c: any) => ({ cartridgeId: String(c._id), status: c.status }));
+		const storageCartridges = (storageCartridgesRaw as any[])
+			.filter((c: any) => !(LOCKED_STATUSES as readonly string[]).includes(c.status))
+			.map((c: any) => ({
+				cartridgeId: String(c._id),
+				qcStatus: c.waxQc?.status ?? 'Accepted',
+				// Derive UI "stored" state from waxStorage.recordedAt rather than
+				// status. status stays 'wax_filled' until completeRun (deferred
+				// commit, see 581c0d7) — but the UI needs to flip the moment
+				// recordBatchStorage runs so CompletionStorage transitions to its
+				// review state and Complete Run becomes clickable.
+				currentInventory: c.waxStorage?.recordedAt ? 'wax_stored' : (c.status ?? 'wax_filled'),
+				storageLocation: c.waxStorage?.location ?? null
+			}));
 
 		// Fridges for storage selection — use parent Equipment records
 		const [equipFridges, orphanFridges] = await Promise.all([
@@ -263,8 +293,13 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			? { process: 'reagent' as const, runId: activeReagentRunRaw._id ? String(activeReagentRunRaw._id) : null }
 			: null;
 
+		const robotName =
+			(layoutData.robots as any[] | undefined)?.find((r) => r.robotId === robotId)?.name ??
+			'Wax Filling';
+
 		return {
 			robotId,
+			robotName,
 			loadError: null,
 			robotBlocked,
 			runState,
@@ -274,7 +309,8 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 				coolingWarningMin: wax.coolingWarningMin ?? 7,
 				deckLockoutMin: wax.deckLockoutMin ?? 25,
 				incubatorTempC: wax.incubatorTempC ?? 37,
-				heaterTempC: wax.heaterTempC ?? 65
+				heaterTempC: wax.heaterTempC ?? 65,
+				minCoolingBeforeQcMin: wax.minCoolingBeforeQcMin ?? 2
 			},
 			tubeData,
 			activeLotId,
@@ -283,6 +319,7 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			rejectionCodes,
 			qcCartridges,
 			storageCartridges,
+			lockedCartridges,
 			fridges,
 			minOvenTimeMin
 		};
@@ -327,8 +364,53 @@ export const actions: Actions = {
 		const lotBarcode = (data.get('lotBarcode') as string)?.trim();
 		const runId = (data.get('runId') as string)?.trim();
 		const override = data.get('override') === 'true';
+		const testMode = data.get('testMode') === 'true';
 		const adminUser = (data.get('adminUser') as string)?.trim() ?? '';
 		const adminPass = (data.get('adminPass') as string) ?? '';
+
+		// Test mode: synthesize a backing lot so the wax flow can be run
+		// end-to-end without touching real BackingLot inventory. The lot id
+		// is deterministic per run so re-clicks during testing reuse the
+		// same row rather than piling up. No admin re-auth required.
+		if (testMode) {
+			if (!runId) return fail(400, { error: 'runId required for test mode' });
+			const testLotId = `TEST-LOT-${runId}`;
+			const existing = await BackingLot.findById(testLotId).lean() as any;
+			if (existing) {
+				await BackingLot.findByIdAndUpdate(testLotId, {
+					$set: {
+						status: 'ready',
+						cartridgeCount: 24
+					}
+				});
+			} else {
+				await BackingLot.create({
+					_id: testLotId,
+					lotType: 'backing',
+					ovenEntryTime: new Date(),
+					status: 'ready',
+					cartridgeCount: 24,
+					operator: { _id: locals.user._id, username: locals.user.username }
+				});
+			}
+			await WaxFillingRun.findByIdAndUpdate(runId, { $set: { activeLotId: testLotId } });
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'backing_lots',
+				recordId: testLotId,
+				action: existing ? 'UPDATE' : 'INSERT',
+				changedBy: locals.user.username,
+				changedAt: new Date(),
+				reason: 'Test mode — synthetic backing lot for end-to-end test (no real inventory impact)',
+				newData: { testMode: true, runId, lotId: testLotId, cartridgeCount: 24 }
+			});
+			return {
+				success: true,
+				lotId: testLotId,
+				cartridgeCount: 24,
+				testMode: true
+			};
+		}
 
 		if (!lotBarcode) return fail(400, { error: 'Lot barcode is required' });
 
@@ -353,7 +435,7 @@ export const actions: Actions = {
 
 		// Admin override path — requires re-auth (username + password). Any
 		// admin (permission `admin:full` or `admin:users`) can override; the
-		// event is recorded in audit_logs for traceability.
+		// event is recorded in audit_log for traceability.
 		if (override) {
 			const verified = await verifyAdminOverride(adminUser, adminPass);
 			if (!verified.ok) {
@@ -435,7 +517,7 @@ export const actions: Actions = {
 		const robotDoc = await Equipment.findOne({ _id: robotId, equipmentType: 'robot' }, { _id: 1, name: 1 }).lean() as any;
 		const run = await WaxFillingRun.create({
 			robot: { _id: robotId, name: robotDoc?.name ?? robotId },
-			operator: { _id: locals.user._id, username: locals.user.username },
+			operator: { _id: locals.user!._id, username: locals.user!.username },
 			status: 'Setup',
 			cartridgeIds: [],
 			setupTimestamp: new Date()
@@ -512,7 +594,11 @@ export const actions: Actions = {
 
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
-		const deckId = (data.get('deckId') as string) || undefined;
+		const deckIdRaw = (data.get('deckId') as string) || undefined;
+		// S2c: resolve deck reference to canonical Equipment._id at entry; all
+		// downstream writes (waxFilling.deckId on cartridges, WaxFillingRun.deckId)
+		// use the resolved value.
+		const deckId = deckIdRaw ? ((await resolveDeckId(deckIdRaw)) ?? deckIdRaw) : undefined;
 		const ovenId = (data.get('ovenId') as string) || undefined;
 		const cartridgeScansRaw = data.get('cartridgeScans') as string;
 
@@ -544,11 +630,15 @@ export const actions: Actions = {
 			return fail(400, { error: `Duplicate barcode(s) scanned: ${[...new Set(dupes)].join(', ')}` });
 		}
 
-		// Check if any of these cartridges are already in another active wax run
+		// Check if any of these cartridges are already in another active wax run.
+		// Excludes cartridges whose waxFilling.runId is *this* run so a retry of a
+		// half-completed loadDeck (cartridges written, run update missed) doesn't
+		// dead-end the operator with "already processed" — the second submission
+		// is idempotent for the same runId.
 		if (cartridgeIds.length > 0) {
 			const alreadyInUse = await CartridgeRecord.find({
 				_id: { $in: cartridgeIds },
-				'waxFilling.runId': { $exists: true },
+				'waxFilling.runId': { $exists: true, $ne: runId },
 				status: { $nin: [null, 'backing', 'voided'] }
 			}).select('_id status waxFilling.runId').lean();
 
@@ -640,7 +730,7 @@ export const actions: Actions = {
 					update: {
 						$setOnInsert: {
 							_id: cid,
-							'backing.operator': { _id: locals.user._id, username: locals.user.username },
+							'backing.operator': { _id: locals.user!._id, username: locals.user!.username },
 							'backing.recordedAt': now
 						},
 						$set: {
@@ -664,7 +754,7 @@ export const actions: Actions = {
 							'waxFilling.robotId': run.robot?._id ?? null,
 							'waxFilling.robotName': run.robot?.name ?? null,
 							'waxFilling.deckPosition': idx + 1,
-							'waxFilling.operator': { _id: locals.user._id, username: locals.user.username }
+							'waxFilling.operator': { _id: locals.user!._id, username: locals.user!.username }
 						}
 					},
 					upsert: true
@@ -685,15 +775,31 @@ export const actions: Actions = {
 			}
 		}
 
-		await WaxFillingRun.findByIdAndUpdate(runId, {
-			$set: {
-				status: 'Loading',
-				deckId: deckId ?? run.deckId,
-				ovenId: ovenId ?? run.ovenId,
-				plannedCartridgeCount: cartridgeIds.length || run.plannedCartridgeCount
-			},
-			$addToSet: { cartridgeIds: { $each: cartridgeIds } }
-		});
+		// The cartridge bulkWrite above stamps each cart with waxFilling.runId,
+		// but the run itself doesn't know about them until this $addToSet lands.
+		// If this update silently fails (driver timeout, etc.), the cartridges
+		// are marooned: status=wax_filling pointing at a run with empty
+		// cartridgeIds — invisible in every wax-filling UI. Surface that
+		// failure loudly so the operator can retry (which is now safe due to
+		// the alreadyInUse same-run exclusion above).
+		try {
+			const updatedRun = await WaxFillingRun.findByIdAndUpdate(runId, {
+				$set: {
+					status: 'Loading',
+					deckId: deckId ?? run.deckId,
+					ovenId: ovenId ?? run.ovenId,
+					plannedCartridgeCount: cartridgeIds.length || run.plannedCartridgeCount
+				},
+				$addToSet: { cartridgeIds: { $each: cartridgeIds } }
+			}, { new: true });
+			if (!updatedRun) {
+				console.error(`[loadDeck] WaxFillingRun ${runId} update returned null — run not found`);
+				return fail(500, { error: `Run ${runId} could not be updated (not found). Cartridges were saved — click Confirm Load again to retry.` });
+			}
+		} catch (err) {
+			console.error('[loadDeck] WaxFillingRun update failed:', err instanceof Error ? err.message : err);
+			return fail(500, { error: `Failed to attach cartridges to run: ${err instanceof Error ? err.message : 'Unknown error'}. Cartridges were saved — click Confirm Load again to retry.` });
+		}
 
 		return { success: true };
 	},
@@ -770,23 +876,68 @@ export const actions: Actions = {
 		// Tray conflict runs at scan time (see /api/dev/validate-equipment
 		// ?type=tray). No duplicate check here.
 
+		// S2b: resolve cooling tray to canonical Equipment._id
+		let resolvedTrayId: string | undefined;
+		if (coolingTrayId) {
+			const resolved = await resolveCoolingTrayId(coolingTrayId);
+			if (!resolved) return fail(400, { error: `Unknown cooling tray: ${coolingTrayId}` });
+			resolvedTrayId = resolved;
+		}
+
+		// Resolve the fridge this tray currently lives in (inferred from
+		// EquipmentLocation.currentPlacements). Degrades gracefully: if the
+		// tray has no placement, we still record the cooling but skip the
+		// fridge fields and log a warning.
+		let coolingLocationId: string | undefined;
+		let coolingLocationName: string | undefined;
+		if (resolvedTrayId) {
+			const fridgeLoc = await EquipmentLocation.findOne({
+				locationType: 'fridge',
+				isActive: true,
+				currentPlacements: { $elemMatch: { itemId: resolvedTrayId } }
+			}).lean().catch(() => null) as any;
+			if (fridgeLoc) {
+				coolingLocationId = String(fridgeLoc._id);
+				coolingLocationName = fridgeLoc.displayName ?? fridgeLoc.barcode ?? undefined;
+			} else {
+				console.warn(`[confirmCooling] No fridge placement found for tray ${resolvedTrayId}`);
+			}
+		}
+
 		const update: Record<string, any> = { status: 'QC', coolingConfirmedTime: now, coolingConfirmedAt: now };
-		if (coolingTrayId) update.coolingTrayId = coolingTrayId;
+		if (resolvedTrayId) update.coolingTrayId = resolvedTrayId;
+		if (coolingLocationId) update.coolingLocationId = coolingLocationId;
 
 		const run = await WaxFillingRun.findByIdAndUpdate(runId, { $set: update }, { new: true }).lean() as any;
 
 		// Record oven exit time on cartridges that have an ovenCure.entryTime
+		// and stamp the cooling fridge on each cartridge's waxStorage subdoc.
+		// Locked carts (linked/underway/completed/voided/scrapped) are skipped + logged.
 		if (run?.cartridgeIds?.length) {
-			const bulkOps = run.cartridgeIds.map((cid: string) => ({
-				updateOne: {
-					filter: { _id: cid, 'ovenCure.entryTime': { $exists: true }, 'ovenCure.exitTime': { $exists: false } },
-					update: { $set: { 'ovenCure.exitTime': now } }
-				}
-			}));
-			await CartridgeRecord.bulkWrite(bulkOps);
+			const { safeIds } = await protectLockedCarts(
+				run.cartridgeIds,
+				'confirmCooling',
+				runId,
+				{ _id: locals.user!._id, username: locals.user!.username }
+			);
+
+			if (safeIds.length > 0) {
+				const waxStorageSet: Record<string, any> = {};
+				if (coolingTrayId) waxStorageSet['waxStorage.coolingTrayId'] = coolingTrayId;
+				if (coolingLocationId) waxStorageSet['waxStorage.coolingLocationId'] = coolingLocationId;
+				if (coolingLocationName) waxStorageSet['waxStorage.coolingLocationName'] = coolingLocationName;
+
+				const bulkOps = safeIds.map((cid: string) => ({
+					updateOne: {
+						filter: { _id: cid, 'ovenCure.entryTime': { $exists: true }, 'ovenCure.exitTime': { $exists: false } },
+						update: { $set: { 'ovenCure.exitTime': now, ...waxStorageSet } }
+					}
+				}));
+				await CartridgeRecord.bulkWrite(bulkOps);
+			}
 		}
 
-		return { success: true };
+		return { success: true, coolingLocationId, coolingLocationName };
 	},
 
 	/** Complete QC — inspect all cartridges and transition to Storage */
@@ -795,16 +946,31 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = (data.get('runId') as string)?.trim();
 		const now = new Date();
 
-		// Server-side cooling timer check: minimum 10 minutes must pass after cooling confirmed
-		const runBeforeQc = await WaxFillingRun.findById(runId).select('coolingConfirmedAt').lean() as any;
+		if (!runId) return fail(404, { error: 'Run not found' });
+
+		// Idempotency: if a prior click flipped status='Storage' but a
+		// downstream side-effect threw, re-firing would duplicate inventory
+		// rows + waxQc writes. Treat as success.
+		const runBeforeQc = await WaxFillingRun.findById(runId).select('coolingConfirmedAt status').lean() as any;
+		if (!runBeforeQc) return fail(404, { error: 'Run not found' });
+		if (runBeforeQc.status === 'Storage' || runBeforeQc.status === 'storage' || runBeforeQc.status === 'completed') {
+			return { success: true };
+		}
+
+		// Server-side cooling timer check: minimum cool-down before QC.
+		// Configurable via ManufacturingSettings.waxFilling.minCoolingBeforeQcMin
+		// (default 2 min). Editable from the wax-filling settings page.
 		if (runBeforeQc?.coolingConfirmedAt) {
+			const settingsDocQc = await ManufacturingSettings.findById('default').select('waxFilling.minCoolingBeforeQcMin').lean() as any;
+			const minCoolMin = settingsDocQc?.waxFilling?.minCoolingBeforeQcMin ?? 2;
+			const minCoolMs = minCoolMin * 60 * 1000;
 			const elapsedMs = Date.now() - new Date(runBeforeQc.coolingConfirmedAt).getTime();
-			if (elapsedMs < 10 * 60 * 1000) {
-				const remainingMin = Math.ceil((10 * 60 * 1000 - elapsedMs) / 60000);
-				return fail(400, { error: `Cartridges must cool for at least 10 minutes before QC inspection. ${remainingMin} minute${remainingMin === 1 ? '' : 's'} remaining.` });
+			if (elapsedMs < minCoolMs) {
+				const remainingMin = Math.ceil((minCoolMs - elapsedMs) / 60000);
+				return fail(400, { error: `Cartridges must cool for at least ${minCoolMin} minute${minCoolMin === 1 ? '' : 's'} before QC inspection. ${remainingMin} minute${remainingMin === 1 ? '' : 's'} remaining.` });
 			}
 		}
 
@@ -812,75 +978,93 @@ export const actions: Actions = {
 			$set: { status: 'Storage', runEndTime: now }
 		}, { new: true }).lean() as any;
 
-		// Write waxFilling phase to all cartridges (WRITE-ONCE)
+		// Write waxFilling phase to all cartridges (WRITE-ONCE).
+		// Locked carts (linked/underway/completed/voided/scrapped) are skipped + audited.
 		if (run?.cartridgeIds?.length) {
-			const bulkOps = run.cartridgeIds.map((cid: string) => ({
-				updateOne: {
-					filter: { _id: cid, 'waxFilling.recordedAt': { $exists: false } },
-					update: {
-						$set: {
-							'waxFilling.runId': run._id,
-							'waxFilling.robotId': run.robot?._id,
-							'waxFilling.robotName': run.robot?.name,
-							'waxFilling.deckId': run.deckId,
-							'waxFilling.waxTubeId': run.waxTubeId,
-							'waxFilling.waxSourceLot': run.waxSourceLot,
-							'waxFilling.operator': run.operator,
-							'waxFilling.runStartTime': run.runStartTime,
-							'waxFilling.runEndTime': now,
-							'waxFilling.recordedAt': now,
-							status: 'wax_filled'
+			const { safeIds } = await protectLockedCarts(
+				run.cartridgeIds,
+				'completeQC',
+				runId,
+				{ _id: locals.user!._id, username: locals.user!.username }
+			);
+
+			if (safeIds.length > 0) {
+				const bulkOps = safeIds.map((cid: string) => ({
+					updateOne: {
+						filter: { _id: cid, 'waxFilling.recordedAt': { $exists: false } },
+						update: {
+							$set: {
+								'waxFilling.runId': run._id,
+								'waxFilling.robotId': run.robot?._id,
+								'waxFilling.robotName': run.robot?.name,
+								'waxFilling.deckId': run.deckId,
+								'waxFilling.waxTubeId': run.waxTubeId,
+								'waxFilling.waxSourceLot': run.waxSourceLot,
+								'waxFilling.operator': run.operator,
+								'waxFilling.runStartTime': run.runStartTime,
+								'waxFilling.runEndTime': now,
+								'waxFilling.recordedAt': now,
+								status: 'wax_filled'
+							}
 						}
 					}
-				}
-			}));
-			await CartridgeRecord.bulkWrite(bulkOps);
+				}));
+				await CartridgeRecord.bulkWrite(bulkOps);
 
-			// Write waxQc.status='Accepted' for every cartridge that wasn't rejected
-			// during QC. Rejects already carry waxQc.recordedAt (from rejectCartridge),
-			// so the recordedAt-not-set filter excludes them.
-			const acceptOps = run.cartridgeIds.map((cid: string) => ({
-				updateOne: {
-					filter: { _id: cid, 'waxQc.recordedAt': { $exists: false }, status: { $ne: 'scrapped' } },
-					update: {
-						$set: {
-							'waxQc.status': 'Accepted',
-							'waxQc.operator': { _id: locals.user._id, username: locals.user.username },
-							'waxQc.timestamp': now,
-							'waxQc.recordedAt': now
+				// Write waxQc.status='Accepted' for every cartridge that wasn't rejected
+				// during QC. Rejects already carry waxQc.recordedAt (from rejectCartridge),
+				// so the recordedAt-not-set filter excludes them.
+				const acceptOps = safeIds.map((cid: string) => ({
+					updateOne: {
+						filter: { _id: cid, 'waxQc.recordedAt': { $exists: false }, status: { $ne: 'scrapped' } },
+						update: {
+							$set: {
+								'waxQc.status': 'Accepted',
+								'waxQc.operator': { _id: locals.user!._id, username: locals.user!.username },
+								'waxQc.timestamp': now,
+								'waxQc.recordedAt': now
+							}
 						}
 					}
-				}
-			}));
-			await CartridgeRecord.bulkWrite(acceptOps);
+				}));
+				await CartridgeRecord.bulkWrite(acceptOps);
 
-			// Record inventory transactions for each cartridge — consume wax (PT-CT-105)
-			const waxPartId = await resolvePartId('PT-CT-105');
-			for (const cid of run.cartridgeIds) {
-				await recordTransaction({
-					transactionType: 'consumption',
-					partDefinitionId: waxPartId ?? undefined,
-					cartridgeRecordId: cid,
-					lotId: run.waxSourceLot ?? undefined,
-					quantity: 1,
-					manufacturingStep: 'wax_filling',
-					manufacturingRunId: String(run._id),
-					operatorId: run.operator?._id,
-					operatorUsername: run.operator?.username,
-					notes: `Wax-filled cartridge created in run ${run._id}`
-				});
+				// Record inventory transactions for each cartridge — consume wax (PT-CT-105)
+				try {
+					const waxPartId = await resolvePartId('PT-CT-105');
+					for (const cid of safeIds) {
+						await recordTransaction({
+							transactionType: 'consumption',
+							partDefinitionId: waxPartId ?? undefined,
+							cartridgeRecordId: cid,
+							lotId: run.waxSourceLot ?? undefined,
+							quantity: 1,
+							manufacturingStep: 'wax_filling',
+							manufacturingRunId: String(run._id),
+							operatorId: run.operator?._id,
+							operatorUsername: run.operator?.username,
+							notes: `Wax-filled cartridge created in run ${run._id}`
+						});
+					}
+				} catch (e) {
+					console.error('[completeQC] consumption recordTransaction failed:', e instanceof Error ? e.message : e);
+				}
 			}
 		}
 
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'wax_filling_runs',
-			recordId: runId,
-			action: 'UPDATE',
-			changedBy: locals.user?.username,
-			changedAt: now,
-			newData: { status: 'Storage' }
-		});
+		try {
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'wax_filling_runs',
+				recordId: runId,
+				action: 'UPDATE',
+				changedBy: locals.user?.username,
+				changedAt: now,
+				newData: { status: 'Storage' }
+			});
+		} catch (e) {
+			console.error('[completeQC] audit log failed:', e instanceof Error ? e.message : e);
+		}
 
 		return { success: true };
 	},
@@ -1037,6 +1221,20 @@ export const actions: Actions = {
 		const rejectionReason = (data.get('rejectionReason') as string) || '';
 		const now = new Date();
 
+		// If the cart is already linked/underway/completed/voided/scrapped,
+		// don't overwrite — log the attempt and refuse.
+		const { safeIds, blockedDetails } = await protectLockedCarts(
+			[cartridgeId],
+			'rejectCartridge',
+			undefined,
+			{ _id: locals.user!._id, username: locals.user!.username }
+		);
+		if (safeIds.length === 0) {
+			return fail(400, {
+				error: `Cannot reject — cartridge is at status="${blockedDetails[0]?.status}" (already in SPU testing or finalized). The attempt has been logged.`
+			});
+		}
+
 		// Wax rejects use status='scrapped' (distinct from the generic 'voided'
 		// used by operator-initiated removals). Cartridge stays in the system
 		// so inventory + traceability queries can still find it.
@@ -1046,7 +1244,7 @@ export const actions: Actions = {
 				$set: {
 					'waxQc.status': 'Rejected',
 					'waxQc.rejectionReason': rejectionReason,
-					'waxQc.operator': { _id: locals.user._id, username: locals.user.username },
+					'waxQc.operator': { _id: locals.user!._id, username: locals.user!.username },
 					'waxQc.timestamp': now,
 					'waxQc.recordedAt': now,
 					status: 'scrapped',
@@ -1089,19 +1287,91 @@ export const actions: Actions = {
 			return fail(400, { error: 'Invalid cartridge IDs' });
 		}
 
+		// Guard: completeQC must have landed before storage. If any cart is still
+		// at status='wax_filling', writing waxStorage now would leave it stranded
+		// — completeRun's wax_filled→wax_stored flip is filtered on status, so the
+		// cart would sit at 'wax_filling' with waxStorage set forever. Caused a
+		// 37-cart incident on 2026-05-04 when completeQC 500'd mid-action.
+		const stillFilling = await CartridgeRecord.find({
+			_id: { $in: cartridgeIds },
+			status: 'wax_filling'
+		}).select('_id').lean() as any[];
+		if (stillFilling.length > 0) {
+			const idList = stillFilling.map(c => c._id).join(', ');
+			return fail(400, {
+				error: `Cannot record storage — ${stillFilling.length} cartridge${stillFilling.length === 1 ? '' : 's'} still at status 'wax_filling' (completeQC did not land). Re-run QC inspection before assigning a fridge. Stuck IDs: ${idList.slice(0, 300)}`
+			});
+		}
+
+		// Resolve the fridge for this batch: first try the storageLocation
+		// string (it may be an EquipmentLocation _id or barcode); if that
+		// misses, fall back to the tray's current placement.
+		let coolingLocationId: string | undefined;
+		let coolingLocationName: string | undefined;
+		if (location) {
+			const direct = await EquipmentLocation.findOne({
+				locationType: 'fridge',
+				isActive: true,
+				$or: [{ _id: location }, { barcode: location }]
+			}).lean().catch(() => null) as any;
+			if (direct) {
+				coolingLocationId = String(direct._id);
+				coolingLocationName = direct.displayName ?? direct.barcode ?? undefined;
+			}
+		}
+		if (!coolingLocationId && coolingTrayId) {
+			const byTray = await EquipmentLocation.findOne({
+				locationType: 'fridge',
+				isActive: true,
+				currentPlacements: { $elemMatch: { itemId: coolingTrayId } }
+			}).lean().catch(() => null) as any;
+			if (byTray) {
+				coolingLocationId = String(byTray._id);
+				coolingLocationName = byTray.displayName ?? byTray.barcode ?? undefined;
+			} else {
+				console.warn(`[recordBatchStorage] No fridge placement found for tray ${coolingTrayId}`);
+			}
+		}
+
+		// Locked carts (linked/underway/completed/voided/scrapped) skipped + audited.
+		// Derive runId from the first cart's waxFilling.runId for the audit log.
+		const firstCart = cartridgeIds[0]
+			? await CartridgeRecord.findById(cartridgeIds[0]).select('waxFilling.runId').lean() as any
+			: null;
+		const inferredRunId: string | undefined = firstCart?.waxFilling?.runId;
+		const { safeIds, blockedDetails } = await protectLockedCarts(
+			cartridgeIds,
+			'recordBatchStorage',
+			inferredRunId,
+			{ _id: locals.user!._id, username: locals.user!.username }
+		);
+
 		const now = new Date();
-		if (cartridgeIds.length > 0) {
-			const bulkOps = cartridgeIds.map((cid: string) => ({
+		// S1a: resolve the scanned fridge reference to Equipment._id. See
+		// opentron-control/wax/[runId]/+page.server.ts for the same pattern.
+		const resolvedLocationId = await resolveFridgeId(location);
+		// S2b: pre-resolve cooling tray here (outside the .map below) because
+		// the map callback is sync and can't await — same pattern as the
+		// sibling opentron-control route.
+		const resolvedTrayId = coolingTrayId ? await resolveCoolingTrayId(coolingTrayId) : null;
+		if (safeIds.length > 0) {
+			// Storage fields only — status stays 'wax_filled' until completeRun.
+			// Keeps reagent filling from picking up cartridges whose parent wax
+			// run is still open.
+			const bulkOps = safeIds.map((cid: string) => ({
 				updateOne: {
 					filter: { _id: cid, 'waxStorage.recordedAt': { $exists: false } },
 					update: {
 						$set: {
+							'waxStorage.locationId': resolvedLocationId,
 							'waxStorage.location': location,
-							'waxStorage.coolingTrayId': coolingTrayId,
-							'waxStorage.operator': { _id: locals.user._id, username: locals.user.username },
+							'waxStorage.coolingTrayId': resolvedTrayId ?? coolingTrayId,
+							...(coolingLocationId ? { 'waxStorage.coolingLocationId': coolingLocationId } : {}),
+							...(coolingLocationName ? { 'waxStorage.coolingLocationName': coolingLocationName } : {}),
+							'waxStorage.operator': { _id: locals.user!._id, username: locals.user!.username },
 							'waxStorage.timestamp': now,
-							'waxStorage.recordedAt': now,
-							status: 'wax_stored'
+							'waxStorage.recordedAt': now
+							// status intentionally NOT set — completeRun does the wax_stored flip.
 						}
 					}
 				}
@@ -1109,7 +1379,7 @@ export const actions: Actions = {
 			await CartridgeRecord.bulkWrite(bulkOps);
 
 			// Record storage transactions
-			for (const cid of cartridgeIds) {
+			for (const cid of safeIds) {
 				await recordTransaction({
 					transactionType: 'creation',
 					cartridgeRecordId: cid,
@@ -1117,7 +1387,7 @@ export const actions: Actions = {
 					manufacturingStep: 'storage',
 					operatorId: locals.user._id,
 					operatorUsername: locals.user.username,
-					notes: `Wax storage: ${location}${coolingTrayId ? `, tray ${coolingTrayId}` : ''}`
+					notes: `Wax storage: ${location}${coolingTrayId ? `, tray ${coolingTrayId}` : ''}${coolingLocationName ? `, fridge ${coolingLocationName}` : ''}`
 				});
 			}
 
@@ -1125,15 +1395,158 @@ export const actions: Actions = {
 			await AuditLog.create({
 				_id: generateId(),
 				tableName: 'cartridge_records',
-				recordId: cartridgeIds[0] ?? 'batch',
+				recordId: safeIds[0] ?? 'batch',
 				action: 'UPDATE',
 				changedBy: locals.user?.username,
 				changedAt: now,
-				newData: { status: 'wax_stored', location, count: cartridgeIds.length }
+				newData: { status: 'wax_stored', location, coolingLocationId, coolingLocationName, count: safeIds.length, skippedLockedCount: blockedDetails.length }
 			});
 		}
 
-		return { success: true };
+		return {
+			success: true,
+			coolingLocationId,
+			coolingLocationName,
+			skippedLockedCount: blockedDetails.length,
+			skippedCarts: blockedDetails.map((b) => ({ cartridgeId: b._id, status: b.status }))
+		};
+	},
+
+	/**
+	 * Clear waxStorage fields on every cartridge in the run so the operator can
+	 * re-pick fridges. Only allowed while the run is still in Storage stage —
+	 * once completeRun has flipped status to 'completed', the assignments are
+	 * locked. Mirrors the action in opentron-control/wax/[runId]/+page.server.ts
+	 * — fix bugs in both.
+	 */
+	reassignStorage: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const runId = data.get('runId') as string;
+		const now = new Date();
+
+		const run = await WaxFillingRun.findById(runId).lean() as any;
+		if (!run) return fail(404, { error: 'Run not found' });
+		if (run.status !== 'Storage' && run.status !== 'storage') {
+			return fail(400, { error: `Cannot reassign — run status is "${run.status}". Reassign is only allowed during Storage stage.` });
+		}
+
+		const cartIds: string[] = run.cartridgeIds ?? [];
+		if (cartIds.length === 0) return { success: true };
+
+		// Skip locked carts (linked/underway/completed/voided/scrapped) — clearing
+		// waxStorage on a cart already in SPU testing would invalidate downstream state.
+		const { safeIds, blockedDetails } = await protectLockedCarts(
+			cartIds,
+			'reassignStorage',
+			runId,
+			{ _id: locals.user!._id, username: locals.user!.username }
+		);
+		if (safeIds.length === 0) {
+			return {
+				success: true,
+				skippedLockedCount: blockedDetails.length,
+				skippedCarts: blockedDetails.map((b) => ({ cartridgeId: b._id, status: b.status }))
+			};
+		}
+
+		await CartridgeRecord.updateMany(
+			{ _id: { $in: safeIds } },
+			{ $unset: { waxStorage: '' } }
+		);
+
+		await mongoose.connection.db!.collection('inventory_transactions').updateMany(
+			{
+				cartridgeRecordId: { $in: safeIds },
+				manufacturingStep: 'storage',
+				transactionType: 'creation',
+				retractedAt: { $exists: false }
+			},
+			{
+				$set: {
+					retractedBy: locals.user?.username ?? 'unknown',
+					retractedAt: now,
+					retractionReason: 'Reassign storage — operator changing fridge selection'
+				}
+			}
+		);
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'cartridge_records',
+			recordId: safeIds[0] ?? 'batch',
+			action: 'REASSIGN_STORAGE',
+			changedBy: locals.user?.username,
+			changedAt: now,
+			newData: { runId, count: safeIds.length, reason: 'Operator-initiated reassignment', skippedLockedCount: blockedDetails.length }
+		});
+
+		return {
+			success: true,
+			skippedLockedCount: blockedDetails.length,
+			skippedCarts: blockedDetails.map((b) => ({ cartridgeId: b._id, status: b.status }))
+		};
+	},
+
+	/**
+	 * Save an operator-entered note against the wax run. Append-only metadata —
+	 * does NOT mutate run status, cartridge status, or any lifecycle field. The
+	 * note is mirrored to every cartridge currently on the run (phase='wax_run')
+	 * AND to WaxFillingRun.notes[] so run-history surfaces can read run.notes
+	 * directly. At most one wax_run note per cartridge — re-saving overwrites.
+	 */
+	recordWaxRunNote: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const runId = data.get('runId') as string;
+		const noteBody = ((data.get('noteBody') as string) ?? '').trim();
+
+		if (!runId) return fail(400, { error: 'runId is required' });
+		if (!noteBody) return fail(400, { error: 'Note body is empty' });
+
+		const run = await WaxFillingRun.findById(runId).select('cartridgeIds').lean() as any;
+		if (!run) return fail(404, { error: 'Run not found' });
+
+		const cartridgeIds: string[] = (run.cartridgeIds ?? []).filter(Boolean);
+
+		const now = new Date();
+		const noteId = generateId();
+		const noteEntry = {
+			_id: noteId,
+			body: noteBody,
+			phase: 'wax_run',
+			author: { _id: locals.user!._id, username: locals.user!.username },
+			createdAt: now
+		};
+
+		// Pull then push: a single wax_run note exists per cartridge AND on the
+		// run document. Re-saves overwrite — operator can refine the note up
+		// until they click Complete Run.
+		const cartridgeOps = cartridgeIds.length > 0 ? [
+			CartridgeRecord.updateMany(
+				{ _id: { $in: cartridgeIds } },
+				{ $pull: { notes: { phase: 'wax_run' } } }
+			),
+			CartridgeRecord.updateMany(
+				{ _id: { $in: cartridgeIds } },
+				{ $push: { notes: noteEntry } }
+			)
+		] : [];
+
+		await Promise.all([
+			WaxFillingRun.updateOne({ _id: runId }, { $pull: { notes: { phase: 'wax_run' } } }),
+			...cartridgeOps.slice(0, 1)
+		]);
+		await Promise.all([
+			WaxFillingRun.updateOne({ _id: runId }, { $push: { notes: noteEntry } }),
+			...cartridgeOps.slice(1)
+		]);
+
+		return { success: true, noteId, cartridgeCount: cartridgeIds.length };
 	},
 
 	/** Complete the full run */
@@ -1142,8 +1555,19 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		const runId = (data.get('runId') as string)?.trim();
 		const now = new Date();
+
+		if (!runId) return fail(404, { error: 'Run not found' });
+
+		// Idempotency: if a prior click flipped status='completed' but a
+		// downstream side-effect threw, re-firing would double-count inventory
+		// and push duplicate audit rows. Treat as success.
+		const existingRun = await WaxFillingRun.findById(runId).select('status').lean() as any;
+		if (!existingRun) return fail(404, { error: 'Run not found' });
+		if (existingRun.status === 'completed') {
+			return { success: true };
+		}
 
 		const run = await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'completed', runEndTime: now }
@@ -1151,7 +1575,36 @@ export const actions: Actions = {
 
 		// Update consumable usage logs
 		const cartridgeCount = run?.cartridgeIds?.length ?? 0;
-		const operatorRef = { _id: locals.user._id, username: locals.user.username };
+		const operatorRef = { _id: locals.user!._id, username: locals.user!.username };
+
+		// Commit point: flip wax_filled → wax_stored for every cartridge that
+		// made it through fridge assignment. Mirrors the flip in
+		// opentron-control/wax/[runId]/+page.server.ts completeRun.
+		// The status='wax_filled' filter already excludes locked carts; the
+		// helper call still runs so improper-order attempts are logged + visible.
+		if (run?.cartridgeIds?.length) {
+			await protectLockedCarts(
+				run.cartridgeIds,
+				'completeRun',
+				runId,
+				{ _id: locals.user!._id, username: locals.user!.username }
+			);
+			await CartridgeRecord.updateMany(
+				{
+					_id: { $in: run.cartridgeIds },
+					status: 'wax_filled',
+					'waxStorage.recordedAt': { $exists: true }
+				},
+				{ $set: { status: 'wax_stored' } }
+			);
+		}
+
+		// Best-effort tail: equipment usage log, inventory consumption,
+		// lifecycle notifications, audit log. Status is already 'completed'
+		// and cartridges are 'wax_stored' — a failure here doesn't undo the
+		// run, so log and let the operator see success instead of a 500 on
+		// a run that's already done.
+		try {
 
 		if (run?.deckId) {
 			await Equipment.findByIdAndUpdate(run.deckId, {
@@ -1244,6 +1697,44 @@ export const actions: Actions = {
 					});
 				}
 			}
+
+			// Decrement the in-house WaxBatch volume tracker (parallel to the
+			// ReceivingLot update above). WaxBatch is created by wax-creation
+			// and is the source Ask BIMS / daily-digest read for remaining
+			// wax volumes — without this decrement, those surfaces drift and
+			// always show 100% remaining no matter how many runs ship. Match
+			// against both lotBarcode (scannable label) and lotNumber
+			// (WAX-YYYY-NNNN) since either may have been the scanned value.
+			// Runs that scanned a ReceivingLot-only barcode won't match here
+			// and the block is a no-op.
+			const waxBatch = await WaxBatch.findOne({
+				$or: [
+					{ lotBarcode: run.waxSourceLot },
+					{ lotNumber: run.waxSourceLot }
+				]
+			}).select('_id remainingVolumeUl').lean() as any;
+			if (waxBatch) {
+				const remainingBefore = Number(waxBatch.remainingVolumeUl ?? 0);
+				const remainingAfter = Math.max(0, remainingBefore - WAX_FILL_VOLUME_UL);
+				await WaxBatch.updateOne(
+					{ _id: waxBatch._id },
+					{
+						$set: { remainingVolumeUl: remainingAfter },
+						$push: {
+							usageLog: {
+								_id: generateId(),
+								runId,
+								volumeChangedUl: -(remainingBefore - remainingAfter),
+								remainingBeforeUl: remainingBefore,
+								remainingAfterUl: remainingAfter,
+								operator: operatorRef,
+								notes: `Wax filling run complete — ${cartridgeCount} cartridges`,
+								createdAt: now
+							}
+						}
+					}
+				);
+			}
 		}
 
 		// Notify run complete
@@ -1265,6 +1756,10 @@ export const actions: Actions = {
 			changedAt: now,
 			newData: { status: 'completed', cartridgeCount }
 		});
+
+		} catch (e) {
+			console.error('[completeRun] post-update side-effect failed:', e instanceof Error ? e.message : e);
+		}
 
 		return { success: true };
 	}

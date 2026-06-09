@@ -19,17 +19,21 @@
 	let coolingBypassError = $state('');
 	let showCoolingBypass = $state(false);
 
+	const coolingGateMs = $derived((data.settings?.minCoolingBeforeQcMin ?? 2) * 60 * 1000);
+
 	let coolingComplete = $derived(() => {
 		if (coolingBypassed) return true;
 		if (!data.runState.coolingConfirmedAt) return false;
 		const elapsed = Date.now() - new Date(data.runState.coolingConfirmedAt).getTime();
-		return elapsed >= 10 * 60 * 1000;
+		return elapsed >= coolingGateMs;
 	});
 
 	let coolingCountdown = $derived(() => {
-		if (!data.runState.coolingConfirmedAt) return '10:00';
+		const totalSec = Math.ceil(coolingGateMs / 1000);
+		const defaultDisplay = `${Math.floor(totalSec / 60)}:${String(totalSec % 60).padStart(2, '0')}`;
+		if (!data.runState.coolingConfirmedAt) return defaultDisplay;
 		const elapsed = Date.now() - new Date(data.runState.coolingConfirmedAt).getTime();
-		const remaining = Math.max(0, 10 * 60 * 1000 - elapsed);
+		const remaining = Math.max(0, coolingGateMs - elapsed);
 		const m = Math.floor(remaining / 60000);
 		const s = Math.floor((remaining % 60000) / 1000);
 		return `${m}:${String(s).padStart(2, '0')}`;
@@ -65,8 +69,25 @@
 		});
 	}
 
-	function handleQCComplete() {
-		submitForm('completeQC');
+	function handleQCComplete(result?: { rejectedCartridges: { cartridgeId: string; reasonCode: string }[] }) {
+		// QCInspection passes the operator's in-page rejections here. Without
+		// forwarding this payload the server would silently accept every
+		// cartridge — see git history for the bug + fix.
+		const rejected = result?.rejectedCartridges ?? [];
+		submitForm('completeQC', { rejectedCartridges: JSON.stringify(rejected) });
+	}
+
+	function handleGoBack() {
+		const msg = data.stage === 'Storage'
+			? 'Go back to QC? This will clear all QC decisions on this run and delete the phantom wax_filling inventory transactions so you can redo inspection cleanly.'
+			: 'Go back to Cooling? This clears the cooling-confirmed timestamp and the cartridges’ ovenCure stamp.';
+		if (!confirm(msg)) return;
+		submitForm('goBack');
+	}
+
+	function handleReassignStorage() {
+		if (!confirm('Reassign fridges? This clears all current fridge assignments on this run so you can pick again. The run stays in Storage stage and nothing is locked in until you click Complete Run.')) return;
+		submitForm('reassignStorage');
 	}
 
 	function handleRecordStorage(cartridgeIds: string[], location: string) {
@@ -104,17 +125,85 @@
 			style="min-height: 44px; min-width: 44px; color: var(--color-tron-text-secondary)">
 			&#8592;
 		</a>
-		<div>
+		<div class="flex-1">
 			<h1 class="text-xl font-bold" style="color: var(--color-tron-cyan)">Wax Post-Processing</h1>
 			<p class="text-xs" style="color: var(--color-tron-text-secondary)">
 				Run {data.runId.slice(-8)} &middot; {data.robotName} &middot;
 				{data.runState.plannedCartridgeCount ?? '?'} cartridges
 			</p>
 		</div>
+		{#if data.canGoBack && data.goBackTargetStage}
+			<button
+				type="button"
+				onclick={handleGoBack}
+				class="min-h-[44px] rounded-lg border border-amber-500/50 bg-amber-900/20 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-900/30"
+				title="Rewind this run by one stage. Disabled once any cartridge is in a fridge."
+			>
+				← Go Back to {data.goBackTargetStage}
+			</button>
+		{:else if data.canReassignStorage}
+			<button
+				type="button"
+				onclick={handleReassignStorage}
+				class="min-h-[44px] rounded-lg border border-amber-500/50 bg-amber-900/20 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-900/30"
+				title="Clear current fridge assignments on this run and re-pick. The run stays in Storage stage and nothing is locked in until Complete Run."
+			>
+				← Reassign Fridges
+			</button>
+		{/if}
 	</div>
 
 	{#if form?.error}
 		<div class="rounded-lg border border-red-500/50 bg-red-900/20 p-3 text-sm text-red-300">{form.error}</div>
+	{/if}
+
+	{#if form?.skippedLockedCount && form.skippedLockedCount > 0}
+		<div class="rounded-lg border border-amber-500/40 bg-amber-900/20 p-3 text-sm text-amber-200">
+			<p class="font-semibold">
+				{form.skippedLockedCount} cartridge{form.skippedLockedCount === 1 ? ' was' : 's were'} skipped on the last write
+			</p>
+			<p class="mt-1 text-xs text-amber-200/80">
+				These carts are linked to an SPU run (or are otherwise terminal). The remaining carts in this batch were written normally — you can still Complete Run for them.
+			</p>
+			{#if form.skippedCarts && form.skippedCarts.length > 0}
+				<div class="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-3">
+					{#each form.skippedCarts as sc (sc.cartridgeId)}
+						<div class="rounded bg-amber-900/30 px-2 py-1 text-[11px]">
+							<span class="font-mono">{sc.cartridgeId.slice(-12)}</span>
+							<span class="ml-2 text-amber-200/70">{sc.status}</span>
+						</div>
+					{/each}
+				</div>
+			{/if}
+		</div>
+	{/if}
+
+	{#if data.runNotes && data.runNotes.length > 0}
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3">
+			<h2 class="mb-2 text-xs font-semibold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
+				Run Notes ({data.runNotes.length})
+			</h2>
+			<div class="space-y-2">
+				{#each data.runNotes as note (note.id)}
+					<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2">
+						<div class="mb-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wider">
+							<span class="rounded bg-[var(--color-tron-cyan)]/20 px-1.5 py-0.5 font-medium text-[var(--color-tron-cyan)]">
+								{note.phase}
+							</span>
+							{#if note.author}
+								<span style="color: var(--color-tron-text-secondary)">{note.author}</span>
+							{/if}
+							{#if note.createdAt}
+								<span style="color: var(--color-tron-text-secondary); opacity: 0.6">
+									{new Date(note.createdAt).toLocaleString()}
+								</span>
+							{/if}
+						</div>
+						<p class="whitespace-pre-wrap text-sm" style="color: var(--color-tron-text)">{note.body}</p>
+					</div>
+				{/each}
+			</div>
+		</div>
 	{/if}
 
 	<!-- Step indicator -->
@@ -148,7 +237,7 @@
 				readonly={false}
 			/>
 		{:else if data.stage === 'QC'}
-			{@const qcCarts = data.qcCartridges.map((c) => ({
+			{@const qcCarts = data.qcCartridges.map((c: any) => ({
 				...c,
 				ovenEntryTime: c.ovenEntryTime ? new Date(c.ovenEntryTime) : null,
 				qcTimestamp: c.qcTimestamp ? new Date(c.qcTimestamp) : null,
@@ -187,6 +276,7 @@
 					{coolingBypassed}
 					runId={data.runId}
 					lotId={null}
+					coolingGateMin={data.settings?.minCoolingBeforeQcMin ?? 2}
 				/>
 			{:else}
 				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">
@@ -197,13 +287,14 @@
 			{@const summary = {
 				runId: data.runId,
 				cartridgeCount: data.storageCartridges.length,
-				acceptedCount: data.storageCartridges.filter((c) => c.qcStatus === 'Accepted').length,
-				rejectedCount: data.storageCartridges.filter((c) => c.qcStatus === 'Rejected').length
+				acceptedCount: data.storageCartridges.filter((c: any) => c.qcStatus === 'Accepted').length,
+				rejectedCount: data.storageCartridges.filter((c: any) => c.qcStatus === 'Rejected').length
 			}}
 			<CompletionStorage
 				cartridges={data.storageCartridges}
 				runSummary={summary}
 				fridges={data.fridges}
+				lockedCartridges={data.lockedCartridges ?? []}
 				onRecordStorage={handleRecordStorage}
 				onComplete={handleCompleteRun}
 				readonly={false}

@@ -1,7 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { page } from '$app/stores';
-	import { enhance } from '$app/forms';
 	import GridBackground from '$lib/components/ui/GridBackground.svelte';
 
 	interface Props {
@@ -12,13 +11,17 @@
 	}
 
 	let { children, data }: Props = $props();
-	let loggingOut = $state(false);
 
 	const navItems = [
 		{
 			href: '/kanban',
 			label: 'Board',
 			icon: 'M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7'
+		},
+		{
+			href: '/kanban/analytics',
+			label: 'Analytics',
+			icon: 'M3 3v18h18M7 17l4-4 4 4 6-6'
 		},
 		{
 			href: '/kanban/list',
@@ -93,54 +96,6 @@
 								<span class="font-medium">{item.label}</span>
 							</a>
 						{/each}
-
-							<!-- Back to Main Site -->
-						<a
-							href='/'
-							class="flex min-h-[var(--size-touch-target)] items-center gap-2 rounded-lg px-3 py-2 text-[var(--color-tron-text-secondary)] transition-all duration-200 hover:bg-[var(--color-tron-bg-tertiary)] hover:text-[var(--color-tron-cyan)]"
-							title="Back to Main Site"
-						>
-							<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-								<path
-									stroke-linecap="round"
-									stroke-linejoin="round"
-									stroke-width="2"
-									d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0a1 1 0 01-1-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 01-1 1"
-								/>
-							</svg>
-							<span class="font-medium">Main Site</span>
-						</a>
-
-						<!-- Logout -->
-						<form
-							method="POST"
-							action="/logout"
-							use:enhance={() => {
-								loggingOut = true;
-								return async ({ update }) => {
-									await update();
-									loggingOut = false;
-								};
-							}}
-						>
-							<button
-								type="submit"
-								disabled={loggingOut}
-								class="flex min-h-[var(--size-touch-target)] items-center gap-2 rounded-lg px-4 py-2 text-[var(--color-tron-text-secondary)] transition-all
-									duration-200 hover:bg-[var(--color-tron-bg-tertiary)] hover:text-[var(--color-tron-red)]
-									disabled:opacity-50"
-							>
-								<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-									<path
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										stroke-width="2"
-										d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
-									/>
-								</svg>
-								<span class="font-medium">{loggingOut ? 'Logging out...' : 'Logout'}</span>
-							</button>
-						</form>
 					</nav>
 				</div>
 			</div>

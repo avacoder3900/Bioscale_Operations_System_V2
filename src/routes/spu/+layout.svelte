@@ -84,7 +84,6 @@
 			icon: 'M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z',
 			items: [
 				{ href: '/spu/cartridge-dashboard', label: 'Cart Dashboard', icon: 'M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z' },
-				{ href: '/spu/cartridges', label: 'Cartridge Registry', icon: 'M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z' },
 				{ href: '/spu/cartridge-admin', label: 'Cart Admin', icon: 'M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4' },
 				{ href: '/spu/assays', label: 'Assays', icon: 'M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z' }
 			]
@@ -131,7 +130,7 @@
 		const current = $page.url.pathname;
 		for (const group of filteredGroups) {
 			for (const item of group.items) {
-				const match = item.href === '/spu' ? current === '/spu' : current.startsWith(item.href);
+				const match = item.href === '/spu' ? (current as string) === '/spu' : current.startsWith(item.href);
 				if (match) {
 					expandedGroups.add(group.label);
 					break;
@@ -158,7 +157,7 @@
 		const current = $page.url.pathname;
 		for (const item of allNavItems) {
 			if (item.href === '/spu') {
-				if (current === '/spu') return item.label;
+				if ((current as string) === '/spu') return item.label;
 			} else if (current.startsWith(item.href)) {
 				return item.label;
 			}

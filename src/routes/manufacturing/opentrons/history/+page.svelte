@@ -2,6 +2,13 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 
+	interface RunNote {
+		id: string;
+		body: string;
+		phase: string;
+		author: string | null;
+		createdAt: string | null;
+	}
 	interface RunRow {
 		runId: string;
 		processType: 'wax' | 'reagent';
@@ -18,6 +25,7 @@
 		endTime: string | null;
 		createdAt: string;
 		abortReason: string | null;
+		notes: RunNote[];
 	}
 
 	interface RunDetailCartridge {
@@ -195,7 +203,8 @@
 		{ key: 'totalCartridges', label: 'Cartridges' },
 		{ key: 'successRate', label: 'Success %' },
 		{ key: 'startTime', label: 'Start Time' },
-		{ key: 'duration', label: 'Duration' }
+		{ key: 'duration', label: 'Duration' },
+		{ key: 'notes', label: 'Notes' }
 	];
 </script>
 
@@ -377,11 +386,23 @@
 						<td class="px-3 py-2 text-xs text-[var(--color-tron-text)]">{successPct(run)}</td>
 						<td class="px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">{formatDate(run.startTime)}</td>
 						<td class="px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">{durationStr(run.startTime, run.endTime)}</td>
+						<td class="px-3 py-2 text-xs">
+							{#if run.notes && run.notes.length > 0}
+								<span
+									class="inline-block max-w-[180px] truncate rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 px-1.5 py-0.5 text-[var(--color-tron-cyan)]"
+									title={run.notes.map((n: any) => `[${n.phase}] ${n.body}`).join('\n\n')}
+								>
+									{run.notes.length} · {run.notes[run.notes.length - 1].body}
+								</span>
+							{:else}
+								<span class="text-[var(--color-tron-text-secondary)]/40">—</span>
+							{/if}
+						</td>
 					</tr>
 					<!-- Expanded detail row -->
 					{#if expandedId === run.runId}
 						<tr class="border-b border-[var(--color-tron-border)]/50">
-							<td colspan="10" class="bg-[var(--color-tron-bg-secondary)] px-4 py-4">
+							<td colspan="11" class="bg-[var(--color-tron-bg-secondary)] px-4 py-4">
 								{#if detailLoading}
 									<p class="text-xs text-[var(--color-tron-text-secondary)]">Loading detail...</p>
 								{:else if expandedDetail}
@@ -403,9 +424,17 @@
 										<!-- Cartridges -->
 										{#if expandedDetail.cartridges.length > 0}
 											<div>
-												<h4 class="mb-1 text-xs font-semibold text-[var(--color-tron-text)]">
-													Cartridges ({expandedDetail.cartridges.length})
-												</h4>
+												<div class="mb-1 flex items-center justify-between">
+													<h4 class="text-xs font-semibold text-[var(--color-tron-text)]">
+														Cartridges ({expandedDetail.cartridges.length})
+													</h4>
+													<a href="/cartridge-admin?runId={run.runId}"
+														class="text-xs text-[var(--color-tron-cyan)] hover:underline"
+														title="Open every cartridge in this run on the cartridge-admin view (shows current state, not just QC-time state)"
+													>
+														View all in cartridge-admin →
+													</a>
+												</div>
 												<div class="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
 													{#each expandedDetail.cartridges as cart (cart.cartridgeId)}
 														<div class="flex items-center gap-2 rounded border border-[var(--color-tron-border)]/50 bg-[var(--color-tron-surface)]/50 px-2 py-1 text-xs">
@@ -473,7 +502,7 @@
 				{/each}
 				{#if data.runs.length === 0}
 					<tr>
-						<td colspan="10" class="px-4 py-8 text-center text-sm text-[var(--color-tron-text-secondary)]">
+						<td colspan="11" class="px-4 py-8 text-center text-sm text-[var(--color-tron-text-secondary)]">
 							No runs found matching your filters.
 						</td>
 					</tr>

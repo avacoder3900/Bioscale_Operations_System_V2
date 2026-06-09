@@ -3,7 +3,9 @@
 	import { TronCard, TronButton, TronBadge } from '$lib/components/ui';
 	import PartsNav from '$lib/components/PartsNav.svelte';
 
-	let { data, form } = $props();
+	let { data, form: _form } = $props();
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const form = _form as any;
 
 	let saving = $state(false);
 </script>

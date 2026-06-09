@@ -2,12 +2,16 @@ export const config = { maxDuration: 60 };
 import { fail } from '@sveltejs/kit';
 import { connectDB, generateId, Equipment, EquipmentLocation, AuditLog, CartridgeRecord, TemperatureReading } from '$lib/server/db';
 import { isAdmin, requirePermission } from '$lib/server/permissions';
+import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'equipment:read');
 	try {
 		await connectDB();
+
+		// Exclude manually checked-out cartridges from fridge occupancy
+		const checkedOutIds = await getCheckedOutCartridgeIds();
 
 		const [equipmentDocs, locationDocs] = await Promise.all([
 			Equipment.find({ equipmentType: { $in: ['fridge', 'oven'] } }).sort({ name: 1 }).lean(),
@@ -24,29 +28,51 @@ export const load: PageServerLoad = async ({ locals }) => {
 			}
 		}
 
-		// Fetch actual cartridge records stored in fridges (for counts + detail display)
+		// Fetch actual cartridge records stored in fridges (for counts + detail display).
+		// Three buckets — same split as /inventory/fridge-storage and /equipment/activity:
+		//   wax_accepted: status='wax_stored' (post-QC live inventory)
+		//   wax_scrapped: status='scrapped' with waxStorage.location set
+		//                 (physically still in the fridge as QA quarantine)
+		//   reagent:      status='stored' with storage.fridgeName set
 		const storedCartridges = await CartridgeRecord.find({
+			_id: { $nin: checkedOutIds },
 			$or: [
 				{ 'waxStorage.location': { $exists: true }, status: 'wax_stored' },
+				{ 'waxStorage.location': { $exists: true }, status: 'scrapped' },
 				{ 'storage.fridgeName': { $exists: true }, status: 'stored' }
 			]
 		}).select({
 			_id: 1, status: 1,
 			'reagentFilling.assayType': 1,
 			'waxQc.status': 1,
+			voidReason: 1,
 			'waxStorage.location': 1, 'waxStorage.recordedAt': 1, 'waxStorage.operator': 1,
 			'storage.fridgeName': 1, 'storage.recordedAt': 1, 'storage.operator': 1,
 			updatedAt: 1
 		}).lean().catch(() => []) as any[];
 
-		// Group cartridges by fridge key and build occupant counts
+		// Group cartridges by fridge key and build per-bucket occupant counts.
 		const occupantMap = new Map<string, number>();
+		const waxAcceptedMap = new Map<string, number>();
+		const waxScrappedMap = new Map<string, number>();
 		const cartridgesByFridge = new Map<string, any[]>();
 		for (const c of storedCartridges) {
-			const isWax = c.status === 'wax_stored' && c.waxStorage?.location;
+			const isWax = !!c.waxStorage?.location && (c.status === 'wax_stored' || c.status === 'scrapped');
 			const key = isWax ? c.waxStorage.location : c.storage?.fridgeName;
 			if (!key) continue;
 			occupantMap.set(key, (occupantMap.get(key) ?? 0) + 1);
+			let storageType: 'wax_accepted' | 'wax_scrapped' | 'reagent';
+			if (isWax) {
+				if (c.status === 'scrapped') {
+					storageType = 'wax_scrapped';
+					waxScrappedMap.set(key, (waxScrappedMap.get(key) ?? 0) + 1);
+				} else {
+					storageType = 'wax_accepted';
+					waxAcceptedMap.set(key, (waxAcceptedMap.get(key) ?? 0) + 1);
+				}
+			} else {
+				storageType = 'reagent';
+			}
 			if (!cartridgesByFridge.has(key)) cartridgesByFridge.set(key, []);
 			const storedAt = isWax ? c.waxStorage?.recordedAt : c.storage?.recordedAt;
 			const operator = isWax ? c.waxStorage?.operator?.username : c.storage?.operator?.username;
@@ -55,26 +81,22 @@ export const load: PageServerLoad = async ({ locals }) => {
 				status: c.status,
 				assayType: c.reagentFilling?.assayType?.name ?? null,
 				waxQcStatus: c.waxQc?.status ?? null,
-				storageType: isWax ? 'wax' : 'reagent',
+				voidReason: c.voidReason ?? null,
+				storageType,
 				storedAt: storedAt ? new Date(storedAt).toISOString() : null,
 				operator: operator ?? null
 			});
 		}
 
-		// Helper: compute total occupants for an equipment and all its child locations
-		function getOccupantCount(equip: any, children: any[]): number {
+		// Helper: compute the sum of a per-key map (occupant / accepted / scrapped)
+		// across an equipment's own keys + all child location keys.
+		function sumOverKeys(equip: any, children: any[], map: Map<string, number>): number {
 			let total = 0;
-			// Match by equipment name and barcode
-			const keys = [equip.barcode, equip.name].filter(Boolean);
-			for (const key of keys) {
-				total += occupantMap.get(key) ?? 0;
-			}
-			// Also count from child location barcodes and display names
+			const keys = [equip.barcode, equip.name].filter(Boolean) as string[];
+			for (const key of keys) total += map.get(key) ?? 0;
 			for (const child of children) {
-				const childKeys = [child.barcode, child.displayName].filter(Boolean);
-				for (const key of childKeys) {
-					total += occupantMap.get(key) ?? 0;
-				}
+				const childKeys = [child.barcode, child.displayName].filter(Boolean) as string[];
+				for (const key of childKeys) total += map.get(key) ?? 0;
 			}
 			return total;
 		}
@@ -106,7 +128,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 					capacity,
 					notes: equip.notes ?? null,
 					createdAt: equip.createdAt?.toISOString?.() ?? equip.createdAt ?? null,
-					occupantCount: getOccupantCount(equip, children),
+					occupantCount: sumOverKeys(equip, children, occupantMap),
+					waxAcceptedCount: sumOverKeys(equip, children, waxAcceptedMap),
+					waxScrappedCount: sumOverKeys(equip, children, waxScrappedMap),
 					currentPlacements: [],
 					cartridges: (() => {
 						const keys = [equip.barcode, equip.name].filter(Boolean);
@@ -132,6 +156,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		for (const loc of locationDocs as any[]) {
 			if (!loc.parentEquipmentId) {
 				const key = loc.barcode ?? loc.displayName ?? String(loc._id);
+				const fallback = loc.displayName ?? '';
+				const lookup = (m: Map<string, number>) => (m.get(key) ?? m.get(fallback) ?? 0);
 				locations.push({
 					id: loc._id,
 					barcode: loc.barcode ?? null,
@@ -141,8 +167,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 					capacity: loc.capacity ?? null,
 					notes: loc.notes ?? null,
 					createdAt: loc.createdAt?.toISOString?.() ?? loc.createdAt ?? null,
-					occupantCount: occupantMap.get(key) ?? occupantMap.get(loc.displayName ?? '') ?? 0,
-					cartridges: cartridgesByFridge.get(key) ?? cartridgesByFridge.get(loc.displayName ?? '') ?? [],
+					occupantCount: lookup(occupantMap),
+					waxAcceptedCount: lookup(waxAcceptedMap),
+					waxScrappedCount: lookup(waxScrappedMap),
+					cartridges: cartridgesByFridge.get(key) ?? cartridgesByFridge.get(fallback) ?? [],
 					currentPlacements: (loc.currentPlacements ?? []).map((p: any) => ({
 						id: p._id,
 						itemType: p.itemType ?? null,

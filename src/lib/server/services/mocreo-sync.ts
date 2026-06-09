@@ -16,9 +16,17 @@ import {
 	rawToC,
 	rawToHumidity
 } from '$lib/server/services/mocreo';
-import { notifyTemperatureAlert } from '$lib/server/notifications';
+import { notifyTemperatureAlert, notifyGatewayOutage, notifyGatewayRecovered } from '$lib/server/notifications';
 
 const OFFLINE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
+// If this fraction of sensors go silent in the same sync, treat as a gateway/power
+// event and emit ONE consolidated notification instead of N per-sensor emails.
+// 0.5 = half or more.
+const GATEWAY_OUTAGE_FRACTION = 0.5;
+// Hysteresis band on temp-alert auto-resolve: a probe must be at least this far
+// inside its threshold to be considered "recovered." Prevents email churn from
+// a fridge oscillating ±0.3°C around its max threshold every sync.
+const TEMP_RECOVERY_HYSTERESIS_C = 0.5;
 
 function authenticateSync(request: Request): void {
 	// 1) Explicit CRON_SECRET Bearer (preferred — set in Vercel env).
@@ -37,7 +45,13 @@ function authenticateSync(request: Request): void {
 	requireAgentApiKey(request);
 }
 
-async function checkLostConnection(sensorId: string, sensorName: string, eq: any, now: Date): Promise<boolean> {
+async function checkLostConnection(
+	sensorId: string,
+	sensorName: string,
+	eq: any,
+	now: Date,
+	gatewayEvent: boolean
+): Promise<boolean> {
 	const existing = await TemperatureAlert.findOne({
 		sensorId,
 		alertType: 'lost_connection',
@@ -54,7 +68,8 @@ async function checkLostConnection(sensorId: string, sensorName: string, eq: any
 		actualValue: null,
 		equipmentId: eq ? String(eq._id) : null,
 		equipmentName: eq?.name ?? null,
-		timestamp: now
+		timestamp: now,
+		gatewayEvent
 	});
 	return true;
 }
@@ -131,16 +146,47 @@ export async function runMocreoSync(request: Request, url: URL) {
 
 	const now = new Date();
 
+	// Pre-fetch all latest readings so we can detect gateway-wide outages
+	// (most/all probes silent at once = power/network loss, not individual probes).
+	// Doing this in one pass lets us emit ONE consolidated email instead of N.
+	type Prefetch = { sample: Awaited<ReturnType<typeof fetchLatestReading>>; fetchError?: any };
+	const prefetched = new Map<string, Prefetch>();
+	await Promise.all(sensors.map(async (s) => {
+		try {
+			const sample = await fetchLatestReading(s.thingName);
+			prefetched.set(s.thingName, { sample });
+		} catch (err) {
+			prefetched.set(s.thingName, { sample: null, fetchError: err });
+		}
+	}));
+
+	const silentSensors = sensors.filter((s) => {
+		const p = prefetched.get(s.thingName);
+		if (!p?.sample) return true;
+		const ageMs = now.getTime() - p.sample.time * 1000;
+		return ageMs > OFFLINE_THRESHOLD_MS;
+	});
+	const isGatewayEvent = sensors.length > 0
+		&& silentSensors.length / sensors.length >= GATEWAY_OUTAGE_FRACTION;
+
+	if (isGatewayEvent) {
+		console.warn(`[MOCREO SYNC] gateway-event detected: ${silentSensors.length}/${sensors.length} sensors silent — consolidating notifications`);
+	}
+
 	for (const sensor of sensors) {
 		const alertsCreated: string[] = [];
 		const eq = sensorToEquipment.get(sensor.thingName);
 		const equipmentId = eq ? String(eq._id) : null;
 
 		try {
-			const sample = await fetchLatestReading(sensor.thingName);
+			const pre = prefetched.get(sensor.thingName);
+			if (pre?.fetchError) throw pre.fetchError;
+			const sample = pre?.sample ?? null;
 			if (!sample) {
-				const created = await checkLostConnection(sensor.thingName, sensor.name, eq, now);
-				if (created) {
+				const created = await checkLostConnection(sensor.thingName, sensor.name, eq, now, isGatewayEvent);
+				// Suppress per-sensor email when this is a gateway-wide event;
+				// one consolidated email is sent after the loop.
+				if (created && !isGatewayEvent) {
 					await notifyTemperatureAlert({
 						sensorId: sensor.thingName, sensorName: sensor.name,
 						alertType: 'lost_connection',
@@ -187,57 +233,143 @@ export async function runMocreoSync(request: Request, url: URL) {
 			const maxC = sc?.temperatureMaxC ?? eq?.temperatureMaxC ?? null;
 			const eqName = eq?.name ?? sc?.sensorName ?? sensor.name;
 
+			// Visibility: surface unprotected sensors in logs so a missing
+			// configuration is visible to anyone tailing the cron output.
+			// (Won't spam — fires once per sensor per sync, ~12/hr at most.)
+			if (alertsEnabled && temperature != null && minC == null && maxC == null) {
+				console.warn(`[MOCREO SYNC] sensor "${eqName}" (${sensor.thingName}) has NO temperature thresholds — high/low alerts will never fire`);
+			}
+
 			if (alertsEnabled && temperature != null) {
 				if (minC != null && temperature < minC) {
-					await TemperatureAlert.create({
-						_id: generateId(),
+					// Idempotent: only create + email if there isn't already an
+					// open low_temp alert for this sensor. Without this guard the
+					// 5-min sync would email every cycle for an ongoing excursion.
+					const existing = await TemperatureAlert.findOne({
 						sensorId: sensor.thingName,
-						sensorName: sensor.name,
 						alertType: 'low_temp',
-						threshold: minC,
-						actualValue: temperature,
-						equipmentId,
-						equipmentName: eqName,
-						timestamp: now
+						acknowledged: false,
+						resolvedAt: { $exists: false }
 					});
-					alertsCreated.push('low_temp');
-					await notifyTemperatureAlert({
-						sensorId: sensor.thingName, sensorName: sensor.name,
-						alertType: 'low_temp', threshold: minC, actualValue: temperature,
-						equipmentId, equipmentName: eqName, timestamp: now
-					});
+					if (!existing) {
+						await TemperatureAlert.create({
+							_id: generateId(),
+							sensorId: sensor.thingName,
+							sensorName: sensor.name,
+							alertType: 'low_temp',
+							threshold: minC,
+							actualValue: temperature,
+							equipmentId,
+							equipmentName: eqName,
+							timestamp: now
+						});
+						alertsCreated.push('low_temp');
+						await notifyTemperatureAlert({
+							sensorId: sensor.thingName, sensorName: sensor.name,
+							alertType: 'low_temp', threshold: minC, actualValue: temperature,
+							equipmentId, equipmentName: eqName, timestamp: now
+						});
+					}
+				} else if (minC != null && temperature >= minC + TEMP_RECOVERY_HYSTERESIS_C) {
+					// Auto-resolve any open low_temp alert when temp recovers past
+					// the hysteresis band. Silent — operators see live status on
+					// the dashboard; no recovery email to avoid oscillation spam.
+					await TemperatureAlert.updateOne(
+						{
+							sensorId: sensor.thingName,
+							alertType: 'low_temp',
+							acknowledged: false,
+							resolvedAt: { $exists: false }
+						},
+						{
+							$set: {
+								acknowledged: true,
+								acknowledgedAt: now,
+								resolvedAt: now,
+								resolvedReason: `auto-resolved: temperature recovered (${temperature.toFixed(1)}°C, threshold ${minC}°C)`
+							}
+						}
+					);
 				}
+
 				if (maxC != null && temperature > maxC) {
-					await TemperatureAlert.create({
-						_id: generateId(),
+					const existing = await TemperatureAlert.findOne({
 						sensorId: sensor.thingName,
-						sensorName: sensor.name,
 						alertType: 'high_temp',
-						threshold: maxC,
-						actualValue: temperature,
-						equipmentId,
-						equipmentName: eqName,
-						timestamp: now
+						acknowledged: false,
+						resolvedAt: { $exists: false }
 					});
-					alertsCreated.push('high_temp');
-					await notifyTemperatureAlert({
-						sensorId: sensor.thingName, sensorName: sensor.name,
-						alertType: 'high_temp', threshold: maxC, actualValue: temperature,
-						equipmentId, equipmentName: eqName, timestamp: now
-					});
+					if (!existing) {
+						await TemperatureAlert.create({
+							_id: generateId(),
+							sensorId: sensor.thingName,
+							sensorName: sensor.name,
+							alertType: 'high_temp',
+							threshold: maxC,
+							actualValue: temperature,
+							equipmentId,
+							equipmentName: eqName,
+							timestamp: now
+						});
+						alertsCreated.push('high_temp');
+						await notifyTemperatureAlert({
+							sensorId: sensor.thingName, sensorName: sensor.name,
+							alertType: 'high_temp', threshold: maxC, actualValue: temperature,
+							equipmentId, equipmentName: eqName, timestamp: now
+						});
+					}
+				} else if (maxC != null && temperature <= maxC - TEMP_RECOVERY_HYSTERESIS_C) {
+					await TemperatureAlert.updateOne(
+						{
+							sensorId: sensor.thingName,
+							alertType: 'high_temp',
+							acknowledged: false,
+							resolvedAt: { $exists: false }
+						},
+						{
+							$set: {
+								acknowledged: true,
+								acknowledgedAt: now,
+								resolvedAt: now,
+								resolvedReason: `auto-resolved: temperature recovered (${temperature.toFixed(1)}°C, threshold ${maxC}°C)`
+							}
+						}
+					);
 				}
 			}
 
 			if (now.getTime() - timestamp.getTime() > OFFLINE_THRESHOLD_MS) {
-				const created = await checkLostConnection(sensor.thingName, sensor.name, eq, now);
+				const created = await checkLostConnection(sensor.thingName, sensor.name, eq, now, isGatewayEvent);
 				alertsCreated.push('lost_connection');
-				if (created) {
+				// Suppress per-sensor email when the whole gateway is out — a
+				// single consolidated email is sent after the loop.
+				if (created && !isGatewayEvent) {
 					await notifyTemperatureAlert({
 						sensorId: sensor.thingName, sensorName: sensor.name,
 						alertType: 'lost_connection',
 						equipmentId, equipmentName: eqName, timestamp: now
 					});
 				}
+			} else {
+				// Probe is reporting fresh data — auto-resolve any open
+				// lost_connection alert. Silent (no recovery email per probe;
+				// the gateway-wide recovery email handles the bulk case).
+				await TemperatureAlert.updateOne(
+					{
+						sensorId: sensor.thingName,
+						alertType: 'lost_connection',
+						acknowledged: false,
+						resolvedAt: { $exists: false }
+					},
+					{
+						$set: {
+							acknowledged: true,
+							acknowledgedAt: now,
+							resolvedAt: now,
+							resolvedReason: 'auto-resolved: probe reporting again'
+						}
+					}
+				);
 			}
 
 			results.push({
@@ -265,7 +397,74 @@ export async function runMocreoSync(request: Request, url: URL) {
 
 	const errored = results.filter((r) => r.error).length;
 	const noReading = results.filter((r) => r.alerts.includes('no_reading')).length;
-	console.log(`[MOCREO SYNC] done path=${path} sensors=${sensors.length} errors=${errored} noReading=${noReading}`);
+	console.log(`[MOCREO SYNC] done path=${path} sensors=${sensors.length} errors=${errored} noReading=${noReading} gatewayEvent=${isGatewayEvent}`);
+
+	// Gateway-wide outage: emit ONE consolidated alert + email instead of N
+	// per-sensor lost_connection notifications. Idempotent — only one unacked
+	// gateway_outage alert at a time. The 30-min mocreo-heartbeat cron handles
+	// reminder emails while the alert stays open; we just stamp lastNotifiedAt
+	// here so that timer starts at the correct moment.
+	if (isGatewayEvent) {
+		const existing = await TemperatureAlert.findOne({
+			alertType: 'gateway_outage',
+			acknowledged: false,
+			resolvedAt: { $exists: false }
+		});
+		if (!existing) {
+			await TemperatureAlert.create({
+				_id: generateId(),
+				sensorId: 'gateway',
+				sensorName: 'Mocreo Gateway',
+				alertType: 'gateway_outage',
+				threshold: null,
+				actualValue: null,
+				equipmentId: null,
+				equipmentName: 'Mocreo Gateway',
+				timestamp: now,
+				gatewayEvent: true,
+				affectedSensorIds: silentSensors.map((s) => s.thingName),
+				lastNotifiedAt: now,
+				notificationCount: 1
+			});
+			await notifyGatewayOutage({
+				timestamp: now,
+				totalSensors: sensors.length,
+				silentSensors: silentSensors.map((s) => ({
+					sensorId: s.thingName,
+					sensorName: s.name,
+					equipmentName: sensorToEquipment.get(s.thingName)?.name ?? null
+				}))
+			});
+		}
+	} else {
+		// Recovery branch: most probes are reporting again, but an outage alert
+		// is still open. Auto-resolve and fire a one-shot recovery email so
+		// reminders stop and operators know to check cold storage. The 30-min
+		// heartbeat does the same, whichever fires first wins (the resolvedAt
+		// check above + here keeps the second one a no-op).
+		const open = await TemperatureAlert.findOne({
+			alertType: 'gateway_outage',
+			acknowledged: false,
+			resolvedAt: { $exists: false }
+		}).sort({ timestamp: -1 }).lean() as any;
+		if (open) {
+			await TemperatureAlert.updateOne({ _id: open._id }, {
+				$set: {
+					acknowledged: true,
+					acknowledgedAt: now,
+					resolvedAt: now,
+					resolvedReason: 'auto-resolved: gateway recovered (5-min sync)'
+				}
+			});
+			await notifyGatewayRecovered({
+				recoveredAt: now,
+				firstSeenAt: open.timestamp,
+				totalReminders: Math.max(0, (open.notificationCount ?? 1) - 1),
+				totalSensors: sensors.length
+			});
+			console.log(`[MOCREO SYNC] auto-resolved gateway_outage alert ${open._id}`);
+		}
+	}
 
 	return json({
 		success: true,
@@ -273,6 +472,8 @@ export async function runMocreoSync(request: Request, url: URL) {
 		sensorCount: sensors.length,
 		errored,
 		noReading,
+		gatewayEvent: isGatewayEvent,
+		silentSensorCount: silentSensors.length,
 		results
 	});
 }

@@ -1,11 +1,15 @@
 <script lang="ts">
 	import { TronCard, TronBadge } from '$lib/components/ui';
+	import IpRevisionHistory from '$lib/components/receiving/IpRevisionHistory.svelte';
+	import IpFormDefinitionEditor from '$lib/components/receiving/IpFormDefinitionEditor.svelte';
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
 
 	let { data, form: _form } = $props();
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const form = _form as any;
+
+	const currentRevision = $derived((data.ipRevisions ?? []).find((r: any) => r.isCurrent) ?? null);
 
 	// Tab state
 	let activeTab = $state<'overview' | 'transactions' | 'receiving'>('overview');
@@ -724,6 +728,7 @@
 								<th>Quantity</th>
 								<th>Balance</th>
 								<th>User</th>
+								<th>Lot</th>
 								<th>Session</th>
 								<th>Actions</th>
 							</tr>
@@ -757,6 +762,9 @@
 										{txn.previousQuantity} → {txn.newQuantity}
 									</td>
 									<td class="tron-text-muted text-sm">{txn.performedByName ?? 'Unknown'}</td>
+									<td class="tron-text-muted text-xs font-mono">
+										{txn.lotId ?? '—'}
+									</td>
 									<td>
 										{#if txn.assemblySessionId}
 											<a

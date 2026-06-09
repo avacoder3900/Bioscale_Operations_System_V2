@@ -14,6 +14,10 @@ const reagentBatchRecordSchema = new Schema({
 	runNumber: String,
 	robot: { _id: String, name: String, side: String },
 	assayType: { _id: String, name: String, skuCode: String },
+	// Research runs bypass the assay-required gate. When true, assayType stays
+	// null and downstream fields that would be populated from the assay are
+	// left blank. The cartridge flow still completes end-to-end.
+	isResearch: { type: Boolean, default: false },
 	operator: operatorRef,
 	deckId: String,
 
@@ -77,6 +81,18 @@ const reagentBatchRecordSchema = new Schema({
 		testedBy: operatorRef, testedAt: Date, notes: String,
 		createdAt: Date
 	},
+
+	// Free-text operator notes attached to the run. Append-only metadata —
+	// never gates state transitions. Mirrored to each cartridge's notes[]
+	// at write time so the same note appears on the run AND on every
+	// cartridge in the run. phase tags the workflow point (e.g. 'reagent_prep').
+	notes: [{
+		_id: { type: String, default: () => generateId() },
+		body: String,
+		phase: String,
+		author: operatorRef,
+		createdAt: Date
+	}],
 
 	finalizedAt: Date, voidedAt: Date, voidReason: String,
 	corrections: [correctionSchema]

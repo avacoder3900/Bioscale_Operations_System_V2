@@ -2,8 +2,6 @@
 	import { SvelteMap } from 'svelte/reactivity';
 	import type { WaxCartridgeRecord, RejectionReasonCode } from '$lib/server/db/schema';
 
-	const COOLING_GATE_MIN = 10;
-
 	interface Props {
 		cartridges: WaxCartridgeRecord[];
 		rejectionCodes: RejectionReasonCode[];
@@ -13,9 +11,10 @@
 		coolingBypassed?: boolean;
 		runId?: string;
 		lotId?: string | null;
+		coolingGateMin?: number;
 	}
 
-	let { cartridges, rejectionCodes, onComplete, readonly: isReadonly = false, coolingConfirmedAt = null, coolingBypassed = false, runId = '', lotId = null }: Props = $props();
+	let { cartridges, rejectionCodes, onComplete, readonly: isReadonly = false, coolingConfirmedAt = null, coolingBypassed = false, runId = '', lotId = null, coolingGateMin = 2 }: Props = $props();
 
 	const cvInspectionHref = '/cv';
 
@@ -26,7 +25,7 @@
 	let error = $state('');
 	let inputEl: HTMLInputElement | undefined = $state();
 
-	// 10-minute cooling gate
+	// Cooling gate — duration comes from ManufacturingSettings.waxFilling.minCoolingBeforeQcMin
 	let coolTick = $state(0);
 	$effect(() => {
 		if (!coolingConfirmedAt || coolingBypassed) return;
@@ -35,10 +34,10 @@
 	});
 	const coolingElapsedMs = $derived.by(() => {
 		void coolTick;
-		if (coolingBypassed) return COOLING_GATE_MIN * 60_000;
+		if (coolingBypassed) return coolingGateMin * 60_000;
 		return coolingConfirmedAt ? Date.now() - coolingConfirmedAt.getTime() : Infinity;
 	});
-	const coolingRemainingMs = $derived(Math.max(0, COOLING_GATE_MIN * 60_000 - coolingElapsedMs));
+	const coolingRemainingMs = $derived(Math.max(0, coolingGateMin * 60_000 - coolingElapsedMs));
 	const coolingGateBlocked = $derived(coolingRemainingMs > 0);
 	const coolingRemainingDisplay = $derived(() => {
 		const totalSec = Math.ceil(coolingRemainingMs / 1000);
@@ -130,7 +129,7 @@
 <div class="space-y-5">
 	<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">QC Inspection</h2>
 
-	<!-- Cooling gate: block QC until cartridges have cooled for 10 minutes -->
+	<!-- Cooling gate: block QC until cartridges have cooled for the configured duration -->
 	{#if coolingGateBlocked}
 		<div class="rounded-lg border border-amber-500/50 bg-amber-900/20 p-6 text-center">
 			<svg class="mx-auto mb-3 h-10 w-10 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
@@ -138,7 +137,7 @@
 			</svg>
 			<p class="text-lg font-bold text-amber-300">Cartridges Still Cooling</p>
 			<p class="mt-2 text-sm text-[var(--color-tron-text-secondary)]">
-				Cartridges must cool for at least {COOLING_GATE_MIN} minutes before QC inspection.
+				Cartridges must cool for at least {coolingGateMin} minute{coolingGateMin === 1 ? '' : 's'} before QC inspection.
 			</p>
 			<p class="mt-4 font-mono text-4xl font-bold text-amber-400">{coolingRemainingDisplay()}</p>
 			<p class="mt-1 text-xs text-amber-400/70">remaining</p>

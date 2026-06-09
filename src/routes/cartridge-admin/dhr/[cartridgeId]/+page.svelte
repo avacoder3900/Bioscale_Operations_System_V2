@@ -22,7 +22,7 @@
 	});
 
 	// Available phase filters (only phases that have photos)
-	const phasesWithPhotos = $derived([...new Set(data.photos.map((p: any) => p.phase))]);
+	const phasesWithPhotos: string[] = $derived(Array.from(new Set(data.photos.map((p: any) => String(p.phase ?? '')))));
 
 	// Filtered photos
 	const filteredPhotos = $derived.by(() => {
@@ -188,6 +188,34 @@
 			{/each}
 		</div>
 	</div>
+
+	<!-- Operator Notes — append-only, written at the run level and mirrored
+		 to every cartridge in that run. Phase tags the workflow point. -->
+	{#if data.notes && data.notes.length > 0}
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
+			<h2 class="mb-4 text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">
+				Operator Notes ({data.notes.length})
+			</h2>
+			<div class="space-y-3">
+				{#each data.notes as note (note.id)}
+					<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+						<div class="mb-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-wider">
+							<span class="rounded bg-[var(--color-tron-cyan)]/20 px-2 py-0.5 font-medium text-[var(--color-tron-cyan)]">
+								{phaseLabel(note.phase)}
+							</span>
+							{#if note.author}
+								<span class="text-[var(--color-tron-text-secondary)]">{note.author}</span>
+							{/if}
+							{#if note.createdAt}
+								<span class="text-[var(--color-tron-text-secondary)]/60">{formatShortDate(note.createdAt)}</span>
+							{/if}
+						</div>
+						<p class="whitespace-pre-wrap text-sm text-[var(--color-tron-text)]">{note.body}</p>
+					</div>
+				{/each}
+			</div>
+		</div>
+	{/if}
 
 	<!-- Timeline -->
 	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">

@@ -140,7 +140,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Low inventory: zero/negative + low (bottom 10 that are > 0)
 	const inventoryFields = (i: typeof itemsWithCost[0]) => ({
 		id: i.id, partNumber: i.partNumber, name: i.name,
-		inventoryCount: i.inventoryCount, leadTimeDays: i.leadTimeDays
+		inventoryCount: i.inventoryCount, leadTimeDays: i.leadTimeDays,
+		inventorySource: i.inventorySource ?? 'box_estimate'
 	});
 	const zeroOrNegative = items.filter(i => i.inventoryCount <= 0).map(inventoryFields);
 	const lowPositive = [...itemsWithCost]

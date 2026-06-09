@@ -8,7 +8,7 @@ import { redirect } from '@sveltejs/kit';
 import {
 	connectDB, OpentronsRobot, Equipment, AssayDefinition,
 	ProcessAnalyticsEvent, SpecLimit, FmeaRecord, SpcSignal, CauseEffectDiagram,
-	ManufacturingSettings
+	ManufacturingSettings, AnalyticsNote
 } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { loadUnifiedRuns } from '$lib/server/analytics/runs-feed.js';
@@ -69,7 +69,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const [
 		runs, robots, equipment, assays,
 		specLimits, fmeaRecords, spcSignals, causeEffectDiagrams,
-		manualEvents, settingsDoc
+		manualEvents, settingsDoc, analyticsNotes
 	] = await Promise.all([
 		loadUnifiedRuns(filters),
 		OpentronsRobot.find({ isActive: { $ne: false } }).select('_id name').lean().catch(() => []),
@@ -80,7 +80,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		SpcSignal.find({}).sort({ detectedAt: -1 }).limit(200).lean().catch(() => []),
 		CauseEffectDiagram.find({ active: true }).lean().catch(() => []),
 		ProcessAnalyticsEvent.find(eventFilter(filters)).sort({ occurredAt: -1 }).limit(500).lean().catch(() => []),
-		ManufacturingSettings.findById('default').lean().catch(() => null)
+		ManufacturingSettings.findById('default').lean().catch(() => null),
+		AnalyticsNote.find({}).sort({ createdAt: -1 }).limit(200).lean().catch(() => [])
 	]);
 
 	// Distinct operator list (from union of run operators + manual events)
@@ -133,6 +134,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		causeEffectDiagrams: (causeEffectDiagrams as any[]).map(serializeCauseEffect),
 		specLimits: (specLimits as any[]).map(serializeSpecLimit),
 		rejectionReasonCodes,
+		analyticsNotes: (analyticsNotes as any[]).map((n: any) => ({
+			id: String(n._id),
+			body: n.body ?? '',
+			operator: n.operator?.username ?? 'unknown',
+			operatorId: n.operator?._id ?? null,
+			createdAt: n.createdAt ? new Date(n.createdAt).toISOString() : null
+		})),
 		runs: runs.map(serializeRun)
 	};
 };

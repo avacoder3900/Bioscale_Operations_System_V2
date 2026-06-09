@@ -33,6 +33,12 @@ const userSchema = new Schema({
 	invitedBy: String,
 	age: Number,
 
+	// Hard cap on concurrent WIP tasks the user can be assigned. Enforced
+	// server-side in src/lib/server/kanban/wip-limit.ts. Default 3 follows
+	// common kanban convention. Set 0 to block all WIP for a user (e.g. on leave).
+	wipLimit: { type: Number, default: 3, min: 0, max: 50 },
+
+
 	roles: [{
 		_id: false,
 		roleId: String,
@@ -104,15 +110,15 @@ userSchema.index({ 'roleHistory.roleId': 1 });
 userSchema.index({ 'trainingRecords.documentId': 1 });
 
 // Sacred document — users use deactivation pattern, not finalizedAt
-// Don't apply standard sacred middleware (no finalizedAt), but block deletes
-userSchema.pre('deleteOne', function (next: (err?: Error) => void) {
+// Don't apply standard sacred middleware (no finalizedAt), but block deletes.
+// Cast through `any` because Mongoose 9's `.pre()` hook overloads no longer
+// accept these query-method strings as a literal-typed first arg, even though
+// they are still valid hook names at runtime.
+const blockDelete = function (next: (err?: Error) => void) {
 	return next(new Error('User documents cannot be deleted — deactivate instead'));
-});
-userSchema.pre('deleteMany', function (next: (err?: Error) => void) {
-	return next(new Error('User documents cannot be deleted — deactivate instead'));
-});
-userSchema.pre('findOneAndDelete', function (next: (err?: Error) => void) {
-	return next(new Error('User documents cannot be deleted — deactivate instead'));
-});
+};
+(userSchema.pre as any)('deleteOne', blockDelete);
+(userSchema.pre as any)('deleteMany', blockDelete);
+(userSchema.pre as any)('findOneAndDelete', blockDelete);
 
 export const User = mongoose.models.User || mongoose.model('User', userSchema, 'users');

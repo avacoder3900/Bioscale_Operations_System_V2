@@ -1,7 +1,7 @@
 import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, LaserCutBatch, ManufacturingSettings, ManufacturingMaterial,
-	ManufacturingMaterialTransaction, AuditLog, generateId
+	ManufacturingMaterialTransaction, AuditLog, PartDefinition, ReceivingLot, generateId
 } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { nanoid } from 'nanoid';
@@ -187,6 +187,29 @@ export const actions: Actions = {
 				operatorUsername: locals.user.username,
 				lotId: outputLotId,
 				notes: `Laser cut batch ${outputLotId}: produced ${outputSheetCount} sheets × ${stripsPerSheet} strips/sheet = ${stripsProduced} strips (${failureCount} sheet failures from ${inputSheetCount} input)`
+			});
+
+			// Mirror the produced batch as a ReceivingLot so it appears on the
+			// PT-CT-112 part page's Receiving Lots tab alongside ROG-accessioned lots.
+			// Internal production passes inspection by definition (operator already
+			// reported failureCount above), so we mark it accepted with a CoC pathway.
+			const outputPart = await PartDefinition.findById(outputPartId)
+				.select('partNumber name').lean() as any;
+			await ReceivingLot.create({
+				_id: generateId(),
+				lotId: outputLotId,
+				lotNumber: outputLotId,
+				part: {
+					_id: outputPartId,
+					partNumber: outputPart?.partNumber ?? 'PT-CT-112',
+					name: outputPart?.name ?? 'Thermoseal Laser Cut sheet'
+				},
+				quantity: stripsProduced,
+				operator: { _id: locals.user._id, username: locals.user.username },
+				inspectionPathway: 'coc',
+				cocMeetsStandards: true,
+				status: 'accepted',
+				notes: `Internal production from laser cut batch: ${outputSheetCount} sheets × ${stripsPerSheet} strips/sheet = ${stripsProduced} strips (${failureCount} sheet failures from ${inputSheetCount} input)`
 			});
 		}
 

@@ -53,15 +53,17 @@
 		return ops;
 	});
 
-	// Pipeline stage data for flow visualization
+	// Pipeline stage data for flow visualization. `stageSlug` deep-links each
+	// tile to /manufacturing/pipeline?stage=<slug>; QC has no dedicated page
+	// yet so it stays inert.
 	const pipelineStages = $derived(() => [
-		{ label: 'Backing', count: data.pipeline.backing.backedTotal, sub: `${data.pipeline.backing.totalReadyCartridges} ready`, color: 'tron-purple' },
-		{ label: 'Wax Fill', count: data.pipeline.waxFilling.inProgress + data.pipeline.waxFilling.waxFilled, sub: `${data.pipeline.waxFilling.inProgress} filling`, color: 'tron-yellow' },
-		{ label: 'Cooling', count: data.pipeline.waxFilling.waxStored, sub: 'in fridge', color: 'tron-blue' },
-		{ label: 'Reagent', count: data.pipeline.reagentFilling.inProgress + data.pipeline.reagentFilling.reagentFilled, sub: `${data.pipeline.reagentFilling.inProgress} filling`, color: 'tron-orange' },
-		{ label: 'Seal', count: data.pipeline.reagentFilling.sealed, sub: 'sealed', color: 'tron-cyan' },
-		{ label: 'QC', count: data.pipeline.reagentFilling.reagentFilled, sub: 'pending', color: 'tron-green' },
-		{ label: 'Store', count: data.pipeline.storage.stored, sub: `${data.pipeline.storage.voided} voided`, color: 'tron-green' },
+		{ label: 'Backing', count: data.pipeline.backing.backedTotal, sub: `${data.pipeline.backing.totalReadyCartridges} ready`, color: 'tron-purple', stageSlug: 'backing' },
+		{ label: 'Wax Fill', count: data.pipeline.waxFilling.inProgress + data.pipeline.waxFilling.waxFilled, sub: `${data.pipeline.waxFilling.inProgress} filling`, color: 'tron-yellow', stageSlug: 'wax_fill' },
+		{ label: 'Cooling', count: data.pipeline.waxFilling.waxStored, sub: 'in fridge', color: 'tron-blue', stageSlug: 'cooling' },
+		{ label: 'Reagent', count: data.pipeline.reagentFilling.inProgress + data.pipeline.reagentFilling.reagentFilled, sub: `${data.pipeline.reagentFilling.inProgress} filling`, color: 'tron-orange', stageSlug: 'reagent' },
+		{ label: 'Seal', count: data.pipeline.reagentFilling.sealed, sub: 'sealed', color: 'tron-cyan', stageSlug: 'seal' },
+		{ label: 'QC', count: data.pipeline.reagentFilling.reagentFilled, sub: 'pending', color: 'tron-green', stageSlug: null },
+		{ label: 'Store', count: data.pipeline.storage.stored, sub: `${data.pipeline.storage.voided} voided`, color: 'tron-green', stageSlug: 'store' },
 	]);
 </script>
 
@@ -124,13 +126,22 @@
 		<div class="flex items-stretch gap-1 overflow-x-auto">
 			{#each pipelineStages() as stage, i}
 				<div class="flex-1 min-w-[100px] text-center">
-					<div class="rounded-lg bg-tron-bg-tertiary border border-tron-border p-3 h-full flex flex-col justify-center">
-						<div class="text-xs font-semibold uppercase tracking-wide text-tron-text-secondary">{stage.label}</div>
-						<div class="mt-1 text-xl font-bold text-{stage.color}">{stage.count}</div>
-						<div class="text-xs text-tron-text-secondary">{stage.sub}</div>
-					</div>
-					{#if i < pipelineStages().length - 1}
-						<div class="hidden"></div>
+					{#if stage.stageSlug}
+						<a
+							href="/manufacturing/pipeline?stage={stage.stageSlug}"
+							class="block rounded-lg bg-tron-bg-tertiary border border-tron-border p-3 h-full flex flex-col justify-center transition-colors hover:border-tron-cyan/60 hover:bg-tron-bg-tertiary/70"
+							title="View {stage.label} pipeline rows"
+						>
+							<div class="text-xs font-semibold uppercase tracking-wide text-tron-text-secondary">{stage.label}</div>
+							<div class="mt-1 text-xl font-bold text-{stage.color}">{stage.count}</div>
+							<div class="text-xs text-tron-text-secondary">{stage.sub}</div>
+						</a>
+					{:else}
+						<div class="rounded-lg bg-tron-bg-tertiary border border-tron-border p-3 h-full flex flex-col justify-center">
+							<div class="text-xs font-semibold uppercase tracking-wide text-tron-text-secondary">{stage.label}</div>
+							<div class="mt-1 text-xl font-bold text-{stage.color}">{stage.count}</div>
+							<div class="text-xs text-tron-text-secondary">{stage.sub}</div>
+						</div>
 					{/if}
 				</div>
 				{#if i < pipelineStages().length - 1}
@@ -215,8 +226,7 @@
 					</div>
 					<div class="mt-1 text-lg font-bold text-tron-text">{data.pipeline.printBarcodes.sheetsOnHand} <span class="text-xs font-normal text-tron-text-secondary">sheets</span></div>
 					<div class="text-xs text-tron-text-secondary">{data.pipeline.printBarcodes.labelsAvailable} labels</div>
-					<!-- Print Barcodes link — route not yet built -->
-								<span class="mt-2 block text-xs text-tron-text-secondary opacity-50">Print (coming soon)</span>
+					<a href="/manufacturing/print-barcodes" class="mt-2 block text-xs text-tron-cyan hover:underline" onclick={(e) => e.stopPropagation()}>&rarr; Print Barcodes</a>
 					{#if expandedCard === 'barcodes'}
 						<div class="mt-3 border-t border-tron-border pt-3">
 							<div class="text-xs text-tron-text-secondary mb-1">Recent Batches</div>

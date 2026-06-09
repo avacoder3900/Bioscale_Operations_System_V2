@@ -195,7 +195,7 @@
 							{/if}
 						</td>
 						<td class="px-4 py-3 text-right text-[var(--color-tron-text-secondary)]">
-							{at.reagents.filter((r) => r.isActive).length} / {at.reagents.length}
+							{at.reagents.filter((r: any) => r.isActive).length} / {at.reagents.length}
 						</td>
 						<td class="px-4 py-3 text-right text-[var(--color-tron-text)]">{at.cartridgeCount}</td>
 						<td class="px-4 py-3 text-right">

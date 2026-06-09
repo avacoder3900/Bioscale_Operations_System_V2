@@ -29,7 +29,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			status: 1, cartridgeCount: 1, 'operator._id': 1, 'operator.username': 1,
 			runStartTime: 1, cartridgesFilled: 1
 		}).lean(),
-		AssayDefinition.find({ isActive: true }, { _id: 1, name: 1 }).lean()
+		AssayDefinition.find({ isActive: true, hidden: { $ne: true } }, { _id: 1, name: 1 }).lean()
 	]);
 
 	const cs = cartridges as any[];
@@ -38,13 +38,17 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// Yield statistics
 	const totalBacked = cs.length;
 	const phases = ['wax_filled', 'wax_qc', 'reagent_filled', 'inspected', 'sealed', 'stored', 'released'];
-	const phaseCounts = phases.map((phase) => ({
-		stage: phase.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()),
-		count: cs.filter((c) => {
+	const phaseCounts = phases.map((phase) => {
+		const count = cs.filter((c) => {
 			const phaseOrder = ['wax_filled', 'wax_qc', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released'];
 			return phaseOrder.indexOf(c.status) >= phaseOrder.indexOf(phase);
-		}).length
-	}));
+		}).length;
+		return {
+			stage: phase.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()),
+			count,
+			percentage: cs.length > 0 ? count / cs.length : 0
+		};
+	});
 	const finalCount = cs.filter((c) => ['stored', 'released', 'shipped'].includes(c.status)).length;
 	const overallYield = totalBacked > 0 ? finalCount / totalBacked : 0;
 
@@ -91,30 +95,62 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	}));
 
 	// Operator stats
-	const opMap = new Map<string, { operatorId: string; username: string; runCount: number; cartridgeCount: number }>();
+	type OperatorStat = {
+		operatorId: string; username: string; operatorName: string;
+		runCount: number; cartridgeCount: number; cartridgesProcessed: number;
+		rejectedCount: number; rejectionRate: number;
+	};
+	const opMap = new Map<string, OperatorStat>();
 	rs.forEach((run) => {
 		const opId = run.operator?._id;
 		const opName = run.operator?.username ?? 'Unknown';
 		if (!opId) return;
-		const existing = opMap.get(opId) ?? { operatorId: opId, username: opName, runCount: 0, cartridgeCount: 0 };
+		const existing = opMap.get(opId) ?? {
+			operatorId: opId, username: opName, operatorName: opName,
+			runCount: 0, cartridgeCount: 0, cartridgesProcessed: 0,
+			rejectedCount: 0, rejectionRate: 0
+		};
 		existing.runCount++;
-		existing.cartridgeCount += run.cartridgeCount ?? run.cartridgesFilled?.length ?? 0;
+		const carts = (run.cartridgesFilled ?? []) as any[];
+		const runCarts = run.cartridgeCount ?? carts.length ?? 0;
+		existing.cartridgeCount += runCarts;
+		existing.cartridgesProcessed += runCarts;
+		existing.rejectedCount += carts.filter((c) => c.inspectionStatus === 'Rejected').length;
 		opMap.set(opId, existing);
 	});
-	const operatorStats = [...opMap.values()];
+	const operatorStats = [...opMap.values()].map((o) => ({
+		...o,
+		rejectionRate: o.cartridgesProcessed > 0 ? o.rejectedCount / o.cartridgesProcessed : 0
+	}));
 
 	// Assay type stats
-	const assayMap = new Map<string, { assayTypeId: string; name: string; runCount: number; cartridgeCount: number }>();
+	type AssayTypeStat = {
+		assayTypeId: string; name: string; assayTypeName: string;
+		runCount: number; cartridgeCount: number; totalCartridges: number;
+		completedCartridges: number; yieldRate: number;
+	};
+	const assayMap = new Map<string, AssayTypeStat>();
 	rs.forEach((run) => {
 		const assayId = run.assayType?._id;
 		if (!assayId) return;
 		const name = run.assayType?.name ?? 'Unknown';
-		const existing = assayMap.get(assayId) ?? { assayTypeId: assayId, name, runCount: 0, cartridgeCount: 0 };
+		const existing = assayMap.get(assayId) ?? {
+			assayTypeId: assayId, name, assayTypeName: name,
+			runCount: 0, cartridgeCount: 0, totalCartridges: 0,
+			completedCartridges: 0, yieldRate: 0
+		};
 		existing.runCount++;
-		existing.cartridgeCount += run.cartridgeCount ?? run.cartridgesFilled?.length ?? 0;
+		const carts = (run.cartridgesFilled ?? []) as any[];
+		const runCarts = run.cartridgeCount ?? carts.length ?? 0;
+		existing.cartridgeCount += runCarts;
+		existing.totalCartridges += runCarts;
+		existing.completedCartridges += carts.filter((c) => c.inspectionStatus === 'Accepted').length;
 		assayMap.set(assayId, existing);
 	});
-	const assayTypeStats = [...assayMap.values()];
+	const assayTypeStats = [...assayMap.values()].map((a) => ({
+		...a,
+		yieldRate: a.totalCartridges > 0 ? a.completedCartridges / a.totalCartridges : 0
+	}));
 
 	return {
 		rangeParam: range,

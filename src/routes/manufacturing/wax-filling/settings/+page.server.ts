@@ -11,7 +11,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const defaultSettings = {
 		minOvenTimeMin: 60, runDurationMin: 45, removeDeckWarningMin: 5,
-		coolingWarningMin: 30, deckLockoutMin: 60, incubatorTempC: 37, heaterTempC: 65,
+		coolingWarningMin: 30, deckLockoutMin: 60,
+		minCoolingBeforeQcMin: 2, // hard block: QC can't run until this many min after cooling confirmed
+		incubatorTempC: 37, heaterTempC: 65,
 		waxPerDeckUl: 5000, tubeCapacityUl: 20000, waxPerCartridgeUl: 100, cartridgesPerColumn: 8
 	};
 
@@ -36,6 +38,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 				removeDeckWarningMin: wax.removeDeckWarningMin ?? defaultSettings.removeDeckWarningMin,
 				coolingWarningMin: wax.coolingWarningMin ?? defaultSettings.coolingWarningMin,
 				deckLockoutMin: wax.deckLockoutMin ?? defaultSettings.deckLockoutMin,
+				minCoolingBeforeQcMin: wax.minCoolingBeforeQcMin ?? defaultSettings.minCoolingBeforeQcMin,
 				incubatorTempC: wax.incubatorTempC ?? defaultSettings.incubatorTempC,
 				heaterTempC: wax.heaterTempC ?? defaultSettings.heaterTempC,
 				waxPerDeckUl: wax.waxPerDeckUl ?? defaultSettings.waxPerDeckUl,
@@ -68,6 +71,7 @@ export const actions: Actions = {
 			{ key: 'removeDeckWarningMin', min: 1, max: 60 },
 			{ key: 'coolingWarningMin', min: 1, max: 120 },
 			{ key: 'deckLockoutMin', min: 1, max: 120 },
+			{ key: 'minCoolingBeforeQcMin', min: 0, max: 120 },
 			{ key: 'incubatorTempC', min: 20, max: 200 },
 			{ key: 'heaterTempC', min: 20, max: 200 },
 			{ key: 'waxPerDeckUl', min: 1, max: 10000 },

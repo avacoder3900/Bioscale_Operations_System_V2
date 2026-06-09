@@ -9,6 +9,7 @@ import {
 	LotRecord, WaxFillingRun, ReagentBatchRecord, LaserCutBatch,
 	CartridgeRecord
 } from '$lib/server/db';
+import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import type { UnifiedRun, GlobalFilters, ProcessType } from './types.js';
 import { inferShift } from './types.js';
 
@@ -89,8 +90,9 @@ async function fetchWaxRuns(f: GlobalFilters): Promise<UnifiedRun[]> {
 	const runIds = (runs as any[]).map(r => String(r._id));
 	let qcByRun = new Map<string, { accepted: number; rejected: number; scrapped: number }>();
 	if (runIds.length > 0) {
+		const checkedOutIds = await getCheckedOutCartridgeIds();
 		const qcAgg = await CartridgeRecord.aggregate([
-			{ $match: { 'waxFilling.runId': { $in: runIds } } },
+			{ $match: { 'waxFilling.runId': { $in: runIds }, _id: { $nin: checkedOutIds } } },
 			{ $group: {
 				_id: '$waxFilling.runId',
 				accepted: { $sum: { $cond: [{ $eq: ['$waxQc.status', 'Accepted'] }, 1, 0] } },

@@ -3,6 +3,7 @@ import { env } from '$env/dynamic/private';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import { connectDB, TemperatureAlert, WaxFillingRun, WaxBatch, PartDefinition, NotificationSettings } from '$lib/server/db';
 import { sendEmail, renderEmailHtml, resolveRecipientEmails } from '$lib/server/email';
+import { COMPLETED, ABORTED_OR_CANCELLED } from '$lib/server/manufacturing/run-statuses';
 import type { RequestHandler } from './$types';
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -36,8 +37,8 @@ async function runDigest(request: Request) {
 
 	const [alerts, runsCompleted, runsAborted, lowBatches, lowParts] = await Promise.all([
 		TemperatureAlert.find({ timestamp: { $gte: since } }).sort({ timestamp: -1 }).limit(50).lean() as Promise<any[]>,
-		WaxFillingRun.countDocuments({ status: { $in: ['completed', 'Completed'] }, runEndTime: { $gte: since } }),
-		WaxFillingRun.countDocuments({ status: { $in: ['aborted', 'Aborted', 'cancelled', 'Cancelled'] }, runEndTime: { $gte: since } }),
+		WaxFillingRun.countDocuments({ status: { $in: COMPLETED }, runEndTime: { $gte: since } }),
+		WaxFillingRun.countDocuments({ status: { $in: ABORTED_OR_CANCELLED }, runEndTime: { $gte: since } }),
 		WaxBatch.find({ remainingVolumeUl: { $lte: settings?.lowWaxBatchThresholdUl ?? 1600 } }).sort({ remainingVolumeUl: 1 }).limit(10).lean() as Promise<any[]>,
 		PartDefinition.find({
 			$expr: {

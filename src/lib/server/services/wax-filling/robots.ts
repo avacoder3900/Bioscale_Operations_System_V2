@@ -19,4 +19,5 @@ export interface RobotRunState {
 	runEndTime: Date | string | null;
 	deckId: string | null;
 	alerts: RobotRunAlert[];
+	activeProcess?: 'wax' | 'reagent' | null;
 }

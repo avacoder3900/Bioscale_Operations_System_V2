@@ -44,7 +44,7 @@
 		<dl class="grid grid-cols-2 gap-4">
 			<div>
 				<dt class="tron-text-muted text-sm">SPU UDI</dt>
-				<dd class="tron-text-primary font-mono">{data.spu.udi}</dd>
+				<dd class="tron-text-primary font-mono">{data.spu?.udi}</dd>
 			</div>
 			<div>
 				<dt class="tron-text-muted text-sm">Duration</dt>

@@ -12,7 +12,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	const page = Math.max(1, Number(url.searchParams.get('page') ?? 1));
 	const search = url.searchParams.get('search') ?? '';
-	const assayTypeId = url.searchParams.get('assayTypeId') ?? '';
+	// Frozen +page.svelte sends `assayType`; older callers/bookmarks use
+	// `assayTypeId`. Read both so the dropdown filter actually applies.
+	const assayTypeId =
+		url.searchParams.get('assayType') ?? url.searchParams.get('assayTypeId') ?? '';
 	const sortBy = url.searchParams.get('sortBy') ?? 'createdAt';
 	const sortDir = url.searchParams.get('sortDir') ?? 'desc';
 
@@ -35,7 +38,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			.limit(PAGE_SIZE)
 			.lean(),
 		CartridgeRecord.countDocuments(filter),
-		AssayDefinition.find({ isActive: true }, { _id: 1, name: 1 }).lean()
+		AssayDefinition.find({ isActive: true, hidden: { $ne: true } }, { _id: 1, name: 1 }).lean()
 	]);
 
 	return {
@@ -46,8 +49,20 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			assayTypeName: c.reagentFilling?.assayType?.name ?? null,
 			reagentInspectionStatus: c.reagentInspection?.status ?? null,
 			reagentInspectionReason: c.reagentInspection?.reason ?? null,
-			waxQcStatus: (c as any).waxQc?.status ?? null,
-			waxQcReason: (c as any).waxQc?.rejectionReason ?? null,
+			waxQcStatus: c.waxQc?.status ?? null,
+			waxQcReason: c.waxQc?.rejectionReason ?? null,
+			waxStatus: c.waxQc?.status ?? null,
+			waxRunId: c.waxFilling?.runId ?? null,
+			reagentRunId: c.reagentFilling?.runId ?? null,
+			backedLotId: c.backing?.lotId ?? null,
+			coolingTrayId: c.waxStorage?.coolingTrayId ?? null,
+			inspectionStatus: c.reagentInspection?.status ?? null,
+			storageLocation: c.storage?.fridgeName ?? c.waxStorage?.location ?? null,
+			topSealBatchId: c.topSeal?.batchId ?? null,
+			operatorName: c.reagentInspection?.operator?.username
+				?? c.waxQc?.operator?.username
+				?? c.waxFilling?.operator?.username
+				?? null,
 			createdAt: c.createdAt
 		})),
 		total,

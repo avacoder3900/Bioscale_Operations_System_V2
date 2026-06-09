@@ -3,7 +3,11 @@ import {
 	connectDB, Equipment, ManufacturingSettings, WaxFillingRun, generateId
 } from '$lib/server/db';
 import { isAdmin as checkAdmin } from '$lib/server/permissions';
+import { COMPLETED, ABORTED_OR_CANCELLED } from '$lib/server/manufacturing/run-statuses';
 import type { PageServerLoad, Actions } from './$types';
+
+// Inline the union here so we don't expand `as const` tuples at every call site.
+const TERMINAL_HISTORY = [...COMPLETED, ...ABORTED_OR_CANCELLED];
 
 export const config = { maxDuration: 60 };
 
@@ -19,7 +23,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		Equipment.find({ equipmentType: { $in: ['fridge', 'oven'] } }).sort({ name: 1 }).lean(),
 		ManufacturingSettings.findById('default').lean(),
 		WaxFillingRun.find({
-			status: { $nin: ['completed', 'aborted', 'cancelled'] }
+			status: { $nin: TERMINAL_HISTORY }
 		}).lean()
 	]);
 
@@ -34,10 +38,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 			if (cols.length) {
 				[activeReagentRunsRaw, reagentRunHistoryRaw] = await Promise.all([
 					db.collection('reagent_filling_runs').find({
-						status: { $nin: ['completed', 'aborted', 'cancelled'] }
+						status: { $nin: TERMINAL_HISTORY }
 					}).toArray(),
 					db.collection('reagent_filling_runs').find(
-						{ status: { $in: ['completed', 'aborted', 'cancelled'] } },
+						{ status: { $in: TERMINAL_HISTORY } },
 						{ sort: { createdAt: -1 }, limit: 50 }
 					).toArray()
 				]);
@@ -47,7 +51,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	// Fetch wax run history
 	const waxRunHistoryRaw = await WaxFillingRun.find({
-		status: { $in: ['completed', 'aborted', 'cancelled'] }
+		status: { $in: TERMINAL_HISTORY }
 	}).sort({ createdAt: -1 }).limit(50).lean();
 
 	const rejectionCodes = ((settingsDoc as any)?.rejectionReasonCodes ?? [])

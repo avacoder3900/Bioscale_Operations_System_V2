@@ -16,7 +16,19 @@ const waxFillingRunSchema = new Schema({
 	status: String,
 	operator: { _id: String, username: String },
 	abortReason: String, plannedCartridgeCount: Number,
-	cartridgeIds: [String]
+	cartridgeIds: [String],
+
+	// Free-text operator notes attached to the run. Append-only metadata —
+	// never gates state transitions. Mirrored to each cartridge's notes[]
+	// at write time so the same note appears on the run AND on every
+	// cartridge in the run. phase tags the workflow point (e.g. 'wax_run').
+	notes: [{
+		_id: { type: String, default: () => generateId() },
+		body: String,
+		phase: String,
+		author: { _id: String, username: String },
+		createdAt: Date
+	}]
 }, { timestamps: true });
 
 // Robot + deck are held through the filling-page-owned stages only.

@@ -5,7 +5,7 @@
 import { fail } from '@sveltejs/kit';
 import {
 	connectDB, ProcessAnalyticsEvent, FmeaRecord, SpcSignal, SpecLimit,
-	CauseEffectDiagram, AuditLog, generateId
+	CauseEffectDiagram, AuditLog, AnalyticsNote, generateId
 } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import type { Actions } from './$types';
@@ -93,6 +93,56 @@ export const analysisActions: Actions = {
 		await ProcessAnalyticsEvent.findByIdAndDelete(id);
 		await writeAudit({ tableName: 'process_analytics_events', recordId: id, action: 'DELETE', changedBy: locals.user.username ?? '' });
 		return { success: true };
+	},
+
+	// -----------------------------------------------------------------------
+	// Analytics Notes — free-form operator notes for labor/time analysis.
+	// Lighter-weight than ProcessAnalyticsEvent: just operator + body +
+	// timestamp. Stored in `analytics_notes` collection.
+	// -----------------------------------------------------------------------
+	createAnalyticsNote: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const f = await request.formData();
+		const body = f.get('body')?.toString().trim() ?? '';
+		if (!body) return fail(400, { noteError: 'Note body is required' });
+
+		const doc = await AnalyticsNote.create({
+			_id: generateId(),
+			body,
+			operator: userRef(locals),
+			createdAt: new Date()
+		});
+
+		await writeAudit({
+			tableName: 'analytics_notes',
+			recordId: String(doc._id),
+			action: 'INSERT',
+			changedBy: locals.user.username ?? '',
+			newData: { body: body.slice(0, 200), operator: userRef(locals).username }
+		});
+
+		return { noteSuccess: true };
+	},
+
+	deleteAnalyticsNote: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const f = await request.formData();
+		const id = f.get('id')?.toString();
+		if (!id) return fail(400, { error: 'id required' });
+		const existing = await AnalyticsNote.findById(id).lean() as any;
+		await AnalyticsNote.findByIdAndDelete(id);
+		await writeAudit({
+			tableName: 'analytics_notes',
+			recordId: id,
+			action: 'DELETE',
+			changedBy: locals.user.username ?? '',
+			newData: existing ? { body: existing.body?.slice(0, 200), operator: existing.operator?.username } : undefined
+		});
+		return { noteDeleteSuccess: true };
 	},
 
 	// -----------------------------------------------------------------------

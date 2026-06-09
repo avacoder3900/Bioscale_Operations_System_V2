@@ -44,7 +44,7 @@ const lotRecordSchema = new Schema({
 	// Wax-filling consumption marker. Presence = bucket consumed (removed
 	// from the ready list). `overridden` flags an admin bypass of the
 	// minimum cure time; the override username + reason are audit-logged
-	// separately in audit_logs but kept here for quick display.
+	// separately in audit_log but kept here for quick display.
 	waxConsumed: {
 		at: Date,
 		by: operatorRef,

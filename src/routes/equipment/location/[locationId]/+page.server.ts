@@ -1,10 +1,14 @@
 export const config = { maxDuration: 60 };
 import { error } from '@sveltejs/kit';
 import { connectDB, Equipment, EquipmentLocation, CartridgeRecord, WaxFillingRun, BackingLot } from '$lib/server/db';
+import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
 	await connectDB();
+
+	// Exclude manually checked-out cartridges from fridge/shelf occupancy
+	const checkedOutIds = await getCheckedOutCartridgeIds();
 
 	const { locationId } = params;
 
@@ -66,14 +70,16 @@ export const load: PageServerLoad = async ({ params }) => {
 	}
 	const uniqueMatchValues = [...new Set(matchValues)];
 
-	// Only count cartridges that are still active inventory. Once a cartridge
-	// ships/completes/voids/scraps, its waxStorage.location / storage.fridgeName
-	// is a stale historical reference — it's no longer physically in the fridge.
-	// Matches /equipment/activity + /cartridge-dashboard filters.
-	const ACTIVE_WAX = ['wax_stored'];
+	// Active inventory only — once a cartridge ships/completes/voids, its
+	// waxStorage.location / storage.fridgeName is just a stale historical
+	// reference. Scrapped wax cartridges remain in the fridge as QA quarantine
+	// (until manually checked out), so they're included in ACTIVE_WAX.
+	// Matches /inventory/fridge-storage + /equipment/activity filters.
+	const ACTIVE_WAX = ['wax_stored', 'scrapped'];
 	const ACTIVE_REAGENT = ['stored', 'reagent_filled', 'released', 'linked', 'inspected', 'sealed', 'cured'];
 	const [cartridgesRaw, waxRunsRaw] = await Promise.all([
 		CartridgeRecord.find({
+			_id: { $nin: checkedOutIds },
 			$or: [
 				{ 'waxStorage.location': { $in: uniqueMatchValues }, status: { $in: ACTIVE_WAX } },
 				{ 'storage.fridgeName': { $in: uniqueMatchValues }, status: { $in: ACTIVE_REAGENT } }
@@ -89,6 +95,7 @@ export const load: PageServerLoad = async ({ params }) => {
 			'waxQc.status': 1,
 			'reagentFilling.assayType': 1,
 			'topSeal.timestamp': 1,
+			voidReason: 1,
 			'waxStorage.location': 1,
 			'waxStorage.recordedAt': 1,
 			'waxStorage.operator': 1,
@@ -131,6 +138,18 @@ export const load: PageServerLoad = async ({ params }) => {
 			? (c.waxStorage?.operator?.username ?? null)
 			: (c.storage?.operator?.username ?? null);
 
+		// Wax bucket splits into accepted (status=wax_stored) vs scrapped
+		// (status=scrapped). Scrapped cartridges still occupy the fridge as
+		// QA quarantine until manual checkout.
+		let storageType: 'wax_accepted' | 'wax_scrapped' | 'reagent' | 'unknown';
+		if (isWax) {
+			storageType = c.status === 'scrapped' ? 'wax_scrapped' : 'wax_accepted';
+		} else if (isReagent) {
+			storageType = 'reagent';
+		} else {
+			storageType = 'unknown';
+		}
+
 		return {
 			id: String(c._id),
 			currentPhase: c.status ?? null,
@@ -142,9 +161,10 @@ export const load: PageServerLoad = async ({ params }) => {
 			waxQcStatus: c.waxQc?.status ?? null,
 			assayType: c.reagentFilling?.assayType?.name ?? null,
 			topSealAt: c.topSeal?.timestamp?.toISOString?.() ?? null,
+			voidReason: c.voidReason ?? null,
 			storedAt: storedAt ? new Date(storedAt).toISOString() : null,
 			operator,
-			storageType: isWax ? 'wax' : isReagent ? 'reagent' : 'unknown'
+			storageType
 		};
 	});
 
@@ -178,7 +198,8 @@ export const load: PageServerLoad = async ({ params }) => {
 		cartridgeCount: r.cartridgeIds?.length ?? r.plannedCartridgeCount ?? 0
 	}));
 
-	const waxCount = cartridges.filter((c) => c.storageType === 'wax').length;
+	const waxAcceptedCount = cartridges.filter((c) => c.storageType === 'wax_accepted').length;
+	const waxScrappedCount = cartridges.filter((c) => c.storageType === 'wax_scrapped').length;
 	const reagentCount = cartridges.filter((c) => c.storageType === 'reagent').length;
 	const backingCount = backingLotsInOven.reduce((s, b) => s + b.cartridgeCount, 0);
 
@@ -197,7 +218,8 @@ export const load: PageServerLoad = async ({ params }) => {
 		backingLots: backingLotsInOven,
 		stats: {
 			total: cartridges.length + backingCount,
-			waxCount,
+			waxAcceptedCount,
+			waxScrappedCount,
 			reagentCount,
 			backingCount,
 			utilization: capacity ? Math.round(((cartridges.length + backingCount) / capacity) * 100) : null

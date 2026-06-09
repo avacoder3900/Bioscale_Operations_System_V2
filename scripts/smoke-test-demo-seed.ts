@@ -1,0 +1,14 @@
+import { getDemoAnalyticsPageData } from '../src/lib/server/analytics/demo-seed.js';
+const d = getDemoAnalyticsPageData();
+console.log('runs:', d.runs.length);
+console.log('fmea:', d.fmeaSummary.all.length);
+console.log('spcSignals:', d.spcSignals.recent.length);
+console.log('manualEvents:', d.manualEvents.length);
+console.log('specLimits:', d.specLimits.length);
+console.log('causeEffectDiagrams:', d.causeEffectDiagrams.length);
+console.log('cycleTime per-process:', d.cycleTime.length);
+console.log('pareto entries:', d.yieldFailures.pareto.length);
+console.log('overview FPY:', d.overview.overallFpy, 'RTY:', d.overview.rty);
+console.log('filterOptions.robots:', d.filterOptions.robots.length);
+console.log('filterOptions.equipment:', d.filterOptions.equipment.length);
+console.log('first cycleTime cap:', d.cycleTime[0]?.capability);

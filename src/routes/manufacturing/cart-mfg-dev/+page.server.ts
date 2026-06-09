@@ -6,12 +6,15 @@ import {
 	BarcodeInventory
 } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
+import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
+
+	const checkedOutIds = await getCheckedOutCartridgeIds();
 
 	const now = Date.now();
 	const todayStart = new Date();
@@ -159,7 +162,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		]),
 		// Oldest wax stored
 		CartridgeRecord.findOne(
-			{ currentPhase: 'wax_stored' },
+			{ currentPhase: 'wax_stored', _id: { $nin: checkedOutIds } },
 			{ 'waxStorage.timestamp': 1 }
 		).sort({ 'waxStorage.timestamp': 1 }).lean()
 	]);

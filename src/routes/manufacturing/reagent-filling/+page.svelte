@@ -16,6 +16,7 @@
 	let { data } = $props();
 
 	let selectedAssayTypeId = $state('');
+	let isResearchRun = $state(false);
 	let errorMsg = $state('');
 	let submitting = $state(false);
 	let showCancelModal = $state(false);
@@ -355,10 +356,18 @@
 			</div>
 			<SetupConfirmation
 				assayTypes={data.assayTypes}
-				reagentNames={data.reagentDefinitions}
+				reagentNames={data.reagentDefinitions as any}
 				{selectedAssayTypeId}
 				onSelectAssayType={(id) => { selectedAssayTypeId = id; }}
-				onComplete={() => submitForm('createRun', { assayTypeId: selectedAssayTypeId })}
+				isResearch={isResearchRun}
+				onSetResearch={(v) => {
+					isResearchRun = v;
+					if (v) selectedAssayTypeId = '';
+				}}
+				onComplete={() => submitForm('createRun', {
+					assayTypeId: isResearchRun ? '' : selectedAssayTypeId,
+					isResearch: isResearchRun ? 'true' : 'false'
+				})}
 			/>
 		</div>
 
@@ -497,10 +506,17 @@
 	{#if displayStage === 'Setup'}
 		<SetupConfirmation
 			assayTypes={data.assayTypes}
-			reagentNames={data.reagentDefinitions}
+			reagentNames={data.reagentDefinitions as any}
 			selectedAssayTypeId={previewParam ? 'preview' : (data.runState.assayTypeName ?? 'selected')}
 			onSelectAssayType={previewParam ? () => {} : (id) => { selectedAssayTypeId = id; }}
-			onComplete={() => submitForm(stage ? 'confirmSetup' : 'createRun', stage ? {} : { assayTypeId: selectedAssayTypeId })}
+			isResearch={previewParam ? false : (data.runState.isResearch || isResearchRun)}
+			onSetResearch={previewParam ? () => {} : (v) => {
+				isResearchRun = v;
+				if (v) selectedAssayTypeId = '';
+			}}
+			onComplete={() => submitForm(stage ? 'confirmSetup' : 'createRun', stage
+				? { isResearch: isResearchRun ? 'true' : 'false' }
+				: { assayTypeId: isResearchRun ? '' : selectedAssayTypeId, isResearch: isResearchRun ? 'true' : 'false' })}
 			readonly={isViewingPast}
 		/>
 
@@ -511,17 +527,66 @@
 				submitForm('loadDeck', { deckId, cartridgeScans: JSON.stringify(cartridgeScans) })}
 			readonly={isViewingPast}
 			focusPaused={showCancelModal}
+			robotId={data.robotId}
+			runId={data.activeRunId ?? null}
 		/>
 
 	{:else if displayStage === 'Loading' && data.cartridges.length > 0 && !reagentBatchConfirmed}
 		<!-- Step 2: Deck loaded — now scan reagent batch barcode -->
 		<ReagentPreparation
-			reagentDefinitions={data.reagentDefinitions}
+			reagentDefinitions={data.reagentDefinitions as any}
 			cartridgeCount={data.cartridges.length}
 			onComplete={(tubes) => {
 				reagentBatchBarcode = tubes[0]?.sourceLotId ?? '';
 				reagentBatchConfirmed = true;
 				submitForm('recordReagentPrep', { tubes: JSON.stringify(tubes) });
+			}}
+			onSaveNote={async (noteBody) => {
+				// Independent fetch — bypasses submitForm so the page doesn't
+				// reload the stage on save. Calls the recordBatchNote action
+				// which writes the note to every cartridge currently on the run.
+				try {
+					const formData = new FormData();
+					formData.set('runId', data.activeRunId ?? '');
+					formData.set('noteBody', noteBody);
+					const res = await fetch('?/recordBatchNote', {
+						method: 'POST',
+						body: formData,
+						headers: { 'x-sveltekit-action': 'true' }
+					});
+					const text = await res.text();
+					if (!res.ok || text.includes('"type":"failure"')) {
+						let err = `HTTP ${res.status}`;
+						try {
+							const json = JSON.parse(text);
+							if (json.type === 'failure' && json.data) {
+								const parsed = typeof json.data === 'string' ? JSON.parse(json.data) : json.data;
+								if (Array.isArray(parsed)) {
+									for (let i = 1; i < parsed.length; i++) {
+										if (typeof parsed[i] === 'string' && parsed[i].length > 3) { err = parsed[i]; break; }
+									}
+								}
+							}
+						} catch { /* fallthrough with HTTP code */ }
+						return { ok: false, error: err };
+					}
+					// SvelteKit action success: data envelope holds the action's return value
+					let cartridgeCount = data.cartridges.length;
+					try {
+						const json = JSON.parse(text);
+						const parsed = typeof json.data === 'string' ? JSON.parse(json.data) : json.data;
+						if (Array.isArray(parsed)) {
+							const obj = parsed[0];
+							if (obj && typeof obj === 'object' && 'cartridgeCount' in obj) {
+								const idx = (obj as Record<string, number>).cartridgeCount;
+								if (typeof idx === 'number' && parsed[idx] != null) cartridgeCount = Number(parsed[idx]);
+							}
+						}
+					} catch { /* keep fallback count */ }
+					return { ok: true, cartridgeCount };
+				} catch (e) {
+					return { ok: false, error: e instanceof Error ? e.message : 'Network error' };
+				}
 			}}
 			readonly={isViewingPast}
 		/>
@@ -553,7 +618,11 @@
 
 	{:else if displayStage === 'Running'}
 		<RunExecution
-			assayTypeName={previewParam ? 'Preview Assay' : (data.runState.assayTypeName ?? 'Unknown')}
+			assayTypeName={previewParam
+				? 'Preview Assay'
+				: (data.runState.isResearch
+					? 'Research Run'
+					: (data.runState.assayTypeName ?? 'Unknown'))}
 			cartridgeCount={previewParam ? 8 : (data.runState.cartridgeCount ?? 0)}
 			runStartTime={new Date(data.runState.runStartTime ?? Date.now())}
 			runEndTime={new Date(data.runState.runEndTime ?? (Date.now() + 600000))}

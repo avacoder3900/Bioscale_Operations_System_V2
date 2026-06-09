@@ -160,8 +160,9 @@ export const actions: Actions = {
 		const now = new Date();
 
 		// Bypass the recipient lookup by sending directly
+		const recipient: string = email;
 		async function sendOne(subject: string, tag: string, html: string) {
-			return send({ to: email, subject, tag, html });
+			return send({ to: recipient, subject, tag, html });
 		}
 
 		if (alertType === 'temperatureAlert_high') {
