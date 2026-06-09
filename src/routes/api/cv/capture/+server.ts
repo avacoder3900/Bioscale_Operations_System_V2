@@ -101,9 +101,27 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			...(forensic ? { metadata: { forensic } } : {})
 		});
 
+		// A batch of legacy cartridges have a malformed (non-array) `photos`
+		// field, so a plain $push throws "must be an array but is of type …".
+		// Use a pipeline update to coerce photos to [] when it isn't an array,
+		// then append — atomic, self-healing, and a no-op shape change for the
+		// well-formed majority. $literal keeps the entry stored verbatim (so a
+		// '$' or '.' in any value isn't parsed as an aggregation expression).
+		const photoEntry = { imageId, phase, capturedAt, r2Key: key, r2Url: publicUrl, cartridgeImageNumber };
 		await CartridgeRecord.updateOne(
 			{ _id: cartridgeId },
-			{ $push: { photos: { imageId, phase, capturedAt, r2Key: key, r2Url: publicUrl, cartridgeImageNumber } } }
+			[
+				{
+					$set: {
+						photos: {
+							$concatArrays: [
+								{ $cond: [{ $isArray: '$photos' }, '$photos', []] },
+								{ $literal: [photoEntry] }
+							]
+						}
+					}
+				}
+			]
 		);
 
 		// Fire-and-forget: any project deploying at this phase runs inference.
