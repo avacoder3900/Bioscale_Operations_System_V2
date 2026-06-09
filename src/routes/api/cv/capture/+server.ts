@@ -121,7 +121,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 						}
 					}
 				}
-			]
+			],
+			// Mongoose 9 requires opting in to array (aggregation-pipeline) updates.
+			{ updatePipeline: true }
 		);
 
 		// Fire-and-forget: any project deploying at this phase runs inference.
