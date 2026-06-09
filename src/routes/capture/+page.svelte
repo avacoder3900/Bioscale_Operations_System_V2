@@ -171,6 +171,13 @@
 	// Submission lock so Space-spam doesn't fire multiple POSTs in flight
 	let submitting = $state(false);
 
+	// Lock-in-progress guard. A scanner in sensing mode re-fires the same
+	// barcode many times per second; because cartridgeId isn't set until the
+	// async lookup resolves, a burst of re-reads would each kick off a
+	// duplicate /api/cv/lookup-cartridge call before the first returns. This
+	// gates handleScan to a single lookup at a time — "scan once, lock once."
+	let locking = $state(false);
+
 	// 2-photo workflow per cartridge: photo 1 = front, photo 2 = back.
 	// After both are taken, the next capture attempt opens the retake dialog.
 	type SessionPhoto = { id: string; cartridgeImageNumber: string };
@@ -522,6 +529,12 @@
 			return null;
 		}
 
+		// A lookup is already in flight from an earlier read in this sensing-mode
+		// burst — cartridgeId hasn't been set yet, so the guards above can't catch
+		// it. Drop the duplicate; the first lookup will do the lock.
+		if (locking) return null;
+		locking = true;
+
 		try {
 			const res = await fetch(`/api/cv/lookup-cartridge?code=${encodeURIComponent(code)}`);
 			if (!res.ok) {
@@ -545,6 +558,8 @@
 		} catch (e) {
 			flashBanner('err', e instanceof Error ? e.message : 'Lookup failed');
 			return null;
+		} finally {
+			locking = false;
 		}
 	}
 
