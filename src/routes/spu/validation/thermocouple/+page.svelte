@@ -20,6 +20,11 @@
 			success?: boolean;
 			sessionId?: string;
 			error?: string;
+			attachSuccess?: boolean;
+			attachError?: string;
+			attachFileName?: string;
+			attachRowCount?: number;
+			attachUdi?: string;
 		} | null;
 	}
 
@@ -32,6 +37,11 @@
 	let minTemp = $state(20);
 	let maxTemp = $state(40);
 	let isSubmitting = $state(false);
+
+	// CSV attach form state
+	let attachUdi = $state('');
+	let csvFileName = $state('');
+	let isUploading = $state(false);
 
 	// Computed duration in seconds
 	let durationSeconds = $derived(durationUnit === 'minutes' ? duration * 60 : duration);
@@ -320,6 +330,98 @@
 				</button>
 			</div>
 		</div>
+	</div>
+
+	<!-- Attach CSV to SPU -->
+	<div class="tron-card p-6">
+		<h2 class="tron-heading mb-2 text-lg font-semibold">Attach Thermocouple CSV to SPU</h2>
+		<p class="tron-text-muted mb-6 text-sm">
+			Upload a thermocouple data CSV and attach it directly to an SPU document in the database.
+		</p>
+
+		<form
+			method="POST"
+			action="?/attachCsv"
+			enctype="multipart/form-data"
+			use:enhance={() => {
+				isUploading = true;
+				return async ({ update }) => {
+					await update();
+					isUploading = false;
+					csvFileName = '';
+				};
+			}}
+			class="space-y-6"
+		>
+			<div class="grid gap-6 md:grid-cols-2">
+				<div>
+					<label for="attachUdi" class="tron-text-muted mb-2 block text-sm font-medium">
+						SPU UDI or Barcode
+					</label>
+					<input
+						type="text"
+						id="attachUdi"
+						name="udi"
+						bind:value={attachUdi}
+						placeholder="Scan or enter SPU UDI / barcode"
+						class="tron-input w-full rounded-lg px-4 py-3 text-lg"
+					/>
+				</div>
+
+				<div>
+					<label for="csvFile" class="tron-text-muted mb-2 block text-sm font-medium">
+						CSV File
+					</label>
+					<input
+						type="file"
+						id="csvFile"
+						name="file"
+						accept=".csv,text/csv"
+						onchange={(e) => {
+							const f = (e.currentTarget as HTMLInputElement).files?.[0];
+							csvFileName = f ? f.name : '';
+						}}
+						class="tron-input w-full rounded-lg px-4 py-2.5 text-sm file:mr-3 file:rounded-md file:border-0 file:bg-[var(--color-tron-bg-tertiary)] file:px-3 file:py-1.5 file:text-[var(--color-tron-text-secondary)]"
+					/>
+					{#if csvFileName}
+						<p class="tron-text-muted mt-1 text-xs">Selected: {csvFileName}</p>
+					{/if}
+				</div>
+			</div>
+
+			{#if form?.attachSuccess}
+				<div class="rounded-lg bg-[var(--color-tron-green)]/10 p-4 text-[var(--color-tron-green)]">
+					Attached <span class="font-medium">{form.attachFileName}</span>
+					({form.attachRowCount} rows) to SPU <span class="font-medium">{form.attachUdi}</span>.
+				</div>
+			{/if}
+			{#if form?.attachError}
+				<div class="rounded-lg bg-[var(--color-tron-red)]/10 p-4 text-[var(--color-tron-red)]">
+					{form.attachError}
+				</div>
+			{/if}
+
+			<button
+				type="submit"
+				disabled={!attachUdi || !csvFileName || isUploading}
+				class="flex w-full items-center justify-center gap-3 rounded-lg bg-[var(--color-tron-cyan)] px-6 py-4 text-lg font-semibold text-[var(--color-tron-bg-primary)] transition-all hover:bg-[var(--color-tron-cyan)]/90 disabled:cursor-not-allowed disabled:opacity-50"
+			>
+				{#if isUploading}
+					<svg class="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none">
+						<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"
+						></circle>
+						<path
+							class="opacity-75"
+							fill="currentColor"
+							d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+						></path>
+					</svg>
+					Attaching...
+				{:else}
+					Attach CSV to SPU
+				{/if}
+			</button>
+		</form>
 	</div>
 
 	<!-- Recent Tests -->

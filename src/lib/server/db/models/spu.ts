@@ -97,6 +97,20 @@ const spuSchema = new Schema({
 	qcStatus: { type: String, enum: ['pending', 'passed', 'failed'] },
 	qcDocumentUrl: String,
 
+	// File attachments stored inline (small CSVs, e.g. thermocouple readings).
+	attachments: [{
+		_id: { type: String, default: () => generateId() },
+		kind: { type: String, default: 'thermocouple_csv' },
+		fileName: String,
+		mimeType: { type: String, default: 'text/csv' },
+		fileSize: Number,
+		rowCount: Number,
+		content: String,
+		sessionId: String,
+		uploadedAt: { type: Date, default: () => new Date() },
+		uploadedBy: operatorRef
+	}],
+
 	finalizedAt: Date,
 	voidedAt: Date,
 	voidReason: String,
