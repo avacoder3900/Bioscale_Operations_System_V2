@@ -2096,3 +2096,102 @@ Confirmed semantics in conversation:
 - Aging Tasks chart = aging in any non-done stage past its warning
   threshold (stage-specific thresholds defined in src/lib/shared/
   kanban-aging.ts).
+
+
+## Session 2026-06-09 — Scanner debounce + ship CV/capture to production + fix capture 500
+
+### Headline
+
+Got the Pi-station capture workflow working end-to-end in production:
+fixed a scanner double-scan bug, deployed the entire CV/capture suite
+from `dev` to `main` (production), then chased two runtime 500s on
+`/api/cv/capture` until photos save and the 2-photo workflow advances.
+Operator confirmed live: scan → lock → Space → photo saves → 1/2 → 2/2.
+
+### What shipped (commit chain)
+
+- 1cd1d05a (bims-capture-agent) — scanner sensing-mode debounce. A
+  scanner in sensing mode re-fires the same barcode many times/sec;
+  because `cartridgeId` is only set after the async lookup resolves, a
+  burst of re-reads each kicked off a duplicate `/api/cv/lookup-cartridge`
+  call (double "Locked on X" banner + double session reset). Added an
+  in-flight `locking` guard in handleScan (mirrors the `submitting`
+  pattern): scan once, lock once. Merged to dev as 417d57fa.
+- d1b1721f (main) — merged `dev` into `main` (433 commits). This is what
+  put the whole CV/capture station, /cv/projects, /cv/stations,
+  /cv/label, etc. into PRODUCTION for the first time. Clean merge, no
+  conflicts.
+- a0ffad5a + 6276cba4 (main) — the capture 500 fix, two parts (below).
+  Cherry-picked to dev as 6913bba4 + 108cd14b.
+
+### The capture 500 — root cause + fix
+
+Two stacked bugs, surfaced one after the other by testing on prod:
+
+1. Legacy data: 475 of ~756 `cartridge_records` have `photos` stored as
+   `{}` (object) instead of `[]`. The endpoint's `$push: { photos }`
+   throws "must be an array but is of type … in document {_id:<cart>}"
+   → 500 on every capture to a bad cart. (This was the long-known,
+   previously-deferred photos[] defect — see memory.)
+   Fix: replaced `$push` with a pipeline update that coerces photos to
+   `[]` when it isn't an array, then appends — self-heals each cart on
+   first capture:
+     [{ $set: { photos: { $concatArrays: [
+        { $cond: [{ $isArray: '$photos' }, '$photos', []] },
+        { $literal: [photoEntry] } ] } } }]
+
+2. Mongoose 9 gotcha: array (aggregation-pipeline) updates THROW at
+   runtime — "Cannot pass an array to query updates unless the
+   `updatePipeline` option is set" — unless you pass
+   `{ updatePipeline: true }` as the options arg. This is NOT caught by
+   `npm run check` (the types accept the array), so it passed local
+   type-check and only failed live. Fixed by adding the option.
+
+### Knowledge learned (reusable — read before similar work)
+
+- VERCEL PREVIEW ENV: Preview deployments only get env vars scoped to
+  the Preview environment. Production-only secrets (R2_WORKER_URL,
+  R2_UPLOAD_SECRET, R2_PUBLIC_URL, R2_BUCKET_NAME — see
+  src/lib/server/services/r2.ts) are ABSENT on branch/preview deploys, so
+  `/api/cv/capture` 500s with "R2_WORKER_URL not configured" on a preview
+  even though scan/lookup (Mongo reads) work fine. To test capture either
+  run on a deploy that has the R2 vars, or add them to the Preview scope.
+- PRODUCTION BRANCH = `main`. Repo has THREE plausible prod branches
+  (main, master, dev). Confirmed this session: Vercel production deploys
+  from `main` (merge → prod URL updated → capture worked). `dev` is the
+  active integration branch and was ~400 commits AHEAD of main/master;
+  main/master had been stale since Apr/May. master and main have also
+  diverged from each other historically.
+- MONGOOSE 9 pipeline updates need `{ updatePipeline: true }` (runtime,
+  not type-checked). See above.
+- LOCAL BUILD ON WINDOWS can't finish `@sveltejs/adapter-vercel`: OOM at
+  Node's 4GB default, and even at 8GB it dies on
+  `EBUSY readlink 'C:\swapfile.sys'` (the Vercel file-tracer choking on
+  the Windows swap file). Both are LOCAL-only; Vercel's Linux builders
+  are fine. The meaningful local signal is the Vite build itself
+  (`✓ built in …`) — that's what catches real code errors; the adapter
+  packaging step can be ignored locally.
+- PI STATION VIDEO is a DIRECT browser↔Pi WebRTC connection
+  (`wss://<station>/ws`). BIMS is NOT in the media path — it only mints a
+  5-min HS256 JWT signed with `station.jwtSecret` from Mongo
+  (deployment-independent). So switching BIMS deployments cannot break
+  video. "No video" this session was a stale connection from an old tab;
+  reconnect/refresh fixed it. The Pi agent supports `trigger_scan` and
+  tags scans `triggered` (agent.py); station capture is a browser-side
+  canvas snapshot of the WebRTC frame POSTed to /api/cv/capture.
+
+### Branch state
+
+main = production, live + verified. dev = synced (108cd14b).
+bims-capture-agent retains the original scanner-debounce commit.
+
+### Open / deferred
+
+- Orphan data: pre-fix 500s left `CvImage` docs + R2 files with no
+  `photos[]` back-ref (CvImage.create + R2 upload ran BEFORE the failing
+  $push) and bumped `photoSequence`. Cosmetic; a cleanup script can prune
+  them if tidy data is wanted.
+- Root cause of the `{}` photos fields never investigated; bad data still
+  exists at rest (capture only heals carts as they're photographed).
+- Any OTHER write path that `$push`es to `photos[]` will hit the same
+  non-array 500 — apply the same coercion + updatePipeline pattern.
