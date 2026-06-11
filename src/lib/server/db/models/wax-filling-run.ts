@@ -28,7 +28,35 @@ const waxFillingRunSchema = new Schema({
 		phase: String,
 		author: { _id: String, username: String },
 		createdAt: Date
-	}]
+	}],
+
+	// --- OT-2 integration (the parameter set + linkage to the executed run) ---
+	// Captured when the operator hits "Start Run" on this wax run.
+	// Mixed because protocol parameter schemas evolve; the wax protocol's
+	// add_parameters() is the source of truth for valid keys.
+	protocolParameters: Schema.Types.Mixed,
+	// OT-2 run id (UUID, returned by `POST /runs` on the robot). Lets us
+	// pull commands/errors from the robot for this specific run.
+	opentronsRunId: String,
+	// Persistent tip tracker snapshot — captured pre-run from the robot's
+	// /data/tip_tracker_<hostname>.json file and stamped again post-run.
+	// `consumed` is `after.nextTipIndex - before.nextTipIndex` (or
+	// (96 - before) + after if the rack was refilled mid-run).
+	pipetteTipState: {
+		_id: false,
+		before: { nextTipIndex: Number, hostname: String, capturedAt: Date },
+		after:  { nextTipIndex: Number, hostname: String, capturedAt: Date },
+		consumed: Number,
+		rackRefilledDuringRun: Boolean
+	},
+
+	// --- Robot-arm transfer step (optional, inserted between OT-2 dispense
+	// and scanner sweep on the wax pilot). When the arm-replay protocol step
+	// fires, the resulting RobotArmRun.runId is stamped here so the wax run
+	// is queryable by arm activity and vice-versa. Single ref by design —
+	// only one arm transfer per wax run for now; if the pilot expands to
+	// multiple transfers we'll widen this to an array.
+	armRunId: { type: String, index: true }
 }, { timestamps: true });
 
 // Robot + deck are held through the filling-page-owned stages only.

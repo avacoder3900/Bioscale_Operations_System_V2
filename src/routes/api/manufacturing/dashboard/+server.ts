@@ -38,7 +38,7 @@ export const GET: RequestHandler = async ({ locals }) => {
 				'Completed', 'Aborted', 'Cancelled'] }
 		}).select('robot status operator assayType cartridgeCount cartridgesFilled runStartTime updatedAt').lean(),
 		CartridgeRecord.aggregate([
-			{ $group: { _id: '$currentPhase', count: { $sum: 1 } } }
+			{ $group: { _id: '$status', count: { $sum: 1 } } }
 		]),
 		Promise.resolve(null),
 		Consumable.find({ type: 'top_seal_roll', status: 'active' })

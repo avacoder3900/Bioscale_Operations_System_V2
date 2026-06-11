@@ -74,11 +74,67 @@ export interface SessionStarted {
 	kind: 'teleop' | 'record' | 'replay';
 }
 
+export interface RecordingSidecar {
+	schema_version: number;
+	frame_count: number;
+	lot_id?: string;
+	manufacturing_step?: string;
+	recorded_during_run_id?: string;
+	operator?: string;
+	started_at_iso?: string;
+	rate_hz?: number;
+	run_id?: string;
+}
+
 export interface RecordingMeta {
 	name: string;
 	path: string;
 	size_bytes: number;
 	modified: string;
+	// Provenance sidecar; null for legacy recordings without one.
+	meta?: RecordingSidecar | null;
+}
+
+interface ProvenanceFields {
+	lot_id?: string;
+	manufacturing_step?: string;
+	recorded_during_run_id?: string;
+}
+
+export interface PreflightResult {
+	ready: boolean;
+	leader_alive: boolean;
+	follower_alive: boolean;
+	expected: Record<string, number>;
+	actual: Record<string, number>;
+	deltas: Record<string, number>;
+	tolerance_steps: number;
+	issues: string[];
+}
+
+export interface JogCalibration {
+	joints: Record<string, { zero_step: number; sign: number }>;
+	axes_map: { x: string; y: string; z: string };
+	axes_sign: { x: number; y: number; z: number };
+}
+
+export interface ArmPose {
+	x_mm: number;
+	y_mm: number;
+	z_mm: number;
+	joint_angles_deg: Record<string, number>;
+	joint_steps: Record<string, number>;
+	calibration_source: string;
+	calibration: JogCalibration;
+}
+
+export interface JogCartesianResult {
+	requested: { dx_mm: number; dy_mm: number; dz_mm: number };
+	before: ArmPose;
+	after_target: ArmPose;
+	goal_steps: Record<string, number>;
+	clamped: Record<string, number>;
+	backlash_applied: Record<string, number>;
 }
 
 export interface PortInfo {
@@ -97,16 +153,50 @@ export const robotArm = {
 	getActive: () => robotArmFetch<ActiveSession>('/sessions/active'),
 	getPortStatus: () => robotArmFetch<PortStatus>('/ports/status'),
 	stop: () => robotArmFetch<{ stopped_run_id: string | null }>('/sessions/stop', { method: 'POST' }),
-	startTeleop: (body: { rate_hz?: number; duration_s?: number; triggered_by?: TriggeredBy }) =>
-		robotArmFetch<SessionStarted>('/teleop/start', { method: 'POST', body }),
-	startRecord: (body: {
-		name: string;
-		rate_hz?: number;
-		duration_s?: number;
-		triggered_by?: TriggeredBy;
-	}) => robotArmFetch<SessionStarted>('/record/start', { method: 'POST', body }),
-	startReplay: (body: { source: string; loops?: number; triggered_by?: TriggeredBy }) =>
-		robotArmFetch<SessionStarted>('/replay/start', { method: 'POST', body }),
+	startTeleop: (
+		body: { rate_hz?: number; duration_s?: number; triggered_by?: TriggeredBy } & ProvenanceFields
+	) => robotArmFetch<SessionStarted>('/teleop/start', { method: 'POST', body }),
+	startRecord: (
+		body: {
+			name: string;
+			rate_hz?: number;
+			duration_s?: number;
+			triggered_by?: TriggeredBy;
+		} & ProvenanceFields
+	) => robotArmFetch<SessionStarted>('/record/start', { method: 'POST', body }),
+	startReplay: (
+		body: {
+			source: string;
+			loops?: number;
+			triggered_by?: TriggeredBy;
+			enforce_preflight?: boolean;
+			preflight_tolerance_steps?: number;
+		} & ProvenanceFields
+	) => robotArmFetch<SessionStarted>('/replay/start', { method: 'POST', body }),
+	preflightReplay: (body: { source: string; tolerance_steps?: number }) =>
+		robotArmFetch<PreflightResult>('/replay/preflight', { method: 'POST', body }),
+	getPose: () => robotArmFetch<ArmPose>('/pose'),
+	jogCartesian: (body: {
+		dx_mm: number;
+		dy_mm: number;
+		dz_mm: number;
+		max_step_delta?: number;
+		backlash_comp?: boolean;
+	}) => robotArmFetch<JogCartesianResult>('/jog/cartesian', { method: 'POST', body }),
+	resetBacklash: () =>
+		robotArmFetch<{ reset: boolean }>('/jog/reset-backlash', { method: 'POST' }),
+	reloadJogCalibration: () =>
+		robotArmFetch<{ calibration_source: string; calibration: JogCalibration }>(
+			'/jog/reload-calibration',
+			{ method: 'POST' }
+		),
+	setTorque: (enable: boolean) =>
+		robotArmFetch<{ enabled: boolean }>('/torque', { method: 'POST', body: { enable } }),
+	jogJoint: (sid: number, delta_steps: number, speed?: number) =>
+		robotArmFetch<{ id: number; goal: number }>(`/servos/${sid}/jog`, {
+			method: 'POST',
+			body: { delta_steps, ...(speed !== undefined ? { speed } : {}) }
+		}),
 	listRecordings: () => robotArmFetch<{ recordings: RecordingMeta[] }>('/recordings'),
 	health: () => robotArmFetch<{ status: string; service: string; version: string }>('/health')
 };

@@ -2,12 +2,14 @@ import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, ReagentBatchRecord, AssayDefinition, CartridgeRecord, Consumable,
 	ManufacturingSettings, WaxFillingRun, Equipment, EquipmentLocation, generateId, AuditLog,
-	ReagentLot
+	ReagentLot,
+	OpentronsRobot
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import { WAX_PAGE_OWNED } from '$lib/server/manufacturing/run-statuses';
 import { resolveFridgeId } from '$lib/server/services/equipment-resolve';
+import { getRobot, robotGet, robotPost } from '$lib/server/opentrons/proxy';
 import type { PageServerLoad, Actions } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -36,7 +38,9 @@ function emptyReagentState(robotId: string, loadError?: string) {
 		loadError: loadError ?? null,
 		runState: {
 			hasActiveRun: false, stage: null, assayTypeName: null, isResearch: false,
-			cartridgeCount: 0, runStartTime: null, runEndTime: null
+			cartridgeCount: 0, runStartTime: null, runEndTime: null,
+			opentronsRunId: null as string | null,
+			protocolParameters: null as Record<string, unknown> | null
 		},
 		activeReagentLots: {} as Record<string, any[]>,
 		assayTypes: [] as { id: string; name: string; skuCode: string | null; isActive: boolean; reagents: { wellPosition: number; reagentName: string }[] }[],
@@ -45,7 +49,20 @@ function emptyReagentState(robotId: string, loadError?: string) {
 		currentSealBatch: null as null | { batchId: string; firstScanTime: string | null; cartridgeIds: string[] },
 		rejectionCodes: [] as any[],
 		tubes: [] as { id: string; reagentName: string; volume: number }[],
-		fridges: [] as { id: string; displayName: string; barcode: string }[]
+		fridges: [] as { id: string; displayName: string; barcode: string }[],
+		robotProtocols: [] as Array<{
+			opentronsProtocolId: string;
+			protocolName: string;
+			protocolType: string | null;
+			analysisStatus: string | null;
+			parametersSchema: any;
+		}>,
+		opentronsRobotId: robotId,
+		lastTipState: null as null | {
+			nextTipIndex: number | null;
+			hostname: string | null;
+			capturedAt: string | null;
+		}
 	};
 }
 
@@ -108,6 +125,35 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			}).sort({ createdAt: -1 }).lean().catch(() => null);
 		}
 
+		// Robot's uploaded protocols (parameter schemas) + the most recent
+		// completed reagent run's tip-tracker snapshot — both feed the
+		// Start Run panel (protocol picker + "tips remaining" readout).
+		const [robotDoc, lastTipRun] = await Promise.all([
+			robotId ? OpentronsRobot.findById(robotId).lean().catch(() => null) : Promise.resolve(null),
+			robotId
+				? ReagentBatchRecord.findOne({
+					'robot._id': robotId,
+					'pipetteTipState.after.nextTipIndex': { $exists: true }
+				}).sort({ runEndTime: -1 }).select('pipetteTipState').lean().catch(() => null)
+				: Promise.resolve(null)
+		]);
+		const robotProtocols = ((robotDoc as any)?.protocols ?? []).map((p: any) => ({
+			opentronsProtocolId: p.opentronsProtocolId ?? null,
+			protocolName: p.protocolName ?? '',
+			protocolType: p.protocolType ?? null,
+			analysisStatus: p.analysisStatus ?? null,
+			parametersSchema: p.parametersSchema ?? null
+		})).filter((p: any) => p.opentronsProtocolId);
+		const lastTipState = (lastTipRun as any)?.pipetteTipState?.after
+			? {
+				nextTipIndex: (lastTipRun as any).pipetteTipState.after.nextTipIndex ?? null,
+				hostname: (lastTipRun as any).pipetteTipState.after.hostname ?? null,
+				capturedAt: (lastTipRun as any).pipetteTipState.after.capturedAt
+					? new Date((lastTipRun as any).pipetteTipState.after.capturedAt).toISOString()
+					: null
+			}
+			: null;
+
 		// Reagent definitions from the active run's assay type
 		const reagentDefinitions: { id: string; reagentName: string; wellPosition: number | null; volumeMicroliters: number | null; isActive: boolean }[] = [];
 		if (activeRun?.assayType?._id) {
@@ -137,9 +183,11 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 				isResearch: activeRun.isResearch === true,
 				cartridgeCount: activeRun.cartridgeCount ?? activeRun.cartridgesFilled?.length ?? 0,
 				runStartTime: activeRun.runStartTime ? new Date(activeRun.runStartTime).toISOString() : null,
-				runEndTime: activeRun.runEndTime ? new Date(activeRun.runEndTime).toISOString() : null
+				runEndTime: activeRun.runEndTime ? new Date(activeRun.runEndTime).toISOString() : null,
+				opentronsRunId: activeRun.opentronsRunId ?? null,
+				protocolParameters: activeRun.protocolParameters ?? null
 			}
-			: { hasActiveRun: false, stage: null, assayTypeName: null, isResearch: false, cartridgeCount: 0, runStartTime: null, runEndTime: null };
+			: { hasActiveRun: false, stage: null, assayTypeName: null, isResearch: false, cartridgeCount: 0, runStartTime: null, runEndTime: null, opentronsRunId: null, protocolParameters: null };
 
 		// Serialize cartridges
 		const cartridges = (activeRun?.cartridgesFilled ?? []).map((cf: any) => ({
@@ -254,7 +302,11 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			rejectionCodes,
 			tubes,
 			fridges,
-			activeReagentLots
+			activeReagentLots,
+			// --- OT-2 Start Run panel inputs (same shape as wax-filling) ---
+			robotProtocols,
+			opentronsRobotId: robotId,
+			lastTipState
 		};
 	} catch (err) {
 		console.error('[REAGENT-FILLING PAGE] Load error:', err instanceof Error ? err.message : err);
@@ -583,18 +635,132 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
-	/** Start the run */
+	/**
+	 * Start the run — same three-step handshake as wax-filling startRun:
+	 *   1. Coerce form params to native types via protocol's parametersSchema.
+	 *   2. POST /runs on the robot.
+	 *   3. POST /runs/<rid>/actions {actionType:'play'}.
+	 *
+	 * Stamp protocolParameters + opentronsRunId + pipetteTipState.before
+	 * onto the ReagentBatchRecord. Status flips Loading→Running atomically
+	 * with the OT-2 work.
+	 */
 	startRun: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
+		const opentronsProtocolId = data.get('opentronsProtocolId')?.toString();
+		if (!runId) return fail(400, { error: 'runId is required' });
+		if (!opentronsProtocolId) return fail(400, { error: 'opentronsProtocolId is required (pick a protocol)' });
 
 		const run = await ReagentBatchRecord.findById(runId).lean() as any;
-		if (!run) return fail(404, { error: 'Run not found' });
+		if (!run) return fail(404, { error: 'Reagent run not found' });
+		const robotId = run.robot?._id;
+		if (!robotId) return fail(400, { error: 'Reagent run has no robot assigned' });
 
-		// Compute run end time based on settings
+		const robot = await getRobot(robotId);
+		if (!robot) return fail(404, { error: `Robot ${robotId} not found / not active` });
+
+		// Resolve protocol on the robot for type coercion.
+		const robotDoc = await OpentronsRobot.findById(robotId).lean() as any;
+		const protocol = (robotDoc?.protocols ?? []).find(
+			(p: any) => p.opentronsProtocolId === opentronsProtocolId
+		);
+		if (!protocol) {
+			return fail(400, {
+				error: `Protocol ${opentronsProtocolId} isn't uploaded to this robot. Upload it via /opentrons/devices first.`
+			});
+		}
+
+		const paramSchema = (protocol.parametersSchema ?? []) as Array<{
+			variableName: string;
+			type?: 'int' | 'float' | 'bool' | 'str';
+			default?: unknown;
+		}>;
+
+		const runTimeParameterValues: Record<string, number | string | boolean> = {};
+		const protocolParameters: Record<string, number | string | boolean> = {};
+		for (const def of paramSchema) {
+			const raw = data.get(`param_${def.variableName}`);
+			if (raw === null) {
+				if (def.default !== undefined && def.default !== null) {
+					runTimeParameterValues[def.variableName] = def.default as any;
+					protocolParameters[def.variableName] = def.default as any;
+				}
+				continue;
+			}
+			let value: number | string | boolean;
+			const s = raw.toString();
+			if (def.type === 'bool') value = s === 'true' || s === 'on';
+			else if (def.type === 'int') value = parseInt(s, 10);
+			else if (def.type === 'float') value = parseFloat(s);
+			else value = s;
+			runTimeParameterValues[def.variableName] = value;
+			protocolParameters[def.variableName] = value;
+		}
+
+		// Create the OT-2 run.
+		let opentronsRunId: string;
+		try {
+			const createRes = await robotPost(robot, '/runs', {
+				data: {
+					protocolId: opentronsProtocolId,
+					...(Object.keys(runTimeParameterValues).length ? { runTimeParameterValues } : {})
+				}
+			});
+			if (!createRes.ok) {
+				const body = await createRes.json().catch(() => ({}));
+				const detail = (body as any).errors?.[0]?.detail ?? `Robot returned ${createRes.status}`;
+				return fail(502, { error: `Couldn't create run on robot: ${detail}` });
+			}
+			const createBody = await createRes.json();
+			opentronsRunId = createBody?.data?.id;
+			if (!opentronsRunId) return fail(502, { error: 'Robot returned no run id' });
+		} catch (err) {
+			return fail(502, {
+				error: `Couldn't reach robot: ${err instanceof Error ? err.message : 'unknown'}`
+			});
+		}
+
+		// Start execution.
+		try {
+			const playRes = await robotPost(robot, `/runs/${opentronsRunId}/actions`, {
+				data: { actionType: 'play' }
+			});
+			if (!playRes.ok) {
+				const body = await playRes.json().catch(() => ({}));
+				const detail = (body as any).errors?.[0]?.detail ?? `Robot returned ${playRes.status}`;
+				return fail(502, {
+					error: `Created run ${opentronsRunId} but couldn't start it: ${detail}.`
+				});
+			}
+		} catch (err) {
+			return fail(502, {
+				error: `Created run ${opentronsRunId} but couldn't start it: ${err instanceof Error ? err.message : 'unknown'}`
+			});
+		}
+
+		// Carry previous reagent run's tip state forward as this run's "before".
+		const prevTipRun = await ReagentBatchRecord.findOne({
+			'robot._id': robotId,
+			'pipetteTipState.after.nextTipIndex': { $exists: true },
+			_id: { $ne: runId }
+		}).sort({ runEndTime: -1 }).select('pipetteTipState').lean() as any;
+
+		const refilled = protocolParameters.tiprack_refilled === true;
+		const beforeSnap = refilled
+			? { nextTipIndex: 0, hostname: prevTipRun?.pipetteTipState?.after?.hostname ?? null, capturedAt: new Date() }
+			: prevTipRun?.pipetteTipState?.after
+				? {
+					nextTipIndex: prevTipRun.pipetteTipState.after.nextTipIndex ?? 0,
+					hostname: prevTipRun.pipetteTipState.after.hostname ?? null,
+					capturedAt: new Date()
+				}
+				: { nextTipIndex: 0, hostname: null, capturedAt: new Date() };
+
+		// Compute end-time estimate from settings (used by the existing UI).
 		const settingsDoc = await ManufacturingSettings.findById('default').lean() as any;
 		const fillTime = settingsDoc?.reagentFilling?.fillTimePerCartridgeMin ?? 0.5;
 		const cartridgeCount = run.cartridgeCount ?? run.cartridgesFilled?.length ?? 0;
@@ -603,7 +769,15 @@ export const actions: Actions = {
 		const runEndTime = new Date(runStartTime.getTime() + runDurationMs);
 
 		await ReagentBatchRecord.findByIdAndUpdate(runId, {
-			$set: { status: 'Running', runStartTime, runEndTime }
+			$set: {
+				status: 'Running',
+				runStartTime,
+				runEndTime,
+				opentronsRunId,
+				protocolParameters,
+				'pipetteTipState.before': beforeSnap,
+				'pipetteTipState.rackRefilledDuringRun': refilled
+			}
 		});
 
 		await AuditLog.create({
@@ -613,10 +787,103 @@ export const actions: Actions = {
 			action: 'UPDATE',
 			changedBy: locals.user?.username,
 			changedAt: runStartTime,
-			newData: { status: 'Running', runStartTime }
+			newData: {
+				status: 'Running',
+				runStartTime,
+				opentronsRunId,
+				protocolParameters,
+				pipetteTipBefore: beforeSnap.nextTipIndex
+			}
 		});
 
-		return { success: true };
+		return { success: true, opentronsRunId };
+	},
+
+	/**
+	 * Record the OT-2 run as finished (called by the client when the
+	 * embedded controller observes terminal status). Stamps
+	 * pipetteTipState.after and consumed onto the ReagentBatchRecord;
+	 * does NOT advance the reagent state machine — the operator still
+	 * walks Inspection via the existing completeRunFilling flow.
+	 */
+	recordRunFinished: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const runId = data.get('runId') as string;
+		const finalStatus = (data.get('finalStatus')?.toString() ?? '').toLowerCase();
+		if (!runId) return fail(400, { error: 'runId is required' });
+
+		const run = await ReagentBatchRecord.findById(runId).lean() as any;
+		if (!run) return fail(404, { error: 'Reagent run not found' });
+		if (!run.opentronsRunId) return fail(400, { error: 'This reagent run has no OT-2 run linked' });
+		if (run.pipetteTipState?.after?.nextTipIndex != null) {
+			return { success: true, alreadyRecorded: true };
+		}
+
+		const robot = await getRobot(run.robot?._id);
+		if (!robot) return fail(404, { error: 'Robot no longer reachable' });
+
+		let nextTipIndex: number | null = null;
+		let pickUpTipCount = 0;
+		try {
+			const cmdRes = await robotGet(
+				robot,
+				`/runs/${run.opentronsRunId}/commands?cursor=0&pageLength=10000`
+			);
+			if (cmdRes.ok) {
+				const cmdBody = await cmdRes.json();
+				const commands = (cmdBody.data ?? []) as Array<{
+					commandType: string;
+					params?: { message?: string };
+				}>;
+				for (const cmd of commands) {
+					if (cmd.commandType === 'pickUpTip') pickUpTipCount += 1;
+					if (cmd.commandType === 'comment' && cmd.params?.message) {
+						const m = cmd.params.message.match(/TIP TRACKER:[\s\S]*?\(index (\d+)\)/);
+						if (m) nextTipIndex = parseInt(m[1], 10);
+					}
+				}
+			}
+		} catch (err) {
+			console.error('[REAGENT-FILLING] recordRunFinished: command fetch failed:', err);
+		}
+
+		const now = new Date();
+		const before = run.pipetteTipState?.before?.nextTipIndex ?? 0;
+		const refilledMidRun = !!run.pipetteTipState?.rackRefilledDuringRun;
+		const finalIndex = nextTipIndex ?? before + pickUpTipCount;
+		const consumed = refilledMidRun
+			? Math.max(0, 96 - before) + finalIndex
+			: Math.max(0, finalIndex - before);
+
+		await ReagentBatchRecord.findByIdAndUpdate(runId, {
+			$set: {
+				'pipetteTipState.after': {
+					nextTipIndex: finalIndex,
+					hostname: run.pipetteTipState?.before?.hostname ?? null,
+					capturedAt: now
+				},
+				'pipetteTipState.consumed': consumed
+			}
+		});
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'reagent_batch_records',
+			recordId: runId,
+			action: 'UPDATE',
+			changedBy: locals.user?.username,
+			changedAt: now,
+			newData: {
+				opentronsRunFinalStatus: finalStatus || 'unknown',
+				pipetteTipAfter: finalIndex,
+				pipetteTipConsumed: consumed
+			}
+		});
+
+		return { success: true, consumed, nextTipIndex: finalIndex };
 	},
 
 	/** Complete run filling — move to Inspection */

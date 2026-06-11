@@ -9,6 +9,8 @@
 	import PostRunCooling from '$lib/components/manufacturing/wax-filling/PostRunCooling.svelte';
 	import QCInspection from '$lib/components/manufacturing/wax-filling/QCInspection.svelte';
 	import CompletionStorage from '$lib/components/manufacturing/wax-filling/CompletionStorage.svelte';
+	import ProtocolStartPanel from '$lib/components/manufacturing/ProtocolStartPanel.svelte';
+	import EmbeddedRunController from '$lib/components/manufacturing/EmbeddedRunController.svelte';
 	import type { RejectionReasonCode } from '$lib/server/db/schema';
 
 	interface Props {
@@ -31,6 +33,8 @@
 				coolingConfirmedAt: string | null;
 				existingWaxRunNote?: string;
 				activeLotId?: string | null;
+				opentronsRunId?: string | null;
+				protocolParameters?: Record<string, unknown> | null;
 			};
 			settings: {
 				runDurationMin: number;
@@ -97,6 +101,19 @@
 				displayName: string;
 				barcode: string;
 			}[];
+			robotProtocols?: {
+				opentronsProtocolId: string;
+				protocolName: string;
+				protocolType: string | null;
+				analysisStatus: string | null;
+				parametersSchema: unknown;
+			}[];
+			opentronsRobotId?: string;
+			lastTipState?: {
+				nextTipIndex: number | null;
+				hostname: string | null;
+				capturedAt: string | null;
+			} | null;
 		};
 	}
 
@@ -148,6 +165,13 @@
 	// confirmed lot — once scanned OK, set from server response or existing activeLotId
 	let confirmedLotId = $state<string | null>(data.activeLotId ?? null);
 	let confirmedLotCount = $state<number | null>(data.activeLotCartridgeCount ?? null);
+
+	// "Close bucket" affordance — lets the operator zero out a partial bucket
+	// so the lot drops out of dashboard "ready" counts instead of stranding
+	// in status='ready' indefinitely.
+	let closeBucketOpen = $state(false);
+	let closeBucketReason = $state('');
+	let closeBucketMsg = $state('');
 
 	// Keep confirmedLotId in sync if server already has one (e.g. after page reload)
 	$effect(() => {
@@ -484,6 +508,23 @@
 		if (data.runState.runId) {
 			submitAction('resetToLoading', { runId: data.runState.runId });
 		}
+	}
+
+	async function handleCloseBucket() {
+		const lotId = confirmedLotId ?? data.activeLotId;
+		if (!lotId) return;
+		const reason = closeBucketReason.trim();
+		if (!reason) {
+			closeBucketMsg = 'Reason is required';
+			return;
+		}
+		closeBucketMsg = '';
+		await submitAction('closeBucket', { lotId, reason });
+		closeBucketOpen = false;
+		closeBucketReason = '';
+		confirmedLotId = null;
+		confirmedLotCount = null;
+		lotScanSuccess = false;
 	}
 
 	function handleAborted(result: {
@@ -1041,40 +1082,47 @@
 			<WaxPreparation onComplete={handleWaxPrepComplete} readonly={isPreviewOrPast} />
 		{:else if displayStage === 'Loading' && displayLoadingSub === 'ready_to_run'}
 			<!-- Deck loaded, ready to start run -->
-			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6">
-				<div class="flex flex-col items-center gap-4">
-					<div
-						class="flex h-16 w-16 items-center justify-center rounded-full bg-green-900/30 text-green-400"
-					>
-						<svg class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+			<div class="space-y-4">
+				<div class="flex items-center gap-3 rounded-lg border border-green-500/40 bg-green-900/10 p-4">
+					<div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-green-900/30 text-green-400">
+						<svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 							<path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
 						</svg>
 					</div>
-					<h3 class="text-lg font-semibold text-[var(--color-tron-text)]">Deck Loaded</h3>
-					<p class="text-sm text-[var(--color-tron-text-secondary)]">
-						Deck {previewParam ? 'DECK-PREVIEW' : data.runState.deckId} is loaded and ready. Proceed to run execution.
-					</p>
-					{#if !isPreviewOrPast}
-						<div class="flex flex-col items-center gap-2">
-							<button
-								type="button"
-								onclick={handleRunStarted}
-								disabled={submitting}
-								class="min-h-[44px] rounded-lg bg-[var(--color-tron-cyan)] px-8 py-3 text-base font-semibold text-white transition-colors hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-50"
-							>
-								Start Run
-							</button>
-							<button
-								type="button"
-								onclick={handleResetToLoading}
-								disabled={submitting}
-								class="rounded border border-amber-500/40 px-4 py-2 text-xs text-amber-400 transition-colors hover:border-amber-500 hover:bg-amber-900/20 disabled:opacity-50"
-							>
-								↩ Reset to Deck Loading
-							</button>
-						</div>
-					{/if}
+					<div>
+						<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">
+							Deck Loaded
+						</h3>
+						<p class="text-xs text-[var(--color-tron-text-secondary)]">
+							Deck {previewParam ? 'DECK-PREVIEW' : data.runState.deckId} ·
+							{data.runState.plannedCartridgeCount ?? '?'} cartridges
+						</p>
+					</div>
 				</div>
+
+				{#if !isPreviewOrPast && data.opentronsRobotId && data.robotProtocols}
+					<ProtocolStartPanel
+						robot={{ _id: data.opentronsRobotId, name: data.robotName }}
+						protocols={data.robotProtocols}
+						contextValues={{ cartridges: data.runState.plannedCartridgeCount ?? 24 }}
+						contextReadonly={['cartridges']}
+						lastTipState={data.lastTipState}
+						submitting={submitting}
+						formAction="?/startRun"
+						extraHidden={{ runId: data.runState.runId ?? '' }}
+					/>
+
+					<div class="flex justify-center">
+						<button
+							type="button"
+							onclick={handleResetToLoading}
+							disabled={submitting}
+							class="rounded border border-amber-500/40 px-4 py-2 text-xs text-amber-400 transition-colors hover:border-amber-500 hover:bg-amber-900/20 disabled:opacity-50"
+						>
+							↩ Reset to Deck Loading
+						</button>
+					</div>
+				{/if}
 			</div>
 		{:else if displayStage === 'Loading' && displayLoadingSub === 'deck_load'}
 			<!-- Backing Lot Gate — must scan before deck loading is enabled -->
@@ -1089,11 +1137,50 @@
 							{#if confirmedLotCount}
 								<span class="text-xs text-[var(--color-tron-text-secondary)]">({confirmedLotCount} cartridges)</span>
 							{/if}
-							<button type="button" onclick={() => { confirmedLotId = null; confirmedLotCount = null; lotScanSuccess = false; lotScanError = ''; }}
-								class="ml-auto text-xs text-[var(--color-tron-text-secondary)] underline hover:text-[var(--color-tron-text)]">
-								Change
-							</button>
+							<div class="ml-auto flex items-center gap-3">
+								<button type="button" onclick={() => { closeBucketOpen = !closeBucketOpen; closeBucketMsg = ''; }}
+									class="text-xs text-amber-400 underline hover:text-amber-300"
+									disabled={submitting}>
+									Close bucket
+								</button>
+								<button type="button" onclick={() => { confirmedLotId = null; confirmedLotCount = null; lotScanSuccess = false; lotScanError = ''; closeBucketOpen = false; }}
+									class="text-xs text-[var(--color-tron-text-secondary)] underline hover:text-[var(--color-tron-text)]">
+									Change
+								</button>
+							</div>
 						</div>
+						{#if closeBucketOpen}
+							<div class="mt-2 rounded border border-amber-500/40 bg-amber-900/10 p-3 space-y-2">
+								<p class="text-xs text-amber-300">
+									Marks this bucket consumed and drops the remaining {confirmedLotCount ?? '?'} cartridge(s).
+									Use when the bucket has leftovers you don't plan to wax-fill.
+								</p>
+								<input
+									type="text"
+									class="tron-input w-full text-sm"
+									placeholder="Reason (required) — e.g. 'leftover from short run', 'damaged carts'"
+									bind:value={closeBucketReason}
+									disabled={submitting}
+								/>
+								{#if closeBucketMsg}
+									<div class="text-xs text-red-400">{closeBucketMsg}</div>
+								{/if}
+								<div class="flex justify-end gap-2">
+									<button type="button"
+										onclick={() => { closeBucketOpen = false; closeBucketReason = ''; closeBucketMsg = ''; }}
+										class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)]"
+										disabled={submitting}>
+										Cancel
+									</button>
+									<button type="button"
+										onclick={handleCloseBucket}
+										class="rounded bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+										disabled={submitting || !closeBucketReason.trim()}>
+										Confirm close
+									</button>
+								</div>
+							</div>
+						{/if}
 					{:else}
 						<p class="text-xs text-[var(--color-tron-text-secondary)]">
 							Scan the Avery lot barcode from the box. Lot must have been in the oven for ≥ {data.minOvenTimeMin} minutes.
@@ -1191,6 +1278,22 @@
 				</div>
 			{/if}
 		{:else if displayStage === 'Running'}
+			{#if !isPreviewOrPast && data.runState.opentronsRunId && data.opentronsRobotId}
+				<EmbeddedRunController
+					robotId={data.opentronsRobotId}
+					robotName={data.robotName}
+					opentronsRunId={data.runState.opentronsRunId}
+					onComplete={(status) => {
+						// Stamp pipetteTipState.after + consumed onto the wax run.
+						// Wax status stays 'Running' until the operator confirms
+						// deck removal via the RunExecution component below.
+						submitAction('recordRunFinished', {
+							runId: data.runState.runId ?? '',
+							finalStatus: status
+						});
+					}}
+				/>
+			{/if}
 			<RunExecution
 				runDurationMin={data.settings.runDurationMin}
 				removeDeckWarningMin={data.settings.removeDeckWarningMin}

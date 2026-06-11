@@ -48,6 +48,23 @@ export const load: PageServerLoad = async ({ locals }) => {
 	};
 };
 
+// Pull optional provenance from formData. Frontend form may not have these
+// fields yet — that's fine, they're optional all the way down.
+function provenanceFromForm(data: FormData): {
+	lot_id?: string;
+	manufacturing_step?: string;
+	recorded_during_run_id?: string;
+} {
+	const lot = data.get('lot_id')?.toString().trim();
+	const step = data.get('manufacturing_step')?.toString().trim();
+	const ref = data.get('recorded_during_run_id')?.toString().trim();
+	return {
+		lot_id: lot || undefined,
+		manufacturing_step: step || undefined,
+		recorded_during_run_id: ref || undefined
+	};
+}
+
 export const actions: Actions = {
 	startTeleop: async ({ request, locals }) => {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
@@ -59,7 +76,8 @@ export const actions: Actions = {
 			const result = await robotArm.startTeleop({
 				rate_hz: rate,
 				duration_s: dur ? parseFloat(dur) : undefined,
-				triggered_by: { _id: locals.user._id, username: locals.user.username }
+				triggered_by: { _id: locals.user._id, username: locals.user.username },
+				...provenanceFromForm(data)
 			});
 			return { success: 'teleop started', runId: result.run_id };
 		} catch (err) {
@@ -80,7 +98,8 @@ export const actions: Actions = {
 				name,
 				rate_hz: rate,
 				duration_s: dur ? parseFloat(dur) : undefined,
-				triggered_by: { _id: locals.user._id, username: locals.user.username }
+				triggered_by: { _id: locals.user._id, username: locals.user.username },
+				...provenanceFromForm(data)
 			});
 			return { success: `recording "${name}" started`, runId: result.run_id };
 		} catch (err) {
@@ -99,7 +118,8 @@ export const actions: Actions = {
 			const result = await robotArm.startReplay({
 				source,
 				loops,
-				triggered_by: { _id: locals.user._id, username: locals.user.username }
+				triggered_by: { _id: locals.user._id, username: locals.user.username },
+				...provenanceFromForm(data)
 			});
 			return { success: `replay started (${loops} loop${loops === 1 ? '' : 's'})`, runId: result.run_id };
 		} catch (err) {

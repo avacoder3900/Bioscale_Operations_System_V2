@@ -36,6 +36,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import queue
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -53,8 +55,13 @@ from arm.driver import (
     ArmDriver,
     ServoState,
 )
+from arm.backlash import get_backlash
+from arm.kinematics import JOG_SERVO_IDS, get_kinematics
+from arm.telemetry import log_move, tail as tail_move_log
+from arm.verified_move import MoveResult, verified_move
 from arm.leader_follower import LeaderFollowerSession
 from arm.recordings import list_recordings as list_recordings_files
+from arm.recordings import load_recording as load_recording_file
 
 POSE_FILE = Path(
     os.environ.get("BIMS_ARM_POSE_FILE", str(Path.home() / ".bims-arm" / "poses.json"))
@@ -68,6 +75,12 @@ BIMS_WEBHOOK_URL = os.environ.get(
     "BIMS_WEBHOOK_URL", "http://localhost:5177/api/robot-arm/webhook"
 )
 
+# Background ping every N seconds so /health can flip leader_connected /
+# follower_connected to false when the bus is dead — without this, a
+# USB unplug leaves the FastAPI port handles open and /health stays
+# falsely positive. See NEXT_STEPS.md #6.
+LIVENESS_PROBE_INTERVAL_S = float(os.environ.get("ROBOT_ARM_PROBE_INTERVAL_S", "5"))
+
 
 class _State:
     leader: Optional[ArmDriver] = None
@@ -75,17 +88,53 @@ class _State:
     lock: Optional[asyncio.Lock] = None  # serializes blocking driver calls (follower)
     active_session: Optional[LeaderFollowerSession] = None
     session_lock: Optional[asyncio.Lock] = None  # serializes /start /stop
+    leader_alive: bool = False
+    follower_alive: bool = False
+    probe_tasks: list = []  # asyncio.Task; populated in lifespan
 
 
 state = _State()
 
 
+# Webhook delivery is async on a dedicated daemon thread so a slow BIMS
+# can't slow the 30 Hz teleop loop. Producers (the session thread,
+# `_emit_to_bims`) push events to _webhook_queue; the drainer thread
+# POSTs with retry + exponential backoff. Queue is bounded so a long
+# BIMS outage doesn't grow memory unboundedly — overflow drops the
+# oldest event and logs (events are advisory; the run record itself is
+# rebuildable from the final terminal event). See NEXT_STEPS.md #7.
+WEBHOOK_QUEUE_MAX = int(os.environ.get("ROBOT_ARM_WEBHOOK_QUEUE_MAX", "256"))
+WEBHOOK_RETRY_DELAYS_S = [1.0, 2.0, 4.0]
+_webhook_queue: "queue.Queue[dict]" = queue.Queue(maxsize=WEBHOOK_QUEUE_MAX)
+_webhook_stop = threading.Event()
+_webhook_thread: Optional[threading.Thread] = None
+
+
 def _emit_to_bims(event: dict) -> None:
-    """Sync HTTP POST to BIMS — runs inside the session's worker thread."""
-    api_key = os.environ.get("AGENT_API_KEY", "")
-    if not api_key:
-        print(f"[webhook] AGENT_API_KEY not set — dropping event {event.get('type')}")
-        return
+    """Producer: enqueue an event for the drainer thread to POST.
+
+    Called from the session thread. Never blocks more than a no-op queue
+    put. On overflow, drops the oldest queued event to make room — the
+    most recent event is more useful for live state than a stale one.
+    """
+    if _webhook_queue.full():
+        try:
+            dropped = _webhook_queue.get_nowait()
+            print(
+                f"[webhook] queue full ({WEBHOOK_QUEUE_MAX}); dropped oldest event "
+                f"{dropped.get('type')} for run {dropped.get('run_id')}",
+                flush=True,
+            )
+        except queue.Empty:
+            pass
+    try:
+        _webhook_queue.put_nowait(event)
+    except queue.Full:
+        print(f"[webhook] failed to enqueue event {event.get('type')}", flush=True)
+
+
+def _webhook_post_once(event: dict, api_key: str) -> tuple[bool, str]:
+    """One POST attempt. Returns (ok, reason). Caller handles retry."""
     try:
         with httpx.Client(timeout=5.0) as client:
             resp = client.post(
@@ -93,27 +142,141 @@ def _emit_to_bims(event: dict) -> None:
                 json={"run_id": event["run_id"], "event": event},
                 headers={"x-agent-api-key": api_key},
             )
-            if resp.status_code >= 400:
-                print(f"[webhook] {resp.status_code}: {resp.text[:200]}")
+        if resp.status_code < 400:
+            return True, ""
+        # 4xx is a client error — retrying won't help (auth, bad payload,
+        # finalized run). Don't burn retry budget on it.
+        if 400 <= resp.status_code < 500:
+            return False, f"client error {resp.status_code}: {resp.text[:200]}"
+        return False, f"server error {resp.status_code}: {resp.text[:200]}"
     except Exception as exc:
-        print(f"[webhook] post failed: {exc}")
+        return False, f"exception: {exc}"
+
+
+def _webhook_drainer() -> None:
+    """Background daemon: pop events, POST with retry."""
+    api_key = os.environ.get("AGENT_API_KEY", "")
+    if not api_key:
+        print("[webhook] AGENT_API_KEY not set — drainer running but every event will drop")
+    while not _webhook_stop.is_set():
+        try:
+            event = _webhook_queue.get(timeout=0.5)
+        except queue.Empty:
+            continue
+        if not api_key:
+            print(f"[webhook] no api key — dropping event {event.get('type')}", flush=True)
+            _webhook_queue.task_done()
+            continue
+        ok, reason = _webhook_post_once(event, api_key)
+        if not ok:
+            # 4xx -> don't retry; 5xx / network -> retry with backoff
+            if reason.startswith("client error"):
+                print(f"[webhook] {reason}; not retrying (event {event.get('type')})", flush=True)
+            else:
+                for delay in WEBHOOK_RETRY_DELAYS_S:
+                    if _webhook_stop.wait(delay):
+                        break
+                    ok, reason = _webhook_post_once(event, api_key)
+                    if ok:
+                        break
+                if not ok:
+                    print(
+                        f"[webhook] gave up after {len(WEBHOOK_RETRY_DELAYS_S)} retries "
+                        f"on {event.get('type')} for {event.get('run_id')}: {reason}",
+                        flush=True,
+                    )
+        _webhook_queue.task_done()
+
+
+def _resolve_port(env_path: str, env_serial: str, default_path: str) -> str:
+    """Pick a serial-port device node.
+
+    Priority:
+      1. Chip-serial match (env var like LEADER_CHIP_SERIAL=5C4C126959)
+         — scan pyserial's list_ports for a device whose serial_number
+         matches; return its node. Survives cable reseats that renumber
+         /dev/cu.usbmodem*.
+      2. Explicit device path (env var LEADER_PORT=/dev/cu.usbmodem...)
+         — used as-is.
+      3. Hard-coded default (DEFAULT_LEADER_PORT etc.).
+
+    See NEXT_STEPS.md #3.
+    """
+    serial_target = os.environ.get(env_serial, "").strip()
+    if serial_target:
+        try:
+            from serial.tools import list_ports
+        except Exception as exc:
+            print(f"[arm-server] {env_serial} set but pyserial.list_ports unavailable: {exc}")
+        else:
+            for p in list_ports.comports():
+                # pyserial's serial_number is the chip's USB serial. macOS
+                # device nodes look like /dev/cu.usbmodem<serial><iface#>
+                # so we substring-match to be robust to the trailing digit.
+                sn = (p.serial_number or "").strip()
+                if sn and (sn == serial_target or serial_target in sn or sn in serial_target):
+                    print(f"[arm-server] {env_serial}={serial_target} resolved to {p.device}")
+                    return p.device
+            print(
+                f"[arm-server] {env_serial}={serial_target} not found among "
+                f"{[p.device for p in list_ports.comports()]}; falling back"
+            )
+    return os.environ.get(env_path, default_path)
+
+
+async def _liveness_probe(driver_attr: str, alive_attr: str, lock: Optional[asyncio.Lock]) -> None:
+    """Ping driver.servo_ids[0] every LIVENESS_PROBE_INTERVAL_S; flip alive flag on failure.
+
+    Skipped while a session is active — the session's own bus traffic
+    serves as the liveness signal, and a concurrent probe would race
+    with sync_read/sync_write on the same port. On the follower we
+    share state.lock with direct-control endpoints; the leader has no
+    direct-control surface so no lock is required.
+    """
+    while True:
+        try:
+            await asyncio.sleep(LIVENESS_PROBE_INTERVAL_S)
+            driver = getattr(state, driver_attr)
+            if driver is None:
+                setattr(state, alive_attr, False)
+                continue
+            sess = state.active_session
+            if sess is not None and sess.is_active():
+                continue
+            try:
+                if lock is not None:
+                    async with lock:
+                        await asyncio.to_thread(driver.ping, driver.servo_ids[0])
+                else:
+                    await asyncio.to_thread(driver.ping, driver.servo_ids[0])
+                if not getattr(state, alive_attr):
+                    print(f"[arm-server] {driver_attr} probe recovered")
+                setattr(state, alive_attr, True)
+            except Exception as exc:
+                if getattr(state, alive_attr):
+                    print(f"[arm-server] {driver_attr} probe failed: {exc}")
+                setattr(state, alive_attr, False)
+        except asyncio.CancelledError:
+            return
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    leader_port = os.environ.get("LEADER_PORT", DEFAULT_LEADER_PORT)
-    follower_port = os.environ.get("FOLLOWER_PORT", DEFAULT_FOLLOWER_PORT)
+    leader_port = _resolve_port("LEADER_PORT", "LEADER_CHIP_SERIAL", DEFAULT_LEADER_PORT)
+    follower_port = _resolve_port("FOLLOWER_PORT", "FOLLOWER_CHIP_SERIAL", DEFAULT_FOLLOWER_PORT)
     baud = int(os.environ.get("ROBOT_ARM_BAUD", str(DEFAULT_BAUD)))
 
     # Follower is required; leader is best-effort (CLI/jog still works without it).
     state.follower = ArmDriver(port=follower_port, baud=baud)
     state.follower.open()
+    state.follower_alive = True
     print(f"[arm-server] FOLLOWER open on {follower_port} @ {baud}")
     try:
         state.leader = ArmDriver(port=leader_port, baud=baud)
         state.leader.open()
         # ping at least one servo to confirm the bus is alive
         state.leader.ping(state.leader.servo_ids[0])
+        state.leader_alive = True
         print(f"[arm-server] LEADER   open on {leader_port} @ {baud}")
     except Exception as exc:
         if state.leader is not None:
@@ -122,18 +285,46 @@ async def lifespan(_: FastAPI):
             except Exception:
                 pass
         state.leader = None
+        state.leader_alive = False
         print(f"[arm-server] LEADER unavailable: {exc}  (teleop/record will 503)")
 
     state.lock = asyncio.Lock()
     state.session_lock = asyncio.Lock()
 
+    # Background liveness probes — one per port. follower probe shares
+    # state.lock with direct-control endpoints; leader has no shared lock.
+    state.probe_tasks = [
+        asyncio.create_task(_liveness_probe("leader", "leader_alive", None)),
+        asyncio.create_task(_liveness_probe("follower", "follower_alive", state.lock)),
+    ]
+
+    # Webhook drainer thread — async POSTs so slow BIMS doesn't block the 30 Hz loop.
+    global _webhook_thread
+    _webhook_stop.clear()
+    _webhook_thread = threading.Thread(
+        target=_webhook_drainer, name="bims-webhook-drainer", daemon=True
+    )
+    _webhook_thread.start()
+
     try:
         yield
     finally:
+        for t in state.probe_tasks:
+            t.cancel()
+        await asyncio.gather(*state.probe_tasks, return_exceptions=True)
         # graceful: if a session is still running, ask it to stop
         if state.active_session is not None and state.active_session.is_active():
             print("[arm-server] cancelling active session on shutdown...")
             state.active_session.stop(timeout=3.0)
+        # Drain webhook queue with a short window so terminal events make it out.
+        _webhook_stop.set()
+        if _webhook_thread is not None:
+            _webhook_thread.join(timeout=3.0)
+            if _webhook_thread.is_alive():
+                print(
+                    f"[webhook] drainer didn't finish in 3 s — "
+                    f"{_webhook_queue.qsize()} event(s) dropped"
+                )
         if state.follower is not None:
             state.follower.close()
         if state.leader is not None:
@@ -193,6 +384,9 @@ class TeleopStartRequest(BaseModel):
     rate_hz: Optional[int] = Field(None, ge=1, le=100)
     duration_s: Optional[float] = Field(None, ge=0.1)
     triggered_by: Optional[dict] = None
+    lot_id: Optional[str] = None
+    manufacturing_step: Optional[str] = None
+    recorded_during_run_id: Optional[str] = None
 
 
 class RecordStartRequest(BaseModel):
@@ -200,12 +394,39 @@ class RecordStartRequest(BaseModel):
     rate_hz: Optional[int] = Field(None, ge=1, le=100)
     duration_s: Optional[float] = Field(None, ge=0.1)
     triggered_by: Optional[dict] = None
+    lot_id: Optional[str] = None
+    manufacturing_step: Optional[str] = None
+    recorded_during_run_id: Optional[str] = None
 
 
 class ReplayStartRequest(BaseModel):
     source: str = Field(..., min_length=1)
     loops: Optional[int] = Field(1, ge=1, le=100)
     triggered_by: Optional[dict] = None
+    lot_id: Optional[str] = None
+    manufacturing_step: Optional[str] = None
+    recorded_during_run_id: Optional[str] = None
+    # When true the server runs the preflight check inline and rejects
+    # the start with 409 if it fails. tolerance_steps is forwarded to
+    # the check. Off by default to preserve legacy behavior.
+    enforce_preflight: bool = False
+    preflight_tolerance_steps: Optional[int] = Field(None, ge=0, le=POS_MAX)
+
+
+class PreflightRequest(BaseModel):
+    source: str = Field(..., min_length=1)
+    tolerance_steps: int = Field(50, ge=0, le=POS_MAX)
+
+
+class PreflightResult(BaseModel):
+    ready: bool
+    leader_alive: bool
+    follower_alive: bool
+    expected: dict[int, int]
+    actual: dict[int, int]
+    deltas: dict[int, int]
+    tolerance_steps: int
+    issues: list[str]
 
 
 class PoseInfo(BaseModel):
@@ -299,8 +520,12 @@ async def health() -> dict:
         "status": "ok",
         "service": "bims-robot-arm",
         "version": SERVICE_VERSION,
-        "leader_connected": state.leader is not None,
-        "follower_connected": state.follower is not None,
+        # Reflect the last liveness-probe result, not just "did we open at boot."
+        # Probe runs every LIVENESS_PROBE_INTERVAL_S; a USB unplug shows up
+        # within that window.
+        "leader_connected": state.leader is not None and state.leader_alive,
+        "follower_connected": state.follower is not None and state.follower_alive,
+        "probe_interval_s": LIVENESS_PROBE_INTERVAL_S,
         "active_session": state.active_session.run_id
         if state.active_session and state.active_session.is_active()
         else None,
@@ -317,6 +542,85 @@ async def list_servos() -> list[ServoStateResponse]:
     states = await asyncio.to_thread(follower.list_states)
     torques = await asyncio.to_thread(follower.get_torques)
     return [_state_to_response(s, torques.get(s.id, False)) for s in states]
+
+
+# Heuristic thresholds for /arm/health — calibrate against real data, not gospel.
+HEALTH_TEMP_HOT_C = 55       # STS3215 derates above ~60°C
+HEALTH_TEMP_WARM_C = 48
+HEALTH_LOAD_HIGH = 600       # |load| out of ~1000 ≈ servo working hard
+HEALTH_VOLTAGE_LOW = 11.5    # 12V supply nominal; <11.5 = drooping
+HEALTH_VOLTAGE_HIGH = 13.0   # above this means supply set wrong
+
+
+def _joint_health(s, torque: bool) -> dict:
+    """Decorate a raw ServoState with derived health flags."""
+    flags: list[str] = []
+    if s.temperature >= HEALTH_TEMP_HOT_C:
+        flags.append("hot")
+    elif s.temperature >= HEALTH_TEMP_WARM_C:
+        flags.append("warm")
+    if abs(s.load) >= HEALTH_LOAD_HIGH:
+        flags.append("high_load")
+    if s.voltage < HEALTH_VOLTAGE_LOW:
+        flags.append("undervolt")
+    elif s.voltage > HEALTH_VOLTAGE_HIGH:
+        flags.append("overvolt")
+    if not torque:
+        flags.append("torque_off")
+    return {
+        "id": s.id,
+        "position": s.position,
+        "load": s.load,
+        "speed": s.speed,
+        "voltage": s.voltage,
+        "temperature": s.temperature,
+        "torque": torque,
+        "flags": flags,
+    }
+
+
+@app.get("/arm/health", dependencies=[Depends(require_api_key)])
+async def arm_health() -> dict:
+    """Per-joint snapshot + overall rollup. Use this before commanding work
+    so we don't ask a 55°C overloaded motor to do something heavy."""
+    follower = _follower()
+    states = await asyncio.to_thread(follower.list_states)
+    torques = await asyncio.to_thread(follower.get_torques)
+    joints = [_joint_health(s, torques.get(s.id, False)) for s in sorted(states, key=lambda x: x.id)]
+
+    # Roll-up: fault if any hot/undervolt/overvolt; warn if any warm/high_load.
+    fault_flags = {"hot", "undervolt", "overvolt"}
+    warn_flags = {"warm", "high_load"}
+    overall = "ok"
+    for j in joints:
+        for f in j["flags"]:
+            if f in fault_flags:
+                overall = "fault"
+                break
+            if f in warn_flags and overall == "ok":
+                overall = "warn"
+        if overall == "fault":
+            break
+
+    return {
+        "overall": overall,
+        "joints": joints,
+        "leader_alive": state.leader_alive,
+        "follower_alive": state.follower_alive,
+        "thresholds": {
+            "temp_warm_c": HEALTH_TEMP_WARM_C,
+            "temp_hot_c": HEALTH_TEMP_HOT_C,
+            "load_high": HEALTH_LOAD_HIGH,
+            "voltage_low": HEALTH_VOLTAGE_LOW,
+            "voltage_high": HEALTH_VOLTAGE_HIGH,
+        },
+    }
+
+
+@app.get("/arm/move-log", dependencies=[Depends(require_api_key)])
+async def get_move_log(n: int = 50) -> dict:
+    """Most-recent n move telemetry records (newest first)."""
+    return {"records": tail_move_log(n)}
 
 
 @app.get(
@@ -361,9 +665,23 @@ async def set_all_positions(req: MoveAllRequest) -> dict:
     off = [sid for sid, on in torques.items() if not on]
     if off:
         raise HTTPException(status_code=409, detail=f"torque off on {off}")
-    goals = dict(zip(follower.servo_ids, req.positions))
-    await _with_follower(follower.set_positions, goals, speed=req.speed)
-    return {"goals": goals}
+    speed_val = req.speed if req.speed is not None else 0
+    # verified_move replaces the old "write + hope" pattern: it polls position
+    # + load, classifies arrival vs stall, retries with progressively stronger
+    # remedies, and logs the result to ~/.bims-arm/move-log.jsonl no matter what.
+    result: MoveResult = await _with_follower(
+        verified_move, follower, list(req.positions), speed_val, "set_positions"
+    )
+    return {
+        "goals": dict(zip(follower.servo_ids, req.positions)),
+        "success": result.success,
+        "achieved": result.achieved,
+        "residuals": result.residuals,
+        "peak_loads": result.peak_loads,
+        "duration_ms": result.duration_ms,
+        "attempts": result.attempts,
+        "failure_reason": result.failure_reason,
+    }
 
 
 @app.post("/home", dependencies=[Depends(require_api_key)])
@@ -443,9 +761,21 @@ async def goto_pose(name: str) -> dict:
     if off:
         raise HTTPException(status_code=409, detail=f"torque off on {off}")
     positions = poses[name]["positions"]
-    goals = dict(zip(follower.servo_ids, positions))
-    await _with_follower(follower.set_positions, goals)
-    return {"name": name, "moving_to": positions}
+    result: MoveResult = await _with_follower(
+        verified_move, follower, list(positions), 0, "pose_move",
+        log_extras={"pose_name": name},
+    )
+    return {
+        "name": name,
+        "moving_to": positions,
+        "success": result.success,
+        "achieved": result.achieved,
+        "residuals": result.residuals,
+        "peak_loads": result.peak_loads,
+        "duration_ms": result.duration_ms,
+        "attempts": result.attempts,
+        "failure_reason": result.failure_reason,
+    }
 
 
 @app.delete("/poses/{name}", dependencies=[Depends(require_api_key)])
@@ -459,6 +789,124 @@ async def delete_pose(name: str) -> dict:
 
 
 # --- leader-follower sessions: teleop / record / replay ---------------------
+
+
+# ---------------------------------------------------------------------------
+# Cartesian jog: read current follower pose, solve IK for an (x,y,z) delta in
+# mm, clamp per-joint step delta to a safe max, write goals. The kinematics
+# module owns the URDF + calibration; we just stitch read/IK/write.
+# ---------------------------------------------------------------------------
+
+
+class JogCartesianRequest(BaseModel):
+    dx_mm: float = Field(0.0, ge=-100.0, le=100.0)
+    dy_mm: float = Field(0.0, ge=-100.0, le=100.0)
+    dz_mm: float = Field(0.0, ge=-100.0, le=100.0)
+    # Per-joint step delta cap. Default 80 steps ≈ 7° per call — protects
+    # against IK solutions that swing a joint wildly when the target is near
+    # a singularity. If clamped, the actual move is smaller than requested.
+    max_step_delta: int = Field(80, ge=1, le=POS_MAX)
+    # Apply backlash compensation on direction reversal. On by default —
+    # major repeatability win for the plastic gear train.
+    backlash_comp: bool = True
+
+
+class JogCartesianResponse(BaseModel):
+    requested: dict  # {dx_mm, dy_mm, dz_mm}
+    before: dict     # full fk() pose
+    after_target: dict  # what fk says we should land at (pre-clamp)
+    goal_steps: dict[int, int]  # what we actually wrote (post-clamp + backlash)
+    clamped: dict[int, int]  # per-joint clamp amount in steps (0 if not clamped)
+    backlash_applied: dict[int, int]  # per-joint compensation steps (signed)
+
+
+@app.get("/pose", dependencies=[Depends(require_api_key)])
+async def get_pose() -> dict:
+    """Current follower end-effector pose (mm) + joint state + calibration source."""
+    follower = _follower()
+    positions = await _with_follower(follower.get_positions)
+    k = get_kinematics()
+    pose_steps = {sid: int(positions[sid]) for sid in JOG_SERVO_IDS if sid in positions}
+    fk = k.fk(pose_steps)
+    return {
+        **fk,
+        "calibration_source": k.calibration_source,
+        "calibration": k.calibration,
+    }
+
+
+@app.post("/jog/cartesian", dependencies=[Depends(require_api_key)])
+async def jog_cartesian(req: JogCartesianRequest) -> JogCartesianResponse:
+    follower = _follower()
+    if state.active_session is not None and state.active_session.is_active():
+        raise HTTPException(
+            status_code=409,
+            detail=f"a {state.active_session.kind} session is active — stop it first",
+        )
+    # Torque must be on or the arm won't hold its commanded pose.
+    torques = await _with_follower(follower.get_torques)
+    off = [sid for sid in JOG_SERVO_IDS if not torques.get(sid, False)]
+    if off:
+        raise HTTPException(status_code=409, detail=f"torque off on {off} — turn on before jog")
+
+    positions = await _with_follower(follower.get_positions)
+    pose_steps = {sid: int(positions[sid]) for sid in JOG_SERVO_IDS}
+    k = get_kinematics()
+    before = k.fk(pose_steps)
+
+    target_steps = k.ik_for_delta(pose_steps, req.dx_mm, req.dy_mm, req.dz_mm)
+    after_target = k.fk(target_steps)
+
+    # Per-joint clamp: cap |Δ| at max_step_delta. If we clamp, the arm reaches
+    # somewhere short of the requested target — caller can re-issue the same
+    # jog to step the rest of the way.
+    clamped: dict[int, int] = {}
+    clamped_targets: dict[int, int] = {}
+    for sid in JOG_SERVO_IDS:
+        delta = target_steps[sid] - pose_steps[sid]
+        if abs(delta) > req.max_step_delta:
+            limited = req.max_step_delta if delta > 0 else -req.max_step_delta
+            clamped_targets[sid] = pose_steps[sid] + limited
+            clamped[sid] = abs(delta) - req.max_step_delta
+        else:
+            clamped_targets[sid] = target_steps[sid]
+            clamped[sid] = 0
+
+    # Backlash compensation: on direction reversal, overshoot by per-joint
+    # backlash_steps so the gear slack is eaten and the output shaft hits target.
+    if req.backlash_comp:
+        goals, backlash_applied = get_backlash().compensate(
+            pose_steps, clamped_targets, k.calibration
+        )
+    else:
+        goals = clamped_targets
+        backlash_applied = {sid: 0 for sid in JOG_SERVO_IDS}
+
+    await _with_follower(follower.set_positions, goals)
+
+    return JogCartesianResponse(
+        requested={"dx_mm": req.dx_mm, "dy_mm": req.dy_mm, "dz_mm": req.dz_mm},
+        before=before,
+        after_target=after_target,
+        goal_steps=goals,
+        clamped=clamped,
+        backlash_applied=backlash_applied,
+    )
+
+
+@app.post("/jog/reset-backlash", dependencies=[Depends(require_api_key)])
+async def reset_backlash() -> dict:
+    """Clear per-joint last-direction state. Use after a manual move (hand-pose
+    with torque off) where the next jog's "reversal" detection would be wrong."""
+    get_backlash().reset()
+    return {"reset": True}
+
+
+@app.post("/jog/reload-calibration", dependencies=[Depends(require_api_key)])
+async def reload_jog_calibration() -> dict:
+    k = get_kinematics()
+    source = k.load_calibration()
+    return {"calibration_source": source, "calibration": k.calibration}
 
 
 def _new_run_id() -> str:
@@ -504,12 +952,20 @@ async def _start_session(kind: str, params: dict, triggered_by: Optional[dict]) 
         return {"run_id": run_id, "kind": kind}
 
 
+def _provenance(req) -> dict:
+    return {
+        "lot_id": req.lot_id,
+        "manufacturing_step": req.manufacturing_step,
+        "recorded_during_run_id": req.recorded_during_run_id,
+    }
+
+
 @app.post("/teleop/start", dependencies=[Depends(require_api_key)])
 async def teleop_start(req: TeleopStartRequest) -> dict:
     _leader_required()
     return await _start_session(
         "teleop",
-        {"rate_hz": req.rate_hz, "duration_s": req.duration_s},
+        {"rate_hz": req.rate_hz, "duration_s": req.duration_s, **_provenance(req)},
         req.triggered_by,
     )
 
@@ -519,16 +975,71 @@ async def record_start(req: RecordStartRequest) -> dict:
     _leader_required()
     return await _start_session(
         "record",
-        {"name": req.name, "rate_hz": req.rate_hz, "duration_s": req.duration_s},
+        {
+            "name": req.name,
+            "rate_hz": req.rate_hz,
+            "duration_s": req.duration_s,
+            **_provenance(req),
+        },
         req.triggered_by,
     )
 
 
+async def _run_preflight(source: str, tolerance_steps: int) -> PreflightResult:
+    """Read first frame of `source` and compare against current follower pose."""
+    follower = _follower()
+    frames = await asyncio.to_thread(load_recording_file, source)
+    if not frames:
+        raise HTTPException(status_code=400, detail=f"recording '{source}' is empty")
+    raw_first = frames[0].get("positions", {}) or {}
+    expected = {int(sid): int(p) for sid, p in raw_first.items()}
+    actual = await _with_follower(follower.get_positions)
+    deltas = {sid: int(actual.get(sid, 0)) - expected.get(sid, 0) for sid in expected}
+    issues: list[str] = []
+    if not state.follower_alive:
+        issues.append("follower liveness probe last failed")
+    over = {sid: d for sid, d in deltas.items() if abs(d) > tolerance_steps}
+    if over:
+        issues.append(
+            f"joints {sorted(over.keys())} exceed {tolerance_steps}-step tolerance "
+            f"(deltas {over}) — operator must home the follower first"
+        )
+    return PreflightResult(
+        ready=not issues,
+        leader_alive=state.leader_alive,
+        follower_alive=state.follower_alive,
+        expected=expected,
+        actual=actual,
+        deltas=deltas,
+        tolerance_steps=tolerance_steps,
+        issues=issues,
+    )
+
+
+@app.post(
+    "/replay/preflight",
+    response_model=PreflightResult,
+    dependencies=[Depends(require_api_key)],
+)
+async def replay_preflight(req: PreflightRequest) -> PreflightResult:
+    return await _run_preflight(req.source, req.tolerance_steps)
+
+
 @app.post("/replay/start", dependencies=[Depends(require_api_key)])
 async def replay_start(req: ReplayStartRequest) -> dict:
+    if req.enforce_preflight:
+        pre = await _run_preflight(
+            req.source,
+            req.preflight_tolerance_steps if req.preflight_tolerance_steps is not None else 50,
+        )
+        if not pre.ready:
+            raise HTTPException(
+                status_code=409,
+                detail={"preflight_failed": True, "issues": pre.issues, "deltas": pre.deltas},
+            )
     return await _start_session(
         "replay",
-        {"source": req.source, "loops": req.loops},
+        {"source": req.source, "loops": req.loops, **_provenance(req)},
         req.triggered_by,
     )
 
@@ -588,6 +1099,9 @@ async def recordings() -> dict:
                 "modified": time.strftime(
                     "%Y-%m-%dT%H:%M:%S", time.localtime(r["modified"])
                 ),
+                # Sidecar meta (lot/step/operator/...) when present; null
+                # for legacy recordings without a sidecar.
+                "meta": r.get("meta"),
             }
         )
     return {"recordings": out}

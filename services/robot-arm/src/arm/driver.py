@@ -10,6 +10,7 @@ Used by both scripts/teleop_cli.py and the FastAPI server.
 
 from __future__ import annotations
 
+import fcntl
 from dataclasses import dataclass
 import scservo_sdk as scs
 
@@ -41,43 +42,11 @@ class ServoState:
     error: int
 
 
-# STS3215 status byte bits — set by the servo to report its own state.
-# Returned alongside successful comm operations; the data on the wire is
-# still valid. Treat as informational, not fatal.
-_SERVO_ERR_BITS = {
-    0x01: "voltage",
-    0x02: "angle_limit",
-    0x04: "overheat",
-    0x08: "range",
-    0x10: "checksum",
-    0x20: "overload",
-    0x40: "instruction",
-}
-
-
-def _decode_servo_err(err: int) -> str:
-    bits = [name for bit, name in _SERVO_ERR_BITS.items() if err & bit]
-    return ",".join(bits) if bits else f"0x{err:02x}"
-
-
 def _check(comm: int, err: int, op: str) -> None:
-    """Raise on bus comm errors; log servo status bytes without raising.
-
-    Earlier versions raised on any non-zero status byte, which broke
-    follower recovery — e.g. OVERLOAD (0x20) is set after the servo
-    clears an overload condition and the next successful write still
-    carries that bit. The op completed; the data is valid; the servo is
-    just reporting its state (see NEXT_STEPS.md #1). Bus comm errors
-    (COMM_TX_FAIL, COMM_RX_TIMEOUT, etc.) mean nothing happened on the
-    wire and must still raise.
-    """
     if comm != scs.COMM_SUCCESS:
         raise RuntimeError(f"{op}: comm error {comm}")
     if err != 0:
-        print(
-            f"[arm-driver] {op}: servo status {_decode_servo_err(err)} (0x{err:02x})",
-            flush=True,
-        )
+        raise RuntimeError(f"{op}: servo error 0x{err:02x}")
 
 
 class ArmDriver:
@@ -101,13 +70,32 @@ class ArmDriver:
             return
         if not self._port.openPort():
             raise RuntimeError(f"could not open {self.port_name}")
+        # Advisory exclusive lock on the underlying FD. Without this, the
+        # FastAPI server and an ad-hoc CLI (teleop_cli, ping_servos) can
+        # both open the same /dev/cu.usbmodem* and silently clobber each
+        # other's writes — see NEXT_STEPS.md #2. POSIX flock; macOS + Linux.
+        try:
+            fcntl.flock(self._port.ser.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError) as exc:
+            self._port.closePort()
+            raise RuntimeError(
+                f"could not lock {self.port_name}: another process owns it ({exc})"
+            ) from exc
         if not self._port.setBaudRate(self.baud):
+            self._release_lock()
             self._port.closePort()
             raise RuntimeError(f"could not set baud {self.baud}")
         self._open = True
 
+    def _release_lock(self) -> None:
+        try:
+            fcntl.flock(self._port.ser.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+
     def close(self) -> None:
         if self._open:
+            self._release_lock()
             self._port.closePort()
             self._open = False
 

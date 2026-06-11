@@ -11,6 +11,8 @@
 	import DeckLoadingGrid from '$lib/components/manufacturing/reagent-filling/DeckLoadingGrid.svelte';
 	import RunExecution from '$lib/components/manufacturing/reagent-filling/RunExecution.svelte';
 	import Inspection from '$lib/components/manufacturing/reagent-filling/Inspection.svelte';
+	import ProtocolStartPanel from '$lib/components/manufacturing/ProtocolStartPanel.svelte';
+	import EmbeddedRunController from '$lib/components/manufacturing/EmbeddedRunController.svelte';
 	// Top Sealing + Storage happen on Opentron Control post-OT-2 queue, not here.
 
 	let { data } = $props();
@@ -605,18 +607,37 @@
 					</div>
 				</div>
 			</div>
-			{#if !isViewingPast}
-				<button type="button"
-					onclick={() => submitForm('startRun', { reagentBatchBarcode: reagentBatchBarcode ?? '' })}
-					disabled={submitting}
-					class="min-h-[52px] w-full rounded-lg border border-green-500/50 bg-green-900/20 px-6 py-4 text-lg font-bold text-green-400 transition-all hover:bg-green-900/30 disabled:opacity-50"
-				>
-					{submitting ? 'Starting Run...' : `Start Run (${data.cartridges.length} cartridges)`}
-				</button>
+			{#if !isViewingPast && data.opentronsRobotId && data.robotProtocols}
+				<ProtocolStartPanel
+					robot={{ _id: data.opentronsRobotId, name: data.robotId }}
+					protocols={data.robotProtocols}
+					contextValues={{ cartridges: data.cartridges.length }}
+					contextReadonly={['cartridges']}
+					lastTipState={data.lastTipState}
+					submitting={submitting}
+					formAction="?/startRun"
+					extraHidden={{
+						runId: data.activeRunId ?? '',
+						reagentBatchBarcode: reagentBatchBarcode ?? ''
+					}}
+				/>
 			{/if}
 		</div>
 
 	{:else if displayStage === 'Running'}
+		{#if !isViewingPast && data.runState.opentronsRunId && data.opentronsRobotId}
+			<EmbeddedRunController
+				robotId={data.opentronsRobotId}
+				robotName={data.runState.assayTypeName ?? 'Reagent Run'}
+				opentronsRunId={data.runState.opentronsRunId}
+				onComplete={(status) => {
+					submitForm('recordRunFinished', {
+						runId: data.activeRunId ?? '',
+						finalStatus: status
+					});
+				}}
+			/>
+		{/if}
 		<RunExecution
 			assayTypeName={previewParam
 				? 'Preview Assay'
