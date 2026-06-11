@@ -67,15 +67,15 @@
 		if (segs[0] === 'cartridge-admin' && segs[1] === 'dhr' && segs.length === 3) {
 			return { entityType: 'cartridge', entityId: id };
 		}
-		// /manufacturing/opentron-control/wax/{runId} | /reagent/{runId}
-		if (segs[0] === 'manufacturing' && segs[1] === 'opentron-control' && segs[2] === 'wax' && segs.length === 4) {
+		// /manufacturing/cart-mfg/opentron-control/wax/{runId} | /reagent/{runId}
+		if (segs[0] === 'manufacturing' && segs[1] === 'cart-mfg' && segs[2] === 'opentron-control' && segs[3] === 'wax' && segs.length === 5) {
 			return { entityType: 'wax_filling_run', entityId: id };
 		}
-		if (segs[0] === 'manufacturing' && segs[1] === 'opentron-control' && segs[2] === 'reagent' && segs.length === 4) {
+		if (segs[0] === 'manufacturing' && segs[1] === 'cart-mfg' && segs[2] === 'opentron-control' && segs[3] === 'reagent' && segs.length === 5) {
 			return { entityType: 'reagent_run', entityId: id };
 		}
-		// /manufacturing/lots/{lotId} | /_receiving/{lotId} | /parts/accession/{lotId}
-		if (segs[0] === 'manufacturing' && segs[1] === 'lots' && segs.length === 3) {
+		// /manufacturing/cart-mfg/lots/{lotId} | /_receiving/{lotId} | /parts/accession/{lotId}
+		if (segs[0] === 'manufacturing' && segs[1] === 'cart-mfg' && segs[2] === 'lots' && segs.length === 4) {
 			return { entityType: 'receiving_lot', entityId: id };
 		}
 		if (segs[0] === '_receiving' && segs.length === 2) {

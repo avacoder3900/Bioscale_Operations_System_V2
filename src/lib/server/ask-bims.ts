@@ -4065,7 +4065,7 @@ async function runTool(name: string, input: any, ctx: ToolContext = {}): Promise
 				rpnThreshold,
 				statusFilter,
 				source: 'FmeaRecord sorted by rpn desc',
-				sourceUrl: '/manufacturing/analysis',
+				sourceUrl: '/manufacturing/cart-mfg/analysis',
 				dataIntegrityNotes: records.length === 0 ? ['No FMEA records matched. Try lowering rpnThreshold or dropping the status filter.'] : []
 			};
 		}

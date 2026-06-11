@@ -4,6 +4,8 @@ export { CartridgeRecord } from './cartridge-record.js';
 export { Spu } from './spu.js';
 export { AssayDefinition } from './assay-definition.js';
 export { ReagentBatchRecord } from './reagent-batch-record.js';
+export { ReagentProtocolTemplate } from './reagent-protocol-template.js';
+export { ReagentLot } from './reagent-lot.js';
 
 // Tier 2: Operational — Receiving & Inspection
 export { ReceivingLot } from './receiving-lot.js';

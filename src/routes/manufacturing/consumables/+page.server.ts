@@ -94,25 +94,25 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Pipeline stages
 	const stages = [
 		{
-			id: 'cut-thermoseal', name: 'Cut Thermoseal', href: '/manufacturing/wi-02',
+			id: 'cut-thermoseal', name: 'Cut Thermoseal', href: '/manufacturing/cart-mfg/wi-02',
 			inputs: [{ name: 'Thermoseal Roll', icon: '🧻', count: null as number | null, unit: 'rolls (ROG)' }],
 			outputs: [{ name: 'Thermoseal Sheets', icon: '📄', count: null as number | null, unit: 'sheets' }],
 			activeRuns: 0, completedRuns: 0
 		},
 		{
-			id: 'cut-topseal', name: 'Cut Top Seal', href: '/manufacturing/wi-03',
+			id: 'cut-topseal', name: 'Cut Top Seal', href: '/manufacturing/cart-mfg/wi-03',
 			inputs: [{ name: 'Top Seal Roll', icon: '🧻', count: null as number | null, unit: 'rolls (ROG)' }],
 			outputs: [{ name: 'Top Seal Sheets', icon: '📄', count: null as number | null, unit: 'sheets' }],
 			activeRuns: 0, completedRuns: 0
 		},
 		{
-			id: 'laser', name: 'Laser Cut', href: '/manufacturing/laser-cutting',
+			id: 'laser', name: 'Laser Cut', href: '/manufacturing/cart-mfg/laser-cutting',
 			inputs: [{ name: 'Thermoseal Sheets', icon: '📄', count: null as number | null, unit: 'sheets' }],
 			outputs: [{ name: 'Cartridge Backs', icon: '🔲', count: individualBacks > 0 ? individualBacks : null, unit: `backs (${cartridgesPerSheet}/sheet)` }],
 			activeRuns: 0, completedRuns: 0
 		},
 		{
-			id: 'backing', name: 'Cartridge Back', href: '/manufacturing/wi-01',
+			id: 'backing', name: 'Cartridge Back', href: '/manufacturing/cart-mfg/wi-01',
 			inputs: [
 				{ name: 'Cartridge Back (laser cut)', icon: '🔲', count: individualBacks > 0 ? individualBacks : null, unit: 'backs' },
 				{ name: 'Raw Cartridge', icon: '📦', count: null as number | null, unit: 'cartridges (ROG)' },
@@ -122,7 +122,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			activeRuns: 0, completedRuns: 0
 		},
 		{
-			id: 'wax', name: 'Wax Filling', href: '/manufacturing/wax-filling',
+			id: 'wax', name: 'Wax Filling', href: '/manufacturing/cart-mfg/wax-filling',
 			inputs: [
 				{ name: 'Backed Cartridges', icon: '📦', count: backedCount, unit: 'cartridges' },
 				{ name: 'Wax (source lots)', icon: '🕯️', count: null as number | null, unit: 'tubes' },
@@ -135,7 +135,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			activeRuns: activeWaxRuns, completedRuns: waxStats[0]?.totalRuns ?? 0
 		},
 		{
-			id: 'reagent', name: 'Reagent Filling + Top Seal', href: '/manufacturing/reagent-filling',
+			id: 'reagent', name: 'Reagent Filling + Top Seal', href: '/manufacturing/cart-mfg/reagent-filling',
 			inputs: [
 				{ name: 'Wax-Filled Cartridges', icon: '🟡', count: waxStored, unit: 'available' },
 				{ name: 'Reagents (per assay)', icon: '💧', count: null as number | null, unit: 'wells' },
@@ -149,7 +149,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			activeRuns: activeReagentRuns, completedRuns: reagentStats[0]?.totalRuns ?? 0
 		},
 		{
-			id: 'qaqc', name: 'QA/QC', href: '/manufacturing/qa-qc',
+			id: 'qaqc', name: 'QA/QC', href: '/manufacturing/cart-mfg/qa-qc',
 			inputs: [{ name: 'Sealed Cartridges', icon: '✅', count: sealed, unit: 'cartridges' }],
 			outputs: [
 				{ name: 'Released', icon: '🎯', count: null as number | null, unit: 'cartridges' },

@@ -291,7 +291,7 @@
 				<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">Recent Runs (last 7 days)</h3>
 				<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Click a run ID to see every cartridge in it</p>
 			</div>
-			<a href="/manufacturing/opentrons/history" class="text-xs text-[var(--color-tron-cyan)] hover:underline">
+			<a href="/manufacturing/cart-mfg/opentrons/history" class="text-xs text-[var(--color-tron-cyan)] hover:underline">
 				Full history →
 			</a>
 		</div>

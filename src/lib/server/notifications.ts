@@ -209,7 +209,7 @@ export const notifyLowWaxBatch = safely(async (batch: {
 				<p>Schedule a new wax creation batch to avoid stockouts.</p>
 			`,
 			ctaText: 'New wax batch',
-			ctaUrl: `${process.env.BIMS_BASE_URL ?? ''}/manufacturing/wax-creation`
+			ctaUrl: `${process.env.BIMS_BASE_URL ?? ''}/manufacturing/cart-mfg/wax-creation`
 		})
 	});
 });

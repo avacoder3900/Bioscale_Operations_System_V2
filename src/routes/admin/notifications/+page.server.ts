@@ -244,7 +244,7 @@ export const actions: Actions = {
 						<p><em>(TEST PREVIEW — no real alert condition)</em></p>
 					`,
 					ctaText: 'New wax batch',
-					ctaUrl: `${process.env.BIMS_BASE_URL ?? ''}/manufacturing/wax-creation`
+					ctaUrl: `${process.env.BIMS_BASE_URL ?? ''}/manufacturing/cart-mfg/wax-creation`
 				})
 			);
 		} else if (alertType === 'lowInventory') {
