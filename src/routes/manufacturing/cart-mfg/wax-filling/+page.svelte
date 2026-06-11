@@ -564,10 +564,10 @@
 			robotId: data.robotId,
 			coolingTrayId: result.trayId
 		});
-		// Final step of the wax run on this page — send operator back to
-		// Opentron Control so they can start another run. QC + Storage for
-		// this run live on the Opentron Control post-OT-2 queue.
-		if (!errorMsg) await goto('/manufacturing/cart-mfg/opentron-control');
+		// Final step of the wax run on this page — back to the wax-filling
+		// robot picker, where the post-OT-2 queue (QC + Storage for this run)
+		// is shown inline below the cards.
+		if (!errorMsg) await goto('/manufacturing/cart-mfg/wax-filling');
 	}
 
 	function handleQCComplete(result: {

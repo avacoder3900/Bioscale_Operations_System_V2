@@ -253,7 +253,7 @@ export const actions: Actions = {
 		// Run has been released to the QC queue — send the operator back to the
 		// Opentron Control homepage so they can start another run. QC + Storage
 		// can be picked up later from the post-OT-2 queue.
-		redirect(303, '/manufacturing/cart-mfg/opentron-control');
+		redirect(303, '/manufacturing/cart-mfg/wax-filling');
 	},
 
 	completeQC: async ({ request, locals, params }) => {
@@ -693,7 +693,7 @@ export const actions: Actions = {
 		const existingRun = await WaxFillingRun.findById(runId).select('status').lean() as any;
 		if (!existingRun) return fail(404, { error: 'Run not found' });
 		if (existingRun.status === 'completed') {
-			redirect(303, '/manufacturing/cart-mfg/opentron-control');
+			redirect(303, '/manufacturing/cart-mfg/wax-filling');
 		}
 
 		const run = await WaxFillingRun.findByIdAndUpdate(runId, {
@@ -867,7 +867,7 @@ export const actions: Actions = {
 			console.error('[completeRun] post-update side-effect failed:', e instanceof Error ? e.message : e);
 		}
 
-		redirect(303, '/manufacturing/cart-mfg/opentron-control');
+		redirect(303, '/manufacturing/cart-mfg/wax-filling');
 	},
 
 	/**

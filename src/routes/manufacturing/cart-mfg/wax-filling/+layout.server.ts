@@ -1,6 +1,7 @@
 import { redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, Equipment, WaxFillingRun, ReagentBatchRecord } from '$lib/server/db';
+import { loadRobotCardsAndQueues } from '$lib/server/manufacturing/robot-cards';
 import type { LayoutServerLoad } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -32,7 +33,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		const REAGENT_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Inspection',
 			'setup', 'loading', 'running', 'inspection'];
 
-		const [robots, activeRuns, activeReagentRuns] = await Promise.all([
+		const [robots, activeRuns, activeReagentRuns, cardsAndQueues] = await Promise.all([
 			Equipment.find({ equipmentType: 'robot', isActive: true }, { _id: 1, name: 1, robotSide: 1 }).sort({ name: 1 }).lean(),
 			WaxFillingRun.find(
 				{ status: { $in: WAX_PAGE_OWNED } },
@@ -41,10 +42,14 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 			ReagentBatchRecord.find(
 				{ status: { $in: REAGENT_PAGE_OWNED } },
 				{ 'robot._id': 1, status: 1 }
-			).lean().catch(() => [])
+			).lean().catch(() => []),
+			// Post-OT-2 wax queue (QC / Storage handoff) — shown inline below the
+			// wizard so the operator never needs the Opentron Control backup route.
+			loadRobotCardsAndQueues().catch(() => ({ waxQueue: [] as any[] }))
 		]);
 
 		return {
+			waxQueue: JSON.parse(JSON.stringify(cardsAndQueues.waxQueue ?? [])),
 			user: JSON.parse(JSON.stringify(locals.user)),
 			robots: (robots as any[]).map((r) => ({
 				// Stringify ObjectId to ensure proper serialization on Vercel
@@ -83,7 +88,8 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		return {
 			user: JSON.parse(JSON.stringify(locals.user)),
 			robots: [],
-			dashboardState: []
+			dashboardState: [],
+			waxQueue: []
 		};
 	}
 };

@@ -1,6 +1,7 @@
 import { redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, Equipment, ReagentBatchRecord, WaxFillingRun } from '$lib/server/db';
+import { loadRobotCardsAndQueues } from '$lib/server/manufacturing/robot-cards';
 import type { LayoutServerLoad } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -32,7 +33,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		const WAX_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Awaiting Removal',
 			'setup', 'loading', 'running', 'awaiting_removal', 'cooling'];
 
-		const [robots, activeRuns, activeWaxRuns] = await Promise.all([
+		const [robots, activeRuns, activeWaxRuns, cardsAndQueues] = await Promise.all([
 			Equipment.find({ equipmentType: 'robot', isActive: true }, { _id: 1, name: 1, robotSide: 1 }).sort({ name: 1 }).lean(),
 			ReagentBatchRecord.find(
 				{ status: { $in: REAGENT_PAGE_OWNED } },
@@ -41,10 +42,14 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 			WaxFillingRun.find(
 				{ status: { $in: WAX_PAGE_OWNED } },
 				{ 'robot._id': 1, status: 1 }
-			).lean().catch(() => [])
+			).lean().catch(() => []),
+			// Post-OT-2 reagent queue (Top Sealing / Storage handoff) — shown
+			// inline below the wizard (WAX-FLOW-1).
+			loadRobotCardsAndQueues().catch(() => ({ reagentQueue: [] as any[], maxTimeBeforeSealMin: 60 }))
 		]);
 
 		return {
+			reagentQueue: JSON.parse(JSON.stringify(cardsAndQueues.reagentQueue ?? [])),
 			user: JSON.parse(JSON.stringify(locals.user)),
 			robots: (robots as any[]).map((r) => ({
 				// Stringify ObjectId to ensure proper serialization on Vercel
@@ -84,7 +89,8 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		return {
 			user: JSON.parse(JSON.stringify(locals.user)),
 			robots: [],
-			dashboardState: []
+			dashboardState: [],
+			reagentQueue: []
 		};
 	}
 };

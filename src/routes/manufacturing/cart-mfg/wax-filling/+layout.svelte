@@ -10,6 +10,17 @@
 		data: {
 			robots: { robotId: string; name: string; description: string }[];
 			dashboardState: RobotRunState[];
+			waxQueue?: {
+				runId: string;
+				robotName: string;
+				status: string;
+				cartridgeCount: number;
+				robotReleasedAt: string | null;
+				elapsedSinceReleasedMin: number;
+				operatorName: string;
+				trayId: string | null;
+				fridgeLocation: string | null;
+			}[];
 		};
 	}
 
@@ -47,6 +58,15 @@
 		const url = new URL($page.url);
 		url.searchParams.set('robot', robotId);
 		goto(url.pathname + url.search, { invalidateAll: true });
+	}
+
+	/** Compact "MMM D, H:MMa" — e.g. "Apr 20, 1:23p". Falls back to elapsed if null. */
+	function formatFinished(iso: string | null, elapsedMin: number): string {
+		if (!iso) return `${elapsedMin} min ago`;
+		const d = new Date(iso);
+		const date = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+		const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }).replace(' ', '').toLowerCase();
+		return `${date}, ${time}`;
 	}
 
 	function stageBadgeColor(stage: string | null): string {
@@ -216,5 +236,50 @@
 				{/each}
 			</div>
 		</div>
+	{/if}
+
+	<!-- Post-OT-2 wax queue: runs awaiting QC / storage. Lives here (not only
+	     on the Opentron Control backup route) so the inline flow is complete. -->
+	{#if !isRobotAgnosticRoute && (data.waxQueue?.length ?? 0) > 0}
+		<section class="pt-2">
+			<div class="mb-3 flex items-center gap-3">
+				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
+					Wax Cartridges Requiring Inspection &amp; Storage
+				</h2>
+				<span class="rounded-full bg-[var(--color-tron-cyan)]/20 px-2.5 py-0.5 text-xs font-bold text-[var(--color-tron-cyan)]">
+					{data.waxQueue!.length}
+				</span>
+			</div>
+			<div class="space-y-2">
+				{#each data.waxQueue! as run (run.runId)}
+					<a href="/manufacturing/cart-mfg/opentron-control/wax/{run.runId}"
+						class="flex items-center justify-between rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 transition-all hover:border-[var(--color-tron-cyan)]/50 hover:bg-[var(--color-tron-cyan)]/5">
+						<div class="flex items-center gap-4">
+							<div>
+								<span class="font-mono text-sm font-bold" style="color: var(--color-tron-cyan)">{run.runId.slice(-8)}</span>
+								<p class="text-xs" style="color: var(--color-tron-text-secondary)">{run.robotName} &middot; {run.operatorName}</p>
+								<p class="mt-0.5 text-xs" style="color: var(--color-tron-text-secondary)">
+									{#if run.trayId}<span>Tray <span class="font-mono text-[var(--color-tron-text)]">{run.trayId}</span></span>{/if}
+									{#if run.trayId && run.fridgeLocation} &middot; {/if}
+									{#if run.fridgeLocation}<span>Fridge <span class="font-mono text-[var(--color-tron-text)]">{run.fridgeLocation}</span></span>{/if}
+								</p>
+							</div>
+							<div class="rounded bg-[var(--color-tron-cyan)]/10 px-2 py-1 text-xs font-medium" style="color: var(--color-tron-cyan)">
+								{run.status}
+							</div>
+						</div>
+						<div class="flex items-center gap-6 text-right">
+							<div>
+								<p class="text-sm font-bold" style="color: var(--color-tron-text)">{run.cartridgeCount} cartridges</p>
+								<p class="text-xs" style="color: var(--color-tron-text-secondary)">OT-2 done {formatFinished(run.robotReleasedAt, run.elapsedSinceReleasedMin)}</p>
+							</div>
+							<svg class="h-5 w-5" style="color: var(--color-tron-text-secondary)" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+							</svg>
+						</div>
+					</a>
+				{/each}
+			</div>
+		</section>
 	{/if}
 </div>

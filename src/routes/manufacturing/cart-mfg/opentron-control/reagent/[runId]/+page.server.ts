@@ -191,7 +191,7 @@ export const actions: Actions = {
 		// Run has been released to the Top Sealing queue — send the operator back
 		// to the Opentron Control homepage so they can start another run. Top
 		// Sealing + Storage can be picked up later from the post-OT-2 queue.
-		redirect(303, '/manufacturing/cart-mfg/opentron-control');
+		redirect(303, '/manufacturing/cart-mfg/reagent-filling');
 	},
 
 	completeInspection: async ({ request, locals }) => {
@@ -423,7 +423,7 @@ export const actions: Actions = {
 			.select('status finalizedAt').lean() as any;
 		if (!existing) return fail(404, { error: 'Run not found' });
 		if (existing.status === 'Completed' || existing.finalizedAt) {
-			redirect(303, '/manufacturing/cart-mfg/opentron-control');
+			redirect(303, '/manufacturing/cart-mfg/reagent-filling');
 		}
 
 		const run = await ReagentBatchRecord.findByIdAndUpdate(runId, {
@@ -457,6 +457,6 @@ export const actions: Actions = {
 			console.error('[completeRun] post-update side-effect failed:', e instanceof Error ? e.message : e);
 		}
 
-		redirect(303, '/manufacturing/cart-mfg/opentron-control');
+		redirect(303, '/manufacturing/cart-mfg/reagent-filling');
 	}
 };
