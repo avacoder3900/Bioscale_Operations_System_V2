@@ -9,6 +9,7 @@
 		createdAt: string;
 		finishTime: string | null;
 		bucketBarcode?: string | null;
+		outputLotNumber?: string | null;
 	}
 
 	interface Props {
@@ -35,14 +36,14 @@
 		form: {
 			checkAndStart?: { success?: boolean; lotId?: string; plannedQty?: number; error?: string; insufficient?: { name: string; need: number; have: number }[] };
 			confirmComplete?: { success?: boolean; handoffPrompt?: string; error?: string };
-			resumeLot?: { success?: boolean; lotId?: string; resumeStep?: string; plannedQty?: number; error?: string };
+			resumeLot?: { success?: boolean; lotId?: string; resumeStep?: string; plannedQty?: number; error?: string; cartridgeIds?: string[] };
 		};
 	}
 
 	let { data, form }: Props = $props();
 
-	// Flow: start → scan → qty → working → confirm
-	let step = $state<'start' | 'scan' | 'qty' | 'working' | 'confirm'>('start');
+	// Flow: start → scan → qty → working → oven (per-cartridge scan) → confirm
+	let step = $state<'start' | 'scan' | 'qty' | 'working' | 'oven' | 'confirm'>('start');
 	let plannedQty = $state(1);
 	let lotBarcode1 = $state('');
 	let lotBarcode2 = $state('');
@@ -108,14 +109,80 @@
 		if (nextId) document.getElementById(nextId)?.focus();
 	}
 	let lotId = $state('');
-	let actualCount = $state(1);
 	let scrapCartridge = $state(0);
 	let scrapThermoseal = $state(0);
 	let scrapBarcode = $state(0);
 	let scrapReason = $state('');
-	let bucketBarcode = $state('');
-	let ovenBarcode = $state('');
 	let sessionNotes = $state('');
+
+	// Per-cartridge oven-scan state (WAX-FLOW-2)
+	let ovenId = $state('');
+	let scannedCarts = $state<string[]>([]);
+	let cartScanInput = $state('');
+	let cartScanError = $state('');
+	let cartScanBusy = $state(false);
+
+	async function handleCartScan() {
+		const barcode = cartScanInput.trim();
+		if (!barcode || cartScanBusy) return;
+		if (!ovenId) { cartScanError = 'Select an oven first'; return; }
+		if (scannedCarts.includes(barcode)) {
+			cartScanError = `${barcode} already scanned in this batch`;
+			cartScanInput = '';
+			return;
+		}
+		cartScanBusy = true;
+		cartScanError = '';
+		try {
+			const fd = new FormData();
+			fd.set('lotId', lotId);
+			fd.set('barcode', barcode);
+			fd.set('ovenId', ovenId);
+			const res = await fetch('?/scanBackedCartridge', {
+				method: 'POST',
+				body: fd,
+				headers: { 'x-sveltekit-action': 'true' }
+			});
+			const json = await res.json();
+			const payload = json?.data ?? json;
+			const inner = payload?.scanBackedCartridge ?? payload;
+			if (!res.ok || inner?.error) {
+				cartScanError = inner?.error ?? `Error ${res.status}`;
+			} else {
+				scannedCarts = [barcode, ...scannedCarts];
+			}
+		} catch (e) {
+			cartScanError = e instanceof Error ? e.message : 'Scan failed';
+		} finally {
+			cartScanBusy = false;
+			cartScanInput = '';
+			document.getElementById('cartScanInput')?.focus();
+		}
+	}
+
+	async function removeCartScan(barcode: string) {
+		cartScanError = '';
+		try {
+			const fd = new FormData();
+			fd.set('lotId', lotId);
+			fd.set('barcode', barcode);
+			const res = await fetch('?/removeBackedCartridge', {
+				method: 'POST',
+				body: fd,
+				headers: { 'x-sveltekit-action': 'true' }
+			});
+			const json = await res.json();
+			const payload = json?.data ?? json;
+			const inner = payload?.removeBackedCartridge ?? payload;
+			if (!res.ok || inner?.error) {
+				cartScanError = inner?.error ?? `Error ${res.status}`;
+			} else {
+				scannedCarts = scannedCarts.filter((b) => b !== barcode);
+			}
+		} catch (e) {
+			cartScanError = e instanceof Error ? e.message : 'Remove failed';
+		}
+	}
 
 	const totalScrap = $derived(scrapCartridge + scrapThermoseal + scrapBarcode);
 	const hasScrap = $derived(totalScrap > 0);
@@ -128,7 +195,6 @@
 			if (r.success && r.lotId) {
 				lotId = r.lotId;
 				plannedQty = r.plannedQty ?? plannedQty;
-				actualCount = r.plannedQty ?? plannedQty;
 				step = 'working';
 			}
 		}
@@ -144,7 +210,7 @@
 			if (r.success) {
 				lotId = r.lotId;
 				plannedQty = r.plannedQty ?? 1;
-				actualCount = r.plannedQty ?? 1;
+				scannedCarts = [...(r.cartridgeIds ?? [])].reverse();
 				step = 'working';
 			}
 		}
@@ -157,14 +223,15 @@
 		lotBarcode1 = '';
 		lotBarcode2 = '';
 		lotBarcode3 = '';
-		actualCount = 1;
 		scrapCartridge = 0;
 		scrapThermoseal = 0;
 		scrapBarcode = 0;
 		scrapReason = '';
-		bucketBarcode = '';
-		ovenBarcode = '';
 		sessionNotes = '';
+		ovenId = '';
+		scannedCarts = [];
+		cartScanInput = '';
+		cartScanError = '';
 		handoffOpen = false;
 		handoffPrompt = '';
 	}
@@ -464,11 +531,95 @@
 
 					<button
 						type="button"
-						onclick={() => { step = 'confirm'; actualCount = plannedQty; }}
+						onclick={() => { step = 'oven'; }}
 						class="mt-4 w-full rounded-lg bg-green-600 py-4 text-lg font-bold text-white hover:bg-green-500 transition-colors"
 					>
-						Done — Count Cartridges
+						Done — Scan Into Oven
 					</button>
+				</div>
+
+			{:else if step === 'oven'}
+				<!-- STEP 5: Scan each backed cartridge into the oven (WAX-FLOW-2) -->
+				<div class="space-y-5">
+					<div class="text-center">
+						<p class="text-lg font-semibold text-[var(--color-tron-text)]">Scan Cartridges Into Oven</p>
+						<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
+							Each scan creates the cartridge record and stamps its oven entry time.
+						</p>
+					</div>
+
+					<div>
+						<label class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Oven</label>
+						<select
+							bind:value={ovenId}
+							disabled={scannedCarts.length > 0}
+							class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)] disabled:opacity-60"
+						>
+							<option value="">— Select oven —</option>
+							{#each (data.ovens ?? []) as oven (oven._id)}
+								<option value={oven._id}>{oven.name}</option>
+							{/each}
+						</select>
+						{#if scannedCarts.length > 0}
+							<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">Oven locked once scanning starts.</p>
+						{/if}
+					</div>
+
+					<div>
+						<label class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Scan cartridge barcode</label>
+						<input
+							type="text"
+							id="cartScanInput"
+							bind:value={cartScanInput}
+							onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleCartScan(); } }}
+							disabled={!ovenId || cartScanBusy}
+							placeholder={ovenId ? 'Scan cartridge…' : 'Select an oven first'}
+							autocomplete="off"
+							class="mt-1 w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-bg-primary)] px-3 py-3 font-mono text-[var(--color-tron-text)] placeholder:text-[var(--color-tron-text-secondary)]/50 focus:border-[var(--color-tron-cyan)] focus:outline-none disabled:opacity-50"
+						/>
+						{#if cartScanError}
+							<p class="mt-1 text-sm text-[var(--color-tron-error)]">{cartScanError}</p>
+						{/if}
+					</div>
+
+					<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3">
+						<div class="flex items-center justify-between">
+							<p class="text-xs text-[var(--color-tron-text-secondary)]">Scanned into oven</p>
+							<p class="text-sm font-bold {scannedCarts.length >= plannedQty ? 'text-green-400' : 'text-[var(--color-tron-cyan)]'}">
+								{scannedCarts.length} / {plannedQty} planned
+							</p>
+						</div>
+						{#if scannedCarts.length > 0}
+							<ul class="mt-2 max-h-48 space-y-1 overflow-y-auto">
+								{#each scannedCarts as barcode (barcode)}
+									<li class="flex items-center justify-between rounded bg-[var(--color-tron-surface)] px-2 py-1">
+										<span class="font-mono text-xs text-[var(--color-tron-text)]">{barcode}</span>
+										<button
+											type="button"
+											onclick={() => removeCartScan(barcode)}
+											class="text-xs text-[var(--color-tron-error)] hover:underline"
+										>
+											Remove
+										</button>
+									</li>
+								{/each}
+							</ul>
+						{/if}
+					</div>
+
+					<div class="flex justify-center gap-3 pt-2">
+						<button
+							type="button"
+							disabled={scannedCarts.length === 0}
+							onclick={() => { step = 'confirm'; }}
+							class="rounded-lg bg-green-600 px-6 py-3 font-bold text-white transition-colors hover:bg-green-500 disabled:opacity-40"
+						>
+							Continue — Confirm Batch
+						</button>
+						<button type="button" onclick={() => { step = 'working'; }} class="rounded-lg border border-[var(--color-tron-border)] px-4 py-3 text-sm text-[var(--color-tron-text-secondary)]">
+							Go Back
+						</button>
+					</div>
 				</div>
 
 			{:else if step === 'confirm'}
@@ -477,18 +628,11 @@
 					<input type="hidden" name="lotId" value={lotId} />
 					<input type="hidden" name="notes" value={sessionNotes} />
 					<div class="space-y-5">
-						<!-- Good cartridges -->
-						<div>
-							<p class="text-lg font-semibold text-[var(--color-tron-text)]">How many GOOD cartridges?</p>
-							<input
-								type="number"
-								name="actualCount"
-								bind:value={actualCount}
-								min="0"
-								max={data.config.maxBatchSize}
-								class="mt-2 mx-auto block w-32 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-3 text-center text-2xl font-bold text-[var(--color-tron-text)]"
-							/>
-							<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)] text-center">Planned: {plannedQty} — Adjust if different</p>
+						<!-- Good cartridges = scanned into oven -->
+						<div class="text-center">
+							<p class="text-lg font-semibold text-[var(--color-tron-text)]">Good cartridges (scanned into oven)</p>
+							<p class="mt-2 text-4xl font-bold text-[var(--color-tron-cyan)]">{scannedCarts.length}</p>
+							<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">Planned: {plannedQty} — go back to scan more or remove mis-scans</p>
 						</div>
 
 						<!-- Per-part scrap -->
@@ -548,51 +692,15 @@
 							<div class="grid grid-cols-3 gap-2 text-center text-sm">
 								<div>
 									<p class="text-xs text-[var(--color-tron-text-secondary)]">Cartridges</p>
-									<p class="font-bold text-[var(--color-tron-text)]">{actualCount + scrapCartridge}</p>
+									<p class="font-bold text-[var(--color-tron-text)]">{scannedCarts.length + scrapCartridge}</p>
 								</div>
 								<div>
 									<p class="text-xs text-[var(--color-tron-text-secondary)]">Thermoseal</p>
-									<p class="font-bold text-[var(--color-tron-text)]">{actualCount + scrapThermoseal}</p>
+									<p class="font-bold text-[var(--color-tron-text)]">{scannedCarts.length + scrapThermoseal}</p>
 								</div>
 								<div>
 									<p class="text-xs text-[var(--color-tron-text-secondary)]">Barcodes</p>
-									<p class="font-bold text-[var(--color-tron-text)]">{actualCount + scrapBarcode}</p>
-								</div>
-							</div>
-						</div>
-
-						<!-- Bucket + Oven assignment -->
-						<div>
-							<p class="text-lg font-semibold text-[var(--color-tron-text)]">Bucket & Oven Assignment</p>
-							<div class="mt-2 grid gap-2 sm:grid-cols-2">
-								<div>
-									<label class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Bucket</label>
-									<input
-										type="text"
-										id="bucketBarcode"
-										name="bucketBarcode"
-										bind:value={bucketBarcode}
-										onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); document.getElementById('ovenBarcode')?.focus(); } }}
-										placeholder="Scan bucket barcode"
-										class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)] placeholder:text-[var(--color-tron-text-secondary)]/50"
-									/>
-								</div>
-								<div>
-									<label class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Oven</label>
-									<input
-										type="text"
-										id="ovenBarcode"
-										name="ovenBarcode"
-										bind:value={ovenBarcode}
-										list="ovenList"
-										placeholder="Scan oven barcode"
-										class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)] placeholder:text-[var(--color-tron-text-secondary)]/50"
-									/>
-									<datalist id="ovenList">
-										{#each (data.ovens ?? []) as oven (oven._id)}
-											<option value={oven.barcode || oven._id}>{oven.name}</option>
-										{/each}
-									</datalist>
+									<p class="font-bold text-[var(--color-tron-text)]">{scannedCarts.length + scrapBarcode}</p>
 								</div>
 							</div>
 						</div>
@@ -605,7 +713,7 @@
 							<button type="submit" class="rounded-lg bg-green-600 px-6 py-3 font-bold text-white hover:bg-green-500 transition-colors">
 								Yes — Confirm & Withdraw
 							</button>
-							<button type="button" onclick={() => { step = 'working'; }} class="rounded-lg border border-[var(--color-tron-border)] px-4 py-3 text-sm text-[var(--color-tron-text-secondary)]">
+							<button type="button" onclick={() => { step = 'oven'; }} class="rounded-lg border border-[var(--color-tron-border)] px-4 py-3 text-sm text-[var(--color-tron-text-secondary)]">
 								Go Back
 							</button>
 						</div>
@@ -622,7 +730,7 @@
 					<table class="w-full text-left text-sm">
 						<thead>
 							<tr class="border-b border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]">
-								<th class="px-3 py-2">Bucket Barcode</th>
+								<th class="px-3 py-2">Lot</th>
 								<th class="px-3 py-2">Qty</th>
 								<th class="px-3 py-2">Operator</th>
 								<th class="px-3 py-2">Status</th>
@@ -636,7 +744,7 @@
 										<a
 											href="/manufacturing/lots/{lot.lotId}"
 											class="text-[var(--color-tron-cyan)] hover:underline"
-										>{lot.bucketBarcode ?? '(in progress)'}</a>
+										>{lot.outputLotNumber ?? lot.bucketBarcode ?? '(in progress)'}</a>
 									</td>
 									<td class="px-3 py-2 text-[var(--color-tron-text)]">{lot.quantityProduced}</td>
 									<td class="px-3 py-2 text-[var(--color-tron-text)]">{lot.operatorName}</td>
