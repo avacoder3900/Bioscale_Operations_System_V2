@@ -74,12 +74,30 @@ export async function computeInUseState(equipmentId: string, equipmentType: Equi
 	}
 
 	if (equipmentType === 'oven') {
+		// WAX-FLOW-2: cartridges backing in the oven are individual
+		// CartridgeRecords (status='backing'); any of them locks the oven.
+		const backingCart = await CartridgeRecord.findOne({
+			status: 'backing', 'backing.ovenLocationId': equipmentId
+		}).select('_id backing.parentLotRecordId').lean() as any;
+		if (backingCart) {
+			return {
+				inUse: true,
+				reason: 'cartridges backing in oven',
+				lockedByRunId: backingCart.backing?.parentLotRecordId
+					? String(backingCart.backing.parentLotRecordId)
+					: String(backingCart._id),
+				lockedUntil: null,
+				operationalState
+			};
+		}
+		// LEGACY: undrained aggregate BackingLot buckets still lock the oven
+		// (read-only; nothing writes to BackingLot any more).
 		const lot = await BackingLot.findOne({ ovenLocationId: equipmentId, status: { $in: ['in_oven', 'ready'] } })
 			.select('_id status ovenEntryTime').lean() as any;
 		if (lot) {
 			return {
 				inUse: true,
-				reason: `backing lot ${lot.status}`,
+				reason: `backing lot ${lot.status} (legacy)`,
 				lockedByRunId: String(lot._id),
 				lockedUntil: null,
 				operationalState
@@ -119,6 +137,8 @@ export async function hasReferences(equipmentId: string, equipmentType: Equipmen
 		breakdown['temperature_alerts'] = await TemperatureAlert.countDocuments({ equipmentId }).catch(() => 0);
 	} else if (equipmentType === 'oven') {
 		breakdown['cartridge_records.ovenCure'] = await CartridgeRecord.countDocuments({ 'ovenCure.locationId': equipmentId });
+		// WAX-FLOW-2: per-cartridge backing records reference the oven directly
+		breakdown['cartridge_records.backing'] = await CartridgeRecord.countDocuments({ 'backing.ovenLocationId': equipmentId });
 		breakdown['backing_lots'] = await BackingLot.countDocuments({ ovenLocationId: equipmentId }).catch(() => 0);
 		breakdown['lot_records'] = await LotRecord.countDocuments({ 'ovenPlacement.ovenId': equipmentId }).catch(() => 0);
 		breakdown['temperature_alerts'] = await TemperatureAlert.countDocuments({ equipmentId }).catch(() => 0);

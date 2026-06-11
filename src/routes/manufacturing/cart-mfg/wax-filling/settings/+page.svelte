@@ -24,6 +24,7 @@
 				tubeCapacityUl: number;
 				waxPerCartridgeUl: number;
 				cartridgesPerColumn: number;
+				waxFillDeadVolumeUl: number;
 			};
 			rejectionReasons: RejectionReason[];
 		};
@@ -86,7 +87,8 @@
 			group: 'Incubator Tube Parameters',
 			items: [
 				{ key: 'waxPerCartridgeUl', label: 'Wax Per Cartridge', unit: 'µL', min: 1, max: 1000 },
-				{ key: 'cartridgesPerColumn', label: 'Cartridges Per Column', unit: '', min: 1, max: 24 }
+				{ key: 'cartridgesPerColumn', label: 'Cartridges Per Column', unit: '', min: 1, max: 24 },
+				{ key: 'waxFillDeadVolumeUl', label: 'Fill Dead Volume (added to per-cartridge × count)', unit: 'µL', min: 0, max: 2000 }
 			]
 		}
 	];

@@ -16,6 +16,10 @@ const waxFillingRunSchema = new Schema({
 	status: String,
 	operator: { _id: String, username: String },
 	abortReason: String, plannedCartridgeCount: Number,
+	// Computed 2ml-tube fill volume for this run (WAX-FLOW-3):
+	// waxPerCartridgeUl × plannedCartridgeCount + waxFillDeadVolumeUl.
+	// completeRun decrements WaxBatch / ReceivingLot volume by this amount.
+	fillVolumeUl: Number,
 	cartridgeIds: [String],
 
 	// Free-text operator notes attached to the run. Append-only metadata —

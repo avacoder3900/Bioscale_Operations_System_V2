@@ -47,9 +47,9 @@ interface StageMeta {
 const STAGE_META: Record<StageKey, StageMeta> = {
 	backing: {
 		key: 'backing', label: 'Backing', color: 'tron-purple',
-		description: 'Backing-lot buckets currently in or out of the oven. Cartridges at this stage have no individual UUIDs yet — they live as an aggregate count on the lot.',
+		description: 'Cartridges currently backing in ovens. Each cartridge is scanned in individually at WI-01 and exists as its own record; rows group them per WI-01 batch. Legacy backing-lot buckets are shown read-only until drained.',
 		headers: [
-			{ key: 'id', label: 'Lot Barcode' },
+			{ key: 'id', label: 'Lot' },
 			{ key: 'status', label: 'Status' },
 			{ key: 'count', label: 'Cartridges' },
 			{ key: 'location', label: 'Oven' },
@@ -133,19 +133,59 @@ function shortId(id: string, n = 8): string {
 	return id.length <= n + 3 ? id : `${id.slice(0, n)}…`;
 }
 
-async function loadBacking(now: Date): Promise<PipelineRow[]> {
-	const [lots, settings] = await Promise.all([
-		BackingLot.find({}).sort({ ovenEntryTime: -1 }).lean() as any as Promise<any[]>,
+async function loadBacking(now: Date, checkedOutIds: string[]): Promise<PipelineRow[]> {
+	// WAX-FLOW-2: cartridges at the backing stage are individual CartridgeRecords
+	// (status='backing'), scanned in one-by-one at WI-01. One row per WI-01 batch.
+	// Legacy BackingLot aggregate buckets (no per-cartridge records) are appended
+	// read-only until drained — nothing writes to BackingLot any more.
+	const [groups, legacyLots, settings] = await Promise.all([
+		CartridgeRecord.aggregate([
+			{ $match: { status: 'backing', _id: { $nin: checkedOutIds } } },
+			{ $group: {
+				_id: '$backing.parentLotRecordId',
+				count: { $sum: 1 },
+				oldestEntry: { $min: '$backing.ovenEntryTime' },
+				ovenNames: { $addToSet: '$backing.ovenLocationName' },
+				operator: { $last: '$backing.operator.username' }
+			} },
+			{ $sort: { oldestEntry: -1 } }
+		]) as any as Promise<any[]>,
+		BackingLot.find({
+			status: { $in: ['in_oven', 'ready', 'created'] },
+			cartridgeCount: { $gt: 0 }
+		}).sort({ ovenEntryTime: -1 }).lean() as any as Promise<any[]>,
 		ManufacturingSettings.findById('default').select('waxFilling.minOvenTimeMin').lean() as any as Promise<any>
 	]);
 	const minOvenMin: number = settings?.waxFilling?.minOvenTimeMin ?? 30;
 
-	return lots.map((l: any) => {
+	const batchRows: PipelineRow[] = groups.map((g: any) => {
+		const lotId = String(g._id ?? 'unknown');
+		const elapsed = ageMin(g.oldestEntry, now);
+		const ready = elapsed != null && elapsed >= minOvenMin;
+		return {
+			id: lotId,
+			idLabel: shortId(lotId, 12),
+			status: ready ? 'ready' : 'in_oven',
+			count: g.count ?? 0,
+			location: (g.ovenNames ?? []).filter(Boolean).join(', ') || null,
+			operator: g.operator ?? null,
+			when: g.oldestEntry ? new Date(g.oldestEntry).toISOString() : null,
+			elapsedMin: elapsed,
+			extras: {
+				ready: ready ? 'yes' : 'no',
+				minOvenMin,
+				remainingMin: ready || elapsed == null ? 0 : Math.max(0, minOvenMin - elapsed)
+			},
+			detailHref: `/manufacturing/cart-mfg/lots/${encodeURIComponent(lotId)}`
+		};
+	});
+
+	const legacyRows: PipelineRow[] = legacyLots.map((l: any) => {
 		const elapsed = ageMin(l.ovenEntryTime, now);
 		const ready = elapsed != null && elapsed >= minOvenMin;
 		return {
 			id: String(l._id),
-			idLabel: shortId(String(l._id), 12),
+			idLabel: `${shortId(String(l._id), 12)} (legacy bucket)`,
 			status: l.status ?? 'unknown',
 			count: l.cartridgeCount ?? 0,
 			location: l.ovenLocationName ?? l.ovenLocationId ?? null,
@@ -155,11 +195,14 @@ async function loadBacking(now: Date): Promise<PipelineRow[]> {
 			extras: {
 				ready: ready ? 'yes' : (l.status === 'consumed' ? '—' : 'no'),
 				minOvenMin,
-				remainingMin: ready || elapsed == null ? 0 : Math.max(0, minOvenMin - elapsed)
+				remainingMin: ready || elapsed == null ? 0 : Math.max(0, minOvenMin - elapsed),
+				legacy: 'legacy bucket'
 			},
 			detailHref: null
 		};
 	});
+
+	return [...batchRows, ...legacyRows];
 }
 
 async function loadWaxFill(now: Date): Promise<PipelineRow[]> {
@@ -339,7 +382,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	let rows: PipelineRow[] = [];
 
 	if (stage === 'backing') {
-		rows = await loadBacking(now);
+		const checkedOutIds = await getCheckedOutCartridgeIds();
+		rows = await loadBacking(now, checkedOutIds);
 	} else if (stage === 'wax_fill') {
 		rows = await loadWaxFill(now);
 	} else if (stage === 'cooling') {

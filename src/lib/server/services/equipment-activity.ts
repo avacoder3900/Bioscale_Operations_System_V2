@@ -5,7 +5,8 @@
  *   - DeviceEvent.find({ deviceId: equipmentId })
  *   - CartridgeRecord wax-storage events (waxStorage.locationId === equipmentId)
  *   - WaxFillingRun events keyed by deck/tray/robot/oven
- *   - BackingLot events (oven)
+ *   - CartridgeRecord backing-scan events (oven, WAX-FLOW-2 — grouped per WI-01 lot)
+ *   - Legacy BackingLot events (oven)
  *   - TemperatureAlert events (equipmentId)
  *   - ManualCartridgeRemoval — checkout events on cartridges that were stored
  *     in this fridge (added 2026-04-23)
@@ -93,7 +94,39 @@ export async function loadUnifiedActivity(
 		});
 	}
 
-	// 4. BackingLot events (oven)
+	// 4. Per-cartridge backing scans into this oven (WAX-FLOW-2), grouped per
+	// WI-01 parent lot. Matches on backing.ovenLocationId regardless of current
+	// status so the event survives the cartridge moving downstream.
+	const backingScans = await CartridgeRecord.aggregate([
+		{ $match: { 'backing.ovenLocationId': equipmentId, 'backing.ovenEntryTime': { $gte: since } } },
+		{ $group: {
+			_id: '$backing.parentLotRecordId',
+			count: { $sum: 1 },
+			firstScanAt: { $min: '$backing.ovenEntryTime' },
+			lastScanAt: { $max: '$backing.ovenEntryTime' },
+			operator: { $last: '$backing.operator.username' }
+		} },
+		{ $sort: { lastScanAt: -1 } },
+		{ $limit: limit }
+	]).catch(() => []) as any[];
+	for (const g of backingScans) {
+		events.push({
+			at: g.lastScanAt ?? new Date(),
+			kind: 'backing_scan',
+			source: 'cartridge_records',
+			summary: `${g.count} cartridge(s) scanned into oven (lot ${g._id ?? 'unknown'})`,
+			payload: {
+				lotRecordId: g._id ?? null,
+				count: g.count,
+				firstScanAt: g.firstScanAt ?? null,
+				lastScanAt: g.lastScanAt ?? null,
+				operator: g.operator ?? null
+			}
+		});
+	}
+
+	// 4b. LEGACY BackingLot events (oven) — aggregate buckets predating
+	// WAX-FLOW-2; kept until those lots drain.
 	const backingLots = await BackingLot.find({ ovenLocationId: equipmentId, ovenEntryTime: { $gte: since } })
 		.sort({ ovenEntryTime: -1 }).limit(limit).lean().catch(() => []) as any[];
 	for (const b of backingLots) {

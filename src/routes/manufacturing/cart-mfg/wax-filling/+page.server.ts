@@ -2,7 +2,7 @@ import { redirect, fail } from '@sveltejs/kit';
 import mongoose from 'mongoose';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
-	Equipment, EquipmentLocation, AuditLog, BackingLot, WaxBatch, ReceivingLot, LotRecord,
+	Equipment, EquipmentLocation, AuditLog, BackingLot, WaxBatch, ReceivingLot,
 	OpentronsRobot, ManualCartridgeRemoval
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
@@ -16,7 +16,18 @@ import { getRobot, robotGet, robotPost } from '$lib/server/opentrons/proxy';
 import bcrypt from 'bcryptjs';
 import type { PageServerLoad, Actions } from './$types';
 
-const WAX_FILL_VOLUME_UL = 800; // μL deducted from the 15ml WaxBatch per run
+// Legacy fallback for runs created before fillVolumeUl was computed per run
+// (WAX-FLOW-3: waxPerCartridgeUl × plannedCartridgeCount + waxFillDeadVolumeUl).
+const LEGACY_WAX_FILL_VOLUME_UL = 800;
+
+const WAX_TUBE_PART_NUMBER = 'PT-CT-114'; // purchased 15ml wax tubes (ReceivingLot source)
+
+/** 2ml-tube fill volume for a run (WAX-FLOW-3). */
+function computeFillVolumeUl(waxSettings: any, plannedCount: number): number {
+	const perCart = Number(waxSettings?.waxPerCartridgeUl ?? 30);
+	const dead = Number(waxSettings?.waxFillDeadVolumeUl ?? 80);
+	return Math.ceil(perCart * Math.max(1, plannedCount) + dead);
+}
 
 /**
  * Verify admin credentials for an override. Looks up the user by username,
@@ -42,7 +53,8 @@ export const config = { maxDuration: 60 };
 function toStage(status: string | null | undefined): string | null {
 	if (!status) return null;
 	const map: Record<string, string> = {
-		setup: 'Setup', Setup: 'Setup',
+		// Setup stage removed (WAX-FLOW-3) — stale Setup runs land on Loading
+		setup: 'Loading', Setup: 'Loading',
 		loading: 'Loading', Loading: 'Loading',
 		running: 'Running', Running: 'Running',
 		awaiting_removal: 'Awaiting Removal', 'Awaiting Removal': 'Awaiting Removal',
@@ -82,15 +94,16 @@ function emptyState(robotId: string, loadError: string | null = null) {
 		settings: {
 			runDurationMin: 45, removeDeckWarningMin: 5, coolingWarningMin: 7,
 			deckLockoutMin: 25, incubatorTempC: 37, heaterTempC: 65,
-			minCoolingBeforeQcMin: 2
+			minCoolingBeforeQcMin: 2, waxPerCartridgeUl: 30, waxFillDeadVolumeUl: 80
 		},
 		tubeData: null as null | {
 			tubeId: string; initialVolumeUl: number; remainingVolumeUl: number;
 			status: string; totalCartridgesFilled: number; totalRunsUsed: number;
 		},
-		activeLotId: null as string | null,
-		activeLotCartridgeCount: null as number | null,
-		ovenLots: [] as { lotId: string; ready: boolean; cartridgeCount: number }[],
+		backedOvens: [] as { ovenId: string; ovenName: string; total: number; ready: number }[],
+		backedReadyCount: 0,
+		backedTotalCount: 0,
+		waxLots: [] as { barcode: string; label: string; remainingVolumeUl: number; source: string }[],
 		rejectionCodes: [] as any[],
 		qcCartridges: [] as any[],
 		storageCartridges: [] as any[],
@@ -318,31 +331,65 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			}))
 		];
 
-		// Backing lots from BackingLot collection
+		// Backed cartridges in ovens (per-cartridge, WAX-FLOW-2 — replaces the
+		// retired BackingLot aggregate). Grouped by oven for the deck-load hint.
 		const minOvenTimeMin = wax.minOvenTimeMin ?? 60;
 		const now = Date.now();
-		const backingLotsRaw = await BackingLot.find({ status: { $in: ['in_oven', 'ready', 'created'] } })
-			.sort({ ovenEntryTime: -1 }).lean().catch(() => []);
+		const backedCartsRaw = await CartridgeRecord.find(
+			{ status: 'backing' },
+			{ _id: 1, 'backing.ovenEntryTime': 1, 'backing.ovenLocationId': 1, 'backing.ovenLocationName': 1 }
+		).lean().catch(() => []);
 
-		const ovenLots = (backingLotsRaw as any[]).map((bl: any) => {
-			const entryTime = bl.ovenEntryTime ? new Date(bl.ovenEntryTime).getTime() : 0;
-			const elapsedMin = entryTime ? (now - entryTime) / 60000 : 0;
-			const remainingMin = Math.max(0, Math.ceil(minOvenTimeMin - elapsedMin));
-			return {
-				lotId: String(bl._id),
-				ready: elapsedMin >= minOvenTimeMin,
-				cartridgeCount: bl.cartridgeCount ?? 0,
-				ovenName: bl.ovenLocationName ?? '',
-				ovenId: bl.ovenLocationId ?? '',
-				elapsedMin: Math.floor(elapsedMin),
-				remainingMin,
-				ovenEntryTime: bl.ovenEntryTime ? new Date(bl.ovenEntryTime).toISOString() : null
+		const ovenGroupMap = new Map<string, { ovenId: string; ovenName: string; total: number; ready: number }>();
+		let backedReadyCount = 0;
+		for (const c of backedCartsRaw as any[]) {
+			const entry = c.backing?.ovenEntryTime ? new Date(c.backing.ovenEntryTime).getTime() : 0;
+			const isReady = entry > 0 && (now - entry) / 60000 >= minOvenTimeMin;
+			if (isReady) backedReadyCount++;
+			const key = c.backing?.ovenLocationId ?? 'unknown';
+			const g = ovenGroupMap.get(key) ?? {
+				ovenId: key,
+				ovenName: c.backing?.ovenLocationName ?? 'Unknown oven',
+				total: 0,
+				ready: 0
 			};
-		});
+			g.total++;
+			if (isReady) g.ready++;
+			ovenGroupMap.set(key, g);
+		}
+		const backedOvens = [...ovenGroupMap.values()].sort((a, b) => a.ovenName.localeCompare(b.ovenName));
 
-		// activeLotId: the current lot associated with the active run (stored on run)
-		const activeLotId: string | null = run?.activeLotId ?? null;
-		const activeLot = activeLotId ? ovenLots.find((l) => l.lotId === activeLotId) : null;
+		// Wax lot dropdown (WAX-FLOW-3): in-house WaxBatches + purchased
+		// PT-CT-114 receiving lots with remaining volume. Few of these ever
+		// exist at once, so a dropdown beats a barcode scan.
+		const [waxBatchesRaw, waxReceivingRaw] = await Promise.all([
+			WaxBatch.find({ remainingVolumeUl: { $gt: 0 } })
+				.select('lotNumber lotBarcode remainingVolumeUl initialVolumeUl createdAt')
+				.sort({ createdAt: -1 }).lean().catch(() => []),
+			ReceivingLot.find({
+				'part.partNumber': WAX_TUBE_PART_NUMBER,
+				status: { $in: ['accepted', 'in_progress'] },
+				quantity: { $gt: 0 }
+			}).select('lotId lotNumber quantity consumedUl createdAt').sort({ createdAt: -1 }).lean().catch(() => [])
+		]);
+		const waxLots = [
+			...(waxBatchesRaw as any[]).map((b: any) => ({
+				barcode: b.lotBarcode || b.lotNumber,
+				label: `${b.lotNumber} (in-house)`,
+				remainingVolumeUl: Number(b.remainingVolumeUl ?? 0),
+				source: 'wax_batch' as const
+			})),
+			...(waxReceivingRaw as any[]).map((l: any) => {
+				const totalUl = Number(l.quantity ?? 0) * 12000;
+				const remaining = Math.max(0, totalUl - Number(l.consumedUl ?? 0));
+				return {
+					barcode: l.lotId,
+					label: `${l.lotNumber || l.lotId} (purchased)`,
+					remainingVolumeUl: remaining,
+					source: 'receiving_lot' as const
+				};
+			})
+		].filter((l) => l.remainingVolumeUl > 0);
 
 		// Check if robot is blocked by reagent filling
 		const robotBlocked = activeReagentRunRaw
@@ -366,12 +413,15 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 				deckLockoutMin: wax.deckLockoutMin ?? 25,
 				incubatorTempC: wax.incubatorTempC ?? 37,
 				heaterTempC: wax.heaterTempC ?? 65,
-				minCoolingBeforeQcMin: wax.minCoolingBeforeQcMin ?? 2
+				minCoolingBeforeQcMin: wax.minCoolingBeforeQcMin ?? 2,
+				waxPerCartridgeUl: wax.waxPerCartridgeUl ?? 30,
+				waxFillDeadVolumeUl: wax.waxFillDeadVolumeUl ?? 80
 			},
 			tubeData,
-			activeLotId,
-			activeLotCartridgeCount: activeLot?.cartridgeCount ?? null,
-			ovenLots,
+			backedOvens,
+			backedReadyCount,
+			backedTotalCount: (backedCartsRaw as any[]).length,
+			waxLots: JSON.parse(JSON.stringify(waxLots)),
 			rejectionCodes,
 			qcCartridges,
 			storageCartridges,
@@ -421,151 +471,8 @@ async function resolveWaxRunId(data: FormData): Promise<string | null> {
 }
 
 export const actions: Actions = {
-	/** Scan backing lot barcode — validates oven time and associates lot with run */
-	scanBackingLot: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const lotBarcode = (data.get('lotBarcode') as string)?.trim();
-		const runId = (data.get('runId') as string)?.trim();
-		const override = data.get('override') === 'true';
-		const testMode = data.get('testMode') === 'true';
-		const adminUser = (data.get('adminUser') as string)?.trim() ?? '';
-		const adminPass = (data.get('adminPass') as string) ?? '';
-
-		// Test mode: synthesize a backing lot so the wax flow can be run
-		// end-to-end without touching real BackingLot inventory. The lot id
-		// is deterministic per run so re-clicks during testing reuse the
-		// same row rather than piling up. No admin re-auth required.
-		if (testMode) {
-			if (!runId) return fail(400, { error: 'runId required for test mode' });
-			const testLotId = `TEST-LOT-${runId}`;
-			const existing = await BackingLot.findById(testLotId).lean() as any;
-			if (existing) {
-				await BackingLot.findByIdAndUpdate(testLotId, {
-					$set: {
-						status: 'ready',
-						cartridgeCount: 24
-					}
-				});
-			} else {
-				await BackingLot.create({
-					_id: testLotId,
-					lotType: 'backing',
-					ovenEntryTime: new Date(),
-					status: 'ready',
-					cartridgeCount: 24,
-					operator: { _id: locals.user._id, username: locals.user.username }
-				});
-			}
-			await WaxFillingRun.findByIdAndUpdate(runId, { $set: { activeLotId: testLotId } });
-			await AuditLog.create({
-				_id: generateId(),
-				tableName: 'backing_lots',
-				recordId: testLotId,
-				action: existing ? 'UPDATE' : 'INSERT',
-				changedBy: locals.user.username,
-				changedAt: new Date(),
-				reason: 'Test mode — synthetic backing lot for end-to-end test (no real inventory impact)',
-				newData: { testMode: true, runId, lotId: testLotId, cartridgeCount: 24 }
-			});
-			return {
-				success: true,
-				lotId: testLotId,
-				cartridgeCount: 24,
-				testMode: true
-			};
-		}
-
-		if (!lotBarcode) return fail(400, { error: 'Lot barcode is required' });
-
-		const settingsDoc = await ManufacturingSettings.findById('default').lean() as any;
-		const minOvenTimeMin: number = settingsDoc?.waxFilling?.minOvenTimeMin ?? 60;
-
-		const lot = await BackingLot.findById(lotBarcode).lean() as any;
-		if (!lot) {
-			return fail(404, { error: `Lot "${lotBarcode}" not found. Register it on the manufacturing dashboard first.` });
-		}
-		if (lot.status === 'consumed') {
-			return fail(400, { error: `Lot "${lotBarcode}" has already been consumed.` });
-		}
-
-		const entryTime = lot.ovenEntryTime ? new Date(lot.ovenEntryTime).getTime() : 0;
-		if (!entryTime) {
-			return fail(400, { error: `Lot "${lotBarcode}" has no oven entry time recorded.` });
-		}
-
-		const elapsedMin = (Date.now() - entryTime) / 60000;
-		const remainingMin = Math.ceil(Math.max(0, minOvenTimeMin - elapsedMin));
-
-		// Admin override path — requires re-auth (username + password). Any
-		// admin (permission `admin:full` or `admin:users`) can override; the
-		// event is recorded in audit_log for traceability.
-		if (override) {
-			const verified = await verifyAdminOverride(adminUser, adminPass);
-			if (!verified.ok) {
-				return fail(403, { error: verified.error, remainingMin, lotId: lotBarcode, requiresOverride: true });
-			}
-			await BackingLot.findByIdAndUpdate(lotBarcode, { $set: { status: 'ready' } });
-			if (runId) {
-				await WaxFillingRun.findByIdAndUpdate(runId, { $set: { activeLotId: lotBarcode } });
-			}
-			await AuditLog.create({
-				_id: generateId(),
-				tableName: 'backing_lots',
-				recordId: lotBarcode,
-				action: 'UPDATE',
-				changedBy: verified.user.username,
-				changedAt: new Date(),
-				reason: `Wax cure time override by admin — ${remainingMin} min remaining`,
-				newData: {
-					override: true,
-					operatorUsername: locals.user.username,
-					adminUsername: verified.user.username,
-					minOvenTimeMin,
-					elapsedMin: Math.floor(elapsedMin),
-					remainingMin
-				}
-			});
-			return {
-				success: true,
-				lotId: lotBarcode,
-				cartridgeCount: lot.cartridgeCount ?? 0,
-				elapsedMin: Math.floor(elapsedMin),
-				overridden: true,
-				overrideBy: verified.user.username
-			};
-		}
-
-		if (elapsedMin < minOvenTimeMin) {
-			return fail(400, {
-				error: `Lot not ready. ${remainingMin} minute${remainingMin === 1 ? '' : 's'} remaining (minimum ${minOvenTimeMin} min required). Wait, pick a bucket that has passed the timer, or get an admin to override.`,
-				remainingMin,
-				lotId: lotBarcode,
-				requiresOverride: true
-			});
-		}
-
-		// Mark lot as ready in DB
-		await BackingLot.findByIdAndUpdate(lotBarcode, { $set: { status: 'ready' } });
-
-		// If a runId was provided, record activeLotId on the run
-		if (runId) {
-			await WaxFillingRun.findByIdAndUpdate(runId, {
-				$set: { activeLotId: lotBarcode }
-			});
-		}
-
-		return {
-			success: true,
-			lotId: lotBarcode,
-			cartridgeCount: lot.cartridgeCount ?? 0,
-			elapsedMin: Math.floor(elapsedMin)
-		};
-	},
-
-	/** Create a new wax filling run in Setup status */
+	/** Create a new wax filling run — starts directly in Loading (the setup
+	 *  confirmation screen was removed in WAX-FLOW-3). */
 	createRun: async ({ request, locals, url }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
@@ -584,7 +491,7 @@ export const actions: Actions = {
 		const run = await WaxFillingRun.create({
 			robot: { _id: robotId, name: robotDoc?.name ?? robotId },
 			operator: { _id: locals.user!._id, username: locals.user!.username },
-			status: 'Setup',
+			status: 'Loading',
 			cartridgeIds: [],
 			setupTimestamp: new Date()
 		});
@@ -601,56 +508,53 @@ export const actions: Actions = {
 		return { success: true, runId: String(run._id) };
 	},
 
-	/** Confirm setup — transition existing run from Setup to Loading */
-	confirmSetup: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		await connectDB();
-
-		const data = await request.formData();
-		const runId = data.get('runId') as string;
-		if (!runId) return fail(400, { error: 'Run ID required' });
-
-		const run = await WaxFillingRun.findById(runId).lean() as any;
-		if (!run) return fail(400, { error: 'Run not found' });
-		if (run.status !== 'Setup' && run.status !== 'setup') {
-			return fail(400, { error: `Run is not in Setup status (current: ${run.status})` });
-		}
-
-		await WaxFillingRun.findByIdAndUpdate(runId, {
-			$set: { status: 'Loading', updatedAt: new Date() }
-		});
-
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'wax_filling_runs',
-			recordId: runId,
-			action: 'UPDATE',
-			changedBy: locals.user?.username,
-			changedAt: new Date(),
-			newData: { status: 'Loading' }
-		});
-
-		return { success: true, runId };
-	},
-
-	/** Record wax preparation (tube info) */
+	/**
+	 * Record wax preparation (WAX-FLOW-3): wax lot chosen from a dropdown,
+	 * fill volume computed from cartridge count. Validates the selected lot
+	 * still has enough remaining volume server-side.
+	 */
 	recordWaxPrep: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
-		const waxTubeId = (data.get('waxTubeId') as string) || undefined;
-		const waxSourceLot = (data.get('waxSourceLot') as string) || undefined;
-		const plannedCartridgeCount = data.get('plannedCartridgeCount') ? Number(data.get('plannedCartridgeCount')) : undefined;
+		const waxSourceLot = (data.get('waxSourceLot') as string)?.trim() || '';
+		const plannedCartridgeCount = data.get('plannedCartridgeCount') ? Number(data.get('plannedCartridgeCount')) : 24;
 
-		const update: Record<string, any> = { status: 'Loading' };
-		if (waxTubeId) update.waxTubeId = waxTubeId;
-		if (waxSourceLot) update.waxSourceLot = waxSourceLot;
-		if (plannedCartridgeCount) update.plannedCartridgeCount = plannedCartridgeCount;
+		if (!runId) return fail(400, { error: 'Run ID required' });
+		if (!waxSourceLot) return fail(400, { error: 'Select a wax lot' });
+		if (!plannedCartridgeCount || plannedCartridgeCount < 1 || plannedCartridgeCount > 24) {
+			return fail(400, { error: 'Cartridge count must be 1-24' });
+		}
 
-		await WaxFillingRun.findByIdAndUpdate(runId, { $set: update });
-		return { success: true };
+		const settingsDoc = await ManufacturingSettings.findById('default').select('waxFilling').lean() as any;
+		const fillVolumeUl = computeFillVolumeUl(settingsDoc?.waxFilling, plannedCartridgeCount);
+
+		// Validate remaining volume on whichever source the dropdown row came from
+		const [waxBatch, waxReceiving] = await Promise.all([
+			WaxBatch.findOne({ $or: [{ lotBarcode: waxSourceLot }, { lotNumber: waxSourceLot }] })
+				.select('remainingVolumeUl lotNumber').lean() as any,
+			ReceivingLot.findOne({
+				$or: [{ lotId: waxSourceLot }, { bagBarcode: waxSourceLot }, { lotNumber: waxSourceLot }],
+				'part.partNumber': WAX_TUBE_PART_NUMBER
+			}).select('quantity consumedUl lotNumber lotId').lean() as any
+		]);
+		let remaining: number | null = null;
+		if (waxBatch) {
+			remaining = Number(waxBatch.remainingVolumeUl ?? 0);
+		} else if (waxReceiving) {
+			remaining = Math.max(0, Number(waxReceiving.quantity ?? 0) * 12000 - Number(waxReceiving.consumedUl ?? 0));
+		}
+		if (remaining === null) return fail(404, { error: `Wax lot "${waxSourceLot}" not found` });
+		if (remaining < fillVolumeUl) {
+			return fail(400, { error: `Wax lot only has ${remaining} μL remaining — this run needs ${fillVolumeUl} μL. Pick another lot.` });
+		}
+
+		await WaxFillingRun.findByIdAndUpdate(runId, {
+			$set: { status: 'Loading', waxSourceLot, plannedCartridgeCount, fillVolumeUl }
+		});
+		return { success: true, fillVolumeUl };
 	},
 
 	/** Load deck — add cartridges to run */
@@ -667,6 +571,11 @@ export const actions: Actions = {
 		const deckId = deckIdRaw ? ((await resolveDeckId(deckIdRaw)) ?? deckIdRaw) : undefined;
 		const ovenId = (data.get('ovenId') as string) || undefined;
 		const cartridgeScansRaw = data.get('cartridgeScans') as string;
+		// WAX-FLOW-2: per-cartridge oven-time admin override + test mode
+		const override = data.get('override') === 'true';
+		const testMode = data.get('testMode') === 'true';
+		const adminUser = (data.get('adminUser') as string)?.trim() ?? '';
+		const adminPass = (data.get('adminPass') as string) ?? '';
 
 		// Deck conflict check runs at scan time (see /api/dev/validate-equipment
 		// ?type=deck). No duplicate check here — this action is the commit.
@@ -736,85 +645,115 @@ export const actions: Actions = {
 		const run = await WaxFillingRun.findById(runId).lean() as any;
 		if (!run) return fail(404, { error: 'Run not found' });
 
-		// Get activeLotId from the run for traceability
-		const activeLotId: string | undefined = (run as any).activeLotId ?? undefined;
-
-		// Resolve the parent LotRecord so we can copy the raw-material lineage
-		// (cartridge blank / thermoseal / barcode-label input lot barcodes, plus
-		// the QR ref and oven placement recorded at WI-01) onto each scanned
-		// cartridge. This is the point at which a physical cartridge barcode
-		// becomes an individual CartridgeRecord — WI-01 only tracks the aggregate
-		// BackingLot up to this moment.
-		const parentLot = activeLotId
-			? await LotRecord.findOne({ bucketBarcode: activeLotId }).lean() as any
-			: null;
-		const backingInputLots = (parentLot?.inputLots ?? []) as Array<any>;
-		const backingInputLotByMaterial: Record<string, string | null> = {
-			cartridgeBlankLot: backingInputLots.find((l) => l.materialName === 'Cartridge')?.barcode ?? null,
-			thermosealLot: backingInputLots.find((l) => l.materialName === 'Thermoseal Laser Cut Sheet')?.barcode ?? null,
-			barcodeLabelLot: backingInputLots.find((l) => l.materialName === 'Barcode')?.barcode ?? null
-		};
-
-		// Create CartridgeRecord stubs and link to this wax run.
-		// Also record baking oven exit: cartridges are leaving the baking oven
-		// (where they were placed during WI-01) and going onto the deck.
+		// WAX-FLOW-2: cartridges were already originated at WI-01 backing
+		// (status 'backing', full lineage + oven entry time on the record).
+		// loadDeck validates each scan against those records and gates on the
+		// per-cartridge minimum oven time.
 		if (cartridgeIds.length > 0) {
 			const now = new Date();
+			const settingsDocLd = await ManufacturingSettings.findById('default')
+				.select('waxFilling.minOvenTimeMin').lean() as any;
+			const minOvenTimeMin: number = settingsDocLd?.waxFilling?.minOvenTimeMin ?? 60;
 
-			// Decrement FIRST with a conditional that refuses to over-pull.
-			// If the bucket doesn't have enough cartridges left, fail the whole
-			// loadDeck before we create any CartridgeRecord rows. This closes the
-			// race where two concurrent loadDecks could each pull past zero, and
-			// the gap where an operator scans more cartridges than the bucket
-			// holds — see the 2941bb67 incident (54-cart lot, 66 pulled).
-			if (activeLotId) {
-				const updatedLot = await BackingLot.findOneAndUpdate(
-					{ _id: activeLotId, cartridgeCount: { $gte: cartridgeIds.length } },
-					{ $inc: { cartridgeCount: -cartridgeIds.length } },
-					{ new: true }
-				).lean() as any;
-				if (!updatedLot) {
-					const current = await BackingLot.findById(activeLotId).select('cartridgeCount status').lean() as any;
-					return fail(400, {
-						error: `Backing lot ${activeLotId} has only ${current?.cartridgeCount ?? 0} cartridge(s) remaining (status=${current?.status ?? 'unknown'}) but ${cartridgeIds.length} were scanned. Load fewer cartridges or scan a different lot.`
-					});
+			const existingCarts = await CartridgeRecord.find(
+				{ _id: { $in: cartridgeIds } },
+				{ _id: 1, status: 1, 'backing.ovenEntryTime': 1, 'waxFilling.runId': 1 }
+			).lean() as any[];
+			const cartById = new Map(existingCarts.map((c: any) => [String(c._id), c]));
+
+			const missing: string[] = [];
+			const wrongStatus: { id: string; status: string }[] = [];
+			const underTime: { id: string; remainingMin: number }[] = [];
+			for (const cid of cartridgeIds) {
+				const c = cartById.get(cid);
+				if (!c) { missing.push(cid); continue; }
+				// Idempotent retry: already stamped onto this run by a prior submit
+				if (c.status === 'wax_filling' && c.waxFilling?.runId === runId) continue;
+				if (c.status !== 'backing') { wrongStatus.push({ id: cid, status: c.status ?? '(none)' }); continue; }
+				const entry = c.backing?.ovenEntryTime ? new Date(c.backing.ovenEntryTime).getTime() : 0;
+				const elapsedMin = entry ? (now.getTime() - entry) / 60000 : 0;
+				if (!entry || elapsedMin < minOvenTimeMin) {
+					underTime.push({ id: cid, remainingMin: Math.ceil(Math.max(0, minOvenTimeMin - elapsedMin)) });
 				}
-				if ((updatedLot.cartridgeCount ?? 0) <= 0) {
-					await BackingLot.findByIdAndUpdate(activeLotId, {
-						$set: { cartridgeCount: 0, status: 'consumed' }
+			}
+
+			// Test mode: synthesize backed carts for unknown barcodes so the
+			// flow can be exercised end-to-end without WI-01. Synthetic carts
+			// have no backing.parentLotRecordId — cancel/abort deletes them.
+			if (missing.length > 0 && testMode) {
+				await CartridgeRecord.bulkWrite(missing.map((cid) => ({
+					updateOne: {
+						filter: { _id: cid },
+						update: {
+							$setOnInsert: {
+								_id: cid,
+								status: 'backing',
+								'backing.ovenEntryTime': new Date(now.getTime() - minOvenTimeMin * 60000),
+								'backing.operator': { _id: locals.user!._id, username: locals.user!.username },
+								'backing.recordedAt': now
+							}
+						},
+						upsert: true
+					}
+				})));
+				await AuditLog.create({
+					_id: generateId(),
+					tableName: 'cartridge_records',
+					recordId: runId,
+					action: 'INSERT',
+					changedBy: locals.user.username,
+					changedAt: now,
+					reason: 'Test mode — synthetic backed cartridges for end-to-end test',
+					newData: { testMode: true, runId, cartridgeIds: missing }
+				});
+				missing.length = 0;
+			}
+
+			if (missing.length > 0) {
+				return fail(400, { error: `Cartridge(s) not found in backing: ${missing.join(', ')}. Scan them into the oven at Cartridge Back (WI-01) first.` });
+			}
+			if (wrongStatus.length > 0) {
+				return fail(400, { error: `Cartridge(s) not available for wax filling: ${wrongStatus.map((w) => `${w.id} (${w.status})`).join(', ')}.` });
+			}
+			if (underTime.length > 0 && !testMode) {
+				if (override) {
+					const verified = await verifyAdminOverride(adminUser, adminPass);
+					if (!verified.ok) {
+						return fail(403, { error: verified.error, requiresOverride: true });
+					}
+					await AuditLog.create({
+						_id: generateId(),
+						tableName: 'cartridge_records',
+						recordId: runId,
+						action: 'UPDATE',
+						changedBy: verified.user.username,
+						changedAt: now,
+						reason: `Wax cure time override by admin — ${underTime.length} cartridge(s) under ${minOvenTimeMin} min`,
+						newData: {
+							override: true,
+							operatorUsername: locals.user.username,
+							adminUsername: verified.user.username,
+							minOvenTimeMin,
+							cartridges: underTime
+						}
+					});
+				} else {
+					const worst = Math.max(...underTime.map((u) => u.remainingMin));
+					return fail(400, {
+						error: `${underTime.length} cartridge(s) have not finished the ${minOvenTimeMin} min oven time (up to ${worst} min remaining). Wait, or get an admin to override.`,
+						requiresOverride: true
 					});
 				}
 			}
 
-			// Lineage filters: the new backing.* fields are written only when
-			// they aren't already populated (so a re-scan of an existing cart
-			// after abort/rescan still gets its lineage stamped, but we don't
-			// stomp an existing record's lineage with a different lot).
 			const ops = cartridgeIds.map((cid: string, idx: number) => ({
 				updateOne: {
 					filter: { _id: cid },
 					update: {
-						$setOnInsert: {
-							_id: cid,
-							'backing.operator': { _id: locals.user!._id, username: locals.user!.username },
-							'backing.recordedAt': now
-						},
 						$set: {
 							status: 'wax_filling',
-							'backing.lotId': activeLotId ?? null,
-							// Record baking oven exit — cartridge is leaving the baking oven
+							// Cartridge is leaving the backing oven onto the deck
 							'backing.ovenExitTime': now,
-							// Material lineage copied from the parent LotRecord. Using
-							// $set (not $setOnInsert) so a re-scan after abort still
-							// writes them. loadDeck already rejects cartridges that
-							// finished another wax run, so this can't clobber finished
-							// work.
-							'backing.lotQrCode': parentLot?.qrCodeRef ?? null,
-							'backing.ovenEntryTime': parentLot?.ovenEntryTime ?? null,
-							'backing.cartridgeBlankLot': backingInputLotByMaterial.cartridgeBlankLot,
-							'backing.thermosealLot': backingInputLotByMaterial.thermosealLot,
-							'backing.barcodeLabelLot': backingInputLotByMaterial.barcodeLabelLot,
-							'backing.parentLotRecordId': parentLot?._id ?? null,
 							'waxFilling.runId': runId,
 							'waxFilling.deckId': deckId ?? null,
 							'waxFilling.robotId': run.robot?._id ?? null,
@@ -822,21 +761,13 @@ export const actions: Actions = {
 							'waxFilling.deckPosition': idx + 1,
 							'waxFilling.operator': { _id: locals.user!._id, username: locals.user!.username }
 						}
-					},
-					upsert: true
+					}
 				}
 			}));
 			try {
 				await CartridgeRecord.bulkWrite(ops);
 			} catch (err) {
 				console.error('[loadDeck] bulkWrite error:', err instanceof Error ? err.message : err);
-				// Roll back the BackingLot decrement so the bucket isn't silently
-				// drained by a failed load.
-				if (activeLotId) {
-					await BackingLot.findByIdAndUpdate(activeLotId, {
-						$inc: { cartridgeCount: cartridgeIds.length }
-					}).catch(() => {});
-				}
 				return fail(500, { error: `Failed to save cartridge records: ${err instanceof Error ? err.message : 'Unknown error'}` });
 			}
 		}
@@ -1487,32 +1418,31 @@ export const actions: Actions = {
 			return fail(400, { error: 'Cannot cancel: the OT-2 has already completed this run. Reject individual cartridges at QC instead.' });
 		}
 
-		// Look up the run so we know which BackingLot to restore + how many to refund
-		const runBeforeCancel = await WaxFillingRun.findById(runId).select('activeLotId cartridgeIds').lean() as any;
-		const cancelRefundLotId: string | undefined = runBeforeCancel?.activeLotId ?? undefined;
+		const runBeforeCancel = await WaxFillingRun.findById(runId).select('cartridgeIds').lean() as any;
 		const cancelScannedIds: string[] = (runBeforeCancel?.cartridgeIds ?? []) as string[];
 
 		await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
 		});
 
-		// Cartridges scanned onto the deck never actually got wax-filled. Delete
-		// the CartridgeRecords so the same physical barcodes can be re-scanned
-		// on a future run. status='backing' is not a valid CartridgeRecord state
-		// post-WI-01-refactor (cartridges only individuate on wax scan).
+		// Cartridges scanned onto the deck never actually got wax-filled.
+		// WI-01-originated carts go back to 'backing' (the operator returns
+		// them to the oven; their original ovenEntryTime is preserved).
+		// Test-mode synthetics (no parentLotRecordId) are deleted.
 		if (cancelScannedIds.length > 0) {
+			await CartridgeRecord.updateMany(
+				{
+					_id: { $in: cancelScannedIds },
+					'waxFilling.runId': runId,
+					status: 'wax_filling',
+					'backing.parentLotRecordId': { $exists: true, $ne: null }
+				},
+				{ $set: { status: 'backing' }, $unset: { waxFilling: '', 'backing.ovenExitTime': '' } }
+			);
 			await CartridgeRecord.deleteMany({
 				_id: { $in: cancelScannedIds },
 				'waxFilling.runId': runId,
 				status: 'wax_filling'
-			});
-		}
-
-		// Refund the BackingLot count so the bucket stays available for another run.
-		if (cancelRefundLotId && cancelScannedIds.length > 0) {
-			await BackingLot.findByIdAndUpdate(cancelRefundLotId, {
-				$inc: { cartridgeCount: cancelScannedIds.length },
-				$set: { status: 'ready' }
 			});
 		}
 
@@ -1523,7 +1453,7 @@ export const actions: Actions = {
 			action: 'UPDATE',
 			changedBy: locals.user?.username,
 			changedAt: now,
-			newData: { status: 'aborted', abortReason: reason, refundedToLot: cancelRefundLotId, refundedCount: cancelScannedIds.length }
+			newData: { status: 'aborted', abortReason: reason, revertedToBacking: cancelScannedIds.length }
 		});
 
 		await notifyRunLifecycle({
@@ -1551,28 +1481,28 @@ export const actions: Actions = {
 			return fail(400, { error: 'Cannot abort: the OT-2 has already completed this run. Reject individual cartridges at QC instead.' });
 		}
 
-		// Look up the run so we know which BackingLot to restore + how many to refund
-		const runBeforeAbort = await WaxFillingRun.findById(runId).select('activeLotId cartridgeIds').lean() as any;
-		const abortRefundLotId: string | undefined = runBeforeAbort?.activeLotId ?? undefined;
+		const runBeforeAbort = await WaxFillingRun.findById(runId).select('cartridgeIds').lean() as any;
 		const abortScannedIds: string[] = (runBeforeAbort?.cartridgeIds ?? []) as string[];
 
 		await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
 		});
 
-		// Same refund semantics as cancelRun — see comment there.
+		// Same revert semantics as cancelRun — see comment there.
 		if (abortScannedIds.length > 0) {
+			await CartridgeRecord.updateMany(
+				{
+					_id: { $in: abortScannedIds },
+					'waxFilling.runId': runId,
+					status: 'wax_filling',
+					'backing.parentLotRecordId': { $exists: true, $ne: null }
+				},
+				{ $set: { status: 'backing' }, $unset: { waxFilling: '', 'backing.ovenExitTime': '' } }
+			);
 			await CartridgeRecord.deleteMany({
 				_id: { $in: abortScannedIds },
 				'waxFilling.runId': runId,
 				status: 'wax_filling'
-			});
-		}
-
-		if (abortRefundLotId && abortScannedIds.length > 0) {
-			await BackingLot.findByIdAndUpdate(abortRefundLotId, {
-				$inc: { cartridgeCount: abortScannedIds.length },
-				$set: { status: 'ready' }
 			});
 		}
 
@@ -1583,7 +1513,7 @@ export const actions: Actions = {
 			action: 'UPDATE',
 			changedBy: locals.user?.username,
 			changedAt: now,
-			newData: { status: 'aborted', abortReason: reason, refundedToLot: abortRefundLotId, refundedCount: abortScannedIds.length }
+			newData: { status: 'aborted', abortReason: reason, revertedToBacking: abortScannedIds.length }
 		});
 
 		await notifyRunLifecycle({
@@ -2040,12 +1970,13 @@ export const actions: Actions = {
 			}
 		}
 
-		// Deduct 800 μL from the scanned 15ml wax tube ReceivingLot.
-		// run.waxSourceLot is the scanned ReceivingLot.lotId / bagBarcode.
+		// Deduct the run's computed fill volume from the wax source lot.
+		// run.waxSourceLot is the selected ReceivingLot / WaxBatch barcode.
 		// consumedUl tracks partial consumption; whole tubes are deducted from
 		// quantity (and part inventory via recordTransaction) once each 12000 μL
 		// crosses a tube boundary.
 		const FULL_TUBE_VOLUME_UL = 12000;
+		const runFillVolumeUl = Number(run?.fillVolumeUl ?? LEGACY_WAX_FILL_VOLUME_UL);
 		if (run?.waxSourceLot) {
 			const waxLot = await ReceivingLot.findOne({
 				$or: [
@@ -2057,7 +1988,7 @@ export const actions: Actions = {
 			if (waxLot) {
 				const consumedBefore = Number(waxLot.consumedUl ?? 0);
 				const capUl = Number(waxLot.quantity ?? 0) * FULL_TUBE_VOLUME_UL;
-				const consumedAfter = Math.min(capUl, consumedBefore + WAX_FILL_VOLUME_UL);
+				const consumedAfter = Math.min(capUl, consumedBefore + runFillVolumeUl);
 				const tubesBefore = Math.floor(consumedBefore / FULL_TUBE_VOLUME_UL);
 				const tubesAfter = Math.floor(consumedAfter / FULL_TUBE_VOLUME_UL);
 				const tubesToDeduct = tubesAfter - tubesBefore;
@@ -2098,7 +2029,7 @@ export const actions: Actions = {
 			}).select('_id remainingVolumeUl').lean() as any;
 			if (waxBatch) {
 				const remainingBefore = Number(waxBatch.remainingVolumeUl ?? 0);
-				const remainingAfter = Math.max(0, remainingBefore - WAX_FILL_VOLUME_UL);
+				const remainingAfter = Math.max(0, remainingBefore - runFillVolumeUl);
 				await WaxBatch.updateOne(
 					{ _id: waxBatch._id },
 					{

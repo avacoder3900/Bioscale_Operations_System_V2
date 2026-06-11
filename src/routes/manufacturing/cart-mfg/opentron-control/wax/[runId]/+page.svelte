@@ -60,13 +60,9 @@
 		f.submit();
 	}
 
-	function handleCoolingComplete(result: { trayId: string; coolingTimestamp: Date; ovenLocationId?: string; ovenLocationName?: string }) {
-		// PostRunCooling now includes the oven scan — pass everything to confirmCooling
-		submitForm('confirmCooling', {
-			coolingTrayId: result.trayId ?? '',
-			ovenLocationId: result.ovenLocationId ?? '',
-			ovenLocationName: result.ovenLocationName ?? ''
-		});
+	function handleCoolingComplete() {
+		// WAX-FLOW-3: cartridges go straight into the cooler — no tray or oven scan
+		submitForm('confirmCooling', {});
 	}
 
 	function handleQCComplete(result?: { rejectedCartridges: { cartridgeId: string; reasonCode: string }[] }) {
@@ -232,7 +228,6 @@
 			<PostRunCooling
 				runEndTime={data.runState.deckRemovedTime ? new Date(data.runState.deckRemovedTime) : new Date()}
 				coolingWarningMin={data.settings.coolingWarningMin}
-				deckLockoutMin={data.settings.deckLockoutMin}
 				onComplete={handleCoolingComplete}
 				readonly={false}
 			/>
