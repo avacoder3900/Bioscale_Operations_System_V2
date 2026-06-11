@@ -9,7 +9,7 @@
  */
 import { error, json } from '@sveltejs/kit';
 import { connectDB, OpentronsRobot } from '$lib/server/db';
-import { registerMaintenanceLabwareDefinition } from '$lib/server/opentrons/maintenance';
+import { registerMaintenanceLabwareDefinition } from '$lib/server/opentrons/maintenance-clone';
 import { requirePermission } from '$lib/server/permissions';
 import type { RequestHandler } from './$types';
 

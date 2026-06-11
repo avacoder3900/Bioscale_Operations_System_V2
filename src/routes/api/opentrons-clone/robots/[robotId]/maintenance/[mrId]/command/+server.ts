@@ -21,7 +21,7 @@ import {
 	isAllowedCommandType,
 	ALLOWED_COMMAND_TYPES,
 	type MaintenanceCommand
-} from '$lib/server/opentrons/maintenance';
+} from '$lib/server/opentrons/maintenance-clone';
 import type { RequestHandler } from './$types';
 
 interface RobotDoc {
