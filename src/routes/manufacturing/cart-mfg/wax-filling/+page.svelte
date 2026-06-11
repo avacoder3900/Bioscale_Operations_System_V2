@@ -160,6 +160,233 @@
 	// (which targets real under-time cartridges).
 	let testMode = $state(false);
 
+	// Orchestrated scan-and-start (deck_load substage): one Start Run press
+	// drives deck-barcode scan → cartridge sweep → loadDeck → startRun. Each
+	// step is rendered in a visible checklist; any failure aborts and opens
+	// the manual scanning fallback (DeckLoadingGrid) below.
+	type OrchStepStatus = 'pending' | 'active' | 'done' | 'failed';
+	interface OrchStep {
+		id: 'deck' | 'sweep' | 'load' | 'start';
+		label: string;
+		status: OrchStepStatus;
+		detail: string;
+	}
+	let orchestrating = $state(false);
+	let orchSteps = $state<OrchStep[]>([]);
+	let manualFallbackOpen = $state(false);
+
+	function setOrchStep(id: OrchStep['id'], status: OrchStepStatus, detail = '') {
+		orchSteps = orchSteps.map((s) => (s.id === id ? { ...s, status, detail } : s));
+	}
+
+	function failOrchStep(id: OrchStep['id'], detail: string) {
+		setOrchStep(id, 'failed', detail);
+		manualFallbackOpen = true;
+	}
+
+	// SvelteKit error(status, msg) from +server routes returns { message }
+	// JSON for fetch callers; plain json({ error }) bodies use { error }.
+	async function apiErrorMessage(res: Response): Promise<string> {
+		try {
+			const body = await res.json();
+			const msg = (body as any)?.message ?? (body as any)?.error;
+			if (typeof msg === 'string' && msg.length > 0) return msg;
+		} catch {
+			// non-JSON body — fall through to the status code
+		}
+		return `Request failed (HTTP ${res.status})`;
+	}
+
+	// Compact SvelteKit action-response error extractor (same shapes as
+	// submitAction's parser; used for the direct ?/startRun POST in step d).
+	function parseActionError(text: string, status: number): string {
+		let err = `Action failed (HTTP ${status})`;
+		try {
+			const json = JSON.parse(text);
+			if (json.type === 'failure' && json.data != null) {
+				const parsed = typeof json.data === 'string' ? JSON.parse(json.data) : json.data;
+				if (Array.isArray(parsed)) {
+					for (let i = 1; i < parsed.length; i++) {
+						if (typeof parsed[i] === 'string' && parsed[i].length > 3) return parsed[i];
+					}
+				}
+			} else if (json.type === 'error' && json.error) {
+				const msg = (json.error as any)?.message;
+				if (typeof msg === 'string' && msg.length > 0) return msg;
+			} else if (typeof json.error === 'string' && json.error.length > 0) {
+				return json.error;
+			}
+		} catch {
+			// unparseable body — keep the HTTP-status fallback
+		}
+		return err;
+	}
+
+	async function handleScanAndStart(formData: FormData) {
+		if (previewParam || submitting || orchestrating) return;
+		const runId = data.runState.runId;
+		if (!runId) return;
+		errorMsg = '';
+		manualFallbackOpen = false;
+		orchSteps = [
+			{ id: 'deck', label: 'Scan deck barcode', status: 'pending', detail: '' },
+			{ id: 'sweep', label: 'Scan cartridges', status: 'pending', detail: '' },
+			{ id: 'load', label: 'Load deck', status: 'pending', detail: '' },
+			{ id: 'start', label: 'Start protocol', status: 'pending', detail: '' }
+		];
+		orchestrating = true;
+		try {
+			// (a) Deck barcode — synchronous gantry scan, up to ~45s server-side.
+			setOrchStep('deck', 'active', 'Robot is scanning the deck barcode…');
+			let deckBarcode = '';
+			try {
+				const res = await fetch('/api/scanner/deck-scan', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ robotId: data.robotId })
+				});
+				if (!res.ok) {
+					failOrchStep('deck', await apiErrorMessage(res));
+					return;
+				}
+				const body = await res.json();
+				if (typeof body?.barcode === 'string') deckBarcode = body.barcode;
+			} catch (e) {
+				failOrchStep('deck', e instanceof Error ? e.message : 'Network error');
+				return;
+			}
+			if (!deckBarcode) {
+				failOrchStep('deck', 'Scanner completed but returned no deck barcode');
+				return;
+			}
+			setOrchStep('deck', 'done', `Deck ${deckBarcode}`);
+
+			// (b) Cartridge sweep — enqueue, then poll the snapshot every 1.5s
+			// (cap 5 min). The daemon walks each taught slot with the gantry
+			// scanner and streams per-slot progress back.
+			const planned = data.runState.plannedCartridgeCount ?? 24;
+			setOrchStep('sweep', 'active', 'Starting cartridge sweep…');
+			let scans: { slotIndex: number; barcode: string }[] = [];
+			try {
+				const res = await fetch('/api/scanner/sweep', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({
+						robotId: data.robotId,
+						source: 'wax_filling',
+						contextRef: runId,
+						maxSlots: planned
+					})
+				});
+				if (!res.ok) {
+					failOrchStep('sweep', await apiErrorMessage(res));
+					return;
+				}
+				const { sweepRunId, slotsTotal } = await res.json();
+				const deadline = Date.now() + 5 * 60 * 1000;
+				let snap: any = null;
+				while (Date.now() < deadline) {
+					await new Promise((r) => setTimeout(r, 1500));
+					const poll = await fetch(`/api/scanner/sweep/${sweepRunId}`);
+					if (!poll.ok) {
+						failOrchStep('sweep', await apiErrorMessage(poll));
+						return;
+					}
+					snap = await poll.json();
+					const total = snap.slotsTotal ?? slotsTotal ?? planned;
+					setOrchStep('sweep', 'active', `Scanning… slot ${Math.min((snap.slotsDone ?? 0) + 1, total)}/${total}`);
+					if (['completed', 'errored', 'cancelled'].includes(snap.status)) break;
+				}
+				if (!snap || !['completed', 'errored', 'cancelled'].includes(snap.status)) {
+					failOrchStep('sweep', 'Timed out waiting for the cartridge sweep (5 min)');
+					return;
+				}
+				if (snap.status !== 'completed') {
+					failOrchStep('sweep', snap.abortReason || `Sweep ${snap.status}`);
+					return;
+				}
+				scans = ((snap.scans ?? []) as { slotIndex: number; barcode: string }[])
+					.filter((s) => typeof s?.barcode === 'string' && s.barcode.length > 0 && typeof s?.slotIndex === 'number')
+					.sort((a, b) => a.slotIndex - b.slotIndex);
+				const errCount = ((snap.errors ?? []) as unknown[]).length;
+				if (errCount > 0 || scans.length < planned) {
+					failOrchStep('sweep', `Robot scanned ${scans.length} of ${planned} cartridges (${errCount} failure${errCount === 1 ? '' : 's'}) — use manual scanning below to finish`);
+					return;
+				}
+				const barcodes = scans.map((s) => s.barcode);
+				if (new Set(barcodes).size !== barcodes.length) {
+					failOrchStep('sweep', 'Duplicate cartridge barcodes scanned across slots — use manual scanning below');
+					return;
+				}
+			} catch (e) {
+				failOrchStep('sweep', e instanceof Error ? e.message : 'Network error');
+				return;
+			}
+			setOrchStep('sweep', 'done', `${scans.length} cartridges scanned`);
+
+			// (c) loadDeck via the existing submitAction — keeps the admin
+			// cure-time override capture (pendingOverrideData) intact. On an
+			// override resubmission via the modal the run lands in
+			// ready_to_run; the operator presses Start Run there (we do NOT
+			// auto-resume through the override).
+			setOrchStep('load', 'active', 'Recording deck load…');
+			const cartridgeScans = scans.map((s) => ({ cartridgeId: s.barcode, backedLotId: '' }));
+			await submitAction('loadDeck', {
+				runId,
+				deckId: deckBarcode,
+				cartridgeScans: JSON.stringify(cartridgeScans),
+				...(testMode ? { testMode: 'true' } : {})
+			});
+			if (errorMsg) {
+				failOrchStep('load', errorMsg);
+				return;
+			}
+			setOrchStep('load', 'done', `Deck ${deckBarcode} · ${cartridgeScans.length} cartridges`);
+
+			// (d) startRun — POST the panel's captured FormData (protocol +
+			// params) the same way submitAction posts actions.
+			setOrchStep('start', 'active', 'Starting protocol on the robot…');
+			try {
+				formData.set('runId', runId);
+				const controller = new AbortController();
+				const timeout = setTimeout(() => controller.abort(), 45000);
+				const res = await fetch('?/startRun', {
+					method: 'POST',
+					body: formData,
+					headers: { 'x-sveltekit-action': 'true' },
+					signal: controller.signal
+				});
+				clearTimeout(timeout);
+				const text = await res.text();
+				if (!res.ok || text.includes('"type":"failure"')) {
+					const err = parseActionError(text, res.status);
+					errorMsg = err;
+					setOrchStep('start', 'failed', err);
+					return;
+				}
+			} catch (e) {
+				const err =
+					e instanceof DOMException && e.name === 'AbortError'
+						? 'Request timed out — the server may be slow.'
+						: e instanceof Error
+							? e.message
+							: 'Request failed';
+				errorMsg = err;
+				setOrchStep('start', 'failed', err);
+				return;
+			}
+			setOrchStep('start', 'done', 'Protocol running');
+			pendingStage = 'Running';
+			await invalidateAll();
+			if (data.runState.hasActiveRun) {
+				pendingStage = null;
+			}
+			orchSteps = [];
+		} finally {
+			orchestrating = false;
+		}
+	}
+
 	// Admin override state
 	let showOverrideModal = $state(false);
 	let overrideUser = $state('');
@@ -564,6 +791,10 @@
 	// Loading stage has 3 sub-steps: wax prep -> deck loading -> ready to run
 	let loadingSubStage = $derived.by(() => {
 		if (!effectiveHasActiveRun || (viewStage !== 'Loading' && effectiveStage !== 'Loading')) return 'wax_prep';
+		// Hold deck_load while the orchestrated scan-and-start is in flight —
+		// its loadDeck step sets deckId mid-flight, which would otherwise flip
+		// the UI to ready_to_run and unmount the step checklist.
+		if (orchestrating) return 'deck_load';
 		if (data.runState.deckId) return 'ready_to_run';
 		if (data.runState.waxSourceLot) return 'deck_load';
 		return 'wax_prep';
@@ -1036,15 +1267,99 @@
 				</div>
 			{/if}
 
-			<DeckLoadingGrid
-				availableLots={[{ lotId: previewParam ? 'LOT-PREVIEW' : 'backed-cartridges', ready: true, cartridgeCount: 24 }]}
-				plannedCartridgeCount={previewParam ? 24 : data.runState.plannedCartridgeCount}
-				onComplete={handleDeckLoadComplete}
-				readonly={isPreviewOrPast}
-				suppressFocus={showCancelModal || showOverrideModal}
-				robotId={data.robotId}
-				runId={data.runState.runId ?? null}
-			/>
+			{#if !isPreviewOrPast && data.opentronsRobotId && data.robotProtocols}
+				<!-- Orchestrated start: one press scans the deck barcode, sweeps
+				     the cartridge slots with the gantry scanner, records the deck
+				     load, then starts the protocol. Manual scanning stays below
+				     as a collapsed fallback. -->
+				<div class="mb-4 space-y-4">
+					<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
+						<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">
+							Start Run — the robot will scan the deck and cartridges first
+						</h3>
+						<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
+							Press Start Run below. The gantry scanner reads the deck barcode, sweeps every cartridge slot, records the deck load, then starts the protocol.
+						</p>
+					</div>
+
+					{#if orchSteps.length > 0}
+						<div class="space-y-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
+							{#each orchSteps as step (step.id)}
+								<div class="flex items-start gap-3">
+									<div class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center">
+										{#if step.status === 'done'}
+											<span class="text-sm font-bold text-green-400">✓</span>
+										{:else if step.status === 'failed'}
+											<span class="text-sm font-bold text-red-400">✗</span>
+										{:else if step.status === 'active'}
+											<div class="h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-tron-cyan)] border-t-transparent"></div>
+										{:else}
+											<span class="h-2.5 w-2.5 rounded-full border border-[var(--color-tron-border)]"></span>
+										{/if}
+									</div>
+									<div class="min-w-0 flex-1">
+										<p class="text-sm font-medium {step.status === 'failed'
+											? 'text-red-300'
+											: step.status === 'done'
+												? 'text-green-400'
+												: step.status === 'active'
+													? 'text-[var(--color-tron-cyan)]'
+													: 'text-[var(--color-tron-text-secondary)]'}">
+											{step.label}
+										</p>
+										{#if step.detail}
+											<p class="text-xs {step.status === 'failed' ? 'text-red-400/80' : 'text-[var(--color-tron-text-secondary)]'}">
+												{step.detail}
+											</p>
+										{/if}
+									</div>
+								</div>
+							{/each}
+						</div>
+					{/if}
+
+					<ProtocolStartPanel
+						robot={{ _id: data.opentronsRobotId, name: data.robotName }}
+						protocols={data.robotProtocols}
+						contextValues={{ cartridges: data.runState.plannedCartridgeCount ?? 24 }}
+						contextReadonly={['cartridges']}
+						lastTipState={data.lastTipState}
+						submitting={submitting || orchestrating}
+						formAction="?/startRun"
+						extraHidden={{ runId: data.runState.runId ?? '' }}
+						onSubmitIntercept={handleScanAndStart}
+					/>
+				</div>
+
+				<details bind:open={manualFallbackOpen} class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]">
+					<summary class="cursor-pointer px-4 py-3 text-sm font-medium text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-text)]">
+						Manual scanning (fallback)
+					</summary>
+					<div class="border-t border-[var(--color-tron-border)] p-4">
+						<DeckLoadingGrid
+							availableLots={[{ lotId: 'backed-cartridges', ready: true, cartridgeCount: 24 }]}
+							plannedCartridgeCount={data.runState.plannedCartridgeCount}
+							onComplete={handleDeckLoadComplete}
+							readonly={isPreviewOrPast}
+							suppressFocus={showCancelModal || showOverrideModal || !manualFallbackOpen}
+							robotId={data.robotId}
+							runId={data.runState.runId ?? null}
+						/>
+					</div>
+				</details>
+			{:else}
+				<!-- Preview/past view, or robot has no OT-2 protocols mapped —
+				     the manual grid stays the primary flow. -->
+				<DeckLoadingGrid
+					availableLots={[{ lotId: previewParam ? 'LOT-PREVIEW' : 'backed-cartridges', ready: true, cartridgeCount: 24 }]}
+					plannedCartridgeCount={previewParam ? 24 : data.runState.plannedCartridgeCount}
+					onComplete={handleDeckLoadComplete}
+					readonly={isPreviewOrPast}
+					suppressFocus={showCancelModal || showOverrideModal}
+					robotId={data.robotId}
+					runId={data.runState.runId ?? null}
+				/>
+			{/if}
 		{:else if displayStage === 'Running'}
 			{#if !isPreviewOrPast && data.runState.opentronsRunId && data.opentronsRobotId}
 				<EmbeddedRunController

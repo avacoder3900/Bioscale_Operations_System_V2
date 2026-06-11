@@ -27,6 +27,12 @@
     extraHidden:     record of extra hidden inputs to include in the POST
                      (e.g. { runId }, so the parent action knows which
                      wax/reagent run this is)
+    onSubmitIntercept: optional. When provided, the form's native POST is
+                     prevented and the serialized FormData (all hidden +
+                     parameter fields it would have posted) is handed to
+                     this callback instead — used by orchestrated flows
+                     that must run robot scans before startRun. When
+                     absent, behavior is identical to a plain form submit.
 -->
 <script lang="ts">
 	interface ParamDef {
@@ -65,7 +71,8 @@
 		tipsPerRack = 96,
 		submitting = false,
 		formAction,
-		extraHidden = {} as Record<string, string>
+		extraHidden = {} as Record<string, string>,
+		onSubmitIntercept = undefined
 	} = $props<{
 		robot: { _id: string; name: string };
 		protocols: ProtocolDef[];
@@ -76,7 +83,18 @@
 		submitting?: boolean;
 		formAction: string;
 		extraHidden?: Record<string, string>;
+		onSubmitIntercept?: (formData: FormData) => Promise<void> | void;
 	}>();
+
+	// Intercept the native submit when the parent wants to orchestrate
+	// (e.g. robot scans before startRun). Fires only after the browser's
+	// built-in validation passes, so required/min/max still apply. With no
+	// interceptor the handler is a no-op and the form posts as before.
+	function handleSubmit(e: SubmitEvent) {
+		if (!onSubmitIntercept) return;
+		e.preventDefault();
+		void onSubmitIntercept(new FormData(e.currentTarget as HTMLFormElement));
+	}
 
 	// Pick the first protocol as a sensible default. Operator can change it
 	// via the dropdown — most robots only have one wax + one reagent protocol
@@ -152,7 +170,7 @@
 			then come back.
 		</div>
 	{:else}
-		<form method="POST" action={formAction} class="space-y-4">
+		<form method="POST" action={formAction} onsubmit={handleSubmit} class="space-y-4">
 			{#each Object.entries(extraHidden) as [k, v] (k)}
 				<input type="hidden" name={k} value={v} />
 			{/each}
