@@ -1,0 +1,30 @@
+# BIMS OT-2 bridge daemon — systemd unit.
+#
+# Install (OT-2 root filesystem is read-only — remount first):
+#   mount -o remount,rw /
+#   cp /data/ot2-bridge/ot2-bridge.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now ot2-bridge
+#   mount -o remount,ro /
+#
+# Logs: journalctl -u ot2-bridge -f
+
+[Unit]
+Description=BIMS OT-2 bridge daemon (command long-poll + barcode scanner + on-robot sweep)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/data/ot2-bridge
+ExecStart=/data/ot2-bridge/run.sh
+Restart=always
+RestartSec=5
+# pip --user packages resolve via /root/.local (symlinked to
+# /var/user-packages/root/.local on the OT-2 — see OT2-BRIDGE-DEPLOYMENT.md)
+Environment=HOME=/root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -5,6 +5,9 @@ const opentronsRobotSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	name: String, ip: String, port: Number, robotSide: String,
 	legacyRobotId: String, isActive: { type: Boolean, default: true },
+	// OT2-BRIDGE-1: deviceId the on-robot bridge daemon polls with
+	// (ot2-<slot>-bridge). Falls back to derivation from name when unset.
+	bridgeDeviceId: String,
 	firmwareVersion: String, apiVersion: String, robotModel: String, robotSerial: String,
 	lastHealthAt: Date, lastHealthOk: Boolean, source: String,
 	protocols: [{

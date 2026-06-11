@@ -4,9 +4,7 @@
  */
 
 import { connectDB, OpentronsRunRecord, OpentronsRobot, OpentronProtocol, generateId } from '$lib/server/db';
-import { robotBaseUrl } from './proxy';
-
-const RUN_TIMEOUT_MS = 5_000;
+import { robotGet, robotPost } from './proxy';
 
 interface CreateRunParams {
 	manufacturingRunId: string;
@@ -42,21 +40,14 @@ export async function createAndStartRun(params: CreateRunParams): Promise<{
 	const deployment = protocol.deployments?.find((d: any) => d.robotId === params.robotId);
 	if (!deployment?.opentronsProtocolId) return null;
 
-	const baseUrl = robotBaseUrl({ ip: robot.ip, port: robot.port ?? 31950 });
-
-	// 1. Create OT-2 run
+	// 1. Create OT-2 run (robotPost is transport-aware — direct or bridge)
 	let otRun: any;
 	try {
-		const createRes = await fetch(`${baseUrl}/runs`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json', 'opentrons-version': '3' },
-			body: JSON.stringify({
-				data: {
-					protocolId: deployment.opentronsProtocolId,
-					runTimeParameterValues: params.runtimeParameters ?? {},
-				},
-			}),
-			signal: AbortSignal.timeout(RUN_TIMEOUT_MS),
+		const createRes = await robotPost(robot, '/runs', {
+			data: {
+				protocolId: deployment.opentronsProtocolId,
+				runTimeParameterValues: params.runtimeParameters ?? {},
+			},
 		});
 		if (!createRes.ok) {
 			const err = await createRes.json().catch(() => ({}));
@@ -69,11 +60,8 @@ export async function createAndStartRun(params: CreateRunParams): Promise<{
 
 	// 2. Start the run (play action)
 	try {
-		const playRes = await fetch(`${baseUrl}/runs/${otRun.id}/actions`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json', 'opentrons-version': '3' },
-			body: JSON.stringify({ data: { actionType: 'play' } }),
-			signal: AbortSignal.timeout(RUN_TIMEOUT_MS),
+		const playRes = await robotPost(robot, `/runs/${otRun.id}/actions`, {
+			data: { actionType: 'play' },
 		});
 		if (!playRes.ok) {
 			const err = await playRes.json().catch(() => ({}));
@@ -118,14 +106,9 @@ export async function sendRunAction(
 	const robot = await OpentronsRobot.findById(record.robotId).lean() as any;
 	if (!robot) return { success: false, error: 'Robot not found' };
 
-	const baseUrl = robotBaseUrl({ ip: robot.ip, port: robot.port ?? 31950 });
-
 	try {
-		const res = await fetch(`${baseUrl}/runs/${record.opentronsRunId}/actions`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json', 'opentrons-version': '3' },
-			body: JSON.stringify({ data: { actionType } }),
-			signal: AbortSignal.timeout(RUN_TIMEOUT_MS),
+		const res = await robotPost(robot, `/runs/${record.opentronsRunId}/actions`, {
+			data: { actionType },
 		});
 		if (!res.ok) {
 			const err = await res.json().catch(() => ({}));
@@ -155,13 +138,8 @@ export async function pollRunStatus(record: any): Promise<void> {
 	const robot = await OpentronsRobot.findById(record.robotId).lean() as any;
 	if (!robot) return;
 
-	const baseUrl = robotBaseUrl({ ip: robot.ip, port: robot.port ?? 31950 });
-
 	try {
-		const res = await fetch(`${baseUrl}/runs/${record.opentronsRunId}`, {
-			signal: AbortSignal.timeout(3000),
-			headers: { 'opentrons-version': '3' },
-		});
+		const res = await robotGet(robot, `/runs/${record.opentronsRunId}`);
 		if (!res.ok) return;
 
 		const data = (await res.json()).data;

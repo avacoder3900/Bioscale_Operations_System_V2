@@ -4,7 +4,7 @@
  */
 
 import { connectDB, OpentronsRobot, OpentronsRunRecord } from '$lib/server/db';
-import { robotBaseUrl, updateRobotHealth } from './proxy';
+import { robotGet, updateRobotHealth } from './proxy';
 import { pollRunStatus } from './run-lifecycle';
 
 const POLL_INTERVAL_MS = 15_000;
@@ -43,7 +43,6 @@ export function subscribeHealth(cb: (states: RobotHealthState[]) => void): () =>
 }
 
 async function pollRobot(robot: { _id: string; name: string; ip: string; port?: number }): Promise<RobotHealthState> {
-	const baseUrl = robotBaseUrl({ ip: robot.ip, port: robot.port ?? 31950 });
 	const start = Date.now();
 	const state: RobotHealthState = {
 		robotId: String(robot._id),
@@ -64,10 +63,8 @@ async function pollRobot(robot: { _id: string; name: string; ip: string; port?: 
 	};
 
 	try {
-		const healthRes = await fetch(`${baseUrl}/health`, {
-			signal: AbortSignal.timeout(ROBOT_TIMEOUT_MS),
-			headers: { 'opentrons-version': '3' },
-		});
+		// robotGet is transport-aware (direct on the LAN, bridge from Vercel)
+		const healthRes = await robotGet(robot, '/health');
 		state.responseTimeMs = Date.now() - start;
 
 		if (!healthRes.ok) {
@@ -83,10 +80,7 @@ async function pollRobot(robot: { _id: string; name: string; ip: string; port?: 
 
 		// Check for active run
 		try {
-			const runsRes = await fetch(`${baseUrl}/runs?pageLength=1`, {
-				signal: AbortSignal.timeout(ROBOT_TIMEOUT_MS),
-				headers: { 'opentrons-version': '3' },
-			});
+			const runsRes = await robotGet(robot, '/runs?pageLength=1');
 			if (runsRes.ok) {
 				const runsData = await runsRes.json();
 				const runs = runsData.data ?? [];

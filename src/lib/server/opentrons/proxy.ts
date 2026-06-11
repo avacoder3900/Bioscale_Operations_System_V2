@@ -1,11 +1,91 @@
 /**
  * Opentrons OT-2 HTTP proxy helpers.
  * Provides utilities for forwarding requests to robot HTTP APIs.
+ *
+ * OT2-BRIDGE-1: every robot request flows through a transport switch.
+ *  - 'direct'  — fetch http://{robot.ip}:{port} (works when BIMS runs on the
+ *                lab LAN, e.g. local dev).
+ *  - 'bridge'  — enqueue an Ot2BridgeCommand and wait for the on-robot
+ *                ot2-bridge daemon to relay it (works from Vercel, which
+ *                cannot reach the lab LAN).
+ *  - OT2_TRANSPORT env selects ('direct' | 'bridge' | 'auto'); 'auto'
+ *    (default) picks bridge on Vercel, direct elsewhere.
  */
 
-import { connectDB, OpentronsRobot, generateId } from '$lib/server/db';
+import { connectDB, OpentronsRobot, Ot2BridgeCommand, ScannerEvent, generateId } from '$lib/server/db';
 
 const DEFAULT_PORT = 31950;
+
+type Ot2Transport = 'direct' | 'bridge';
+
+function resolveTransport(): Ot2Transport {
+	const mode = (process.env.OT2_TRANSPORT ?? 'auto').toLowerCase();
+	if (mode === 'direct' || mode === 'bridge') return mode;
+	return process.env.VERCEL ? 'bridge' : 'direct';
+}
+
+/** ot2-<slot>-bridge — same slot-code derivation as the scanner deviceId */
+export function bridgeDeviceIdForRobot(robot: { name?: string; bridgeDeviceId?: string }): string {
+	if (robot.bridgeDeviceId) return robot.bridgeDeviceId;
+	const match = (robot.name ?? '').match(/\b([A-Z]\d{2})\b/);
+	const slot = match?.[1]?.toLowerCase();
+	return slot ? `ot2-${slot}-bridge` : 'unknown-bridge';
+}
+
+const BRIDGE_POLL_MS = 100;
+const BRIDGE_TIMEOUT_MS = 30_000; // parity with the direct robotFetch abort
+
+/**
+ * Relay one HTTP request through the command queue and wait for the daemon's
+ * result. Returns a real Response so call sites are transport-agnostic.
+ */
+async function bridgeFetch(
+	robot: any,
+	method: string,
+	path: string,
+	body?: unknown
+): Promise<Response> {
+	await connectDB();
+	const deviceId = bridgeDeviceIdForRobot(robot);
+	const cmd = await Ot2BridgeCommand.create({
+		_id: generateId(),
+		robotId: String(robot._id ?? ''),
+		deviceId,
+		kind: 'http',
+		request: { method, path, body: body ?? null },
+		ttlMs: BRIDGE_TIMEOUT_MS
+	});
+
+	const deadline = Date.now() + BRIDGE_TIMEOUT_MS;
+	while (Date.now() < deadline) {
+		const doc = await Ot2BridgeCommand.findById(cmd._id)
+			.select('status result error').lean() as any;
+		if (doc?.status === 'completed') {
+			return new Response(JSON.stringify(doc.result?.body ?? null), {
+				status: doc.result?.status ?? 200,
+				headers: { 'content-type': 'application/json' }
+			});
+		}
+		if (doc?.status === 'failed' || doc?.status === 'expired') {
+			throw new Error(`${method} ${path} failed via bridge (${deviceId}): ${doc.error ?? doc.status}`);
+		}
+		await new Promise((r) => setTimeout(r, BRIDGE_POLL_MS));
+	}
+
+	// Timed out waiting — mark the command terminal and surface daemon liveness
+	await Ot2BridgeCommand.updateOne(
+		{ _id: cmd._id, status: { $in: ['pending', 'claimed'] } },
+		{ $set: { status: 'expired', error: 'BIMS gave up waiting for the bridge daemon', completedAt: new Date() } }
+	).catch(() => {});
+	const lastBeat = await ScannerEvent.findOne({
+		deviceId,
+		eventType: 'heartbeat'
+	}).sort({ receivedAt: -1 }).select('receivedAt').lean().catch(() => null) as any;
+	const beatInfo = lastBeat?.receivedAt
+		? `last bridge heartbeat ${Math.round((Date.now() - new Date(lastBeat.receivedAt).getTime()) / 60000)} min ago`
+		: 'no bridge heartbeat ever received';
+	throw new Error(`${method} ${path} failed: robot bridge "${deviceId}" did not respond within ${BRIDGE_TIMEOUT_MS / 1000}s (${beatInfo})`);
+}
 
 /** Get a robot record by DB id and assert it's active */
 export async function getRobot(id: string) {
@@ -50,6 +130,7 @@ async function robotFetch(url: string, init: RequestInit & { method?: string } =
 
 /** Proxy a GET request to the robot */
 export async function robotGet(robot: any, path: string): Promise<Response> {
+	if (resolveTransport() === 'bridge') return bridgeFetch(robot, 'GET', path);
 	const url = `${robotBaseUrl(robot)}${path}`;
 	return robotFetch(url, {
 		headers: { 'opentrons-version': '3' }
@@ -58,6 +139,7 @@ export async function robotGet(robot: any, path: string): Promise<Response> {
 
 /** Proxy a POST request to the robot */
 export async function robotPost(robot: any, path: string, body?: unknown): Promise<Response> {
+	if (resolveTransport() === 'bridge') return bridgeFetch(robot, 'POST', path, body);
 	const url = `${robotBaseUrl(robot)}${path}`;
 	return robotFetch(url, {
 		method: 'POST',
@@ -71,6 +153,7 @@ export async function robotPost(robot: any, path: string, body?: unknown): Promi
 
 /** Proxy a PATCH request to the robot */
 export async function robotPatch(robot: any, path: string, body?: unknown): Promise<Response> {
+	if (resolveTransport() === 'bridge') return bridgeFetch(robot, 'PATCH', path, body);
 	const url = `${robotBaseUrl(robot)}${path}`;
 	return robotFetch(url, {
 		method: 'PATCH',
@@ -84,6 +167,7 @@ export async function robotPatch(robot: any, path: string, body?: unknown): Prom
 
 /** Proxy a DELETE request to the robot */
 export async function robotDelete(robot: any, path: string): Promise<Response> {
+	if (resolveTransport() === 'bridge') return bridgeFetch(robot, 'DELETE', path);
 	const url = `${robotBaseUrl(robot)}${path}`;
 	return robotFetch(url, {
 		method: 'DELETE',

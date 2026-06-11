@@ -1,0 +1,51 @@
+import mongoose, { Schema } from 'mongoose';
+import { generateId } from '../utils.js';
+
+/**
+ * OT-2 command bridge queue (OT2-BRIDGE-1).
+ *
+ * BIMS (which cannot reach the lab LAN from Vercel) enqueues commands here;
+ * the ot2-bridge daemon on each robot long-polls /api/agent/ot2/poll, claims
+ * the oldest pending command for its deviceId, executes it against the
+ * robot's local HTTP API (kind 'http') or runs an on-robot routine (kind
+ * 'sweep' / 'deck_scan'), and posts the outcome back.
+ */
+const ot2BridgeCommandSchema = new Schema({
+	_id: { type: String, default: () => generateId() },
+	robotId: String,             // OpentronsRobot._id
+	deviceId: String,            // ot2-<slot>-bridge
+	kind: { type: String, enum: ['http', 'sweep', 'deck_scan'], required: true },
+	// kind 'http': relay this request to http://localhost:31950 on the robot
+	request: {
+		method: String,
+		path: String,
+		body: Schema.Types.Mixed
+	},
+	// kind 'sweep' / 'deck_scan': routine parameters (see OT2-BRIDGE-2)
+	payload: Schema.Types.Mixed,
+	status: {
+		type: String,
+		enum: ['pending', 'claimed', 'completed', 'failed', 'expired'],
+		default: 'pending'
+	},
+	// kind 'http': the robot's HTTP response, relayed verbatim
+	result: {
+		status: Number,
+		body: Schema.Types.Mixed
+	},
+	error: String,
+	ttlMs: { type: Number, default: 45_000 }, // pending → expired if unclaimed
+	requestedBy: String,
+	createdAt: { type: Date, default: () => new Date() },
+	claimedAt: Date,
+	completedAt: Date
+}, { timestamps: false });
+
+ot2BridgeCommandSchema.index({ deviceId: 1, status: 1, createdAt: 1 });
+ot2BridgeCommandSchema.index({ robotId: 1, createdAt: -1 });
+// History self-cleans 7 days after completion (completedAt is also set when
+// a command is failed/expired, so every terminal doc ages out).
+ot2BridgeCommandSchema.index({ completedAt: 1 }, { expireAfterSeconds: 7 * 24 * 3600 });
+
+export const Ot2BridgeCommand = mongoose.models.Ot2BridgeCommand
+	|| mongoose.model('Ot2BridgeCommand', ot2BridgeCommandSchema, 'ot2_bridge_commands');
