@@ -1,0 +1,63 @@
+name: Train CV Model
+
+# Ephemeral training runner. BIMS fires a repository_dispatch (type:
+# train-cv-model) from the "Train" button with { projectId, version }; GitHub
+# spins up this runner, trains a PaDiM model, uploads <version>.onnx to R2 via
+# the Cloudflare Worker, reports back to BIMS, then the runner is destroyed.
+# No always-on host. Can also be run by hand from the Actions tab.
+
+on:
+  repository_dispatch:
+    types: [train-cv-model]
+  workflow_dispatch:
+    inputs:
+      projectId:
+        description: CV project id to train
+        required: true
+        type: string
+      version:
+        description: Model version (must already exist on the project as 'training')
+        required: true
+        type: string
+
+concurrency:
+  # Never train the same project twice at once; a newer request wins.
+  group: train-cv-${{ github.event.client_payload.projectId || github.event.inputs.projectId }}
+  cancel-in-progress: true
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve inputs
+        id: vars
+        run: |
+          PID="${{ github.event.client_payload.projectId || github.event.inputs.projectId }}"
+          VER="${{ github.event.client_payload.version || github.event.inputs.version }}"
+          if [ -z "$PID" ]; then echo "No projectId provided" >&2; exit 1; fi
+          if [ -z "$VER" ]; then echo "No version provided" >&2; exit 1; fi
+          echo "projectId=$PID" >> "$GITHUB_OUTPUT"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: services/cv-worker/requirements-train.txt
+
+      - name: Install dependencies
+        run: pip install -r services/cv-worker/requirements-train.txt
+
+      - name: Train model
+        # No R2 creds needed: BIMS hands the runner public image URLs + a model
+        # upload target at runtime over the authed manifest call.
+        env:
+          BIMS_URL: ${{ secrets.BIMS_URL }}
+          TRAIN_CALLBACK_SECRET: ${{ secrets.TRAIN_CALLBACK_SECRET }}
+        run: >
+          python services/cv-worker/train_cli.py
+          --project-id "${{ steps.vars.outputs.projectId }}"
+          --version "${{ steps.vars.outputs.version }}"

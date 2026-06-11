@@ -28,7 +28,15 @@ const cvProjectSchema = new Schema({
 		sampleCount: Number,                                     // labeled image count used
 		sampleSnapshot: [String],                                // imageIds frozen at training (for replay)
 		confidenceThreshold: { type: Number, default: 0.5 },
-		notes: String
+		notes: String,
+		// Lifecycle of the ephemeral (GitHub Actions) training run for this version.
+		// 'training' set at dispatch; the train-complete callback flips it to
+		// 'ready' or 'failed'. Defaults to 'ready' so pre-existing entries (minted
+		// before this field existed) are treated as usable.
+		status: { type: String, enum: ['training', 'ready', 'failed'], default: 'ready' },
+		completedAt: Date,
+		metrics: { type: Schema.Types.Mixed },                   // optional trainer-reported metrics
+		errorMessage: String
 	}],
 
 	// Production decision-maker. null = no model deployed yet.
