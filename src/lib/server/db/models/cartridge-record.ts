@@ -19,14 +19,16 @@ const cartridgeRecordSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 
 	backing: {
-		lotId: String,               // BackingLot._id (bucket barcode)
+		lotId: String,               // LEGACY: BackingLot._id (bucket barcode) — not written since WAX-FLOW-2
 		parentLotRecordId: String,   // LotRecord._id — the WI-01 batch
 		lotQrCode: String,           // LotRecord.qrCodeRef
 		cartridgeBlankLot: String,   // PT-CT-104 input material lot
 		thermosealLot: String,       // PT-CT-112 input material lot
 		barcodeLabelLot: String,     // PT-CT-106 input material lot
-		ovenEntryTime: Date,         // when the bucket entered the backing oven
-		ovenExitTime: Date,          // when the cartridge left the bucket onto a deck
+		ovenEntryTime: Date,         // when this cartridge was scanned into the backing oven
+		ovenExitTime: Date,          // when the cartridge left the oven onto a wax deck
+		ovenLocationId: String,      // Equipment._id of the backing oven (WAX-FLOW-2)
+		ovenLocationName: String,    // denormalized oven name for display (WAX-FLOW-2)
 		operator: operatorRef,
 		recordedAt: Date
 	},
@@ -158,6 +160,7 @@ const cartridgeRecordSchema = new Schema({
 
 cartridgeRecordSchema.index({ status: 1 });
 cartridgeRecordSchema.index({ 'backing.lotId': 1 });
+cartridgeRecordSchema.index({ status: 1, 'backing.ovenLocationId': 1 }); // WAX-FLOW-2: oven occupancy queries
 cartridgeRecordSchema.index({ 'waxFilling.runId': 1 });
 cartridgeRecordSchema.index({ 'reagentFilling.runId': 1 });
 cartridgeRecordSchema.index({ 'reagentFilling.assayType._id': 1 });

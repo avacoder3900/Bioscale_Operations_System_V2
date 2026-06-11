@@ -1,9 +1,13 @@
 import { fail } from '@sveltejs/kit';
-import { connectDB, AuditLog, WaxBatch, generateId } from '$lib/server/db';
+import { connectDB, AuditLog, WaxBatch, PartDefinition, generateId } from '$lib/server/db';
+import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
 const FULL_TUBE_VOLUME_UL = 12000; // 12 ml per 15 ml tube (filled per wax-creation instructions)
+
+// Raw materials consumed by this work instruction (see docs/prds/WAX-CREATION-PARTS-LINK.md)
+const WAX_PART_NUMBERS = ['PT-CT-108', 'PT-CT-109', 'PT-CT-110'];
 
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'manufacturing:read');
@@ -24,7 +28,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 	}
 	const lotNumber = `${prefix}${String(seq).padStart(4, '0')}`;
 
-	return { lotNumber };
+	const waxParts = await PartDefinition.find({ partNumber: { $in: WAX_PART_NUMBERS } })
+		.select('partNumber name unitCost unitOfMeasure supplier')
+		.lean();
+
+	return { lotNumber, waxParts: JSON.parse(JSON.stringify(waxParts)) };
 };
 
 export const actions: Actions = {
@@ -84,6 +92,31 @@ export const actions: Actions = {
 				initialVolumeUl
 			}
 		});
+
+		// Record raw-material consumption (PT-CT-108 nonadecane, PT-CT-109 micro wax, PT-CT-110 15ml tubes)
+		const partDocs = await PartDefinition.find({ partNumber: { $in: WAX_PART_NUMBERS } })
+			.select('partNumber')
+			.lean();
+		const partIdByNumber = new Map(partDocs.map((p: any) => [p.partNumber, String(p._id)]));
+		const tubesUsed = fullTubeCount + (partialTubeMl > 0 ? 1 : 0);
+		const consumptions = [
+			{ partNumber: 'PT-CT-108', quantity: nanodecaneWeight / 100, notes: `Wax batch ${lotNumber} — ${nanodecaneWeight}g nonadecane (100g/bottle)` },
+			{ partNumber: 'PT-CT-109', quantity: actualWaxWeight / 453.6, notes: `Wax batch ${lotNumber} — ${actualWaxWeight}g microcrystalline wax (453.6g/bag)` },
+			{ partNumber: 'PT-CT-110', quantity: tubesUsed, notes: `Wax batch ${lotNumber} — ${fullTubeCount} full + ${partialTubeMl > 0 ? 1 : 0} partial tubes` }
+		];
+		for (const c of consumptions) {
+			const partDefinitionId = partIdByNumber.get(c.partNumber);
+			if (!partDefinitionId) continue;
+			await recordTransaction({
+				transactionType: 'consumption',
+				partDefinitionId,
+				quantity: c.quantity,
+				manufacturingRunId: batchId,
+				operatorId: locals.user!._id,
+				operatorUsername: locals.user!.username,
+				notes: c.notes
+			});
+		}
 
 		return { success: true, batchId };
 	}

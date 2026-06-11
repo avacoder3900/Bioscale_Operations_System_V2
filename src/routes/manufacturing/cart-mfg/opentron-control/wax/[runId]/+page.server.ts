@@ -21,7 +21,8 @@ import type { PageServerLoad, Actions } from './$types';
 
 export const config = { maxDuration: 60 };
 
-const WAX_FILL_VOLUME_UL = 800;
+// Legacy fallback for runs without a computed fillVolumeUl (WAX-FLOW-3)
+const LEGACY_WAX_FILL_VOLUME_UL = 800;
 
 function toStage(status: string | null | undefined): string | null {
 	if (!status) return null;
@@ -253,7 +254,7 @@ export const actions: Actions = {
 		// Run has been released to the QC queue — send the operator back to the
 		// Opentron Control homepage so they can start another run. QC + Storage
 		// can be picked up later from the post-OT-2 queue.
-		redirect(303, '/manufacturing/cart-mfg/opentron-control');
+		redirect(303, '/manufacturing/cart-mfg/wax-filling');
 	},
 
 	completeQC: async ({ request, locals, params }) => {
@@ -693,7 +694,7 @@ export const actions: Actions = {
 		const existingRun = await WaxFillingRun.findById(runId).select('status').lean() as any;
 		if (!existingRun) return fail(404, { error: 'Run not found' });
 		if (existingRun.status === 'completed') {
-			redirect(303, '/manufacturing/cart-mfg/opentron-control');
+			redirect(303, '/manufacturing/cart-mfg/wax-filling');
 		}
 
 		const run = await WaxFillingRun.findByIdAndUpdate(runId, {
@@ -781,13 +782,14 @@ export const actions: Actions = {
 
 			if (run?.waxSourceLot) {
 				const FULL_TUBE_VOLUME_UL = 12000;
+				const runFillVolumeUl = Number(run?.fillVolumeUl ?? LEGACY_WAX_FILL_VOLUME_UL);
 				const waxLot = await ReceivingLot.findOne({
 					$or: [{ lotId: run.waxSourceLot }, { bagBarcode: run.waxSourceLot }, { lotNumber: run.waxSourceLot }]
 				}).lean() as any;
 				if (waxLot) {
 					const consumedBefore = Number(waxLot.consumedUl ?? 0);
 					const capUl = Number(waxLot.quantity ?? 0) * FULL_TUBE_VOLUME_UL;
-					const consumedAfter = Math.min(capUl, consumedBefore + WAX_FILL_VOLUME_UL);
+					const consumedAfter = Math.min(capUl, consumedBefore + runFillVolumeUl);
 					const tubesBefore = Math.floor(consumedBefore / FULL_TUBE_VOLUME_UL);
 					const tubesAfter = Math.floor(consumedAfter / FULL_TUBE_VOLUME_UL);
 					const tubesToDeduct = tubesAfter - tubesBefore;
@@ -826,7 +828,7 @@ export const actions: Actions = {
 				}).select('_id remainingVolumeUl').lean() as any;
 				if (waxBatch) {
 					const remainingBefore = Number(waxBatch.remainingVolumeUl ?? 0);
-					const remainingAfter = Math.max(0, remainingBefore - WAX_FILL_VOLUME_UL);
+					const remainingAfter = Math.max(0, remainingBefore - runFillVolumeUl);
 					await WaxBatch.updateOne(
 						{ _id: waxBatch._id },
 						{
@@ -867,7 +869,7 @@ export const actions: Actions = {
 			console.error('[completeRun] post-update side-effect failed:', e instanceof Error ? e.message : e);
 		}
 
-		redirect(303, '/manufacturing/cart-mfg/opentron-control');
+		redirect(303, '/manufacturing/cart-mfg/wax-filling');
 	},
 
 	/**

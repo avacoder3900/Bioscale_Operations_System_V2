@@ -7,7 +7,11 @@ const manufacturingSettingsSchema = new Schema({
 		coolingWarningMin: Number, deckLockoutMin: Number, incubatorTempC: Number,
 		heaterTempC: Number, waxPerDeckUl: Number, tubeCapacityUl: Number,
 		waxPerCartridgeUl: Number, cartridgesPerColumn: Number,
-		meltDurationMin: { type: Number, default: 30 }
+		meltDurationMin: { type: Number, default: 30 },
+		// Dead volume added on top of waxPerCartridgeUl × count when computing
+		// the 2ml-tube fill instruction (WAX-FLOW-3). Default keeps 24 carts
+		// near the legacy flat 800 μL.
+		waxFillDeadVolumeUl: { type: Number, default: 80 }
 	},
 	reagentFilling: {
 		fillTimePerCartridgeMin: Number,

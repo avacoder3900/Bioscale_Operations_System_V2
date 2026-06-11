@@ -92,10 +92,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 	//   wax_accepted (status='wax_stored')          — keyed by waxStorage.location
 	//   wax_scrapped (status='scrapped' + waxStorage.location set) — QA quarantine
 	//   reagent      (status∈{stored,reagent_filled}) — keyed by storage.fridgeName
-	// Oven occupancy reads from BackingLot: during backing phase cartridges
-	// only exist as an aggregate count on the lot — individual CartridgeRecords
-	// don't come into being until their UUID is scanned at wax deck loading.
-	const [waxAcceptedCountsAgg, waxScrappedCountsAgg, reagentStorageCounts, ovenOccupancyAgg] = await Promise.all([
+	// Oven occupancy (WAX-FLOW-2): cartridges in the backing oven are individual
+	// CartridgeRecords (status='backing', keyed by backing.ovenLocationId).
+	// Legacy BackingLot aggregate buckets are still added per-oven until drained
+	// — nothing writes to BackingLot any more.
+	const [waxAcceptedCountsAgg, waxScrappedCountsAgg, reagentStorageCounts, backingCartOccupancyAgg, legacyOvenOccupancyAgg] = await Promise.all([
 		CartridgeRecord.aggregate([
 			{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored', _id: { $nin: checkedOutIds } } },
 			{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
@@ -108,14 +109,21 @@ export const load: PageServerLoad = async ({ locals }) => {
 			{ $match: { 'storage.fridgeName': { $exists: true }, status: { $in: ['stored', 'reagent_filled'] }, _id: { $nin: checkedOutIds } } },
 			{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
 		]),
+		CartridgeRecord.aggregate([
+			{ $match: { status: 'backing', _id: { $nin: checkedOutIds } } },
+			{ $group: { _id: '$backing.ovenLocationId', count: { $sum: 1 } } }
+		]),
 		BackingLot.aggregate([
 			{ $match: { status: { $in: ['in_oven', 'ready'] }, ovenLocationId: { $exists: true, $ne: null } } },
 			{ $group: { _id: '$ovenLocationId', count: { $sum: '$cartridgeCount' } } }
 		]).catch(() => [])
 	]);
-	const ovenOccupantMap = new Map<string, number>(
-		(ovenOccupancyAgg as any[]).map((o: any) => [String(o._id), o.count])
-	);
+	const ovenOccupancyAgg = [...(backingCartOccupancyAgg as any[]), ...(legacyOvenOccupancyAgg as any[])];
+	const ovenOccupantMap = new Map<string, number>();
+	for (const o of ovenOccupancyAgg as any[]) {
+		const key = String(o._id);
+		ovenOccupantMap.set(key, (ovenOccupantMap.get(key) ?? 0) + (o.count ?? 0));
+	}
 	const waxAcceptedMap = new Map<string, number>(
 		(waxAcceptedCountsAgg as any[]).map((c: any) => [c._id, c.count])
 	);
@@ -140,13 +148,14 @@ export const load: PageServerLoad = async ({ locals }) => {
 		if (f.name) { fridgeMap.set(f.name, label); fridgeIdMap.set(f.name, String(f._id)); }
 	}
 
-	// Phase pipeline order for display. 'backing' isn't a CartridgeRecord status
-	// anymore (cartridges don't exist as individuals during backing) — take that
-	// count from BackingLot.cartridgeCount aggregated across in_oven + ready lots.
+	// Phase pipeline order for display. 'backing' is a real CartridgeRecord
+	// status again (WAX-FLOW-2, per-cartridge oven scans) so it's already in
+	// phaseCounts — add the legacy BackingLot.cartridgeCount sum on top until
+	// those buckets drain.
 	const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped'];
 	const phaseMap = new Map((phaseCounts as any[]).map((p: any) => [p._id, p.count]));
-	const backingPipelineCount = (ovenOccupancyAgg as any[]).reduce((s, o: any) => s + (o.count ?? 0), 0);
-	phaseMap.set('backing', backingPipelineCount);
+	const legacyBackingCount = (legacyOvenOccupancyAgg as any[]).reduce((s, o: any) => s + (o.count ?? 0), 0);
+	phaseMap.set('backing', (phaseMap.get('backing') ?? 0) + legacyBackingCount);
 
 	const qcMap = (arr: any[]) => {
 		const m: Record<string, number> = {};

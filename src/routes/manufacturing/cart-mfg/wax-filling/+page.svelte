@@ -2,7 +2,6 @@
 	import { enhance, deserialize } from '$app/forms';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { page } from '$app/stores';
-	import SetupConfirmation from '$lib/components/manufacturing/wax-filling/SetupConfirmation.svelte';
 	import WaxPreparation from '$lib/components/manufacturing/wax-filling/WaxPreparation.svelte';
 	import DeckLoadingGrid from '$lib/components/manufacturing/wax-filling/DeckLoadingGrid.svelte';
 	import RunExecution from '$lib/components/manufacturing/wax-filling/RunExecution.svelte';
@@ -32,7 +31,6 @@
 				plannedCartridgeCount: number | null;
 				coolingConfirmedAt: string | null;
 				existingWaxRunNote?: string;
-				activeLotId?: string | null;
 				opentronsRunId?: string | null;
 				protocolParameters?: Record<string, unknown> | null;
 			};
@@ -44,6 +42,8 @@
 				incubatorTempC: number;
 				heaterTempC: number;
 				minCoolingBeforeQcMin?: number;
+				waxPerCartridgeUl: number;
+				waxFillDeadVolumeUl: number;
 			};
 			tubeData: {
 				tubeId: string;
@@ -53,19 +53,20 @@
 				totalCartridgesFilled: number;
 				totalRunsUsed: number;
 			} | null;
-			activeLotId: string | null;
-			activeLotCartridgeCount: number | null;
-			ovenLots: {
-				lotId: string;
-				ready: boolean;
-				cartridgeCount: number;
-				ovenName?: string;
-				ovenId?: string;
-				elapsedMin?: number;
-				remainingMin?: number;
-				ovenEntryTime?: string | null;
+			waxLots: {
+				barcode: string;
+				label: string;
+				remainingVolumeUl: number;
+				source: string;
 			}[];
-			minOvenTimeMin: number;
+			backedOvens: {
+				ovenId: string;
+				ovenName: string;
+				total: number;
+				ready: number;
+			}[];
+			backedReadyCount: number;
+			backedTotalCount: number;
 			rejectionCodes: RejectionReasonCode[];
 			qcCartridges: {
 				cartridgeId: string;
@@ -153,91 +154,11 @@
 	let showCancelModal = $state(false);
 	let cancelReason = $state('');
 
-	// Backing lot scan state
-	let lotScanInput = $state('');
-	let lotScanError = $state('');
-	let lotScanSuccess = $state(false);
-	let lotScanSubmitting = $state(false);
-	// Test mode — synthesizes a TEST-LOT-<runId> BackingLot server-side so
-	// the wax flow can be run end-to-end without consuming real inventory.
-	// Distinct from the admin cure-time override (which targets a real lot).
+	// Test mode — loadDeck synthesizes backed CartridgeRecords for unknown
+	// scanned barcodes so the wax flow can be run end-to-end without going
+	// through WI-01 backing. Distinct from the admin cure-time override
+	// (which targets real under-time cartridges).
 	let testMode = $state(false);
-	// confirmed lot — once scanned OK, set from server response or existing activeLotId
-	let confirmedLotId = $state<string | null>(data.activeLotId ?? null);
-	let confirmedLotCount = $state<number | null>(data.activeLotCartridgeCount ?? null);
-
-	// "Close bucket" affordance — lets the operator zero out a partial bucket
-	// so the lot drops out of dashboard "ready" counts instead of stranding
-	// in status='ready' indefinitely.
-	let closeBucketOpen = $state(false);
-	let closeBucketReason = $state('');
-	let closeBucketMsg = $state('');
-
-	// Keep confirmedLotId in sync if server already has one (e.g. after page reload)
-	$effect(() => {
-		if (data.activeLotId && !confirmedLotId) {
-			confirmedLotId = data.activeLotId;
-			confirmedLotCount = data.activeLotCartridgeCount ?? null;
-			lotScanSuccess = true;
-		}
-	});
-
-	async function handleScanBackingLot() {
-		if (!data.runState.runId) return;
-		// In test mode the lot barcode is synthesized server-side; we don't
-		// require the input to be non-empty.
-		if (!testMode && !lotScanInput.trim()) return;
-		lotScanSubmitting = true;
-		lotScanError = '';
-		lotScanSuccess = false;
-		try {
-			const fd = new FormData();
-			fd.set('lotBarcode', lotScanInput.trim());
-			fd.set('runId', data.runState.runId);
-			if (testMode) fd.set('testMode', 'true');
-			const res = await fetch('?/scanBackingLot', {
-				method: 'POST',
-				body: fd,
-				headers: { 'x-sveltekit-action': 'true' }
-			});
-			const json = await res.json();
-			if (!res.ok) {
-				const msg = json?.error ?? json?.data?.error ?? `Error ${res.status}`;
-				lotScanError = msg;
-				// If the server says the bucket is short of its oven time,
-				// stage an admin override: open the modal pre-loaded with
-				// this lot. On confirm, the modal resubmits scanBackingLot
-				// with adminUser/adminPass + override=true.
-				const payload = json?.data ?? json;
-				if (payload?.requiresOverride && payload?.lotId) {
-					pendingOverrideAction = 'scanBackingLot';
-					pendingOverrideData = {
-						lotBarcode: payload.lotId,
-						runId: data.runState.runId ?? '',
-						override: 'true'
-					};
-				}
-			} else {
-				const d = json?.data ?? json;
-				confirmedLotId = d?.lotId ?? lotScanInput.trim();
-				confirmedLotCount = d?.cartridgeCount ?? null;
-				lotScanSuccess = true;
-				lotScanInput = '';
-				await invalidateAll();
-			}
-		} catch (e) {
-			lotScanError = e instanceof Error ? e.message : 'Scan failed';
-		} finally {
-			lotScanSubmitting = false;
-		}
-	}
-
-	function handleLotScanKeydown(e: KeyboardEvent) {
-		if (e.key === 'Enter' && lotScanInput.trim()) {
-			e.preventDefault();
-			handleScanBackingLot();
-		}
-	}
 
 	// Admin override state
 	let showOverrideModal = $state(false);
@@ -247,11 +168,10 @@
 	let pendingOverrideAction = $state('');
 	let pendingOverrideData = $state<Record<string, string>>({});
 
-	const STAGES = ['Setup', 'Loading', 'Running', 'Awaiting Removal', 'QC', 'Storage'] as const;
+	const STAGES = ['Loading', 'Running', 'Awaiting Removal', 'QC', 'Storage'] as const;
 
 	// Optimistic stage: prevents UI flash when invalidateAll() returns stale/failed data
 	const ACTION_NEXT_STAGE: Record<string, string> = {
-		confirmSetup: 'Loading',
 		recordWaxPrep: 'Loading',
 		loadDeck: 'Loading',
 		startRun: 'Running',
@@ -280,14 +200,12 @@
 
 	function stageLabel(stage: string): string {
 		switch (stage) {
-			case 'Setup':
-				return '1. Setup';
 			case 'Loading':
-				return '2. Load';
+				return '1. Load';
 			case 'Running':
-				return '3. Run';
+				return '2. Run';
 			case 'Awaiting Removal':
-				return '4. Deck Removal';
+				return '3. Deck Removal';
 			default:
 				return stage;
 		}
@@ -393,10 +311,12 @@
 						if (msg && !msg.includes('{')) serverError = msg;
 					}
 				}
-				// Store failed loadDeck action for admin override
+				// Store failed loadDeck action for admin override — the resubmit
+				// must carry override=true so the server takes the admin re-auth
+				// path for cartridges still under the minimum oven time.
 				if (action === 'loadDeck') {
 					pendingOverrideAction = action;
-					pendingOverrideData = formData;
+					pendingOverrideData = { ...formData, override: 'true' };
 				}
 				errorMsg = serverError;
 				// Scroll the error banner into view — on the deck grid the
@@ -452,21 +372,13 @@
 		}
 	}
 
-	function handleSetupComplete() {
-		if (previewParam) return;
-		if (data.runState.runId) {
-			submitAction('confirmSetup', { runId: data.runState.runId });
-		}
-	}
-
-	function handleWaxPrepComplete(result: { sourceLot: string; tubeId: string; plannedCartridgeCount?: number }) {
+	function handleWaxPrepComplete(result: { sourceLot: string; plannedCartridgeCount: number }) {
 		if (previewParam) return;
 		if (data.runState.runId) {
 			submitAction('recordWaxPrep', {
 				runId: data.runState.runId,
 				waxSourceLot: result.sourceLot,
-				waxTubeId: result.tubeId,
-				plannedCartridgeCount: String(result.plannedCartridgeCount ?? 24)
+				plannedCartridgeCount: String(result.plannedCartridgeCount)
 			});
 		}
 	}
@@ -488,13 +400,10 @@
 			if (result.countMismatchReason) {
 				formData.countMismatchReason = result.countMismatchReason;
 			}
+			if (testMode) {
+				formData.testMode = 'true';
+			}
 			submitAction('loadDeck', formData);
-		}
-	}
-
-	function handleRunStarted() {
-		if (data.runState.runId) {
-			submitAction('startRun', { runId: data.runState.runId });
 		}
 	}
 
@@ -508,23 +417,6 @@
 		if (data.runState.runId) {
 			submitAction('resetToLoading', { runId: data.runState.runId });
 		}
-	}
-
-	async function handleCloseBucket() {
-		const lotId = confirmedLotId ?? data.activeLotId;
-		if (!lotId) return;
-		const reason = closeBucketReason.trim();
-		if (!reason) {
-			closeBucketMsg = 'Reason is required';
-			return;
-		}
-		closeBucketMsg = '';
-		await submitAction('closeBucket', { lotId, reason });
-		closeBucketOpen = false;
-		closeBucketReason = '';
-		confirmedLotId = null;
-		confirmedLotCount = null;
-		lotScanSuccess = false;
 	}
 
 	function handleAborted(result: {
@@ -554,20 +446,19 @@
 		cancelReason = '';
 	}
 
-	async function handleCoolingComplete(result: { trayId: string; coolingTimestamp: Date }) {
+	async function handleCoolingComplete() {
 		// After confirmDeckRemoved sets robotReleasedAt, the load query filters
 		// the run out and data.runState.runId becomes null — so don't guard on
 		// it. The server falls back to looking up the run by robotId (which
 		// the load always returns).
 		await submitAction('confirmCooling', {
 			runId: data.runState.runId ?? '',
-			robotId: data.robotId,
-			coolingTrayId: result.trayId
+			robotId: data.robotId
 		});
-		// Final step of the wax run on this page — send operator back to
-		// Opentron Control so they can start another run. QC + Storage for
-		// this run live on the Opentron Control post-OT-2 queue.
-		if (!errorMsg) await goto('/manufacturing/cart-mfg/opentron-control');
+		// Final step of the wax run on this page — back to the wax-filling
+		// robot picker, where the post-OT-2 queue (QC + Storage for this run)
+		// is shown inline below the cards.
+		if (!errorMsg) await goto('/manufacturing/cart-mfg/wax-filling');
 	}
 
 	function handleQCComplete(result: {
@@ -678,13 +569,10 @@
 		return 'wax_prep';
 	});
 
-	// Lot scan is required before deck loading sub-stage
-	let lotConfirmed = $derived(!!confirmedLotId || !!data.activeLotId);
-
 	// Preview mode
 	type WaxStage = (typeof STAGES)[number];
 	const previewParam = $derived($page.url.searchParams.has('preview'));
-	let previewStage = $state<WaxStage>('Setup');
+	let previewStage = $state<WaxStage>('Loading');
 	let previewLoadingSub = $state<'wax_prep' | 'deck_load' | 'ready_to_run'>('wax_prep');
 	const displayStage = $derived(previewParam ? previewStage : viewStage);
 	const displayLoadingSub = $derived(previewParam ? previewLoadingSub : loadingSubStage);
@@ -735,37 +623,33 @@
 				<a href="?" class="text-xs text-[var(--color-tron-text-secondary)] underline hover:text-[var(--color-tron-text)]">Exit Preview</a>
 			</div>
 			<div class="flex flex-wrap gap-2">
-				<button type="button" onclick={() => { previewStage = 'Setup'; }}
-					class="rounded px-3 py-1.5 text-xs font-medium transition-colors {previewStage === 'Setup' ? 'bg-[var(--color-tron-cyan)] text-white' : 'border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}">
-					1. Setup
-				</button>
 				<button type="button" onclick={() => { previewStage = 'Loading'; previewLoadingSub = 'wax_prep'; }}
 					class="rounded px-3 py-1.5 text-xs font-medium transition-colors {previewStage === 'Loading' && previewLoadingSub === 'wax_prep' ? 'bg-[var(--color-tron-cyan)] text-white' : 'border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}">
-					2a. Wax Prep
+					1a. Wax Prep
 				</button>
 				<button type="button" onclick={() => { previewStage = 'Loading'; previewLoadingSub = 'deck_load'; }}
 					class="rounded px-3 py-1.5 text-xs font-medium transition-colors {previewStage === 'Loading' && previewLoadingSub === 'deck_load' ? 'bg-[var(--color-tron-cyan)] text-white' : 'border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}">
-					2b. Deck Load
+					1b. Deck Load
 				</button>
 				<button type="button" onclick={() => { previewStage = 'Loading'; previewLoadingSub = 'ready_to_run'; }}
 					class="rounded px-3 py-1.5 text-xs font-medium transition-colors {previewStage === 'Loading' && previewLoadingSub === 'ready_to_run' ? 'bg-[var(--color-tron-cyan)] text-white' : 'border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}">
-					2c. Ready
+					1c. Ready
 				</button>
 				<button type="button" onclick={() => { previewStage = 'Running'; }}
 					class="rounded px-3 py-1.5 text-xs font-medium transition-colors {previewStage === 'Running' ? 'bg-[var(--color-tron-cyan)] text-white' : 'border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}">
-					3. Running
+					2. Running
 				</button>
 				<button type="button" onclick={() => { previewStage = 'Awaiting Removal'; }}
 					class="rounded px-3 py-1.5 text-xs font-medium transition-colors {previewStage === 'Awaiting Removal' ? 'bg-[var(--color-tron-cyan)] text-white' : 'border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}">
-					4. Cool
+					3. Cool
 				</button>
 				<button type="button" onclick={() => { previewStage = 'QC'; }}
 					class="rounded px-3 py-1.5 text-xs font-medium transition-colors {previewStage === 'QC' ? 'bg-[var(--color-tron-cyan)] text-white' : 'border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}">
-					5. QC
+					4. QC
 				</button>
 				<button type="button" onclick={() => { previewStage = 'Storage'; }}
 					class="rounded px-3 py-1.5 text-xs font-medium transition-colors {previewStage === 'Storage' ? 'bg-[var(--color-tron-cyan)] text-white' : 'border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}">
-					6. Store
+					5. Store
 				</button>
 			</div>
 		</div>
@@ -877,7 +761,7 @@
 							if (result.type === 'failure') {
 								errorMsg = (result.data as Record<string, string>)?.error ?? 'Failed to create run';
 							} else {
-								pendingStage = 'Setup';
+								pendingStage = 'Loading';
 							}
 							await invalidateAll();
 							if (data.runState.hasActiveRun) {
@@ -1071,15 +955,14 @@
 				</div>
 			</div>
 		{/if}
-		{#if displayStage === 'Setup'}
-			<SetupConfirmation
-				incubatorTempC={data.settings.incubatorTempC}
-				heaterTempC={data.settings.heaterTempC}
-				onComplete={handleSetupComplete}
+		{#if displayStage === 'Loading' && displayLoadingSub === 'wax_prep'}
+			<WaxPreparation
+				waxLots={data.waxLots}
+				waxPerCartridgeUl={data.settings.waxPerCartridgeUl}
+				deadVolumeUl={data.settings.waxFillDeadVolumeUl}
+				onComplete={handleWaxPrepComplete}
 				readonly={isPreviewOrPast}
 			/>
-		{:else if displayStage === 'Loading' && displayLoadingSub === 'wax_prep'}
-			<WaxPreparation onComplete={handleWaxPrepComplete} readonly={isPreviewOrPast} />
 		{:else if displayStage === 'Loading' && displayLoadingSub === 'ready_to_run'}
 			<!-- Deck loaded, ready to start run -->
 			<div class="space-y-4">
@@ -1125,158 +1008,43 @@
 				{/if}
 			</div>
 		{:else if displayStage === 'Loading' && displayLoadingSub === 'deck_load'}
-			<!-- Backing Lot Gate — must scan before deck loading is enabled -->
+			<!-- Backed cartridge availability — informational only (the WAX-FLOW-2
+			     per-cartridge backing flow replaced the lot-scan gate) -->
 			{#if !previewParam}
-				<div class="rounded-lg border {(lotConfirmed) ? 'border-green-500/40 bg-green-900/10' : 'border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-surface)]'} p-4 space-y-3 mb-4">
-					<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">Step 1 — Scan Backing Lot Barcode</h3>
-					{#if lotConfirmed}
-						<div class="flex items-center gap-2">
-							<span class="inline-block h-2.5 w-2.5 rounded-full bg-green-500" aria-hidden="true"></span>
-							<span class="text-sm text-green-400 font-medium">Lot confirmed:</span>
-							<span class="font-mono text-sm text-[var(--color-tron-cyan)]">{confirmedLotId ?? data.activeLotId}</span>
-							{#if confirmedLotCount}
-								<span class="text-xs text-[var(--color-tron-text-secondary)]">({confirmedLotCount} cartridges)</span>
-							{/if}
-							<div class="ml-auto flex items-center gap-3">
-								<button type="button" onclick={() => { closeBucketOpen = !closeBucketOpen; closeBucketMsg = ''; }}
-									class="text-xs text-amber-400 underline hover:text-amber-300"
-									disabled={submitting}>
-									Close bucket
-								</button>
-								<button type="button" onclick={() => { confirmedLotId = null; confirmedLotCount = null; lotScanSuccess = false; lotScanError = ''; closeBucketOpen = false; }}
-									class="text-xs text-[var(--color-tron-text-secondary)] underline hover:text-[var(--color-tron-text)]">
-									Change
-								</button>
-							</div>
+				<div class="mb-4 space-y-2 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
+					<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">
+						Backed cartridges ready: <span class="font-mono text-[var(--color-tron-cyan)]">{data.backedReadyCount} / {data.backedTotalCount}</span>
+					</h3>
+					{#if data.backedOvens.length > 0}
+						<div class="space-y-0.5 text-xs text-[var(--color-tron-text-secondary)]">
+							{#each data.backedOvens as oven (oven.ovenId)}
+								<div>{oven.ovenName} — <span class="font-mono">{oven.ready}/{oven.total}</span> ready</div>
+							{/each}
 						</div>
-						{#if closeBucketOpen}
-							<div class="mt-2 rounded border border-amber-500/40 bg-amber-900/10 p-3 space-y-2">
-								<p class="text-xs text-amber-300">
-									Marks this bucket consumed and drops the remaining {confirmedLotCount ?? '?'} cartridge(s).
-									Use when the bucket has leftovers you don't plan to wax-fill.
-								</p>
-								<input
-									type="text"
-									class="tron-input w-full text-sm"
-									placeholder="Reason (required) — e.g. 'leftover from short run', 'damaged carts'"
-									bind:value={closeBucketReason}
-									disabled={submitting}
-								/>
-								{#if closeBucketMsg}
-									<div class="text-xs text-red-400">{closeBucketMsg}</div>
-								{/if}
-								<div class="flex justify-end gap-2">
-									<button type="button"
-										onclick={() => { closeBucketOpen = false; closeBucketReason = ''; closeBucketMsg = ''; }}
-										class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)]"
-										disabled={submitting}>
-										Cancel
-									</button>
-									<button type="button"
-										onclick={handleCloseBucket}
-										class="rounded bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
-										disabled={submitting || !closeBucketReason.trim()}>
-										Confirm close
-									</button>
-								</div>
-							</div>
-						{/if}
 					{:else}
 						<p class="text-xs text-[var(--color-tron-text-secondary)]">
-							Scan the Avery lot barcode from the box. Lot must have been in the oven for ≥ {data.minOvenTimeMin} minutes.
+							No backed cartridges in ovens. Scan cartridges into an oven at Cartridge Back (WI-01) first.
 						</p>
-						{#if lotScanError}
-							<div class="rounded border border-red-500/30 bg-red-900/20 px-3 py-2 text-xs text-red-300">
-								{lotScanError}
-								{#if pendingOverrideAction === 'scanBackingLot'}
-									<div class="mt-2 flex flex-wrap items-center gap-2">
-										<button type="button"
-											onclick={() => { showOverrideModal = true; overrideError = ''; }}
-											class="rounded bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700">
-											Admin Override
-										</button>
-										<button type="button"
-											onclick={() => { lotScanError = ''; lotScanInput = ''; pendingOverrideAction = ''; pendingOverrideData = {}; }}
-											class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)]">
-											Pick another bucket
-										</button>
-									</div>
-								{/if}
-							</div>
-						{/if}
-						<div class="flex items-center gap-3">
-							<input
-								type="text"
-								class="tron-input flex-1"
-								placeholder={testMode ? 'Test mode — barcode is ignored, lot will be synthesized' : 'Scan lot barcode...'}
-								bind:value={lotScanInput}
-								onkeydown={handleLotScanKeydown}
-								autocomplete="off"
-								autofocus
-								disabled={lotScanSubmitting || testMode}
-							/>
-							<button
-								type="button"
-								onclick={handleScanBackingLot}
-								disabled={lotScanSubmitting || (!testMode && !lotScanInput.trim())}
-								class="min-h-[44px] rounded-lg {testMode ? 'bg-amber-500' : 'bg-[var(--color-tron-cyan)]'} px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:opacity-80 disabled:opacity-50"
-							>
-								{lotScanSubmitting ? 'Checking...' : testMode ? 'Start Test Lot' : 'Verify'}
-							</button>
-						</div>
-						<!-- Test mode toggle -->
-						<label class="flex items-start gap-2 text-xs text-amber-400 cursor-pointer">
-							<input type="checkbox" bind:checked={testMode} class="mt-0.5 rounded" />
-							<span>
-								Test Mode — synthesize a <span class="font-mono">TEST-LOT-{'{'}runId{'}'}</span> backing lot so the wax flow can be exercised end-to-end without consuming real inventory. Real BackingLot records and cure-time checks are bypassed; the test lot's 24-cartridge count is decremented during deck-loading. No admin re-auth needed.
-							</span>
-						</label>
-						<!-- Quick-pick from ready lots -->
-						{#if data.ovenLots.filter(l => l.ready).length > 0}
-							<div class="text-xs text-[var(--color-tron-text-secondary)]">
-								<span class="text-green-400">Ready:</span>
-								{#each data.ovenLots.filter(l => l.ready) as ol}
-									<button type="button" onclick={() => { lotScanInput = ol.lotId; handleScanBackingLot(); }}
-										class="ml-1 font-mono text-[var(--color-tron-cyan)] underline hover:no-underline">
-										{ol.lotId}{ol.ovenName ? ` @ ${ol.ovenName}` : ''}
-									</button>
-								{/each}
-							</div>
-						{/if}
-						<!-- Still curing -->
-						{#if data.ovenLots.filter(l => !l.ready).length > 0}
-							<div class="text-xs text-[var(--color-tron-text-secondary)]">
-								<span class="text-amber-400">Still curing:</span>
-								{#each data.ovenLots.filter(l => !l.ready) as ol}
-									<span class="ml-1 font-mono">
-										{ol.lotId}{ol.ovenName ? ` @ ${ol.ovenName}` : ''}
-										<span class="text-amber-400">— {ol.remainingMin ?? 0} min left</span>
-									</span>
-								{/each}
-							</div>
-						{/if}
 					{/if}
+					<!-- Test mode toggle -->
+					<label class="flex items-start gap-2 text-xs text-amber-400 cursor-pointer">
+						<input type="checkbox" bind:checked={testMode} class="mt-0.5 rounded" />
+						<span>
+							Test Mode — unknown scanned barcodes are synthesized server-side as backed cartridges so the wax flow can be exercised end-to-end without WI-01 backing. Cure-time checks are bypassed for synthetic carts; no admin re-auth needed.
+						</span>
+					</label>
 				</div>
 			{/if}
 
-			<!-- Deck loading grid — only enabled after lot confirmed (or in preview) -->
-			{#if previewParam || lotConfirmed}
-				<DeckLoadingGrid
-					availableLots={previewParam ? [{ lotId: 'LOT-PREVIEW', ready: true, cartridgeCount: 24 }] : (confirmedLotId ? [{ lotId: confirmedLotId, ready: true, cartridgeCount: confirmedLotCount ?? 0 }] : data.ovenLots.filter(l => l.ready))}
-					plannedCartridgeCount={previewParam ? 24 : data.runState.plannedCartridgeCount}
-					onComplete={handleDeckLoadComplete}
-					readonly={isPreviewOrPast}
-					suppressFocus={showCancelModal || showOverrideModal}
-					robotId={data.robotId}
-					runId={data.runState.runId ?? null}
-				/>
-			{:else}
-				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">
-					<p class="text-sm text-[var(--color-tron-text-secondary)]">
-						Scan the backing lot barcode above to unlock cartridge scanning.
-					</p>
-				</div>
-			{/if}
+			<DeckLoadingGrid
+				availableLots={[{ lotId: previewParam ? 'LOT-PREVIEW' : 'backed-cartridges', ready: true, cartridgeCount: 24 }]}
+				plannedCartridgeCount={previewParam ? 24 : data.runState.plannedCartridgeCount}
+				onComplete={handleDeckLoadComplete}
+				readonly={isPreviewOrPast}
+				suppressFocus={showCancelModal || showOverrideModal}
+				robotId={data.robotId}
+				runId={data.runState.runId ?? null}
+			/>
 		{:else if displayStage === 'Running'}
 			{#if !isPreviewOrPast && data.runState.opentronsRunId && data.opentronsRobotId}
 				<EmbeddedRunController
@@ -1295,12 +1063,8 @@
 				/>
 			{/if}
 			<RunExecution
-				runDurationMin={data.settings.runDurationMin}
-				removeDeckWarningMin={data.settings.removeDeckWarningMin}
 				runId={previewParam ? 'WXR-PREVIEW' : (data.runState.runId ?? '')}
 				serverRunStartTime={previewParam ? new Date() : (data.runState.runStartTime ? new Date(data.runState.runStartTime) : null)}
-				serverRunEndTime={previewParam ? new Date(Date.now() + 600000) : (data.runState.runEndTime ? new Date(data.runState.runEndTime) : null)}
-				onRunStarted={handleRunStarted}
 				onDeckRemoved={handleDeckRemoved}
 				onAborted={handleAborted}
 				readonly={isPreviewOrPast}
@@ -1309,10 +1073,8 @@
 			<PostRunCooling
 				runEndTime={previewParam ? new Date() : (data.runState.deckRemovedTime ? new Date(data.runState.deckRemovedTime) : (data.runState.runEndTime ? new Date(data.runState.runEndTime) : new Date()))}
 				coolingWarningMin={data.settings.coolingWarningMin}
-				deckLockoutMin={data.settings.deckLockoutMin}
 				onComplete={handleCoolingComplete}
 				readonly={isPreviewOrPast}
-				suppressFocus={showCancelModal || showOverrideModal}
 			/>
 		{:else if displayStage === 'QC'}
 			{@const qcCarts = previewParam ? mockQcCartridges : data.qcCartridges.map((c) => ({
@@ -1359,7 +1121,7 @@
 					coolingConfirmedAt={previewParam ? null : (data.runState.coolingConfirmedAt ? new Date(data.runState.coolingConfirmedAt) : null)}
 					{coolingBypassed}
 					runId={data.runState.runId ?? ''}
-					lotId={data.runState.activeLotId ?? null}
+					lotId={null}
 					coolingGateMin={data.settings?.minCoolingBeforeQcMin ?? 2}
 				/>
 			{:else}

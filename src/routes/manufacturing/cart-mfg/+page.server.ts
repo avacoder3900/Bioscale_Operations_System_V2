@@ -29,7 +29,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const [
 		robots, settingsDoc, activeWaxRuns, activeReagentRuns,
-		backingLots, phaseCounts, equipOvens, locationOvens, recentLots
+		backingLots, backingCartGroups, phaseCounts, equipOvens, locationOvens, recentLots
 	] = await Promise.all([
 		OpentronsRobot.find({}).select('_id name').lean(),
 		ManufacturingSettings.findById('default').lean(),
@@ -41,8 +41,25 @@ export const load: PageServerLoad = async ({ locals }) => {
 			status: { $nin: ['completed', 'aborted', 'cancelled', 'voided',
 				'Completed', 'Aborted', 'Cancelled'] }
 		}).lean(),
-		BackingLot.find({ status: { $in: ['in_oven', 'ready', 'created'] } })
-			.sort({ ovenEntryTime: -1 }).lean(),
+		// LEGACY (WAX-FLOW-2): aggregate BackingLot buckets are display-only
+		// until drained — nothing writes to BackingLot any more.
+		BackingLot.find({
+			status: { $in: ['in_oven', 'ready', 'created'] },
+			cartridgeCount: { $gt: 0 }
+		}).sort({ ovenEntryTime: -1 }).lean(),
+		// WAX-FLOW-2: cartridges in the backing oven are individual
+		// CartridgeRecords (status='backing'). One row per WI-01 batch per oven.
+		CartridgeRecord.aggregate([
+			{ $match: { status: 'backing', _id: { $nin: checkedOutIds } } },
+			{ $group: {
+				_id: { lotId: '$backing.parentLotRecordId', ovenLocationId: '$backing.ovenLocationId' },
+				count: { $sum: 1 },
+				oldestEntry: { $min: '$backing.ovenEntryTime' },
+				ovenLocationName: { $last: '$backing.ovenLocationName' },
+				operatorUsername: { $last: '$backing.operator.username' }
+			} },
+			{ $sort: { oldestEntry: -1 } }
+		]),
 		CartridgeRecord.aggregate([
 			{ $match: { _id: { $nin: checkedOutIds } } },
 			{ $group: { _id: '$status', count: { $sum: 1 } } }
@@ -112,7 +129,31 @@ export const load: PageServerLoad = async ({ locals }) => {
 		])
 	]);
 
-	const enrichedBackingLots = (backingLots as any[]).map((bl: any) => {
+	// WAX-FLOW-2 rows: one per WI-01 batch per oven, built from individual
+	// 'backing' CartridgeRecords. lotId is the parent WI-01 LotRecord id, so the
+	// dashboard's /manufacturing/cart-mfg/lots/{lotId} links resolve.
+	const backingBatchRows = (backingCartGroups as any[]).map((g: any) => {
+		const entryMs = g.oldestEntry ? new Date(g.oldestEntry).getTime() : 0;
+		const elapsedMin = entryMs ? (now - entryMs) / 60000 : 0;
+		const isReady = elapsedMin >= minOvenTimeMin;
+		return {
+			lotId: String(g._id?.lotId ?? 'unknown'),
+			cartridgeCount: g.count ?? 0,
+			status: isReady ? 'ready' : 'in_oven',
+			ovenLocationId: g._id?.ovenLocationId ?? null,
+			ovenLocationName: g.ovenLocationName ?? null,
+			ovenEntryTime: g.oldestEntry ? new Date(g.oldestEntry).toISOString() : null,
+			elapsedMin: Math.floor(elapsedMin),
+			remainingMin: Math.max(0, Math.ceil(minOvenTimeMin - elapsedMin)),
+			isReady,
+			operatorUsername: g.operatorUsername ?? null,
+			legacy: false
+		};
+	});
+
+	// LEGACY rows: undrained BackingLot aggregates keep their existing elapsed
+	// math so per-oven floor counts don't drop during the transition.
+	const legacyBackingRows = (backingLots as any[]).map((bl: any) => {
 		const entryMs = bl.ovenEntryTime ? new Date(bl.ovenEntryTime).getTime() : 0;
 		const elapsedMin = entryMs ? (now - entryMs) / 60000 : 0;
 		return {
@@ -125,9 +166,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 			elapsedMin: Math.floor(elapsedMin),
 			remainingMin: Math.max(0, Math.ceil(minOvenTimeMin - elapsedMin)),
 			isReady: elapsedMin >= minOvenTimeMin,
-			operatorUsername: bl.operator?.username ?? null
+			operatorUsername: bl.operator?.username ?? null,
+			legacy: true
 		};
 	});
+
+	const enrichedBackingLots = [...backingBatchRows, ...legacyBackingRows];
+	const legacyBackedTotal = legacyBackingRows.reduce((s, r) => s + r.cartridgeCount, 0);
 
 	// Build ovens-with-contents: one row per oven Equipment/Location with its BackingLots inside
 	const ovenSources = [
@@ -272,7 +317,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 				inProgressLots: enrichedBackingLots.filter((bl) => !bl.isReady),
 				readyLots: enrichedBackingLots.filter((bl) => bl.isReady),
 				totalReadyCartridges: enrichedBackingLots.filter((bl) => bl.isReady).reduce((s, bl) => s + bl.cartridgeCount, 0),
-				backedTotal: phaseMap.get('backing') ?? 0
+				// Individual 'backing' CartridgeRecords + legacy aggregate buckets
+				backedTotal: (phaseMap.get('backing') ?? 0) + legacyBackedTotal
 			},
 			waxFilling: {
 				inProgress: phaseMap.get('wax_filling') ?? 0,

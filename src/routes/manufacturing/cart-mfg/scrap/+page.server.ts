@@ -124,12 +124,13 @@ export const actions: Actions = {
 	},
 
 	/**
-	 * Manually remove (pre-wax) cartridges from a BackingLot bucket sitting in
-	 * an oven. CartridgeRecords don't exist yet at this stage — cartridges are
-	 * an aggregate count on BackingLot.cartridgeCount until their UUID is
-	 * scanned at wax deck loading. So this action mirrors the wax-filling
-	 * loadDeck pattern (atomic conditional decrement; mark consumed on drain)
-	 * without creating any CartridgeRecord rows.
+	 * Manually remove a pre-wax (backing) cartridge. WAX-FLOW-2: cartridges in
+	 * the backing oven exist as individual CartridgeRecords (status='backing'),
+	 * so the scanned barcode is checked against those first — a match is
+	 * scrapped per-cartridge (the count field is ignored; one scan = one
+	 * cartridge). If no backing cartridge matches, the barcode is treated as a
+	 * LEGACY BackingLot bucket id and the old aggregate-decrement path runs
+	 * (kept until those buckets drain; nothing else writes to BackingLot).
 	 */
 	removeFromBackingLot: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
@@ -142,19 +143,66 @@ export const actions: Actions = {
 		const reason = ((data.get('reason') as string) ?? '').trim();
 
 		if (!lotBarcode) {
-			return fail(400, { removeBackingLot: { error: 'Scan the backing lot barcode' } });
-		}
-		const count = Number(countRaw);
-		if (!Number.isInteger(count) || count <= 0) {
-			return fail(400, { removeBackingLot: { error: 'Count must be a positive whole number' } });
+			return fail(400, { removeBackingLot: { error: 'Scan the cartridge or backing lot barcode' } });
 		}
 		if (!reason) {
 			return fail(400, { removeBackingLot: { error: 'Reason is required' } });
 		}
 
+		// WAX-FLOW-2 path: scanned barcode is an individual backing cartridge.
+		const backingCart = await CartridgeRecord.findOne({ _id: lotBarcode, status: 'backing' })
+			.select('_id status').lean() as any;
+		if (backingCart) {
+			const now = new Date();
+			const removalId = generateId();
+
+			await CartridgeRecord.findByIdAndUpdate(lotBarcode, {
+				$set: {
+					status: 'scrapped',
+					voidedAt: now,
+					voidReason: `Manual pre-wax removal: ${reason}`
+				}
+			});
+
+			await ManualCartridgeRemoval.create({
+				_id: removalId,
+				cartridgeIds: [lotBarcode],
+				reason,
+				operator: { _id: locals.user._id, username: locals.user.username },
+				removedAt: now
+			});
+
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'cartridge_records',
+				recordId: lotBarcode,
+				action: 'UPDATE',
+				changedBy: locals.user.username,
+				changedAt: now,
+				oldData: { status: 'backing' },
+				newData: { status: 'scrapped', removalGroupId: removalId },
+				reason: `Manual pre-wax removal: ${reason}`
+			});
+
+			return {
+				removeBackingLot: {
+					success: true,
+					removalId,
+					lotBarcode,
+					count: 1
+				}
+			};
+		}
+
+		// LEGACY path: aggregate BackingLot bucket. Count applies here only.
+		const count = Number(countRaw);
+		if (!Number.isInteger(count) || count <= 0) {
+			return fail(400, { removeBackingLot: { error: 'Count must be a positive whole number' } });
+		}
+
 		// Atomic conditional decrement — refuses to over-pull. Same pattern as
-		// wax-filling loadDeck so concurrent wax loads + manual checkouts can't
-		// drive cartridgeCount negative. See wax-filling/+page.server.ts:629.
+		// the old wax-filling loadDeck so concurrent manual checkouts can't
+		// drive cartridgeCount negative.
 		const updatedLot = await BackingLot.findOneAndUpdate(
 			{ _id: lotBarcode, cartridgeCount: { $gte: count } },
 			{ $inc: { cartridgeCount: -count } },
@@ -165,7 +213,7 @@ export const actions: Actions = {
 			const current = await BackingLot.findById(lotBarcode)
 				.select('cartridgeCount status').lean() as any;
 			if (!current) {
-				return fail(404, { removeBackingLot: { error: `Backing lot "${lotBarcode}" not found` } });
+				return fail(404, { removeBackingLot: { error: `No backing cartridge or legacy backing lot found for "${lotBarcode}"` } });
 			}
 			return fail(400, {
 				removeBackingLot: {

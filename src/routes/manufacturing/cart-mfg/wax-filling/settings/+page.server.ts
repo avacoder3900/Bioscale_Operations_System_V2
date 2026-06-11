@@ -14,7 +14,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		coolingWarningMin: 30, deckLockoutMin: 60,
 		minCoolingBeforeQcMin: 2, // hard block: QC can't run until this many min after cooling confirmed
 		incubatorTempC: 37, heaterTempC: 65,
-		waxPerDeckUl: 5000, tubeCapacityUl: 20000, waxPerCartridgeUl: 100, cartridgesPerColumn: 8
+		waxPerDeckUl: 5000, tubeCapacityUl: 20000, waxPerCartridgeUl: 100, cartridgesPerColumn: 8,
+		waxFillDeadVolumeUl: 80 // added on top of waxPerCartridgeUl × count for the 2ml tube fill (WAX-FLOW-3)
 	};
 
 	try {
@@ -44,7 +45,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 				waxPerDeckUl: wax.waxPerDeckUl ?? defaultSettings.waxPerDeckUl,
 				tubeCapacityUl: wax.tubeCapacityUl ?? defaultSettings.tubeCapacityUl,
 				waxPerCartridgeUl: wax.waxPerCartridgeUl ?? defaultSettings.waxPerCartridgeUl,
-				cartridgesPerColumn: wax.cartridgesPerColumn ?? defaultSettings.cartridgesPerColumn
+				cartridgesPerColumn: wax.cartridgesPerColumn ?? defaultSettings.cartridgesPerColumn,
+				waxFillDeadVolumeUl: wax.waxFillDeadVolumeUl ?? defaultSettings.waxFillDeadVolumeUl
 			},
 			rejectionReasons
 		};
@@ -77,7 +79,8 @@ export const actions: Actions = {
 			{ key: 'waxPerDeckUl', min: 1, max: 10000 },
 			{ key: 'tubeCapacityUl', min: 1, max: 50000 },
 			{ key: 'waxPerCartridgeUl', min: 1, max: 1000 },
-			{ key: 'cartridgesPerColumn', min: 1, max: 24 }
+			{ key: 'cartridgesPerColumn', min: 1, max: 24 },
+			{ key: 'waxFillDeadVolumeUl', min: 0, max: 2000 }
 		];
 
 		for (const f of fields) {

@@ -63,7 +63,9 @@
 			rejectedCartridges: JSON.stringify(pendingRejected),
 			trayId: trayResult.id
 		});
-		if (!errorMsg) await goto('/manufacturing/cart-mfg/opentron-control');
+		// Back to the reagent-filling robot picker — the post-OT-2 queue (top
+		// sealing + storage for this run) is shown inline below the cards.
+		if (!errorMsg) await goto('/manufacturing/cart-mfg/reagent-filling');
 	}
 
 	function rescanTray() {

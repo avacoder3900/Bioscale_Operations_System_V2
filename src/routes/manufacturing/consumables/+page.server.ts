@@ -23,13 +23,18 @@ export const load: PageServerLoad = async ({ locals }) => {
 		{ $group: { _id: '$status', count: { $sum: 1 } } }
 	]);
 	const phaseMap = new Map<string, number>(phaseCounts.map((p: any) => [p._id ?? 'unknown', p.count]));
-	// "Backed" cartridges live as aggregate BackingLot.cartridgeCount, not as
-	// individual CartridgeRecord docs (they don't individuate until wax scan).
-	const backedAgg = await BackingLot.aggregate([
-		{ $match: { status: { $in: ['in_oven', 'ready'] } } },
-		{ $group: { _id: null, total: { $sum: '$cartridgeCount' } } }
+	// "Backed" cartridges (WAX-FLOW-2) are individual CartridgeRecords with
+	// status='backing', scanned in one-by-one at WI-01. Legacy BackingLot
+	// aggregate buckets (no per-cartridge records) are added on top until
+	// drained — nothing writes to BackingLot any more.
+	const [backedCartCount, legacyBackedAgg] = await Promise.all([
+		CartridgeRecord.countDocuments({ status: 'backing', _id: { $nin: checkedOutIds } }),
+		BackingLot.aggregate([
+			{ $match: { status: { $in: ['in_oven', 'ready', 'created'] }, cartridgeCount: { $gt: 0 } } },
+			{ $group: { _id: null, total: { $sum: '$cartridgeCount' } } }
+		]).catch(() => [])
 	]);
-	const backedCount = (backedAgg[0] as any)?.total ?? 0;
+	const backedCount = backedCartCount + ((legacyBackedAgg[0] as any)?.total ?? 0);
 
 	const waxStats = await WaxFillingRun.aggregate([
 		{ $match: { status: { $in: ['completed', 'Completed'] } } },
