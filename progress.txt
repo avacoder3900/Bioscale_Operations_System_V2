@@ -2195,3 +2195,84 @@ bims-capture-agent retains the original scanner-debounce commit.
   exists at rest (capture only heals carts as they're photographed).
 - Any OTHER write path that `$push`es to `photos[]` will hit the same
   non-array 500 — apply the same coercion + updatePipeline pattern.
+
+
+## Session 2026-06-11 — Wax flow revamp (WAX-FLOW PRDs 1-4) + wax-creation 500 fix
+
+### Branch
+jq/wax-flow-revamp (from master/79a335f post-consolidation trunk). PRDs in
+docs/prds/WAX-FLOW-{1-4}-*.md, decisions confirmed with Jacob in-session.
+
+### wax-creation prod 500 — root cause + fix (d9b7006)
++page.svelte rendered data.waxParts during SSR but load returned only
+{ lotNumber } -> TypeError -> 500 on every view (UI/server mismatch from the
+trunk consolidation; the .svelte was written against WAX-CREATION-PARTS-LINK
+which was never implemented server-side). Fix: waxParts (PT-CT-108/109/110)
+in load + consumption via the centralized recordTransaction service.
+
+### WAX-FLOW-1 (b2ebff8) — filling tabs primary, hub backup
+Cart-mfg menu: Opentron Control -> Wax Filling / Wax Inspect / Reagent
+Filling. Robot pickers already existed on both filling layouts (no-param =
+picker). Robot cards + post-OT-2 queues extracted to
+lib/server/manufacturing/robot-cards.ts; queues now render inline on both
+filling layouts; ALL end-of-flow redirects repointed from the hub to the
+filling pages. /opentron-control + sub-routes stay reachable as backup.
+
+### WAX-FLOW-2 (b393bb9 + 7ba0584) — per-cartridge backing origination
+BackingLot aggregate retired. WI-01 gains an oven-scan step: each backed
+cartridge scanned (oven locked after first scan) -> CartridgeRecord created
+with status='backing', full material lineage from LotRecord.inputLots, oven
+entry time + new backing.ovenLocationId/Name fields. confirmComplete derives
+good count from scans; bucket barcode gone. wax-filling loadDeck validates
+status='backing' + per-cartridge minOvenTimeMin (admin re-auth override;
+test mode synthesizes carts, marked by missing parentLotRecordId).
+cancel/abort revert carts to 'backing' (synthetics deleted). 7 consumers
+switched to CartridgeRecord queries with read-only legacy BackingLot rows:
+cart-mfg dashboard, pipeline, cartridge-dashboard, consumables,
+equipment-status, equipment-activity, scrap (scrap now per-cartridge for
+backing carts; legacy bucket path retained). scripts/close-legacy-backing-
+lots.ts (dry-run default) for the final drain.
+
+### WAX-FLOW-3 (7ba0584) — fill flow simplification
+Setup stage deleted (createRun starts in Loading; toStage maps stale Setup
+runs to Loading). WaxPreparation rewritten 5->3 steps: wax lot DROPDOWN
+(active WaxBatches + PT-CT-114 receiving lots, loaded in page load), count,
+computed fill volume. Volume = waxPerCartridgeUl x count +
+waxFillDeadVolumeUl (new ManufacturingSettings field, default 80, editable
+on wax-filling settings). recordWaxPrep validates remaining volume server-
+side and persists run.fillVolumeUl; completeRun (both copies: wax-filling +
+opentron-control/wax/[runId]) decrements WaxBatch/ReceivingLot by it
+(LEGACY_WAX_FILL_VOLUME_UL=800 fallback for old runs). 2ml-tube-lot scan +
+A3 popup deleted — NOTE: per-run 2ml tube consumption no longer recorded
+(old scan accepted any receiving lot; no part number to FIFO against —
+legacy waxTubeId block kept for old runs; revisit if Jacob supplies the
+2ml tube part number). Run countdown timer removed (RunExecution slimmed;
+OT-2 polling via EmbeddedRunController drives completion). PostRunCooling:
+tray + oven scans removed -> single "Cartridges Placed in Cooler" confirm
+(the old oven-scan result was already discarded by the page). confirmCooling
+works with no tray.
+
+### WAX-FLOW-4 (eafcd90) — wax-inspect inline CV page
+/manufacturing/cart-mfg/wax-inspect: scanner-wedge sticky context (gated to
+wax_filling/wax_filled/wax_stored), Pi WebRTC station (lock+JWT) or USB
+camera, capture -> /api/cv/capture phase=wax_filled, 2s verdict polling
+(PASS/FAIL + confidence + defects; shadow as caption), live feed of last 50
+wax_filled inspections, no-model-deployed notice. Config prereq: a CvProject
+needs deployAtPhases:['wax_filled'] + promoted activeModelVersion.
+
+### Known issues / follow-ups
+- CvInspection schema enum ('pending/processing/complete/failed') mismatches
+  what run-inference.ts writes ('running'/'completed' + isShadow/triggeredAt
+  not in schema) — PRE-EXISTING; could break inline inference at runtime.
+  Verify against Atlas before first wax-inspect go-live.
+- Legacy in-oven BackingLots: shown read-only on dashboard/pipeline; wax fill
+  no longer accepts them. Physical carts from those buckets must be scanned
+  through the new WI-01 oven step; then run close-legacy-backing-lots.ts.
+- 2ml tube consumption gap (see WAX-FLOW-3 note above).
+- reagent-filling still has its own SetupConfirmation/flow — untouched by
+  design (Jacob's asks were wax-specific apart from the tabs split).
+
+### Validation
+npm run check: 11 errors = exactly the documented pre-existing baseline
+(r2.ts, run-inference anomaly_score, AskBimsWidget, 8x assembly implicit-
+any). Zero new errors. Contract tests not run (need running app).
