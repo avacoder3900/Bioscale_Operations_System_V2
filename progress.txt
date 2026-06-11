@@ -2339,3 +2339,38 @@ direct-only. PRDs: docs/prds/OT2-BRIDGE-1/-2.
   per robot before using robot deck-scan.
 - Legacy single-scan trigger/event path intentionally retained (per-slot
   rescans + teach test-scans); consolidation into commands is later cleanup.
+
+
+## Session 2026-06-11 (cont. 2) — One-button Start Run + lab runbook
+
+### Orchestrated Start Run (61aca89)
+Jacob (screenshot feedback): no standalone deck-scan UI — scanning should be
+implicit in starting the run. Wax Loading stage now leads with the
+ProtocolStartPanel; pressing Start Run executes a visible checklist:
+robot deck-barcode scan (/api/scanner/deck-scan) -> gantry cartridge sweep
+(live slot N/M via SweepRun polling) -> loadDeck (admin-override capture
+preserved; abort on partial scans/duplicates) -> startRun with the captured
+protocol/params FormData. ProtocolStartPanel gained optional
+onSubmitIntercept(formData) (backward compatible — reagent + ready_to_run
+usages unchanged). Manual DeckLoadingGrid demoted to a collapsed Manual
+scanning (fallback) details section that auto-opens on abort; kept as the
+primary UI when the robot has no OT-2 linkage. loadingSubStage pins to
+deck_load while orchestrating (loadDeck sets deckId mid-flight, which would
+otherwise unmount the checklist). Reagent page intentionally not yet
+converted.
+
+### Barcode-position reality check (documented for the floor)
+Positions are TAUGHT coordinates (OpentronsScannerPositionSet), not
+discovered: B07 = 8 hand-taught + 16 extrapolated (+148mm/column) with a
+-50mm Z shift; R04/B14 = verbatim clones of B07, NEVER jog-verified.
+deckBarcodePosition exists as of OT2-BRIDGE-2 but NO robot has one taught
+yet — teach on the scanner-positions page (new Deck Barcode section) after
+ensuring the deck label is physically gantry-readable.
+
+### docs/LAB-MAC-RUNBOOK-OT2-BRIDGE.md (new)
+Ordered go-live checklist for the lab Mac: deploy ot2-bridge to B07 (stop
+old scanner-bridge first; do NOT copy its BIMS_BASE_URL — it points at the
+Mac LAN IP from May perf testing), systemd enable, heartbeat verification,
+teach deck position, then test the one-button Start Run from the PRODUCTION
+URL (Test Mode synthesizes cartridges). R04/B14 jog-verification + rollout
+as time permits.
