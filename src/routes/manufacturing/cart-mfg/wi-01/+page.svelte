@@ -8,6 +8,7 @@
 		status: string;
 		createdAt: string;
 		finishTime: string | null;
+		bucketBarcode?: string | null;
 	}
 
 	interface Props {
