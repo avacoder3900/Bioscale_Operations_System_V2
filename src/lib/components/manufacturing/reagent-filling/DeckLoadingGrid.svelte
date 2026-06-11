@@ -119,6 +119,39 @@
 		step = 'loading';
 	}
 
+	// Robot deck-barcode scan (OT2-BRIDGE-2): the OT-2's gantry scanner reads
+	// the deck's own barcode label via POST /api/scanner/deck-scan, then the
+	// result runs through the exact same validation path as a manual Enter.
+	let deckScanInFlight = $state(false);
+	let deckScanError = $state('');
+
+	async function scanDeckWithRobot() {
+		if (isReadonly || !robotId || deckScanInFlight) return;
+		deckScanInFlight = true;
+		deckScanError = '';
+		try {
+			const res = await fetch('/api/scanner/deck-scan', {
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ robotId })
+			});
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok || !body?.barcode) {
+				deckScanError = (body?.message ?? body?.error ?? `Deck scan failed (HTTP ${res.status})`).toString();
+				playBeep(false);
+				return;
+			}
+			deckInput = String(body.barcode);
+			await handleDeckKeydown(new KeyboardEvent('keydown', { key: 'Enter' }));
+		} catch (e) {
+			deckScanError = e instanceof Error ? e.message : String(e);
+			playBeep(false);
+		} finally {
+			deckScanInFlight = false;
+		}
+	}
+
 	function rescanDeck() {
 		deckPendingValue = '';
 		setTimeout(() => deckInputEl?.focus(), 50);
@@ -470,7 +503,25 @@
 							autofocus
 						/>
 					</div>
+					{#if robotId}
+						<button
+							type="button"
+							onclick={scanDeckWithRobot}
+							disabled={deckScanInFlight}
+							class="mt-5 shrink-0 rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-3 py-2 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40"
+						>
+							{#if deckScanInFlight}
+								<span class="mr-1 inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent align-[-2px]" aria-hidden="true"></span>
+								Robot scanning deck…
+							{:else}
+								Scan Deck with Robot
+							{/if}
+						</button>
+					{/if}
 				</div>
+				{#if deckScanError}
+					<p class="mt-2 text-xs text-red-300">{deckScanError}</p>
+				{/if}
 				<button
 					type="button"
 					onclick={async () => {

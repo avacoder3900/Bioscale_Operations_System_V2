@@ -6,9 +6,13 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, OpentronsScannerSweepRun, OpentronsRobot } from '$lib/server/db';
-import { getRobot } from '$lib/server/opentrons/proxy';
+import { connectDB, OpentronsScannerSweepRun, Ot2BridgeCommand } from '$lib/server/db';
+import { getRobot, robotGet } from '$lib/server/opentrons/proxy';
 import { closeMaintenanceRun } from '$lib/server/opentrons/maintenance';
+
+// Cancel may relay the maintenance-run close through the command bridge,
+// which can take tens of seconds when the daemon is slow to claim.
+export const config = { maxDuration: 60 };
 
 function pickSnapshot(doc: any) {
 	return {
@@ -41,8 +45,37 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
-	const doc = await OpentronsScannerSweepRun.findById(params.id).lean();
+	let doc = await OpentronsScannerSweepRun.findById(params.id).lean() as any;
 	if (!doc) error(404, 'Sweep run not found');
+
+	// Lazy liveness check (OT2-BRIDGE-2): commands only get expired when a
+	// daemon polls or a caller waits — a sweep has neither, so a dead daemon
+	// would leave the run "running" forever. The UI polls this snapshot, so
+	// detect the stranded command here and fail the run visibly.
+	if (doc.status === 'running') {
+		const cmd = await Ot2BridgeCommand.findOne({ kind: 'sweep', 'payload.sweepRunId': params.id })
+			.sort({ createdAt: -1 }).select('status createdAt ttlMs').lean() as any;
+		const overdue = cmd?.status === 'pending'
+			&& Date.now() - new Date(cmd.createdAt).getTime() > (cmd.ttlMs ?? 120_000);
+		if (cmd && (cmd.status === 'expired' || cmd.status === 'failed' || overdue)) {
+			const now = new Date();
+			if (overdue) {
+				await Ot2BridgeCommand.updateOne(
+					{ _id: cmd._id, status: 'pending' },
+					{ $set: { status: 'expired', error: 'Never claimed by bridge daemon', completedAt: now } }
+				);
+			}
+			doc = await OpentronsScannerSweepRun.findByIdAndUpdate(params.id, {
+				$set: {
+					status: 'errored',
+					completedAt: now,
+					abortReason: 'Bridge daemon did not pick up the sweep — is the robot\'s bridge online?'
+				},
+				$push: { log: { ts: now, level: 'error', message: 'Sweep command was never claimed by the bridge daemon' } }
+			}, { new: true }).lean() as any;
+		}
+	}
+
 	return json(pickSnapshot(doc));
 };
 
@@ -82,21 +115,36 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 			}
 		});
 
-		// Step 2: actively close any open maintenance run on the OT-2. Closing
-		// the run releases motor holds + unblocks any HTTP call the wedged
-		// worker is still waiting on (the OT-2 will respond to subsequent
-		// commands with "run not found", which makes the worker throw + exit
-		// the try/catch cleanly).
+		// Step 2: expire any live bridge command for this sweep. A dead daemon
+		// must not strand the command in the queue (pending), and a daemon that
+		// claims/continues it late gets a 409 from the progress endpoint once
+		// the command is terminal — so the cancelled sweep can't resurrect.
+		await Ot2BridgeCommand.updateMany(
+			{
+				kind: 'sweep',
+				status: { $in: ['pending', 'claimed'] },
+				'payload.sweepRunId': params.id
+			},
+			{
+				$set: {
+					status: 'expired',
+					error: `Sweep cancelled by ${locals.user.username}`,
+					completedAt: new Date()
+				}
+			}
+		).catch((e) => {
+			console.warn('[cancel] expiring sweep command failed:', e instanceof Error ? e.message : e);
+		});
+
+		// Step 3: actively close any open maintenance run on the OT-2 — the
+		// wedge fallback. Closing the run releases motor holds + makes any
+		// in-flight motion command on a wedged daemon fail fast ("run not
+		// found"). robotGet/closeMaintenanceRun are transport-aware, so this
+		// works both direct (lab LAN) and via kind:'http' bridge commands.
 		const robot = await getRobot(doc.robotId);
 		if (robot) {
 			try {
-				const baseUrl = `http://${(robot as any).ip}:${(robot as any).port ?? 31950}`;
-				const ac = new AbortController();
-				const t = setTimeout(() => ac.abort(), 8_000);
-				const cr = await fetch(`${baseUrl}/maintenance_runs/current_run`, {
-					headers: { 'opentrons-version': '3' },
-					signal: ac.signal
-				}).finally(() => clearTimeout(t));
+				const cr = await robotGet(robot as any, '/maintenance_runs/current_run');
 				if (cr.ok) {
 					const cb: any = await cr.json();
 					const runId = cb?.data?.id;

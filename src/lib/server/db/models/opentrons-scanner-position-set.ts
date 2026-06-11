@@ -33,6 +33,17 @@ const opentronsScannerPositionSetSchema = new Schema(
 		title: { type: String, required: true },
 		positionCount: { type: Number, required: true, min: 1 },
 		positions: { type: [positionSchema], default: [] },
+		// Optional taught position of the deck's own barcode label (OT2-BRIDGE-2).
+		// Used by the kind:'deck_scan' bridge command to read the deck barcode
+		// with the gantry scanner at deck loading. Plain nested object — no _id.
+		deckBarcodePosition: {
+			x: Number,
+			y: Number,
+			z: Number,
+			// Optional last test-scan barcode captured during teaching, for sanity.
+			testScanBarcode: String,
+			testScannedAt: Date
+		},
 		isDefault: { type: Boolean, default: false, index: true },
 		// Mount metadata captured at teach time so the sweep uses the same
 		// pipette mount that was used during calibration.

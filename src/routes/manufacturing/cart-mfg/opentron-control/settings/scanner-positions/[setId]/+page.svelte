@@ -6,12 +6,14 @@
 	let { data, form } = $props();
 
 	type Position = { slotIndex: number; x: number; y: number; z: number; testScanBarcode?: string };
+	type DeckBarcodePosition = { x: number; y: number; z: number; testScanBarcode?: string; testScannedAt?: string };
 	type SetDoc = {
 		_id: string;
 		robotId: string;
 		title: string;
 		positionCount: number;
 		positions: Position[];
+		deckBarcodePosition?: DeckBarcodePosition | null;
 		isDefault: boolean;
 		pipetteMount?: 'left' | 'right';
 		pipetteName?: string;
@@ -28,6 +30,12 @@
 		return m;
 	});
 	const taughtCount = $derived(positionsBySlot.size);
+	const deckPos = $derived.by<DeckBarcodePosition | null>(() => {
+		const p = set.deckBarcodePosition;
+		return p && typeof p.x === 'number' && typeof p.y === 'number' && typeof p.z === 'number'
+			? p
+			: null;
+	});
 
 	let selectedSlot = $state<number>(0);
 	let stepSize = $state<number>(1); // mm
@@ -323,6 +331,73 @@
 		return null;
 	}
 
+	async function moveToDeckPosition() {
+		if (!runId || !pipetteId) {
+			lastError = 'Open a maintenance run first';
+			return;
+		}
+		if (!deckPos) {
+			lastError = 'The deck-barcode position has not been saved yet.';
+			return;
+		}
+		clearMessages();
+		busy = true;
+		try {
+			await api(`/api/opentrons-lab/robots/${robot._id}/maintenance/${runId}/move-to`, {
+				method: 'POST',
+				body: JSON.stringify({ pipetteId, x: deckPos.x, y: deckPos.y, z: deckPos.z })
+			});
+			lastInfo = 'Moved to deck-barcode position.';
+			await refreshPosition();
+		} catch (e) {
+			lastError = e instanceof Error ? e.message : String(e);
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function saveDeckPosition() {
+		clearMessages();
+		// Refresh position right before saving so we record the OT-2's authoritative XYZ.
+		if (!runId || !pipetteId) {
+			lastError = 'Open a maintenance run first';
+			return;
+		}
+		busy = true;
+		try {
+			await refreshPosition();
+			if (liveX === null || liveY === null || liveZ === null) {
+				lastError = 'Could not read position from robot';
+				return;
+			}
+			const body: Record<string, unknown> = { x: liveX, y: liveY, z: liveZ };
+			if (testScanLatest?.barcode) body.testScanBarcode = testScanLatest.barcode;
+			await api(`/api/scanner-position-sets/${set._id}/deck-position`, {
+				method: 'PUT',
+				body: JSON.stringify(body)
+			});
+			lastInfo = `Saved deck-barcode position: x=${liveX.toFixed(2)} y=${liveY.toFixed(2)} z=${liveZ.toFixed(2)}`;
+			// Clear test scan so it's fresh for the next position
+			testScanLatest = null;
+			await invalidateAll();
+		} catch (e) {
+			lastError = e instanceof Error ? e.message : String(e);
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function clearDeckPosition() {
+		if (!confirm('Clear the saved deck-barcode position?')) return;
+		try {
+			await api(`/api/scanner-position-sets/${set._id}/deck-position`, { method: 'DELETE' });
+			await invalidateAll();
+			lastInfo = 'Cleared deck-barcode position';
+		} catch (e) {
+			lastError = e instanceof Error ? e.message : String(e);
+		}
+	}
+
 	async function clearSlot(slotIndex: number) {
 		if (!confirm(`Clear saved XYZ for slot ${slotIndex + 1}?`)) return;
 		try {
@@ -483,6 +558,53 @@
 						</button>
 					</div>
 				{/if}
+			</div>
+
+			<!-- Deck barcode position — taught once per robot; used by "Scan Deck
+			     with Robot" at deck loading (OT2-BRIDGE-2). Same jog → save →
+			     optional test-scan flow as the slot teaching above. -->
+			<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-black/30 p-2 text-xs" style="color: var(--color-tron-text)">
+				<div class="font-bold" style="color: var(--color-tron-cyan)">Deck Barcode {deckPos ? '(taught)' : '(not taught)'}</div>
+				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">
+					Position where the gantry scanner can read the deck's own barcode label. Jog there, optionally Test Scan, then save.
+				</p>
+				{#if deckPos}
+					<div class="mt-1 grid grid-cols-3 gap-1 font-mono text-[11px]">
+						<span>x: {deckPos.x.toFixed(2)}</span>
+						<span>y: {deckPos.y.toFixed(2)}</span>
+						<span>z: {deckPos.z.toFixed(2)}</span>
+					</div>
+					{#if deckPos.testScanBarcode}
+						<div class="mt-1 break-all text-[10px]" style="color: var(--color-tron-text-secondary)">last test scan: {deckPos.testScanBarcode}</div>
+					{/if}
+				{/if}
+				<div class="mt-2 flex gap-2">
+					<button
+						type="button"
+						onclick={saveDeckPosition}
+						disabled={!runId || !pipetteId || busy}
+						class="rounded border border-green-500/50 bg-green-900/20 px-2 py-1 text-[11px] font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40"
+					>
+						Save Deck Position
+					</button>
+					{#if deckPos}
+						<button
+							type="button"
+							onclick={moveToDeckPosition}
+							disabled={!runId || !pipetteId || busy}
+							class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40"
+						>
+							Move here
+						</button>
+						<button
+							type="button"
+							onclick={clearDeckPosition}
+							class="rounded border border-red-500/30 px-2 py-1 text-[11px] text-red-300 hover:bg-red-900/20"
+						>
+							Clear
+						</button>
+					{/if}
+				</div>
 			</div>
 		</section>
 
