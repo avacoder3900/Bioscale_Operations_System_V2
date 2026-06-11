@@ -2276,3 +2276,66 @@ needs deployAtPhases:['wax_filled'] + promoted activeModelVersion.
 npm run check: 11 errors = exactly the documented pre-existing baseline
 (r2.ts, run-inference anomaly_score, AskBimsWidget, 8x assembly implicit-
 any). Zero new errors. Contract tests not run (need running app).
+
+
+## Session 2026-06-11 (cont.) — OT-2 command bridge (OT2-BRIDGE PRDs 1-2) + wax math fix
+
+### Wax math fix (4033ff4)
+Live ManufacturingSettings.waxFilling.waxPerCartridgeUl was 200; corrected to
+19.2 via scripts/set-wax-per-cartridge-19-2.ts (audit logged). Code fallbacks
+updated; settings number inputs gained step="any".
+
+### Architecture decision (Jacob)
+Outbound-only command bridge = the standing BIMS IoT control-plane pattern
+(robot arm + CV stations migrate later). Two-tier rule: control plane =
+device polls BIMS (works from Vercel, zero inbound exposure); heavy realtime
+data plane (video) = direct browser<->device on LAN with BIMS-minted tokens.
+One unified daemon per OT-2 (replaces scanner-bridge.py). v1 scope: filling
+flows + sweep + deck scan + teach/jog + health; opentrons-clone stays
+direct-only. PRDs: docs/prds/OT2-BRIDGE-1/-2.
+
+### OT2-BRIDGE-1 (5d892c6) — command bridge core + daemon
+- Ot2BridgeCommand queue (kinds http/sweep/deck_scan; TTL 7d on completedAt;
+  pending->expired via ttlMs). OpentronsRobot.bridgeDeviceId
+  (ot2-<slot>-bridge, derived from name like the scanner deviceId).
+- /api/agent/ot2/poll (long-poll claim, 20s cap, expires overdue pending),
+  /commands/[id]/result, /commands/[id]/progress (writes sweep progress onto
+  OpentronsScannerSweepRun, echoes pause/cancel, supports final).
+- proxy.ts: OT2_TRANSPORT=direct|bridge|auto (auto: VERCEL->bridge).
+  bridgeFetch returns a real Response — all robotGet/Post/Patch/Delete call
+  sites inherit unchanged (maintenance.ts already used them). Timeout errors
+  include last bridge heartbeat age. run-lifecycle.ts + health-poller.ts raw
+  fetches moved onto proxy verbs. NOT bridged: protocol upload/deploy
+  (multipart) + the whole opentrons-clone stack (direct/localhost as before).
+- scripts/ot2-bridge.py (Py3.7-safe, pyserial+requests): command long-poll
+  worker (http relay to localhost:31950 with the 201-but-inner-failed check;
+  on-robot sweep + deck_scan executors with serial-port lock), legacy
+  scanner trigger loop (unchanged contract), heartbeat with /health snapshot.
+  run.sh + systemd unit + scripts/OT2-BRIDGE-DEPLOYMENT.md (supersedes
+  SCANNER-OT2-DEPLOYMENT.md; stop old scanner-bridge first; B07->R04->B14).
+- .gitattributes pins *.py/*.sh/*.service to LF (Windows checkout would
+  break shebangs on the robot).
+
+### OT2-BRIDGE-2 (f87ccee) — on-robot sweep + robot deck scan
+- /api/scanner/sweep enqueues ONE kind:sweep command; in-process per-slot
+  worker DELETED (daemon walks slots locally, scans serial directly — no
+  more per-slot ScannerTrigger/Event round-trips — and streams progress).
+  Sweep UI contract unchanged (same SweepRun polling).
+- Cancel expires the queued command + keeps transport-aware active
+  maintenance-run close; snapshot GET lazily marks runs errored when the
+  command was never claimed (dead-daemon detection).
+- Position sets: deckBarcodePosition taught on the scanner-positions page
+  (new PUT/DELETE /api/scanner-position-sets/[id]/deck-position).
+- POST /api/scanner/deck-scan (sync, waits up to 45s) + "Scan Deck with
+  Robot" buttons on both DeckLoadingGrids (manual input kept as fallback).
+
+### Validation / deployment status
+- npm run check: 11-error baseline, zero new. python -m py_compile clean;
+  3.7-compat reviewed; NOT hardware-tested.
+- NEXT PHYSICAL STEP: deploy ot2-bridge to B07 per OT2-BRIDGE-DEPLOYMENT.md
+  (stop scanner-bridge, install /data/ot2-bridge, systemd enable), verify
+  heartbeat, then test Start Run + sweep from the Vercel deploy
+  (OT2_TRANSPORT auto picks bridge there). Teach deck-barcode positions
+  per robot before using robot deck-scan.
+- Legacy single-scan trigger/event path intentionally retained (per-slot
+  rescans + teach test-scans); consolidation into commands is later cleanup.
