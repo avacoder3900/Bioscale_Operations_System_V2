@@ -14,7 +14,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		coolingWarningMin: 30, deckLockoutMin: 60,
 		minCoolingBeforeQcMin: 2, // hard block: QC can't run until this many min after cooling confirmed
 		incubatorTempC: 37, heaterTempC: 65,
-		waxPerDeckUl: 5000, tubeCapacityUl: 20000, waxPerCartridgeUl: 100, cartridgesPerColumn: 8,
+		waxPerDeckUl: 5000, tubeCapacityUl: 20000, waxPerCartridgeUl: 19.2, cartridgesPerColumn: 8,
 		waxFillDeadVolumeUl: 80 // added on top of waxPerCartridgeUl × count for the 2ml tube fill (WAX-FLOW-3)
 	};
 

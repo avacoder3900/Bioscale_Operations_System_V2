@@ -24,7 +24,7 @@ const WAX_TUBE_PART_NUMBER = 'PT-CT-114'; // purchased 15ml wax tubes (Receiving
 
 /** 2ml-tube fill volume for a run (WAX-FLOW-3). */
 function computeFillVolumeUl(waxSettings: any, plannedCount: number): number {
-	const perCart = Number(waxSettings?.waxPerCartridgeUl ?? 30);
+	const perCart = Number(waxSettings?.waxPerCartridgeUl ?? 19.2);
 	const dead = Number(waxSettings?.waxFillDeadVolumeUl ?? 80);
 	return Math.ceil(perCart * Math.max(1, plannedCount) + dead);
 }
@@ -94,7 +94,7 @@ function emptyState(robotId: string, loadError: string | null = null) {
 		settings: {
 			runDurationMin: 45, removeDeckWarningMin: 5, coolingWarningMin: 7,
 			deckLockoutMin: 25, incubatorTempC: 37, heaterTempC: 65,
-			minCoolingBeforeQcMin: 2, waxPerCartridgeUl: 30, waxFillDeadVolumeUl: 80
+			minCoolingBeforeQcMin: 2, waxPerCartridgeUl: 19.2, waxFillDeadVolumeUl: 80
 		},
 		tubeData: null as null | {
 			tubeId: string; initialVolumeUl: number; remainingVolumeUl: number;
@@ -414,7 +414,7 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 				incubatorTempC: wax.incubatorTempC ?? 37,
 				heaterTempC: wax.heaterTempC ?? 65,
 				minCoolingBeforeQcMin: wax.minCoolingBeforeQcMin ?? 2,
-				waxPerCartridgeUl: wax.waxPerCartridgeUl ?? 30,
+				waxPerCartridgeUl: wax.waxPerCartridgeUl ?? 19.2,
 				waxFillDeadVolumeUl: wax.waxFillDeadVolumeUl ?? 80
 			},
 			tubeData,

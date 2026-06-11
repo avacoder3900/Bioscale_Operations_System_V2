@@ -156,6 +156,7 @@
 								value={data.settings[field.key]}
 								min={field.min}
 								max={field.max}
+								step="any"
 								required
 								class="min-h-[44px] w-full rounded border px-3 py-2 text-sm text-[var(--color-tron-text)] placeholder-[var(--color-tron-text-secondary)] focus:outline-none {fieldError
 									? 'border-red-500 bg-red-900/10 focus:border-red-400'
