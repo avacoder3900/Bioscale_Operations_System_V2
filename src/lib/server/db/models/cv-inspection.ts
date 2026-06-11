@@ -3,37 +3,29 @@ import { generateId } from '../utils.js';
 
 const cvInspectionSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
-
-	// What was inspected
-	imageId: { type: String, required: true, index: true },
-	cartridgeRecordId: { type: String, required: true, index: true },
-	phase: { type: String, required: true },
-
-	// Which model decided
-	projectId: { type: String, required: true, index: true },
-	modelVersion: { type: String, required: true },       // matches CvProject.trainedModels[].version
-	modelPath: { type: String, required: true },         // R2 key of the ONNX used
-	isShadow: { type: Boolean, default: false },         // true = parallel A/B inference, not the production decision
-
-	// Decision
+	sampleId: String,
+	imageId: String,
+	projectId: { type: String, index: true },
+	inspectionType: String,
+	status: { type: String, enum: ['pending', 'processing', 'complete', 'failed'], default: 'pending' },
 	result: { type: String, enum: ['pass', 'fail', null], default: null },
 	confidenceScore: Number,
-	anomalyScore: Number,
-	confidenceThreshold: Number,
 	defects: [{ type: String, location: String, severity: String, _id: false }],
-
-	// Lifecycle
-	status: { type: String, enum: ['queued', 'running', 'completed', 'failed'], default: 'queued' },
+	modelVersion: String,
 	processingTimeMs: Number,
-	errorMessage: String,
-
-	// Provenance
-	triggeredBy: { type: String, enum: ['auto-on-capture', 'manual', 'batch'], default: 'auto-on-capture' },
-	triggeredAt: { type: Date, default: Date.now },
-	completedAt: Date
+	cartridgeRecordId: String,
+	phase: String,
+	completedAt: Date,
+	// Human ground-truth review of the model's verdict. Feeds the training set:
+	// 'pass' -> CvImage.label 'approved', 'fail' -> 'rejected'.
+	humanLabel: { type: String, enum: ['pass', 'fail', null], default: null },
+	reviewedBy: { _id: String, username: String },
+	reviewedAt: Date
 }, { timestamps: true });
 
+cvInspectionSchema.index({ sampleId: 1 });
 cvInspectionSchema.index({ status: 1 });
-cvInspectionSchema.index({ projectId: 1, modelVersion: 1 });
+cvInspectionSchema.index({ cartridgeRecordId: 1 });
+cvInspectionSchema.index({ projectId: 1, humanLabel: 1 });
 
 export const CvInspection = mongoose.models.CvInspection || mongoose.model('CvInspection', cvInspectionSchema, 'cv_inspections');
