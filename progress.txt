@@ -2374,3 +2374,72 @@ Mac LAN IP from May perf testing), systemd enable, heartbeat verification,
 teach deck position, then test the one-button Start Run from the PRODUCTION
 URL (Test Mode synthesizes cartridges). R04/B14 jog-verification + rollout
 as time permits.
+
+
+## Session 2026-06-12 — Prod dynamic-API 404 root-caused + fixed (Vercel /api collision)
+
+### The bug
+Every dynamic `[param]` API endpoint (a `+server.ts` under a bracket dir) 404'd
+on the production Vercel alias, while static API routes AND dynamic PAGE routes
+worked. This silently broke the OT-2 bridge: robots execute commands fine, but
+the daemon's result/progress callbacks (`/api/agent/ot2/commands/[id]/result`
++ `/progress`) 404'd, so BIMS never recorded outcomes — and the wax one-button
+Start Run (deck-scan / sweep `[id]` round-trips) could not complete.
+
+### Investigation (what we ruled OUT, with evidence)
+Probed prod with curl + header inspection. The discriminator: `x-vercel-id`.
+Broken routes returned `x-vercel-error: NOT_FOUND` with `cle1::` ONLY (rejected
+at the edge, never routed to a function); working routes showed `cle1::pdx1::`
+(reached a fn). So the failure was edge-level, before any of our code (this also
+proves it was NOT the in-app permission layer — requirePermission runs in the
+fn). Ruled out, each with a test: stale deploy, build cache (cleared, redeployed
+— no change), route-count limit (361 entries, all present + correct locally),
+function-count limit (only 5 real fns; 717 .func are symlinks into them), and
+`split:true` (deployed commit 6ef0a73 to master — still 404; split only changes
+the symlink target, not the form). Local `.vercel/output` was provably correct
+every time, which is the key tell: the bug only appears in Vercel's build, not
+ours.
+
+### Root cause (confirmed by controlled experiment)
+There is a ROOT-LEVEL `api/` directory (`api/ml/infer.py` — a legacy Vercel
+Python ONNX inference fn — + `api/requirements.txt`), declared in vercel.json
+`functions`. Vercel RESERVES the whole `/api/*` namespace when a root `api/`
+dir with serverless fns exists and applies legacy literal-path routing: it
+matches `/api/.../<value>` against the literal folder `[id]` and 404s, never
+falling through to SvelteKit's regex routes. Static `/api` routes resolve (exact
+path match); dynamic PAGE routes are unaffected (not under `/api`). This also
+explains local-correct-but-prod-broken: local `npm run build` runs ONLY the
+SvelteKit adapter; Vercel ALSO builds the root python fn and merges it, hijacking
+`/api/*`. CONFIRMED via preview deploy of branch `test/remove-root-api` (4fcd67c)
+which deletes the root `api/` dir — on that preview ALL dynamic endpoints flipped
+404 -> 401 (cle1::pdx1::), including `box/files/[id]` which was never split. So
+`split` was irrelevant; the root `api/` was the entire problem.
+
+### Impact analysis (wide sweep) — blast radius ~nil
+The python fn is effectively DEAD CODE. CV inference moved IN-PROCESS:
+cv-bridge.ts header — "used to call an external Python worker over HTTP, now
+runs entirely in-process via cv-classifier, no outside service required." Active
+path (capture -> runPhaseInference -> cv-bridge.runInference -> cv-classifier
+embedImage+predict, classifier weights in the CvProject doc) makes NO python
+call. The ONLY code ref to `/api/ml/infer` is the `/api/cv/infer` route (a
+"manual one-off inference" endpoint) which itself has ZERO callers (docs-only).
+OT-2 daemon treats current 404s as terminal/expired and swallows them — once
+endpoints work it just starts succeeding (pure upside). Crons (`/api/cron/*`
+SvelteKit routes) unaffected. GH Actions CV training (services/cv-worker +
+HTTPS callbacks) never touches root `api/`. SEPARATE pre-existing bug found:
+run-inference.ts passed `modelPath` where cv-bridge.runInference expects
+`projectId` -> auto-inference always failed "Project not found".
+
+### The fix (PROD-API-NAMESPACE-FIX + CV-INFERENCE-PROJECTID-FIX PRDs)
+1. Delete root `api/` dir + remove vercel.json `functions` block -> SvelteKit
+   reclaims `/api/*`, all 66 dynamic endpoints resolve.
+2. Revert the `split:true` workaround from the 5 endpoints (now unnecessary;
+   avoids needless cold-starts).
+3. Rewire `/api/cv/infer` to the in-process `runInference` (drops the dead
+   python dependency, keeps the manual-inference capability).
+4. Fix run-inference.ts to pass `project._id` (not `modelPath`) to runInference.
+
+### NEXT STEP
+Push to master -> prod deploy -> re-probe the dynamic endpoints (expect non-404
+/ cle1::pdx1::). Then verify OT-2 bridge result/progress POSTs return 200 in the
+daemon journal, and run the wax one-button Start Run end to end.
