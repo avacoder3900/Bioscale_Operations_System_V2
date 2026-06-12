@@ -59,7 +59,15 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	const version = makeVersion();
 	const modelPath = `cv/${projectId}/models/${version}.onnx`;
-	const threshold = typeof confidenceThreshold === 'number' ? confidenceThreshold : 0.5;
+
+	// confidenceThreshold is the OPERATOR OVERRIDE (PRD CV-VERDICT-CALIBRATION §4):
+	// effective threshold = confidenceThreshold ?? calibratedThreshold ?? 0.5.
+	// Do NOT default it to 0.5 here — a new entry must leave it unset so the
+	// calibration computed by the trainer can win.
+	const threshold =
+		typeof confidenceThreshold === 'number' && Number.isFinite(confidenceThreshold)
+			? confidenceThreshold
+			: undefined;
 
 	// Record the version up-front (status 'training') so the History tab shows the
 	// in-flight run. The train-complete callback flips status to ready/failed.
@@ -74,7 +82,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 					trainedBy: { _id: locals.user._id, username: locals.user.username },
 					sampleCount: labeled.length,
 					sampleSnapshot: labeled.map((i) => i._id),
-					confidenceThreshold: threshold,
+					...(threshold !== undefined ? { confidenceThreshold: threshold } : {}),
 					notes: '',
 					status: 'training'
 				}
@@ -150,7 +158,15 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 						trainedAt: latest.trainedAt,
 						completedAt: latest.completedAt ?? null,
 						sampleCount: latest.sampleCount ?? null,
-						errorMessage: latest.errorMessage ?? null
+						errorMessage: latest.errorMessage ?? null,
+						// Calibration fields (persisted by the train-complete callback;
+						// both the GH Actions trainer and the long-lived worker /train
+						// path report through that same callback).
+						confidenceThreshold: latest.confidenceThreshold ?? null,
+						calibratedThreshold: latest.calibratedThreshold ?? null,
+						scoreStats: latest.scoreStats ?? null,
+						calibrationWarning: latest.calibrationWarning ?? null,
+						metrics: latest.metrics ?? null
 					}
 				: null
 		}

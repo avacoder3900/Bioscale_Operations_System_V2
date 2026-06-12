@@ -4,21 +4,23 @@ Derived from iCast CV training_service.py + inference_service.py.
 """
 
 import asyncio
+import hashlib
 import os
+import shutil
 import time
 import threading
 from enum import Enum
-from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
 import boto3
 import numpy as np
 import onnxruntime as ort
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from PIL import Image
 from pydantic import BaseModel
+
+from calibration import calibrate, make_onnx_scorer, preprocess_image, sanitize_for_json
 
 # ---------------------------------------------------------------------------
 # Config
@@ -32,6 +34,35 @@ R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL", "")
 MODEL_INPUT_SIZE = int(os.getenv("MODEL_INPUT_SIZE", "256"))
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.5"))
 TRAINING_DATA_DIR = Path(os.getenv("TRAINING_DATA_DIR", "/tmp/cv-training"))
+CV_WORKER_SECRET = os.getenv("CV_WORKER_SECRET", "")
+
+# Train-complete callback (PRD CV-VERDICT-CALIBRATION-AND-GATING §5b step 5):
+# BOTH training paths converge on POST {BIMS_URL}/api/cv/train-complete with the
+# shared TRAIN_CALLBACK_SECRET — same contract as train_cli.report_complete.
+BIMS_URL = os.getenv("BIMS_URL", "").rstrip("/")
+TRAIN_CALLBACK_SECRET = os.getenv("TRAIN_CALLBACK_SECRET", "")
+
+# ---------------------------------------------------------------------------
+# Auth — shared secret on every endpoint except /health (Fly checks)
+# ---------------------------------------------------------------------------
+
+_no_secret_warned = False
+
+
+def require_cv_secret(x_cv_secret: Optional[str] = Header(default=None, alias="X-CV-Secret")):
+    """Require X-CV-Secret == CV_WORKER_SECRET.
+
+    When the env var is unset (local dev), allow everything but log a warning
+    once so an unauthenticated production deploy is at least visible.
+    """
+    global _no_secret_warned
+    if not CV_WORKER_SECRET:
+        if not _no_secret_warned:
+            _no_secret_warned = True
+            print("[cv-worker] WARNING: CV_WORKER_SECRET is not set — endpoints are unauthenticated (local dev only)")
+        return
+    if x_cv_secret != CV_WORKER_SECRET:
+        raise HTTPException(401, "Unauthorized")
 
 # ---------------------------------------------------------------------------
 # R2 helpers
@@ -56,35 +87,34 @@ def upload_to_r2(data: bytes, key: str, content_type: str = "application/octet-s
     _s3_client().put_object(Bucket=R2_BUCKET_NAME, Key=key, Body=data, ContentType=content_type)
 
 # ---------------------------------------------------------------------------
-# Image preprocessing (matches iCast inference_service.py)
+# ONNX model cache (LRU-capped; preprocessing shared with calibration.py)
 # ---------------------------------------------------------------------------
 
-IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+MODEL_CACHE_MAX = 8
 
-
-def preprocess_image(data: bytes, size: int = MODEL_INPUT_SIZE) -> np.ndarray:
-    img = Image.open(BytesIO(data)).convert("RGB").resize((size, size), Image.BILINEAR)
-    arr = np.array(img, dtype=np.float32) / 255.0
-    arr = (arr - IMAGENET_MEAN) / IMAGENET_STD
-    return arr.transpose(2, 0, 1)[np.newaxis]  # NCHW
-
-# ---------------------------------------------------------------------------
-# ONNX model cache
-# ---------------------------------------------------------------------------
-
-_model_cache: dict[str, tuple[ort.InferenceSession, float]] = {}
+_model_cache: dict[str, tuple[ort.InferenceSession, float]] = {}  # path -> (session, last_use)
 _cache_lock = threading.Lock()
 
 
 def get_onnx_session(model_path: str) -> ort.InferenceSession:
     with _cache_lock:
         if model_path in _model_cache:
-            return _model_cache[model_path][0]
+            session = _model_cache[model_path][0]
+            _model_cache[model_path] = (session, time.time())  # refresh last-use
+            return session
     session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
     with _cache_lock:
         _model_cache[model_path] = (session, time.time())
+        while len(_model_cache) > MODEL_CACHE_MAX:
+            oldest = min(_model_cache, key=lambda k: _model_cache[k][1])
+            del _model_cache[oldest]
     return session
+
+
+def model_cache_path(r2_key: str) -> Path:
+    """Local cache filename for a model R2 key — SHA-1 hashed to avoid the
+    replace('/', '_') collisions between keys like a/b_c and a_b/c."""
+    return TRAINING_DATA_DIR / "models" / (hashlib.sha1(r2_key.encode()).hexdigest() + ".onnx")
 
 # ---------------------------------------------------------------------------
 # Training state
@@ -109,12 +139,21 @@ class TrainRequest(BaseModel):
     imageUrls: list[str]
     labels: dict[str, str]  # url -> "approved" | "rejected"
     modelOutputKey: str
+    # trainedModels[] version this run mints. Optional for back-compat: when
+    # absent it is derived from modelOutputKey ("cv/<pid>/models/<version>.onnx").
+    version: Optional[str] = None
+
+
+class ScoreStats(BaseModel):
+    rawMin: float
+    rawMax: float
 
 
 class InferRequest(BaseModel):
     image_url: str
     model_path: str  # R2 key to ONNX model
     confidence_threshold: float | None = None  # Per-call override of CONFIDENCE_THRESHOLD env
+    score_stats: ScoreStats | None = None  # Calibration stats from the trainedModels[] entry
 
 
 class TrainStatusResponse(BaseModel):
@@ -122,6 +161,14 @@ class TrainStatusResponse(BaseModel):
     status: str
     progress: float = 0.0
     message: str = ""
+    # Calibration results (populated when status == complete). Persisted by the
+    # worker itself POSTing /api/cv/train-complete at the end of _run_training
+    # (same callback + secret as train_cli.py); /status is only a transient
+    # in-memory view for polling/debugging and is lost on restart.
+    calibratedThreshold: float | None = None
+    scoreStats: dict | None = None
+    metrics: dict | None = None
+    calibrationWarning: str | None = None
 
 # ---------------------------------------------------------------------------
 # FastAPI app
@@ -144,9 +191,47 @@ async def health():
 
 # ---- Training -------------------------------------------------------------
 
+def _report_train_complete(project_id: str, version: str, status: str, message: str, extra: dict | None = None):
+    """POST the run outcome (+ calibration) to the app's train-complete callback.
+
+    Same contract and secret as train_cli.report_complete, so BOTH training
+    paths converge on /api/cv/train-complete (PRD §5b step 5) and the
+    trainedModels[] entry is flipped out of 'training'. Best-effort: a callback
+    failure must never fail the training run itself.
+    """
+    if not BIMS_URL or not TRAIN_CALLBACK_SECRET:
+        print(
+            "[cv-worker] WARNING: BIMS_URL/TRAIN_CALLBACK_SECRET not set — "
+            "train-complete callback skipped; results live only in the in-memory /status"
+        )
+        return
+    import json
+    import urllib.request
+
+    payload = {"projectId": project_id, "version": version, "status": status, "message": message}
+    if extra:
+        payload.update(extra)
+    payload = sanitize_for_json(payload)
+    req = urllib.request.Request(
+        f"{BIMS_URL}/api/cv/train-complete",
+        data=json.dumps(payload, allow_nan=False).encode(),
+        method="POST",
+    )
+    req.add_header("x-train-secret", TRAIN_CALLBACK_SECRET)
+    req.add_header("content-type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            resp.read()
+    except Exception as e:
+        print(f"[cv-worker] WARNING: train-complete callback failed: {e}")
+
+
 def _run_training(req: TrainRequest):
     """Background training task using Anomalib PaDiM."""
     project_id = req.project_id
+    # Version for the train-complete callback; the app names model keys
+    # "cv/<projectId>/models/<version>.onnx", so the stem is the version.
+    version = req.version or Path(req.modelOutputKey).stem
     try:
         with _training_lock:
             _training_status[project_id] = {
@@ -239,12 +324,45 @@ def _run_training(req: TrainRequest):
 
         upload_to_r2(onnx_path.read_bytes(), req.modelOutputKey, "application/octet-stream")
 
+        # Calibration "final exam" (PRD §5b): score every labeled image with the
+        # exported ONNX, derive scoreStats + F1-optimal threshold. A calibration
+        # failure must not fail the training — the model is already uploaded and
+        # usable via the legacy fallback path.
+        with _training_lock:
+            _training_status[project_id]["progress"] = 0.95
+            _training_status[project_id]["message"] = "Calibrating threshold..."
+
+        try:
+            scorer = make_onnx_scorer(onnx_path, MODEL_INPUT_SIZE)
+            cal = calibrate(
+                scorer,
+                sorted(normal_dir.glob("*.jpg")),
+                sorted(abnormal_dir.glob("*.jpg")),
+            )
+        except Exception as cal_err:
+            cal = {
+                "calibratedThreshold": None,
+                "scoreStats": None,
+                "metrics": None,
+                "calibrationWarning": f"calibration failed: {cal_err}",
+            }
+
         with _training_lock:
             _training_status[project_id] = {
                 "status": TrainingState.COMPLETE,
                 "progress": 1.0,
                 "message": "Training complete",
+                **cal,
             }
+
+        # Persist the outcome on the app side (PRD §5b step 5: same callback,
+        # same secret as the GH Actions path) — without this the calibration
+        # only lives in the in-memory dict above and dies on restart.
+        _report_train_complete(project_id, version, "trained", "Training complete", extra=cal)
+
+        # Hygiene: training images + outputs are no longer needed once the
+        # model is uploaded and calibrated.
+        shutil.rmtree(project_dir, ignore_errors=True)
 
     except Exception as e:
         with _training_lock:
@@ -253,9 +371,10 @@ def _run_training(req: TrainRequest):
                 "progress": 0.0,
                 "message": str(e),
             }
+        _report_train_complete(project_id, version, "failed", str(e))
 
 
-@app.post("/train")
+@app.post("/train", dependencies=[Depends(require_cv_secret)])
 async def train(req: TrainRequest):
     with _training_lock:
         current = _training_status.get(req.project_id, {})
@@ -268,7 +387,7 @@ async def train(req: TrainRequest):
     return {"project_id": req.project_id, "status": "training", "message": "Training started"}
 
 
-@app.get("/status")
+@app.get("/status", dependencies=[Depends(require_cv_secret)])
 async def status(project_id: str):
     with _training_lock:
         st = _training_status.get(project_id)
@@ -279,11 +398,11 @@ async def status(project_id: str):
 
 # ---- Inference ------------------------------------------------------------
 
-@app.post("/infer")
+@app.post("/infer", dependencies=[Depends(require_cv_secret)])
 async def infer(req: InferRequest):
     try:
         # Download model from R2 to local cache
-        model_local = TRAINING_DATA_DIR / "models" / req.model_path.replace("/", "_")
+        model_local = model_cache_path(req.model_path)
         if not model_local.exists():
             model_local.parent.mkdir(parents=True, exist_ok=True)
             model_data = download_from_r2(req.model_path)
@@ -299,25 +418,39 @@ async def infer(req: InferRequest):
 
         # Preprocess and run
         start = time.time()
-        input_tensor = preprocess_image(image_data)
+        input_tensor = preprocess_image(image_data, MODEL_INPUT_SIZE)
         session = get_onnx_session(str(model_local))
 
         input_name = session.get_inputs()[0].name
         outputs = session.run(None, {input_name: input_tensor})
 
-        anomaly_score = float(outputs[0].flatten()[0])
-        # Normalize to 0-1 if needed
-        if anomaly_score < 0 or anomaly_score > 1:
-            anomaly_score = 1.0 / (1.0 + np.exp(-anomaly_score))
+        raw_score = float(outputs[0].flatten()[0])
+        if req.score_stats is not None:
+            # Calibrated path: min-max normalize with the model's training-time
+            # score stats, clamped to [0, 1]. No sigmoid.
+            denom = req.score_stats.rawMax - req.score_stats.rawMin
+            if denom > 0:
+                normalized_score = (raw_score - req.score_stats.rawMin) / denom
+            else:
+                normalized_score = 0.0 if raw_score <= req.score_stats.rawMin else 1.0
+            normalized_score = min(max(normalized_score, 0.0), 1.0)
+        else:
+            # Legacy path (uncalibrated model entries): conditional sigmoid,
+            # unchanged for back-compat.
+            normalized_score = raw_score
+            if normalized_score < 0 or normalized_score > 1:
+                normalized_score = 1.0 / (1.0 + np.exp(-normalized_score))
 
         threshold = req.confidence_threshold if req.confidence_threshold is not None else CONFIDENCE_THRESHOLD
-        is_anomalous = anomaly_score >= threshold
+        is_anomalous = normalized_score >= threshold
         elapsed_ms = (time.time() - start) * 1000
 
         return {
             "result": "fail" if is_anomalous else "pass",
-            "confidence": round(1.0 - anomaly_score if not is_anomalous else anomaly_score, 4),
-            "anomaly_score": round(anomaly_score, 4),
+            "confidence": round(1.0 - normalized_score if not is_anomalous else normalized_score, 4),
+            "raw_score": round(raw_score, 6),
+            "normalized_score": round(normalized_score, 4),
+            "anomaly_score": round(normalized_score, 4),  # back-compat alias for normalized_score
             "is_anomalous": is_anomalous,
             "threshold": round(threshold, 4),
             "processing_time_ms": round(elapsed_ms, 1),
@@ -394,7 +527,7 @@ def liza_process_frame(frame, params=None):
     return frame
 
 
-@app.post("/process-image")
+@app.post("/process-image", dependencies=[Depends(require_cv_secret)])
 async def process_image(req: ProcessRequest):
     import cv2
 

@@ -175,12 +175,27 @@ export const actions: Actions = {
 		const project = await CvProject.findById(params.id).select('trainedModels').lean() as any;
 		if (!project) return fail(404, { error: 'Project not found' });
 
-		const knownVersions = new Set((project.trainedModels ?? []).map((m: any) => m.version));
-		if (activeModelVersion && !knownVersions.has(activeModelVersion)) {
-			return fail(400, { error: `Unknown active version: ${activeModelVersion}` });
-		}
-		if (shadowModelVersion && !knownVersions.has(shadowModelVersion)) {
-			return fail(400, { error: `Unknown shadow version: ${shadowModelVersion}` });
+		// Versions must exist AND be 'ready' — never promote an in-flight or failed
+		// training run (PRD CV-VERDICT-CALIBRATION §8.6). Entries predating the
+		// status field count as ready (legacy).
+		const byVersion = new Map<string, any>(
+			(project.trainedModels ?? []).map((m: any) => [m.version, m])
+		);
+		for (const [version, label] of [
+			[activeModelVersion, 'active'],
+			[shadowModelVersion, 'shadow']
+		] as const) {
+			if (!version) continue;
+			const entry = byVersion.get(version);
+			if (!entry) {
+				return fail(400, { error: `Unknown ${label} version: ${version}` });
+			}
+			const entryStatus = entry.status ?? 'ready';
+			if (entryStatus !== 'ready') {
+				return fail(400, {
+					error: `Cannot set ${label} version ${version}: status is '${entryStatus}', not 'ready'`
+				});
+			}
 		}
 
 		await CvProject.updateOne(
@@ -208,7 +223,16 @@ export const actions: Actions = {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
 		const form = await request.formData();
 		const rawThreshold = form.get('confidenceThreshold')?.toString();
-		const confidenceThreshold = rawThreshold ? Number(rawThreshold) : undefined;
+		// The (frozen) UI prefills this input with value="0.5", so every UI-triggered
+		// training submits 0.5 even when the operator never touched it. Treat the
+		// untouched default as "no override" so calibratedThreshold can win
+		// (effective threshold = confidenceThreshold ?? calibratedThreshold ?? 0.5 —
+		// dropping an intentional 0.5 override only matters once calibration exists,
+		// which is exactly when it should not be silently pinned). An operator who
+		// truly wants ~0.5 can enter 0.51 or adjust the override after training.
+		const parsed = rawThreshold ? Number(rawThreshold) : NaN;
+		const confidenceThreshold =
+			Number.isFinite(parsed) && parsed !== 0.5 ? parsed : undefined;
 
 		const resp = await fetch('/api/cv/train', {
 			method: 'POST',

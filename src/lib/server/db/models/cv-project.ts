@@ -27,7 +27,23 @@ const cvProjectSchema = new Schema({
 		trainedBy: operatorRef,
 		sampleCount: Number,                                     // labeled image count used
 		sampleSnapshot: [String],                                // imageIds frozen at training (for replay)
-		confidenceThreshold: { type: Number, default: 0.5 },
+		// Operator override. No default — new entries leave this unset (null) so a
+		// calibratedThreshold can win; effective threshold at inference time is
+		// confidenceThreshold ?? calibratedThreshold ?? 0.5. Entries minted before
+		// calibration existed have 0.5 stored here and keep legacy behavior.
+		confidenceThreshold: { type: Number },
+		// F1-optimal threshold from the validation sweep at training time.
+		// null = uncalibrated (e.g. no labeled-bad images).
+		calibratedThreshold: { type: Number, default: null },
+		// Min-max normalization params recorded over validation scores.
+		scoreStats: {
+			_id: false,
+			rawMin: Number,
+			rawMax: Number,
+			goodMean: Number,                                    // sanity/debug
+			badMean: Number                                      // sanity/debug
+		},
+		calibrationWarning: String,                              // e.g. 'no labeled-bad images'
 		notes: String,
 		// Lifecycle of the ephemeral (GitHub Actions) training run for this version.
 		// 'training' set at dispatch; the train-complete callback flips it to
@@ -44,6 +60,10 @@ const cvProjectSchema = new Schema({
 
 	// Optional shadow model — runs in parallel for evaluation, does NOT decide production.
 	shadowModelVersion: { type: String, default: null },
+
+	// Gate rollout per PRD CV-VERDICT-CALIBRATION-AND-GATING §5c. Stage A is
+	// schema-only: no gate logic reads this yet, everything behaves as advisory.
+	enforcementMode: { type: String, enum: ['advisory', 'soft', 'hard'], default: 'advisory' },
 
 	// Capture settings (LIZA params) — retained for any project that drives a capture station.
 	captureSettings: {

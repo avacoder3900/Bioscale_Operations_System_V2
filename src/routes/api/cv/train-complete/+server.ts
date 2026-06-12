@@ -6,7 +6,12 @@
  * records completion metadata. Authenticated by the shared TRAIN_CALLBACK_SECRET.
  * Does NOT promote the model — promotion stays manual on the Deployment tab.
  *
- * Body: { projectId, version, status: 'trained'|'failed', message?, metrics? }
+ * Body: { projectId, version, status: 'trained'|'failed', message?, metrics?,
+ *         calibratedThreshold?, scoreStats?, calibrationWarning? }
+ *
+ * Calibration fields (PRD CV-VERDICT-CALIBRATION-AND-GATING §5b/§6) are optional
+ * and validated defensively — a malformed shape is ignored, never a 4xx, so a
+ * trainer bug can't strand a finished run in 'training'.
  */
 import { json, error } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
@@ -24,7 +29,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	await connectDB();
 
 	const body = await request.json().catch(() => ({}));
-	const { projectId, version, status, message, metrics } = body;
+	const { projectId, version, status, message, metrics, calibratedThreshold, scoreStats, calibrationWarning } = body;
 	if (!projectId) return json({ error: 'projectId is required' }, { status: 400 });
 	if (!version) return json({ error: 'version is required' }, { status: 400 });
 	if (status !== 'trained' && status !== 'failed') {
@@ -36,8 +41,41 @@ export const POST: RequestHandler = async ({ request }) => {
 		'trainedModels.$.status': newStatus,
 		'trainedModels.$.completedAt': new Date()
 	};
-	if (metrics) set['trainedModels.$.metrics'] = metrics;
+	// Validation metrics ({f1, threshold, falsePassRate, falseFailRate, nGood, nBad})
+	// go into the EXISTING `metrics: Mixed` field — only accept a plain object.
+	if (metrics && typeof metrics === 'object' && !Array.isArray(metrics)) {
+		set['trainedModels.$.metrics'] = metrics;
+	}
 	if (status === 'failed' && message) set['trainedModels.$.errorMessage'] = String(message);
+
+	// calibratedThreshold: finite number, or explicit null (= trained but
+	// uncalibrated, e.g. no labeled-bad images). Anything else is ignored.
+	if (
+		calibratedThreshold === null ||
+		(typeof calibratedThreshold === 'number' && Number.isFinite(calibratedThreshold))
+	) {
+		set['trainedModels.$.calibratedThreshold'] = calibratedThreshold;
+	}
+
+	// scoreStats: requires finite rawMin/rawMax; goodMean/badMean optional.
+	// Unknown keys are dropped (we rebuild the object from known fields).
+	const isFinite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+	if (
+		scoreStats &&
+		typeof scoreStats === 'object' &&
+		!Array.isArray(scoreStats) &&
+		isFinite(scoreStats.rawMin) &&
+		isFinite(scoreStats.rawMax)
+	) {
+		const stats: Record<string, number> = { rawMin: scoreStats.rawMin, rawMax: scoreStats.rawMax };
+		if (isFinite(scoreStats.goodMean)) stats.goodMean = scoreStats.goodMean;
+		if (isFinite(scoreStats.badMean)) stats.badMean = scoreStats.badMean;
+		set['trainedModels.$.scoreStats'] = stats;
+	}
+
+	if (typeof calibrationWarning === 'string' && calibrationWarning.trim() !== '') {
+		set['trainedModels.$.calibrationWarning'] = calibrationWarning;
+	}
 
 	const res = await CvProject.updateOne(
 		{ _id: projectId, 'trainedModels.version': version },
@@ -52,7 +90,14 @@ export const POST: RequestHandler = async ({ request }) => {
 		tableName: 'cv_projects',
 		recordId: projectId,
 		action: 'UPDATE',
-		newData: { trainComplete: { version, status: newStatus } },
+		newData: {
+			trainComplete: {
+				version,
+				status: newStatus,
+				calibratedThreshold: (set['trainedModels.$.calibratedThreshold'] ?? null) as number | null,
+				calibrated: 'trainedModels.$.scoreStats' in set
+			}
+		},
 		changedAt: new Date(),
 		changedBy: 'gh-actions-trainer',
 		reason: `train-complete v${version} → ${newStatus}`

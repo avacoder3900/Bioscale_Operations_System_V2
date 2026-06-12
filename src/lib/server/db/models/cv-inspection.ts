@@ -18,9 +18,24 @@ const cvInspectionSchema = new Schema({
 	// Decision
 	result: { type: String, enum: ['pass', 'fail', null], default: null },
 	confidenceScore: Number,
-	anomalyScore: Number,
+	rawScore: Number,                                     // unnormalized model output
+	anomalyScore: Number,                                 // normalized score (back-compat)
 	confidenceThreshold: Number,
 	defects: [{ type: String, location: String, severity: String, _id: false }],
+
+	// Operator disposition of a verdict (PRD CV-VERDICT-CALIBRATION-AND-GATING §6).
+	// Stage A is schema-only — the disposition endpoint ships in Stage B.
+	// Nested Schema (not POJO) so `reason: required` only validates when a
+	// disposition is actually set, and `_id: false` applies as schema options.
+	disposition: {
+		type: new Schema({
+			decision: { type: String, enum: ['accept', 'reject'] },
+			reason: { type: String, required: true },
+			by: { _id: String, username: String },
+			at: Date
+		}, { _id: false }),
+		default: undefined
+	},
 
 	// Lifecycle
 	status: { type: String, enum: ['queued', 'running', 'completed', 'failed'], default: 'queued' },

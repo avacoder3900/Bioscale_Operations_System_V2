@@ -23,6 +23,13 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	if (cartridgeRecordId) filter.cartridgeRecordId = cartridgeRecordId;
 	if (imageId) filter.imageId = imageId;
 
+	// Shadow (A/B) inspections are excluded by default — they are not production
+	// decisions (PRD CV-VERDICT-CALIBRATION §8.6). `?includeShadow=true` returns
+	// everything. `$ne: true` also covers legacy docs missing the field.
+	if (url.searchParams.get('includeShadow') !== 'true') {
+		filter.isShadow = { $ne: true };
+	}
+
 	const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 200);
 	const skip = parseInt(url.searchParams.get('skip') || '0');
 

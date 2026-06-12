@@ -17,8 +17,11 @@ Flow:
   2. Download each image into good/ (approved) or bad/ (rejected).
   3. Train Anomalib PaDiM, export ONNX.
   4. PUT the ONNX to modelUploadUrl (X-Upload-Secret) -> lands in R2 at modelKey.
-  5. POST {BIMS_URL}/api/cv/train-complete  (x-train-secret)
-        -> { projectId, version, status: 'trained'|'failed', message }
+  5. Calibrate (shared calibration.py): score every labeled image with the
+     exported ONNX -> scoreStats + F1-optimal calibratedThreshold + metrics.
+  6. POST {BIMS_URL}/api/cv/train-complete  (x-train-secret)
+        -> { projectId, version, status: 'trained'|'failed', message,
+             calibratedThreshold, scoreStats, metrics, calibrationWarning }
 
 Env (from the GitHub Actions workflow):
   BIMS_URL                 the Vercel deploy URL
@@ -28,10 +31,13 @@ Env (from the GitHub Actions workflow):
 import argparse
 import json
 import os
+import shutil
 import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
+
+from calibration import calibrate, make_onnx_scorer, sanitize_for_json
 
 BIMS_URL = os.environ["BIMS_URL"].rstrip("/")
 TRAIN_CALLBACK_SECRET = os.environ["TRAIN_CALLBACK_SECRET"]
@@ -40,7 +46,9 @@ WORK_DIR = Path(os.environ.get("TRAINING_DATA_DIR", "/tmp/cv-training"))
 
 def _bims_request(path: str, method: str = "GET", payload: dict | None = None) -> dict:
     url = f"{BIMS_URL}{path}"
-    data = json.dumps(payload).encode() if payload is not None else None
+    # allow_nan=False: never emit the literal token NaN/Infinity — that is
+    # invalid JSON and the app would parse the body as {} and reject it.
+    data = json.dumps(payload, allow_nan=False).encode() if payload is not None else None
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("x-train-secret", TRAIN_CALLBACK_SECRET)
     req.add_header("content-type", "application/json")
@@ -53,18 +61,21 @@ def fetch_manifest(project_id: str, version: str) -> dict:
     return _bims_request(f"/api/cv/train-manifest?{qs}")
 
 
-def report_complete(project_id: str, version: str, status: str, message: str):
+def report_complete(project_id: str, version: str, status: str, message: str, extra: dict | None = None):
+    payload = {
+        "projectId": project_id,
+        "version": version,
+        "status": status,
+        "message": message,
+    }
+    if extra:
+        payload.update(extra)
+    # Belt and suspenders: calibrate() already refuses non-finite scores, but a
+    # stray NaN/Inf anywhere in the payload must degrade to null, not to an
+    # unparseable body that strands the trainedModels[] entry in 'training'.
+    payload = sanitize_for_json(payload)
     try:
-        _bims_request(
-            "/api/cv/train-complete",
-            method="POST",
-            payload={
-                "projectId": project_id,
-                "version": version,
-                "status": status,
-                "message": message,
-            },
-        )
+        _bims_request("/api/cv/train-complete", method="POST", payload=payload)
     except Exception as e:  # never let a callback failure mask the real error
         print(f"[train_cli] WARNING: failed to report completion: {e}", file=sys.stderr)
 
@@ -81,7 +92,7 @@ def upload_model(upload_url: str, upload_secret: str, data: bytes):
         resp.read()
 
 
-def train(project_id: str, version: str) -> str:
+def train(project_id: str, version: str) -> dict:
     project_dir = WORK_DIR / project_id / version
     good_dir = project_dir / "good"
     bad_dir = project_dir / "bad"
@@ -145,7 +156,35 @@ def train(project_id: str, version: str) -> str:
 
     upload_model(upload_url, upload_secret, onnx_path.read_bytes())
     print(f"[train_cli] uploaded model to {manifest.get('modelKey')}")
-    return manifest.get("modelKey", "")
+
+    # Calibration "final exam" (shared with the worker /train path): score every
+    # labeled image with the exported ONNX, derive scoreStats + the F1-optimal
+    # threshold. A calibration failure must not fail the run — the model is
+    # already uploaded and usable via the legacy fallback path.
+    try:
+        scorer = make_onnx_scorer(onnx_path, 256)  # same input size as training above
+        calibration = calibrate(
+            scorer,
+            sorted(good_dir.glob("*.jpg")),
+            sorted(bad_dir.glob("*.jpg")),
+        )
+        print(
+            f"[train_cli] calibratedThreshold={calibration.get('calibratedThreshold')} "
+            f"metrics={calibration.get('metrics')} warning={calibration.get('calibrationWarning')}"
+        )
+    except Exception as e:
+        print(f"[train_cli] WARNING: calibration failed: {e}", file=sys.stderr)
+        calibration = {
+            "calibratedThreshold": None,
+            "scoreStats": None,
+            "metrics": None,
+            "calibrationWarning": f"calibration failed: {e}",
+        }
+
+    # Hygiene: drop training images + outputs now that the model is uploaded
+    # and calibrated.
+    shutil.rmtree(project_dir, ignore_errors=True)
+    return calibration
 
 
 def main():
@@ -157,8 +196,8 @@ def main():
     project_id = args.project_id
     version = args.version
     try:
-        train(project_id, version)
-        report_complete(project_id, version, "trained", "Training complete")
+        calibration = train(project_id, version)
+        report_complete(project_id, version, "trained", "Training complete", extra=calibration)
         print("[train_cli] done")
     except Exception as e:
         print(f"[train_cli] FAILED: {e}", file=sys.stderr)
