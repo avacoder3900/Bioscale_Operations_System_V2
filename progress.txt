@@ -2443,3 +2443,55 @@ run-inference.ts passed `modelPath` where cv-bridge.runInference expects
 Push to master -> prod deploy -> re-probe the dynamic endpoints (expect non-404
 / cle1::pdx1::). Then verify OT-2 bridge result/progress POSTs return 200 in the
 daemon journal, and run the wax one-button Start Run end to end.
+
+### Prod RESULT: dynamic endpoints fixed (verified ~13:04)
+After push, all dynamic /api endpoints flipped 404->401 (cle1::pdx1::). Confirmed.
+
+### Wax page showing the REAGENT protocol — root-caused
+The Wax Filling Start Run panel showed "Reagent_Filling...py (reagent-filling)".
+Causes: (1) the wax/reagent pages listed ALL of a robot's protocols with NO type
+filter, and ProtocolStartPanel defaults to protocols[0]; (2) there is NO wax
+protocol on the robots — DB read (opentrons_robots) shows each of B07/R04/B14 has
+exactly ONE protocol: Reagent_Filling_GEN7.py, protocolType "reagent-filling".
+No wax_filling.py anywhere; protocols are NOT repo files — they live on the robot
++ in robot.protocols[] (read by the mfg pages).
+
+Fix 1 (a3819df): filter each mfg page to its own protocolType (wax-filling /
+reagent-filling). Wax page now shows its no-protocol empty state instead of the
+reagent default.
+
+### The deeper gap: nothing syncs uploads into robot.protocols[]
+The /opentrons Import button POSTs /api/opentrons-lab/robots/[id]/protocols which
+forwards the file DIRECTLY to the robot (robotBaseUrl, NOT the bridge) and does
+NOT write robot.protocols[]. The deploy endpoint also uses direct HTTP + only
+writes OpentronProtocol.deployments[]. No discoverable code populates
+robot.protocols[] (the reagent entry came from a now-gone migration/manual step).
+So: uploading a protocol never makes it appear on the mfg pages.
+
+Fix 2 (new script scripts/sync-robot-protocols.ts): run on the lab Mac, for each
+robot GET /protocols + latest analysis, derive protocolType from the .py filename
+(wax*->wax-filling, reagent*->reagent-filling), and $set robot.protocols[]. Dry-run
+by default (SYNC_APPLY=1 to write). Guards: skips a robot if unreachable or 0
+protocols (never clobbers with empty). UNTESTED against robots from this session
+— run dry-run first.
+
+### "fetch failed" on UI upload + "barcode scanning only over local network"
+Robots' `ip` field is set to .local mDNS hostnames (OT2CEP20210817R04.local etc.),
+not IPs. Upload (and the barcode auto-scan note) go DIRECT to the robot, so they
+only work from BIMS on the lab LAN (localhost:5176 + mDNS) — the cloud deploy
+can't reach .local => "fetch failed". NOTE: the barcode auto-scan amber note in
+the DeckLoadingGrid .svelte is STALE for bridged ops (sweep/deck-scan run via the
+daemon now), but it IS still true for UPLOAD (not bridged). The .svelte is frozen
+(UI rules) so the copy stays until a UI pass.
+
+DEFERRED (future PRD): bridge the multipart protocol upload (kind:'http' carries
+JSON only — needs a new daemon command that base64-decodes the file and POSTs
+multipart to localhost:31950/protocols) so uploads work from the cloud deploy.
+
+### Operator path to get the wax protocol live (run on the lab Mac, robots ON)
+1. UPLOAD_APPLY=1 npx tsx scripts/upload-local-protocols-to-all-robots.ts
+   (pushes every local Opentrons .py — incl. Wax_Filling_GEN7_Cartridge.py — to
+   all robots, bundling custom labware so analysis resolves).
+2. npx tsx scripts/sync-robot-protocols.ts            (dry run — review)
+   SYNC_APPLY=1 npx tsx scripts/sync-robot-protocols.ts   (write robot.protocols[])
+3. Wax page now offers Wax_Filling_GEN7_Cartridge.py (wax-filling).
