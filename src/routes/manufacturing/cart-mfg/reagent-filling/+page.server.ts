@@ -143,7 +143,10 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			protocolType: p.protocolType ?? null,
 			analysisStatus: p.analysisStatus ?? null,
 			parametersSchema: p.parametersSchema ?? null
-		})).filter((p: any) => p.opentronsProtocolId);
+		// Only offer reagent-filling protocols on the reagent stage — a
+		// wax-filling protocol must never be startable here. Empty -> panel
+		// shows its no-protocol state.
+		})).filter((p: any) => p.opentronsProtocolId && p.protocolType === 'reagent-filling');
 		const lastTipState = (lastTipRun as any)?.pipetteTipState?.after
 			? {
 				nextTipIndex: (lastTipRun as any).pipetteTipState.after.nextTipIndex ?? null,

@@ -233,7 +233,10 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			protocolType: p.protocolType ?? null,
 			analysisStatus: p.analysisStatus ?? null,
 			parametersSchema: p.parametersSchema ?? null
-		})).filter((p: any) => p.opentronsProtocolId);
+		// Only offer wax-filling protocols on the wax stage — a reagent-filling
+		// protocol must never be startable here. Empty -> panel shows its
+		// no-protocol state (upload a wax-filling protocol on /opentrons).
+		})).filter((p: any) => p.opentronsProtocolId && p.protocolType === 'wax-filling');
 
 		// Last known tip state for this robot — derived from the most recent
 		// completed wax run. null on first-ever use; protocol falls back to A1.
