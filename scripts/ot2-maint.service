@@ -1,0 +1,6 @@
+[Unit]
+Description=BIMS OT-2 disk maintenance (prune orphaned journals + truncate unrotated logs)
+
+[Service]
+Type=oneshot
+ExecStart=/data/ot2-bridge/ot2-maint.sh

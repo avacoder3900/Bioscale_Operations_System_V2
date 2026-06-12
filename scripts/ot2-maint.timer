@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly BIMS OT-2 disk maintenance
+
+[Timer]
+OnCalendar=weekly
+# Run on next boot if the scheduled time was missed (robot was powered off).
+Persistent=true
+# Avoid all robots hitting at the exact same instant.
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target
