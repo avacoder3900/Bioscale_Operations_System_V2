@@ -50,7 +50,10 @@ async function runOne(
 	});
 
 	try {
-		const result = await runInference(ctx.imageUrl, modelPath, confidenceThreshold);
+		// runInference expects the PROJECT ID (it re-fetches the project to load the
+		// trained classifier weights), not the model path. modelPath/version are
+		// recorded on the CvInspection above for traceability only.
+		const result = await runInference(ctx.imageUrl, project._id, confidenceThreshold);
 		await CvInspection.updateOne(
 			{ _id: inspectionId },
 			{ $set: {
