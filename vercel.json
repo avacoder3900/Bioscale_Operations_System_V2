@@ -1,4 +1,10 @@
 {
+  "functions": {
+    "api/ml/infer.py": {
+      "memory": 2048,
+      "maxDuration": 30
+    }
+  },
   "crons": [
     {
       "path": "/api/cron/mocreo",

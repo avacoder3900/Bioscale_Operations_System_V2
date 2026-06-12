@@ -52,9 +52,20 @@ already exist on the cartridge record (`waxQc`, `reagentInspection`,
 Prerequisite for everything: prove the training round-trip works on the real
 deployment. From the handoff's Monday checklist, still the right order:
 
+> **2026-06-12 decision — serverless inference.** The Fly worker was never
+> deployed (zero apps in the Fly account); every historical inference attempt
+> failed against an unreachable localhost. Rather than pay for an always-on
+> machine, inference moved into the Vercel deployment itself: `api/ml/infer.py`
+> (Python function, ported from Jacob's `feat/cv-train-infer-split` prior art,
+> upgraded to the Stage A contract) serves `/api/ml/infer` on the same domain.
+> Training stays on free GitHub Actions runners (`train-cv-model.yml` +
+> `train_cli.py`). `services/cv-worker/` remains in-repo as the optional
+> standalone fallback (`CV_INFER_URL`/`CV_WORKER_URL` overrides) and still owns
+> the LIZA `/process-image` endpoint, which has no serverless port yet.
+
 | # | Check | How | Exit |
 |---|---|---|---|
-| 0.1 | Worker reachable from Vercel | `GET ${CV_WORKER_URL}/health` from the deployed app's env; verify the Vercel env var points at the Fly worker | 200 |
+| 0.1 | Inference fn deployed | `GET https://<deployment>/api/ml/infer` health probe; `POST` with a real model_path + image | 200, sane scores |
 | 0.2 | Capture end-to-end | `/capture` with USB scanner: scan registered cartridge → green banner → photo in <2s, `_00N` increments | CvImage + `photos[]` entry exist |
 | 0.3 | Label flow | `/cv/label` → approve ~10 / reject ~3 wax_filled images | `qcLabel` persists on refresh |
 | 0.4 | **Training round-trip** | Create "Wax Fill QC" project → add labeled members → deploy at `wax_filled` → `POST /api/cv/train` → poll until `trainedModels[]` entry is `ready` → set active | New version `ready` with ONNX in R2 |

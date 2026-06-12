@@ -1,0 +1,6 @@
+# Deps for the Vercel Python serverless functions under api/ (inference only).
+# Deliberately NO torch/anomalib — training runs in GitHub Actions, not on Vercel.
+onnxruntime>=1.17.0
+numpy>=1.26.0
+pillow>=10.0.0
+boto3>=1.34.0
