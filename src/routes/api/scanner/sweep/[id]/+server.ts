@@ -12,10 +12,7 @@ import { closeMaintenanceRun } from '$lib/server/opentrons/maintenance';
 
 // Cancel may relay the maintenance-run close through the command bridge,
 // which can take tens of seconds when the daemon is slow to claim.
-// split:true gives this dynamic-segment endpoint its own Vercel function instead of
-// a symlink into the merged group, working around a Vercel deploy-time bug that 404s
-// bracketed API routes at the edge before they reach our code.
-export const config = { maxDuration: 60, split: true };
+export const config = { maxDuration: 60 };
 
 function pickSnapshot(doc: any) {
 	return {

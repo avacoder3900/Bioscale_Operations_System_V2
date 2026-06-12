@@ -1,13 +1,13 @@
 import { json, error } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { CvInspection } from '$lib/server/db/models/cv-inspection.js';
 import { generateId } from '$lib/server/db/utils.js';
+import { runInference } from '$lib/server/services/cv-bridge';
 import type { RequestHandler } from './$types';
 
-export const POST: RequestHandler = async ({ request, locals, url, fetch }) => {
+export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
 	await connectDB();
 
@@ -39,29 +39,17 @@ export const POST: RequestHandler = async ({ request, locals, url, fetch }) => {
 			status: 'processing'
 		});
 
-		// Call the co-located Vercel Python function (same deployment, same origin).
-		// CV_INFER_URL can override (e.g. local dev pointing at a running worker).
-		const inferUrl = env.CV_INFER_URL || `${url.origin}/api/ml/infer`;
-		const res = await fetch(inferUrl, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json',
-				...(env.ML_INFER_SECRET ? { 'x-ml-secret': env.ML_INFER_SECRET } : {})
-			},
-			body: JSON.stringify({
-				image_url: image.imageUrl,
-				model_path: `cv/${projectId}/models/model.onnx`,
-				threshold: project.confidenceThreshold ?? 0.5
-			})
-		});
-
-		if (!res.ok) {
-			const text = await res.text();
+		// Inference runs IN-PROCESS via cv-classifier (no external worker). The old
+		// Vercel Python function at /api/ml/infer was removed — see the
+		// PROD-API-NAMESPACE-FIX PRD. runInference loads the project's trained
+		// classifier weights and grades the image locally.
+		let result;
+		try {
+			result = await runInference(image.imageUrl, projectId, project.confidenceThreshold ?? 0.5);
+		} catch (e: any) {
 			await CvInspection.findByIdAndUpdate(inspectionId, { status: 'failed' });
-			return json({ error: `Inference failed (${res.status}): ${text}` }, { status: 502 });
+			return json({ error: `Inference failed: ${e?.message ?? String(e)}` }, { status: 502 });
 		}
-
-		const result = await res.json();
 
 		await CvInspection.findByIdAndUpdate(inspectionId, {
 			status: 'complete',

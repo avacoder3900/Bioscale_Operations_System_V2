@@ -2,11 +2,6 @@ import { json } from '@sveltejs/kit';
 import { connectDB, CartridgeRecord, CvImage, InventoryTransaction, ReceivingLot } from '$lib/server/db';
 import type { RequestHandler } from './$types';
 
-// split:true gives this dynamic-segment endpoint its own Vercel function instead
-// of a symlink into the merged group, working around a Vercel deploy-time bug that
-// 404s bracketed API routes at the edge before they reach our code.
-export const config = { split: true };
-
 export const GET: RequestHandler = async ({ locals, params }) => {
 	if (!locals.user) return json({ error: 'Unauthorized' }, { status: 401 });
 	await connectDB();

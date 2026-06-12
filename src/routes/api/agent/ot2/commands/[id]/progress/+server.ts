@@ -24,11 +24,6 @@ import { requireAgentApiKey } from '$lib/server/api-auth';
 import { connectDB, Ot2BridgeCommand, OpentronsScannerSweepRun } from '$lib/server/db';
 import type { RequestHandler } from './$types';
 
-// split:true gives this dynamic-segment endpoint its own Vercel function instead
-// of a symlink into the merged group, working around a Vercel deploy-time bug that
-// 404s bracketed API routes at the edge before they reach our code.
-export const config = { split: true };
-
 export const POST: RequestHandler = async ({ request, params }) => {
 	requireAgentApiKey(request);
 

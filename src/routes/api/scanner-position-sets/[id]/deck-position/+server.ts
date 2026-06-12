@@ -15,11 +15,6 @@ import type { RequestHandler } from './$types';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, OpentronsScannerPositionSet, AuditLog, generateId } from '$lib/server/db';
 
-// split:true gives this dynamic-segment endpoint its own Vercel function instead
-// of a symlink into the merged group, working around a Vercel deploy-time bug that
-// 404s bracketed API routes at the edge before they reach our code.
-export const config = { split: true };
-
 export const PUT: RequestHandler = async ({ params, locals, request }) => {
 	if (!locals.user) error(401, 'Not authenticated');
 	requirePermission(locals.user, 'manufacturing:write');
