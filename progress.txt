@@ -2195,3 +2195,69 @@ bims-capture-agent retains the original scanner-debounce commit.
   exists at rest (capture only heals carts as they're photographed).
 - Any OTHER write path that `$push`es to `photos[]` will hit the same
   non-array 500 — apply the same coercion + updatePipeline pattern.
+
+## Session 2026-06-12 — CV verdict-path audit + calibration/gating PRD
+
+### What happened
+
+Full read-only audit of the CV pass/fail (approval) path: capture →
+`runPhaseInference()` → cv-worker `/infer` → `CvInspection`. No code
+changed this session. Findings logged here; the fix is spec'd in
+docs/prds/CV-VERDICT-CALIBRATION-AND-GATING.md (Draft, awaiting review).
+
+### How the verdict works today (verified, file:line)
+
+- Capture (`/api/cv/capture`, `/api/cv/capture-ingest`) fires
+  `runPhaseInference()` fire-and-forget (run-inference.ts:104-114);
+  fan-out to every CvProject with `deployAtPhases ∋ phase` +
+  `activeModelVersion`; CvInspection pre-inserted as `running`, then
+  updated verbatim from the worker response (run-inference.ts:52-65).
+- The ENTIRE approval criterion is main.py:308-318: single PaDiM
+  anomaly score; sigmoid-squashed ONLY if outside [0,1]; `fail` if
+  score >= threshold (trainedModels[].confidenceThreshold, default
+  0.5). Shadow model runs the same way with isShadow:true.
+
+### Root causes of bad verdicts
+
+1. THRESHOLD IS UNCALIBRATED — PaDiM scores are unbounded distances,
+   not probabilities; conditional sigmoid distorts them inconsistently
+   (raw 3.0→0.95, raw 0.7→unchanged); nobody ever computed the
+   threshold from labeled data. This is THE bug behind verdicts not
+   tracking reality.
+2. VERDICTS HAVE NO CONSEQUENCES — result is display-only (DHR +
+   project pages); nothing gates cartridge flow; a CV `fail` can ship.
+   No human disposition/override exists (CvImage.qcLabel is training
+   labels, unrelated to inspections).
+3. FRAGILE LOOP — cv-bridge.ts has NO timeout/retry (hung worker =
+   inspection stuck `running` forever); worker response stored with
+   zero validation (`any`); worker has NO AUTH on any endpoint
+   (cv-bridge sends no header; cv-api.ts X-API-Key module is unused by
+   the infer path); `defects` is a hardcoded placeholder; unbounded
+   ONNX session cache (OOM risk); /tmp training data never cleaned;
+   model cache filename `replace('/','_')` can collide; shadow
+   inspections never filtered out of queries; promotion doesn't check
+   trainedModels[].status — a 'failed' model can be set active.
+
+### Corrections to first-pass audit (subagent claims I disproved)
+
+- cv_inspections DOES index imageId/cartridgeRecordId/projectId
+  (schema `index: true`) — "missing index" finding was WRONG.
+- There is no optional X-API-Key on the infer path — cv-bridge.ts
+  sends nothing. Worker is fully unauthenticated.
+
+### The plan (see PRD for detail)
+
+A) Calibrate at training time (score all labeled images, min-max
+   normalize, F1-optimal threshold → new trainedModels fields, metrics
+   via existing train-complete callback) + harden loop (timeout/retry,
+   zod validation, X-CV-Secret worker auth, cache hygiene, stale-
+   running sweep). B) Disposition endpoint + getCvGateStatus() soft
+   gate meshing CV phases onto existing manual QC sections
+   (wax_filled↔waxQc, reagent↔reagentInspection, qaqc_released↔
+   qaqcRelease). C) Per-project hard gate via CvProject.enforcementMode.
+   Two small .svelte surfaces flagged for freeze escalation.
+
+### Branch state
+
+No commits. New file: docs/prds/CV-VERDICT-CALIBRATION-AND-GATING.md.
+CV code audited on `dev` in this clone; cv-worker on Fly untouched.
