@@ -13,7 +13,17 @@ const cvProjectSchema = new Schema({
 	annotatedCount: { type: Number, default: 0 },
 	modelStatus: { type: String, enum: ['untrained', 'training', 'trained', 'failed'], default: 'untrained' },
 	modelVersion: String,
-	// Anomaly-score cutoff for pass/fail at inference time (0..1).
+	// Trained in-process logistic-regression classifier (weights, bias,
+	// standardization + calibration params). Written wholesale by triggerTraining.
+	// Mixed because it's an opaque model blob, never queried by sub-field.
+	// MUST be a declared path — Mongoose strict mode silently drops undeclared
+	// keys from $set, which previously discarded the trained model entirely.
+	classifier: { type: Schema.Types.Mixed, default: null },
+	trainingError: { type: String, default: null },
+	// Phases at which this project's trained classifier auto-runs inference on
+	// capture (see run-inference.ts). Declared so deployment config persists.
+	deployAtPhases: { type: [String], default: [] },
+	// Pass-probability cutoff for pass/fail at inference time (0..1).
 	confidenceThreshold: { type: Number, default: 0.5, min: 0, max: 1 },
 	captureSettings: {
 		mode: { type: String, enum: ['full', 'raw'], default: 'full' },
@@ -34,5 +44,6 @@ const cvProjectSchema = new Schema({
 
 cvProjectSchema.index({ projectType: 1 });
 cvProjectSchema.index({ modelStatus: 1 });
+cvProjectSchema.index({ deployAtPhases: 1 });
 
 export const CvProject = mongoose.models.CvProject || mongoose.model('CvProject', cvProjectSchema, 'cv_projects');

@@ -56,14 +56,14 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// "captures will save without inference" notice when nothing is.
 	const deployedRaw = await CvProject.find({
 		deployAtPhases: PHASE,
-		activeModelVersion: { $ne: null }
+		modelStatus: 'trained'
 	})
-		.select('_id name activeModelVersion')
+		.select('_id name modelVersion')
 		.lean() as any[];
 	const deployedProjects = deployedRaw.map((p: any) => ({
 		id: p._id,
 		name: p.name ?? '(unnamed project)',
-		version: p.activeModelVersion
+		version: p.modelVersion
 	}));
 
 	// Last 50 wax_filled inspections (newest first), joined with their CvImage
