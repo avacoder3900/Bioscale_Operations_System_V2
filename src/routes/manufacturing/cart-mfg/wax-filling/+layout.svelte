@@ -54,7 +54,23 @@
 				}`
 	);
 
-	function selectRobot(robotId: string) {
+	async function selectRobot(robotId: string) {
+		const state = data.dashboardState.find((r) => r.robotId === robotId);
+		// No active run on this robot → start one now so clicking goes straight
+		// into wax setup (no intermediate "Start Wax Filling Run" page).
+		if (state && !state.hasActiveRun) {
+			try {
+				const fd = new FormData();
+				fd.set('robotId', robotId);
+				await fetch(`${BASE}?/createRun`, {
+					method: 'POST',
+					body: fd,
+					headers: { 'x-sveltekit-action': 'true' }
+				});
+			} catch {
+				/* fall through — the page still shows the manual start button */
+			}
+		}
 		const url = new URL($page.url);
 		url.searchParams.set('robot', robotId);
 		goto(url.pathname + url.search, { invalidateAll: true });
@@ -137,6 +153,12 @@
 				class={navLinkClass(`${BASE}/settings`)}
 			>
 				Settings
+			</a>
+			<a
+				href="/manufacturing/cart-mfg/opentron-control/settings"
+				class="min-h-[44px] rounded px-3 py-2 text-sm font-medium transition-colors text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]"
+			>
+				Teach Positions
 			</a>
 			<a
 				href={resolve('/equipment/activity')}

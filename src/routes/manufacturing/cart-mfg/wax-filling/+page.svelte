@@ -160,6 +160,12 @@
 	// (which targets real under-time cartridges).
 	let testMode = $state(false);
 
+	// WAX-FLOW-STREAMLINE: the cartridge-layout grid (DeckLoadingGrid) is the single
+	// deck-load surface — its on-robot deck scan + sweep fill the grid live, failed
+	// slots show red and are click-to-rescan, then loadDeck advances to Start Run.
+	// Flip to false to restore the old one-button orchestration checklist below.
+	const USE_GRID_PRIMARY = true;
+
 	// Orchestrated scan-and-start (deck_load substage): one Start Run press
 	// drives deck-barcode scan → cartridge sweep → loadDeck → startRun. Each
 	// step is rendered in a visible checklist; any failure aborts and opens
@@ -1267,11 +1273,9 @@
 				</div>
 			{/if}
 
-			{#if !isPreviewOrPast && data.opentronsRobotId && data.robotProtocols}
-				<!-- Orchestrated start: one press scans the deck barcode, sweeps
-				     the cartridge slots with the gantry scanner, records the deck
-				     load, then starts the protocol. Manual scanning stays below
-				     as a collapsed fallback. -->
+			{#if !USE_GRID_PRIMARY && !isPreviewOrPast && data.opentronsRobotId && data.robotProtocols}
+				<!-- Legacy one-button orchestration (hidden — USE_GRID_PRIMARY).
+				     The grid-primary else branch below is the live deck-load flow. -->
 				<div class="mb-4 space-y-4">
 					<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 						<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">
