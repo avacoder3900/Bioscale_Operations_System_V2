@@ -43,6 +43,7 @@ import os
 import sys
 import time
 import json
+import base64
 import signal
 import logging
 import threading
@@ -468,6 +469,78 @@ def execute_http(command_id: str, request_spec: dict) -> None:
         _post_result(command_id, {"ok": False, "error": str(e)})
 
 
+# How long to wait for on-robot protocol analysis after an upload (OT2-BRIDGE-3).
+UPLOAD_ANALYSIS_TIMEOUT_S = 60
+
+
+def execute_upload_protocol(command_id: str, payload: dict) -> None:
+    """OT2-BRIDGE-3: receive a base64 .py over the bridge, multipart-upload it to
+    the local robot /protocols, then poll the on-robot analysis (the daemon is
+    local so this is fast) and return the protocol id + analyzed metadata."""
+    file_name = payload.get("fileName") or "protocol.py"
+    file_b64 = payload.get("fileB64") or ""
+    log.info("upload_protocol %s: %s (%d b64 chars)", command_id, file_name, len(file_b64))
+    try:
+        file_bytes = base64.b64decode(file_b64)
+        files = {"files": (file_name, file_bytes, "text/x-python")}
+        r = requests.post(
+            OT2_BASE_URL + "/protocols",
+            headers={"opentrons-version": "*"},
+            files=files,
+            timeout=60,
+        )
+        if r.status_code >= 400:
+            _post_result(command_id, {"ok": False, "error": "robot upload {}: {}".format(r.status_code, r.text[:300])})
+            return
+        pid = (((r.json() or {}).get("data")) or {}).get("id")
+        if not pid:
+            _post_result(command_id, {"ok": False, "error": "robot returned no protocol id"})
+            return
+
+        analysis_status = "pending"
+        params = labware = pipettes = None
+        deadline = time.time() + UPLOAD_ANALYSIS_TIMEOUT_S
+        while time.time() < deadline:
+            time.sleep(2)
+            try:
+                ar = ot2_request("GET", "/protocols/{}/analyses".format(pid), timeout=15)
+                analyses = (ar.json() or {}).get("data") or []
+            except Exception:
+                continue
+            if not analyses:
+                continue
+            latest = analyses[-1]
+            st = latest.get("status")
+            if st == "completed":
+                detail = latest
+                try:
+                    dr = ot2_request("GET", "/protocols/{}/analyses/{}".format(pid, latest.get("id")), timeout=15)
+                    detail = (dr.json() or {}).get("data") or latest
+                except Exception:
+                    pass
+                body = detail.get("result") or detail
+                params = body.get("runTimeParameters")
+                labware = body.get("labware")
+                pipettes = body.get("pipettes")
+                analysis_status = "completed"
+                break
+            if st == "failed":
+                analysis_status = "failed"
+                break
+
+        _post_result(command_id, {"ok": True, "status": 200, "body": {
+            "opentronsProtocolId": pid,
+            "analysisStatus": analysis_status,
+            "parametersSchema": params,
+            "labwareDefinitions": labware,
+            "pipettesRequired": pipettes,
+        }})
+        log.info("upload_protocol %s done: id=%s analysis=%s", command_id, pid, analysis_status)
+    except Exception as e:
+        log.warning("upload_protocol %s failed: %s", command_id, e)
+        _post_result(command_id, {"ok": False, "error": str(e)})
+
+
 def _setup_pipette(run_id: str, payload: dict) -> str:
     """Discover + load the pipette for a sweep/deck-scan run; returns the
     run-scoped pipetteId."""
@@ -666,6 +739,8 @@ def execute_command(cmd: dict, port: ScannerPort) -> None:
         execute_sweep(command_id, cmd.get("payload") or {}, port)
     elif kind == "deck_scan":
         execute_deck_scan(command_id, cmd.get("payload") or {}, port)
+    elif kind == "upload_protocol":
+        execute_upload_protocol(command_id, cmd.get("payload") or {})
     else:
         log.warning("Unknown command kind '%s' (id=%s)", kind, command_id)
         _post_result(command_id, {"ok": False, "error": "unknown command kind: {}".format(kind)})

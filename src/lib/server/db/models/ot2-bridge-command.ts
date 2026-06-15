@@ -14,7 +14,7 @@ const ot2BridgeCommandSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	robotId: String,             // OpentronsRobot._id
 	deviceId: String,            // ot2-<slot>-bridge
-	kind: { type: String, enum: ['http', 'sweep', 'deck_scan'], required: true },
+	kind: { type: String, enum: ['http', 'sweep', 'deck_scan', 'upload_protocol'], required: true },
 	// kind 'http': relay this request to http://localhost:31950 on the robot
 	request: {
 		method: String,
@@ -22,6 +22,8 @@ const ot2BridgeCommandSchema = new Schema({
 		body: Schema.Types.Mixed
 	},
 	// kind 'sweep' / 'deck_scan': routine parameters (see OT2-BRIDGE-2)
+	// kind 'upload_protocol': { fileName, fileB64 } — base64 .py uploaded to the
+	// robot's /protocols then analyzed on-robot (see OT2-BRIDGE-3)
 	payload: Schema.Types.Mixed,
 	status: {
 		type: String,

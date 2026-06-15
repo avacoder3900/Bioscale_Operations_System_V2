@@ -2495,3 +2495,45 @@ multipart to localhost:31950/protocols) so uploads work from the cloud deploy.
 2. npx tsx scripts/sync-robot-protocols.ts            (dry run — review)
    SYNC_APPLY=1 npx tsx scripts/sync-robot-protocols.ts   (write robot.protocols[])
 3. Wax page now offers Wax_Filling_GEN7_Cartridge.py (wax-filling).
+
+
+## Session 2026-06-15 — OT2-BRIDGE-3: cloud→robot protocol upload (REFRESHER)
+
+WHERE WE ARE: the prod dynamic-API 404 is fixed (root api/ removed); the wax/reagent
+pages filter by protocolType; sync-robot-protocols.ts exists. Open item this session:
+uploading a protocol from the CLOUD app failed ("fetch failed") because the Import
+endpoint hits the robot DIRECTLY (robotBaseUrl -> .local), which Vercel can't reach,
+and upload was never bridged. We bridged it.
+
+WHAT SHIPPED (PRD docs/prds/OT2-BRIDGE-3-CLOUD-PROTOCOL-UPLOAD.md):
+- New bridge command kind 'upload_protocol' (Ot2BridgeCommand enum). payload =
+  { fileName, fileB64 }.
+- Daemon scripts/ot2-bridge.py execute_upload_protocol: base64-decode -> multipart
+  POST localhost:31950/protocols -> poll on-robot analysis (<=60s) -> return
+  { opentronsProtocolId, analysisStatus, parametersSchema, labwareDefinitions,
+  pipettesRequired }. Dispatched from execute_command. (py_compile clean, 3.7-safe.)
+- proxy.ts robotUploadProtocol(robot, fileName, bytes): bridge (Vercel) via
+  bridgeUpload, or direct (lab LAN) via directUpload (upload + analysis poll).
+- Endpoint POST /api/opentrons-lab/robots/[id]/protocols: calls robotUploadProtocol,
+  derives protocolType from filename, UPSERTS robot.protocols[] (the array the mfg
+  pages read), writes AuditLog. export const config = { maxDuration: 120 } (bridged
+  round-trip can exceed 30s). So a cloud Import now lands the protocol AND shows it
+  on the Wax page — no lab Mac, no scripts.
+- npm run check: 11-error baseline, zero new. npm run build: green.
+
+KNOWN LIMIT: uploads the .py only (no labware bundle). The wax protocol uses custom
+GEN7 labware; if on-robot analysis comes back failed/pending the param form won't
+populate. The robots already hold the GEN7 labware from earlier script uploads; if a
+NEW labware set is ever needed, push it once via upload-local-protocols-to-all-robots.ts.
+
+>>> NEXT STEP (must do before testing): REDEPLOY THE DAEMON to B07/R04/B14 — the
+robots still run the old ot2-bridge.py without 'upload_protocol'. Until redeployed,
+a cloud upload command will come back "unknown command kind". Steps:
+  KEY=/Users/brevitest/ot2_ssh_key
+  for H in muddy-water.local OT2CEP20210817R04.local hidden-leaf.local; do
+    scp -O -i $KEY scripts/ot2-bridge.py root@$H:/data/ot2-bridge/ot2-bridge.py
+    ssh -i $KEY root@$H 'systemctl restart ot2-bridge'   # or kill+restart per run.sh
+  done
+Then: deployed app -> /opentrons -> Import -> pick robot + Wax_Filling_GEN7_Cartridge.py
+-> Import. Expect success (no fetch failed); Wax page shows it (wax-filling) with params.
+Code is on master after this session's push (see git log: OT2-BRIDGE-3 commit).

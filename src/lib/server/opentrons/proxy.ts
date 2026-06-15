@@ -203,3 +203,116 @@ export async function updateRobotHealth(
 		}
 	);
 }
+
+// Protocol upload (OT2-BRIDGE-3) ----------------------------------------------
+
+/** Normalized result of uploading + analyzing a protocol on a robot. */
+export interface UploadedProtocol {
+	opentronsProtocolId: string;
+	analysisStatus: string;
+	parametersSchema: unknown;
+	labwareDefinitions: unknown;
+	pipettesRequired: unknown;
+}
+
+// The bridged upload waits for the daemon to upload AND analyze on-robot, which
+// takes longer than the 30s http relay. Keep under the endpoint's maxDuration
+// (120s) and over the daemon's analysis budget (~60s).
+const UPLOAD_BRIDGE_TIMEOUT_MS = 110_000;
+const ANALYSIS_POLL_MS = 2000;
+const ANALYSIS_BUDGET_MS = 60_000;
+
+/** Pull params/labware/pipettes out of a robot analysis (handles both the
+ *  inlined-result and detail-by-id shapes across robot-server versions). */
+function parseAnalysis(detail: any): Pick<UploadedProtocol, 'parametersSchema' | 'labwareDefinitions' | 'pipettesRequired'> {
+	const body = detail?.result ?? detail ?? {};
+	return {
+		parametersSchema: body.runTimeParameters ?? null,
+		labwareDefinitions: body.labware ?? null,
+		pipettesRequired: body.pipettes ?? null
+	};
+}
+
+/** Relay an upload_protocol command through the bridge and await the daemon's
+ *  result. Mirrors bridgeFetch but with a file payload and a longer deadline. */
+async function bridgeUpload(robot: any, fileName: string, fileB64: string): Promise<any> {
+	await connectDB();
+	const deviceId = bridgeDeviceIdForRobot(robot);
+	const cmd = await Ot2BridgeCommand.create({
+		_id: generateId(),
+		robotId: String(robot._id ?? ''),
+		deviceId,
+		kind: 'upload_protocol',
+		payload: { fileName, fileB64 },
+		ttlMs: UPLOAD_BRIDGE_TIMEOUT_MS
+	});
+
+	const deadline = Date.now() + UPLOAD_BRIDGE_TIMEOUT_MS;
+	while (Date.now() < deadline) {
+		const doc = await Ot2BridgeCommand.findById(cmd._id).select('status result error').lean() as any;
+		if (doc?.status === 'completed') return doc.result?.body ?? null;
+		if (doc?.status === 'failed' || doc?.status === 'expired') {
+			throw new Error(`upload via bridge (${deviceId}) failed: ${doc.error ?? doc.status}`);
+		}
+		await new Promise((r) => setTimeout(r, 300));
+	}
+	await Ot2BridgeCommand.updateOne(
+		{ _id: cmd._id, status: { $in: ['pending', 'claimed'] } },
+		{ $set: { status: 'expired', error: 'BIMS gave up waiting for the bridge daemon', completedAt: new Date() } }
+	).catch(() => {});
+	throw new Error(`upload failed: robot bridge "${deviceId}" did not respond within ${UPLOAD_BRIDGE_TIMEOUT_MS / 1000}s`);
+}
+
+/** Upload + analyze directly against the robot's HTTP API (local-dev transport). */
+async function directUpload(robot: any, fileName: string, bytes: Uint8Array): Promise<UploadedProtocol> {
+	const base = robotBaseUrl(robot);
+	const form = new FormData();
+	form.append('files', new Blob([bytes as BlobPart], { type: 'text/x-python' }), fileName);
+	const res = await robotFetch(`${base}/protocols`, { method: 'POST', headers: { 'opentrons-version': '*' }, body: form });
+	if (!res.ok) throw new Error(`robot upload failed (${res.status})`);
+	const pid = ((await res.json())?.data)?.id;
+	if (!pid) throw new Error('robot did not return a protocol id');
+
+	let analysisStatus = 'pending';
+	let parsed: any = { parametersSchema: null, labwareDefinitions: null, pipettesRequired: null };
+	const deadline = Date.now() + ANALYSIS_BUDGET_MS;
+	while (Date.now() < deadline) {
+		await new Promise((r) => setTimeout(r, ANALYSIS_POLL_MS));
+		const ar = await robotFetch(`${base}/protocols/${pid}/analyses`, { headers: { 'opentrons-version': '*' } }).catch(() => null);
+		if (!ar || !ar.ok) continue;
+		const analyses = (await ar.json())?.data ?? [];
+		if (!analyses.length) continue;
+		const latest = analyses[analyses.length - 1];
+		if (latest.status === 'completed') {
+			let detail: any = latest;
+			const dr = await robotFetch(`${base}/protocols/${pid}/analyses/${latest.id}`, { headers: { 'opentrons-version': '*' } }).catch(() => null);
+			if (dr && dr.ok) detail = (await dr.json())?.data ?? latest;
+			parsed = parseAnalysis(detail);
+			analysisStatus = 'completed';
+			break;
+		}
+		if (latest.status === 'failed') { analysisStatus = 'failed'; break; }
+	}
+	return { opentronsProtocolId: pid, analysisStatus, ...parsed };
+}
+
+/**
+ * Upload a protocol .py to a robot and return its analyzed metadata, choosing
+ * the bridge (cloud → daemon) or direct (lab LAN) transport automatically.
+ */
+export async function robotUploadProtocol(robot: any, fileName: string, bytes: Uint8Array): Promise<UploadedProtocol> {
+	if (resolveTransport() === 'bridge') {
+		const fileB64 = Buffer.from(bytes).toString('base64');
+		const body = await bridgeUpload(robot, fileName, fileB64);
+		const pid = body?.opentronsProtocolId ?? body?.id;
+		if (!pid) throw new Error(`bridge upload returned no protocol id: ${JSON.stringify(body)?.slice(0, 200)}`);
+		return {
+			opentronsProtocolId: pid,
+			analysisStatus: body?.analysisStatus ?? 'unknown',
+			parametersSchema: body?.parametersSchema ?? null,
+			labwareDefinitions: body?.labwareDefinitions ?? null,
+			pipettesRequired: body?.pipettesRequired ?? null
+		};
+	}
+	return directUpload(robot, fileName, bytes);
+}
