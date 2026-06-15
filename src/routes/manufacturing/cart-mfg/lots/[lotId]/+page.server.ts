@@ -1,5 +1,5 @@
 import { error, redirect, fail } from '@sveltejs/kit';
-import { connectDB, LotRecord, ProcessConfiguration } from '$lib/server/db';
+import { connectDB, LotRecord, ProcessConfiguration, CartridgeRecord } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -11,10 +11,28 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const lot = await LotRecord.findById(params.lotId).lean() as any;
 	if (!lot) throw error(404, 'Lot not found');
 
+	// Cartridges individuated into this backing lot (WAX-FLOW-2): each carries its
+	// own scan time + scanner, grouped by backing.parentLotRecordId.
+	const carts = await CartridgeRecord.find({ 'backing.parentLotRecordId': params.lotId })
+		.select('_id status backing.ovenEntryTime backing.operator backing.ovenLocationName')
+		.lean() as any[];
+	const cartridges = carts
+		.map((c: any) => ({
+			barcode: String(c._id),
+			status: c.status ?? '',
+			scannedAt: c.backing?.ovenEntryTime ? new Date(c.backing.ovenEntryTime).toISOString() : null,
+			scannedBy: c.backing?.operator?.username ?? 'unknown',
+			oven: c.backing?.ovenLocationName ?? ''
+		}))
+		.sort((a, b) => (a.scannedAt ?? '').localeCompare(b.scannedAt ?? ''));
+
+	const ovenName = lot.ovenPlacement?.ovenBarcode ?? carts[0]?.backing?.ovenLocationName ?? null;
+
 	return {
 		lot: {
 			lotId: String(lot._id),
 			bucketBarcode: lot.bucketBarcode ?? null,
+			outputLotNumber: lot.outputLotNumber ?? null,
 			configId: lot.processConfig?.processName ?? lot.processConfig?._id ?? '',
 			qrCodeRef: lot.qrCodeRef ?? '',
 			quantityProduced: lot.quantityProduced ?? 0,
@@ -22,8 +40,14 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			startTime: lot.startTime ? new Date(lot.startTime).toISOString() : null,
 			finishTime: lot.finishTime ? new Date(lot.finishTime).toISOString() : null,
 			cycleTime: lot.cycleTime ?? null,
-			createdAt: lot.createdAt ? new Date(lot.createdAt).toISOString() : ''
+			createdAt: lot.createdAt ? new Date(lot.createdAt).toISOString() : '',
+			oven: ovenName,
+			inputLots: (lot.inputLots ?? []).map((il: any) => ({
+				materialName: il.materialName ?? '',
+				barcode: il.barcode ?? ''
+			}))
 		},
+		cartridges,
 		batchNotes: (lot.stepEntries ?? [])
 			.filter((s: any) => s.note || s.imageUrl)
 			.map((s: any) => ({

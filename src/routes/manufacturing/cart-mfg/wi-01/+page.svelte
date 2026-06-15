@@ -460,7 +460,7 @@
 		<!-- Recent Batches (config screen only) -->
 		{#if data.recentLots.length > 0 && step === 'config'}
 			<div class="border-t border-[var(--color-tron-border)] pt-4">
-				<h2 class="text-sm font-medium text-[var(--color-tron-text-secondary)]">Recent batches</h2>
+				<h2 class="text-sm font-medium text-[var(--color-tron-text-secondary)]">Backing lots</h2>
 				<div class="mt-2 overflow-x-auto">
 					<table class="w-full text-left text-sm">
 						<thead>
@@ -475,7 +475,7 @@
 						<tbody>
 							{#each data.recentLots as lot (lot.lotId)}
 								<tr class="border-b border-[var(--color-tron-border)]">
-									<td class="px-3 py-2 font-mono text-xs"><a href="/manufacturing/lots/{lot.lotId}" class="text-[var(--color-tron-cyan)] hover:underline">{lot.outputLotNumber ?? lot.bucketBarcode ?? '(in progress)'}</a></td>
+									<td class="px-3 py-2 font-mono text-xs"><a href="/manufacturing/cart-mfg/lots/{lot.lotId}" class="text-[var(--color-tron-cyan)] hover:underline">{lot.outputLotNumber ?? lot.bucketBarcode ?? '(in progress)'}</a></td>
 									<td class="px-3 py-2 text-[var(--color-tron-text)]">{lot.quantityProduced}</td>
 									<td class="px-3 py-2 text-[var(--color-tron-text)]">{lot.operatorName}</td>
 									<td class="px-3 py-2 text-[var(--color-tron-text)]">{lot.status}</td>
