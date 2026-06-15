@@ -62,12 +62,16 @@
 				</div>
 				<!-- Cartridge count -->
 				<div>
-					<label for="cartridge-count-select" class="tron-label">Cartridges</label>
-					<select id="cartridge-count-select" class="tron-input mt-1 w-full" bind:value={plannedCartridgeCount}>
-						{#each Array.from({ length: 24 }, (_, i) => i + 1) as n (n)}
-							<option value={n}>{n}</option>
-						{/each}
-					</select>
+					<label for="cartridge-count-input" class="tron-label">Cartridges</label>
+					<input
+						id="cartridge-count-input"
+						type="number"
+						min="1"
+						max="24"
+						class="tron-input mt-1 w-full"
+						bind:value={plannedCartridgeCount}
+					/>
+					<p class="mt-1 text-[11px] text-[var(--color-tron-text-secondary)]">1–24</p>
 				</div>
 			</div>
 

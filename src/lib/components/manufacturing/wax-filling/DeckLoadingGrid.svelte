@@ -200,6 +200,25 @@
 		}
 	}
 
+	// WAX-FLOW-STREAMLINE: one action — robot scans the deck barcode, auto-confirms,
+	// then sweeps every cartridge slot. The grid fills live and failed slots show
+	// red (click a red tile to rescan it by hand). No separate button presses.
+	let autoRunning = $state(false);
+	async function scanDeckAndCartridges() {
+		if (isReadonly || !robotId || autoRunning) return;
+		autoRunning = true;
+		try {
+			if (!deckId) {
+				await scanDeckWithRobot();
+				if (!deckPendingValue) return; // deck scan failed — error already shown
+				confirmDeck(); // auto-advance to cartridge loading (no manual confirm)
+			}
+			await autoSweepCartridges();
+		} finally {
+			autoRunning = false;
+		}
+	}
+
 	function confirmDeck() {
 		// Validation already done on Enter keydown
 		deckId = deckPendingValue;
@@ -624,6 +643,22 @@
 			class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5"
 		>
 			{#if !deckPendingValue}
+				{#if robotId && !isReadonly}
+					<button
+						type="button"
+						onclick={scanDeckAndCartridges}
+						disabled={autoRunning || deckScanInFlight || sweepInFlight}
+						class="mb-4 flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/20 px-4 py-3 text-sm font-bold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30 disabled:cursor-not-allowed disabled:opacity-40"
+					>
+						{#if autoRunning}
+							<span class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden="true"></span>
+							Robot scanning deck + cartridges…
+						{:else}
+							Scan deck + cartridges with robot
+						{/if}
+					</button>
+					<p class="mb-3 text-center text-[11px] text-[var(--color-tron-text-secondary)]">or scan manually below</p>
+				{/if}
 				<div class="flex items-center gap-3">
 					<div
 						class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)]"

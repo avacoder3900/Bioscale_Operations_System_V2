@@ -175,7 +175,15 @@
 				<input type="hidden" name={k} value={v} />
 			{/each}
 
-			<!-- Protocol selector -->
+			<button
+					type="submit"
+					disabled={submitting || !selectedProtocolId}
+					class="w-full rounded-lg bg-[var(--color-tron-cyan)] px-6 py-3 text-base font-semibold text-white transition-colors hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-50"
+				>
+					{submitting ? 'Starting…' : 'Start Run'}
+				</button>
+
+				<!-- Protocol selector -->
 			<label class="block">
 				<span class="text-xs font-medium uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
 					Protocol
@@ -329,14 +337,6 @@
 					<a href="/opentrons/devices/{robot._id}" class="underline">the device page</a>.
 				</div>
 			{/if}
-
-			<button
-				type="submit"
-				disabled={submitting || !selectedProtocolId}
-				class="w-full rounded-lg bg-[var(--color-tron-cyan)] px-6 py-3 text-base font-semibold text-white transition-colors hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-50"
-			>
-				{submitting ? 'Starting…' : 'Start Run'}
-			</button>
 		</form>
 	{/if}
 </div>

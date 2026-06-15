@@ -117,27 +117,6 @@
 	</nav>
 
 	<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-		<div class="flex items-center gap-3">
-			<span class="text-sm font-medium text-[var(--color-tron-text)]">
-				{data.robots.find((r) => r.robotId === selectedRobotId)?.name ?? 'Robot'}
-			</span>
-
-			{#if selectedRobotState}
-				<span
-					class="rounded px-2 py-1 text-xs font-medium {stageBadgeColor(selectedRobotState.stage)}"
-				>
-					{selectedRobotState.hasActiveRun ? selectedRobotState.stage : 'Idle'}
-				</span>
-				{#each selectedRobotState.alerts as alert (alert.type)}
-					<span
-						class="rounded border border-red-500/30 bg-red-900/50 px-2 py-1 text-xs font-medium text-red-300"
-					>
-						{alert.message}
-					</span>
-				{/each}
-			{/if}
-		</div>
-
 		<nav class="flex items-center gap-1">
 			<a href={resolve('/manufacturing/cart-mfg/wax-filling')} class={navLinkClass(BASE, true)}>
 				Run Wizard
