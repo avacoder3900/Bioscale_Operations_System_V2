@@ -239,5 +239,18 @@
 			Run finished with status <span class="font-mono" style="color: var(--color-tron-cyan)">{runStatus}</span>.
 			Advancing the flow…
 		</div>
+		{#if runStatus === 'failed' && run?.errors?.length}
+			<div class="mt-2 rounded border border-red-500/40 bg-red-900/15 p-2 text-xs text-red-300">
+				<p class="font-semibold">Why it failed</p>
+				<ul class="mt-1 space-y-1">
+					{#each run.errors as e (e.id ?? e.detail ?? e.errorType)}
+						<li class="font-mono text-[11px] leading-snug text-red-200/90">{e.detail ?? e.errorType ?? 'Unknown error'}</li>
+					{/each}
+				</ul>
+				{#if run.errors.some((e: any) => /labware/i.test(e.detail ?? '') && /not found/i.test(e.detail ?? ''))}
+					<p class="mt-1 text-[10px] text-red-300/70">A custom labware definition isn't on this robot — re-upload the protocol bundled with its labware (the Opentrons app does this automatically; the cloud import does not).</p>
+				{/if}
+			</div>
+		{/if}
 	{/if}
 </div>
