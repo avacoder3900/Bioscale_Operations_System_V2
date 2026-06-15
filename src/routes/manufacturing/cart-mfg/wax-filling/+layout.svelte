@@ -102,19 +102,9 @@
 
 	<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
 		<div class="flex items-center gap-3">
-			<label for="robot-select" class="text-sm font-medium text-[var(--color-tron-text-secondary)]">
-				Robot
-			</label>
-			<select
-				id="robot-select"
-				value={selectedRobotId}
-				onchange={(e) => selectRobot(e.currentTarget.value)}
-				class="min-h-[44px] rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
-			>
-				{#each data.robots as robot (robot.robotId)}
-					<option value={robot.robotId}>{robot.name}</option>
-				{/each}
-			</select>
+			<span class="text-sm font-medium text-[var(--color-tron-text)]">
+				{data.robots.find((r) => r.robotId === selectedRobotId)?.name ?? 'Robot'}
+			</span>
 
 			{#if selectedRobotState}
 				<span

@@ -428,7 +428,7 @@
 	function stageLabel(stage: string): string {
 		switch (stage) {
 			case 'Loading':
-				return '1. Load';
+				return '1. Wax fill setup';
 			case 'Running':
 				return '2. Run';
 			case 'Awaiting Removal':
