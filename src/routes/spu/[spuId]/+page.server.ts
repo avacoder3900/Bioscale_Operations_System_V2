@@ -83,6 +83,16 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			finalizedAt: s.finalizedAt ?? null,
 			corrections: s.corrections ?? []
 		},
+		attachments: (s.attachments ?? []).map((a: any) => ({
+			id: a._id,
+			fileName: a.fileName ?? 'attachment.csv',
+			kind: a.kind ?? 'file',
+			fileSize: a.fileSize ?? 0,
+			rowCount: a.rowCount ?? null,
+			sessionId: a.sessionId ?? null,
+			uploadedAt: a.uploadedAt ?? null,
+			uploadedByName: a.uploadedBy?.username ?? null
+		})),
 		batch: batch
 			? {
 					id: (batch as any)._id,

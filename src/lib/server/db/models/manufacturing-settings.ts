@@ -4,7 +4,7 @@ const manufacturingSettingsSchema = new Schema({
 	_id: { type: String, default: 'default' },
 	waxFilling: {
 		minOvenTimeMin: Number, runDurationMin: Number, removeDeckWarningMin: Number,
-		coolingWarningMin: Number, deckLockoutMin: Number, incubatorTempC: Number,
+		coolingWarningMin: Number, coolingRequiredMin: Number, deckLockoutMin: Number, incubatorTempC: Number,
 		heaterTempC: Number, waxPerDeckUl: Number, tubeCapacityUl: Number,
 		waxPerCartridgeUl: Number, cartridgesPerColumn: Number
 	},

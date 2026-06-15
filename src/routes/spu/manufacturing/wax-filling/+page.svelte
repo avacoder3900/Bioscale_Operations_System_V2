@@ -105,6 +105,18 @@
 	let effectiveStage = $derived(pendingStage ?? (data.runState.hasActiveRun ? data.runState.stage : null));
 	let effectiveHasActiveRun = $derived(!!pendingStage || data.runState.hasActiveRun);
 
+	// Cooling timer for "remove from tray → loose storage". Clock starts at
+	// coolingConfirmedTime; cartridges must cool coolingRequiredMin before removal.
+	let nowMs = $state(Date.now());
+	$effect(() => {
+		const t = setInterval(() => { nowMs = Date.now(); }, 30_000);
+		return () => clearInterval(t);
+	});
+	let coolingStartMs = $derived(data.runState.coolingConfirmedTime ? new Date(data.runState.coolingConfirmedTime).getTime() : null);
+	let coolingReadyAtMs = $derived(coolingStartMs != null ? coolingStartMs + data.settings.coolingRequiredMin * 60_000 : null);
+	let coolingReady = $derived(coolingReadyAtMs != null && nowMs >= coolingReadyAtMs);
+	let coolingRemainingMin = $derived(coolingReadyAtMs != null ? Math.max(0, Math.ceil((coolingReadyAtMs - nowMs) / 60_000)) : data.settings.coolingRequiredMin);
+
 	let currentStageIndex = $derived(
 		effectiveHasActiveRun && effectiveStage
 			? STAGES.indexOf(effectiveStage as (typeof STAGES)[number])
@@ -306,6 +318,11 @@
 				trayId: result.trayId
 			});
 		}
+	}
+
+	function handleRemoveFromTray() {
+		if (previewParam || !data.runState.runId) return;
+		submitAction('removeFromTray', { runId: data.runState.runId });
 	}
 
 	function handleQCComplete(result: {
@@ -856,6 +873,38 @@
 				onComplete={handleCompleteRun}
 				readonly={isPreviewOrPast}
 			/>
+			{#if !previewParam && data.runState.coolingTrayId}
+				<div class="mt-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
+					<div class="flex items-center justify-between gap-4">
+						<div>
+							<p class="text-sm font-medium text-[var(--color-tron-text)]">
+								Cooling tray {data.runState.coolingTrayId}
+							</p>
+							<p class="text-xs text-[var(--color-tron-text-secondary)]">
+								{#if coolingReady}
+									Cooling complete — remove cartridges to loose storage to free this tray.
+								{:else}
+									Cartridges must cool {data.settings.coolingRequiredMin} min before removal.
+								{/if}
+							</p>
+						</div>
+						<button
+							type="button"
+							onclick={handleRemoveFromTray}
+							disabled={submitting || (!coolingReady && !data.isAdmin)}
+							class="shrink-0 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+						>
+							{#if coolingReady}
+								Remove from tray → loose storage
+							{:else if data.isAdmin}
+								Override: remove now (cooling, {coolingRemainingMin} min left)
+							{:else}
+								Cooling… {coolingRemainingMin} min remaining
+							{/if}
+						</button>
+					</div>
+				</div>
+			{/if}
 		{/if}
 	</div>
 	{/if}

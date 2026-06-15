@@ -2,6 +2,8 @@ import { redirect, fail } from '@sveltejs/kit';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId
 } from '$lib/server/db';
+import { isAdmin, hasPermission } from '$lib/server/permissions';
+import { releaseTrayForRun, coolingStatus, DEFAULT_COOLING_REQUIRED_MIN } from '$lib/server/cooling';
 import type { PageServerLoad, Actions } from './$types';
 
 /** Map DB status → UI stage string (STAGES const in svelte) */
@@ -36,8 +38,9 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			robotId: '',
 			loadError: 'No robots configured. Add a robot in equipment settings.',
 			robotBlocked: null,
-			runState: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null },
-			settings: { runDurationMin: 45, removeDeckWarningMin: 5, coolingWarningMin: 30, deckLockoutMin: 60, incubatorTempC: 37, heaterTempC: 65 },
+			runState: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, coolingConfirmedTime: null, plannedCartridgeCount: null },
+			settings: { runDurationMin: 45, removeDeckWarningMin: 5, coolingWarningMin: 30, coolingRequiredMin: DEFAULT_COOLING_REQUIRED_MIN, deckLockoutMin: 60, incubatorTempC: 37, heaterTempC: 65 },
+			isAdmin: isAdmin(locals.user) || hasPermission(locals.user, 'manufacturing:admin'),
 			tubeData: null, ovenLots: [], rejectionCodes: [], qcCartridges: [], storageCartridges: []
 		};
 	}
@@ -86,9 +89,10 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			deckId: run.deckId ?? null,
 			waxSourceLot: run.waxSourceLot ?? null,
 			coolingTrayId: run.coolingTrayId ?? null,
+			coolingConfirmedTime: run.coolingConfirmedTime ? new Date(run.coolingConfirmedTime).toISOString() : null,
 			plannedCartridgeCount: run.plannedCartridgeCount ?? run.cartridgeIds?.length ?? null
 		}
-		: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null };
+		: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, coolingConfirmedTime: null, plannedCartridgeCount: null };
 
 	// Tube data
 	const tube = activeTube as any;
@@ -169,10 +173,12 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			runDurationMin: wax.runDurationMin ?? 45,
 			removeDeckWarningMin: wax.removeDeckWarningMin ?? 5,
 			coolingWarningMin: wax.coolingWarningMin ?? 30,
+			coolingRequiredMin: wax.coolingRequiredMin ?? DEFAULT_COOLING_REQUIRED_MIN,
 			deckLockoutMin: wax.deckLockoutMin ?? 60,
 			incubatorTempC: wax.incubatorTempC ?? 37,
 			heaterTempC: wax.heaterTempC ?? 65
 		},
+		isAdmin: isAdmin(locals.user) || hasPermission(locals.user, 'manufacturing:admin'),
 		tubeData,
 		ovenLots,
 		rejectionCodes,
@@ -350,6 +356,51 @@ export const actions: Actions = {
 
 		await WaxFillingRun.findByIdAndUpdate(runId, { $set: update });
 		return { success: true };
+	},
+
+	/**
+	 * Remove a run's cartridges from the cooling tray into loose storage and free the tray.
+	 * Blocked until the batch has cooled for `coolingRequiredMin` (default 30 min);
+	 * admins (admin:full / admin:users / manufacturing:admin) may override.
+	 */
+	removeFromTray: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const runId = data.get('runId') as string;
+		if (!runId) return fail(400, { error: 'runId is required' });
+
+		const [run, settingsDoc] = await Promise.all([
+			WaxFillingRun.findById(runId).lean() as any,
+			ManufacturingSettings.findById('default').lean() as any
+		]);
+		if (!run) return fail(404, { error: 'Run not found' });
+
+		const requiredMin = settingsDoc?.waxFilling?.coolingRequiredMin ?? DEFAULT_COOLING_REQUIRED_MIN;
+		const userIsAdmin = isAdmin(locals.user) || hasPermission(locals.user, 'manufacturing:admin');
+		const { ready, elapsedMin } = coolingStatus(run.coolingConfirmedTime, requiredMin, Date.now());
+
+		if (!ready && !userIsAdmin) {
+			const remaining = run.coolingConfirmedTime
+				? Math.max(0, Math.ceil(requiredMin - (elapsedMin ?? 0)))
+				: requiredMin;
+			return fail(403, {
+				error: `Cartridges must cool ${requiredMin} min before removal — ~${remaining} min remaining. An admin can override.`,
+				coolingNotReady: true
+			});
+		}
+
+		const operator = { _id: locals.user._id, username: locals.user.username };
+		const result = await releaseTrayForRun(run, {
+			operator,
+			changedBy: locals.user.username,
+			reason: !ready && userIsAdmin
+				? 'Admin override — removed from tray before cooling complete'
+				: 'Cooling complete — removed from tray to loose storage'
+		});
+
+		return { success: true, ...result };
 	},
 
 	/** Complete QC — inspect all cartridges and transition to Storage */

@@ -43,6 +43,13 @@
 		return new Date(date).toLocaleString();
 	}
 
+	function formatBytes(bytes: number): string {
+		if (!bytes) return '—';
+		if (bytes < 1024) return `${bytes} B`;
+		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+		return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+	}
+
 	const fieldLabels: Record<string, string> = {
 		status: 'Status',
 		batchId: 'Batch'
@@ -434,6 +441,57 @@
 				</div>
 			{/each}
 		</div>
+	</TronCard>
+
+	<!-- Attachments (thermocouple CSVs, etc.) -->
+	<TronCard>
+		<h3 class="tron-text-primary mb-4 text-lg font-medium">Attachments</h3>
+		{#if data.attachments.length > 0}
+			<div class="overflow-x-auto">
+				<table class="tron-table">
+					<thead>
+						<tr>
+							<th>File</th>
+							<th>Type</th>
+							<th>Rows</th>
+							<th>Size</th>
+							<th>Uploaded</th>
+							<th>By</th>
+							<th></th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each data.attachments as att (att.id)}
+							<tr>
+								<td class="font-mono">{att.fileName}</td>
+								<td>{att.kind}</td>
+								<td>{att.rowCount ?? '—'}</td>
+								<td>{formatBytes(att.fileSize)}</td>
+								<td>{formatDate(att.uploadedAt)}</td>
+								<td>{att.uploadedByName ?? '—'}</td>
+								<td>
+									<a
+										href="/spu/{data.spu.id}/attachments/{att.id}"
+										class="underline"
+										style="color: var(--color-tron-cyan);"
+										download={att.fileName}
+									>
+										Download
+									</a>
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{:else}
+			<div class="py-6 text-center">
+				<p class="tron-text-muted">No attachments yet.</p>
+				<p class="mt-1 text-xs" style="color: var(--color-tron-cyan); opacity: 0.7;">
+					Upload thermocouple CSVs from the Thermocouple Validation page
+				</p>
+			</div>
+		{/if}
 	</TronCard>
 
 	<TronCard>
