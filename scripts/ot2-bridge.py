@@ -482,12 +482,21 @@ def execute_upload_protocol(command_id: str, payload: dict) -> None:
     log.info("upload_protocol %s: %s (%d b64 chars)", command_id, file_name, len(file_b64))
     try:
         file_bytes = base64.b64decode(file_b64)
-        files = {"files": (file_name, file_bytes, "text/x-python")}
+        # The .py first, then every bundled custom-labware .json under the same
+        # multipart field "files" (a list of tuples — dict can't repeat a key).
+        files = [("files", (file_name, file_bytes, "text/x-python"))]
+        for lw in (payload.get("labware") or []):
+            try:
+                lw_bytes = base64.b64decode(lw.get("b64") or "")
+                files.append(("files", (lw.get("fileName") or "labware.json", lw_bytes, "application/json")))
+            except Exception:
+                pass
+        log.info("upload_protocol %s: bundling %d labware def(s)", command_id, len(files) - 1)
         r = requests.post(
             OT2_BASE_URL + "/protocols",
             headers={"opentrons-version": "*"},
             files=files,
-            timeout=60,
+            timeout=120,
         )
         if r.status_code >= 400:
             _post_result(command_id, {"ok": False, "error": "robot upload {}: {}".format(r.status_code, r.text[:300])})

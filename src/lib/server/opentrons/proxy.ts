@@ -12,7 +12,7 @@
  *    (default) picks bridge on Vercel, direct elsewhere.
  */
 
-import { connectDB, OpentronsRobot, Ot2BridgeCommand, ScannerEvent, generateId } from '$lib/server/db';
+import { connectDB, OpentronsRobot, Ot2BridgeCommand, ScannerEvent, generateId, LabwareDefinition } from '$lib/server/db';
 
 const DEFAULT_PORT = 31950;
 
@@ -237,7 +237,7 @@ function parseAnalysis(detail: any): Pick<UploadedProtocol, 'parametersSchema' |
 
 /** Relay an upload_protocol command through the bridge and await the daemon's
  *  result. Mirrors bridgeFetch but with a file payload and a longer deadline. */
-async function bridgeUpload(robot: any, fileName: string, fileB64: string): Promise<any> {
+async function bridgeUpload(robot: any, fileName: string, fileB64: string, labware: { fileName: string; b64: string }[]): Promise<any> {
 	await connectDB();
 	const deviceId = bridgeDeviceIdForRobot(robot);
 	const cmd = await Ot2BridgeCommand.create({
@@ -245,7 +245,7 @@ async function bridgeUpload(robot: any, fileName: string, fileB64: string): Prom
 		robotId: String(robot._id ?? ''),
 		deviceId,
 		kind: 'upload_protocol',
-		payload: { fileName, fileB64 },
+		payload: { fileName, fileB64, labware },
 		ttlMs: UPLOAD_BRIDGE_TIMEOUT_MS
 	});
 
@@ -266,10 +266,14 @@ async function bridgeUpload(robot: any, fileName: string, fileB64: string): Prom
 }
 
 /** Upload + analyze directly against the robot's HTTP API (local-dev transport). */
-async function directUpload(robot: any, fileName: string, bytes: Uint8Array): Promise<UploadedProtocol> {
+async function directUpload(robot: any, fileName: string, bytes: Uint8Array, labware: { fileName: string; json: string }[]): Promise<UploadedProtocol> {
 	const base = robotBaseUrl(robot);
 	const form = new FormData();
 	form.append('files', new Blob([bytes as BlobPart], { type: 'text/x-python' }), fileName);
+	// Bundle the BIMS labware library so the robot resolves custom labware.
+	for (const lw of labware) {
+		form.append('files', new Blob([lw.json], { type: 'application/json' }), lw.fileName);
+	}
 	const res = await robotFetch(`${base}/protocols`, { method: 'POST', headers: { 'opentrons-version': '*' }, body: form });
 	if (!res.ok) throw new Error(`robot upload failed (${res.status})`);
 	const pid = ((await res.json())?.data)?.id;
@@ -303,9 +307,19 @@ async function directUpload(robot: any, fileName: string, bytes: Uint8Array): Pr
  * the bridge (cloud → daemon) or direct (lab LAN) transport automatically.
  */
 export async function robotUploadProtocol(robot: any, fileName: string, bytes: Uint8Array): Promise<UploadedProtocol> {
+	// Bundle the BIMS-managed labware library so the robot resolves a protocol's
+	// custom labware at run time (the OT-2 resolves from what's bundled at upload).
+	await connectDB();
+	const defs = await LabwareDefinition.find().select('fileName loadName definition').lean() as any[];
+	const labware = defs.map((d) => {
+		const fn = (d.fileName && String(d.fileName).endsWith('.json')) ? String(d.fileName) : `${d.loadName}.json`;
+		return { fileName: fn, json: JSON.stringify(d.definition) };
+	});
+
 	if (resolveTransport() === 'bridge') {
 		const fileB64 = Buffer.from(bytes).toString('base64');
-		const body = await bridgeUpload(robot, fileName, fileB64);
+		const labwareB64 = labware.map((l) => ({ fileName: l.fileName, b64: Buffer.from(l.json).toString('base64') }));
+		const body = await bridgeUpload(robot, fileName, fileB64, labwareB64);
 		const pid = body?.opentronsProtocolId ?? body?.id;
 		if (!pid) throw new Error(`bridge upload returned no protocol id: ${JSON.stringify(body)?.slice(0, 200)}`);
 		return {
@@ -316,5 +330,5 @@ export async function robotUploadProtocol(robot: any, fileName: string, bytes: U
 			pipettesRequired: body?.pipettesRequired ?? null
 		};
 	}
-	return directUpload(robot, fileName, bytes);
+	return directUpload(robot, fileName, bytes, labware);
 }
