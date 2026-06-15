@@ -23,6 +23,9 @@ const cvProjectSchema = new Schema({
 	// Phases at which this project's trained classifier auto-runs inference on
 	// capture (see run-inference.ts). Declared so deployment config persists.
 	deployAtPhases: { type: [String], default: [] },
+	// Master model trains on every labeled image regardless of phase; otherwise
+	// the project trains on labeled images captured at its deployAtPhases.
+	isMasterModel: { type: Boolean, default: false },
 	// Pass-probability cutoff for pass/fail at inference time (0..1).
 	confidenceThreshold: { type: Number, default: 0.5, min: 0, max: 1 },
 	captureSettings: {

@@ -45,18 +45,31 @@ export async function triggerTraining(projectId: string): Promise<TrainingResult
 	const project = (await CvProject.findById(projectId).lean()) as any;
 	if (!project) throw new Error(`Project ${projectId} not found`);
 
-	const query: Record<string, any> = { label: { $ne: null } };
-	if (!project.isMasterModel) query.projectId = projectId;
+	// Labels are stored on CvImage.qcLabel (legacy docs used .label). Membership:
+	// a master model trains on every labeled image; otherwise the project trains
+	// on labeled images captured at one of its deployAtPhases. (Images carry no
+	// projectId on this schema, so phase is the association.)
+	const labelExpr = { $in: ['approved', 'rejected'] };
+	const query: Record<string, any> = { $or: [{ qcLabel: labelExpr }, { label: labelExpr }] };
+	if (!project.isMasterModel) {
+		const phases: string[] = project.deployAtPhases ?? [];
+		if (phases.length === 0) {
+			throw new Error('Project is not a master model and has no deployAtPhases — nothing to train on.');
+		}
+		query['cartridgeTag.phase'] = { $in: phases };
+	}
 
 	const images = (await CvImage.find(query)
-		.select('_id imageUrl filePath label embedding embeddingVersion')
+		.select('_id imageUrl filePath qcLabel label embedding embeddingVersion')
 		.lean()) as any[];
+
+	const labelOf = (i: any): string | null => i.qcLabel ?? i.label ?? null;
 
 	if (images.length < 5) {
 		throw new Error(`Need at least 5 labeled images to train (have ${images.length})`);
 	}
-	const approved = images.filter((i) => i.label === 'approved').length;
-	const rejected = images.filter((i) => i.label === 'rejected').length;
+	const approved = images.filter((i) => labelOf(i) === 'approved').length;
+	const rejected = images.filter((i) => labelOf(i) === 'rejected').length;
 	if (approved === 0 || rejected === 0) {
 		throw new Error(
 			`Need both classes labeled (have ${approved} approved, ${rejected} rejected). Label at least one of each.`
@@ -88,7 +101,7 @@ export async function triggerTraining(projectId: string): Promise<TrainingResult
 		}
 
 		X.push(emb);
-		y.push(img.label === 'approved' ? 1 : 0);
+		y.push(labelOf(img) === 'approved' ? 1 : 0);
 	}
 
 	const classifier = fitClassifier(X, y);
