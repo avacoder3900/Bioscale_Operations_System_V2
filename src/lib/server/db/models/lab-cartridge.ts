@@ -4,7 +4,8 @@ import { generateId } from '../utils.js';
 const labCartridgeSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	barcode: String, serialNumber: String, lotNumber: String,
-	cartridgeType: { type: String, enum: ['measurement', 'calibration', 'reference', 'test'] },
+	cartridgeType: { type: String, enum: ['measurement', 'calibration', 'reference', 'test', 'optical_test'] },
+	assay: { _id: String, name: String, skuCode: String },
 	status: { type: String, enum: ['available', 'in_use', 'depleted', 'expired', 'quarantine', 'disposed'] },
 	groupId: String, partDefinitionId: String, manufacturer: String,
 	expirationDate: Date, receivedDate: Date, openedDate: Date,
