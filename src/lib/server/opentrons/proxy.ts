@@ -225,7 +225,9 @@ const ANALYSIS_BUDGET_MS = 60_000;
 /** Pull params/labware/pipettes out of a robot analysis (handles both the
  *  inlined-result and detail-by-id shapes across robot-server versions). */
 function parseAnalysis(detail: any): Pick<UploadedProtocol, 'parametersSchema' | 'labwareDefinitions' | 'pipettesRequired'> {
-	const body = detail?.result ?? detail ?? {};
+	// runTimeParameters/labware/pipettes are top-level on the analysis; `result`
+	// is a string verdict (e.g. "ok"), so only treat it as the body if it's an object.
+	const body = (detail?.result && typeof detail.result === 'object') ? detail.result : (detail ?? {});
 	return {
 		parametersSchema: body.runTimeParameters ?? null,
 		labwareDefinitions: body.labware ?? null,

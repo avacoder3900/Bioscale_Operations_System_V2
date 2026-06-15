@@ -510,15 +510,22 @@ def execute_upload_protocol(command_id: str, payload: dict) -> None:
             if not analyses:
                 continue
             latest = analyses[-1]
+            if not isinstance(latest, dict):
+                continue
             st = latest.get("status")
             if st == "completed":
                 detail = latest
                 try:
                     dr = ot2_request("GET", "/protocols/{}/analyses/{}".format(pid, latest.get("id")), timeout=15)
-                    detail = (dr.json() or {}).get("data") or latest
+                    dd = (dr.json() or {}).get("data")
+                    if isinstance(dd, dict):
+                        detail = dd
                 except Exception:
                     pass
-                body = detail.get("result") or detail
+                # The analysis fields (runTimeParameters/labware/pipettes) are at
+                # the TOP LEVEL; `result` is a string verdict, not a nested object.
+                res = detail.get("result")
+                body = res if isinstance(res, dict) else detail
                 params = body.get("runTimeParameters")
                 labware = body.get("labware")
                 pipettes = body.get("pipettes")
