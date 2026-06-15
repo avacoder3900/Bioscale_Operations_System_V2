@@ -78,6 +78,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	if (!config) {
 		return {
 			config: null,
+			availableLots: { 'PT-CT-104': [], 'PT-CT-112': [], 'PT-CT-106': [] },
 			processSteps: [],
 			lotStepEntries: [],
 			recentLots: [],
@@ -96,7 +97,32 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const partByPN = new Map((parts as any[]).map((p: any) => [p.partNumber, p]));
 	const partQty = (pn: string) => (partByPN.get(pn) as any)?.inventoryCount ?? 0;
 
+	// Available input lots per consumed part, for the batch-setup dropdowns.
+	// remaining = lot.quantity − Σ(consumption/scrap tx against that lotId).
+	const consumedPNs = CONSUMED_PARTS.map((p) => p.partNumber);
+	const recvLots = await ReceivingLot.find({
+		'part.partNumber': { $in: consumedPNs },
+		status: { $nin: ['rejected', 'returned'] }
+	}).select('lotId part.partNumber quantity').lean() as any[];
+	const consumedAgg = await InventoryTransaction.aggregate([
+		{ $match: { lotId: { $in: recvLots.map((l) => l.lotId) }, transactionType: { $in: ['consumption', 'scrap'] } } },
+		{ $group: { _id: '$lotId', total: { $sum: '$quantity' } } }
+	]);
+	const consumedByLot = new Map((consumedAgg as any[]).map((c2: any) => [c2._id, Math.abs(c2.total ?? 0)]));
+	const availableLots: Record<string, { lotId: string; quantity: number; remaining: number }[]> = {
+		'PT-CT-104': [], 'PT-CT-112': [], 'PT-CT-106': []
+	};
+	for (const l of recvLots) {
+		const pn = l.part?.partNumber;
+		if (!availableLots[pn]) continue;
+		const qty = Number(l.quantity ?? 0);
+		const remaining = Math.max(0, qty - (consumedByLot.get(l.lotId) ?? 0));
+		if (remaining > 0) availableLots[pn].push({ lotId: l.lotId, quantity: qty, remaining });
+	}
+	for (const pn of consumedPNs) availableLots[pn].sort((a, b) => b.remaining - a.remaining);
+
 	return {
+		availableLots,
 		config: {
 			configId: String(c._id),
 			processName: c.processName ?? 'Cartridge Backing (WI-01)',
@@ -188,16 +214,17 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
+		// quantity is OPTIONAL (oven-session flow): the real count is reconciled
+		// from cartridges actually scanned into the oven at confirmComplete. When
+		// 0/absent we skip the upfront inventory precheck.
 		const quantity = Number(data.get('quantity') || 0);
 		const lot1 = (data.get('lot1') as string)?.trim() || '';
 		const lot2 = (data.get('lot2') as string)?.trim() || '';
 		const lot3 = (data.get('lot3') as string)?.trim() || '';
 
-		if (quantity <= 0) return fail(400, { checkAndStart: { error: 'Quantity must be greater than 0' } });
-
-		// Defense-in-depth: re-validate each scanned lot matches the part it
-		// represents. The UI validates on scan, but we re-check here so a
-		// forged form submission can't slip through.
+		// Defense-in-depth: re-validate each selected lot matches the part it
+		// represents (dropdowns are server-populated, but a forged form submission
+		// could still slip through).
 		const scanChecks: Array<[string, string, string]> = [
 			['PT-CT-104', 'Cartridge', lot1],
 			['PT-CT-112', 'Thermoseal Laser Cut Sheet', lot2],
@@ -210,31 +237,33 @@ export const actions: Actions = {
 			}
 		}
 
-		// Check inventory for all 3 consumed materials
-		const parts = await PartDefinition.find({
-			partNumber: { $in: CONSUMED_PARTS.map(p => p.partNumber) },
-			bomType: 'cartridge',
-			isActive: true
-		}).lean() as any[];
+		// Upfront inventory precheck only when a planned quantity was given.
+		if (quantity > 0) {
+			const parts = await PartDefinition.find({
+				partNumber: { $in: CONSUMED_PARTS.map(p => p.partNumber) },
+				bomType: 'cartridge',
+				isActive: true
+			}).lean() as any[];
 
-		const partMap = new Map(parts.map((p: any) => [p.partNumber, p]));
-		const insufficient: { name: string; need: number; have: number }[] = [];
+			const partMap = new Map(parts.map((p: any) => [p.partNumber, p]));
+			const insufficient: { name: string; need: number; have: number }[] = [];
 
-		for (const cp of CONSUMED_PARTS) {
-			const part = partMap.get(cp.partNumber);
-			const have = part?.inventoryCount ?? 0;
-			if (have < quantity) {
-				insufficient.push({ name: cp.name, need: quantity, have });
-			}
-		}
-
-		if (insufficient.length > 0) {
-			return fail(400, {
-				checkAndStart: {
-					error: 'Insufficient inventory for this batch size',
-					insufficient
+			for (const cp of CONSUMED_PARTS) {
+				const part = partMap.get(cp.partNumber);
+				const have = part?.inventoryCount ?? 0;
+				if (have < quantity) {
+					insufficient.push({ name: cp.name, need: quantity, have });
 				}
-			});
+			}
+
+			if (insufficient.length > 0) {
+				return fail(400, {
+					checkAndStart: {
+						error: 'Insufficient inventory for this batch size',
+						insufficient
+					}
+				});
+			}
 		}
 
 		// Create lot record with auto-generated QR

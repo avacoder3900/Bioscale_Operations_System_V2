@@ -2537,3 +2537,23 @@ a cloud upload command will come back "unknown command kind". Steps:
 Then: deployed app -> /opentrons -> Import -> pick robot + Wax_Filling_GEN7_Cartridge.py
 -> Import. Expect success (no fetch failed); Wax page shows it (wax-filling) with params.
 Code is on master after this session's push (see git log: OT2-BRIDGE-3 commit).
+VERIFIED working end-to-end: Wax_Filling_GEN7_Cartridge.py uploaded from the cloud
+to B07, analysis completed (10 params), tagged wax-filling, shows on the Wax page.
+(Bugfix along the way: analysis `result` is a string verdict, not a nested object.)
+
+## Session 2026-06-15 (cont.) — WI-01 Backing redesigned to oven-session
+
+PRD docs/prds/WI01-BACKING-OVEN-SESSION.md. Backing page (/manufacturing/cart-mfg/wi-01)
+flow changed from scan-3-lots → qty → work → oven → confirm  TO:
+  config (3 material-lot DROPDOWNS + oven dropdown) → session (rapid-fire scan
+  cartridges) → finish (scrap + withdraw).
+- Server: load now returns availableLots per consumed part (PT-CT-104/112/106) =
+  ReceivingLots with remaining qty, for the dropdowns. checkAndStart: quantity is
+  now OPTIONAL (skips the upfront inventory precheck); consumption is reconciled
+  from the actual scanned count at confirmComplete (already was). scan/remove/
+  confirm actions unchanged.
+- UI: +page.svelte rewritten to config/session/confirm. Dropdowns submit via
+  use:enhance → checkAndStart → lotId → session. Rapid scan reuses scanBackedCartridge.
+  Resume path: if a resumed batch has no client oven, the session shows an oven
+  selector to continue. npm run check 11-baseline (0 new); build green.
+On master after this session's push.
