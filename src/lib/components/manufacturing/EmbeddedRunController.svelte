@@ -42,6 +42,9 @@
 	let lastError = $state<string | null>(null);
 	let actionInFlight = $state<string | null>(null);
 	let terminalFired = $state(false);
+	// Auto-resume the initial "confirm off-deck labware" pause so operators don't
+	// click resume at the start of the wax/reagent protocol. Fires once.
+	let autoResumedInitial = $state(false);
 	let pollHandle: ReturnType<typeof setTimeout> | null = null;
 
 	const TERMINAL = new Set(['succeeded', 'failed', 'stopped']);
@@ -59,6 +62,12 @@
 				if (!terminalFired && TERMINAL.has(next)) {
 					terminalFired = true;
 					if (onComplete) onComplete(next, run);
+				}
+				// Off-deck labware makes the engine pause once at the very start;
+				// auto-resume it (only the first pause, never error-recovery).
+				else if (!autoResumedInitial && next === 'paused') {
+					autoResumedInitial = true;
+					void handleAction('resume');
 				}
 			} else {
 				lastError = `Robot returned ${res.status}`;
