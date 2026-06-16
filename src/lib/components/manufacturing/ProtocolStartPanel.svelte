@@ -74,7 +74,8 @@
 		extraHidden = {} as Record<string, string>,
 		onSubmitIntercept = undefined,
 		autoStart = false,
-		onAutoStarted = undefined
+		onAutoStarted = undefined,
+		submitLabel = 'Start Run'
 	} = $props<{
 		robot: { _id: string; name: string };
 		protocols: ProtocolDef[];
@@ -86,6 +87,7 @@
 		formAction: string;
 		extraHidden?: Record<string, string>;
 		onSubmitIntercept?: (formData: FormData) => Promise<void> | void;
+		submitLabel?: string;
 		// When true, the panel submits itself once on mount (used to auto-start
 		// the run straight after a clean barcode scan — no operator click).
 		autoStart?: boolean;
@@ -196,7 +198,7 @@
 					disabled={submitting || !selectedProtocolId}
 					class="w-full rounded-lg bg-[var(--color-tron-cyan)] px-6 py-3 text-base font-semibold text-white transition-colors hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-50"
 				>
-					{submitting ? 'Starting…' : 'Start Run'}
+					{submitting ? 'Starting…' : submitLabel}
 				</button>
 
 				<!-- Protocol selector -->

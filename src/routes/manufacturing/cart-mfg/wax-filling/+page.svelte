@@ -170,6 +170,15 @@
 	// the operator goes straight into the run with no extra click.
 	let autoStartPending = $state(false);
 
+	// Protocol parameters are set in their OWN step BEFORE barcode scanning so the
+	// operator configures the run, then walks away during the scan and it starts
+	// automatically with those exact values (instead of the run-start params being
+	// skipped by auto-start). The chosen protocol + param values are captured as
+	// the FormData the panel would have submitted, then replayed to ?/startRun
+	// after a clean scan. Client-only: a mid-flow page reload re-shows the step.
+	let paramsReady = $state(false);
+	let capturedParamsFd = $state<FormData | null>(null);
+
 	// Orchestrated scan-and-start (deck_load substage): one Start Run press
 	// drives deck-barcode scan → cartridge sweep → loadDeck → startRun. Each
 	// step is rendered in a visible checklist; any failure aborts and opens
@@ -623,28 +632,69 @@
 		});
 	}
 
-	function handleDeckLoadComplete(result: {
+	// Capture the protocol + params chosen at the params step (before scanning).
+	// The panel hands us the exact FormData it would have submitted to ?/startRun;
+	// we replay it after a clean scan so the run starts with those values.
+	function handleParamsConfirmed(fd: FormData) {
+		capturedParamsFd = fd;
+		paramsReady = true; // advances the substage to barcode scanning (deck_load)
+	}
+
+	// Start the run with the params captured before scanning. Hands-off path.
+	async function startRunWithCapturedParams() {
+		if (!capturedParamsFd || !data.runState.runId) return;
+		capturedParamsFd.set('runId', data.runState.runId);
+		submitting = true;
+		pendingStage = 'Running';
+		try {
+			const res = await fetch('?/startRun', {
+				method: 'POST',
+				body: capturedParamsFd,
+				headers: { 'x-sveltekit-action': 'true' }
+			});
+			const text = await res.text();
+			if (!res.ok || text.includes('"type":"failure"')) {
+				errorMsg = 'Auto-start with your parameters failed — start the run manually below.';
+				pendingStage = null;
+				autoStartPending = false;
+			}
+			await invalidateAll();
+			if (data.runState.hasActiveRun && data.runState.stage !== 'Loading') pendingStage = null;
+		} catch (e) {
+			errorMsg = e instanceof Error ? e.message : 'Run start failed';
+			pendingStage = null;
+		} finally {
+			submitting = false;
+		}
+	}
+
+	async function handleDeckLoadComplete(result: {
 		deckId: string;
 		ovenId: string;
 		cartridgeScans: { cartridgeId: string; backedLotId: string }[];
 		countMismatchReason?: string;
 	}) {
 		if (previewParam) return;
-		if (data.runState.runId) {
-			const formData: Record<string, string> = {
-				runId: data.runState.runId,
-				deckId: result.deckId,
-				ovenId: result.ovenId,
-				cartridgeScans: JSON.stringify(result.cartridgeScans)
-			};
-			if (result.countMismatchReason) {
-				formData.countMismatchReason = result.countMismatchReason;
-			}
-			if (testMode) {
-				formData.testMode = 'true';
-			}
-			// Clean scan (full count, no mismatch) → auto-start the run at ready_to_run.
-			if (!result.countMismatchReason) autoStartPending = true;
+		if (!data.runState.runId) return;
+		const formData: Record<string, string> = {
+			runId: data.runState.runId,
+			deckId: result.deckId,
+			ovenId: result.ovenId,
+			cartridgeScans: JSON.stringify(result.cartridgeScans)
+		};
+		if (result.countMismatchReason) {
+			formData.countMismatchReason = result.countMismatchReason;
+		}
+		const cleanScan = !result.countMismatchReason;
+		if (cleanScan && capturedParamsFd) {
+			// Hands-off: record the deck load, then start the run with the params
+			// the operator set BEFORE scanning. No ready_to_run panel, no clicks.
+			await submitAction('loadDeck', formData);
+			await startRunWithCapturedParams();
+		} else {
+			// Fallback (mismatch, or params not captured e.g. mid-flow reload):
+			// land on ready_to_run; auto-start there only on a clean scan.
+			if (cleanScan) autoStartPending = true;
 			submitAction('loadDeck', formData);
 		}
 	}
@@ -811,7 +861,9 @@
 		// the UI to ready_to_run and unmount the step checklist.
 		if (orchestrating) return 'deck_load';
 		if (data.runState.deckId) return 'ready_to_run';
-		if (data.runState.waxSourceLot) return 'deck_load';
+		// Protocol params come BEFORE barcode scanning now: once the wax lot is
+		// recorded, set params, then advance to the scan.
+		if (data.runState.waxSourceLot) return paramsReady ? 'deck_load' : 'params';
 		return 'wax_prep';
 	});
 
@@ -819,7 +871,7 @@
 	type WaxStage = (typeof STAGES)[number];
 	const previewParam = $derived($page.url.searchParams.has('preview'));
 	let previewStage = $state<WaxStage>('Loading');
-	let previewLoadingSub = $state<'wax_prep' | 'deck_load' | 'ready_to_run'>('wax_prep');
+	let previewLoadingSub = $state<'wax_prep' | 'params' | 'deck_load' | 'ready_to_run'>('wax_prep');
 	const displayStage = $derived(previewParam ? previewStage : viewStage);
 	const displayLoadingSub = $derived(previewParam ? previewLoadingSub : loadingSubStage);
 
@@ -828,7 +880,7 @@
 	const TIMELINE = ['Wax fill setup', 'Barcode scanning', 'Run', 'Deck removal', 'QC', 'Storage'] as const;
 	const currentBubbleIndex = $derived.by(() => {
 		const s = effectiveStage;
-		if (s === 'Loading') return loadingSubStage === 'wax_prep' ? 0 : 1;
+		if (s === 'Loading') return (loadingSubStage === 'wax_prep' || loadingSubStage === 'params') ? 0 : 1;
 		if (s === 'Running') return 2;
 		if (s === 'Awaiting Removal') return 3;
 		if (s === 'QC') return 4;
@@ -836,6 +888,18 @@
 		return 0;
 	});
 	const isPreviewOrPast = $derived(previewParam || isViewingPast);
+
+	// Reset the params step whenever the active run changes (new run / switched
+	// robot / run finished) so each run requires its own parameter confirmation.
+	let lastParamsRunId = '';
+	$effect(() => {
+		const rid = data.runState.runId ?? '';
+		if (rid !== lastParamsRunId) {
+			lastParamsRunId = rid;
+			paramsReady = false;
+			capturedParamsFd = null;
+		}
+	});
 
 	const mockQcCartridges = Array.from({ length: 6 }, (_, i) => ({
 		cartridgeId: `CART-${String(i + 1).padStart(4, '0')}`,
@@ -1240,6 +1304,37 @@
 					</div>
 				{/if}
 			</div>
+		{:else if displayStage === 'Loading' && displayLoadingSub === 'params'}
+			<!-- Protocol parameters BEFORE barcode scanning: configure the run now,
+			     then walk away during the scan — it starts automatically with these
+			     values (instead of run-start params getting skipped by auto-start). -->
+			{#if !isPreviewOrPast && data.opentronsRobotId && data.robotProtocols}
+				<div class="space-y-4">
+					<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
+						<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">Set protocol parameters</h3>
+						<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
+							Configure the run now. After you continue, scanning the deck + cartridges starts the run automatically with these values — you can walk away.
+						</p>
+					</div>
+					<ProtocolStartPanel
+						robot={{ _id: data.opentronsRobotId, name: data.robotName }}
+						protocols={data.robotProtocols}
+						contextValues={{ cartridges: data.runState.plannedCartridgeCount ?? 24 }}
+						contextReadonly={['cartridges']}
+						lastTipState={data.lastTipState}
+						submitting={submitting}
+						formAction="?/startRun"
+						extraHidden={{ runId: data.runState.runId ?? '' }}
+						submitLabel="Save & continue to barcode scan →"
+						onSubmitIntercept={handleParamsConfirmed}
+					/>
+				</div>
+			{:else}
+				<div class="rounded-lg border border-amber-500/40 bg-amber-900/10 p-4 text-sm text-amber-300">
+					No protocol parameters to set for this robot.
+					<button type="button" class="ml-2 underline" onclick={() => (paramsReady = true)}>Continue to scan →</button>
+				</div>
+			{/if}
 		{:else if displayStage === 'Loading' && displayLoadingSub === 'deck_load'}
 
 			{#if !USE_GRID_PRIMARY && !isPreviewOrPast && data.opentronsRobotId && data.robotProtocols}
