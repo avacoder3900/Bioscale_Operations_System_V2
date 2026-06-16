@@ -154,11 +154,10 @@
 	let showCancelModal = $state(false);
 	let cancelReason = $state('');
 
-	// Test mode — loadDeck synthesizes backed CartridgeRecords for unknown
-	// scanned barcodes so the wax flow can be run end-to-end without going
-	// through WI-01 backing. Distinct from the admin cure-time override
-	// (which targets real under-time cartridges).
-	let testMode = $state(false);
+	// Test Mode removed from the UI — cartridges always come from real WI-01
+	// backing now. Kept as a constant false so the loadDeck call sites compile
+	// without synthesizing test cartridges.
+	const testMode = false;
 
 	// WAX-FLOW-STREAMLINE: the cartridge-layout grid (DeckLoadingGrid) is the single
 	// deck-load surface — its on-robot deck scan + sweep fill the grid live, failed
@@ -1242,16 +1241,6 @@
 				{/if}
 			</div>
 		{:else if displayStage === 'Loading' && displayLoadingSub === 'deck_load'}
-			<!-- "Backed cartridges ready" counts removed as redundant; the Test Mode
-			     toggle is kept (used to exercise the wax flow without WI-01 backing). -->
-			{#if !previewParam}
-				<label class="mb-4 flex items-start gap-2 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3 text-xs text-amber-400 cursor-pointer">
-					<input type="checkbox" bind:checked={testMode} class="mt-0.5 rounded" />
-					<span>
-						Test Mode — unknown scanned barcodes are synthesized server-side as backed cartridges so the wax flow can be exercised end-to-end without WI-01 backing. Cure-time checks are bypassed for synthetic carts; no admin re-auth needed.
-					</span>
-				</label>
-			{/if}
 
 			{#if !USE_GRID_PRIMARY && !isPreviewOrPast && data.opentronsRobotId && data.robotProtocols}
 				<!-- Legacy one-button orchestration (hidden — USE_GRID_PRIMARY).
