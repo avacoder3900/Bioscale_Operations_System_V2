@@ -65,6 +65,15 @@
 	let error = $state('');
 	let busy = $state(false);
 
+	// live "is this cartridge already used?" status for the scanned/selected barcode
+	let cartridgeStatus = $state<{
+		checking: boolean;
+		exists: boolean;
+		available?: boolean;
+		status?: string;
+		cartridgeType?: string;
+	} | null>(null);
+
 	// --- derived ---
 	let selectedSpu = $derived(data.spus.find((s) => s._id === selectedSpuId) ?? null);
 	let attachedOc = $derived(selectedSpu?.validation?.opticalConfirmation ?? null);
@@ -105,6 +114,33 @@
 			payload = null;
 		}
 		return { ok: res.ok, payload };
+	}
+
+	async function checkCartridge() {
+		const b = selectedBarcode.trim();
+		if (!b) {
+			cartridgeStatus = null;
+			return;
+		}
+		// fast path: anything in the available dropdown list is, by definition, available
+		if (data.cartridges.find((c) => c.barcode === b)) {
+			cartridgeStatus = { checking: false, exists: true, available: true, status: 'available', cartridgeType: 'optical_test' };
+			return;
+		}
+		cartridgeStatus = { checking: true, exists: false };
+		try {
+			const res = await fetch('/api/validation/optical-confirmation/cartridges?barcode=' + encodeURIComponent(b));
+			const r = await res.json();
+			cartridgeStatus = {
+				checking: false,
+				exists: !!r.exists,
+				available: r.exists ? !r.used : undefined,
+				status: r.status,
+				cartridgeType: r.cartridgeType
+			};
+		} catch {
+			cartridgeStatus = null;
+		}
 	}
 
 	async function attach() {
@@ -254,6 +290,7 @@
 					result = null;
 					error = '';
 					selectedBarcode = '';
+					cartridgeStatus = null;
 				}}
 				class="tron-input w-full rounded-lg px-4 py-3"
 			>
@@ -315,39 +352,78 @@
 						Detach cartridge
 					</button>
 				</div>
-			{:else if data.cartridges.length === 0}
-				<p class="tron-text-muted text-sm">
-					No available optical-test cartridges. Capture one on the
-					<a
-						href="./optical-confirmation/cartridges"
-						class="text-[var(--color-tron-cyan)] hover:underline">cartridges page</a
-					>.
-				</p>
 			{:else}
-				<label for="cartridgePicker" class="tron-text-muted mb-2 block text-sm font-medium">
-					Available cartridge
+				<label for="cartridgeScan" class="tron-text-muted mb-2 block text-sm font-medium">
+					Scan cartridge barcode
 				</label>
-				<select
-					id="cartridgePicker"
+				<input
+					id="cartridgeScan"
+					type="text"
 					bind:value={selectedBarcode}
-					class="tron-input w-full rounded-lg px-4 py-3"
-				>
-					<option value="">— Select a cartridge —</option>
-					{#each data.cartridges as c (c._id)}
-						<option value={c.barcode}>
-							{c.barcode}{#if c.assay?.skuCode}
-								· {c.assay.skuCode}{/if}
-						</option>
-					{/each}
-				</select>
+					onblur={checkCartridge}
+					placeholder="Scan or type barcode…"
+					class="tron-input w-full rounded-lg px-4 py-3 text-lg"
+				/>
+
+				{#if cartridgeStatus && !cartridgeStatus.checking}
+					{#if cartridgeStatus.exists && cartridgeStatus.available}
+						<p class="mt-1 text-xs text-[var(--color-tron-green)]">✓ Available — ready to attach.</p>
+					{:else if cartridgeStatus.exists}
+						<p class="mt-1 text-xs text-[var(--color-tron-red)]">
+							⚠ Already used (type: {cartridgeStatus.cartridgeType}, status: {cartridgeStatus.status}). Pick another cartridge.
+						</p>
+					{:else}
+						<p class="mt-1 text-xs text-[var(--color-tron-red)]">
+							⚠ No captured optical-test cartridge with that barcode — capture it first.
+						</p>
+					{/if}
+				{/if}
+
+				{#if data.cartridges.length > 0}
+					<label for="cartridgePicker" class="tron-text-muted mt-4 mb-2 block text-sm font-medium">
+						…or pick an available one
+					</label>
+					<select
+						id="cartridgePicker"
+						bind:value={selectedBarcode}
+						onchange={checkCartridge}
+						class="tron-input w-full rounded-lg px-4 py-3"
+					>
+						<option value="">— Select a cartridge —</option>
+						{#each data.cartridges as c (c._id)}
+							<option value={c.barcode}>
+								{c.barcode}{#if c.assay?.skuCode}
+									· {c.assay.skuCode}{/if}
+							</option>
+						{/each}
+					</select>
+				{:else}
+					<p class="tron-text-muted mt-3 text-sm">
+						No available optical-test cartridges in inventory — scan one above, or
+						<a
+							href="./optical-confirmation/cartridges"
+							class="text-[var(--color-tron-cyan)] hover:underline">capture one</a
+						> first.
+					</p>
+				{/if}
+
 				<button
 					type="button"
 					onclick={attach}
-					disabled={busy || !selectedBarcode}
+					disabled={busy ||
+						!selectedBarcode.trim() ||
+						(cartridgeStatus?.exists === true && cartridgeStatus?.available === false)}
 					class="mt-6 flex w-full items-center justify-center gap-3 rounded-lg bg-[var(--color-tron-cyan)] px-6 py-4 text-lg font-semibold text-[var(--color-tron-bg-primary)] transition-all hover:bg-[var(--color-tron-cyan)]/90 disabled:cursor-not-allowed disabled:opacity-50"
 				>
 					Attach cartridge
 				</button>
+				{#if !selectedBarcode.trim()}
+					<p class="tron-text-muted mt-2 text-center text-xs">Scan or select a cartridge barcode to enable.</p>
+				{:else if cartridgeStatus?.exists === true && cartridgeStatus?.available === false}
+					<p class="tron-text-muted mt-2 text-center text-xs">
+						This cartridge is {cartridgeStatus.status} — choose an available one.
+					</p>
+				{/if}
 			{/if}
 		</div>
 	{/if}
