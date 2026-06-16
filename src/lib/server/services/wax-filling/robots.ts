@@ -30,6 +30,7 @@ export interface RobotRunState {
 	runStartTime: Date | string | null;
 	runEndTime: Date | string | null;
 	deckId: string | null;
+	cartridgeCount?: number;
 	health?: RobotHealthSummary | null;
 	alerts: RobotRunAlert[];
 	activeProcess?: 'wax' | 'reagent' | null;

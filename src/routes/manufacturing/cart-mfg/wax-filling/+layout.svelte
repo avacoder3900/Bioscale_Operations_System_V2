@@ -115,6 +115,15 @@
 		}
 	}
 
+	// Compact "running for" label for the gallery run counter.
+	function elapsedLabel(iso: string | Date): string {
+		const ms = Date.now() - new Date(iso).getTime();
+		if (!Number.isFinite(ms) || ms < 0) return '';
+		const min = Math.floor(ms / 60000);
+		if (min < 60) return `${min}m`;
+		return `${Math.floor(min / 60)}h ${min % 60}m`;
+	}
+
 	onMount(() => {
 		pollHealth();
 		const id = setInterval(pollHealth, 10000);
@@ -283,9 +292,16 @@
 							</div>
 						{/if}
 						{#if robotState.hasActiveRun && robotState.activeProcess}
-							<div class="flex items-center gap-2 rounded border border-amber-500/30 bg-amber-900/20 px-3 py-1.5 text-xs text-amber-300">
-								<span class="h-2 w-2 rounded-full bg-amber-400 animate-pulse"></span>
-								{robotState.activeProcess === 'wax' ? 'Wax' : 'Reagent'}: {robotState.stage}
+							<div class="flex flex-col items-center gap-1">
+								<div class="flex items-center gap-2 rounded border border-amber-500/30 bg-amber-900/20 px-3 py-1.5 text-xs text-amber-300">
+									<span class="h-2 w-2 rounded-full bg-amber-400 animate-pulse"></span>
+									{robotState.activeProcess === 'wax' ? 'Wax' : 'Reagent'}: {robotState.stage}
+								</div>
+								{#if (robotState.cartridgeCount ?? 0) > 0 || robotState.runStartTime}
+									<div class="text-xs text-[var(--color-tron-text-secondary)]">
+										{#if (robotState.cartridgeCount ?? 0) > 0}{robotState.cartridgeCount} cart{robotState.cartridgeCount === 1 ? '' : 's'}{/if}{#if (robotState.cartridgeCount ?? 0) > 0 && robotState.runStartTime} · {/if}{#if robotState.runStartTime}{elapsedLabel(robotState.runStartTime)}{/if}
+									</div>
+								{/if}
 							</div>
 						{:else}
 							<div class="flex items-center gap-2 text-xs text-green-300">

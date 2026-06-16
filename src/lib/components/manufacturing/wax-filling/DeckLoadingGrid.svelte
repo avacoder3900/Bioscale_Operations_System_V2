@@ -218,6 +218,19 @@
 				confirmDeck(); // auto-advance to cartridge loading (no manual confirm)
 			}
 			await autoSweepCartridges();
+			// Hands-off completion: if the robot read every specified cartridge
+			// cleanly (count matches, no slot needs a manual rescan), finish
+			// automatically — no "Confirm Full Load" click, so the operator can
+			// start the scan and walk away. A mismatch/failed slot still falls
+			// through to the manual confirm/mismatch flow.
+			if (
+				deckId &&
+				plannedCartridgeCount != null &&
+				failedSlots.size === 0 &&
+				filledCount === plannedCartridgeCount
+			) {
+				tryComplete();
+			}
 		} finally {
 			autoRunning = false;
 		}

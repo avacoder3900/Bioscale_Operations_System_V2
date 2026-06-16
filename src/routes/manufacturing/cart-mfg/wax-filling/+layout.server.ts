@@ -38,7 +38,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 			Equipment.find({ equipmentType: 'robot', isActive: true }, { _id: 1, name: 1, robotSide: 1 }).sort({ name: 1 }).lean(),
 			WaxFillingRun.find(
 				{ status: { $in: WAX_PAGE_OWNED } },
-				{ 'robot._id': 1, status: 1, runStartTime: 1, runEndTime: 1, deckId: 1 }
+				{ 'robot._id': 1, status: 1, runStartTime: 1, runEndTime: 1, deckId: 1, cartridgeIds: 1 }
 			).lean(),
 			ReagentBatchRecord.find(
 				{ status: { $in: REAGENT_PAGE_OWNED } },
@@ -85,6 +85,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 					runStartTime: waxRun?.runStartTime ? new Date(waxRun.runStartTime).toISOString() : null,
 					runEndTime: waxRun?.runEndTime ? new Date(waxRun.runEndTime).toISOString() : null,
 					deckId: waxRun?.deckId ?? null,
+					cartridgeCount: waxRun ? (waxRun.cartridgeIds ?? []).length : 0,
 					health: (health as any)[robotIdStr] ?? null,
 					alerts: []
 				};
