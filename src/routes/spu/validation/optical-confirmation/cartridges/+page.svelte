@@ -38,6 +38,8 @@
 	// Local copy of the cartridge list so we can prepend on success
 	let cartridges = $state<Cartridge[]>(data.cartridges ?? []);
 
+	// Only assays that actually have a SKU code can be selected (blank-SKU options would leave the value empty)
+	let validAssays = $derived(data.assays.filter((a) => a.skuCode && a.skuCode.trim().length > 0));
 	let isValid = $derived(barcode.trim().length > 0 && assaySkuCode.trim().length > 0);
 
 	// Live "is this barcode already used?" check
@@ -193,10 +195,10 @@
 				<label for="assay" class="tron-text-muted mb-2 block text-sm font-medium">
 					Assay <span class="text-[var(--color-tron-red)]">*</span>
 				</label>
-				{#if data.assays.length > 0}
+				{#if validAssays.length > 0}
 					<select id="assay" bind:value={assaySkuCode} class="tron-input w-full rounded-lg px-4 py-3">
 						<option value="">Select an assay…</option>
-						{#each data.assays as assay (assay._id)}
+						{#each validAssays as assay (assay._id)}
 							<option value={assay.skuCode}>{assay.name} ({assay.skuCode})</option>
 						{/each}
 					</select>
@@ -271,7 +273,9 @@
 				{isSubmitting ? 'Capturing…' : 'Capture Cartridge'}
 			</button>
 			{#if !isValid}
-				<p class="tron-text-muted text-center text-xs">Enter a barcode and an assay SKU to enable.</p>
+				<p class="tron-text-muted text-center text-xs">
+					To enable — barcode: {barcode.trim() ? '✓' : '✗ empty'} · assay SKU: {assaySkuCode.trim() ? `✓ ${assaySkuCode}` : '✗ empty'}
+				</p>
 			{/if}
 		</form>
 	</div>
