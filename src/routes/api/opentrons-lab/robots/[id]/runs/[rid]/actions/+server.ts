@@ -9,7 +9,16 @@ import { requirePermission } from '$lib/server/permissions';
 import { getRobot, robotPost } from '$lib/server/opentrons/proxy';
 
 const VALID_ACTIONS = ['play', 'pause', 'stop', 'resume'] as const;
-type RunAction = (typeof VALID_ACTIONS)[number];
+
+// The OT-2 has no 'resume' actionType — a paused run is resumed with 'play'.
+// Passing 'resume' through made the robot reject it (the spurious error seen when
+// auto-resuming the off-deck pause). Map it here.
+const ACTION_TO_OT2: Record<string, string> = {
+	play: 'play',
+	pause: 'pause',
+	stop: 'stop',
+	resume: 'play'
+};
 
 export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!locals.user) error(401, 'Not authenticated');
@@ -25,7 +34,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 
 	try {
 		const res = await robotPost(robot, `/runs/${params.rid}/actions`, {
-			data: { actionType: action as RunAction }
+			data: { actionType: ACTION_TO_OT2[action] }
 		});
 		if (!res.ok) {
 			const body = await res.json().catch(() => ({}));

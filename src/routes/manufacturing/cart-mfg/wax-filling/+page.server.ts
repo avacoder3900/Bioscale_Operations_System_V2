@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import {
 	connectDB, WaxFillingRun, CartridgeRecord, Consumable, ManufacturingSettings, generateId,
 	Equipment, EquipmentLocation, AuditLog, BackingLot, WaxBatch, ReceivingLot,
-	OpentronsRobot, ManualCartridgeRemoval
+	OpentronsRobot, ManualCartridgeRemoval, Ot2BridgeCommand
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { resolveFridgeId, resolveCoolingTrayId, resolveDeckId } from '$lib/server/services/equipment-resolve';
@@ -12,7 +12,7 @@ import { User } from '$lib/server/db';
 import { notifyLowWaxBatch, notifyRunLifecycle, shouldWarnLowWax } from '$lib/server/notifications';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import { protectLockedCarts, LOCKED_STATUSES } from '$lib/server/manufacturing/locked-cartridges';
-import { getRobot, robotGet, robotPost } from '$lib/server/opentrons/proxy';
+import { getRobot, robotGet, robotPost, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
 import bcrypt from 'bcryptjs';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -947,6 +947,24 @@ export const actions: Actions = {
 			return fail(502, {
 				error: `Created run ${opentronsRunId} but couldn't start it: ${err instanceof Error ? err.message : 'unknown'}`
 			});
+		}
+
+		// Auto-resume the protocol's initial off-deck "confirm deck loaded" pause
+		// on the robot. The operator is routed to the gallery and won't be on the
+		// run page to click Resume, so the daemon watches the run and resumes the
+		// first pause once. Fire-and-forget.
+		try {
+			await Ot2BridgeCommand.create({
+				_id: generateId(),
+				robotId: String(robotId),
+				deviceId: bridgeDeviceIdForRobot(robot as any),
+				kind: 'auto_resume_run',
+				payload: { runId: opentronsRunId },
+				ttlMs: 120_000,
+				requestedBy: locals.user.username
+			});
+		} catch (e) {
+			console.warn('[startRun] could not enqueue auto_resume_run:', e instanceof Error ? e.message : e);
 		}
 
 		// Carry the previous run's tip state forward as this run's "before"

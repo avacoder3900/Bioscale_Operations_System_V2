@@ -1039,6 +1039,47 @@ def execute_restart_robot_server(command_id: str) -> None:
         _post_result(command_id, {"ok": False, "error": "robot server did not come back after restart"})
 
 
+AUTO_RESUME_TIMEOUT_S = float(os.environ.get("AUTO_RESUME_TIMEOUT_S", "75"))
+
+
+def execute_auto_resume_run(command_id: str, payload: dict) -> None:
+    """Auto-resume the protocol's initial off-deck / 'confirm deck loaded' pause
+    so the operator can start the scan and walk away (they're routed to the
+    gallery, not the run page). Waits for the FIRST pause after play and resumes
+    it once with 'play' (the OT-2 has no 'resume' action). Leaves any later pause
+    or error-recovery state alone."""
+    run_id = (payload or {}).get("runId")
+    if not run_id:
+        _post_result(command_id, {"ok": False, "error": "auto_resume_run: no runId"})
+        return
+    log.info("auto_resume_run %s: watching run %s for the initial pause", command_id, run_id)
+    deadline = time.time() + AUTO_RESUME_TIMEOUT_S
+    resumed = False
+    while time.time() < deadline:
+        time.sleep(1.0)
+        try:
+            r = ot2_request("GET", "/runs/{}".format(run_id), timeout=6)
+            if r.status_code >= 400:
+                continue
+            status = (((r.json() or {}).get("data")) or {}).get("status")
+        except Exception:
+            continue
+        if status == "paused":
+            try:
+                ot2_request("POST", "/runs/{}/actions".format(run_id),
+                            {"data": {"actionType": "play"}}, timeout=10)
+                resumed = True
+                log.info("auto_resume_run %s: resumed initial pause on %s", command_id, run_id)
+            except Exception as e:
+                log.warning("auto_resume_run %s: resume failed: %s", command_id, e)
+            break
+        if status in ("succeeded", "failed", "stopped"):
+            log.info("auto_resume_run %s: run %s ended (%s) before pausing", command_id, run_id, status)
+            break
+        # 'running' / 'idle' / None -> keep waiting for the initial pause
+    _post_result(command_id, {"ok": True, "status": 200, "body": {"resumed": resumed}})
+
+
 def execute_command(cmd: dict, port: ScannerPort) -> None:
     command_id = cmd.get("_id")
     kind = cmd.get("kind")
@@ -1055,6 +1096,8 @@ def execute_command(cmd: dict, port: ScannerPort) -> None:
         execute_upload_protocol(command_id, cmd.get("payload") or {})
     elif kind == "restart_robot_server":
         execute_restart_robot_server(command_id)
+    elif kind == "auto_resume_run":
+        execute_auto_resume_run(command_id, cmd.get("payload") or {})
     else:
         log.warning("Unknown command kind '%s' (id=%s)", kind, command_id)
         _post_result(command_id, {"ok": False, "error": "unknown command kind: {}".format(kind)})
