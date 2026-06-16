@@ -72,7 +72,9 @@
 		submitting = false,
 		formAction,
 		extraHidden = {} as Record<string, string>,
-		onSubmitIntercept = undefined
+		onSubmitIntercept = undefined,
+		autoStart = false,
+		onAutoStarted = undefined
 	} = $props<{
 		robot: { _id: string; name: string };
 		protocols: ProtocolDef[];
@@ -84,7 +86,21 @@
 		formAction: string;
 		extraHidden?: Record<string, string>;
 		onSubmitIntercept?: (formData: FormData) => Promise<void> | void;
+		// When true, the panel submits itself once on mount (used to auto-start
+		// the run straight after a clean barcode scan — no operator click).
+		autoStart?: boolean;
+		onAutoStarted?: () => void;
 	}>();
+
+	let formEl: HTMLFormElement | undefined = $state();
+	let autoSubmitted = $state(false);
+	$effect(() => {
+		if (autoStart && !autoSubmitted && formEl && selectedProtocolId) {
+			autoSubmitted = true;
+			onAutoStarted?.();
+			setTimeout(() => formEl?.requestSubmit(), 60);
+		}
+	});
 
 	// Intercept the native submit when the parent wants to orchestrate
 	// (e.g. robot scans before startRun). Fires only after the browser's
@@ -170,7 +186,7 @@
 			then come back.
 		</div>
 	{:else}
-		<form method="POST" action={formAction} onsubmit={handleSubmit} class="space-y-4">
+		<form bind:this={formEl} method="POST" action={formAction} onsubmit={handleSubmit} class="space-y-4">
 			{#each Object.entries(extraHidden) as [k, v] (k)}
 				<input type="hidden" name={k} value={v} />
 			{/each}

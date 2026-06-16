@@ -166,6 +166,11 @@
 	// Flip to false to restore the old one-button orchestration checklist below.
 	const USE_GRID_PRIMARY = true;
 
+	// After a clean barcode scan (deck + all cartridges, no mismatch) loadDeck
+	// advances to ready_to_run; this auto-fires the protocol Start Run there so
+	// the operator goes straight into the run with no extra click.
+	let autoStartPending = $state(false);
+
 	// Orchestrated scan-and-start (deck_load substage): one Start Run press
 	// drives deck-barcode scan → cartridge sweep → loadDeck → startRun. Each
 	// step is rendered in a visible checklist; any failure aborts and opens
@@ -636,6 +641,8 @@
 			if (testMode) {
 				formData.testMode = 'true';
 			}
+			// Clean scan (full count, no mismatch) → auto-start the run at ready_to_run.
+			if (!result.countMismatchReason) autoStartPending = true;
 			submitAction('loadDeck', formData);
 		}
 	}
@@ -813,6 +820,19 @@
 	let previewLoadingSub = $state<'wax_prep' | 'deck_load' | 'ready_to_run'>('wax_prep');
 	const displayStage = $derived(previewParam ? previewStage : viewStage);
 	const displayLoadingSub = $derived(previewParam ? previewLoadingSub : loadingSubStage);
+
+	// Timeline bubbles (6): the Loading stage is split into "Wax fill setup"
+	// (wax_prep) and "Barcode scanning" (deck_load/ready_to_run); the rest map 1:1.
+	const TIMELINE = ['Wax fill setup', 'Barcode scanning', 'Run', 'Deck removal', 'QC', 'Storage'] as const;
+	const currentBubbleIndex = $derived.by(() => {
+		const s = effectiveStage;
+		if (s === 'Loading') return loadingSubStage === 'wax_prep' ? 0 : 1;
+		if (s === 'Running') return 2;
+		if (s === 'Awaiting Removal') return 3;
+		if (s === 'QC') return 4;
+		if (s === 'Storage') return 5;
+		return 0;
+	});
 	const isPreviewOrPast = $derived(previewParam || isViewingPast);
 
 	const mockQcCartridges = Array.from({ length: 6 }, (_, i) => ({
@@ -1037,7 +1057,7 @@
 					<div class="flex items-center gap-3">
 					<a href="/manufacturing/cart-mfg/reagent-filling?robot={data.robotId}" class="rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 px-2 py-0.5 text-xs font-medium text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20">Move to Reagent Run →</a>
 					<span class="text-xs text-[var(--color-tron-text-secondary)]">
-						Stage {currentStageIndex + 1} of {STAGES.length}
+						Stage {currentBubbleIndex + 1} of {TIMELINE.length}
 					</span>
 					<a href="?preview" class="rounded border border-[var(--color-tron-orange)]/40 px-2 py-0.5 text-xs text-[var(--color-tron-orange)] hover:bg-[var(--color-tron-orange)]/10">Preview</a>
 					<button
@@ -1062,15 +1082,12 @@
 						</svg>
 					</button>
 
-					{#each STAGES as stage, i (stage)}
-						{@const isCurrent = i === currentStageIndex}
-						{@const isPast = i < currentStageIndex}
-						{@const isViewing = i === viewStageIndex}
+					{#each TIMELINE as label, i (label)}
+						{@const isCurrent = i === currentBubbleIndex}
+						{@const isPast = i < currentBubbleIndex}
 						<div class="flex flex-1 flex-col items-center gap-1">
 							<div
-								class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-colors {isViewing && !isCurrent
-									? 'ring-2 ring-[var(--color-tron-yellow)]'
-									: ''} {isCurrent
+								class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-colors {isCurrent
 									? 'bg-[var(--color-tron-cyan)] text-white'
 									: isPast
 										? 'bg-green-600 text-white'
@@ -1085,10 +1102,10 @@
 										? 'text-green-400'
 										: 'text-[var(--color-tron-text-secondary)]'}"
 							>
-								{stageLabel(stage)}
+								{label}
 							</span>
 						</div>
-						{#if i < STAGES.length - 1}
+						{#if i < TIMELINE.length - 1}
 							<div
 								class="mt-[-16px] h-0.5 flex-1 {isPast
 									? 'bg-green-600'
@@ -1230,6 +1247,8 @@
 						submitting={submitting}
 						formAction="?/startRun"
 						extraHidden={{ runId: data.runState.runId ?? '' }}
+						autoStart={autoStartPending}
+						onAutoStarted={() => (autoStartPending = false)}
 					/>
 
 					<div class="flex justify-center">
