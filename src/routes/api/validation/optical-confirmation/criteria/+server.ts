@@ -42,6 +42,7 @@ export const PUT: RequestHandler = async ({ request, locals }) => {
 		changed.assay = assay?.skuCode ?? null;
 	}
 
+	settings.markModified('opticalConfirmation');
 	settings.updatedAt = new Date();
 	await settings.save();
 

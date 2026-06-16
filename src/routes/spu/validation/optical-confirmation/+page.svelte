@@ -196,6 +196,10 @@
 					{isSavingAssay ? 'Saving…' : 'Set Assay'}
 				</button>
 			</div>
+			<p class="mt-2 text-xs {hasAssay ? 'text-[var(--color-tron-green)]' : 'text-[var(--color-tron-red)]'}">
+				Currently set: {hasAssay ? `${data.presetAssay?.name} (${data.presetAssay?.skuCode})` : 'none'} ·
+				{data.assays.length} assay(s) in catalog{data.assays.length === 0 ? ' — add one under Assays first' : ''}
+			</p>
 		{:else if hasAssay}
 			<p class="text-[var(--color-tron-text-secondary)]">
 				<span class="tron-heading font-medium">{data.presetAssay?.name}</span>
