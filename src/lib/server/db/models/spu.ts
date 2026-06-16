@@ -97,7 +97,8 @@ const spuSchema = new Schema({
 	qcStatus: { type: String, enum: ['pending', 'passed', 'failed'] },
 	qcDocumentUrl: String,
 
-	// File attachments stored inline (small CSVs, e.g. thermocouple readings).
+	// File attachments — bytes live in Cloudflare R2 (same store as COC/lot files).
+	// Mongo holds only metadata + the R2 key; `content` is legacy (pre-R2) only.
 	attachments: [{
 		_id: { type: String, default: () => generateId() },
 		kind: { type: String, default: 'thermocouple_csv' },
@@ -105,7 +106,9 @@ const spuSchema = new Schema({
 		mimeType: { type: String, default: 'text/csv' },
 		fileSize: Number,
 		rowCount: Number,
-		content: String,
+		r2Key: String,
+		url: String,
+		content: String, // legacy: inline bytes for attachments created before the R2 switch
 		sessionId: String,
 		uploadedAt: { type: Date, default: () => new Date() },
 		uploadedBy: operatorRef
