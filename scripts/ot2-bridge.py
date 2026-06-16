@@ -107,11 +107,26 @@ HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL_S", "10"))
 # 3-5s (marginally-aimed positions) and reported them as "empty (ACK only)".
 SCAN_TIMEOUT = float(os.environ.get("SCAN_TIMEOUT_S", "5.5"))
 
-# Focus recovery: some codes (esp. the deck's far slots) sit at the edge of the
-# scanner's focal range at the taught Z and only decode when the scanner is
-# moved CLOSER. On a failed scan we re-try progressively closer (lower z by these
-# mm) — automating the manual "move the scanner closer" fix.
-FOCUS_NUDGE_MM = [int(x) for x in os.environ.get("FOCUS_NUDGE_MM", "8,16").split(",") if x.strip()]
+# Search-raster fallback: when the on-point scan fails (barcode placement varies
+# + the acrylic deck has optical imperfections), the gantry rasters a small grid
+# around the taught point, scanning at each stop (scanner keeps re-triggering).
+# First hit wins. dz is applied as z - dz (CLOSER = better focus through acrylic).
+# Order = focus-only first (acrylic optics often just need a nearer focus,
+# operator-confirmed), then a 3x3 grid in x/y for placement drift. Env-tunable.
+SEARCH_STEP_MM = int(os.environ.get("SEARCH_STEP_MM", "4"))      # +/- grid step (x and y)
+SEARCH_DWELL_S = float(os.environ.get("SEARCH_DWELL_S", "1.8"))  # listen per grid stop
+
+
+def _build_search_offsets(step: int) -> list:
+    grid = [(dx, dy) for dy in (-step, 0, step) for dx in (-step, 0, step)
+            if not (dx == 0 and dy == 0)]  # 8 points around center
+    offs = [(0, 0, 8), (0, 0, 16)]              # focus closer, on-center
+    offs += [(dx, dy, 0) for (dx, dy) in grid]  # 3x3 grid at taught z
+    offs += [(dx, dy, 8) for (dx, dy) in grid]  # 3x3 grid one focus-step closer
+    return offs
+
+
+SEARCH_OFFSETS = _build_search_offsets(SEARCH_STEP_MM)
 
 # How long the BIMS long-poll HTTP request may take end-to-end. Must exceed
 # POLL_WAIT_MS (server holds up to 20s) plus network/cold-start headroom.
@@ -614,7 +629,7 @@ class ScannerPort:
                 pass
             self.ser = None
 
-    def trigger_and_read(self, timeout_s: Optional[float] = None) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    def trigger_and_read(self, timeout_s: Optional[float] = None, clamp: bool = True) -> Tuple[Optional[str], Optional[str], Optional[str]]:
         """Fire the scanner repeatedly until it decodes or the window expires;
         return (decoded_text, raw_hex, error).
 
@@ -627,7 +642,9 @@ class ScannerPort:
         poke so the scanner settles after the previous burst / gantry move.
         Each burst gets a clean buffer (reset before the trigger) so stale ACKs
         from a prior poke can't masquerade as a payload."""
-        wait_s = max(timeout_s if timeout_s and timeout_s > 0 else SCAN_TIMEOUT, SCAN_TIMEOUT)
+        wait_s = timeout_s if timeout_s and timeout_s > 0 else SCAN_TIMEOUT
+        if clamp:
+            wait_s = max(wait_s, SCAN_TIMEOUT)   # on-point scans get the full window
         SETTLE_S = 0.15          # rest before each (re)trigger so the engine resets
         RETRIGGER_EVERY_S = 1.0  # listen this long per burst before re-poking
         with self.lock:
@@ -684,6 +701,27 @@ def scan_with_retry(port: ScannerPort, timeout_s: float, retry_once: bool) -> di
         text, raw, err = port.trigger_and_read(timeout_s)
         attempts = 2
     return {"barcode": text, "rawPayload": raw, "error": err, "attempts": attempts}
+
+
+def search_scan(port: ScannerPort, run_id: str, pipette_id: str,
+                x: float, y: float, z: float) -> dict:
+    """Fallback when the on-point scan fails: raster SEARCH_OFFSETS around the
+    taught point, scanning (short dwell, scanner re-triggering) at each stop.
+    Compensates for barcode-placement variance and acrylic-deck optics. Returns
+    a scan dict; the first stop that decodes wins."""
+    last = {"barcode": None, "rawPayload": None, "error": "search found nothing", "attempts": 0}
+    for (dx, dy, dz) in SEARCH_OFFSETS:
+        try:
+            move_to_coordinates(run_id, pipette_id, x + dx, y + dy, z - dz)
+        except Exception as e:
+            log.warning("search move (dx=%+d dy=%+d dz=-%d) failed: %s", dx, dy, dz, e)
+            continue
+        text, raw, err = port.trigger_and_read(SEARCH_DWELL_S, clamp=False)
+        last = {"barcode": text, "rawPayload": raw, "error": err, "attempts": 1}
+        if text:
+            log.info("search hit at dx=%+d dy=%+d dz=-%d", dx, dy, dz)
+            return last
+    return last
 
 
 # Command executors -----------------------------------------------------------
@@ -876,21 +914,13 @@ def execute_sweep(command_id: str, payload: dict, port: ScannerPort) -> None:
                 continue
 
             scan = scan_with_retry(port, scan_timeout, retry_once)
-            # Focus recovery: if the taught-Z scan failed, retry progressively
-            # CLOSER. Out-of-focus codes (the deck's far slots) decode once the
-            # scanner is nearer — this automates the manual fix.
+            # On failure, raster a small grid around the taught point (placement
+            # variance + acrylic optics) — first stop that decodes wins.
             if not scan["barcode"]:
-                for dz in FOCUS_NUDGE_MM:
-                    try:
-                        move_to_coordinates(maint_run_id, pipette_id, pos["x"], pos["y"], pos["z"] - dz)
-                    except Exception as e:
-                        log.warning("Slot %d: focus-nudge move failed: %s", slot_index + 1, e)
-                        break
-                    log.info("Slot %d: focus retry %dmm closer (z=%.1f)", slot_index + 1, dz, pos["z"] - dz)
-                    scan = scan_with_retry(port, scan_timeout, False)
-                    if scan["barcode"]:
-                        log.info("Slot %d: recovered %dmm closer", slot_index + 1, dz)
-                        break
+                log.info("Slot %d: on-point scan failed — searching grid", slot_index + 1)
+                scan = search_scan(port, maint_run_id, pipette_id, pos["x"], pos["y"], pos["z"])
+                if scan["barcode"]:
+                    log.info("Slot %d: recovered via grid search", slot_index + 1)
             slots_done += 1
             if scan["barcode"]:
                 scan_count += 1
@@ -969,19 +999,10 @@ def execute_deck_scan(command_id: str, payload: dict, port: ScannerPort) -> None
         home_gantry(maint_run_id, force=True)
         move_to_coordinates(maint_run_id, pipette_id, pos["x"], pos["y"], pos["z"])
         scan = scan_with_retry(port, scan_timeout, True)
-        # Focus recovery (same as the sweep): retry progressively closer if the
-        # deck QR didn't decode at the taught Z.
+        # Same grid-search fallback as the sweep if the deck QR didn't decode.
         if not scan["barcode"]:
-            for dz in FOCUS_NUDGE_MM:
-                try:
-                    move_to_coordinates(maint_run_id, pipette_id, pos["x"], pos["y"], pos["z"] - dz)
-                except Exception as e:
-                    log.warning("deck_scan: focus-nudge move failed: %s", e)
-                    break
-                log.info("deck_scan: focus retry %dmm closer (z=%.1f)", dz, pos["z"] - dz)
-                scan = scan_with_retry(port, scan_timeout, False)
-                if scan["barcode"]:
-                    break
+            log.info("deck_scan: on-point scan failed — searching grid")
+            scan = search_scan(port, maint_run_id, pipette_id, pos["x"], pos["y"], pos["z"])
         if scan["barcode"]:
             _post_result(command_id, {"ok": True, "status": 200, "body": {
                 "barcode": scan["barcode"],
