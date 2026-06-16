@@ -14,7 +14,7 @@ const ot2BridgeCommandSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	robotId: String,             // OpentronsRobot._id
 	deviceId: String,            // ot2-<slot>-bridge
-	kind: { type: String, enum: ['http', 'sweep', 'deck_scan', 'upload_protocol'], required: true },
+	kind: { type: String, enum: ['http', 'sweep', 'deck_scan', 'upload_protocol', 'restart_robot_server'], required: true },
 	// kind 'http': relay this request to http://localhost:31950 on the robot
 	request: {
 		method: String,

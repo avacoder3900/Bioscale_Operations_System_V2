@@ -2,6 +2,7 @@ import { redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, Equipment, WaxFillingRun, ReagentBatchRecord } from '$lib/server/db';
 import { loadRobotCardsAndQueues } from '$lib/server/manufacturing/robot-cards';
+import { getRobotsHealth } from '$lib/server/opentrons/health';
 import type { LayoutServerLoad } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -48,6 +49,12 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 			loadRobotCardsAndQueues().catch(() => ({ waxQueue: [] as any[] }))
 		]);
 
+		// Per-robot health from the bridge heartbeat (ready / busy / hung /
+		// offline) — drives the status badges + the restart-server affordance.
+		const health = await getRobotsHealth(
+			(robots as any[]).map((r) => ({ _id: String(r._id), name: r.name }))
+		).catch(() => ({} as Record<string, any>));
+
 		return {
 			waxQueue: JSON.parse(JSON.stringify(cardsAndQueues.waxQueue ?? [])),
 			user: JSON.parse(JSON.stringify(locals.user)),
@@ -78,6 +85,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 					runStartTime: waxRun?.runStartTime ? new Date(waxRun.runStartTime).toISOString() : null,
 					runEndTime: waxRun?.runEndTime ? new Date(waxRun.runEndTime).toISOString() : null,
 					deckId: waxRun?.deckId ?? null,
+					health: (health as any)[robotIdStr] ?? null,
 					alerts: []
 				};
 			})

@@ -47,6 +47,7 @@ import base64
 import signal
 import logging
 import threading
+import subprocess
 from typing import Optional, Tuple
 
 try:
@@ -241,6 +242,99 @@ def robot_health() -> Optional[dict]:
         return None
 
 
+def engine_health() -> dict:
+    """Readiness probe BEYOND /health. /health stays 200 even when the run
+    engine is hung (a gantry command blocked at the hardware level), so we poke
+    the run endpoints with short timeouts — a timeout/5xx here is the signal of
+    a hung server, and we report any non-idle run so the UI can show 'busy'.
+
+    Returns: {engineOk, protocolRun: status|None, maintenanceRun: status|None}.
+    engineOk=False means the engine did not answer promptly = needs a restart."""
+    out = {"engineOk": True, "protocolRun": None, "maintenanceRun": None}
+    try:
+        r = ot2_request("GET", "/runs", timeout=5)
+        if r.status_code < 400:
+            body = r.json() or {}
+            href = ((body.get("links") or {}).get("current") or {}).get("href") or ""
+            cid = href.rsplit("/", 1)[-1] if href else None
+            if cid:
+                for run in (body.get("data") or []):
+                    if run.get("id") == cid:
+                        out["protocolRun"] = run.get("status")
+        else:
+            out["engineOk"] = False
+    except Exception:
+        out["engineOk"] = False
+    try:
+        r = ot2_request("GET", "/maintenance_runs/current", timeout=5)
+        if r.status_code == 404:
+            out["maintenanceRun"] = None
+        elif r.status_code < 400:
+            out["maintenanceRun"] = ((r.json() or {}).get("data") or {}).get("status", "open")
+        else:
+            out["engineOk"] = False
+    except Exception:
+        out["engineOk"] = False
+    return out
+
+
+_last_restart_at = 0.0
+RESTART_COOLDOWN_S = 120.0
+
+
+def restart_robot_server(reason: str = "", force: bool = False) -> bool:
+    """Restart the OT-2's opentrons-robot-server (the uvicorn process that runs
+    the protocol/maintenance engine). This is the reliable fix when the engine
+    is hung. Cooldown-guarded so an auto-heal loop can't thrash; force=True (the
+    manual UI button) bypasses the cooldown."""
+    global _last_restart_at
+    if not force and (time.time() - _last_restart_at) < RESTART_COOLDOWN_S:
+        log.warning("robot-server restart suppressed (cooldown %.0fs) — reason: %s",
+                    RESTART_COOLDOWN_S - (time.time() - _last_restart_at), reason)
+        return False
+    _last_restart_at = time.time()
+    log.warning("RESTARTING opentrons-robot-server — reason: %s", reason)
+    try:
+        subprocess.run(["systemctl", "restart", "opentrons-robot-server"],
+                       timeout=90, check=False)
+    except Exception as e:
+        log.error("robot-server restart command failed: %s", e)
+        return False
+    for _ in range(45):  # ~90s for the server to come back
+        try:
+            r = ot2_request("GET", "/health", timeout=4)
+            if r.status_code < 400:
+                log.info("robot-server back up after restart")
+                time.sleep(3)  # let the hardware controller settle
+                return True
+        except Exception:
+            pass
+        time.sleep(2)
+    log.error("robot-server did not come back within timeout after restart")
+    return False
+
+
+def clear_stale_maintenance_run() -> Optional[dict]:
+    """Delete a leftover maintenance run that's blocking a new one. Best-effort
+    — if the server is hung this DELETE will also time out (the restart ladder
+    handles that case)."""
+    try:
+        r = ot2_request("GET", "/maintenance_runs/current", timeout=5)
+    except Exception:
+        return None
+    if r.status_code == 404 or r.status_code >= 500:
+        return None
+    mid = ((r.json() or {}).get("data") or {}).get("id") if r.status_code < 400 else None
+    if not mid:
+        return None
+    log.warning("clearing stale maintenance run %s", mid)
+    try:
+        ot2_request("DELETE", "/maintenance_runs/{}".format(mid), timeout=10)
+    except Exception as e:
+        log.warning("delete maintenance run %s failed: %s", mid, e)
+    return {"id": mid, "action": "cleared"}
+
+
 # A protocol run that never reached a terminal state (commonly a `paused` run
 # left over from the off-deck initial pause) keeps holding the OT-2 run engine,
 # so the robot refuses new maintenance runs with this error. We auto-clear it.
@@ -304,10 +398,28 @@ def clear_stale_protocol_run() -> Optional[dict]:
     return {"id": run_id, "priorStatus": status, "action": "cleared"}
 
 
+# Conflict hints that mean a leftover run is blocking a new maintenance run.
+MAINT_CONFLICT_HINTS = ("protocol run is active", "not idle or stopped", "run is not idle")
+
+
 # Maintenance-run helpers — mirrors src/lib/server/opentrons/maintenance.ts ----
-def open_maintenance_run(_allow_recovery: bool = True) -> str:
+def open_maintenance_run(_attempt: int = 0) -> str:
+    """Open a maintenance run, with a 3-tier auto-heal ladder:
+      attempt 0: on a run-conflict, clear stale protocol + maintenance runs, retry
+      attempt 1: still conflicting, or the POST itself hung -> restart the
+                 robot-server (it's wedged), retry
+      attempt 2: give up and raise.
+    A genuinely-ACTIVE protocol run is never auto-killed (clear_stale_protocol_run
+    raises) — that surfaces as a loud error instead."""
     # JSON:API style — requires the `data` envelope even with no attributes.
-    r = ot2_request("POST", "/maintenance_runs", {"data": {}})
+    try:
+        r = ot2_request("POST", "/maintenance_runs", {"data": {}})
+    except Exception as e:
+        # The HTTP call itself failed (server hung / unreachable) — restart once.
+        if _attempt <= 1 and restart_robot_server("maintenance POST failed: {}".format(e)):
+            return open_maintenance_run(_attempt=2)
+        raise RobotCommandError("robot server unreachable: {}".format(e))
+
     body = {}
     try:
         body = r.json() or {}
@@ -315,10 +427,18 @@ def open_maintenance_run(_allow_recovery: bool = True) -> str:
         pass
     if r.status_code >= 400:
         detail = _first_error_detail(body) or "Robot returned {} on /maintenance_runs".format(r.status_code)
-        if _allow_recovery and PROTOCOL_RUN_CONFLICT in (detail or "").lower():
-            cleared = clear_stale_protocol_run()  # raises if genuinely active
-            log.info("auto-recovered before maintenance run: %s", cleared)
-            return open_maintenance_run(_allow_recovery=False)
+        low = (detail or "").lower()
+        is_conflict = any(h in low for h in MAINT_CONFLICT_HINTS)
+        if _attempt == 0 and is_conflict:
+            # Tier 1 — clear leftover runs (protocol then maintenance) and retry.
+            clear_stale_protocol_run()  # raises if genuinely active
+            clear_stale_maintenance_run()
+            log.info("auto-recovered (cleared stale runs) before maintenance run")
+            return open_maintenance_run(_attempt=1)
+        if _attempt <= 1 and (is_conflict or r.status_code >= 500):
+            # Tier 2 — still wedged: the server is hung, restart it and retry.
+            if restart_robot_server("maintenance-run conflict persists: {}".format(detail)):
+                return open_maintenance_run(_attempt=2)
         raise RobotCommandError(detail)
     run_id = (body.get("data") or {}).get("id")
     if not run_id:
@@ -824,6 +944,18 @@ def execute_deck_scan(command_id: str, payload: dict, port: ScannerPort) -> None
                 log.warning("close maintenance run failed: %s", e)
 
 
+def execute_restart_robot_server(command_id: str) -> None:
+    """Manual recovery (UI button): restart the OT-2 robot-server and wait for
+    it to come back. Bypasses the auto-heal cooldown."""
+    log.info("restart_robot_server command %s: restarting on operator request", command_id)
+    ok = restart_robot_server("manual restart via BIMS", force=True)
+    if ok:
+        _post_result(command_id, {"ok": True, "status": 200, "body": {"restarted": True}})
+        log.info("restart_robot_server command %s: server back up", command_id)
+    else:
+        _post_result(command_id, {"ok": False, "error": "robot server did not come back after restart"})
+
+
 def execute_command(cmd: dict, port: ScannerPort) -> None:
     command_id = cmd.get("_id")
     kind = cmd.get("kind")
@@ -838,6 +970,8 @@ def execute_command(cmd: dict, port: ScannerPort) -> None:
         execute_deck_scan(command_id, cmd.get("payload") or {}, port)
     elif kind == "upload_protocol":
         execute_upload_protocol(command_id, cmd.get("payload") or {})
+    elif kind == "restart_robot_server":
+        execute_restart_robot_server(command_id)
     else:
         log.warning("Unknown command kind '%s' (id=%s)", kind, command_id)
         _post_result(command_id, {"ok": False, "error": "unknown command kind: {}".format(kind)})
@@ -912,6 +1046,7 @@ def heartbeat_loop(port: ScannerPort, stop: threading.Event) -> None:
                 "eventType": "heartbeat",
                 "metadata": {
                     "health": robot_health(),
+                    "engine": engine_health(),
                     "version": VERSION,
                     "serialOpen": port.is_open(),
                     "serialPort": port.port
