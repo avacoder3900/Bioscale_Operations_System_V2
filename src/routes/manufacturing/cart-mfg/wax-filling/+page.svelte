@@ -1242,32 +1242,15 @@
 				{/if}
 			</div>
 		{:else if displayStage === 'Loading' && displayLoadingSub === 'deck_load'}
-			<!-- Backed cartridge availability — informational only (the WAX-FLOW-2
-			     per-cartridge backing flow replaced the lot-scan gate) -->
+			<!-- "Backed cartridges ready" counts removed as redundant; the Test Mode
+			     toggle is kept (used to exercise the wax flow without WI-01 backing). -->
 			{#if !previewParam}
-				<div class="mb-4 space-y-2 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-					<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">
-						Backed cartridges ready: <span class="font-mono text-[var(--color-tron-cyan)]">{data.backedReadyCount} / {data.backedTotalCount}</span>
-					</h3>
-					{#if data.backedOvens.length > 0}
-						<div class="space-y-0.5 text-xs text-[var(--color-tron-text-secondary)]">
-							{#each data.backedOvens as oven (oven.ovenId)}
-								<div>{oven.ovenName} — <span class="font-mono">{oven.ready}/{oven.total}</span> ready</div>
-							{/each}
-						</div>
-					{:else}
-						<p class="text-xs text-[var(--color-tron-text-secondary)]">
-							No backed cartridges in ovens. Scan cartridges into an oven at Cartridge Back (WI-01) first.
-						</p>
-					{/if}
-					<!-- Test mode toggle -->
-					<label class="flex items-start gap-2 text-xs text-amber-400 cursor-pointer">
-						<input type="checkbox" bind:checked={testMode} class="mt-0.5 rounded" />
-						<span>
-							Test Mode — unknown scanned barcodes are synthesized server-side as backed cartridges so the wax flow can be exercised end-to-end without WI-01 backing. Cure-time checks are bypassed for synthetic carts; no admin re-auth needed.
-						</span>
-					</label>
-				</div>
+				<label class="mb-4 flex items-start gap-2 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3 text-xs text-amber-400 cursor-pointer">
+					<input type="checkbox" bind:checked={testMode} class="mt-0.5 rounded" />
+					<span>
+						Test Mode — unknown scanned barcodes are synthesized server-side as backed cartridges so the wax flow can be exercised end-to-end without WI-01 backing. Cure-time checks are bypassed for synthetic carts; no admin re-auth needed.
+					</span>
+				</label>
 			{/if}
 
 			{#if !USE_GRID_PRIMARY && !isPreviewOrPast && data.opentronsRobotId && data.robotProtocols}
