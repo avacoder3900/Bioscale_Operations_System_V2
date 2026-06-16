@@ -6,7 +6,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'cartridge:read');
 	await connectDB();
 
-	const assays = await AssayDefinition.find({ isActive: true })
+	const assays = await AssayDefinition.find({ isActive: { $ne: false } })
 		.select('name skuCode')
 		.sort({ name: 1 })
 		.lean();

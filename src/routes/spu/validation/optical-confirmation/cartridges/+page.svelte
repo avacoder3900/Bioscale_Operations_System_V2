@@ -40,6 +40,39 @@
 
 	let isValid = $derived(barcode.trim().length > 0 && assaySkuCode.trim().length > 0);
 
+	// Live "is this barcode already used?" check
+	let barcodeStatus = $state<{
+		checking: boolean;
+		exists: boolean;
+		used?: boolean;
+		status?: string;
+		cartridgeType?: string;
+	} | null>(null);
+
+	async function checkBarcode() {
+		const b = barcode.trim();
+		if (!b) {
+			barcodeStatus = null;
+			return;
+		}
+		barcodeStatus = { checking: true, exists: false };
+		try {
+			const res = await fetch(
+				'/api/validation/optical-confirmation/cartridges?barcode=' + encodeURIComponent(b)
+			);
+			const r = await res.json();
+			barcodeStatus = {
+				checking: false,
+				exists: !!r.exists,
+				used: r.used,
+				status: r.status,
+				cartridgeType: r.cartridgeType
+			};
+		} catch {
+			barcodeStatus = null;
+		}
+	}
+
 	function statusBadge(status?: string) {
 		switch (status) {
 			case 'available':
@@ -141,21 +174,42 @@
 					id="barcode"
 					type="text"
 					bind:value={barcode}
+					onblur={checkBarcode}
 					placeholder="Scan or type barcode"
 					class="tron-input w-full rounded-lg px-4 py-3 text-lg"
 				/>
+				{#if barcodeStatus && !barcodeStatus.checking}
+					{#if !barcodeStatus.exists}
+						<p class="mt-1 text-xs text-[var(--color-tron-green)]">✓ Barcode is free — available to capture.</p>
+					{:else}
+						<p class="mt-1 text-xs text-[var(--color-tron-red)]">
+							⚠ Already in the system (type: {barcodeStatus.cartridgeType}, status: {barcodeStatus.status}){barcodeStatus.used ? ' — in use' : ''}. Pick a different barcode.
+						</p>
+					{/if}
+				{/if}
 			</div>
 
 			<div>
 				<label for="assay" class="tron-text-muted mb-2 block text-sm font-medium">
 					Assay <span class="text-[var(--color-tron-red)]">*</span>
 				</label>
-				<select id="assay" bind:value={assaySkuCode} class="tron-input w-full rounded-lg px-4 py-3">
-					<option value="">Select an assay…</option>
-					{#each data.assays as assay (assay._id)}
-						<option value={assay.skuCode}>{assay.name} ({assay.skuCode})</option>
-					{/each}
-				</select>
+				{#if data.assays.length > 0}
+					<select id="assay" bind:value={assaySkuCode} class="tron-input w-full rounded-lg px-4 py-3">
+						<option value="">Select an assay…</option>
+						{#each data.assays as assay (assay._id)}
+							<option value={assay.skuCode}>{assay.name} ({assay.skuCode})</option>
+						{/each}
+					</select>
+				{:else}
+					<input
+						id="assay"
+						type="text"
+						bind:value={assaySkuCode}
+						placeholder="Enter assay SKU code"
+						class="tron-input w-full rounded-lg px-4 py-3"
+					/>
+					<p class="tron-text-muted mt-1 text-xs">No assays returned from the catalog — type the assay SKU code manually.</p>
+				{/if}
 			</div>
 
 			<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -216,6 +270,9 @@
 			>
 				{isSubmitting ? 'Capturing…' : 'Capture Cartridge'}
 			</button>
+			{#if !isValid}
+				<p class="tron-text-muted text-center text-xs">Enter a barcode and an assay SKU to enable.</p>
+			{/if}
 		</form>
 	</div>
 
