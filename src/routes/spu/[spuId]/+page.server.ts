@@ -93,16 +93,27 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			finalizedAt: s.finalizedAt ?? null,
 			corrections: s.corrections ?? []
 		},
-		attachments: (s.attachments ?? []).map((a: any) => ({
-			id: a._id,
-			fileName: a.fileName ?? 'attachment.csv',
-			kind: a.kind ?? 'file',
-			fileSize: a.fileSize ?? 0,
-			rowCount: a.rowCount ?? null,
-			sessionId: a.sessionId ?? null,
-			uploadedAt: a.uploadedAt ?? null,
-			uploadedByName: a.uploadedBy?.username ?? null
-		})),
+		attachments: (s.attachments ?? []).map((a: any) => {
+			// Parse a capped preview (header + up to 50 rows) for inline viewing.
+			const raw = typeof a.content === 'string' ? a.content : '';
+			const lines = raw.split(/\r?\n/).filter((l: string) => l.trim().length > 0);
+			const grid = lines.slice(0, 51).map((l: string) => l.split(','));
+			return {
+				id: a._id,
+				fileName: a.fileName ?? 'attachment.csv',
+				kind: a.kind ?? 'file',
+				fileSize: a.fileSize ?? 0,
+				rowCount: a.rowCount ?? null,
+				sessionId: a.sessionId ?? null,
+				uploadedAt: a.uploadedAt ?? null,
+				uploadedByName: a.uploadedBy?.username ?? null,
+				preview: {
+					header: grid[0] ?? [],
+					rows: grid.slice(1),
+					truncated: lines.length > 51
+				}
+			};
+		}),
 		batch: batch
 			? {
 					id: (batch as any)._id,
@@ -250,6 +261,74 @@ export const actions: Actions = {
 		await connectDB();
 		await Spu.updateOne({ _id: params.spuId }, { $unset: { particleLink: '' } });
 		return { success: true };
+	},
+
+	uploadCsv: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const file = form.get('file');
+		if (!(file instanceof File) || file.size === 0) {
+			return fail(400, { error: 'A CSV file is required' });
+		}
+		if (file.size > 2 * 1024 * 1024) {
+			return fail(400, { error: 'File too large (max 2 MB)' });
+		}
+		const content = await file.text();
+		// Row count = non-empty lines minus the header row.
+		const lines = content.split(/\r?\n/).filter((l) => l.trim().length > 0);
+		const rowCount = Math.max(0, lines.length - 1);
+
+		const spu = await Spu.findById(params.spuId);
+		if (!spu) return fail(404, { error: 'SPU not found' });
+
+		const attachment = {
+			_id: generateId(),
+			kind: 'thermocouple_csv',
+			fileName: file.name || 'thermocouple.csv',
+			mimeType: file.type || 'text/csv',
+			fileSize: file.size,
+			rowCount,
+			content,
+			sessionId: form.get('sessionId')?.toString() || null,
+			uploadedAt: new Date(),
+			uploadedBy: { _id: locals.user!._id, username: locals.user!.username }
+		};
+		await Spu.updateOne({ _id: params.spuId }, { $push: { attachments: attachment } });
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'spus',
+			recordId: params.spuId,
+			action: 'UPDATE',
+			oldData: {},
+			newData: { attachmentAdded: attachment.fileName, rowCount },
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+
+		return { uploadSuccess: true, fileName: attachment.fileName, rowCount };
+	},
+
+	deleteAttachment: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const attachmentId = form.get('attachmentId')?.toString();
+		if (!attachmentId) return fail(400, { error: 'attachmentId required' });
+
+		await Spu.updateOne({ _id: params.spuId }, { $pull: { attachments: { _id: attachmentId } } });
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'spus',
+			recordId: params.spuId,
+			action: 'UPDATE',
+			oldData: { attachmentId },
+			newData: { attachmentRemoved: attachmentId },
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+
+		return { deleteSuccess: true };
 	},
 
 	// updateAssignment removed — release status (released-rnd/manufacturing/field) via transitionStatus

@@ -20,6 +20,9 @@
 	let renaming = $state(false);
 	let showRenameForm = $state(false);
 
+	let uploadingCsv = $state(false);
+	let expandedAttachment = $state<string | null>(null);
+
 	// Assignment removed — release status (released-rnd/manufacturing/field) replaces it
 
 	let showRecordHistory = $state(false);
@@ -475,9 +478,37 @@
 		</div>
 	</TronCard>
 
-	<!-- Attachments (thermocouple CSVs, etc.) -->
+	<!-- Attachments — upload + view thermocouple CSVs per SPU -->
 	<TronCard>
 		<h3 class="tron-text-primary mb-4 text-lg font-medium">Attachments</h3>
+
+		<!-- Upload form -->
+		<form
+			method="POST"
+			action="?/uploadCsv"
+			enctype="multipart/form-data"
+			class="mb-4 flex flex-wrap items-center gap-3"
+			use:enhance={() => {
+				uploadingCsv = true;
+				return async ({ update }) => {
+					await update();
+					uploadingCsv = false;
+				};
+			}}
+		>
+			<input type="file" name="file" accept=".csv,text/csv" required class="tron-text-secondary text-sm" />
+			<TronButton type="submit" disabled={uploadingCsv}>
+				{uploadingCsv ? 'Uploading…' : 'Upload CSV'}
+			</TronButton>
+			{#if form?.uploadSuccess}
+				<span class="text-xs" style="color: var(--color-tron-green);">
+					Uploaded {form.fileName} ({form.rowCount} rows)
+				</span>
+			{:else if form?.error}
+				<span class="text-xs" style="color: var(--color-tron-red, #ef4444);">{form.error}</span>
+			{/if}
+		</form>
+
 		{#if data.attachments.length > 0}
 			<div class="overflow-x-auto">
 				<table class="tron-table">
@@ -489,7 +520,7 @@
 							<th>Size</th>
 							<th>Uploaded</th>
 							<th>By</th>
-							<th></th>
+							<th>Actions</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -502,16 +533,74 @@
 								<td>{formatDate(att.uploadedAt)}</td>
 								<td>{att.uploadedByName ?? '—'}</td>
 								<td>
-									<a
-										href="/spu/{data.spu.id}/attachments/{att.id}"
-										class="underline"
-										style="color: var(--color-tron-cyan);"
-										download={att.fileName}
-									>
-										Download
-									</a>
+									<div class="flex items-center gap-3">
+										<button
+											type="button"
+											class="underline"
+											style="color: var(--color-tron-cyan);"
+											onclick={() => (expandedAttachment = expandedAttachment === att.id ? null : att.id)}
+										>
+											{expandedAttachment === att.id ? 'Hide' : 'View'}
+										</button>
+										<a
+											href="/spu/{data.spu.id}/attachments/{att.id}"
+											class="underline"
+											style="color: var(--color-tron-cyan);"
+											download={att.fileName}
+										>
+											Download
+										</a>
+										<form
+											method="POST"
+											action="?/deleteAttachment"
+											use:enhance
+											onsubmit={(e) => {
+												if (!confirm('Delete this attachment?')) e.preventDefault();
+											}}
+										>
+											<input type="hidden" name="attachmentId" value={att.id} />
+											<button type="submit" class="underline" style="color: var(--color-tron-red, #ef4444);">
+												Delete
+											</button>
+										</form>
+									</div>
 								</td>
 							</tr>
+							{#if expandedAttachment === att.id}
+								<tr>
+									<td colspan="7" style="background: rgba(0, 0, 0, 0.2);">
+										{#if att.preview.header.length > 0}
+											<div class="overflow-x-auto p-2">
+												<table class="tron-table text-xs">
+													<thead>
+														<tr>
+															{#each att.preview.header as col}
+																<th>{col}</th>
+															{/each}
+														</tr>
+													</thead>
+													<tbody>
+														{#each att.preview.rows as row}
+															<tr>
+																{#each row as cell}
+																	<td class="font-mono">{cell}</td>
+																{/each}
+															</tr>
+														{/each}
+													</tbody>
+												</table>
+												{#if att.preview.truncated}
+													<p class="tron-text-muted mt-2 text-xs">
+														Showing first 50 rows of {att.rowCount}. Download for the full file.
+													</p>
+												{/if}
+											</div>
+										{:else}
+											<p class="tron-text-muted p-2 text-xs">No preview available — download to view.</p>
+										{/if}
+									</td>
+								</tr>
+							{/if}
 						{/each}
 					</tbody>
 				</table>
@@ -520,7 +609,7 @@
 			<div class="py-6 text-center">
 				<p class="tron-text-muted">No attachments yet.</p>
 				<p class="mt-1 text-xs" style="color: var(--color-tron-cyan); opacity: 0.7;">
-					Upload thermocouple CSVs from the Thermocouple Validation page
+					Use the upload control above to attach a thermocouple CSV.
 				</p>
 			</div>
 		{/if}
