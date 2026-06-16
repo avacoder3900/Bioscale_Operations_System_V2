@@ -46,15 +46,17 @@ export async function checkDeckConflict(deckId: string, ignoreRunId?: string): P
 			deckId,
 			status: { $in: WAX_PAGE_OWNED },
 			...(ignoreRunId ? { _id: { $ne: ignoreRunId } } : {})
-		}).select('_id status').lean() as any,
+		}).select('_id status robot.name').lean() as any,
 		ReagentBatchRecord.findOne({
 			deckId,
 			status: { $in: REAGENT_PAGE_OWNED },
 			...(ignoreRunId ? { _id: { $ne: ignoreRunId } } : {})
-		}).select('_id status').lean() as any
+		}).select('_id status robot.name').lean() as any
 	]);
-	if (wax) return `Deck "${deckId}" is on wax run ${String(wax._id).slice(-8)} (${wax.status}). Complete that run first.`;
-	if (reagent) return `Deck "${deckId}" is on reagent run ${String(reagent._id).slice(-8)} (${reagent.status}). Complete that run first.`;
+	// Name the robot so a stale hold is findable — without it the operator can't
+	// tell WHICH robot's tab to open to cancel the blocking run.
+	if (wax) return `Deck "${deckId}" is on wax run ${String(wax._id).slice(-8)} (${wax.status}) on ${wax.robot?.name ?? 'another robot'}. Complete or cancel that run first.`;
+	if (reagent) return `Deck "${deckId}" is on reagent run ${String(reagent._id).slice(-8)} (${reagent.status}) on ${reagent.robot?.name ?? 'another robot'}. Complete or cancel that run first.`;
 	return null;
 }
 
