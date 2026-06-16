@@ -516,19 +516,45 @@ export const actions: Actions = {
 	 * fill volume computed from cartridge count. Validates the selected lot
 	 * still has enough remaining volume server-side.
 	 */
-	recordWaxPrep: async ({ request, locals }) => {
+	recordWaxPrep: async ({ request, locals, url }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
+		let runId = data.get('runId') as string;
+		const robotId = (data.get('robotId') as string) ?? url.searchParams.get('robot') ?? '';
 		const waxSourceLot = (data.get('waxSourceLot') as string)?.trim() || '';
 		const plannedCartridgeCount = data.get('plannedCartridgeCount') ? Number(data.get('plannedCartridgeCount')) : 24;
 
-		if (!runId) return fail(400, { error: 'Run ID required' });
 		if (!waxSourceLot) return fail(400, { error: 'Select a wax lot' });
 		if (!plannedCartridgeCount || plannedCartridgeCount < 1 || plannedCartridgeCount > 24) {
 			return fail(400, { error: 'Cartridge count must be 1-24' });
+		}
+
+		// Deferred run creation (WAX-FLOW): selecting a robot no longer creates a
+		// run — it's created here on "wax setup complete" so idle robots stay
+		// idle. If the caller already has a run (legacy/manual start), reuse it.
+		if (!runId) {
+			if (!robotId) return fail(400, { error: 'Robot ID required' });
+			const robotErr = await checkRobotConflict(robotId);
+			if (robotErr) return fail(400, { error: robotErr });
+			const robotDoc = await Equipment.findOne({ _id: robotId, equipmentType: 'robot' }, { _id: 1, name: 1 }).lean() as any;
+			const newRun = await WaxFillingRun.create({
+				robot: { _id: robotId, name: robotDoc?.name ?? robotId },
+				operator: { _id: locals.user!._id, username: locals.user!.username },
+				status: 'Loading',
+				cartridgeIds: [],
+				setupTimestamp: new Date()
+			});
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'wax_filling_runs',
+				recordId: String(newRun._id),
+				action: 'INSERT',
+				changedBy: locals.user?.username,
+				changedAt: new Date()
+			});
+			runId = String(newRun._id);
 		}
 
 		const settingsDoc = await ManufacturingSettings.findById('default').select('waxFilling').lean() as any;

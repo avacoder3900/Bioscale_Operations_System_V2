@@ -19,17 +19,78 @@ export type JogAxis = 'x' | 'y' | 'leftZ' | 'rightZ';
 
 export type RobotRef = { ip: string; port?: number | null };
 
+// A protocol run left non-terminal (commonly a `paused` run from the off-deck
+// initial pause that was never resumed/closed) keeps holding the OT-2 run
+// engine, so the robot refuses new maintenance runs with this error. We
+// auto-clear the stale run and retry — the same self-heal the bridge daemon
+// does for deck-scan/sweep (scripts/ot2-bridge.py).
+const PROTOCOL_RUN_CONFLICT = 'protocol run is active';
+const ACTIVE_RUN_STATES = new Set(['running', 'finishing']);
+const TERMINAL_RUN_STATES = new Set(['stopped', 'failed', 'succeeded']);
+
+async function currentProtocolRun(
+	robot: RobotRef
+): Promise<{ id: string; status: string | null } | null> {
+	const res = await robotGet(robot as any, '/runs');
+	if (!res.ok) return null;
+	const body = (await res.json().catch(() => ({}))) as any;
+	const href: string = body?.links?.current?.href ?? '';
+	const curId = href ? href.split('/').pop() ?? null : null;
+	if (!curId) return null;
+	const run = (body?.data ?? []).find((r: any) => r.id === curId);
+	return { id: curId, status: run?.status ?? null };
+}
+
+/**
+ * Free the run engine when a non-terminal protocol run is blocking a new
+ * maintenance run. Throws if the blocking run is genuinely ACTIVE
+ * (running/finishing) — we never silently kill a live run.
+ */
+async function clearStaleProtocolRun(robot: RobotRef): Promise<void> {
+	const run = await currentProtocolRun(robot);
+	if (!run) return;
+	const status = (run.status ?? '').toLowerCase();
+	if (TERMINAL_RUN_STATES.has(status)) return; // terminal-but-current doesn't block
+	if (ACTIVE_RUN_STATES.has(status)) {
+		throw new Error(
+			`Robot has an ACTIVE protocol run (status=${status}) — stop that run before opening a maintenance run.`
+		);
+	}
+	// Stale: paused / idle / blocked-by-open-door / stop-requested / awaiting-recovery
+	await robotPost(robot as any, `/runs/${run.id}/actions`, {
+		data: { actionType: 'stop' }
+	}).catch(() => {});
+	for (let i = 0; i < 6; i++) {
+		const cur = await currentProtocolRun(robot);
+		if (!cur || TERMINAL_RUN_STATES.has((cur.status ?? '').toLowerCase())) break;
+		await new Promise((r) => setTimeout(r, 500));
+	}
+	await robotDelete(robot as any, `/runs/${run.id}`).catch(() => {});
+}
+
 /** Open a new maintenance run. Returns the run id. */
 export async function openMaintenanceRun(robot: RobotRef): Promise<{ runId: string }> {
 	// OT-2 maintenance_runs endpoint is JSON:API style — requires the `data`
 	// envelope even when there are no attributes. Empty body returns
 	// `Field required` at /data.
-	const res = await robotPost(robot as any, '/maintenance_runs', { data: {} });
+	const open = async () => robotPost(robot as any, '/maintenance_runs', { data: {} });
+	let res = await open();
 	if (!res.ok) {
-		const body = await res.json().catch(() => ({}));
-		throw new Error(
-			(body as any)?.errors?.[0]?.detail ?? `Robot returned ${res.status} on /maintenance_runs`
-		);
+		const body = (await res.json().catch(() => ({}))) as any;
+		const detail = body?.errors?.[0]?.detail ?? `Robot returned ${res.status} on /maintenance_runs`;
+		if (String(detail).toLowerCase().includes(PROTOCOL_RUN_CONFLICT)) {
+			await clearStaleProtocolRun(robot); // throws if genuinely active
+			res = await open();
+			if (!res.ok) {
+				const retryBody = (await res.json().catch(() => ({}))) as any;
+				throw new Error(
+					retryBody?.errors?.[0]?.detail ??
+						`Robot returned ${res.status} on /maintenance_runs`
+				);
+			}
+		} else {
+			throw new Error(detail);
+		}
 	}
 	const body = (await res.json()) as { data?: { id?: string } };
 	const runId = body?.data?.id;

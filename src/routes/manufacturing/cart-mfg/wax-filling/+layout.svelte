@@ -54,23 +54,10 @@
 				}`
 	);
 
-	async function selectRobot(robotId: string) {
-		const state = data.dashboardState.find((r) => r.robotId === robotId);
-		// No active run on this robot → start one now so clicking goes straight
-		// into wax setup (no intermediate "Start Wax Filling Run" page).
-		if (state && !state.hasActiveRun) {
-			try {
-				const fd = new FormData();
-				fd.set('robotId', robotId);
-				await fetch(`${BASE}?/createRun`, {
-					method: 'POST',
-					body: fd,
-					headers: { 'x-sveltekit-action': 'true' }
-				});
-			} catch {
-				/* fall through — the page still shows the manual start button */
-			}
-		}
+	function selectRobot(robotId: string) {
+		// Just navigate — do NOT create a run here. Run creation is deferred to
+		// "wax setup complete" so clicking between robot tabs leaves idle robots
+		// idle (they only flip to a run once the operator commits the wax setup).
 		const url = new URL($page.url);
 		url.searchParams.set('robot', robotId);
 		goto(url.pathname + url.search, { invalidateAll: true });

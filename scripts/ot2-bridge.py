@@ -413,8 +413,23 @@ def load_pipette_in_run(run_id: str, pipette_name: str, mount: str) -> str:
     return pid
 
 
-def home_gantry(run_id: str) -> None:
+# Skip redundant re-homes: the OT-2 keeps absolute position across maintenance
+# runs, so a deck-scan immediately followed by a cartridge sweep does not need
+# to home again between them (each home is ~30-60s; back-to-back scans were
+# costing ~2 min). Track the last home and skip if still fresh. _last_home_at
+# starts at 0 so a fresh deck-scan / standalone sweep / daemon-restart homes.
+_last_home_at = 0.0
+HOME_FRESH_S = 180.0
+
+
+def home_gantry(run_id: str, force: bool = False) -> None:
+    global _last_home_at
+    age = time.time() - _last_home_at
+    if not force and age < HOME_FRESH_S:
+        log.info("Skipping home — gantry homed %.0fs ago (still fresh)", age)
+        return
     send_maintenance_command(run_id, "home", {}, timeout_s=60.0)
+    _last_home_at = time.time()
 
 
 def move_to_coordinates(run_id: str, pipette_id: str, x: float, y: float, z: float) -> None:
@@ -734,13 +749,10 @@ def execute_sweep(command_id: str, payload: dict, port: ScannerPort) -> None:
         abort_reason = str(e)
         log.error("Sweep aborted: %s", abort_reason)
 
-    # Wind down: home + close the maintenance run regardless of outcome.
+    # Wind down: close the maintenance run regardless of outcome. No wind-down
+    # home — the protocol run that follows homes at its own start, so homing
+    # here just added dead time.
     if maint_run_id:
-        try:
-            log.info("Homing gantry after sweep")
-            home_gantry(maint_run_id)
-        except Exception as e:
-            log.warning("post-sweep home failed: %s", e)
         try:
             close_maintenance_run(maint_run_id)
             log.info("Maintenance run closed")
@@ -782,7 +794,10 @@ def execute_deck_scan(command_id: str, payload: dict, port: ScannerPort) -> None
     try:
         maint_run_id = open_maintenance_run()
         pipette_id = _setup_pipette(maint_run_id, payload)
-        home_gantry(maint_run_id)
+        # Force a home at the start of a deck scan — it's the entry point of the
+        # deck->sweep flow, so this is the one home for the whole sequence; the
+        # following sweep skips its home (gantry still fresh).
+        home_gantry(maint_run_id, force=True)
         move_to_coordinates(maint_run_id, pipette_id, pos["x"], pos["y"], pos["z"])
         scan = scan_with_retry(port, scan_timeout, True)
         if scan["barcode"]:
@@ -800,10 +815,9 @@ def execute_deck_scan(command_id: str, payload: dict, port: ScannerPort) -> None
         _post_result(command_id, {"ok": False, "error": str(e)})
     finally:
         if maint_run_id:
-            try:
-                home_gantry(maint_run_id)
-            except Exception as e:
-                log.warning("post-deck-scan home failed: %s", e)
+            # No wind-down home here — a cartridge sweep (or the protocol run)
+            # follows immediately and will home if needed. Homing between the
+            # deck scan and the cartridge scan was the redundant ~1-2 min delay.
             try:
                 close_maintenance_run(maint_run_id)
             except Exception as e:

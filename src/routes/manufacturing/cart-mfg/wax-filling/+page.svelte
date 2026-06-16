@@ -612,13 +612,16 @@
 
 	function handleWaxPrepComplete(result: { sourceLot: string; plannedCartridgeCount: number }) {
 		if (previewParam) return;
-		if (data.runState.runId) {
-			submitAction('recordWaxPrep', {
-				runId: data.runState.runId,
-				waxSourceLot: result.sourceLot,
-				plannedCartridgeCount: String(result.plannedCartridgeCount)
-			});
-		}
+		// Run creation is deferred to here (WAX-FLOW): selecting a robot no longer
+		// creates a run, so idle robots stay idle. recordWaxPrep creates the run
+		// from robotId when none exists yet, then records the wax prep. If a run
+		// already exists (legacy/manual start), it's reused via runId.
+		submitAction('recordWaxPrep', {
+			runId: data.runState.runId ?? '',
+			robotId: data.robotId,
+			waxSourceLot: result.sourceLot,
+			plannedCartridgeCount: String(result.plannedCartridgeCount)
+		});
 	}
 
 	function handleDeckLoadComplete(result: {
@@ -992,51 +995,26 @@
 			</div>
 		</div>
 	{:else if !previewParam && !effectiveHasActiveRun}
-		<!-- No active run: initiate wax filling directly -->
+		<!-- No active run yet: show the wax setup directly. Completing it creates
+		     the run (deferred from robot-select so idle robots stay idle). -->
 		<div class="space-y-6 py-8">
 			<div class="text-center">
-				<div class="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full border-2 border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]">
-					<svg class="h-10 w-10 text-[var(--color-tron-cyan)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-						<path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
-					</svg>
-				</div>
 				<h2 class="text-xl font-semibold text-[var(--color-tron-text)]">
 					{data.robotName} — Wax Filling
 				</h2>
 				<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">
-					Start a new wax filling run on this robot.
+					Robot idle — complete wax setup to start a run.
 				</p>
 			</div>
 
-			<div class="mx-auto max-w-md">
-				<form
-					method="POST"
-					action="?/createRun"
-					use:enhance={() => {
-						submitting = true;
-						return async ({ result }) => {
-							if (result.type === 'failure') {
-								errorMsg = (result.data as Record<string, string>)?.error ?? 'Failed to create run';
-							} else {
-								pendingStage = 'Loading';
-							}
-							await invalidateAll();
-							if (data.runState.hasActiveRun) {
-								pendingStage = null;
-							}
-							submitting = false;
-						};
-					}}
-				>
-					<input type="hidden" name="robotId" value={data.robotId} />
-					<button
-						type="submit"
-						disabled={submitting}
-						class="min-h-[44px] w-full rounded-lg bg-[var(--color-tron-cyan)] px-8 py-3 text-base font-semibold text-white transition-colors hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-50"
-					>
-						{submitting ? 'Creating...' : 'Start Wax Filling Run'}
-					</button>
-				</form>
+			<div class="mx-auto max-w-2xl">
+				<WaxPreparation
+					waxLots={data.waxLots}
+					waxPerCartridgeUl={data.settings.waxPerCartridgeUl}
+					deadVolumeUl={data.settings.waxFillDeadVolumeUl}
+					onComplete={handleWaxPrepComplete}
+					readonly={false}
+				/>
 			</div>
 
 			<div class="text-center">
