@@ -107,6 +107,12 @@ HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL_S", "10"))
 # 3-5s (marginally-aimed positions) and reported them as "empty (ACK only)".
 SCAN_TIMEOUT = float(os.environ.get("SCAN_TIMEOUT_S", "5.5"))
 
+# Focus recovery: some codes (esp. the deck's far slots) sit at the edge of the
+# scanner's focal range at the taught Z and only decode when the scanner is
+# moved CLOSER. On a failed scan we re-try progressively closer (lower z by these
+# mm) — automating the manual "move the scanner closer" fix.
+FOCUS_NUDGE_MM = [int(x) for x in os.environ.get("FOCUS_NUDGE_MM", "8,16").split(",") if x.strip()]
+
 # How long the BIMS long-poll HTTP request may take end-to-end. Must exceed
 # POLL_WAIT_MS (server holds up to 20s) plus network/cold-start headroom.
 POLL_HTTP_TIMEOUT_S = 25
@@ -870,6 +876,21 @@ def execute_sweep(command_id: str, payload: dict, port: ScannerPort) -> None:
                 continue
 
             scan = scan_with_retry(port, scan_timeout, retry_once)
+            # Focus recovery: if the taught-Z scan failed, retry progressively
+            # CLOSER. Out-of-focus codes (the deck's far slots) decode once the
+            # scanner is nearer — this automates the manual fix.
+            if not scan["barcode"]:
+                for dz in FOCUS_NUDGE_MM:
+                    try:
+                        move_to_coordinates(maint_run_id, pipette_id, pos["x"], pos["y"], pos["z"] - dz)
+                    except Exception as e:
+                        log.warning("Slot %d: focus-nudge move failed: %s", slot_index + 1, e)
+                        break
+                    log.info("Slot %d: focus retry %dmm closer (z=%.1f)", slot_index + 1, dz, pos["z"] - dz)
+                    scan = scan_with_retry(port, scan_timeout, False)
+                    if scan["barcode"]:
+                        log.info("Slot %d: recovered %dmm closer", slot_index + 1, dz)
+                        break
             slots_done += 1
             if scan["barcode"]:
                 scan_count += 1
@@ -948,6 +969,19 @@ def execute_deck_scan(command_id: str, payload: dict, port: ScannerPort) -> None
         home_gantry(maint_run_id, force=True)
         move_to_coordinates(maint_run_id, pipette_id, pos["x"], pos["y"], pos["z"])
         scan = scan_with_retry(port, scan_timeout, True)
+        # Focus recovery (same as the sweep): retry progressively closer if the
+        # deck QR didn't decode at the taught Z.
+        if not scan["barcode"]:
+            for dz in FOCUS_NUDGE_MM:
+                try:
+                    move_to_coordinates(maint_run_id, pipette_id, pos["x"], pos["y"], pos["z"] - dz)
+                except Exception as e:
+                    log.warning("deck_scan: focus-nudge move failed: %s", e)
+                    break
+                log.info("deck_scan: focus retry %dmm closer (z=%.1f)", dz, pos["z"] - dz)
+                scan = scan_with_retry(port, scan_timeout, False)
+                if scan["barcode"]:
+                    break
         if scan["barcode"]:
             _post_result(command_id, {"ok": True, "status": 200, "body": {
                 "barcode": scan["barcode"],
