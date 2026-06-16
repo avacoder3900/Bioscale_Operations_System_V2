@@ -19,6 +19,7 @@ const manufacturingSettingsSchema = new Schema({
 		emailRecipients: [String]
 	},
 	opticalConfirmation: {
+		assay: { _id: String, name: String, skuCode: String },
 		parameters: [{ _id: false, name: String, channel: String, unit: String, min: Number, max: Number, target: Number, required: { type: Boolean, default: true } }],
 		locked: { type: Boolean, default: false },
 		lockedBy: { _id: String, username: String },

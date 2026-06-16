@@ -1,5 +1,5 @@
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, ManufacturingSettings } from '$lib/server/db';
+import { connectDB, ManufacturingSettings, AssayDefinition } from '$lib/server/db';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -10,10 +10,16 @@ export const load: PageServerLoad = async ({ locals }) => {
 		.select('opticalConfirmation')
 		.lean();
 
+	const assays = await AssayDefinition.find({ isActive: { $ne: false } })
+		.select('name skuCode')
+		.sort({ name: 1 })
+		.lean();
+
 	return {
 		opticalConfirmation: JSON.parse(
 			JSON.stringify((settings as { opticalConfirmation?: unknown } | null)?.opticalConfirmation ?? null)
-		)
+		),
+		assays: JSON.parse(JSON.stringify(assays))
 	};
 };
 

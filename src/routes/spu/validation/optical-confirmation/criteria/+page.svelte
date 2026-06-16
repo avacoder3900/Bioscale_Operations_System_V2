@@ -9,7 +9,14 @@
 		required: boolean;
 	}
 
+	interface Assay {
+		_id: string;
+		name: string;
+		skuCode: string;
+	}
+
 	interface OpticalConfirmation {
+		assay?: { _id?: string; name?: string; skuCode?: string } | null;
 		parameters?: Parameter[];
 		locked?: boolean;
 		lockedBy?: { _id?: string; username?: string } | null;
@@ -20,10 +27,43 @@
 	interface Props {
 		data: {
 			opticalConfirmation: OpticalConfirmation | null;
+			assays: Assay[];
 		};
 	}
 
 	let { data }: Props = $props();
+
+	let assays = $derived(data.assays ?? []);
+	let selectedAssaySku = $state<string>(data.opticalConfirmation?.assay?.skuCode ?? '');
+	let isSavingAssay = $state(false);
+
+	async function saveAssay() {
+		isSavingAssay = true;
+		message = null;
+		try {
+			const chosen = (data.assays ?? []).find((a) => a.skuCode === selectedAssaySku) ?? null;
+			const res = await fetch('/api/validation/optical-confirmation/criteria', {
+				method: 'PUT',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					assay: chosen ? { _id: chosen._id, name: chosen.name, skuCode: chosen.skuCode } : null
+				})
+			});
+			const body = await res.json();
+			if (res.ok && body.success) {
+				message = {
+					type: 'success',
+					text: chosen ? `Optical-confirmation assay set to ${chosen.skuCode}.` : 'Assay cleared.'
+				};
+			} else {
+				message = { type: 'error', text: body.error ?? `Save failed (${res.status}).` };
+			}
+		} catch (err) {
+			message = { type: 'error', text: err instanceof Error ? err.message : 'Save failed.' };
+		} finally {
+			isSavingAssay = false;
+		}
+	}
 
 	function emptyRow(): Parameter {
 		return { name: '', channel: '', unit: '', min: null, max: null, target: null, required: true };
@@ -171,6 +211,42 @@
 			</p>
 		</div>
 	{/if}
+
+	<div class="tron-card p-6">
+		<h2 class="tron-heading mb-2 text-lg font-semibold">Optical Confirmation Assay</h2>
+		<p class="tron-text-muted mb-4 text-sm">
+			The single assay stamped onto every optical-test cartridge at capture. Pick it from the assay
+			catalog.
+		</p>
+		<div class="flex flex-wrap items-end gap-4">
+			<div class="min-w-64 flex-1">
+				<label for="ocAssay" class="tron-text-muted mb-2 block text-sm font-medium">Assay</label>
+				<select
+					id="ocAssay"
+					bind:value={selectedAssaySku}
+					class="tron-input w-full rounded-lg px-4 py-3"
+				>
+					<option value="">— None —</option>
+					{#each assays as a (a._id)}
+						<option value={a.skuCode}>{a.name} ({a.skuCode})</option>
+					{/each}
+				</select>
+			</div>
+			<button
+				type="button"
+				onclick={saveAssay}
+				disabled={isSavingAssay}
+				class="rounded-lg bg-[var(--color-tron-orange)] px-6 py-3 font-semibold text-[var(--color-tron-bg-primary)] transition-all hover:bg-[var(--color-tron-orange)]/90 disabled:cursor-not-allowed disabled:opacity-50"
+			>
+				{isSavingAssay ? 'Saving…' : 'Set Assay'}
+			</button>
+		</div>
+		{#if !selectedAssaySku}
+			<p class="mt-2 text-xs text-[var(--color-tron-red)]">
+				No assay set — batch capture is blocked until you set one.
+			</p>
+		{/if}
+	</div>
 
 	<div class="tron-card">
 		<div

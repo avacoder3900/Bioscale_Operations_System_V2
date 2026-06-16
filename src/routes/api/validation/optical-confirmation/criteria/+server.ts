@@ -16,24 +16,39 @@ export const PUT: RequestHandler = async ({ request, locals }) => {
 	requirePermission(locals.user, 'manufacturing:admin');
 	await connectDB();
 
-	const { parameters } = await request.json();
-	if (!Array.isArray(parameters)) return json({ error: 'parameters[] required' }, { status: 400 });
+	// Accepts { parameters?, assay? } — update either or both.
+	const { parameters, assay } = await request.json();
+	if (parameters === undefined && assay === undefined) {
+		return json({ error: 'Nothing to update (provide parameters and/or assay)' }, { status: 400 });
+	}
 
-	const settings = await ManufacturingSettings.findById('default');
-	if (!settings) return json({ error: 'Settings not initialized' }, { status: 400 });
+	let settings = await ManufacturingSettings.findById('default');
+	if (!settings) settings = new ManufacturingSettings({ _id: 'default' });
 
 	const oc = settings.opticalConfirmation;
-	if (oc?.locked && !isAdmin(locals.user)) return json({ error: 'Criteria locked - admin required to edit' }, { status: 403 });
+	const changed: Record<string, unknown> = {};
 
-	const oldParams = oc?.parameters;
-	settings.set('opticalConfirmation.parameters', parameters);
+	if (parameters !== undefined) {
+		if (!Array.isArray(parameters)) return json({ error: 'parameters must be an array' }, { status: 400 });
+		// The lock guards the threshold range only.
+		if (oc?.locked && !isAdmin(locals.user)) return json({ error: 'Criteria locked - admin required to edit' }, { status: 403 });
+		settings.set('opticalConfirmation.parameters', parameters);
+		changed.parameters = parameters;
+	}
+
+	if (assay !== undefined) {
+		// assay = { _id, name, skuCode } to set, or null to clear.
+		settings.set('opticalConfirmation.assay', assay || undefined);
+		changed.assay = assay?.skuCode ?? null;
+	}
+
 	settings.updatedAt = new Date();
 	await settings.save();
 
 	await AuditLog.create({
 		tableName: 'manufacturing_settings', recordId: 'default', action: 'UPDATE',
-		oldData: { opticalConfirmation_parameters: oldParams }, newData: { opticalConfirmation_parameters: parameters },
-		changedBy: locals.user._id, changedAt: new Date(), reason: 'Edit optical confirmation criteria'
+		newData: { opticalConfirmation: changed },
+		changedBy: locals.user._id, changedAt: new Date(), reason: 'Edit optical confirmation settings'
 	});
 
 	return json({ success: true });
