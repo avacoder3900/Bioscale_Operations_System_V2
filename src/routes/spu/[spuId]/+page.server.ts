@@ -66,6 +66,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 				thermocouple: s.validation?.thermocouple ?? null,
 				lux: s.validation?.lux ?? null,
 				spectrophotometer: s.validation?.spectrophotometer ?? null,
+				opticalConfirmation: s.validation?.opticalConfirmation ?? null,
 				status: s.validation?.status ?? 'pending'
 			},
 			qcDocumentUrl: s.qcDocumentUrl ?? null,

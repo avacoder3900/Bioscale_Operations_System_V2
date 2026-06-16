@@ -453,6 +453,35 @@
 		</div>
 	</TronCard>
 
+	<!-- Optical Confirmation -->
+	<TronCard>
+		<div class="flex items-center justify-between gap-4">
+			<div class="flex items-center gap-3">
+				<div class="text-2xl">👁️</div>
+				<div>
+					<h3 class="tron-text-primary text-lg font-medium">Optical Confirmation</h3>
+					<div class="mt-1">
+						{#if data.spu.validation?.opticalConfirmation?.status === 'passed'}
+							<span class="rounded-full px-2 py-0.5 text-xs font-bold" style="color: var(--color-tron-green); background: rgba(0,255,100,0.15);">PASS</span>
+						{:else if data.spu.validation?.opticalConfirmation?.status === 'failed'}
+							<span class="rounded-full px-2 py-0.5 text-xs font-bold" style="color: var(--color-tron-red); background: rgba(255,0,0,0.15);">FAIL</span>
+						{:else}
+							<span class="rounded-full px-2 py-0.5 text-xs font-bold tron-text-muted" style="background: rgba(128,128,128,0.15);">PENDING</span>
+						{/if}
+						{#if data.spu.validation?.opticalConfirmation?.completedAt}
+							<span class="tron-text-muted ml-2 text-[10px]">{formatDate(data.spu.validation.opticalConfirmation.completedAt)}</span>
+						{/if}
+					</div>
+				</div>
+			</div>
+			<a href="/spu/validation/optical-confirmation?spuId={data.spu.id}">
+				<TronButton variant="primary" style="min-height: 44px;">
+					Open Optical Confirmation
+				</TronButton>
+			</a>
+		</div>
+	</TronCard>
+
 	<TronCard>
 		<h3 class="tron-text-primary mb-4 text-lg font-medium">Parts Traceability</h3>
 		{#if data.parts.length > 0}
