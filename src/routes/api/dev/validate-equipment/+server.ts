@@ -15,16 +15,19 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	}
 
 	if (type === 'deck') {
-		const deck = await Equipment.findOne({ _id: id, equipmentType: 'deck' }).lean();
+		// Accept the canonical id (e.g. DECK-004) OR the deck's QR alias; either
+		// resolves to the same deck and we return the canonical id downstream.
+		const deck = await Equipment.findOne({ equipmentType: 'deck', $or: [{ _id: id }, { qrCode: id }] }).lean() as any;
 		if (!deck) return json({ error: `Deck "${id}" does not exist. Register it in Equipment → Decks & Trays first.` }, { status: 404 });
-		if ((deck as any).status === 'retired') return json({ error: `Deck "${id}" is retired.` }, { status: 400 });
+		const deckId = String(deck._id);
+		if (deck.status === 'retired') return json({ error: `Deck "${deckId}" is retired.` }, { status: 400 });
 		// In-use conflict — checked at scan time so the operator sees it
 		// immediately instead of on submit. `runId` query param lets the
 		// caller's own run be ignored (re-scan case).
 		const ignoreRunId = url.searchParams.get('runId')?.trim() || undefined;
-		const conflict = await checkDeckConflict(id, ignoreRunId);
+		const conflict = await checkDeckConflict(deckId, ignoreRunId);
 		if (conflict) return json({ error: conflict }, { status: 409 });
-		return json({ valid: true, id, name: (deck as any).name ?? id, status: (deck as any).status });
+		return json({ valid: true, id: deckId, name: deck.name ?? deckId, status: deck.status });
 	}
 
 	if (type === 'oven') {

@@ -19,6 +19,7 @@ import {
 	OpentronsScannerPositionSet,
 	Ot2BridgeCommand,
 	AuditLog,
+	Equipment,
 	generateId
 } from '$lib/server/db';
 import { getRobot, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
@@ -92,6 +93,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			if (typeof barcode !== 'string' || !barcode) {
 				error(502, 'Bridge daemon completed the deck scan but returned no barcode');
 			}
+			// The gantry reads the deck QR alias; translate it to the deck's
+			// canonical id (e.g. DECK-004) so downstream uses the linear identity.
+			const matchedDeck = (await Equipment.findOne({
+				equipmentType: 'deck',
+				$or: [{ _id: barcode }, { qrCode: barcode }]
+			}).select('_id').lean()) as any;
+			const resolved = matchedDeck?._id ? String(matchedDeck._id) : barcode;
 			await AuditLog.create({
 				_id: generateId(),
 				tableName: 'ot2_bridge_commands',
@@ -101,12 +109,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 					robotId: String(robot._id),
 					deviceId,
 					positionSetId: set._id,
-					barcode
+					barcode,
+					resolved
 				},
 				changedAt: new Date(),
 				changedBy: user.username
 			});
-			return json({ success: true, barcode });
+			return json({ success: true, barcode: resolved });
 		}
 		if (doc?.status === 'failed' || doc?.status === 'expired') {
 			error(502, doc.error || `Deck scan ${doc.status}`);

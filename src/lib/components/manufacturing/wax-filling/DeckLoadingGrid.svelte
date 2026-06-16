@@ -146,6 +146,9 @@
 			const value = deckInput.trim();
 			deckInput = '';
 			deckError = '';
+			// validate-equipment returns the canonical deck id (DECK-004) even when
+			// a QR alias was scanned — use it so the deck loads under its real id.
+			let resolvedDeckId = value;
 			// Validate on Enter before showing confirm UI
 			try {
 				const res = await fetch(`/api/dev/validate-equipment?type=deck&id=${encodeURIComponent(value)}`);
@@ -155,12 +158,13 @@
 					playBeep(false);
 					return;
 				}
+				resolvedDeckId = result.id ?? value;
 			} catch {
 				deckError = 'Validation service unavailable, cannot proceed';
 				playBeep(false);
 				return;
 			}
-			deckPendingValue = value;
+			deckPendingValue = resolvedDeckId;
 			playBeep(true);
 		}
 	}
