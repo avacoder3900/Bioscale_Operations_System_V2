@@ -101,7 +101,11 @@ OT2_BASE_URL = os.environ.get("OT2_BASE_URL", "http://localhost:31950").rstrip("
 POLL_WAIT_MS = int(os.environ.get("POLL_WAIT_MS", "18000"))
 TRIGGER_POLL_INTERVAL = int(os.environ.get("TRIGGER_POLL_INTERVAL_MS", "500")) / 1000.0
 HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL_S", "10"))
-SCAN_TIMEOUT = float(os.environ.get("SCAN_TIMEOUT_S", "3"))
+# Read window per scan. MUST be >= the scanner's "Single Scanning Time" (5s
+# default, see manual Appendix A). In Command Mode each trigger makes the
+# scanner scan for up to that long; a 3s window cut off decodes that landed at
+# 3-5s (marginally-aimed positions) and reported them as "empty (ACK only)".
+SCAN_TIMEOUT = float(os.environ.get("SCAN_TIMEOUT_S", "5.5"))
 
 # How long the BIMS long-poll HTTP request may take end-to-end. Must exceed
 # POLL_WAIT_MS (server holds up to 20s) plus network/cold-start headroom.
@@ -606,7 +610,10 @@ class ScannerPort:
 
     def trigger_and_read(self, timeout_s: Optional[float] = None) -> Tuple[Optional[str], Optional[str], Optional[str]]:
         """Fire the scanner; return (decoded_text, raw_hex, error)."""
-        wait_s = timeout_s if timeout_s and timeout_s > 0 else SCAN_TIMEOUT
+        # Never wait less than SCAN_TIMEOUT — callers (deck_scan/sweep) pass 3s,
+        # but the scanner needs up to its 5s single-scan-time to decode a
+        # marginal read, so clamp up to give it the full window.
+        wait_s = max(timeout_s if timeout_s and timeout_s > 0 else SCAN_TIMEOUT, SCAN_TIMEOUT)
         with self.lock:
             if not self.is_open():
                 self.open()
