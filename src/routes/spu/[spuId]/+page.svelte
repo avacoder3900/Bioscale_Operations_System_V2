@@ -21,6 +21,7 @@
 	let showRenameForm = $state(false);
 
 	let uploadingCsv = $state(false);
+	let expandedAttachment = $state<string | null>(null);
 
 	// Assignment removed — release status (released-rnd/manufacturing/field) replaces it
 
@@ -477,7 +478,7 @@
 		</div>
 	</TronCard>
 
-	<!-- Attachments — upload + download CSV/XLSX per SPU (bytes stored in R2) -->
+	<!-- Attachments — upload + view thermocouple CSVs per SPU -->
 	<TronCard>
 		<h3 class="tron-text-primary mb-4 text-lg font-medium">Attachments</h3>
 
@@ -495,13 +496,13 @@
 				};
 			}}
 		>
-			<input type="file" name="file" accept=".csv,.xlsx,text/csv" required class="tron-text-secondary text-sm" />
+			<input type="file" name="file" accept=".csv,text/csv" required class="tron-text-secondary text-sm" />
 			<TronButton type="submit" disabled={uploadingCsv}>
-				{uploadingCsv ? 'Uploading…' : 'Upload File'}
+				{uploadingCsv ? 'Uploading…' : 'Upload CSV'}
 			</TronButton>
 			{#if form?.uploadSuccess}
 				<span class="text-xs" style="color: var(--color-tron-green);">
-					Uploaded {form.fileName}{form.rowCount != null ? ` (${form.rowCount} rows)` : ''}
+					Uploaded {form.fileName} ({form.rowCount} rows)
 				</span>
 			{:else if form?.error}
 				<span class="text-xs" style="color: var(--color-tron-red, #ef4444);">{form.error}</span>
@@ -533,6 +534,14 @@
 								<td>{att.uploadedByName ?? '—'}</td>
 								<td>
 									<div class="flex items-center gap-3">
+										<button
+											type="button"
+											class="underline"
+											style="color: var(--color-tron-cyan);"
+											onclick={() => (expandedAttachment = expandedAttachment === att.id ? null : att.id)}
+										>
+											{expandedAttachment === att.id ? 'Hide' : 'View'}
+										</button>
 										<a
 											href="/spu/{data.spu.id}/attachments/{att.id}"
 											class="underline"
@@ -557,6 +566,41 @@
 									</div>
 								</td>
 							</tr>
+							{#if expandedAttachment === att.id}
+								<tr>
+									<td colspan="7" style="background: rgba(0, 0, 0, 0.2);">
+										{#if att.preview.header.length > 0}
+											<div class="overflow-x-auto p-2">
+												<table class="tron-table text-xs">
+													<thead>
+														<tr>
+															{#each att.preview.header as col}
+																<th>{col}</th>
+															{/each}
+														</tr>
+													</thead>
+													<tbody>
+														{#each att.preview.rows as row}
+															<tr>
+																{#each row as cell}
+																	<td class="font-mono">{cell}</td>
+																{/each}
+															</tr>
+														{/each}
+													</tbody>
+												</table>
+												{#if att.preview.truncated}
+													<p class="tron-text-muted mt-2 text-xs">
+														Showing first 50 rows of {att.rowCount}. Download for the full file.
+													</p>
+												{/if}
+											</div>
+										{:else}
+											<p class="tron-text-muted p-2 text-xs">No preview available — download to view.</p>
+										{/if}
+									</td>
+								</tr>
+							{/if}
 						{/each}
 					</tbody>
 				</table>
