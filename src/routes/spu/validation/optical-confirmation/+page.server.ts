@@ -1,30 +1,33 @@
-import { requirePermission } from '$lib/server/permissions';
-import { connectDB, Spu, LabCartridge, ManufacturingSettings } from '$lib/server/db';
+import { requirePermission, hasPermission } from '$lib/server/permissions';
+import { connectDB, ManufacturingSettings, AssayDefinition, CartridgeGroup, LabCartridge } from '$lib/server/db';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
-	requirePermission(locals.user, 'spu:read');
+	requirePermission(locals.user, 'cartridge:read');
 	await connectDB();
 
-	const spus = await Spu.find({ status: { $in: ['assembled', 'assembling', 'validating'] } })
-		.select('udi status validation.opticalConfirmation')
-		.sort({ updatedAt: -1 })
-		.limit(100)
-		.lean();
+	const settings = await ManufacturingSettings.findById('default').select('opticalConfirmation').lean();
+	const presetAssay = (settings as { opticalConfirmation?: { assay?: unknown } } | null)?.opticalConfirmation?.assay ?? null;
 
-	const cartridges = await LabCartridge.find({ cartridgeType: 'optical_test', status: 'available' })
-		.select('barcode assay status expirationDate')
-		.lean();
+	const canSetAssay = hasPermission(locals.user, 'manufacturing:admin');
+	const assays = canSetAssay
+		? await AssayDefinition.find({ isActive: { $ne: false } }).select('name skuCode').sort({ name: 1 }).lean()
+		: [];
 
-	const settings = await ManufacturingSettings.findById('default')
-		.select('opticalConfirmation')
+	const groups = await CartridgeGroup.find().select('name color').sort({ name: 1 }).limit(50).lean();
+
+	const cartridges = await LabCartridge.find({ cartridgeType: 'optical_test' })
+		.select('barcode assay status expirationDate groupId createdAt')
+		.sort({ createdAt: -1 })
+		.limit(200)
 		.lean();
-	const criteria = settings?.opticalConfirmation ?? null;
 
 	return {
-		spus: JSON.parse(JSON.stringify(spus)),
+		presetAssay: JSON.parse(JSON.stringify(presetAssay)),
+		assays: JSON.parse(JSON.stringify(assays)),
+		groups: JSON.parse(JSON.stringify(groups)),
 		cartridges: JSON.parse(JSON.stringify(cartridges)),
-		criteria: JSON.parse(JSON.stringify(criteria))
+		canSetAssay
 	};
 };
 
