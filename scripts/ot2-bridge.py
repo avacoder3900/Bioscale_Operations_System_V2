@@ -609,11 +609,21 @@ class ScannerPort:
             self.ser = None
 
     def trigger_and_read(self, timeout_s: Optional[float] = None) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-        """Fire the scanner; return (decoded_text, raw_hex, error)."""
-        # Never wait less than SCAN_TIMEOUT — callers (deck_scan/sweep) pass 3s,
-        # but the scanner needs up to its 5s single-scan-time to decode a
-        # marginal read, so clamp up to give it the full window.
+        """Fire the scanner repeatedly until it decodes or the window expires;
+        return (decoded_text, raw_hex, error).
+
+        In Command Mode ONE trigger = ONE short scan burst (the module's
+        "Single Scanning Time"), then it ACKs and goes idle. A single trigger +
+        passive wait therefore reports "empty (ACK only)" whenever the decode
+        didn't land in that one burst — which is exactly the intermittent
+        per-slot failure we saw. So instead we RE-TRIGGER (re-poke) every
+        ~RETRIGGER_EVERY_S across the whole window, with a short rest before each
+        poke so the scanner settles after the previous burst / gantry move.
+        Each burst gets a clean buffer (reset before the trigger) so stale ACKs
+        from a prior poke can't masquerade as a payload."""
         wait_s = max(timeout_s if timeout_s and timeout_s > 0 else SCAN_TIMEOUT, SCAN_TIMEOUT)
+        SETTLE_S = 0.15          # rest before each (re)trigger so the engine resets
+        RETRIGGER_EVERY_S = 1.0  # listen this long per burst before re-poking
         with self.lock:
             if not self.is_open():
                 self.open()
@@ -621,37 +631,36 @@ class ScannerPort:
                 return None, None, "serial port not open"
             try:
                 assert self.ser is not None
-                self.ser.reset_input_buffer()
-                self.ser.write(TRIGGER_BYTES)
-                self.ser.flush()
-                # Read whatever the scanner returns within the deadline.
-                # GM-class engines typically respond with the raw decoded
-                # bytes terminated by CRLF (or just the bytes for empty reads).
                 deadline = time.time() + wait_s
-                buf = bytearray()
+                last_raw: Optional[str] = None
+                got_any = False
                 while time.time() < deadline:
-                    chunk = self.ser.read(256)
-                    if chunk:
-                        buf.extend(chunk)
-                        # Settle: the decoded payload can arrive in pieces.
-                        time.sleep(0.05)
-                    elif _decoded_payload(buf):
-                        # Read went idle AND a real barcode is present beyond the
-                        # ACK — done. (Previously this broke on ACK-only, cutting
-                        # off scans whose decode lagged the trigger ACK by a hair.)
-                        break
-                    # else: only the trigger ACK (or nothing) so far — keep
-                    # waiting for the decoded payload up to the deadline.
-                if not buf:
+                    # Rest, flush, fire one burst.
+                    time.sleep(SETTLE_S)
+                    self.ser.reset_input_buffer()
+                    self.ser.write(TRIGGER_BYTES)
+                    self.ser.flush()
+                    burst_deadline = min(deadline, time.time() + RETRIGGER_EVERY_S)
+                    buf = bytearray()
+                    while time.time() < burst_deadline:
+                        chunk = self.ser.read(256)
+                        if chunk:
+                            got_any = True
+                            buf.extend(chunk)
+                            time.sleep(0.03)  # let a piecewise payload finish arriving
+                            if _decoded_payload(buf):
+                                break
+                        elif _decoded_payload(buf):
+                            break
+                    if buf:
+                        last_raw = buf.hex()
+                    decoded = _decoded_payload(buf)
+                    if decoded:
+                        return decoded.decode("utf-8", errors="replace").strip(), last_raw, None
+                    # else: this burst only ACKed (or was silent) — re-poke.
+                if not got_any:
                     return None, None, "no response within timeout"
-
-                raw_hex = buf.hex()
-                # Strip the fixed trigger ACK if it leads the response — without
-                # this, the ACK's last bytes ("31") leak into the decoded text.
-                text = _decoded_payload(buf).decode("utf-8", errors="replace").strip()
-                if not text:
-                    return None, raw_hex, "empty payload (ACK only)"
-                return text, raw_hex, None
+                return None, last_raw, "empty payload (ACK only)"
             except serial.SerialException as e:
                 self.close()
                 return None, None, "serial error: {}".format(e)
