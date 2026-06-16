@@ -2557,3 +2557,50 @@ flow changed from scan-3-lots → qty → work → oven → confirm  TO:
   Resume path: if a resumed batch has no client oven, the session shows an oven
   selector to continue. npm run check 11-baseline (0 new); build green.
 On master after this session's push.
+
+=== 2026-06-16 (PM) — OT-2 lab testing fixes + WI-01 backing polish ===
+Live lab-testing session against R04/B07/B14. Many bridge-daemon + UI fixes,
+all deployed to all 3 robots (scp /data/ot2-bridge/ot2-bridge.py + systemctl
+restart ot2-bridge) and/or pushed to master (Vercel).
+
+DECK-QR ALIAS: each deck gets a QR/UUID sticker resolving to its canonical id.
+  equipment.qrCode (indexed); validate-equipment + deck-scan resolve _id OR
+  qrCode -> canonical; DECK-004.qrCode=1eff9672-05c4-46c9-84be-192310f4e325.
+
+OT-2 BRIDGE DAEMON (scripts/ot2-bridge.py):
+- Self-heal stuck maintenance runs: open_maintenance_run() 3-tier ladder —
+  clear stale protocol+maintenance runs -> if still wedged/hung, restart
+  opentrons-robot-server (cooldown 120s) -> retry. New kind 'restart_robot_server'.
+  Same self-heal mirrored in src/lib/server/opentrons/maintenance.ts.
+- Engine hang detection: heartbeat now carries engine_health() (probes /runs +
+  /maintenance_runs/current); /health alone stays 200 while the engine is hung.
+- ROBOT HEALTH UI: src/lib/server/opentrons/health.ts -> ready/busy/hung/offline
+  badge on wax-filling robot tabs + "Restart robot server" button when hung;
+  polled via GET /api/opentrons-lab/robots/health. Restart endpoint:
+  POST /api/opentrons-lab/robots/[id]/restart-server (fire-and-forget).
+- SCANNER "empty payload (ACK only)" — three layered fixes in trigger_and_read:
+  (1) don't break on the ACK alone (_decoded_payload); (2) read window 3->5.5s;
+  (3) THE real fix: RE-TRIGGER every ~1s across the window (Command Mode = one
+  burst per trigger then idle), 0.15s settle before each poke, fresh buffer per
+  burst. Confirmed against Waveshare manual V2.1 (command-mode trigger
+  7E000801000201ABCD; Single Scanning Time 5s; reread-delay only applies in
+  Continuous/Sensing, NOT command mode).
+- Homing: home_gantry() skips a re-home if homed <180s ago; deck scan forces one
+  home at flow entry; wind-down homes between deck-scan and sweep removed (~2min).
+
+WAX FLOW: run creation deferred from robot-select to "wax setup complete"
+  (recordWaxPrep creates the run); idle robots stay idle. Deck-conflict message
+  now names the robot holding the deck. Freed DECK-004 (aborted stale B14 run).
+
+WI-01 BACKING (PRD docs/prds/WI01-BACKING-FLOW-FIXES.md):
+- Oven chosen ONCE at setup: stored on LotRecord.backingOven at checkAndStart,
+  echoed back + set client-side, recovered on resume; the in-session oven picker
+  is removed (was asking twice).
+- Free/continuous scanning: scanArmed toggle + onblur auto-refocus + field not
+  disabled during the async scan; "Scanning active" indicator.
+- Genesis guard: scanBackedCartridge rejects any barcode already existing at ANY
+  status (message hardened).
+- Resume only for In-Progress lots WITH scanned carts; resumeLot server guard
+  rejects non-In-Progress (finished lots can't be resumed); deleted empty ghost
+  started-session lots.
+npm run check 11-baseline (0 new); builds green. On master.

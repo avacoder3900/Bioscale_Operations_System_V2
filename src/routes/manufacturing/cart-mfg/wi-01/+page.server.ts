@@ -141,6 +141,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			bucketBarcode: l.bucketBarcode ?? null,
 			outputLotNumber: l.outputLotNumber ?? null,
 			quantityProduced: l.quantityProduced ?? 0,
+			cartridgeCount: (l.cartridgeIds ?? []).length,
 			operatorName: l.operator?.username ?? 'unknown',
 			status: l.status ?? 'unknown',
 			createdAt: l.createdAt?.toISOString?.() ?? '',
@@ -317,7 +318,17 @@ export const actions: Actions = {
 			newData: { quantity, inputLots: inputLots.map(l => l.barcode) }
 		});
 
-		return { checkAndStart: { success: true, lotId, plannedQty: quantity } };
+		return {
+			checkAndStart: {
+				success: true,
+				lotId,
+				plannedQty: quantity,
+				// Echo the oven so the scan session can lock it in without relying
+				// on client state surviving the form submit (WI01-BACKING-FLOW-FIXES).
+				ovenId: String(oven._id),
+				ovenName: oven.name ?? oven.barcode ?? ''
+			}
+		};
 	},
 
 	/**
@@ -692,6 +703,11 @@ export const actions: Actions = {
 
 		const lot = await LotRecord.findById(lotId).lean() as any;
 		if (!lot) return fail(404, { resumeLot: { error: 'Lot not found' } });
+		// A finished batch (confirm & withdraw -> Completed, or aborted/cancelled)
+		// is terminal — it can never be resumed (WI01-BACKING-FLOW-FIXES).
+		if (lot.status !== 'In Progress') {
+			return fail(400, { resumeLot: { error: `This batch is "${lot.status}" — finished batches cannot be resumed.` } });
+		}
 
 		// Recover the batch oven so the resumed session shows it locked instead
 		// of re-asking (WI01-BACKING-FLOW-FIXES). Prefer the oven stored at

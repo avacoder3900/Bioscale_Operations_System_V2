@@ -4,6 +4,7 @@
 	interface RecentLot {
 		lotId: string;
 		quantityProduced: number;
+		cartridgeCount?: number;
 		operatorName: string;
 		status: string;
 		createdAt: string;
@@ -180,7 +181,14 @@
 	$effect(() => {
 		if (form?.checkAndStart) {
 			const r = form.checkAndStart as any;
-			if (r.success && r.lotId) { lotId = r.lotId; step = 'session'; armScanning(); }
+			if (r.success && r.lotId) {
+				lotId = r.lotId;
+				// Lock in the oven from the server response so the session never
+				// re-asks for it (don't rely on client state surviving the submit).
+				if (r.ovenId) ovenId = r.ovenId;
+				step = 'session';
+				armScanning();
+			}
 		}
 		if (form?.confirmComplete) {
 			const r = form.confirmComplete as any;
@@ -324,8 +332,10 @@
 					</div>
 				</form>
 
-				<!-- Resume in-progress batches -->
-				{#each data.recentLots.filter((l) => l.status === 'In Progress') as ipLot (ipLot.lotId)}
+				<!-- Resume in-progress batches — only ones with scanned cartridges.
+				     An empty started session (0 carts) isn't worth resuming and was
+				     showing as a confusing ghost; just start a fresh batch instead. -->
+				{#each data.recentLots.filter((l) => l.status === 'In Progress' && (l.cartridgeCount ?? 0) > 0) as ipLot (ipLot.lotId)}
 					<div class="mt-4 rounded-lg border border-[var(--color-tron-yellow)]/50 bg-[var(--color-tron-yellow)]/5 p-3">
 						<div class="flex items-center justify-between">
 							<div>
@@ -354,7 +364,8 @@
 						<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">Each scan creates the cartridge record with the batch's lots + oven entry time.</p>
 					</div>
 
-					<!-- Locked batch config -->
+					<!-- Locked batch config — oven is chosen ONCE at setup and carried
+					     through here (and on resume), never re-asked. -->
 					<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3 text-xs">
 						{#if ovenId}
 							<div class="flex flex-wrap gap-x-4 gap-y-1 text-[var(--color-tron-text-secondary)]">
@@ -364,14 +375,7 @@
 								{#if lot3}<span>label <span class="font-mono text-[var(--color-tron-text)]">{lot3}</span></span>{/if}
 							</div>
 						{:else}
-							<!-- Resumed batch with no client-side oven yet: pick the oven to continue -->
-							<label for="ovenResume" class="block text-[var(--color-tron-text-secondary)]">Select oven to continue scanning</label>
-							<select id="ovenResume" bind:value={ovenId} class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 text-[var(--color-tron-text)]">
-								<option value="">— Select oven —</option>
-								{#each (data.ovens ?? []) as oven (oven._id)}
-									<option value={oven._id}>{oven.name}</option>
-								{/each}
-							</select>
+							<p class="text-[var(--color-tron-error)]">No oven recorded for this batch — start a new batch from the setup screen.</p>
 						{/if}
 					</div>
 
