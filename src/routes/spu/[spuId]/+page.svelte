@@ -20,6 +20,8 @@
 	let renaming = $state(false);
 	let showRenameForm = $state(false);
 
+	let uploadingCsv = $state(false);
+
 	// Assignment removed — release status (released-rnd/manufacturing/field) replaces it
 
 	let showRecordHistory = $state(false);
@@ -43,6 +45,13 @@
 	function formatDate(date: Date | string | null): string {
 		if (!date) return '—';
 		return new Date(date).toLocaleString();
+	}
+
+	function formatBytes(bytes: number): string {
+		if (!bytes) return '—';
+		if (bytes < 1024) return `${bytes} B`;
+		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+		return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 	}
 
 	const fieldLabels: Record<string, string> = {
@@ -466,6 +475,100 @@
 				</div>
 			{/each}
 		</div>
+	</TronCard>
+
+	<!-- Attachments — upload + download CSV/XLSX per SPU (bytes stored in R2) -->
+	<TronCard>
+		<h3 class="tron-text-primary mb-4 text-lg font-medium">Attachments</h3>
+
+		<!-- Upload form -->
+		<form
+			method="POST"
+			action="?/uploadCsv"
+			enctype="multipart/form-data"
+			class="mb-4 flex flex-wrap items-center gap-3"
+			use:enhance={() => {
+				uploadingCsv = true;
+				return async ({ update }) => {
+					await update();
+					uploadingCsv = false;
+				};
+			}}
+		>
+			<input type="file" name="file" accept=".csv,.xlsx,text/csv" required class="tron-text-secondary text-sm" />
+			<TronButton type="submit" disabled={uploadingCsv}>
+				{uploadingCsv ? 'Uploading…' : 'Upload File'}
+			</TronButton>
+			{#if form?.uploadSuccess}
+				<span class="text-xs" style="color: var(--color-tron-green);">
+					Uploaded {form.fileName}{form.rowCount != null ? ` (${form.rowCount} rows)` : ''}
+				</span>
+			{:else if form?.error}
+				<span class="text-xs" style="color: var(--color-tron-red, #ef4444);">{form.error}</span>
+			{/if}
+		</form>
+
+		{#if data.attachments.length > 0}
+			<div class="overflow-x-auto">
+				<table class="tron-table">
+					<thead>
+						<tr>
+							<th>File</th>
+							<th>Type</th>
+							<th>Rows</th>
+							<th>Size</th>
+							<th>Uploaded</th>
+							<th>By</th>
+							<th>Actions</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each data.attachments as att (att.id)}
+							<tr>
+								<td class="font-mono">{att.fileName}</td>
+								<td>{att.kind}</td>
+								<td>{att.rowCount ?? '—'}</td>
+								<td>{formatBytes(att.fileSize)}</td>
+								<td>{formatDate(att.uploadedAt)}</td>
+								<td>{att.uploadedByName ?? '—'}</td>
+								<td>
+									<div class="flex items-center gap-3">
+										<a
+											href="/spu/{data.spu.id}/attachments/{att.id}"
+											class="underline"
+											style="color: var(--color-tron-cyan);"
+											download={att.fileName}
+										>
+											Download
+										</a>
+										<form
+											method="POST"
+											action="?/deleteAttachment"
+											use:enhance
+											onsubmit={(e) => {
+												if (!confirm('Delete this attachment?')) e.preventDefault();
+											}}
+										>
+											<input type="hidden" name="attachmentId" value={att.id} />
+											<button type="submit" class="underline" style="color: var(--color-tron-red, #ef4444);">
+												Delete
+											</button>
+										</form>
+									</div>
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{:else}
+			<div class="py-6 text-center">
+				<p class="tron-text-muted">No attachments yet.</p>
+				<p class="mt-1 text-xs" style="color: var(--color-tron-cyan); opacity: 0.7;">
+					Use the upload control above to attach a thermocouple CSV.
+				</p>
+			</div>
+		{/if}
 	</TronCard>
 
 	<!-- Validation Session History -->

@@ -5,6 +5,7 @@ import {
 	ElectronicSignature, AuditLog, ParticleDevice, ValidationSession, generateId
 } from '$lib/server/db';
 import { byId } from '$lib/server/db/native-helpers';
+import { uploadViaWorker, deleteViaWorker } from '$lib/server/services/r2';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -93,6 +94,16 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			finalizedAt: s.finalizedAt ?? null,
 			corrections: s.corrections ?? []
 		},
+		attachments: (s.attachments ?? []).map((a: any) => ({
+			id: a._id,
+			fileName: a.fileName ?? 'attachment',
+			kind: a.kind ?? 'file',
+			fileSize: a.fileSize ?? 0,
+			rowCount: a.rowCount ?? null,
+			sessionId: a.sessionId ?? null,
+			uploadedAt: a.uploadedAt ?? null,
+			uploadedByName: a.uploadedBy?.username ?? null
+		})),
 		batch: batch
 			? {
 					id: (batch as any)._id,
@@ -240,6 +251,105 @@ export const actions: Actions = {
 		await connectDB();
 		await Spu.updateOne({ _id: params.spuId }, { $unset: { particleLink: '' } });
 		return { success: true };
+	},
+
+	uploadCsv: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const file = form.get('file');
+		if (!(file instanceof File) || file.size === 0) {
+			return fail(400, { error: 'A file is required' });
+		}
+		if (file.size > 10 * 1024 * 1024) {
+			return fail(400, { error: 'File too large (max 10 MB)' });
+		}
+
+		const spu = await Spu.findById(params.spuId);
+		if (!spu) return fail(404, { error: 'SPU not found' });
+
+		// Raw bytes — no lossy text decode, so any file type round-trips faithfully.
+		const buffer = Buffer.from(await file.arrayBuffer());
+		const contentType = file.type || 'application/octet-stream';
+
+		// Row count only makes sense for text/CSV; skip for binary (xlsx, etc.).
+		let rowCount: number | null = null;
+		if (/\.csv$/i.test(file.name) || contentType.includes('csv') || contentType.startsWith('text/')) {
+			const lines = buffer.toString('utf8').split(/\r?\n/).filter((l) => l.trim().length > 0);
+			rowCount = Math.max(0, lines.length - 1);
+		}
+
+		const attachmentId = generateId();
+		const safeName = (file.name || 'attachment').replace(/[^a-zA-Z0-9_\-.]/g, '_').slice(0, 120);
+		const key = `spu-attachments/${params.spuId}/${attachmentId}_${safeName}`;
+
+		let url: string;
+		try {
+			url = await uploadViaWorker(buffer, key, contentType);
+		} catch (e) {
+			return fail(502, { error: `Storage upload failed: ${(e as Error).message}` });
+		}
+
+		const attachment = {
+			_id: attachmentId,
+			kind: 'thermocouple_csv',
+			fileName: file.name || 'attachment',
+			mimeType: contentType,
+			fileSize: file.size,
+			rowCount,
+			r2Key: key,
+			url,
+			sessionId: form.get('sessionId')?.toString() || null,
+			uploadedAt: new Date(),
+			uploadedBy: { _id: locals.user!._id, username: locals.user!.username }
+		};
+		await Spu.updateOne({ _id: params.spuId }, { $push: { attachments: attachment } });
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'spus',
+			recordId: params.spuId,
+			action: 'UPDATE',
+			oldData: {},
+			newData: { attachmentAdded: attachment.fileName, r2Key: key, rowCount },
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+
+		return { uploadSuccess: true, fileName: attachment.fileName, rowCount };
+	},
+
+	deleteAttachment: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const attachmentId = form.get('attachmentId')?.toString();
+		if (!attachmentId) return fail(400, { error: 'attachmentId required' });
+
+		const spu = (await Spu.findById(params.spuId, { attachments: 1 }).lean()) as any;
+		const att = (spu?.attachments ?? []).find((a: any) => a._id === attachmentId);
+
+		// Best-effort R2 cleanup; don't block the DB removal if the object is already gone.
+		if (att?.r2Key) {
+			try {
+				await deleteViaWorker(att.r2Key);
+			} catch {
+				/* ignore — orphaned object is harmless */
+			}
+		}
+
+		await Spu.updateOne({ _id: params.spuId }, { $pull: { attachments: { _id: attachmentId } } });
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'spus',
+			recordId: params.spuId,
+			action: 'UPDATE',
+			oldData: { attachmentId, r2Key: att?.r2Key ?? null },
+			newData: { attachmentRemoved: attachmentId },
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+
+		return { deleteSuccess: true };
 	},
 
 	// updateAssignment removed — release status (released-rnd/manufacturing/field) via transitionStatus
