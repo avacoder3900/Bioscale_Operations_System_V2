@@ -73,6 +73,15 @@ TRIGGER_BYTES = bytes([0x7E, 0x00, 0x08, 0x01, 0x00, 0x02, 0x01, 0xAB, 0xCD])
 # Always prepended to the decoded barcode bytes — strip it before returning text.
 TRIGGER_ACK = bytes([0x02, 0x00, 0x00, 0x01, 0x00, 0x33, 0x31])
 
+
+def _decoded_payload(buf: bytearray) -> bytes:
+    """Bytes after the fixed trigger ACK, whitespace/CRLF-stripped. Empty means
+    the scanner ACKed the trigger but hasn't sent the decoded barcode YET — the
+    decode lags the ACK by tens of ms, so the read loop must keep waiting until
+    this is non-empty (or the deadline), NOT break on the ACK alone."""
+    p = buf[len(TRIGGER_ACK):] if buf.startswith(TRIGGER_ACK) else buf
+    return bytes(p).strip()
+
 # Configuration ---------------------------------------------------------------
 BIMS_BASE_URL = os.environ.get("BIMS_BASE_URL", "").rstrip("/")
 API_KEY = os.environ.get("BIMS_AGENT_API_KEY", "")
@@ -617,19 +626,22 @@ class ScannerPort:
                     chunk = self.ser.read(256)
                     if chunk:
                         buf.extend(chunk)
-                        # Settle: keep reading briefly in case payload arrives in pieces
+                        # Settle: the decoded payload can arrive in pieces.
                         time.sleep(0.05)
-                    elif buf:
+                    elif _decoded_payload(buf):
+                        # Read went idle AND a real barcode is present beyond the
+                        # ACK — done. (Previously this broke on ACK-only, cutting
+                        # off scans whose decode lagged the trigger ACK by a hair.)
                         break
+                    # else: only the trigger ACK (or nothing) so far — keep
+                    # waiting for the decoded payload up to the deadline.
                 if not buf:
                     return None, None, "no response within timeout"
 
                 raw_hex = buf.hex()
                 # Strip the fixed trigger ACK if it leads the response — without
                 # this, the ACK's last bytes ("31") leak into the decoded text.
-                payload = buf[len(TRIGGER_ACK):] if buf.startswith(TRIGGER_ACK) else buf
-                text = payload.decode("utf-8", errors="replace").strip()
-                text = text.rstrip("\r\n")
+                text = _decoded_payload(buf).decode("utf-8", errors="replace").strip()
                 if not text:
                     return None, raw_hex, "empty payload (ACK only)"
                 return text, raw_hex, None
