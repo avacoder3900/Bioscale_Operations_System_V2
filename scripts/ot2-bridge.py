@@ -241,8 +241,71 @@ def robot_health() -> Optional[dict]:
         return None
 
 
+# A protocol run that never reached a terminal state (commonly a `paused` run
+# left over from the off-deck initial pause) keeps holding the OT-2 run engine,
+# so the robot refuses new maintenance runs with this error. We auto-clear it.
+PROTOCOL_RUN_CONFLICT = "protocol run is active"
+ACTIVE_RUN_STATES = {"running", "finishing"}
+TERMINAL_RUN_STATES = {"stopped", "failed", "succeeded"}
+
+
+def _current_protocol_run() -> Optional[dict]:
+    """Return {'id','status'} for the robot's current protocol run, or None."""
+    try:
+        r = ot2_request("GET", "/runs", timeout=8)
+        if r.status_code >= 400:
+            return None
+        body = r.json() or {}
+    except Exception:
+        return None
+    href = ((body.get("links") or {}).get("current") or {}).get("href") or ""
+    cur_id = href.rsplit("/", 1)[-1] if href else None
+    if not cur_id:
+        return None
+    for run in (body.get("data") or []):
+        if run.get("id") == cur_id:
+            return {"id": cur_id, "status": run.get("status")}
+    return {"id": cur_id, "status": None}
+
+
+def clear_stale_protocol_run() -> Optional[dict]:
+    """Free the run engine when a non-terminal protocol run is blocking a
+    maintenance run. Returns a dict describing what was cleared, or None if
+    nothing was blocking. Raises RobotCommandError if the blocking run is
+    genuinely ACTIVE (running/finishing) — we never silently kill a live run."""
+    run = _current_protocol_run()
+    if not run:
+        return None
+    status = (run.get("status") or "").lower()
+    if status in TERMINAL_RUN_STATES:
+        return None  # terminal-but-current doesn't block a new run
+    if status in ACTIVE_RUN_STATES:
+        raise RobotCommandError(
+            "Robot has an ACTIVE protocol run (status={}) — refusing to "
+            "auto-clear it. Stop that run before scanning.".format(status))
+    # Stale: paused / idle / blocked-by-open-door / stop-requested / awaiting-recovery
+    run_id = run["id"]
+    log.warning("clearing stale protocol run %s (status=%s) blocking maintenance op",
+                run_id, status)
+    try:
+        ot2_request("POST", "/runs/{}/actions".format(run_id),
+                    {"data": {"actionType": "stop"}}, timeout=10)
+    except Exception as e:
+        log.warning("stop action on %s failed: %s", run_id, e)
+    for _ in range(12):  # ~6s for stop to reach terminal
+        cur = _current_protocol_run()
+        if not cur or (cur.get("status") or "").lower() in TERMINAL_RUN_STATES:
+            break
+        time.sleep(0.5)
+    try:
+        ot2_request("DELETE", "/runs/{}".format(run_id), timeout=10)
+    except Exception as e:
+        log.warning("delete run %s failed: %s", run_id, e)
+    return {"id": run_id, "priorStatus": status, "action": "cleared"}
+
+
 # Maintenance-run helpers — mirrors src/lib/server/opentrons/maintenance.ts ----
-def open_maintenance_run() -> str:
+def open_maintenance_run(_allow_recovery: bool = True) -> str:
     # JSON:API style — requires the `data` envelope even with no attributes.
     r = ot2_request("POST", "/maintenance_runs", {"data": {}})
     body = {}
@@ -252,6 +315,10 @@ def open_maintenance_run() -> str:
         pass
     if r.status_code >= 400:
         detail = _first_error_detail(body) or "Robot returned {} on /maintenance_runs".format(r.status_code)
+        if _allow_recovery and PROTOCOL_RUN_CONFLICT in (detail or "").lower():
+            cleared = clear_stale_protocol_run()  # raises if genuinely active
+            log.info("auto-recovered before maintenance run: %s", cleared)
+            return open_maintenance_run(_allow_recovery=False)
         raise RobotCommandError(detail)
     run_id = (body.get("data") or {}).get("id")
     if not run_id:
