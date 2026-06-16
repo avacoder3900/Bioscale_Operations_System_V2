@@ -133,7 +133,7 @@
 		</div>
 		<div class="flex gap-2">
 			<a href="/spu/validation/optical-confirmation" class="tron-text-muted text-sm hover:text-[var(--color-tron-cyan)]">← Run page</a>
-			<a href="/spu/validation/optical-confirmation/criteria" class="tron-text-muted text-sm hover:text-[var(--color-tron-orange)]">Criteria / assay</a>
+			<a href="/spu/validation/optical-confirmation/criteria" class="tron-text-muted text-sm hover:text-[var(--color-tron-orange)]">Assay setup</a>
 		</div>
 	</div>
 
