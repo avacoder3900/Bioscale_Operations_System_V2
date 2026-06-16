@@ -60,6 +60,9 @@
 	let cartScanInput = $state('');
 	let cartScanError = $state('');
 	let cartScanBusy = $state(false);
+	// Free-scanning mode: armed once, the field stays focused so the operator
+	// can scan cartridge after cartridge without clicking back in each time.
+	let scanArmed = $state(false);
 
 	// Confirm state
 	let scrapCartridge = $state(0);
@@ -103,6 +106,7 @@
 		}
 		cartScanBusy = true;
 		cartScanError = '';
+		cartScanInput = ''; // clear up-front so the field is ready for the next scan
 		try {
 			const fd = new FormData();
 			fd.set('lotId', lotId);
@@ -125,7 +129,7 @@
 			cartScanError = e instanceof Error ? e.message : 'Scan failed';
 		} finally {
 			cartScanBusy = false;
-			cartScanInput = '';
+			// Keep the field focused so the operator can scan the next cart hands-free.
 			document.getElementById('cartScanInput')?.focus();
 		}
 	}
@@ -158,10 +162,25 @@
 		setTimeout(() => document.getElementById('cartScanInput')?.focus(), 60);
 	}
 
+	// Arm free-scanning: focus the field and keep it focused. Called on entering
+	// the session and whenever the operator clicks "Start scanning".
+	function armScanning() {
+		scanArmed = true;
+		focusScan();
+	}
+
+	// Auto-refocus when the field loses focus while scanning is armed, so a stray
+	// click never forces the operator to click back into the field.
+	function handleScanBlur() {
+		if (scanArmed && ovenId && step === 'session') {
+			setTimeout(() => document.getElementById('cartScanInput')?.focus(), 50);
+		}
+	}
+
 	$effect(() => {
 		if (form?.checkAndStart) {
 			const r = form.checkAndStart as any;
-			if (r.success && r.lotId) { lotId = r.lotId; step = 'session'; focusScan(); }
+			if (r.success && r.lotId) { lotId = r.lotId; step = 'session'; armScanning(); }
 		}
 		if (form?.confirmComplete) {
 			const r = form.confirmComplete as any;
@@ -174,9 +193,11 @@
 			const r = form.resumeLot as any;
 			if (r.success) {
 				lotId = r.lotId;
+				// Recover the batch oven so the session shows it locked, never re-asks.
+				if (r.ovenId) ovenId = r.ovenId;
 				scannedCarts = [...(r.cartridgeIds ?? [])].reverse();
 				step = 'session';
-				focusScan();
+				armScanning();
 			}
 		}
 	});
@@ -189,6 +210,7 @@
 		scannedCarts = [];
 		cartScanInput = '';
 		cartScanError = '';
+		scanArmed = false;
 		scrapCartridge = 0; scrapThermoseal = 0; scrapBarcode = 0;
 		scrapReason = '';
 		sessionNotes = '';
@@ -241,6 +263,7 @@
 					<input type="hidden" name="lot1" value={lot1} />
 					<input type="hidden" name="lot2" value={lot2} />
 					<input type="hidden" name="lot3" value={lot3} />
+					<input type="hidden" name="ovenId" value={ovenId} />
 
 					<div class="space-y-4">
 						<div>
@@ -353,17 +376,34 @@
 					</div>
 
 					<div>
-						<label for="cartScanInput" class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Scan cartridge barcode</label>
+						<div class="flex items-center justify-between">
+							<label for="cartScanInput" class="block text-xs font-medium text-[var(--color-tron-text-secondary)]">Scan cartridge barcode</label>
+							{#if ovenId}
+								{#if scanArmed}
+									<span class="flex items-center gap-2 text-xs font-medium text-[var(--color-tron-cyan)]">
+										<span class="flex items-center gap-1.5"><span class="h-2 w-2 animate-pulse rounded-full bg-[var(--color-tron-cyan)]"></span>Scanning active</span>
+										<button type="button" onclick={() => (scanArmed = false)} class="rounded border border-[var(--color-tron-border)] px-2 py-0.5 text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Pause</button>
+									</span>
+								{:else}
+									<button type="button" onclick={armScanning} class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1 text-xs font-medium text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20">Start scanning</button>
+								{/if}
+							{/if}
+						</div>
 						<input
 							type="text"
 							id="cartScanInput"
 							bind:value={cartScanInput}
 							onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleCartScan(); } }}
-							disabled={!ovenId || cartScanBusy}
-							placeholder={ovenId ? 'Scan cartridge…' : 'Select an oven first'}
+							onblur={handleScanBlur}
+							onfocus={() => { if (ovenId) scanArmed = true; }}
+							disabled={!ovenId}
+							placeholder={ovenId ? (scanArmed ? 'Scan cartridge… (mode active)' : 'Click here or “Start scanning”, then scan freely') : 'Select an oven first'}
 							autocomplete="off"
-							class="mt-1 w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-bg-primary)] px-3 py-3 font-mono text-[var(--color-tron-text)] placeholder:text-[var(--color-tron-text-secondary)]/50 focus:border-[var(--color-tron-cyan)] focus:outline-none disabled:opacity-50"
+							class="mt-1 w-full rounded border bg-[var(--color-tron-bg-primary)] px-3 py-3 font-mono text-[var(--color-tron-text)] placeholder:text-[var(--color-tron-text-secondary)]/50 focus:outline-none disabled:opacity-50 {scanArmed && ovenId ? 'border-[var(--color-tron-cyan)] ring-1 ring-[var(--color-tron-cyan)]/40' : 'border-[var(--color-tron-cyan)]/50 focus:border-[var(--color-tron-cyan)]'}"
 						/>
+						{#if cartScanBusy}
+							<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">Recording…</p>
+						{/if}
 						{#if cartScanError}
 							<p class="mt-1 text-sm text-[var(--color-tron-error)]">{cartScanError}</p>
 						{/if}

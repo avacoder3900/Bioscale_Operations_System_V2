@@ -221,6 +221,16 @@ export const actions: Actions = {
 		const lot1 = (data.get('lot1') as string)?.trim() || '';
 		const lot2 = (data.get('lot2') as string)?.trim() || '';
 		const lot3 = (data.get('lot3') as string)?.trim() || '';
+		const ovenId = (data.get('ovenId') as string)?.trim() || '';
+
+		// Oven is chosen once at setup and stored on the lot so the scan session
+		// (and any later resume) never re-asks for it (WI01-BACKING-FLOW-FIXES).
+		if (!ovenId) return fail(400, { checkAndStart: { error: 'Select an oven before starting' } });
+		const oven = await Equipment.findOne({
+			equipmentType: 'oven',
+			$or: [{ _id: ovenId }, { barcode: ovenId }]
+		}).select('_id name barcode').lean() as any;
+		if (!oven) return fail(400, { checkAndStart: { error: `No oven found matching "${ovenId}"` } });
 
 		// Defense-in-depth: re-validate each selected lot matches the part it
 		// represents (dropdowns are server-populated, but a forged form submission
@@ -291,6 +301,7 @@ export const actions: Actions = {
 			status: 'In Progress',
 			startTime: new Date(),
 			inputLots,
+			backingOven: { ovenId: String(oven._id), ovenName: oven.name ?? oven.barcode ?? '' },
 			plannedQuantity: quantity,
 			stepEntries: [],
 			cartridgeIds: []
@@ -340,9 +351,12 @@ export const actions: Actions = {
 		}).select('_id name barcode').lean() as any;
 		if (!oven) return fail(400, { scanBackedCartridge: { error: `No oven found matching "${ovenId}"` } });
 
+		// Backing is the GENESIS of every cartridge record — a barcode may only be
+		// born once. Reject if a CartridgeRecord with this barcode already exists
+		// at ANY status (WI01-BACKING-FLOW-FIXES change 3).
 		const existing = await CartridgeRecord.findById(barcode).select('status').lean() as any;
 		if (existing) {
-			return fail(409, { scanBackedCartridge: { error: `Cartridge ${barcode} already exists (status "${existing.status}") — duplicate scan?`, barcode } });
+			return fail(409, { scanBackedCartridge: { error: `Cartridge ${barcode} already exists in the system (status "${existing.status}"). Backing must be the first record for a barcode — this one is already in use.`, barcode } });
 		}
 
 		// Material lineage from the parent LotRecord's input scans
@@ -679,12 +693,26 @@ export const actions: Actions = {
 		const lot = await LotRecord.findById(lotId).lean() as any;
 		if (!lot) return fail(404, { resumeLot: { error: 'Lot not found' } });
 
+		// Recover the batch oven so the resumed session shows it locked instead
+		// of re-asking (WI01-BACKING-FLOW-FIXES). Prefer the oven stored at
+		// setup; for legacy lots without it, derive from the first scanned cart.
+		let ovenId: string = lot.backingOven?.ovenId ?? '';
+		let ovenName: string = lot.backingOven?.ovenName ?? '';
+		if (!ovenId && (lot.cartridgeIds ?? []).length > 0) {
+			const firstCart = await CartridgeRecord.findById(lot.cartridgeIds[0])
+				.select('backing.ovenLocationId backing.ovenLocationName').lean() as any;
+			ovenId = firstCart?.backing?.ovenLocationId ?? '';
+			ovenName = firstCart?.backing?.ovenLocationName ?? '';
+		}
+
 		return {
 			resumeLot: {
 				success: true,
 				lotId,
 				resumeStep: 'working',
 				plannedQty: lot.plannedQuantity ?? 1,
+				ovenId,
+				ovenName,
 				// Re-hydrate the oven-scan list so already-scanned cartridges
 				// survive a page reload mid-batch (WAX-FLOW-2)
 				cartridgeIds: lot.cartridgeIds ?? []

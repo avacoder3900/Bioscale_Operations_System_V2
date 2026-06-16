@@ -32,6 +32,11 @@ const lotRecordSchema = new Schema({
 	bucketBarcode: String,
 	notes: String,
 
+	// Oven chosen at WI-01 batch setup (checkAndStart). Lets a resumed scan
+	// session show the oven as a locked value instead of re-asking the operator
+	// to pick it again (WI01-BACKING-FLOW-FIXES change 1).
+	backingOven: { ovenId: String, ovenName: String },
+
 	// Oven placement — scanned at WI-01 confirm step. Used by wax filling
 	// to compute the minimum cure time before the bucket can be consumed.
 	ovenPlacement: {
