@@ -232,10 +232,10 @@
 				<!-- Tip Lengths -->
 				<div class="rounded border border-[var(--color-tron-border)]/50 p-3">
 					<h4 class="text-xs font-medium text-[var(--color-tron-text-secondary)]">Tip Length Calibrations</h4>
-					{#if data.calibration.tipLengths.length === 0}
+					{#if ((data.calibration as any).tipLengths?.length ?? 0) === 0}
 						<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">None</p>
 					{:else}
-						{#each data.calibration.tipLengths as tl (tl.tiprack)}
+						{#each (data.calibration as any).tipLengths as tl (tl.tiprack)}
 							<div class="mt-1 text-xs">
 								<span class="text-[var(--color-tron-text)]">{tl.tipLength.toFixed(2)} mm</span>
 								<span class="text-[var(--color-tron-text-secondary)]"> — {tl.tiprack}</span>

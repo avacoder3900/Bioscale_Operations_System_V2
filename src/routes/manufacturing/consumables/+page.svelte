@@ -154,7 +154,7 @@
 		<div class="mb-3 flex items-center justify-between">
 			<h2 class="text-sm font-semibold uppercase tracking-wide text-[var(--color-tron-text-secondary)]">Cartridge Parts Stock</h2>
 			<div class="flex items-center gap-2">
-				<a href="/receiving" class="rounded border border-[var(--color-tron-cyan)]/40 px-3 py-1.5 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10">ROG (Receiving) →</a>
+				<a href="/parts/accession" class="rounded border border-[var(--color-tron-cyan)]/40 px-3 py-1.5 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10">ROG →</a>
 				<a href="/parts" class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Manage Parts →</a>
 			</div>
 		</div>
@@ -217,7 +217,7 @@
 		</div>
 
 		<p class="mb-3 text-xs text-[var(--color-tron-text-secondary)]">
-			All inventory should come in through <a href="/receiving" class="text-[var(--color-tron-cyan)] hover:underline">ROG (Receiving)</a>.
+			All inventory should come in through <a href="/parts/accession" class="text-[var(--color-tron-cyan)] hover:underline">ROG</a>.
 			Manual edits require admin authorization and a documented reason.
 		</p>
 

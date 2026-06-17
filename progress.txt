@@ -382,7 +382,57 @@ Dev is 157 commits ahead of master. It contains the bulk of the manufacturing pi
 
 ---
 
-## Phase 13: Device Logging Pipeline (Mar 27–30, 2026)
+## Phase 13: CV Capture Station + LIZA Image Processing (Mar 31, 2026)
+
+### Branch: `feature/cv-bims-integration`
+
+**CV Capture Tab (Phase 1)**
+- Live USB camera capture in browser via `getUserMedia`
+- Camera auto-fallback on NotReadableError (skips built-in, finds USB camera)
+- Multi-capture session (camera stays live between saves)
+- Resume live feed after save (no black screen)
+- Images upload to R2 via Cloudflare Worker proxy
+
+**R2 Worker Deploy**
+- Deployed `brevitest-r2-upload` Cloudflare Worker
+- Made GET requests public (so browser can render images)
+- Added `R2_WORKER_URL` + `R2_UPLOAD_SECRET` to Vercel env vars
+- Updated `.env.example` with R2 worker variables
+
+**QR Code Scanning (Phase 2)**
+- Browser-side QR detection via `BarcodeDetector` API (500ms scan loop)
+- QR overlay on live feed (green=detected, red=not detected, display only)
+- Barcode lookup API: `GET /api/cv/lookup-barcode?code=...`
+- LIZA filename format: `cartridge_capture_{QRDATA}_{001}.jpg`
+- Keyboard shortcuts: Space (capture/save), Esc (retake)
+
+**LIZA Image Processing Pipeline (Phase 3)**
+- Python CV worker: `/process-image` endpoint with exact LIZA `process_frame()` replica
+- 5-step pipeline: color correction, denoise, CLAHE, gamma, sharpen
+- Processing mode toggle: Full (LIZA 5-step) vs Raw (no processing)
+- Server-side processing triggered automatically after capture
+- Schema: `CvImage.processedPath`, `CvProject.captureSettings`
+
+**PRDs Created**
+- `docs/prds/CV-CAPTURE-STATION.md`
+- `docs/prds/CV-IMAGE-PROCESSING.md`
+- `docs/prds/R2-WORKER-UPLOAD-PROXY.md`
+
+### MAG-VAL: Magnetometer Validation Admin Override (2026-03-31)
+- **MAG-VAL-01 + MAG-VAL-02:** Admin override for failed magnetometer validation sessions
+- Added `override` subdocument to ValidationSession schema (by, at, reason, originalResult)
+- Added `overrideApproval` form action to `/validation/magnetometer/[sessionId]/+page.server.ts`
+- Requires admin:full permission + bcrypt password re-entry + reason (min 10 chars)
+- Updates both ValidationSession (overallPassed → true) and SPU record (status → overridden)
+- Full AuditLog trail with before/after snapshots
+- Load function updated to expose override state to frontend
+- Companion PRD: `docs/prds/DHR-VALIDATION-DISPLAY.md` (frontend display, separate branch)
+- Files changed: `validation-session.ts` (model), `[sessionId]/+page.server.ts` (action + load)
+- PRD: `docs/prds/MAG-VAL-ADMIN-OVERRIDE.md`
+
+---
+
+## Phase 13b: Device Logging Pipeline (Mar 27–30, 2026)
 
 ### Overview
 Built the BIMS side of the firmware device logging pipeline. Firmware v74 uploads session logs via Particle Cloud → AWS Lambda middleware → BIMS API. The Lambda parses firmware log text, extracts checkpoint/crash data, and POSTs structured data to BIMS endpoints. BIMS owns all writes (nanoid IDs, immutable middleware, Mongoose validation).
@@ -448,3 +498,2148 @@ Firmware `ms` timestamps are from the device's internal clock; webhook/event tim
 3. Deploy updated Lambda (`index.mjs` + `db-adapter.mjs`)
 4. Create Particle webhook for `device-log` events
 5. Deploy firmware with session log upload capability
+
+
+================================================================================
+# 2026-04-22 → 2026-04-23 — Cartridge/Backing-Lot Refactor + Manufacturing Analytics
+================================================================================
+
+## Starting problem (2026-04-22)
+
+Dashboard was lying: Oven 1 showed 0 cartridges despite physically holding 83.
+"Backing cartridges" pipeline count stuck too high. Wax QC Yield stuck at 0%.
+
+## Root causes discovered
+
+1. **Oven tile hardcoded `count: 0`** in cartridge-dashboard/+page.server.ts:146-151.
+2. **BackingLot.cartridgeCount never decremented** — set once at WI-01 time, stayed
+   stale forever regardless of how many cartridges wax-filling pulled.
+3. **Two parallel CartridgeRecord pools** that never reconciled:
+   - WI-01 → nanoid-ID placeholders w/ `status='backing'` that were never consumed
+   - Wax-filling `loadDeck` → UUID records from scanned barcodes (different IDs)
+   Result: lineage fragmented, ghost counts inflated forever.
+4. **waxQc.status='Accepted' was never written** on the happy path — only the
+   reject path wrote `'Rejected'`. So "Wax QC Yield" KPI = 0 numerator.
+
+## Initial fixes (2026-04-22)
+
+Code changes:
+- `cartridge-dashboard/+page.server.ts`: oven tile now queries BackingLot sum
+- `wax-filling/+page.server.ts` `loadDeck`: decrements BackingLot.cartridgeCount,
+  marks `consumed` at zero, voids stale WI-01 placeholders on consumption
+- `wax-filling` + `opentron-control/wax/[runId]` `completeQC`: writes
+  `waxQc.status='Accepted'` for every non-rejected cart
+- `equipment/activity`, `equipment/location/[locationId]`, `cartridge-admin/storage`:
+  status filters + BackingLot-based oven counts
+- `manufacturing/consumables/+page.server.ts`: `backedCount` reads BackingLot sum
+
+Backfills applied:
+- 9,641 historical cartridges → `waxQc.status='Accepted'` (system-backfill tag)
+- 2 BackingLots → `status='consumed'`, `cartridgeCount=0`
+- 56 + 2 WI-01 nanoid placeholders voided
+- 27 final nanoid stubs deleted
+
+## Major redesign (2026-04-22 evening)
+
+User clarified intent: cartridges should only individuate when their barcode is
+FIRST SCANNED at wax deck loading. WI-01 should track raw-material lots and
+aggregate bucket counts, nothing per-cartridge.
+
+Refactor:
+- WI-01 no longer creates CartridgeRecord docs; only LotRecord + BackingLot
+- `loadDeck` resolves parent LotRecord via bucketBarcode and copies material
+  lineage (cartridgeBlankLot, thermosealLot, barcodeLabelLot, qrCodeRef,
+  ovenEntryTime) onto each scanned cartridge
+- CartridgeRecord schema extended: parentLotRecordId, lotQrCode, cartridgeBlankLot,
+  thermosealLot, barcodeLabelLot, ovenExitTime added to `backing` subdoc
+- Dashboards + oven tiles all use `BackingLot.cartridgeCount` as source of
+  truth instead of counting CartridgeRecords
+- Reagent-filling: removed defensive `$setOnInsert: status='backing'` orphan path
+
+Commit `97082dc` on dev → merged to master → main (deployed).
+
+## Thorough audit via Opus 4.7 subagent
+
+Full Mongo verification. Key findings:
+- BLOCKER-1: refactor committed but not yet deployed at time of audit. 98 today's
+  cartridges were missing the new lineage fields (fixed via follow-up backfill).
+- BLOCKER-2: lot `2941bb67` over-pulled — WI-01 recorded 54 cartridges, 66 were
+  actually pulled across 4 runs. Deployed code had no decrement to stop it.
+- HIGH-1: 133 + 88 cartridges with backing.lotId pointing at LotRecord._id
+  instead of the bucket barcode (legacy format).
+- HIGH-2: duplicate LotRecord on bucket 5b867012 (qty=1 vs qty=2, 2 days apart).
+- MEDIUM: 101 nanoid `_id` CartridgeRecord rows remaining (seed / test fixtures).
+- MEDIUM: 242 dangling `inventory_transactions.cartridgeRecordId` references.
+- MEDIUM: `manufacturing/+page.server.ts` still using dead `currentPhase` field.
+- R1: loadDeck `$inc` atomic but "≤0 → consumed" flip separate → transiently
+  negative cartridgeCount possible; no pre-check gate against over-pull.
+- R2: `system-backfill` operator stamp on 9,641 waxQc rows — compliance smell.
+- R3: cancelRun/abortRun still set `status='backing'` on cartridges (invalid
+  post-refactor).
+- R5: lineage fields written via `$setOnInsert` → re-scan never updates them.
+
+## Fixes for audit findings (2026-04-23)
+
+Code fixes (landed in `master` at `b8fcad7`, then into `main`):
+- `manufacturing/+page.server.ts`: `currentPhase` → `status`
+- `wax-filling/loadDeck`: atomic over-pull guard via conditional `findOneAndUpdate`
+  with `cartridgeCount: {$gte: N}` — fails with clear error if bucket lacks stock;
+  rollback on bulkWrite failure
+- `cancelRun` / `abortRun`: delete aborted CartridgeRecords + refund BackingLot
+  `cartridgeCount` — no more `status='backing'` revert
+- Lineage fields moved from `$setOnInsert` to `$set` so re-scans populate them
+- Reagent-filling bare-upsert now writes `status='reagent_filling'` on insert
+  (transient state instead of null). Added to enum.
+
+Data reconciliations:
+- 176 CartridgeRecord `backing.lotId` values remapped from LotRecord._id to bucket
+- 288 cartridges got retroactive material lineage
+- 55 CART-* seed orphans voided
+- 70 latest-WI-01 nanoid stubs deleted
+- 2 missing BackingLots (fde9a2aa, ffda9702) retro-created as status=consumed
+- Duplicate LotRecord KnvhBjHKSC0jStX1rQw4s marked Superseded
+- Lot V1BSHFzMXsNAxYiP59o6b: `actualConsumedCount: 66` field + `corrections[]`
+  entry + AuditLog RECONCILE row documenting the 12-cartridge over-pull with
+  root cause. **12 cartridges still need QA human review before shipping.**
+- AuditLog BACKFILL entry for the 9,641 waxQc rows with rationale + authorizer
+
+## Equipment settings viewer
+
+New route `/manufacturing/opentron-control/settings` — read-only card view of
+current wax + reagent filling settings (timers, temperatures, volumes) with
+links out to the existing admin-gated edit pages. Gear icon button added to
+the main Opentron Control header.
+
+## Manufacturing analytics page (ball of clay)
+
+New route `/manufacturing/analysis` (commit `f660442` on dev, merged to master
+at `b8fcad7`). User said "build everything, we'll refine by removal."
+
+Eleven tabs: Overview, Cycle Time, Yield & Failures, Material Flow, Compare,
+SPC Alerts, FMEA, Manual Input, All Runs, Reports & Export, DOE Planner.
+
+New Mongoose models:
+- `ProcessAnalyticsEvent` — manual observations/deviations/MSA/environmental/etc.
+- `SpecLimit` — per-(process, metric) LSL/USL/target/cpkMin, empty by default
+- `FmeaRecord` — S × O × D = RPN auto-computed on save
+- `SpcSignal` — Nelson rule hits with ack/close workflow
+- `CauseEffectDiagram` — 5M1E fishbone per process
+
+Data layer:
+- `src/lib/server/analytics/types.ts` — canonical ProcessType enum, shift inference
+- `src/lib/server/analytics/runs-feed.ts` — unified UnifiedRun view across
+  LotRecord, WaxFillingRun, ReagentBatchRecord, LaserCutBatch
+- `src/lib/server/analytics/stats.ts` — describe, histogram, Pareto, I-MR chart,
+  p-chart, Nelson rules 1-8, Cp/Cpk + DPMO + process sigma, one-way ANOVA,
+  two-sample t-test, linear regression, FPY/RTY
+
+Sub-page `/manufacturing/analysis/spec-limits` — admin-gated editor for setting
+LSL/USL/target per (process, metric) with required rationale field for 21 CFR
+820.250 regulatory traceability.
+
+Added nav link "Analysis" to manufacturing sidebar.
+
+Deps added: `simple-statistics`, `uplot`.
+
+Phase 1 intentionally leaves capability analysis (Cp/Cpk) disabled until spec
+limits are set empirically from stable baseline. FMEA / DOE analysis / Gage R&R
+stubs present but empty.
+
+## Compliance PDF
+
+Generated `summary.pdf` (US Letter, 101 KB) summarizing the refactor in
+human-readable form. Committed at root of repo + copied to Desktop as
+`BIMS-Cartridge-Refactor-Summary.pdf`.
+
+## CORE RULE established (2026-04-23)
+
+User clarified: even when they say "approve everything" / "all permissions
+allowed" / "execute without asking," **`main` is explicitly excluded**. Pushing
+to `main` requires its own per-action authorization referencing `main` or
+"production" or "deploy" directly.
+
+Memory updated:
+- `feedback_no_master_merge.md` — hard rule, supersedes autonomy memory for main
+- `feedback_autonomy.md` — clarified that blanket permission excludes main
+- MEMORY.md index — reflects CORE RULE prominently
+
+Claude workflow: edits → commit on dev → push dev → merge dev into master →
+push master → **STOP.** Hand off to user: "pushed to master at `<sha>` — ready
+for you to promote to main when you're ready."
+
+## Current branch state (end of session 2026-04-23)
+
+- `dev` at `f660442` (origin up to date)
+- `master` at `b8fcad7` (origin up to date) — includes all refactor + audit
+  fixes + analytics scaffolding
+- `main` at `87ceba7` — was pushed before the CORE RULE was established;
+  **from now on, user promotes main themselves**
+- Currently on `ralph/equipment-connectivity-prd` at `591c056` — snapshot of
+  in-progress equipment-connectivity work, pushed to origin
+
+## Known follow-ups
+
+- QA review of the 12 unaccounted cartridges from bucket `2941bb67` before any
+  ship
+- Once 30+ runs of each process have accumulated, set empirical spec limits
+  and turn on Cp/Cpk on the analytics page
+- Nightly job to auto-open SPC signals when Nelson rules trip on new data
+  (scaffold present; scheduler not yet wired)
+- Rejection-reason taxonomy: extend `rejectionReasonCodes` with
+  category/severity/costWeight for Pareto stacking
+- xlsx multi-sheet export on analytics Reports tab (dep already installed)
+- Re-evaluate analytics tab set with user after real-world use — refine by
+  removal, not addition
+
+
+---
+
+## Session 2026-04-23 — Equipment Audit, Inventory Ops, PRD Authoring
+
+Full transcript saved to `docs/SESSION-LOG-2026-04-23.md` (appended here as a dedicated file to avoid conflicts with parallel-terminal writes to this log).
+
+Headlines:
+- Authored PRD `docs/prds/PRD-EQUIPMENT-MASTER-CONNECTIVITY.md` covering 9 Ralph-executable stories to fix 7 Equipment connectivity disconnects + S9 legacy wax-filling link cleanup (11 call sites across 8 files).
+- DB ops: cartridgesPerLaserCutSheet 6 → 16; deleted 11 test cartridges from FRIDGE-001 (audit preserved); voided wax-filling run TF44Oxqs2RqL6KDI_yXBG with note; 2 placeholder receiving lots created earlier (PT-CT-104 qty 500, PT-CT-106 qty 400, awaiting real supplier barcode swap).
+- Audits: full UI connectivity audit (SPU sidebar 100% broken — 10 links; handoff brief produced for coworker), Equipment master-controller deep-dive (qualified NO — metadata master, not transaction master).
+- Branch `ralph/equipment-connectivity-prd` commit `3c354e7` pushed. PR URL: https://github.com/avacoder3900/Bioscale_Operations_System_V2/pull/new/ralph/equipment-connectivity-prd
+- Hard rule noted: NEVER push/merge to `main`. Stop at `master`.
+
+See `docs/SESSION-LOG-2026-04-23.md` for the full 16-section record including file paths, line numbers, DB end state, diagnostic scripts produced, and open items.
+
+
+---
+
+## Session 2026-04-23 — Reagent Filling: Research-Run Mode + Hidden Assay Filter + Tube Consumption Fix
+
+Parallel terminal to the equipment-audit session above. Full audit briefing at `docs/audit-handoff-2026-04-23.md`.
+
+Headlines:
+- **Research run mode** added to reagent filling. Operator picks Production (assay required) or Research (no assay) at Setup. Research bypasses the assay-required gate and lets cartridges flow through filling → inspection → seal → cure → storage → link → test without any assay info. Schema: `ReagentBatchRecord.isResearch` + `CartridgeRecord.reagentFilling.isResearch` (no migration needed; undefined reads as false). Committed as `9bd7c12` on `dev`.
+- **Hidden assay filter** — applied `hidden: { $ne: true }` to 8 operator-facing AssayDefinition dropdowns (home dashboard, reagent-filling, opentrons history, cartridge detail, cartridge-admin {statistics, release, filled, failures}). Left admin/settings pages alone (they create assays with `hidden: true` and must see them). Memory note: `project_reagent_tube_consumption.md`.
+- **Inventory bug fix** — `completeRunFilling` was consuming 1× PT-CT-107 per cartridge (overstated). Now: flat 4 per run regardless of cartridge count. Applies to both production and research. TODO inline: scale by assay × batch when the real formula is decided.
+- **Mongo read-only finding** (`scripts/diag-finished-cartridge-fields.ts`): 583 cartridges are already in `status: 'linked'` with `reagentFilling.assayType = null` — proves the downstream link/test flow tolerates null assayType today, so research cartridges will flow identically.
+- **Branch chaos** — ~3 parallel terminals were pushing during this session. Eventually merged `ralph/equipment-connectivity-prd` → `dev` via commit `61e8c04` after ~10 attempts (each blocked by other terminals switching branches mid-operation and conflicting on `.claude/settings.local.json`). Final dev HEAD (end of session): `77bc5d7` with ralph fully merged in.
+- **⚠️ Master was pushed to by another terminal** (`787bb5b` + `26c8c56`) — violates the "never push to main/master" hard rule. Not this terminal. User needs to confirm if intentional.
+
+Files changed for the feature (all on dev):
+- `src/lib/server/db/models/reagent-batch-record.ts` — +`isResearch`
+- `src/lib/server/db/models/cartridge-record.ts` — +`reagentFilling.isResearch`
+- `src/lib/components/manufacturing/reagent-filling/SetupConfirmation.svelte` — Production/Research toggle, gate logic
+- `src/routes/manufacturing/reagent-filling/+page.svelte` — `isResearchRun` state threaded through createRun/confirmSetup
+- `src/routes/manufacturing/reagent-filling/+page.server.ts` — hidden filter, 3 actions wired, inventory fix
+- `src/routes/+page.server.ts`, `src/routes/cartridges/[cartridgeId]/+page.server.ts`, `src/routes/manufacturing/opentrons/history/+page.server.ts`, `src/routes/cartridge-admin/{statistics,release,filled,failures}/+page.server.ts` — hidden filter
+
+Handoff for tomorrow's audit: `docs/audit-handoff-2026-04-23.md` (commit `614b2fb`).
+
+
+================================================================================
+# 2026-04-23 → 04-24 — Analytics Demo Page + Training Mode + Misc Fixes
+================================================================================
+
+Full handoff doc: `docs/SESSION-HANDOFF-2026-04-24-ANALYTICS-DEMO.md`.
+
+## Headlines
+
+- Built `/manufacturing/analysis/demo` — fabricated-data twin of the real
+  analytics page. Uses deterministic seeded RNG (seed=20260423) in
+  `src/lib/server/analytics/demo-seed.ts`. Cached at module scope, zero
+  Mongo writes. 1,115 runs across 30 days, ~4,100 cartridges end-to-end.
+- All form actions on the demo are no-ops that return a "demo mode — not
+  persisted" notice.
+- Rebalanced demo data flow so cartridge counts are physically coherent
+  stage-to-stage (wax was over-consuming WI-01 by 2,292 carts; top-seal +
+  QA-QC were tiny at 42+28). Final mix: 63/40/92/105/230/265/180/140.
+  Per-stage flow verified by `scripts/audit-demo-consistency.ts`.
+- Password gate on demo — cookie-based, 24-hour session, password
+  `processadmin`. httpOnly, sameSite=strict, secure. Lock/unlock actions
+  in `+page.server.ts`.
+- Training mode overlay — ON/OFF toggle, green training panels on every
+  tab, blue glossary drawer with 23 term definitions, Start Here intro
+  banner explaining common vs special cause as the key concept. Written
+  for a sophomore engineering student new to process engineering.
+  Covers Cp/Cpk/DPMO/FPY/RTY/Nelson rules/ANOVA/FMEA/DOE/etc.
+- Demo operators renamed: 12 full names — Nick Fox, Rick Knox, Mick Cox,
+  Vic Brooks, Nico Sanchez, Leandro Valdez, Alejandro Hernandez,
+  Alessandro Gonzalez, Sandro Rodriguez, Evandro Fernandez, Dario Martinez,
+  Armando Gutierrez. Real page untouched.
+- Configurable pre-QC cooldown — was hardcoded 10 min in two completeQC
+  actions, now `ManufacturingSettings.waxFilling.minCoolingBeforeQcMin`
+  with default 2 (seeded via `scripts/set-cooling-before-qc-2min.ts`).
+  Editable on wax-filling settings page. AuditLog written on seed.
+- WI-01 naming audit — read-only. Identified 28 code refs in 17 files,
+  65 doc refs, 26 script refs. Mongo fingerprint: 13 LotRecord qrCodeRefs
+  prefixed `WI01-`, 35 inventory_transactions with WI-01 notes, 16
+  backing-type LotRecords. DB layer already uses `'backing'` — obsolete
+  naming lives in URL path + enum key + QR prefix + comments. User said
+  wait for Friday to work through it; do not touch yet.
+- Deploy fix — Svelte compile error on the demo page. `min{(USL − μ)/3σ,
+  (μ − LSL)/3σ}` in the Cpk glossary entry — Svelte parses `{` as a
+  template expression. Rewrote as prose. Unblocks Vercel deploy. Commit
+  `1573df7`.
+
+## CORE RULE (lives in memory)
+
+`~/.claude/projects/.../memory/feedback_no_master_merge.md` — **never push
+to main**. Even when user says "all permissions allowed" or "approve
+everything," `main` is excluded. Promoting master → main is user-only.
+
+## Branch state end of session
+
+- `dev`    = `1573df7` (analytics demo + training + cooldown config + brace fix)
+- `master` = `b622586` (behind dev — merge dev → master as next step)
+- `main`   = `87ceba7` (OFF-LIMITS; user promotes)
+
+## Carry-forward compliance flag
+
+Lot `V1BSHFzMXsNAxYiP59o6b` / bucket `2941bb67`: WI-01 recorded 54
+cartridges; 66 actually pulled. 12 extras have unverified provenance.
+Documented via corrections[] + AuditLog RECONCILE. **Must not ship to
+customer without human QA review.** Carry this until closed.
+
+## Session 2026-05-04/05 — Print Barcodes Overhaul + Fridge Breakdown
+
+### Print barcodes (`/manufacturing/print-barcodes`)
+
+Long thread of incremental fixes against a single page. Final state:
+
+- **Print rendering:** entire 8×10 sheet composes onto a single off-DOM
+  canvas at 300 DPI → one `<img>` per sheet → one PDF Image object per
+  page. Earlier per-cell strategies (canvas, SVG, img+data-URI) all
+  tripped HP "PDL PDF limitcheck" because HP firmware caps near 50
+  image XObjects/page; one-image-per-sheet is comfortably under that.
+- **Layout:** Avery 94102 (8×10 / 0.75" cells / 0.125" gutters /
+  0.23"+0.46" page margins) with operator-tuned grid shift (`shiftX
+  = 0.1125 * cellSize`, `shiftY = 0.10 * cellSize`) and 15% in-place
+  shrink on QR + ABC labels + UUID text (centers preserved). UUID
+  text rendered as two lines split at the midpoint.
+- **Print stream chrome:** `display:none` on `header`, `aside.mfg-sidebar`,
+  `.tron-scanlines` so they never enter the print PDF (was a big
+  contributor to the limitcheck before this fix).
+- **Print dialog flow:** "Print Sheet" disables itself while open;
+  `afterprint` event opens an "Add to inventory?" modal. Trailing
+  blank page eliminated by gating `break-after: page` to all-but-last
+  sheet.
+- **Inventory wiring (final design — commit `8dd3a04`):** consolidated
+  to `PT-CT-106` "Barcodes" only (drops the short-lived `PT-CT-115`
+  "Barcode Template Sheets" idea). On confirm, two transactions hit
+  the same part via the shared `recordTransaction` helper:
+    - `consumption: sheetsToPrint`  (sheets fed in)
+    - `creation: totalLabels`       (labels printed)
+  Net per sheet = +(LABELS_PER_SHEET − 1) = +79 ⇒ WI-01 cartridge-back's
+  `if (have < quantity)` check is never starved. `BarcodeInventory`
+  legacy mirror still decremented for the cart-mfg-dev "Barcode sheets
+  low" alert (one-way drain — pre-existing dysfunction, flagged for
+  follow-up).
+- **Generate vs Confirm:** `?/print` only mints UUIDs and previews —
+  no DB writes. `?/addToInventory` is the commit point; "No, discard"
+  just navigates back, no cleanup needed (UUIDs are stateless).
+
+Commits on `dev`: `8bd4e82`, `ef7ee53`, `581dad1`, `bf423f5`, `eab4e18`,
+`fe579da`, `01ae0ca`, `8dd3a04`.
+
+### Fridge totals breakdown (5 surfaces)
+
+Mirroring the existing `/inventory/fridge-storage` split (commit `cb6ff0d`)
+across every other surface that summarises fridges:
+
+- `/equipment/activity` per-fridge card (commit `b4b09d2`)
+- `/equipment/fridges-ovens` per-row pill, `/equipment/location/[id]`
+  stats grid + filter buttons, `/cartridge-dashboard` Fridge Storage
+  list, root `/+page.server.ts` `fridgeCapacity.used` count
+  (commit `f308160`)
+
+Three buckets per fridge, all filtered against `getCheckedOutCartridgeIds()`:
+- `wax_accepted`: `status='wax_stored'` (post-QC, live inventory)
+- `wax_scrapped`: `status='scrapped'` w/ `waxStorage.location` set
+  (QA quarantine, physically still occupying the slot)
+- `reagent`: `status∈{stored, reagent_filled}` w/ `storage.fridgeName`
+  set (post-reagent-fill bucket)
+
+`equipment/location/[locationId]` also added a 'scrapped' phase badge
+style (red) and gained a `wax_scrapped` filter button.
+
+### Heads-up for next session
+
+- `BarcodeInventory.avery94102SheetsOnHand` is a one-way drain (only
+  decremented on print, never incremented on ROG). Three readers:
+  `manufacturing/+page.server.ts`, `cart-mfg-dev/+page.server.ts`,
+  `api/manufacturing/dashboard/+server.ts`. To finish consolidation,
+  refactor those to read `PT-CT-106.inventoryCount` and stop touching
+  `BarcodeInventory`.
+- Branch `feat/scanner-on-ot2` exists locally and on origin; not
+  related to this session but caused some confusion mid-session
+  because rebase/stash bounced HEAD between branches.
+
+## Session 2026-05-04/05 — Laser-cut traceability, pre-wax checkout, MOCREO heartbeat, ask-bims yield fix
+
+Four shipped features, all on `dev`. Each commit referenced inline.
+
+### Laser-cut produced batches mirror as ReceivingLots on PT-CT-112 (`5a5a7be`)
+
+The wax-filling → cartridge-back → laser-cut chain was updating
+`PT-CT-112.inventoryCount` via `recordTransaction` (creation tx with
+`partDefinitionId`) but not creating a `ReceivingLot`, so internally
+produced batches never appeared on the Receiving Lots tab of the part
+page (only ROG-accessioned lots did). Fix: in
+`src/routes/manufacturing/laser-cutting/+page.server.ts` `recordBatch`,
+after the output `recordTransaction`, look up the part doc and create a
+matching `ReceivingLot` keyed by `outputLotId` with
+`status='accepted'`, `inspectionPathway='coc'`,
+`cocMeetsStandards=true`, quantity=stripsProduced.
+
+Backfill: `scripts/backfill-laser-cut-receiving-lots.ts` walks
+`laser_cut_batches`, sources qty from the matching InventoryTransaction
+(strips/sheet ratio drifted 6→16 between Apr 22 and Apr 27 — recomputing
+with current ratio overstates older batches), and skips batches with no
+matching tx (predate the partDefinitionId wiring in commit `6795b23`,
+never moved inventory). Ran live: 4 lots backfilled (LOT-20260422-RFIZ
+qty=18, LOT-20260427-DZCO qty=160, LOT-20260427-OFBC qty=96,
+LOT-20260504-MKBM qty=240), 3 pre-wiring orphans skipped. PT-CT-112's
+Receiving Lots tab now shows 6 lots / 536 units.
+
+### Pre-wax cartridge removal from a backing lot (`00034b5`)
+
+Operators need to pull cartridges from a backing-lot bucket sitting in
+the oven before wax filling (over-counted bucket, inspection pull, etc).
+Adds `removeFromBackingLot` action and a second card on
+`/manufacturing/scrap`. Operator scans the bucket barcode (which IS the
+`BackingLot._id`) and enters a headcount.
+
+Mirrors `wax-filling/loadDeck`: atomic conditional decrement on
+`BackingLot.cartridgeCount` via
+`findOneAndUpdate({_id, cartridgeCount: {$gte: count}}, {$inc: {-count}})`
+which refuses to over-pull, and flips status to `'consumed'` when the
+bucket drains. **No CartridgeRecord rows are created or touched** — at
+the backing stage cartridges only exist as an aggregate count, individual
+records are first created at wax-deck loading. The audit trail lives on
+`ManualCartridgeRemoval` (extended with `backingLotId` + `cartridgeCount`,
+backward-compat) and an `AuditLog` `CHECKOUT` entry against
+`tableName='backing_lots'`.
+
+UI: Recent Checkouts table now badges pre-wax entries with a "Pre-wax"
+chip + the lot id; the "Cartridges" expansion is hidden on those rows
+(no UUIDs to show). Verified end-to-end via
+`scripts/sim-pre-wax-removal.ts` (10 cases, including over-pull
+rejection, drain → consumed transition, and post-drain guard).
+
+### MOCREO half-hour heartbeat with reminder cadence + auto-resolve (`cf621bd`)
+
+The 5-min sync at `/api/cron/mocreo` already detected gateway outages
+and fired a single email, but never re-emailed and never auto-resolved
+— operators stayed in the dark while the gateway stayed down. Adds
+`/api/cron/mocreo-heartbeat` at `*/30 * * * *` that re-emails every 30
+min while the outage persists and clears the alert + sends a recovery
+email when probes start reporting again.
+
+Lifecycle of a `gateway_outage` alert:
+- t=0      5-min sync detects outage → creates alert + initial email
+- t=30/60  heartbeat sees still-open alert + lastNotifiedAt ≥ 25min ago
+           → sends reminder #1, #2, ... (subject prefixes "[REMINDER #N]")
+- t=Nm     readings resume → either cron auto-resolves + recovery email
+
+Heartbeat is **DB-only** — it reads `TemperatureReading` and the open
+alert from Mongo, never calls the MOCREO API. So it correctly fires on
+cascade loss, building power loss, gateway crash, AND if the 5-min sync
+itself stops firing for any reason. Reminder threshold is 25min, not 30,
+to give the cron 5min of slack so a slightly-late fire doesn't skip a
+beat (Vercel cron timing isn't second-precise).
+
+Two guard rails on the email side:
+- Defensive create only fires on confirmed outage signal
+  (`haveSignal && isOutage`) — no false alarms when there's no probe data
+- Auto-resolve requires positive evidence (`haveSignal && !isOutage`).
+  An outage that outlasts the 7-day reading lookback returns
+  `reminder_sent` (alert stays open, reminders continue) rather than
+  falsely emailing "Gateway recovered."
+
+Schema additions on `TemperatureAlert`: `lastNotifiedAt`,
+`notificationCount`, `resolvedAt`, `resolvedReason` (all backward-compat).
+`notifyGatewayOutage` accepts optional `firstSeenAt` + `reminderNumber`
+so reminders render with downtime + reminder count in the subject. New
+`notifyGatewayRecovered` for the recovery one-shot. The 5-min sync also
+auto-resolves on recovery so both crons converge on the same state
+whichever fires first. Verified via `scripts/sim-mocreo-heartbeat.ts`
+(10 cases).
+
+### ask-bims `get_run_yield` casing bug (`62ed216`)
+
+User reported "15 wax_stored cartridges still pending QC" but the DB
+showed 0. Trace: an AI agent calling `get_run_yield` for run
+`7ahsRsv6Y7Hy_1cf1_EPm` (17 carts) reported 0 accepted / 0 scrapped /
+17 pendingQc. Real ground truth from `find_cartridges` was 15 Accepted
+/ 2 Rejected / 0 pending.
+
+Root cause was **purely casing**, not field path: schema enum is
+`['Accepted', 'Rejected', 'Pending']` but the comparisons in
+`get_run_yield` were lowercase (`if (qc === 'accepted')`), so no cart
+ever matched the accepted or rejected branch and everything fell through
+to `pendingQc`. Fixed by normalizing input to lowercase before comparing
+(rather than matching capitalized literals) so the bug can't recur if
+the schema enum casing ever drifts again.
+
+Subtle gotcha that made this look like a field-path bug: sibling tool
+`find_cartridges` projects the same DB field (`waxQc.status`) under the
+output name `qcStatus`. The user's diagnostic showed `qcStatus` as a
+"top-level field," but it's just an API rename in the projection. Don't
+change the field path — `c.waxQc?.status` is the actual DB nesting and
+it was already correct in `get_run_yield`.
+
+### Repo layout heads-up
+
+There are TWO git checkouts of this repo on disk:
+- Outer: `/Users/brevitest/Bioscale_Operations_System_V2/` (this is the
+  one to edit; current branch tracks `origin/dev`)
+- Nested: `/Users/brevitest/Bioscale_Operations_System_V2/Bioscale_Operations_System_V2/`
+  (separate clone, was on `master`; production deploys from this branch
+  via Vercel based on the strips/sheet text observed in production
+  inventory transactions)
+
+Caused some confusion mid-session: a `tsx` run from the wrong CWD
+resolved scripts under the nested clone. To ship a fix to production,
+merge `dev` → `master` so Vercel rebuilds. Untracked `Bioscale_Operations_System_V2/`
+in `git status` is the nested clone, not files to commit.
+
+### Heads-up for next session
+
+- The pre-wax checkout commit modifies `src/routes/manufacturing/scrap/+page.svelte`
+  — `CLAUDE.md` says `.svelte` files are frozen, but the user explicitly
+  authorized this edit ("yes you have all permissions go ahead").
+- The MOCREO heartbeat depends on the cron actually firing every 30
+  min. Vercel has had cron-registration drift before (history of
+  "trigger Vercel rebuild" commits in May 2026); first sanity check on
+  the next session is `vercel cron list` or the dashboard to confirm
+  `/api/cron/mocreo-heartbeat` is registered.
+- Backfill script `scripts/backfill-laser-cut-receiving-lots.ts` is
+  idempotent (`lotId`-keyed) and safe to re-run. New laser-cut batches
+  auto-create their own ReceivingLots; only old batches needed it.
+
+## Session 2026-05-06 — Cart-MFG Checkout: Status-Agnostic Removal + Count Consistency
+
+### Problem
+
+Operator reported: cart-MFG manual checkout page rejected 5 cartridges
+with "status is 'completed', expected 'wax_stored'" plus 1 "not found".
+The 5 had moved past wax_stored into completed (already QC'd) — system
+recorded a state the cart never physically reached. Operator needed a
+way to physically remove them from inventory regardless of current
+status, without overwriting any production state.
+
+### Resolution
+
+`src/routes/manufacturing/scrap/+page.server.ts` `removeWaxStoredCartridges`
+action: dropped the wax_stored eligibility gate. Validate existence
+only — any status (wax_stored, scrapped, completed, etc.) is now
+checkout-eligible. Status is preserved on checkout. The action records
+the physical-removal event in `ManualCartridgeRemoval`, plus a
+per-cartridge `AuditLog` entry that captures `statusAtCheckout` so the
+audit trail self-describes. Form action name kept (UI compat).
+
+### Count consistency sweep
+
+`getCheckedOutCartridgeIds()` was already in place at
+`src/lib/server/checkout-utils.ts` and applied to ~10 location-based
+counts (fridge/oven occupancy). It was MISSING from every status-based
+count. Patched all of them so a manual checkout drops the cart from
+EVERY count simultaneously:
+- `routes/manufacturing/+page.server.ts` — phaseCounts, rejectedToday/Week, producedToday/Week
+- `routes/cartridge-dashboard/+page.server.ts` — phase/QC/inspection/7-day/assay
+- `routes/manufacturing/consumables/+page.server.ts` — phaseCounts + voided/scrapped tile
+- `lib/server/ask-bims.ts` — count_cartridges_by_status, get_run_yield
+- `lib/server/analytics/runs-feed.ts` — per-run QC aggregation
+- `routes/+page.server.ts` — already done in earlier f4062f5 commit
+
+### Skipped on purpose
+
+`lib/server/services/equipment-status.ts:hasReferences` is the
+delete-orphan guard. A checked-out cartridge still has a
+`waxStorage.locationId` field referencing the fridge — that reference
+must still block fridge deletion (otherwise checkouts would let you
+delete equipment that has historical refs). Live equipment occupancy
+queries already filter (in `/equipment/activity` etc.).
+
+Pre-wax (BackingLot) checkout was already correct via atomic decrement
+in `removeFromBackingLot` action.
+
+### Pattern: any new cartridge count query MUST filter
+
+Going forward, every aggregation/count over `CartridgeRecord` that
+represents "currently in the system" must include `_id: { $nin:
+checkedOutIds }` where `checkedOutIds = await getCheckedOutCartridgeIds()`.
+Otherwise checked-out carts double-count. The exception is queries
+that intentionally include historical references (delete-orphan
+guards, audit reports).
+
+### Heads-up for next session
+
+- The user authorized a sweep to fix all 271 svelte-check errors, but
+  paused that work to commit the checkout fix first. A comprehensive
+  remediation plan was generated (8 phases, see chat history) — Phase
+  1 is `npm install` (4 declared-but-uninstalled packages: resend,
+  simple-statistics, @anthropic-ai/sdk, bwip-js).
+- Mongoose 9.2.3 is installed but `CLAUDE.md` says Mongoose 8 — three
+  errors in `user.ts:108-114` are from Mongoose 9's new
+  deleteOne/deleteMany overloads. Worth confirming the upgrade was
+  intentional before remediating those.
+- `vercel.json` has an uncommitted addition for
+  `/api/cron/cartridge-cleanup-reminder` paired with an untracked
+  route folder `src/routes/api/cron/cartridge-cleanup-reminder/` — not
+  from this session, looks like in-progress work the user has on a
+  separate workstream.
+
+## Session 2026-05-06 — 500 fixes, manufacturing pipeline page, status-set centralisation, daily reminder cron
+
+Six shipped pieces. Each commit on `dev`.
+
+### AuditLog enum drop (`b6932c9`, `84d3ef2`)
+
+User reported a 500 on Confirm QC for the post-wax cartridges path,
+then a follow-up 500 on the Go Back button on the post-OT-2 assign-
+fridge page. Root cause was the AuditLog `action` field's enum:
+`['INSERT','UPDATE','DELETE','PHASE_ADVANCE','CHECKOUT']` rejected
+the 9+ other action strings the codebase actually writes
+(`IMPROPER_ORDER_BLOCKED`, `GO_BACK`, `REASSIGN_STORAGE`, `SYNC`,
+`IMPORT`, `UPSERT`, `RETIRE`, `OVERRIDE`, `manual_inventory_edit`,
+`create`).
+
+`protectLockedCarts` writes `IMPROPER_ORDER_BLOCKED` whenever a
+wax-flow action targets a cart at status ∈ LOCKED_STATUSES. Run
+MVJ-YpH5_W-X8WzSmkWY6 had one cart already at status='scrapped'
+from a prior `rejectCartridge` per-cart rejection, so every
+`completeQC` and `goBack` against it tripped enum validation
+mid-flight. The wrapping action 500'd, leaving the run advanced
+to Storage but cartridges still at status='wax_filling' with no
+`waxFilling.recordedAt`.
+
+First fix added `IMPROPER_ORDER_BLOCKED` to the enum. Then audit
+revealed `goBack` writes `action: 'GO_BACK'` a few lines later,
+also outside the enum, so the same lot still 500'd. Whitelisting
+one value at a time was a losing game (10+ values in use, and the
+enum hadn't been load-bearing — the codebase had been silently
+hitting these for who knows how long), so the second fix dropped
+the enum entirely and made `action` a free-form String. Audit log
+is telemetry, not a state machine.
+
+After deploy the user recovered MVJ via standard Confirm QC retry —
+no GO_BACK rows ever landed, but the path is open.
+
+Live verification end-of-session: 5 `IMPROPER_ORDER_BLOCKED` rows
+have written cleanly post-deploy, 0 enum errors observed since.
+
+### Manufacturing Pipeline page (`002dbf1`)
+
+User asked for "all backing lots in a clear place" then expanded to
+"same layout for wax fill, cooling, reagent, seal, store with a
+dropdown." Built `/manufacturing/pipeline?stage=<key>` with six
+stages and a unified PipelineRow shape (`id/status/count/location/
+operator/when/elapsedMin/extras/detailHref`) so one table renders
+any stage. Dropdown + chip row both navigate via URL.
+
+Per-stage data sources:
+- backing → BackingLot, every status
+- wax_fill → WaxFillingRun (active only)
+- cooling → CartridgeRecord status='wax_stored' grouped by waxStorage.location
+- reagent → ReagentBatchRecord (active only)
+- seal → CartridgeRecord status∈{sealed,cured} grouped by topSeal.batchId
+- store → CartridgeRecord status='stored' grouped by storage.fridgeName
+
+Wired the cart-mfg-dev "Pipeline Flow" tiles to deep-link into the
+matching stage. QC tile stays inert (it's a sub-state of the active
+wax run, no canonical entity). Tiles wrap in `<a>` with hover
+state; QC stays a `<div>`.
+
+Tailwind dynamic classes (`bg-{stage.color}/20`, `text-{...}`,
+`border-{...}/40`) might not be JIT'd because of the opacity
+modifiers — flagged for visual verification, not blocking.
+
+Per-row drill-in:
+- wax / reagent runs → `/cartridge-admin?runId=...`
+- cooling / store fridges → `/equipment/location/[id]`
+- backing rows → no canonical drilldown (no per-cartridge view at
+  backing stage; cartridges aren't individuated until wax-deck load)
+
+### Run-statuses centralisation (`f4062f5` + `21f9911`)
+
+`WaxFillingRun.status` and `ReagentBatchRecord.status` are loose
+`String` with no enum, and the codebase has historically written
+values in BOTH cases. Wax leans lowercase ('completed', 'aborted'),
+reagent leans capitalized ('Completed', 'Cancelled', 'Aborted'). At
+audit time:
+
+  wax_filling_runs:        completed=40 aborted=29 Aborted=3 voided=1
+  reagent_batch_records:   Completed=27 Cancelled=13 Aborted=9 completed=1
+
+A `status: { $in: ['completed'] }` filter was finding ~93% of
+completed wax runs but only ~4% of completed reagent runs — silent,
+persistent miscount across multiple dashboards.
+
+Created `src/lib/server/manufacturing/run-statuses.ts` with named
+sets that include both casings: `WAX_PAGE_OWNED`,
+`REAGENT_PAGE_OWNED`, `WAX_FILLING_ACTIVE`, `REAGENT_FILLING_ACTIVE`,
+`WAX_NON_TERMINAL`, `REAGENT_NON_TERMINAL`, `COMPLETED`,
+`ABORTED_OR_CANCELLED`, `VOIDED`, `ANY_TERMINAL`.
+
+First sweep fixed:
+- `manufacturing/resource-locks.ts` (already had constants — switch
+  to module imports)
+- `routes/+page.server.ts` (home dashboard active-wax filter)
+- `routes/equipment/activity/+page.server.ts` (equipment dashboard,
+  was missing reagent runs)
+- `routes/api/cron/daily-digest/+server.ts` (already both-case inline
+  — switched to module)
+- `routes/manufacturing/pipeline/+page.server.ts` (built earlier same
+  session — switched to ANY_TERMINAL)
+
+Audit caught three I missed and labelled "comprehensive" too early:
+- `manufacturing/wax-filling/equipment/+page.server.ts` (FOUR filters
+  — the worst was reagent history hiding 96% of records)
+- `manufacturing/wax-filling/oven-queue/+page.server.ts`
+- `manufacturing/reagent-filling/+page.server.ts:203` (cosmetic
+  duplicate of WAX_PAGE_OWNED)
+
+End-of-session verification: a `$in: ['completed','Completed']`
+query against reagent_batch_records returns 28 rows; the lowercase-
+only version returns 1. Centralisation recovered 27 runs that
+dashboards were silently hiding.
+
+### Pre-wax checkout regression sim (`a3a21df`)
+
+Companion script to `sim-mocreo-heartbeat.ts`. Replicates the
+`removeFromBackingLot` action's logic against a synthetic test
+BackingLot: happy path / over-pull / drain → consumed / post-drain
+guard / nonexistent-lot guard / validation. 10 cases. Was used to
+verify the original feature in commit `00034b5` but never committed.
+Pinning it now as regression coverage symmetric with the heartbeat
+sim.
+
+### Daily 4:30 PM cartridge-cleanup reminder cron (`d4d8dcc`)
+
+User wanted a daily email reminder to ncox@brevitest.com via the
+internal email system (not Slack/MCP). Built
+`/api/cron/cartridge-cleanup-reminder` and registered it in
+vercel.json at `30 21 * * *` (21:30 UTC = 4:30 PM CDT). Hard-coded
+recipient by request. Email body links to Equipment Activity,
+Pipeline → Backing, and Cartridge Checkout — the three surfaces
+the operator needs to reconcile drift.
+
+Earlier same session I'd created a one-shot claude.ai routine for
+4:30 PM today as a stop-gap; disabled it once the daily cron
+landed so today doesn't get a duplicate at 4:30.
+
+Note: Vercel only fires crons from production deployments. The
+new entry is registered on the dev preview but won't actually
+fire until dev → master is merged. User said they'd handle the
+merge themselves.
+
+### Backing-timer enforcement check (no code change)
+
+User created backing lot `d0c6ce18-cfac-46b4-8e42-1bd8370ee169`
+(70 carts, Oven 1, by nick) and asked whether the heating-time
+restriction is being enforced. Replicated the
+`scanBackingLot` server-side conditional from `wax-filling/+page.
+server.ts:411` against the live lot — confirmed:
+
+- `scanBackingLot` returns HTTP 400 if `elapsedMin < minOvenTimeMin`
+  with message "Lot not ready. {N} minute(s) remaining (minimum
+  {threshold} min required). Wait, pick a bucket that has passed
+  the timer, or get an admin to override."
+- `loadDeck` does NOT independently re-check the timer; it pulls
+  `activeLotId` from `WaxFillingRun.activeLotId`, which is only
+  set when `scanBackingLot` succeeds. The UI gates cartridge-scan
+  inputs behind the lot scan, so a normal operator can't bypass.
+  A direct POST to `?/loadDeck` could skip the timer + write
+  cartridges with `backing.lotId=null`. Worth knowing; not in the
+  attack surface for the wax-filling page.
+
+User noted the threshold is set to 30 in DB (default fallback in
+code is 60); they said they'd flip it to 60 themselves on the
+wax-filling settings page.
+
+### Heads-up for next session
+
+- Daily cron registers only after dev → master merges. Sanity check
+  on next session is `vercel cron list` or the dashboard for
+  `/api/cron/cartridge-cleanup-reminder`.
+- Pipeline page Tailwind dynamic classes with opacity (`bg-{color}/20`
+  etc.) not yet visually verified; if styling looks off, swap to a
+  static class lookup table.
+- Wax-filling timer enforcement hole: `loadDeck` should ideally
+  re-check the timer too, not just trust `activeLotId`. Current
+  state is UI-gated, which is fine for normal use but not a defence
+  in depth. Worth a follow-up if/when audit risk surfaces.
+
+## Session 2026-05-06 (cont.) — Audit-log dual-collection consolidation
+
+While verifying the cart-MFG checkout went through cleanly, found Mongo
+had TWO audit collections side-by-side:
+- `audit_log` (singular, 10,643 entries) — wired to the AuditLog
+  Mongoose model at `src/lib/server/db/models/audit-log.ts:28`. All
+  production app code writes here.
+- `audit_logs` (plural, 269 entries) — created entirely by hand-run
+  scripts in `/scripts` that called `db.collection('audit_logs')`
+  directly, bypassing the model. ~95% of plural entries are from
+  `system-*` script-author tags.
+
+Production was always correct. The plural was pure script drift.
+
+Resolution:
+1. `scripts/consolidate-audit-logs.ts` (new) — migration tool with
+   `--dry-run` and `--execute` flags. Dry-run confirmed 0 `_id`
+   collisions; `--execute` copied all 269 plural entries into singular
+   (singular grew 10644 → 10913) and dropped the plural collection.
+2. Sed-replaced `audit_logs` → `audit_log` across 53 script files and
+   3 src/ comment references. Without this step, the next run of any
+   diagnostic script would silently re-create the plural collection.
+3. Two new diagnostic scripts saved:
+   `scripts/verify-recent-checkout.ts` and
+   `scripts/verify-checkout-audit-log.ts` — useful for future post-
+   checkout sanity passes.
+
+Commit: `c1ba3fa chore(audit-log): consolidate dual audit_log/audit_logs
+collections into one`. 58 files changed (53 script renames + 3 src/
+comment edits + migration tool + 2 diag scripts).
+
+Going forward: AuditLog collection name is `audit_log` (singular). The
+Mongoose model is the only sanctioned writer. If a one-off script must
+use the raw driver, it MUST use `'audit_log'` not `'audit_logs'`.
+
+### Tangentially observed but NOT acted on
+
+While categorising the 271 svelte-check errors (work paused), saw 4
+declared-but-uninstalled packages (`resend`, `simple-statistics`,
+`@anthropic-ai/sdk`, `bwip-js`) and Mongoose 9.2.3 installed despite
+CLAUDE.md claiming Mongoose 8. The full 8-phase remediation plan is
+in chat history. Not yet started — user prioritised the checkout +
+consolidation work first.
+
+## Session 2026-05-06 (cont. 2) — 271-error remediation, all 8 phases shipped
+
+User authorised editing `.svelte` files for this remediation despite
+the CLAUDE.md "UI is frozen" rule. End state: `npm run check` reports
+0 errors (was 271). Single commit `6dcd6a7`, 69 files changed, +432 /
+-282 lines. Mongoose upgrade to 9.2.3 confirmed intentional;
+CLAUDE.md updated to match.
+
+### Phase recap
+
+1. **`npm install`** — 4 declared-but-uninstalled packages were
+   missing from `node_modules`, cascading errors across importing
+   files. Reinstall cleared 69 errors in one shot.
+
+2. **Dead-reference fixups** — `r2Upload` in `_receiving/new` was a
+   misnamed `uploadToR2` with arg-order swap. `parts/[partId]/+page.svelte`
+   referenced `IpRevisionHistory` + `IpFormDefinitionEditor` +
+   `currentRevision` without imports/derivations.
+
+3. **Schema drift in load functions (the big category, 115+ errors)**
+   — 15 hot-spot routes had load functions hand-crafting narrow
+   projections that dropped fields the templates still read. Fields
+   all existed on the underlying Mongoose models — server-side
+   projections were the only thing missing. Touched: cartridge-admin/
+   release, /failures, /filled, /statistics, /sku-management;
+   customers/[id]; assembly/[sessionId]; assays/[assayId]/assign;
+   assays/import; cartridges/analysis;
+   documents/instructions/[id]/run/[runId]; cartridges/[cartridgeId];
+   parts/+page; equipment/robots; equipment/activity.
+
+4. **Type alignment** — Dropped `LifecycleStage` casing constraint
+   in cartridge-admin/failures + /filled (UI uses post-state
+   PascalCase, not pipeline lowercase). Added `'assay_loaded'` and
+   `'testing'` to `LifecycleStage`. Mongoose 9 hook signature
+   regression in `user.ts` (`.pre('deleteOne'/'deleteMany'/
+   'findOneAndDelete')` now mistyped) — cast through `any` since
+   runtime hooks still fire correctly. Fixed `r2.ts` `fetch(buffer)`
+   by wrapping in `Uint8Array` (newer Node `fetch` doesn't accept
+   Node `Buffer` directly). Added `'cut_top_seal'` to
+   `inventory-transaction` enum. Widened `TronButton` variant union
+   to include `'ghost'`.
+
+5. **Native-driver casts (Mongoose ObjectId vs nanoid string)** —
+   New helpers `byId(id)` / `asId(id)` in
+   `src/lib/server/db/native-helpers.ts`. Replaced 13 sites across
+   6 files where raw `db.collection(...)` calls hit the
+   `Type 'string' is not assignable to type 'Condition<ObjectId>'`
+   problem. Single source of cast.
+
+6. **Possibly-undefined guards** — `locals.user!` non-null
+   assertions in actions where `requirePermission` already narrows
+   but TypeScript doesn't propagate (manufacturing/wax-filling,
+   /reagent-filling, /opentron-control/reagent, equipment/decks-trays,
+   qa-qc). Optional-chaining for scattered `form.failures` /
+   `data.spu` reads.
+
+7. **Implicit-any annotations** — `(x: any)` on ~30 callback
+   parameters across ~10 .svelte files. Pure type hygiene.
+
+8. **Last-mile** — Reordered `$derived` `tubesUsed` below the
+   `$state` variables it referenced in wax-creation. Expanded
+   wax-filling `runState` type to include `activeLotId`. Expanded
+   wax/reagent `RobotRunState` with `activeProcess?` field. Added
+   missing `WaxCartridgeRecord` export to `schema.ts`. The
+   stubborn `equipment/activity` errors turned out to be the
+   .svelte's OWN `Props` interface declaring a narrow `locations`
+   shape — server-side fixes never propagated because the .svelte
+   was overriding. Widened the Props interface to match.
+
+### Important pattern: .svelte Props interfaces win over PageData
+
+`equipment/activity/+page.svelte` and several other components
+declare their own `interface Props { data: { ... } }` block that
+shadows the auto-generated PageData type. If you widen a load
+function and the .svelte STILL shows "property X doesn't exist",
+check whether the .svelte is type-asserting its data shape locally.
+
+### byId() / asId() helper
+
+`src/lib/server/db/native-helpers.ts` is the new home for raw
+MongoDB driver casts. Mongoose models are typed correctly for
+nanoid `_id`s, but native-driver calls
+(`db.collection('foo').findOne({ _id: stringId })`) hit
+`Type 'string' is not assignable to type 'Condition<ObjectId>'`.
+Use `byId(id)` for filters, `asId(id)` for `_id` fields in
+`insertOne` payloads.
+
+### Heads-up for next session
+
+- Build + contract test gates not yet run at time of writing this
+  note — needed before the dev → master merge.
+- Phase 3 surfaced real data into templates that previously got
+  `undefined`. Hidden bugs in date formatters / number math could
+  trip on those routes. Worth a 5-minute smoke test of each fixed
+  page.
+- The nested checkout `Bioscale_Operations_System_V2/Bioscale_Operations_System_V2/`
+  is what Vercel ships from. Today's changes are only on the outer
+  copy and only on `dev`. Production needs a `dev → master` merge
+  to pick them up.
+- `vercel.json` cron addition for `/api/cron/cartridge-cleanup-reminder`
+  remains uncommitted (separate workstream — left untouched).
+
+## Session 2026-05-11 — Scanner phase-0 end-to-end on B07 + fleet rollout
+
+End-to-end success: gantry-mounted Waveshare scanner on OT-2 B07 now
+teaches positions, sweeps them, and feeds barcodes into wax/reagent
+filling. Cloned the position set to R04 and B14 as a starting point.
+
+### Bridge & hardware (B07)
+- Bridge daemon (`scanner-bridge.py`) running on B07 as PID 32558 against
+  `https://bioscale-operations-system-mongodb.vercel.app`. Heartbeats
+  every 10s land in `scanner_events` (deviceId=`ot2-b07-scanner`).
+- USB cable reseating mid-session shifted the device between `/dev/ttyACM0`
+  and `/dev/ttyACM1`. Solved permanently with a udev rule installed at
+  `/etc/udev/rules.d/99-bims-scanner.rules` (VID:PID `0218:0212`,
+  serial `2027300413413333`) → pins to `/dev/scanner`. `.env` now reads
+  `SCANNER_SERIAL_PORT=/dev/scanner`. Root remounted ro afterwards.
+
+### Teach UI fixes (commits on `feat/scanner-phase-0`)
+- `3c21e98 fix(scanner-teach): surface real fetch errors instead of bare "fetch failed"`
+  Proxy wraps fetch to expose `err.cause.code` + URL. Server logs the
+  underlying reason via console.warn. Client api() augments network errors
+  with the URL.
+- `19ef4ca fix(scanner-teach): two bugs blocking Open Maintenance Run`
+  (1) OT-2 `/maintenance_runs` requires `{ data: {} }` envelope, not `{}`.
+  (2) `loadPipette` rejected display-name strings like "20 microliter" —
+  resolve the canonical name from live `/pipettes` instead of trusting
+  the set's stored `pipetteName`; respect the set's `pipetteMount`.
+- `21bcef5 fix(scanner-teach): derive deviceId from robot name`
+  Was hardcoded `lab-mac-scanner-1`. Now derived via regex on robot.name
+  (`Robot 3 B07` → `ot2-b07-scanner`).
+
+### Settings list UX
+- `c69ec41 feat(scanner-teach): per-card delete on the settings list`
+  Each set card gets an inline `×` button posting to the per-set
+  deleteSet action, with a confirmation prompt and an inline failure
+  banner. Avoids navigating into each set to clean up.
+
+### Position extrapolation
+- `scripts/extrapolate-scanner-positions.ts` — pops slots 8-23 from
+  slots 0-7 using `x + 148 mm * column`, preserving Y and Z. Used on
+  B07's "Barcode Locations" set after the operator taught the first 8.
+- Snake-numbered deck: col 0 = slots 1-8 top→bot; col 1 = 9-16 bot→top;
+  col 2 = 17-24 top→bot. Same-row slots are colinear in Y. Source
+  column was alternating-X (~3 vs ~75) intentionally; extrapolation
+  preserves the alternation.
+
+### Filling pages — auto-scan + per-slot rescan + override
+- `ab7e620 feat(scanner): note localhost-only auto-scan on wax + reagent grids`
+  Amber notice under the Scan Cartridges card. Vercel can't route to
+  the OT-2's private LAN — auto-scan only works from BIMS running on
+  a Mac on the lab network.
+- `bc26bb6 feat(scanner-sweep): maxSlots cap + retry-once + correct deviceId default`
+  `/api/scanner/sweep` accepts body.maxSlots; per-slot trigger retries
+  once before recording failure; default deviceId derived from robot
+  name. Audit + response include slotsWalked.
+- `49b22cc feat(wax-filling): per-slot rescans, override, sweep count + retry-aware grid`
+  Wax DeckLoadingGrid: scans state now sparse Array<scan|null> length 24
+  (slotIndex matches deck position). Count input next to Scan Cartridges
+  button (default = plannedCartridgeCount). Sweep no longer aborts on
+  per-slot failures — collects them into sweepFailures, surfaces summary,
+  red-borders affected tiles. Tiles are now buttons. Click opens inline
+  rescan panel with handheld-friendly input + Override checkbox + Close.
+- `18827f0 feat(reagent-filling): mirror per-slot rescans, override, count + retry from wax`
+  Same refactor on reagent grid.
+- `56ded5e fix(filling-grids): tighten override semantics + clear stale failure list`
+  Audit-found bugs: override was bypassing cross-slot duplicate check
+  (user-intent was only "replace what's in this slot"); manual rescan
+  cleared red border but not the failures list. Fixed both grids.
+
+### Fleet rollout
+- `scripts/clone-scanner-position-set.ts` — clones a set to N target
+  robots, optionally `--default`. Dry-run by default.
+- Cloned B07's "Barcode Locations" (set `Lla0SH0yOb65-MdtTgQeL`,
+  24/24 taught, default) to R04 (new id `0Ap8akXDCBCGICM2a9BsF`) and
+  B14 (new id `yhYsOi6NjAKjvC-1EmiiE`), each marked default for its
+  robot. R04 and B14 had no prior sets.
+- **Coordinates are verbatim from B07.** Different OT-2s drift in deck
+  calibration, so R04 and B14 should be jog-verified before relying on
+  auto-sweep in production.
+
+### Diagnostic scripts (committed)
+- `scripts/inspect-scanner-events.ts` — parameterized replacement for
+  the deprecated `inspect-r04-scanner.ts` (hardcoded deviceId). Accepts
+  `<deviceId> [limit]`.
+- `scripts/extrapolate-scanner-positions.ts` — see above.
+- `scripts/clone-scanner-position-set.ts` — see above.
+
+### Local dev setup gotcha
+- `npm run dev` doesn't load `.env` into `process.env`. Must run as
+  `set -a; source .env; set +a; npm run dev` or the server 500s on
+  every request with "MONGODB_URI is not set". Worth fixing in
+  package.json eventually (e.g. add `dotenv -e .env -- vite dev`).
+
+### Pending / next session
+- Jog-verify the cloned position sets on R04 and B14 against their
+  real decks. Differences will likely require a re-teach of column 0
+  + a re-run of `extrapolate-scanner-positions.ts`.
+- Consider moving the OT-2 fetches client-side so the Vercel deploy
+  can also run sweep/jog (browser is on the LAN; Vercel isn't).
+  ~30 min refactor of the teach + grids; un-blocks "Scan Cartridges"
+  from the public URL.
+- Per-set `pipetteName` is stored free-form on the model (we saw
+  "20 microliter" sneak in). Could add a dropdown in the set-creation
+  form constrained to the OT-2 enum (`p20_single_gen2`, etc.) — but
+  the sweep + teach now resolve canonical names from live `/pipettes`
+  on the fly, so this is cosmetic.
+- systemd unit for the bridge daemon on B07 still deferred; recovery
+  after reboot is manual (`cd /data/scanner-bridge && nohup ./run.sh &`).
+
+### Branch state end of session
+- All work on `feat/scanner-phase-0`. 9 commits ahead of `origin/dev`.
+  Local `dev` was fast-forwarded to `origin/dev` (was 23 behind at
+  session start). Vercel dev preview was rebuilt earlier with an
+  empty commit.
+- Not merged to `dev` yet — `feat/scanner-phase-0` is the integration
+  branch for this whole workstream.
+
+## Session 2026-05-11 (evening) / 2026-05-12 — Scanner phase-1: async sweep, live UI, real cancel, perf tuning
+
+### Headline
+Scanner sweep is now production-feeling: live progress in the UI, working
+pause/cancel/resume, history page, and ~2-3s/slot instead of 6s. The
+session also surfaced two real bugs that had been silently masking
+themselves for the entire prior session.
+
+### Big architectural change — async sweep with persisted state
+- New `OpentronsScannerSweepRun` model — live state + history for every
+  Scan Cartridges invocation. Status (running/paused/cancelled/completed/
+  errored), slotsDone, currentSlotIndex, scans[], errors[], appended log[]
+  with timestamps and per-level color coding.
+- `POST /api/scanner/sweep` is now fire-and-forget: validates inputs,
+  rejects if a sweep is running on the same robot, creates the SweepRun
+  doc, fires the work in the background, returns the sweepRunId
+  immediately. Response no longer hangs for ~2 minutes.
+- Background worker writes progress at every step: maintenance-run-open,
+  pipette discovery, home, per-slot move + scan attempts, retries, errors,
+  home, run close. Between every slot it re-reads cancelRequested /
+  pauseRequested and honors them.
+- New endpoints:
+  - `GET /api/scanner/sweep/<id>` — snapshot for polling
+  - `POST /api/scanner/sweep/<id>` with action='cancel'|'pause'|'resume'
+  - `GET /api/scanner/sweep` — paginated history list
+- Commits: `16032c6` server, `23b8970` client live UI on both filling
+  grids, `7e9ba2d` history page at /manufacturing/opentron-control/sweeps,
+  `56ded5e` override-semantics audit fix.
+
+### Two silent bugs found that had been masking themselves
+1. `sendMaintenanceCommand` in maintenance.ts only checked res.ok (HTTP
+   201). OT-2 returns 201 even when the inner command failed —
+   body.data.status="failed" + body.data.error.detail. Failed moves were
+   passing as success, gantry never moved, scanner re-read the same
+   barcode N times, sweep reported `scanCount: 24, errorCount: 0`. Fixed
+   in `b363609`: detect inner status, throw with the OT-2's errorType +
+   detail.
+2. Stored positions had z=200 across all three robots' sets. p300_single
+   _gen2 on the left mount rejects z>~170 with FailedToPlanMoveError.
+   Combined with bug 1, this was the actual root cause of "gantry homes
+   then scans without moving". Mitigated by global -50mm Z shift via the
+   new `scripts/shift-scanner-positions.ts` (commit `666bdfd`). Real
+   solution is re-teach with a workable Z.
+
+### Cancel works even when the worker is wedged
+- Pre-fix: cancel was just a DB flag flip. If the worker was hung inside
+  a Node fetch (e.g., on `openMaintenanceRun` after a dev-server restart
+  left stuck keepalive sockets), nothing read the flag and the gantry
+  stayed put forever.
+- Fix in `e4e0ce4`:
+  - Cancel handler now immediately sets `status='cancelled'` on the doc
+    so the UI flips out of "running" instantly.
+  - Then actively queries the OT-2 for `/maintenance_runs/current_run`
+    and calls closeMaintenanceRun on whatever id comes back. Releases
+    motor holds AND makes the wedged worker's next OT-2 call fail with
+    "run not found" so it exits cleanly.
+  - `robotFetch` now wraps every OT-2 fetch in a 30s AbortSignal — stuck
+    keepalive sockets abort instead of hanging forever. 30s matches the
+    OT-2's own waitUntilComplete window, so legitimate slow moves still
+    complete.
+
+### Perf tuning — ~6s/slot → ~2-3s/slot
+Per-slot timing measured at the start of the session was 6032ms avg with
+123ms idle gap (worker overhead negligible). Three targeted changes:
+- `moveTo` defaults forceDirect=true. Scanner sweeps don't pick up tips
+  or transport liquid; the safety-arc routing was pure overhead. -500ms-1s
+  per slot. (`17c09b0`)
+- Sweep DB-poll dropped 200ms→50ms.
+- Bridge .env on B07: POLL_INTERVAL_MS 500→100, SCAN_TIMEOUT_S 3→1.5.
+- **Biggest win — bridge swapped to localhost target.** BIMS_BASE_URL
+  changed from `https://bioscale-operations-system-mongodb.vercel.app`
+  to `http://172.16.28.173:5176` on B07 .env. Every trigger-poll and
+  event-POST hop drops from ~150-250ms to ~5-10ms. Requires
+  `AGENT_API_KEY` to be present in the Mac's local `.env` (now is —
+  fetched from the bridge .env and persisted). For production sweeps,
+  the bridge needs to be repointed back at Vercel.
+
+### Test-mode backing lot (no inventory impact)
+Commit `8b28d55`: wax-filling "Test Mode" checkbox actually functions
+now. Was previously just a label — sent override=true which only
+triggered the admin cure-time path. Now sends testMode=true; server
+auto-creates `TEST-LOT-<runId>` with cartridgeCount=24, status=ready, no
+admin re-auth required. Real BackingLot inventory untouched.
+
+### Robot name alignment + wax start-screen header fix
+- `Equipment.name` updated to match `OpentronsRobot.name` ("Robot 3" →
+  "Robot 3 B07" etc.) via `scripts/align-equipment-robot-names.ts` (commit
+  `3777bd1`). The link between collections is the shared _id; rename is
+  purely cosmetic.
+- Wax-filling start-screen "Robot N — Wax Filling" header was hardcoded
+  to `data.robotId === 'robot-1' ? 'Robot 1' : 'Robot 2'` — never matched
+  the nanoid IDs, always fell through to "Robot 2". Now uses data.robotName
+  pulled from the layout's robots list (`9b8252b`).
+
+### Scripts added under /scripts
+- `extrapolate-scanner-positions.ts` — fill slots 8-23 from 0-7 using
+  x+148mm per column (preserves alternating-X within column).
+- `clone-scanner-position-set.ts` — copy a set across robots with optional
+  --default + demote existing defaults. Used in this session to seed R04
+  and B14 from B07.
+- `shift-scanner-positions.ts` — global dx/dy/dz nudge on a set. Used to
+  push z=200 → z=150.
+- `align-equipment-robot-names.ts` — Equipment.name ← OpentronsRobot.name.
+- `inspect-scanner-events.ts` — parameterized event tail by deviceId.
+  Replaces the deprecated `inspect-r04-scanner.ts`.
+
+### Pending / next session
+- **Re-teach Z properly** on at least B07. The -50mm shift may not put
+  the scanner in optimal focal range — test reads first. If empty-payload
+  failures show up, re-teach Z per slot.
+- **R04 + B14 still untested** — coordinates copied verbatim from B07,
+  need physical jog-verification before relying on auto-sweep there.
+- **Bridge BIMS_BASE_URL** points at the Mac. Revert to Vercel
+  (`https://bioscale-operations-system-mongodb.vercel.app`) when no
+  longer testing from this Mac, or production sweeps from elsewhere
+  will be slow / unreachable.
+- **Mongoose warning**: `errors` is a reserved schema pathname on
+  OpentronsScannerSweepRun. Functional but worth renaming to `slotErrors`
+  for cleanliness.
+- **Vite startup time** is ~10s on first request after restart — Node
+  module cache warm-up. Worth investigating if it bites again.
+- **`npm run dev` doesn't load .env** into process.env (existing memory).
+  Start with `set -a; source .env; set +a; npm run dev` or the server
+  500s on every request with "MONGODB_URI is not set".
+
+### Branch state end of session
+- All work on `feat/scanner-phase-0`. ~22 commits ahead of `origin/dev`
+  for this whole workstream.
+- Vercel dev preview points at master via the nested checkout. Local
+  dev server is the only path that can reach the OT-2.
+
+
+
+## Session 2026-05-15/16 — CV Refactor (cartridge-first)
+
+### Worktree
+- New worktree at `C:/Users/jacobq/Documents/GitHub/Bioscale_Operations_System_V2-cv` on branch `feature/cv-followups` (from `origin/dev`).
+- Setup commits:
+  - `2378f28` chore(cart-dashboard): drop linked/underway/completed from pipeline graphic.
+  - `1073cdb` chore(cv): wipe all cv_projects, null projectId on all images — cartridge-first reset. Includes one-time `scripts/wipe-cv-projects-cartridge-first.ts` and full pre-wipe ledger at `docs/CV-PROJECT-LEDGER-2026-05-16T02-41-34.md` (27 projects, 1445 images).
+- Pre-existing on dev: LabCartridge / CartridgeGroup / FirmwareCartridge models and dead routes deleted (LabCartridge collection was empty; FirmwareCartridge also empty but referenced by /devices + /assays/[id] tabs which were also trimmed). Sidebar Cartridge Registry entries removed from main + SPU layouts.
+
+### Architectural pivot
+- Old model: CvImage.projectId required → image existed FOR a project. Induction auto-created CartridgeRecord when CV saw a new QR.
+- New model: image identity = cartridge + phase + capturedAt. Projects became composable training sets that own (and deploy) a model. Induction is gone.
+- Mongo state after migration: cv_projects=0, cv_images=1445 (projectId nulled, label→qcLabel, cartridgeImageNumber minted for the 581 with cartridge tags), cv_inspections=0, cartridge_records.photoSequence initialized on all 11,607.
+
+### PRDs
+- `docs/prds/CV-REFACTOR-1-IMAGE-MODEL.md` — schema diff for CvImage / CvProject / CvInspection / CartridgeRecord, migration plan, endpoint impact.
+- `docs/prds/CV-REFACTOR-2-CAPTURE-PIPELINE.md` — hardware scanner sticky-context flow, /capture page, inline manufacturing buttons, R&D forensic capture.
+- `docs/prds/CV-REFACTOR-3-PROJECT-AS-MODEL.md` — composability rules, append-only versioning, phase-X auto-inference, A/B shadow mode.
+- `docs/prds/CV-REFACTOR-4-ADMIN-UIS.md` — /cv/stream chronological feed, /cv/label search-driven labeling, /cv/projects rebuild with 4 tabs.
+
+### Schema changes (commit `398f02c`)
+- CvImage: dropped projectId + sampleId. cartridgeTag.{cartridgeRecordId, phase} now required. Added cartridgeImageNumber, capturedBy, qcLabel (renamed from label), qcLabeledBy, qcLabeledAt.
+- CvProject: added members[], composedOf[], isLiveComposition, deployAtPhases[], trainedModels[] (append-only), activeModelVersion, shadowModelVersion. Dropped isMasterModel, imageCount, annotatedCount, phases, labels, projectType, modelStatus, modelVersion, top-level confidenceThreshold.
+- CvInspection: required modelVersion + modelPath + isShadow + phase + cartridgeRecordId. Added triggeredBy, triggeredAt.
+- CartridgeRecord: added photoSequence atomic counter. Added cartridgeImageNumber to photos[] subdoc.
+- Migration: `scripts/migrate-cv-image-model.ts` is idempotent (dry-run by default, --apply to commit).
+
+### Capture endpoints (commit `398f02c`)
+- POST /api/cv/capture (new) — multipart cartridge-first capture. Validates cartridge, mints sequence number atomically, uploads via R2 worker.
+- POST /api/cv/images/record — projectId now optional, cartridgeTag required, 2-photo-per-stage cap dropped (operator captures front/back/side).
+- POST /api/cv/images/presign — projectId optional; defaults R2 key prefix to `cv/captures/...`.
+- POST /api/cv/capture-ingest — silently ignores legacy projectId from Python scripts; rejects orphan scans (cartridge must exist; no auto-induct).
+- PATCH /api/cv/images/[id]/link-cartridge — retroactive legacy-image linking, orphan-reject, 409 if already tagged.
+- PATCH /api/cv/images/[id]/label — uses qcLabel now; no longer maintains CvProject.annotatedCount.
+- GET /api/cv/lookup-cartridge — returns 404 on missing cartridge; no more auto-phase-advancement.
+- DELETED: /api/cv/induct-cartridge.
+
+### Admin UIs (commits `65d1ebe`, `b848bf8`)
+- /capture — dedicated capture station with hardware-scanner sticky context. Hidden autofocused input receives barcode wedge keystrokes (refocused every 500ms); Enter resolves cartridge; Space (or button) snapshots video and POSTs to /api/cv/capture. Just-captured strip with thumbnails. Phase dropdown.
+- /cv/stream — chronological feed of every CvImage. Filter by phase, cartridge id (regex), date range, qcLabel. Lightbox with keyboard navigation. Replaces /cv/gallery.
+- /cv/label — search-driven labeling. Filter cartridges by assay / wax run / reagent run / operator / status / date / image phase / qcLabel state. Two-stage Mongo query (CartridgeRecord match → CvImage restrict). Bulk approve / reject / clear-label and Add-selected-to-project actions. Audit-logged.
+- /cv/projects (list) — project cards, "+ New project" inline form.
+- /cv/projects/[id] (rebuilt) — tabs: Members | Composition | Deployment | History. Members shows preview + remove-from-direct-members. Composition supports composedOf with isLiveComposition toggle; cycle guard. Deployment: deployAtPhases checkboxes + activeModelVersion/shadowModelVersion selects + clear-shadow action. History: trainedModels table + recent CvInspection rows (active vs shadow).
+- /cv → 302 redirect to /cv/stream (was dashboard).
+- CV layout nav updated.
+- CaptureButton component at `src/lib/components/cv/CaptureButton.svelte` — drop-in for inline manufacturing capture (not yet wired into wax-fill / reagent-fill / top-seal pages).
+
+### Deleted routes (broken under new schema)
+- /cv/gallery, /cv/inspect, /cv/history, /cv/master, /cv/training, /cv/cartridge/[id].
+
+### Inference loop (commit `163a8c4`)
+- `src/lib/server/cv/resolve-project-members.ts` — recursive composition resolver (MAX_DEPTH=5, cycle-safe). Returns { direct, composed, all, cycleSkipped }. Only recurses when isLiveComposition===true.
+- `src/lib/server/cv/run-inference.ts` — `runInferenceForProject` runs active + (optional) shadow model against one image; creates CvInspection records (isShadow flag distinguishes). `runPhaseInference` finds every project deploying at a given phase and fans out.
+- POST /api/cv/train — pulls members via resolver, filters to qcLabel != null, mints version `{iso}_{4-char}`, writes new trainedModels[] entry BEFORE worker fires, modelOutputKey = `cv/{projectId}/models/{version}.onnx` (never overwrites). Does NOT auto-promote.
+- POST /api/cv/infer — manual one-off inference path. Optional `version` to test a non-active version. Skips shadow on manual override.
+- /api/cv/capture and /api/cv/capture-ingest now fire `runPhaseInference()` fire-and-forget after creating the image doc. Errors logged but never block the capture response.
+
+### Type check
+- 11 svelte-check errors at every checkpoint; all pre-existing (r2.ts Buffer overload, AskBimsWidget literal-type comparison, assembly/[sessionId] implicit-any params, wi-01 bucketBarcode). Zero introduced by this refactor.
+
+### What still needs work
+- CV worker integration not end-to-end verified. CV_WORKER_URL env var must be set on Vercel; if worker is down, training and inference 502 but capture still succeeds.
+- CaptureButton not wired into manufacturing pages (one-line drop-in per WI page; deferred so operator can pick placement).
+- Python `camera_capture.py` scripts still POST to /api/cv/capture-ingest with the same payload — works, BUT they now reject if the scanned cartridge doesn't exist in BIMS. Bench operators may need to register cartridges upstream first.
+- R&D forensic capture path (`/cv/forensic-capture`, phase=post_run) is in PRD 2 but not built. Use /capture with phase=post_run as a workaround for now.
+- No CV contract tests yet (whole CV stack has zero tests — was true before refactor, still true).
+
+### Reference docs added
+- `docs/CV-PROJECT-LEDGER-2026-05-16T02-41-34.md` — pre-wipe ledger of all 27 deleted projects + their 1445 images (snapshot of project→image membership; reconstructible by hand if needed).
+- `docs/CV-REFACTOR-HANDOFF.md` — Monday quick-start: what's live, what's deferred, how to test each piece.
+
+### Commit chain on feature/cv-followups
+- 2378f28 chore(cart-dashboard): drop linked/underway/completed phases
+- 1073cdb chore(cv): wipe all cv_projects, null projectId
+- 398f02c feat(cv): cartridge-first refactor — PRDs + schema + capture endpoints
+- 65d1ebe feat(cv): /cv/stream + /capture (hardware scanner)
+- b848bf8 feat(cv): /cv/label + /cv/projects rebuild + dead route cleanup
+- 163a8c4 feat(cv): inference loop — versioned training + phase-X auto-inference + A/B shadow
+
+
+## Session 2026-05-15 — Kanban auto-archive (PRD + implementation)
+
+### Headline
+Per-task Archive button on `/kanban/task/[taskId]` was 404-ing (the
+`?/archive` form action did not exist server-side). Wired the action,
+hardened the existing `/api/cron/archive-done-tasks` endpoint so Vercel
+Cron can actually call it, scheduled it weekly (Sunday 23:00 CDT / Monday
+04:00 UTC), and added a one-shot cleanup script that ran a full sweep of
+existing done tasks regardless of age.
+
+### Decisions (confirmed with Jacob)
+- Schedule: `0 4 * * 1` UTC = Sunday 11 PM CDT. Board is clean Monday AM.
+- Cron min-age: 24h since `statusChangedAt`. Stops a task marked done at
+  10:59 PM Sunday from disappearing 60 seconds later.
+- Per-task archive: done-only. Non-done tasks return `fail(400)` and the
+  task is unchanged. (UI is frozen, so the button stays visible — server
+  is source of truth.)
+
+### Files changed
+- `docs/prds/KANBAN-AUTO-ARCHIVE.md` — new PRD
+- `src/routes/kanban/task/[taskId]/+page.server.ts` — added `archive` action
+  with done-status guard, activityLog push, and AuditLog row
+- `src/routes/api/cron/archive-done-tasks/+server.ts` — added GET, 3-mode
+  auth (CRON_SECRET / `vercel-cron/*` UA / agent API key), 24h min-age
+  filter on `statusChangedAt`
+- `vercel.json` — added cron entry at `0 4 * * 1`
+- `scripts/archive-done-tasks-cleanup.ts` — one-shot manual archive of
+  all `status: 'done', archived: false` tasks (no min-age) with single
+  `audit_log` row recording the bulk operation
+
+### Validation
+- `npm run check`: 26 pre-existing ERRORS (missing optional deps + unrelated
+  implicit-anys) and 416 warnings. Zero new errors in changed files.
+- Cleanup script run: archived all currently-done tasks (see audit_log
+  row `recordId: 'manual-cleanup'`, `changedBy: 'system-manual'`).
+
+### Branch state
+- All on `feature/kanban-improvement`, branched off freshly-pulled `dev`.
+- 4 feature files + this progress entry + cleanup script committed and
+  pushed. Carryover stray `s` in `docs/BIMS-UNIFIED-TIMELINE-SPEC.md` left
+  unstaged (Jacob editing in the IDE).
+
+### Next session
+- Verify Vercel cron dashboard shows the new job after deploy.
+- Monday AM after first scheduled run: confirm `audit_log` has the
+  `cron-bulk` row and the board is clean.
+- Open question: do we want a one-click "unarchive" affordance on
+  `/kanban/archived`? Currently archive is one-way through the UI.
+
+### Follow-up — Archived view UX (same session)
+
+After deploying, swapped the Archive table's last column from "Archived"
+(archivedAt) to "Completed" (statusChangedAt). Reasoning: once a task is
+in the archive, the timestamp Jacob actually wants is "when did we finish
+this," not "when did the cron sweep it up." Since archiving doesn't change
+`status` (the field flips `archived: true` but leaves `status: 'done'`
+intact), `statusChangedAt` on an archived task is necessarily the moment
+it moved to done.
+
+Added click-to-sort on all five archive column headers (Title, Project,
+Assignee, Status, Completed). Three-state cycle per header: asc → desc →
+cleared. Matches the existing pattern on `/kanban/list/+page.svelte`.
+Null `statusChangedAt` sorts to the bottom via `Number.MAX_SAFE_INTEGER`.
+
+- `src/routes/kanban/archived/+page.svelte` — sort state, sortedTasks
+  derivation, header click handlers, header sort indicators, column rename.
+- Commit `b3198c1`. Pushed to `feature/kanban-improvement`.
+
+### Follow-up — Backlog accordion on board view (same session)
+
+Backlog column is now collapsible per project, defaulting to collapsed.
+The motivation: backlog is the tallest column and dominates the project
+section's vertical height. With backlog folded, the project's row is
+sized by the tallest of Ready / WIP / Waiting / Done — much more
+information-dense.
+
+`KanbanColumn.svelte` gained three optional props — `collapsible`,
+`collapsed`, `onToggleCollapse` — that are backward-compatible (default
+false / undefined → behavior identical to before). When `collapsible`,
+the header gets a chevron button that rotates 90° when collapsed. The
+outer column div still receives drop events when collapsed, so dragging
+a task onto a folded backlog header still works.
+
+`/kanban/+page.svelte` tracks fold state per project in a new
+`collapsedBacklogs: Set<string | null>` state, initialized from
+`data.projects` (= all backlogs collapsed at mount).
+
+- `src/lib/components/kanban/KanbanColumn.svelte` — collapsible props,
+  chevron, gated task list render
+- `src/routes/kanban/+page.svelte` — collapsedBacklogs state, toggleBacklog,
+  prop passthrough on the per-column `<KanbanColumn>` call
+
+### Follow-up — Persistent collapse state on board (same session)
+
+Project section fold + backlog accordion fold are now stored on the
+KanbanProject document. Global, not per-user: every kanban:read user
+sees the same state, every kanban:write user can change it. The change
+survives refresh and is shared across all users on next refresh.
+
+Schema additions on `kanban_projects`:
+- `collapsed: Boolean` — defaults `false` (project section starts expanded)
+- `backlogCollapsed: Boolean` — defaults `true` (backlog starts collapsed)
+
+Legacy projects without the fields fall through to those defaults via
+normalization in the layout load (`p.collapsed === true`,
+`p.backlogCollapsed !== false`). The earlier "auto-collapse projects with
+no tasks" heuristic was removed per Jacob's decision — explicit state
+only.
+
+Persistence API: `POST /api/kanban/projects/[id]/ui-state` with body
+`{ collapsed?: boolean, backlogCollapsed?: boolean }`. Partial updates
+allowed. Requires `kanban:write`. No audit log entry — UI state is not
+data, just a presentation toggle.
+
+Client pattern: optimistic update in the local Set, fire-and-forget POST,
+revert on non-ok response. No global error banner since the failure
+mode is invisible (user just sees the chevron snap back).
+
+- `src/lib/server/db/models/kanban-project.ts` — two new schema fields
+- `src/routes/kanban/+layout.server.ts` — normalize into definite booleans
+- `src/routes/api/kanban/projects/[id]/ui-state/+server.ts` — new endpoint
+- `src/routes/kanban/+page.svelte` — drop heuristic, init from DB,
+  async toggle handlers with optimistic+revert
+
+### Side errand — One-off cartridge status flip (same session)
+
+Mid-session, Jacob asked for a quick programmatic fix unrelated to the
+kanban work: flip status from `stored` → `completed` on 16 specific
+cartridge records (UUIDs hard-coded into the script).
+
+`scripts/oneoff-cartridge-stored-to-completed.ts` does this with safety
+guards: skips records that are missing, not currently `stored`, or have
+`finalizedAt` set. Bypasses Mongoose sacred middleware by using raw
+`db.collection('cartridge_records').updateOne(...)` — the explicit
+finalizedAt check substitutes for that safeguard. One `audit_log` row
+per cartridge (`tableName: 'cartridge_records'`, `oldData: {status: 'stored'}`,
+`newData: {status: 'completed'}`, `changedBy: 'system-manual'`).
+
+Result: 16 updated, 0 missing, 0 wrong status, 0 finalized.
+
+Script left in the repo as a historical record (matches the existing
+`complete-stuck-wax-run-2y2f.ts` / `delete-fridge-001-11-cartridges.ts`
+pattern) but currently **unstaged** — Jacob said to handle it separately
+from the kanban feature branch.
+
+### Follow-up — Persistence reliability (same session)
+
+Jacob tested the deploy and reported "only some of the project horizontal
+swim lanes persisted" after folding several then navigating away.
+Diagnosis: fire-and-forget POSTs got orphaned when the page unmounted
+mid-flight — fast ones completed, slow ones (Vercel cold-start) got
+dropped.
+
+Fix in `persistProjectUiState`:
+- `keepalive: true` on the fetch — POST survives page unload.
+- Retry once after 500ms on 5xx or network error. 4xx errors aren't
+  retried (won't be fixed by retrying auth/validation failures).
+
+Single ~15-line change in `src/routes/kanban/+page.svelte`.
+
+### Follow-up — Stale layout data on within-kanban navigation (same session)
+
+Jacob hit a different bug: fold state didn't persist when navigating
+between sibling kanban routes (/kanban → /kanban/list → /kanban). Worked
+fine on hard refresh or cross-layout navigation.
+
+Root cause: SvelteKit caches `+layout.server.ts` data and doesn't re-run
+the load function on sibling-route navigations. So `data.projects`
+stayed stale (pre-click `collapsed` values) even after the DB POST
+succeeded. On return to /kanban, the page component re-mounted and
+the `$state(...)` Set initializer read the stale cached layout data.
+
+Fix:
+- `kanban/+layout.server.ts` — `depends('kanban:projects')` tags the
+  layout for explicit invalidation.
+- `kanban/+page.svelte` — `invalidate('kanban:projects')` after each
+  successful UI-state POST. Layout re-runs in the background, so the
+  next time the page remounts (sibling-route navigation), its $state
+  initializer reads fresh `data.projects`.
+
+Note: $state initializers only run once at mount — they don't re-run
+when `data` changes during the component's lifetime. That's intentional
+here: the optimistic local state IS the source of truth while the page
+is open. The invalidation ensures the SERVER data catches up so future
+remounts start from the correct baseline.
+
+### Follow-up — Nav cleanup on kanban layout (same session)
+
+Removed "Main Site" link and "Logout" form from the kanban header nav.
+They were duplicate affordances — the global app navigation already
+covers both. Cleanup also drops the now-unused `enhance` import and
+`loggingOut` state from the layout.
+
+- `src/routes/kanban/+layout.svelte` — 50 lines deleted.
+
+### Session end state
+
+`feature/kanban-improvement` is at 9 commits on top of `dev`:
+- d0fd483  feat: kanban auto-archive (PRD + per-task fix + cron)
+- b3198c1  feat: archived view Completed column + sortable headers
+- 88b7c1b  docs: progress entry
+- 32cbaf2  feat: collapsible backlog (default collapsed)
+- a223f8e  feat: persist project + backlog collapse globally
+- dd36550  docs: cartridge one-off entry
+- d172251  fix: keepalive + retry on UI-state POSTs
+- 8938e9f  fix: invalidate layout after UI-state POST (sibling-route cache bug)
+- a0071b9  chore: remove Main Site + Logout from kanban nav
+
+Side errand: 16 cartridge records flipped stored → completed via
+`scripts/oneoff-cartridge-stored-to-completed.ts` (unstaged).
+
+One-time manual archive run: 298 done kanban tasks archived.
+
+### Follow-up — Kanban Analytics PRDs (same session)
+
+Drafted 7 PRDs covering the analytics page build-out and the WIP system:
+
+1. `docs/prds/KANBAN-ANALYTICS-FOUNDATION.md` — /kanban/analytics route,
+   permissions, date-range URL param, chart.js + svelte-chartjs decision,
+   shared `loadAnalyticsData()` aggregator, nav link.
+2. `docs/prds/KANBAN-ANALYTICS-KPI-CARDS.md` — 6 headline cards (Active,
+   Throughput, Median cycle, WIP, Stuck in Waiting, Aging). Aging
+   thresholds extracted to shared module so card + analytics can't drift.
+3. `docs/prds/KANBAN-ANALYTICS-CFD.md` — cumulative flow diagram, daily
+   stacked area, computed by replaying activityLog[] across all tasks.
+4. `docs/prds/KANBAN-ANALYTICS-FLOW-CHARTS.md` — throughput bar, cycle
+   time scatter w/ p50/p85/p95 lines, aging WIP, time-in-status breakdown.
+5. `docs/prds/KANBAN-ANALYTICS-BREAKDOWNS.md` — per-project table,
+   per-assignee table w/ load score, source mix donut.
+6. `docs/prds/KANBAN-WIP-TIMELINE.md` — the headline daily timeline.
+   Y axis is one person per group, each person contributes `wipLimit`
+   stacked rows. X axis: 44 15-min buckets (7:00 AM – 5:45 PM) + two
+   overflow buckets (< 7 AM, ≥ 6 PM). Cells fill with project color
+   when WIP task overlaps. Carry-over from prior day starts in left
+   overflow. Day tabs S M T W R F S. Polls every 30s. Includes overflow
+   "violation lanes" in red for retrospective WIP-cap breaches.
+7. `docs/prds/KANBAN-WIP-LIMIT-ENFORCEMENT.md` — hard cap on move-to-wip
+   via shared `assertWipLimitOk()` guard. 409 on violation, modal listing
+   the assignee's current WIP tasks. New `User.wipLimit` field (default 3).
+   Admin UI add to user edit form.
+
+Suggested implementation order:
+- Foundation → KPI Cards → CFD → WIP Limit Enforcement → WIP Timeline →
+  Flow Charts → Breakdowns
+
+Foundation is the only hard prerequisite. WIP-Timeline benefits from
+having the enforcement PRD shipped first (so violation lanes have meaning).
+
+Open items flagged in PRDs:
+- Confirm first X-axis bucket is 7:00 vs 7:15 (Jacob wrote 7:15).
+- Admin override permission for WIP limit — out of v1, follow-up.
+
+### Follow-up — PRD finalization + Foundation scaffold (same session)
+
+PRDs finalized after Jacob's confirmations:
+- WIP-TIMELINE: first regular bucket is 7:00 (confirmed).
+- WIP-LIMIT-ENFORCEMENT: nobody (including admins) bypasses the limit;
+  user-edit form lives at `/admin/users` not `/spu/admin/users/[id]`.
+
+Foundation implementation kicked off (PRD KANBAN-ANALYTICS-FOUNDATION):
+- `npm install chart.js svelte-chartjs` — 317 packages added.
+- `src/lib/server/kanban/analytics.ts` — shared aggregator with
+  `AnalyticsRange`, `loadAnalyticsData()`, range parsing. Returns
+  `{ range, since, taskCount }` scaffold; sibling PRDs will extend.
+- `src/routes/kanban/analytics/+page.server.ts` — load function with
+  `requirePermission('kanban:read')`, `depends('kanban:analytics')`,
+  range param parsing.
+- `src/routes/kanban/analytics/+page.svelte` — page shell with date
+  range selector (7d/30d/90d/All) and 5 dashed-border placeholder
+  sections labeled by sibling PRD.
+- `src/routes/kanban/+layout.svelte` — Analytics nav link added after
+  Archive.
+
+`npm run check`: 11 errors (down from 26 — chart.js types resolved
+several pre-existing missing-module errors), 0 new errors from changed
+files.
+
+### Follow-up — Full analytics page build-out (same session)
+
+All 7 kanban analytics PRDs implemented end to end:
+
+1. FOUNDATION  (commit 2ed1738) — route, nav, aggregator, chart lib
+2. KPI-CARDS   (commit f5afc3e) — 6 cards + shared aging module
+3. CFD         (commit 3133117) — daily stacked area, activityLog replay
+4. WIP-LIMIT   (commit c71da35) — hard cap, modal, admin UI
+5. WIP-TIMELINE (commit f278641) — daily grid w/ day tabs + 30s polling
+6. FLOW-CHARTS (commit e2d3f51) — throughput, scatter, aging, time-in-stage
+7. BREAKDOWNS  (commit e2d3f51) — per-project, per-assignee, source mix
+
+`/kanban/analytics` is now a live, end-to-end dashboard with:
+- Date-range selector (7d/30d/90d/all) in the header
+- 6 headline KPI cards
+- Cumulative flow diagram (stacked area)
+- Daily WIP Timeline grid (the hero feature — each user has wipLimit
+  lanes of 15-min cells, day-tab navigation, polls every 30s,
+  click cell → task detail)
+- 2x2 grid: throughput + cycle scatter + aging-WIP + time-in-status
+- 3-column row: per-project table + per-assignee table + source mix donut
+
+WIP hard cap (PRD 4) is enforced in all three move paths (board action,
+task detail move/update, API endpoint). Hitting the cap surfaces a modal
+listing the assignee's current WIP. Admin UI at /admin/users now has a
+WIP limit input per user, with its own updateWipLimit action and audit row.
+
+`npm run check`: 11 errors (project baseline — chart.js install actually
+*reduced* errors from 26 to 11 by resolving previously missing-module
+imports). Zero new errors from this work.
+
+### Session end state
+
+Branch feature/kanban-improvement at 16 commits. PR-ready.
+
+### Follow-up — Analytics page polish round (same session)
+
+After the initial 7-PRD analytics build-out, a series of UX refinements
+based on real testing on the deploy:
+
+- 2ee0880  `noScroll: true` on day-tab + range-selector navigation —
+  clicking either no longer bounces the page back to the top.
+- 0061fc8  Task title column added to the right of each WIP-timeline
+  lane. Each row now shows the project-color-dot + name(s) of tasks
+  occupying that slot, filling the previously-empty right side of the
+  chart on wide screens.
+- 2adba48  Source mix donut split into TWO charts:
+   - "Manual vs Agent" (binary) — how the task entered the system.
+   - "Created by" — who originated each task (resolved usernames).
+  Layout tidied: flow charts (2x2) → mix donuts (2 cols) → tables
+  (2 cols). Dropped the awkward 3-col bottom row.
+  Renamed "Aging WIP" → "Aging Tasks" since the chart includes any
+  non-done stage past its warning threshold, not just status=wip.
+- e56fc49  Analytics nav moved to 2nd position (Board → Analytics →
+  List → Projects → Archive).
+- e2a70b2  WIP-timeline x-axis labels switched from military
+  (7..12..17) to 12-hour (7a..12p..5p) with am/pm suffix.
+- 3823d4b  WIP-timeline:
+   - DD/MM/YY date label to the left of S M T W R F S tabs.
+   - Cyan "now" line marches across the chart, visible only on today's
+     view. Recomputes every minute.
+   - Server caps still-in-WIP intervals at `now` — future-day charts
+     render empty for currently-in-WIP tasks (no fake "predicted"
+     activity). Past-day charts unaffected.
+
+Known caveat documented for Creator Mix: if the agent records tasks
+under its own user account rather than the requesting human's account,
+agent-mediated tasks cluster under that agent user. Will revisit if/when
+Jacob sees this pattern.
+
+Confirmed semantics in conversation:
+- Cycle time = first `→ wip` to first `→ done`, single window, no
+  resets even if a task bounces through `waiting` between them.
+- Aging Tasks chart = aging in any non-done stage past its warning
+  threshold (stage-specific thresholds defined in src/lib/shared/
+  kanban-aging.ts).
+
+
+## Session 2026-06-09 — Scanner debounce + ship CV/capture to production + fix capture 500
+
+### Headline
+
+Got the Pi-station capture workflow working end-to-end in production:
+fixed a scanner double-scan bug, deployed the entire CV/capture suite
+from `dev` to `main` (production), then chased two runtime 500s on
+`/api/cv/capture` until photos save and the 2-photo workflow advances.
+Operator confirmed live: scan → lock → Space → photo saves → 1/2 → 2/2.
+
+### What shipped (commit chain)
+
+- 1cd1d05a (bims-capture-agent) — scanner sensing-mode debounce. A
+  scanner in sensing mode re-fires the same barcode many times/sec;
+  because `cartridgeId` is only set after the async lookup resolves, a
+  burst of re-reads each kicked off a duplicate `/api/cv/lookup-cartridge`
+  call (double "Locked on X" banner + double session reset). Added an
+  in-flight `locking` guard in handleScan (mirrors the `submitting`
+  pattern): scan once, lock once. Merged to dev as 417d57fa.
+- d1b1721f (main) — merged `dev` into `main` (433 commits). This is what
+  put the whole CV/capture station, /cv/projects, /cv/stations,
+  /cv/label, etc. into PRODUCTION for the first time. Clean merge, no
+  conflicts.
+- a0ffad5a + 6276cba4 (main) — the capture 500 fix, two parts (below).
+  Cherry-picked to dev as 6913bba4 + 108cd14b.
+
+### The capture 500 — root cause + fix
+
+Two stacked bugs, surfaced one after the other by testing on prod:
+
+1. Legacy data: 475 of ~756 `cartridge_records` have `photos` stored as
+   `{}` (object) instead of `[]`. The endpoint's `$push: { photos }`
+   throws "must be an array but is of type … in document {_id:<cart>}"
+   → 500 on every capture to a bad cart. (This was the long-known,
+   previously-deferred photos[] defect — see memory.)
+   Fix: replaced `$push` with a pipeline update that coerces photos to
+   `[]` when it isn't an array, then appends — self-heals each cart on
+   first capture:
+     [{ $set: { photos: { $concatArrays: [
+        { $cond: [{ $isArray: '$photos' }, '$photos', []] },
+        { $literal: [photoEntry] } ] } } }]
+
+2. Mongoose 9 gotcha: array (aggregation-pipeline) updates THROW at
+   runtime — "Cannot pass an array to query updates unless the
+   `updatePipeline` option is set" — unless you pass
+   `{ updatePipeline: true }` as the options arg. This is NOT caught by
+   `npm run check` (the types accept the array), so it passed local
+   type-check and only failed live. Fixed by adding the option.
+
+### Knowledge learned (reusable — read before similar work)
+
+- VERCEL PREVIEW ENV: Preview deployments only get env vars scoped to
+  the Preview environment. Production-only secrets (R2_WORKER_URL,
+  R2_UPLOAD_SECRET, R2_PUBLIC_URL, R2_BUCKET_NAME — see
+  src/lib/server/services/r2.ts) are ABSENT on branch/preview deploys, so
+  `/api/cv/capture` 500s with "R2_WORKER_URL not configured" on a preview
+  even though scan/lookup (Mongo reads) work fine. To test capture either
+  run on a deploy that has the R2 vars, or add them to the Preview scope.
+- PRODUCTION BRANCH = `main`. Repo has THREE plausible prod branches
+  (main, master, dev). Confirmed this session: Vercel production deploys
+  from `main` (merge → prod URL updated → capture worked). `dev` is the
+  active integration branch and was ~400 commits AHEAD of main/master;
+  main/master had been stale since Apr/May. master and main have also
+  diverged from each other historically.
+- MONGOOSE 9 pipeline updates need `{ updatePipeline: true }` (runtime,
+  not type-checked). See above.
+- LOCAL BUILD ON WINDOWS can't finish `@sveltejs/adapter-vercel`: OOM at
+  Node's 4GB default, and even at 8GB it dies on
+  `EBUSY readlink 'C:\swapfile.sys'` (the Vercel file-tracer choking on
+  the Windows swap file). Both are LOCAL-only; Vercel's Linux builders
+  are fine. The meaningful local signal is the Vite build itself
+  (`✓ built in …`) — that's what catches real code errors; the adapter
+  packaging step can be ignored locally.
+- PI STATION VIDEO is a DIRECT browser↔Pi WebRTC connection
+  (`wss://<station>/ws`). BIMS is NOT in the media path — it only mints a
+  5-min HS256 JWT signed with `station.jwtSecret` from Mongo
+  (deployment-independent). So switching BIMS deployments cannot break
+  video. "No video" this session was a stale connection from an old tab;
+  reconnect/refresh fixed it. The Pi agent supports `trigger_scan` and
+  tags scans `triggered` (agent.py); station capture is a browser-side
+  canvas snapshot of the WebRTC frame POSTed to /api/cv/capture.
+
+### Branch state
+
+main = production, live + verified. dev = synced (108cd14b).
+bims-capture-agent retains the original scanner-debounce commit.
+
+### Open / deferred
+
+- Orphan data: pre-fix 500s left `CvImage` docs + R2 files with no
+  `photos[]` back-ref (CvImage.create + R2 upload ran BEFORE the failing
+  $push) and bumped `photoSequence`. Cosmetic; a cleanup script can prune
+  them if tidy data is wanted.
+- Root cause of the `{}` photos fields never investigated; bad data still
+  exists at rest (capture only heals carts as they're photographed).
+- Any OTHER write path that `$push`es to `photos[]` will hit the same
+  non-array 500 — apply the same coercion + updatePipeline pattern.
+
+
+## Session 2026-06-11 — Wax flow revamp (WAX-FLOW PRDs 1-4) + wax-creation 500 fix
+
+### Branch
+jq/wax-flow-revamp (from master/79a335f post-consolidation trunk). PRDs in
+docs/prds/WAX-FLOW-{1-4}-*.md, decisions confirmed with Jacob in-session.
+
+### wax-creation prod 500 — root cause + fix (d9b7006)
++page.svelte rendered data.waxParts during SSR but load returned only
+{ lotNumber } -> TypeError -> 500 on every view (UI/server mismatch from the
+trunk consolidation; the .svelte was written against WAX-CREATION-PARTS-LINK
+which was never implemented server-side). Fix: waxParts (PT-CT-108/109/110)
+in load + consumption via the centralized recordTransaction service.
+
+### WAX-FLOW-1 (b2ebff8) — filling tabs primary, hub backup
+Cart-mfg menu: Opentron Control -> Wax Filling / Wax Inspect / Reagent
+Filling. Robot pickers already existed on both filling layouts (no-param =
+picker). Robot cards + post-OT-2 queues extracted to
+lib/server/manufacturing/robot-cards.ts; queues now render inline on both
+filling layouts; ALL end-of-flow redirects repointed from the hub to the
+filling pages. /opentron-control + sub-routes stay reachable as backup.
+
+### WAX-FLOW-2 (b393bb9 + 7ba0584) — per-cartridge backing origination
+BackingLot aggregate retired. WI-01 gains an oven-scan step: each backed
+cartridge scanned (oven locked after first scan) -> CartridgeRecord created
+with status='backing', full material lineage from LotRecord.inputLots, oven
+entry time + new backing.ovenLocationId/Name fields. confirmComplete derives
+good count from scans; bucket barcode gone. wax-filling loadDeck validates
+status='backing' + per-cartridge minOvenTimeMin (admin re-auth override;
+test mode synthesizes carts, marked by missing parentLotRecordId).
+cancel/abort revert carts to 'backing' (synthetics deleted). 7 consumers
+switched to CartridgeRecord queries with read-only legacy BackingLot rows:
+cart-mfg dashboard, pipeline, cartridge-dashboard, consumables,
+equipment-status, equipment-activity, scrap (scrap now per-cartridge for
+backing carts; legacy bucket path retained). scripts/close-legacy-backing-
+lots.ts (dry-run default) for the final drain.
+
+### WAX-FLOW-3 (7ba0584) — fill flow simplification
+Setup stage deleted (createRun starts in Loading; toStage maps stale Setup
+runs to Loading). WaxPreparation rewritten 5->3 steps: wax lot DROPDOWN
+(active WaxBatches + PT-CT-114 receiving lots, loaded in page load), count,
+computed fill volume. Volume = waxPerCartridgeUl x count +
+waxFillDeadVolumeUl (new ManufacturingSettings field, default 80, editable
+on wax-filling settings). recordWaxPrep validates remaining volume server-
+side and persists run.fillVolumeUl; completeRun (both copies: wax-filling +
+opentron-control/wax/[runId]) decrements WaxBatch/ReceivingLot by it
+(LEGACY_WAX_FILL_VOLUME_UL=800 fallback for old runs). 2ml-tube-lot scan +
+A3 popup deleted — NOTE: per-run 2ml tube consumption no longer recorded
+(old scan accepted any receiving lot; no part number to FIFO against —
+legacy waxTubeId block kept for old runs; revisit if Jacob supplies the
+2ml tube part number). Run countdown timer removed (RunExecution slimmed;
+OT-2 polling via EmbeddedRunController drives completion). PostRunCooling:
+tray + oven scans removed -> single "Cartridges Placed in Cooler" confirm
+(the old oven-scan result was already discarded by the page). confirmCooling
+works with no tray.
+
+### WAX-FLOW-4 (eafcd90) — wax-inspect inline CV page
+/manufacturing/cart-mfg/wax-inspect: scanner-wedge sticky context (gated to
+wax_filling/wax_filled/wax_stored), Pi WebRTC station (lock+JWT) or USB
+camera, capture -> /api/cv/capture phase=wax_filled, 2s verdict polling
+(PASS/FAIL + confidence + defects; shadow as caption), live feed of last 50
+wax_filled inspections, no-model-deployed notice. Config prereq: a CvProject
+needs deployAtPhases:['wax_filled'] + promoted activeModelVersion.
+
+### Known issues / follow-ups
+- CvInspection schema enum ('pending/processing/complete/failed') mismatches
+  what run-inference.ts writes ('running'/'completed' + isShadow/triggeredAt
+  not in schema) — PRE-EXISTING; could break inline inference at runtime.
+  Verify against Atlas before first wax-inspect go-live.
+- Legacy in-oven BackingLots: shown read-only on dashboard/pipeline; wax fill
+  no longer accepts them. Physical carts from those buckets must be scanned
+  through the new WI-01 oven step; then run close-legacy-backing-lots.ts.
+- 2ml tube consumption gap (see WAX-FLOW-3 note above).
+- reagent-filling still has its own SetupConfirmation/flow — untouched by
+  design (Jacob's asks were wax-specific apart from the tabs split).
+
+### Validation
+npm run check: 11 errors = exactly the documented pre-existing baseline
+(r2.ts, run-inference anomaly_score, AskBimsWidget, 8x assembly implicit-
+any). Zero new errors. Contract tests not run (need running app).
+
+
+## Session 2026-06-11 (cont.) — OT-2 command bridge (OT2-BRIDGE PRDs 1-2) + wax math fix
+
+### Wax math fix (4033ff4)
+Live ManufacturingSettings.waxFilling.waxPerCartridgeUl was 200; corrected to
+19.2 via scripts/set-wax-per-cartridge-19-2.ts (audit logged). Code fallbacks
+updated; settings number inputs gained step="any".
+
+### Architecture decision (Jacob)
+Outbound-only command bridge = the standing BIMS IoT control-plane pattern
+(robot arm + CV stations migrate later). Two-tier rule: control plane =
+device polls BIMS (works from Vercel, zero inbound exposure); heavy realtime
+data plane (video) = direct browser<->device on LAN with BIMS-minted tokens.
+One unified daemon per OT-2 (replaces scanner-bridge.py). v1 scope: filling
+flows + sweep + deck scan + teach/jog + health; opentrons-clone stays
+direct-only. PRDs: docs/prds/OT2-BRIDGE-1/-2.
+
+### OT2-BRIDGE-1 (5d892c6) — command bridge core + daemon
+- Ot2BridgeCommand queue (kinds http/sweep/deck_scan; TTL 7d on completedAt;
+  pending->expired via ttlMs). OpentronsRobot.bridgeDeviceId
+  (ot2-<slot>-bridge, derived from name like the scanner deviceId).
+- /api/agent/ot2/poll (long-poll claim, 20s cap, expires overdue pending),
+  /commands/[id]/result, /commands/[id]/progress (writes sweep progress onto
+  OpentronsScannerSweepRun, echoes pause/cancel, supports final).
+- proxy.ts: OT2_TRANSPORT=direct|bridge|auto (auto: VERCEL->bridge).
+  bridgeFetch returns a real Response — all robotGet/Post/Patch/Delete call
+  sites inherit unchanged (maintenance.ts already used them). Timeout errors
+  include last bridge heartbeat age. run-lifecycle.ts + health-poller.ts raw
+  fetches moved onto proxy verbs. NOT bridged: protocol upload/deploy
+  (multipart) + the whole opentrons-clone stack (direct/localhost as before).
+- scripts/ot2-bridge.py (Py3.7-safe, pyserial+requests): command long-poll
+  worker (http relay to localhost:31950 with the 201-but-inner-failed check;
+  on-robot sweep + deck_scan executors with serial-port lock), legacy
+  scanner trigger loop (unchanged contract), heartbeat with /health snapshot.
+  run.sh + systemd unit + scripts/OT2-BRIDGE-DEPLOYMENT.md (supersedes
+  SCANNER-OT2-DEPLOYMENT.md; stop old scanner-bridge first; B07->R04->B14).
+- .gitattributes pins *.py/*.sh/*.service to LF (Windows checkout would
+  break shebangs on the robot).
+
+### OT2-BRIDGE-2 (f87ccee) — on-robot sweep + robot deck scan
+- /api/scanner/sweep enqueues ONE kind:sweep command; in-process per-slot
+  worker DELETED (daemon walks slots locally, scans serial directly — no
+  more per-slot ScannerTrigger/Event round-trips — and streams progress).
+  Sweep UI contract unchanged (same SweepRun polling).
+- Cancel expires the queued command + keeps transport-aware active
+  maintenance-run close; snapshot GET lazily marks runs errored when the
+  command was never claimed (dead-daemon detection).
+- Position sets: deckBarcodePosition taught on the scanner-positions page
+  (new PUT/DELETE /api/scanner-position-sets/[id]/deck-position).
+- POST /api/scanner/deck-scan (sync, waits up to 45s) + "Scan Deck with
+  Robot" buttons on both DeckLoadingGrids (manual input kept as fallback).
+
+### Validation / deployment status
+- npm run check: 11-error baseline, zero new. python -m py_compile clean;
+  3.7-compat reviewed; NOT hardware-tested.
+- NEXT PHYSICAL STEP: deploy ot2-bridge to B07 per OT2-BRIDGE-DEPLOYMENT.md
+  (stop scanner-bridge, install /data/ot2-bridge, systemd enable), verify
+  heartbeat, then test Start Run + sweep from the Vercel deploy
+  (OT2_TRANSPORT auto picks bridge there). Teach deck-barcode positions
+  per robot before using robot deck-scan.
+- Legacy single-scan trigger/event path intentionally retained (per-slot
+  rescans + teach test-scans); consolidation into commands is later cleanup.
+
+
+## Session 2026-06-11 (cont. 2) — One-button Start Run + lab runbook
+
+### Orchestrated Start Run (61aca89)
+Jacob (screenshot feedback): no standalone deck-scan UI — scanning should be
+implicit in starting the run. Wax Loading stage now leads with the
+ProtocolStartPanel; pressing Start Run executes a visible checklist:
+robot deck-barcode scan (/api/scanner/deck-scan) -> gantry cartridge sweep
+(live slot N/M via SweepRun polling) -> loadDeck (admin-override capture
+preserved; abort on partial scans/duplicates) -> startRun with the captured
+protocol/params FormData. ProtocolStartPanel gained optional
+onSubmitIntercept(formData) (backward compatible — reagent + ready_to_run
+usages unchanged). Manual DeckLoadingGrid demoted to a collapsed Manual
+scanning (fallback) details section that auto-opens on abort; kept as the
+primary UI when the robot has no OT-2 linkage. loadingSubStage pins to
+deck_load while orchestrating (loadDeck sets deckId mid-flight, which would
+otherwise unmount the checklist). Reagent page intentionally not yet
+converted.
+
+### Barcode-position reality check (documented for the floor)
+Positions are TAUGHT coordinates (OpentronsScannerPositionSet), not
+discovered: B07 = 8 hand-taught + 16 extrapolated (+148mm/column) with a
+-50mm Z shift; R04/B14 = verbatim clones of B07, NEVER jog-verified.
+deckBarcodePosition exists as of OT2-BRIDGE-2 but NO robot has one taught
+yet — teach on the scanner-positions page (new Deck Barcode section) after
+ensuring the deck label is physically gantry-readable.
+
+### docs/LAB-MAC-RUNBOOK-OT2-BRIDGE.md (new)
+Ordered go-live checklist for the lab Mac: deploy ot2-bridge to B07 (stop
+old scanner-bridge first; do NOT copy its BIMS_BASE_URL — it points at the
+Mac LAN IP from May perf testing), systemd enable, heartbeat verification,
+teach deck position, then test the one-button Start Run from the PRODUCTION
+URL (Test Mode synthesizes cartridges). R04/B14 jog-verification + rollout
+as time permits.
+
+
+## Session 2026-06-12 — Prod dynamic-API 404 root-caused + fixed (Vercel /api collision)
+
+### The bug
+Every dynamic `[param]` API endpoint (a `+server.ts` under a bracket dir) 404'd
+on the production Vercel alias, while static API routes AND dynamic PAGE routes
+worked. This silently broke the OT-2 bridge: robots execute commands fine, but
+the daemon's result/progress callbacks (`/api/agent/ot2/commands/[id]/result`
++ `/progress`) 404'd, so BIMS never recorded outcomes — and the wax one-button
+Start Run (deck-scan / sweep `[id]` round-trips) could not complete.
+
+### Investigation (what we ruled OUT, with evidence)
+Probed prod with curl + header inspection. The discriminator: `x-vercel-id`.
+Broken routes returned `x-vercel-error: NOT_FOUND` with `cle1::` ONLY (rejected
+at the edge, never routed to a function); working routes showed `cle1::pdx1::`
+(reached a fn). So the failure was edge-level, before any of our code (this also
+proves it was NOT the in-app permission layer — requirePermission runs in the
+fn). Ruled out, each with a test: stale deploy, build cache (cleared, redeployed
+— no change), route-count limit (361 entries, all present + correct locally),
+function-count limit (only 5 real fns; 717 .func are symlinks into them), and
+`split:true` (deployed commit 6ef0a73 to master — still 404; split only changes
+the symlink target, not the form). Local `.vercel/output` was provably correct
+every time, which is the key tell: the bug only appears in Vercel's build, not
+ours.
+
+### Root cause (confirmed by controlled experiment)
+There is a ROOT-LEVEL `api/` directory (`api/ml/infer.py` — a legacy Vercel
+Python ONNX inference fn — + `api/requirements.txt`), declared in vercel.json
+`functions`. Vercel RESERVES the whole `/api/*` namespace when a root `api/`
+dir with serverless fns exists and applies legacy literal-path routing: it
+matches `/api/.../<value>` against the literal folder `[id]` and 404s, never
+falling through to SvelteKit's regex routes. Static `/api` routes resolve (exact
+path match); dynamic PAGE routes are unaffected (not under `/api`). This also
+explains local-correct-but-prod-broken: local `npm run build` runs ONLY the
+SvelteKit adapter; Vercel ALSO builds the root python fn and merges it, hijacking
+`/api/*`. CONFIRMED via preview deploy of branch `test/remove-root-api` (4fcd67c)
+which deletes the root `api/` dir — on that preview ALL dynamic endpoints flipped
+404 -> 401 (cle1::pdx1::), including `box/files/[id]` which was never split. So
+`split` was irrelevant; the root `api/` was the entire problem.
+
+### Impact analysis (wide sweep) — blast radius ~nil
+The python fn is effectively DEAD CODE. CV inference moved IN-PROCESS:
+cv-bridge.ts header — "used to call an external Python worker over HTTP, now
+runs entirely in-process via cv-classifier, no outside service required." Active
+path (capture -> runPhaseInference -> cv-bridge.runInference -> cv-classifier
+embedImage+predict, classifier weights in the CvProject doc) makes NO python
+call. The ONLY code ref to `/api/ml/infer` is the `/api/cv/infer` route (a
+"manual one-off inference" endpoint) which itself has ZERO callers (docs-only).
+OT-2 daemon treats current 404s as terminal/expired and swallows them — once
+endpoints work it just starts succeeding (pure upside). Crons (`/api/cron/*`
+SvelteKit routes) unaffected. GH Actions CV training (services/cv-worker +
+HTTPS callbacks) never touches root `api/`. SEPARATE pre-existing bug found:
+run-inference.ts passed `modelPath` where cv-bridge.runInference expects
+`projectId` -> auto-inference always failed "Project not found".
+
+### The fix (PROD-API-NAMESPACE-FIX + CV-INFERENCE-PROJECTID-FIX PRDs)
+1. Delete root `api/` dir + remove vercel.json `functions` block -> SvelteKit
+   reclaims `/api/*`, all 66 dynamic endpoints resolve.
+2. Revert the `split:true` workaround from the 5 endpoints (now unnecessary;
+   avoids needless cold-starts).
+3. Rewire `/api/cv/infer` to the in-process `runInference` (drops the dead
+   python dependency, keeps the manual-inference capability).
+4. Fix run-inference.ts to pass `project._id` (not `modelPath`) to runInference.
+
+### NEXT STEP
+Push to master -> prod deploy -> re-probe the dynamic endpoints (expect non-404
+/ cle1::pdx1::). Then verify OT-2 bridge result/progress POSTs return 200 in the
+daemon journal, and run the wax one-button Start Run end to end.
+
+### Prod RESULT: dynamic endpoints fixed (verified ~13:04)
+After push, all dynamic /api endpoints flipped 404->401 (cle1::pdx1::). Confirmed.
+
+### Wax page showing the REAGENT protocol — root-caused
+The Wax Filling Start Run panel showed "Reagent_Filling...py (reagent-filling)".
+Causes: (1) the wax/reagent pages listed ALL of a robot's protocols with NO type
+filter, and ProtocolStartPanel defaults to protocols[0]; (2) there is NO wax
+protocol on the robots — DB read (opentrons_robots) shows each of B07/R04/B14 has
+exactly ONE protocol: Reagent_Filling_GEN7.py, protocolType "reagent-filling".
+No wax_filling.py anywhere; protocols are NOT repo files — they live on the robot
++ in robot.protocols[] (read by the mfg pages).
+
+Fix 1 (a3819df): filter each mfg page to its own protocolType (wax-filling /
+reagent-filling). Wax page now shows its no-protocol empty state instead of the
+reagent default.
+
+### The deeper gap: nothing syncs uploads into robot.protocols[]
+The /opentrons Import button POSTs /api/opentrons-lab/robots/[id]/protocols which
+forwards the file DIRECTLY to the robot (robotBaseUrl, NOT the bridge) and does
+NOT write robot.protocols[]. The deploy endpoint also uses direct HTTP + only
+writes OpentronProtocol.deployments[]. No discoverable code populates
+robot.protocols[] (the reagent entry came from a now-gone migration/manual step).
+So: uploading a protocol never makes it appear on the mfg pages.
+
+Fix 2 (new script scripts/sync-robot-protocols.ts): run on the lab Mac, for each
+robot GET /protocols + latest analysis, derive protocolType from the .py filename
+(wax*->wax-filling, reagent*->reagent-filling), and $set robot.protocols[]. Dry-run
+by default (SYNC_APPLY=1 to write). Guards: skips a robot if unreachable or 0
+protocols (never clobbers with empty). UNTESTED against robots from this session
+— run dry-run first.
+
+### "fetch failed" on UI upload + "barcode scanning only over local network"
+Robots' `ip` field is set to .local mDNS hostnames (OT2CEP20210817R04.local etc.),
+not IPs. Upload (and the barcode auto-scan note) go DIRECT to the robot, so they
+only work from BIMS on the lab LAN (localhost:5176 + mDNS) — the cloud deploy
+can't reach .local => "fetch failed". NOTE: the barcode auto-scan amber note in
+the DeckLoadingGrid .svelte is STALE for bridged ops (sweep/deck-scan run via the
+daemon now), but it IS still true for UPLOAD (not bridged). The .svelte is frozen
+(UI rules) so the copy stays until a UI pass.
+
+DEFERRED (future PRD): bridge the multipart protocol upload (kind:'http' carries
+JSON only — needs a new daemon command that base64-decodes the file and POSTs
+multipart to localhost:31950/protocols) so uploads work from the cloud deploy.
+
+### Operator path to get the wax protocol live (run on the lab Mac, robots ON)
+1. UPLOAD_APPLY=1 npx tsx scripts/upload-local-protocols-to-all-robots.ts
+   (pushes every local Opentrons .py — incl. Wax_Filling_GEN7_Cartridge.py — to
+   all robots, bundling custom labware so analysis resolves).
+2. npx tsx scripts/sync-robot-protocols.ts            (dry run — review)
+   SYNC_APPLY=1 npx tsx scripts/sync-robot-protocols.ts   (write robot.protocols[])
+3. Wax page now offers Wax_Filling_GEN7_Cartridge.py (wax-filling).
+
+
+## Session 2026-06-15 — OT2-BRIDGE-3: cloud→robot protocol upload (REFRESHER)
+
+WHERE WE ARE: the prod dynamic-API 404 is fixed (root api/ removed); the wax/reagent
+pages filter by protocolType; sync-robot-protocols.ts exists. Open item this session:
+uploading a protocol from the CLOUD app failed ("fetch failed") because the Import
+endpoint hits the robot DIRECTLY (robotBaseUrl -> .local), which Vercel can't reach,
+and upload was never bridged. We bridged it.
+
+WHAT SHIPPED (PRD docs/prds/OT2-BRIDGE-3-CLOUD-PROTOCOL-UPLOAD.md):
+- New bridge command kind 'upload_protocol' (Ot2BridgeCommand enum). payload =
+  { fileName, fileB64 }.
+- Daemon scripts/ot2-bridge.py execute_upload_protocol: base64-decode -> multipart
+  POST localhost:31950/protocols -> poll on-robot analysis (<=60s) -> return
+  { opentronsProtocolId, analysisStatus, parametersSchema, labwareDefinitions,
+  pipettesRequired }. Dispatched from execute_command. (py_compile clean, 3.7-safe.)
+- proxy.ts robotUploadProtocol(robot, fileName, bytes): bridge (Vercel) via
+  bridgeUpload, or direct (lab LAN) via directUpload (upload + analysis poll).
+- Endpoint POST /api/opentrons-lab/robots/[id]/protocols: calls robotUploadProtocol,
+  derives protocolType from filename, UPSERTS robot.protocols[] (the array the mfg
+  pages read), writes AuditLog. export const config = { maxDuration: 120 } (bridged
+  round-trip can exceed 30s). So a cloud Import now lands the protocol AND shows it
+  on the Wax page — no lab Mac, no scripts.
+- npm run check: 11-error baseline, zero new. npm run build: green.
+
+KNOWN LIMIT: uploads the .py only (no labware bundle). The wax protocol uses custom
+GEN7 labware; if on-robot analysis comes back failed/pending the param form won't
+populate. The robots already hold the GEN7 labware from earlier script uploads; if a
+NEW labware set is ever needed, push it once via upload-local-protocols-to-all-robots.ts.
+
+>>> NEXT STEP (must do before testing): REDEPLOY THE DAEMON to B07/R04/B14 — the
+robots still run the old ot2-bridge.py without 'upload_protocol'. Until redeployed,
+a cloud upload command will come back "unknown command kind". Steps:
+  KEY=/Users/brevitest/ot2_ssh_key
+  for H in muddy-water.local OT2CEP20210817R04.local hidden-leaf.local; do
+    scp -O -i $KEY scripts/ot2-bridge.py root@$H:/data/ot2-bridge/ot2-bridge.py
+    ssh -i $KEY root@$H 'systemctl restart ot2-bridge'   # or kill+restart per run.sh
+  done
+Then: deployed app -> /opentrons -> Import -> pick robot + Wax_Filling_GEN7_Cartridge.py
+-> Import. Expect success (no fetch failed); Wax page shows it (wax-filling) with params.
+Code is on master after this session's push (see git log: OT2-BRIDGE-3 commit).
+VERIFIED working end-to-end: Wax_Filling_GEN7_Cartridge.py uploaded from the cloud
+to B07, analysis completed (10 params), tagged wax-filling, shows on the Wax page.
+(Bugfix along the way: analysis `result` is a string verdict, not a nested object.)
+
+## Session 2026-06-15 (cont.) — WI-01 Backing redesigned to oven-session
+
+PRD docs/prds/WI01-BACKING-OVEN-SESSION.md. Backing page (/manufacturing/cart-mfg/wi-01)
+flow changed from scan-3-lots → qty → work → oven → confirm  TO:
+  config (3 material-lot DROPDOWNS + oven dropdown) → session (rapid-fire scan
+  cartridges) → finish (scrap + withdraw).
+- Server: load now returns availableLots per consumed part (PT-CT-104/112/106) =
+  ReceivingLots with remaining qty, for the dropdowns. checkAndStart: quantity is
+  now OPTIONAL (skips the upfront inventory precheck); consumption is reconciled
+  from the actual scanned count at confirmComplete (already was). scan/remove/
+  confirm actions unchanged.
+- UI: +page.svelte rewritten to config/session/confirm. Dropdowns submit via
+  use:enhance → checkAndStart → lotId → session. Rapid scan reuses scanBackedCartridge.
+  Resume path: if a resumed batch has no client oven, the session shows an oven
+  selector to continue. npm run check 11-baseline (0 new); build green.
+On master after this session's push.
+
+=== 2026-06-16 (PM) — OT-2 lab testing fixes + WI-01 backing polish ===
+Live lab-testing session against R04/B07/B14. Many bridge-daemon + UI fixes,
+all deployed to all 3 robots (scp /data/ot2-bridge/ot2-bridge.py + systemctl
+restart ot2-bridge) and/or pushed to master (Vercel).
+
+DECK-QR ALIAS: each deck gets a QR/UUID sticker resolving to its canonical id.
+  equipment.qrCode (indexed); validate-equipment + deck-scan resolve _id OR
+  qrCode -> canonical; DECK-004.qrCode=1eff9672-05c4-46c9-84be-192310f4e325.
+
+OT-2 BRIDGE DAEMON (scripts/ot2-bridge.py):
+- Self-heal stuck maintenance runs: open_maintenance_run() 3-tier ladder —
+  clear stale protocol+maintenance runs -> if still wedged/hung, restart
+  opentrons-robot-server (cooldown 120s) -> retry. New kind 'restart_robot_server'.
+  Same self-heal mirrored in src/lib/server/opentrons/maintenance.ts.
+- Engine hang detection: heartbeat now carries engine_health() (probes /runs +
+  /maintenance_runs/current); /health alone stays 200 while the engine is hung.
+- ROBOT HEALTH UI: src/lib/server/opentrons/health.ts -> ready/busy/hung/offline
+  badge on wax-filling robot tabs + "Restart robot server" button when hung;
+  polled via GET /api/opentrons-lab/robots/health. Restart endpoint:
+  POST /api/opentrons-lab/robots/[id]/restart-server (fire-and-forget).
+- SCANNER "empty payload (ACK only)" — three layered fixes in trigger_and_read:
+  (1) don't break on the ACK alone (_decoded_payload); (2) read window 3->5.5s;
+  (3) THE real fix: RE-TRIGGER every ~1s across the window (Command Mode = one
+  burst per trigger then idle), 0.15s settle before each poke, fresh buffer per
+  burst. Confirmed against Waveshare manual V2.1 (command-mode trigger
+  7E000801000201ABCD; Single Scanning Time 5s; reread-delay only applies in
+  Continuous/Sensing, NOT command mode).
+- Homing: home_gantry() skips a re-home if homed <180s ago; deck scan forces one
+  home at flow entry; wind-down homes between deck-scan and sweep removed (~2min).
+
+WAX FLOW: run creation deferred from robot-select to "wax setup complete"
+  (recordWaxPrep creates the run); idle robots stay idle. Deck-conflict message
+  now names the robot holding the deck. Freed DECK-004 (aborted stale B14 run).
+
+WI-01 BACKING (PRD docs/prds/WI01-BACKING-FLOW-FIXES.md):
+- Oven chosen ONCE at setup: stored on LotRecord.backingOven at checkAndStart,
+  echoed back + set client-side, recovered on resume; the in-session oven picker
+  is removed (was asking twice).
+- Free/continuous scanning: scanArmed toggle + onblur auto-refocus + field not
+  disabled during the async scan; "Scanning active" indicator.
+- Genesis guard: scanBackedCartridge rejects any barcode already existing at ANY
+  status (message hardened).
+- Resume only for In-Progress lots WITH scanned carts; resumeLot server guard
+  rejects non-In-Progress (finished lots can't be resumed); deleted empty ghost
+  started-session lots.
+npm run check 11-baseline (0 new); builds green. On master.
+
+=== 2026-06-16 (evening) — wax run-start polish + reagent parity (overnight) ===
+WAX:
+- Protocol params moved to a step BEFORE barcode scanning (reuses
+  ProtocolStartPanel via onSubmitIntercept to capture FormData; replayed to
+  ?/startRun after a clean scan). Hands-off: set params, hit scan, walk away.
+- Clean robot sweep auto-completes (no "Confirm Full Load"); gallery run counter
+  (cartridge count + elapsed) on robot cards.
+- OFF-DECK AUTO-RESUME: the actions endpoint mapped 'resume'->'play' (OT-2 has no
+  'resume' action; that was the spurious error). New daemon command kind
+  'auto_resume_run' watches the run locally and resumes the FIRST off-deck pause
+  once; wax startRun enqueues it after play (operator is routed to gallery, so
+  client-side resume couldn't work). Deployed daemon to all 3 robots.
+REAGENT (parity port — partial, see docs/prds/REAGENT-FLOW-PARITY.md):
+- DONE: off-deck auto-resume (startRun enqueues auto_resume_run); robot health
+  badges (ready/busy/hung/offline) + restart-server banner + run counter on the
+  reagent gallery/tabs/cards.
+- DEFERRED (needs review/testing, not done blind): reorder reagent Loading to
+  params -> barcode scanning -> auto-start. Reagent Loading has extra steps
+  (ReagentBatchScan, ReagentPreparation) and its DeckLoadingGrid lacks
+  plannedCartridgeCount/mismatch + the scanDeckAndCartridges chain, so where the
+  reagent-specific steps sit relative to params is an open question for Jacob.
+npm run check 11-baseline (0 new); builds green. All on master.
+
+=== 2026-06-17 — failed-slot rescan + calibration foundation (autonomous crank) ===
+FAILED-SLOT ROBOT RESCAN (PRD docs/prds/FAILED-SLOT-ROBOT-RESCAN.md):
+- sweep endpoint accepts optional slotIndices[] — walk exactly those slots.
+- wax + reagent DeckLoadingGrid: "Retry N failed slots with robot" button re-sweeps
+  only the red tiles (reusing the focus/grid-search recovery); recovered tiles
+  clear in the absorb loop; wax auto-completes if the retry clears all + count matches.
+CALIBRATION (CALIB-* PRDs merged to master from ralph/labware-calibration):
+- CALIB-1 server: DeckCalibrationEdit model + apply-edit service (Mongo source of
+  truth + best-effort local JSON mirror + history/AuditLog).
+- CALIB-1 manual tuner page /manufacturing/cart-mfg/deck-tuner (pick deck → hole →
+  nudge X/Y/Z → save). Testable without a robot.
+- NOT done (need LAN / risky blind): CALIB-0 live-jog session + tuner jog mode;
+  CALIB-1-3 sync-to-robot; CALIB-2 global-cal surface; CALIB-3 Mongo offsets
+  (invasive .py edits). See CALIB-NEXT-STEPS.md.
+npm run check 11-baseline (0 new errors); builds green. All on master.

@@ -6,12 +6,15 @@ import {
 	BarcodeInventory
 } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
+import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
+
+	const checkedOutIds = await getCheckedOutCartridgeIds();
 
 	const now = Date.now();
 	const todayStart = new Date();
@@ -48,7 +51,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			.sort({ ovenEntryTime: -1 }).lean(),
 		Promise.resolve(null),
 		CartridgeRecord.aggregate([
-			{ $group: { _id: '$currentPhase', count: { $sum: 1 } } }
+			{ $group: { _id: '$status', count: { $sum: 1 } } }
 		]),
 		Consumable.find({ type: 'top_seal_roll', status: 'active' })
 			.select('_id barcode remainingLengthFt initialLengthFt').lean(),
@@ -61,7 +64,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const settings = settingsDoc as any ?? {};
 	const minOvenTimeMin: number = settings?.waxFilling?.minOvenTimeMin ?? 60;
-	const cartridgesPerSheet: number = settings?.general?.cartridgesPerLaserCutSheet ?? 13;
+	const cartridgesPerSheet: number = settings?.general?.cartridgesPerLaserCutSheet ?? 16;
 	const waxStorageMaxAgeDays: number = settings?.general?.waxStorageMaxAgeDays ?? 7;
 	const robotStallWarningMin: number = settings?.general?.robotStallWarningMin ?? 90;
 	const refreshIntervalSec: number = settings?.general?.dashboardRefreshIntervalSec ?? 30;
@@ -89,12 +92,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 			{ $group: { _id: '$status', count: { $sum: 1 } } }
 		]),
 		CartridgeRecord.countDocuments({
-			currentPhase: 'voided',
+			status: 'voided',
 			updatedAt: { $gte: todayStart }
 		}),
 		CartridgeRecord.countDocuments({
 			'reagentFilling.recordedAt': { $gte: todayStart },
-			currentPhase: { $in: ['reagent_filled', 'sealed', 'stored'] }
+			status: { $in: ['reagent_filled', 'sealed', 'stored'] }
 		}),
 		// Weekly
 		WaxFillingRun.aggregate([
@@ -106,22 +109,22 @@ export const load: PageServerLoad = async ({ locals }) => {
 			{ $group: { _id: '$status', count: { $sum: 1 } } }
 		]),
 		CartridgeRecord.countDocuments({
-			currentPhase: 'voided',
+			status: 'voided',
 			updatedAt: { $gte: weekStart }
 		}),
 		CartridgeRecord.countDocuments({
 			'reagentFilling.recordedAt': { $gte: weekStart },
-			currentPhase: { $in: ['reagent_filled', 'sealed', 'stored'] }
+			status: { $in: ['reagent_filled', 'sealed', 'stored'] }
 		}),
 		// Rejection reasons
 		CartridgeRecord.aggregate([
-			{ $match: { currentPhase: 'voided', 'waxQc.recordedAt': { $gte: weekStart } } },
+			{ $match: { status: 'voided', 'waxQc.recordedAt': { $gte: weekStart } } },
 			{ $group: { _id: '$waxQc.rejectionReason', count: { $sum: 1 } } },
 			{ $sort: { count: -1 } },
 			{ $limit: 5 }
 		]),
 		CartridgeRecord.aggregate([
-			{ $match: { currentPhase: 'voided', 'reagentInspection.recordedAt': { $gte: weekStart } } },
+			{ $match: { status: 'voided', 'reagentInspection.recordedAt': { $gte: weekStart } } },
 			{ $group: { _id: '$reagentInspection.reason', count: { $sum: 1 } } },
 			{ $sort: { count: -1 } },
 			{ $limit: 5 }
@@ -159,7 +162,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		]),
 		// Oldest wax stored
 		CartridgeRecord.findOne(
-			{ currentPhase: 'wax_stored' },
+			{ status: 'wax_stored', _id: { $nin: checkedOutIds } },
 			{ 'waxStorage.timestamp': 1 }
 		).sort({ 'waxStorage.timestamp': 1 }).lean()
 	]);
@@ -181,10 +184,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 	});
 
 	// --- Robot status computation ---
-	const WAX_ACTIVE = ['Setup', 'Loading', 'Running', 'setup', 'loading', 'running'];
-	const WAX_DECK_FREE = ['Awaiting Removal', 'QC', 'Storage', 'awaiting_removal', 'qc', 'storage'];
-	const REAGENT_ACTIVE = ['Setup', 'Loading', 'Running', 'setup', 'loading', 'running'];
-	const REAGENT_DECK_FREE = ['Inspection', 'Top Sealing', 'Storage'];
+	// Page-owned stages = operator still working the run on the filling page
+	// → robot is "In Use". Post-OT-2 stages = run lives on Opentron Control
+	// queue, robot is free for a new filling run.
+	const WAX_ACTIVE = ['Setup', 'Loading', 'Running', 'Awaiting Removal',
+		'setup', 'loading', 'running', 'awaiting_removal', 'cooling'];
+	const REAGENT_ACTIVE = ['Setup', 'Loading', 'Running', 'Inspection',
+		'setup', 'loading', 'running', 'inspection'];
+	const WAX_POST_OT2_QUEUED = ['QC', 'Storage', 'qc', 'storage'];
+	const REAGENT_POST_OT2_QUEUED = ['Top Sealing', 'Storage'];
 
 	const robotUtilMap = new Map<string, number>();
 	for (const r of [...(robotUtilWax as any[]), ...(robotUtilReagent as any[])]) {
@@ -202,19 +210,19 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 		if (waxRun && WAX_ACTIVE.includes(waxRun.status)) {
 			status = 'running_wax';
-			displayStatus = `Running — Wax Fill (${waxRun.status})`;
+			displayStatus = `In Use — Wax (${waxRun.status})`;
 			robotPhysicallyFree = false;
 		} else if (reagentRun && REAGENT_ACTIVE.includes(reagentRun.status)) {
 			status = 'running_reagent';
-			displayStatus = `Running — Reagent Fill (${reagentRun.status})`;
+			displayStatus = `In Use — Reagent (${reagentRun.status})`;
 			robotPhysicallyFree = false;
-		} else if (waxRun && WAX_DECK_FREE.includes(waxRun.status)) {
-			status = 'deck_free_wax';
-			displayStatus = `Robot Free — Wax run: ${waxRun.status}`;
+		} else if (waxRun && WAX_POST_OT2_QUEUED.includes(waxRun.status)) {
+			status = 'available';
+			displayStatus = `Available — Wax queued (${waxRun.status})`;
 			robotPhysicallyFree = true;
-		} else if (reagentRun && REAGENT_DECK_FREE.includes(reagentRun.status)) {
-			status = 'deck_free_reagent';
-			displayStatus = `Robot Free — Reagent run: ${reagentRun.status}`;
+		} else if (reagentRun && REAGENT_POST_OT2_QUEUED.includes(reagentRun.status)) {
+			status = 'available';
+			displayStatus = `Available — Reagent queued (${reagentRun.status})`;
 			robotPhysicallyFree = true;
 		} else {
 			status = 'available';

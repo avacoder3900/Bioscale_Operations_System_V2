@@ -1,0 +1,7 @@
+aiohttp>=3.9
+aiortc>=1.6
+evdev>=1.7
+gpiozero>=2.0
+opencv-python>=4.8
+pyjwt>=2.8
+python-dotenv>=1.0

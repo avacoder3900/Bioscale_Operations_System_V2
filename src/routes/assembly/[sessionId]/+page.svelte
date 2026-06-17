@@ -34,12 +34,53 @@
 	// Work instruction mode: use work instruction steps if available
 	let hasWorkInstructions = $derived(data.workInstructionSteps.length > 0);
 
+	// Set of part numbers already scanned for a given WI step (each scan is a
+	// fieldRecord with bomItemId = partNumber, written by the scanPart action).
+	function getScannedPartsForStep(stepId: string): Set<string> {
+		const scanned = new Set<string>();
+		for (const fr of data.capturedFieldRecords) {
+			if (fr.workInstructionStepId === stepId && fr.bomItemId) {
+				scanned.add(fr.bomItemId);
+			}
+		}
+		return scanned;
+	}
+
+	// A step is fully scanned when every partRequirement has at least one scan
+	// recorded for it. Steps with no parts fall back to the legacy completedAt
+	// signal so non-scan steps don't get stuck.
+	function isWiStepFullyScanned(stepId: string): boolean {
+		const step = data.workInstructionSteps.find((s) => s.id === stepId);
+		if (!step) return false;
+		if (step.partRequirements.length === 0) {
+			return data.completedStepRecords.some(
+				(r: { workInstructionStepId: string | null }) => r.workInstructionStepId === stepId
+			);
+		}
+		const scanned = getScannedPartsForStep(stepId);
+		return step.partRequirements.every((pr: { partNumber: string }) =>
+			scanned.has(pr.partNumber)
+		);
+	}
+
+	// The next part requirement in the step that hasn't been scanned yet — that's
+	// the expected part for the operator's next scan.
+	function getNextUnscannedPart(
+		stepId: string
+	): { partNumber: string; quantity: number } | null {
+		const step = data.workInstructionSteps.find((s) => s.id === stepId);
+		if (!step) return null;
+		const scanned = getScannedPartsForStep(stepId);
+		const next = step.partRequirements.find(
+			(pr: { partNumber: string }) => !scanned.has(pr.partNumber)
+		);
+		return next ? { partNumber: next.partNumber, quantity: next.quantity } : null;
+	}
+
 	// For work instruction mode
 	let currentWiStepIndex = $derived(() => {
 		if (!hasWorkInstructions) return 0;
-		// Find first incomplete step
-		const completedStepIds = new Set(data.completedStepRecords.map((r) => r.workInstructionStepId));
-		const index = data.workInstructionSteps.findIndex((s) => !completedStepIds.has(s.id));
+		const index = data.workInstructionSteps.findIndex((s) => !isWiStepFullyScanned(s.id));
 		return index === -1 ? data.workInstructionSteps.length : index;
 	});
 	let currentWiStep = $derived(
@@ -89,7 +130,9 @@
 	}
 
 	function isWiStepCompleted(stepId: string): boolean {
-		return data.completedStepRecords.some((r) => r.workInstructionStepId === stepId);
+		// "Completed" = all parts in this step have been scanned (or, for steps with
+		// no parts, the legacy completedAt timestamp exists).
+		return isWiStepFullyScanned(stepId);
 	}
 
 	function getWiStepScanData(
@@ -116,31 +159,42 @@
 		const barcodeInput = formElement.querySelector('input[name="barcode"]') as HTMLInputElement;
 		const partInput = formElement.querySelector(
 			'input[name="partDefinitionId"]'
-		) as HTMLInputElement;
+		) as HTMLInputElement | null;
+		const expectedInput = formElement.querySelector(
+			'input[name="expectedPartNumber"]'
+		) as HTMLInputElement | null;
+		const qtyInput = formElement.querySelector('input[name="qty"]') as HTMLInputElement | null;
 		const wiStepInput = formElement.querySelector(
 			'input[name="workInstructionStepId"]'
-		) as HTMLInputElement;
+		) as HTMLInputElement | null;
 
-		if (barcodeInput && partInput) {
-			barcodeInput.value = barcode;
+		if (!barcodeInput) return;
+		barcodeInput.value = barcode;
 
-			if (hasWorkInstructions && currentWiStep) {
-				// Work instruction mode
-				const firstPartReq = currentWiStep.partRequirements[0];
-				const partDef = firstPartReq
-					? getPartDefinitionForNumber(firstPartReq.partNumber)
+		if (hasWorkInstructions && currentWiStep) {
+			// Work instruction mode — target the next unscanned part in this step.
+			const next = getNextUnscannedPart(currentWiStep.id);
+			const fallbackReq = currentWiStep.partRequirements[0];
+			const expectedPartNumber = next?.partNumber ?? fallbackReq?.partNumber ?? '';
+			const expectedQty = next?.quantity ?? fallbackReq?.quantity ?? 1;
+
+			if (expectedInput) expectedInput.value = expectedPartNumber;
+			if (qtyInput) qtyInput.value = String(expectedQty);
+			if (wiStepInput) wiStepInput.value = currentWiStep.id;
+			if (partInput) {
+				const partDef = expectedPartNumber
+					? getPartDefinitionForNumber(expectedPartNumber)
 					: data.parts[0];
 				partInput.value = partDef?.id ?? '';
-				if (wiStepInput) {
-					wiStepInput.value = currentWiStep.id;
-				}
-			} else if (currentPart) {
-				// Parts-only mode
-				partInput.value = currentPart.id;
 			}
-
-			formElement.requestSubmit();
+		} else if (currentPart) {
+			// Parts-only mode (no WI loaded).
+			if (expectedInput) expectedInput.value = currentPart.partNumber ?? '';
+			if (qtyInput) qtyInput.value = String(getQuantityToDeduct(currentPart.id));
+			if (partInput) partInput.value = currentPart.id;
 		}
+
+		formElement.requestSubmit();
 	}
 
 	// Custom Field Functions (PRD-WINSTX)
@@ -294,19 +348,36 @@
 				</div>
 			{/if}
 
-			<!-- Required Parts for this step -->
+			<!-- Required Parts for this step (with scan status) -->
 			{#if currentWiStep.partRequirements.length > 0}
+				{@const scannedForStep = getScannedPartsForStep(currentWiStep.id)}
+				{@const nextPart = getNextUnscannedPart(currentWiStep.id)}
 				<div class="mb-4">
 					<h4 class="tron-text-muted mb-2 text-sm font-medium">Required Parts</h4>
 					<div class="flex flex-wrap gap-2">
 						{#each currentWiStep.partRequirements as partReq (partReq.id)}
+							{@const isScanned = scannedForStep.has(partReq.partNumber)}
+							{@const isNext = nextPart?.partNumber === partReq.partNumber}
 							<span
-								class="rounded bg-[var(--color-tron-cyan)]/10 px-2 py-1 font-mono text-sm text-[var(--color-tron-cyan)]"
+								class="rounded px-2 py-1 font-mono text-sm {isScanned
+									? 'bg-[var(--color-tron-green)]/15 text-[var(--color-tron-green)]'
+									: isNext
+										? 'bg-[var(--color-tron-cyan)]/25 text-[var(--color-tron-cyan)] ring-1 ring-[var(--color-tron-cyan)]'
+										: 'bg-[var(--color-tron-cyan)]/10 text-[var(--color-tron-cyan)]'}"
 							>
-								{partReq.partNumber} × {partReq.quantity}
+								{isScanned ? '✓ ' : isNext ? '→ ' : ''}{partReq.partNumber} × {partReq.quantity}
 							</span>
 						{/each}
 					</div>
+					{#if nextPart}
+						<p class="tron-text-muted mt-2 text-xs">
+							Next scan must match
+							<span class="font-mono text-[var(--color-tron-cyan)]">{nextPart.partNumber}</span>
+							(decrements inventory by {nextPart.quantity}).
+						</p>
+					{:else}
+						<p class="mt-2 text-xs text-[var(--color-tron-green)]">All parts scanned for this step.</p>
+					{/if}
 				</div>
 			{/if}
 
@@ -565,6 +636,8 @@
 			>
 				<input type="hidden" name="barcode" />
 				<input type="hidden" name="partDefinitionId" />
+				<input type="hidden" name="expectedPartNumber" />
+				<input type="hidden" name="qty" />
 				<input type="hidden" name="workInstructionStepId" />
 				<ScanInput
 					label={currentWiStep.requiresScan ? 'Scan to Complete Step' : 'Scan Part Barcode'}
@@ -707,6 +780,8 @@
 			>
 				<input type="hidden" name="barcode" />
 				<input type="hidden" name="partDefinitionId" />
+				<input type="hidden" name="expectedPartNumber" />
+				<input type="hidden" name="qty" />
 				<input type="hidden" name="workInstructionStepId" />
 				<ScanInput label="Scan Part Barcode" placeholder="Scan barcode..." onScan={handleScan} />
 			</form>

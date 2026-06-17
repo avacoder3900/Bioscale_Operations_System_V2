@@ -19,6 +19,10 @@ const equipmentSchema = new Schema({
 	lastHealthOk: Boolean, lastHealthAt: Date,
 	// Deck specific
 	currentRobotId: String, lockoutUntil: Date, lastUsed: Date,
+	// Deck QR alias (DECK-QR): a QR/UUID (same format as cartridge barcodes) stuck
+	// on the deck at a consistent spot. The gantry auto-scan reads this; it
+	// resolves to the deck's canonical _id (e.g. DECK-004). Scan either one.
+	qrCode: { type: String, index: true },
 	// Cooling tray specific
 	assignedRunId: String,
 	// Usage log (shared by deck/tray)

@@ -8,6 +8,18 @@ export interface RobotRunAlert {
 	severity?: 'info' | 'warning' | 'error';
 }
 
+export interface RobotHealthSummary {
+	status: 'ready' | 'busy' | 'hung' | 'offline';
+	label: string;
+	detail: string;
+	bridgeOnline: boolean;
+	serverOk: boolean;
+	engineOk: boolean;
+	protocolRun: string | null;
+	maintenanceRun: string | null;
+	lastBeatMsAgo: number | null;
+}
+
 export interface RobotRunState {
 	robotId: string;
 	name: string;
@@ -18,5 +30,8 @@ export interface RobotRunState {
 	runStartTime: Date | string | null;
 	runEndTime: Date | string | null;
 	deckId: string | null;
+	cartridgeCount?: number;
+	health?: RobotHealthSummary | null;
 	alerts: RobotRunAlert[];
+	activeProcess?: 'wax' | 'reagent' | null;
 }

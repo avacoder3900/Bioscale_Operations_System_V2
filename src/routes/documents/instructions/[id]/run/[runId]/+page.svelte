@@ -6,11 +6,13 @@
 	import UnitTabBar from '$lib/components/production/UnitTabBar.svelte';
 	import UnitStepView from '$lib/components/production/UnitStepView.svelte';
 
-	let { data, form } = $props();
+	let { data, form: _form } = $props();
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const form = _form as any;
 
 	const initialUnitId = data.units[0]?.id ?? '';
 	let selectedUnitId = $state(initialUnitId);
-	let selectedUnit = $derived(data.units.find((u) => u.id === selectedUnitId));
+	let selectedUnit = $derived(data.units.find((u: any) => u.id === selectedUnitId));
 
 	// Build completed step IDs per unit from session records
 	let completedStepsByUnit = $derived.by(() => {
@@ -18,7 +20,7 @@
 		for (const unit of data.units) {
 			if (unit.assemblySessionId) {
 				const records = data.completedStepsBySession[unit.assemblySessionId] ?? [];
-				map.set(unit.id, new Set(records.map((r) => r.workInstructionStepId)));
+				map.set(unit.id, new Set(records.map((r: any) => r.workInstructionStepId)));
 			} else {
 				map.set(unit.id, new Set());
 			}
@@ -30,7 +32,7 @@
 		completedStepsByUnit.get(selectedUnitId) ?? new Set<string>()
 	);
 
-	let allUnitsCompleted = $derived(data.units.every((u) => u.status === 'completed'));
+	let allUnitsCompleted = $derived(data.units.every((u: any) => u.status === 'completed'));
 	let runStatus = $derived(
 		data.run.status as 'approved' | 'in_progress' | 'paused' | 'completed' | 'cancelled'
 	);
@@ -62,7 +64,7 @@
 
 	function handleUnitSelect(unitId: string) {
 		selectedUnitId = unitId;
-		const unit = data.units.find((u) => u.id === unitId);
+		const unit = data.units.find((u: any) => u.id === unitId);
 		if (unit && unit.status === 'pending' && !startingUnit) {
 			startingUnit = true;
 		}
@@ -99,7 +101,7 @@
 
 	<!-- Unit Tab Bar -->
 	<UnitTabBar
-		units={data.units.map((u) => ({
+		units={data.units.map((u: any) => ({
 			id: u.id,
 			unitIndex: u.unitIndex,
 			udi: u.udi,

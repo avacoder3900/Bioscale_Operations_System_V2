@@ -12,8 +12,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	const page = Math.max(1, Number(url.searchParams.get('page') ?? 1));
 	const search = url.searchParams.get('search') ?? '';
-	const assayTypeId = url.searchParams.get('assayTypeId') ?? '';
-	const lifecycleStage = url.searchParams.get('lifecycleStage') ?? '';
+	// Frozen +page.svelte sends `assayType` and `stage`; older callers/bookmarks
+	// use `assayTypeId` and `lifecycleStage`. Read both so the dropdowns work.
+	const assayTypeId =
+		url.searchParams.get('assayType') ?? url.searchParams.get('assayTypeId') ?? '';
+	const lifecycleStage =
+		url.searchParams.get('stage') ?? url.searchParams.get('lifecycleStage') ?? '';
 	const sortBy = url.searchParams.get('sortBy') ?? 'createdAt';
 	const sortDir = url.searchParams.get('sortDir') ?? 'desc';
 
@@ -34,7 +38,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			.limit(PAGE_SIZE)
 			.lean(),
 		CartridgeRecord.countDocuments(filter),
-		AssayDefinition.find({ isActive: true }, { _id: 1, name: 1 }).lean(),
+		AssayDefinition.find({ isActive: true, hidden: { $ne: true } }, { _id: 1, name: 1 }).lean(),
 		Customer.find({ status: 'active' }, { _id: 1, name: 1 }).lean(),
 		ShippingLot.find({ status: { $in: ['open', 'released'] } }).sort({ createdAt: -1 }).lean()
 	]);
@@ -50,6 +54,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			inspectionStatus: c.reagentInspection?.status ?? null,
 			topSealBatchId: c.topSeal?.batchId ?? null,
 			shippingLotId: c.shipping?.packageId ?? null,
+			fridgeId: c.storage?.fridgeId ?? c.storage?.locationId ?? null,
+			storageContainerBarcode: c.storage?.containerBarcode ?? null,
+			expirationDate: c.reagentFilling?.expirationDate ?? null,
+			operatorName: c.reagentInspection?.operator?.username
+				?? c.reagentFilling?.operator?.username
+				?? null,
 			createdAt: c.createdAt
 		})),
 		total,

@@ -62,6 +62,14 @@
 	const reagentYield = $derived(() => {
 		return reagentTotal > 0 ? (((data.reagentInspection['Accepted'] ?? 0) / reagentTotal) * 100).toFixed(1) : '—';
 	});
+
+	function runStatusClass(status: string): string {
+		const s = status.toLowerCase();
+		if (s === 'completed' || s === 'complete') return 'text-emerald-300 bg-emerald-900/40 border-emerald-500/30';
+		if (s === 'aborted' || s === 'cancelled') return 'text-red-300 bg-red-900/40 border-red-500/30';
+		if (s === 'running' || s === 'in progress') return 'text-green-300 bg-green-900/40 border-green-500/30';
+		return 'text-[var(--color-tron-text-secondary)] bg-[var(--color-tron-surface)] border-[var(--color-tron-border)]';
+	}
 </script>
 
 <div class="space-y-5">
@@ -222,11 +230,24 @@
 					<div class="space-y-1.5">
 						{#each data.storageDistribution as loc}
 							<a href="/equipment/location/{loc.locationId}" class="flex items-center justify-between rounded px-2 py-1.5 hover:bg-[var(--color-tron-surface)] transition-colors">
-								<div class="flex items-center gap-2">
+								<div class="flex min-w-0 flex-1 items-center gap-2">
 									<span class="text-sm">🧊</span>
-									<span class="text-xs text-[var(--color-tron-text)]">{loc.locationName}</span>
+									<span class="truncate text-xs text-[var(--color-tron-text)]">{loc.locationName}</span>
 								</div>
-								<div class="flex items-center gap-2">
+								<div class="flex items-center gap-2.5">
+									{#if loc.count > 0}
+										<span class="font-mono text-[10px] text-amber-300" title="Accepted wax">
+											<span class="font-bold">{loc.waxAcceptedCount ?? 0}</span>A
+										</span>
+										<span class="font-mono text-[10px] text-red-300" title="Scrapped wax">
+											<span class="font-bold">{loc.waxScrappedCount ?? 0}</span>S
+										</span>
+										{#if (loc.reagentCount ?? 0) > 0}
+											<span class="font-mono text-[10px] text-purple-300" title="Reagent stored">
+												<span class="font-bold">{loc.reagentCount}</span>R
+											</span>
+										{/if}
+									{/if}
 									<span class="text-xs font-mono font-bold text-[var(--color-tron-cyan)]">{loc.count}</span>
 									{#if loc.capacity}
 										<span class="text-[10px] text-[var(--color-tron-text-secondary)]">/ {loc.capacity}</span>
@@ -263,6 +284,78 @@
 		</div>
 	</div>
 
+	<!-- Last 7 days run history -->
+	<TronCard>
+		<div class="mb-3 flex items-center justify-between">
+			<div>
+				<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">Recent Runs (last 7 days)</h3>
+				<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Click a run ID to see every cartridge in it</p>
+			</div>
+			<a href="/manufacturing/cart-mfg/opentrons/history" class="text-xs text-[var(--color-tron-cyan)] hover:underline">
+				Full history →
+			</a>
+		</div>
+		{#if data.recentRuns.length === 0}
+			<p class="text-center text-xs text-[var(--color-tron-text-secondary)] py-4">No wax or reagent runs in the last 7 days.</p>
+		{:else}
+			<div class="overflow-x-auto">
+				<table class="w-full text-xs">
+					<thead>
+						<tr class="border-b border-[var(--color-tron-border)] text-left text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">
+							<th class="px-2 py-1.5 font-medium">Run ID</th>
+							<th class="px-2 py-1.5 font-medium">Type</th>
+							<th class="px-2 py-1.5 font-medium">Status</th>
+							<th class="px-2 py-1.5 font-medium">Robot</th>
+							<th class="px-2 py-1.5 font-medium">Operator</th>
+							<th class="px-2 py-1.5 font-medium">Assay</th>
+							<th class="px-2 py-1.5 text-right font-medium">Carts</th>
+							<th class="px-2 py-1.5 font-medium">Started</th>
+							<th class="px-2 py-1.5 font-medium">Notes</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each data.recentRuns as run (run.runId + run.processType)}
+							<tr class="border-b border-[var(--color-tron-border)]/30 hover:bg-[var(--color-tron-surface)]/40">
+								<td class="px-2 py-1.5 font-mono">
+									<a href="/cartridge-admin?runId={run.runId}"
+										class="text-[var(--color-tron-cyan)] hover:underline"
+										title="Show all cartridges in this run"
+									>{run.runId}</a>
+								</td>
+								<td class="px-2 py-1.5">
+									<span class="rounded border px-1.5 py-0.5 text-[10px] font-medium {run.processType === 'wax' ? 'border-amber-500/30 bg-amber-900/40 text-amber-300' : 'border-blue-500/30 bg-blue-900/40 text-blue-300'}">
+										{run.processType === 'wax' ? 'Wax' : 'Reagent'}
+									</span>
+								</td>
+								<td class="px-2 py-1.5">
+									<span class="rounded border px-1.5 py-0.5 text-[10px] font-medium {runStatusClass(run.status)}">
+										{run.status}
+									</span>
+								</td>
+								<td class="px-2 py-1.5 text-[var(--color-tron-text-secondary)]">{run.robotName ?? '—'}</td>
+								<td class="px-2 py-1.5 text-[var(--color-tron-text-secondary)]">{run.operatorName ?? '—'}</td>
+								<td class="px-2 py-1.5 text-[var(--color-tron-text-secondary)]">{run.assayName ?? '—'}</td>
+								<td class="px-2 py-1.5 text-right font-mono text-[var(--color-tron-text)]">{run.cartridgeCount}</td>
+								<td class="px-2 py-1.5 text-[var(--color-tron-text-secondary)]">{formatRelative(run.startTime ?? run.createdAt)}</td>
+								<td class="px-2 py-1.5">
+									{#if run.notes && run.notes.count > 0}
+										<span class="inline-block max-w-[200px] truncate rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 px-1.5 py-0.5 text-[10px] text-[var(--color-tron-cyan)]"
+											title={run.notes.lastBody ?? ''}
+										>
+											{run.notes.count} · {run.notes.lastBody}
+										</span>
+									{:else}
+										<span class="text-[var(--color-tron-text-secondary)]/40">—</span>
+									{/if}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	</TronCard>
+
 	<!-- Expiring + Recent Row -->
 	<div class="grid gap-4 lg:grid-cols-2">
 		<!-- Expiring Soon -->
@@ -272,7 +365,7 @@
 				<div class="space-y-1.5">
 					{#each data.expiringSoon as c}
 						{@const days = daysUntil(c.expirationDate)}
-						<a href="/cartridges/{c.id}" class="flex items-center justify-between rounded px-2 py-1.5 hover:bg-[var(--color-tron-surface)] transition-colors">
+						<a href="/cartridge-admin/dhr/{c.id}" class="flex items-center justify-between rounded px-2 py-1.5 hover:bg-[var(--color-tron-surface)] transition-colors">
 							<div class="flex items-center gap-2">
 								<span class="font-mono text-xs text-[var(--color-tron-text)]">{c.id.slice(-8)}</span>
 								<span class="text-xs text-[var(--color-tron-text-secondary)]">{c.assay}</span>
@@ -291,7 +384,7 @@
 			<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Recent Activity</h3>
 			<div class="space-y-1">
 				{#each data.recentActivity as c}
-					<a href="/cartridges/{c.id}" class="flex items-center justify-between rounded px-2 py-1.5 hover:bg-[var(--color-tron-surface)] transition-colors">
+					<a href="/cartridge-admin/dhr/{c.id}" class="flex items-center justify-between rounded px-2 py-1.5 hover:bg-[var(--color-tron-surface)] transition-colors">
 						<div class="flex items-center gap-2">
 							<div class="h-2 w-2 rounded-full" style="background: {phaseColor(c.phase)}"></div>
 							<span class="font-mono text-xs text-[var(--color-tron-text)]">{c.id.slice(-8)}</span>
@@ -313,22 +406,4 @@
 		</TronCard>
 	</div>
 
-	<!-- Lab Cartridges (if any) -->
-	{#if data.lab.total > 0}
-		<TronCard>
-			<h3 class="mb-3 text-sm font-semibold text-[var(--color-tron-text)]">Lab Cartridges</h3>
-			<div class="grid gap-3 sm:grid-cols-3">
-				<div class="text-center">
-					<div class="text-xl font-bold text-[var(--color-tron-cyan)]">{data.lab.total}</div>
-					<div class="text-[10px] text-[var(--color-tron-text-secondary)] uppercase">Total</div>
-				</div>
-				{#each data.lab.statusCounts as s}
-					<div class="text-center">
-						<div class="text-xl font-bold text-[var(--color-tron-text)]">{s.count}</div>
-						<div class="text-[10px] text-[var(--color-tron-text-secondary)] capitalize">{s.status?.replace(/_/g, ' ') ?? '—'}</div>
-					</div>
-				{/each}
-			</div>
-		</TronCard>
-	{/if}
 </div>

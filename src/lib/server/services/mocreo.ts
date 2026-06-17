@@ -1,9 +1,10 @@
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { env } from '$env/dynamic/private';
 
 const BASE_URL = 'https://api.sync-sign.com/v2';
-const CONFIG_PATH = join(homedir(), '.openclaw', 'secrets', 'mocreo_config.json');
+const DEFAULT_CONFIG_PATH = join(homedir(), '.openclaw', 'secrets', 'mocreo_config.json');
 
 interface MocreoConfig {
 	email: string;
@@ -19,8 +20,28 @@ interface TokenCache {
 let tokenCache: TokenCache | null = null;
 
 function loadConfig(): MocreoConfig {
-	const raw = readFileSync(CONFIG_PATH, 'utf-8');
-	return JSON.parse(raw);
+	// Prefer env vars (works on Vercel and any host without filesystem secrets)
+	if (env.MOCREO_EMAIL && env.MOCREO_PASSWORD) {
+		return { email: env.MOCREO_EMAIL, password: env.MOCREO_PASSWORD };
+	}
+
+	const path = env.MOCREO_CONFIG_PATH || DEFAULT_CONFIG_PATH;
+	if (!existsSync(path)) {
+		throw new Error(
+			`Mocreo config not found. Set MOCREO_EMAIL and MOCREO_PASSWORD env vars, ` +
+				`or place a JSON file at ${path} (override with MOCREO_CONFIG_PATH).`
+		);
+	}
+	try {
+		const raw = readFileSync(path, 'utf-8');
+		const parsed = JSON.parse(raw);
+		if (!parsed.email || !parsed.password) {
+			throw new Error(`Mocreo config at ${path} missing required "email" or "password" field.`);
+		}
+		return parsed;
+	} catch (err: any) {
+		throw new Error(`Failed to load Mocreo config from ${path}: ${err.message}`);
+	}
 }
 
 async function authenticate(): Promise<string> {
@@ -30,21 +51,35 @@ async function authenticate(): Promise<string> {
 	}
 
 	const config = loadConfig();
-	const res = await fetch(`${BASE_URL}/oauth/token`, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({
-			username: config.email,
-			password: config.password,
-			provider: 'mocreo'
-		})
-	});
-
-	if (!res.ok) {
-		throw new Error(`Mocreo auth failed: ${res.status} ${res.statusText}`);
+	let res: Response;
+	try {
+		res = await fetch(`${BASE_URL}/oauth/token`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				username: config.email,
+				password: config.password,
+				provider: 'mocreo'
+			})
+		});
+	} catch (err: any) {
+		throw new Error(`Mocreo auth network error: ${err.message}`);
 	}
 
-	const body = await res.json();
+	if (!res.ok) {
+		const detail = await res.text().catch(() => '');
+		throw new Error(`Mocreo auth failed: ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ''}`);
+	}
+
+	let body: any;
+	try {
+		body = await res.json();
+	} catch (err: any) {
+		throw new Error(`Mocreo auth: invalid JSON response — ${err.message}`);
+	}
+	if (!body?.data?.accessToken) {
+		throw new Error(`Mocreo auth: response missing accessToken (${JSON.stringify(body).slice(0, 200)})`);
+	}
 	const { accessToken, refreshToken } = body.data;
 
 	// Cache token for 55 minutes (Mocreo tokens typically last 1 hour)
@@ -71,10 +106,14 @@ async function apiGet(path: string): Promise<any> {
 			const retry = await fetch(`${BASE_URL}${path}`, {
 				headers: { Authorization: `Bearer ${newToken}` }
 			});
-			if (!retry.ok) throw new Error(`Mocreo API error: ${retry.status} ${retry.statusText}`);
+			if (!retry.ok) {
+				const detail = await retry.text().catch(() => '');
+				throw new Error(`Mocreo API error (${path}): ${retry.status} ${retry.statusText}${detail ? ` — ${detail.slice(0, 200)}` : ''}`);
+			}
 			return retry.json();
 		}
-		throw new Error(`Mocreo API error: ${res.status} ${res.statusText}`);
+		const detail = await res.text().catch(() => '');
+		throw new Error(`Mocreo API error (${path}): ${res.status} ${res.statusText}${detail ? ` — ${detail.slice(0, 200)}` : ''}`);
 	}
 
 	return res.json();

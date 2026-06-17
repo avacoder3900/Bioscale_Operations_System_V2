@@ -1096,7 +1096,26 @@
 							<td class="font-mono">{formatCurrency(item.unitCost)}</td>
 							<td class="font-mono">{formatCurrency(item.totalValue)}</td>
 							<td>
-								<div class="flex gap-2">
+								<div class="flex items-center gap-2">
+									<form method="POST" action="?/withdrawCartridgePart" use:enhance class="flex items-center gap-1">
+										<input type="hidden" name="id" value={item.id} />
+										<input
+											name="quantity"
+											type="number"
+											min="1"
+											step="1"
+											required
+											placeholder="Qty"
+											class="tron-input w-16 text-xs"
+										/>
+										<input
+											name="reason"
+											type="text"
+											placeholder="Reason (optional)"
+											class="tron-input w-28 text-xs"
+										/>
+										<button type="submit" class="text-xs text-[var(--color-tron-cyan)] hover:underline">Withdraw</button>
+									</form>
 									<form method="POST" action="?/deleteCartridgePart" use:enhance>
 										<input type="hidden" name="id" value={item.id} />
 										<button type="submit" class="text-xs text-[var(--color-tron-red)] hover:underline">Delete</button>

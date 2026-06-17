@@ -11,7 +11,7 @@ function requireAccessionPermission(user: any): void {
 	}
 }
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
 	requireAccessionPermission(locals.user);
 	await connectDB();
 
@@ -55,6 +55,64 @@ export const load: PageServerLoad = async ({ locals }) => {
 			inventoryCount: p.inventoryCount ?? 0
 		}));
 
+	// ---------- Lot history ----------
+	const q = url.searchParams.get('q')?.trim() ?? '';
+	const partIdFilter = url.searchParams.get('partId')?.trim() ?? '';
+	const statusFilter = url.searchParams.get('status')?.trim() ?? '';
+	const fromStr = url.searchParams.get('from')?.trim() ?? '';
+	const toStr = url.searchParams.get('to')?.trim() ?? '';
+
+	const lotQuery: Record<string, any> = {};
+	if (q) {
+		const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+		lotQuery.$or = [
+			{ lotId: re },
+			{ lotNumber: re },
+			{ bagBarcode: re },
+			{ 'part.partNumber': re },
+			{ 'part.name': re }
+		];
+	}
+	if (partIdFilter) lotQuery['part._id'] = partIdFilter;
+	if (statusFilter) lotQuery.status = statusFilter;
+	if (fromStr || toStr) {
+		const dateRange: Record<string, Date> = {};
+		const fromDate = fromStr ? new Date(fromStr) : null;
+		const toDate = toStr ? new Date(toStr) : null;
+		if (fromDate && !isNaN(fromDate.getTime())) dateRange.$gte = fromDate;
+		if (toDate && !isNaN(toDate.getTime())) {
+			toDate.setHours(23, 59, 59, 999);
+			dateRange.$lte = toDate;
+		}
+		if (Object.keys(dateRange).length > 0) lotQuery.createdAt = dateRange;
+	}
+
+	const lotDocs = await ReceivingLot.find(lotQuery)
+		.select('lotId lotNumber part quantity status inspectionPathway operator bagBarcode createdAt')
+		.sort({ createdAt: -1 })
+		.limit(100)
+		.lean() as any[];
+
+	const lots = lotDocs.map((l: any) => ({
+		id: l._id,
+		lotId: l.lotId ?? '',
+		lotNumber: l.lotNumber ?? '',
+		partNumber: l.part?.partNumber ?? '',
+		partName: l.part?.name ?? '',
+		quantity: l.quantity ?? 0,
+		status: l.status ?? 'in_progress',
+		inspectionPathway: l.inspectionPathway ?? '',
+		operatorUsername: l.operator?.username ?? '',
+		bagBarcode: l.bagBarcode ?? '',
+		createdAt: l.createdAt ?? null
+	}));
+
+	const partOptions = allParts.map((p: any) => ({
+		id: p._id,
+		partNumber: p.partNumber ?? '',
+		name: p.name ?? ''
+	}));
+
 	return {
 		registered: JSON.parse(JSON.stringify(registered)),
 		unregistered: JSON.parse(JSON.stringify(unregistered)),
@@ -62,7 +120,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 			total: allParts.length,
 			registered: registered.length,
 			unregistered: unregistered.length
-		}
+		},
+		lots: JSON.parse(JSON.stringify(lots)),
+		partOptions: JSON.parse(JSON.stringify(partOptions)),
+		filters: { q, partId: partIdFilter, status: statusFilter, from: fromStr, to: toStr }
 	};
 };
 

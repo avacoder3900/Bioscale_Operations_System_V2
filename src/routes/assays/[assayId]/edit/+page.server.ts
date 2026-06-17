@@ -12,8 +12,13 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!assay) throw error(404, 'Assay not found');
 
 	// Parse instructions from metadata or bcode if available
-	const instructions: { type: string; params?: Record<string, unknown> }[] =
+	const rawInstructions: { type: string; params?: Record<string, unknown> | number[] }[] =
 		assay.instructions ?? assay.metadata?.instructions ?? [];
+	// Normalize to numeric params[] — the BCODE editor only handles array params.
+	const instructions: { type: string; params?: number[] }[] = rawInstructions.map((i) => ({
+		type: i.type,
+		params: Array.isArray(i.params) ? i.params : undefined
+	}));
 
 	return {
 		assay: {

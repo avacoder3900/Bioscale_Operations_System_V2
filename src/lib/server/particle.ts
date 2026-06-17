@@ -31,7 +31,7 @@ async function getAccessToken(): Promise<string> {
 async function particleFetch(path: string, options: RequestInit = {}): Promise<Response> {
 	const token = await getAccessToken();
 	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), 30000);
+	const timeout = setTimeout(() => controller.abort(), 15000);
 	const res = await fetch(`${PARTICLE_API_BASE}${path}`, {
 		...options,
 		signal: controller.signal,

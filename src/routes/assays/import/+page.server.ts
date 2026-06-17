@@ -1,6 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { connectDB, AssayDefinition, generateId } from '$lib/server/db';
+import { connectDB, AssayDefinition } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
+import { generateLegacyAssayId } from '$lib/server/assay-legacy-shape';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -29,13 +30,28 @@ export const actions: Actions = {
 		// Support both single assay and array of assays
 		const items: any[] = Array.isArray(parsed) ? parsed : [parsed];
 
-		const previews = items.map((item, idx) => ({
-			idx,
-			name: item.name ?? 'Unnamed',
-			skuCode: item.skuCode ?? null,
-			description: item.description ?? null,
-			reagentCount: (item.reagents ?? []).length
-		}));
+		const previews = items.map((item, idx) => {
+			const bcode = typeof item.BCODE === 'string' ? item.BCODE : null;
+			const reagents = (item.reagents ?? []) as any[];
+			const instructionCount = reagents.reduce(
+				(s: number, r: any) => s + (Array.isArray(r?.instructions) ? r.instructions.length : 0),
+				0
+			);
+			return {
+				idx,
+				name: item.name ?? 'Unnamed',
+				skuCode: item.skuCode ?? null,
+				description: item.description ?? null,
+				reagentCount: reagents.length,
+				instructionCount,
+				bcode,
+				bcodeLength: bcode?.length ?? 0,
+				checksum: typeof item.checksum === 'number' ? item.checksum : 0,
+				existingId: typeof item._id === 'string' ? item._id : null,
+				valid: typeof item.name === 'string' && item.name.length > 0,
+				error: typeof item.name === 'string' && item.name.length > 0 ? null : 'Missing name'
+			};
+		});
 
 		return { previews, rawJson: text, importResult: null };
 	},
@@ -65,13 +81,24 @@ export const actions: Actions = {
 
 		const created: string[] = [];
 		for (const item of toImport) {
+			// Preserve the imported doc's _id if it already matches the legacy
+			// A######## format; otherwise mint a new legacy-format ID.
+			const importedId = typeof item._id === 'string' ? item._id : undefined;
+			const idLooksLegacy = importedId && /^A[0-9A-F]{7}$/.test(importedId);
+			const _id = idLooksLegacy ? importedId! : await generateLegacyAssayId(AssayDefinition as any);
+
 			const assay = await AssayDefinition.create({
-				_id: generateId(),
+				_id,
 				name: item.name,
-				skuCode: item.skuCode,
+				// Legacy default is null; respect imported value if any.
+				skuCode: item.skuCode ?? null,
 				description: item.description,
 				duration: item.duration,
-				shelfLifeDays: item.shelfLifeDays,
+				// Pass through legacy markers from the source file verbatim — imports
+				// of a legacy export should round-trip exactly.
+				BCODE: item.BCODE ?? undefined,
+				hidden: item.hidden ?? true,
+				protected: item.protected ?? true,
 				isActive: true,
 				reagents: item.reagents ?? [],
 				versionHistory: []
@@ -80,7 +107,13 @@ export const actions: Actions = {
 		}
 
 		return {
-			importResult: { count: created.length, ids: created },
+			importResult: {
+				count: created.length,
+				ids: created,
+				imported: created.length,
+				skipped: items.length - created.length,
+				errors: [] as { name: string; error: string }[]
+			},
 			previews: [],
 			rawJson: ''
 		};

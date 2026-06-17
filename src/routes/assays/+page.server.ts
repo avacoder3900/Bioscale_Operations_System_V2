@@ -1,5 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, AssayDefinition, CartridgeRecord, AuditLog, generateId } from '$lib/server/db';
+import { generateLegacyAssayId } from '$lib/server/assay-legacy-shape';
 import { hasPermission, requirePermission } from '$lib/server/permissions';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -71,14 +72,17 @@ export const actions: Actions = {
 		if (!assayId) return fail(400, { error: 'Assay ID required' });
 		const original = await AssayDefinition.findById(assayId).lean() as any;
 		if (!original) return fail(404, { error: 'Assay not found' });
-		const newId = generateId();
+		const newId = await generateLegacyAssayId(AssayDefinition as any);
 		await AssayDefinition.create({
 			_id: newId,
 			name: `${original.name} (Copy)`,
-			skuCode: original.skuCode ? `${original.skuCode}-COPY` : undefined,
+			// Legacy shape: skuCode is null unless user explicitly sets it later.
+			skuCode: null,
 			description: original.description,
 			duration: original.duration,
-			shelfLifeDays: original.shelfLifeDays,
+			BCODE: original.BCODE ?? undefined,
+			hidden: true,
+			protected: true,
 			isActive: true,
 			reagents: original.reagents ?? [],
 			versionHistory: []

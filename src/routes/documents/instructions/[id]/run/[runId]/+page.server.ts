@@ -71,11 +71,18 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 
 	// Progress calculation
 	const totalUnits = run.units?.length ?? 0;
-	const completedUnits = (run.units ?? []).filter((u: any) => u.status === 'completed').length;
+	const units = (run.units ?? []) as any[];
+	const completedUnits = units.filter((u) => u.status === 'completed').length;
+	const inProgressUnits = units.filter((u) => u.status === 'in_progress').length;
+	const pendingUnits = units.filter((u) => u.status === 'pending' || !u.status).length;
 	const progress = {
 		completedUnits,
 		totalUnits,
-		percent: totalUnits > 0 ? Math.round((completedUnits / totalUnits) * 100) : 0
+		percent: totalUnits > 0 ? Math.round((completedUnits / totalUnits) * 100) : 0,
+		total: totalUnits,
+		completed: completedUnits,
+		inProgress: inProgressUnits,
+		pending: pendingUnits
 	};
 
 	return {

@@ -13,7 +13,7 @@
 	let name = $state(data.assay.name);
 	let description = $state(data.assay.description ?? '');
 	let changeNotes = $state('');
-	let currentInstructions = $state<Instruction[]>(data.instructions);
+	let currentInstructions = $state<Instruction[]>(data.instructions as Instruction[]);
 	let instructionsJson = $state(JSON.stringify(data.instructions));
 	let submitting = $state(false);
 
@@ -106,7 +106,7 @@
 		<input type="hidden" name="instructions" value={instructionsJson} />
 
 		<!-- BCODE Editor pre-populated with existing instructions -->
-		<BcodeEditor initialInstructions={data.instructions} oncompile={handleCompile} />
+		<BcodeEditor initialInstructions={data.instructions as any} oncompile={handleCompile as any} />
 
 		<!-- Submit -->
 		<div class="mt-4 flex justify-end gap-2">

@@ -2,6 +2,7 @@ import { fail, redirect, error } from '@sveltejs/kit';
 import { connectDB, KanbanTask, KanbanProject, AuditLog, User } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
 import { requirePermission } from '$lib/server/permissions';
+import { checkWipLimit } from '$lib/server/kanban/wip-limit';
 import type { PageServerLoad, Actions } from './$types';
 
 function mapTag(tag: string) {
@@ -106,6 +107,14 @@ export const actions: Actions = {
 
 		const dueDate = fd.get('dueDate') as string | null;
 
+		// If this update changes the assignee of a task already in WIP, check
+		// the new assignee's WIP capacity.
+		const existing = await KanbanTask.findById(params.taskId).select('status assignee').lean() as any;
+		if (existing?.status === 'wip' && assignee && existing.assignee?._id !== assignee._id) {
+			const check = await checkWipLimit(assignee._id, params.taskId);
+			if (!check.ok) return fail(409, { wipLimitError: check });
+		}
+
 		await KanbanTask.updateOne({ _id: params.taskId }, {
 			$set: {
 				title: title.trim(),
@@ -139,6 +148,12 @@ export const actions: Actions = {
 
 		const task = await KanbanTask.findById(params.taskId).lean() as any;
 		if (!task) return fail(400, { error: 'Task not found' });
+
+		// Hard WIP-limit cap. Skip if already in wip (idempotent re-move).
+		if (newStatus === 'wip' && task.status !== 'wip') {
+			const check = await checkWipLimit(task.assignee?._id ?? null, params.taskId);
+			if (!check.ok) return fail(409, { wipLimitError: check });
+		}
 
 		await KanbanTask.updateOne({ _id: params.taskId }, {
 			$set: { status: newStatus, statusChangedAt: new Date() },
@@ -210,6 +225,41 @@ export const actions: Actions = {
 
 		// Tags are just strings — add to the task
 		await KanbanTask.updateOne({ _id: params.taskId }, { $addToSet: { tags: name.trim() } });
+		return { success: true };
+	},
+
+	archive: async ({ locals, params }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
+		await connectDB();
+
+		const task = await KanbanTask.findById(params.taskId).lean() as any;
+		if (!task) return fail(404, { error: 'Task not found' });
+		if (task.archived) return fail(400, { error: 'Task is already archived' });
+		if (task.status !== 'done') return fail(400, { error: 'Only done tasks can be archived' });
+
+		await KanbanTask.updateOne({ _id: params.taskId }, {
+			$set: { archived: true, archivedAt: new Date() },
+			$push: {
+				activityLog: {
+					_id: generateId(),
+					action: 'archived',
+					details: { fromStatus: task.status },
+					createdAt: new Date(),
+					createdBy: locals.user._id
+				}
+			}
+		});
+
+		await AuditLog.create({
+			tableName: 'kanban_tasks',
+			recordId: params.taskId,
+			action: 'UPDATE',
+			oldData: { archived: false },
+			newData: { archived: true },
+			changedBy: locals.user.username ?? locals.user._id
+		});
+
 		return { success: true };
 	}
 };

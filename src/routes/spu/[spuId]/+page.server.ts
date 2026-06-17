@@ -2,8 +2,9 @@ import { fail, error } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import {
 	connectDB, Spu, Batch, User, Customer, AssemblySession,
-	ElectronicSignature, AuditLog, ParticleDevice, generateId
+	ElectronicSignature, AuditLog, ParticleDevice, ValidationSession, generateId
 } from '$lib/server/db';
+import { byId } from '$lib/server/db/native-helpers';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -15,13 +16,17 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const s = spu as any;
 
 	// Parallel lookups
-	const [createdByUser, batch, sessions, signatures, auditTrail, customers] = await Promise.all([
+	const [createdByUser, batch, sessions, signatures, auditTrail, customers, validationSessions] = await Promise.all([
 		s.createdBy ? User.findById(s.createdBy, { username: 1 }).lean() : null,
 		s.batch?._id ? Batch.findById(s.batch._id).lean() : null,
 		AssemblySession.find({ spuId: params.spuId }).sort({ createdAt: -1 }).lean(),
 		ElectronicSignature.find({ entityId: params.spuId }).sort({ signedAt: -1 }).lean(),
 		AuditLog.find({ entityId: params.spuId }).sort({ createdAt: -1 }).limit(50).lean(),
-		Customer.find({ status: 'active' }, { name: 1 }).lean()
+		Customer.find({ status: 'active' }, { name: 1 }).lean(),
+		ValidationSession.find({ spuId: params.spuId })
+			.select('_id type status startedAt completedAt overallPassed failureReasons criteriaUsed magResults override userId rawData')
+			.sort({ createdAt: -1 })
+			.lean()
 	]);
 
 	// Particle device lookup
@@ -45,6 +50,11 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const auditUsers = auditUserIds.length ? await User.find({ _id: { $in: auditUserIds } }, { username: 1 }).lean() : [];
 	const auditMap = new Map(auditUsers.map((u: any) => [u._id, u.username]));
 
+	// Validation session user lookup
+	const valUserIds = [...new Set((validationSessions as any[]).map((v: any) => v.userId).filter(Boolean))];
+	const valUsers = valUserIds.length ? await User.find({ _id: { $in: valUserIds } }, { username: 1 }).lean() : [];
+	const valMap = new Map(valUsers.map((u: any) => [u._id, u.username]));
+
 	return {
 		spu: {
 			id: s._id,
@@ -66,7 +76,6 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 				thermocouple: s.validation?.thermocouple ?? null,
 				lux: s.validation?.lux ?? null,
 				spectrophotometer: s.validation?.spectrophotometer ?? null,
-				opticalConfirmation: s.validation?.opticalConfirmation ?? null,
 				status: s.validation?.status ?? 'pending'
 			},
 			qcDocumentUrl: s.qcDocumentUrl ?? null,
@@ -84,6 +93,27 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			finalizedAt: s.finalizedAt ?? null,
 			corrections: s.corrections ?? []
 		},
+		attachments: (s.attachments ?? []).map((a: any) => {
+			// Parse a capped preview (header + up to 50 rows) for inline viewing.
+			const raw = typeof a.content === 'string' ? a.content : '';
+			const lines = raw.split(/\r?\n/).filter((l: string) => l.trim().length > 0);
+			const grid = lines.slice(0, 51).map((l: string) => l.split(','));
+			return {
+				id: a._id,
+				fileName: a.fileName ?? 'attachment.csv',
+				kind: a.kind ?? 'file',
+				fileSize: a.fileSize ?? 0,
+				rowCount: a.rowCount ?? null,
+				sessionId: a.sessionId ?? null,
+				uploadedAt: a.uploadedAt ?? null,
+				uploadedByName: a.uploadedBy?.username ?? null,
+				preview: {
+					header: grid[0] ?? [],
+					rows: grid.slice(1),
+					truncated: lines.length > 51
+				}
+			};
+		}),
 		batch: batch
 			? {
 					id: (batch as any)._id,
@@ -157,6 +187,25 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 				}
 			: null,
 		assemblyStatusHistory: [],
+		validationSessions: (validationSessions as any[]).map((v: any) => ({
+			id: v._id,
+			type: v.type,
+			status: v.status,
+			startedAt: v.startedAt,
+			completedAt: v.completedAt,
+			overallPassed: v.overallPassed ?? null,
+			failureReasons: v.failureReasons ?? [],
+			criteriaUsed: v.criteriaUsed ?? null,
+			magResults: v.magResults ?? null,
+			rawData: v.rawData ?? null,
+			operatorName: valMap.get(v.userId) ?? 'Unknown',
+			override: v.override ? {
+				by: v.override.by,
+				at: v.override.at,
+				reason: v.override.reason,
+				originalResult: v.override.originalResult
+			} : null
+		})),
 		auditTrail: auditTrail.map((a: any) => ({
 			id: a._id,
 			action: a.action ?? '',
@@ -212,6 +261,74 @@ export const actions: Actions = {
 		await connectDB();
 		await Spu.updateOne({ _id: params.spuId }, { $unset: { particleLink: '' } });
 		return { success: true };
+	},
+
+	uploadCsv: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const file = form.get('file');
+		if (!(file instanceof File) || file.size === 0) {
+			return fail(400, { error: 'A CSV file is required' });
+		}
+		if (file.size > 2 * 1024 * 1024) {
+			return fail(400, { error: 'File too large (max 2 MB)' });
+		}
+		const content = await file.text();
+		// Row count = non-empty lines minus the header row.
+		const lines = content.split(/\r?\n/).filter((l) => l.trim().length > 0);
+		const rowCount = Math.max(0, lines.length - 1);
+
+		const spu = await Spu.findById(params.spuId);
+		if (!spu) return fail(404, { error: 'SPU not found' });
+
+		const attachment = {
+			_id: generateId(),
+			kind: 'thermocouple_csv',
+			fileName: file.name || 'thermocouple.csv',
+			mimeType: file.type || 'text/csv',
+			fileSize: file.size,
+			rowCount,
+			content,
+			sessionId: form.get('sessionId')?.toString() || null,
+			uploadedAt: new Date(),
+			uploadedBy: { _id: locals.user!._id, username: locals.user!.username }
+		};
+		await Spu.updateOne({ _id: params.spuId }, { $push: { attachments: attachment } });
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'spus',
+			recordId: params.spuId,
+			action: 'UPDATE',
+			oldData: {},
+			newData: { attachmentAdded: attachment.fileName, rowCount },
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+
+		return { uploadSuccess: true, fileName: attachment.fileName, rowCount };
+	},
+
+	deleteAttachment: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const attachmentId = form.get('attachmentId')?.toString();
+		if (!attachmentId) return fail(400, { error: 'attachmentId required' });
+
+		await Spu.updateOne({ _id: params.spuId }, { $pull: { attachments: { _id: attachmentId } } });
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'spus',
+			recordId: params.spuId,
+			action: 'UPDATE',
+			oldData: { attachmentId },
+			newData: { attachmentRemoved: attachmentId },
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+
+		return { deleteSuccess: true };
 	},
 
 	// updateAssignment removed — release status (released-rnd/manufacturing/field) via transitionStatus
@@ -360,7 +477,7 @@ export const actions: Actions = {
 		if (spu.finalizedAt) return fail(400, { error: 'Cannot delete a finalized SPU' });
 
 		// Use direct collection delete to bypass sacred middleware
-		await Spu.collection.deleteOne({ _id: params.spuId });
+		await Spu.collection.deleteOne(byId(params.spuId));
 
 		// Audit log
 		await AuditLog.create({

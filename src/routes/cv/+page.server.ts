@@ -1,17 +1,12 @@
 import { redirect } from '@sveltejs/kit';
-import { connectDB } from '$lib/server/db/connection.js';
-import { CvProject } from '$lib/server/db/models/cv-project.js';
 import type { PageServerLoad } from './$types';
 
+/**
+ * /cv — landing redirect. After the cartridge-first refactor, the CV section's
+ * "home" is the chronological image stream. From there operators branch into
+ * /cv/label, /cv/projects, or /capture.
+ */
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
-	await connectDB();
-
-	const projects = await CvProject.find().sort({ createdAt: -1 }).lean();
-
-	return {
-		projects: JSON.parse(JSON.stringify(projects))
-	};
+	redirect(302, '/cv/stream');
 };
-
-export const config = { maxDuration: 60 };

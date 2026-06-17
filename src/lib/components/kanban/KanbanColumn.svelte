@@ -40,9 +40,19 @@
 		config: StatusConfig;
 		tasks: TaskData[];
 		onDrop?: (taskId: string, newStatus: string) => void;
+		collapsible?: boolean;
+		collapsed?: boolean;
+		onToggleCollapse?: () => void;
 	}
 
-	let { config, tasks, onDrop }: Props = $props();
+	let {
+		config,
+		tasks,
+		onDrop,
+		collapsible = false,
+		collapsed = false,
+		onToggleCollapse
+	}: Props = $props();
 	let dragOver = $state(false);
 
 	function handleDragOver(e: DragEvent) {
@@ -81,9 +91,32 @@
 		class="mb-3 flex items-center justify-between rounded-t-lg px-3 py-2"
 		style="background: {config.color}15; border-bottom: 2px solid {config.color};"
 	>
-		<h3 class="text-sm font-bold" style="color: {config.color};">
-			{config.label}
-		</h3>
+		{#if collapsible && onToggleCollapse}
+			<button
+				type="button"
+				onclick={onToggleCollapse}
+				class="flex items-center gap-1.5 transition-opacity hover:opacity-80"
+				title={collapsed ? 'Expand' : 'Collapse'}
+				aria-expanded={!collapsed}
+			>
+				<svg
+					class="h-3 w-3 transition-transform duration-200 {collapsed ? '-rotate-90' : ''}"
+					style="color: {config.color};"
+					fill="none"
+					viewBox="0 0 24 24"
+					stroke="currentColor"
+				>
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+				</svg>
+				<h3 class="text-sm font-bold" style="color: {config.color};">
+					{config.label}
+				</h3>
+			</button>
+		{:else}
+			<h3 class="text-sm font-bold" style="color: {config.color};">
+				{config.label}
+			</h3>
+		{/if}
 		<span
 			class="inline-flex h-6 min-w-[1.5rem] items-center justify-center rounded-full px-1.5 text-xs font-bold"
 			style="background: {config.color}25; color: {config.color};"
@@ -92,64 +125,66 @@
 		</span>
 	</div>
 
-	<!-- Task cards -->
-	<div class="flex flex-1 flex-col gap-2">
-		{#each tasks as task (task.id)}
-			<div class="group relative">
-				<KanbanTaskCard {task} />
+	<!-- Task cards (hidden when collapsed; outer div remains a drop target) -->
+	{#if !collapsed}
+		<div class="flex flex-1 flex-col gap-2">
+			{#each tasks as task (task.id)}
+				<div class="group relative">
+					<KanbanTaskCard {task} />
 
-				<!-- Move buttons overlay -->
-				<div
-					class="absolute top-1 right-1 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100"
-				>
-					{#if config.prevStatus}
-						<form method="POST" action="?/move" use:enhance>
-							<input type="hidden" name="taskId" value={task.id} />
-							<input type="hidden" name="newStatus" value={config.prevStatus} />
-							<button
-								type="submit"
-								class="flex h-7 w-7 items-center justify-center rounded bg-[var(--color-tron-bg-primary)] text-[var(--color-tron-text-secondary)] shadow transition-colors hover:text-[var(--color-tron-cyan)]"
-								title="Move to {config.prevStatus}"
-							>
-								<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-									<path
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										stroke-width="2"
-										d="M15 19l-7-7 7-7"
-									/>
-								</svg>
-							</button>
-						</form>
-					{/if}
-					{#if config.nextStatus}
-						<form method="POST" action="?/move" use:enhance>
-							<input type="hidden" name="taskId" value={task.id} />
-							<input type="hidden" name="newStatus" value={config.nextStatus} />
-							<button
-								type="submit"
-								class="flex h-7 w-7 items-center justify-center rounded bg-[var(--color-tron-bg-primary)] text-[var(--color-tron-text-secondary)] shadow transition-colors hover:text-[var(--color-tron-cyan)]"
-								title="Move to {config.nextStatus}"
-							>
-								<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-									<path
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										stroke-width="2"
-										d="M9 5l7 7-7 7"
-									/>
-								</svg>
-							</button>
-						</form>
-					{/if}
+					<!-- Move buttons overlay -->
+					<div
+						class="absolute top-1 right-1 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100"
+					>
+						{#if config.prevStatus}
+							<form method="POST" action="?/move" use:enhance>
+								<input type="hidden" name="taskId" value={task.id} />
+								<input type="hidden" name="newStatus" value={config.prevStatus} />
+								<button
+									type="submit"
+									class="flex h-7 w-7 items-center justify-center rounded bg-[var(--color-tron-bg-primary)] text-[var(--color-tron-text-secondary)] shadow transition-colors hover:text-[var(--color-tron-cyan)]"
+									title="Move to {config.prevStatus}"
+								>
+									<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											stroke-width="2"
+											d="M15 19l-7-7 7-7"
+										/>
+									</svg>
+								</button>
+							</form>
+						{/if}
+						{#if config.nextStatus}
+							<form method="POST" action="?/move" use:enhance>
+								<input type="hidden" name="taskId" value={task.id} />
+								<input type="hidden" name="newStatus" value={config.nextStatus} />
+								<button
+									type="submit"
+									class="flex h-7 w-7 items-center justify-center rounded bg-[var(--color-tron-bg-primary)] text-[var(--color-tron-text-secondary)] shadow transition-colors hover:text-[var(--color-tron-cyan)]"
+									title="Move to {config.nextStatus}"
+								>
+									<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											stroke-width="2"
+											d="M9 5l7 7-7 7"
+										/>
+									</svg>
+								</button>
+							</form>
+						{/if}
+					</div>
 				</div>
-			</div>
-		{:else}
-			<div
-				class="flex flex-1 items-center justify-center rounded-lg border border-dashed border-[var(--color-tron-border)] py-8"
-			>
-				<p class="tron-text-muted text-xs">No tasks</p>
-			</div>
-		{/each}
-	</div>
+			{:else}
+				<div
+					class="flex flex-1 items-center justify-center rounded-lg border border-dashed border-[var(--color-tron-border)] py-8"
+				>
+					<p class="tron-text-muted text-xs">No tasks</p>
+				</div>
+			{/each}
+		</div>
+	{/if}
 </div>

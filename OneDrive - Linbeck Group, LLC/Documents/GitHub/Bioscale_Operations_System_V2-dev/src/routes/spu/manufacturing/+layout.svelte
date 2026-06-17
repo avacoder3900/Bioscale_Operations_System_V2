@@ -32,14 +32,24 @@
 			icon: 'M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10'
 		},
 		{
-			href: '/spu/manufacturing/opentrons',
-			label: 'Opentrons',
-			icon: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z'
+			href: '/spu/manufacturing/wax-filling',
+			label: 'Wax Fill',
+			icon: 'M12 2a7 7 0 017 7c0 5-7 13-7 13S5 14 5 9a7 7 0 017-7zm0 4a3 3 0 100 6 3 3 0 000-6z'
+		},
+		{
+			href: '/spu/manufacturing/reagent-filling',
+			label: 'Reagent Fill',
+			icon: 'M9 3h6v2l-1 1v4l4 8a2 2 0 01-2 3H8a2 2 0 01-2-3l4-8V6L9 5V3z'
 		},
 		{
 			href: '/spu/manufacturing/top-seal-cutting',
 			label: 'Top Seal',
 			icon: 'M4 6h16M4 12h16M4 18h7'
+		},
+		{
+			href: '/spu/manufacturing/cv-inspection',
+			label: 'CV Inspection',
+			icon: 'M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.774 48.774 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z'
 		},
 		{
 			href: '/spu/manufacturing/qa-qc',
@@ -48,22 +58,18 @@
 		},
 		{
 			href: '/spu/manufacturing/inventory',
-			label: 'Inventory',
+			label: 'Equipment',
 			icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01'
+		},
+		{
+			href: '/spu/manufacturing/opentrons',
+			label: 'Robots',
+			icon: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z'
 		}
-	];
-
-	const opentronsPrefixes = [
-		'/spu/manufacturing/opentrons',
-		'/spu/manufacturing/wax-filling',
-		'/spu/manufacturing/reagent-filling'
 	];
 
 	function isActive(href: string, currentPath: string, exact = false): boolean {
 		if (exact) return currentPath === href;
-		if (href === '/spu/manufacturing/opentrons') {
-			return opentronsPrefixes.some((p) => currentPath.startsWith(p));
-		}
 		return currentPath.startsWith(href);
 	}
 </script>

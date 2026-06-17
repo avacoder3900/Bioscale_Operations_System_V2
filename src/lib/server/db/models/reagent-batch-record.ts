@@ -14,6 +14,10 @@ const reagentBatchRecordSchema = new Schema({
 	runNumber: String,
 	robot: { _id: String, name: String, side: String },
 	assayType: { _id: String, name: String, skuCode: String },
+	// Research runs bypass the assay-required gate. When true, assayType stays
+	// null and downstream fields that would be populated from the assay are
+	// left blank. The cartridge flow still completes end-to-end.
+	isResearch: { type: Boolean, default: false },
 	operator: operatorRef,
 	deckId: String,
 
@@ -24,6 +28,13 @@ const reagentBatchRecordSchema = new Schema({
 	}],
 
 	setupTimestamp: Date, runStartTime: Date, runEndTime: Date,
+	// Set when the OT-2 finishes (completeRunFilling). Once present, the run
+	// no longer locks the robot — operators can start a new run while the
+	// post-OT-2 steps (inspection/sealing/storage) continue on Opentron Control.
+	robotReleasedAt: Date,
+	// Tray the cartridges sit on between Inspection and Top Sealing. Not a
+	// fridge/oven location — purely a holding surface.
+	trayId: String,
 	// status stores the current UI workflow stage or terminal state
 	status: {
 		type: String,
@@ -71,8 +82,40 @@ const reagentBatchRecordSchema = new Schema({
 		createdAt: Date
 	},
 
+	// Free-text operator notes attached to the run. Append-only metadata —
+	// never gates state transitions. Mirrored to each cartridge's notes[]
+	// at write time so the same note appears on the run AND on every
+	// cartridge in the run. phase tags the workflow point (e.g. 'reagent_prep').
+	notes: [{
+		_id: { type: String, default: () => generateId() },
+		body: String,
+		phase: String,
+		author: operatorRef,
+		createdAt: Date
+	}],
+
 	finalizedAt: Date, voidedAt: Date, voidReason: String,
-	corrections: [correctionSchema]
+	corrections: [correctionSchema],
+
+	// --- OT-2 integration (the parameter set + linkage to the executed run) ---
+	// Captured when the operator hits "Start Run" on this reagent batch.
+	// Mixed because protocol parameter schemas evolve; the reagent protocol's
+	// add_parameters() is the source of truth for valid keys.
+	protocolParameters: Schema.Types.Mixed,
+	// OT-2 run id (UUID, returned by `POST /runs` on the robot). Lets us
+	// pull commands/errors from the robot for this specific run.
+	opentronsRunId: String,
+	// Persistent tip tracker snapshot — captured pre-run from the robot's
+	// /data/tip_tracker_reagent_<hostname>.json file and stamped again
+	// post-run. `consumed` is `after.nextTipIndex - before.nextTipIndex`
+	// (or (96 - before) + after if the rack was refilled mid-run).
+	pipetteTipState: {
+		_id: false,
+		before: { nextTipIndex: Number, hostname: String, capturedAt: Date },
+		after:  { nextTipIndex: Number, hostname: String, capturedAt: Date },
+		consumed: Number,
+		rackRefilledDuringRun: Boolean
+	}
 }, { timestamps: true });
 
 reagentBatchRecordSchema.index({ 'assayType._id': 1, status: 1 });
@@ -80,6 +123,28 @@ reagentBatchRecordSchema.index({ 'operator._id': 1 });
 reagentBatchRecordSchema.index({ 'robot._id': 1 });
 reagentBatchRecordSchema.index({ status: 1, createdAt: -1 });
 reagentBatchRecordSchema.index({ 'cartridgesFilled.cartridgeId': 1 });
+
+// Robot + deck are held through the filling-page-owned stages only.
+// Once status passes those (Top Sealing / Storage), the deck is off and
+// free to reuse — but cartridges still sit on the holding tray through
+// Storage, so the tray uniqueness window is wider (non-terminal).
+const REAGENT_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Inspection',
+	'setup', 'loading', 'running', 'inspection'];
+const REAGENT_NON_TERMINAL = ['Setup', 'Loading', 'Running', 'Inspection', 'Top Sealing', 'Storage',
+	'setup', 'loading', 'running', 'inspection', 'top_sealing', 'storage'];
+
+reagentBatchRecordSchema.index(
+	{ 'robot._id': 1 },
+	{ unique: true, partialFilterExpression: { status: { $in: REAGENT_PAGE_OWNED }, 'robot._id': { $exists: true } }, name: 'robot_active_unique' }
+);
+reagentBatchRecordSchema.index(
+	{ deckId: 1 },
+	{ unique: true, partialFilterExpression: { status: { $in: REAGENT_PAGE_OWNED }, deckId: { $exists: true } }, name: 'deck_active_unique' }
+);
+reagentBatchRecordSchema.index(
+	{ trayId: 1 },
+	{ unique: true, partialFilterExpression: { status: { $in: REAGENT_NON_TERMINAL }, trayId: { $exists: true } }, name: 'tray_active_unique' }
+);
 
 applySacredMiddleware(reagentBatchRecordSchema);
 

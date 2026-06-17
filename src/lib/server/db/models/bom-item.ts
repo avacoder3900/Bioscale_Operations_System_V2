@@ -3,7 +3,7 @@ import { generateId } from '../utils.js';
 
 const bomItemSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
-	bomType: { type: String, enum: ['spu', 'cartridge'] },
+	bomType: { type: String, enum: ['spu', 'cartridge'], default: 'spu' },
 	partNumber: String, name: String, description: String, category: String,
 	quantityPerUnit: Number, unitOfMeasure: String,
 	supplier: String, manufacturer: String, vendorPartNumber: String,

@@ -5,7 +5,14 @@ import { applyImmutableMiddleware } from '../middleware/immutable.js';
 const auditLogSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	tableName: String, recordId: String,
-	action: { type: String, enum: ['INSERT', 'UPDATE', 'DELETE', 'PHASE_ADVANCE'] },
+	// Free-form string. The codebase writes 10+ distinct values
+	// (INSERT/UPDATE/DELETE/PHASE_ADVANCE/CHECKOUT plus IMPROPER_ORDER_BLOCKED,
+	// GO_BACK, SYNC, IMPORT, UPSERT, RETIRE, REASSIGN_STORAGE, OVERRIDE,
+	// manual_inventory_edit, create, ...). The previous enum was incomplete and
+	// caused 500s mid-action whenever a new value was introduced (e.g. the
+	// goBack action on the wax assign-fridge page). Audit-log action is
+	// telemetry, not a state machine — keep it permissive.
+	action: { type: String },
 	oldData: Schema.Types.Mixed, newData: Schema.Types.Mixed,
 	changedAt: { type: Date, default: Date.now }, changedBy: String,
 	changedFields: Schema.Types.Mixed, reason: String,

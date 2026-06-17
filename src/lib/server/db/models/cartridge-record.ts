@@ -19,9 +19,16 @@ const cartridgeRecordSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 
 	backing: {
-		lotId: String,
-		lotQrCode: String,
-		ovenEntryTime: Date,
+		lotId: String,               // LEGACY: BackingLot._id (bucket barcode) — not written since WAX-FLOW-2
+		parentLotRecordId: String,   // LotRecord._id — the WI-01 batch
+		lotQrCode: String,           // LotRecord.qrCodeRef
+		cartridgeBlankLot: String,   // PT-CT-104 input material lot
+		thermosealLot: String,       // PT-CT-112 input material lot
+		barcodeLabelLot: String,     // PT-CT-106 input material lot
+		ovenEntryTime: Date,         // when this cartridge was scanned into the backing oven
+		ovenExitTime: Date,          // when the cartridge left the oven onto a wax deck
+		ovenLocationId: String,      // Equipment._id of the backing oven (WAX-FLOW-2)
+		ovenLocationName: String,    // denormalized oven name for display (WAX-FLOW-2)
 		operator: operatorRef,
 		recordedAt: Date
 	},
@@ -35,11 +42,20 @@ const cartridgeRecordSchema = new Schema({
 		rejectionReason: String, operator: operatorRef, timestamp: Date, recordedAt: Date
 	},
 	waxStorage: {
-		location: String, coolingTrayId: String, operator: operatorRef, timestamp: Date, recordedAt: Date
+		locationId: String,           // Equipment._id of the fridge (authoritative join key - S1a)
+		location: String,             // denormalized fridge name/barcode for display - do NOT use as a query filter
+		coolingTrayId: String,        // Equipment._id of the cooling tray
+		coolingLocationId: String,    // Equipment._id of the cooling fridge (resolved from tray placement)
+		coolingLocationName: String,  // denormalized cooling fridge name for display
+		operator: operatorRef, timestamp: Date, recordedAt: Date
 	},
 	reagentFilling: {
 		runId: String, robotId: String, robotName: String,
 		assayType: { _id: String, name: String, skuCode: String },
+		// Research runs leave assayType null and flag the cartridge so downstream
+		// consumers can distinguish "missing assay data (research)" from "missing
+		// assay data (bug)".
+		isResearch: Boolean,
 		deckPosition: Number,
 		tubeRecords: [{ _id: false, wellPosition: Number, reagentName: String, sourceLotId: String, transferTubeId: String }],
 		operator: operatorRef, fillDate: Date, expirationDate: Date, recordedAt: Date
@@ -58,9 +74,10 @@ const cartridgeRecordSchema = new Schema({
 		recordedAt: Date
 	},
 	storage: {
-		fridgeId: String, // ORPHANED: never written by any action
-		fridgeName: String, locationId: String,
-		containerBarcode: String, // ORPHANED: never written by any action
+		fridgeId: String,        // Equipment._id of the fridge (authoritative — S1a repurposed from orphan)
+		fridgeName: String,      // denormalized fridge name for display — do NOT use as a query filter
+		locationId: String,      // Equipment._id of the fridge (duplicate of fridgeId for index compatibility — S1a)
+		containerBarcode: String, // ORPHANED: never written by any action — pending S7 cleanup
 		operator: operatorRef, timestamp: Date, recordedAt: Date
 	},
 	qaqcRelease: {
@@ -103,7 +120,7 @@ const cartridgeRecordSchema = new Schema({
 	status: {
 		type: String,
 		enum: [
-			'backing', 'wax_filling', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected',
+			'backing', 'wax_filling', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filling', 'reagent_filled', 'inspected',
 			'sealed', 'cured', 'stored', 'released', 'shipped',
 			'linked', 'underway', 'completed', 'cancelled', 'scrapped', 'voided',
 			'packeted', 'transferred', 'refrigerated', 'received'
@@ -113,15 +130,43 @@ const cartridgeRecordSchema = new Schema({
 	finalizedAt: Date, // ORPHANED: never written by any action
 	voidedAt: Date,
 	voidReason: String,
+	photos: [{
+		_id: false,
+		imageId: String,
+		phase: String,
+		capturedAt: Date,
+		r2Key: String,
+		r2Url: String,
+		cartridgeImageNumber: String
+	}],
+
+	// Atomic counter for cartridgeImageNumber generation.
+	// $inc'd at capture time so concurrent captures never collide.
+	photoSequence: { type: Number, default: 0 },
+
+	// Operator-entered notes attached to this cartridge. Written by phase-scoped
+	// actions (e.g. recordBatchNote at reagent prep). At most one note per
+	// (cartridge, phase) — the action pulls then pushes so re-saves overwrite.
+	notes: [{
+		_id: { type: String, default: () => generateId() },
+		body: String,
+		phase: String,
+		author: operatorRef,
+		createdAt: Date
+	}],
+
 	corrections: [correctionSchema]
 }, { timestamps: true });
 
 cartridgeRecordSchema.index({ status: 1 });
 cartridgeRecordSchema.index({ 'backing.lotId': 1 });
+cartridgeRecordSchema.index({ status: 1, 'backing.ovenLocationId': 1 }); // WAX-FLOW-2: oven occupancy queries
 cartridgeRecordSchema.index({ 'waxFilling.runId': 1 });
 cartridgeRecordSchema.index({ 'reagentFilling.runId': 1 });
 cartridgeRecordSchema.index({ 'reagentFilling.assayType._id': 1 });
 cartridgeRecordSchema.index({ 'storage.locationId': 1 });
+cartridgeRecordSchema.index({ 'storage.fridgeId': 1 });         // S1a: canonical fridge join
+cartridgeRecordSchema.index({ 'waxStorage.locationId': 1 });    // S1a: canonical fridge join for wax_stored
 cartridgeRecordSchema.index({ 'storage.containerBarcode': 1 });
 cartridgeRecordSchema.index({ 'qaqcRelease.shippingLotId': 1 });
 cartridgeRecordSchema.index({ 'shipping.packageId': 1 });

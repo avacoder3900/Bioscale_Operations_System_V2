@@ -1,6 +1,7 @@
-import { error } from '@sveltejs/kit';
+import { error, fail } from '@sveltejs/kit';
+import bcrypt from 'bcryptjs';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, ValidationSession, User, generateId } from '$lib/server/db';
+import { connectDB, ValidationSession, User, Spu, AuditLog, generateId } from '$lib/server/db';
 import { getVariable } from '$lib/server/particle';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -22,7 +23,15 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			barcode: session.barcode ?? null,
 			username: user?.username ?? null,
 			spuUdi: session.spuUdi ?? null,
-			particleDeviceId: session.particleDeviceId ?? null
+			spuId: session.spuId ?? null,
+			particleDeviceId: session.particleDeviceId ?? null,
+			overallPassed: session.overallPassed ?? null,
+			override: session.override ? {
+				by: session.override.by,
+				at: session.override.at?.toISOString() ?? null,
+				reason: session.override.reason,
+				originalResult: session.override.originalResult
+			} : null
 		},
 		result: session.magResults ? {
 			id: session._id,
@@ -97,6 +106,89 @@ export const actions: Actions = {
 		} catch (err) {
 			return { error: `Failed to read device: ${err instanceof Error ? err.message : String(err)}` };
 		}
+	},
+
+	overrideApproval: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'admin:full');
+		await connectDB();
+
+		const data = await request.formData();
+		const adminPassword = data.get('adminPassword')?.toString();
+		const reason = data.get('reason')?.toString();
+
+		if (!adminPassword) return fail(400, { error: 'Password is required' });
+		if (!reason || reason.length < 10) return fail(400, { error: 'Reason required (min 10 characters)' });
+
+		// Re-authenticate admin via password
+		const user = await User.findById(locals.user!._id).lean() as any;
+		if (!user) return fail(400, { error: 'User not found' });
+		const validPassword = await bcrypt.compare(adminPassword, user.passwordHash);
+		if (!validPassword) return fail(403, { error: 'Invalid password' });
+
+		const session = await ValidationSession.findById(params.sessionId).lean() as any;
+		if (!session) return fail(404, { error: 'Session not found' });
+		if (session.overallPassed === true && !session.override) {
+			return fail(400, { error: 'Session already passed — no override needed' });
+		}
+		if (session.override) {
+			return fail(400, { error: 'Session already has an override' });
+		}
+
+		const originalResult = {
+			overallPassed: session.overallPassed,
+			failureReasons: session.failureReasons ?? [],
+			status: session.status
+		};
+
+		// Update ValidationSession
+		await ValidationSession.updateOne(
+			{ _id: params.sessionId },
+			{
+				$set: {
+					overallPassed: true,
+					status: 'completed',
+					override: {
+						by: { _id: locals.user!._id, username: locals.user!.username },
+						at: new Date(),
+						reason,
+						originalResult
+					}
+				}
+			}
+		);
+
+		// Update SPU validation record if linked
+		if (session.spuId) {
+			await Spu.updateOne({ _id: session.spuId }, {
+				$set: {
+					'validation.magnetometer.status': 'overridden',
+					'validation.magnetometer.overriddenBy': { _id: locals.user!._id, username: locals.user!.username },
+					'validation.magnetometer.overriddenAt': new Date(),
+					'validation.magnetometer.overrideReason': reason
+				}
+			});
+		}
+
+		// Audit log
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'validation_sessions',
+			recordId: params.sessionId,
+			entityId: session.spuId ?? params.sessionId,
+			action: 'OVERRIDE',
+			oldData: originalResult,
+			newData: {
+				overallPassed: true,
+				status: 'completed',
+				overriddenBy: locals.user!.username,
+				reason
+			},
+			changedAt: new Date(),
+			changedBy: locals.user!._id,
+			reason: `Magnetometer validation override: ${reason}`
+		});
+
+		return { success: true, overrideApplied: true };
 	}
 };
 

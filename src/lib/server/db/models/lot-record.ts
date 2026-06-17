@@ -19,8 +19,44 @@ const lotRecordSchema = new Schema({
 	operator: operatorRef,
 	inputLots: { type: [inputLotSchema], default: undefined }, // typed array (backward-compatible)
 	quantityProduced: Number,
+	plannedQuantity: Number,
 	desiredQuantity: Number,
 	quantityDiscrepancyReason: String,
+	scrapCount: { type: Number, default: 0 },
+	scrapDetail: {
+		cartridge: { type: Number, default: 0 },
+		thermoseal: { type: Number, default: 0 },
+		barcode: { type: Number, default: 0 }
+	},
+	scrapReason: String,
+	bucketBarcode: String,
+	notes: String,
+
+	// Oven chosen at WI-01 batch setup (checkAndStart). Lets a resumed scan
+	// session show the oven as a locked value instead of re-asking the operator
+	// to pick it again (WI01-BACKING-FLOW-FIXES change 1).
+	backingOven: { ovenId: String, ovenName: String },
+
+	// Oven placement — scanned at WI-01 confirm step. Used by wax filling
+	// to compute the minimum cure time before the bucket can be consumed.
+	ovenPlacement: {
+		ovenId: String,
+		ovenBarcode: String,
+		placedAt: Date,
+		placedBy: operatorRef
+	},
+
+	// Wax-filling consumption marker. Presence = bucket consumed (removed
+	// from the ready list). `overridden` flags an admin bypass of the
+	// minimum cure time; the override username + reason are audit-logged
+	// separately in audit_log but kept here for quick display.
+	waxConsumed: {
+		at: Date,
+		by: operatorRef,
+		overridden: { type: Boolean, default: false },
+		overrideBy: operatorRef,
+		overrideReason: String
+	},
 
 	stepEntries: [{
 		_id: { type: String, default: () => generateId() },

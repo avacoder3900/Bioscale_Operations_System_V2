@@ -1,11 +1,15 @@
 <script lang="ts">
 	import { TronCard, TronBadge } from '$lib/components/ui';
+	import IpRevisionHistory from '$lib/components/receiving/IpRevisionHistory.svelte';
+	import IpFormDefinitionEditor from '$lib/components/receiving/IpFormDefinitionEditor.svelte';
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
 
 	let { data, form: _form } = $props();
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const form = _form as any;
+
+	const currentRevision = $derived((data.ipRevisions ?? []).find((r: any) => r.isCurrent) ?? null);
 
 	// Tab state
 	let activeTab = $state<'overview' | 'transactions' | 'receiving'>('overview');
@@ -724,6 +728,7 @@
 								<th>Quantity</th>
 								<th>Balance</th>
 								<th>User</th>
+								<th>Lot</th>
 								<th>Session</th>
 								<th>Actions</th>
 							</tr>
@@ -757,6 +762,9 @@
 										{txn.previousQuantity} → {txn.newQuantity}
 									</td>
 									<td class="tron-text-muted text-sm">{txn.performedByName ?? 'Unknown'}</td>
+									<td class="tron-text-muted text-xs font-mono">
+										{txn.lotId ?? '—'}
+									</td>
 									<td>
 										{#if txn.assemblySessionId}
 											<a
@@ -1043,7 +1051,7 @@
 							{#each data.receivingLots as lot}
 								<tr class="border-b hover:bg-white/5" style="border-color: var(--color-tron-border);">
 									<td class="p-2">
-										<a href="/receiving/{lot.id}" class="text-cyan-400 hover:underline font-mono text-xs">{lot.lotNumber}</a>
+										<a href="/parts/accession/{lot.id}" class="text-cyan-400 hover:underline font-mono text-xs">{lot.lotNumber}</a>
 									</td>
 									<td class="p-2 font-mono text-xs tron-text-muted">{lot.bagBarcode || lot.lotId || '—'}</td>
 									<td class="p-2 text-right tron-text-primary">{lot.quantity}</td>
@@ -1069,7 +1077,7 @@
 			{:else}
 				<div class="empty-state">
 					<p class="tron-text-muted">No receiving lots recorded for this part.</p>
-					<p class="tron-text-muted text-xs mt-1">Use the <a href="/parts/accession" class="text-cyan-400 hover:underline">Part Accession</a> page to scan incoming inventory.</p>
+					<p class="tron-text-muted text-xs mt-1">Use the <a href="/parts/accession" class="text-cyan-400 hover:underline">ROG</a> page to scan incoming inventory.</p>
 				</div>
 			{/if}
 		</div>

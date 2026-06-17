@@ -1,16 +1,25 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, AssayDefinition, BomItem, generateId, AuditLog } from '$lib/server/db';
+import { connectDB, AssayDefinition, BomItem, CartridgeRecord, generateId, AuditLog } from '$lib/server/db';
+import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'cartridge:read');
 	await connectDB();
 
-	const [assayDefs, bomItems] = await Promise.all([
+	const checkedOutIds = await getCheckedOutCartridgeIds();
+	const [assayDefs, bomItems, cartCountAgg] = await Promise.all([
 		AssayDefinition.find().sort({ name: 1 }).lean(),
-		BomItem.find({ isActive: true }).sort({ partNumber: 1 }).lean()
+		BomItem.find({ isActive: true }).sort({ partNumber: 1 }).lean(),
+		CartridgeRecord.aggregate([
+			{ $match: { 'reagentFilling.assayType._id': { $exists: true }, _id: { $nin: checkedOutIds } } },
+			{ $group: { _id: '$reagentFilling.assayType._id', count: { $sum: 1 } } }
+		]).catch(() => [] as any[])
 	]);
+	const cartCountByAssayId = new Map<string, number>(
+		(cartCountAgg as any[]).map((c) => [c._id, c.count])
+	);
 
 	type Reagent = {
 		id: string;
@@ -46,6 +55,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			useSingleCost: a.useSingleCost ?? false,
 			isActive: a.isActive ?? true,
 			lockedAt: a.lockedAt ?? null,
+			cartridgeCount: cartCountByAssayId.get(a._id) ?? 0,
 			reagents: (a.reagents ?? []).map((r: any): Reagent => ({
 				id: r._id,
 				wellPosition: r.wellPosition ?? null,
@@ -113,11 +123,15 @@ export const actions: Actions = {
 				subComponents: []
 			}));
 
+			const { generateLegacyAssayId } = await import('$lib/server/assay-legacy-shape');
+			const _id = await generateLegacyAssayId(AssayDefinition as any);
 			const newAssay = await AssayDefinition.create({
-				_id: generateId(),
+				_id,
 				name,
 				skuCode,
 				shelfLifeDays,
+				hidden: true,
+				protected: true,
 				isActive: true,
 				reagents
 			});

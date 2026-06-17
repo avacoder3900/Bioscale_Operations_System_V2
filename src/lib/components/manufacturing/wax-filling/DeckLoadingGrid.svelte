@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { SvelteMap } from 'svelte/reactivity';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { generateTestBarcode } from '$lib/utils/test-barcode';
 
 	interface OvenLot {
@@ -16,12 +16,18 @@
 	interface Props {
 		availableLots: OvenLot[];
 		plannedCartridgeCount?: number | null;
-		onComplete: (data: { deckId: string; cartridgeScans: CartridgeScan[]; countMismatchReason?: string }) => void;
+		onComplete: (data: { deckId: string; ovenId: string; cartridgeScans: CartridgeScan[]; countMismatchReason?: string }) => void;
 		readonly?: boolean;
 		suppressFocus?: boolean;
+		// OpentronsRobot._id (or legacy Equipment robot id) — when set, the
+		// "Scan Cartridges" button drives the gantry-mounted scanner via
+		// /api/scanner/sweep using this robot's default position set.
+		robotId?: string | null;
+		// Optional run id used as contextRef on the scanner trigger.
+		runId?: string | null;
 	}
 
-	let { availableLots, plannedCartridgeCount = null, onComplete, readonly: isReadonly = false, suppressFocus = false }: Props = $props();
+	let { availableLots, plannedCartridgeCount = null, onComplete, readonly: isReadonly = false, suppressFocus = false, robotId = null, runId = null }: Props = $props();
 
 	// 8 rows × 3 cols, vertical snake: Col1 down, Col2 up, Col3 down
 	const GRID_ROWS = [
@@ -37,15 +43,34 @@
 	const SCAN_ORDER = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24];
 	const TOTAL_POSITIONS = 24;
 
-	let step = $state<'deck' | 'loading'>('deck');
+	let step = $state<'deck' | 'oven' | 'loading'>('deck');
 	let deckId = $state('');
 	let deckInput = $state('');
 	let deckError = $state('');
+	let ovenId = $state('');
+	let ovenInput = $state('');
+	let ovenError = $state('');
+	let ovenPendingValue = $state('');
+	let ovenInputEl: HTMLInputElement | undefined = $state();
 	let cartridgeInput = $state('');
-	let scans = $state<CartridgeScan[]>([]);
+	// Sparse — scans[slotIndex] is either a filled CartridgeScan or null.
+	// slotIndex matches SCAN_ORDER position (slotIndex 0 → deck position 1, etc.)
+	// so per-slot rescans, per-slot sweep failures, and overrides can all
+	// address a specific tile without depending on insertion order.
+	let scans = $state<Array<CartridgeScan | null>>(Array(TOTAL_POSITIONS).fill(null));
 
 	let deckInputEl: HTMLInputElement | undefined = $state();
 	let cartridgeInputEl: HTMLInputElement | undefined = $state();
+
+	// Per-slot rescan / sweep state
+	let failedSlots = $state<Set<number>>(new SvelteSet());
+	let sweepFailures = $state<Array<{ slotIndex: number; message: string }>>([]);
+	let sweepCount = $state<number>(plannedCartridgeCount ?? TOTAL_POSITIONS);
+	let expandedSlot = $state<number | null>(null);
+	let expandedInput = $state('');
+	let expandedOverride = $state(false);
+	let expandedError = $state('');
+	let expandedInputEl: HTMLInputElement | undefined = $state();
 
 	// Pending confirm state for deck scan
 	let deckPendingValue = $state('');
@@ -55,14 +80,19 @@
 	let mismatchReason = $state('');
 
 	const readyLots = $derived(availableLots.filter((l) => l.ready));
-	const nextPosition = $derived(scans.length < TOTAL_POSITIONS ? SCAN_ORDER[scans.length] : null);
-	const isFull = $derived(scans.length >= TOTAL_POSITIONS);
+	const filledCount = $derived(scans.filter((s) => s !== null).length);
+	const firstEmptySlotIndex = $derived(scans.findIndex((s) => s === null));
+	const nextPosition = $derived(
+		firstEmptySlotIndex >= 0 ? SCAN_ORDER[firstEmptySlotIndex] : null
+	);
+	const isFull = $derived(filledCount >= TOTAL_POSITIONS);
 
-	// Map position -> scan for grid display
+	// Map position -> scan for grid display. slotIndex i ↔ deck position i+1.
 	const positionMap = $derived.by(() => {
 		const map = new SvelteMap<number, CartridgeScan>();
-		for (let i = 0; i < scans.length; i++) {
-			map.set(SCAN_ORDER[i], scans[i]);
+		for (let i = 0; i < TOTAL_POSITIONS; i++) {
+			const s = scans[i];
+			if (s) map.set(SCAN_ORDER[i], s);
 		}
 		return map;
 	});
@@ -73,6 +103,7 @@
 		// Count scans per lot to determine which lot we're on
 		const lotCounts = new SvelteMap<string, number>();
 		for (const s of scans) {
+			if (!s) continue;
 			lotCounts.set(s.backedLotId, (lotCounts.get(s.backedLotId) ?? 0) + 1);
 		}
 		// Find first lot that hasn't been fully used (max 48 per lot from schema)
@@ -115,6 +146,9 @@
 			const value = deckInput.trim();
 			deckInput = '';
 			deckError = '';
+			// validate-equipment returns the canonical deck id (DECK-004) even when
+			// a QR alias was scanned — use it so the deck loads under its real id.
+			let resolvedDeckId = value;
 			// Validate on Enter before showing confirm UI
 			try {
 				const res = await fetch(`/api/dev/validate-equipment?type=deck&id=${encodeURIComponent(value)}`);
@@ -124,22 +158,90 @@
 					playBeep(false);
 					return;
 				}
+				resolvedDeckId = result.id ?? value;
 			} catch {
 				deckError = 'Validation service unavailable, cannot proceed';
 				playBeep(false);
 				return;
 			}
-			deckPendingValue = value;
+			deckPendingValue = resolvedDeckId;
 			playBeep(true);
 		}
 	}
 
 	let deckValidating = $state(false);
 
+	// Robot deck-barcode scan (OT2-BRIDGE-2): the OT-2's gantry scanner reads
+	// the deck's own barcode label via POST /api/scanner/deck-scan, then the
+	// result runs through the exact same validation path as a manual Enter.
+	let deckScanInFlight = $state(false);
+	let deckScanError = $state('');
+
+	async function scanDeckWithRobot() {
+		if (isReadonly || !robotId || deckScanInFlight) return;
+		deckScanInFlight = true;
+		deckScanError = '';
+		try {
+			const res = await fetch('/api/scanner/deck-scan', {
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ robotId })
+			});
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok || !body?.barcode) {
+				deckScanError = (body?.message ?? body?.error ?? `Deck scan failed (HTTP ${res.status})`).toString();
+				playBeep(false);
+				return;
+			}
+			deckInput = String(body.barcode);
+			await handleDeckKeydown(new KeyboardEvent('keydown', { key: 'Enter' }));
+		} catch (e) {
+			deckScanError = e instanceof Error ? e.message : String(e);
+			playBeep(false);
+		} finally {
+			deckScanInFlight = false;
+		}
+	}
+
+	// WAX-FLOW-STREAMLINE: one action — robot scans the deck barcode, auto-confirms,
+	// then sweeps every cartridge slot. The grid fills live and failed slots show
+	// red (click a red tile to rescan it by hand). No separate button presses.
+	let autoRunning = $state(false);
+	async function scanDeckAndCartridges() {
+		if (isReadonly || !robotId || autoRunning) return;
+		autoRunning = true;
+		try {
+			if (!deckId) {
+				await scanDeckWithRobot();
+				if (!deckPendingValue) return; // deck scan failed — error already shown
+				confirmDeck(); // auto-advance to cartridge loading (no manual confirm)
+			}
+			await autoSweepCartridges();
+			// Hands-off completion: if the robot read every specified cartridge
+			// cleanly (count matches, no slot needs a manual rescan), finish
+			// automatically — no "Confirm Full Load" click, so the operator can
+			// start the scan and walk away. A mismatch/failed slot still falls
+			// through to the manual confirm/mismatch flow.
+			if (
+				deckId &&
+				plannedCartridgeCount != null &&
+				failedSlots.size === 0 &&
+				filledCount === plannedCartridgeCount
+			) {
+				tryComplete();
+			}
+		} finally {
+			autoRunning = false;
+		}
+	}
+
 	function confirmDeck() {
 		// Validation already done on Enter keydown
 		deckId = deckPendingValue;
 		deckPendingValue = '';
+		// Skip oven scan — deck is being REMOVED from oven, not placed into one.
+		// Oven scan happens at step 4 (deck removal) after the OT-2 run completes.
 		step = 'loading';
 	}
 
@@ -148,50 +250,377 @@
 		setTimeout(() => deckInputEl?.focus(), 50);
 	}
 
+	async function handleOvenKeydown(e: KeyboardEvent) {
+		if (isReadonly) return;
+		if (e.key === 'Enter' && ovenInput.trim()) {
+			e.preventDefault();
+			const value = ovenInput.trim();
+			ovenInput = '';
+			ovenError = '';
+			try {
+				const res = await fetch(`/api/dev/validate-equipment?type=oven&id=${encodeURIComponent(value)}`);
+				const result = await res.json();
+				if (!res.ok || result.error) {
+					ovenError = result.error ?? `Oven "${value}" not found.`;
+					playBeep(false);
+					return;
+				}
+				ovenPendingValue = result.id ?? value;
+				playBeep(true);
+			} catch {
+				ovenError = 'Validation service unavailable, cannot proceed';
+				playBeep(false);
+			}
+		}
+	}
+
+	function confirmOven() {
+		ovenId = ovenPendingValue;
+		ovenPendingValue = '';
+		step = 'loading';
+	}
+
+	function rescanOven() {
+		ovenPendingValue = '';
+		setTimeout(() => ovenInputEl?.focus(), 50);
+	}
+
+	async function processScannedCartridge(
+		scanned: string,
+		opts: { slotIndex?: number; override?: boolean } = {}
+	): Promise<{ ok: boolean; error?: string }> {
+		const targetSlot = opts.slotIndex ?? firstEmptySlotIndex;
+		if (targetSlot < 0 || targetSlot >= TOTAL_POSITIONS) {
+			return { ok: false, error: `Deck is full (${TOTAL_POSITIONS} max)` };
+		}
+		// Refuse to overwrite a filled slot unless override is explicitly set.
+		if (!opts.override && scans[targetSlot] !== null) {
+			return {
+				ok: false,
+				error: `Slot ${targetSlot + 1} is already filled — enable override to replace.`
+			};
+		}
+		// Duplicate-in-other-slots check always runs, even with override. We
+		// exclude the target slot itself so re-scanning the same cartridge into
+		// the same slot is a no-op rather than an error; but the same cartridge
+		// in a different slot is still rejected, override or not.
+		const dupIndex = scans.findIndex((s, i) => s?.cartridgeId === scanned && i !== targetSlot);
+		if (dupIndex >= 0) {
+			return {
+				ok: false,
+				error: `Cartridge "${scanned}" already scanned in this session (slot ${dupIndex + 1})`
+			};
+		}
+		if (!currentLot) {
+			return { ok: false, error: 'No available oven-ready lots' };
+		}
+		try {
+			const res = await fetch(`/api/dev/validate-equipment?type=cartridge&id=${encodeURIComponent(scanned)}`);
+			const result = await res.json();
+			if (!res.ok || result.error) {
+				return { ok: false, error: result.error ?? `Cartridge "${scanned}" validation failed` };
+			}
+		} catch {
+			return { ok: false, error: 'Validation service unavailable, cannot proceed' };
+		}
+		const next = scans.slice();
+		next[targetSlot] = { cartridgeId: scanned, backedLotId: currentLot.lotId };
+		scans = next;
+		// Clear failed-slot flag + remove from the visible failures list now
+		// that this slot has a valid scan.
+		if (failedSlots.has(targetSlot)) {
+			const fs = new SvelteSet(failedSlots);
+			fs.delete(targetSlot);
+			failedSlots = fs;
+		}
+		if (sweepFailures.some((f) => f.slotIndex === targetSlot)) {
+			sweepFailures = sweepFailures.filter((f) => f.slotIndex !== targetSlot);
+		}
+		return { ok: true };
+	}
+
 	async function handleCartridgeKeydown(e: KeyboardEvent) {
 		if (isReadonly) return;
 		if (e.key === 'Enter' && cartridgeInput.trim()) {
 			e.preventDefault();
 			const scanned = cartridgeInput.trim();
 			cartridgeInput = '';
-
-			if (isFull || scans.length >= TOTAL_POSITIONS) {
+			const r = await processScannedCartridge(scanned);
+			if (r.ok) {
+				deckError = '';
+				playBeep(true);
+			} else {
+				deckError = r.error ?? 'Scan failed';
 				playBeep(false);
-				deckError = `Deck is full (${TOTAL_POSITIONS} max)`;
+			}
+		}
+	}
+
+	type SweepLogEntry = { ts: string; level: 'info' | 'warn' | 'error'; message: string; slotIndex?: number | null };
+
+	let sweepInFlight = $state(false);
+	let sweepProgress = $state<string | null>(null);
+	let currentSweepRunId = $state<string | null>(null);
+	let sweepStatus = $state<'running' | 'paused' | 'cancelled' | 'completed' | 'errored' | null>(null);
+	let sweepLog = $state<SweepLogEntry[]>([]);
+	let slotsTotal = $state(0);
+	let slotsDone = $state(0);
+	let currentSlotIdx = $state<number | null>(null);
+	let controlBusy = $state(false);
+
+	async function autoSweepCartridges() {
+		if (isReadonly) return;
+		if (!robotId) {
+			deckError = 'No robot configured for this run — cannot auto-scan.';
+			return;
+		}
+		if (!currentLot) {
+			deckError = 'No available oven-ready lots';
+			return;
+		}
+		const cap = Math.max(1, Math.min(TOTAL_POSITIONS, Math.floor(sweepCount)));
+		deckError = '';
+		sweepProgress = `Starting sweep on ${cap} position${cap === 1 ? '' : 's'}…`;
+		sweepInFlight = true;
+		// Reset prior per-slot state — a new sweep starts fresh.
+		failedSlots = new SvelteSet();
+		sweepFailures = [];
+		sweepLog = [];
+		slotsTotal = cap;
+		slotsDone = 0;
+		currentSlotIdx = null;
+		sweepStatus = 'running';
+
+		try {
+			const res = await fetch('/api/scanner/sweep', {
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					robotId,
+					source: 'wax_filling',
+					contextRef: runId ?? undefined,
+					maxSlots: cap
+				})
+			});
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				deckError = (body?.message ?? body?.error ?? `Sweep failed (HTTP ${res.status})`).toString();
+				playBeep(false);
+				sweepInFlight = false;
+				sweepStatus = null;
 				return;
 			}
+			currentSweepRunId = body.sweepRunId as string;
+			slotsTotal = body.slotsTotal ?? cap;
+			await pollSweepUntilDone(currentSweepRunId);
+		} catch (e) {
+			deckError = e instanceof Error ? e.message : String(e);
+			playBeep(false);
+			sweepInFlight = false;
+		}
+	}
 
-			// Check for duplicate in current session
-			if (scans.some((s) => s.cartridgeId === scanned)) {
+	// Re-run the robot sweep on ONLY the currently-failed slots (the red tiles),
+	// reusing the per-slot focus/grid-search recovery. Recovered slots clear; any
+	// still failing stay red for manual scan. Saves hand-scanning each one.
+	async function retryFailedSlots() {
+		if (isReadonly || !robotId || sweepInFlight || autoRunning) return;
+		const slots = [...failedSlots].sort((a, b) => a - b);
+		if (slots.length === 0) return;
+		deckError = '';
+		sweepProgress = `Retrying ${slots.length} slot${slots.length === 1 ? '' : 's'} with the robot…`;
+		sweepInFlight = true;
+		sweepStatus = 'running';
+		// Fresh absorption — the retry sweep only walks the failed slots.
+		absorbedScanSlots = new Set();
+		absorbedErrorSlots = new Set();
+		slotsTotal = slots.length;
+		slotsDone = 0;
+		currentSlotIdx = null;
+		try {
+			const res = await fetch('/api/scanner/sweep', {
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ robotId, source: 'wax_filling', contextRef: runId ?? undefined, slotIndices: slots })
+			});
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				deckError = (body?.message ?? body?.error ?? `Retry failed (HTTP ${res.status})`).toString();
 				playBeep(false);
-				deckError = `Cartridge "${scanned}" already scanned in this session`;
+				sweepInFlight = false;
+				sweepStatus = null;
 				return;
 			}
-
-			if (!currentLot) {
-				playBeep(false);
-				deckError = 'No available oven-ready lots';
-				return;
+			currentSweepRunId = body.sweepRunId as string;
+			slotsTotal = body.slotsTotal ?? slots.length;
+			await pollSweepUntilDone(currentSweepRunId);
+			// Hands-off: if the retry cleared every red tile and the count matches,
+			// finish automatically (same rule as the clean first sweep).
+			if (deckId && plannedCartridgeCount != null && failedSlots.size === 0 && filledCount === plannedCartridgeCount) {
+				tryComplete();
 			}
+		} catch (e) {
+			deckError = e instanceof Error ? e.message : String(e);
+			playBeep(false);
+			sweepInFlight = false;
+		}
+	}
 
-			// Validate cartridge against MongoDB (check not already processed)
+	// Track which slots we've already absorbed from the server side so each
+	// poll only processes the deltas. validate-equipment is per-slot and we
+	// don't want to refire it 100 times for a slot the server already returned.
+	let absorbedScanSlots = $state<Set<number>>(new Set());
+	let absorbedErrorSlots = $state<Set<number>>(new Set());
+
+	async function pollSweepUntilDone(sweepRunId: string): Promise<void> {
+		// Poll every ~500ms until status is terminal.
+		while (true) {
+			let state: any;
 			try {
-				const res = await fetch(`/api/dev/validate-equipment?type=cartridge&id=${encodeURIComponent(scanned)}`);
-				const result = await res.json();
-				if (!res.ok || result.error) {
-					playBeep(false);
-					deckError = result.error ?? `Cartridge "${scanned}" validation failed`;
-					return;
+				const r = await fetch(`/api/scanner/sweep/${sweepRunId}`, { credentials: 'same-origin' });
+				if (!r.ok) {
+					deckError = `Live status poll failed (HTTP ${r.status})`;
+					break;
 				}
-			} catch {
-				playBeep(false);
-				deckError = 'Validation service unavailable, cannot proceed';
+				state = await r.json();
+			} catch (e) {
+				deckError = e instanceof Error ? e.message : 'Live status poll failed';
+				break;
+			}
+
+			sweepStatus = state.status;
+			slotsDone = state.slotsDone ?? 0;
+			currentSlotIdx = state.currentSlotIndex ?? null;
+			sweepLog = (state.log ?? []) as SweepLogEntry[];
+			sweepProgress = state.status === 'paused'
+				? 'Paused.'
+				: `${state.slotsDone ?? 0} / ${state.slotsTotal ?? slotsTotal}`;
+
+			// Absorb any newly-arrived scans through the per-slot validator so
+			// they show up live on the deck grid.
+			for (const sc of state.scans ?? []) {
+				if (absorbedScanSlots.has(sc.slotIndex)) continue;
+				absorbedScanSlots.add(sc.slotIndex);
+				const r = await processScannedCartridge(sc.barcode, { slotIndex: sc.slotIndex });
+				if (!r.ok) {
+					const newFailed = new SvelteSet(failedSlots);
+					newFailed.add(sc.slotIndex);
+					failedSlots = newFailed;
+					sweepFailures = [
+						...sweepFailures.filter((f) => f.slotIndex !== sc.slotIndex),
+						{ slotIndex: sc.slotIndex, message: r.error ?? 'validation failed' }
+					].sort((a, b) => a.slotIndex - b.slotIndex);
+				} else if (failedSlots.has(sc.slotIndex) || sweepFailures.some((f) => f.slotIndex === sc.slotIndex)) {
+					// Recovered (e.g. via the failed-slot robot retry) — clear the red tile.
+					const nf = new SvelteSet(failedSlots);
+					nf.delete(sc.slotIndex);
+					failedSlots = nf;
+					sweepFailures = sweepFailures.filter((f) => f.slotIndex !== sc.slotIndex);
+				}
+			}
+
+			// Absorb new errors from the server (scanner failures, move-to failures).
+			for (const err of state.errors ?? []) {
+				if (absorbedErrorSlots.has(err.slotIndex)) continue;
+				absorbedErrorSlots.add(err.slotIndex);
+				const newFailed = new SvelteSet(failedSlots);
+				newFailed.add(err.slotIndex);
+				failedSlots = newFailed;
+				sweepFailures = [
+					...sweepFailures.filter((f) => f.slotIndex !== err.slotIndex),
+					{ slotIndex: err.slotIndex, message: err.message }
+				].sort((a, b) => a.slotIndex - b.slotIndex);
+			}
+
+			if (['completed', 'cancelled', 'errored'].includes(state.status)) {
+				sweepInFlight = false;
+				const cap2 = state.slotsTotal ?? slotsTotal;
+				if (state.status === 'completed' && sweepFailures.length === 0) {
+					sweepProgress = `Captured ${state.scans?.length ?? 0}/${cap2} cartridges.`;
+					playBeep(true);
+				} else if (state.status === 'cancelled') {
+					deckError = `Cancelled. ${state.scans?.length ?? 0}/${cap2} captured before stop.`;
+					playBeep(false);
+				} else if (state.status === 'errored') {
+					deckError = state.abortReason ?? 'Sweep ended with an error.';
+					playBeep(false);
+				} else if (sweepFailures.length > 0) {
+					deckError = `Captured ${(state.scans?.length ?? 0) - sweepFailures.length}/${cap2}. ${sweepFailures.length} slot${sweepFailures.length === 1 ? '' : 's'} need manual rescan — click the red tiles below.`;
+					playBeep(false);
+				}
+				setTimeout(() => {
+					sweepProgress = null;
+				}, 4000);
 				return;
 			}
 
-			deckError = '';
-			scans = [...scans, { cartridgeId: scanned, backedLotId: currentLot.lotId }];
+			await new Promise((r) => setTimeout(r, 500));
+		}
+		sweepInFlight = false;
+	}
+
+	async function sendSweepControl(action: 'pause' | 'resume' | 'cancel') {
+		if (!currentSweepRunId || controlBusy) return;
+		controlBusy = true;
+		try {
+			const r = await fetch(`/api/scanner/sweep/${currentSweepRunId}`, {
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ action })
+			});
+			if (!r.ok) {
+				const b = await r.json().catch(() => ({}));
+				deckError = b?.message ?? `Control "${action}" failed (HTTP ${r.status})`;
+			}
+		} catch (e) {
+			deckError = e instanceof Error ? e.message : `Control "${action}" failed`;
+		} finally {
+			controlBusy = false;
+		}
+	}
+
+	function openSlot(slotIndex: number) {
+		if (isReadonly) return;
+		expandedSlot = slotIndex;
+		expandedInput = '';
+		expandedOverride = scans[slotIndex] !== null; // pre-arm override on filled slots
+		expandedError = '';
+		setTimeout(() => expandedInputEl?.focus(), 30);
+	}
+
+	function closeSlot() {
+		expandedSlot = null;
+		expandedInput = '';
+		expandedOverride = false;
+		expandedError = '';
+	}
+
+	async function handleExpandedKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape') {
+			e.preventDefault();
+			closeSlot();
+			return;
+		}
+		if (e.key !== 'Enter' || !expandedInput.trim() || expandedSlot === null) return;
+		e.preventDefault();
+		const scanned = expandedInput.trim();
+		const target = expandedSlot;
+		const r = await processScannedCartridge(scanned, {
+			slotIndex: target,
+			override: expandedOverride
+		});
+		if (r.ok) {
+			expandedError = '';
 			playBeep(true);
+			closeSlot();
+		} else {
+			expandedError = r.error ?? 'Scan failed';
+			expandedInput = '';
+			playBeep(false);
+			setTimeout(() => expandedInputEl?.focus(), 30);
 		}
 	}
 
@@ -203,37 +632,64 @@
 		// No auto-refocus — lets buttons register clicks without interference
 	}
 
+	// Dense, slot-ordered snapshot for completion handlers. Server doesn't track
+	// per-slot index; it just records each scanned cartridge. So we filter out
+	// the null slots and send the remaining scans in slot order.
+	function denseScans(): CartridgeScan[] {
+		return scans.filter((s): s is CartridgeScan => s !== null);
+	}
+
 	function tryComplete() {
-		if (scans.length === 0) return;
+		if (filledCount === 0) return;
 		// Check for mismatch with planned count
-		if (plannedCartridgeCount != null && scans.length !== plannedCartridgeCount) {
+		if (plannedCartridgeCount != null && filledCount !== plannedCartridgeCount) {
 			showMismatchModal = true;
 			return;
 		}
-		onComplete({ deckId, cartridgeScans: [...scans] });
+		onComplete({ deckId, ovenId, cartridgeScans: denseScans() });
 	}
 
 	function confirmMismatch() {
 		if (!mismatchReason.trim()) return;
 		showMismatchModal = false;
-		onComplete({ deckId, cartridgeScans: [...scans], countMismatchReason: mismatchReason.trim() });
+		onComplete({
+			deckId,
+			ovenId,
+			cartridgeScans: denseScans(),
+			countMismatchReason: mismatchReason.trim()
+		});
 		mismatchReason = '';
 	}
 
 	function confirmPartialLoad() {
-		if (scans.length === 0) return;
-		onComplete({ deckId, cartridgeScans: [...scans] });
+		if (filledCount === 0) return;
+		onComplete({ deckId, ovenId, cartridgeScans: denseScans() });
 	}
 
 	function undoLastScan() {
-		if (scans.length > 0) {
-			scans = scans.slice(0, -1);
-			deckError = '';
+		// Clear the highest-index filled slot. With sparse state the "last
+		// scan" is no longer trivially scans[-1] — find the highest filled
+		// slotIndex and null it out.
+		let lastIdx = -1;
+		for (let i = scans.length - 1; i >= 0; i--) {
+			if (scans[i] !== null) {
+				lastIdx = i;
+				break;
+			}
 		}
+		if (lastIdx < 0) return;
+		const next = scans.slice();
+		next[lastIdx] = null;
+		scans = next;
+		deckError = '';
 	}
 
 	$effect(() => {
 		if (step === 'deck' && deckInputEl && !isReadonly && !suppressFocus && !deckPendingValue) deckInputEl.focus();
+	});
+
+	$effect(() => {
+		if (step === 'oven' && ovenInputEl && !isReadonly && !suppressFocus && !ovenPendingValue) ovenInputEl.focus();
 	});
 
 	$effect(() => {
@@ -257,6 +713,22 @@
 			class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5"
 		>
 			{#if !deckPendingValue}
+				{#if robotId && !isReadonly}
+					<button
+						type="button"
+						onclick={scanDeckAndCartridges}
+						disabled={autoRunning || deckScanInFlight || sweepInFlight}
+						class="mb-4 flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/20 px-4 py-3 text-sm font-bold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30 disabled:cursor-not-allowed disabled:opacity-40"
+					>
+						{#if autoRunning}
+							<span class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" aria-hidden="true"></span>
+							Robot scanning deck + cartridges…
+						{:else}
+							Scan deck + cartridges with robot
+						{/if}
+					</button>
+					<p class="mb-3 text-center text-[11px] text-[var(--color-tron-text-secondary)]">or scan manually below</p>
+				{/if}
 				<div class="flex items-center gap-3">
 					<div
 						class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)]"
@@ -290,7 +762,25 @@
 							autocomplete="off"
 						/>
 					</div>
+					{#if robotId}
+						<button
+							type="button"
+							onclick={scanDeckWithRobot}
+							disabled={deckScanInFlight}
+							class="mt-5 shrink-0 rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-3 py-2 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40"
+						>
+							{#if deckScanInFlight}
+								<span class="mr-1 inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent align-[-2px]" aria-hidden="true"></span>
+								Robot scanning deck…
+							{:else}
+								Scan Deck with Robot
+							{/if}
+						</button>
+					{/if}
 				</div>
+				{#if deckScanError}
+					<p class="mt-2 text-xs text-red-300">{deckScanError}</p>
+				{/if}
 				<button
 					type="button"
 					onclick={async () => {
@@ -333,6 +823,52 @@
 				<p class="mt-2 text-sm text-[var(--color-tron-red)]">{deckError}</p>
 			{/if}
 		</div>
+	{:else if step === 'oven'}
+		<!-- Step 1b: Oven barcode scan — which oven this deck will go into -->
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5">
+			<p class="mb-3 text-xs text-[var(--color-tron-text-secondary)]">
+				Deck <span class="font-mono text-[var(--color-tron-cyan)]">{deckId}</span> confirmed. Scan the oven this deck will go into.
+			</p>
+			{#if !ovenPendingValue}
+				<div>
+					<label for="oven-barcode-input" class="tron-label">Scan Oven Barcode</label>
+					<input
+						bind:this={ovenInputEl}
+						id="oven-barcode-input"
+						type="text"
+						class="tron-input"
+						placeholder="Scan oven barcode..."
+						bind:value={ovenInput}
+						onkeydown={handleOvenKeydown}
+						autocomplete="off"
+					/>
+				</div>
+			{:else}
+				<div class="space-y-3">
+					<p class="text-sm text-[var(--color-tron-text-secondary)]">Scanned oven:</p>
+					<p class="font-mono text-lg font-semibold text-[var(--color-tron-cyan)]">{ovenPendingValue}</p>
+					<div class="flex gap-3">
+						<button
+							type="button"
+							onclick={rescanOven}
+							class="min-h-[44px] rounded-lg border border-[var(--color-tron-border)] px-4 py-3 text-sm text-[var(--color-tron-text-secondary)] transition-all hover:border-[var(--color-tron-cyan)]/30"
+						>
+							Re-scan
+						</button>
+						<button
+							type="button"
+							onclick={confirmOven}
+							class="min-h-[44px] flex-1 rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-6 py-3 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30"
+						>
+							Continue
+						</button>
+					</div>
+				</div>
+			{/if}
+			{#if ovenError}
+				<p class="mt-2 text-sm text-[var(--color-tron-red)]">{ovenError}</p>
+			{/if}
+		</div>
 	{:else}
 		<!-- Step 2: Cartridge loading grid -->
 		<div class="space-y-4">
@@ -349,8 +885,8 @@
 							Planned: <span class="font-semibold text-[var(--color-tron-text)]">{plannedCartridgeCount}</span>
 						</span>
 					{/if}
-					<span class="text-sm font-semibold {plannedCartridgeCount != null && scans.length > 0 && scans.length !== plannedCartridgeCount ? 'text-amber-400' : 'text-[var(--color-tron-text)]'}">
-						{scans.length} / {TOTAL_POSITIONS}
+					<span class="text-sm font-semibold {plannedCartridgeCount != null && filledCount > 0 && filledCount !== plannedCartridgeCount ? 'text-amber-400' : 'text-[var(--color-tron-text)]'}">
+						{filledCount} / {TOTAL_POSITIONS}
 					</span>
 				</div>
 			</div>
@@ -364,7 +900,197 @@
 				</div>
 			{/if}
 
-			<!-- Scan input -->
+			<!-- Auto-sweep button (gantry-mounted scanner) -->
+			{#if !isFull && !isReadonly && robotId}
+				<div class="rounded-lg border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/5 p-4">
+					<div class="flex items-center justify-between gap-3">
+						<div>
+							<div class="text-sm font-semibold" style="color: var(--color-tron-cyan)">Scan Cartridges</div>
+							<div class="text-[11px]" style="color: var(--color-tron-text-secondary)">
+								Drive the OT-2 to each taught position and read every barcode automatically.
+							</div>
+						</div>
+						<div class="flex items-center gap-2">
+							<label class="flex flex-col text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
+								Count
+								<input
+									type="number"
+									min="1"
+									max={TOTAL_POSITIONS}
+									bind:value={sweepCount}
+									disabled={sweepInFlight}
+									class="w-16 rounded border border-[var(--color-tron-cyan)]/40 bg-black/30 px-2 py-1 text-center font-mono text-sm text-[var(--color-tron-cyan)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+								/>
+							</label>
+							<button
+								type="button"
+								onclick={autoSweepCartridges}
+								disabled={sweepInFlight}
+								class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-2 text-sm font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40"
+							>
+								{sweepInFlight ? 'Scanning…' : 'Scan Cartridges'}
+							</button>
+						</div>
+					</div>
+					{#if sweepProgress}
+						<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">{sweepProgress}</p>
+					{/if}
+					{#if sweepFailures.length > 0}
+						<div class="mt-2 rounded border border-red-500/40 bg-red-900/15 p-2">
+							<p class="text-[11px] font-semibold text-red-300">
+								{sweepFailures.length} slot{sweepFailures.length === 1 ? '' : 's'} need a rescan — retry with the robot, or click the red tiles to scan by hand
+							</p>
+							{#if !isReadonly && robotId}
+								<button
+									type="button"
+									onclick={retryFailedSlots}
+									disabled={sweepInFlight || autoRunning}
+									class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-xs font-medium text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-50"
+								>
+									{sweepInFlight ? 'Retrying…' : `Retry ${sweepFailures.length} failed slot${sweepFailures.length === 1 ? '' : 's'} with robot`}
+								</button>
+							{/if}
+							<ul class="mt-1 space-y-0.5 text-[10px] text-red-200/90">
+								{#each sweepFailures as f (f.slotIndex)}
+									<li>Slot {f.slotIndex + 1}: {f.message}</li>
+								{/each}
+							</ul>
+						</div>
+					{/if}
+				</div>
+			{/if}
+
+			<!-- Live sweep status — visible while a sweep is in flight or just finished -->
+			{#if currentSweepRunId && (sweepInFlight || sweepStatus === 'paused' || (sweepStatus && slotsDone > 0))}
+				<div class="rounded-lg border border-[var(--color-tron-cyan)]/40 bg-black/20 p-4">
+					<div class="flex items-center justify-between gap-3">
+						<div class="flex items-center gap-3">
+							<span class="rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider
+								{sweepStatus === 'running' ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' :
+								sweepStatus === 'paused' ? 'bg-amber-500/20 text-amber-300' :
+								sweepStatus === 'cancelled' ? 'bg-red-500/20 text-red-300' :
+								sweepStatus === 'errored' ? 'bg-red-500/30 text-red-200' :
+								'bg-green-500/20 text-green-300'}">
+								{sweepStatus ?? 'idle'}
+							</span>
+							<span class="text-xs" style="color: var(--color-tron-text-secondary)">
+								Slot {slotsDone}/{slotsTotal}{currentSlotIdx !== null ? ` · at slot ${currentSlotIdx + 1}` : ''}
+							</span>
+						</div>
+						<div class="flex items-center gap-2">
+							{#if sweepStatus === 'running'}
+								<button
+									type="button"
+									onclick={() => sendSweepControl('pause')}
+									disabled={controlBusy}
+									class="rounded border border-amber-500/60 bg-amber-900/20 px-3 py-1 text-xs font-semibold text-amber-300 hover:bg-amber-900/40 disabled:opacity-40"
+								>
+									Pause
+								</button>
+							{:else if sweepStatus === 'paused'}
+								<button
+									type="button"
+									onclick={() => sendSweepControl('resume')}
+									disabled={controlBusy}
+									class="rounded border border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/15 px-3 py-1 text-xs font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40"
+								>
+									Resume
+								</button>
+							{/if}
+							{#if sweepStatus === 'running' || sweepStatus === 'paused'}
+								<button
+									type="button"
+									onclick={() => sendSweepControl('cancel')}
+									disabled={controlBusy}
+									class="rounded border border-red-500/60 bg-red-900/20 px-3 py-1 text-xs font-semibold text-red-300 hover:bg-red-900/40 disabled:opacity-40"
+								>
+									Cancel
+								</button>
+							{/if}
+						</div>
+					</div>
+					<!-- Progress bar -->
+					<div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-black/40">
+						<div
+							class="h-full transition-all
+								{sweepStatus === 'cancelled' || sweepStatus === 'errored'
+									? 'bg-red-500/70'
+									: sweepStatus === 'completed'
+										? 'bg-green-500/70'
+										: 'bg-[var(--color-tron-cyan)]'}"
+							style="width: {slotsTotal > 0 ? Math.min(100, (slotsDone / slotsTotal) * 100) : 0}%"
+						></div>
+					</div>
+					<!-- Live log -->
+					{#if sweepLog.length > 0}
+						<details open class="mt-3">
+							<summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
+								Log ({sweepLog.length})
+							</summary>
+							<div class="mt-1 max-h-48 overflow-y-auto rounded border border-[var(--color-tron-border)] bg-black/40 p-2 font-mono text-[10px] leading-tight">
+								{#each sweepLog.slice(-100) as entry, i (i)}
+									<div class="
+										{entry.level === 'error' ? 'text-red-300' :
+										entry.level === 'warn' ? 'text-amber-300' :
+										'text-[var(--color-tron-text-secondary)]'}">
+										<span class="opacity-50">[{new Date(entry.ts).toLocaleTimeString()}]</span>
+										{entry.message}
+									</div>
+								{/each}
+							</div>
+						</details>
+					{/if}
+				</div>
+			{/if}
+
+			<!-- Per-slot rescan panel — shows when a tile is clicked -->
+			{#if expandedSlot !== null && !isReadonly}
+				<div class="rounded-lg border border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/10 p-4">
+					<div class="flex items-start justify-between gap-3">
+						<div class="flex-1">
+							<div class="text-sm font-semibold" style="color: var(--color-tron-cyan)">
+								Slot {expandedSlot + 1}
+								{#if scans[expandedSlot]}
+									<span class="ml-2 font-mono text-[11px] text-green-300">currently: {scans[expandedSlot]?.cartridgeId}</span>
+								{:else if failedSlots.has(expandedSlot)}
+									<span class="ml-2 text-[11px] text-red-300">(failed during auto-scan)</span>
+								{:else}
+									<span class="ml-2 text-[11px]" style="color: var(--color-tron-text-secondary)">(empty)</span>
+								{/if}
+							</div>
+							<label for="slot-rescan-input" class="tron-label mt-2 block">
+								Scan or paste cartridge barcode
+							</label>
+							<input
+								bind:this={expandedInputEl}
+								id="slot-rescan-input"
+								type="text"
+								class="tron-input"
+								placeholder="Scan cartridge barcode..."
+								bind:value={expandedInput}
+								onkeydown={handleExpandedKeydown}
+								autocomplete="off"
+							/>
+							<label class="mt-2 flex items-center gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
+								<input type="checkbox" bind:checked={expandedOverride} class="accent-[var(--color-tron-cyan)]" />
+								Override (allow replacing the cartridge currently in this slot)
+							</label>
+							{#if expandedError}
+								<p class="mt-2 text-[11px] text-red-300">{expandedError}</p>
+							{/if}
+						</div>
+						<button
+							type="button"
+							onclick={closeSlot}
+							class="rounded border border-[var(--color-tron-border)] px-3 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
+						>
+							Close
+						</button>
+					</div>
+				</div>
+			{/if}
+
+			<!-- Manual scan input (fallback / handheld) -->
 			{#if !isFull}
 				<div
 					class="flex items-center gap-3 rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-surface)] p-4"
@@ -387,7 +1113,7 @@
 					</div>
 					<button
 						type="button"
-						onclick={() => { if (scans.length >= TOTAL_POSITIONS) return; cartridgeInput = generateTestBarcode('CART'); handleCartridgeKeydown(new KeyboardEvent('keydown', { key: 'Enter' })); }}
+						onclick={() => { if (isFull) return; cartridgeInput = generateTestBarcode('CART'); handleCartridgeKeydown(new KeyboardEvent('keydown', { key: 'Enter' })); }}
 						class="mt-5 rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-orange)] hover:text-[var(--color-tron-orange)]"
 					>
 						Test
@@ -412,33 +1138,54 @@
 					{#each GRID_ROWS as row, rowIndex (rowIndex)}
 						<div class="grid grid-cols-3 gap-1.5">
 							{#each row as pos (pos)}
+								{@const slotIdx = pos - 1}
 								{@const scan = positionMap.get(pos)}
 								{@const isNext = pos === nextPosition}
-								<div
+								{@const isFailed = failedSlots.has(slotIdx)}
+								{@const isExpanded = expandedSlot === slotIdx}
+								<button
+									type="button"
+									onclick={() => openSlot(slotIdx)}
+									disabled={isReadonly}
+									title={scan
+										? `Slot ${pos}: ${scan.cartridgeId} — click to override`
+										: isFailed
+											? `Slot ${pos}: failed during auto-scan — click to rescan`
+											: `Slot ${pos}: click to scan`}
 									class="flex min-h-[44px] flex-col items-center justify-center rounded border text-center text-xs transition-all
-										{scan
-										? 'border-green-500/50 bg-green-900/30'
-										: isNext
-											? 'animate-pulse border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/10'
-											: 'border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)]'}"
+										{isExpanded
+											? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/25 ring-1 ring-[var(--color-tron-cyan)]'
+											: isFailed
+												? 'border-red-500/70 bg-red-900/30'
+												: scan
+													? 'border-green-500/50 bg-green-900/30'
+													: isNext
+														? 'animate-pulse border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/10'
+														: 'border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)]'}
+										{isReadonly ? 'cursor-default' : 'cursor-pointer hover:border-[var(--color-tron-cyan)]'}"
 								>
 									<span
-										class="font-mono text-[10px] {scan
-											? 'text-green-400'
-											: isNext
-												? 'text-[var(--color-tron-cyan)]'
-												: 'text-[var(--color-tron-text-secondary)]'}"
+										class="font-mono text-[10px] {isFailed
+											? 'text-red-300'
+											: scan
+												? 'text-green-400'
+												: isNext
+													? 'text-[var(--color-tron-cyan)]'
+													: 'text-[var(--color-tron-text-secondary)]'}"
 									>
 										{pos}
 									</span>
 									{#if scan}
 										<span
-											class="mt-0.5 max-w-full truncate px-0.5 font-mono text-[8px] text-green-300"
+											class="mt-0.5 w-full break-all px-0.5 font-mono text-[8px] leading-tight text-green-300"
+											title={scan.cartridgeId}
 										>
-											{scan.cartridgeId.length > 6 ? scan.cartridgeId.slice(-6) : scan.cartridgeId}
+											{scan.cartridgeId}
 										</span>
+									{:else if isFailed}
+										<span class="mt-0.5 text-[8px] font-semibold text-red-300">rescan</span>
 									{/if}
-								</div>
+								</button>
 							{/each}
 						</div>
 					{/each}
@@ -454,7 +1201,7 @@
 
 			<!-- Action buttons -->
 			<div class="flex gap-3">
-				{#if scans.length > 0}
+				{#if filledCount > 0}
 					<button
 						type="button"
 						onclick={undoLastScan}
@@ -469,15 +1216,15 @@
 						onclick={tryComplete}
 						class="min-h-[44px] flex-1 rounded-lg border border-green-500/50 bg-green-900/20 px-6 py-3 text-sm font-bold text-green-400 transition-all hover:bg-green-900/30"
 					>
-						Confirm Full Load ({scans.length} cartridges)
+						Confirm Full Load ({filledCount} cartridges)
 					</button>
-				{:else if scans.length > 0}
+				{:else if filledCount > 0}
 					<button
 						type="button"
 						onclick={confirmPartialLoad}
 						class="min-h-[44px] flex-1 rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-4 py-2 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30"
 					>
-						Confirm Partial Load ({scans.length} cartridges)
+						Confirm Partial Load ({filledCount} cartridges)
 					</button>
 				{/if}
 			</div>
@@ -491,8 +1238,8 @@
 				<h3 class="text-lg font-semibold text-amber-400">Cartridge Count Mismatch</h3>
 				<p class="mt-2 text-sm text-[var(--color-tron-text-secondary)]">
 					You planned <span class="font-bold text-[var(--color-tron-text)]">{plannedCartridgeCount}</span> cartridges
-					but scanned <span class="font-bold text-[var(--color-tron-text)]">{scans.length}</span>.
-					The wax calculation will use the actual scanned count ({scans.length}).
+					but scanned <span class="font-bold text-[var(--color-tron-text)]">{filledCount}</span>.
+					The wax calculation will use the actual scanned count ({filledCount}).
 				</p>
 				<label class="mt-4 block">
 					<span class="text-sm font-medium text-[var(--color-tron-text-secondary)]">Reason for mismatch</span>
@@ -517,7 +1264,7 @@
 						disabled={!mismatchReason.trim()}
 						class="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-amber-700 disabled:opacity-50"
 					>
-						Confirm with {scans.length} Cartridges
+						Confirm with {filledCount} Cartridges
 					</button>
 				</div>
 			</div>

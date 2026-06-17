@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { connectDB, CartridgeRecord, InventoryTransaction, ReceivingLot } from '$lib/server/db';
+import { connectDB, CartridgeRecord, CvImage, InventoryTransaction, ReceivingLot } from '$lib/server/db';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ locals, params }) => {
@@ -208,6 +208,20 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 			.lean()
 		: [];
 
+	// Fetch CV images linked to this cartridge
+	const cvImages = await CvImage.find({ 'cartridgeTag.cartridgeRecordId': params.cartridgeId })
+		.select('_id cartridgeTag.phase capturedAt imageUrl filePath label')
+		.sort({ capturedAt: -1 })
+		.lean();
+
+	const photos = (cvImages as any[]).map(img => ({
+		imageId: img._id,
+		phase: img.cartridgeTag?.phase || null,
+		capturedAt: img.capturedAt,
+		imageUrl: img.imageUrl || null,
+		label: img.label || null
+	}));
+
 	return json({
 		success: true,
 		cartridge: {
@@ -220,6 +234,7 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 		},
 		timeline: JSON.parse(JSON.stringify(timeline)),
 		transactions: JSON.parse(JSON.stringify(transactions)),
-		linkedLots: JSON.parse(JSON.stringify(linkedLots))
+		linkedLots: JSON.parse(JSON.stringify(linkedLots)),
+		photos: JSON.parse(JSON.stringify(photos))
 	});
 };

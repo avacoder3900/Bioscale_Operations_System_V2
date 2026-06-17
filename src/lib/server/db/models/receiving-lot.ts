@@ -11,11 +11,19 @@ const receivingLotSchema = new Schema({
 		name: String
 	},
 	quantity: { type: Number, required: true },
+	consumedUl: { type: Number, default: 0 },
 	serialNumber: String,
 	operator: { _id: String, username: String },
 	inspectionPathway: { type: String, enum: ['coc', 'ip'], required: true },
 	cocDocumentUrl: String,
 	cocMeetsStandards: Boolean,
+	cocPhotos: [{
+		lotNumber: String,
+		r2Key: String,
+		fileUrl: String,
+		fileName: String,
+		uploadedAt: { type: Date, default: Date.now }
+	}],
 	ipResults: Schema.Types.Mixed, // { result, passRate, percentRequired }
 	ipRevisionId: String, // InspectionProcedureRevision._id
 	firstArticleInspection: { type: Boolean, default: false },
@@ -49,7 +57,17 @@ const receivingLotSchema = new Schema({
 	dispositionExplanation: String,
 	disposedAt: Date,
 	disposedBy: { _id: String, username: String },
-	status: { type: String, enum: ['in_progress', 'accepted', 'rejected', 'returned', 'other'], default: 'in_progress' }
+	status: { type: String, enum: ['in_progress', 'accepted', 'rejected', 'returned', 'other'], default: 'in_progress' },
+	waxMelt: {
+		type: new Schema({
+			startedAt: Date,
+			startedBy: { type: { _id: String, username: String }, _id: false },
+			readyAt: Date,
+			confirmedMeltedAt: Date,
+			confirmedBy: { type: { _id: String, username: String }, _id: false }
+		}, { _id: false }),
+		default: undefined
+	}
 }, { timestamps: true });
 
 receivingLotSchema.index({ lotId: 1 }, { unique: true });

@@ -1,6 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, AssayDefinition } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
+import { generateLegacyAssayId, toLegacyBcode } from '$lib/server/assay-legacy-shape';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -16,36 +17,46 @@ export const actions: Actions = {
 		await connectDB();
 
 		const data = await request.formData();
-		const name = data.get('name') as string;
-		if (!name?.trim()) return fail(400, { error: 'Assay name is required' });
+		const name = (data.get('name') as string)?.trim();
+		if (!name) return fail(400, { error: 'Assay name is required' });
 
-		// Auto-generate skuCode if not provided
-		const skuCode = (data.get('skuCode') as string)?.trim() || `ASSAY-${Date.now().toString(36).toUpperCase()}`;
+		// Legacy shape: skuCode is typically null. Only set it when the operator
+		// explicitly provides a value (we don't auto-generate like we used to).
+		const skuCodeRaw = (data.get('skuCode') as string)?.trim();
+		const skuCode = skuCodeRaw ? skuCodeRaw : null;
 
-		// Parse instructions from the hidden field
-		let instructions: any[] = [];
+		// Parse instructions coming from the BcodeEditor (UI shape).
+		let uiInstructions: any[] = [];
 		const instructionsRaw = data.get('instructions') as string;
 		if (instructionsRaw) {
 			try {
-				instructions = JSON.parse(instructionsRaw);
+				uiInstructions = JSON.parse(instructionsRaw);
 			} catch {
 				return fail(400, { error: 'Invalid instructions format' });
 			}
 		}
 
-		const assay = await AssayDefinition.create({
+		const BCODE = toLegacyBcode(uiInstructions);
+		const _id = await generateLegacyAssayId(AssayDefinition as any);
+
+		const description = (data.get('description') as string) || undefined;
+		const duration = data.get('duration') ? Number(data.get('duration')) : undefined;
+
+		await AssayDefinition.create({
+			_id,
 			name,
 			skuCode,
-			description: (data.get('description') as string) || undefined,
-			duration: data.get('duration') ? Number(data.get('duration')) : undefined,
-			shelfLifeDays: data.get('shelfLifeDays') ? Number(data.get('shelfLifeDays')) : undefined,
+			description,
+			duration,
+			BCODE,
+			hidden: true,
+			protected: true,
 			isActive: true,
-			metadata: { instructions },
 			reagents: [],
 			versionHistory: []
 		});
 
-		redirect(303, `/assays/${assay._id}`);
+		redirect(303, `/assays/${_id}`);
 	}
 };
 

@@ -39,11 +39,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			status: 'processing'
 		});
 
-		// Call Python worker
-		const modelPath = `cv/${projectId}/models/model.onnx`;
-		const result = await runInference(image.imageUrl, modelPath);
+		// Inference runs IN-PROCESS via cv-classifier (no external worker). The old
+		// Vercel Python function at /api/ml/infer was removed — see the
+		// PROD-API-NAMESPACE-FIX PRD. runInference loads the project's trained
+		// classifier weights and grades the image locally.
+		let result;
+		try {
+			result = await runInference(image.imageUrl, projectId, project.confidenceThreshold ?? 0.5);
+		} catch (e: any) {
+			await CvInspection.findByIdAndUpdate(inspectionId, { status: 'failed' });
+			return json({ error: `Inference failed: ${e?.message ?? String(e)}` }, { status: 502 });
+		}
 
-		// Update inspection with result
 		await CvInspection.findByIdAndUpdate(inspectionId, {
 			status: 'complete',
 			result: result.result,

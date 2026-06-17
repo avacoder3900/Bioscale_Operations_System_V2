@@ -1,13 +1,27 @@
 <script lang="ts">
-	import { invalidateAll } from '$app/navigation';
+	import { invalidate, invalidateAll } from '$app/navigation';
 	import TronButton from '$lib/components/ui/TronButton.svelte';
 	import KanbanColumn from '$lib/components/kanban/KanbanColumn.svelte';
 	import CreateTaskModal from '$lib/components/kanban/CreateTaskModal.svelte';
+	import WipLimitModal from '$lib/components/kanban/WipLimitModal.svelte';
 
 	let { data, form } = $props();
 	let showCreateModal = $state(false);
 	let dragError = $state('');
 	let showMyTasks = $state(false);
+	let wipLimitInfo = $state<{
+		assignee: string;
+		assigneeId: string;
+		limit: number;
+		currentCount: number;
+		currentTasks: { _id: string; title: string }[];
+	} | null>(null);
+
+	// Surface WIP-limit blocks from form actions (arrow buttons).
+	$effect(() => {
+		const err = (form as any)?.wipLimitError;
+		if (err && err.kind === 'wip_limit_exceeded') wipLimitInfo = err;
+	});
 
 	// Filter tasks based on toggle
 	let filteredTasks = $derived(
@@ -87,20 +101,102 @@
 		return grouped;
 	}
 
-	/** Track which project sections are collapsed */
+	/**
+	 * Project section + backlog accordion collapse state are both persisted
+	 * server-side on KanbanProject (collapsed / backlogCollapsed fields).
+	 * Global state: every user sees and writes the same value. Optimistic
+	 * update + revert on API failure.
+	 *
+	 * Defaults from server-side normalization:
+	 *   - collapsed: false (project sections start expanded)
+	 *   - backlogCollapsed: true (backlogs start collapsed)
+	 */
 	let collapsed = $state(new Set<string | null>(
-		data.projects.filter((p) => !filteredTasks.some((t) => t.projectId === p.id)).map((p) => p.id)
+		data.projects.filter((p) => p.collapsed).map((p) => p.id)
 	));
 
-	function toggleCollapse(projectId: string | null) {
-		const next = new Set(collapsed);
-		const key = projectId;
-		if (next.has(key)) {
-			next.delete(key);
-		} else {
-			next.add(key);
+	let collapsedBacklogs = $state(new Set<string | null>(
+		data.projects.filter((p) => p.backlogCollapsed).map((p) => p.id)
+	));
+
+	async function persistProjectUiState(
+		projectId: string,
+		payload: { collapsed?: boolean; backlogCollapsed?: boolean }
+	): Promise<boolean> {
+		const url = `/api/kanban/projects/${projectId}/ui-state`;
+		const opts: RequestInit = {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(payload),
+			// Survive page unload — fold a bunch of chevrons then navigate away
+			// and the in-flight POSTs still complete instead of getting dropped.
+			keepalive: true
+		};
+
+		try {
+			const res = await fetch(url, opts);
+			if (res.ok) {
+				// Refresh the layout's cached projects so sibling-route navigation
+				// (/kanban → /kanban/list → /kanban) sees the new value.
+				invalidate('kanban:projects');
+				return true;
+			}
+			// 4xx won't be fixed by retry (auth, validation). 5xx might be a
+			// Vercel cold-start or transient blip — fall through to retry.
+			if (res.status < 500) return false;
+		} catch {
+			// Network error — fall through to retry.
 		}
+
+		await new Promise((r) => setTimeout(r, 500));
+		try {
+			const res = await fetch(url, opts);
+			if (res.ok) {
+				invalidate('kanban:projects');
+				return true;
+			}
+			return false;
+		} catch {
+			return false;
+		}
+	}
+
+	async function toggleCollapse(projectId: string | null) {
+		if (projectId === null) return;
+		const wasCollapsed = collapsed.has(projectId);
+		const newState = !wasCollapsed;
+
+		const next = new Set(collapsed);
+		if (newState) next.add(projectId);
+		else next.delete(projectId);
 		collapsed = next;
+
+		const ok = await persistProjectUiState(projectId, { collapsed: newState });
+		if (!ok) {
+			const revert = new Set(collapsed);
+			if (wasCollapsed) revert.add(projectId);
+			else revert.delete(projectId);
+			collapsed = revert;
+		}
+	}
+
+	async function toggleBacklog(projectId: string | null) {
+		if (projectId === null) return;
+		const wasCollapsed = collapsedBacklogs.has(projectId);
+		const newState = !wasCollapsed;
+
+		const next = new Set(collapsedBacklogs);
+		if (newState) next.add(projectId);
+		else next.delete(projectId);
+		collapsedBacklogs = next;
+
+		const ok = await persistProjectUiState(projectId, { backlogCollapsed: newState });
+		if (!ok) {
+			const revert = new Set(collapsedBacklogs);
+			if (wasCollapsed) revert.add(projectId);
+			else revert.delete(projectId);
+			collapsedBacklogs = revert;
+		}
 	}
 
 	async function handleDrop(taskId: string, newStatus: string) {
@@ -112,6 +208,10 @@
 				body: JSON.stringify({ taskId, newStatus })
 			});
 			const result = await res.json();
+			if (res.status === 409 && result.kind === 'wip_limit_exceeded') {
+				wipLimitInfo = result;
+				return;
+			}
 			if (!result.success) {
 				dragError = result.error ?? 'Failed to move task';
 			}
@@ -277,6 +377,9 @@
 								config={col}
 								tasks={grouped[col.key] ?? []}
 								onDrop={handleDrop}
+								collapsible={col.key === 'backlog'}
+								collapsed={col.key === 'backlog' && collapsedBacklogs.has(group.id)}
+								onToggleCollapse={col.key === 'backlog' ? () => toggleBacklog(group.id) : undefined}
 							/>
 						{/each}
 					</div>
@@ -294,4 +397,9 @@
 		defaultProjectId={createModalProjectId}
 		onclose={() => { showCreateModal = false; createModalProjectId = undefined; }}
 	/>
+{/if}
+
+<!-- WIP limit hit modal -->
+{#if wipLimitInfo}
+	<WipLimitModal info={wipLimitInfo} onclose={() => (wipLimitInfo = null)} />
 {/if}

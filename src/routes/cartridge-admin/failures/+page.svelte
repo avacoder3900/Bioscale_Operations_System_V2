@@ -1,14 +1,12 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
-	import type { LifecycleStage } from '$lib/server/services/cartridge-admin/queries';
-
 	let { data } = $props();
 
 	let searchInput = $state(data.filters.search ?? '');
 	let expandedId = $state<string | null>(null);
 
-	const FAILURE_STAGES: LifecycleStage[] = ['Rejected', 'Scrapped'];
+	const FAILURE_STAGES: ('Rejected' | 'Scrapped')[] = ['Rejected', 'Scrapped'];
 
 	const stageColors: Record<string, string> = {
 		Rejected: 'bg-red-900/50 text-red-300 border-red-500/30',

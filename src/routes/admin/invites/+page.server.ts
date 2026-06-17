@@ -57,6 +57,16 @@ export const actions: Actions = {
 
 		const baseUrl = url.origin;
 		const inviteUrl = `${baseUrl}/invite/accept?token=${token}`;
+
+		// Notify admins
+		const { notifyAdminEvent } = await import('$lib/server/notifications');
+		await notifyAdminEvent({
+			event: 'invite_created',
+			summary: `New invite sent to ${email}`,
+			actor: locals.user?.username,
+			detailsHtml: `<p>Invited by <strong>${locals.user?.username}</strong>. Invite link expires in 7 days.</p>`
+		});
+
 		return { success: true, inviteUrl };
 	},
 

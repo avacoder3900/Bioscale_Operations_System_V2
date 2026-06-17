@@ -1,11 +1,12 @@
 import { redirect, fail } from '@sveltejs/kit';
 import bcrypt from 'bcryptjs';
 import {
-	connectDB, CartridgeRecord, WaxFillingRun, ReagentBatchRecord,
+	connectDB, CartridgeRecord, WaxFillingRun, ReagentBatchRecord, BackingLot,
 	ManufacturingMaterial, ManufacturingMaterialTransaction,
 	ManufacturingSettings, PartDefinition, User, AuditLog, generateId
 } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
+import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -13,12 +14,27 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
+	// Exclude checked-out cartridges from inventory counts
+	const checkedOutIds = await getCheckedOutCartridgeIds();
+
 	// === Pipeline counts ===
 	const phaseCounts = await CartridgeRecord.aggregate([
+		{ $match: { _id: { $nin: checkedOutIds } } },
 		{ $group: { _id: '$status', count: { $sum: 1 } } }
 	]);
 	const phaseMap = new Map<string, number>(phaseCounts.map((p: any) => [p._id ?? 'unknown', p.count]));
-	const backedCount = await CartridgeRecord.countDocuments({ 'backing.recordedAt': { $exists: true } });
+	// "Backed" cartridges (WAX-FLOW-2) are individual CartridgeRecords with
+	// status='backing', scanned in one-by-one at WI-01. Legacy BackingLot
+	// aggregate buckets (no per-cartridge records) are added on top until
+	// drained — nothing writes to BackingLot any more.
+	const [backedCartCount, legacyBackedAgg] = await Promise.all([
+		CartridgeRecord.countDocuments({ status: 'backing', _id: { $nin: checkedOutIds } }),
+		BackingLot.aggregate([
+			{ $match: { status: { $in: ['in_oven', 'ready', 'created'] }, cartridgeCount: { $gt: 0 } } },
+			{ $group: { _id: null, total: { $sum: '$cartridgeCount' } } }
+		]).catch(() => [])
+	]);
+	const backedCount = backedCartCount + ((legacyBackedAgg[0] as any)?.total ?? 0);
 
 	const waxStats = await WaxFillingRun.aggregate([
 		{ $match: { status: { $in: ['completed', 'Completed'] } } },
@@ -36,10 +52,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 		status: { $nin: ['completed', 'Completed', 'aborted', 'Aborted', 'cancelled', 'Cancelled', 'voided'] }
 	});
 
-	const waxStored = await CartridgeRecord.countDocuments({ status: 'wax_stored' });
-	const reagentStored = await CartridgeRecord.countDocuments({ status: 'stored' });
-	const sealed = await CartridgeRecord.countDocuments({ status: 'sealed' });
-	const voided = await CartridgeRecord.countDocuments({ status: 'voided' });
+	const waxStored = await CartridgeRecord.countDocuments({ status: 'wax_stored', _id: { $nin: checkedOutIds } });
+	const reagentStored = await CartridgeRecord.countDocuments({ status: 'stored', _id: { $nin: checkedOutIds } });
+	const sealed = await CartridgeRecord.countDocuments({ status: 'sealed', _id: { $nin: checkedOutIds } });
+	// Count both 'scrapped' (QC rejects) and legacy 'voided' — same semantic
+	// bucket for the "not usable" cartridge count tile.
+	const voided = await CartridgeRecord.countDocuments({ status: { $in: ['scrapped', 'voided'] }, _id: { $nin: checkedOutIds } });
 
 	// === Parts inventory (cartridge BOM) ===
 	const parts = await PartDefinition.find({ bomType: 'cartridge', isActive: true })
@@ -59,7 +77,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// === Settings ===
 	const settingsDoc = await ManufacturingSettings.findById('default').lean();
 	const general = (settingsDoc as any)?.general ?? {};
-	const cartridgesPerSheet = general.cartridgesPerLaserCutSheet ?? 13;
+	const cartridgesPerSheet = general.cartridgesPerLaserCutSheet ?? 16;
 
 	const laserCutPart = partsList.find((p) => /laser.?cut|substrate|thermoseal.?sheet/i.test(p.name));
 	const individualBacks = (laserCutPart?.inventoryCount ?? 0) * cartridgesPerSheet;
@@ -81,25 +99,25 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Pipeline stages
 	const stages = [
 		{
-			id: 'cut-thermoseal', name: 'Cut Thermoseal', href: '/manufacturing/wi-02',
+			id: 'cut-thermoseal', name: 'Cut Thermoseal', href: '/manufacturing/cart-mfg/wi-02',
 			inputs: [{ name: 'Thermoseal Roll', icon: '🧻', count: null as number | null, unit: 'rolls (ROG)' }],
 			outputs: [{ name: 'Thermoseal Sheets', icon: '📄', count: null as number | null, unit: 'sheets' }],
 			activeRuns: 0, completedRuns: 0
 		},
 		{
-			id: 'cut-topseal', name: 'Cut Top Seal', href: '/manufacturing/wi-03',
+			id: 'cut-topseal', name: 'Cut Top Seal', href: '/manufacturing/cart-mfg/wi-03',
 			inputs: [{ name: 'Top Seal Roll', icon: '🧻', count: null as number | null, unit: 'rolls (ROG)' }],
 			outputs: [{ name: 'Top Seal Sheets', icon: '📄', count: null as number | null, unit: 'sheets' }],
 			activeRuns: 0, completedRuns: 0
 		},
 		{
-			id: 'laser', name: 'Laser Cut', href: '/manufacturing/laser-cutting',
+			id: 'laser', name: 'Laser Cut', href: '/manufacturing/cart-mfg/laser-cutting',
 			inputs: [{ name: 'Thermoseal Sheets', icon: '📄', count: null as number | null, unit: 'sheets' }],
 			outputs: [{ name: 'Cartridge Backs', icon: '🔲', count: individualBacks > 0 ? individualBacks : null, unit: `backs (${cartridgesPerSheet}/sheet)` }],
 			activeRuns: 0, completedRuns: 0
 		},
 		{
-			id: 'backing', name: 'Cartridge Back', href: '/manufacturing/wi-01',
+			id: 'backing', name: 'Cartridge Back', href: '/manufacturing/cart-mfg/wi-01',
 			inputs: [
 				{ name: 'Cartridge Back (laser cut)', icon: '🔲', count: individualBacks > 0 ? individualBacks : null, unit: 'backs' },
 				{ name: 'Raw Cartridge', icon: '📦', count: null as number | null, unit: 'cartridges (ROG)' },
@@ -109,7 +127,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			activeRuns: 0, completedRuns: 0
 		},
 		{
-			id: 'wax', name: 'Wax Filling', href: '/manufacturing/wax-filling',
+			id: 'wax', name: 'Wax Filling', href: '/manufacturing/cart-mfg/wax-filling',
 			inputs: [
 				{ name: 'Backed Cartridges', icon: '📦', count: backedCount, unit: 'cartridges' },
 				{ name: 'Wax (source lots)', icon: '🕯️', count: null as number | null, unit: 'tubes' },
@@ -122,7 +140,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			activeRuns: activeWaxRuns, completedRuns: waxStats[0]?.totalRuns ?? 0
 		},
 		{
-			id: 'reagent', name: 'Reagent Filling + Top Seal', href: '/manufacturing/reagent-filling',
+			id: 'reagent', name: 'Reagent Filling + Top Seal', href: '/manufacturing/cart-mfg/reagent-filling',
 			inputs: [
 				{ name: 'Wax-Filled Cartridges', icon: '🟡', count: waxStored, unit: 'available' },
 				{ name: 'Reagents (per assay)', icon: '💧', count: null as number | null, unit: 'wells' },
@@ -136,7 +154,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			activeRuns: activeReagentRuns, completedRuns: reagentStats[0]?.totalRuns ?? 0
 		},
 		{
-			id: 'qaqc', name: 'QA/QC', href: '/manufacturing/qa-qc',
+			id: 'qaqc', name: 'QA/QC', href: '/manufacturing/cart-mfg/qa-qc',
 			inputs: [{ name: 'Sealed Cartridges', icon: '✅', count: sealed, unit: 'cartridges' }],
 			outputs: [
 				{ name: 'Released', icon: '🎯', count: null as number | null, unit: 'cartridges' },

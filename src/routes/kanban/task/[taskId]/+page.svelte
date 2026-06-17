@@ -327,7 +327,7 @@
 					<div class="flex justify-between">
 						<dt class="tron-text-muted">Size</dt>
 						<dd class="tron-text-primary">
-							{{ short: 'Short', medium: 'Medium', long: 'Long' }[data.task.taskLength] ??
+							{({ short: 'Short', medium: 'Medium', long: 'Long' } as Record<string, string>)[data.task.taskLength as string] ??
 								data.task.taskLength}
 						</dd>
 					</div>

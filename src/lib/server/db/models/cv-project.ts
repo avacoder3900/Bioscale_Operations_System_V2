@@ -12,7 +12,24 @@ const cvProjectSchema = new Schema({
 	imageCount: { type: Number, default: 0 },
 	annotatedCount: { type: Number, default: 0 },
 	modelStatus: { type: String, enum: ['untrained', 'training', 'trained', 'failed'], default: 'untrained' },
-	modelVersion: String
+	modelVersion: String,
+	// Anomaly-score cutoff for pass/fail at inference time (0..1).
+	confidenceThreshold: { type: Number, default: 0.5, min: 0, max: 1 },
+	captureSettings: {
+		mode: { type: String, enum: ['full', 'raw'], default: 'full' },
+		exposure: { type: Number, default: -5 },
+		whiteBalance: { type: Number, default: 4000 },
+		brightness: { type: Number, default: 128 },
+		contrast: { type: Number, default: 128 },
+		gain: { type: Number, default: 0 },
+		sharpness: { type: Number, default: 128 },
+		redCorrection: { type: Number, default: 0.85 },
+		greenCorrection: { type: Number, default: 0.90 },
+		blueCorrection: { type: Number, default: 1.0 },
+		claheStrength: { type: Number, default: 2.0 },
+		gamma: { type: Number, default: 0.85 },
+		_id: false
+	}
 }, { timestamps: true });
 
 cvProjectSchema.index({ projectType: 1 });

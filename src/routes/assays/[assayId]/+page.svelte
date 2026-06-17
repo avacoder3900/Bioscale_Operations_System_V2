@@ -5,7 +5,7 @@
 
 	let { data, form } = $props();
 
-	let activeTab = $state<'overview' | 'bcode' | 'cartridges' | 'results' | 'versions' | 'reagents'>('overview');
+	let activeTab = $state<'overview' | 'bcode' | 'results' | 'versions' | 'reagents'>('overview');
 	let showEditModal = $state(false);
 	let showDeleteConfirm = $state(false);
 	let editName = $state(data.assay.name);
@@ -321,25 +321,6 @@
 		</button>
 		<button
 			class="px-4 py-2"
-			style="min-height: 44px; color: {activeTab === 'cartridges'
-				? 'var(--color-tron-cyan, #00ffff)'
-				: 'var(--color-tron-text-secondary, #9ca3af)'}; border-bottom: 2px solid {activeTab === 'cartridges'
-				? 'var(--color-tron-cyan, #00ffff)'
-				: 'transparent'}"
-			onclick={() => (activeTab = 'cartridges')}
-		>
-			Cartridges
-			{#if data.linkedCartridges.length > 0}
-				<span
-					class="ml-1 rounded-full px-1.5 py-0.5 text-xs"
-					style="background: var(--color-tron-cyan, #00ffff); color: #000"
-				>
-					{data.linkedCartridges.length}
-				</span>
-			{/if}
-		</button>
-		<button
-			class="px-4 py-2"
 			style="min-height: 44px; color: {activeTab === 'results'
 				? 'var(--color-tron-cyan, #00ffff)'
 				: 'var(--color-tron-text-secondary, #9ca3af)'}; border-bottom: 2px solid {activeTab === 'results'
@@ -455,14 +436,6 @@
 						<dt style="color: var(--color-tron-text-secondary, #9ca3af)">CRC32 Checksum</dt>
 						<dd class="font-mono" style="color: var(--color-tron-text-primary, #f3f4f6)">
 							{data.assay.checksum ?? '—'}
-						</dd>
-					</div>
-					<div class="flex justify-between">
-						<dt style="color: var(--color-tron-text-secondary, #9ca3af)">
-							Linked Cartridges
-						</dt>
-						<dd style="color: var(--color-tron-text-primary, #f3f4f6)">
-							{data.linkedCartridges.length}
 						</dd>
 					</div>
 					<div class="flex justify-between">
@@ -606,56 +579,6 @@
 					</p>
 				{/if}
 			</div>
-		</div>
-	{/if}
-
-	<!-- Cartridges Tab -->
-	{#if activeTab === 'cartridges'}
-		<div class="tron-card p-5">
-			<h3 class="mb-4 text-lg font-semibold" style="color: var(--color-tron-cyan, #00ffff)">
-				Linked Firmware Cartridges
-			</h3>
-			{#if data.linkedCartridges.length === 0}
-				<p style="color: var(--color-tron-text-secondary, #9ca3af)">
-					No firmware cartridges are linked to this assay.
-				</p>
-			{:else}
-				<div class="overflow-x-auto">
-					<table class="tron-table w-full">
-						<thead>
-							<tr>
-								<th>Cartridge UUID</th>
-								<th>Status</th>
-								<th>Lot Number</th>
-								<th>Serial Number</th>
-								<th>Created</th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each data.linkedCartridges as c (c.id)}
-								<tr>
-									<td style="font-family: monospace; color: var(--color-tron-cyan, #00ffff)">
-										{c.cartridgeUuid}
-									</td>
-									<td>
-										<span
-											class="inline-block rounded px-2 py-1 text-xs font-semibold"
-											style="color: var(--color-tron-text-primary, #f3f4f6)"
-										>
-											{c.status}
-										</span>
-									</td>
-									<td>{c.lotNumber ?? '—'}</td>
-									<td>{c.serialNumber ?? '—'}</td>
-									<td style="color: var(--color-tron-text-secondary, #9ca3af)">
-										{formatDate(c.createdAt)}
-									</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
-			{/if}
 		</div>
 	{/if}
 
@@ -804,7 +727,7 @@
 						Active Reagents
 					</dt>
 					<dd class="text-2xl font-bold" style="color: var(--color-tron-cyan, #00ffff)">
-						{data.assay.reagents.filter(r => r.isActive).length}
+						{data.assay.reagents.filter((r: any) => r.isActive).length}
 					</dd>
 				</div>
 				<div class="rounded p-3" style="background: var(--color-tron-bg-secondary, #1f2937)">
@@ -812,7 +735,7 @@
 						Calculated BOM Cost
 					</dt>
 					<dd class="text-2xl font-bold" style="color: var(--color-tron-green, #39ff14)">
-						${data.assay.reagents.filter(r => r.isActive).reduce((sum, r) => sum + reagentCost(r), 0).toFixed(4)}
+						${data.assay.reagents.filter((r: any) => r.isActive).reduce((sum: number, r: any) => sum + reagentCost(r), 0).toFixed(4)}
 					</dd>
 				</div>
 				<div class="rounded p-3" style="background: var(--color-tron-bg-secondary, #1f2937)">
@@ -823,7 +746,7 @@
 						{#if data.assay.useSingleCost && data.assay.bomCostOverride}
 							${data.assay.bomCostOverride}
 						{:else}
-							${data.assay.reagents.filter(r => r.isActive).reduce((sum, r) => sum + reagentCost(r), 0).toFixed(4)}
+							${data.assay.reagents.filter((r: any) => r.isActive).reduce((sum: number, r: any) => sum + reagentCost(r), 0).toFixed(4)}
 						{/if}
 					</dd>
 				</div>
@@ -905,7 +828,7 @@
 				<p style="color: var(--color-tron-text-secondary, #9ca3af)">No reagents defined. Add one above.</p>
 			{:else}
 				<div class="space-y-2">
-					{#each data.assay.reagents.slice().sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)) as reagent (reagent.id)}
+					{#each data.assay.reagents.slice().sort((a: any, b: any) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)) as reagent (reagent.id)}
 						<div
 							class="rounded"
 							style="border: 1px solid {reagent.isActive ? 'var(--color-tron-border, #374151)' : '#374151'}; background: var(--color-tron-bg-secondary, #1f2937); opacity: {reagent.isActive ? '1' : '0.6'}"
@@ -1099,7 +1022,7 @@
 								<!-- Sub-components -->
 								{#if expandedReagents.has(reagent.id) && reagent.subComponents.length > 0}
 									<div class="mx-3 mb-3 space-y-1">
-										{#each reagent.subComponents.slice().sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)) as sub (sub.id)}
+										{#each reagent.subComponents.slice().sort((a: any, b: any) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)) as sub (sub.id)}
 											<div
 												class="rounded p-3"
 												style="background: color-mix(in srgb, var(--color-tron-surface, #111827) 80%, transparent); border-left: 2px solid var(--color-tron-cyan, #00ffff)"

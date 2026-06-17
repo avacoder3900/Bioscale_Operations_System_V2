@@ -41,7 +41,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	]);
 	const roleCountMap = new Map(userRoleCounts.map((r: any) => [r._id, r.count]));
 
-	const selectedRoleId = url.searchParams.get('selected');
+	// Frozen +page.svelte writes `?roleId=` when expanding a role row; older
+	// callers/bookmarks use `?selected=`. Read both so the row stays expanded
+	// across reloads regardless of which name produced the URL.
+	const selectedRoleId = url.searchParams.get('roleId') ?? url.searchParams.get('selected');
 	let selectedRole: {
 		id: string;
 		name: string;

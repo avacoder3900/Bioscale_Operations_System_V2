@@ -1,11 +1,16 @@
 export const config = { maxDuration: 60 };
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, EquipmentLocation, Equipment, WaxFillingRun, ReagentBatchRecord, CartridgeRecord } from '$lib/server/db';
+import { connectDB, EquipmentLocation, Equipment, WaxFillingRun, ReagentBatchRecord, CartridgeRecord, BackingLot } from '$lib/server/db';
+import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
+import { WAX_FILLING_ACTIVE, REAGENT_FILLING_ACTIVE } from '$lib/server/manufacturing/run-statuses';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'equipment:read');
 	await connectDB();
+
+	// Exclude manually checked-out cartridges from fridge occupancy counts
+	const checkedOutIds = await getCheckedOutCartridgeIds();
 
 	const [
 		deckDocs, trayDocs, locationDocs, equipmentDocs,
@@ -16,8 +21,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		Equipment.find({ equipmentType: 'cooling_tray' }).lean(),
 		EquipmentLocation.find({ isActive: true }).lean(),
 		Equipment.find({ isActive: { $ne: false } }).lean(),
-		WaxFillingRun.find({ status: { $in: ['setup', 'running'] } }).sort({ createdAt: -1 }).lean(),
-		ReagentBatchRecord.find({ status: { $in: ['setup', 'running'] } }).sort({ createdAt: -1 }).lean(),
+		WaxFillingRun.find({ status: { $in: WAX_FILLING_ACTIVE } }).sort({ createdAt: -1 }).lean(),
+		ReagentBatchRecord.find({ status: { $in: REAGENT_FILLING_ACTIVE } }).sort({ createdAt: -1 }).lean(),
 		WaxFillingRun.find().sort({ createdAt: -1 }).limit(50).lean(),
 		ReagentBatchRecord.find().sort({ createdAt: -1 }).limit(50).lean()
 	]);
@@ -37,20 +42,48 @@ export const load: PageServerLoad = async ({ locals }) => {
 		assignedRunId: t.assignedRunId ?? null
 	}));
 
-	// Compute occupant counts from CartridgeRecord
-	const [waxCounts, reagentCounts] = await Promise.all([
+	// Compute occupant counts from CartridgeRecord + BackingLot.
+	//
+	// Fridges have three buckets — same split used by /inventory/fridge-storage:
+	//   (1) waxAccepted: status='wax_stored' (post-QC, live inventory)
+	//   (2) waxScrapped: status='scrapped' with waxStorage.location set
+	//       (physically still in the fridge as QA quarantine until checkout)
+	//   (3) reagent: status∈{stored, reagent_filled} with storage.fridgeName
+	//
+	// Ovens: individual CartridgeRecord docs don't exist during the backing
+	// phase — cartridges only become individuated when their UUID is scanned
+	// at wax deck loading. So oven occupancy is an aggregate read from
+	// BackingLot.cartridgeCount (decremented by wax-filling loadDeck).
+	const [waxAcceptedCounts, waxScrappedCounts, reagentCounts, ovenCountsById] = await Promise.all([
 		CartridgeRecord.aggregate([
-			{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored' } },
+			{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored', _id: { $nin: checkedOutIds } } },
 			{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
 		]).catch(() => []),
 		CartridgeRecord.aggregate([
-			{ $match: { 'storage.fridgeName': { $exists: true }, status: { $in: ['stored', 'reagent_filled'] } } },
+			{ $match: { 'waxStorage.location': { $exists: true }, status: 'scrapped', _id: { $nin: checkedOutIds } } },
+			{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
+		]).catch(() => []),
+		CartridgeRecord.aggregate([
+			{ $match: { 'storage.fridgeName': { $exists: true }, status: { $in: ['stored', 'reagent_filled'] }, _id: { $nin: checkedOutIds } } },
 			{ $group: { _id: '$storage.fridgeName', count: { $sum: 1 } } }
+		]).catch(() => []),
+		BackingLot.aggregate([
+			{ $match: { status: { $in: ['in_oven', 'ready'] }, ovenLocationId: { $exists: true, $ne: null } } },
+			{ $group: { _id: '$ovenLocationId', count: { $sum: '$cartridgeCount' } } }
 		]).catch(() => [])
 	]);
+	const waxAcceptedMap = new Map<string, number>();
+	const waxScrappedMap = new Map<string, number>();
 	const occupantMap = new Map<string, number>();
-	for (const c of [...waxCounts as any[], ...reagentCounts as any[]]) {
-		// Match by barcode or display name
+	for (const c of waxAcceptedCounts as any[]) {
+		waxAcceptedMap.set(c._id, (waxAcceptedMap.get(c._id) ?? 0) + c.count);
+		occupantMap.set(c._id, (occupantMap.get(c._id) ?? 0) + c.count);
+	}
+	for (const c of waxScrappedCounts as any[]) {
+		waxScrappedMap.set(c._id, (waxScrappedMap.get(c._id) ?? 0) + c.count);
+		occupantMap.set(c._id, (occupantMap.get(c._id) ?? 0) + c.count);
+	}
+	for (const c of [...(reagentCounts as any[]), ...(ovenCountsById as any[])]) {
 		occupantMap.set(c._id, (occupantMap.get(c._id) ?? 0) + c.count);
 	}
 
@@ -68,17 +101,24 @@ export const load: PageServerLoad = async ({ locals }) => {
 	}
 
 	// Locations: show Equipment as parent entries, plus orphan EquipmentLocations
-	const locations: any[] = [];
+	type LocationRow = {
+		id: string; barcode: string; locationType: string; displayName: string;
+		isActive: boolean; capacity: number | null;
+		occupantCount: number; waxAcceptedCount: number; waxScrappedCount: number;
+	};
+	const locations: LocationRow[] = [];
+	const sumKeys = (map: Map<string, number>, keys: string[]) =>
+		keys.reduce((acc, k) => acc + (map.get(k) ?? 0), 0);
 	for (const equip of equipmentDocs as any[]) {
 		if (!['fridge', 'oven', 'robot'].includes(equip.equipmentType)) continue;
 		const children = childLocMap.get(String(equip._id)) ?? [];
-		let occupants = 0;
-		const keys = [equip.barcode, equip.name].filter(Boolean);
-		for (const key of keys) occupants += occupantMap.get(key) ?? 0;
-		for (const child of children) {
-			const childKeys = [child.barcode, child.displayName].filter(Boolean);
-			for (const key of childKeys) occupants += occupantMap.get(key) ?? 0;
-		}
+		// Match keys: equipment _id (for ovenLocationId), barcode, and display name
+		const ownKeys = [String(equip._id), equip.barcode, equip.name].filter(Boolean) as string[];
+		const childKeys = children.flatMap((c: any) => [c.barcode, c.displayName].filter(Boolean) as string[]);
+		const allKeys = [...ownKeys, ...childKeys];
+		const occupants = sumKeys(occupantMap, allKeys);
+		const waxAccepted = sumKeys(waxAcceptedMap, allKeys);
+		const waxScrapped = sumKeys(waxScrappedMap, allKeys);
 		let capacity = equip.capacity ?? null;
 		if (!capacity && children.length > 0) {
 			let total = 0; let hasAny = false;
@@ -92,13 +132,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 			displayName: equip.name ?? '',
 			isActive: equip.status !== 'offline',
 			capacity,
-			occupantCount: occupants
+			occupantCount: occupants,
+			waxAcceptedCount: waxAccepted,
+			waxScrappedCount: waxScrapped
 		});
 	}
 	for (const l of orphanLocs) {
 		const barcode = l.barcode ?? '';
 		const name = l.displayName ?? '';
-		const occupants = (occupantMap.get(barcode) ?? 0) + (occupantMap.get(name) ?? 0);
+		const keys = [barcode, name].filter(Boolean) as string[];
 		locations.push({
 			id: l._id,
 			barcode,
@@ -106,7 +148,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 			displayName: name,
 			isActive: l.isActive ?? true,
 			capacity: l.capacity ?? null,
-			occupantCount: occupants
+			occupantCount: sumKeys(occupantMap, keys),
+			waxAcceptedCount: sumKeys(waxAcceptedMap, keys),
+			waxScrappedCount: sumKeys(waxScrappedMap, keys)
 		});
 	}
 
@@ -179,22 +223,41 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	// Robots from equipment collection
 	const robotDocs = (equipmentDocs as any[]).filter(e => e.equipmentType === 'robot');
-	const robots = robotDocs.map((r: any) => ({
+	const robots: { robotId: string; name: string; status: string }[] = robotDocs.map((r: any) => ({
 		robotId: String(r._id),
 		name: r.name ?? String(r._id),
 		status: r.status ?? 'active'
 	}));
 
-	return {
+	type LocationOut = {
+		id: string; barcode: string; locationType: string; displayName: string;
+		isActive: boolean; capacity: number | null;
+		occupantCount: number; waxAcceptedCount: number; waxScrappedCount: number;
+	};
+	type RobotOut = { robotId: string; name: string; status: string };
+	type ReturnShape = {
+		decks: typeof decks;
+		trays: typeof trays;
+		locations: LocationOut[];
+		equipmentTemps: typeof equipmentTemps;
+		placements: typeof placements;
+		activeWaxRuns: typeof activeWaxRuns;
+		activeReagentRuns: typeof activeReagentRuns;
+		waxRunHistory: typeof waxRunHistory;
+		reagentRunHistory: typeof reagentRunHistory;
+		robots: RobotOut[];
+	};
+	const result: ReturnShape = {
 		decks,
 		trays,
-		locations,
+		locations: locations as LocationOut[],
 		equipmentTemps,
 		placements,
 		activeWaxRuns,
 		activeReagentRuns,
 		waxRunHistory,
 		reagentRunHistory,
-		robots
+		robots: robots as RobotOut[]
 	};
+	return result;
 };

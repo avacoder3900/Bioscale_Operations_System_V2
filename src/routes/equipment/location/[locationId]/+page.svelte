@@ -12,9 +12,10 @@
 		waxQcStatus: string | null;
 		assayType: string | null;
 		topSealAt: string | null;
+		voidReason: string | null;
 		storedAt: string | null;
 		operator: string | null;
-		storageType: 'wax' | 'reagent' | 'unknown';
+		storageType: 'wax_accepted' | 'wax_scrapped' | 'reagent' | 'unknown';
 	}
 
 	interface WaxRun {
@@ -42,7 +43,8 @@
 			waxRuns: WaxRun[];
 			stats: {
 				total: number;
-				waxCount: number;
+				waxAcceptedCount: number;
+				waxScrappedCount: number;
 				reagentCount: number;
 				utilization: number | null;
 			};
@@ -54,7 +56,7 @@
 	type SortKey = 'id' | 'phase' | 'lotId' | 'assayType' | 'waxQcStatus' | 'storedAt' | 'operator';
 	let sortKey = $state<SortKey>('storedAt');
 	let sortDir = $state<1 | -1>(-1);
-	let filterType = $state<'all' | 'wax' | 'reagent'>('all');
+	let filterType = $state<'all' | 'wax_accepted' | 'wax_scrapped' | 'reagent'>('all');
 
 	function toggleSort(key: SortKey) {
 		if (sortKey === key) {
@@ -92,6 +94,7 @@
 			case 'inspected': return 'bg-blue-900/30 text-blue-300 border-blue-500/30';
 			case 'sealed': return 'bg-cyan-900/30 text-cyan-300 border-cyan-500/30';
 			case 'cured': return 'bg-orange-900/30 text-orange-300 border-orange-500/30';
+			case 'scrapped': return 'bg-red-900/30 text-red-300 border-red-500/30';
 			default: return 'bg-slate-800 text-slate-300 border-slate-600';
 		}
 	}
@@ -171,7 +174,7 @@
 	</div>
 
 	<!-- Stats row -->
-	<div class="grid grid-cols-2 gap-3 sm:grid-cols-5">
+	<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 text-center">
 			<div class="text-3xl font-bold text-[var(--color-tron-text)]">{data.stats.total}</div>
 			<div class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">Total Stored</div>
@@ -187,8 +190,12 @@
 			</div>
 		{/if}
 		<div class="rounded-lg border border-amber-500/30 bg-amber-900/10 p-4 text-center">
-			<div class="text-3xl font-bold text-amber-400">{data.stats.waxCount}</div>
-			<div class="mt-1 text-xs text-amber-300/70">Wax Stored</div>
+			<div class="text-3xl font-bold text-amber-400">{data.stats.waxAcceptedCount}</div>
+			<div class="mt-1 text-xs text-amber-300/70">Accepted Wax</div>
+		</div>
+		<div class="rounded-lg border border-red-500/30 bg-red-900/10 p-4 text-center">
+			<div class="text-3xl font-bold text-red-400">{data.stats.waxScrappedCount}</div>
+			<div class="mt-1 text-xs text-red-300/70">Scrapped Wax</div>
 		</div>
 		<div class="rounded-lg border border-purple-500/30 bg-purple-900/10 p-4 text-center">
 			<div class="text-3xl font-bold text-purple-400">{data.stats.reagentCount}</div>
@@ -225,9 +232,13 @@
 					class="rounded px-2.5 py-1 text-xs font-medium transition-colors {filterType === 'all' ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}">
 					All
 				</button>
-				<button type="button" onclick={() => (filterType = 'wax')}
-					class="rounded px-2.5 py-1 text-xs font-medium transition-colors {filterType === 'wax' ? 'bg-amber-900/30 text-amber-300' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}">
-					Wax
+				<button type="button" onclick={() => (filterType = 'wax_accepted')}
+					class="rounded px-2.5 py-1 text-xs font-medium transition-colors {filterType === 'wax_accepted' ? 'bg-amber-900/30 text-amber-300' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}">
+					Accepted Wax
+				</button>
+				<button type="button" onclick={() => (filterType = 'wax_scrapped')}
+					class="rounded px-2.5 py-1 text-xs font-medium transition-colors {filterType === 'wax_scrapped' ? 'bg-red-900/30 text-red-300' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}">
+					Scrapped Wax
 				</button>
 				<button type="button" onclick={() => (filterType = 'reagent')}
 					class="rounded px-2.5 py-1 text-xs font-medium transition-colors {filterType === 'reagent' ? 'bg-purple-900/30 text-purple-300' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}">

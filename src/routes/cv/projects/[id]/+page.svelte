@@ -1,435 +1,433 @@
 <script lang="ts">
-	let { data } = $props();
-	let activeTab = $state('import');
-	const tabs = ['Import', 'Labels', 'Train', 'Test', 'Review', 'Integrate'];
+	import { enhance } from '$app/forms';
 
-	// Import tab
-	let uploading = $state(false);
-	let uploadMsg = $state('');
-	let dragOver = $state(false);
+	let { data, form } = $props();
 
-	// Labels tab
-	let labeling = $state<string | null>(null);
+	type Tab = 'members' | 'composition' | 'deployment' | 'history';
+	let activeTab = $state<Tab>('members');
 
-	// Train tab
-	let training = $state(false);
-	let trainStatus = $state<any>(null);
-	let trainPollTimer = $state<ReturnType<typeof setInterval> | null>(null);
+	let submitting = $state(false);
 
-	// Test tab
-	let testFile = $state<File | null>(null);
-	let testing = $state(false);
-	let testResult = $state<any>(null);
+	// Composition picker state
+	let composedOfSelections = $state<Set<string>>(new Set(data.project.composedOf));
+	let liveCompositionToggle = $state(data.project.isLiveComposition);
 
-	const statusColors: Record<string, string> = {
-		untrained: 'var(--color-tron-text-secondary)',
-		training: 'var(--color-tron-yellow)',
-		trained: 'var(--color-tron-green)',
-		failed: 'var(--color-tron-red)'
-	};
+	// Deployment state
+	let deploySelections = $state<Set<string>>(new Set(data.project.deployAtPhases));
+	let activeVersion = $state<string>(data.project.activeModelVersion ?? '');
+	let shadowVersion = $state<string>(data.project.shadowModelVersion ?? '');
 
-	async function uploadFiles(files: FileList | File[]) {
-		uploading = true;
-		uploadMsg = '';
-		let count = 0;
-		let lastError = '';
-		for (const file of files) {
-			const fd = new FormData();
-			fd.append('file', file);
-			fd.append('projectId', data.project._id);
-			try {
-				const res = await fetch('/api/cv/images', { method: 'POST', body: fd });
-				if (res.ok) {
-					count++;
-				} else {
-					const errJson = await res.json().catch(() => ({}));
-					lastError = errJson.error || `Upload failed (${res.status})`;
-					console.error('Upload error:', errJson);
-				}
-			} catch (e: any) {
-				lastError = e.message || 'Network error';
-				console.error('Upload exception:', e);
-			}
-		}
-		uploadMsg = count > 0
-			? `Uploaded ${count} image${count !== 1 ? 's' : ''}${lastError ? ` (${files.length - count} failed: ${lastError})` : ''}`
-			: `Upload failed: ${lastError || 'Unknown error'}`;
-		uploading = false;
-		if (count > 0) setTimeout(() => location.reload(), 800);
+	function toggleSet<T>(set: Set<T>, val: T): Set<T> {
+		const next = new Set(set);
+		if (next.has(val)) next.delete(val); else next.add(val);
+		return next;
 	}
 
-	function handleDrop(e: DragEvent) {
-		e.preventDefault();
-		dragOver = false;
-		if (e.dataTransfer?.files.length) uploadFiles(e.dataTransfer.files);
-	}
-
-	function handleFileInput(e: Event) {
-		const input = e.target as HTMLInputElement;
-		if (input.files?.length) uploadFiles(input.files);
-	}
-
-	async function toggleLabel(imageId: string, current: string | null, newLabel: string) {
-		labeling = imageId;
-		const label = current === newLabel ? null : newLabel;
-		try {
-			await fetch(`/api/cv/images/${imageId}/label`, {
-				method: 'PATCH',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ label })
-			});
-			const img = data.images.find((i: any) => i._id === imageId);
-			if (img) img.label = label;
-			data.images = [...data.images]; // trigger reactivity
-		} catch { /* skip */ }
-		labeling = null;
-	}
-
-	async function startTraining() {
-		training = true;
-		try {
-			const res = await fetch('/api/cv/train', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ projectId: data.project._id })
-			});
-			const json = await res.json();
-			if (!res.ok) { trainStatus = { status: 'failed', message: json.error }; training = false; return; }
-			trainStatus = { status: 'training', progress: 0, message: 'Training started...' };
-			pollTraining();
-		} catch (err: any) {
-			trainStatus = { status: 'failed', message: err.message };
-			training = false;
-		}
-	}
-
-	function pollTraining() {
-		trainPollTimer = setInterval(async () => {
-			try {
-				const res = await fetch(`/api/cv/train?projectId=${data.project._id}`);
-				const json = await res.json();
-				trainStatus = json.data;
-				if (trainStatus.status === 'complete' || trainStatus.status === 'failed') {
-					clearInterval(trainPollTimer!);
-					trainPollTimer = null;
-					training = false;
-				}
-			} catch { /* retry */ }
-		}, 3000);
-	}
-
-	async function runTest() {
-		if (!testFile) return;
-		testing = true;
-		testResult = null;
-		// First upload the test image
-		const fd = new FormData();
-		fd.append('file', testFile);
-		fd.append('projectId', data.project._id);
-		try {
-			const uploadRes = await fetch('/api/cv/images', { method: 'POST', body: fd });
-			const uploadJson = await uploadRes.json();
-			if (!uploadRes.ok) { testResult = { error: uploadJson.error }; testing = false; return; }
-
-			// Run inference
-			const inferRes = await fetch('/api/cv/infer', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ imageId: uploadJson.data._id, projectId: data.project._id })
-			});
-			testResult = (await inferRes.json()).data || (await inferRes.json());
-		} catch (err: any) {
-			testResult = { error: err.message };
-		}
-		testing = false;
-	}
-
-	function fmtDate(d: string) {
-		return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+	function fmt(d: string | Date | null): string {
+		if (!d) return '—';
+		return new Date(d).toLocaleString();
 	}
 </script>
 
-<div class="space-y-6">
-	<!-- Header -->
-	<div class="flex items-center justify-between">
+<div class="space-y-4">
+	<header class="flex flex-wrap items-start justify-between gap-3">
 		<div>
-			<a href="/cv" class="text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">&larr; All Projects</a>
-			<h2 class="text-2xl font-bold text-[var(--color-tron-cyan)]">{data.project.name}</h2>
-			{#if data.project.description}
-				<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">{data.project.description}</p>
-			{/if}
+			<a href="/cv/projects" class="text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">← all projects</a>
+			<h1 class="mt-1 text-2xl font-bold text-[var(--color-tron-cyan)]">{data.project.name}</h1>
+			{#if data.project.description}<p class="text-sm text-[var(--color-tron-text-secondary)]">{data.project.description}</p>{/if}
 		</div>
-		<span
-			class="rounded-full px-3 py-1 text-sm font-semibold"
-			style="color: {statusColors[data.project.modelStatus]}; background: color-mix(in srgb, {statusColors[data.project.modelStatus]} 20%, transparent)"
-		>
-			{data.project.modelStatus?.toUpperCase()}
-		</span>
-	</div>
-
-	<!-- Stats Bar -->
-	<div class="grid grid-cols-2 gap-3 sm:grid-cols-5">
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3 text-center">
-			<div class="text-xl font-bold text-[var(--color-tron-text-primary)]">{data.project.imageCount || 0}</div>
-			<div class="text-xs text-[var(--color-tron-text-secondary)]">Images</div>
-		</div>
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3 text-center">
-			<div class="text-xl font-bold text-[var(--color-tron-green)]">{data.labelStats.approved}</div>
-			<div class="text-xs text-[var(--color-tron-text-secondary)]">Approved</div>
-		</div>
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3 text-center">
-			<div class="text-xl font-bold text-[var(--color-tron-red)]">{data.labelStats.rejected}</div>
-			<div class="text-xs text-[var(--color-tron-text-secondary)]">Rejected</div>
-		</div>
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3 text-center">
-			<div class="text-xl font-bold text-[var(--color-tron-text-secondary)]">{data.labelStats.unlabeled}</div>
-			<div class="text-xs text-[var(--color-tron-text-secondary)]">Unlabeled</div>
-		</div>
-		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3 text-center">
-			<div class="text-xl font-bold text-[var(--color-tron-purple)]">{data.inspections.length}</div>
-			<div class="text-xs text-[var(--color-tron-text-secondary)]">Inspections</div>
-		</div>
-	</div>
-
-	<!-- Tab Bar -->
-	<div class="flex gap-1 overflow-x-auto rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-1">
-		{#each tabs as tab}
-			<button
-				class="whitespace-nowrap rounded-md px-4 py-2 text-sm font-medium transition-colors {activeTab === tab.toLowerCase() ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
-				onclick={() => activeTab = tab.toLowerCase()}
+		<div class="flex flex-col items-end gap-2">
+			<a
+				href={`/capture?projectId=${encodeURIComponent(data.project.id)}${data.project.deployAtPhases[0] ? `&phase=${encodeURIComponent(data.project.deployAtPhases[0])}` : ''}`}
+				class="rounded bg-[var(--color-tron-green,#39ff14)] px-4 py-2 text-sm font-medium text-black"
+				title={data.project.activeModelVersion
+					? `Inference will auto-run for this project at phase ${data.project.deployAtPhases.join(', ') || '(none deployed)'}`
+					: 'No active model yet — capture will save images but not run inference for this project'}
 			>
-				{tab}
+				Capture cartridges →
+			</a>
+			<div class="text-right text-xs text-[var(--color-tron-text-secondary)]">
+				<div>created {fmt(data.project.createdAt)}</div>
+				<div>updated {fmt(data.project.updatedAt)}</div>
+			</div>
+		</div>
+	</header>
+
+	{#if form?.error}
+		<div class="rounded border border-[var(--color-tron-red,#ff3366)] bg-[rgba(255,51,102,0.08)] p-3 text-sm text-[var(--color-tron-red,#ff3366)]">{form.error}</div>
+	{/if}
+	{#if form?.success}
+		<div class="rounded border border-[var(--color-tron-green,#39ff14)] bg-[rgba(57,255,20,0.08)] p-3 text-sm text-[var(--color-tron-green,#39ff14)]">
+			{form.message ?? 'Saved.'}
+		</div>
+	{/if}
+
+	<!-- Summary bar -->
+	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3">
+		<div class="grid gap-3 sm:grid-cols-4">
+			<div>
+				<div class="text-xs uppercase text-[var(--color-tron-text-secondary)]">Members</div>
+				<div class="font-mono text-lg text-[var(--color-tron-cyan)]">{data.effectiveTotal}</div>
+				<div class="text-[10px] text-[var(--color-tron-text-secondary)]">
+					{data.project.memberCount} direct
+					{#if data.liveAdditionCount > 0} + {data.liveAdditionCount} via composition{/if}
+				</div>
+			</div>
+			<div>
+				<div class="text-xs uppercase text-[var(--color-tron-text-secondary)]">Labels</div>
+				<div class="font-mono text-lg">
+					<span class="text-[var(--color-tron-green,#39ff14)]">{data.labelStats.approved}</span> /
+					<span class="text-[var(--color-tron-red,#ff3366)]">{data.labelStats.rejected}</span>
+				</div>
+				<div class="text-[10px] text-[var(--color-tron-text-secondary)]">approved / rejected · {data.labelStats.unlabeled} unlabeled</div>
+			</div>
+			<div>
+				<div class="text-xs uppercase text-[var(--color-tron-text-secondary)]">Active model</div>
+				<div class="font-mono text-sm text-[var(--color-tron-green,#39ff14)]">{data.project.activeModelVersion ?? '—'}</div>
+				{#if data.project.shadowModelVersion}
+					<div class="text-[10px] text-[var(--color-tron-cyan)]">shadow: {data.project.shadowModelVersion}</div>
+				{/if}
+			</div>
+			<div>
+				<div class="text-xs uppercase text-[var(--color-tron-text-secondary)]">Deploys at</div>
+				<div class="flex flex-wrap gap-1 text-xs">
+					{#each data.project.deployAtPhases as ph (ph)}
+						<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5">{ph}</span>
+					{:else}
+						<span class="text-[10px] text-[var(--color-tron-text-secondary)]">no phases configured</span>
+					{/each}
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<!-- Tabs -->
+	<div class="flex gap-1 border-b border-[var(--color-tron-border)]">
+		{#each ['members', 'composition', 'deployment', 'history'] as t (t)}
+			<button
+				type="button"
+				class="px-4 py-2 text-sm font-medium
+					{activeTab === t
+						? 'border-b-2 border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]'
+						: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
+				onclick={() => (activeTab = t as Tab)}
+			>
+				{t.charAt(0).toUpperCase() + t.slice(1)}
 			</button>
 		{/each}
 	</div>
 
-	<!-- Tab Content -->
-	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-6">
-
-		<!-- IMPORT TAB -->
-		{#if activeTab === 'import'}
-			<div
-				class="flex min-h-[200px] flex-col items-center justify-center rounded-lg border-2 border-dashed transition-colors {dragOver ? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/5' : 'border-[var(--color-tron-border)]'}"
-				role="button"
-				tabindex="0"
-				ondragover={(e) => { e.preventDefault(); dragOver = true; }}
-				ondragleave={() => dragOver = false}
-				ondrop={handleDrop}
-			>
-				<svg class="mb-3 h-12 w-12 text-[var(--color-tron-text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
-				</svg>
-				<p class="mb-2 text-[var(--color-tron-text-primary)]">Drag & drop images here</p>
-				<p class="mb-4 text-sm text-[var(--color-tron-text-secondary)]">or click to browse</p>
-				<label class="cursor-pointer rounded-lg bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-black hover:opacity-90">
-					Browse Files
-					<input type="file" accept="image/*" multiple class="hidden" onchange={handleFileInput} />
-				</label>
+	{#if activeTab === 'members'}
+		<div class="space-y-3">
+			<div class="flex items-center justify-between text-sm">
+				<div class="text-[var(--color-tron-text-secondary)]">
+					Showing first {data.previewImages.length} of {data.effectiveTotal} effective members.
+				</div>
+				<a href="/cv/label" class="rounded bg-[var(--color-tron-cyan)] px-3 py-1.5 text-xs font-medium text-[var(--color-tron-bg-primary)]">
+					Add images via /cv/label
+				</a>
 			</div>
-			{#if uploading}
-				<p class="mt-3 text-center text-sm text-[var(--color-tron-yellow)]">Uploading...</p>
-			{/if}
-			{#if uploadMsg}
-				<p class="mt-3 text-center text-sm text-[var(--color-tron-green)]">{uploadMsg}</p>
-			{/if}
 
-		<!-- LABELS TAB -->
-		{:else if activeTab === 'labels'}
-			{#if data.images.length === 0}
-				<p class="text-center text-[var(--color-tron-text-secondary)]">No images yet. Upload images in the Import tab.</p>
+			{#if data.previewImages.length === 0}
+				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-12 text-center">
+					<p class="text-[var(--color-tron-text-secondary)]">No members yet.</p>
+					<p class="mt-2 text-xs text-[var(--color-tron-text-secondary)]">
+						Use <a class="text-[var(--color-tron-cyan)] underline" href="/cv/label">/cv/label</a> to assemble a training set, or set up live composition under the Composition tab.
+					</p>
+				</div>
 			{:else}
-				<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-					{#each data.images as image (image._id)}
-						<div class="group relative overflow-hidden rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)]">
-							<div class="aspect-square bg-[var(--color-tron-bg-tertiary)]">
-								{#if image.imageUrl}
-									<img src={image.imageUrl} alt={image.filename} class="h-full w-full object-cover" />
-								{:else}
-									<div class="flex h-full items-center justify-center text-xs text-[var(--color-tron-text-secondary)]">No preview</div>
-								{/if}
-							</div>
-							<!-- Label badge -->
-							{#if image.label}
-								<span class="absolute left-2 top-2 rounded-full px-2 py-0.5 text-xs font-semibold {image.label === 'approved' ? 'bg-[var(--color-tron-green)]/20 text-[var(--color-tron-green)]' : 'bg-[var(--color-tron-red)]/20 text-[var(--color-tron-red)]'}">
-									{image.label === 'approved' ? 'GOOD' : 'DEFECT'}
-								</span>
+				<div class="grid gap-3 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+					{#each data.previewImages as img (img.id)}
+						<div class="overflow-hidden rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
+							{#if img.thumbnailUrl}
+								<img src={img.thumbnailUrl} alt={img.cartridgeImageNumber ?? 'capture'} class="aspect-square w-full object-cover" />
+							{:else}
+								<div class="aspect-square w-full bg-[var(--color-tron-bg-tertiary)]"></div>
 							{/if}
-							<!-- Label buttons -->
-							<div class="flex border-t border-[var(--color-tron-border)]">
-								<button
-									class="flex-1 py-1.5 text-xs font-medium transition-colors {image.label === 'approved' ? 'bg-[var(--color-tron-green)]/20 text-[var(--color-tron-green)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-green)]'}"
-									disabled={labeling === image._id}
-									onclick={() => toggleLabel(image._id, image.label, 'approved')}
-								>&#10003; Good</button>
-								<button
-									class="flex-1 border-l border-[var(--color-tron-border)] py-1.5 text-xs font-medium transition-colors {image.label === 'rejected' ? 'bg-[var(--color-tron-red)]/20 text-[var(--color-tron-red)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-red)]'}"
-									disabled={labeling === image._id}
-									onclick={() => toggleLabel(image._id, image.label, 'rejected')}
-								>&#10007; Defect</button>
+							<div class="p-2 text-xs">
+								<div class="truncate font-mono text-[var(--color-tron-cyan)]">{img.cartridgeImageNumber ?? '—'}</div>
+								<div class="flex items-center justify-between text-[var(--color-tron-text-secondary)]">
+									<span class="truncate">{img.phase ?? '—'}</span>
+									{#if img.qcLabel === 'approved'}<span class="text-[var(--color-tron-green,#39ff14)]">✓</span>
+									{:else if img.qcLabel === 'rejected'}<span class="text-[var(--color-tron-red,#ff3366)]">✗</span>{/if}
+								</div>
+								{#if data.project.members.includes(img.id)}
+									<form
+										method="POST"
+										action="?/removeMember"
+										class="mt-1"
+										use:enhance={() => {
+											submitting = true;
+											return async ({ update }) => {
+												await update();
+												submitting = false;
+											};
+										}}
+									>
+										<input type="hidden" name="imageId" value={img.id} />
+										<button type="submit" disabled={submitting} class="w-full rounded border border-[var(--color-tron-red,#ff3366)] px-1.5 py-0.5 text-[10px] text-[var(--color-tron-red,#ff3366)] disabled:opacity-40">
+											Remove
+										</button>
+									</form>
+								{:else}
+									<div class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)] italic">via composition</div>
+								{/if}
 							</div>
 						</div>
 					{/each}
 				</div>
 			{/if}
+		</div>
 
-		<!-- TRAIN TAB -->
-		{:else if activeTab === 'train'}
-			<div class="space-y-6">
-				<div class="grid grid-cols-3 gap-4">
-					<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4 text-center">
-						<div class="text-2xl font-bold text-[var(--color-tron-green)]">{data.labelStats.approved}</div>
-						<div class="text-xs text-[var(--color-tron-text-secondary)]">Good Images</div>
+	{:else if activeTab === 'composition'}
+		<form
+			method="POST"
+			action="?/updateComposition"
+			use:enhance={() => {
+				submitting = true;
+				return async ({ update }) => {
+					await update();
+					submitting = false;
+				};
+			}}
+			class="space-y-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4"
+		>
+			<div>
+				<label class="flex items-center gap-2 text-sm">
+					<input type="checkbox" name="isLiveComposition" bind:checked={liveCompositionToggle} />
+					<span class="text-[var(--color-tron-text)]">Live composition</span>
+				</label>
+				<p class="ml-6 text-xs text-[var(--color-tron-text-secondary)]">
+					When on, this project's effective members union with every selected child project's current members at training time. When off, composedOf is informational only — members[] is the frozen training set.
+				</p>
+			</div>
+			<div>
+				<div class="mb-2 text-xs uppercase text-[var(--color-tron-text-secondary)]">Compose from</div>
+				{#if data.otherProjects.length === 0}
+					<p class="text-xs text-[var(--color-tron-text-secondary)]">No other projects exist yet.</p>
+				{:else}
+					<div class="grid gap-1 sm:grid-cols-2">
+						{#each data.otherProjects as p (p.id)}
+							{@const checked = composedOfSelections.has(p.id)}
+							<label class="flex items-center gap-2 rounded border border-[var(--color-tron-border)] p-2 text-sm">
+								<input
+									type="checkbox"
+									name="composedOf"
+									value={p.id}
+									{checked}
+									onchange={() => (composedOfSelections = toggleSet(composedOfSelections, p.id))}
+								/>
+								<span class="flex-1 truncate text-[var(--color-tron-text)]">{p.name}</span>
+								<span class="text-xs text-[var(--color-tron-text-secondary)]">{p.memberCount}</span>
+							</label>
+						{/each}
 					</div>
-					<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4 text-center">
-						<div class="text-2xl font-bold text-[var(--color-tron-red)]">{data.labelStats.rejected}</div>
-						<div class="text-xs text-[var(--color-tron-text-secondary)]">Defect Images</div>
-					</div>
-					<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4 text-center">
-						<div class="text-2xl font-bold text-[var(--color-tron-text-secondary)]">{data.labelStats.unlabeled}</div>
-						<div class="text-xs text-[var(--color-tron-text-secondary)]">Unlabeled</div>
-					</div>
-				</div>
-
-				{#if trainStatus}
-					<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-4">
-						<div class="mb-2 flex items-center justify-between text-sm">
-							<span class="text-[var(--color-tron-text-primary)]">Training Status</span>
-							<span class="font-semibold" style="color: {trainStatus.status === 'complete' ? 'var(--color-tron-green)' : trainStatus.status === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-yellow)'}">{trainStatus.status?.toUpperCase()}</span>
-						</div>
-						{#if trainStatus.progress !== undefined}
-							<div class="mb-2 h-2 overflow-hidden rounded-full bg-[var(--color-tron-bg-tertiary)]">
-								<div class="h-full rounded-full bg-gradient-to-r from-[var(--color-tron-cyan)] to-[var(--color-tron-green)] transition-all" style="width: {Math.round(trainStatus.progress * 100)}%"></div>
-							</div>
-						{/if}
-						{#if trainStatus.message}
-							<p class="text-xs text-[var(--color-tron-text-secondary)]">{trainStatus.message}</p>
-						{/if}
-					</div>
-				{/if}
-
-				<button
-					class="w-full rounded-lg bg-[var(--color-tron-cyan)] px-4 py-3 text-sm font-medium text-black hover:opacity-90 disabled:opacity-50"
-					disabled={training || (data.labelStats.approved + data.labelStats.rejected) < 5}
-					onclick={startTraining}
-				>
-					{#if training}Training in Progress...{:else}Start Training{/if}
-				</button>
-				{#if (data.labelStats.approved + data.labelStats.rejected) < 5}
-					<p class="text-center text-xs text-[var(--color-tron-text-secondary)]">Need at least 5 labeled images to start training.</p>
 				{/if}
 			</div>
+			<button type="submit" disabled={submitting} class="rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-[var(--color-tron-bg-primary)] disabled:opacity-40">
+				{submitting ? 'Saving…' : 'Save composition'}
+			</button>
+		</form>
 
-		<!-- TEST TAB -->
-		{:else if activeTab === 'test'}
-			<div class="space-y-4">
-				{#if data.project.modelStatus !== 'trained'}
-					<p class="text-center text-[var(--color-tron-text-secondary)]">Train a model first before running tests.</p>
-				{:else}
+	{:else if activeTab === 'deployment'}
+		<form
+			method="POST"
+			action="?/updateDeployment"
+			use:enhance={() => {
+				submitting = true;
+				return async ({ update }) => {
+					await update();
+					submitting = false;
+				};
+			}}
+			class="space-y-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4"
+		>
+			<div>
+				<div class="mb-2 text-xs uppercase text-[var(--color-tron-text-secondary)]">Deploy at phases</div>
+				<p class="mb-2 text-xs text-[var(--color-tron-text-secondary)]">
+					When a capture lands at any selected phase and this project has an active model, the model runs inference automatically.
+				</p>
+				<div class="grid gap-2 sm:grid-cols-3">
+					{#each data.observedPhases as ph (ph)}
+						{@const checked = deploySelections.has(ph)}
+						<label class="flex items-center gap-2 rounded border border-[var(--color-tron-border)] p-2 text-sm">
+							<input
+								type="checkbox"
+								name="phase"
+								value={ph}
+								{checked}
+								onchange={() => (deploySelections = toggleSet(deploySelections, ph))}
+							/>
+							<span>{ph}</span>
+						</label>
+					{/each}
+				</div>
+			</div>
+
+			<div class="grid gap-3 sm:grid-cols-2">
+				<div>
+					<label for="d-active" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Active model version</label>
+					<select id="d-active" name="activeModelVersion" bind:value={activeVersion} class="tron-input w-full">
+						<option value="">— none —</option>
+						{#each data.project.trainedModels as m (m.version)}
+							<option value={m.version}>{m.version} (n={m.sampleCount ?? '?'})</option>
+						{/each}
+					</select>
+				</div>
+				<div>
+					<label for="d-shadow" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Shadow model version</label>
+					<select id="d-shadow" name="shadowModelVersion" bind:value={shadowVersion} class="tron-input w-full">
+						<option value="">— none —</option>
+						{#each data.project.trainedModels as m (m.version)}
+							<option value={m.version}>{m.version}</option>
+						{/each}
+					</select>
+				</div>
+			</div>
+
+			<div class="flex gap-2">
+				<button type="submit" disabled={submitting} class="rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-[var(--color-tron-bg-primary)] disabled:opacity-40">
+					{submitting ? 'Saving…' : 'Save deployment'}
+				</button>
+			</div>
+		</form>
+
+	{:else if activeTab === 'history'}
+		<div class="space-y-4">
+			<div class="flex flex-wrap items-end justify-between gap-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
+				<div>
+					<h3 class="text-sm font-semibold uppercase text-[var(--color-tron-text-secondary)]">Train a new model</h3>
+					<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
+						Trains PaDiM on the labeled images in this project's effective member set. Needs ≥ 5 labeled images. Append-only — every run produces a new version. Promote it under the Deployment tab.
+					</p>
+					<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
+						Currently: <span class="font-mono text-[var(--color-tron-green,#39ff14)]">{data.labelStats.approved}</span> approved, <span class="font-mono text-[var(--color-tron-red,#ff3366)]">{data.labelStats.rejected}</span> rejected, {data.labelStats.unlabeled} unlabeled.
+					</p>
+				</div>
+				<form
+					method="POST"
+					action="?/train"
+					use:enhance={() => {
+						submitting = true;
+						return async ({ update }) => {
+							await update();
+							submitting = false;
+						};
+					}}
+					class="flex items-end gap-2"
+				>
 					<div>
-						<label class="mb-1 block text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Test Image</label>
-						<input type="file" accept="image/*" class="w-full text-sm text-[var(--color-tron-text-primary)]" onchange={(e) => { const t = e.target as HTMLInputElement; testFile = t.files?.[0] || null; }} />
+						<label for="train-threshold" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Confidence threshold</label>
+						<input id="train-threshold" name="confidenceThreshold" type="number" step="0.01" min="0" max="1" value="0.5" class="tron-input w-28" />
 					</div>
 					<button
-						class="rounded-lg bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-black hover:opacity-90 disabled:opacity-50"
-						disabled={!testFile || testing}
-						onclick={runTest}
+						type="submit"
+						disabled={submitting || data.labelStats.approved + data.labelStats.rejected < 5}
+						class="rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-[var(--color-tron-bg-primary)] disabled:opacity-40"
+						title={data.labelStats.approved + data.labelStats.rejected < 5
+							? 'Need at least 5 labeled images before training'
+							: 'Kick off training on the cv-worker'}
 					>
-						{testing ? 'Running Inference...' : 'Run Test'}
+						{submitting ? 'Starting…' : 'Train new version'}
 					</button>
+				</form>
+			</div>
 
-					{#if testResult}
-						{#if testResult.error}
-							<div class="rounded border border-[var(--color-tron-red)]/30 bg-[var(--color-tron-red)]/10 p-4 text-sm text-[var(--color-tron-red)]">{testResult.error}</div>
-						{:else}
-							<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-6 text-center">
-								<div class="mb-2 text-4xl font-bold {testResult.result === 'pass' ? 'text-[var(--color-tron-green)]' : 'text-[var(--color-tron-red)]'}">
-									{testResult.result?.toUpperCase()}
-								</div>
-								<div class="text-sm text-[var(--color-tron-text-secondary)]">
-									Confidence: <span class="font-semibold text-[var(--color-tron-text-primary)]">{Math.round((testResult.confidenceScore || 0) * 100)}%</span>
-								</div>
-								{#if testResult.processingTimeMs}
-									<div class="text-xs text-[var(--color-tron-text-secondary)]">{Math.round(testResult.processingTimeMs)}ms</div>
-								{/if}
-							</div>
-						{/if}
-					{/if}
+			<div>
+				<h3 class="mb-2 text-sm font-semibold uppercase text-[var(--color-tron-text-secondary)]">Trained models</h3>
+				{#if data.project.trainedModels.length === 0}
+					<p class="text-sm text-[var(--color-tron-text-secondary)]">No models trained yet.</p>
+				{:else}
+					<div class="overflow-x-auto rounded border border-[var(--color-tron-border)]">
+						<table class="w-full text-sm">
+							<thead class="bg-[var(--color-tron-bg-tertiary)] text-xs uppercase text-[var(--color-tron-text-secondary)]">
+								<tr>
+									<th class="px-3 py-2 text-left">Version</th>
+									<th class="px-3 py-2 text-left">Trained at</th>
+									<th class="px-3 py-2 text-left">By</th>
+									<th class="px-3 py-2 text-right">Samples</th>
+									<th class="px-3 py-2 text-right">Threshold</th>
+									<th class="px-3 py-2"></th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each data.project.trainedModels as m (m.version)}
+									<tr class="border-t border-[var(--color-tron-border)]">
+										<td class="px-3 py-2 font-mono text-[var(--color-tron-cyan)]">{m.version}</td>
+										<td class="px-3 py-2 text-[var(--color-tron-text-secondary)]">{fmt(m.trainedAt)}</td>
+										<td class="px-3 py-2 text-[var(--color-tron-text-secondary)]">{m.trainedBy?.username ?? '—'}</td>
+										<td class="px-3 py-2 text-right">{m.sampleCount ?? '—'}</td>
+										<td class="px-3 py-2 text-right">{m.confidenceThreshold ?? '—'}</td>
+										<td class="px-3 py-2 text-right text-xs">
+											{#if m.version === data.project.activeModelVersion}<span class="text-[var(--color-tron-green,#39ff14)]">ACTIVE</span>{/if}
+											{#if m.version === data.project.shadowModelVersion}<span class="text-[var(--color-tron-cyan)]">SHADOW</span>{/if}
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
 				{/if}
 			</div>
 
-		<!-- REVIEW TAB -->
-		{:else if activeTab === 'review'}
-			{#if data.inspections.length === 0}
-				<p class="text-center text-[var(--color-tron-text-secondary)]">No inspections yet.</p>
-			{:else}
-				<div class="overflow-x-auto">
-					<table class="w-full">
-						<thead>
-							<tr class="border-b border-[var(--color-tron-border)] text-left">
-								<th class="px-4 py-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Result</th>
-								<th class="px-4 py-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Confidence</th>
-								<th class="px-4 py-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Status</th>
-								<th class="px-4 py-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Phase</th>
-								<th class="px-4 py-3 text-xs uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Date</th>
-							</tr>
-						</thead>
-						<tbody class="divide-y divide-[var(--color-tron-border)]">
-							{#each data.inspections as insp (insp._id)}
-								<tr class="transition-colors hover:bg-[var(--color-tron-bg-tertiary)]">
-									<td class="px-4 py-2">
-										{#if insp.result}
-											<span class="rounded-full px-2 py-0.5 text-xs font-semibold {insp.result === 'pass' ? 'bg-[var(--color-tron-green)]/20 text-[var(--color-tron-green)]' : 'bg-[var(--color-tron-red)]/20 text-[var(--color-tron-red)]'}">
-												{insp.result.toUpperCase()}
-											</span>
-										{:else}
-											<span class="text-xs text-[var(--color-tron-text-secondary)]">—</span>
-										{/if}
-									</td>
-									<td class="px-4 py-2 text-sm text-[var(--color-tron-text-primary)]">{insp.confidenceScore ? Math.round(insp.confidenceScore * 100) + '%' : '—'}</td>
-									<td class="px-4 py-2 text-sm text-[var(--color-tron-text-secondary)]">{insp.status}</td>
-									<td class="px-4 py-2 text-sm text-[var(--color-tron-text-secondary)]">{insp.phase || '—'}</td>
-									<td class="px-4 py-2 text-sm text-[var(--color-tron-text-secondary)]">{fmtDate(insp.createdAt)}</td>
+			<div>
+				<h3 class="mb-2 text-sm font-semibold uppercase text-[var(--color-tron-text-secondary)]">Recent inspections</h3>
+				{#if data.recentInspections.length === 0}
+					<p class="text-sm text-[var(--color-tron-text-secondary)]">No inspections have been recorded for this project yet.</p>
+				{:else}
+					<div class="overflow-x-auto rounded border border-[var(--color-tron-border)]">
+						<table class="w-full text-sm">
+							<thead class="bg-[var(--color-tron-bg-tertiary)] text-xs uppercase text-[var(--color-tron-text-secondary)]">
+								<tr>
+									<th class="px-3 py-2 text-left">When</th>
+									<th class="px-3 py-2 text-left">Cartridge</th>
+									<th class="px-3 py-2 text-left">Phase</th>
+									<th class="px-3 py-2 text-left">Version</th>
+									<th class="px-3 py-2 text-left">Result</th>
+									<th class="px-3 py-2 text-right">Confidence</th>
+									<th class="px-3 py-2"></th>
 								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
-			{/if}
-
-		<!-- INTEGRATE TAB -->
-		{:else if activeTab === 'integrate'}
-			<div class="space-y-4">
-				<h3 class="text-lg font-semibold text-[var(--color-tron-text-primary)]">API Endpoints</h3>
-				<div class="space-y-2 text-sm">
-					{#each [
-						['GET', `/api/cv/projects/${data.project._id}`, 'Get project details'],
-						['GET', `/api/cv/projects/${data.project._id}/images`, 'List project images'],
-						['POST', '/api/cv/images', 'Upload image (multipart, projectId required)'],
-						['PATCH', '/api/cv/images/:id/label', 'Set image label (approved/rejected)'],
-						['POST', '/api/cv/train', 'Start training (projectId in body)'],
-						['GET', `/api/cv/train?projectId=${data.project._id}`, 'Poll training status'],
-						['POST', '/api/cv/infer', 'Run inference (imageId + projectId in body)']
-					] as [method, path, desc]}
-						<div class="flex items-start gap-3 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3">
-							<span class="rounded bg-[var(--color-tron-cyan)]/20 px-2 py-0.5 text-xs font-bold text-[var(--color-tron-cyan)]">{method}</span>
-							<div>
-								<code class="text-xs text-[var(--color-tron-text-primary)]">{path}</code>
-								<p class="text-xs text-[var(--color-tron-text-secondary)]">{desc}</p>
-							</div>
-						</div>
-					{/each}
-				</div>
-
-				<h3 class="mt-6 text-lg font-semibold text-[var(--color-tron-text-primary)]">Manufacturing Gate Integration</h3>
-				<p class="text-sm text-[var(--color-tron-text-secondary)]">
-					To use this CV project as a manufacturing quality gate, call the inference endpoint at each production phase.
-					Images with a "fail" result can automatically block the cartridge from proceeding to the next phase.
-				</p>
-				<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-3">
-					<p class="mb-1 text-xs text-[var(--color-tron-text-secondary)]">Project ID</p>
-					<code class="text-sm text-[var(--color-tron-cyan)]">{data.project._id}</code>
-				</div>
+							</thead>
+							<tbody>
+								{#each data.recentInspections as r (r._id)}
+									<tr class="border-t border-[var(--color-tron-border)]">
+										<td class="px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">{fmt(r.triggeredAt ?? r.completedAt ?? r.createdAt)}</td>
+										<td class="px-3 py-2 font-mono text-[var(--color-tron-cyan)]">{r.cartridgeRecordId}</td>
+										<td class="px-3 py-2">{r.phase}</td>
+										<td class="px-3 py-2 font-mono text-xs">{r.modelVersion ?? '—'}</td>
+										<td class="px-3 py-2">
+											{#if r.result === 'pass'}<span class="text-[var(--color-tron-green,#39ff14)]">PASS</span>
+											{:else if r.result === 'fail'}<span class="text-[var(--color-tron-red,#ff3366)]">FAIL</span>
+											{:else}<span class="text-[var(--color-tron-text-secondary)]">{r.status}</span>{/if}
+										</td>
+										<td class="px-3 py-2 text-right">{r.confidenceScore != null ? (r.confidenceScore * 100).toFixed(1) + '%' : '—'}</td>
+										<td class="px-3 py-2 text-xs">{r.isShadow ? 'shadow' : ''}</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{/if}
 			</div>
-		{/if}
+		</div>
+	{/if}
+
+	<!-- Danger zone -->
+	<div class="mt-6 rounded-lg border border-[var(--color-tron-red,#ff3366)] bg-[rgba(255,51,102,0.05)] p-3">
+		<div class="flex items-center justify-between">
+			<div>
+				<div class="text-sm font-medium text-[var(--color-tron-red,#ff3366)]">Delete project</div>
+				<div class="text-xs text-[var(--color-tron-text-secondary)]">Removes this project. Member images are NOT deleted.</div>
+			</div>
+			<form method="POST" action="?/deleteProject">
+				<button
+					type="submit"
+					onclick={(e) => { if (!confirm('Delete this project? Images are kept.')) e.preventDefault(); }}
+					class="rounded border border-[var(--color-tron-red,#ff3366)] px-3 py-1.5 text-xs font-medium text-[var(--color-tron-red,#ff3366)]"
+				>
+					Delete
+				</button>
+			</form>
+		</div>
 	</div>
 </div>

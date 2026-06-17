@@ -4,7 +4,7 @@
 
 	interface Props {
 		children: Snippet;
-		data: { canManageUsers: boolean; canManageRoles: boolean };
+		data: { canManageUsers: boolean; canManageRoles: boolean; canManageAdmin: boolean };
 	}
 
 	let { children, data }: Props = $props();
@@ -18,10 +18,21 @@
 		if (data.canManageRoles) {
 			items.push({ href: '/admin/roles', label: 'Roles' });
 		}
+		if (data.canManageAdmin) {
+			items.push({ href: '/admin/notifications', label: 'Notifications' });
+			items.push({ href: '/admin/ask-bims', label: 'Ask BIMS' });
+			items.push({ href: '/admin/ask-bims/cost', label: 'Ask BIMS Cost' });
+			items.push({ href: '/admin/ask-bims/feedback', label: 'Ask BIMS Feedback' });
+		}
 		return items;
 	});
 
 	function isActive(href: string): boolean {
+		// Exact match for /admin/ask-bims so the parent tab doesn't also light up
+		// when on /admin/ask-bims/cost or /admin/ask-bims/feedback.
+		if (href === '/admin/ask-bims') {
+			return $page.url.pathname === '/admin/ask-bims';
+		}
 		return $page.url.pathname.startsWith(href);
 	}
 </script>

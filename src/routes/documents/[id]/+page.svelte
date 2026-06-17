@@ -17,7 +17,7 @@
 
 	// Get current revision content
 	let currentRevision = $derived(
-		data.revisions.find((r) => r.revision === data.document.currentRevision)
+		data.revisions.find((r: any) => String(r.revision) === String(data.document.currentRevision))
 	);
 
 	// Check if current user is the document owner
@@ -145,8 +145,8 @@
 		<TronCard>
 			<h2 class="tron-text-primary mb-4 text-lg font-bold">Revision History</h2>
 			<RevisionTimeline
-				revisions={timelineRevisions}
-				currentRevision={data.document.currentRevision}
+				revisions={timelineRevisions.map((r: any) => ({ ...r, revision: String(r.revision) }))}
+				currentRevision={String(data.document.currentRevision)}
 			/>
 		</TronCard>
 	{/if}

@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import { connectDB, KanbanTask } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
 import { requirePermission } from '$lib/server/permissions';
+import { checkWipLimit } from '$lib/server/kanban/wip-limit';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
@@ -14,6 +15,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	const task = await KanbanTask.findById(taskId).lean() as any;
 	if (!task) return json({ error: 'Task not found' }, { status: 404 });
+
+	// Hard WIP-limit cap (PRD KANBAN-WIP-LIMIT-ENFORCEMENT). Only relevant when
+	// the new status is 'wip' and the task isn't already in wip (idempotent move).
+	if (newStatus === 'wip' && task.status !== 'wip') {
+		const check = await checkWipLimit(task.assignee?._id ?? null, taskId);
+		if (!check.ok) return json(check, { status: 409 });
+	}
 
 	const update: any = { status: newStatus, statusChangedAt: new Date() };
 	if (sortOrder !== undefined) update.sortOrder = sortOrder;
