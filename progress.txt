@@ -2604,3 +2604,26 @@ WI-01 BACKING (PRD docs/prds/WI01-BACKING-FLOW-FIXES.md):
   rejects non-In-Progress (finished lots can't be resumed); deleted empty ghost
   started-session lots.
 npm run check 11-baseline (0 new); builds green. On master.
+
+=== 2026-06-16 (evening) — wax run-start polish + reagent parity (overnight) ===
+WAX:
+- Protocol params moved to a step BEFORE barcode scanning (reuses
+  ProtocolStartPanel via onSubmitIntercept to capture FormData; replayed to
+  ?/startRun after a clean scan). Hands-off: set params, hit scan, walk away.
+- Clean robot sweep auto-completes (no "Confirm Full Load"); gallery run counter
+  (cartridge count + elapsed) on robot cards.
+- OFF-DECK AUTO-RESUME: the actions endpoint mapped 'resume'->'play' (OT-2 has no
+  'resume' action; that was the spurious error). New daemon command kind
+  'auto_resume_run' watches the run locally and resumes the FIRST off-deck pause
+  once; wax startRun enqueues it after play (operator is routed to gallery, so
+  client-side resume couldn't work). Deployed daemon to all 3 robots.
+REAGENT (parity port — partial, see docs/prds/REAGENT-FLOW-PARITY.md):
+- DONE: off-deck auto-resume (startRun enqueues auto_resume_run); robot health
+  badges (ready/busy/hung/offline) + restart-server banner + run counter on the
+  reagent gallery/tabs/cards.
+- DEFERRED (needs review/testing, not done blind): reorder reagent Loading to
+  params -> barcode scanning -> auto-start. Reagent Loading has extra steps
+  (ReagentBatchScan, ReagentPreparation) and its DeckLoadingGrid lacks
+  plannedCartridgeCount/mismatch + the scanDeckAndCartridges chain, so where the
+  reagent-specific steps sit relative to params is an open question for Jacob.
+npm run check 11-baseline (0 new); builds green. All on master.
