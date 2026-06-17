@@ -37,10 +37,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	// Yield statistics
 	const totalBacked = cs.length;
-	const phases = ['wax_filled', 'wax_stored', 'wax_ready', 'reagent_filled', 'inspected', 'sealed', 'stored', 'released'];
+	const phases = ['wax_filled', 'wax_stored', 'wax_ready', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'stored', 'released'];
 	const phaseCounts = phases.map((phase) => {
 		const count = cs.filter((c) => {
-			const phaseOrder = ['wax_filled', 'wax_stored', 'wax_qc', 'wax_ready', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released'];
+			const phaseOrder = ['wax_filled', 'wax_stored', 'wax_qc', 'wax_ready', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured', 'stored', 'released'];
 			return phaseOrder.indexOf(c.status) >= phaseOrder.indexOf(phase);
 		}).length;
 		return {
@@ -54,7 +54,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	// Throughput
 	const totalCompleted = cs.filter((c) => ['stored', 'released', 'shipped'].includes(c.status)).length;
-	const totalInProgress = cs.filter((c) => ['reagent_filled', 'inspected', 'sealed', 'cured'].includes(c.status)).length;
+	const totalInProgress = cs.filter((c) => ['reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured'].includes(c.status)).length;
 
 	// Daily counts
 	const dailyMap = new Map<string, number>();

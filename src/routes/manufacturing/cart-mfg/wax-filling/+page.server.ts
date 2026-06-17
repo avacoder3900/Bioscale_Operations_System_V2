@@ -218,11 +218,15 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 				// OT-2 linkage — set by startRun once the protocol run is created
 				// on the robot. Absent during Setup/Loading; present once Running.
 				opentronsRunId: run.opentronsRunId ?? null,
+				// Final status of the OT-2 .py once it lands terminal (stamped by
+				// recordRunFinished). Lets the page show the deck-removal
+				// confirmation only after the protocol completes, even on reload.
+				opentronsRunFinalStatus: run.opentronsRunFinalStatus ?? null,
 				// Mirror the parameter set the operator chose for this run so the
 				// page can show "what we asked the robot to do" after the fact.
 				protocolParameters: run.protocolParameters ?? null
 			}
-			: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckRemovedTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null, coolingConfirmedAt: null, existingWaxRunNote: '', opentronsRunId: null, protocolParameters: null };
+			: { hasActiveRun: false, runId: null, stage: null, runStartTime: null, runEndTime: null, deckRemovedTime: null, deckId: null, waxSourceLot: null, coolingTrayId: null, plannedCartridgeCount: null, coolingConfirmedAt: null, existingWaxRunNote: '', opentronsRunId: null, opentronsRunFinalStatus: null, protocolParameters: null };
 
 		// Robot's uploaded protocols, projected to what the Start Run panel
 		// needs (id, name, type, parameter schema). Empty list if the robot
@@ -1092,6 +1096,9 @@ export const actions: Actions = {
 
 		await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: {
+				// Persist the terminal .py status on the run so the Running stage can
+				// reveal the deck-removal + Run-again controls after it finishes (reload-safe).
+				opentronsRunFinalStatus: finalStatus || 'unknown',
 				'pipetteTipState.after': {
 					nextTipIndex: finalIndex,
 					hostname: hostname ?? run.pipetteTipState?.before?.hostname ?? null,

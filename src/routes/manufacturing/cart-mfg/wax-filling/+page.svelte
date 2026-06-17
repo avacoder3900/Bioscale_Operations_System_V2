@@ -31,6 +31,7 @@
 				coolingConfirmedAt: string | null;
 				existingWaxRunNote?: string;
 				opentronsRunId?: string | null;
+				opentronsRunFinalStatus?: string | null;
 				protocolParameters?: Record<string, unknown> | null;
 			};
 			settings: {
@@ -900,6 +901,17 @@
 		}
 	});
 
+	// Run finished = the OT-2 .py reached a terminal status. Sourced from the
+	// EmbeddedRunController completion callback (live) OR the server stamp
+	// (survives reload). Gates the deck-removal confirmation.
+	// NOTE: wax "Run again" is intentionally NOT wired yet — wax cooling/QC/storage
+	// are still owned by this page (status 'Awaiting Removal' stays active here, no
+	// robotReleasedAt filter on the load), so creating a new run mid-cooling would
+	// orphan the cooling batch. Wax Run-again needs the same off-page treatment the
+	// reagent flow got (REAGENT-INSPECT-AFTER-TOPSEAL) before it's safe.
+	let runFinishedLocal = $state(false);
+	const runFinished = $derived(runFinishedLocal || !!data.runState.opentronsRunFinalStatus);
+
 	const mockQcCartridges = Array.from({ length: 6 }, (_, i) => ({
 		cartridgeId: `CART-${String(i + 1).padStart(4, '0')}`,
 		backedLotId: `LOT-001`,
@@ -1437,6 +1449,7 @@
 						// Stamp pipetteTipState.after + consumed onto the wax run.
 						// Wax status stays 'Running' until the operator confirms
 						// deck removal via the RunExecution component below.
+						runFinishedLocal = true;
 						submitAction('recordRunFinished', {
 							runId: data.runState.runId ?? '',
 							finalStatus: status
@@ -1447,6 +1460,7 @@
 			<RunExecution
 				runId={previewParam ? 'WXR-PREVIEW' : (data.runState.runId ?? '')}
 				serverRunStartTime={previewParam ? new Date() : (data.runState.runStartTime ? new Date(data.runState.runStartTime) : null)}
+				runFinished={previewParam ? true : runFinished}
 				onDeckRemoved={handleDeckRemoved}
 				onAborted={handleAborted}
 				readonly={isPreviewOrPast}

@@ -2643,3 +2643,34 @@ CALIBRATION (CALIB-* PRDs merged to master from ralph/labware-calibration):
   CALIB-1-3 sync-to-robot; CALIB-2 global-cal surface; CALIB-3 Mongo offsets
   (invasive .py edits). See CALIB-NEXT-STEPS.md.
 npm run check 11-baseline (0 new errors); builds green. All on master.
+
+=== 2026-06-17 — run-complete gating + reagent inspection moved after Cut Top Seal ===
+RUN-COMPLETION GATING (PRD docs/prds/RUN-COMPLETION-AND-RUN-AGAIN.md):
+- "Confirm — Deck Removed" (wax RunExecution) now appears ONLY after the .py lands
+  terminal — was rendered for the whole Running stage. Added runFinished prop
+  (gated button + "Run in progress…" spinner; Abort stays available throughout).
+  Page tracks runFinished via EmbeddedRunController.onComplete + a new server stamp
+  opentronsRunFinalStatus (now persisted in $set on BOTH wax+reagent recordRunFinished,
+  + exposed in runState) so a reload after completion still shows the button.
+REAGENT INSPECT AFTER CUT TOP SEAL (PRD docs/prds/REAGENT-INSPECT-AFTER-TOPSEAL.md):
+- Removed the on-page Inspection stage (+ holding-tray scan) from reagent-filling.
+  completeRunFilling now goes Running → 'Top Sealing' directly (was 'Inspection');
+  cartridges still set reagent_filled. Removed 'Inspection' from PAGE_OWNED_STATUSES
+  + STAGES + the Inspect timeline bubble. Running is now the terminal page stage.
+- New statuses reagent_qc / reagent_ready / reagent_rejected (mirror wax trio).
+  Lifecycle: reagent_filled → [Cut Top Seal] sealed → [Reagent Inspect] (photo)
+  reagent_qc → (scan-gated verdict) reagent_ready | reagent_rejected. reagent_rejected
+  is terminal for now (no scrap gate / downstream gating yet — per Jacob).
+- New page /manufacturing/cart-mfg/reagent-inspect (mirror of wax-inspect, phase
+  'reagent_filled', ALLOWED_STATUSES sealed/reagent_qc). New API /api/cv/reagent-verdict
+  (mirror of wax-verdict; writes reagentInspection subdoc + added source field).
+  /api/cv/capture: sealed → reagent_qc on photo. Sidebar: Reagent Inspect after Cut
+  Top Seal. Surfaces (status order + colors) updated in 6 files.
+- REAGENT "Run again" (Running stage, after .py): completeRunFilling (→ Top Sealing,
+  robot freed, page idle) + createRun reusing assay + params → barcode scanning.
+  Correct because Top Sealing is NOT page-owned (no orphan).
+- WAX "Run again" NOT shipped: wax cooling/QC/storage are still page-owned ('Awaiting
+  Removal' stays active on the wax-filling load, no robotReleasedAt filter), so a new
+  run mid-cooling would orphan the cooling batch. Needs the same off-page treatment
+  reagent inspection got. Wax deck-removed gating IS shipped.
+npm run check 11-baseline (0 new errors); builds green. All on master.

@@ -37,9 +37,11 @@ function emptyReagentState(robotId: string, loadError?: string) {
 		robotBlocked: null as { process: 'wax'; runId: string | null } | null,
 		loadError: loadError ?? null,
 		runState: {
-			hasActiveRun: false, stage: null, assayTypeName: null, isResearch: false,
+			hasActiveRun: false, stage: null, assayTypeName: null,
+			assayTypeId: null as string | null, isResearch: false,
 			cartridgeCount: 0, runStartTime: null, runEndTime: null,
 			opentronsRunId: null as string | null,
+			opentronsRunFinalStatus: null as string | null,
 			protocolParameters: null as Record<string, unknown> | null
 		},
 		activeReagentLots: {} as Record<string, any[]>,
@@ -114,9 +116,10 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 		// (completeRunFilling sets robotReleasedAt) but still renders here.
 		// The filter is status-based, not robotReleasedAt-based, so an
 		// Inspection run keeps loading its cartridges on this page after the
-		// OT-2 handoff. Top Sealing / Storage runs live on Opentron Control
-		// and must NOT match.
-		const PAGE_OWNED_STATUSES = ['Setup', 'Loading', 'Running', 'Inspection', 'setup', 'running'];
+		// OT-2 handoff. Inspection moved off this page (REAGENT-INSPECT-AFTER-TOPSEAL):
+		// a completed run goes straight to Top Sealing on Opentron Control, so
+		// Inspection / Top Sealing / Storage runs live there and must NOT match.
+		const PAGE_OWNED_STATUSES = ['Setup', 'Loading', 'Running', 'setup', 'running'];
 		let activeRun: any = null;
 		if (robotId) {
 			activeRun = await ReagentBatchRecord.findOne({
@@ -183,14 +186,19 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 				hasActiveRun: true,
 				stage,
 				assayTypeName: activeRun.assayType?.name ?? null,
+				// Assay _id so "Run again" can recreate a run with the same assay.
+				assayTypeId: activeRun.assayType?._id ?? null,
 				isResearch: activeRun.isResearch === true,
 				cartridgeCount: activeRun.cartridgeCount ?? activeRun.cartridgesFilled?.length ?? 0,
 				runStartTime: activeRun.runStartTime ? new Date(activeRun.runStartTime).toISOString() : null,
 				runEndTime: activeRun.runEndTime ? new Date(activeRun.runEndTime).toISOString() : null,
 				opentronsRunId: activeRun.opentronsRunId ?? null,
+				// Terminal .py status (stamped by recordRunFinished) — gates the
+				// run-complete UI (Complete + Run again) on the Running stage, on reload too.
+				opentronsRunFinalStatus: activeRun.opentronsRunFinalStatus ?? null,
 				protocolParameters: activeRun.protocolParameters ?? null
 			}
-			: { hasActiveRun: false, stage: null, assayTypeName: null, isResearch: false, cartridgeCount: 0, runStartTime: null, runEndTime: null, opentronsRunId: null, protocolParameters: null };
+			: { hasActiveRun: false, stage: null, assayTypeName: null, assayTypeId: null, isResearch: false, cartridgeCount: 0, runStartTime: null, runEndTime: null, opentronsRunId: null, opentronsRunFinalStatus: null, protocolParameters: null };
 
 		// Serialize cartridges
 		const cartridges = (activeRun?.cartridgesFilled ?? []).map((cf: any) => ({
@@ -881,6 +889,9 @@ export const actions: Actions = {
 
 		await ReagentBatchRecord.findByIdAndUpdate(runId, {
 			$set: {
+				// Persist the terminal .py status on the run so the Running stage can
+				// reveal the Complete + Run-again controls after the protocol finishes.
+				opentronsRunFinalStatus: finalStatus || 'unknown',
 				'pipetteTipState.after': {
 					nextTipIndex: finalIndex,
 					hostname: run.pipetteTipState?.before?.hostname ?? null,
@@ -918,11 +929,14 @@ export const actions: Actions = {
 
 		const run = await ReagentBatchRecord.findByIdAndUpdate(runId, {
 			$set: {
-				status: 'Inspection',
+				// Inspection moved off this page (REAGENT-INSPECT-AFTER-TOPSEAL): a
+				// completed run goes straight to Top Sealing on Opentron Control;
+				// reagent inspection happens later on the Reagent Inspect page.
+				status: 'Top Sealing',
 				runEndTime: now,
 				// Robot is physically free as of now — releases the robot lock so
-				// the next wax/reagent run can start while inspection/sealing/
-				// storage continue detached on Opentron Control.
+				// the next wax/reagent run can start while sealing/storage continue
+				// detached on Opentron Control.
 				robotReleasedAt: now
 			}
 		}, { new: true }).lean() as any;
@@ -980,7 +994,7 @@ export const actions: Actions = {
 			action: 'UPDATE',
 			changedBy: locals.user?.username,
 			changedAt: now,
-			newData: { status: 'Inspection' }
+			newData: { status: 'Top Sealing' }
 		});
 
 		// Robot is now free. The page's load function will no longer find this run

@@ -105,6 +105,10 @@ const reagentBatchRecordSchema = new Schema({
 	// OT-2 run id (UUID, returned by `POST /runs` on the robot). Lets us
 	// pull commands/errors from the robot for this specific run.
 	opentronsRunId: String,
+	// Terminal status of the OT-2 .py (succeeded/failed/stopped), stamped when
+	// the protocol lands terminal. Lets the page show the deck-removal
+	// confirmation only after the run completes, on reload too.
+	opentronsRunFinalStatus: String,
 	// Persistent tip tracker snapshot — captured pre-run from the robot's
 	// /data/tip_tracker_reagent_<hostname>.json file and stamped again
 	// post-run. `consumed` is `after.nextTipIndex - before.nextTipIndex`

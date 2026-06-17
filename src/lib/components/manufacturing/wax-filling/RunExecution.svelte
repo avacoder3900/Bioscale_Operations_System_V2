@@ -4,7 +4,9 @@
 	interface Props {
 		runId: string;
 		serverRunStartTime?: Date | null;
+		runFinished?: boolean;
 		onDeckRemoved: () => void;
+		onRunAgain?: (() => void) | null;
 		onAborted: (data: {
 			usableCartridgeIds: string[];
 			scrapCartridgeIds: string[];
@@ -17,7 +19,9 @@
 	let {
 		runId,
 		serverRunStartTime = null,
+		runFinished = false,
 		onDeckRemoved,
+		onRunAgain = null,
 		onAborted,
 		readonly: isReadonly = false
 	}: Props = $props();
@@ -139,18 +143,43 @@
 					{serverRunStartTime ? serverRunStartTime.toLocaleTimeString() : '—'}
 				</p>
 				<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
-					Robot progress is shown in the run controller above. Once the run finishes, remove the deck and confirm below.
+					{#if runFinished}
+						Run finished. Remove the deck and confirm below.
+					{:else}
+						Robot progress is shown in the run controller above. The deck-removal
+						confirmation will appear once the run finishes.
+					{/if}
 				</p>
 			</div>
 
-			<button
-				type="button"
-				onclick={handleDeckRemoved}
-				disabled={isReadonly}
-				class="min-h-[44px] w-full max-w-sm rounded-lg border border-green-500/50 bg-green-900/20 px-8 py-4 text-lg font-bold text-green-400 transition-all hover:bg-green-900/30 disabled:opacity-50"
-			>
-				Confirm — Deck Removed
-			</button>
+			{#if runFinished}
+				<button
+					type="button"
+					onclick={handleDeckRemoved}
+					disabled={isReadonly}
+					class="min-h-[44px] w-full max-w-sm rounded-lg border border-green-500/50 bg-green-900/20 px-8 py-4 text-lg font-bold text-green-400 transition-all hover:bg-green-900/30 disabled:opacity-50"
+				>
+					Confirm — Deck Removed
+				</button>
+				{#if onRunAgain}
+					<button
+						type="button"
+						onclick={() => onRunAgain?.()}
+						disabled={isReadonly}
+						class="min-h-[44px] w-full max-w-sm rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/15 px-8 py-3 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-50"
+					>
+						Run again — same parameters, scan a fresh deck
+					</button>
+				{/if}
+			{:else}
+				<div class="flex items-center gap-2 text-sm text-[var(--color-tron-text-secondary)]">
+					<svg class="h-4 w-4 animate-spin text-[var(--color-tron-cyan)]" fill="none" viewBox="0 0 24 24">
+						<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+						<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+					</svg>
+					Run in progress…
+				</div>
+			{/if}
 			<button
 				type="button"
 				onclick={handleAbortStep1}

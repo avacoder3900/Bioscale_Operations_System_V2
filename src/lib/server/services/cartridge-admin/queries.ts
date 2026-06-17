@@ -13,6 +13,9 @@ export type LifecycleStage =
 	| 'reagent_filled'
 	| 'inspected'
 	| 'sealed'
+	| 'reagent_qc'
+	| 'reagent_ready'
+	| 'reagent_rejected'
 	| 'cured'
 	| 'stored'
 	| 'released'
@@ -41,6 +44,9 @@ export const LIFECYCLE_STAGES: LifecycleStage[] = [
 	'reagent_filled',
 	'inspected',
 	'sealed',
+	'reagent_qc',
+	'reagent_ready',
+	'reagent_rejected',
 	'cured',
 	'stored',
 	'released',

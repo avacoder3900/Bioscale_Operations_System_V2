@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { goto, invalidateAll } from '$app/navigation';
+	import { invalidateAll } from '$app/navigation';
 	import SetupConfirmation from '$lib/components/manufacturing/reagent-filling/SetupConfirmation.svelte';
 	import ReagentPreparation from '$lib/components/manufacturing/reagent-filling/ReagentPreparation.svelte';
 	import ReagentBatchScan from '$lib/components/manufacturing/reagent-filling/ReagentBatchScan.svelte';
@@ -10,7 +10,6 @@
 	// DO NOT overwrite Jacob's reagent batch models or routes — this page is the UI consumer only.
 	import DeckLoadingGrid from '$lib/components/manufacturing/reagent-filling/DeckLoadingGrid.svelte';
 	import RunExecution from '$lib/components/manufacturing/reagent-filling/RunExecution.svelte';
-	import Inspection from '$lib/components/manufacturing/reagent-filling/Inspection.svelte';
 	import ProtocolStartPanel from '$lib/components/manufacturing/ProtocolStartPanel.svelte';
 	import EmbeddedRunController from '$lib/components/manufacturing/EmbeddedRunController.svelte';
 	// Top Sealing + Storage happen on Opentron Control post-OT-2 queue, not here.
@@ -25,54 +24,9 @@
 	let cancelReason = $state('');
 	let showResetModal = $state(false);
 
-	// Tray scan sub-step — shown after Inspection's Complete button. The
-	// rejected list from Inspection is held locally until the operator
-	// scans the holding tray, then both fields submit together.
-	let pendingRejected = $state<null | { cartridgeRecordId: string; reasonCode: string }[]>(null);
-	let trayInput = $state('');
-	let trayError = $state('');
-	let trayValidating = $state(false);
-	let trayResult = $state<{ id: string; name: string } | null>(null);
-	let trayInputEl: HTMLInputElement | undefined = $state();
-
-	async function handleTrayKeydown(e: KeyboardEvent) {
-		if (e.key !== 'Enter' || !trayInput.trim()) return;
-		e.preventDefault();
-		const value = trayInput.trim();
-		trayInput = '';
-		trayError = '';
-		trayValidating = true;
-		try {
-			const res = await fetch(`/api/dev/validate-equipment?type=tray&id=${encodeURIComponent(value)}`);
-			const result = await res.json();
-			if (!res.ok || result.error) {
-				trayError = result.error ?? `Tray "${value}" not found.`;
-			} else {
-				trayResult = { id: result.id ?? value, name: result.name ?? value };
-			}
-		} catch {
-			trayError = 'Validation failed';
-		} finally {
-			trayValidating = false;
-		}
-	}
-
-	async function confirmTrayAndSubmit() {
-		if (!pendingRejected || !trayResult) return;
-		await submitForm('completeInspectionBatch', {
-			rejectedCartridges: JSON.stringify(pendingRejected),
-			trayId: trayResult.id
-		});
-		// Back to the reagent-filling robot picker — the post-OT-2 queue (top
-		// sealing + storage for this run) is shown inline below the cards.
-		if (!errorMsg) await goto('/manufacturing/cart-mfg/reagent-filling');
-	}
-
-	function rescanTray() {
-		trayResult = null;
-		trayError = '';
-		setTimeout(() => trayInputEl?.focus(), 50);
-	}
+	// Inspection (and its holding-tray scan) moved off this page — see
+	// REAGENT-INSPECT-AFTER-TOPSEAL. The run now ends at Run; sealing happens on
+	// Opentron Control and inspection on the Reagent Inspect page.
 
 	// Admin override state
 	let showOverrideModal = $state(false);
@@ -91,10 +45,11 @@
 		}
 	});
 
-	// Reagent-filling page owns Setup → Load → Run → Inspection (4 stages).
-	// Top Sealing (5) and Storage (6) live on Opentron Control's post-OT-2
-	// queue, reached by clicking the run card after Inspection completes.
-	const STAGES = ['Setup', 'Loading', 'Running', 'Inspection'] as const;
+	// Reagent-filling page owns Setup → Load → Run (3 stages). Inspection moved
+	// off this page (REAGENT-INSPECT-AFTER-TOPSEAL): a completed run goes straight
+	// to Top Sealing on Opentron Control, then the Reagent Inspect page; both live
+	// on the post-OT-2 queue, reached after the run finishes here.
+	const STAGES = ['Setup', 'Loading', 'Running'] as const;
 	type Stage = (typeof STAGES)[number];
 
 	// Optimistic stage: prevents UI flash when invalidateAll() returns stale/failed data
@@ -104,7 +59,6 @@
 		recordReagentPrep: 'Loading',
 		loadDeck: 'Loading',
 		startRun: 'Running',
-		completeRunFilling: 'Inspection',
 	};
 	let pendingStage = $state<string | null>(null);
 
@@ -117,15 +71,54 @@
 	// starts hands-off with those values. Client-only — a reload re-shows the step.
 	let paramsReady = $state(false);
 	let capturedParamsFd = $state<FormData | null>(null);
+	// "Run again" stashes the prior run's params here so the fresh run skips the
+	// param step and lands straight on barcode scanning (the per-run reset below
+	// reapplies it instead of clearing).
 	let lastParamsRunId = '';
+	let runAgainParamsFd: FormData | null = null;
 	$effect(() => {
 		const rid = data.activeRunId ?? '';
 		if (rid !== lastParamsRunId) {
 			lastParamsRunId = rid;
-			paramsReady = false;
-			capturedParamsFd = null;
+			if (runAgainParamsFd && rid) {
+				capturedParamsFd = runAgainParamsFd;
+				paramsReady = true;
+				runAgainParamsFd = null;
+			} else {
+				paramsReady = false;
+				capturedParamsFd = null;
+			}
 		}
 	});
+
+	// Run finished = the OT-2 .py reached a terminal status. Sourced from the
+	// EmbeddedRunController completion callback (live) OR the server stamp
+	// (survives reload). Gates the Complete + Run-again controls on Running.
+	let runFinishedLocal = $state(false);
+	const runFinished = $derived(runFinishedLocal || !!data.runState.opentronsRunFinalStatus);
+
+	// "Run again": complete the just-finished run (→ Top Sealing, robot freed),
+	// then start a fresh run on the same robot reusing the same assay + protocol
+	// params — landing on barcode scanning. Mirrors the wax flow.
+	async function handleRunAgain() {
+		if (previewParam || submitting || !data.activeRunId) return;
+		const isResearch = data.runState.isResearch === true;
+		const assayTypeId = data.runState.assayTypeId ?? '';
+		// Preserve the params so the fresh run skips the param step (if captured).
+		runAgainParamsFd = capturedParamsFd;
+		runFinishedLocal = false;
+		// 1) Complete the current run — robotReleasedAt frees the robot and the
+		//    page load drops it as active (status → Top Sealing).
+		await submitForm('completeRunFilling');
+		if (errorMsg) { runAgainParamsFd = null; return; }
+		// 2) Create a fresh run on the same robot with the same assay.
+		await submitForm('createRun', {
+			assayTypeId: isResearch ? '' : assayTypeId,
+			isResearch: isResearch ? 'true' : 'false'
+		});
+		// 3) The reset $effect picks up the new runId + runAgainParamsFd → sets
+		//    paramsReady + capturedParamsFd → substage advances to barcode scan.
+	}
 
 	function handleParamsConfirmed(fd: FormData) {
 		capturedParamsFd = fd;
@@ -189,9 +182,11 @@
 	const displayStage = $derived(previewParam ? previewStage : viewStage);
 	const isPreviewOrPast = $derived(previewParam || isViewingPast);
 
-	// Timeline bubbles (5): the Loading stage is split into "Barcode Scanning"
-	// (deck + cartridge scan, cartridges===0) and "Load" (reagent prep, cartridges>0).
-	const TIMELINE = ['Reagent Fill Setup', 'Barcode Scanning', 'Reagent Prep', 'Run', 'Inspect'] as const;
+	// Timeline bubbles (4): the Loading stage is split into "Barcode Scanning"
+	// (deck + cartridge scan, cartridges===0) and "Reagent Prep" (cartridges>0).
+	// Inspection moved off this page — the run ends at Run (then Top Sealing →
+	// Reagent Inspect on the post-OT-2 queue).
+	const TIMELINE = ['Reagent Fill Setup', 'Barcode Scanning', 'Reagent Prep', 'Run'] as const;
 	const currentBubbleIndex = $derived.by(() => {
 		const s = stage;
 		if (s === 'Loading') {
@@ -201,7 +196,6 @@
 			return 2;
 		}
 		if (s === 'Running') return 3;
-		if (s === 'Inspection') return 4;
 		return 0; // Setup (or no run)
 	});
 
@@ -319,25 +313,6 @@
 		}
 	}
 
-	// Mock data for preview mode — fields match each component's expected interface
-	const mockCartridges = Array.from({ length: 8 }, (_, i) => ({
-		// Inspection expects: id, cartridgeId, deckPosition, inspectionStatus, inspectionReason
-		id: `CR-${i + 1}`,
-		cartridgeId: `CART-${String(i + 1).padStart(4, '0')}`,
-		deckPosition: i + 1,
-		inspectionStatus: i < 5 ? 'Accepted' : i < 7 ? 'Rejected' : 'QA/QC',
-		inspectionReason: i >= 5 && i < 7 ? 'Underfill' : null,
-		// CompletionStorage expects: currentStatus, storageLocation
-		currentStatus: i < 5 ? 'Sealed' : 'Rejected',
-		storageLocation: null as string | null
-	}));
-
-	const mockRejectionCodes = [
-		{ code: 'UNDERFILL', label: 'Underfill' },
-		{ code: 'OVERFILL', label: 'Overfill' },
-		{ code: 'CONTAMINATION', label: 'Contamination' },
-		{ code: 'DAMAGE', label: 'Physical Damage' }
-	];
 </script>
 
 <div class="space-y-4">
@@ -360,10 +335,6 @@
 				<button type="button" onclick={() => { previewStage = 'Running'; }}
 					class="rounded px-3 py-1.5 text-xs font-medium transition-colors {previewStage === 'Running' ? 'bg-[var(--color-tron-cyan)] text-white' : 'border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}">
 					3. Running
-				</button>
-				<button type="button" onclick={() => { previewStage = 'Inspection'; }}
-					class="rounded px-3 py-1.5 text-xs font-medium transition-colors {previewStage === 'Inspection' ? 'bg-[var(--color-tron-cyan)] text-white' : 'border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}">
-					4. Inspection
 				</button>
 			</div>
 		</div>
@@ -454,7 +425,7 @@
 					<a href="?preview" class="rounded border border-[var(--color-tron-orange)]/40 px-2 py-0.5 text-xs text-[var(--color-tron-orange)] hover:bg-[var(--color-tron-orange)]/10">
 						Preview
 					</a>
-					{#if stage === 'Loading' || stage === 'Running' || stage === 'Inspection'}
+					{#if stage === 'Loading' || stage === 'Running'}
 						<button
 							type="button"
 							onclick={() => { showResetModal = true; }}
@@ -696,6 +667,9 @@
 				robotName={data.runState.assayTypeName ?? 'Reagent Run'}
 				opentronsRunId={data.runState.opentronsRunId}
 				onComplete={(status) => {
+					// The .py landed terminal — reveal the run-complete controls. The
+					// run does NOT auto-advance; the operator sends it on or re-runs.
+					runFinishedLocal = true;
 					submitForm('recordRunFinished', {
 						runId: data.activeRunId ?? '',
 						finalStatus: status
@@ -712,82 +686,37 @@
 			cartridgeCount={previewParam ? 8 : (data.runState.cartridgeCount ?? 0)}
 			runStartTime={new Date(data.runState.runStartTime ?? Date.now())}
 			runEndTime={new Date(data.runState.runEndTime ?? (Date.now() + 600000))}
-			onTimerComplete={() => submitForm('completeRunFilling')}
+			onTimerComplete={() => { runFinishedLocal = true; }}
 			onAbort={(reason, photoUrl) => submitForm('abortRun', { reason, photoUrl: photoUrl ?? '' })}
 			readonly={isViewingPast}
 		/>
 
-	{:else if displayStage === 'Inspection' && pendingRejected === null}
-		<Inspection
-			cartridges={previewParam ? mockCartridges : data.cartridges}
-			rejectionCodes={previewParam ? mockRejectionCodes : data.rejectionCodes}
-			onComplete={({ rejectedCartridges }) => {
-				if (previewParam) { errorMsg = 'Actions disabled in preview mode'; return; }
-				// Buffer the rejected list and show the tray scan sub-step.
-				// The form submits once the tray has been validated.
-				pendingRejected = rejectedCartridges;
-				setTimeout(() => trayInputEl?.focus(), 100);
-			}}
-			readonly={isViewingPast}
-			focusPaused={showCancelModal || showResetModal || showOverrideModal}
-		/>
-
-	{:else if displayStage === 'Inspection' && pendingRejected !== null}
-		<!-- Tray scan sub-step: holding tray for cartridges between Inspection
-			and Top Sealing. Not a fridge/oven — just a flat surface. -->
-		<div class="space-y-5">
-			<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Scan Holding Tray</h2>
-			<p class="text-sm text-[var(--color-tron-text-secondary)]">
-				Place inspected cartridges on a tray and scan its barcode. The tray
-				holds them until Top Sealing on Opentron Control.
-			</p>
-
-			{#if !trayResult}
-				<div>
-					<input
-						bind:this={trayInputEl}
-						type="text"
-						bind:value={trayInput}
-						onkeydown={handleTrayKeydown}
-						placeholder="Scan tray barcode..."
-						disabled={trayValidating}
-						class="min-h-[44px] w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text)] placeholder-[var(--color-tron-text-secondary)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
-						autocomplete="off"
-					/>
-					{#if trayError}<p class="mt-2 text-sm text-red-400">{trayError}</p>{/if}
-					{#if trayValidating}<p class="mt-2 text-sm text-[var(--color-tron-text-secondary)]">Validating...</p>{/if}
-				</div>
+		<!-- Run-complete controls (REAGENT-INSPECT-AFTER-TOPSEAL): appear only once
+		     the .py finishes. Inspection is no longer here — the batch goes to Top
+		     Sealing, and Run again starts a fresh batch with the same parameters. -->
+		{#if !isViewingPast && (previewParam || runFinished)}
+			<div class="mt-4 flex flex-col items-center gap-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
+				<p class="text-sm text-[var(--color-tron-text-secondary)]">
+					Run finished. Send this batch to Top Sealing, or run another batch with the same parameters.
+				</p>
 				<button
 					type="button"
-					onclick={() => { pendingRejected = null; trayError = ''; trayInput = ''; }}
-					class="min-h-[36px] rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
+					onclick={() => submitForm('completeRunFilling')}
+					disabled={submitting}
+					class="min-h-[44px] w-full max-w-sm rounded-lg border border-green-500/50 bg-green-900/20 px-8 py-3 text-base font-bold text-green-400 transition-all hover:bg-green-900/30 disabled:opacity-50"
 				>
-					← Back to Inspection
+					Complete — send to Top Sealing
 				</button>
-			{:else}
-				<div class="rounded-lg border border-green-500/30 bg-green-900/10 p-4 text-center">
-					<p class="text-sm text-green-400">Tray verified:</p>
-					<p class="mt-1 font-mono text-xl font-bold text-green-300">{trayResult.name}</p>
-				</div>
-				<div class="flex gap-3">
-					<button
-						type="button"
-						onclick={rescanTray}
-						class="min-h-[44px] rounded-lg border border-[var(--color-tron-border)] px-4 py-3 text-sm text-[var(--color-tron-text-secondary)] transition-all hover:border-[var(--color-tron-cyan)]/30"
-					>
-						Re-scan
-					</button>
-					<button
-						type="button"
-						onclick={confirmTrayAndSubmit}
-						disabled={submitting}
-						class="min-h-[44px] flex-1 rounded-lg border border-green-500/50 bg-green-900/20 px-6 py-3 text-lg font-bold text-green-400 transition-all hover:bg-green-900/30 disabled:opacity-50"
-					>
-						{submitting ? 'Submitting...' : `Confirm — Cartridges on ${trayResult.name}`}
-					</button>
-				</div>
-			{/if}
-		</div>
+				<button
+					type="button"
+					onclick={handleRunAgain}
+					disabled={submitting}
+					class="min-h-[44px] w-full max-w-sm rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/15 px-8 py-3 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-50"
+				>
+					Run again — same parameters, scan a fresh deck
+				</button>
+			</div>
+		{/if}
 	{/if}
 
 	<!-- Cancel Run Modal -->

@@ -147,6 +147,25 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			});
 		}
 
+		// Reagent inspection (REAGENT-INSPECT-AFTER-TOPSEAL): photographing a `sealed`
+		// cart (post Cut Top Seal) advances it to reagent_qc ("photographed, awaiting
+		// verdict"). The scan-gated verdict then moves it to reagent_ready/reagent_rejected.
+		if (updated.status === 'sealed') {
+			await CartridgeRecord.updateOne(
+				{ _id: cartridgeId, status: 'sealed' },
+				{ $set: { status: 'reagent_qc' } }
+			);
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'cartridge_records',
+				recordId: cartridgeId,
+				action: 'reagent_inspection_photo',
+				newData: { status: 'reagent_qc', from: 'sealed', imageId, phase },
+				changedAt: capturedAt,
+				changedBy: locals.user.username
+			});
+		}
+
 		// Fire-and-forget: any project deploying at this phase runs inference.
 		// Errors are swallowed inside runPhaseInference — capture response always
 		// succeeds regardless of inference state.

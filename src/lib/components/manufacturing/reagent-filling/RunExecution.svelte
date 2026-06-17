@@ -85,7 +85,7 @@
 		{#if timerComplete}
 			<div class="space-y-2">
 				<div class="text-2xl font-bold text-green-400">Filling Complete</div>
-				<p class="text-sm text-[var(--color-tron-text-secondary)]">Proceeding to inspection...</p>
+				<p class="text-sm text-[var(--color-tron-text-secondary)]">Use the controls below to finish.</p>
 			</div>
 		{:else}
 			<div class="text-5xl font-mono font-bold text-[var(--color-tron-cyan)] tabular-nums">
