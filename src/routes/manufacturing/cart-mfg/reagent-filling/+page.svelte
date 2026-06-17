@@ -191,7 +191,7 @@
 
 	// Timeline bubbles (5): the Loading stage is split into "Barcode Scanning"
 	// (deck + cartridge scan, cartridges===0) and "Load" (reagent prep, cartridges>0).
-	const TIMELINE = ['Reagent Fill Setup', 'Barcode Scanning', 'Load', 'Run', 'Inspect'] as const;
+	const TIMELINE = ['Reagent Fill Setup', 'Barcode Scanning', 'Reagent Prep', 'Run', 'Inspect'] as const;
 	const currentBubbleIndex = $derived.by(() => {
 		const s = stage;
 		if (s === 'Loading') {
