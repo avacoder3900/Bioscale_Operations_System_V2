@@ -120,7 +120,9 @@ const cartridgeRecordSchema = new Schema({
 	status: {
 		type: String,
 		enum: [
-			'backing', 'wax_filling', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filling', 'reagent_filled', 'inspected',
+			// Wax inspection flow (WAX-INSPECTION-READY-REJECTED): wax_stored → (photo)
+			// → wax_qc (awaiting verdict) → wax_ready | wax_rejected. Only wax_ready → reagent.
+			'backing', 'wax_filling', 'wax_filled', 'wax_stored', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filling', 'reagent_filled', 'inspected',
 			'sealed', 'cured', 'stored', 'released', 'shipped',
 			'linked', 'underway', 'completed', 'cancelled', 'scrapped', 'voided',
 			'packeted', 'transferred', 'refrigerated', 'received'

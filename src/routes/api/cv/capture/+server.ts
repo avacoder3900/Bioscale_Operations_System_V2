@@ -26,6 +26,7 @@ import { json, error } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
+import { AuditLog } from '$lib/server/db/models/index.js';
 import { generateId } from '$lib/server/db/utils.js';
 import { uploadViaWorker, getR2Url, buildCvNamedKey } from '$lib/server/services/r2';
 import { hasPermission } from '$lib/server/permissions';
@@ -66,7 +67,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const updated = await CartridgeRecord.findOneAndUpdate(
 			{ _id: cartridgeId },
 			{ $inc: { photoSequence: 1 } },
-			{ new: true, projection: { photoSequence: 1 } }
+			{ new: true, projection: { photoSequence: 1, status: 1 } }
 		).lean() as any;
 
 		if (!updated) {
@@ -125,6 +126,26 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			// Mongoose 9 requires opting in to array (aggregation-pipeline) updates.
 			{ updatePipeline: true }
 		);
+
+		// Wax inspection (WAX-INSPECTION-READY-REJECTED): photographing a wax_stored
+		// cart advances it to wax_qc ("photographed, awaiting verdict"). The verdict
+		// (human scan-gated, or CV) then moves it to wax_ready/wax_rejected. Scoped
+		// to wax_stored so /capture at other phases never re-statuses a cart.
+		if (updated.status === 'wax_stored') {
+			await CartridgeRecord.updateOne(
+				{ _id: cartridgeId, status: 'wax_stored' },
+				{ $set: { status: 'wax_qc' } }
+			);
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'cartridge_records',
+				recordId: cartridgeId,
+				action: 'wax_inspection_photo',
+				newData: { status: 'wax_qc', from: 'wax_stored', imageId, phase },
+				changedAt: capturedAt,
+				changedBy: locals.user.username
+			});
+		}
 
 		// Fire-and-forget: any project deploying at this phase runs inference.
 		// Errors are swallowed inside runPhaseInference — capture response always

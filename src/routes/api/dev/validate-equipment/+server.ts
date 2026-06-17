@@ -77,9 +77,18 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 				return json({ error: `Cartridge "${id}" not found. It must go through wax filling first.`, isNew: true }, { status: 404 });
 			}
 			const phase = (cart as any).status;
-			const validForReagent = ['wax_filled', 'wax_stored', 'wax_qc'];
-			if (!validForReagent.includes(phase)) {
-				return json({ error: `Cartridge "${id}" is in phase "${phase}". Must be wax stored before reagent filling.` }, { status: 400 });
+			// Only wax-inspected & passed carts may enter reagent filling
+			// (WAX-INSPECTION-READY-REJECTED). wax_stored/wax_qc still need inspection.
+			if (phase !== 'wax_ready') {
+				const hint =
+					phase === 'wax_rejected'
+						? 'it was rejected at wax inspection'
+						: phase === 'wax_qc'
+							? 'it is photographed but not yet passed at wax inspection'
+							: phase === 'wax_stored'
+								? 'it still needs wax inspection (photo + verdict)'
+								: `it is in phase "${phase}"`;
+				return json({ error: `Cartridge "${id}" is not wax_ready — ${hint}.` }, { status: 400 });
 			}
 			return json({ valid: true, id, isNew: false, phase });
 		}

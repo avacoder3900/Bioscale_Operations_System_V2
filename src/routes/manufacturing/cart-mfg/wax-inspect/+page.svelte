@@ -14,7 +14,9 @@
 	let { data } = $props();
 
 	const PHASE = 'wax_filled';
-	const ALLOWED_STATUSES = ['wax_filling', 'wax_filled', 'wax_stored'];
+	// wax_stored carts get photographed (→ wax_qc); wax_qc carts get re-scanned to
+	// give the Ready/Rejected verdict. (wax_filling/wax_filled kept for tolerance.)
+	const ALLOWED_STATUSES = ['wax_filling', 'wax_filled', 'wax_stored', 'wax_qc'];
 
 	// ── Sticky cartridge context ────────────────────────────────────────────
 	let cartridgeId = $state<string | null>(null);
@@ -506,6 +508,9 @@
 			} else {
 				verdict = { state: 'no_model' };
 			}
+			// Photographing a wax_stored cart advanced it to wax_qc server-side —
+			// reflect that so the Ready/Rejected verdict buttons appear.
+			if (cartridgeStatus === 'wax_stored') cartridgeStatus = 'wax_qc';
 			flashBanner('ok', `Captured ${result.cartridgeImageNumber}`, 1800);
 		} catch (e) {
 			if (pollSeq === mySeq) verdict = { state: 'error', message: e instanceof Error ? e.message : 'Capture failed' };
@@ -513,6 +518,45 @@
 		} finally {
 			submitting = false;
 			// Refocus the scanner input so the next scan still wedges correctly.
+			scanInputEl?.focus();
+		}
+	}
+
+	// ── Wax verdict (scan-gated): wax_qc → wax_ready / wax_rejected ──────────
+	// The scanned (sticky-context) cartridge IS the physical-scan gate. Only a
+	// wax_qc cart (photographed, no verdict yet) can be judged. CV auto-verdict
+	// will reuse the same /api/cv/wax-verdict endpoint with source:'cv'.
+	let verdictBusy = $state(false);
+	let verdictMsg = $state<string | null>(null);
+
+	async function submitVerdict(v: 'ready' | 'rejected') {
+		if (verdictBusy || !cartridgeId) return;
+		let reason = '';
+		if (v === 'rejected') {
+			reason = (prompt('Reason for rejecting this wax cartridge?') ?? '').trim();
+			if (!reason) return; // cancelled / empty
+		}
+		verdictBusy = true;
+		verdictMsg = null;
+		try {
+			const res = await fetch('/api/cv/wax-verdict', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ cartridgeId, verdict: v, reason, source: 'human' })
+			});
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok || body.error) {
+				verdictMsg = body.error ?? `Verdict failed (HTTP ${res.status})`;
+				flashBanner('err', verdictMsg ?? 'Verdict failed');
+			} else {
+				cartridgeStatus = body.status; // wax_ready | wax_rejected
+				verdictMsg = `${cartridgeId} → ${body.status}`;
+				flashBanner('ok', verdictMsg, 2200);
+			}
+		} catch (e) {
+			verdictMsg = e instanceof Error ? e.message : 'Verdict failed';
+		} finally {
+			verdictBusy = false;
 			scanInputEl?.focus();
 		}
 	}
@@ -759,6 +803,32 @@
 			</button>
 			{#if !cartridgeId}
 				<div class="text-xs text-[var(--color-tron-text-secondary)]">Scan a cartridge to enable capture</div>
+			{/if}
+
+			<!-- Scan-gated verdict: a photographed (wax_qc) cart gets passed/failed.
+			     The scanned sticky-context cartridge IS the physical-scan gate. -->
+			{#if cartridgeId && cartridgeStatus === 'wax_qc'}
+				<div class="flex flex-col items-center gap-2 border-l border-[var(--color-tron-border)] pl-4">
+					<div class="text-xs text-[var(--color-tron-text-secondary)]">Wax inspection verdict</div>
+					<div class="flex gap-2">
+						<button
+							type="button"
+							onclick={() => submitVerdict('ready')}
+							disabled={verdictBusy}
+							class="rounded bg-green-600 px-5 py-3 text-lg font-bold text-white transition-colors hover:bg-green-500 disabled:opacity-40"
+						>✓ Wax Ready</button>
+						<button
+							type="button"
+							onclick={() => submitVerdict('rejected')}
+							disabled={verdictBusy}
+							class="rounded bg-red-600 px-5 py-3 text-lg font-bold text-white transition-colors hover:bg-red-500 disabled:opacity-40"
+						>✗ Reject</button>
+					</div>
+				</div>
+			{:else if cartridgeId && (cartridgeStatus === 'wax_ready' || cartridgeStatus === 'wax_rejected')}
+				<div class="text-sm font-semibold {cartridgeStatus === 'wax_ready' ? 'text-green-400' : 'text-red-400'}">
+					{cartridgeId} is {cartridgeStatus}
+				</div>
 			{/if}
 		</div>
 
