@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { connectDB, LabCartridge, ManufacturingSettings, CartridgeGroup, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, LabCartridge, CartridgeGroup, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 
 // Live status check for a barcode so the UI can tell the operator whether it is free or already used.
@@ -21,9 +21,9 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	});
 };
 
-// Batch-register optical-test cartridges. Every cartridge gets the preset optical-confirmation
-// assay (from settings) and is assigned to a validation group (CartridgeGroup). Accepts a list of
-// barcodes (or a single `barcode` for back-compat).
+// Batch-register optical-test cartridges. The assay ID is entered directly and written onto each
+// cartridge document; cartridges are assigned to a validation group (CartridgeGroup). After writing,
+// the created docs are re-read from Mongo and returned as `verified` so the UI can prove the change.
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!locals.user) return json({ error: 'Unauthorized' }, { status: 401 });
 	requirePermission(locals.user, 'cartridge:write');
@@ -34,12 +34,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	const barcodes = [...new Set(rawList.map((b) => String(b).trim()).filter(Boolean))];
 	if (barcodes.length === 0) return json({ error: 'Provide at least one barcode' }, { status: 400 });
 
-	// Preset assay — set once by an admin on the Criteria page.
-	const settings = await ManufacturingSettings.findById('default').select('opticalConfirmation').lean();
-	const presetAssay = (settings as any)?.opticalConfirmation?.assay;
-	if (!presetAssay?.skuCode) {
-		return json({ error: 'No optical-confirmation assay is configured. Set it on the Criteria page first.' }, { status: 400 });
-	}
+	// Assay ID entered directly in the capture window — written straight onto the cartridge document.
+	const assayId = (body.assayId ?? '').toString().trim();
+	if (!assayId) return json({ error: 'Assay ID is required' }, { status: 400 });
 
 	// Resolve the validation group: use an existing groupId, or create one from groupName.
 	let groupId: string | undefined = body.groupId?.trim() || undefined;
@@ -74,9 +71,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				cartridgeType: 'optical_test',
 				status: 'available',
 				groupId,
-				assay: { _id: presetAssay._id, name: presetAssay.name, skuCode: presetAssay.skuCode },
-				notes: 'Optical confirmation assay ' + presetAssay.skuCode + (groupName ? ' - group ' + groupName : '') + ' - off standard workflow',
-				usageLog: [{ action: 'registered', newValue: presetAssay.skuCode, performedBy: operator, performedAt: now }],
+				assay: { _id: assayId, skuCode: assayId },
+				notes: 'Optical confirmation assay ' + assayId + (groupName ? ' - group ' + groupName : '') + ' - off standard workflow',
+				usageLog: [{ action: 'registered', newValue: assayId, performedBy: operator, performedAt: now }],
 				createdBy: locals.user._id
 			});
 			created.push({ _id: cartridge._id, barcode });
@@ -85,13 +82,29 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		}
 	}
 
+	// Read the just-written docs back out of Mongo (proof the documents changed on the BIMS side).
+	const createdIds = created.map((c) => c._id);
+	const verified = createdIds.length
+		? await LabCartridge.find({ _id: { $in: createdIds } })
+				.select('barcode assay groupId status cartridgeType updatedAt')
+				.lean()
+		: [];
+
 	if (created.length > 0) {
 		await AuditLog.create({
 			tableName: 'lab_cartridges', recordId: groupId ?? 'batch', action: 'INSERT',
-			newData: { count: created.length, assay: presetAssay.skuCode, groupId, groupName, barcodes: created.map((c) => c.barcode) },
+			newData: { count: created.length, assayId, groupId, groupName, barcodes: created.map((c) => c.barcode) },
 			changedBy: locals.user._id, changedAt: now, reason: 'Batch-capture optical-test cartridges'
 		});
 	}
 
-	return json({ success: true, created, skipped, groupId, groupName, assay: presetAssay });
+	return json({
+		success: true,
+		created,
+		skipped,
+		verified: JSON.parse(JSON.stringify(verified)),
+		groupId,
+		groupName,
+		assayId
+	});
 };

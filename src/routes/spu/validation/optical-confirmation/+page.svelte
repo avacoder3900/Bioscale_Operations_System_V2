@@ -1,15 +1,9 @@
 <script lang="ts">
 	import { invalidateAll } from '$app/navigation';
 
-	interface Assay {
+	interface AssayRef {
 		_id?: string;
-		name?: string;
 		skuCode?: string;
-	}
-	interface AssayOpt {
-		_id: string;
-		name: string;
-		skuCode: string;
 	}
 	interface Group {
 		_id: string;
@@ -19,68 +13,49 @@
 	interface Cartridge {
 		_id: string;
 		barcode: string;
-		assay?: Assay | null;
+		assay?: AssayRef | null;
 		status?: string;
 		groupId?: string | null;
 		createdAt?: string;
 	}
+	interface VerifiedRow {
+		_id?: string;
+		barcode: string;
+		assay?: AssayRef | null;
+		groupId?: string | null;
+		status?: string;
+		updatedAt?: string;
+	}
 	interface Props {
 		data: {
-			presetAssay: Assay | null;
-			assays: AssayOpt[];
 			groups: Group[];
 			cartridges: Cartridge[];
-			canSetAssay: boolean;
 		};
 	}
 
 	let { data }: Props = $props();
 
-	// ---- assay setting ----
-	let selectedAssaySku = $state<string>(data.presetAssay?.skuCode ?? '');
-	let isSavingAssay = $state(false);
-	let assayMessage = $state<{ type: 'success' | 'error'; text: string } | null>(null);
-
-	async function saveAssay() {
-		isSavingAssay = true;
-		assayMessage = null;
-		try {
-			const chosen = (data.assays ?? []).find((a) => a.skuCode === selectedAssaySku) ?? null;
-			const res = await fetch('/api/validation/optical-confirmation/criteria', {
-				method: 'PUT',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					assay: chosen ? { _id: chosen._id, name: chosen.name, skuCode: chosen.skuCode } : null
-				})
-			});
-			const body = await res.json();
-			if (res.ok && body.success) {
-				assayMessage = { type: 'success', text: chosen ? `Assay set to ${chosen.skuCode}.` : 'Assay cleared.' };
-				await invalidateAll();
-			} else {
-				assayMessage = { type: 'error', text: body.error ?? `Save failed (${res.status}).` };
-			}
-		} catch (err) {
-			assayMessage = { type: 'error', text: err instanceof Error ? err.message : 'Save failed.' };
-		} finally {
-			isSavingAssay = false;
-		}
-	}
-
-	// ---- batch capture ----
 	let cartridges = $state<Cartridge[]>(data.cartridges ?? []);
+	let assayId = $state('');
 	let groupName = $state('');
 	let selectedGroupId = $state('');
 	let groupSuggestions = $state<Group[]>([]);
 	let barcodesText = $state('');
 	let busy = $state(false);
 	let errorMessage = $state<string | null>(null);
-	let resultSummary = $state<{ created: number; skipped: { barcode: string; reason: string }[] } | null>(null);
+	let result = $state<{
+		created: number;
+		skipped: { barcode: string; reason: string }[];
+		verified: VerifiedRow[];
+		assayId: string;
+		groupName?: string;
+	} | null>(null);
 
 	const groupNameById = $derived(new Map((data.groups ?? []).map((g) => [g._id, g.name])));
 	let parsedBarcodes = $derived(barcodesText.split(/[\n,]/).map((b) => b.trim()).filter(Boolean));
-	let hasAssay = $derived(!!data.presetAssay?.skuCode);
-	let isValid = $derived(hasAssay && parsedBarcodes.length > 0 && groupName.trim().length > 0);
+	let isValid = $derived(
+		assayId.trim().length > 0 && parsedBarcodes.length > 0 && groupName.trim().length > 0
+	);
 
 	async function searchGroups() {
 		const q = groupName.trim();
@@ -121,13 +96,18 @@
 		}
 	}
 
+	function groupLabel(row: VerifiedRow): string {
+		if (!row.groupId) return '—';
+		return groupNameById.get(row.groupId) ?? result?.groupName ?? row.groupId;
+	}
+
 	async function register() {
 		if (!isValid || busy) return;
 		busy = true;
 		errorMessage = null;
-		resultSummary = null;
+		result = null;
 		try {
-			const body: Record<string, unknown> = { barcodes: parsedBarcodes };
+			const body: Record<string, unknown> = { barcodes: parsedBarcodes, assayId: assayId.trim() };
 			if (selectedGroupId) body.groupId = selectedGroupId;
 			else body.groupName = groupName.trim();
 
@@ -141,7 +121,13 @@
 				errorMessage = r.error ?? 'Registration failed';
 				return;
 			}
-			resultSummary = { created: (r.created ?? []).length, skipped: r.skipped ?? [] };
+			result = {
+				created: (r.created ?? []).length,
+				skipped: r.skipped ?? [],
+				verified: r.verified ?? [],
+				assayId: r.assayId,
+				groupName: r.groupName
+			};
 			barcodesText = '';
 			groupSuggestions = [];
 			await invalidateAll();
@@ -156,69 +142,31 @@
 
 <div class="space-y-6">
 	<div>
-		<h1 class="tron-heading text-2xl font-bold">Optical Confirmation — Cartridges &amp; Assay</h1>
+		<h1 class="tron-heading text-2xl font-bold">Optical Confirmation — Cartridges</h1>
 		<p class="tron-text-muted mt-1">
-			Set the optical-confirmation assay and batch-register cartridge barcodes into a validation group.
+			Write an assay ID directly onto each cartridge and assign them to a validation group.
 		</p>
 	</div>
 
-	<!-- Assay -->
-	<div class="tron-card p-6">
-		<h2 class="tron-heading mb-2 text-lg font-semibold">Assay</h2>
-		{#if assayMessage}
-			<div
-				class="mb-3 rounded-lg p-3 text-sm {assayMessage.type === 'success'
-					? 'bg-[var(--color-tron-green)]/10 text-[var(--color-tron-green)]'
-					: 'bg-[var(--color-tron-red)]/10 text-[var(--color-tron-red)]'}"
-			>
-				{assayMessage.text}
-			</div>
-		{/if}
-
-		{#if data.canSetAssay}
-			<p class="tron-text-muted mb-4 text-sm">The single assay stamped onto every optical-test cartridge.</p>
-			<div class="flex flex-wrap items-end gap-4">
-				<div class="min-w-64 flex-1">
-					<label for="ocAssay" class="tron-text-muted mb-2 block text-sm font-medium">Assay</label>
-					<select id="ocAssay" bind:value={selectedAssaySku} class="tron-input w-full rounded-lg px-4 py-3">
-						<option value="">— None —</option>
-						{#each data.assays as a (a._id)}
-							<option value={a.skuCode}>{a.name} ({a.skuCode})</option>
-						{/each}
-					</select>
-				</div>
-				<button
-					type="button"
-					onclick={saveAssay}
-					disabled={isSavingAssay}
-					class="rounded-lg bg-[var(--color-tron-orange)] px-6 py-3 font-semibold text-[var(--color-tron-bg-primary)] transition-all hover:bg-[var(--color-tron-orange)]/90 disabled:cursor-not-allowed disabled:opacity-50"
-				>
-					{isSavingAssay ? 'Saving…' : 'Set Assay'}
-				</button>
-			</div>
-			<p class="mt-2 text-xs {hasAssay ? 'text-[var(--color-tron-green)]' : 'text-[var(--color-tron-red)]'}">
-				Currently set: {hasAssay ? `${data.presetAssay?.name} (${data.presetAssay?.skuCode})` : 'none'} ·
-				{data.assays.length} assay(s) in catalog{data.assays.length === 0 ? ' — add one under Assays first' : ''}
-			</p>
-		{:else if hasAssay}
-			<p class="text-[var(--color-tron-text-secondary)]">
-				<span class="tron-heading font-medium">{data.presetAssay?.name}</span>
-				(<span class="font-mono">{data.presetAssay?.skuCode}</span>)
-			</p>
-		{:else}
-			<p class="text-[var(--color-tron-red)]">No optical-confirmation assay set (admin must set one).</p>
-		{/if}
-	</div>
-
-	<!-- Batch register -->
+	<!-- Register -->
 	<div class="tron-card p-6">
 		<h2 class="tron-heading mb-4 text-lg font-semibold">Register barcodes</h2>
 
-		{#if !hasAssay}
-			<p class="mb-4 text-sm text-[var(--color-tron-red)]">Set an assay above before registering cartridges.</p>
-		{/if}
-
 		<div class="space-y-4">
+			<!-- Assay ID (typed directly) -->
+			<div>
+				<label for="assayId" class="tron-text-muted mb-2 block text-sm font-medium">
+					Assay ID <span class="text-[var(--color-tron-red)]">*</span>
+				</label>
+				<input
+					id="assayId"
+					type="text"
+					bind:value={assayId}
+					placeholder="Enter the assay / validation ID to write onto each cartridge"
+					class="tron-input w-full rounded-lg px-4 py-3 font-mono"
+				/>
+			</div>
+
 			<!-- Validation group -->
 			<div class="relative">
 				<label for="group" class="tron-text-muted mb-2 block text-sm font-medium">
@@ -273,35 +221,77 @@
 				<div class="rounded-lg bg-[var(--color-tron-red)]/10 p-4 text-[var(--color-tron-red)]">{errorMessage}</div>
 			{/if}
 
-			{#if resultSummary}
-				<div class="rounded-lg border border-[var(--color-tron-green)]/30 bg-[var(--color-tron-green)]/10 p-4">
-					<p class="text-[var(--color-tron-green)]">Registered {resultSummary.created} cartridge(s).</p>
-					{#if resultSummary.skipped.length > 0}
-						<p class="tron-text-muted mt-2 text-sm">Skipped {resultSummary.skipped.length}:</p>
-						<ul class="tron-text-muted mt-1 list-inside list-disc text-xs">
-							{#each resultSummary.skipped as s (s.barcode)}
-								<li><span class="font-mono">{s.barcode}</span> — {s.reason}</li>
-							{/each}
-						</ul>
-					{/if}
-				</div>
-			{/if}
-
 			<button
 				type="submit"
 				onclick={register}
 				disabled={!isValid || busy}
 				class="flex w-full items-center justify-center gap-3 rounded-lg bg-[var(--color-tron-orange)] px-6 py-4 text-lg font-semibold text-[var(--color-tron-bg-primary)] transition-all hover:bg-[var(--color-tron-orange)]/90 disabled:cursor-not-allowed disabled:opacity-50"
 			>
-				{busy ? 'Registering…' : `Register ${parsedBarcodes.length || ''} cartridge(s)`}
+				{busy ? 'Writing…' : `Register ${parsedBarcodes.length || ''} cartridge(s)`}
 			</button>
 			{#if !isValid}
 				<p class="tron-text-muted text-center text-xs">
-					Need — assay: {hasAssay ? '✓' : '✗'} · group: {groupName.trim() ? '✓' : '✗'} · barcodes: {parsedBarcodes.length > 0 ? '✓' : '✗'}
+					Need — assay ID: {assayId.trim() ? '✓' : '✗'} · group: {groupName.trim() ? '✓' : '✗'} · barcodes: {parsedBarcodes.length > 0 ? '✓' : '✗'}
 				</p>
 			{/if}
 		</div>
 	</div>
+
+	<!-- Mongo verification -->
+	{#if result}
+		<div class="tron-card p-6">
+			<div class="flex flex-wrap items-center gap-3">
+				<span class="rounded-full bg-[var(--color-tron-green)]/20 px-3 py-1 text-sm font-semibold text-[var(--color-tron-green)]">
+					✓ Verified in MongoDB
+				</span>
+				<span class="tron-text-secondary text-sm">
+					{result.verified.length} document(s) re-read from the database after write
+					{#if result.skipped.length > 0}· {result.skipped.length} skipped{/if}
+				</span>
+			</div>
+			<p class="tron-text-muted mt-2 text-sm">
+				Assay ID written: <span class="font-mono text-[var(--color-tron-cyan)]">{result.assayId}</span>
+				{#if result.groupName}· group <span class="font-medium">{result.groupName}</span>{/if}
+			</p>
+
+			{#if result.verified.length > 0}
+				<div class="mt-4 overflow-x-auto">
+					<table class="w-full text-sm">
+						<thead class="bg-[var(--color-tron-bg-secondary)]">
+							<tr class="text-left">
+								<th class="tron-text-muted p-2">Barcode</th>
+								<th class="tron-text-muted p-2">Assay (stored in Mongo)</th>
+								<th class="tron-text-muted p-2">Group</th>
+								<th class="tron-text-muted p-2">Status</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each result.verified as row (row.barcode)}
+								{@const badge = statusBadge(row.status)}
+								<tr class="border-t border-[var(--color-tron-border)]">
+									<td class="p-2 font-mono">{row.barcode}</td>
+									<td class="p-2 font-mono text-[var(--color-tron-cyan)]">{row.assay?._id ?? row.assay?.skuCode ?? '—'}</td>
+									<td class="tron-text-muted p-2">{groupLabel(row)}</td>
+									<td class="p-2">
+										<span class="rounded-full px-2 py-1 text-xs font-medium {badge.class}">{badge.label}</span>
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+
+			{#if result.skipped.length > 0}
+				<p class="tron-text-muted mt-3 text-sm">Skipped:</p>
+				<ul class="tron-text-muted mt-1 list-inside list-disc text-xs">
+					{#each result.skipped as s (s.barcode)}
+						<li><span class="font-mono">{s.barcode}</span> — {s.reason}</li>
+					{/each}
+				</ul>
+			{/if}
+		</div>
+	{/if}
 
 	<!-- Existing cartridges -->
 	<div class="tron-card">
@@ -328,7 +318,7 @@
 							<tr class="border-t border-[var(--color-tron-border)]">
 								<td class="p-2 font-mono">{c.barcode}</td>
 								<td class="tron-text-muted p-2">{c.groupId ? (groupNameById.get(c.groupId) ?? '—') : '—'}</td>
-								<td class="tron-text-muted p-2">{c.assay?.skuCode ?? '—'}</td>
+								<td class="tron-text-muted p-2 font-mono">{c.assay?._id ?? c.assay?.skuCode ?? '—'}</td>
 								<td class="p-2">
 									<span class="rounded-full px-2 py-1 text-xs font-medium {badge.class}">{badge.label}</span>
 								</td>
