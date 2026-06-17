@@ -38,18 +38,9 @@
 		return selected?.reagents ?? [];
 	});
 
-	let confirmed = $state(false);
-
-	// Assay-required gate is lifted when Research is selected.
-	let allChecked = $derived(confirmed && (isResearch || !!selectedAssayTypeId) && !isReadonly);
-
-	const items = [
-		'Robot powered on and calibrated',
-		'Deck is clean and ready',
-		'2ml tube rack prepared',
-		'Reagent source tubes available',
-		'PPE worn'
-	];
+	// Assay-required gate is lifted when Research is selected. The old "setup
+	// conditions" checklist + confirm checkbox were removed (informational noise).
+	let allChecked = $derived((isResearch || !!selectedAssayTypeId) && !isReadonly);
 </script>
 
 <div class="space-y-5">
@@ -126,40 +117,6 @@
 		</div>
 	{/if}
 
-	<!-- Checklist (read-only display) -->
-	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-2">
-		{#each items as item}
-			<div class="flex items-center gap-3 text-sm text-[var(--color-tron-text)]">
-				<span class="text-[var(--color-tron-text-secondary)]">•</span>
-				{item}
-			</div>
-		{/each}
-	</div>
-
-	<!-- Single confirm checkbox -->
-	<button
-		type="button"
-		onclick={() => { confirmed = !confirmed; }}
-		class="flex min-h-[44px] w-full items-center gap-4 rounded-lg border px-4 py-3 text-left transition-all {confirmed
-			? 'border-green-500/50 bg-green-900/20'
-			: 'border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] hover:border-[var(--color-tron-cyan)]/30'}"
-	>
-		<div
-			class="flex h-6 w-6 shrink-0 items-center justify-center rounded border-2 transition-colors {confirmed
-				? 'border-green-500 bg-green-500'
-				: 'border-[var(--color-tron-text-secondary)]'}"
-		>
-			{#if confirmed}
-				<svg class="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3">
-					<path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-				</svg>
-			{/if}
-		</div>
-		<span class="text-sm font-medium {confirmed ? 'text-green-300' : 'text-[var(--color-tron-text)]'}">
-			I confirm all setup conditions above are met
-		</span>
-	</button>
-
 	<button
 		type="button"
 		disabled={!allChecked || isReadonly}
@@ -171,7 +128,7 @@
 		{allChecked
 			? 'Confirm Setup'
 			: isResearch
-				? 'Check the box above to continue'
-				: 'Select assay type and check the box above to continue'}
+				? 'Continue'
+				: 'Select an assay type to continue'}
 	</button>
 </div>

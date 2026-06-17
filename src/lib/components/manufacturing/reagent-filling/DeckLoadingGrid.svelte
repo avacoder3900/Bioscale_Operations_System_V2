@@ -157,6 +157,28 @@
 		setTimeout(() => deckInputEl?.focus(), 50);
 	}
 
+	// One-button (mirror wax): robot-scan the deck barcode, auto-confirm, then
+	// sweep every cartridge slot — and auto-complete on a clean sweep so the
+	// operator clicks once and walks away. Falls back to red tiles on misses.
+	let autoRunning = $state(false);
+	async function scanDeckAndCartridges() {
+		if (isReadonly || !robotId || autoRunning) return;
+		autoRunning = true;
+		try {
+			if (!deckId) {
+				await scanDeckWithRobot();
+				if (!deckPendingValue) return; // deck scan failed — error already shown
+				confirmDeck();
+			}
+			await autoSweepCartridges();
+			if (deckId && failedSlots.size === 0 && filledCount > 0) {
+				onComplete({ deckId, cartridgeScans: denseScans() });
+			}
+		} finally {
+			autoRunning = false;
+		}
+	}
+
 	async function processScannedCartridge(
 		scanned: string,
 		opts: { slotIndex?: number; override?: boolean } = {}
@@ -527,6 +549,22 @@
 	{#if step === 'deck'}
 		<!-- Step 1: Deck barcode scan -->
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5">
+			{#if robotId && !isReadonly && !deckPendingValue && !deckId}
+				<button
+					type="button"
+					onclick={scanDeckAndCartridges}
+					disabled={autoRunning || deckScanInFlight || sweepInFlight}
+					class="mb-4 w-full rounded-lg border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-3 text-base font-bold text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40"
+				>
+					{#if autoRunning}
+						<span class="mr-1 inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent align-[-3px]" aria-hidden="true"></span>
+						Scanning deck + cartridges with robot…
+					{:else}
+						Scan deck + cartridges with robot
+					{/if}
+				</button>
+				<p class="mb-3 text-center text-xs text-[var(--color-tron-text-secondary)]">or scan manually below</p>
+			{/if}
 			{#if !deckPendingValue}
 				<div class="flex items-center gap-3">
 					<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)]">
