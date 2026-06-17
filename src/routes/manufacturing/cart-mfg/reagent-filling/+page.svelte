@@ -112,6 +112,55 @@
 	let reagentBatchConfirmed = $state(false);
 	let reagentBatchBarcode = $state<string | null>(null);
 
+	// Protocol params captured BEFORE barcode scanning (mirror wax). Set on the
+	// setup/params step, then replayed to ?/startRun after reagent prep so the run
+	// starts hands-off with those values. Client-only — a reload re-shows the step.
+	let paramsReady = $state(false);
+	let capturedParamsFd = $state<FormData | null>(null);
+	let lastParamsRunId = '';
+	$effect(() => {
+		const rid = data.activeRunId ?? '';
+		if (rid !== lastParamsRunId) {
+			lastParamsRunId = rid;
+			paramsReady = false;
+			capturedParamsFd = null;
+		}
+	});
+
+	function handleParamsConfirmed(fd: FormData) {
+		capturedParamsFd = fd;
+		paramsReady = true; // advance from params step to Barcode Scanning
+	}
+
+	async function startRunWithCapturedParams() {
+		if (!capturedParamsFd || !data.activeRunId) return;
+		capturedParamsFd.set('runId', data.activeRunId);
+		capturedParamsFd.set('reagentBatchBarcode', reagentBatchBarcode ?? '');
+		// Cartridge count is only known after the scan — inject the real count.
+		capturedParamsFd.set('param_cartridges', String(data.cartridges.length));
+		submitting = true;
+		pendingStage = 'Running';
+		try {
+			const res = await fetch('?/startRun', {
+				method: 'POST',
+				body: capturedParamsFd,
+				headers: { 'x-sveltekit-action': 'true' }
+			});
+			const txt = await res.text();
+			if (!res.ok || txt.includes('"type":"failure"')) {
+				errorMsg = 'Auto-start with your parameters failed — start the run manually below.';
+				pendingStage = null;
+			}
+			await invalidateAll();
+			if (data.runState.hasActiveRun && data.runState.stage !== 'Loading') pendingStage = null;
+		} catch (e) {
+			errorMsg = e instanceof Error ? e.message : 'Run start failed';
+			pendingStage = null;
+		} finally {
+			submitting = false;
+		}
+	}
+
 	// Preview mode: ?preview shows all stages with clickable picker
 	const previewParam = $derived($page.url.searchParams.has('preview'));
 	let previewStage = $state<Stage>('Setup');
@@ -145,7 +194,12 @@
 	const TIMELINE = ['Reagent Fill Setup', 'Barcode Scanning', 'Load', 'Run', 'Inspect'] as const;
 	const currentBubbleIndex = $derived.by(() => {
 		const s = stage;
-		if (s === 'Loading') return data.cartridges.length === 0 ? 1 : 2;
+		if (s === 'Loading') {
+			// Before the deck scan: params step shows under "Reagent Fill Setup" (0),
+			// then the deck+cart scan ("Barcode Scanning", 1); after scan = "Load" (2).
+			if (data.cartridges.length === 0) return paramsReady ? 1 : 0;
+			return 2;
+		}
 		if (s === 'Running') return 3;
 		if (s === 'Inspection') return 4;
 		return 0; // Setup (or no run)
@@ -508,8 +562,30 @@
 			readonly={isViewingPast}
 		/>
 
+	{:else if displayStage === 'Loading' && !previewParam && data.cartridges.length === 0 && !paramsReady && data.opentronsRobotId && data.robotProtocols}
+		<!-- Protocol params BEFORE barcode scanning (mirror wax): configure the run
+		     now; after you scan + prep reagents it starts automatically with these. -->
+		<div class="space-y-4">
+			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
+				<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">Set protocol parameters</h3>
+				<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
+					Configure the reagent run now. After you scan the deck + cartridges and prep reagents, the run starts automatically with these values.
+				</p>
+			</div>
+			<ProtocolStartPanel
+				robot={{ _id: data.opentronsRobotId, name: data.robotId }}
+				protocols={data.robotProtocols}
+				lastTipState={data.lastTipState}
+				submitting={submitting}
+				formAction="?/startRun"
+				extraHidden={{ runId: data.activeRunId ?? '' }}
+				submitLabel="Save & continue to barcode scan →"
+				onSubmitIntercept={handleParamsConfirmed}
+			/>
+		</div>
+
 	{:else if displayStage === 'Loading' && (previewParam || data.cartridges.length === 0)}
-		<!-- Step 1: Deck Loading first -->
+		<!-- Step 1: Deck + cartridge scan -->
 		<DeckLoadingGrid
 			onComplete={({ deckId, cartridgeScans }) =>
 				submitForm('loadDeck', { deckId, cartridgeScans: JSON.stringify(cartridgeScans) })}
@@ -524,10 +600,13 @@
 		<ReagentPreparation
 			reagentDefinitions={data.reagentDefinitions as any}
 			cartridgeCount={data.cartridges.length}
-			onComplete={(tubes) => {
+			onComplete={async (tubes) => {
 				reagentBatchBarcode = tubes[0]?.sourceLotId ?? '';
 				reagentBatchConfirmed = true;
-				submitForm('recordReagentPrep', { tubes: JSON.stringify(tubes) });
+				await submitForm('recordReagentPrep', { tubes: JSON.stringify(tubes) });
+				// Hands-off: if params were set before scanning, start the run now with
+				// them. Otherwise fall through to the manual Start Run panel below.
+				if (capturedParamsFd) await startRunWithCapturedParams();
 			}}
 			onSaveNote={async (noteBody) => {
 				// Independent fetch — bypasses submitForm so the page doesn't
