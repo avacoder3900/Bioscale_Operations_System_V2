@@ -11,8 +11,21 @@ six-layer map; memory `project-ot2-stuck-run-blocks-maintenance` is a gotcha for
 ## Status
 - ✅ Audit of all six position-correction layers — done (`CALIBRATION-SYSTEM-WORKSHOP.md`).
 - ✅ Design decisions locked with Jacob (2026-06-16) — see "Decisions" below.
-- ✅ Four PRDs written + committed (`49e760c`).
-- ⬜ Implementation — **not started.**
+- ✅ Four PRDs written + committed (`49e760c`); docs merged to master.
+- 🟡 Implementation — **CALIB-1 server + manual-delta tuner shipped (2026-06-17):**
+  - ✅ `DeckCalibrationEdit` model (`deck_calibration_edits`) — per-hole nudge history.
+  - ✅ apply-edit service (`src/lib/server/services/deck-calibration/apply-edit.ts`):
+    after=before+delta → Mongo `labware_definitions` (source of truth) + best-effort
+    local JSON mirror + AuditLog + history; `deckEditHistory()`.
+  - ✅ Deck-tuner page `/manufacturing/cart-mfg/deck-tuner` — pick deck → hole →
+    nudge X/Y/Z → save (manual delta; testable without a robot).
+  - ⬜ CALIB-0 live-jog session (`jog-session.ts`) + tuner "move-gantry-and-jog"
+    mode — needs LAN; not shipped (won't ship untested robot control). Anchors:
+    `maintenance-clone.ts` helpers; LPC page drives the same via
+    `/api/opentrons-clone/robots/[robotId]/maintenance/*`.
+  - ⬜ CALIB-1-3 "sync deck to robot" (re-bundle via protocol re-upload).
+  - ⬜ CALIB-2 (global-cal surface) — not started. CALIB-3 (Mongo offsets, delete
+    hardcoded ROBOT_OFFSETS) — deferred (invasive .py edits; decks are close).
 
 ## Decisions (locked)
 1. **Feature 1 (deck-JSON hole tuner)** = a dedicated maintenance-run jog wizard that recreates the

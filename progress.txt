@@ -2627,3 +2627,19 @@ REAGENT (parity port — partial, see docs/prds/REAGENT-FLOW-PARITY.md):
   plannedCartridgeCount/mismatch + the scanDeckAndCartridges chain, so where the
   reagent-specific steps sit relative to params is an open question for Jacob.
 npm run check 11-baseline (0 new); builds green. All on master.
+
+=== 2026-06-17 — failed-slot rescan + calibration foundation (autonomous crank) ===
+FAILED-SLOT ROBOT RESCAN (PRD docs/prds/FAILED-SLOT-ROBOT-RESCAN.md):
+- sweep endpoint accepts optional slotIndices[] — walk exactly those slots.
+- wax + reagent DeckLoadingGrid: "Retry N failed slots with robot" button re-sweeps
+  only the red tiles (reusing the focus/grid-search recovery); recovered tiles
+  clear in the absorb loop; wax auto-completes if the retry clears all + count matches.
+CALIBRATION (CALIB-* PRDs merged to master from ralph/labware-calibration):
+- CALIB-1 server: DeckCalibrationEdit model + apply-edit service (Mongo source of
+  truth + best-effort local JSON mirror + history/AuditLog).
+- CALIB-1 manual tuner page /manufacturing/cart-mfg/deck-tuner (pick deck → hole →
+  nudge X/Y/Z → save). Testable without a robot.
+- NOT done (need LAN / risky blind): CALIB-0 live-jog session + tuner jog mode;
+  CALIB-1-3 sync-to-robot; CALIB-2 global-cal surface; CALIB-3 Mongo offsets
+  (invasive .py edits). See CALIB-NEXT-STEPS.md.
+npm run check 11-baseline (0 new errors); builds green. All on master.
