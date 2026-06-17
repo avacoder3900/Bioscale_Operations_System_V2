@@ -140,6 +140,17 @@
 	const displayStage = $derived(previewParam ? previewStage : viewStage);
 	const isPreviewOrPast = $derived(previewParam || isViewingPast);
 
+	// Timeline bubbles (5): the Loading stage is split into "Barcode Scanning"
+	// (deck + cartridge scan, cartridges===0) and "Load" (reagent prep, cartridges>0).
+	const TIMELINE = ['Reagent Fill Setup', 'Barcode Scanning', 'Load', 'Run', 'Inspect'] as const;
+	const currentBubbleIndex = $derived.by(() => {
+		const s = stage;
+		if (s === 'Loading') return data.cartridges.length === 0 ? 1 : 2;
+		if (s === 'Running') return 3;
+		if (s === 'Inspection') return 4;
+		return 0; // Setup (or no run)
+	});
+
 	function stageLabel(s: string): string {
 		switch (s) {
 			case 'Setup': return '1. Setup';
@@ -384,7 +395,7 @@
 				</span>
 				<div class="flex items-center gap-3">
 					<span class="text-xs text-[var(--color-tron-text-secondary)]">
-						Stage {currentStageIndex + 1} of {STAGES.length}
+						Stage {currentBubbleIndex + 1} of {TIMELINE.length}
 					</span>
 					<a href="?preview" class="rounded border border-[var(--color-tron-orange)]/40 px-2 py-0.5 text-xs text-[var(--color-tron-orange)] hover:bg-[var(--color-tron-orange)]/10">
 						Preview
@@ -408,26 +419,12 @@
 				</div>
 			</div>
 			<div class="flex items-center gap-1">
-				<button
-					type="button"
-					disabled={viewStageIndex <= 0}
-					onclick={() => { viewStageIndex = Math.max(0, viewStageIndex - 1); }}
-					class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)] disabled:opacity-30 disabled:hover:border-[var(--color-tron-border)] disabled:hover:text-[var(--color-tron-text-secondary)]"
-				>
-					<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-						<path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
-					</svg>
-				</button>
-
-				{#each STAGES as s, i (s)}
-					{@const isCurrent = i === currentStageIndex}
-					{@const isPast = i < currentStageIndex}
-					{@const isViewing = i === viewStageIndex}
+				{#each TIMELINE as label, i (label)}
+					{@const isCurrent = i === currentBubbleIndex}
+					{@const isPast = i < currentBubbleIndex}
 					<div class="flex flex-1 flex-col items-center gap-1">
 						<div
-							class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-colors {isViewing && !isCurrent
-								? 'ring-2 ring-[var(--color-tron-yellow)]'
-								: ''} {isCurrent
+							class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-colors {isCurrent
 								? 'bg-[var(--color-tron-cyan)] text-white'
 								: isPast
 									? 'bg-green-600 text-white'
@@ -442,10 +439,10 @@
 									? 'text-green-400'
 									: 'text-[var(--color-tron-text-secondary)]'}"
 						>
-							{stageLabel(s)}
+							{label}
 						</span>
 					</div>
-					{#if i < STAGES.length - 1}
+					{#if i < TIMELINE.length - 1}
 						<div
 							class="mt-[-16px] h-0.5 flex-1 {isPast
 								? 'bg-green-600'
@@ -453,19 +450,6 @@
 						></div>
 					{/if}
 				{/each}
-
-				<button
-					type="button"
-					disabled={viewStageIndex >= STAGES.length - 1}
-					onclick={() => { viewStageIndex = Math.min(STAGES.length - 1, viewStageIndex + 1); }}
-					class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border transition-colors disabled:opacity-30 {viewStageIndex >= currentStageIndex
-						? 'border-amber-500/50 text-amber-400 hover:border-amber-500 hover:text-amber-300'
-						: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'} disabled:hover:border-[var(--color-tron-border)] disabled:hover:text-[var(--color-tron-text-secondary)]"
-				>
-					<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-						<path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-					</svg>
-				</button>
 			</div>
 		</div>
 
