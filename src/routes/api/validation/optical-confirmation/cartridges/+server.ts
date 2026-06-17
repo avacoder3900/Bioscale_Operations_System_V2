@@ -3,7 +3,7 @@ import type { RequestHandler } from './$types';
 import { connectDB, mongoose, CartridgeGroup, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 
-// Live status check: does a cartridge_record exist for this barcode, and what is its current assayId?
+// Status check: is the cartridge_records doc for this barcode "linked" + which assayId?
 export const GET: RequestHandler = async ({ url, locals }) => {
 	if (!locals.user) return json({ error: 'Unauthorized' }, { status: 401 });
 	requirePermission(locals.user, 'cartridge:read');
@@ -11,14 +11,14 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	const barcode = url.searchParams.get('barcode')?.trim();
 	if (!barcode) return json({ exists: false });
 	const col = mongoose.connection.db.collection('cartridge_records');
-	const c = await col.findOne({ _id: barcode as any }, { projection: { assayId: 1, currentPhase: 1 } });
+	const c = await col.findOne({ _id: barcode as any }, { projection: { assayId: 1, status: 1, serialNumber: 1 } });
 	if (!c) return json({ exists: false });
-	return json({ exists: true, assayId: (c as any).assayId ?? null, currentPhase: (c as any).currentPhase ?? null });
+	return json({ exists: true, assayId: (c as any).assayId ?? null, status: (c as any).status ?? null, serialNumber: (c as any).serialNumber ?? null });
 };
 
-// Categorize cartridges as optical-test by writing assayId directly onto the cartridge_records docs.
-// Uses a raw collection update (find by _id = scanned barcode) so the field lands regardless of the
-// Mongoose schema/sacred middleware, then re-reads from the SAME collection as proof.
+// Make cartridges runnable on the SPU by writing the research/SPU cartridge shape onto their
+// cartridge_records docs (status: 'linked' + assayId + serialNumber + checkpoints). The SPU keys off
+// these fields — assayId alone is not enough. Upserts by _id = scanned barcode.
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!locals.user) return json({ error: 'Unauthorized' }, { status: 401 });
 	requirePermission(locals.user, 'cartridge:write');
@@ -32,7 +32,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	const assayId = (body.assayId ?? '').toString().trim();
 	if (!assayId) return json({ error: 'Assay ID is required' }, { status: 400 });
 
-	// Resolve the validation group (optional): existing groupId, or create one from groupName.
+	// Resolve the validation group (optional).
 	let groupId: string | undefined = body.groupId?.trim() || undefined;
 	let groupName: string | undefined;
 	if (!groupId && body.groupName?.trim()) {
@@ -46,37 +46,65 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		if (grp) groupName = grp.name;
 	}
 
+	const db = mongoose.connection.db;
+	const dbName = db.databaseName;
+	const col = db.collection('cartridge_records');
+
+	// Friendly assay name from the catalog (research docs leave it blank, but nice to have).
+	const assayDef = await db.collection('assay_definitions').findOne({ _id: assayId as any }, { projection: { name: 1 } });
+	const assayName = (assayDef as any)?.name ?? '';
+
 	const now = new Date();
-	const col = mongoose.connection.db.collection('cartridge_records');
-	const dbName = mongoose.connection.db.databaseName;
+	const nowIso = now.toISOString();
+	const who = (locals.user as any).username || (locals.user as any).email || locals.user._id;
+	const checkpoint = { who, when: nowIso, where: { city_name: 'Houston' } };
+	const expirationDate = new Date(now.getTime() + 4 * 365 * 24 * 3600 * 1000).toISOString();
+	const serialMiddle = (now.getTime() % 1e11).toString().padStart(11, '0');
+
 	const updated: string[] = [];
 	const skipped: { barcode: string; reason: string }[] = [];
 
-	for (const barcode of barcodes) {
-		const setFields: Record<string, unknown> = {
-			assayId,
-			assayCategory: 'optical_test',
-			assayCategorizedAt: now,
-			assayCategorizedBy: locals.user._id
-		};
-		if (groupId) setFields.validationGroupId = groupId;
+	for (let i = 0; i < barcodes.length; i++) {
+		const barcode = barcodes[i];
+		const serialNumber = `${assayId}-${serialMiddle}-${String(i + 1).padStart(3, '0')}`;
 		try {
-			const res = await col.updateOne({ _id: barcode as any }, { $set: setFields });
-			if (res.matchedCount === 0) {
-				skipped.push({ barcode, reason: `no cartridge_record with _id "${barcode}"` });
-			} else {
-				updated.push(barcode);
-			}
+			await col.updateOne(
+				{ _id: barcode as any },
+				{
+					$set: {
+						status: 'linked',
+						statusUpdatedOn: nowIso,
+						assayId,
+						assayName,
+						serialNumber,
+						checkpoints: { created: checkpoint, linked: checkpoint },
+						quantity: 0,
+						expirationDate,
+						// BIMS-side categorization
+						assayCategory: 'optical_test',
+						validationGroupId: groupId ?? null
+					},
+					$setOnInsert: {
+						validationErrors: [],
+						photos: [],
+						reagentChain: [],
+						corrections: [],
+						photoSequence: 0
+					}
+				},
+				{ upsert: true }
+			);
+			updated.push(barcode);
 		} catch (err) {
 			skipped.push({ barcode, reason: err instanceof Error ? err.message : 'update failed' });
 		}
 	}
 
-	// Re-read the just-edited docs from cartridge_records (proof the documents changed in this DB).
+	// Re-read from cartridge_records (proof the docs are now in the runnable shape).
 	const verified = updated.length
 		? await col
 				.find({ _id: { $in: updated as any } })
-				.project({ _id: 1, assayId: 1, assayCategory: 1, validationGroupId: 1, currentPhase: 1 })
+				.project({ _id: 1, status: 1, assayId: 1, serialNumber: 1, assayCategory: 1, validationGroupId: 1 })
 				.toArray()
 		: [];
 
@@ -85,10 +113,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			tableName: 'cartridge_records',
 			recordId: groupId ?? 'batch',
 			action: 'UPDATE',
-			newData: { assayId, count: updated.length, groupId, groupName, barcodes: updated },
+			newData: { assayId, status: 'linked', count: updated.length, groupId, groupName, barcodes: updated },
 			changedBy: locals.user._id,
 			changedAt: now,
-			reason: 'Categorize cartridges as optical-test (set assayId on cartridge_records)'
+			reason: 'Make cartridges runnable (research/SPU shape: status linked + assayId + serialNumber)'
 		});
 	}
 
@@ -99,6 +127,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		skipped,
 		verified: JSON.parse(JSON.stringify(verified)),
 		assayId,
+		assayName,
 		groupId,
 		groupName
 	});

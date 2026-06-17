@@ -8,17 +8,17 @@
 	}
 	interface Cartridge {
 		_id: string; // = barcode
+		status?: string | null;
 		assayId?: string | null;
+		serialNumber?: string | null;
 		validationGroupId?: string | null;
-		currentPhase?: string | null;
-		assayCategorizedAt?: string | null;
 	}
 	interface VerifiedRow {
 		_id: string;
+		status?: string | null;
 		assayId?: string | null;
-		assayCategory?: string | null;
+		serialNumber?: string | null;
 		validationGroupId?: string | null;
-		currentPhase?: string | null;
 	}
 	interface Props {
 		data: {
@@ -43,6 +43,7 @@
 		skipped: { barcode: string; reason: string }[];
 		verified: VerifiedRow[];
 		assayId: string;
+		assayName?: string;
 		groupName?: string;
 		dbName: string;
 	} | null>(null);
@@ -103,6 +104,7 @@
 				skipped: r.skipped ?? [],
 				verified: r.verified ?? [],
 				assayId: r.assayId,
+				assayName: r.assayName,
 				groupName: r.groupName,
 				dbName: r.dbName
 			};
@@ -122,7 +124,8 @@
 	<div>
 		<h1 class="tron-heading text-2xl font-bold">Optical Confirmation — Cartridges</h1>
 		<p class="tron-text-muted mt-1">
-			Categorize cartridges as optical-test by writing an assay ID directly onto their
+			Make cartridges runnable on the SPU — stamps the research/SPU shape
+			(<span class="font-mono">status: "linked"</span> + assayId + serialNumber) onto their
 			<span class="font-mono">cartridge_records</span> documents.
 		</p>
 		<p class="tron-text-muted mt-1 text-xs">
@@ -202,7 +205,7 @@
 				disabled={!isValid || busy}
 				class="flex w-full items-center justify-center gap-3 rounded-lg bg-[var(--color-tron-orange)] px-6 py-4 text-lg font-semibold text-[var(--color-tron-bg-primary)] transition-all hover:bg-[var(--color-tron-orange)]/90 disabled:cursor-not-allowed disabled:opacity-50"
 			>
-				{busy ? 'Writing…' : `Set assay ID on ${parsedBarcodes.length || ''} cartridge(s)`}
+				{busy ? 'Writing…' : `Make ${parsedBarcodes.length || ''} cartridge(s) runnable`}
 			</button>
 			{#if !isValid}
 				<p class="tron-text-muted text-center text-xs">
@@ -236,18 +239,20 @@
 						<thead class="bg-[var(--color-tron-bg-secondary)]">
 							<tr class="text-left">
 								<th class="tron-text-muted p-2">Cartridge _id (barcode)</th>
-								<th class="tron-text-muted p-2">assayId (stored in Mongo)</th>
+								<th class="tron-text-muted p-2">status</th>
+								<th class="tron-text-muted p-2">assayId</th>
+								<th class="tron-text-muted p-2">serialNumber</th>
 								<th class="tron-text-muted p-2">Group</th>
-								<th class="tron-text-muted p-2">Phase</th>
 							</tr>
 						</thead>
 						<tbody>
 							{#each result.verified as row (row._id)}
 								<tr class="border-t border-[var(--color-tron-border)]">
 									<td class="p-2 font-mono">{row._id}</td>
+									<td class="p-2 font-mono {row.status === 'linked' ? 'text-[var(--color-tron-green)]' : 'text-[var(--color-tron-red)]'}">{row.status ?? '—'}</td>
 									<td class="p-2 font-mono text-[var(--color-tron-cyan)]">{row.assayId ?? '—'}</td>
+									<td class="tron-text-muted p-2 font-mono">{row.serialNumber ?? '—'}</td>
 									<td class="tron-text-muted p-2">{groupLabel(row.validationGroupId)}</td>
-									<td class="tron-text-muted p-2">{row.currentPhase ?? '—'}</td>
 								</tr>
 							{/each}
 						</tbody>
@@ -269,7 +274,7 @@
 	<!-- Existing categorized cartridges -->
 	<div class="tron-card">
 		<div class="flex items-center justify-between border-b border-[var(--color-tron-border)] p-4">
-			<h2 class="tron-heading text-lg font-semibold">Optical-Test Cartridges (assayId set)</h2>
+			<h2 class="tron-heading text-lg font-semibold">Optical-Test Cartridges (status: linked)</h2>
 			<span class="tron-text-muted text-sm">{cartridges.length} shown</span>
 		</div>
 		{#if cartridges.length === 0}
@@ -280,18 +285,20 @@
 					<thead class="sticky top-0 bg-[var(--color-tron-bg-secondary)]">
 						<tr class="text-left">
 							<th class="tron-text-muted p-2">Cartridge _id</th>
+							<th class="tron-text-muted p-2">status</th>
 							<th class="tron-text-muted p-2">assayId</th>
+							<th class="tron-text-muted p-2">serialNumber</th>
 							<th class="tron-text-muted p-2">Group</th>
-							<th class="tron-text-muted p-2">Phase</th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each cartridges as c (c._id)}
 							<tr class="border-t border-[var(--color-tron-border)]">
 								<td class="p-2 font-mono">{c._id}</td>
+								<td class="p-2 font-mono {c.status === 'linked' ? 'text-[var(--color-tron-green)]' : ''}">{c.status ?? '—'}</td>
 								<td class="p-2 font-mono">{c.assayId ?? '—'}</td>
+								<td class="tron-text-muted p-2 font-mono">{c.serialNumber ?? '—'}</td>
 								<td class="tron-text-muted p-2">{groupLabel(c.validationGroupId)}</td>
-								<td class="tron-text-muted p-2">{c.currentPhase ?? '—'}</td>
 							</tr>
 						{/each}
 					</tbody>
