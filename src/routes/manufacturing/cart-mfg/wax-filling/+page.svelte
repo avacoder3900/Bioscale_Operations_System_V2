@@ -699,9 +699,15 @@
 		}
 	}
 
-	function handleDeckRemoved() {
+	function handleDeckRemoved(storageLocation: string) {
+		// Deck-removed is now the single commit: write the waxFilling phase record,
+		// store in the chosen fridge, flip the whole deck to wax_stored, complete
+		// the run. Replaces the old cooling → QC → storage chain.
 		if (data.runState.runId) {
-			submitAction('confirmDeckRemoved', { runId: data.runState.runId });
+			submitAction('storeDeckAndComplete', {
+				runId: data.runState.runId,
+				storageLocation
+			});
 		}
 	}
 
@@ -1461,6 +1467,7 @@
 				runId={previewParam ? 'WXR-PREVIEW' : (data.runState.runId ?? '')}
 				serverRunStartTime={previewParam ? new Date() : (data.runState.runStartTime ? new Date(data.runState.runStartTime) : null)}
 				runFinished={previewParam ? true : runFinished}
+				fridges={data.fridges}
 				onDeckRemoved={handleDeckRemoved}
 				onAborted={handleAborted}
 				readonly={isPreviewOrPast}

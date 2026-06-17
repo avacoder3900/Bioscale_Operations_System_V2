@@ -2674,3 +2674,27 @@ REAGENT INSPECT AFTER CUT TOP SEAL (PRD docs/prds/REAGENT-INSPECT-AFTER-TOPSEAL.
   run mid-cooling would orphan the cooling batch. Needs the same off-page treatment
   reagent inspection got. Wax deck-removed gating IS shipped.
 npm run check 11-baseline (0 new errors); builds green. All on master.
+
+=== 2026-06-17 (later) — wax: deck-removed → pick fridge → wax_stored (one commit) ===
+Carts were getting stuck at wax_filling: the wax-filling page only owned through
+cooling, then handed off to Opentron Control for completeQC (→wax_filled) +
+recordStorage + completeRun (→wax_stored). With QC now being the wax-inspect
+photo/verdict flow on a stored cart, that cooling→QC→storage chain was redundant
+and operators were leaving runs stranded at QC on Opentron Control (carts stuck
+wax_filling). Fix: deck-removal is now the single commit on the wax-filling page.
+- New action storeDeckAndComplete (wax-filling +page.server.ts): writes the
+  waxFilling phase WRITE-ONCE record + per-cart wax consumption (PT-CT-105, the two
+  non-redundant side effects from completeQC) + waxStorage fridge location, flips
+  the whole deck wax_filling → wax_stored, and completes the run (status 'completed',
+  not page-owned → page resets to idle).
+- RunExecution.svelte: "Confirm — Deck Removed" (gated on runFinished) now opens a
+  fridge picker (pick_fridge phase) → "Store deck & finish" → onDeckRemoved(fridgeId).
+  Added fridges prop; onDeckRemoved now takes the storageLocation.
+- wax page: handleDeckRemoved(storageLocation) → storeDeckAndComplete; passes
+  data.fridges to RunExecution.
+- Cooling timer + on-page QC/Storage stages are now unreachable for new runs (run
+  completes at deck-removal). Left as dead code; old completeQC/completeRun/
+  recordStorage + Opentron Control wax QC remain for any already-detached legacy
+  runs. Pre-existing stuck carts (e.g. run XymSat5wqsDIlWbp-8g7a at status QC) still
+  need finishing on Opentron Control — not retroactively fixed.
+npm run check 11-baseline (0 new errors); builds green. All on master.

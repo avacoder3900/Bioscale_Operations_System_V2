@@ -5,7 +5,8 @@
 		runId: string;
 		serverRunStartTime?: Date | null;
 		runFinished?: boolean;
-		onDeckRemoved: () => void;
+		fridges?: { id: string; displayName: string; barcode: string }[];
+		onDeckRemoved: (storageLocation: string) => void;
 		onRunAgain?: (() => void) | null;
 		onAborted: (data: {
 			usableCartridgeIds: string[];
@@ -20,6 +21,7 @@
 		runId,
 		serverRunStartTime = null,
 		runFinished = false,
+		fridges = [],
 		onDeckRemoved,
 		onRunAgain = null,
 		onAborted,
@@ -29,9 +31,11 @@
 	// Run progress/completion is shown by the EmbeddedRunController on the
 	// page (OT-2 polling) — this component only owns the deck-removed
 	// confirmation and the abort flow.
-	type Phase = 'remove_deck' | 'abort_confirm1' | 'abort_confirm2' | 'abort_recovery';
+	type Phase = 'remove_deck' | 'pick_fridge' | 'abort_confirm1' | 'abort_confirm2' | 'abort_recovery';
 
 	let phase = $state<Phase>('remove_deck');
+	// Fridge the deck is stored in — picked after "Confirm — Deck Removed".
+	let selectedFridge = $state('');
 
 	// Abort recovery state
 	let usableScans = $state<string[]>([]);
@@ -41,7 +45,13 @@
 	let columnsCompleted = $state(0);
 
 	function handleDeckRemoved() {
-		onDeckRemoved();
+		// Don't commit yet — first pick the fridge the deck is stored in.
+		phase = 'pick_fridge';
+	}
+
+	function confirmStore() {
+		if (!selectedFridge) return;
+		onDeckRemoved(selectedFridge);
 	}
 
 	function handleAbortStep1() {
@@ -187,6 +197,52 @@
 				class="min-h-[44px] rounded-lg border border-red-500/50 bg-red-900/20 px-6 py-3 text-sm font-semibold text-red-400 transition-all hover:bg-red-900/30 disabled:opacity-50"
 			>
 				Abort Run
+			</button>
+		</div>
+	{/if}
+
+	<!-- Pick the fridge the deck is stored in, then commit the whole deck to
+	     wax_stored (WAX-FLOW: deck-removed → fridge → wax_stored). -->
+	{#if phase === 'pick_fridge'}
+		<div class="flex flex-col items-center gap-5 py-4">
+			<div class="w-full max-w-sm text-center">
+				<p class="text-lg font-semibold text-[var(--color-tron-text)]">Where is this deck stored?</p>
+				<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
+					Pick the fridge — every cartridge on this run moves to <span class="font-mono text-[var(--color-tron-cyan)]">wax_stored</span>.
+				</p>
+			</div>
+			<div class="w-full max-w-sm">
+				<label for="store-fridge" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Fridge</label>
+				<select
+					id="store-fridge"
+					bind:value={selectedFridge}
+					disabled={isReadonly}
+					class="min-h-[44px] w-full rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none disabled:opacity-50"
+				>
+					<option value="">Select a fridge…</option>
+					{#each fridges as f (f.id)}
+						<option value={f.id}>{f.displayName}{f.barcode ? ` (${f.barcode})` : ''}</option>
+					{/each}
+				</select>
+				{#if fridges.length === 0}
+					<p class="mt-1 text-xs text-[var(--color-tron-orange)]">No active fridges found — register one under Equipment.</p>
+				{/if}
+			</div>
+			<button
+				type="button"
+				onclick={confirmStore}
+				disabled={isReadonly || !selectedFridge}
+				class="min-h-[44px] w-full max-w-sm rounded-lg border border-green-500/50 bg-green-900/20 px-8 py-4 text-lg font-bold text-green-400 transition-all hover:bg-green-900/30 disabled:cursor-not-allowed disabled:opacity-50"
+			>
+				Store deck &amp; finish
+			</button>
+			<button
+				type="button"
+				onclick={() => (phase = 'remove_deck')}
+				disabled={isReadonly}
+				class="text-xs text-[var(--color-tron-text-secondary)] underline hover:text-[var(--color-tron-cyan)] disabled:opacity-50"
+			>
+				← Back
 			</button>
 		</div>
 	{/if}

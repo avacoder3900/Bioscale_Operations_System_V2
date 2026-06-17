@@ -1156,6 +1156,121 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
+	/**
+	 * Confirm deck removed + store in one commit (WAX-FLOW: deck-removed → fridge
+	 * → wax_stored). Replaces the old cooling → completeQC → recordStorage →
+	 * completeRun chain on this page now that QC is the wax-inspect photo/verdict
+	 * flow on an already-stored cart. The operator clicks "Confirm — Deck Removed",
+	 * picks the fridge the deck is stored in, and every cartridge on the run goes
+	 * straight wax_filling → wax_stored. Preserves the two non-redundant side
+	 * effects from the old chain: the waxFilling phase WRITE-ONCE record (DHR /
+	 * traceability) and the per-cartridge wax consumption (PT-CT-105).
+	 */
+	storeDeckAndComplete: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const runId = (data.get('runId') as string)?.trim();
+		const storageLocation = (data.get('storageLocation') as string)?.trim();
+		if (!runId) return fail(400, { error: 'Missing runId' });
+		if (!storageLocation) return fail(400, { error: 'Pick a fridge to store the deck in' });
+
+		const run = await WaxFillingRun.findById(runId).lean() as any;
+		if (!run) return fail(404, { error: 'Run not found' });
+		// Idempotent: a second click after success is a no-op.
+		if (run.status === 'completed') return { success: true };
+
+		const now = new Date();
+		// S1a: resolve the scanned/selected fridge reference to Equipment._id.
+		const resolvedLocationId = await resolveFridgeId(storageLocation);
+
+		if (run.cartridgeIds?.length) {
+			// Locked carts (linked/underway/completed/voided/scrapped) skipped + audited.
+			const { safeIds } = await protectLockedCarts(
+				run.cartridgeIds,
+				'storeDeckAndComplete',
+				runId,
+				{ _id: locals.user!._id, username: locals.user!.username }
+			);
+
+			if (safeIds.length > 0) {
+				// One write per cart: stamp the waxFilling phase record + storage
+				// location and flip straight to wax_stored. Filter on status so we
+				// only touch this run's carts that are actually still wax_filling.
+				const bulkOps = safeIds.map((cid: string) => ({
+					updateOne: {
+						filter: { _id: cid, status: 'wax_filling' },
+						update: {
+							$set: {
+								'waxFilling.runId': run._id,
+								'waxFilling.robotId': run.robot?._id,
+								'waxFilling.robotName': run.robot?.name,
+								'waxFilling.deckId': run.deckId,
+								'waxFilling.waxTubeId': run.waxTubeId,
+								'waxFilling.waxSourceLot': run.waxSourceLot,
+								'waxFilling.operator': run.operator,
+								'waxFilling.runStartTime': run.runStartTime,
+								'waxFilling.runEndTime': now,
+								'waxFilling.recordedAt': now,
+								'waxStorage.locationId': resolvedLocationId,
+								'waxStorage.location': storageLocation,
+								'waxStorage.operator': { _id: locals.user!._id, username: locals.user!.username },
+								'waxStorage.timestamp': now,
+								'waxStorage.recordedAt': now,
+								status: 'wax_stored'
+							}
+						}
+					}
+				}));
+				await CartridgeRecord.bulkWrite(bulkOps);
+
+				// Consume wax (PT-CT-105) per cartridge — same as the old completeQC.
+				try {
+					const waxPartId = await resolvePartId('PT-CT-105');
+					for (const cid of safeIds) {
+						await recordTransaction({
+							transactionType: 'consumption',
+							partDefinitionId: waxPartId ?? undefined,
+							cartridgeRecordId: cid,
+							lotId: run.waxSourceLot ?? undefined,
+							quantity: 1,
+							manufacturingStep: 'wax_filling',
+							manufacturingRunId: String(run._id),
+							operatorId: run.operator?._id,
+							operatorUsername: run.operator?.username,
+							notes: `Wax-filled cartridge stored (deck-removed commit) in run ${run._id}, fridge ${storageLocation}`
+						});
+					}
+				} catch (e) {
+					console.error('[storeDeckAndComplete] consumption recordTransaction failed:', e instanceof Error ? e.message : e);
+				}
+			}
+		}
+
+		// Complete the run — robot freed, deck off. status='completed' is not
+		// page-owned, so the load drops it and the page resets to "Start new run".
+		await WaxFillingRun.findByIdAndUpdate(runId, {
+			$set: { status: 'completed', deckRemovedTime: now, robotReleasedAt: now, runEndTime: now }
+		});
+
+		try {
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'wax_filling_runs',
+				recordId: runId,
+				action: 'UPDATE',
+				changedBy: locals.user?.username,
+				changedAt: now,
+				newData: { status: 'completed', cartridgeStatus: 'wax_stored', storageLocation }
+			});
+		} catch (e) {
+			console.error('[storeDeckAndComplete] audit log failed:', e instanceof Error ? e.message : e);
+		}
+
+		return { success: true };
+	},
+
 	/** Confirm cooling — transition Awaiting Removal → QC; record oven exit */
 	confirmCooling: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
