@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { connectDB, LabCartridge, CartridgeGroup, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, OpticalTestCartridge, ValidationGroup, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 
 // Live status check for a barcode so the UI can tell the operator whether it is free or already used.
@@ -10,19 +10,19 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	await connectDB();
 	const barcode = url.searchParams.get('barcode')?.trim();
 	if (!barcode) return json({ exists: false });
-	const c = await LabCartridge.findOne({ barcode }).select('status cartridgeType assay').lean();
+	const c = await OpticalTestCartridge.findOne({ barcode }).select('status assay').lean();
 	if (!c) return json({ exists: false });
 	return json({
 		exists: true,
 		status: (c as any).status ?? null,
-		cartridgeType: (c as any).cartridgeType ?? null,
+		cartridgeType: 'optical_test',
 		used: (c as any).status !== 'available',
 		assaySkuCode: (c as any).assay?.skuCode ?? null
 	});
 };
 
 // Batch-register optical-test cartridges. The assay ID is entered directly and written onto each
-// cartridge document; cartridges are assigned to a validation group (CartridgeGroup). After writing,
+// cartridge document; cartridges are assigned to a validation group (ValidationGroup). After writing,
 // the created docs are re-read from Mongo and returned as `verified` so the UI can prove the change.
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!locals.user) return json({ error: 'Unauthorized' }, { status: 401 });
@@ -43,12 +43,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	let groupName: string | undefined;
 	if (!groupId && body.groupName?.trim()) {
 		const name = body.groupName.trim();
-		let grp: any = await CartridgeGroup.findOne({ name }).lean();
-		if (!grp) grp = await CartridgeGroup.create({ _id: generateId(), name, createdBy: locals.user._id });
+		let grp: any = await ValidationGroup.findOne({ name }).lean();
+		if (!grp) grp = await ValidationGroup.create({ _id: generateId(), name, createdBy: locals.user._id });
 		groupId = grp._id;
 		groupName = name;
 	} else if (groupId) {
-		const grp: any = await CartridgeGroup.findById(groupId).select('name').lean();
+		const grp: any = await ValidationGroup.findById(groupId).select('name').lean();
 		if (!grp) return json({ error: 'Validation group not found' }, { status: 400 });
 		groupName = grp.name;
 	}
@@ -59,16 +59,15 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	const skipped: { barcode: string; reason: string }[] = [];
 
 	for (const barcode of barcodes) {
-		const existing = await LabCartridge.findOne({ barcode }).select('status cartridgeType').lean();
+		const existing = await OpticalTestCartridge.findOne({ barcode }).select('status').lean();
 		if (existing) {
-			skipped.push({ barcode, reason: `already exists (${(existing as any).cartridgeType}/${(existing as any).status})` });
+			skipped.push({ barcode, reason: `already exists (status: ${(existing as any).status})` });
 			continue;
 		}
 		try {
-			const cartridge = await LabCartridge.create({
+			const cartridge = await OpticalTestCartridge.create({
 				_id: generateId(),
 				barcode,
-				cartridgeType: 'optical_test',
 				status: 'available',
 				groupId,
 				assay: { _id: assayId, skuCode: assayId },
@@ -85,14 +84,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	// Read the just-written docs back out of Mongo (proof the documents changed on the BIMS side).
 	const createdIds = created.map((c) => c._id);
 	const verified = createdIds.length
-		? await LabCartridge.find({ _id: { $in: createdIds } })
-				.select('barcode assay groupId status cartridgeType updatedAt')
+		? await OpticalTestCartridge.find({ _id: { $in: createdIds } })
+				.select('barcode assay groupId status updatedAt')
 				.lean()
 		: [];
 
 	if (created.length > 0) {
 		await AuditLog.create({
-			tableName: 'lab_cartridges', recordId: groupId ?? 'batch', action: 'INSERT',
+			tableName: 'optical_test_cartridges', recordId: groupId ?? 'batch', action: 'INSERT',
 			newData: { count: created.length, assayId, groupId, groupName, barcodes: created.map((c) => c.barcode) },
 			changedBy: locals.user._id, changedAt: now, reason: 'Batch-capture optical-test cartridges'
 		});

@@ -1,6 +1,8 @@
 // Tier 1: Sacred Documents
 export { User } from './user.js';
 export { CartridgeRecord } from './cartridge-record.js';
+export { OpticalTestCartridge } from './optical-test-cartridge.js';
+export { ValidationGroup } from './validation-group.js';
 export { Spu } from './spu.js';
 export { AssayDefinition } from './assay-definition.js';
 export { ReagentBatchRecord } from './reagent-batch-record.js';
@@ -40,10 +42,7 @@ export { OpentronsRobot } from './opentrons-robot.js';
 export { Consumable } from './consumable.js';
 export { BomItem } from './bom-item.js';
 export { PartDefinition } from './part-definition.js';
-export { CartridgeGroup } from './cartridge-group.js';
-export { LabCartridge } from './lab-cartridge.js';
 export { FirmwareDevice } from './firmware-device.js';
-export { FirmwareCartridge } from './firmware-cartridge.js';
 export { TestResult } from './test-result.js';
 export { ShippingLot } from './shipping-lot.js';
 export { ShippingPackage } from './shipping-package.js';
