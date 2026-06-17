@@ -1,28 +1,37 @@
 <script lang="ts">
 	import { invalidateAll } from '$app/navigation';
 
-	interface Group {
+	interface Arm {
+		name: string;
+		assayId: string;
+		assayName?: string;
+	}
+	interface Experiment {
 		_id: string;
 		name: string;
-		color?: string;
+		program?: string;
+		folderId?: string;
+		arms: Arm[];
 	}
 	interface Cartridge {
-		_id: string; // = barcode
+		_id: string;
 		status?: string | null;
 		assayId?: string | null;
 		serialNumber?: string | null;
-		validationGroupId?: string | null;
+		experiment?: string | null;
+		arm?: string | null;
 	}
 	interface VerifiedRow {
 		_id: string;
 		status?: string | null;
 		assayId?: string | null;
 		serialNumber?: string | null;
-		validationGroupId?: string | null;
+		experiment?: string | null;
+		arm?: string | null;
 	}
 	interface Props {
 		data: {
-			groups: Group[];
+			experiments: Experiment[];
 			cartridges: Cartridge[];
 			dbName: string;
 		};
@@ -31,10 +40,8 @@
 	let { data }: Props = $props();
 
 	let cartridges = $state<Cartridge[]>(data.cartridges ?? []);
-	let assayId = $state('');
-	let groupName = $state('');
-	let selectedGroupId = $state('');
-	let groupSuggestions = $state<Group[]>([]);
+	let selectedExperimentId = $state('');
+	let selectedArmIndex = $state('');
 	let barcodesText = $state('');
 	let busy = $state(false);
 	let errorMessage = $state<string | null>(null);
@@ -43,40 +50,22 @@
 		skipped: { barcode: string; reason: string }[];
 		verified: VerifiedRow[];
 		assayId: string;
-		assayName?: string;
-		groupName?: string;
+		experiment: string;
+		arm: string;
 		dbName: string;
 	} | null>(null);
 
-	const groupNameById = $derived(new Map((data.groups ?? []).map((g) => [g._id, g.name])));
+	let selectedExperiment = $derived(data.experiments.find((e) => e._id === selectedExperimentId) ?? null);
+	let arms = $derived(selectedExperiment?.arms ?? []);
+	let selectedArm = $derived(selectedArmIndex !== '' ? arms[Number(selectedArmIndex)] : null);
 	let parsedBarcodes = $derived(barcodesText.split(/[\n,]/).map((b) => b.trim()).filter(Boolean));
-	let isValid = $derived(assayId.trim().length > 0 && parsedBarcodes.length > 0);
+	let isValid = $derived(!!selectedExperimentId && selectedArmIndex !== '' && parsedBarcodes.length > 0);
 
-	async function searchGroups() {
-		const q = groupName.trim();
-		selectedGroupId = '';
-		if (!q) {
-			groupSuggestions = [];
-			return;
-		}
-		try {
-			const res = await fetch('/api/validation/optical-confirmation/groups?q=' + encodeURIComponent(q));
-			const r = await res.json();
-			groupSuggestions = r.groups ?? [];
-		} catch {
-			groupSuggestions = [];
-		}
-	}
-
-	function pickGroup(g: Group) {
-		selectedGroupId = g._id;
-		groupName = g.name;
-		groupSuggestions = [];
-	}
-
-	function groupLabel(id?: string | null): string {
-		if (!id) return '—';
-		return groupNameById.get(id) ?? result?.groupName ?? id;
+	function statusColor(s?: string | null) {
+		if (s === 'linked' || s === 'completed') return 'text-[var(--color-tron-green)]';
+		if (s === 'underway') return 'text-[var(--color-tron-cyan)]';
+		if (s === 'cancelled') return 'text-[var(--color-tron-red)]';
+		return '';
 	}
 
 	async function register() {
@@ -85,18 +74,18 @@
 		errorMessage = null;
 		result = null;
 		try {
-			const body: Record<string, unknown> = { barcodes: parsedBarcodes, assayId: assayId.trim() };
-			if (selectedGroupId) body.groupId = selectedGroupId;
-			else if (groupName.trim()) body.groupName = groupName.trim();
-
 			const res = await fetch('/api/validation/optical-confirmation/cartridges', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(body)
+				body: JSON.stringify({
+					experimentId: selectedExperimentId,
+					armIndex: Number(selectedArmIndex),
+					barcodes: parsedBarcodes
+				})
 			});
 			const r = await res.json();
 			if (!res.ok || r.error) {
-				errorMessage = r.error ?? 'Update failed';
+				errorMessage = r.error ?? 'Add to arm failed';
 				return;
 			}
 			result = {
@@ -104,12 +93,11 @@
 				skipped: r.skipped ?? [],
 				verified: r.verified ?? [],
 				assayId: r.assayId,
-				assayName: r.assayName,
-				groupName: r.groupName,
+				experiment: r.experiment,
+				arm: r.arm,
 				dbName: r.dbName
 			};
 			barcodesText = '';
-			groupSuggestions = [];
 			await invalidateAll();
 			cartridges = data.cartridges ?? [];
 		} catch (err) {
@@ -122,68 +110,67 @@
 
 <div class="space-y-6">
 	<div>
-		<h1 class="tron-heading text-2xl font-bold">Optical Confirmation — Cartridges</h1>
+		<h1 class="tron-heading text-2xl font-bold">Optical Confirmation — Add Cartridges to an Experiment Arm</h1>
 		<p class="tron-text-muted mt-1">
-			Make cartridges runnable on the SPU — stamps the research/SPU shape
-			(<span class="font-mono">status: "linked"</span> + assayId + serialNumber) onto their
-			<span class="font-mono">cartridge_records</span> documents.
+			Assign cartridges to an experiment → arm so the SPU runs (and completes) the optical scan. This
+			stamps the runnable research shape (status linked + assay + folder/experiment/arm + serialNumber)
+			onto <span class="font-mono">cartridge_records</span> and registers them on the arm.
 		</p>
 		<p class="tron-text-muted mt-1 text-xs">
-			BIMS is connected to database: <span class="font-mono text-[var(--color-tron-cyan)]">{data.dbName}</span>
-			— make sure that's the database you're inspecting.
+			Database: <span class="font-mono text-[var(--color-tron-cyan)]">{data.dbName}</span>
 		</p>
 	</div>
 
-	<!-- Register -->
 	<div class="tron-card p-6">
-		<h2 class="tron-heading mb-4 text-lg font-semibold">Set assay ID on cartridges</h2>
+		<h2 class="tron-heading mb-4 text-lg font-semibold">Register barcodes</h2>
 
 		<div class="space-y-4">
+			<!-- Experiment -->
 			<div>
-				<label for="assayId" class="tron-text-muted mb-2 block text-sm font-medium">
-					Assay ID <span class="text-[var(--color-tron-red)]">*</span>
+				<label for="experiment" class="tron-text-muted mb-2 block text-sm font-medium">
+					Experiment <span class="text-[var(--color-tron-red)]">*</span>
 				</label>
-				<input
-					id="assayId"
-					type="text"
-					bind:value={assayId}
-					placeholder="Assay / validation ID to write onto each cartridge_records doc"
-					class="tron-input w-full rounded-lg px-4 py-3 font-mono"
-				/>
-			</div>
-
-			<!-- Validation group (optional) -->
-			<div class="relative">
-				<label for="group" class="tron-text-muted mb-2 block text-sm font-medium">
-					Validation group <span class="tron-text-muted">(optional)</span>
-				</label>
-				<input
-					id="group"
-					type="text"
-					bind:value={groupName}
-					oninput={searchGroups}
-					placeholder="Search or type a new group name…"
+				<select
+					id="experiment"
+					bind:value={selectedExperimentId}
+					onchange={() => (selectedArmIndex = '')}
 					class="tron-input w-full rounded-lg px-4 py-3"
-					autocomplete="off"
-				/>
-				{#if groupSuggestions.length > 0}
-					<div class="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
-						{#each groupSuggestions as g (g._id)}
-							<button type="button" onclick={() => pickGroup(g)} class="block w-full px-4 py-2 text-left text-sm hover:bg-[var(--color-tron-cyan)]/10">{g.name}</button>
-						{/each}
-					</div>
-				{/if}
-				{#if groupName.trim() && !selectedGroupId}
-					<p class="tron-text-muted mt-1 text-xs">Will create a new group <span class="font-medium">"{groupName.trim()}"</span>.</p>
-				{:else if selectedGroupId}
-					<p class="mt-1 text-xs text-[var(--color-tron-green)]">✓ Using existing group.</p>
+				>
+					<option value="">— Select an experiment —</option>
+					{#each data.experiments as e (e._id)}
+						<option value={e._id}>{e.name}{e.program ? ` · ${e.program}` : ''}</option>
+					{/each}
+				</select>
+			</div>
+
+			<!-- Arm -->
+			<div>
+				<label for="arm" class="tron-text-muted mb-2 block text-sm font-medium">
+					Arm <span class="text-[var(--color-tron-red)]">*</span>
+				</label>
+				<select
+					id="arm"
+					bind:value={selectedArmIndex}
+					disabled={!selectedExperiment}
+					class="tron-input w-full rounded-lg px-4 py-3 disabled:opacity-50"
+				>
+					<option value="">— Select an arm —</option>
+					{#each arms as a, i (a.name + i)}
+						<option value={String(i)}>{a.name} · assay {a.assayId}{a.assayName ? ` (${a.assayName})` : ''}</option>
+					{/each}
+				</select>
+				{#if selectedArm}
+					<p class="mt-1 text-xs text-[var(--color-tron-green)]">
+						✓ Assay <span class="font-mono">{selectedArm.assayId}</span> · folder {selectedExperiment?.folderId}
+					</p>
 				{/if}
 			</div>
 
+			<!-- Barcodes -->
 			<div>
 				<label for="barcodes" class="tron-text-muted mb-2 block text-sm font-medium">
 					Barcodes <span class="text-[var(--color-tron-red)]">*</span>
-					<span class="tron-text-muted">— one per line (each must match an existing cartridge_records _id)</span>
+					<span class="tron-text-muted">— one per line (cartridge _id / scanned barcode)</span>
 				</label>
 				<textarea
 					id="barcodes"
@@ -205,54 +192,48 @@
 				disabled={!isValid || busy}
 				class="flex w-full items-center justify-center gap-3 rounded-lg bg-[var(--color-tron-orange)] px-6 py-4 text-lg font-semibold text-[var(--color-tron-bg-primary)] transition-all hover:bg-[var(--color-tron-orange)]/90 disabled:cursor-not-allowed disabled:opacity-50"
 			>
-				{busy ? 'Writing…' : `Make ${parsedBarcodes.length || ''} cartridge(s) runnable`}
+				{busy ? 'Adding…' : `Add ${parsedBarcodes.length || ''} cartridge(s) to arm`}
 			</button>
 			{#if !isValid}
 				<p class="tron-text-muted text-center text-xs">
-					Need — assay ID: {assayId.trim() ? '✓' : '✗'} · barcodes: {parsedBarcodes.length > 0 ? '✓' : '✗'}
+					Need — experiment: {selectedExperimentId ? '✓' : '✗'} · arm: {selectedArmIndex !== '' ? '✓' : '✗'} · barcodes: {parsedBarcodes.length > 0 ? '✓' : '✗'}
 				</p>
 			{/if}
 		</div>
 	</div>
 
-	<!-- Mongo verification -->
+	<!-- Verification -->
 	{#if result}
 		<div class="tron-card p-6">
 			<div class="flex flex-wrap items-center gap-3">
-				<span class="rounded-full bg-[var(--color-tron-green)]/20 px-3 py-1 text-sm font-semibold text-[var(--color-tron-green)]">
-					✓ Verified in MongoDB
-				</span>
+				<span class="rounded-full bg-[var(--color-tron-green)]/20 px-3 py-1 text-sm font-semibold text-[var(--color-tron-green)]">✓ Verified in MongoDB</span>
 				<span class="tron-text-secondary text-sm">
-					database <span class="font-mono text-[var(--color-tron-cyan)]">{result.dbName}</span> ·
-					collection <span class="font-mono">cartridge_records</span> ·
-					{result.updated} updated{#if result.skipped.length > 0} · {result.skipped.length} skipped{/if}
+					database <span class="font-mono text-[var(--color-tron-cyan)]">{result.dbName}</span> · {result.updated} cartridge(s) added to
+					<span class="font-medium">{result.experiment} / {result.arm}</span> · assay <span class="font-mono">{result.assayId}</span>
+					{#if result.skipped.length > 0}· {result.skipped.length} skipped{/if}
 				</span>
 			</div>
-			<p class="tron-text-muted mt-2 text-sm">
-				assayId written: <span class="font-mono text-[var(--color-tron-cyan)]">{result.assayId}</span>
-				{#if result.groupName}· group <span class="font-medium">{result.groupName}</span>{/if}
-			</p>
 
 			{#if result.verified.length > 0}
 				<div class="mt-4 overflow-x-auto">
 					<table class="w-full text-sm">
 						<thead class="bg-[var(--color-tron-bg-secondary)]">
 							<tr class="text-left">
-								<th class="tron-text-muted p-2">Cartridge _id (barcode)</th>
+								<th class="tron-text-muted p-2">Cartridge _id</th>
 								<th class="tron-text-muted p-2">status</th>
 								<th class="tron-text-muted p-2">assayId</th>
 								<th class="tron-text-muted p-2">serialNumber</th>
-								<th class="tron-text-muted p-2">Group</th>
+								<th class="tron-text-muted p-2">arm</th>
 							</tr>
 						</thead>
 						<tbody>
 							{#each result.verified as row (row._id)}
 								<tr class="border-t border-[var(--color-tron-border)]">
 									<td class="p-2 font-mono">{row._id}</td>
-									<td class="p-2 font-mono {row.status === 'linked' ? 'text-[var(--color-tron-green)]' : 'text-[var(--color-tron-red)]'}">{row.status ?? '—'}</td>
+									<td class="p-2 font-mono {statusColor(row.status)}">{row.status ?? '—'}</td>
 									<td class="p-2 font-mono text-[var(--color-tron-cyan)]">{row.assayId ?? '—'}</td>
 									<td class="tron-text-muted p-2 font-mono">{row.serialNumber ?? '—'}</td>
-									<td class="tron-text-muted p-2">{groupLabel(row.validationGroupId)}</td>
+									<td class="tron-text-muted p-2">{row.arm ?? '—'}</td>
 								</tr>
 							{/each}
 						</tbody>
@@ -261,7 +242,7 @@
 			{/if}
 
 			{#if result.skipped.length > 0}
-				<p class="tron-text-muted mt-3 text-sm">Skipped (no matching cartridge_records doc):</p>
+				<p class="tron-text-muted mt-3 text-sm">Skipped:</p>
 				<ul class="tron-text-muted mt-1 list-inside list-disc text-xs">
 					{#each result.skipped as s (s.barcode)}
 						<li><span class="font-mono">{s.barcode}</span> — {s.reason}</li>
@@ -271,14 +252,14 @@
 		</div>
 	{/if}
 
-	<!-- Existing categorized cartridges -->
+	<!-- Existing -->
 	<div class="tron-card">
 		<div class="flex items-center justify-between border-b border-[var(--color-tron-border)] p-4">
-			<h2 class="tron-heading text-lg font-semibold">Optical-Test Cartridges (status: linked)</h2>
+			<h2 class="tron-heading text-lg font-semibold">Optical-Test Cartridges</h2>
 			<span class="tron-text-muted text-sm">{cartridges.length} shown</span>
 		</div>
 		{#if cartridges.length === 0}
-			<p class="tron-text-muted p-4 text-sm">No cartridge_records have an assayId set yet.</p>
+			<p class="tron-text-muted p-4 text-sm">No optical-test cartridges yet.</p>
 		{:else}
 			<div class="max-h-96 overflow-y-auto">
 				<table class="w-full text-sm">
@@ -288,17 +269,17 @@
 							<th class="tron-text-muted p-2">status</th>
 							<th class="tron-text-muted p-2">assayId</th>
 							<th class="tron-text-muted p-2">serialNumber</th>
-							<th class="tron-text-muted p-2">Group</th>
+							<th class="tron-text-muted p-2">arm</th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each cartridges as c (c._id)}
 							<tr class="border-t border-[var(--color-tron-border)]">
 								<td class="p-2 font-mono">{c._id}</td>
-								<td class="p-2 font-mono {c.status === 'linked' ? 'text-[var(--color-tron-green)]' : ''}">{c.status ?? '—'}</td>
+								<td class="p-2 font-mono {statusColor(c.status)}">{c.status ?? '—'}</td>
 								<td class="p-2 font-mono">{c.assayId ?? '—'}</td>
 								<td class="tron-text-muted p-2 font-mono">{c.serialNumber ?? '—'}</td>
-								<td class="tron-text-muted p-2">{groupLabel(c.validationGroupId)}</td>
+								<td class="tron-text-muted p-2">{c.arm ?? '—'}</td>
 							</tr>
 						{/each}
 					</tbody>

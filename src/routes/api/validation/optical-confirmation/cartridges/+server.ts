@@ -1,9 +1,9 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { connectDB, mongoose, CartridgeGroup, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, mongoose, AuditLog } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 
-// Status check: is the cartridge_records doc for this barcode "linked" + which assayId?
+// Status check: is the cartridge_records doc for this barcode "linked" + which assay/serial?
 export const GET: RequestHandler = async ({ url, locals }) => {
 	if (!locals.user) return json({ error: 'Unauthorized' }, { status: 401 });
 	requirePermission(locals.user, 'cartridge:read');
@@ -11,112 +11,111 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	const barcode = url.searchParams.get('barcode')?.trim();
 	if (!barcode) return json({ exists: false });
 	const col = mongoose.connection.db.collection('cartridge_records');
-	const c = await col.findOne({ _id: barcode as any }, { projection: { assayId: 1, status: 1, serialNumber: 1 } });
+	const c = await col.findOne({ _id: barcode as any }, { projection: { assayId: 1, status: 1, serialNumber: 1, experiment: 1, arm: 1 } });
 	if (!c) return json({ exists: false });
-	return json({ exists: true, assayId: (c as any).assayId ?? null, status: (c as any).status ?? null, serialNumber: (c as any).serialNumber ?? null });
+	return json({ exists: true, ...c });
 };
 
-// Make cartridges runnable on the SPU by writing the research/SPU cartridge shape onto their
-// cartridge_records docs (status: 'linked' + assayId + serialNumber + checkpoints). The SPU keys off
-// these fields — assayId alone is not enough. Upserts by _id = scanned barcode.
+// Add cartridges to an experiment → arm (brevitest-research add-cartridge-to-arm), which is what makes
+// the SPU/brevitest-cloud run AND complete the test. Writes the full research/SPU cartridge shape onto
+// cartridge_records (status:'linked' + assayId + folderId/program/experiment/arm + serialNumber +
+// checkpoints), pushes refs into the arm, and bumps the experiment's nextSerialNumber.
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!locals.user) return json({ error: 'Unauthorized' }, { status: 401 });
 	requirePermission(locals.user, 'cartridge:write');
 	await connectDB();
 
 	const body = await request.json();
+	const experimentId = (body.experimentId ?? '').toString().trim();
+	const armIndex = Number(body.armIndex);
 	const rawList: string[] = Array.isArray(body.barcodes) ? body.barcodes : body.barcode ? [body.barcode] : [];
 	const barcodes = [...new Set(rawList.map((b) => String(b).trim()).filter(Boolean))];
+
+	if (!experimentId) return json({ error: 'Select an experiment' }, { status: 400 });
+	if (!Number.isInteger(armIndex) || armIndex < 0) return json({ error: 'Select an arm' }, { status: 400 });
 	if (barcodes.length === 0) return json({ error: 'Provide at least one barcode' }, { status: 400 });
-
-	const assayId = (body.assayId ?? '').toString().trim();
-	if (!assayId) return json({ error: 'Assay ID is required' }, { status: 400 });
-
-	// Resolve the validation group (optional).
-	let groupId: string | undefined = body.groupId?.trim() || undefined;
-	let groupName: string | undefined;
-	if (!groupId && body.groupName?.trim()) {
-		const name = body.groupName.trim();
-		let grp: any = await CartridgeGroup.findOne({ name }).lean();
-		if (!grp) grp = await CartridgeGroup.create({ _id: generateId(), name, createdBy: locals.user._id });
-		groupId = grp._id;
-		groupName = name;
-	} else if (groupId) {
-		const grp: any = await CartridgeGroup.findById(groupId).select('name').lean();
-		if (grp) groupName = grp.name;
-	}
 
 	const db = mongoose.connection.db;
 	const dbName = db.databaseName;
-	const col = db.collection('cartridge_records');
+	const expCol = db.collection('experiments');
+	const crCol = db.collection('cartridge_records');
 
-	// Friendly assay name from the catalog (research docs leave it blank, but nice to have).
-	const assayDef = await db.collection('assay_definitions').findOne({ _id: assayId as any }, { projection: { name: 1 } });
-	const assayName = (assayDef as any)?.name ?? '';
+	const exp: any = await expCol.findOne({ _id: experimentId as any });
+	if (!exp) return json({ error: 'Experiment not found' }, { status: 400 });
+	const arm = exp.arms?.[armIndex];
+	if (!arm) return json({ error: 'Arm not found on experiment' }, { status: 400 });
+
+	const batchKey = String(exp.folderId ?? '').slice(0, 11);
+	let nextSerial = Number(exp.nextSerialNumber ?? 0);
 
 	const now = new Date();
 	const nowIso = now.toISOString();
 	const who = (locals.user as any).username || (locals.user as any).email || locals.user._id;
 	const checkpoint = { who, when: nowIso, where: { city_name: 'Houston' } };
 	const expirationDate = new Date(now.getTime() + 4 * 365 * 24 * 3600 * 1000).toISOString();
-	const serialMiddle = (now.getTime() % 1e11).toString().padStart(11, '0');
 
-	const updated: string[] = [];
+	const updated: { barcode: string; serialNumber: string }[] = [];
 	const skipped: { barcode: string; reason: string }[] = [];
+	const armPush: any[] = [];
 
-	for (let i = 0; i < barcodes.length; i++) {
-		const barcode = barcodes[i];
-		const serialNumber = `${assayId}-${serialMiddle}-${String(i + 1).padStart(3, '0')}`;
+	for (const barcode of barcodes) {
+		const index = nextSerial % 1000;
+		const serialNumber = `${arm.assayId}-${batchKey}-${String(index).padStart(3, '0')}`;
 		try {
-			await col.updateOne(
+			await crCol.updateOne(
 				{ _id: barcode as any },
 				{
 					$set: {
 						status: 'linked',
 						statusUpdatedOn: nowIso,
-						assayId,
-						assayName,
+						assayId: arm.assayId,
+						assayName: arm.assayName ?? '',
+						folderId: exp.folderId,
+						program: exp.program,
+						experiment: exp.name,
+						arm: arm.name,
 						serialNumber,
 						checkpoints: { created: checkpoint, linked: checkpoint },
 						quantity: 0,
 						expirationDate,
-						// BIMS-side categorization
-						assayCategory: 'optical_test',
-						validationGroupId: groupId ?? null
+						assayCategory: 'optical_test'
 					},
-					$setOnInsert: {
-						validationErrors: [],
-						photos: [],
-						reagentChain: [],
-						corrections: [],
-						photoSequence: 0
-					}
+					$setOnInsert: { validationErrors: [], photos: [], reagentChain: [], corrections: [], photoSequence: 0 }
 				},
 				{ upsert: true }
 			);
-			updated.push(barcode);
+			armPush.push({ barcode, status: 'linked', quantity: 0 });
+			updated.push({ barcode, serialNumber });
+			nextSerial = index + 1;
 		} catch (err) {
 			skipped.push({ barcode, reason: err instanceof Error ? err.message : 'update failed' });
 		}
 	}
 
-	// Re-read from cartridge_records (proof the docs are now in the runnable shape).
+	// Register the cartridges on the arm + advance the experiment's serial counter.
+	if (armPush.length > 0) {
+		await expCol.updateOne(
+			{ _id: experimentId as any },
+			{ $push: { [`arms.${armIndex}.cartridges`]: { $each: armPush } } as any, $set: { nextSerialNumber: nextSerial, statusUpdatedOn: nowIso } }
+		);
+	}
+
 	const verified = updated.length
-		? await col
-				.find({ _id: { $in: updated as any } })
-				.project({ _id: 1, status: 1, assayId: 1, serialNumber: 1, assayCategory: 1, validationGroupId: 1 })
+		? await crCol
+				.find({ _id: { $in: updated.map((u) => u.barcode) as any } })
+				.project({ _id: 1, status: 1, assayId: 1, serialNumber: 1, experiment: 1, arm: 1 })
 				.toArray()
 		: [];
 
 	if (updated.length > 0) {
 		await AuditLog.create({
 			tableName: 'cartridge_records',
-			recordId: groupId ?? 'batch',
+			recordId: experimentId,
 			action: 'UPDATE',
-			newData: { assayId, status: 'linked', count: updated.length, groupId, groupName, barcodes: updated },
+			newData: { assayId: arm.assayId, experiment: exp.name, arm: arm.name, count: updated.length, barcodes: updated.map((u) => u.barcode) },
 			changedBy: locals.user._id,
 			changedAt: now,
-			reason: 'Make cartridges runnable (research/SPU shape: status linked + assayId + serialNumber)'
+			reason: 'Add cartridges to experiment arm (optical test) — research/SPU runnable shape'
 		});
 	}
 
@@ -126,9 +125,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		updated: updated.length,
 		skipped,
 		verified: JSON.parse(JSON.stringify(verified)),
-		assayId,
-		assayName,
-		groupId,
-		groupName
+		assayId: arm.assayId,
+		experiment: exp.name,
+		arm: arm.name
 	});
 };

@@ -1,26 +1,33 @@
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, mongoose, CartridgeGroup } from '$lib/server/db';
+import { connectDB, mongoose } from '$lib/server/db';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'cartridge:read');
 	await connectDB();
+	const db = mongoose.connection.db;
 
-	const groups = await CartridgeGroup.find().select('name color').sort({ name: 1 }).limit(50).lean();
+	// Experiments (with arms) — selecting an experiment + arm supplies the assay/folder/program context.
+	const experiments = await db
+		.collection('experiments')
+		.find({ 'arms.0': { $exists: true } })
+		.project({ _id: 1, name: 1, program: 1, folderId: 1, 'arms.name': 1, 'arms.assayId': 1, 'arms.assayName': 1 })
+		.sort({ name: 1 })
+		.limit(500)
+		.toArray();
 
-	// Cartridges made runnable as optical-test (research/SPU shape: status linked + assayId set).
-	const col = mongoose.connection.db.collection('cartridge_records');
-	const cartridges = await col
+	const cartridges = await db
+		.collection('cartridge_records')
 		.find({ assayCategory: 'optical_test' })
-		.project({ _id: 1, status: 1, assayId: 1, serialNumber: 1, validationGroupId: 1 })
+		.project({ _id: 1, status: 1, assayId: 1, serialNumber: 1, experiment: 1, arm: 1 })
 		.sort({ statusUpdatedOn: -1 })
 		.limit(200)
 		.toArray();
 
 	return {
-		groups: JSON.parse(JSON.stringify(groups)),
+		experiments: JSON.parse(JSON.stringify(experiments)),
 		cartridges: JSON.parse(JSON.stringify(cartridges)),
-		dbName: mongoose.connection.db.databaseName
+		dbName: db.databaseName
 	};
 };
 
