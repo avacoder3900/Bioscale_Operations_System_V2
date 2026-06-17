@@ -152,7 +152,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// status again (WAX-FLOW-2, per-cartridge oven scans) so it's already in
 	// phaseCounts — add the legacy BackingLot.cartridgeCount sum on top until
 	// those buckets drain.
-	const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped'];
+	const phaseOrder = ['backing', 'wax_filled', 'wax_stored', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped'];
 	const phaseMap = new Map((phaseCounts as any[]).map((p: any) => [p._id, p.count]));
 	const legacyBackingCount = (legacyOvenOccupancyAgg as any[]).reduce((s, o: any) => s + (o.count ?? 0), 0);
 	phaseMap.set('backing', (phaseMap.get('backing') ?? 0) + legacyBackingCount);

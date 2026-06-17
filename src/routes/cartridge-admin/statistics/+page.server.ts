@@ -37,10 +37,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	// Yield statistics
 	const totalBacked = cs.length;
-	const phases = ['wax_filled', 'wax_qc', 'reagent_filled', 'inspected', 'sealed', 'stored', 'released'];
+	const phases = ['wax_filled', 'wax_stored', 'wax_ready', 'reagent_filled', 'inspected', 'sealed', 'stored', 'released'];
 	const phaseCounts = phases.map((phase) => {
 		const count = cs.filter((c) => {
-			const phaseOrder = ['wax_filled', 'wax_qc', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released'];
+			const phaseOrder = ['wax_filled', 'wax_stored', 'wax_qc', 'wax_ready', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released'];
 			return phaseOrder.indexOf(c.status) >= phaseOrder.indexOf(phase);
 		}).length;
 		return {
@@ -78,7 +78,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const qaqcInspected = cs.filter((c) => (c as any).qaqc?.status).length;
 	const qaqcFailed = cs.filter((c) => (c as any).qaqc?.status === 'Failed' || (c as any).qaqc?.status === 'Rejected').length;
 	const qaqcRate = qaqcInspected > 0 ? qaqcFailed / qaqcInspected : 0;
-	const waxRejectedCount = cs.filter((c) => c.status === 'wax_qc' || (c as any).waxQc?.status === 'Rejected').length;
+	const waxRejectedCount = cs.filter((c) => c.status === 'wax_rejected' || (c as any).waxQc?.status === 'Rejected').length;
 
 	// Rejection breakdown
 	const rejectionMap = new Map<string, number>();

@@ -6,7 +6,6 @@
 	import DeckLoadingGrid from '$lib/components/manufacturing/wax-filling/DeckLoadingGrid.svelte';
 	import RunExecution from '$lib/components/manufacturing/wax-filling/RunExecution.svelte';
 	import PostRunCooling from '$lib/components/manufacturing/wax-filling/PostRunCooling.svelte';
-	import QCInspection from '$lib/components/manufacturing/wax-filling/QCInspection.svelte';
 	import CompletionStorage from '$lib/components/manufacturing/wax-filling/CompletionStorage.svelte';
 	import ProtocolStartPanel from '$lib/components/manufacturing/ProtocolStartPanel.svelte';
 	import EmbeddedRunController from '$lib/components/manufacturing/EmbeddedRunController.svelte';
@@ -1496,17 +1495,26 @@
 					{/if}
 				</div>
 			{:else if qcCarts.length > 0}
-				<QCInspection
-					cartridges={qcCarts}
-					rejectionCodes={data.rejectionCodes}
-					onComplete={handleQCComplete}
-					readonly={isPreviewOrPast}
-					coolingConfirmedAt={previewParam ? null : (data.runState.coolingConfirmedAt ? new Date(data.runState.coolingConfirmedAt) : null)}
-					{coolingBypassed}
-					runId={data.runState.runId ?? ''}
-					lotId={null}
-					coolingGateMin={data.settings?.minCoolingBeforeQcMin ?? 2}
-				/>
+				<!-- FU1 (WAX-INSPECTION-FOLLOWUPS): the pre-storage QC accept/reject was
+				     removed. This step is now just "carts cooled → move to storage"; the
+				     accept/reject verdict happens AFTER storage at Wax Inspect
+				     (wax_qc → wax_ready/wax_rejected). -->
+				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center space-y-3">
+					<p class="text-sm text-[var(--color-tron-text)]">
+						{qcCarts.length} cartridge{qcCarts.length === 1 ? '' : 's'} cooled and ready to store.
+					</p>
+					<p class="text-xs text-[var(--color-tron-text-secondary)]">
+						Wax inspection (photo + Ready/Rejected) happens after storage, at Wax Inspect.
+					</p>
+					<button
+						type="button"
+						onclick={() => handleQCComplete({ rejectedCartridges: [] })}
+						disabled={submitting || isPreviewOrPast}
+						class="rounded-lg bg-[var(--color-tron-cyan)] px-6 py-3 font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+					>
+						{submitting ? 'Saving…' : 'Confirm cooled → continue to storage'}
+					</button>
+				</div>
 			{:else}
 				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">
 					<p class="text-sm text-[var(--color-tron-text-secondary)]">

@@ -1299,23 +1299,10 @@ export const actions: Actions = {
 				}));
 				await CartridgeRecord.bulkWrite(bulkOps);
 
-				// Write waxQc.status='Accepted' for every cartridge that wasn't rejected
-				// during QC. Rejects already carry waxQc.recordedAt (from rejectCartridge),
-				// so the recordedAt-not-set filter excludes them.
-				const acceptOps = safeIds.map((cid: string) => ({
-					updateOne: {
-						filter: { _id: cid, 'waxQc.recordedAt': { $exists: false }, status: { $ne: 'scrapped' } },
-						update: {
-							$set: {
-								'waxQc.status': 'Accepted',
-								'waxQc.operator': { _id: locals.user!._id, username: locals.user!.username },
-								'waxQc.timestamp': now,
-								'waxQc.recordedAt': now
-							}
-						}
-					}
-				}));
-				await CartridgeRecord.bulkWrite(acceptOps);
+				// NOTE (WAX-INSPECTION-FOLLOWUPS FU1): the pre-storage auto-Accept
+				// (waxQc.status='Accepted') was removed. Carts are NOT judged before
+				// storage — they go wax_filled → wax_stored, and the accept/reject
+				// verdict happens at /wax-inspect (wax_qc → wax_ready/wax_rejected).
 
 				// Record inventory transactions for each cartridge — consume wax (PT-CT-105)
 				try {

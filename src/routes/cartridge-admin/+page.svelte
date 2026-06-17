@@ -56,7 +56,7 @@
 		return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString();
 	}
 
-	const STAGES: LifecycleStage[] = ['backing', 'wax_filled', 'wax_qc', 'wax_stored', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed', 'voided'];
+	const STAGES: LifecycleStage[] = ['backing', 'wax_filled', 'wax_stored', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filled', 'inspected', 'sealed', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed', 'voided'];
 
 	function stageLabel(stage: string): string {
 		return stage.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -65,8 +65,10 @@
 	const stageColors: Record<string, string> = {
 		backing: 'bg-gray-900/50 text-gray-300 border-gray-500/30',
 		wax_filled: 'bg-blue-900/50 text-blue-300 border-blue-500/30',
-		wax_qc: 'bg-cyan-900/50 text-cyan-300 border-cyan-500/30',
 		wax_stored: 'bg-violet-900/50 text-violet-300 border-violet-500/30',
+		wax_qc: 'bg-cyan-900/50 text-cyan-300 border-cyan-500/30',
+		wax_ready: 'bg-green-900/50 text-green-300 border-green-500/30',
+		wax_rejected: 'bg-red-900/50 text-red-300 border-red-500/30',
 		reagent_filled: 'bg-green-900/50 text-green-300 border-green-500/30',
 		inspected: 'bg-yellow-900/50 text-yellow-300 border-yellow-500/30',
 		sealed: 'bg-purple-900/50 text-purple-300 border-purple-500/30',

@@ -6,8 +6,10 @@ export type LifecycleStage =
 	| 'backing'
 	| 'wax_filling'
 	| 'wax_filled'
-	| 'wax_qc'
 	| 'wax_stored'
+	| 'wax_qc'
+	| 'wax_ready'
+	| 'wax_rejected'
 	| 'reagent_filled'
 	| 'inspected'
 	| 'sealed'
@@ -32,8 +34,10 @@ export const LIFECYCLE_STAGES: LifecycleStage[] = [
 	'backing',
 	'wax_filling',
 	'wax_filled',
-	'wax_qc',
 	'wax_stored',
+	'wax_qc',
+	'wax_ready',
+	'wax_rejected',
 	'reagent_filled',
 	'inspected',
 	'sealed',
