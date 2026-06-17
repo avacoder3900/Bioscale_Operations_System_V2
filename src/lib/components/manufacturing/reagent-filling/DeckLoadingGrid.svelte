@@ -288,6 +288,46 @@
 		}
 	}
 
+	// Re-run the robot sweep on ONLY the currently-failed slots (red tiles),
+	// reusing the per-slot focus/grid-search recovery. Saves hand-scanning each.
+	async function retryFailedSlots() {
+		if (isReadonly || !robotId || sweepInFlight) return;
+		const slots = [...failedSlots].sort((a, b) => a - b);
+		if (slots.length === 0) return;
+		deckError = '';
+		sweepProgress = `Retrying ${slots.length} slot${slots.length === 1 ? '' : 's'} with the robot…`;
+		sweepInFlight = true;
+		sweepStatus = 'running';
+		absorbedScanSlots = new Set();
+		absorbedErrorSlots = new Set();
+		slotsTotal = slots.length;
+		slotsDone = 0;
+		currentSlotIdx = null;
+		try {
+			const res = await fetch('/api/scanner/sweep', {
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ robotId, source: 'reagent_filling', contextRef: runId ?? undefined, slotIndices: slots })
+			});
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				deckError = (body?.message ?? body?.error ?? `Retry failed (HTTP ${res.status})`).toString();
+				playBeep(false);
+				sweepInFlight = false;
+				sweepStatus = null;
+				return;
+			}
+			currentSweepRunId = body.sweepRunId as string;
+			slotsTotal = body.slotsTotal ?? slots.length;
+			await pollSweepUntilDone(currentSweepRunId);
+		} catch (e) {
+			deckError = e instanceof Error ? e.message : String(e);
+			playBeep(false);
+			sweepInFlight = false;
+		}
+	}
+
 	async function pollSweepUntilDone(sweepRunId: string): Promise<void> {
 		while (true) {
 			let state: any;
@@ -323,6 +363,12 @@
 						...sweepFailures.filter((f) => f.slotIndex !== sc.slotIndex),
 						{ slotIndex: sc.slotIndex, message: r.error ?? 'validation failed' }
 					].sort((a, b) => a.slotIndex - b.slotIndex);
+				} else if (failedSlots.has(sc.slotIndex) || sweepFailures.some((f) => f.slotIndex === sc.slotIndex)) {
+					// Recovered via the failed-slot robot retry — clear the red tile.
+					const nf = new SvelteSet(failedSlots);
+					nf.delete(sc.slotIndex);
+					failedSlots = nf;
+					sweepFailures = sweepFailures.filter((f) => f.slotIndex !== sc.slotIndex);
 				}
 			}
 
@@ -620,8 +666,18 @@
 					{#if sweepFailures.length > 0}
 						<div class="mt-2 rounded border border-red-500/40 bg-red-900/15 p-2">
 							<p class="text-[11px] font-semibold text-red-300">
-								{sweepFailures.length} slot{sweepFailures.length === 1 ? '' : 's'} need manual rescan — click the red tiles below
+								{sweepFailures.length} slot{sweepFailures.length === 1 ? '' : 's'} need a rescan — retry with the robot, or click the red tiles to scan by hand
 							</p>
+							{#if !isReadonly && robotId}
+								<button
+									type="button"
+									onclick={retryFailedSlots}
+									disabled={sweepInFlight}
+									class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-xs font-medium text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-50"
+								>
+									{sweepInFlight ? 'Retrying…' : `Retry ${sweepFailures.length} failed slot${sweepFailures.length === 1 ? '' : 's'} with robot`}
+								</button>
+							{/if}
 							<ul class="mt-1 space-y-0.5 text-[10px] text-red-200/90">
 								{#each sweepFailures as f (f.slotIndex)}
 									<li>Slot {f.slotIndex + 1}: {f.message}</li>

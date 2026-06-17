@@ -70,6 +70,17 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	const rawMaxSlots = Number(body?.maxSlots);
 	const maxSlotsRequested =
 		Number.isFinite(rawMaxSlots) && rawMaxSlots > 0 ? Math.floor(rawMaxSlots) : null;
+	// Optional: re-scan ONLY these specific slots (failed-slot retry). When
+	// present, the walk visits exactly these slot indices instead of 0..maxSlots.
+	const slotIndicesReq: number[] | null = Array.isArray(body?.slotIndices)
+		? Array.from(
+				new Set(
+					(body.slotIndices as unknown[])
+						.map((n) => Math.floor(Number(n)))
+						.filter((n) => Number.isFinite(n) && n >= 0)
+				)
+			).sort((a, b) => a - b)
+		: null;
 
 	if (!robotId) error(400, 'robotId required');
 
@@ -88,22 +99,35 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!set) error(404, positionSetId ? 'Position set not found' : 'No default position set for this robot — teach one first');
 	if (set.robotId !== opentronsRobotId) error(400, 'Position set does not belong to this robot');
 
-	const slotsToWalk = Math.min(set.positionCount, maxSlotsRequested ?? set.positionCount);
-
 	const positionsBySlot = new Map<number, { x: number; y: number; z: number }>();
 	for (const p of set.positions ?? []) {
 		positionsBySlot.set(p.slotIndex, { x: p.x, y: p.y, z: p.z });
 	}
-	const missing: number[] = [];
-	for (let i = 0; i < slotsToWalk; i++) {
-		if (!positionsBySlot.has(i)) missing.push(i);
+
+	// Determine the ordered list of slots to walk: an explicit slotIndices list
+	// (failed-slot retry) or the contiguous 0..maxSlots range.
+	let walkSlots: number[];
+	if (slotIndicesReq && slotIndicesReq.length > 0) {
+		const tooHigh = slotIndicesReq.filter((i) => i >= set.positionCount);
+		if (tooHigh.length > 0) error(400, `slotIndices out of range (max ${set.positionCount - 1}): ${tooHigh.join(', ')}`);
+		const untaught = slotIndicesReq.filter((i) => !positionsBySlot.has(i));
+		if (untaught.length > 0) error(400, `Position set "${set.title}" has no taught position for slot(s): ${untaught.join(', ')}`);
+		walkSlots = slotIndicesReq;
+	} else {
+		const slotsToWalk = Math.min(set.positionCount, maxSlotsRequested ?? set.positionCount);
+		const missing: number[] = [];
+		for (let i = 0; i < slotsToWalk; i++) {
+			if (!positionsBySlot.has(i)) missing.push(i);
+		}
+		if (missing.length > 0) {
+			error(
+				400,
+				`Position set "${set.title}" is incomplete — slots not taught (0..${slotsToWalk - 1}): ${missing.join(', ')}`
+			);
+		}
+		walkSlots = Array.from({ length: slotsToWalk }, (_, i) => i);
 	}
-	if (missing.length > 0) {
-		error(
-			400,
-			`Position set "${set.title}" is incomplete — slots not taught (0..${slotsToWalk - 1}): ${missing.join(', ')}`
-		);
-	}
+	const slotsToWalk = walkSlots.length;
 
 	// Reject if there's already a running sweep for this robot — keeps state
 	// machines on the OT-2 sane (one maintenance run at a time).
@@ -144,7 +168,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	// Enqueue ONE bridge command — the daemon executes the whole walk locally
 	// and streams per-slot progress back. slotIndex order is the walk order.
 	const bridgeDeviceId = bridgeDeviceIdForRobot(robot);
-	const walkedPositions = Array.from({ length: slotsToWalk }, (_, slotIndex) => {
+	const walkedPositions = walkSlots.map((slotIndex) => {
 		const p = positionsBySlot.get(slotIndex)!;
 		return { slotIndex, x: p.x, y: p.y, z: p.z };
 	});
