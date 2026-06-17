@@ -2,6 +2,7 @@ import { redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, Equipment, ReagentBatchRecord, WaxFillingRun } from '$lib/server/db';
 import { loadRobotCardsAndQueues } from '$lib/server/manufacturing/robot-cards';
+import { getRobotsHealth } from '$lib/server/opentrons/health';
 import type { LayoutServerLoad } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -48,6 +49,12 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 			loadRobotCardsAndQueues().catch(() => ({ reagentQueue: [] as any[], maxTimeBeforeSealMin: 60 }))
 		]);
 
+		// Per-robot health (ready/busy/hung/offline) from the bridge heartbeat —
+		// drives the status dots + restart-server affordance (mirrors wax).
+		const health = await getRobotsHealth(
+			(robots as any[]).map((r) => ({ _id: String(r._id), name: r.name }))
+		).catch(() => ({}) as Record<string, any>);
+
 		return {
 			reagentQueue: JSON.parse(JSON.stringify(cardsAndQueues.reagentQueue ?? [])),
 			user: JSON.parse(JSON.stringify(locals.user)),
@@ -79,6 +86,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 					runStartTime: reagentRun?.runStartTime ? new Date(reagentRun.runStartTime).toISOString() : null,
 					runEndTime: reagentRun?.runEndTime ? new Date(reagentRun.runEndTime).toISOString() : null,
 					cartridgeCount: reagentRun?.cartridgeCount ?? 0,
+					health: (health as any)[robotIdStr] ?? null,
 					postRobotRuns: []
 				};
 			})

@@ -3,13 +3,13 @@ import {
 	connectDB, ReagentBatchRecord, AssayDefinition, CartridgeRecord, Consumable,
 	ManufacturingSettings, WaxFillingRun, Equipment, EquipmentLocation, generateId, AuditLog,
 	ReagentLot,
-	OpentronsRobot
+	OpentronsRobot, Ot2BridgeCommand
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import { WAX_PAGE_OWNED } from '$lib/server/manufacturing/run-statuses';
 import { resolveFridgeId } from '$lib/server/services/equipment-resolve';
-import { getRobot, robotGet, robotPost } from '$lib/server/opentrons/proxy';
+import { getRobot, robotGet, robotPost, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
 import type { PageServerLoad, Actions } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -743,6 +743,24 @@ export const actions: Actions = {
 			return fail(502, {
 				error: `Created run ${opentronsRunId} but couldn't start it: ${err instanceof Error ? err.message : 'unknown'}`
 			});
+		}
+
+		// Auto-resume the protocol's initial off-deck "confirm deck loaded" pause
+		// on the robot — operators shouldn't have to click Resume to confirm a
+		// deck that's already loaded. Fire-and-forget; the daemon resumes the
+		// first pause once. (Mirrors wax-filling startRun.)
+		try {
+			await Ot2BridgeCommand.create({
+				_id: generateId(),
+				robotId: String(robotId),
+				deviceId: bridgeDeviceIdForRobot(robot as any),
+				kind: 'auto_resume_run',
+				payload: { runId: opentronsRunId },
+				ttlMs: 120_000,
+				requestedBy: locals.user.username
+			});
+		} catch (e) {
+			console.warn('[reagent startRun] could not enqueue auto_resume_run:', e instanceof Error ? e.message : e);
 		}
 
 		// Carry previous reagent run's tip state forward as this run's "before".

@@ -1,9 +1,11 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
-	import { goto } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import type { ReagentRobotRunState } from '$lib/server/services/reagent-filling/robots';
+	import type { RobotHealthSummary } from '$lib/server/services/wax-filling/robots';
 
 	interface Props {
 		children: Snippet;
@@ -63,6 +65,61 @@
 		// eslint-disable-next-line svelte/no-navigation-without-resolve -- URL built from current page
 		goto(url.pathname + url.search, { invalidateAll: true });
 	}
+
+	// --- Robot health (ready / busy / hung / offline) — mirrors wax-filling ---
+	let liveHealth = $state<Record<string, RobotHealthSummary>>({});
+	let restartingId = $state<string | null>(null);
+	let restartMsg = $state('');
+
+	function healthFor(robotId: string): RobotHealthSummary | null {
+		return liveHealth[robotId] ?? data.dashboardState.find((r) => r.robotId === robotId)?.health ?? null;
+	}
+	function healthDotClass(status?: string | null): string {
+		switch (status) {
+			case 'ready': return 'bg-green-400';
+			case 'busy': return 'bg-amber-400';
+			case 'hung': return 'bg-red-500 animate-pulse';
+			case 'offline': return 'bg-gray-500';
+			default: return 'bg-gray-600';
+		}
+	}
+	function elapsedLabel(iso: string | Date | null): string {
+		if (!iso) return '';
+		const ms = Date.now() - new Date(iso).getTime();
+		if (!Number.isFinite(ms) || ms < 0) return '';
+		const min = Math.floor(ms / 60000);
+		return min < 60 ? `${min}m` : `${Math.floor(min / 60)}h ${min % 60}m`;
+	}
+	async function pollHealth() {
+		try {
+			const res = await fetch('/api/opentrons-lab/robots/health');
+			if (res.ok) {
+				const body = await res.json();
+				if (body?.health) liveHealth = body.health;
+			}
+		} catch { /* keep last known */ }
+	}
+	async function restartServer(robotId: string, robotName: string) {
+		if (restartingId) return;
+		if (!confirm(`Restart the robot server on ${robotName}?\n\nThis clears a hung engine (~90s). Any in-progress run on this robot will be cancelled.`)) return;
+		restartingId = robotId;
+		restartMsg = '';
+		try {
+			const res = await fetch(`/api/opentrons-lab/robots/${robotId}/restart-server`, { method: 'POST' });
+			const body = await res.json().catch(() => ({}));
+			restartMsg = res.ok ? (body.message ?? 'Restart sent.') : (body.message ?? body.error ?? 'Restart failed.');
+		} catch {
+			restartMsg = 'Restart request failed — check the bridge.';
+		} finally {
+			restartingId = null;
+			setTimeout(pollHealth, 3000);
+		}
+	}
+	onMount(() => {
+		pollHealth();
+		const id = setInterval(pollHealth, 10000);
+		return () => clearInterval(id);
+	});
 
 	/** Compact "MMM D, H:MMa" — e.g. "Apr 20, 1:23p". Falls back to elapsed if null. */
 	function formatFinished(iso: string | null, elapsedMin: number): string {
@@ -181,6 +238,10 @@
 					? 'border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]'
 					: 'border-transparent text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
 			>
+				{#if healthFor(robotState.robotId)}
+					{@const h = healthFor(robotState.robotId)}
+					<span class="h-2.5 w-2.5 rounded-full {healthDotClass(h?.status)}" title={`${h?.label}: ${h?.detail}`}></span>
+				{/if}
 				{robotState.name}
 				<span class="rounded px-1.5 py-0.5 text-xs {stageBadgeColor(robotState.stage)}">
 					{robotState.hasActiveRun ? robotState.stage : 'Idle'}
@@ -190,6 +251,24 @@
 	</div>
 
 	{#if selectedRobotId}
+		{@const sh = healthFor(selectedRobotId)}
+		{#if sh && (sh.status === 'hung' || sh.status === 'offline')}
+			{@const selName = data.dashboardState.find((r) => r.robotId === selectedRobotId)?.name ?? 'this robot'}
+			<div class="mt-3 flex flex-wrap items-center gap-3 rounded-lg border {sh.status === 'hung' ? 'border-red-500/50 bg-red-900/20' : 'border-gray-500/40 bg-gray-800/30'} px-4 py-3">
+				<span class="h-2.5 w-2.5 rounded-full {healthDotClass(sh.status)}"></span>
+				<div class="flex-1 text-sm">
+					<span class="font-semibold {sh.status === 'hung' ? 'text-red-300' : 'text-gray-300'}">{sh.label}</span>
+					<span class="text-[var(--color-tron-text-secondary)]"> — {sh.detail}</span>
+				</div>
+				{#if sh.status === 'hung'}
+					<button type="button" onclick={() => restartServer(selectedRobotId, selName)} disabled={restartingId === selectedRobotId}
+						class="min-h-[36px] rounded border border-red-500/60 bg-red-900/30 px-4 py-1.5 text-sm font-medium text-red-200 transition-colors hover:bg-red-900/50 disabled:opacity-50">
+						{restartingId === selectedRobotId ? 'Restarting…' : 'Restart robot server'}
+					</button>
+				{/if}
+			</div>
+			{#if restartMsg}<p class="mt-2 text-xs text-[var(--color-tron-text-secondary)]">{restartMsg}</p>{/if}
+		{/if}
 		{@render children()}
 	{:else}
 		<!-- No robot selected — show robot selection cards -->
@@ -216,10 +295,24 @@
 							{#if robot?.description}
 							{/if}
 						</div>
+						{#if healthFor(robotState.robotId)}
+							{@const h = healthFor(robotState.robotId)}
+							<div class="flex items-center gap-1.5 text-xs" title={h?.detail}>
+								<span class="h-2 w-2 rounded-full {healthDotClass(h?.status)}"></span>
+								<span class="{h?.status === 'hung' ? 'text-red-300' : h?.status === 'offline' ? 'text-gray-400' : h?.status === 'busy' ? 'text-amber-300' : 'text-green-300'}">{h?.label}</span>
+							</div>
+						{/if}
 						{#if robotState.hasActiveRun && robotState.activeProcess}
-							<div class="flex items-center gap-2 rounded border border-amber-500/30 bg-amber-900/20 px-3 py-1.5 text-xs text-amber-300">
-								<span class="h-2 w-2 rounded-full bg-amber-400 animate-pulse"></span>
-								{robotState.activeProcess === 'wax' ? 'Wax' : 'Reagent'}: {robotState.stage}
+							<div class="flex flex-col items-center gap-1">
+								<div class="flex items-center gap-2 rounded border border-amber-500/30 bg-amber-900/20 px-3 py-1.5 text-xs text-amber-300">
+									<span class="h-2 w-2 rounded-full bg-amber-400 animate-pulse"></span>
+									{robotState.activeProcess === 'wax' ? 'Wax' : 'Reagent'}: {robotState.stage}
+								</div>
+								{#if (robotState.cartridgeCount ?? 0) > 0 || robotState.runStartTime}
+									<div class="text-xs text-[var(--color-tron-text-secondary)]">
+										{#if (robotState.cartridgeCount ?? 0) > 0}{robotState.cartridgeCount} cart{robotState.cartridgeCount === 1 ? '' : 's'}{/if}{#if (robotState.cartridgeCount ?? 0) > 0 && robotState.runStartTime} · {/if}{#if robotState.runStartTime}{elapsedLabel(robotState.runStartTime)}{/if}
+									</div>
+								{/if}
 							</div>
 						{:else}
 							<div class="flex items-center gap-2 text-xs text-green-300">
