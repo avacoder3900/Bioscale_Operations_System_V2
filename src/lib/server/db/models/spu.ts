@@ -74,6 +74,14 @@ const spuSchema = new Schema({
 			status: { type: String, enum: ['pending', 'passed', 'failed'], default: 'pending' },
 			sessionId: String, completedAt: Date, rawData: Schema.Types.Mixed,
 			results: Schema.Types.Mixed, failureReasons: [String], criteriaUsed: Schema.Types.Mixed
+		},
+		opticalConfirmation: {
+			status: { type: String, enum: ['pending', 'passed', 'failed'], default: 'pending' },
+			sessionId: String, completedAt: Date, rawData: Schema.Types.Mixed,
+			results: Schema.Types.Mixed, failureReasons: [String], criteriaUsed: Schema.Types.Mixed,
+			labCartridgeId: String, cartridgeBarcode: String,
+			assay: { _id: String, name: String, skuCode: String },
+			attachedAt: Date, attachedBy: operatorRef
 		}
 	},
 

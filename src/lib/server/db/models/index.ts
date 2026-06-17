@@ -1,6 +1,8 @@
 // Tier 1: Sacred Documents
 export { User } from './user.js';
 export { CartridgeRecord } from './cartridge-record.js';
+export { OpticalTestCartridge } from './optical-test-cartridge.js';
+export { ValidationGroup } from './validation-group.js';
 export { Spu } from './spu.js';
 export { AssayDefinition } from './assay-definition.js';
 export { ReagentBatchRecord } from './reagent-batch-record.js';
