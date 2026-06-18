@@ -109,10 +109,10 @@ export function robotBaseUrl(robot: { ip: string; port?: number | null }): strin
 // sockets that can leave a sweep stuck mid-call when the OT-2 or network
 // blips. 30s matches the OT-2's own per-command waitUntilComplete timeout —
 // any single HTTP hop hanging past that is a stuck socket, not a slow move.
-async function robotFetch(url: string, init: RequestInit & { method?: string } = {}): Promise<Response> {
+async function robotFetch(url: string, init: RequestInit & { method?: string } = {}, timeoutMs = 30_000): Promise<Response> {
 	const method = init.method ?? 'GET';
 	const ac = new AbortController();
-	const timer = setTimeout(() => ac.abort(new Error('robotFetch timeout after 30s')), 30_000);
+	const timer = setTimeout(() => ac.abort(new Error(`robotFetch timeout after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
 	try {
 		return await fetch(url, { ...init, signal: ac.signal });
 	} catch (e: any) {
@@ -137,8 +137,9 @@ export async function robotGet(robot: any, path: string): Promise<Response> {
 	});
 }
 
-/** Proxy a POST request to the robot */
-export async function robotPost(robot: any, path: string, body?: unknown): Promise<Response> {
+/** Proxy a POST request to the robot. opts.timeoutMs overrides the 30s default
+ *  for slow commands (e.g. home, which can take 30-60s). */
+export async function robotPost(robot: any, path: string, body?: unknown, opts: { timeoutMs?: number } = {}): Promise<Response> {
 	if (resolveTransport() === 'bridge') return bridgeFetch(robot, 'POST', path, body);
 	const url = `${robotBaseUrl(robot)}${path}`;
 	return robotFetch(url, {
@@ -148,7 +149,7 @@ export async function robotPost(robot: any, path: string, body?: unknown): Promi
 			'opentrons-version': '3'
 		},
 		body: body !== undefined ? JSON.stringify(body) : undefined
-	});
+	}, opts.timeoutMs);
 }
 
 /** Proxy a PATCH request to the robot */

@@ -245,9 +245,20 @@
 	}
 	async function homeRobot() {
 		if (!runId) { errMsg = 'Open a maintenance run first'; return; }
+		clearMsg();
 		busy = true;
-		try { await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/home`, { method: 'POST', body: JSON.stringify({}) }); await refreshPosition(); msg = 'Homed.'; }
-		catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
+		msg = 'Homing all axes… (~30s, the gantry re-finds its endstops)';
+		try {
+			// Empty body = home ALL axes — re-references position after the arm is
+			// knocked off track. Server allows up to 120s; client waits ~70s.
+			await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/home`, { method: 'POST', body: JSON.stringify({}) });
+			// Position reference changed — the prior move-to-hole nominal is now stale.
+			nominal = null; refWell = null;
+			await refreshPosition();
+			msg = 'Homed — positions re-referenced. Move to a hole again to recalibrate.';
+		} catch (e) {
+			errMsg = `Home failed: ${e instanceof Error ? e.message : String(e)}`;
+		} finally { busy = false; }
 	}
 	async function jogAxis(axis: 'x' | 'y' | 'leftZ' | 'rightZ', distance: number) {
 		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }

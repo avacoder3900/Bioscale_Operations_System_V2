@@ -10,6 +10,9 @@ import { requirePermission } from '$lib/server/permissions';
 import { getRobot } from '$lib/server/opentrons/proxy';
 import { home } from '$lib/server/opentrons/maintenance';
 
+// Homing all axes can take 30-60s — well past the default function window.
+export const config = { maxDuration: 120 };
+
 export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!locals.user) error(401, 'Not authenticated');
 	requirePermission(locals.user, 'manufacturing:write');

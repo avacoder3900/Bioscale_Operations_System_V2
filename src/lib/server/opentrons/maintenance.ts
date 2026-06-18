@@ -127,9 +127,11 @@ export async function sendMaintenanceCommand(
 	if (waitUntilComplete) qs.set('waitUntilComplete', 'true');
 	if (timeoutMs) qs.set('timeout', String(timeoutMs));
 	const path = `/maintenance_runs/${runId}/commands?${qs.toString()}`;
+	// Client HTTP timeout must exceed the robot-side waitUntilComplete hold
+	// (timeoutMs) or slow commands like home abort early as "fetch failed".
 	const res = await robotPost(robot as any, path, {
 		data: { commandType, intent: 'setup', params }
-	});
+	}, { timeoutMs: timeoutMs + 10_000 });
 	if (!res.ok) {
 		const body = await res.json().catch(() => ({}));
 		throw new Error(

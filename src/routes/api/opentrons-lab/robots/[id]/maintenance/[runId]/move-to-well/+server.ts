@@ -12,6 +12,9 @@ import { requirePermission } from '$lib/server/permissions';
 import { getRobot } from '$lib/server/opentrons/proxy';
 import { moveToWell } from '$lib/server/opentrons/maintenance';
 
+// Safe-arc move (lift ~80mm, travel, descend) can take longer than the default window.
+export const config = { maxDuration: 60 };
+
 export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!locals.user) error(401, 'Not authenticated');
 	requirePermission(locals.user, 'manufacturing:write');
