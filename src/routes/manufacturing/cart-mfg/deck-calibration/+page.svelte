@@ -275,6 +275,29 @@
 	}
 
 	// Move to the (single) selected hole's nominal position so the operator can see the error.
+	// Load the deck labware into the run once (so the robot computes well positions).
+	async function ensureDeckLoaded(): Promise<string> {
+		if (loadedLabwareId) return loadedLabwareId;
+		const d = decks.find((x) => x.loadName === data.selected);
+		const lw = await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/load-labware`, {
+			method: 'POST',
+			body: JSON.stringify({ namespace: d?.namespace, loadName: data.selected, version: d?.version ?? 1, slot: deckSlot })
+		});
+		loadedLabwareId = lw?.labwareId ?? null;
+		if (!loadedLabwareId) throw new Error('load-labware did not return a labwareId');
+		return loadedLabwareId;
+	}
+	const safeArcZ = $derived(Math.round((wells.length ? Math.max(...wells.map((w) => w.z)) : 12) + 80));
+
+	// Safe arc: lift ~80mm above the holes, travel in XY, descend. Never drags the tip.
+	async function moveToWellSafe(name: string): Promise<void> {
+		const lid = await ensureDeckLoaded();
+		await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/move-to-well`, {
+			method: 'POST',
+			body: JSON.stringify({ pipetteId, labwareId: lid, wellName: name, minimumZHeight: safeArcZ })
+		});
+	}
+
 	async function moveToSelectedHole() {
 		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
 		if (selection.size !== 1) { errMsg = 'Select exactly one reference hole to move to'; return; }
@@ -282,27 +305,94 @@
 		clearMsg();
 		busy = true;
 		try {
-			// Load the deck labware into the run once (so the robot computes nominal absolute).
-			if (!loadedLabwareId) {
-				const lw = await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/load-labware`, {
-					method: 'POST',
-					body: JSON.stringify({ namespace: decks.find((d) => d.loadName === data.selected)?.namespace, loadName: data.selected, version: decks.find((d) => d.loadName === data.selected)?.version ?? 1, slot: deckSlot })
-				});
-				loadedLabwareId = lw?.labwareId ?? null;
-				if (!loadedLabwareId) throw new Error('load-labware did not return a labwareId');
-			}
-			// Safe arc: lift to ~80mm above the highest hole, travel in XY, then descend —
-			// so the tip never drags across cartridges between holes.
-			const maxWellZ = wells.length ? Math.max(...wells.map((w) => w.z)) : 12;
-			const minimumZHeight = Math.round(maxWellZ + 80);
-			await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/move-to-well`, {
-				method: 'POST',
-				body: JSON.stringify({ pipetteId, labwareId: loadedLabwareId, wellName: name, minimumZHeight })
-			});
+			await moveToWellSafe(name);
 			await refreshPosition();
 			nominal = liveX !== null ? { x: liveX!, y: liveY!, z: liveZ! } : null;
 			refWell = name;
 			msg = `At nominal of ${name}. Jog onto the real hole, then Capture.`;
+		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
+	}
+
+	// ── Tour: drive the pipette through every active-role hole, like a fill run, ──
+	// so you can watch which positions are hitting. Stepped or auto-played.
+	let touring = $state(false);
+	let tourIndex = $state(0);
+	let tourWells = $state<string[]>([]);
+	let tourPlaying = $state(false);
+
+	function orderedActiveWells(): string[] {
+		// Column-major sweep (left→right, then by y) so travel between holes is short.
+		return wells
+			.filter((w) => isActiveRole(w.name))
+			.slice()
+			.sort((a, b) => colOf(a.name) - colOf(b.name) || a.y - b.y)
+			.map((w) => w.name);
+	}
+	async function tourGoTo(i: number) {
+		if (i < 0 || i >= tourWells.length) return;
+		busy = true; clearMsg();
+		try {
+			const name = tourWells[i];
+			await moveToWellSafe(name);
+			tourIndex = i;
+			selection = new Set([name]);
+			refWell = name;
+			msg = `Tour ${roleFilter === 'all' ? 'holes' : roleFilter}: ${i + 1}/${tourWells.length} — ${name}`;
+		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); tourPlaying = false; }
+		finally { busy = false; }
+	}
+	async function startTour() {
+		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
+		const list = orderedActiveWells();
+		if (!list.length) { errMsg = 'No holes for the active role'; return; }
+		tourWells = list; touring = true;
+		await tourGoTo(0);
+	}
+	async function tourNext() { if (tourIndex < tourWells.length - 1) await tourGoTo(tourIndex + 1); }
+	async function tourPrev() { if (tourIndex > 0) await tourGoTo(tourIndex - 1); }
+	function tourStop() { touring = false; tourPlaying = false; }
+	async function tourPlay() {
+		tourPlaying = true;
+		while (tourPlaying && tourIndex < tourWells.length - 1) {
+			await tourGoTo(tourIndex + 1);
+			if (!tourPlaying) break;
+			await new Promise((r) => setTimeout(r, 500));
+		}
+		tourPlaying = false;
+	}
+
+	// ── Tip pickup + go to tip calibrator (matches the real fill workflow) ──
+	// Tiprack + calibrator point come from the protocols (wax: p20 right + the
+	// limit-switch calibrator at 125.181,173.247,z34.491; reagent: p300 left).
+	let calX = $state(125.181), calY = $state(173.247), calZ = $state(34.491);
+	let tipWell = $state('A1');
+	let hasTip = $state(false);
+	const tiprackForMount = $derived(desiredMount === 'right' ? 'cosmasanddamian_96_tiprack_20ul' : 'cosmas_and_damian_biotix_96_200ul_tiprack');
+
+	async function pickUpTipAction() {
+		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
+		clearMsg(); busy = true;
+		msg = 'Loading tiprack & picking up a tip…';
+		try {
+			await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/pick-up-tip`, {
+				method: 'POST',
+				body: JSON.stringify({ pipetteId, tiprackLoadName: tiprackForMount, slot: '11', tipWell })
+			});
+			hasTip = true;
+			msg = `Picked up a tip (${tiprackForMount} ${tipWell}). Now go to the calibrator or a hole.`;
+		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
+	}
+	async function goToCalibrator() {
+		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
+		clearMsg(); busy = true;
+		try {
+			// Safe arc to the calibrator point (lift, travel, descend).
+			await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/move-to`, {
+				method: 'POST',
+				body: JSON.stringify({ pipetteId, x: calX, y: calY, z: calZ, minimumZHeight: safeArcZ, forceDirect: false })
+			});
+			await refreshPosition();
+			msg = `At tip calibrator (${calX}, ${calY}, ${calZ}). Jog to fine-tune.`;
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
 	}
 
@@ -494,6 +584,45 @@
 				<div class="mt-2 grid grid-cols-2 gap-2">
 					<button type="button" onclick={moveToSelectedHole} disabled={!pipetteId || busy || selCount !== 1} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Select exactly one hole">Move to hole</button>
 					<button type="button" onclick={captureOffset} disabled={!pipetteId || busy || !nominal} class="rounded border border-green-500/50 bg-green-900/20 px-2 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Capture offset</button>
+				</div>
+
+				<!-- Tip pickup + calibrator (real-workflow setup) -->
+				<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-black/20 p-2">
+					<div class="mb-1 flex items-center justify-between text-[11px]" style="color: var(--color-tron-text-secondary)">
+						<span class="font-bold uppercase tracking-wider">Tip</span>
+						<span>{hasTip ? '🟢 tip on' : 'no tip'} · {tiprackForMount.includes('20ul') ? 'p20 rack' : 'p300 rack'}</span>
+					</div>
+					<div class="grid grid-cols-2 gap-2">
+						<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Pick up tip</button>
+						<button type="button" onclick={goToCalibrator} disabled={!pipetteId || busy} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Go to calibrator</button>
+					</div>
+					<div class="mt-1 grid grid-cols-3 gap-1 text-[10px]" style="color: var(--color-tron-text-secondary)">
+						<label>calX <input type="number" step="0.1" bind:value={calX} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
+						<label>calY <input type="number" step="0.1" bind:value={calY} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
+						<label>calZ <input type="number" step="0.1" bind:value={calZ} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
+					</div>
+				</div>
+
+				<!-- Tour: drive through every active-role hole like a fill run -->
+				<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-black/20 p-2">
+					<div class="mb-1 text-[11px] font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Tour holes</div>
+					{#if !touring}
+						<button type="button" onclick={startTour} disabled={!pipetteId || busy} class="w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">
+							Run through all {roleFilter === 'all' ? 'holes' : `${roleFilter} holes`}
+						</button>
+					{:else}
+						<div class="mb-1 text-center text-[11px]" style="color: var(--color-tron-cyan)">{tourIndex + 1} / {tourWells.length} — {tourWells[tourIndex]}</div>
+						<div class="grid grid-cols-4 gap-1">
+							<button type="button" onclick={tourPrev} disabled={busy || tourIndex === 0} class="rounded border border-[var(--color-tron-border)] py-1.5 text-xs hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">‹ Prev</button>
+							<button type="button" onclick={tourNext} disabled={busy || tourIndex >= tourWells.length - 1} class="rounded border border-[var(--color-tron-border)] py-1.5 text-xs hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">Next ›</button>
+							{#if tourPlaying}
+								<button type="button" onclick={() => (tourPlaying = false)} class="rounded border border-amber-500/40 bg-amber-900/15 py-1.5 text-xs text-amber-300">Pause</button>
+							{:else}
+								<button type="button" onclick={tourPlay} disabled={busy || tourIndex >= tourWells.length - 1} class="rounded border border-[var(--color-tron-cyan)]/40 py-1.5 text-xs text-[var(--color-tron-cyan)] disabled:opacity-40">Play</button>
+							{/if}
+							<button type="button" onclick={tourStop} class="rounded border border-red-500/40 bg-red-900/15 py-1.5 text-xs text-red-300">Stop</button>
+						</div>
+					{/if}
 				</div>
 			</section>
 
