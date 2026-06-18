@@ -133,10 +133,17 @@ export async function sendMaintenanceCommand(
 		data: { commandType, intent: 'setup', params }
 	}, { timeoutMs: timeoutMs + 10_000 });
 	if (!res.ok) {
-		const body = await res.json().catch(() => ({}));
-		throw new Error(
-			(body as any)?.errors?.[0]?.detail ?? `Robot returned ${res.status} on command ${commandType}`
-		);
+		const body: any = await res.json().catch(() => ({}));
+		// Opentrons command errors use {errors:[{detail}]}; FastAPI request-validation
+		// (422) uses {detail:[{loc,msg}]} — surface the field path so "field required"
+		// is actually diagnosable instead of a bare message.
+		const fastapiDetail = Array.isArray(body?.detail)
+			? body.detail.map((d: any) => `${(d?.loc ?? []).join('.')}: ${d?.msg ?? ''}`).join('; ')
+			: typeof body?.detail === 'string'
+				? body.detail
+				: null;
+		const detail = body?.errors?.[0]?.detail ?? fastapiDetail ?? body?.message;
+		throw new Error(`${commandType}: ${detail ?? `robot returned ${res.status}`}`);
 	}
 	// CRITICAL: the OT-2 returns HTTP 201 even when a command failed; the
 	// per-command status lives at body.data.status. A "failed" status with
@@ -216,7 +223,11 @@ export async function loadPipetteInRun(
 	return pid;
 }
 
-/** Home all axes (or a specific subset). */
+/** Home all axes (or a specific subset).
+ *  The schema marks `axes` optional ("omit = home all"), but some OT-2 firmware
+ *  rejects an empty params object with a "field required" validation error, so we
+ *  ALWAYS send the explicit full OT-2 axis set when no subset is given. */
+const OT2_ALL_AXES = ['x', 'y', 'leftZ', 'rightZ', 'leftPlunger', 'rightPlunger'] as const;
 export async function home(
 	robot: RobotRef,
 	runId: string,
@@ -226,7 +237,7 @@ export async function home(
 		robot,
 		runId,
 		'home',
-		axes ? { axes } : {},
+		{ axes: axes ?? [...OT2_ALL_AXES] },
 		{ waitUntilComplete: true, timeoutMs: 60_000 }
 	);
 }
