@@ -20,6 +20,8 @@ import {
 	LabwareDefinition,
 	OpentronsRobot,
 	OpentronProtocol,
+	RobotDeckOffset,
+	TipCalibratorFixture,
 	AuditLog,
 	generateId
 } from '$lib/server/db';
@@ -31,6 +33,11 @@ import { getRobot, robotUploadProtocol } from '$lib/server/opentrons/proxy';
 import type { PageServerLoad, Actions } from './$types';
 
 const DECK_RE = /(gen4deck|cartridge_deck)/i;
+// The two tube racks + two tip racks used by the wax/reagent protocols (slots 10/11).
+const TUBE_RACKS = ['cosmas_and_damian_drybath_tuberack', 'custom_2ml_24_tube_rack'];
+const TIP_RACKS = ['cosmasanddamian_96_tiprack_20ul', 'cosmas_and_damian_biotix_96_200ul_tiprack'];
+// Default OT-2 slot per labware kind (deck/carriage spans 1-9 from slot 1).
+const SLOT_FOR_KIND: Record<string, string> = { deck: '1', tube: '10', tip: '11' };
 
 export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!locals.user) redirect(302, '/login');
@@ -38,24 +45,29 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	await connectDB();
 
 	const defs = (await LabwareDefinition.find({}, { loadName: 1, namespace: 1, version: 1 }).lean()) as any[];
-	const decks = defs
-		.filter((d) => DECK_RE.test(d.loadName))
-		.map((d) => ({ loadName: d.loadName, namespace: d.namespace ?? '', version: d.version ?? 1 }))
-		.sort((a, b) => a.loadName.localeCompare(b.loadName));
+	const toOpt = (d: any) => ({ loadName: d.loadName, namespace: d.namespace ?? '', version: d.version ?? 1 });
+	const decks = defs.filter((d) => DECK_RE.test(d.loadName)).map(toOpt).sort((a, b) => a.loadName.localeCompare(b.loadName));
+	const tubeRacks = defs.filter((d) => TUBE_RACKS.includes(d.loadName)).map(toOpt).sort((a, b) => a.loadName.localeCompare(b.loadName));
+	const tipRacks = defs.filter((d) => TIP_RACKS.includes(d.loadName)).map(toOpt).sort((a, b) => a.loadName.localeCompare(b.loadName));
 
 	const robotsRaw = (await OpentronsRobot.find({}, { name: 1, robotSide: 1, isActive: 1 }).lean()) as any[];
 	const robots = robotsRaw
 		.map((r) => ({ _id: String(r._id), name: r.name ?? String(r._id), robotSide: r.robotSide ?? null, isActive: r.isActive !== false }))
 		.sort((a, b) => a.name.localeCompare(b.name));
 
-	const selected = url.searchParams.get('deck')?.trim() || (decks[0]?.loadName ?? '');
+	// What kind of labware are we calibrating: deck | tube | tip | calibrator.
+	// The calibrator is a fixed fixture (not labware) — no options, no wells.
+	const kind = (url.searchParams.get('kind')?.trim() || 'deck') as 'deck' | 'tube' | 'tip' | 'calibrator';
+	const optionsForKind = kind === 'tube' ? tubeRacks : kind === 'tip' ? tipRacks : kind === 'calibrator' ? [] : decks;
+	const selected = kind === 'calibrator' ? '' : (url.searchParams.get('deck')?.trim() || (optionsForKind[0]?.loadName ?? ''));
+	const slot = SLOT_FOR_KIND[kind] ?? '1';
 
 	let wells: { name: string; x: number; y: number; z: number }[] = [];
 	let dimensions = { x: 0, y: 0, z: 0 };
 	let history: any[] = [];
 	let editedWells: string[] = [];
 
-	if (selected && decks.some((d) => d.loadName === selected)) {
+	if (selected && optionsForKind.some((d) => d.loadName === selected)) {
 		const def = (await LabwareDefinition.findOne({ loadName: selected }).lean()) as any;
 		const wmap = def?.definition?.wells ?? {};
 		const dim = def?.definition?.dimensions ?? {};
@@ -69,23 +81,33 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		const hist = await deckEditHistory(selected, 200);
 		editedWells = Array.from(new Set(hist.map((h: any) => h.wellName)));
 		history = hist.slice(0, 100).map((h: any) => ({
-			wellName: h.wellName,
-			delta: h.delta,
-			before: h.before,
-			after: h.after,
-			createdBy: h.createdBy ?? '',
-			createdAt: h.createdAt?.toISOString?.() ?? ''
+			wellName: h.wellName, delta: h.delta, before: h.before, after: h.after,
+			createdBy: h.createdBy ?? '', createdAt: h.createdAt?.toISOString?.() ?? ''
 		}));
 	}
 
+	// Per-robot calibration: all global offsets + tip-calibrator fixtures (client picks by robot).
+	const robotOffsets = (await RobotDeckOffset.find({}).lean() as any[]).map((o) => ({
+		robotId: String(o.robotId), offset: o.offset ?? { x: 0, y: 0, z: 0 }, isReference: !!o.isReference,
+		capturedAt: o.capturedAt?.toISOString?.() ?? null, note: o.note ?? ''
+	}));
+	const calibrators = (await TipCalibratorFixture.find({}).lean() as any[]).map((c) => ({
+		robotId: String(c.robotId), position: c.position ?? { x: 125.181, y: 173.247, z: 34.491 },
+		zCalWax: c.zCalWax ?? 34.491, zCalReagent: c.zCalReagent ?? 40.8
+	}));
+
 	return {
-		decks,
+		kind,
+		decks, tubeRacks, tipRacks,
 		robots,
 		selected,
+		slot,
 		wells: JSON.parse(JSON.stringify(wells)),
 		dimensions,
 		editedWells,
-		history: JSON.parse(JSON.stringify(history))
+		history: JSON.parse(JSON.stringify(history)),
+		robotOffsets: JSON.parse(JSON.stringify(robotOffsets)),
+		calibrators: JSON.parse(JSON.stringify(calibrators))
 	};
 };
 
@@ -125,6 +147,46 @@ export const actions: Actions = {
 		} catch (e) {
 			return fail(400, { error: e instanceof Error ? e.message : 'Batch apply failed' });
 		}
+	},
+
+	/** PRD 2/3: save the tip-calibrator fixture position (jog → save) per robot. */
+	saveCalibrator: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const data = await request.formData();
+		const robotId = (data.get('robotId') as string)?.trim();
+		const x = Number(data.get('x')), y = Number(data.get('y')), z = Number(data.get('z'));
+		if (!robotId) return fail(400, { error: 'Pick a robot' });
+		if (![x, y, z].every(Number.isFinite)) return fail(400, { error: 'x/y/z must be numbers' });
+		await TipCalibratorFixture.updateOne(
+			{ robotId },
+			{ $set: { position: { x, y, z }, capturedBy: { _id: locals.user._id, username: locals.user.username }, capturedAt: new Date() }, $setOnInsert: { _id: generateId() } },
+			{ upsert: true }
+		);
+		await AuditLog.create({ _id: generateId(), tableName: 'tip_calibrator_fixtures', recordId: robotId, action: 'save_calibrator', newData: { x, y, z }, changedAt: new Date(), changedBy: locals.user?.username });
+		return { success: true, action: 'saveCalibrator' };
+	},
+
+	/** PRD 5: save a robot's GLOBAL deck offset (applies to all labware at fill time). */
+	saveRobotOffset: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const data = await request.formData();
+		const robotId = (data.get('robotId') as string)?.trim();
+		const x = Number(data.get('x')), y = Number(data.get('y')), z = Number(data.get('z'));
+		const isReference = (data.get('isReference') as string) === 'true';
+		if (!robotId) return fail(400, { error: 'Pick a robot' });
+		if (![x, y, z].every(Number.isFinite)) return fail(400, { error: 'x/y/z must be numbers' });
+		if (isReference) await RobotDeckOffset.updateMany({ robotId: { $ne: robotId } }, { $set: { isReference: false } });
+		await RobotDeckOffset.updateOne(
+			{ robotId },
+			{ $set: { offset: { x, y, z }, isReference, capturedBy: { _id: locals.user._id, username: locals.user.username }, capturedAt: new Date() }, $setOnInsert: { _id: generateId() } },
+			{ upsert: true }
+		);
+		await AuditLog.create({ _id: generateId(), tableName: 'robot_deck_offsets', recordId: robotId, action: 'save_robot_offset', newData: { x, y, z, isReference }, changedAt: new Date(), changedBy: locals.user?.username });
+		return { success: true, action: 'saveRobotOffset' };
 	},
 
 	/**

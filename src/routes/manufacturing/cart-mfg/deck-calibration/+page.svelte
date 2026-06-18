@@ -13,7 +13,12 @@
 
 	type Well = { name: string; x: number; y: number; z: number };
 
-	const decks = $derived(data.decks as { loadName: string; namespace: string; version: number }[]);
+	type LwOpt = { loadName: string; namespace: string; version: number };
+	const decks = $derived(data.decks as LwOpt[]);
+	const tubeRacks = $derived((data.tubeRacks ?? []) as LwOpt[]);
+	const tipRacks = $derived((data.tipRacks ?? []) as LwOpt[]);
+	const kind = $derived(data.kind as 'deck' | 'tube' | 'tip' | 'calibrator');
+	const labwareOptions = $derived(kind === 'tube' ? tubeRacks : kind === 'tip' ? tipRacks : decks);
 	const robots = $derived(data.robots as { _id: string; name: string; robotSide: string | null; isActive: boolean }[]);
 	const wells = $derived(data.wells as Well[]);
 	const dim = $derived(data.dimensions as { x: number; y: number; z: number });
@@ -32,6 +37,44 @@
 		u.searchParams.set('deck', loadName);
 		goto(u, { keepFocus: true, noScroll: true });
 	}
+	function pickKind(k: 'deck' | 'tube' | 'tip' | 'calibrator') {
+		const u = new URL($page.url);
+		u.searchParams.set('kind', k);
+		u.searchParams.delete('deck'); // default to first option of the new kind
+		goto(u, { keepFocus: true, noScroll: true });
+	}
+
+	// Switching labware (kind/selection) invalidates the canvas selection and the
+	// deck loaded into the run (it's a different labware now). Also resync the deck
+	// slot to the kind's default and drop the wax/reagent filter (only decks have it).
+	let lastSelectedKey = '';
+	$effect(() => {
+		const key = `${data.kind}:${data.selected}`;
+		if (key !== lastSelectedKey) {
+			lastSelectedKey = key;
+			selection = new Set();
+			loadedLabwareId = null;
+			deckDirty = false;
+			deckSlot = data.slot;
+			if (data.kind !== 'deck') roleFilter = 'all';
+		}
+	});
+
+	// Per-robot calibration state (PRD 2/5): the selected robot's saved global
+	// offset + tip-calibrator fixture. Prefill the calibrator point when the robot
+	// changes so "Go to calibrator" starts from its last-saved position.
+	const currentOffset = $derived((data.robotOffsets as any[]).find((o) => o.robotId === selectedRobotId) ?? null);
+	const currentCalibrator = $derived((data.calibrators as any[]).find((c) => c.robotId === selectedRobotId) ?? null);
+	let offsetIsReference = $state(false);
+	let lastCalRobot = '';
+	$effect(() => {
+		if (selectedRobotId && selectedRobotId !== lastCalRobot) {
+			lastCalRobot = selectedRobotId;
+			const cal = (data.calibrators as any[]).find((c) => c.robotId === selectedRobotId);
+			if (cal?.position) { calX = cal.position.x; calY = cal.position.y; calZ = cal.position.z; }
+			offsetIsReference = !!(data.robotOffsets as any[]).find((o) => o.robotId === selectedRobotId)?.isReference;
+		}
+	});
 
 	// ── Hole role (wax vs reagent) — by deck column parity ───────────────────────
 	// Confirmed from the protocols: wax fills EVEN columns (2,4,…,24), reagent fills
@@ -313,7 +356,7 @@
 	// Load the deck labware into the run once (so the robot computes well positions).
 	async function ensureDeckLoaded(): Promise<string> {
 		if (loadedLabwareId) return loadedLabwareId;
-		const d = decks.find((x) => x.loadName === data.selected);
+		const d = labwareOptions.find((x) => x.loadName === data.selected);
 		const lw = await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/load-labware`, {
 			method: 'POST',
 			body: JSON.stringify({ namespace: d?.namespace, loadName: data.selected, version: d?.version ?? 1, slot: deckSlot })
@@ -441,6 +484,29 @@
 		msg = `Captured offset from ${refWell}: dx=${dx} dy=${dy} dz=${dz}. Select the holes to apply it to.`;
 	}
 
+	// ── PRD 2: save the tip-calibrator fixture position for the selected robot. ──
+	// Uses the live jogged position when a run is open (jog onto the calibrator,
+	// then save), otherwise the typed calX/calY/calZ.
+	async function saveCalibratorPosition() {
+		if (!selectedRobotId) { errMsg = 'Pick a robot'; return; }
+		const x = runId && liveX !== null ? liveX : calX;
+		const y = runId && liveY !== null ? liveY : calY;
+		const z = runId && liveZ !== null ? liveZ : calZ;
+		const r = await postAction('saveCalibrator', { robotId: selectedRobotId, x: String(x), y: String(y), z: String(z) });
+		if (r) { calX = +(+x).toFixed(3); calY = +(+y).toFixed(3); calZ = +(+z).toFixed(3); msg = `Saved tip-calibrator for ${robot?.name}: (${calX}, ${calY}, ${calZ}).`; }
+	}
+
+	// ── PRD 5: save the robot's GLOBAL deck offset. The captured dx/dy/dz (the
+	// error of THIS robot vs the reference deck) is the global correction applied
+	// to all labware at fill time. One robot is the reference (offset 0,0,0).
+	async function saveRobotOffsetFromCapture() {
+		if (!selectedRobotId) { errMsg = 'Pick a robot'; return; }
+		if (!offsetIsReference && dx === 0 && dy === 0 && dz === 0) { errMsg = 'Capture a non-zero offset first (or mark this robot the reference)'; return; }
+		const x = offsetIsReference ? 0 : dx, y = offsetIsReference ? 0 : dy, z = offsetIsReference ? 0 : dz;
+		const r = await postAction('saveRobotOffset', { robotId: selectedRobotId, x: String(x), y: String(y), z: String(z), isReference: String(offsetIsReference) });
+		if (r) msg = `Saved global offset for ${robot?.name}: (${x}, ${y}, ${z})${offsetIsReference ? ' — set as reference (others cleared)' : ''}.`;
+	}
+
 	onDestroy(() => {
 		if (runId) {
 			try {
@@ -464,17 +530,35 @@
 
 	<!-- Pickers -->
 	<div class="flex flex-wrap items-end gap-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
-		<label class="text-xs" style="color: var(--color-tron-text-secondary)">Deck
-			<select value={data.selected} onchange={(e) => pickDeck(e.currentTarget.value)} class="mt-1 block rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono text-xs" style="color: var(--color-tron-text)">
-				{#each decks as d (d.loadName)}<option value={d.loadName}>{d.loadName}</option>{/each}
-			</select>
-		</label>
+		<div class="text-xs" style="color: var(--color-tron-text-secondary)">Labware
+			<div class="mt-1 flex overflow-hidden rounded border border-[var(--color-tron-border)] text-[11px]">
+				{#each [['deck', 'Deck', '1'], ['tube', 'Tube rack', '10'], ['tip', 'Tip rack', '11'], ['calibrator', 'Calibrator', '—']] as [k, lbl, sl] (k)}
+					<button
+						type="button"
+						onclick={() => pickKind(k as 'deck' | 'tube' | 'tip' | 'calibrator')}
+						class="px-2.5 py-1.5 transition-colors {kind === k ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:bg-white/5'}"
+						title={sl === '—' ? 'Tip-calibrator fixture' : `Slot ${sl}`}
+					>{lbl}</button>
+				{/each}
+			</div>
+		</div>
+		{#if kind !== 'calibrator'}
+			<label class="text-xs" style="color: var(--color-tron-text-secondary)">{kind === 'tube' ? 'Tube rack' : kind === 'tip' ? 'Tip rack' : 'Deck'}
+				<select value={data.selected} onchange={(e) => pickDeck(e.currentTarget.value)} class="mt-1 block rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono text-xs" style="color: var(--color-tron-text)">
+					{#each labwareOptions as d (d.loadName)}<option value={d.loadName}>{d.loadName}</option>{/each}
+				</select>
+			</label>
+		{/if}
 		<label class="text-xs" style="color: var(--color-tron-text-secondary)">Robot
 			<select bind:value={selectedRobotId} class="mt-1 block rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 text-xs" style="color: var(--color-tron-text)">
 				{#each robots as r (r._id)}<option value={r._id}>{r.name}{r.isActive ? '' : ' (inactive)'}</option>{/each}
 			</select>
 		</label>
-		<div class="text-xs" style="color: var(--color-tron-text-secondary)">{wells.length} holes · {dim.x}×{dim.y} mm</div>
+		{#if kind === 'calibrator'}
+			<div class="text-xs" style="color: var(--color-tron-text-secondary)">Tip-calibrator fixture · slot-free</div>
+		{:else}
+			<div class="text-xs" style="color: var(--color-tron-text-secondary)">{wells.length} holes · {dim.x}×{dim.y} mm · slot {data.slot}</div>
+		{/if}
 	</div>
 
 	{#if errMsg}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{errMsg}</div>{/if}
@@ -485,18 +569,20 @@
 		<section class="min-w-0 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 			<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
 				<div class="flex flex-wrap items-center gap-3">
-					<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Deck — {selCount} selected</h2>
-					<div class="flex overflow-hidden rounded border border-[var(--color-tron-border)] text-[11px]">
-						{#each [['all', 'All'], ['wax', `Wax (${waxCount})`], ['reagent', `Reagent (${reagentCount})`]] as [val, label] (val)}
-							<button
-								type="button"
-								onclick={() => setRoleFilter(val as 'all' | Role)}
-								class="px-2.5 py-1 transition-colors {roleFilter === val
-									? (val === 'wax' ? 'bg-[rgba(217,160,80,0.25)] text-[#e0b070]' : val === 'reagent' ? 'bg-[rgba(80,170,215,0.25)] text-[#7ec6e6]' : 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]')
-									: 'text-[var(--color-tron-text-secondary)] hover:bg-white/5'}"
-							>{label}</button>
-						{/each}
-					</div>
+					<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">{kind === 'deck' ? 'Deck' : kind === 'tube' ? 'Tube rack' : 'Tip rack'} — {selCount} selected</h2>
+					{#if kind === 'deck'}
+						<div class="flex overflow-hidden rounded border border-[var(--color-tron-border)] text-[11px]">
+							{#each [['all', 'All'], ['wax', `Wax (${waxCount})`], ['reagent', `Reagent (${reagentCount})`]] as [val, label] (val)}
+								<button
+									type="button"
+									onclick={() => setRoleFilter(val as 'all' | Role)}
+									class="px-2.5 py-1 transition-colors {roleFilter === val
+										? (val === 'wax' ? 'bg-[rgba(217,160,80,0.25)] text-[#e0b070]' : val === 'reagent' ? 'bg-[rgba(80,170,215,0.25)] text-[#7ec6e6]' : 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]')
+										: 'text-[var(--color-tron-text-secondary)] hover:bg-white/5'}"
+								>{label}</button>
+							{/each}
+						</div>
+					{/if}
 				</div>
 				<div class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 					<label>Zoom <input type="range" min="0.6" max="5" step="0.2" bind:value={zoom} /> {zoom.toFixed(1)}×</label>
@@ -549,8 +635,14 @@
 						{/if}
 					</svg>
 				</div>
+				{:else if kind === 'calibrator'}
+					<div class="space-y-2 p-6 text-center text-xs" style="color: var(--color-tron-text-secondary)">
+						<p>The tip calibrator is a fixed limit-switch fixture, not labware — there's no grid to teach.</p>
+						<p>Open a run, pick up a tip, jog onto the calibrator, then <strong>Save calibrator position</strong> in the Tip panel. It saves per robot ({robot?.name ?? 'robot'}).</p>
+						<p class="font-mono">{robot?.name ?? 'robot'}: {currentCalibrator ? `(${currentCalibrator.position.x}, ${currentCalibrator.position.y}, ${currentCalibrator.position.z})` : 'none saved'}</p>
+					</div>
 				{:else}
-					<div class="p-6 text-center text-xs" style="color: var(--color-tron-text-secondary)">No wells — pick a deck.</div>
+					<div class="p-6 text-center text-xs" style="color: var(--color-tron-text-secondary)">No wells — pick {kind === 'tube' ? 'a tube rack' : kind === 'tip' ? 'a tip rack' : 'a deck'}.</div>
 				{/if}
 			</div>
 		</section>
@@ -644,6 +736,9 @@
 						<label>calY <input type="number" step="0.1" bind:value={calY} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
 						<label>calZ <input type="number" step="0.1" bind:value={calZ} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
 					</div>
+					<button type="button" onclick={saveCalibratorPosition} disabled={busy || !selectedRobotId} class="mt-1 w-full rounded border border-green-500/40 bg-green-900/15 px-2 py-1.5 text-[11px] font-semibold text-green-300 hover:bg-green-900/25 disabled:opacity-40">
+						Save calibrator position{runId ? ' (from live)' : ''} → {robot?.name ?? 'robot'}
+					</button>
 				</div>
 
 				<!-- Tour: drive through every active-role hole like a fill run -->
@@ -684,6 +779,25 @@
 					⤧ Shift whole grid by this offset {roleFilter !== 'all' ? `(${roleFilter} only)` : ''}
 				</button>
 				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Anchor: jog to one hole (e.g. a corner) → Capture → Shift whole grid translates every hole by that offset.</p>
+			</section>
+
+			<!-- PRD 5: per-robot global deck offset -->
+			<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Robot global offset</h2>
+				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">
+					A whole-robot correction applied to ALL labware at fill time — for swapping one deck between robots. One robot is the reference (0,0,0); the others store their error vs it. Capture the offset (jog the same hole on this robot), then save.
+				</p>
+				<div class="mt-2 rounded border border-[var(--color-tron-border)] bg-black/30 p-2 text-[11px] font-mono" style="color: var(--color-tron-text)">
+					{robot?.name ?? 'robot'}: {currentOffset
+						? `(${currentOffset.offset.x}, ${currentOffset.offset.y}, ${currentOffset.offset.z})${currentOffset.isReference ? ' · reference' : ''}`
+						: 'none saved'}
+				</div>
+				<label class="mt-2 flex items-center gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
+					<input type="checkbox" bind:checked={offsetIsReference} /> This robot is the reference (offset 0,0,0; clears others' reference flag)
+				</label>
+				<button type="button" onclick={saveRobotOffsetFromCapture} disabled={busy || !selectedRobotId} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">
+					{offsetIsReference ? `Set ${robot?.name ?? 'robot'} as reference (0,0,0)` : `Save captured offset (${dx}, ${dy}, ${dz}) → ${robot?.name ?? 'robot'}`}
+				</button>
 			</section>
 
 			<!-- Sync -->
