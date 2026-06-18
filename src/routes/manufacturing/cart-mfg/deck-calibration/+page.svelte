@@ -256,9 +256,13 @@
 				loadedLabwareId = lw?.labwareId ?? null;
 				if (!loadedLabwareId) throw new Error('load-labware did not return a labwareId');
 			}
+			// Safe arc: lift to ~80mm above the highest hole, travel in XY, then descend —
+			// so the tip never drags across cartridges between holes.
+			const maxWellZ = wells.length ? Math.max(...wells.map((w) => w.z)) : 12;
+			const minimumZHeight = Math.round(maxWellZ + 80);
 			await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/move-to-well`, {
 				method: 'POST',
-				body: JSON.stringify({ pipetteId, labwareId: loadedLabwareId, wellName: name })
+				body: JSON.stringify({ pipetteId, labwareId: loadedLabwareId, wellName: name, minimumZHeight })
 			});
 			await refreshPosition();
 			nominal = liveX !== null ? { x: liveX!, y: liveY!, z: liveZ! } : null;

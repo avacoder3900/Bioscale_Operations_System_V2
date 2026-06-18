@@ -3,7 +3,8 @@
  * (DECK-CALIBRATION-STUDIO "move to hole"). Requires the labware to have been
  * loaded first via .../load-labware.
  * POST /api/opentrons-lab/robots/:id/maintenance/:runId/move-to-well
- * Body: { pipetteId: string, labwareId: string, wellName: string, zOffsetMm?: number }
+ * Body: { pipetteId: string, labwareId: string, wellName: string, zOffsetMm?: number, minimumZHeight?: number }
+ * minimumZHeight (deck mm) makes the move a safe arc — lift up, travel, descend.
  */
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
@@ -23,12 +24,13 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	const labwareId = body?.labwareId;
 	const wellName = body?.wellName;
 	const zOffsetMm = typeof body?.zOffsetMm === 'number' ? body.zOffsetMm : undefined;
+	const minimumZHeight = typeof body?.minimumZHeight === 'number' ? body.minimumZHeight : undefined;
 	if (!pipetteId || typeof pipetteId !== 'string') error(400, 'pipetteId required');
 	if (!labwareId || typeof labwareId !== 'string') error(400, 'labwareId required');
 	if (!wellName || typeof wellName !== 'string') error(400, 'wellName required');
 
 	try {
-		await moveToWell(robot, params.runId, pipetteId, labwareId, wellName, { zOffsetMm });
+		await moveToWell(robot, params.runId, pipetteId, labwareId, wellName, { zOffsetMm, minimumZHeight });
 		return json({ ok: true });
 	} catch (e) {
 		console.error('[API] move-to-well error:', e instanceof Error ? e.message : e);

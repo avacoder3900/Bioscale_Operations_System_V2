@@ -346,14 +346,21 @@ export async function loadLabwareInRun(
 	return id;
 }
 
-/** Move the pipette to a well's nominal position (default: just above the well top). */
+/**
+ * Move the pipette to a well's nominal position (default: just above the well top).
+ * Travels as a SAFE ARC, not a straight line: with forceDirect=false the OT-2 lifts
+ * to `minimumZHeight` (deck Z, mm) first, moves over the target in XY, then descends.
+ * This avoids dragging the tip across cartridges/structures between holes. The
+ * caller passes a high minimumZHeight (≈80mm above the holes) so the lift always
+ * clears the deck.
+ */
 export async function moveToWell(
 	robot: RobotRef,
 	runId: string,
 	pipetteId: string,
 	labwareId: string,
 	wellName: string,
-	opts: { zOffsetMm?: number } = {}
+	opts: { zOffsetMm?: number; minimumZHeight?: number } = {}
 ): Promise<void> {
 	await sendMaintenanceCommand(
 		robot,
@@ -363,7 +370,10 @@ export async function moveToWell(
 			pipetteId,
 			labwareId,
 			wellName,
-			wellLocation: { origin: 'top', offset: { x: 0, y: 0, z: opts.zOffsetMm ?? 2 } }
+			wellLocation: { origin: 'top', offset: { x: 0, y: 0, z: opts.zOffsetMm ?? 2 } },
+			// false ⇒ travel via the safe arc (up to minimumZHeight, over, down).
+			forceDirect: false,
+			...(opts.minimumZHeight !== undefined ? { minimumZHeight: opts.minimumZHeight } : {})
 		},
 		{ waitUntilComplete: true, timeoutMs: 30_000 }
 	);
