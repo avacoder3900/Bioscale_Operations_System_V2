@@ -5,8 +5,6 @@
 	import WaxPreparation from '$lib/components/manufacturing/wax-filling/WaxPreparation.svelte';
 	import DeckLoadingGrid from '$lib/components/manufacturing/wax-filling/DeckLoadingGrid.svelte';
 	import RunExecution from '$lib/components/manufacturing/wax-filling/RunExecution.svelte';
-	import PostRunCooling from '$lib/components/manufacturing/wax-filling/PostRunCooling.svelte';
-	import CompletionStorage from '$lib/components/manufacturing/wax-filling/CompletionStorage.svelte';
 	import ProtocolStartPanel from '$lib/components/manufacturing/ProtocolStartPanel.svelte';
 	import EmbeddedRunController from '$lib/components/manufacturing/EmbeddedRunController.svelte';
 	import type { RejectionReasonCode } from '$lib/server/db/schema';
@@ -68,35 +66,6 @@
 			backedReadyCount: number;
 			backedTotalCount: number;
 			rejectionCodes: RejectionReasonCode[];
-			qcCartridges: {
-				cartridgeId: string;
-				backedLotId: string;
-				ovenEntryTime: string | null;
-				waxRunId: string | null;
-				deckPosition: number | null;
-				waxTubeId: string | null;
-				coolingTrayId: string | null;
-				transferTimeSeconds: number | null;
-				qcStatus: string;
-				rejectionReason: string | null;
-				qcTimestamp: string | null;
-				currentInventory: string;
-				storageLocation: string | null;
-				storageTimestamp: string | null;
-				storageOperatorId: string | null;
-				createdAt: string;
-				updatedAt: string;
-			}[];
-			storageCartridges: {
-				cartridgeId: string;
-				qcStatus: string;
-				currentInventory: string;
-				storageLocation: string | null;
-			}[];
-			lockedCartridges?: {
-				cartridgeId: string;
-				status: string;
-			}[];
 			fridges: {
 				id: string;
 				displayName: string;
@@ -128,29 +97,6 @@
 	// must dismiss so a "200 OK" no longer masks a partial write. Reset on the
 	// next submitAction call.
 	let skippedNotice = $state<{ count: number; carts: { cartridgeId: string; status: string }[]; action: string } | null>(null);
-	let coolingBypassed = $state(false);
-	let showCoolingBypass = $state(false);
-	let coolingBypassPassword = $state('');
-	let coolingBypassError = $state('');
-
-	function handleCoolingBypass() {
-		// Check admin password via server validation
-		const pw = coolingBypassPassword.trim();
-		if (!pw) { coolingBypassError = 'Enter admin password'; return; }
-		fetch('/api/dev/validate-equipment?type=admin-password&id=' + encodeURIComponent(pw))
-			.then(r => r.json())
-			.then(d => {
-				if (d.valid) {
-					coolingBypassed = true;
-					showCoolingBypass = false;
-					coolingBypassError = '';
-					coolingBypassPassword = '';
-				} else {
-					coolingBypassError = 'Invalid admin password';
-				}
-			})
-			.catch(() => { coolingBypassError = 'Verification failed'; });
-	}
 	let showCancelModal = $state(false);
 	let cancelReason = $state('');
 
@@ -414,14 +360,16 @@
 	let pendingOverrideAction = $state('');
 	let pendingOverrideData = $state<Record<string, string>>({});
 
-	const STAGES = ['Loading', 'Running', 'Awaiting Removal', 'QC', 'Storage'] as const;
+	// Deck-removal is the terminal commit (storeDeckAndComplete → wax_stored, run
+	// completed → page idle), so this page owns only Loading → Running. Cooling/QC/
+	// storage were removed (WAX-FLOW: deck-removed → fridge → wax_stored).
+	const STAGES = ['Loading', 'Running'] as const;
 
 	// Optimistic stage: prevents UI flash when invalidateAll() returns stale/failed data
 	const ACTION_NEXT_STAGE: Record<string, string> = {
 		recordWaxPrep: 'Loading',
 		loadDeck: 'Loading',
 		startRun: 'Running',
-		confirmDeckRemoved: 'Awaiting Removal',
 	};
 	let pendingStage = $state<string | null>(null);
 	let effectiveStage = $derived(pendingStage ?? (data.runState.hasActiveRun ? data.runState.stage : null));
@@ -450,8 +398,6 @@
 				return '1. Wax fill setup';
 			case 'Running':
 				return '2. Run';
-			case 'Awaiting Removal':
-				return '3. Deck Removal';
 			default:
 				return stage;
 		}
@@ -744,120 +690,6 @@
 		cancelReason = '';
 	}
 
-	async function handleCoolingComplete() {
-		// After confirmDeckRemoved sets robotReleasedAt, the load query filters
-		// the run out and data.runState.runId becomes null — so don't guard on
-		// it. The server falls back to looking up the run by robotId (which
-		// the load always returns).
-		await submitAction('confirmCooling', {
-			runId: data.runState.runId ?? '',
-			robotId: data.robotId
-		});
-		// Final step of the wax run on this page — back to the wax-filling
-		// robot picker, where the post-OT-2 queue (QC + Storage for this run)
-		// is shown inline below the cards.
-		if (!errorMsg) await goto('/manufacturing/cart-mfg/wax-filling');
-	}
-
-	function handleQCComplete(result: {
-		rejectedCartridges: { cartridgeId: string; reasonCode: string }[];
-	}) {
-		handleQCSequential(result.rejectedCartridges);
-	}
-
-	async function handleQCSequential(
-		rejectedCartridges: { cartridgeId: string; reasonCode: string }[]
-	) {
-		if (submitting) return;
-		submitting = true;
-		submittingTooLong = false;
-		const slowTimer = setTimeout(() => { submittingTooLong = true; }, 5000);
-		try {
-			// Reject each cartridge individually
-			for (const c of rejectedCartridges) {
-				const fd = new FormData();
-				fd.set('cartridgeId', c.cartridgeId);
-				fd.set('reasonCode', c.reasonCode);
-				const res = await fetch('?/rejectCartridge', {
-					method: 'POST',
-					body: fd,
-					headers: { 'x-sveltekit-action': 'true' }
-				});
-				if (!res.ok) {
-					errorMsg = 'Failed to reject cartridge';
-					break;
-				}
-			}
-			// Then complete QC for the tray
-			if (!errorMsg) {
-				const trayId = data.runState.coolingTrayId ?? data.qcCartridges[0]?.coolingTrayId;
-				if (trayId) {
-					const fd = new FormData();
-					fd.set('trayId', trayId);
-					if (data.runState.runId) fd.set('runId', data.runState.runId);
-					const res = await fetch('?/completeQC', {
-						method: 'POST',
-						body: fd,
-						headers: { 'x-sveltekit-action': 'true' }
-					});
-					if (!res.ok) {
-						errorMsg = 'Failed to complete QC';
-					}
-				}
-			}
-		} catch (e) {
-			errorMsg = e instanceof Error ? e.message : 'QC failed';
-		}
-		clearTimeout(slowTimer);
-		pendingStage = 'Storage';
-		await invalidateAll();
-		if (data.runState.hasActiveRun) {
-			pendingStage = null;
-		}
-		submitting = false;
-		submittingTooLong = false;
-	}
-
-	function handleRecordStorage(cartridgeIds: string[], location: string) {
-		console.log('[handleRecordStorage] cartridgeIds:', cartridgeIds, 'location:', JSON.stringify(location));
-		if (previewParam) return;
-		submitAction('recordBatchStorage', {
-			cartridgeIds: JSON.stringify(cartridgeIds),
-			storageLocation: location
-		});
-	}
-
-	function handleCompleteRun() {
-		if (previewParam) return;
-		if (data.runState.runId) {
-			submitAction('completeRun', { runId: data.runState.runId });
-		}
-	}
-
-	// Cooling timer: block QC after coolingConfirmedAt for the duration set in
-	// ManufacturingSettings.waxFilling.minCoolingBeforeQcMin (default 2 min).
-	const coolingRequiredMs = $derived((data.settings?.minCoolingBeforeQcMin ?? 2) * 60 * 1000);
-	let coolingTick = $state(0);
-	$effect(() => {
-		if (data.runState.stage === 'QC' && data.runState.coolingConfirmedAt && !coolingBypassed) {
-			const interval = setInterval(() => { coolingTick++; }, 1000);
-			return () => clearInterval(interval);
-		}
-	});
-	const coolingConfirmedAt = $derived(data.runState.coolingConfirmedAt ? new Date(data.runState.coolingConfirmedAt) : null);
-	const coolingElapsedMs = $derived.by(() => {
-		void coolingTick;
-		if (coolingBypassed) return coolingRequiredMs;
-		return coolingConfirmedAt ? Date.now() - coolingConfirmedAt.getTime() : coolingRequiredMs;
-	});
-	const coolingRemainingMs = $derived(Math.max(0, coolingRequiredMs - coolingElapsedMs));
-	const coolingComplete = $derived(coolingRemainingMs === 0 || coolingBypassed);
-	const coolingCountdown = $derived.by(() => {
-		const totalSec = Math.ceil(coolingRemainingMs / 1000);
-		const m = Math.floor(totalSec / 60);
-		const s = totalSec % 60;
-		return `${m}:${String(s).padStart(2, '0')}`;
-	});
 
 	// Loading stage has 3 sub-steps: wax prep -> deck loading -> ready to run
 	let loadingSubStage = $derived.by(() => {
@@ -881,16 +713,15 @@
 	const displayStage = $derived(previewParam ? previewStage : viewStage);
 	const displayLoadingSub = $derived(previewParam ? previewLoadingSub : loadingSubStage);
 
-	// Timeline bubbles (6): the Loading stage is split into "Wax fill setup"
-	// (wax_prep) and "Barcode scanning" (deck_load/ready_to_run); the rest map 1:1.
-	const TIMELINE = ['Wax fill setup', 'Barcode scanning', 'Run', 'Deck removal', 'QC', 'Storage'] as const;
+	// Timeline bubbles (3): the Loading stage is split into "Wax fill setup"
+	// (wax_prep) and "Barcode scanning" (deck_load/ready_to_run); then Run. The
+	// run ends at deck-removal (→ fridge → wax_stored) inside the Run stage, so
+	// there are no cooling/QC/storage bubbles.
+	const TIMELINE = ['Wax fill setup', 'Barcode scanning', 'Run'] as const;
 	const currentBubbleIndex = $derived.by(() => {
 		const s = effectiveStage;
 		if (s === 'Loading') return (loadingSubStage === 'wax_prep' || loadingSubStage === 'params') ? 0 : 1;
 		if (s === 'Running') return 2;
-		if (s === 'Awaiting Removal') return 3;
-		if (s === 'QC') return 4;
-		if (s === 'Storage') return 5;
 		return 0;
 	});
 	const isPreviewOrPast = $derived(previewParam || isViewingPast);
@@ -918,40 +749,6 @@
 	let runFinishedLocal = $state(false);
 	const runFinished = $derived(runFinishedLocal || !!data.runState.opentronsRunFinalStatus);
 
-	const mockQcCartridges = Array.from({ length: 6 }, (_, i) => ({
-		cartridgeId: `CART-${String(i + 1).padStart(4, '0')}`,
-		backedLotId: `LOT-001`,
-		ovenEntryTime: new Date(Date.now() - 3600000) as Date | null,
-		waxRunId: 'WXR-PREVIEW',
-		deckPosition: i + 1 as number | null,
-		waxTubeId: 'TUBE-001' as string | null,
-		coolingTrayId: 'TRAY-001' as string | null,
-		transferTimeSeconds: 45 as number | null,
-		qcStatus: 'Pending',
-		rejectionReason: null as string | null,
-		qcTimestamp: null as Date | null,
-		currentInventory: 'WaxFilling',
-		storageLocation: null as string | null,
-		storageTimestamp: null as Date | null,
-		storageOperatorId: null as string | null,
-		createdAt: new Date(),
-		updatedAt: new Date()
-	}));
-
-	const mockStorageCartridges = [
-		...Array.from({ length: 5 }, (_, i) => ({
-			cartridgeId: `CART-${String(i + 1).padStart(4, '0')}`,
-			qcStatus: 'Accepted',
-			currentInventory: 'Cooled Cartridge',
-			storageLocation: null as string | null
-		})),
-		{
-			cartridgeId: 'CART-0006',
-			qcStatus: 'Rejected',
-			currentInventory: 'Rejected',
-			storageLocation: null as string | null
-		}
-	];
 </script>
 
 <div class="space-y-6">
@@ -978,18 +775,6 @@
 				<button type="button" onclick={() => { previewStage = 'Running'; }}
 					class="rounded px-3 py-1.5 text-xs font-medium transition-colors {previewStage === 'Running' ? 'bg-[var(--color-tron-cyan)] text-white' : 'border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}">
 					2. Running
-				</button>
-				<button type="button" onclick={() => { previewStage = 'Awaiting Removal'; }}
-					class="rounded px-3 py-1.5 text-xs font-medium transition-colors {previewStage === 'Awaiting Removal' ? 'bg-[var(--color-tron-cyan)] text-white' : 'border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}">
-					3. Cool
-				</button>
-				<button type="button" onclick={() => { previewStage = 'QC'; }}
-					class="rounded px-3 py-1.5 text-xs font-medium transition-colors {previewStage === 'QC' ? 'bg-[var(--color-tron-cyan)] text-white' : 'border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}">
-					4. QC
-				</button>
-				<button type="button" onclick={() => { previewStage = 'Storage'; }}
-					class="rounded px-3 py-1.5 text-xs font-medium transition-colors {previewStage === 'Storage' ? 'bg-[var(--color-tron-cyan)] text-white' : 'border border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}">
-					5. Store
 				</button>
 			</div>
 		</div>
@@ -1470,141 +1255,6 @@
 				fridges={data.fridges}
 				onDeckRemoved={handleDeckRemoved}
 				onAborted={handleAborted}
-				readonly={isPreviewOrPast}
-			/>
-		{:else if displayStage === 'Awaiting Removal'}
-			<PostRunCooling
-				runEndTime={previewParam ? new Date() : (data.runState.deckRemovedTime ? new Date(data.runState.deckRemovedTime) : (data.runState.runEndTime ? new Date(data.runState.runEndTime) : new Date()))}
-				coolingWarningMin={data.settings.coolingWarningMin}
-				onComplete={handleCoolingComplete}
-				readonly={isPreviewOrPast}
-			/>
-		{:else if displayStage === 'QC'}
-			{@const qcCarts = previewParam ? mockQcCartridges : data.qcCartridges.map((c) => ({
-				...c,
-				ovenEntryTime: c.ovenEntryTime ? new Date(c.ovenEntryTime) : null,
-				qcTimestamp: c.qcTimestamp ? new Date(c.qcTimestamp) : null,
-				storageTimestamp: c.storageTimestamp ? new Date(c.storageTimestamp) : null,
-				createdAt: new Date(c.createdAt),
-				updatedAt: new Date(c.updatedAt)
-			}))}
-			{#if !previewParam && !coolingComplete}
-				<div class="rounded-lg border border-blue-500/50 bg-blue-900/20 p-5 text-center">
-					<p class="text-sm font-medium text-blue-300">Cooling in progress — inspection locked</p>
-					<p class="mt-2 font-mono text-3xl font-bold text-blue-200">Cooling: {coolingCountdown} remaining before inspection</p>
-					<p class="mt-2 text-xs text-blue-400/70">Cartridges must cool for 10 minutes before QC inspection can begin.</p>
-					{#if !showCoolingBypass}
-						<button type="button" onclick={() => { showCoolingBypass = true; }} class="mt-3 text-xs text-blue-400/50 hover:text-blue-300 transition-colors">
-							Admin Override
-						</button>
-					{:else}
-						<div class="mt-3 flex items-center justify-center gap-2">
-							<input
-								type="password"
-								bind:value={coolingBypassPassword}
-								placeholder="Admin password..."
-								class="rounded border border-blue-500/30 bg-blue-900/30 px-3 py-1.5 text-sm text-blue-200 placeholder:text-blue-400/40 focus:border-blue-400 focus:outline-none"
-								onkeydown={(e) => { if (e.key === 'Enter') handleCoolingBypass(); }}
-							/>
-							<button type="button" onclick={handleCoolingBypass} class="rounded bg-blue-500/20 px-3 py-1.5 text-sm text-blue-300 hover:bg-blue-500/30">
-								Bypass
-							</button>
-						</div>
-						{#if coolingBypassError}
-							<p class="mt-1 text-xs text-red-400">{coolingBypassError}</p>
-						{/if}
-					{/if}
-				</div>
-			{:else if qcCarts.length > 0}
-				<!-- FU1 (WAX-INSPECTION-FOLLOWUPS): the pre-storage QC accept/reject was
-				     removed. This step is now just "carts cooled → move to storage"; the
-				     accept/reject verdict happens AFTER storage at Wax Inspect
-				     (wax_qc → wax_ready/wax_rejected). -->
-				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center space-y-3">
-					<p class="text-sm text-[var(--color-tron-text)]">
-						{qcCarts.length} cartridge{qcCarts.length === 1 ? '' : 's'} cooled and ready to store.
-					</p>
-					<p class="text-xs text-[var(--color-tron-text-secondary)]">
-						Wax inspection (photo + Ready/Rejected) happens after storage, at Wax Inspect.
-					</p>
-					<button
-						type="button"
-						onclick={() => handleQCComplete({ rejectedCartridges: [] })}
-						disabled={submitting || isPreviewOrPast}
-						class="rounded-lg bg-[var(--color-tron-cyan)] px-6 py-3 font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-40"
-					>
-						{submitting ? 'Saving…' : 'Confirm cooled → continue to storage'}
-					</button>
-				</div>
-			{:else}
-				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">
-					<p class="text-sm text-[var(--color-tron-text-secondary)]">
-						No cartridges found for QC inspection. The cooling tray may not have been assigned yet.
-					</p>
-				</div>
-			{/if}
-		{:else if displayStage === 'Storage'}
-			{@const storageCarts = previewParam ? mockStorageCartridges : data.storageCartridges}
-			{@const summary = {
-				runId: previewParam ? 'WXR-PREVIEW' : (data.runState.runId ?? ''),
-				cartridgeCount: storageCarts.length,
-				acceptedCount: storageCarts.filter((c) => c.qcStatus === 'Accepted').length,
-				rejectedCount: storageCarts.filter((c) => c.qcStatus === 'Rejected').length
-			}}
-			<CompletionStorage
-				cartridges={storageCarts}
-				runSummary={summary}
-				fridges={data.fridges}
-				lockedCartridges={previewParam ? [] : (data.lockedCartridges ?? [])}
-				onRecordStorage={handleRecordStorage}
-				onComplete={handleCompleteRun}
-				existingNote={data.runState.existingWaxRunNote ?? ''}
-				onSaveNote={async (noteBody) => {
-					// Independent fetch — bypasses submitForm so the page doesn't
-					// reload the stage on save. Calls recordWaxRunNote which writes
-					// the note to WaxFillingRun.notes[] AND every cartridge in the run.
-					try {
-						const formData = new FormData();
-						formData.set('runId', data.runState.runId ?? '');
-						formData.set('noteBody', noteBody);
-						const res = await fetch('?/recordWaxRunNote', {
-							method: 'POST',
-							body: formData,
-							headers: { 'x-sveltekit-action': 'true' }
-						});
-						const text = await res.text();
-						if (!res.ok || text.includes('"type":"failure"')) {
-							let err = `HTTP ${res.status}`;
-							try {
-								const json = JSON.parse(text);
-								if (json.type === 'failure' && json.data) {
-									const parsed = typeof json.data === 'string' ? JSON.parse(json.data) : json.data;
-									if (Array.isArray(parsed)) {
-										for (let i = 1; i < parsed.length; i++) {
-											if (typeof parsed[i] === 'string' && parsed[i].length > 3) { err = parsed[i]; break; }
-										}
-									}
-								}
-							} catch { /* fallthrough with HTTP code */ }
-							return { ok: false, error: err };
-						}
-						let cartridgeCount = storageCarts.length;
-						try {
-							const json = JSON.parse(text);
-							const parsed = typeof json.data === 'string' ? JSON.parse(json.data) : json.data;
-							if (Array.isArray(parsed)) {
-								const obj = parsed[0];
-								if (obj && typeof obj === 'object' && 'cartridgeCount' in obj) {
-									const idx = (obj as Record<string, number>).cartridgeCount;
-									if (typeof idx === 'number' && parsed[idx] != null) cartridgeCount = Number(parsed[idx]);
-								}
-							}
-						} catch { /* keep fallback count */ }
-						return { ok: true, cartridgeCount };
-					} catch (e) {
-						return { ok: false, error: e instanceof Error ? e.message : 'Network error' };
-					}
-				}}
 				readonly={isPreviewOrPast}
 			/>
 		{/if}

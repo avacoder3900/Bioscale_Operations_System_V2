@@ -2698,3 +2698,27 @@ wax_filling). Fix: deck-removal is now the single commit on the wax-filling page
   runs. Pre-existing stuck carts (e.g. run XymSat5wqsDIlWbp-8g7a at status QC) still
   need finishing on Opentron Control — not retroactively fixed.
 npm run check 11-baseline (0 new errors); builds green. All on master.
+
+=== 2026-06-17 (later 2) — wax: remove dead cooling/QC/storage code ===
+Now that deck-removal commits straight to wax_stored (storeDeckAndComplete), the
+old cooling → completeQC → recordStorage → completeRun chain on the wax-filling
+page is unreachable. Removed it (~1130 lines):
+- Server actions deleted: confirmDeckRemoved, confirmCooling, completeQC,
+  recordBatchStorage, reassignStorage, completeRun, rejectCartridge. Kept:
+  createRun, recordWaxPrep, loadDeck, startRun, recordRunFinished,
+  storeDeckAndComplete, resetToLoading, closeBucket, cancelRun, abortRun,
+  recordWaxRunNote.
+- Load: dropped qcCartridges / storageCartridges / lockedCartridges (queries +
+  return + empty-state + the page's Props type fields).
+- Client: removed the 'Awaiting Removal'/'QC'/'Storage' display stages + their
+  handlers (handleCoolingComplete/handleQCComplete/handleQCSequential/
+  handleRecordStorage/handleCompleteRun), the cooling-bypass state + timer
+  (coolingComplete/coolingCountdown/coolingBypass*), PostRunCooling +
+  CompletionStorage imports, the mockQc/mockStorage data, and the
+  Cool/QC/Store preview buttons. STAGES = ['Loading','Running']; TIMELINE =
+  ['Wax fill setup','Barcode scanning','Run'].
+- LEFT intact: PostRunCooling/CompletionStorage/QCInspection component files +
+  Opentron Control's own completeQC/completeRun/etc. — still used there to finish
+  already-detached/legacy wax runs. recordWaxRunNote action kept (note feature,
+  now uncalled from this page).
+npm run check 11-baseline (0 new errors); builds green. All on master.
