@@ -163,7 +163,11 @@
 			dx: String(dx), dy: String(dy), dz: String(dz),
 			robotId: selectedRobotId || ''
 		});
-		if (r) { msg = `Applied offset to ${r.applied} hole(s)${r.failed?.length ? ` (${r.failed.length} skipped)` : ''}.`; clearSelection(); }
+		if (r) {
+			msg = `Applied to ${r.applied} hole(s) — saved to BIMS.${runId ? ' Reload deck into the run to verify on the robot; Re-upload for real fills.' : ''}`;
+			clearSelection();
+			if (runId) deckDirty = true;
+		}
 	}
 
 	// Select every hole of the active role (handy for a global grid shift).
@@ -185,7 +189,11 @@
 			dx: String(dx), dy: String(dy), dz: String(dz),
 			robotId: selectedRobotId || ''
 		});
-		if (r) { msg = `Global shift applied to ${r.applied} hole(s).`; clearSelection(); }
+		if (r) {
+			msg = `Global shift applied to ${r.applied} hole(s) — saved to BIMS.${runId ? ' Reload deck into the run to verify; Re-upload for real fills.' : ''}`;
+			clearSelection();
+			if (runId) deckDirty = true;
+		}
 	}
 
 	let syncWhich = $state<'both' | 'wax' | 'reagent'>('both');
@@ -210,6 +218,9 @@
 	// Deck slot the labware sits in (for move-to-hole). Resolved/overridable; OT-2 slots 1-11.
 	let deckSlot = $state('1');
 	let loadedLabwareId = $state<string | null>(null);
+	// True after an offset is applied while a run is open: the run still holds the
+	// pre-edit deck, so "Move to hole" would use stale coords until the deck is reloaded.
+	let deckDirty = $state(false);
 
 	async function api(path: string, init?: RequestInit): Promise<any> {
 		const res = await fetch(path, { ...init, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) } });
@@ -232,9 +243,22 @@
 			pipetteName = res.pipetteName ?? null;
 			zAxis = pipetteMount === 'right' ? 'rightZ' : 'leftZ';
 			loadedLabwareId = null;
+			deckDirty = false; // fresh run loads the current deck from Mongo
+			hasTip = false;
 			if (!pipetteId) errMsg = 'Maintenance run opened but no pipette loaded — jog/move will fail until a pipette is configured.';
 			else msg = `Connected. pipette ${pipetteName} on ${pipetteMount}.`;
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { connecting = false; }
+	}
+
+	// Reopen the run so it re-registers the corrected deck from Mongo — the only
+	// reliable way to make "Move to hole" reflect offsets applied since opening.
+	async function reloadDeckIntoRun() {
+		if (!runId) { errMsg = 'No run open'; return; }
+		clearMsg();
+		msg = 'Reloading corrected deck into the run…';
+		await stopMaintenance();
+		await startMaintenance();
+		if (!errMsg) msg = 'Reloaded — the run now uses your corrected deck. Move to a hole to verify.';
 	}
 	async function stopMaintenance() {
 		if (!runId) return;
@@ -535,6 +559,13 @@
 					{/if}
 				</div>
 				{#if runId}<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">pipette {pipetteName} ({pipetteMount})</p>{/if}
+
+				{#if runId && deckDirty}
+					<div class="mt-2 flex items-center justify-between gap-2 rounded border border-amber-500/40 bg-amber-900/15 p-2 text-[11px] text-amber-200">
+						<span>Deck edits aren't in the run's loaded copy yet — Move to hole will use the old positions.</span>
+						<button type="button" onclick={reloadDeckIntoRun} disabled={busy || connecting} class="shrink-0 rounded border border-amber-400/60 bg-amber-900/30 px-2 py-1 font-bold text-amber-100 disabled:opacity-40">Reload deck</button>
+					</div>
+				{/if}
 
 				<div class="mt-2 flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 					<span>Pipette</span>
