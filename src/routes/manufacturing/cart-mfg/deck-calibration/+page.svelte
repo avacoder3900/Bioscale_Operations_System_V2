@@ -267,7 +267,7 @@
 
 </script>
 
-<div class="mx-auto max-w-[1400px] space-y-4 p-4">
+<div class="mx-auto max-w-[1400px] space-y-4 overflow-x-clip p-4">
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Deck Calibration Studio</h1>
@@ -298,7 +298,7 @@
 
 	<div class="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
 		<!-- Canvas -->
-		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+		<section class="min-w-0 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 			<div class="mb-2 flex items-center justify-between">
 				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Deck — {selCount} selected</h2>
 				<div class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
@@ -346,7 +346,7 @@
 		</section>
 
 		<!-- Right column: jog + offset + apply + sync -->
-		<div class="space-y-4">
+		<div class="min-w-0 space-y-4">
 			<!-- Maintenance / Jog -->
 			<section class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-surface)]/40 p-3">
 				<div class="flex items-center justify-between">
