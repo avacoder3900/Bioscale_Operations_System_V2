@@ -47,8 +47,8 @@
 	function clearSelection() { selection = new Set(); }
 
 	// ── Canvas geometry (viewBox = deck mm; y flipped to screen) ─────────────────
-	let zoom = $state(1.6);
-	const wellR = 1.4; // viewBox (mm) radius — a touch larger than the ~1.8mm holes for clickability
+	let zoom = $state(1); // 1 = fit container width; >1 zooms in (scrolls)
+	const wellR = 1.9; // viewBox (mm) radius — ~2× the physical ~0.9mm hole radius so dots stay visible/clickable at fit
 	function cy(y: number): number { return dim.y - y; } // flip
 	let svgEl = $state<SVGSVGElement | null>(null);
 
@@ -265,8 +265,6 @@
 		}
 	});
 
-	const svgW = $derived(Math.max(320, Math.round((dim.x || 1) * 2 * zoom)));
-	const svgH = $derived(Math.round(svgW * ((dim.y || 1) / (dim.x || 1))));
 </script>
 
 <div class="mx-auto max-w-[1400px] space-y-4 p-4">
@@ -298,27 +296,30 @@
 	{#if errMsg}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{errMsg}</div>{/if}
 	{#if msg}<div class="rounded border border-green-500/30 bg-green-900/15 p-2 text-xs text-green-300">{msg}</div>{/if}
 
-	<div class="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_360px]">
+	<div class="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
 		<!-- Canvas -->
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 			<div class="mb-2 flex items-center justify-between">
 				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Deck — {selCount} selected</h2>
 				<div class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
-					<label>Zoom <input type="range" min="0.8" max="4" step="0.2" bind:value={zoom} /></label>
+					<label>Zoom <input type="range" min="0.6" max="5" step="0.2" bind:value={zoom} /> {zoom.toFixed(1)}×</label>
+					<button type="button" onclick={() => (zoom = 1)} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Fit</button>
 					<button type="button" onclick={clearSelection} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Clear</button>
 				</div>
 			</div>
 			<p class="mb-2 text-[11px]" style="color: var(--color-tron-text-secondary)">Drag a box to select a group (Shift adds). Click a hole to toggle. Edited holes show an amber ring.</p>
-			<div class="overflow-auto rounded border border-[var(--color-tron-border)] bg-black/40" style="max-height: 70vh;">
+			<div class="overflow-auto rounded border border-[var(--color-tron-border)] bg-black/40" style="max-height: 72vh;">
 				{#if wells.length}
+				<div style={`width:${zoom * 100}%;`}>
 					<svg
 						bind:this={svgEl}
-						width={svgW} height={svgH}
+						width="100%"
 						viewBox={`0 0 ${dim.x} ${dim.y}`}
+						preserveAspectRatio="xMidYMid meet"
 						onpointerdown={onCanvasPointerDown}
 						onpointermove={onCanvasPointerMove}
 						onpointerup={onCanvasPointerUp}
-						style="display:block; touch-action:none; cursor: crosshair;"
+						style="display:block; height:auto; touch-action:none; cursor: crosshair;"
 					>
 						{#each wells as w (w.name)}
 							{@const sel = selection.has(w.name)}
@@ -337,6 +338,7 @@
 							<rect x={boxRect.x} y={boxRect.y} width={boxRect.w} height={boxRect.h} fill="rgba(0,255,255,0.12)" stroke="var(--color-tron-cyan)" stroke-width="0.4" />
 						{/if}
 					</svg>
+				</div>
 				{:else}
 					<div class="p-6 text-center text-xs" style="color: var(--color-tron-text-secondary)">No wells — pick a deck.</div>
 				{/if}
