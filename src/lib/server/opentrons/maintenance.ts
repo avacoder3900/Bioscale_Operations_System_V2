@@ -242,7 +242,11 @@ export async function home(
 	);
 }
 
-/** Jog (relative move) on a single axis. */
+/** Jog (relative move) on a single axis.
+ *  The caller may pass leftZ/rightZ (the home-style MotorAxis), but moveRelative's
+ *  axis is a MovementAxis ('x'|'y'|'z') — the mount is already fixed by pipetteId,
+ *  so map both Z variants to 'z'. (leftZ/rightZ here caused "input should be
+ *  'x','y' or 'z'" from the robot.) */
 export async function jog(
 	robot: RobotRef,
 	runId: string,
@@ -250,11 +254,12 @@ export async function jog(
 	axis: JogAxis,
 	distance: number
 ): Promise<void> {
+	const moveAxis = axis === 'leftZ' || axis === 'rightZ' ? 'z' : axis;
 	await sendMaintenanceCommand(
 		robot,
 		runId,
 		'moveRelative',
-		{ pipetteId, axis, distance },
+		{ pipetteId, axis: moveAxis, distance },
 		{ waitUntilComplete: true, timeoutMs: 30_000 }
 	);
 }
