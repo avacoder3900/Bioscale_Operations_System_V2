@@ -41,6 +41,7 @@ Run:
 
 import os
 import sys
+import glob
 import time
 import json
 import base64
@@ -1080,6 +1081,223 @@ def execute_auto_resume_run(command_id: str, payload: dict) -> None:
     _post_result(command_id, {"ok": True, "status": 200, "body": {"resumed": resumed}})
 
 
+# Tip calibration (NATIVE-CALIBRATION-SYSTEM PRD 4) -------------------------
+# Replicates the protocols' pick_up_and_calibrate_tip(): pick up a tip, touch it
+# against the calibrator's limit switches over serial, and return the per-tip
+# {x,y} "adjust" (how far the bent tip is off nominal). BIMS triggers this BEFORE
+# jog-tuning so captured geometry is tip-zeroed, and applies the adjust to every
+# subsequent move-to during tuning.
+#
+# The motion is driven over the maintenance API (move_to_coordinates, forceDirect
+# like the .py); the serial probe + the offset math are carried VERBATIM from
+# Wax_Filling_GEN7_Cartridge.py. Two things are robot-validation-gated and noted
+# inline: (a) the calibrator serial fixture is a SECOND /dev/ttyACM device (not
+# the scanner on SCANNER_SERIAL_PORT); (b) the carriage-frame constants
+# (150.536 / 177.0) and the calibrator nominal (125.181, 173.247) are the .py's —
+# absolute probe points are derived by translating the .py recipe onto the
+# BIMS-supplied absolute calibrator point, so adjust stays frame-independent.
+CAL_NOMINAL_X = 125.181  # .py calibrator approach point in the carriage frame
+CAL_NOMINAL_Y = 173.247
+
+
+def _open_calibrator_serial() -> Optional["serial.Serial"]:
+    """Open the calibrator limit-switch fixture — a /dev/ttyACM? device at
+    115200, distinct from the barcode scanner (SCANNER_SERIAL_PORT). Mirrors the
+    .py glob+probe. Returns an open serial.Serial or None."""
+    for dev in sorted(glob.glob("/dev/ttyACM?")):
+        if dev == SERIAL_PORT:
+            continue  # that's the scanner
+        try:
+            s = serial.Serial(port=dev, baudrate=115200, timeout=0.5)
+            time.sleep(0.2)
+            s.reset_input_buffer()
+            s.reset_output_buffer()
+            log.info("calibrate_tip: opened calibrator serial %s", dev)
+            return s
+        except Exception as e:
+            log.warning("calibrate_tip: %s not the calibrator (%s)", dev, e)
+    return None
+
+
+def _cal_write(s: "serial.Serial", data: bytes, retries: int = 3) -> None:
+    last = None
+    for _ in range(retries):
+        try:
+            s.reset_output_buffer()
+            s.write(data)
+            s.flush()
+            return
+        except serial.SerialException as e:
+            last = e
+            time.sleep(0.1)
+    raise serial.SerialException("calibrator write failed: {}".format(last))
+
+
+def register_labware_definition(run_id: str, definition: dict) -> None:
+    r = ot2_request("POST", "/maintenance_runs/{}/labware_definitions".format(run_id),
+                    {"data": definition}, timeout=20)
+    if r.status_code >= 400:
+        body = {}
+        try:
+            body = r.json() or {}
+        except Exception:
+            pass
+        raise RobotCommandError(_first_error_detail(body) or
+                                "Robot returned {} registering labware def".format(r.status_code))
+
+
+def load_labware_in_run(run_id: str, namespace: str, load_name: str, version: int, slot: str) -> str:
+    body = send_maintenance_command(run_id, "loadLabware", {
+        "location": {"slotName": str(slot)},
+        "loadName": load_name,
+        "namespace": namespace,
+        "version": int(version or 1),
+    })
+    lid = ((body.get("data") or {}).get("result") or {}).get("labwareId")
+    if not lid:
+        raise RobotCommandError("loadLabware did not return a labwareId")
+    return lid
+
+
+def pick_up_tip_in_run(run_id: str, pipette_id: str, labware_id: str, well: str) -> None:
+    send_maintenance_command(run_id, "pickUpTip", {
+        "pipetteId": pipette_id, "labwareId": labware_id, "wellName": well,
+        "wellLocation": {"origin": "top", "offset": {"x": 0, "y": 0, "z": 0}},
+    })
+
+
+def drop_tip_in_run(run_id: str, pipette_id: str, labware_id: str, well: str) -> None:
+    try:
+        send_maintenance_command(run_id, "dropTip", {
+            "pipetteId": pipette_id, "labwareId": labware_id, "wellName": well,
+        })
+    except Exception as e:
+        log.warning("calibrate_tip: drop tip failed (continuing): %s", e)
+
+
+def _probe_axis(run_id: str, pipette_id: str, ser: "serial.Serial",
+                axis: str, start_x: float, start_y: float, z: float,
+                arm_byte: bytes) -> Tuple[float, bool]:
+    """Step the tip 0.1mm/iter along `axis` (-x or -y) until the limit switch
+    replies arm_byte, mirroring the .py. Returns (shift_at_limit, reached)."""
+    move_to_coordinates(run_id, pipette_id, start_x, start_y, z)
+    _cal_write(ser, arm_byte)
+    shift = 0.1
+    reached = False
+    while not reached:
+        if axis == "x":
+            move_to_coordinates(run_id, pipette_id, start_x - shift, start_y, z)
+        else:
+            move_to_coordinates(run_id, pipette_id, start_x, start_y - shift, z)
+        shift += 0.1
+        if shift > 5:
+            log.warning("calibrate_tip: %s axis hit 5mm travel without limit", axis)
+            break
+        original = ser.timeout
+        ser.timeout = 0.01
+        try:
+            reached = ser.read(1) == arm_byte
+        finally:
+            ser.timeout = original
+    return shift, reached
+
+
+def execute_calibrate_tip(command_id: str, payload: dict) -> None:
+    """PRD 4: pick up a tip, probe it on the calibrator, return adjust{x,y}.
+
+    payload:
+      pipetteMount / pipetteName       — pipette selection (as sweep)
+      tiprack: { definition, namespace, loadName, version, slot, tipWell }
+      calibrator: { x, y, z }          — ABSOLUTE approach point (BIMS fixture);
+                                         z is the per-tip z_cal (34.491 wax / 40.8 reagent)
+    """
+    cal = (payload or {}).get("calibrator") or {}
+    tip = (payload or {}).get("tiprack") or {}
+    try:
+        cal_x = float(cal["x"]); cal_y = float(cal["y"]); z_cal = float(cal["z"])
+    except Exception:
+        _post_result(command_id, {"ok": False, "error": "calibrate_tip: calibrator {x,y,z} required"})
+        return
+
+    # Translate the .py carriage-frame recipe onto the absolute calibrator point.
+    tx = cal_x - CAL_NOMINAL_X
+    ty = cal_y - CAL_NOMINAL_Y
+
+    run_id = None
+    ser = None
+    try:
+        run_id = open_maintenance_run()
+        log.info("calibrate_tip %s: maintenance run %s", command_id, run_id)
+        pipette_id = _setup_pipette(run_id, payload)
+        home_gantry(run_id)
+
+        # Load tiprack + pick up a tip.
+        if tip.get("definition"):
+            register_labware_definition(run_id, tip["definition"])
+        lid = load_labware_in_run(run_id, tip.get("namespace", ""), tip.get("loadName", ""),
+                                  tip.get("version", 1), tip.get("slot", "11"))
+        tip_well = tip.get("tipWell", "A1")
+        pick_up_tip_in_run(run_id, pipette_id, lid, tip_well)
+
+        # Open the calibrator fixture + read its stored "bend" string (cmd 'C').
+        ser = _open_calibrator_serial()
+        if not ser:
+            raise RobotCommandError("calibrator serial fixture not found on /dev/ttyACM? "
+                                    "(separate from the scanner)")
+        bend = {"x": 0.0, "y": 0.0}
+        try:
+            _cal_write(ser, b"C")
+            raw = ser.readline()
+            parts = str(raw).split(":")
+            if len(parts) >= 2:
+                bend["x"] = float(parts[0][2:])
+                bend["y"] = float(parts[1][:-5])
+            log.info("calibrate_tip: bend string x=%s y=%s", bend["x"], bend["y"])
+        except Exception as e:
+            log.warning("calibrate_tip: bend read failed, using 0,0: %s", e)
+
+        # Approach the calibrator (absolute).
+        move_to_coordinates(run_id, pipette_id, cal_x, cal_y, z_cal)
+
+        # X probe — .py start (124.581, 166.747) translated to absolute.
+        x_shift, x_ok = _probe_axis(run_id, pipette_id, ser, "x",
+                                    124.581 + tx, 166.747 + ty, z_cal, b"X")
+        x_offset = round(124.581 - x_shift - 150.536 + bend["x"], 1)
+
+        # Y probe — .py start (134.01, 165.747) translated to absolute.
+        y_shift, y_ok = _probe_axis(run_id, pipette_id, ser, "y",
+                                    134.01 + tx, 165.747 + ty, z_cal, b"Y")
+        y_offset = round(165.747 - y_shift - 177.0 + bend["y"], 1)
+
+        # Retract above the calibrator, then drop the tip.
+        move_to_coordinates(run_id, pipette_id, 127.181 + tx, 174.247 + ty, z_cal + 20)
+        drop_tip_in_run(run_id, pipette_id, lid, tip_well)
+
+        result = {
+            "adjust": {"x": x_offset, "y": y_offset},
+            "bend": bend,
+            "limitReached": {"x": x_ok, "y": y_ok},
+            "zCal": z_cal,
+        }
+        log.info("calibrate_tip %s: adjust x=%s y=%s (limit x=%s y=%s)",
+                 command_id, x_offset, y_offset, x_ok, y_ok)
+        _post_result(command_id, {"ok": True, "status": 200, "body": result})
+    except Exception as e:
+        log.error("calibrate_tip %s failed: %s", command_id, e)
+        _post_result(command_id, {"ok": False, "error": str(e)})
+    finally:
+        if ser:
+            try:
+                ser.close()
+            except Exception:
+                pass
+        if run_id:
+            try:
+                close_maintenance_run(run_id)
+            except Exception as e:
+                log.warning("calibrate_tip: close run failed: %s", e)
+
+
 def execute_command(cmd: dict, port: ScannerPort) -> None:
     command_id = cmd.get("_id")
     kind = cmd.get("kind")
@@ -1098,6 +1316,8 @@ def execute_command(cmd: dict, port: ScannerPort) -> None:
         execute_restart_robot_server(command_id)
     elif kind == "auto_resume_run":
         execute_auto_resume_run(command_id, cmd.get("payload") or {})
+    elif kind == "calibrate_tip":
+        execute_calibrate_tip(command_id, cmd.get("payload") or {})
     else:
         log.warning("Unknown command kind '%s' (id=%s)", kind, command_id)
         _post_result(command_id, {"ok": False, "error": "unknown command kind: {}".format(kind)})

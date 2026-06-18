@@ -374,6 +374,8 @@
 			method: 'POST',
 			body: JSON.stringify({ pipetteId, labwareId: lid, wellName: name, minimumZHeight: safeArcZ })
 		});
+		// Nudge onto the tip-zeroed position so tuning is done against a calibrated tip.
+		await applyTipAdjust();
 	}
 
 	async function moveToSelectedHole() {
@@ -446,6 +448,32 @@
 	let tipWell = $state('A1');
 	let hasTip = $state(false);
 	const tiprackForMount = $derived(desiredMount === 'right' ? 'cosmasanddamian_96_tiprack_20ul' : 'cosmas_and_damian_biotix_96_200ul_tiprack');
+
+	// ── PRD 4: robot-side tip calibration (limit-switch probe via the bridge). ──
+	// The returned adjust{x,y} is the per-tip bend correction; we apply it to every
+	// move-to during tuning so captured geometry is tip-zeroed (no double-count).
+	let tipAdjust = $state<{ x: number; y: number } | null>(null);
+	let calibrating = $state(false);
+	async function calibrateTip() {
+		if (!selectedRobotId) { errMsg = 'Pick a robot'; return; }
+		clearMsg(); calibrating = true;
+		msg = 'Calibrating tip on the fixture… (~1–2 min: pick up tip + limit-switch probe)';
+		try {
+			const res = await api('/api/scanner/calibrate-tip', { method: 'POST', body: JSON.stringify({ robotId: selectedRobotId, mount: desiredMount, tipWell }) });
+			if (res?.adjust && typeof res.adjust.x === 'number') {
+				tipAdjust = { x: res.adjust.x, y: res.adjust.y };
+				hasTip = true;
+				msg = `Tip calibrated: adjust x=${tipAdjust.x} y=${tipAdjust.y}. Applied to every move-to while tuning.`;
+			} else { errMsg = 'Calibration returned no adjust'; }
+		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { calibrating = false; }
+	}
+	// Apply the tip-zero correction as a relative jog after a move-to (mirrors the
+	// .py's `.move(Point(adjust.x, adjust.y, 0))` on each dispense).
+	async function applyTipAdjust() {
+		if (!tipAdjust || !runId || !pipetteId) return;
+		if (tipAdjust.x) await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/jog`, { method: 'POST', body: JSON.stringify({ pipetteId, axis: 'x', distance: tipAdjust.x }) });
+		if (tipAdjust.y) await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/jog`, { method: 'POST', body: JSON.stringify({ pipetteId, axis: 'y', distance: tipAdjust.y }) });
+	}
 
 	async function pickUpTipAction() {
 		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
@@ -725,12 +753,18 @@
 				<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-black/20 p-2">
 					<div class="mb-1 flex items-center justify-between text-[11px]" style="color: var(--color-tron-text-secondary)">
 						<span class="font-bold uppercase tracking-wider">Tip</span>
-						<span>{hasTip ? '🟢 tip on' : 'no tip'} · {tiprackForMount.includes('20ul') ? 'p20 rack' : 'p300 rack'}</span>
+						<span>{hasTip ? '🟢 tip on' : 'no tip'} · {tiprackForMount.includes('20ul') ? 'p20 rack' : 'p300 rack'}{tipAdjust ? ` · zeroed (${tipAdjust.x}, ${tipAdjust.y})` : ''}</span>
 					</div>
 					<div class="grid grid-cols-2 gap-2">
 						<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Pick up tip</button>
 						<button type="button" onclick={goToCalibrator} disabled={!pipetteId || busy} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Go to calibrator</button>
 					</div>
+					<button type="button" onclick={calibrateTip} disabled={busy || calibrating || !selectedRobotId} class="mt-2 w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Pick up a tip and probe it on the limit-switch fixture; applies the bend correction to tuning">
+						{calibrating ? 'Calibrating tip…' : 'Calibrate tip (limit-switch probe)'}
+					</button>
+					{#if tipAdjust}
+						<button type="button" onclick={() => (tipAdjust = null)} class="mt-1 w-full rounded border border-[var(--color-tron-border)] px-2 py-1 text-[10px] hover:border-amber-400/60" style="color: var(--color-tron-text-secondary)">Clear tip adjust</button>
+					{/if}
 					<div class="mt-1 grid grid-cols-3 gap-1 text-[10px]" style="color: var(--color-tron-text-secondary)">
 						<label>calX <input type="number" step="0.1" bind:value={calX} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
 						<label>calY <input type="number" step="0.1" bind:value={calY} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
