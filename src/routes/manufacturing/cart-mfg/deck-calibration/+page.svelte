@@ -56,7 +56,11 @@
 		if (r !== 'all') selection = new Set([...selection].filter(isActiveRole));
 	}
 
+	// Deselect mode: when on, box-drag and clicks REMOVE holes from the selection.
+	let deselectMode = $state(false);
+
 	function toggleWell(name: string, additive: boolean) {
+		if (deselectMode) { const next = new Set(selection); next.delete(name); selection = next; return; }
 		if (!isActiveRole(name)) return; // can't select a filtered-out hole
 		const next = new Set(additive ? selection : []);
 		if (selection.has(name) && additive) next.delete(name);
@@ -107,9 +111,16 @@
 		const moved = Math.abs(x1 - x0) > 1 || Math.abs(y1 - y0) > 1;
 		if (moved) {
 			const hits = wells.filter((w) => isActiveRole(w.name) && w.x >= x0 && w.x <= x1 && w.y >= y0 && w.y <= y1).map((w) => w.name);
-			const next = e.shiftKey ? new Set(selection) : new Set<string>();
-			for (const h of hits) next.add(h);
-			selection = next;
+			if (deselectMode) {
+				// Deselect mode: a box REMOVES the boxed holes from the selection.
+				const next = new Set(selection);
+				for (const h of hits) next.delete(h);
+				selection = next;
+			} else {
+				const next = e.shiftKey ? new Set(selection) : new Set<string>();
+				for (const h of hits) next.add(h);
+				selection = next;
+			}
 		}
 		boxing = false; boxStart = null; boxNow = null;
 	}
@@ -491,6 +502,7 @@
 					<label>Zoom <input type="range" min="0.6" max="5" step="0.2" bind:value={zoom} /> {zoom.toFixed(1)}×</label>
 					<button type="button" onclick={() => (zoom = 1)} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Fit</button>
 					<button type="button" onclick={selectAllActive} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Select all{roleFilter !== 'all' ? ` ${roleFilter}` : ''}</button>
+					<button type="button" onclick={() => (deselectMode = !deselectMode)} class="rounded border px-2 py-1 {deselectMode ? 'border-amber-500/60 bg-amber-900/20 text-amber-300' : 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)]'}" style={deselectMode ? '' : 'color: var(--color-tron-text)'} title="When on, box-drag/click removes holes from the selection">Deselect{deselectMode ? ' ✓' : ''}</button>
 					<button type="button" onclick={clearSelection} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Clear</button>
 				</div>
 			</div>
