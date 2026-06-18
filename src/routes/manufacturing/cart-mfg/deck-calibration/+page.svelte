@@ -166,6 +166,28 @@
 		if (r) { msg = `Applied offset to ${r.applied} hole(s)${r.failed?.length ? ` (${r.failed.length} skipped)` : ''}.`; clearSelection(); }
 	}
 
+	// Select every hole of the active role (handy for a global grid shift).
+	function selectAllActive() {
+		selection = new Set(wells.filter((w) => isActiveRole(w.name)).map((w) => w.name));
+	}
+
+	// Global grid shift: anchor on one jogged point, apply that offset to the WHOLE
+	// grid (active role) as a rigid translation. Use when the entire deck is off.
+	async function applyGlobalShift() {
+		if (dx === 0 && dy === 0 && dz === 0) { errMsg = 'Capture (or type) a non-zero offset first'; return; }
+		const names = wells.filter((w) => isActiveRole(w.name)).map((w) => w.name);
+		if (names.length === 0) { errMsg = 'No holes to shift'; return; }
+		const label = roleFilter === 'all' ? 'the entire deck' : `all ${roleFilter} holes`;
+		if (!confirm(`Shift ${names.length} holes (${label}) by dx=${dx} dy=${dy} dz=${dz}? This translates the whole grid.`)) return;
+		const r = await postAction('applyBatch', {
+			deckLoadName: data.selected,
+			wellNames: JSON.stringify(names),
+			dx: String(dx), dy: String(dy), dz: String(dz),
+			robotId: selectedRobotId || ''
+		});
+		if (r) { msg = `Global shift applied to ${r.applied} hole(s).`; clearSelection(); }
+	}
+
 	let syncWhich = $state<'both' | 'wax' | 'reagent'>('both');
 	async function syncToRobot() {
 		if (!selectedRobotId) { errMsg = 'Pick a robot'; return; }
@@ -181,6 +203,8 @@
 	let pipetteName = $state<string | null>(null);
 	let stepSize = $state(1);
 	let zAxis = $state<'leftZ' | 'rightZ'>('leftZ');
+	// Which pipette to dial in with. Chosen before opening the run; locked while open.
+	let desiredMount = $state<'left' | 'right'>('left');
 	let liveX = $state<number | null>(null), liveY = $state<number | null>(null), liveZ = $state<number | null>(null);
 	let connecting = $state(false);
 	// Deck slot the labware sits in (for move-to-hole). Resolved/overridable; OT-2 slots 1-11.
@@ -201,7 +225,7 @@
 		clearMsg();
 		connecting = true;
 		try {
-			const res = await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance`, { method: 'POST', body: JSON.stringify({}) });
+			const res = await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance`, { method: 'POST', body: JSON.stringify({ mount: desiredMount }) });
 			runId = res.runId ?? null;
 			pipetteId = res.pipetteId ?? null;
 			pipetteMount = res.mount ?? null;
@@ -341,6 +365,7 @@
 				<div class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 					<label>Zoom <input type="range" min="0.6" max="5" step="0.2" bind:value={zoom} /> {zoom.toFixed(1)}×</label>
 					<button type="button" onclick={() => (zoom = 1)} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Fit</button>
+					<button type="button" onclick={selectAllActive} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Select all{roleFilter !== 'all' ? ` ${roleFilter}` : ''}</button>
 					<button type="button" onclick={clearSelection} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Clear</button>
 				</div>
 			</div>
@@ -410,6 +435,21 @@
 				</div>
 				{#if runId}<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">pipette {pipetteName} ({pipetteMount})</p>{/if}
 
+				<div class="mt-2 flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
+					<span>Pipette</span>
+					<div class="flex overflow-hidden rounded border border-[var(--color-tron-border)]">
+						{#each [['left', 'Left'], ['right', 'Right']] as [m, lbl] (m)}
+							<button
+								type="button"
+								disabled={!!runId}
+								onclick={() => { desiredMount = m as 'left' | 'right'; zAxis = m === 'right' ? 'rightZ' : 'leftZ'; }}
+								class="px-2.5 py-1 transition-colors disabled:opacity-50 {desiredMount === m ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'hover:bg-white/5'}"
+							>{lbl}</button>
+						{/each}
+					</div>
+					{#if runId}<span class="text-[10px]">close run to switch</span>{/if}
+				</div>
+
 				<div class="mt-2 flex flex-wrap items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 					<label>Step <select bind:value={stepSize} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono text-xs" style="color: var(--color-tron-text)">
 						<option value={0.1}>0.1</option><option value={1}>1</option><option value={5}>5</option><option value={10}>10</option><option value={25}>25</option>
@@ -457,6 +497,10 @@
 				<button type="button" onclick={applyToSelection} disabled={busy || selCount === 0} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-sm font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">
 					Apply to {selCount} selected hole{selCount === 1 ? '' : 's'}
 				</button>
+				<button type="button" onclick={applyGlobalShift} disabled={busy} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-2 text-xs font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40">
+					⤧ Shift whole grid by this offset {roleFilter !== 'all' ? `(${roleFilter} only)` : ''}
+				</button>
+				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Anchor: jog to one hole (e.g. a corner) → Capture → Shift whole grid translates every hole by that offset.</p>
 			</section>
 
 			<!-- Sync -->
