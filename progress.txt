@@ -2722,3 +2722,28 @@ page is unreachable. Removed it (~1130 lines):
   already-detached/legacy wax runs. recordWaxRunNote action kept (note feature,
   now uncalled from this page).
 npm run check 11-baseline (0 new errors); builds green. All on master.
+
+=== 2026-06-18 — Deck Calibration Studio (graphical + jog + group apply) ===
+PRD docs/prds/DECK-CALIBRATION-STUDIO.md. New page /manufacturing/cart-mfg/deck-calibration
+(+ sidebar "Deck Calib"). Confirmed: fill-hole positions ARE per-well x/y/z in the BIMS
+deck labware defs (gen4deck_gen7cartridge_001..006, 576 wells A1..X24, native Opentrons
+schema, NOT abstracted — BIMS is a registry+bundler). Both wax+reagent .py load the same
+def, so one editor covers both.
+LAYER A (robot-agnostic, shipped + verifiable):
+- Graphical SVG deck: every hole at real x/y (y-flipped), zoom, edited-ring (amber),
+  selected (cyan). Box-drag select (Shift adds) + click toggle. Selection summary.
+- applyDeckEditBatch (apply-edit.ts): one delta → many wells in a single Mongo write +
+  batch DeckCalibrationEdit history + 1 AuditLog + 1 local-file mirror pass.
+- Page actions: applyBatch (typed/captured dx/dy/dz → selection), sync (re-upload wax/
+  reagent protocol via robotUploadProtocol so corrected def reaches the robot; needs the
+  .py in OpentronProtocol.fileContent — degrades with a clear message if absent). History panel.
+LAYER B (jog — built; needs live-robot verification):
+- Jog panel mirrors the scanner-position teach flow (open/close maintenance run, step-size,
+  Z-axis, X/Y/Z jog pad, live position, Home) via existing /api/opentrons-lab/.../maintenance.
+- "Move to hole" → "Capture offset": loads the deck def into the run + moveToWell to the
+  selected hole's NOMINAL (robot computes it); operator jogs onto the real hole; Capture =
+  current − nominal = pure per-hole correction → fills dx/dy/dz, applied to the graphical
+  selection. New maintenance.ts helpers registerLabwareDefinition/loadLabwareInRun/moveToWell
+  + endpoints load-labware, move-to-well. (Bare nozzle, no tip — X/Y is the win; Z has a
+  tip-length caveat. Deck slot defaults to 1, overridable.)
+npm run check 11-baseline (0 new errors); build green. All on master.

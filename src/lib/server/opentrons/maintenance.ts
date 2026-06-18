@@ -299,3 +299,72 @@ export async function getCurrentPosition(
 	if (!p) return null;
 	return { x: p.x, y: p.y, z: p.z };
 }
+
+/**
+ * Register a custom labware definition onto a maintenance run so a subsequent
+ * loadLabware (by namespace/loadName/version) can resolve it. Required for the
+ * deck-calibration "move to hole" (DECK-CALIBRATION-STUDIO) since the deck is a
+ * custom Opentrons def. Mirrors maintenance-clone.registerMaintenanceLabwareDefinition
+ * but over the bridge-capable robotPost transport.
+ */
+export async function registerLabwareDefinition(
+	robot: RobotRef,
+	runId: string,
+	definition: unknown
+): Promise<void> {
+	const res = await robotPost(robot as any, `/maintenance_runs/${runId}/labware_definitions`, {
+		data: definition
+	});
+	if (!res.ok) {
+		const body = await res.json().catch(() => ({}));
+		throw new Error(
+			(body as any)?.errors?.[0]?.detail ?? `Robot returned ${res.status} registering labware definition`
+		);
+	}
+}
+
+/** Load a (already-registered) labware def into the run at a slot; returns labwareId. */
+export async function loadLabwareInRun(
+	robot: RobotRef,
+	runId: string,
+	args: { namespace: string; loadName: string; version: number; slot: string }
+): Promise<string> {
+	const result = (await sendMaintenanceCommand(
+		robot,
+		runId,
+		'loadLabware',
+		{
+			location: { slotName: args.slot },
+			loadName: args.loadName,
+			namespace: args.namespace,
+			version: args.version
+		},
+		{ waitUntilComplete: true, timeoutMs: 30_000 }
+	)) as { data?: { result?: { labwareId?: string } } };
+	const id = result?.data?.result?.labwareId;
+	if (!id) throw new Error('loadLabware did not return a labwareId');
+	return id;
+}
+
+/** Move the pipette to a well's nominal position (default: just above the well top). */
+export async function moveToWell(
+	robot: RobotRef,
+	runId: string,
+	pipetteId: string,
+	labwareId: string,
+	wellName: string,
+	opts: { zOffsetMm?: number } = {}
+): Promise<void> {
+	await sendMaintenanceCommand(
+		robot,
+		runId,
+		'moveToWell',
+		{
+			pipetteId,
+			labwareId,
+			wellName,
+			wellLocation: { origin: 'top', offset: { x: 0, y: 0, z: opts.zOffsetMm ?? 2 } }
+		},
+		{ waitUntilComplete: true, timeoutMs: 30_000 }
+	);
+}
