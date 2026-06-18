@@ -33,11 +33,31 @@
 		goto(u, { keepFocus: true, noScroll: true });
 	}
 
+	// ── Hole role (wax vs reagent) — by deck column parity ───────────────────────
+	// Confirmed from the protocols: wax fills EVEN columns (2,4,…,24), reagent fills
+	// ODD columns (1,3,…,23). Well name = rowLetter+colNumber, so role = column parity.
+	// They need different fill accuracy, so calibration treats them separately.
+	type Role = 'wax' | 'reagent';
+	function colOf(name: string): number { const m = name.match(/(\d+)$/); return m ? parseInt(m[1], 10) : 0; }
+	function roleOf(name: string): Role { return colOf(name) % 2 === 0 ? 'wax' : 'reagent'; }
+	let roleFilter = $state<'all' | Role>('all');
+	function isActiveRole(name: string): boolean { return roleFilter === 'all' || roleFilter === roleOf(name); }
+	const waxCount = $derived(wells.filter((w) => roleOf(w.name) === 'wax').length);
+	const reagentCount = $derived(wells.filter((w) => roleOf(w.name) === 'reagent').length);
+
 	// ── Selection ───────────────────────────────────────────────────────────────
 	let selection = $state<Set<string>>(new Set());
 	const selCount = $derived(selection.size);
 
+	function setRoleFilter(r: 'all' | Role) {
+		roleFilter = r;
+		// Keep the selection within the active role so an applied offset never
+		// touches the other type of hole.
+		if (r !== 'all') selection = new Set([...selection].filter(isActiveRole));
+	}
+
 	function toggleWell(name: string, additive: boolean) {
+		if (!isActiveRole(name)) return; // can't select a filtered-out hole
 		const next = new Set(additive ? selection : []);
 		if (selection.has(name) && additive) next.delete(name);
 		else next.add(name);
@@ -86,7 +106,7 @@
 		const y0 = Math.min(boxStart.y, boxNow.y), y1 = Math.max(boxStart.y, boxNow.y);
 		const moved = Math.abs(x1 - x0) > 1 || Math.abs(y1 - y0) > 1;
 		if (moved) {
-			const hits = wells.filter((w) => w.x >= x0 && w.x <= x1 && w.y >= y0 && w.y <= y1).map((w) => w.name);
+			const hits = wells.filter((w) => isActiveRole(w.name) && w.x >= x0 && w.x <= x1 && w.y >= y0 && w.y <= y1).map((w) => w.name);
 			const next = e.shiftKey ? new Set(selection) : new Set<string>();
 			for (const h of hits) next.add(h);
 			selection = next;
@@ -299,15 +319,28 @@
 	<div class="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
 		<!-- Canvas -->
 		<section class="min-w-0 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
-			<div class="mb-2 flex items-center justify-between">
-				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Deck — {selCount} selected</h2>
+			<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+				<div class="flex flex-wrap items-center gap-3">
+					<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Deck — {selCount} selected</h2>
+					<div class="flex overflow-hidden rounded border border-[var(--color-tron-border)] text-[11px]">
+						{#each [['all', 'All'], ['wax', `Wax (${waxCount})`], ['reagent', `Reagent (${reagentCount})`]] as [val, label] (val)}
+							<button
+								type="button"
+								onclick={() => setRoleFilter(val as 'all' | Role)}
+								class="px-2.5 py-1 transition-colors {roleFilter === val
+									? (val === 'wax' ? 'bg-[rgba(217,160,80,0.25)] text-[#e0b070]' : val === 'reagent' ? 'bg-[rgba(80,170,215,0.25)] text-[#7ec6e6]' : 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]')
+									: 'text-[var(--color-tron-text-secondary)] hover:bg-white/5'}"
+							>{label}</button>
+						{/each}
+					</div>
+				</div>
 				<div class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 					<label>Zoom <input type="range" min="0.6" max="5" step="0.2" bind:value={zoom} /> {zoom.toFixed(1)}×</label>
 					<button type="button" onclick={() => (zoom = 1)} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Fit</button>
 					<button type="button" onclick={clearSelection} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Clear</button>
 				</div>
 			</div>
-			<p class="mb-2 text-[11px]" style="color: var(--color-tron-text-secondary)">Drag a box to select a group (Shift adds). Click a hole to toggle. Edited holes show an amber ring.</p>
+			<p class="mb-2 text-[11px]" style="color: var(--color-tron-text-secondary)">Drag a box to select a group (Shift adds). Click a hole to toggle. Wax holes are amber, reagent blue; the toggle restricts which you can select. Edited holes show an amber ring.</p>
 			<div class="overflow-auto rounded border border-[var(--color-tron-border)] bg-black/40" style="max-height: 72vh;">
 				{#if wells.length}
 				<div style={`width:${zoom * 100}%;`}>
@@ -324,15 +357,26 @@
 						{#each wells as w (w.name)}
 							{@const sel = selection.has(w.name)}
 							{@const edited = editedSet.has(w.name)}
+							{@const active = isActiveRole(w.name)}
+							{@const role = roleOf(w.name)}
 							<circle
 								cx={w.x} cy={cy(w.y)} r={wellR}
-								fill={sel ? 'var(--color-tron-cyan)' : refWell === w.name ? '#f59e0b' : 'rgba(120,140,160,0.5)'}
-								stroke={edited ? '#f59e0b' : sel ? 'var(--color-tron-cyan)' : 'none'}
+								fill={!active
+									? 'rgba(120,140,160,0.10)'
+									: sel
+										? 'var(--color-tron-cyan)'
+										: refWell === w.name
+											? '#f59e0b'
+											: role === 'wax'
+												? 'rgba(217,160,80,0.6)'
+												: 'rgba(80,170,215,0.6)'}
+								stroke={edited && active ? '#f59e0b' : sel ? 'var(--color-tron-cyan)' : 'none'}
 								stroke-width={edited ? 0.5 : 0.3}
+								style={active ? '' : 'pointer-events:none;'}
 								onpointerdown={(e) => { e.stopPropagation(); }}
 								onclick={(e) => { e.stopPropagation(); toggleWell(w.name, e.shiftKey || e.ctrlKey || e.metaKey); }}
 								role="button" tabindex="-1"
-							><title>{w.name} — x {w.x.toFixed(2)} y {w.y.toFixed(2)} z {w.z.toFixed(2)}{edited ? ' (edited)' : ''}</title></circle>
+							><title>{w.name} ({role}) — x {w.x.toFixed(2)} y {w.y.toFixed(2)} z {w.z.toFixed(2)}{edited ? ' (edited)' : ''}</title></circle>
 						{/each}
 						{#if boxRect}
 							<rect x={boxRect.x} y={boxRect.y} width={boxRect.w} height={boxRect.h} fill="rgba(0,255,255,0.12)" stroke="var(--color-tron-cyan)" stroke-width="0.4" />
