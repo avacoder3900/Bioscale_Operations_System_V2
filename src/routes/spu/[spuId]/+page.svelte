@@ -27,6 +27,10 @@
 
 	let showRecordHistory = $state(false);
 	let transitionReason = $state('');
+	let showValidation = $state(false);
+
+	// Overall validation status for the collapsed Validation summary badge
+	const validationOverall = $derived((data.spu.validation as any)?.status ?? 'pending');
 
 	const STATUS_OPTIONS = [
 		'draft', 'assembling', 'assembled', 'validating', 'validated',
@@ -101,8 +105,19 @@
 			<h2 class="tron-text-primary font-mono text-2xl font-bold">{data.spu.udi}</h2>
 			<p class="tron-text-muted">Device History Record</p>
 		</div>
-		<div class="flex gap-2">
+		<div class="flex items-center gap-2">
 			<SpuStatusBadge status={data.spu.status} />
+			<!-- Servicing: opens (or reuses) a service ticket for this SPU via the existing ticket system -->
+			<form method="POST" action="/spu/servicing?/scan">
+				<input type="hidden" name="barcode" value={data.spu.barcode ?? data.spu.udi} />
+				<TronButton
+					type="submit"
+					variant="primary"
+					style="min-height: 40px; background: var(--color-tron-orange); border-color: var(--color-tron-orange);"
+				>
+					🔧 Servicing
+				</TronButton>
+			</form>
 		</div>
 	</div>
 
@@ -425,15 +440,32 @@
 		</TronCard>
 	{/if}
 
-	<!-- Validation Tests -->
+	<!-- Validation (selectable) -->
 	<TronCard>
-		<h3 class="tron-text-primary mb-4 text-lg font-medium">Validation Tests</h3>
-		<div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+		<button type="button" class="flex w-full items-center justify-between" onclick={() => (showValidation = !showValidation)}>
+			<h3 class="tron-text-primary text-lg font-medium">
+				Validation
+				<span
+					class="ml-2 rounded-full px-2 py-0.5 text-xs font-bold align-middle"
+					style="color: {validationOverall === 'passed' ? 'var(--color-tron-green)' : validationOverall === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-orange)'}; background: rgba(128,128,128,0.12);"
+				>
+					{validationOverall.toUpperCase()}
+				</span>
+			</h3>
+			<span class="flex items-center gap-2 text-sm" style="color: var(--color-tron-cyan);">
+				{showValidation ? 'Hide' : 'View Validation Data'}
+				<svg class="h-5 w-5 transition-transform {showValidation ? 'rotate-180' : ''}" fill="currentColor" viewBox="0 0 20 20">
+					<path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+				</svg>
+			</span>
+		</button>
+
+		{#if showValidation}
+		<div class="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
 			{#each [
 				{ name: 'Magnetometer', key: 'magnetometer', icon: '🧲' },
-				{ name: 'Thermocouple', key: 'thermocouple', icon: '🌡️' },
-				{ name: 'Lux', key: 'lux', icon: '💡' },
-				{ name: 'Spectrophotometer', key: 'spectrophotometer', icon: '🔬' }
+				{ name: 'Spectrophotometer', key: 'spectrophotometer', icon: '🔬' },
+				{ name: 'Thermocouple', key: 'thermocouple', icon: '🌡️' }
 			] as test (test.key)}
 				{@const result = (data.spu.validation as any)?.[test.key]}
 				<div class="rounded-lg border p-3" style="border-color: {result?.status === 'passed' || result?.status === 'overridden' ? 'var(--color-tron-green)' : result?.status === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-border)'}; background: {result?.status === 'passed' || result?.status === 'overridden' ? 'rgba(0,255,100,0.05)' : result?.status === 'failed' ? 'rgba(255,0,0,0.05)' : 'var(--color-tron-bg-secondary)'};">
@@ -476,6 +508,7 @@
 				</div>
 			{/each}
 		</div>
+		{/if}
 	</TronCard>
 
 	<!-- Attachments — upload + view thermocouple CSVs per SPU -->
