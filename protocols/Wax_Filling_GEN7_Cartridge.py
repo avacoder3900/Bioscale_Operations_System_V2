@@ -450,7 +450,7 @@ def run(protocol: protocol_api.ProtocolContext):
                 finally:
                     ser.timeout = original_timeout
                 #adjustment made to the 100.3 to be close to the x position
-            xOffset = round(x_pos - shift - (cal_x + 25.355) + offset['x'], 1)
+            xOffset = round(offset['x'] - shift, 1)
             x_pos = cal_x + 8.829
             y_pos = cal_y - 7.5
             pipette.move_to(types.Location(types.Point(x=x_pos, y=y_pos, z=z_cal), carriage), force_direct=True, speed=20)
@@ -478,7 +478,7 @@ def run(protocol: protocol_api.ProtocolContext):
                 finally:
                     ser.timeout = original_timeout
             #adjustment made to the 161.2 to be close to the y position
-            yOffset = round(y_pos - shift - (cal_y + 3.753) + offset['y'], 1)
+            yOffset = round(offset['y'] - shift, 1)
 
             pipette.move_to(types.Location(types.Point(x=cal_x + 2.0, y=cal_y + 1.0, z=z_cal), carriage), force_direct=True, speed=20)
             pipette.move_to(types.Location(types.Point(x=cal_x + 2.0, y=cal_y + 1.0, z=z_cal + 20), carriage), force_direct=True, speed=20)

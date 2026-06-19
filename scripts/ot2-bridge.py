@@ -1311,12 +1311,15 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
         # X probe — .py start (124.581, 166.747) translated to absolute.
         x_shift, x_ok = _probe_axis(run_id, pipette_id, ser, "x",
                                     124.581 + tx, 166.747 + ty, z_cal, b"X")
-        x_offset = round(124.581 - x_shift - 150.536 + bend["x"], 1)
+        # adjust = (calibrator C-string baseline) - travel-to-switch. The old
+        # hardcoded position constant (150.536/177.0) that produced a ~32mm jump
+        # is GONE — the C string is now the baseline the operator dials in.
+        x_offset = round(bend["x"] - x_shift, 1)
 
         # Y probe — .py start (134.01, 165.747) translated to absolute.
         y_shift, y_ok = _probe_axis(run_id, pipette_id, ser, "y",
                                     134.01 + tx, 165.747 + ty, z_cal, b"Y")
-        y_offset = round(165.747 - y_shift - 177.0 + bend["y"], 1)
+        y_offset = round(bend["y"] - y_shift, 1)
 
         # Retract above the calibrator (slow). KEEP THE TIP ON — the operator uses
         # it to tune the deck next. (No drop_tip.)
