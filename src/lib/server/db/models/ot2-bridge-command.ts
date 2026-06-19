@@ -41,7 +41,11 @@ const ot2BridgeCommandSchema = new Schema({
 	createdAt: { type: Date, default: () => new Date() },
 	claimedAt: Date,
 	completedAt: Date
-}, { timestamps: false });
+// minimize:false is REQUIRED — this queue relays request bodies + command
+// payloads VERBATIM to the robot. Mongoose's default minimize:true deletes empty
+// objects on save, which silently strips Opentrons labware-def fields like
+// `groups[].metadata: {}` → the robot rejects the def with "Field required".
+}, { timestamps: false, minimize: false });
 
 ot2BridgeCommandSchema.index({ deviceId: 1, status: 1, createdAt: 1 });
 ot2BridgeCommandSchema.index({ robotId: 1, createdAt: -1 });
