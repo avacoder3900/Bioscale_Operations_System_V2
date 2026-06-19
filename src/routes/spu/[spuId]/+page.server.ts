@@ -383,5 +383,55 @@ export const actions: Actions = {
 		});
 
 		return { success: true, deleted: true };
+	},
+
+	requestServicing: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const serviceType = form.get('serviceType')?.toString() || 'other';
+		const notes = form.get('notes')?.toString().trim() || '';
+		const setServicing = form.get('setServicing')?.toString() === 'true';
+
+		const spu = await Spu.findById(params.spuId);
+		if (!spu) return fail(404, { error: 'SPU not found' });
+		if ((spu as any).finalizedAt) return fail(400, { error: 'SPU is finalized' });
+
+		const oldStatus = (spu as any).status ?? 'draft';
+		const reason = `Service request (${serviceType})${notes ? ': ' + notes : ''}`;
+
+		// Optionally transition the device into 'servicing' status.
+		if (setServicing && oldStatus !== 'servicing') {
+			await Spu.updateOne(
+				{ _id: params.spuId },
+				{
+					$set: { status: 'servicing' },
+					$push: {
+						statusTransitions: {
+							_id: generateId(),
+							from: oldStatus,
+							to: 'servicing',
+							changedBy: { _id: locals.user!._id, username: locals.user!.username },
+							changedAt: new Date(),
+							reason
+						}
+					}
+				}
+			);
+		}
+
+		// Record the service request in the device history.
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'spus',
+			recordId: params.spuId,
+			action: 'UPDATE',
+			oldData: { status: oldStatus },
+			newData: { serviceType, notes, status: setServicing ? 'servicing' : oldStatus },
+			reason,
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+
+		return { success: true };
 	}
 };

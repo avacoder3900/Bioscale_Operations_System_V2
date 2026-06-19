@@ -17,6 +17,11 @@
 	let unlinking = $state(false);
 	let renaming = $state(false);
 	let showRenameForm = $state(false);
+	let showValidation = $state(false);
+	let showServicingModal = $state(false);
+	let submittingService = $state(false);
+
+	let validationOverall = $derived(data.spu.validation?.status ?? 'pending');
 
 	// Assignment removed — release status (released-rnd/manufacturing/field) replaces it
 
@@ -86,6 +91,7 @@
 		if (form?.success) {
 			showStateForm = false;
 			transitionReason = '';
+			showServicingModal = false;
 		}
 	});
 </script>
@@ -96,8 +102,15 @@
 			<h2 class="tron-text-primary font-mono text-2xl font-bold">{data.spu.udi}</h2>
 			<p class="tron-text-muted">Device History Record</p>
 		</div>
-		<div class="flex gap-2">
+		<div class="flex items-center gap-2">
 			<SpuStatusBadge status={data.spu.status} />
+			<TronButton
+				variant="primary"
+				onclick={() => (showServicingModal = true)}
+				style="min-height: 40px; background: var(--color-tron-orange); border-color: var(--color-tron-orange);"
+			>
+				🔧 Servicing
+			</TronButton>
 		</div>
 	</div>
 
@@ -271,7 +284,7 @@
 									return async ({ result }) => {
 										deleting = false;
 										if (result.type === 'success') {
-											window.location.href = '/spu';
+											window.location.href = '/spu/mfg';
 										}
 									};
 								}}
@@ -403,44 +416,77 @@
 		</TronCard>
 	{/if}
 
-	<!-- Validation Tests -->
+	<!-- Validation (selectable) -->
 	<TronCard>
-		<h3 class="tron-text-primary mb-4 text-lg font-medium">Validation Tests</h3>
-		<div class="grid grid-cols-2 gap-3 md:grid-cols-4">
-			{#each [
-				{ name: 'Magnetometer', key: 'magnetometer', icon: '🧲' },
-				{ name: 'Thermocouple', key: 'thermocouple', icon: '🌡️' },
-				{ name: 'Lux', key: 'lux', icon: '💡' },
-				{ name: 'Spectrophotometer', key: 'spectrophotometer', icon: '🔬' }
-			] as test (test.key)}
-				{@const result = data.spu.validation?.[test.key]}
-				<div class="rounded-lg border p-3" style="border-color: {result?.status === 'passed' ? 'var(--color-tron-green)' : result?.status === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-border)'}; background: {result?.status === 'passed' ? 'rgba(0,255,100,0.05)' : result?.status === 'failed' ? 'rgba(255,0,0,0.05)' : 'var(--color-tron-bg-secondary)'};">
-					<div class="text-center">
-						<div class="text-lg">{test.icon}</div>
-						<div class="tron-text-primary text-xs font-bold mt-1">{test.name}</div>
-						<div class="mt-2">
-							{#if result?.status === 'passed'}
+		<button type="button" class="flex w-full items-center justify-between" onclick={() => (showValidation = !showValidation)}>
+			<h3 class="tron-text-primary text-lg font-medium">
+				Validation
+				<span
+					class="ml-2 rounded-full px-2 py-0.5 text-xs font-bold align-middle"
+					style="color: {validationOverall === 'passed' ? 'var(--color-tron-green)' : validationOverall === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-orange)'}; background: rgba(128,128,128,0.12);"
+				>
+					{validationOverall.toUpperCase()}
+				</span>
+			</h3>
+			<span class="flex items-center gap-2 text-sm" style="color: var(--color-tron-cyan);">
+				{showValidation ? 'Hide' : 'View Validation Data'}
+				<svg class="h-5 w-5 transition-transform {showValidation ? 'rotate-180' : ''}" fill="currentColor" viewBox="0 0 20 20">
+					<path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+				</svg>
+			</span>
+		</button>
+
+		{#if showValidation}
+			<div class="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+				{#each [
+					{ name: 'Magnetometer', key: 'magnetometer', icon: '🧲', href: '/spu/validation/magnetometer/history' },
+					{ name: 'Spectrophotometer', key: 'spectrophotometer', icon: '🔬', href: '/spu/validation/spectrophotometer/history' },
+					{ name: 'Thermocouple', key: 'thermocouple', icon: '🌡️', href: '/spu/validation/thermocouple/history' }
+				] as test (test.key)}
+					{@const result = data.spu.validation?.[test.key]}
+					{@const status = result?.status ?? 'pending'}
+					<div class="rounded-lg border p-4" style="border-color: {status === 'passed' ? 'var(--color-tron-green)' : status === 'failed' ? 'var(--color-tron-red)' : 'var(--color-tron-border)'}; background: {status === 'passed' ? 'rgba(0,255,100,0.05)' : status === 'failed' ? 'rgba(255,0,0,0.05)' : 'var(--color-tron-bg-secondary)'};">
+						<div class="flex items-center justify-between">
+							<div class="flex items-center gap-2">
+								<span class="text-lg">{test.icon}</span>
+								<span class="tron-text-primary text-sm font-bold">{test.name}</span>
+							</div>
+							{#if status === 'passed'}
 								<span class="rounded-full px-2 py-0.5 text-xs font-bold" style="color: var(--color-tron-green); background: rgba(0,255,100,0.15);">PASS</span>
-							{:else if result?.status === 'failed'}
+							{:else if status === 'failed'}
 								<span class="rounded-full px-2 py-0.5 text-xs font-bold" style="color: var(--color-tron-red); background: rgba(255,0,0,0.15);">FAIL</span>
 							{:else}
 								<span class="rounded-full px-2 py-0.5 text-xs font-bold tron-text-muted" style="background: rgba(128,128,128,0.15);">PENDING</span>
 							{/if}
 						</div>
-						{#if result?.completedAt}
-							<div class="tron-text-muted text-[10px] mt-1">{formatDate(result.completedAt)}</div>
+
+						<dl class="mt-3 space-y-1.5 text-xs">
+							<div class="flex justify-between">
+								<dt class="tron-text-muted">Completed</dt>
+								<dd class="tron-text-primary">{result?.completedAt ? formatDate(result.completedAt) : '—'}</dd>
+							</div>
+							<div class="flex justify-between">
+								<dt class="tron-text-muted">Session</dt>
+								<dd class="tron-text-primary font-mono break-all">{result?.sessionId ?? '—'}</dd>
+							</div>
+						</dl>
+
+						{#if status === 'failed' && result?.failureReasons?.length > 0}
+							<div class="mt-2 border-t pt-2 space-y-1" style="border-color: var(--color-tron-border);">
+								{#each result.failureReasons as reason}
+									<div class="text-[11px]" style="color: var(--color-tron-red);">✗ {reason}</div>
+								{/each}
+							</div>
 						{/if}
+
+						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
+						<a href={test.href} class="mt-3 block text-center text-xs hover:underline" style="color: var(--color-tron-cyan);">
+							View {test.name} history →
+						</a>
 					</div>
-					{#if result?.status === 'failed' && result?.failureReasons?.length > 0}
-						<div class="mt-2 border-t pt-2 space-y-1" style="border-color: var(--color-tron-border);">
-							{#each result.failureReasons as reason}
-								<div class="text-[10px]" style="color: var(--color-tron-red);">✗ {reason}</div>
-							{/each}
-						</div>
-					{/if}
-				</div>
-			{/each}
-		</div>
+				{/each}
+			</div>
+		{/if}
 	</TronCard>
 
 	<!-- Attachments (thermocouple CSVs, etc.) -->
@@ -641,3 +687,82 @@
 		{/if}
 	</TronCard>
 </div>
+
+<!-- Servicing Modal -->
+{#if showServicingModal}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+		<div class="w-full max-w-lg">
+			<TronCard>
+				<div class="mb-4 flex items-center justify-between">
+					<div>
+						<h3 class="tron-text-primary text-xl font-bold">🔧 Servicing</h3>
+						<p class="tron-text-muted text-sm">{data.spu.udi}</p>
+					</div>
+					<button type="button" class="tron-text-muted hover:tron-text-primary" onclick={() => (showServicingModal = false)} aria-label="Close modal">
+						<svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+						</svg>
+					</button>
+				</div>
+
+				<form
+					method="POST"
+					action="?/requestServicing"
+					use:enhance={() => {
+						submittingService = true;
+						return async ({ update }) => {
+							submittingService = false;
+							await update();
+						};
+					}}
+					class="space-y-4"
+				>
+					<div>
+						<label for="service-type" class="tron-label">What kind of servicing is needed?</label>
+						<select id="service-type" name="serviceType" class="tron-select w-full" required disabled={submittingService} style="min-height: 44px;">
+							<option value="inspection">Inspection</option>
+							<option value="calibration">Calibration</option>
+							<option value="repair">Repair</option>
+							<option value="part-replacement">Part replacement</option>
+							<option value="other">Other</option>
+						</select>
+					</div>
+
+					<div>
+						<label for="service-notes" class="tron-label">Details</label>
+						<textarea
+							id="service-notes"
+							name="notes"
+							rows="4"
+							class="tron-input w-full"
+							placeholder="Describe the issue or service request..."
+							disabled={submittingService}
+						></textarea>
+					</div>
+
+					<label class="flex items-center gap-2 text-sm tron-text-primary">
+						<input type="checkbox" name="setServicing" value="true" checked class="h-4 w-4 accent-[var(--color-tron-orange)]" disabled={submittingService} />
+						Move this SPU to <span class="font-semibold" style="color: var(--color-tron-orange);">Servicing</span> status
+					</label>
+
+					<p class="tron-text-muted text-xs italic">
+						This logs a service request to the device history. We'll refine the full servicing workflow next.
+					</p>
+
+					{#if form?.error}
+						<div class="rounded border border-[var(--color-tron-red)] bg-[rgba(255,51,102,0.1)] p-3">
+							<p class="text-sm text-[var(--color-tron-red)]">{form.error}</p>
+						</div>
+					{/if}
+
+					<div class="flex gap-3 pt-2">
+						<TronButton type="button" class="flex-1" onclick={() => (showServicingModal = false)} disabled={submittingService}>Cancel</TronButton>
+						<TronButton type="submit" variant="primary" class="flex-1" disabled={submittingService}>
+							{submittingService ? 'Submitting...' : 'Submit Service Request'}
+						</TronButton>
+					</div>
+				</form>
+			</TronCard>
+		</div>
+	</div>
+{/if}
