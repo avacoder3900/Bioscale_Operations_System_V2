@@ -14,9 +14,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 	return {
 		spus: spus.map((s: any) => {
 			const v = s.validation ?? {};
-			const validationPassed = VALIDATION_KEYS.filter(
-				(k) => v[k]?.status === 'passed' || v[k]?.status === 'overridden'
-			).length;
+			// Validations completed before a service return don't count toward the current cycle.
+			const reset = s.validationResetAt ? new Date(s.validationResetAt).getTime() : null;
+			const validationPassed = VALIDATION_KEYS.filter((k) => {
+				const r = v[k];
+				const passed = r?.status === 'passed' || r?.status === 'overridden';
+				if (!passed) return false;
+				if (reset === null) return true;
+				return r.completedAt && new Date(r.completedAt).getTime() >= reset;
+			}).length;
 			return {
 				id: s._id,
 				udi: s.udi,

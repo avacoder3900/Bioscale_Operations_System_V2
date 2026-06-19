@@ -36,13 +36,33 @@
 
 	const deviceId = $derived(data.particleLink?.particleDeviceId ?? data.spu.id);
 
+	// Servicing
+	let showServicing = $state(false);
+	let submittingService = $state(false);
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const serviceRecords = $derived(((data.spu as any).serviceRecords ?? []) as any[]);
+	const openService = $derived(serviceRecords.find((r) => r.status === 'open') ?? null);
+	const currentCycle = $derived(serviceRecords.filter((r) => r.status === 'returned').length);
+
+	// Which service cycle a validation belongs to (0 = new device, k = post-service #k).
+	function validationPhase(completedAt: string | Date | null | undefined): number | null {
+		if (!completedAt) return null;
+		const t = new Date(completedAt).getTime();
+		return serviceRecords.filter((r) => r.status === 'returned' && r.returnedAt && new Date(r.returnedAt).getTime() <= t).length;
+	}
+	function phaseLabel(phase: number | null): string {
+		if (phase === null) return '';
+		return phase === 0 ? 'New device' : `Post-service #${phase}`;
+	}
+
 	// Overall validation status for the Validation tab summary badge
 	const validationOverall = $derived((data.spu.validation as any)?.status ?? 'pending');
-	// How many of the 3 tracked validations have passed (red until 3/3).
+	// Count a test only if it passed AND was done in the current service cycle.
 	const validationPassedCount = $derived(
 		['magnetometer', 'spectrophotometer', 'thermocouple'].filter((k) => {
-			const st = (data.spu.validation as any)?.[k]?.status;
-			return st === 'passed' || st === 'overridden';
+			const r = (data.spu.validation as any)?.[k];
+			const passed = r?.status === 'passed' || r?.status === 'overridden';
+			return passed && validationPhase(r?.completedAt) === currentCycle;
 		}).length
 	);
 
@@ -108,6 +128,7 @@
 		if (form?.success) {
 			showStateForm = false;
 			transitionReason = '';
+			showServicing = false;
 		}
 	});
 </script>
@@ -120,17 +141,14 @@
 		</div>
 		<div class="flex items-center gap-2">
 			<SpuStatusBadge status={data.spu.status} />
-			<!-- Servicing: opens (or reuses) a service ticket for this SPU via the existing ticket system -->
-			<form method="POST" action="/spu/servicing?/scan">
-				<input type="hidden" name="barcode" value={data.spu.barcode ?? data.spu.udi} />
-				<TronButton
-					type="submit"
-					variant="primary"
-					style="min-height: 40px; background: var(--color-tron-orange); border-color: var(--color-tron-orange);"
-				>
-					🔧 Servicing
-				</TronButton>
-			</form>
+			<!-- Servicing: opens the quick service window (Phase A send / Phase B return) -->
+			<TronButton
+				variant="primary"
+				onclick={() => (showServicing = true)}
+				style="min-height: 40px; background: var(--color-tron-orange); border-color: var(--color-tron-orange);"
+			>
+				🔧 Servicing{#if openService} (open){/if}
+			</TronButton>
 		</div>
 	</div>
 
@@ -523,6 +541,7 @@
 							</div>
 							{#if result?.completedAt}
 								<div class="tron-text-muted text-[10px] mt-1">{formatDate(result.completedAt)}</div>
+									<div class="text-[10px] mt-0.5" style="color: {validationPhase(result.completedAt) === currentCycle ? 'var(--color-tron-cyan)' : 'var(--color-tron-text-secondary)'};">{phaseLabel(validationPhase(result.completedAt))}{#if validationPhase(result.completedAt) !== currentCycle} · not counted{/if}</div>
 							{/if}
 							{#if result?.sessionId}
 								<a href="/validation/{test.key}/{result.sessionId}" class="text-[10px] underline mt-1 block" style="color: var(--color-tron-cyan);">View Session</a>
@@ -671,6 +690,31 @@
 				<div class="flex justify-between gap-3"><dt class="tron-text-muted">Finalized</dt><dd class="tron-text-primary text-right">{data.spu.finalizedAt ? formatDate(data.spu.finalizedAt) : 'No'}</dd></div>
 			</dl>
 		</TronCard>
+
+		<!-- Service History -->
+		{#if serviceRecords.length > 0}
+			<TronCard>
+				<h3 class="tron-text-primary mb-4 text-lg font-medium">Service History</h3>
+				<div class="space-y-3">
+					{#each [...serviceRecords].reverse() as rec (rec.id)}
+						<div class="rounded-lg border p-3" style="border-color: {rec.status === 'open' ? 'var(--color-tron-orange)' : 'var(--color-tron-border)'};">
+							<div class="flex items-center justify-between">
+								<span class="tron-text-primary text-sm font-bold">Service #{rec.cycle}</span>
+								<span class="rounded-full px-2 py-0.5 text-xs font-bold" style="color: {rec.status === 'open' ? 'var(--color-tron-orange)' : 'var(--color-tron-green)'}; background: rgba(128,128,128,0.12);">
+									{rec.status === 'open' ? 'OUT FOR SERVICE' : 'RETURNED'}
+								</span>
+							</div>
+							<dl class="mt-2 space-y-1 text-xs">
+								<div><dt class="tron-text-muted inline">Issue:</dt> <dd class="tron-text-primary inline">{rec.issue}</dd></div>
+								{#if rec.initialTestPlan}<div><dt class="tron-text-muted inline">Initial plan:</dt> <dd class="tron-text-primary inline">{rec.initialTestPlan}</dd></div>{/if}
+								{#if rec.fix}<div><dt class="tron-text-muted inline">Fix:</dt> <dd class="tron-text-primary inline">{rec.fix}</dd></div>{/if}
+								<div class="tron-text-muted">Opened {formatDate(rec.openedAt)}{#if rec.openedByName} by {rec.openedByName}{/if}{#if rec.returnedAt} · Returned {formatDate(rec.returnedAt)}{#if rec.returnedByName} by {rec.returnedByName}{/if}{/if}</div>
+							</dl>
+						</div>
+					{/each}
+				</div>
+			</TronCard>
+		{/if}
 
 		<!-- Attachments — upload + view thermocouple CSVs per SPU -->
 		<TronCard>
@@ -957,3 +1001,82 @@
 		</TronCard>
 	{/if}
 </div>
+
+<!-- Servicing quick window -->
+{#if showServicing}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+		<div class="w-full max-w-lg">
+			<TronCard>
+				<div class="mb-4 flex items-center justify-between">
+					<div>
+						<h3 class="tron-text-primary text-xl font-bold">🔧 Servicing</h3>
+						<p class="tron-text-muted font-mono text-sm">{data.spu.udi}</p>
+					</div>
+					<button type="button" class="tron-text-muted hover:tron-text-primary" onclick={() => (showServicing = false)} aria-label="Close">
+						<svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+					</button>
+				</div>
+
+				{#if !openService}
+					<!-- Phase A: send to service -->
+					<form
+						method="POST"
+						action="?/openService"
+						use:enhance={() => { submittingService = true; return async ({ update }) => { submittingService = false; await update(); }; }}
+						class="space-y-4"
+					>
+						<p class="tron-text-muted text-sm">
+							Send this unit for service. It will move to <span style="color: var(--color-tron-orange);">servicing</span>.
+						</p>
+						<div>
+							<label for="svc-issue" class="tron-label">Issue</label>
+							<textarea id="svc-issue" name="issue" rows="3" class="tron-input w-full" placeholder="What is wrong with the device?" required disabled={submittingService}></textarea>
+						</div>
+						<div>
+							<label for="svc-plan" class="tron-label">Initial plan to test</label>
+							<textarea id="svc-plan" name="initialTestPlan" rows="3" class="tron-input w-full" placeholder="How will it be diagnosed / tested?" disabled={submittingService}></textarea>
+						</div>
+						{#if form?.error}
+							<div class="rounded border border-[var(--color-tron-red)] bg-[rgba(255,51,102,0.1)] p-3"><p class="text-sm text-[var(--color-tron-red)]">{form.error}</p></div>
+						{/if}
+						<div class="flex gap-3 pt-1">
+							<TronButton type="button" class="flex-1" onclick={() => (showServicing = false)} disabled={submittingService}>Cancel</TronButton>
+							<TronButton type="submit" variant="primary" class="flex-1" disabled={submittingService}>{submittingService ? 'Saving...' : 'Send to Servicing'}</TronButton>
+						</div>
+					</form>
+				{:else}
+					<!-- Phase B: device returned -->
+					<div class="mb-4 rounded-lg border p-3" style="border-color: var(--color-tron-orange); background: rgba(249,115,22,0.06);">
+						<div class="tron-text-primary text-sm font-bold">Service #{openService.cycle} — out for service</div>
+						<dl class="mt-1 space-y-1 text-xs">
+							<div><dt class="tron-text-muted inline">Issue:</dt> <dd class="tron-text-primary inline">{openService.issue}</dd></div>
+							{#if openService.initialTestPlan}<div><dt class="tron-text-muted inline">Initial plan:</dt> <dd class="tron-text-primary inline">{openService.initialTestPlan}</dd></div>{/if}
+							<div class="tron-text-muted">Opened {formatDate(openService.openedAt)}{#if openService.openedByName} by {openService.openedByName}{/if}</div>
+						</dl>
+					</div>
+					<form
+						method="POST"
+						action="?/returnService"
+						use:enhance={() => { submittingService = true; return async ({ update }) => { submittingService = false; await update(); }; }}
+						class="space-y-4"
+					>
+						<div>
+							<label for="svc-fix" class="tron-label">What was the fix?</label>
+							<textarea id="svc-fix" name="fix" rows="3" class="tron-input w-full" placeholder="Describe the repair / change made..." required disabled={submittingService}></textarea>
+						</div>
+						<p class="text-xs" style="color: var(--color-tron-orange);">
+							On return, the unit goes to <strong>validating</strong> and the validation counter resets to 0/3. Prior validation records are kept and tagged with their service cycle.
+						</p>
+						{#if form?.error}
+							<div class="rounded border border-[var(--color-tron-red)] bg-[rgba(255,51,102,0.1)] p-3"><p class="text-sm text-[var(--color-tron-red)]">{form.error}</p></div>
+						{/if}
+						<div class="flex gap-3 pt-1">
+							<TronButton type="button" class="flex-1" onclick={() => (showServicing = false)} disabled={submittingService}>Cancel</TronButton>
+							<TronButton type="submit" variant="primary" class="flex-1" disabled={submittingService}>{submittingService ? 'Saving...' : 'Mark Returned & Require Re-validation'}</TronButton>
+						</div>
+					</form>
+				{/if}
+			</TronCard>
+		</div>
+	</div>
+{/if}

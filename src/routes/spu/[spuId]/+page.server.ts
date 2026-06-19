@@ -91,7 +91,20 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 				reason: t.reason ?? null
 			})),
 			finalizedAt: s.finalizedAt ?? null,
-			corrections: s.corrections ?? []
+			corrections: s.corrections ?? [],
+			validationResetAt: s.validationResetAt ?? null,
+			serviceRecords: (s.serviceRecords ?? []).map((r: any) => ({
+				id: r._id,
+				cycle: r.cycle ?? null,
+				issue: r.issue ?? '',
+				initialTestPlan: r.initialTestPlan ?? '',
+				fix: r.fix ?? null,
+				status: r.status ?? 'open',
+				openedByName: r.openedBy?.username ?? null,
+				openedAt: r.openedAt ?? null,
+				returnedByName: r.returnedBy?.username ?? null,
+				returnedAt: r.returnedAt ?? null
+			}))
 		},
 		attachments: (s.attachments ?? []).map((a: any) => {
 			// Parse a capped preview (header + up to 50 rows) for inline viewing.
@@ -491,6 +504,94 @@ export const actions: Actions = {
 		});
 
 		return { success: true, deleted: true };
+	},
+
+	// Send a unit out for service — Phase A: capture the issue + initial test plan.
+	openService: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const issue = form.get('issue')?.toString().trim();
+		const initialTestPlan = form.get('initialTestPlan')?.toString().trim() || '';
+		if (!issue) return fail(400, { error: 'Issue is required' });
+
+		const spu = await Spu.findById(params.spuId).lean() as any;
+		if (!spu) return fail(404, { error: 'SPU not found' });
+		const records: any[] = spu.serviceRecords ?? [];
+		if (records.some((r) => r.status === 'open')) {
+			return fail(400, { error: 'This unit already has an open service record' });
+		}
+
+		const cycle = records.length + 1;
+		const operator = { _id: locals.user!._id, username: locals.user!.username };
+		const now = new Date();
+		const record = {
+			_id: generateId(), cycle, issue, initialTestPlan, fix: null, status: 'open',
+			openedBy: operator, openedAt: now, returnedBy: null, returnedAt: null
+		};
+		const oldStatus = spu.status ?? 'draft';
+
+		// Native write bypasses sacred middleware so finalized/deployed units can be serviced.
+		await (Spu.collection as any).updateOne(byId(params.spuId), {
+			$push: {
+				serviceRecords: record,
+				statusTransitions: { _id: generateId(), from: oldStatus, to: 'servicing', changedBy: operator, changedAt: now, reason: `Service #${cycle}: ${issue}` }
+			},
+			$set: { status: 'servicing', updatedAt: now }
+		});
+
+		await AuditLog.create({
+			_id: generateId(), tableName: 'spus', recordId: params.spuId, action: 'UPDATE',
+			oldData: { status: oldStatus }, newData: { serviceCycle: cycle, issue },
+			reason: `Service #${cycle} opened: ${issue}`,
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+		return { success: true, serviceOpened: true };
+	},
+
+	// Return a serviced unit — Phase B: record the fix, require re-validation,
+	// and reset the validation counter (prior validation records are preserved).
+	returnService: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const fix = form.get('fix')?.toString().trim();
+		if (!fix) return fail(400, { error: 'A description of the fix is required' });
+
+		const spu = await Spu.findById(params.spuId).lean() as any;
+		if (!spu) return fail(404, { error: 'SPU not found' });
+		const open = (spu.serviceRecords ?? []).find((r: any) => r.status === 'open');
+		if (!open) return fail(400, { error: 'No open service record to return' });
+
+		const operator = { _id: locals.user!._id, username: locals.user!.username };
+		const now = new Date();
+		const oldStatus = spu.status ?? 'servicing';
+
+		await (Spu.collection as any).updateOne(
+			{ ...byId(params.spuId), 'serviceRecords._id': open._id },
+			{
+				$set: {
+					'serviceRecords.$.status': 'returned',
+					'serviceRecords.$.fix': fix,
+					'serviceRecords.$.returnedBy': operator,
+					'serviceRecords.$.returnedAt': now,
+					status: 'validating',
+					validationResetAt: now,
+					updatedAt: now
+				},
+				$push: {
+					statusTransitions: { _id: generateId(), from: oldStatus, to: 'validating', changedBy: operator, changedAt: now, reason: `Service #${open.cycle} returned — re-validation required` }
+				}
+			}
+		);
+
+		await AuditLog.create({
+			_id: generateId(), tableName: 'spus', recordId: params.spuId, action: 'UPDATE',
+			oldData: { status: oldStatus }, newData: { serviceCycle: open.cycle, fix, validationReset: now },
+			reason: `Service #${open.cycle} returned: ${fix}. Validation counter reset.`,
+			changedBy: locals.user!.username ?? locals.user!._id
+		});
+		return { success: true, serviceReturned: true };
 	}
 };
 

@@ -111,6 +111,23 @@ const spuSchema = new Schema({
 		uploadedBy: operatorRef
 	}],
 
+	// Servicing lifecycle — each service event is numbered (cycle 1, 2, 3…).
+	// A device sent for service gets an 'open' record; on return it becomes
+	// 'returned' with the fix, and validationResetAt is stamped.
+	serviceRecords: [{
+		_id: { type: String, default: () => generateId() },
+		cycle: Number,
+		issue: String,
+		initialTestPlan: String,
+		fix: String,
+		status: { type: String, enum: ['open', 'returned'], default: 'open' },
+		openedBy: operatorRef, openedAt: { type: Date, default: () => new Date() },
+		returnedBy: operatorRef, returnedAt: Date
+	}],
+	// Validations completed before this instant don't count toward the current
+	// N/3 (set when a serviced device is returned). Prior records are preserved.
+	validationResetAt: Date,
+
 	finalizedAt: Date,
 	voidedAt: Date,
 	voidReason: String,
