@@ -15,7 +15,7 @@
 ```
 src/
 ├── routes/                    # SvelteKit file-based routing
-│   ├── +layout.svelte         # Root layout (DO NOT MODIFY)
+│   ├── +layout.svelte         # Root layout
 │   ├── +layout.server.ts      # Root auth check
 │   ├── login/                 # Public auth routes
 │   ├── spu/                   # Main app routes (protected)
@@ -24,7 +24,7 @@ src/
 │   ├── opentrons/             # Lab robot control
 │   └── api/                   # API endpoints
 ├── lib/
-│   ├── components/            # Shared Svelte components (DO NOT MODIFY)
+│   ├── components/            # Shared Svelte components
 │   ├── server/
 │   │   ├── db/
 │   │   │   ├── connection.ts  # Mongoose connection singleton
@@ -42,12 +42,12 @@ src/
 ## Rules
 
 ### DO NOT MODIFY
-- Any `.svelte` file (UI layer is frozen — copied from old app)
-- `src/lib/components/`
 - `src/lib/stores/`
 - `src/lib/utils/` (client-side)
 - `src/app.html`, `src/app.css`
 - `static/`
+
+> **Svelte UI freeze lifted (2026-06-19):** `.svelte` files and `src/lib/components/` are no longer frozen and may be modified. (`stores/`, `utils/`, `app.html`, `app.css`, and `static/` remain off-limits unless explicitly authorized.)
 
 ### Server Files (what you CAN modify)
 - `+page.server.ts` — load functions and form actions
@@ -180,7 +180,6 @@ npx tsx scripts/seed.ts # Seed test data
 - **Don't forget `await connectDB()`** — Mongoose connection is lazy
 - **Don't forget `.lean()`** — without it, Mongoose returns heavy documents
 - **Don't forget JSON serialization** — SvelteKit can't serialize Mongoose docs directly. Always `JSON.parse(JSON.stringify(data))` before returning from load functions, especially for user objects in layouts.
-- **Don't modify .svelte files** — the UI layer is frozen
 - **Don't skip audit logging** — every mutation gets an AuditLog entry
 - **Don't forget `_id: false` on subdocument arrays** — Mongoose auto-adds ObjectId `_id` to every subdocument unless you opt out. ObjectId breaks SvelteKit serialization. Use `_id: false` for data-only subdocs, or `_id: { type: String, default: () => generateId() }` for trackable subdocs.
 - **Don't skip `requirePermission()`** — every load function and action needs it. See [SECURITY.md](SECURITY.md).
