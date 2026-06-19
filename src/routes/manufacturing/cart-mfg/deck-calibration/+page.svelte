@@ -22,7 +22,6 @@
 	const robots = $derived(data.robots as { _id: string; name: string; robotSide: string | null; isActive: boolean }[]);
 	const wells = $derived(data.wells as Well[]);
 	const dim = $derived(data.dimensions as { x: number; y: number; z: number });
-	const editedSet = $derived(new Set(data.editedWells as string[]));
 	const wellByName = $derived(new Map(wells.map((w) => [w.name, w] as const)));
 
 	// ── Pickers ───────────────────────────────────────────────────────────────
@@ -643,7 +642,7 @@
 					<button type="button" onclick={deselectAll} title="Deselect everything (or press Esc anywhere)" class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Clear (Esc)</button>
 				</div>
 			</div>
-			<p class="mb-2 text-[11px]" style="color: var(--color-tron-text-secondary)">Drag a box to select a group (Shift adds). Click a hole to toggle. Wax holes are amber, reagent blue; the toggle restricts which you can select. Edited holes show an amber ring.</p>
+			<p class="mb-2 text-[11px]" style="color: var(--color-tron-text-secondary)">Drag a box to select a group (Shift adds). Click a hole to toggle. Wax holes are amber, reagent blue; the toggle restricts which you can select. Esc clears everything.</p>
 			<div class="overflow-auto rounded border border-[var(--color-tron-border)] bg-black/40" style="max-height: 72vh;">
 				{#if wells.length}
 				<div style={`width:${zoom * 100}%;`}>
@@ -659,7 +658,6 @@
 					>
 						{#each wells as w (w.name)}
 							{@const sel = selection.has(w.name)}
-							{@const edited = editedSet.has(w.name)}
 							{@const active = isActiveRole(w.name)}
 							{@const role = roleOf(w.name)}
 							<circle
@@ -673,13 +671,13 @@
 											: role === 'wax'
 												? 'rgba(217,160,80,0.6)'
 												: 'rgba(80,170,215,0.6)'}
-								stroke={edited && active ? '#f59e0b' : sel ? 'var(--color-tron-cyan)' : 'none'}
-								stroke-width={edited ? 0.5 : 0.3}
+								stroke={sel ? 'var(--color-tron-cyan)' : 'none'}
+								stroke-width="0.3"
 								style={active ? '' : 'pointer-events:none;'}
 								onpointerdown={(e) => { e.stopPropagation(); }}
 								onclick={(e) => { e.stopPropagation(); toggleWell(w.name, e.shiftKey || e.ctrlKey || e.metaKey); }}
 								role="button" tabindex="-1"
-							><title>{w.name} ({role}) — x {w.x.toFixed(2)} y {w.y.toFixed(2)} z {w.z.toFixed(2)}{edited ? ' (edited)' : ''}</title></circle>
+							><title>{w.name} ({role}) — x {w.x.toFixed(2)} y {w.y.toFixed(2)} z {w.z.toFixed(2)}</title></circle>
 						{/each}
 						{#if boxRect}
 							<rect x={boxRect.x} y={boxRect.y} width={boxRect.w} height={boxRect.h} fill="rgba(0,255,255,0.12)" stroke="var(--color-tron-cyan)" stroke-width="0.4" />
