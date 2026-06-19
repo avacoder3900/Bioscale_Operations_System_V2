@@ -587,14 +587,18 @@ def home_gantry(run_id: str, force: bool = False) -> None:
     _last_home_at = time.time()
 
 
-def move_to_coordinates(run_id: str, pipette_id: str, x: float, y: float, z: float) -> None:
+def move_to_coordinates(run_id: str, pipette_id: str, x: float, y: float, z: float,
+                        speed: Optional[float] = None, force_direct: bool = True) -> None:
     # forceDirect — sweeps carry no tips/liquid; direct point-to-point cuts
     # ~0.5-1s off every slot transition (same rationale as maintenance.ts).
-    send_maintenance_command(run_id, "moveToCoordinates",
-                             {"pipetteId": pipette_id,
-                              "coordinates": {"x": x, "y": y, "z": z},
-                              "forceDirect": True},
-                             timeout_s=30.0)
+    # speed (mm/s) lets the tip-calibration probe creep slowly onto the limit
+    # switch; omitted = the robot's default (fast) gantry speed for sweeps/scans.
+    params = {"pipetteId": pipette_id,
+              "coordinates": {"x": x, "y": y, "z": z},
+              "forceDirect": force_direct}
+    if speed is not None:
+        params["speed"] = speed
+    send_maintenance_command(run_id, "moveToCoordinates", params, timeout_s=30.0)
 
 
 # Serial port management ------------------------------------------------------
@@ -1175,20 +1179,26 @@ def drop_tip_in_run(run_id: str, pipette_id: str, labware_id: str, well: str) ->
         log.warning("calibrate_tip: drop tip failed (continuing): %s", e)
 
 
+# Tip-calibration motion speeds (mm/s) — ~1/3 of the .py's (approach 20, probe 5)
+# so the operator can watch the probe creep onto the limit switch. Tune here.
+CAL_APPROACH_SPEED = 7.0
+CAL_PROBE_SPEED = 2.0
+
+
 def _probe_axis(run_id: str, pipette_id: str, ser: "serial.Serial",
                 axis: str, start_x: float, start_y: float, z: float,
                 arm_byte: bytes) -> Tuple[float, bool]:
     """Step the tip 0.1mm/iter along `axis` (-x or -y) until the limit switch
     replies arm_byte, mirroring the .py. Returns (shift_at_limit, reached)."""
-    move_to_coordinates(run_id, pipette_id, start_x, start_y, z)
+    move_to_coordinates(run_id, pipette_id, start_x, start_y, z, speed=CAL_APPROACH_SPEED)
     _cal_write(ser, arm_byte)
     shift = 0.1
     reached = False
     while not reached:
         if axis == "x":
-            move_to_coordinates(run_id, pipette_id, start_x - shift, start_y, z)
+            move_to_coordinates(run_id, pipette_id, start_x - shift, start_y, z, speed=CAL_PROBE_SPEED)
         else:
-            move_to_coordinates(run_id, pipette_id, start_x, start_y - shift, z)
+            move_to_coordinates(run_id, pipette_id, start_x, start_y - shift, z, speed=CAL_PROBE_SPEED)
         shift += 0.1
         if shift > 5:
             log.warning("calibrate_tip: %s axis hit 5mm travel without limit", axis)
@@ -1203,10 +1213,19 @@ def _probe_axis(run_id: str, pipette_id: str, ser: "serial.Serial",
 
 
 def execute_calibrate_tip(command_id: str, payload: dict) -> None:
-    """PRD 4: pick up a tip, probe it on the calibrator, return adjust{x,y}.
+    """PRD 4: probe the tip on the calibrator, return adjust{x,y}. KEEPS the tip on.
+
+    Two modes:
+      ATTACHED (payload has runId + pipetteId): probe inside the STUDIO's existing
+        maintenance run with the tip already picked up there — the tip + run stay
+        live afterward so the operator tunes the deck with that same calibrated tip.
+        We do NOT pick up, drop, home, or close in this mode.
+      STANDALONE (no runId): open our own run, pick up a tip, probe, keep the tip,
+        close the run. (Used if ever triggered outside the studio.)
 
     payload:
-      pipetteMount / pipetteName       — pipette selection (as sweep)
+      runId / pipetteId                — studio session to probe inside (ATTACHED)
+      pipetteMount / pipetteName       — pipette selection (STANDALONE)
       tiprack: { definition, namespace, loadName, version, slot, tipWell }
       calibrator: { x, y, z }          — ABSOLUTE approach point (BIMS fixture);
                                          z is the per-tip z_cal (34.491 wax / 40.8 reagent)
@@ -1223,21 +1242,28 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
     tx = cal_x - CAL_NOMINAL_X
     ty = cal_y - CAL_NOMINAL_Y
 
+    attached_run = (payload or {}).get("runId")
+    attached_pip = (payload or {}).get("pipetteId")
+    attached = bool(attached_run and attached_pip)
+
     run_id = None
+    own_run = not attached  # only close a run we opened ourselves
     ser = None
     try:
-        run_id = open_maintenance_run()
-        log.info("calibrate_tip %s: maintenance run %s", command_id, run_id)
-        pipette_id = _setup_pipette(run_id, payload)
-        home_gantry(run_id)
-
-        # Load tiprack + pick up a tip.
-        if tip.get("definition"):
-            register_labware_definition(run_id, tip["definition"])
-        lid = load_labware_in_run(run_id, tip.get("namespace", ""), tip.get("loadName", ""),
-                                  tip.get("version", 1), tip.get("slot", "11"))
-        tip_well = tip.get("tipWell", "A1")
-        pick_up_tip_in_run(run_id, pipette_id, lid, tip_well)
+        if attached:
+            run_id = attached_run
+            pipette_id = attached_pip
+            log.info("calibrate_tip %s: ATTACHED to studio run %s (tip already on)", command_id, run_id)
+        else:
+            run_id = open_maintenance_run()
+            log.info("calibrate_tip %s: STANDALONE run %s", command_id, run_id)
+            pipette_id = _setup_pipette(run_id, payload)
+            home_gantry(run_id)
+            if tip.get("definition"):
+                register_labware_definition(run_id, tip["definition"])
+            lid = load_labware_in_run(run_id, tip.get("namespace", ""), tip.get("loadName", ""),
+                                      tip.get("version", 1), tip.get("slot", "11"))
+            pick_up_tip_in_run(run_id, pipette_id, lid, tip.get("tipWell", "A1"))
 
         # Open the calibrator fixture + read its stored "bend" string (cmd 'C').
         ser = _open_calibrator_serial()
@@ -1256,8 +1282,8 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
         except Exception as e:
             log.warning("calibrate_tip: bend read failed, using 0,0: %s", e)
 
-        # Approach the calibrator (absolute).
-        move_to_coordinates(run_id, pipette_id, cal_x, cal_y, z_cal)
+        # Approach the calibrator (absolute, slow).
+        move_to_coordinates(run_id, pipette_id, cal_x, cal_y, z_cal, speed=CAL_APPROACH_SPEED)
 
         # X probe — .py start (124.581, 166.747) translated to absolute.
         x_shift, x_ok = _probe_axis(run_id, pipette_id, ser, "x",
@@ -1269,18 +1295,20 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
                                     134.01 + tx, 165.747 + ty, z_cal, b"Y")
         y_offset = round(165.747 - y_shift - 177.0 + bend["y"], 1)
 
-        # Retract above the calibrator, then drop the tip.
-        move_to_coordinates(run_id, pipette_id, 127.181 + tx, 174.247 + ty, z_cal + 20)
-        drop_tip_in_run(run_id, pipette_id, lid, tip_well)
+        # Retract above the calibrator (slow). KEEP THE TIP ON — the operator uses
+        # it to tune the deck next. (No drop_tip.)
+        move_to_coordinates(run_id, pipette_id, 127.181 + tx, 174.247 + ty, z_cal + 20, speed=CAL_APPROACH_SPEED)
 
         result = {
             "adjust": {"x": x_offset, "y": y_offset},
             "bend": bend,
             "limitReached": {"x": x_ok, "y": y_ok},
             "zCal": z_cal,
+            "tipKept": True,
+            "attached": attached,
         }
-        log.info("calibrate_tip %s: adjust x=%s y=%s (limit x=%s y=%s)",
-                 command_id, x_offset, y_offset, x_ok, y_ok)
+        log.info("calibrate_tip %s: adjust x=%s y=%s (limit x=%s y=%s, attached=%s, tip kept)",
+                 command_id, x_offset, y_offset, x_ok, y_ok, attached)
         _post_result(command_id, {"ok": True, "status": 200, "body": result})
     except Exception as e:
         log.error("calibrate_tip %s failed: %s", command_id, e)
@@ -1291,7 +1319,8 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
                 ser.close()
             except Exception:
                 pass
-        if run_id:
+        # Leave the studio's run open in ATTACHED mode (tip stays on for tuning).
+        if own_run and run_id:
             try:
                 close_maintenance_run(run_id)
             except Exception as e:

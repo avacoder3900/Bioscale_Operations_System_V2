@@ -53,6 +53,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	const robotId = body?.robotId?.toString().trim();
 	const mount = (body?.mount?.toString().trim() === 'right' ? 'right' : 'left') as 'left' | 'right';
 	const tipWell = body?.tipWell?.toString().trim() || 'A1';
+	// ATTACHED mode: probe inside the studio's open maintenance run (tip already
+	// picked up there) so the tip + run survive for deck tuning. Both required.
+	const studioRunId = body?.runId?.toString().trim() || null;
+	const studioPipetteId = body?.pipetteId?.toString().trim() || null;
 	if (!robotId) error(400, 'robotId required');
 
 	let robot = await getRobot(robotId);
@@ -94,7 +98,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				version: tipDef.version ?? 1,
 				slot: '11',
 				tipWell
-			}
+			},
+			// Present → daemon probes inside this run and keeps the tip on.
+			...(studioRunId && studioPipetteId ? { runId: studioRunId, pipetteId: studioPipetteId } : {})
 		},
 		ttlMs: COMMAND_TTL_MS,
 		requestedBy: user.username
