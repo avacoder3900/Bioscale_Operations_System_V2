@@ -28,12 +28,16 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	const wellName = body?.wellName;
 	const zOffsetMm = typeof body?.zOffsetMm === 'number' ? body.zOffsetMm : undefined;
 	const minimumZHeight = typeof body?.minimumZHeight === 'number' ? body.minimumZHeight : undefined;
+	// Tip-cal adjust folded into the well offset → a single fluid move to
+	// well+adjust (matches the protocol's well.top().move(adjust)), not move+jog.
+	const xOffsetMm = typeof body?.xOffsetMm === 'number' ? body.xOffsetMm : undefined;
+	const yOffsetMm = typeof body?.yOffsetMm === 'number' ? body.yOffsetMm : undefined;
 	if (!pipetteId || typeof pipetteId !== 'string') error(400, 'pipetteId required');
 	if (!labwareId || typeof labwareId !== 'string') error(400, 'labwareId required');
 	if (!wellName || typeof wellName !== 'string') error(400, 'wellName required');
 
 	try {
-		await moveToWell(robot, params.runId, pipetteId, labwareId, wellName, { zOffsetMm, minimumZHeight });
+		await moveToWell(robot, params.runId, pipetteId, labwareId, wellName, { zOffsetMm, minimumZHeight, xOffsetMm, yOffsetMm });
 		return json({ ok: true });
 	} catch (e) {
 		console.error('[API] move-to-well error:', e instanceof Error ? e.message : e);

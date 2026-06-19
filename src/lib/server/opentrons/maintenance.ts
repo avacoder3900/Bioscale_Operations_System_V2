@@ -378,7 +378,7 @@ export async function moveToWell(
 	pipetteId: string,
 	labwareId: string,
 	wellName: string,
-	opts: { zOffsetMm?: number; minimumZHeight?: number } = {}
+	opts: { zOffsetMm?: number; minimumZHeight?: number; xOffsetMm?: number; yOffsetMm?: number } = {}
 ): Promise<void> {
 	await sendMaintenanceCommand(
 		robot,
@@ -388,7 +388,8 @@ export async function moveToWell(
 			pipetteId,
 			labwareId,
 			wellName,
-			wellLocation: { origin: 'top', offset: { x: 0, y: 0, z: opts.zOffsetMm ?? 2 } },
+			// x/y offset = tip-cal adjust folded in → one move to well+adjust.
+			wellLocation: { origin: 'top', offset: { x: opts.xOffsetMm ?? 0, y: opts.yOffsetMm ?? 0, z: opts.zOffsetMm ?? 2 } },
 			// false ⇒ travel via the safe arc (up to minimumZHeight, over, down).
 			forceDirect: false,
 			...(opts.minimumZHeight !== undefined ? { minimumZHeight: opts.minimumZHeight } : {})

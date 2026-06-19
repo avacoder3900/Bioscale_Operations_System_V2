@@ -383,12 +383,16 @@
 	// Safe arc: lift ~80mm above the holes, travel in XY, descend. Never drags the tip.
 	async function moveToWellSafe(name: string): Promise<void> {
 		const lid = await ensureDeckLoaded();
+		// Fold the tip-cal adjust into the well offset so it's ONE fluid move to
+		// well+adjust (the safe arc lifts, travels, descends once) — exactly what
+		// the protocol does (well.top().move(adjust)). No separate second jog.
 		await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/move-to-well`, {
 			method: 'POST',
-			body: JSON.stringify({ pipetteId, labwareId: lid, wellName: name, minimumZHeight: safeArcZ })
+			body: JSON.stringify({
+				pipetteId, labwareId: lid, wellName: name, minimumZHeight: safeArcZ,
+				xOffsetMm: tipAdjust?.x ?? 0, yOffsetMm: tipAdjust?.y ?? 0
+			})
 		});
-		// Nudge onto the tip-zeroed position so tuning is done against a calibrated tip.
-		await applyTipAdjust();
 	}
 
 	async function moveToSelectedHole() {
@@ -481,13 +485,6 @@
 				msg = `Tip calibrated: adjust x=${tipAdjust.x} y=${tipAdjust.y}. Tip kept on; applied to every move-to while tuning.`;
 			} else { errMsg = 'Calibration returned no adjust'; }
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { calibrating = false; }
-	}
-	// Apply the tip-zero correction as a relative jog after a move-to (mirrors the
-	// .py's `.move(Point(adjust.x, adjust.y, 0))` on each dispense).
-	async function applyTipAdjust() {
-		if (!tipAdjust || !runId || !pipetteId) return;
-		if (tipAdjust.x) await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/jog`, { method: 'POST', body: JSON.stringify({ pipetteId, axis: 'x', distance: tipAdjust.x }) });
-		if (tipAdjust.y) await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/jog`, { method: 'POST', body: JSON.stringify({ pipetteId, axis: 'y', distance: tipAdjust.y }) });
 	}
 
 	async function pickUpTipAction() {
