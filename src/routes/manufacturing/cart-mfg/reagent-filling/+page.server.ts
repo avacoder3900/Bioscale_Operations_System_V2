@@ -10,6 +10,7 @@ import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/s
 import { WAX_PAGE_OWNED } from '$lib/server/manufacturing/run-statuses';
 import { resolveFridgeId } from '$lib/server/services/equipment-resolve';
 import { getRobot, robotGet, robotPost, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
+import { calibrationRtpValues } from '$lib/server/opentrons/calibration-rtps';
 import type { PageServerLoad, Actions } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -711,6 +712,12 @@ export const actions: Actions = {
 			runTimeParameterValues[def.variableName] = value;
 			protocolParameters[def.variableName] = value;
 		}
+
+		// PRD 6: inject BIMS-native calibration params (global offset + calibrator
+		// point) for robots with a captured offset. No-op for the pre-cutover .py.
+		const calRtps = await calibrationRtpValues(String(robotId), 'reagent-filling', paramSchema as any);
+		Object.assign(runTimeParameterValues, calRtps);
+		Object.assign(protocolParameters, calRtps);
 
 		// Create the OT-2 run.
 		let opentronsRunId: string;

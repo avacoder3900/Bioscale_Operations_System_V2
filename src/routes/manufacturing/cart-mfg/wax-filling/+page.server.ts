@@ -13,6 +13,7 @@ import { notifyLowWaxBatch, notifyRunLifecycle, shouldWarnLowWax } from '$lib/se
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import { protectLockedCarts, LOCKED_STATUSES } from '$lib/server/manufacturing/locked-cartridges';
 import { getRobot, robotGet, robotPost, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
+import { calibrationRtpValues } from '$lib/server/opentrons/calibration-rtps';
 import bcrypt from 'bcryptjs';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -850,6 +851,13 @@ export const actions: Actions = {
 			runTimeParameterValues[def.variableName] = value;
 			protocolParameters[def.variableName] = value;
 		}
+
+		// PRD 6: inject the BIMS-native calibration params (global offset +
+		// calibrator point) for robots that have a captured offset. No-op for the
+		// pre-cutover protocol (none of these RTPs declared) — see calibration-rtps.
+		const calRtps = await calibrationRtpValues(String(robotId), 'wax-filling', paramSchema as any);
+		Object.assign(runTimeParameterValues, calRtps);
+		Object.assign(protocolParameters, calRtps);
 
 		// Create the OT-2 run.
 		let opentronsRunId: string;
