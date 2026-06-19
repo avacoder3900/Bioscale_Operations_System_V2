@@ -513,15 +513,20 @@
 	}
 
 	// ── PRD 2: save the tip-calibrator fixture position for the selected robot. ──
-	// Uses the live jogged position when a run is open (jog onto the calibrator,
-	// then save), otherwise the typed calX/calY/calZ.
+	// Saves EXACTLY the X/Y/Z fields — type them directly, or click "From live" to
+	// fill them from the jogged position first. (Previously it silently used the
+	// live position whenever a run was open, ignoring typed edits.)
 	async function saveCalibratorPosition() {
 		if (!selectedRobotId) { errMsg = 'Pick a robot'; return; }
-		const x = runId && liveX !== null ? liveX : calX;
-		const y = runId && liveY !== null ? liveY : calY;
-		const z = runId && liveZ !== null ? liveZ : calZ;
-		const r = await postAction('saveCalibrator', { robotId: selectedRobotId, x: String(x), y: String(y), z: String(z) });
-		if (r) { calX = +(+x).toFixed(3); calY = +(+y).toFixed(3); calZ = +(+z).toFixed(3); msg = `Saved tip-calibrator for ${robot?.name}: (${calX}, ${calY}, ${calZ}).`; }
+		const r = await postAction('saveCalibrator', { robotId: selectedRobotId, x: String(calX), y: String(calY), z: String(calZ) });
+		if (r) msg = `Saved tip-calibrator for ${robot?.name}: (${calX}, ${calY}, ${calZ}).`;
+	}
+	// Fill the calibrator X/Y/Z fields from the live jogged position (jog onto the
+	// calibrator → click this → Save).
+	function captureCalibratorFromLive() {
+		if (liveX === null || liveY === null || liveZ === null) { errMsg = 'No live position — open a run and move/jog first'; return; }
+		calX = +liveX.toFixed(3); calY = +liveY.toFixed(3); calZ = +liveZ.toFixed(3);
+		msg = `Calibrator fields set from live (${calX}, ${calY}, ${calZ}). Click Save to persist.`;
 	}
 
 	// ── PRD 5: save the robot's GLOBAL deck offset. The captured dx/dy/dz (the
@@ -770,9 +775,10 @@
 						<label>calY <input type="number" step="0.1" bind:value={calY} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
 						<label>calZ <input type="number" step="0.1" bind:value={calZ} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
 					</div>
-					<button type="button" onclick={saveCalibratorPosition} disabled={busy || !selectedRobotId} class="mt-1 w-full rounded border border-green-500/40 bg-green-900/15 px-2 py-1.5 text-[11px] font-semibold text-green-300 hover:bg-green-900/25 disabled:opacity-40">
-						Save calibrator position{runId ? ' (from live)' : ''} → {robot?.name ?? 'robot'}
-					</button>
+					<div class="mt-1 grid grid-cols-2 gap-2">
+						<button type="button" onclick={captureCalibratorFromLive} disabled={busy || liveX === null} class="rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)" title="Copy the live jogged position into the X/Y/Z fields">From live ↧</button>
+						<button type="button" onclick={saveCalibratorPosition} disabled={busy || !selectedRobotId} class="rounded border border-green-500/40 bg-green-900/15 px-2 py-1.5 text-[11px] font-semibold text-green-300 hover:bg-green-900/25 disabled:opacity-40">Save → {robot?.name ?? 'robot'}</button>
+					</div>
 				</div>
 
 				<!-- Tour: drive through every active-role hole like a fill run -->
