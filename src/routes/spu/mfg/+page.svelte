@@ -7,18 +7,6 @@
 
 	let search = $state('');
 
-	function shortId(udi: string): string {
-		const m = udi.match(/\(21\)(.+)/);
-		if (!m) return udi.slice(0, 8).toUpperCase();
-		return `SPU-${m[1].slice(0, 8).toUpperCase()}`;
-	}
-
-	function qcColor(status: string): string {
-		if (status === 'pass' || status === 'passed') return 'var(--color-tron-green)';
-		if (status === 'fail' || status === 'failed') return 'var(--color-tron-red)';
-		return 'var(--color-tron-orange)';
-	}
-
 	// Search filters the visible widgets live.
 	let filtered = $derived.by(() => {
 		const q = search.trim().toLowerCase();
@@ -26,21 +14,21 @@
 		return data.spus.filter(
 			(s) =>
 				s.udi.toLowerCase().includes(q) ||
-				shortId(s.udi).toLowerCase().includes(q) ||
+				(s.deviceId && s.deviceId.toLowerCase().includes(q)) ||
 				(s.barcode && s.barcode.toLowerCase().includes(q)) ||
 				(s.owner && s.owner.toLowerCase().includes(q)) ||
 				(s.batchNumber && s.batchNumber.toLowerCase().includes(q))
 		);
 	});
 
-	// Enter jumps straight to an exact match.
+	// Enter jumps straight to an exact UDI / device-id / barcode match.
 	function onEnter() {
 		const q = search.trim().toLowerCase();
 		if (!q) return;
 		const exact = data.spus.find(
 			(s) =>
 				s.udi.toLowerCase() === q ||
-				shortId(s.udi).toLowerCase() === q ||
+				(s.deviceId && s.deviceId.toLowerCase() === q) ||
 				(s.barcode && s.barcode.toLowerCase() === q)
 		);
 		if (exact) goto(`/spu/${exact.id}`);
@@ -51,7 +39,7 @@
 	<input
 		type="text"
 		class="tron-input w-full"
-		placeholder="Search SPUs by UDI, serial, barcode, owner, or batch..."
+		placeholder="Search SPUs by UDI, device ID, barcode, owner, or batch..."
 		bind:value={search}
 		onkeydown={(e) => {
 			if (e.key === 'Enter') onEnter();
@@ -68,28 +56,28 @@
 	{:else}
 		<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 			{#each filtered as s (s.id)}
+				{@const valComplete = s.validationPassed >= s.validationTotal}
 				<a href="/spu/{s.id}" class="block">
 					<TronCard interactive>
 						<div class="flex items-start justify-between gap-2">
 							<div class="min-w-0">
-								<div class="text-sm font-bold text-[var(--color-tron-cyan)]">{shortId(s.udi)}</div>
-								<div class="tron-text-muted truncate font-mono text-xs" title={s.udi}>{s.udi}</div>
+								<div class="truncate font-mono text-sm font-bold text-[var(--color-tron-cyan)]" title={s.udi}>
+									{s.udi}
+								</div>
+								<div class="tron-text-muted mt-0.5 truncate font-mono text-xs" title={s.deviceId ?? ''}>
+									Device ID: {s.deviceId ?? '—'}
+								</div>
 							</div>
 							<SpuStatusBadge status={s.status} />
 						</div>
-						<div class="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+
+						<div class="mt-3">
 							<span
-								class="rounded px-1.5 py-0.5 font-medium"
-								style="background: color-mix(in srgb, {qcColor(s.qcStatus)} 20%, transparent); color: {qcColor(s.qcStatus)};"
+								class="inline-block rounded-full px-2 py-0.5 text-xs font-bold"
+								style="color: {valComplete ? 'var(--color-tron-green)' : 'var(--color-tron-red)'}; background: {valComplete ? 'rgba(0,255,100,0.15)' : 'rgba(255,0,0,0.15)'};"
 							>
-								QC: {s.qcStatus}
+								Validation {s.validationPassed}/{s.validationTotal}
 							</span>
-							{#if s.owner}
-								<span class="tron-text-muted">· {s.owner}</span>
-							{/if}
-							{#if s.batchNumber}
-								<span class="tron-text-muted">· Batch {s.batchNumber}</span>
-							{/if}
 						</div>
 					</TronCard>
 				</a>

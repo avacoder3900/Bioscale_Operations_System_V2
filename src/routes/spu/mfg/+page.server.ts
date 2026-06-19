@@ -9,16 +9,27 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const spus = await Spu.find().sort({ createdAt: -1 }).lean();
 
+	const VALIDATION_KEYS = ['magnetometer', 'spectrophotometer', 'thermocouple'];
+
 	return {
-		spus: spus.map((s: any) => ({
-			id: s._id,
-			udi: s.udi,
-			barcode: s.barcode ?? null,
-			status: s.status ?? 'draft',
-			qcStatus: s.qcStatus ?? 'pending',
-			owner: s.owner ?? null,
-			batchNumber: s.batch?.batchNumber ?? null,
-			createdAt: s.createdAt
-		}))
+		spus: spus.map((s: any) => {
+			const v = s.validation ?? {};
+			const validationPassed = VALIDATION_KEYS.filter(
+				(k) => v[k]?.status === 'passed' || v[k]?.status === 'overridden'
+			).length;
+			return {
+				id: s._id,
+				udi: s.udi,
+				deviceId: s.particleLink?.particleDeviceId ?? null,
+				barcode: s.barcode ?? null,
+				status: s.status ?? 'draft',
+				qcStatus: s.qcStatus ?? 'pending',
+				owner: s.owner ?? null,
+				batchNumber: s.batch?.batchNumber ?? null,
+				validationPassed,
+				validationTotal: VALIDATION_KEYS.length,
+				createdAt: s.createdAt
+			};
+		})
 	};
 };
