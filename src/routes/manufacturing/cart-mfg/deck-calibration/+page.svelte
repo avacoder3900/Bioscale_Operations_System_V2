@@ -113,6 +113,20 @@
 	}
 	function clearSelection() { selection = new Set(); }
 
+	// ESC = wipe EVERYTHING selected/highlighted, no matter what: the well
+	// selection, the reference-hole highlight, an in-progress box drag, and
+	// deselect mode. Works anywhere on the page (handy mid-jog).
+	function deselectAll() {
+		selection = new Set();
+		refWell = null;
+		nominal = null;
+		deselectMode = false;
+		boxing = false; boxStart = null; boxNow = null;
+	}
+	function onWindowKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape') deselectAll();
+	}
+
 	// ── Canvas geometry (viewBox = deck mm; y flipped to screen) ─────────────────
 	let zoom = $state(1); // 1 = fit container width; >1 zooms in (scrolls)
 	const wellR = 1.9; // viewBox (mm) radius — ~2× the physical ~0.9mm hole radius so dots stay visible/clickable at fit
@@ -552,6 +566,8 @@
 
 </script>
 
+<svelte:window onkeydown={onWindowKeydown} />
+
 <div class="mx-auto max-w-[1400px] space-y-4 overflow-x-clip p-4">
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div>
@@ -624,7 +640,7 @@
 					<button type="button" onclick={() => (zoom = 1)} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Fit</button>
 					<button type="button" onclick={selectAllActive} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Select all{roleFilter !== 'all' ? ` ${roleFilter}` : ''}</button>
 					<button type="button" onclick={() => (deselectMode = !deselectMode)} class="rounded border px-2 py-1 {deselectMode ? 'border-amber-500/60 bg-amber-900/20 text-amber-300' : 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)]'}" style={deselectMode ? '' : 'color: var(--color-tron-text)'} title="When on, box-drag/click removes holes from the selection">Deselect{deselectMode ? ' ✓' : ''}</button>
-					<button type="button" onclick={clearSelection} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Clear</button>
+					<button type="button" onclick={deselectAll} title="Deselect everything (or press Esc anywhere)" class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Clear (Esc)</button>
 				</div>
 			</div>
 			<p class="mb-2 text-[11px]" style="color: var(--color-tron-text-secondary)">Drag a box to select a group (Shift adds). Click a hole to toggle. Wax holes are amber, reagent blue; the toggle restricts which you can select. Edited holes show an amber ring.</p>
