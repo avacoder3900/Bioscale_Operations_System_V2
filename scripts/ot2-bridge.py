@@ -601,6 +601,13 @@ def move_to_coordinates(run_id: str, pipette_id: str, x: float, y: float, z: flo
     send_maintenance_command(run_id, "moveToCoordinates", params, timeout_s=30.0)
 
 
+def get_current_position(run_id: str, pipette_id: str) -> dict:
+    """Read the pipette's current gantry position (savePosition)."""
+    body = send_maintenance_command(run_id, "savePosition", {"pipetteId": pipette_id})
+    pos = ((body.get("data") or {}).get("result") or {}).get("position") or {}
+    return {"x": pos.get("x"), "y": pos.get("y"), "z": pos.get("z")}
+
+
 # Serial port management ------------------------------------------------------
 class ScannerPort:
     """Thin wrapper that auto-reconnects on failure. The internal lock is the
@@ -1269,9 +1276,6 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
         _post_result(command_id, {"ok": False, "error": "calibrate_tip: calibrator {x,y,z} required"})
         return
 
-    # Translate the .py carriage-frame recipe onto the absolute calibrator point.
-    tx = cal_x - CAL_NOMINAL_X
-    ty = cal_y - CAL_NOMINAL_Y
 
     attached_run = (payload or {}).get("runId")
     attached_pip = (payload or {}).get("pipetteId")
@@ -1305,25 +1309,40 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
             bend = {"x": 0.0, "y": 0.0}
         log.info("calibrate_tip: bend x=%s y=%s", bend["x"], bend["y"])
 
-        # Approach the calibrator (absolute, slow).
-        move_to_coordinates(run_id, pipette_id, cal_x, cal_y, z_cal, speed=CAL_APPROACH_SPEED)
+        # Where to probe from. ATTACHED: start from the tip's CURRENT position
+        # (the operator already jogged it onto the calibrator) at the CURRENT Z —
+        # no re-approach, no secondary raise. STANDALONE: use the saved calibrator
+        # point and approach it first.
+        if attached:
+            cur = get_current_position(run_id, pipette_id)
+            ref_x = cur["x"] if cur["x"] is not None else cal_x
+            ref_y = cur["y"] if cur["y"] is not None else cal_y
+            z_probe = cur["z"] if cur["z"] is not None else z_cal
+            log.info("calibrate_tip: probing from current pos x=%s y=%s z=%s", ref_x, ref_y, z_probe)
+        else:
+            ref_x, ref_y, z_probe = cal_x, cal_y, z_cal
+            move_to_coordinates(run_id, pipette_id, cal_x, cal_y, z_cal, speed=CAL_APPROACH_SPEED)
 
-        # X probe — .py start (124.581, 166.747) translated to absolute.
+        # Translate the .py probe recipe onto the start reference.
+        ptx = ref_x - CAL_NOMINAL_X
+        pty = ref_y - CAL_NOMINAL_Y
+
+        # X probe — .py start (124.581, 166.747) translated onto the reference.
         x_shift, x_ok = _probe_axis(run_id, pipette_id, ser, "x",
-                                    124.581 + tx, 166.747 + ty, z_cal, b"X")
+                                    124.581 + ptx, 166.747 + pty, z_probe, b"X")
         # adjust = (calibrator C-string baseline) - travel-to-switch. The old
         # hardcoded position constant (150.536/177.0) that produced a ~32mm jump
         # is GONE — the C string is now the baseline the operator dials in.
         x_offset = round(bend["x"] - x_shift, 1)
 
-        # Y probe — .py start (134.01, 165.747) translated to absolute.
+        # Y probe — .py start (134.01, 165.747) translated onto the reference.
         y_shift, y_ok = _probe_axis(run_id, pipette_id, ser, "y",
-                                    134.01 + tx, 165.747 + ty, z_cal, b"Y")
+                                    134.01 + ptx, 165.747 + pty, z_probe, b"Y")
         y_offset = round(bend["y"] - y_shift, 1)
 
-        # Retract above the calibrator (slow). KEEP THE TIP ON — the operator uses
-        # it to tune the deck next. (No drop_tip.)
-        move_to_coordinates(run_id, pipette_id, 127.181 + tx, 174.247 + ty, z_cal + 20, speed=CAL_APPROACH_SPEED)
+        # Retract (slow, lift off the fixture). KEEP THE TIP ON — the operator
+        # uses it to tune the deck next. (No drop_tip.)
+        move_to_coordinates(run_id, pipette_id, 127.181 + ptx, 174.247 + pty, z_probe + 20, speed=CAL_APPROACH_SPEED)
 
         # If an axis never tripped its limit switch, the probe is INVALID — the
         # computed offset is garbage (full 5mm travel). Fail loudly so BIMS does
