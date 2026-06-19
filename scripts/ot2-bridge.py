@@ -1104,23 +1104,54 @@ CAL_NOMINAL_X = 125.181  # .py calibrator approach point in the carriage frame
 CAL_NOMINAL_Y = 173.247
 
 
-def _open_calibrator_serial() -> Optional["serial.Serial"]:
-    """Open the calibrator limit-switch fixture — a /dev/ttyACM? device at
-    115200, distinct from the barcode scanner (SCANNER_SERIAL_PORT). Mirrors the
-    .py glob+probe. Returns an open serial.Serial or None."""
+def _parse_bend(raw: bytes):
+    """Parse the calibrator's 'C' reply (e.g. b'-4.05:1.55\\r\\n') → {x,y} or None.
+    Matches the .py's str(bytes).split(':') parsing."""
+    parts = str(raw).split(":")
+    if len(parts) < 2 or not raw:
+        return None
+    try:
+        return {"x": float(parts[0][2:]), "y": float(parts[1][:-5])}
+    except Exception:
+        return None
+
+
+def _open_calibrator_serial():
+    """Find + open the calibrator limit-switch fixture by PROBING each /dev/ttyACM
+    with 'C' — the calibrator replies with its bend string ('x:y'); the barcode
+    scanner (and anything else) does not. This is robust to port ordering and to
+    SCANNER_SERIAL_PORT being a udev symlink (e.g. /dev/scanner → ttyACMn), which
+    the old raw-string compare missed — so it was opening the SCANNER, the arm
+    bytes went nowhere, and the probe never saw a limit hit. Skips the scanner's
+    resolved device. Returns (serial, bend_dict) or (None, None)."""
+    try:
+        scanner_real = os.path.realpath(SERIAL_PORT) if SERIAL_PORT else None
+    except Exception:
+        scanner_real = None
     for dev in sorted(glob.glob("/dev/ttyACM?")):
-        if dev == SERIAL_PORT:
-            continue  # that's the scanner
+        try:
+            if scanner_real and os.path.realpath(dev) == scanner_real:
+                log.info("calibrate_tip: %s is the scanner — skipping", dev)
+                continue
+        except Exception:
+            pass
         try:
             s = serial.Serial(port=dev, baudrate=115200, timeout=0.5)
             time.sleep(0.2)
             s.reset_input_buffer()
             s.reset_output_buffer()
-            log.info("calibrate_tip: opened calibrator serial %s", dev)
-            return s
+            s.write(b"C")
+            s.flush()
+            time.sleep(0.2)
+            bend = _parse_bend(s.readline())
+            if bend is not None:
+                log.info("calibrate_tip: calibrator found on %s (bend x=%s y=%s)", dev, bend["x"], bend["y"])
+                return s, bend
+            log.info("calibrate_tip: %s did not answer 'C' — not the calibrator", dev)
+            s.close()
         except Exception as e:
-            log.warning("calibrate_tip: %s not the calibrator (%s)", dev, e)
-    return None
+            log.warning("calibrate_tip: probe %s failed: %s", dev, e)
+    return None, None
 
 
 def _cal_write(s: "serial.Serial", data: bytes, retries: int = 3) -> None:
@@ -1265,22 +1296,14 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
                                       tip.get("version", 1), tip.get("slot", "11"))
             pick_up_tip_in_run(run_id, pipette_id, lid, tip.get("tipWell", "A1"))
 
-        # Open the calibrator fixture + read its stored "bend" string (cmd 'C').
-        ser = _open_calibrator_serial()
+        # Find + open the calibrator fixture by probing 'C' (returns its bend).
+        ser, bend = _open_calibrator_serial()
         if not ser:
-            raise RobotCommandError("calibrator serial fixture not found on /dev/ttyACM? "
-                                    "(separate from the scanner)")
-        bend = {"x": 0.0, "y": 0.0}
-        try:
-            _cal_write(ser, b"C")
-            raw = ser.readline()
-            parts = str(raw).split(":")
-            if len(parts) >= 2:
-                bend["x"] = float(parts[0][2:])
-                bend["y"] = float(parts[1][:-5])
-            log.info("calibrate_tip: bend string x=%s y=%s", bend["x"], bend["y"])
-        except Exception as e:
-            log.warning("calibrate_tip: bend read failed, using 0,0: %s", e)
+            raise RobotCommandError("calibrator fixture not found — no /dev/ttyACM device "
+                                    "answered the 'C' bend query (scanner skipped)")
+        if bend is None:
+            bend = {"x": 0.0, "y": 0.0}
+        log.info("calibrate_tip: bend x=%s y=%s", bend["x"], bend["y"])
 
         # Approach the calibrator (absolute, slow).
         move_to_coordinates(run_id, pipette_id, cal_x, cal_y, z_cal, speed=CAL_APPROACH_SPEED)
@@ -1298,6 +1321,17 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
         # Retract above the calibrator (slow). KEEP THE TIP ON — the operator uses
         # it to tune the deck next. (No drop_tip.)
         move_to_coordinates(run_id, pipette_id, 127.181 + tx, 174.247 + ty, z_cal + 20, speed=CAL_APPROACH_SPEED)
+
+        # If an axis never tripped its limit switch, the probe is INVALID — the
+        # computed offset is garbage (full 5mm travel). Fail loudly so BIMS does
+        # NOT store/apply a bogus adjust to the deck tuning.
+        if not (x_ok and y_ok):
+            bad = ", ".join(a for a, ok in (("X", x_ok), ("Y", y_ok)) if not ok)
+            raise RobotCommandError(
+                "tip calibration failed: {} limit switch not reached within 5mm — "
+                "tip didn't contact the fixture (check z_cal / calibrator position). "
+                "No adjust applied.".format(bad)
+            )
 
         result = {
             "adjust": {"x": x_offset, "y": y_offset},
