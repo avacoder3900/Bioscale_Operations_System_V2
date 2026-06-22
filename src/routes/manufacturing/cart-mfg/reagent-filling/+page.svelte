@@ -677,19 +677,29 @@
 				}}
 			/>
 		{/if}
-		<RunExecution
-			assayTypeName={previewParam
-				? 'Preview Assay'
-				: (data.runState.isResearch
-					? 'Research Run'
-					: (data.runState.assayTypeName ?? 'Unknown'))}
-			cartridgeCount={previewParam ? 8 : (data.runState.cartridgeCount ?? 0)}
-			runStartTime={new Date(data.runState.runStartTime ?? Date.now())}
-			runEndTime={new Date(data.runState.runEndTime ?? (Date.now() + 600000))}
-			onTimerComplete={() => { runFinishedLocal = true; }}
-			onAbort={(reason, photoUrl) => submitForm('abortRun', { reason, photoUrl: photoUrl ?? '' })}
-			readonly={isViewingPast}
-		/>
+		{#if data.runState.runEndTime || previewParam}
+			<RunExecution
+				assayTypeName={previewParam
+					? 'Preview Assay'
+					: (data.runState.isResearch
+						? 'Research Run'
+						: (data.runState.assayTypeName ?? 'Unknown'))}
+				cartridgeCount={previewParam ? 8 : (data.runState.cartridgeCount ?? 0)}
+				runStartTime={new Date(data.runState.runStartTime ?? Date.now())}
+				runEndTime={new Date(data.runState.runEndTime ?? (Date.now() + 600000))}
+				onTimerComplete={() => { runFinishedLocal = true; }}
+				onAbort={(reason, photoUrl) => submitForm('abortRun', { reason, photoUrl: photoUrl ?? '' })}
+				readonly={isViewingPast}
+			/>
+		{:else}
+			<!-- Run has been started but the server hasn't written runEndTime yet.
+			     Show a brief "starting" state instead of a misleading flat-10-min
+			     fallback countdown (the real timer = start + cartridges × fillTime). -->
+			<div class="flex flex-col items-center gap-2 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">
+				<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">Starting run…</h2>
+				<p class="text-sm text-[var(--color-tron-text-secondary)]">Creating the protocol run on the robot — the countdown will appear once it begins.</p>
+			</div>
+		{/if}
 
 		<!-- Run-complete controls (REAGENT-INSPECT-AFTER-TOPSEAL): appear only once
 		     the .py finishes. Inspection is no longer here — the batch goes to Top
