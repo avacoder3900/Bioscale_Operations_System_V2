@@ -52,6 +52,8 @@ function emptyReagentState(robotId: string, loadError?: string) {
 		currentSealBatch: null as null | { batchId: string; firstScanTime: string | null; cartridgeIds: string[] },
 		rejectionCodes: [] as any[],
 		tubes: [] as { id: string; reagentName: string; volume: number }[],
+		reagentPrepDone: false,
+		reagentBatchBarcode: null as string | null,
 		fridges: [] as { id: string; displayName: string; barcode: string }[],
 		robotProtocols: [] as Array<{
 			opentronsProtocolId: string;
@@ -313,6 +315,10 @@ export const load: PageServerLoad = async ({ locals, url, parent }) => {
 			currentSealBatch,
 			rejectionCodes,
 			tubes,
+			// Reagent-batch prep state, server-derived so it survives a reload (the
+			// batch is now selected BEFORE the deck scan, which reloads the page).
+			reagentPrepDone: (activeRun?.tubeRecords ?? []).length > 0,
+			reagentBatchBarcode: (activeRun?.tubeRecords ?? [])[0]?.sourceLotId ?? null,
 			fridges,
 			activeReagentLots,
 			// --- OT-2 Start Run panel inputs (same shape as wax-filling) ---

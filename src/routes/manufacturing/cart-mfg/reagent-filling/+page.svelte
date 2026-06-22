@@ -62,9 +62,14 @@
 	};
 	let pendingStage = $state<string | null>(null);
 
-	// Reagent batch scan state — tracks whether batch has been scanned and confirmed in the Loading stage
-	let reagentBatchConfirmed = $state(false);
-	let reagentBatchBarcode = $state<string | null>(null);
+	// Reagent batch scan state. The batch is now selected BEFORE the deck scan, and
+	// the deck scan reloads the page — so derive "confirmed" from the server (the
+	// run's persisted tubeRecords) with a client override for the optimistic moment
+	// right after scanning the batch but before the reload lands.
+	let reagentBatchConfirmedLocal = $state(false);
+	let reagentBatchBarcodeLocal = $state<string | null>(null);
+	const reagentBatchConfirmed = $derived(reagentBatchConfirmedLocal || (data.reagentPrepDone ?? false));
+	const reagentBatchBarcode = $derived(reagentBatchBarcodeLocal ?? data.reagentBatchBarcode ?? null);
 
 	// Protocol params captured BEFORE barcode scanning (mirror wax). Set on the
 	// setup/params step, then replayed to ?/startRun after reagent prep so the run
@@ -80,6 +85,9 @@
 		const rid = data.activeRunId ?? '';
 		if (rid !== lastParamsRunId) {
 			lastParamsRunId = rid;
+			// New run → clear the optimistic batch overrides (server state drives it).
+			reagentBatchConfirmedLocal = false;
+			reagentBatchBarcodeLocal = null;
 			if (runAgainParamsFd && rid) {
 				capturedParamsFd = runAgainParamsFd;
 				paramsReady = true;
@@ -151,6 +159,54 @@
 			pendingStage = null;
 		} finally {
 			submitting = false;
+		}
+	}
+
+	// Batch-note save — independent fetch (bypasses submitForm so the page doesn't
+	// reload the stage on save). Writes the note to every cartridge on the run.
+	// NOTE: only meaningful once cartridges are loaded; before the deck scan there
+	// are none yet, so the note targets 0 cartridges (ReagentPreparation guards UX).
+	async function handleSaveBatchNote(noteBody: string): Promise<{ ok: boolean; error?: string; cartridgeCount?: number }> {
+		try {
+			const formData = new FormData();
+			formData.set('runId', data.activeRunId ?? '');
+			formData.set('noteBody', noteBody);
+			const res = await fetch('?/recordBatchNote', {
+				method: 'POST',
+				body: formData,
+				headers: { 'x-sveltekit-action': 'true' }
+			});
+			const text = await res.text();
+			if (!res.ok || text.includes('"type":"failure"')) {
+				let err = `HTTP ${res.status}`;
+				try {
+					const json = JSON.parse(text);
+					if (json.type === 'failure' && json.data) {
+						const parsed = typeof json.data === 'string' ? JSON.parse(json.data) : json.data;
+						if (Array.isArray(parsed)) {
+							for (let i = 1; i < parsed.length; i++) {
+								if (typeof parsed[i] === 'string' && parsed[i].length > 3) { err = parsed[i]; break; }
+							}
+						}
+					}
+				} catch { /* fallthrough with HTTP code */ }
+				return { ok: false, error: err };
+			}
+			let cartridgeCount = data.cartridges.length;
+			try {
+				const json = JSON.parse(text);
+				const parsed = typeof json.data === 'string' ? JSON.parse(json.data) : json.data;
+				if (Array.isArray(parsed)) {
+					const obj = parsed[0];
+					if (obj && typeof obj === 'object' && 'cartridgeCount' in obj) {
+						const idx = (obj as Record<string, number>).cartridgeCount;
+						if (typeof idx === 'number' && parsed[idx] != null) cartridgeCount = Number(parsed[idx]);
+					}
+				}
+			} catch { /* keep fallback count */ }
+			return { ok: true, cartridgeCount };
+		} catch (e) {
+			return { ok: false, error: e instanceof Error ? e.message : 'Network error' };
 		}
 	}
 
@@ -540,7 +596,7 @@
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 				<h3 class="text-sm font-semibold text-[var(--color-tron-text)]">Set protocol parameters</h3>
 				<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
-					Configure the reagent run now. After you scan the deck + cartridges and prep reagents, the run starts automatically with these values.
+					Configure the reagent run now. Next you'll scan the reagent batch, then the deck + cartridges — the run starts automatically once the deck is scanned.
 				</p>
 			</div>
 			<ProtocolStartPanel
@@ -550,83 +606,44 @@
 				submitting={submitting}
 				formAction="?/startRun"
 				extraHidden={{ runId: data.activeRunId ?? '' }}
-				submitLabel="Save & continue to barcode scan →"
+				submitLabel="Save & continue to reagent batch →"
 				onSubmitIntercept={handleParamsConfirmed}
 			/>
 		</div>
 
+	{:else if displayStage === 'Loading' && !previewParam && data.cartridges.length === 0 && !reagentBatchConfirmed}
+		<!-- Step 2: Scan the reagent batch barcode BEFORE the deck scan (mirror wax).
+		     Records the batch now; the run auto-starts once the deck is scanned, so
+		     there are no more buttons after barcode scanning. -->
+		<ReagentPreparation
+			reagentDefinitions={data.reagentDefinitions as any}
+			onComplete={async (tubes) => {
+				reagentBatchBarcodeLocal = tubes[0]?.sourceLotId ?? '';
+				reagentBatchConfirmedLocal = true;
+				// Persist the batch (writes to the run record — no cartridge dependency).
+				// Do NOT start the run yet: the deck hasn't been scanned. The deck-scan
+				// step auto-starts once cartridges are on.
+				await submitForm('recordReagentPrep', { tubes: JSON.stringify(tubes) });
+			}}
+			onSaveNote={handleSaveBatchNote}
+			readonly={isViewingPast}
+		/>
+
 	{:else if displayStage === 'Loading' && (previewParam || data.cartridges.length === 0)}
-		<!-- Step 1: Deck + cartridge scan -->
+		<!-- Step 3: Deck + cartridge scan. On complete, auto-start the run with the
+		     params + batch captured before scanning — straight into filling, no button. -->
 		<DeckLoadingGrid
-			onComplete={({ deckId, cartridgeScans }) =>
-				submitForm('loadDeck', { deckId, cartridgeScans: JSON.stringify(cartridgeScans) })}
+			onComplete={async ({ deckId, cartridgeScans }) => {
+				await submitForm('loadDeck', { deckId, cartridgeScans: JSON.stringify(cartridgeScans) });
+				// Hands-off auto-start (mirror wax): scan was the last manual step.
+				if (!errorMsg && reagentBatchConfirmed && capturedParamsFd) {
+					await startRunWithCapturedParams();
+				}
+			}}
 			readonly={isViewingPast}
 			focusPaused={showCancelModal}
 			robotId={data.robotId}
 			runId={data.activeRunId ?? null}
-		/>
-
-	{:else if displayStage === 'Loading' && data.cartridges.length > 0 && !reagentBatchConfirmed}
-		<!-- Step 2: Deck loaded — now scan reagent batch barcode -->
-		<ReagentPreparation
-			reagentDefinitions={data.reagentDefinitions as any}
-			cartridgeCount={data.cartridges.length}
-			onComplete={async (tubes) => {
-				reagentBatchBarcode = tubes[0]?.sourceLotId ?? '';
-				reagentBatchConfirmed = true;
-				await submitForm('recordReagentPrep', { tubes: JSON.stringify(tubes) });
-				// Hands-off: if params were set before scanning, start the run now with
-				// them. Otherwise fall through to the manual Start Run panel below.
-				if (capturedParamsFd) await startRunWithCapturedParams();
-			}}
-			onSaveNote={async (noteBody) => {
-				// Independent fetch — bypasses submitForm so the page doesn't
-				// reload the stage on save. Calls the recordBatchNote action
-				// which writes the note to every cartridge currently on the run.
-				try {
-					const formData = new FormData();
-					formData.set('runId', data.activeRunId ?? '');
-					formData.set('noteBody', noteBody);
-					const res = await fetch('?/recordBatchNote', {
-						method: 'POST',
-						body: formData,
-						headers: { 'x-sveltekit-action': 'true' }
-					});
-					const text = await res.text();
-					if (!res.ok || text.includes('"type":"failure"')) {
-						let err = `HTTP ${res.status}`;
-						try {
-							const json = JSON.parse(text);
-							if (json.type === 'failure' && json.data) {
-								const parsed = typeof json.data === 'string' ? JSON.parse(json.data) : json.data;
-								if (Array.isArray(parsed)) {
-									for (let i = 1; i < parsed.length; i++) {
-										if (typeof parsed[i] === 'string' && parsed[i].length > 3) { err = parsed[i]; break; }
-									}
-								}
-							}
-						} catch { /* fallthrough with HTTP code */ }
-						return { ok: false, error: err };
-					}
-					// SvelteKit action success: data envelope holds the action's return value
-					let cartridgeCount = data.cartridges.length;
-					try {
-						const json = JSON.parse(text);
-						const parsed = typeof json.data === 'string' ? JSON.parse(json.data) : json.data;
-						if (Array.isArray(parsed)) {
-							const obj = parsed[0];
-							if (obj && typeof obj === 'object' && 'cartridgeCount' in obj) {
-								const idx = (obj as Record<string, number>).cartridgeCount;
-								if (typeof idx === 'number' && parsed[idx] != null) cartridgeCount = Number(parsed[idx]);
-							}
-						}
-					} catch { /* keep fallback count */ }
-					return { ok: true, cartridgeCount };
-				} catch (e) {
-					return { ok: false, error: e instanceof Error ? e.message : 'Network error' };
-				}
-			}}
-			readonly={isViewingPast}
 		/>
 
 	{:else if displayStage === 'Loading' && data.cartridges.length > 0 && reagentBatchConfirmed}
