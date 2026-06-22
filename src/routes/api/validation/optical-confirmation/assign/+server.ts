@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { connectDB, AssayDefinition, OpticalTestCartridge, CartridgeGroup, CartridgeRecord, GeneratedBarcode, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, AssayDefinition, OpticalTestCartridge, CartridgeGroup, CartridgeRecord, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 
 // Assign an assay as an optical-confirmation validation cartridge.
@@ -77,18 +77,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	const fullAssay = JSON.parse(JSON.stringify(assay));
 	const armName = `BIMS Optical — ${(assay as any).name ?? assayId}`;
 
+	// Serial sequence: continue numbering from existing optical cartridges. Avoids
+	// the generated_barcodes counter (its unique `barcode` index rejects the null
+	// upsert-insert with E11000).
+	const baseSeq = await CartridgeRecord.countDocuments({ assayCategory: 'optical_test' });
+
 	const created: { _id: string; barcode: string; serialNumber: string }[] = [];
 	const skipped: { barcode: string; reason: string }[] = [];
 	let idx = 0;
 
 	for (const barcode of barcodes) {
 		idx += 1;
-		const runSeq = await GeneratedBarcode.findOneAndUpdate(
-			{ prefix: 'run-cartridge' },
-			{ $inc: { sequence: 1 } },
-			{ upsert: true, new: true, setDefaultsOnInsert: true }
-		);
-		const serialNumber = `${assayId}-run-${(runSeq as any)?.sequence ?? idx}`;
+		const serialNumber = `${assayId}-run-${baseSeq + idx}`;
 		// Idempotency guard: one optical cartridge per barcode (the scan IS the identity).
 		const dup = await OpticalTestCartridge.findOne({ barcode }).lean();
 		if (dup) { skipped.push({ barcode, reason: 'optical cartridge with this barcode already exists' }); continue; }
