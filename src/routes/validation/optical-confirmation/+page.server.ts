@@ -1,21 +1,25 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, AssayDefinition, OpticalTestCartridge } from '$lib/server/db';
+import { connectDB, AssayDefinition, CartridgeRecord } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
+
+// The single optical-confirmation assay in use: "Gen 5 Optical Scan - Start
+// Position Corrected". Change this id if a different optical assay is adopted.
+const OPTICAL_ASSAY_ID = 'A9EB41AD';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'cartridge:read');
 	await connectDB();
 
-	// Only assays that carry a runnable BCODE program can be assigned.
-	const assays = await AssayDefinition.find({ isActive: true, 'BCODE.code.0': { $exists: true } })
+	// Only the one optical assay we run.
+	const assays = await AssayDefinition.find({ _id: OPTICAL_ASSAY_ID })
 		.select('name skuCode duration BCODE.code')
-		.sort({ name: 1 })
-		.limit(500)
 		.lean();
 
-	const cartridges = await OpticalTestCartridge.find({ isActive: true })
-		.select('barcode serialNumber assay status groupId bcode.code duration createdAt')
+	// Optical test cartridge log — read run status from cartridge_records (where the
+	// device/brevitest-cloud writes the run lifecycle: linked -> underway -> completed).
+	const cartridges = await CartridgeRecord.find({ assayCategory: 'optical_test' })
+		.select('serialNumber assayId assayName status statusUpdatedOn checkpoints createdAt analysis rawData device')
 		.sort({ createdAt: -1 })
 		.limit(200)
 		.lean();
@@ -30,15 +34,16 @@ export const load: PageServerLoad = async ({ locals }) => {
 		})),
 		cartridges: cartridges.map((c: any) => ({
 			id: c._id,
-			barcode: c.barcode,
-			serialNumber: c.serialNumber ?? c.barcode,
-			assayId: c.assay?._id ?? null,
-			assayName: c.assay?.name ?? null,
-			status: c.status,
-			groupId: c.groupId ?? null,
-			bcodeSteps: Array.isArray(c.bcode?.code) ? c.bcode.code.length : 0,
-			duration: c.duration ?? null,
-			createdAt: c.createdAt?.toISOString?.() ?? null
+			serialNumber: c.serialNumber ?? c._id,
+			assayName: c.assayName ?? c.assayId ?? null,
+			status: c.status ?? 'linked',
+			ran: !!(c.checkpoints?.completed || c.checkpoints?.underway || c.status === 'completed'),
+			assignedAt: c.createdAt?.toISOString?.() ?? null,
+			underwayAt: c.checkpoints?.underway?.when ?? null,
+			completedAt: c.checkpoints?.completed?.when ?? null,
+			result: c.analysis
+				? { profileName: c.analysis.profileName ?? null, computedAt: c.analysis.computedAt ?? null }
+				: null
 		}))
 	};
 };
