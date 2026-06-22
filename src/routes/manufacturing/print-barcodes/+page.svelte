@@ -248,6 +248,10 @@
 <div class="space-y-5 p-4 print:p-0">
 	<!-- Form + status — hidden when printing -->
 	<div class="print:hidden space-y-4">
+		<!-- Printing instructions — yellow attention banner -->
+		<div class="rounded-md border-2 border-yellow-400 bg-yellow-300 p-3 text-sm font-semibold text-black">
+			⚠ Set scale to 100%, select no margins, and ensure that side tray of printer is open and the paper is face down. Ensure that clamps for paper are touching top and bottom of the paper.
+		</div>
 		<div>
 			<h1 class="text-xl font-semibold" style="color: var(--color-tron-cyan)">Print Cartridge Barcodes</h1>
 			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
