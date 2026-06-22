@@ -34,10 +34,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 		})),
 		cartridges: cartridges.map((c: any) => ({
 			id: c._id,
-			serialNumber: c.serialNumber ?? c._id,
+			barcode: c._id, // cartridge_records _id IS the scanned barcode
 			assayName: c.assayName ?? c.assayId ?? null,
 			status: c.status ?? 'linked',
 			ran: !!(c.checkpoints?.completed || c.checkpoints?.underway || c.status === 'completed'),
+			// The run writes a `device` block — its name is the SPU/reader it ran on.
+			spuUdi: c.device?.name ?? null,
+			spuDeviceId: c.device?.id ?? null,
 			assignedAt: c.createdAt?.toISOString?.() ?? null,
 			underwayAt: c.checkpoints?.underway?.when ?? null,
 			completedAt: c.checkpoints?.completed?.when ?? null,

@@ -5,8 +5,9 @@
 		data: {
 			assays: Array<{ id: string; name: string; skuCode: string; duration: number | null; bcodeSteps: number }>;
 			cartridges: Array<{
-				id: string; serialNumber: string; assayName: string | null;
+				id: string; barcode: string; assayName: string | null;
 				status: string; ran: boolean;
+				spuUdi: string | null; spuDeviceId: string | null;
 				assignedAt: string | null; underwayAt: string | null; completedAt: string | null;
 				result: { profileName: string | null; computedAt: string | null } | null;
 			}>;
@@ -155,9 +156,10 @@
 				<table class="w-full text-sm">
 					<thead class="text-left text-[var(--color-tron-text-secondary)]">
 						<tr class="border-b border-[var(--color-tron-border)]">
-							<th class="p-3 font-medium">Serial</th>
+							<th class="p-3 font-medium">Barcode</th>
 							<th class="p-3 font-medium">Assay</th>
 							<th class="p-3 font-medium">Status</th>
+							<th class="p-3 font-medium">SPU</th>
 							<th class="p-3 font-medium">Result</th>
 							<th class="p-3 font-medium">Assigned</th>
 							<th class="p-3 font-medium">Completed</th>
@@ -166,11 +168,12 @@
 					<tbody class="divide-y divide-[var(--color-tron-border)]">
 						{#each data.cartridges as c (c.id)}
 							<tr>
-								<td class="p-3 font-mono text-xs text-[var(--color-tron-text-primary)]">{c.serialNumber}</td>
+								<td class="p-3 font-mono text-xs text-[var(--color-tron-text-primary)]">{c.barcode}</td>
 								<td class="p-3">{c.assayName ?? '—'}</td>
 								<td class="p-3">
 									<span class="rounded-full px-2 py-1 text-xs font-medium {statusClass(c.status)}">{c.status}</span>
 								</td>
+								<td class="p-3 font-mono text-xs text-[var(--color-tron-text-secondary)]">{c.spuUdi ?? '—'}</td>
 								<td class="p-3 text-[var(--color-tron-text-secondary)]">
 									{#if c.result}
 										{c.result.profileName ?? 'analyzed'}
