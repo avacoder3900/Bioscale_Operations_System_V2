@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { connectDB, AssayDefinition, OpticalTestCartridge, CartridgeGroup, CartridgeRecord, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, AssayDefinition, OpticalTestCartridge, CartridgeGroup, CartridgeRecord, GeneratedBarcode, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 
 // Assign an assay as an optical-confirmation validation cartridge.
@@ -65,10 +65,24 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		version: (assay as any).versionHistory?.length ?? 0
 	};
 
-	const created: { _id: string; barcode: string }[] = [];
+	// Serial numbers in the research-runnable format: `${assayId}-${batchKey}-${index}`.
+	// batchKey is an 11-digit monotonic batch counter (per assay); index is the
+	// 3-digit position within this assign call.
+	const batchDoc = await GeneratedBarcode.findOneAndUpdate(
+		{ prefix: `OPT-${assayId}` },
+		{ $inc: { sequence: 1 } },
+		{ upsert: true, new: true, setDefaultsOnInsert: true }
+	);
+	const batchKey = String((batchDoc as any)?.sequence ?? 1).padStart(11, '0');
+	const checkpoint = { who: locals.user.username, when: now.toISOString() };
+
+	const created: { _id: string; barcode: string; serialNumber: string }[] = [];
 	const skipped: { barcode: string; reason: string }[] = [];
+	let idx = 0;
 
 	for (const barcode of barcodes) {
+		idx += 1;
+		const serialNumber = `${assayId}-${batchKey}-${String(idx).padStart(3, '0')}`;
 		// Idempotency guard: one optical cartridge per barcode (the scan IS the identity).
 		const dup = await OpticalTestCartridge.findOne({ barcode }).lean();
 		if (dup) { skipped.push({ barcode, reason: 'optical cartridge with this barcode already exists' }); continue; }
@@ -84,7 +98,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		await OpticalTestCartridge.create({
 			_id,
 			barcode,
-			serialNumber: barcode,
+			serialNumber,
 			assay: assayRef,
 			bcode: bcodeSnapshot,
 			bcodeSnapshotAt: now,
@@ -104,16 +118,28 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			createdBy: locals.user._id
 		});
 
-		// Also register/tag it in cartridge_records (_id = scanned barcode) so it
-		// shows up alongside regular cartridges. Upsert: create if new, tag if it
-		// was already an optical cartridge_records doc from a prior run.
+		// Register it in cartridge_records (_id = scanned barcode) with the FLAT
+		// runnable shape the device reads (mirrors research seed cartridges):
+		// top-level assayId/assayName/serialNumber/checkpoints/used/etc. The device
+		// resolves assayId -> the assay's BCODE program at scan time. Upsert: create
+		// if new, tag if it was already an optical cartridge_records doc.
 		await CartridgeRecord.findByIdAndUpdate(
 			barcode,
 			{
 				$set: {
+					// flat runnable fields
+					assayId: assayRef._id,
+					assayName: assayRef.name,
+					serialNumber,
+					name: serialNumber,
+					status: 'linked',
+					statusUpdatedOn: now.toISOString(),
+					used: false,
+					validationErrors: [],
+					checkpoints: { created: checkpoint, linked: checkpoint },
+					// BIMS optical-validation tags + cross-ref
 					assayCategory: 'optical_test',
 					opticalTestCartridgeId: _id,
-					status: 'linked',
 					assayLoaded: { assay: { _id: assayRef._id, name: assayRef.name, skuCode: assayRef.skuCode }, loadedAt: now, recordedAt: now }
 				},
 				$setOnInsert: { _id: barcode }
@@ -121,7 +147,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			{ upsert: true, new: true, setDefaultsOnInsert: true }
 		);
 
-		created.push({ _id, barcode });
+		created.push({ _id, barcode, serialNumber });
 	}
 
 	if (created.length > 0) {

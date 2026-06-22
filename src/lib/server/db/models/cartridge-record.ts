@@ -101,6 +101,20 @@ const cartridgeRecordSchema = new Schema({
 	assayCategory: { type: String, enum: ['optical_test'] },
 	opticalTestCartridgeId: String, // cross-ref to the OpticalTestCartridge doc
 
+	// Flat "runnable cartridge" fields — the shape the device/firmware reads to
+	// run an assay (mirrors the research-seeded cartridges, e.g. CRP-SEED-001).
+	// The device resolves assayId -> the assay's BCODE program at scan time.
+	// Declared here so Mongoose preserves them on model writes (strict mode
+	// would otherwise strip them, which is why optical docs lacked them).
+	assayId: String,
+	assayName: String,
+	serialNumber: String,
+	name: String,
+	statusUpdatedOn: String,
+	used: { type: Boolean, default: false },
+	validationErrors: { type: [Schema.Types.Mixed], default: [] },
+	checkpoints: Schema.Types.Mixed,
+
 	testExecution: {
 		spu: {
 			_id: String, udi: String,
