@@ -93,6 +93,14 @@ const cartridgeRecordSchema = new Schema({
 		assay: { _id: String, name: String, skuCode: String },
 		loadedAt: Date, recordedAt: Date
 	},
+
+	// Categorizes a cartridge assigned an assay off the standard product
+	// workflow. 'optical_test' = an optical-confirmation validation cartridge
+	// (also tracked in optical_test_cartridges). Lets cartridge views
+	// surface/filter these alongside product cartridges.
+	assayCategory: { type: String, enum: ['optical_test'] },
+	opticalTestCartridgeId: String, // cross-ref to the OpticalTestCartridge doc
+
 	testExecution: {
 		spu: {
 			_id: String, udi: String,

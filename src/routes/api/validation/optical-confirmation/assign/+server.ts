@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { connectDB, AssayDefinition, OpticalTestCartridge, CartridgeGroup, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, AssayDefinition, OpticalTestCartridge, CartridgeGroup, CartridgeRecord, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 
 // Assign an assay as an optical-confirmation validation cartridge.
@@ -69,9 +69,16 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	const skipped: { barcode: string; reason: string }[] = [];
 
 	for (const barcode of barcodes) {
-		// Idempotency guard: one cartridge per barcode (the scan IS the identity).
+		// Idempotency guard: one optical cartridge per barcode (the scan IS the identity).
 		const dup = await OpticalTestCartridge.findOne({ barcode }).lean();
-		if (dup) { skipped.push({ barcode, reason: 'cartridge with this barcode already exists' }); continue; }
+		if (dup) { skipped.push({ barcode, reason: 'optical cartridge with this barcode already exists' }); continue; }
+
+		// Don't clobber a real product cartridge that happens to share this id.
+		const existingCR = await CartridgeRecord.findById(barcode).select('assayCategory status').lean();
+		if (existingCR && (existingCR as any).assayCategory !== 'optical_test') {
+			skipped.push({ barcode, reason: 'a non-optical cartridge already exists with this barcode' });
+			continue;
+		}
 
 		const _id = generateId();
 		await OpticalTestCartridge.create({
@@ -96,6 +103,24 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			}],
 			createdBy: locals.user._id
 		});
+
+		// Also register/tag it in cartridge_records (_id = scanned barcode) so it
+		// shows up alongside regular cartridges. Upsert: create if new, tag if it
+		// was already an optical cartridge_records doc from a prior run.
+		await CartridgeRecord.findByIdAndUpdate(
+			barcode,
+			{
+				$set: {
+					assayCategory: 'optical_test',
+					opticalTestCartridgeId: _id,
+					status: 'linked',
+					assayLoaded: { assay: { _id: assayRef._id, name: assayRef.name, skuCode: assayRef.skuCode }, loadedAt: now, recordedAt: now }
+				},
+				$setOnInsert: { _id: barcode }
+			},
+			{ upsert: true, new: true, setDefaultsOnInsert: true }
+		);
+
 		created.push({ _id, barcode });
 	}
 
