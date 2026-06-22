@@ -582,17 +582,18 @@ export const actions: Actions = {
 				return fail(400, { error: `Cartridge ${missingIds[0]} not found. Must complete wax filling first.` });
 			}
 
-			// Hard state-machine gate: cartridge MUST be at status='wax_stored'
-			// before reagent filling can begin. This prevents the race where a
-			// cartridge has been fridge-assigned but the parent wax run isn't
-			// yet 'completed' — wax_stored status is set only at wax completeRun,
-			// so requiring it here is equivalent to "parent wax run is closed."
-			// Applies to both research and production reagent runs.
-			const notReady = (existingCartridges as any[]).filter((c: any) => c.status !== 'wax_stored');
+			// Hard state-machine gate: cartridge MUST be at status='wax_ready'
+			// before reagent filling can begin — i.e. it completed wax filling
+			// (→ wax_stored) AND passed wax inspection (wax_stored → wax_qc →
+			// wax_ready). Per the model's documented flow, only wax_ready feeds
+			// reagent. NOTE: this previously checked wax_stored, which rejected
+			// every inspected cart (a stale gate from before wax inspection was
+			// added). Applies to both research and production reagent runs.
+			const notReady = (existingCartridges as any[]).filter((c: any) => c.status !== 'wax_ready');
 			if (notReady.length > 0) {
 				const details = notReady.map((c: any) => `${c._id} (status=${c.status ?? 'none'})`).join(', ');
 				return fail(400, {
-					error: `Cartridge(s) not ready for reagent filling — must be 'wax_stored' first. Complete the wax run (click "Complete Run" on its Storage page) before scanning: ${details}`
+					error: `Cartridge(s) not ready for reagent filling — must be 'wax_ready' (wax filled + inspection passed) first. Complete wax filling and wax inspection before scanning: ${details}`
 				});
 			}
 		}

@@ -1,0 +1,816 @@
+[
+  {
+    "_id": "00c6cfda-ce37-4b1e-945c-c498add28968",
+    "backing": {
+      "parentLotRecordId": "Pct2vV2ypioeXPOGff1Db",
+      "lotQrCode": "WI01-WKQ8LRJO",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260504-MKBM",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-16T21:09:05.690Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-16T21:09:05.690Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-16T21:09:05.692Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "0595b546-7049-4ba8-ba78-33b4c105a00c",
+    "backing": {
+      "parentLotRecordId": "Pct2vV2ypioeXPOGff1Db",
+      "lotQrCode": "WI01-WKQ8LRJO",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260504-MKBM",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-16T21:09:43.381Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-16T21:09:43.381Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-16T21:09:43.382Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "0790e854-542c-4b16-bbfd-7d9f66bbd39a",
+    "backing": {
+      "parentLotRecordId": "0Lztv78-IoS6HPk4HvqLc",
+      "lotQrCode": "WI01-DUKMK0YN",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260504-MKBM",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-16T20:02:10.137Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-16T20:02:10.137Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-16T20:02:10.139Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "1c558b87-c549-4985-8b63-0039167cacd1",
+    "backing": {
+      "parentLotRecordId": "urFrbEzJ1MfRXrENijp9a",
+      "lotQrCode": "WI01-TSN3TWGI",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260504-MKBM",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-15T21:24:48.525Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-15T21:24:48.525Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-15T21:24:48.527Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "1d2d35b3-03b3-4055-9ab9-1efb3e98f231",
+    "backing": {
+      "parentLotRecordId": "Pct2vV2ypioeXPOGff1Db",
+      "lotQrCode": "WI01-WKQ8LRJO",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260504-MKBM",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-16T21:10:09.947Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-16T21:10:09.947Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-16T21:10:09.949Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "35db148b-dbc7-45ca-be4c-040ebdc095c7",
+    "backing": {
+      "parentLotRecordId": "Pct2vV2ypioeXPOGff1Db",
+      "lotQrCode": "WI01-WKQ8LRJO",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260504-MKBM",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-16T21:09:41.544Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-16T21:09:41.544Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-16T21:09:41.546Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "45d39db9-e39d-43b7-8eab-4a92d80f93ae",
+    "backing": {
+      "parentLotRecordId": "Pct2vV2ypioeXPOGff1Db",
+      "lotQrCode": "WI01-WKQ8LRJO",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260504-MKBM",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-16T21:10:07.836Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-16T21:10:07.836Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-16T21:10:07.837Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "5e2d46d4-d549-4cf0-9722-ef9d964b1c96",
+    "backing": {
+      "parentLotRecordId": "Pct2vV2ypioeXPOGff1Db",
+      "lotQrCode": "WI01-WKQ8LRJO",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260504-MKBM",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-16T21:09:39.499Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-16T21:09:39.499Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-16T21:09:39.500Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "83e916b0-7032-448a-8e4e-cad1537c26ac",
+    "backing": {
+      "parentLotRecordId": "Pct2vV2ypioeXPOGff1Db",
+      "lotQrCode": "WI01-WKQ8LRJO",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260504-MKBM",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-16T21:09:20.766Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-16T21:09:20.766Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-16T21:09:20.768Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "84efba5d-f282-48da-8c53-022c8cdb6af1",
+    "backing": {
+      "parentLotRecordId": "Pct2vV2ypioeXPOGff1Db",
+      "lotQrCode": "WI01-WKQ8LRJO",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260504-MKBM",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-16T21:09:11.500Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-16T21:09:11.500Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-16T21:09:11.502Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "ae5ddb04-1fbc-473c-9a93-13de58593662",
+    "backing": {
+      "parentLotRecordId": "Pct2vV2ypioeXPOGff1Db",
+      "lotQrCode": "WI01-WKQ8LRJO",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260504-MKBM",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-16T21:09:09.681Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-16T21:09:09.681Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-16T21:09:09.683Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "b08737c3-c286-4e89-8f96-340839cb9284",
+    "backing": {
+      "parentLotRecordId": "fDSk6-Djo1Tcixtkd4rsL",
+      "lotQrCode": "WI01-ETAFQ02L",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260504-MKBM",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-16T14:47:35.688Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-16T14:47:35.688Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-16T14:47:35.690Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "b4c8e040-8946-4bb5-b090-23372e9aab01",
+    "backing": {
+      "parentLotRecordId": "Pct2vV2ypioeXPOGff1Db",
+      "lotQrCode": "WI01-WKQ8LRJO",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260504-MKBM",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-16T21:09:01.744Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-16T21:09:01.744Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-16T21:09:01.748Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "b9ea5975-f7bf-4768-b8ba-b414aca2d5da",
+    "backing": {
+      "parentLotRecordId": "Pct2vV2ypioeXPOGff1Db",
+      "lotQrCode": "WI01-WKQ8LRJO",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260504-MKBM",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-16T21:09:45.264Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-16T21:09:45.264Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-16T21:09:45.266Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "babd4a57-6c50-42e4-9b5d-4401b0cedbc7",
+    "backing": {
+      "parentLotRecordId": "fDSk6-Djo1Tcixtkd4rsL",
+      "lotQrCode": "WI01-ETAFQ02L",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260504-MKBM",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-16T14:47:28.730Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-16T14:47:28.730Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-16T14:47:28.732Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "bd8a61d7-ba43-4601-ab8c-13bdc0af05a8",
+    "backing": {
+      "parentLotRecordId": "Pct2vV2ypioeXPOGff1Db",
+      "lotQrCode": "WI01-WKQ8LRJO",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260504-MKBM",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-16T21:09:07.733Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-16T21:09:07.733Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-16T21:09:07.734Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "bf0725cd-cab6-48ac-98cf-12592474a8c1",
+    "backing": {
+      "parentLotRecordId": "nqiMRB_ml6sTEhwv9aHXx",
+      "lotQrCode": "WI01-VU04IXLF",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260427-DZCO",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-16T22:07:20.469Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-16T22:07:20.469Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-16T22:07:20.472Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "c19a0bc5-2792-4cb2-9bff-9921f5f3a2c6",
+    "backing": {
+      "parentLotRecordId": "nqiMRB_ml6sTEhwv9aHXx",
+      "lotQrCode": "WI01-VU04IXLF",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260427-DZCO",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-16T22:07:18.567Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-16T22:07:18.567Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-16T22:07:18.570Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "e5fb9234-b900-4ccc-9c61-b4fabae08aaf",
+    "backing": {
+      "parentLotRecordId": "Pct2vV2ypioeXPOGff1Db",
+      "lotQrCode": "WI01-WKQ8LRJO",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260504-MKBM",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-16T21:08:53.578Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-16T21:08:53.578Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-16T21:08:53.581Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "e81170cd-4572-4d67-a71c-0b661cf2292a",
+    "backing": {
+      "parentLotRecordId": "fDSk6-Djo1Tcixtkd4rsL",
+      "lotQrCode": "WI01-ETAFQ02L",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260504-MKBM",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-16T14:47:26.648Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-16T14:47:26.648Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-16T14:47:26.651Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "ed51c99c-c8be-4a38-970a-bca22f9853c6",
+    "backing": {
+      "parentLotRecordId": "Pct2vV2ypioeXPOGff1Db",
+      "lotQrCode": "WI01-WKQ8LRJO",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260504-MKBM",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-16T21:09:47.262Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-16T21:09:47.262Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-16T21:09:47.264Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  },
+  {
+    "_id": "f2281b9d-5982-404b-937e-7d41698f8324",
+    "backing": {
+      "parentLotRecordId": "urFrbEzJ1MfRXrENijp9a",
+      "lotQrCode": "WI01-TSN3TWGI",
+      "cartridgeBlankLot": "9b968611-bf7e-4068-88e4-6af3d49639f0",
+      "thermosealLot": "LOT-20260504-MKBM",
+      "barcodeLabelLot": "PLACEHOLDER-CT-106-20260422",
+      "ovenEntryTime": "2026-06-15T21:24:44.362Z",
+      "ovenLocationId": "IWSsrS9Q4zSkkFS0xdMob",
+      "ovenLocationName": "Oven 1",
+      "operator": {
+        "_id": "3CKmpYNUsQQv2rFVT0-ej",
+        "username": "jacob"
+      },
+      "recordedAt": "2026-06-15T21:24:44.362Z"
+    },
+    "reagentFilling": {
+      "tubeRecords": []
+    },
+    "testExecution": {
+      "spu": {
+        "parts": []
+      }
+    },
+    "testResult": {
+      "spectroReadings": []
+    },
+    "status": "backing",
+    "photoSequence": 0,
+    "photos": [],
+    "notes": [],
+    "corrections": [],
+    "createdAt": "2026-06-15T21:24:44.364Z",
+    "updatedAt": "2026-06-17T19:22:27.261Z",
+    "__v": 0
+  }
+]
