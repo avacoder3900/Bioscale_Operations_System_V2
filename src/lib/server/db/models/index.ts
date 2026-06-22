@@ -3,6 +3,8 @@ export { User } from './user.js';
 export { CartridgeRecord } from './cartridge-record.js';
 export { Spu } from './spu.js';
 export { AssayDefinition } from './assay-definition.js';
+export { OpticalTestCartridge } from './optical-test-cartridge.js';
+export { CartridgeGroup } from './cartridge-group.js';
 export { ReagentBatchRecord } from './reagent-batch-record.js';
 export { ReagentProtocolTemplate } from './reagent-protocol-template.js';
 export { ReagentLot } from './reagent-lot.js';

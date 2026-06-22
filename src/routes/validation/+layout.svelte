@@ -23,6 +23,11 @@
 			href: '/validation/thermocouple',
 			label: 'Thermocouple',
 			icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z'
+		},
+		{
+			href: '/validation/optical-confirmation',
+			label: 'Optical Confirmation',
+			icon: 'M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z M15 12a3 3 0 11-6 0 3 3 0 016 0z'
 		}
 	];
 
@@ -35,6 +40,7 @@
 		if (path.includes('/spectrophotometer')) return 'Spectrophotometer';
 		if (path.includes('/thermocouple')) return 'Thermocouple';
 		if (path.includes('/magnetometer')) return 'Magnetometer';
+		if (path.includes('/optical-confirmation')) return 'Optical Confirmation';
 		return 'Dashboard';
 	}
 
