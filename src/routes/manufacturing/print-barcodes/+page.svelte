@@ -25,17 +25,18 @@
 	// match the physical Avery 94102 stickers without a code change. Defaults
 	// are the previously hard-coded values from sheetPng(). Persisted per
 	// browser in localStorage so a one-time calibration sticks across reloads.
-	// Baseline shifted 2 mm left + 3 mm up from the prior alignment.
-	// At 300 DPI, 1 mm = 300/25.4 ≈ 11.811 px → 2 mm ≈ 23.62 px, 3 mm ≈ 35.43 px.
-	//   X: 0.3125 − 23.62 = −23.31 px (negative = left)
-	//   Y: 15     − 35.43 = −20.43 px (negative = up)
-	const DEFAULT_SHIFT_X = -23.31; // px @ 300 DPI (− = left, + = right)
-	const DEFAULT_SHIFT_Y = -20.43; // px @ 300 DPI (− = up, + = down)
+	// Operator-tuned baseline. At 300 DPI, 1 mm = 300/25.4 ≈ 11.811 px.
+	// History from original 0.3125/15: −2mm left/−3mm up, then +1mm right/+2mm
+	// down → net 1 mm left + 1 mm up vs original.
+	//   X: −23.31 + 11.81 = −11.50 px (negative = left)
+	//   Y: −20.43 + 23.62 =   3.19 px (positive = down)
+	const DEFAULT_SHIFT_X = -11.50; // px @ 300 DPI (− = left, + = right)
+	const DEFAULT_SHIFT_Y = 3.19; // px @ 300 DPI (− = up, + = down)
 	const DEFAULT_SHRINK_PCT = 85; // QR + text footprint, % of cell geometry
 	// Bumped to .v2 alongside the 2 mm-left / 3 mm-up baseline change so a
 	// browser that cached the old defaults adopts the new baseline instead of
 	// overriding it. Bump again if defaults change and must re-take effect.
-	const CALIB_KEY = 'printBarcodeCalib.v2';
+	const CALIB_KEY = 'printBarcodeCalib.v3';
 
 	function loadCalib(): { shiftX?: number; shiftY?: number; shrinkPct?: number } | null {
 		if (typeof localStorage === 'undefined') return null;
