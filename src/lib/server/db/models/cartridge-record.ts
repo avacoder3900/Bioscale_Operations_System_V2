@@ -115,6 +115,20 @@ const cartridgeRecordSchema = new Schema({
 	validationErrors: { type: [Schema.Types.Mixed], default: [] },
 	checkpoints: Schema.Types.Mixed,
 
+	// The device runs cartridge.assay.BCODE — the FULL assay (incl. BCODE program)
+	// is embedded directly on the cartridge so the reader has everything it needs
+	// at scan time. program/experiment/arm tie it to the run-cartridge experiment.
+	// Mirrors the shape of cartridges that have actually run (status 'completed').
+	assay: Schema.Types.Mixed,
+	program: String,
+	experiment: String,
+	arm: String,
+	quantity: Number,
+	expirationDate: String,
+	priorStatus: String,
+	folderId: String,
+	reagentChain: { type: [Schema.Types.Mixed], default: [] },
+
 	testExecution: {
 		spu: {
 			_id: String, udi: String,

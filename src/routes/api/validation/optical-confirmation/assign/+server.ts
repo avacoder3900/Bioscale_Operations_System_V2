@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { connectDB, AssayDefinition, OpticalTestCartridge, CartridgeGroup, CartridgeRecord, GeneratedBarcode, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, AssayDefinition, OpticalTestCartridge, CartridgeGroup, CartridgeRecord, GeneratedBarcode, Experiment, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 
 // Assign an assay as an optical-confirmation validation cartridge.
@@ -65,24 +65,34 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		version: (assay as any).versionHistory?.length ?? 0
 	};
 
-	// Serial numbers in the research-runnable format: `${assayId}-${batchKey}-${index}`.
-	// batchKey is an 11-digit monotonic batch counter (per assay); index is the
-	// 3-digit position within this assign call.
-	const batchDoc = await GeneratedBarcode.findOneAndUpdate(
-		{ prefix: `OPT-${assayId}` },
-		{ $inc: { sequence: 1 } },
-		{ upsert: true, new: true, setDefaultsOnInsert: true }
-	);
-	const batchKey = String((batchDoc as any)?.sequence ?? 1).padStart(11, '0');
-	const checkpoint = { who: locals.user.username, when: now.toISOString() };
+	// Serial numbers in the runnable format actual ran cartridges use: `${assayId}-run-${N}`.
+	const checkpoint = { who: locals.user.username, when: now.toISOString(), where: { city_name: 'Houston' } };
+	const expirationDate = '2030' + now.toISOString().slice(4);
+
+	// The full assay (incl. BCODE) is embedded on each cartridge so the device has
+	// the runnable program at scan time — this is what a ran cartridge carries.
+	const fullAssay = JSON.parse(JSON.stringify(assay));
+
+	// Cartridges run via the "run-cartridge" experiment. Use/create an arm for this
+	// assay so brevitest-cloud picks them up; mirror its program/experiment/arm onto
+	// each cartridge. Arm is clearly labelled as BIMS-created for traceability.
+	const RUN_EXPERIMENT_ID = 'run-cartridge';
+	const armName = `BIMS Optical — ${(assay as any).name ?? assayId}`;
+	const runExp: any = await Experiment.findById(RUN_EXPERIMENT_ID);
 
 	const created: { _id: string; barcode: string; serialNumber: string }[] = [];
 	const skipped: { barcode: string; reason: string }[] = [];
+	const armPush: { barcode: string; status: string; quantity: number }[] = [];
 	let idx = 0;
 
 	for (const barcode of barcodes) {
 		idx += 1;
-		const serialNumber = `${assayId}-${batchKey}-${String(idx).padStart(3, '0')}`;
+		const runSeq = await GeneratedBarcode.findOneAndUpdate(
+			{ prefix: 'run-cartridge' },
+			{ $inc: { sequence: 1 } },
+			{ upsert: true, new: true, setDefaultsOnInsert: true }
+		);
+		const serialNumber = `${assayId}-run-${(runSeq as any)?.sequence ?? idx}`;
 		// Idempotency guard: one optical cartridge per barcode (the scan IS the identity).
 		const dup = await OpticalTestCartridge.findOne({ barcode }).lean();
 		if (dup) { skipped.push({ barcode, reason: 'optical cartridge with this barcode already exists' }); continue; }
@@ -118,25 +128,32 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			createdBy: locals.user._id
 		});
 
-		// Register it in cartridge_records (_id = scanned barcode) with the FLAT
-		// runnable shape the device reads (mirrors research seed cartridges):
-		// top-level assayId/assayName/serialNumber/checkpoints/used/etc. The device
-		// resolves assayId -> the assay's BCODE program at scan time. Upsert: create
-		// if new, tag if it was already an optical cartridge_records doc.
+		// Write the cartridge_records doc in the exact shape a RAN cartridge carries:
+		// the FULL assay (incl. BCODE) embedded as `assay`, plus program/experiment/arm
+		// linkage to the run-cartridge experiment. The device reads cartridge.assay.BCODE
+		// to run; brevitest-cloud later writes back underway/completed + device/rawData.
 		await CartridgeRecord.findByIdAndUpdate(
 			barcode,
 			{
 				$set: {
-					// flat runnable fields
+					assay: fullAssay,            // full embedded assay WITH BCODE — what the device runs
 					assayId: assayRef._id,
 					assayName: assayRef.name,
+					program: 'Run Cartridge',
+					experiment: 'Run Cartridge',
+					arm: armName,
 					serialNumber,
 					name: serialNumber,
 					status: 'linked',
+					priorStatus: '',
 					statusUpdatedOn: now.toISOString(),
+					quantity: 0,
+					expirationDate,
 					used: false,
 					validationErrors: [],
+					reagentChain: [],
 					checkpoints: { created: checkpoint, linked: checkpoint },
+					folderId: '',
 					// BIMS optical-validation tags + cross-ref
 					assayCategory: 'optical_test',
 					opticalTestCartridgeId: _id,
@@ -147,7 +164,24 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			{ upsert: true, new: true, setDefaultsOnInsert: true }
 		);
 
+		armPush.push({ barcode, status: 'linked', quantity: 0 });
 		created.push({ _id, barcode, serialNumber });
+	}
+
+	// Add the cartridges to the run-cartridge experiment's arm so the runner picks
+	// them up. Reuse the BIMS arm for this assay if present, else create it.
+	if (armPush.length > 0 && runExp) {
+		const arms: any[] = Array.isArray(runExp.arms) ? runExp.arms : [];
+		let arm = arms.find((a) => a.name === armName);
+		if (!arm) {
+			arm = { name: armName, description: 'BIMS optical-confirmation validation cartridges', assayId, assayName: (assay as any).name, splitQuantity: false, cartridges: [] };
+			arms.push(arm);
+		}
+		arm.cartridges = [...(arm.cartridges ?? []), ...armPush];
+		runExp.arms = arms;
+		runExp.statusUpdatedOn = now.toISOString();
+		runExp.markModified('arms');
+		await runExp.save();
 	}
 
 	if (created.length > 0) {
