@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { connectDB, AssayDefinition, OpticalTestCartridge, CartridgeGroup, CartridgeRecord, GeneratedBarcode, Experiment, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, AssayDefinition, OpticalTestCartridge, CartridgeGroup, CartridgeRecord, GeneratedBarcode, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 
 // Assign an assay as an optical-confirmation validation cartridge.
@@ -71,18 +71,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	// The full assay (incl. BCODE) is embedded on each cartridge so the device has
 	// the runnable program at scan time — this is what a ran cartridge carries.
+	// The device runs cartridge.assay.BCODE directly off this doc; no experiment
+	// arm is needed (the arm is the research app's org structure, not a run gate).
 	const fullAssay = JSON.parse(JSON.stringify(assay));
-
-	// Cartridges run via the "run-cartridge" experiment. Use/create an arm for this
-	// assay so brevitest-cloud picks them up; mirror its program/experiment/arm onto
-	// each cartridge. Arm is clearly labelled as BIMS-created for traceability.
-	const RUN_EXPERIMENT_ID = 'run-cartridge';
 	const armName = `BIMS Optical — ${(assay as any).name ?? assayId}`;
-	const runExp: any = await Experiment.findById(RUN_EXPERIMENT_ID);
 
 	const created: { _id: string; barcode: string; serialNumber: string }[] = [];
 	const skipped: { barcode: string; reason: string }[] = [];
-	const armPush: { barcode: string; status: string; quantity: number }[] = [];
 	let idx = 0;
 
 	for (const barcode of barcodes) {
@@ -164,24 +159,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			{ upsert: true, new: true, setDefaultsOnInsert: true }
 		);
 
-		armPush.push({ barcode, status: 'linked', quantity: 0 });
 		created.push({ _id, barcode, serialNumber });
-	}
-
-	// Add the cartridges to the run-cartridge experiment's arm so the runner picks
-	// them up. Reuse the BIMS arm for this assay if present, else create it.
-	if (armPush.length > 0 && runExp) {
-		const arms: any[] = Array.isArray(runExp.arms) ? runExp.arms : [];
-		let arm = arms.find((a) => a.name === armName);
-		if (!arm) {
-			arm = { name: armName, description: 'BIMS optical-confirmation validation cartridges', assayId, assayName: (assay as any).name, splitQuantity: false, cartridges: [] };
-			arms.push(arm);
-		}
-		arm.cartridges = [...(arm.cartridges ?? []), ...armPush];
-		runExp.arms = arms;
-		runExp.statusUpdatedOn = now.toISOString();
-		runExp.markModified('arms');
-		await runExp.save();
 	}
 
 	if (created.length > 0) {
