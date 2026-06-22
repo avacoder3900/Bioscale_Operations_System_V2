@@ -156,40 +156,11 @@ def add_parameters(parameters: protocol_api.Parameters):
         default=True
     )
 
-    # ==================================================================
-    # NATIVE-CALIBRATION-SYSTEM PRD 6 — BIMS-driven calibration RTPs.
-    # When bims_native is True, the global offset (supplied by BIMS from
-    # RobotDeckOffset) replaces the built-in ROBOT_OFFSETS table and is
-    # applied to ALL labware (deck carriage + tube rack + tip rack), not
-    # just the carriage. Defaults reproduce current behavior, so a run
-    # with no BIMS values (manual/Opentrons app) is unchanged. The
-    # calibrator point + z_cal are read here too (defaults = the
-    # previously-hardcoded values) so the tip-calibration probe is tunable.
-    # ==================================================================
-    parameters.add_bool(
-        variable_name="bims_native",
-        display_name="BIMS-native offsets",
-        description="Use the BIMS global offset (applied to ALL labware) instead of the built-in per-robot table.",
-        default=False,
-    )
-    parameters.add_float(variable_name="offset_x", display_name="BIMS offset X",
-        description="Global deck offset X from BIMS (used when BIMS-native).",
-        default=0.0, minimum=-50.0, maximum=50.0, unit="mm")
-    parameters.add_float(variable_name="offset_y", display_name="BIMS offset Y",
-        description="Global deck offset Y from BIMS (used when BIMS-native).",
-        default=0.0, minimum=-50.0, maximum=50.0, unit="mm")
-    parameters.add_float(variable_name="offset_z", display_name="BIMS offset Z",
-        description="Global deck offset Z from BIMS (used when BIMS-native).",
-        default=0.0, minimum=-50.0, maximum=50.0, unit="mm")
-    parameters.add_float(variable_name="cal_x", display_name="Tip-calibrator X",
-        description="Tip-calibrator approach X (carriage frame).",
-        default=125.181, minimum=0.0, maximum=400.0, unit="mm")
-    parameters.add_float(variable_name="cal_y", display_name="Tip-calibrator Y",
-        description="Tip-calibrator approach Y (carriage frame).",
-        default=173.247, minimum=0.0, maximum=400.0, unit="mm")
-    parameters.add_float(variable_name="z_cal", display_name="Tip-calibrator Z",
-        description="Tip-calibration probe Z (p300 200uL reagent tip).",
-        default=40.8, minimum=0.0, maximum=200.0, unit="mm")
+
+
+
+    
+    
 
 def run(protocol: protocol_api.ProtocolContext):
     # =====================================================================
@@ -220,26 +191,10 @@ def run(protocol: protocol_api.ProtocolContext):
     if robot_offsets is DEFAULT_OFFSETS:
         protocol.comment(f'WARNING: Unknown robot hostname "{hostname}" — using zero offsets. Add this robot to ROBOT_OFFSETS.')
 
-    # PRD 6: BIMS-native global offset overrides the built-in table and is applied
-    # to ALL labware (see below). Default bims_native=False keeps current behavior.
-    bims_native = bool(protocol.params.bims_native)
-    if bims_native:
-        robot_offsets = { 'name': 'BIMS-native', 'x': protocol.params.offset_x,
-                          'y': protocol.params.offset_y, 'z': protocol.params.offset_z }
-        protocol.comment(f'BIMS-native offsets (applied to ALL labware): '
-                         f'x={robot_offsets["x"]}, y={robot_offsets["y"]}, z={robot_offsets["z"]}mm')
-
     offset = { 'x': 0, 'y': 0 }
     tuberack = protocol.load_labware('custom_2ml_24_tube_rack', 10)
     tiprack = protocol.load_labware('cosmas_and_damian_biotix_96_200ul_tiprack', 11)
     pipette = protocol.load_instrument('p300_single_gen2', mount='left', tip_racks=[tiprack])
-
-    # PRD 6: in BIMS-native mode the global offset shifts the tube rack + tip rack
-    # too (the carriage is shifted later, where it's loaded by particle ID). In the
-    # legacy table mode this is skipped so behavior is byte-for-byte unchanged.
-    if bims_native:
-        tuberack.set_offset(x=robot_offsets['x'], y=robot_offsets['y'], z=robot_offsets['z'])
-        tiprack.set_offset(x=robot_offsets['x'], y=robot_offsets['y'], z=robot_offsets['z'])
 
     # =====================================================================
     # PERSISTENT TIP TRACKING
@@ -295,12 +250,11 @@ def run(protocol: protocol_api.ProtocolContext):
     carriages = {
         'e00fce68981a5e0784a62b71' : protocol.load_labware('gen4deck_gen7cartridge_001', protocol_api.OFF_DECK),
         'e00fce680fde2dcc48014df0' : protocol.load_labware('gen4deck_gen7cartridge_002', protocol_api.OFF_DECK),
-        'e00fce68fc3b723490857c78' : protocol.load_labware('gen4deck_gen7cartridge_003', protocol_api.OFF_DECK),
-        'e00fce680a100a70d1fea1a3' : protocol.load_labware('gen4deck_gen7cartridge_004', protocol_api.OFF_DECK)
-    }
-
-    # deck 005 not in use (no physical carriage); re-add here if one is provisioned:
-    #'e00fce68356060b112c98173' : protocol.load_labware('gen4deck_gen7cartridge_005', protocol_api.OFF_DECK),
+        'e00fce68fc3b723490857c78' : protocol.load_labware('gen4deck_gen7cartridge_003', protocol_api.OFF_DECK)
+    }       
+    
+    #'e00fce680a100a70d1fea1a3' : protocol.load_labware('gen4deck_gen7cartridge_004', protocol_api.OFF_DECK),
+    #'e00fce68356060b112c98173' : protocol.load_labware('gen4deck_gen7cartridge_004', protocol_api.OFF_DECK),
     
     # Helper function to safely read from serial with retries
     def serial_read_with_retry(ser, max_retries=3, timeout=0.5):
@@ -470,13 +424,7 @@ def run(protocol: protocol_api.ProtocolContext):
 
         def pick_up_and_calibrate_tip():
             nonlocal _tip_index
-            # PRD 6: calibrator point + probe Z are RTPs (defaults = previously
-            # hardcoded values; z_cal for the 200uL VWR tip). Move points track
-            # cal_x/cal_y; the limit-switch constants shift by the same delta so
-            # the returned offset is invariant when the calibrator isn't re-tuned.
-            cal_x = protocol.params.cal_x
-            cal_y = protocol.params.cal_y
-            z_cal = protocol.params.z_cal
+            z_cal = 40.8 #keep in mind this is for 200 microliter VWR tip!
             
             if (pipette.has_tip):
                 pipette.drop_tip()
@@ -499,10 +447,10 @@ def run(protocol: protocol_api.ProtocolContext):
                 else:
                     protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} — rack now empty')
 
-            pipette.move_to(types.Location(types.Point(x=cal_x, y=cal_y, z=z_cal), carriage), speed=None)
+            pipette.move_to(types.Location(types.Point(x=125.181, y=173.247, z=z_cal), carriage), speed=None)
 
-            x_pos = cal_x - 1.4
-            y_pos = cal_y - 7.0
+            x_pos = 123.781
+            y_pos = 166.247
             pipette.move_to(types.Location(types.Point(x=x_pos, y=y_pos, z=z_cal), carriage), force_direct=True, speed=20)
             limit_reached = False
             shift = 0.1
@@ -527,9 +475,9 @@ def run(protocol: protocol_api.ProtocolContext):
                 finally:
                     ser.timeout = original_timeout
             
-            xOffset = round(offset['x'] - shift, 1)
-            x_pos = cal_x + 8.829
-            y_pos = cal_y - 7.5
+            xOffset = round(x_pos - shift -149.906 + offset['x'], 1)
+            x_pos = 134.01
+            y_pos = 165.747
             pipette.move_to(types.Location(types.Point(x=x_pos, y=y_pos, z=z_cal), carriage), force_direct=True, speed=20)
             limit_reached = False
             shift = 0.1
@@ -555,10 +503,10 @@ def run(protocol: protocol_api.ProtocolContext):
                 finally:
                     ser.timeout = original_timeout
 
-            yOffset = round(offset['y'] - shift, 1)
+            yOffset = round(y_pos - shift - 176.8 + offset['y'], 1)
 
-            pipette.move_to(types.Location(types.Point(x=cal_x, y=cal_y, z=z_cal), carriage), force_direct=True, speed=20)
-            pipette.move_to(types.Location(types.Point(x=cal_x, y=cal_y, z=z_cal + 20), carriage), force_direct=True, speed=20)
+            pipette.move_to(types.Location(types.Point(x=125.181, y=173.247, z=z_cal), carriage), force_direct=True, speed=20)
+            pipette.move_to(types.Location(types.Point(x=125.181, y=173.247, z=z_cal + 20), carriage), force_direct=True, speed=20)
             
             return { 'x': xOffset, 'y': yOffset }
 
