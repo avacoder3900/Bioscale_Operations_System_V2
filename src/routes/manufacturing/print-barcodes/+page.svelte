@@ -20,6 +20,41 @@
 	let confirming = $state(false);
 	let addError = $state<string | null>(null);
 
+	// ── Printed-label layout calibration ─────────────────────────────────
+	// Operator-adjustable alignment so the rendered sheet can be nudged to
+	// match the physical Avery 94102 stickers without a code change. Defaults
+	// are the previously hard-coded values from sheetPng(). Persisted per
+	// browser in localStorage so a one-time calibration sticks across reloads.
+	const DEFAULT_SHIFT_X = 0.3125; // px @ 300 DPI (30px ≈ 0.1")
+	const DEFAULT_SHIFT_Y = 15; // px @ 300 DPI
+	const DEFAULT_SHRINK_PCT = 85; // QR + text footprint, % of cell geometry
+	const CALIB_KEY = 'printBarcodeCalib.v1';
+
+	function loadCalib(): { shiftX?: number; shiftY?: number; shrinkPct?: number } | null {
+		if (typeof localStorage === 'undefined') return null;
+		try {
+			return JSON.parse(localStorage.getItem(CALIB_KEY) || 'null');
+		} catch {
+			return null;
+		}
+	}
+	const _savedCalib = loadCalib();
+	let shiftX = $state(_savedCalib?.shiftX ?? DEFAULT_SHIFT_X);
+	let shiftY = $state(_savedCalib?.shiftY ?? DEFAULT_SHIFT_Y);
+	let shrinkPct = $state(_savedCalib?.shrinkPct ?? DEFAULT_SHRINK_PCT);
+
+	// Persist whenever a value changes.
+	$effect(() => {
+		if (typeof localStorage === 'undefined') return;
+		localStorage.setItem(CALIB_KEY, JSON.stringify({ shiftX, shiftY, shrinkPct }));
+	});
+
+	function resetCalib() {
+		shiftX = DEFAULT_SHIFT_X;
+		shiftY = DEFAULT_SHIFT_Y;
+		shrinkPct = DEFAULT_SHRINK_PCT;
+	}
+
 	// Print, then prompt "Add to inventory?". afterprint fires when the
 	// browser's print dialog closes (Print or Cancel). Showing the prompt
 	// here — rather than committing on Generate — means cancelled prints
@@ -92,7 +127,9 @@
 		if (typeof document === 'undefined') return '';
 		if (!cells.some((c) => c)) return '';
 
-		const cacheKey = cells.join('|');
+		// Calibration values are part of the key so a nudge re-renders instead
+		// of returning a stale cached sheet.
+		const cacheKey = `${cells.join('|')}|${shiftX}|${shiftY}|${shrinkPct}`;
 		const cached = sheetCache.get(cacheKey);
 		if (cached) return cached;
 
@@ -115,9 +152,8 @@
 		//   start →  shiftX = +25.3 px,  shiftY = +22.5 px  (0.1125c, 0.10c)
 		//   nudge →  shiftX = +0.3  px,  shiftY = +7.5  px  (−25 left, −15 up)
 		//   half-y → shiftY = +15   px                       (only 7.5 up vs start)
-		// Stored as raw pixels now so further nudges read cleanly.
-		const shiftX = 0.3125;
-		const shiftY = 15;
+		// shiftX / shiftY are now operator-adjustable raw pixels (see the
+		// "Print alignment" calibration controls + localStorage persistence).
 		const padX = 0.23 * DPI + shiftX;
 		const padY = 0.46 * DPI + shiftY;
 
@@ -125,9 +161,9 @@
 		ctx.fillStyle = '#000000';
 
 		// Operator-tuned shrink applied to every drawn element so QR + text
-		// occupy 85% of their previous footprint while their visual centers
-		// stay exactly where they were before.
-		const SHRINK = 0.85;
+		// occupy `shrinkPct`% of their previous footprint while their visual
+		// centers stay exactly where they were before.
+		const SHRINK = shrinkPct / 100;
 
 		for (let i = 0; i < cells.length; i++) {
 			const code = cells[i];
@@ -225,6 +261,67 @@
 				{/if}
 			</div>
 		</div>
+
+		<!-- Print alignment (calibration). Nudges where labels render on the
+		     sheet to match the physical Avery 94102 stickers. Pure client-side
+		     render tuning — does NOT touch minting, inventory, or permissions.
+		     Persisted per browser; hidden from the printout (parent is
+		     print:hidden). -->
+		<details class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+			<summary class="cursor-pointer text-sm font-medium" style="color: var(--color-tron-text)">
+				Print alignment (calibration)
+			</summary>
+			<div class="mt-3 space-y-3">
+				<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
+					Nudge the printed layout to line up with the physical sticker grid. Offsets are pixels at 300&nbsp;DPI (30&nbsp;px ≈ 0.1&quot;). The preview below updates live; settings are saved in this browser only.
+				</p>
+				<div class="grid gap-3 sm:grid-cols-3">
+					<label class="block">
+						<span class="block text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">X offset (px, + = right)</span>
+						<input
+							type="number"
+							step="0.5"
+							bind:value={shiftX}
+							class="mt-1 w-32 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm font-mono"
+							style="color: var(--color-tron-text)"
+						/>
+					</label>
+					<label class="block">
+						<span class="block text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Y offset (px, + = down)</span>
+						<input
+							type="number"
+							step="0.5"
+							bind:value={shiftY}
+							class="mt-1 w-32 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm font-mono"
+							style="color: var(--color-tron-text)"
+						/>
+					</label>
+					<label class="block">
+						<span class="block text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Label size (%, 50–100)</span>
+						<input
+							type="number"
+							step="1"
+							min="50"
+							max="100"
+							bind:value={shrinkPct}
+							class="mt-1 w-32 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm font-mono"
+							style="color: var(--color-tron-text)"
+						/>
+					</label>
+				</div>
+				<div class="flex items-center gap-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
+					<button
+						type="button"
+						onclick={resetCalib}
+						class="rounded border border-[var(--color-tron-border)] px-3 py-1 hover:border-[var(--color-tron-text-secondary)]"
+						style="color: var(--color-tron-text-secondary)"
+					>
+						Reset to defaults
+					</button>
+					<span class="font-mono">x={shiftX} · y={shiftY} · size={shrinkPct}%</span>
+				</div>
+			</div>
+		</details>
 
 		<!-- Mint form -->
 		<form
