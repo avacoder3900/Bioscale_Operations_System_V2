@@ -17,6 +17,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	requirePermission(locals.user, 'cartridge:write');
 	await connectDB();
 
+	try {
 	const body = await request.json();
 	const assayId = (body.assayId ?? '').toString().trim();
 	if (!assayId) return json({ error: 'assayId is required' }, { status: 400 });
@@ -183,4 +184,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		skipped,
 		groupId: groupId ?? null
 	});
+	} catch (err) {
+		// Surface the real failure to the operator instead of a generic 500.
+		const message = err instanceof Error ? err.message : String(err);
+		console.error('[optical assign] failed:', err);
+		return json({ error: `Assign failed: ${message}` }, { status: 500 });
+	}
 };
