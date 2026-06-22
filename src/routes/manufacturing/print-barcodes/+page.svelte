@@ -25,17 +25,17 @@
 	// match the physical Avery 94102 stickers without a code change. Defaults
 	// are the previously hard-coded values from sheetPng(). Persisted per
 	// browser in localStorage so a one-time calibration sticks across reloads.
-	// Reset to the original alignment (0.3125 / 15 px), then nudged 0.5 mm up.
-	// At 300 DPI, 1 mm = 300/25.4 ≈ 11.811 px → 0.5 mm ≈ 5.91 px.
-	//   X: 0.3125 (original, no horizontal change)
-	//   Y: 15 − 5.91 = 9.09 px (0.5 mm up)
+	// Original first-template alignment — no mm adjustments. These match the
+	// values the layout shipped with. Pitch is a constant 1.0" (verified
+	// against Avery 94102's true 0.375"/0.625" margins), so the grid is
+	// equidistant and a shift translates every cell uniformly.
 	const DEFAULT_SHIFT_X = 0.3125; // px @ 300 DPI (− = left, + = right)
-	const DEFAULT_SHIFT_Y = 9.09; // px @ 300 DPI (− = up, + = down)
+	const DEFAULT_SHIFT_Y = 15; // px @ 300 DPI (− = up, + = down)
 	const DEFAULT_SHRINK_PCT = 85; // QR + text footprint, % of cell geometry
 	// Bumped to .v2 alongside the 2 mm-left / 3 mm-up baseline change so a
 	// browser that cached the old defaults adopts the new baseline instead of
 	// overriding it. Bump again if defaults change and must re-take effect.
-	const CALIB_KEY = 'printBarcodeCalib.v4';
+	const CALIB_KEY = 'printBarcodeCalib.v5';
 
 	function loadCalib(): { shiftX?: number; shiftY?: number; shrinkPct?: number } | null {
 		if (typeof localStorage === 'undefined') return null;
