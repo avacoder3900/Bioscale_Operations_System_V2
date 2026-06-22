@@ -334,26 +334,42 @@ def run(protocol: protocol_api.ProtocolContext):
         return False
 
     ser = None
-    
-    # Try to open serial port with better error handling
-    for port in glob.glob('/dev/ttyACM?'):
+
+    # Find the CALIBRATOR serial device — NOT the barcode scanner. Both enumerate
+    # as /dev/ttyACM*, and the port numbers shift on replug, so opening "the first
+    # ttyACM" can grab the scanner (which never answers 'C' -> offset read fails ->
+    # the run silently bails). So: (1) skip whatever /dev/scanner points to, and
+    # (2) probe each remaining port with 'C' — the calibrator replies with its
+    # 'x:y' offset string; the scanner/others do not.
+    import os as _os_cal
+    _scanner_real = _os_cal.path.realpath('/dev/scanner') if _os_cal.path.exists('/dev/scanner') else None
+    for port in sorted(glob.glob('/dev/ttyACM*')):
+        _s = None
         try:
-            ser = serial.Serial(port=port, baudrate=115200, timeout=0.5)
-            # Give device time to initialize after opening
+            if _scanner_real and _os_cal.path.realpath(port) == _scanner_real:
+                protocol.comment(f'Skipping scanner port {port}')
+                continue
+            _s = serial.Serial(port=port, baudrate=115200, timeout=0.5)
             time.sleep(0.2)
-            # Flush any stale data
-            ser.reset_input_buffer()
-            ser.reset_output_buffer()
-            protocol.comment(f'Successfully opened serial port: {port}')
-            break
+            _s.reset_input_buffer()
+            _s.reset_output_buffer()
+            _s.write(b'C'); _s.flush(); time.sleep(0.3)
+            if b':' in (_s.readline() or b''):
+                _s.reset_input_buffer()
+                ser = _s
+                protocol.comment(f'Calibrator found on serial port: {port}')
+                break
+            _s.close()
         except Exception as e:
             protocol.comment(f'Exception testing port {port}: {str(e)}')
-            if ser and ser.is_open:
-                ser.close()
-            ser = None
-    
+            try:
+                if _s and _s.is_open:
+                    _s.close()
+            except Exception:
+                pass
+
     if not ser or not ser.is_open:
-        protocol.pause('Unable to open serial port - click Resume to continue')
+        protocol.pause('Unable to find calibrator serial port - click Resume to continue')
         return
     
     try:
