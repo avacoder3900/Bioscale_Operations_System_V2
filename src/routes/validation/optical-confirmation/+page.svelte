@@ -168,7 +168,13 @@
 					<tbody class="divide-y divide-[var(--color-tron-border)]">
 						{#each data.cartridges as c (c.id)}
 							<tr>
-								<td class="p-3 font-mono text-xs text-[var(--color-tron-text-primary)]">{c.barcode}</td>
+								<td class="p-3 font-mono text-xs">
+									<a
+										href="/validation/optical-confirmation/{c.id}"
+										class="text-[var(--color-tron-cyan)] hover:underline"
+										title="View cartridge data"
+									>{c.barcode}</a>
+								</td>
 								<td class="p-3">{c.assayName ?? '—'}</td>
 								<td class="p-3">
 									<span class="rounded-full px-2 py-1 text-xs font-medium {statusClass(c.status)}">{c.status}</span>
