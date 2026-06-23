@@ -613,10 +613,7 @@
 		dx = +(liveX - nominal.x).toFixed(3);
 		dy = +(liveY - nominal.y).toFixed(3);
 		dz = +(liveZ - nominal.z).toFixed(3);
-		// A sane per-hole correction is a few mm. A capture near tip-length scale is
-		// almost always a frame mismatch — warn (the server also hard-rejects >15mm).
-		const big = Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz));
-		msg = `Captured offset from ${refWell}: dx=${dx} dy=${dy} dz=${dz}.${big > 15 ? ' ⚠ This is unusually large (>15mm) — likely a bad capture; it will be rejected on apply.' : ' Select the holes to apply it to.'}`;
+		msg = `Captured offset from ${refWell}: dx=${dx} dy=${dy} dz=${dz}. Select the holes to apply it to.`;
 	}
 
 	// ── PRD 2: save the tip-calibrator fixture position for the selected robot. ──

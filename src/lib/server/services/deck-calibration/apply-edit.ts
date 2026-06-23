@@ -46,26 +46,11 @@ export interface ApplyDeckEditResult {
 
 const n = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
-// ── Sanity bounds (prevents geometry runaway like the 2026-06 deck-004 Z-shift) ──
-// A real per-hole calibration nudge is sub-mm to a few mm. Anything larger is
-// almost always a bad capture (e.g. a tip-length frame mismatch ≈ 35-50mm), so we
-// refuse it rather than silently corrupting the deck geometry.
-const MAX_NUDGE_MM = 15;
-// After an edit a well's z must stay within the labware's own physical height band.
-// The deck def's zDimension is the real ceiling (deck = 12.7mm; a well at 82mm is
-// physically impossible). Margin allows legit small overshoot; skipped if unknown.
-const Z_BAND_MARGIN_MM = 12;
-
-function assertSaneDelta(delta: Vec3) {
-	const big = (['x', 'y', 'z'] as const).find((k) => Math.abs(delta[k]) > MAX_NUDGE_MM);
-	if (big) {
-		throw new Error(
-			`Rejected: Δ${big}=${delta[big]}mm exceeds the ${MAX_NUDGE_MM}mm per-edit limit. ` +
-				`A correction this large is almost always a bad capture (e.g. a tip on/off frame ` +
-				`mismatch). Re-check the tip state and re-capture; type a smaller delta to override intentionally.`
-	);
-	}
-}
+// ── Physical Z backstop (catches gross geometry runaway like the 2026-06 deck-004
+// Z-shift, where wells crept to 82mm on a 12.7mm-tall deck). No XY/magnitude cap —
+// real corrections can be large. This only rejects a well z placed physically
+// outside the labware's own body, generous enough to never block real work.
+const Z_BAND_MARGIN_MM = 40;
 
 function zBand(def: any): { min: number; max: number } | null {
 	const zDim = Number(def?.definition?.dimensions?.zDimension ?? 0);
@@ -86,8 +71,7 @@ export async function applyDeckEdit(input: ApplyDeckEditInput): Promise<ApplyDec
 	const before: Vec3 = { x: n(well.x), y: n(well.y), z: n(well.z) };
 	const after: Vec3 = { x: before.x + delta.x, y: before.y + delta.y, z: before.z + delta.z };
 
-	// Guard against geometry runaway (the 2026-06 deck-004 Z-shift corruption).
-	assertSaneDelta(delta);
+	// Physical Z backstop only (no magnitude cap — corrections can be large).
 	const band = zBand(def);
 	if (band && (after.z < band.min || after.z > band.max)) {
 		throw new Error(
@@ -191,10 +175,6 @@ export async function applyDeckEditBatch(
 	const { deckLoadName } = input;
 	const delta: Vec3 = { x: n(input.delta?.x), y: n(input.delta?.y), z: n(input.delta?.z) };
 	const wellNames = Array.from(new Set(input.wellNames ?? []));
-
-	// Guard against geometry runaway — one delta hits many wells, so reject the
-	// whole batch up front rather than corrupting a cartridge at a time.
-	assertSaneDelta(delta);
 
 	const def = (await LabwareDefinition.findOne({ loadName: deckLoadName }).lean()) as any;
 	if (!def) throw new Error(`Labware definition "${deckLoadName}" not found in labware_definitions.`);
