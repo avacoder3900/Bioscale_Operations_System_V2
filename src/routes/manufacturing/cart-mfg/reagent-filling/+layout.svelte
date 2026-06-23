@@ -115,6 +115,28 @@
 			setTimeout(pollHealth, 3000);
 		}
 	}
+	// Master "force reset to idle" — aborts any stale reagent/wax run record that's
+	// locking the robot AND best-effort clears the robot's own run state. Works in
+	// any circumstance (stale BIMS record, stuck robot run). Cartridges left as-is.
+	let resettingId = $state<string | null>(null);
+	let resetMsg = $state('');
+	async function forceReset(robotId: string, robotName: string) {
+		if (resettingId) return;
+		if (!confirm(`Force ${robotName} back to idle?\n\nThis ABORTS any active reagent/wax run on this robot and clears its run state. Use for stale/stuck runs. Cartridges are left as-is.`)) return;
+		resettingId = robotId;
+		resetMsg = '';
+		try {
+			const res = await fetch(`/api/opentrons-lab/robots/${robotId}/force-reset`, { method: 'POST' });
+			const body = await res.json().catch(() => ({}));
+			resetMsg = res.ok ? (body.message ?? 'Reset to idle.') : (body.message ?? body.error ?? 'Reset failed.');
+			if (res.ok) await invalidateAll();
+		} catch {
+			resetMsg = 'Reset request failed — check the bridge.';
+		} finally {
+			resettingId = null;
+			setTimeout(pollHealth, 1500);
+		}
+	}
 	onMount(() => {
 		pollHealth();
 		const id = setInterval(pollHealth, 10000);
@@ -278,6 +300,7 @@
 			<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 				{#each data.dashboardState as robotState (robotState.robotId)}
 					{@const robot = data.robots.find((r) => r.robotId === robotState.robotId)}
+					<div class="flex flex-col gap-2">
 					<button
 						type="button"
 						onclick={() => selectRobot(robotState.robotId)}
@@ -330,6 +353,20 @@
 							</a>
 						{/if}
 					</button>
+					<!-- Master force-reset: free a robot stuck on a stale run, in any circumstance. -->
+					<button
+						type="button"
+						onclick={() => forceReset(robotState.robotId, robotState.name)}
+						disabled={resettingId === robotState.robotId}
+						class="rounded border border-red-500/40 bg-red-900/15 px-3 py-1.5 text-xs font-medium text-red-300 transition-colors hover:bg-red-900/30 disabled:opacity-40"
+						title="Abort any stale run and force this robot back to idle"
+					>
+						{resettingId === robotState.robotId ? 'Resetting…' : 'Force reset to idle'}
+					</button>
+					{#if resetMsg && resettingId === null}
+						<p class="text-center text-[11px] text-[var(--color-tron-text-secondary)]">{resetMsg}</p>
+					{/if}
+					</div>
 				{/each}
 			</div>
 		</div>

@@ -1,0 +1,277 @@
+[
+  {
+    "_id": "DJaudxoEQuwVZbYAATGHh",
+    "robot": {
+      "_id": "2vIu0fzsbqzkZ7_Zjj3h2",
+      "name": "Robot 3 B07"
+    },
+    "setupTimestamp": "2026-06-15T21:15:22.560Z",
+    "status": "QC",
+    "operator": {
+      "_id": "3CKmpYNUsQQv2rFVT0-ej",
+      "username": "jacob"
+    },
+    "cartridgeIds": [
+      "11d20390-ac79-4242-890a-3aaa7e396e6d"
+    ],
+    "notes": [],
+    "createdAt": "2026-06-15T21:15:22.571Z",
+    "updatedAt": "2026-06-15T21:23:10.355Z",
+    "__v": 0,
+    "fillVolumeUl": 100,
+    "plannedCartridgeCount": 1,
+    "waxSourceLot": "TEST-WAX-1776287898349",
+    "deckId": "DECK-004",
+    "opentronsRunId": "f2f26cbf-d5f7-4eee-a09d-0546306ca6eb",
+    "pipetteTipState": {
+      "before": {
+        "nextTipIndex": 0,
+        "hostname": null,
+        "capturedAt": "2026-06-15T21:21:28.864Z"
+      },
+      "rackRefilledDuringRun": false,
+      "after": {
+        "nextTipIndex": 0,
+        "hostname": null,
+        "capturedAt": "2026-06-15T21:22:03.565Z"
+      },
+      "consumed": 0
+    },
+    "protocolParameters": {
+      "cartridges": 1,
+      "wax": true,
+      "row_pattern_0": true,
+      "row_pattern_1": true,
+      "row_pattern_2": true,
+      "tiprack_refilled": false,
+      "vol_gate4": 1.6,
+      "vol_gate3": 1.6,
+      "vol_gate2": 1.6,
+      "vol_gate1": 1.6
+    },
+    "runStartTime": "2026-06-15T21:21:28.864Z",
+    "deckRemovedTime": "2026-06-15T21:23:01.929Z",
+    "robotReleasedAt": "2026-06-15T21:23:01.929Z",
+    "coolingConfirmedTime": "2026-06-15T21:23:10.355Z"
+  },
+  {
+    "_id": "XymSat5wqsDIlWbp-8g7a",
+    "robot": {
+      "_id": "2vIu0fzsbqzkZ7_Zjj3h2",
+      "name": "Robot 3 B07"
+    },
+    "setupTimestamp": "2026-06-17T21:53:25.609Z",
+    "status": "QC",
+    "operator": {
+      "_id": "3CKmpYNUsQQv2rFVT0-ej",
+      "username": "jacob"
+    },
+    "cartridgeIds": [
+      "1e5f0102-606e-4119-a23b-00ae1d671553"
+    ],
+    "notes": [],
+    "createdAt": "2026-06-17T21:53:25.614Z",
+    "updatedAt": "2026-06-17T22:04:40.892Z",
+    "__v": 0,
+    "fillVolumeUl": 100,
+    "plannedCartridgeCount": 1,
+    "waxSourceLot": "TEST-WAX-1776287898349",
+    "deckId": "DECK-004",
+    "opentronsRunId": "259ff4a8-d3d5-4bb9-bfe2-3d43d3e1007f",
+    "pipetteTipState": {
+      "before": {
+        "nextTipIndex": 13,
+        "hostname": null,
+        "capturedAt": "2026-06-17T21:54:41.851Z"
+      },
+      "rackRefilledDuringRun": false,
+      "after": {
+        "nextTipIndex": 14,
+        "hostname": null,
+        "capturedAt": "2026-06-17T21:57:09.398Z"
+      },
+      "consumed": 1
+    },
+    "protocolParameters": {
+      "cartridges": 1,
+      "wax": true,
+      "row_pattern_0": true,
+      "row_pattern_1": true,
+      "row_pattern_2": true,
+      "tiprack_refilled": false,
+      "vol_gate4": 1.6,
+      "vol_gate3": 1.6,
+      "vol_gate2": 1.6,
+      "vol_gate1": 1.6
+    },
+    "runStartTime": "2026-06-17T21:54:41.851Z",
+    "deckRemovedTime": "2026-06-17T22:04:17.752Z",
+    "robotReleasedAt": "2026-06-17T22:04:17.752Z",
+    "coolingConfirmedTime": "2026-06-17T22:04:40.891Z"
+  },
+  {
+    "_id": "aadmnehgc0QIVcYE2fiNb",
+    "robot": {
+      "_id": "2vIu0fzsbqzkZ7_Zjj3h2",
+      "name": "Robot 3 B07"
+    },
+    "setupTimestamp": "2026-06-15T23:38:10.307Z",
+    "status": "QC",
+    "operator": {
+      "_id": "3CKmpYNUsQQv2rFVT0-ej",
+      "username": "jacob"
+    },
+    "cartridgeIds": [
+      "4293281b-208d-4b85-8f5b-c035dafc5a69"
+    ],
+    "notes": [],
+    "createdAt": "2026-06-15T23:38:10.312Z",
+    "updatedAt": "2026-06-16T00:04:19.024Z",
+    "__v": 0,
+    "fillVolumeUl": 100,
+    "plannedCartridgeCount": 1,
+    "waxSourceLot": "TEST-WAX-1776287898349",
+    "deckId": "DECK-004",
+    "opentronsRunId": "9cbff015-c605-4643-90d4-1b0b3ba7f4e0",
+    "pipetteTipState": {
+      "before": {
+        "nextTipIndex": 0,
+        "hostname": null,
+        "capturedAt": "2026-06-15T23:41:19.503Z"
+      },
+      "rackRefilledDuringRun": false,
+      "after": {
+        "nextTipIndex": 9,
+        "hostname": null,
+        "capturedAt": "2026-06-15T23:44:18.565Z"
+      },
+      "consumed": 9
+    },
+    "protocolParameters": {
+      "cartridges": 1,
+      "wax": true,
+      "row_pattern_0": true,
+      "row_pattern_1": true,
+      "row_pattern_2": true,
+      "tiprack_refilled": false,
+      "vol_gate4": 1.6,
+      "vol_gate3": 1.6,
+      "vol_gate2": 1.6,
+      "vol_gate1": 1.6
+    },
+    "runStartTime": "2026-06-15T23:41:19.503Z",
+    "deckRemovedTime": "2026-06-16T00:04:14.063Z",
+    "robotReleasedAt": "2026-06-16T00:04:14.063Z",
+    "coolingConfirmedTime": "2026-06-16T00:04:19.024Z"
+  },
+  {
+    "_id": "j-HXT8eqTlZKlB-Q6ctUp",
+    "robot": {
+      "_id": "2vIu0fzsbqzkZ7_Zjj3h2",
+      "name": "Robot 3 B07"
+    },
+    "setupTimestamp": "2026-06-17T19:22:31.655Z",
+    "status": "QC",
+    "operator": {
+      "_id": "JJtUGWAWTnbou3J3isc1",
+      "username": "alejandro"
+    },
+    "cartridgeIds": [
+      "3d1ab248-c6fa-4147-bf9c-82b8f5300975"
+    ],
+    "notes": [],
+    "createdAt": "2026-06-17T19:22:31.665Z",
+    "updatedAt": "2026-06-17T19:27:30.849Z",
+    "__v": 0,
+    "fillVolumeUl": 541,
+    "plannedCartridgeCount": 1,
+    "waxSourceLot": "TEST-WAX-15ML-001",
+    "opentronsRunId": "30e8a4fc-80c1-4443-bc77-db3a26931360",
+    "pipetteTipState": {
+      "before": {
+        "nextTipIndex": 13,
+        "hostname": null,
+        "capturedAt": "2026-06-17T19:27:16.182Z"
+      },
+      "rackRefilledDuringRun": false,
+      "after": {
+        "nextTipIndex": 13,
+        "hostname": null,
+        "capturedAt": "2026-06-17T19:23:59.942Z"
+      },
+      "consumed": 0
+    },
+    "protocolParameters": {
+      "cartridges": 1,
+      "wax": true,
+      "row_pattern_0": true,
+      "row_pattern_1": true,
+      "row_pattern_2": true,
+      "tiprack_refilled": false,
+      "vol_gate4": 1.6,
+      "vol_gate3": 1.6,
+      "vol_gate2": 1.6,
+      "vol_gate1": 1.6
+    },
+    "runStartTime": "2026-06-17T19:27:16.182Z",
+    "deckId": "DECK-001",
+    "deckRemovedTime": "2026-06-17T19:27:28.628Z",
+    "robotReleasedAt": "2026-06-17T19:27:28.628Z",
+    "coolingConfirmedTime": "2026-06-17T19:27:30.849Z"
+  },
+  {
+    "_id": "lOQ3aHmTr6Ejy2cNKyn5g",
+    "robot": {
+      "_id": "2vIu0fzsbqzkZ7_Zjj3h2",
+      "name": "Robot 3 B07"
+    },
+    "setupTimestamp": "2026-06-15T22:29:20.322Z",
+    "status": "QC",
+    "operator": {
+      "_id": "3CKmpYNUsQQv2rFVT0-ej",
+      "username": "jacob"
+    },
+    "cartridgeIds": [
+      "a27c824d-f6a4-4b10-9dc1-396e019e9592"
+    ],
+    "notes": [],
+    "createdAt": "2026-06-15T22:29:20.324Z",
+    "updatedAt": "2026-06-15T22:52:04.883Z",
+    "__v": 0,
+    "fillVolumeUl": 100,
+    "plannedCartridgeCount": 1,
+    "waxSourceLot": "TEST-WAX-1776287898349",
+    "deckId": "DECK-004",
+    "opentronsRunId": "f7e0c4bf-f09d-44fe-9dff-1b29390f6055",
+    "pipetteTipState": {
+      "before": {
+        "nextTipIndex": 0,
+        "hostname": null,
+        "capturedAt": "2026-06-15T22:41:27.209Z"
+      },
+      "rackRefilledDuringRun": false,
+      "after": {
+        "nextTipIndex": 8,
+        "hostname": null,
+        "capturedAt": "2026-06-15T22:51:24.244Z"
+      },
+      "consumed": 8
+    },
+    "protocolParameters": {
+      "cartridges": 1,
+      "wax": true,
+      "row_pattern_0": true,
+      "row_pattern_1": true,
+      "row_pattern_2": true,
+      "tiprack_refilled": false,
+      "vol_gate4": 1.6,
+      "vol_gate3": 1.6,
+      "vol_gate2": 1.6,
+      "vol_gate1": 1.6
+    },
+    "runStartTime": "2026-06-15T22:41:27.209Z",
+    "deckRemovedTime": "2026-06-15T22:51:43.863Z",
+    "robotReleasedAt": "2026-06-15T22:51:43.863Z",
+    "coolingConfirmedTime": "2026-06-15T22:52:04.882Z"
+  }
+]
