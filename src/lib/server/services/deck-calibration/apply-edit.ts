@@ -46,6 +46,33 @@ export interface ApplyDeckEditResult {
 
 const n = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
+// ── Sanity bounds (prevents geometry runaway like the 2026-06 deck-004 Z-shift) ──
+// A real per-hole calibration nudge is sub-mm to a few mm. Anything larger is
+// almost always a bad capture (e.g. a tip-length frame mismatch ≈ 35-50mm), so we
+// refuse it rather than silently corrupting the deck geometry.
+const MAX_NUDGE_MM = 15;
+// After an edit a well's z must stay within the labware's own physical height band.
+// The deck def's zDimension is the real ceiling (deck = 12.7mm; a well at 82mm is
+// physically impossible). Margin allows legit small overshoot; skipped if unknown.
+const Z_BAND_MARGIN_MM = 12;
+
+function assertSaneDelta(delta: Vec3) {
+	const big = (['x', 'y', 'z'] as const).find((k) => Math.abs(delta[k]) > MAX_NUDGE_MM);
+	if (big) {
+		throw new Error(
+			`Rejected: Δ${big}=${delta[big]}mm exceeds the ${MAX_NUDGE_MM}mm per-edit limit. ` +
+				`A correction this large is almost always a bad capture (e.g. a tip on/off frame ` +
+				`mismatch). Re-check the tip state and re-capture; type a smaller delta to override intentionally.`
+	);
+	}
+}
+
+function zBand(def: any): { min: number; max: number } | null {
+	const zDim = Number(def?.definition?.dimensions?.zDimension ?? 0);
+	if (!Number.isFinite(zDim) || zDim <= 0) return null;
+	return { min: -Z_BAND_MARGIN_MM, max: zDim + Z_BAND_MARGIN_MM };
+}
+
 export async function applyDeckEdit(input: ApplyDeckEditInput): Promise<ApplyDeckEditResult> {
 	await connectDB();
 	const { deckLoadName, wellName } = input;
@@ -58,6 +85,16 @@ export async function applyDeckEdit(input: ApplyDeckEditInput): Promise<ApplyDec
 
 	const before: Vec3 = { x: n(well.x), y: n(well.y), z: n(well.z) };
 	const after: Vec3 = { x: before.x + delta.x, y: before.y + delta.y, z: before.z + delta.z };
+
+	// Guard against geometry runaway (the 2026-06 deck-004 Z-shift corruption).
+	assertSaneDelta(delta);
+	const band = zBand(def);
+	if (band && (after.z < band.min || after.z > band.max)) {
+		throw new Error(
+			`Rejected: ${wellName} z would become ${after.z.toFixed(2)}mm, outside the ` +
+				`labware's physical band [${band.min}, ${band.max.toFixed(1)}]mm. Likely a bad capture.`
+		);
+	}
 
 	// 1. Mongo source of truth — set the well's coords (Mixed sub-path).
 	await LabwareDefinition.updateOne(
@@ -155,9 +192,14 @@ export async function applyDeckEditBatch(
 	const delta: Vec3 = { x: n(input.delta?.x), y: n(input.delta?.y), z: n(input.delta?.z) };
 	const wellNames = Array.from(new Set(input.wellNames ?? []));
 
+	// Guard against geometry runaway — one delta hits many wells, so reject the
+	// whole batch up front rather than corrupting a cartridge at a time.
+	assertSaneDelta(delta);
+
 	const def = (await LabwareDefinition.findOne({ loadName: deckLoadName }).lean()) as any;
 	if (!def) throw new Error(`Labware definition "${deckLoadName}" not found in labware_definitions.`);
 	const wells = def.definition?.wells ?? {};
+	const band = zBand(def);
 
 	const now = new Date();
 	const failed: { wellName: string; reason: string }[] = [];
@@ -173,6 +215,10 @@ export async function applyDeckEditBatch(
 		}
 		const before: Vec3 = { x: n(well.x), y: n(well.y), z: n(well.z) };
 		const after: Vec3 = { x: before.x + delta.x, y: before.y + delta.y, z: before.z + delta.z };
+		if (band && (after.z < band.min || after.z > band.max)) {
+			failed.push({ wellName, reason: `z ${after.z.toFixed(2)}mm out of band [${band.min}, ${band.max.toFixed(1)}]` });
+			continue;
+		}
 		setOps[`definition.wells.${wellName}.x`] = after.x;
 		setOps[`definition.wells.${wellName}.y`] = after.y;
 		setOps[`definition.wells.${wellName}.z`] = after.z;

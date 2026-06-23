@@ -192,7 +192,13 @@
 
 	// ── Captured / manual offset ─────────────────────────────────────────────────
 	let dx = $state(0), dy = $state(0), dz = $state(0);
-	let nominal = $state<{ x: number; y: number; z: number } | null>(null);
+	// nominal carries the tip-state it was measured in. The OT-2 position readback
+	// (savePosition) is the pipette CRITICAL POINT, which drops by the tip length
+	// (~50mm) the moment a tip is picked up. dz = live − nominal is only a true
+	// GANTRY displacement if both reads share one tip state; otherwise the tip
+	// length leaks into the captured delta and corrupts the deck geometry. So we
+	// stamp the tip state and refuse a capture across a tip change.
+	let nominal = $state<{ x: number; y: number; z: number; hasTip: boolean } | null>(null);
 	let refWell = $state<string | null>(null); // the hole we moved-to for capture
 
 	// ── Messages ─────────────────────────────────────────────────────────────────
@@ -231,10 +237,22 @@
 			robotId: selectedRobotId || ''
 		});
 		if (r) {
-			msg = `Applied to ${r.applied} hole(s) — saved to BIMS.${runId ? ' Reload deck into the run to verify on the robot; Re-upload for real fills.' : ''}`;
+			msg = applyMsg('Applied', r);
 			clearSelection();
-			if (runId) deckDirty = true;
+			if (runId && !slotOrigin) deckDirty = true;
 		}
+	}
+
+	// Build the post-apply message: report count, any guard-rejected wells, and
+	// whether the open run already reflects it (absolute moves) or needs a reload.
+	function applyMsg(verb: string, r: any): string {
+		const liveNote = runId
+			? slotOrigin
+				? ' Live in this run — “Move to hole” reflects it now.'
+				: ' Move to a hole once to enable live updates (or Reload deck).'
+			: '';
+		const rej = r.failed?.length ? ` ⚠ ${r.failed.length} rejected (out of bounds).` : '';
+		return `${verb} to ${r.applied} hole(s) — saved to BIMS.${rej}${liveNote} Re-upload (Sync) for real fills.`;
 	}
 
 	// Select every hole of the active role (handy for a global grid shift).
@@ -257,9 +275,9 @@
 			robotId: selectedRobotId || ''
 		});
 		if (r) {
-			msg = `Global shift applied to ${r.applied} hole(s) — saved to BIMS.${runId ? ' Reload deck into the run to verify; Re-upload for real fills.' : ''}`;
+			msg = applyMsg('Global shift applied', r);
 			clearSelection();
-			if (runId) deckDirty = true;
+			if (runId && !slotOrigin) deckDirty = true;
 		}
 	}
 
@@ -285,6 +303,17 @@
 	// Deck slot the labware sits in (for move-to-hole). Resolved/overridable; OT-2 slots 1-11.
 	let deckSlot = $state('1');
 	let loadedLabwareId = $state<string | null>(null);
+	// #6 — apply edits to the OPEN run without closing it. The OT-2 binds a labware's
+	// geometry at loadLabware time, so moveToWell uses the coords AS LOADED; later
+	// Mongo edits don't reach the live run (the old "Reload deck" close/reopen dance).
+	// Fix: derive the slot's deck origin ONCE (first moveToWell, vs the coords
+	// snapshotted at load), then move via absolute moveToCoordinates built from the
+	// LIVE (edited) Mongo coords. moveToCoordinates places the critical point at an
+	// absolute deck point (robot handles tip length), so it's tip-independent and
+	// reflects edits instantly — no run close needed.
+	let slotOrigin = $state<{ x: number; y: number; z: number } | null>(null);
+	let loadedWells = $state<Map<string, { x: number; y: number; z: number }> | null>(null);
+	const APPROACH_Z_MM = 2; // critical point parks this far above the well top
 	// True after an offset is applied while a run is open: the run still holds the
 	// pre-edit deck, so "Move to hole" would use stale coords until the deck is reloaded.
 	let deckDirty = $state(false);
@@ -332,7 +361,9 @@
 		busy = true;
 		try { await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}`, { method: 'DELETE' }); }
 		catch (e) { errMsg = e instanceof Error ? e.message : String(e); }
-		finally { runId = null; pipetteId = null; pipetteMount = null; pipetteName = null; loadedLabwareId = null; liveX = liveY = liveZ = null; busy = false; }
+		// Closing the run drops the tip and clears the session → reset ALL tip/frame
+		// state so a stale tipAdjust or nominal can't leak into the next session.
+		finally { runId = null; pipetteId = null; pipetteMount = null; pipetteName = null; loadedLabwareId = null; liveX = liveY = liveZ = null; hasTip = false; tipAdjust = null; nominal = null; refWell = null; slotOrigin = null; loadedWells = null; busy = false; }
 	}
 	async function homeRobot() {
 		if (!runId) { errMsg = 'Open a maintenance run first'; return; }
@@ -376,23 +407,72 @@
 		});
 		loadedLabwareId = lw?.labwareId ?? null;
 		if (!loadedLabwareId) throw new Error('load-labware did not return a labwareId');
+		// Snapshot the coords the run was loaded with (so we can derive the slot origin
+		// even after subsequent edits change the live Mongo coords). Re-derive origin.
+		loadedWells = new Map(wells.map((w) => [w.name, { x: w.x, y: w.y, z: w.z }]));
+		slotOrigin = null;
 		return loadedLabwareId;
 	}
-	const safeArcZ = $derived(Math.round((wells.length ? Math.max(...wells.map((w) => w.z)) : 12) + 80));
+	// Safe-arc lift height (critical-point deck Z) for moves between holes.
+	// Based on the labware's OWN physical height (dimensions.z) + clearance — NOT
+	// max(well.z), which a corrupted/edited well could inflate without bound (that
+	// drove the "Arc out of bounds in Z" error: a deck whose wells had crept to 82mm
+	// produced safeArcZ 162 → +tip ≈ 211mm, past the gantry limit). Clamped to a
+	// machine-real ceiling: the OT-2 left p300 rejects gantry Z beyond ~170mm, and a
+	// tip adds ~50mm, so the critical point must stay below ~115mm. (Verify per robot.)
+	const ARC_CLEARANCE_MM = 80;
+	const ARC_CEILING_MM = 115;
+	const safeArcZ = $derived(Math.min(Math.round((dim.z || 12.7) + ARC_CLEARANCE_MM), ARC_CEILING_MM));
 
-	// Safe arc: lift ~80mm above the holes, travel in XY, descend. Never drags the tip.
+	// Safe arc: lift to safeArcZ, travel in XY, descend. Never drags the tip.
+	// Once the slot origin is known we move by ABSOLUTE coordinates from the live
+	// (edited) Mongo coords, so applied edits take effect with no run close (#6).
+	// The first move of a session uses moveToWell (the run's loaded def) and derives
+	// the origin from the load-time snapshot.
 	async function moveToWellSafe(name: string): Promise<void> {
 		const lid = await ensureDeckLoaded();
-		// Fold the tip-cal adjust into the well offset so it's ONE fluid move to
-		// well+adjust (the safe arc lifts, travels, descends once) — exactly what
-		// the protocol does (well.top().move(adjust)). No separate second jog.
+		const ax = tipAdjust?.x ?? 0, ay = tipAdjust?.y ?? 0;
+
+		if (slotOrigin) {
+			// Absolute move from LIVE coords → reflects edits instantly, tip-independent.
+			const w = wellByName.get(name);
+			if (!w) throw new Error(`Unknown well ${name}`);
+			await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/move-to`, {
+				method: 'POST',
+				body: JSON.stringify({
+					pipetteId,
+					x: slotOrigin.x + w.x + ax,
+					y: slotOrigin.y + w.y + ay,
+					z: slotOrigin.z + w.z + APPROACH_Z_MM,
+					minimumZHeight: safeArcZ,
+					forceDirect: false
+				})
+			});
+			return;
+		}
+
+		// First move: use moveToWell (uses the run's loaded def), then derive the slot
+		// origin from the load-time snapshot so every later move can go absolute.
+		// Fold the tip-cal adjust into the well offset (one fluid move to well+adjust,
+		// matching the protocol's well.top().move(adjust)).
 		await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/move-to-well`, {
 			method: 'POST',
 			body: JSON.stringify({
 				pipetteId, labwareId: lid, wellName: name, minimumZHeight: safeArcZ,
-				xOffsetMm: tipAdjust?.x ?? 0, yOffsetMm: tipAdjust?.y ?? 0
+				xOffsetMm: ax, yOffsetMm: ay
 			})
 		});
+		await refreshPosition();
+		const loaded = loadedWells?.get(name);
+		if (loaded && liveX !== null && liveY !== null && liveZ !== null) {
+			// liveZ is the critical point parked at (well top + APPROACH_Z); the robot
+			// already accounted for tip length, so the derived origin is tip-independent.
+			slotOrigin = {
+				x: liveX - loaded.x - ax,
+				y: liveY - loaded.y - ay,
+				z: liveZ - loaded.z - APPROACH_Z_MM
+			};
+		}
 	}
 
 	async function moveToSelectedHole() {
@@ -404,9 +484,9 @@
 		try {
 			await moveToWellSafe(name);
 			await refreshPosition();
-			nominal = liveX !== null ? { x: liveX!, y: liveY!, z: liveZ! } : null;
+			nominal = liveX !== null ? { x: liveX!, y: liveY!, z: liveZ!, hasTip } : null;
 			refWell = name;
-			msg = `At nominal of ${name}. Jog onto the real hole, then Capture.`;
+			msg = `At nominal of ${name}${hasTip ? ' (tip on)' : ' (no tip)'}. Jog onto the real hole, then Capture.`;
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
 	}
 
@@ -481,8 +561,11 @@
 			const res = await api('/api/scanner/calibrate-tip', { method: 'POST', body: JSON.stringify({ robotId: selectedRobotId, mount: desiredMount, tipWell, runId, pipetteId }) });
 			if (res?.adjust && typeof res.adjust.x === 'number') {
 				tipAdjust = { x: res.adjust.x, y: res.adjust.y };
+				// The probe moved the gantry and changed the applied adjust → any prior
+				// nominal is stale. Re-Move to the hole before capturing.
+				nominal = null; refWell = null;
 				await refreshPosition();
-				msg = `Tip calibrated: adjust x=${tipAdjust.x} y=${tipAdjust.y}. Tip kept on; applied to every move-to while tuning.`;
+				msg = `Tip calibrated: adjust x=${tipAdjust.x} y=${tipAdjust.y}. Tip kept on; applied to every move-to while tuning. Move to a hole to set a fresh nominal.`;
 			} else { errMsg = 'Calibration returned no adjust'; }
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { calibrating = false; }
 	}
@@ -497,6 +580,9 @@
 				body: JSON.stringify({ pipetteId, tiprackLoadName: tiprackForMount, slot: '11', tipWell })
 			});
 			hasTip = true;
+			// Tip state just changed → any nominal taken without the tip is now a
+			// different frame. Force a fresh Move-to-hole before the next capture.
+			nominal = null; refWell = null;
 			msg = `Picked up a tip (${tiprackForMount} ${tipWell}). Now go to the calibrator or a hole.`;
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
 	}
@@ -516,12 +602,21 @@
 
 	async function captureOffset() {
 		if (!nominal) { errMsg = 'Move to a hole first to set the nominal reference'; return; }
+		// Tip-state must match the nominal's, or the ~50mm tip length leaks into dz.
+		if (nominal.hasTip !== hasTip) {
+			errMsg = `Tip state changed since "Move to hole" (${nominal.hasTip ? 'tip was on' : 'no tip'}, now ${hasTip ? 'tip on' : 'no tip'}). Move to the hole again so nominal + capture share one frame, then Capture.`;
+			nominal = null; refWell = null;
+			return;
+		}
 		await refreshPosition();
 		if (liveX === null || liveY === null || liveZ === null) { errMsg = 'Could not read position'; return; }
 		dx = +(liveX - nominal.x).toFixed(3);
 		dy = +(liveY - nominal.y).toFixed(3);
 		dz = +(liveZ - nominal.z).toFixed(3);
-		msg = `Captured offset from ${refWell}: dx=${dx} dy=${dy} dz=${dz}. Select the holes to apply it to.`;
+		// A sane per-hole correction is a few mm. A capture near tip-length scale is
+		// almost always a frame mismatch — warn (the server also hard-rejects >15mm).
+		const big = Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz));
+		msg = `Captured offset from ${refWell}: dx=${dx} dy=${dy} dz=${dz}.${big > 15 ? ' ⚠ This is unusually large (>15mm) — likely a bad capture; it will be rejected on apply.' : ' Select the holes to apply it to.'}`;
 	}
 
 	// ── PRD 2: save the tip-calibrator fixture position for the selected robot. ──
