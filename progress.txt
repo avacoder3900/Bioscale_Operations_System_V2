@@ -2747,3 +2747,76 @@ LAYER B (jog — built; needs live-robot verification):
   + endpoints load-labware, move-to-well. (Bare nozzle, no tip — X/Y is the win; Z has a
   tip-length caveat. Deck slot defaults to 1, overridable.)
 npm run check 11-baseline (0 new errors); build green. All on master.
+
+=== 2026-06-23/24 — Deck-cal corruption fixes, Studio UX, cartridge backfills, OT-2 scanners, run-control + param reliability ===
+Full Ralph-method context reload on the deck calibration system; reconciled progress.txt
+(stops at the 2026-06-18 Studio) with the CODE: NATIVE-CALIBRATION-SYSTEM PRDs 1-6 had since
+shipped to master (RobotDeckOffset/TipCalibratorFixture models, calibrate-tip bridge cmd,
+PRD-6 RTP cutover). The on-robot daemon is scripts/ot2-bridge.py IN THIS REPO (not separate);
+bridge command kinds grew to 7 (…+restart_robot_server, auto_resume_run, calibrate_tip).
+
+DECK-CAL Z-SHIFT CORRUPTION (root-caused from data):
+- savePosition returns the pipette CRITICAL POINT, which drops by the tip length (~49mm) when
+  a tip is picked up — so the "home value 200 → 150.73" is EXPECTED, not a bug. The Studio's
+  captureOffset did dz = liveZ − nominal.z without locking tip state, so a tip change between
+  Move-to-hole and Capture leaked the tip length into saved deltas → corrupted geometry.
+- DATA proof: gen4deck_gen7cartridge_004 well-z had crept 8.8mm → 16-82mm over 7845 edits
+  (5955 with |Δ|>5mm; A1 timeline showed +44/±20 swings). Siblings 001/002/003 clean.
+  Inflated max well-z (82) made safeArcZ = max(wellZ)+80 = 162 → +tip ≈211mm > gantry max →
+  "FailedToPlanMoveError: Arc out of bounds in Z". RECOVERED deck-004 to baseline (earliest
+  `before` per well, z 8.5-9.1) via scratchpad recover script; corrupted state backed up.
+  NOTE: robot still holds the old bundle until Sync; local lab-Mac JSON mirror also stale.
+- FIXES (master): (1) tip-state lock — nominal stamped with hasTip; captureOffset refused on
+  tip change; nominal/tipAdjust cleared on pickup/calibrate/close. (2) safeArcZ from labware
+  dimensions.z clamped to a machine ceiling (115mm) instead of corruptible well-z. (3) #6 —
+  "Move to hole" now uses ABSOLUTE moveToCoordinates from live Mongo coords via a once-derived
+  slot origin → edits apply in the OPEN run, no close/reopen (the run caches loaded geometry;
+  Mongo IS source of truth and only reaches the robot on Sync). (4) physical-bounds guard in
+  apply-edit (rejected the 15mm magnitude cap per operator — corrections can be large — kept
+  only 0≤x≤xDim, 0≤y≤yDim, 0≤z).
+
+DECK-003 "Input should be a valid integer" on B14 (looked robot-specific):
+- It was a corrupted DEF, not the robot/positions. Calibration had pushed deck-003 row-A wells
+  to y=-0.5/-0.2 (off the front edge). OT-2 labware schema requires well coords ≥0, so
+  registering the def 422'd (int|float≥0 union → "valid integer"), breaking move-to-hole
+  wherever 003 was loaded — only "B14" because that's where 003 was selected. The "crazy dance"
+  was the search-raster fallback firing on every miss. FIXED: clamped the 8 wells to y=0 in
+  Mongo; extended the apply-edit guard to enforce x/y physical bounds (was Z-only).
+
+STUDIO UX: 0.25mm reference grid (1mm + 10mm bold lines, SVG pattern, toggle); live hover
+coordinate readout (cursor x/y + nearest hole z); 0.5mm jog step; "Set position → one hole"
+(absolute x/y/z, prefilled, computes delta under the engine); session multi-level Undo of the
+last applied shift (offset/global/set-position).
+
+CARTRIDGE BACKFILLS (direct Mongo, cartridge_records, _id = barcode):
+- "ready for reagent filling" = status wax_ready (reagent intake gate hard-checks status===
+  'wax_ready'). Backfilled 24 scanned carts → wax_ready (22 created, 1 advanced wax_stored→
+  wax_ready, 1 skipped because completed) + 1 replacement cart; minimal authentic wax shape +
+  waxQc Accepted + backfill marker + AuditLog. (The larger 583-cart bucket backfill was paused
+  — 136 already existed incl. completed/cancelled; report CSVs handed to operator to reconcile.)
+
+OT-2 SCANNERS (new Waveshare units): B14 scanner "not turning on" + danced every barcode.
+Real cause (from B14 daemon log): serial EIO — `Scan attempt failed (5, 'Input/output error')`
+at every slot → "0 scans, 24 errors". A *connection* fault, not positions/illumination.
+(My initial under-voltage theory was wrong — B14 does uniquely under-volt, but hammering the
+scanner didn't worsen it; the EIO was the proximate fault.) Operator swapped the USB cable;
+restarted ot2-bridge to drop the stale handle; confirmed clean reads + a live barcode decode
+(f4c59368-…). R04 new scanner: clean out of the gate (throttled 0x0, no EIO, decoded
+9d1325d6-…). Diagnostic pattern: `(5,'Input/output error')` in the daemon log = serial/cable.
+
+RUN-CONTROL RELIABILITY (PRD docs/prds/OT2-RUN-CONTROL-RELIABILITY.md): pause/resume/stop on
+the wax/reagent run screens were spotty (driven from Vercel → status polls AND actions share
+the serialized bridge queue). Fixed EmbeddedRunController.svelte + the actions endpoint: Stop
+always enabled while live; handle finishing/blocked-by-open-door/awaiting-recovery; endpoint
+returns {conflict, robotStatus} for 4xx (action invalid for current state) so the client treats
+it as benign and reconciles by re-poll instead of a 502; sticky optimistic status (polls don't
+overwrite during an action) kills the flicker; skip polling during an action + reconcile right
+after; AbortSignal timeouts (poll 6s / action 12s) + destroyed guard.
+
+RUN PARAMS: bool RTPs ignored operator toggles — an unchecked HTML checkbox posts no field, so
+turning a default-on param OFF (e.g. tracer) dropped param_<name> and startRun's "absent → use
+default" fallback ran the default. FIXED ProtocolStartPanel.svelte: bool params now post via a
+hidden input that ALWAYS carries true/false (same pattern already used for tiprack_refilled);
+the visible checkbox just drives state. Affects wax + reagent (shared panel).
+
+All committed + pushed to master; npm run check stayed at the 11-error baseline throughout.
