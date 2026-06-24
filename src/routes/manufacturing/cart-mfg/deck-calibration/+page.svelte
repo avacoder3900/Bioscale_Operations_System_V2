@@ -743,7 +743,7 @@
 				<div class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 					<label>Zoom <input type="range" min="0.6" max="5" step="0.2" bind:value={zoom} /> {zoom.toFixed(1)}×</label>
 					<button type="button" onclick={() => (zoom = 1)} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Fit</button>
-					<button type="button" onclick={() => (showGrid = !showGrid)} class="rounded border px-2 py-1 {showGrid ? 'border-[var(--color-tron-cyan)]/60 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}" style={showGrid ? '' : 'color: var(--color-tron-text)'} title="Toggle the 1mm reference grid (10mm major lines)">Grid{showGrid ? ' ✓' : ''}</button>
+					<button type="button" onclick={() => (showGrid = !showGrid)} class="rounded border px-2 py-1 {showGrid ? 'border-[var(--color-tron-cyan)]/60 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}" style={showGrid ? '' : 'color: var(--color-tron-text)'} title="Toggle the reference grid (0.25mm fine · 1mm · 10mm bold)">Grid{showGrid ? ' ✓' : ''}</button>
 					<button type="button" onclick={selectAllActive} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Select all{roleFilter !== 'all' ? ` ${roleFilter}` : ''}</button>
 					<button type="button" onclick={() => (deselectMode = !deselectMode)} class="rounded border px-2 py-1 {deselectMode ? 'border-amber-500/60 bg-amber-900/20 text-amber-300' : 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)]'}" style={deselectMode ? '' : 'color: var(--color-tron-text)'} title="When on, box-drag/click removes holes from the selection">Deselect{deselectMode ? ' ✓' : ''}</button>
 					<button type="button" onclick={deselectAll} title="Deselect everything (or press Esc anywhere)" class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Clear (Esc)</button>
@@ -764,15 +764,19 @@
 						onpointerleave={() => (hover = null)}
 						style="display:block; height:auto; touch-action:none; cursor: crosshair;"
 					>
-						<!-- Light 1mm reference grid (minor) + 10mm major lines, drawn behind the holes.
-						     Uses an SVG pattern (tiled) so it's cheap regardless of deck size. -->
+						<!-- Reference grid drawn behind the holes: 0.25mm fine, 1mm medium, 10mm
+						     bold (nested SVG patterns — tiled, so cheap regardless of deck size). -->
 						<defs>
+							<pattern id="grid-025mm" width="0.25" height="0.25" patternUnits="userSpaceOnUse">
+								<path d="M 0.25 0 L 0 0 0 0.25" fill="none" stroke="rgba(130,180,220,0.22)" stroke-width="0.02" />
+							</pattern>
 							<pattern id="grid-1mm" width="1" height="1" patternUnits="userSpaceOnUse">
-								<path d="M 1 0 L 0 0 0 1" fill="none" stroke="rgba(120,170,210,0.16)" stroke-width="0.04" />
+								<rect width="1" height="1" fill="url(#grid-025mm)" />
+								<path d="M 1 0 L 0 0 0 1" fill="none" stroke="rgba(130,180,220,0.40)" stroke-width="0.05" />
 							</pattern>
 							<pattern id="grid-10mm" width="10" height="10" patternUnits="userSpaceOnUse">
 								<rect width="10" height="10" fill="url(#grid-1mm)" />
-								<path d="M 10 0 L 0 0 0 10" fill="none" stroke="rgba(120,170,210,0.32)" stroke-width="0.1" />
+								<path d="M 10 0 L 0 0 0 10" fill="none" stroke="rgba(130,180,220,0.55)" stroke-width="0.1" />
 							</pattern>
 						</defs>
 						{#if showGrid}
