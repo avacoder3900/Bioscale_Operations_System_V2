@@ -20,17 +20,6 @@
 	type DeployedProject = { id: string; name: string; version: string };
 	let deployedHere = $derived<DeployedProject[]>(data.deploymentsByPhase?.[phase] ?? []);
 
-	// Stations currently holding an operator lock that you could take over — any
-	// holder (another operator, or a dead browser tab with no live session, since
-	// the lock has no TTL), excluding the one you're already on. Each gets a
-	// "Connect" button that boots the holder once an admin authorizes it.
-	let lockedStations = $derived(
-		(data.stations ?? []).filter(
-			(s: any) =>
-				s.currentOperator && s.currentOperator._id && s._id !== selectedStationId
-		)
-	);
-
 	// Admin-authorized takeover ("Connect" on an in-use station). takeoverStation
 	// holds the station being taken over; the rest carry the admin credentials
 	// being entered into the inline form.
@@ -319,6 +308,18 @@
 		// has acknowledged it by changing the dropdown.
 		stationDownAt = null;
 		if (selectedStationId) {
+			const station = data.stations.find((s: { _id: string }) => s._id === selectedStationId) as any;
+			const heldByOther =
+				station?.currentOperator &&
+				station.currentOperator._id &&
+				station.currentOperator._id !== data.user._id;
+			if (heldByOther) {
+				// In-use station picked from the dropdown — don't connect yet. The
+				// admin-credentials form drives submitTakeover(), which boots the
+				// holder, claims the lock, then connects.
+				openTakeover(station._id, station.name, station.currentOperator.username);
+				return;
+			}
 			cameraError = null;
 			await connectToStation(selectedStationId);
 		} else {
@@ -360,6 +361,16 @@
 		takeoverUsername = '';
 		takeoverPassword = '';
 		takeoverError = null;
+	}
+
+	// Bail out of a takeover: clear the form and drop the dropdown back to local.
+	async function cancelTakeover() {
+		takeoverStation = null;
+		takeoverUsername = '';
+		takeoverPassword = '';
+		takeoverError = null;
+		selectedStationId = null;
+		await startCamera();
 	}
 
 	// Admin-authorized takeover: an admin/manager account's credentials boot the
@@ -1068,12 +1079,13 @@
 							{@const badge = s.status === 'online' ? '🟢' : s.status === 'degraded' ? '🟡' : '🔴'}
 							{@const heldByOther = s.currentOperator && s.currentOperator._id && s.currentOperator._id !== data.user._id}
 							{@const offline = s.status !== 'online' && s.status !== 'degraded'}
-							{@const disabled = offline || heldByOther}
-							<option value={s._id} disabled={disabled}>
+							<!-- In-use stations stay selectable: picking one opens the admin
+							     takeover form (see onStationChange). Only offline disables. -->
+							<option value={s._id} disabled={offline}>
 								{badge}
 								{s.name}
 								{#if offline}(offline){/if}
-								{#if heldByOther}(in use by {s.currentOperator.username}){/if}
+								{#if heldByOther}(in use by {s.currentOperator.username} — take over){/if}
 							</option>
 						{/each}
 					</select>
@@ -1089,77 +1101,52 @@
 			</div>
 		</div>
 
-		<!-- Stations currently in use by another operator (or a dead browser tab,
-		     since the lock has no TTL). "Connect" boots the holder and takes over
-		     once an admin authorizes it — the dropdown option stays disabled until
-		     then. Every takeover is audited server-side. -->
-		{#if lockedStations.length > 0}
-			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3">
-				<p class="text-xs uppercase text-[var(--color-tron-text-secondary)]">In use</p>
-				<ul class="mt-2 space-y-1">
-					{#each lockedStations as s (s._id)}
-						<li class="flex items-center justify-between gap-3 text-sm">
-							<span class="text-[var(--color-tron-text-secondary)]">
-								<span class="text-[var(--color-tron-cyan)]">{s.name}</span>
-								— {s.currentOperator.username}{#if s.currentOperator._id === data.user._id} (you){/if}{#if s.currentOperator.since} since {new Date(s.currentOperator.since).toLocaleString()}{/if}
-							</span>
-							<button
-								type="button"
-								onclick={() => openTakeover(s._id, s.name, s.currentOperator.username)}
-								title="Boot the current operator and take over this station (an admin must authorize)."
-								class="shrink-0 rounded border border-[var(--color-tron-cyan)] px-2 py-0.5 text-xs text-[var(--color-tron-cyan)] hover:bg-[rgba(0,229,255,0.08)]"
-							>
-								Connect
-							</button>
-						</li>
-					{/each}
-				</ul>
-
-				{#if takeoverStation}
-					<form
-						class="mt-3 space-y-2 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] p-3"
-						onsubmit={(e) => { e.preventDefault(); submitTakeover(); }}
-					>
-						<p class="text-sm text-[var(--color-tron-text-secondary)]">
-							Take over <span class="text-[var(--color-tron-cyan)]">{takeoverStation.name}</span>
-							from {takeoverStation.holder}? An admin must authorize.
-						</p>
-						<input
-							type="text"
-							bind:value={takeoverUsername}
-							placeholder="Admin username"
-							autocomplete="off"
-							class="tron-input w-full"
-						/>
-						<input
-							type="password"
-							bind:value={takeoverPassword}
-							placeholder="Admin password"
-							autocomplete="off"
-							class="tron-input w-full"
-						/>
-						{#if takeoverError}
-							<p class="text-xs text-[var(--color-tron-red,#ff3366)]">{takeoverError}</p>
-						{/if}
-						<div class="flex justify-end gap-2">
-							<button
-								type="button"
-								onclick={() => (takeoverStation = null)}
-								class="rounded border border-[var(--color-tron-border)] px-3 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)]"
-							>
-								Cancel
-							</button>
-							<button
-								type="submit"
-								disabled={takeoverBusy || !takeoverUsername || !takeoverPassword}
-								class="rounded border border-[var(--color-tron-cyan)] px-3 py-1 text-xs text-[var(--color-tron-cyan)] hover:bg-[rgba(0,229,255,0.08)] disabled:opacity-40"
-							>
-								{takeoverBusy ? 'Connecting…' : 'Connect'}
-							</button>
-						</div>
-					</form>
+		<!-- Admin-authorized takeover. Shown when an in-use station is picked from
+		     the Station dropdown (onStationChange). An admin/manager's credentials
+		     boot the current holder and connect us. Audited server-side. -->
+		{#if takeoverStation}
+			<form
+				class="space-y-2 rounded-lg border border-[var(--color-tron-cyan)] bg-[var(--color-tron-bg-secondary)] p-3"
+				onsubmit={(e) => { e.preventDefault(); submitTakeover(); }}
+			>
+				<p class="text-sm text-[var(--color-tron-text-secondary)]">
+					<span class="text-[var(--color-tron-cyan)]">{takeoverStation.name}</span>
+					is in use by {takeoverStation.holder}. An admin must authorize the takeover.
+				</p>
+				<input
+					type="text"
+					bind:value={takeoverUsername}
+					placeholder="Admin username"
+					autocomplete="off"
+					class="tron-input w-full"
+				/>
+				<input
+					type="password"
+					bind:value={takeoverPassword}
+					placeholder="Admin password"
+					autocomplete="off"
+					class="tron-input w-full"
+				/>
+				{#if takeoverError}
+					<p class="text-xs text-[var(--color-tron-red,#ff3366)]">{takeoverError}</p>
 				{/if}
-			</div>
+				<div class="flex justify-end gap-2">
+					<button
+						type="button"
+						onclick={() => cancelTakeover()}
+						class="rounded border border-[var(--color-tron-border)] px-3 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)]"
+					>
+						Cancel
+					</button>
+					<button
+						type="submit"
+						disabled={takeoverBusy || !takeoverUsername || !takeoverPassword}
+						class="rounded border border-[var(--color-tron-cyan)] px-3 py-1 text-xs text-[var(--color-tron-cyan)] hover:bg-[rgba(0,229,255,0.08)] disabled:opacity-40"
+					>
+						{takeoverBusy ? 'Connecting…' : 'Connect'}
+					</button>
+				</div>
+			</form>
 		{/if}
 
 		<!-- Camera -->
