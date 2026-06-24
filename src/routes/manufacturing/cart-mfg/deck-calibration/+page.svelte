@@ -157,9 +157,22 @@
 		boxNow = d;
 		(e.target as Element).setPointerCapture?.(e.pointerId);
 	}
+	// Live cursor coords (deck mm) for the hover readout + nearest hole (for z,
+	// which is only defined per-hole on a deck).
+	let hover = $state<{ x: number; y: number } | null>(null);
+	const hoverNearest = $derived.by(() => {
+		if (!hover || !wells.length) return null;
+		let best: Well | null = null, bestD = Infinity;
+		for (const w of wells) {
+			const ddx = w.x - hover.x, ddy = w.y - hover.y, d = ddx * ddx + ddy * ddy;
+			if (d < bestD) { bestD = d; best = w; }
+		}
+		return best ? { well: best, dist: Math.sqrt(bestD) } : null;
+	});
+
 	function onCanvasPointerMove(e: PointerEvent) {
-		if (!boxing) return;
-		boxNow = toDeck(e);
+		hover = toDeck(e);
+		if (boxing) boxNow = hover;
 	}
 	function onCanvasPointerUp(e: PointerEvent) {
 		if (!boxing || !boxStart || !boxNow) { boxing = false; return; }
@@ -723,6 +736,9 @@
 							{/each}
 						</div>
 					{/if}
+					<span class="font-mono text-[11px]" style="color: var(--color-tron-cyan)" title="Cursor position in deck mm; z is the nearest hole's calibrated height">
+						{#if hover}x {hover.x.toFixed(2)}  y {hover.y.toFixed(2)}{#if hoverNearest}  ·  {hoverNearest.well.name} z {hoverNearest.well.z.toFixed(2)} ({hoverNearest.dist.toFixed(1)}mm){/if}{:else}<span style="color: var(--color-tron-text-secondary)">hover deck for coords</span>{/if}
+					</span>
 				</div>
 				<div class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 					<label>Zoom <input type="range" min="0.6" max="5" step="0.2" bind:value={zoom} /> {zoom.toFixed(1)}×</label>
@@ -745,6 +761,7 @@
 						onpointerdown={onCanvasPointerDown}
 						onpointermove={onCanvasPointerMove}
 						onpointerup={onCanvasPointerUp}
+						onpointerleave={() => (hover = null)}
 						style="display:block; height:auto; touch-action:none; cursor: crosshair;"
 					>
 						<!-- Light 1mm reference grid (minor) + 10mm major lines, drawn behind the holes.
