@@ -128,6 +128,7 @@
 
 	// ── Canvas geometry (viewBox = deck mm; y flipped to screen) ─────────────────
 	let zoom = $state(1); // 1 = fit container width; >1 zooms in (scrolls)
+	let showGrid = $state(true); // light 1mm reference grid (10mm major lines) behind the holes
 	const wellR = 1.9; // viewBox (mm) radius — ~2× the physical ~0.9mm hole radius so dots stay visible/clickable at fit
 	function cy(y: number): number { return dim.y - y; } // flip
 	let svgEl = $state<SVGSVGElement | null>(null);
@@ -726,6 +727,7 @@
 				<div class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 					<label>Zoom <input type="range" min="0.6" max="5" step="0.2" bind:value={zoom} /> {zoom.toFixed(1)}×</label>
 					<button type="button" onclick={() => (zoom = 1)} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Fit</button>
+					<button type="button" onclick={() => (showGrid = !showGrid)} class="rounded border px-2 py-1 {showGrid ? 'border-[var(--color-tron-cyan)]/60 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}" style={showGrid ? '' : 'color: var(--color-tron-text)'} title="Toggle the 1mm reference grid (10mm major lines)">Grid{showGrid ? ' ✓' : ''}</button>
 					<button type="button" onclick={selectAllActive} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Select all{roleFilter !== 'all' ? ` ${roleFilter}` : ''}</button>
 					<button type="button" onclick={() => (deselectMode = !deselectMode)} class="rounded border px-2 py-1 {deselectMode ? 'border-amber-500/60 bg-amber-900/20 text-amber-300' : 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)]'}" style={deselectMode ? '' : 'color: var(--color-tron-text)'} title="When on, box-drag/click removes holes from the selection">Deselect{deselectMode ? ' ✓' : ''}</button>
 					<button type="button" onclick={deselectAll} title="Deselect everything (or press Esc anywhere)" class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Clear (Esc)</button>
@@ -745,6 +747,20 @@
 						onpointerup={onCanvasPointerUp}
 						style="display:block; height:auto; touch-action:none; cursor: crosshair;"
 					>
+						<!-- Light 1mm reference grid (minor) + 10mm major lines, drawn behind the holes.
+						     Uses an SVG pattern (tiled) so it's cheap regardless of deck size. -->
+						<defs>
+							<pattern id="grid-1mm" width="1" height="1" patternUnits="userSpaceOnUse">
+								<path d="M 1 0 L 0 0 0 1" fill="none" stroke="rgba(120,170,210,0.16)" stroke-width="0.04" />
+							</pattern>
+							<pattern id="grid-10mm" width="10" height="10" patternUnits="userSpaceOnUse">
+								<rect width="10" height="10" fill="url(#grid-1mm)" />
+								<path d="M 10 0 L 0 0 0 10" fill="none" stroke="rgba(120,170,210,0.32)" stroke-width="0.1" />
+							</pattern>
+						</defs>
+						{#if showGrid}
+							<rect x="0" y="0" width={dim.x} height={dim.y} fill="url(#grid-10mm)" />
+						{/if}
 						{#each wells as w (w.name)}
 							{@const sel = selection.has(w.name)}
 							{@const active = isActiveRole(w.name)}
