@@ -842,7 +842,7 @@
 
 				<div class="mt-2 flex flex-wrap items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 					<label>Step <select bind:value={stepSize} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono text-xs" style="color: var(--color-tron-text)">
-						<option value={0.1}>0.1</option><option value={1}>1</option><option value={5}>5</option><option value={10}>10</option><option value={25}>25</option>
+						<option value={0.1}>0.1</option><option value={0.5}>0.5</option><option value={1}>1</option><option value={5}>5</option><option value={10}>10</option><option value={25}>25</option>
 					</select> mm</label>
 					<label>Z <select bind:value={zAxis} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono text-xs" style="color: var(--color-tron-text)"><option value="leftZ">leftZ</option><option value="rightZ">rightZ</option></select></label>
 					<label>Slot <input bind:value={deckSlot} class="w-10 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono text-xs" style="color: var(--color-tron-text)" /></label>
