@@ -276,10 +276,18 @@
 								value={paramValues[p.variableName] ? 'true' : 'false'}
 							/>
 						{:else if p.type === 'bool'}
+							<!-- Hidden input ALWAYS posts the value. A bare checkbox submits
+							     nothing when unchecked, so toggling a default-on param OFF would
+							     be dropped and the server would fall back to the default. The
+							     visible checkbox only drives paramValues; the hidden field posts. -->
+							<input
+								type="hidden"
+								name="param_{p.variableName}"
+								value={paramValues[p.variableName] ? 'true' : 'false'}
+							/>
 							<label class="flex cursor-pointer items-start gap-2 rounded border border-[var(--color-tron-border)] bg-black/30 p-2 text-sm">
 								<input
 									type="checkbox"
-									name="param_{p.variableName}"
 									checked={!!paramValues[p.variableName]}
 									disabled={isReadonly}
 									onchange={(e) =>
