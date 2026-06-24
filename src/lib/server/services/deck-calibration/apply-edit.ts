@@ -46,16 +46,32 @@ export interface ApplyDeckEditResult {
 
 const n = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
-// ── Physical Z backstop (catches gross geometry runaway like the 2026-06 deck-004
-// Z-shift, where wells crept to 82mm on a 12.7mm-tall deck). No XY/magnitude cap —
-// real corrections can be large. This only rejects a well z placed physically
-// outside the labware's own body, generous enough to never block real work.
-const Z_BAND_MARGIN_MM = 40;
+// ── Physical-bounds backstop. NOT a magnitude cap (corrections can be large) — this
+// rejects only edits that push a well OFF the labware's own body. The OT-2 labware
+// schema requires every well coord within the labware: 0 ≤ x ≤ xDimension,
+// 0 ≤ y ≤ yDimension, 0 ≤ z. A jog past an edge (e.g. y = −0.5) makes the WHOLE def
+// fail registration on the robot ("Input should be a valid integer" / "≥ 0"), which
+// silently breaks move-to-hole wherever that deck is loaded (the 2026-06 deck-003
+// row-A bug). Z keeps a generous upper margin (catches gross runaway like deck-004's
+// 82mm-on-a-12.7mm-deck). Real holes are always well inside, so nothing legit is blocked.
+const Z_UPPER_MARGIN_MM = 40;
 
-function zBand(def: any): { min: number; max: number } | null {
-	const zDim = Number(def?.definition?.dimensions?.zDimension ?? 0);
-	if (!Number.isFinite(zDim) || zDim <= 0) return null;
-	return { min: -Z_BAND_MARGIN_MM, max: zDim + Z_BAND_MARGIN_MM };
+function dimsOf(def: any): { xMax: number; yMax: number; zMax: number } {
+	const d = def?.definition?.dimensions ?? {};
+	const x = Number(d.xDimension), y = Number(d.yDimension), z = Number(d.zDimension);
+	return {
+		xMax: Number.isFinite(x) && x > 0 ? x : Infinity,
+		yMax: Number.isFinite(y) && y > 0 ? y : Infinity,
+		zMax: Number.isFinite(z) && z > 0 ? z + Z_UPPER_MARGIN_MM : Infinity
+	};
+}
+
+/** Returns a reason string if `after` is off the labware body, else null. */
+function outOfBounds(after: Vec3, b: { xMax: number; yMax: number; zMax: number }): string | null {
+	if (after.x < 0 || after.x > b.xMax) return `x ${after.x.toFixed(2)}mm outside the labware [0, ${b.xMax}]`;
+	if (after.y < 0 || after.y > b.yMax) return `y ${after.y.toFixed(2)}mm outside the labware [0, ${b.yMax}]`;
+	if (after.z < 0 || after.z > b.zMax) return `z ${after.z.toFixed(2)}mm outside the labware [0, ${Number.isFinite(b.zMax) ? b.zMax.toFixed(1) : '∞'}]`;
+	return null;
 }
 
 export async function applyDeckEdit(input: ApplyDeckEditInput): Promise<ApplyDeckEditResult> {
@@ -71,12 +87,12 @@ export async function applyDeckEdit(input: ApplyDeckEditInput): Promise<ApplyDec
 	const before: Vec3 = { x: n(well.x), y: n(well.y), z: n(well.z) };
 	const after: Vec3 = { x: before.x + delta.x, y: before.y + delta.y, z: before.z + delta.z };
 
-	// Physical Z backstop only (no magnitude cap — corrections can be large).
-	const band = zBand(def);
-	if (band && (after.z < band.min || after.z > band.max)) {
+	// Physical-bounds backstop (no magnitude cap — corrections can be large).
+	const oob = outOfBounds(after, dimsOf(def));
+	if (oob) {
 		throw new Error(
-			`Rejected: ${wellName} z would become ${after.z.toFixed(2)}mm, outside the ` +
-				`labware's physical band [${band.min}, ${band.max.toFixed(1)}]mm. Likely a bad capture.`
+			`Rejected: ${wellName} ${oob}. A well can't be moved off the deck's physical body ` +
+				`(the robot rejects the whole def otherwise). Re-capture within the labware.`
 		);
 	}
 
@@ -179,7 +195,7 @@ export async function applyDeckEditBatch(
 	const def = (await LabwareDefinition.findOne({ loadName: deckLoadName }).lean()) as any;
 	if (!def) throw new Error(`Labware definition "${deckLoadName}" not found in labware_definitions.`);
 	const wells = def.definition?.wells ?? {};
-	const band = zBand(def);
+	const dims = dimsOf(def);
 
 	const now = new Date();
 	const failed: { wellName: string; reason: string }[] = [];
@@ -195,8 +211,9 @@ export async function applyDeckEditBatch(
 		}
 		const before: Vec3 = { x: n(well.x), y: n(well.y), z: n(well.z) };
 		const after: Vec3 = { x: before.x + delta.x, y: before.y + delta.y, z: before.z + delta.z };
-		if (band && (after.z < band.min || after.z > band.max)) {
-			failed.push({ wellName, reason: `z ${after.z.toFixed(2)}mm out of band [${band.min}, ${band.max.toFixed(1)}]` });
+		const oob = outOfBounds(after, dims);
+		if (oob) {
+			failed.push({ wellName, reason: oob });
 			continue;
 		}
 		setOps[`definition.wells.${wellName}.x`] = after.x;
