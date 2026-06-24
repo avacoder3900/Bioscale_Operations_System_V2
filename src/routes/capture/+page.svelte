@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { invalidateAll } from '$app/navigation';
 	import jsQR from 'jsqr';
 
 	let { data } = $props();
@@ -21,14 +20,25 @@
 	type DeployedProject = { id: string; name: string; version: string };
 	let deployedHere = $derived<DeployedProject[]>(data.deploymentsByPhase?.[phase] ?? []);
 
-	// Every station that currently holds an operator lock, regardless of who
-	// holds it — including our own dead session. A ghost lock (a browser tab that
-	// died without firing beforeunload) pins a station as "in use" with no live
-	// session and no TTL, so any operator can reset any locked station back to
-	// idle from the list below the station picker.
+	// Stations currently holding an operator lock that you could take over — any
+	// holder (another operator, or a dead browser tab with no live session, since
+	// the lock has no TTL), excluding the one you're already on. Each gets a
+	// "Connect" button that boots the holder once an admin authorizes it.
 	let lockedStations = $derived(
-		(data.stations ?? []).filter((s: any) => s.currentOperator && s.currentOperator._id)
+		(data.stations ?? []).filter(
+			(s: any) =>
+				s.currentOperator && s.currentOperator._id && s._id !== selectedStationId
+		)
 	);
+
+	// Admin-authorized takeover ("Connect" on an in-use station). takeoverStation
+	// holds the station being taken over; the rest carry the admin credentials
+	// being entered into the inline form.
+	let takeoverStation = $state<{ _id: string; name: string; holder: string } | null>(null);
+	let takeoverUsername = $state('');
+	let takeoverPassword = $state('');
+	let takeoverError = $state<string | null>(null);
+	let takeoverBusy = $state(false);
 
 	// Scanner-wedge buffer
 	let scanInput = $state('');
@@ -344,27 +354,53 @@
 		}
 	}
 
-	// Boot a ghost operator off a station. ?force=true clears the lock no matter
-	// who holds it; the server audits every force-release. After release we
-	// re-run the page load so the dropdown option flips back to selectable and
-	// the station returns to "waiting for an operator".
-	async function resetStation(stationId: string, name: string, holder: string) {
-		if (
-			!confirm(
-				`Reset "${name}"? This boots ${holder} off and returns the station to "waiting for an operator". Only do this if no one is actually using it.`
-			)
-		)
-			return;
+	// Open the admin-credentials form to take over an in-use station.
+	function openTakeover(stationId: string, name: string, holder: string) {
+		takeoverStation = { _id: stationId, name, holder };
+		takeoverUsername = '';
+		takeoverPassword = '';
+		takeoverError = null;
+	}
+
+	// Admin-authorized takeover: an admin/manager account's credentials boot the
+	// current holder and claim the lock for us server-side; we then connect. The
+	// takeover already set currentOperator to us, so connectToStation's own lock
+	// claim is a same-operator refresh (no 409).
+	async function submitTakeover() {
+		if (!takeoverStation || takeoverBusy) return;
+		const station = takeoverStation;
+		takeoverBusy = true;
+		takeoverError = null;
 		try {
 			const res = await fetch(
-				`/api/cv/stations/${encodeURIComponent(stationId)}/lock?force=true`,
-				{ method: 'DELETE' }
+				`/api/cv/stations/${encodeURIComponent(station._id)}/takeover`,
+				{
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						adminUsername: takeoverUsername,
+						adminPassword: takeoverPassword
+					})
+				}
 			);
-			if (!res.ok) throw new Error(`HTTP ${res.status}`);
-			await invalidateAll();
-			flashBanner('ok', `Station "${name}" released — now waiting for an operator.`);
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				takeoverError = body?.error || `Takeover failed (HTTP ${res.status})`;
+				return;
+			}
+			takeoverStation = null;
+			takeoverUsername = '';
+			takeoverPassword = '';
+			flashBanner(
+				'ok',
+				`Took over ${station.name}${body.bootedOperator ? ` from ${body.bootedOperator}` : ''} — connecting…`
+			);
+			selectedStationId = station._id;
+			await connectToStation(station._id);
 		} catch (e) {
-			flashBanner('err', `Failed to reset station: ${e instanceof Error ? e.message : e}`);
+			takeoverError = e instanceof Error ? e.message : 'Takeover failed';
+		} finally {
+			takeoverBusy = false;
 		}
 	}
 
@@ -1053,15 +1089,13 @@
 			</div>
 		</div>
 
-		<!-- Every station currently holding an operator lock — any holder,
-		     including our own dead session. A browser tab that dies without firing
-		     beforeunload leaves the lock set with no live session, so the station
-		     shows "in use" forever and its dropdown option stays disabled. Any
-		     operator can force-release any of these back to idle (audited
-		     server-side) to recover it. -->
+		<!-- Stations currently in use by another operator (or a dead browser tab,
+		     since the lock has no TTL). "Connect" boots the holder and takes over
+		     once an admin authorizes it — the dropdown option stays disabled until
+		     then. Every takeover is audited server-side. -->
 		{#if lockedStations.length > 0}
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3">
-				<p class="text-xs uppercase text-[var(--color-tron-text-secondary)]">In use — reset to free up</p>
+				<p class="text-xs uppercase text-[var(--color-tron-text-secondary)]">In use</p>
 				<ul class="mt-2 space-y-1">
 					{#each lockedStations as s (s._id)}
 						<li class="flex items-center justify-between gap-3 text-sm">
@@ -1071,15 +1105,60 @@
 							</span>
 							<button
 								type="button"
-								onclick={() => resetStation(s._id, s.name, s.currentOperator.username)}
-								title="Force-release this station back to idle. Use only when no one is actually on it."
-								class="shrink-0 rounded border border-[var(--color-tron-red,#ff3366)] px-2 py-0.5 text-xs text-[var(--color-tron-red,#ff3366)] hover:bg-[rgba(255,51,102,0.08)]"
+								onclick={() => openTakeover(s._id, s.name, s.currentOperator.username)}
+								title="Boot the current operator and take over this station (an admin must authorize)."
+								class="shrink-0 rounded border border-[var(--color-tron-cyan)] px-2 py-0.5 text-xs text-[var(--color-tron-cyan)] hover:bg-[rgba(0,229,255,0.08)]"
 							>
-								Reset
+								Connect
 							</button>
 						</li>
 					{/each}
 				</ul>
+
+				{#if takeoverStation}
+					<form
+						class="mt-3 space-y-2 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] p-3"
+						onsubmit={(e) => { e.preventDefault(); submitTakeover(); }}
+					>
+						<p class="text-sm text-[var(--color-tron-text-secondary)]">
+							Take over <span class="text-[var(--color-tron-cyan)]">{takeoverStation.name}</span>
+							from {takeoverStation.holder}? An admin must authorize.
+						</p>
+						<input
+							type="text"
+							bind:value={takeoverUsername}
+							placeholder="Admin username"
+							autocomplete="off"
+							class="tron-input w-full"
+						/>
+						<input
+							type="password"
+							bind:value={takeoverPassword}
+							placeholder="Admin password"
+							autocomplete="off"
+							class="tron-input w-full"
+						/>
+						{#if takeoverError}
+							<p class="text-xs text-[var(--color-tron-red,#ff3366)]">{takeoverError}</p>
+						{/if}
+						<div class="flex justify-end gap-2">
+							<button
+								type="button"
+								onclick={() => (takeoverStation = null)}
+								class="rounded border border-[var(--color-tron-border)] px-3 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)]"
+							>
+								Cancel
+							</button>
+							<button
+								type="submit"
+								disabled={takeoverBusy || !takeoverUsername || !takeoverPassword}
+								class="rounded border border-[var(--color-tron-cyan)] px-3 py-1 text-xs text-[var(--color-tron-cyan)] hover:bg-[rgba(0,229,255,0.08)] disabled:opacity-40"
+							>
+								{takeoverBusy ? 'Connecting…' : 'Connect'}
+							</button>
+						</div>
+					</form>
+				{/if}
 			</div>
 		{/if}
 
