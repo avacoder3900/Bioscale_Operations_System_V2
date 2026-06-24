@@ -21,15 +21,13 @@
 	type DeployedProject = { id: string; name: string; version: string };
 	let deployedHere = $derived<DeployedProject[]>(data.deploymentsByPhase?.[phase] ?? []);
 
-	// Stations whose operator lock is held by someone other than us. Drives the
-	// "in use by another operator" reset list below the station picker — a ghost
-	// lock (browser tab that died without firing beforeunload) otherwise pins a
-	// station as occupied forever with no way to recover it from this page.
-	let stationsHeldByOthers = $derived(
-		(data.stations ?? []).filter(
-			(s: any) =>
-				s.currentOperator && s.currentOperator._id && s.currentOperator._id !== data.user._id
-		)
+	// Every station that currently holds an operator lock, regardless of who
+	// holds it — including our own dead session. A ghost lock (a browser tab that
+	// died without firing beforeunload) pins a station as "in use" with no live
+	// session and no TTL, so any operator can reset any locked station back to
+	// idle from the list below the station picker.
+	let lockedStations = $derived(
+		(data.stations ?? []).filter((s: any) => s.currentOperator && s.currentOperator._id)
 	);
 
 	// Scanner-wedge buffer
@@ -1055,20 +1053,21 @@
 			</div>
 		</div>
 
-		<!-- Stations whose lock is held by another operator. A browser tab that
-		     dies without firing beforeunload leaves the lock set with no live
-		     session, so the station shows "in use" forever and its dropdown
-		     option stays disabled. Any operator can force-release it back to idle
-		     (audited server-side) to recover it. -->
-		{#if stationsHeldByOthers.length > 0}
+		<!-- Every station currently holding an operator lock — any holder,
+		     including our own dead session. A browser tab that dies without firing
+		     beforeunload leaves the lock set with no live session, so the station
+		     shows "in use" forever and its dropdown option stays disabled. Any
+		     operator can force-release any of these back to idle (audited
+		     server-side) to recover it. -->
+		{#if lockedStations.length > 0}
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3">
-				<p class="text-xs uppercase text-[var(--color-tron-text-secondary)]">In use by another operator</p>
+				<p class="text-xs uppercase text-[var(--color-tron-text-secondary)]">In use — reset to free up</p>
 				<ul class="mt-2 space-y-1">
-					{#each stationsHeldByOthers as s (s._id)}
+					{#each lockedStations as s (s._id)}
 						<li class="flex items-center justify-between gap-3 text-sm">
 							<span class="text-[var(--color-tron-text-secondary)]">
 								<span class="text-[var(--color-tron-cyan)]">{s.name}</span>
-								— {s.currentOperator.username}{#if s.currentOperator.since} since {new Date(s.currentOperator.since).toLocaleString()}{/if}
+								— {s.currentOperator.username}{#if s.currentOperator._id === data.user._id} (you){/if}{#if s.currentOperator.since} since {new Date(s.currentOperator.since).toLocaleString()}{/if}
 							</span>
 							<button
 								type="button"
