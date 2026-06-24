@@ -206,6 +206,21 @@
 
 	// ── Captured / manual offset ─────────────────────────────────────────────────
 	let dx = $state(0), dy = $state(0), dz = $state(0);
+
+	// Set-absolute-position (vs offset): type an exact x/y/z for a single selected
+	// hole. Prefilled from that hole's current coords when exactly one is selected.
+	let setX = $state(0), setY = $state(0), setZ = $state(0);
+	$effect(() => {
+		if (selection.size === 1) {
+			const w = wellByName.get([...selection][0]);
+			if (w) { setX = +w.x.toFixed(3); setY = +w.y.toFixed(3); setZ = +w.z.toFixed(3); }
+		}
+	});
+
+	// Session undo stack of applied shifts (offset / global / set-position). Each
+	// entry is the wells + the delta that was applied, so undo = apply the inverse.
+	type Vec3 = { x: number; y: number; z: number };
+	let undoStack = $state<{ wellNames: string[]; delta: Vec3; label: string }[]>([]);
 	// nominal carries the tip-state it was measured in. The OT-2 position readback
 	// (savePosition) is the pipette CRITICAL POINT, which drops by the tip length
 	// (~50mm) the moment a tip is picked up. dz = live − nominal is only a true
@@ -241,18 +256,55 @@
 		}
 	}
 
+	// Core apply: one delta → many wells (Mongo via applyBatch). Records the op on
+	// the undo stack unless this IS an undo. Returns the action result (or null).
+	async function applyDelta(wellNames: string[], d: Vec3, label: string, record = true) {
+		const r = await postAction('applyBatch', {
+			deckLoadName: data.selected,
+			wellNames: JSON.stringify(wellNames),
+			dx: String(d.x), dy: String(d.y), dz: String(d.z),
+			robotId: selectedRobotId || ''
+		});
+		if (r && record) undoStack = [...undoStack, { wellNames, delta: d, label }];
+		return r;
+	}
+
 	async function applyToSelection() {
 		if (selection.size === 0) { errMsg = 'Select at least one hole'; return; }
 		if (dx === 0 && dy === 0 && dz === 0) { errMsg = 'Capture or enter a non-zero offset'; return; }
-		const r = await postAction('applyBatch', {
-			deckLoadName: data.selected,
-			wellNames: JSON.stringify([...selection]),
-			dx: String(dx), dy: String(dy), dz: String(dz),
-			robotId: selectedRobotId || ''
-		});
+		const r = await applyDelta([...selection], { x: dx, y: dy, z: dz }, `offset (${dx}, ${dy}, ${dz})`);
 		if (r) {
 			msg = applyMsg('Applied', r);
 			clearSelection();
+			if (runId && !slotOrigin) deckDirty = true;
+		}
+	}
+
+	// Set a single selected hole to an EXACT position (computes the delta vs its
+	// current coords, then applies via the same engine so history/bounds/undo work).
+	async function applyAbsolute() {
+		if (selection.size !== 1) { errMsg = 'Select exactly one hole to set its position'; return; }
+		const name = [...selection][0];
+		const w = wellByName.get(name);
+		if (!w) { errMsg = 'Selected hole not found'; return; }
+		const d = { x: +(setX - w.x).toFixed(3), y: +(setY - w.y).toFixed(3), z: +(setZ - w.z).toFixed(3) };
+		if (d.x === 0 && d.y === 0 && d.z === 0) { errMsg = 'Position equals current — nothing to change'; return; }
+		const r = await applyDelta([name], d, `set ${name} → (${setX}, ${setY}, ${setZ})`);
+		if (r) {
+			msg = `Set ${name} to (${setX}, ${setY}, ${setZ}) — saved to BIMS.${runId && !slotOrigin ? ' Reload deck to verify.' : ''}`;
+			if (runId && !slotOrigin) deckDirty = true;
+		}
+	}
+
+	// Undo the last applied shift (offset / global / set-position) by applying its
+	// inverse delta. LIFO across the session; not recorded as a new undo entry.
+	async function undoLast() {
+		const last = undoStack[undoStack.length - 1];
+		if (!last) { errMsg = 'Nothing to undo'; return; }
+		const r = await applyDelta(last.wellNames, { x: -last.delta.x, y: -last.delta.y, z: -last.delta.z }, '', false);
+		if (r) {
+			undoStack = undoStack.slice(0, -1);
+			msg = `Undid ${last.label} on ${r.applied} hole(s).`;
 			if (runId && !slotOrigin) deckDirty = true;
 		}
 	}
@@ -282,12 +334,7 @@
 		if (names.length === 0) { errMsg = 'No holes to shift'; return; }
 		const label = roleFilter === 'all' ? 'the entire deck' : `all ${roleFilter} holes`;
 		if (!confirm(`Shift ${names.length} holes (${label}) by dx=${dx} dy=${dy} dz=${dz}? This translates the whole grid.`)) return;
-		const r = await postAction('applyBatch', {
-			deckLoadName: data.selected,
-			wellNames: JSON.stringify(names),
-			dx: String(dx), dy: String(dy), dz: String(dz),
-			robotId: selectedRobotId || ''
-		});
+		const r = await applyDelta(names, { x: dx, y: dy, z: dz }, `global shift (${dx}, ${dy}, ${dz})`);
 		if (r) {
 			msg = applyMsg('Global shift applied', r);
 			clearSelection();
@@ -961,6 +1008,23 @@
 					⤧ Shift whole grid by this offset {roleFilter !== 'all' ? `(${roleFilter} only)` : ''}
 				</button>
 				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Anchor: jog to one hole (e.g. a corner) → Capture → Shift whole grid translates every hole by that offset.</p>
+				<button type="button" onclick={undoLast} disabled={busy || undoStack.length === 0} class="mt-2 w-full rounded border border-amber-500/50 bg-amber-900/15 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-900/25 disabled:opacity-40" title="Revert the last applied shift (offset, global, or set-position)">
+					↶ Undo last {undoStack.length ? `(${undoStack.length})` : ''}
+				</button>
+			</section>
+
+			<!-- Set absolute position (single hole) -->
+			<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Set position → one hole</h2>
+				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Type an EXACT x/y/z (deck mm) for the single selected hole — not a change. Prefilled with its current coords; edit and apply.</p>
+				<div class="mt-2 grid grid-cols-3 gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
+					<label>x <input type="number" step="0.01" bind:value={setX} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+					<label>y <input type="number" step="0.01" bind:value={setY} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+					<label>z <input type="number" step="0.01" bind:value={setZ} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+				</div>
+				<button type="button" onclick={applyAbsolute} disabled={busy || selCount !== 1} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-sm font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40" title="Select exactly one hole">
+					{selCount === 1 ? `Set ${[...selection][0]} to this position` : 'Select exactly one hole'}
+				</button>
 			</section>
 
 			<!-- PRD 5: per-robot global deck offset -->
