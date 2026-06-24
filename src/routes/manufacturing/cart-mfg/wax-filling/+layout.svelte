@@ -232,28 +232,32 @@
 
 	{#if selectedRobotId}
 		{@const sh = healthFor(selectedRobotId)}
-		{#if sh && (sh.status === 'hung' || sh.status === 'offline')}
-			{@const selName = data.dashboardState.find((r) => r.robotId === selectedRobotId)?.name ?? 'this robot'}
-			<div class="mt-3 flex flex-wrap items-center gap-3 rounded-lg border {sh.status === 'hung' ? 'border-red-500/50 bg-red-900/20' : 'border-gray-500/40 bg-gray-800/30'} px-4 py-3">
-				<span class="h-2.5 w-2.5 rounded-full {healthDotClass(sh.status)}"></span>
-				<div class="flex-1 text-sm">
-					<span class="font-semibold {sh.status === 'hung' ? 'text-red-300' : 'text-gray-300'}">{sh.label}</span>
-					<span class="text-[var(--color-tron-text-secondary)]"> — {sh.detail}</span>
-				</div>
-				{#if sh.status === 'hung'}
-					<button
-						type="button"
-						onclick={() => restartServer(selectedRobotId, selName)}
-						disabled={restartingId === selectedRobotId}
-						class="min-h-[36px] rounded border border-red-500/60 bg-red-900/30 px-4 py-1.5 text-sm font-medium text-red-200 transition-colors hover:bg-red-900/50 disabled:opacity-50"
-					>
-						{restartingId === selectedRobotId ? 'Restarting…' : 'Restart robot server'}
-					</button>
-				{/if}
+		{@const selName = data.dashboardState.find((r) => r.robotId === selectedRobotId)?.name ?? 'this robot'}
+		{@const isHung = sh?.status === 'hung'}
+		{@const isOffline = sh?.status === 'offline'}
+		<!-- Restart-server control is ALWAYS available for the selected robot, not just
+		     when health reports "hung" — the TaskGroup engine hang can wedge a robot the
+		     health probe still reads as ready, so operators need the button on hand. Loud
+		     red only when actually hung; subdued otherwise so normal runs aren't alarmed. -->
+		<div class="mt-3 flex flex-wrap items-center gap-3 rounded-lg border {isHung ? 'border-red-500/50 bg-red-900/20' : isOffline ? 'border-gray-500/40 bg-gray-800/30' : 'border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]'} px-4 py-3">
+			<span class="h-2.5 w-2.5 rounded-full {healthDotClass(sh?.status)}"></span>
+			<div class="flex-1 text-sm">
+				<span class="font-semibold {isHung ? 'text-red-300' : isOffline ? 'text-gray-300' : 'text-[var(--color-tron-text)]'}">{sh?.label ?? 'Robot'}</span>
+				{#if sh?.detail}<span class="text-[var(--color-tron-text-secondary)]"> — {sh.detail}</span>{/if}
 			</div>
-			{#if restartMsg}
-				<p class="mt-2 text-xs text-[var(--color-tron-text-secondary)]">{restartMsg}</p>
-			{/if}
+			<button
+				type="button"
+				onclick={() => restartServer(selectedRobotId, selName)}
+				disabled={restartingId === selectedRobotId}
+				class="min-h-[36px] rounded border px-4 py-1.5 text-sm font-medium transition-colors disabled:opacity-50 {isHung
+					? 'border-red-500/60 bg-red-900/30 text-red-200 hover:bg-red-900/50'
+					: 'border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-text)]'}"
+			>
+				{restartingId === selectedRobotId ? 'Restarting…' : 'Restart robot server'}
+			</button>
+		</div>
+		{#if restartMsg}
+			<p class="mt-2 text-xs text-[var(--color-tron-text-secondary)]">{restartMsg}</p>
 		{/if}
 	{/if}
 
