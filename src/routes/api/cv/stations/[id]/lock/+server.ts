@@ -13,7 +13,6 @@ import { connectDB } from '$lib/server/db/connection.js';
 import { CaptureStation } from '$lib/server/db/models/capture-station.js';
 import { AuditLog } from '$lib/server/db/models/audit-log.js';
 import { generateId } from '$lib/server/db/utils.js';
-import { hasPermission } from '$lib/server/permissions';
 import type { RequestHandler } from './$types';
 import type { LockStationResponse } from '$lib/types/capture-station';
 
@@ -83,16 +82,15 @@ export const DELETE: RequestHandler = async ({ params, locals, url }) => {
 		return json({ ok: true } satisfies LockStationResponse);
 	}
 
-	// Admin force-release path (story D2): the cv:write / manufacturing:write
-	// admin override of the same-holder check. ?force=true unblocks the
-	// detail page's "Force release" button so operators stuck holding a
-	// dead browser tab can be unstuck without restarting the agent.
+	// Force-release path: ?force=true lets ANY authenticated operator clear the
+	// lock, not just the holder. A browser tab that dies without firing
+	// beforeunload leaves currentOperator set with no live session, pinning the
+	// station as "in use" forever. Letting any operator reset it from the
+	// /capture page (and the /cv/stations detail page) is the recovery path;
+	// every force-release is audited below for accountability.
 	const isForce = url.searchParams.get('force') === 'true';
-	const isAdmin =
-		hasPermission(locals.user, 'cv:write') ||
-		hasPermission(locals.user, 'manufacturing:write');
 
-	if (holder._id !== locals.user._id && !(isForce && isAdmin)) {
+	if (holder._id !== locals.user._id && !isForce) {
 		return json({ error: 'Only the current holder can release this lock' }, { status: 403 });
 	}
 
@@ -110,7 +108,7 @@ export const DELETE: RequestHandler = async ({ params, locals, url }) => {
 		changedFields: ['currentOperator'],
 		changedAt: new Date(),
 		changedBy: locals.user.username,
-		reason: isForce && holder._id !== locals.user._id ? 'admin-force-release' : 'lock-release'
+		reason: holder._id !== locals.user._id ? 'force-release' : 'lock-release'
 	});
 
 	return json({ ok: true } satisfies LockStationResponse);

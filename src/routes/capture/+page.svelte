@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import { invalidateAll } from '$app/navigation';
 	import jsQR from 'jsqr';
 
 	let { data } = $props();
@@ -19,6 +20,17 @@
 	// the operator changes the phase dropdown.
 	type DeployedProject = { id: string; name: string; version: string };
 	let deployedHere = $derived<DeployedProject[]>(data.deploymentsByPhase?.[phase] ?? []);
+
+	// Stations whose operator lock is held by someone other than us. Drives the
+	// "in use by another operator" reset list below the station picker — a ghost
+	// lock (browser tab that died without firing beforeunload) otherwise pins a
+	// station as occupied forever with no way to recover it from this page.
+	let stationsHeldByOthers = $derived(
+		(data.stations ?? []).filter(
+			(s: any) =>
+				s.currentOperator && s.currentOperator._id && s.currentOperator._id !== data.user._id
+		)
+	);
 
 	// Scanner-wedge buffer
 	let scanInput = $state('');
@@ -331,6 +343,30 @@
 			lockedStationId = null;
 			fetch(`/api/cv/stations/${encodeURIComponent(releaseId)}/lock`, { method: 'DELETE' })
 				.catch(() => null);
+		}
+	}
+
+	// Boot a ghost operator off a station. ?force=true clears the lock no matter
+	// who holds it; the server audits every force-release. After release we
+	// re-run the page load so the dropdown option flips back to selectable and
+	// the station returns to "waiting for an operator".
+	async function resetStation(stationId: string, name: string, holder: string) {
+		if (
+			!confirm(
+				`Reset "${name}"? This boots ${holder} off and returns the station to "waiting for an operator". Only do this if no one is actually using it.`
+			)
+		)
+			return;
+		try {
+			const res = await fetch(
+				`/api/cv/stations/${encodeURIComponent(stationId)}/lock?force=true`,
+				{ method: 'DELETE' }
+			);
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			await invalidateAll();
+			flashBanner('ok', `Station "${name}" released — now waiting for an operator.`);
+		} catch (e) {
+			flashBanner('err', `Failed to reset station: ${e instanceof Error ? e.message : e}`);
 		}
 	}
 
@@ -1018,6 +1054,35 @@
 				</div>
 			</div>
 		</div>
+
+		<!-- Stations whose lock is held by another operator. A browser tab that
+		     dies without firing beforeunload leaves the lock set with no live
+		     session, so the station shows "in use" forever and its dropdown
+		     option stays disabled. Any operator can force-release it back to idle
+		     (audited server-side) to recover it. -->
+		{#if stationsHeldByOthers.length > 0}
+			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3">
+				<p class="text-xs uppercase text-[var(--color-tron-text-secondary)]">In use by another operator</p>
+				<ul class="mt-2 space-y-1">
+					{#each stationsHeldByOthers as s (s._id)}
+						<li class="flex items-center justify-between gap-3 text-sm">
+							<span class="text-[var(--color-tron-text-secondary)]">
+								<span class="text-[var(--color-tron-cyan)]">{s.name}</span>
+								— {s.currentOperator.username}{#if s.currentOperator.since} since {new Date(s.currentOperator.since).toLocaleString()}{/if}
+							</span>
+							<button
+								type="button"
+								onclick={() => resetStation(s._id, s.name, s.currentOperator.username)}
+								title="Force-release this station back to idle. Use only when no one is actually on it."
+								class="shrink-0 rounded border border-[var(--color-tron-red,#ff3366)] px-2 py-0.5 text-xs text-[var(--color-tron-red,#ff3366)] hover:bg-[rgba(255,51,102,0.08)]"
+							>
+								Reset
+							</button>
+						</li>
+					{/each}
+				</ul>
+			</div>
+		{/if}
 
 		<!-- Camera -->
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-black p-2">

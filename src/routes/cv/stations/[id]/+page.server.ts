@@ -3,7 +3,8 @@
  *
  * Form actions:
  *   rename            — PATCH name + location via /api/cv/stations/[id]
- *   forceRelease      — DELETE /api/cv/stations/[id]/lock?force=true
+ *   forceRelease      — clears currentOperator inline (audit reason 'force-release'),
+ *                       same logical action as DELETE /api/cv/stations/[id]/lock?force=true
  *   rotateSecret      — POST /api/cv/stations/[id]/rotate-secret
  *   deregister        — DELETE /api/cv/stations/[id]
  *
@@ -173,7 +174,7 @@ export const actions: Actions = {
 			changedFields: ['currentOperator'],
 			changedAt: new Date(),
 			changedBy: locals.user.username,
-			reason: 'admin-force-release'
+			reason: 'force-release'
 		});
 
 		return { ok: true, action: 'forceRelease' };
