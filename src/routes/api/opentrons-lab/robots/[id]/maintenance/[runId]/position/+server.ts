@@ -14,6 +14,9 @@ import { requirePermission } from '$lib/server/permissions';
 import { getRobot } from '$lib/server/opentrons/proxy';
 import { getCurrentPosition } from '$lib/server/opentrons/maintenance';
 
+// savePosition routes through the bridge (up to ~30s); exceed Vercel's ~10s default.
+export const config = { maxDuration: 45 };
+
 export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!locals.user) error(401, 'Not authenticated');
 	requirePermission(locals.user, 'manufacturing:read');

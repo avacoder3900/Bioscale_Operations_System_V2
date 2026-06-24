@@ -8,6 +8,9 @@ import type { RequestHandler } from './$types';
 import { requirePermission } from '$lib/server/permissions';
 import { getRobot, robotPost } from '$lib/server/opentrons/proxy';
 
+// Control actions route through the bridge (up to ~30s); exceed Vercel's ~10s default.
+export const config = { maxDuration: 45 };
+
 const VALID_ACTIONS = ['play', 'pause', 'stop', 'resume'] as const;
 
 // The OT-2 has no 'resume' actionType — a paused run is resumed with 'play'.

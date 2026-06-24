@@ -9,6 +9,9 @@ import type { RequestHandler } from './$types';
 import { requirePermission } from '$lib/server/permissions';
 import { getRobot, robotGet, robotPatch } from '$lib/server/opentrons/proxy';
 
+// Status read + stop both route through the bridge (up to ~30s); exceed Vercel's default.
+export const config = { maxDuration: 45 };
+
 export const GET: RequestHandler = async ({ params, locals }) => {
 	if (!locals.user) error(401, 'Not authenticated');
 	requirePermission(locals.user, 'manufacturing:read');

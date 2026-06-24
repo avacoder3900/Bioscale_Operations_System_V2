@@ -12,6 +12,9 @@ import { jog, type JogAxis } from '$lib/server/opentrons/maintenance';
 
 const VALID_AXES: JogAxis[] = ['x', 'y', 'leftZ', 'rightZ'];
 
+// Each jog is a bridge round-trip (up to ~30s); exceed Vercel's ~10s default.
+export const config = { maxDuration: 45 };
+
 export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!locals.user) error(401, 'Not authenticated');
 	requirePermission(locals.user, 'manufacturing:write');

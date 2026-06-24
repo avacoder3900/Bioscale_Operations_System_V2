@@ -12,6 +12,10 @@ import { getRobot } from '$lib/server/opentrons/proxy';
 import { connectDB, LabwareDefinition } from '$lib/server/db';
 import { registerLabwareDefinition, loadLabwareInRun } from '$lib/server/opentrons/maintenance';
 
+// Registers the full (576-well) deck def + loadLabware over the bridge — two
+// round-trips with a large payload; exceed Vercel's ~10s default.
+export const config = { maxDuration: 60 };
+
 export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!locals.user) error(401, 'Not authenticated');
 	requirePermission(locals.user, 'manufacturing:write');

@@ -10,6 +10,9 @@ import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { getRobot } from '$lib/server/opentrons/proxy';
 import { closeMaintenanceRun } from '$lib/server/opentrons/maintenance';
 
+// Closing routes through the bridge (up to ~30s); exceed Vercel's ~10s default.
+export const config = { maxDuration: 45 };
+
 export const DELETE: RequestHandler = async ({ params, locals }) => {
 	if (!locals.user) error(401, 'Not authenticated');
 	requirePermission(locals.user, 'manufacturing:write');

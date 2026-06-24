@@ -11,6 +11,10 @@ import { requirePermission } from '$lib/server/permissions';
 import { getRobot } from '$lib/server/opentrons/proxy';
 import { moveTo } from '$lib/server/opentrons/maintenance';
 
+// Safe-arc move (lift, travel, descend) over the bridge can take longer than
+// Vercel's ~10s default — this is what "Move to hole" uses. Give it headroom.
+export const config = { maxDuration: 60 };
+
 export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!locals.user) error(401, 'Not authenticated');
 	requirePermission(locals.user, 'manufacturing:write');

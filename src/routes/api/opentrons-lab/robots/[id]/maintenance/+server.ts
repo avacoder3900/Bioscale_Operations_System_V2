@@ -21,6 +21,10 @@ import {
 	loadPipetteInRun
 } from '$lib/server/opentrons/maintenance';
 
+// Opening a run can chain several bridge round-trips (clear stale run + discover/
+// load pipette); give Vercel headroom so it isn't killed (FUNCTION_INVOCATION_TIMEOUT).
+export const config = { maxDuration: 90 };
+
 export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!locals.user) error(401, 'Not authenticated');
 	requirePermission(locals.user, 'manufacturing:write');
