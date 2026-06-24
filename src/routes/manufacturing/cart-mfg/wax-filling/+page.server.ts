@@ -419,6 +419,43 @@ async function resolveWaxRunId(data: FormData): Promise<string | null> {
 	return run ? String(run._id) : null;
 }
 
+/**
+ * Best-effort stop of the OT-2 run backing a wax run, BEFORE we mark the run
+ * aborted in BIMS. Without this, abort/cancel only updated the database — the
+ * UI exited but the physical robot kept executing the protocol, leaving an
+ * un-stoppable "running" run on the device.
+ *
+ * Resilient by design: a run that never reached the robot, an already-terminal
+ * run (404/409/"not found"), or an unreachable robot must NOT block the
+ * operator's abort. Returns a human warning string when the stop couldn't be
+ * confirmed (so the UI can tell the operator to check the device), else null.
+ *
+ * `run` must have been selected with `opentronsRunId` and `robot`.
+ */
+async function stopRobotRun(run: any): Promise<string | null> {
+	const opentronsRunId: string | undefined = run?.opentronsRunId;
+	const robotId: string | undefined = run?.robot?._id;
+	if (!opentronsRunId || !robotId) return null; // never started on a robot
+
+	try {
+		const robot = await getRobot(robotId);
+		if (!robot) return `Robot ${robotId} is offline — confirm the run is stopped on the device.`;
+		const res = await robotPost(robot, `/runs/${opentronsRunId}/actions`, {
+			data: { actionType: 'stop' }
+		});
+		if (res.ok) return null;
+		const body = await res.json().catch(() => ({}));
+		const detail = (body as any)?.errors?.[0]?.detail ?? `robot returned ${res.status}`;
+		// Already finished/cleared → nothing to stop, treat as success.
+		if (res.status === 404 || res.status === 409 || /not found|not allowed|terminal/i.test(String(detail))) {
+			return null;
+		}
+		return `Couldn't stop the run on the robot (${detail}) — confirm on the device.`;
+	} catch (e) {
+		return `Couldn't reach the robot to stop the run (${e instanceof Error ? e.message : 'unknown'}) — confirm on the device.`;
+	}
+}
+
 export const actions: Actions = {
 	/** Create a new wax filling run — starts directly in Loading (the setup
 	 *  confirmation screen was removed in WAX-FLOW-3). */
@@ -1300,8 +1337,11 @@ export const actions: Actions = {
 			return fail(400, { error: 'Cannot cancel: the OT-2 has already completed this run. Reject individual cartridges at QC instead.' });
 		}
 
-		const runBeforeCancel = await WaxFillingRun.findById(runId).select('cartridgeIds').lean() as any;
+		const runBeforeCancel = await WaxFillingRun.findById(runId).select('cartridgeIds opentronsRunId robot').lean() as any;
 		const cancelScannedIds: string[] = (runBeforeCancel?.cartridgeIds ?? []) as string[];
+
+		// Actually halt the OT-2 first — otherwise the robot keeps running.
+		const cancelRobotWarning = await stopRobotRun(runBeforeCancel);
 
 		await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
@@ -1343,7 +1383,7 @@ export const actions: Actions = {
 			operator: locals.user?.username, reason
 		});
 
-		return { success: true };
+		return { success: true, warning: cancelRobotWarning ?? undefined };
 	},
 
 	abortRun: async ({ request, locals }) => {
@@ -1363,8 +1403,11 @@ export const actions: Actions = {
 			return fail(400, { error: 'Cannot abort: the OT-2 has already completed this run. Reject individual cartridges at QC instead.' });
 		}
 
-		const runBeforeAbort = await WaxFillingRun.findById(runId).select('cartridgeIds').lean() as any;
+		const runBeforeAbort = await WaxFillingRun.findById(runId).select('cartridgeIds opentronsRunId robot').lean() as any;
 		const abortScannedIds: string[] = (runBeforeAbort?.cartridgeIds ?? []) as string[];
+
+		// Actually halt the OT-2 first — otherwise the robot keeps running.
+		const abortRobotWarning = await stopRobotRun(runBeforeAbort);
 
 		await WaxFillingRun.findByIdAndUpdate(runId, {
 			$set: { status: 'aborted', abortReason: reason, runEndTime: now }
@@ -1403,7 +1446,7 @@ export const actions: Actions = {
 			operator: locals.user?.username, reason
 		});
 
-		return { success: true };
+		return { success: true, warning: abortRobotWarning ?? undefined };
 	},
 
 

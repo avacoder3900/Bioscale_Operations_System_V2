@@ -360,6 +360,36 @@ async function resolveRunId(data: FormData): Promise<string | null> {
 	return run ? String(run._id) : null;
 }
 
+/**
+ * Best-effort stop of the OT-2 run backing a reagent run, BEFORE marking it
+ * aborted/cancelled in BIMS. Without this the UI exited but the robot kept
+ * running. Resilient: never-started, already-terminal, or unreachable cases
+ * don't block the operator. Returns a warning string when the stop couldn't be
+ * confirmed, else null. `run` must be selected with `opentronsRunId` + `robot`.
+ */
+async function stopRobotRun(run: any): Promise<string | null> {
+	const opentronsRunId: string | undefined = run?.opentronsRunId;
+	const robotId: string | undefined = run?.robot?._id;
+	if (!opentronsRunId || !robotId) return null; // never started on a robot
+
+	try {
+		const robot = await getRobot(robotId);
+		if (!robot) return `Robot ${robotId} is offline — confirm the run is stopped on the device.`;
+		const res = await robotPost(robot, `/runs/${opentronsRunId}/actions`, {
+			data: { actionType: 'stop' }
+		});
+		if (res.ok) return null;
+		const body = await res.json().catch(() => ({}));
+		const detail = (body as any)?.errors?.[0]?.detail ?? `robot returned ${res.status}`;
+		if (res.status === 404 || res.status === 409 || /not found|not allowed|terminal/i.test(String(detail))) {
+			return null;
+		}
+		return `Couldn't stop the run on the robot (${detail}) — confirm on the device.`;
+	} catch (e) {
+		return `Couldn't reach the robot to stop the run (${e instanceof Error ? e.message : 'unknown'}) — confirm on the device.`;
+	}
+}
+
 export const actions: Actions = {
 	/** Create a new run */
 	createRun: async ({ request, locals, url }) => {
@@ -1455,10 +1485,13 @@ export const actions: Actions = {
 		// Once the OT-2 has finished (robotReleasedAt set), the run is committed
 		// and can no longer be cancelled. Per-cartridge rejection at inspection
 		// or sealing remains available.
-		const existing = await ReagentBatchRecord.findById(runId).select('robotReleasedAt').lean() as any;
+		const existing = await ReagentBatchRecord.findById(runId).select('robotReleasedAt opentronsRunId robot').lean() as any;
 		if (existing?.robotReleasedAt) {
 			return fail(400, { error: 'Cannot cancel: the OT-2 has already completed this run. Reject individual cartridges at inspection or sealing instead.' });
 		}
+
+		// Actually halt the OT-2 first — otherwise the robot keeps running.
+		const cancelRobotWarning = await stopRobotRun(existing);
 
 		await ReagentBatchRecord.findByIdAndUpdate(runId, {
 			$set: { status: 'Cancelled', abortReason: reason, runEndTime: now }
@@ -1485,7 +1518,7 @@ export const actions: Actions = {
 			newData: { status: 'Cancelled', abortReason: reason }
 		});
 
-		return { success: true };
+		return { success: true, warning: cancelRobotWarning ?? undefined };
 	},
 
 	/** Abort a run */
@@ -1498,6 +1531,10 @@ export const actions: Actions = {
 		const reason = (data.get('reason') as string) || 'Aborted';
 		const photoUrl = (data.get('photoUrl') as string) || undefined;
 		const now = new Date();
+
+		// Actually halt the OT-2 first — otherwise the robot keeps running.
+		const abortTarget = await ReagentBatchRecord.findById(runId).select('opentronsRunId robot').lean() as any;
+		const abortRobotWarning = await stopRobotRun(abortTarget);
 
 		await ReagentBatchRecord.findByIdAndUpdate(runId, {
 			$set: {
@@ -1529,7 +1566,7 @@ export const actions: Actions = {
 			newData: { status: 'Aborted', abortReason: reason }
 		});
 
-		return { success: true };
+		return { success: true, warning: abortRobotWarning ?? undefined };
 	},
 
 	/** Reset to deck loading — clear cartridges and seal batches, go back to Loading */
