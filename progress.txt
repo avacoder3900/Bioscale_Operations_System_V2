@@ -2820,3 +2820,29 @@ hidden input that ALWAYS carries true/false (same pattern already used for tipra
 the visible checkbox just drives state. Affects wax + reagent (shared panel).
 
 All committed + pushed to master; npm run check stayed at the 11-error baseline throughout.
+
+=== 2026-06-24 (cont.) — Vercel maxDuration fix + Quick-Seal shortcut ===
+DECK-CAL / RUN-CONTROL "FUNCTION_INVOCATION_TIMEOUT" (Vercel): on the deployed app the Studio
+jog/move + run-control calls go over the bridge (each robot round-trip up to ~30s), but several
+endpoints had no `export const config = { maxDuration }` so they hit Vercel's ~10s default and
+500'd. Added maxDuration to the 8 unprotected endpoints: maintenance open(90), close(45), jog(45),
+move-to(60 — used by "Move to hole"'s absolute-coordinate path), position(45), load-labware(60),
+runs/[rid] GET+stop(45), runs/[rid]/actions(45). (move-to-well/home/pick-up-tip/calibrate-tip
+already had it.) Note: the bridge itself still caps a single robot call at 30s (BRIDGE_TIMEOUT_MS)
+— a separate ceiling if a robot op (e.g. home over the bridge) genuinely needs longer.
+
+QUICK-SEAL SHORTCUT (PRD docs/prds/QUICK-SEAL-WAXQC-TO-SEALED.md): new page
+/manufacturing/cart-mfg/quick-seal (+ "Quick Seal" sidebar entry after Cut Top Seal). Bulk-scan
+cartridge barcodes into a free-text <textarea> (scanner Enter = newline, focus retained — scan
+many without clicking) and flip them from wax_qc/wax_ready straight to `sealed` (the state before
+the reagent pic), shortcutting the verdict + reagent-fill steps for an out-of-BIMS workflow.
+Decisions: accept wax_qc OR wax_ready; just flip to sealed (operator+timestamp+priorStatus+note+
+AuditLog, no top-seal lot); per-cart reject (not found / wrong status) with reasons, valid carts
+still process and rejects stay in the box. Direct CartridgeRecord.updateOne (sacred middleware
+doesn't block — finalizedAt never set). Cartridge status flow reference (cartridge-record.ts enum):
+backing → wax_filling → wax_stored → wax_qc → wax_ready → reagent_filling → reagent_filled →
+sealed → reagent_qc → reagent_ready → cured → stored → released → shipped (+ wax_rejected/
+reagent_rejected branches; wax_filled & 'inspected' are legacy/unused; reagent intake gate hard-
+checks status==='wax_ready'; capture flips only wax_stored→wax_qc).
+
+All committed + pushed to master; npm run check stayed at the 11-error baseline.
