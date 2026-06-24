@@ -46,44 +46,65 @@
 	// click resume at the start of the wax/reagent protocol. Fires once.
 	let autoResumedInitial = $state(false);
 	let pollHandle: ReturnType<typeof setTimeout> | null = null;
+	let destroyed = false;
 
 	const TERMINAL = new Set(['succeeded', 'failed', 'stopped']);
-	const RUNNING = new Set(['running', 'paused', 'idle', 'pause-requested', 'stop-requested']);
+	const POLL_TIMEOUT_MS = 6000;
+	const ACTION_TIMEOUT_MS = 12000;
+
+	function schedulePoll() {
+		if (!destroyed) pollHandle = setTimeout(poll, pollMs);
+	}
+	// Force an immediate reconcile poll (e.g. right after a control action) rather
+	// than waiting for the next tick.
+	function pollNow() {
+		if (pollHandle) { clearTimeout(pollHandle); pollHandle = null; }
+		void poll();
+	}
 
 	async function poll() {
+		// Don't fight an in-flight control action for the serialized bridge queue,
+		// and never overwrite the optimistic status with an older reading.
+		if (actionInFlight) { schedulePoll(); return; }
 		try {
-			const res = await fetch(`/api/opentrons-lab/robots/${robotId}/runs/${opentronsRunId}`);
+			const res = await fetch(`/api/opentrons-lab/robots/${robotId}/runs/${opentronsRunId}`, {
+				signal: AbortSignal.timeout(POLL_TIMEOUT_MS)
+			});
 			if (res.ok) {
 				const body = await res.json();
 				run = body.data ?? body;
-				const next = (run.status ?? 'idle') as string;
-				runStatus = next;
-				lastError = null;
-				if (!terminalFired && TERMINAL.has(next)) {
-					terminalFired = true;
-					if (onComplete) onComplete(next, run);
-				}
-				// Off-deck labware makes the engine pause once at the very start;
-				// auto-resume it (only the first pause, never error-recovery).
-				else if (!autoResumedInitial && next === 'paused') {
-					autoResumedInitial = true;
-					void handleAction('resume');
+				// A control action may have started during the await — don't clobber it.
+				if (!actionInFlight) {
+					const next = (run.status ?? 'idle') as string;
+					runStatus = next;
+					lastError = null;
+					if (!terminalFired && TERMINAL.has(next)) {
+						terminalFired = true;
+						if (onComplete) onComplete(next, run);
+					}
+					// Off-deck labware makes the engine pause once at the very start;
+					// auto-resume it (only the first pause, never error-recovery).
+					else if (!autoResumedInitial && next === 'paused') {
+						autoResumedInitial = true;
+						void handleAction('resume');
+					}
 				}
 			} else {
 				lastError = `Robot returned ${res.status}`;
 			}
 		} catch (err) {
-			lastError = err instanceof Error ? err.message : 'Failed to reach robot';
+			lastError = (err as any)?.name === 'TimeoutError'
+				? 'Robot status timed out (bridge slow) — retrying'
+				: err instanceof Error ? err.message : 'Failed to reach robot';
 		}
-		// Keep polling even after terminal — gives the operator a chance
-		// to see final state if they didn't navigate away yet.
-		pollHandle = setTimeout(poll, pollMs);
+		// Keep polling even after terminal so the operator sees the final state.
+		schedulePoll();
 	}
 
 	async function handleAction(action: 'play' | 'pause' | 'stop' | 'resume') {
 		actionInFlight = action;
-		// Optimistic UI: flip the visible status immediately so the
-		// operator sees feedback before the next poll lands.
+		// Optimistic UI: flip the visible status immediately. Polls won't overwrite
+		// it while actionInFlight is set, so it won't flicker back.
 		if (action === 'play' || action === 'resume') runStatus = 'running';
 		else if (action === 'pause') runStatus = 'pause-requested';
 		else if (action === 'stop') runStatus = 'stop-requested';
@@ -94,17 +115,27 @@
 				{
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ action })
+					body: JSON.stringify({ action }),
+					signal: AbortSignal.timeout(ACTION_TIMEOUT_MS)
 				}
 			);
-			if (!res.ok) {
-				const body = await res.json().catch(() => ({}));
-				lastError = (body as any).message ?? `Robot returned ${res.status}`;
+			const body = await res.json().catch(() => ({}));
+			if (res.ok) {
+				lastError = null;
+			} else if ((body as any).conflict) {
+				// Action was invalid for the robot's CURRENT state (e.g. Pause when
+				// already paused) — benign; the reconcile poll below syncs the UI.
+				lastError = null;
+			} else {
+				lastError = (body as any).detail ?? (body as any).message ?? `Robot returned ${res.status}`;
 			}
 		} catch (err) {
-			lastError = err instanceof Error ? err.message : 'Action failed';
+			lastError = (err as any)?.name === 'TimeoutError'
+				? 'Action timed out (bridge slow) — re-checking status'
+				: err instanceof Error ? err.message : 'Action failed';
 		} finally {
 			actionInFlight = null;
+			pollNow(); // reconcile to the robot's true state right away
 		}
 	}
 
@@ -122,6 +153,11 @@
 			case 'stopped':
 			case 'stop-requested':
 				return 'bg-gray-800 text-gray-300 border-gray-500/40';
+			case 'finishing':
+				return 'bg-green-900/40 text-green-300 border-green-500/40';
+			case 'blocked-by-open-door':
+			case 'awaiting-recovery':
+				return 'bg-orange-900/40 text-orange-300 border-orange-500/40';
 			case 'idle':
 				return 'bg-blue-900/40 text-blue-300 border-blue-500/40';
 			default:
@@ -157,15 +193,22 @@
 	});
 
 	onDestroy(() => {
+		destroyed = true;
 		if (pollHandle) {
 			clearTimeout(pollHandle);
 			pollHandle = null;
 		}
 	});
 
-	let canPlay = $derived(runStatus === 'idle' || runStatus === 'paused');
+	let isTerminal = $derived(TERMINAL.has(runStatus));
+	// Stop must always be available while the run is live (any non-terminal state,
+	// incl. finishing / blocked-by-open-door / awaiting-recovery).
+	let canStop = $derived(!isTerminal);
 	let canPause = $derived(runStatus === 'running');
-	let canStop = $derived(RUNNING.has(runStatus));
+	// Play/Resume: any live, non-running, non-transitioning state.
+	let canPlay = $derived(
+		!isTerminal && runStatus !== 'running' && runStatus !== 'pause-requested' && runStatus !== 'stop-requested'
+	);
 </script>
 
 <div class="space-y-4 rounded-xl border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-5">

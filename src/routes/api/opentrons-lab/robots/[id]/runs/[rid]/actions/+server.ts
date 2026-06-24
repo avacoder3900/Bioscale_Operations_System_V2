@@ -38,7 +38,16 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		});
 		if (!res.ok) {
 			const body = await res.json().catch(() => ({}));
-			error(502, (body as any).errors?.[0]?.detail ?? `Robot returned ${res.status}`);
+			const detail = (body as any).errors?.[0]?.detail ?? `Robot returned ${res.status}`;
+			// A 4xx from the robot means the action is invalid for the run's CURRENT
+			// state (e.g. pause when already paused) — benign; the client reconciles
+			// by re-polling. 5xx/other = a real failure. Surface robotStatus + a
+			// `conflict` flag so the client can tell them apart instead of alarming.
+			const conflict = res.status >= 400 && res.status < 500;
+			return json(
+				{ ok: false, action, robotStatus: res.status, detail, conflict },
+				{ status: conflict ? 409 : 502 }
+			);
 		}
 		return json({ ok: true, action });
 	} catch (e) {
