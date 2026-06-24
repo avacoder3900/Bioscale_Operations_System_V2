@@ -309,6 +309,14 @@
 		stationDownAt = null;
 		if (selectedStationId) {
 			const station = data.stations.find((s: { _id: string }) => s._id === selectedStationId) as any;
+			const offline = station && station.status !== 'online' && station.status !== 'degraded';
+			if (offline) {
+				flashBanner(
+					'info',
+					`⚠ ${station?.name ?? 'Station'} appears offline (no recent heartbeat from the Pi) — trying anyway.`,
+					5000
+				);
+			}
 			const heldByOther =
 				station?.currentOperator &&
 				station.currentOperator._id &&
@@ -1079,9 +1087,10 @@
 							{@const badge = s.status === 'online' ? '🟢' : s.status === 'degraded' ? '🟡' : '🔴'}
 							{@const heldByOther = s.currentOperator && s.currentOperator._id && s.currentOperator._id !== data.user._id}
 							{@const offline = s.status !== 'online' && s.status !== 'degraded'}
-							<!-- In-use stations stay selectable: picking one opens the admin
-							     takeover form (see onStationChange). Only offline disables. -->
-							<option value={s._id} disabled={offline}>
+							<!-- Every station is always selectable (no gray-out). Picking an
+							     in-use one opens the admin takeover form; picking an offline
+							     one warns, then tries anyway. See onStationChange. -->
+							<option value={s._id}>
 								{badge}
 								{s.name}
 								{#if offline}(offline){/if}
