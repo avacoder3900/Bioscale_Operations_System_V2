@@ -167,21 +167,19 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		}
 
 		// Post-mortem inspection (POST-MORTEM-INSPECT): photographing a ran cart
-		// (`completed`) on the Post-Mortem Inspect page advances it to postmortem_qc
-		// ("photographed, awaiting verdict"). The scan-gated verdict then moves it to
-		// postmortem_ready/postmortem_rejected. Gated on phase === 'post_mortem' so a
-		// completed cart photographed elsewhere (e.g. R&D forensic capture) is left as-is.
+		// (`completed`) on the Post-Mortem Inspect page. The photo is captured and
+		// attached, but FOR NOW the cartridge state is intentionally LEFT at
+		// `completed` — we no longer advance it to postmortem_qc. The post-mortem
+		// step accepts completed carts and does not change their state on scan;
+		// the QC-verdict transition is paused (re-enable by restoring the
+		// updateOne below). Gated on phase === 'post_mortem'.
 		if (phase === 'post_mortem' && updated.status === 'completed') {
-			await CartridgeRecord.updateOne(
-				{ _id: cartridgeId, status: 'completed' },
-				{ $set: { status: 'postmortem_qc' } }
-			);
 			await AuditLog.create({
 				_id: generateId(),
 				tableName: 'cartridge_records',
 				recordId: cartridgeId,
 				action: 'post_mortem_inspection_photo',
-				newData: { status: 'postmortem_qc', from: 'completed', imageId, phase },
+				newData: { status: 'completed', stateUnchanged: true, imageId, phase },
 				changedAt: capturedAt,
 				changedBy: locals.user.username
 			});
