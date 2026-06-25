@@ -166,6 +166,27 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			});
 		}
 
+		// Post-mortem inspection (POST-MORTEM-INSPECT): photographing a ran cart
+		// (`completed`) on the Post-Mortem Inspect page advances it to postmortem_qc
+		// ("photographed, awaiting verdict"). The scan-gated verdict then moves it to
+		// postmortem_ready/postmortem_rejected. Gated on phase === 'post_mortem' so a
+		// completed cart photographed elsewhere (e.g. R&D forensic capture) is left as-is.
+		if (phase === 'post_mortem' && updated.status === 'completed') {
+			await CartridgeRecord.updateOne(
+				{ _id: cartridgeId, status: 'completed' },
+				{ $set: { status: 'postmortem_qc' } }
+			);
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'cartridge_records',
+				recordId: cartridgeId,
+				action: 'post_mortem_inspection_photo',
+				newData: { status: 'postmortem_qc', from: 'completed', imageId, phase },
+				changedAt: capturedAt,
+				changedBy: locals.user.username
+			});
+		}
+
 		// Fire-and-forget: any project deploying at this phase runs inference.
 		// Errors are swallowed inside runPhaseInference — capture response always
 		// succeeds regardless of inference state.

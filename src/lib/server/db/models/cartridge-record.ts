@@ -116,6 +116,13 @@ const cartridgeRecordSchema = new Schema({
 		status: { type: String, enum: ['pending', 'completed', 'failed', 'invalid'] },
 		completedAt: Date, recordedAt: Date
 	},
+	// Post-mortem inspection verdict (POST-MORTEM-INSPECT) — the after-run QC of a
+	// ran cartridge. Mirrors `reagentInspection`/`waxQc` so the DHR + stats can
+	// render the decision. The photo itself lands in `photos[]` (phase 'post_mortem').
+	postMortemInspection: {
+		status: { type: String, enum: ['Accepted', 'Rejected', 'Pending'] },
+		reason: String, source: String, operator: operatorRef, timestamp: Date, recordedAt: Date
+	},
 
 	status: {
 		type: String,
@@ -128,7 +135,11 @@ const cartridgeRecordSchema = new Schema({
 			// a scan-gated verdict → reagent_ready | reagent_rejected. ('inspected' kept
 			// for legacy data — the reagent run page no longer sets it.)
 			'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured', 'stored', 'released', 'shipped',
-			'linked', 'underway', 'completed', 'cancelled', 'scrapped', 'voided',
+			// Post-mortem inspection flow (POST-MORTEM-INSPECT): a cartridge that has
+			// been ran (`completed`) is photographed on the Post-Mortem Inspect page →
+			// postmortem_qc (awaiting verdict); a scan-gated verdict → postmortem_ready
+			// | postmortem_rejected. Mirrors the wax/reagent inspection flows.
+			'linked', 'underway', 'completed', 'postmortem_qc', 'postmortem_ready', 'postmortem_rejected', 'cancelled', 'scrapped', 'voided',
 			'packeted', 'transferred', 'refrigerated', 'received'
 		]
 	},
