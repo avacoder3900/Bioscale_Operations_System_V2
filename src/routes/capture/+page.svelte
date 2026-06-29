@@ -198,6 +198,13 @@
 	let retakeInProgress = $state(false);
 	const PHOTOS_PER_CARTRIDGE = 2;
 
+	// Cartridges already at status 'linked' (assay assigned / runnable) are
+	// photographed ad hoc at the linking step, not in the fixed 2-shot
+	// front/back workflow. For them we lift the per-cartridge photo cap and the
+	// lock-until-done scan guard, so the operator can keep capturing and freely
+	// scan the next cartridge without hitting the retake dialog.
+	let unlimitedCapture = $derived(cartridgeStatus === 'linked');
+
 	// Remote scan-then-capture (Pi station only). Space sends {cmd:'trigger_scan'}
 	// to the agent, which forwards the next physical read tagged triggered=true;
 	// the WS handler then locks the cartridge AND auto-fires the photo. This flag
@@ -555,7 +562,7 @@
 		// re-reads and jsQR sightings of other cartridges from stomping on the
 		// in-flight workflow. Operator must finish photos OR click "Release"
 		// (clearCartridgeForNext) before a new cartridge can lock.
-		if (cartridgeId && sessionPhotos.length < PHOTOS_PER_CARTRIDGE) {
+		if (cartridgeId && !unlimitedCapture && sessionPhotos.length < PHOTOS_PER_CARTRIDGE) {
 			if (source !== 'auto') {
 				// Intentional trigger pull / Space-press — operator deserves feedback.
 				flashBanner('info', `Still on ${cartridgeId} (${sessionPhotos.length}/${PHOTOS_PER_CARTRIDGE} photos). Finish or click "Release lock" to scan a new cartridge.`, 2800);
@@ -618,7 +625,7 @@
 		// already happened, so just capture; after both photos Space reaches the
 		// retake dialog (same as local).
 		if (cartridgeId) {
-			if (sessionPhotos.length >= PHOTOS_PER_CARTRIDGE) showRetakeDialog = true;
+			if (!unlimitedCapture && sessionPhotos.length >= PHOTOS_PER_CARTRIDGE) showRetakeDialog = true;
 			else capturePhoto();
 			return;
 		}
@@ -675,7 +682,7 @@
 			flashBanner('err', 'Scan a cartridge first');
 			return;
 		}
-		if (sessionPhotos.length >= PHOTOS_PER_CARTRIDGE) {
+		if (!unlimitedCapture && sessionPhotos.length >= PHOTOS_PER_CARTRIDGE) {
 			showRetakeDialog = true;
 			return;
 		}
@@ -728,7 +735,9 @@
 				flashBanner('ok', 'Retake complete — ready for next cartridge', 2400);
 				setTimeout(() => clearCartridgeForNext(), 100);
 			} else {
-				flashBanner('ok', `Captured ${result.cartridgeImageNumber} (${sessionPhotos.length}/${PHOTOS_PER_CARTRIDGE})`, 1800);
+				flashBanner('ok', unlimitedCapture
+					? `Captured ${result.cartridgeImageNumber} (${sessionPhotos.length})`
+					: `Captured ${result.cartridgeImageNumber} (${sessionPhotos.length}/${PHOTOS_PER_CARTRIDGE})`, 1800);
 			}
 		} catch (e) {
 			flashBanner('err', e instanceof Error ? e.message : 'Capture failed');
@@ -999,12 +1008,12 @@
 					{#if cartridgeId}
 						<div class="flex items-center gap-2">
 							<span class="font-mono text-lg text-[var(--color-tron-green,#39ff14)]">🟢 {cartridgeId}</span>
-							{#if sessionPhotos.length < PHOTOS_PER_CARTRIDGE}
+							{#if !unlimitedCapture && sessionPhotos.length < PHOTOS_PER_CARTRIDGE}
 								<span class="rounded bg-[rgba(255,215,0,0.15)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-tron-yellow,#ffd700)]" title="Other scans are ignored until you take {PHOTOS_PER_CARTRIDGE} photos or click Release.">🔒 LOCKED</span>
 							{/if}
 						</div>
 						<div class="text-xs text-[var(--color-tron-text-secondary)]">
-							{cartridgeStatus ?? 'unknown'} · {cartridgePhotoCount} prior · session {sessionPhotos.length}/{PHOTOS_PER_CARTRIDGE}
+							{cartridgeStatus ?? 'unknown'} · {cartridgePhotoCount} prior · session {sessionPhotos.length}{unlimitedCapture ? ' (unlimited)' : `/${PHOTOS_PER_CARTRIDGE}`}
 						</div>
 						<button
 							type="button"
@@ -1170,11 +1179,13 @@
 					? 'Capturing…'
 					: awaitingTriggeredScan
 						? 'Scanning…'
-						: sessionPhotos.length >= PHOTOS_PER_CARTRIDGE
+						: !unlimitedCapture && sessionPhotos.length >= PHOTOS_PER_CARTRIDGE
 							? '↺ Retake (Space)'
 							: selectedStationId && !cartridgeId
 								? '⎵ Scan + Capture (Space)'
-								: `📷 Capture ${sessionPhotos.length + 1} of ${PHOTOS_PER_CARTRIDGE} (Space)`}
+								: unlimitedCapture
+									? `📷 Capture ${sessionPhotos.length + 1} (Space)`
+									: `📷 Capture ${sessionPhotos.length + 1} of ${PHOTOS_PER_CARTRIDGE} (Space)`}
 			</button>
 			<div class="text-xs text-[var(--color-tron-text-secondary)]">
 				This session: {recentCaptures.length} photo{recentCaptures.length === 1 ? '' : 's'}

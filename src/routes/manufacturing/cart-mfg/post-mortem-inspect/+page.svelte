@@ -17,7 +17,8 @@
 
 	const PHASE = 'post_mortem';
 	// Only ran carts (`completed`) are photographed here; the status is left as-is.
-	const ALLOWED_STATUSES = ['completed'];
+	// 'linked' is allowed so already-linked carts can still be photographed here.
+	const ALLOWED_STATUSES = ['completed', 'linked'];
 
 	// ── Sticky cartridge context ────────────────────────────────────────────
 	let cartridgeId = $state<string | null>(null);

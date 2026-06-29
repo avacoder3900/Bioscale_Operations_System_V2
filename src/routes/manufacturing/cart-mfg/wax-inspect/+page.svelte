@@ -16,7 +16,8 @@
 	const PHASE = 'wax_filled';
 	// wax_stored carts get photographed (→ wax_qc); wax_qc carts get re-scanned to
 	// give the Ready/Rejected verdict. (wax_filling/wax_filled kept for tolerance.)
-	const ALLOWED_STATUSES = ['wax_filling', 'wax_filled', 'wax_stored', 'wax_qc'];
+	// 'linked' is allowed so already-linked carts can still be photographed here.
+	const ALLOWED_STATUSES = ['wax_filling', 'wax_filled', 'wax_stored', 'wax_qc', 'linked'];
 
 	// ── Sticky cartridge context ────────────────────────────────────────────
 	let cartridgeId = $state<string | null>(null);
