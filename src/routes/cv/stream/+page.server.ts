@@ -2,8 +2,12 @@
  * /cv/stream — chronological feed of every image captured, regardless of
  * project or source. The "look at what's coming in" view.
  *
- * Filters: phase, cartridgeId (partial match), date range, qcLabel state.
- * Paginated 48 per page, sorted by capturedAt desc.
+ * Organized into Unreviewed / Reviewed / All tabs so an operator can scroll
+ * the queue and label each image pass (approved) / fail (rejected) directly,
+ * building the dataset for a future pass/fail CV model.
+ *
+ * Filters: phase, cartridgeId (partial match), date range, verdict (within
+ * the Reviewed/All tabs). Paginated 48 per page, sorted by capturedAt desc.
  */
 import { redirect } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
@@ -19,31 +23,45 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 
 	const phase = url.searchParams.get('phase') || '';
 	const cartridgeId = url.searchParams.get('cartridge')?.trim() || '';
-	const labelFilter = url.searchParams.get('label') || ''; // approved | rejected | unlabeled
+	// Which tab: unreviewed (no label yet) | reviewed (has a label) | all.
+	const reviewParam = url.searchParams.get('review') || 'unreviewed';
+	const review = ['unreviewed', 'reviewed', 'all'].includes(reviewParam) ? reviewParam : 'unreviewed';
+	// Verdict sub-filter, only meaningful within Reviewed / All.
+	const verdict = url.searchParams.get('verdict') || ''; // approved | rejected
 	const fromDate = url.searchParams.get('from') || '';
 	const toDate = url.searchParams.get('to') || '';
 	const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10));
 
-	const filter: Record<string, any> = {};
-	if (phase) filter['cartridgeTag.phase'] = phase;
+	// Base filter — everything except the review/verdict state. Used both for the
+	// active query and for the per-tab counts so the badges stay in sync.
+	const baseFilter: Record<string, any> = {};
+	if (phase) baseFilter['cartridgeTag.phase'] = phase;
 	if (cartridgeId) {
-		filter['cartridgeTag.cartridgeRecordId'] = { $regex: cartridgeId, $options: 'i' };
+		baseFilter['cartridgeTag.cartridgeRecordId'] = { $regex: cartridgeId, $options: 'i' };
 	}
-	if (labelFilter === 'unlabeled') filter.qcLabel = null;
-	else if (labelFilter === 'approved' || labelFilter === 'rejected') filter.qcLabel = labelFilter;
-
 	if (fromDate || toDate) {
-		filter.capturedAt = {};
-		if (fromDate) filter.capturedAt.$gte = new Date(fromDate);
+		baseFilter.capturedAt = {};
+		if (fromDate) baseFilter.capturedAt.$gte = new Date(fromDate);
 		if (toDate) {
 			// Make `to` inclusive by setting it to end-of-day.
 			const end = new Date(toDate);
 			end.setHours(23, 59, 59, 999);
-			filter.capturedAt.$lte = end;
+			baseFilter.capturedAt.$lte = end;
 		}
 	}
 
-	const [imagesRaw, total, distinctPhases] = await Promise.all([
+	// Layer the review-tab + verdict conditions on top of the base filter.
+	const filter: Record<string, any> = { ...baseFilter };
+	if (review === 'unreviewed') {
+		filter.qcLabel = null;
+	} else if (review === 'reviewed') {
+		filter.qcLabel = verdict === 'approved' || verdict === 'rejected' ? verdict : { $ne: null };
+	} else if (verdict === 'approved' || verdict === 'rejected') {
+		// "All" tab with an explicit verdict picked.
+		filter.qcLabel = verdict;
+	}
+
+	const [imagesRaw, total, distinctPhases, unreviewedCount, reviewedCount] = await Promise.all([
 		CvImage.find(filter)
 			.sort({ capturedAt: -1 })
 			.skip((page - 1) * PAGE_SIZE)
@@ -52,7 +70,10 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 			.lean(),
 		CvImage.countDocuments(filter),
 		// Phases available in the data — drives the filter dropdown
-		CvImage.distinct('cartridgeTag.phase')
+		CvImage.distinct('cartridgeTag.phase'),
+		// Tab badges — respect the active base filters but not the review tab itself.
+		CvImage.countDocuments({ ...baseFilter, qcLabel: null }),
+		CvImage.countDocuments({ ...baseFilter, qcLabel: { $ne: null } })
 	]);
 
 	const images = (imagesRaw as any[]).map(img => ({
@@ -76,7 +97,9 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		page,
 		totalPages,
 		pageSize: PAGE_SIZE,
-		filters: { phase, cartridgeId, labelFilter, fromDate, toDate },
+		review,
+		counts: { unreviewed: unreviewedCount, reviewed: reviewedCount },
+		filters: { phase, cartridgeId, verdict, fromDate, toDate },
 		availablePhases: (distinctPhases as string[]).filter(Boolean).sort()
 	};
 };

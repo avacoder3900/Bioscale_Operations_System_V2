@@ -6,29 +6,61 @@
 
 	let phase = $state(data.filters.phase || '');
 	let cartridgeId = $state(data.filters.cartridgeId || '');
-	let labelFilter = $state(data.filters.labelFilter || '');
+	let verdict = $state(data.filters.verdict || '');
 	let fromDate = $state(data.filters.fromDate || '');
 	let toDate = $state(data.filters.toDate || '');
 
+	// Local, mutable copies so we can label optimistically without a round-trip
+	// reload. Re-synced whenever the server sends a fresh page (nav / tab switch).
+	let images = $state(data.images);
+	let counts = $state(data.counts);
+	let labeling = $state<string | null>(null);
+	$effect(() => {
+		images = data.images;
+		counts = data.counts;
+	});
+
 	let lightboxIndex = $state<number | null>(null);
 
-	function applyFilters() {
+	const tabs = [
+		{ key: 'unreviewed', label: 'Unreviewed' },
+		{ key: 'reviewed', label: 'Reviewed' },
+		{ key: 'all', label: 'All' }
+	] as const;
+
+	function paramsFromFilters(): URLSearchParams {
 		const params = new URLSearchParams();
 		if (phase) params.set('phase', phase);
 		if (cartridgeId) params.set('cartridge', cartridgeId);
-		if (labelFilter) params.set('label', labelFilter);
+		// Verdict only makes sense on Reviewed/All.
+		if (verdict && data.review !== 'unreviewed') params.set('verdict', verdict);
 		if (fromDate) params.set('from', fromDate);
 		if (toDate) params.set('to', toDate);
+		return params;
+	}
+
+	function applyFilters() {
+		const params = paramsFromFilters();
+		params.set('review', data.review);
 		goto(`/cv/stream?${params.toString()}`);
 	}
 
 	function resetFilters() {
 		phase = '';
 		cartridgeId = '';
-		labelFilter = '';
+		verdict = '';
 		fromDate = '';
 		toDate = '';
-		goto('/cv/stream');
+		goto(`/cv/stream?review=${data.review}`);
+	}
+
+	function switchTab(tab: string) {
+		if (tab === data.review) return;
+		const params = paramsFromFilters();
+		// Verdict only applies to Reviewed/All; drop it when entering Unreviewed.
+		if (tab === 'unreviewed') params.delete('verdict');
+		params.set('review', tab);
+		goto(`/cv/stream?${params.toString()}`);
 	}
 
 	function goToPage(p: number) {
@@ -51,22 +83,72 @@
 		return d.toLocaleDateString();
 	}
 
+	function adjustCounts(from: string | null, to: string | null) {
+		if (from === to) return;
+		if (!from && to) { counts = { unreviewed: counts.unreviewed - 1, reviewed: counts.reviewed + 1 }; }
+		else if (from && !to) { counts = { unreviewed: counts.unreviewed + 1, reviewed: counts.reviewed - 1 }; }
+	}
+
+	// Approve = pass, reject = fail, null = clear. Optimistic with rollback.
+	async function setLabel(id: string, qcLabel: 'approved' | 'rejected' | null) {
+		const img = images.find((x) => x.id === id);
+		if (!img) return;
+		const prev = img.qcLabel;
+		if (prev === qcLabel) return;
+
+		img.qcLabel = qcLabel;
+		images = [...images];
+		adjustCounts(prev, qcLabel);
+		labeling = id;
+
+		try {
+			const res = await fetch(`/api/cv/images/${id}/label`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ qcLabel })
+			});
+			if (!res.ok) throw new Error(`label failed: ${res.status}`);
+		} catch (err) {
+			// Roll back the optimistic change.
+			img.qcLabel = prev;
+			images = [...images];
+			adjustCounts(qcLabel, prev);
+			console.error(err);
+		} finally {
+			labeling = null;
+		}
+	}
+
 	function openLightbox(i: number) { lightboxIndex = i; }
 	function closeLightbox() { lightboxIndex = null; }
 	function prevImage() {
 		if (lightboxIndex === null) return;
-		lightboxIndex = (lightboxIndex - 1 + data.images.length) % data.images.length;
+		lightboxIndex = (lightboxIndex - 1 + images.length) % images.length;
 	}
 	function nextImage() {
 		if (lightboxIndex === null) return;
-		lightboxIndex = (lightboxIndex + 1) % data.images.length;
+		lightboxIndex = (lightboxIndex + 1) % images.length;
+	}
+
+	// Label the image in the lightbox, then advance — keeps the scroll-and-label
+	// rhythm going without reaching for the mouse.
+	async function labelAndAdvance(qcLabel: 'approved' | 'rejected' | null) {
+		if (lightboxIndex === null) return;
+		const img = images[lightboxIndex];
+		if (!img) return;
+		await setLabel(img.id, qcLabel);
+		if (qcLabel !== null) nextImage();
 	}
 
 	function onKey(e: KeyboardEvent) {
 		if (lightboxIndex === null) return;
+		const k = e.key.toLowerCase();
 		if (e.key === 'Escape') closeLightbox();
-		if (e.key === 'ArrowLeft') prevImage();
-		if (e.key === 'ArrowRight') nextImage();
+		else if (e.key === 'ArrowLeft') prevImage();
+		else if (e.key === 'ArrowRight') nextImage();
+		else if (k === 'a' || k === 'p') { e.preventDefault(); labelAndAdvance('approved'); }
+		else if (k === 'r' || k === 'f' || k === 'd') { e.preventDefault(); labelAndAdvance('rejected'); }
+		else if (k === 'u' || k === 'c') { e.preventDefault(); labelAndAdvance(null); }
 	}
 </script>
 
@@ -77,9 +159,30 @@
 		<div>
 			<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">Image Stream</h1>
 			<p class="text-sm text-[var(--color-tron-text-secondary)]">
-				Every image captured by BIMS, chronological. {data.total.toLocaleString()} total.
+				Scroll the captures and label each one pass / fail. Reviewed images are ready for the CV model.
 			</p>
 		</div>
+	</div>
+
+	<!-- Review tabs -->
+	<div class="flex flex-wrap items-center gap-2 border-b border-[var(--color-tron-border)]">
+		{#each tabs as t (t.key)}
+			<button
+				type="button"
+				onclick={() => switchTab(t.key)}
+				class="-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors
+					{data.review === t.key
+						? 'border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]'
+						: 'border-transparent text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
+			>
+				{t.label}
+				{#if t.key === 'unreviewed'}
+					<span class="ml-1 rounded-full bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs">{counts.unreviewed.toLocaleString()}</span>
+				{:else if t.key === 'reviewed'}
+					<span class="ml-1 rounded-full bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs">{counts.reviewed.toLocaleString()}</span>
+				{/if}
+			</button>
+		{/each}
 	</div>
 
 	<!-- Filters -->
@@ -98,15 +201,16 @@
 				<label for="cart-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Cartridge</label>
 				<input id="cart-filter" type="text" bind:value={cartridgeId} placeholder="CART-X partial match" class="tron-input w-full" />
 			</div>
-			<div>
-				<label for="label-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">QC label</label>
-				<select id="label-filter" bind:value={labelFilter} class="tron-input w-full">
-					<option value="">Any</option>
-					<option value="approved">Approved</option>
-					<option value="rejected">Rejected</option>
-					<option value="unlabeled">Unlabeled</option>
-				</select>
-			</div>
+			{#if data.review !== 'unreviewed'}
+				<div>
+					<label for="verdict-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Verdict</label>
+					<select id="verdict-filter" bind:value={verdict} class="tron-input w-full">
+						<option value="">Any</option>
+						<option value="approved">Pass</option>
+						<option value="rejected">Fail</option>
+					</select>
+				</div>
+			{/if}
 			<div>
 				<label for="from-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">From</label>
 				<input id="from-filter" type="date" bind:value={fromDate} class="tron-input w-full" />
@@ -127,42 +231,78 @@
 	</div>
 
 	<!-- Results -->
-	{#if data.images.length === 0}
+	{#if images.length === 0}
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-12 text-center">
-			<p class="text-[var(--color-tron-text-secondary)]">No images match these filters.</p>
+			<p class="text-[var(--color-tron-text-secondary)]">
+				{#if data.review === 'unreviewed'}
+					Nothing left to review for these filters. 🎉
+				{:else}
+					No images match these filters.
+				{/if}
+			</p>
 		</div>
 	{:else}
 		<div class="text-xs text-[var(--color-tron-text-secondary)]">
-			Page {data.page} of {data.totalPages} — showing {data.images.length} of {data.total.toLocaleString()}
+			Page {data.page} of {data.totalPages} — showing {images.length} of {data.total.toLocaleString()}
 		</div>
 
 		<div class="grid gap-3 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8">
-			{#each data.images as img, i (img.id)}
-				<button
-					type="button"
-					onclick={() => openLightbox(i)}
-					class="group overflow-hidden rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] text-left transition-colors hover:border-[var(--color-tron-cyan)]"
+			{#each images as img, i (img.id)}
+				<div
+					class="group overflow-hidden rounded border bg-[var(--color-tron-bg-secondary)] transition-colors
+						{img.qcLabel === 'approved'
+							? 'border-[var(--color-tron-green,#39ff14)]'
+							: img.qcLabel === 'rejected'
+								? 'border-[var(--color-tron-red,#ff3366)]'
+								: 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)]'}"
 				>
-					{#if img.thumbnailUrl}
-						<img src={img.thumbnailUrl} alt={img.cartridgeImageNumber ?? 'capture'} class="aspect-square w-full object-cover" />
-					{:else}
-						<div class="aspect-square w-full bg-[var(--color-tron-bg-tertiary)]"></div>
-					{/if}
-					<div class="p-2 text-xs">
-						<div class="truncate font-mono text-[var(--color-tron-cyan)]">{img.cartridgeImageNumber ?? '—'}</div>
-						<div class="flex items-center justify-between text-[var(--color-tron-text-secondary)]">
-							<span class="truncate">{img.phase ?? '—'}</span>
+					<button
+						type="button"
+						onclick={() => openLightbox(i)}
+						class="block w-full text-left"
+					>
+						<div class="relative">
+							{#if img.thumbnailUrl}
+								<img src={img.thumbnailUrl} alt={img.cartridgeImageNumber ?? 'capture'} class="aspect-square w-full object-cover" />
+							{:else}
+								<div class="aspect-square w-full bg-[var(--color-tron-bg-tertiary)]"></div>
+							{/if}
 							{#if img.qcLabel === 'approved'}
-								<span class="text-[var(--color-tron-green,#39ff14)]">✓</span>
+								<span class="absolute left-1 top-1 rounded bg-[var(--color-tron-green,#39ff14)] px-1.5 py-0.5 text-[10px] font-bold text-black">PASS</span>
 							{:else if img.qcLabel === 'rejected'}
-								<span class="text-[var(--color-tron-red,#ff3366)]">✗</span>
+								<span class="absolute left-1 top-1 rounded bg-[var(--color-tron-red,#ff3366)] px-1.5 py-0.5 text-[10px] font-bold text-white">FAIL</span>
 							{/if}
 						</div>
-						<div class="truncate text-[10px] text-[var(--color-tron-text-secondary)]">
-							{formatRelative(img.capturedAt)}
+						<div class="p-2 text-xs">
+							<div class="truncate font-mono text-[var(--color-tron-cyan)]">{img.cartridgeImageNumber ?? '—'}</div>
+							<div class="truncate text-[var(--color-tron-text-secondary)]">{img.phase ?? '—'}</div>
+							<div class="truncate text-[10px] text-[var(--color-tron-text-secondary)]">
+								{formatRelative(img.capturedAt)}
+							</div>
 						</div>
+					</button>
+					<!-- Inline pass/fail — label without opening the image -->
+					<div class="flex border-t border-[var(--color-tron-border)]">
+						<button
+							type="button"
+							disabled={labeling === img.id}
+							onclick={() => setLabel(img.id, img.qcLabel === 'approved' ? null : 'approved')}
+							class="flex-1 py-1.5 text-xs font-semibold transition-colors disabled:opacity-40
+								{img.qcLabel === 'approved'
+									? 'bg-[var(--color-tron-green,#39ff14)]/20 text-[var(--color-tron-green,#39ff14)]'
+									: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-green,#39ff14)]'}"
+						>✓ Pass</button>
+						<button
+							type="button"
+							disabled={labeling === img.id}
+							onclick={() => setLabel(img.id, img.qcLabel === 'rejected' ? null : 'rejected')}
+							class="flex-1 border-l border-[var(--color-tron-border)] py-1.5 text-xs font-semibold transition-colors disabled:opacity-40
+								{img.qcLabel === 'rejected'
+									? 'bg-[var(--color-tron-red,#ff3366)]/20 text-[var(--color-tron-red,#ff3366)]'
+									: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-red,#ff3366)]'}"
+						>✗ Fail</button>
 					</div>
-				</button>
+				</div>
 			{/each}
 		</div>
 
@@ -181,7 +321,7 @@
 
 <!-- Lightbox -->
 {#if lightboxIndex !== null}
-	{@const img = data.images[lightboxIndex]}
+	{@const img = images[lightboxIndex]}
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
 	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4" onclick={closeLightbox}>
@@ -192,14 +332,52 @@
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div class="max-h-full max-w-5xl space-y-3" onclick={(e) => e.stopPropagation()}>
 			{#if img.url}
-				<img src={img.url} alt={img.cartridgeImageNumber ?? 'capture'} class="max-h-[80vh] rounded shadow-2xl" />
+				<img src={img.url} alt={img.cartridgeImageNumber ?? 'capture'} class="mx-auto max-h-[70vh] rounded shadow-2xl" />
 			{/if}
+
+			<!-- Pass / Fail review controls -->
+			<div class="flex items-center justify-center gap-2">
+				<button
+					type="button"
+					disabled={labeling === img.id}
+					onclick={() => labelAndAdvance('approved')}
+					class="rounded px-5 py-2 text-sm font-bold transition-colors disabled:opacity-40
+						{img.qcLabel === 'approved'
+							? 'bg-[var(--color-tron-green,#39ff14)] text-black'
+							: 'border border-[var(--color-tron-green,#39ff14)] text-[var(--color-tron-green,#39ff14)] hover:bg-[var(--color-tron-green,#39ff14)]/20'}"
+				>✓ Pass <span class="ml-1 opacity-60">(A)</span></button>
+				<button
+					type="button"
+					disabled={labeling === img.id}
+					onclick={() => labelAndAdvance('rejected')}
+					class="rounded px-5 py-2 text-sm font-bold transition-colors disabled:opacity-40
+						{img.qcLabel === 'rejected'
+							? 'bg-[var(--color-tron-red,#ff3366)] text-white'
+							: 'border border-[var(--color-tron-red,#ff3366)] text-[var(--color-tron-red,#ff3366)] hover:bg-[var(--color-tron-red,#ff3366)]/20'}"
+				>✗ Fail <span class="ml-1 opacity-60">(F)</span></button>
+				<button
+					type="button"
+					disabled={labeling === img.id || !img.qcLabel}
+					onclick={() => labelAndAdvance(null)}
+					class="rounded border border-[var(--color-tron-border)] px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-text-primary)] disabled:opacity-30"
+				>Clear <span class="ml-1 opacity-60">(C)</span></button>
+			</div>
+
 			<div class="rounded bg-[var(--color-tron-bg-secondary)] p-3 text-sm">
 				<div class="grid gap-2 sm:grid-cols-2">
 					<div><span class="text-[var(--color-tron-text-secondary)]">Image:</span> <span class="font-mono text-[var(--color-tron-cyan)]">{img.cartridgeImageNumber ?? '—'}</span></div>
 					<div><span class="text-[var(--color-tron-text-secondary)]">Cartridge:</span> <a href={`/cartridge-admin/dhr/${img.cartridgeRecordId}`} class="text-[var(--color-tron-cyan)] underline">{img.cartridgeRecordId ?? '—'}</a></div>
 					<div><span class="text-[var(--color-tron-text-secondary)]">Phase:</span> {img.phase ?? '—'}</div>
-					<div><span class="text-[var(--color-tron-text-secondary)]">QC label:</span> {img.qcLabel ?? 'unlabeled'}</div>
+					<div>
+						<span class="text-[var(--color-tron-text-secondary)]">Verdict:</span>
+						{#if img.qcLabel === 'approved'}
+							<span class="font-semibold text-[var(--color-tron-green,#39ff14)]">Pass</span>
+						{:else if img.qcLabel === 'rejected'}
+							<span class="font-semibold text-[var(--color-tron-red,#ff3366)]">Fail</span>
+						{:else}
+							<span class="text-[var(--color-tron-text-secondary)]">unreviewed</span>
+						{/if}
+					</div>
 					<div><span class="text-[var(--color-tron-text-secondary)]">Captured:</span> {img.capturedAt ? new Date(img.capturedAt).toLocaleString() : '—'}</div>
 					<div><span class="text-[var(--color-tron-text-secondary)]">By:</span> {img.capturedByUsername ?? '—'}</div>
 				</div>
