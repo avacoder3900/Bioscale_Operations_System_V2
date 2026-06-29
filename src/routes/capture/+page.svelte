@@ -21,15 +21,14 @@
 	type DeployedProject = { id: string; name: string; version: string };
 	let deployedHere = $derived<DeployedProject[]>(data.deploymentsByPhase?.[phase] ?? []);
 
-	// Stations whose operator lock is held by someone other than us. Drives the
-	// "in use by another operator" reset list below the station picker — a ghost
-	// lock (browser tab that died without firing beforeunload) otherwise pins a
-	// station as occupied forever with no way to recover it from this page.
-	let stationsHeldByOthers = $derived(
-		(data.stations ?? []).filter(
-			(s: any) =>
-				s.currentOperator && s.currentOperator._id && s.currentOperator._id !== data.user._id
-		)
+	// Every station that currently holds an operator lock — held by anyone,
+	// including us. Drives the always-visible "Station locks" panel below the
+	// picker so an operator can boot a ghost lock off (a browser tab that died
+	// without firing beforeunload pins the station as "in use" forever and
+	// disables its dropdown option) or clear their own stale lock. Every
+	// force-release is audited server-side.
+	let occupiedStations = $derived(
+		(data.stations ?? []).filter((s: any) => s.currentOperator?._id)
 	);
 
 	// Scanner-wedge buffer
@@ -1055,20 +1054,23 @@
 			</div>
 		</div>
 
-		<!-- Stations whose lock is held by another operator. A browser tab that
-		     dies without firing beforeunload leaves the lock set with no live
-		     session, so the station shows "in use" forever and its dropdown
-		     option stays disabled. Any operator can force-release it back to idle
-		     (audited server-side) to recover it. -->
-		{#if stationsHeldByOthers.length > 0}
-			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3">
-				<p class="text-xs uppercase text-[var(--color-tron-text-secondary)]">In use by another operator</p>
+		<!-- Station-lock manager. Every station currently holding an operator lock
+		     is listed here with a Reset (force-release) button so a ghost lock — a
+		     dead browser tab that pins a station as "in use" forever and disables
+		     its dropdown option — can be cleared back to idle. Visible to any
+		     operator; every reset is audited server-side. -->
+		{#if occupiedStations.length > 0}
+			<div class="rounded-lg border border-[var(--color-tron-yellow,#facc15)] bg-[rgba(250,204,21,0.06)] p-3">
+				<p class="text-xs font-semibold uppercase text-[var(--color-tron-yellow,#facc15)]">
+					Station locks — Reset to boot an operator off
+				</p>
 				<ul class="mt-2 space-y-1">
-					{#each stationsHeldByOthers as s (s._id)}
+					{#each occupiedStations as s (s._id)}
+						{@const isSelf = s.currentOperator._id === data.user._id}
 						<li class="flex items-center justify-between gap-3 text-sm">
 							<span class="text-[var(--color-tron-text-secondary)]">
 								<span class="text-[var(--color-tron-cyan)]">{s.name}</span>
-								— {s.currentOperator.username}{#if s.currentOperator.since} since {new Date(s.currentOperator.since).toLocaleString()}{/if}
+								— {s.currentOperator.username}{#if isSelf} (you){/if}{#if s.currentOperator.since} since {new Date(s.currentOperator.since).toLocaleString()}{/if}
 							</span>
 							<button
 								type="button"
