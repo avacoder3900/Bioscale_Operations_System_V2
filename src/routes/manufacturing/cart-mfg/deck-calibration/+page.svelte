@@ -130,6 +130,9 @@
 	let zoom = $state(1); // 1 = fit container width; >1 zooms in (scrolls)
 	let showGrid = $state(true); // light 1mm reference grid (10mm major lines) behind the holes
 	const wellR = 1.9; // viewBox (mm) radius — ~2× the physical ~0.9mm hole radius so dots stay visible/clickable at fit
+	// Padding (mm) around the deck in the viewBox so edge rows (front row sits at
+	// y≈0 → the very bottom after the y-flip) aren't clipped at the canvas edge.
+	const VIEW_PAD = 14;
 	function cy(y: number): number { return dim.y - y; } // flip
 	let svgEl = $state<SVGSVGElement | null>(null);
 
@@ -797,13 +800,13 @@
 				</div>
 			</div>
 			<p class="mb-2 text-[11px]" style="color: var(--color-tron-text-secondary)">Drag a box to select a group (Shift adds). Click a hole to toggle. Wax holes are amber, reagent blue; the toggle restricts which you can select. Esc clears everything.</p>
-			<div class="overflow-auto rounded border border-[var(--color-tron-border)] bg-black/40" style="max-height: 72vh;">
+			<div class="overflow-auto rounded border border-[var(--color-tron-border)] bg-black/40" style="max-height: 85vh;">
 				{#if wells.length}
 				<div style={`width:${zoom * 100}%;`}>
 					<svg
 						bind:this={svgEl}
 						width="100%"
-						viewBox={`0 0 ${dim.x} ${dim.y}`}
+						viewBox={`${-VIEW_PAD} ${-VIEW_PAD} ${dim.x + 2 * VIEW_PAD} ${dim.y + 2 * VIEW_PAD}`}
 						preserveAspectRatio="xMidYMid meet"
 						onpointerdown={onCanvasPointerDown}
 						onpointermove={onCanvasPointerMove}
@@ -827,7 +830,7 @@
 							</pattern>
 						</defs>
 						{#if showGrid}
-							<rect x="0" y="0" width={dim.x} height={dim.y} fill="url(#grid-10mm)" />
+							<rect x={-VIEW_PAD} y={-VIEW_PAD} width={dim.x + 2 * VIEW_PAD} height={dim.y + 2 * VIEW_PAD} fill="url(#grid-10mm)" />
 						{/if}
 						{#each wells as w (w.name)}
 							{@const sel = selection.has(w.name)}
