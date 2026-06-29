@@ -132,7 +132,7 @@
 	const wellR = 1.9; // viewBox (mm) radius — ~2× the physical ~0.9mm hole radius so dots stay visible/clickable at fit
 	// Padding (mm) around the deck in the viewBox so edge rows (front row sits at
 	// y≈0 → the very bottom after the y-flip) aren't clipped at the canvas edge.
-	const VIEW_PAD = 14;
+	const VIEW_PAD = 24;
 	function cy(y: number): number { return dim.y - y; } // flip
 	let svgEl = $state<SVGSVGElement | null>(null);
 
