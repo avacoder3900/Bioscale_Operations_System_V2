@@ -7,6 +7,7 @@ import {
 } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
+import { WAX_PAGE_OWNED } from '$lib/server/db/models/wax-filling-run';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -335,6 +336,18 @@ export const load: PageServerLoad = async ({ locals }) => {
 		.sort((a, b) => b.count - a.count)
 		.slice(0, 5);
 
+	// --- "In the filling step" marker (derived, not status-based) ---
+	// A cartridge is in-filling iff it belongs to a wax run still in a
+	// filling-page-owned stage (robot/deck held, pre-QC/Storage). Derived from
+	// the already-loaded activeWaxRuns so there's no extra query and no reliance
+	// on CartridgeRecord.status. Mirrors $lib/server/in-filling.ts.
+	const inFillingIds = new Set<string>();
+	for (const r of activeWaxRuns as Array<{ status?: string; cartridgeIds?: string[] }>) {
+		if (r.status && WAX_PAGE_OWNED.includes(r.status)) {
+			for (const id of r.cartridgeIds ?? []) inFillingIds.add(id);
+		}
+	}
+
 	// --- Serialize and return ---
 	return JSON.parse(JSON.stringify({
 		robots: robotStatuses,
@@ -367,7 +380,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 				backedTotal: phaseMap.get('backing') ?? 0
 			},
 			waxFilling: {
-				inProgress: phaseMap.get('wax_filling') ?? 0,
+				inProgress: inFillingIds.size,
 				waxFilled: phaseMap.get('wax_filled') ?? 0,
 				waxStored: phaseMap.get('wax_stored') ?? 0
 			},

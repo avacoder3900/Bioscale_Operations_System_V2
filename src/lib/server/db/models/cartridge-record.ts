@@ -158,14 +158,13 @@ const cartridgeRecordSchema = new Schema({
 		enum: [
 			// Wax inspection flow (WAX-INSPECTION-READY-REJECTED): wax_stored → (photo)
 			// → wax_qc (awaiting verdict) → wax_ready | wax_rejected. Only wax_ready → reagent.
-			'backing', 'wax_filling', 'wax_filled', 'wax_stored', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filling', 'reagent_filled', 'inspected',
+			'backing', 'wax_filling', 'wax_filled', 'wax_stored', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filling', 'reagent_filled',
 			// Reagent inspection flow (REAGENT-INSPECT-AFTER-TOPSEAL): after Cut Top Seal a
 			// cartridge is `sealed`; a photo on the Reagent Inspect page → reagent_qc;
-			// a scan-gated verdict → reagent_ready | reagent_rejected. ('inspected' kept
-			// for legacy data — the reagent run page no longer sets it.)
-			'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured', 'stored', 'released', 'shipped',
+			// a scan-gated verdict → reagent_ready | reagent_rejected.
+			'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'stored', 'released', 'shipped',
 			'linked', 'underway', 'completed', 'cancelled', 'scrapped', 'voided',
-			'packeted', 'transferred', 'refrigerated', 'received'
+			'packeted', 'transferred', 'received'
 		]
 	},
 

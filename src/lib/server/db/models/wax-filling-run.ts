@@ -71,7 +71,11 @@ const waxFillingRunSchema = new Schema({
 // Once status passes those (QC / Storage), the deck is off the robot and
 // free to reuse — but cartridges still sit on the cooling tray through
 // Storage, so the tray uniqueness window is wider (non-terminal).
-const WAX_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Awaiting Removal',
+// Stages where the robot/deck are still held — i.e. cartridges are physically
+// on the deck being wax-filled. Exported as the canonical "in the filling step"
+// window so dashboards can derive that marker from run membership instead of a
+// cartridge status value. See $lib/server/in-filling.ts.
+export const WAX_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Awaiting Removal',
 	'setup', 'loading', 'running', 'awaiting_removal', 'cooling'];
 const WAX_NON_TERMINAL = ['Setup', 'Loading', 'Running', 'Awaiting Removal', 'QC', 'Storage',
 	'setup', 'loading', 'running', 'awaiting_removal', 'cooling', 'qc', 'storage'];
