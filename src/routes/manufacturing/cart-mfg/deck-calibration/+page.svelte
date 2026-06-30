@@ -91,6 +91,17 @@
 	let selection = $state<Set<string>>(new Set());
 	const selCount = $derived(selection.size);
 
+	// Anchor for "Set position → selection": the typed x/y/z is the anchor's new
+	// position; the whole selection translates by the same delta (preserves the
+	// holes' relative geometry). Prefer the most-recently-clicked hole while it
+	// stays selected; otherwise fall back to the first selected hole in deck order
+	// so the anchor is always defined when anything is selected.
+	let anchorWell = $state<string | null>(null);
+	const anchor = $derived.by(() => {
+		if (anchorWell && selection.has(anchorWell)) return anchorWell;
+		return wells.find((w) => selection.has(w.name))?.name ?? null;
+	});
+
 	function setRoleFilter(r: 'all' | Role) {
 		roleFilter = r;
 		// Keep the selection within the active role so an applied offset never
@@ -106,7 +117,7 @@
 		if (!isActiveRole(name)) return; // can't select a filtered-out hole
 		const next = new Set(additive ? selection : []);
 		if (selection.has(name) && additive) next.delete(name);
-		else next.add(name);
+		else { next.add(name); anchorWell = name; } // a newly clicked hole becomes the anchor
 		if (!additive && selection.has(name) && selection.size === 1) next.clear();
 		selection = next;
 	}
@@ -210,12 +221,13 @@
 	// ── Captured / manual offset ─────────────────────────────────────────────────
 	let dx = $state(0), dy = $state(0), dz = $state(0);
 
-	// Set-absolute-position (vs offset): type an exact x/y/z for a single selected
-	// hole. Prefilled from that hole's current coords when exactly one is selected.
+	// Set-absolute-position (vs offset): type an exact x/y/z for the anchor hole;
+	// the whole selection translates by the same delta. Prefilled from the anchor's
+	// current coords whenever the anchor changes.
 	let setX = $state(0), setY = $state(0), setZ = $state(0);
 	$effect(() => {
-		if (selection.size === 1) {
-			const w = wellByName.get([...selection][0]);
+		if (anchor) {
+			const w = wellByName.get(anchor);
 			if (w) { setX = +w.x.toFixed(3); setY = +w.y.toFixed(3); setZ = +w.z.toFixed(3); }
 		}
 	});
@@ -283,18 +295,23 @@
 		}
 	}
 
-	// Set a single selected hole to an EXACT position (computes the delta vs its
-	// current coords, then applies via the same engine so history/bounds/undo work).
+	// Set the selection to an EXACT position: the typed x/y/z is the ANCHOR hole's
+	// new position; the whole selection translates by that delta (single hole =
+	// just that hole). Computes the delta vs the anchor's current coords, then
+	// applies via the same engine so history/bounds/undo work.
 	async function applyAbsolute() {
-		if (selection.size !== 1) { errMsg = 'Select exactly one hole to set its position'; return; }
-		const name = [...selection][0];
-		const w = wellByName.get(name);
-		if (!w) { errMsg = 'Selected hole not found'; return; }
-		const d = { x: +(setX - w.x).toFixed(3), y: +(setY - w.y).toFixed(3), z: +(setZ - w.z).toFixed(3) };
+		if (selection.size === 0) { errMsg = 'Select one or more holes — the typed position sets the anchor; the group moves with it'; return; }
+		const aName = anchor;
+		const a = aName ? wellByName.get(aName) : null;
+		if (!a) { errMsg = 'Anchor hole not found'; return; }
+		const d = { x: +(setX - a.x).toFixed(3), y: +(setY - a.y).toFixed(3), z: +(setZ - a.z).toFixed(3) };
 		if (d.x === 0 && d.y === 0 && d.z === 0) { errMsg = 'Position equals current — nothing to change'; return; }
-		const r = await applyDelta([name], d, `set ${name} → (${setX}, ${setY}, ${setZ})`);
+		const names = [...selection];
+		const r = await applyDelta(names, d, `set ${aName} → (${setX}, ${setY}, ${setZ})${names.length > 1 ? ` + ${names.length - 1} more` : ''}`);
 		if (r) {
-			msg = `Set ${name} to (${setX}, ${setY}, ${setZ}) — saved to BIMS.${runId && !slotOrigin ? ' Reload deck to verify.' : ''}`;
+			msg = names.length === 1
+				? `Set ${aName} to (${setX}, ${setY}, ${setZ}) — saved to BIMS.${runId && !slotOrigin ? ' Reload deck to verify.' : ''}`
+				: applyMsg(`Set anchor ${aName} → (${setX}, ${setY}, ${setZ}); moved`, r);
 			if (runId && !slotOrigin) deckDirty = true;
 		}
 	}
@@ -1016,17 +1033,20 @@
 				</button>
 			</section>
 
-			<!-- Set absolute position (single hole) -->
+			<!-- Set absolute position (selection, anchor-translate) -->
 			<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
-				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Set position → one hole</h2>
-				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Type an EXACT x/y/z (deck mm) for the single selected hole — not a change. Prefilled with its current coords; edit and apply.</p>
+				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Set position → selection</h2>
+				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Type an EXACT x/y/z (deck mm) for the <strong>anchor</strong> hole — not a change. With several holes selected, the whole group translates by the same delta (relative spacing preserved). Prefilled with the anchor's current coords; edit and apply.</p>
+				<div class="mt-1 text-[10px] font-mono" style="color: var(--color-tron-text-secondary)">
+					{anchor ? `Anchor: ${anchor}${selCount > 1 ? ` (+${selCount - 1} more move with it)` : ''}` : 'Select one or more holes'}
+				</div>
 				<div class="mt-2 grid grid-cols-3 gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 					<label>x <input type="number" step="0.01" bind:value={setX} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
 					<label>y <input type="number" step="0.01" bind:value={setY} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
 					<label>z <input type="number" step="0.01" bind:value={setZ} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
 				</div>
-				<button type="button" onclick={applyAbsolute} disabled={busy || selCount !== 1} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-sm font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40" title="Select exactly one hole">
-					{selCount === 1 ? `Set ${[...selection][0]} to this position` : 'Select exactly one hole'}
+				<button type="button" onclick={applyAbsolute} disabled={busy || selCount === 0} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-sm font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40" title="Select one or more holes; the typed position sets the anchor and the group moves with it">
+					{selCount === 0 ? 'Select one or more holes' : selCount === 1 ? `Set ${anchor} to this position` : `Move ${selCount} holes (anchor ${anchor})`}
 				</button>
 			</section>
 

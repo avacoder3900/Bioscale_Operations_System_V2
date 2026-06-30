@@ -2846,3 +2846,27 @@ reagent_rejected branches; wax_filled & 'inspected' are legacy/unused; reagent i
 checks status==='wax_ready'; capture flips only wax_stored→wax_qc).
 
 All committed + pushed to master; npm run check stayed at the 11-error baseline.
+
+=== 2026-06-30 — Deck-cal: "Set position" now works on the whole highlight selection ===
+PRD docs/prds/DECK-CAL-SET-POSITION-SELECTION.md. The Deck Calibration Studio
+(/manufacturing/cart-mfg/deck-calibration) "Set position → one hole" panel was hard-gated to
+selection.size===1. Lifted that cap so the operator can type an exact x/y/z for ANY highlighted
+group (click / shift-click / box-drag).
+SEMANTICS: a deck is distinct holes, so forcing every selected hole to the same coordinate would
+collapse them — the only sound multi-hole "set position" is an ANCHOR-relative rigid translate.
+The typed x/y/z is the anchor hole's new position; the whole selection shifts by the same delta
+(relative spacing preserved). Single-hole selection = byte-identical to the old behavior. Mirrors
+the existing "Shift whole grid" anchor pattern but scoped to the selection + driven by an absolute
+target instead of typed dx/dy/dz.
+ANCHOR: most-recently-clicked hole while it stays selected; else falls back to the first selected
+hole in deck-definition order so the anchor is always defined. Inputs prefill from the anchor's
+current coords on anchor change; the panel shows the active anchor ("+N more move with it").
+UI-ONLY, reuses the existing engine — NO server/model/API change. applyAbsolute now accepts
+selCount>=1 and routes the anchor delta through applyDelta → ?/applyBatch (applyDeckEditBatch),
+inheriting bounds-guard, DeckCalibrationEdit history, AuditLog, single-undo (inverse delta),
+live-run update, and "Sync for real fills" semantics unchanged. Out-of-bounds members still
+report via failed[].
+FILES: src/routes/manufacturing/cart-mfg/deck-calibration/+page.svelte (anchorWell state + anchor
+derived; toggleWell stamps anchor on add; setX/Y/Z prefill off anchor; applyAbsolute rewrite;
+"Set position → selection" panel — title/help/anchor readout/button). + the PRD.
+npm run check: 11-error baseline (0 new in deck-calibration/+page.svelte); not yet committed.
