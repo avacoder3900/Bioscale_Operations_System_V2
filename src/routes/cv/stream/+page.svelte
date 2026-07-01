@@ -120,6 +120,15 @@
 		}
 	}
 
+	// A highlight was burned into the stored photo — point the grid + lightbox at
+	// the new (boxed) image so it shows everywhere without a reload.
+	function applyHighlightSaved(id: string, url: string) {
+		const i = images.findIndex((x) => x.id === id);
+		if (i === -1) return;
+		images[i] = { ...images[i], url, thumbnailUrl: url };
+		images = [...images];
+	}
+
 	function openLightbox(i: number) { lightboxIndex = i; }
 	function closeLightbox() { lightboxIndex = null; }
 	function prevImage() {
@@ -334,7 +343,13 @@
 		<div class="max-h-full max-w-5xl space-y-3" onclick={(e) => e.stopPropagation()}>
 			{#if img.url}
 				<div class="flex justify-center">
-					<PhotoHighlighter src={img.url} alt={img.cartridgeImageNumber ?? 'capture'} imgClass="mx-auto max-h-[70vh] w-auto rounded shadow-2xl" />
+					<PhotoHighlighter
+						src={img.url}
+						alt={img.cartridgeImageNumber ?? 'capture'}
+						imageId={img.id}
+						onsaved={(u) => applyHighlightSaved(img.id, u)}
+						imgClass="mx-auto max-h-[70vh] w-auto rounded shadow-2xl"
+					/>
 				</div>
 			{/if}
 

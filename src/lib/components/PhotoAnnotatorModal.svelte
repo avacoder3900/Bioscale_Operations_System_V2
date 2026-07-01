@@ -12,10 +12,14 @@
 	interface Props {
 		url: string | null;
 		alt?: string;
+		/** CvImage id — enables "Save to photo" in the highlighter. */
+		imageId?: string | null;
 		onclose: () => void;
+		/** Called with the new image URL after a save. */
+		onsaved?: (url: string) => void;
 	}
 
-	let { url, alt = 'photo', onclose }: Props = $props();
+	let { url, alt = 'photo', imageId = null, onclose, onsaved }: Props = $props();
 
 	function onKey(e: KeyboardEvent) {
 		if (url && e.key === 'Escape') onclose();
@@ -51,7 +55,7 @@
 					✕
 				</button>
 			</div>
-			<PhotoHighlighter src={url} {alt} imgClass="block max-h-[75vh] w-auto rounded" />
+			<PhotoHighlighter src={url} {alt} {imageId} {onsaved} imgClass="block max-h-[75vh] w-auto rounded" />
 		</div>
 	</div>
 {/if}

@@ -18,6 +18,14 @@
 
 	// Photo currently open in the highlight annotator (null = closed).
 	let annotateUrl = $state<string | null>(null);
+	let annotateImageId = $state<string | null>(null);
+
+	// A highlight was burned into the stored photo — repoint the feed row and the
+	// open modal at the new (boxed) image.
+	function applyHighlightSaved(id: string, url: string) {
+		feed = feed.map((r) => (r.imageId === id ? { ...r, imageUrl: url } : r));
+		annotateUrl = url;
+	}
 
 	const PHASE = 'post_mortem';
 	// Only ran carts (`completed`) are photographed here; the status is left as-is.
@@ -634,7 +642,12 @@
 
 <svelte:window onkeydown={onGlobalKeydown} />
 
-<PhotoAnnotatorModal url={annotateUrl} onclose={() => (annotateUrl = null)} />
+<PhotoAnnotatorModal
+	url={annotateUrl}
+	imageId={annotateImageId}
+	onsaved={(u) => applyHighlightSaved(annotateImageId ?? '', u)}
+	onclose={() => { annotateUrl = null; annotateImageId = null; }}
+/>
 
 <div class="min-h-screen bg-[var(--color-tron-bg-primary)] p-4 sm:p-6">
 	<div class="mx-auto max-w-6xl space-y-4">
@@ -861,7 +874,7 @@
 										{#if row.imageUrl}
 											<button
 												type="button"
-												onclick={() => (annotateUrl = row.imageUrl)}
+												onclick={() => { annotateUrl = row.imageUrl; annotateImageId = row.imageId; }}
 												title="Open photo to highlight"
 												class="block rounded ring-offset-1 ring-offset-[var(--color-tron-bg-primary)] transition-shadow hover:ring-2 hover:ring-[var(--color-tron-yellow,#facc15)]"
 											>

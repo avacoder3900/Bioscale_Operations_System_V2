@@ -25,13 +25,22 @@
 		imgClass?: string;
 		/** Extra classes on the outer wrapper. */
 		class?: string;
+		/**
+		 * CvImage id. When provided, a "Save to photo" button appears that burns
+		 * the boxes into the stored image via /api/cv/images/[id]/highlight.
+		 */
+		imageId?: string | null;
+		/** Called with the new image URL after a successful save. */
+		onsaved?: (url: string) => void;
 	}
 
 	let {
 		src,
 		alt = 'photo',
 		imgClass = 'block max-h-[70vh] w-auto rounded',
-		class: className = ''
+		class: className = '',
+		imageId = null,
+		onsaved
 	}: Props = $props();
 
 	const BOX_COLOR = 'var(--color-tron-yellow,#facc15)';
@@ -120,6 +129,35 @@
 		boxes = boxes.filter((_, idx) => idx !== i);
 	}
 
+	// ── Save (burn boxes into the stored photo) ─────────────────────────────
+	let saving = $state(false);
+	let saveError = $state<string | null>(null);
+
+	async function save() {
+		if (!imageId || boxes.length === 0 || saving) return;
+		saving = true;
+		saveError = null;
+		try {
+			const res = await fetch(`/api/cv/images/${encodeURIComponent(imageId)}/highlight`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ boxes })
+			});
+			const data = await res.json().catch(() => ({}));
+			if (!res.ok || !data.imageUrl) {
+				throw new Error(data.error || `HTTP ${res.status}`);
+			}
+			// The boxes are now baked into the pixels — hand the new URL up so the
+			// parent swaps src (which resets our overlay via the src $effect).
+			highlighting = false;
+			onsaved?.(data.imageUrl as string);
+		} catch (e) {
+			saveError = e instanceof Error ? e.message : 'Save failed';
+		} finally {
+			saving = false;
+		}
+	}
+
 	const preview = $derived(start && cursor ? boxFrom(start, cursor) : null);
 
 	function boxStyle(b: Box): string {
@@ -151,6 +189,17 @@
 			</button>
 		{/if}
 
+		{#if imageId && boxes.length > 0}
+			<button
+				type="button"
+				onclick={save}
+				disabled={saving}
+				class="rounded border border-[var(--color-tron-green,#39ff14)] bg-[rgba(57,255,20,0.12)] px-3 py-1.5 text-sm font-semibold text-[var(--color-tron-green,#39ff14)] transition-colors hover:bg-[rgba(57,255,20,0.2)] disabled:opacity-40"
+			>
+				{saving ? 'Saving…' : '💾 Save to photo'}
+			</button>
+		{/if}
+
 		{#if highlighting}
 			<span class="text-xs text-[var(--color-tron-text-secondary)]">
 				{start
@@ -159,6 +208,12 @@
 			</span>
 		{/if}
 	</div>
+
+	{#if saveError}
+		<div class="rounded border border-[var(--color-tron-red,#ff3366)] bg-[rgba(255,51,102,0.08)] px-3 py-1.5 text-xs text-[var(--color-tron-red,#ff3366)]">
+			{saveError}
+		</div>
+	{/if}
 
 	<!-- Image + overlay. The wrapper hugs the image so % coords map to the photo. -->
 	<div bind:this={wrapEl} class="relative inline-block select-none leading-none">

@@ -203,6 +203,20 @@ export async function copyViaWorker(sourceKey: string, destKey: string): Promise
 }
 
 /**
+ * Download an object's bytes via the Cloudflare Worker (GET /file/:key).
+ * Reads go through the Worker's native R2 binding, bypassing the direct-to-R2
+ * TLS issues Vercel functions hit.
+ */
+export async function downloadViaWorker(key: string): Promise<Buffer> {
+	const workerUrl = env.R2_WORKER_URL;
+	if (!workerUrl) throw new Error('R2_WORKER_URL not configured');
+	const url = `${workerUrl}/file/${encodeURIComponent(key)}`;
+	const res = await fetch(url);
+	if (!res.ok) throw new Error(`worker download ${key} → ${res.status}`);
+	return Buffer.from(await res.arrayBuffer());
+}
+
+/**
  * Delete an object via the Cloudflare Worker (DELETE /file/:key).
  * Worker requires X-Upload-Secret for writes/deletes.
  */
