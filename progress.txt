@@ -3024,3 +3024,22 @@ Prior reference deployment (predates this session, no git metadata — origin un
 https://bioscale-operations-system-mongodb-8mruxedpw-brevitest.vercel.app — user reports this had a
 working "Common Failures" tab; could not be traced to a commit. If its source is recovered via the
 Vercel dashboard Source tab, reconcile against the Label Creation tab above and note the diff here.
+
+--------------------------------------------------------------------------------
+2026-07-01 (follow-up) — feat/cartridge-photo-filters-v2 merged to master, deployed to production
+--------------------------------------------------------------------------------
+Fast-forward merged feat/cartridge-photo-filters-v2 into master (master hadn't moved since branching,
+so no new merge commit) and pushed to origin/master. This time followed the Deployment Rule properly:
+no local `vercel deploy` — pushed to GitHub and let the Vercel GitHub integration build/deploy
+automatically. Confirmed the integration does work correctly on the brevitest-scope project: a
+Production build started within 8 seconds of the push.
+
+Deployment: production — https://bioscale-operations-system-mongodb-irqbctilj-brevitest.vercel.app
+  (dpl_AUcxZL3hFJQUVNV61Z4io4aVPadC), aliased to bioscale-operations-system-mongodb.vercel.app
+Source: master @ commit be3feb371 (triggered automatically by GitHub integration, not local deploy)
+Retrieve this exact code: git checkout master (currently at be3feb371;
+  git log master --oneline to re-find it if master has since moved on)
+What this deployment is for: promotes the full cartridge-photo-filters-v2 feature set (arm/experiment/
+  tag/common-failure filters on /cartridge-admin and /cv/stream, plus the /cv/stream Label Creation
+  tab) to production for the whole team. The Label Creation tab blank-screen issue (see above) is
+  still unresolved as of this deploy — flag to the team if it reproduces in production.
