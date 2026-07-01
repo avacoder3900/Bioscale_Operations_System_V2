@@ -3166,3 +3166,14 @@ endpoint. Not deployed (no push yet).
 Next: M2–M5 live in the brevitest-research repo (branch feat/cartridge-barcode-enrichment):
 research proxy endpoint (server-to-server with AGENT_API_KEY) + BarcodeCard/CartridgePhotos
 components wired into the 4 barcode display sites.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-jcacrtpl2-brevitest.vercel.app
+Source: branch feat/cartridge-photos-agent-api @ commit f977234a
+Retrieve this exact code: git checkout feat/cartridge-photos-agent-api at commit f977234a
+  (or: git log feat/cartridge-photos-agent-api --oneline)
+What this deployment is for: cross-app cartridge photos agent API (M1) — consumed by the
+  brevitest-research app. Verified live: no-key->401, valid-key+unknown-barcode->200 found:false.
+Companion deploy: brevitest-research preview https://brevitest-research-8xsl7aut9-brevitest.vercel.app
+  (branch feat/cartridge-barcode-enrichment @ 88bf806). NOTE: research cloud preview needs env vars
+  BIMS_BASE_URL + AGENT_API_KEY set in the brevitest/brevitest-research Vercel project to load photos;
+  verified end-to-end LOCALLY instead (research dev server -> BIMS preview, all proxy paths pass).
