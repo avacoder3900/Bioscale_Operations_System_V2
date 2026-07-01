@@ -229,7 +229,7 @@
 					? 'border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]'
 					: 'border-transparent text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
 		>
-			Manage Failures
+			Label Creation
 		</button>
 	</div>
 
