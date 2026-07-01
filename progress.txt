@@ -3080,3 +3080,19 @@ Retrieve this exact code: git checkout feat/cv-failure-labels (currently at d10f
 What this deployment is for: review before merging to master — this REPLACES the Label Creation
   tab currently live in production (from the earlier be3feb371 deploy) with the correct feature.
   Not yet merged to master / promoted to production.
+
+================================================================================
+2026-07-01 (follow-up) — feat/cv-failure-labels merged to master, deployed to production
+================================================================================
+User reviewed the preview (git-feat-cv-ce8275 branch alias) and confirmed it looks right. Fast-
+forward merged feat/cv-failure-labels into master (master hadn't moved since branching) and pushed
+— GitHub integration auto-built and deployed to production, no local `vercel deploy`.
+
+Deployment: production — https://bioscale-operations-system-mongodb-2l7luli0x-brevitest.vercel.app
+  (dpl_9LMNxnduGNkKQ1AUcLXLn5fpbyQP)
+Source: master @ commit 8857bc2ef (triggered automatically by GitHub integration)
+Retrieve this exact code: git checkout master (currently at 8857bc2ef;
+  git log master --oneline to re-find it if master has since moved on)
+What this deployment is for: promotes the correct common-failure-labels feature (FailureLabel
+  model, Manage tab, lightbox Notes+Labels, /capture quick-tag panel) to production, replacing the
+  earlier wrong-data-model "Label Creation" tab that had been live since the be3feb371 deploy.
