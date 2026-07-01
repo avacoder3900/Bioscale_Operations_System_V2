@@ -126,6 +126,9 @@ const cartridgeRecordSchema = new Schema({
 	quantity: Number,
 	expirationDate: String,
 	priorStatus: String,
+	// Set by the Quick Reagent Fill Test tool when a cart is reused for a test
+	// fill (QUICK-REAGENT-FILL-TEST.md) — a queryable marker for filtering/cleanup.
+	usedForTestFill: { type: Boolean, default: false },
 	folderId: String,
 	reagentChain: { type: [Schema.Types.Mixed], default: [] },
 
@@ -215,6 +218,8 @@ cartridgeRecordSchema.index({ status: 1, 'reagentFilling.expirationDate': 1 });
 cartridgeRecordSchema.index({ 'testExecution.spu._id': 1 });
 cartridgeRecordSchema.index({ 'sample.subjectId': 1 });
 cartridgeRecordSchema.index({ 'testResult.status': 1 });
+cartridgeRecordSchema.index({ arm: 1 });
+cartridgeRecordSchema.index({ experiment: 1 });
 
 applySacredMiddleware(cartridgeRecordSchema);
 

@@ -10,6 +10,7 @@ import { connectDB } from '$lib/server/db/connection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CaptureStation, deriveStatus } from '$lib/server/db/models/capture-station.js';
 import { CvProject } from '$lib/server/db/models/cv-project.js';
+import { FailureLabel } from '$lib/server/db/models/failure-label.js';
 import type { PageServerLoad } from './$types';
 
 const DEFAULT_PHASES = [
@@ -29,6 +30,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// Pull the phases we actually have data for, union with the standard list.
 	const distinctPhases = await CvImage.distinct('cartridgeTag.phase');
 	const phases = Array.from(new Set([...DEFAULT_PHASES, ...(distinctPhases as string[]).filter(Boolean)])).sort();
+
+	// Premade failure-label pick-list, for quick-tagging a photo right after capture.
+	const failureLabelsRaw = await FailureLabel.find().sort({ text: 1 }).lean();
+	const failureLabels = (failureLabelsRaw as any[]).map(l => ({ id: l._id, text: l.text }));
 
 	// Pi capture stations for the station dropdown. Story E1: return ALL
 	// stations (not just online) so the operator can see why an option is
@@ -109,7 +114,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		user: { _id: locals.user._id, username: locals.user.username },
 		initialPhase,
 		projectContext,
-		deploymentsByPhase
+		deploymentsByPhase,
+		failureLabels
 	};
 };
 

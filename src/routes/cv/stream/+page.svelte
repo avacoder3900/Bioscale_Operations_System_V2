@@ -5,12 +5,99 @@
 
 	let { data } = $props();
 
+	// 'browse' = the image grid (Unreviewed/Reviewed/All); 'manage' = the
+	// failure-label editor. Client-side only — doesn't touch the review tab
+	// state or reload image data.
+	let activeView = $state<'browse' | 'manage'>('browse');
+
+	// Manage tab: premade failure-label pick-list. Local copy so + / delete
+	// feel instant; re-synced whenever the server sends a fresh page.
+	let failureLabels = $state(data.failureLabels);
+	$effect(() => { failureLabels = data.failureLabels; });
+	let newLabelText = $state('');
+	let addingLabel = $state(false);
+
+	async function addFailureLabel() {
+		const text = newLabelText.trim();
+		if (!text || addingLabel) return;
+		addingLabel = true;
+		try {
+			const res = await fetch('/api/cv/failure-labels', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ text })
+			});
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			const body = await res.json();
+			if (!failureLabels.some(l => l.id === body.data._id)) {
+				failureLabels = [...failureLabels, { id: body.data._id, text: body.data.text }].sort((a, b) => a.text.localeCompare(b.text));
+			}
+			newLabelText = '';
+		} catch (err) {
+			console.error(err);
+		} finally {
+			addingLabel = false;
+		}
+	}
+
+	async function deleteFailureLabel(id: string) {
+		if (!confirm('Delete this failure label? (Photos already tagged with it keep the tag.)')) return;
+		const prev = failureLabels;
+		failureLabels = failureLabels.filter(l => l.id !== id);
+		try {
+			const res = await fetch(`/api/cv/failure-labels/${id}`, { method: 'DELETE' });
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+		} catch (err) {
+			failureLabels = prev;
+			console.error(err);
+		}
+	}
+
+	// Per-photo Notes + Labels (lightbox). Persist immediately via PATCH.
+	let tagNotesDraft = $state('');
+	let savingTags = $state(false);
+
+	async function saveImageTags(id: string, patch: { labels?: string[]; notes?: string }) {
+		savingTags = true;
+		try {
+			const res = await fetch(`/api/cv/images/${id}/tags`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(patch)
+			});
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+		} catch (err) {
+			console.error(err);
+		} finally {
+			savingTags = false;
+		}
+	}
+
+	function toggleImageLabel(img: { id: string; labels: string[] }, text: string) {
+		const has = img.labels.includes(text);
+		const nextLabels = has ? img.labels.filter(l => l !== text) : [...img.labels, text];
+		img.labels = nextLabels;
+		images = [...images];
+		saveImageTags(img.id, { labels: nextLabels });
+	}
+
+	function commitImageNotes(img: { id: string; notes: string }) {
+		img.notes = tagNotesDraft;
+		images = [...images];
+		saveImageTags(img.id, { notes: tagNotesDraft });
+	}
+
 	let phase = $state(data.filters.phase || '');
 	let cartridgeId = $state(data.filters.cartridgeId || '');
 	let verdict = $state(data.filters.verdict || '');
 	let fromDate = $state(data.filters.fromDate || '');
 	let toDate = $state(data.filters.toDate || '');
 	let highlighted = $state(data.filters.highlighted || '');
+	let arm = $state(data.filters.arm || '');
+	let experiment = $state(data.filters.experiment || '');
+	let tag = $state(data.filters.tag || '');
+	let failureCode = $state(data.filters.failureCode || '');
+	let notesSearch = $state(data.filters.notesSearch || '');
 
 	// Local, mutable copies so we can label optimistically without a round-trip
 	// reload. Re-synced whenever the server sends a fresh page (nav / tab switch).
@@ -39,6 +126,11 @@
 		if (fromDate) params.set('from', fromDate);
 		if (toDate) params.set('to', toDate);
 		if (highlighted) params.set('highlighted', highlighted);
+		if (arm) params.set('arm', arm);
+		if (experiment) params.set('experiment', experiment);
+		if (tag) params.set('tag', tag);
+		if (failureCode) params.set('failureCode', failureCode);
+		if (notesSearch) params.set('notes', notesSearch);
 		return params;
 	}
 
@@ -55,6 +147,11 @@
 		fromDate = '';
 		toDate = '';
 		highlighted = '';
+		arm = '';
+		experiment = '';
+		tag = '';
+		failureCode = '';
+		notesSearch = '';
 		goto(`/cv/stream?review=${data.review}`);
 	}
 
@@ -132,15 +229,20 @@
 		images = [...images];
 	}
 
-	function openLightbox(i: number) { lightboxIndex = i; }
+	function openLightbox(i: number) {
+		lightboxIndex = i;
+		tagNotesDraft = images[i]?.notes ?? '';
+	}
 	function closeLightbox() { lightboxIndex = null; }
 	function prevImage() {
 		if (lightboxIndex === null) return;
 		lightboxIndex = (lightboxIndex - 1 + images.length) % images.length;
+		tagNotesDraft = images[lightboxIndex]?.notes ?? '';
 	}
 	function nextImage() {
 		if (lightboxIndex === null) return;
 		lightboxIndex = (lightboxIndex + 1) % images.length;
+		tagNotesDraft = images[lightboxIndex]?.notes ?? '';
 	}
 
 	// Label the image in the lightbox, then advance — keeps the scroll-and-label
@@ -182,9 +284,9 @@
 		{#each tabs as t (t.key)}
 			<button
 				type="button"
-				onclick={() => switchTab(t.key)}
+				onclick={() => { activeView = 'browse'; switchTab(t.key); }}
 				class="-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors
-					{data.review === t.key
+					{activeView === 'browse' && data.review === t.key
 						? 'border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]'
 						: 'border-transparent text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
 			>
@@ -196,8 +298,19 @@
 				{/if}
 			</button>
 		{/each}
+		<button
+			type="button"
+			onclick={() => { activeView = 'manage'; }}
+			class="-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors
+				{activeView === 'manage'
+					? 'border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]'
+					: 'border-transparent text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
+		>
+			Label Creation
+		</button>
 	</div>
 
+	{#if activeView === 'browse'}
 	<!-- Filters -->
 	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
 		<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
@@ -240,6 +353,46 @@
 					<option value="no">Not highlighted</option>
 				</select>
 			</div>
+			<div>
+				<label for="arm-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Arm</label>
+				<select id="arm-filter" bind:value={arm} class="tron-input w-full">
+					<option value="">All arms</option>
+					{#each data.armOptions as a (a)}
+						<option value={a}>{a}</option>
+					{/each}
+				</select>
+			</div>
+			<div>
+				<label for="experiment-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Experiment</label>
+				<select id="experiment-filter" bind:value={experiment} class="tron-input w-full">
+					<option value="">All experiments</option>
+					{#each data.experimentOptions as e (e)}
+						<option value={e}>{e}</option>
+					{/each}
+				</select>
+			</div>
+			<div>
+				<label for="tag-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Tag</label>
+				<select id="tag-filter" bind:value={tag} class="tron-input w-full">
+					<option value="">All tags</option>
+					{#each data.tagOptions as t (t)}
+						<option value={t}>{t}</option>
+					{/each}
+				</select>
+			</div>
+			<div>
+				<label for="failure-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Common Failure</label>
+				<select id="failure-filter" bind:value={failureCode} class="tron-input w-full">
+					<option value="">All</option>
+					{#each data.failureCodeOptions as fc (fc.code)}
+						<option value={fc.code}>{fc.label}</option>
+					{/each}
+				</select>
+			</div>
+			<div>
+				<label for="notes-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Search Notes</label>
+				<input id="notes-filter" type="text" bind:value={notesSearch} placeholder="Keyword in photo notes" class="tron-input w-full" />
+			</div>
 		</div>
 		<div class="mt-3 flex gap-2">
 			<button type="button" onclick={applyFilters} class="rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-[var(--color-tron-bg-primary)]">
@@ -281,6 +434,7 @@
 						type="button"
 						onclick={() => openLightbox(i)}
 						class="block w-full text-left"
+						title={img.notes || undefined}
 					>
 						<div class="relative">
 							{#if img.thumbnailUrl}
@@ -296,10 +450,20 @@
 							{#if img.highlighted}
 								<span class="absolute right-1 top-1 rounded bg-[var(--color-tron-yellow,#facc15)] px-1.5 py-0.5 text-[10px] font-bold text-black" title="Highlighted">▣ HL</span>
 							{/if}
+							{#if img.notes}
+								<span class="absolute right-1 top-7 rounded bg-black/60 px-1 py-0.5 text-[10px] text-white">📝</span>
+							{/if}
 						</div>
 						<div class="p-2 text-xs">
 							<div class="truncate font-mono text-[var(--color-tron-cyan)]">{img.cartridgeImageNumber ?? '—'}</div>
 							<div class="truncate text-[var(--color-tron-text-secondary)]">{img.phase ?? '—'}</div>
+							{#if img.labels && img.labels.length > 0}
+								<div class="mt-0.5 flex flex-wrap gap-0.5">
+									{#each img.labels as l (l)}
+										<span class="truncate rounded bg-[var(--color-tron-cyan)]/20 px-1 py-0.5 text-[9px] text-[var(--color-tron-cyan)]">{l}</span>
+									{/each}
+								</div>
+							{/if}
 							<div class="truncate text-[10px] text-[var(--color-tron-text-secondary)]">
 								{formatRelative(img.capturedAt)}
 							</div>
@@ -339,6 +503,48 @@
 			<button type="button" disabled={data.page >= data.totalPages} onclick={() => goToPage(data.page + 1)} class="rounded border border-[var(--color-tron-border)] px-4 py-2 text-sm disabled:opacity-30">
 				Next →
 			</button>
+		</div>
+	{/if}
+	{/if}
+
+	{#if activeView === 'manage'}
+		<!-- Manage the premade failure-label pick-list (FailureLabel) — used by the
+		     Labels picker on each photo below, and at capture time. -->
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
+			<div class="mb-4 flex items-center justify-between">
+				<h2 class="text-lg font-medium text-[var(--color-tron-cyan)]">Common Failure Labels</h2>
+				<button
+					type="button"
+					onclick={() => { const el = document.getElementById('new-label-input'); el?.focus(); }}
+					class="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--color-tron-cyan)] text-lg font-bold text-[var(--color-tron-bg-primary)] hover:opacity-90"
+					title="Add a new failure label"
+				>+</button>
+			</div>
+
+			<form onsubmit={(e) => { e.preventDefault(); addFailureLabel(); }} class="mb-4 flex gap-2">
+				<input
+					id="new-label-input"
+					type="text"
+					bind:value={newLabelText}
+					placeholder="Type a new failure label and press Enter…"
+					class="tron-input flex-1 text-sm"
+				/>
+				<button type="submit" disabled={!newLabelText.trim() || addingLabel} class="rounded border border-green-500/50 px-4 py-2 text-sm text-green-400 hover:bg-green-900/20 disabled:opacity-40">
+					Add
+				</button>
+			</form>
+
+			<div class="flex flex-wrap gap-2">
+				{#each failureLabels as l (l.id)}
+					<span class="flex items-center gap-1.5 rounded-full border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-1 text-sm text-[var(--color-tron-text)]">
+						{l.text}
+						<button type="button" onclick={() => deleteFailureLabel(l.id)} class="text-[var(--color-tron-text-secondary)] hover:text-red-400" title="Delete">✕</button>
+					</span>
+				{/each}
+				{#if failureLabels.length === 0}
+					<p class="text-sm text-[var(--color-tron-text-secondary)]">No failure labels yet — add one above.</p>
+				{/if}
+			</div>
 		</div>
 	{/if}
 </div>
@@ -412,6 +618,41 @@
 					</div>
 					<div><span class="text-[var(--color-tron-text-secondary)]">Captured:</span> {img.capturedAt ? new Date(img.capturedAt).toLocaleString() : '—'}</div>
 					<div><span class="text-[var(--color-tron-text-secondary)]">By:</span> {img.capturedByUsername ?? '—'}</div>
+				</div>
+
+				<!-- Labels — select-only from the premade FailureLabel list (Manage tab).
+				     Not free text; that's Notes below. -->
+				<div class="mt-3 border-t border-[var(--color-tron-border)] pt-3">
+					<div class="mb-1.5 text-xs font-semibold text-[var(--color-tron-text-secondary)]">FAILURE LABELS</div>
+					<div class="flex flex-wrap gap-1.5">
+						{#each data.failureLabels as l (l.id)}
+							{@const active = img.labels.includes(l.text)}
+							<button
+								type="button"
+								onclick={() => toggleImageLabel(img, l.text)}
+								class="rounded-full border px-2.5 py-1 text-xs transition-colors
+									{active
+										? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]'
+										: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
+							>{l.text}</button>
+						{/each}
+						{#if data.failureLabels.length === 0}
+							<p class="text-xs text-[var(--color-tron-text-secondary)]">No failure labels yet — add some in the Label Creation tab.</p>
+						{/if}
+					</div>
+				</div>
+
+				<!-- Notes — free text, separate from Labels above. -->
+				<div class="mt-3 border-t border-[var(--color-tron-border)] pt-3">
+					<div class="mb-1.5 text-xs font-semibold text-[var(--color-tron-text-secondary)]">NOTES</div>
+					<textarea
+						bind:value={tagNotesDraft}
+						onblur={() => commitImageNotes(img)}
+						disabled={savingTags}
+						rows="2"
+						placeholder="Freeform notes about this photo…"
+						class="tron-input w-full text-sm"
+					></textarea>
 				</div>
 			</div>
 		</div>

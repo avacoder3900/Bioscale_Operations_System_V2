@@ -58,6 +58,19 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const forensicNotes = formData.get('forensicNotes')?.toString().trim() || undefined;
 		const forensic = forensicNotes ? { notes: forensicNotes } : undefined;
 
+		// Optional common-failure tagging at capture time (select-only labels from
+		// FailureLabel, plus a free-text note) — both land on cartridgeTag, distinct
+		// from the forensic notes above.
+		const labelsRaw = formData.get('labels')?.toString();
+		let labels: string[] = [];
+		if (labelsRaw) {
+			try {
+				const parsed = JSON.parse(labelsRaw);
+				if (Array.isArray(parsed)) labels = parsed.filter((l): l is string => typeof l === 'string');
+			} catch { /* ignore malformed labels payload */ }
+		}
+		const cartridgeTagNotes = formData.get('notes')?.toString().trim() || undefined;
+
 		if (!file) return json({ error: 'file is required' }, { status: 400 });
 		if (!cartridgeId) return json({ error: 'cartridgeId is required' }, { status: 400 });
 		if (!phase) return json({ error: 'phase is required' }, { status: 400 });
@@ -97,7 +110,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			capturedBy: { _id: locals.user._id, username: locals.user.username },
 			imageUrl: publicUrl,
 			processingMode: processingMode === 'raw' || processingMode === 'full' ? processingMode : undefined,
-			cartridgeTag: { cartridgeRecordId: cartridgeId, phase },
+			cartridgeTag: {
+				cartridgeRecordId: cartridgeId,
+				phase,
+				...(labels.length > 0 ? { labels } : {}),
+				...(cartridgeTagNotes ? { notes: cartridgeTagNotes } : {})
+			},
 			cartridgeImageNumber,
 			...(forensic ? { metadata: { forensic } } : {})
 		});
