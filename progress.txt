@@ -2905,3 +2905,54 @@ applyDeckEditBatch (bounds guard + history + AuditLog + single Undo + live-run u
 the existing applyGlobalShift (which only hits the active role → easy to half-shift the deck).
 UI-only, no server change. npm run check: 11-error baseline (0 new in deck-calibration/+page.svelte).
 Reaches operators only after the stale prod alias is promoted to master.
+
+================================================================================
+2026-07-01 — Quick Reagent Fill Test page (self-service test-cart prep)
+================================================================================
+PRD: docs/prds/QUICK-REAGENT-FILL-TEST.md
+Productized the ad-hoc "set carts to wax_ready so I can scan them into a reagent test fill"
+DB-script work (done by hand repeatedly through the 2026-07-01 reagent test session) into a
+self-service page modeled 1:1 on Quick Seal.
+
+New route: /manufacturing/cart-mfg/quick-reagent-test
+  - +page.svelte: same textarea bulk-scan UI as quick-seal; button "Make N carts reagent-fillable";
+    lists converted (from→wax_ready) + rejected; keeps not-found barcodes in the box to re-scan.
+  - +page.server.ts: `convert` action takes ANY existing cart at ANY status and:
+      status → wax_ready (reagent-fill intake gate), reagentFilling → { tubeRecords: [] }
+      (clears the "already reagent-filled" guard so reused/already-filled carts scan clean),
+      records priorStatus, sets usedForTestFill:true, pushes a "Used for test fill" note
+      (phase 'test-fill'), writes an AuditLog row (action 'quick_reagent_test').
+      Only not-found barcodes are rejected — every existing cart is accepted (the whole point).
+  - permissions: manufacturing:read (load) / manufacturing:write (action), like Quick Seal.
+Model: added `usedForTestFill: Boolean` to cartridge-record.ts (strict mode would strip it otherwise);
+priorStatus already existed. Nav: added "Quick Rgt Test" item after "Quick Seal" in cart-mfg/+layout.svelte.
+npm run check: 11-error baseline (0 new in the new/edited files). Reaches operators only after the
+stale prod alias is promoted to master.
+
+================================================================================
+2026-07-01 — FIX: reagent/wax run "succeeds" instantly without filling (B07)
+================================================================================
+Root cause (evidence-backed, see memory project-reagent-empty-run-calibrator):
+NOT a connection/bridge bug and NOT a parameter-parsing bug. Verified the robot
+received well_2=true correctly. The run bailed BEFORE the fill logic: the protocol
+searches /dev/ttyACM* for the tip-calibrator once at startup; the calibrator (a USB
+serial device) enumerates a few SECONDS after the run starts, so the cold probe
+missed it → protocol.pause('Unable to find calibrator serial port') then `return`
+→ run ends with 16 setup commands, zero fills. BIMS auto-resumes that first pause
+(off-deck auto-resume) → the empty run lands as "succeeded". Evidence: run 6763d05c
+command stream ended at waitForResume; /dev/ttyACM0 (Particle calibrator) mtime was
+16:44, ~AFTER the ~16:43:50 probe; calibrator answers 'C'->'=-1.0:1:0' fine now.
+
+Fix (protocols/Reagent_Filling_GEN7.py + Wax_Filling_GEN7_Cartridge.py, identical):
+- Extracted the port probe into _probe_for_calibrator(); added _find_calibrator()
+  that POLLS for the calibrator for ~25s (handles late USB enumeration) instead of
+  one cold probe.
+- Replaced the silent `pause(...); return` with a retry-on-resume loop: pause with a
+  clear "Tip calibrator missing — Resume to retry" message, and each Resume re-probes
+  and CONTINUES the run (never returns to an empty success). Matches the operator's
+  "error pops, resume/re-run, then it fills" workaround — now automatic.
+- Analysis pass (is_simulating) kept single-probe + return so upload/analysis can't
+  hang on the retry loop. py_compile clean on both.
+PENDING DEPLOY: the fix only takes effect once the .py is re-uploaded to B07 (POST
+/api/opentrons-lab/robots/[id]/protocols → new opentronsProtocolId; select it in the
+Start Run panel). Repo edit alone does nothing on the robot.
