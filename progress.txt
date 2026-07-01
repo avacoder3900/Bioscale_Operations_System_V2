@@ -3096,3 +3096,45 @@ Retrieve this exact code: git checkout master (currently at 8857bc2ef;
 What this deployment is for: promotes the correct common-failure-labels feature (FailureLabel
   model, Manage tab, lightbox Notes+Labels, /capture quick-tag panel) to production, replacing the
   earlier wrong-data-model "Label Creation" tab that had been live since the be3feb371 deploy.
+
+================================================================================
+2026-07-01 — feat/photo-highlight-annotation — photo Highlight tool + save + filter
+================================================================================
+New feature: operators draw yellow outline boxes on capture photos, save them into the
+image, and filter the Image Stream by highlighted photos.
+
+Components (src/lib/components/):
+- PhotoHighlighter.svelte — "Highlight" toggle; two clicks (corner-to-corner) drop a
+  yellow border-only box (transparent interior). Normalized [0..1] coords track the image
+  on resize; live rubber-band preview; per-box x delete; Clear; right-click cancels; boxes
+  reset when src changes. Given an imageId it shows "Save to photo".
+- PhotoAnnotatorModal.svelte — full-screen wrapper opening a photo in the highlighter
+  (used by the cart-mfg inspect feeds).
+
+Save (burn-in): POST /api/cv/images/[id]/highlight — pulls capture bytes via the R2 worker
+(new downloadViaWorker helper in services/r2.ts), sharp-composites the boxes as yellow
+stroked rects at real pixel scale (EXIF-orientation safe via resolveWithObject dims),
+uploads under a new key, repoints CvImage.imageUrl/filePath (+ cartridge photos[] mirror),
+deletes the original object (overwrite-in-place per operator choice), records the boxes
+under metadata.highlight, and audit-logs (cv_images / highlight_burn_in).
+
+Surfaces: /cv/stream lightbox + reagent-inspect / wax-inspect / post-mortem-inspect feed
+thumbnails (click -> annotator modal).
+
+Filter: /cv/stream gained a "Highlighted" filter (Any / Highlighted / Not highlighted)
+matching on metadata.highlight existence, with a yellow "HL" thumbnail badge. Merged
+alongside master's arm/experiment/tag/common-failure/notes filters (resolved the two
+/cv/stream conflicts to keep both; HL badge stacks above the notes badge).
+
+Merge: master had advanced to ee49dfff since the branch point; merged master into the
+branch, resolved the /cv/stream conflicts, npm run check clean for the touched files.
+Removed the temporary /highlight-test harness + its PUBLIC_PATHS / layout publicPaths
+bypasses before merging.
+
+Deployment: production — https://bioscale-operations-system-mongodb-8q27b7z8y-brevitest.vercel.app
+Source: master @ commit 71776242 (fast-forward from feat/photo-highlight-annotation;
+  triggered automatically by GitHub integration)
+Retrieve this exact code: git checkout master (currently at 71776242;
+  git log master --oneline to re-find it if master has since moved on)
+What this deployment is for: ships the photo Highlight tool (draw + save-to-photo +
+  filter-by-highlighted) to production.
