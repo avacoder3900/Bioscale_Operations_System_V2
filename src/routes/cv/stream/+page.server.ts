@@ -9,13 +9,15 @@
  * Filters: phase, cartridgeId (partial match), date range, verdict (within
  * the Reviewed/All tabs). Paginated 48 per page, sorted by capturedAt desc.
  */
-import { redirect } from '@sveltejs/kit';
+import { redirect, fail } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
 import { ManufacturingSettings } from '$lib/server/db/models/manufacturing-settings.js';
+import { generateId } from '$lib/server/db/utils.js';
+import { requirePermission } from '$lib/server/permissions';
 import { getR2Url } from '$lib/server/services/r2';
-import type { PageServerLoad } from './$types';
+import type { PageServerLoad, Actions } from './$types';
 
 const PAGE_SIZE = 48;
 
@@ -128,7 +130,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	const failureCodeOptions = (((settingsDoc as any)?.rejectionReasonCodes ?? []) as any[])
 		.slice()
 		.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
-		.map(rc => ({ code: rc.code, label: rc.label, processType: rc.processType }));
+		.map(rc => ({ id: String(rc._id), code: rc.code, label: rc.label, processType: rc.processType, sortOrder: rc.sortOrder ?? 0 }));
 
 	const images = (imagesRaw as any[]).map(img => ({
 		id: img._id,
@@ -162,6 +164,68 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		tagOptions,
 		failureCodeOptions
 	};
+};
+
+export const actions: Actions = {
+	/** Create a common-failure reason (wax or reagent, picked in the form). */
+	createFailureReason: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:admin');
+		await connectDB();
+
+		const data = await request.formData();
+		const code = (data.get('code') as string)?.trim();
+		const label = (data.get('label') as string)?.trim();
+		const processType = (data.get('processType') as string) === 'wax' ? 'wax' : 'reagent';
+		const sortOrder = Number(data.get('sortOrder') ?? 0);
+
+		if (!code || !label) return fail(400, { error: 'Code and label are required' });
+
+		await ManufacturingSettings.findByIdAndUpdate(
+			'default',
+			{ $push: { rejectionReasonCodes: { _id: generateId(), code, label, processType, sortOrder } } },
+			{ upsert: true }
+		);
+		return { success: true };
+	},
+
+	/** Update a common-failure reason's label/sort order. */
+	updateFailureReason: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:admin');
+		await connectDB();
+
+		const data = await request.formData();
+		const codeId = data.get('codeId') as string;
+		const label = (data.get('label') as string)?.trim();
+		const sortOrder = Number(data.get('sortOrder') ?? 0);
+
+		if (!codeId || !label) return fail(400, { error: 'Code ID and label are required' });
+
+		await ManufacturingSettings.findOneAndUpdate(
+			{ 'rejectionReasonCodes._id': codeId },
+			{ $set: { 'rejectionReasonCodes.$.label': label, 'rejectionReasonCodes.$.sortOrder': sortOrder } }
+		);
+		return { success: true };
+	},
+
+	/** Delete a common-failure reason. */
+	deleteFailureReason: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:admin');
+		await connectDB();
+
+		const data = await request.formData();
+		const codeId = data.get('codeId') as string;
+
+		if (!codeId) return fail(400, { error: 'Code ID required' });
+
+		await ManufacturingSettings.findByIdAndUpdate(
+			'default',
+			{ $pull: { rejectionReasonCodes: { _id: codeId } } }
+		);
+		return { success: true };
+	}
 };
 
 export const config = { maxDuration: 60 };

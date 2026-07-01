@@ -1,8 +1,31 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
+	import { enhance } from '$app/forms';
 
 	let { data } = $props();
+
+	// 'browse' = the image grid (Unreviewed/Reviewed/All); 'manage' = the
+	// common-failures editor. Client-side only — doesn't touch the review tab
+	// state or reload image data.
+	let activeView = $state<'browse' | 'manage'>('browse');
+	let editingReasonId = $state<string | null>(null);
+	let editLabel = $state('');
+	let editSortOrder = $state(0);
+	let showAddReason = $state(false);
+	let newCode = $state('');
+	let newLabel = $state('');
+	let newSortOrder = $state(0);
+	let newProcessType = $state<'wax' | 'reagent'>('wax');
+
+	function startEditReason(reason: { id: string; label: string; sortOrder: number }) {
+		editingReasonId = reason.id;
+		editLabel = reason.label;
+		editSortOrder = reason.sortOrder;
+	}
+	function cancelEditReason() {
+		editingReasonId = null;
+	}
 
 	let phase = $state(data.filters.phase || '');
 	let cartridgeId = $state(data.filters.cartridgeId || '');
@@ -184,9 +207,9 @@
 		{#each tabs as t (t.key)}
 			<button
 				type="button"
-				onclick={() => switchTab(t.key)}
+				onclick={() => { activeView = 'browse'; switchTab(t.key); }}
 				class="-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors
-					{data.review === t.key
+					{activeView === 'browse' && data.review === t.key
 						? 'border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]'
 						: 'border-transparent text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
 			>
@@ -198,8 +221,19 @@
 				{/if}
 			</button>
 		{/each}
+		<button
+			type="button"
+			onclick={() => { activeView = 'manage'; }}
+			class="-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors
+				{activeView === 'manage'
+					? 'border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]'
+					: 'border-transparent text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text-primary)]'}"
+		>
+			Manage Failures
+		</button>
 	</div>
 
+	{#if activeView === 'browse'}
 	<!-- Filters -->
 	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
 		<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
@@ -381,6 +415,100 @@
 			<button type="button" disabled={data.page >= data.totalPages} onclick={() => goToPage(data.page + 1)} class="rounded border border-[var(--color-tron-border)] px-4 py-2 text-sm disabled:opacity-30">
 				Next →
 			</button>
+		</div>
+	{/if}
+	{/if}
+
+	{#if activeView === 'manage'}
+		<!-- Manage common-failure reasons (ManufacturingSettings.rejectionReasonCodes) -->
+		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
+			<h2 class="mb-4 text-lg font-medium text-[var(--color-tron-cyan)]">Common Failures</h2>
+			<div class="overflow-x-auto">
+				<table class="tron-table w-full text-sm">
+					<thead>
+						<tr>
+							<th class="px-3 py-2 text-left text-[var(--color-tron-text-secondary)]">Process</th>
+							<th class="px-3 py-2 text-left text-[var(--color-tron-text-secondary)]">Code</th>
+							<th class="px-3 py-2 text-left text-[var(--color-tron-text-secondary)]">Label</th>
+							<th class="px-3 py-2 text-left text-[var(--color-tron-text-secondary)]">Sort Order</th>
+							<th class="px-3 py-2 text-right text-[var(--color-tron-text-secondary)]">Actions</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each data.failureCodeOptions as reason (reason.id)}
+							{#if editingReasonId === reason.id}
+								<tr>
+									<td colspan="5" class="px-3 py-2">
+										<form method="POST" action="?/updateFailureReason" use:enhance={() => { return async ({ update }) => { editingReasonId = null; await update(); }; }} class="flex items-end gap-3">
+											<input type="hidden" name="codeId" value={reason.id} />
+											<span class="font-mono text-[var(--color-tron-text)]">{reason.code}</span>
+											<input type="text" name="label" bind:value={editLabel} class="tron-input flex-1 text-sm" />
+											<input type="number" name="sortOrder" bind:value={editSortOrder} class="tron-input text-sm" style="width:80px" />
+											<button type="submit" class="rounded border border-green-500/50 px-2 py-1 text-xs text-green-400 hover:bg-green-900/20">Save</button>
+											<button type="button" onclick={cancelEditReason} class="rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Cancel</button>
+										</form>
+									</td>
+								</tr>
+							{:else}
+								<tr>
+									<td class="px-3 py-2 text-[var(--color-tron-text-secondary)]">{reason.processType === 'wax' ? 'Wax' : 'Reagent'}</td>
+									<td class="px-3 py-2 font-mono text-[var(--color-tron-text)]">{reason.code}</td>
+									<td class="px-3 py-2 text-[var(--color-tron-text)]">{reason.label}</td>
+									<td class="px-3 py-2 text-[var(--color-tron-text)]">{reason.sortOrder}</td>
+									<td class="px-3 py-2 text-right">
+										<div class="flex justify-end gap-2">
+											<button type="button" onclick={() => startEditReason(reason)} class="rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10">Edit</button>
+											<form method="POST" action="?/deleteFailureReason" use:enhance onsubmit={(e) => { if (!confirm('Delete this reason?')) e.preventDefault(); }}>
+												<input type="hidden" name="codeId" value={reason.id} />
+												<button type="submit" class="rounded border border-red-500/50 px-2 py-1 text-xs text-red-400 hover:bg-red-900/20">Delete</button>
+											</form>
+										</div>
+									</td>
+								</tr>
+							{/if}
+						{/each}
+						{#if data.failureCodeOptions.length === 0}
+							<tr>
+								<td colspan="5" class="px-3 py-4 text-center text-[var(--color-tron-text-secondary)]">No common failures configured yet.</td>
+							</tr>
+						{/if}
+					</tbody>
+				</table>
+			</div>
+
+			{#if showAddReason}
+				<form method="POST" action="?/createFailureReason" use:enhance={() => { return async ({ update }) => { showAddReason = false; newCode = ''; newLabel = ''; newSortOrder = 0; await update(); }; }} class="mt-4 flex flex-wrap items-end gap-3 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] p-3">
+					<label class="block">
+						<span class="mb-1 block text-xs text-[var(--color-tron-text-secondary)]">Process</span>
+						<select name="processType" bind:value={newProcessType} class="tron-input text-sm">
+							<option value="wax">Wax</option>
+							<option value="reagent">Reagent</option>
+						</select>
+					</label>
+					<label class="block">
+						<span class="mb-1 block text-xs text-[var(--color-tron-text-secondary)]">Code</span>
+						<input type="text" name="code" bind:value={newCode} class="tron-input text-sm" placeholder="REJ-XX" required />
+					</label>
+					<label class="block flex-1">
+						<span class="mb-1 block text-xs text-[var(--color-tron-text-secondary)]">Label</span>
+						<input type="text" name="label" bind:value={newLabel} class="tron-input text-sm" placeholder="Reason description" required />
+					</label>
+					<label class="block">
+						<span class="mb-1 block text-xs text-[var(--color-tron-text-secondary)]">Sort Order</span>
+						<input type="number" name="sortOrder" bind:value={newSortOrder} class="tron-input text-sm" style="width:80px" />
+					</label>
+					<button type="submit" class="min-h-[44px] rounded border border-green-500/50 px-4 py-2 text-sm text-green-400 hover:bg-green-900/20">Add</button>
+					<button type="button" onclick={() => { showAddReason = false; }} class="min-h-[44px] rounded border border-[var(--color-tron-border)] px-4 py-2 text-sm text-[var(--color-tron-text-secondary)]">Cancel</button>
+				</form>
+			{:else}
+				<button
+					type="button"
+					onclick={() => { showAddReason = true; }}
+					class="mt-4 rounded border border-[var(--color-tron-cyan)]/50 px-4 py-2 text-sm text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10"
+				>
+					+ Add Failure Reason
+				</button>
+			{/if}
 		</div>
 	{/if}
 </div>
