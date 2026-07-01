@@ -2869,4 +2869,18 @@ report via failed[].
 FILES: src/routes/manufacturing/cart-mfg/deck-calibration/+page.svelte (anchorWell state + anchor
 derived; toggleWell stamps anchor on add; setX/Y/Z prefill off anchor; applyAbsolute rewrite;
 "Set position → selection" panel — title/help/anchor readout/button). + the PRD.
-npm run check: 11-error baseline (0 new in deck-calibration/+page.svelte); not yet committed.
+npm run check: 11-error baseline (0 new in deck-calibration/+page.svelte). Committed +
+pushed to master (3be991ac).
+
+=== 2026-07-01 — Deploy investigation: prod serving a STALE build (0.5mm step "missing") ===
+Operator reported the 0.5mm jog step vanished from the Deck Calibration Studio. Root-caused it
+is NOT a code regression: 0.5 is present in master (added fd1fb5b2, never removed) and master
+builds clean. Fingerprinted the LIVE prod bundle at bioscale-operations-system-mongodb.vercel.app
+(fetched the public /_app/immutable client chunks): the deployed deck-cal page (node 116) has jog
+steps 0.1/1/5/10/25 (NO 0.5) and the OLD "Set position → one hole" tool — i.e. a build from before
+~2026-06-20. That deployed state matches NO current branch tip, so the Vercel PRODUCTION alias is
+not tracking master (master pushes land as previews, prod stays pinned to an old/divergent build).
+Hence a hard refresh can't help — the stale bundle IS what's served. Fix is Vercel-side (promote
+the latest master deployment to Production, or set Production Branch = master); a code change can't
+help since 0.5 already exists on master. Pushed a fresh master build to give a current deployment
+ready to promote. (Also: prod being ~2wk stale means all recent deck-cal + other work is not live.)
