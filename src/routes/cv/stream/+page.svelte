@@ -10,6 +10,7 @@
 	let verdict = $state(data.filters.verdict || '');
 	let fromDate = $state(data.filters.fromDate || '');
 	let toDate = $state(data.filters.toDate || '');
+	let highlighted = $state(data.filters.highlighted || '');
 
 	// Local, mutable copies so we can label optimistically without a round-trip
 	// reload. Re-synced whenever the server sends a fresh page (nav / tab switch).
@@ -37,6 +38,7 @@
 		if (verdict && data.review !== 'unreviewed') params.set('verdict', verdict);
 		if (fromDate) params.set('from', fromDate);
 		if (toDate) params.set('to', toDate);
+		if (highlighted) params.set('highlighted', highlighted);
 		return params;
 	}
 
@@ -52,6 +54,7 @@
 		verdict = '';
 		fromDate = '';
 		toDate = '';
+		highlighted = '';
 		goto(`/cv/stream?review=${data.review}`);
 	}
 
@@ -125,7 +128,7 @@
 	function applyHighlightSaved(id: string, url: string) {
 		const i = images.findIndex((x) => x.id === id);
 		if (i === -1) return;
-		images[i] = { ...images[i], url, thumbnailUrl: url };
+		images[i] = { ...images[i], url, thumbnailUrl: url, highlighted: true };
 		images = [...images];
 	}
 
@@ -197,7 +200,7 @@
 
 	<!-- Filters -->
 	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
-		<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+		<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
 			<div>
 				<label for="phase-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Phase</label>
 				<select id="phase-filter" bind:value={phase} class="tron-input w-full">
@@ -228,6 +231,14 @@
 			<div>
 				<label for="to-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">To</label>
 				<input id="to-filter" type="date" bind:value={toDate} class="tron-input w-full" />
+			</div>
+			<div>
+				<label for="hl-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Highlighted</label>
+				<select id="hl-filter" bind:value={highlighted} class="tron-input w-full">
+					<option value="">Any</option>
+					<option value="yes">Highlighted</option>
+					<option value="no">Not highlighted</option>
+				</select>
 			</div>
 		</div>
 		<div class="mt-3 flex gap-2">
@@ -281,6 +292,9 @@
 								<span class="absolute left-1 top-1 rounded bg-[var(--color-tron-green,#39ff14)] px-1.5 py-0.5 text-[10px] font-bold text-black">PASS</span>
 							{:else if img.qcLabel === 'rejected'}
 								<span class="absolute left-1 top-1 rounded bg-[var(--color-tron-red,#ff3366)] px-1.5 py-0.5 text-[10px] font-bold text-white">FAIL</span>
+							{/if}
+							{#if img.highlighted}
+								<span class="absolute right-1 top-1 rounded bg-[var(--color-tron-yellow,#facc15)] px-1.5 py-0.5 text-[10px] font-bold text-black" title="Highlighted">▣ HL</span>
 							{/if}
 						</div>
 						<div class="p-2 text-xs">

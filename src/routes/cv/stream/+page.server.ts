@@ -30,6 +30,9 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	const verdict = url.searchParams.get('verdict') || ''; // approved | rejected
 	const fromDate = url.searchParams.get('from') || '';
 	const toDate = url.searchParams.get('to') || '';
+	// Highlight sub-filter: '' (any) | 'yes' (has burned-in boxes) | 'no'.
+	const highlightedParam = url.searchParams.get('highlighted') || '';
+	const highlighted = ['yes', 'no'].includes(highlightedParam) ? highlightedParam : '';
 	const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10));
 
 	// Base filter — everything except the review/verdict state. Used both for the
@@ -49,6 +52,9 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 			baseFilter.capturedAt.$lte = end;
 		}
 	}
+	// A photo is "highlighted" once boxes have been burned in (metadata.highlight set).
+	if (highlighted === 'yes') baseFilter['metadata.highlight'] = { $exists: true };
+	else if (highlighted === 'no') baseFilter['metadata.highlight'] = { $exists: false };
 
 	// Layer the review-tab + verdict conditions on top of the base filter.
 	const filter: Record<string, any> = { ...baseFilter };
@@ -66,7 +72,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 			.sort({ capturedAt: -1 })
 			.skip((page - 1) * PAGE_SIZE)
 			.limit(PAGE_SIZE)
-			.select('_id cartridgeImageNumber cartridgeTag filePath imageUrl thumbnailPath qcLabel capturedAt capturedBy fileSizeBytes')
+			.select('_id cartridgeImageNumber cartridgeTag filePath imageUrl thumbnailPath qcLabel capturedAt capturedBy fileSizeBytes metadata.highlight')
 			.lean(),
 		CvImage.countDocuments(filter),
 		// Phases available in the data — drives the filter dropdown
@@ -86,7 +92,8 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		thumbnailUrl: img.thumbnailPath ? getR2Url(img.thumbnailPath) : (img.imageUrl || (img.filePath ? getR2Url(img.filePath) : null)),
 		capturedAt: img.capturedAt ?? null,
 		capturedByUsername: img.capturedBy?.username ?? null,
-		fileSizeBytes: img.fileSizeBytes ?? null
+		fileSizeBytes: img.fileSizeBytes ?? null,
+		highlighted: Boolean(img.metadata?.highlight)
 	}));
 
 	const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -99,7 +106,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		pageSize: PAGE_SIZE,
 		review,
 		counts: { unreviewed: unreviewedCount, reviewed: reviewedCount },
-		filters: { phase, cartridgeId, verdict, fromDate, toDate },
+		filters: { phase, cartridgeId, verdict, fromDate, toDate, highlighted },
 		availablePhases: (distinctPhases as string[]).filter(Boolean).sort()
 	};
 };
