@@ -215,6 +215,8 @@ cartridgeRecordSchema.index({ status: 1, 'reagentFilling.expirationDate': 1 });
 cartridgeRecordSchema.index({ 'testExecution.spu._id': 1 });
 cartridgeRecordSchema.index({ 'sample.subjectId': 1 });
 cartridgeRecordSchema.index({ 'testResult.status': 1 });
+cartridgeRecordSchema.index({ arm: 1 });
+cartridgeRecordSchema.index({ experiment: 1 });
 
 applySacredMiddleware(cartridgeRecordSchema);
 

@@ -36,6 +36,7 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 			imageId: img._id,
 			phase: img.cartridgeTag?.phase || null,
 			labels: img.cartridgeTag?.labels || [],
+			notes: img.cartridgeTag?.notes || '',
 			capturedAt: img.capturedAt || img.createdAt,
 			url,
 			thumbnailUrl,
