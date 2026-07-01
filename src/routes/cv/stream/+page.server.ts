@@ -9,15 +9,14 @@
  * Filters: phase, cartridgeId (partial match), date range, verdict (within
  * the Reviewed/All tabs). Paginated 48 per page, sorted by capturedAt desc.
  */
-import { redirect, fail } from '@sveltejs/kit';
+import { redirect } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
 import { ManufacturingSettings } from '$lib/server/db/models/manufacturing-settings.js';
-import { generateId } from '$lib/server/db/utils.js';
-import { requirePermission } from '$lib/server/permissions';
+import { FailureLabel } from '$lib/server/db/models/failure-label.js';
 import { getR2Url } from '$lib/server/services/r2';
-import type { PageServerLoad, Actions } from './$types';
+import type { PageServerLoad } from './$types';
 
 const PAGE_SIZE = 48;
 
@@ -105,7 +104,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		filter.qcLabel = verdict;
 	}
 
-	const [imagesRaw, total, distinctPhases, unreviewedCount, reviewedCount, armOptionsRaw, experimentOptionsRaw, tagOptionsRaw, settingsDoc] = await Promise.all([
+	const [imagesRaw, total, distinctPhases, unreviewedCount, reviewedCount, armOptionsRaw, experimentOptionsRaw, tagOptionsRaw, settingsDoc, failureLabelsRaw] = await Promise.all([
 		CvImage.find(filter)
 			.sort({ capturedAt: -1 })
 			.skip((page - 1) * PAGE_SIZE)
@@ -121,7 +120,11 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		CartridgeRecord.distinct('arm', { arm: { $nin: [null, ''] } }),
 		CartridgeRecord.distinct('experiment', { experiment: { $nin: [null, ''] } }),
 		CvImage.distinct('cartridgeTag.labels', { 'cartridgeTag.labels': { $exists: true, $ne: [] } }),
-		ManufacturingSettings.findById('default').select('rejectionReasonCodes').lean()
+		ManufacturingSettings.findById('default').select('rejectionReasonCodes').lean(),
+		// The premade failure-label pick-list (Manage tab + tag-pickers). Separate
+		// from failureCodeOptions below (rejectionReasonCodes-backed, powers only
+		// the existing Common Failure *filter* dropdown) — do not conflate the two.
+		FailureLabel.find().sort({ text: 1 }).lean()
 	]);
 
 	const armOptions = (armOptionsRaw as string[]).sort((a, b) => a.localeCompare(b));
@@ -131,6 +134,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		.slice()
 		.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
 		.map(rc => ({ id: String(rc._id), code: rc.code, label: rc.label, processType: rc.processType, sortOrder: rc.sortOrder ?? 0 }));
+	const failureLabels = (failureLabelsRaw as any[]).map(l => ({ id: l._id, text: l.text }));
 
 	const images = (imagesRaw as any[]).map(img => ({
 		id: img._id,
@@ -162,70 +166,9 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		armOptions,
 		experimentOptions,
 		tagOptions,
-		failureCodeOptions
+		failureCodeOptions,
+		failureLabels
 	};
-};
-
-export const actions: Actions = {
-	/** Create a common-failure reason (wax or reagent, picked in the form). */
-	createFailureReason: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'manufacturing:admin');
-		await connectDB();
-
-		const data = await request.formData();
-		const code = (data.get('code') as string)?.trim();
-		const label = (data.get('label') as string)?.trim();
-		const processType = (data.get('processType') as string) === 'wax' ? 'wax' : 'reagent';
-		const sortOrder = Number(data.get('sortOrder') ?? 0);
-
-		if (!code || !label) return fail(400, { error: 'Code and label are required' });
-
-		await ManufacturingSettings.findByIdAndUpdate(
-			'default',
-			{ $push: { rejectionReasonCodes: { _id: generateId(), code, label, processType, sortOrder } } },
-			{ upsert: true }
-		);
-		return { success: true };
-	},
-
-	/** Update a common-failure reason's label/sort order. */
-	updateFailureReason: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'manufacturing:admin');
-		await connectDB();
-
-		const data = await request.formData();
-		const codeId = data.get('codeId') as string;
-		const label = (data.get('label') as string)?.trim();
-		const sortOrder = Number(data.get('sortOrder') ?? 0);
-
-		if (!codeId || !label) return fail(400, { error: 'Code ID and label are required' });
-
-		await ManufacturingSettings.findOneAndUpdate(
-			{ 'rejectionReasonCodes._id': codeId },
-			{ $set: { 'rejectionReasonCodes.$.label': label, 'rejectionReasonCodes.$.sortOrder': sortOrder } }
-		);
-		return { success: true };
-	},
-
-	/** Delete a common-failure reason. */
-	deleteFailureReason: async ({ request, locals }) => {
-		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'manufacturing:admin');
-		await connectDB();
-
-		const data = await request.formData();
-		const codeId = data.get('codeId') as string;
-
-		if (!codeId) return fail(400, { error: 'Code ID required' });
-
-		await ManufacturingSettings.findByIdAndUpdate(
-			'default',
-			{ $pull: { rejectionReasonCodes: { _id: codeId } } }
-		);
-		return { success: true };
-	}
 };
 
 export const config = { maxDuration: 60 };

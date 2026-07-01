@@ -1,30 +1,89 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
-	import { enhance } from '$app/forms';
 
 	let { data } = $props();
 
 	// 'browse' = the image grid (Unreviewed/Reviewed/All); 'manage' = the
-	// common-failures editor. Client-side only — doesn't touch the review tab
+	// failure-label editor. Client-side only — doesn't touch the review tab
 	// state or reload image data.
 	let activeView = $state<'browse' | 'manage'>('browse');
-	let editingReasonId = $state<string | null>(null);
-	let editLabel = $state('');
-	let editSortOrder = $state(0);
-	let showAddReason = $state(false);
-	let newCode = $state('');
-	let newLabel = $state('');
-	let newSortOrder = $state(0);
-	let newProcessType = $state<'wax' | 'reagent'>('wax');
 
-	function startEditReason(reason: { id: string; label: string; sortOrder: number }) {
-		editingReasonId = reason.id;
-		editLabel = reason.label;
-		editSortOrder = reason.sortOrder;
+	// Manage tab: premade failure-label pick-list. Local copy so + / delete
+	// feel instant; re-synced whenever the server sends a fresh page.
+	let failureLabels = $state(data.failureLabels);
+	$effect(() => { failureLabels = data.failureLabels; });
+	let newLabelText = $state('');
+	let addingLabel = $state(false);
+
+	async function addFailureLabel() {
+		const text = newLabelText.trim();
+		if (!text || addingLabel) return;
+		addingLabel = true;
+		try {
+			const res = await fetch('/api/cv/failure-labels', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ text })
+			});
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			const body = await res.json();
+			if (!failureLabels.some(l => l.id === body.data._id)) {
+				failureLabels = [...failureLabels, { id: body.data._id, text: body.data.text }].sort((a, b) => a.text.localeCompare(b.text));
+			}
+			newLabelText = '';
+		} catch (err) {
+			console.error(err);
+		} finally {
+			addingLabel = false;
+		}
 	}
-	function cancelEditReason() {
-		editingReasonId = null;
+
+	async function deleteFailureLabel(id: string) {
+		if (!confirm('Delete this failure label? (Photos already tagged with it keep the tag.)')) return;
+		const prev = failureLabels;
+		failureLabels = failureLabels.filter(l => l.id !== id);
+		try {
+			const res = await fetch(`/api/cv/failure-labels/${id}`, { method: 'DELETE' });
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+		} catch (err) {
+			failureLabels = prev;
+			console.error(err);
+		}
+	}
+
+	// Per-photo Notes + Labels (lightbox). Persist immediately via PATCH.
+	let tagNotesDraft = $state('');
+	let savingTags = $state(false);
+
+	async function saveImageTags(id: string, patch: { labels?: string[]; notes?: string }) {
+		savingTags = true;
+		try {
+			const res = await fetch(`/api/cv/images/${id}/tags`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(patch)
+			});
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+		} catch (err) {
+			console.error(err);
+		} finally {
+			savingTags = false;
+		}
+	}
+
+	function toggleImageLabel(img: { id: string; labels: string[] }, text: string) {
+		const has = img.labels.includes(text);
+		const nextLabels = has ? img.labels.filter(l => l !== text) : [...img.labels, text];
+		img.labels = nextLabels;
+		images = [...images];
+		saveImageTags(img.id, { labels: nextLabels });
+	}
+
+	function commitImageNotes(img: { id: string; notes: string }) {
+		img.notes = tagNotesDraft;
+		images = [...images];
+		saveImageTags(img.id, { notes: tagNotesDraft });
 	}
 
 	let phase = $state(data.filters.phase || '');
@@ -157,15 +216,20 @@
 		}
 	}
 
-	function openLightbox(i: number) { lightboxIndex = i; }
+	function openLightbox(i: number) {
+		lightboxIndex = i;
+		tagNotesDraft = images[i]?.notes ?? '';
+	}
 	function closeLightbox() { lightboxIndex = null; }
 	function prevImage() {
 		if (lightboxIndex === null) return;
 		lightboxIndex = (lightboxIndex - 1 + images.length) % images.length;
+		tagNotesDraft = images[lightboxIndex]?.notes ?? '';
 	}
 	function nextImage() {
 		if (lightboxIndex === null) return;
 		lightboxIndex = (lightboxIndex + 1) % images.length;
+		tagNotesDraft = images[lightboxIndex]?.notes ?? '';
 	}
 
 	// Label the image in the lightbox, then advance — keeps the scroll-and-label
@@ -420,95 +484,43 @@
 	{/if}
 
 	{#if activeView === 'manage'}
-		<!-- Manage common-failure reasons (ManufacturingSettings.rejectionReasonCodes) -->
+		<!-- Manage the premade failure-label pick-list (FailureLabel) — used by the
+		     Labels picker on each photo below, and at capture time. -->
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
-			<h2 class="mb-4 text-lg font-medium text-[var(--color-tron-cyan)]">Common Failures</h2>
-			<div class="overflow-x-auto">
-				<table class="tron-table w-full text-sm">
-					<thead>
-						<tr>
-							<th class="px-3 py-2 text-left text-[var(--color-tron-text-secondary)]">Process</th>
-							<th class="px-3 py-2 text-left text-[var(--color-tron-text-secondary)]">Code</th>
-							<th class="px-3 py-2 text-left text-[var(--color-tron-text-secondary)]">Label</th>
-							<th class="px-3 py-2 text-left text-[var(--color-tron-text-secondary)]">Sort Order</th>
-							<th class="px-3 py-2 text-right text-[var(--color-tron-text-secondary)]">Actions</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each data.failureCodeOptions as reason (reason.id)}
-							{#if editingReasonId === reason.id}
-								<tr>
-									<td colspan="5" class="px-3 py-2">
-										<form method="POST" action="?/updateFailureReason" use:enhance={() => { return async ({ update }) => { editingReasonId = null; await update(); }; }} class="flex items-end gap-3">
-											<input type="hidden" name="codeId" value={reason.id} />
-											<span class="font-mono text-[var(--color-tron-text)]">{reason.code}</span>
-											<input type="text" name="label" bind:value={editLabel} class="tron-input flex-1 text-sm" />
-											<input type="number" name="sortOrder" bind:value={editSortOrder} class="tron-input text-sm" style="width:80px" />
-											<button type="submit" class="rounded border border-green-500/50 px-2 py-1 text-xs text-green-400 hover:bg-green-900/20">Save</button>
-											<button type="button" onclick={cancelEditReason} class="rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Cancel</button>
-										</form>
-									</td>
-								</tr>
-							{:else}
-								<tr>
-									<td class="px-3 py-2 text-[var(--color-tron-text-secondary)]">{reason.processType === 'wax' ? 'Wax' : 'Reagent'}</td>
-									<td class="px-3 py-2 font-mono text-[var(--color-tron-text)]">{reason.code}</td>
-									<td class="px-3 py-2 text-[var(--color-tron-text)]">{reason.label}</td>
-									<td class="px-3 py-2 text-[var(--color-tron-text)]">{reason.sortOrder}</td>
-									<td class="px-3 py-2 text-right">
-										<div class="flex justify-end gap-2">
-											<button type="button" onclick={() => startEditReason(reason)} class="rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10">Edit</button>
-											<form method="POST" action="?/deleteFailureReason" use:enhance onsubmit={(e) => { if (!confirm('Delete this reason?')) e.preventDefault(); }}>
-												<input type="hidden" name="codeId" value={reason.id} />
-												<button type="submit" class="rounded border border-red-500/50 px-2 py-1 text-xs text-red-400 hover:bg-red-900/20">Delete</button>
-											</form>
-										</div>
-									</td>
-								</tr>
-							{/if}
-						{/each}
-						{#if data.failureCodeOptions.length === 0}
-							<tr>
-								<td colspan="5" class="px-3 py-4 text-center text-[var(--color-tron-text-secondary)]">No common failures configured yet.</td>
-							</tr>
-						{/if}
-					</tbody>
-				</table>
-			</div>
-
-			{#if showAddReason}
-				<form method="POST" action="?/createFailureReason" use:enhance={() => { return async ({ update }) => { showAddReason = false; newCode = ''; newLabel = ''; newSortOrder = 0; await update(); }; }} class="mt-4 flex flex-wrap items-end gap-3 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] p-3">
-					<label class="block">
-						<span class="mb-1 block text-xs text-[var(--color-tron-text-secondary)]">Process</span>
-						<select name="processType" bind:value={newProcessType} class="tron-input text-sm">
-							<option value="wax">Wax</option>
-							<option value="reagent">Reagent</option>
-						</select>
-					</label>
-					<label class="block">
-						<span class="mb-1 block text-xs text-[var(--color-tron-text-secondary)]">Code</span>
-						<input type="text" name="code" bind:value={newCode} class="tron-input text-sm" placeholder="REJ-XX" required />
-					</label>
-					<label class="block flex-1">
-						<span class="mb-1 block text-xs text-[var(--color-tron-text-secondary)]">Label</span>
-						<input type="text" name="label" bind:value={newLabel} class="tron-input text-sm" placeholder="Reason description" required />
-					</label>
-					<label class="block">
-						<span class="mb-1 block text-xs text-[var(--color-tron-text-secondary)]">Sort Order</span>
-						<input type="number" name="sortOrder" bind:value={newSortOrder} class="tron-input text-sm" style="width:80px" />
-					</label>
-					<button type="submit" class="min-h-[44px] rounded border border-green-500/50 px-4 py-2 text-sm text-green-400 hover:bg-green-900/20">Add</button>
-					<button type="button" onclick={() => { showAddReason = false; }} class="min-h-[44px] rounded border border-[var(--color-tron-border)] px-4 py-2 text-sm text-[var(--color-tron-text-secondary)]">Cancel</button>
-				</form>
-			{:else}
+			<div class="mb-4 flex items-center justify-between">
+				<h2 class="text-lg font-medium text-[var(--color-tron-cyan)]">Common Failure Labels</h2>
 				<button
 					type="button"
-					onclick={() => { showAddReason = true; }}
-					class="mt-4 rounded border border-[var(--color-tron-cyan)]/50 px-4 py-2 text-sm text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10"
-				>
-					+ Add Failure Reason
+					onclick={() => { const el = document.getElementById('new-label-input'); el?.focus(); }}
+					class="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--color-tron-cyan)] text-lg font-bold text-[var(--color-tron-bg-primary)] hover:opacity-90"
+					title="Add a new failure label"
+				>+</button>
+			</div>
+
+			<form onsubmit={(e) => { e.preventDefault(); addFailureLabel(); }} class="mb-4 flex gap-2">
+				<input
+					id="new-label-input"
+					type="text"
+					bind:value={newLabelText}
+					placeholder="Type a new failure label and press Enter…"
+					class="tron-input flex-1 text-sm"
+				/>
+				<button type="submit" disabled={!newLabelText.trim() || addingLabel} class="rounded border border-green-500/50 px-4 py-2 text-sm text-green-400 hover:bg-green-900/20 disabled:opacity-40">
+					Add
 				</button>
-			{/if}
+			</form>
+
+			<div class="flex flex-wrap gap-2">
+				{#each failureLabels as l (l.id)}
+					<span class="flex items-center gap-1.5 rounded-full border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-1 text-sm text-[var(--color-tron-text)]">
+						{l.text}
+						<button type="button" onclick={() => deleteFailureLabel(l.id)} class="text-[var(--color-tron-text-secondary)] hover:text-red-400" title="Delete">✕</button>
+					</span>
+				{/each}
+				{#if failureLabels.length === 0}
+					<p class="text-sm text-[var(--color-tron-text-secondary)]">No failure labels yet — add one above.</p>
+				{/if}
+			</div>
 		</div>
 	{/if}
 </div>
@@ -574,19 +586,41 @@
 					</div>
 					<div><span class="text-[var(--color-tron-text-secondary)]">Captured:</span> {img.capturedAt ? new Date(img.capturedAt).toLocaleString() : '—'}</div>
 					<div><span class="text-[var(--color-tron-text-secondary)]">By:</span> {img.capturedByUsername ?? '—'}</div>
-					{#if img.labels && img.labels.length > 0}
-						<div class="sm:col-span-2">
-							<span class="text-[var(--color-tron-text-secondary)]">Tags:</span>
-							<span class="ml-1 flex flex-wrap gap-1">
-								{#each img.labels as l (l)}
-									<span class="rounded bg-[var(--color-tron-cyan)]/20 px-1.5 py-0.5 text-[10px] text-[var(--color-tron-cyan)]">{l}</span>
-								{/each}
-							</span>
-						</div>
-					{/if}
-					{#if img.notes}
-						<div class="sm:col-span-2"><span class="text-[var(--color-tron-text-secondary)]">Notes:</span> <span class="whitespace-pre-wrap">{img.notes}</span></div>
-					{/if}
+				</div>
+
+				<!-- Labels — select-only from the premade FailureLabel list (Manage tab).
+				     Not free text; that's Notes below. -->
+				<div class="mt-3 border-t border-[var(--color-tron-border)] pt-3">
+					<div class="mb-1.5 text-xs font-semibold text-[var(--color-tron-text-secondary)]">FAILURE LABELS</div>
+					<div class="flex flex-wrap gap-1.5">
+						{#each data.failureLabels as l (l.id)}
+							{@const active = img.labels.includes(l.text)}
+							<button
+								type="button"
+								onclick={() => toggleImageLabel(img, l.text)}
+								class="rounded-full border px-2.5 py-1 text-xs transition-colors
+									{active
+										? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]'
+										: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
+							>{l.text}</button>
+						{/each}
+						{#if data.failureLabels.length === 0}
+							<p class="text-xs text-[var(--color-tron-text-secondary)]">No failure labels yet — add some in the Label Creation tab.</p>
+						{/if}
+					</div>
+				</div>
+
+				<!-- Notes — free text, separate from Labels above. -->
+				<div class="mt-3 border-t border-[var(--color-tron-border)] pt-3">
+					<div class="mb-1.5 text-xs font-semibold text-[var(--color-tron-text-secondary)]">NOTES</div>
+					<textarea
+						bind:value={tagNotesDraft}
+						onblur={() => commitImageNotes(img)}
+						disabled={savingTags}
+						rows="2"
+						placeholder="Freeform notes about this photo…"
+						class="tron-input w-full text-sm"
+					></textarea>
 				</div>
 			</div>
 		</div>

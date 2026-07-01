@@ -41,6 +41,7 @@ export { WaxFillingRun } from './wax-filling-run.js';
 export { WaxBatch } from './wax-batch.js';
 export { ProcessConfiguration } from './process-configuration.js';
 export { ManufacturingSettings } from './manufacturing-settings.js';
+export { FailureLabel } from './failure-label.js';
 export { LaserCutBatch } from './laser-cut-batch.js';
 export { ManufacturingMaterial } from './manufacturing-material.js';
 export { Equipment } from './equipment.js';
