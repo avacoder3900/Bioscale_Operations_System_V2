@@ -1,6 +1,10 @@
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, CartridgeRecord, AssayDefinition, User, WaxFillingRun, ReagentBatchRecord } from '$lib/server/db';
+import { connectDB, CartridgeRecord, AssayDefinition, User, WaxFillingRun, ReagentBatchRecord, CvImage, ManufacturingSettings } from '$lib/server/db';
 import type { PageServerLoad } from './$types';
+
+function escapeRegExp(str: string): string {
+	return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 export const load: PageServerLoad = async ({ locals, url }) => {
 	requirePermission(locals.user, 'cartridgeAdmin:read');
@@ -24,6 +28,17 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// linked to that run. Deep-linkable from the run-history expansion and
 	// from the dashboard's recent-runs panel.
 	const runId = url.searchParams.get('runId') || '';
+	// arm/experiment live directly on CartridgeRecord (run-cartridge experiment
+	// assignment). tag comes from the CV image stream's cartridgeTag.labels —
+	// a separate collection, so it resolves to a cartridge-id allowlist below.
+	// failureCode matches ManufacturingSettings.rejectionReasonCodes; the wax/
+	// reagent inspection UIs write the selected code into waxQc.rejectionReason
+	// / reagentInspection.reason, so filtering on that code hits real data.
+	const arm = url.searchParams.get('arm') || '';
+	const experiment = url.searchParams.get('experiment') || '';
+	const tag = url.searchParams.get('tag') || '';
+	const failureCode = url.searchParams.get('failureCode') || '';
+	const notesSearch = url.searchParams.get('notes') || '';
 	const pageNum = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10));
 	// Operator-selectable page size. Whitelist to prevent arbitrary values from
 	// loading huge result sets — fall back to 25 for anything outside the menu.
@@ -64,6 +79,37 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			]
 		});
 	}
+	if (arm) query.arm = arm;
+	if (experiment) query.experiment = experiment;
+	if (failureCode) {
+		andClauses.push({
+			$or: [
+				{ 'waxQc.rejectionReason': failureCode },
+				{ 'reagentInspection.reason': failureCode }
+			]
+		});
+	}
+	// tag and notesSearch both resolve to a cartridge-id allowlist via CvImage;
+	// when both are active, intersect rather than let the second overwrite the
+	// first so "tag=X AND notes contains Y" behaves as an AND, not an OR.
+	if (tag || notesSearch) {
+		const idLists = await Promise.all([
+			tag
+				? CvImage.distinct('cartridgeTag.cartridgeRecordId', { 'cartridgeTag.labels': tag })
+				: null,
+			notesSearch
+				? CvImage.distinct('cartridgeTag.cartridgeRecordId', {
+					'cartridgeTag.notes': { $regex: escapeRegExp(notesSearch), $options: 'i' }
+				})
+				: null
+		]);
+		const activeLists = idLists.filter((l): l is string[] => l !== null);
+		const intersected = activeLists.reduce((acc, ids) => {
+			const idSet = new Set(ids);
+			return acc.filter(id => idSet.has(id));
+		});
+		query._id = { $in: intersected };
+	}
 	if (andClauses.length === 1) {
 		Object.assign(query, andClauses[0]);
 	} else if (andClauses.length > 1) {
@@ -84,7 +130,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	};
 	const sortField = sortMap[sortBy] || 'createdAt';
 
-	const [cartridges, total, assayTypes, operators, waxRuns, reagentRuns] = await Promise.all([
+	const [cartridges, total, assayTypes, operators, waxRuns, reagentRuns, armOptionsRaw, experimentOptionsRaw, tagOptionsRaw, settingsDoc] = await Promise.all([
 		CartridgeRecord.find(query)
 			.sort({ [sortField]: sortDir === 'asc' ? 1 : -1 })
 			.skip((pageNum - 1) * pageSize)
@@ -104,8 +150,20 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			.select('_id operator runStartTime createdAt')
 			.sort({ createdAt: -1 })
 			.limit(100)
-			.lean()
+			.lean(),
+		CartridgeRecord.distinct('arm', { arm: { $nin: [null, ''] } }),
+		CartridgeRecord.distinct('experiment', { experiment: { $nin: [null, ''] } }),
+		CvImage.distinct('cartridgeTag.labels', { 'cartridgeTag.labels': { $exists: true, $ne: [] } }),
+		ManufacturingSettings.findById('default').select('rejectionReasonCodes').lean()
 	]);
+
+	const armOptions = (armOptionsRaw as string[]).sort((a, b) => a.localeCompare(b));
+	const experimentOptions = (experimentOptionsRaw as string[]).sort((a, b) => a.localeCompare(b));
+	const tagOptions = (tagOptionsRaw as string[]).sort((a, b) => a.localeCompare(b));
+	const failureCodeOptions = (((settingsDoc as any)?.rejectionReasonCodes ?? []) as any[])
+		.slice()
+		.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+		.map(rc => ({ code: rc.code, label: rc.label, processType: rc.processType }));
 
 	const recentRuns = [
 		...(waxRuns as any[]).map(r => ({
@@ -159,7 +217,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	}
 
 	return {
-		filters: { search, sortBy, sortDir, assayTypeId, lifecycleStage, operatorId, runId },
+		filters: { search, sortBy, sortDir, assayTypeId, lifecycleStage, operatorId, runId, arm, experiment, tag, failureCode, notesSearch },
+		armOptions,
+		experimentOptions,
+		tagOptions,
+		failureCodeOptions,
 		cartridges: (cartridges as any[]).map(c => {
 			// Find first available operator name across phases
 			const operatorName =
@@ -172,6 +234,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				cartridgeId: c._id,
 				backedLotId: c.backing?.lotId ?? null,
 				assayTypeName: c.reagentFilling?.assayType?.name ?? null,
+				arm: c.arm ?? null,
+				experiment: c.experiment ?? null,
 				waxRunId: c.waxFilling?.runId ?? null,
 				reagentRunId: c.reagentFilling?.runId ?? null,
 				currentLifecycleStage: c.status ?? 'unknown',

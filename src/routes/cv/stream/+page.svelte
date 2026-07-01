@@ -9,6 +9,11 @@
 	let verdict = $state(data.filters.verdict || '');
 	let fromDate = $state(data.filters.fromDate || '');
 	let toDate = $state(data.filters.toDate || '');
+	let arm = $state(data.filters.arm || '');
+	let experiment = $state(data.filters.experiment || '');
+	let tag = $state(data.filters.tag || '');
+	let failureCode = $state(data.filters.failureCode || '');
+	let notesSearch = $state(data.filters.notesSearch || '');
 
 	// Local, mutable copies so we can label optimistically without a round-trip
 	// reload. Re-synced whenever the server sends a fresh page (nav / tab switch).
@@ -36,6 +41,11 @@
 		if (verdict && data.review !== 'unreviewed') params.set('verdict', verdict);
 		if (fromDate) params.set('from', fromDate);
 		if (toDate) params.set('to', toDate);
+		if (arm) params.set('arm', arm);
+		if (experiment) params.set('experiment', experiment);
+		if (tag) params.set('tag', tag);
+		if (failureCode) params.set('failureCode', failureCode);
+		if (notesSearch) params.set('notes', notesSearch);
 		return params;
 	}
 
@@ -51,6 +61,11 @@
 		verdict = '';
 		fromDate = '';
 		toDate = '';
+		arm = '';
+		experiment = '';
+		tag = '';
+		failureCode = '';
+		notesSearch = '';
 		goto(`/cv/stream?review=${data.review}`);
 	}
 
@@ -219,6 +234,46 @@
 				<label for="to-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">To</label>
 				<input id="to-filter" type="date" bind:value={toDate} class="tron-input w-full" />
 			</div>
+			<div>
+				<label for="arm-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Arm</label>
+				<select id="arm-filter" bind:value={arm} class="tron-input w-full">
+					<option value="">All arms</option>
+					{#each data.armOptions as a (a)}
+						<option value={a}>{a}</option>
+					{/each}
+				</select>
+			</div>
+			<div>
+				<label for="experiment-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Experiment</label>
+				<select id="experiment-filter" bind:value={experiment} class="tron-input w-full">
+					<option value="">All experiments</option>
+					{#each data.experimentOptions as e (e)}
+						<option value={e}>{e}</option>
+					{/each}
+				</select>
+			</div>
+			<div>
+				<label for="tag-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Tag</label>
+				<select id="tag-filter" bind:value={tag} class="tron-input w-full">
+					<option value="">All tags</option>
+					{#each data.tagOptions as t (t)}
+						<option value={t}>{t}</option>
+					{/each}
+				</select>
+			</div>
+			<div>
+				<label for="failure-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Common Failure</label>
+				<select id="failure-filter" bind:value={failureCode} class="tron-input w-full">
+					<option value="">All</option>
+					{#each data.failureCodeOptions as fc (fc.code)}
+						<option value={fc.code}>{fc.label}</option>
+					{/each}
+				</select>
+			</div>
+			<div>
+				<label for="notes-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Search Notes</label>
+				<input id="notes-filter" type="text" bind:value={notesSearch} placeholder="Keyword in photo notes" class="tron-input w-full" />
+			</div>
 		</div>
 		<div class="mt-3 flex gap-2">
 			<button type="button" onclick={applyFilters} class="rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-[var(--color-tron-bg-primary)]">
@@ -260,6 +315,7 @@
 						type="button"
 						onclick={() => openLightbox(i)}
 						class="block w-full text-left"
+						title={img.notes || undefined}
 					>
 						<div class="relative">
 							{#if img.thumbnailUrl}
@@ -272,10 +328,20 @@
 							{:else if img.qcLabel === 'rejected'}
 								<span class="absolute left-1 top-1 rounded bg-[var(--color-tron-red,#ff3366)] px-1.5 py-0.5 text-[10px] font-bold text-white">FAIL</span>
 							{/if}
+							{#if img.notes}
+								<span class="absolute right-1 top-1 rounded bg-black/60 px-1 py-0.5 text-[10px] text-white">📝</span>
+							{/if}
 						</div>
 						<div class="p-2 text-xs">
 							<div class="truncate font-mono text-[var(--color-tron-cyan)]">{img.cartridgeImageNumber ?? '—'}</div>
 							<div class="truncate text-[var(--color-tron-text-secondary)]">{img.phase ?? '—'}</div>
+							{#if img.labels && img.labels.length > 0}
+								<div class="mt-0.5 flex flex-wrap gap-0.5">
+									{#each img.labels as l (l)}
+										<span class="truncate rounded bg-[var(--color-tron-cyan)]/20 px-1 py-0.5 text-[9px] text-[var(--color-tron-cyan)]">{l}</span>
+									{/each}
+								</div>
+							{/if}
 							<div class="truncate text-[10px] text-[var(--color-tron-text-secondary)]">
 								{formatRelative(img.capturedAt)}
 							</div>
@@ -380,6 +446,19 @@
 					</div>
 					<div><span class="text-[var(--color-tron-text-secondary)]">Captured:</span> {img.capturedAt ? new Date(img.capturedAt).toLocaleString() : '—'}</div>
 					<div><span class="text-[var(--color-tron-text-secondary)]">By:</span> {img.capturedByUsername ?? '—'}</div>
+					{#if img.labels && img.labels.length > 0}
+						<div class="sm:col-span-2">
+							<span class="text-[var(--color-tron-text-secondary)]">Tags:</span>
+							<span class="ml-1 flex flex-wrap gap-1">
+								{#each img.labels as l (l)}
+									<span class="rounded bg-[var(--color-tron-cyan)]/20 px-1.5 py-0.5 text-[10px] text-[var(--color-tron-cyan)]">{l}</span>
+								{/each}
+							</span>
+						</div>
+					{/if}
+					{#if img.notes}
+						<div class="sm:col-span-2"><span class="text-[var(--color-tron-text-secondary)]">Notes:</span> <span class="whitespace-pre-wrap">{img.notes}</span></div>
+					{/if}
 				</div>
 			</div>
 		</div>
