@@ -12,10 +12,16 @@
 import { redirect } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
+import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
+import { ManufacturingSettings } from '$lib/server/db/models/manufacturing-settings.js';
 import { getR2Url } from '$lib/server/services/r2';
 import type { PageServerLoad } from './$types';
 
 const PAGE_SIZE = 48;
+
+function escapeRegExp(str: string): string {
+	return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 export const load: PageServerLoad = async ({ url, locals }) => {
 	if (!locals.user) redirect(302, '/login');
@@ -30,14 +36,23 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	const verdict = url.searchParams.get('verdict') || ''; // approved | rejected
 	const fromDate = url.searchParams.get('from') || '';
 	const toDate = url.searchParams.get('to') || '';
+	// arm/experiment/failureCode live on CartridgeRecord, not CvImage — resolved
+	// to a cartridge-id allowlist below. tag and notesSearch are direct CvImage
+	// fields (cartridgeTag.labels / cartridgeTag.notes).
+	const arm = url.searchParams.get('arm') || '';
+	const experiment = url.searchParams.get('experiment') || '';
+	const tag = url.searchParams.get('tag') || '';
+	const failureCode = url.searchParams.get('failureCode') || '';
+	const notesSearch = url.searchParams.get('notes') || '';
 	const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10));
 
 	// Base filter — everything except the review/verdict state. Used both for the
 	// active query and for the per-tab counts so the badges stay in sync.
 	const baseFilter: Record<string, any> = {};
 	if (phase) baseFilter['cartridgeTag.phase'] = phase;
-	if (cartridgeId) {
-		baseFilter['cartridgeTag.cartridgeRecordId'] = { $regex: cartridgeId, $options: 'i' };
+	if (tag) baseFilter['cartridgeTag.labels'] = tag;
+	if (notesSearch) {
+		baseFilter['cartridgeTag.notes'] = { $regex: escapeRegExp(notesSearch), $options: 'i' };
 	}
 	if (fromDate || toDate) {
 		baseFilter.capturedAt = {};
@@ -48,6 +63,33 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 			end.setHours(23, 59, 59, 999);
 			baseFilter.capturedAt.$lte = end;
 		}
+	}
+
+	// arm/experiment/failureCode resolve via CartridgeRecord to a cartridge-id
+	// allowlist; cartridgeId (partial-match search) narrows the same field with
+	// a regex, so both are combined into one $and clause rather than letting
+	// one overwrite the other.
+	const cartridgeIdClauses: any[] = [];
+	if (cartridgeId) {
+		cartridgeIdClauses.push({ 'cartridgeTag.cartridgeRecordId': { $regex: cartridgeId, $options: 'i' } });
+	}
+	if (arm || experiment || failureCode) {
+		const cartQuery: Record<string, any> = {};
+		if (arm) cartQuery.arm = arm;
+		if (experiment) cartQuery.experiment = experiment;
+		if (failureCode) {
+			cartQuery.$or = [
+				{ 'waxQc.rejectionReason': failureCode },
+				{ 'reagentInspection.reason': failureCode }
+			];
+		}
+		const matchingCartIds = await CartridgeRecord.distinct('_id', cartQuery);
+		cartridgeIdClauses.push({ 'cartridgeTag.cartridgeRecordId': { $in: matchingCartIds } });
+	}
+	if (cartridgeIdClauses.length === 1) {
+		Object.assign(baseFilter, cartridgeIdClauses[0]);
+	} else if (cartridgeIdClauses.length > 1) {
+		baseFilter.$and = cartridgeIdClauses;
 	}
 
 	// Layer the review-tab + verdict conditions on top of the base filter.
@@ -61,7 +103,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		filter.qcLabel = verdict;
 	}
 
-	const [imagesRaw, total, distinctPhases, unreviewedCount, reviewedCount] = await Promise.all([
+	const [imagesRaw, total, distinctPhases, unreviewedCount, reviewedCount, armOptionsRaw, experimentOptionsRaw, tagOptionsRaw, settingsDoc] = await Promise.all([
 		CvImage.find(filter)
 			.sort({ capturedAt: -1 })
 			.skip((page - 1) * PAGE_SIZE)
@@ -73,14 +115,28 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		CvImage.distinct('cartridgeTag.phase'),
 		// Tab badges — respect the active base filters but not the review tab itself.
 		CvImage.countDocuments({ ...baseFilter, qcLabel: null }),
-		CvImage.countDocuments({ ...baseFilter, qcLabel: { $ne: null } })
+		CvImage.countDocuments({ ...baseFilter, qcLabel: { $ne: null } }),
+		CartridgeRecord.distinct('arm', { arm: { $nin: [null, ''] } }),
+		CartridgeRecord.distinct('experiment', { experiment: { $nin: [null, ''] } }),
+		CvImage.distinct('cartridgeTag.labels', { 'cartridgeTag.labels': { $exists: true, $ne: [] } }),
+		ManufacturingSettings.findById('default').select('rejectionReasonCodes').lean()
 	]);
+
+	const armOptions = (armOptionsRaw as string[]).sort((a, b) => a.localeCompare(b));
+	const experimentOptions = (experimentOptionsRaw as string[]).sort((a, b) => a.localeCompare(b));
+	const tagOptions = (tagOptionsRaw as string[]).sort((a, b) => a.localeCompare(b));
+	const failureCodeOptions = (((settingsDoc as any)?.rejectionReasonCodes ?? []) as any[])
+		.slice()
+		.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+		.map(rc => ({ code: rc.code, label: rc.label, processType: rc.processType }));
 
 	const images = (imagesRaw as any[]).map(img => ({
 		id: img._id,
 		cartridgeImageNumber: img.cartridgeImageNumber ?? null,
 		cartridgeRecordId: img.cartridgeTag?.cartridgeRecordId ?? null,
 		phase: img.cartridgeTag?.phase ?? null,
+		labels: img.cartridgeTag?.labels ?? [],
+		notes: img.cartridgeTag?.notes ?? '',
 		qcLabel: img.qcLabel ?? null,
 		url: img.imageUrl || (img.filePath ? getR2Url(img.filePath) : null),
 		thumbnailUrl: img.thumbnailPath ? getR2Url(img.thumbnailPath) : (img.imageUrl || (img.filePath ? getR2Url(img.filePath) : null)),
@@ -99,8 +155,12 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		pageSize: PAGE_SIZE,
 		review,
 		counts: { unreviewed: unreviewedCount, reviewed: reviewedCount },
-		filters: { phase, cartridgeId, verdict, fromDate, toDate },
-		availablePhases: (distinctPhases as string[]).filter(Boolean).sort()
+		filters: { phase, cartridgeId, verdict, fromDate, toDate, arm, experiment, tag, failureCode, notesSearch },
+		availablePhases: (distinctPhases as string[]).filter(Boolean).sort(),
+		armOptions,
+		experimentOptions,
+		tagOptions,
+		failureCodeOptions
 	};
 };
 
