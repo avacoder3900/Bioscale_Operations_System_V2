@@ -39,6 +39,50 @@ src/
 └── hooks.server.ts            # Auth middleware (session validation on every request)
 ```
 
+## Deployment Rules (MANDATORY)
+
+**NEVER deploy to Vercel from local (`npx vercel deploy` / `vercel deploy --prod`).** This has already
+caused untraceable deployments in this project — a deployment with no git metadata means nobody can
+find the branch/commit it came from later. Always:
+1. Commit to the feature branch.
+2. `git push origin <branch>` to GitHub.
+3. Let Vercel's GitHub integration build/deploy from that push (preview for branches, production for
+   `master`). If the GitHub integration isn't firing (check the Vercel dashboard's Deployments tab
+   before assuming this), fix *that* — don't route around it with a local CLI deploy.
+
+Every deployment must be traceable to a GitHub commit. If you ever must deploy from local as a one-off
+exception, log it immediately in `progress.txt` per the Deployment Log Entries format below so it stays
+traceable.
+
+### Progress Log Heartbeat (MANDATORY)
+
+Update `progress.txt` at least once per hour of active session work — every 30 minutes when the
+session involves substantial, ongoing changes. Don't wait until the end of a session to write it up;
+if the session is interrupted, the log should still reflect what was actually done.
+
+Each entry:
+```
+================================================================================
+YYYY-MM-DD — <branch-name> — <one-line summary>
+================================================================================
+What was built/changed/fixed, in the existing narrative style (see entries below this
+section for the established tone/detail level). Include: files touched, root cause if
+it's a fix, and `npm run check` status (error count vs. the current baseline).
+```
+
+### Deployment Log Entries (MANDATORY)
+
+Any time a deployment (preview or production) is created for a branch, log it — don't rely on the
+Vercel dashboard alone, since deployment history there is not branch/commit-searchable the way this
+file is. Append to the relevant progress.txt entry:
+```
+Deployment: <preview|production> — <deployment URL>
+Source: branch <branch-name> @ commit <short-sha>
+Retrieve this exact code: git checkout <branch-name> at commit <short-sha>
+  (or: git log <branch-name> --oneline to find it if the branch has since moved on)
+What this deployment is for: <one line — what feature/fix it's meant to demonstrate or test>
+```
+
 ## Rules
 
 ### DO NOT MODIFY

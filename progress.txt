@@ -2972,3 +2972,55 @@ fine. Also converted the particle-ID bail to retry-on-resume (never return-to-em
 an is_simulating guard so analysis can't hang on the loop. Redeployed to all 3 robots.
 Calibrator 'C' is still returning -1.0 (hardware/probe issue, worked Jun 24) — flagged for
 physical follow-up, but runs no longer depend on it.
+
+================================================================================
+2026-07-01 — feat/cartridge-photo-filters-v2 — cartridge photo search/filter + common-failure management
+================================================================================
+PROCESS NOTE FIRST: this session made several `npx vercel deploy` / `vercel deploy --prod` calls
+directly from local, violating the MANDATORY Deployment Rule above (which lived only in this file
+and wasn't in CLAUDE.md, so it got missed). This is very likely also how the untraceable
+"8mruxedpw" deployment on this project got created earlier — no git metadata, no way to find its
+source. Fixed going forward: the rule is now duplicated into CLAUDE.md's top-level Rules section
+(where it's actually loaded every session) plus a new heartbeat + deployment-log requirement so
+this doesn't recur. No more local `vercel deploy` calls after this entry unless explicitly logged
+as a one-off exception.
+
+Also discovered: two Vercel projects share the exact name "bioscale-operations-system-mongodb" —
+one under the personal "alejandro-valdezs-projects" scope (empty env vars, non-functional, was
+being deployed to by mistake), and the real one under the "brevitest" team scope (has MONGODB_URI,
+R2_*, MOCREO_*, CV_WORKER_URL, etc. — this is the actual production app). All deploys below are to
+the brevitest-scope project.
+
+Feature: cartridge photo browsing/filtering, spanning /cartridge-admin and /cv/stream (Image Stream):
+  - Filters added to both pages: Arm, Experiment (both direct CartridgeRecord fields), Tag (CV
+    image-stream cartridgeTag.labels), Common Failure (ManufacturingSettings.rejectionReasonCodes,
+    joined via CartridgeRecord.waxQc.rejectionReason / reagentInspection.reason), and a free-text
+    search over cartridgeTag.notes (regex-escaped). New indexes: CartridgeRecord.arm,
+    CartridgeRecord.experiment, CvImage['cartridgeTag.labels'].
+  - /cv/stream got a 4th tab — "Label Creation" (originally named "Manage Failures") — full CRUD
+    (create/edit/delete) for ManufacturingSettings.rejectionReasonCodes across both wax and reagent
+    process types, reusing the same action logic already on the wax-filling/reagent-filling settings
+    pages, generalized to take processType from the form. Gated on manufacturing:admin.
+  - Files: src/lib/server/db/models/{cartridge-record,cv-image}.ts,
+    src/routes/cartridge-admin/+page.{server.ts,svelte}, src/routes/cv/stream/+page.{server.ts,svelte},
+    src/routes/api/cartridge-admin/dhr/[cartridgeId]/+server.ts (notes now included in photo payload).
+  - npm run check: 11-error baseline, 0 new (same pre-existing errors in r2.ts, run-inference.ts,
+    AskBimsWidget.svelte, assembly/[sessionId]/+page.svelte — unrelated to this work).
+
+OPEN ISSUE: reported blank screen when clicking the Label Creation tab in one preview. Structural
+review (brace-balance check, svelte-check) found nothing wrong in the template — 18/18 {#if}/{/if}
+and 10/10 {#each}/{/each} pairs balance. Needs an actual browser console error or the Vercel
+dashboard Source-tab comparison against an earlier working deployment (URL below) to pin down.
+Unresolved as of this entry.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-8y6lhxniv-brevitest.vercel.app
+Source: branch feat/cartridge-photo-filters-v2 @ commit 238649f45
+Retrieve this exact code: git checkout feat/cartridge-photo-filters-v2 (currently at 238649f45;
+  git log feat/cartridge-photo-filters-v2 --oneline to re-find it if the branch has since moved on)
+What this deployment is for: full feature (filters on both pages + Label Creation tab, post-rename)
+  against real production data on the brevitest-team project.
+
+Prior reference deployment (predates this session, no git metadata — origin unknown):
+https://bioscale-operations-system-mongodb-8mruxedpw-brevitest.vercel.app — user reports this had a
+working "Common Failures" tab; could not be traced to a commit. If its source is recovered via the
+Vercel dashboard Source tab, reconcile against the Label Creation tab above and note the diff here.
