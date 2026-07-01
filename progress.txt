@@ -2884,3 +2884,24 @@ Hence a hard refresh can't help — the stale bundle IS what's served. Fix is Ve
 the latest master deployment to Production, or set Production Branch = master); a code change can't
 help since 0.5 already exists on master. Pushed a fresh master build to give a current deployment
 ready to promote. (Also: prod being ~2wk stale means all recent deck-cal + other work is not live.)
+
+=== 2026-07-01 — Deck-003 "holes off again" diagnosed + one-click "Re-baseline deck" ===
+Operator reported deck-003 "Move to Hole" was exact yesterday, off today; wanted to know if the
+work saved/uploaded. DATA (read-only Mongo, prod .env): all 3219 deck_calibration_edits intact,
+nothing reverted; yesterday's edited wells unchanged; +168 edits today. Robot B07 (hidden-leaf):
+NOT rebooted (up 5d20h), Opentrons deck cal unchanged (lastModified 2023-11-21), pipette offsets
+zero — robot frame did not move. Clarified: Studio "Move to Hole" loads the deck def LIVE from
+Mongo into a maintenance run — it does NOT depend on the fill-protocol Sync (Sync only affects
+real wax/reagent runs). ROOT CAUSE: whole-deck placement drift. Today's 60 re-tuned holes moved by
+a tight mean (0.4,-1.5,0)mm (±0.3) = a uniform shift, not per-hole drift; history has 83 uniform
+bulk-shift batches (~12 on the 6/30 evening alone), almost all ~1mm in -Y. So the deck goes off by
+~1mm/session (systematic -Y — either a non-repeatable physical mount OR a systematic offset in the
+STALE-prod Move-to-Hole math that the fixed master code may not have; re-test after prod promote).
+Operator had been correcting it 12 holes (one cartridge) at a time — the time sink.
+FIX (PRD docs/prds/DECK-CAL-REBASELINE-WHOLE-DECK.md): added rebaselineDeck() + a prominent
+"⇱ Deck moved? Re-baseline ALL 576 holes" button to the Offset panel — applies the captured/typed
+dx/dy/dz to EVERY hole (both wax + reagent, ignoring the role filter) in one click via the existing
+applyDeckEditBatch (bounds guard + history + AuditLog + single Undo + live-run update). Complements
+the existing applyGlobalShift (which only hits the active role → easy to half-shift the deck).
+UI-only, no server change. npm run check: 11-error baseline (0 new in deck-calibration/+page.svelte).
+Reaches operators only after the stale prod alias is promoted to master.
