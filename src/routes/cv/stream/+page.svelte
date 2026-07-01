@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
+	import PhotoHighlighter from '$lib/components/PhotoHighlighter.svelte';
 
 	let { data } = $props();
 
@@ -332,7 +333,9 @@
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div class="max-h-full max-w-5xl space-y-3" onclick={(e) => e.stopPropagation()}>
 			{#if img.url}
-				<img src={img.url} alt={img.cartridgeImageNumber ?? 'capture'} class="mx-auto max-h-[70vh] rounded shadow-2xl" />
+				<div class="flex justify-center">
+					<PhotoHighlighter src={img.url} alt={img.cartridgeImageNumber ?? 'capture'} imgClass="mx-auto max-h-[70vh] w-auto rounded shadow-2xl" />
+				</div>
 			{/if}
 
 			<!-- Pass / Fail review controls -->

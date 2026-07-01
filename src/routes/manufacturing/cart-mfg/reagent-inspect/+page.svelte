@@ -10,8 +10,12 @@
 	 * Capture/station plumbing mirrors /wax-inspect (the proven implementation).
 	 */
 	import { onMount, onDestroy } from 'svelte';
+	import PhotoAnnotatorModal from '$lib/components/PhotoAnnotatorModal.svelte';
 
 	let { data } = $props();
+
+	// Photo currently open in the highlight annotator (null = closed).
+	let annotateUrl = $state<string | null>(null);
 
 	const PHASE = 'reagent_filled';
 	// sealed carts get photographed (→ reagent_qc); reagent_qc carts get re-scanned
@@ -670,6 +674,8 @@
 
 <svelte:window onkeydown={onGlobalKeydown} />
 
+<PhotoAnnotatorModal url={annotateUrl} onclose={() => (annotateUrl = null)} />
+
 <div class="min-h-screen bg-[var(--color-tron-bg-primary)] p-4 sm:p-6">
 	<div class="mx-auto max-w-6xl space-y-4">
 		<header class="flex items-center justify-between">
@@ -919,7 +925,14 @@
 								<tr class="border-t border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)]">
 									<td class="px-3 py-2">
 										{#if row.imageUrl}
-											<img src={row.imageUrl} alt={row.cartridgeRecordId ?? 'capture'} class="h-12 w-12 rounded object-cover" loading="lazy" />
+											<button
+												type="button"
+												onclick={() => (annotateUrl = row.imageUrl)}
+												title="Open photo to highlight"
+												class="block rounded ring-offset-1 ring-offset-[var(--color-tron-bg-primary)] transition-shadow hover:ring-2 hover:ring-[var(--color-tron-yellow,#facc15)]"
+											>
+												<img src={row.imageUrl} alt={row.cartridgeRecordId ?? 'capture'} class="h-12 w-12 cursor-pointer rounded object-cover" loading="lazy" />
+											</button>
 										{:else}
 											<div class="flex h-12 w-12 items-center justify-center rounded bg-[var(--color-tron-bg-tertiary)] text-[10px] text-[var(--color-tron-text-secondary)]">—</div>
 										{/if}
