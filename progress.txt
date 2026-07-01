@@ -3043,3 +3043,40 @@ What this deployment is for: promotes the full cartridge-photo-filters-v2 featur
   tag/common-failure filters on /cartridge-admin and /cv/stream, plus the /cv/stream Label Creation
   tab) to production for the whole team. The Label Creation tab blank-screen issue (see above) is
   still unresolved as of this deploy — flag to the team if it reproduces in production.
+
+================================================================================
+2026-07-01 (follow-up) — feat/cv-failure-labels — root cause of the blank Label Creation tab + rebuild
+================================================================================
+Root cause of the earlier "blank screen" report: not a bug at all — the user was describing a
+DIFFERENT, correct feature than what got built. "Common failures" was built against
+ManufacturingSettings.rejectionReasonCodes (the formal wax/reagent QC rejection-code system,
+code/label/processType/sortOrder) when what was actually wanted is a simple, freeform failure-
+label vocabulary for tagging photos. See docs/prds/CV-FAILURE-LABELS.md for the full spec — user
+confirmed design: two separate sections per photo (Notes = free text, Labels = select-only chips
+from a premade list; new labels only get created via the Manage tab's + button, never inline).
+
+Rebuilt per the PRD on a fresh branch (does NOT touch master yet — this is preview-only until
+reviewed):
+  - New FailureLabel model (src/lib/server/db/models/failure-label.ts) — minimal, just text +
+    createdBy/At, unique case-insensitive.
+  - New endpoints: POST/GET /api/cv/failure-labels, DELETE .../[id],
+    PATCH /api/cv/images/[id]/tags (added alongside — did not remove — an existing unused POST
+    handler at that same path that proxies to an external CV worker).
+  - POST /api/cv/capture extended to accept labels/notes at capture time.
+  - /cv/stream: Manage tab rebuilt (dropped the wrong rejectionReasonCodes CRUD actions entirely,
+    replaced with the +-button flow); lightbox now has editable Notes + Labels sections.
+  - /capture: "Just captured" strip now has a per-photo 🏷 quick-tag panel (Notes + Labels),
+    since that page has no other tag-editing UI to build (sessionPhotos is a stats-only array,
+    not a rendered list — recentCaptures is the correct hook).
+  - Existing Common Failure filter dropdown (rejectionReasonCodes-backed) and Tag filter dropdown
+    (cartridgeTag.labels-backed) untouched, per Non-goals.
+  - npm run check: 11-error baseline, 0 new.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-qpwxu7ruo-brevitest.vercel.app
+  (dpl_BTYsqU38NqKLWT3Hsos1FuzETTG3)
+Source: branch feat/cv-failure-labels @ commit d10f31032
+Retrieve this exact code: git checkout feat/cv-failure-labels (currently at d10f31032;
+  git log feat/cv-failure-labels --oneline to re-find it if the branch has since moved on)
+What this deployment is for: review before merging to master — this REPLACES the Label Creation
+  tab currently live in production (from the earlier be3feb371 deploy) with the correct feature.
+  Not yet merged to master / promoted to production.
