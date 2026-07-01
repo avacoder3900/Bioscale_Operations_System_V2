@@ -5,7 +5,7 @@ import * as auth from '$lib/server/auth';
 import { uploadFile } from '$lib/server/box';
 import { env } from '$env/dynamic/private';
 
-const PUBLIC_PATHS = ['/login', '/invite/accept', '/highlight-test'];
+const PUBLIC_PATHS = ['/login', '/invite/accept'];
 
 const handleAuth: Handle = async ({ event, resolve }) => {
 	const sessionToken = event.cookies.get(auth.sessionCookieName);

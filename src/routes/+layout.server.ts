@@ -5,7 +5,7 @@ import type { LayoutServerLoad } from './$types';
 
 export const load: LayoutServerLoad = async ({ locals, url }) => {
 	// Public routes that don't require authentication
-	const publicPaths = ['/login', '/logout', '/invite', '/api', '/highlight-test'];
+	const publicPaths = ['/login', '/logout', '/invite', '/api'];
 	if (publicPaths.some(p => url.pathname === p || url.pathname.startsWith(p + '/'))) {
 		return {};
 	}
