@@ -417,28 +417,46 @@ def run(protocol: protocol_api.ProtocolContext):
             else:
                 raise ValueError('Invalid offset data format')
         except Exception as e:
-            protocol.pause(f'Error reading offset data: {str(e)} - click Resume to continue')
-            ser.close()
-            return
+            # Do NOT bail the run here. The 'C' baseline read can come back blank or
+            # malformed even when the calibrator is otherwise fine — operators have
+            # resumed past this in the Opentrons app and the run + per-tip probe still
+            # work. Pause so the operator can choose to continue, then proceed with a
+            # zero baseline (the per-tip X/Y probe below still runs; in bims_native mode
+            # the global offset is applied separately via set_offset). Never `return`.
+            protocol.pause(
+                f'Could not read offset calibration ({str(e)}). '
+                f'Click Resume to START THE RUN ANYWAY (zero baseline; per-tip '
+                f'calibration still runs), or Cancel/Stop to end.'
+            )
+            offset['x'] = 0.0
+            offset['y'] = 0.0
+            protocol.comment('Continuing without serial offset baseline — using x=0.0, y=0.0.')
 
-        # Read particle ID with retry logic
-        try:
-            serial_write_with_retry(ser, b'I')
-            particle_id_raw = serial_read_with_retry(ser)
-            # Decode bytes to string and strip whitespace/newlines, then extract 24-character ID
-            particle_id = particle_id_raw.decode('utf-8', errors='ignore').strip()[:24]
-            if particle_id not in carriages:
-                raise ValueError(f'Unknown particle ID: {particle_id}')
-            carriage = carriages[particle_id]
-            protocol.move_labware(labware=carriage, new_location=1)
-            # Apply per-robot offsets to all well positions on this labware
-            carriage.set_offset(x=robot_offsets['x'], y=robot_offsets['y'], z=robot_offsets['z'])
-            protocol.comment(f'Loaded carriage for particle ID: {particle_id}')
-            protocol.comment(f'Applied robot offsets: x={robot_offsets["x"]}, y={robot_offsets["y"]}, z={robot_offsets["z"]}')
-        except Exception as e:
-            protocol.pause(f'Error reading particle ID: {str(e)} - click Resume to continue')
-            ser.close()
-            return
+        # Read particle ID (which carriage/deck is loaded) with retry-on-resume —
+        # never bail to an empty run. 'I' is reliable in practice; if it ever returns
+        # garbage the operator can Resume to re-read (or Cancel/Stop to end).
+        carriage = None
+        while carriage is None:
+            try:
+                serial_write_with_retry(ser, b'I')
+                particle_id_raw = serial_read_with_retry(ser)
+                # Decode bytes to string and strip whitespace/newlines, then extract 24-character ID
+                particle_id = particle_id_raw.decode('utf-8', errors='ignore').strip()[:24]
+                if particle_id not in carriages:
+                    raise ValueError(f'Unknown particle ID: {particle_id}')
+                carriage = carriages[particle_id]
+            except Exception as e:
+                if protocol.is_simulating():
+                    return  # analysis pass: don't loop on a (no-op) pause
+                protocol.pause(
+                    f'Could not read the deck/particle ID ({str(e)}). Check the '
+                    f'calibrator, then click Resume to retry (or Cancel/Stop to end).'
+                )
+        protocol.move_labware(labware=carriage, new_location=1)
+        # Apply per-robot offsets to all well positions on this labware
+        carriage.set_offset(x=robot_offsets['x'], y=robot_offsets['y'], z=robot_offsets['z'])
+        protocol.comment(f'Loaded carriage for particle ID: {particle_id}')
+        protocol.comment(f'Applied robot offsets: x={robot_offsets["x"]}, y={robot_offsets["y"]}, z={robot_offsets["z"]}')
 
         def pick_up_and_calibrate_tip():
             nonlocal _tip_index

@@ -2956,3 +2956,19 @@ Fix (protocols/Reagent_Filling_GEN7.py + Wax_Filling_GEN7_Cartridge.py, identica
 PENDING DEPLOY: the fix only takes effect once the .py is re-uploaded to B07 (POST
 /api/opentrons-lab/robots/[id]/protocols → new opentronsProtocolId; select it in the
 Start Run panel). Repo edit alone does nothing on the robot.
+
+2026-07-01 (follow-up) — reagent/wax "empty succeeded" round 2: offset-read bail
+The calibrator-not-found retry fix worked (calibrator now found), but the run still
+bailed at the NEXT trap: after finding the calibrator it reads the 'C' offset, and on
+B07 the calibrator returns a persistent bad value `=-1.0:1:0` (verified via SSH, 5/5;
+unchanged after a USB replug — the probe/limit-switch measurement is stuck, though 'I'
+particle-ID reads fine and correctly IDs deck 003). The old code did pause+return on that
+parse failure → empty "succeeded" run again.
+Fix (both protocols): the offset-read failure no longer returns — it pauses ("Could not
+read offset calibration … Resume to START THE RUN ANYWAY"), sets offset x=y=0, and
+CONTINUES (per-tip X/Y probe still runs; bims_native global offset applied via set_offset).
+Matches operator experience: resume past the "missing offset data" error and the run fills
+fine. Also converted the particle-ID bail to retry-on-resume (never return-to-empty), with
+an is_simulating guard so analysis can't hang on the loop. Redeployed to all 3 robots.
+Calibrator 'C' is still returning -1.0 (hardware/probe issue, worked Jun 24) — flagged for
+physical follow-up, but runs no longer depend on it.
