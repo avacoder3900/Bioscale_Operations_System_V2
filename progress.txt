@@ -3246,3 +3246,28 @@ Retrieve this exact code: git checkout master (currently at 320a7c47;
   git log master --oneline to re-find it if master has since moved on)
 What this deployment is for: ships the /cv/stream filter cleanup (Tag = Label-Creation
   labels only; Common Failure dropdown removed) to production.
+
+================================================================================
+2026-07-02 — feat/dhr-photo-stream-parity — DHR photo pass/fail parity + cartridge-admin data + drop stream "All" tab
+================================================================================
+Three UI features, merged to master:
+- DHR document (/cartridge-admin/dhr/[cartridgeId]) photos now show the SAME detail the image
+  stream shows: human QC pass/fail (qcLabel) PASS/FAIL badge + colored border + inline Pass/Fail on
+  each card; lightbox Pass/Fail/Clear controls (keys A/F/C) + Verdict; Labels + Notes sections
+  populate. Interactive via the existing /api/cv/images/[id]/label endpoint (optimistic w/ rollback).
+  Root cause of the gap: the page LOAD (+page.server.ts) mapped labels/notes but not qcLabel, and the
+  lightbox read a nonexistent img.label field; fixed by adding qcLabel (+ cartridgeImageNumber/
+  capturedByUsername) to the load and the shared /api/cartridge-admin/dhr endpoint.
+- Cartridge-admin search expanded row now surfaces SPU it ran on (testExecution.spu), Experiment,
+  Arm, and Current State (status) from the already-loaded lean doc — no extra fetch. N/A until run.
+- Image stream (/cv/stream): removed the "All" review tab (Unreviewed / Reviewed only) + server
+  no longer accepts review=all.
+FILES: src/routes/cartridge-admin/dhr/[cartridgeId]/{+page.server.ts,+page.svelte},
+src/routes/api/cartridge-admin/dhr/[cartridgeId]/+server.ts,
+src/routes/cartridge-admin/{+page.server.ts,+page.svelte},
+src/routes/cv/stream/{+page.server.ts,+page.svelte}.
+Merged origin/master into the branch first (master had independently added overlapping arm/
+experiment filters + DHR endpoint fields — deduped arm/experiment in the row; kept program/spuId/
+spuUdi). svelte-check: 45-error master baseline unchanged, 0 new errors in touched files.
+Deployment: production — via master merge (PR #15); production URL logged on deploy below.
+Source: branch feat/dhr-photo-stream-parity.

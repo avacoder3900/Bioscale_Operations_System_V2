@@ -112,8 +112,7 @@
 
 	const tabs = [
 		{ key: 'unreviewed', label: 'Unreviewed' },
-		{ key: 'reviewed', label: 'Reviewed' },
-		{ key: 'all', label: 'All' }
+		{ key: 'reviewed', label: 'Reviewed' }
 	] as const;
 
 	function paramsFromFilters(): URLSearchParams {

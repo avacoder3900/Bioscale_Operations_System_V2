@@ -381,6 +381,10 @@
 							<td colspan="12" class="bg-[var(--color-tron-surface)]/50 px-4 py-3">
 								<!-- Always-available summary metadata (from list query) -->
 								<div class="mb-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+									<div><span class="text-[var(--color-tron-text-secondary)]">Current State:</span> <span class="ml-1 font-medium text-[var(--color-tron-cyan)]">{stageLabel(c.currentLifecycleStage)}</span></div>
+									<div><span class="text-[var(--color-tron-text-secondary)]">SPU:</span> <span class="ml-1 font-mono text-[var(--color-tron-text)]">{c.spuUdi ?? c.spuId ?? 'N/A'}</span></div>
+									<div><span class="text-[var(--color-tron-text-secondary)]">Experiment:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.experiment ?? 'N/A'}</span></div>
+									<div><span class="text-[var(--color-tron-text-secondary)]">Arm:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.arm ?? 'N/A'}</span></div>
 									<div><span class="text-[var(--color-tron-text-secondary)]">Wax Status:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.waxStatus ?? 'N/A'}</span></div>
 									<div><span class="text-[var(--color-tron-text-secondary)]">Wax QC:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.waxQcStatus ?? 'N/A'}</span></div>
 									<div><span class="text-[var(--color-tron-text-secondary)]">Inspection:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.inspectionStatus ?? 'N/A'}</span></div>
