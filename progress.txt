@@ -3271,3 +3271,7 @@ experiment filters + DHR endpoint fields — deduped arm/experiment in the row; 
 spuUdi). svelte-check: 45-error master baseline unchanged, 0 new errors in touched files.
 Deployment: production — via master merge (PR #15); production URL logged on deploy below.
 Source: branch feat/dhr-photo-stream-parity.
+Deployment: production — https://bioscale-operations-system-mongodb-1xxgho6ts-brevitest.vercel.app
+Source: branch feat/dhr-photo-stream-parity @ commit 7792fc31 (merged to master e98494d3 via PR #15)
+Retrieve this exact code: git checkout master at commit e98494d3
+What this deployment is for: DHR photo pass/fail parity + cartridge-admin SPU/experiment/arm/state + drop image-stream "All" tab
