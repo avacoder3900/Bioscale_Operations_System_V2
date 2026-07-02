@@ -2893,3 +2893,13 @@ Every new feature, as soon as it is COMPLETE or READY TO TEST, must have its dep
 and staged so it is one click from "Publish." Do not leave finished or testable work sitting
 without a ready-to-publish deployment queued — the preview/staging deploy should already be built
 and waiting on the "Publish" button, not something to start assembling after the fact.
+
+=== 2026-07-02 — Cartridge-Admin expanded row: SPU / experiment / arm / current state ===
+Branch feat/dhr-photo-stream-parity. The /cartridge-admin search table's expanded row now surfaces
+more of the cartridge document: the SPU it was run on (testExecution.spu.udi/_id), the Experiment
+and Arm (run-cartridge linkage), and the Current State (status — reagent_qc, sealed, completed,
+etc.) shown prominently. All come from the list query's already-loaded lean doc — no extra fetch.
+FILES: src/routes/cartridge-admin/+page.server.ts (row now returns experiment/arm/program/spuId/
+spuUdi), src/routes/cartridge-admin/+page.svelte (four new cells at the top of the expansion
+summary grid: Current State, SPU, Experiment, Arm). Fields are null until a cartridge is assigned
+to an experiment arm and executed on an SPU, so pre-run cartridges show N/A. svelte-check: clean.
