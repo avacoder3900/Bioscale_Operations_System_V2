@@ -3138,3 +3138,30 @@ Retrieve this exact code: git checkout master (currently at 71776242;
   git log master --oneline to re-find it if master has since moved on)
 What this deployment is for: ships the photo Highlight tool (draw + save-to-photo +
   filter-by-highlighted) to production.
+
+================================================================================
+2026-07-02 — fix/cv-stream-failure-label-filter — Common Failure filter uses only Label-Creation labels
+================================================================================
+On /cv/stream the Tag / Common-Failure filter dropdown was populated from
+`tagOptions` — every distinct `cartridgeTag.labels` value ever observed on an
+image. That set includes labels that were never in (or were later deleted from)
+the Label Creation tab, so operators saw stale/uncurated options they didn't
+create. Repointed the dropdown at the curated `data.failureLabels` list (the
+FailureLabel collection managed in the Label Creation tab) so it only offers
+Common Failure Labels that actually exist there. Filtering still runs through the
+existing `tag` param → `cartridgeTag.labels` server filter, so behavior is
+unchanged for labels that are in the list.
+
+Files: src/routes/cv/stream/+page.svelte (dropdown now iterates data.failureLabels),
+src/routes/cv/stream/+page.server.ts (dropped the now-unused tagOptions distinct
+query + its return field). Left the separate rejectionReasonCodes-backed
+`failureCodeOptions` "Common Failure" filter untouched. svelte-check clean for the
+touched files (pre-existing chart.js/bwip-js/implicit-any errors unchanged).
+
+Deployment: preview — https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/5qFdzeMGX7nmt2HUrAqdv4Q9o8GY
+Source: branch fix/cv-stream-failure-label-filter @ commit 61194820 (off master;
+  triggered automatically by GitHub integration)
+Retrieve this exact code: git checkout fix/cv-stream-failure-label-filter at commit 61194820
+  (or: git log fix/cv-stream-failure-label-filter --oneline to find it if the branch moves)
+What this deployment is for: preview of the /cv/stream Common Failure filter now
+  listing only Label-Creation labels, before merging to master.
