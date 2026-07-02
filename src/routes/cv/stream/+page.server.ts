@@ -110,7 +110,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		filter.qcLabel = verdict;
 	}
 
-	const [imagesRaw, total, distinctPhases, unreviewedCount, reviewedCount, armOptionsRaw, experimentOptionsRaw, tagOptionsRaw, settingsDoc, failureLabelsRaw] = await Promise.all([
+	const [imagesRaw, total, distinctPhases, unreviewedCount, reviewedCount, armOptionsRaw, experimentOptionsRaw, settingsDoc, failureLabelsRaw] = await Promise.all([
 		CvImage.find(filter)
 			.sort({ capturedAt: -1 })
 			.skip((page - 1) * PAGE_SIZE)
@@ -125,7 +125,6 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		CvImage.countDocuments({ ...baseFilter, qcLabel: { $ne: null } }),
 		CartridgeRecord.distinct('arm', { arm: { $nin: [null, ''] } }),
 		CartridgeRecord.distinct('experiment', { experiment: { $nin: [null, ''] } }),
-		CvImage.distinct('cartridgeTag.labels', { 'cartridgeTag.labels': { $exists: true, $ne: [] } }),
 		ManufacturingSettings.findById('default').select('rejectionReasonCodes').lean(),
 		// The premade failure-label pick-list (Manage tab + tag-pickers). Separate
 		// from failureCodeOptions below (rejectionReasonCodes-backed, powers only
@@ -135,7 +134,6 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 
 	const armOptions = (armOptionsRaw as string[]).sort((a, b) => a.localeCompare(b));
 	const experimentOptions = (experimentOptionsRaw as string[]).sort((a, b) => a.localeCompare(b));
-	const tagOptions = (tagOptionsRaw as string[]).sort((a, b) => a.localeCompare(b));
 	const failureCodeOptions = (((settingsDoc as any)?.rejectionReasonCodes ?? []) as any[])
 		.slice()
 		.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
@@ -172,7 +170,6 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		availablePhases: (distinctPhases as string[]).filter(Boolean).sort(),
 		armOptions,
 		experimentOptions,
-		tagOptions,
 		failureCodeOptions,
 		failureLabels
 	};

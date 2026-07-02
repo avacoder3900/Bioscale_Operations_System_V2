@@ -375,8 +375,10 @@
 				<label for="tag-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Tag</label>
 				<select id="tag-filter" bind:value={tag} class="tron-input w-full">
 					<option value="">All tags</option>
-					{#each data.tagOptions as t (t)}
-						<option value={t}>{t}</option>
+					<!-- Only the premade Common Failure Labels (Label Creation tab), not
+					     every label ever observed on an image. -->
+					{#each data.failureLabels as l (l.id)}
+						<option value={l.text}>{l.text}</option>
 					{/each}
 				</select>
 			</div>
