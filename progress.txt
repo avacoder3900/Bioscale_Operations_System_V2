@@ -2869,37 +2869,405 @@ report via failed[].
 FILES: src/routes/manufacturing/cart-mfg/deck-calibration/+page.svelte (anchorWell state + anchor
 derived; toggleWell stamps anchor on add; setX/Y/Z prefill off anchor; applyAbsolute rewrite;
 "Set position → selection" panel — title/help/anchor readout/button). + the PRD.
-npm run check: 11-error baseline (0 new in deck-calibration/+page.svelte); not yet committed.
+npm run check: 11-error baseline (0 new in deck-calibration/+page.svelte). Committed +
+pushed to master (3be991ac).
 
-=== 2026-07-02 — Cartridge-Admin DHR photos: image-stream parity (pass/fail + labels/notes) ===
-Branch feat/dhr-photo-stream-parity (off master). The DHR document view
-(/cartridge-admin/dhr/[cartridgeId]) now shows the SAME per-photo detail the image stream
-(/cv/stream) shows: human QC PASS/FAIL (qcLabel) badge + colored border + inline Pass/Fail buttons
-on each card, and a lightbox with Pass/Fail/Clear controls (keys A/F/C), a Verdict line, and Labels
-+ Notes sections. Fully interactive — writes through the same /api/cv/images/[id]/label endpoint the
-stream uses (optimistic with rollback), so pass/fail can be set straight from the DHR document.
-ROOT CAUSE: the page's photos come from +page.server.ts (the load), which already mapped
-labels/notes but NOT qcLabel; the lightbox's verdict chip also read a nonexistent img.label field.
-FIX: add qcLabel + cartridgeImageNumber + capturedByUsername to the load (and to the shared
-/api/cartridge-admin/dhr endpoint the search-page preview uses), drop the broken img.label, and
-render qcLabel with the stream's pass/fail code.
+=== 2026-07-01 — Deploy investigation: prod serving a STALE build (0.5mm step "missing") ===
+Operator reported the 0.5mm jog step vanished from the Deck Calibration Studio. Root-caused it
+is NOT a code regression: 0.5 is present in master (added fd1fb5b2, never removed) and master
+builds clean. Fingerprinted the LIVE prod bundle at bioscale-operations-system-mongodb.vercel.app
+(fetched the public /_app/immutable client chunks): the deployed deck-cal page (node 116) has jog
+steps 0.1/1/5/10/25 (NO 0.5) and the OLD "Set position → one hole" tool — i.e. a build from before
+~2026-06-20. That deployed state matches NO current branch tip, so the Vercel PRODUCTION alias is
+not tracking master (master pushes land as previews, prod stays pinned to an old/divergent build).
+Hence a hard refresh can't help — the stale bundle IS what's served. Fix is Vercel-side (promote
+the latest master deployment to Production, or set Production Branch = master); a code change can't
+help since 0.5 already exists on master. Pushed a fresh master build to give a current deployment
+ready to promote. (Also: prod being ~2wk stale means all recent deck-cal + other work is not live.)
+
+=== 2026-07-01 — Deck-003 "holes off again" diagnosed + one-click "Re-baseline deck" ===
+Operator reported deck-003 "Move to Hole" was exact yesterday, off today; wanted to know if the
+work saved/uploaded. DATA (read-only Mongo, prod .env): all 3219 deck_calibration_edits intact,
+nothing reverted; yesterday's edited wells unchanged; +168 edits today. Robot B07 (hidden-leaf):
+NOT rebooted (up 5d20h), Opentrons deck cal unchanged (lastModified 2023-11-21), pipette offsets
+zero — robot frame did not move. Clarified: Studio "Move to Hole" loads the deck def LIVE from
+Mongo into a maintenance run — it does NOT depend on the fill-protocol Sync (Sync only affects
+real wax/reagent runs). ROOT CAUSE: whole-deck placement drift. Today's 60 re-tuned holes moved by
+a tight mean (0.4,-1.5,0)mm (±0.3) = a uniform shift, not per-hole drift; history has 83 uniform
+bulk-shift batches (~12 on the 6/30 evening alone), almost all ~1mm in -Y. So the deck goes off by
+~1mm/session (systematic -Y — either a non-repeatable physical mount OR a systematic offset in the
+STALE-prod Move-to-Hole math that the fixed master code may not have; re-test after prod promote).
+Operator had been correcting it 12 holes (one cartridge) at a time — the time sink.
+FIX (PRD docs/prds/DECK-CAL-REBASELINE-WHOLE-DECK.md): added rebaselineDeck() + a prominent
+"⇱ Deck moved? Re-baseline ALL 576 holes" button to the Offset panel — applies the captured/typed
+dx/dy/dz to EVERY hole (both wax + reagent, ignoring the role filter) in one click via the existing
+applyDeckEditBatch (bounds guard + history + AuditLog + single Undo + live-run update). Complements
+the existing applyGlobalShift (which only hits the active role → easy to half-shift the deck).
+UI-only, no server change. npm run check: 11-error baseline (0 new in deck-calibration/+page.svelte).
+Reaches operators only after the stale prod alias is promoted to master.
+
+================================================================================
+2026-07-01 — Quick Reagent Fill Test page (self-service test-cart prep)
+================================================================================
+PRD: docs/prds/QUICK-REAGENT-FILL-TEST.md
+Productized the ad-hoc "set carts to wax_ready so I can scan them into a reagent test fill"
+DB-script work (done by hand repeatedly through the 2026-07-01 reagent test session) into a
+self-service page modeled 1:1 on Quick Seal.
+
+New route: /manufacturing/cart-mfg/quick-reagent-test
+  - +page.svelte: same textarea bulk-scan UI as quick-seal; button "Make N carts reagent-fillable";
+    lists converted (from→wax_ready) + rejected; keeps not-found barcodes in the box to re-scan.
+  - +page.server.ts: `convert` action takes ANY existing cart at ANY status and:
+      status → wax_ready (reagent-fill intake gate), reagentFilling → { tubeRecords: [] }
+      (clears the "already reagent-filled" guard so reused/already-filled carts scan clean),
+      records priorStatus, sets usedForTestFill:true, pushes a "Used for test fill" note
+      (phase 'test-fill'), writes an AuditLog row (action 'quick_reagent_test').
+      Only not-found barcodes are rejected — every existing cart is accepted (the whole point).
+  - permissions: manufacturing:read (load) / manufacturing:write (action), like Quick Seal.
+Model: added `usedForTestFill: Boolean` to cartridge-record.ts (strict mode would strip it otherwise);
+priorStatus already existed. Nav: added "Quick Rgt Test" item after "Quick Seal" in cart-mfg/+layout.svelte.
+npm run check: 11-error baseline (0 new in the new/edited files). Reaches operators only after the
+stale prod alias is promoted to master.
+
+================================================================================
+2026-07-01 — FIX: reagent/wax run "succeeds" instantly without filling (B07)
+================================================================================
+Root cause (evidence-backed, see memory project-reagent-empty-run-calibrator):
+NOT a connection/bridge bug and NOT a parameter-parsing bug. Verified the robot
+received well_2=true correctly. The run bailed BEFORE the fill logic: the protocol
+searches /dev/ttyACM* for the tip-calibrator once at startup; the calibrator (a USB
+serial device) enumerates a few SECONDS after the run starts, so the cold probe
+missed it → protocol.pause('Unable to find calibrator serial port') then `return`
+→ run ends with 16 setup commands, zero fills. BIMS auto-resumes that first pause
+(off-deck auto-resume) → the empty run lands as "succeeded". Evidence: run 6763d05c
+command stream ended at waitForResume; /dev/ttyACM0 (Particle calibrator) mtime was
+16:44, ~AFTER the ~16:43:50 probe; calibrator answers 'C'->'=-1.0:1:0' fine now.
+
+Fix (protocols/Reagent_Filling_GEN7.py + Wax_Filling_GEN7_Cartridge.py, identical):
+- Extracted the port probe into _probe_for_calibrator(); added _find_calibrator()
+  that POLLS for the calibrator for ~25s (handles late USB enumeration) instead of
+  one cold probe.
+- Replaced the silent `pause(...); return` with a retry-on-resume loop: pause with a
+  clear "Tip calibrator missing — Resume to retry" message, and each Resume re-probes
+  and CONTINUES the run (never returns to an empty success). Matches the operator's
+  "error pops, resume/re-run, then it fills" workaround — now automatic.
+- Analysis pass (is_simulating) kept single-probe + return so upload/analysis can't
+  hang on the retry loop. py_compile clean on both.
+PENDING DEPLOY: the fix only takes effect once the .py is re-uploaded to B07 (POST
+/api/opentrons-lab/robots/[id]/protocols → new opentronsProtocolId; select it in the
+Start Run panel). Repo edit alone does nothing on the robot.
+
+2026-07-01 (follow-up) — reagent/wax "empty succeeded" round 2: offset-read bail
+The calibrator-not-found retry fix worked (calibrator now found), but the run still
+bailed at the NEXT trap: after finding the calibrator it reads the 'C' offset, and on
+B07 the calibrator returns a persistent bad value `=-1.0:1:0` (verified via SSH, 5/5;
+unchanged after a USB replug — the probe/limit-switch measurement is stuck, though 'I'
+particle-ID reads fine and correctly IDs deck 003). The old code did pause+return on that
+parse failure → empty "succeeded" run again.
+Fix (both protocols): the offset-read failure no longer returns — it pauses ("Could not
+read offset calibration … Resume to START THE RUN ANYWAY"), sets offset x=y=0, and
+CONTINUES (per-tip X/Y probe still runs; bims_native global offset applied via set_offset).
+Matches operator experience: resume past the "missing offset data" error and the run fills
+fine. Also converted the particle-ID bail to retry-on-resume (never return-to-empty), with
+an is_simulating guard so analysis can't hang on the loop. Redeployed to all 3 robots.
+Calibrator 'C' is still returning -1.0 (hardware/probe issue, worked Jun 24) — flagged for
+physical follow-up, but runs no longer depend on it.
+
+================================================================================
+2026-07-01 — feat/cartridge-photo-filters-v2 — cartridge photo search/filter + common-failure management
+================================================================================
+PROCESS NOTE FIRST: this session made several `npx vercel deploy` / `vercel deploy --prod` calls
+directly from local, violating the MANDATORY Deployment Rule above (which lived only in this file
+and wasn't in CLAUDE.md, so it got missed). This is very likely also how the untraceable
+"8mruxedpw" deployment on this project got created earlier — no git metadata, no way to find its
+source. Fixed going forward: the rule is now duplicated into CLAUDE.md's top-level Rules section
+(where it's actually loaded every session) plus a new heartbeat + deployment-log requirement so
+this doesn't recur. No more local `vercel deploy` calls after this entry unless explicitly logged
+as a one-off exception.
+
+Also discovered: two Vercel projects share the exact name "bioscale-operations-system-mongodb" —
+one under the personal "alejandro-valdezs-projects" scope (empty env vars, non-functional, was
+being deployed to by mistake), and the real one under the "brevitest" team scope (has MONGODB_URI,
+R2_*, MOCREO_*, CV_WORKER_URL, etc. — this is the actual production app). All deploys below are to
+the brevitest-scope project.
+
+Feature: cartridge photo browsing/filtering, spanning /cartridge-admin and /cv/stream (Image Stream):
+  - Filters added to both pages: Arm, Experiment (both direct CartridgeRecord fields), Tag (CV
+    image-stream cartridgeTag.labels), Common Failure (ManufacturingSettings.rejectionReasonCodes,
+    joined via CartridgeRecord.waxQc.rejectionReason / reagentInspection.reason), and a free-text
+    search over cartridgeTag.notes (regex-escaped). New indexes: CartridgeRecord.arm,
+    CartridgeRecord.experiment, CvImage['cartridgeTag.labels'].
+  - /cv/stream got a 4th tab — "Label Creation" (originally named "Manage Failures") — full CRUD
+    (create/edit/delete) for ManufacturingSettings.rejectionReasonCodes across both wax and reagent
+    process types, reusing the same action logic already on the wax-filling/reagent-filling settings
+    pages, generalized to take processType from the form. Gated on manufacturing:admin.
+  - Files: src/lib/server/db/models/{cartridge-record,cv-image}.ts,
+    src/routes/cartridge-admin/+page.{server.ts,svelte}, src/routes/cv/stream/+page.{server.ts,svelte},
+    src/routes/api/cartridge-admin/dhr/[cartridgeId]/+server.ts (notes now included in photo payload).
+  - npm run check: 11-error baseline, 0 new (same pre-existing errors in r2.ts, run-inference.ts,
+    AskBimsWidget.svelte, assembly/[sessionId]/+page.svelte — unrelated to this work).
+
+OPEN ISSUE: reported blank screen when clicking the Label Creation tab in one preview. Structural
+review (brace-balance check, svelte-check) found nothing wrong in the template — 18/18 {#if}/{/if}
+and 10/10 {#each}/{/each} pairs balance. Needs an actual browser console error or the Vercel
+dashboard Source-tab comparison against an earlier working deployment (URL below) to pin down.
+Unresolved as of this entry.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-8y6lhxniv-brevitest.vercel.app
+Source: branch feat/cartridge-photo-filters-v2 @ commit 238649f45
+Retrieve this exact code: git checkout feat/cartridge-photo-filters-v2 (currently at 238649f45;
+  git log feat/cartridge-photo-filters-v2 --oneline to re-find it if the branch has since moved on)
+What this deployment is for: full feature (filters on both pages + Label Creation tab, post-rename)
+  against real production data on the brevitest-team project.
+
+Prior reference deployment (predates this session, no git metadata — origin unknown):
+https://bioscale-operations-system-mongodb-8mruxedpw-brevitest.vercel.app — user reports this had a
+working "Common Failures" tab; could not be traced to a commit. If its source is recovered via the
+Vercel dashboard Source tab, reconcile against the Label Creation tab above and note the diff here.
+
+--------------------------------------------------------------------------------
+2026-07-01 (follow-up) — feat/cartridge-photo-filters-v2 merged to master, deployed to production
+--------------------------------------------------------------------------------
+Fast-forward merged feat/cartridge-photo-filters-v2 into master (master hadn't moved since branching,
+so no new merge commit) and pushed to origin/master. This time followed the Deployment Rule properly:
+no local `vercel deploy` — pushed to GitHub and let the Vercel GitHub integration build/deploy
+automatically. Confirmed the integration does work correctly on the brevitest-scope project: a
+Production build started within 8 seconds of the push.
+
+Deployment: production — https://bioscale-operations-system-mongodb-irqbctilj-brevitest.vercel.app
+  (dpl_AUcxZL3hFJQUVNV61Z4io4aVPadC), aliased to bioscale-operations-system-mongodb.vercel.app
+Source: master @ commit be3feb371 (triggered automatically by GitHub integration, not local deploy)
+Retrieve this exact code: git checkout master (currently at be3feb371;
+  git log master --oneline to re-find it if master has since moved on)
+What this deployment is for: promotes the full cartridge-photo-filters-v2 feature set (arm/experiment/
+  tag/common-failure filters on /cartridge-admin and /cv/stream, plus the /cv/stream Label Creation
+  tab) to production for the whole team. The Label Creation tab blank-screen issue (see above) is
+  still unresolved as of this deploy — flag to the team if it reproduces in production.
+
+================================================================================
+2026-07-01 (follow-up) — feat/cv-failure-labels — root cause of the blank Label Creation tab + rebuild
+================================================================================
+Root cause of the earlier "blank screen" report: not a bug at all — the user was describing a
+DIFFERENT, correct feature than what got built. "Common failures" was built against
+ManufacturingSettings.rejectionReasonCodes (the formal wax/reagent QC rejection-code system,
+code/label/processType/sortOrder) when what was actually wanted is a simple, freeform failure-
+label vocabulary for tagging photos. See docs/prds/CV-FAILURE-LABELS.md for the full spec — user
+confirmed design: two separate sections per photo (Notes = free text, Labels = select-only chips
+from a premade list; new labels only get created via the Manage tab's + button, never inline).
+
+Rebuilt per the PRD on a fresh branch (does NOT touch master yet — this is preview-only until
+reviewed):
+  - New FailureLabel model (src/lib/server/db/models/failure-label.ts) — minimal, just text +
+    createdBy/At, unique case-insensitive.
+  - New endpoints: POST/GET /api/cv/failure-labels, DELETE .../[id],
+    PATCH /api/cv/images/[id]/tags (added alongside — did not remove — an existing unused POST
+    handler at that same path that proxies to an external CV worker).
+  - POST /api/cv/capture extended to accept labels/notes at capture time.
+  - /cv/stream: Manage tab rebuilt (dropped the wrong rejectionReasonCodes CRUD actions entirely,
+    replaced with the +-button flow); lightbox now has editable Notes + Labels sections.
+  - /capture: "Just captured" strip now has a per-photo 🏷 quick-tag panel (Notes + Labels),
+    since that page has no other tag-editing UI to build (sessionPhotos is a stats-only array,
+    not a rendered list — recentCaptures is the correct hook).
+  - Existing Common Failure filter dropdown (rejectionReasonCodes-backed) and Tag filter dropdown
+    (cartridgeTag.labels-backed) untouched, per Non-goals.
+  - npm run check: 11-error baseline, 0 new.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-qpwxu7ruo-brevitest.vercel.app
+  (dpl_BTYsqU38NqKLWT3Hsos1FuzETTG3)
+Source: branch feat/cv-failure-labels @ commit d10f31032
+Retrieve this exact code: git checkout feat/cv-failure-labels (currently at d10f31032;
+  git log feat/cv-failure-labels --oneline to re-find it if the branch has since moved on)
+What this deployment is for: review before merging to master — this REPLACES the Label Creation
+  tab currently live in production (from the earlier be3feb371 deploy) with the correct feature.
+  Not yet merged to master / promoted to production.
+
+================================================================================
+2026-07-01 (follow-up) — feat/cv-failure-labels merged to master, deployed to production
+================================================================================
+User reviewed the preview (git-feat-cv-ce8275 branch alias) and confirmed it looks right. Fast-
+forward merged feat/cv-failure-labels into master (master hadn't moved since branching) and pushed
+— GitHub integration auto-built and deployed to production, no local `vercel deploy`.
+
+Deployment: production — https://bioscale-operations-system-mongodb-2l7luli0x-brevitest.vercel.app
+  (dpl_9LMNxnduGNkKQ1AUcLXLn5fpbyQP)
+Source: master @ commit 8857bc2ef (triggered automatically by GitHub integration)
+Retrieve this exact code: git checkout master (currently at 8857bc2ef;
+  git log master --oneline to re-find it if master has since moved on)
+What this deployment is for: promotes the correct common-failure-labels feature (FailureLabel
+  model, Manage tab, lightbox Notes+Labels, /capture quick-tag panel) to production, replacing the
+  earlier wrong-data-model "Label Creation" tab that had been live since the be3feb371 deploy.
+
+================================================================================
+2026-07-01 — feat/photo-highlight-annotation — photo Highlight tool + save + filter
+================================================================================
+New feature: operators draw yellow outline boxes on capture photos, save them into the
+image, and filter the Image Stream by highlighted photos.
+
+Components (src/lib/components/):
+- PhotoHighlighter.svelte — "Highlight" toggle; two clicks (corner-to-corner) drop a
+  yellow border-only box (transparent interior). Normalized [0..1] coords track the image
+  on resize; live rubber-band preview; per-box x delete; Clear; right-click cancels; boxes
+  reset when src changes. Given an imageId it shows "Save to photo".
+- PhotoAnnotatorModal.svelte — full-screen wrapper opening a photo in the highlighter
+  (used by the cart-mfg inspect feeds).
+
+Save (burn-in): POST /api/cv/images/[id]/highlight — pulls capture bytes via the R2 worker
+(new downloadViaWorker helper in services/r2.ts), sharp-composites the boxes as yellow
+stroked rects at real pixel scale (EXIF-orientation safe via resolveWithObject dims),
+uploads under a new key, repoints CvImage.imageUrl/filePath (+ cartridge photos[] mirror),
+deletes the original object (overwrite-in-place per operator choice), records the boxes
+under metadata.highlight, and audit-logs (cv_images / highlight_burn_in).
+
+Surfaces: /cv/stream lightbox + reagent-inspect / wax-inspect / post-mortem-inspect feed
+thumbnails (click -> annotator modal).
+
+Filter: /cv/stream gained a "Highlighted" filter (Any / Highlighted / Not highlighted)
+matching on metadata.highlight existence, with a yellow "HL" thumbnail badge. Merged
+alongside master's arm/experiment/tag/common-failure/notes filters (resolved the two
+/cv/stream conflicts to keep both; HL badge stacks above the notes badge).
+
+Merge: master had advanced to ee49dfff since the branch point; merged master into the
+branch, resolved the /cv/stream conflicts, npm run check clean for the touched files.
+Removed the temporary /highlight-test harness + its PUBLIC_PATHS / layout publicPaths
+bypasses before merging.
+
+Deployment: production — https://bioscale-operations-system-mongodb-8q27b7z8y-brevitest.vercel.app
+Source: master @ commit 71776242 (fast-forward from feat/photo-highlight-annotation;
+  triggered automatically by GitHub integration)
+Retrieve this exact code: git checkout master (currently at 71776242;
+  git log master --oneline to re-find it if master has since moved on)
+What this deployment is for: ships the photo Highlight tool (draw + save-to-photo +
+  filter-by-highlighted) to production.
+
+================================================================================
+2026-07-02 — fix/cv-stream-failure-label-filter — Common Failure filter uses only Label-Creation labels
+================================================================================
+On /cv/stream the Tag / Common-Failure filter dropdown was populated from
+`tagOptions` — every distinct `cartridgeTag.labels` value ever observed on an
+image. That set includes labels that were never in (or were later deleted from)
+the Label Creation tab, so operators saw stale/uncurated options they didn't
+create. Repointed the dropdown at the curated `data.failureLabels` list (the
+FailureLabel collection managed in the Label Creation tab) so it only offers
+Common Failure Labels that actually exist there. Filtering still runs through the
+existing `tag` param → `cartridgeTag.labels` server filter, so behavior is
+unchanged for labels that are in the list.
+
+Files: src/routes/cv/stream/+page.svelte (dropdown now iterates data.failureLabels),
+src/routes/cv/stream/+page.server.ts (dropped the now-unused tagOptions distinct
+query + its return field). Left the separate rejectionReasonCodes-backed
+`failureCodeOptions` "Common Failure" filter untouched. svelte-check clean for the
+touched files (pre-existing chart.js/bwip-js/implicit-any errors unchanged).
+
+Deployment: preview — https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/5qFdzeMGX7nmt2HUrAqdv4Q9o8GY
+Source: branch fix/cv-stream-failure-label-filter @ commit 61194820 (off master;
+  triggered automatically by GitHub integration)
+Retrieve this exact code: git checkout fix/cv-stream-failure-label-filter at commit 61194820
+  (or: git log fix/cv-stream-failure-label-filter --oneline to find it if the branch moves)
+What this deployment is for: preview of the /cv/stream Common Failure filter now
+  listing only Label-Creation labels, before merging to master.
+
+================================================================================
+2026-07-02 (follow-up) — fix/cv-stream-failure-label-filter — drop the Common Failure filter entirely
+================================================================================
+Follow-up to the entry above: rather than curating the rejectionReasonCodes
+"Common Failure" filter, removed it outright per request — the Tag filter (now
+sourced from the curated FailureLabel list) is the only label filter on
+/cv/stream. Removed from +page.svelte: the "Common Failure" <select> block, the
+`failureCode` state, and its handling in paramsFromFilters/resetFilters. Removed
+from +page.server.ts: the `failureCode` query param, its CartridgeRecord
+waxQc.rejectionReason / reagentInspection.reason resolution inside the
+arm/experiment cartridge-id clause, the ManufacturingSettings rejectionReasonCodes
+query + `failureCodeOptions`, the `failureCode` filters field, and the now-unused
+ManufacturingSettings import. The Label Creation ("Common Failure Labels") Manage
+tab is untouched. svelte-check clean for the touched files.
+
+Deployment: preview — https://vercel.com/brevitest/bioscale-operations-system-mongodb/8L9HZSS4gzvguUP62ThYBuK2NYWT
+Source: branch fix/cv-stream-failure-label-filter @ commit 755f557c (off master;
+  triggered automatically by GitHub integration)
+Retrieve this exact code: git checkout fix/cv-stream-failure-label-filter at commit 755f557c
+  (or: git log fix/cv-stream-failure-label-filter --oneline to find it if the branch moves)
+What this deployment is for: preview of /cv/stream with the Common Failure filter
+  removed and only the Tag filter remaining, before merging to master.
+
+================================================================================
+2026-07-01 — feat/cartridge-photos-agent-api — cross-app cartridge photos API (M1 of CARTRIDGE-PHOTOS-01)
+================================================================================
+First milestone of the CARTRIDGE-PHOTOS-01 PRD (docs/prds/CARTRIDGE-PHOTOS-01-barcode-
+enrichment.md): surface each cartridge's photos + tags + notes in the brevitest-research
+app, next to every barcode, grouped by the capture STATE (phase) they were shot in.
+
+M1 (this branch, BIMS side): new agent endpoint
+  GET /api/agent/cartridge/[barcode]/photos
+- Guarded by AGENT_API_KEY via requireAgentApiKey() ($lib/server/api-auth).
+- connectDB(); queries BOTH CartridgeRecord (photos[]/notes[]) and cv_images
+  (cartridgeTag.labels/notes, qcLabel, thumbnailPath, imageUrl) for the barcode
+  (= CartridgeRecord._id / scanned UUID).
+- Merges the two sources, dedupes by imageId / cartridgeImageNumber (embedded photos[]
+  wins for the authoritative stored r2Url; cv_images enriches labels/notes/qc/thumbnail),
+  groups by phase into photosByState (sorted oldest->newest), unions labels+qc verdicts
+  into card-level tags[], and returns operator notes[] ({body, phase, author, createdAt}).
+- Unknown barcode -> 200 { found:false, photosByState:{}, tags:[], notes:[] } so the
+  research proxy has one simple success path. r2Url/thumbnailUrl are public R2 Worker URLs
+  (getR2Url) — image bytes never transit this server.
+
+npm run check: 11 errors / 428 warnings — all pre-existing baseline; ZERO from the new
+endpoint. Not deployed (no push yet).
+
+Next: M2–M5 live in the brevitest-research repo (branch feat/cartridge-barcode-enrichment):
+research proxy endpoint (server-to-server with AGENT_API_KEY) + BarcodeCard/CartridgePhotos
+components wired into the 4 barcode display sites.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-jcacrtpl2-brevitest.vercel.app
+Source: branch feat/cartridge-photos-agent-api @ commit f977234a
+Retrieve this exact code: git checkout feat/cartridge-photos-agent-api at commit f977234a
+  (or: git log feat/cartridge-photos-agent-api --oneline)
+What this deployment is for: cross-app cartridge photos agent API (M1) — consumed by the
+  brevitest-research app. Verified live: no-key->401, valid-key+unknown-barcode->200 found:false.
+Companion deploy: brevitest-research preview https://brevitest-research-8xsl7aut9-brevitest.vercel.app
+  (branch feat/cartridge-barcode-enrichment @ 88bf806). NOTE: research cloud preview needs env vars
+  BIMS_BASE_URL + AGENT_API_KEY set in the brevitest/brevitest-research Vercel project to load photos;
+  verified end-to-end LOCALLY instead (research dev server -> BIMS preview, all proxy paths pass).
+
+================================================================================
+2026-07-02 (follow-up) — fix/cv-stream-failure-label-filter merged to master, deployed to production
+================================================================================
+Merged fix/cv-stream-failure-label-filter into master (merge commit; origin/master
+had advanced to 7cb80211 with the feat/cartridge-photos-agent-api work, so this was
+a real merge — the only conflict was this progress.txt append, resolved by keeping
+both sides). Master fast-forwarded to the merge commit. Ships the two /cv/stream
+changes to production: (1) the Tag filter now lists only curated FailureLabel
+(Label Creation tab) labels, and (2) the rejectionReasonCodes "Common Failure"
+filter dropdown is removed.
+
+Deployment: production — https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/Gs2Rs5XEAkTdPmhdNz9wB5Nk4xB8
+Source: master @ commit 320a7c47 (fast-forward from fix/cv-stream-failure-label-filter;
+  triggered automatically by GitHub integration)
+Retrieve this exact code: git checkout master (currently at 320a7c47;
+  git log master --oneline to re-find it if master has since moved on)
+What this deployment is for: ships the /cv/stream filter cleanup (Tag = Label-Creation
+  labels only; Common Failure dropdown removed) to production.
+
+================================================================================
+2026-07-02 — feat/dhr-photo-stream-parity — DHR photo pass/fail parity + cartridge-admin data + drop stream "All" tab
+================================================================================
+Three UI features, merged to master:
+- DHR document (/cartridge-admin/dhr/[cartridgeId]) photos now show the SAME detail the image
+  stream shows: human QC pass/fail (qcLabel) PASS/FAIL badge + colored border + inline Pass/Fail on
+  each card; lightbox Pass/Fail/Clear controls (keys A/F/C) + Verdict; Labels + Notes sections
+  populate. Interactive via the existing /api/cv/images/[id]/label endpoint (optimistic w/ rollback).
+  Root cause of the gap: the page LOAD (+page.server.ts) mapped labels/notes but not qcLabel, and the
+  lightbox read a nonexistent img.label field; fixed by adding qcLabel (+ cartridgeImageNumber/
+  capturedByUsername) to the load and the shared /api/cartridge-admin/dhr endpoint.
+- Cartridge-admin search expanded row now surfaces SPU it ran on (testExecution.spu), Experiment,
+  Arm, and Current State (status) from the already-loaded lean doc — no extra fetch. N/A until run.
+- Image stream (/cv/stream): removed the "All" review tab (Unreviewed / Reviewed only) + server
+  no longer accepts review=all.
 FILES: src/routes/cartridge-admin/dhr/[cartridgeId]/{+page.server.ts,+page.svelte},
-src/routes/api/cartridge-admin/dhr/[cartridgeId]/+server.ts.
-svelte-check: no new errors in the touched files. Left the search-page (/cartridge-admin) thumbnail
-strip's bare-image lightbox as-is (separate minimal surface); qcLabel is now available there too.
-
-=== POLICY — DEPLOYMENT READINESS (going forward) ===
-Every new feature, as soon as it is COMPLETE or READY TO TEST, must have its deployment lined up
-and staged so it is one click from "Publish." Do not leave finished or testable work sitting
-without a ready-to-publish deployment queued — the preview/staging deploy should already be built
-and waiting on the "Publish" button, not something to start assembling after the fact.
-
-=== 2026-07-02 — Cartridge-Admin expanded row: SPU / experiment / arm / current state ===
-Branch feat/dhr-photo-stream-parity. The /cartridge-admin search table's expanded row now surfaces
-more of the cartridge document: the SPU it was run on (testExecution.spu.udi/_id), the Experiment
-and Arm (run-cartridge linkage), and the Current State (status — reagent_qc, sealed, completed,
-etc.) shown prominently. All come from the list query's already-loaded lean doc — no extra fetch.
-FILES: src/routes/cartridge-admin/+page.server.ts (row now returns experiment/arm/program/spuId/
-spuUdi), src/routes/cartridge-admin/+page.svelte (four new cells at the top of the expansion
-summary grid: Current State, SPU, Experiment, Arm). Fields are null until a cartridge is assigned
-to an experiment arm and executed on an SPU, so pre-run cartridges show N/A. svelte-check: clean.
+src/routes/api/cartridge-admin/dhr/[cartridgeId]/+server.ts,
+src/routes/cartridge-admin/{+page.server.ts,+page.svelte},
+src/routes/cv/stream/{+page.server.ts,+page.svelte}.
+Merged origin/master into the branch first (master had independently added overlapping arm/
+experiment filters + DHR endpoint fields — deduped arm/experiment in the row; kept program/spuId/
+spuUdi). svelte-check: 45-error master baseline unchanged, 0 new errors in touched files.
+Deployment: production — via master merge (PR #15); production URL logged on deploy below.
+Source: branch feat/dhr-photo-stream-parity.

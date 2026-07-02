@@ -131,8 +131,42 @@
 		capturedAt: number;
 		url: string | null;
 		inference: InferenceState;
+		labels: string[];
+		notes: string;
 	};
 	let recentCaptures = $state<Capture[]>([]);
+
+	// Quick-tag panel on the "Just captured" strip — which thumbnail (if any)
+	// has its Notes/Labels panel expanded.
+	let expandedTagId = $state<string | null>(null);
+	let savingCaptureTags = $state(false);
+
+	async function saveCaptureTags(cap: Capture, patch: { labels?: string[]; notes?: string }) {
+		savingCaptureTags = true;
+		try {
+			const res = await fetch(`/api/cv/images/${cap.id}/tags`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(patch)
+			});
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+		} catch (err) {
+			console.error(err);
+		} finally {
+			savingCaptureTags = false;
+		}
+	}
+
+	function toggleCaptureLabel(cap: Capture, text: string) {
+		const has = cap.labels.includes(text);
+		cap.labels = has ? cap.labels.filter(l => l !== text) : [...cap.labels, text];
+		recentCaptures = [...recentCaptures];
+		saveCaptureTags(cap, { labels: cap.labels });
+	}
+
+	function commitCaptureNotes(cap: Capture) {
+		saveCaptureTags(cap, { notes: cap.notes });
+	}
 
 	function patchInference(imageId: string, inf: InferenceState) {
 		recentCaptures = recentCaptures.map(c => c.id === imageId ? { ...c, inference: inf } : c);
@@ -723,7 +757,9 @@
 				phase: result.phase,
 				capturedAt: Date.now(),
 				url: result.imageUrl,
-				inference: { status: 'pending' }
+				inference: { status: 'pending' },
+				labels: [],
+				notes: ''
 			};
 			recentCaptures = [cap, ...recentCaptures].slice(0, 10);
 			pollInference(result.imageId).catch(() => null);
@@ -1273,6 +1309,41 @@
 									<span class="inline-block rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[10px] text-[var(--color-tron-text-secondary)]" title="No project is deployed at this phase — set one up under /cv/projects/[id] Deployment.">no model</span>
 								{/if}
 							</div>
+							<button
+								type="button"
+								onclick={() => { expandedTagId = expandedTagId === cap.id ? null : cap.id; }}
+								class="mt-1 w-32 truncate rounded border border-[var(--color-tron-border)] px-1.5 py-0.5 text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]"
+							>
+								{cap.labels.length > 0 ? `🏷 ${cap.labels.length} label${cap.labels.length === 1 ? '' : 's'}` : '🏷 Tag failure…'}
+							</button>
+							{#if expandedTagId === cap.id}
+								<div class="mt-1 w-48 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] p-2">
+									<div class="mb-1 flex flex-wrap gap-1">
+										{#each data.failureLabels as l (l.id)}
+											{@const active = cap.labels.includes(l.text)}
+											<button
+												type="button"
+												onclick={() => toggleCaptureLabel(cap, l.text)}
+												class="rounded-full border px-1.5 py-0.5 text-[10px]
+													{active
+														? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]'
+														: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}"
+											>{l.text}</button>
+										{/each}
+										{#if data.failureLabels.length === 0}
+											<span class="text-[10px] text-[var(--color-tron-text-secondary)]">No labels yet — add some on /cv/stream.</span>
+										{/if}
+									</div>
+									<textarea
+										bind:value={cap.notes}
+										onblur={() => commitCaptureNotes(cap)}
+										disabled={savingCaptureTags}
+										rows="2"
+										placeholder="Notes…"
+										class="tron-input w-full text-[10px]"
+									></textarea>
+								</div>
+							{/if}
 						</div>
 					{/each}
 				</div>

@@ -38,7 +38,7 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 			cartridgeRecordId: img.cartridgeTag?.cartridgeRecordId ?? params.cartridgeId,
 			phase: img.cartridgeTag?.phase || null,
 			labels: img.cartridgeTag?.labels || [],
-			notes: img.cartridgeTag?.notes ?? null,
+			notes: img.cartridgeTag?.notes || '',
 			// Human QC verdict — the pass/fail the image stream shows (approved/rejected/null).
 			qcLabel: img.qcLabel ?? null,
 			capturedAt: img.capturedAt || img.createdAt,

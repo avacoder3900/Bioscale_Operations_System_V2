@@ -365,43 +365,75 @@ def run(protocol: protocol_api.ProtocolContext):
         return False
 
     ser = None
+    import os as _os_cal
 
     # Find the CALIBRATOR serial device — NOT the barcode scanner. Both enumerate
     # as /dev/ttyACM*, and the port numbers shift on replug, so opening "the first
-    # ttyACM" can grab the scanner (which never answers 'C' -> offset read fails ->
-    # the run silently bails). So: (1) skip whatever /dev/scanner points to, and
-    # (2) probe each remaining port with 'C' — the calibrator replies with its
-    # 'x:y' offset string; the scanner/others do not.
-    import os as _os_cal
-    _scanner_real = _os_cal.path.realpath('/dev/scanner') if _os_cal.path.exists('/dev/scanner') else None
-    for port in sorted(glob.glob('/dev/ttyACM*')):
-        _s = None
-        try:
-            if _scanner_real and _os_cal.path.realpath(port) == _scanner_real:
-                protocol.comment(f'Skipping scanner port {port}')
-                continue
-            _s = serial.Serial(port=port, baudrate=115200, timeout=0.5)
-            time.sleep(0.2)
-            _s.reset_input_buffer()
-            _s.reset_output_buffer()
-            _s.write(b'C'); _s.flush(); time.sleep(0.3)
-            if b':' in (_s.readline() or b''):
-                _s.reset_input_buffer()
-                ser = _s
-                protocol.comment(f'Calibrator found on serial port: {port}')
-                break
-            _s.close()
-        except Exception as e:
-            protocol.comment(f'Exception testing port {port}: {str(e)}')
+    # ttyACM" can grab the scanner (which never answers 'C' -> offset read fails).
+    # So: (1) skip whatever /dev/scanner points to, and (2) probe each remaining
+    # port with 'C' — the calibrator replies with its 'x:y' offset string.
+    def _probe_for_calibrator():
+        _scanner_real = _os_cal.path.realpath('/dev/scanner') if _os_cal.path.exists('/dev/scanner') else None
+        for port in sorted(glob.glob('/dev/ttyACM*')):
+            _s = None
             try:
-                if _s and _s.is_open:
-                    _s.close()
-            except Exception:
-                pass
+                if _scanner_real and _os_cal.path.realpath(port) == _scanner_real:
+                    protocol.comment(f'Skipping scanner port {port}')
+                    continue
+                _s = serial.Serial(port=port, baudrate=115200, timeout=0.5)
+                time.sleep(0.2)
+                _s.reset_input_buffer()
+                _s.reset_output_buffer()
+                _s.write(b'C'); _s.flush(); time.sleep(0.3)
+                if b':' in (_s.readline() or b''):
+                    _s.reset_input_buffer()
+                    protocol.comment(f'Calibrator found on serial port: {port}')
+                    return _s
+                _s.close()
+            except Exception as e:
+                protocol.comment(f'Exception testing port {port}: {str(e)}')
+                try:
+                    if _s and _s.is_open:
+                        _s.close()
+                except Exception:
+                    pass
+        return None
 
-    if not ser or not ser.is_open:
-        protocol.pause('Unable to find calibrator serial port - click Resume to continue')
-        return
+    # The calibrator (USB serial) can enumerate a few SECONDS after the run starts,
+    # so a single cold probe often misses it. That miss is what made the protocol
+    # pause and then `return`, producing an empty "succeeded" run with zero fills
+    # ("start the run again and it works" was the ad-hoc workaround). Poll for the
+    # port instead of giving up on the first try.
+    def _find_calibrator(wait_s=25):
+        _deadline = time.time() + wait_s
+        while True:
+            _s = _probe_for_calibrator()
+            if _s is not None:
+                return _s
+            if time.time() >= _deadline:
+                return None
+            time.sleep(1.5)
+
+    if protocol.is_simulating():
+        # Analysis pass: best-effort single probe, no retry/pause loop (pause() is a
+        # no-op during analysis, so a loop here would hang the upload). The live run
+        # pass does the real retry below.
+        ser = _probe_for_calibrator()
+        if not ser or not ser.is_open:
+            return
+    else:
+        ser = _find_calibrator()
+        # Still not found → PAUSE with a clear message and RETRY on Resume — never
+        # `return` (that silently ended the run with no fills). Each Resume re-probes,
+        # so once the calibrator has enumerated / been reseated the run continues and
+        # actually fills.
+        while not ser or not ser.is_open:
+            protocol.pause(
+                'Tip calibrator missing — could not read offset calibration. '
+                'Check the calibrator USB connection, then click Resume to retry '
+                '(or Cancel/Stop to end the run).'
+            )
+            ser = _find_calibrator(wait_s=8)
     
     try:
         # Read offset data with retry logic
@@ -416,32 +448,50 @@ def run(protocol: protocol_api.ProtocolContext):
             else:
                 raise ValueError('Invalid offset data format')
         except Exception as e:
-            protocol.pause(f'Error reading offset data: {str(e)} - click Resume to continue')
-            ser.close()
-            return
-
-        # Read particle ID with retry logic
-        try:
-            serial_write_with_retry(ser, b'I')
-            particle_id_raw = serial_read_with_retry(ser)
-            # Decode bytes to string and strip whitespace/newlines, then extract 24-character ID
-            particle_id = particle_id_raw.decode('utf-8', errors='ignore').strip()[:24]
-            if particle_id not in carriages:
-                raise ValueError(f'Unknown particle ID: {particle_id}')
-            carriage = carriages[particle_id]
-            protocol.move_labware(labware=carriage, new_location=1)
-            # Apply per-robot offsets to all well positions on this labware
-            carriage.set_offset(
-                x=robot_offsets['x'],
-                y=robot_offsets['y'],
-                z=robot_offsets['z']
+            # Do NOT bail the run here. The 'C' baseline read can come back blank or
+            # malformed even when the calibrator is otherwise fine — operators have
+            # resumed past this in the Opentrons app and the run + per-tip probe still
+            # work. Pause so the operator can choose to continue, then proceed with a
+            # zero baseline (the per-tip X/Y probe below still runs; in bims_native mode
+            # the global offset is applied separately via set_offset). Never `return`.
+            protocol.pause(
+                f'Could not read offset calibration ({str(e)}). '
+                f'Click Resume to START THE RUN ANYWAY (zero baseline; per-tip '
+                f'calibration still runs), or Cancel/Stop to end.'
             )
-            protocol.comment(f'Loaded carriage for particle ID: {particle_id}')
-            protocol.comment(f'Applied robot offsets: x={robot_offsets["x"]}, y={robot_offsets["y"]}, z={robot_offsets["z"]}')
-        except Exception as e:
-            protocol.pause(f'Error reading particle ID: {str(e)} - click Resume to continue')
-            ser.close()
-            return
+            offset['x'] = 0.0
+            offset['y'] = 0.0
+            protocol.comment('Continuing without serial offset baseline — using x=0.0, y=0.0.')
+
+        # Read particle ID (which carriage/deck is loaded) with retry-on-resume —
+        # never bail to an empty run. 'I' is reliable in practice; if it ever returns
+        # garbage the operator can Resume to re-read (or Cancel/Stop to end).
+        carriage = None
+        while carriage is None:
+            try:
+                serial_write_with_retry(ser, b'I')
+                particle_id_raw = serial_read_with_retry(ser)
+                # Decode bytes to string and strip whitespace/newlines, then extract 24-character ID
+                particle_id = particle_id_raw.decode('utf-8', errors='ignore').strip()[:24]
+                if particle_id not in carriages:
+                    raise ValueError(f'Unknown particle ID: {particle_id}')
+                carriage = carriages[particle_id]
+            except Exception as e:
+                if protocol.is_simulating():
+                    return  # analysis pass: don't loop on a (no-op) pause
+                protocol.pause(
+                    f'Could not read the deck/particle ID ({str(e)}). Check the '
+                    f'calibrator, then click Resume to retry (or Cancel/Stop to end).'
+                )
+        protocol.move_labware(labware=carriage, new_location=1)
+        # Apply per-robot offsets to all well positions on this labware
+        carriage.set_offset(
+            x=robot_offsets['x'],
+            y=robot_offsets['y'],
+            z=robot_offsets['z']
+        )
+        protocol.comment(f'Loaded carriage for particle ID: {particle_id}')
+        protocol.comment(f'Applied robot offsets: x={robot_offsets["x"]}, y={robot_offsets["y"]}, z={robot_offsets["z"]}')
 
         # Calibration check wells - 9 positions across the deck
         calibration_check_wells = ['W3', 'L5', 'B7', 'B15', 'L13', 'W11', 'W19', 'L21', 'B23']

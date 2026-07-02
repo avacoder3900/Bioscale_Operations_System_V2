@@ -362,6 +362,23 @@
 		}
 	}
 
+	// Re-baseline the WHOLE deck after a physical reseat. Applies the captured
+	// offset to ALL 576 holes at once — BOTH wax + reagent, ignoring the role
+	// filter — so a deck bump is a one-click fix, not per-hole re-tuning. Workflow:
+	// jog to ONE reference hole, Capture the offset, then re-baseline. Undo reverts it.
+	async function rebaselineDeck() {
+		if (dx === 0 && dy === 0 && dz === 0) { errMsg = 'Jog to one reference hole and Capture the offset first (or type dx/dy/dz).'; return; }
+		const names = wells.map((w) => w.name);
+		if (names.length === 0) { errMsg = 'No holes to shift'; return; }
+		if (!confirm(`Deck moved? Re-baseline the WHOLE deck — all ${names.length} holes (wax + reagent) — by dx=${dx} dy=${dy} dz=${dz}. Undo reverts it. Continue?`)) return;
+		const r = await applyDelta(names, { x: dx, y: dy, z: dz }, `deck re-baseline (${dx}, ${dy}, ${dz})`);
+		if (r) {
+			msg = applyMsg('Re-baselined the whole deck', r);
+			clearSelection();
+			if (runId && !slotOrigin) deckDirty = true;
+		}
+	}
+
 	let syncWhich = $state<'both' | 'wax' | 'reagent'>('both');
 	async function syncToRobot() {
 		if (!selectedRobotId) { errMsg = 'Pick a robot'; return; }
@@ -1027,7 +1044,10 @@
 				<button type="button" onclick={applyGlobalShift} disabled={busy} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-2 text-xs font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40">
 					⤧ Shift whole grid by this offset {roleFilter !== 'all' ? `(${roleFilter} only)` : ''}
 				</button>
-				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Anchor: jog to one hole (e.g. a corner) → Capture → Shift whole grid translates every hole by that offset.</p>
+				<button type="button" onclick={rebaselineDeck} disabled={busy} class="mt-2 w-full rounded border border-orange-500/60 bg-orange-900/20 px-3 py-2 text-sm font-bold text-orange-200 hover:bg-orange-900/30 disabled:opacity-40" title="Deck was moved/reseated? Shift ALL 576 holes (wax + reagent) by this offset in one click.">
+					⇱ Deck moved? Re-baseline ALL {wells.length} holes
+				</button>
+				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Anchor: jog to one hole (e.g. a corner) → Capture → shift translates every hole by that offset. <strong>Re-baseline</strong> hits the whole deck (both roles) — use it when the deck was bumped/reseated and everything is off by the same amount.</p>
 				<button type="button" onclick={undoLast} disabled={busy || undoStack.length === 0} class="mt-2 w-full rounded border border-amber-500/50 bg-amber-900/15 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-900/25 disabled:opacity-40" title="Revert the last applied shift (offset, global, or set-position)">
 					↶ Undo last {undoStack.length ? `(${undoStack.length})` : ''}
 				</button>

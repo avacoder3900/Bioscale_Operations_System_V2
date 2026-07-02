@@ -7,6 +7,7 @@
 	let { data } = $props();
 
 	let searchInput = $state(data.filters.search ?? '');
+	let notesSearchInput = $state(data.filters.notesSearch ?? '');
 	let expandedId = $state<string | null>(null);
 
 	function formatRunOption(run: { processType: string; operator: string | null; startedAt: string | null; id: string }): string {
@@ -21,7 +22,7 @@
 		return `${when} • ${op} • ${proc}`;
 	}
 
-	type DhrPhoto = { imageId: string; phase: string | null; capturedAt: string | null; url: string | null; thumbnailUrl: string | null; label?: string | null; inspectionResult?: string | null; confidenceScore?: number | null };
+	type DhrPhoto = { imageId: string; phase: string | null; capturedAt: string | null; url: string | null; thumbnailUrl: string | null; label?: string | null; inspectionResult?: string | null; confidenceScore?: number | null; notes?: string | null };
 	type DhrTimeline = { step: string; timestamp: string | null; operator: string | null; details: Record<string, any>; lotIds: string[]; photos: DhrPhoto[] };
 	type DhrDetails = {
 		cartridge: { cartridgeId: string; status: string; voidedAt?: string | null; voidReason?: string | null; createdAt?: string; updatedAt?: string };
@@ -100,6 +101,10 @@
 		updateFilters({ search: searchInput || undefined });
 	}
 
+	function doNotesSearch() {
+		updateFilters({ notes: notesSearchInput || undefined });
+	}
+
 	function clearRunIdFilter() {
 		updateFilters({ runId: undefined });
 	}
@@ -166,6 +171,60 @@
 				<option value={run.id} selected={data.filters.runId === run.id}>{formatRunOption(run)}</option>
 			{/each}
 		</select>
+
+		<select onchange={(e) => updateFilters({ arm: e.currentTarget.value || undefined })}
+			class="min-h-[44px] rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text)]"
+			title="Filter cartridges by experiment arm"
+		>
+			<option value="">All Arms</option>
+			{#each data.armOptions as arm (arm)}
+				<option value={arm} selected={data.filters.arm === arm}>{arm}</option>
+			{/each}
+		</select>
+
+		<select onchange={(e) => updateFilters({ experiment: e.currentTarget.value || undefined })}
+			class="min-h-[44px] rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text)]"
+			title="Filter cartridges by experiment"
+		>
+			<option value="">All Experiments</option>
+			{#each data.experimentOptions as exp (exp)}
+				<option value={exp} selected={data.filters.experiment === exp}>{exp}</option>
+			{/each}
+		</select>
+
+		<select onchange={(e) => updateFilters({ tag: e.currentTarget.value || undefined })}
+			class="min-h-[44px] rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text)]"
+			title="Filter cartridges by CV image stream tag"
+		>
+			<option value="">All Tags</option>
+			{#each data.tagOptions as tag (tag)}
+				<option value={tag} selected={data.filters.tag === tag}>{tag}</option>
+			{/each}
+		</select>
+
+		<select onchange={(e) => updateFilters({ failureCode: e.currentTarget.value || undefined })}
+			class="min-h-[44px] w-56 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text)]"
+			title="Filter cartridges by common failure reason"
+		>
+			<option value="">All Common Failures</option>
+			{#each data.failureCodeOptions as fc (fc.code)}
+				<option value={fc.code} selected={data.filters.failureCode === fc.code}>{fc.label}</option>
+			{/each}
+		</select>
+
+		<div class="flex gap-2">
+			<input
+				bind:value={notesSearchInput}
+				onkeydown={(e) => { if (e.key === 'Enter') doNotesSearch(); }}
+				placeholder="Search photo notes..."
+				class="min-h-[44px] min-w-[200px] rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+			/>
+			<button type="button" onclick={doNotesSearch}
+				class="min-h-[44px] rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-4 py-2 text-sm font-medium text-[var(--color-tron-cyan)]"
+			>
+				Search Notes
+			</button>
+		</div>
 
 		<select onchange={(e) => updateFilters({ pageSize: e.currentTarget.value })}
 			class="min-h-[44px] rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] px-3 py-2 text-sm text-[var(--color-tron-text)]"
@@ -240,6 +299,8 @@
 						{ key: 'date_created', label: 'Cartridge ID' },
 						{ key: '', label: 'Backed Lot' },
 						{ key: 'assay_type', label: 'Assay Type' },
+						{ key: '', label: 'Arm' },
+						{ key: '', label: 'Experiment' },
 						{ key: '', label: 'Wax Run' },
 						{ key: '', label: 'Reagent Run' },
 						{ key: 'current_status', label: 'Stage' },
@@ -272,6 +333,8 @@
 						<td class="px-3 py-2 font-mono text-xs text-[var(--color-tron-text)]">{c.cartridgeId}</td>
 						<td class="px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">{c.backedLotId}</td>
 						<td class="px-3 py-2 text-xs text-[var(--color-tron-text)]">{c.assayTypeName ?? '—'}</td>
+						<td class="px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">{c.arm ?? '—'}</td>
+						<td class="px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">{c.experiment ?? '—'}</td>
 						<td class="px-3 py-2 font-mono text-xs text-[var(--color-tron-text-secondary)]">
 							{#if c.waxRunId}
 								<button type="button"
@@ -315,7 +378,7 @@
 					</tr>
 					{#if expandedId === c.cartridgeId}
 						<tr>
-							<td colspan="10" class="bg-[var(--color-tron-surface)]/50 px-4 py-3">
+							<td colspan="12" class="bg-[var(--color-tron-surface)]/50 px-4 py-3">
 								<!-- Always-available summary metadata (from list query) -->
 								<div class="mb-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
 									<div><span class="text-[var(--color-tron-text-secondary)]">Current State:</span> <span class="ml-1 font-medium text-[var(--color-tron-cyan)]">{stageLabel(c.currentLifecycleStage)}</span></div>
@@ -367,9 +430,12 @@
 											<div class="flex flex-wrap gap-2">
 												{#each det.photos as p (p.imageId)}
 													{#if p.url}
-														<button type="button" onclick={(e) => { e.stopPropagation(); lightboxUrl = p.url; }} class="group relative">
+														<button type="button" onclick={(e) => { e.stopPropagation(); lightboxUrl = p.url; }} class="group relative" title={p.notes || undefined}>
 															<img src={p.thumbnailUrl ?? p.url} alt="cartridge photo {p.phase ?? ''}" class="h-20 w-20 rounded border border-[var(--color-tron-border)] object-cover group-hover:border-[var(--color-tron-cyan)]" loading="lazy" />
 															<span class="absolute bottom-0 left-0 right-0 truncate bg-black/60 px-1 py-0.5 text-[10px] text-white">{p.phase ?? 'untagged'}</span>
+															{#if p.notes}
+																<span class="absolute right-0 top-0 rounded-bl bg-black/60 px-1 py-0.5 text-[10px] text-white">📝</span>
+															{/if}
 														</button>
 													{/if}
 												{/each}
@@ -454,7 +520,7 @@
 				{/each}
 				{#if data.cartridges.length === 0}
 					<tr>
-						<td colspan="10" class="px-4 py-8 text-center text-sm text-[var(--color-tron-text-secondary)]">
+						<td colspan="12" class="px-4 py-8 text-center text-sm text-[var(--color-tron-text-secondary)]">
 							No cartridges found
 						</td>
 					</tr>

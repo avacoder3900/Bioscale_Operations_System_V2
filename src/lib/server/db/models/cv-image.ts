@@ -52,5 +52,6 @@ const cvImageSchema = new Schema({
 
 cvImageSchema.index({ qcLabel: 1 });
 cvImageSchema.index({ capturedAt: -1 });
+cvImageSchema.index({ 'cartridgeTag.labels': 1 });
 
 export const CvImage = mongoose.models.CvImage || mongoose.model('CvImage', cvImageSchema, 'cv_images');
