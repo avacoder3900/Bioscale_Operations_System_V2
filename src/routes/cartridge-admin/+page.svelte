@@ -301,6 +301,7 @@
 						{ key: 'assay_type', label: 'Assay Type' },
 						{ key: '', label: 'Arm' },
 						{ key: '', label: 'Experiment' },
+						{ key: '', label: 'Sample' },
 						{ key: '', label: 'Wax Run' },
 						{ key: '', label: 'Reagent Run' },
 						{ key: 'current_status', label: 'Stage' },
@@ -335,6 +336,11 @@
 						<td class="px-3 py-2 text-xs text-[var(--color-tron-text)]">{c.assayTypeName ?? '—'}</td>
 						<td class="px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">{c.arm ?? '—'}</td>
 						<td class="px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">{c.experiment ?? '—'}</td>
+						<td class="px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">
+							{#if c.sampleLabel}
+								<span class="text-[var(--color-tron-text)]">{c.sampleLabel}</span>{#if c.sampleType}<span class="ml-1 text-[10px] text-[var(--color-tron-text-secondary)]">({c.sampleType})</span>{/if}
+							{:else}—{/if}
+						</td>
 						<td class="px-3 py-2 font-mono text-xs text-[var(--color-tron-text-secondary)]">
 							{#if c.waxRunId}
 								<button type="button"
@@ -378,13 +384,15 @@
 					</tr>
 					{#if expandedId === c.cartridgeId}
 						<tr>
-							<td colspan="12" class="bg-[var(--color-tron-surface)]/50 px-4 py-3">
+							<td colspan="13" class="bg-[var(--color-tron-surface)]/50 px-4 py-3">
 								<!-- Always-available summary metadata (from list query) -->
 								<div class="mb-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
 									<div><span class="text-[var(--color-tron-text-secondary)]">Current State:</span> <span class="ml-1 font-medium text-[var(--color-tron-cyan)]">{stageLabel(c.currentLifecycleStage)}</span></div>
 									<div><span class="text-[var(--color-tron-text-secondary)]">SPU:</span> <span class="ml-1 font-mono text-[var(--color-tron-text)]">{c.spuUdi ?? c.spuId ?? 'N/A'}</span></div>
 									<div><span class="text-[var(--color-tron-text-secondary)]">Experiment:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.experiment ?? 'N/A'}</span></div>
 									<div><span class="text-[var(--color-tron-text-secondary)]">Arm:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.arm ?? 'N/A'}</span></div>
+									<div><span class="text-[var(--color-tron-text-secondary)]">Sample:</span> <span class="ml-1 font-mono text-[var(--color-tron-text)]">{c.sampleLabel ?? 'N/A'}</span></div>
+									<div><span class="text-[var(--color-tron-text-secondary)]">Sample Type:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.sampleType ?? 'N/A'}</span></div>
 									<div><span class="text-[var(--color-tron-text-secondary)]">Wax Status:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.waxStatus ?? 'N/A'}</span></div>
 									<div><span class="text-[var(--color-tron-text-secondary)]">Wax QC:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.waxQcStatus ?? 'N/A'}</span></div>
 									<div><span class="text-[var(--color-tron-text-secondary)]">Inspection:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.inspectionStatus ?? 'N/A'}</span></div>
@@ -520,7 +528,7 @@
 				{/each}
 				{#if data.cartridges.length === 0}
 					<tr>
-						<td colspan="12" class="px-4 py-8 text-center text-sm text-[var(--color-tron-text-secondary)]">
+						<td colspan="13" class="px-4 py-8 text-center text-sm text-[var(--color-tron-text-secondary)]">
 							No cartridges found
 						</td>
 					</tr>

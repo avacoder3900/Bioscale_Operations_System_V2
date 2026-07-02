@@ -1,5 +1,5 @@
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, CartridgeRecord, AssayDefinition, User, WaxFillingRun, ReagentBatchRecord, CvImage, ManufacturingSettings } from '$lib/server/db';
+import { connectDB, CartridgeRecord, AssayDefinition, User, WaxFillingRun, ReagentBatchRecord, CvImage, ManufacturingSettings, Experiment } from '$lib/server/db';
 import type { PageServerLoad } from './$types';
 
 function escapeRegExp(str: string): string {
@@ -165,6 +165,29 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
 		.map(rc => ({ code: rc.code, label: rc.label, processType: rc.processType }));
 
+	// Sample labels live on the research-v2 Experiment docs (arms[].cartridges[]),
+	// keyed by barcode = cartridge _id (research writes to the shared Atlas; BIMS
+	// reads). Build a barcode -> sampleLabel map for the cartridges on this page.
+	const pageBarcodes = (cartridges as any[]).map(c => c._id);
+	const sampleLabelByBarcode = new Map<string, { sampleLabel: string | null; sampleId: string | null }>();
+	if (pageBarcodes.length > 0) {
+		const exps = await Experiment.find({ 'arms.cartridges.barcode': { $in: pageBarcodes } })
+			.select('arms')
+			.lean() as any[];
+		for (const exp of exps) {
+			for (const arm of (exp.arms ?? [])) {
+				for (const ac of (arm.cartridges ?? [])) {
+					if (ac?.barcode && !sampleLabelByBarcode.has(ac.barcode)) {
+						sampleLabelByBarcode.set(ac.barcode, {
+							sampleLabel: ac.sampleLabel ?? ac.sampleLabelA ?? null,
+							sampleId: ac.sampleId ?? ac.sampleIdA ?? null
+						});
+					}
+				}
+			}
+		}
+	}
+
 	const recentRuns = [
 		...(waxRuns as any[]).map(r => ({
 			id: r._id,
@@ -242,6 +265,16 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				program: c.program ?? null,
 				spuId: c.testExecution?.spu?._id ?? null,
 				spuUdi: c.testExecution?.spu?.udi ?? null,
+				// Specific sample run on this cartridge. Authoritative source is the
+				// research Experiment (sampleLabel by barcode); fall back to any
+				// denormalized field on the cartridge doc, then the BIMS schema path.
+				sampleLabel:
+					sampleLabelByBarcode.get(c._id)?.sampleLabel
+					?? (c as any).sampleLabel
+					?? c.sample?.subjectId
+					?? null,
+				sampleId: sampleLabelByBarcode.get(c._id)?.sampleId ?? (c as any).sampleId ?? null,
+				sampleType: c.sample?.sampleType ?? null,
 				operatorName,
 				createdAt: c.createdAt,
 				expirationDate: c.reagentFilling?.expirationDate ?? null,

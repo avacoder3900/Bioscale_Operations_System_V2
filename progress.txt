@@ -3275,3 +3275,18 @@ Deployment: production — https://bioscale-operations-system-mongodb-1xxgho6ts-
 Source: branch feat/dhr-photo-stream-parity @ commit 7792fc31 (merged to master e98494d3 via PR #15)
 Retrieve this exact code: git checkout master at commit e98494d3
 What this deployment is for: DHR photo pass/fail parity + cartridge-admin SPU/experiment/arm/state + drop image-stream "All" tab
+
+================================================================================
+2026-07-02 — feat/cartridge-admin-sample — cartridge-admin shows the specific sample run per cartridge
+================================================================================
+Surfaces CartridgeRecord.sample in the /cartridge-admin expanded row: Sample (sample.subjectId) and
+Sample Type, next to the SPU/Experiment/Arm/State cells added earlier. Also loads sampleCollectedAt
+for future use. Pulled from the already-loaded lean doc — no extra query. N/A until a sample is
+recorded on the cartridge.
+FILES: src/routes/cartridge-admin/+page.server.ts (row gains sampleSubjectId/sampleType/
+sampleCollectedAt), src/routes/cartridge-admin/+page.svelte (Sample + Sample Type cells).
+svelte-check: 45-error master baseline unchanged, 0 new in cartridge-admin.
+Deployment: preview — https://bioscale-operations-system-mongodb-qx7b6khn2-brevitest.vercel.app
+Source: branch feat/cartridge-admin-sample @ commit f15518b1
+Retrieve this exact code: git checkout feat/cartridge-admin-sample at commit f15518b1
+What this deployment is for: cartridge-admin expanded row now shows the specific sample (subjectId + type) per cartridge
