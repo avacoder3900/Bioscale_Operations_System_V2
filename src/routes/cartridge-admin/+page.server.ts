@@ -242,6 +242,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				program: c.program ?? null,
 				spuId: c.testExecution?.spu?._id ?? null,
 				spuUdi: c.testExecution?.spu?.udi ?? null,
+				// Specific sample run on this cartridge (sample.subjectId is the sample identifier).
+				sampleSubjectId: c.sample?.subjectId ?? null,
+				sampleType: c.sample?.sampleType ?? null,
+				sampleCollectedAt: c.sample?.collectedAt ?? null,
 				operatorName,
 				createdAt: c.createdAt,
 				expirationDate: c.reagentFilling?.expirationDate ?? null,
