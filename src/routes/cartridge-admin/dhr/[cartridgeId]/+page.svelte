@@ -5,6 +5,41 @@
 	let selectedPhoto = $state<any>(null);
 	let lightboxOpen = $state(false);
 
+	// Local, mutable copy of the photos so pass/fail labeling updates instantly
+	// without a full reload — same pattern as the /cv/stream image feed.
+	let photos = $state<any[]>(data.photos);
+	let labeling = $state<string | null>(null);
+	$effect(() => { photos = data.photos; });
+
+	// Approve = pass, reject = fail, null = clear. Optimistic with rollback.
+	// Reuses the same /api/cv/images/[id]/label endpoint the image stream uses.
+	async function setLabel(imageId: string, qcLabel: 'approved' | 'rejected' | null) {
+		const img = photos.find((p: any) => p.imageId === imageId);
+		if (!img) return;
+		const prev = img.qcLabel ?? null;
+		if (prev === qcLabel) return;
+
+		img.qcLabel = qcLabel;
+		photos = [...photos];
+		if (selectedPhoto && selectedPhoto.imageId === imageId) selectedPhoto = img;
+		labeling = imageId;
+		try {
+			const res = await fetch(`/api/cv/images/${imageId}/label`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ qcLabel })
+			});
+			if (!res.ok) throw new Error(`label failed: ${res.status}`);
+		} catch (err) {
+			// Roll back the optimistic change.
+			img.qcLabel = prev;
+			photos = [...photos];
+			console.error(err);
+		} finally {
+			labeling = null;
+		}
+	}
+
 	// All phases in pipeline order
 	const phaseOrder = [
 		'backing', 'wax_filling', 'wax_qc', 'wax_storage',
@@ -22,12 +57,12 @@
 	});
 
 	// Available phase filters (only phases that have photos)
-	const phasesWithPhotos: string[] = $derived(Array.from(new Set(data.photos.map((p: any) => String(p.phase ?? '')))));
+	const phasesWithPhotos: string[] = $derived(Array.from(new Set(photos.map((p: any) => String(p.phase ?? '')))));
 
 	// Filtered photos
 	const filteredPhotos = $derived.by(() => {
-		if (activePhaseFilter === 'all') return data.photos;
-		return data.photos.filter((p: any) => p.phase === activePhaseFilter);
+		if (activePhaseFilter === 'all') return photos;
+		return photos.filter((p: any) => p.phase === activePhaseFilter);
 	});
 
 	function formatDate(iso: string): string {
@@ -89,7 +124,22 @@
 			selectedPhoto = filteredPhotos[newIdx];
 		}
 	}
+
+	// Lightbox keyboard shortcuts — same rhythm as the image stream:
+	// ←/→ navigate, A/P pass, R/F/D fail, C/U clear, Esc close.
+	function onKey(e: KeyboardEvent) {
+		if (!lightboxOpen || !selectedPhoto) return;
+		const k = e.key.toLowerCase();
+		if (e.key === 'Escape') closeLightbox();
+		else if (e.key === 'ArrowLeft') navigatePhoto(-1);
+		else if (e.key === 'ArrowRight') navigatePhoto(1);
+		else if (k === 'a' || k === 'p') { e.preventDefault(); setLabel(selectedPhoto.imageId, selectedPhoto.qcLabel === 'approved' ? null : 'approved'); }
+		else if (k === 'r' || k === 'f' || k === 'd') { e.preventDefault(); setLabel(selectedPhoto.imageId, selectedPhoto.qcLabel === 'rejected' ? null : 'rejected'); }
+		else if (k === 'c' || k === 'u') { e.preventDefault(); setLabel(selectedPhoto.imageId, null); }
+	}
 </script>
+
+<svelte:window onkeydown={onKey} />
 
 <div class="space-y-6">
 	<!-- Header -->
@@ -370,53 +420,84 @@
 			<div class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
 				{#each filteredPhotos as photo (photo.imageId)}
 					{@const badge = inspectionBadge(photo.inspectionResult, photo.inspectionStatus)}
-					<!-- svelte-ignore a11y_no_static_element_interactions -->
-					<!-- svelte-ignore a11y_click_events_have_key_events -->
 					<div
-						class="group cursor-pointer overflow-hidden rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] transition-colors hover:border-[var(--color-tron-cyan)]"
-						onclick={() => openLightbox(photo)}
+						class="group overflow-hidden rounded-lg border bg-[var(--color-tron-bg)] transition-colors
+							{photo.qcLabel === 'approved'
+								? 'border-[var(--color-tron-green,#39ff14)]'
+								: photo.qcLabel === 'rejected'
+									? 'border-[var(--color-tron-red,#ff3366)]'
+									: 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)]'}"
 					>
-						<div class="relative aspect-video overflow-hidden">
-							<img
-								src={photo.thumbnailUrl || photo.url}
-								alt="Phase {photo.phase}"
-								class="h-full w-full object-cover transition-transform group-hover:scale-105"
-							/>
-							{#if badge.text}
-								<div class="absolute top-2 right-2">
-									<span class="inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold {badge.color}">{badge.text}</span>
-								</div>
-							{/if}
-						</div>
-						<div class="p-2 space-y-1">
-							<span class="inline-block rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[10px] text-[var(--color-tron-text-secondary)]">
-								{phaseLabel(photo.phase)}
-							</span>
-							{#if photo.labels?.length > 0}
-								<div class="flex flex-wrap gap-1">
-									{#each photo.labels.slice(0, 3) as label}
-										<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-1 py-0.5 text-[9px] text-[var(--color-tron-text-secondary)]">
-											{label.replace(/_/g, ' ')}
-										</span>
-									{/each}
-								</div>
-							{/if}
-							<p class="text-[10px] text-[var(--color-tron-text-secondary)]">
-								{formatShortDate(photo.capturedAt)}
-							</p>
-							{#if photo.confidenceScore !== null}
-								<div class="flex items-center gap-1">
-									<div class="h-1 w-12 rounded-full bg-[var(--color-tron-bg-tertiary)]">
-										<div
-											class="h-full rounded-full {photo.inspectionResult === 'pass' ? 'bg-[var(--color-tron-green)]' : 'bg-[var(--color-tron-red)]'}"
-											style="width: {Math.min(photo.confidenceScore * 100, 100)}%"
-										></div>
+						<button type="button" onclick={() => openLightbox(photo)} class="block w-full cursor-pointer text-left">
+							<div class="relative aspect-video overflow-hidden">
+								<img
+									src={photo.thumbnailUrl || photo.url}
+									alt="Phase {photo.phase}"
+									class="h-full w-full object-cover transition-transform group-hover:scale-105"
+								/>
+								<!-- Human QC pass/fail — same treatment as the image stream. -->
+								{#if photo.qcLabel === 'approved'}
+									<span class="absolute left-2 top-2 rounded bg-[var(--color-tron-green,#39ff14)] px-1.5 py-0.5 text-[10px] font-bold text-black">PASS</span>
+								{:else if photo.qcLabel === 'rejected'}
+									<span class="absolute left-2 top-2 rounded bg-[var(--color-tron-red,#ff3366)] px-1.5 py-0.5 text-[10px] font-bold text-white">FAIL</span>
+								{/if}
+								{#if badge.text}
+									<div class="absolute top-2 right-2">
+										<span class="inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold {badge.color}">{badge.text}</span>
 									</div>
-									<span class="text-[9px] text-[var(--color-tron-text-secondary)]">
-										{(photo.confidenceScore * 100).toFixed(0)}%
-									</span>
-								</div>
-							{/if}
+								{/if}
+							</div>
+							<div class="p-2 space-y-1">
+								<span class="inline-block rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[10px] text-[var(--color-tron-text-secondary)]">
+									{phaseLabel(photo.phase)}
+								</span>
+								{#if photo.labels?.length > 0}
+									<div class="flex flex-wrap gap-1">
+										{#each photo.labels.slice(0, 3) as label}
+											<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-1 py-0.5 text-[9px] text-[var(--color-tron-text-secondary)]">
+												{label.replace(/_/g, ' ')}
+											</span>
+										{/each}
+									</div>
+								{/if}
+								<p class="text-[10px] text-[var(--color-tron-text-secondary)]">
+									{formatShortDate(photo.capturedAt)}
+								</p>
+								{#if photo.confidenceScore !== null}
+									<div class="flex items-center gap-1">
+										<div class="h-1 w-12 rounded-full bg-[var(--color-tron-bg-tertiary)]">
+											<div
+												class="h-full rounded-full {photo.inspectionResult === 'pass' ? 'bg-[var(--color-tron-green)]' : 'bg-[var(--color-tron-red)]'}"
+												style="width: {Math.min(photo.confidenceScore * 100, 100)}%"
+											></div>
+										</div>
+										<span class="text-[9px] text-[var(--color-tron-text-secondary)]">
+											{(photo.confidenceScore * 100).toFixed(0)}%
+										</span>
+									</div>
+								{/if}
+							</div>
+						</button>
+						<!-- Inline pass/fail — label without opening the photo (image-stream parity). -->
+						<div class="flex border-t border-[var(--color-tron-border)]">
+							<button
+								type="button"
+								disabled={labeling === photo.imageId}
+								onclick={() => setLabel(photo.imageId, photo.qcLabel === 'approved' ? null : 'approved')}
+								class="flex-1 py-1.5 text-xs font-semibold transition-colors disabled:opacity-40
+									{photo.qcLabel === 'approved'
+										? 'bg-[var(--color-tron-green,#39ff14)]/20 text-[var(--color-tron-green,#39ff14)]'
+										: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-green,#39ff14)]'}"
+							>✓ Pass</button>
+							<button
+								type="button"
+								disabled={labeling === photo.imageId}
+								onclick={() => setLabel(photo.imageId, photo.qcLabel === 'rejected' ? null : 'rejected')}
+								class="flex-1 border-l border-[var(--color-tron-border)] py-1.5 text-xs font-semibold transition-colors disabled:opacity-40
+									{photo.qcLabel === 'rejected'
+										? 'bg-[var(--color-tron-red,#ff3366)]/20 text-[var(--color-tron-red,#ff3366)]'
+										: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-red,#ff3366)]'}"
+							>✗ Fail</button>
 						</div>
 					</div>
 				{/each}
@@ -490,6 +571,34 @@
 				class="w-full"
 			/>
 
+			<!-- Pass / Fail review controls — same as the image stream (keys A / F / C). -->
+			<div class="flex items-center justify-center gap-2 border-t border-[var(--color-tron-border)] p-3">
+				<button
+					type="button"
+					disabled={labeling === selectedPhoto.imageId}
+					onclick={() => setLabel(selectedPhoto.imageId, selectedPhoto.qcLabel === 'approved' ? null : 'approved')}
+					class="rounded px-5 py-2 text-sm font-bold transition-colors disabled:opacity-40
+						{selectedPhoto.qcLabel === 'approved'
+							? 'bg-[var(--color-tron-green,#39ff14)] text-black'
+							: 'border border-[var(--color-tron-green,#39ff14)] text-[var(--color-tron-green,#39ff14)] hover:bg-[var(--color-tron-green,#39ff14)]/20'}"
+				>✓ Pass <span class="ml-1 opacity-60">(A)</span></button>
+				<button
+					type="button"
+					disabled={labeling === selectedPhoto.imageId}
+					onclick={() => setLabel(selectedPhoto.imageId, selectedPhoto.qcLabel === 'rejected' ? null : 'rejected')}
+					class="rounded px-5 py-2 text-sm font-bold transition-colors disabled:opacity-40
+						{selectedPhoto.qcLabel === 'rejected'
+							? 'bg-[var(--color-tron-red,#ff3366)] text-white'
+							: 'border border-[var(--color-tron-red,#ff3366)] text-[var(--color-tron-red,#ff3366)] hover:bg-[var(--color-tron-red,#ff3366)]/20'}"
+				>✗ Fail <span class="ml-1 opacity-60">(F)</span></button>
+				<button
+					type="button"
+					disabled={labeling === selectedPhoto.imageId || !selectedPhoto.qcLabel}
+					onclick={() => setLabel(selectedPhoto.imageId, null)}
+					class="rounded border border-[var(--color-tron-border)] px-4 py-2 text-sm text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-text)] disabled:opacity-30"
+				>Clear <span class="ml-1 opacity-60">(C)</span></button>
+			</div>
+
 			<!-- Info panel -->
 			<div class="p-4 space-y-3">
 				<div class="flex items-center justify-between">
@@ -500,10 +609,13 @@
 						{#if badge.text}
 							<span class="rounded px-2 py-0.5 text-xs font-semibold {badge.color}">{badge.text}</span>
 						{/if}
-						{#if selectedPhoto.label}
-							<span class="rounded px-2 py-0.5 text-xs {selectedPhoto.label === 'approved' ? 'bg-[var(--color-tron-green)]/20 text-[var(--color-tron-green)]' : 'bg-[var(--color-tron-red)]/20 text-[var(--color-tron-red)]'}">
-								{selectedPhoto.label}
-							</span>
+						<!-- Human QC verdict (approved/rejected), same as the image stream. -->
+						{#if selectedPhoto.qcLabel === 'approved'}
+							<span class="rounded bg-[var(--color-tron-green,#39ff14)]/20 px-2 py-0.5 text-xs font-semibold text-[var(--color-tron-green,#39ff14)]">PASS</span>
+						{:else if selectedPhoto.qcLabel === 'rejected'}
+							<span class="rounded bg-[var(--color-tron-red,#ff3366)]/20 px-2 py-0.5 text-xs font-semibold text-[var(--color-tron-red,#ff3366)]">FAIL</span>
+						{:else}
+							<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-tron-text-secondary)]">Unreviewed</span>
 						{/if}
 					</div>
 					<span class="text-xs text-[var(--color-tron-text-secondary)]">
@@ -546,17 +658,23 @@
 				{/if}
 
 				{#if selectedPhoto.labels?.length > 0}
-					<div class="flex flex-wrap gap-1">
-						{#each selectedPhoto.labels as label}
-							<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-tron-text-secondary)]">
-								{label.replace(/_/g, ' ')}
-							</span>
-						{/each}
+					<div class="space-y-1 border-t border-[var(--color-tron-border)] pt-3">
+						<h3 class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Labels</h3>
+						<div class="flex flex-wrap gap-1">
+							{#each selectedPhoto.labels as label}
+								<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-tron-text-secondary)]">
+									{label.replace(/_/g, ' ')}
+								</span>
+							{/each}
+						</div>
 					</div>
 				{/if}
 
 				{#if selectedPhoto.notes}
-					<p class="text-xs text-[var(--color-tron-text-secondary)] italic">{selectedPhoto.notes}</p>
+					<div class="space-y-1 border-t border-[var(--color-tron-border)] pt-3">
+						<h3 class="text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Notes</h3>
+						<p class="whitespace-pre-wrap text-xs italic text-[var(--color-tron-text-secondary)]">{selectedPhoto.notes}</p>
+					</div>
 				{/if}
 			</div>
 		</div>

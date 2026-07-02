@@ -2870,3 +2870,26 @@ FILES: src/routes/manufacturing/cart-mfg/deck-calibration/+page.svelte (anchorWe
 derived; toggleWell stamps anchor on add; setX/Y/Z prefill off anchor; applyAbsolute rewrite;
 "Set position → selection" panel — title/help/anchor readout/button). + the PRD.
 npm run check: 11-error baseline (0 new in deck-calibration/+page.svelte); not yet committed.
+
+=== 2026-07-02 — Cartridge-Admin DHR photos: image-stream parity (pass/fail + labels/notes) ===
+Branch feat/dhr-photo-stream-parity (off master). The DHR document view
+(/cartridge-admin/dhr/[cartridgeId]) now shows the SAME per-photo detail the image stream
+(/cv/stream) shows: human QC PASS/FAIL (qcLabel) badge + colored border + inline Pass/Fail buttons
+on each card, and a lightbox with Pass/Fail/Clear controls (keys A/F/C), a Verdict line, and Labels
++ Notes sections. Fully interactive — writes through the same /api/cv/images/[id]/label endpoint the
+stream uses (optimistic with rollback), so pass/fail can be set straight from the DHR document.
+ROOT CAUSE: the page's photos come from +page.server.ts (the load), which already mapped
+labels/notes but NOT qcLabel; the lightbox's verdict chip also read a nonexistent img.label field.
+FIX: add qcLabel + cartridgeImageNumber + capturedByUsername to the load (and to the shared
+/api/cartridge-admin/dhr endpoint the search-page preview uses), drop the broken img.label, and
+render qcLabel with the stream's pass/fail code.
+FILES: src/routes/cartridge-admin/dhr/[cartridgeId]/{+page.server.ts,+page.svelte},
+src/routes/api/cartridge-admin/dhr/[cartridgeId]/+server.ts.
+svelte-check: no new errors in the touched files. Left the search-page (/cartridge-admin) thumbnail
+strip's bare-image lightbox as-is (separate minimal surface); qcLabel is now available there too.
+
+=== POLICY — DEPLOYMENT READINESS (going forward) ===
+Every new feature, as soon as it is COMPLETE or READY TO TEST, must have its deployment lined up
+and staged so it is one click from "Publish." Do not leave finished or testable work sitting
+without a ready-to-publish deployment queued — the preview/staging deploy should already be built
+and waiting on the "Publish" button, not something to start assembling after the fact.

@@ -47,13 +47,18 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 
 		return {
 			imageId: img._id,
+			cartridgeImageNumber: img.cartridgeImageNumber ?? null,
+			cartridgeRecordId: img.cartridgeTag?.cartridgeRecordId ?? params.cartridgeId,
 			phase: img.cartridgeTag?.phase || 'untagged',
 			labels: img.cartridgeTag?.labels || [],
 			notes: img.cartridgeTag?.notes || '',
+			// Human QC verdict — the pass/fail shown in the image stream (approved/rejected/null).
+			qcLabel: img.qcLabel ?? null,
 			capturedAt: img.capturedAt || img.createdAt,
+			capturedByUsername: img.capturedBy?.username ?? null,
 			url,
 			thumbnailUrl,
-			label: img.label || null,
+			// Auto-classifier verdict, separate from the human qcLabel above.
 			inspectionResult: inspection?.result || null,
 			inspectionStatus: inspection?.status || null,
 			confidenceScore: inspection?.confidenceScore ?? null,
