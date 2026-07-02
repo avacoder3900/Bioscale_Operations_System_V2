@@ -337,8 +337,8 @@
 						<td class="px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">{c.arm ?? '—'}</td>
 						<td class="px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">{c.experiment ?? '—'}</td>
 						<td class="px-3 py-2 text-xs text-[var(--color-tron-text-secondary)]">
-							{#if c.sampleSubjectId}
-								<span class="text-[var(--color-tron-text)]">{c.sampleSubjectId}</span>{#if c.sampleType}<span class="ml-1 text-[10px] text-[var(--color-tron-text-secondary)]">({c.sampleType})</span>{/if}
+							{#if c.sampleLabel}
+								<span class="text-[var(--color-tron-text)]">{c.sampleLabel}</span>{#if c.sampleType}<span class="ml-1 text-[10px] text-[var(--color-tron-text-secondary)]">({c.sampleType})</span>{/if}
 							{:else}—{/if}
 						</td>
 						<td class="px-3 py-2 font-mono text-xs text-[var(--color-tron-text-secondary)]">
@@ -391,7 +391,7 @@
 									<div><span class="text-[var(--color-tron-text-secondary)]">SPU:</span> <span class="ml-1 font-mono text-[var(--color-tron-text)]">{c.spuUdi ?? c.spuId ?? 'N/A'}</span></div>
 									<div><span class="text-[var(--color-tron-text-secondary)]">Experiment:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.experiment ?? 'N/A'}</span></div>
 									<div><span class="text-[var(--color-tron-text-secondary)]">Arm:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.arm ?? 'N/A'}</span></div>
-									<div><span class="text-[var(--color-tron-text-secondary)]">Sample:</span> <span class="ml-1 font-mono text-[var(--color-tron-text)]">{c.sampleSubjectId ?? 'N/A'}</span></div>
+									<div><span class="text-[var(--color-tron-text-secondary)]">Sample:</span> <span class="ml-1 font-mono text-[var(--color-tron-text)]">{c.sampleLabel ?? 'N/A'}</span></div>
 									<div><span class="text-[var(--color-tron-text-secondary)]">Sample Type:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.sampleType ?? 'N/A'}</span></div>
 									<div><span class="text-[var(--color-tron-text-secondary)]">Wax Status:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.waxStatus ?? 'N/A'}</span></div>
 									<div><span class="text-[var(--color-tron-text-secondary)]">Wax QC:</span> <span class="ml-1 text-[var(--color-tron-text)]">{c.waxQcStatus ?? 'N/A'}</span></div>
