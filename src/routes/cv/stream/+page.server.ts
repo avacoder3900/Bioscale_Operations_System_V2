@@ -25,7 +25,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	const cartridgeId = url.searchParams.get('cartridge')?.trim() || '';
 	// Which tab: unreviewed (no label yet) | reviewed (has a label) | all.
 	const reviewParam = url.searchParams.get('review') || 'unreviewed';
-	const review = ['unreviewed', 'reviewed', 'all'].includes(reviewParam) ? reviewParam : 'unreviewed';
+	const review = ['unreviewed', 'reviewed'].includes(reviewParam) ? reviewParam : 'unreviewed';
 	// Verdict sub-filter, only meaningful within Reviewed / All.
 	const verdict = url.searchParams.get('verdict') || ''; // approved | rejected
 	const fromDate = url.searchParams.get('from') || '';
@@ -56,9 +56,6 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		filter.qcLabel = null;
 	} else if (review === 'reviewed') {
 		filter.qcLabel = verdict === 'approved' || verdict === 'rejected' ? verdict : { $ne: null };
-	} else if (verdict === 'approved' || verdict === 'rejected') {
-		// "All" tab with an explicit verdict picked.
-		filter.qcLabel = verdict;
 	}
 
 	const [imagesRaw, total, distinctPhases, unreviewedCount, reviewedCount] = await Promise.all([
