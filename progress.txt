@@ -3227,3 +3227,22 @@ Companion deploy: brevitest-research preview https://brevitest-research-8xsl7aut
   (branch feat/cartridge-barcode-enrichment @ 88bf806). NOTE: research cloud preview needs env vars
   BIMS_BASE_URL + AGENT_API_KEY set in the brevitest/brevitest-research Vercel project to load photos;
   verified end-to-end LOCALLY instead (research dev server -> BIMS preview, all proxy paths pass).
+
+================================================================================
+2026-07-02 (follow-up) — fix/cv-stream-failure-label-filter merged to master, deployed to production
+================================================================================
+Merged fix/cv-stream-failure-label-filter into master (merge commit; origin/master
+had advanced to 7cb80211 with the feat/cartridge-photos-agent-api work, so this was
+a real merge — the only conflict was this progress.txt append, resolved by keeping
+both sides). Master fast-forwarded to the merge commit. Ships the two /cv/stream
+changes to production: (1) the Tag filter now lists only curated FailureLabel
+(Label Creation tab) labels, and (2) the rejectionReasonCodes "Common Failure"
+filter dropdown is removed.
+
+Deployment: production — https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/Gs2Rs5XEAkTdPmhdNz9wB5Nk4xB8
+Source: master @ commit 320a7c47 (fast-forward from fix/cv-stream-failure-label-filter;
+  triggered automatically by GitHub integration)
+Retrieve this exact code: git checkout master (currently at 320a7c47;
+  git log master --oneline to re-find it if master has since moved on)
+What this deployment is for: ships the /cv/stream filter cleanup (Tag = Label-Creation
+  labels only; Common Failure dropdown removed) to production.
