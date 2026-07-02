@@ -13,7 +13,6 @@ import { redirect } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
-import { ManufacturingSettings } from '$lib/server/db/models/manufacturing-settings.js';
 import { FailureLabel } from '$lib/server/db/models/failure-label.js';
 import { getR2Url } from '$lib/server/services/r2';
 import type { PageServerLoad } from './$types';
@@ -40,13 +39,12 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	// Highlight sub-filter: '' (any) | 'yes' (has burned-in boxes) | 'no'.
 	const highlightedParam = url.searchParams.get('highlighted') || '';
 	const highlighted = ['yes', 'no'].includes(highlightedParam) ? highlightedParam : '';
-	// arm/experiment/failureCode live on CartridgeRecord, not CvImage — resolved
-	// to a cartridge-id allowlist below. tag and notesSearch are direct CvImage
+	// arm/experiment live on CartridgeRecord, not CvImage — resolved to a
+	// cartridge-id allowlist below. tag and notesSearch are direct CvImage
 	// fields (cartridgeTag.labels / cartridgeTag.notes).
 	const arm = url.searchParams.get('arm') || '';
 	const experiment = url.searchParams.get('experiment') || '';
 	const tag = url.searchParams.get('tag') || '';
-	const failureCode = url.searchParams.get('failureCode') || '';
 	const notesSearch = url.searchParams.get('notes') || '';
 	const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10));
 
@@ -72,24 +70,18 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	if (highlighted === 'yes') baseFilter['metadata.highlight'] = { $exists: true };
 	else if (highlighted === 'no') baseFilter['metadata.highlight'] = { $exists: false };
 
-	// arm/experiment/failureCode resolve via CartridgeRecord to a cartridge-id
-	// allowlist; cartridgeId (partial-match search) narrows the same field with
-	// a regex, so both are combined into one $and clause rather than letting
-	// one overwrite the other.
+	// arm/experiment resolve via CartridgeRecord to a cartridge-id allowlist;
+	// cartridgeId (partial-match search) narrows the same field with a regex, so
+	// both are combined into one $and clause rather than letting one overwrite
+	// the other.
 	const cartridgeIdClauses: any[] = [];
 	if (cartridgeId) {
 		cartridgeIdClauses.push({ 'cartridgeTag.cartridgeRecordId': { $regex: cartridgeId, $options: 'i' } });
 	}
-	if (arm || experiment || failureCode) {
+	if (arm || experiment) {
 		const cartQuery: Record<string, any> = {};
 		if (arm) cartQuery.arm = arm;
 		if (experiment) cartQuery.experiment = experiment;
-		if (failureCode) {
-			cartQuery.$or = [
-				{ 'waxQc.rejectionReason': failureCode },
-				{ 'reagentInspection.reason': failureCode }
-			];
-		}
 		const matchingCartIds = await CartridgeRecord.distinct('_id', cartQuery);
 		cartridgeIdClauses.push({ 'cartridgeTag.cartridgeRecordId': { $in: matchingCartIds } });
 	}
@@ -110,7 +102,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		filter.qcLabel = verdict;
 	}
 
-	const [imagesRaw, total, distinctPhases, unreviewedCount, reviewedCount, armOptionsRaw, experimentOptionsRaw, settingsDoc, failureLabelsRaw] = await Promise.all([
+	const [imagesRaw, total, distinctPhases, unreviewedCount, reviewedCount, armOptionsRaw, experimentOptionsRaw, failureLabelsRaw] = await Promise.all([
 		CvImage.find(filter)
 			.sort({ capturedAt: -1 })
 			.skip((page - 1) * PAGE_SIZE)
@@ -125,19 +117,13 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		CvImage.countDocuments({ ...baseFilter, qcLabel: { $ne: null } }),
 		CartridgeRecord.distinct('arm', { arm: { $nin: [null, ''] } }),
 		CartridgeRecord.distinct('experiment', { experiment: { $nin: [null, ''] } }),
-		ManufacturingSettings.findById('default').select('rejectionReasonCodes').lean(),
-		// The premade failure-label pick-list (Manage tab + tag-pickers). Separate
-		// from failureCodeOptions below (rejectionReasonCodes-backed, powers only
-		// the existing Common Failure *filter* dropdown) — do not conflate the two.
+		// The premade failure-label pick-list (Label Creation / Manage tab + tag
+		// pickers) — also the source for the Tag filter dropdown.
 		FailureLabel.find().sort({ text: 1 }).lean()
 	]);
 
 	const armOptions = (armOptionsRaw as string[]).sort((a, b) => a.localeCompare(b));
 	const experimentOptions = (experimentOptionsRaw as string[]).sort((a, b) => a.localeCompare(b));
-	const failureCodeOptions = (((settingsDoc as any)?.rejectionReasonCodes ?? []) as any[])
-		.slice()
-		.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
-		.map(rc => ({ id: String(rc._id), code: rc.code, label: rc.label, processType: rc.processType, sortOrder: rc.sortOrder ?? 0 }));
 	const failureLabels = (failureLabelsRaw as any[]).map(l => ({ id: l._id, text: l.text }));
 
 	const images = (imagesRaw as any[]).map(img => ({
@@ -166,11 +152,10 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		pageSize: PAGE_SIZE,
 		review,
 		counts: { unreviewed: unreviewedCount, reviewed: reviewedCount },
-		filters: { phase, cartridgeId, verdict, fromDate, toDate, highlighted, arm, experiment, tag, failureCode, notesSearch },
+		filters: { phase, cartridgeId, verdict, fromDate, toDate, highlighted, arm, experiment, tag, notesSearch },
 		availablePhases: (distinctPhases as string[]).filter(Boolean).sort(),
 		armOptions,
 		experimentOptions,
-		failureCodeOptions,
 		failureLabels
 	};
 };

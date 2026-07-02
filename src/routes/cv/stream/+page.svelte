@@ -96,7 +96,6 @@
 	let arm = $state(data.filters.arm || '');
 	let experiment = $state(data.filters.experiment || '');
 	let tag = $state(data.filters.tag || '');
-	let failureCode = $state(data.filters.failureCode || '');
 	let notesSearch = $state(data.filters.notesSearch || '');
 
 	// Local, mutable copies so we can label optimistically without a round-trip
@@ -129,7 +128,6 @@
 		if (arm) params.set('arm', arm);
 		if (experiment) params.set('experiment', experiment);
 		if (tag) params.set('tag', tag);
-		if (failureCode) params.set('failureCode', failureCode);
 		if (notesSearch) params.set('notes', notesSearch);
 		return params;
 	}
@@ -150,7 +148,6 @@
 		arm = '';
 		experiment = '';
 		tag = '';
-		failureCode = '';
 		notesSearch = '';
 		goto(`/cv/stream?review=${data.review}`);
 	}
@@ -379,15 +376,6 @@
 					     every label ever observed on an image. -->
 					{#each data.failureLabels as l (l.id)}
 						<option value={l.text}>{l.text}</option>
-					{/each}
-				</select>
-			</div>
-			<div>
-				<label for="failure-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Common Failure</label>
-				<select id="failure-filter" bind:value={failureCode} class="tron-input w-full">
-					<option value="">All</option>
-					{#each data.failureCodeOptions as fc (fc.code)}
-						<option value={fc.code}>{fc.label}</option>
 					{/each}
 				</select>
 			</div>
