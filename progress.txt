@@ -3165,3 +3165,26 @@ Retrieve this exact code: git checkout fix/cv-stream-failure-label-filter at com
   (or: git log fix/cv-stream-failure-label-filter --oneline to find it if the branch moves)
 What this deployment is for: preview of the /cv/stream Common Failure filter now
   listing only Label-Creation labels, before merging to master.
+
+================================================================================
+2026-07-02 (follow-up) — fix/cv-stream-failure-label-filter — drop the Common Failure filter entirely
+================================================================================
+Follow-up to the entry above: rather than curating the rejectionReasonCodes
+"Common Failure" filter, removed it outright per request — the Tag filter (now
+sourced from the curated FailureLabel list) is the only label filter on
+/cv/stream. Removed from +page.svelte: the "Common Failure" <select> block, the
+`failureCode` state, and its handling in paramsFromFilters/resetFilters. Removed
+from +page.server.ts: the `failureCode` query param, its CartridgeRecord
+waxQc.rejectionReason / reagentInspection.reason resolution inside the
+arm/experiment cartridge-id clause, the ManufacturingSettings rejectionReasonCodes
+query + `failureCodeOptions`, the `failureCode` filters field, and the now-unused
+ManufacturingSettings import. The Label Creation ("Common Failure Labels") Manage
+tab is untouched. svelte-check clean for the touched files.
+
+Deployment: preview — https://vercel.com/brevitest/bioscale-operations-system-mongodb/8L9HZSS4gzvguUP62ThYBuK2NYWT
+Source: branch fix/cv-stream-failure-label-filter @ commit 755f557c (off master;
+  triggered automatically by GitHub integration)
+Retrieve this exact code: git checkout fix/cv-stream-failure-label-filter at commit 755f557c
+  (or: git log fix/cv-stream-failure-label-filter --oneline to find it if the branch moves)
+What this deployment is for: preview of /cv/stream with the Common Failure filter
+  removed and only the Tag filter remaining, before merging to master.
