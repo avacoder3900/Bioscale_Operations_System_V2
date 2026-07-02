@@ -10,7 +10,8 @@
  *
  * Unlike Quick Seal, this accepts EVERY existing cartridge regardless of status —
  * that is the whole point: grab any carts on hand and reuse them for a test fill.
- * Only not-found barcodes are rejected (and kept in the box to re-scan).
+ * A not-found barcode is not rejected either: it is ORIGINATED as a brand-new
+ * cartridge directly at wax_ready so a never-before-seen barcode still works.
  */
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
@@ -52,7 +53,41 @@ export const actions: Actions = {
 		for (const barcode of barcodes) {
 			const cart = (await CartridgeRecord.findById(barcode).select('_id status').lean()) as any;
 			if (!cart) {
-				rejected.push({ barcode, reason: 'not found' });
+				// Never-before-seen barcode: originate a brand-new cartridge directly
+				// at wax_ready (the reagent-fill intake gate) so it can be used for a
+				// test fill without having gone through wax/backing first. Created,
+				// not rejected.
+				try {
+					await CartridgeRecord.create({
+						_id: barcode,
+						status: 'wax_ready',
+						usedForTestFill: true,
+						reagentFilling: { tubeRecords: [] },
+						notes: [
+							{
+								_id: generateId(),
+								body: 'Originated for test fill (Quick Reagent Fill Test: new → wax_ready).',
+								phase: 'test-fill',
+								author: op,
+								createdAt: now
+							}
+						]
+					});
+					await AuditLog.create({
+						_id: generateId(),
+						tableName: 'cartridge_records',
+						recordId: barcode,
+						action: 'quick_reagent_test',
+						newData: { from: 'new', to: 'wax_ready', originated: true },
+						changedAt: now,
+						changedBy: op.username
+					});
+					converted.push({ barcode, from: 'new' });
+				} catch (e: any) {
+					// Duplicate-key race (created between findById and create) or any
+					// other write error — surface it, keep the barcode to re-scan.
+					rejected.push({ barcode, reason: e?.code === 11000 ? 'already exists — re-scan' : 'could not originate' });
+				}
 				continue;
 			}
 			const from = cart.status ?? 'none';
