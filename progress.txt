@@ -3360,3 +3360,7 @@ Deployment: preview — https://bioscale-operations-system-mongodb-i0pklhtyc-bre
 Source: branch feat/cv-clean-datapath @ commit 9fc54ac7
 Retrieve this exact code: git checkout feat/cv-clean-datapath at commit 9fc54ac7
 What this deployment is for: reworked CV dropdown (CV Stations + Image Stream only) on top of the CV data-model purge + CVDEMO seed
+Deployment: preview — https://bioscale-operations-system-mongodb-i940fh60w-brevitest.vercel.app
+Source: branch feat/cv-clean-datapath @ commit 6bfcbf68
+Retrieve this exact code: git checkout feat/cv-clean-datapath at commit 6bfcbf68
+What this deployment is for: full model-management UI reachability — dropdown now Stations/Stream/Models/Labeling, model page links phases→stream + label-more
