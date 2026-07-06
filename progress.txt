@@ -3364,3 +3364,7 @@ Deployment: preview — https://bioscale-operations-system-mongodb-i940fh60w-bre
 Source: branch feat/cv-clean-datapath @ commit 6bfcbf68
 Retrieve this exact code: git checkout feat/cv-clean-datapath at commit 6bfcbf68
 What this deployment is for: full model-management UI reachability — dropdown now Stations/Stream/Models/Labeling, model page links phases→stream + label-more
+Deployment: preview — https://bioscale-operations-system-mongodb-mv1f0ix29-brevitest.vercel.app
+Source: branch feat/cv-clean-datapath @ commit c3cb8213
+Retrieve this exact code: git checkout feat/cv-clean-datapath at commit c3cb8213
+What this deployment is for: Stage Models page (/cv/deployments) — per-stage model assignment + live-version selection, in CV dropdown
