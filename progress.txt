@@ -3376,3 +3376,7 @@ Deployment: preview — https://bioscale-operations-system-mongodb-1pizt0897.ver
 Source: branch feat/cv-clean-datapath @ commit 9a3c305b
 Retrieve this exact code: git checkout feat/cv-clean-datapath at commit 9a3c305b
 What this deployment is for: CV dropdown in workflow order incl. Cartridge Intake page (/cv/intake) + direct Capture link (supersedes 144e3d7b preview)
+Deployment: preview — https://bioscale-operations-system-mongodb-7wo22w9dz-brevitest.vercel.app
+Source: branch feat/cv-clean-datapath @ commit 42b6295a
+Retrieve this exact code: git checkout feat/cv-clean-datapath at commit 42b6295a
+What this deployment is for: capture-page intake mode toggle — station wedge scanner scans create/assign cartridges to wax/reagent/post-mortem and lock for photos
