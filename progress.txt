@@ -3338,3 +3338,21 @@ assembly page) — 0 new. Vite build ✓ (adapter-vercel nft step fails locally 
 C:\swapfile.sys EBUSY — Windows-only artifact, fine on Vercel CI).
 NEXT: run scripts/migrate-cv-labels.ts (dry → --apply) against prod Mongo,
 verify /cv/stream + /cv/label + DHR + train loop on preview, then merge.
+
+================================================================================
+2026-07-06 — feat/cv-clean-datapath — CVDEMO seed + preview deployment
+================================================================================
+Seeded CV demo into prod Mongo via scripts/seed-cv-example.ts: 12 CVDEMO-*
+cartridges / 24 photos with full new-style QC truth (15 approved sampled from
+real wax_filled images, 9 rejected from reagent_filled — real visual signal),
+demo tags cvdemo-wax-overflow/cvdemo-misaligned-lid in failure_labels, project
+CVDEMO-project ("CV Demo — Wax QC", phases=[cvdemo], untrained). Isolated on
+phase 'cvdemo' — no real capture routes through it. Remove with
+`npx tsx scripts/seed-cv-example.ts --cleanup`.
+Verified pre-push: training aggregation returns all 24 (15/9), image URLs
+serve bytes (200 image/jpeg).
+Deployment: preview — https://bioscale-operations-system-mongodb-nuhonkmtr.vercel.app
+Source: branch feat/cv-clean-datapath @ commit dcaf85c8
+Retrieve this exact code: git checkout feat/cv-clean-datapath at commit dcaf85c8
+  (or: git log feat/cv-clean-datapath --oneline to find it if the branch has since moved on)
+What this deployment is for: end-to-end test of the purged CV data model — label/train/deploy the CVDEMO project through the UI
