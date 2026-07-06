@@ -3372,3 +3372,7 @@ Deployment: preview — https://bioscale-operations-system-mongodb-mzvtywheb-bre
 Source: branch feat/cv-clean-datapath @ commit 3eb94da4
 Retrieve this exact code: git checkout feat/cv-clean-datapath at commit 3eb94da4
 What this deployment is for: capture-page inspect-step intake (scan unknown barcode → create cartridge + assign wax/reagent/post-mortem status) + Stage Models page
+Deployment: preview — https://bioscale-operations-system-mongodb-1pizt0897.vercel.app
+Source: branch feat/cv-clean-datapath @ commit 9a3c305b
+Retrieve this exact code: git checkout feat/cv-clean-datapath at commit 9a3c305b
+What this deployment is for: CV dropdown in workflow order incl. Cartridge Intake page (/cv/intake) + direct Capture link (supersedes 144e3d7b preview)
