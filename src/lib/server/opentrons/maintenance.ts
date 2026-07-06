@@ -342,11 +342,36 @@ export async function registerLabwareDefinition(
 }
 
 /** Load a (already-registered) labware def into the run at a slot; returns labwareId. */
+/**
+ * Return the id of labware already loaded at `slot` in a maintenance run, or null.
+ * A maintenance run is reused across repeated pick-up-tip / move-to-hole actions,
+ * so the same tiprack/deck may already occupy the slot from an earlier call.
+ */
+async function loadedLabwareAtSlot(
+	robot: RobotRef,
+	runId: string,
+	slot: string
+): Promise<{ id: string; loadName: string } | null> {
+	const res = await robotGet(robot as any, `/maintenance_runs/${runId}`);
+	if (!res.ok) return null;
+	const body = (await res.json().catch(() => ({}))) as any;
+	const lw = (body?.data?.labware ?? []) as Array<any>;
+	const match = lw.find((x) => String(x?.location?.slotName ?? '') === String(slot));
+	return match?.id ? { id: match.id, loadName: match.loadName } : null;
+}
+
 export async function loadLabwareInRun(
 	robot: RobotRef,
 	runId: string,
 	args: { namespace: string; loadName: string; version: number; slot: string }
 ): Promise<string> {
+	// Idempotent: re-loading the same labware into an already-occupied slot throws
+	// LocationIsOccupiedError. That happens whenever this maintenance run was already
+	// used to load this slot (e.g. pick up a tip, then pick up again without closing).
+	// Reuse the existing labware id instead of failing.
+	const existing = await loadedLabwareAtSlot(robot, runId, args.slot).catch(() => null);
+	if (existing && existing.loadName === args.loadName) return existing.id;
+
 	const result = (await sendMaintenanceCommand(
 		robot,
 		runId,

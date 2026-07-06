@@ -37,8 +37,17 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 
 	try {
 		await registerLabwareDefinition(robot, params.runId, def.definition);
+		// loadLabwareInRun is idempotent (reuses the slot if already loaded), so a
+		// reused maintenance run no longer throws LocationIsOccupiedError here.
 		const tiprackLabwareId = await loadLabwareInRun(robot, params.runId, { namespace, loadName: tiprackLoadName, version, slot });
-		await pickUpTip(robot, params.runId, pipetteId, tiprackLabwareId, tipWell);
+		try {
+			await pickUpTip(robot, params.runId, pipetteId, tiprackLabwareId, tipWell);
+		} catch (tipErr) {
+			// In a reused run the pipette may already hold a tip — that's the desired
+			// end state, so treat "tip already attached" as success instead of erroring.
+			const msg = tipErr instanceof Error ? tipErr.message : String(tipErr);
+			if (!/tip.*(attach|present|already)|already.*tip|should not have a tip/i.test(msg)) throw tipErr;
+		}
 		return json({ tiprackLabwareId });
 	} catch (e) {
 		console.error('[API] pick-up-tip error:', e instanceof Error ? e.message : e);
