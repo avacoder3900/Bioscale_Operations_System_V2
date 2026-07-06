@@ -72,6 +72,7 @@
 					<span class="text-[var(--color-tron-red,#ff3366)]">{data.labelStats.rejected}</span>
 				</div>
 				<div class="text-[10px] text-[var(--color-tron-text-secondary)]">approved / rejected · {data.labelStats.unlabeled} unlabeled</div>
+				<a href="/cv/label" class="text-[10px] text-[var(--color-tron-cyan)] hover:underline">Label more photos →</a>
 			</div>
 			<div>
 				<div class="text-xs uppercase text-[var(--color-tron-text-secondary)]">Active model</div>
@@ -84,7 +85,11 @@
 				<div class="text-xs uppercase text-[var(--color-tron-text-secondary)]">Phases</div>
 				<div class="flex flex-wrap gap-1 text-xs">
 					{#each data.project.phases as ph (ph)}
-						<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5">{ph}</span>
+						<a
+							href={`/cv/stream?phase=${encodeURIComponent(ph)}&review=reviewed`}
+							class="rounded bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 hover:text-[var(--color-tron-cyan)]"
+							title={`View this phase's labeled photos in the stream`}
+						>{ph}</a>
 					{:else}
 						<span class="text-[10px] text-[var(--color-tron-text-secondary)]">no phases configured</span>
 					{/each}
