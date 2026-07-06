@@ -20,7 +20,8 @@ const DEFAULT_PHASES = [
 	'sealed',
 	'oven_cured',
 	'qaqc_released',
-	'post_run'
+	'post_run',
+	'post_mortem'
 ];
 
 export const load: PageServerLoad = async ({ locals, url }) => {

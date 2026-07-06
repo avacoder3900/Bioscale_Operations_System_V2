@@ -619,9 +619,13 @@
 				cartridgeId = null;
 				cartridgeStatus = null;
 				cartridgePhotoCount = 0;
+				// Offer intake: the operator can create this cartridge and assign
+				// it to an inspect step right here.
+				intakeOffer = code;
 				return null;
 			}
 			const data = await res.json();
+			intakeOffer = null;
 			cartridgeId = data.cartridgeRecordId;
 			cartridgeStatus = data.status ?? null;
 			cartridgePhotoCount = data.photoCount ?? 0;
@@ -821,8 +825,55 @@
 		sessionPhotos = [];
 		retakeInProgress = false;
 		showRetakeDialog = false;
+		intakeOffer = null;
 		scanInput = '';
 		scanInputEl?.focus();
+	}
+
+	// ── Inspect-step intake ─────────────────────────────────────────────────
+	// A scanned barcode that isn't in BIMS (or a locked cartridge at the wrong
+	// status) can be assigned to an inspect step here: creates/re-statuses the
+	// CartridgeRecord so that step's scan-gated flow accepts it, then locks it
+	// for photos and preselects the phase that step expects.
+	const INTAKE_STEPS = [
+		{ value: 'wax', label: 'Wax inspect (→ wax_stored)' },
+		{ value: 'reagent', label: 'Reagent inspect (→ sealed)' },
+		{ value: 'post_mortem', label: 'Post-mortem (→ completed)' }
+	] as const;
+	let intakeOffer = $state<string | null>(null);
+	let intakeStep = $state<'wax' | 'reagent' | 'post_mortem'>('wax');
+	let intakeBusy = $state(false);
+
+	async function submitIntake() {
+		const code = intakeOffer ?? cartridgeId;
+		if (!code || intakeBusy) return;
+		intakeBusy = true;
+		try {
+			const res = await fetch('/api/cv/cartridge-intake', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ cartridgeId: code, inspectStep: intakeStep })
+			});
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				flashBanner('err', body.error || 'Intake failed');
+				return;
+			}
+			cartridgeId = body.cartridgeId;
+			cartridgeStatus = body.status;
+			if (body.created) {
+				cartridgePhotoCount = 0;
+				sessionPhotos = [];
+			}
+			scannedAt = Date.now();
+			intakeOffer = null;
+			if (body.phase && data.phases.includes(body.phase)) phase = body.phase;
+			flashBanner('ok', `${body.cartridgeId} ${body.created ? 'created' : 'assigned'} → ${body.status} — ready for photos at ${body.phase}`);
+		} catch (e) {
+			flashBanner('err', e instanceof Error ? e.message : 'Intake failed');
+		} finally {
+			intakeBusy = false;
+		}
 	}
 
 	function onScanKeydown(e: KeyboardEvent) {
@@ -1032,6 +1083,41 @@
 			<div class="rounded border border-[var(--color-tron-yellow,#facc15)] bg-[rgba(250,204,21,0.08)] p-3 text-sm text-[var(--color-tron-yellow,#facc15)]">
 				<span class="font-semibold">Station {stationDownAt.name} went offline at {new Date(stationDownAt.at).toLocaleTimeString()}.</span>
 				<span class="ml-2 text-[var(--color-tron-text-secondary)]">Pick another station from the dropdown above, or wait for this one to come back online.</span>
+			</div>
+		{/if}
+
+		<!-- Inspect-step intake: unknown barcode → create + assign; locked cartridge → reassign -->
+		{#if intakeOffer || cartridgeId}
+			<div class="rounded-lg border {intakeOffer ? 'border-[var(--color-tron-yellow,#facc15)] bg-[rgba(250,204,21,0.06)]' : 'border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]'} p-3">
+				<div class="flex flex-wrap items-center gap-3">
+					{#if intakeOffer}
+						<span class="text-sm text-[var(--color-tron-yellow,#facc15)]">
+							<span class="font-semibold">{intakeOffer}</span> isn't in BIMS — create it and assign to an inspect step:
+						</span>
+					{:else}
+						<span class="text-xs uppercase text-[var(--color-tron-text-secondary)]">Assign {cartridgeId} to inspect step</span>
+					{/if}
+					<select bind:value={intakeStep} class="tron-input py-1 text-xs" aria-label="Inspect step">
+						{#each INTAKE_STEPS as s (s.value)}
+							<option value={s.value}>{s.label}</option>
+						{/each}
+					</select>
+					<button
+						type="button"
+						onclick={submitIntake}
+						disabled={intakeBusy}
+						class="rounded {intakeOffer ? 'bg-[var(--color-tron-yellow,#facc15)] text-black' : 'border border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)] hover:text-[var(--color-tron-bg-primary)]'} px-3 py-1 text-xs font-semibold disabled:opacity-40"
+					>
+						{intakeBusy ? 'Assigning…' : intakeOffer ? 'Create & assign' : 'Assign'}
+					</button>
+					{#if intakeOffer}
+						<button
+							type="button"
+							onclick={() => (intakeOffer = null)}
+							class="rounded px-2 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-red,#ff3366)]"
+						>dismiss</button>
+					{/if}
+				</div>
 			</div>
 		{/if}
 
