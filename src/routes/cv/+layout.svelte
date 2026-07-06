@@ -34,6 +34,11 @@
 			icon: 'M5 13l4 4L19 7'
 		},
 		{
+			href: '/cv/deployments',
+			label: 'Stage Models',
+			icon: 'M13 10V3L4 14h7v7l9-11h-7z'
+		},
+		{
 			href: '/',
 			label: 'Back to BIMS',
 			icon: 'M11 17l-5-5m0 0l5-5m-5 5h12'
