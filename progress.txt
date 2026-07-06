@@ -3356,3 +3356,7 @@ Source: branch feat/cv-clean-datapath @ commit dcaf85c8
 Retrieve this exact code: git checkout feat/cv-clean-datapath at commit dcaf85c8
   (or: git log feat/cv-clean-datapath --oneline to find it if the branch has since moved on)
 What this deployment is for: end-to-end test of the purged CV data model — label/train/deploy the CVDEMO project through the UI
+Deployment: preview — https://bioscale-operations-system-mongodb-i0pklhtyc-brevitest.vercel.app
+Source: branch feat/cv-clean-datapath @ commit 9fc54ac7
+Retrieve this exact code: git checkout feat/cv-clean-datapath at commit 9fc54ac7
+What this deployment is for: reworked CV dropdown (CV Stations + Image Stream only) on top of the CV data-model purge + CVDEMO seed
