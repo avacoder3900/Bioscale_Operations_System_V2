@@ -646,8 +646,13 @@
 	const FILL_JUMP_MM = 60; // protocol jump_height: travel height above the well top
 	const FILL_DISPENSE_MM = 2; // protocol dispense pos: well.top(-3)+5 = 2mm above top
 	const FILL_RETRACT_MM = 5; // protocol well_prejump_height
-	let fillSpeed = $state(20); // mm/s — Reagent_Filling_GEN7 travel-move speed
-	let fillDwellMs = $state(400); // dwell at the dispense position (real fill delays 0.25s)
+	// The reagent fill's dispense loop (dispense_reagent) uses plain move_to with NO
+	// speed arg → the gantry runs at the pipette's DEFAULT (full) speed. So "match the
+	// protocol" = don't cap the speed at all. The earlier 20 mm/s was the tip-calibrator
+	// limit-switch probe, which is deliberately slow — not the fill.
+	let fillMatchProtocol = $state(true); // default: move at the protocol's own (full) speed
+	let fillSpeed = $state(20); // mm/s cap, applied ONLY when match-protocol is off (watch slowly)
+	let fillDwellMs = $state(250); // dwell at the dispense position (protocol delays 0.25s)
 	let fillMotionRunning = $state(false);
 	let fillStop = false;
 
@@ -674,7 +679,9 @@
 				x: slotOrigin.x + w.x + ax,
 				y: slotOrigin.y + w.y + ay,
 				z: zAbs,
-				speed: fillSpeed,
+				// Match the protocol: its dispense-loop moves run at the default (full) speed,
+				// so only cap when the operator turns match-protocol off to watch slowly.
+				...(fillMatchProtocol ? {} : { speed: fillSpeed }),
 				// Between holes, lift to the jump height (arc) so the tip never drags.
 				...(o.arc ? { minimumZHeight: zAbs } : {}),
 				forceDirect: o.forceDirect
@@ -707,7 +714,7 @@
 				const name = chosen[i];
 				selection = new Set([name]);
 				refWell = name;
-				msg = `Fill motion ${i + 1}/${chosen.length} — ${name} @ ${fillSpeed} mm/s`;
+				msg = `Fill motion ${i + 1}/${chosen.length} — ${name}${fillMatchProtocol ? ' (protocol speed)' : ` @ ${fillSpeed} mm/s`}`;
 				await fillMoveAbs(name, FILL_JUMP_MM, { forceDirect: false, arc: true }); // 1) travel above hole
 				if (fillStop) break;
 				await fillMoveAbs(name, FILL_DISPENSE_MM, { forceDirect: true }); // 2) descend to dispense pos
@@ -716,7 +723,7 @@
 				if (fillStop) break;
 				await fillMoveAbs(name, FILL_RETRACT_MM, { forceDirect: true }); // 4) retract to prejump
 			}
-			if (!fillStop) msg = `Fill motion complete — ${chosen.length} hole(s) at ${fillSpeed} mm/s`;
+			if (!fillStop) msg = `Fill motion complete — ${chosen.length} hole(s)${fillMatchProtocol ? ' at protocol speed' : ` at ${fillSpeed} mm/s`}`;
 		} catch (e) {
 			errMsg = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -1128,10 +1135,13 @@
 						</div>
 						<div class="mt-2 flex flex-wrap items-center gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
 							<span class="opacity-70">Fill:</span>
-							<label>Speed <input type="number" min="1" max="400" step="1" bind:value={fillSpeed} class="w-14 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /> mm/s</label>
+							<label class="flex items-center gap-1"><input type="checkbox" bind:checked={fillMatchProtocol} /> Protocol speed</label>
+							{#if !fillMatchProtocol}
+								<label>Cap <input type="number" min="1" max="400" step="1" bind:value={fillSpeed} class="w-14 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /> mm/s</label>
+							{/if}
 							<label>Dwell <input type="number" min="0" max="5000" step="50" bind:value={fillDwellMs} class="w-16 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /> ms</label>
 						</div>
-						<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)"><strong>Fill motion</strong> mimics a real fill at each selected hole (60mm jump → 2mm-above-top dispense → {fillDwellMs}ms dwell → 5mm retract) at {fillSpeed} mm/s, in fill order — pick any hole(s) as the start.{hasTip ? '' : ' Pick up a tip first to match the real fill height.'}</p>
+						<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)"><strong>Fill motion</strong> mimics a real fill at each selected hole (60mm jump → 2mm-above-top dispense → {fillDwellMs}ms dwell → 5mm retract){fillMatchProtocol ? ' at the protocol’s own full speed' : ` capped to ${fillSpeed} mm/s`}, in fill order — pick any hole(s) as the start.{hasTip ? '' : ' Pick up a tip first to match the real fill height.'}</p>
 					{/if}
 				</div>
 			</section>
