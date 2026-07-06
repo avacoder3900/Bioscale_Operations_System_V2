@@ -1,12 +1,12 @@
 /**
  * Shared inference helpers.
  *
- * - `runInferenceForProject` — runs one project's active model (and shadow if set)
- *   against an image. Creates CvInspection records for each. Fire-and-forget;
+ * - `runInferenceForProject` — runs one project's active model (and shadow if
+ *   set) against an image. Creates a CvInspection per run. Fire-and-forget;
  *   errors are caught and logged, never thrown back to the caller.
  *
- * - `runPhaseInference` — given a captured image's phase, finds every project
- *   that deploys at that phase and runs inference for each.
+ * - `runPhaseInference` — given a captured photo's phase, finds every project
+ *   whose phases[] include it and has an active model, and runs each.
  */
 import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { CvInspection } from '$lib/server/db/models/cv-inspection.js';
@@ -23,45 +23,37 @@ interface InferenceContext {
 
 async function runOne(
 	ctx: InferenceContext,
-	project: any,
-	version: string,
-	modelPath: string,
-	confidenceThreshold: number,
+	projectId: string,
+	modelVersion: string,
 	isShadow: boolean
 ): Promise<void> {
 	const inspectionId = generateId();
-	const triggeredAt = new Date();
 
-	// Insert a queued/running record up front so the operator can see the
-	// inspection is in progress, even if the worker is slow.
+	// Insert the running record up front so operators can see the inspection
+	// is in progress.
 	await CvInspection.create({
 		_id: inspectionId,
 		imageId: ctx.imageId,
 		cartridgeRecordId: ctx.cartridgeRecordId,
 		phase: ctx.phase,
-		projectId: project._id,
-		modelVersion: version,
-		modelPath,
+		projectId,
+		modelVersion,
 		isShadow,
 		status: 'running',
 		triggeredBy: ctx.triggeredBy ?? 'auto-on-capture',
-		triggeredAt,
-		confidenceThreshold
+		triggeredAt: new Date()
 	});
 
 	try {
-		// runInference expects the PROJECT ID (it re-fetches the project to load the
-		// trained classifier weights), not the model path. modelPath/version are
-		// recorded on the CvInspection above for traceability only.
-		const result = await runInference(ctx.imageUrl, project._id, confidenceThreshold);
+		const result = await runInference(ctx.imageUrl, projectId, { modelVersion });
 		await CvInspection.updateOne(
 			{ _id: inspectionId },
 			{ $set: {
 				status: 'completed',
 				result: result.result,
+				passProbability: result.passProbability,
 				confidenceScore: result.confidence,
-				anomalyScore: result.anomaly_score,
-				defects: result.defects ?? [],
+				threshold: result.threshold,
 				processingTimeMs: result.processing_time_ms,
 				completedAt: new Date()
 			}}
@@ -70,45 +62,27 @@ async function runOne(
 		const msg = err instanceof Error ? err.message : String(err);
 		await CvInspection.updateOne(
 			{ _id: inspectionId },
-			{ $set: {
-				status: 'failed',
-				errorMessage: msg,
-				completedAt: new Date()
-			}}
+			{ $set: { status: 'failed', errorMessage: msg, completedAt: new Date() } }
 		);
-		console.error(`[phase-inference] project=${project._id} version=${version} image=${ctx.imageId}:`, msg);
+		console.error(`[phase-inference] project=${projectId} version=${modelVersion} image=${ctx.imageId}:`, msg);
 	}
 }
 
 export async function runInferenceForProject(ctx: InferenceContext, project: any): Promise<void> {
 	if (!project.activeModelVersion) return; // nothing to run
 
-	const activeModel = (project.trainedModels ?? []).find((m: any) => m.version === project.activeModelVersion);
-	if (!activeModel) {
-		console.error(`[phase-inference] project=${project._id} activeModelVersion=${project.activeModelVersion} not found in trainedModels`);
-		return;
-	}
+	await runOne(ctx, project._id, project.activeModelVersion, false);
 
-	const threshold = activeModel.confidenceThreshold ?? 0.5;
-
-	// Active inference
-	await runOne(ctx, project, activeModel.version, activeModel.modelPath, threshold, false);
-
-	// Shadow inference (if configured)
 	if (project.shadowModelVersion && project.shadowModelVersion !== project.activeModelVersion) {
-		const shadowModel = (project.trainedModels ?? []).find((m: any) => m.version === project.shadowModelVersion);
-		if (shadowModel) {
-			const shadowThreshold = shadowModel.confidenceThreshold ?? 0.5;
-			await runOne(ctx, project, shadowModel.version, shadowModel.modelPath, shadowThreshold, true);
-		}
+		await runOne(ctx, project._id, project.shadowModelVersion, true);
 	}
 }
 
 export async function runPhaseInference(ctx: InferenceContext): Promise<void> {
 	const projects = await CvProject.find({
-		deployAtPhases: ctx.phase,
+		phases: ctx.phase,
 		activeModelVersion: { $ne: null }
-	}).lean() as any[];
+	}).select('_id activeModelVersion shadowModelVersion').lean() as any[];
 
 	if (projects.length === 0) return;
 

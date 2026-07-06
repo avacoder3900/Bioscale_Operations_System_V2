@@ -6,13 +6,15 @@
  *
  * Backwards-compatible contract for the old lab scripts:
  *  - Still accepts the same multipart fields they send today
- *  - `projectId` is silently ignored (refactor moved CvImage off projects)
+ *  - `projectId` is silently ignored (CvImage lives off projects now)
  *  - `qrCode` is the cartridgeRecordId
- *  - `phase` is required
+ *  - `phase` is required (defaults to wax_filled for the legacy scripts)
  *
  * New behavior:
  *  - Rejects with 400 if the QR doesn't match an existing CartridgeRecord.
  *    Induction is gone — the scripts can no longer auto-create cartridges.
+ *  - CvImage row is technical/derived only; cartridge_records.photos[] carries
+ *    the full photo truth (R2 pointer + capture metadata + QC placeholder).
  */
 import { json } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
@@ -70,22 +72,47 @@ export const POST: RequestHandler = async ({ request }) => {
 	const publicUrl = getR2Url(key);
 
 	const capturedAt = new Date();
-	const image = await CvImage.create({
+	// Technical row only — the photo truth (R2 pointer, capture metadata, QC)
+	// lives on cartridge_records.photos[] below.
+	await CvImage.create({
 		_id: id,
+		cartridgeRecordId: qrCode,
+		phase,
 		filename,
-		filePath: key,
 		fileSizeBytes: buffer.length,
 		cameraIndex: cameraIndexRaw ? Number.parseInt(cameraIndexRaw, 10) : undefined,
-		capturedAt,
-		imageUrl: publicUrl,
-		processingMode: processingMode === 'raw' || processingMode === 'full' ? processingMode : undefined,
-		cartridgeTag: { cartridgeRecordId: qrCode, phase },
-		cartridgeImageNumber
+		processingMode: processingMode === 'raw' || processingMode === 'full' ? processingMode : undefined
 	});
 
+	// A batch of legacy cartridges have a malformed (non-array) `photos` field,
+	// so a plain $push throws. Use a pipeline update to coerce photos to [] when
+	// it isn't an array, then append — atomic and self-healing. $literal keeps
+	// the entry stored verbatim (so a '$' or '.' in any value isn't parsed).
+	const photoEntry = {
+		imageId: id,
+		phase,
+		capturedAt,
+		r2Key: key,
+		r2Url: publicUrl,
+		cartridgeImageNumber,
+		qcLabel: null
+	};
 	await CartridgeRecord.updateOne(
 		{ _id: qrCode },
-		{ $push: { photos: { imageId: id, phase, capturedAt, r2Key: key, r2Url: publicUrl, cartridgeImageNumber } } }
+		[
+			{
+				$set: {
+					photos: {
+						$concatArrays: [
+							{ $cond: [{ $isArray: '$photos' }, '$photos', []] },
+							{ $literal: [photoEntry] }
+						]
+					}
+				}
+			}
+		],
+		// Mongoose 9 requires opting in to array (aggregation-pipeline) updates.
+		{ updatePipeline: true }
 	);
 
 	await AuditLog.create({

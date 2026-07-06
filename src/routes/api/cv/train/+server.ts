@@ -1,45 +1,38 @@
 import { json, error } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CvProject } from '$lib/server/db/models/cv-project.js';
-import { CvImage } from '$lib/server/db/models/cv-image.js';
-import { dispatchWorkflow } from '$lib/server/services/github-dispatch';
+import { triggerTraining, getTrainingStatus } from '$lib/server/services/cv-bridge.js';
 import type { RequestHandler } from './$types';
 
 /**
- * Start training. BIMS does NOT train here (Vercel can't run torch); it fires a
- * GitHub Actions `repository_dispatch`, which runs an ephemeral runner that
- * trains, uploads model.onnx to R2, and calls /api/cv/train-complete when done.
+ * POST /api/cv/train — train the project's classifier in-process (seconds,
+ * no external service). Training data comes from cartridge_records.photos[]
+ * entries whose phase is in the project's phases[] and whose qcLabel is set.
+ * The new model is appended to trainedModels[] and activated.
  */
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
 	await connectDB();
 
+	const body = await request.json();
+	const { projectId } = body;
+	if (!projectId) return json({ error: 'projectId is required' }, { status: 400 });
+
+	const project = (await CvProject.findById(projectId).select('_id').lean()) as any;
+	if (!project) return json({ error: 'Project not found' }, { status: 404 });
+
 	try {
-		const body = await request.json();
-		const { projectId } = body;
-		if (!projectId) return json({ error: 'projectId is required' }, { status: 400 });
-
-		const project = (await CvProject.findById(projectId).lean()) as any;
-		if (!project) return json({ error: 'Project not found' }, { status: 404 });
-
-		// Require enough labeled images before spending a runner.
-		const labeledCount = await CvImage.countDocuments({ projectId, label: { $ne: null } });
-		if (labeledCount < 5) {
-			return json({ error: 'Need at least 5 labeled images to train' }, { status: 400 });
-		}
-
-		await dispatchWorkflow('train-cv-model', { projectId });
-		await CvProject.findByIdAndUpdate(projectId, { modelStatus: 'training' });
-
-		return json({
-			data: { projectId, status: 'training', labeledCount, message: 'Training dispatched' }
+		const result = await triggerTraining(projectId, {
+			_id: locals.user._id,
+			username: locals.user.username
 		});
+		return json({ data: result });
 	} catch (err: any) {
-		return json({ error: err.message }, { status: 500 });
+		return json({ error: err.message }, { status: 400 });
 	}
 };
 
-/** Poll training state. Source of truth is CvProject.modelStatus (set by the callback). */
+/** Poll training state / active-model metrics. */
 export const GET: RequestHandler = async ({ url, locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
 	await connectDB();
@@ -47,17 +40,10 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	const projectId = url.searchParams.get('projectId');
 	if (!projectId) return json({ error: 'projectId is required' }, { status: 400 });
 
-	const project = (await CvProject.findById(projectId)
-		.select('modelStatus modelVersion updatedAt')
-		.lean()) as any;
-	if (!project) return json({ error: 'Project not found' }, { status: 404 });
-
-	return json({
-		data: {
-			projectId,
-			modelStatus: project.modelStatus,
-			modelVersion: project.modelVersion,
-			updatedAt: project.updatedAt
-		}
-	});
+	try {
+		const status = await getTrainingStatus(projectId);
+		return json({ data: status });
+	} catch (err: any) {
+		return json({ error: err.message }, { status: 404 });
+	}
 };

@@ -20,7 +20,6 @@
 	// Selection
 	let selected = $state<Set<string>>(new Set());
 	let submitting = $state(false);
-	let addToProjectId = $state<string>('');
 
 	function applyFilters() {
 		const params = new URLSearchParams();
@@ -231,44 +230,11 @@
 						Clear labels
 					</button>
 				</form>
-
-				{#if data.projects.length > 0}
-					<form
-						method="POST"
-						action="?/addToProject"
-						class="mt-2 flex flex-wrap items-center gap-2"
-						use:enhance={() => {
-							submitting = true;
-							return async ({ update }) => {
-								await update();
-								submitting = false;
-							};
-						}}
-					>
-						{#each [...selected] as id (id)}
-							<input type="hidden" name="imageId" value={id} />
-						{/each}
-						<label for="add-proj" class="text-xs text-[var(--color-tron-text-secondary)]">Add {selected.size} to:</label>
-						<select id="add-proj" name="projectId" bind:value={addToProjectId} class="tron-input text-xs">
-							<option value="">— pick a project —</option>
-							{#each data.projects as p (p.id)}
-								<option value={p.id}>{p.name} ({p.memberCount})</option>
-							{/each}
-						</select>
-						<button type="submit" disabled={submitting || !addToProjectId} class="rounded bg-[var(--color-tron-cyan)] px-3 py-1.5 text-xs font-medium text-[var(--color-tron-bg-primary)] disabled:opacity-40">
-							Add to project
-						</button>
-					</form>
-				{/if}
 			{/if}
 
 			{#if form?.success && form.updated}
 				<div class="mt-2 text-xs text-[var(--color-tron-green,#39ff14)]">
 					Updated {form.updated} images → {form.label ?? 'unlabeled'}.
-				</div>
-			{:else if form?.success && form.addedToProject}
-				<div class="mt-2 text-xs text-[var(--color-tron-green,#39ff14)]">
-					Added {form.count} image{form.count === 1 ? '' : 's'} to project.
 				</div>
 			{/if}
 		</div>

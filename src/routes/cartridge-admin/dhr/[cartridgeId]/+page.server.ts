@@ -1,6 +1,6 @@
 import { error } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, CartridgeRecord, CvImage, CvInspection, InventoryTransaction, ReceivingLot, ManufacturingSettings } from '$lib/server/db';
+import { connectDB, CartridgeRecord, CvInspection, InventoryTransaction, ReceivingLot, ManufacturingSettings } from '$lib/server/db';
 import { getR2Url } from '$lib/server/services/r2';
 import { getCartridgeTimings } from '$lib/utils/cartridge-timings';
 import type { PageServerLoad } from './$types';
@@ -12,11 +12,9 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const cartridge = await CartridgeRecord.findById(params.cartridgeId).lean() as any;
 	if (!cartridge) throw error(404, 'Cartridge not found');
 
-	// Parallel queries
-	const [images, inspections, transactions, settingsDoc] = await Promise.all([
-		CvImage.find({ 'cartridgeTag.cartridgeRecordId': params.cartridgeId })
-			.sort({ capturedAt: 1 })
-			.lean(),
+	// Parallel queries. Photos come from cartridge.photos[] (already loaded above);
+	// only machine verdicts + transactions + settings need their own reads.
+	const [inspections, transactions, settingsDoc] = await Promise.all([
 		CvInspection.find({ cartridgeRecordId: params.cartridgeId })
 			.sort({ completedAt: -1 })
 			.lean(),
@@ -34,38 +32,35 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		sealMin: settings?.reagentFilling?.maxTimeBeforeSealMin
 	});
 
-	// Resolve photo URLs through the Cloudflare Worker proxy. Direct R2 endpoint
-	// is unreachable from browsers (TLS) so we use the same path the recorder
-	// already writes: imageUrl (already worker-routed) → getR2Url(filePath).
-	const photos = (images as any[]).map((img) => {
-		const r2Key = img.filePath
-			|| (cartridge.photos || []).find((p: any) => p.imageId === img._id)?.r2Key;
-		const url = img.imageUrl || (r2Key ? getR2Url(r2Key) : null);
-		const thumbnailUrl = img.thumbnailPath ? getR2Url(img.thumbnailPath) : url;
+	// Photos come straight from the cartridge record of truth. R2 pointers live
+	// on each entry (r2Url already worker-routed → getR2Url(r2Key) fallback).
+	const photos = ([...(cartridge.photos || [])] as any[])
+		.sort((a, b) => new Date(a.capturedAt || 0).getTime() - new Date(b.capturedAt || 0).getTime())
+		.map((p) => {
+			const url = p.r2Url || (p.r2Key ? getR2Url(p.r2Key) : null);
+			const inspection = (inspections as any[]).find(i => i.imageId === p.imageId);
 
-		const inspection = (inspections as any[]).find(i => i.imageId === img._id);
-
-		return {
-			imageId: img._id,
-			cartridgeImageNumber: img.cartridgeImageNumber ?? null,
-			cartridgeRecordId: img.cartridgeTag?.cartridgeRecordId ?? params.cartridgeId,
-			phase: img.cartridgeTag?.phase || 'untagged',
-			labels: img.cartridgeTag?.labels || [],
-			notes: img.cartridgeTag?.notes || '',
-			// Human QC verdict — the pass/fail shown in the image stream (approved/rejected/null).
-			qcLabel: img.qcLabel ?? null,
-			capturedAt: img.capturedAt || img.createdAt,
-			capturedByUsername: img.capturedBy?.username ?? null,
-			url,
-			thumbnailUrl,
-			// Auto-classifier verdict, separate from the human qcLabel above.
-			inspectionResult: inspection?.result || null,
-			inspectionStatus: inspection?.status || null,
-			confidenceScore: inspection?.confidenceScore ?? null,
-			defects: inspection?.defects || [],
-			processingTimeMs: inspection?.processingTimeMs ?? null
-		};
-	});
+			return {
+				imageId: p.imageId,
+				cartridgeImageNumber: p.cartridgeImageNumber ?? null,
+				cartridgeRecordId: params.cartridgeId,
+				phase: p.phase || 'untagged',
+				labels: p.labels || [],
+				notes: p.notes || '',
+				// Human QC verdict — the pass/fail shown in the image stream (approved/rejected/null).
+				qcLabel: p.qcLabel ?? null,
+				capturedAt: p.capturedAt || null,
+				capturedByUsername: p.capturedBy?.username ?? null,
+				url,
+				thumbnailUrl: url,
+				// Auto-classifier verdict, separate from the human qcLabel above.
+				inspectionResult: inspection?.result || null,
+				inspectionStatus: inspection?.status || null,
+				confidenceScore: inspection?.confidenceScore ?? null,
+				defects: [],
+				processingTimeMs: inspection?.processingTimeMs ?? null
+			};
+		});
 
 	// Build timeline phases
 	const timeline: any[] = [];
@@ -182,7 +177,6 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 				phase: i.phase,
 				result: i.result,
 				confidenceScore: i.confidenceScore,
-				defects: i.defects || [],
 				completedAt: i.completedAt
 			}))
 		)),

@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import { requireAgentApiKey } from '$lib/server/api-auth';
-import { connectDB, CartridgeRecord, CvImage } from '$lib/server/db';
+import { connectDB, CartridgeRecord } from '$lib/server/db';
 import { getR2Url } from '$lib/server/services/r2';
 import type { RequestHandler } from './$types';
 
@@ -12,10 +12,10 @@ import type { RequestHandler } from './$types';
  * captured photo grouped by the manufacturing/QC STATE (phase) it was taken
  * in, plus the cartridge's tags (union of per-image labels) and operator notes.
  *
- * Photo sources are merged: the embedded CartridgeRecord.photos[] (authoritative
- * by barcode, carries the stored public r2Url) and the cv_images collection
- * (richer — carries labels/notes/qcLabel/thumbnail). Both are keyed to the same
- * cartridge; we dedupe by imageId / cartridgeImageNumber.
+ * Photos come straight from the embedded CartridgeRecord.photos[] — the single
+ * record of truth for every photo (R2 pointer, phase, capture metadata, qcLabel,
+ * labels, notes). cv_images is no longer consulted here: it holds only derived
+ * technical data (embeddings/dimensions), none of which this endpoint emits.
  *
  * Guarded by AGENT_API_KEY (x-api-key / x-agent-api-key / Bearer). The returned
  * r2Url/thumbnailUrl values are PUBLIC Cloudflare Worker URLs — the caller can
@@ -50,63 +50,30 @@ export const GET: RequestHandler = async ({ request, params }) => {
 
 	const barcode = params.barcode;
 
-	const [cartridge, cvImages] = await Promise.all([
-		CartridgeRecord.findById(barcode).select('photos notes').lean() as Promise<any>,
-		CvImage.find({ 'cartridgeTag.cartridgeRecordId': barcode }).lean() as Promise<any[]>
-	]);
+	const cartridge = await CartridgeRecord.findById(barcode).select('photos notes').lean() as any;
 
-	if (!cartridge && (!cvImages || cvImages.length === 0)) {
+	if (!cartridge) {
 		return json({ barcode, found: false, photosByState: {}, tags: [], notes: [] });
 	}
 
-	// Index cv_images so we can enrich embedded photos and detect cv-only images.
-	const cvById = new Map<string, any>();
-	const cvByNum = new Map<string, any>();
-	for (const cv of cvImages ?? []) {
-		if (cv._id) cvById.set(String(cv._id), cv);
-		if (cv.cartridgeImageNumber) cvByNum.set(String(cv.cartridgeImageNumber), cv);
-	}
-
-	const usedCv = new Set<string>();
 	const photos: OutPhoto[] = [];
 
-	const buildFromCv = (cv: any, phaseHint?: string, imageId?: string): OutPhoto => ({
-		imageId: imageId ?? String(cv._id),
-		phase: phaseHint || cv?.cartridgeTag?.phase || 'unknown',
-		capturedAt: cv?.capturedAt ? new Date(cv.capturedAt).toISOString() : null,
-		r2Url: toUrl(cv?.imageUrl) ?? toUrl(cv?.processedPath) ?? toUrl(cv?.filePath) ?? null,
-		thumbnailUrl: toUrl(cv?.thumbnailPath),
-		cartridgeImageNumber: cv?.cartridgeImageNumber ?? undefined,
-		qcLabel: cv?.qcLabel ?? null,
-		labels: cv?.cartridgeTag?.labels ?? [],
-		note: cv?.cartridgeTag?.notes || undefined
-	});
-
-	// 1. Embedded photos[] first — they carry the authoritative stored r2Url.
-	for (const p of cartridge?.photos ?? []) {
-		const cv =
-			(p.imageId && cvById.get(String(p.imageId))) ||
-			(p.cartridgeImageNumber && cvByNum.get(String(p.cartridgeImageNumber))) ||
-			null;
-		if (cv?._id) usedCv.add(String(cv._id));
-
+	// Every photo entry is now complete truth — no cv_images merge needed.
+	for (const p of cartridge.photos ?? []) {
+		const r2Url = toUrl(p.r2Url) ?? toUrl(p.r2Key) ?? null;
 		photos.push({
-			imageId: String(p.imageId ?? cv?._id ?? p.cartridgeImageNumber ?? p.r2Key),
-			phase: p.phase || cv?.cartridgeTag?.phase || 'unknown',
-			capturedAt: p.capturedAt ? new Date(p.capturedAt).toISOString() : (cv?.capturedAt ? new Date(cv.capturedAt).toISOString() : null),
-			r2Url: toUrl(p.r2Url) ?? toUrl(p.r2Key) ?? toUrl(cv?.imageUrl) ?? null,
-			thumbnailUrl: toUrl(cv?.thumbnailPath),
-			cartridgeImageNumber: p.cartridgeImageNumber ?? cv?.cartridgeImageNumber ?? undefined,
-			qcLabel: cv?.qcLabel ?? null,
-			labels: cv?.cartridgeTag?.labels ?? [],
-			note: cv?.cartridgeTag?.notes || undefined
+			imageId: String(p.imageId ?? p.cartridgeImageNumber ?? p.r2Key),
+			phase: p.phase || 'unknown',
+			capturedAt: p.capturedAt ? new Date(p.capturedAt).toISOString() : null,
+			r2Url,
+			// Thumbnails no longer exist (cv_images dropped thumbnailPath); fall back
+			// to the full-resolution r2Url so the key stays populated for consumers.
+			thumbnailUrl: r2Url ?? undefined,
+			cartridgeImageNumber: p.cartridgeImageNumber ?? undefined,
+			qcLabel: p.qcLabel ?? null,
+			labels: p.labels ?? [],
+			note: p.notes || undefined
 		});
-	}
-
-	// 2. cv_images not already represented by an embedded photo.
-	for (const cv of cvImages ?? []) {
-		if (usedCv.has(String(cv._id))) continue;
-		photos.push(buildFromCv(cv));
 	}
 
 	// Group by phase; sort each group oldest→newest.

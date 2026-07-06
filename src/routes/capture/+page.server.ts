@@ -28,7 +28,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	await connectDB();
 
 	// Pull the phases we actually have data for, union with the standard list.
-	const distinctPhases = await CvImage.distinct('cartridgeTag.phase');
+	const distinctPhases = await CvImage.distinct('phase');
 	const phases = Array.from(new Set([...DEFAULT_PHASES, ...(distinctPhases as string[]).filter(Boolean)])).sort();
 
 	// Premade failure-label pick-list, for quick-tagging a photo right after capture.
@@ -76,13 +76,13 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	} | null = null;
 	if (requestedProjectId) {
 		const proj = await CvProject.findById(requestedProjectId)
-			.select('_id name deployAtPhases activeModelVersion')
+			.select('_id name phases activeModelVersion')
 			.lean() as any;
 		if (proj) {
 			projectContext = {
 				id: proj._id,
 				name: proj.name ?? '',
-				deployAtPhases: proj.deployAtPhases ?? [],
+				deployAtPhases: proj.phases ?? [],
 				activeModelVersion: proj.activeModelVersion ?? null
 			};
 		}
@@ -93,13 +93,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// selected phase has any model wired up. Empty array for a phase means
 	// captures at that phase will write CvImage rows but no CvInspection rows.
 	const allDeployed = await CvProject.find({
-		activeModelVersion: { $ne: null },
-		deployAtPhases: { $exists: true, $not: { $size: 0 } }
-	}).select('_id name activeModelVersion deployAtPhases').lean() as any[];
+		activeModelVersion: { $ne: null }
+	}).select('_id name activeModelVersion phases').lean() as any[];
 
 	const deploymentsByPhase: Record<string, Array<{ id: string; name: string; version: string }>> = {};
 	for (const p of allDeployed) {
-		for (const ph of p.deployAtPhases ?? []) {
+		for (const ph of p.phases ?? []) {
 			(deploymentsByPhase[ph] ??= []).push({
 				id: p._id,
 				name: p.name ?? '(unnamed project)',

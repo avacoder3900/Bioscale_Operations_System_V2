@@ -707,7 +707,7 @@
 		{#if !data.modelDeployed}
 			<div class="rounded border border-[var(--color-tron-yellow,#facc15)] bg-[rgba(250,204,21,0.08)] p-3 text-sm text-[var(--color-tron-yellow,#facc15)]">
 				<span class="font-semibold">No model is deployed at the wax_filled phase — captures will save without inference.</span>
-				<span class="ml-2 text-[var(--color-tron-text-secondary)]">Promote a model and add "wax_filled" to deployAtPhases under <a href="/cv/projects" class="text-[var(--color-tron-cyan)] hover:underline">/cv/projects</a> → Deployment.</span>
+				<span class="ml-2 text-[var(--color-tron-text-secondary)]">Promote a model and add "wax_filled" to the project's phases under <a href="/cv/projects" class="text-[var(--color-tron-cyan)] hover:underline">/cv/projects</a> → Deployment.</span>
 			</div>
 		{:else}
 			<div class="rounded border border-[var(--color-tron-green,#39ff14)] bg-[rgba(57,255,20,0.05)] p-2 text-xs">

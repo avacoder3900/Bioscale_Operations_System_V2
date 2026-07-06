@@ -11,7 +11,6 @@
  */
 import { redirect } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
-import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
 import { FailureLabel } from '$lib/server/db/models/failure-label.js';
 import { getR2Url } from '$lib/server/services/r2';
@@ -39,79 +38,94 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	// Highlight sub-filter: '' (any) | 'yes' (has burned-in boxes) | 'no'.
 	const highlightedParam = url.searchParams.get('highlighted') || '';
 	const highlighted = ['yes', 'no'].includes(highlightedParam) ? highlightedParam : '';
-	// arm/experiment live on CartridgeRecord, not CvImage — resolved to a
-	// cartridge-id allowlist below. tag and notesSearch are direct CvImage
-	// fields (cartridgeTag.labels / cartridgeTag.notes).
+	// arm/experiment are cartridge-level fields (matched pre-unwind); tag and
+	// notesSearch are photo-level (photos.labels / photos.notes, post-unwind).
 	const arm = url.searchParams.get('arm') || '';
 	const experiment = url.searchParams.get('experiment') || '';
 	const tag = url.searchParams.get('tag') || '';
 	const notesSearch = url.searchParams.get('notes') || '';
 	const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10));
 
-	// Base filter — everything except the review/verdict state. Used both for the
-	// active query and for the per-tab counts so the badges stay in sync.
-	const baseFilter: Record<string, any> = {};
-	if (phase) baseFilter['cartridgeTag.phase'] = phase;
-	if (tag) baseFilter['cartridgeTag.labels'] = tag;
+	// Photos are now sourced directly from cartridge_records.photos[] (the record
+	// of truth), not cv_images. Filters split into cartridge-level (pre-unwind)
+	// and photo-level (post-unwind) matches.
+	const cartMatch: Record<string, any> = {};
+	if (cartridgeId) cartMatch._id = { $regex: cartridgeId, $options: 'i' };
+	if (arm) cartMatch.arm = arm;
+	if (experiment) cartMatch.experiment = experiment;
+
+	// Base photo-level filter — everything except the review/verdict state. Used
+	// both for the active query and for the per-tab counts so badges stay in sync.
+	const basePhotoMatch: Record<string, any> = {};
+	if (phase) basePhotoMatch['photos.phase'] = phase;
+	if (tag) basePhotoMatch['photos.labels'] = tag;
 	if (notesSearch) {
-		baseFilter['cartridgeTag.notes'] = { $regex: escapeRegExp(notesSearch), $options: 'i' };
+		basePhotoMatch['photos.notes'] = { $regex: escapeRegExp(notesSearch), $options: 'i' };
 	}
 	if (fromDate || toDate) {
-		baseFilter.capturedAt = {};
-		if (fromDate) baseFilter.capturedAt.$gte = new Date(fromDate);
+		basePhotoMatch['photos.capturedAt'] = {};
+		if (fromDate) basePhotoMatch['photos.capturedAt'].$gte = new Date(fromDate);
 		if (toDate) {
 			// Make `to` inclusive by setting it to end-of-day.
 			const end = new Date(toDate);
 			end.setHours(23, 59, 59, 999);
-			baseFilter.capturedAt.$lte = end;
+			basePhotoMatch['photos.capturedAt'].$lte = end;
 		}
 	}
-	// A photo is "highlighted" once boxes have been burned in (metadata.highlight set).
-	if (highlighted === 'yes') baseFilter['metadata.highlight'] = { $exists: true };
-	else if (highlighted === 'no') baseFilter['metadata.highlight'] = { $exists: false };
+	// A photo is "highlighted" once region boxes have been drawn (annotations non-empty).
+	if (highlighted === 'yes') basePhotoMatch['photos.annotations.0'] = { $exists: true };
+	else if (highlighted === 'no') basePhotoMatch['photos.annotations.0'] = { $exists: false };
 
-	// arm/experiment resolve via CartridgeRecord to a cartridge-id allowlist;
-	// cartridgeId (partial-match search) narrows the same field with a regex, so
-	// both are combined into one $and clause rather than letting one overwrite
-	// the other.
-	const cartridgeIdClauses: any[] = [];
-	if (cartridgeId) {
-		cartridgeIdClauses.push({ 'cartridgeTag.cartridgeRecordId': { $regex: cartridgeId, $options: 'i' } });
-	}
-	if (arm || experiment) {
-		const cartQuery: Record<string, any> = {};
-		if (arm) cartQuery.arm = arm;
-		if (experiment) cartQuery.experiment = experiment;
-		const matchingCartIds = await CartridgeRecord.distinct('_id', cartQuery);
-		cartridgeIdClauses.push({ 'cartridgeTag.cartridgeRecordId': { $in: matchingCartIds } });
-	}
-	if (cartridgeIdClauses.length === 1) {
-		Object.assign(baseFilter, cartridgeIdClauses[0]);
-	} else if (cartridgeIdClauses.length > 1) {
-		baseFilter.$and = cartridgeIdClauses;
-	}
+	// Assemble the unwound pipeline for a given extra photo-match (review clause
+	// or a tab-count clause). cartMatch runs before unwind to prune whole carts.
+	const buildPipeline = (extra: Record<string, any>) => {
+		const stages: any[] = [];
+		if (Object.keys(cartMatch).length) stages.push({ $match: cartMatch });
+		stages.push({ $unwind: '$photos' });
+		const pm = { ...basePhotoMatch, ...extra };
+		if (Object.keys(pm).length) stages.push({ $match: pm });
+		return stages;
+	};
 
-	// Layer the review-tab + verdict conditions on top of the base filter.
-	const filter: Record<string, any> = { ...baseFilter };
+	// Review-tab + verdict clause layered on top of the base photo match.
+	const reviewClause: Record<string, any> = {};
 	if (review === 'unreviewed') {
-		filter.qcLabel = null;
+		reviewClause['photos.qcLabel'] = null;
 	} else if (review === 'reviewed') {
-		filter.qcLabel = verdict === 'approved' || verdict === 'rejected' ? verdict : { $ne: null };
+		reviewClause['photos.qcLabel'] =
+			verdict === 'approved' || verdict === 'rejected' ? verdict : { $ne: null };
 	}
 
-	const [imagesRaw, total, distinctPhases, unreviewedCount, reviewedCount, armOptionsRaw, experimentOptionsRaw, failureLabelsRaw] = await Promise.all([
-		CvImage.find(filter)
-			.sort({ capturedAt: -1 })
-			.skip((page - 1) * PAGE_SIZE)
-			.limit(PAGE_SIZE)
-			.select('_id cartridgeImageNumber cartridgeTag filePath imageUrl thumbnailPath qcLabel capturedAt capturedBy fileSizeBytes metadata.highlight')
-			.lean(),
-		CvImage.countDocuments(filter),
+	const [imagesRaw, totalAgg, distinctPhases, unreviewedAgg, reviewedAgg, armOptionsRaw, experimentOptionsRaw, failureLabelsRaw] = await Promise.all([
+		CartridgeRecord.aggregate([
+			...buildPipeline(reviewClause),
+			{ $sort: { 'photos.capturedAt': -1 } },
+			{ $skip: (page - 1) * PAGE_SIZE },
+			{ $limit: PAGE_SIZE },
+			{
+				$project: {
+					_id: 0,
+					imageId: '$photos.imageId',
+					cartridgeImageNumber: '$photos.cartridgeImageNumber',
+					cartridgeRecordId: '$_id',
+					phase: '$photos.phase',
+					labels: '$photos.labels',
+					notes: '$photos.notes',
+					qcLabel: '$photos.qcLabel',
+					r2Url: '$photos.r2Url',
+					r2Key: '$photos.r2Key',
+					capturedAt: '$photos.capturedAt',
+					capturedByUsername: '$photos.capturedBy.username',
+					annotationCount: { $size: { $ifNull: ['$photos.annotations', []] } }
+				}
+			}
+		]),
+		CartridgeRecord.aggregate([...buildPipeline(reviewClause), { $count: 'n' }]),
 		// Phases available in the data — drives the filter dropdown
-		CvImage.distinct('cartridgeTag.phase'),
+		CartridgeRecord.distinct('photos.phase'),
 		// Tab badges — respect the active base filters but not the review tab itself.
-		CvImage.countDocuments({ ...baseFilter, qcLabel: null }),
-		CvImage.countDocuments({ ...baseFilter, qcLabel: { $ne: null } }),
+		CartridgeRecord.aggregate([...buildPipeline({ 'photos.qcLabel': null }), { $count: 'n' }]),
+		CartridgeRecord.aggregate([...buildPipeline({ 'photos.qcLabel': { $ne: null } }), { $count: 'n' }]),
 		CartridgeRecord.distinct('arm', { arm: { $nin: [null, ''] } }),
 		CartridgeRecord.distinct('experiment', { experiment: { $nin: [null, ''] } }),
 		// The premade failure-label pick-list (Label Creation / Manage tab + tag
@@ -119,25 +133,31 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		FailureLabel.find().sort({ text: 1 }).lean()
 	]);
 
+	const total = (totalAgg as any[])[0]?.n ?? 0;
+	const unreviewedCount = (unreviewedAgg as any[])[0]?.n ?? 0;
+	const reviewedCount = (reviewedAgg as any[])[0]?.n ?? 0;
 	const armOptions = (armOptionsRaw as string[]).sort((a, b) => a.localeCompare(b));
 	const experimentOptions = (experimentOptionsRaw as string[]).sort((a, b) => a.localeCompare(b));
 	const failureLabels = (failureLabelsRaw as any[]).map(l => ({ id: l._id, text: l.text }));
 
-	const images = (imagesRaw as any[]).map(img => ({
-		id: img._id,
-		cartridgeImageNumber: img.cartridgeImageNumber ?? null,
-		cartridgeRecordId: img.cartridgeTag?.cartridgeRecordId ?? null,
-		phase: img.cartridgeTag?.phase ?? null,
-		labels: img.cartridgeTag?.labels ?? [],
-		notes: img.cartridgeTag?.notes ?? '',
-		qcLabel: img.qcLabel ?? null,
-		url: img.imageUrl || (img.filePath ? getR2Url(img.filePath) : null),
-		thumbnailUrl: img.thumbnailPath ? getR2Url(img.thumbnailPath) : (img.imageUrl || (img.filePath ? getR2Url(img.filePath) : null)),
-		capturedAt: img.capturedAt ?? null,
-		capturedByUsername: img.capturedBy?.username ?? null,
-		fileSizeBytes: img.fileSizeBytes ?? null,
-		highlighted: Boolean(img.metadata?.highlight)
-	}));
+	const images = (imagesRaw as any[]).map(p => {
+		const url = p.r2Url || (p.r2Key ? getR2Url(p.r2Key) : null);
+		return {
+			id: p.imageId,
+			cartridgeImageNumber: p.cartridgeImageNumber ?? null,
+			cartridgeRecordId: p.cartridgeRecordId ?? null,
+			phase: p.phase ?? null,
+			labels: p.labels ?? [],
+			notes: p.notes ?? '',
+			qcLabel: p.qcLabel ?? null,
+			url,
+			thumbnailUrl: url,
+			capturedAt: p.capturedAt ?? null,
+			capturedByUsername: p.capturedByUsername ?? null,
+			fileSizeBytes: null,
+			highlighted: (p.annotationCount ?? 0) > 0
+		};
+	});
 
 	const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 

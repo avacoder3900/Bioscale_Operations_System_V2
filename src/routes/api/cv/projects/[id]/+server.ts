@@ -1,12 +1,11 @@
 /**
  * GET    /api/cv/projects/[id]    — full project doc
- * PATCH  /api/cv/projects/[id]    — partial update (name, description,
- *                                    members, composedOf, isLiveComposition,
- *                                    deployAtPhases, activeModelVersion,
- *                                    shadowModelVersion)
- * DELETE /api/cv/projects/[id]    — delete the project doc only.
- *                                    Images are NOT touched — they live free
- *                                    of project membership after the refactor.
+ * PATCH  /api/cv/projects/[id]    — partial update (name, description, phases,
+ *                                    confidenceThreshold, activeModelVersion,
+ *                                    shadowModelVersion, captureSettings)
+ * DELETE /api/cv/projects/[id]    — delete the project doc only. Photos and
+ *                                    inspections are NOT touched — they live on
+ *                                    cartridge_records / cv_inspections.
  */
 import { json, error } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
@@ -16,12 +15,8 @@ import type { RequestHandler } from './$types';
 const EDITABLE_FIELDS = [
 	'name',
 	'description',
-	'purpose',
-	'tags',
-	'members',
-	'composedOf',
-	'isLiveComposition',
-	'deployAtPhases',
+	'phases',
+	'confidenceThreshold',
 	'activeModelVersion',
 	'shadowModelVersion',
 	'captureSettings'
@@ -74,6 +69,7 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
 	const result = await CvProject.findByIdAndDelete(params.id);
 	if (!result) return json({ error: 'Project not found' }, { status: 404 });
 
-	// Images are NOT deleted — they live free of project membership.
+	// Photos (cartridge_records.photos[]) and inspections (cv_inspections) are
+	// not project-owned, so they survive project deletion untouched.
 	return json({ success: true });
 };

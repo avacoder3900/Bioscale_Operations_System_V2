@@ -9,7 +9,6 @@
  */
 import { json, error } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
-import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
 import { getR2Url } from '$lib/server/services/r2';
 import type { RequestHandler } from './$types';
@@ -23,7 +22,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	await connectDB();
 
 	const cartridge = await CartridgeRecord.findById(code)
-		.select('_id status photoSequence assayLoaded testExecution testResult sample')
+		.select('_id status photoSequence photos assayLoaded testExecution testResult sample')
 		.lean() as any;
 
 	if (!cartridge) {
@@ -69,19 +68,20 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 
 	// Recent photos for this cartridge — informational, helps the capture UI
 	// show "you've already captured N photos of this cart" to the operator.
-	const recentPhotos = await CvImage.find({ 'cartridgeTag.cartridgeRecordId': code })
-		.select('_id cartridgeImageNumber cartridgeTag.phase capturedAt filePath imageUrl qcLabel')
-		.sort({ capturedAt: -1 })
-		.limit(20)
-		.lean();
+	// Sourced from the cartridge's own photos[] (the photo record of truth);
+	// no CvImage read — that collection is now a technical/embedding cache only.
+	const recentPhotos = ((cartridge.photos ?? []) as any[])
+		.slice()
+		.sort((a, b) => new Date(b.capturedAt ?? 0).getTime() - new Date(a.capturedAt ?? 0).getTime())
+		.slice(0, 20);
 
-	const photosPayload = (recentPhotos as any[]).map((img) => ({
-		id: img._id,
-		cartridgeImageNumber: img.cartridgeImageNumber,
-		phase: img.cartridgeTag?.phase,
-		qcLabel: img.qcLabel,
-		capturedAt: img.capturedAt,
-		url: img.imageUrl || (img.filePath ? getR2Url(img.filePath) : null)
+	const photosPayload = recentPhotos.map((p) => ({
+		id: p.imageId,
+		cartridgeImageNumber: p.cartridgeImageNumber,
+		phase: p.phase,
+		qcLabel: p.qcLabel ?? null,
+		capturedAt: p.capturedAt,
+		url: p.r2Url || (p.r2Key ? getR2Url(p.r2Key) : null)
 	}));
 
 	return json({

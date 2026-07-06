@@ -106,7 +106,6 @@ export { WebhookLog } from './webhook-log.js';
 // CV / Computer Vision
 export { CvProject } from './cv-project.js';
 export { CvImage } from './cv-image.js';
-export { CvSample } from './cv-sample.js';
 export { CvInspection } from './cv-inspection.js';
 export { CaptureStation } from './capture-station.js';
 

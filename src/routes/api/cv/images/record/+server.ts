@@ -1,3 +1,11 @@
+/**
+ * POST /api/cv/images/record — presign companion.
+ *
+ * The browser uploaded the file to R2 via a presigned key; this records it.
+ * Creates a technical CvImage row and appends the full photo truth to
+ * cartridge_records.photos[] (R2 pointer, capture metadata, optional
+ * labels/notes, qcLabel placeholder). Mirrors /api/cv/capture's data shape.
+ */
 import { json, error } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
@@ -14,14 +22,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
 	await connectDB();
 
-	const { projectId, key, filename, contentType, fileSize, cartridgeTag } = await request.json();
+	const { key, filename, fileSize, cartridgeTag } = await request.json();
 	if (!key || !filename) {
 		return json({ error: 'key and filename are required' }, { status: 400 });
 	}
-	// projectId is no longer required — images live free of projects after the
-	// cartridge-first refactor. If a caller still passes it, ignore it.
+	// projectId is no longer accepted — images live free of projects after the
+	// cartridge-first refactor.
 
-	// cartridgeTag is now required — every image must be of a cartridge.
+	// cartridgeTag is required — every image must be of a cartridge.
 	const cartridgeRecordId: string | undefined = cartridgeTag?.cartridgeRecordId;
 	const phase: string | undefined = cartridgeTag?.phase;
 	if (!cartridgeRecordId || !phase) {
@@ -29,6 +37,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		try { await deleteViaWorker(key); } catch { /* best-effort */ }
 		return json({ error: 'cartridgeTag.cartridgeRecordId and cartridgeTag.phase are required' }, { status: 400 });
 	}
+
+	// Optional QC truth supplied at record time.
+	const labels: string[] = Array.isArray(cartridgeTag?.labels)
+		? cartridgeTag.labels.filter((l: unknown): l is string => typeof l === 'string')
+		: [];
+	const notes: string | undefined = cartridgeTag?.notes?.toString().trim() || undefined;
 
 	// Validate cartridge exists. Reject orphan scans inline.
 	// Atomically $inc photoSequence and grab the new value to mint cartridgeImageNumber.
@@ -47,35 +61,46 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	const cartridgeImageNumber = `${cartridgeRecordId}_${pad(seq)}`;
 	const publicUrl = getR2Url(key);
 	const capturedAt = new Date();
+	const imageId = generateId();
 
+	// Technical row only — photo truth lives on cartridge_records.photos[] below.
 	const image = await CvImage.create({
-		_id: generateId(),
+		_id: imageId,
+		cartridgeRecordId,
+		phase,
 		filename,
-		filePath: key,
-		fileSizeBytes: fileSize || 0,
-		capturedAt,
-		capturedBy: { _id: locals.user._id, username: locals.user.username },
-		imageUrl: publicUrl,
-		cartridgeTag: {
-			cartridgeRecordId,
-			phase,
-			labels: cartridgeTag?.labels ?? [],
-			notes: cartridgeTag?.notes ?? ''
-		},
-		cartridgeImageNumber
+		fileSizeBytes: fileSize || 0
 	});
 
-	// Push the photo ref onto the cartridge for fast DHR queries.
+	// Pipeline append (self-heals malformed legacy `photos` fields; $literal
+	// stores the entry verbatim). Mirrors /api/cv/capture.
+	const photoEntry = {
+		imageId,
+		phase,
+		capturedAt,
+		capturedBy: { _id: locals.user._id, username: locals.user.username },
+		r2Key: key,
+		r2Url: publicUrl,
+		cartridgeImageNumber,
+		qcLabel: null,
+		...(labels.length > 0 ? { labels } : {}),
+		...(notes ? { notes } : {})
+	};
 	await CartridgeRecord.updateOne(
 		{ _id: cartridgeRecordId },
-		{ $push: { photos: {
-			imageId: image._id,
-			phase,
-			capturedAt,
-			r2Key: key,
-			r2Url: publicUrl,
-			cartridgeImageNumber
-		}}}
+		[
+			{
+				$set: {
+					photos: {
+						$concatArrays: [
+							{ $cond: [{ $isArray: '$photos' }, '$photos', []] },
+							{ $literal: [photoEntry] }
+						]
+					}
+				}
+			}
+		],
+		{ updatePipeline: true }
 	);
 
 	return json({ data: JSON.parse(JSON.stringify(image)) }, { status: 201 });

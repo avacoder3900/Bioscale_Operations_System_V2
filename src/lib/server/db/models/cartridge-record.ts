@@ -174,14 +174,38 @@ const cartridgeRecordSchema = new Schema({
 	finalizedAt: Date, // ORPHANED: never written by any action
 	voidedAt: Date,
 	voidReason: String,
+	// Single source of truth for every photo of this cartridge: the R2 pointer,
+	// capture metadata, AND the human QC truth (qcLabel/labels/notes/annotations).
+	// cv_images holds only derived technical data (embeddings, dimensions);
+	// cv_inspections holds only machine verdicts. Never store human labels there.
 	photos: [{
 		_id: false,
 		imageId: String,
 		phase: String,
 		capturedAt: Date,
+		capturedBy: operatorRef,
 		r2Key: String,
 		r2Url: String,
-		cartridgeImageNumber: String
+		cartridgeImageNumber: String,
+
+		// Human QC truth — the training label for CV models.
+		qcLabel: { type: String, enum: ['approved', 'rejected', null], default: null },
+		qcLabeledBy: operatorRef,
+		qcLabeledAt: Date,
+
+		// Defect tags from the failure_labels vocabulary + free-text note.
+		labels: [String],
+		notes: String,
+
+		// Region marks (normalized 0..1) documenting where the defect is.
+		annotations: [{
+			_id: false,
+			x: Number, y: Number, w: Number, h: Number,
+			tag: String,
+			color: String,
+			savedBy: operatorRef,
+			savedAt: Date
+		}]
 	}],
 
 	// Atomic counter for cartridgeImageNumber generation.
@@ -220,6 +244,9 @@ cartridgeRecordSchema.index({ 'sample.subjectId': 1 });
 cartridgeRecordSchema.index({ 'testResult.status': 1 });
 cartridgeRecordSchema.index({ arm: 1 });
 cartridgeRecordSchema.index({ experiment: 1 });
+cartridgeRecordSchema.index({ 'photos.imageId': 1 });   // photo-truth lookups/writes by imageId
+cartridgeRecordSchema.index({ 'photos.qcLabel': 1, 'photos.phase': 1 }); // training-set queries
+cartridgeRecordSchema.index({ 'photos.labels': 1 });    // defect-tag search
 
 applySacredMiddleware(cartridgeRecordSchema);
 

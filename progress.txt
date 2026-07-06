@@ -3290,3 +3290,51 @@ Deployment: preview — https://bioscale-operations-system-mongodb-qx7b6khn2-bre
 Source: branch feat/cartridge-admin-sample @ commit f15518b1
 Retrieve this exact code: git checkout feat/cartridge-admin-sample at commit f15518b1
 What this deployment is for: cartridge-admin expanded row now shows the specific sample (subjectId + type) per cartridge
+
+================================================================================
+2026-07-06 — feat/cv-clean-datapath — CV data-model purge + single-source-of-truth rework
+================================================================================
+Purging the layered CV slop and rebuilding one clean pathway: cartridge doc →
+photo labels → pass/fail → training → model. Audit found total schema drift
+(CvProject deployment layer — trainedModels/activeModelVersion/deployAtPhases/
+members/composedOf/classifier — entirely undeclared, silently stripped by
+Mongoose; both training paths dead; 3 label vocabularies).
+NEW ARCHITECTURE (docs/CV-CLEAN-DATAPATH.md is the contract):
+- cartridge_records.photos[] = photo record of truth (r2 pointers + capturedBy
+  + qcLabel/qcLabeledBy/At + labels[] + notes + annotations[]); indexes added on
+  photos.imageId / photos.qcLabel+phase / photos.labels.
+- cv_projects = model organizer only: phases[] (one scope field), versioned
+  trainedModels[] w/ embedded LR classifier + holdout metrics, activeModelVersion,
+  shadowModelVersion. members/composedOf/purpose/labels/tags/counters purged.
+- cv_inspections = machine verdicts only (status running/completed/failed,
+  passProbability/threshold added; humanLabel/defects/sampleId purged).
+- cv_images = derived cache only (embedding/embeddingVersion declared at last,
+  dims, processing provenance). All truth fields moved out.
+- failure_labels = THE defect-tag vocabulary.
+REWIRED: cv-bridge (trains from photos[] via aggregation, stratified holdout,
+versioned model push), run-inference (active+shadow via trainedModels),
+photo-truth.ts helper (only sanctioned QC write path), capture (truth into
+photoEntry, technical CvImage row), label/tags (write photos.$[p] + AuditLog),
+train (in-process, GH Actions path dead), infer, highlight (annotations onto
+photos[], embedding cache invalidated on pixel change).
+PURGED: cv_samples model+routes, /api/cv/process-image (always-502),
+services/cv-worker, .github/workflows/train-cv-model.yml, github-dispatch.ts,
+cv-api.ts + inspections/[id]/poll (dead iCast proxy).
+NEW: scripts/migrate-cv-labels.ts — idempotent backfill (cv_images truth →
+photos[] gap-fill, cv_inspections.humanLabel fallback, --apply gate).
+Consumer routes/pages being rewired to photos[] source (3 parallel subagents:
+write-side APIs, read-side APIs, page servers).
+svelte-check: 11-error baseline (10 pre-existing on master: r2.ts, AskBimsWidget,
+assembly page anys); 1 new (cv-project _id:false) fixed → back at baseline.
+COMPLETE: 64 files, +1811/-2575 (net -764 lines). Also rewired all consumer
+routes/pages (lookup-cartridge, agent photos, DHR api+pages, traceability,
+failure-labels in-use, stream, label incl. bulkLabel via one arrayFilters
+updateMany, capture page, projects list+detail incl. Members/Composition tabs
+removed, wax/reagent/post-mortem-inspect). Also purged: images/+server.ts
+legacy POST (no callers), inspections POST + inspections/[id] GET (no callers),
+resolve-project-members.ts (orphan).
+svelte-check: 10 errors = pre-existing master baseline (r2.ts, AskBimsWidget,
+assembly page) — 0 new. Vite build ✓ (adapter-vercel nft step fails locally on
+C:\swapfile.sys EBUSY — Windows-only artifact, fine on Vercel CI).
+NEXT: run scripts/migrate-cv-labels.ts (dry → --apply) against prod Mongo,
+verify /cv/stream + /cv/label + DHR + train loop on preview, then merge.

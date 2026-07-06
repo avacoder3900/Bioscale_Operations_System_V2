@@ -100,23 +100,16 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const publicUrl = getR2Url(key);
 
 		const capturedAt = new Date();
+		// Technical row only — the photo itself (R2 pointer, capture metadata,
+		// QC truth) lives on cartridge_records.photos[] below.
 		await CvImage.create({
 			_id: imageId,
+			cartridgeRecordId: cartridgeId,
+			phase,
 			filename: filenameFromClient,
-			filePath: key,
 			fileSizeBytes: buffer.length,
 			cameraIndex: cameraIndexRaw ? Number.parseInt(cameraIndexRaw, 10) : undefined,
-			capturedAt,
-			capturedBy: { _id: locals.user._id, username: locals.user.username },
-			imageUrl: publicUrl,
 			processingMode: processingMode === 'raw' || processingMode === 'full' ? processingMode : undefined,
-			cartridgeTag: {
-				cartridgeRecordId: cartridgeId,
-				phase,
-				...(labels.length > 0 ? { labels } : {}),
-				...(cartridgeTagNotes ? { notes: cartridgeTagNotes } : {})
-			},
-			cartridgeImageNumber,
 			...(forensic ? { metadata: { forensic } } : {})
 		});
 
@@ -126,7 +119,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// then append — atomic, self-healing, and a no-op shape change for the
 		// well-formed majority. $literal keeps the entry stored verbatim (so a
 		// '$' or '.' in any value isn't parsed as an aggregation expression).
-		const photoEntry = { imageId, phase, capturedAt, r2Key: key, r2Url: publicUrl, cartridgeImageNumber };
+		const photoEntry = {
+			imageId,
+			phase,
+			capturedAt,
+			capturedBy: { _id: locals.user._id, username: locals.user.username },
+			r2Key: key,
+			r2Url: publicUrl,
+			cartridgeImageNumber,
+			qcLabel: null,
+			...(labels.length > 0 ? { labels } : {}),
+			...(cartridgeTagNotes ? { notes: cartridgeTagNotes } : {})
+		};
 		await CartridgeRecord.updateOne(
 			{ _id: cartridgeId },
 			[

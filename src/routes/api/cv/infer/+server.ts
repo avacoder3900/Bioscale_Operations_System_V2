@@ -1,12 +1,16 @@
 import { json, error } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
-import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { CvInspection } from '$lib/server/db/models/cv-inspection.js';
 import { generateId } from '$lib/server/db/utils.js';
 import { runInference } from '$lib/server/services/cv-bridge';
+import { getPhotoByImageId } from '$lib/server/cv/photo-truth.js';
 import type { RequestHandler } from './$types';
 
+/**
+ * POST /api/cv/infer — manually grade one photo with a project's active
+ * model. Runs in-process; records a CvInspection (machine verdict only).
+ */
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
 	await connectDB();
@@ -17,49 +21,56 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		if (!imageId) return json({ error: 'imageId is required' }, { status: 400 });
 		if (!projectId) return json({ error: 'projectId is required' }, { status: 400 });
 
-		const [image, project] = await Promise.all([
-			CvImage.findById(imageId).lean() as any,
-			CvProject.findById(projectId).lean() as any
+		const [found, project] = await Promise.all([
+			getPhotoByImageId(imageId),
+			CvProject.findById(projectId).select('activeModelVersion modelStatus').lean() as any
 		]);
 
-		if (!image) return json({ error: 'Image not found' }, { status: 404 });
+		if (!found) return json({ error: 'Photo not found' }, { status: 404 });
 		if (!project) return json({ error: 'Project not found' }, { status: 404 });
-		if (project.modelStatus !== 'trained') {
-			return json({ error: 'Project model is not trained' }, { status: 400 });
+		if (!project.activeModelVersion) {
+			return json({ error: 'Project has no active model — train first' }, { status: 400 });
+		}
+		if (!found.photo.r2Url) {
+			return json({ error: 'Photo has no stored image URL' }, { status: 422 });
 		}
 
-		// Create pending inspection
 		const inspectionId = generateId();
 		await CvInspection.create({
 			_id: inspectionId,
 			imageId,
+			cartridgeRecordId: found.cartridgeRecordId,
+			phase: found.photo.phase,
 			projectId,
-			sampleId: image.sampleId,
-			inspectionType: project.projectType,
-			status: 'processing'
+			modelVersion: project.activeModelVersion,
+			status: 'running',
+			triggeredBy: 'manual',
+			triggeredAt: new Date()
 		});
 
-		// Inference runs IN-PROCESS via cv-classifier (no external worker). The old
-		// Vercel Python function at /api/ml/infer was removed — see the
-		// PROD-API-NAMESPACE-FIX PRD. runInference loads the project's trained
-		// classifier weights and grades the image locally.
 		let result;
 		try {
-			result = await runInference(image.imageUrl, projectId, project.confidenceThreshold ?? 0.5);
+			result = await runInference(found.photo.r2Url, projectId);
 		} catch (e: any) {
-			await CvInspection.findByIdAndUpdate(inspectionId, { status: 'failed' });
+			await CvInspection.updateOne(
+				{ _id: inspectionId },
+				{ $set: { status: 'failed', errorMessage: e?.message ?? String(e), completedAt: new Date() } }
+			);
 			return json({ error: `Inference failed: ${e?.message ?? String(e)}` }, { status: 502 });
 		}
 
-		await CvInspection.findByIdAndUpdate(inspectionId, {
-			status: 'complete',
-			result: result.result,
-			confidenceScore: result.confidence,
-			defects: result.defects || [],
-			modelVersion: project.modelVersion,
-			processingTimeMs: result.processing_time_ms,
-			completedAt: new Date()
-		});
+		await CvInspection.updateOne(
+			{ _id: inspectionId },
+			{ $set: {
+				status: 'completed',
+				result: result.result,
+				passProbability: result.passProbability,
+				confidenceScore: result.confidence,
+				threshold: result.threshold,
+				processingTimeMs: result.processing_time_ms,
+				completedAt: new Date()
+			}}
+		);
 
 		const inspection = await CvInspection.findById(inspectionId).lean();
 		return json({ data: JSON.parse(JSON.stringify(inspection)) });

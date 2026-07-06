@@ -1,34 +1,32 @@
 import mongoose, { Schema } from 'mongoose';
 import { generateId } from '../utils.js';
 
-const operatorRef = { _id: String, username: String };
-
+/**
+ * CvImage — derived/technical data ONLY, keyed 1:1 with a
+ * cartridge_records.photos[] entry by _id (= photos[].imageId).
+ *
+ * The photo itself — R2 pointer, phase, capture metadata, and ALL human QC
+ * truth (qcLabel, labels, notes, annotations) — lives on the cartridge
+ * record. This collection holds what doesn't belong on a sacred
+ * manufacturing document: bulky re-computable embeddings and file/processing
+ * technicalities. Deleting a row here loses nothing that can't be recomputed.
+ */
 const cvImageSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 
-	// Identity — cartridge-first. Required after the refactor.
-	cartridgeTag: {
-		cartridgeRecordId: { type: String, required: true, index: true },
-		phase: { type: String, required: true },
-		labels: [String],
-		notes: String,
-		_id: false
-	},
-	cartridgeImageNumber: { type: String, index: true },
+	// Reverse lookup to the owning cartridge (photos[].imageId === _id).
+	cartridgeRecordId: { type: String, index: true },
+	phase: String,
 
-	// Where the pixels live
+	// File technicalities
 	filename: String,
-	filePath: String,
-	thumbnailPath: String,
-	imageUrl: String,
 	width: Number,
 	height: Number,
 	fileSizeBytes: Number,
 	cameraIndex: Number,
 	metadata: Schema.Types.Mixed,
 
-	// Processing pipeline
-	processedPath: String,
+	// LIZA processing provenance
 	processingMode: { type: String, enum: ['full', 'raw', null] },
 	processingParams: {
 		redCorrection: { type: Number, default: 0.85 },
@@ -40,18 +38,14 @@ const cvImageSchema = new Schema({
 	},
 	processedAt: Date,
 
-	// Capture metadata
-	capturedAt: Date,
-	capturedBy: operatorRef,
-
-	// QC label — optional, demoted from identity to a side field
-	qcLabel: { type: String, enum: ['approved', 'rejected', null], default: null },
-	qcLabeledBy: operatorRef,
-	qcLabeledAt: Date
+	// Embedding cache — feature vector for the classifier, keyed by version
+	// so an embedding upgrade (e.g. color-spatial → DINOv2) invalidates
+	// cleanly. Recomputed on demand from the R2 image when stale.
+	embedding: [Number],
+	embeddingVersion: String,
+	embeddedAt: Date
 }, { timestamps: true });
 
-cvImageSchema.index({ qcLabel: 1 });
-cvImageSchema.index({ capturedAt: -1 });
-cvImageSchema.index({ 'cartridgeTag.labels': 1 });
+cvImageSchema.index({ embeddingVersion: 1 });
 
 export const CvImage = mongoose.models.CvImage || mongoose.model('CvImage', cvImageSchema, 'cv_images');

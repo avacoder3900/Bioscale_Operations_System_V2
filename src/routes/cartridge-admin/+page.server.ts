@@ -1,5 +1,5 @@
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, CartridgeRecord, AssayDefinition, User, WaxFillingRun, ReagentBatchRecord, CvImage, ManufacturingSettings, Experiment } from '$lib/server/db';
+import { connectDB, CartridgeRecord, AssayDefinition, User, WaxFillingRun, ReagentBatchRecord, ManufacturingSettings, Experiment } from '$lib/server/db';
 import type { PageServerLoad } from './$types';
 
 function escapeRegExp(str: string): string {
@@ -29,8 +29,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// from the dashboard's recent-runs panel.
 	const runId = url.searchParams.get('runId') || '';
 	// arm/experiment live directly on CartridgeRecord (run-cartridge experiment
-	// assignment). tag comes from the CV image stream's cartridgeTag.labels —
-	// a separate collection, so it resolves to a cartridge-id allowlist below.
+	// assignment). tag/notesSearch now live on cartridge_records.photos[]
+	// (photos.labels / photos.notes), matched directly — no separate collection.
 	// failureCode matches ManufacturingSettings.rejectionReasonCodes; the wax/
 	// reagent inspection UIs write the selected code into waxQc.rejectionReason
 	// / reagentInspection.reason, so filtering on that code hits real data.
@@ -89,26 +89,12 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			]
 		});
 	}
-	// tag and notesSearch both resolve to a cartridge-id allowlist via CvImage;
-	// when both are active, intersect rather than let the second overwrite the
-	// first so "tag=X AND notes contains Y" behaves as an AND, not an OR.
-	if (tag || notesSearch) {
-		const idLists = await Promise.all([
-			tag
-				? CvImage.distinct('cartridgeTag.cartridgeRecordId', { 'cartridgeTag.labels': tag })
-				: null,
-			notesSearch
-				? CvImage.distinct('cartridgeTag.cartridgeRecordId', {
-					'cartridgeTag.notes': { $regex: escapeRegExp(notesSearch), $options: 'i' }
-				})
-				: null
-		]);
-		const activeLists = idLists.filter((l): l is string[] => l !== null);
-		const intersected = activeLists.reduce((acc, ids) => {
-			const idSet = new Set(ids);
-			return acc.filter(id => idSet.has(id));
-		});
-		query._id = { $in: intersected };
+	// tag and notesSearch now live on cartridge_records.photos[] directly — no
+	// cross-collection roundtrip. Each is its own clause so tag+notes AND at the
+	// cartridge level (a cart matches if any of its photos carry the tag/note).
+	if (tag) andClauses.push({ 'photos.labels': tag });
+	if (notesSearch) {
+		andClauses.push({ 'photos.notes': { $regex: escapeRegExp(notesSearch), $options: 'i' } });
 	}
 	if (andClauses.length === 1) {
 		Object.assign(query, andClauses[0]);
@@ -153,7 +139,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			.lean(),
 		CartridgeRecord.distinct('arm', { arm: { $nin: [null, ''] } }),
 		CartridgeRecord.distinct('experiment', { experiment: { $nin: [null, ''] } }),
-		CvImage.distinct('cartridgeTag.labels', { 'cartridgeTag.labels': { $exists: true, $ne: [] } }),
+		CartridgeRecord.distinct('photos.labels', { 'photos.labels': { $exists: true, $ne: [] } }),
 		ManufacturingSettings.findById('default').select('rejectionReasonCodes').lean()
 	]);
 

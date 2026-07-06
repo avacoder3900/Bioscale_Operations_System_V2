@@ -8,25 +8,26 @@
  *
  * Behavior:
  *   1. Auth: cv:write OR manufacturing:write (same as capture).
- *   2. Load the CvImage; fetch its current bytes from R2 via the Worker.
+ *   2. Find the photo entry on the cartridge record; fetch bytes from R2.
  *   3. sharp-composite an SVG of yellow stroked rects scaled to real pixels.
  *   4. Upload the boxed image under a new R2 key.
- *   5. Repoint the CvImage (imageUrl/filePath/size/dims) + the matching
- *      CartridgeRecord.photos[] entry at the boxed image.
+ *   5. Repoint photos[].r2Key/r2Url and append photos[].annotations (the
+ *      region truth); refresh the CvImage technical row and invalidate its
+ *      embedding cache (the pixels changed).
  *   6. Delete the original object (overwrite-in-place semantics) and audit-log.
  *   7. Return { imageUrl } — the new URL for the caller to display.
  *
  * Overwrite is intentional (operator choice): the un-annotated original is
- * discarded. The drawn boxes are also recorded under metadata.highlight so the
- * annotation is auditable even though the pixels are replaced.
+ * discarded. The drawn boxes live on photos[].annotations so the annotation
+ * is auditable even though the pixels are replaced.
  */
 import { json, error } from '@sveltejs/kit';
 import sharp from 'sharp';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
-import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
 import { AuditLog } from '$lib/server/db/models/index.js';
 import { generateId } from '$lib/server/db/utils.js';
+import { getPhotoByImageId, updatePhotoTruth } from '$lib/server/cv/photo-truth.js';
 import {
 	uploadViaWorker,
 	downloadViaWorker,
@@ -87,11 +88,12 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	await connectDB();
 
 	try {
-		const image = await CvImage.findById(id).lean() as any;
-		if (!image) return json({ error: `image ${id} not found` }, { status: 404 });
+		const found = await getPhotoByImageId(id);
+		if (!found) return json({ error: `photo ${id} not found` }, { status: 404 });
+		const { cartridgeRecordId, photo } = found;
 
-		const sourceKey: string | undefined = image.filePath;
-		if (!sourceKey) return json({ error: 'image has no stored file to annotate' }, { status: 400 });
+		const sourceKey = photo.r2Key;
+		if (!sourceKey) return json({ error: 'photo has no stored file to annotate' }, { status: 400 });
 
 		// 1. Pull the current bytes through the Worker (native R2 binding).
 		const original = await downloadViaWorker(sourceKey);
@@ -125,47 +127,38 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 			.toBuffer();
 
 		// 3. Upload under a fresh key.
-		const cin = image.cartridgeImageNumber || image._id;
+		const cin = photo.cartridgeImageNumber || id;
 		const newKey = buildCvNamedKey('captures', generateId(), `${cin}-highlighted.jpg`);
 		const newUrl = await uploadViaWorker(boxed, newKey, 'image/jpeg');
 
-		// 4. Repoint the record at the boxed image; record the annotation.
+		// 4. Photo truth: repoint the pointer + append the region annotations.
 		const savedAt = new Date();
-		const highlightMeta = {
-			boxes,
-			color: BOX_COLOR,
-			savedBy: { _id: locals.user._id, username: locals.user.username },
-			savedAt,
-			replacedKey: sourceKey
-		};
+		const operator = { _id: locals.user._id, username: locals.user.username };
+		const priorAnnotations = Array.isArray(photo.annotations) ? photo.annotations : [];
+		await updatePhotoTruth(id, {
+			r2Key: newKey,
+			r2Url: newUrl,
+			annotations: [
+				...priorAnnotations,
+				...boxes.map((b) => ({ ...b, color: BOX_COLOR, savedBy: operator, savedAt }))
+			]
+		});
+
+		// Technical row: new dimensions/size, provenance, and a stale-embedding
+		// invalidation — the pixels changed, so any cached feature vector is wrong.
 		await CvImage.updateOne(
 			{ _id: id },
 			{
 				$set: {
-					imageUrl: newUrl,
-					filePath: newKey,
-					fileSizeBytes: boxed.length,
 					width: W,
 					height: H,
-					'metadata.highlight': highlightMeta
-				}
-			}
+					fileSizeBytes: boxed.length,
+					'metadata.replacedKey': sourceKey
+				},
+				$unset: { embedding: 1, embeddingVersion: 1, embeddedAt: 1 }
+			},
+			{ upsert: true }
 		);
-
-		// Keep the cartridge's photos[] mirror in sync (best-effort — a batch of
-		// legacy carts have a malformed non-array `photos` that would throw).
-		const cartridgeRecordId: string | undefined = image.cartridgeTag?.cartridgeRecordId;
-		if (cartridgeRecordId) {
-			try {
-				await CartridgeRecord.updateOne(
-					{ _id: cartridgeRecordId },
-					{ $set: { 'photos.$[p].r2Key': newKey, 'photos.$[p].r2Url': newUrl } },
-					{ arrayFilters: [{ 'p.imageId': id }] }
-				);
-			} catch (e) {
-				console.warn('[highlight] photos[] mirror update skipped:', e);
-			}
-		}
 
 		// 5. Drop the original bytes (overwrite-in-place). Best-effort: a failed
 		//    delete only orphans the old object, it must not fail the request.
@@ -177,12 +170,12 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
 		await AuditLog.create({
 			_id: generateId(),
-			tableName: 'cv_images',
-			recordId: id,
-			action: 'highlight_burn_in',
+			tableName: 'cartridge_records',
+			recordId: cartridgeRecordId,
+			action: 'photo_highlight_burn_in',
 			newData: {
+				imageId: id,
 				boxes: boxes.length,
-				cartridgeRecordId: cartridgeRecordId ?? null,
 				newKey,
 				replacedKey: sourceKey
 			},

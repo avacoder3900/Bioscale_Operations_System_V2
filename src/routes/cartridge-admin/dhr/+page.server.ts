@@ -1,5 +1,5 @@
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, CartridgeRecord, CvImage } from '$lib/server/db';
+import { connectDB, CartridgeRecord } from '$lib/server/db';
 import { getR2Url } from '$lib/server/services/r2';
 import type { PageServerLoad } from './$types';
 
@@ -24,7 +24,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			.limit(20)
 			.lean();
 
-		results = await Promise.all((cartridges as any[]).map(async (c) => {
+		results = (cartridges as any[]).map((c) => {
 			const photoRefs = (c.photos || []) as Array<{ imageId: string; capturedAt: Date; r2Key?: string; r2Url?: string }>;
 			let previewUrl: string | null = null;
 
@@ -33,16 +33,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					new Date(b.capturedAt || 0).getTime() - new Date(a.capturedAt || 0).getTime()
 				)[0];
 
-				if (newest.r2Url) {
-					previewUrl = newest.r2Url;
-				} else if (newest.r2Key) {
-					previewUrl = getR2Url(newest.r2Key);
-				} else if (newest.imageId) {
-					const img = await CvImage.findById(newest.imageId).select('filePath thumbnailPath imageUrl').lean() as any;
-					if (img?.imageUrl) previewUrl = img.imageUrl;
-					else if (img?.thumbnailPath) previewUrl = getR2Url(img.thumbnailPath);
-					else if (img?.filePath) previewUrl = getR2Url(img.filePath);
-				}
+				// photos[] carries the R2 pointer directly (truth) — no cv_images lookup.
+				if (newest.r2Url) previewUrl = newest.r2Url;
+				else if (newest.r2Key) previewUrl = getR2Url(newest.r2Key);
 			}
 
 			return {
@@ -53,7 +46,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				previewUrl,
 				createdAt: c.createdAt
 			};
-		}));
+		});
 	}
 
 	return {

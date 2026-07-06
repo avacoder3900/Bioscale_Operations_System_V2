@@ -1,5 +1,6 @@
 import { json } from '@sveltejs/kit';
-import { connectDB, CartridgeRecord, CvImage, InventoryTransaction, ReceivingLot } from '$lib/server/db';
+import { connectDB, CartridgeRecord, InventoryTransaction, ReceivingLot } from '$lib/server/db';
+import { getR2Url } from '$lib/server/services/r2';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ locals, params }) => {
@@ -208,19 +209,19 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 			.lean()
 		: [];
 
-	// Fetch CV images linked to this cartridge
-	const cvImages = await CvImage.find({ 'cartridgeTag.cartridgeRecordId': params.cartridgeId })
-		.select('_id cartridgeTag.phase capturedAt imageUrl filePath label')
-		.sort({ capturedAt: -1 })
-		.lean();
-
-	const photos = (cvImages as any[]).map(img => ({
-		imageId: img._id,
-		phase: img.cartridgeTag?.phase || null,
-		capturedAt: img.capturedAt,
-		imageUrl: img.imageUrl || null,
-		label: img.label || null
-	}));
+	// Photo timeline from the cartridge's own photos[] (the record of truth);
+	// cv_images is now a technical/embedding cache and is not read here.
+	const photos = ((cartridge.photos || []) as any[])
+		.slice()
+		.sort((a, b) => new Date(b.capturedAt ?? 0).getTime() - new Date(a.capturedAt ?? 0).getTime())
+		.map(p => ({
+			imageId: p.imageId,
+			phase: p.phase || null,
+			capturedAt: p.capturedAt ?? null,
+			imageUrl: p.r2Url || (p.r2Key ? getR2Url(p.r2Key) : null),
+			// Was the dead CvImage.label; now the human QC verdict (approved/rejected/null).
+			label: p.qcLabel ?? null
+		}));
 
 	return json({
 		success: true,

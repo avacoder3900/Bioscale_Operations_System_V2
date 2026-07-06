@@ -21,7 +21,7 @@ import { connectDB } from '$lib/server/db/connection.js';
 import { CaptureStation, deriveStatus } from '$lib/server/db/models/capture-station.js';
 import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { CvInspection } from '$lib/server/db/models/cv-inspection.js';
-import { CvImage } from '$lib/server/db/models/cv-image.js';
+import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
 import { getR2Url } from '$lib/server/services/r2';
 import { requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
@@ -58,7 +58,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Is anything actually deployed at post_mortem? Drives the yellow
 	// "captures will save without inference" notice when nothing is.
 	const deployedRaw = await CvProject.find({
-		deployAtPhases: PHASE,
+		phases: PHASE,
 		activeModelVersion: { $ne: null }
 	})
 		.select('_id name activeModelVersion')
@@ -80,12 +80,16 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const imageIds = Array.from(
 		new Set(inspectionsRaw.map((i: any) => i.imageId).filter(Boolean))
 	);
-	const images = imageIds.length > 0
-		? await CvImage.find({ _id: { $in: imageIds } })
-			.select('_id imageUrl filePath capturedBy')
-			.lean() as any[]
+	// Photo thumbnails + operator come from cartridge_records.photos[] (truth).
+	const photoRows = imageIds.length > 0
+		? await CartridgeRecord.aggregate([
+			{ $match: { 'photos.imageId': { $in: imageIds } } },
+			{ $unwind: '$photos' },
+			{ $match: { 'photos.imageId': { $in: imageIds } } },
+			{ $project: { _id: 0, imageId: '$photos.imageId', r2Url: '$photos.r2Url', r2Key: '$photos.r2Key', operator: '$photos.capturedBy.username' } }
+		]) as any[]
 		: [];
-	const imageById = new Map<string, any>(images.map((img: any) => [img._id, img]));
+	const imageById = new Map<string, any>(photoRows.map((p: any) => [p.imageId, p]));
 
 	const recentInspections = inspectionsRaw.map((i: any) => {
 		const img = i.imageId ? imageById.get(i.imageId) : undefined;
@@ -93,7 +97,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			id: i._id,
 			imageId: i.imageId ?? null,
 			cartridgeRecordId: i.cartridgeRecordId ?? null,
-			imageUrl: img?.imageUrl ?? (img?.filePath ? getR2Url(img.filePath) : null),
+			imageUrl: img?.r2Url ?? (img?.r2Key ? getR2Url(img.r2Key) : null),
 			result: i.result ?? null,
 			confidenceScore: typeof i.confidenceScore === 'number' ? i.confidenceScore : null,
 			modelVersion: i.modelVersion ?? null,

@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { connectDB, CartridgeRecord, CvImage, CvInspection, InventoryTransaction, ReceivingLot } from '$lib/server/db';
+import { connectDB, CartridgeRecord, CvInspection, InventoryTransaction, ReceivingLot } from '$lib/server/db';
 import { getR2Url } from '$lib/server/services/r2';
 import type { RequestHandler } from './$types';
 
@@ -10,12 +10,13 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 	const cartridge = await CartridgeRecord.findById(params.cartridgeId).lean() as any;
 	if (!cartridge) return json({ error: 'Cartridge not found' }, { status: 404 });
 
-	// Fetch CV images, inspections, and transactions in parallel
-	const [images, inspections, transactions] = await Promise.all([
-		CvImage.find({ 'cartridgeTag.cartridgeRecordId': params.cartridgeId })
-			.sort({ capturedAt: -1 })
-			.lean(),
-		CvInspection.find({ cartridgeRecordId: params.cartridgeId })
+	// Machine verdicts (finished inspections only) + transactions in parallel.
+	// 'complete' is legacy data compat — current writers use 'completed'.
+	const [inspections, transactions] = await Promise.all([
+		CvInspection.find({
+			cartridgeRecordId: params.cartridgeId,
+			status: { $in: ['completed', 'complete'] }
+		})
 			.sort({ completedAt: -1 })
 			.lean(),
 		InventoryTransaction.find({ cartridgeRecordId: params.cartridgeId })
@@ -23,33 +24,36 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 			.lean()
 	]);
 
-	// Resolve photo URLs through the Cloudflare Worker proxy.
-	const photos = (images as any[]).map((img) => {
-		const r2Key = img.filePath
-			|| (cartridge.photos || []).find((p: any) => p.imageId === img._id)?.r2Key;
-		const url = img.imageUrl || (r2Key ? getR2Url(r2Key) : null);
-		const thumbnailUrl = img.thumbnailPath ? getR2Url(img.thumbnailPath) : url;
+	// Photos are the cartridge's own photos[] — the record of truth for every
+	// photo and its human QC data. Resolve URLs through the Cloudflare Worker proxy.
+	const photos = ((cartridge.photos || []) as any[])
+		.slice()
+		.sort((a, b) => new Date(b.capturedAt ?? 0).getTime() - new Date(a.capturedAt ?? 0).getTime())
+		.map((p) => {
+			const url = p.r2Url || (p.r2Key ? getR2Url(p.r2Key) : null);
+			// Thumbnails no longer exist — fall back to the full image URL.
+			const thumbnailUrl = url;
 
-		const inspection = (inspections as any[]).find(i => i.imageId === img._id);
+			const inspection = (inspections as any[]).find(i => i.imageId === p.imageId);
 
-		return {
-			imageId: img._id,
-			cartridgeImageNumber: img.cartridgeImageNumber ?? null,
-			cartridgeRecordId: img.cartridgeTag?.cartridgeRecordId ?? params.cartridgeId,
-			phase: img.cartridgeTag?.phase || null,
-			labels: img.cartridgeTag?.labels || [],
-			notes: img.cartridgeTag?.notes || '',
-			// Human QC verdict — the pass/fail the image stream shows (approved/rejected/null).
-			qcLabel: img.qcLabel ?? null,
-			capturedAt: img.capturedAt || img.createdAt,
-			capturedByUsername: img.capturedBy?.username ?? null,
-			url,
-			thumbnailUrl,
-			// Auto-classifier verdict (separate from the human qcLabel above).
-			inspectionResult: inspection?.result || null,
-			confidenceScore: inspection?.confidenceScore || null
-		};
-	});
+			return {
+				imageId: p.imageId,
+				cartridgeImageNumber: p.cartridgeImageNumber ?? null,
+				cartridgeRecordId: params.cartridgeId,
+				phase: p.phase || null,
+				labels: p.labels || [],
+				notes: p.notes || '',
+				// Human QC verdict — the pass/fail the image stream shows (approved/rejected/null).
+				qcLabel: p.qcLabel ?? null,
+				capturedAt: p.capturedAt ?? null,
+				capturedByUsername: p.capturedBy?.username ?? null,
+				url,
+				thumbnailUrl,
+				// Machine verdict from the auto-classifier (separate from the human qcLabel above).
+				inspectionResult: inspection?.result || null,
+				confidenceScore: inspection?.confidenceScore || null
+			};
+		});
 
 	// Build timeline from cartridge phases
 	const timeline: any[] = [];
@@ -280,7 +284,6 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 				phase: i.phase,
 				result: i.result,
 				confidenceScore: i.confidenceScore,
-				defects: i.defects || [],
 				completedAt: i.completedAt
 			}))
 		)),

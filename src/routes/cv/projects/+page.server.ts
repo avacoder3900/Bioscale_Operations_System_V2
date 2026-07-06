@@ -1,6 +1,7 @@
 /**
- * /cv/projects — list every CV project (training set). Empty list after the
- * cartridge-first wipe — operators create projects from /cv/label or here.
+ * /cv/projects — list every CV project (one model per manufacturing concern).
+ * Projects don't own photos: their scope is phases[], and their training set
+ * derives from cartridge_records.photos[] labels at train time.
  */
 import { fail, redirect } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
@@ -14,19 +15,16 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const projectsRaw = await CvProject.find()
 		.sort({ createdAt: -1 })
-		.select('_id name description purpose tags members composedOf isLiveComposition deployAtPhases activeModelVersion shadowModelVersion trainedModels createdAt updatedAt')
+		.select('_id name description projectType phases modelStatus activeModelVersion shadowModelVersion trainedModels.version trainedModels.trainedAt trainedModels.holdoutAccuracy createdAt updatedAt')
 		.lean();
 
 	const projects = (projectsRaw as any[]).map(p => ({
 		id: p._id,
 		name: p.name ?? '',
 		description: p.description ?? '',
-		purpose: p.purpose ?? '',
-		tags: p.tags ?? [],
-		memberCount: (p.members ?? []).length,
-		composedOfCount: (p.composedOf ?? []).length,
-		isLiveComposition: !!p.isLiveComposition,
-		deployAtPhases: p.deployAtPhases ?? [],
+		projectType: p.projectType ?? 'classification',
+		phases: p.phases ?? [],
+		modelStatus: p.modelStatus ?? 'untrained',
 		trainedModelCount: (p.trainedModels ?? []).length,
 		activeModelVersion: p.activeModelVersion ?? null,
 		shadowModelVersion: p.shadowModelVersion ?? null,
@@ -34,7 +32,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		updatedAt: p.updatedAt ?? null
 	}));
 
-	return { projects };
+	return { projects: JSON.parse(JSON.stringify(projects)) };
 };
 
 export const actions: Actions = {
@@ -45,19 +43,13 @@ export const actions: Actions = {
 		const form = await request.formData();
 		const name = form.get('name')?.toString().trim();
 		const description = form.get('description')?.toString().trim() ?? '';
-		const purpose = form.get('purpose')?.toString().trim() ?? '';
 		if (!name) return fail(400, { error: 'Project name is required' });
 
 		const project = await CvProject.create({
 			_id: generateId(),
 			name,
 			description,
-			purpose,
-			tags: [],
-			members: [],
-			composedOf: [],
-			isLiveComposition: false,
-			deployAtPhases: [],
+			phases: [],
 			trainedModels: [],
 			activeModelVersion: null,
 			shadowModelVersion: null

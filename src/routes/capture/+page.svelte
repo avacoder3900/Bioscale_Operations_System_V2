@@ -1006,7 +1006,7 @@
 						<span class="text-[var(--color-tron-red,#ff3366)]">— no active model on this project. Train + promote one under the project's Deployment tab before inference will run.</span>
 					{:else if !pc.deployAtPhases.includes(phase)}
 						<span class="text-[var(--color-tron-red,#ff3366)]">
-							— this project deploys at {pc.deployAtPhases.length > 0 ? pc.deployAtPhases.join(', ') : '(no phases)'}, not "{phase}". Change the phase below OR add "{phase}" to deployAtPhases on the project.
+							— this project deploys at {pc.deployAtPhases.length > 0 ? pc.deployAtPhases.join(', ') : '(no phases)'}, not "{phase}". Change the phase below OR add "{phase}" to the project's phases.
 						</span>
 					{:else}
 						<span class="text-[var(--color-tron-green,#39ff14)]">— ✓ inference will run (model v{pc.activeModelVersion}) for captures at "{phase}".</span>
