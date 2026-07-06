@@ -636,6 +636,99 @@
 		tourPlaying = false;
 	}
 
+	// ── Fill motion: replay the REAL fill motion on just the selected hole(s) ──
+	// Mirrors Reagent_Filling_GEN7 (run_calibration_check / dispense_reagent), which
+	// at every hole does: jump 60mm above the well top → descend to +2mm (the dispense
+	// position, = well.top(-3)+5) → dwell → retract to +5mm. We drive that motion at the
+	// fill travel speed (default 20 mm/s = the protocol's speed=20 moves). Runs ONLY the
+	// holes you selected, in fill order, starting from your first selected hole — so you
+	// can pick any hole(s) as the start point, not just the whole-deck Tour.
+	const FILL_JUMP_MM = 60; // protocol jump_height: travel height above the well top
+	const FILL_DISPENSE_MM = 2; // protocol dispense pos: well.top(-3)+5 = 2mm above top
+	const FILL_RETRACT_MM = 5; // protocol well_prejump_height
+	let fillSpeed = $state(20); // mm/s — Reagent_Filling_GEN7 travel-move speed
+	let fillDwellMs = $state(400); // dwell at the dispense position (real fill delays 0.25s)
+	let fillMotionRunning = $state(false);
+	let fillStop = false;
+
+	// Holes in the order the fill visits them (column-major, then y) — matches Tour.
+	function fillOrder(names: string[]): string[] {
+		return names
+			.slice()
+			.sort((a, b) => colOf(a) - colOf(b) || (wellByName.get(a)?.y ?? 0) - (wellByName.get(b)?.y ?? 0));
+	}
+
+	// Absolute move to `aboveTopMm` over a hole's top, at fill speed, from LIVE (edited)
+	// Mongo coords via slotOrigin — so the motion reflects the current calibration and is
+	// tip-independent (the robot places the critical point at the target).
+	async function fillMoveAbs(name: string, aboveTopMm: number, o: { forceDirect: boolean; arc?: boolean }) {
+		const w = wellByName.get(name);
+		if (!w || !slotOrigin) throw new Error('Deck origin not established yet');
+		const ax = tipAdjust?.x ?? 0,
+			ay = tipAdjust?.y ?? 0;
+		const zAbs = slotOrigin.z + w.z + aboveTopMm;
+		await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/move-to`, {
+			method: 'POST',
+			body: JSON.stringify({
+				pipetteId,
+				x: slotOrigin.x + w.x + ax,
+				y: slotOrigin.y + w.y + ay,
+				z: zAbs,
+				speed: fillSpeed,
+				// Between holes, lift to the jump height (arc) so the tip never drags.
+				...(o.arc ? { minimumZHeight: zAbs } : {}),
+				forceDirect: o.forceDirect
+			})
+		});
+	}
+
+	async function runFillMotion() {
+		if (!runId || !pipetteId) {
+			errMsg = 'Open a maintenance run first';
+			return;
+		}
+		const chosen = fillOrder([...selection].filter((n) => wellByName.has(n)));
+		if (!chosen.length) {
+			errMsg = 'Select the hole(s) you want to run the fill motion on';
+			return;
+		}
+		clearMsg();
+		fillMotionRunning = true;
+		fillStop = false;
+		busy = true;
+		try {
+			// Establish the slot origin (first move uses the safe arc via moveToWellSafe).
+			if (!slotOrigin) await moveToWellSafe(chosen[0]);
+			for (let i = 0; i < chosen.length; i++) {
+				if (fillStop) {
+					msg = `Fill motion stopped — ${i}/${chosen.length} done`;
+					break;
+				}
+				const name = chosen[i];
+				selection = new Set([name]);
+				refWell = name;
+				msg = `Fill motion ${i + 1}/${chosen.length} — ${name} @ ${fillSpeed} mm/s`;
+				await fillMoveAbs(name, FILL_JUMP_MM, { forceDirect: false, arc: true }); // 1) travel above hole
+				if (fillStop) break;
+				await fillMoveAbs(name, FILL_DISPENSE_MM, { forceDirect: true }); // 2) descend to dispense pos
+				await refreshPosition();
+				await new Promise((r) => setTimeout(r, Math.max(0, fillDwellMs))); // 3) dwell (visual check)
+				if (fillStop) break;
+				await fillMoveAbs(name, FILL_RETRACT_MM, { forceDirect: true }); // 4) retract to prejump
+			}
+			if (!fillStop) msg = `Fill motion complete — ${chosen.length} hole(s) at ${fillSpeed} mm/s`;
+		} catch (e) {
+			errMsg = e instanceof Error ? e.message : String(e);
+		} finally {
+			fillMotionRunning = false;
+			busy = false;
+			await refreshPosition();
+		}
+	}
+	function stopFillMotion() {
+		fillStop = true;
+	}
+
 	// ── Tip pickup + go to tip calibrator (matches the real fill workflow) ──
 	// Tiprack + calibrator point come from the protocols (wax: p20 right + the
 	// limit-switch calibrator at 125.181,173.247,z34.491; reagent: p300 left).
@@ -1007,14 +1100,10 @@
 					</div>
 				</div>
 
-				<!-- Tour: drive through every active-role hole like a fill run -->
+				<!-- Tour + Fill motion: drive the pipette through holes like a real fill -->
 				<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-black/20 p-2">
-					<div class="mb-1 text-[11px] font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Tour holes</div>
-					{#if !touring}
-						<button type="button" onclick={startTour} disabled={!pipetteId || busy} class="w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">
-							Run through all {roleFilter === 'all' ? 'holes' : `${roleFilter} holes`}
-						</button>
-					{:else}
+					<div class="mb-1 text-[11px] font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Tour / Fill motion</div>
+					{#if touring}
 						<div class="mb-1 text-center text-[11px]" style="color: var(--color-tron-cyan)">{tourIndex + 1} / {tourWells.length} — {tourWells[tourIndex]}</div>
 						<div class="grid grid-cols-4 gap-1">
 							<button type="button" onclick={tourPrev} disabled={busy || tourIndex === 0} class="rounded border border-[var(--color-tron-border)] py-1.5 text-xs hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">‹ Prev</button>
@@ -1026,6 +1115,23 @@
 							{/if}
 							<button type="button" onclick={tourStop} class="rounded border border-red-500/40 bg-red-900/15 py-1.5 text-xs text-red-300">Stop</button>
 						</div>
+					{:else if fillMotionRunning}
+						<button type="button" onclick={stopFillMotion} class="w-full rounded border border-red-500/40 bg-red-900/15 py-2 text-xs text-red-300">■ Stop fill motion</button>
+					{:else}
+						<div class="grid grid-cols-2 gap-1">
+							<button type="button" onclick={startTour} disabled={!pipetteId || busy} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Drive through every hole in order (whole deck)">
+								Run through all {roleFilter === 'all' ? 'holes' : `${roleFilter} holes`}
+							</button>
+							<button type="button" onclick={runFillMotion} disabled={!pipetteId || busy || selCount === 0} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Drive the exact fill motion (jump 60mm → dispense +2mm → dwell → retract +5mm) at fill speed, for the selected hole(s) only">
+								▶ Fill motion ({selCount} selected)
+							</button>
+						</div>
+						<div class="mt-2 flex flex-wrap items-center gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
+							<span class="opacity-70">Fill:</span>
+							<label>Speed <input type="number" min="1" max="400" step="1" bind:value={fillSpeed} class="w-14 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /> mm/s</label>
+							<label>Dwell <input type="number" min="0" max="5000" step="50" bind:value={fillDwellMs} class="w-16 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /> ms</label>
+						</div>
+						<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)"><strong>Fill motion</strong> mimics a real fill at each selected hole (60mm jump → 2mm-above-top dispense → {fillDwellMs}ms dwell → 5mm retract) at {fillSpeed} mm/s, in fill order — pick any hole(s) as the start.{hasTip ? '' : ' Pick up a tip first to match the real fill height.'}</p>
 					{/if}
 				</div>
 			</section>

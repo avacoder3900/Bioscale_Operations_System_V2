@@ -275,7 +275,7 @@ export async function moveTo(
 	runId: string,
 	pipetteId: string,
 	coords: { x: number; y: number; z: number },
-	opts: { minimumZHeight?: number; forceDirect?: boolean } = {}
+	opts: { minimumZHeight?: number; forceDirect?: boolean; speed?: number } = {}
 ): Promise<void> {
 	const forceDirect = opts.forceDirect ?? true;
 	await sendMaintenanceCommand(
@@ -286,6 +286,9 @@ export async function moveTo(
 			pipetteId,
 			coordinates: coords,
 			...(opts.minimumZHeight !== undefined ? { minimumZHeight: opts.minimumZHeight } : {}),
+			// Optional max travel speed (mm/s). Used to mimic the fill motion in the
+			// deck-calibration "Fill motion" tool; omitted → robot default speed.
+			...(opts.speed !== undefined ? { speed: opts.speed } : {}),
 			forceDirect
 		},
 		{ waitUntilComplete: true, timeoutMs: 30_000 }

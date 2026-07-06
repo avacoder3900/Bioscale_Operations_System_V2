@@ -2,7 +2,7 @@
  * Move to absolute deck coordinates inside a maintenance run.
  * POST /api/opentrons-lab/robots/:id/maintenance/:runId/move-to
  * Body: { pipetteId: string, x: number, y: number, z: number,
- *         minimumZHeight?: number, forceDirect?: boolean }
+ *         minimumZHeight?: number, forceDirect?: boolean, speed?: number }
  */
 
 import { json, error } from '@sveltejs/kit';
@@ -29,11 +29,15 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	const z = body?.z;
 	const minimumZHeight = body?.minimumZHeight;
 	const forceDirect = body?.forceDirect;
+	const speed = body?.speed;
 
 	if (!pipetteId || typeof pipetteId !== 'string') error(400, 'pipetteId required');
 	if (typeof x !== 'number' || !Number.isFinite(x)) error(400, 'x must be a finite number');
 	if (typeof y !== 'number' || !Number.isFinite(y)) error(400, 'y must be a finite number');
 	if (typeof z !== 'number' || !Number.isFinite(z)) error(400, 'z must be a finite number');
+	if (speed !== undefined && (typeof speed !== 'number' || !Number.isFinite(speed) || speed <= 0)) {
+		error(400, 'speed must be a positive finite number (mm/s)');
+	}
 
 	try {
 		await moveTo(
@@ -43,7 +47,8 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 			{ x, y, z },
 			{
 				minimumZHeight: typeof minimumZHeight === 'number' ? minimumZHeight : undefined,
-				forceDirect: typeof forceDirect === 'boolean' ? forceDirect : undefined
+				forceDirect: typeof forceDirect === 'boolean' ? forceDirect : undefined,
+				speed: typeof speed === 'number' ? speed : undefined
 			}
 		);
 		return json({ ok: true });
