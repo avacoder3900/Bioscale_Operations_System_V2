@@ -612,6 +612,40 @@
 		locking = true;
 
 		try {
+			// Intake mode: assign the scanned code to the selected inspect step
+			// (creates the CartridgeRecord if it isn't in BIMS), then lock it for
+			// photos with the step's phase preselected. Triggered scans fall
+			// straight through to auto-capture, so trigger-pull = scan + assign + photo.
+			if (intakeMode) {
+				const ires = await fetch('/api/cv/cartridge-intake', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ cartridgeId: code, inspectStep: intakeStep })
+				});
+				const ibody = await ires.json().catch(() => ({}));
+				if (!ires.ok) {
+					flashBanner('err', ibody.error || `Intake failed for ${code}`);
+					return null;
+				}
+				// Prior-photo count is cosmetic — fetch it now that the cartridge exists.
+				let prior = 0;
+				try {
+					const lres = await fetch(`/api/cv/lookup-cartridge?code=${encodeURIComponent(code)}`);
+					if (lres.ok) prior = (await lres.json()).photoCount ?? 0;
+				} catch { /* ignore */ }
+				cartridgeId = ibody.cartridgeId;
+				cartridgeStatus = ibody.status;
+				cartridgePhotoCount = prior;
+				scannedAt = Date.now();
+				sessionPhotos = [];
+				retakeInProgress = false;
+				showRetakeDialog = false;
+				intakeOffer = null;
+				if (ibody.phase && data.phases.includes(ibody.phase)) phase = ibody.phase;
+				flashBanner('ok', `${ibody.cartridgeId} ${ibody.created ? 'created' : 'assigned'} → ${ibody.status} — locked for photos at ${ibody.phase}`);
+				return cartridgeId;
+			}
+
 			const res = await fetch(`/api/cv/lookup-cartridge?code=${encodeURIComponent(code)}`);
 			if (!res.ok) {
 				const body = await res.json().catch(() => ({}));
@@ -624,11 +658,11 @@
 				intakeOffer = code;
 				return null;
 			}
-			const data = await res.json();
+			const info = await res.json();
 			intakeOffer = null;
-			cartridgeId = data.cartridgeRecordId;
-			cartridgeStatus = data.status ?? null;
-			cartridgePhotoCount = data.photoCount ?? 0;
+			cartridgeId = info.cartridgeRecordId;
+			cartridgeStatus = info.status ?? null;
+			cartridgePhotoCount = info.photoCount ?? 0;
 			scannedAt = Date.now();
 			sessionPhotos = [];
 			retakeInProgress = false;
@@ -843,6 +877,10 @@
 	let intakeOffer = $state<string | null>(null);
 	let intakeStep = $state<'wax' | 'reagent' | 'post_mortem'>('wax');
 	let intakeBusy = $state(false);
+	// Intake mode: while ON, every barcode the station scanner reads is
+	// assigned to the selected inspect step (created in BIMS if missing) and
+	// immediately locked for photos — scan, shoot, next.
+	let intakeMode = $state(false);
 
 	async function submitIntake() {
 		const code = intakeOffer ?? cartridgeId;
@@ -1155,6 +1193,31 @@
 							<option value={p}>{p}</option>
 						{/each}
 					</select>
+				</div>
+				<div>
+					<span class="block text-xs uppercase text-[var(--color-tron-text-secondary)]">Intake mode</span>
+					<div class="mt-1 flex items-center gap-2">
+						<button
+							type="button"
+							role="switch"
+							aria-checked={intakeMode}
+							aria-label="Intake mode — scans create/assign cartridges to an inspect step"
+							onclick={() => (intakeMode = !intakeMode)}
+							class="relative h-6 w-11 rounded-full transition-colors {intakeMode ? 'bg-[var(--color-tron-cyan)]' : 'bg-[var(--color-tron-bg-tertiary)] border border-[var(--color-tron-border)]'}"
+						>
+							<span class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all {intakeMode ? 'left-[22px]' : 'left-0.5'}"></span>
+						</button>
+						{#if intakeMode}
+							<select bind:value={intakeStep} class="tron-input py-1 text-xs" aria-label="Inspect step for scanned cartridges">
+								{#each INTAKE_STEPS as s (s.value)}
+									<option value={s.value}>{s.label}</option>
+								{/each}
+							</select>
+						{/if}
+					</div>
+					{#if intakeMode}
+						<div class="mt-1 text-[10px] text-[var(--color-tron-yellow,#facc15)]">Every scan creates/assigns → {INTAKE_STEPS.find((s) => s.value === intakeStep)?.label}</div>
+					{/if}
 				</div>
 				<div>
 					<label for="station-sel" class="block text-xs uppercase text-[var(--color-tron-text-secondary)]">Station</label>
