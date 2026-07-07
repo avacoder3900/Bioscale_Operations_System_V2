@@ -3408,3 +3408,7 @@ without it — would have stripped the flag); provision/setup scripts register
 sequence:true; stations route default includes it.
 svelte-check: 10-error baseline, 0 new. Subagents hit a transient Anthropic
 API outage mid-build (ConnectionRefused); resumed with edits intact.
+Deployment: preview — https://bioscale-operations-system-mongodb-ltyf5i31l-brevitest.vercel.app
+Source: branch cv-microscope @ commit 63b865b3
+Retrieve this exact code: git checkout cv-microscope at commit 63b865b3
+What this deployment is for: CV-MICROSCOPE-01 — microscope station agent + timed grid sequence + capture/stream/DHR UI (bench-testable once Celestron hardware is on a station)
