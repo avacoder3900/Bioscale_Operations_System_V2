@@ -38,14 +38,36 @@ export const POST: RequestHandler = async ({ request }) => {
 	const formData = await request.formData();
 	const file = formData.get('file') as File | null;
 	const qrCode = formData.get('qrCode')?.toString().trim();
-	const phase = formData.get('phase')?.toString().trim() || 'wax_filled';
 	const cameraIndexRaw = formData.get('cameraIndex')?.toString();
 	const processingMode = formData.get('processingMode')?.toString() as 'full' | 'raw' | undefined;
 	// Legacy projectId — silently ignored after the refactor.
 	// const _legacyProjectId = formData.get('projectId');
 
+	// Photo type: 'inspection' (default — standard station photos, phase-bound)
+	// or 'microscope' (timed grid sequence; a photo DESCRIPTOR, not a mfg state:
+	// phase stays null and phase-based inference is skipped).
+	const photoTypeRaw = formData.get('photoType')?.toString();
+	const photoType = photoTypeRaw === 'microscope' ? 'microscope' : 'inspection';
+	const phase =
+		photoType === 'microscope'
+			? null
+			: formData.get('phase')?.toString().trim() || 'wax_filled';
+
+	// Microscope grid-sequence identity (all optional; stamped by the station
+	// agent): sequenceId groups one run, sequenceIndex = order taken,
+	// locationRow/locationCol = named grid slot (e.g. B / 4).
+	const sequenceId = formData.get('sequenceId')?.toString().trim() || undefined;
+	const sequenceIndexRaw = formData.get('sequenceIndex')?.toString();
+	const sequenceIndex = sequenceIndexRaw ? Number.parseInt(sequenceIndexRaw, 10) : undefined;
+	const locationRow = formData.get('locationRow')?.toString().trim() || undefined;
+	const locationColRaw = formData.get('locationCol')?.toString();
+	const locationCol = locationColRaw ? Number.parseInt(locationColRaw, 10) : undefined;
+
 	if (!file) return json({ error: 'file is required' }, { status: 400 });
 	if (!qrCode) return json({ error: 'qrCode is required' }, { status: 400 });
+	if (sequenceIndex !== undefined && (Number.isNaN(sequenceIndex) || sequenceIndex < 1)) {
+		return json({ error: 'sequenceIndex must be a positive integer' }, { status: 400 });
+	}
 
 	// Reject orphan scans — cartridge must exist.
 	// Atomically bump photoSequence to mint cartridgeImageNumber.
@@ -95,7 +117,13 @@ export const POST: RequestHandler = async ({ request }) => {
 		r2Key: key,
 		r2Url: publicUrl,
 		cartridgeImageNumber,
-		qcLabel: null
+		qcLabel: null,
+		photoType,
+		...(sequenceId ? { sequenceId } : {}),
+		...(sequenceIndex !== undefined ? { sequenceIndex } : {}),
+		...(locationRow || locationCol !== undefined
+			? { location: { ...(locationRow ? { row: locationRow } : {}), ...(locationCol !== undefined ? { col: locationCol } : {}) } }
+			: {})
 	};
 	await CartridgeRecord.updateOne(
 		{ _id: qrCode },
@@ -120,26 +148,35 @@ export const POST: RequestHandler = async ({ request }) => {
 		tableName: 'cv_images',
 		recordId: id,
 		action: 'INSERT',
-		newData: { source: 'capture-ingest', cartridgeRecordId: qrCode, phase, key, cartridgeImageNumber, processingMode },
+		newData: {
+			source: 'capture-ingest', cartridgeRecordId: qrCode, phase, key, cartridgeImageNumber,
+			processingMode, photoType,
+			...(sequenceId ? { sequenceId, sequenceIndex, locationRow, locationCol } : {})
+		},
 		changedAt: capturedAt,
 		changedBy: 'cv-capture-agent',
 		reason: 'capture-ingest'
 	});
 
-	// Fire-and-forget phase-X auto-inference for any project deployed at this phase.
-	runPhaseInference({
-		imageId: id,
-		imageUrl: publicUrl,
-		cartridgeRecordId: qrCode,
-		phase,
-		triggeredBy: 'auto-on-capture'
-	}).catch(err => console.error('[capture-ingest] phase-inference failed:', err));
+	// Fire-and-forget phase-X auto-inference for any project deployed at this
+	// phase. Microscope photos have no phase — nothing routes; skip entirely.
+	if (phase) {
+		runPhaseInference({
+			imageId: id,
+			imageUrl: publicUrl,
+			cartridgeRecordId: qrCode,
+			phase,
+			triggeredBy: 'auto-on-capture'
+		}).catch(err => console.error('[capture-ingest] phase-inference failed:', err));
+	}
 
 	return json({
 		imageId: id,
 		cartridgeImageNumber,
 		key,
 		cartridgeRecordId: qrCode,
-		phase
+		phase,
+		photoType,
+		...(sequenceId ? { sequenceId, sequenceIndex, location: { row: locationRow, col: locationCol } } : {})
 	}, { status: 201 });
 };

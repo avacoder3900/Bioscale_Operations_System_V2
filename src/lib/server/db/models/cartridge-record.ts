@@ -188,6 +188,21 @@ const cartridgeRecordSchema = new Schema({
 		r2Url: String,
 		cartridgeImageNumber: String,
 
+		// What KIND of photo this is — not a manufacturing state. 'inspection'
+		// (default) = the standard station/inline photos; 'microscope' = a shot
+		// from a microscope station's timed grid sequence. Microscope photos
+		// carry phase:null and skip phase-based inference routing.
+		photoType: { type: String, enum: ['inspection', 'microscope'], default: 'inspection' },
+		// Grid-sequence identity (microscope runs): one sequenceId per run,
+		// sequenceIndex = order taken (1..count), location = named grid slot
+		// (row 'A'..'C' × col 1..5 by default) — correctable later.
+		sequenceId: String,
+		sequenceIndex: Number,
+		location: {
+			row: String,
+			col: Number
+		},
+
 		// Human QC truth — the training label for CV models.
 		qcLabel: { type: String, enum: ['approved', 'rejected', null], default: null },
 		qcLabeledBy: operatorRef,
@@ -247,6 +262,9 @@ cartridgeRecordSchema.index({ experiment: 1 });
 cartridgeRecordSchema.index({ 'photos.imageId': 1 });   // photo-truth lookups/writes by imageId
 cartridgeRecordSchema.index({ 'photos.qcLabel': 1, 'photos.phase': 1 }); // training-set queries
 cartridgeRecordSchema.index({ 'photos.labels': 1 });    // defect-tag search
+cartridgeRecordSchema.index({ 'photos.photoType': 1 }); // "which cartridges have microscope photos"
+cartridgeRecordSchema.index({ 'photos.sequenceId': 1 }); // group a microscope run
+cartridgeRecordSchema.index({ 'photos.location.row': 1, 'photos.location.col': 1 }); // grid-slot search
 
 applySacredMiddleware(cartridgeRecordSchema);
 

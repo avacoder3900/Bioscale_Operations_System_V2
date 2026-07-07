@@ -74,8 +74,8 @@ location: { row: String, col: Number }         // named grid position, e.g. row 
 | P4 | `/capture` sequence panel (grid config, start/abort/progress/auto-start) + stream `type`/location filters + DHR run grouping | `capture/+page.svelte`, `cv/stream/+page.server.ts` + `.svelte`, DHR pages |
 | P5 | Bench test on Windows with the Celestron; then Pi provisioning notes | RUNBOOK.md |
 
-## 6. Decisions needed (defaults applied if unchallenged)
-1. **Direct ingest from the Pi** (agent → `capture-ingest` with `STATION_AGENT_KEY`) instead of browser-mediated upload — **recommended yes**.
-2. **Interval default 2 s** between the 15 shots (a full run ≈ 30 s) — adjust?
-3. ~~Phase~~ **RESOLVED (2026-07-07):** microscope photos are a **photo type** (`photoType: 'microscope'`), not a phase. `phase` stays null on them; existing phases (`wax_filled`, `sealed`, …) remain manufacturing states only.
-4. **15 photos fixed per run** — count is configurable but defaults to 15; grid default **3×5 (rows A–C × cols 1–5)**, row-major. Confirm the grid shape (3×5 vs 5×3) and whether the scan order is row-major or serpentine — this determines the pre-stamped row/col of each shot.
+## 6. Decisions (all RESOLVED 2026-07-07)
+1. **Upload path — RESOLVED: `capture-ingest`, which IS the standard BIMS storage path.** `/api/cv/capture-ingest` performs the identical storage sequence as the browser's `/api/cv/capture` (R2 upload → `cv_images` technical row → `cartridge_records.photos[]` truth entry); it differs only in auth (station agent key vs. login session). No parallel pipeline is created.
+2. **Interval — RESOLVED: config variable**, not a fixed decision. `SEQUENCE_INTERVAL_MS` env on the agent (initial default 2000) + per-run override from the UI. Tunable when hardware arrives, no code change.
+3. **Photo type — RESOLVED:** `photoType: 'microscope'` descriptor, not a phase. `phase` stays null on microscope photos.
+4. **Count & grid — RESOLVED: config variables.** `SEQUENCE_COUNT` (default 15) and `GRID_ROWS`/`GRID_COLS`/`GRID_ORDER` (default 3×5, rows A–C × cols 1–5, row-major) as agent env + UI overrides. rows×cols must equal count; the slot→row/col stamping derives from whatever the config says at capture time, so grid shape/order can be finalized during bench testing.
