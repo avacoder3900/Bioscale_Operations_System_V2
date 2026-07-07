@@ -65,6 +65,42 @@ location: { row: String, col: Number }         // named grid position, e.g. row 
 - Motorized stage / positioning control — "location" here is a post-hoc human label, the microscope does not move by itself.
 - CV model changes — sequence photos train/infer through the existing pathway untouched.
 
+## 4.5 Bench test — staged, PAUSED on station wifi (2026-07-07)
+
+P1–P4 are implemented and pushed (`63b865b3`). A live end-to-end bench was staged
+but paused: the lab wifi went down, taking both Pi stations offline (station 3 /
+"CV Station test 3" on `alejandrospi2.tailf65a70.ts.net` — last heartbeat
+15:52Z; the Celestron is physically plugged into that Pi).
+
+**Already verified without hardware:** py_compile on all agent modules; grid
+mapping (row-major 6→B1, serpentine 6→B5, count-mismatch→None); svelte-check
+at baseline; `sequence` capability plumbed end-to-end (schema + provisioning).
+
+**Staged and ready to resume when wifi is back:**
+1. This machine runs the branch's ingest code locally:
+   `cd .worktrees/cv-microscope && npm run dev -- --port 5199` (`.env.local`
+   already present with MONGODB_URI/R2/AGENT_API_KEY).
+2. Test target cartridge: `CVDEMO-001-RNKn1Xg47bmk` (seeded demo cart — no
+   real manufacturing data touched).
+3. Bench harness: `services/bims-capture-agent/bench_sequence.py` — drives
+   SequenceManager against a real camera + real BIMS, prints every WS event.
+   Note: it opens the camera with `cv2.CAP_DSHOW` (Windows); for a Pi run,
+   drop the backend arg or add a `sys.platform` guard.
+4. Resume plan (Pi route): SSH `root@alejandrospi2.tailf65a70.ts.net` →
+   confirm Celestron in `/sys/class/video4linux/*/name` → copy `sequence.py`
+   + patched `bench_sequence.py` to the Pi → run with
+   `BIMS_URL=http://100.104.29.116:5199` (this PC's Tailscale IP; start vite
+   with `--host` so it listens beyond localhost) and the fleet
+   `STATION_AGENT_KEY`/`AGENT_API_KEY` → 15 shots land on the demo cart →
+   review in Image Stream (`type=microscope`) + DHR grid.
+   (Alternative bench: plug the Celestron into the Windows box and run
+   `python bench_sequence.py CVDEMO-001-RNKn1Xg47bmk` directly.)
+5. Full-agent test (after bench passes): update the Pi's agent checkout to
+   the `cv-microscope` branch code, set `CAMERA_DEVICE=celestron` +
+   `CAMERA_PROFILE=microscope` in its env, re-run provision (registers the
+   `sequence` capability), restart `bims-capture-agent.service`, and use the
+   /capture "Microscope sequence" panel end-to-end.
+
 ## 5. Implementation plan (phased)
 | Phase | What | Files |
 |---|---|---|
