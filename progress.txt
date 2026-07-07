@@ -3290,3 +3290,27 @@ Deployment: preview — https://bioscale-operations-system-mongodb-qx7b6khn2-bre
 Source: branch feat/cartridge-admin-sample @ commit f15518b1
 Retrieve this exact code: git checkout feat/cartridge-admin-sample at commit f15518b1
 What this deployment is for: cartridge-admin expanded row now shows the specific sample (subjectId + type) per cartridge
+
+================================================================================
+2026-07-07 — feat/cv-pipeline-v2 — CV pipeline V2 PRD (train/verify/deploy redesign)
+================================================================================
+Investigated why saving a CV project deployment to the post_mortem phase reports
+success but the post-mortem-inspect page says no model is assigned. Root cause
+(verified against the production DB and an empirical Mongoose 9 probe): the CV
+Mongoose schemas on master never declared most fields the CV code writes —
+deployAtPhases/activeModelVersion/shadowModelVersion/trainedModels/classifier on
+cv_projects, embedding/label on cv_images, plus a status-enum mismatch on
+cv_inspections — and strict mode silently strips them from every create/$set.
+Reads (.lean()) bypass the schema, so legacy May/June data still renders, which
+masked the breakage. A partial schema fix exists on the main lineage (18b5b953f,
+2026-06-15) but never merged to master.
+
+Wrote docs/prds/CV-PIPELINE-V2.md: five-stage redesign — phase-scoped capture
+(station step picks the model), unified labeling (capture-time OR stream UI, one
+qcLabel field), training-set assembly that checks cartridge status/tags/phase,
+versioned immutable trainedModels[] entries with per-version training-set
+manifests (exact imageIds, newSincePrevious) so iterations improve without
+erasing prior models, a holdout verification gate + explicit Deploy button, and
+the human-review loop feeding the next iteration. Includes the schema fixes,
+migration script spec, and a 4-PR implementation plan. Docs-only commit; npm run
+check not applicable.
