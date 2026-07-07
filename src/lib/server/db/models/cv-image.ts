@@ -6,15 +6,21 @@ const operatorRef = { _id: String, username: String };
 const cvImageSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 
-	// Identity — cartridge-first. Required after the refactor.
+	// Identity — cartridge-first for phase captures. Not required at the schema level:
+	// project-scoped demo/R&D uploads (POST /api/cv/images) have no cartridge. The
+	// capture endpoint still enforces cartridge presence for phase captures.
 	cartridgeTag: {
-		cartridgeRecordId: { type: String, required: true, index: true },
-		phase: { type: String, required: true },
+		cartridgeRecordId: { type: String, index: true },
+		phase: String,
 		labels: [String],
 		notes: String,
 		_id: false
 	},
 	cartridgeImageNumber: { type: String, index: true },
+
+	// Project-scoped uploads without a cartridge (demo/R&D via POST /api/cv/images)
+	projectId: { type: String, index: true },
+	sampleId: String,
 
 	// Where the pixels live
 	filename: String,
@@ -39,6 +45,11 @@ const cvImageSchema = new Schema({
 		_id: false
 	},
 	processedAt: Date,
+
+	// Embedding cache (cv-color-spatial-v1, 156 floats) — select:false so routine
+	// queries never drag it; the trainer selects it explicitly.
+	embedding: { type: [Number], select: false },
+	embeddingVersion: String,
 
 	// Capture metadata
 	capturedAt: Date,

@@ -10,6 +10,11 @@
  *   phase:          required — manufacturing phase or 'post_run' for R&D
  *   cameraIndex:    optional
  *   processingMode: optional 'full' | 'raw'
+ *   verdict:        optional 'approved' | 'rejected' — capture-time QC label
+ *                   (PRD CV-PIPELINE-V2 Stage 2 entry point A); any other
+ *                   value is a 400
+ *   stationId:      optional — capture station the photo came from; used for
+ *                   the Stage-1 phase sanity check (warn, never block)
  *
  * Behavior:
  *   1. Auth: cv:write OR manufacturing:write (inline mfg buttons use the latter).
@@ -18,7 +23,9 @@
  *   4. Upload file via R2 Worker.
  *   5. Create CvImage doc.
  *   6. Push photo ref to CartridgeRecord.photos[].
- *   7. Return { imageId, cartridgeImageNumber, imageUrl, phase }.
+ *   7. Return { imageId, cartridgeImageNumber, imageUrl, phase } — plus a
+ *      { warning } string when the posted phase disagrees with the station's
+ *      assignedPhase.
  *
  * Future (PRD 3 Phase 4): fire-and-forget phase-X auto-inference here.
  */
@@ -26,6 +33,7 @@ import { json, error } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
+import { CaptureStation } from '$lib/server/db/models/capture-station.js';
 import { AuditLog } from '$lib/server/db/models/index.js';
 import { generateId } from '$lib/server/db/utils.js';
 import { uploadViaWorker, getR2Url, buildCvNamedKey } from '$lib/server/services/r2';
@@ -71,9 +79,34 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		}
 		const cartridgeTagNotes = formData.get('notes')?.toString().trim() || undefined;
 
+		// Optional capture-time QC verdict (CV-PIPELINE-V2 Stage 2 entry point A) —
+		// writes the same qcLabel the labeling UIs use, attributed to the operator.
+		// Empty string (an unset form control) is treated as "no verdict".
+		const verdictRaw = formData.get('verdict')?.toString().trim() || undefined;
+		if (verdictRaw !== undefined && verdictRaw !== 'approved' && verdictRaw !== 'rejected') {
+			return json({ error: `verdict must be 'approved' or 'rejected'` }, { status: 400 });
+		}
+		const verdict = verdictRaw as 'approved' | 'rejected' | undefined;
+
+		// Optional station identity — drives the Stage-1 phase sanity check below.
+		const stationId = formData.get('stationId')?.toString().trim() || undefined;
+
 		if (!file) return json({ error: 'file is required' }, { status: 400 });
 		if (!cartridgeId) return json({ error: 'cartridgeId is required' }, { status: 400 });
 		if (!phase) return json({ error: 'phase is required' }, { status: 400 });
+
+		// Station sanity check (CV-PIPELINE-V2 Stage 1): a capture posted from a
+		// station assigned to a different phase is almost always "wrong station
+		// selected in the dropdown". Warn in the success response — never block.
+		let warning: string | undefined;
+		if (stationId) {
+			const station = await CaptureStation.findById(stationId)
+				.select('name assignedPhase')
+				.lean() as any;
+			if (station?.assignedPhase && station.assignedPhase !== phase) {
+				warning = `station ${station.name} is assigned to ${station.assignedPhase} but this capture was tagged ${phase}`;
+			}
+		}
 
 		// Atomic $inc serves double duty: validates cartridge exists AND mints a
 		// race-free sequence number. null updated = cartridge doesn't exist.
@@ -117,8 +150,29 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				...(cartridgeTagNotes ? { notes: cartridgeTagNotes } : {})
 			},
 			cartridgeImageNumber,
+			...(verdict
+				? {
+					qcLabel: verdict,
+					qcLabeledBy: { _id: locals.user._id, username: locals.user.username },
+					qcLabeledAt: capturedAt
+				}
+				: {}),
 			...(forensic ? { metadata: { forensic } } : {})
 		});
+
+		// Capture-time verdict is a QC decision — audit it like the other
+		// cartridge-status writes below.
+		if (verdict) {
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'cv_images',
+				recordId: imageId,
+				action: 'capture_verdict',
+				newData: { qcLabel: verdict, cartridgeId, phase },
+				changedAt: capturedAt,
+				changedBy: locals.user.username
+			});
+		}
 
 		// A batch of legacy cartridges have a malformed (non-array) `photos`
 		// field, so a plain $push throws "must be an array but is of type …".
@@ -201,7 +255,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			cartridgeRecordId: cartridgeId,
 			phase,
 			imageUrl: publicUrl,
-			filePath: key
+			filePath: key,
+			...(warning ? { warning } : {})
 		}, { status: 201 });
 	} catch (e: any) {
 		// Surface the underlying error to the operator UI instead of a bare 500.

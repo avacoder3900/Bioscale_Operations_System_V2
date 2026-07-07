@@ -10,6 +10,7 @@
  */
 import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { CvInspection } from '$lib/server/db/models/cv-inspection.js';
+import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
 import { generateId } from '$lib/server/db/utils.js';
 import { runInference } from '$lib/server/services/cv-bridge';
 
@@ -32,8 +33,9 @@ async function runOne(
 	const inspectionId = generateId();
 	const triggeredAt = new Date();
 
-	// Insert a queued/running record up front so the operator can see the
-	// inspection is in progress, even if the worker is slow.
+	// Insert a queued record up front so the operator can see the inspection
+	// is in progress, even if inference is slow. Lifecycle matches the
+	// cv-inspection status enum: queued -> running -> completed | failed.
 	await CvInspection.create({
 		_id: inspectionId,
 		imageId: ctx.imageId,
@@ -43,29 +45,54 @@ async function runOne(
 		modelVersion: version,
 		modelPath,
 		isShadow,
-		status: 'running',
+		status: 'queued',
 		triggeredBy: ctx.triggeredBy ?? 'auto-on-capture',
 		triggeredAt,
 		confidenceThreshold
 	});
 
 	try {
-		// runInference expects the PROJECT ID (it re-fetches the project to load the
-		// trained classifier weights), not the model path. modelPath/version are
-		// recorded on the CvInspection above for traceability only.
-		const result = await runInference(ctx.imageUrl, project._id, confidenceThreshold);
+		await CvInspection.updateOne({ _id: inspectionId }, { $set: { status: 'running' } });
+
+		// runInference expects the PROJECT ID (it re-fetches the project to load
+		// the trained weights). The version is passed as an override so each run
+		// grades with ITS OWN weights — shadow runs use shadowModelVersion, not
+		// whatever happens to be active.
+		const result = await runInference(ctx.imageUrl, project._id, confidenceThreshold, version);
 		await CvInspection.updateOne(
 			{ _id: inspectionId },
 			{ $set: {
 				status: 'completed',
 				result: result.result,
 				confidenceScore: result.confidence,
-				anomalyScore: result.anomaly_score,
 				defects: result.defects ?? [],
 				processingTimeMs: result.processing_time_ms,
 				completedAt: new Date()
 			}}
 		);
+
+		// Mirror a compact verdict summary onto the cartridge's photos[] entry
+		// (CV-PIPELINE-V2 Stage 5) — active runs only; shadows stay invisible.
+		// Summary only: labels/embeddings/history never move onto the cartridge.
+		// A mirror failure must not flip a completed inspection to failed.
+		if (!isShadow) {
+			try {
+				await CartridgeRecord.updateOne(
+					{ _id: ctx.cartridgeRecordId, 'photos.imageId': ctx.imageId },
+					{ $set: {
+						'photos.$.verdictSummary': {
+							verdict: result.result,
+							inspectionId,
+							modelVersion: version,
+							at: new Date()
+						}
+					}}
+				);
+			} catch (mirrorErr) {
+				const mirrorMsg = mirrorErr instanceof Error ? mirrorErr.message : String(mirrorErr);
+				console.error(`[phase-inference] verdict mirror failed cartridge=${ctx.cartridgeRecordId} image=${ctx.imageId}:`, mirrorMsg);
+			}
+		}
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		await CvInspection.updateOne(
@@ -94,7 +121,7 @@ export async function runInferenceForProject(ctx: InferenceContext, project: any
 	// Active inference
 	await runOne(ctx, project, activeModel.version, activeModel.modelPath, threshold, false);
 
-	// Shadow inference (if configured)
+	// Shadow inference (if configured) — runs with the shadow version's weights.
 	if (project.shadowModelVersion && project.shadowModelVersion !== project.activeModelVersion) {
 		const shadowModel = (project.trainedModels ?? []).find((m: any) => m.version === project.shadowModelVersion);
 		if (shadowModel) {

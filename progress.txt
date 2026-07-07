@@ -3314,3 +3314,46 @@ erasing prior models, a holdout verification gate + explicit Deploy button, and
 the human-review loop feeding the next iteration. Includes the schema fixes,
 migration script spec, and a 4-PR implementation plan. Docs-only commit; npm run
 check not applicable.
+
+================================================================================
+2026-07-07 — feat/cv-pipeline-v2 — CV-PIPELINE-V2 implemented (schemas, versioned train/verify/deploy, review queue)
+================================================================================
+Implemented the full CV-PIPELINE-V2 PRD (docs/prds/CV-PIPELINE-V2.md) via a
+multi-agent workflow, then hand-verified. Changes:
+
+- Schemas (the strict-mode unblock): cv-project.ts declares deployAtPhases/
+  activeModelVersion/shadowModelVersion, trainingFilter, verifyGate, and the
+  versioned trainedModels[] (immutable per-run entries carrying their own
+  classifier weights, training-set manifest with exact imageIds +
+  newSincePrevious, and holdout verification). cv-image.ts declares the
+  embedding cache (select:false) + projectId/sampleId and relaxes cartridgeTag
+  for project-scoped uploads; qcLabel is now the single label field.
+  cv-inspection.ts status enum fixed to queued/running/completed/failed +
+  isShadow/triggeredBy/At/confidenceThreshold/errorMessage declared + needs-
+  review index. cartridge-record.ts photos[] gains verdictSummary.
+- Training core: cv-bridge triggerTraining assembles by qcLabel + phase +
+  trainingFilter (cartridge status/tag join), holds out a stratified ~20%
+  sample, scores balanced accuracy against verifyGate (defaults 10/0.80), and
+  APPENDS a trainedModels[] version (status verified when the gate passes).
+  runInference resolves weights per version (shadow runs use shadow weights);
+  non-shadow verdicts mirror {verdict, inspectionId, modelVersion} onto the
+  cartridge's photos[] entry. /api/cv/train now trains in-process, audits, and
+  returns version + gate result (stale GitHub-dispatch path removed).
+- Deployment tab: version-history table with status pills + holdout metrics,
+  gate-checked Deploy button (server re-checks verification.passed), rollback
+  via redeploying older passed versions, shadow set/clear, per-version
+  scorecard (model-vs-human agreement) on History. Fixed a pre-existing train
+  action bug (read data.version off the wrong nesting; claimed async).
+- Capture: optional Pass/Fail verdict at capture (writes qcLabel, audited,
+  auto-resets per shot) + station assignedPhase-vs-phase mismatch warning.
+- Review: new /cv/review needs-review queue (verdict but no humanLabel,
+  shadows excluded) with Agree/Overrule that sets humanLabel and mirrors
+  qcLabel, project/phase filters, and a count badge in the CV nav.
+- scripts/migrate-cv-pipeline-v2.ts: raw-driver migration (label->qcLabel,
+  legacy classifier wrapped as trainedModels v1, inspection status normalize);
+  DRY-RUN by default, --apply to write. NOT yet run against prod.
+
+npm run check: 10 errors / 428 warnings vs baseline 11/428 — zero errors in
+any touched file (all 10 pre-existing: r2.ts, AskBimsWidget, assembly page).
+This push creates a Vercel preview build for the branch (URL in the Vercel
+dashboard under this commit).

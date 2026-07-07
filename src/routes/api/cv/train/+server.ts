@@ -1,14 +1,18 @@
 import { json, error } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CvProject } from '$lib/server/db/models/cv-project.js';
-import { CvImage } from '$lib/server/db/models/cv-image.js';
-import { dispatchWorkflow } from '$lib/server/services/github-dispatch';
+import { AuditLog } from '$lib/server/db/models/audit-log.js';
+import { generateId } from '$lib/server/db/utils.js';
+import { triggerTraining } from '$lib/server/services/cv-bridge';
 import type { RequestHandler } from './$types';
 
 /**
- * Start training. BIMS does NOT train here (Vercel can't run torch); it fires a
- * GitHub Actions `repository_dispatch`, which runs an ephemeral runner that
- * trains, uploads model.onnx to R2, and calls /api/cv/train-complete when done.
+ * Train a project's classifier IN-PROCESS (sharp embeddings + logistic
+ * regression via cv-bridge — no GitHub-dispatched runner, no torch). Each run
+ * appends an immutable trainedModels[] version with its exact training-set
+ * manifest and an automatic holdout verification against the project's
+ * verify gate (CV-PIPELINE-V2 Stage 3/4). Training runs synchronously and
+ * the response carries the new version + verification result.
  */
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
@@ -19,27 +23,67 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const { projectId } = body;
 		if (!projectId) return json({ error: 'projectId is required' }, { status: 400 });
 
-		const project = (await CvProject.findById(projectId).lean()) as any;
+		const project = (await CvProject.findById(projectId).select('_id name').lean()) as any;
 		if (!project) return json({ error: 'Project not found' }, { status: 404 });
 
-		// Require enough labeled images before spending a runner.
-		const labeledCount = await CvImage.countDocuments({ projectId, label: { $ne: null } });
-		if (labeledCount < 5) {
-			return json({ error: 'Need at least 5 labeled images to train' }, { status: 400 });
+		let result;
+		try {
+			result = await triggerTraining(projectId, {
+				_id: locals.user._id,
+				username: locals.user.username
+			});
+		} catch (err: any) {
+			const msg = err?.message ?? String(err);
+			// Guardrail failures (too few labeled images / single class) are
+			// caller errors, not server faults.
+			return json({ error: msg }, { status: msg.startsWith('Need') ? 400 : 500 });
 		}
 
-		await dispatchWorkflow('train-cv-model', { projectId });
-		await CvProject.findByIdAndUpdate(projectId, { modelStatus: 'training' });
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'cv_projects',
+			recordId: projectId,
+			action: 'cv_train',
+			newData: {
+				version: result.version,
+				versionStatus: result.versionStatus,
+				samplesUsed: result.samplesUsed,
+				approvedCount: result.approvedCount,
+				rejectedCount: result.rejectedCount,
+				newSincePrevious: result.newSincePrevious,
+				holdoutCount: result.verification.holdoutCount,
+				balancedAccuracy: result.verification.balancedAccuracy,
+				gatePassed: result.verification.passed
+			},
+			changedAt: new Date(),
+			changedBy: locals.user.username
+		});
 
 		return json({
-			data: { projectId, status: 'training', labeledCount, message: 'Training dispatched' }
+			data: {
+				projectId,
+				status: result.status,
+				version: result.version,
+				versionStatus: result.versionStatus,
+				modelVersion: result.modelVersion,
+				samplesUsed: result.samplesUsed,
+				approvedCount: result.approvedCount,
+				rejectedCount: result.rejectedCount,
+				trainingAccuracy: result.trainingAccuracy,
+				embeddedNow: result.embeddedNow,
+				newSincePrevious: result.newSincePrevious,
+				verification: result.verification,
+				gate: result.verification.gate,
+				gatePassed: result.verification.passed,
+				durationMs: result.durationMs
+			}
 		});
 	} catch (err: any) {
 		return json({ error: err.message }, { status: 500 });
 	}
 };
 
-/** Poll training state. Source of truth is CvProject.modelStatus (set by the callback). */
+/** Poll training state. Source of truth is CvProject.modelStatus (mirrored by cv-bridge). */
 export const GET: RequestHandler = async ({ url, locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
 	await connectDB();

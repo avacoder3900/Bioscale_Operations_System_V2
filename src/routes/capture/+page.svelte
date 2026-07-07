@@ -68,6 +68,22 @@
 	// the right fit for "the station you're using just died — pick another."
 	let stationDownAt = $state<{ name: string; at: number } | null>(null);
 
+	// CV-PIPELINE-V2 Stage 1: the capture endpoint warns (never blocks) when the
+	// selected station's assignedPhase disagrees with the posted phase. Kept as
+	// its own banner (not flashBanner) so it doesn't fight the transient
+	// "Captured …" toast; refreshed on every capture response, so a capture with
+	// no warning clears it.
+	let stationPhaseWarning = $state<string | null>(null);
+
+	// CV-PIPELINE-V2 Stage 2 entry point A: optional capture-time pass/fail
+	// verdict. Tri-state — null (default), 'approved', 'rejected' — sent as the
+	// `verdict` form field and reset to null after each capture so a stale
+	// verdict can't mislabel the next photo.
+	let verdict = $state<'approved' | 'rejected' | null>(null);
+	function toggleVerdict(v: 'approved' | 'rejected') {
+		verdict = verdict === v ? null : v;
+	}
+
 	// Remote-camera tuning panel — only meaningful when a Pi station is the
 	// active video source. cameraParams is populated by the WS handler for
 	// {event: 'camera_params'} which the agent sends after we POST a
@@ -741,6 +757,10 @@
 			form.append('file', blob, `capture.jpg`);
 			form.append('cartridgeId', cartridgeId);
 			form.append('phase', phase);
+			// Optional capture-time verdict + station identity (for the server's
+			// assignedPhase sanity check).
+			if (verdict) form.append('verdict', verdict);
+			if (selectedStationId) form.append('stationId', selectedStationId);
 
 			const res = await fetch('/api/cv/capture', { method: 'POST', body: form });
 			if (!res.ok) {
@@ -748,6 +768,11 @@
 				throw new Error(body.error || `HTTP ${res.status}`);
 			}
 			const result = await res.json();
+
+			// Non-blocking station/phase mismatch warning from the server — the
+			// capture itself succeeded. Refreshed every capture, so it self-clears
+			// once station + phase agree again.
+			stationPhaseWarning = result.warning ?? null;
 
 			// Push to recent captures. Inference starts as 'pending'; pollInference
 			// runs in the background and patches the entry when the result lands.
@@ -765,6 +790,9 @@
 			pollInference(result.imageId).catch(() => null);
 			cartridgePhotoCount += 1;
 			sessionPhotos = [...sessionPhotos, { id: result.imageId, cartridgeImageNumber: result.cartridgeImageNumber }];
+			// One verdict per photo — clear the toggle so the next capture starts
+			// at "none" instead of inheriting this photo's verdict.
+			verdict = null;
 			const retakeComplete = retakeInProgress && sessionPhotos.length >= PHOTOS_PER_CARTRIDGE;
 			if (retakeComplete) {
 				flashBanner('ok', 'Retake complete — ready for next cartridge', 2400);
@@ -1035,6 +1063,24 @@
 			</div>
 		{/if}
 
+		<!-- Station/phase mismatch warning (CV-PIPELINE-V2 Stage 1). Non-blocking —
+		     the capture saved fine; this flags "wrong station selected" so the
+		     operator can fix the phase or station before the next shot. -->
+		{#if stationPhaseWarning}
+			<div class="rounded border border-[var(--color-tron-yellow,#facc15)] bg-[rgba(250,204,21,0.08)] p-3 text-sm text-[var(--color-tron-yellow,#facc15)]">
+				<span class="font-semibold">⚠ Phase mismatch:</span>
+				<span class="ml-1">{stationPhaseWarning}.</span>
+				<span class="ml-2 text-[var(--color-tron-text-secondary)]">The photo was saved — check the Phase and Station dropdowns before the next capture.</span>
+				<button
+					type="button"
+					onclick={() => (stationPhaseWarning = null)}
+					class="ml-2 rounded border border-[var(--color-tron-yellow,#facc15)] px-1.5 py-0.5 text-[10px] uppercase hover:bg-[rgba(250,204,21,0.15)]"
+				>
+					Dismiss
+				</button>
+			</div>
+		{/if}
+
 		<!-- Context bar -->
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
 			<div class="flex flex-wrap items-center gap-4">
@@ -1225,6 +1271,32 @@
 									? `📷 Capture ${sessionPhotos.length + 1} (Space)`
 									: `📷 Capture ${sessionPhotos.length + 1} of ${PHOTOS_PER_CARTRIDGE} (Space)`}
 			</button>
+			<!-- Optional capture-time verdict (CV-PIPELINE-V2 Stage 2 entry point A).
+			     Tri-state: click the active button again to clear. Applies to the
+			     NEXT capture only, then resets to none. -->
+			<div class="flex items-center gap-1.5">
+				<span class="text-xs uppercase text-[var(--color-tron-text-secondary)]" title="Optional — label the next photo pass/fail the moment you take it. Leave unset to label later in /cv/label or the stream.">Verdict</span>
+				<button
+					type="button"
+					onclick={() => toggleVerdict('approved')}
+					class="rounded border px-2 py-1 text-xs font-semibold
+						{verdict === 'approved'
+							? 'border-[var(--color-tron-green,#39ff14)] bg-[rgba(57,255,20,0.15)] text-[var(--color-tron-green,#39ff14)]'
+							: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-green,#39ff14)] hover:text-[var(--color-tron-green,#39ff14)]'}"
+				>
+					✓ Pass
+				</button>
+				<button
+					type="button"
+					onclick={() => toggleVerdict('rejected')}
+					class="rounded border px-2 py-1 text-xs font-semibold
+						{verdict === 'rejected'
+							? 'border-[var(--color-tron-red,#ff3366)] bg-[rgba(255,51,102,0.15)] text-[var(--color-tron-red,#ff3366)]'
+							: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-red,#ff3366)] hover:text-[var(--color-tron-red,#ff3366)]'}"
+				>
+					✗ Fail
+				</button>
+			</div>
 			<div class="text-xs text-[var(--color-tron-text-secondary)]">
 				This session: {recentCaptures.length} photo{recentCaptures.length === 1 ? '' : 's'}
 			</div>

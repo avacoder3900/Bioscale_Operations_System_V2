@@ -181,7 +181,17 @@ const cartridgeRecordSchema = new Schema({
 		capturedAt: Date,
 		r2Key: String,
 		r2Url: String,
-		cartridgeImageNumber: String
+		cartridgeImageNumber: String,
+		// Compact deployed-model verdict mirror (CV-PIPELINE-V2 Stage 5), written
+		// by run-inference.ts on non-shadow completion. Summary only — labels,
+		// embeddings and inspection history stay on the cv_* collections.
+		verdictSummary: {
+			verdict: String,
+			inspectionId: String,
+			modelVersion: String,
+			at: Date,
+			_id: false
+		}
 	}],
 
 	// Atomic counter for cartridgeImageNumber generation.

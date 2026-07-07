@@ -2,18 +2,74 @@
  * /cv/projects/[id] — project detail with tabs:
  *   - Members:     view/add/remove member imageIds
  *   - Composition: composedOf + isLiveComposition
- *   - Deployment:  deployAtPhases, activeModelVersion, shadowModelVersion
- *   - History:     trainedModels[] table + recent inspections + train button
+ *   - Deployment:  deploy-at phases + per-version Deploy / Roll back / Verify /
+ *                  Shadow (CV-PIPELINE-V2 Stage 4 — the verify → deploy gate).
+ *   - History:     train button + per-version scorecard + recent inspections.
  */
 import { error, fail, redirect } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CvInspection } from '$lib/server/db/models/cv-inspection.js';
+import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
+import { AuditLog } from '$lib/server/db/models/audit-log.js';
+import { generateId } from '$lib/server/db/utils.js';
+import {
+	embedImage,
+	fetchImageBytes,
+	predict,
+	EMBEDDING_VERSION
+} from '$lib/server/services/cv-classifier';
 import { getR2Url } from '$lib/server/services/r2';
 import type { Actions, PageServerLoad } from './$types';
 
 const PREVIEW_LIMIT = 60;
+
+// Verify-gate defaults (mirrored in the cv-project schema + cv-bridge).
+const DEFAULT_MIN_HOLDOUT_COUNT = 10;
+const DEFAULT_MIN_BALANCED_ACCURACY = 0.8;
+
+/** Strip the heavy classifier blob before shipping a version to the client. */
+function toClientVersion(m: any) {
+	const ts = m.trainingSet ?? null;
+	const v = m.verification ?? null;
+	return {
+		version: m.version,
+		status: m.status ?? 'trained',
+		confidenceThreshold: m.confidenceThreshold ?? null,
+		trainedAt: m.trainedAt ?? null,
+		trainedBy: m.trainedBy ? { username: m.trainedBy.username ?? null } : null,
+		deployedAt: m.deployedAt ?? null,
+		deployedBy:
+			m.deployedBy && typeof m.deployedBy === 'object'
+				? { username: m.deployedBy.username ?? null }
+				: null,
+		legacy: !!m.legacy,
+		trainingSet: ts
+			? {
+					count: ts.count ?? null,
+					approvedCount: ts.approvedCount ?? null,
+					rejectedCount: ts.rejectedCount ?? null,
+					newSincePrevious: ts.newSincePrevious ?? null,
+					imageCount: Array.isArray(ts.imageIds) ? ts.imageIds.length : (ts.count ?? null)
+				}
+			: null,
+		verification: v
+			? {
+					holdoutCount: v.holdoutCount ?? null,
+					accuracy: v.accuracy ?? null,
+					balancedAccuracy: v.balancedAccuracy ?? null,
+					passRecall: v.passRecall ?? null,
+					failRecall: v.failRecall ?? null,
+					gate: v.gate ?? null,
+					passed: !!v.passed,
+					mode: v.mode ?? null,
+					verifiedAt: v.verifiedAt ?? null,
+					verifiedBy: v.verifiedBy ? { username: v.verifiedBy.username ?? null } : null
+				}
+			: null
+	};
+}
 
 export const load: PageServerLoad = async ({ params, locals }) => {
 	if (!locals.user) redirect(302, '/login');
@@ -73,6 +129,38 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		.limit(20)
 		.lean();
 
+	// Per-version scorecard (Stage 5): model verdict vs. human review agreement,
+	// grouped by the version that produced the verdict.
+	const scorecardRaw = await CvInspection.aggregate([
+		{ $match: { projectId: params.id, result: { $in: ['pass', 'fail'] } } },
+		{
+			$group: {
+				_id: '$modelVersion',
+				totalRuns: { $sum: 1 },
+				shadowRuns: { $sum: { $cond: [{ $eq: ['$isShadow', true] }, 1, 0] } },
+				reviewed: { $sum: { $cond: [{ $in: ['$humanLabel', ['pass', 'fail']] }, 1, 0] } },
+				agreed: {
+					$sum: {
+						$cond: [
+							{ $and: [{ $in: ['$humanLabel', ['pass', 'fail']] }, { $eq: ['$humanLabel', '$result'] }] },
+							1,
+							0
+						]
+					}
+				}
+			}
+		},
+		{ $sort: { _id: 1 } }
+	]);
+	const scorecard = (scorecardRaw as any[]).map((s) => ({
+		version: s._id ?? '(unversioned)',
+		totalRuns: s.totalRuns ?? 0,
+		shadowRuns: s.shadowRuns ?? 0,
+		reviewed: s.reviewed ?? 0,
+		agreed: s.agreed ?? 0,
+		agreementPct: s.reviewed > 0 ? Math.round((s.agreed / s.reviewed) * 1000) / 10 : null
+	}));
+
 	// Phases observed in the data — drives the deployAtPhases checkboxes
 	const observedPhases = await CvImage.distinct('cartridgeTag.phase');
 
@@ -87,10 +175,15 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			memberCount: memberIds.length,
 			composedOf: project.composedOf ?? [],
 			isLiveComposition: !!project.isLiveComposition,
+			isMasterModel: !!project.isMasterModel,
 			deployAtPhases: project.deployAtPhases ?? [],
 			activeModelVersion: project.activeModelVersion ?? null,
 			shadowModelVersion: project.shadowModelVersion ?? null,
-			trainedModels: project.trainedModels ?? [],
+			verifyGate: {
+				minHoldoutCount: project.verifyGate?.minHoldoutCount ?? DEFAULT_MIN_HOLDOUT_COUNT,
+				minBalancedAccuracy: project.verifyGate?.minBalancedAccuracy ?? DEFAULT_MIN_BALANCED_ACCURACY
+			},
+			trainedModels: (project.trainedModels ?? []).map(toClientVersion),
 			createdAt: project.createdAt ?? null,
 			updatedAt: project.updatedAt ?? null
 		},
@@ -116,6 +209,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			memberCount: (p.members ?? []).length
 		})),
 		recentInspections: JSON.parse(JSON.stringify(recentInspections)),
+		scorecard,
 		observedPhases: (observedPhases as string[]).filter(Boolean).sort()
 	};
 };
@@ -164,6 +258,8 @@ export const actions: Actions = {
 		return { success: true, section: 'composition' };
 	},
 
+	// Manual override of the routing fields (advanced). The primary path is the
+	// per-version deployVersion action below; this stays for direct edits.
 	updateDeployment: async ({ params, request, locals }) => {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
 		await connectDB();
@@ -190,10 +286,290 @@ export const actions: Actions = {
 		return { success: true, section: 'deployment' };
 	},
 
+	// Promote a verified version to the deployed model (Stage 4). Rollback is the
+	// same call against an older passed version. Re-checks the gate server-side,
+	// flips lifecycle status, retires the previously deployed version, and points
+	// activeModelVersion + deployAtPhases at the chosen version.
+	deployVersion: async ({ params, request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		await connectDB();
+		const form = await request.formData();
+		const version = form.get('version')?.toString();
+		const phases = form.getAll('phase').map(v => String(v)).filter(Boolean);
+		if (!version) return fail(400, { error: 'version required' });
+
+		const project = await CvProject.findById(params.id)
+			.select('trainedModels deployAtPhases')
+			.lean() as any;
+		if (!project) return fail(404, { error: 'Project not found' });
+
+		const entry = (project.trainedModels ?? []).find((m: any) => m.version === version);
+		if (!entry) return fail(400, { error: `Unknown version: ${version}` });
+		// Server-side gate re-check — never trust the button's enabled state.
+		if (!entry.verification?.passed) {
+			return fail(400, {
+				error: `Version ${version} has not passed verification and cannot be deployed.`,
+				section: 'deployment'
+			});
+		}
+
+		// Keep the current routing phases when the form posts none.
+		const deployAtPhases = phases.length > 0 ? phases : (project.deployAtPhases ?? []);
+		const now = new Date();
+		const deployer = { _id: locals.user._id, username: locals.user.username };
+
+		await CvProject.updateOne(
+			{ _id: params.id },
+			{
+				$set: {
+					activeModelVersion: version,
+					deployAtPhases,
+					modelVersion: version,
+					modelStatus: 'trained',
+					'trainedModels.$[elem].status': 'deployed',
+					'trainedModels.$[elem].deployedAt': now,
+					'trainedModels.$[elem].deployedBy': deployer,
+					// Retire whatever was deployed before (status only — weights kept).
+					'trainedModels.$[dep].status': 'retired'
+				}
+			},
+			{
+				arrayFilters: [
+					{ 'elem.version': version },
+					{ 'dep.status': 'deployed', 'dep.version': { $ne: version } }
+				]
+			}
+		);
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'cv_projects',
+			recordId: params.id,
+			action: 'cv_deploy',
+			newData: { version, phases: deployAtPhases },
+			changedAt: now,
+			changedBy: locals.user.username ?? locals.user._id,
+			reason: `cv_deploy ${version} at ${deployAtPhases.join(', ') || '(no phases)'}`
+		});
+
+		return {
+			success: true,
+			section: 'deployment',
+			message: `Deployed ${version} at ${deployAtPhases.join(', ') || '(no phases)'}.`
+		};
+	},
+
+	// Re-score a version against the CURRENT labeled pool (Stage 4 "quick check").
+	// Prefers images the version never trained on (a fresh holdout); falls back to
+	// the full pool if that leaves a class empty. Updates ONLY that version's
+	// verification via a positional array update — never rewrites the array.
+	verifyVersion: async ({ params, request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		await connectDB();
+		const form = await request.formData();
+		const version = form.get('version')?.toString();
+		if (!version) return fail(400, { error: 'version required' });
+
+		const project = await CvProject.findById(params.id)
+			.select('trainedModels phases isMasterModel trainingFilter verifyGate confidenceThreshold')
+			.lean() as any;
+		if (!project) return fail(404, { error: 'Project not found' });
+
+		const entry = (project.trainedModels ?? []).find((m: any) => m.version === version);
+		if (!entry) return fail(400, { error: `Unknown version: ${version}` });
+		const classifier = entry.classifier;
+		if (!classifier?.weights?.length) {
+			return fail(400, { error: `Version ${version} has no classifier weights to score.`, section: 'deployment' });
+		}
+
+		try {
+			// Assemble the eligible labeled pool with the trainer's rules (phase
+			// scope unless master model, then trainingFilter tags + statuses).
+			const query: Record<string, any> = { qcLabel: { $ne: null } };
+			const phases: string[] = project.isMasterModel ? [] : (project.phases ?? []);
+			if (phases.length > 0) query['cartridgeTag.phase'] = { $in: phases };
+
+			let pool = await CvImage.find(query)
+				.select('_id imageUrl qcLabel cartridgeTag embeddingVersion +embedding')
+				.lean() as any[];
+
+			const tf = project.trainingFilter ?? {};
+			const requiredTags: string[] = tf.requiredTags ?? [];
+			const excludeTags: string[] = tf.excludeTags ?? [];
+			if (requiredTags.length > 0) {
+				pool = pool.filter((img) => {
+					const labels: string[] = img.cartridgeTag?.labels ?? [];
+					return requiredTags.every((t) => labels.includes(t));
+				});
+			}
+			if (excludeTags.length > 0) {
+				pool = pool.filter((img) => {
+					const labels: string[] = img.cartridgeTag?.labels ?? [];
+					return !excludeTags.some((t) => labels.includes(t));
+				});
+			}
+			const cartridgeStatuses: string[] = tf.cartridgeStatuses ?? [];
+			if (cartridgeStatuses.length > 0) {
+				const cartIds = [
+					...new Set(pool.map((i) => i.cartridgeTag?.cartridgeRecordId).filter(Boolean))
+				];
+				const carts = await CartridgeRecord.find({ _id: { $in: cartIds } })
+					.select('_id status')
+					.lean() as any[];
+				const allowed = new Set(
+					carts.filter((c) => cartridgeStatuses.includes(c.status)).map((c) => c._id)
+				);
+				pool = pool.filter(
+					(i) => i.cartridgeTag?.cartridgeRecordId && allowed.has(i.cartridgeTag.cartridgeRecordId)
+				);
+			}
+
+			// Prefer a fresh holdout (images the fit never saw) when it still has
+			// both classes; otherwise score the whole pool and say so.
+			const trainedIds = new Set<string>(entry.trainingSet?.imageIds ?? []);
+			const fresh = pool.filter((i) => !trainedIds.has(i._id));
+			const freshHasBoth =
+				fresh.some((i) => i.qcLabel === 'approved') && fresh.some((i) => i.qcLabel === 'rejected');
+			const useFresh = fresh.length > 0 && freshHasBoth;
+			const scoringSet = useFresh ? fresh : pool;
+			const mode = useFresh ? 'holdout-excludes-training' : 'full-pool';
+
+			if (scoringSet.length === 0) {
+				return fail(400, { error: 'No labeled images available to verify against.', section: 'deployment' });
+			}
+
+			const threshold = entry.confidenceThreshold ?? project.confidenceThreshold ?? 0.5;
+			let passCorrect = 0;
+			let passTotal = 0;
+			let failCorrect = 0;
+			let failTotal = 0;
+			const scoredIds: string[] = [];
+			for (const img of scoringSet) {
+				let emb: number[] | undefined =
+					img.embeddingVersion === EMBEDDING_VERSION && Array.isArray(img.embedding)
+						? img.embedding
+						: undefined;
+				if (!emb) {
+					if (!img.imageUrl) continue; // can't score an image with no pixels
+					const bytes = await fetchImageBytes(img.imageUrl);
+					emb = await embedImage(bytes);
+					await CvImage.updateOne(
+						{ _id: img._id },
+						{ $set: { embedding: emb, embeddingVersion: EMBEDDING_VERSION } }
+					);
+				}
+				const out = predict(emb, classifier as any, threshold);
+				scoredIds.push(img._id);
+				if (img.qcLabel === 'approved') {
+					passTotal++;
+					if (out.verdict === 'pass') passCorrect++;
+				} else {
+					failTotal++;
+					if (out.verdict === 'fail') failCorrect++;
+				}
+			}
+
+			const holdoutCount = scoredIds.length;
+			const accuracy = holdoutCount > 0 ? (passCorrect + failCorrect) / holdoutCount : 0;
+			const passRecall = passTotal > 0 ? passCorrect / passTotal : 0;
+			const failRecall = failTotal > 0 ? failCorrect / failTotal : 0;
+			const balancedAccuracy = (passRecall + failRecall) / 2;
+			const gate = {
+				minHoldoutCount: project.verifyGate?.minHoldoutCount ?? DEFAULT_MIN_HOLDOUT_COUNT,
+				minBalancedAccuracy: project.verifyGate?.minBalancedAccuracy ?? DEFAULT_MIN_BALANCED_ACCURACY
+			};
+			const passed = holdoutCount >= gate.minHoldoutCount && balancedAccuracy >= gate.minBalancedAccuracy;
+			const now = new Date();
+			const verifier = { _id: locals.user._id, username: locals.user.username };
+
+			const verification = {
+				holdoutImageIds: scoredIds,
+				holdoutCount,
+				accuracy,
+				balancedAccuracy,
+				passRecall,
+				failRecall,
+				gate,
+				passed,
+				mode, // which pool this on-demand check scored against
+				verifiedAt: now,
+				verifiedBy: verifier
+			};
+
+			// Positional update of just this entry. Don't move a deployed/retired
+			// version's lifecycle status — only flip trained<->verified for
+			// not-yet-deployed versions.
+			const set: Record<string, any> = { 'trainedModels.$[elem].verification': verification };
+			if (entry.status === 'trained' || entry.status === 'verified') {
+				set['trainedModels.$[elem].status'] = passed ? 'verified' : 'trained';
+			}
+			await CvProject.updateOne(
+				{ _id: params.id },
+				{ $set: set },
+				{ arrayFilters: [{ 'elem.version': version }] }
+			);
+
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'cv_projects',
+				recordId: params.id,
+				action: 'cv_verify',
+				newData: { version, holdoutCount, balancedAccuracy, passed, mode },
+				changedAt: now,
+				changedBy: locals.user.username ?? locals.user._id,
+				reason: `cv_verify ${version}: balAcc ${(balancedAccuracy * 100).toFixed(1)}% on ${holdoutCount} (${mode}) -> ${passed ? 'PASS' : 'FAIL'}`
+			});
+
+			return {
+				success: true,
+				section: 'deployment',
+				message: `Verified ${version}: balanced accuracy ${(balancedAccuracy * 100).toFixed(1)}% on ${holdoutCount} images (${mode}) — ${passed ? 'passed' : 'did not pass'} the gate.`
+			};
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			return fail(500, { error: `Verify failed: ${msg}`, section: 'deployment' });
+		}
+	},
+
+	setShadow: async ({ params, request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		await connectDB();
+		const form = await request.formData();
+		const version = form.get('version')?.toString();
+		if (!version) return fail(400, { error: 'version required' });
+		const project = await CvProject.findById(params.id).select('trainedModels').lean() as any;
+		if (!project) return fail(404, { error: 'Project not found' });
+		if (!(project.trainedModels ?? []).some((m: any) => m.version === version)) {
+			return fail(400, { error: `Unknown version: ${version}` });
+		}
+		await CvProject.updateOne({ _id: params.id }, { $set: { shadowModelVersion: version } });
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'cv_projects',
+			recordId: params.id,
+			action: 'cv_shadow_set',
+			newData: { shadowModelVersion: version },
+			changedAt: new Date(),
+			changedBy: locals.user.username ?? locals.user._id,
+			reason: `cv_shadow_set ${version}`
+		});
+		return { success: true, section: 'deployment', message: `Shadow set to ${version}.` };
+	},
+
 	clearShadow: async ({ params, locals }) => {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
 		await connectDB();
 		await CvProject.updateOne({ _id: params.id }, { $set: { shadowModelVersion: null } });
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'cv_projects',
+			recordId: params.id,
+			action: 'cv_shadow_clear',
+			newData: { shadowModelVersion: null },
+			changedAt: new Date(),
+			changedBy: locals.user.username ?? locals.user._id,
+			reason: 'cv_shadow_clear'
+		});
 		return { success: true, section: 'deployment' };
 	},
 
@@ -215,17 +591,27 @@ export const actions: Actions = {
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ projectId: params.id, confidenceThreshold })
 		});
-		const data = await resp.json().catch(() => ({}));
+		const body = await resp.json().catch(() => ({}));
 		if (!resp.ok) {
 			return fail(resp.status, {
-				error: data?.error ?? `Training failed (HTTP ${resp.status})`,
+				error: body?.error ?? `Training failed (HTTP ${resp.status})`,
 				section: 'train'
 			});
 		}
+
+		// Training now runs synchronously in-process and returns the new version +
+		// its holdout verification (nested under `data`). Surface the gate result.
+		const d = body.data ?? {};
+		const v = d.verification ?? {};
+		const balAcc = typeof v.balancedAccuracy === 'number' ? `${(v.balancedAccuracy * 100).toFixed(1)}%` : '—';
+		const gateMsg = d.gatePassed ? 'passed the verify gate' : 'did not pass the verify gate';
+		const nextStep = d.gatePassed
+			? 'Deploy it under the Deployment tab.'
+			: 'Label more images and retrain, or lower the gate.';
 		return {
 			success: true,
 			section: 'train',
-			message: `Training kicked off — version ${data.version} (${data.sampleCount} labeled samples). Worker is processing; refresh the History tab in ~1 min.`
+			message: `Trained ${d.version} — ${d.samplesUsed ?? '?'} samples (${d.approvedCount ?? '?'}✓ / ${d.rejectedCount ?? '?'}✗), ${d.newSincePrevious ?? 0} new since the previous version. Holdout balanced accuracy ${balAcc} on ${v.holdoutCount ?? '?'} images — ${gateMsg}. ${nextStep}`
 		};
 	}
 };
