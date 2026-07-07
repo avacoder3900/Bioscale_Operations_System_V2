@@ -654,7 +654,14 @@
 	let fillSpeed = $state(20); // mm/s cap, applied ONLY when match-protocol is off (watch slowly)
 	let fillDwellMs = $state(250); // dwell at the dispense position (protocol delays 0.25s)
 	let fillMotionRunning = $state(false);
+	let fillPaused = $state(false); // pause takes effect between moves (mid-move can't interrupt)
 	let fillStop = false;
+
+	// Block between moves while paused (until resumed or stopped). Mid-move can't be
+	// interrupted — the OT-2 finishes the current move — so pause lands at a safe point.
+	async function fillWaitIfPaused() {
+		while (fillPaused && !fillStop) await new Promise((r) => setTimeout(r, 150));
+	}
 
 	// Holes in the order the fill visits them (column-major, then y) — matches Tour.
 	function fillOrder(names: string[]): string[] {
@@ -702,11 +709,13 @@
 		clearMsg();
 		fillMotionRunning = true;
 		fillStop = false;
+		fillPaused = false;
 		busy = true;
 		try {
 			// Establish the slot origin (first move uses the safe arc via moveToWellSafe).
 			if (!slotOrigin) await moveToWellSafe(chosen[0]);
 			for (let i = 0; i < chosen.length; i++) {
+				await fillWaitIfPaused();
 				if (fillStop) {
 					msg = `Fill motion stopped — ${i}/${chosen.length} done`;
 					break;
@@ -716,10 +725,12 @@
 				refWell = name;
 				msg = `Fill motion ${i + 1}/${chosen.length} — ${name}${fillMatchProtocol ? ' (protocol speed)' : ` @ ${fillSpeed} mm/s`}`;
 				await fillMoveAbs(name, FILL_JUMP_MM, { forceDirect: false, arc: true }); // 1) travel above hole
+				await fillWaitIfPaused();
 				if (fillStop) break;
 				await fillMoveAbs(name, FILL_DISPENSE_MM, { forceDirect: true }); // 2) descend to dispense pos
 				await refreshPosition();
 				await new Promise((r) => setTimeout(r, Math.max(0, fillDwellMs))); // 3) dwell (visual check)
+				await fillWaitIfPaused();
 				if (fillStop) break;
 				await fillMoveAbs(name, FILL_RETRACT_MM, { forceDirect: true }); // 4) retract to prejump
 			}
@@ -728,12 +739,21 @@
 			errMsg = e instanceof Error ? e.message : String(e);
 		} finally {
 			fillMotionRunning = false;
+			fillPaused = false;
 			busy = false;
 			await refreshPosition();
 		}
 	}
+	function pauseFillMotion() {
+		fillPaused = true;
+		msg = 'Fill motion paused — Resume to continue, or Stop to end.';
+	}
+	function resumeFillMotion() {
+		fillPaused = false;
+	}
 	function stopFillMotion() {
 		fillStop = true;
+		fillPaused = false;
 	}
 
 	// ── Tip pickup + go to tip calibrator (matches the real fill workflow) ──
@@ -1123,7 +1143,15 @@
 							<button type="button" onclick={tourStop} class="rounded border border-red-500/40 bg-red-900/15 py-1.5 text-xs text-red-300">Stop</button>
 						</div>
 					{:else if fillMotionRunning}
-						<button type="button" onclick={stopFillMotion} class="w-full rounded border border-red-500/40 bg-red-900/15 py-2 text-xs text-red-300">■ Stop fill motion</button>
+						{#if fillPaused}<div class="mb-1 text-center text-[11px] text-amber-300">Paused</div>{/if}
+						<div class="grid grid-cols-2 gap-1">
+							{#if fillPaused}
+								<button type="button" onclick={resumeFillMotion} class="rounded border border-[var(--color-tron-cyan)]/40 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10">▶ Resume</button>
+							{:else}
+								<button type="button" onclick={pauseFillMotion} class="rounded border border-amber-500/40 bg-amber-900/15 py-2 text-xs text-amber-300">❚❚ Pause</button>
+							{/if}
+							<button type="button" onclick={stopFillMotion} class="rounded border border-red-500/40 bg-red-900/15 py-2 text-xs text-red-300">■ Stop</button>
+						</div>
 					{:else}
 						<div class="grid grid-cols-2 gap-1">
 							<button type="button" onclick={startTour} disabled={!pipetteId || busy} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Drive through every hole in order (whole deck)">
