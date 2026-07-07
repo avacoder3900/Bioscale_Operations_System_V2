@@ -36,14 +36,23 @@ We want a CV capture station whose camera is a **microscope** (Celestron Imager 
 - **Upload path — recommended: agent POSTs directly to `/api/cv/capture-ingest`** with the fleet `STATION_AGENT_KEY`. Rationale: a 15-shot timed run mediated through the operator's browser tab adds failure modes (tab focus/sleep, WebRTC frame quality) for zero benefit; `capture-ingest` already exists for exactly this kind of scripted ingest and lands photos in the standard pathway (R2 + `photos[]` + auto-inference). This intentionally relaxes the "Pi never writes to BIMS" principle — flagged as **Decision 1** below.
 - **Resilience**: each still is saved to a local spool first (`/home/pi/bims-spool/<sequenceId>/NN.jpg`), then uploaded; on upload failure, retry with backoff; spool entries delete on confirmed ingest. Power loss mid-sequence loses at most the not-yet-taken shots.
 
-### 3.4 Storage & labeling of sequence photos
-- **Defaults**: `count = 15`, `intervalMs = 2000` (both env-overridable and settable per-run from the UI).
-- **Phase**: new capture phase **`microscope`** (added to the capture page's phase list). Sequence photos are ordinary `photos[]` entries at that phase — visible in Image Stream, DHR, labelable, trainable.
-- **Sequence identity for later location-labeling** — add two optional fields to the `photos[]` subdocument (schema addition on this branch):
-  - `sequenceId: String` — one id per 15-shot run (groups the set)
-  - `sequenceIndex: Number` — 1…15, the slot within the run
-- "Label by location later" contract: a follow-up UI will present a run's 15 photos ordered by `sequenceIndex` and let someone assign location names, written into the existing `photos[].labels[]` (vocabulary via `failure_labels` or a new location vocabulary — decided in that follow-up, **not built here**). This PRD only guarantees the data needed for it exists.
-- `capture-ingest` gains acceptance of `sequenceId`/`sequenceIndex` and passes them into the photo entry.
+### 3.4 Storage & labeling of sequence photos — a photo TYPE, not a phase
+Microscope photos are **not a manufacturing state**. `phase` values like `wax_filled`/`sealed` describe where the cartridge is in the process; a microscope capture is a different *kind of photo* of the same cartridge. So no new phase is created. Instead the `photos[]` subdocument gains a descriptor + location block (schema addition on this branch):
+
+```
+photoType:  'inspection' | 'microscope'        // default 'inspection' — existing photos unchanged
+sequenceId: String                             // groups one 15-shot run
+sequenceIndex: Number                          // 1…15, order taken
+location: { row: String, col: Number }         // named grid position, e.g. row 'A', col 3 → "A3"
+```
+
+- **Grid pattern**: 15 shots default to a **3 rows × 5 columns** grid (rows `A–C`, columns `1–5`), row-major scan order. The pattern is config (`GRID_ROWS`/`GRID_COLS`, rows×cols must equal count), and the agent **pre-stamps `location` from `sequenceIndex`** per the pattern (shot 1 → A1, shot 6 → B1, …). The follow-up labeling UI can correct/confirm locations later — but every photo carries a best-guess row/col from day one.
+- **Phase on microscope photos**: left `null`. They don't participate in phase-based inference routing (no `runPhaseInference` fires for them) and never pollute a step model's training set. If a microscope model is wanted later, model scoping by `photoType` is a small follow-up on `CvProject`.
+- **Findability** (a first-class requirement):
+  - Mongo index on `photos.photoType` (+ `photos.location.row/col`).
+  - **Image Stream**: new filter `type = microscope` and a location filter (row/col), each photo card badges its `location` (e.g. `A3`) and run.
+  - **Cartridge admin / DHR**: cartridges with microscope photos are queryable (`photos.photoType: 'microscope'`); the DHR photo section groups a run by `sequenceId` and shows the row/col grid.
+- `capture-ingest` gains acceptance of `photoType`, `sequenceId`, `sequenceIndex`, `location` and passes them into the photo entry. Defaults: `count = 15`, `intervalMs = 2000` (env-overridable and settable per-run from the UI).
 
 ### 3.5 `/capture` page UI (station mode)
 - A **"Microscope sequence"** panel when the selected station reports the `sequence` capability in `/health`:
@@ -61,12 +70,12 @@ We want a CV capture station whose camera is a **microscope** (Celestron Imager 
 |---|---|---|
 | P1 | Camera device selection by name/index/path + microscope profile + Windows dev mode | `services/bims-capture-agent/camera.py`, `agent.py`, `.env.example`, README |
 | P2 | Sequence engine: WS commands, timer stills, local spool, direct ingest w/ retry, progress events | new `services/bims-capture-agent/sequence.py`, `agent.py` |
-| P3 | `photos[].sequenceId/sequenceIndex` schema + `capture-ingest` acceptance + `microscope` phase | `cartridge-record.ts`, `api/cv/capture-ingest/+server.ts`, `capture/+page.server.ts` |
-| P4 | `/capture` sequence panel (start/abort/progress/auto-start toggle) | `capture/+page.svelte` |
+| P3 | `photos[].photoType/sequenceId/sequenceIndex/location` schema + indexes + `capture-ingest` acceptance | `cartridge-record.ts`, `api/cv/capture-ingest/+server.ts` |
+| P4 | `/capture` sequence panel (grid config, start/abort/progress/auto-start) + stream `type`/location filters + DHR run grouping | `capture/+page.svelte`, `cv/stream/+page.server.ts` + `.svelte`, DHR pages |
 | P5 | Bench test on Windows with the Celestron; then Pi provisioning notes | RUNBOOK.md |
 
 ## 6. Decisions needed (defaults applied if unchallenged)
 1. **Direct ingest from the Pi** (agent → `capture-ingest` with `STATION_AGENT_KEY`) instead of browser-mediated upload — **recommended yes**.
 2. **Interval default 2 s** between the 15 shots (a full run ≈ 30 s) — adjust?
-3. **Phase name `microscope`** for these photos — or should sequence photos use the cartridge's inspect-step phase (e.g. `wax_filled`) so existing per-step models score them? Default: `microscope` (its own model scope; a Stage Models assignment can deploy a model there when ready).
-4. **15 photos fixed per run** — count is configurable but defaults to 15 per the requirement.
+3. ~~Phase~~ **RESOLVED (2026-07-07):** microscope photos are a **photo type** (`photoType: 'microscope'`), not a phase. `phase` stays null on them; existing phases (`wax_filled`, `sealed`, …) remain manufacturing states only.
+4. **15 photos fixed per run** — count is configurable but defaults to 15; grid default **3×5 (rows A–C × cols 1–5)**, row-major. Confirm the grid shape (3×5 vs 5×3) and whether the scan order is row-major or serpentine — this determines the pre-stamped row/col of each shot.
