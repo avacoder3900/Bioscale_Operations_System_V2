@@ -97,6 +97,9 @@
 	let experiment = $state(data.filters.experiment || '');
 	let tag = $state(data.filters.tag || '');
 	let notesSearch = $state(data.filters.notesSearch || '');
+	let photoType = $state(data.filters.type || '');
+	let row = $state(data.filters.row || '');
+	let col = $state(data.filters.col || '');
 
 	// Local, mutable copies so we can label optimistically without a round-trip
 	// reload. Re-synced whenever the server sends a fresh page (nav / tab switch).
@@ -128,6 +131,9 @@
 		if (experiment) params.set('experiment', experiment);
 		if (tag) params.set('tag', tag);
 		if (notesSearch) params.set('notes', notesSearch);
+		if (photoType) params.set('type', photoType);
+		if (row) params.set('row', row);
+		if (col) params.set('col', col);
 		return params;
 	}
 
@@ -148,6 +154,9 @@
 		experiment = '';
 		tag = '';
 		notesSearch = '';
+		photoType = '';
+		row = '';
+		col = '';
 		goto(`/cv/stream?review=${data.review}`);
 	}
 
@@ -382,6 +391,22 @@
 				<label for="notes-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Search Notes</label>
 				<input id="notes-filter" type="text" bind:value={notesSearch} placeholder="Keyword in photo notes" class="tron-input w-full" />
 			</div>
+			<div>
+				<label for="type-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Type</label>
+				<select id="type-filter" bind:value={photoType} class="tron-input w-full">
+					<option value="">All types</option>
+					<option value="inspection">Inspection</option>
+					<option value="microscope">Microscope</option>
+				</select>
+			</div>
+			<div>
+				<label for="row-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Row</label>
+				<input id="row-filter" type="text" bind:value={row} placeholder="e.g. A" class="tron-input w-full" />
+			</div>
+			<div>
+				<label for="col-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Col</label>
+				<input id="col-filter" type="number" min="1" bind:value={col} placeholder="e.g. 3" class="tron-input w-full" />
+			</div>
 		</div>
 		<div class="mt-3 flex gap-2">
 			<button type="button" onclick={applyFilters} class="rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-[var(--color-tron-bg-primary)]">
@@ -441,6 +466,12 @@
 							{/if}
 							{#if img.notes}
 								<span class="absolute right-1 top-7 rounded bg-black/60 px-1 py-0.5 text-[10px] text-white">📝</span>
+							{/if}
+							{#if img.photoType === 'microscope'}
+								<span class="absolute bottom-1 right-1 rounded bg-[var(--color-tron-cyan)]/80 px-1 py-0.5 text-[9px] font-bold text-black" title="Microscope sequence photo">🔬</span>
+							{/if}
+							{#if img.location && (img.location.row || img.location.col != null)}
+								<span class="absolute bottom-1 left-1 rounded bg-black/70 px-1 py-0.5 text-[9px] font-mono font-bold text-[var(--color-tron-cyan)]">{img.location.row ?? ''}{img.location.col ?? ''}</span>
 							{/if}
 						</div>
 						<div class="p-2 text-xs">

@@ -47,6 +47,12 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 				phase: p.phase || 'untagged',
 				labels: p.labels || [],
 				notes: p.notes || '',
+				// Microscope-sequence descriptors — drive the grouped run grid below.
+				// photoType defaults to 'inspection' for legacy/missing values.
+				photoType: p.photoType || 'inspection',
+				sequenceId: p.sequenceId ?? null,
+				sequenceIndex: p.sequenceIndex ?? null,
+				location: p.location ? { row: p.location.row ?? null, col: p.location.col ?? null } : null,
 				// Human QC verdict — the pass/fail shown in the image stream (approved/rejected/null).
 				qcLabel: p.qcLabel ?? null,
 				capturedAt: p.capturedAt || null,

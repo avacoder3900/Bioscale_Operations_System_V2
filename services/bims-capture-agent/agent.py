@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 # Local sibling modules — agent.py is run as a script, not as a package member.
 import camera as camera_mod  # noqa: E402
 import scanner as scanner_mod  # noqa: E402
+import sequence as sequence_mod  # noqa: E402
 
 __version__ = "0.1.0"
 
@@ -68,16 +69,38 @@ def _bool_env(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
+async def _broadcast(message: dict) -> None:
+    """Fan a JSON event out to every connected operator browser.
+
+    Same dead-client-guarding model as _broadcast_scans. Used by the sequence
+    engine for sequence_progress / sequence_done / sequence_error events.
+    """
+    for ws in list(_ws_clients):
+        if ws.closed:
+            _ws_clients.discard(ws)
+            continue
+        try:
+            await ws.send_json(message)
+        except Exception:
+            log.exception("failed to broadcast to a client; dropping")
+            _ws_clients.discard(ws)
+
+
 async def health(_request: web.Request) -> web.Response:
+    # `capabilities` lets the /capture UI feature-gate. The timed microscope
+    # sequence engine is always compiled in, so "sequence" is always advertised;
+    # the browser still checks camera_ok before offering the Start button.
     return web.json_response(
         {
             "station_id": os.environ.get("STATION_ID", ""),
             "station_name": os.environ.get("STATION_NAME", ""),
             "agent_version": __version__,
             "camera_ok": camera_mod.is_available(),
+            "camera_profile": camera_mod.profile(),
             "scanner_ok": scanner_mod.is_available(),
             "led_ok": False,
             "robot_arm_ok": False,
+            "capabilities": ["sequence"],
             "uptime_s": int(time.monotonic() - _started_at),
         }
     )
@@ -242,6 +265,36 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
                             "event": "scan_armed",
                             "dropped": dropped,
                             "ts": int(time.time() * 1000),
+                        }
+                    )
+                elif cmd == "sequence_start":
+                    # Timed microscope run: grab N full-res stills on an
+                    # interval, spool + upload each to /api/cv/capture-ingest,
+                    # stream sequence_progress events back. Rejected (error
+                    # event) if a run is already active or cartridgeId missing.
+                    ok, result = await sequence_mod.manager.start(
+                        cartridge_id=payload.get("cartridgeId"),
+                        count=payload.get("count"),
+                        interval_ms=payload.get("intervalMs"),
+                        grab_still=camera_mod.grab_still,
+                        broadcast=_broadcast,
+                    )
+                    if ok:
+                        # Ack with the sequenceId so the UI can wire Abort
+                        # immediately (before the first sequence_progress).
+                        await ws.send_json(
+                            {"event": "sequence_started", "sequenceId": result}
+                        )
+                    else:
+                        await ws.send_json(
+                            {"event": "sequence_error", "message": result}
+                        )
+                elif cmd == "sequence_abort":
+                    sequence_mod.manager.abort()
+                    await ws.send_json(
+                        {
+                            "event": "sequence_aborting",
+                            "sequenceId": sequence_mod.manager.current_id,
                         }
                     )
                 elif cmd == "get_camera_params":
@@ -533,6 +586,8 @@ async def _on_startup(app: web.Application) -> None:
 
 
 async def _on_cleanup(app: web.Application) -> None:
+    # Stop any in-flight sequence run before tearing the loop down.
+    await sequence_mod.manager.shutdown()
     for key in ("scan_broadcaster", "heartbeat"):
         task = app.get(key)
         if task is not None:

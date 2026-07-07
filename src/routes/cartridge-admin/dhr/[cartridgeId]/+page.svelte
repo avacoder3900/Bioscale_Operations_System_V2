@@ -56,13 +56,40 @@
 		return -1;
 	});
 
-	// Available phase filters (only phases that have photos)
-	const phasesWithPhotos: string[] = $derived(Array.from(new Set(photos.map((p: any) => String(p.phase ?? '')))));
+	// Microscope-sequence photos are a different KIND of photo — split them out so
+	// the phase gallery/timeline stay inspection-only and microscope runs render
+	// in their own grouped section below.
+	const inspectionPhotos = $derived(photos.filter((p: any) => p.photoType !== 'microscope'));
+	const microscopePhotos = $derived(photos.filter((p: any) => p.photoType === 'microscope'));
 
-	// Filtered photos
+	// Group microscope photos by sequenceId (one 15-shot run each), newest run
+	// first, each run ordered by sequenceIndex for a row/col-ordered grid.
+	const microscopeRuns = $derived.by(() => {
+		const groups = new Map<string, any[]>();
+		for (const p of microscopePhotos) {
+			const key = p.sequenceId || 'ungrouped';
+			if (!groups.has(key)) groups.set(key, []);
+			groups.get(key)!.push(p);
+		}
+		const runs = Array.from(groups.entries()).map(([sequenceId, ps]) => {
+			const ordered = [...ps].sort((a, b) => (a.sequenceIndex ?? 0) - (b.sequenceIndex ?? 0));
+			const latest = ps.reduce((max, p) => {
+				const t = p.capturedAt ? new Date(p.capturedAt).getTime() : 0;
+				return t > max ? t : max;
+			}, 0);
+			return { sequenceId, photos: ordered, capturedAt: latest };
+		});
+		runs.sort((a, b) => b.capturedAt - a.capturedAt);
+		return runs;
+	});
+
+	// Available phase filters (only inspection phases that have photos)
+	const phasesWithPhotos: string[] = $derived(Array.from(new Set(inspectionPhotos.map((p: any) => String(p.phase ?? '')))));
+
+	// Filtered photos (inspection only — microscope runs render separately)
 	const filteredPhotos = $derived.by(() => {
-		if (activePhaseFilter === 'all') return photos;
-		return photos.filter((p: any) => p.phase === activePhaseFilter);
+		if (activePhaseFilter === 'all') return inspectionPhotos;
+		return inspectionPhotos.filter((p: any) => p.phase === activePhaseFilter);
 	});
 
 	function formatDate(iso: string): string {
@@ -381,11 +408,11 @@
 	<!-- Photo Gallery -->
 	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
 		<h2 class="mb-4 text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-text-secondary)]">
-			All Photos ({data.photos.length})
+			All Photos ({inspectionPhotos.length})
 		</h2>
 
 		<!-- Phase filter tabs -->
-		{#if data.photos.length > 0}
+		{#if inspectionPhotos.length > 0}
 			<div class="mb-4 flex items-center gap-2 border-b border-[var(--color-tron-border)] pb-0">
 				<button
 					class="px-3 py-2 text-sm font-medium transition-colors {activePhaseFilter === 'all'
@@ -393,7 +420,7 @@
 						: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
 					onclick={() => { activePhaseFilter = 'all'; }}
 				>
-					All ({data.photos.length})
+					All ({inspectionPhotos.length})
 				</button>
 				{#each phasesWithPhotos as phase}
 					<button
@@ -402,7 +429,7 @@
 							: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
 						onclick={() => { activePhaseFilter = phase; }}
 					>
-						{phaseLabel(phase)} ({data.photos.filter((p: any) => p.phase === phase).length})
+						{phaseLabel(phase)} ({inspectionPhotos.filter((p: any) => p.phase === phase).length})
 					</button>
 				{/each}
 			</div>
@@ -504,6 +531,63 @@
 			</div>
 		{/if}
 	</div>
+
+	<!-- Microscope sequence runs — grouped by sequenceId, newest run first, each
+	     run a row/col-ordered grid with the location label under each thumbnail. -->
+	{#if microscopePhotos.length > 0}
+		<div class="rounded-lg border border-[var(--color-tron-cyan)] bg-[var(--color-tron-bg-secondary)] p-4">
+			<h2 class="mb-4 text-xs font-semibold uppercase tracking-wider text-[var(--color-tron-cyan)]">
+				🔬 Microscope Sequences ({microscopePhotos.length} photo{microscopePhotos.length !== 1 ? 's' : ''} · {microscopeRuns.length} run{microscopeRuns.length !== 1 ? 's' : ''})
+			</h2>
+			<div class="space-y-6">
+				{#each microscopeRuns as run (run.sequenceId)}
+					<div>
+						<div class="mb-2 flex flex-wrap items-center gap-2">
+							<span class="rounded bg-[var(--color-tron-cyan)]/20 px-2 py-0.5 font-mono text-xs text-[var(--color-tron-cyan)]">{run.sequenceId}</span>
+							<span class="text-xs text-[var(--color-tron-text-secondary)]">{run.photos.length} shot{run.photos.length !== 1 ? 's' : ''}</span>
+							{#if run.capturedAt}
+								<span class="text-xs text-[var(--color-tron-text-secondary)]/60">{formatShortDate(new Date(run.capturedAt).toISOString())}</span>
+							{/if}
+						</div>
+						<div class="grid grid-cols-3 gap-3 sm:grid-cols-5 lg:grid-cols-8">
+							{#each run.photos as photo (photo.imageId)}
+								<div
+									class="group overflow-hidden rounded-lg border bg-[var(--color-tron-bg)] transition-colors
+										{photo.qcLabel === 'approved'
+											? 'border-[var(--color-tron-green,#39ff14)]'
+											: photo.qcLabel === 'rejected'
+												? 'border-[var(--color-tron-red,#ff3366)]'
+												: 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)]'}"
+								>
+									<button type="button" onclick={() => openLightbox(photo)} class="block w-full cursor-pointer text-left">
+										<div class="relative aspect-square overflow-hidden">
+											<img
+												src={photo.thumbnailUrl || photo.url}
+												alt="Microscope {photo.location ? `${photo.location.row ?? ''}${photo.location.col ?? ''}` : `#${photo.sequenceIndex ?? ''}`}"
+												class="h-full w-full object-cover transition-transform group-hover:scale-105"
+											/>
+											{#if photo.qcLabel === 'approved'}
+												<span class="absolute left-1 top-1 rounded bg-[var(--color-tron-green,#39ff14)] px-1 py-0.5 text-[9px] font-bold text-black">PASS</span>
+											{:else if photo.qcLabel === 'rejected'}
+												<span class="absolute left-1 top-1 rounded bg-[var(--color-tron-red,#ff3366)] px-1 py-0.5 text-[9px] font-bold text-white">FAIL</span>
+											{/if}
+										</div>
+									</button>
+									<div class="px-1 py-1 text-center font-mono text-[11px] text-[var(--color-tron-cyan)]">
+										{#if photo.location && (photo.location.row || photo.location.col != null)}
+											{photo.location.row ?? ''}{photo.location.col ?? ''}
+										{:else}
+											#{photo.sequenceIndex ?? '—'}
+										{/if}
+									</div>
+								</div>
+							{/each}
+						</div>
+					</div>
+				{/each}
+			</div>
+		</div>
+	{/if}
 
 	<!-- Linked Lots -->
 	{#if data.linkedLots.length > 0}

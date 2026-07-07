@@ -44,6 +44,14 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	const experiment = url.searchParams.get('experiment') || '';
 	const tag = url.searchParams.get('tag') || '';
 	const notesSearch = url.searchParams.get('notes') || '';
+	// Photo-type filter (microscope-sequence support): '' (any) | 'inspection' |
+	// 'microscope'. Legacy/missing photoType counts as inspection.
+	const typeParam = url.searchParams.get('type') || '';
+	const photoType = ['inspection', 'microscope'].includes(typeParam) ? typeParam : '';
+	// Grid-slot filters — only meaningful for microscope photos but applied
+	// independently so a row/col can be searched across everything.
+	const row = url.searchParams.get('row')?.trim() || '';
+	const col = url.searchParams.get('col')?.trim() || '';
 	const page = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10));
 
 	// Photos are now sourced directly from cartridge_records.photos[] (the record
@@ -58,6 +66,13 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	// both for the active query and for the per-tab counts so badges stay in sync.
 	const basePhotoMatch: Record<string, any> = {};
 	if (phase) basePhotoMatch['photos.phase'] = phase;
+	if (photoType === 'microscope') basePhotoMatch['photos.photoType'] = 'microscope';
+	else if (photoType === 'inspection') basePhotoMatch['photos.photoType'] = { $ne: 'microscope' };
+	if (row) basePhotoMatch['photos.location.row'] = row;
+	if (col) {
+		const colNum = parseInt(col, 10);
+		if (!Number.isNaN(colNum)) basePhotoMatch['photos.location.col'] = colNum;
+	}
 	if (tag) basePhotoMatch['photos.labels'] = tag;
 	if (notesSearch) {
 		basePhotoMatch['photos.notes'] = { $regex: escapeRegExp(notesSearch), $options: 'i' };
@@ -116,6 +131,11 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 					r2Key: '$photos.r2Key',
 					capturedAt: '$photos.capturedAt',
 					capturedByUsername: '$photos.capturedBy.username',
+					photoType: '$photos.photoType',
+					sequenceId: '$photos.sequenceId',
+					sequenceIndex: '$photos.sequenceIndex',
+					locationRow: '$photos.location.row',
+					locationCol: '$photos.location.col',
 					annotationCount: { $size: { $ifNull: ['$photos.annotations', []] } }
 				}
 			}
@@ -155,7 +175,15 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 			capturedAt: p.capturedAt ?? null,
 			capturedByUsername: p.capturedByUsername ?? null,
 			fileSizeBytes: null,
-			highlighted: (p.annotationCount ?? 0) > 0
+			highlighted: (p.annotationCount ?? 0) > 0,
+			// Microscope-sequence descriptors. photoType defaults to 'inspection'
+			// for legacy/missing values; location is null unless both parts exist.
+			photoType: p.photoType ?? 'inspection',
+			sequenceId: p.sequenceId ?? null,
+			sequenceIndex: p.sequenceIndex ?? null,
+			location: (p.locationRow != null || p.locationCol != null)
+				? { row: p.locationRow ?? null, col: p.locationCol ?? null }
+				: null
 		};
 	});
 
@@ -169,7 +197,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		pageSize: PAGE_SIZE,
 		review,
 		counts: { unreviewed: unreviewedCount, reviewed: reviewedCount },
-		filters: { phase, cartridgeId, verdict, fromDate, toDate, highlighted, arm, experiment, tag, notesSearch },
+		filters: { phase, cartridgeId, verdict, fromDate, toDate, highlighted, arm, experiment, tag, notesSearch, type: photoType, row, col },
 		availablePhases: (distinctPhases as string[]).filter(Boolean).sort(),
 		armOptions,
 		experimentOptions,

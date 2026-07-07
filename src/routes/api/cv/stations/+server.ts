@@ -45,7 +45,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!name) return json({ error: 'name is required' }, { status: 400 });
 	if (!hostname) return json({ error: 'hostname is required' }, { status: 400 });
 
-	const capabilities = body.capabilities ?? { camera: false, scanner: false, led: false, robotArm: false };
+	const capabilities = body.capabilities ?? { camera: false, scanner: false, led: false, robotArm: false, sequence: false };
 
 	const now = new Date();
 	const existing = await CaptureStation.findOne({ hostname }).lean() as any;

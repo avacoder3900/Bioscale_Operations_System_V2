@@ -3380,3 +3380,31 @@ Deployment: preview — https://bioscale-operations-system-mongodb-7wo22w9dz-bre
 Source: branch feat/cv-clean-datapath @ commit 42b6295a
 Retrieve this exact code: git checkout feat/cv-clean-datapath at commit 42b6295a
 What this deployment is for: capture-page intake mode toggle — station wedge scanner scans create/assign cartridges to wax/reagent/post-mortem and lock for photos
+
+================================================================================
+2026-07-07 — cv-microscope — CV-MICROSCOPE-01: microscope station + timed grid sequence
+================================================================================
+PRD docs/prds/CV-MICROSCOPE-STATION.md (all decisions resolved: capture-ingest
+IS the standard storage path; interval/count/grid are config vars pending
+hardware; microscope photos are a photoType descriptor, NOT a phase).
+P3 (schema+ingest): photos[] gains photoType('inspection'|'microscope'),
+sequenceId, sequenceIndex, location{row,col} + indexes; capture-ingest accepts
+them, phase:null on microscope photos, phase-inference skipped for them.
+P1+P2 (Pi agent): CAMERA_DEVICE env (index//dev/videoN/name-match e.g.
+'celestron'), CAMERA_PROFILE=microscope preset, Windows dev mode (CAP_DSHOW,
+evdev optional); new sequence.py — timed full-res stills, disk spool + 3x
+backoff retry upload to /api/cv/capture-ingest, grid slot→row/col stamping
+(3x5 A-C×1-5 default, row-major|serpentine, mismatch→location omitted), WS
+cmds sequence_start/abort, events sequence_started/progress/done/error;
+'sequence' capability in /health. py_compile clean; grid mapping unit-verified
+(row-major 6→B1, serpentine 6→B5, count-mismatch→None).
+P4 (UI): /capture "Microscope sequence" panel (count/interval per-run inputs,
+Start/Abort, auto-start-on-scan incl. intake-mode path, progress bar, done
+summary linking stream; release-lock guards in-flight runs); stream type/row/
+col filters + 🔬 chip + location badges; DHR groups microscope runs by
+sequenceId as sequenceIndex-ordered grids.
+Glue: CaptureStation.capabilities gains `sequence` Boolean (was strict-object
+without it — would have stripped the flag); provision/setup scripts register
+sequence:true; stations route default includes it.
+svelte-check: 10-error baseline, 0 new. Subagents hit a transient Anthropic
+API outage mid-build (ConnectionRefused); resumed with edits intact.
