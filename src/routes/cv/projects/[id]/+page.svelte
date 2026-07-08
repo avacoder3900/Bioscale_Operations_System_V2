@@ -3,7 +3,14 @@
 
 	let { data, form } = $props();
 
-	type Tab = 'members' | 'composition' | 'deployment' | 'history';
+	type Tab = 'members' | 'composition' | 'training' | 'deployment' | 'history';
+	const TAB_LABELS: Record<Tab, string> = {
+		members: 'Members',
+		composition: 'Composition',
+		training: 'Training setup',
+		deployment: 'Deployment',
+		history: 'History'
+	};
 	let activeTab = $state<Tab>('members');
 
 	let submitting = $state(false);
@@ -12,10 +19,30 @@
 	let composedOfSelections = $state<Set<string>>(new Set(data.project.composedOf));
 	let liveCompositionToggle = $state(data.project.isLiveComposition);
 
+	// Training-setup state
+	let phaseSelections = $state<Set<string>>(new Set(data.project.phases));
+	let masterToggle = $state(data.project.isMasterModel);
+	let statusSelections = $state<Set<string>>(new Set(data.project.trainingFilter.cartridgeStatuses));
+
 	// Deployment state
 	let deploySelections = $state<Set<string>>(new Set(data.project.deployAtPhases));
 	let activeVersion = $state<string>(data.project.activeModelVersion ?? '');
 	let shadowVersion = $state<string>(data.project.shadowModelVersion ?? '');
+
+	// Latest trained version (append-only array — last entry) for the stepper.
+	const latestVersion = $derived(
+		data.project.trainedModels.length > 0
+			? data.project.trainedModels[data.project.trainedModels.length - 1]
+			: null
+	);
+	// Train-button gating from the trainer-truth eligible pool (not member stats).
+	const trainBlockedReason = $derived(
+		data.trainPool.total < 5
+			? `Need at least 5 eligible labeled images to train (have ${data.trainPool.total})`
+			: data.trainPool.approved === 0 || data.trainPool.rejected === 0
+				? `Need both classes labeled (have ${data.trainPool.approved} approved, ${data.trainPool.rejected} rejected)`
+				: null
+	);
 
 	function toggleSet<T>(set: Set<T>, val: T): Set<T> {
 		const next = new Set(set);
@@ -121,9 +148,45 @@
 		</div>
 	</div>
 
+	<!-- Pipeline stepper: labeled pool → latest version vs gate → deployed -->
+	<div class="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] px-3 py-2 text-xs">
+		<span class="text-[var(--color-tron-text-secondary)]">
+			<span class="uppercase">1 · Label</span>
+			<span class="ml-1 font-mono text-[var(--color-tron-text)]">{data.trainPool.total}</span> eligible
+			(<span class="text-[var(--color-tron-green,#39ff14)]">{data.trainPool.approved}✓</span>/<span class="text-[var(--color-tron-red,#ff3366)]">{data.trainPool.rejected}✗</span>)
+			{#if latestVersion}· <span class="font-mono text-[var(--color-tron-cyan)]">{data.trainPool.newSinceLastVersion}</span> new since last train{/if}
+		</span>
+		<span class="text-[var(--color-tron-border)]">→</span>
+		<span class="text-[var(--color-tron-text-secondary)]">
+			<span class="uppercase">2 · Train + verify</span>
+			{#if latestVersion}
+				<span class="ml-1 font-mono text-[var(--color-tron-cyan)]">{latestVersion.version}</span>
+				{#if !latestVersion.verification}
+					<span class="text-[var(--color-tron-amber,#ffb300)]">unverified</span>
+				{:else if latestVersion.verification.passed}
+					<span class="text-[var(--color-tron-green,#39ff14)]">gate PASS</span>
+				{:else}
+					<span class="text-[var(--color-tron-red,#ff3366)]">gate FAIL</span>
+				{/if}
+			{:else}
+				<span class="ml-1 italic">no versions yet</span>
+			{/if}
+		</span>
+		<span class="text-[var(--color-tron-border)]">→</span>
+		<span class="text-[var(--color-tron-text-secondary)]">
+			<span class="uppercase">3 · Deployed</span>
+			{#if data.project.activeModelVersion}
+				<span class="ml-1 font-mono text-[var(--color-tron-green,#39ff14)]">{data.project.activeModelVersion}</span>
+				at {data.project.deployAtPhases.join(', ') || '(no phases)'}
+			{:else}
+				<span class="ml-1 italic">nothing deployed</span>
+			{/if}
+		</span>
+	</div>
+
 	<!-- Tabs -->
 	<div class="flex gap-1 border-b border-[var(--color-tron-border)]">
-		{#each ['members', 'composition', 'deployment', 'history'] as t (t)}
+		{#each ['members', 'composition', 'training', 'deployment', 'history'] as t (t)}
 			<button
 				type="button"
 				class="px-4 py-2 text-sm font-medium
@@ -132,7 +195,7 @@
 						: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
 				onclick={() => (activeTab = t as Tab)}
 			>
-				{t.charAt(0).toUpperCase() + t.slice(1)}
+				{TAB_LABELS[t as Tab]}
 			</button>
 		{/each}
 	</div>
@@ -246,6 +309,120 @@
 			</div>
 			<button type="submit" disabled={submitting} class="rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-[var(--color-tron-bg-primary)] disabled:opacity-40">
 				{submitting ? 'Saving…' : 'Save composition'}
+			</button>
+		</form>
+
+	{:else if activeTab === 'training'}
+		<form
+			method="POST"
+			action="?/updateTrainingSetup"
+			use:enhance={() => {
+				submitting = true;
+				return async ({ update }) => {
+					await update();
+					submitting = false;
+				};
+			}}
+			class="space-y-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4"
+		>
+			<!-- Master toggle + phase scope -->
+			<div>
+				<label class="flex items-center gap-2 text-sm">
+					<input type="checkbox" name="isMasterModel" bind:checked={masterToggle} />
+					<span class="text-[var(--color-tron-text)]">Master model</span>
+					{#if masterToggle}
+						<span class="rounded border border-[var(--color-tron-amber,#ffb300)] px-2 py-0.5 text-[10px] uppercase text-[var(--color-tron-amber,#ffb300)]">MASTER</span>
+					{/if}
+				</label>
+				<p class="ml-6 text-xs text-[var(--color-tron-text-secondary)]">
+					A master model trains on labeled images from every phase — the phase scope below is ignored (and left untouched).
+				</p>
+			</div>
+
+			<div>
+				<div class="mb-2 flex items-center gap-2 text-xs uppercase text-[var(--color-tron-text-secondary)]">
+					<span>Phase scope</span>
+					{#if masterToggle}
+						<span class="rounded border border-[var(--color-tron-amber,#ffb300)] px-2 py-0.5 text-[10px] text-[var(--color-tron-amber,#ffb300)]">MASTER — all phases</span>
+					{/if}
+				</div>
+				<p class="mb-2 text-xs text-[var(--color-tron-text-secondary)]">
+					Only images captured at these manufacturing phases are eligible for training. None selected = all phases.
+				</p>
+				<div class="grid gap-2 sm:grid-cols-3 md:grid-cols-4">
+					{#each data.canonicalPhases as ph (ph)}
+						{@const checked = phaseSelections.has(ph)}
+						<label class="flex items-center gap-2 rounded border border-[var(--color-tron-border)] p-2 text-sm {masterToggle ? 'opacity-40' : ''}">
+							<input
+								type="checkbox"
+								name="phases"
+								value={ph}
+								{checked}
+								disabled={masterToggle}
+								onchange={() => (phaseSelections = toggleSet(phaseSelections, ph))}
+							/>
+							<span class="font-mono text-xs">{ph}</span>
+						</label>
+					{/each}
+				</div>
+			</div>
+
+			<!-- Verify gate -->
+			<div>
+				<div class="mb-2 text-xs uppercase text-[var(--color-tron-text-secondary)]">Verify gate</div>
+				<p class="mb-2 text-xs text-[var(--color-tron-text-secondary)]">
+					A trained version must clear these on its holdout before it can be deployed.
+				</p>
+				<div class="grid gap-3 sm:grid-cols-2">
+					<div>
+						<label for="ts-holdout" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Min holdout count <span class="normal-case">(default 10)</span></label>
+						<input id="ts-holdout" name="minHoldoutCount" type="number" step="1" min="1" value={data.project.verifyGate.minHoldoutCount} class="tron-input w-full" />
+					</div>
+					<div>
+						<label for="ts-balacc" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Min balanced accuracy <span class="normal-case">(default 0.80)</span></label>
+						<input id="ts-balacc" name="minBalancedAccuracy" type="number" step="0.01" min="0.01" max="1" value={data.project.verifyGate.minBalancedAccuracy} class="tron-input w-full" />
+					</div>
+				</div>
+			</div>
+
+			<!-- Training filter -->
+			<div>
+				<div class="mb-2 text-xs uppercase text-[var(--color-tron-text-secondary)]">Training filter</div>
+				<p class="mb-2 text-xs text-[var(--color-tron-text-secondary)]">
+					Narrows the eligible pool by cartridge status (e.g. exclude voided/scrapped carts) and failure-label tags. Empty = no restriction.
+				</p>
+				<div class="mb-3">
+					<div class="mb-1 text-[10px] uppercase text-[var(--color-tron-text-secondary)]">Cartridge statuses (only train on images from carts in these statuses)</div>
+					<div class="grid gap-1 sm:grid-cols-3 md:grid-cols-4">
+						{#each data.cartridgeStatusOptions as st (st)}
+							{@const checked = statusSelections.has(st)}
+							<label class="flex items-center gap-2 rounded border border-[var(--color-tron-border)] p-1.5 text-xs">
+								<input
+									type="checkbox"
+									name="cartridgeStatuses"
+									value={st}
+									{checked}
+									onchange={() => (statusSelections = toggleSet(statusSelections, st))}
+								/>
+								<span class="font-mono">{st}</span>
+							</label>
+						{/each}
+					</div>
+				</div>
+				<div class="grid gap-3 sm:grid-cols-2">
+					<div>
+						<label for="ts-required" class="mb-1 block text-[10px] uppercase text-[var(--color-tron-text-secondary)]">Required tags (comma-separated)</label>
+						<input id="ts-required" name="requiredTags" type="text" value={data.project.trainingFilter.requiredTags.join(', ')} placeholder="e.g. wax_bridge, underfill" class="tron-input w-full" />
+					</div>
+					<div>
+						<label for="ts-exclude" class="mb-1 block text-[10px] uppercase text-[var(--color-tron-text-secondary)]">Exclude tags (comma-separated)</label>
+						<input id="ts-exclude" name="excludeTags" type="text" value={data.project.trainingFilter.excludeTags.join(', ')} placeholder="e.g. blurry, test_shot" class="tron-input w-full" />
+					</div>
+				</div>
+			</div>
+
+			<button type="submit" disabled={submitting} class="rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-[var(--color-tron-bg-primary)] disabled:opacity-40">
+				{submitting ? 'Saving…' : 'Save training setup'}
 			</button>
 		</form>
 
@@ -479,8 +656,20 @@
 					<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
 						Fits a logistic-regression classifier in-process on the labeled images (needs ≥ 5, both classes present) and auto-scores a holdout against the verify gate. Append-only — every run produces a new immutable version. Verify + Deploy it under the Deployment tab.
 					</p>
+					<p class="mt-1 text-xs text-[var(--color-tron-text)]">
+						Eligible for training (phase scope + filter applied):
+						<span class="font-mono text-[var(--color-tron-green,#39ff14)]">{data.trainPool.approved}</span> approved,
+						<span class="font-mono text-[var(--color-tron-red,#ff3366)]">{data.trainPool.rejected}</span> rejected
+						— <span class="font-mono text-[var(--color-tron-cyan)]">{data.trainPool.newSinceLastVersion}</span> new since
+						{#if data.trainPool.latestVersion}<span class="font-mono">{data.trainPool.latestVersion}</span>{:else}ever (no versions yet){/if}.
+					</p>
+					{#if trainBlockedReason}
+						<p class="mt-1 text-xs text-[var(--color-tron-amber,#ffb300)]">{trainBlockedReason} — adjust the scope under Training setup or label more images.</p>
+					{:else if data.trainPool.latestVersion && data.trainPool.newSinceLastVersion === 0}
+						<p class="mt-1 text-xs text-[var(--color-tron-amber,#ffb300)]">No new labeled images since {data.trainPool.latestVersion} — retraining will reuse the same pool.</p>
+					{/if}
 					<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
-						Currently: <span class="font-mono text-[var(--color-tron-green,#39ff14)]">{data.labelStats.approved}</span> approved, <span class="font-mono text-[var(--color-tron-red,#ff3366)]">{data.labelStats.rejected}</span> rejected, {data.labelStats.unlabeled} unlabeled.
+						Project members: {data.labelStats.approved} approved, {data.labelStats.rejected} rejected, {data.labelStats.unlabeled} unlabeled.
 					</p>
 				</div>
 				<form
@@ -501,11 +690,9 @@
 					</div>
 					<button
 						type="submit"
-						disabled={submitting || data.labelStats.approved + data.labelStats.rejected < 5}
+						disabled={submitting || trainBlockedReason !== null}
 						class="rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-medium text-[var(--color-tron-bg-primary)] disabled:opacity-40"
-						title={data.labelStats.approved + data.labelStats.rejected < 5
-							? 'Need at least 5 labeled images before training'
-							: 'Kick off training on the cv-worker'}
+						title={trainBlockedReason ?? 'Train a new immutable version on the eligible labeled pool'}
 					>
 						{submitting ? 'Starting…' : 'Train new version'}
 					</button>
