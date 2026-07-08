@@ -9,6 +9,9 @@
  *  - `projectId` is silently ignored (refactor moved CvImage off projects)
  *  - `qrCode` is the cartridgeRecordId
  *  - `phase` is required
+ *  - `view` is optional ('top' | 'bottom') — camera view the photo was shot
+ *    from (top/bottom cartridge photos look completely different, so a model
+ *    trains on / grades one view); any other non-empty value is a 400
  *
  * New behavior:
  *  - Rejects with 400 if the QR doesn't match an existing CartridgeRecord.
@@ -41,6 +44,14 @@ export const POST: RequestHandler = async ({ request }) => {
 	const processingMode = formData.get('processingMode')?.toString() as 'full' | 'raw' | undefined;
 	// Legacy projectId — silently ignored after the refactor.
 	// const _legacyProjectId = formData.get('projectId');
+
+	// Optional camera view (CV-PIPELINE-V2 top/bottom split) — empty string is
+	// treated as "no view".
+	const viewRaw = formData.get('view')?.toString().trim() || undefined;
+	if (viewRaw !== undefined && viewRaw !== 'top' && viewRaw !== 'bottom') {
+		return json({ error: `view must be 'top' or 'bottom'` }, { status: 400 });
+	}
+	const view = viewRaw as 'top' | 'bottom' | undefined;
 
 	if (!file) return json({ error: 'file is required' }, { status: 400 });
 	if (!qrCode) return json({ error: 'qrCode is required' }, { status: 400 });
@@ -80,7 +91,8 @@ export const POST: RequestHandler = async ({ request }) => {
 		imageUrl: publicUrl,
 		processingMode: processingMode === 'raw' || processingMode === 'full' ? processingMode : undefined,
 		cartridgeTag: { cartridgeRecordId: qrCode, phase },
-		cartridgeImageNumber
+		cartridgeImageNumber,
+		...(view ? { view } : {})
 	});
 
 	await CartridgeRecord.updateOne(
@@ -93,7 +105,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		tableName: 'cv_images',
 		recordId: id,
 		action: 'INSERT',
-		newData: { source: 'capture-ingest', cartridgeRecordId: qrCode, phase, key, cartridgeImageNumber, processingMode },
+		newData: { source: 'capture-ingest', cartridgeRecordId: qrCode, phase, view: view ?? null, key, cartridgeImageNumber, processingMode },
 		changedAt: capturedAt,
 		changedBy: 'cv-capture-agent',
 		reason: 'capture-ingest'
@@ -105,6 +117,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		imageUrl: publicUrl,
 		cartridgeRecordId: qrCode,
 		phase,
+		view: view ?? null,
 		triggeredBy: 'auto-on-capture'
 	}).catch(err => console.error('[capture-ingest] phase-inference failed:', err));
 

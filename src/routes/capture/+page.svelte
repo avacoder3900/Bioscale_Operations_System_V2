@@ -84,6 +84,15 @@
 		verdict = verdict === v ? null : v;
 	}
 
+	// CV-PIPELINE-V2 top/bottom split: the camera view for the next capture.
+	// Tri-state — null (default), 'top', 'bottom' — sent as the `view` form field.
+	// UNLIKE the verdict toggle this is STICKY: operators shoot a batch of tops
+	// then a batch of bottoms, so it must survive across captures (never reset).
+	let captureView = $state<'top' | 'bottom' | null>(null);
+	function toggleView(v: 'top' | 'bottom') {
+		captureView = captureView === v ? null : v;
+	}
+
 	// Remote-camera tuning panel — only meaningful when a Pi station is the
 	// active video source. cameraParams is populated by the WS handler for
 	// {event: 'camera_params'} which the agent sends after we POST a
@@ -760,6 +769,8 @@
 			// Optional capture-time verdict + station identity (for the server's
 			// assignedPhase sanity check).
 			if (verdict) form.append('verdict', verdict);
+			// Sticky view (top/bottom split) — sent when set, NOT reset after capture.
+			if (captureView) form.append('view', captureView);
 			if (selectedStationId) form.append('stationId', selectedStationId);
 
 			const res = await fetch('/api/cv/capture', { method: 'POST', body: form });
@@ -1295,6 +1306,33 @@
 							: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-red,#ff3366)] hover:text-[var(--color-tron-red,#ff3366)]'}"
 				>
 					✗ Fail
+				</button>
+			</div>
+			<!-- Optional camera view (CV-PIPELINE-V2 top/bottom split). Tri-state:
+			     click the active button again to clear. STICKY — unlike Verdict it
+			     persists across captures so a batch of tops (then bottoms) keeps the
+			     same view without re-clicking. -->
+			<div class="flex items-center gap-1.5">
+				<span class="text-xs uppercase text-[var(--color-tron-text-secondary)]" title="Optional — which side of the cartridge this is. Sticky: stays selected across captures so you can shoot a batch of tops, then bottoms.">View</span>
+				<button
+					type="button"
+					onclick={() => toggleView('top')}
+					class="rounded border px-2 py-1 text-xs font-semibold
+						{captureView === 'top'
+							? 'border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.15)] text-[var(--color-tron-cyan)]'
+							: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
+				>
+					Top
+				</button>
+				<button
+					type="button"
+					onclick={() => toggleView('bottom')}
+					class="rounded border px-2 py-1 text-xs font-semibold
+						{captureView === 'bottom'
+							? 'border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.15)] text-[var(--color-tron-cyan)]'
+							: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
+				>
+					Bottom
 				</button>
 			</div>
 			<div class="text-xs text-[var(--color-tron-text-secondary)]">

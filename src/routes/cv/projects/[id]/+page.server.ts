@@ -220,6 +220,10 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	const poolQuery: Record<string, any> = { qcLabel: { $ne: null } };
 	const scopePhases: string[] = project.isMasterModel ? [] : (project.phases ?? []);
 	if (scopePhases.length > 0) poolQuery['cartridgeTag.phase'] = { $in: scopePhases };
+	// View scope (CV-PIPELINE-V2 top/bottom split): mirror the trainer's view
+	// restriction so the pre-train counts by the Train button stay truthful.
+	const scopeView: string | null = project.view ?? null;
+	if (scopeView) poolQuery.view = scopeView;
 
 	let pool = await CvImage.find(poolQuery)
 		.select('_id qcLabel cartridgeTag.labels cartridgeTag.cartridgeRecordId')
@@ -286,6 +290,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			composedOf: project.composedOf ?? [],
 			isLiveComposition: !!project.isLiveComposition,
 			isMasterModel: !!project.isMasterModel,
+			view: project.view ?? null,
 			phases: project.phases ?? [],
 			trainingFilter: {
 				cartridgeStatuses: project.trainingFilter?.cartridgeStatuses ?? [],
@@ -387,11 +392,18 @@ export const actions: Actions = {
 		const form = await request.formData();
 
 		const existing = await CvProject.findById(params.id)
-			.select('phases trainingFilter verifyGate isMasterModel')
+			.select('phases view trainingFilter verifyGate isMasterModel')
 			.lean() as any;
 		if (!existing) return fail(404, { error: 'Project not found' });
 
 		const isMasterModel = form.get('isMasterModel') === 'on';
+
+		// View scope (CV-PIPELINE-V2 top/bottom split): empty select = any view (null).
+		const viewRaw = form.get('view')?.toString().trim() || '';
+		if (viewRaw && viewRaw !== 'top' && viewRaw !== 'bottom') {
+			return fail(400, { error: `View must be 'top', 'bottom', or blank (any view).`, section: 'training-setup' });
+		}
+		const view = viewRaw ? viewRaw : null;
 
 		// Phase scope: canonical set + any legacy value already on the project.
 		const allowedPhases = new Set([...CANONICAL_PHASES, ...(existing.phases ?? [])]);
@@ -423,7 +435,8 @@ export const actions: Actions = {
 			'verifyGate.minBalancedAccuracy': minBalancedAccuracy,
 			'trainingFilter.cartridgeStatuses': cartridgeStatuses,
 			'trainingFilter.requiredTags': requiredTags,
-			'trainingFilter.excludeTags': excludeTags
+			'trainingFilter.excludeTags': excludeTags,
+			view
 		};
 		// Master-model projects skip the phase filter — their checkboxes post
 		// disabled/empty, so leave phases untouched rather than wiping them.
@@ -439,12 +452,14 @@ export const actions: Actions = {
 			oldData: {
 				phases: existing.phases ?? [],
 				isMasterModel: !!existing.isMasterModel,
+				view: existing.view ?? null,
 				verifyGate: existing.verifyGate ?? null,
 				trainingFilter: existing.trainingFilter ?? null
 			},
 			newData: {
 				phases: isMasterModel ? (existing.phases ?? []) : submittedPhases,
 				isMasterModel,
+				view,
 				verifyGate: { minHoldoutCount, minBalancedAccuracy },
 				trainingFilter: { cartridgeStatuses, requiredTags, excludeTags }
 			},
@@ -569,7 +584,7 @@ export const actions: Actions = {
 		if (!version) return fail(400, { error: 'version required' });
 
 		const project = await CvProject.findById(params.id)
-			.select('trainedModels phases isMasterModel trainingFilter verifyGate confidenceThreshold')
+			.select('trainedModels phases view isMasterModel trainingFilter verifyGate confidenceThreshold')
 			.lean() as any;
 		if (!project) return fail(404, { error: 'Project not found' });
 
@@ -586,6 +601,10 @@ export const actions: Actions = {
 			const query: Record<string, any> = { qcLabel: { $ne: null } };
 			const phases: string[] = project.isMasterModel ? [] : (project.phases ?? []);
 			if (phases.length > 0) query['cartridgeTag.phase'] = { $in: phases };
+			// Same view restriction the trainer applies (CV-PIPELINE-V2 top/bottom
+			// split) so an on-demand verify scores against the version's own view.
+			const view: string | null = project.view ?? null;
+			if (view) query.view = view;
 
 			let pool = await CvImage.find(query)
 				.select('_id imageUrl qcLabel cartridgeTag embeddingVersion +embedding')

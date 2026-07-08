@@ -19,6 +19,9 @@ interface InferenceContext {
 	imageUrl: string;
 	cartridgeRecordId: string;
 	phase: string;
+	// Camera view of the captured photo (CV-PIPELINE-V2 top/bottom split).
+	// null/undefined = untagged photo — graded only by view-less projects.
+	view?: string | null;
 	triggeredBy?: 'auto-on-capture' | 'manual' | 'batch';
 }
 
@@ -139,6 +142,18 @@ export async function runPhaseInference(ctx: InferenceContext): Promise<void> {
 
 	if (projects.length === 0) return;
 
+	// View gate (CV-PIPELINE-V2 top/bottom split): a photo with a set view is
+	// only graded by view-less projects (view null = "any view") or projects
+	// pinned to that exact view; a photo with null view is only graded by
+	// view-less projects. A view-scoped project never grades the wrong view.
+	const photoView = ctx.view ?? null;
+	const eligible = projects.filter(p => {
+		const projView = p.view ?? null;
+		return projView === null || projView === photoView;
+	});
+
+	if (eligible.length === 0) return;
+
 	// Run inferences in parallel — they're independent.
-	await Promise.all(projects.map(p => runInferenceForProject(ctx, p)));
+	await Promise.all(eligible.map(p => runInferenceForProject(ctx, p)));
 }

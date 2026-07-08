@@ -336,6 +336,7 @@
         <ul>
           <li>The response and inspect pages say exactly which project + version graded the photo, or that nothing is deployed at this step.</li>
           <li><b>New:</b> if the capture comes from a station whose <code>assignedPhase</code> disagrees with the posted phase, the operator gets a warning (catches wrong-station mistakes; doesn't block).</li>
+          <li><b>New — top/bottom view split:</b> each photo carries a <code>view</code> tag (sticky Top/Bottom toggle at capture), and each project can be view-scoped. A bottom photo is never graded by — and never trains — a top model, and vice versa; view-less projects behave as before.</li>
         </ul>
         <div class="writes">
           <span class="wlabel">Writes</span>

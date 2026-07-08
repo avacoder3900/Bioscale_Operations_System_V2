@@ -32,6 +32,11 @@ const cvProjectSchema = new Schema({
 	labels: [{ name: String, color: String, _id: false }],
 	members: [String],
 
+	// View scope — top and bottom cartridge photos look completely different, so
+	// a model trains on and grades exactly one view. null = "any view"
+	// (backward compatible: existing view-less projects grade every photo).
+	view: { type: String, enum: ['top', 'bottom', null], default: null },
+
 	// Composition (master model): projects assembled from other projects' pools.
 	composedOf: [String],
 	isLiveComposition: { type: Boolean, default: false },

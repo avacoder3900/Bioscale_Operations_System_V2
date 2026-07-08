@@ -133,6 +133,12 @@ async function trainProject(project: any, trainedBy: Operator | undefined, t0: n
 	const query: Record<string, any> = { qcLabel: { $ne: null } };
 	const phases: string[] = project.isMasterModel ? [] : (project.phases ?? []);
 	if (phases.length > 0) query['cartridgeTag.phase'] = { $in: phases };
+	// View scope (CV-PIPELINE-V2 top/bottom split): when the project pins a
+	// view, train ONLY on images tagged that exact view. Untagged photos are
+	// excluded, since mixing unknown views is what this feature prevents.
+	// Applies even to master models. null view = "any view" (no restriction).
+	const view: string | null = project.view ?? null;
+	if (view) query.view = view;
 
 	// embedding is select:false on the schema — pull it explicitly.
 	const images = (await CvImage.find(query)
@@ -290,7 +296,7 @@ async function trainProject(project: any, trainedBy: Operator | undefined, t0: n
 			approvedCount: classifier.approvedCount,
 			rejectedCount: classifier.rejectedCount,
 			newSincePrevious,
-			filter: { phases, cartridgeStatuses, requiredTags, excludeTags }
+			filter: { phases, view, cartridgeStatuses, requiredTags, excludeTags }
 		},
 		verification
 	};

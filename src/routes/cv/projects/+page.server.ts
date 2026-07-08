@@ -36,7 +36,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const projectsRaw = await CvProject.find()
 		.sort({ createdAt: -1 })
-		.select('_id name description purpose projectType tags phases isMasterModel members composedOf isLiveComposition deployAtPhases activeModelVersion shadowModelVersion trainedModels modelStatus createdAt updatedAt')
+		.select('_id name description purpose projectType tags phases view isMasterModel members composedOf isLiveComposition deployAtPhases activeModelVersion shadowModelVersion trainedModels modelStatus createdAt updatedAt')
 		.lean();
 
 	const projects = (projectsRaw as any[]).map(p => ({
@@ -48,6 +48,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		tags: p.tags ?? [],
 		phases: p.phases ?? [],
 		isMasterModel: !!p.isMasterModel,
+		view: p.view ?? null,
 		memberCount: (p.members ?? []).length,
 		composedOfCount: (p.composedOf ?? []).length,
 		isLiveComposition: !!p.isLiveComposition,
@@ -78,6 +79,12 @@ export const actions: Actions = {
 		const projectType = form.get('projectType')?.toString().trim() || 'classification';
 		const isMasterModel = form.get('isMasterModel') === 'on';
 		const requestedPhases = form.getAll('phases').map(v => String(v)).filter(Boolean);
+		// View scope (CV-PIPELINE-V2 top/bottom split): empty select = any view (null).
+		const viewRaw = form.get('view')?.toString().trim() || '';
+		if (viewRaw && viewRaw !== 'top' && viewRaw !== 'bottom') {
+			return fail(400, { error: `View must be 'top', 'bottom', or blank (any view).` });
+		}
+		const view = viewRaw ? viewRaw : null;
 		if (!name) return fail(400, { error: 'Project name is required' });
 
 		// Phase scoping is what makes training assembly deterministic: at least
@@ -103,6 +110,7 @@ export const actions: Actions = {
 			projectType,
 			phases,
 			isMasterModel,
+			view,
 			tags: [],
 			members: [],
 			composedOf: [],
@@ -118,7 +126,7 @@ export const actions: Actions = {
 			tableName: 'cv_projects',
 			recordId: project._id,
 			action: 'cv_project_create',
-			newData: { name, description, purpose, projectType, phases, isMasterModel },
+			newData: { name, description, purpose, projectType, phases, view, isMasterModel },
 			changedAt: new Date(),
 			changedBy: locals.user.username ?? locals.user._id,
 			reason: `cv_project_create "${name}" (${isMasterModel ? 'master model' : phases.join(', ')})`

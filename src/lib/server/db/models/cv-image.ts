@@ -55,6 +55,11 @@ const cvImageSchema = new Schema({
 	capturedAt: Date,
 	capturedBy: operatorRef,
 
+	// Camera view the photo was shot from. Top and bottom of a cartridge look
+	// completely different, so a model trains on and grades exactly one view.
+	// null = untagged legacy photo (only graded by view-less projects).
+	view: { type: String, enum: ['top', 'bottom', null], default: null },
+
 	// QC label — optional, demoted from identity to a side field
 	qcLabel: { type: String, enum: ['approved', 'rejected', null], default: null },
 	qcLabeledBy: operatorRef,

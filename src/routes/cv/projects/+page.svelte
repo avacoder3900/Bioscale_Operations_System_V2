@@ -85,6 +85,17 @@
 
 				<input type="hidden" name="projectType" value="classification" />
 
+				<div>
+					<label for="np-view" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">
+						View <span class="normal-case">— top and bottom cartridge photos look different; a view-scoped model trains on and grades only that view</span>
+					</label>
+					<select id="np-view" name="view" class="tron-input w-full">
+						<option value="">Any view (default — grades every photo)</option>
+						<option value="top">Top</option>
+						<option value="bottom">Bottom</option>
+					</select>
+				</div>
+
 				<fieldset class="rounded border border-[var(--color-tron-border)] p-3">
 					<legend class="px-1 text-xs uppercase text-[var(--color-tron-text-secondary)]">
 						Training phases <span class="normal-case">— which manufacturing steps' labeled photos this model trains on</span>
@@ -146,6 +157,9 @@
 								<h3 class="text-lg font-semibold text-[var(--color-tron-cyan)]">{p.name}</h3>
 								{#if p.isMasterModel}
 									<span class="rounded border border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.10)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[var(--color-tron-cyan)]">Master</span>
+								{/if}
+								{#if p.view}
+									<span class="rounded border border-[var(--color-tron-amber,#ffb300)] bg-[rgba(255,179,0,0.10)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[var(--color-tron-amber,#ffb300)]">{p.view}</span>
 								{/if}
 							</div>
 							{#if p.description}

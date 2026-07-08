@@ -191,6 +191,25 @@ verification: {
   entry so cartridge pages show verdicts without extra queries. Summary only — labels,
   embeddings and history never move onto the cartridge doc.)
 
+### View split — top vs. bottom (added 2026-07-08)
+
+Cartridges are photographed from the top and the bottom; the two views look completely
+different, so a model must train on and grade exactly one view.
+
+- `cv_images.view: 'top' | 'bottom' | null` — set at capture via a **sticky** Top/Bottom
+  selector on /capture (sticky because operators shoot batches per view; the Pass/Fail
+  verdict toggle, by contrast, resets per shot). `null` = untagged legacy photo.
+- `cv_projects.view: 'top' | 'bottom' | null` — set at create or in Training setup.
+  `null` = "any view" (backward compatible; existing projects unchanged).
+- **Routing rule:** at capture, a photo is graded only by deployed projects whose view
+  matches — a view-less project grades everything at its phase; a view-scoped project
+  never sees the other view (or untagged photos).
+- **Training rule:** a view-scoped project trains only on images with that exact view;
+  untagged photos are excluded (mixing unknown views is what this prevents). The view is
+  recorded in each version's `trainingSet.filter`.
+- Typical setup: two projects per phase — "Post-mortem Top" (view: top) and
+  "Post-mortem Bottom" (view: bottom) — each with its own versions, gate, and deploy.
+
 ---
 
 ## 4. Schema changes (the unblock)

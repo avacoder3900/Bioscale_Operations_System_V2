@@ -22,6 +22,8 @@
 	// Training-setup state
 	let phaseSelections = $state<Set<string>>(new Set(data.project.phases));
 	let masterToggle = $state(data.project.isMasterModel);
+	// View scope (CV-PIPELINE-V2 top/bottom split) — '' = any view.
+	let viewSelection = $state<string>(data.project.view ?? '');
 	let statusSelections = $state<Set<string>>(new Set(data.project.trainingFilter.cartridgeStatuses));
 
 	// Deployment state
@@ -337,6 +339,19 @@
 				<p class="ml-6 text-xs text-[var(--color-tron-text-secondary)]">
 					A master model trains on labeled images from every phase — the phase scope below is ignored (and left untouched).
 				</p>
+			</div>
+
+			<!-- View scope (CV-PIPELINE-V2 top/bottom split) -->
+			<div>
+				<label for="ts-view" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">View</label>
+				<p class="mb-2 text-xs text-[var(--color-tron-text-secondary)]">
+					Top and bottom cartridge photos look completely different. Pin a view to train on and grade only that view (untagged photos are excluded); leave as Any view for existing behavior. Applies even to master models.
+				</p>
+				<select id="ts-view" name="view" bind:value={viewSelection} class="tron-input w-full sm:w-64">
+					<option value="">Any view</option>
+					<option value="top">Top</option>
+					<option value="bottom">Bottom</option>
+				</select>
 			</div>
 
 			<div>

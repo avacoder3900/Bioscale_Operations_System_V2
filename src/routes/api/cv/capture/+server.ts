@@ -13,6 +13,11 @@
  *   verdict:        optional 'approved' | 'rejected' — capture-time QC label
  *                   (PRD CV-PIPELINE-V2 Stage 2 entry point A); any other
  *                   value is a 400
+ *   view:           optional 'top' | 'bottom' — camera view the photo was shot
+ *                   from (top/bottom cartridge photos look completely different,
+ *                   so a model trains on / grades one view). Any other non-empty
+ *                   value is a 400. Routed into inference so view-scoped models
+ *                   only grade their own view.
  *   stationId:      optional — capture station the photo came from; used for
  *                   the Stage-1 phase sanity check (warn, never block)
  *
@@ -88,6 +93,15 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		}
 		const verdict = verdictRaw as 'approved' | 'rejected' | undefined;
 
+		// Optional camera view (CV-PIPELINE-V2 top/bottom split) — top and bottom
+		// cartridge photos look completely different, so a model grades one view.
+		// Empty string (an unset toggle) is treated as "no view".
+		const viewRaw = formData.get('view')?.toString().trim() || undefined;
+		if (viewRaw !== undefined && viewRaw !== 'top' && viewRaw !== 'bottom') {
+			return json({ error: `view must be 'top' or 'bottom'` }, { status: 400 });
+		}
+		const view = viewRaw as 'top' | 'bottom' | undefined;
+
 		// Optional station identity — drives the Stage-1 phase sanity check below.
 		const stationId = formData.get('stationId')?.toString().trim() || undefined;
 
@@ -150,6 +164,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				...(cartridgeTagNotes ? { notes: cartridgeTagNotes } : {})
 			},
 			cartridgeImageNumber,
+			...(view ? { view } : {}),
 			...(verdict
 				? {
 					qcLabel: verdict,
@@ -246,6 +261,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			imageUrl: publicUrl,
 			cartridgeRecordId: cartridgeId,
 			phase,
+			view: view ?? null,
 			triggeredBy: 'auto-on-capture'
 		}).catch(err => console.error('[capture] phase-inference failed:', err));
 

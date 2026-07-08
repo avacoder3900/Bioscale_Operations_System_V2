@@ -3394,3 +3394,18 @@ count query in cv/+layout.server.ts). Repointed the per-version scorecard on
 not inspection humanLabel, so the agreement metric stays live. humanLabel
 stays declared on cv_inspections for API/backfill use. PRD + diagram updated
 to record the decision. npm run check: 10 errors / 431 warnings — baseline.
+
+================================================================================
+2026-07-08 — feat/cv-pipeline-v2 — top/bottom view split
+================================================================================
+Cartridge top and bottom photos look completely different, so models must be
+view-scoped. Added cv_images.view + cv_projects.view ('top'|'bottom'|null,
+null = any/legacy, fully backward compatible). Capture (/capture + both
+capture endpoints) takes a sticky Top/Bottom toggle; runPhaseInference gates
+projects by view (view-scoped projects never grade the wrong view or untagged
+photos); triggerTraining, the pre-train pool counts, and verifyVersion all
+apply the same restriction; view recorded in each version's trainingSet
+.filter; View selector on project create + Training setup; TOP/BOTTOM chip on
+project cards. PRD + diagram updated. Typical setup: two projects per phase
+(e.g. Post-mortem Top / Post-mortem Bottom).
+npm run check: 10 errors / 432 warnings — baseline held, zero in CV files.
