@@ -46,7 +46,8 @@
 		<span>Deploy</span>
 		<span class="opacity-70">(on the project page)</span>
 		<span>→</span>
-		<a href="/cv/review" class="text-[var(--color-tron-cyan)] hover:underline">Review</a>
+		<a href="/cv/stream" class="text-[var(--color-tron-cyan)] hover:underline">Review</a>
+		<span class="opacity-70">(in the image stream)</span>
 	</div>
 
 	{#if form?.error}

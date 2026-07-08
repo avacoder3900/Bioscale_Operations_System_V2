@@ -175,15 +175,14 @@ verification: {
 - The stream/review section shows each verdict with its model version; a human review
   writes `humanLabel` + `reviewedBy/At` on the inspection and mirrors the effective
   verdict onto the image's `qcLabel`, which feeds Stage 3's next iteration.
-- **Needs-review queue (easy UI).** A dedicated review view listing every image that has
-  a model verdict but **no human review yet**: `cv_inspections` where `result != null`,
-  `humanLabel == null`, `isShadow != true`, `status: 'completed'` — newest first,
-  filterable by project and phase. Each row/card shows the thumbnail, cartridge + phase,
-  the model's PASS/FAIL badge with confidence, and one-click **Agree** / **Overrule**
-  actions that write `humanLabel` + `reviewedBy/At` and mirror the effective label onto
-  the image's `qcLabel`. The queue count is surfaced as a badge in the CV nav so
-  unreviewed verdicts are visible without hunting for them. This is the primary daily
-  touchpoint of the review loop.
+- **Needs-review lives in the image stream.** (Revised 2026-07-08: a dedicated
+  `/cv/review` route + nav badge was built, then removed — the image stream already has
+  Needs-review / Reviewed tabs and is the operators' daily touchpoint.) Reviewing an
+  image in the stream writes `qcLabel` (approved/rejected), which is both the human
+  truth for the scorecard and the training signal for the next iteration. The
+  per-version scorecard therefore compares each inspection's verdict against its
+  image's `qcLabel` (approved→pass, rejected→fail) rather than a separate
+  `humanLabel` field.
 - Per-version scorecard on the project page: model verdict vs. human review agreement
   per deployed version — this is the "reviewed again in another section" view and tells
   you when it's time for the next training iteration.
@@ -234,7 +233,7 @@ favor of `qcLabel`.
 | **1. Schema + label unification** | All §4 declarations, enum fix, trainer reads `qcLabel`, migration script | Everything — smallest possible diff, ship first |
 | **2. Versioned training** | `triggerTraining` appends `trainedModels[]` entries with manifest + holdout verification; train UI shows available/new image counts | Stage 3 + automatic verify |
 | **3. Verify gate + Deploy button** | Gate enforcement, Deploy/rollback/shadow UX on the Deployment tab, audit logging | Stage 4 |
-| **4. Review loop + capture verdict** | Capture-time approve/reject, **needs-review queue UI** (verdict-but-no-human-review, with Agree/Overrule + nav badge), per-version scorecard, `photos[]` verdict summary mirror, station phase sanity warning | Stages 1, 2, 5 polish |
+| **4. Review loop + capture verdict** | Capture-time approve/reject, review via the image stream's Needs-review tab (qcLabel), per-version scorecard (verdict vs. image qcLabel), `photos[]` verdict summary mirror, station phase sanity warning | Stages 1, 2, 5 polish |
 
 Each PR: `npm run check` against baseline, preview deploy via GitHub push (never local
 `vercel deploy`), entry in `progress.txt` with branch/commit/URL.
@@ -242,9 +241,9 @@ Each PR: `npm run check` against baseline, preview deploy via GitHub push (never
 **Acceptance (end-to-end):** on a preview deploy — label ≥ 15 post-mortem photos → train
 → version appears with manifest + holdout score → passes gate → Deploy to `post_mortem`
 → capture a new photo at the post-mortem station → verdict appears on the inspect page
-→ the photo shows up in the **needs-review queue** with its PASS/FAIL badge → Agree or
-Overrule clears it from the queue and sets `qcLabel` → next train shows it as a new
-training image.
+→ the photo shows up in the **image stream's Needs-review tab** with its verdict →
+approving/rejecting it there sets `qcLabel` → next train shows it as a new training
+image.
 Then: retrain with more photos → v2 appears alongside v1 → roll back to v1 → verify the
 station uses v1 again.
 

@@ -434,7 +434,7 @@
         which feeds stage 3's next iteration. A per-version scorecard (model verdict vs. human review
         agreement) tells you when the deployed version is drifting and it's time to train the next one.</p>
         <ul>
-          <li><b>New — needs-review queue:</b> a dedicated view of every image with a model verdict but <em>no human review yet</em> (<code>result != null</code>, <code>humanLabel == null</code>, shadows excluded), newest first, filterable by project/phase. Thumbnail + PASS/FAIL badge + one-click <b>Agree / Overrule</b>; the queue count shows as a badge in the CV nav so nothing sits unreviewed unnoticed.</li>
+          <li><b>Needs-review lives in the image stream</b> (revised: the dedicated /cv/review page was removed — the stream already has Needs-review / Reviewed tabs). Approving or rejecting an image there writes <code>qcLabel</code>, which is both the human truth for the scorecard and the training signal for the next iteration.</li>
           <li><b>New:</b> a compact verdict summary <code>{verdict, inspectionId, modelVersion}</code> is mirrored onto the matching <code>cartridge_records.photos[]</code> entry, so cartridge/DHR pages show pass–fail without extra queries. Summary only — labels, embeddings and history never move onto the cartridge doc.</li>
         </ul>
         <div class="writes">

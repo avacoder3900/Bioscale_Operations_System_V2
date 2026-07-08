@@ -162,19 +162,35 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		.lean();
 
 	// Per-version scorecard (Stage 5): model verdict vs. human review agreement,
-	// grouped by the version that produced the verdict.
+	// grouped by the version that produced the verdict. Review happens in the
+	// image stream and lands on CvImage.qcLabel (approved/rejected), so the
+	// human truth is looked up from the image, not the inspection.
 	const scorecardRaw = await CvInspection.aggregate([
 		{ $match: { projectId: params.id, result: { $in: ['pass', 'fail'] } } },
+		{ $lookup: { from: 'cv_images', localField: 'imageId', foreignField: '_id', as: 'img' } },
+		{
+			$addFields: {
+				humanVerdict: {
+					$switch: {
+						branches: [
+							{ case: { $eq: [{ $arrayElemAt: ['$img.qcLabel', 0] }, 'approved'] }, then: 'pass' },
+							{ case: { $eq: [{ $arrayElemAt: ['$img.qcLabel', 0] }, 'rejected'] }, then: 'fail' }
+						],
+						default: null
+					}
+				}
+			}
+		},
 		{
 			$group: {
 				_id: '$modelVersion',
 				totalRuns: { $sum: 1 },
 				shadowRuns: { $sum: { $cond: [{ $eq: ['$isShadow', true] }, 1, 0] } },
-				reviewed: { $sum: { $cond: [{ $in: ['$humanLabel', ['pass', 'fail']] }, 1, 0] } },
+				reviewed: { $sum: { $cond: [{ $in: ['$humanVerdict', ['pass', 'fail']] }, 1, 0] } },
 				agreed: {
 					$sum: {
 						$cond: [
-							{ $and: [{ $in: ['$humanLabel', ['pass', 'fail']] }, { $eq: ['$humanLabel', '$result'] }] },
+							{ $and: [{ $in: ['$humanVerdict', ['pass', 'fail']] }, { $eq: ['$humanVerdict', '$result'] }] },
 							1,
 							0
 						]

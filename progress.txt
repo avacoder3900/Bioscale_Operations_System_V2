@@ -3381,3 +3381,16 @@ User couldn't find projects on the preview: the CV nav dropdown never linked
 npm run check: 10 errors / 431 warnings vs baseline 10/428 (all 10 errors
 pre-existing outside CV; +3 warnings in new UI). Push creates the Vercel
 preview for this commit.
+
+================================================================================
+2026-07-08 — feat/cv-pipeline-v2 — removed /cv/review; review lives in the image stream
+================================================================================
+User call: the image stream's Needs-review/Reviewed tabs already cover review,
+so the dedicated /cv/review page is redundant. Removed the route, the
+"Needs Review" nav item, and both count badges (and the per-request queue
+count query in cv/+layout.server.ts). Repointed the per-version scorecard on
+/cv/projects/[id] to compare inspection verdicts against the image's qcLabel
+(approved->pass / rejected->fail) via $lookup — stream review writes qcLabel,
+not inspection humanLabel, so the agreement metric stays live. humanLabel
+stays declared on cv_inspections for API/backfill use. PRD + diagram updated
+to record the decision. npm run check: 10 errors / 431 warnings — baseline.

@@ -14,11 +14,9 @@
 	let loggingOut = $state(false);
 	let menuOpen = $state(false);
 
-	// Needs-review queue size (model verdicts with no human review yet).
-	const reviewCount = $derived(data.reviewQueueCount ?? 0);
-
 	// Nav follows the CV-PIPELINE-V2 stage order:
-	// capture -> label -> train/verify/deploy (Projects & Models) -> review.
+	// capture -> label -> train/verify/deploy (Projects & Models).
+	// Review happens in the Image Stream (its Needs-review tab).
 	const navItems = [
 		{
 			href: '/cv/stream',
@@ -39,12 +37,6 @@
 			href: '/cv/projects',
 			label: 'Projects & Models',
 			icon: 'M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4'
-		},
-		{
-			// Needs-review queue — the count badge renders next to this item.
-			href: '/cv/review',
-			label: 'Needs Review',
-			icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4'
 		},
 		{
 			href: '/cv/stations',
@@ -130,14 +122,6 @@
 									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
 								</svg>
 								<span>{activeLabel}</span>
-								{#if reviewCount > 0}
-									<span
-										class="rounded-full bg-[var(--color-tron-red,#ff3366)] px-1.5 py-0.5 text-[10px] font-bold leading-none text-black"
-										title="{reviewCount} model verdict{reviewCount === 1 ? '' : 's'} awaiting review"
-									>
-										{reviewCount > 99 ? '99+' : reviewCount}
-									</span>
-								{/if}
 								<svg class="h-4 w-4 transition-transform {menuOpen ? 'rotate-180' : ''}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
 								</svg>
@@ -165,16 +149,6 @@
 												<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={item.icon} />
 											</svg>
 											<span class="font-medium">{item.label}</span>
-											{#if item.href === '/cv/review' && reviewCount > 0}
-												<span
-													class="ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none
-														{active
-														? 'bg-[var(--color-tron-bg-primary)] text-[var(--color-tron-cyan)]'
-														: 'bg-[var(--color-tron-red,#ff3366)] text-black'}"
-												>
-													{reviewCount > 99 ? '99+' : reviewCount}
-												</span>
-											{/if}
 										</a>
 									{/each}
 								</div>
