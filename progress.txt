@@ -3457,3 +3457,26 @@ CAP_PROP_BUFFERSIZE=1 (kills ~250ms stale-frame lag at the old depth-4
 default) + env-tunable STREAM_WIDTH/HEIGHT/FPS + STAMP_FRAMES hook; agent.py
 wires GET /preview.mjpg (?key=STATION_AGENT_KEY) and PREVIEW=local. All
 py_compile clean; agent service stopped/restarted around benches.
+
+================================================================================
+2026-07-08 — cv-microscope — Fast preview integrated into BIMS, remote-controlled, deployed to station 3
+================================================================================
+Per user: no extra hardware, everything through BIMS. MJPEG preview is now the
+capture page's station live view: /preview.mjpg on the agent authenticates the
+SAME station JWT as /ws (no key exposure), served over the existing Tailscale
+Serve HTTPS (no mixed content), rendered via <img> with automatic fallback to
+the WebRTC <video> on error. WebRTC stays connected underneath so photo capture
+(canvas from videoEl) and camera tuning are untouched. Remote-tunable from the
+page: Fast-preview toggle + fps (8-20) + JPEG quality (60-90) — passed as query
+params, clamped agent-side.
+ROOT CAUSE FIX (resolution): on Linux the agent opened the camera with the AUTO
+OpenCV backend → GStreamer on Pi OS, which silently ignores FOURCC/size sets and
+pinned the Celestron at 640x480. Explicit CAP_V4L2 → full 1920x1080 native
+(verified: fourcc-first and size-first orders both fine under V4L2; auto broken).
+DEPLOYED TO STATION 3 (alejandrospi2) remotely: agent.py/camera.py/preview.py/
+latency_stamp.py/sequence.py to /opt/bims-capture-agent, station.env gains
+CAMERA_PROFILE=microscope CAMERA_DEVICE=celestron, service restarted. Verified
+on-Pi: 1920x1080 native microscope profile, capabilities ['sequence'],
+/preview.mjpg 401 without token / 200 streaming ~12fps with a signed JWT, and
+HTTPS 401 via tailscale serve from the tailnet.
+svelte-check: 10-error baseline, 0 new (one TDZ error introduced+fixed).

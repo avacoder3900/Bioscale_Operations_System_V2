@@ -233,10 +233,16 @@ def _camera_source() -> object:
 
 
 def _open_capture(source: object) -> "cv2.VideoCapture":
-    """Open a capture with the platform-appropriate backend (DSHOW on Windows)."""
+    """Open a capture with the platform-appropriate backend.
+
+    Windows: DSHOW (fast startup, prop support). Linux: CAP_V4L2 explicitly —
+    the auto backend resolves to GStreamer on Pi OS, which silently ignores
+    FOURCC/width/height sets and pins UVC cams at their 640x480 default
+    (verified on the Celestron: auto → 640x480, V4L2 → full 1920x1080).
+    """
     if _IS_WINDOWS:
         return cv2.VideoCapture(source, cv2.CAP_DSHOW)
-    return cv2.VideoCapture(source)
+    return cv2.VideoCapture(source, cv2.CAP_V4L2)
 
 
 def _profile_dims() -> tuple[int, int]:

@@ -38,6 +38,23 @@
 	// Camera
 	let videoEl: HTMLVideoElement | null = null;
 	let stream: MediaStream | null = null;
+
+	// Fast MJPEG live preview (station mode): the agent's /preview.mjpg is
+	// ~35ms capture→display vs ~260ms for the WebRTC track (benched on the
+	// Pi). WebRTC stays connected underneath — photo capture still reads
+	// videoEl — this only swaps what the operator SEES. Falls back to the
+	// WebRTC <video> automatically if the stream errors.
+	let stationToken = $state<string | null>(null);
+	let stationHostname = $state<string | null>(null);
+	let mjpegPreview = $state(true);
+	let mjpegError = $state(false);
+	let mjpegFps = $state(15);
+	let mjpegQ = $state(80);
+	const mjpegUrl = $derived(
+		stationToken && stationHostname
+			? `https://${stationHostname}/preview.mjpg?token=${encodeURIComponent(stationToken)}&fps=${mjpegFps}&q=${mjpegQ}`
+			: null
+	);
 	let cameras = $state<MediaDeviceInfo[]>([]);
 	let selectedCameraId = $state<string | null>(null);
 	let cameraError = $state<string | null>(null);
@@ -46,6 +63,7 @@
 	// A real id swaps the video source to a WebRTC stream from that Pi —
 	// see onStationChange() and connectToStation().
 	let selectedStationId = $state<string | null>(null);
+	const mjpegShowing = $derived(!!selectedStationId && mjpegPreview && !mjpegError && !!mjpegUrl);
 	let ws: WebSocket | null = null;
 	let pc: RTCPeerConnection | null = null;
 	// Tracked separately so beforeunload + teardown can release the right
@@ -432,6 +450,9 @@
 		if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
 		if (pc) { try { pc.close(); } catch { /* */ } pc = null; }
 		if (ws) { try { ws.close(); } catch { /* */ } ws = null; }
+		stationToken = null;
+		stationHostname = null;
+		mjpegError = false;
 		if (stream) {
 			stream.getTracks().forEach(t => t.stop());
 			stream = null;
@@ -516,6 +537,9 @@
 			const tokBody = await tokRes.json();
 			token = tokBody.token;
 			if (!token) throw new Error('empty token');
+			stationToken = token;
+			stationHostname = station.hostname;
+			mjpegError = false;
 		} catch (e) {
 			flashBanner('err', `Failed to fetch station token: ${e instanceof Error ? e.message : e}`);
 			selectedStationId = null;
@@ -1411,7 +1435,43 @@
 				</div>
 			{:else}
 				<!-- svelte-ignore a11y_media_has_caption -->
-				<video bind:this={videoEl} class="aspect-video w-full rounded" playsinline autoplay muted></video>
+				{#if mjpegShowing}
+					<!-- Fast MJPEG preview (~35ms) — WebRTC keeps running hidden below
+					     so photo capture and tuning stay untouched. -->
+					<img
+						src={mjpegUrl}
+						alt="Live station preview (fast MJPEG)"
+						class="aspect-video w-full rounded object-contain"
+						onerror={() => {
+							mjpegError = true;
+							flashBanner('info', 'Fast preview unavailable on this station — using WebRTC view.', 4000);
+						}}
+					/>
+				{/if}
+				<video bind:this={videoEl} class="aspect-video w-full rounded {mjpegShowing ? 'hidden' : ''}" playsinline autoplay muted></video>
+				{#if selectedStationId}
+					<div class="mt-1 flex flex-wrap items-center gap-3 text-[11px] text-[var(--color-tron-text-secondary)]">
+						<label class="flex items-center gap-1">
+							<input type="checkbox" bind:checked={mjpegPreview} />
+							Fast preview (MJPEG{mjpegShowing ? ' · active' : ''})
+						</label>
+						{#if mjpegPreview && !mjpegError}
+							<label class="flex items-center gap-1">fps
+								<select bind:value={mjpegFps} class="tron-input py-0 text-[11px]">
+									{#each [8, 12, 15, 20] as f (f)}<option value={f}>{f}</option>{/each}
+								</select>
+							</label>
+							<label class="flex items-center gap-1">quality
+								<select bind:value={mjpegQ} class="tron-input py-0 text-[11px]">
+									{#each [60, 70, 80, 90] as q (q)}<option value={q}>{q}</option>{/each}
+								</select>
+							</label>
+						{/if}
+						{#if mjpegError}
+							<button type="button" class="text-[var(--color-tron-cyan)] hover:underline" onclick={() => (mjpegError = false)}>retry fast preview</button>
+						{/if}
+					</div>
+				{/if}
 			{/if}
 		</div>
 

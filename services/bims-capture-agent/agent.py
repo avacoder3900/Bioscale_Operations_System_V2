@@ -608,9 +608,10 @@ def build_app() -> web.Application:
     app.router.add_get("/health", health)
     app.router.add_get("/ws", websocket)
     # Low-latency MJPEG live preview (no WebRTC negotiation, no VP8) —
-    # <img src="http://<station>:8765/preview.mjpg?key=..."> renders natively.
+    # <img src="https://<station>/preview.mjpg?token=<station JWT>"> renders
+    # natively via Tailscale Serve. Same JWT validation as /ws.
     preview_mod.attach_mjpeg_route(
-        app, camera_mod.grab_still, os.environ.get("STATION_AGENT_KEY", "")
+        app, camera_mod.grab_still, lambda req: _ws_authenticate(req).ok
     )
     app.on_startup.append(_on_startup)
     app.on_cleanup.append(_on_cleanup)
