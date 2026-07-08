@@ -3437,3 +3437,23 @@ NEXT: deploy the cv-microscope agent code to the Pi properly (git pull /
 copy + CAMERA_DEVICE=celestron CAMERA_PROFILE=microscope env + re-provision
 to register the sequence capability), then the full /capture "Microscope
 sequence" panel test against a deployed preview.
+
+================================================================================
+2026-07-08 — cv-microscope — Live-view latency: 3 transports built + benched on the Pi
+================================================================================
+Built three preview transports and raced them head-to-head ON station 3's Pi
+with the Celestron (same process/clock, pixel-embedded ms timestamps via new
+latency_stamp.py, 60 frames each, 720p):
+  local HDMI (PREVIEW=local, cv2 fullscreen):  0.1ms mean (+monitor ~8-16ms)
+  MJPEG HTTP (/preview.mjpg on the agent):     35ms mean, p95 37ms
+  WebRTC (existing aiortc track, tuned):       261ms mean, p95 264ms (loopback!)
+VERDICT: WebRTC's VP8 software encode + jitter buffer costs ~260ms before the
+network even gets involved — that's the lag the user felt. MJPEG is 7.5x
+faster; with LAN RTT (~35ms Tailscale direct) a remote MJPEG viewer lands
+~50-55ms ≈ near-desktop feel. Local HDMI is the true zero.
+NEW CODE: latency_stamp.py (pixel timestamps), preview.py (MJPEG route +
+run_local_preview), bench_view_latency.py (3-way harness); camera.py gains
+CAP_PROP_BUFFERSIZE=1 (kills ~250ms stale-frame lag at the old depth-4
+default) + env-tunable STREAM_WIDTH/HEIGHT/FPS + STAMP_FRAMES hook; agent.py
+wires GET /preview.mjpg (?key=STATION_AGENT_KEY) and PREVIEW=local. All
+py_compile clean; agent service stopped/restarted around benches.

@@ -46,10 +46,24 @@ _IS_WINDOWS = sys.platform == "win32"
 # asyncio.sleep on the remaining slot time so a slow camera doesn't bunch
 # frames and a fast camera doesn't burn the CPU. Full-resolution stills for
 # the microscope sequence bypass this ceiling via grab_still().
-_STREAM_WIDTH = 1280
-_STREAM_HEIGHT = 720
-_TARGET_FPS = 15
-_FRAME_INTERVAL = 1.0 / _TARGET_FPS
+# Env-tunable per station (latency work): STREAM_WIDTH / STREAM_HEIGHT /
+# STREAM_FPS — smaller/slower stream = less encode time = lower lag.
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
+_STREAM_WIDTH = _env_int("STREAM_WIDTH", 1280)
+_STREAM_HEIGHT = _env_int("STREAM_HEIGHT", 720)
+_TARGET_FPS = _env_int("STREAM_FPS", 15)
+_FRAME_INTERVAL = 1.0 / max(1, _TARGET_FPS)
+
+# Latency-bench hook: STAMP_FRAMES=1 embeds a millisecond timestamp as pixel
+# blocks into every live frame (see latency_stamp.py) so a receiver on the
+# same clock can measure capture→delivery latency through any transport.
+_STAMP_FRAMES = os.environ.get("STAMP_FRAMES", "") == "1"
 
 # CAMERA_PROFILE presets applied after the capture opens. 'default' keeps the
 # historical 1280x720 behavior; 'microscope' targets the sensor's full
@@ -252,6 +266,10 @@ class CameraTrack(VideoStreamTrack):
             self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, cap_w)
             self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cap_h)
             self._cap.set(cv2.CAP_PROP_FPS, _TARGET_FPS)
+            # Depth-1 capture buffer: read() always hands back the NEWEST
+            # frame. The OpenCV default (~4 frames) serves stale frames,
+            # which reads as ~250ms of extra display lag at 15 fps.
+            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             if _CAMERA_PROFILE == "microscope":
                 # Fixed optics: disable autofocus + auto-exposure so a timed
                 # run of stills is consistent shot-to-shot. Values remain live-
@@ -336,6 +354,10 @@ class CameraTrack(VideoStreamTrack):
                     (_STREAM_WIDTH, _STREAM_HEIGHT),
                     interpolation=cv2.INTER_AREA,
                 )
+            if _STAMP_FRAMES:
+                from latency_stamp import stamp_frame
+
+                stamp_frame(frame_bgr)
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
         video_frame = VideoFrame.from_ndarray(frame_rgb, format="rgb24")

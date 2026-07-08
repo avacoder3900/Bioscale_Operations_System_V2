@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 
 # Local sibling modules — agent.py is run as a script, not as a package member.
 import camera as camera_mod  # noqa: E402
+import preview as preview_mod  # noqa: E402
 import scanner as scanner_mod  # noqa: E402
 import sequence as sequence_mod  # noqa: E402
 
@@ -583,6 +584,10 @@ async def _on_startup(app: web.Application) -> None:
     app["heartbeat"] = asyncio.create_task(
         _heartbeat_loop(), name="bims-heartbeat"
     )
+    # PREVIEW=local renders the camera full-screen on the station's own
+    # display — sensor→screen, no encode, no network (the latency floor).
+    if os.environ.get("PREVIEW", "").strip().lower() == "local":
+        preview_mod.run_local_preview(camera_mod.grab_still)
 
 
 async def _on_cleanup(app: web.Application) -> None:
@@ -602,6 +607,11 @@ def build_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/health", health)
     app.router.add_get("/ws", websocket)
+    # Low-latency MJPEG live preview (no WebRTC negotiation, no VP8) —
+    # <img src="http://<station>:8765/preview.mjpg?key=..."> renders natively.
+    preview_mod.attach_mjpeg_route(
+        app, camera_mod.grab_still, os.environ.get("STATION_AGENT_KEY", "")
+    )
     app.on_startup.append(_on_startup)
     app.on_cleanup.append(_on_cleanup)
     return app
