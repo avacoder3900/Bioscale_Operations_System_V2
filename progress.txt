@@ -3484,3 +3484,7 @@ Deployment: preview — https://bioscale-operations-system-mongodb-1le4olyt8.ver
 Source: branch cv-microscope @ commit 5fbee2c1
 Retrieve this exact code: git checkout cv-microscope at commit 5fbee2c1
 What this deployment is for: MJPEG fast preview as the station live view (remote-tunable fps/quality, JWT-authed, WebRTC fallback) — test on /capture with CV Station test 3
+Deployment: preview — https://bioscale-operations-system-mongodb-2fg7xaqd3-brevitest.vercel.app
+Source: branch cv-microscope @ commit f312ae6c
+Retrieve this exact code: git checkout cv-microscope at commit f312ae6c
+What this deployment is for: current branch head — full microscope station stack (fast MJPEG preview + grid sequence + intake + stage models) for user testing
