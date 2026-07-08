@@ -3480,3 +3480,7 @@ on-Pi: 1920x1080 native microscope profile, capabilities ['sequence'],
 /preview.mjpg 401 without token / 200 streaming ~12fps with a signed JWT, and
 HTTPS 401 via tailscale serve from the tailnet.
 svelte-check: 10-error baseline, 0 new (one TDZ error introduced+fixed).
+Deployment: preview — https://bioscale-operations-system-mongodb-1le4olyt8.vercel.app
+Source: branch cv-microscope @ commit 5fbee2c1
+Retrieve this exact code: git checkout cv-microscope at commit 5fbee2c1
+What this deployment is for: MJPEG fast preview as the station live view (remote-tunable fps/quality, JWT-authed, WebRTC fallback) — test on /capture with CV Station test 3
