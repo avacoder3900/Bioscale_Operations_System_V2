@@ -3412,3 +3412,28 @@ Deployment: preview — https://bioscale-operations-system-mongodb-ltyf5i31l-bre
 Source: branch cv-microscope @ commit 63b865b3
 Retrieve this exact code: git checkout cv-microscope at commit 63b865b3
 What this deployment is for: CV-MICROSCOPE-01 — microscope station agent + timed grid sequence + capture/stream/DHR UI (bench-testable once Celestron hardware is on a station)
+
+================================================================================
+2026-07-08 — cv-microscope — BENCH TEST PASSED: Celestron on Pi station 3, 15/15 grid sequence
+================================================================================
+Live end-to-end bench of CV-MICROSCOPE-01 on the real hardware: Celestron
+Imager HD plugged into station 3 ("CV Station test 3" = alejandrospi2, /dev/
+video0). Ran SequenceManager via bench_sequence.py on the Pi (agent venv),
+uploading through an SSH reverse tunnel to a local dev server running the
+branch's capture-ingest (BIMS_URL=127.0.0.1:5199 → this PC).
+RESULT: 15/15 shots captured at 2s interval, all uploaded (0 failed, 0
+retries), grid stamped row-major A1..C5 exactly per config, sequence_done
+{uploaded:15, failed:0}. Mongo verified: photos[] entries carry
+photoType:microscope, phase:null, sequenceId/sequenceIndex/location; R2
+serves the bytes (image/jpeg). Agent service stopped for the bench and
+restarted cleanly after.
+Fixes en route: dev server needs .env.local exported to process.env
+(connection.ts reads process.env directly — vite only maps to $env);
+bench harness got a win32/linux backend guard (CAP_DSHOW vs CAP_V4L2).
+KNOWN TUNING ITEM: bench opened the Celestron at 640x480 (no MJPG fourcc
+in the harness); the real agent camera path sets MJPG + 1080p — confirm
+resolution during the full-agent test.
+NEXT: deploy the cv-microscope agent code to the Pi properly (git pull /
+copy + CAMERA_DEVICE=celestron CAMERA_PROFILE=microscope env + re-provision
+to register the sequence capability), then the full /capture "Microscope
+sequence" panel test against a deployed preview.

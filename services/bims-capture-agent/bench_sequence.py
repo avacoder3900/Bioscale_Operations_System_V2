@@ -28,7 +28,8 @@ def main() -> None:
     count = int(sys.argv[3]) if len(sys.argv) > 3 else None
     interval_ms = int(sys.argv[4]) if len(sys.argv) > 4 else None
 
-    cap = cv2.VideoCapture(cam_index, cv2.CAP_DSHOW)
+    backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_V4L2
+    cap = cv2.VideoCapture(cam_index, backend)
     if not cap.isOpened():
         sys.exit(f"could not open camera {cam_index}")
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
