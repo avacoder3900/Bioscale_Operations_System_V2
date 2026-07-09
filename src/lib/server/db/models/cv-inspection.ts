@@ -12,7 +12,10 @@ const cvInspectionSchema = new Schema({
 	status: { type: String, enum: ['queued', 'running', 'completed', 'failed'], default: 'queued' },
 	result: { type: String, enum: ['pass', 'fail', null], default: null },
 	confidenceScore: Number,
-	defects: [{ type: String, location: String, severity: String, _id: false }],
+	// `type` must be wrapped ({ type: String }) — a bare `type: String` here makes
+	// Mongoose read the whole subdoc as "array of String", so writing a defect
+	// object threw "Cast to string failed ... at path defects.0" on FAIL verdicts.
+	defects: [{ type: { type: String }, location: String, severity: String, _id: false }],
 	modelVersion: String,
 	modelPath: String,
 	processingTimeMs: Number,
