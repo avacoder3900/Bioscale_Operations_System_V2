@@ -6,15 +6,21 @@ const operatorRef = { _id: String, username: String };
 const cvImageSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 
-	// Identity — cartridge-first. Required after the refactor.
+	// Identity — cartridge-first for phase captures. Not required at the schema level:
+	// project-scoped demo/R&D uploads (POST /api/cv/images) have no cartridge. The
+	// capture endpoint still enforces cartridge presence for phase captures.
 	cartridgeTag: {
-		cartridgeRecordId: { type: String, required: true, index: true },
-		phase: { type: String, required: true },
+		cartridgeRecordId: { type: String, index: true },
+		phase: String,
 		labels: [String],
 		notes: String,
 		_id: false
 	},
 	cartridgeImageNumber: { type: String, index: true },
+
+	// Project-scoped uploads without a cartridge (demo/R&D via POST /api/cv/images)
+	projectId: { type: String, index: true },
+	sampleId: String,
 
 	// Where the pixels live
 	filename: String,
@@ -40,9 +46,24 @@ const cvImageSchema = new Schema({
 	},
 	processedAt: Date,
 
+	// Embedding cache (cv-color-spatial-v1, 156 floats) — select:false so routine
+	// queries never drag it; the trainer selects it explicitly.
+	embedding: { type: [Number], select: false },
+	embeddingVersion: String,
+
 	// Capture metadata
 	capturedAt: Date,
 	capturedBy: operatorRef,
+
+	// Camera view the photo was shot from. Top and bottom of a cartridge look
+	// completely different, so a model trains on and grades exactly one view.
+	// null = untagged legacy photo (only graded by view-less projects).
+	view: { type: String, enum: ['top', 'bottom', null], default: null },
+
+	// How `view` was assigned: 'manual' = operator's Top/Bottom toggle;
+	// 'barcode-auto' = inferred at capture from barcode presence (barcode ⇒ top);
+	// null = untagged (no toggle and detection unavailable).
+	viewSource: { type: String, enum: ['manual', 'barcode-auto', null], default: null },
 
 	// QC label — optional, demoted from identity to a side field
 	qcLabel: { type: String, enum: ['approved', 'rejected', null], default: null },

@@ -10,6 +10,18 @@
  *   phase:          required — manufacturing phase or 'post_run' for R&D
  *   cameraIndex:    optional
  *   processingMode: optional 'full' | 'raw'
+ *   verdict:        optional 'approved' | 'rejected' — capture-time QC label
+ *                   (PRD CV-PIPELINE-V2 Stage 2 entry point A); any other
+ *                   value is a 400
+ *   view:           optional 'top' | 'bottom' — camera view the photo was shot
+ *                   from (top/bottom cartridge photos look completely different,
+ *                   so a model trains on / grades one view). Any other non-empty
+ *                   value is a 400. Routed into inference so view-scoped models
+ *                   only grade their own view. When omitted, the view is
+ *                   auto-classified from barcode presence (barcode ⇒ top) —
+ *                   see viewSource in the response.
+ *   stationId:      optional — capture station the photo came from; used for
+ *                   the Stage-1 phase sanity check (warn, never block)
  *
  * Behavior:
  *   1. Auth: cv:write OR manufacturing:write (inline mfg buttons use the latter).
@@ -18,7 +30,10 @@
  *   4. Upload file via R2 Worker.
  *   5. Create CvImage doc.
  *   6. Push photo ref to CartridgeRecord.photos[].
- *   7. Return { imageId, cartridgeImageNumber, imageUrl, phase }.
+ *   7. Return { imageId, cartridgeImageNumber, imageUrl, phase, view, viewSource }
+ *      — plus a { warning } string when the posted phase disagrees with the
+ *      station's assignedPhase. viewSource is 'manual' (operator toggle),
+ *      'barcode-auto' (inferred here), or null (untagged).
  *
  * Future (PRD 3 Phase 4): fire-and-forget phase-X auto-inference here.
  */
@@ -26,9 +41,11 @@ import { json, error } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
+import { CaptureStation } from '$lib/server/db/models/capture-station.js';
 import { AuditLog } from '$lib/server/db/models/index.js';
 import { generateId } from '$lib/server/db/utils.js';
 import { uploadViaWorker, getR2Url, buildCvNamedKey } from '$lib/server/services/r2';
+import { detectBarcodePresence, BARCODE_VIEW, NO_BARCODE_VIEW } from '$lib/server/services/barcode-detect';
 import { hasPermission } from '$lib/server/permissions';
 import { runPhaseInference } from '$lib/server/cv/run-inference';
 import type { RequestHandler } from './$types';
@@ -71,9 +88,43 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		}
 		const cartridgeTagNotes = formData.get('notes')?.toString().trim() || undefined;
 
+		// Optional capture-time QC verdict (CV-PIPELINE-V2 Stage 2 entry point A) —
+		// writes the same qcLabel the labeling UIs use, attributed to the operator.
+		// Empty string (an unset form control) is treated as "no verdict".
+		const verdictRaw = formData.get('verdict')?.toString().trim() || undefined;
+		if (verdictRaw !== undefined && verdictRaw !== 'approved' && verdictRaw !== 'rejected') {
+			return json({ error: `verdict must be 'approved' or 'rejected'` }, { status: 400 });
+		}
+		const verdict = verdictRaw as 'approved' | 'rejected' | undefined;
+
+		// Optional camera view (CV-PIPELINE-V2 top/bottom split) — top and bottom
+		// cartridge photos look completely different, so a model grades one view.
+		// Empty string (an unset toggle) is treated as "no view".
+		const viewRaw = formData.get('view')?.toString().trim() || undefined;
+		if (viewRaw !== undefined && viewRaw !== 'top' && viewRaw !== 'bottom') {
+			return json({ error: `view must be 'top' or 'bottom'` }, { status: 400 });
+		}
+		const view = viewRaw as 'top' | 'bottom' | undefined;
+
+		// Optional station identity — drives the Stage-1 phase sanity check below.
+		const stationId = formData.get('stationId')?.toString().trim() || undefined;
+
 		if (!file) return json({ error: 'file is required' }, { status: 400 });
 		if (!cartridgeId) return json({ error: 'cartridgeId is required' }, { status: 400 });
 		if (!phase) return json({ error: 'phase is required' }, { status: 400 });
+
+		// Station sanity check (CV-PIPELINE-V2 Stage 1): a capture posted from a
+		// station assigned to a different phase is almost always "wrong station
+		// selected in the dropdown". Warn in the success response — never block.
+		let warning: string | undefined;
+		if (stationId) {
+			const station = await CaptureStation.findById(stationId)
+				.select('name assignedPhase')
+				.lean() as any;
+			if (station?.assignedPhase && station.assignedPhase !== phase) {
+				warning = `station ${station.name} is assigned to ${station.assignedPhase} but this capture was tagged ${phase}`;
+			}
+		}
 
 		// Atomic $inc serves double duty: validates cartridge exists AND mints a
 		// race-free sequence number. null updated = cartridge doesn't exist.
@@ -91,6 +142,21 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const cartridgeImageNumber = `${cartridgeId}_${pad(seq)}`;
 
 		const buffer = Buffer.from(await file.arrayBuffer());
+
+		// Resolve the camera view (CV-PIPELINE-V2 top/bottom split). The manual
+		// toggle always wins; when it's unset, auto-classify from barcode presence
+		// (the cartridge barcode shows only in top photos). Detection never blocks
+		// or fails a capture — a null result leaves the view untagged.
+		let effectiveView: 'top' | 'bottom' | undefined = view;
+		let viewSource: 'manual' | 'barcode-auto' | undefined = view ? 'manual' : undefined;
+		if (!view) {
+			const hasBarcode = await detectBarcodePresence(buffer);
+			if (hasBarcode !== null) {
+				effectiveView = hasBarcode ? BARCODE_VIEW : NO_BARCODE_VIEW;
+				viewSource = 'barcode-auto';
+			}
+		}
+
 		const imageId = generateId();
 		const filenameFromClient = file.name || `${cartridgeImageNumber}.jpg`;
 		const key = buildCvNamedKey('captures', imageId, `${cartridgeImageNumber}-${filenameFromClient}`);
@@ -117,8 +183,31 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				...(cartridgeTagNotes ? { notes: cartridgeTagNotes } : {})
 			},
 			cartridgeImageNumber,
+			...(effectiveView ? { view: effectiveView } : {}),
+			...(viewSource ? { viewSource } : {}),
+			...(verdict
+				? {
+					qcLabel: verdict,
+					qcLabeledBy: { _id: locals.user._id, username: locals.user.username },
+					qcLabeledAt: capturedAt
+				}
+				: {}),
 			...(forensic ? { metadata: { forensic } } : {})
 		});
+
+		// Capture-time verdict is a QC decision — audit it like the other
+		// cartridge-status writes below.
+		if (verdict) {
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'cv_images',
+				recordId: imageId,
+				action: 'capture_verdict',
+				newData: { qcLabel: verdict, cartridgeId, phase },
+				changedAt: capturedAt,
+				changedBy: locals.user.username
+			});
+		}
 
 		// A batch of legacy cartridges have a malformed (non-array) `photos`
 		// field, so a plain $push throws "must be an array but is of type …".
@@ -192,6 +281,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			imageUrl: publicUrl,
 			cartridgeRecordId: cartridgeId,
 			phase,
+			view: effectiveView ?? null,
 			triggeredBy: 'auto-on-capture'
 		}).catch(err => console.error('[capture] phase-inference failed:', err));
 
@@ -201,7 +291,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			cartridgeRecordId: cartridgeId,
 			phase,
 			imageUrl: publicUrl,
-			filePath: key
+			filePath: key,
+			view: effectiveView ?? null,
+			viewSource: viewSource ?? null,
+			...(warning ? { warning } : {})
 		}, { status: 201 });
 	} catch (e: any) {
 		// Surface the underlying error to the operator UI instead of a bare 500.

@@ -3290,3 +3290,146 @@ Deployment: preview — https://bioscale-operations-system-mongodb-qx7b6khn2-bre
 Source: branch feat/cartridge-admin-sample @ commit f15518b1
 Retrieve this exact code: git checkout feat/cartridge-admin-sample at commit f15518b1
 What this deployment is for: cartridge-admin expanded row now shows the specific sample (subjectId + type) per cartridge
+
+================================================================================
+2026-07-07 — feat/cv-pipeline-v2 — CV pipeline V2 PRD (train/verify/deploy redesign)
+================================================================================
+Investigated why saving a CV project deployment to the post_mortem phase reports
+success but the post-mortem-inspect page says no model is assigned. Root cause
+(verified against the production DB and an empirical Mongoose 9 probe): the CV
+Mongoose schemas on master never declared most fields the CV code writes —
+deployAtPhases/activeModelVersion/shadowModelVersion/trainedModels/classifier on
+cv_projects, embedding/label on cv_images, plus a status-enum mismatch on
+cv_inspections — and strict mode silently strips them from every create/$set.
+Reads (.lean()) bypass the schema, so legacy May/June data still renders, which
+masked the breakage. A partial schema fix exists on the main lineage (18b5b953f,
+2026-06-15) but never merged to master.
+
+Wrote docs/prds/CV-PIPELINE-V2.md: five-stage redesign — phase-scoped capture
+(station step picks the model), unified labeling (capture-time OR stream UI, one
+qcLabel field), training-set assembly that checks cartridge status/tags/phase,
+versioned immutable trainedModels[] entries with per-version training-set
+manifests (exact imageIds, newSincePrevious) so iterations improve without
+erasing prior models, a holdout verification gate + explicit Deploy button, and
+the human-review loop feeding the next iteration. Includes the schema fixes,
+migration script spec, and a 4-PR implementation plan. Docs-only commit; npm run
+check not applicable.
+
+================================================================================
+2026-07-07 — feat/cv-pipeline-v2 — CV-PIPELINE-V2 implemented (schemas, versioned train/verify/deploy, review queue)
+================================================================================
+Implemented the full CV-PIPELINE-V2 PRD (docs/prds/CV-PIPELINE-V2.md) via a
+multi-agent workflow, then hand-verified. Changes:
+
+- Schemas (the strict-mode unblock): cv-project.ts declares deployAtPhases/
+  activeModelVersion/shadowModelVersion, trainingFilter, verifyGate, and the
+  versioned trainedModels[] (immutable per-run entries carrying their own
+  classifier weights, training-set manifest with exact imageIds +
+  newSincePrevious, and holdout verification). cv-image.ts declares the
+  embedding cache (select:false) + projectId/sampleId and relaxes cartridgeTag
+  for project-scoped uploads; qcLabel is now the single label field.
+  cv-inspection.ts status enum fixed to queued/running/completed/failed +
+  isShadow/triggeredBy/At/confidenceThreshold/errorMessage declared + needs-
+  review index. cartridge-record.ts photos[] gains verdictSummary.
+- Training core: cv-bridge triggerTraining assembles by qcLabel + phase +
+  trainingFilter (cartridge status/tag join), holds out a stratified ~20%
+  sample, scores balanced accuracy against verifyGate (defaults 10/0.80), and
+  APPENDS a trainedModels[] version (status verified when the gate passes).
+  runInference resolves weights per version (shadow runs use shadow weights);
+  non-shadow verdicts mirror {verdict, inspectionId, modelVersion} onto the
+  cartridge's photos[] entry. /api/cv/train now trains in-process, audits, and
+  returns version + gate result (stale GitHub-dispatch path removed).
+- Deployment tab: version-history table with status pills + holdout metrics,
+  gate-checked Deploy button (server re-checks verification.passed), rollback
+  via redeploying older passed versions, shadow set/clear, per-version
+  scorecard (model-vs-human agreement) on History. Fixed a pre-existing train
+  action bug (read data.version off the wrong nesting; claimed async).
+- Capture: optional Pass/Fail verdict at capture (writes qcLabel, audited,
+  auto-resets per shot) + station assignedPhase-vs-phase mismatch warning.
+- Review: new /cv/review needs-review queue (verdict but no humanLabel,
+  shadows excluded) with Agree/Overrule that sets humanLabel and mirrors
+  qcLabel, project/phase filters, and a count badge in the CV nav.
+- scripts/migrate-cv-pipeline-v2.ts: raw-driver migration (label->qcLabel,
+  legacy classifier wrapped as trainedModels v1, inspection status normalize);
+  DRY-RUN by default, --apply to write. NOT yet run against prod.
+
+npm run check: 10 errors / 428 warnings vs baseline 11/428 — zero errors in
+any touched file (all 10 pre-existing: r2.ts, AskBimsWidget, assembly page).
+This push creates a Vercel preview build for the branch (URL in the Vercel
+dashboard under this commit).
+
+================================================================================
+2026-07-08 — feat/cv-pipeline-v2 — CV UI journey completed (nav, project create wizard, training setup)
+================================================================================
+User couldn't find projects on the preview: the CV nav dropdown never linked
+/cv/projects and pointed at three dead routes (/cv/inspect, /cv/labeling,
+/cv/history). Completed the make-a-model UI journey:
+- cv/+layout.svelte nav rebuilt to real routes in pipeline order (Image
+  Stream, Capture, Label, Projects & Models, Needs Review w/ badge, Stations,
+  Forensic Capture); fixed latent activeLabel fallthrough bug.
+- /cv/projects: create now requires training phases (canonical 8-phase union
+  of /capture + inspect pages) or Master model, writes phases/isMasterModel/
+  projectType, audited; cards show pipeline state (phase chips, version count,
+  deployed version); "how a model comes to life" hint strip.
+- /cv/projects/[id]: new Training setup tab (phases, master toggle, verifyGate
+  10/0.80 inputs, cartridge-status filter from the real status enum, tag
+  filters) via updateTrainingSetup action (dotted $set, audited); pre-train
+  eligible-pool counts (approved/rejected, new-since-last-version) computed
+  with the trainer's own eligibility rules, shown at the Train button which
+  now disables with a hint when the pool is too small; compact pipeline
+  stepper.
+npm run check: 10 errors / 431 warnings vs baseline 10/428 (all 10 errors
+pre-existing outside CV; +3 warnings in new UI). Push creates the Vercel
+preview for this commit.
+
+================================================================================
+2026-07-08 — feat/cv-pipeline-v2 — removed /cv/review; review lives in the image stream
+================================================================================
+User call: the image stream's Needs-review/Reviewed tabs already cover review,
+so the dedicated /cv/review page is redundant. Removed the route, the
+"Needs Review" nav item, and both count badges (and the per-request queue
+count query in cv/+layout.server.ts). Repointed the per-version scorecard on
+/cv/projects/[id] to compare inspection verdicts against the image's qcLabel
+(approved->pass / rejected->fail) via $lookup — stream review writes qcLabel,
+not inspection humanLabel, so the agreement metric stays live. humanLabel
+stays declared on cv_inspections for API/backfill use. PRD + diagram updated
+to record the decision. npm run check: 10 errors / 431 warnings — baseline.
+
+================================================================================
+2026-07-08 — feat/cv-pipeline-v2 — top/bottom view split
+================================================================================
+Cartridge top and bottom photos look completely different, so models must be
+view-scoped. Added cv_images.view + cv_projects.view ('top'|'bottom'|null,
+null = any/legacy, fully backward compatible). Capture (/capture + both
+capture endpoints) takes a sticky Top/Bottom toggle; runPhaseInference gates
+projects by view (view-scoped projects never grade the wrong view or untagged
+photos); triggerTraining, the pre-train pool counts, and verifyVersion all
+apply the same restriction; view recorded in each version's trainingSet
+.filter; View selector on project create + Training setup; TOP/BOTTOM chip on
+project cards. PRD + diagram updated. Typical setup: two projects per phase
+(e.g. Post-mortem Top / Post-mortem Bottom).
+npm run check: 10 errors / 432 warnings — baseline held, zero in CV files.
+
+================================================================================
+2026-07-09 — feat/cv-pipeline-v2 — barcode view auto-classification + 3-phase options + backfill
+================================================================================
+- Barcode auto-classification: cartridge barcodes are only visible in TOP
+  photos, so when the operator leaves the /capture Top/Bottom toggle unset,
+  the capture endpoints (capture + capture-ingest) run presence-only barcode
+  detection (new dep zxing-wasm, sharp-downscaled frame, 3s cap, decoded value
+  discarded): barcode ⇒ view 'top', none ⇒ 'bottom', stamped viewSource
+  'barcode-auto'; manual toggle wins ('manual'); detector failure leaves the
+  photo untagged and NEVER blocks a capture. Side mapping is one constant in
+  src/lib/server/services/barcode-detect.ts. Functional round-trip self-test
+  (zxing writer → composite → detect) passes.
+- CV project phase options reduced to the three inline inspection points
+  (wax_filled / reagent_filled / post_mortem) on create, Training setup, and
+  the deploy-at checkboxes (legacy phases stay visible on projects that have
+  them).
+- scripts/backfill-photo-views.ts: classifies all untagged production photos
+  with the same detector (idempotent; skips tagged; failures left untagged).
+  Smoke run (16) verified; four samples visually confirmed (tops show QR,
+  bottoms show label back). Full run over 4,695 photos launched.
+npm run check: 10 errors / 432 warnings — exact baseline, zero in CV files.
+Merging to master for production deployment (migration dry-run showed zero
+legacy writes needed, so no --apply step).

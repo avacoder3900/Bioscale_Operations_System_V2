@@ -1,0 +1,601 @@
+<title>BIMS CV Model — Data Path &amp; Storage</title>
+<style>
+  :root {
+    --bg: #f4f7f8;
+    --panel: #ffffff;
+    --panel-2: #eef3f5;
+    --ink: #182931;
+    --muted: #5d7681;
+    --line: #d5e1e5;
+    --accent: #0d7f8c;
+    --accent-soft: #e0f0f2;
+    --bad: #b3413a;
+    --bad-bg: #f9edec;
+    --ok: #2e7d4f;
+    --ok-bg: #e9f4ee;
+    --warn: #96660f;
+    --warn-bg: #f9f1e0;
+    --mono: "Cascadia Code", Consolas, ui-monospace, "SF Mono", Menlo, monospace;
+    --sans: "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0c1316; --panel: #131e23; --panel-2: #0f181c;
+      --ink: #d7e5ea; --muted: #8ba3ac; --line: #26383f;
+      --accent: #55cfe0; --accent-soft: #123137;
+      --bad: #ff9089; --bad-bg: #2c1917;
+      --ok: #74cf9b; --ok-bg: #14291d;
+      --warn: #dcae57; --warn-bg: #2c2311;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0c1316; --panel: #131e23; --panel-2: #0f181c;
+    --ink: #d7e5ea; --muted: #8ba3ac; --line: #26383f;
+    --accent: #55cfe0; --accent-soft: #123137;
+    --bad: #ff9089; --bad-bg: #2c1917;
+    --ok: #74cf9b; --ok-bg: #14291d;
+    --warn: #dcae57; --warn-bg: #2c2311;
+  }
+  :root[data-theme="light"] {
+    --bg: #f4f7f8; --panel: #ffffff; --panel-2: #eef3f5;
+    --ink: #182931; --muted: #5d7681; --line: #d5e1e5;
+    --accent: #0d7f8c; --accent-soft: #e0f0f2;
+    --bad: #b3413a; --bad-bg: #f9edec;
+    --ok: #2e7d4f; --ok-bg: #e9f4ee;
+    --warn: #96660f; --warn-bg: #f9f1e0;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.55;
+    margin: 0;
+    padding: 40px 20px 80px;
+  }
+  main { max-width: 1020px; margin: 0 auto; }
+
+  h1 { font-size: 1.7rem; margin: 0 0 6px; letter-spacing: -0.01em; text-wrap: balance; }
+  h2 { font-size: 1.15rem; margin: 0 0 4px; text-wrap: balance; }
+  .eyebrow {
+    font-size: 0.7rem; font-weight: 600; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 8px;
+  }
+  .lede { color: var(--muted); max-width: 65ch; margin: 0; }
+  section { margin-top: 52px; }
+  section > p.intro { color: var(--muted); max-width: 70ch; margin: 4px 0 20px; }
+
+  code, .mono { font-family: var(--mono); font-size: 0.85em; }
+  .path {
+    font-family: var(--mono); font-size: 0.78rem; color: var(--muted);
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 4px; padding: 1px 6px; white-space: nowrap;
+  }
+
+  .branchbar {
+    display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center;
+    border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+    background: var(--accent-soft);
+    border-radius: 8px; padding: 10px 16px; margin-top: 20px;
+    font-size: 0.84rem;
+  }
+  .branchbar .mono { color: var(--accent); font-weight: 600; }
+
+  /* ---------- legend ---------- */
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center;
+    border: 1px solid var(--line); background: var(--panel);
+    border-radius: 8px; padding: 12px 16px; margin-top: 14px;
+    font-size: 0.83rem; color: var(--muted);
+  }
+  .legend b { color: var(--ink); font-weight: 600; }
+  .swatch { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin-right: 7px; vertical-align: -1px; }
+
+  /* ---------- field chips ---------- */
+  .f {
+    font-family: var(--mono); font-size: 0.76rem;
+    display: inline-block; padding: 2px 7px; border-radius: 4px;
+    border: 1px solid var(--line); background: var(--panel-2);
+    margin: 2px 3px 2px 0; white-space: nowrap;
+  }
+  .f.dropped {
+    border-color: color-mix(in srgb, var(--bad) 45%, transparent);
+    background: var(--bad-bg); color: var(--bad);
+    text-decoration: line-through; text-decoration-thickness: 1px;
+  }
+  .f.keyfield { border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .f.newf { border-color: color-mix(in srgb, var(--ok) 55%, transparent); background: var(--ok-bg); color: var(--ok); }
+
+  .pill {
+    display: inline-block; font-size: 0.7rem; font-weight: 600;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    border-radius: 999px; padding: 2px 10px; vertical-align: 2px;
+  }
+  .pill.bad { color: var(--bad); background: var(--bad-bg); }
+  .pill.ok { color: var(--ok); background: var(--ok-bg); }
+  .pill.warn { color: var(--warn); background: var(--warn-bg); }
+  .pill.new { color: var(--accent); background: var(--accent-soft); }
+
+  /* ---------- overview diagram ---------- */
+  .overview-wrap { overflow-x: auto; margin-top: 20px; }
+  .overview {
+    display: grid; grid-template-columns: 1fr 28px 1fr 28px 1fr 28px 1.35fr;
+    gap: 14px; align-items: stretch; min-width: 860px;
+  }
+  .lane {
+    border: 1px solid var(--line); background: var(--panel);
+    border-radius: 10px; padding: 14px 14px 10px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .lane .lane-title {
+    font-size: 0.68rem; font-weight: 700; letter-spacing: 0.11em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 2px;
+  }
+  .node {
+    border: 1px solid var(--line); background: var(--panel-2);
+    border-radius: 6px; padding: 7px 10px; font-size: 0.8rem;
+  }
+  .node .mono { display: block; color: var(--accent); font-size: 0.74rem; }
+  .node small { color: var(--muted); display: block; margin-top: 1px; }
+  .node.store { border-left: 3px solid var(--accent); }
+  .arrowcell {
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 1.05rem;
+  }
+
+  /* ---------- version lifecycle strip ---------- */
+  .lifecycle {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    margin: 16px 0 4px; font-size: 0.8rem;
+  }
+  .lifecycle .state {
+    font-family: var(--mono); font-size: 0.78rem; font-weight: 600;
+    border: 1px solid var(--line); background: var(--panel);
+    border-radius: 999px; padding: 4px 14px;
+  }
+  .lifecycle .state.hot { border-color: color-mix(in srgb, var(--ok) 55%, transparent); background: var(--ok-bg); color: var(--ok); }
+  .lifecycle .sep { color: var(--muted); }
+  .lifecycle .gateNote { color: var(--muted); font-size: 0.75rem; }
+
+  /* ---------- pipeline stages ---------- */
+  .stage {
+    display: grid; grid-template-columns: 52px 1fr; gap: 0 18px;
+    margin-top: 18px;
+  }
+  .stage-num {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+  }
+  .stage-num .n {
+    width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-weight: 700; font-size: 0.9rem;
+    color: var(--accent); background: var(--accent-soft);
+    border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+  .stage-num .stem { width: 2px; flex: 1; background: var(--line); border-radius: 2px; }
+  .stage:last-of-type .stem { display: none; }
+  .stage-card {
+    border: 1px solid var(--line); background: var(--panel);
+    border-radius: 10px; padding: 16px 18px 14px; margin-bottom: 8px;
+  }
+  .stage-card h3 { margin: 0; font-size: 1rem; }
+  .stage-card h3 .pill { margin-left: 10px; }
+  .stage-card .route { margin: 6px 0 10px; font-size: 0.8rem; color: var(--muted); }
+  .stage-card p { margin: 8px 0; font-size: 0.88rem; max-width: 75ch; }
+  .stage-card ul { margin: 8px 0; padding-left: 20px; font-size: 0.88rem; max-width: 72ch; }
+  .stage-card li { margin: 4px 0; }
+  .writes {
+    margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line);
+    font-size: 0.82rem;
+  }
+  .writes .wlabel {
+    font-size: 0.66rem; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--muted); margin-right: 8px;
+  }
+  .writes .wrow { margin-top: 5px; }
+  .writes .coll { font-family: var(--mono); font-size: 0.78rem; color: var(--accent); font-weight: 600; margin-right: 6px; }
+  .today {
+    margin-top: 10px; border-left: 3px solid var(--bad);
+    background: var(--bad-bg); border-radius: 0 6px 6px 0;
+    padding: 8px 12px; font-size: 0.83rem; color: var(--ink);
+  }
+  .today b { color: var(--bad); }
+
+  /* ---------- storage cards ---------- */
+  .stores { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 16px; margin-top: 20px; }
+  .store-card {
+    border: 1px solid var(--line); border-top: 3px solid var(--accent);
+    background: var(--panel); border-radius: 10px; padding: 16px 18px 14px;
+  }
+  .store-card.r2 { border-top-color: var(--muted); }
+  .store-card h3 { margin: 0; font-family: var(--mono); font-size: 0.95rem; }
+  .store-card .role { color: var(--muted); font-size: 0.82rem; margin: 4px 0 12px; }
+  .fgroup { margin-top: 10px; }
+  .fgroup .glabel {
+    font-size: 0.66rem; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 4px;
+  }
+  .store-card .note { font-size: 0.78rem; color: var(--muted); margin: 10px 0 0; }
+  .versionbox {
+    margin-top: 8px; border: 1px dashed color-mix(in srgb, var(--ok) 45%, transparent);
+    background: var(--ok-bg); border-radius: 8px; padding: 10px 12px;
+  }
+  .versionbox .glabel { color: var(--ok); }
+
+  /* ---------- broken table ---------- */
+  .tablewrap { overflow-x: auto; margin-top: 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.83rem; min-width: 760px; }
+  th {
+    text-align: left; font-size: 0.68rem; letter-spacing: 0.09em; text-transform: uppercase;
+    color: var(--muted); padding: 10px 14px; border-bottom: 1px solid var(--line);
+    background: var(--panel-2);
+  }
+  td { padding: 9px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td .mono { font-size: 0.78rem; }
+  td.effect { color: var(--muted); }
+
+  .fixnote {
+    margin-top: 22px; border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent);
+    background: var(--ok-bg); border-radius: 10px; padding: 14px 18px;
+    font-size: 0.88rem; max-width: none;
+  }
+  .fixnote b { color: var(--ok); }
+
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<main>
+  <p class="eyebrow">BIMS V2 · Computer Vision · pipeline V2 redesign</p>
+  <h1>CV model data path — the V2 pipeline</h1>
+  <p class="lede">
+    The trained model is not a file: it's a logistic-regression weight vector stored inline on the project
+    document. This page shows the redesigned five-stage flow — phase-scoped capture, unified labeling,
+    versioned train → verify → deploy — and what each stage reads and writes.
+  </p>
+
+  <div class="branchbar">
+    <span>PRD: <span class="mono">docs/prds/CV-PIPELINE-V2.md</span></span>
+    <span>Branch: <span class="mono">feat/cv-pipeline-v2</span></span>
+    <span>Commit: <span class="mono">9de0ad540</span> (off master <span class="mono">d7bb44eca</span>)</span>
+  </div>
+
+  <div class="legend">
+    <span><span class="swatch" style="background: var(--accent);"></span><b>Existing field</b> — already in the design, kept</span>
+    <span><span class="swatch" style="background: var(--ok);"></span><b>New in V2</b> — added by this redesign</span>
+    <span><span class="swatch" style="background: var(--bad);"></span><b><s>Struck</s></b> — written today but undeclared on <span class="mono">master</span>; silently dropped until PR&nbsp;1 lands</span>
+  </div>
+
+  <!-- ================= OVERVIEW ================= -->
+  <section>
+    <p class="eyebrow">Big picture</p>
+    <h2>Four layers, left to right</h2>
+    <div class="overview-wrap">
+      <div class="overview">
+        <div class="lane">
+          <div class="lane-title">Capture sources</div>
+          <div class="node">Pi capture stations<small>camera + barcode wedge · assignedPhase</small></div>
+          <div class="node">/capture page<small>general CV capture</small></div>
+          <div class="node">Inline inspect pages<small>wax · reagent · post-mortem</small></div>
+        </div>
+        <div class="arrowcell">→</div>
+        <div class="lane">
+          <div class="lane-title">API routes</div>
+          <div class="node"><span class="mono">POST /api/cv/capture</span><small>photo + cartridgeId + phase (+ verdict)</small></div>
+          <div class="node"><span class="mono">POST /api/cv/train</span><small>train button → new version</small></div>
+          <div class="node"><span class="mono">Deployment tab</span><small>verify panel + Deploy button</small></div>
+          <div class="node"><span class="mono">/cv/label · /cv/stream</span><small>labeling + review</small></div>
+        </div>
+        <div class="arrowcell">→</div>
+        <div class="lane">
+          <div class="lane-title">Server services</div>
+          <div class="node"><span class="mono">cv-bridge.ts</span><small>triggerTraining · runInference</small></div>
+          <div class="node"><span class="mono">cv-classifier.ts</span><small>embedImage (sharp) · fit · predict</small></div>
+          <div class="node"><span class="mono">run-inference.ts</span><small>phase → deployed model fan-out</small></div>
+        </div>
+        <div class="arrowcell">→</div>
+        <div class="lane">
+          <div class="lane-title">Storage</div>
+          <div class="node store"><span class="mono">R2 bucket</span><small>the pixels — uploaded via R2 Worker</small></div>
+          <div class="node store"><span class="mono">cv_images</span><small>one doc per photo · qcLabel · embedding cache</small></div>
+          <div class="node store"><span class="mono">cv_projects</span><small>versioned models + deployment config</small></div>
+          <div class="node store"><span class="mono">cv_inspections</span><small>verdict log, one doc per run</small></div>
+          <div class="node store"><span class="mono">cartridge_records</span><small>photos[] refs + verdict summary</small></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= PIPELINE ================= -->
+  <section>
+    <p class="eyebrow">The V2 pipeline</p>
+    <h2>Five stages, one model lifecycle</h2>
+    <p class="intro">Every trained model becomes an immutable version that moves through a lifecycle —
+    new training adds versions, never erases them. Rollback is repointing, not retraining.</p>
+
+    <div class="lifecycle">
+      <span class="state">trained</span><span class="sep">→</span>
+      <span class="state">verified</span><span class="sep">→</span>
+      <span class="state hot">deployed</span><span class="sep">→</span>
+      <span class="state">retired</span>
+      <span class="gateNote">· gate between trained→verified: holdout sample ≥ min count AND balanced accuracy ≥ min — only verified versions get a Deploy button</span>
+    </div>
+
+    <!-- Stage 1 -->
+    <div class="stage">
+      <div class="stage-num"><div class="n">1</div><div class="stem"></div></div>
+      <div class="stage-card">
+        <h3>Capture — phase picks the model <span class="pill new">V2</span></h3>
+        <div class="route"><span class="path">src\routes\api\cv\capture\+server.ts</span> → <span class="path">src\lib\server\cv\run-inference.ts</span></div>
+        <p>Capture keeps its contract (orphan photos rejected, atomic image numbering, R2 upload, photo ref
+        pushed to the cartridge). The photo's <b>phase is the routing key</b>: after saving, capture looks up
+        which deployed model owns that step — a post-mortem photo is checked by the post-mortem model, wax by
+        wax — via <code>find({ deployAtPhases: phase, activeModelVersion: {$ne: null} })</code>.</p>
+        <ul>
+          <li>The response and inspect pages say exactly which project + version graded the photo, or that nothing is deployed at this step.</li>
+          <li><b>New:</b> if the capture comes from a station whose <code>assignedPhase</code> disagrees with the posted phase, the operator gets a warning (catches wrong-station mistakes; doesn't block).</li>
+          <li><b>New — top/bottom view split:</b> each photo carries a <code>view</code> tag (sticky Top/Bottom toggle at capture), and each project can be view-scoped. A bottom photo is never graded by — and never trains — a top model, and vice versa; view-less projects behave as before.</li>
+        </ul>
+        <div class="writes">
+          <span class="wlabel">Writes</span>
+          <div class="wrow"><span class="coll">R2</span><span class="f">image bytes</span></div>
+          <div class="wrow"><span class="coll">cv_images</span><span class="f keyfield">cartridgeTag.phase</span><span class="f">imageUrl</span><span class="f">capturedBy</span></div>
+          <div class="wrow"><span class="coll">cartridge_records</span><span class="f">photos[] ref</span><span class="f">photoSequence++</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stage 2 -->
+    <div class="stage">
+      <div class="stage-num"><div class="n">2</div><div class="stem"></div></div>
+      <div class="stage-card">
+        <h3>Label — two doors, one field <span class="pill new">V2</span></h3>
+        <div class="route"><span class="path">api\cv\capture</span> (verdict at capture) · <span class="path">src\routes\cv\label</span> · image-stream review UI</div>
+        <p>Approve/reject can happen <b>at the moment of capture</b> (new optional <code>verdict</code> field on
+        the capture call, next to the existing failure-label tagging) <b>or later</b> in /cv/label and the
+        stream UI. Both write the same single source of truth: <code>qcLabel</code>, attributed with
+        <code>qcLabeledBy/At</code>. The trainer reads only this field; the legacy <code>label</code> field is
+        migrated into it and retired.</p>
+        <div class="writes">
+          <span class="wlabel">Writes</span>
+          <div class="wrow"><span class="coll">cv_images</span><span class="f keyfield">qcLabel: 'approved' | 'rejected'</span><span class="f">qcLabeledBy / At</span></div>
+        </div>
+        <div class="today"><b>Today on master:</b> labeling writes <code>qcLabel</code> but the trainer queries
+        <code>label</code> — freshly labeled projects look unlabeled and training aborts. Fixed in PR&nbsp;1.</div>
+      </div>
+    </div>
+
+    <!-- Stage 3 -->
+    <div class="stage">
+      <div class="stage-num"><div class="n">3</div><div class="stem"></div></div>
+      <div class="stage-card">
+        <h3>Train — where the verdict is made <span class="pill new">core of V2</span></h3>
+        <div class="route"><span class="path">src\lib\server\services\cv-bridge.ts</span> (triggerTraining, in-process: sharp embeddings + logistic regression)</div>
+        <p><b>Training-set assembly</b> replaces the naive label query. At train time the project resolves:
+        all images with <code>qcLabel</code> set, whose <code>cartridgeTag.phase</code> matches the project's
+        phases, joined against the cartridge to apply <code>trainingFilter</code> — cartridge statuses to
+        include (e.g. exclude voided carts), required/excluded failure tags. Then it embeds
+        (156-feature color/spatial vector, cached per image), fits logistic regression, and calibrates the
+        pass threshold.</p>
+        <p><b>Output is an appended, immutable version</b> — not an overwrite. Each run adds a
+        <code>trainedModels[]</code> entry carrying its own weights <em>and its training-set manifest</em>:
+        exactly which <code>imageIds</code> trained it, class counts, and <code>newSincePrevious</code> so you
+        can see what each iteration added. The train UI shows "N labeled available, M new since current
+        version" before you press Train — so you never retrain on the same set by accident, and more photos
+        improve the next version without touching any previous one.</p>
+        <div class="writes">
+          <span class="wlabel">Writes</span>
+          <div class="wrow"><span class="coll">cv_images</span><span class="f dropped">embedding[] cache</span><span class="f dropped">embeddingVersion</span></div>
+          <div class="wrow"><span class="coll">cv_projects</span><span class="f newf">trainedModels[] += { version, classifier, trainingSet manifest, verification }</span></div>
+        </div>
+        <div class="today"><b>Today on master:</b> weights are written to an undeclared project-level
+        <code>classifier</code> field and vanish; nothing appends versions. PR&nbsp;1 declares the fields,
+        PR&nbsp;2 makes training versioned.</div>
+      </div>
+    </div>
+
+    <!-- Stage 4 -->
+    <div class="stage">
+      <div class="stage-num"><div class="n">4</div><div class="stem"></div></div>
+      <div class="stage-card">
+        <h3>Verify → Deploy — the gate and the button <span class="pill new">V2</span></h3>
+        <div class="route">Deployment tab · <span class="path">src\routes\cv\projects\[id]\+page.server.ts</span></div>
+        <p><b>Verify:</b> assembly holds out a stratified sample (default 20%, min 5 per class) the fit never
+        sees. The candidate is scored on it and the result lands inside the version entry. Only a version whose
+        holdout meets the gate — minimum sample size and minimum balanced accuracy (defaults 10 / 0.80,
+        per-project override) — flips to <code>verified</code>. A quick-check panel can re-verify any version
+        against the current labeled pool on demand.</p>
+        <p><b>Deploy:</b> the Deploy button is enabled only for verified versions. Deploying sets
+        <code>activeModelVersion</code> and <code>deployAtPhases</code> (wax / reagent / post-mortem…), marks
+        the version <code>deployed</code>, and retires the previous one — status only, weights kept, so
+        rollback is one click. A <code>shadowModelVersion</code> can run silently alongside for A/B before
+        promotion. Every deploy is audit-logged.</p>
+        <div class="writes">
+          <span class="wlabel">Writes</span>
+          <div class="wrow"><span class="coll">cv_projects</span><span class="f newf">trainedModels[n].verification + status</span><span class="f dropped">activeModelVersion</span><span class="f dropped">deployAtPhases</span><span class="f dropped">shadowModelVersion</span></div>
+          <div class="wrow"><span class="coll">audit_log</span><span class="f newf">deploy / rollback events</span></div>
+        </div>
+        <div class="today"><b>Today on master (your original bug):</b> the deployment save is stripped whole —
+        the DB doc only bumps <code>updatedAt</code>. There is no verification step and no gate; the save
+        button writes config that never persists. PR&nbsp;1 + PR&nbsp;3.</div>
+      </div>
+    </div>
+
+    <!-- Stage 5 -->
+    <div class="stage">
+      <div class="stage-num"><div class="n">5</div><div class="stem"></div></div>
+      <div class="stage-card">
+        <h3>Review — close the loop <span class="pill new">V2</span></h3>
+        <div class="route"><span class="path">/cv/stream</span> review · <span class="path">cv_inspections</span></div>
+        <p>Every deployed-model run stays a <code>CvInspection</code> doc — the verdict <em>log</em> (one per
+        image × project × version, shadows flagged). Operators review verdicts in the stream section; a review
+        writes <code>humanLabel</code> on the inspection and mirrors into the image's <code>qcLabel</code>,
+        which feeds stage 3's next iteration. A per-version scorecard (model verdict vs. human review
+        agreement) tells you when the deployed version is drifting and it's time to train the next one.</p>
+        <ul>
+          <li><b>Needs-review lives in the image stream</b> (revised: the dedicated /cv/review page was removed — the stream already has Needs-review / Reviewed tabs). Approving or rejecting an image there writes <code>qcLabel</code>, which is both the human truth for the scorecard and the training signal for the next iteration.</li>
+          <li><b>New:</b> a compact verdict summary <code>{verdict, inspectionId, modelVersion}</code> is mirrored onto the matching <code>cartridge_records.photos[]</code> entry, so cartridge/DHR pages show pass–fail without extra queries. Summary only — labels, embeddings and history never move onto the cartridge doc.</li>
+        </ul>
+        <div class="writes">
+          <span class="wlabel">Writes</span>
+          <div class="wrow"><span class="coll">cv_inspections</span><span class="f">result</span><span class="f">confidenceScore</span><span class="f">modelVersion</span><span class="f">humanLabel</span><span class="f dropped">isShadow · triggeredBy/At</span></div>
+          <div class="wrow"><span class="coll">cartridge_records</span><span class="f newf">photos[].verdictSummary</span></div>
+        </div>
+        <div class="today"><b>Today on master:</b> run-inference writes <code>status: 'running'/'completed'</code>
+        but the schema enum only allows <code>pending|processing|complete|failed</code> — the inspection can't
+        even be created. Enum fixed in PR&nbsp;1.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= STORAGE ================= -->
+  <section>
+    <p class="eyebrow">Storage map</p>
+    <h2>Where everything lives</h2>
+    <p class="intro">MongoDB Atlas + one R2 bucket. Pixels live once, in R2. Green fields are new in V2;
+    struck fields are used today but undeclared on <span class="mono">master</span> until PR&nbsp;1.</p>
+
+    <div class="stores">
+      <div class="store-card">
+        <h3>cv_projects</h3>
+        <p class="role">One doc per CV project. <b>All model versions live here</b> — weights inline, no files.</p>
+        <div class="fgroup"><span class="glabel">Identity + training scope</span>
+          <span class="f">name</span><span class="f">projectType</span><span class="f">phases[]</span>
+          <span class="f newf">trainingFilter { cartridgeStatuses, requiredTags, excludeTags }</span>
+          <span class="f newf">verifyGate { minHoldoutCount, minBalancedAccuracy }</span>
+        </div>
+        <div class="versionbox">
+          <span class="glabel">trainedModels[] — one immutable entry per training run</span>
+          <span class="f newf">version</span>
+          <span class="f newf">status: trained→verified→deployed→retired</span>
+          <span class="f newf">classifier { weights[156], bias, calibration }</span>
+          <span class="f newf">confidenceThreshold</span>
+          <span class="f newf">trainingSet { imageIds[], counts, newSincePrevious, filter }</span>
+          <span class="f newf">verification { holdoutIds, balancedAccuracy, gate, passed }</span>
+        </div>
+        <div class="fgroup"><span class="glabel">Deployment (what stage-1 routing queries)</span>
+          <span class="f dropped">deployAtPhases[]</span>
+          <span class="f dropped">activeModelVersion</span>
+          <span class="f dropped">shadowModelVersion</span>
+        </div>
+        <p class="note">Weights ≈ 2 KB per version — dozens of versions per project are fine; archive retired
+        weights to R2 if it ever grows past that.</p>
+      </div>
+
+      <div class="store-card">
+        <h3>cv_images</h3>
+        <p class="role">One doc per photo — the training table. Flat so "all labeled images across all cartridges" is one indexed query.</p>
+        <div class="fgroup"><span class="glabel">Identity</span>
+          <span class="f keyfield">cartridgeTag { cartridgeRecordId, phase, labels[], notes }</span>
+          <span class="f">cartridgeImageNumber</span>
+          <span class="f">projectId (cartridge-less demo/R&amp;D sets)</span>
+        </div>
+        <div class="fgroup"><span class="glabel">Pixels (pointers into R2)</span>
+          <span class="f">imageUrl</span><span class="f">filePath</span><span class="f">thumbnailPath</span><span class="f">processingParams</span>
+        </div>
+        <div class="fgroup"><span class="glabel">Training signal — single label field</span>
+          <span class="f keyfield">qcLabel: approved | rejected</span><span class="f">qcLabeledBy / At</span>
+          <span class="f dropped">embedding[] (156-float cache)</span>
+          <span class="f dropped">embeddingVersion</span>
+        </div>
+        <p class="note">Legacy <code>label</code> field: migrated into <code>qcLabel</code>, then retired.</p>
+      </div>
+
+      <div class="store-card">
+        <h3>cv_inspections</h3>
+        <p class="role">Append-only verdict log: one doc per image × project × model version run. The review queue and per-version scorecards live on this.</p>
+        <div class="fgroup"><span class="glabel">What ran</span>
+          <span class="f">imageId</span><span class="f">projectId</span><span class="f">phase</span><span class="f">modelVersion</span>
+          <span class="f dropped">isShadow</span><span class="f dropped">triggeredBy / triggeredAt</span><span class="f dropped">confidenceThreshold</span>
+        </div>
+        <div class="fgroup"><span class="glabel">Verdict + human review</span>
+          <span class="f keyfield">result: pass | fail</span><span class="f">confidenceScore</span><span class="f">status (enum fixed in PR 1)</span>
+          <span class="f">humanLabel</span><span class="f">reviewedBy / reviewedAt</span>
+        </div>
+      </div>
+
+      <div class="store-card">
+        <h3>cartridge_records</h3>
+        <p class="role">The manufacturing record. CV touches only photo bookkeeping + a read-only verdict summary.</p>
+        <div class="fgroup"><span class="glabel">CV-related</span>
+          <span class="f">photos[] { imageId, phase, r2Url, … }</span>
+          <span class="f">photoSequence (atomic counter)</span>
+          <span class="f newf">photos[].verdictSummary { verdict, inspectionId, modelVersion }</span>
+        </div>
+        <p class="note">Kept thin on purpose: CV churn (relabels, re-runs, retrains) never lands on the
+        manufacturing doc — the 475-cart photos[] desync taught us why.</p>
+      </div>
+
+      <div class="store-card r2">
+        <h3>R2 bucket <span style="font-family: var(--sans); font-size: 0.72rem; color: var(--muted); font-weight: 400;">(Cloudflare, via Worker)</span></h3>
+        <p class="role">The only thing outside Mongo: the image bytes.</p>
+        <div class="fgroup"><span class="glabel">Contents</span>
+          <span class="f">original capture</span><span class="f">processed variant</span><span class="f">thumbnail</span>
+        </div>
+        <p class="note">Uploads via the R2 Worker; public URLs via <code>getR2Url</code>. Inference fetches
+        bytes back from here to embed.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= WHY IT BREAKS TODAY ================= -->
+  <section>
+    <p class="eyebrow">Prerequisite fixes (PR 1)</p>
+    <h2>What's silently broken on master right now</h2>
+    <p class="intro">Mongoose strict mode drops undeclared fields from every <code>create</code>/<code>$set</code>
+    with no error. Verified against the production database. Reads bypass the schema, so stale May/June data
+    still renders — that's what masked all of this. PR&nbsp;1 of the plan is purely declarations + the enum +
+    label unification, and unblocks every stage above.</p>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Write site</th><th>Field(s)</th><th>Declared?</th><th>Effect today</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="mono">updateDeployment</span> / PATCH project</td>
+            <td><span class="mono">deployAtPhases, activeModelVersion, shadowModelVersion</span></td>
+            <td><span class="pill bad">no</span></td>
+            <td class="effect">Deployment save vanishes → "No model is deployed at the post_mortem phase"</td>
+          </tr>
+          <tr>
+            <td><span class="mono">triggerTraining</span> result</td>
+            <td><span class="mono">classifier, trainingError</span></td>
+            <td><span class="pill bad">no</span></td>
+            <td class="effect">Trained weights never persist</td>
+          </tr>
+          <tr>
+            <td><span class="mono">triggerTraining</span> embedding cache</td>
+            <td><span class="mono">embedding, embeddingVersion</span></td>
+            <td><span class="pill bad">no</span></td>
+            <td class="effect">Every image re-embedded on every train</td>
+          </tr>
+          <tr>
+            <td><span class="mono">triggerTraining</span> label query</td>
+            <td>reads <span class="mono">label</span>; UIs write <span class="mono">qcLabel</span></td>
+            <td><span class="pill warn">mismatch</span></td>
+            <td class="effect">Trainer sees 0 labeled images</td>
+          </tr>
+          <tr>
+            <td><span class="mono">runOne</span> inspection create</td>
+            <td><span class="mono">status: 'running' / 'completed'</span></td>
+            <td><span class="pill warn">enum mismatch</span></td>
+            <td class="effect">Inspection record fails validation at create</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="fixnote">
+      <b>Plan of record:</b> <span class="mono">docs/prds/CV-PIPELINE-V2.md</span> on
+      <span class="mono">feat/cv-pipeline-v2</span> — PR&nbsp;1 schema + label unification (unblocks everything),
+      PR&nbsp;2 versioned training with manifests + holdout verify, PR&nbsp;3 verify gate + Deploy button +
+      rollback/shadow, PR&nbsp;4 capture-time verdicts, scorecards, and the photos[] verdict summary.
+      End-to-end acceptance: label → train → gate → deploy to post_mortem → capture grades at the station →
+      review → next iteration sees the new photos.
+    </div>
+  </section>
+</main>
