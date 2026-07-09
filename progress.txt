@@ -3450,3 +3450,9 @@ and a small amber TOP/BOTTOM badge on each photo card, so operators can browse
 by camera view now that all ~4.7k photos are view-tagged (barcode backfill).
 'Untagged' matches both explicit null and legacy docs without the field.
 npm run check: 10 errors — baseline, zero in touched files.
+
+Deployment: production — https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/FBofk6brVT9NL2z5HRDkHJaEhEct
+Source: branch master @ commit 4a0fca2af (merge of PR #19, feat/stream-view-filter)
+Retrieve this exact code: git checkout master at commit 4a0fca2af
+What this deployment is for: /cv/stream View filter (Top/Bottom/Untagged) + per-card view
+badge, making the barcode-backfilled view tags browsable.
