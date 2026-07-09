@@ -3293,7 +3293,7 @@ What this deployment is for: cartridge-admin expanded row now shows the specific
 
 ================================================================================
 2026-07-07 — feat/cv-pipeline-v2 — CV pipeline V2 PRD (train/verify/deploy redesign)
-================================================================================
+=========================================================================
 Investigated why saving a CV project deployment to the post_mortem phase reports
 success but the post-mortem-inspect page says no model is assigned. Root cause
 (verified against the production DB and an empirical Mongoose 9 probe): the CV
@@ -3456,3 +3456,104 @@ Source: branch master @ commit 4a0fca2af (merge of PR #19, feat/stream-view-filt
 Retrieve this exact code: git checkout master at commit 4a0fca2af
 What this deployment is for: /cv/stream View filter (Top/Bottom/Untagged) + per-card view
 badge, making the barcode-backfilled view tags browsable.
+=======
+2026-07-08 — master (working tree) — R04 reagent "not running" = calibrator log-flood at particle-ID read; robust-ID fix + R04 deploy script
+================================================================================
+Operator report: reagent test fill on R04 "not running". Diagnosis from the robot's own run record
+(run da4543fa, 2026-07-08 20:22Z): R04 ALREADY had the fixed protocol w/ use_tip_calibration=false
+(Alejandro uploaded 20:17Z, protocol 23786f24) — the run was stuck in the retry-pause loop at the
+particle-ID read. Root cause: R04's calibrator floods its USB serial with Particle system-log lines
+("0014455145 [system] ERRO/WARN/INFO ..."); the protocol's single readline() after 'I' returns a log
+line instead of the deck ID → "Unknown particle ID" pause. Operator pressed Resume 7x over 3 min
+before a clean line landed; run then filled normally (deck 001, tip-cal probe skipped).
+FIX (protocols/Reagent_Filling_GEN7.py):
+- _read_particle_id(): drain input buffer, send 'I', scan EVERY line arriving in a 2.5s window for a
+  KNOWN carriage ID (substring match against the carriages dict), 4 internal attempts before the
+  operator-facing pause. Survives log-line interleaving.
+- When use_tip_calibration is false, skip the 'C' offset-baseline serial read entirely (its result
+  only feeds the per-tip X/Y probe, which is already skipped) — removes that pause path too.
+FILES: protocols/Reagent_Filling_GEN7.py; scripts/deploy-reagent-to-r04.cjs (new; mirror of the B14
+deploy script — Mongo-bundled labware, analysis gate on use_tip_calibration, repoints R04 robotId
+CCyX8FjTRGvYOd9vISGvi reagent entry). Deploy to R04 pending the live run finishing (won't analyze on
+the Pi mid-fill); also refresh stored opentrons_protocols op-9a81e595ea21a04b fileContent so UI
+re-uploads/deck-cal sync don't revert the robust-ID fix. npm run check: n/a (protocol .py + one-off
+.cjs script only; no src/ changes).
+DEPLOYED 2026-07-08 ~20:45Z (run da4543fa was stopped by operator 20:32Z, robot free): R04 reagent
+slot repointed 23786f24... -> 6eeb16e4-bba6-44cf-b9cb-72f494fe42d7 (analysis completed, 27 params,
+use_tip_calibration present default=false). Stored opentrons_protocols op-9a81e595ea21a04b
+fileContent refreshed to the robust-ID repo version (60.5KB -> 61.8KB) — UI re-upload/deck-cal sync
+no longer reverts. B07/B14 untouched (pre-robust-ID version still on them; redeploy via their
+scripts if the log-flood symptom appears there).
+
+================================================================================
+2026-07-08 — master (working tree) — ROOT CAUSE: B14 deck-004 "Studio-perfect but reagent fill misses" = RobotDeckOffset (-0.1, -2.4, 0) applied at fill time but never in the Studio
+================================================================================
+Operator calibrated deck-004 on B14 via the Deck Calibration Studio (723 edits on 7/08; Move-to-hole
+and Fill-motion both aligned), but real reagent fills missed holes entirely (bent tip), with different
+error between two back-to-back tests. Diagnosed from the robot's own run records (runs 2e33e8ea 20:50Z
++ bcaacf69 21:22Z, protocol 927e2325 uploaded 20:41Z) + Mongo:
+- BOTH runs ran bims_native=True with offset_x=-0.1, offset_y=-2.4, offset_z=0 — the RobotDeckOffset
+  row for B14 (rdo-156341190168018b), captured by alejandro 2026-07-01 20:58Z (overwriting the 0,0,0
+  PRD-6 seed; the row's note text still says "seeded ... 0,0,0" — stale). The .py applies this to ALL
+  labware (deck carriage + tube rack + TIP RACK).
+- The Studio's Move-to-hole / Fill-motion / pick-up-tip NEVER apply RobotDeckOffset (verified in
+  deck-calibration/+page.svelte — currentOffset is display/save only; moveToWellSafe/fillMoveAbs use
+  pure Mongo geometry). So a deck tuned to look perfect in the Studio fills ~2.4mm off in -Y. WYSIWYG
+  breaks whenever the selected robot has a nonzero global offset.
+- Run-to-run variance explained: the offset also shifts TIP PICKUP at slot 11 by -2.4mm Y → tips seat
+  crooked/bend (operator saw a bent tip) → variable extra error per pickup. use_tip_calibration=False
+  in both runs (per-tip probe skipped), so that layer was NOT the variance source.
+- Secondary: both runs used the 20:41Z protocol snapshot; Studio edits at 21:18+ (incl. two 288-well
+  z batches at 21:32) were not on the robot until the 21:37Z sync (adbf11b3, now in robot.protocols[]).
+- Both runs targeted identically (same moveToWell stream) — robot-side math did not drift between tests.
+Fix options (not yet applied): (1) zero B14's RobotDeckOffset since deck-004 geometry is now tuned
+on-B14 to physical truth (any deck whose tuning compensated for -2.4 would shift back, check per deck);
+(2) code fix: Studio should apply (or at minimum loudly warn about) the robot's global offset in
+Move-to-hole/Fill-motion/tip-pickup so Studio == fill. Diagnosis only this entry; no code changed.
+
+================================================================================
+2026-07-09 — master (working tree) — B07 reagent fill "not working" = pause gauntlet (flaky calibrator USB + old protocol build), not a fill bug
+================================================================================
+Run 0da1e029 (B07, 14:25Z, BIMS-launched, use_tip_calibration=False, bims_native offsets 0,0,0)
+never reached filling; commands + actions show: (1) calibrator USB enumerated ~2min late →
+five "Tip calibrator missing" pauses 14:26:37-14:27:37 (operator resumed each; found on
+/dev/ttyACM0 at 14:28:04 — device node mtime confirms re-enumeration at 14:28); (2) stuck 'C'
+string "=-1.0:1:0" → "Could not read offset calibration (could not convert string to float:
+'=-1.0')" pause — B07's OLD protocol build (4a9dec4d, 7/06) reads 'C' unconditionally even with
+tip-cal off (B14/R04's 7/08 build skips it); resumed, continued with zero baseline (harmless —
+value unused); (3) run then reached the NORMAL moveLabware→slot 1 manualMoveWithPause deck-confirm
+pause — auto_resume_run had been consumed/expired by pause #1 — robot sat waiting 75s and the
+operator pressed Stop at 14:29:31 ("failed moveLabware" = RunStoppedError from the stop, not a
+real failure). One more Resume would have started the fill.
+Live SSH probe of B07 calibrator now: present at /dev/ttyACM0, 'C' still stuck at =-1.0:1:0
+(hardware, since 7/01), 'I' reads CLEAN → e00fce68fc3b723490857c78 = deck-003 on B07's carriage.
+BIMS side healthy: bridge commands all 200/201; fresh ReagentBatchRecord OPvzmxxxUqjxsLRy1I7TP at
+Loading (14:29:41) ready to proceed. Remedies: retry + Resume through the deck-confirm pause;
+deploy the current build to B07 (scripts/deploy-reagent-to-b07.cjs) to kill the 'C' pause;
+physically reseat/replace B07's calibrator USB (late enumeration is the root friction; stuck 'C'
+matters only if tip calibration is ever re-enabled). Diagnosis only; nothing changed.
+
+================================================================================
+2026-07-09 — master (working tree) — Deck-cal: "Align selection → anchor hole" (straighten every line in a cartridge)
+================================================================================
+PRD docs/prds/DECK-CAL-ALIGN-CARTRIDGE-TO-HOLE.md. Operator-reported defect: some fill
+lines within a cartridge are shifted slightly vs the others. New Studio tool: jog-verify
+ONE good hole, box-select the whole cartridge, click the good hole LAST (it becomes the
+anchor), one button snaps every other selected hole of the SAME role onto a clean grid
+ruled by the anchor's row + line: new x = x(anchorRow, thisCol) (every column line
+perfectly straight), new y = y(thisRow, anchorCol) (every row level). Z untouched.
+Opposite-role holes are skipped + reported (wax/reagent rows are staggered ~one row
+pitch by design — re-run with an anchor of the other type). Semantics ("straighten every
+line", not cross-only or rigid-per-line) confirmed with the operator.
+- apply-edit.ts: new applyDeckEditsPerWell() — per-well deltas in ONE Mongo write, with
+  the same bounds guard, per-well DeckCalibrationEdit history (each row carries its own
+  delta), one summary AuditLog (mode:'per-well'), best-effort local labware-JSON mirror.
+- deck-calibration/+page.server.ts: new applyPerWell action (manufacturing:write),
+  edits = JSON [{wellName,dx,dy,dz}].
+- deck-calibration/+page.svelte: rowOf() helper; applyPerWellEdits() client path;
+  undoStack entries extended with optional per-well edits (undoLast inverts each — one
+  Undo reverts the whole alignment); alignSelectionToAnchor(); new cyan "Align selection
+  → anchor hole" panel between Set-position and Robot-global-offset.
+Inherits live-run deckDirty note + "Sync for real fills" (reaches the robot only on
+Sync/protocol re-upload, like all Studio edits). npm run check: 11-error baseline
+unchanged (0 in touched files). NOT yet committed.

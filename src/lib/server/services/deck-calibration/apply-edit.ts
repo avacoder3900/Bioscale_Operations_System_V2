@@ -285,6 +285,127 @@ export async function applyDeckEditBatch(
 	return { applied: results.length, failed, fileSynced, results };
 }
 
+export interface ApplyDeckEditsPerWellInput {
+	deckLoadName: string;
+	edits: { wellName: string; delta: Vec3 }[];
+	user: { _id?: string; username?: string };
+	robotId?: string | null;
+	deckEquipmentId?: string | null;
+}
+
+/**
+ * Apply a DIFFERENT delta to each well in one shot (grid alignment — e.g. the
+ * "Align cartridge to a reference hole" tool, where every hole snaps by its own
+ * amount). Same guarantees as applyDeckEditBatch: one Mongo read + one write,
+ * per-well DeckCalibrationEdit history (each row carries its own delta), one
+ * summary AuditLog, physical-bounds guard per well, best-effort local mirror.
+ */
+export async function applyDeckEditsPerWell(
+	input: ApplyDeckEditsPerWellInput
+): Promise<ApplyDeckEditBatchResult> {
+	await connectDB();
+	const { deckLoadName } = input;
+	// Last edit wins if a well is listed twice.
+	const editMap = new Map<string, Vec3>();
+	for (const e of input.edits ?? []) {
+		if (e?.wellName) editMap.set(e.wellName, { x: n(e.delta?.x), y: n(e.delta?.y), z: n(e.delta?.z) });
+	}
+
+	const def = (await LabwareDefinition.findOne({ loadName: deckLoadName }).lean()) as any;
+	if (!def) throw new Error(`Labware definition "${deckLoadName}" not found in labware_definitions.`);
+	const wells = def.definition?.wells ?? {};
+	const dims = dimsOf(def);
+
+	const now = new Date();
+	const failed: { wellName: string; reason: string }[] = [];
+	const results: { wellName: string; before: Vec3; after: Vec3 }[] = [];
+	const setOps: Record<string, number> = {};
+	const historyDocs: any[] = [];
+
+	for (const [wellName, delta] of editMap) {
+		const well = wells[wellName];
+		if (!well) {
+			failed.push({ wellName, reason: 'well not found' });
+			continue;
+		}
+		const before: Vec3 = { x: n(well.x), y: n(well.y), z: n(well.z) };
+		const after: Vec3 = { x: before.x + delta.x, y: before.y + delta.y, z: before.z + delta.z };
+		const oob = outOfBounds(after, dims);
+		if (oob) {
+			failed.push({ wellName, reason: oob });
+			continue;
+		}
+		setOps[`definition.wells.${wellName}.x`] = after.x;
+		setOps[`definition.wells.${wellName}.y`] = after.y;
+		setOps[`definition.wells.${wellName}.z`] = after.z;
+		results.push({ wellName, before, after });
+		historyDocs.push({
+			_id: generateId(),
+			deckLoadName,
+			deckEquipmentId: input.deckEquipmentId ?? null,
+			wellName,
+			delta,
+			before,
+			after,
+			robotId: input.robotId ?? null,
+			createdBy: input.user?.username,
+			createdAt: now
+		});
+	}
+
+	if (results.length === 0) {
+		return { applied: 0, failed, fileSynced: false, results };
+	}
+
+	await LabwareDefinition.updateOne({ loadName: deckLoadName }, { $set: setOps });
+	await DeckCalibrationEdit.insertMany(historyDocs);
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'labware_definitions',
+		recordId: deckLoadName,
+		action: 'deck_calibration_edit_batch',
+		newData: {
+			mode: 'per-well',
+			wellCount: results.length,
+			wells: results.map((r) => r.wellName),
+			robotId: input.robotId ?? null
+		},
+		changedAt: now,
+		changedBy: input.user?.username
+	});
+
+	// Best-effort local-file mirror pass (lab Mac). Mongo already committed.
+	let fileSynced = false;
+	try {
+		if (fs.existsSync(LABWARE_DIR)) {
+			for (const f of fs.readdirSync(LABWARE_DIR).filter((x) => x.endsWith('.json'))) {
+				const fp = path.join(LABWARE_DIR, f);
+				try {
+					const json = JSON.parse(fs.readFileSync(fp, 'utf8'));
+					if (json?.parameters?.loadName === deckLoadName) {
+						for (const r of results) {
+							if (json.wells?.[r.wellName]) {
+								json.wells[r.wellName].x = r.after.x;
+								json.wells[r.wellName].y = r.after.y;
+								json.wells[r.wellName].z = r.after.z;
+							}
+						}
+						fs.writeFileSync(fp, JSON.stringify(json, null, 2));
+						fileSynced = true;
+						break;
+					}
+				} catch {
+					/* skip unparseable file */
+				}
+			}
+		}
+	} catch {
+		/* best-effort — Mongo is source of truth */
+	}
+
+	return { applied: results.length, failed, fileSynced, results };
+}
+
 /** Recent per-hole edit history for a deck (for the tuner page). */
 export async function deckEditHistory(deckLoadName: string, limit = 100) {
 	await connectDB();

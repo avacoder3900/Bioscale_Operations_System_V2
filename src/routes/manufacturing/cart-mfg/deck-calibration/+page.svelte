@@ -81,6 +81,7 @@
 	// They need different fill accuracy, so calibration treats them separately.
 	type Role = 'wax' | 'reagent';
 	function colOf(name: string): number { const m = name.match(/(\d+)$/); return m ? parseInt(m[1], 10) : 0; }
+	function rowOf(name: string): string { const m = name.match(/^([A-Za-z]+)/); return m ? m[1] : ''; }
 	function roleOf(name: string): Role { return colOf(name) % 2 === 0 ? 'wax' : 'reagent'; }
 	let roleFilter = $state<'all' | Role>('all');
 	function isActiveRole(name: string): boolean { return roleFilter === 'all' || roleFilter === roleOf(name); }
@@ -235,7 +236,9 @@
 	// Session undo stack of applied shifts (offset / global / set-position). Each
 	// entry is the wells + the delta that was applied, so undo = apply the inverse.
 	type Vec3 = { x: number; y: number; z: number };
-	let undoStack = $state<{ wellNames: string[]; delta: Vec3; label: string }[]>([]);
+	// A uniform entry carries one delta for all wells; an align entry carries a
+	// per-well edit list (each hole moved by its own amount) — undo inverts each.
+	let undoStack = $state<{ wellNames: string[]; delta: Vec3; label: string; edits?: { wellName: string; delta: Vec3 }[] }[]>([]);
 	// nominal carries the tip-state it was measured in. The OT-2 position readback
 	// (savePosition) is the pipette CRITICAL POINT, which drops by the tip length
 	// (~50mm) the moment a tip is picked up. dz = live − nominal is only a true
@@ -284,6 +287,72 @@
 		return r;
 	}
 
+	// Per-well apply: each hole moves by ITS OWN delta (one Mongo write via
+	// applyPerWell). Records an align-style undo entry unless this IS an undo.
+	async function applyPerWellEdits(edits: { wellName: string; delta: Vec3 }[], label: string, record = true) {
+		const r = await postAction('applyPerWell', {
+			deckLoadName: data.selected,
+			edits: JSON.stringify(edits.map((e) => ({ wellName: e.wellName, dx: e.delta.x, dy: e.delta.y, dz: e.delta.z }))),
+			robotId: selectedRobotId || ''
+		});
+		if (r && record) undoStack = [...undoStack, { wellNames: edits.map((e) => e.wellName), delta: { x: 0, y: 0, z: 0 }, label, edits }];
+		return r;
+	}
+
+	// ── Align selection to the anchor hole (straighten every line) ───────────────
+	// The anchor is the jog-verified, trusted hole. Every OTHER selected hole of the
+	// SAME role snaps onto a clean grid ruled by the anchor's row + column:
+	//   new x = x of the hole at (anchor's row, this hole's column)  → every column
+	//           line becomes perfectly straight, spaced per the anchor's row;
+	//   new y = y of the hole at (this hole's row, anchor's column)  → every row
+	//           becomes level, spaced per the anchor's column.
+	// Z is never touched. Opposite-role holes are skipped — wax and reagent rows are
+	// deliberately staggered (~one row pitch), so their Y must come from a ruler
+	// column of their own role; re-run with an anchor of the other type.
+	async function alignSelectionToAnchor() {
+		if (selection.size < 2) { errMsg = 'Select the cartridge (or group) to align — at least 2 holes, anchor included'; return; }
+		const aName = anchor;
+		const a = aName ? wellByName.get(aName) : null;
+		if (!aName || !a) { errMsg = 'Click the trusted (jog-verified) hole last — it becomes the anchor'; return; }
+		const aRow = rowOf(aName), aCol = colOf(aName), aRole = roleOf(aName);
+
+		const edits: { wellName: string; delta: Vec3 }[] = [];
+		let skippedRole = 0, skippedNoRuler = 0, alreadyAligned = 0;
+		for (const name of selection) {
+			if (name === aName) continue;
+			if (roleOf(name) !== aRole) { skippedRole++; continue; }
+			const w = wellByName.get(name);
+			if (!w) continue;
+			const xRuler = wellByName.get(`${aRow}${colOf(name)}`);   // anchor's row, this column
+			const yRuler = wellByName.get(`${rowOf(name)}${aCol}`);   // this row, anchor's column
+			if (!xRuler || !yRuler) { skippedNoRuler++; continue; }
+			const d = { x: +(xRuler.x - w.x).toFixed(3), y: +(yRuler.y - w.y).toFixed(3), z: 0 };
+			if (d.x === 0 && d.y === 0) { alreadyAligned++; continue; }
+			edits.push({ wellName: name, delta: d });
+		}
+
+		const skips = [
+			skippedRole ? `${skippedRole} ${aRole === 'wax' ? 'reagent' : 'wax'} hole(s) skipped (align them with a ${aRole === 'wax' ? 'reagent' : 'wax'} anchor)` : '',
+			alreadyAligned ? `${alreadyAligned} already aligned` : ''
+		].filter(Boolean).join('; ');
+		if (edits.length === 0) {
+			msg = `Nothing to move — ${skips || 'selection is already aligned to ' + aName}.`;
+			return;
+		}
+		if (!confirm(
+			`Align ${edits.length} ${aRole} hole(s) to anchor ${aName}?\n` +
+			`Each hole snaps onto the grid ruled by ${aName}'s row + line (X from row ${aRow}, Y from line ${aCol}). ` +
+			`Z is untouched.${skips ? `\n(${skips}.)` : ''}\nUndo reverts the whole alignment.`
+		)) return;
+		const r = await applyPerWellEdits(edits, `align ${edits.length} to ${aName}`);
+		if (r) {
+			msg = applyMsg(`Aligned to ${aName}`, r) + (skips ? ` (${skips}.)` : '');
+			if (skippedNoRuler) msg += ` ⚠ ${skippedNoRuler} skipped (ruler hole missing).`;
+			clearSelection();
+			if (runId && !slotOrigin) deckDirty = true;
+		}
+	}
+
 	async function applyToSelection() {
 		if (selection.size === 0) { errMsg = 'Select at least one hole'; return; }
 		if (dx === 0 && dy === 0 && dz === 0) { errMsg = 'Capture or enter a non-zero offset'; return; }
@@ -321,7 +390,11 @@
 	async function undoLast() {
 		const last = undoStack[undoStack.length - 1];
 		if (!last) { errMsg = 'Nothing to undo'; return; }
-		const r = await applyDelta(last.wellNames, { x: -last.delta.x, y: -last.delta.y, z: -last.delta.z }, '', false);
+		const r = last.edits
+			? await applyPerWellEdits(
+				last.edits.map((e) => ({ wellName: e.wellName, delta: { x: -e.delta.x, y: -e.delta.y, z: -e.delta.z } })),
+				'', false)
+			: await applyDelta(last.wellNames, { x: -last.delta.x, y: -last.delta.y, z: -last.delta.z }, '', false);
 		if (r) {
 			undoStack = undoStack.slice(0, -1);
 			msg = `Undid ${last.label} on ${r.applied} hole(s).`;
@@ -1211,6 +1284,18 @@
 				</div>
 				<button type="button" onclick={applyAbsolute} disabled={busy || selCount === 0} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-sm font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40" title="Select one or more holes; the typed position sets the anchor and the group moves with it">
 					{selCount === 0 ? 'Select one or more holes' : selCount === 1 ? `Set ${anchor} to this position` : `Move ${selCount} holes (anchor ${anchor})`}
+				</button>
+			</section>
+
+			<!-- Align selection to the anchor hole (straighten every line) -->
+			<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Align selection → anchor hole</h2>
+				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Fixes lines that are shifted relative to each other within a cartridge. Jog-verify ONE good hole, select the whole cartridge (box-drag), and click the good hole <strong>last</strong> so it's the anchor. Every selected {anchor ? roleOf(anchor) : ''} hole snaps onto a clean grid ruled by the anchor's row and line: X from the anchor's row, Y from the anchor's line. Z untouched. {anchor ? `${roleOf(anchor) === 'wax' ? 'Reagent' : 'Wax'} holes are staggered by design — align them separately with a ${roleOf(anchor) === 'wax' ? 'reagent' : 'wax'} anchor.` : ''}</p>
+				<div class="mt-1 text-[10px] font-mono" style="color: var(--color-tron-text-secondary)">
+					{anchor && selCount >= 2 ? `Anchor: ${anchor} (${roleOf(anchor)}) — ${selCount - 1} other hole(s) selected` : 'Select the cartridge, click the trusted hole last'}
+				</div>
+				<button type="button" onclick={alignSelectionToAnchor} disabled={busy || selCount < 2} class="mt-2 w-full rounded border border-cyan-500/50 bg-cyan-900/20 px-3 py-2 text-sm font-bold text-cyan-300 hover:bg-cyan-900/30 disabled:opacity-40" title="Straighten every line in the selection to the anchor hole's row + line (same hole type only; Z untouched)">
+					{selCount < 2 ? 'Select the cartridge + an anchor hole' : `⌗ Align ${selCount - 1} hole(s) to ${anchor}`}
 				</button>
 			</section>
 

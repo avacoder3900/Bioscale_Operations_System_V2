@@ -27,6 +27,7 @@ import {
 } from '$lib/server/db';
 import {
 	applyDeckEditBatch,
+	applyDeckEditsPerWell,
 	deckEditHistory
 } from '$lib/server/services/deck-calibration/apply-edit';
 import { getRobot, robotUploadProtocol } from '$lib/server/opentrons/proxy';
@@ -146,6 +147,44 @@ export const actions: Actions = {
 			return { success: true, action: 'applyBatch', ...res };
 		} catch (e) {
 			return fail(400, { error: e instanceof Error ? e.message : 'Batch apply failed' });
+		}
+	},
+
+	/**
+	 * Apply a DIFFERENT delta per well in one write (grid alignment — "Align to
+	 * anchor hole"). Body: edits = JSON [{ wellName, dx, dy, dz }].
+	 */
+	applyPerWell: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+
+		const data = await request.formData();
+		const deckLoadName = (data.get('deckLoadName') as string)?.trim() || '';
+		const robotId = (data.get('robotId') as string)?.trim() || null;
+		let rawEdits: { wellName: string; dx: number; dy: number; dz: number }[] = [];
+		try {
+			rawEdits = JSON.parse((data.get('edits') as string) || '[]');
+		} catch {
+			return fail(400, { error: 'edits must be a JSON array' });
+		}
+
+		if (!deckLoadName) return fail(400, { error: 'Pick a deck' });
+		if (!Array.isArray(rawEdits) || rawEdits.length === 0) return fail(400, { error: 'No edits to apply' });
+		const edits = rawEdits
+			.filter((e) => e?.wellName && [e.dx, e.dy, e.dz].every((v) => Number.isFinite(Number(v))))
+			.map((e) => ({ wellName: String(e.wellName), delta: { x: Number(e.dx), y: Number(e.dy), z: Number(e.dz) } }));
+		if (edits.length === 0) return fail(400, { error: 'No valid edits to apply' });
+
+		try {
+			const res = await applyDeckEditsPerWell({
+				deckLoadName,
+				edits,
+				user: { _id: locals.user._id, username: locals.user.username },
+				robotId
+			});
+			return { success: true, action: 'applyPerWell', ...res };
+		} catch (e) {
+			return fail(400, { error: e instanceof Error ? e.message : 'Per-well apply failed' });
 		}
 	},
 
