@@ -3557,3 +3557,12 @@ line", not cross-only or rigid-per-line) confirmed with the operator.
 Inherits live-run deckDirty note + "Sync for real fills" (reaches the robot only on
 Sync/protocol re-upload, like all Studio edits). npm run check: 11-error baseline
 unchanged (0 in touched files). NOT yet committed.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app (built 2026-07-09T16:01:35Z,
+  verified live via /_app/version.json ~2 min after push; triggered automatically by the GitHub
+  integration — no local vercel deploy)
+Source: branch master @ commit a7417e87
+Retrieve this exact code: git checkout master at commit a7417e87
+  (or: git log master --oneline to find it if master has since moved on)
+What this deployment is for: ships the Deck Calibration "Align selection → anchor hole" tool
+  (straighten every line in a cartridge to one jog-verified hole) to production.
