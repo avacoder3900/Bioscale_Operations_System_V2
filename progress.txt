@@ -3566,3 +3566,20 @@ Retrieve this exact code: git checkout master at commit a7417e87
   (or: git log master --oneline to find it if master has since moved on)
 What this deployment is for: ships the Deck Calibration "Align selection → anchor hole" tool
   (straighten every line in a cartridge to one jog-verified hole) to production.
+
+================================================================================
+2026-07-09 — feat/cartridge-induct — deliberate cartridge induct recovered at /cv/induct
+================================================================================
+Recovered the induct capability that died in the cartridge-first refactor
+(398f02c2e), redesigned as a deliberate flow instead of the old any-scan
+auto-create: new /cv/induct page (CV nav "Induct") where the operator picks
+what the cartridge should be ready for — Wax inspection (status wax_stored),
+Reagent inspection (sealed), or Post-mortem (completed); mappings derived
+from the actual inspect flows' expected statuses — then scans. New records
+originate at the chosen status with an induct-sourced note (phase 'induct'),
+priorStatus 'new', and a cartridge_induct AuditLog row; existing cartridges
+are NEVER mutated (re-scan shows current status + phase history). Wedge-
+scanner UX: autofocused input, Enter submits, refocuses after each scan,
+sticky ready-for selection, recently-inducted list driven by the audit rows.
+PRD: docs/prds/CV-CARTRIDGE-INDUCT.md.
+npm run check: 10 errors / 434 warnings — baseline, zero in touched files.
