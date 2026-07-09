@@ -46,6 +46,7 @@ import { AuditLog } from '$lib/server/db/models/index.js';
 import { generateId } from '$lib/server/db/utils.js';
 import { uploadViaWorker, getR2Url, buildCvNamedKey } from '$lib/server/services/r2';
 import { detectBarcodePresence, BARCODE_VIEW, NO_BARCODE_VIEW } from '$lib/server/services/barcode-detect';
+import { embedImage, EMBEDDING_VERSION } from '$lib/server/services/cv-classifier';
 import { hasPermission } from '$lib/server/permissions';
 import { runPhaseInference } from '$lib/server/cv/run-inference';
 import type { RequestHandler } from './$types';
@@ -157,6 +158,17 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			}
 		}
 
+		// Pre-warm the training-embedding cache while the pixels are already in
+		// memory (~150ms) — so training never has to re-fetch this photo from R2
+		// and embed it in-request (cold-cache embedding is what 504'd training).
+		// Best-effort: an embed failure never blocks a capture.
+		let embedding: number[] | undefined;
+		try {
+			embedding = await embedImage(buffer);
+		} catch (e) {
+			console.error('[capture] embed cache-warm failed:', e instanceof Error ? e.message : e);
+		}
+
 		const imageId = generateId();
 		const filenameFromClient = file.name || `${cartridgeImageNumber}.jpg`;
 		const key = buildCvNamedKey('captures', imageId, `${cartridgeImageNumber}-${filenameFromClient}`);
@@ -183,6 +195,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				...(cartridgeTagNotes ? { notes: cartridgeTagNotes } : {})
 			},
 			cartridgeImageNumber,
+			...(embedding ? { embedding, embeddingVersion: EMBEDDING_VERSION } : {}),
 			...(effectiveView ? { view: effectiveView } : {}),
 			...(viewSource ? { viewSource } : {}),
 			...(verdict

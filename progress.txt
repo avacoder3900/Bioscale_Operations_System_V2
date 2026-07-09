@@ -3590,3 +3590,23 @@ Retrieve this exact code: git checkout master at commit 63ca531da
 What this deployment is for: /cv/induct — deliberate cartridge induction (pick wax/reagent/
 post-mortem readiness, scan, record originates at the matching status with audit trail;
 existing carts never mutated).
+
+================================================================================
+2026-07-09 — feat/train-timeout-fix — training 504 fixed (embedding cache + time budget)
+================================================================================
+User's first real training run 504'd. Root cause: /api/cv/train had no
+maxDuration (short serverless default) while triggerTraining sequentially
+fetched+embedded every cache-miss labeled image from R2 (~200 images = minutes;
+each failed attempt persisted some embeddings, so retries crept forward).
+Fixes:
+1. Pre-warmed the cache operationally: scripts/backfill-embeddings.ts (new,
+   idempotent, --labeled / --limit flags) — ran over ALL prod photos; every
+   image now carries a cv-color-spatial-v1 embedding, so training is fit-only
+   (seconds).
+2. /api/cv/train: export config maxDuration 300 — a cold cache can't 504.
+3. triggerTraining: cache-miss embedding now runs at bounded concurrency (6)
+   instead of sequentially.
+4. /api/cv/capture: embeds the photo at capture time (buffer already in
+   memory, ~150ms, best-effort never blocks) and stores it on the CvImage —
+   new photos always arrive pre-embedded.
+npm run check: 10 errors / 434 warnings — baseline, zero in touched files.
