@@ -3620,3 +3620,10 @@ declared defects: [{ type: String, ... }] — bare `type` makes Mongoose read
 the subdoc as "array of String". Wrapped it ({ type: { type: String } }).
 Two failed wax_filled inspections in prod carry this error; re-photograph
 those carts after deploy. npm run check: 10 errors — baseline.
+
+Deployment: production — https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/2ugtJ4R6dKLcqM8Mwqv4Xk9DL7Ld
+Source: branch master @ commit 0661da69b (merge of PR #23, feat/train-timeout-fix)
+Retrieve this exact code: git checkout master at commit 0661da69b
+What this deployment is for: training 504 fix (capture-time embedding, concurrent cache-miss
+embedding, maxDuration 300 on /api/cv/train, backfill-embeddings script — cache already
+warmed for all ~4.7k prod photos) + defects.0 cast-error fix so FAIL verdicts persist.
