@@ -3409,3 +3409,27 @@ apply the same restriction; view recorded in each version's trainingSet
 project cards. PRD + diagram updated. Typical setup: two projects per phase
 (e.g. Post-mortem Top / Post-mortem Bottom).
 npm run check: 10 errors / 432 warnings — baseline held, zero in CV files.
+
+================================================================================
+2026-07-09 — feat/cv-pipeline-v2 — barcode view auto-classification + 3-phase options + backfill
+================================================================================
+- Barcode auto-classification: cartridge barcodes are only visible in TOP
+  photos, so when the operator leaves the /capture Top/Bottom toggle unset,
+  the capture endpoints (capture + capture-ingest) run presence-only barcode
+  detection (new dep zxing-wasm, sharp-downscaled frame, 3s cap, decoded value
+  discarded): barcode ⇒ view 'top', none ⇒ 'bottom', stamped viewSource
+  'barcode-auto'; manual toggle wins ('manual'); detector failure leaves the
+  photo untagged and NEVER blocks a capture. Side mapping is one constant in
+  src/lib/server/services/barcode-detect.ts. Functional round-trip self-test
+  (zxing writer → composite → detect) passes.
+- CV project phase options reduced to the three inline inspection points
+  (wax_filled / reagent_filled / post_mortem) on create, Training setup, and
+  the deploy-at checkboxes (legacy phases stay visible on projects that have
+  them).
+- scripts/backfill-photo-views.ts: classifies all untagged production photos
+  with the same detector (idempotent; skips tagged; failures left untagged).
+  Smoke run (16) verified; four samples visually confirmed (tops show QR,
+  bottoms show label back). Full run over 4,695 photos launched.
+npm run check: 10 errors / 432 warnings — exact baseline, zero in CV files.
+Merging to master for production deployment (migration dry-run showed zero
+legacy writes needed, so no --apply step).

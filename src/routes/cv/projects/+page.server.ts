@@ -14,21 +14,11 @@ import { AuditLog } from '$lib/server/db/models/audit-log.js';
 import { generateId } from '$lib/server/db/utils.js';
 import type { Actions, PageServerLoad } from './$types';
 
-// Canonical manufacturing phases — the union of the /capture station list
-// (src/routes/capture/+page.server.ts DEFAULT_PHASES) and the phase-pinned
-// inspect/forensic pages (wax-inspect → wax_filled, post-mortem-inspect →
-// post_mortem, forensic-capture → post_run). Do not invent new names here:
-// capture routes photos to deployed models by exact-string phase match.
-const CANONICAL_PHASES = [
-	'wax_filled',
-	'reagent_filled',
-	'inspected',
-	'sealed',
-	'oven_cured',
-	'qaqc_released',
-	'post_run',
-	'post_mortem'
-];
+// CV project phases — exactly the three inline CV inspection points
+// (wax-inspect → wax_filled, reagent-inspect → reagent_filled,
+// post-mortem-inspect → post_mortem). Do not invent new names here: capture
+// routes photos to deployed models by exact-string phase match.
+const CANONICAL_PHASES = ['wax_filled', 'reagent_filled', 'post_mortem'];
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');

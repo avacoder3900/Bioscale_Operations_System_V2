@@ -32,20 +32,13 @@ const PREVIEW_LIMIT = 60;
 const DEFAULT_MIN_HOLDOUT_COUNT = 10;
 const DEFAULT_MIN_BALANCED_ACCURACY = 0.8;
 
-// Canonical manufacturing phases — the exact set enumerated by the capture and
-// inspect flows (/capture DEFAULT_PHASES + the phase-pinned wax-inspect
-// ('wax_filled') and post-mortem-inspect ('post_mortem') pages). Do not invent
-// new phase names here.
-const CANONICAL_PHASES = [
-	'wax_filled',
-	'reagent_filled',
-	'inspected',
-	'sealed',
-	'oven_cured',
-	'qaqc_released',
-	'post_run',
-	'post_mortem'
-];
+// CV project phases — exactly the three inline CV inspection points
+// (wax-inspect → wax_filled, reagent-inspect → reagent_filled,
+// post-mortem-inspect → post_mortem). Do not invent new phase names here:
+// capture routes photos to deployed models by exact-string phase match.
+// Legacy projects with other phases keep them (the setup action unions
+// canonical with the project's existing phases).
+const CANONICAL_PHASES = ['wax_filled', 'reagent_filled', 'post_mortem'];
 
 /** Real cartridge_records.status enum, read off the schema (single source of truth). */
 function cartridgeStatusValues(): string[] {
@@ -209,8 +202,11 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		agreementPct: s.reviewed > 0 ? Math.round((s.agreed / s.reviewed) * 1000) / 10 : null
 	}));
 
-	// Phases observed in the data — drives the deployAtPhases checkboxes
-	const observedPhases = await CvImage.distinct('cartridgeTag.phase');
+	// Deploy-at options — the three canonical CV inspection points, plus any
+	// phase this project already deploys at (legacy data stays visible/undoable).
+	const observedPhases = Array.from(
+		new Set([...CANONICAL_PHASES, ...((project.deployAtPhases ?? []) as string[])])
+	);
 
 	// --- Pre-train visibility (PRD Stage 3) ---------------------------------
 	// Assemble the eligible labeled pool with the SAME rules the trainer uses

@@ -93,6 +93,13 @@
 		captureView = captureView === v ? null : v;
 	}
 
+	// Barcode auto-classify feedback: when the operator leaves the View toggle
+	// unset, the server infers the view from barcode presence (barcode ⇒ top) and
+	// reports viewSource 'barcode-auto'. This non-blocking notice tells the
+	// operator what it decided; it self-clears on the next capture (and stays null
+	// whenever the toggle is set, since the manual view wins).
+	let autoViewNotice = $state<string | null>(null);
+
 	// Remote-camera tuning panel — only meaningful when a Pi station is the
 	// active video source. cameraParams is populated by the WS handler for
 	// {event: 'camera_params'} which the agent sends after we POST a
@@ -785,6 +792,17 @@
 			// once station + phase agree again.
 			stationPhaseWarning = result.warning ?? null;
 
+			// Barcode auto-classify notice — only when the operator left the View
+			// toggle unset and the server inferred the view from barcode presence.
+			// Set toggle ⇒ viewSource is 'manual', so this stays null.
+			if (!captureView && result.viewSource === 'barcode-auto' && result.view) {
+				autoViewNotice = result.view === 'top'
+					? 'auto-classified as TOP (barcode detected)'
+					: 'auto-classified as BOTTOM (no barcode)';
+			} else {
+				autoViewNotice = null;
+			}
+
 			// Push to recent captures. Inference starts as 'pending'; pollInference
 			// runs in the background and patches the entry when the result lands.
 			const cap: Capture = {
@@ -1312,33 +1330,45 @@
 			     click the active button again to clear. STICKY — unlike Verdict it
 			     persists across captures so a batch of tops (then bottoms) keeps the
 			     same view without re-clicking. -->
-			<div class="flex items-center gap-1.5">
-				<span class="text-xs uppercase text-[var(--color-tron-text-secondary)]" title="Optional — which side of the cartridge this is. Sticky: stays selected across captures so you can shoot a batch of tops, then bottoms.">View</span>
-				<button
-					type="button"
-					onclick={() => toggleView('top')}
-					class="rounded border px-2 py-1 text-xs font-semibold
-						{captureView === 'top'
-							? 'border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.15)] text-[var(--color-tron-cyan)]'
-							: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
-				>
-					Top
-				</button>
-				<button
-					type="button"
-					onclick={() => toggleView('bottom')}
-					class="rounded border px-2 py-1 text-xs font-semibold
-						{captureView === 'bottom'
-							? 'border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.15)] text-[var(--color-tron-cyan)]'
-							: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
-				>
-					Bottom
-				</button>
+			<div class="flex flex-col gap-0.5">
+				<div class="flex items-center gap-1.5">
+					<span class="text-xs uppercase text-[var(--color-tron-text-secondary)]" title="Optional — which side of the cartridge this is. Sticky: stays selected across captures so you can shoot a batch of tops, then bottoms.">View</span>
+					<button
+						type="button"
+						onclick={() => toggleView('top')}
+						class="rounded border px-2 py-1 text-xs font-semibold
+							{captureView === 'top'
+								? 'border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.15)] text-[var(--color-tron-cyan)]'
+								: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
+					>
+						Top
+					</button>
+					<button
+						type="button"
+						onclick={() => toggleView('bottom')}
+						class="rounded border px-2 py-1 text-xs font-semibold
+							{captureView === 'bottom'
+								? 'border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.15)] text-[var(--color-tron-cyan)]'
+								: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
+					>
+						Bottom
+					</button>
+				</div>
+				<span class="text-[10px] text-[var(--color-tron-text-secondary)]">leave unset to auto-classify by barcode</span>
 			</div>
 			<div class="text-xs text-[var(--color-tron-text-secondary)]">
 				This session: {recentCaptures.length} photo{recentCaptures.length === 1 ? '' : 's'}
 			</div>
 		</div>
+
+		<!-- Barcode auto-classify notice (CV-PIPELINE-V2). Non-blocking — only shown
+		     when the View toggle was left unset and the server inferred the view
+		     from barcode presence. Self-clears on the next capture. -->
+		{#if autoViewNotice}
+			<div class="text-xs text-[var(--color-tron-cyan)]">
+				🏷 {autoViewNotice}
+			</div>
+		{/if}
 
 		<!-- Retake dialog — opens when operator presses Space after the 2nd photo -->
 		{#if showRetakeDialog}

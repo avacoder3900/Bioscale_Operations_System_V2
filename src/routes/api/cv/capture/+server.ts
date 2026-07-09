@@ -17,7 +17,9 @@
  *                   from (top/bottom cartridge photos look completely different,
  *                   so a model trains on / grades one view). Any other non-empty
  *                   value is a 400. Routed into inference so view-scoped models
- *                   only grade their own view.
+ *                   only grade their own view. When omitted, the view is
+ *                   auto-classified from barcode presence (barcode ⇒ top) —
+ *                   see viewSource in the response.
  *   stationId:      optional — capture station the photo came from; used for
  *                   the Stage-1 phase sanity check (warn, never block)
  *
@@ -28,9 +30,10 @@
  *   4. Upload file via R2 Worker.
  *   5. Create CvImage doc.
  *   6. Push photo ref to CartridgeRecord.photos[].
- *   7. Return { imageId, cartridgeImageNumber, imageUrl, phase } — plus a
- *      { warning } string when the posted phase disagrees with the station's
- *      assignedPhase.
+ *   7. Return { imageId, cartridgeImageNumber, imageUrl, phase, view, viewSource }
+ *      — plus a { warning } string when the posted phase disagrees with the
+ *      station's assignedPhase. viewSource is 'manual' (operator toggle),
+ *      'barcode-auto' (inferred here), or null (untagged).
  *
  * Future (PRD 3 Phase 4): fire-and-forget phase-X auto-inference here.
  */
@@ -42,6 +45,7 @@ import { CaptureStation } from '$lib/server/db/models/capture-station.js';
 import { AuditLog } from '$lib/server/db/models/index.js';
 import { generateId } from '$lib/server/db/utils.js';
 import { uploadViaWorker, getR2Url, buildCvNamedKey } from '$lib/server/services/r2';
+import { detectBarcodePresence, BARCODE_VIEW, NO_BARCODE_VIEW } from '$lib/server/services/barcode-detect';
 import { hasPermission } from '$lib/server/permissions';
 import { runPhaseInference } from '$lib/server/cv/run-inference';
 import type { RequestHandler } from './$types';
@@ -138,6 +142,21 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const cartridgeImageNumber = `${cartridgeId}_${pad(seq)}`;
 
 		const buffer = Buffer.from(await file.arrayBuffer());
+
+		// Resolve the camera view (CV-PIPELINE-V2 top/bottom split). The manual
+		// toggle always wins; when it's unset, auto-classify from barcode presence
+		// (the cartridge barcode shows only in top photos). Detection never blocks
+		// or fails a capture — a null result leaves the view untagged.
+		let effectiveView: 'top' | 'bottom' | undefined = view;
+		let viewSource: 'manual' | 'barcode-auto' | undefined = view ? 'manual' : undefined;
+		if (!view) {
+			const hasBarcode = await detectBarcodePresence(buffer);
+			if (hasBarcode !== null) {
+				effectiveView = hasBarcode ? BARCODE_VIEW : NO_BARCODE_VIEW;
+				viewSource = 'barcode-auto';
+			}
+		}
+
 		const imageId = generateId();
 		const filenameFromClient = file.name || `${cartridgeImageNumber}.jpg`;
 		const key = buildCvNamedKey('captures', imageId, `${cartridgeImageNumber}-${filenameFromClient}`);
@@ -164,7 +183,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				...(cartridgeTagNotes ? { notes: cartridgeTagNotes } : {})
 			},
 			cartridgeImageNumber,
-			...(view ? { view } : {}),
+			...(effectiveView ? { view: effectiveView } : {}),
+			...(viewSource ? { viewSource } : {}),
 			...(verdict
 				? {
 					qcLabel: verdict,
@@ -261,7 +281,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			imageUrl: publicUrl,
 			cartridgeRecordId: cartridgeId,
 			phase,
-			view: view ?? null,
+			view: effectiveView ?? null,
 			triggeredBy: 'auto-on-capture'
 		}).catch(err => console.error('[capture] phase-inference failed:', err));
 
@@ -272,6 +292,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			phase,
 			imageUrl: publicUrl,
 			filePath: key,
+			view: effectiveView ?? null,
+			viewSource: viewSource ?? null,
 			...(warning ? { warning } : {})
 		}, { status: 201 });
 	} catch (e: any) {

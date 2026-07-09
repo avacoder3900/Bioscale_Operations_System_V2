@@ -209,6 +209,15 @@ different, so a model must train on and grade exactly one view.
   recorded in each version's `trainingSet.filter`.
 - Typical setup: two projects per phase — "Post-mortem Top" (view: top) and
   "Post-mortem Bottom" (view: bottom) — each with its own versions, gate, and deploy.
+- **Barcode auto-classification (added 2026-07-09).** The cartridge barcode is visible
+  only in TOP photos, so when the operator leaves the view toggle unset, the capture
+  endpoint runs presence-only barcode detection (zxing-wasm on a sharp-downscaled
+  frame; the decoded value is discarded): barcode found ⇒ `view: 'top'`, none ⇒
+  `view: 'bottom'`, recorded with `viewSource: 'barcode-auto'`. A manually set toggle
+  always wins (`viewSource: 'manual'`), and a detector failure leaves the photo
+  untagged rather than ever blocking a capture. The side mapping lives in one constant
+  (`BARCODE_VIEW`) in `src/lib/server/services/barcode-detect.ts` in case the label
+  ever moves.
 
 ---
 

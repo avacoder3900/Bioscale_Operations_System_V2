@@ -60,6 +60,11 @@ const cvImageSchema = new Schema({
 	// null = untagged legacy photo (only graded by view-less projects).
 	view: { type: String, enum: ['top', 'bottom', null], default: null },
 
+	// How `view` was assigned: 'manual' = operator's Top/Bottom toggle;
+	// 'barcode-auto' = inferred at capture from barcode presence (barcode ⇒ top);
+	// null = untagged (no toggle and detection unavailable).
+	viewSource: { type: String, enum: ['manual', 'barcode-auto', null], default: null },
+
 	// QC label — optional, demoted from identity to a side field
 	qcLabel: { type: String, enum: ['approved', 'rejected', null], default: null },
 	qcLabeledBy: operatorRef,
