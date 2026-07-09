@@ -274,6 +274,72 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		new Set([...CANONICAL_PHASES, ...(project.phases ?? [])])
 	);
 
+	// --- Needs review (PRD Stage 5, scoped per project) ---------------------
+	// This project's non-shadow deployed-model verdicts (pass/fail) whose IMAGE
+	// still has no human truth (qcLabel null) — the per-model review workbench.
+	// Review now lives on the image, so "unreviewed" = the joined image's
+	// qcLabel is null. Newest first, capped at PREVIEW_LIMIT with a total badge.
+	const needsReviewAgg = await CvInspection.aggregate([
+		{
+			$match: {
+				projectId: params.id,
+				status: 'completed',
+				result: { $in: ['pass', 'fail'] },
+				isShadow: { $ne: true }
+			}
+		},
+		{ $sort: { triggeredAt: -1, _id: -1 } },
+		{ $lookup: { from: 'cv_images', localField: 'imageId', foreignField: '_id', as: 'img' } },
+		{ $addFields: { img: { $arrayElemAt: ['$img', 0] } } },
+		// Keep only inspections whose image exists and has no human label yet.
+		{ $match: { img: { $ne: null }, 'img.qcLabel': null } },
+		{
+			$facet: {
+				items: [
+					{ $limit: PREVIEW_LIMIT },
+					{
+						$project: {
+							_id: 0,
+							inspectionId: '$_id',
+							imageId: '$imageId',
+							result: '$result',
+							confidenceScore: '$confidenceScore',
+							modelVersion: '$modelVersion',
+							phase: { $ifNull: ['$phase', '$img.cartridgeTag.phase'] },
+							cartridgeRecordId: { $ifNull: ['$cartridgeRecordId', '$img.cartridgeTag.cartridgeRecordId'] },
+							view: '$img.view',
+							thumbnailPath: '$img.thumbnailPath',
+							imageUrl: '$img.imageUrl',
+							filePath: '$img.filePath',
+							capturedAt: '$img.capturedAt',
+							triggeredAt: '$triggeredAt'
+						}
+					}
+				],
+				total: [{ $count: 'n' }]
+			}
+		}
+	]);
+	const needsReviewRaw = (needsReviewAgg[0]?.items ?? []) as any[];
+	const needsReviewTotal = needsReviewAgg[0]?.total?.[0]?.n ?? 0;
+	const needsReview = needsReviewRaw.map((it) => {
+		const fullUrl = it.imageUrl || (it.filePath ? getR2Url(it.filePath) : null);
+		return {
+			inspectionId: it.inspectionId,
+			imageId: it.imageId ?? null,
+			thumbnailUrl: it.thumbnailPath ? getR2Url(it.thumbnailPath) : fullUrl,
+			url: fullUrl,
+			cartridgeRecordId: it.cartridgeRecordId ?? null,
+			phase: it.phase ?? null,
+			view: it.view ?? null,
+			result: it.result,
+			confidenceScore: it.confidenceScore ?? null,
+			modelVersion: it.modelVersion ?? null,
+			capturedAt: it.capturedAt ?? null,
+			triggeredAt: it.triggeredAt ?? null
+		};
+	});
+
 	return {
 		project: {
 			id: project._id,
@@ -330,7 +396,9 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		observedPhases: (observedPhases as string[]).filter(Boolean).sort(),
 		canonicalPhases,
 		cartridgeStatusOptions: cartridgeStatusValues(),
-		trainPool
+		trainPool,
+		needsReview: JSON.parse(JSON.stringify(needsReview)),
+		needsReviewTotal
 	};
 };
 
@@ -784,6 +852,78 @@ export const actions: Actions = {
 			reason: 'cv_shadow_clear'
 		});
 		return { success: true, section: 'deployment' };
+	},
+
+	// One-click Agree / Overrule of a verdict from THIS project's models (Stage 5,
+	// per-project review workbench). Review truth lives on the image: writes
+	// qcLabel (+ qcLabeledBy/At) on the CvImage and mirrors humanLabel
+	// (+ reviewedBy/At) onto the CvInspection. The next training iteration reads
+	// the image's qcLabel.
+	reviewVerdict: async ({ params, request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		await connectDB();
+		const form = await request.formData();
+		const inspectionId = form.get('inspectionId')?.toString();
+		const decision = form.get('decision')?.toString();
+		if (!inspectionId) return fail(400, { error: 'inspectionId required', section: 'needs-review' });
+		if (decision !== 'agree' && decision !== 'overrule') {
+			return fail(400, { error: `Invalid decision: ${decision}`, section: 'needs-review' });
+		}
+
+		const inspection = await CvInspection.findById(inspectionId).lean() as any;
+		if (!inspection) return fail(404, { error: 'Inspection not found', section: 'needs-review' });
+		if (inspection.projectId !== params.id) {
+			return fail(400, { error: 'Inspection does not belong to this project', section: 'needs-review' });
+		}
+		if (inspection.result !== 'pass' && inspection.result !== 'fail') {
+			return fail(400, { error: 'Inspection has no pass/fail verdict to review', section: 'needs-review' });
+		}
+		if (inspection.isShadow) {
+			return fail(400, { error: 'Shadow verdicts are not reviewable', section: 'needs-review' });
+		}
+		if (!inspection.imageId) {
+			return fail(400, { error: 'Inspection has no image to label', section: 'needs-review' });
+		}
+
+		const image = await CvImage.findById(inspection.imageId).select('_id qcLabel').lean() as any;
+		if (!image) return fail(404, { error: 'Image not found', section: 'needs-review' });
+		// Someone may have reviewed this image via the stream in the meantime.
+		if (image.qcLabel) {
+			return fail(409, {
+				error: 'This photo was already reviewed elsewhere — reload to refresh the queue.',
+				section: 'needs-review'
+			});
+		}
+
+		// Effective verdict: agree keeps the model's call, overrule inverts it.
+		const humanLabel = decision === 'agree'
+			? inspection.result
+			: (inspection.result === 'pass' ? 'fail' : 'pass');
+		const qcLabel = humanLabel === 'pass' ? 'approved' : 'rejected';
+		const reviewer = { _id: locals.user._id, username: locals.user.username };
+		const now = new Date();
+
+		await CvImage.updateOne(
+			{ _id: inspection.imageId },
+			{ $set: { qcLabel, qcLabeledBy: reviewer, qcLabeledAt: now } }
+		);
+		await CvInspection.updateOne(
+			{ _id: inspectionId },
+			{ $set: { humanLabel, reviewedBy: reviewer, reviewedAt: now } }
+		);
+
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'cv_inspections',
+			recordId: inspectionId,
+			action: 'cv_review',
+			newData: { decision, result: inspection.result, humanLabel, imageId: inspection.imageId },
+			changedAt: now,
+			changedBy: locals.user.username ?? locals.user._id,
+			reason: `cv_review ${decision}: model ${inspection.result} -> human ${humanLabel}`
+		});
+
+		return { success: true, section: 'needs-review', message: `Recorded: ${humanLabel.toUpperCase()}.` };
 	},
 
 	deleteProject: async ({ params, locals }) => {
