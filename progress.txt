@@ -3627,3 +3627,18 @@ Retrieve this exact code: git checkout master at commit 0661da69b
 What this deployment is for: training 504 fix (capture-time embedding, concurrent cache-miss
 embedding, maxDuration 300 on /api/cv/train, backfill-embeddings script — cache already
 warmed for all ~4.7k prod photos) + defects.0 cast-error fix so FAIL verdicts persist.
+
+================================================================================
+2026-07-09 — feat/project-needs-review — per-project "Needs review" tab
+================================================================================
+Each CV project page gains a "Needs review" tab (between Deployment and
+History, amber count badge): this project's non-shadow completed verdicts
+whose photo has no qcLabel yet, newest first (aggregate w/ cv_images lookup,
+capped 60 + total). One-click Agree/Overrule writes BOTH the image's qcLabel
+(training signal) and the inspection's humanLabel/reviewedBy/At (verdict
+provenance for the scorecard), audited as cv_review; guards against the
+photo having been reviewed in the stream meanwhile (409). Card grid shows
+thumbnail, PASS/FAIL + confidence, model version, cartridge/phase/view.
+This is the per-model review workbench: overrules are the next version's
+highest-value training data. npm run check: 10 errors / 434 warnings —
+baseline, zero added.

@@ -3,17 +3,20 @@
 
 	let { data, form } = $props();
 
-	type Tab = 'members' | 'composition' | 'training' | 'deployment' | 'history';
+	type Tab = 'members' | 'composition' | 'training' | 'deployment' | 'needs-review' | 'history';
 	const TAB_LABELS: Record<Tab, string> = {
 		members: 'Members',
 		composition: 'Composition',
 		training: 'Training setup',
 		deployment: 'Deployment',
+		'needs-review': 'Needs review',
 		history: 'History'
 	};
 	let activeTab = $state<Tab>('members');
 
 	let submitting = $state(false);
+	// Per-card busy state for the Needs-review Agree/Overrule buttons, keyed by inspectionId.
+	let reviewingId = $state<string | null>(null);
 
 	// Composition picker state
 	let composedOfSelections = $state<Set<string>>(new Set(data.project.composedOf));
@@ -188,16 +191,19 @@
 
 	<!-- Tabs -->
 	<div class="flex gap-1 border-b border-[var(--color-tron-border)]">
-		{#each ['members', 'composition', 'training', 'deployment', 'history'] as t (t)}
+		{#each ['members', 'composition', 'training', 'deployment', 'needs-review', 'history'] as t (t)}
 			<button
 				type="button"
-				class="px-4 py-2 text-sm font-medium
+				class="flex items-center gap-1.5 px-4 py-2 text-sm font-medium
 					{activeTab === t
 						? 'border-b-2 border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]'
 						: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
 				onclick={() => (activeTab = t as Tab)}
 			>
 				{TAB_LABELS[t as Tab]}
+				{#if t === 'needs-review' && data.needsReviewTotal > 0}
+					<span class="rounded-full border border-[var(--color-tron-amber,#ffb300)] bg-[rgba(255,179,0,0.12)] px-1.5 text-[10px] font-mono text-[var(--color-tron-amber,#ffb300)]">{data.needsReviewTotal}</span>
+				{/if}
 			</button>
 		{/each}
 	</div>
@@ -661,6 +667,100 @@
 					</button>
 				</form>
 			</details>
+		</div>
+
+	{:else if activeTab === 'needs-review'}
+		<div class="space-y-3">
+			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-3 text-xs text-[var(--color-tron-text-secondary)]">
+				Reviews write the photo's QC label — they train the next version.
+				<span class="ml-1 font-mono text-[var(--color-tron-cyan)]">{data.needsReviewTotal}</span> unreviewed
+				{data.needsReviewTotal === 1 ? 'verdict' : 'verdicts'} from this project's models.
+			</div>
+
+			{#if data.needsReview.length === 0}
+				<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-12 text-center">
+					<p class="text-[var(--color-tron-text-secondary)]">No unreviewed verdicts from this project's models.</p>
+				</div>
+			{:else}
+				<div class="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+					{#each data.needsReview as item (item.inspectionId)}
+						{@const busy = reviewingId === item.inspectionId}
+						<div class="overflow-hidden rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
+							{#if item.url}
+								<a href={item.url} target="_blank" rel="noopener">
+									{#if item.thumbnailUrl}
+										<img src={item.thumbnailUrl} alt={item.cartridgeRecordId ?? 'capture'} class="aspect-square w-full object-cover" />
+									{:else}
+										<div class="flex aspect-square w-full items-center justify-center bg-[var(--color-tron-bg-tertiary)] text-[10px] text-[var(--color-tron-text-secondary)]">no thumbnail</div>
+									{/if}
+								</a>
+							{:else}
+								<div class="flex aspect-square w-full items-center justify-center bg-[var(--color-tron-bg-tertiary)] text-[10px] text-[var(--color-tron-text-secondary)]">no image</div>
+							{/if}
+							<div class="space-y-1.5 p-2 text-xs">
+								<div class="flex items-center justify-between">
+									{#if item.result === 'pass'}
+										<span class="rounded border border-[var(--color-tron-green,#39ff14)] bg-[rgba(57,255,20,0.08)] px-1.5 py-0.5 text-[10px] font-medium uppercase text-[var(--color-tron-green,#39ff14)]">PASS</span>
+									{:else}
+										<span class="rounded border border-[var(--color-tron-red,#ff3366)] bg-[rgba(255,51,102,0.08)] px-1.5 py-0.5 text-[10px] font-medium uppercase text-[var(--color-tron-red,#ff3366)]">FAIL</span>
+									{/if}
+									<span class="font-mono text-[var(--color-tron-text-secondary)]">
+										{item.confidenceScore != null ? (item.confidenceScore * 100).toFixed(1) + '%' : '—'}
+									</span>
+								</div>
+								<div class="truncate font-mono text-[10px] text-[var(--color-tron-text-secondary)]" title={item.modelVersion ?? ''}>
+									{item.modelVersion ?? '(unversioned)'}
+								</div>
+								<div class="truncate font-mono text-[var(--color-tron-cyan)]" title={item.cartridgeRecordId ?? ''}>
+									{item.cartridgeRecordId ?? '—'}
+								</div>
+								<div class="flex flex-wrap gap-1">
+									{#if item.phase}<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[10px]">{item.phase}</span>{/if}
+									{#if item.view}<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[10px]">{item.view}</span>{/if}
+								</div>
+								<div class="mt-1 flex gap-1">
+									<form
+										method="POST"
+										action="?/reviewVerdict"
+										class="flex-1"
+										use:enhance={() => {
+											reviewingId = item.inspectionId;
+											return async ({ update }) => {
+												await update();
+												reviewingId = null;
+											};
+										}}
+									>
+										<input type="hidden" name="inspectionId" value={item.inspectionId} />
+										<input type="hidden" name="decision" value="agree" />
+										<button type="submit" disabled={busy} class="w-full rounded border border-[var(--color-tron-green,#39ff14)] px-1.5 py-1 text-[10px] font-medium text-[var(--color-tron-green,#39ff14)] disabled:opacity-40">
+											Agree
+										</button>
+									</form>
+									<form
+										method="POST"
+										action="?/reviewVerdict"
+										class="flex-1"
+										use:enhance={() => {
+											reviewingId = item.inspectionId;
+											return async ({ update }) => {
+												await update();
+												reviewingId = null;
+											};
+										}}
+									>
+										<input type="hidden" name="inspectionId" value={item.inspectionId} />
+										<input type="hidden" name="decision" value="overrule" />
+										<button type="submit" disabled={busy} class="w-full rounded border border-[var(--color-tron-red,#ff3366)] px-1.5 py-1 text-[10px] font-medium text-[var(--color-tron-red,#ff3366)] disabled:opacity-40">
+											Overrule
+										</button>
+									</form>
+								</div>
+							</div>
+						</div>
+					{/each}
+				</div>
+			{/if}
 		</div>
 
 	{:else if activeTab === 'history'}
