@@ -105,3 +105,7 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 		}
 	});
 };
+
+// Training embeds any cache-miss images in-request (bounded concurrency) —
+// give it the full serverless budget so a cold cache can't 504 the run.
+export const config = { maxDuration: 300 };

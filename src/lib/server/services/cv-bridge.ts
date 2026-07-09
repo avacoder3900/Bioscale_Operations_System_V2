@@ -194,28 +194,38 @@ async function trainProject(project: any, trainedBy: Operator | undefined, t0: n
 	}
 
 	// --- Embeddings (cached per EMBEDDING_VERSION) --------------------------
+	// Cache misses fetch from R2 + embed with bounded concurrency — sequential
+	// embedding of a large first-time pool is what pushed training past the
+	// serverless time limit (504s). scripts/backfill-embeddings.ts pre-warms
+	// the cache; this path handles whatever it missed.
 	let embeddedNow = 0;
 	const embByImage = new Map<string, number[]>();
+	const misses: any[] = [];
 	for (const img of eligible) {
-		let emb: number[] | undefined =
-			img.embeddingVersion === EMBEDDING_VERSION && Array.isArray(img.embedding)
-				? img.embedding
-				: undefined;
-
-		if (!emb) {
-			const url = img.imageUrl;
-			if (!url) {
-				throw new Error(`CvImage ${img._id} has no imageUrl, cannot embed`);
-			}
-			const bytes = await fetchImageBytes(url);
-			emb = await embedImage(bytes);
-			await CvImage.updateOne(
-				{ _id: img._id },
-				{ $set: { embedding: emb, embeddingVersion: EMBEDDING_VERSION } }
-			);
-			embeddedNow++;
+		if (img.embeddingVersion === EMBEDDING_VERSION && Array.isArray(img.embedding)) {
+			embByImage.set(img._id, img.embedding);
+		} else {
+			misses.push(img);
 		}
-		embByImage.set(img._id, emb);
+	}
+	const EMBED_CONCURRENCY = 6;
+	for (let i = 0; i < misses.length; i += EMBED_CONCURRENCY) {
+		await Promise.all(
+			misses.slice(i, i + EMBED_CONCURRENCY).map(async (img) => {
+				const url = img.imageUrl;
+				if (!url) {
+					throw new Error(`CvImage ${img._id} has no imageUrl, cannot embed`);
+				}
+				const bytes = await fetchImageBytes(url);
+				const emb = await embedImage(bytes);
+				await CvImage.updateOne(
+					{ _id: img._id },
+					{ $set: { embedding: emb, embeddingVersion: EMBEDDING_VERSION } }
+				);
+				embeddedNow++;
+				embByImage.set(img._id, emb);
+			})
+		);
 	}
 
 	// --- Stratified holdout + fit (Stage 4 verify happens at train time) ----
