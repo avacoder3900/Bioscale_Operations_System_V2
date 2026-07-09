@@ -3433,3 +3433,11 @@ npm run check: 10 errors / 432 warnings — baseline held, zero in CV files.
 npm run check: 10 errors / 432 warnings — exact baseline, zero in CV files.
 Merging to master for production deployment (migration dry-run showed zero
 legacy writes needed, so no --apply step).
+
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/7dNUBNv1JUYL9CxVxAkXc18hHdh4
+Source: branch master @ commit c3d78832f (merge of PR #17, feat/cv-pipeline-v2 @ 412d65f65)
+Retrieve this exact code: git checkout master at commit c3d78832f
+What this deployment is for: CV-PIPELINE-V2 go-live — versioned train/verify/deploy, 3-phase
+project options, top/bottom view split with barcode auto-classification, review in the image
+stream. Migration dry-run showed zero legacy writes needed; photo-view backfill running
+separately via scripts/backfill-photo-views.ts.
