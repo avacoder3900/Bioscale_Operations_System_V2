@@ -3583,3 +3583,10 @@ scanner UX: autofocused input, Enter submits, refocuses after each scan,
 sticky ready-for selection, recently-inducted list driven by the audit rows.
 PRD: docs/prds/CV-CARTRIDGE-INDUCT.md.
 npm run check: 10 errors / 434 warnings — baseline, zero in touched files.
+
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/DQhib5UKyEbXagDkkyRfdXWkPYFN
+Source: branch master @ commit 63ca531da (merge of PR #21, feat/cartridge-induct)
+Retrieve this exact code: git checkout master at commit 63ca531da
+What this deployment is for: /cv/induct — deliberate cartridge induction (pick wax/reagent/
+post-mortem readiness, scan, record originates at the matching status with audit trail;
+existing carts never mutated).
