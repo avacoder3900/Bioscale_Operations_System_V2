@@ -3441,3 +3441,12 @@ What this deployment is for: CV-PIPELINE-V2 go-live — versioned train/verify/d
 project options, top/bottom view split with barcode auto-classification, review in the image
 stream. Migration dry-run showed zero legacy writes needed; photo-view backfill running
 separately via scripts/backfill-photo-views.ts.
+
+================================================================================
+2026-07-09 — feat/stream-view-filter — Image Stream: filter + badge for top/bottom view
+================================================================================
+Added a View filter (All / Top / Bottom / Untagged) to /cv/stream's filter bar
+and a small amber TOP/BOTTOM badge on each photo card, so operators can browse
+by camera view now that all ~4.7k photos are view-tagged (barcode backfill).
+'Untagged' matches both explicit null and legacy docs without the field.
+npm run check: 10 errors — baseline, zero in touched files.

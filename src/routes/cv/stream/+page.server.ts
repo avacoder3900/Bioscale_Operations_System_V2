@@ -39,6 +39,9 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	// Highlight sub-filter: '' (any) | 'yes' (has burned-in boxes) | 'no'.
 	const highlightedParam = url.searchParams.get('highlighted') || '';
 	const highlighted = ['yes', 'no'].includes(highlightedParam) ? highlightedParam : '';
+	// Camera-view filter (top/bottom split): '' (any) | top | bottom | untagged.
+	const viewParam = url.searchParams.get('view') || '';
+	const view = ['top', 'bottom', 'untagged'].includes(viewParam) ? viewParam : '';
 	// arm/experiment live on CartridgeRecord, not CvImage — resolved to a
 	// cartridge-id allowlist below. tag and notesSearch are direct CvImage
 	// fields (cartridgeTag.labels / cartridgeTag.notes).
@@ -69,6 +72,9 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	// A photo is "highlighted" once boxes have been burned in (metadata.highlight set).
 	if (highlighted === 'yes') baseFilter['metadata.highlight'] = { $exists: true };
 	else if (highlighted === 'no') baseFilter['metadata.highlight'] = { $exists: false };
+	// view: null matches both explicit null and legacy docs without the field.
+	if (view === 'top' || view === 'bottom') baseFilter.view = view;
+	else if (view === 'untagged') baseFilter.view = null;
 
 	// arm/experiment resolve via CartridgeRecord to a cartridge-id allowlist;
 	// cartridgeId (partial-match search) narrows the same field with a regex, so
@@ -104,7 +110,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 			.sort({ capturedAt: -1 })
 			.skip((page - 1) * PAGE_SIZE)
 			.limit(PAGE_SIZE)
-			.select('_id cartridgeImageNumber cartridgeTag filePath imageUrl thumbnailPath qcLabel capturedAt capturedBy fileSizeBytes metadata.highlight')
+			.select('_id cartridgeImageNumber cartridgeTag filePath imageUrl thumbnailPath qcLabel view capturedAt capturedBy fileSizeBytes metadata.highlight')
 			.lean(),
 		CvImage.countDocuments(filter),
 		// Phases available in the data — drives the filter dropdown
@@ -131,6 +137,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		labels: img.cartridgeTag?.labels ?? [],
 		notes: img.cartridgeTag?.notes ?? '',
 		qcLabel: img.qcLabel ?? null,
+		view: img.view ?? null,
 		url: img.imageUrl || (img.filePath ? getR2Url(img.filePath) : null),
 		thumbnailUrl: img.thumbnailPath ? getR2Url(img.thumbnailPath) : (img.imageUrl || (img.filePath ? getR2Url(img.filePath) : null)),
 		capturedAt: img.capturedAt ?? null,
@@ -149,7 +156,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		pageSize: PAGE_SIZE,
 		review,
 		counts: { unreviewed: unreviewedCount, reviewed: reviewedCount },
-		filters: { phase, cartridgeId, verdict, fromDate, toDate, highlighted, arm, experiment, tag, notesSearch },
+		filters: { phase, cartridgeId, verdict, fromDate, toDate, highlighted, view, arm, experiment, tag, notesSearch },
 		availablePhases: (distinctPhases as string[]).filter(Boolean).sort(),
 		armOptions,
 		experimentOptions,

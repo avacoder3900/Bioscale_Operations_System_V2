@@ -93,6 +93,7 @@
 	let fromDate = $state(data.filters.fromDate || '');
 	let toDate = $state(data.filters.toDate || '');
 	let highlighted = $state(data.filters.highlighted || '');
+	let view = $state(data.filters.view || '');
 	let arm = $state(data.filters.arm || '');
 	let experiment = $state(data.filters.experiment || '');
 	let tag = $state(data.filters.tag || '');
@@ -124,6 +125,7 @@
 		if (fromDate) params.set('from', fromDate);
 		if (toDate) params.set('to', toDate);
 		if (highlighted) params.set('highlighted', highlighted);
+		if (view) params.set('view', view);
 		if (arm) params.set('arm', arm);
 		if (experiment) params.set('experiment', experiment);
 		if (tag) params.set('tag', tag);
@@ -144,6 +146,7 @@
 		fromDate = '';
 		toDate = '';
 		highlighted = '';
+		view = '';
 		arm = '';
 		experiment = '';
 		tag = '';
@@ -350,6 +353,15 @@
 				</select>
 			</div>
 			<div>
+				<label for="view-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">View</label>
+				<select id="view-filter" bind:value={view} class="tron-input w-full">
+					<option value="">All views</option>
+					<option value="top">Top</option>
+					<option value="bottom">Bottom</option>
+					<option value="untagged">Untagged</option>
+				</select>
+			</div>
+			<div>
 				<label for="arm-filter" class="mb-1 block text-xs uppercase text-[var(--color-tron-text-secondary)]">Arm</label>
 				<select id="arm-filter" bind:value={arm} class="tron-input w-full">
 					<option value="">All arms</option>
@@ -438,6 +450,9 @@
 							{/if}
 							{#if img.highlighted}
 								<span class="absolute right-1 top-1 rounded bg-[var(--color-tron-yellow,#facc15)] px-1.5 py-0.5 text-[10px] font-bold text-black" title="Highlighted">▣ HL</span>
+							{/if}
+							{#if img.view}
+								<span class="absolute bottom-1 left-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-bold uppercase text-[var(--color-tron-amber,#ffb300)]" title="Camera view">{img.view}</span>
 							{/if}
 							{#if img.notes}
 								<span class="absolute right-1 top-7 rounded bg-black/60 px-1 py-0.5 text-[10px] text-white">📝</span>
