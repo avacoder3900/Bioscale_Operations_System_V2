@@ -3693,3 +3693,22 @@ Source: branch master @ commit f65db559e (merge of feat/single-photo-capture PR 
 Retrieve this exact code: git checkout master at commit f65db559e
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: /capture single-photo workflow — one photo per cartridge, lock releases after it; 2-photo front/back flow removed.
+
+================================================================================
+2026-07-10 — feat/capture-card-labels — Capture cards show full cartridge name + label chips
+================================================================================
+Per user: on /capture's "Just captured" strip they couldn't see the specific
+name of each cartridge (the id was truncated to the 128px card width) or which
+labels were applied (only a "N labels" count button).
+
+src/routes/capture/+page.svelte:
+- Capture record now carries cartridgeId (from the capture response's
+  cartridgeRecordId); the card shows the FULL cartridge id (break-all, never
+  truncated) with the cartridgeImageNumber in the tooltip, and the phase line
+  gains "photo N" from the image-number suffix.
+- Applied labels render inline as cyan chips on the card, so tags are visible
+  at a glance; the tag button becomes "Edit labels…" when labels exist
+  ("Tag failure…" when none).
+
+npm run check: 11 errors / 434 warnings — identical pre-existing baseline,
+zero in touched file.

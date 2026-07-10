@@ -158,6 +158,7 @@
 		| { status: 'none' };
 	type Capture = {
 		id: string;
+		cartridgeId: string;
 		cartridgeImageNumber: string;
 		phase: string;
 		capturedAt: number;
@@ -806,6 +807,7 @@
 			// runs in the background and patches the entry when the result lands.
 			const cap: Capture = {
 				id: result.imageId,
+				cartridgeId: result.cartridgeRecordId ?? cartridgeId,
 				cartridgeImageNumber: result.cartridgeImageNumber,
 				phase: result.phase,
 				capturedAt: Date.now(),
@@ -1408,8 +1410,10 @@
 							{#if cap.url}
 								<img src={cap.url} alt={cap.cartridgeImageNumber} class="h-32 w-32 rounded object-cover" />
 							{/if}
-							<div class="mt-1 font-mono text-[var(--color-tron-cyan)] truncate w-32">{cap.cartridgeImageNumber}</div>
-							<div class="text-[var(--color-tron-text-secondary)] truncate w-32">{cap.phase}</div>
+							<!-- Full cartridge id (break-all, never truncated) — the image
+							     number's _NN suffix is still available via the tooltip. -->
+							<div class="mt-1 w-32 break-all font-mono text-[10px] leading-tight text-[var(--color-tron-cyan)]" title={cap.cartridgeImageNumber}>{cap.cartridgeId}</div>
+							<div class="text-[var(--color-tron-text-secondary)] truncate w-32">{cap.phase} · photo {cap.cartridgeImageNumber.split('_').pop()}</div>
 							<div class="mt-1 w-32">
 								{#if cap.inference.status === 'pending' || cap.inference.status === 'running'}
 									<span class="inline-block animate-pulse rounded bg-[rgba(0,255,255,0.15)] px-1.5 py-0.5 text-[10px] text-[var(--color-tron-cyan)]">Inferring…</span>
@@ -1427,12 +1431,21 @@
 									<span class="inline-block rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[10px] text-[var(--color-tron-text-secondary)]" title="No project is deployed at this phase — set one up under /cv/projects/[id] Deployment.">no model</span>
 								{/if}
 							</div>
+							<!-- Applied labels shown inline as chips — the button below only
+							     opens the editor, so the operator sees what's tagged at a glance. -->
+							{#if cap.labels.length > 0}
+								<div class="mt-1 flex w-32 flex-wrap gap-1">
+									{#each cap.labels as l (l)}
+										<span class="rounded-full border border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.1)] px-1.5 py-0.5 text-[9px] leading-tight text-[var(--color-tron-cyan)]">{l}</span>
+									{/each}
+								</div>
+							{/if}
 							<button
 								type="button"
 								onclick={() => { expandedTagId = expandedTagId === cap.id ? null : cap.id; }}
 								class="mt-1 w-32 truncate rounded border border-[var(--color-tron-border)] px-1.5 py-0.5 text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]"
 							>
-								{cap.labels.length > 0 ? `🏷 ${cap.labels.length} label${cap.labels.length === 1 ? '' : 's'}` : '🏷 Tag failure…'}
+								{cap.labels.length > 0 ? '🏷 Edit labels…' : '🏷 Tag failure…'}
 							</button>
 							{#if expandedTagId === cap.id}
 								<div class="mt-1 w-48 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] p-2">
