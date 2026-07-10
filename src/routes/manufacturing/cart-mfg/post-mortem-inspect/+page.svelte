@@ -53,12 +53,40 @@
 	// ── Camera (local USB path) ─────────────────────────────────────────────
 	let videoEl: HTMLVideoElement | null = null;
 	let stream: MediaStream | null = null;
+
+	// Fast MJPEG live preview + auto-reconnect (station mode). The agent's
+	// /preview.mjpg is ~35ms capture→display vs ~260ms WebRTC; WebRTC stays
+	// connected underneath (photo capture reads videoEl). Station tokens live
+	// 300s, so every reconnect attempt re-fetches a FRESH token — a wifi blip
+	// must never require a page reload.
+	let stationToken = $state<string | null>(null);
+	let stationHostname = $state<string | null>(null);
+	let mjpegPreview = $state(true);
+	let mjpegError = $state(false);
+	const mjpegUrl = $derived(
+		stationToken && stationHostname
+			? `https://${stationHostname}/preview.mjpg?token=${encodeURIComponent(stationToken)}&fps=15&q=80`
+			: null
+	);
+	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+	let reconnectDelayMs = 2000;
+
+	function scheduleReconnect(stationId: string) {
+		if (reconnectTimer) return;
+		const delay = reconnectDelayMs;
+		reconnectDelayMs = Math.min(reconnectDelayMs * 2, 15000);
+		reconnectTimer = setTimeout(() => {
+			reconnectTimer = null;
+			if (selectedStationId === stationId) void connectToStation(stationId, true);
+		}, delay);
+	}
 	let cameras = $state<MediaDeviceInfo[]>([]);
 	let selectedCameraId = $state<string | null>(null);
 	let cameraError = $state<string | null>(null);
 
 	// ── Remote Pi capture station ───────────────────────────────────────────
 	let selectedStationId = $state<string | null>(null);
+	const mjpegShowing = $derived(!!selectedStationId && mjpegPreview && !mjpegError && !!mjpegUrl);
 	let ws: WebSocket | null = null;
 	let pc: RTCPeerConnection | null = null;
 	// Tracked separately so beforeunload + teardown can release the right
@@ -312,6 +340,11 @@
 
 	function teardownStation() {
 		if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+		if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+		reconnectDelayMs = 2000;
+		stationToken = null;
+		stationHostname = null;
+		mjpegError = false;
 		if (pc) { try { pc.close(); } catch { /* */ } pc = null; }
 		if (ws) { try { ws.close(); } catch { /* */ } ws = null; }
 		if (stream) {
@@ -327,12 +360,19 @@
 		}
 	}
 
-	async function connectToStation(stationId: string) {
+	async function connectToStation(stationId: string, isReconnect = false) {
 		const station = data.stations.find((s: { _id: string }) => s._id === stationId);
 		if (!station) {
 			flashBanner('err', `Station ${stationId} not found`);
 			selectedStationId = null;
 			return;
+		}
+
+		// Reconnect: drop the dead socket/peer but KEEP our operator lock.
+		if (isReconnect) {
+			if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+			if (pc) { try { pc.close(); } catch { /* */ } pc = null; }
+			if (ws) { try { ws.close(); } catch { /* */ } ws = null; }
 		}
 
 		// Hard one-operator-per-station lock. 409 means another user holds it.
@@ -350,12 +390,15 @@
 			if (!lockRes.ok) throw new Error(`HTTP ${lockRes.status}`);
 			lockedStationId = stationId;
 		} catch (e) {
+			if (isReconnect) { scheduleReconnect(stationId); return; }
 			flashBanner('err', `Failed to claim station lock: ${e instanceof Error ? e.message : e}`);
 			selectedStationId = null;
 			await startCamera();
 			return;
 		}
 
+		// Fresh token EVERY attempt — they expire after 300s, so reusing one
+		// across a reconnect guarantees a rejected socket.
 		let token: string;
 		try {
 			const tokRes = await fetch(`/api/cv/stations/${encodeURIComponent(stationId)}/token`);
@@ -363,7 +406,10 @@
 			const tokBody = await tokRes.json();
 			token = tokBody.token;
 			if (!token) throw new Error('empty token');
+			stationToken = token;
+			stationHostname = station.hostname;
 		} catch (e) {
+			if (isReconnect) { scheduleReconnect(stationId); return; }
 			flashBanner('err', `Failed to fetch station token: ${e instanceof Error ? e.message : e}`);
 			selectedStationId = null;
 			teardownStation();
@@ -376,6 +422,9 @@
 		ws = sock;
 
 		sock.onopen = () => {
+			reconnectDelayMs = 2000;
+			stationDownAt = null;
+			mjpegError = false;
 			// Heartbeat keeps the BIMS operator-lock alive (5-min server timeout).
 			heartbeatInterval = setInterval(() => {
 				if (sock.readyState === WebSocket.OPEN) {
@@ -386,9 +435,12 @@
 
 		sock.onerror = () => flashBanner('err', `Station ${station.name}: WebSocket error`);
 		sock.onclose = () => {
-			if (selectedStationId === stationId) {
-				flashBanner('err', `Station ${station.name}: connection closed`);
+			// Auto-reconnect with backoff (fresh token each attempt) — a wifi
+			// blip on the Pi must never require a page reload.
+			if (selectedStationId === stationId && ws === sock) {
+				flashBanner('info', `Station ${station.name}: connection lost — reconnecting…`, 4000);
 				stationDownAt = { name: station.name, at: Date.now() };
+				scheduleReconnect(stationId);
 			}
 		};
 
@@ -767,7 +819,26 @@
 				</div>
 			{:else}
 				<!-- svelte-ignore a11y_media_has_caption -->
-				<video bind:this={videoEl} class="aspect-video w-full rounded" playsinline autoplay muted></video>
+				{#if mjpegShowing}
+					<!-- Fast MJPEG preview (~35ms) — WebRTC keeps running hidden below
+					     so photo capture stays untouched. -->
+					<img
+						src={mjpegUrl}
+						alt="Live station preview (fast MJPEG)"
+						class="aspect-video w-full rounded object-contain"
+						onerror={() => (mjpegError = true)}
+					/>
+				{/if}
+				<video bind:this={videoEl} class="aspect-video w-full rounded {mjpegShowing ? 'hidden' : ''}" playsinline autoplay muted></video>
+				{#if selectedStationId}
+					<label class="mt-1 flex items-center gap-1 text-[11px] text-[var(--color-tron-text-secondary)]">
+						<input type="checkbox" bind:checked={mjpegPreview} />
+						Fast preview (MJPEG{mjpegShowing ? ' · active' : ''})
+						{#if mjpegError}
+							<button type="button" class="ml-2 text-[var(--color-tron-cyan)] hover:underline" onclick={() => (mjpegError = false)}>retry</button>
+						{/if}
+					</label>
+				{/if}
 			{/if}
 		</div>
 

@@ -55,6 +55,18 @@
 			? `https://${stationHostname}/preview.mjpg?token=${encodeURIComponent(stationToken)}&fps=${mjpegFps}&q=${mjpegQ}`
 			: null
 	);
+	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+	let reconnectDelayMs = 2000;
+
+	function scheduleReconnect(stationId: string) {
+		if (reconnectTimer) return;
+		const delay = reconnectDelayMs;
+		reconnectDelayMs = Math.min(reconnectDelayMs * 2, 15000);
+		reconnectTimer = setTimeout(() => {
+			reconnectTimer = null;
+			if (selectedStationId === stationId) void connectToStation(stationId, true);
+		}, delay);
+	}
 	let cameras = $state<MediaDeviceInfo[]>([]);
 	let selectedCameraId = $state<string | null>(null);
 	let cameraError = $state<string | null>(null);
@@ -448,6 +460,8 @@
 
 	function teardownStation() {
 		if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+		if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+		reconnectDelayMs = 2000;
 		if (pc) { try { pc.close(); } catch { /* */ } pc = null; }
 		if (ws) { try { ws.close(); } catch { /* */ } ws = null; }
 		stationToken = null;
@@ -501,12 +515,19 @@
 		}
 	}
 
-	async function connectToStation(stationId: string) {
+	async function connectToStation(stationId: string, isReconnect = false) {
 		const station = data.stations.find((s: { _id: string }) => s._id === stationId);
 		if (!station) {
 			flashBanner('err', `Station ${stationId} not found`);
 			selectedStationId = null;
 			return;
+		}
+
+		// Reconnect: drop the dead socket/peer but KEEP our operator lock.
+		if (isReconnect) {
+			if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+			if (pc) { try { pc.close(); } catch { /* */ } pc = null; }
+			if (ws) { try { ws.close(); } catch { /* */ } ws = null; }
 		}
 
 		// Hard one-operator-per-station lock. 409 means another user holds it.
@@ -524,6 +545,7 @@
 			if (!lockRes.ok) throw new Error(`HTTP ${lockRes.status}`);
 			lockedStationId = stationId;
 		} catch (e) {
+			if (isReconnect) { scheduleReconnect(stationId); return; }
 			flashBanner('err', `Failed to claim station lock: ${e instanceof Error ? e.message : e}`);
 			selectedStationId = null;
 			await startCamera();
@@ -541,6 +563,7 @@
 			stationHostname = station.hostname;
 			mjpegError = false;
 		} catch (e) {
+			if (isReconnect) { scheduleReconnect(stationId); return; }
 			flashBanner('err', `Failed to fetch station token: ${e instanceof Error ? e.message : e}`);
 			selectedStationId = null;
 			teardownStation();
@@ -553,6 +576,9 @@
 		ws = sock;
 
 		sock.onopen = () => {
+			reconnectDelayMs = 2000;
+			stationDownAt = null;
+			mjpegError = false;
 			// Heartbeat keeps the BIMS operator-lock alive (5-min server timeout)
 			// and lets the Pi notice the operator went away cleanly.
 			heartbeatInterval = setInterval(() => {
@@ -564,13 +590,13 @@
 
 		sock.onerror = () => flashBanner('err', `Station ${station.name}: WebSocket error`);
 		sock.onclose = () => {
-			// If the user is still on this station, surface that the link dropped.
-			// Story E2: also raise the persistent "station down" banner so the
-			// operator knows they need to pick another rather than wondering
-			// why captures stopped working.
-			if (selectedStationId === stationId) {
-				flashBanner('err', `Station ${station.name}: connection closed`);
+			// Auto-reconnect with backoff (fresh token each attempt) — a wifi
+			// blip on the Pi must never require a page reload. The "station
+			// down" banner stays up until a reconnect succeeds.
+			if (selectedStationId === stationId && ws === sock) {
+				flashBanner('info', `Station ${station.name}: connection lost — reconnecting…`, 4000);
 				stationDownAt = { name: station.name, at: Date.now() };
+				scheduleReconnect(stationId);
 			}
 		};
 

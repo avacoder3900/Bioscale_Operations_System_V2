@@ -3488,3 +3488,24 @@ Deployment: preview — https://bioscale-operations-system-mongodb-2fg7xaqd3-bre
 Source: branch cv-microscope @ commit f312ae6c
 Retrieve this exact code: git checkout cv-microscope at commit f312ae6c
 What this deployment is for: current branch head — full microscope station stack (fast MJPEG preview + grid sequence + intake + stage models) for user testing
+
+================================================================================
+2026-07-10 — cv-microscope — Station resilience: auto-reconnect + fresh tokens + MJPEG on inspect pages
+================================================================================
+User console error exposed the disconnect UX bug: station JWTs live 300s and
+NO page auto-reconnected — sock.onclose just showed "connection closed", so
+any Pi wifi blip demanded a page interaction, and a retry after 5min would
+present an expired token. FIX on capture + wax/reagent/post-mortem-inspect:
+sock.onclose → scheduleReconnect (2s backoff doubling to 15s cap), each
+attempt re-runs connectToStation(stationId, true) which keeps the operator
+lock, closes dead pc/ws, and fetches a FRESH token; transient lock/token
+fetch failures re-schedule instead of clearing the station; onopen resets
+backoff + clears the station-down banner. Inspect trio also gains the fast
+MJPEG preview (same as capture: JWT-authed /preview.mjpg <img>, WebRTC
+hidden underneath for photo capture, toggle + retry).
+Pi-side same session: wifi power_save was ON (dmesg confirmed at boot) —
+disabled + persisted via NetworkManager conf; BIMS_URL repointed from stale
+2026-06-09 preview to current cv-microscope deployment (heartbeat verified,
+gap 15s; direct LAN path 9ms after fix). Pi dropped again under load →
+suspect PSU sag (sticky get_throttled check pending Pi return).
+svelte-check: 10-error baseline, 0 new.
