@@ -3648,3 +3648,15 @@ Source: branch master @ commit 5abe7fb67 (merge of PR #25, feat/project-needs-re
 Retrieve this exact code: git checkout master at commit 5abe7fb67
 What this deployment is for: per-project "Needs review" tab — each CV project's unreviewed
 model verdicts with one-click Agree/Overrule (writes image qcLabel + inspection humanLabel).
+
+================================================================================
+2026-07-10 — feat/review-lightbox — Needs-review photos enlarge in place
+================================================================================
+Per user: clicking a Needs-review card's photo no longer opens a new tab —
+it opens an in-page lightbox (dark overlay, full-size object-contain image)
+with the verdict/confidence/cartridge/phase/view context in the header,
+prev/next arrows (+ ArrowLeft/Right keys, Esc or backdrop-click to close),
+and Agree/Overrule right in the overlay. Reviewing from the lightbox
+advances to the next unreviewed photo (index clamps as the queue shrinks;
+closes when empty) — a rapid full-screen review flow.
+npm run check: 10 errors / 434 warnings — baseline, zero in touched files.
