@@ -14,9 +14,9 @@
 	let loggingOut = $state(false);
 	let menuOpen = $state(false);
 
-	// Nav follows the CV-PIPELINE-V2 stage order:
-	// capture -> label -> train/verify/deploy (Projects & Models).
-	// Review happens in the Image Stream (its Needs-review tab).
+	// Nav order per operator preference: stream (review) first, then
+	// projects/models, then the capture + label tools, then stations.
+	// Forensic Capture intentionally lives in the Cart Mfg sidebar, not here.
 	const navItems = [
 		{
 			href: '/cv/stream',
@@ -24,14 +24,14 @@
 			icon: 'M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z'
 		},
 		{
+			href: '/cv/projects',
+			label: 'Projects & Models',
+			icon: 'M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4'
+		},
+		{
 			href: '/capture',
 			label: 'Capture',
 			icon: 'M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z M15 13a3 3 0 11-6 0 3 3 0 016 0z'
-		},
-		{
-			href: '/cv/induct',
-			label: 'Induct',
-			icon: 'M12 4v16m8-8H4'
 		},
 		{
 			href: '/cv/label',
@@ -39,19 +39,14 @@
 			icon: 'M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-5 5a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z'
 		},
 		{
-			href: '/cv/projects',
-			label: 'Projects & Models',
-			icon: 'M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4'
-		},
-		{
 			href: '/cv/stations',
 			label: 'Stations',
 			icon: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z'
 		},
 		{
-			href: '/cv/forensic-capture',
-			label: 'Forensic Capture',
-			icon: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z'
+			href: '/cv/induct',
+			label: 'Induct',
+			icon: 'M12 4v16m8-8H4'
 		},
 		{
 			href: '/',
