@@ -279,6 +279,10 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
                         interval_ms=payload.get("intervalMs"),
                         grab_still=camera_mod.grab_still,
                         broadcast=_broadcast,
+                        # Live/still split: hold the sensor at still resolution
+                        # for the whole run (renegotiation ~4s on the Celestron).
+                        still_enter=camera_mod.enter_still_mode,
+                        still_exit=camera_mod.exit_still_mode,
                     )
                     if ok:
                         # Ack with the sequenceId so the UI can wire Abort
@@ -587,7 +591,7 @@ async def _on_startup(app: web.Application) -> None:
     # PREVIEW=local renders the camera full-screen on the station's own
     # display — sensor→screen, no encode, no network (the latency floor).
     if os.environ.get("PREVIEW", "").strip().lower() == "local":
-        preview_mod.run_local_preview(camera_mod.grab_still)
+        preview_mod.run_local_preview(camera_mod.grab_live)
 
 
 async def _on_cleanup(app: web.Application) -> None:
@@ -609,9 +613,11 @@ def build_app() -> web.Application:
     app.router.add_get("/ws", websocket)
     # Low-latency MJPEG live preview (no WebRTC negotiation, no VP8) —
     # <img src="https://<station>/preview.mjpg?token=<station JWT>"> renders
-    # natively via Tailscale Serve. Same JWT validation as /ws.
+    # natively via Tailscale Serve. Same JWT validation as /ws. Uses
+    # grab_live (stream resolution) — grab_still renegotiates the sensor
+    # per call and must never run per-frame.
     preview_mod.attach_mjpeg_route(
-        app, camera_mod.grab_still, lambda req: _ws_authenticate(req).ok
+        app, camera_mod.grab_live, lambda req: _ws_authenticate(req).ok
     )
     app.on_startup.append(_on_startup)
     app.on_cleanup.append(_on_cleanup)

@@ -212,6 +212,10 @@ class SequenceManager:
         self._task: Optional[asyncio.Task] = None
         self._abort = asyncio.Event()
         self._current_id: Optional[str] = None
+        # Optional live/still-split hooks (camera.enter/exit_still_mode) —
+        # hold the sensor at still resolution for the whole run.
+        self._still_enter: Optional[Callable[[], None]] = None
+        self._still_exit: Optional[Callable[[], None]] = None
 
     def is_running(self) -> bool:
         return self._task is not None and not self._task.done()
@@ -228,6 +232,8 @@ class SequenceManager:
         interval_ms: object,
         grab_still: GrabStill,
         broadcast: Broadcast,
+        still_enter: "Optional[Callable[[], None]]" = None,
+        still_exit: "Optional[Callable[[], None]]" = None,
     ) -> tuple[bool, str]:
         """Start a run. Returns (True, sequenceId) or (False, error_message)."""
         if self.is_running():
@@ -242,6 +248,8 @@ class SequenceManager:
 
         self._abort.clear()
         self._current_id = _new_sequence_id()
+        self._still_enter = still_enter
+        self._still_exit = still_exit
         self._task = asyncio.create_task(
             self._run(cid, n, interval, grab_still, broadcast),
             name="bims-sequence",
@@ -307,6 +315,14 @@ class SequenceManager:
             cols,
             order,
         )
+
+        # Live/still split: hold the sensor at still resolution for the WHOLE
+        # run (renegotiation costs seconds on some cameras — never per shot).
+        if self._still_enter is not None:
+            try:
+                await asyncio.to_thread(self._still_enter)
+            except Exception:
+                log.exception("still_enter hook failed — continuing at live res")
 
         try:
             timeout = aiohttp.ClientTimeout(total=30)
@@ -394,6 +410,13 @@ class SequenceManager:
                 {"event": "sequence_error", "message": str(exc)}
             )
             return
+        finally:
+            # Always restore the live resolution, even on crash/abort/cancel.
+            if self._still_exit is not None:
+                try:
+                    await asyncio.to_thread(self._still_exit)
+                except Exception:
+                    log.exception("still_exit hook failed")
 
         log.info(
             "sequence %s done: uploaded=%d failed=%d aborted=%s",

@@ -258,7 +258,21 @@ class CameraTrack(VideoStreamTrack):
     def __init__(self) -> None:
         super().__init__()
         source = _camera_source()
-        cap_w, cap_h = _profile_dims()
+        # LIVE/STILL SPLIT: the shared handle runs at the STREAM resolution so
+        # the live pipeline (decode → encode) costs the same as a plain webcam
+        # (~0.9 MP/frame at 720p, vs 2 MP when we captured 1080p and shrank
+        # every frame). grab_still() renegotiates the sensor to the profile's
+        # full still resolution per shot and restores — ~100-300 ms per still,
+        # invisible at multi-second sequence intervals.
+        still_w, still_h = _profile_dims()
+        cap_w = min(still_w, _STREAM_WIDTH)
+        cap_h = min(still_h, _STREAM_HEIGHT)
+        self._still_w, self._still_h = still_w, still_h
+        self._live_w, self._live_h = cap_w, cap_h
+        # >0 while a sequence run holds the sensor at still resolution —
+        # renegotiation on this camera costs ~4s, so we switch once per RUN,
+        # not per shot. recv()'s resize branch downsizes live frames meanwhile.
+        self._still_mode = 0
         # Serializes cv2 reads between the WebRTC recv() (event loop) and
         # grab_still() (sequence thread) — cv2.VideoCapture.read() is not
         # thread-safe, and both share this single handle.
@@ -301,15 +315,10 @@ class CameraTrack(VideoStreamTrack):
     def is_open(self) -> bool:
         return bool(self._cap and self._cap.isOpened())
 
-    def grab_still(self) -> Optional["object"]:
-        """Return a fresh full-resolution BGR frame from the shared capture.
+    def grab_live(self) -> Optional["object"]:
+        """One fresh frame at the LIVE (stream) resolution — no renegotiation.
 
-        Reads one frame under the same lock the WebRTC recv() uses, so the
-        sequence engine and the live stream never call cv2.read() concurrently
-        (unsafe) and only one cv2.VideoCapture handle is ever opened. At the
-        sequence interval (seconds) this "steals" a single frame from the live
-        track — invisible at 15 fps. Returns the un-downsampled frame (full
-        1920x1080 under the microscope profile); returns None if the read fails.
+        Used by the MJPEG preview: cheap, safe to call every frame.
         """
         if self._cap is None:
             return None
@@ -317,6 +326,67 @@ class CameraTrack(VideoStreamTrack):
             if not self.is_open():
                 return None
             ok, frame_bgr = self._cap.read()
+        if not ok or frame_bgr is None:
+            return None
+        return frame_bgr
+
+    def enter_still_mode(self) -> None:
+        """Hold the sensor at the profile's STILL resolution (sequence run).
+
+        Renegotiation costs ~4s on the Celestron, so a run switches once at
+        start and once at end instead of per shot. Nested calls refcount.
+        """
+        if (self._still_w, self._still_h) == (self._live_w, self._live_h):
+            return
+        with self._read_lock:
+            if not self.is_open():
+                return
+            self._still_mode += 1
+            if self._still_mode == 1:
+                self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._still_w)
+                self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._still_h)
+                self._cap.read()  # flush the transition frame
+
+    def exit_still_mode(self) -> None:
+        """Restore the LIVE (stream) resolution once no run holds still mode."""
+        if (self._still_w, self._still_h) == (self._live_w, self._live_h):
+            return
+        with self._read_lock:
+            if not self.is_open() or self._still_mode == 0:
+                return
+            self._still_mode -= 1
+            if self._still_mode == 0:
+                self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._live_w)
+                self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._live_h)
+                self._cap.read()  # flush back
+
+    def grab_still(self) -> Optional["object"]:
+        """Return a fresh FULL-RESOLUTION BGR frame from the shared capture.
+
+        Inside still mode (sequence runs) this is a plain read — the sensor is
+        already at still resolution. Outside it, it renegotiates for a single
+        shot (slow on this camera: ~4s round trip) and restores — acceptable
+        for one-off grabs, never for per-frame use (that's grab_live()).
+        """
+        if self._cap is None:
+            return None
+        with self._read_lock:
+            if not self.is_open():
+                return None
+            in_still_mode = self._still_mode > 0
+            needs_switch = (
+                not in_still_mode
+                and (self._still_w, self._still_h) != (self._live_w, self._live_h)
+            )
+            if needs_switch:
+                self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._still_w)
+                self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._still_h)
+                self._cap.read()  # flush the transition frame
+            ok, frame_bgr = self._cap.read()
+            if needs_switch:
+                self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._live_w)
+                self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._live_h)
+                self._cap.read()  # flush back
         if not ok or frame_bgr is None:
             return None
         return frame_bgr
@@ -505,13 +575,36 @@ def known_param_names() -> list[str]:
 def grab_still() -> Optional["object"]:
     """Full-resolution BGR frame from the shared camera, or None if unavailable.
 
-    Used by the sequence engine (sequence.py) for timed microscope stills. Shares
-    the singleton capture handle with the WebRTC track — no second device open.
+    Used by the sequence engine (sequence.py) for timed microscope stills —
+    renegotiates the sensor to still resolution per shot (live/still split).
+    Do NOT call per-frame; use grab_live() for previews.
     """
     source = _ensure_source_track()
     if source is None:
         return None
     return source.grab_still()
+
+
+def grab_live() -> Optional["object"]:
+    """One frame at the live stream resolution — cheap, preview-safe."""
+    source = _ensure_source_track()
+    if source is None:
+        return None
+    return source.grab_live()
+
+
+def enter_still_mode() -> None:
+    """Hold the sensor at still resolution for a sequence run (refcounted)."""
+    source = _ensure_source_track()
+    if source is not None:
+        source.enter_still_mode()
+
+
+def exit_still_mode() -> None:
+    """Release the still-resolution hold; live resolution restores at zero."""
+    source = _ensure_source_track()
+    if source is not None:
+        source.exit_still_mode()
 
 
 def profile() -> str:

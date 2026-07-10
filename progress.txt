@@ -3513,3 +3513,25 @@ Deployment: preview — https://bioscale-operations-system-mongodb-asqk0way9-bre
 Source: branch cv-microscope @ commit 6c3a044c
 Retrieve this exact code: git checkout cv-microscope at commit 6c3a044c
 What this deployment is for: station auto-reconnect (fresh tokens, backoff) + MJPEG fast preview on wax/reagent/post-mortem inspect pages
+
+================================================================================
+2026-07-10 — cv-microscope — Live/still split deployed: microscope live view now costs the same as a webcam
+================================================================================
+Answered "why is the other camera fast": station 2 streams 640x480 (its old
+agent's auto-backend bug ignores res sets) = ~4.6Mpx/s decoded, while station
+3 captured 1920x1080 + resized every frame = 31.1Mpx/s (~6.75x the CPU/frame).
+FIX (live/still split, run-scoped): shared camera handle now runs at STREAM
+res (1280x720) for the live pipeline; sequence runs call
+camera.enter/exit_still_mode() (refcounted, hooked via SequenceManager.start
+still_enter/still_exit, restored in a finally even on crash/abort) which
+renegotiates the sensor to 1920x1080 ONCE per run — measured on the Celestron:
+per-shot renegotiation would cost ~3.9s, run-scoped switch costs 2.2s once,
+then stills are full 1080p at ~120ms each; live frames during a run arrive at
+1080p and recv()'s existing resize branch downsizes them. grab_live() added
+(preview-safe, no renegotiation) — MJPEG route + PREVIEW=local now use it
+(grab_still per-frame would have renegotiated per preview frame).
+Deployed to station 3 (/opt), verified on hardware: live 720p → enter 2223ms
+→ stills 1080p @ 120-129ms → exit → live 720p. User confirmed the 16:43
+reboot was their own power cycle (no phantom reboots); persistent journald
+enabled on the Pi for future forensics.
+Agent-only change — no UI deployment needed for this entry.
