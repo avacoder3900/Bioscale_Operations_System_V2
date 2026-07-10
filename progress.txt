@@ -3642,3 +3642,9 @@ thumbnail, PASS/FAIL + confidence, model version, cartridge/phase/view.
 This is the per-model review workbench: overrules are the next version's
 highest-value training data. npm run check: 10 errors / 434 warnings —
 baseline, zero added.
+
+Deployment: production — https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/5v7a8u7QchPFECUsqBMDhreXg4FJ
+Source: branch master @ commit 5abe7fb67 (merge of PR #25, feat/project-needs-review)
+Retrieve this exact code: git checkout master at commit 5abe7fb67
+What this deployment is for: per-project "Needs review" tab — each CV project's unreviewed
+model verdicts with one-click Agree/Overrule (writes image qcLabel + inspection humanLabel).
