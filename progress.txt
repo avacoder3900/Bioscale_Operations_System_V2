@@ -3666,3 +3666,26 @@ Source: branch master @ commit 6d287c13c (merge of PR #27, feat/review-lightbox)
 Retrieve this exact code: git checkout master at commit 6d287c13c
 What this deployment is for: Needs-review lightbox — photos enlarge in place with arrow-key
 navigation and Agree/Overrule in the overlay (advances to next photo on review).
+
+================================================================================
+2026-07-10 — feat/cv-projects-guide — "How to create a CV model" guide on /cv/projects
+================================================================================
+Per user (follow-up to the stream pipeline guide, PR #29): the Projects page
+gets its own step-by-step guide so a user landing there knows how to go from
+photos to a deployed model. Replaces the old one-line "How a model comes to
+life" hint on /cv/projects with a collapsible 6-step panel; each step carries
+a "where" chip naming the exact page/tab it happens on:
+  1 Build the training data (Capture → Image Stream, review Pass/Fail, ≥5 per class)
+  2 Create a project (this page → + New project; phases/view/master scoping)
+  3 Train a version (project page → History tab; ≥5 labeled, both classes,
+    immutable versions)
+  4 Verify it passes the gate (Deployment tab; holdout count + balanced accuracy)
+  5 Deploy (Deployment tab; deploy-at phases, optional shadow version)
+  6 Review verdicts & retrain (Needs review tab; overrules feed the next version)
+Toggle button ("How do I create a model?") next to + New project; collapsed
+state persists in localStorage (cv-projects-guide-collapsed), same pattern as
+the stream guide. Pure .svelte change, no server load changes.
+Built in worktree .worktrees/cv-projects-guide (main checkout was busy on
+feat/single-photo-capture).
+npm run check: 11 errors / 434 warnings — all pre-existing baseline, zero in
+touched files.
