@@ -3660,3 +3660,9 @@ and Agree/Overrule right in the overlay. Reviewing from the lightbox
 advances to the next unreviewed photo (index clamps as the queue shrinks;
 closes when empty) — a rapid full-screen review flow.
 npm run check: 10 errors / 434 warnings — baseline, zero in touched files.
+
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/J2K9Pn9vEbDVVF7zfzYbgZAVtCZy
+Source: branch master @ commit 6d287c13c (merge of PR #27, feat/review-lightbox)
+Retrieve this exact code: git checkout master at commit 6d287c13c
+What this deployment is for: Needs-review lightbox — photos enlarge in place with arrow-key
+navigation and Agree/Overrule in the overlay (advances to next photo on review).
