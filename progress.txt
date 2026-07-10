@@ -3688,3 +3688,8 @@ src/routes/capture/+page.svelte only (the 2-photo rule was purely client-side;
 
 npm run check: 11 errors / 434 warnings — identical pre-existing baseline
 (r2.ts, barcode-detect.ts, AskBimsWidget, assembly page), zero in touched file.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/E9SfftckD5RG4Zd5pssoR6TgzWKU
+Source: branch master @ commit f65db559e (merge of feat/single-photo-capture PR #30, change commit 95c5f8785)
+Retrieve this exact code: git checkout master at commit f65db559e
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: /capture single-photo workflow — one photo per cartridge, lock releases after it; 2-photo front/back flow removed.
