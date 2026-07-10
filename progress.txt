@@ -3509,3 +3509,7 @@ disabled + persisted via NetworkManager conf; BIMS_URL repointed from stale
 gap 15s; direct LAN path 9ms after fix). Pi dropped again under load →
 suspect PSU sag (sticky get_throttled check pending Pi return).
 svelte-check: 10-error baseline, 0 new.
+Deployment: preview — https://bioscale-operations-system-mongodb-asqk0way9-brevitest.vercel.app
+Source: branch cv-microscope @ commit 6c3a044c
+Retrieve this exact code: git checkout cv-microscope at commit 6c3a044c
+What this deployment is for: station auto-reconnect (fresh tokens, backoff) + MJPEG fast preview on wax/reagent/post-mortem inspect pages
