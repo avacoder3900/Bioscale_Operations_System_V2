@@ -18,6 +18,34 @@
 	// Per-card busy state for the Needs-review Agree/Overrule buttons, keyed by inspectionId.
 	let reviewingId = $state<string | null>(null);
 
+	// Needs-review lightbox: click a card's photo to enlarge it in place instead
+	// of opening a new tab. Arrow keys navigate the queue; reviewing from inside
+	// the lightbox advances to the next unreviewed photo.
+	let lightboxIndex = $state<number | null>(null);
+	const lightboxItem = $derived(
+		lightboxIndex === null ? null : (data.needsReview[lightboxIndex] ?? null)
+	);
+	function closeLightbox() {
+		lightboxIndex = null;
+	}
+	function stepLightbox(delta: number) {
+		if (lightboxIndex === null || data.needsReview.length === 0) return;
+		lightboxIndex = (lightboxIndex + delta + data.needsReview.length) % data.needsReview.length;
+	}
+	// After a review, the queue re-loads without the reviewed item — keep the
+	// same index (which now points at the next photo), clamped; close when empty.
+	function clampLightbox() {
+		if (lightboxIndex === null) return;
+		if (data.needsReview.length === 0) lightboxIndex = null;
+		else if (lightboxIndex > data.needsReview.length - 1) lightboxIndex = data.needsReview.length - 1;
+	}
+	function onLightboxKeydown(e: KeyboardEvent) {
+		if (lightboxIndex === null) return;
+		if (e.key === 'Escape') closeLightbox();
+		else if (e.key === 'ArrowRight') stepLightbox(1);
+		else if (e.key === 'ArrowLeft') stepLightbox(-1);
+	}
+
 	// Composition picker state
 	let composedOfSelections = $state<Set<string>>(new Set(data.project.composedOf));
 	let liveCompositionToggle = $state(data.project.isLiveComposition);
@@ -80,6 +108,8 @@
 		}
 	}
 </script>
+
+<svelte:window onkeydown={onLightboxKeydown} />
 
 <div class="space-y-4">
 	<header class="flex flex-wrap items-start justify-between gap-3">
@@ -683,17 +713,22 @@
 				</div>
 			{:else}
 				<div class="grid gap-3 grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
-					{#each data.needsReview as item (item.inspectionId)}
+					{#each data.needsReview as item, i (item.inspectionId)}
 						{@const busy = reviewingId === item.inspectionId}
 						<div class="overflow-hidden rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
 							{#if item.url}
-								<a href={item.url} target="_blank" rel="noopener">
+								<button
+									type="button"
+									class="block w-full cursor-zoom-in"
+									title="Click to enlarge"
+									onclick={() => (lightboxIndex = i)}
+								>
 									{#if item.thumbnailUrl}
 										<img src={item.thumbnailUrl} alt={item.cartridgeRecordId ?? 'capture'} class="aspect-square w-full object-cover" />
 									{:else}
 										<div class="flex aspect-square w-full items-center justify-center bg-[var(--color-tron-bg-tertiary)] text-[10px] text-[var(--color-tron-text-secondary)]">no thumbnail</div>
 									{/if}
-								</a>
+								</button>
 							{:else}
 								<div class="flex aspect-square w-full items-center justify-center bg-[var(--color-tron-bg-tertiary)] text-[10px] text-[var(--color-tron-text-secondary)]">no image</div>
 							{/if}
@@ -759,6 +794,99 @@
 							</div>
 						</div>
 					{/each}
+				</div>
+			{/if}
+
+			{#if lightboxItem}
+				{@const lbBusy = reviewingId === lightboxItem.inspectionId}
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<!-- svelte-ignore a11y_click_events_have_key_events -->
+				<div
+					class="fixed inset-0 z-50 flex flex-col bg-black/85 p-4"
+					onclick={(e) => { if (e.target === e.currentTarget) closeLightbox(); }}
+				>
+					<!-- Header: verdict context + close -->
+					<div class="mx-auto flex w-full max-w-5xl items-center justify-between gap-3 pb-2 text-xs">
+						<div class="flex flex-wrap items-center gap-2">
+							{#if lightboxItem.result === 'pass'}
+								<span class="rounded border border-[var(--color-tron-green,#39ff14)] bg-[rgba(57,255,20,0.12)] px-2 py-0.5 font-medium uppercase text-[var(--color-tron-green,#39ff14)]">PASS</span>
+							{:else}
+								<span class="rounded border border-[var(--color-tron-red,#ff3366)] bg-[rgba(255,51,102,0.12)] px-2 py-0.5 font-medium uppercase text-[var(--color-tron-red,#ff3366)]">FAIL</span>
+							{/if}
+							<span class="font-mono text-white/80">{lightboxItem.confidenceScore != null ? (lightboxItem.confidenceScore * 100).toFixed(1) + '%' : '—'}</span>
+							<span class="font-mono text-[var(--color-tron-cyan)]">{lightboxItem.cartridgeRecordId ?? '—'}</span>
+							{#if lightboxItem.phase}<span class="rounded bg-white/10 px-1.5 py-0.5 text-white/70">{lightboxItem.phase}</span>{/if}
+							{#if lightboxItem.view}<span class="rounded bg-white/10 px-1.5 py-0.5 uppercase text-white/70">{lightboxItem.view}</span>{/if}
+							<span class="font-mono text-[10px] text-white/50">{lightboxItem.modelVersion ?? ''}</span>
+						</div>
+						<div class="flex items-center gap-2">
+							<span class="font-mono text-white/50">{(lightboxIndex ?? 0) + 1} / {data.needsReview.length}</span>
+							<button type="button" class="rounded border border-white/30 px-2 py-1 text-white/80 hover:bg-white/10" onclick={closeLightbox}>✕ Close</button>
+						</div>
+					</div>
+
+					<!-- Photo + prev/next -->
+					<div class="relative mx-auto flex min-h-0 w-full max-w-5xl flex-1 items-center justify-center">
+						<button
+							type="button"
+							class="absolute left-0 z-10 rounded-full border border-white/30 bg-black/50 px-3 py-2 text-lg text-white/80 hover:bg-white/10"
+							title="Previous (←)"
+							onclick={() => stepLightbox(-1)}
+						>‹</button>
+						<img
+							src={lightboxItem.url}
+							alt={lightboxItem.cartridgeRecordId ?? 'capture'}
+							class="max-h-full max-w-full rounded object-contain"
+						/>
+						<button
+							type="button"
+							class="absolute right-0 z-10 rounded-full border border-white/30 bg-black/50 px-3 py-2 text-lg text-white/80 hover:bg-white/10"
+							title="Next (→)"
+							onclick={() => stepLightbox(1)}
+						>›</button>
+					</div>
+
+					<!-- Review actions — reviewing advances to the next photo in the queue -->
+					<div class="mx-auto flex w-full max-w-md gap-2 pt-3">
+						<form
+							method="POST"
+							action="?/reviewVerdict"
+							class="flex-1"
+							use:enhance={() => {
+								reviewingId = lightboxItem.inspectionId;
+								return async ({ update }) => {
+									await update();
+									reviewingId = null;
+									clampLightbox();
+								};
+							}}
+						>
+							<input type="hidden" name="inspectionId" value={lightboxItem.inspectionId} />
+							<input type="hidden" name="decision" value="agree" />
+							<button type="submit" disabled={lbBusy} class="w-full rounded border border-[var(--color-tron-green,#39ff14)] bg-[rgba(57,255,20,0.10)] px-3 py-2 text-sm font-medium text-[var(--color-tron-green,#39ff14)] disabled:opacity-40">
+								{lbBusy ? '…' : 'Agree'}
+							</button>
+						</form>
+						<form
+							method="POST"
+							action="?/reviewVerdict"
+							class="flex-1"
+							use:enhance={() => {
+								reviewingId = lightboxItem.inspectionId;
+								return async ({ update }) => {
+									await update();
+									reviewingId = null;
+									clampLightbox();
+								};
+							}}
+						>
+							<input type="hidden" name="inspectionId" value={lightboxItem.inspectionId} />
+							<input type="hidden" name="decision" value="overrule" />
+							<button type="submit" disabled={lbBusy} class="w-full rounded border border-[var(--color-tron-red,#ff3366)] bg-[rgba(255,51,102,0.10)] px-3 py-2 text-sm font-medium text-[var(--color-tron-red,#ff3366)] disabled:opacity-40">
+								{lbBusy ? '…' : 'Overrule'}
+							</button>
+						</form>
+					</div>
 				</div>
 			{/if}
 		</div>
