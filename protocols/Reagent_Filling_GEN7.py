@@ -35,6 +35,13 @@ def add_parameters(parameters: protocol_api.Parameters):
     )
 
     parameters.add_bool(
+        variable_name="use_tip_calibration",
+        display_name="USE TIP CALIBRATION",
+        description="OFF = dispense at nominal well position. ON = shift X/Y by the calibrator tip-bend probe.",
+        default=False
+    )
+
+    parameters.add_bool(
         variable_name="tiprack_refilled",
         display_name="Tiprack Refilled",
         description="Set to True if you have refilled the tiprack. Resets tip tracking to position A1.",
@@ -436,53 +443,77 @@ def run(protocol: protocol_api.ProtocolContext):
             ser = _find_calibrator(wait_s=8)
     
     try:
-        # Read offset data with retry logic
-        try:
-            serial_write_with_retry(ser, b'C')
-            offset_data_raw = serial_read_with_retry(ser)
-            offset_data = str(offset_data_raw).split(':')
-            if len(offset_data) >= 2:
-                offset['x'] = float(offset_data[0][2:])
-                offset['y'] = float(offset_data[1][:-5])
-                protocol.comment(f'Offset calibration: x={offset["x"]}, y={offset["y"]}')
-            else:
-                raise ValueError('Invalid offset data format')
-        except Exception as e:
-            # Do NOT bail the run here. The 'C' baseline read can come back blank or
-            # malformed even when the calibrator is otherwise fine — operators have
-            # resumed past this in the Opentrons app and the run + per-tip probe still
-            # work. Pause so the operator can choose to continue, then proceed with a
-            # zero baseline (the per-tip X/Y probe below still runs; in bims_native mode
-            # the global offset is applied separately via set_offset). Never `return`.
-            protocol.pause(
-                f'Could not read offset calibration ({str(e)}). '
-                f'Click Resume to START THE RUN ANYWAY (zero baseline; per-tip '
-                f'calibration still runs), or Cancel/Stop to end.'
-            )
-            offset['x'] = 0.0
-            offset['y'] = 0.0
-            protocol.comment('Continuing without serial offset baseline — using x=0.0, y=0.0.')
-
-        # Read particle ID (which carriage/deck is loaded) with retry-on-resume —
-        # never bail to an empty run. 'I' is reliable in practice; if it ever returns
-        # garbage the operator can Resume to re-read (or Cancel/Stop to end).
-        carriage = None
-        while carriage is None:
+        # The 'C' offset baseline only feeds the per-tip X/Y probe below, so when
+        # tip calibration is disabled there is nothing to read — skip the serial
+        # exchange (and its could-not-read pause) entirely.
+        if not protocol.params.use_tip_calibration:
+            protocol.comment('Tip calibration disabled — skipping offset baseline read (x=0.0, y=0.0).')
+        else:
+            # Read offset data with retry logic
             try:
-                serial_write_with_retry(ser, b'I')
-                particle_id_raw = serial_read_with_retry(ser)
-                # Decode bytes to string and strip whitespace/newlines, then extract 24-character ID
-                particle_id = particle_id_raw.decode('utf-8', errors='ignore').strip()[:24]
-                if particle_id not in carriages:
-                    raise ValueError(f'Unknown particle ID: {particle_id}')
-                carriage = carriages[particle_id]
+                serial_write_with_retry(ser, b'C')
+                offset_data_raw = serial_read_with_retry(ser)
+                offset_data = str(offset_data_raw).split(':')
+                if len(offset_data) >= 2:
+                    offset['x'] = float(offset_data[0][2:])
+                    offset['y'] = float(offset_data[1][:-5])
+                    protocol.comment(f'Offset calibration: x={offset["x"]}, y={offset["y"]}')
+                else:
+                    raise ValueError('Invalid offset data format')
             except Exception as e:
-                if protocol.is_simulating():
-                    return  # analysis pass: don't loop on a (no-op) pause
+                # Do NOT bail the run here. The 'C' baseline read can come back blank or
+                # malformed even when the calibrator is otherwise fine — operators have
+                # resumed past this in the Opentrons app and the run + per-tip probe still
+                # work. Pause so the operator can choose to continue, then proceed with a
+                # zero baseline (the per-tip X/Y probe below still runs; in bims_native mode
+                # the global offset is applied separately via set_offset). Never `return`.
                 protocol.pause(
-                    f'Could not read the deck/particle ID ({str(e)}). Check the '
-                    f'calibrator, then click Resume to retry (or Cancel/Stop to end).'
+                    f'Could not read offset calibration ({str(e)}). '
+                    f'Click Resume to START THE RUN ANYWAY (zero baseline; per-tip '
+                    f'calibration still runs), or Cancel/Stop to end.'
                 )
+                offset['x'] = 0.0
+                offset['y'] = 0.0
+                protocol.comment('Continuing without serial offset baseline — using x=0.0, y=0.0.')
+
+        # Read particle ID (which carriage/deck is loaded). The calibrator's USB
+        # serial ALSO carries the Particle device's system log ("0014455145 [system]
+        # INFO ..."), so a single readline() after 'I' often returns a log line
+        # instead of the ID — that is what forced operators to hit Resume 5-10 times
+        # per run on R04. Instead: drain the backlog, send 'I', then scan every line
+        # that arrives in a short window for a KNOWN carriage ID, retrying a few
+        # times internally before involving the operator.
+        def _read_particle_id(attempts=4, window_s=2.5):
+            for _attempt in range(attempts):
+                try:
+                    ser.reset_input_buffer()
+                    serial_write_with_retry(ser, b'I')
+                    _deadline = time.time() + window_s
+                    _buf = ''
+                    while time.time() < _deadline:
+                        _line = ser.readline()
+                        if not _line:
+                            continue
+                        _buf += _line.decode('utf-8', errors='ignore')
+                        for _pid in carriages:
+                            if _pid in _buf:
+                                return _pid
+                except Exception as e:
+                    protocol.comment(f'Particle ID read attempt {_attempt + 1} failed: {str(e)}')
+            return None
+
+        carriage = None
+        particle_id = _read_particle_id()
+        while particle_id is None:
+            if protocol.is_simulating():
+                return  # analysis pass: don't loop on a (no-op) pause
+            protocol.pause(
+                'Could not read the deck/particle ID from the calibrator (no known '
+                'deck ID in its serial output). Check the calibrator, then click '
+                'Resume to retry (or Cancel/Stop to end).'
+            )
+            particle_id = _read_particle_id()
+        carriage = carriages[particle_id]
         protocol.move_labware(labware=carriage, new_location=1)
         # Apply per-robot offsets to all well positions on this labware
         carriage.set_offset(
@@ -564,6 +595,16 @@ def run(protocol: protocol_api.ProtocolContext):
                     protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} — next tip will be {_all_tips[_tip_index].well_name} (index {_tip_index})')
                 else:
                     protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} — rack now empty')
+
+            # Per-tip bend calibration is OPT-IN (use_tip_calibration). When disabled,
+            # skip the physical X/Y limit-switch probe entirely and dispense at the
+            # nominal well position — no probe-derived shift. A miscalibrated/faulty
+            # calibrator returns bad offsets that push the tip off the target hole, so
+            # OFF restores nominal positioning. The tip is already picked up and the tip
+            # tracker already advanced above, so returning here loses nothing but the probe.
+            if not protocol.params.use_tip_calibration:
+                protocol.comment('Per-tip calibration DISABLED — nominal position, no X/Y probe.')
+                return { 'x': 0.0, 'y': 0.0 }
 
             pipette.move_to(types.Location(types.Point(x=cal_x, y=cal_y, z=z_cal), carriage), speed=None)
 
