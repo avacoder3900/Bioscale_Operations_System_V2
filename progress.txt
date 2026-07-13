@@ -3693,3 +3693,31 @@ Source: branch master @ commit f65db559e (merge of feat/single-photo-capture PR 
 Retrieve this exact code: git checkout master at commit f65db559e
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: /capture single-photo workflow — one photo per cartridge, lock releases after it; 2-photo front/back flow removed.
+
+================================================================================
+2026-07-10 — feat/cv-stream-pipeline-guide — Stream pipeline guide + CV nav reorder
+================================================================================
+Per user: the Image Stream should teach the data flow for making a CV model,
+and the CV dropdown needed reordering.
+
+1. CV nav dropdown (src/routes/cv/+layout.svelte): reordered to Image Stream,
+   Projects & Models, Capture, Label, Stations (Induct kept, moved after
+   Stations; Back to BIMS last). Forensic Capture REMOVED from this menu —
+   it now lives in the Cart Mfg sidebar instead
+   (src/routes/manufacturing/cart-mfg/+layout.svelte, added after Post-Mortem,
+   links to /cv/forensic-capture).
+
+2. Image Stream pipeline guide (src/routes/cv/stream/+page.svelte + server):
+   a 4-step "How a CV model gets made" banner — 1 Capture (photos flow in
+   automatically from /capture + inline inspects), 2 Review here ("you are
+   here"; live unreviewed/reviewed counts), 3 Create a project (live project
+   count, links /cv/projects), 4 Train & deploy (live deployed-model count).
+   Footer line spells out the data flow: capture station → image stream →
+   project training set → trained model → deployed back to capture phases.
+   Collapsible via a "How do I make a CV model?" header button; collapsed
+   state persists in localStorage so daily reviewers see it once. Server load
+   adds two CvProject counts (total + activeModelVersion set) to the existing
+   Promise.all.
+
+npm run check: 11 errors / 434 warnings — all pre-existing baseline
+(r2.ts, barcode-detect.ts, AskBimsWidget, assembly page), zero in touched files.
