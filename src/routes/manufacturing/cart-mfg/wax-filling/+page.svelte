@@ -614,6 +614,68 @@
 		}
 	}
 
+	// ── Tip-break recovery ────────────────────────────────────────────────────
+	// The run controller's "Tip broke" button stops the run and ejects the broken tip into
+	// the trash; it hands us the last hole that actually got wax. We restart the SAME batch
+	// on a fresh OT-2 run that skips straight to that point, so only the holes that were
+	// never filled get filled. (Wax is one tip for the whole deck — no group to pick.)
+	type FillProgress = { group: string; cartridge: number; hole: number; well: string; wellsFilled: number };
+	let showResume = $state(false);
+	let resumeDetected = $state<FillProgress | null>(null);
+	let resumeCartridge = $state(1);
+	let resumeHole = $state(1);
+
+	function onTipBreak(p: FillProgress | null) {
+		resumeDetected = p;
+		// Pre-fill with the last hole that got wax. We resume AT it rather than after it:
+		// the hole the tip was over when it snapped is exactly the one you can't trust, so
+		// it gets re-done. Both fields stay editable — the operator saw what happened and
+		// we didn't.
+		resumeCartridge = p?.cartridge ?? 1;
+		resumeHole = p?.hole ?? 1;
+		showResume = true;
+	}
+
+	async function startResumeRun() {
+		if (!capturedParamsFd || !data.runState.runId) {
+			errorMsg = 'Lost the original run parameters — start the run manually below.';
+			showResume = false;
+			return;
+		}
+		// Same parameters the aborted run used, plus the resume point. A fresh tip comes for
+		// free: the protocol's tip tracker is persisted on pickup, so it already points at
+		// the next unused tip.
+		const fd = new FormData();
+		for (const [k, v] of capturedParamsFd.entries()) fd.append(k, v as string);
+		fd.set('runId', data.runState.runId);
+		fd.set('param_resume_cartridge', String(resumeCartridge));
+		fd.set('param_resume_hole', String(resumeHole));
+
+		showResume = false;
+		submitting = true;
+		errorMsg = '';
+		pendingStage = 'Running';
+		try {
+			const res = await fetch('?/startRun', {
+				method: 'POST',
+				body: fd,
+				headers: { 'x-sveltekit-action': 'true' }
+			});
+			const text = await res.text();
+			if (!res.ok || text.includes('"type":"failure"')) {
+				errorMsg = 'Could not start the resume run — start it manually below.';
+				pendingStage = null;
+			}
+			await invalidateAll();
+			if (data.runState.hasActiveRun && data.runState.stage !== 'Loading') pendingStage = null;
+		} catch (e) {
+			errorMsg = e instanceof Error ? e.message : 'Resume run failed to start';
+			pendingStage = null;
+		} finally {
+			submitting = false;
+		}
+	}
+
 	async function handleDeckLoadComplete(result: {
 		deckId: string;
 		ovenId: string;
@@ -1236,6 +1298,7 @@
 					robotId={data.opentronsRobotId}
 					robotName={data.robotName}
 					opentronsRunId={data.runState.opentronsRunId}
+					{onTipBreak}
 					onComplete={(status) => {
 						// Stamp pipetteTipState.after + consumed onto the wax run.
 						// Wax status stays 'Running' until the operator confirms
@@ -1248,6 +1311,68 @@
 					}}
 				/>
 			{/if}
+
+			{#if showResume}
+				<div class="mt-3 rounded border border-orange-500/50 bg-orange-950/30 p-4">
+					<h3 class="text-sm font-semibold text-orange-300">Resume the fill after the broken tip</h3>
+					{#if resumeDetected}
+						<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
+							The run filled <strong>{resumeDetected.wellsFilled}</strong> hole(s). The last one that
+							actually got wax was cartridge
+							<strong>{resumeDetected.cartridge}</strong>, hole
+							<strong>{resumeDetected.hole}</strong> (deck well {resumeDetected.well}).
+							It will be re-filled — the hole the tip was over when it snapped is the one you can't
+							trust. Everything from there on gets filled; everything before it is left alone.
+						</p>
+					{:else}
+						<p class="mt-1 text-xs text-yellow-300">
+							This run never dispensed anything, so there's nothing to skip — set the resume point
+							by hand, or leave it at cartridge 1 / hole 1 to fill the whole deck.
+						</p>
+					{/if}
+
+					<div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+						<label class="text-xs" style="color: var(--color-tron-text-secondary)">
+							Resume at cartridge
+							<input
+								type="number" min="1" max="24" bind:value={resumeCartridge}
+								class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
+								style="color: var(--color-tron-text)"
+							/>
+						</label>
+						<label class="text-xs" style="color: var(--color-tron-text-secondary)">
+							…and hole
+							<input
+								type="number" min="1" max="12" bind:value={resumeHole}
+								class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
+								style="color: var(--color-tron-text)"
+							/>
+						</label>
+					</div>
+
+					<p class="mt-2 text-xs" style="color: var(--color-tron-text-secondary)">
+						A fresh tip is picked up automatically. If a whole aspiration's worth of wax went into
+						the trash with the tip, top the source tube up before starting.
+					</p>
+
+					<div class="mt-3 flex gap-2">
+						<button
+							type="button" onclick={startResumeRun} disabled={submitting}
+							class="rounded border border-orange-500/60 bg-orange-900/30 px-4 py-2 text-sm font-medium text-orange-200 hover:bg-orange-900/50 disabled:opacity-40"
+						>
+							▶ Start resume run
+						</button>
+						<button
+							type="button" onclick={() => (showResume = false)} disabled={submitting}
+							class="rounded border border-[var(--color-tron-border)] px-4 py-2 text-sm disabled:opacity-40"
+							style="color: var(--color-tron-text-secondary)"
+						>
+							Cancel
+						</button>
+					</div>
+				</div>
+			{/if}
+
 			<RunExecution
 				runId={previewParam ? 'WXR-PREVIEW' : (data.runState.runId ?? '')}
 				serverRunStartTime={previewParam ? new Date() : (data.runState.runStartTime ? new Date(data.runState.runStartTime) : null)}

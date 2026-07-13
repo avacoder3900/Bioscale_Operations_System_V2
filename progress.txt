@@ -3845,8 +3845,7 @@ NOT DONE / NOT VERIFIED — READ BEFORE USING:
 1. NOT TESTED ON A REAL RUN. Nothing here has been exercised against a physical fill. The
    protocols are NOT deployed to any robot yet (R04 still runs the old reagent .py). Deploy
    and dry-run before trusting it with real cartridges.
-2. The WAX PAGE still needs its resume dialog wired (the protocol side and the shared
-   "Tip broke" button are done; wax-filling/+page.svelte does not yet pass onTipBreak).
+2. B14/B07 have not been checked — only R04 was used to prove the tip eject.
 3. The branch's base commit carries the operator's previously-uncommitted
    Reagent_Filling_GEN7.py WIP (use_tip_calibration etc.), because that is what R04 actually
    runs — basing on master would have silently reverted it on the next deploy.
