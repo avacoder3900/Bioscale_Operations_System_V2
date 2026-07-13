@@ -14,6 +14,7 @@ import { connectDB } from '$lib/server/db/connection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CartridgeRecord } from '$lib/server/db/models/cartridge-record.js';
 import { FailureLabel } from '$lib/server/db/models/failure-label.js';
+import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { getR2Url } from '$lib/server/services/r2';
 import type { PageServerLoad } from './$types';
 
@@ -105,7 +106,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		filter.qcLabel = verdict === 'approved' || verdict === 'rejected' ? verdict : { $ne: null };
 	}
 
-	const [imagesRaw, total, distinctPhases, unreviewedCount, reviewedCount, armOptionsRaw, experimentOptionsRaw, failureLabelsRaw] = await Promise.all([
+	const [imagesRaw, total, distinctPhases, unreviewedCount, reviewedCount, armOptionsRaw, experimentOptionsRaw, failureLabelsRaw, projectCount, deployedModelCount] = await Promise.all([
 		CvImage.find(filter)
 			.sort({ capturedAt: -1 })
 			.skip((page - 1) * PAGE_SIZE)
@@ -122,7 +123,11 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		CartridgeRecord.distinct('experiment', { experiment: { $nin: [null, ''] } }),
 		// The premade failure-label pick-list (Label Creation / Manage tab + tag
 		// pickers) — also the source for the Tag filter dropdown.
-		FailureLabel.find().sort({ text: 1 }).lean()
+		FailureLabel.find().sort({ text: 1 }).lean(),
+		// Pipeline-guide banner: how far along the "make a CV model" flow the
+		// lab is. Global counts, deliberately unaffected by the page filters.
+		CvProject.countDocuments({}),
+		CvProject.countDocuments({ activeModelVersion: { $ne: null } })
 	]);
 
 	const armOptions = (armOptionsRaw as string[]).sort((a, b) => a.localeCompare(b));
@@ -156,6 +161,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		pageSize: PAGE_SIZE,
 		review,
 		counts: { unreviewed: unreviewedCount, reviewed: reviewedCount },
+		pipeline: { projectCount, deployedModelCount },
 		filters: { phase, cartridgeId, verdict, fromDate, toDate, highlighted, view, arm, experiment, tag, notesSearch },
 		availablePhases: (distinctPhases as string[]).filter(Boolean).sort(),
 		armOptions,

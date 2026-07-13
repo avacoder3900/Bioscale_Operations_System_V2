@@ -1,9 +1,53 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
+	import { browser } from '$app/environment';
 	import PhotoHighlighter from '$lib/components/PhotoHighlighter.svelte';
 
 	let { data } = $props();
+
+	// "How to make a CV model" pipeline guide. Collapsed state sticks across
+	// visits so daily reviewers aren't nagged, but new users see it by default.
+	let showGuide = $state(browser ? localStorage.getItem('cv-stream-guide-collapsed') !== '1' : true);
+	function toggleGuide() {
+		showGuide = !showGuide;
+		if (browser) localStorage.setItem('cv-stream-guide-collapsed', showGuide ? '0' : '1');
+	}
+
+	const guideSteps = $derived([
+		{
+			n: 1,
+			title: 'Capture',
+			desc: 'Photos taken at Capture and the inline inspect steps (wax / reagent / post-mortem) flow into this stream automatically.',
+			stat: null,
+			href: '/capture',
+			linkText: 'Open Capture'
+		},
+		{
+			n: 2,
+			title: 'Review here',
+			desc: 'Mark every photo Pass or Fail (A / F keys in the lightbox). Reviewed photos are the model’s training data — tag failure labels on the fails.',
+			stat: `${data.counts.unreviewed.toLocaleString()} to review · ${data.counts.reviewed.toLocaleString()} done`,
+			href: null,
+			linkText: null
+		},
+		{
+			n: 3,
+			title: 'Create a project',
+			desc: 'A project is a training set — scope it to the phases (and top/bottom view) its labeled photos come from.',
+			stat: `${data.pipeline.projectCount} project${data.pipeline.projectCount === 1 ? '' : 's'}`,
+			href: '/cv/projects',
+			linkText: 'Projects & Models'
+		},
+		{
+			n: 4,
+			title: 'Train & deploy',
+			desc: 'From the project page: train a model version on your reviewed photos, then deploy it so new captures get auto-graded.',
+			stat: `${data.pipeline.deployedModelCount} deployed model${data.pipeline.deployedModelCount === 1 ? '' : 's'}`,
+			href: '/cv/projects',
+			linkText: 'Go train'
+		}
+	]);
 
 	// 'browse' = the image grid (Unreviewed/Reviewed/All); 'manage' = the
 	// failure-label editor. Client-side only — doesn't touch the review tab
@@ -276,7 +320,72 @@
 				Scroll the captures and label each one pass / fail. Reviewed images are ready for the CV model.
 			</p>
 		</div>
+		<button
+			type="button"
+			onclick={toggleGuide}
+			class="flex items-center gap-1.5 rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs font-medium text-[var(--color-tron-text-secondary)] transition-colors hover:text-[var(--color-tron-cyan)]"
+		>
+			<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+			</svg>
+			{showGuide ? 'Hide guide' : 'How do I make a CV model?'}
+		</button>
 	</div>
+
+	{#if showGuide}
+		<!-- Pipeline guide: the data flow from raw capture to a deployed model,
+		     and what the operator does at each stage. -->
+		<div class="rounded-lg border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-bg-secondary)] p-4">
+			<div class="mb-3 flex items-center justify-between">
+				<h2 class="text-sm font-semibold uppercase tracking-wide text-[var(--color-tron-cyan)]">
+					How a CV model gets made
+				</h2>
+				<button
+					type="button"
+					onclick={toggleGuide}
+					class="text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]"
+				>✕ hide</button>
+			</div>
+			<div class="grid gap-3 md:grid-cols-4">
+				{#each guideSteps as step, i (step.n)}
+					<div class="relative flex flex-col rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] p-3
+						{step.n === 2 ? 'border-[var(--color-tron-cyan)]/60' : ''}">
+						<div class="mb-1.5 flex items-center gap-2">
+							<span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold
+								{step.n === 2
+									? 'bg-[var(--color-tron-cyan)] text-[var(--color-tron-bg-primary)]'
+									: 'bg-[var(--color-tron-bg-tertiary)] text-[var(--color-tron-cyan)]'}">{step.n}</span>
+							<span class="text-sm font-semibold text-[var(--color-tron-text-primary,#e5faff)]">{step.title}</span>
+							{#if step.n === 2}
+								<span class="rounded bg-[var(--color-tron-cyan)]/15 px-1.5 py-0.5 text-[10px] font-bold uppercase text-[var(--color-tron-cyan)]">you are here</span>
+							{/if}
+						</div>
+						<p class="flex-1 text-xs leading-relaxed text-[var(--color-tron-text-secondary)]">{step.desc}</p>
+						<div class="mt-2 flex items-center justify-between gap-2">
+							{#if step.stat}
+								<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-2 py-0.5 font-mono text-[10px] text-[var(--color-tron-cyan)]">{step.stat}</span>
+							{:else}
+								<span></span>
+							{/if}
+							{#if step.href}
+								<a href={step.href} class="text-xs font-medium text-[var(--color-tron-cyan)] underline hover:opacity-80">{step.linkText} →</a>
+							{/if}
+						</div>
+						{#if i < guideSteps.length - 1}
+							<div class="absolute -right-2.5 top-1/2 hidden -translate-y-1/2 text-[var(--color-tron-cyan)] md:block">›</div>
+						{/if}
+					</div>
+				{/each}
+			</div>
+			<p class="mt-3 text-xs text-[var(--color-tron-text-secondary)]">
+				Data flow: <span class="text-[var(--color-tron-cyan)]">capture station</span>
+				→ <span class="text-[var(--color-tron-cyan)]">image stream</span> (you review)
+				→ <span class="text-[var(--color-tron-cyan)]">project training set</span>
+				→ <span class="text-[var(--color-tron-cyan)]">trained model</span>
+				→ deployed back to the capture phases, grading new photos as they arrive.
+			</p>
+		</div>
+	{/if}
 
 	<!-- Review tabs -->
 	<div class="flex flex-wrap items-center gap-2 border-b border-[var(--color-tron-border)]">
