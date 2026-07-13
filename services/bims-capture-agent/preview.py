@@ -94,6 +94,44 @@ def attach_mjpeg_route(
     app.router.add_get("/preview.mjpg", handler)
 
 
+def attach_snapshot_route(
+    app: web.Application,
+    get_frame: GetFrame,
+    authenticate: Callable[[web.Request], bool],
+) -> None:
+    """GET /snapshot.jpg — one live frame as a plain JPEG.
+
+    Lets the capture page take photos while it watches the MJPEG pathway with
+    WebRTC torn down (single-encoder mode — see the PSU-brownout note in
+    progress.txt): the browser fetches this instead of drawing the <video>
+    element to a canvas. CORS is open because the page fetches cross-origin
+    (BIMS on vercel.app → station on ts.net); auth is the same station JWT
+    as /ws and /preview.mjpg, so the header discloses nothing.
+    """
+
+    async def handler(request: web.Request) -> web.Response:
+        if not authenticate(request):
+            raise web.HTTPUnauthorized(text="bad or missing ?token=")
+        quality = _clamped_int(request.query.get("q"), 92, 30, 95)
+        loop = asyncio.get_running_loop()
+        frame = await loop.run_in_executor(None, get_frame)
+        if frame is None:
+            raise web.HTTPServiceUnavailable(text="camera not available")
+        jpeg = await loop.run_in_executor(None, _encode_jpeg, frame, quality)
+        if not jpeg:
+            raise web.HTTPInternalServerError(text="jpeg encode failed")
+        return web.Response(
+            body=jpeg,
+            content_type="image/jpeg",
+            headers={
+                "Cache-Control": "no-store",
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+
+    app.router.add_get("/snapshot.jpg", handler)
+
+
 def run_local_preview(get_frame: GetFrame) -> threading.Thread:
     """Full-screen local render on the station's own display (daemon thread)."""
 

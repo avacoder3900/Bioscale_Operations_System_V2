@@ -605,10 +605,16 @@
 			try { msg = JSON.parse(ev.data); } catch { return; }
 
 			if (msg.event === 'hello') {
-				try {
-					await startWebRtcOffer(sock);
-				} catch (e) {
-					flashBanner('err', `WebRTC offer failed: ${e instanceof Error ? e.message : e}`);
+				// Single-encoder mode: don't negotiate WebRTC while the MJPEG
+				// pathway is selected and healthy — the <img> onerror handler
+				// falls back to an offer if the fast preview turns out to be
+				// unavailable on this station.
+				if (!(mjpegPreview && !mjpegError)) {
+					try {
+						await startWebRtcOffer(sock);
+					} catch (e) {
+						flashBanner('err', `WebRTC offer failed: ${e instanceof Error ? e.message : e}`);
+					}
 				}
 				// Request current camera params so the settings panel can
 				// populate slider defaults from what the camera actually
@@ -706,6 +712,30 @@
 				return;
 			}
 		};
+	}
+
+	// Single-encoder pathway switch: the Pi must never run VP8 + JPEG encode
+	// at the same time (sustained dual-encode load browned out station 3's
+	// PSU). Watching MJPEG tears WebRTC down — on both ends, via webrtc_stop —
+	// and switching back to Classic re-offers over the same WebSocket.
+	function stopWebRtc() {
+		if (pc) { try { pc.close(); } catch { /* */ } pc = null; }
+		if (stream) {
+			stream.getTracks().forEach(t => t.stop());
+			stream = null;
+		}
+		if (videoEl) videoEl.srcObject = null;
+		if (ws && ws.readyState === WebSocket.OPEN) {
+			try { ws.send(JSON.stringify({ cmd: 'webrtc_stop' })); } catch { /* */ }
+		}
+	}
+
+	function startWebRtcIfNeeded() {
+		if (!pc && ws && ws.readyState === WebSocket.OPEN) {
+			startWebRtcOffer(ws).catch((e) =>
+				flashBanner('err', `WebRTC offer failed: ${e instanceof Error ? e.message : e}`)
+			);
+		}
 	}
 
 	async function startWebRtcOffer(sock: WebSocket) {
@@ -923,23 +953,41 @@
 			showRetakeDialog = true;
 			return;
 		}
-		if (!videoEl || !stream) {
+		// Single-encoder mode: while the MJPEG pathway is showing there is no
+		// WebRTC stream to canvas — fetch a still from the agent instead.
+		if (!mjpegShowing && (!videoEl || !stream)) {
 			flashBanner('err', 'Camera not running');
 			return;
 		}
 
 		submitting = true;
 		try {
-			const canvas = document.createElement('canvas');
-			canvas.width = videoEl.videoWidth;
-			canvas.height = videoEl.videoHeight;
-			const ctx = canvas.getContext('2d');
-			if (!ctx) throw new Error('canvas 2d context unavailable');
-			ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+			let blob: Blob;
+			if (mjpegShowing && stationHostname && stationToken) {
+				const snapRes = await fetch(
+					`https://${stationHostname}/snapshot.jpg?token=${encodeURIComponent(stationToken)}`
+				);
+				if (!snapRes.ok) {
+					throw new Error(
+						snapRes.status === 404
+							? 'This station agent lacks snapshot support — switch to the Classic pathway to capture'
+							: `Station snapshot failed: HTTP ${snapRes.status}`
+					);
+				}
+				blob = await snapRes.blob();
+			} else {
+				if (!videoEl || !stream) throw new Error('Camera not running');
+				const canvas = document.createElement('canvas');
+				canvas.width = videoEl.videoWidth;
+				canvas.height = videoEl.videoHeight;
+				const ctx = canvas.getContext('2d');
+				if (!ctx) throw new Error('canvas 2d context unavailable');
+				ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
 
-			const blob: Blob = await new Promise((resolve, reject) => {
-				canvas.toBlob(b => b ? resolve(b) : reject(new Error('toBlob failed')), 'image/jpeg', 0.92);
-			});
+				blob = await new Promise((resolve, reject) => {
+					canvas.toBlob(b => b ? resolve(b) : reject(new Error('toBlob failed')), 'image/jpeg', 0.92);
+				});
+			}
 
 			const form = new FormData();
 			form.append('file', blob, `capture.jpg`);
@@ -1471,6 +1519,9 @@
 						onerror={() => {
 							mjpegError = true;
 							flashBanner('info', 'Fast preview unavailable on this station — using WebRTC view.', 4000);
+							// Single-encoder mode skipped the offer at connect;
+							// bring WebRTC up now that MJPEG is out.
+							startWebRtcIfNeeded();
 						}}
 					/>
 				{/if}
@@ -1490,6 +1541,7 @@
 							onclick={() => {
 								mjpegError = false;
 								mjpegPreview = true;
+								stopWebRtc();
 							}}
 						>
 							⚡ Microscope fast (MJPEG ~35ms){mjpegShowing ? ' · LIVE' : ''}
@@ -1499,7 +1551,10 @@
 							class="rounded border px-3 py-1 font-medium transition-colors {!mjpegShowing
 								? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]'
 								: 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
-							onclick={() => (mjpegPreview = false)}
+							onclick={() => {
+								mjpegPreview = false;
+								startWebRtcIfNeeded();
+							}}
 						>
 							Classic (WebRTC ~260ms){!mjpegShowing ? ' · LIVE' : ''}
 						</button>

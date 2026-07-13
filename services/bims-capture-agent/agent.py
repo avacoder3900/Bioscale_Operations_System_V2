@@ -101,7 +101,7 @@ async def health(_request: web.Request) -> web.Response:
             "scanner_ok": scanner_mod.is_available(),
             "led_ok": False,
             "robot_arm_ok": False,
-            "capabilities": ["sequence"],
+            "capabilities": ["sequence", "snapshot"],
             "uptime_s": int(time.monotonic() - _started_at),
         }
     )
@@ -443,6 +443,14 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
                             "sdp": pc.localDescription.sdp,
                         }
                     )
+                elif cmd == "webrtc_stop":
+                    # Single-encoder mode: the page watches the MJPEG pathway
+                    # and explicitly kills the VP8 encode instead of leaving a
+                    # hidden WebRTC stream burning CPU (sustained dual-encode
+                    # load browned out station 3's PSU — see progress.txt
+                    # 2026-07-13). The page re-offers sdp_offer to resume.
+                    await teardown_pc()
+                    await ws.send_json({"event": "webrtc_stopped"})
                 elif cmd == "ice_candidate":
                     candidate_payload = payload.get("candidate")
                     if pc is None or not isinstance(candidate_payload, dict):
@@ -617,6 +625,12 @@ def build_app() -> web.Application:
     # grab_live (stream resolution) — grab_still renegotiates the sensor
     # per call and must never run per-frame.
     preview_mod.attach_mjpeg_route(
+        app, camera_mod.grab_live, lambda req: _ws_authenticate(req).ok
+    )
+    # Single JPEG still for photo capture while WebRTC is torn down
+    # (single-encoder mode) — the page fetches this instead of canvasing
+    # the <video> element.
+    preview_mod.attach_snapshot_route(
         app, camera_mod.grab_live, lambda req: _ws_authenticate(req).ok
     )
     app.on_startup.append(_on_startup)

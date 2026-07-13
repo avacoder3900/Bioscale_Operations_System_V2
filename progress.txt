@@ -3556,3 +3556,26 @@ Deployment: preview — https://bioscale-operations-system-mongodb-78ji2jlq9-bre
 Source: branch cv-microscope @ commit 33710c12
 Retrieve this exact code: git checkout cv-microscope at commit 33710c12
 What this deployment is for: video pathway A/B switch on /capture (MJPEG vs WebRTC buttons) — lag testing on CV Station test 3 (microscope). Station 3 BIMS_URL repointed to the stable branch alias so it tracks future pushes.
+
+================================================================================
+2026-07-13 — cv-microscope — Single-encoder video pathways (PSU brownout mitigation)
+================================================================================
+Station 3 kept losing power during video testing (uptime reset each time =
+5V rail collapse, matching the Jul-10 PSU-sag suspicion). Root cause of the
+load spike: the A/B pathway design ran BOTH encoders — WebRTC/VP8 always
+negotiated + hidden under the MJPEG view. Now the pathways are exclusive:
+- Page: picking MJPEG closes the RTCPeerConnection and sends new WS cmd
+  webrtc_stop (agent tears down its pc → VP8 encode stops); picking Classic
+  re-offers over the existing WS. On 'hello' the offer is skipped while the
+  MJPEG pathway is selected/healthy; the <img> onerror falls back to WebRTC
+  (keeps old agents like station 2 working).
+- Photo capture while on MJPEG: new agent route GET /snapshot.jpg (station
+  JWT auth, one grab_live frame, q default 92, CORS * because the page
+  fetches cross-origin) — capturePhoto fetches it instead of canvasing the
+  <video>. /health capabilities now ["sequence","snapshot"].
+NOTE: persistent journald on station 3 was found NOT enabled (the 7/10 fix
+didn't stick — "no persistent journal was found"), so pre-crash logs are
+lost; enabling it + a power monitor was blocked by permissions this session.
+Files: services/bims-capture-agent/{agent.py,preview.py},
+src/routes/capture/+page.svelte. Agent deployed to station 3 via scp +
+restart (capabilities verified). svelte-check: 10-error baseline, 0 new.
