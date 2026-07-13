@@ -722,7 +722,6 @@ def run(protocol: protocol_api.ProtocolContext):
                 jump_height = 60
                 tip_dispenses = 180
                 tip_change_count = 0
-                well_prejump_height = 5
                 # Process all wells
                 well_index = 0
                 
@@ -819,15 +818,21 @@ def run(protocol: protocol_api.ProtocolContext):
                         current_rate = dispense_rates[gate]
                         
                         if jump_count % jump_frequency == 0:
-                            # The two protocol.delay(0.3) calls that used to sit in here are
-                            # gone: they made the gantry stop dead just above the hole and
-                            # then plunge, which is the "pause, then it pushes too hard"
-                            # the operator was seeing. Nothing depends on the dwell — the
-                            # moves are already sequential — so the approach is now one
-                            # continuous motion, like reagent's.
-                            pipette.move_to(well.top(jump_height))
+                            # ONE waypoint, high above the hole, then the dispense descends
+                            # straight in. This block used to be five stop-start segments:
+                            #   move to top+60 (no adjust) -> STOP
+                            #   move to top+60 (adjust)    -> STOP   (same height, ~0mm apart)
+                            #   delay 0.3s                 -> PAUSE
+                            #   move to top+5              -> STOP   <- right above the hole
+                            #   delay 0.3s                 -> PAUSE
+                            #   dispense at top-3.0        -> plunge
+                            # Every move_to is a separate command and the gantry decelerates
+                            # to a dead stop at each one, so the tip halted 5mm over the hole
+                            # and then drove down into it. That is the "pause, then it pushes
+                            # too hard" — it is not the delays alone, it is the waypoint.
+                            # Collapsed to a single high move so the descent into the hole is
+                            # one continuous motion with nothing to stop for.
                             pipette.move_to(well.top(jump_height).move(types.Point(adjust['x'], adjust['y'], 0.0)))
-                            pipette.move_to(well.top(well_prejump_height).move(types.Point(adjust['x'], adjust['y'], 0.0)))
 
                         pipette.dispense(current_volume, well.top(well_z_depth).move(types.Point(adjust['x'], adjust['y'], 0.0)), rate=current_rate)
                         

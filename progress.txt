@@ -3946,3 +3946,41 @@ scripts/test-fill-resume.py: ALL PASS (unchanged).
 STILL OPEN: 1.0mm is a clearance-driven guess, not a wax-transfer-validated number. Watch the
 first run — if holes under-fill, raise it toward 2.0; if it still catches, go negative and let
 it hover like reagent. That is what the parameter is for. B07/B14 wax NOT touched.
+
+================================================================================
+2026-07-13 — feat/fill-resume-after-tip-break — wax: the pause was a WAYPOINT, not the delays
+================================================================================
+Operator, after the first fix: "i don't want it to pause before entering the hole it should
+just flow straight through". Correct — removing the two protocol.delay(0.3) calls was not
+enough. The approach block was FIVE stop-start segments:
+    move_to top+60 (no adjust)   -> gantry decelerates to a dead STOP
+    move_to top+60 (with adjust) -> STOP  (same height, a fraction of a mm away)
+    delay 0.3s                   -> PAUSE
+    move_to top+5                -> STOP  <-- hanging right over the hole
+    delay 0.3s                   -> PAUSE
+    dispense at top-3.0          -> plunge in from a standstill
+Every move_to is its own Opentrons command and the gantry comes to rest at each one. So even
+with the delays gone, the tip still HALTED 5mm above the hole and then drove down into it from
+zero velocity. The waypoint was the pause. Collapsed the whole block to a single high move, so
+the descent into the hole is one continuous motion with nothing to stop for:
+    move_to top+60 (with adjust) -> dispense at top-(dispense_depth)
+`well_prejump_height` is now unused and removed.
+
+Note this block only ever ran on well #1 of a run (jump_frequency=288), which is exactly where
+the operator watched the tip snap.
+
+Between wells the tip still arcs (up, across, down) — that is Opentrons' own path planning and
+is unavoidable while the tip has to come OUT of one hole before it can go into the next. The
+way to make it perfectly flat is to not enter the hole at all: set Wax dispense depth negative
+and it hovers above the rim exactly like reagent and the Studio do. That is now a one-field
+change on the BIMS start form, no redeploy.
+
+BIMS WIRING — VERIFIED, NOTHING TO DO. The new RTPs flow to the operator with zero BIMS code:
+ProtocolStartPanel reflects over the protocol's parametersSchema and already renders `float`
+as a number input honouring minimum/maximum (step="any"), and wax's startRun action parseFloat's
+param_dispense_depth into runTimeParameterValues. So "Wax dispense depth (mm)" and "USE TIP
+CALIBRATION" appear on the wax Start Run form automatically.
+
+DEPLOYED to R04: protocol 3713361b-f14c-422b-8620-f8145ca981e9 (was 3167a9ef).
+On-robot analysis: completed, 21 RTPs, dispense_depth default=1.0, use_tip_calibration=false.
+scripts/test-fill-resume.py: ALL PASS.
