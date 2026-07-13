@@ -17,6 +17,35 @@ metadata = {
 
 requirements = {"robotType": "OT-2", "apiLevel": "2.19"}
 
+# Cartridges on a deck. The destination list is always laid out as this many equal
+# contiguous blocks, so cartridge N is the slice [(N-1)*per : N*per].
+CARTS_ON_DECK = 24
+
+
+def resume_window(total_wells, cartridges_per_deck, resume_cartridge=1, resume_hole=1,
+                  carts_on_deck=CARTS_ON_DECK):
+    """Which slice of the destination list should this run actually fill?
+
+    `cartridges_per_deck` has always truncated the END of the list (fill the first N
+    cartridges). Resume adds a START, so a run aborted by a broken tip can be picked up
+    exactly where it died instead of re-filling the whole deck.
+
+    resume_cartridge/resume_hole are 1-based (that's how an operator counts them on the
+    bench). The default (1, 1) yields start=0 — i.e. a normal full run, byte-for-byte the
+    old behaviour.
+
+    Returns (start, end) to be used as well_names[start:end].
+
+    Kept module-level and pure ON PURPOSE: the fill loop is wrapped in
+    `if dispense and not protocol.is_simulating()`, so an Opentrons analysis/simulation
+    never executes it and cannot catch a slicing bug. This function is the part that can
+    be tested on its own — see scripts/test-fill-resume.py.
+    """
+    wells_on_cart = int(total_wells / carts_on_deck)
+    end = min(cartridges_per_deck * wells_on_cart, total_wells)
+    start = (resume_cartridge - 1) * wells_on_cart + (resume_hole - 1)
+    return max(0, min(start, end)), end
+
 def add_parameters(parameters: protocol_api.Parameters):
     parameters.add_int(
         variable_name="cartridges",
@@ -136,6 +165,20 @@ def add_parameters(parameters: protocol_api.Parameters):
     parameters.add_float(variable_name="z_cal", display_name="Tip-calibrator Z",
         description="Tip-calibration probe Z (p20 wax tip).",
         default=34.491, minimum=0.0, maximum=200.0, unit="mm")
+
+    # ── Resume after a broken tip ────────────────────────────────────────────────
+    # A tip that snaps mid-fill used to mean re-running the whole deck. These let a
+    # fresh run pick up exactly where the aborted one died: it starts at (cartridge,
+    # hole) and fills everything from there on. Defaults (1, 1) = a normal full run,
+    # so an operator who never touches them sees no change. BIMS fills these in
+    # automatically from the aborted run's command log; they are 1-based because
+    # that is how the operator counts cartridges and holes on the bench.
+    parameters.add_int(variable_name="resume_cartridge", display_name="Resume: cartridge",
+        description="Start filling at this cartridge (1 = from the beginning). Set by the Tip-broke recovery flow.",
+        default=1, minimum=1, maximum=24)
+    parameters.add_int(variable_name="resume_hole", display_name="Resume: hole in that cartridge",
+        description="Within the resume cartridge, start at this hole (1 = its first hole).",
+        default=1, minimum=1, maximum=12)
 
 def run(protocol: protocol_api.ProtocolContext):
     # === HOSTNAME DEBUG — remove after confirming ===
@@ -608,11 +651,28 @@ def run(protocol: protocol_api.ProtocolContext):
                 adjust: XY offset adjustment dict
                 cartridges_per_deck: Number of cartridges to fill
             """
-            wells_to_fill_names = []
-            wells_on_cart = int(len(well_names)/24)
-           
-            for i in range(cartridges_per_deck * wells_on_cart):
-                wells_to_fill_names.append(well_names[i])
+            start_i, end_i = resume_window(
+                len(well_names), cartridges_per_deck, resume_cartridge, resume_hole)
+            wells_to_fill_names = well_names[start_i:end_i]
+
+            if start_i > 0:
+                protocol.comment(
+                    f'RESUME: starting at cartridge {resume_cartridge} hole {resume_hole} '
+                    f'(well index {start_i}) — skipping {start_i} already-filled well(s), '
+                    f'{len(wells_to_fill_names)} to go.'
+                )
+                # The source tube already gave up the skipped wells' worth of wax in the
+                # aborted run, so model what is ACTUALLY left rather than a full tube —
+                # otherwise the liquid-height maths aspirates above the surface and draws
+                # air. source_volume arrives as (dead_volume + wax for ALL the wells this
+                # run would have filled), so subtracting the skipped wells' wax leaves
+                # exactly (dead_volume + wax for the wells that remain).
+                skipped_volume = sum(
+                    well_volumes[COLUMN_GATE.get(get_well_column(w), 'wax_gate4')]
+                    for w in well_names[:start_i]
+                )
+                source_volume = source_volume - skipped_volume
+                protocol.comment(f'RESUME: source volume adjusted down by {skipped_volume:.1f}uL already dispensed.')
 
             for source in sources:
                 source_well = tuberack[source]
@@ -883,6 +943,11 @@ def run(protocol: protocol_api.ProtocolContext):
 
         wax = protocol.params.wax
         cartridges_per_deck = protocol.params.cartridges
+
+        # Resume point for a run restarted after a broken tip. (1, 1) = normal full run.
+        # Read into the enclosing scope so dispense_reagent() closes over them.
+        resume_cartridge = protocol.params.resume_cartridge
+        resume_hole = protocol.params.resume_hole
 
         tube_locations = {
             'wax': 'A3',

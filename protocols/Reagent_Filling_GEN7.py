@@ -17,6 +17,69 @@ metadata = {
 
 requirements = {"robotType": "OT-2", "apiLevel": "2.19"}
 
+# Cartridges on a deck. Every destination list is laid out as this many equal contiguous
+# blocks, so cartridge N is the slice [(N-1)*per : N*per].
+CARTS_ON_DECK = 24
+
+# The order the reagent groups are dispensed in — MUST match the dispatch order in run().
+# Each group is a full pass over the deck with its OWN tip, which is why a resume point
+# needs to name a group as well as a cartridge/hole: "cartridge 24, hole 3" is ambiguous
+# until you know which reagent was in the tip when it broke.
+GROUP_ORDER = [
+    'well_2a', 'well_2b', 'well_2c',
+    'well_3a', 'well_3b', 'well_3c',
+    'well_4a', 'well_4b', 'well_4c',
+    'well_5a', 'well_5b', 'well_5c',
+    'well_2', 'well_3', 'well_4', 'well_5',
+]
+
+
+def resume_window(total_wells, cartridges_per_deck, resume_cartridge=1, resume_hole=1,
+                  carts_on_deck=CARTS_ON_DECK):
+    """Which slice of a group's destination list should this run actually fill?
+
+    `cartridges_per_deck` has always truncated the END of the list (fill the first N
+    cartridges). Resume adds a START, so a run aborted by a broken tip can be picked up
+    exactly where it died instead of re-filling the whole deck.
+
+    resume_cartridge/resume_hole are 1-based (that's how an operator counts them on the
+    bench). The default (1, 1) yields start=0 — a normal full run, identical to the old
+    behaviour.
+
+    Returns (start, end) to be used as wells[start:end].
+
+    Kept module-level and pure ON PURPOSE: the fill loop is wrapped in
+    `if dispense and not protocol.is_simulating()`, so an Opentrons analysis/simulation
+    never executes it and cannot catch a slicing bug. This is the piece that CAN be
+    tested standalone — see scripts/test-fill-resume.py.
+    """
+    wells_on_cart = int(total_wells / carts_on_deck)
+    end = min(cartridges_per_deck * wells_on_cart, total_wells)
+    start = (resume_cartridge - 1) * wells_on_cart + (resume_hole - 1)
+    return max(0, min(start, end)), end
+
+
+def group_resume_plan(group_key, resume_group):
+    """How should `group_key` be treated on a resumed run?
+
+      'skip'   — it finished before the tip broke; don't dispense it again.
+      'resume' — the tip broke during THIS group; start partway in.
+      'full'   — it never started; fill it end to end.
+
+    resume_group is '' (or a name not in GROUP_ORDER) for a normal run → always 'full'.
+    """
+    if not resume_group or resume_group not in GROUP_ORDER:
+        return 'full'
+    if group_key not in GROUP_ORDER:
+        return 'full'
+    gi = GROUP_ORDER.index(group_key)
+    ri = GROUP_ORDER.index(resume_group)
+    if gi < ri:
+        return 'skip'
+    if gi == ri:
+        return 'resume'
+    return 'full'
+
 def add_parameters(parameters: protocol_api.Parameters):
     parameters.add_int(
         variable_name="cartridges",
@@ -197,6 +260,44 @@ def add_parameters(parameters: protocol_api.Parameters):
     parameters.add_float(variable_name="z_cal", display_name="Tip-calibrator Z",
         description="Tip-calibration probe Z (p300 200uL reagent tip).",
         default=40.8, minimum=0.0, maximum=200.0, unit="mm")
+
+    # ── Resume after a broken tip ────────────────────────────────────────────────
+    # A tip that snaps mid-fill used to mean re-running the whole deck. These let a fresh
+    # run pick up exactly where the aborted one died. Reagent dispenses each group as a
+    # separate full pass over the deck with its OWN tip, so the resume point needs all
+    # three: WHICH reagent was in the tip, and how far into the deck it had got.
+    # Groups before resume_reagent are skipped (already done); groups after it run in
+    # full (never started). Empty resume_reagent = a normal full run, so an operator who
+    # ignores these sees no change at all. BIMS fills them in from the aborted run's
+    # command log.
+    parameters.add_str(variable_name="resume_reagent", display_name="Resume: reagent group",
+        description="Reagent whose tip broke. Blank = normal full run.",
+        choices=[
+            {"display_name": "— none (normal full run) —", "value": ""},
+            {"display_name": "Beads (well_2)", "value": "well_2"},
+            {"display_name": "Tracer (well_3)", "value": "well_3"},
+            {"display_name": "Wash (well_4)", "value": "well_4"},
+            {"display_name": "Elution (well_5)", "value": "well_5"},
+            {"display_name": "Beads a (well_2a)", "value": "well_2a"},
+            {"display_name": "Beads b (well_2b)", "value": "well_2b"},
+            {"display_name": "Beads c (well_2c)", "value": "well_2c"},
+            {"display_name": "Tracer a (well_3a)", "value": "well_3a"},
+            {"display_name": "Tracer b (well_3b)", "value": "well_3b"},
+            {"display_name": "Tracer c (well_3c)", "value": "well_3c"},
+            {"display_name": "Wash a (well_4a)", "value": "well_4a"},
+            {"display_name": "Wash b (well_4b)", "value": "well_4b"},
+            {"display_name": "Wash c (well_4c)", "value": "well_4c"},
+            {"display_name": "Elution a (well_5a)", "value": "well_5a"},
+            {"display_name": "Elution b (well_5b)", "value": "well_5b"},
+            {"display_name": "Elution c (well_5c)", "value": "well_5c"},
+        ],
+        default="")
+    parameters.add_int(variable_name="resume_cartridge", display_name="Resume: cartridge",
+        description="Within the resume reagent, start filling at this cartridge (1 = from the beginning).",
+        default=1, minimum=1, maximum=24)
+    parameters.add_int(variable_name="resume_hole", display_name="Resume: hole in that cartridge",
+        description="Within the resume cartridge, start at this hole (1 = its first hole).",
+        default=1, minimum=1, maximum=12)
 
 def run(protocol: protocol_api.ProtocolContext):
     # =====================================================================
@@ -803,7 +904,8 @@ def run(protocol: protocol_api.ProtocolContext):
             return liquid_surface_z
 
 
-        def dispense_reagent(sources, wells, well_volume, source_volume, adjust, cartridges_per_deck):
+        def dispense_reagent(sources, wells, well_volume, source_volume, adjust, cartridges_per_deck,
+                             resume_cart=1, resume_hole_n=1):
             """
             Aspirates reagent from source tubes and dispenses into cartridge wells.
 
@@ -816,11 +918,32 @@ def run(protocol: protocol_api.ProtocolContext):
               6. Convert to depth below rim and send the pipette command
             """
 
-            # Build list of wells to fill based on how many cartridges we're doing
-            wells_to_fill = []
-            wells_on_cart = int(len(wells) / 24)
-            for i in range(cartridges_per_deck * wells_on_cart):
-                wells_to_fill.append(wells[i])
+            # Build list of wells to fill: [resume point, cartridges_per_deck).
+            # start_index > 0 only on a run resumed after a broken tip.
+            start_i, end_i = resume_window(
+                len(wells), cartridges_per_deck, resume_cart, resume_hole_n)
+            wells_to_fill = wells[start_i:end_i]
+
+            if start_i > 0:
+                protocol.comment(
+                    f'RESUME: starting at cartridge {resume_cart} hole {resume_hole_n} '
+                    f'(well index {start_i}) — skipping {start_i} already-filled well(s), '
+                    f'{len(wells_to_fill)} to go.'
+                )
+                # The source tube already gave up the skipped wells' worth of reagent in
+                # the aborted run, so model what is ACTUALLY left rather than a full tube
+                # — otherwise the liquid-height maths aspirates above the surface and
+                # draws air. source_volume arrives as (dead_volume + reagent for ALL the
+                # wells this run would have filled), so subtracting the skipped wells'
+                # reagent leaves exactly (dead_volume + reagent for the wells that remain).
+                # NOTE: the aspiration overhead (disposal_volume + aspirate_remainder) is
+                # blown back INTO the source tube, so it doesn't enter this sum. What IS
+                # unaccounted for is the reagent lost with the broken tip itself (up to one
+                # aspiration's worth); the 50uL dead_volume absorbs part of it — top the
+                # tube up if a whole batch was lost.
+                source_volume = source_volume - (start_i * well_volume)
+                protocol.comment(
+                    f'RESUME: source volume adjusted down by {start_i * well_volume:.1f}uL already dispensed.')
 
             for source in sources:
                 source_well = tuberack[source]
@@ -1051,6 +1174,15 @@ def run(protocol: protocol_api.ProtocolContext):
         #specify from 1 - 20 how many cartidges are to be filled
         cartridges_per_deck = protocol.params.cartridges
 
+        # Resume point for a run restarted after a broken tip. Blank reagent = normal run.
+        resume_reagent = (protocol.params.resume_reagent or '').strip()
+        resume_cartridge = protocol.params.resume_cartridge
+        resume_hole = protocol.params.resume_hole
+        if resume_reagent:
+            protocol.comment(
+                f'RESUME RUN: reagent={resume_reagent}, cartridge={resume_cartridge}, hole={resume_hole}. '
+                f'Groups before {resume_reagent} are skipped; groups after it run in full.')
+
         # Gen6: 4 reagent types - well_2 (beads)=D3, well_3 (wash)=D4, well_4 (wash)=D5, well_5 (elution)=D6
         tube_locations = {
             'well_2a': 'D3',
@@ -1155,70 +1287,46 @@ def run(protocol: protocol_api.ProtocolContext):
                 # Normal path - pick up new tip and calibrate
                 return pick_up_and_calibrate_tip()
 
+        # Dispense each enabled reagent group, in GROUP_ORDER. Every group is a full pass
+        # over the deck with its own tip, which is why a resume point has to name a group.
+        #
+        # On a resumed run (resume_reagent set):
+        #   groups BEFORE it  -> 'skip'   (they finished before the tip broke)
+        #   the group itself  -> 'resume' (start at resume_cartridge / resume_hole)
+        #   groups AFTER it   -> 'full'   (they never started)
+        # On a normal run resume_reagent is '' and every group is 'full', so this behaves
+        # exactly as the old 16 if-blocks did.
         if dispense and not protocol.is_simulating():
-            if well_2a:
-                adjust = get_calibration()
-                dispense_reagent([tube_locations['well_2a']], final_destinations['well_2a'], well_volume=well_volumes['well_2a'], source_volume= source_volumes['well_2a'], adjust=adjust, cartridges_per_deck = cartridges_per_deck)
-            
-            if well_2b:
-                adjust = get_calibration()
-                dispense_reagent([tube_locations['well_2b']], final_destinations['well_2b'], well_volume=well_volumes['well_2b'], source_volume= source_volumes['well_2b'], adjust=adjust, cartridges_per_deck = cartridges_per_deck)
+            enabled = {
+                'well_2a': well_2a, 'well_2b': well_2b, 'well_2c': well_2c,
+                'well_3a': well_3a, 'well_3b': well_3b, 'well_3c': well_3c,
+                'well_4a': well_4a, 'well_4b': well_4b, 'well_4c': well_4c,
+                'well_5a': well_5a, 'well_5b': well_5b, 'well_5c': well_5c,
+                'well_2': well_2, 'well_3': well_3, 'well_4': well_4, 'well_5': well_5,
+            }
+            for group in GROUP_ORDER:
+                if not enabled.get(group):
+                    continue
 
-            if well_2c:
-                adjust = get_calibration()
-                dispense_reagent([tube_locations['well_2c']], final_destinations['well_2c'], well_volume=well_volumes['well_2c'], source_volume= source_volumes['well_2c'], adjust=adjust, cartridges_per_deck = cartridges_per_deck)
+                plan = group_resume_plan(group, resume_reagent)
+                if plan == 'skip':
+                    protocol.comment(f'RESUME: skipping {group} — already dispensed before the tip broke.')
+                    continue
+                # Only the group whose tip broke starts partway in; later groups start clean.
+                cart_i = resume_cartridge if plan == 'resume' else 1
+                hole_i = resume_hole if plan == 'resume' else 1
 
-            if well_3a:
                 adjust = get_calibration()
-                dispense_reagent([tube_locations['well_3a']], final_destinations['well_3a'], well_volume=well_volumes['well_3a'], source_volume= source_volumes['well_3a'], adjust=adjust, cartridges_per_deck = cartridges_per_deck)
-            
-            if well_3b:
-                adjust = get_calibration()
-                dispense_reagent([tube_locations['well_3b']], final_destinations['well_3b'], well_volume=well_volumes['well_3b'], source_volume= source_volumes['well_3b'], adjust=adjust, cartridges_per_deck = cartridges_per_deck)
-
-            if well_3c:
-                adjust = get_calibration()
-                dispense_reagent([tube_locations['well_3c']], final_destinations['well_3c'], well_volume=well_volumes['well_3c'], source_volume= source_volumes['well_3c'], adjust=adjust, cartridges_per_deck = cartridges_per_deck)
-
-            if well_4a:
-                adjust = get_calibration()
-                dispense_reagent([tube_locations['well_4a']], final_destinations['well_4a'], well_volume=well_volumes['well_4a'], source_volume= source_volumes['well_4a'], adjust=adjust, cartridges_per_deck = cartridges_per_deck)
-            
-            if well_4b:
-                adjust = get_calibration()
-                dispense_reagent([tube_locations['well_4b']], final_destinations['well_4b'], well_volume=well_volumes['well_4b'], source_volume= source_volumes['well_4b'], adjust=adjust, cartridges_per_deck = cartridges_per_deck)
-
-            if well_4c:
-                adjust = get_calibration()
-                dispense_reagent([tube_locations['well_4c']], final_destinations['well_4c'], well_volume=well_volumes['well_4c'], source_volume= source_volumes['well_4c'], adjust=adjust, cartridges_per_deck = cartridges_per_deck)
-
-            if well_5a:
-                adjust = get_calibration()
-                dispense_reagent([tube_locations['well_5a']], final_destinations['well_5a'], well_volume=well_volumes['well_5a'], source_volume= source_volumes['well_5a'], adjust=adjust, cartridges_per_deck = cartridges_per_deck)
-            
-            if well_5b:
-                adjust = get_calibration()
-                dispense_reagent([tube_locations['well_5b']], final_destinations['well_5b'], well_volume=well_volumes['well_5b'], source_volume= source_volumes['well_5b'], adjust=adjust, cartridges_per_deck = cartridges_per_deck)
-            
-            if well_5c:
-                adjust = get_calibration()
-                dispense_reagent([tube_locations['well_5c']], final_destinations['well_5c'], well_volume=well_volumes['well_5c'], source_volume= source_volumes['well_5c'], adjust=adjust, cartridges_per_deck = cartridges_per_deck)
-
-            if well_2:
-                adjust = get_calibration()
-                dispense_reagent([tube_locations['well_2']], final_destinations['well_2'], well_volume=well_volumes['well_2'], source_volume= source_volumes['well_2'], adjust=adjust, cartridges_per_deck = cartridges_per_deck)
-
-            if well_3:
-                adjust = get_calibration()
-                dispense_reagent([tube_locations['well_3']], final_destinations['well_3'], well_volume=well_volumes['well_3'], source_volume= source_volumes['well_3'], adjust=adjust, cartridges_per_deck = cartridges_per_deck)
-            
-            if well_4:
-                adjust = get_calibration()
-                dispense_reagent([tube_locations['well_4']], final_destinations['well_4'], well_volume=well_volumes['well_4'], source_volume= source_volumes['well_4'], adjust=adjust, cartridges_per_deck = cartridges_per_deck)
-           
-            if well_5:
-                adjust = get_calibration()
-                dispense_reagent([tube_locations['well_5']], final_destinations['well_5'], well_volume=well_volumes['well_5'], source_volume= source_volumes['well_5'], adjust=adjust, cartridges_per_deck = cartridges_per_deck)
+                dispense_reagent(
+                    [tube_locations[group]],
+                    final_destinations[group],
+                    well_volume=well_volumes[group],
+                    source_volume=source_volumes[group],
+                    adjust=adjust,
+                    cartridges_per_deck=cartridges_per_deck,
+                    resume_cart=cart_i,
+                    resume_hole_n=hole_i,
+                )
 
     finally:
         # Always close serial port, even if there's an error
