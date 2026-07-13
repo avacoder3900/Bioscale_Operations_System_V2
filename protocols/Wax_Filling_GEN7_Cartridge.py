@@ -720,6 +720,10 @@ def run(protocol: protocol_api.ProtocolContext):
                 jump_count = 0
                 jump_frequency = 288
                 jump_height = 60
+                # mm/s for the one long descent into the first hole. The gantry's
+                # default would cover that 61mm fast enough to snap a tip that is a
+                # few tenths of a mm off-centre in a 1.8mm bore.
+                APPROACH_SPEED = 20
                 tip_dispenses = 180
                 tip_change_count = 0
                 # Process all wells
@@ -818,23 +822,27 @@ def run(protocol: protocol_api.ProtocolContext):
                         current_rate = dispense_rates[gate]
                         
                         if jump_count % jump_frequency == 0:
-                            # ONE waypoint, high above the hole, then the dispense descends
-                            # straight in. This block used to be five stop-start segments:
-                            #   move to top+60 (no adjust) -> STOP
-                            #   move to top+60 (adjust)    -> STOP   (same height, ~0mm apart)
-                            #   delay 0.3s                 -> PAUSE
-                            #   move to top+5              -> STOP   <- right above the hole
-                            #   delay 0.3s                 -> PAUSE
-                            #   dispense at top-3.0        -> plunge
-                            # Every move_to is a separate command and the gantry decelerates
-                            # to a dead stop at each one, so the tip halted 5mm over the hole
-                            # and then drove down into it. That is the "pause, then it pushes
-                            # too hard" — it is not the delays alone, it is the waypoint.
-                            # Collapsed to a single high move so the descent into the hole is
-                            # one continuous motion with nothing to stop for.
+                            # FIRST hole of the run — the only one reached from the 60mm
+                            # obstacle-clearing height. Everything after it is approached by
+                            # Opentrons' own arc, a short ~6mm hop, which is why the tip has
+                            # always broken HERE and not further in.
+                            #
+                            # Do NOT let the dispense do this descent: it would drive 61mm
+                            # straight down into a 1.8mm hole in one motion, arriving fast.
+                            # Come down under an explicit speed limit instead, in one
+                            # continuous move (no waypoint to stop at), then dispense in
+                            # place. If the tip is off-centre it now stalls against the
+                            # cartridge face rather than being driven through it.
                             pipette.move_to(well.top(jump_height).move(types.Point(adjust['x'], adjust['y'], 0.0)))
-
-                        pipette.dispense(current_volume, well.top(well_z_depth).move(types.Point(adjust['x'], adjust['y'], 0.0)), rate=current_rate)
+                            pipette.move_to(
+                                well.top(well_z_depth).move(types.Point(adjust['x'], adjust['y'], 0.0)),
+                                force_direct=True, speed=APPROACH_SPEED)
+                            pipette.dispense(current_volume, rate=current_rate)
+                        else:
+                            # Arc from the previous hole (up, across, down ~6mm). force_direct
+                            # would be fatal here — it would drag the tip sideways THROUGH the
+                            # cartridge from inside one hole to the next.
+                            pipette.dispense(current_volume, well.top(well_z_depth).move(types.Point(adjust['x'], adjust['y'], 0.0)), rate=current_rate)
                         
                         tip_change_count += 1
                         jump_count += 1

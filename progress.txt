@@ -3984,3 +3984,57 @@ CALIBRATION" appear on the wax Start Run form automatically.
 DEPLOYED to R04: protocol 3713361b-f14c-422b-8620-f8145ca981e9 (was 3167a9ef).
 On-robot analysis: completed, 21 RTPs, dispense_depth default=1.0, use_tip_calibration=false.
 scripts/test-fill-resume.py: ALL PASS.
+
+================================================================================
+2026-07-13 — feat/fill-resume-after-tip-break — wax STILL broke a tip: I caused it
+================================================================================
+Operator ran the fixed protocol and the tip still broke: "it broke on the first hole because
+it paused and then jammed the tip down", and asked to "use the same calibration as the deck
+calibration coordinates".
+
+READ THE RUN, DON'T GUESS (run b88dd8c4 on R04):
+- It DID use the new protocol (3713361b): dispense_depth=1.0, use_tip_calibration=False,
+  offsets 0,0,0. The depth fix was live. It dispensed X2, X4, X6 at z=-1.0 and the operator
+  cancelled at X8.
+- So the tip is NOT bottoming out on the floor of the hole. At -1.0 there is 2.75mm of floor
+  clearance. It is hitting the cartridge FACE. That is an XY problem, not a Z problem.
+
+"USE THE SAME CALIBRATION AS THE DECK CALIBRATION" — IT ALREADY DOES. Diffed the labware baked
+into protocol 3713361b ON THE ROBOT against the live Mongo def the Studio edits:
+    robot : X2 x=51.053999999999995 y=253.221 z=2.8
+    Mongo : X2 x=51.053999999999995 y=253.221 z=2.8   (identical for X2/X4/X6/X8)
+Zero drift. The last deck-001 edit was 21:06Z, the upload 21:40Z, so the edits are in. With
+use_tip_calibration=False the `adjust` term is {0,0} and all offsets are 0, so the fill's XY
+IS the Studio's XY, exactly. Nothing to fix there.
+
+TWO THINGS I GOT WRONG, BOTH MINE:
+1. It breaks on the FIRST hole because that is the only hole reached from the 60mm jump height
+   (jump_frequency=288 -> the block runs once). Every other hole is approached by Opentrons'
+   own arc, a short ~6mm hop. When I collapsed the approach waypoints to make the motion
+   "smooth", I turned the first approach into a single 61mm plunge — LONGER AND FASTER than
+   before. The operator's "it paused and then jammed the tip down" is exactly that: the stop at
+   +60, then a 61mm dive into a 1.8mm bore.
+2. THE REAL REGRESSION: the operator asked me to disable tip calibration, and I did, without
+   realising wax's entry depends on it. The tip-bend probe measures where the ACTUAL tip is —
+   tips sit a few tenths of a mm off-centre when picked up — and shifts X/Y so the tip enters
+   the hole centred. The hole is 1.8mm; a p20 tip has ~0.4mm of side clearance. REAGENT DOES
+   NOT NEED THIS BECAUSE REAGENT NEVER ENTERS THE HOLE (it hovers at top+2, as does the Deck
+   Calibration Studio). Wax is the only motion that goes in, so wax is the only one that needs
+   the correction. Turning it off is what put a possibly-off-centre tip into a hole barely
+   wider than it is. That the deck jogs fine in the Studio proves nothing: hovering 2mm above
+   a hole tolerates a 1mm XY error that entering it does not.
+
+FIX SHIPPED: the first hole is no longer plunged into. After the 60mm obstacle-clearing move
+the tip now descends under an explicit speed limit (APPROACH_SPEED = 20 mm/s), in ONE
+continuous force_direct move (no waypoint to stop at), then dispenses in place. An off-centre
+tip now stalls against the cartridge face instead of being driven through it. Every other hole
+keeps the normal arc — force_direct there would drag the tip sideways THROUGH the cartridge
+from inside one hole to the next.
+DEPLOYED to R04: f643dc9b-398e-49fb-9568-95b1dba82729 (was 3713361b). Analysis completed, 21 RTPs.
+
+STILL THE OPERATOR'S CALL, and the actual cure:
+  (a) tick USE TIP CALIBRATION back ON for wax — restores the tip-centring the entry depends
+      on. No redeploy; it is a checkbox on the BIMS start form.
+  (b) or set Wax dispense depth NEGATIVE — hovers above the rim like reagent and the Studio,
+      so the tip can never strike. Unproven for wax transfer at 1.6uL.
+The speed limit alone reduces the force; it does not center the tip.
