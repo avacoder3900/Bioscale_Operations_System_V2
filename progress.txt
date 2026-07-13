@@ -3768,3 +3768,80 @@ Retrieve this exact code: git checkout master at commit ed2bc8f47
 What this deployment is for: CV guides bundle — Image Stream pipeline banner + CV nav reorder
 (Forensic Capture → Cart Mfg sidebar), /cv/projects 6-step "How to create a CV model" guide,
 "quality gate: PASSED / NOT MET" rename, and the "Train & History" tab with stepper jump link.
+
+================================================================================
+2026-07-13 — fix/deckcal-partial-apply — deck-cal: the bug that kept eating calibration
+================================================================================
+Operator reported deck-001 on R04 "off by 2mm+ in x and y, worse in some cartridges"
+after a finished calibration, and had to re-tune holes they'd already spent hours on.
+
+FIRST, WHAT IT WASN'T (all verified against live data, all clean):
+- robot_deck_offsets = (0,0,0) on all three robots. Not the PRD-5 offset layer.
+- Zero /labwareOffsets on R04 target deck-001 (it has some, but only tuberack/tiprack).
+- Saves DO persist: all 576 deck-001 wells match their last deck_calibration_edits row.
+- The robot DOES get the calibration: the deck def bundled into R04's newest protocol
+  is byte-identical to Mongo.
+- Nothing mutates the deck unattended: a gap test (last edit of the previous session vs
+  the `before` of the first edit of the next) shows ZERO drift.
+So it wasn't an offset, a sync failure, or a lost write. It was the Studio itself.
+
+ROOT CAUSE — PARTIAL APPLY AT THE y=0 FLOOR. applyDeckEditBatch checked bounds per well,
+pushed the failures into `failed`, and COMMITTED THE REST. Deck-001's row A sits at
+y = 0.25-0.8mm — on the labware's y=0 boundary. So any band shift with a negative dy
+silently leaves row A behind. Proven on the operator's own data: the 16:13 event on
+2026-07-13 requested all 288 reagent wells with (dx -1, dy -2.4); 276 were written and
+all 12 row-A holes (A1..A23 odd) were rejected for negative y. The UI said
+"Applied to 276 hole(s) — saved to BIMS. ⚠ 12 rejected (out of bounds)." — a warning
+suffix on a SUCCESS message that never names the holes. Result: the front row is left
+2.4mm out of line with its own band, i.e. exactly "off by 2mm, worse in some cartridges".
+
+The bounds guard is CORRECT and stays: a well at y<0 makes the whole definition fail
+registration on the robot (the 2026-06 deck-003 row-A bug). The honest consequence, now
+surfaced instead of hidden: a band whose front row sits on the y=0 floor CANNOT be shifted
+further in -y. Fixing that needs the deck definition/labware placement moved, not the
+well coords.
+
+MADE IT WORSE — UNDO. applyDelta pushed the REQUESTED wellNames onto the undo stack, not
+the applied ones. undoLast replayed the inverse across all 288; the inverse (+2.4) IS in
+bounds for row A, so undo MOVED the 12 holes that had never moved. Undoing a partial shift
+corrupts the front row in the opposite direction — worse than not undoing.
+
+CONTRIBUTED — STICKY OFFSET. dx/dy/dz and the captured `nominal` survived a successful
+apply, and the server is read-modify-write with no idempotency, so the identical delta
+could be re-fired and compounded. The post-apply banner invites exactly that ("Move to
+hole will use the old positions" → re-verify → re-capture against the STALE nominal →
+same numbers → apply again).
+
+FIXES (src/lib/server/services/deck-calibration/apply-edit.ts,
+       src/routes/manufacturing/cart-mfg/deck-calibration/+page.svelte):
+1. Batches are ALL-OR-NOTHING — applyDeckEditBatch and applyDeckEditsPerWell now write
+   nothing if ANY well is out of bounds, and return the blockers. The client surfaces it
+   as a hard error naming the holes and explaining that the band is against the labware
+   edge — not as a green "Applied".
+2. The undo stack records r.results (applied), never the requested names.
+3. Every apply path calls consumeOffset() — zeroes dx/dy/dz and nulls nominal/refWell.
+
+NOT DONE (deliberately, needs an operator decision): row A's coordinates were NOT bulk-
+moved off the y=0 floor. That changes where the robot physically goes and is the operator's
+call, not a code fix.
+
+ALSO FOUND (latent, unused, dangerous): POST /api/opentrons-lab/labware
+(src/routes/api/opentrons-lab/labware/+server.ts:46) does `$set: { definition: def }` — a
+wholesale replace of every well's geometry, with NO history row and no merge. One re-import
+of a deck would obliterate a full calibration silently. The audit log shows it has NEVER
+been used. Left alone but flagged; it should merge-or-refuse for decks that have edits.
+
+CAVEAT ON THE HISTORY: deck_calibration_edits has 308 chain breaks (a later edit's `before`
+!= the prior edit's `after`), all on 2026-07-10, including x/y jumps up to 8mm. The app
+cannot do this — only apply-edit.ts writes geometry and it always records history. They came
+from ad-hoc maintenance scripts writing Mongo directly. So the deck's history is not a
+complete record for that day, and the exact moment the deck first went wrong can't be
+reconstructed. The mechanism above is proven and was demonstrably still active today.
+
+Test: scripts/test-deckcal-partial-apply.ts — drives the REAL applyDeckEditBatch against a
+throwaway labware def (never deck-001, cleans up after itself):
+  MONGODB_URI=... npx tsx scripts/test-deckcal-partial-apply.ts
+Reproduces the failure on master (applied=3 of 5; B1 moves y 7.4 -> 5.0 while A1/A3 stay)
+and passes on this branch (applied=0, nothing moves, blockers named).
+
+npm run check: 11 errors / 434 warnings — identical pre-existing baseline.
