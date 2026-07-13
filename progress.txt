@@ -3551,3 +3551,8 @@ instant and comparable. Clicking the MJPEG button also clears mjpegError, so
 it doubles as the retry. fps/quality selects unchanged.
 Files: src/routes/capture/+page.svelte only.
 svelte-check: 10-error baseline, 0 new.
+Deployment: preview — https://bioscale-operations-system-mongodb-78ji2jlq9-brevitest.vercel.app
+  (stable branch alias: https://bioscale-operations-system-mongodb-git-cv-microscope-brevitest.vercel.app)
+Source: branch cv-microscope @ commit 33710c12
+Retrieve this exact code: git checkout cv-microscope at commit 33710c12
+What this deployment is for: video pathway A/B switch on /capture (MJPEG vs WebRTC buttons) — lag testing on CV Station test 3 (microscope). Station 3 BIMS_URL repointed to the stable branch alias so it tracks future pushes.
