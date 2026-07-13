@@ -160,7 +160,12 @@ async def _upload_still(
     Returns the imageId on success (HTTP 201), else None after all attempts.
     """
     url = f"{base_url}/api/cv/capture-ingest"
-    headers = {"x-agent-api-key": api_key}
+    # SvelteKit's CSRF guard 403s any form-content POST whose Origin header is
+    # absent or mismatched — native clients send none by default, which is why
+    # ingest worked against `vite dev` (guard disabled in dev) but failed
+    # against every production build. Sending our own base URL as Origin makes
+    # the request same-origin.
+    headers = {"x-agent-api-key": api_key, "Origin": base_url}
     attempts = len(_UPLOAD_BACKOFFS) + 1  # initial + 3 retries
     for attempt in range(attempts):
         try:
