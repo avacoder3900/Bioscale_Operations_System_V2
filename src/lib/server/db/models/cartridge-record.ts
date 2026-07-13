@@ -182,6 +182,13 @@ const cartridgeRecordSchema = new Schema({
 		r2Key: String,
 		r2Url: String,
 		cartridgeImageNumber: String,
+		// CV-MICROSCOPE-01: photo type descriptor + grid-sequence identity.
+		// 'microscope' photos are phase-less timed grid shots; sequenceId groups
+		// one run, sequenceIndex is capture order, location is the grid slot.
+		photoType: { type: String, enum: ['inspection', 'microscope'] },
+		sequenceId: String,
+		sequenceIndex: Number,
+		location: { row: String, col: Number, _id: false },
 		// Compact deployed-model verdict mirror (CV-PIPELINE-V2 Stage 5), written
 		// by run-inference.ts on non-shadow completion. Summary only — labels,
 		// embeddings and inspection history stay on the cv_* collections.

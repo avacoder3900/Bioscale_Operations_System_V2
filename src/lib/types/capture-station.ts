@@ -13,6 +13,8 @@ export interface CaptureStationCapabilities {
 	scanner: boolean;
 	led: boolean;
 	robotArm: boolean;
+	/** Timed microscope grid-sequence engine (CV-MICROSCOPE-01). */
+	sequence?: boolean;
 }
 
 export interface CaptureStationOperator {

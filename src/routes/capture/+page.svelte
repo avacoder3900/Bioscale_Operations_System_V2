@@ -38,6 +38,36 @@
 	// Camera
 	let videoEl: HTMLVideoElement | null = null;
 	let stream: MediaStream | null = null;
+
+	// Fast MJPEG live preview (station mode): the agent's /preview.mjpg is
+	// ~35ms capture→display vs ~260ms for the WebRTC track (benched on the
+	// Pi). Single-encoder rule: the Pi never runs VP8 + JPEG at once (dual
+	// encode browned out station 3's PSU), so the pathway buttons below tear
+	// one transport down before showing the other. Falls back to the WebRTC
+	// <video> automatically if the MJPEG stream errors.
+	let stationToken = $state<string | null>(null);
+	let stationHostname = $state<string | null>(null);
+	let mjpegPreview = $state(true);
+	let mjpegError = $state(false);
+	let mjpegFps = $state(15);
+	let mjpegQ = $state(80);
+	const mjpegUrl = $derived(
+		stationToken && stationHostname
+			? `https://${stationHostname}/preview.mjpg?token=${encodeURIComponent(stationToken)}&fps=${mjpegFps}&q=${mjpegQ}`
+			: null
+	);
+	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+	let reconnectDelayMs = 2000;
+
+	function scheduleReconnect(stationId: string) {
+		if (reconnectTimer) return;
+		const delay = reconnectDelayMs;
+		reconnectDelayMs = Math.min(reconnectDelayMs * 2, 15000);
+		reconnectTimer = setTimeout(() => {
+			reconnectTimer = null;
+			if (selectedStationId === stationId) void connectToStation(stationId, true);
+		}, delay);
+	}
 	let cameras = $state<MediaDeviceInfo[]>([]);
 	let selectedCameraId = $state<string | null>(null);
 	let cameraError = $state<string | null>(null);
@@ -46,6 +76,7 @@
 	// A real id swaps the video source to a WebRTC stream from that Pi —
 	// see onStationChange() and connectToStation().
 	let selectedStationId = $state<string | null>(null);
+	const mjpegShowing = $derived(!!selectedStationId && mjpegPreview && !mjpegError && !!mjpegUrl);
 	let ws: WebSocket | null = null;
 	let pc: RTCPeerConnection | null = null;
 	// Tracked separately so beforeunload + teardown can release the right
@@ -280,6 +311,76 @@
 	let triggerScanTimer: ReturnType<typeof setTimeout> | null = null;
 	const TRIGGER_SCAN_TIMEOUT_MS = 6000;
 
+	// ── Microscope sequence (station mode, 'sequence' capability only) ─────────
+	// A timed multi-shot run driven entirely by the Pi agent: the browser sends
+	// {cmd:'sequence_start', cartridgeId, count, intervalMs} and the agent grabs
+	// full-res stills on a timer, ingesting each via /api/cv/capture-ingest and
+	// reporting {event:'sequence_progress'} per shot then {event:'sequence_done'}.
+	let seqCount = $state(15);
+	let seqIntervalSec = $state(2);
+	let autoStartOnScan = $state(false);
+	let sequenceRunning = $state(false);
+	// The cartridge the active run is shooting — pinned so the completion link
+	// still resolves if the lock is released after the run finishes.
+	let sequenceCartridgeId = $state<string | null>(null);
+	let seqProgress = $state<{ index: number; count: number; location: { row: string; col: number } | null } | null>(null);
+	let seqSummary = $state<{ count: number; uploaded: number; failed: number; aborted: boolean; cartridgeId: string } | null>(null);
+
+	// The station object currently selected + whether it advertises 'sequence'
+	// in its capabilities. Both drive whether the microscope panel renders.
+	let selectedStation = $derived(
+		selectedStationId ? (data.stations ?? []).find((s: any) => s._id === selectedStationId) : null
+	);
+	// CaptureStation.capabilities is an object of booleans ({camera, scanner,
+	// led, robotArm, sequence}); the agent's own /health reports a list that
+	// includes 'sequence'. Accept both shapes so this gates correctly whichever
+	// way the capability arrives.
+	function hasSequenceCapability(cap: any): boolean {
+		if (!cap) return false;
+		if (Array.isArray(cap)) return cap.includes('sequence');
+		return !!cap.sequence;
+	}
+	let stationSupportsSequence = $derived(hasSequenceCapability(selectedStation?.capabilities));
+
+	function startSequence() {
+		if (!isStationLive()) { flashBanner('err', 'Station not connected — pick a station or wait for it to reconnect.'); return; }
+		if (!stationSupportsSequence) { flashBanner('err', 'This station does not support microscope sequences.'); return; }
+		if (!cartridgeId) { flashBanner('err', 'Lock a cartridge first, then start the sequence.'); return; }
+		if (sequenceRunning) return; // one run at a time
+		const count = Math.max(1, Math.round(Number(seqCount)) || 15);
+		const intervalMs = Math.max(100, Math.round((Number(seqIntervalSec) || 2) * 1000));
+		try {
+			ws!.send(JSON.stringify({ cmd: 'sequence_start', cartridgeId, count, intervalMs }));
+		} catch {
+			flashBanner('err', 'Failed to reach station — try again.');
+			return;
+		}
+		sequenceRunning = true;
+		sequenceCartridgeId = cartridgeId;
+		seqSummary = null;
+		seqProgress = { index: 0, count, location: null };
+		flashBanner('info', `Microscope sequence started — ${count} shots every ${seqIntervalSec}s`, 2500);
+	}
+
+	function abortSequence() {
+		if (isStationLive()) {
+			try { ws!.send(JSON.stringify({ cmd: 'sequence_abort' })); } catch { /* socket may be gone */ }
+		}
+		flashBanner('info', 'Aborting sequence…', 2000);
+		// The agent confirms with {event:'sequence_done', aborted:true}; if the
+		// socket is already dead we won't get it, so drop the running flag here too.
+		if (!isStationLive()) sequenceRunning = false;
+	}
+
+	// Fired from handleScan's success path when Auto-start-on-scan is enabled and
+	// the active station supports sequences — scan → walk away.
+	function maybeAutoStartSequence() {
+		if (!autoStartOnScan || sequenceRunning) return;
+		if (!isStationLive() || !stationSupportsSequence) return;
+		if (!cartridgeId) return;
+		startSequence();
+	}
+
 	let refocusInterval: ReturnType<typeof setInterval> | null = null;
 
 	// Camera-driven auto-scan: jsQR decodes the live video feed every ~2s.
@@ -393,8 +494,13 @@
 
 	function teardownStation() {
 		if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+		if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+		reconnectDelayMs = 2000;
 		if (pc) { try { pc.close(); } catch { /* */ } pc = null; }
 		if (ws) { try { ws.close(); } catch { /* */ } ws = null; }
+		stationToken = null;
+		stationHostname = null;
+		mjpegError = false;
 		if (stream) {
 			stream.getTracks().forEach(t => t.stop());
 			stream = null;
@@ -443,12 +549,19 @@
 		}
 	}
 
-	async function connectToStation(stationId: string) {
+	async function connectToStation(stationId: string, isReconnect = false) {
 		const station = data.stations.find((s: { _id: string }) => s._id === stationId);
 		if (!station) {
 			flashBanner('err', `Station ${stationId} not found`);
 			selectedStationId = null;
 			return;
+		}
+
+		// Reconnect: drop the dead socket/peer but KEEP our operator lock.
+		if (isReconnect) {
+			if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+			if (pc) { try { pc.close(); } catch { /* */ } pc = null; }
+			if (ws) { try { ws.close(); } catch { /* */ } ws = null; }
 		}
 
 		// Hard one-operator-per-station lock. 409 means another user holds it.
@@ -466,6 +579,7 @@
 			if (!lockRes.ok) throw new Error(`HTTP ${lockRes.status}`);
 			lockedStationId = stationId;
 		} catch (e) {
+			if (isReconnect) { scheduleReconnect(stationId); return; }
 			flashBanner('err', `Failed to claim station lock: ${e instanceof Error ? e.message : e}`);
 			selectedStationId = null;
 			await startCamera();
@@ -479,7 +593,11 @@
 			const tokBody = await tokRes.json();
 			token = tokBody.token;
 			if (!token) throw new Error('empty token');
+			stationToken = token;
+			stationHostname = station.hostname;
+			mjpegError = false;
 		} catch (e) {
+			if (isReconnect) { scheduleReconnect(stationId); return; }
 			flashBanner('err', `Failed to fetch station token: ${e instanceof Error ? e.message : e}`);
 			selectedStationId = null;
 			teardownStation();
@@ -492,6 +610,9 @@
 		ws = sock;
 
 		sock.onopen = () => {
+			reconnectDelayMs = 2000;
+			stationDownAt = null;
+			mjpegError = false;
 			// Heartbeat keeps the BIMS operator-lock alive (5-min server timeout)
 			// and lets the Pi notice the operator went away cleanly.
 			heartbeatInterval = setInterval(() => {
@@ -503,13 +624,13 @@
 
 		sock.onerror = () => flashBanner('err', `Station ${station.name}: WebSocket error`);
 		sock.onclose = () => {
-			// If the user is still on this station, surface that the link dropped.
-			// Story E2: also raise the persistent "station down" banner so the
-			// operator knows they need to pick another rather than wondering
-			// why captures stopped working.
-			if (selectedStationId === stationId) {
-				flashBanner('err', `Station ${station.name}: connection closed`);
+			// Auto-reconnect with backoff (fresh token each attempt) — a wifi
+			// blip on the Pi must never require a page reload. The "station
+			// down" banner stays up until a reconnect succeeds.
+			if (selectedStationId === stationId && ws === sock) {
+				flashBanner('info', `Station ${station.name}: connection lost — reconnecting…`, 4000);
 				stationDownAt = { name: station.name, at: Date.now() };
+				scheduleReconnect(stationId);
 			}
 		};
 
@@ -518,10 +639,16 @@
 			try { msg = JSON.parse(ev.data); } catch { return; }
 
 			if (msg.event === 'hello') {
-				try {
-					await startWebRtcOffer(sock);
-				} catch (e) {
-					flashBanner('err', `WebRTC offer failed: ${e instanceof Error ? e.message : e}`);
+				// Single-encoder mode: don't negotiate WebRTC while the MJPEG
+				// pathway is selected and healthy — the <img> onerror handler
+				// falls back to an offer if the fast preview turns out to be
+				// unavailable on this station.
+				if (!(mjpegPreview && !mjpegError)) {
+					try {
+						await startWebRtcOffer(sock);
+					} catch (e) {
+						flashBanner('err', `WebRTC offer failed: ${e instanceof Error ? e.message : e}`);
+					}
 				}
 				// Request current camera params so the settings panel can
 				// populate slider defaults from what the camera actually
@@ -558,6 +685,50 @@
 				return;
 			}
 
+			// Microscope sequence lifecycle (agent-driven timed multi-shot run).
+			// sequence_progress fires per shot, sequence_done at the end (with an
+			// aborted flag if it was cut short), sequence_error on a hard failure.
+			if (msg.event === 'sequence_progress') {
+				sequenceRunning = true;
+				seqProgress = {
+					index: typeof msg.index === 'number' ? msg.index : (seqProgress?.index ?? 0),
+					count: typeof msg.count === 'number' ? msg.count : (seqProgress?.count ?? Number(seqCount)),
+					location: msg.location && typeof msg.location === 'object'
+						? { row: msg.location.row ?? '', col: msg.location.col ?? 0 }
+						: null
+				};
+				return;
+			}
+
+			if (msg.event === 'sequence_done') {
+				sequenceRunning = false;
+				const uploaded = typeof msg.uploaded === 'number' ? msg.uploaded : 0;
+				const failed = typeof msg.failed === 'number' ? msg.failed : 0;
+				seqSummary = {
+					count: typeof msg.count === 'number' ? msg.count : (seqProgress?.count ?? 0),
+					uploaded,
+					failed,
+					aborted: !!msg.aborted,
+					cartridgeId: sequenceCartridgeId ?? cartridgeId ?? ''
+				};
+				seqProgress = null;
+				flashBanner(
+					msg.aborted ? 'info' : 'ok',
+					msg.aborted
+						? `Sequence aborted — ${uploaded} uploaded`
+						: `Sequence complete — ${uploaded} uploaded${failed ? `, ${failed} failed` : ''}`,
+					4000
+				);
+				return;
+			}
+
+			if (msg.event === 'sequence_error') {
+				sequenceRunning = false;
+				seqProgress = null;
+				flashBanner('err', `Sequence error: ${typeof msg.message === 'string' ? msg.message : 'unknown'}`);
+				return;
+			}
+
 			// Pi scanner forwards each Enter-terminated read as a single event.
 			// Two paths:
 			//  • triggered (operator pressed Space → {cmd:'trigger_scan'}): lock
@@ -575,6 +746,30 @@
 				return;
 			}
 		};
+	}
+
+	// Single-encoder pathway switch: the Pi must never run VP8 + JPEG encode
+	// at the same time (sustained dual-encode load browned out station 3's
+	// PSU). Watching MJPEG tears WebRTC down — on both ends, via webrtc_stop —
+	// and switching back to Classic re-offers over the same WebSocket.
+	function stopWebRtc() {
+		if (pc) { try { pc.close(); } catch { /* */ } pc = null; }
+		if (stream) {
+			stream.getTracks().forEach(t => t.stop());
+			stream = null;
+		}
+		if (videoEl) videoEl.srcObject = null;
+		if (ws && ws.readyState === WebSocket.OPEN) {
+			try { ws.send(JSON.stringify({ cmd: 'webrtc_stop' })); } catch { /* */ }
+		}
+	}
+
+	function startWebRtcIfNeeded() {
+		if (!pc && ws && ws.readyState === WebSocket.OPEN) {
+			startWebRtcOffer(ws).catch((e) =>
+				flashBanner('err', `WebRTC offer failed: ${e instanceof Error ? e.message : e}`)
+			);
+		}
 	}
 
 	async function startWebRtcOffer(sock: WebSocket) {
@@ -663,6 +858,7 @@
 			retakeInProgress = false;
 			showRetakeDialog = false;
 			flashBanner('ok', `Locked on ${cartridgeId} — ${cartridgePhotoCount} prior photos`);
+			maybeAutoStartSequence();
 			return cartridgeId;
 		} catch (e) {
 			flashBanner('err', e instanceof Error ? e.message : 'Lookup failed');
@@ -750,23 +946,41 @@
 			showRetakeDialog = true;
 			return;
 		}
-		if (!videoEl || !stream) {
+		// Single-encoder mode: while the MJPEG pathway is showing there is no
+		// WebRTC stream to canvas — fetch a still from the agent instead.
+		if (!mjpegShowing && (!videoEl || !stream)) {
 			flashBanner('err', 'Camera not running');
 			return;
 		}
 
 		submitting = true;
 		try {
-			const canvas = document.createElement('canvas');
-			canvas.width = videoEl.videoWidth;
-			canvas.height = videoEl.videoHeight;
-			const ctx = canvas.getContext('2d');
-			if (!ctx) throw new Error('canvas 2d context unavailable');
-			ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+			let blob: Blob;
+			if (mjpegShowing && stationHostname && stationToken) {
+				const snapRes = await fetch(
+					`https://${stationHostname}/snapshot.jpg?token=${encodeURIComponent(stationToken)}`
+				);
+				if (!snapRes.ok) {
+					throw new Error(
+						snapRes.status === 404
+							? 'This station agent lacks snapshot support — switch to the Classic pathway to capture'
+							: `Station snapshot failed: HTTP ${snapRes.status}`
+					);
+				}
+				blob = await snapRes.blob();
+			} else {
+				if (!videoEl || !stream) throw new Error('Camera not running');
+				const canvas = document.createElement('canvas');
+				canvas.width = videoEl.videoWidth;
+				canvas.height = videoEl.videoHeight;
+				const ctx = canvas.getContext('2d');
+				if (!ctx) throw new Error('canvas 2d context unavailable');
+				ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
 
-			const blob: Blob = await new Promise((resolve, reject) => {
-				canvas.toBlob(b => b ? resolve(b) : reject(new Error('toBlob failed')), 'image/jpeg', 0.92);
-			});
+				blob = await new Promise((resolve, reject) => {
+					canvas.toBlob(b => b ? resolve(b) : reject(new Error('toBlob failed')), 'image/jpeg', 0.92);
+				});
+			}
 
 			const form = new FormData();
 			form.append('file', blob, `capture.jpg`);
@@ -858,6 +1072,13 @@
 	}
 
 	function clearCartridgeForNext() {
+		// A microscope sequence is still shooting this cartridge — don't yank the
+		// lock out from under it. Confirm + abort first.
+		if (sequenceRunning) {
+			if (!confirm('A microscope sequence is still running on this cartridge. Abort it and release the lock?')) return;
+			abortSequence();
+			sequenceRunning = false;
+		}
 		cartridgeId = null;
 		cartridgeStatus = null;
 		cartridgePhotoCount = 0;
@@ -1199,8 +1420,72 @@
 					{cameraError}
 				</div>
 			{:else}
+				{#if mjpegShowing}
+					<!-- Fast MJPEG preview (~35ms). Single-encoder: WebRTC is torn down
+					     while this shows; photo capture uses the agent's /snapshot.jpg. -->
+					<img
+						src={mjpegUrl}
+						alt="Live station preview (fast MJPEG)"
+						class="aspect-video w-full rounded object-contain"
+						onerror={() => {
+							mjpegError = true;
+							flashBanner('info', 'Fast preview unavailable on this station — using WebRTC view.', 4000);
+							// Single-encoder mode skipped the offer at connect;
+							// bring WebRTC up now that MJPEG is out.
+							startWebRtcIfNeeded();
+						}}
+					/>
+				{/if}
 				<!-- svelte-ignore a11y_media_has_caption -->
-				<video bind:this={videoEl} class="aspect-video w-full rounded" playsinline autoplay muted></video>
+				<video bind:this={videoEl} class="aspect-video w-full rounded {mjpegShowing ? 'hidden' : ''}" playsinline autoplay muted></video>
+				{#if selectedStationId}
+					<!-- Video pathway switch — EXCLUSIVE: each button shuts the other
+					     encoder off on the Pi (dual encode browned out the PSU), so
+					     switching renegotiates and takes a couple of seconds. -->
+					<div class="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-[var(--color-tron-text-secondary)]">
+						<span class="font-medium uppercase tracking-wide">Video pathway:</span>
+						<button
+							type="button"
+							class="rounded border px-3 py-1 font-medium transition-colors {mjpegShowing
+								? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]'
+								: 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
+							onclick={() => {
+								mjpegError = false;
+								mjpegPreview = true;
+								stopWebRtc();
+							}}
+						>
+							⚡ Microscope fast (MJPEG ~35ms){mjpegShowing ? ' · LIVE' : ''}
+						</button>
+						<button
+							type="button"
+							class="rounded border px-3 py-1 font-medium transition-colors {!mjpegShowing
+								? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]'
+								: 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
+							onclick={() => {
+								mjpegPreview = false;
+								startWebRtcIfNeeded();
+							}}
+						>
+							Classic (WebRTC ~260ms){!mjpegShowing ? ' · LIVE' : ''}
+						</button>
+						{#if mjpegPreview && !mjpegError}
+							<label class="flex items-center gap-1">fps
+								<select bind:value={mjpegFps} class="tron-input py-0 text-[11px]">
+									{#each [8, 12, 15, 20] as f (f)}<option value={f}>{f}</option>{/each}
+								</select>
+							</label>
+							<label class="flex items-center gap-1">quality
+								<select bind:value={mjpegQ} class="tron-input py-0 text-[11px]">
+									{#each [60, 70, 80, 90] as q (q)}<option value={q}>{q}</option>{/each}
+								</select>
+							</label>
+						{/if}
+						{#if mjpegError && mjpegPreview}
+							<span class="text-[var(--color-tron-red,#ff3366)]">fast preview failed — click ⚡ to retry</span>
+						{/if}
+					</div>
+				{/if}
 			{/if}
 		</div>
 
@@ -1266,12 +1551,88 @@
 			</div>
 		{/if}
 
+		<!-- Microscope sequence (station mode + 'sequence' capability only). A timed
+		     multi-shot run the Pi agent drives on its own once started. -->
+		{#if selectedStationId && stationSupportsSequence}
+			<div class="rounded-lg border border-[var(--color-tron-cyan)] bg-[var(--color-tron-bg-secondary)] p-4 space-y-3">
+				<div class="flex flex-wrap items-center justify-between gap-2">
+					<h3 class="text-sm font-semibold uppercase text-[var(--color-tron-cyan)]">🔬 Microscope sequence</h3>
+					<div class="flex items-center gap-2">
+						<span class="text-xs text-[var(--color-tron-text-secondary)]">Auto-start on scan</span>
+						<button
+							type="button"
+							role="switch"
+							aria-checked={autoStartOnScan}
+							aria-label="Auto-start sequence when a cartridge is scanned"
+							onclick={() => (autoStartOnScan = !autoStartOnScan)}
+							class="relative h-6 w-11 rounded-full transition-colors {autoStartOnScan ? 'bg-[var(--color-tron-cyan)]' : 'bg-[var(--color-tron-bg-tertiary)] border border-[var(--color-tron-border)]'}"
+						>
+							<span class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all {autoStartOnScan ? 'left-[22px]' : 'left-0.5'}"></span>
+						</button>
+					</div>
+				</div>
+
+				<div class="flex flex-wrap items-end gap-4">
+					<div>
+						<label for="seq-count" class="block text-xs uppercase text-[var(--color-tron-text-secondary)]">Count</label>
+						<input id="seq-count" type="number" min="1" max="100" bind:value={seqCount} disabled={sequenceRunning} class="tron-input w-24" />
+					</div>
+					<div>
+						<label for="seq-interval" class="block text-xs uppercase text-[var(--color-tron-text-secondary)]">Interval (s)</label>
+						<input id="seq-interval" type="number" min="0.2" step="0.1" bind:value={seqIntervalSec} disabled={sequenceRunning} class="tron-input w-24" />
+					</div>
+					{#if !sequenceRunning}
+						<button
+							type="button"
+							onclick={startSequence}
+							disabled={!cartridgeId}
+							title={cartridgeId ? 'Start the timed capture run' : 'Lock a cartridge first'}
+							class="rounded bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-bold text-[var(--color-tron-bg-primary)] disabled:opacity-40"
+						>▶ Start sequence</button>
+					{:else}
+						<button
+							type="button"
+							onclick={abortSequence}
+							class="rounded border border-[var(--color-tron-red,#ff3366)] px-4 py-2 text-sm font-bold text-[var(--color-tron-red,#ff3366)] hover:bg-[rgba(255,51,102,0.08)]"
+						>■ Abort</button>
+					{/if}
+				</div>
+
+				{#if sequenceRunning && seqProgress}
+					{@const pct = seqProgress.count ? Math.round((seqProgress.index / seqProgress.count) * 100) : 0}
+					<div>
+						<div class="mb-1 flex items-center justify-between text-xs">
+							<span class="text-[var(--color-tron-text-secondary)]">{seqProgress.index} / {seqProgress.count}</span>
+							{#if seqProgress.location}
+								<span class="rounded bg-[var(--color-tron-cyan)]/20 px-2 py-0.5 font-mono text-[var(--color-tron-cyan)]">{seqProgress.location.row}{seqProgress.location.col}</span>
+							{/if}
+						</div>
+						<div class="h-2 w-full overflow-hidden rounded-full bg-[var(--color-tron-bg-tertiary)]">
+							<div class="h-full rounded-full bg-[var(--color-tron-cyan)] transition-all" style="width: {pct}%"></div>
+						</div>
+					</div>
+				{/if}
+
+				{#if seqSummary}
+					<div class="rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] p-3 text-xs">
+						<span class="font-semibold {seqSummary.aborted ? 'text-[var(--color-tron-yellow,#facc15)]' : 'text-[var(--color-tron-green,#39ff14)]'}">
+							{seqSummary.aborted ? 'Aborted' : 'Complete'}
+						</span>
+						<span class="text-[var(--color-tron-text-secondary)]"> — {seqSummary.uploaded} uploaded{seqSummary.failed ? `, ${seqSummary.failed} failed` : ''} of {seqSummary.count}</span>
+						{#if seqSummary.cartridgeId}
+							<a href={`/cv/stream?cartridge=${encodeURIComponent(seqSummary.cartridgeId)}`} class="ml-2 text-[var(--color-tron-cyan)] underline">View photos →</a>
+						{/if}
+					</div>
+				{/if}
+			</div>
+		{/if}
+
 		<!-- Action bar -->
 		<div class="flex items-center justify-between gap-3">
 			<button
 				type="button"
 				onclick={() => (selectedStationId ? onStationSpace() : capturePhoto())}
-				disabled={submitting || awaitingTriggeredScan || !stream || (!selectedStationId && !cartridgeId)}
+				disabled={submitting || awaitingTriggeredScan || (!stream && !mjpegShowing) || (!selectedStationId && !cartridgeId)}
 				class="rounded bg-[var(--color-tron-cyan)] px-6 py-3 text-lg font-bold text-[var(--color-tron-bg-primary)] disabled:opacity-40"
 			>
 				{submitting

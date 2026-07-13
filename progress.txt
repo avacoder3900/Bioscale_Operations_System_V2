@@ -3768,3 +3768,35 @@ Retrieve this exact code: git checkout master at commit ed2bc8f47
 What this deployment is for: CV guides bundle — Image Stream pipeline banner + CV nav reorder
 (Forensic Capture → Cart Mfg sidebar), /cv/projects 6-step "How to create a CV model" guide,
 "quality gate: PASSED / NOT MET" rename, and the "Train & History" tab with stepper jump link.
+
+================================================================================
+2026-07-13 — feat/microscope-station-v2 — microscope station ported onto CV-PIPELINE-V2 (reconciliation Option 1)
+================================================================================
+The CV-RECONCILIATION.md decision executed: new branch off master (a6e6195b)
+carrying ONLY the microscope station, on V2's conventions. The cv-microscope
+branch's photos[]-as-truth layer, cartridge intake, and Stage Models page are
+NOT ported (stay shelved on cv-microscope).
+
+What was ported:
+- services/bims-capture-agent/: taken wholesale from cv-microscope (master made
+  zero agent changes since the merge-base, verified via git diff) — CAP_V4L2
+  fix, live/still split, sequence.py grid engine, preview.py MJPEG (~35ms),
+  /snapshot.jpg, webrtc_stop, latency benches.
+- capture-ingest: additive fields photoType ('inspection'|'microscope'),
+  sequenceId/sequenceIndex/locationRow+Col. V2 conventions KEPT: CvImage stays
+  the photo truth (fields declared on cv-image.ts so strict mode can't strip
+  them), photos[] pointer entries carry the same fields. Microscope photos are
+  phase-less: barcode view auto-classify skipped (close-ups have no barcode →
+  would all misclassify 'bottom') and runPhaseInference skipped (no phase to
+  route).
+- Models: cv-image.ts + cartridge-record.ts photos[] gain photoType/sequence/
+  location; capture-station.ts capabilities + CaptureStationCapabilities type
+  gain `sequence`.
+- /capture page: ported onto master's evolved page (single-photo workflow,
+  station-lock reset, camera tuning all preserved) — MJPEG fast preview with
+  fps/quality selects, EXCLUSIVE video-pathway switch (single-encoder rule:
+  dual VP8+JPEG encode browned out station 3's PSU), snapshot-based capture on
+  the MJPEG path, WS auto-reconnect with backoff, microscope sequence panel
+  (start/abort, progress bar, grid-slot badge, auto-start-on-scan).
+npm run check: 10 errors / 434 warnings — all pre-existing baseline (one BELOW
+master's 11-error baseline), zero in touched files.
