@@ -44,16 +44,16 @@
 		{
 			n: 3,
 			title: 'Train a version',
-			where: 'Project page → History tab',
+			where: 'Project page → Train & History tab',
 			desc: 'Press "Train new version". It needs at least 5 labeled photos with both Pass and Fail present, fits the classifier in-process, and auto-scores a holdout. Every run creates a new immutable version — nothing is overwritten.',
 			href: null,
 			linkText: null
 		},
 		{
 			n: 4,
-			title: 'Verify it passes the gate',
+			title: 'Verify it passes the quality gate',
 			where: 'Project page → Deployment tab',
-			desc: 'A version must pass the verify gate (enough holdout photos + minimum balanced accuracy) before it can deploy. Use Verify to re-score a version against the current labeled pool at any time.',
+			desc: 'A version must pass the quality gate (enough holdout photos + minimum balanced accuracy) before it can deploy — "NOT MET" means the model isn’t accurate enough yet, not that anything is wrong with your cartridges. Use Verify to re-score a version against the current labeled pool at any time.',
 			href: null,
 			linkText: null
 		},
