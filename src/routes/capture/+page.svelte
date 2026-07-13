@@ -41,19 +41,18 @@
 
 	// Fast MJPEG live preview (station mode): the agent's /preview.mjpg is
 	// ~35ms capture→display vs ~260ms for the WebRTC track (benched on the
-	// Pi). Single-encoder rule: the Pi never runs VP8 + JPEG at once (dual
-	// encode browned out station 3's PSU), so the pathway buttons below tear
-	// one transport down before showing the other. Falls back to the WebRTC
-	// <video> automatically if the MJPEG stream errors.
+	// Pi), so it is THE station view. Single-encoder rule: the Pi never runs
+	// VP8 + JPEG at once (dual encode browned out station 3's PSU) — WebRTC
+	// is only negotiated as an automatic fallback when the MJPEG stream
+	// errors (older agents without /preview.mjpg, e.g. station 2).
 	let stationToken = $state<string | null>(null);
 	let stationHostname = $state<string | null>(null);
-	let mjpegPreview = $state(true);
 	let mjpegError = $state(false);
-	let mjpegFps = $state(15);
-	let mjpegQ = $state(80);
+	const MJPEG_FPS = 15;
+	const MJPEG_QUALITY = 80;
 	const mjpegUrl = $derived(
 		stationToken && stationHostname
-			? `https://${stationHostname}/preview.mjpg?token=${encodeURIComponent(stationToken)}&fps=${mjpegFps}&q=${mjpegQ}`
+			? `https://${stationHostname}/preview.mjpg?token=${encodeURIComponent(stationToken)}&fps=${MJPEG_FPS}&q=${MJPEG_QUALITY}`
 			: null
 	);
 	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -76,7 +75,7 @@
 	// A real id swaps the video source to a WebRTC stream from that Pi —
 	// see onStationChange() and connectToStation().
 	let selectedStationId = $state<string | null>(null);
-	const mjpegShowing = $derived(!!selectedStationId && mjpegPreview && !mjpegError && !!mjpegUrl);
+	const mjpegShowing = $derived(!!selectedStationId && !mjpegError && !!mjpegUrl);
 	let ws: WebSocket | null = null;
 	let pc: RTCPeerConnection | null = null;
 	// Tracked separately so beforeunload + teardown can release the right
@@ -640,10 +639,10 @@
 
 			if (msg.event === 'hello') {
 				// Single-encoder mode: don't negotiate WebRTC while the MJPEG
-				// pathway is selected and healthy — the <img> onerror handler
-				// falls back to an offer if the fast preview turns out to be
-				// unavailable on this station.
-				if (!(mjpegPreview && !mjpegError)) {
+				// view is healthy — the <img> onerror handler falls back to an
+				// offer if the fast preview turns out to be unavailable on
+				// this station.
+				if (mjpegError) {
 					try {
 						await startWebRtcOffer(sock);
 					} catch (e) {
@@ -748,22 +747,9 @@
 		};
 	}
 
-	// Single-encoder pathway switch: the Pi must never run VP8 + JPEG encode
-	// at the same time (sustained dual-encode load browned out station 3's
-	// PSU). Watching MJPEG tears WebRTC down — on both ends, via webrtc_stop —
-	// and switching back to Classic re-offers over the same WebSocket.
-	function stopWebRtc() {
-		if (pc) { try { pc.close(); } catch { /* */ } pc = null; }
-		if (stream) {
-			stream.getTracks().forEach(t => t.stop());
-			stream = null;
-		}
-		if (videoEl) videoEl.srcObject = null;
-		if (ws && ws.readyState === WebSocket.OPEN) {
-			try { ws.send(JSON.stringify({ cmd: 'webrtc_stop' })); } catch { /* */ }
-		}
-	}
-
+	// WebRTC fallback bring-up — only runs after the MJPEG view errors, so the
+	// Pi still never encodes VP8 + JPEG at the same time (dual-encode load
+	// browned out station 3's PSU).
 	function startWebRtcIfNeeded() {
 		if (!pc && ws && ws.readyState === WebSocket.OPEN) {
 			startWebRtcOffer(ws).catch((e) =>
@@ -1438,54 +1424,6 @@
 				{/if}
 				<!-- svelte-ignore a11y_media_has_caption -->
 				<video bind:this={videoEl} class="aspect-video w-full rounded {mjpegShowing ? 'hidden' : ''}" playsinline autoplay muted></video>
-				{#if selectedStationId}
-					<!-- Video pathway switch — EXCLUSIVE: each button shuts the other
-					     encoder off on the Pi (dual encode browned out the PSU), so
-					     switching renegotiates and takes a couple of seconds. -->
-					<div class="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-[var(--color-tron-text-secondary)]">
-						<span class="font-medium uppercase tracking-wide">Video pathway:</span>
-						<button
-							type="button"
-							class="rounded border px-3 py-1 font-medium transition-colors {mjpegShowing
-								? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]'
-								: 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
-							onclick={() => {
-								mjpegError = false;
-								mjpegPreview = true;
-								stopWebRtc();
-							}}
-						>
-							⚡ Microscope fast (MJPEG ~35ms){mjpegShowing ? ' · LIVE' : ''}
-						</button>
-						<button
-							type="button"
-							class="rounded border px-3 py-1 font-medium transition-colors {!mjpegShowing
-								? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]'
-								: 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
-							onclick={() => {
-								mjpegPreview = false;
-								startWebRtcIfNeeded();
-							}}
-						>
-							Classic (WebRTC ~260ms){!mjpegShowing ? ' · LIVE' : ''}
-						</button>
-						{#if mjpegPreview && !mjpegError}
-							<label class="flex items-center gap-1">fps
-								<select bind:value={mjpegFps} class="tron-input py-0 text-[11px]">
-									{#each [8, 12, 15, 20] as f (f)}<option value={f}>{f}</option>{/each}
-								</select>
-							</label>
-							<label class="flex items-center gap-1">quality
-								<select bind:value={mjpegQ} class="tron-input py-0 text-[11px]">
-									{#each [60, 70, 80, 90] as q (q)}<option value={q}>{q}</option>{/each}
-								</select>
-							</label>
-						{/if}
-						{#if mjpegError && mjpegPreview}
-							<span class="text-[var(--color-tron-red,#ff3366)]">fast preview failed — click ⚡ to retry</span>
-						{/if}
-					</div>
-				{/if}
 			{/if}
 		</div>
 

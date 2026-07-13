@@ -3825,3 +3825,16 @@ End-to-end PASSED 2026-07-13: 2-shot sequence from station 3 → HTTP 201s → v
 in Mongo: cv_images AND cartridge_records.photos[] both carry photoType='microscope',
 sequenceId, sequenceIndex (phase null, view untagged) with R2 URLs. Station 3
 heartbeats clean against the branch alias.
+
+================================================================================
+2026-07-13 — feat/microscope-station-v2 — pathway A/B switch removed; MJPEG is THE station view
+================================================================================
+User verdict after live testing: the MJPEG path "works perfectly — this is the
+way to go." The operator-facing "Video pathway" A/B switch (built for the lag
+test) is removed from /capture: the fast MJPEG stream is now the only station
+view, at fixed fps=15/q=80, with WebRTC negotiated ONLY as an automatic
+fallback when /preview.mjpg errors (older agents, e.g. station 2's master-era
+agent). Single-encoder guarantee unchanged — the Pi still never runs VP8 and
+JPEG encode simultaneously. Snapshot-based photo capture stays.
+npm run check: 10 errors / 434 warnings — pre-existing baseline, zero in
+touched files.
