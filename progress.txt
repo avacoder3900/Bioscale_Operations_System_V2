@@ -3760,3 +3760,11 @@ button — it was hidden under a tab literally labeled "History". Tab renamed
 stepper's step 2 gained a "Train new version" link that jumps straight to
 that tab. Projects-list guide steps 3/4 updated to the new names.
 npm run check: 11 errors / 434 warnings — baseline, zero in touched files.
+
+Deployment: production — https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/BREKfA7pHHQ4hpsyiYg7tsK7eSo7
+Source: branch master @ commit ed2bc8f47 (merge of PR #31, feat/cv-projects-guide; includes PR #29, feat/cv-stream-pipeline-guide, merged just before at b1dcbc1dc)
+Retrieve this exact code: git checkout master at commit ed2bc8f47
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: CV guides bundle — Image Stream pipeline banner + CV nav reorder
+(Forensic Capture → Cart Mfg sidebar), /cv/projects 6-step "How to create a CV model" guide,
+"quality gate: PASSED / NOT MET" rename, and the "Train & History" tab with stepper jump link.
