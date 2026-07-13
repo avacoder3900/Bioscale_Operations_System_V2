@@ -905,7 +905,7 @@ def run(protocol: protocol_api.ProtocolContext):
 
 
         def dispense_reagent(sources, wells, well_volume, source_volume, adjust, cartridges_per_deck,
-                             resume_cart=1, resume_hole_n=1):
+                             resume_cart=1, resume_hole_n=1, group_key=''):
             """
             Aspirates reagent from source tubes and dispenses into cartridge wells.
 
@@ -920,6 +920,8 @@ def run(protocol: protocol_api.ProtocolContext):
 
             # Build list of wells to fill: [resume point, cartridges_per_deck).
             # start_index > 0 only on a run resumed after a broken tip.
+            wells_on_cart = int(len(wells) / CARTS_ON_DECK)
+            well_names_by_index = wells          # `wells` is the ordered well-NAME list
             start_i, end_i = resume_window(
                 len(wells), cartridges_per_deck, resume_cart, resume_hole_n)
             wells_to_fill = wells[start_i:end_i]
@@ -1037,7 +1039,7 @@ def run(protocol: protocol_api.ProtocolContext):
                     well_z_depth = -3.0        # mm below well top to dispense at
                     well_prejump_height = 5    # mm above well top for pre-jump move
 
-                    for well in wells_this_run:
+                    for j, well in enumerate(wells_this_run):
                         # Every jump_frequency wells, do an extra high move to clear obstacles
                         if jump_count % jump_frequency == 0:
                             pipette.move_to(well.top(jump_height).move(types.Point(adjust['x'], adjust['y'], 0.0)))
@@ -1047,6 +1049,18 @@ def run(protocol: protocol_api.ProtocolContext):
                         protocol.delay(seconds=0.25)
                         jump_count += 1
                         dispensed_volume += well_volume
+
+                        # Breadcrumb for the tip-break recovery flow. BIMS reads the LAST
+                        # of these out of the run's command log to work out where to
+                        # resume, so it never has to re-implement this file's well
+                        # ordering in TypeScript (it serpentines, and differs per reagent
+                        # group — duplicating it would rot the moment either side moved).
+                        # Emitted AFTER the dispense, so the last one you see is the last
+                        # well that actually got liquid.
+                        abs_i = start_i + start_well + j
+                        protocol.comment(
+                            f'FILL PROGRESS: group={group_key} cartridge={abs_i // wells_on_cart + 1} '
+                            f'hole={abs_i % wells_on_cart + 1} well={well_names_by_index[abs_i]}')
 
                     # Blow out remaining liquid back into source tube
                     pipette.blow_out(location=source_well.bottom(2.4))
@@ -1326,6 +1340,7 @@ def run(protocol: protocol_api.ProtocolContext):
                     cartridges_per_deck=cartridges_per_deck,
                     resume_cart=cart_i,
                     resume_hole_n=hole_i,
+                    group_key=group,
                 )
 
     finally:

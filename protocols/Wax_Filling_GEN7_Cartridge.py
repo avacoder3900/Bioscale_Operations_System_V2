@@ -651,6 +651,7 @@ def run(protocol: protocol_api.ProtocolContext):
                 adjust: XY offset adjustment dict
                 cartridges_per_deck: Number of cartridges to fill
             """
+            wells_on_cart = int(len(well_names) / CARTS_ON_DECK)
             start_i, end_i = resume_window(
                 len(well_names), cartridges_per_deck, resume_cartridge, resume_hole)
             wells_to_fill_names = well_names[start_i:end_i]
@@ -783,6 +784,19 @@ def run(protocol: protocol_api.ProtocolContext):
                         jump_count += 1
                         dispensed_volume += current_volume
                         protocol.comment(f'Dispensed {current_volume}uL into well {well_name} (tip #{tip_change_count})')
+
+                        # Breadcrumb for the tip-break recovery flow. BIMS reads the LAST
+                        # of these out of the run's command log to work out where to
+                        # resume, so it never has to re-implement this file's well
+                        # ordering in TypeScript (reorganize_list() groups columns in
+                        # fours — duplicating that would rot the moment either side moved).
+                        # Emitted AFTER the dispense, so the last one is the last well that
+                        # actually got wax. well_index is relative to the (possibly resumed)
+                        # slice, so add start_i back to get the true position on the deck.
+                        abs_i = start_i + well_index + idx
+                        protocol.comment(
+                            f'FILL PROGRESS: group=wax cartridge={abs_i // wells_on_cart + 1} '
+                            f'hole={abs_i % wells_on_cart + 1} well={well_name}')
                      
                     source_volume -= dispensed_volume
                     well_index += wells_this_cycle

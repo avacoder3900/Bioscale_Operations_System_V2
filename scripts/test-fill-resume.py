@@ -103,5 +103,22 @@ check('no well is missed', filled_before | filled_after == set(range(288)),
 check('  (the well that was mid-dispense IS re-done, which is what we want)',
       died_at in filled_after)
 
+print('\n6. round-trip: the breadcrumb the protocol emits must name the well you resume at')
+# The protocols emit, AFTER each dispense:
+#   FILL PROGRESS: group=<g> cartridge=<abs_i // wells_on_cart + 1> hole=<abs_i % wells_on_cart + 1>
+# BIMS reads the LAST one and feeds cartridge/hole straight back in as the resume point.
+# So breadcrumb(i) -> resume_window(...) must land back on exactly well i.
+for n_wells, label in ((288, 'wax'), (72, 'reagent well_2')):
+    per = n_wells // 24
+    bad = []
+    for i in range(n_wells):
+        cart = i // per + 1          # what the protocol prints
+        hole = i % per + 1
+        start, _end = rw(n_wells, 24, cart, hole)   # what BIMS feeds back
+        if start != i:
+            bad.append((i, cart, hole, start))
+    check(f'{label}: all {n_wells} breadcrumbs round-trip to their own index',
+          not bad, f'{len(bad)} mismatched, e.g. {bad[:2]}' if bad else '')
+
 print('\n%s\n' % ('ALL PASS' if not fails else '%d FAILURE(S)' % len(fails)))
 sys.exit(1 if fails else 0)
