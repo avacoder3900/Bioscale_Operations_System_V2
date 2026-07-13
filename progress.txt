@@ -3800,3 +3800,12 @@ What was ported:
   (start/abort, progress bar, grid-slot badge, auto-start-on-scan).
 npm run check: 10 errors / 434 warnings — all pre-existing baseline (one BELOW
 master's 11-error baseline), zero in touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-kjyi1fpqf-brevitest.vercel.app
+  (stable branch alias: https://bioscale-operations-system-mongodb-git-feat-mi-4c950e-brevitest.vercel.app)
+Source: branch feat/microscope-station-v2 @ commit 040fe542
+Retrieve this exact code: git checkout feat/microscope-station-v2 at commit 040fe542
+  (or: git log feat/microscope-station-v2 --oneline to find it if the branch has since moved on)
+What this deployment is for: microscope station ported onto CV-PIPELINE-V2 (reconciliation
+Option 1) — sequence ingest fields land without strict-drop, MJPEG/WebRTC single-encoder
+pathway switch + sequence panel on /capture; station 3 repointed here for end-to-end test.
