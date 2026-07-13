@@ -86,6 +86,21 @@ def add_parameters(parameters: protocol_api.Parameters):
         default=True
     )
 
+    # The fill hole is 3.75mm deep and 1.8mm wide. The tip used to be driven to
+    # top-3.0 — 0.75mm off the floor of the hole — which snapped tips whenever the
+    # deck drifted even slightly. The Deck Calibration Studio and the reagent fill
+    # BOTH hover at top+2.0 and never enter the bore; wax was the only motion that
+    # went in. Capped at 2.5 so the old 3.0 crash cannot be re-entered by hand.
+    parameters.add_float(
+        variable_name="dispense_depth",
+        display_name="Wax dispense depth (mm)",
+        description="How far below the hole rim the tip dispenses. Negative = hover above it, like reagent.",
+        default=1.0,
+        minimum=-2.0,
+        maximum=2.5,
+        unit="mm"
+    )
+
     parameters.add_bool(
         variable_name="use_tip_calibration",
         display_name="USE TIP CALIBRATION",
@@ -784,7 +799,16 @@ def run(protocol: protocol_api.ProtocolContext):
 
                     # DISPENSING - with variable volumes and rates per well
                     dispensed_volume = 0
-                    well_z_depth = -3.0 + z_offset
+                    # Depth below the hole rim, straight from the RTP. The hole is only
+                    # 3.75mm deep, so the old -3.0 left just 0.75mm to the floor and any
+                    # deck drift drove the tip through the bottom.
+                    #
+                    # z_offset is deliberately NOT added here. carriage.set_offset() has
+                    # already shifted the whole labware (and therefore well.top()) by it;
+                    # adding it again double-counted the global z offset. Reagent never did
+                    # this. It is a no-op today (every robot_deck_offsets row is 0,0,0) but
+                    # it would have silently doubled the depth the moment anyone set one.
+                    well_z_depth = -float(protocol.params.dispense_depth)
 
                     for idx, well in enumerate(wells_to_fill):
                         # Determine volume and rate for this specific well via gate
@@ -795,12 +819,16 @@ def run(protocol: protocol_api.ProtocolContext):
                         current_rate = dispense_rates[gate]
                         
                         if jump_count % jump_frequency == 0:
+                            # The two protocol.delay(0.3) calls that used to sit in here are
+                            # gone: they made the gantry stop dead just above the hole and
+                            # then plunge, which is the "pause, then it pushes too hard"
+                            # the operator was seeing. Nothing depends on the dwell — the
+                            # moves are already sequential — so the approach is now one
+                            # continuous motion, like reagent's.
                             pipette.move_to(well.top(jump_height))
                             pipette.move_to(well.top(jump_height).move(types.Point(adjust['x'], adjust['y'], 0.0)))
-                            protocol.delay(seconds=.3)
                             pipette.move_to(well.top(well_prejump_height).move(types.Point(adjust['x'], adjust['y'], 0.0)))
-                            protocol.delay(seconds=.3)
-                            
+
                         pipette.dispense(current_volume, well.top(well_z_depth).move(types.Point(adjust['x'], adjust['y'], 0.0)), rate=current_rate)
                         
                         tip_change_count += 1

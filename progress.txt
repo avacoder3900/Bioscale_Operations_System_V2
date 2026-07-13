@@ -3888,3 +3888,61 @@ NOT deployed to B07/B14 wax — the ask was R04 and those two are on older wax b
 there would also flip their wax default to tip-cal OFF, which nobody asked for. Run
 deploy-wax-to-r04.cjs with the host/robot-id swapped when they want it.
 npm run check: unaffected (protocol .py + a .cjs script only).
+
+================================================================================
+2026-07-13 — feat/fill-resume-after-tip-break — wax tip breakage: the fill was the
+             only motion that entered the hole
+================================================================================
+Operator: "when i run the wax fill, it pauses right before its about to go in the hole and
+it pushes it too hard and breaks the tip... can you fix it so that it is one smooth motion
+like reagent filling". Then, decisively: "why does it not just run like the deck calibration"
+and "i just went back to the deck calibration and it worked fine".
+
+THE HOLE (deck labware, all 576 wells identical): depth 3.75mm, diameter 1.8mm.
+Three things drive the pipette to those holes. Only one of them goes IN:
+  Deck Calibration Studio : moveToWell origin='top', offset z=+2.0  -> HOVERS above
+  Reagent fill            : well.top(-3.0).move(Point(x, y, +5.0)) = +2.0 -> HOVERS above
+  Wax fill                : well.top(-3.0)                              -> 3.0mm INSIDE
+Wax was the only motion in the entire system that entered the bore — 0.75mm off the floor
+of a 3.75mm hole, inside a 1.8mm bore. Any deck drift and the tip bottoms out or catches the
+rim, and snaps. That is why deck calibration and reagent never break tips and wax does. It
+was never a calibration problem.
+
+A WRONG THEORY, AND WHAT KILLED IT (worth recording so nobody re-derives it). The wax hole Z
+disagrees wildly BETWEEN decks — top = 6.55 (001), 12.50 (002), 6.05 (003), 26.71 (004) —
+while the reagent hole Z agrees everywhere (~11.5-11.9). deck-001/003 carry a SINGLE z value
+for all 288 wax holes, which reads like an untaught default. I concluded deck-001's wax Z was
+~6mm too low and the tip was being driven through the floor. The operator's "deck calibration
+worked fine" disproved it: the Studio hovers at top+2.0, so a 6mm-low datum would have driven
+the tip INTO the cartridge face during a jog. It didn't. deck_calibration_edits confirms it —
+2454 wax-hole edits on deck-001, the most recent today (P2, before.z=2.8 -> after.z=2.8).
+deck-001's Z is right. It is deck-002 (12.50, and ZERO wax-hole edits ever) that is the odd
+one out. Do not "fix" deck-001's Z.
+
+FIXES (protocols/Wax_Filling_GEN7_Cartridge.py):
+1. New RTP `dispense_depth` (float, default 1.0mm, range -2.0..2.5, unit mm) replaces the
+   hardcoded -3.0. Default 1.0 -> the tip sits 2.75mm off the floor instead of 0.75mm (3.7x
+   the clearance) and stays in the widest part of the bore. Capped at 2.5 so the old 3.0
+   crash cannot be dialled back in by hand. Negative hovers ABOVE the rim (reagent/Studio
+   behaviour) if it turns out the wax transfers fine without entering at all — that is a wax-
+   rheology question only the bench can answer, hence the parameter.
+2. Removed the two protocol.delay(0.3) calls in the jump block. Those are the literal "pause"
+   the operator saw: they fire when jump_count % jump_frequency == 0, and jump_frequency=288,
+   so they run on the FIRST well only — pause, pause, then plunge. Exactly where the tip broke.
+   Nothing depends on the dwell; the approach is now continuous, like reagent's.
+3. Dropped the `+ z_offset` from well_z_depth. carriage.set_offset() already shifts the whole
+   labware (and so well.top()) by the global z offset; adding it again DOUBLE-COUNTED it.
+   Reagent never did this. A no-op today (every robot_deck_offsets row is 0,0,0) but it would
+   have silently doubled the dispense depth the moment anyone set a global z.
+
+DEPLOYED to R04: protocol 3167a9ef-127f-48ab-ba4b-a5825d0a06c8 (was b0383d34).
+On-robot analysis: completed, 21 RTPs, dispense_depth default=1.0, use_tip_calibration=false.
+The deploy script's safety gate earned its keep — the first attempt failed analysis with
+ParameterNameError: display_name >30 chars ("Wax dispense depth (mm into hole)" = 32). Opentrons
+caps display_name at 30 and description at 100. The gate refused to repoint Mongo, so R04 was
+never left pointing at a broken protocol. Shortened and redeployed.
+scripts/test-fill-resume.py: ALL PASS (unchanged).
+
+STILL OPEN: 1.0mm is a clearance-driven guess, not a wax-transfer-validated number. Watch the
+first run — if holes under-fill, raise it toward 2.0; if it still catches, go negative and let
+it hover like reagent. That is what the parameter is for. B07/B14 wax NOT touched.

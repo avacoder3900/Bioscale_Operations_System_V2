@@ -90,6 +90,11 @@ async function main() {
   if (!toggleDef) throw new Error('use_tip_calibration not in analysis — NOT repointing');
   if (toggleDef.default !== false) throw new Error(`use_tip_calibration default is ${toggleDef.default}, expected false — NOT repointing`);
 
+  const depthDef = (params ?? []).find((p) => p.variableName === 'dispense_depth');
+  console.log(`  dispense_depth present = ${!!depthDef}, default = ${depthDef && depthDef.default}`);
+  if (!depthDef) throw new Error('dispense_depth not in analysis — NOT repointing');
+  if (depthDef.default !== 1.0) throw new Error(`dispense_depth default is ${depthDef.default}, expected 1.0 — NOT repointing`);
+
   // The resume RTPs ship on this same build; make sure they survived the upload too.
   for (const need of ['resume_cartridge', 'resume_hole']) {
     console.log(`  ${need} present = ${names.includes(need)}`);
