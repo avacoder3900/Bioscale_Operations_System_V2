@@ -3693,3 +3693,75 @@ Source: branch master @ commit f65db559e (merge of feat/single-photo-capture PR 
 Retrieve this exact code: git checkout master at commit f65db559e
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: /capture single-photo workflow — one photo per cartridge, lock releases after it; 2-photo front/back flow removed.
+
+================================================================================
+2026-07-13 — fix/scanner-port-reconnect — OT-2 bridge: survive a scanner USB drop
+================================================================================
+R04 went "not responding" mid-morning: the UI showed `POST /maintenance_runs
+failed: robot bridge "ot2-r04-bridge" did not respond within 30s (last bridge
+heartbeat 0 min ago)`, then `exceptiongroup.ExceptionGroup: unhandled errors in a
+TaskGroup (1 sub-exception)`. The robot itself was healthy the whole time
+(/health 200, no current run, disk 4%). Three separate defects stacked:
+
+ROOT CAUSE — the scanner's USB re-enumerated (dmesg: 0218:0212 "USBScn Module"
+disconnect, device 9 -> device 10, both ttyACM2; udev repointed /dev/scanner
+correctly). That invalidated the file handle the bridge already held. Reads/writes
+on the dead fd raise termios.error(5,'Input/output error') / OSError — NOT
+serial.SerialException — so ScannerPort.trigger_and_read()'s generic
+`except Exception` swallowed it and returned WITHOUT closing the port. self.ser
+stayed set, is_open() kept returning True, and every subsequent scan reused the
+dead handle. The class docstring promised "auto-reconnects on failure"; for this
+error class it never did. Fix: _scan_window() now raises on any device-level
+error and trigger_and_read() drops the handle + reopens (PORT_OPEN_ATTEMPTS=3,
+PORT_REOPEN_DELAY_S=1.0, spanning the observed ~2s re-enumeration gap).
+
+AMPLIFIER — every failed on-point scan fell through to search_scan(), an 18-stop
+gantry raster (2 focus + two 3x3 grids). With a dead port every stop is a real
+gantry move feeding a port that cannot answer, so one glitch = ~10 min of futile
+motion. The command_loop is a SINGLE worker, so everything BIMS sent queued behind
+it and aged out at 30s — while the separate heartbeat thread kept reporting
+"0 min ago", which is why the error message looked self-contradictory. Fix: scan
+errors are now classified (PORT_ERROR_PREFIX + is_port_error()); a dead port skips
+the raster entirely at both call sites (sweep + deck_scan) and aborts search_scan()
+mid-raster. A genuine no-decode still rasters all 18 stops — that fallback is
+untouched and still earns its keep.
+
+ESCALATION — when the doomed scan finally gave up, close_maintenance_run()'s
+DELETE returned "Run is currently active. Allow the run to finish or stop it with
+a `stop` action". It gave up on the first try, so the run was never deleted and the
+engine wedged: every later POST /maintenance_runs 500'd with RunConflictError
+(the real sub-exception inside that ExceptionGroup). There IS no stop action to
+take — the robot's own OpenAPI spec exposes only GET+DELETE on
+/maintenance_runs/{runId} — so the fix is to retry the DELETE while the run winds
+down (CLOSE_ATTEMPTS=6 x 2s), and raise immediately on any non-wind-down error.
+
+BONUS BUG (the reason it couldn't self-heal) — clear_stale_maintenance_run() and
+engine_health() both probed "/maintenance_runs/current". That path is captured by
+the /maintenance_runs/{runId} route as a run literally named "current", so it
+ALWAYS 404s ("Run current was not found") whether or not a run is open. Tier 1 of
+the auto-heal ladder was therefore dead code, and the health check could never see
+a stuck maintenance run. The real endpoint is /maintenance_runs/current_run
+(confirmed against the robot's OpenAPI spec; maintenance-clone.ts already used it).
+Verified live on R04: with a stale run open, current_run -> HTTP 200 while
+/current -> HTTP 404 on the same robot at the same instant.
+
+Files: scripts/ot2-bridge.py (ScannerPort._scan_window/trigger_and_read,
+is_port_error, scan_with_retry, search_scan, close_maintenance_run,
+clear_stale_maintenance_run, engine_health, new constants),
+scripts/test-ot2-bridge-scanner.py (new — self-contained regression test, stubs
+pyserial, no hardware needed: `python3 scripts/test-ot2-bridge-scanner.py`).
+
+Recovery performed on R04 before the fix: systemctl restart opentrons-robot-server
+(cleared the wedged engine, ~110s to come back) + systemctl restart ot2-bridge.
+
+npm run check: 11 errors / 434 warnings — identical pre-existing baseline; this
+branch touches no TS/Svelte.
+
+Bridge deployment (scp to /data/ot2-bridge/ot2-bridge.py + systemctl restart
+ot2-bridge; prior file kept as ot2-bridge.py.bak-20260713):
+  R04 172.16.28.144 — deployed 15:29 UTC, verified: port reopened, deployed
+    clear_stale_maintenance_run() cleared real stale run a5bf1e4a, then
+    open+close of a fresh maintenance run succeeded.
+  B07 172.16.28.101 — deployed 15:29 UTC, bridge active, scanner port opened.
+  B14 172.16.28.167 — NOT DEPLOYED, robot was powered off / off the network.
+    Re-run the scp+restart for B14 when it is back up.
