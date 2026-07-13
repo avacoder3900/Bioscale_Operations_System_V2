@@ -3838,3 +3838,12 @@ agent). Single-encoder guarantee unchanged — the Pi still never runs VP8 and
 JPEG encode simultaneously. Snapshot-based photo capture stays.
 npm run check: 10 errors / 434 warnings — pre-existing baseline, zero in
 touched files.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 9ac25a88 (merge of PR #34, feat/microscope-station-v2 @ 9059cac7)
+Retrieve this exact code: git checkout master at commit 9ac25a88
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: microscope station live in production — CV-MICROSCOPE-01 on
+CV-PIPELINE-V2 conventions (sequence ingest fields, MJPEG station view w/ WebRTC fallback,
+snapshot capture, sequence panel) + ingest CSRF/station-key fixes. Ends the cv-microscope
+reconciliation pause.
