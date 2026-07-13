@@ -1476,11 +1476,33 @@
 				{/if}
 				<video bind:this={videoEl} class="aspect-video w-full rounded {mjpegShowing ? 'hidden' : ''}" playsinline autoplay muted></video>
 				{#if selectedStationId}
-					<div class="mt-1 flex flex-wrap items-center gap-3 text-[11px] text-[var(--color-tron-text-secondary)]">
-						<label class="flex items-center gap-1">
-							<input type="checkbox" bind:checked={mjpegPreview} />
-							Fast preview (MJPEG{mjpegShowing ? ' · active' : ''})
-						</label>
+					<!-- Video pathway A/B switch: both transports stay connected (WebRTC
+					     always runs underneath for photo capture); these buttons only
+					     swap which one the operator watches, so lag can be compared
+					     live without renegotiating anything. -->
+					<div class="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-[var(--color-tron-text-secondary)]">
+						<span class="font-medium uppercase tracking-wide">Video pathway:</span>
+						<button
+							type="button"
+							class="rounded border px-3 py-1 font-medium transition-colors {mjpegShowing
+								? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]'
+								: 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
+							onclick={() => {
+								mjpegError = false;
+								mjpegPreview = true;
+							}}
+						>
+							⚡ Microscope fast (MJPEG ~35ms){mjpegShowing ? ' · LIVE' : ''}
+						</button>
+						<button
+							type="button"
+							class="rounded border px-3 py-1 font-medium transition-colors {!mjpegShowing
+								? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]'
+								: 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
+							onclick={() => (mjpegPreview = false)}
+						>
+							Classic (WebRTC ~260ms){!mjpegShowing ? ' · LIVE' : ''}
+						</button>
 						{#if mjpegPreview && !mjpegError}
 							<label class="flex items-center gap-1">fps
 								<select bind:value={mjpegFps} class="tron-input py-0 text-[11px]">
@@ -1493,8 +1515,8 @@
 								</select>
 							</label>
 						{/if}
-						{#if mjpegError}
-							<button type="button" class="text-[var(--color-tron-cyan)] hover:underline" onclick={() => (mjpegError = false)}>retry fast preview</button>
+						{#if mjpegError && mjpegPreview}
+							<span class="text-[var(--color-tron-red,#ff3366)]">fast preview failed — click ⚡ to retry</span>
 						{/if}
 					</div>
 				{/if}

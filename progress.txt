@@ -3535,3 +3535,19 @@ Deployed to station 3 (/opt), verified on hardware: live 720p → enter 2223ms
 reboot was their own power cycle (no phantom reboots); persistent journald
 enabled on the Pi for future forensics.
 Agent-only change — no UI deployment needed for this entry.
+
+================================================================================
+2026-07-13 — cv-microscope — Video pathway A/B switch on /capture
+================================================================================
+User wants to test the two live-view transports side by side on station 3
+(microscope) because lag persisted on the page they were using (which turned
+out to be the Jul-10 f312ae6c preview — behind branch HEAD, no live/still
+split). Replaced the small "Fast preview (MJPEG)" checkbox on /capture with a
+prominent two-button "Video pathway" switcher: "⚡ Microscope fast (MJPEG
+~35ms)" vs "Classic (WebRTC ~260ms)" — the same transport the older station-2
+agent uses. Both stay connected underneath (WebRTC always runs for photo
+capture); the buttons only swap what the operator watches, so switching is
+instant and comparable. Clicking the MJPEG button also clears mjpegError, so
+it doubles as the retry. fps/quality selects unchanged.
+Files: src/routes/capture/+page.svelte only.
+svelte-check: 10-error baseline, 0 new.
