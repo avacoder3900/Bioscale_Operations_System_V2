@@ -3827,3 +3827,47 @@ NOTE: this half of the fix is CLIENT-side, so it only takes effect once deployed
 (branch preview or master). R04 is currently homed, so teaching works today on the
 existing prod build; the fix is what stops it recurring after the next restart or
 power cycle.
+
+================================================================================
+2026-07-13 — worktree-fix+scanner-port-reconnect — B14 scanner: deployed the fix
+================================================================================
+B14's scanner returned "unexpected error: (5, 'Input/output error')" on every Test Scan,
+even after the operator scanned the "USB Virtual Port" barcodes from the manual (the fix
+that worked on B07). Scanning those barcodes was not the problem — it was the trigger.
+
+ROOT CAUSE (confirmed on the robot, not inferred). The ot2-bridge process on B14 had been up
+since Jun 30 and was holding this file descriptor:
+    /proc/278/fd/3 -> /dev/ttyACM0 (deleted)
+Putting the scanner into USB Virtual Port mode makes it RE-ENUMERATE on the USB bus: the old
+/dev/ttyACM0 node is destroyed and it comes back as a new node (/dev/ttyACM2, created
+19:02:45 today). The udev rule re-pointed /dev/scanner at the new node correctly. But the
+long-running daemon still held the fd to the node that no longer exists, and every scan
+did reset_input_buffer() on that dead fd -> termios.error(5, 'Input/output error').
+
+So the operator's fix DID work at the hardware level, and that is exactly what broke the
+software: the act of switching the scanner out of HID mode re-enumerated it out from under a
+daemon that had no way to notice. The old bridge never reconnects, so it stays broken
+forever until the daemon is restarted — no amount of re-scanning the manual can help.
+
+This is precisely the bug the scanner-port-reconnect work (commit 3d200a29) fixes: catch ANY
+exception (termios.error is NOT a serial.SerialException — it does not inherit from it, which
+is why the original except-clause missed it), close the port, and reopen it, up to
+SCANNER_PORT_OPEN_ATTEMPTS times. B14 was the one robot that never received it — it was
+powered off during the R04/B07 rollout.
+
+DEPLOYED to B14 (172.16.28.71):
+  cp /data/ot2-bridge/ot2-bridge.py{,.bak-2026-07-13}     # rollback copy on the robot
+  scp -O scripts/ot2-bridge.py root@172.16.28.71:/data/ot2-bridge/ot2-bridge.py
+  systemctl restart ot2-bridge
+VERIFIED after restart: daemon holds fd 3 -> /dev/ttyACM2 (the LIVE node); a raw trigger+read
+on /dev/scanner completed reset_input_buffer() with no termios error and decoded a real
+barcode off the bench. The scanner-port fix is now on ALL THREE robots.
+
+IP DRIFT — B14 IS NO LONGER AT 172.16.28.167. It is at 172.16.28.71 (hostname muddy-water,
+OT2CEP20200309B14). The IPs are DHCP and do drift; a port-31950 sweep of .100-.200 misses it.
+Re-derive with: arp -a | grep -i b8:27:eb   (all OT-2s are Raspberry Pis), or dns-sd -B.
+Confirmed still current: B07 172.16.28.101, R04 172.16.28.144.
+
+Also seen in B14's log and NOT a problem: one transient DNS failure resolving the BIMS host
+at 19:03. Zero failures since the restart, and the robot gets HTTP 405 (i.e. reachable) from
+/api/agent/scanner/triggers. No action taken.
