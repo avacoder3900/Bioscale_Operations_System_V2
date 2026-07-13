@@ -3579,3 +3579,8 @@ lost; enabling it + a power monitor was blocked by permissions this session.
 Files: services/bims-capture-agent/{agent.py,preview.py},
 src/routes/capture/+page.svelte. Agent deployed to station 3 via scp +
 restart (capabilities verified). svelte-check: 10-error baseline, 0 new.
+Deployment: preview — https://bioscale-operations-system-mongodb-lehnapbg2-brevitest.vercel.app
+  (stable branch alias: https://bioscale-operations-system-mongodb-git-cv-microscope-brevitest.vercel.app)
+Source: branch cv-microscope @ commit 40527249
+Retrieve this exact code: git checkout cv-microscope at commit 40527249
+What this deployment is for: single-encoder video pathways (webrtc_stop + /snapshot.jpg capture) — PSU brownout mitigation test on CV Station test 3. Matching agent deployed to station 3 via scp same session.
