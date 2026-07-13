@@ -3768,3 +3768,85 @@ Retrieve this exact code: git checkout master at commit ed2bc8f47
 What this deployment is for: CV guides bundle — Image Stream pipeline banner + CV nav reorder
 (Forensic Capture → Cart Mfg sidebar), /cv/projects 6-step "How to create a CV model" guide,
 "quality gate: PASSED / NOT MET" rename, and the "Train & History" tab with stepper jump link.
+
+================================================================================
+2026-07-13 — feat/fill-resume-after-tip-break — resume a fill after a broken tip
+================================================================================
+Operator request: when a tip breaks mid wax/reagent fill, stop the robot, drop the broken
+tip, pick up a new one, and resume from a chosen point (e.g. "cartridge 24, well 3")
+instead of re-running the whole deck or hand-filling. Detection is MANUAL — the operator
+spots the broken tip and presses the button; the robot is not asked to detect anything.
+
+WHY IT IS A RESTART, NOT A MID-RUN FIX. An OT-2 protocol run cannot be told to jump. It
+offers play/pause/stop, and its native error recovery (resume-from-recovery + fixit
+commands) only engages when the ROBOT itself fails a command — a snapped tip is not one of
+those; it dispenses air and reports success. So recovery is: stop the run, eject the tip,
+start a FRESH run that skips straight to the resume point. Costs a re-home (~1-2 min)
+instead of a whole deck.
+
+PROTOCOLS (both). New runtime parameters, all defaulting to a no-op:
+  wax     : resume_cartridge, resume_hole
+  reagent : resume_reagent (which group's tip broke), resume_cartridge, resume_hole
+`cartridges` has always truncated the END of the destination list (fill the first N
+cartridges); resume is its mirror image, a START index — so the data structure already
+supported this. resume_window() is the whole of it.
+Reagent needs the extra group because it does NOT fill cartridge-by-cartridge: each reagent
+group is a separate full pass over the deck with its own tip, so "cartridge 24 hole 3" is
+ambiguous until you know which reagent was in the tip. Groups before the named one are
+skipped, the named one resumes partway, groups after it run in full. The 16 copy-pasted
+dispatch branches are now one loop over GROUP_ORDER so no branch can drift.
+
+LIQUID HEIGHT SELF-CORRECTS (the part that worried me). source_volume arrives as
+(dead_volume + reagent for every well this run would fill); the tube physically holds
+(dead_volume + reagent for the wells that REMAIN). Subtracting the skipped wells' volume
+gives exactly the truth, so no special case. The aspiration overhead is blown back INTO the
+source tube so it isn't in the sum. NOT modelled: reagent lost inside the broken tip (up to
+one aspiration's worth) — the 50uL dead volume absorbs some; top the tube up if a whole
+batch went with the tip. The UI says so.
+
+FILL PROGRESS BREADCRUMB. After every dispense both protocols emit
+  FILL PROGRESS: group=<g> cartridge=<n> hole=<n> well=<name>
+BIMS reads the LAST one from the run's command log to find the resume point. The
+alternative was re-implementing each protocol's destination ordering in TypeScript — it
+serpentines, wax groups columns in fours, reagent differs per group — and that copy would
+rot the moment either side moved. The protocol is the source of truth for where the pipette
+was.
+
+EJECTING THE BROKEN TIP — the one thing that could have killed the feature. Stopping a run
+RESETS the engine's tip state, so the broken tip is still on the pipette while the robot
+believes the mount is empty; the next run would drive a fresh tip straight down onto it.
+Proven on R04: `dropTipInPlace` ejects regardless of what the engine believes (this is what
+the Opentrons drop-tip wizard does). `unsafe/dropTipInPlace` is OT-3 ONLY and fails with
+HardwareNotSupportedError — do not reach for it. Must home first: the gantry is at an
+unknown position after a stop and moveToAddressableAreaForDropTip refuses unhomed axes.
+
+FILES
+  protocols/Wax_Filling_GEN7_Cartridge.py, protocols/Reagent_Filling_GEN7.py
+    resume_window() + group_resume_plan() (module-level and PURE on purpose — see testing)
+  scripts/test-fill-resume.py                            (new, 21 checks, no robot/DB needed)
+  src/lib/server/opentrons/fill-resume.ts                (new — reads the breadcrumb)
+  src/lib/server/opentrons/maintenance.ts                (ejectTipToTrash)
+  src/routes/api/opentrons-lab/robots/[id]/eject-tip/+server.ts               (new)
+  src/routes/api/opentrons-lab/robots/[id]/runs/[rid]/fill-progress/+server.ts (new)
+  src/lib/components/manufacturing/EmbeddedRunController.svelte  ("Tip broke" button)
+  src/routes/manufacturing/cart-mfg/reagent-filling/+page.svelte (resume dialog)
+
+TESTING. scripts/test-fill-resume.py exists because the fill loop is wrapped in
+`if dispense and not protocol.is_simulating()` — an Opentrons analysis NEVER executes it and
+cannot catch a slicing bug, and a wrong slice skips or re-fills REAL cartridges. It asserts
+the resume maths standalone, including: a default run is byte-for-byte the old behaviour;
+across a break + resume every well is filled exactly once and none is missed; and every one
+of the 288 wax / 72 reagent breadcrumbs round-trips to its own index. Both protocols also
+pass opentrons_simulate (exit 0) — which is what caught Opentrons' 100-char cap on parameter
+descriptions.
+npm run check: 11 errors / 434 warnings — unchanged baseline, none in the touched files.
+
+NOT DONE / NOT VERIFIED — READ BEFORE USING:
+1. NOT TESTED ON A REAL RUN. Nothing here has been exercised against a physical fill. The
+   protocols are NOT deployed to any robot yet (R04 still runs the old reagent .py). Deploy
+   and dry-run before trusting it with real cartridges.
+2. The WAX PAGE still needs its resume dialog wired (the protocol side and the shared
+   "Tip broke" button are done; wax-filling/+page.svelte does not yet pass onTipBreak).
+3. The branch's base commit carries the operator's previously-uncommitted
+   Reagent_Filling_GEN7.py WIP (use_tip_calibration etc.), because that is what R04 actually
+   runs — basing on master would have silently reverted it on the next deploy.

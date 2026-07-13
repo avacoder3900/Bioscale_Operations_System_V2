@@ -28,14 +28,92 @@
 		robotName = 'OT-2',
 		opentronsRunId,
 		onComplete,
+		onTipBreak,
 		pollMs = 2000
 	} = $props<{
 		robotId: string;
 		robotName?: string;
 		opentronsRunId: string;
 		onComplete?: (status: string, run: any) => void;
+		/**
+		 * Tip-break recovery. Fired once the run is stopped, the broken tip is in the
+		 * trash, and we know where the run died — the page then offers to restart from
+		 * that point. `progress` is null if the run never dispensed anything, in which
+		 * case there's nothing to resume and the page should just offer a plain re-run.
+		 * Omit this prop to hide the button entirely (non-fill runs).
+		 */
+		onTipBreak?: (progress: FillProgress | null) => void;
 		pollMs?: number;
 	}>();
+
+	type FillProgress = {
+		group: string;
+		cartridge: number;
+		hole: number;
+		well: string;
+		wellsFilled: number;
+	};
+
+	let recovering = $state<string | null>(null);
+
+	/**
+	 * The tip snapped mid-fill. The OT-2 can't be told to swap a tip and carry on — its
+	 * native error recovery only engages on a command the ROBOT calls failed, and a broken
+	 * tip isn't one. So: stop the run, get the broken tip off the pipette, and find out how
+	 * far it got. The page takes it from there and starts a fresh run that skips ahead.
+	 *
+	 * Ejecting matters and is easy to miss: stopping the run resets the engine's tip state,
+	 * so the broken tip is still on the pipette while the robot believes the mount is empty.
+	 * Skip the eject and the next run drives a fresh tip straight down on top of it.
+	 */
+	async function recoverTipBreak() {
+		if (
+			!confirm(
+				'Tip broke?\n\n' +
+					'This will STOP the run, drop the broken tip in the trash, and then offer to ' +
+					'restart from where it left off (you can adjust the exact cartridge/hole).\n\n' +
+					'The stopped run cannot be un-stopped. Continue?'
+			)
+		)
+			return;
+
+		lastError = null;
+		try {
+			recovering = 'Stopping the run…';
+			await handleAction('stop');
+
+			// Read progress BEFORE ejecting: the eject opens its own maintenance run, and we
+			// want the command log of the fill run untouched by anything else in between.
+			recovering = 'Working out where it stopped…';
+			let progress: FillProgress | null = null;
+			const pRes = await fetch(
+				`/api/opentrons-lab/robots/${robotId}/runs/${opentronsRunId}/fill-progress`,
+				{ credentials: 'same-origin' }
+			);
+			if (pRes.ok) progress = (await pRes.json())?.progress ?? null;
+
+			recovering = 'Dropping the broken tip in the trash…';
+			const eRes = await fetch(`/api/opentrons-lab/robots/${robotId}/eject-tip`, {
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({})
+			});
+			if (!eRes.ok) {
+				const b = await eRes.json().catch(() => null);
+				throw new Error(
+					(b?.message ?? `HTTP ${eRes.status}`) +
+						' — take the broken tip off by hand before restarting.'
+				);
+			}
+
+			recovering = null;
+			onTipBreak?.(progress);
+		} catch (e) {
+			recovering = null;
+			lastError = `Tip-break recovery: ${e instanceof Error ? e.message : String(e)}`;
+		}
+	}
 
 	let run = $state<any>(null);
 	let runStatus = $state<string>('idle');
@@ -285,6 +363,21 @@
 			■ Stop
 		</button>
 	</div>
+
+	{#if onTipBreak && !isTerminal}
+		<button
+			type="button"
+			onclick={recoverTipBreak}
+			disabled={!!actionInFlight || !!recovering}
+			class="mt-2 w-full rounded border border-orange-500/50 bg-orange-900/20 px-4 py-2 text-sm font-medium text-orange-300 transition-colors hover:bg-orange-900/40 disabled:cursor-not-allowed disabled:opacity-40"
+		>
+			{recovering ?? '🔧 Tip broke — stop, re-tip & resume from here'}
+		</button>
+		<p class="mt-1 text-center text-xs" style="color: var(--color-tron-text-secondary)">
+			Stops the run, drops the broken tip in the trash, then restarts from the last hole it
+			filled — instead of re-running the whole deck.
+		</p>
+	{/if}
 
 	{#if TERMINAL.has(runStatus)}
 		<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-2 text-xs" style="color: var(--color-tron-text-secondary)">

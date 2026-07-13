@@ -133,6 +133,80 @@
 		paramsReady = true; // advance from params step to Barcode Scanning
 	}
 
+	// ── Tip-break recovery ──────────────────────────────────────────────────────
+	// The controller has already stopped the run and dropped the broken tip in the
+	// trash; it hands us the last hole that actually got liquid. We restart the SAME
+	// batch on a fresh OT-2 run that skips straight to that point, so only the holes
+	// that were never filled get filled.
+	type FillProgress = { group: string; cartridge: number; hole: number; well: string; wellsFilled: number };
+	let showResume = $state(false);
+	let resumeDetected = $state<FillProgress | null>(null);
+	let resumeReagent = $state('');
+	let resumeCartridge = $state(1);
+	let resumeHole = $state(1);
+
+	const REAGENT_CHOICES = [
+		{ value: 'well_2', label: 'Beads (well_2)' },
+		{ value: 'well_3', label: 'Tracer (well_3)' },
+		{ value: 'well_4', label: 'Wash (well_4)' },
+		{ value: 'well_5', label: 'Elution (well_5)' },
+		{ value: 'well_2a', label: 'Beads a' }, { value: 'well_2b', label: 'Beads b' }, { value: 'well_2c', label: 'Beads c' },
+		{ value: 'well_3a', label: 'Tracer a' }, { value: 'well_3b', label: 'Tracer b' }, { value: 'well_3c', label: 'Tracer c' },
+		{ value: 'well_4a', label: 'Wash a' }, { value: 'well_4b', label: 'Wash b' }, { value: 'well_4c', label: 'Wash c' },
+		{ value: 'well_5a', label: 'Elution a' }, { value: 'well_5b', label: 'Elution b' }, { value: 'well_5c', label: 'Elution c' }
+	];
+
+	function onTipBreak(p: FillProgress | null) {
+		resumeDetected = p;
+		// Pre-fill with the last hole that got liquid. We resume AT it rather than after
+		// it: the hole the tip was over when it snapped is exactly the one you can't
+		// trust, so it gets re-done. Everything is editable — the operator saw what
+		// happened and we didn't.
+		resumeReagent = p?.group ?? 'well_2';
+		resumeCartridge = p?.cartridge ?? 1;
+		resumeHole = p?.hole ?? 1;
+		showResume = true;
+	}
+
+	async function startResumeRun() {
+		if (!capturedParamsFd || !data.activeRunId) {
+			errorMsg = 'Lost the original run parameters — start the run manually below.';
+			showResume = false;
+			return;
+		}
+		// Same parameters the aborted run used, plus the resume point. A fresh tip comes
+		// for free: the protocol's tip tracker is persisted on pickup, so it already
+		// points at the next unused tip.
+		const fd = new FormData();
+		for (const [k, v] of capturedParamsFd.entries()) fd.append(k, v as string);
+		fd.set('runId', data.activeRunId);
+		fd.set('reagentBatchBarcode', reagentBatchBarcode ?? '');
+		fd.set('param_cartridges', String(data.cartridges.length));
+		fd.set('param_resume_reagent', resumeReagent);
+		fd.set('param_resume_cartridge', String(resumeCartridge));
+		fd.set('param_resume_hole', String(resumeHole));
+
+		showResume = false;
+		submitting = true;
+		errorMsg = '';
+		try {
+			const res = await fetch('?/startRun', {
+				method: 'POST',
+				body: fd,
+				headers: { 'x-sveltekit-action': 'true' }
+			});
+			const txt = await res.text();
+			if (!res.ok || txt.includes('"type":"failure"')) {
+				errorMsg = 'Could not start the resume run — start it manually below.';
+			}
+			await invalidateAll();
+		} catch (e) {
+			errorMsg = e instanceof Error ? e.message : 'Resume run failed to start';
+		} finally {
+			submitting = false;
+		}
+	}
+
 	async function startRunWithCapturedParams() {
 		if (!capturedParamsFd || !data.activeRunId) return;
 		capturedParamsFd.set('runId', data.activeRunId);
@@ -683,6 +757,7 @@
 				robotId={data.opentronsRobotId}
 				robotName={data.runState.assayTypeName ?? 'Reagent Run'}
 				opentronsRunId={data.runState.opentronsRunId}
+				{onTipBreak}
 				onComplete={(status) => {
 					// The .py landed terminal — reveal the run-complete controls. The
 					// run does NOT auto-advance; the operator sends it on or re-runs.
@@ -694,6 +769,83 @@
 				}}
 			/>
 		{/if}
+
+		{#if showResume}
+			<div class="mt-3 rounded border border-orange-500/50 bg-orange-950/30 p-4">
+				<h3 class="text-sm font-semibold text-orange-300">Resume the fill after the broken tip</h3>
+				{#if resumeDetected}
+					<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
+						The run filled <strong>{resumeDetected.wellsFilled}</strong> hole(s). The last one that
+						actually got reagent was
+						<strong>{resumeDetected.group}</strong>, cartridge
+						<strong>{resumeDetected.cartridge}</strong>, hole
+						<strong>{resumeDetected.hole}</strong> (deck well {resumeDetected.well}).
+						It will be re-filled — the hole the tip was over when it snapped is the one you can't
+						trust. Everything from there on gets filled; everything before it is left alone.
+					</p>
+				{:else}
+					<p class="mt-1 text-xs text-yellow-300">
+						This run never dispensed anything, so there's nothing to skip — set the resume point
+						by hand, or just leave it at cartridge 1 / hole 1 to fill the whole deck.
+					</p>
+				{/if}
+
+				<div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+					<label class="text-xs" style="color: var(--color-tron-text-secondary)">
+						Reagent whose tip broke
+						<select
+							bind:value={resumeReagent}
+							class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
+							style="color: var(--color-tron-text)"
+						>
+							{#each REAGENT_CHOICES as c (c.value)}
+								<option value={c.value}>{c.label}</option>
+							{/each}
+						</select>
+					</label>
+					<label class="text-xs" style="color: var(--color-tron-text-secondary)">
+						Resume at cartridge
+						<input
+							type="number" min="1" max="24" bind:value={resumeCartridge}
+							class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
+							style="color: var(--color-tron-text)"
+						/>
+					</label>
+					<label class="text-xs" style="color: var(--color-tron-text-secondary)">
+						…and hole
+						<input
+							type="number" min="1" max="12" bind:value={resumeHole}
+							class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
+							style="color: var(--color-tron-text)"
+						/>
+					</label>
+				</div>
+
+				<p class="mt-2 text-xs" style="color: var(--color-tron-text-secondary)">
+					Reagents dispensed <em>before</em> {resumeReagent} are skipped (they already finished);
+					reagents after it run in full. A fresh tip is picked up automatically. If a whole
+					aspiration's worth of reagent went into the trash with the tip, top the source tube up
+					before starting.
+				</p>
+
+				<div class="mt-3 flex gap-2">
+					<button
+						type="button" onclick={startResumeRun} disabled={submitting}
+						class="rounded border border-orange-500/60 bg-orange-900/30 px-4 py-2 text-sm font-medium text-orange-200 hover:bg-orange-900/50 disabled:opacity-40"
+					>
+						▶ Start resume run
+					</button>
+					<button
+						type="button" onclick={() => (showResume = false)} disabled={submitting}
+						class="rounded border border-[var(--color-tron-border)] px-4 py-2 text-sm disabled:opacity-40"
+						style="color: var(--color-tron-text-secondary)"
+					>
+						Cancel
+					</button>
+				</div>
+			</div>
+		{/if}
+
 		{#if data.runState.runEndTime || previewParam}
 			<RunExecution
 				assayTypeName={previewParam
