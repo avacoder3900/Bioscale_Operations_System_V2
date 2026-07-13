@@ -28,6 +28,7 @@ import { generateId } from '$lib/server/db/utils.js';
 import { uploadViaWorker, getR2Url, buildCvNamedKey } from '$lib/server/services/r2';
 import { detectBarcodePresence, BARCODE_VIEW, NO_BARCODE_VIEW } from '$lib/server/services/barcode-detect';
 import { requireAgentApiKey } from '$lib/server/api-auth';
+import { requireStationAgentKey } from '$lib/server/auth/station-agent-key';
 import { runPhaseInference } from '$lib/server/cv/run-inference';
 import type { RequestHandler } from './$types';
 
@@ -36,7 +37,16 @@ function pad(n: number): string {
 }
 
 export const POST: RequestHandler = async ({ request }) => {
-	requireAgentApiKey(request);
+	// Two callers, two keys: the legacy lab scripts authenticate with
+	// AGENT_API_KEY (x-agent-api-key), while fleet capture stations hold only
+	// STATION_AGENT_KEY (x-station-agent-key — same key heartbeat/registration
+	// already validate). Accept whichever the caller presents; both checks are
+	// timing-safe and fail-closed.
+	if (request.headers.get('x-station-agent-key')) {
+		requireStationAgentKey(request);
+	} else {
+		requireAgentApiKey(request);
+	}
 	await connectDB();
 
 	const formData = await request.formData();

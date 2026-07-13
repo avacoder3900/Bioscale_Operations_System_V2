@@ -166,6 +166,12 @@ async def _upload_still(
     # against every production build. Sending our own base URL as Origin makes
     # the request same-origin.
     headers = {"x-agent-api-key": api_key, "Origin": base_url}
+    # Fleet stations hold STATION_AGENT_KEY (validated by heartbeat/register);
+    # AGENT_API_KEY on Pis is often stale or unset. Send the station key too —
+    # capture-ingest prefers it when present.
+    station_key = os.environ.get("STATION_AGENT_KEY", "").strip()
+    if station_key:
+        headers["x-station-agent-key"] = station_key
     attempts = len(_UPLOAD_BACKOFFS) + 1  # initial + 3 retries
     for attempt in range(attempts):
         try:
