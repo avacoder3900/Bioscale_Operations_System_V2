@@ -65,6 +65,19 @@ const cvImageSchema = new Schema({
 	// null = untagged (no toggle and detection unavailable).
 	viewSource: { type: String, enum: ['manual', 'barcode-auto', null], default: null },
 
+	// Photo type descriptor (CV-MICROSCOPE-01): 'inspection' = standard station
+	// photo, phase-bound; 'microscope' = timed grid-sequence shot. Microscope is
+	// a descriptor, not a mfg state — phase stays unset and view auto-classify +
+	// phase inference are skipped at ingest.
+	photoType: { type: String, enum: ['inspection', 'microscope'], default: 'inspection' },
+
+	// Microscope grid-sequence identity, stamped by the station agent:
+	// sequenceId groups one run, sequenceIndex = order taken (1-based),
+	// location = named grid slot (row letter / column number, e.g. B4).
+	sequenceId: { type: String, index: true },
+	sequenceIndex: Number,
+	location: { row: String, col: Number, _id: false },
+
 	// QC label — optional, demoted from identity to a side field
 	qcLabel: { type: String, enum: ['approved', 'rejected', null], default: null },
 	qcLabeledBy: operatorRef,

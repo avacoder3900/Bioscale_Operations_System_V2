@@ -3768,3 +3768,73 @@ Retrieve this exact code: git checkout master at commit ed2bc8f47
 What this deployment is for: CV guides bundle — Image Stream pipeline banner + CV nav reorder
 (Forensic Capture → Cart Mfg sidebar), /cv/projects 6-step "How to create a CV model" guide,
 "quality gate: PASSED / NOT MET" rename, and the "Train & History" tab with stepper jump link.
+
+================================================================================
+2026-07-13 — feat/microscope-station-v2 — microscope station ported onto CV-PIPELINE-V2 (reconciliation Option 1)
+================================================================================
+The CV-RECONCILIATION.md decision executed: new branch off master (a6e6195b)
+carrying ONLY the microscope station, on V2's conventions. The cv-microscope
+branch's photos[]-as-truth layer, cartridge intake, and Stage Models page are
+NOT ported (stay shelved on cv-microscope).
+
+What was ported:
+- services/bims-capture-agent/: taken wholesale from cv-microscope (master made
+  zero agent changes since the merge-base, verified via git diff) — CAP_V4L2
+  fix, live/still split, sequence.py grid engine, preview.py MJPEG (~35ms),
+  /snapshot.jpg, webrtc_stop, latency benches.
+- capture-ingest: additive fields photoType ('inspection'|'microscope'),
+  sequenceId/sequenceIndex/locationRow+Col. V2 conventions KEPT: CvImage stays
+  the photo truth (fields declared on cv-image.ts so strict mode can't strip
+  them), photos[] pointer entries carry the same fields. Microscope photos are
+  phase-less: barcode view auto-classify skipped (close-ups have no barcode →
+  would all misclassify 'bottom') and runPhaseInference skipped (no phase to
+  route).
+- Models: cv-image.ts + cartridge-record.ts photos[] gain photoType/sequence/
+  location; capture-station.ts capabilities + CaptureStationCapabilities type
+  gain `sequence`.
+- /capture page: ported onto master's evolved page (single-photo workflow,
+  station-lock reset, camera tuning all preserved) — MJPEG fast preview with
+  fps/quality selects, EXCLUSIVE video-pathway switch (single-encoder rule:
+  dual VP8+JPEG encode browned out station 3's PSU), snapshot-based capture on
+  the MJPEG path, WS auto-reconnect with backoff, microscope sequence panel
+  (start/abort, progress bar, grid-slot badge, auto-start-on-scan).
+npm run check: 10 errors / 434 warnings — all pre-existing baseline (one BELOW
+master's 11-error baseline), zero in touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-kjyi1fpqf-brevitest.vercel.app
+  (stable branch alias: https://bioscale-operations-system-mongodb-git-feat-mi-4c950e-brevitest.vercel.app)
+Source: branch feat/microscope-station-v2 @ commit 040fe542
+Retrieve this exact code: git checkout feat/microscope-station-v2 at commit 040fe542
+  (or: git log feat/microscope-station-v2 --oneline to find it if the branch has since moved on)
+What this deployment is for: microscope station ported onto CV-PIPELINE-V2 (reconciliation
+Option 1) — sequence ingest fields land without strict-drop, MJPEG/WebRTC single-encoder
+pathway switch + sequence panel on /capture; station 3 repointed here for end-to-end test.
+
+Post-deploy verification on station 3 (repointed to the branch alias) surfaced two
+pre-existing latent bugs in the agent ingest path, both fixed on this branch:
+1. SvelteKit CSRF guard 403s native multipart POSTs with no Origin header — ingest
+   only ever worked against `vite dev` (guard disabled in dev); EVERY production
+   build rejected it. Fix: agent sends its BIMS_URL as Origin (@ 50cb54a8).
+2. capture-ingest only honored the legacy AGENT_API_KEY, which is stale on the fleet
+   Pis — uploads 401'd against preview AND prod envs. Fix: endpoint now accepts
+   x-station-agent-key (same timing-safe helper heartbeat uses); agent sends both
+   keys (@ d191f2f7). Also: station 3's disk spool never worked (bims-spool mkdir
+   permission denied for user bims inside the root-owned deploy dir) — created
+   /var/lib/bims-capture-agent/spool owned by bims + SPOOL_DIR in station.env.
+End-to-end PASSED 2026-07-13: 2-shot sequence from station 3 → HTTP 201s → verified
+in Mongo: cv_images AND cartridge_records.photos[] both carry photoType='microscope',
+sequenceId, sequenceIndex (phase null, view untagged) with R2 URLs. Station 3
+heartbeats clean against the branch alias.
+
+================================================================================
+2026-07-13 — feat/microscope-station-v2 — pathway A/B switch removed; MJPEG is THE station view
+================================================================================
+User verdict after live testing: the MJPEG path "works perfectly — this is the
+way to go." The operator-facing "Video pathway" A/B switch (built for the lag
+test) is removed from /capture: the fast MJPEG stream is now the only station
+view, at fixed fps=15/q=80, with WebRTC negotiated ONLY as an automatic
+fallback when /preview.mjpg errors (older agents, e.g. station 2's master-era
+agent). Single-encoder guarantee unchanged — the Pi still never runs VP8 and
+JPEG encode simultaneously. Snapshot-based photo capture stays.
+npm run check: 10 errors / 434 warnings — pre-existing baseline, zero in
+touched files.

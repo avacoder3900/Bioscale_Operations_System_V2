@@ -43,7 +43,10 @@ const captureStationSchema = new Schema({
 		camera: Boolean,
 		scanner: Boolean,
 		led: Boolean,
-		robotArm: Boolean
+		robotArm: Boolean,
+		// Timed microscope grid-sequence engine (CV-MICROSCOPE-01). Gates the
+		// "Microscope sequence" panel on /capture.
+		sequence: Boolean
 	},
 	mode: { type: String, enum: ['free', 'assigned'], default: 'free' },
 	assignedPhase: String,
