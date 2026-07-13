@@ -26,4 +26,6 @@ const assemblySessionSchema = new Schema({
 	createdAt: { type: Date, default: Date.now }
 }, { timestamps: false });
 
+assemblySessionSchema.index({ spuId: 1 });
+
 export const AssemblySession = mongoose.models.AssemblySession || mongoose.model('AssemblySession', assemblySessionSchema, 'assembly_sessions');

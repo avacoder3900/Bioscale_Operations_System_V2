@@ -14,44 +14,45 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!session) throw error(404, 'Assembly session not found');
 	const s = session as any;
 
-	const spu = s.spuId ? await Spu.findById(s.spuId).lean() : null;
+	const [spu, wiDoc] = await Promise.all([
+		s.spuId ? Spu.findById(s.spuId).lean() : null,
+		s.workInstructionId ? WorkInstruction.findById(s.workInstructionId).lean() : null
+	]);
 	const sp = spu as any;
 
 	let workInstruction: { documentNumber: string } | null = null;
 	let workInstructionSteps: any[] = [];
 
-	if (s.workInstructionId) {
-		const wi = await WorkInstruction.findById(s.workInstructionId).lean() as any;
-		if (wi) {
-			workInstruction = { documentNumber: wi.documentNumber ?? '' };
-			const currentVersion = (wi.versions ?? []).find(
-				(v: any) => v.version === wi.currentVersion
-			) ?? (wi.versions ?? []).slice(-1)[0];
-			workInstructionSteps = (currentVersion?.steps ?? []).map((step: any) => ({
-				id: step._id,
-				stepNumber: step.stepNumber ?? 0,
-				title: step.title ?? '',
-				content: step.content ?? '',
-				requiresScan: step.requiresScan ?? false,
-				scanPrompt: step.scanPrompt ?? null,
-				partRequirements: (step.partRequirements ?? []).map((pr: any) => ({
-					id: pr._id,
-					partNumber: pr.partNumber ?? '',
-					quantity: pr.quantity ?? 1
-				})),
-				fieldDefinitions: (step.fieldDefinitions ?? []).map((fd: any) => ({
-					id: fd._id,
-					fieldName: fd.fieldName ?? '',
-					fieldLabel: fd.fieldLabel ?? fd.fieldName ?? '',
-					fieldType: fd.fieldType ?? 'manual_entry',
-					isRequired: fd.isRequired ?? false,
-					validationPattern: fd.validationPattern ?? null,
-					options: fd.options ?? null,
-					barcodeFieldMapping: fd.barcodeFieldMapping ?? null,
-					sortOrder: fd.sortOrder ?? 0
-				}))
-			}));
-		}
+	const wi = wiDoc as any;
+	if (wi) {
+		workInstruction = { documentNumber: wi.documentNumber ?? '' };
+		const currentVersion = (wi.versions ?? []).find(
+			(v: any) => v.version === wi.currentVersion
+		) ?? (wi.versions ?? []).slice(-1)[0];
+		workInstructionSteps = (currentVersion?.steps ?? []).map((step: any) => ({
+			id: step._id,
+			stepNumber: step.stepNumber ?? 0,
+			title: step.title ?? '',
+			content: step.content ?? '',
+			requiresScan: step.requiresScan ?? false,
+			scanPrompt: step.scanPrompt ?? null,
+			partRequirements: (step.partRequirements ?? []).map((pr: any) => ({
+				id: pr._id,
+				partNumber: pr.partNumber ?? '',
+				quantity: pr.quantity ?? 1
+			})),
+			fieldDefinitions: (step.fieldDefinitions ?? []).map((fd: any) => ({
+				id: fd._id,
+				fieldName: fd.fieldName ?? '',
+				fieldLabel: fd.fieldLabel ?? fd.fieldName ?? '',
+				fieldType: fd.fieldType ?? 'manual_entry',
+				isRequired: fd.isRequired ?? false,
+				validationPattern: fd.validationPattern ?? null,
+				options: fd.options ?? null,
+				barcodeFieldMapping: fd.barcodeFieldMapping ?? null,
+				sortOrder: fd.sortOrder ?? 0
+			}))
+		}));
 	}
 
 	const bomItems = await BomItem.find({ bomType: 'spu', isActive: true }).sort({ boxRowIndex: 1 }).lean();

@@ -143,3 +143,56 @@ if (apiKey !== process.env.AGENT_API_KEY) return json({ error: 'Unauthorized' },
 - Box.com integration is stubbed (deferred)
 - Opentrons endpoints depend on live robot hardware
 - MongoDB has seed data only — no production data migrated yet
+
+### 2026-07-13: Architecture survey + performance audit (Claude session)
+- Surveyed full stack → wrote `BIMS_ARCHITECTURE.md` (data structures, storage,
+  cloud infra, frontend) via 3 parallel exploration agents
+- Ran read-side + write-side performance audits (361 find calls, form actions,
+  serialization, indexes) → appended "Performance Audit" section to BIMS_ARCHITECTURE.md
+- Key findings:
+  - P0 BUG: spu/[spuId] AuditLog query uses non-existent fields (entityId/createdAt
+    vs recordId/changedAt) → full audit_log scan on every SPU view, returns nothing
+  - P0 BUG: CartridgeRecord.phases $push targets undeclared schema field (strict
+    mode silently drops) — shipping/+page.server.ts:187
+  - ~7 missing indexes (Spu.createdAt, TestResult, InventoryTransaction,
+    AssemblySession.spuId, ElectronicSignature, LabCartridge, CartridgeRecord.createdAt)
+  - spu/mfg loads ALL SPUs unprojected (incl. inline CSVs) for a 9-field list
+  - receiving/new does 6-8 serialized writes; audit-log write serialized in 50+ actions
+  - cartridge updateStatus/changeGroup: read-modify-write race + unbounded usageLog[]
+  - connection.ts not hardened for serverless (boolean guard, minPoolSize 1)
+- Wrote PRD: docs/prds/PERF-01-data-read-write-health.md
+- Started perf rework branch: perf/data-health-01 (multi-agent workflow implementing
+  P0 bugs, indexes, projections, parallelization, race fix, connection hardening)
+- Workflow completed (14 agents): all 8 PERF-01 tasks implemented; adversarial review
+  found 6 findings; critical (magnetometer Promise.all vs sacred middleware ordering
+  -> phantom immutable audit entries) and major (LabCartridge.status enum bypassed by
+  updateOne) both fixed
+- R6 DECISION (deliberate, per PRD flag requirement): usageLog $push left UNCAPPED —
+  cartridge detail page (cartridges/[cartridgeId]) renders the FULL usage history, so
+  a $slice cap would silently truncate displayed data; race fix ($set+$push atomic) still
+  applied. Capping requires a paginated usage-history read first (PERF-02 candidate)
+- Known cosmetic nit (left as-is): spu/[spuId] audit-trail fallback now shows raw
+  changedBy string for deleted-user IDs / literal 'system' instead of 'System'
+
+### 2026-07-13 (later session): PERF-01 follow-ups via parallel agents (perf/data-health-01, uncommitted)
+- Resumed cancelled session's work; 6 parallel agents on the deferred items:
+- Pagination (50/page + countDocuments + Prev/Next pager UI): spu/mfg, assays,
+  customers, documents/instructions, spu/documents/repository,
+  manufacturing/inventory, manufacturing/consumables
+- Skipped w/ rationale: laser-cutting + equipment/activity (already capped at 50),
+  cartridges/analysis (needs DB aggregation rewrite, not a pager), parts (bounded
+  master data; UI filters need full set)
+- mfg scan-bar regression fixed: lookup now resolves server-side (?lookup= ->
+  exact-match query -> redirect); register offer only on true DB miss
+- test-results/[resultId]: readings[] mapped output slimmed 17->14 fields
+  (dropped position/laserOutput/timestampMs; UI-verified unused) ~18% payload cut
+- Audit-write rollout: 28/49 sites are primary+single-audit -> correctly left
+  sequential (phantom-audit rule); real wins: api/agent/messages (counter batched
+  w/ audit), api/agent/query/seed (~60 upserts Promise.all'd); e-signature flows +
+  thermocouple deliberately untouched
+- Punch list (open): consumables+inventory summary cards now page-scoped;
+  customers search still server-ignored (pre-existing); repository columns broken
+  (pre-existing); assays stat-card full scan; analysis-page aggregation rewrite;
+  phases[] backfill decision
+- Typecheck: 183 errors = exact pre-existing baseline, zero new (first run showed
+  +30, artifact of skipping svelte-kit sync). Production build: in progress.

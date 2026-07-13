@@ -20,4 +20,8 @@ const testResultSchema = new Schema({
 	processedAt: Date
 }, { timestamps: true });
 
+testResultSchema.index({ status: 1, createdAt: -1 });
+testResultSchema.index({ deviceId: 1 });
+testResultSchema.index({ assayId: 1 });
+
 export const TestResult = mongoose.models.TestResult || mongoose.model('TestResult', testResultSchema, 'test_results');

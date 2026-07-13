@@ -9,6 +9,8 @@ const electronicSignatureSchema = new Schema({
 	userAgent: String, dataHash: String
 }, { timestamps: false });
 
+electronicSignatureSchema.index({ entityType: 1, entityId: 1 });
+
 applyImmutableMiddleware(electronicSignatureSchema);
 
 export const ElectronicSignature = mongoose.models.ElectronicSignature || mongoose.model('ElectronicSignature', electronicSignatureSchema, 'electronic_signatures');

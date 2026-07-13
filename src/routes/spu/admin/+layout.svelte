@@ -4,7 +4,13 @@
 
 	interface Props {
 		children: Snippet;
-		data: { canManageUsers: boolean; canManageRoles: boolean };
+		data: {
+			canManageUsers: boolean;
+			canManageRoles: boolean;
+			canManageQms: boolean;
+			qmsPhase: string;
+			regulated: boolean;
+		};
 	}
 
 	let { children, data }: Props = $props();
@@ -18,6 +24,9 @@
 		if (data.canManageRoles) {
 			items.push({ href: '/spu/admin/roles', label: 'Roles' });
 		}
+		if (data.canManageQms) {
+			items.push({ href: '/spu/admin/qms', label: 'QMS' });
+		}
 		return items;
 	});
 
@@ -27,11 +36,24 @@
 </script>
 
 <div class="space-y-6">
-	<div>
-		<h2 class="text-lg font-semibold" style="color: var(--color-tron-cyan)">Administration</h2>
-		<p class="text-sm" style="color: var(--color-tron-text-secondary)">
-			Manage users, roles, and invitations
-		</p>
+	<div class="flex items-start justify-between gap-4">
+		<div>
+			<h2 class="text-lg font-semibold" style="color: var(--color-tron-cyan)">Administration</h2>
+			<p class="text-sm" style="color: var(--color-tron-text-secondary)">
+				Manage users, roles, and invitations
+			</p>
+		</div>
+		<span
+			class="whitespace-nowrap rounded-full border px-3 py-1 text-xs font-semibold"
+			style="border-color: {data.regulated
+				? 'var(--color-tron-green)'
+				: 'var(--color-tron-cyan)'}; color: {data.regulated
+				? 'var(--color-tron-green)'
+				: 'var(--color-tron-cyan)'}"
+			title="QMS environment"
+		>
+			{data.regulated ? '● REGULATED' : '○ CONFIGURATION'}
+		</span>
 	</div>
 
 	<!-- Tab Navigation -->

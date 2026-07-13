@@ -1,6 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, InviteToken, Role, User, generateId } from '$lib/server/db';
+import { requireQmsGate, writeAudit } from '$lib/server/qms-gate';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -40,34 +41,57 @@ export const load: PageServerLoad = async ({ locals }) => {
 };
 
 export const actions: Actions = {
-	sendInvite: async ({ request, locals, url }) => {
-		requirePermission(locals.user, 'user:write');
+	sendInvite: async (event) => {
+		const form = await event.request.formData();
+		const { actor } = await requireQmsGate(event, form, {
+			permission: 'user:write',
+			action: 'Send invite',
+			entityType: 'invite_token'
+		});
 		await connectDB();
-		const form = await request.formData();
 		const email = form.get('email')?.toString().trim();
 		const roleId = form.get('roleId')?.toString() || undefined;
 		if (!email) return fail(400, { error: 'Email required' });
 
 		const token = generateId();
+		const inviteId = generateId();
 		await InviteToken.create({
-			_id: generateId(), email, token, roleId,
-			invitedBy: locals.user!._id,
+			_id: inviteId, email, token, roleId,
+			invitedBy: actor._id,
 			expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
 		});
+		await writeAudit(event, {
+			tableName: 'invite_tokens',
+			recordId: inviteId,
+			action: 'INSERT',
+			newData: { email, roleId }
+		});
 
-		const baseUrl = url.origin;
+		const baseUrl = event.url.origin;
 		const inviteUrl = `${baseUrl}/invite/accept?token=${token}`;
 		return { success: true, inviteUrl };
 	},
 
-	revokeInvite: async ({ request, locals }) => {
-		requirePermission(locals.user, 'user:write');
+	revokeInvite: async (event) => {
+		const form = await event.request.formData();
+		await requireQmsGate(event, form, {
+			permission: 'user:write',
+			action: 'Revoke invite',
+			entityType: 'invite_token',
+			entityId: form.get('inviteId')?.toString()
+		});
 		await connectDB();
-		const form = await request.formData();
 		const inviteId = form.get('inviteId')?.toString();
 		if (!inviteId) return fail(400, { error: 'Invite ID required' });
 
 		await InviteToken.updateOne({ _id: inviteId }, { $set: { status: 'expired' } });
+		await writeAudit(event, {
+			tableName: 'invite_tokens',
+			recordId: inviteId,
+			action: 'UPDATE',
+			newData: { status: 'expired' },
+			changedFields: ['status']
+		});
 		return { success: true };
 	}
 };

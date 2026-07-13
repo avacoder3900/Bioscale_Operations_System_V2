@@ -2,11 +2,21 @@ import { redirect, fail } from '@sveltejs/kit';
 import { connectDB, Consumable, AuditLog, generateId } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!locals.user) redirect(302, '/login');
 	await connectDB();
 
-	const consumables = await Consumable.find().sort({ type: 1, createdAt: -1 }).lean();
+	const pageSize = 50;
+	const page = Math.max(1, parseInt(url.searchParams.get('page') ?? '1', 10) || 1);
+
+	const [consumables, totalCount] = await Promise.all([
+		Consumable.find()
+			.sort({ type: 1, createdAt: -1 })
+			.skip((page - 1) * pageSize)
+			.limit(pageSize)
+			.lean(),
+		Consumable.countDocuments()
+	]);
 
 	const serialized = (consumables as any[]).map((c: any) => ({
 		id: c._id,
@@ -50,7 +60,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		top_seal_roll: serialized.filter(c => c.type === 'top_seal_roll')
 	};
 
-	return { consumables: JSON.parse(JSON.stringify(grouped)) };
+	return { consumables: JSON.parse(JSON.stringify(grouped)), page, pageSize, totalCount };
 };
 
 export const actions: Actions = {

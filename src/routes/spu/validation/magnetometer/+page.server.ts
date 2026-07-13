@@ -42,6 +42,7 @@ export const actions: Actions = {
 
 		const spu = await Spu.findById(spuId).lean() as any;
 		if (!spu?.particleLink?.particleDeviceId) return fail(400, { error: 'SPU has no Particle device linked' });
+		if (spu.finalizedAt) return fail(400, { error: 'Cannot modify finalized SPU. Use corrections.' });
 
 		// Read the current magnet_validation variable (from a previous run_test)
 		try {
@@ -73,6 +74,8 @@ export const actions: Actions = {
 			const overallPassed = failureReasons.length === 0;
 
 			const sessionId = generateId();
+			const magStatus = overallPassed ? 'passed' : 'failed';
+			// Sequential on purpose: Spu.updateOne is sacred-gated (may throw); the immutable audit entry must only be written after it succeeds
 			await ValidationSession.create({
 				_id: sessionId,
 				type: 'mag',
@@ -91,7 +94,6 @@ export const actions: Actions = {
 			});
 
 			// Update SPU validation record
-			const magStatus = overallPassed ? 'passed' : 'failed';
 			await Spu.updateOne({ _id: spuId }, {
 				$set: {
 					'validation.magnetometer': {

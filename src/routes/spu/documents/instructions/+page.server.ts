@@ -2,9 +2,16 @@ import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, WorkInstruction, AuditLog, generateId } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async () => {
+export const load: PageServerLoad = async ({ url }) => {
 	await connectDB();
-	const wis = await WorkInstruction.find().sort({ updatedAt: -1 }).lean();
+
+	const pageSize = 50;
+	const page = Math.max(1, parseInt(url.searchParams.get('page') ?? '1') || 1);
+
+	const [wis, totalCount] = await Promise.all([
+		WorkInstruction.find().sort({ updatedAt: -1 }).skip((page - 1) * pageSize).limit(pageSize).lean(),
+		WorkInstruction.countDocuments()
+	]);
 
 	return {
 		workInstructions: wis.map((wi: any) => ({
@@ -26,7 +33,10 @@ export const load: PageServerLoad = async () => {
 			category: wi.category ?? null,
 			createdAt: wi.createdAt,
 			updatedAt: wi.updatedAt
-		}))
+		})),
+		page,
+		pageSize,
+		totalCount
 	};
 };
 

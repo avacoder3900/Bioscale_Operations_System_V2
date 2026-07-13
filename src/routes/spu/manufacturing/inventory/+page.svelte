@@ -14,10 +14,15 @@
 				individualBacks: number;
 				cartridgesPerSheet: number;
 			};
+			page: number;
+			pageSize: number;
+			totalCount: number;
 		};
 	}
 
 	let { data }: Props = $props();
+
+	let totalPages = $derived(Math.max(1, Math.ceil(data.totalCount / data.pageSize)));
 </script>
 
 <div class="space-y-6">
@@ -78,5 +83,22 @@
 				</tbody>
 			</table>
 		</div>
+
+		<!-- Pagination -->
+		{#if totalPages > 1}
+			<div class="mt-4 flex items-center justify-center gap-4">
+				{#if data.page > 1}
+					<a href="?page={data.page - 1}" class="tron-btn-secondary">Prev</a>
+				{:else}
+					<span class="tron-btn-secondary pointer-events-none opacity-40">Prev</span>
+				{/if}
+				<span class="text-sm text-[var(--color-tron-text-secondary)]">Page {data.page} of {totalPages}</span>
+				{#if data.page < totalPages}
+					<a href="?page={data.page + 1}" class="tron-btn-secondary">Next</a>
+				{:else}
+					<span class="tron-btn-secondary pointer-events-none opacity-40">Next</span>
+				{/if}
+			</div>
+		{/if}
 	</section>
 </div>

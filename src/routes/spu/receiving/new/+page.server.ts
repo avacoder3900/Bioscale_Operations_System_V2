@@ -273,11 +273,24 @@ export const actions: Actions = {
 				status
 			});
 
+			// Fetch current counts needed by the inventory writes below
+			let prevPart: any = null;
+			let mfgMaterial: any = null;
+			if (status === 'accepted') {
+				[prevPart, mfgMaterial] = await Promise.all([
+					PartDefinition.findById(partId).lean(),
+					ManufacturingMaterial.findOne({ partDefinitionId: partId }).lean()
+				]) as any[];
+			}
+
+			// Remaining writes are independent (pre-generated ids, no read-backs) — run concurrently
+			const followUpWrites: Promise<unknown>[] = [];
+
 			// Create tool confirmations if present
 			if (confirmedToolsJson) {
 				const confirmedTools = JSON.parse(confirmedToolsJson) as { tool_id: string; name: string }[];
 				if (confirmedTools.length > 0) {
-					await ToolConfirmation.insertMany(
+					followUpWrites.push(ToolConfirmation.insertMany(
 						confirmedTools.map((t) => ({
 							_id: generateId(),
 							lotId: lot._id,
@@ -289,13 +302,13 @@ export const actions: Actions = {
 							},
 							confirmedAt: new Date()
 						}))
-					);
+					));
 				}
 			}
 
 			// Create inspection results if present
 			if (inspectionResultRows.length > 0) {
-				await InspectionResult.insertMany(
+				followUpWrites.push(InspectionResult.insertMany(
 					inspectionResultRows.map((r) => ({
 						_id: generateId(),
 						lotId: lot._id,
@@ -308,21 +321,20 @@ export const actions: Actions = {
 						toolUsed: r.toolUsed,
 						notes: r.notes
 					}))
-				);
+				));
 			}
 
 			// Update inventory on acceptance
 			if (status === 'accepted') {
-				const prevPart = await PartDefinition.findById(partId).lean() as any;
 				const prevCount = prevPart?.inventoryCount ?? 0;
 				const newCount = prevCount + quantity;
 
-				await PartDefinition.updateOne(
+				followUpWrites.push(PartDefinition.updateOne(
 					{ _id: partId },
 					{ $inc: { inventoryCount: quantity } }
-				);
+				));
 
-				await InventoryTransaction.create({
+				followUpWrites.push(InventoryTransaction.create({
 					_id: generateId(),
 					partDefinitionId: partId,
 					transactionType: 'receipt',
@@ -332,16 +344,15 @@ export const actions: Actions = {
 					reason: `Received lot ${lotId}`,
 					performedBy: locals.user!._id,
 					performedAt: new Date()
-				});
+				}));
 
 				// FIX-04: Also sync ManufacturingMaterial if one is linked to this PartDefinition
-				const mfgMaterial = await ManufacturingMaterial.findOne({ partDefinitionId: partId }).lean() as any;
 				if (mfgMaterial) {
 					const mfgBefore = mfgMaterial.currentQuantity ?? 0;
 					const mfgAfter = mfgBefore + quantity;
 					const now = new Date();
 
-					await ManufacturingMaterialTransaction.create({
+					followUpWrites.push(ManufacturingMaterialTransaction.create({
 						_id: generateId(),
 						materialId: mfgMaterial._id,
 						transactionType: 'receive',
@@ -351,7 +362,7 @@ export const actions: Actions = {
 						operatorId: locals.user!._id,
 						notes: `Received via lot ${lotId}`,
 						createdAt: now
-					});
+					}));
 
 					const txEntry = {
 						transactionType: 'receive',
@@ -363,16 +374,16 @@ export const actions: Actions = {
 						createdAt: now
 					};
 
-					await ManufacturingMaterial.findByIdAndUpdate(mfgMaterial._id, {
+					followUpWrites.push(ManufacturingMaterial.findByIdAndUpdate(mfgMaterial._id, {
 						$set: { currentQuantity: mfgAfter, updatedAt: now },
 						$push: { recentTransactions: { $each: [txEntry], $slice: -100 } }
-					});
+					}));
 				}
 			}
 
 			// Audit log for override
 			if (overrideApplied) {
-				await AuditLog.create({
+				followUpWrites.push(AuditLog.create({
 					_id: generateId(),
 					tableName: 'receiving_lot',
 					recordId: lot._id,
@@ -385,12 +396,12 @@ export const actions: Actions = {
 					},
 					changedBy: locals.user!._id,
 					changedAt: new Date()
-				});
+				}));
 			}
 
 			// Audit log for rejection
 			if (status === 'rejected') {
-				await AuditLog.create({
+				followUpWrites.push(AuditLog.create({
 					_id: generateId(),
 					tableName: 'receiving_lot',
 					recordId: lot._id,
@@ -402,8 +413,10 @@ export const actions: Actions = {
 					},
 					changedBy: locals.user!._id,
 					changedAt: new Date()
-				});
+				}));
 			}
+
+			if (followUpWrites.length > 0) await Promise.all(followUpWrites);
 
 			return { success: true, lotCreated: true, lotId: lot._id };
 		} catch (err) {

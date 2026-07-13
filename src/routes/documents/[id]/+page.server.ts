@@ -7,18 +7,15 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	const doc = await Document.findById(params.id).lean() as any;
 	if (!doc) error(404, 'Document not found');
 
-	// Resolve owner username
-	let ownerUsername: string | null = null;
-	if (doc.ownerId) {
-		const owner = await User.findById(doc.ownerId).select('username').lean() as any;
-		ownerUsername = owner?.username ?? null;
-	}
-
-	// Resolve revision creator usernames
+	// Resolve owner + revision creator usernames
 	const creatorIds = [...new Set((doc.revisions ?? []).map((r: any) => r.createdBy).filter(Boolean))];
-	const creators = creatorIds.length > 0
-		? await User.find({ _id: { $in: creatorIds } }).select('_id username').lean()
-		: [];
+	const [owner, creators] = await Promise.all([
+		doc.ownerId ? User.findById(doc.ownerId).select('username').lean() : null,
+		creatorIds.length > 0
+			? User.find({ _id: { $in: creatorIds } }).select('_id username').lean()
+			: []
+	]);
+	const ownerUsername = (owner as any)?.username ?? null;
 	const creatorMap = new Map(creators.map((u: any) => [u._id, u.username]));
 
 	// Get user's training records across all revisions

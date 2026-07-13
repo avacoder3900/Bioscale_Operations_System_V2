@@ -179,23 +179,24 @@ export const actions: Actions = {
 		const packageId = data.get('packageId') as string;
 		const cartridgeId = data.get('cartridgeId') as string;
 
-		await ShippingPackage.findByIdAndUpdate(packageId, {
-			$push: { cartridges: { cartridgeId, addedAt: new Date() } }
-		});
-
-		// Write shipping phase to cartridge DMR
-		await CartridgeRecord.findByIdAndUpdate(cartridgeId, {
-			$push: {
-				phases: {
-					phaseType: 'shipping',
-					status: 'completed',
-					startedAt: new Date(),
-					completedAt: new Date(),
-					performedBy: { _id: locals.user._id, username: locals.user.username },
-					notes: `Added to shipping package ${packageId}`
+		await Promise.all([
+			ShippingPackage.findByIdAndUpdate(packageId, {
+				$push: { cartridges: { cartridgeId, addedAt: new Date() } }
+			}),
+			// Write shipping phase to cartridge DMR
+			CartridgeRecord.findByIdAndUpdate(cartridgeId, {
+				$push: {
+					phases: {
+						phaseType: 'shipping',
+						status: 'completed',
+						startedAt: new Date(),
+						completedAt: new Date(),
+						performedBy: { _id: locals.user._id, username: locals.user.username },
+						notes: `Added to shipping package ${packageId}`
+					}
 				}
-			}
-		});
+			})
+		]);
 
 		return { success: true };
 	},

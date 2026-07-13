@@ -25,6 +25,15 @@
 	}
 
 	let filteredCustomers = $derived(data.customers);
+
+	let totalPages = $derived(Math.max(1, Math.ceil(data.totalCount / data.pageSize)));
+
+	function goToPage(n: number) {
+		const params = new SvelteURLSearchParams($page.url.searchParams);
+		params.set('page', String(n));
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- resolve used, query params appended
+		goto(resolve('/spu/customers') + `?${params.toString()}`);
+	}
 </script>
 
 <div class="space-y-6">
@@ -256,4 +265,13 @@
 			</table>
 		</div>
 	</TronCard>
+
+	<!-- Pagination -->
+	{#if totalPages > 1}
+		<div class="flex items-center justify-center gap-4">
+			<TronButton onclick={() => goToPage(data.page - 1)} disabled={data.page <= 1}>Prev</TronButton>
+			<span class="tron-text-muted text-sm">Page {data.page} of {totalPages}</span>
+			<TronButton onclick={() => goToPage(data.page + 1)} disabled={data.page >= totalPages}>Next</TronButton>
+		</div>
+	{/if}
 </div>

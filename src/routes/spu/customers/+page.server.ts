@@ -3,11 +3,17 @@ import { connectDB, Customer, Spu, AuditLog } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
 import type { PageServerLoad, Actions } from './$types';
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!locals.user) redirect(302, '/login');
 	await connectDB();
 
-	const customers = await Customer.find().sort({ name: 1 }).lean();
+	const pageSize = 50;
+	const page = Math.max(1, parseInt(url.searchParams.get('page') ?? '1') || 1);
+
+	const [customers, totalCount] = await Promise.all([
+		Customer.find().sort({ name: 1 }).skip((page - 1) * pageSize).limit(pageSize).lean(),
+		Customer.countDocuments()
+	]);
 
 	// Get SPU counts per customer
 	const spuCounts = await Spu.aggregate([
@@ -27,7 +33,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 			contactPhone: c.contactPhone ?? null,
 			createdAt: c.createdAt,
 			spuCount: countMap.get(c._id) ?? 0
-		}))
+		})),
+		page,
+		pageSize,
+		totalCount
 	};
 };
 

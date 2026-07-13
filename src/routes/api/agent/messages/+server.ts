@@ -63,6 +63,7 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	let routingReason = 'direct';
 	let audienceTier = 'individual';
+	let matchedPatternId: string | null = null;
 	if (messageType) {
 		const pattern = await RoutingPattern.findOne({
 			contentType: messageType,
@@ -72,10 +73,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		if (pattern) {
 			routingReason = `pattern:${pattern._id}`;
 			audienceTier = pattern.stakeholderRoles?.[0] ?? 'individual';
-			await RoutingPattern.findByIdAndUpdate(pattern._id, {
-				$inc: { usageCount: 1 },
-				lastUsed: new Date()
-			});
+			matchedPatternId = pattern._id;
 		}
 	}
 
@@ -93,15 +91,25 @@ export const POST: RequestHandler = async ({ request }) => {
 		audienceTier
 	});
 
-	await AuditLog.create({
-		_id: generateId(),
-		tableName: 'agent_messages',
-		recordId: message._id,
-		action: 'INSERT',
-		newData: { toUserId, messageType: messageType || 'info', priority: priority || 'normal' },
-		changedAt: new Date(),
-		changedBy: 'agent-api'
-	});
+	// Audit and the routing-pattern usage counter are independent secondary writes;
+	// run them together after the primary message write has committed.
+	await Promise.all([
+		AuditLog.create({
+			_id: generateId(),
+			tableName: 'agent_messages',
+			recordId: message._id,
+			action: 'INSERT',
+			newData: { toUserId, messageType: messageType || 'info', priority: priority || 'normal' },
+			changedAt: new Date(),
+			changedBy: 'agent-api'
+		}),
+		...(matchedPatternId
+			? [RoutingPattern.findByIdAndUpdate(matchedPatternId, {
+				$inc: { usageCount: 1 },
+				lastUsed: new Date()
+			})]
+			: [])
+	]);
 
 	return json({ success: true, data: { id: message._id, status: 'pending' } }, { status: 201 });
 };

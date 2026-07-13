@@ -15,6 +15,15 @@ const correctionSchema = new Schema({
 	approvedAt: Date
 }, { _id: false });
 
+const phaseEntrySchema = new Schema({
+	phaseType: String,
+	status: String,
+	startedAt: Date,
+	completedAt: Date,
+	performedBy: operatorRef,
+	notes: String
+}, { _id: false });
+
 const cartridgeRecordSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 
@@ -100,6 +109,8 @@ const cartridgeRecordSchema = new Schema({
 			'sealed', 'cured', 'stored', 'released', 'shipped', 'assay_loaded', 'testing', 'completed', 'voided']
 	},
 
+	phases: [phaseEntrySchema],
+
 	finalizedAt: Date,
 	voidedAt: Date,
 	voidReason: String,
@@ -119,6 +130,7 @@ cartridgeRecordSchema.index({ currentPhase: 1, 'reagentFilling.expirationDate': 
 cartridgeRecordSchema.index({ 'testExecution.spu._id': 1 });
 cartridgeRecordSchema.index({ 'sample.subjectId': 1 });
 cartridgeRecordSchema.index({ 'testResult.status': 1 });
+cartridgeRecordSchema.index({ createdAt: -1 });
 
 applySacredMiddleware(cartridgeRecordSchema);
 

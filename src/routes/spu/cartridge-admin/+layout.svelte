@@ -59,6 +59,9 @@
 		<a href={resolve('/spu/cartridge-admin/sku-management')} class={tabClass('/spu/cartridge-admin/sku-management')}>
 			SKU Management
 		</a>
+		<a href={resolve('/spu/cartridge-admin/photo-staging')} class={tabClass('/spu/cartridge-admin/photo-staging')}>
+			Photo Staging
+		</a>
 	</div>
 
 	{@render children()}

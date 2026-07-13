@@ -35,11 +35,16 @@
 				incubator_tube: ConsumableItem[];
 				top_seal_roll: ConsumableItem[];
 			};
+			page: number;
+			pageSize: number;
+			totalCount: number;
 		};
 		form: { success?: boolean; error?: string; consumableId?: string } | null;
 	}
 
 	let { data, form }: Props = $props();
+
+	const totalPages = $derived(Math.max(1, Math.ceil(data.totalCount / data.pageSize)));
 
 	let showCreate = $state(false);
 	let selectedType = $state('deck');
@@ -303,6 +308,39 @@
 			</section>
 		{/if}
 	{/each}
+
+	<!-- Pager -->
+	{#if data.totalCount > data.pageSize}
+		<div class="flex items-center justify-between border-t border-[var(--color-tron-border)] pt-4">
+			<p class="text-xs text-[var(--color-tron-text-secondary)]">
+				Page {data.page} of {totalPages} · {data.totalCount} total
+			</p>
+			<!-- eslint-disable svelte/no-navigation-without-resolve -->
+			<div class="flex gap-2">
+				{#if data.page > 1}
+					<a
+						href="?page={data.page - 1}"
+						class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)]/50 hover:text-[var(--color-tron-text)]"
+					>
+						Prev
+					</a>
+				{:else}
+					<span class="rounded border border-[var(--color-tron-border)]/40 px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)]/40">Prev</span>
+				{/if}
+				{#if data.page < totalPages}
+					<a
+						href="?page={data.page + 1}"
+						class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)]/50 hover:text-[var(--color-tron-text)]"
+					>
+						Next
+					</a>
+				{:else}
+					<span class="rounded border border-[var(--color-tron-border)]/40 px-3 py-1.5 text-xs text-[var(--color-tron-text-secondary)]/40">Next</span>
+				{/if}
+			</div>
+			<!-- eslint-enable svelte/no-navigation-without-resolve -->
+		</div>
+	{/if}
 
 	{#if allConsumables.length === 0}
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-8 text-center">

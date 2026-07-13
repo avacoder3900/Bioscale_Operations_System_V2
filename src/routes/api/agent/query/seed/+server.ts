@@ -130,28 +130,27 @@ export const POST: RequestHandler = async ({ request }) => {
 	requireAgentApiKey(request);
 	await connectDB();
 
-	let schemaCount = 0;
-	let queryCount = 0;
+	// Schema-metadata and agent-query upserts are all independent of one another
+	// (distinct filters, distinct collections), so run them concurrently.
+	await Promise.all([
+		...SCHEMA_ENTRIES.map((entry) =>
+			SchemaMetadata.findOneAndUpdate(
+				{ collectionName: entry.collectionName },
+				{ $set: { ...entry, tableName: entry.collectionName } },
+				{ upsert: true }
+			)
+		),
+		...QUERY_ENTRIES.map((entry) =>
+			AgentQuery.findOneAndUpdate(
+				{ name: entry.name },
+				{ $set: { ...entry, isActive: true } },
+				{ upsert: true }
+			)
+		)
+	]);
 
-	// Upsert schema metadata
-	for (const entry of SCHEMA_ENTRIES) {
-		await SchemaMetadata.findOneAndUpdate(
-			{ collectionName: entry.collectionName },
-			{ $set: { ...entry, tableName: entry.collectionName } },
-			{ upsert: true }
-		);
-		schemaCount++;
-	}
-
-	// Upsert agent queries
-	for (const entry of QUERY_ENTRIES) {
-		await AgentQuery.findOneAndUpdate(
-			{ name: entry.name },
-			{ $set: { ...entry, isActive: true } },
-			{ upsert: true }
-		);
-		queryCount++;
-	}
+	const schemaCount = SCHEMA_ENTRIES.length;
+	const queryCount = QUERY_ENTRIES.length;
 
 	await AuditLog.create({
 		_id: generateId(),

@@ -9,8 +9,10 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 
 	await connectDB();
 
-	const projects = await KanbanProject.find({ isActive: true }).sort({ sortOrder: 1 }).lean();
-	const users = await User.find({}, { _id: 1, username: 1 }).lean();
+	const [projects, users] = await Promise.all([
+		KanbanProject.find({ isActive: true }).sort({ sortOrder: 1 }).lean(),
+		User.find({}, { _id: 1, username: 1 }).lean()
+	]);
 
 	return {
 		user: locals.user,

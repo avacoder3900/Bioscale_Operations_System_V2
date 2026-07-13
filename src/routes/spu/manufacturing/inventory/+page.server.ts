@@ -5,13 +5,20 @@ import {
 } from '$lib/server/db';
 import type { PageServerLoad, Actions } from './$types';
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!locals.user) redirect(302, '/login');
 	await connectDB();
 
-	const [materials, settingsDoc] = await Promise.all([
-		ManufacturingMaterial.find().sort({ name: 1 }).lean(),
-		ManufacturingSettings.findById('default').lean()
+	const pageSize = 50;
+	const page = Math.max(1, parseInt(url.searchParams.get('page') ?? '1') || 1);
+
+	// Derived "Individual Backs" needs the laser-cut material regardless of which
+	// page is being viewed, so query it separately from the paginated list.
+	const [materials, totalCount, settingsDoc, laserCutMaterial] = await Promise.all([
+		ManufacturingMaterial.find().sort({ name: 1 }).skip((page - 1) * pageSize).limit(pageSize).lean(),
+		ManufacturingMaterial.countDocuments(),
+		ManufacturingSettings.findById('default').lean(),
+		ManufacturingMaterial.findOne({ name: /laser.?cut|cut.?sub|substrate/i }).lean()
 	]);
 
 	const general = (settingsDoc as any)?.general ?? {};
@@ -30,11 +37,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	}));
 
 	// Derived: "Individual Backs Available" = laser-cut sheets × cartridgesPerSheet
-	// Find the laser-cut output material
-	const laserCutMaterial = (materials as any[]).find((m: any) =>
-		m.name && /laser.?cut|cut.?sub|substrate/i.test(m.name)
-	);
-	const laserCutQty = laserCutMaterial?.currentQuantity ?? 0;
+	const laserCutQty = (laserCutMaterial as any)?.currentQuantity ?? 0;
 	const individualBacks = laserCutQty * cartridgesPerSheet;
 
 	return {
@@ -42,7 +45,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 		derived: {
 			individualBacks,
 			cartridgesPerSheet
-		}
+		},
+		page,
+		pageSize,
+		totalCount
 	};
 };
 

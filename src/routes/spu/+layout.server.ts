@@ -10,26 +10,23 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 
 	await connectDB();
 
-	// Check Box.com connection status
-	let isBoxConnected = false;
-	try {
-		const boxInteg = await Integration.findOne({ type: 'box' }).lean();
-		isBoxConnected = Boolean(boxInteg?.accessToken);
-	} catch { /* non-critical */ }
+	// Check Box.com + Particle connection status (non-critical)
+	const [boxInteg, particleInteg] = await Promise.all([
+		Integration.findOne({ type: 'box' }).lean().catch(() => null),
+		Integration.findOne({ type: 'particle' }).lean().catch(() => null)
+	]);
 
-	// Check Particle connection status
+	const isBoxConnected = Boolean(boxInteg?.accessToken);
+
 	let particleStatus: 'connected' | 'stale' | 'disconnected' = 'disconnected';
-	try {
-		const particleInteg = await Integration.findOne({ type: 'particle' }).lean();
-		if (particleInteg?.isActive) {
-			const staleThreshold = ((particleInteg.syncIntervalMinutes as number) ?? 30) * 2 * 60 * 1000;
-			if (particleInteg.lastSyncAt && Date.now() - new Date(particleInteg.lastSyncAt).getTime() < staleThreshold) {
-				particleStatus = 'connected';
-			} else {
-				particleStatus = 'stale';
-			}
+	if (particleInteg?.isActive) {
+		const staleThreshold = ((particleInteg.syncIntervalMinutes as number) ?? 30) * 2 * 60 * 1000;
+		if (particleInteg.lastSyncAt && Date.now() - new Date(particleInteg.lastSyncAt).getTime() < staleThreshold) {
+			particleStatus = 'connected';
+		} else {
+			particleStatus = 'stale';
 		}
-	} catch { /* non-critical */ }
+	}
 
 	const user = locals.user;
 	const canAccessDocuments = hasPermission(user, 'document:read');

@@ -1,6 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, InviteToken, User, Role, generateId } from '$lib/server/db';
 import { generateSessionToken, createSession, setSessionTokenCookie } from '$lib/server/auth';
+import { passwordPolicyError } from '$lib/server/qms-gate';
 import bcrypt from 'bcryptjs';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -39,6 +40,8 @@ export const actions: Actions = {
 		if (!token || !username || !password) {
 			return fail(400, { error: 'All fields are required' });
 		}
+		const pwErr = passwordPolicyError(password, username);
+		if (pwErr) return fail(400, { error: pwErr });
 
 		await connectDB();
 		const invite = await InviteToken.findOne({ token, status: 'pending' });

@@ -22,6 +22,8 @@
 			documents: Document[];
 			search: string;
 			totalCount: number;
+			page: number;
+			pageSize: number;
 		};
 		form: {
 			success?: boolean;
@@ -35,6 +37,14 @@
 	let { data, form }: Props = $props();
 
 	let searchInput = $state(data.search);
+
+	let totalPages = $derived(Math.max(1, Math.ceil(data.totalCount / data.pageSize)));
+
+	function goToPage(n: number) {
+		const url = new URL($page.url);
+		url.searchParams.set('page', String(n));
+		goto(url.toString());
+	}
 
 	function handleSearch() {
 		const url = new URL($page.url);
@@ -270,4 +280,13 @@
 			</table>
 		{/if}
 	</div>
+
+	<!-- Pagination -->
+	{#if totalPages > 1}
+		<div class="flex items-center justify-center gap-4">
+			<button type="button" class="tron-btn-secondary" onclick={() => goToPage(data.page - 1)} disabled={data.page <= 1}>Prev</button>
+			<span class="tron-text-muted text-sm">Page {data.page} of {totalPages}</span>
+			<button type="button" class="tron-btn-secondary" onclick={() => goToPage(data.page + 1)} disabled={data.page >= totalPages}>Next</button>
+		</div>
+	{/if}
 </div>

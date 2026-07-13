@@ -100,20 +100,25 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const cartridgeId = data.get('cartridgeId') as string;
 		const newStatus = data.get('status') as string;
+		if (!['available', 'in_use', 'depleted', 'expired', 'quarantine', 'disposed'].includes(newStatus)) {
+			return { success: false, error: 'Invalid status' };
+		}
 
-		const cart = await LabCartridge.findById(cartridgeId);
+		const cart = await LabCartridge.findById(cartridgeId).select('status').lean() as any;
 		if (!cart) return { success: false, error: 'Not found' };
 
-		const oldStatus = cart.status;
-		cart.status = newStatus as any;
-		cart.usageLog.push({
-			action: 'status_changed',
-			previousValue: oldStatus,
-			newValue: newStatus,
-			performedBy: { _id: locals.user._id, username: locals.user.username },
-			performedAt: new Date()
-		} as any);
-		await cart.save();
+		await LabCartridge.updateOne({ _id: cartridgeId }, {
+			$set: { status: newStatus },
+			$push: {
+				usageLog: {
+					action: 'status_changed',
+					previousValue: cart.status,
+					newValue: newStatus,
+					performedBy: { _id: locals.user._id, username: locals.user.username },
+					performedAt: new Date()
+				}
+			}
+		});
 
 		return { success: true };
 	},
@@ -127,19 +132,21 @@ export const actions: Actions = {
 		const cartridgeId = data.get('cartridgeId') as string;
 		const newGroupId = data.get('groupId') as string;
 
-		const cart = await LabCartridge.findById(cartridgeId);
+		const cart = await LabCartridge.findById(cartridgeId).select('groupId').lean() as any;
 		if (!cart) return { success: false, error: 'Not found' };
 
-		const oldGroup = cart.groupId;
-		cart.groupId = newGroupId;
-		cart.usageLog.push({
-			action: 'group_changed',
-			previousValue: oldGroup,
-			newValue: newGroupId,
-			performedBy: { _id: locals.user._id, username: locals.user.username },
-			performedAt: new Date()
-		} as any);
-		await cart.save();
+		await LabCartridge.updateOne({ _id: cartridgeId }, {
+			$set: { groupId: newGroupId },
+			$push: {
+				usageLog: {
+					action: 'group_changed',
+					previousValue: cart.groupId,
+					newValue: newGroupId,
+					performedBy: { _id: locals.user._id, username: locals.user.username },
+					performedAt: new Date()
+				}
+			}
+		});
 
 		return { success: true };
 	},

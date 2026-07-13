@@ -11,6 +11,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!batch) throw error(404, 'Batch not found');
 
 	const spus = await Spu.find({ 'batch._id': params.batchId })
+		.select('udi status deviceState assemblyStatus createdAt assembly.completedAt')
 		.sort({ createdAt: -1 })
 		.lean();
 

@@ -39,7 +39,9 @@
 		);
 	});
 
-	// Enter / Lookup → navigate to an exact match, otherwise offer to register.
+	// Enter / Lookup → navigate to an exact match. Fast path checks the loaded
+	// page client-side; on a miss we resolve against the full DB via ?lookup=,
+	// which redirects on a hit or comes back with data.lookupNotFound set.
 	function handleLookup() {
 		const term = lookupInput.trim();
 		if (!term) return;
@@ -52,9 +54,17 @@
 		if (existing) {
 			goto(`/spu/${existing.id}`);
 		} else {
-			showRegisterForm = true;
+			goto(`?lookup=${encodeURIComponent(term)}`);
 		}
 	}
+
+	// A DB-wide miss returns here with lookupNotFound → offer to register it.
+	$effect(() => {
+		if (data.lookupNotFound) {
+			lookupInput = data.lookupNotFound;
+			showRegisterForm = true;
+		}
+	});
 
 	$effect(() => {
 		if (form?.success && form?.spuId) {
@@ -229,7 +239,7 @@
 		<div class="flex items-center justify-between">
 			<h3 class="tron-text-primary text-lg font-bold">SPU Units</h3>
 			<span class="tron-text-muted text-sm">
-				{#if lookupInput.trim()}Showing {filteredSpus.length} of {data.spus.length}{:else}{data.spus.length} total{/if}
+				{#if lookupInput.trim()}Showing {filteredSpus.length} of {data.spus.length} on this page{:else}{data.totalCount} total{/if}
 			</span>
 		</div>
 
@@ -279,6 +289,24 @@
 						</TronCard>
 					</a>
 				{/each}
+			</div>
+		{/if}
+
+		{#if data.totalCount > data.pageSize}
+			<div class="flex items-center justify-center gap-4 pt-2">
+				{#if data.page > 1}
+					<a href="?page={data.page - 1}" class="tron-button" style="min-height: 44px">Prev</a>
+				{:else}
+					<span class="tron-button" style="min-height: 44px; opacity: 0.4; pointer-events: none">Prev</span>
+				{/if}
+				<span class="tron-text-muted text-sm">
+					Page {data.page} of {Math.max(1, Math.ceil(data.totalCount / data.pageSize))}
+				</span>
+				{#if data.page * data.pageSize < data.totalCount}
+					<a href="?page={data.page + 1}" class="tron-button" style="min-height: 44px">Next</a>
+				{:else}
+					<span class="tron-button" style="min-height: 44px; opacity: 0.4; pointer-events: none">Next</span>
+				{/if}
 			</div>
 		{/if}
 	{/if}

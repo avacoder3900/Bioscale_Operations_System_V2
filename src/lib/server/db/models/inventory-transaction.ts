@@ -12,6 +12,9 @@ const inventoryTransactionSchema = new Schema({
 	retractedBy: String, retractedAt: Date, retractionReason: String
 }, { timestamps: false });
 
+inventoryTransactionSchema.index({ partDefinitionId: 1, performedAt: -1 });
+inventoryTransactionSchema.index({ performedAt: -1 });
+
 applyImmutableMiddleware(inventoryTransactionSchema);
 
 export const InventoryTransaction = mongoose.models.InventoryTransaction || mongoose.model('InventoryTransaction', inventoryTransactionSchema, 'inventory_transactions');

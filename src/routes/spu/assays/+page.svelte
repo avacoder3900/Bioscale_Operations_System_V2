@@ -34,6 +34,17 @@
 		if (!date) return '—';
 		return new Date(date).toLocaleDateString();
 	}
+
+	// Build a pager link that preserves the active search/status filters.
+	function pageHref(n: number): string {
+		const params = new URLSearchParams();
+		if (data.filters.search) params.set('search', data.filters.search);
+		if (data.filters.status) params.set('status', data.filters.status);
+		params.set('page', String(n));
+		return `/spu/assays?${params.toString()}`;
+	}
+
+	let totalPages = $derived(Math.max(1, Math.ceil(data.totalCount / data.pageSize)));
 </script>
 
 <div class="mx-auto max-w-7xl space-y-6 p-4">
@@ -273,5 +284,23 @@
 				</tbody>
 			</table>
 		</div>
+
+		{#if data.totalCount > data.pageSize}
+			<div class="flex items-center justify-center gap-4 pt-2">
+				{#if data.page > 1}
+					<a href={pageHref(data.page - 1)} class="tron-button" style="min-height: 44px">Prev</a>
+				{:else}
+					<span class="tron-button" style="min-height: 44px; opacity: 0.4; pointer-events: none">Prev</span>
+				{/if}
+				<span class="text-sm" style="color: var(--color-tron-text-secondary, #9ca3af)">
+					Page {data.page} of {totalPages}
+				</span>
+				{#if data.page < totalPages}
+					<a href={pageHref(data.page + 1)} class="tron-button" style="min-height: 44px">Next</a>
+				{:else}
+					<span class="tron-button" style="min-height: 44px; opacity: 0.4; pointer-events: none">Next</span>
+				{/if}
+			</div>
+		{/if}
 	{/if}
 </div>

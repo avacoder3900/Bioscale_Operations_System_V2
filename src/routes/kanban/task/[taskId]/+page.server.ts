@@ -11,10 +11,11 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!locals.user) redirect(302, '/login');
 	await connectDB();
 
-	const task = await KanbanTask.findById(params.taskId).lean() as any;
+	const [task, projects] = await Promise.all([
+		KanbanTask.findById(params.taskId).lean() as any,
+		KanbanProject.find().sort({ sortOrder: 1 }).lean()
+	]);
 	if (!task) error(404, 'Task not found');
-
-	const projects = await KanbanProject.find().sort({ sortOrder: 1 }).lean();
 
 	// Collect all unique tags across all tasks for "allTags"
 	const allTagsRaw = await KanbanTask.distinct('tags');

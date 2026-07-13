@@ -23,12 +23,20 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	if (status === 'active') query.isActive = true;
 	if (status === 'inactive') query.isActive = false;
 
-	const [assays, linkedCounts] = await Promise.all([
-		AssayDefinition.find(query).sort({ name: 1 }).lean(),
+	const pageSize = 50;
+	const pageNum = Math.max(1, parseInt(url.searchParams.get('page') || '1', 10) || 1);
+
+	const [assays, linkedCounts, totalCount] = await Promise.all([
+		AssayDefinition.find(query)
+			.sort({ name: 1 })
+			.skip((pageNum - 1) * pageSize)
+			.limit(pageSize)
+			.lean(),
 		CartridgeRecord.aggregate([
 			{ $match: { 'reagentFilling.assayType._id': { $exists: true } } },
 			{ $group: { _id: '$reagentFilling.assayType._id', count: { $sum: 1 } } }
-		])
+		]),
+		AssayDefinition.countDocuments(query)
 	]);
 
 	// Build linked cartridge count map
@@ -56,6 +64,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			totalLinkedCartridges: totalLinked
 		},
 		filters: { search: search ?? '', status },
+		page: pageNum,
+		pageSize,
+		totalCount,
 		canWrite: hasPermission(locals.user, 'assay:write'),
 		canDelete: hasPermission(locals.user, 'assay:write')
 	};

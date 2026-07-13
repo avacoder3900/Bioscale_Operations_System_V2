@@ -20,6 +20,7 @@ if (!MONGODB_URI) {
 // All available permissions
 const ALL_PERMISSIONS = [
 	'admin:full', 'admin:users',
+	'qms:read', 'qms:admin',
 	'user:read', 'user:write',
 	'role:read', 'role:write',
 	'kanban:read', 'kanban:write', 'kanban:admin',

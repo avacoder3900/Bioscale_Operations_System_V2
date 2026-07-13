@@ -19,8 +19,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		s.createdBy ? User.findById(s.createdBy, { username: 1 }).lean() : null,
 		s.batch?._id ? Batch.findById(s.batch._id).lean() : null,
 		AssemblySession.find({ spuId: params.spuId }).sort({ createdAt: -1 }).lean(),
-		ElectronicSignature.find({ entityId: params.spuId }).sort({ signedAt: -1 }).lean(),
-		AuditLog.find({ entityId: params.spuId }).sort({ createdAt: -1 }).limit(50).lean(),
+		ElectronicSignature.find({ entityType: 'spu', entityId: params.spuId }).sort({ signedAt: -1 }).lean(),
+		AuditLog.find({ tableName: 'spus', recordId: params.spuId }).sort({ changedAt: -1 }).limit(50).lean(),
 		Customer.find({ status: 'active' }, { name: 1 }).lean()
 	]);
 
@@ -30,20 +30,14 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		particleDevice = await ParticleDevice.findOne({ particleDeviceId: s.particleLink.particleDeviceId }).lean();
 	}
 
-	// Operator name lookup for sessions
-	const opIds = sessions.map((ss: any) => ss.userId).filter(Boolean);
-	const operators = opIds.length ? await User.find({ _id: { $in: opIds } }, { username: 1 }).lean() : [];
-	const opMap = new Map(operators.map((u: any) => [u._id, u.username]));
-
-	// Signature user lookup
-	const sigUserIds = signatures.map((sig: any) => sig.userId).filter(Boolean);
-	const sigUsers = sigUserIds.length ? await User.find({ _id: { $in: sigUserIds } }, { username: 1 }).lean() : [];
-	const sigMap = new Map(sigUsers.map((u: any) => [u._id, u.username]));
-
-	// Audit trail user lookup
-	const auditUserIds = [...new Set(auditTrail.map((a: any) => a.userId).filter(Boolean))];
-	const auditUsers = auditUserIds.length ? await User.find({ _id: { $in: auditUserIds } }, { username: 1 }).lean() : [];
-	const auditMap = new Map(auditUsers.map((u: any) => [u._id, u.username]));
+	// Username lookup for sessions, signatures, and audit trail (single query)
+	const userIds = [...new Set([
+		...sessions.map((ss: any) => ss.userId),
+		...signatures.map((sig: any) => sig.userId),
+		...auditTrail.map((a: any) => a.changedBy)
+	].filter(Boolean))];
+	const users = userIds.length ? await User.find({ _id: { $in: userIds } }, { username: 1 }).lean() : [];
+	const userMap = new Map(users.map((u: any) => [u._id, u.username]));
 
 	return {
 		spu: {
@@ -145,7 +139,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			completedAt: ss.completedAt ?? null,
 			status: ss.status,
 			operatorId: ss.userId ?? '',
-			operatorName: opMap.get(ss.userId) ?? ''
+			operatorName: userMap.get(ss.userId) ?? ''
 		})),
 		signatures: signatures.map((sig: any) => ({
 			id: sig._id,
@@ -153,7 +147,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			meaning: sig.meaning ?? '',
 			signedAt: sig.signedAt,
 			userId: sig.userId ?? '',
-			userName: sigMap.get(sig.userId) ?? ''
+			userName: userMap.get(sig.userId) ?? ''
 		})),
 		assemblySignature: s.signature?._id
 			? {
@@ -172,8 +166,8 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			reason: a.reason ?? null,
 			oldData: a.oldData ?? null,
 			newData: a.newData ?? null,
-			changedBy: auditMap.get(a.userId) ?? auditMap.get(a.changedBy) ?? 'System',
-			changedAt: a.changedAt ?? a.createdAt
+			changedBy: userMap.get(a.changedBy) ?? a.changedBy ?? 'System',
+			changedAt: a.changedAt
 		}))
 	};
 };

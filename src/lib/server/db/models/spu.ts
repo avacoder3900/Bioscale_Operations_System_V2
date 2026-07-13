@@ -128,6 +128,7 @@ spuSchema.index({ 'assignment.customer._id': 1 });
 spuSchema.index({ 'parts.lotNumber': 1 });
 spuSchema.index({ 'parts.partNumber': 1 });
 spuSchema.index({ createdBy: 1 });
+spuSchema.index({ createdAt: -1 });
 
 applySacredMiddleware(spuSchema);
 

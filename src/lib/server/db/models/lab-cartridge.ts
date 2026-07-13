@@ -21,4 +21,8 @@ const labCartridgeSchema = new Schema({
 	createdBy: String
 }, { timestamps: true });
 
+labCartridgeSchema.index({ status: 1 });
+labCartridgeSchema.index({ groupId: 1 });
+labCartridgeSchema.index({ createdAt: -1 });
+
 export const LabCartridge = mongoose.models.LabCartridge || mongoose.model('LabCartridge', labCartridgeSchema, 'lab_cartridges');
