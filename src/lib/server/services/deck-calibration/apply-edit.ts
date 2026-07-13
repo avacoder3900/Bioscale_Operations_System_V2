@@ -234,6 +234,19 @@ export async function applyDeckEditBatch(
 		});
 	}
 
+	// ALL-OR-NOTHING. A batch is one operator intent ("move this band by 2.4mm"), so a
+	// partial apply is never what they asked for — it silently de-aligns the wells that
+	// WERE moved from the ones that weren't, and the deck ends up more wrong than before.
+	// This bit us on deck-001 (2026-07-13): a −2.4mm y shift of the 288-well reagent band
+	// wrote 276 and dropped all 12 row-A holes, whose y (0.25–0.8mm) sits on the labware's
+	// y=0 floor. The operator saw "Applied to 276 hole(s) ✓" and a warning suffix, and the
+	// front row was left 2.4mm out of line with its own band. Refuse the whole batch instead
+	// and name the blockers — a rejected shift costs a retry; a half-applied one costs a
+	// recalibration. (The bounds guard itself is NOT negotiable: a well at y<0 makes the
+	// whole def fail registration on the robot — see Z_UPPER_MARGIN_MM above.)
+	if (failed.length > 0) {
+		return { applied: 0, failed, fileSynced: false, results: [] };
+	}
 	if (results.length === 0) {
 		return { applied: 0, failed, fileSynced: false, results };
 	}
@@ -353,6 +366,11 @@ export async function applyDeckEditsPerWell(
 		});
 	}
 
+	// All-or-nothing, for the same reason as applyDeckEditBatch above: an align that
+	// lands half its wells leaves the cartridge less aligned than it started.
+	if (failed.length > 0) {
+		return { applied: 0, failed, fileSynced: false, results: [] };
+	}
 	if (results.length === 0) {
 		return { applied: 0, failed, fileSynced: false, results };
 	}

@@ -283,7 +283,13 @@
 			dx: String(d.x), dy: String(d.y), dz: String(d.z),
 			robotId: selectedRobotId || ''
 		});
-		if (r && record) undoStack = [...undoStack, { wellNames, delta: d, label }];
+		if (rejected(r)) return null;
+		// Record what was APPLIED, not what was requested. Recording the request meant an
+		// undo replayed the inverse onto wells the server had refused to move — and since
+		// the inverse points back INTO bounds, undo happily moved holes that had never
+		// moved, corrupting them. (With the all-or-nothing server this can't arise, but a
+		// stale client must not be able to resurrect it.)
+		if (r && record) undoStack = [...undoStack, { wellNames: r.results.map((x: any) => x.wellName), delta: d, label }];
 		return r;
 	}
 
@@ -295,8 +301,29 @@
 			edits: JSON.stringify(edits.map((e) => ({ wellName: e.wellName, dx: e.delta.x, dy: e.delta.y, dz: e.delta.z }))),
 			robotId: selectedRobotId || ''
 		});
-		if (r && record) undoStack = [...undoStack, { wellNames: edits.map((e) => e.wellName), delta: { x: 0, y: 0, z: 0 }, label, edits }];
+		if (rejected(r)) return null;
+		if (r && record) {
+			const applied = new Set(r.results.map((x: any) => x.wellName));
+			const kept = edits.filter((e) => applied.has(e.wellName));
+			undoStack = [...undoStack, { wellNames: kept.map((e) => e.wellName), delta: { x: 0, y: 0, z: 0 }, label, edits: kept }];
+		}
 		return r;
+	}
+
+	// The server now applies a batch all-or-nothing: if ANY hole would land off the
+	// labware it moves NOTHING and returns them in `failed`. Surface that as a hard
+	// error naming the blockers — the old code reported "Applied to N ✓" with a warning
+	// suffix, so a half-shifted band read as success and quietly de-aligned the deck.
+	function rejected(r: any): boolean {
+		if (!r || r.applied !== 0 || !r.failed?.length) return false;
+		const names = r.failed.map((f: any) => f.wellName);
+		const shown = names.slice(0, 8).join(', ') + (names.length > 8 ? `, +${names.length - 8} more` : '');
+		errMsg =
+			`Nothing was changed — ${names.length} hole(s) would land off the labware: ${shown}. ` +
+			`(${r.failed[0].reason}.) The whole shift was refused so the deck can't end up half-moved. ` +
+			`These holes sit on the labware edge, so the band can't move that far — move the deck definition instead of the holes, or shift by less.`;
+		msg = '';
+		return true;
 	}
 
 	// ── Align selection to the anchor hole (straighten every line) ───────────────
@@ -349,6 +376,7 @@
 			msg = applyMsg(`Aligned to ${aName}`, r) + (skips ? ` (${skips}.)` : '');
 			if (skippedNoRuler) msg += ` ⚠ ${skippedNoRuler} skipped (ruler hole missing).`;
 			clearSelection();
+			consumeOffset();  // the geometry moved — any captured reference is now stale
 			if (runId && !slotOrigin) deckDirty = true;
 		}
 	}
@@ -360,8 +388,21 @@
 		if (r) {
 			msg = applyMsg('Applied', r);
 			clearSelection();
+			consumeOffset();
 			if (runId && !slotOrigin) deckDirty = true;
 		}
+	}
+
+	// An offset is spent once applied. Leaving it in the boxes — with `nominal` still
+	// pointing at the pre-move reference — let the identical delta be fired again and
+	// again, and the server adds deltas to whatever is stored (read-modify-write), so
+	// every re-fire compounded. The post-apply banner actively invites the re-fire:
+	// it tells you the run still has the OLD positions, so you go re-verify, still see
+	// the error, re-capture against the STALE nominal (same numbers), and apply again.
+	function consumeOffset() {
+		dx = 0; dy = 0; dz = 0;
+		nominal = null;
+		refWell = null;
 	}
 
 	// Set the selection to an EXACT position: the typed x/y/z is the ANCHOR hole's
@@ -381,6 +422,7 @@
 			msg = names.length === 1
 				? `Set ${aName} to (${setX}, ${setY}, ${setZ}) — saved to BIMS.${runId && !slotOrigin ? ' Reload deck to verify.' : ''}`
 				: applyMsg(`Set anchor ${aName} → (${setX}, ${setY}, ${setZ}); moved`, r);
+			consumeOffset();  // the geometry moved — any captured reference is now stale
 			if (runId && !slotOrigin) deckDirty = true;
 		}
 	}
@@ -431,6 +473,7 @@
 		if (r) {
 			msg = applyMsg('Global shift applied', r);
 			clearSelection();
+			consumeOffset();
 			if (runId && !slotOrigin) deckDirty = true;
 		}
 	}
@@ -448,6 +491,7 @@
 		if (r) {
 			msg = applyMsg('Re-baselined the whole deck', r);
 			clearSelection();
+			consumeOffset();
 			if (runId && !slotOrigin) deckDirty = true;
 		}
 	}
