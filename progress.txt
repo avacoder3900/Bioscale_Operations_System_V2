@@ -3849,3 +3849,42 @@ NOT DONE / NOT VERIFIED — READ BEFORE USING:
 3. The branch's base commit carries the operator's previously-uncommitted
    Reagent_Filling_GEN7.py WIP (use_tip_calibration etc.), because that is what R04 actually
    runs — basing on master would have silently reverted it on the next deploy.
+
+================================================================================
+2026-07-13 — feat/fill-resume-after-tip-break — wax: USE TIP CALIBRATION toggle (default OFF)
+================================================================================
+Operator asked for the tip-bend calibration to be off for wax on R04, the way it already is
+for reagent on the other robots. Reagent has had a `use_tip_calibration` RTP (default False)
+since the 7/07 deploy; the WAX protocol had no such parameter at all — it always ran the
+probe. So this is not a settings change, it is a missing parameter. Added it, mirroring
+reagent line-for-line:
+  1. add_bool use_tip_calibration, default=False
+  2. skip the 'C' offset-baseline serial read when off (that baseline ONLY feeds the probe)
+  3. skip the per-tip X/Y limit-switch probe when off -> return {x:0.0, y:0.0}
+`adjust` is applied as Point(adjust['x'], adjust['y'], 0.0) on every move + dispense, so
+zeros == dispense at the nominal well position. Nominal is the Studio-corrected geometry, so
+this is not "uncalibrated" — it drops the per-tip bend correction only.
+
+WHAT THIS DOES *NOT* DO — the calibrator must stay plugged in. Wax reads the deck/particle ID
+off that same serial device ('I') and that is how it picks WHICH deck labware to load
+(gen4deck_gen7cartridge_001..004). Unplugging the calibrator still pauses the run at start.
+Reagent behaves identically. Only the tip-bend probe is gated.
+
+DEPLOYED to R04 via scripts/deploy-wax-to-r04.cjs (new; mirrors deploy-reagent-to-r04.cjs).
+Bundles labware from Mongo `labware_definitions` (NOT the local Opentrons app folder — that
+ships stale deck geometry and lands the run ~30mm off). Safety gate: refuses to repoint Mongo
+unless the fresh ON-ROBOT analysis completes AND exposes use_tip_calibration with default=false.
+  R04 wax entry: 9b1114b5-4343-4b0a-98da-576e9e13dd80 -> b0383d34-61a8-489f-9b4f-9e34546cbab7
+  R04 on-robot analysis: completed, 20 RTPs, use_tip_calibration default=false ✓
+R04 had no active run at deploy time (all runs stopped) — verified before uploading.
+
+NOTE: this build of the wax .py also carries the tip-break resume RTPs (resume_cartridge /
+resume_hole) from earlier today, since they live in the same file. Both default to 1, which
+resume_window() makes an exact no-op — a normal run is byte-for-byte the old behaviour, and
+scripts/test-fill-resume.py asserts exactly that. So the resume feature is now LIVE on R04's
+wax protocol but inert unless the operator sets it. Still never exercised on a real fill.
+
+NOT deployed to B07/B14 wax — the ask was R04 and those two are on older wax builds; deploying
+there would also flip their wax default to tip-cal OFF, which nobody asked for. Run
+deploy-wax-to-r04.cjs with the host/robot-id swapped when they want it.
+npm run check: unaffected (protocol .py + a .cjs script only).
