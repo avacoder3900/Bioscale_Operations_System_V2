@@ -443,3 +443,38 @@ export async function pickUpTip(
 		{ waitUntilComplete: true, timeoutMs: 30_000 }
 	);
 }
+
+/**
+ * Eject whatever tip is PHYSICALLY on the pipette into the trash — even though the run
+ * engine has no idea one is there.
+ *
+ * This is the crux of tip-break recovery. Stopping a protocol run resets the engine's tip
+ * state, so the broken tip is still on the pipette but the robot believes the mount is
+ * empty; the next run would then drive a fresh tip down on top of it. `dropTipInPlace`
+ * ejects regardless of what the engine believes — it is what the Opentrons drop-tip wizard
+ * uses. (`unsafe/dropTipInPlace` is the OT-3-only variant and errors with
+ * HardwareNotSupportedError here — verified on R04, don't reach for it.)
+ *
+ * Must be preceded by a home: the gantry position is unknown after a stop, and
+ * moveToAddressableAreaForDropTip refuses to move on unknown axes.
+ */
+export async function ejectTipToTrash(
+	robot: RobotRef,
+	runId: string,
+	pipetteId: string
+): Promise<void> {
+	await sendMaintenanceCommand(
+		robot,
+		runId,
+		'moveToAddressableAreaForDropTip',
+		{ pipetteId, addressableAreaName: 'fixedTrash', offset: { x: 0, y: 0, z: 0 } },
+		{ waitUntilComplete: true, timeoutMs: 60_000 }
+	);
+	await sendMaintenanceCommand(
+		robot,
+		runId,
+		'dropTipInPlace',
+		{ pipetteId },
+		{ waitUntilComplete: true, timeoutMs: 60_000 }
+	);
+}
