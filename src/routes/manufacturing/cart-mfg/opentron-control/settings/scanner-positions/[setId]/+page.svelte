@@ -121,7 +121,19 @@
 				lastError =
 					'Maintenance run opened but no pipette could be loaded. Jog/move-to will fail until a pipette is configured on the robot.';
 			} else {
-				lastInfo = `Connected. runId=${runId}, pipette=${pipetteName} on ${pipetteMount}.`;
+				// Home every axis before any jogging. The OT-2 refuses savePosition while
+				// ANY axis of the pipette is in an unknown position — including the plunger
+				// (B/C) we never touch here — so without this the first "read position"
+				// fails with MustHomeError and there is nothing to save. Position is
+				// unknown after any robot-server restart or power cycle, so we cannot
+				// assume an earlier flow left the arm homed.
+				lastInfo = 'Homing…';
+				await api(`/api/opentrons-lab/robots/${robot._id}/maintenance/${runId}/home`, {
+					method: 'POST',
+					body: JSON.stringify({})
+				});
+				await refreshPosition();
+				lastInfo = `Connected and homed. runId=${runId}, pipette=${pipetteName} on ${pipetteMount}.`;
 			}
 		} catch (e) {
 			lastError = e instanceof Error ? e.message : String(e);

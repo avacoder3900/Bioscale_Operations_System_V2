@@ -3765,3 +3765,65 @@ ot2-bridge; prior file kept as ot2-bridge.py.bak-20260713):
   B07 172.16.28.101 — deployed 15:29 UTC, bridge active, scanner port opened.
   B14 172.16.28.167 — NOT DEPLOYED, robot was powered off / off the network.
     Re-run the scp+restart for B14 when it is back up.
+
+================================================================================
+2026-07-13 — fix/scanner-port-reconnect — teach pages: home on Open (MustHomeError)
+================================================================================
+Second bug found the same session, surfaced by the robot-server restart above.
+Teaching barcode positions failed with:
+  Position read failed: POST /api/opentrons-lab/robots/<id>/maintenance/<runId>/position
+  -> HTTP 502: savePosition failed: [MustHomeError] Error 2013 POSITION_UNKNOWN
+     (PositionUnknownError): LEFT pipette axes (['B']) must be homed.
+and, as a direct consequence, no jogged position would save.
+
+B is the LEFT PIPETTE'S PLUNGER axis, not the gantry. savePosition defaults to
+failOnNotHomed=true and refuses to report a position while ANY axis of that
+pipette is in an unknown position — the plunger included, even though teaching
+never touches it. savePosition is how the teach page reads back where you jogged,
+so a 502 there means there is no position to persist: the save wasn't failing,
+the READ was.
+
+ROOT CAUSE — neither teach page homes when it opens a maintenance run:
+  scanner-positions/[setId]/+page.svelte  startMaintenance() -> no home
+  deck-calibration/+page.svelte           startMaintenance() -> no home
+In both, homeRobot() existed but was wired ONLY to a manual "Home" button. The
+flow (open run -> jog -> savePosition) silently depended on the robot having been
+homed by some EARLIER flow — in practice the bridge's deck_scan, which does
+home_gantry(force=True). Axis position is unknown after any robot-server restart
+or power cycle, so that assumption breaks exactly when you least expect it. The
+restart performed to unwedge R04 (see entry above) is what exposed it.
+
+The home() helper itself was never at fault: maintenance.ts:249 sends the full
+OT-2 axis set ['x','y','leftZ','rightZ','leftPlunger','rightPlunger'] — plungers
+included. The bug was that nothing called it. Precedent for the fix already
+existed: the LPC wizard (opentrons-clone/.../lpc/+page.svelte:176-184) homes
+immediately after creating its session, with a comment describing this exact
+MustHomeError on the unused mount's plunger. The teach pages were the only
+savePosition callers that never got that treatment.
+
+FIX — both teach pages now home all axes in startMaintenance(), right after the
+run opens and the pipette loads, before any jog is possible. Chose home-on-Open
+(rather than a catch-MustHomeError-and-retry in the /position endpoint) so the
+arm moves at a predictable moment the operator initiated, not mid-teach.
+Files: src/routes/manufacturing/cart-mfg/opentron-control/settings/
+       scanner-positions/[setId]/+page.svelte  (startMaintenance)
+       src/routes/manufacturing/cart-mfg/deck-calibration/+page.svelte
+       (startMaintenance; also clears the now-stale nominal/refWell, matching
+        what homeRobot() already did)
+Note deck-calibration's reloadDeckIntoRun() goes through startMaintenance(), so a
+deck reload now homes too — correct, and it costs ~30s.
+
+Verified on R04: home -> savePosition returns a real position (x=382.4 y=345.9
+z=198.8). NOT verified by reproducing MustHomeError on demand — the only reliable
+way back into the unhomed state is another robot-server restart, deliberately
+skipped so as not to re-break the operator's live session before this (client-side)
+fix is deployed. The mechanism is not in doubt: the robot names the offending axis
+itself, and the code path provably has no home on Open.
+
+npm run check: 11 errors / 434 warnings — identical pre-existing baseline, none in
+the touched files.
+
+NOTE: this half of the fix is CLIENT-side, so it only takes effect once deployed
+(branch preview or master). R04 is currently homed, so teaching works today on the
+existing prod build; the fix is what stops it recurring after the next restart or
+power cycle.

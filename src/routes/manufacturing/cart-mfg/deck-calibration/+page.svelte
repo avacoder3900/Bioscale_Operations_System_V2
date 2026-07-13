@@ -513,7 +513,19 @@
 			deckDirty = false; // fresh run loads the current deck from Mongo
 			hasTip = false;
 			if (!pipetteId) errMsg = 'Maintenance run opened but no pipette loaded — jog/move will fail until a pipette is configured.';
-			else msg = `Connected. pipette ${pipetteName} on ${pipetteMount}.`;
+			else {
+				// Home every axis before any jogging. The OT-2 refuses savePosition while ANY
+				// axis of the pipette is in an unknown position — including the plunger (B/C)
+				// we never touch here — so without this the first position read fails with
+				// MustHomeError and there is nothing to save. Position is unknown after any
+				// robot-server restart or power cycle, so we cannot assume an earlier flow
+				// (a deck scan, a previous session) left the arm homed.
+				msg = 'Homing all axes… (~30s, the gantry re-finds its endstops)';
+				await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/home`, { method: 'POST', body: JSON.stringify({}) });
+				nominal = null; refWell = null;
+				await refreshPosition();
+				msg = `Connected and homed. pipette ${pipetteName} on ${pipetteMount}.`;
+			}
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { connecting = false; }
 	}
 
