@@ -3721,3 +3721,42 @@ and the CV dropdown needed reordering.
 
 npm run check: 11 errors / 434 warnings — all pre-existing baseline
 (r2.ts, barcode-detect.ts, AskBimsWidget, assembly page), zero in touched files.
+
+================================================================================
+2026-07-10 — feat/cv-projects-guide — "How to create a CV model" guide on /cv/projects
+================================================================================
+Per user (follow-up to the stream pipeline guide, PR #29): the Projects page
+gets its own step-by-step guide so a user landing there knows how to go from
+photos to a deployed model. Replaces the old one-line "How a model comes to
+life" hint on /cv/projects with a collapsible 6-step panel; each step carries
+a "where" chip naming the exact page/tab it happens on:
+  1 Build the training data (Capture → Image Stream, review Pass/Fail, ≥5 per class)
+  2 Create a project (this page → + New project; phases/view/master scoping)
+  3 Train a version (project page → History tab; ≥5 labeled, both classes,
+    immutable versions)
+  4 Verify it passes the gate (Deployment tab; holdout count + balanced accuracy)
+  5 Deploy (Deployment tab; deploy-at phases, optional shadow version)
+  6 Review verdicts & retrain (Needs review tab; overrules feed the next version)
+Toggle button ("How do I create a model?") next to + New project; collapsed
+state persists in localStorage (cv-projects-guide-collapsed), same pattern as
+the stream guide. Pure .svelte change, no server load changes.
+Built in worktree .worktrees/cv-projects-guide (main checkout was busy on
+feat/single-photo-capture).
+npm run check: 11 errors / 434 warnings — all pre-existing baseline, zero in
+touched files.
+
+================================================================================
+2026-07-13 — feat/cv-projects-guide — "gate FAIL" rename + train-button discoverability
+================================================================================
+Per user: "gate FAIL" on the project page read as "training cartridges to
+fail". Renamed everywhere on /cv/projects/[id]: stepper now says
+"quality gate: PASSED / NOT MET" (with explanatory tooltips saying it's the
+model's accuracy check, not the cartridges), versions-table column "Gate" →
+"Quality gate" with PASSED / NOT MET cells + tooltips, caption "gate: n ≥…"
+→ "quality gate: n ≥…".
+Second complaint: user reviewed more photos but couldn't find a retrain
+button — it was hidden under a tab literally labeled "History". Tab renamed
+"Train & History", the empty-state hint updated to match, and the top
+stepper's step 2 gained a "Train new version" link that jumps straight to
+that tab. Projects-list guide steps 3/4 updated to the new names.
+npm run check: 11 errors / 434 warnings — baseline, zero in touched files.

@@ -10,7 +10,7 @@
 		training: 'Training setup',
 		deployment: 'Deployment',
 		'needs-review': 'Needs review',
-		history: 'History'
+		history: 'Train & History'
 	};
 	let activeTab = $state<Tab>('members');
 
@@ -199,13 +199,14 @@
 				{#if !latestVersion.verification}
 					<span class="text-[var(--color-tron-amber,#ffb300)]">unverified</span>
 				{:else if latestVersion.verification.passed}
-					<span class="text-[var(--color-tron-green,#39ff14)]">gate PASS</span>
+					<span class="text-[var(--color-tron-green,#39ff14)]" title="This model version scored accurately enough on held-out photos to be deployable">quality gate: PASSED</span>
 				{:else}
-					<span class="text-[var(--color-tron-red,#ff3366)]">gate FAIL</span>
+					<span class="text-[var(--color-tron-red,#ff3366)]" title="This model version isn't accurate enough yet (or has too few holdout photos) — label more and retrain. Not about your cartridges.">quality gate: NOT MET</span>
 				{/if}
 			{:else}
 				<span class="ml-1 italic">no versions yet</span>
 			{/if}
+			· <button type="button" class="text-[var(--color-tron-cyan)] underline hover:opacity-80" onclick={() => (activeTab = 'history')}>Train new version</button>
 		</span>
 		<span class="text-[var(--color-tron-border)]">→</span>
 		<span class="text-[var(--color-tron-text-secondary)]">
@@ -508,11 +509,11 @@
 				<div class="mb-2 flex items-center justify-between">
 					<h3 class="text-sm font-semibold uppercase text-[var(--color-tron-text-secondary)]">Model versions</h3>
 					<span class="text-xs text-[var(--color-tron-text-secondary)]">
-						gate: n ≥ {data.project.verifyGate.minHoldoutCount}, balanced acc ≥ {pct01(data.project.verifyGate.minBalancedAccuracy)}
+						quality gate: n ≥ {data.project.verifyGate.minHoldoutCount}, balanced acc ≥ {pct01(data.project.verifyGate.minBalancedAccuracy)}
 					</span>
 				</div>
 				{#if data.project.trainedModels.length === 0}
-					<p class="text-sm text-[var(--color-tron-text-secondary)]">No models trained yet — train one under the History tab.</p>
+					<p class="text-sm text-[var(--color-tron-text-secondary)]">No models trained yet — train one under the Train &amp; History tab.</p>
 				{:else}
 					<div class="overflow-x-auto rounded border border-[var(--color-tron-border)]">
 						<table class="w-full text-sm">
@@ -524,7 +525,7 @@
 									<th class="px-3 py-2 text-right">Images</th>
 									<th class="px-3 py-2 text-right">Holdout bal. acc</th>
 									<th class="px-3 py-2 text-right">Threshold</th>
-									<th class="px-3 py-2 text-center">Gate</th>
+									<th class="px-3 py-2 text-center">Quality gate</th>
 									<th class="px-3 py-2 text-right">Actions</th>
 								</tr>
 							</thead>
@@ -565,9 +566,9 @@
 											{#if !m.verification}
 												<span class="text-[var(--color-tron-text-secondary)]">—</span>
 											{:else if passed}
-												<span class="text-[var(--color-tron-green,#39ff14)]">PASS</span>
+												<span class="text-[var(--color-tron-green,#39ff14)]" title="Accurate enough on holdout photos — deployable">PASSED</span>
 											{:else}
-												<span class="text-[var(--color-tron-red,#ff3366)]">FAIL</span>
+												<span class="text-[var(--color-tron-red,#ff3366)]" title="Model accuracy below the gate (or too few holdout photos) — label more and retrain">NOT MET</span>
 											{/if}
 										</td>
 										<td class="px-3 py-2">
