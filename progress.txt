@@ -3668,6 +3668,33 @@ What this deployment is for: Needs-review lightbox — photos enlarge in place w
 navigation and Agree/Overrule in the overlay (advances to next photo on review).
 
 ================================================================================
+2026-07-10 — feat/single-photo-capture — Capture station: one photo per cartridge (was 2)
+================================================================================
+Per user: the front+back 2-photo workflow at /capture is no longer needed — only
+one photo per cartridge from now on, and no lingering lock across a 2nd shot.
+
+src/routes/capture/+page.svelte only (the 2-photo rule was purely client-side;
+/api/cv/capture never enforced a count):
+- PHOTOS_PER_CARTRIDGE 2 → 1. All the lock/cap/retake logic keys off this
+  constant, so the scan lock now releases after the single photo instead of
+  holding until a 2nd.
+- Retake dialog simplified: removed the "Retake only the back (2nd photo)"
+  option + retakeSecond(); single "Retake" button (deletes the photo, capture
+  a new one).
+- Copy updated throughout: header instructions (no more "Space ×2 front+back"),
+  Pi-station hint (photo auto-fires on scan lock), capture button is now just
+  "📷 Capture (Space)" instead of "Capture N of 2", banners and LOCKED tooltip
+  singular. Unlimited-capture mode for 'linked' cartridges unchanged.
+
+npm run check: 11 errors / 434 warnings — identical pre-existing baseline
+(r2.ts, barcode-detect.ts, AskBimsWidget, assembly page), zero in touched file.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/E9SfftckD5RG4Zd5pssoR6TgzWKU
+Source: branch master @ commit f65db559e (merge of feat/single-photo-capture PR #30, change commit 95c5f8785)
+Retrieve this exact code: git checkout master at commit f65db559e
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: /capture single-photo workflow — one photo per cartridge, lock releases after it; 2-photo front/back flow removed.
+
+================================================================================
 2026-07-10 — feat/cv-stream-pipeline-guide — Stream pipeline guide + CV nav reorder
 ================================================================================
 Per user: the Image Stream should teach the data flow for making a CV model,

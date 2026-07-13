@@ -255,17 +255,18 @@
 	// gates handleScan to a single lookup at a time — "scan once, lock once."
 	let locking = $state(false);
 
-	// 2-photo workflow per cartridge: photo 1 = front, photo 2 = back.
-	// After both are taken, the next capture attempt opens the retake dialog.
+	// Single-photo workflow per cartridge (was 2: front + back — dropped 2026-07
+	// since only one photo is needed). After it's taken, the next capture
+	// attempt opens the retake dialog.
 	type SessionPhoto = { id: string; cartridgeImageNumber: string };
 	let sessionPhotos = $state<SessionPhoto[]>([]);
 	let showRetakeDialog = $state(false);
 	let retakeInProgress = $state(false);
-	const PHOTOS_PER_CARTRIDGE = 2;
+	const PHOTOS_PER_CARTRIDGE = 1;
 
 	// Cartridges already at status 'linked' (assay assigned / runnable) are
-	// photographed ad hoc at the linking step, not in the fixed 2-shot
-	// front/back workflow. For them we lift the per-cartridge photo cap and the
+	// photographed ad hoc at the linking step, not in the fixed single-shot
+	// workflow. For them we lift the per-cartridge photo cap and the
 	// lock-until-done scan guard, so the operator can keep capturing and freely
 	// scan the next cartridge without hitting the retake dialog.
 	let unlimitedCapture = $derived(cartridgeStatus === 'linked');
@@ -618,19 +619,19 @@
 		// limited to 'auto'; handheld re-scans used to silently re-lock + reset
 		// the session. With lock-until-done that's the wrong default — the
 		// only legitimate re-trigger of the same code is "operator wants the
-		// retake dialog," which they reach via Capture-after-2-photos instead.)
+		// retake dialog," which they reach via Capture-after-the-photo instead.)
 		// We still return the locked id so a triggered re-scan can capture.
 		if (code === cartridgeId) return cartridgeId;
 
-		// Lock-until-done guard: a cartridge is locked AND the 2-photo session
-		// is still in progress → ignore any DIFFERENT scan code. Stops wedge
+		// Lock-until-done guard: a cartridge is locked AND its photo hasn't been
+		// taken yet → ignore any DIFFERENT scan code. Stops wedge
 		// re-reads and jsQR sightings of other cartridges from stomping on the
-		// in-flight workflow. Operator must finish photos OR click "Release"
+		// in-flight workflow. Operator must take the photo OR click "Release"
 		// (clearCartridgeForNext) before a new cartridge can lock.
 		if (cartridgeId && !unlimitedCapture && sessionPhotos.length < PHOTOS_PER_CARTRIDGE) {
 			if (source !== 'auto') {
 				// Intentional trigger pull / Space-press — operator deserves feedback.
-				flashBanner('info', `Still on ${cartridgeId} (${sessionPhotos.length}/${PHOTOS_PER_CARTRIDGE} photos). Finish or click "Release lock" to scan a new cartridge.`, 2800);
+				flashBanner('info', `Still on ${cartridgeId} — photo not taken yet. Capture it or click "Release lock" to scan a new cartridge.`, 2800);
 			}
 			// jsQR / Pi-scanner 'auto' sources are silently ignored — they fire
 			// continuously, so toasts would spam.
@@ -676,19 +677,17 @@
 	}
 
 	// Space on a live Pi station. Decides between "scan first, then capture" and
-	// "just capture the next photo":
+	// "just capture the photo":
 	//  • No cartridge locked (or the previous session is finished) → trigger a
 	//    fresh scan; the WS handler auto-captures once it locks.
-	//  • Mid-session (front already shot, back pending) → capture directly. The
-	//    cartridge identity is already established, and the barcode is usually
-	//    hidden on the back, so forcing a re-scan would just stall.
-	//  • Both photos done → open the retake dialog (same as local).
+	//  • Locked but photo not yet taken → capture directly. The cartridge
+	//    identity is already established, so forcing a re-scan would just stall.
+	//  • Photo done → open the retake dialog (same as local).
 	function onStationSpace() {
 		if (submitting || awaitingTriggeredScan) return;
-		// Already locked — either a sensing/auto read picked the cartridge up
-		// before Space, or it's mid-session. The scan half of "scan → photo"
-		// already happened, so just capture; after both photos Space reaches the
-		// retake dialog (same as local).
+		// Already locked — a sensing/auto read picked the cartridge up before
+		// Space. The scan half of "scan → photo" already happened, so just
+		// capture; after the photo Space reaches the retake dialog (same as local).
 		if (cartridgeId) {
 			if (!unlimitedCapture && sessionPhotos.length >= PHOTOS_PER_CARTRIDGE) showRetakeDialog = true;
 			else capturePhoto();
@@ -829,7 +828,7 @@
 			} else {
 				flashBanner('ok', unlimitedCapture
 					? `Captured ${result.cartridgeImageNumber} (${sessionPhotos.length})`
-					: `Captured ${result.cartridgeImageNumber} (${sessionPhotos.length}/${PHOTOS_PER_CARTRIDGE})`, 1800);
+					: `Captured ${result.cartridgeImageNumber}`, 1800);
 			}
 		} catch (e) {
 			flashBanner('err', e instanceof Error ? e.message : 'Capture failed');
@@ -851,20 +850,7 @@
 			} catch { /* best effort */ }
 		}
 		recentCaptures = recentCaptures.filter(c => !ids.includes(c.id));
-		flashBanner('info', 'Retake all — capture 2 new photos');
-	}
-
-	async function retakeSecond() {
-		showRetakeDialog = false;
-		const second = sessionPhotos[1];
-		if (!second) return;
-		sessionPhotos = [sessionPhotos[0]];
-		retakeInProgress = true;
-		try {
-			await fetch(`/api/cv/images/${second.id}`, { method: 'DELETE' });
-		} catch { /* best effort */ }
-		recentCaptures = recentCaptures.filter(c => c.id !== second.id);
-		flashBanner('info', 'Retake 2nd — capture the back photo');
+		flashBanner('info', 'Retake — capture a new photo');
 	}
 
 	function cancelRetake() {
@@ -1011,11 +997,11 @@
 			<div>
 				<h1 class="text-2xl font-bold text-[var(--color-tron-cyan)]">Capture Station</h1>
 				<p class="text-xs text-[var(--color-tron-text-secondary)]">
-					Pull the USB scanner trigger to lock a cartridge. Press Space (×2) for front + back photos. While locked, other scans are ignored — finish both photos or click "Release lock" to switch cartridges.
+					Pull the USB scanner trigger to lock a cartridge, then press Space to take its photo. While locked, other scans are ignored — take the photo or click "Release lock" to switch cartridges.
 				</p>
 				{#if selectedStationId}
 					<p class="text-xs text-[var(--color-tron-cyan)]">
-						Pi station: press Space to scan the barcode — the front photo is taken automatically once it locks. Press Space again for the back.
+						Pi station: press Space to scan the barcode — the photo is taken automatically once it locks.
 					</p>
 				{/if}
 			</div>
@@ -1119,11 +1105,11 @@
 						<div class="flex items-center gap-2">
 							<span class="font-mono text-lg text-[var(--color-tron-green,#39ff14)]">🟢 {cartridgeId}</span>
 							{#if !unlimitedCapture && sessionPhotos.length < PHOTOS_PER_CARTRIDGE}
-								<span class="rounded bg-[rgba(255,215,0,0.15)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-tron-yellow,#ffd700)]" title="Other scans are ignored until you take {PHOTOS_PER_CARTRIDGE} photos or click Release.">🔒 LOCKED</span>
+								<span class="rounded bg-[rgba(255,215,0,0.15)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-tron-yellow,#ffd700)]" title="Other scans are ignored until you take the photo or click Release.">🔒 LOCKED</span>
 							{/if}
 						</div>
 						<div class="text-xs text-[var(--color-tron-text-secondary)]">
-							{cartridgeStatus ?? 'unknown'} · {cartridgePhotoCount} prior · session {sessionPhotos.length}{unlimitedCapture ? ' (unlimited)' : `/${PHOTOS_PER_CARTRIDGE}`}
+							{cartridgeStatus ?? 'unknown'} · {cartridgePhotoCount} prior · session {sessionPhotos.length}{unlimitedCapture ? ' (unlimited)' : ''}
 						</div>
 						<button
 							type="button"
@@ -1298,7 +1284,7 @@
 								? '⎵ Scan + Capture (Space)'
 								: unlimitedCapture
 									? `📷 Capture ${sessionPhotos.length + 1} (Space)`
-									: `📷 Capture ${sessionPhotos.length + 1} of ${PHOTOS_PER_CARTRIDGE} (Space)`}
+									: '📷 Capture (Space)'}
 			</button>
 			<!-- Optional capture-time verdict (CV-PIPELINE-V2 Stage 2 entry point A).
 			     Tri-state: click the active button again to clear. Applies to the
@@ -1370,13 +1356,13 @@
 			</div>
 		{/if}
 
-		<!-- Retake dialog — opens when operator presses Space after the 2nd photo -->
+		<!-- Retake dialog — opens when operator presses Space after the photo -->
 		{#if showRetakeDialog}
 			<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true">
 				<div class="w-full max-w-md rounded-lg border border-[var(--color-tron-cyan)] bg-[var(--color-tron-bg-secondary)] p-6 space-y-4">
-					<h2 class="text-lg font-bold text-[var(--color-tron-cyan)]">Retake photos?</h2>
+					<h2 class="text-lg font-bold text-[var(--color-tron-cyan)]">Retake photo?</h2>
 					<p class="text-sm text-[var(--color-tron-text-secondary)]">
-						This cartridge already has its {PHOTOS_PER_CARTRIDGE} photos. Choose what to retake — the replaced photo(s) will be deleted.
+						This cartridge already has its photo. Retaking deletes the existing photo.
 					</p>
 					<div class="grid gap-2">
 						<button
@@ -1384,16 +1370,8 @@
 							onclick={retakeAll}
 							class="rounded border border-[var(--color-tron-red,#ff3366)] bg-[rgba(255,51,102,0.08)] px-4 py-3 text-left text-sm text-[var(--color-tron-red,#ff3366)] hover:bg-[rgba(255,51,102,0.15)]"
 						>
-							<div class="font-bold">↺ Retake both</div>
-							<div class="text-xs opacity-80">Deletes both photos. Capture 2 new ones.</div>
-						</button>
-						<button
-							type="button"
-							onclick={retakeSecond}
-							class="rounded border border-[var(--color-tron-cyan)] bg-[rgba(0,255,255,0.08)] px-4 py-3 text-left text-sm text-[var(--color-tron-cyan)] hover:bg-[rgba(0,255,255,0.15)]"
-						>
-							<div class="font-bold">↺ Retake only the back (2nd photo)</div>
-							<div class="text-xs opacity-80">Deletes the 2nd photo. Capture one new one.</div>
+							<div class="font-bold">↺ Retake</div>
+							<div class="text-xs opacity-80">Deletes the photo. Capture a new one.</div>
 						</button>
 						<button
 							type="button"
