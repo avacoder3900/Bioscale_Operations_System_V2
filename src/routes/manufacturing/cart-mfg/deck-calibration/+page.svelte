@@ -103,12 +103,39 @@
 		return wells.find((w) => selection.has(w.name))?.name ?? null;
 	});
 
+	// ── Which PIPETTE fills which hole ───────────────────────────────────────────
+	// This is the whole ballgame, and getting it wrong silently ruins a calibration.
+	//   wax     holes (even cols) are filled by p20_single_gen2  on the RIGHT mount
+	//   reagent holes (odd cols)  are filled by p300_single_gen2 on the LEFT  mount
+	// Jogging is "save the deck coordinate where THIS pipette's tip looks centred".
+	// The two pipettes have separate offset calibrations, and any residual error
+	// between them means they land in different physical places for the same
+	// coordinate. So a hole taught with the p300 is only correct FOR THE p300 — and
+	// the wax fill, which has to thread a p20 tip into a 1.8mm bore with ~0.4mm of
+	// clearance, will miss it and snap the tip. (Reagent never noticed because it is
+	// taught and run with the same p300, and it hovers above the hole anyway.)
+	// Selecting the mount also swaps the tiprack (see tiprackForMount), so this picks
+	// up the right TIP LENGTH too — the p20's tip is ~14mm shorter than the p300's.
+	const MOUNT_FOR_ROLE: Record<Role, 'left' | 'right'> = { wax: 'right', reagent: 'left' };
+
 	function setRoleFilter(r: 'all' | Role) {
 		roleFilter = r;
 		// Keep the selection within the active role so an applied offset never
 		// touches the other type of hole.
 		if (r !== 'all') selection = new Set([...selection].filter(isActiveRole));
+		// Follow the role onto the pipette that actually fills it. Only while no run
+		// is open — the mount is fixed once the maintenance run has loaded a pipette.
+		if (r !== 'all' && !runId) {
+			desiredMount = MOUNT_FOR_ROLE[r];
+			zAxis = desiredMount === 'right' ? 'rightZ' : 'leftZ';
+		}
 	}
+
+	// Roles present in the current selection that the loaded pipette does NOT fill.
+	const wrongPipetteFor = $derived.by(() => {
+		const roles = new Set([...selection].map(roleOf));
+		return [...roles].filter((r) => MOUNT_FOR_ROLE[r] !== desiredMount);
+	});
 
 	// Deselect mode: when on, box-drag and clicks REMOVE holes from the selection.
 	let deselectMode = $state(false);
@@ -1135,8 +1162,28 @@
 							>{lbl}</button>
 						{/each}
 					</div>
+					<span class="text-[10px]">
+						{desiredMount === 'right' ? 'p20 · fills WAX holes' : 'p300 · fills REAGENT holes'}
+					</span>
 					{#if runId}<span class="text-[10px]">close run to switch</span>{/if}
 				</div>
+
+				{#if wrongPipetteFor.length > 0}
+					<!-- A hole taught with the wrong pipette is taught wrong: each pipette has its
+					     own offset calibration, so the saved coordinate is only correct for the
+					     pipette that jogged it. This is what was snapping wax tips — the deck was
+					     taught with the p300 (the Studio's old default) and filled with the p20. -->
+					<div class="mt-2 rounded border border-red-500/60 bg-red-950/40 p-2 text-xs text-red-200">
+						<strong>Wrong pipette for these holes.</strong>
+						You have <strong>{wrongPipetteFor.join(' + ')}</strong> hole(s) selected, but you're
+						jogging the <strong>{desiredMount === 'right' ? 'p20 (right)' : 'p300 (left)'}</strong>.
+						{wrongPipetteFor.join('/')} holes are filled by the
+						<strong>{wrongPipetteFor.map((r) => MOUNT_FOR_ROLE[r] === 'right' ? 'p20 (right)' : 'p300 (left)').join('/')}</strong>.
+						Teaching them with this pipette saves a position that is only right for
+						<em>this</em> pipette — the fill will still miss the hole.
+						{#if runId}Close the run, switch the pipette, and re-open.{:else}Switch the pipette above.{/if}
+					</div>
+				{/if}
 
 				<div class="mt-2 flex flex-wrap items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 					<label>Step <select bind:value={stepSize} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono text-xs" style="color: var(--color-tron-text)">
