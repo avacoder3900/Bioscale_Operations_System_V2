@@ -3847,3 +3847,59 @@ What this deployment is for: microscope station live in production — CV-MICROS
 CV-PIPELINE-V2 conventions (sequence ingest fields, MJPEG station view w/ WebRTC fallback,
 snapshot capture, sequence panel) + ingest CSRF/station-key fixes. Ends the cv-microscope
 reconciliation pause.
+
+================================================================================
+2026-07-14 — feat/fill-resume-after-tip-break — THE wax tip-break root cause:
+             the deck was calibrated with the WRONG PIPETTE
+================================================================================
+The operator, after three of my fixes failed to stop the breakage: "there is a difference
+between the reagent tip and the wax filling tip height and i want to make sure that it is
+being accounted for". That instinct was right, and the truth is worse than tip length.
+
+R04 has TWO pipettes:
+    left  = p300_single_gen2 (P3HSV212021062502) -> REAGENT fill, 200uL tiprack
+    right = p20_single_gen2  (P20SV222021110407) -> WAX fill,      20uL tiprack
+And the Deck Calibration Studio opened on the LEFT mount by default:
+    src/routes/manufacturing/cart-mfg/deck-calibration/+page.svelte:471
+    let desiredMount = $state<'left' | 'right'>('left');
+So unless the operator clicked "Right" every session, THE DECK WAS TAUGHT WITH THE REAGENT
+PIPETTE AND THE REAGENT TIP, then filled with the wax pipette on the other mount.
+
+WHY THAT BREAKS WAX AND ONLY WAX. Jogging saves "the deck coordinate at which THIS pipette's
+tip looks centred on the hole". Each pipette carries its own offset calibration:
+    p300 left : x=-2.10 y=-4.10 z=-0.80   (calibrated 2024-12-17)
+    p20  right: x=-1.10 y=-5.60 z=-0.90   (calibrated 2025-10-28, 10 months apart)
+Those corrections are meant to make both pipettes agree on where a point is; any residual
+error between them means they physically land in DIFFERENT places for the same coordinate.
+A hole taught with the p300 is therefore correct FOR THE p300 ONLY.
+  - Reagent: taught with the p300, run with the p300 -> the error cancels exactly. And it
+    hovers at top+2 anyway, so it would not care. Works perfectly with tip-cal OFF, which is
+    what the operator kept (correctly) pointing at.
+  - Wax: run with the p20, inherits the full p300-vs-p20 disagreement, and is the ONLY motion
+    that must thread a tip into a 1.8mm bore with ~0.4mm of side clearance. A few tenths of a
+    mm is all it takes.
+This is why re-calibrating never helped: it was making the holes more accurate FOR THE WRONG
+PIPETTE. And it is why the depth (3.0 -> 1.0mm), the delay removal, and the 20mm/s approach
+all failed to stop it — the tip was never going too deep, it was landing beside the hole.
+Selecting the mount also swaps the tiprack (tiprackForMount), so the wrong mount also meant
+the wrong TIP LENGTH (p20 tip is ~14mm shorter) — exactly what the operator suspected.
+
+FIX (deck-calibration/+page.svelte):
+- MOUNT_FOR_ROLE = { wax: 'right', reagent: 'left' } — the Studio now follows the role filter
+  onto the pipette that actually fills those holes (while no run is open; the mount is fixed
+  once a maintenance run has loaded a pipette).
+- A red banner when the selection contains holes the loaded pipette does not fill, spelling out
+  that the saved position will only be right for the pipette that jogged it.
+npm run check: 11 errors / 434 warnings — unchanged baseline, none in this file.
+
+WHAT THE OPERATOR MUST NOW DO: re-teach deck-001's WAX holes (even columns) with the pipette
+set to RIGHT (p20). The reagent holes (odd columns) are stored separately and are already
+correct — teaching wax with the p20 will not disturb them. Wax and reagent hole x/y are
+per-well in the same def, so the two roles can carry different corrections. That is the fix;
+the protocol-side changes below are secondary.
+
+Protocol changes that stand regardless (all deployed to R04, f643dc9b):
+  dispense_depth RTP (default 1.0mm below the rim, was a hardcoded 3.0 into a 3.75mm hole)
+  first-hole approach speed-limited to 20mm/s instead of a 61mm free plunge
+  the two protocol.delay(0.3) pauses removed
+  well_z_depth no longer double-counts the global z offset
