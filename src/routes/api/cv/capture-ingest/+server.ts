@@ -28,6 +28,7 @@ import { generateId } from '$lib/server/db/utils.js';
 import { uploadViaWorker, getR2Url, buildCvNamedKey } from '$lib/server/services/r2';
 import { detectBarcodePresence, BARCODE_VIEW, NO_BARCODE_VIEW } from '$lib/server/services/barcode-detect';
 import { requireAgentApiKey } from '$lib/server/api-auth';
+import { requireStationAgentKey } from '$lib/server/auth/station-agent-key';
 import { runPhaseInference } from '$lib/server/cv/run-inference';
 import type { RequestHandler } from './$types';
 
@@ -36,17 +37,49 @@ function pad(n: number): string {
 }
 
 export const POST: RequestHandler = async ({ request }) => {
-	requireAgentApiKey(request);
+	// Two callers, two keys: the legacy lab scripts authenticate with
+	// AGENT_API_KEY (x-agent-api-key), while fleet capture stations hold only
+	// STATION_AGENT_KEY (x-station-agent-key — same key heartbeat/registration
+	// already validate). Accept whichever the caller presents; both checks are
+	// timing-safe and fail-closed.
+	if (request.headers.get('x-station-agent-key')) {
+		requireStationAgentKey(request);
+	} else {
+		requireAgentApiKey(request);
+	}
 	await connectDB();
 
 	const formData = await request.formData();
 	const file = formData.get('file') as File | null;
 	const qrCode = formData.get('qrCode')?.toString().trim();
-	const phase = formData.get('phase')?.toString().trim() || 'wax_filled';
 	const cameraIndexRaw = formData.get('cameraIndex')?.toString();
 	const processingMode = formData.get('processingMode')?.toString() as 'full' | 'raw' | undefined;
 	// Legacy projectId — silently ignored after the refactor.
 	// const _legacyProjectId = formData.get('projectId');
+
+	// Photo type: 'inspection' (default — standard station photos, phase-bound)
+	// or 'microscope' (CV-MICROSCOPE-01 timed grid sequence; a photo DESCRIPTOR,
+	// not a mfg state: phase stays null, and view auto-classification + phase
+	// inference are skipped).
+	const photoTypeRaw = formData.get('photoType')?.toString();
+	const photoType = photoTypeRaw === 'microscope' ? 'microscope' : 'inspection';
+	const phase =
+		photoType === 'microscope'
+			? null
+			: formData.get('phase')?.toString().trim() || 'wax_filled';
+
+	// Microscope grid-sequence identity (all optional; stamped by the station
+	// agent): sequenceId groups one run, sequenceIndex = order taken,
+	// locationRow/locationCol = named grid slot (e.g. B / 4).
+	const sequenceId = formData.get('sequenceId')?.toString().trim() || undefined;
+	const sequenceIndexRaw = formData.get('sequenceIndex')?.toString();
+	const sequenceIndex = sequenceIndexRaw ? Number.parseInt(sequenceIndexRaw, 10) : undefined;
+	const locationRow = formData.get('locationRow')?.toString().trim() || undefined;
+	const locationColRaw = formData.get('locationCol')?.toString();
+	const locationCol = locationColRaw ? Number.parseInt(locationColRaw, 10) : undefined;
+	if (sequenceIndex !== undefined && (Number.isNaN(sequenceIndex) || sequenceIndex < 1)) {
+		return json({ error: 'sequenceIndex must be a positive integer' }, { status: 400 });
+	}
 
 	// Optional camera view (CV-PIPELINE-V2 top/bottom split) — empty string is
 	// treated as "no view".
@@ -80,9 +113,11 @@ export const POST: RequestHandler = async ({ request }) => {
 	// view always wins; otherwise auto-classify from barcode presence (the
 	// cartridge barcode shows only in top photos). Detection never blocks or fails
 	// a capture — a null result leaves the view untagged.
+	// Microscope close-ups never show the barcode, so barcode-auto would
+	// misclassify every one as 'bottom' — leave microscope shots untagged.
 	let effectiveView: 'top' | 'bottom' | undefined = view;
 	let viewSource: 'manual' | 'barcode-auto' | undefined = view ? 'manual' : undefined;
-	if (!view) {
+	if (!view && photoType !== 'microscope') {
 		const hasBarcode = await detectBarcodePresence(buffer);
 		if (hasBarcode !== null) {
 			effectiveView = hasBarcode ? BARCODE_VIEW : NO_BARCODE_VIEW;
@@ -98,6 +133,14 @@ export const POST: RequestHandler = async ({ request }) => {
 	await uploadViaWorker(buffer, key, contentType);
 	const publicUrl = getR2Url(key);
 
+	const sequenceFields = {
+		...(sequenceId ? { sequenceId } : {}),
+		...(sequenceIndex !== undefined ? { sequenceIndex } : {}),
+		...(locationRow || locationCol !== undefined
+			? { location: { ...(locationRow ? { row: locationRow } : {}), ...(locationCol !== undefined ? { col: locationCol } : {}) } }
+			: {})
+	};
+
 	const capturedAt = new Date();
 	const image = await CvImage.create({
 		_id: id,
@@ -108,15 +151,24 @@ export const POST: RequestHandler = async ({ request }) => {
 		capturedAt,
 		imageUrl: publicUrl,
 		processingMode: processingMode === 'raw' || processingMode === 'full' ? processingMode : undefined,
-		cartridgeTag: { cartridgeRecordId: qrCode, phase },
+		cartridgeTag: { cartridgeRecordId: qrCode, ...(phase ? { phase } : {}) },
 		cartridgeImageNumber,
+		photoType,
+		...sequenceFields,
 		...(effectiveView ? { view: effectiveView } : {}),
 		...(viewSource ? { viewSource } : {})
 	});
 
 	await CartridgeRecord.updateOne(
 		{ _id: qrCode },
-		{ $push: { photos: { imageId: id, phase, capturedAt, r2Key: key, r2Url: publicUrl, cartridgeImageNumber } } }
+		{
+			$push: {
+				photos: {
+					imageId: id, phase, capturedAt, r2Key: key, r2Url: publicUrl, cartridgeImageNumber,
+					photoType, ...sequenceFields
+				}
+			}
+		}
 	);
 
 	await AuditLog.create({
@@ -124,21 +176,28 @@ export const POST: RequestHandler = async ({ request }) => {
 		tableName: 'cv_images',
 		recordId: id,
 		action: 'INSERT',
-		newData: { source: 'capture-ingest', cartridgeRecordId: qrCode, phase, view: effectiveView ?? null, viewSource: viewSource ?? null, key, cartridgeImageNumber, processingMode },
+		newData: {
+			source: 'capture-ingest', cartridgeRecordId: qrCode, phase, view: effectiveView ?? null,
+			viewSource: viewSource ?? null, key, cartridgeImageNumber, processingMode, photoType,
+			...(sequenceId ? { sequenceId, sequenceIndex, locationRow, locationCol } : {})
+		},
 		changedAt: capturedAt,
 		changedBy: 'cv-capture-agent',
 		reason: 'capture-ingest'
 	});
 
-	// Fire-and-forget phase-X auto-inference for any project deployed at this phase.
-	runPhaseInference({
-		imageId: id,
-		imageUrl: publicUrl,
-		cartridgeRecordId: qrCode,
-		phase,
-		view: effectiveView ?? null,
-		triggeredBy: 'auto-on-capture'
-	}).catch(err => console.error('[capture-ingest] phase-inference failed:', err));
+	// Fire-and-forget phase-X auto-inference for any project deployed at this
+	// phase. Microscope photos have no phase — nothing routes; skip entirely.
+	if (phase) {
+		runPhaseInference({
+			imageId: id,
+			imageUrl: publicUrl,
+			cartridgeRecordId: qrCode,
+			phase,
+			view: effectiveView ?? null,
+			triggeredBy: 'auto-on-capture'
+		}).catch(err => console.error('[capture-ingest] phase-inference failed:', err));
+	}
 
 	return json({
 		imageId: id,
@@ -146,7 +205,9 @@ export const POST: RequestHandler = async ({ request }) => {
 		key,
 		cartridgeRecordId: qrCode,
 		phase,
+		photoType,
 		view: effectiveView ?? null,
-		viewSource: viewSource ?? null
+		viewSource: viewSource ?? null,
+		...(sequenceId ? { sequenceId, sequenceIndex, location: { row: locationRow, col: locationCol } } : {})
 	}, { status: 201 });
 };

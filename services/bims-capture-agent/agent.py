@@ -24,7 +24,9 @@ from dotenv import load_dotenv
 
 # Local sibling modules — agent.py is run as a script, not as a package member.
 import camera as camera_mod  # noqa: E402
+import preview as preview_mod  # noqa: E402
 import scanner as scanner_mod  # noqa: E402
+import sequence as sequence_mod  # noqa: E402
 
 __version__ = "0.1.0"
 
@@ -68,16 +70,38 @@ def _bool_env(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
+async def _broadcast(message: dict) -> None:
+    """Fan a JSON event out to every connected operator browser.
+
+    Same dead-client-guarding model as _broadcast_scans. Used by the sequence
+    engine for sequence_progress / sequence_done / sequence_error events.
+    """
+    for ws in list(_ws_clients):
+        if ws.closed:
+            _ws_clients.discard(ws)
+            continue
+        try:
+            await ws.send_json(message)
+        except Exception:
+            log.exception("failed to broadcast to a client; dropping")
+            _ws_clients.discard(ws)
+
+
 async def health(_request: web.Request) -> web.Response:
+    # `capabilities` lets the /capture UI feature-gate. The timed microscope
+    # sequence engine is always compiled in, so "sequence" is always advertised;
+    # the browser still checks camera_ok before offering the Start button.
     return web.json_response(
         {
             "station_id": os.environ.get("STATION_ID", ""),
             "station_name": os.environ.get("STATION_NAME", ""),
             "agent_version": __version__,
             "camera_ok": camera_mod.is_available(),
+            "camera_profile": camera_mod.profile(),
             "scanner_ok": scanner_mod.is_available(),
             "led_ok": False,
             "robot_arm_ok": False,
+            "capabilities": ["sequence", "snapshot"],
             "uptime_s": int(time.monotonic() - _started_at),
         }
     )
@@ -244,6 +268,40 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
                             "ts": int(time.time() * 1000),
                         }
                     )
+                elif cmd == "sequence_start":
+                    # Timed microscope run: grab N full-res stills on an
+                    # interval, spool + upload each to /api/cv/capture-ingest,
+                    # stream sequence_progress events back. Rejected (error
+                    # event) if a run is already active or cartridgeId missing.
+                    ok, result = await sequence_mod.manager.start(
+                        cartridge_id=payload.get("cartridgeId"),
+                        count=payload.get("count"),
+                        interval_ms=payload.get("intervalMs"),
+                        grab_still=camera_mod.grab_still,
+                        broadcast=_broadcast,
+                        # Live/still split: hold the sensor at still resolution
+                        # for the whole run (renegotiation ~4s on the Celestron).
+                        still_enter=camera_mod.enter_still_mode,
+                        still_exit=camera_mod.exit_still_mode,
+                    )
+                    if ok:
+                        # Ack with the sequenceId so the UI can wire Abort
+                        # immediately (before the first sequence_progress).
+                        await ws.send_json(
+                            {"event": "sequence_started", "sequenceId": result}
+                        )
+                    else:
+                        await ws.send_json(
+                            {"event": "sequence_error", "message": result}
+                        )
+                elif cmd == "sequence_abort":
+                    sequence_mod.manager.abort()
+                    await ws.send_json(
+                        {
+                            "event": "sequence_aborting",
+                            "sequenceId": sequence_mod.manager.current_id,
+                        }
+                    )
                 elif cmd == "get_camera_params":
                     # Remote camera tuning: browser asks for current values
                     # to populate slider defaults on first open. Returns
@@ -385,6 +443,14 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
                             "sdp": pc.localDescription.sdp,
                         }
                     )
+                elif cmd == "webrtc_stop":
+                    # Single-encoder mode: the page watches the MJPEG pathway
+                    # and explicitly kills the VP8 encode instead of leaving a
+                    # hidden WebRTC stream burning CPU (sustained dual-encode
+                    # load browned out station 3's PSU — see progress.txt
+                    # 2026-07-13). The page re-offers sdp_offer to resume.
+                    await teardown_pc()
+                    await ws.send_json({"event": "webrtc_stopped"})
                 elif cmd == "ice_candidate":
                     candidate_payload = payload.get("candidate")
                     if pc is None or not isinstance(candidate_payload, dict):
@@ -530,9 +596,15 @@ async def _on_startup(app: web.Application) -> None:
     app["heartbeat"] = asyncio.create_task(
         _heartbeat_loop(), name="bims-heartbeat"
     )
+    # PREVIEW=local renders the camera full-screen on the station's own
+    # display — sensor→screen, no encode, no network (the latency floor).
+    if os.environ.get("PREVIEW", "").strip().lower() == "local":
+        preview_mod.run_local_preview(camera_mod.grab_live)
 
 
 async def _on_cleanup(app: web.Application) -> None:
+    # Stop any in-flight sequence run before tearing the loop down.
+    await sequence_mod.manager.shutdown()
     for key in ("scan_broadcaster", "heartbeat"):
         task = app.get(key)
         if task is not None:
@@ -547,6 +619,20 @@ def build_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/health", health)
     app.router.add_get("/ws", websocket)
+    # Low-latency MJPEG live preview (no WebRTC negotiation, no VP8) —
+    # <img src="https://<station>/preview.mjpg?token=<station JWT>"> renders
+    # natively via Tailscale Serve. Same JWT validation as /ws. Uses
+    # grab_live (stream resolution) — grab_still renegotiates the sensor
+    # per call and must never run per-frame.
+    preview_mod.attach_mjpeg_route(
+        app, camera_mod.grab_live, lambda req: _ws_authenticate(req).ok
+    )
+    # Single JPEG still for photo capture while WebRTC is torn down
+    # (single-encoder mode) — the page fetches this instead of canvasing
+    # the <video> element.
+    preview_mod.attach_snapshot_route(
+        app, camera_mod.grab_live, lambda req: _ws_authenticate(req).ok
+    )
     app.on_startup.append(_on_startup)
     app.on_cleanup.append(_on_cleanup)
     return app
