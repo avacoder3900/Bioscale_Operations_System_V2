@@ -3847,3 +3847,37 @@ What this deployment is for: microscope station live in production — CV-MICROS
 CV-PIPELINE-V2 conventions (sequence ingest fields, MJPEG station view w/ WebRTC fallback,
 snapshot capture, sequence panel) + ingest CSRF/station-key fixes. Ends the cv-microscope
 reconciliation pause.
+
+================================================================================
+2026-07-17 — feat/robot-arm-mfg-tab — Robot Arm tab wired to the live arm-pi
+================================================================================
+The arm-pi Raspberry Pi 5 went live today (Tailscale hostname arm-pi, Funnel
+at https://arm-pi.tailf65a70.ts.net, robot-arm.service on :8000). This branch
+makes the existing Robot Arm tab in the cart-mfg sidebar actually work
+against it:
+
+- Fixed the landing redirect: /manufacturing/cart-mfg/robot-arm 302'd to
+  /manufacturing/robot-arm/control, which does not exist (control lives under
+  cart-mfg/). Root cause: route was moved under cart-mfg but the redirect
+  target was never updated.
+- Fixed GET /api/robot-arm/runs sorting by lastEventAt/firstSeenAt — fields
+  the RobotArmRun schema never persists (Mongoose strict mode drops them),
+  so the sort was a no-op. Now sorts startedAt desc.
+- api-auth.ts: extracted timing-safe compare; added requireRobotArmAgentKey
+  which accepts the new dedicated ROBOT_ARM_AGENT_KEY (set in Vercel
+  prod+preview today) or the legacy AGENT_API_KEY. Webhook + runs endpoints
+  now use it — the arm has its own rotatable credential.
+- Control page header: replaced the circular "← back" link with a subnav
+  (Runs · Calibrate · Jog).
+
+Vercel env added today (prod+preview): ROBOT_ARM_BASE_URL,
+ROBOT_ARM_API_KEY, ROBOT_ARM_AGENT_KEY. Takes effect on next deployment.
+
+Pi-side counterpart (robot-arm repo, branch robot-arm-pi-integration
+@ 751899a): implemented POST /torque, POST /servos/{id}/jog (bounded,
+limit-clamped), POST /replay/preflight, enforce_preflight on /replay/start;
+Cartesian /pose + /jog/* return 501 until the IK stack is ported, so the
+jog page degrades to per-joint mode cleanly. Verified over tailnet: 503
+DRY_RUN guards, 501s, 400 on missing recording.
+
+npm run check: 10 errors, all documented pre-existing baseline (r2.ts Buffer overload, AskBimsWidget comparison, assembly/[sessionId] implicit-any) — zero new from this branch.

@@ -5,18 +5,18 @@
  */
 import { json } from '@sveltejs/kit';
 import { connectDB, RobotArmRun } from '$lib/server/db';
-import { requireAgentApiKey } from '$lib/server/api-auth';
+import { requireRobotArmAgentKey } from '$lib/server/api-auth';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request, url }) => {
-	requireAgentApiKey(request);
+	requireRobotArmAgentKey(request);
 	await connectDB();
 
 	const limit = Math.min(Number(url.searchParams.get('limit') ?? 50), 200);
 
 	const runs = await RobotArmRun.find()
-		.select('_id type status startedAt endedAt lastEventAt triggeredBy parameters result')
-		.sort({ lastEventAt: -1, firstSeenAt: -1 })
+		.select('_id type status startedAt endedAt triggeredBy parameters result')
+		.sort({ startedAt: -1 })
 		.limit(limit)
 		.lean();
 

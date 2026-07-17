@@ -20,13 +20,29 @@
 		<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">
 			Robot Arm — Remote Control
 		</h1>
-		<a
-			href="/manufacturing/cart-mfg/robot-arm"
-			class="text-xs transition-colors hover:text-[var(--color-tron-cyan)]"
-			style="color: var(--color-tron-text-secondary)"
-		>
-			← back
-		</a>
+		<nav class="flex items-center gap-4 text-xs">
+			<a
+				href="/manufacturing/cart-mfg/robot-arm/runs"
+				class="transition-colors hover:text-[var(--color-tron-cyan)]"
+				style="color: var(--color-tron-text-secondary)"
+			>
+				Runs
+			</a>
+			<a
+				href="/manufacturing/robot-arm/calibrate"
+				class="transition-colors hover:text-[var(--color-tron-cyan)]"
+				style="color: var(--color-tron-text-secondary)"
+			>
+				Calibrate
+			</a>
+			<a
+				href="/manufacturing/robot-arm/jog"
+				class="transition-colors hover:text-[var(--color-tron-cyan)]"
+				style="color: var(--color-tron-text-secondary)"
+			>
+				Jog
+			</a>
+		</nav>
 	</div>
 
 	<!-- Connection / active session banner -->

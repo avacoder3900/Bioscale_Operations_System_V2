@@ -14,7 +14,7 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { connectDB } from '$lib/server/db/connection';
 import { RobotArmRun } from '$lib/server/db/models';
-import { requireAgentApiKey } from '$lib/server/api-auth';
+import { requireRobotArmAgentKey } from '$lib/server/api-auth';
 
 interface IncomingEvent {
 	type: string;
@@ -59,7 +59,7 @@ function inferType(eventType: string): string | undefined {
 }
 
 export const POST: RequestHandler = async ({ request }) => {
-	requireAgentApiKey(request);
+	requireRobotArmAgentKey(request);
 
 	const payload = (await request.json().catch(() => null)) as IncomingPayload | null;
 	if (!payload?.run_id || !payload?.event?.type) {
