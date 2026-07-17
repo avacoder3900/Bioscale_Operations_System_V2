@@ -4222,3 +4222,21 @@ What this deployment is for: microscope station live in production — CV-MICROS
 CV-PIPELINE-V2 conventions (sequence ingest fields, MJPEG station view w/ WebRTC fallback,
 snapshot capture, sequence panel) + ingest CSRF/station-key fixes. Ends the cv-microscope
 reconciliation pause.
+
+================================================================================
+2026-07-17 — feat/fill-resume-after-tip-break — reset deck-004 corrupted labware geometry to a clean baseline (operator-approved)
+================================================================================
+Deck-004's stored geometry was corrupt (see prior entry): wax (even) columns all ~23mm vs
+correct ~2.3, reagent columns 1-7 at 10.1 vs the correct ~8.1 (cols 9-23), plus drifted x/y.
+Operator approved a reset. Copied deck-003's (clean) per-well x/y/z into deck-004 for all 576
+wells via raw driver update to labware_definitions (loadName gen4deck_gen7cartridge_004),
+$set definition.wells + updatedAt. Result verified from a fresh Mongo read:
+  reagent col z (1..23 odd): 8.1,8.1,8.1,8.1,8.2,8.2,8.2,8.2,8.2,8.2,8.2,8.2
+  wax col z (2..24 even):    2.3 x12
+FULL pre-reset backup: scripts/backups/deck4-labware-pre-reset-2026-07-17.json (the entire
+old deck-004 def). Restore = $set definition.wells from that file's definition.wells.
+NOTE: this raw update did NOT write deck_calibration_edits history (Studio's applyBatch would);
+and it only changed MONGO. The robot still holds the old corrupt frozen snapshot until the
+protocol is re-synced/re-uploaded. This baseline is a STARTING POINT — the operator must
+re-teach deck-004 in Studio (now that the capture 2mm-clearance fix is in) and then sync to
+the robot before filling deck-004.
