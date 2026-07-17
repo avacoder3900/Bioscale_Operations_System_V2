@@ -4240,3 +4240,34 @@ and it only changed MONGO. The robot still holds the old corrupt frozen snapshot
 protocol is re-synced/re-uploaded. This baseline is a STARTING POINT — the operator must
 re-teach deck-004 in Studio (now that the capture 2mm-clearance fix is in) and then sync to
 the robot before filling deck-004.
+
+================================================================================
+2026-07-17 — feat/fill-resume-after-tip-break — B14 reagent inconsistency = SHARED deck-3 clobbered by B07/R04; restored reagent cols to the July-9 good snapshot
+================================================================================
+Operator report: a calibrator-OFF reagent fill on B14 succeeded, then "the next day" (last week)
+the same fill was off — WITHOUT the operator touching the calibration. Root cause found:
+deck-3 (gen4deck_gen7cartridge_003) is a SHARED labware def used by all three robots, keyed by
+the cartridge's particle ID, not the robot. All robots run RobotDeckOffset=0, so there is no
+per-robot compensation — whoever calibrates that physical cartridge last sets the numbers for
+everyone. deck_calibration_edits shows the churn was NOT B14:
+   2026-07-06 B07  801 | 2026-07-08 R04 888 | 2026-07-09 B07 948 | 2026-07-10 B07 1384
+B07/R04 sessions drifted deck-3's REAGENT columns +7 to +8.8mm in X (and ~+1mm Z) after
+2026-07-09 — almost certainly their flaky calibrator baking the tip-offset leak into teaching
+(the tipAdjust-into-stored-geometry bug). That drift is what broke B14's next run.
+
+Evidence of the good state: B14's July-9 reagent protocol (a89f0e32) froze a snapshot of deck-3
+whose reagent columns match clean deck-1 (no +8mm), z~8.1 — the geometry the successful run used.
+(Its WAX columns are corrupt at z~39, so a full restore was NOT done.)
+
+ACTION (operator-approved "restore deck 3 to the successful shot"): restored ONLY the 288
+reagent (odd-column) wells of deck-3 to the July-9 snapshot x/y/z; left the 288 wax (even) wells
+as-is (current wax z=2.3 is correct; July-9 wax z=39 is corrupt). Verified: reagent cols now
+match July-9 exactly (dX=0, z 8.1-8.2). Full pre-restore backup:
+scripts/backups/deck3-labware-pre-restore-2026-07-17.json. Restore = $set definition.wells from
+that file. NOTE: deck-3 is SHARED — this also changed it for B07/R04; since the +8mm was
+corruption, it should help them, but they should verify. Robot still holds the drifted frozen
+snapshot until the reagent protocol is RE-UPLOADED to B14.
+
+DURABLE FIX STILL NEEDED: stop cross-robot clobbering of shared cartridge defs — either give each
+robot its own deck def, or use per-robot RobotDeckOffset so one shared geometry + per-robot
+offset serves all three. Until then deck-3 will drift again whenever B07/R04 recalibrate.
