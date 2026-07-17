@@ -930,7 +930,15 @@
 		if (liveX === null || liveY === null || liveZ === null) { errMsg = 'Could not read position'; return; }
 		dx = +(liveX - nominal.x).toFixed(3);
 		dy = +(liveY - nominal.y).toFixed(3);
-		dz = +(liveZ - nominal.z).toFixed(3);
+		// Z-frame correction (critical): `nominal.z` is the critical point PARKED at
+		// well_top + APPROACH_Z_MM, but the well's stored `z` is the RIM (well_top). So a
+		// raw `liveZ - nominal.z` is measured from the parked hover, not the rim, and bakes
+		// a -APPROACH_Z_MM bias into the stored rim — a capture taken exactly at the true
+		// rim would store dz=-2 instead of 0. The fill then applies its OWN well.top()+2
+		// hover on top of that low rim, landing the tip ON the rim (0 clearance) and driving
+		// it into the cartridge. Add APPROACH_Z_MM back so dz is the rim delta: jog the tip
+		// onto the rim → dz corrects the stored rim → the fill hovers the intended 2mm above.
+		dz = +(liveZ - nominal.z + APPROACH_Z_MM).toFixed(3);
 		msg = `Captured offset from ${refWell}: dx=${dx} dy=${dy} dz=${dz}. Select the holes to apply it to.`;
 	}
 

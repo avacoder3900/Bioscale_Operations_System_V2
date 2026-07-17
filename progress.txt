@@ -3903,3 +3903,54 @@ Protocol changes that stand regardless (all deployed to R04, f643dc9b):
   first-hole approach speed-limited to 20mm/s instead of a 61mm free plunge
   the two protocol.delay(0.3) pauses removed
   well_z_depth no longer double-counts the global z offset
+
+================================================================================
+2026-07-17 — feat/fill-resume-after-tip-break — deck-cal capture drops the 2mm approach clearance → fills land on the rim and bend tips
+================================================================================
+SYMPTOM (operator, B07): a reagent fill on cartridge_004 drove the p300 tip too deep and
+bent it, even though the deck looked perfect when jogged in Deck Calibration Studio and the
+latest calibration had been synced. "Check that my newest deck cal is on the robot and find
+the issue."
+
+FIRST: is the robot running stale geometry? NO. Pulled B07's current reagent protocol
+(d0b7ceff, uploaded 10:45 CT) and compared its frozen labware defs well-by-well against Mongo:
+identical, including cartridge_004's column-7 edits made at ~10:27-10:32 that morning. The
+robot had the operator's latest geometry. The failed run (3067ef57) dispensed at well.top()+2
+over column 7 with offsets 0/0/0; every move the engine issued was nominally SAFE and every
+dispense "succeeded" (OT-2 has no collision sensing). So it was never a stale-upload problem.
+
+ROOT CAUSE (Studio capture Z-frame bug, deck-calibration/+page.svelte:captureOffset):
+Teaching a hole parks the pipette critical point at well_top + APPROACH_Z_MM (=2mm) and
+snapshots that as `nominal`. The operator jogs the tip down onto the rim and captures. The
+capture stored dz = liveZ - nominal.z — measured from the +2 PARKED hover, not from the rim —
+and applied it straight to the well's stored `z` (which represents the rim). The 2mm parking
+clearance was never added back, so a capture taken exactly at the true rim stored dz = -2
+instead of 0: every taught rim ended up 2mm LOW. The fill then applies its OWN well.top()+2
+hover on top of that low rim and lands the tip ON the rim (0 clearance), or deeper if the
+operator jogged past for tactile contact → tip drives into the cartridge and bends. This is
+why it looks perfect in Studio (tip visibly parks 2mm high, you jog to the rim) but only goes
+deep at fill time, and why PRECISE re-teaching makes it worse.
+Proof frame: nominal.z = P + z0 + 2; capture at real rim R gives dz = R-(P+z0+2); stored
+z0' = z0+dz = R-P-2; fill Z = P+z0'+2 = R → the fill tip-end lands at exactly where you
+jogged, with the intended +2 eaten. Bias is Z-only (dx/dy carry no approach offset; tipAdjust
+cancels because it appears in both the nominal move and the live read).
+
+FIX: dz = +(liveZ - nominal.z + APPROACH_Z_MM).toFixed(3) — measure the jog delta from the
+well TOP (rim), not the parked hover. Now jogging the tip onto the rim stores the true rim and
+the fill hovers the intended 2mm above. One-line change + explanatory comment; no other capture
+path computes dz (batch/perWell apply just add the delta).
+npm run check: 11 errors / 434 warnings — unchanged baseline, none in deck-calibration.
+
+SECONDARY FINDING (data, cartridge_004 is corrupted): per-column median z vs a clean sibling
+(003): every WAX (even) column is at ~23mm vs the correct ~2.3mm (+20.6mm), and reagent
+columns 1/3/5/7 are at 10.1 vs 8.1 (+2mm) while reagent columns 9-23 are correct. That
+intra-cartridge split is impossible on a real cartridge — deck-004 has a history of this
+tip-length-conflation corruption (edits in June drove wells to z=-26). The one-line capture
+fix does NOT repair existing stored data.
+
+WHAT THE OPERATOR MUST DO: after this deploys, RE-TEACH against the fixed tool (jog the tip to
+touch the rim; the fill now adds the 2mm itself). cartridge_004 needs a full clean
+re-derivation, not per-well nudges — its wax columns are +20mm and reagent 1-7 are +2mm.
+Cartridges 001 and 003 are clean and safe to fill. NOTE: the fix changes capture semantics for
+ALL cartridges/robots; wells previously taught by jogging to a 2mm HOVER (the old workaround)
+are already correct and need no change unless re-taught.
