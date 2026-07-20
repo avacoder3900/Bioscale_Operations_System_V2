@@ -3847,3 +3847,40 @@ What this deployment is for: microscope station live in production — CV-MICROS
 CV-PIPELINE-V2 conventions (sequence ingest fields, MJPEG station view w/ WebRTC fallback,
 snapshot capture, sequence panel) + ingest CSRF/station-key fixes. Ends the cv-microscope
 reconciliation pause.
+
+================================================================================
+2026-07-20 — feat/spu-validation-runs — VALIDATION-05: SPU validation runs (multi-SPU run tracking)
+================================================================================
+Implemented the VALIDATION-05 PRD (docs/prds/VALIDATION-05-spu-validation-run.md) off
+origin/master in worktree .worktrees/validation-runs. New "Runs" tab in Validation:
+
+- /validation/runs — roster of SPUs in validation (status validating, or assembled with
+  validation pending) with mag/thermo status chips + active-run linkage; multi-select →
+  startRun creates a VALRUN-NNNNNN run (GeneratedBarcode prefix VALRUN) snapshotting each
+  member's UDI. One active run per UDI enforced. Run history table with status filters.
+- /validation/runs/[runId] — SPU × step matrix (Magnetometer | Thermocouple | Optical
+  Confirmation; display order only, no enforced sequencing). Per-cell: status chip,
+  session link, thermo inline upload panel, Evaluate, manual Record result
+  (passed/failed/skipped + notes), per-SPU Mark validated (transitions validating →
+  validated with statusTransitions entry), remove-from-run, complete/abort run. All
+  mutations audit-logged (schema-declared AuditLog fields).
+- New model ValidationRun (validation_runs) + runId on ValidationSession.
+- Thermocouple upload pipeline extracted from the standalone page's `upload` action into
+  src/lib/server/validation/thermo-upload.ts (processThermoUpload / evaluateThermoSession);
+  the standalone /validation/thermocouple page rewired through it, parse UI extracted into
+  shared ThermoFileUpload.svelte, file input widened to .csv,.xlsx.
+- Decision 2 (upload ≠ pass): run uploads park at 'uploaded'; pass/fail only on evaluation
+  against STANDARD_THERMO_CRITERIA (src/lib/server/validation/thermo-criteria.ts) — values
+  TBD, currently null, so Evaluate is disabled with a banner until the team sets the range.
+- Not built yet: SPU-detail run-membership section (PRD §6.3); magnetometer/optical pages
+  don't yet read the ?udi&runId deep-link params (links work, manual Record result covers
+  attribution).
+
+npm run check: 10 errors, all pre-existing baseline (r2.ts, AskBimsWidget, assembly page)
+— zero errors/warnings from new files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-dwsp3zgoo.vercel.app
+Source: branch feat/spu-validation-runs @ commit 6c883390
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 6c883390
+  (or: git log feat/spu-validation-runs --oneline to find it if the branch has since moved on)
+What this deployment is for: VALIDATION-05 SPU validation runs feature — roster, run matrix, thermo upload-then-evaluate flow.
