@@ -10,6 +10,15 @@
 				spuUdi: string | null; spuDeviceId: string | null;
 				assignedAt: string | null; underwayAt: string | null; completedAt: string | null;
 				result: { profileName: string | null; computedAt: string | null } | null;
+				analysis: {
+					profileName: string;
+					ratioByChannel: { A: number | null; B: number | null; C: number | null };
+					channels: Array<{
+						channel: string; n: number;
+						sums: { f3: number; f5: number; f7: number };
+						ratios: { 'f7/f3': number | null; 'f5/f3': number | null };
+					}>;
+				} | null;
 			}>;
 		};
 		form: {
@@ -160,6 +169,7 @@
 							<th class="p-3 font-medium">Assay</th>
 							<th class="p-3 font-medium">Status</th>
 							<th class="p-3 font-medium">SPU</th>
+							<th class="p-3 font-medium">F7/F3 (A/B/C)</th>
 							<th class="p-3 font-medium">Result</th>
 							<th class="p-3 font-medium">Assigned</th>
 							<th class="p-3 font-medium">Completed</th>
@@ -168,12 +178,26 @@
 					<tbody class="divide-y divide-[var(--color-tron-border)]">
 						{#each data.cartridges as c (c.id)}
 							<tr>
-								<td class="p-3 font-mono text-xs text-[var(--color-tron-text-primary)]">{c.barcode}</td>
+								<td class="p-3 font-mono text-xs text-[var(--color-tron-text-primary)]">
+									<a href={'/validation/optical-confirmation/' + c.id} class="hover:text-[var(--color-tron-cyan)] hover:underline">{c.barcode}</a>
+								</td>
 								<td class="p-3">{c.assayName ?? '—'}</td>
 								<td class="p-3">
 									<span class="rounded-full px-2 py-1 text-xs font-medium {statusClass(c.status)}">{c.status}</span>
 								</td>
 								<td class="p-3 font-mono text-xs text-[var(--color-tron-text-secondary)]">{c.spuUdi ?? '—'}</td>
+								<td class="p-3 text-xs font-mono">
+									{#if c.analysis}
+										<span class="text-[var(--color-tron-text-secondary)]">A:</span>
+										<span class="text-[var(--color-tron-cyan)]">{c.analysis.ratioByChannel.A != null ? c.analysis.ratioByChannel.A.toFixed(1) : '—'}</span>
+										<span class="text-[var(--color-tron-text-secondary)] ml-2">B:</span>
+										<span class="text-[var(--color-tron-cyan)]">{c.analysis.ratioByChannel.B != null ? c.analysis.ratioByChannel.B.toFixed(1) : '—'}</span>
+										<span class="text-[var(--color-tron-text-secondary)] ml-2">C:</span>
+										<span class="text-[var(--color-tron-cyan)]">{c.analysis.ratioByChannel.C != null ? c.analysis.ratioByChannel.C.toFixed(1) : '—'}</span>
+									{:else}
+										<span class="text-[var(--color-tron-text-secondary)]">—</span>
+									{/if}
+								</td>
 								<td class="p-3 text-[var(--color-tron-text-secondary)]">
 									{#if c.result}
 										{c.result.profileName ?? 'analyzed'}

@@ -3847,3 +3847,45 @@ What this deployment is for: microscope station live in production — CV-MICROS
 CV-PIPELINE-V2 conventions (sequence ingest fields, MJPEG station view w/ WebRTC fallback,
 snapshot capture, sequence panel) + ingest CSRF/station-key fixes. Ends the cv-microscope
 reconciliation pause.
+
+================================================================================
+2026-07-20 — feat/optical-confirmation-analysis-profile — per-channel F7/F3 analysis in optical-confirmation log + spectrophotometer tab removed
+================================================================================
+VALIDATION-04. Surfaces the research app's "Single Scan Cortisol" analysis profile
+(per-well A/B/C F7/F3 ratio) on cartridges run through Manufacturing > Validation >
+Optical Confirmation. The assay run is unchanged — "Gen 5 Optical Scan" (A9EB41AD)
+loaded onto the cartridge as before; "cortisol" is only the NAME of the analysis
+profile that interprets the resulting optical data.
+
+Data path: brevitest-cloud writes raw fluorometer readings onto
+cartridge_records.rawData.readings[] (channel A/B/C, f1..f8, clear, nir) after a run.
+test_results collection is empty in prod — NOT used. We DERIVE the analysis on read;
+nothing is written to the DB (fully non-destructive, and it sidesteps the strict
+Mongoose schema which doesn't declare rawData/analysis).
+
+Formula (ported verbatim from research analysis.ts, single-scan case): per channel,
+sum f3/f5/f7 over the whole run, then F7/F3 = Σf7/Σf3 (ratio of SUMS, not means;
+guard Σf3=0 → null), also F5/F3. Displayed to 1 decimal in the log, 2 in the detail
+table — matching the research experiment view. Single-scan means NO scan-group
+detection is needed (one group = whole run == research single-scan profile [0]).
+
+Files:
+- src/lib/server/optical-analysis.ts — pure computeOpticalAnalysis(readings) + the
+  OpticalAnalysis/OpticalChannelAnalysis contract. + optical-analysis.test.ts (vitest,
+  4 cases: ratio-of-sums, Σf3=0→null, empty→null, non-numeric skip) — PASS.
+- optical-confirmation/+page.server.ts — derive analysis per cartridge on read.
+- optical-confirmation/+page.svelte — new "F7/F3 (A/B/C)" column (A: x.x B: x.x
+  C: x.x), barcode now links to the detail view.
+- optical-confirmation/[id]/+page.server.ts + +page.svelte — per-cartridge detail
+  view (per-channel table Well|F3 sum|F7 sum|F5 sum|F7/F3|F5/F3|n + collapsible raw
+  JsonTree), ported from feat/optical-cartridge-data-view and refactored onto the
+  shared module. + src/lib/components/JsonTree.svelte.
+- Removed the Spectrophotometer tab: nav item + getSectionName branch in
+  validation/+layout.svelte, the whole routes/validation/spectrophotometer subtree,
+  and the two orphaned SpectrophotometerCapture/Result components (safety-checked:
+  no external importers). Default /validation redirect goes to magnetometer, so
+  nothing breaks.
+
+Built via a 5-agent workflow (disjoint files) + typecheck pass. npm run check:
+46 errors / 430 warnings — all pre-existing master baseline, ZERO in touched files.
+Only 2 benign state_referenced_locally warnings in the ported JsonTree.svelte.

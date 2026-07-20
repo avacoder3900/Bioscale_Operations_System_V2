@@ -1,6 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, AssayDefinition, CartridgeRecord } from '$lib/server/db';
+import { computeOpticalAnalysis } from '$lib/server/optical-analysis';
 import type { Actions, PageServerLoad } from './$types';
 
 // The single optical-confirmation assay in use: "Gen 5 Optical Scan - Start
@@ -33,6 +34,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			bcodeSteps: Array.isArray(a.BCODE?.code) ? a.BCODE.code.length : 0
 		})),
 		cartridges: cartridges.map((c: any) => ({
+			// Derive-on-read F7/F3 analysis (non-destructive; never written to the DB).
+			analysis: computeOpticalAnalysis(c.rawData?.readings ?? []),
 			id: c._id,
 			barcode: c._id, // cartridge_records _id IS the scanned barcode
 			assayName: c.assayName ?? c.assayId ?? null,
