@@ -3954,3 +3954,20 @@ re-derivation, not per-well nudges — its wax columns are +20mm and reagent 1-7
 Cartridges 001 and 003 are clean and safe to fill. NOTE: the fix changes capture semantics for
 ALL cartridges/robots; wells previously taught by jogging to a 2mm HOVER (the old workaround)
 are already correct and need no change unless re-taught.
+
+================================================================================
+2026-07-20 — fix/deckcal-capture-clearance — calibration fixes extracted; fill-resume feature shelved
+================================================================================
+Operator decision: drop the tip-break fill-resume feature for now and focus only on robot
+calibration. The two deck-cal accuracy fixes were cherry-picked off
+feat/fill-resume-after-tip-break onto a clean branch from master:
+  90b05a9b (was 15971035) — Studio teaches each hole with the pipette that actually fills it
+    (MOUNT_FOR_ROLE wax→right/p20, reagent→left/p300, + wrong-pipette warning banner)
+  4bff9f35 (was 8db0134f) — "Capture offset" adds back the 2mm approach clearance so taught
+    rims store the true rim instead of 2mm low (the "calibrates fine, fill bends tips" bug)
+Only src/routes/manufacturing/cart-mfg/deck-calibration/+page.svelte is touched; the
+fill-resume commits, wax protocol changes, and the 07-17 deck backups stay on the old branch.
+Context: on 07-17 deck-004 was deliberately reset to deck-003's baseline (operator-approved,
+backups in scripts/backups/ on the old branch) and the 07-20 re-teach of its reagent wells was
+done against prod WITHOUT this capture fix — re-verify/re-capture Z on deck-004 after this
+deploys. npm run check: 11 errors / 434 warnings — unchanged baseline.
