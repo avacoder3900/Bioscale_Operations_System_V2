@@ -10,6 +10,11 @@
 
 	const navItems = [
 		{
+			href: '/validation/runs',
+			label: 'Runs',
+			icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4'
+		},
+		{
 			href: '/validation/magnetometer',
 			label: 'Magnetometer',
 			icon: 'M13 10V3L4 14h7v7l9-11h-7z'
@@ -37,6 +42,7 @@
 	}
 
 	function getSectionName(path: string): string {
+		if (path.includes('/runs')) return 'Runs';
 		if (path.includes('/spectrophotometer')) return 'Spectrophotometer';
 		if (path.includes('/thermocouple')) return 'Thermocouple';
 		if (path.includes('/magnetometer')) return 'Magnetometer';
