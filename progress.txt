@@ -3971,3 +3971,26 @@ Context: on 07-17 deck-004 was deliberately reset to deck-003's baseline (operat
 backups in scripts/backups/ on the old branch) and the 07-20 re-teach of its reagent wells was
 done against prod WITHOUT this capture fix — re-verify/re-capture Z on deck-004 after this
 deploys. npm run check: 11 errors / 434 warnings — unchanged baseline.
+
+================================================================================
+2026-07-20 — ops — B07 calibration-chain fixes propagated to R04 + B14
+================================================================================
+Follow-on from the fill-vs-Studio position audit (see prior entry). Direct ops, no code:
+(1) B07 tip_calibrator_fixtures position restored 126/173 -> 125.181/173.247 (the hand-typed
+    round values leaked (-0.819,+0.247)mm into every tip-cal fill via the cal_x/cal_y RTPs —
+    the deployed .py's adjust formula is NOT invariant to the calibrator point despite its
+    comment). Operator separately corrected B07's calibrator EEPROM string 1.0:1.0 -> 0.7:2.0
+    (Particle console save_calibration; string must equal a reference tip's measured walks —
+    the Jul-14 experiment centers: X 0.7, Y 2.0). Live validation: probe adjusts moved exactly
+    as predicted (y -0.9 -> +0.3); open question: two tips both read x=-0.5 (possible Studio/
+    bridge-vs-.py probe X bias — arbitrate with RUN CALIBRATION CHECK before teaching w/ adjust).
+(2) Protocol bundles aligned with B07 (same Mongo-active sources, fresh labware bundle,
+    analysis-gated, audit rows): B14 reagent fc312732 + wax db4d946d (its Fri 20:27Z bundles
+    predated the 21:14Z deck-003 restore -> carried the discarded bad geometry); R04 reagent
+    7ca60fd3 (its Jul-8 bundle missed the Jul-13 deck-001 edits). R04 wax already fresh (Jul-13
+    21:47Z > last deck-001 edit 21:06Z) — untouched.
+(3) tip_calibrator_fixtures rows now exist for all three robots at the baseline-matched
+    defaults (R04 created here; B14 appeared from the Studio; B07 corrected earlier).
+Remaining per robot: operator sets each calibrator's EEPROM string from probes on THAT device;
+teach/verify; then Studio Sync as the LAST step (B07 has 18:44Z deck-004 edits newer than its
+16:27Z bundle). Studio capture fixes (2mm clearance + mount-per-role) still pending PR merge.
