@@ -3911,3 +3911,13 @@ Deployment: preview — https://bioscale-operations-system-mongodb-ihlc0e88s-bre
 Source: branch feat/spu-validation-runs @ commit 21daa189
 Retrieve this exact code: git checkout feat/spu-validation-runs at commit 21daa189
 What this deployment is for: E11000 startRun fix — user retest of starting a validation run.
+
+Follow-up 2026-07-21 (2): runs list moved to top of /validation/runs; per-run per-step
+validation-status chips in the run table (Mag/Thermo/Optical passed✓/failed✗/uploaded↑/
+pending counts); matrix failed cells show failure reasons; re-run allowed on decided cells
+(Run again / re-upload) with earlier attempts preserved in cell.previous (session links).
+npm run check unchanged vs baseline.
+Deployment: preview — https://bioscale-operations-system-mongodb-irivm7r9x-brevitest.vercel.app
+Source: branch feat/spu-validation-runs @ commit 06039a93
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 06039a93
+What this deployment is for: runs-on-top layout + per-step status visibility + retry flow, for user review.
