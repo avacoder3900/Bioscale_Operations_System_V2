@@ -117,10 +117,13 @@ export const actions: Actions = {
 			return fail(400, { error: `Already in an active run: ${[...conflictUdis].join(', ')}` });
 		}
 
-		// Mint VALRUN-000001 style run number (same pattern as THERMO barcodes)
+		// Mint VALRUN-000001 style run number. The counter doc MUST get a
+		// placeholder barcode on insert: generated_barcodes has a non-sparse
+		// unique index on barcode, and a null-barcode doc already exists in
+		// prod (the OPT- counter) — upserting without one throws E11000.
 		const barcodeDoc = await GeneratedBarcode.findOneAndUpdate(
-			{ prefix: 'VALRUN' },
-			{ $inc: { sequence: 1 } },
+			{ prefix: 'VALRUN', type: 'sequence_counter' },
+			{ $inc: { sequence: 1 }, $setOnInsert: { barcode: 'VALRUN-COUNTER' } },
 			{ upsert: true, new: true, setDefaultsOnInsert: true }
 		);
 		const seq = (barcodeDoc as any).sequence ?? 1;
