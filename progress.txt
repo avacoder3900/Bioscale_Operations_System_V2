@@ -3940,3 +3940,16 @@ Deployment: preview — https://bioscale-operations-system-mongodb-cza34dfmu-bre
 Source: branch feat/spu-validation-runs @ commit 2c3368f9 (code = 449be48b)
 Retrieve this exact code: git checkout feat/spu-validation-runs at commit 2c3368f9
 What this deployment is for: prior mag/thermo results carried into run view, for user review.
+
+Follow-up 2026-07-21 (5): optical-confirmation data readout (VALIDATION-04 core) — new
+src/lib/server/optical-analysis.ts computes per-channel F7/F3 (ratio of summed bands,
+test scans when baselineScans>0 else whole run) from cartridge_records.rawData.readings;
+cartridge log gains Analysis (F7/F3) column (A/B/C inline); barcode links to new
+/validation/optical-confirmation/[id] view: per-well ratio tiles, per-channel sums table,
+raw readings table, full raw JSON. Display-only/non-destructive (no analysis persistence
+yet). Verified compute against 2 completed prod cartridges (126 readings, A/B/C sane
+ratios). npm run check unchanged vs baseline.
+Deployment: preview — https://bioscale-operations-system-mongodb-7grg5p89b-brevitest.vercel.app
+Source: branch feat/spu-validation-runs @ commit dd2d8342
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit dd2d8342
+What this deployment is for: optical readout (ratios + raw data), for user review.
