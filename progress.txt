@@ -3921,3 +3921,11 @@ Deployment: preview — https://bioscale-operations-system-mongodb-irivm7r9x-bre
 Source: branch feat/spu-validation-runs @ commit 06039a93
 Retrieve this exact code: git checkout feat/spu-validation-runs at commit 06039a93
 What this deployment is for: runs-on-top layout + per-step status visibility + retry flow, for user review.
+
+Follow-up 2026-07-21 (3): live auto-refresh — /validation/runs and the run matrix poll
+invalidateAll() every 10s while visible; green "live" indicator with last-updated time;
+picker/panel state survives refreshes. npm run check unchanged vs baseline.
+Deployment: preview — https://bioscale-operations-system-mongodb-7baakqz98.vercel.app
+Source: branch feat/spu-validation-runs @ commit 9fe7ef0c
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 9fe7ef0c
+What this deployment is for: live auto-updating validation-run status, for user review.
