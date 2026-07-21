@@ -3929,3 +3929,14 @@ Deployment: preview — https://bioscale-operations-system-mongodb-7baakqz98.ver
 Source: branch feat/spu-validation-runs @ commit 9fe7ef0c
 Retrieve this exact code: git checkout feat/spu-validation-runs at commit 9fe7ef0c
 What this deployment is for: live auto-updating validation-run status, for user review.
+
+Follow-up 2026-07-21 (4): prior device-record validation now on the run screen — the
+DHR-visible spu.validation.{magnetometer,thermocouple} results carry into runs: startRun
+prefill (carriedOver cells w/ session link), and for pre-existing runs the matrix shows
+"passed/failed · prior · from device record" with one-click adopt; prior passes count in
+Overall; session links route by type. Note: Vercel webhook silently skipped 449be48b
+(no deployment created) — retriggered via empty commit 2c3368f9.
+Deployment: preview — https://bioscale-operations-system-mongodb-cza34dfmu-brevitest.vercel.app
+Source: branch feat/spu-validation-runs @ commit 2c3368f9 (code = 449be48b)
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 2c3368f9
+What this deployment is for: prior mag/thermo results carried into run view, for user review.
