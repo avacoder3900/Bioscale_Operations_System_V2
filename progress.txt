@@ -3893,3 +3893,11 @@ Deployment: preview — https://bioscale-operations-system-mongodb-fcrzpa18j-bre
 Source: branch feat/spu-validation-runs @ commit 454e1e00
 Retrieve this exact code: git checkout feat/spu-validation-runs at commit 454e1e00
 What this deployment is for: validation-run group picker (search/dropdown SPU selection) for user review.
+
+Follow-up 2026-07-21: picker unrestricted — roster now lists ALL SPUs except voided/retired
+(was: only validating / assembled+pending); dropdown rows show lifecycle status; overview
+table renamed "All SPUs", sorted by UDI. npm run check unchanged vs baseline.
+Deployment: preview — https://bioscale-operations-system-mongodb-2h9i5kprc.vercel.app
+Source: branch feat/spu-validation-runs @ commit 67a4e7c0
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 67a4e7c0
+What this deployment is for: unrestricted SPU picker for validation runs, for user review.
