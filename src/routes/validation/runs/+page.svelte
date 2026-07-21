@@ -32,15 +32,61 @@
 
 	let { data, form }: Props = $props();
 
-	let selected = $state<Record<string, boolean>>({});
 	let runName = $state('');
 	let statusFilter = $state<'all' | 'in_progress' | 'completed' | 'aborted'>('all');
 	let isSubmitting = $state(false);
 
-	let selectedIds = $derived(Object.entries(selected).filter(([, v]) => v).map(([k]) => k));
+	// Combobox picker state: type to search, dropdown to scroll, each selection
+	// joins the staged validation group below.
+	let query = $state('');
+	let picked = $state<RosterSpu[]>([]);
+	let dropdownOpen = $state(false);
+	let highlightIndex = $state(0);
+
+	let pickedIds = $derived(picked.map(p => p.id));
+	let available = $derived(data.spus.filter(s => !s.activeRun && !pickedIds.includes(s.id)));
+	let matches = $derived.by(() => {
+		const q = query.trim().toLowerCase();
+		if (!q) return available;
+		return available.filter(s =>
+			s.udi.toLowerCase().includes(q) || (s.batchNumber ?? '').toLowerCase().includes(q)
+		);
+	});
+
 	let filteredRuns = $derived(
 		statusFilter === 'all' ? data.runs : data.runs.filter(r => r.status === statusFilter)
 	);
+
+	function addToGroup(spu: RosterSpu) {
+		if (pickedIds.includes(spu.id)) return;
+		picked.push(spu);
+		query = '';
+		highlightIndex = 0;
+	}
+
+	function removeFromGroup(id: string) {
+		picked = picked.filter(p => p.id !== id);
+	}
+
+	function onSearchKeydown(e: KeyboardEvent) {
+		if (!dropdownOpen && (e.key === 'ArrowDown' || e.key === 'Enter')) {
+			dropdownOpen = true;
+			return;
+		}
+		if (e.key === 'ArrowDown') {
+			e.preventDefault();
+			highlightIndex = Math.min(highlightIndex + 1, matches.length - 1);
+		} else if (e.key === 'ArrowUp') {
+			e.preventDefault();
+			highlightIndex = Math.max(highlightIndex - 1, 0);
+		} else if (e.key === 'Enter') {
+			e.preventDefault();
+			const hit = matches[highlightIndex] ?? matches[0];
+			if (hit) addToGroup(hit);
+		} else if (e.key === 'Escape') {
+			dropdownOpen = false;
+		}
+	}
 
 	function statusChip(status: string): string {
 		if (status === 'passed') return 'bg-[var(--color-tron-green)]/20 text-[var(--color-tron-green)]';
@@ -74,7 +120,7 @@
 		</div>
 	{/if}
 
-	<!-- SPUs in Validation -->
+	<!-- Build validation group -->
 	<form
 		method="POST"
 		action="?/startRun"
@@ -87,9 +133,84 @@
 		}}
 	>
 		<div class="tron-card">
-			<div class="flex items-center justify-between border-b border-[var(--color-tron-border)] p-4">
-				<h2 class="tron-heading text-lg font-semibold">SPUs in Validation ({data.spus.length})</h2>
-				<div class="flex items-center gap-3">
+			<div class="border-b border-[var(--color-tron-border)] p-4">
+				<h2 class="tron-heading text-lg font-semibold">Build Validation Group</h2>
+				<p class="tron-text-muted mt-1 text-sm">Search or scroll to find an SPU, select it to add it to the group, then start the run.</p>
+			</div>
+
+			<div class="space-y-4 p-4">
+				<!-- Combobox: search + scrollable dropdown -->
+				<div class="relative max-w-md">
+					<input
+						type="text"
+						bind:value={query}
+						placeholder="Search SPU by UDI or batch… ({available.length} available)"
+						class="tron-input w-full rounded-lg px-4 py-3"
+						autocomplete="off"
+						onfocus={() => { dropdownOpen = true; highlightIndex = 0; }}
+						onblur={() => dropdownOpen = false}
+						oninput={() => { dropdownOpen = true; highlightIndex = 0; }}
+						onkeydown={onSearchKeydown}
+					/>
+					{#if dropdownOpen}
+						<div class="absolute z-20 mt-1 max-h-72 w-full overflow-y-auto rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] shadow-lg">
+							{#if matches.length === 0}
+								<p class="tron-text-muted p-3 text-sm">
+									{available.length === 0 ? 'No SPUs available — all are in a run already or none are in validation.' : `No SPU matches “${query}”`}
+								</p>
+							{:else}
+								{#each matches as spu, i (spu.id)}
+									<button
+										type="button"
+										class="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left text-sm transition-colors
+											{i === highlightIndex ? 'bg-[var(--color-tron-cyan)]/15' : 'hover:bg-[var(--color-tron-bg-tertiary)]'}"
+										onmousedown={(e) => { e.preventDefault(); addToGroup(spu); }}
+										onmouseenter={() => highlightIndex = i}
+									>
+										<span class="tron-heading font-medium">{spu.udi}</span>
+										<span class="flex items-center gap-2">
+											{#if spu.batchNumber}
+												<span class="tron-text-muted text-xs">batch {spu.batchNumber}</span>
+											{/if}
+											<span class="rounded-full px-2 py-0.5 text-xs font-medium capitalize {statusChip(spu.magStatus)}">mag: {spu.magStatus}</span>
+											<span class="rounded-full px-2 py-0.5 text-xs font-medium capitalize {statusChip(spu.thermoStatus)}">thermo: {spu.thermoStatus}</span>
+										</span>
+									</button>
+								{/each}
+							{/if}
+						</div>
+					{/if}
+				</div>
+
+				<!-- Staged group -->
+				{#if picked.length === 0}
+					<p class="tron-text-muted text-sm">No SPUs in the group yet.</p>
+				{:else}
+					<div>
+						<h3 class="tron-text-muted mb-2 text-xs font-medium uppercase">Validation group ({picked.length})</h3>
+						<div class="flex flex-wrap gap-2">
+							{#each picked as spu (spu.id)}
+								<span class="flex items-center gap-2 rounded-full border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/10 py-1.5 pr-2 pl-3 text-sm">
+									<input type="hidden" name="spuIds" value={spu.id} />
+									<span class="tron-heading font-medium">{spu.udi}</span>
+									{#if spu.batchNumber}
+										<span class="tron-text-muted text-xs">({spu.batchNumber})</span>
+									{/if}
+									<button
+										type="button"
+										onclick={() => removeFromGroup(spu.id)}
+										class="tron-text-muted rounded-full px-1.5 text-xs hover:text-[var(--color-tron-red)]"
+										title="Remove {spu.udi} from group"
+									>
+										✕
+									</button>
+								</span>
+							{/each}
+						</div>
+					</div>
+				{/if}
+
+				<div class="flex items-center gap-3 border-t border-[var(--color-tron-border)] pt-4">
 					<input
 						type="text"
 						name="name"
@@ -99,68 +220,83 @@
 					/>
 					<button
 						type="submit"
-						disabled={selectedIds.length === 0 || isSubmitting}
+						disabled={picked.length === 0 || isSubmitting}
 						class="rounded-lg bg-[var(--color-tron-orange)] px-4 py-2 text-sm font-semibold text-[var(--color-tron-bg-primary)] transition-all hover:bg-[var(--color-tron-orange)]/90 disabled:cursor-not-allowed disabled:opacity-50"
 					>
-						{isSubmitting ? 'Starting…' : `Start Validation Run (${selectedIds.length})`}
+						{isSubmitting ? 'Starting…' : `Start Validation Run (${picked.length})`}
 					</button>
 				</div>
 			</div>
-
-			{#if data.spus.length === 0}
-				<p class="tron-text-muted p-6 text-sm">
-					No SPUs are currently in validation. Set an SPU's status to <span class="font-medium">validating</span> from its detail page to see it here.
-				</p>
-			{:else}
-				<div class="overflow-x-auto">
-					<table class="w-full text-sm">
-						<thead>
-							<tr class="border-b border-[var(--color-tron-border)] text-left">
-								<th class="p-3"></th>
-								<th class="tron-text-muted p-3 font-medium">UDI</th>
-								<th class="tron-text-muted p-3 font-medium">Batch</th>
-								<th class="tron-text-muted p-3 font-medium">Status</th>
-								<th class="tron-text-muted p-3 font-medium">Mag</th>
-								<th class="tron-text-muted p-3 font-medium">Thermo</th>
-								<th class="tron-text-muted p-3 font-medium">Active Run</th>
-							</tr>
-						</thead>
-						<tbody class="divide-y divide-[var(--color-tron-border)]">
-							{#each data.spus as spu (spu.id)}
-								<tr class={spu.activeRun ? 'opacity-60' : ''}>
-									<td class="p-3">
-										{#if spu.activeRun}
-											<input type="checkbox" disabled title="Already in {spu.activeRun.runNumber}" />
-										{:else}
-											<input type="checkbox" name="spuIds" value={spu.id} bind:checked={selected[spu.id]} />
-										{/if}
-									</td>
-									<td class="p-3">
-										<a href="/spu/{spu.id}" class="tron-heading font-medium hover:text-[var(--color-tron-cyan)] hover:underline">{spu.udi}</a>
-									</td>
-									<td class="tron-text-muted p-3">{spu.batchNumber ?? '—'}</td>
-									<td class="p-3 capitalize">{spu.status}</td>
-									<td class="p-3">
-										<span class="rounded-full px-2 py-1 text-xs font-medium capitalize {statusChip(spu.magStatus)}">{spu.magStatus}</span>
-									</td>
-									<td class="p-3">
-										<span class="rounded-full px-2 py-1 text-xs font-medium capitalize {statusChip(spu.thermoStatus)}">{spu.thermoStatus}</span>
-									</td>
-									<td class="p-3">
-										{#if spu.activeRun}
-											<a href="/validation/runs/{spu.activeRun.runId}" class="text-[var(--color-tron-cyan)] hover:underline">{spu.activeRun.runNumber}</a>
-										{:else}
-											<span class="tron-text-muted">—</span>
-										{/if}
-									</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
-			{/if}
 		</div>
 	</form>
+
+	<!-- SPUs in Validation (overview) -->
+	<div class="tron-card">
+		<div class="border-b border-[var(--color-tron-border)] p-4">
+			<h2 class="tron-heading text-lg font-semibold">SPUs in Validation ({data.spus.length})</h2>
+		</div>
+
+		{#if data.spus.length === 0}
+			<p class="tron-text-muted p-6 text-sm">
+				No SPUs are currently in validation. Set an SPU's status to <span class="font-medium">validating</span> from its detail page to see it here.
+			</p>
+		{:else}
+			<div class="overflow-x-auto">
+				<table class="w-full text-sm">
+					<thead>
+						<tr class="border-b border-[var(--color-tron-border)] text-left">
+							<th class="tron-text-muted p-3 font-medium">UDI</th>
+							<th class="tron-text-muted p-3 font-medium">Batch</th>
+							<th class="tron-text-muted p-3 font-medium">Status</th>
+							<th class="tron-text-muted p-3 font-medium">Mag</th>
+							<th class="tron-text-muted p-3 font-medium">Thermo</th>
+							<th class="tron-text-muted p-3 font-medium">Active Run</th>
+							<th class="p-3"></th>
+						</tr>
+					</thead>
+					<tbody class="divide-y divide-[var(--color-tron-border)]">
+						{#each data.spus as spu (spu.id)}
+							<tr class={spu.activeRun ? 'opacity-60' : ''}>
+								<td class="p-3">
+									<a href="/spu/{spu.id}" class="tron-heading font-medium hover:text-[var(--color-tron-cyan)] hover:underline">{spu.udi}</a>
+								</td>
+								<td class="tron-text-muted p-3">{spu.batchNumber ?? '—'}</td>
+								<td class="p-3 capitalize">{spu.status}</td>
+								<td class="p-3">
+									<span class="rounded-full px-2 py-1 text-xs font-medium capitalize {statusChip(spu.magStatus)}">{spu.magStatus}</span>
+								</td>
+								<td class="p-3">
+									<span class="rounded-full px-2 py-1 text-xs font-medium capitalize {statusChip(spu.thermoStatus)}">{spu.thermoStatus}</span>
+								</td>
+								<td class="p-3">
+									{#if spu.activeRun}
+										<a href="/validation/runs/{spu.activeRun.runId}" class="text-[var(--color-tron-cyan)] hover:underline">{spu.activeRun.runNumber}</a>
+									{:else}
+										<span class="tron-text-muted">—</span>
+									{/if}
+								</td>
+								<td class="p-3 text-right">
+									{#if spu.activeRun}
+										<span class="tron-text-muted text-xs">in run</span>
+									{:else if pickedIds.includes(spu.id)}
+										<span class="text-xs text-[var(--color-tron-cyan)]">in group ✓</span>
+									{:else}
+										<button
+											type="button"
+											onclick={() => addToGroup(spu)}
+											class="rounded-lg border border-[var(--color-tron-cyan)]/40 px-3 py-1 text-xs font-medium text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-cyan)]/10"
+										>
+											+ Add to group
+										</button>
+									{/if}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	</div>
 
 	<!-- Run history -->
 	<div class="tron-card">
