@@ -1,5 +1,7 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
 	import ThermoFileUpload from '$lib/components/validation/thermocouple/ThermoFileUpload.svelte';
 
 	interface StepCell {
@@ -68,6 +70,20 @@
 
 	// Per-SPU parsed thermo file (readings JSON + name) for the upload forms
 	let thermoParsed = $state<Record<string, { readingsJson: string; fileName: string; count: number }>>({});
+
+	// Live refresh: re-fetch run data every 10s (when the tab is visible) so
+	// validations completed elsewhere — another tab, another operator, the
+	// instrument pages — appear without a manual reload. Local UI state
+	// (open panels, parsed files) survives invalidation.
+	let lastRefreshed = $state<Date | null>(null);
+	onMount(() => {
+		const id = setInterval(async () => {
+			if (document.hidden) return;
+			await invalidateAll();
+			lastRefreshed = new Date();
+		}, 10000);
+		return () => clearInterval(id);
+	});
 
 	function cellFor(m: Member, step: string): StepCell {
 		return m.steps?.[step] ?? { status: 'not_started' };
@@ -143,6 +159,10 @@
 			<p class="tron-text-muted mt-1 text-sm">
 				Started {fmtDate(run.startedAt)}{#if run.createdBy?.username}&nbsp;by {run.createdBy.username}{/if}
 				{#if run.completedAt}&nbsp;· ended {fmtDate(run.completedAt)}{/if}
+				<span class="ml-2 inline-flex items-center gap-1 text-xs">
+					<span class="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-tron-green)]"></span>
+					live{#if lastRefreshed}&nbsp;· updated {lastRefreshed.toLocaleTimeString()}{/if}
+				</span>
 			</p>
 			{#if run.abortReason}
 				<p class="mt-1 text-sm text-[var(--color-tron-red)]">Aborted: {run.abortReason}</p>

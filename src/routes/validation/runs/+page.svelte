@@ -1,5 +1,7 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
 
 	interface RosterSpu {
 		id: string;
@@ -50,6 +52,18 @@
 	let picked = $state<RosterSpu[]>([]);
 	let dropdownOpen = $state(false);
 	let highlightIndex = $state(0);
+
+	// Live refresh: run/step statuses update every 10s while the tab is
+	// visible. Picker state (query, staged group) survives invalidation.
+	let lastRefreshed = $state<Date | null>(null);
+	onMount(() => {
+		const id = setInterval(async () => {
+			if (document.hidden) return;
+			await invalidateAll();
+			lastRefreshed = new Date();
+		}, 10000);
+		return () => clearInterval(id);
+	});
 
 	let pickedIds = $derived(picked.map(p => p.id));
 	let available = $derived(data.spus.filter(s => !s.activeRun && !pickedIds.includes(s.id)));
@@ -118,7 +132,13 @@
 	<div class="flex items-center justify-between">
 		<div>
 			<h1 class="tron-heading text-2xl font-bold">Validation Runs</h1>
-			<p class="tron-text-muted mt-1">Batch multiple SPUs into one tracked validation run</p>
+			<p class="tron-text-muted mt-1">
+				Batch multiple SPUs into one tracked validation run
+				<span class="ml-2 inline-flex items-center gap-1 text-xs">
+					<span class="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-tron-green)]"></span>
+					live{#if lastRefreshed}&nbsp;· updated {lastRefreshed.toLocaleTimeString()}{/if}
+				</span>
+			</p>
 		</div>
 	</div>
 
