@@ -38,7 +38,12 @@
 				createdBy?: { username?: string } | null;
 			};
 			sessionById: Record<string, { id: string; type: string; status: string; barcode: string | null }>;
-			spuById: Record<string, { udi: string; status: string; finalized: boolean }>;
+			spuById: Record<string, {
+				udi: string;
+				status: string;
+				finalized: boolean;
+				prior: Record<string, { status: string; sessionId: string | null; completedAt: string | null; failureReasons: string[] } | null>;
+			}>;
 			thermoCriteria: { minTemp: number; maxTemp: number } | null;
 		};
 		form: {
@@ -89,12 +94,37 @@
 		return m.steps?.[step] ?? { status: 'not_started' };
 	}
 
+	// Prior validation result stored on the SPU itself (spu.validation.*) —
+	// e.g. a magnetometer pass recorded before this run existed.
+	function priorFor(m: Member, step: string) {
+		return data.spuById[m.spuId]?.prior?.[step] ?? null;
+	}
+
+	function sessionHref(sessionId: string): string {
+		const s = data.sessionById[sessionId];
+		if (s?.type === 'mag') return `/validation/magnetometer/${sessionId}`;
+		if (s?.type === 'spec') return `/validation/spectrophotometer/${sessionId}`;
+		return `/validation/thermocouple/${sessionId}`;
+	}
+
+	function fmtShortDate(d: string | null): string {
+		return d ? new Date(d).toLocaleDateString() : '';
+	}
+
+	// Effective status: the run cell if it has state, else the SPU's prior
+	// device-record result — a prior mag pass counts toward Overall.
+	function effectiveStatus(m: Member, step: string): string {
+		const cell = cellFor(m, step);
+		if (cell.status !== 'not_started') return cell.status;
+		return priorFor(m, step)?.status ?? 'not_started';
+	}
+
 	function passedCount(m: Member): number {
-		return (run.steps ?? []).filter(s => cellFor(m, s).status === 'passed').length;
+		return (run.steps ?? []).filter(s => effectiveStatus(m, s) === 'passed').length;
 	}
 
 	function allPassed(m: Member): boolean {
-		return (run.steps ?? []).every(s => cellFor(m, s).status === 'passed');
+		return (run.steps ?? []).every(s => effectiveStatus(m, s) === 'passed');
 	}
 
 	function chip(status: string): string {
@@ -232,10 +262,37 @@
 
 						{#each run.steps as step (step)}
 							{@const cell = cellFor(member, step)}
+							{@const prior = cell.status === 'not_started' ? priorFor(member, step) : null}
 							{@const panelKey = `${member.spuId}:${step}`}
 							<td class="p-3">
 								<div class="flex flex-col items-start gap-1.5">
-									<span class="rounded-full px-2 py-1 text-xs font-medium {chip(cell.status)}">{chipLabel(cell.status)}</span>
+									{#if prior}
+										<!-- Carried over from the SPU's DHR (spu.validation.*) -->
+										<span class="rounded-full px-2 py-1 text-xs font-medium {chip(prior.status)}">{chipLabel(prior.status)} · prior</span>
+										<span class="tron-text-muted text-xs">
+											from device record{#if prior.completedAt}&nbsp;· {fmtShortDate(prior.completedAt)}{/if}
+										</span>
+										{#if prior.status === 'failed' && prior.failureReasons?.length}
+											<span class="max-w-56 text-xs text-[var(--color-tron-red)]">{prior.failureReasons.join('; ')}</span>
+										{/if}
+										{#if prior.sessionId && data.sessionById[prior.sessionId]}
+											<a href={sessionHref(prior.sessionId)} class="text-xs text-[var(--color-tron-cyan)] hover:underline">
+												{data.sessionById[prior.sessionId].barcode ?? 'session'} →
+											</a>
+										{/if}
+										{#if inProgress}
+											<form method="POST" action="?/recordStepResult" use:enhance>
+												<input type="hidden" name="spuId" value={member.spuId} />
+												<input type="hidden" name="step" value={step} />
+												<input type="hidden" name="outcome" value={prior.status} />
+												<input type="hidden" name="sessionId" value={prior.sessionId ?? ''} />
+												<input type="hidden" name="notes" value="Carried over from prior validation" />
+												<button type="submit" class="text-xs text-[var(--color-tron-cyan)] hover:underline">Use this result</button>
+											</form>
+										{/if}
+									{:else}
+										<span class="rounded-full px-2 py-1 text-xs font-medium {chip(cell.status)}">{chipLabel(cell.status)}</span>
+									{/if}
 
 									{#if step === 'thermocouple' && cell.result}
 										<span class="tron-text-muted text-xs">
@@ -263,7 +320,7 @@
 											Earlier attempts:
 											{#each cell.previous as prev, pi (pi)}
 												{#if prev.sessionId && data.sessionById[prev.sessionId]}
-													<a href="/validation/thermocouple/{prev.sessionId}" class="ml-1 hover:underline {prev.status === 'failed' ? 'text-[var(--color-tron-red)]' : prev.status === 'passed' ? 'text-[var(--color-tron-green)]' : ''}">
+													<a href={sessionHref(prev.sessionId)} class="ml-1 hover:underline {prev.status === 'failed' ? 'text-[var(--color-tron-red)]' : prev.status === 'passed' ? 'text-[var(--color-tron-green)]' : ''}">
 														{prev.status === 'failed' ? '✗' : prev.status === 'passed' ? '✓' : '•'} {data.sessionById[prev.sessionId].barcode ?? prev.status}
 													</a>
 												{:else}
@@ -275,7 +332,7 @@
 										</span>
 									{/if}
 									{#if cell.sessionId && data.sessionById[cell.sessionId]}
-										<a href="/validation/thermocouple/{cell.sessionId}" class="text-xs text-[var(--color-tron-cyan)] hover:underline">
+										<a href={sessionHref(cell.sessionId)} class="text-xs text-[var(--color-tron-cyan)] hover:underline">
 											{data.sessionById[cell.sessionId].barcode ?? 'session'} →
 										</a>
 									{/if}

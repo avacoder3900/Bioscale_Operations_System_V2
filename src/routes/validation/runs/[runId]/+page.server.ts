@@ -69,15 +69,27 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		};
 	}
 
-	// Current SPU rollup statuses (live view alongside the run's own cells)
+	// Current SPU rollup statuses (live view alongside the run's own cells).
+	// Prior validation results (spu.validation.{magnetometer,thermocouple} —
+	// written by the instrument pages, possibly before this run existed) are
+	// surfaced per step so a previously-passed mag test is visible in the
+	// matrix and can be adopted into the run.
 	const memberIds = (run.spus ?? []).map((m: any) => m.spuId);
 	const spus = memberIds.length
 		? await Spu.find({ _id: { $in: memberIds } })
-			.select('udi status finalizedAt validation.status validation.magnetometer.status validation.thermocouple.status')
+			.select('udi status finalizedAt validation.status validation.magnetometer validation.thermocouple')
 			.lean() as any[]
 		: [];
 	const spuById: Record<string, any> = {};
 	for (const s of spus) {
+		const priorOf = (v: any) => v?.status && v.status !== 'pending'
+			? {
+				status: v.status,
+				sessionId: v.sessionId ?? null,
+				completedAt: v.completedAt?.toISOString?.() ?? v.completedAt ?? null,
+				failureReasons: v.failureReasons ?? []
+			}
+			: null;
 		spuById[s._id] = {
 			id: s._id,
 			udi: s.udi,
@@ -85,8 +97,31 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			finalized: !!s.finalizedAt,
 			validationStatus: s.validation?.status ?? 'pending',
 			magStatus: s.validation?.magnetometer?.status ?? 'pending',
-			thermoStatus: s.validation?.thermocouple?.status ?? 'pending'
+			thermoStatus: s.validation?.thermocouple?.status ?? 'pending',
+			prior: {
+				magnetometer: priorOf(s.validation?.magnetometer),
+				thermocouple: priorOf(s.validation?.thermocouple)
+			}
 		};
+	}
+
+	// Pull prior sessions into the session map too, so their links resolve
+	const priorSessionIds = Object.values(spuById)
+		.flatMap((s: any) => [s.prior.magnetometer?.sessionId, s.prior.thermocouple?.sessionId])
+		.filter((id: any) => id && !sessionById[id]);
+	if (priorSessionIds.length) {
+		const priorSessions = await ValidationSession.find({ _id: { $in: priorSessionIds } })
+			.select('-results.rawData -rawData -magResults')
+			.lean() as any[];
+		for (const s of priorSessions) {
+			sessionById[s._id] = {
+				id: s._id,
+				type: s.type,
+				status: s.status,
+				barcode: s.barcode ?? null,
+				completedAt: s.completedAt?.toISOString?.() ?? null
+			};
+		}
 	}
 
 	return {
@@ -269,6 +304,8 @@ export const actions: Actions = {
 		const step = form.get('step')?.toString();
 		const outcome = form.get('outcome')?.toString() as (typeof MANUAL_OUTCOMES)[number] | undefined;
 		const notes = form.get('notes')?.toString().trim() || null;
+		// Optional: link a ValidationSession (used when adopting a prior result)
+		const sessionId = form.get('sessionId')?.toString() || null;
 
 		if (!spuId) return fail(400, { error: 'Missing SPU' });
 		const member = activeMember(run, spuId);
@@ -322,7 +359,8 @@ export const actions: Actions = {
 					[`spus.$.steps.${step}.completedAt`]: now,
 					[`spus.$.steps.${step}.completedBy`]: user,
 					[`spus.$.steps.${step}.notes`]: notes,
-					[`spus.$.steps.${step}.previous`]: previous
+					[`spus.$.steps.${step}.previous`]: previous,
+					...(sessionId ? { [`spus.$.steps.${step}.sessionId`]: sessionId } : {})
 				}
 			}
 		);
@@ -332,7 +370,8 @@ export const actions: Actions = {
 			spuUdi: member.udi,
 			step,
 			outcome,
-			notes
+			notes,
+			sessionId
 		}, { previousStatus });
 
 		return { success: true, spuId, step, outcome };

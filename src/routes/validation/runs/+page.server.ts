@@ -112,7 +112,7 @@ export const actions: Actions = {
 		if (spuIds.length === 0) return fail(400, { error: 'Select at least one SPU to start a run' });
 
 		const spus = await Spu.find({ _id: { $in: spuIds } })
-			.select('udi status finalizedAt')
+			.select('udi status finalizedAt validation.magnetometer validation.thermocouple')
 			.lean() as any[];
 		if (spus.length !== spuIds.length) {
 			return fail(400, { error: 'One or more selected SPUs no longer exist' });
@@ -164,12 +164,30 @@ export const actions: Actions = {
 			name,
 			status: 'in_progress',
 			steps: [...VALIDATION_RUN_STEPS],
-			spus: spus.map(s => ({
-				spuId: s._id,
-				udi: s.udi,
-				addedAt: new Date(),
-				steps: structuredClone(emptySteps)
-			})),
+			spus: spus.map(s => {
+				// Carry prior device-record results (spu.validation.*, as shown on
+				// the SPU's DHR) into the run so an already-passed mag/thermo test
+				// is visible from the start. Re-running a step is still allowed.
+				const steps: Record<string, unknown> = structuredClone(emptySteps);
+				for (const key of ['magnetometer', 'thermocouple'] as const) {
+					const v = s.validation?.[key];
+					if (v?.status && v.status !== 'pending') {
+						steps[key] = {
+							status: v.status,
+							sessionId: v.sessionId ?? null,
+							completedAt: v.completedAt ?? null,
+							notes: 'Carried over from prior validation',
+							carriedOver: true
+						};
+					}
+				}
+				return {
+					spuId: s._id,
+					udi: s.udi,
+					addedAt: new Date(),
+					steps
+				};
+			}),
 			createdBy: { _id: locals.user!._id, username: locals.user!.username },
 			startedAt: new Date()
 		});
