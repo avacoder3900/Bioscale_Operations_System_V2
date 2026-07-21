@@ -169,6 +169,7 @@
 									>
 										<span class="tron-heading font-medium">{spu.udi}</span>
 										<span class="flex items-center gap-2">
+											<span class="tron-text-muted text-xs capitalize">{spu.status}</span>
 											{#if spu.batchNumber}
 												<span class="tron-text-muted text-xs">batch {spu.batchNumber}</span>
 											{/if}
@@ -230,16 +231,14 @@
 		</div>
 	</form>
 
-	<!-- SPUs in Validation (overview) -->
+	<!-- All SPUs (overview) -->
 	<div class="tron-card">
 		<div class="border-b border-[var(--color-tron-border)] p-4">
-			<h2 class="tron-heading text-lg font-semibold">SPUs in Validation ({data.spus.length})</h2>
+			<h2 class="tron-heading text-lg font-semibold">All SPUs ({data.spus.length})</h2>
 		</div>
 
 		{#if data.spus.length === 0}
-			<p class="tron-text-muted p-6 text-sm">
-				No SPUs are currently in validation. Set an SPU's status to <span class="font-medium">validating</span> from its detail page to see it here.
-			</p>
+			<p class="tron-text-muted p-6 text-sm">No SPUs registered yet.</p>
 		{:else}
 			<div class="overflow-x-auto">
 				<table class="w-full text-sm">

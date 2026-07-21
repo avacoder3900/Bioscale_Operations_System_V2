@@ -6,13 +6,10 @@ import {
 } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
 
-// SPUs "in validation": lifecycle status is validating, or assembled and not
-// yet validated (VALIDATION-05 §6.1).
+// Any SPU is selectable for a run (same scope as the thermocouple page's
+// SPU dropdown); only voided/retired units are excluded.
 const ROSTER_QUERY = {
-	$or: [
-		{ status: 'validating' },
-		{ status: 'assembled', 'validation.status': 'pending' }
-	]
+	status: { $nin: ['voided', 'retired'] }
 };
 
 function activeMembers(run: any): any[] {
@@ -37,7 +34,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const spus = await Spu.find(ROSTER_QUERY)
 		.select('udi barcode status batch.batchNumber createdAt validation.status validation.magnetometer.status validation.thermocouple.status')
-		.sort({ createdAt: -1 })
+		.sort({ udi: 1 })
 		.lean() as any[];
 
 	const runs = await ValidationRun.find()
