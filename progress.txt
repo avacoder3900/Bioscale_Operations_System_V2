@@ -3901,3 +3901,13 @@ Deployment: preview — https://bioscale-operations-system-mongodb-2h9i5kprc.ver
 Source: branch feat/spu-validation-runs @ commit 67a4e7c0
 Retrieve this exact code: git checkout feat/spu-validation-runs at commit 67a4e7c0
 What this deployment is for: unrestricted SPU picker for validation runs, for user review.
+
+Fix 2026-07-21: startRun 500 — the VALRUN counter upsert hit the non-sparse unique
+barcode_1 index (prod already has one null-barcode counter doc from the OPT- feature:
+the known generated_barcodes E11000 gotcha). Counter doc now gets a VALRUN-COUNTER
+placeholder barcode via $setOnInsert, filter scoped by type:sequence_counter. Root cause
+confirmed + fix pattern verified directly against prod Mongo with a throwaway prefix.
+Deployment: preview — https://bioscale-operations-system-mongodb-ihlc0e88s-brevitest.vercel.app
+Source: branch feat/spu-validation-runs @ commit 21daa189
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 21daa189
+What this deployment is for: E11000 startRun fix — user retest of starting a validation run.
