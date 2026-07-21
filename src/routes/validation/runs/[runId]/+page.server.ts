@@ -45,9 +45,13 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 
 	const run = await loadRun(params.runId);
 
-	// Linked sessions — metadata + stats only, never the raw readings arrays
+	// Linked sessions — metadata + stats only, never the raw readings arrays.
+	// Includes sessions from earlier attempts (`previous`) so history links work.
 	const sessionIds = (run.spus ?? [])
-		.flatMap((m: any) => Object.values(m.steps ?? {}).map((c: any) => c?.sessionId))
+		.flatMap((m: any) => Object.values(m.steps ?? {}).flatMap((c: any) => [
+			c?.sessionId,
+			...(c?.previous ?? []).map((p: any) => p?.sessionId)
+		]))
 		.filter(Boolean);
 	const sessions = sessionIds.length
 		? await ValidationSession.find({ _id: { $in: sessionIds } })
@@ -135,8 +139,25 @@ export const actions: Actions = {
 
 		// Decision 2: uploaded ≠ passed. Without a configured standard range the
 		// cell parks at 'uploaded'; with one, evaluation ran inside the upload.
+		// A re-upload keeps the earlier attempt in `previous` so failed history
+		// stays visible after a retry.
+		const prior = member.steps?.thermocouple;
+		const previous = [
+			...(prior?.previous ?? []),
+			...(prior?.sessionId
+				? [{
+					status: prior.status,
+					sessionId: prior.sessionId,
+					result: prior.result ?? null,
+					evaluation: prior.evaluation ?? null,
+					completedAt: prior.completedAt ?? null,
+					completedBy: prior.completedBy ?? null
+				}]
+				: [])
+		];
 		const now = new Date();
 		const cell: Record<string, unknown> = {
+			previous,
 			status: outcome.evaluated ? (outcome.passed ? 'passed' : 'failed') : 'uploaded',
 			sessionId: outcome.sessionId,
 			result: { ...outcome.stats, fileName },
@@ -257,7 +278,23 @@ export const actions: Actions = {
 
 		const user = { _id: locals.user!._id, username: locals.user!.username };
 		const now = new Date();
-		const previousStatus = member.steps?.[step]?.status ?? 'not_started';
+		const prior = member.steps?.[step];
+		const previousStatus = prior?.status ?? 'not_started';
+		// Keep the earlier attempt visible when overwriting a decided cell
+		const previous = [
+			...(prior?.previous ?? []),
+			...(prior && !['not_started', 'in_progress'].includes(prior.status)
+				? [{
+					status: prior.status,
+					sessionId: prior.sessionId ?? null,
+					result: prior.result ?? null,
+					evaluation: prior.evaluation ?? null,
+					notes: prior.notes ?? null,
+					completedAt: prior.completedAt ?? null,
+					completedBy: prior.completedBy ?? null
+				}]
+				: [])
+		];
 
 		// Mirror manual pass/fail into the SPU rollup where one exists
 		// (magnetometer/thermocouple; optical confirmation has no rollup field on
@@ -284,7 +321,8 @@ export const actions: Actions = {
 					[`spus.$.steps.${step}.status`]: outcome,
 					[`spus.$.steps.${step}.completedAt`]: now,
 					[`spus.$.steps.${step}.completedBy`]: user,
-					[`spus.$.steps.${step}.notes`]: notes
+					[`spus.$.steps.${step}.notes`]: notes,
+					[`spus.$.steps.${step}.previous`]: previous
 				}
 			}
 		);

@@ -20,10 +20,18 @@
 		status: string;
 		spuCount: number;
 		progress: { passed: number; total: number };
+		steps: string[];
+		stepSummary: Record<string, { passed: number; failed: number; uploaded: number; total: number }>;
 		startedAt: string | null;
 		completedAt: string | null;
 		createdBy: string | null;
 	}
+
+	const SHORT_STEP_LABELS: Record<string, string> = {
+		magnetometer: 'Mag',
+		thermocouple: 'Thermo',
+		optical_confirmation: 'Optical'
+	};
 
 	interface Props {
 		data: { spus: RosterSpu[]; runs: RunSummary[] };
@@ -119,6 +127,86 @@
 			{form.error}
 		</div>
 	{/if}
+
+	<!-- Runs (top): each run with its per-step validation status -->
+	<div class="tron-card">
+		<div class="flex items-center justify-between border-b border-[var(--color-tron-border)] p-4">
+			<h2 class="tron-heading text-lg font-semibold">Runs</h2>
+			<div class="flex gap-2">
+				{#each [['all', 'All'], ['in_progress', 'In Progress'], ['completed', 'Completed'], ['aborted', 'Aborted']] as [value, label] (value)}
+					<button
+						type="button"
+						onclick={() => statusFilter = value as typeof statusFilter}
+						class="rounded-lg px-3 py-1 text-xs font-medium transition-colors
+							{statusFilter === value
+								? 'bg-[var(--color-tron-cyan)] text-[var(--color-tron-bg-primary)]'
+								: 'bg-[var(--color-tron-bg-tertiary)] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
+					>
+						{label}
+					</button>
+				{/each}
+			</div>
+		</div>
+
+		{#if filteredRuns.length === 0}
+			<p class="tron-text-muted p-6 text-sm">No validation runs yet — build a group below to start one.</p>
+		{:else}
+			<div class="overflow-x-auto">
+				<table class="w-full text-sm">
+					<thead>
+						<tr class="border-b border-[var(--color-tron-border)] text-left">
+							<th class="tron-text-muted p-3 font-medium">Run #</th>
+							<th class="tron-text-muted p-3 font-medium">Name</th>
+							<th class="tron-text-muted p-3 font-medium">SPUs</th>
+							<th class="tron-text-muted p-3 font-medium">Validation Status</th>
+							<th class="tron-text-muted p-3 font-medium">Status</th>
+							<th class="tron-text-muted p-3 font-medium">Started</th>
+							<th class="tron-text-muted p-3 font-medium">By</th>
+						</tr>
+					</thead>
+					<tbody class="divide-y divide-[var(--color-tron-border)]">
+						{#each filteredRuns as run (run.id)}
+							<tr class="transition-colors hover:bg-[var(--color-tron-bg-tertiary)]">
+								<td class="p-3">
+									<a href="/validation/runs/{run.id}" class="tron-heading font-medium text-[var(--color-tron-cyan)] hover:underline">{run.runNumber}</a>
+								</td>
+								<td class="p-3">{run.name ?? '—'}</td>
+								<td class="p-3">{run.spuCount}</td>
+								<td class="p-3">
+									<div class="flex flex-wrap items-center gap-2">
+										{#each run.steps as step (step)}
+											{@const s = run.stepSummary[step]}
+											{#if s}
+												{@const pending = s.total - s.passed - s.failed - s.uploaded}
+												<span class="flex items-center gap-1 rounded-full bg-[var(--color-tron-bg-tertiary)] px-2 py-1 text-xs">
+													<span class="tron-text-muted">{SHORT_STEP_LABELS[step] ?? step}:</span>
+													{#if s.passed > 0}<span class="font-medium text-[var(--color-tron-green)]">{s.passed}✓</span>{/if}
+													{#if s.failed > 0}<span class="font-medium text-[var(--color-tron-red)]">{s.failed}✗</span>{/if}
+													{#if s.uploaded > 0}<span class="font-medium text-[var(--color-tron-orange)]">{s.uploaded}↑</span>{/if}
+													{#if pending > 0}<span class="tron-text-muted">{pending}·</span>{/if}
+													{#if s.total === 0}<span class="tron-text-muted">—</span>{/if}
+												</span>
+											{/if}
+										{/each}
+									</div>
+								</td>
+								<td class="p-3">
+									<span class="rounded-full px-2 py-1 text-xs font-medium {runChip(run.status)}">
+										{run.status === 'in_progress' ? 'In Progress' : run.status === 'completed' ? 'Completed' : 'Aborted'}
+									</span>
+								</td>
+								<td class="tron-text-muted p-3">{fmtDate(run.startedAt)}</td>
+								<td class="tron-text-muted p-3">{run.createdBy ?? '—'}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+			<p class="tron-text-muted border-t border-[var(--color-tron-border)] px-4 py-2 text-xs">
+				✓ passed · ✗ failed · ↑ uploaded (awaiting evaluation) · &nbsp;·&nbsp; pending
+			</p>
+		{/if}
+	</div>
 
 	<!-- Build validation group -->
 	<form
@@ -297,65 +385,4 @@
 		{/if}
 	</div>
 
-	<!-- Run history -->
-	<div class="tron-card">
-		<div class="flex items-center justify-between border-b border-[var(--color-tron-border)] p-4">
-			<h2 class="tron-heading text-lg font-semibold">Runs</h2>
-			<div class="flex gap-2">
-				{#each [['all', 'All'], ['in_progress', 'In Progress'], ['completed', 'Completed'], ['aborted', 'Aborted']] as [value, label] (value)}
-					<button
-						type="button"
-						onclick={() => statusFilter = value as typeof statusFilter}
-						class="rounded-lg px-3 py-1 text-xs font-medium transition-colors
-							{statusFilter === value
-								? 'bg-[var(--color-tron-cyan)] text-[var(--color-tron-bg-primary)]'
-								: 'bg-[var(--color-tron-bg-tertiary)] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
-					>
-						{label}
-					</button>
-				{/each}
-			</div>
-		</div>
-
-		{#if filteredRuns.length === 0}
-			<p class="tron-text-muted p-6 text-sm">No validation runs yet.</p>
-		{:else}
-			<div class="overflow-x-auto">
-				<table class="w-full text-sm">
-					<thead>
-						<tr class="border-b border-[var(--color-tron-border)] text-left">
-							<th class="tron-text-muted p-3 font-medium">Run #</th>
-							<th class="tron-text-muted p-3 font-medium">Name</th>
-							<th class="tron-text-muted p-3 font-medium">SPUs</th>
-							<th class="tron-text-muted p-3 font-medium">Progress</th>
-							<th class="tron-text-muted p-3 font-medium">Status</th>
-							<th class="tron-text-muted p-3 font-medium">Started</th>
-							<th class="tron-text-muted p-3 font-medium">Completed</th>
-							<th class="tron-text-muted p-3 font-medium">By</th>
-						</tr>
-					</thead>
-					<tbody class="divide-y divide-[var(--color-tron-border)]">
-						{#each filteredRuns as run (run.id)}
-							<tr class="transition-colors hover:bg-[var(--color-tron-bg-tertiary)]">
-								<td class="p-3">
-									<a href="/validation/runs/{run.id}" class="tron-heading font-medium text-[var(--color-tron-cyan)] hover:underline">{run.runNumber}</a>
-								</td>
-								<td class="p-3">{run.name ?? '—'}</td>
-								<td class="p-3">{run.spuCount}</td>
-								<td class="p-3">{run.progress.passed}/{run.progress.total} steps passed</td>
-								<td class="p-3">
-									<span class="rounded-full px-2 py-1 text-xs font-medium {runChip(run.status)}">
-										{run.status === 'in_progress' ? 'In Progress' : run.status === 'completed' ? 'Completed' : 'Aborted'}
-									</span>
-								</td>
-								<td class="tron-text-muted p-3">{fmtDate(run.startedAt)}</td>
-								<td class="tron-text-muted p-3">{fmtDate(run.completedAt)}</td>
-								<td class="tron-text-muted p-3">{run.createdBy ?? '—'}</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
-		{/if}
-	</div>
 </div>

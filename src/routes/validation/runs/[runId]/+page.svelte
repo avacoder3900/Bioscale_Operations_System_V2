@@ -10,6 +10,7 @@
 		completedAt?: string | null;
 		completedBy?: { username?: string } | null;
 		notes?: string | null;
+		previous?: StepCell[];
 	}
 
 	interface Member {
@@ -232,6 +233,27 @@
 											vs {cell.evaluation.criteria.minTemp}–{cell.evaluation.criteria.maxTemp}°C
 										</span>
 									{/if}
+									{#if cell.status === 'failed' && cell.evaluation?.failureReasons?.length}
+										<span class="max-w-56 text-xs text-[var(--color-tron-red)]">
+											{cell.evaluation.failureReasons.join('; ')}
+										</span>
+									{/if}
+									{#if cell.previous?.length}
+										<span class="tron-text-muted text-xs">
+											Earlier attempts:
+											{#each cell.previous as prev, pi (pi)}
+												{#if prev.sessionId && data.sessionById[prev.sessionId]}
+													<a href="/validation/thermocouple/{prev.sessionId}" class="ml-1 hover:underline {prev.status === 'failed' ? 'text-[var(--color-tron-red)]' : prev.status === 'passed' ? 'text-[var(--color-tron-green)]' : ''}">
+														{prev.status === 'failed' ? '✗' : prev.status === 'passed' ? '✓' : '•'} {data.sessionById[prev.sessionId].barcode ?? prev.status}
+													</a>
+												{:else}
+													<span class="ml-1 {prev.status === 'failed' ? 'text-[var(--color-tron-red)]' : prev.status === 'passed' ? 'text-[var(--color-tron-green)]' : ''}">
+														{prev.status === 'failed' ? '✗ failed' : prev.status === 'passed' ? '✓ passed' : prev.status}
+													</span>
+												{/if}
+											{/each}
+										</span>
+									{/if}
 									{#if cell.sessionId && data.sessionById[cell.sessionId]}
 										<a href="/validation/thermocouple/{cell.sessionId}" class="text-xs text-[var(--color-tron-cyan)] hover:underline">
 											{data.sessionById[cell.sessionId].barcode ?? 'session'} →
@@ -244,24 +266,22 @@
 									{#if inProgress}
 										<div class="flex flex-wrap gap-2">
 											{#if step === 'thermocouple'}
-												{#if cell.status === 'not_started' || cell.status === 'uploaded'}
-													<button type="button" onclick={() => togglePanel(`${panelKey}:upload`)} class="text-xs text-[var(--color-tron-orange)] hover:underline">
-														{cell.status === 'uploaded' ? 'Re-upload' : 'Upload data'}
-													</button>
-												{/if}
+												<button type="button" onclick={() => togglePanel(`${panelKey}:upload`)} class="text-xs text-[var(--color-tron-orange)] hover:underline">
+													{cell.status === 'not_started' ? 'Upload data' : cell.status === 'uploaded' ? 'Re-upload' : 'Run again'}
+												</button>
 												{#if cell.status === 'uploaded' && data.thermoCriteria}
 													<form method="POST" action="?/evaluateThermo" use:enhance>
 														<input type="hidden" name="spuId" value={member.spuId} />
 														<button type="submit" class="text-xs text-[var(--color-tron-cyan)] hover:underline">Evaluate</button>
 													</form>
 												{/if}
-											{:else if step === 'magnetometer' && (cell.status === 'not_started' || cell.status === 'in_progress')}
+											{:else if step === 'magnetometer'}
 												<a href="/validation/magnetometer?udi={encodeURIComponent(member.udi)}&runId={run._id}" class="text-xs text-[var(--color-tron-orange)] hover:underline">
-													Run test →
+													{cell.status === 'not_started' || cell.status === 'in_progress' ? 'Run test →' : 'Run again →'}
 												</a>
-											{:else if step === 'optical_confirmation' && (cell.status === 'not_started' || cell.status === 'in_progress')}
+											{:else if step === 'optical_confirmation'}
 												<a href="/validation/optical-confirmation?udi={encodeURIComponent(member.udi)}&runId={run._id}" class="text-xs text-[var(--color-tron-orange)] hover:underline">
-													Open →
+													{cell.status === 'not_started' || cell.status === 'in_progress' ? 'Open →' : 'Run again →'}
 												</a>
 											{/if}
 											<button type="button" onclick={() => togglePanel(`${panelKey}:record`)} class="tron-text-muted text-xs hover:text-[var(--color-tron-cyan)]">

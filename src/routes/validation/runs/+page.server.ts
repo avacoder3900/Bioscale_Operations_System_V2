@@ -28,6 +28,24 @@ function runProgress(run: any): { passed: number; total: number } {
 	return { passed, total: members.length * stepKeys.length };
 }
 
+// Per-step rollup across a run's active members, for the at-a-glance status
+// chips on the run list (e.g. Mag: 2 passed / 1 failed).
+function stepSummary(run: any): Record<string, { passed: number; failed: number; uploaded: number; total: number }> {
+	const members = activeMembers(run);
+	const out: Record<string, { passed: number; failed: number; uploaded: number; total: number }> = {};
+	for (const key of run.steps ?? []) {
+		const s = { passed: 0, failed: 0, uploaded: 0, total: members.length };
+		for (const m of members) {
+			const st = m.steps?.[key]?.status;
+			if (st === 'passed') s.passed++;
+			else if (st === 'failed') s.failed++;
+			else if (st === 'uploaded') s.uploaded++;
+		}
+		out[key] = s;
+	}
+	return out;
+}
+
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'spu:read');
 	await connectDB();
@@ -72,6 +90,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 				status: r.status,
 				spuCount: activeMembers(r).length,
 				progress,
+				steps: r.steps ?? [],
+				stepSummary: stepSummary(r),
 				startedAt: r.startedAt?.toISOString?.() ?? null,
 				completedAt: r.completedAt?.toISOString?.() ?? null,
 				createdBy: r.createdBy?.username ?? null
