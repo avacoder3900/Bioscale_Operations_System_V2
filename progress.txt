@@ -3884,3 +3884,12 @@ Source: branch feat/spu-validation-runs @ commit 6c883390
 Retrieve this exact code: git checkout feat/spu-validation-runs at commit 6c883390
   (or: git log feat/spu-validation-runs --oneline to find it if the branch has since moved on)
 What this deployment is for: VALIDATION-05 SPU validation runs feature — roster, run matrix, thermo upload-then-evaluate flow.
+
+Follow-up (same day): group-picker selection UX on /validation/runs — checkbox table replaced
+with a combobox (type-ahead locks to first match, Enter adds; scrollable dropdown; staged
+"validation group" chips with remove; +Add buttons on the overview table). npm run check
+unchanged vs baseline.
+Deployment: preview — https://bioscale-operations-system-mongodb-fcrzpa18j-brevitest.vercel.app
+Source: branch feat/spu-validation-runs @ commit 454e1e00
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 454e1e00
+What this deployment is for: validation-run group picker (search/dropdown SPU selection) for user review.
