@@ -264,7 +264,7 @@
 							{@const cell = cellFor(member, step)}
 							{@const prior = cell.status === 'not_started' ? priorFor(member, step) : null}
 							{@const panelKey = `${member.spuId}:${step}`}
-							<td class="p-3">
+							<td class="p-3 {cell.status === 'passed' ? 'bg-[var(--color-tron-green)]/10' : cell.status === 'failed' ? 'bg-[var(--color-tron-red)]/5' : ''}">
 								<div class="flex flex-col items-start gap-1.5">
 									{#if prior}
 										<!-- Carried over from the SPU's DHR (spu.validation.*) -->
@@ -296,9 +296,8 @@
 
 									{#if step === 'thermocouple' && cell.result}
 										<span class="tron-text-muted text-xs">
-											{cell.result.readingCount ?? '?'} readings
 											{#if cell.result.min != null && cell.result.max != null}
-												· min {cell.result.min.toFixed(1)} · max {cell.result.max.toFixed(1)}°C
+												min {cell.result.min.toFixed(1)} · max {cell.result.max.toFixed(1)}°C
 											{/if}
 											{#if cell.result.mode != null}
 												· mode {cell.result.mode.toFixed(1)}°C
@@ -307,6 +306,30 @@
 												· {cell.result.fileName}
 											{/if}
 										</span>
+									{/if}
+									{#if step === 'thermocouple' && cell.status === 'uploaded' && inProgress}
+										<!-- Verdict on the displayed values (manual until the
+										     larger-dataset acceptance range is defined) -->
+										<div class="flex gap-2">
+											<form method="POST" action="?/recordStepResult" use:enhance>
+												<input type="hidden" name="spuId" value={member.spuId} />
+												<input type="hidden" name="step" value={step} />
+												<input type="hidden" name="outcome" value="passed" />
+												<input type="hidden" name="notes" value="Approved on mode/min/max review" />
+												<button type="submit" class="rounded-lg bg-[var(--color-tron-green)] px-3 py-1.5 text-xs font-semibold text-[var(--color-tron-bg-primary)] hover:bg-[var(--color-tron-green)]/90">
+													Approve
+												</button>
+											</form>
+											<form method="POST" action="?/recordStepResult" use:enhance>
+												<input type="hidden" name="spuId" value={member.spuId} />
+												<input type="hidden" name="step" value={step} />
+												<input type="hidden" name="outcome" value="failed" />
+												<input type="hidden" name="notes" value="Rejected on mode/min/max review" />
+												<button type="submit" class="rounded-lg border border-[var(--color-tron-red)]/50 px-3 py-1.5 text-xs font-semibold text-[var(--color-tron-red)] hover:bg-[var(--color-tron-red)]/10">
+													Reject
+												</button>
+											</form>
+										</div>
 									{/if}
 									{#if cell.evaluation}
 										<span class="tron-text-muted text-xs">
