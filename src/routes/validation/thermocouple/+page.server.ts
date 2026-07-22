@@ -48,6 +48,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 					? {
 						min: thermoResult.processedData.stats.min,
 						max: thermoResult.processedData.stats.max,
+						mode: thermoResult.processedData.stats.mode ?? null,
 						average: thermoResult.processedData.stats.average
 					}
 					: null

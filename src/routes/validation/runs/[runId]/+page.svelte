@@ -7,7 +7,7 @@
 	interface StepCell {
 		status: string;
 		sessionId?: string;
-		result?: { min?: number; max?: number; average?: number; readingCount?: number; fileName?: string | null };
+		result?: { min?: number; max?: number; mode?: number; average?: number; readingCount?: number; fileName?: string | null };
 		evaluation?: { criteria: { minTemp: number; maxTemp: number }; passed: boolean; failureReasons: string[] } | null;
 		completedAt?: string | null;
 		completedBy?: { username?: string } | null;
@@ -298,7 +298,10 @@
 										<span class="tron-text-muted text-xs">
 											{cell.result.readingCount ?? '?'} readings
 											{#if cell.result.min != null && cell.result.max != null}
-												· {cell.result.min.toFixed(1)}–{cell.result.max.toFixed(1)}°C
+												· min {cell.result.min.toFixed(1)} · max {cell.result.max.toFixed(1)}°C
+											{/if}
+											{#if cell.result.mode != null}
+												· mode {cell.result.mode.toFixed(1)}°C
 											{/if}
 											{#if cell.result.fileName}
 												· {cell.result.fileName}

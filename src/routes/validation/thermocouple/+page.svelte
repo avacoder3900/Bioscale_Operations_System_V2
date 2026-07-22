@@ -12,7 +12,7 @@
 				barcode: string | null;
 				createdAt: string;
 				spuUdi: string | null;
-				stats: { min: number; max: number; average: number } | null;
+				stats: { min: number; max: number; mode: number | null; average: number } | null;
 			}>;
 		};
 		form: {
@@ -22,7 +22,7 @@
 			results?: {
 				passed: boolean;
 				stats: {
-					min: number; max: number; average: number; stdDev: number;
+					min: number; max: number; mode: number; average: number; stdDev: number;
 					cv: number; range: number; drift: number;
 					readingCount: number; durationMs: number;
 				};
@@ -55,6 +55,20 @@
 		const max = Math.max(...temps);
 		const sum = temps.reduce((a, b) => a + b, 0);
 		const avg = sum / temps.length;
+		// Mode at 0.1°C resolution (matches server computeMode)
+		const counts = new Map<number, number>();
+		for (const t of temps) {
+			const b = Math.round(t * 10) / 10;
+			counts.set(b, (counts.get(b) ?? 0) + 1);
+		}
+		let mode = temps[0];
+		let bestCount = -1;
+		for (const [bucket, count] of counts) {
+			if (count > bestCount || (count === bestCount && Math.abs(bucket - avg) < Math.abs(mode - avg))) {
+				mode = bucket;
+				bestCount = count;
+			}
+		}
 		const variance = temps.reduce((acc, t) => acc + (t - avg) ** 2, 0) / temps.length;
 		const stdDev = Math.sqrt(variance);
 		const cv = avg !== 0 ? (stdDev / avg) * 100 : 0;
@@ -64,7 +78,7 @@
 			? readings[readings.length - 1].timestamp - readings[0].timestamp
 			: 0;
 		return {
-			min, max, average: avg, stdDev, cv, range, drift,
+			min, max, mode, average: avg, stdDev, cv, range, drift,
 			readingCount: temps.length, durationMs
 		};
 	});
@@ -240,11 +254,15 @@
 			<div class="tron-card mt-4 p-6">
 				<h2 class="tron-heading mb-4 text-lg font-semibold">Statistics Preview</h2>
 				<div class="grid grid-cols-2 gap-4 md:grid-cols-4">
-					<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
+					<div class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
+						<span class="tron-text-muted block text-xs uppercase">Mode</span>
+						<span class="tron-heading text-2xl font-bold">{fmtTemp(stats.mode)}</span>
+					</div>
+					<div class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
 						<span class="tron-text-muted block text-xs uppercase">Min</span>
 						<span class="tron-heading text-2xl font-bold">{fmtTemp(stats.min)}</span>
 					</div>
-					<div class="rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
+					<div class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
 						<span class="tron-text-muted block text-xs uppercase">Max</span>
 						<span class="tron-heading text-2xl font-bold">{fmtTemp(stats.max)}</span>
 					</div>
@@ -324,7 +342,7 @@
 							{/if}
 							{#if session.stats}
 								<span class="tron-text-muted ml-2 text-sm">
-									{session.stats.min.toFixed(1)}°C – {session.stats.max.toFixed(1)}°C (avg {session.stats.average.toFixed(1)}°C)
+									{session.stats.min.toFixed(1)}°C – {session.stats.max.toFixed(1)}°C{#if session.stats.mode != null}&nbsp;· mode {session.stats.mode.toFixed(1)}°C{/if} (avg {session.stats.average.toFixed(1)}°C)
 								</span>
 							{/if}
 						</div>
