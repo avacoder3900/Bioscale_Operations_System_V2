@@ -1,6 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, AssayDefinition, CartridgeRecord } from '$lib/server/db';
+import { computeOpticalAnalysis } from '$lib/server/optical-analysis';
 import type { Actions, PageServerLoad } from './$types';
 
 // The single optical-confirmation assay in use: "Gen 5 Optical Scan - Start
@@ -32,22 +33,34 @@ export const load: PageServerLoad = async ({ locals }) => {
 			duration: a.duration ?? null,
 			bcodeSteps: Array.isArray(a.BCODE?.code) ? a.BCODE.code.length : 0
 		})),
-		cartridges: cartridges.map((c: any) => ({
-			id: c._id,
-			barcode: c._id, // cartridge_records _id IS the scanned barcode
-			assayName: c.assayName ?? c.assayId ?? null,
-			status: c.status ?? 'linked',
-			ran: !!(c.checkpoints?.completed || c.checkpoints?.underway || c.status === 'completed'),
-			// The run writes a `device` block — its name is the SPU/reader it ran on.
-			spuUdi: c.device?.name ?? null,
-			spuDeviceId: c.device?.id ?? null,
-			assignedAt: c.createdAt?.toISOString?.() ?? null,
-			underwayAt: c.checkpoints?.underway?.when ?? null,
-			completedAt: c.checkpoints?.completed?.when ?? null,
-			result: c.analysis
-				? { profileName: c.analysis.profileName ?? null, computedAt: c.analysis.computedAt ?? null }
-				: null
-		}))
+		cartridges: cartridges.map((c: any) => {
+			// VALIDATION-04: per-channel F7/F3 from rawData.readings (already
+			// selected above; previously loaded and thrown away).
+			const analysis = computeOpticalAnalysis(c);
+			return {
+				id: c._id,
+				barcode: c._id, // cartridge_records _id IS the scanned barcode
+				assayName: c.assayName ?? c.assayId ?? null,
+				status: c.status ?? 'linked',
+				ran: !!(c.checkpoints?.completed || c.checkpoints?.underway || c.status === 'completed'),
+				// The run writes a `device` block — its name is the SPU/reader it ran on.
+				spuUdi: c.device?.name ?? null,
+				spuDeviceId: c.device?.id ?? null,
+				assignedAt: c.createdAt?.toISOString?.() ?? null,
+				underwayAt: c.checkpoints?.underway?.when ?? null,
+				completedAt: c.checkpoints?.completed?.when ?? null,
+				analysis: analysis
+					? {
+						ratioByChannel: analysis.ratioByChannel,
+						readingCount: analysis.readingCount,
+						scanGroup: analysis.scanGroup
+					}
+					: null,
+				result: c.analysis
+					? { profileName: c.analysis.profileName ?? null, computedAt: c.analysis.computedAt ?? null }
+					: null
+			};
+		})
 	};
 };
 

@@ -6,6 +6,7 @@
 			assays: Array<{ id: string; name: string; skuCode: string; duration: number | null; bcodeSteps: number }>;
 			cartridges: Array<{
 				id: string; barcode: string; assayName: string | null;
+			analysis: { ratioByChannel: Record<string, number | null>; readingCount: number; scanGroup: string } | null;
 				status: string; ran: boolean;
 				spuUdi: string | null; spuDeviceId: string | null;
 				assignedAt: string | null; underwayAt: string | null; completedAt: string | null;
@@ -160,6 +161,7 @@
 							<th class="p-3 font-medium">Assay</th>
 							<th class="p-3 font-medium">Status</th>
 							<th class="p-3 font-medium">SPU</th>
+							<th class="p-3 font-medium">Analysis (F7/F3)</th>
 							<th class="p-3 font-medium">Result</th>
 							<th class="p-3 font-medium">Assigned</th>
 							<th class="p-3 font-medium">Completed</th>
@@ -168,12 +170,28 @@
 					<tbody class="divide-y divide-[var(--color-tron-border)]">
 						{#each data.cartridges as c (c.id)}
 							<tr>
-								<td class="p-3 font-mono text-xs text-[var(--color-tron-text-primary)]">{c.barcode}</td>
+								<td class="p-3 font-mono text-xs">
+									<a href="/validation/optical-confirmation/{c.id}" class="text-[var(--color-tron-cyan)] hover:underline">{c.barcode}</a>
+								</td>
 								<td class="p-3">{c.assayName ?? '—'}</td>
 								<td class="p-3">
 									<span class="rounded-full px-2 py-1 text-xs font-medium {statusClass(c.status)}">{c.status}</span>
 								</td>
 								<td class="p-3 font-mono text-xs text-[var(--color-tron-text-secondary)]">{c.spuUdi ?? '—'}</td>
+								<td class="p-3">
+									{#if c.analysis}
+										<span class="flex items-center gap-2 whitespace-nowrap">
+											{#each Object.entries(c.analysis.ratioByChannel) as [ch, ratio] (ch)}
+												<span class="text-xs">
+													<span class="tron-text-muted">{ch}:</span>
+													<span class="tron-heading font-medium">{ratio != null ? ratio.toFixed(1) : '—'}</span>
+												</span>
+											{/each}
+										</span>
+									{:else}
+										<span class="tron-text-muted">—</span>
+									{/if}
+								</td>
 								<td class="p-3 text-[var(--color-tron-text-secondary)]">
 									{#if c.result}
 										{c.result.profileName ?? 'analyzed'}

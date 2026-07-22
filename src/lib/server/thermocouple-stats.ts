@@ -1,6 +1,7 @@
 export interface ChannelStats {
 	min: number;
 	max: number;
+	mode: number;
 	average: number;
 	stdDev: number;
 	cv: number;
@@ -10,6 +11,27 @@ export interface ChannelStats {
 	outOfRangeCount: number;
 }
 
+// Most frequent value at 0.1°C resolution (the loggers' native step); ties
+// break toward the value closest to the mean.
+export function computeMode(values: number[]): number {
+	if (values.length === 0) return 0;
+	const counts = new Map<number, number>();
+	for (const v of values) {
+		const bucket = Math.round(v * 10) / 10;
+		counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
+	}
+	const mean = values.reduce((a, b) => a + b, 0) / values.length;
+	let best = values[0];
+	let bestCount = -1;
+	for (const [bucket, count] of counts) {
+		if (count > bestCount || (count === bestCount && Math.abs(bucket - mean) < Math.abs(best - mean))) {
+			best = bucket;
+			bestCount = count;
+		}
+	}
+	return best;
+}
+
 function round3(n: number): number {
 	return Math.round(n * 1000) / 1000;
 }
@@ -17,7 +39,7 @@ function round3(n: number): number {
 export function computeChannelStats(values: number[], minTemp: number, maxTemp: number): ChannelStats {
 	const n = values.length;
 	if (n === 0) {
-		return { min: 0, max: 0, average: 0, stdDev: 0, cv: 0, range: 0, drift: 0, readingCount: 0, outOfRangeCount: 0 };
+		return { min: 0, max: 0, mode: 0, average: 0, stdDev: 0, cv: 0, range: 0, drift: 0, readingCount: 0, outOfRangeCount: 0 };
 	}
 
 	const min = Math.min(...values);
@@ -34,6 +56,7 @@ export function computeChannelStats(values: number[], minTemp: number, maxTemp: 
 	return {
 		min: round3(min),
 		max: round3(max),
+		mode: computeMode(values),
 		average: round3(average),
 		stdDev: round3(stdDev),
 		cv: round3(cv),
@@ -49,12 +72,13 @@ export function computeOverallStats(
 ): ChannelStats {
 	const entries = Object.values(channelStats);
 	if (entries.length === 0) {
-		return { min: 0, max: 0, average: 0, stdDev: 0, cv: 0, range: 0, drift: 0, readingCount: 0, outOfRangeCount: 0 };
+		return { min: 0, max: 0, mode: 0, average: 0, stdDev: 0, cv: 0, range: 0, drift: 0, readingCount: 0, outOfRangeCount: 0 };
 	}
 
 	const totalReadings = entries.reduce((s, e) => s + e.readingCount, 0);
 	return {
 		min: round3(Math.min(...entries.map(e => e.min))),
+		mode: round3(entries.reduce((s, e) => s + (e.mode ?? 0), 0) / entries.length),
 		max: round3(Math.max(...entries.map(e => e.max))),
 		average: round3(entries.reduce((s, e) => s + e.average, 0) / entries.length),
 		stdDev: round3(entries.reduce((s, e) => s + e.stdDev, 0) / entries.length),

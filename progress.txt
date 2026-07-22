@@ -3847,3 +3847,141 @@ What this deployment is for: microscope station live in production — CV-MICROS
 CV-PIPELINE-V2 conventions (sequence ingest fields, MJPEG station view w/ WebRTC fallback,
 snapshot capture, sequence panel) + ingest CSRF/station-key fixes. Ends the cv-microscope
 reconciliation pause.
+
+================================================================================
+2026-07-20 — feat/spu-validation-runs — VALIDATION-05: SPU validation runs (multi-SPU run tracking)
+================================================================================
+Implemented the VALIDATION-05 PRD (docs/prds/VALIDATION-05-spu-validation-run.md) off
+origin/master in worktree .worktrees/validation-runs. New "Runs" tab in Validation:
+
+- /validation/runs — roster of SPUs in validation (status validating, or assembled with
+  validation pending) with mag/thermo status chips + active-run linkage; multi-select →
+  startRun creates a VALRUN-NNNNNN run (GeneratedBarcode prefix VALRUN) snapshotting each
+  member's UDI. One active run per UDI enforced. Run history table with status filters.
+- /validation/runs/[runId] — SPU × step matrix (Magnetometer | Thermocouple | Optical
+  Confirmation; display order only, no enforced sequencing). Per-cell: status chip,
+  session link, thermo inline upload panel, Evaluate, manual Record result
+  (passed/failed/skipped + notes), per-SPU Mark validated (transitions validating →
+  validated with statusTransitions entry), remove-from-run, complete/abort run. All
+  mutations audit-logged (schema-declared AuditLog fields).
+- New model ValidationRun (validation_runs) + runId on ValidationSession.
+- Thermocouple upload pipeline extracted from the standalone page's `upload` action into
+  src/lib/server/validation/thermo-upload.ts (processThermoUpload / evaluateThermoSession);
+  the standalone /validation/thermocouple page rewired through it, parse UI extracted into
+  shared ThermoFileUpload.svelte, file input widened to .csv,.xlsx.
+- Decision 2 (upload ≠ pass): run uploads park at 'uploaded'; pass/fail only on evaluation
+  against STANDARD_THERMO_CRITERIA (src/lib/server/validation/thermo-criteria.ts) — values
+  TBD, currently null, so Evaluate is disabled with a banner until the team sets the range.
+- Not built yet: SPU-detail run-membership section (PRD §6.3); magnetometer/optical pages
+  don't yet read the ?udi&runId deep-link params (links work, manual Record result covers
+  attribution).
+
+npm run check: 10 errors, all pre-existing baseline (r2.ts, AskBimsWidget, assembly page)
+— zero errors/warnings from new files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-dwsp3zgoo.vercel.app
+Source: branch feat/spu-validation-runs @ commit 6c883390
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 6c883390
+  (or: git log feat/spu-validation-runs --oneline to find it if the branch has since moved on)
+What this deployment is for: VALIDATION-05 SPU validation runs feature — roster, run matrix, thermo upload-then-evaluate flow.
+
+Follow-up (same day): group-picker selection UX on /validation/runs — checkbox table replaced
+with a combobox (type-ahead locks to first match, Enter adds; scrollable dropdown; staged
+"validation group" chips with remove; +Add buttons on the overview table). npm run check
+unchanged vs baseline.
+Deployment: preview — https://bioscale-operations-system-mongodb-fcrzpa18j-brevitest.vercel.app
+Source: branch feat/spu-validation-runs @ commit 454e1e00
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 454e1e00
+What this deployment is for: validation-run group picker (search/dropdown SPU selection) for user review.
+
+Follow-up 2026-07-21: picker unrestricted — roster now lists ALL SPUs except voided/retired
+(was: only validating / assembled+pending); dropdown rows show lifecycle status; overview
+table renamed "All SPUs", sorted by UDI. npm run check unchanged vs baseline.
+Deployment: preview — https://bioscale-operations-system-mongodb-2h9i5kprc.vercel.app
+Source: branch feat/spu-validation-runs @ commit 67a4e7c0
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 67a4e7c0
+What this deployment is for: unrestricted SPU picker for validation runs, for user review.
+
+Fix 2026-07-21: startRun 500 — the VALRUN counter upsert hit the non-sparse unique
+barcode_1 index (prod already has one null-barcode counter doc from the OPT- feature:
+the known generated_barcodes E11000 gotcha). Counter doc now gets a VALRUN-COUNTER
+placeholder barcode via $setOnInsert, filter scoped by type:sequence_counter. Root cause
+confirmed + fix pattern verified directly against prod Mongo with a throwaway prefix.
+Deployment: preview — https://bioscale-operations-system-mongodb-ihlc0e88s-brevitest.vercel.app
+Source: branch feat/spu-validation-runs @ commit 21daa189
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 21daa189
+What this deployment is for: E11000 startRun fix — user retest of starting a validation run.
+
+Follow-up 2026-07-21 (2): runs list moved to top of /validation/runs; per-run per-step
+validation-status chips in the run table (Mag/Thermo/Optical passed✓/failed✗/uploaded↑/
+pending counts); matrix failed cells show failure reasons; re-run allowed on decided cells
+(Run again / re-upload) with earlier attempts preserved in cell.previous (session links).
+npm run check unchanged vs baseline.
+Deployment: preview — https://bioscale-operations-system-mongodb-irivm7r9x-brevitest.vercel.app
+Source: branch feat/spu-validation-runs @ commit 06039a93
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 06039a93
+What this deployment is for: runs-on-top layout + per-step status visibility + retry flow, for user review.
+
+Follow-up 2026-07-21 (3): live auto-refresh — /validation/runs and the run matrix poll
+invalidateAll() every 10s while visible; green "live" indicator with last-updated time;
+picker/panel state survives refreshes. npm run check unchanged vs baseline.
+Deployment: preview — https://bioscale-operations-system-mongodb-7baakqz98.vercel.app
+Source: branch feat/spu-validation-runs @ commit 9fe7ef0c
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 9fe7ef0c
+What this deployment is for: live auto-updating validation-run status, for user review.
+
+Follow-up 2026-07-21 (4): prior device-record validation now on the run screen — the
+DHR-visible spu.validation.{magnetometer,thermocouple} results carry into runs: startRun
+prefill (carriedOver cells w/ session link), and for pre-existing runs the matrix shows
+"passed/failed · prior · from device record" with one-click adopt; prior passes count in
+Overall; session links route by type. Note: Vercel webhook silently skipped 449be48b
+(no deployment created) — retriggered via empty commit 2c3368f9.
+Deployment: preview — https://bioscale-operations-system-mongodb-cza34dfmu-brevitest.vercel.app
+Source: branch feat/spu-validation-runs @ commit 2c3368f9 (code = 449be48b)
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 2c3368f9
+What this deployment is for: prior mag/thermo results carried into run view, for user review.
+
+Follow-up 2026-07-21 (5): optical-confirmation data readout (VALIDATION-04 core) — new
+src/lib/server/optical-analysis.ts computes per-channel F7/F3 (ratio of summed bands,
+test scans when baselineScans>0 else whole run) from cartridge_records.rawData.readings;
+cartridge log gains Analysis (F7/F3) column (A/B/C inline); barcode links to new
+/validation/optical-confirmation/[id] view: per-well ratio tiles, per-channel sums table,
+raw readings table, full raw JSON. Display-only/non-destructive (no analysis persistence
+yet). Verified compute against 2 completed prod cartridges (126 readings, A/B/C sane
+ratios). npm run check unchanged vs baseline.
+Deployment: preview — https://bioscale-operations-system-mongodb-7grg5p89b-brevitest.vercel.app
+Source: branch feat/spu-validation-runs @ commit dd2d8342
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit dd2d8342
+What this deployment is for: optical readout (ratios + raw data), for user review.
+
+Fix 2026-07-22: thermocouple parser rewritten (new parse-thermo.ts) — the logger export
+("温度 datasheet" title row, then Date | CH4 | ℃) defeated header detection; single-cell
+title row triggered the single-column fallback and column A's Excel date serials (~46,000,
+seen on the SPU 212 upload preview) parsed as temperatures. Old prod sessions
+THERMO-000005/6 show the sibling bug (row indexes 1..493 as temps). Parser now considers
+ONLY columns A-C, classifies by content (units/dates/serials/indexes/plausible temps) with
+header hints as tiebreakers, handles "HH:MM:SS YYYY-MM-DD" stamps, shows which columns it
+used. Verified vs real RT_data export (1,914 readings 23.7-45.3C) + 5 variants. Server-side
+guard: uploads with >20% of values outside -100..1000C are rejected, not recorded.
+Deployment: preview — https://bioscale-operations-system-mongodb-kn3f3tkak.vercel.app
+Source: branch feat/spu-validation-runs @ commit 1f3b62cf
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 1f3b62cf
+What this deployment is for: thermocouple parser fix (columns A-C), for user re-upload of SPU 212 data.
+
+Follow-up 2026-07-22 (2): mode/min/max extraction + display (part 1 of manual thermo
+verdicts) — computeChannelStats gains mode (0.1C buckets, ties toward mean); shown as
+highlighted Mode/Min/Max tiles first in the upload preview, in recent-session lines, and
+as "min X · max Y · mode Z" in run matrix thermo cells. Part 2 pending: manual pass/fail
+on those values (recordStepResult flow) until a larger dataset defines auto criteria.
+Deployment: preview — https://bioscale-operations-system-mongodb-lhal5dzbz.vercel.app
+Source: branch feat/spu-validation-runs @ commit 45bbfca0
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 45bbfca0
+What this deployment is for: mode/min/max readout on thermocouple data, for user review.
+
+Follow-up 2026-07-22 (3): thermo cell polish — readings count removed (min/max/mode/file
+only); uploaded cells gain Approve/Reject buttons (recordStepResult passed/failed with
+review note); passed cells tint green, failed tint red.
+Deployment: preview — https://bioscale-operations-system-mongodb-k2qsxjq91.vercel.app
+Source: branch feat/spu-validation-runs @ commit 95946f83
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 95946f83
+What this deployment is for: approve/reject verdict UX on thermo uploads, for user review.

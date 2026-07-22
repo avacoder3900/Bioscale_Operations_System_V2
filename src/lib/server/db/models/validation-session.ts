@@ -4,6 +4,8 @@ import { generateId } from '../utils.js';
 const validationSessionSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	type: String, spuId: String, generatedBarcodeId: String,
+	// VALIDATION-05: set when the session was created from a validation run.
+	runId: String,
 	status: { type: String, enum: ['pending', 'in_progress', 'running', 'completed', 'failed', 'timed_out'] },
 	startedAt: Date, completedAt: Date, userId: String,
 	spuUdi: String, particleDeviceId: String,
