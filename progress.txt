@@ -3985,3 +3985,18 @@ Deployment: preview — https://bioscale-operations-system-mongodb-k2qsxjq91.ver
 Source: branch feat/spu-validation-runs @ commit 95946f83
 Retrieve this exact code: git checkout feat/spu-validation-runs at commit 95946f83
 What this deployment is for: approve/reject verdict UX on thermo uploads, for user review.
+
+================================================================================
+2026-07-22 — master — VALIDATION-05 merged to production (PR #35)
+================================================================================
+feat/spu-validation-runs merged to master via PR #35 (merge commit a3da0859; clean
+fast-forward, master had not moved since branch point 88ec5a6d). Ships: SPU validation
+runs (roster/picker, VALRUN runs, live SPU × step matrix, per-step chips, retries with
+history, DHR carryover, approve/reject verdicts, mode/min/max), thermocouple parser
+rewrite (columns A-C content classification + server sanity guard), shared thermo upload
+pipeline (upload ≠ pass; standard range TBD in thermo-criteria.ts), optical-confirmation
+readout (per-channel F7/F3 + [id] raw-data view), VALRUN E11000 fix.
+Deployment: production — https://bioscale-operations-system-mongodb-7ydpo4zns-brevitest.vercel.app
+Source: branch master @ commit a3da0859 (PR #35)
+Retrieve this exact code: git checkout master at commit a3da0859
+What this deployment is for: VALIDATION-05 + optical readout + thermo parser fix, live in production.
