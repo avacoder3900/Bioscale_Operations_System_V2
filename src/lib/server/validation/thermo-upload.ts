@@ -75,6 +75,15 @@ export async function processThermoUpload(opts: {
 	if (spu.finalizedAt) return { error: 'SPU is finalized and cannot be modified' };
 
 	const temps = readings.map(r => r.temperature);
+
+	// Sanity guard: a correct parse yields temperatures, not Excel date
+	// serials (~46,000) or row indexes. Reject implausible data instead of
+	// recording a garbage session (old sessions THERMO-000005/6 did exactly
+	// that: "temperatures" 1..493 from a row-index column).
+	const implausible = temps.filter(t => !isFinite(t) || t < -100 || t > 1000).length;
+	if (implausible / temps.length > 0.2) {
+		return { error: `Parsed values do not look like temperatures (${implausible} of ${temps.length} outside -100…1000°C) — check the file's column layout and re-upload` };
+	}
 	const durationMs = readings.length >= 2
 		? readings[readings.length - 1].timestamp - readings[0].timestamp
 		: 0;

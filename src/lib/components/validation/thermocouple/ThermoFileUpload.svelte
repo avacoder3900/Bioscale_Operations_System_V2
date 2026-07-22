@@ -1,5 +1,6 @@
 <script lang="ts">
 	import * as XLSX from 'xlsx';
+	import { parseThermoRows } from './parse-thermo';
 
 	interface Reading {
 		timestamp: number;
@@ -18,11 +19,13 @@
 	let fileName = $state('');
 	let readingCount = $state(0);
 	let parseError = $state('');
+	let columnsNote = $state('');
 	let isDragging = $state(false);
 	let hasReadings = $derived(readingCount > 0);
 
 	function handleFile(file: File) {
 		parseError = '';
+		columnsNote = '';
 		fileName = file.name;
 
 		const reader = new FileReader();
@@ -33,87 +36,17 @@
 				const ws = wb.Sheets[wb.SheetNames[0]];
 				const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
 
-				if (rows.length < 2) {
-					parseError = 'File has no data rows';
+				// Column detection + parsing (columns A–C only) lives in
+				// parse-thermo.ts so it can be unit-tested against real exports.
+				const result = parseThermoRows(rows);
+				if (result.error) {
+					parseError = result.error;
 					return;
 				}
 
-				// Find temperature and time columns
-				const header = rows[0].map((h: any) => String(h).toLowerCase().trim());
-				let tempCol = header.findIndex(h =>
-					h.includes('temp') || h.includes('°c') || h.includes('celsius') || h === 'c' || h === 't'
-				);
-				let timeCol = header.findIndex(h =>
-					h.includes('time') || h.includes('timestamp') || h.includes('date') || h.includes('elapsed')
-				);
-
-				// Fallback: if no header match, assume col 0 = time, col 1 = temp
-				if (tempCol === -1 && rows[0].length >= 2) {
-					const firstDataRow = rows[1];
-					if (typeof firstDataRow[1] === 'number' || !isNaN(Number(firstDataRow[1]))) {
-						timeCol = 0;
-						tempCol = 1;
-					} else if (typeof firstDataRow[0] === 'number' || !isNaN(Number(firstDataRow[0]))) {
-						tempCol = 0;
-						timeCol = -1;
-					}
-				}
-				if (tempCol === -1 && rows[0].length === 1) {
-					tempCol = 0;
-				}
-
-				if (tempCol === -1) {
-					parseError = 'Could not find temperature column. Expected header containing "temp", "°C", "celsius", or "T"';
-					return;
-				}
-
-				// Parse data rows (skip header)
-				const parsed: Reading[] = [];
-				const startTime = Date.now();
-
-				for (let i = 1; i < rows.length; i++) {
-					const row = rows[i];
-					if (!row || row.length === 0) continue;
-
-					const tempVal = Number(row[tempCol]);
-					if (isNaN(tempVal)) continue;
-
-					let ts: number;
-					if (timeCol >= 0 && row[timeCol] != null) {
-						const timeVal = row[timeCol];
-						if (typeof timeVal === 'number' && timeVal > 25000 && timeVal < 60000) {
-							// Excel date serial
-							const excelEpoch = new Date(1899, 11, 30).getTime();
-							ts = excelEpoch + timeVal * 86400000;
-						} else if (typeof timeVal === 'number' && timeVal > 1000000000000) {
-							ts = timeVal; // already ms timestamp
-						} else if (typeof timeVal === 'number' && timeVal > 1000000000) {
-							ts = timeVal * 1000; // seconds timestamp
-						} else if (typeof timeVal === 'number') {
-							// Elapsed seconds
-							ts = startTime + timeVal * 1000;
-						} else if (typeof timeVal === 'string') {
-							const d = new Date(timeVal);
-							ts = isNaN(d.getTime()) ? startTime + (i - 1) * 1000 : d.getTime();
-						} else {
-							ts = startTime + (i - 1) * 1000;
-						}
-					} else {
-						// No time column — assume 1 reading per second
-						ts = startTime + (i - 1) * 1000;
-					}
-
-					parsed.push({ timestamp: ts, temperature: tempVal });
-				}
-
-				if (parsed.length === 0) {
-					parseError = 'No valid temperature readings found in file';
-					return;
-				}
-
-				parsed.sort((a, b) => a.timestamp - b.timestamp);
-				readingCount = parsed.length;
-				onparsed({ readings: parsed, readingsJson: JSON.stringify(parsed), fileName: file.name });
+				readingCount = result.readings.length;
+				columnsNote = result.columnsNote;
+				onparsed({ readings: result.readings, readingsJson: JSON.stringify(result.readings), fileName: file.name });
 			} catch (err) {
 				parseError = `Failed to parse file: ${err instanceof Error ? err.message : String(err)}`;
 			}
@@ -143,6 +76,7 @@
 		readingCount = 0;
 		fileName = '';
 		parseError = '';
+		columnsNote = '';
 		onclear?.();
 	}
 </script>
@@ -180,7 +114,7 @@
 			</svg>
 			<div>
 				<p class="tron-heading font-medium {compact ? 'text-sm' : ''}">{fileName}</p>
-				<p class="tron-text-muted text-sm">{readingCount} readings loaded</p>
+				<p class="tron-text-muted text-sm">{readingCount} readings loaded{#if columnsNote}&nbsp;· {columnsNote}{/if}</p>
 			</div>
 		</div>
 		<button type="button" onclick={clearFile} class="tron-text-muted text-sm hover:text-[var(--color-tron-red)]">
