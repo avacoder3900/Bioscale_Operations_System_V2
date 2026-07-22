@@ -3977,3 +3977,11 @@ Deployment: preview — https://bioscale-operations-system-mongodb-lhal5dzbz.ver
 Source: branch feat/spu-validation-runs @ commit 45bbfca0
 Retrieve this exact code: git checkout feat/spu-validation-runs at commit 45bbfca0
 What this deployment is for: mode/min/max readout on thermocouple data, for user review.
+
+Follow-up 2026-07-22 (3): thermo cell polish — readings count removed (min/max/mode/file
+only); uploaded cells gain Approve/Reject buttons (recordStepResult passed/failed with
+review note); passed cells tint green, failed tint red.
+Deployment: preview — https://bioscale-operations-system-mongodb-k2qsxjq91.vercel.app
+Source: branch feat/spu-validation-runs @ commit 95946f83
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 95946f83
+What this deployment is for: approve/reject verdict UX on thermo uploads, for user review.
