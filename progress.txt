@@ -3967,3 +3967,13 @@ Deployment: preview — https://bioscale-operations-system-mongodb-kn3f3tkak.ver
 Source: branch feat/spu-validation-runs @ commit 1f3b62cf
 Retrieve this exact code: git checkout feat/spu-validation-runs at commit 1f3b62cf
 What this deployment is for: thermocouple parser fix (columns A-C), for user re-upload of SPU 212 data.
+
+Follow-up 2026-07-22 (2): mode/min/max extraction + display (part 1 of manual thermo
+verdicts) — computeChannelStats gains mode (0.1C buckets, ties toward mean); shown as
+highlighted Mode/Min/Max tiles first in the upload preview, in recent-session lines, and
+as "min X · max Y · mode Z" in run matrix thermo cells. Part 2 pending: manual pass/fail
+on those values (recordStepResult flow) until a larger dataset defines auto criteria.
+Deployment: preview — https://bioscale-operations-system-mongodb-lhal5dzbz.vercel.app
+Source: branch feat/spu-validation-runs @ commit 45bbfca0
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 45bbfca0
+What this deployment is for: mode/min/max readout on thermocouple data, for user review.
