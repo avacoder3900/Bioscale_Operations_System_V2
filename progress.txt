@@ -3953,3 +3953,17 @@ Deployment: preview — https://bioscale-operations-system-mongodb-7grg5p89b-bre
 Source: branch feat/spu-validation-runs @ commit dd2d8342
 Retrieve this exact code: git checkout feat/spu-validation-runs at commit dd2d8342
 What this deployment is for: optical readout (ratios + raw data), for user review.
+
+Fix 2026-07-22: thermocouple parser rewritten (new parse-thermo.ts) — the logger export
+("温度 datasheet" title row, then Date | CH4 | ℃) defeated header detection; single-cell
+title row triggered the single-column fallback and column A's Excel date serials (~46,000,
+seen on the SPU 212 upload preview) parsed as temperatures. Old prod sessions
+THERMO-000005/6 show the sibling bug (row indexes 1..493 as temps). Parser now considers
+ONLY columns A-C, classifies by content (units/dates/serials/indexes/plausible temps) with
+header hints as tiebreakers, handles "HH:MM:SS YYYY-MM-DD" stamps, shows which columns it
+used. Verified vs real RT_data export (1,914 readings 23.7-45.3C) + 5 variants. Server-side
+guard: uploads with >20% of values outside -100..1000C are rejected, not recorded.
+Deployment: preview — https://bioscale-operations-system-mongodb-kn3f3tkak.vercel.app
+Source: branch feat/spu-validation-runs @ commit 1f3b62cf
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 1f3b62cf
+What this deployment is for: thermocouple parser fix (columns A-C), for user re-upload of SPU 212 data.
