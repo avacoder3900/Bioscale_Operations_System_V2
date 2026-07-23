@@ -4032,3 +4032,31 @@ Deployment: preview — https://bioscale-operations-system-mongodb-n656kbd0x.ver
 Source: branch feat/spu-validation-runs @ commit 0b154bb2
 Retrieve this exact code: git checkout feat/spu-validation-runs at commit 0b154bb2
 What this deployment is for: validation runs UX pass (pinned active runs, search, run switcher, SPU tie-in), for user review.
+
+================================================================================
+2026-07-23 — feat/spu-validation-runs — per-cartridge research-app analysis in BIMS
+================================================================================
+Optical confirmation now analyzes each cartridge on its own with the research
+app's exact engine:
+- Ported research-v2's pure analysis engine (detectScanGroupsFromBCODE,
+  buildManualScanGroups, computeAnalysis) to src/lib/server/optical-engine.ts.
+  Verified against 25 cartridges with stored research-app analysis blocks:
+  25/25 outputs match exactly (channel x scan-group x column, 1e-9 tolerance).
+- /validation/optical-confirmation/[id] now runs the engine live per cartridge
+  using the shared analysis_profiles collection (5 profiles): profile picker
+  (?profile=), headline ratio tiles (first ratio column, e.g. f7/f3), full
+  output grid (f3_raw/f5_raw/f7_raw/f5/f3/f7/f3 per well), per-scan-group sums
+  table, stored research-app result shown for comparison when present. Profile
+  precedence: ?profile= -> stored analysis's profile -> 'Single Scan Cortisol'
+  -> first. BCODE-driven scan-group detection (A9EB41AD = one 42-scan group);
+  falls back to whole-run group when no BCODE.
+- List query fixed to select by assay (assayId/assay._id = A9EB41AD, name
+  regex fallback) instead of assayCategory: 'optical_test' — the category
+  exists on only ~19 of 886 Gen 5 cartridges, so the page was hiding ~98% of
+  runs (764 with full readings across 40 SPUs).
+Data findings logged for the record: 5 analysis_profiles shared with research
+app; 109/764 carts have stored analysis; ~40 runs have malformed scans (261 or
+15-24 readings, off-window positions); some corrupted _ids (doubled UUIDs).
+Files: src/lib/server/optical-engine.ts (new), optical-confirmation/+page.server.ts,
+[id]/+page.server.ts, [id]/+page.svelte.
+npm run check: 10 errors — unchanged pre-existing baseline.

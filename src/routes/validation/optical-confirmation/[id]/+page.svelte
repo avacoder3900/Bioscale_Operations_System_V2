@@ -1,12 +1,28 @@
 <script lang="ts">
-	interface ChannelRow {
+	import { goto } from '$app/navigation';
+
+	interface Output {
 		channel: string;
-		n: number;
-		f3Sum: number;
-		f5Sum: number;
-		f7Sum: number;
-		f7f3: number | null;
-		f5f3: number | null;
+		scanGroupLabel: string;
+		scanGroupIndex: number;
+		column: string;
+		value: number;
+	}
+
+	interface ScanGroup {
+		label: string;
+		scanRange: string;
+		scanCount: number;
+		channels: Record<string, { sums: Record<string, number>; ratios: Record<string, number> }>;
+	}
+
+	interface Analysis {
+		profileId: string;
+		profileName: string;
+		computedAt: string;
+		computedBy: string;
+		scanGroups: ScanGroup[];
+		outputs: Output[];
 	}
 
 	interface Props {
@@ -16,15 +32,10 @@
 			status: string;
 			spuUdi: string | null;
 			completedAt: string | null;
-			analysis: {
-				readingCount: number;
-				baselineScans: number | null;
-				testScans: number | null;
-				scanGroup: 'test' | 'all';
-				channels: ChannelRow[];
-				allChannels: ChannelRow[];
-				ratioByChannel: Record<string, number | null>;
-			} | null;
+			liveAnalysis: Analysis | null;
+			storedAnalysis: Analysis | null;
+			profiles: { id: string; name: string; description: string }[];
+			selectedProfileId: string | null;
 			readings: any[];
 			rawData: any;
 		};
@@ -38,15 +49,44 @@
 
 	let visibleReadings = $derived(showAllReadings ? data.readings : data.readings.slice(0, 30));
 
-	function fmt(v: unknown): string {
-		if (v == null) return '—';
-		if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(2);
-		return String(v);
+	// Output grid: rows = channel (× scan group when a profile outputs several),
+	// columns = the profile's configured output columns.
+	let outputs = $derived(data.liveAnalysis?.outputs ?? []);
+	let outCols = $derived([...new Set(outputs.map(o => o.column))]);
+	let outRows = $derived.by(() => {
+		const seen = new Map<string, { channel: string; group: string; gi: number }>();
+		for (const o of outputs) {
+			const k = `${o.channel}|${o.scanGroupIndex}`;
+			if (!seen.has(k)) seen.set(k, { channel: o.channel, group: o.scanGroupLabel, gi: o.scanGroupIndex });
+		}
+		return [...seen.values()];
+	});
+	let multiGroup = $derived(new Set(outRows.map(r => r.gi)).size > 1);
+
+	function outVal(row: { channel: string; gi: number }, col: string): number | null {
+		return outputs.find(o => o.channel === row.channel && o.scanGroupIndex === row.gi && o.column === col)?.value ?? null;
 	}
+
+	function fmtVal(col: string, v: number | null): string {
+		if (v == null) return '—';
+		return col.includes('/') ? v.toFixed(3) : Math.round(v).toLocaleString();
+	}
+
+	// Headline: the profile's first ratio column (e.g. f7/f3) per channel
+	let headlineCol = $derived(outCols.find(c => c.includes('/')) ?? null);
 
 	function fmtDate(d: string | null): string {
 		return d ? new Date(d).toLocaleString() : '—';
 	}
+
+	function onProfileChange(e: Event) {
+		const id = (e.currentTarget as HTMLSelectElement).value;
+		goto(`?profile=${encodeURIComponent(id)}`, { noScroll: true, keepFocus: true });
+	}
+
+	let storedRatios = $derived(
+		(data.storedAnalysis?.outputs ?? []).filter(o => o.column.includes('/'))
+	);
 </script>
 
 <div class="space-y-6">
@@ -63,81 +103,131 @@
 		<span class="rounded-full bg-[var(--color-tron-bg-tertiary)] px-3 py-1 text-xs font-medium capitalize">{data.status}</span>
 	</div>
 
-	{#if !data.analysis}
+	{#if data.readings.length === 0}
 		<div class="tron-card p-6">
 			<p class="tron-text-muted">No run data yet — this cartridge has no readings. The analysis appears here automatically once the device completes the run.</p>
 		</div>
-	{:else}
-		<!-- Headline ratios -->
-		<div class="tron-card p-6">
-			<h2 class="tron-heading mb-1 text-lg font-semibold">Analysis — F7/F3 per channel</h2>
-			<p class="tron-text-muted mb-4 text-xs">
-				Ratio of summed bands over the
-				{data.analysis.scanGroup === 'test'
-					? `test scans (readings after the first ${data.analysis.baselineScans} baseline scans)`
-					: 'full run (no baseline split recorded)'}
-				· {data.analysis.readingCount} readings total
-			</p>
-			<div class="flex flex-wrap gap-4">
-				{#each Object.entries(data.analysis.ratioByChannel) as [ch, ratio] (ch)}
-					<div class="min-w-28 rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
-						<span class="tron-text-muted block text-xs uppercase">Well {ch}</span>
-						<span class="tron-heading text-3xl font-bold">{ratio != null ? ratio.toFixed(1) : '—'}</span>
-						<span class="tron-text-muted block text-xs">F7/F3</span>
-					</div>
-				{/each}
-			</div>
-		</div>
-
-		<!-- Per-channel table -->
+	{:else if data.liveAnalysis}
+		<!-- Research-engine analysis -->
 		<div class="tron-card">
-			<div class="border-b border-[var(--color-tron-border)] p-4">
-				<h2 class="tron-heading text-lg font-semibold">Per-channel sums ({data.analysis.scanGroup === 'test' ? 'test scans' : 'all readings'})</h2>
+			<div class="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-tron-border)] p-4">
+				<div>
+					<h2 class="tron-heading text-lg font-semibold">Analysis — {data.liveAnalysis.profileName}</h2>
+					<p class="tron-text-muted mt-0.5 text-xs">
+						Research-app engine, computed live ·
+						{#each data.liveAnalysis.scanGroups as g, i (i)}
+							{i > 0 ? ' · ' : ''}{g.label}: scans {g.scanRange}
+						{/each}
+						· {data.readings.length} readings
+					</p>
+				</div>
+				<label class="flex items-center gap-2 text-sm">
+					<span class="tron-text-muted text-xs">Profile</span>
+					<select class="tron-input rounded-lg px-3 py-1.5 text-sm" onchange={onProfileChange}>
+						{#each data.profiles as p (p.id)}
+							<option value={p.id} selected={p.id === data.selectedProfileId}>{p.name}</option>
+						{/each}
+					</select>
+				</label>
 			</div>
-			<div class="overflow-x-auto">
+
+			{#if headlineCol}
+				<div class="flex flex-wrap gap-4 p-4">
+					{#each outRows as row (`${row.channel}|${row.gi}`)}
+						<div class="min-w-28 rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
+							<span class="tron-text-muted block text-xs uppercase">Well {row.channel}{#if multiGroup}&nbsp;· {row.group}{/if}</span>
+							<span class="tron-heading text-3xl font-bold">{fmtVal(headlineCol, outVal(row, headlineCol))}</span>
+							<span class="tron-text-muted block text-xs uppercase">{headlineCol}</span>
+						</div>
+					{/each}
+				</div>
+			{/if}
+
+			<div class="overflow-x-auto border-t border-[var(--color-tron-border)]">
 				<table class="w-full text-sm">
 					<thead class="text-left text-[var(--color-tron-text-secondary)]">
 						<tr class="border-b border-[var(--color-tron-border)]">
 							<th class="p-3 font-medium">Well</th>
-							<th class="p-3 font-medium">F3 sum</th>
-							<th class="p-3 font-medium">F5 sum</th>
-							<th class="p-3 font-medium">F7 sum</th>
-							<th class="p-3 font-medium">F5/F3</th>
-							<th class="p-3 font-medium">F7/F3</th>
-							<th class="p-3 font-medium">n</th>
+							{#if multiGroup}<th class="p-3 font-medium">Scan group</th>{/if}
+							{#each outCols as col (col)}
+								<th class="p-3 font-medium uppercase">{col}</th>
+							{/each}
 						</tr>
 					</thead>
 					<tbody class="divide-y divide-[var(--color-tron-border)]">
-						{#each data.analysis.channels as row (row.channel)}
+						{#each outRows as row (`${row.channel}|${row.gi}`)}
 							<tr>
 								<td class="tron-heading p-3 font-medium">{row.channel}</td>
-								<td class="p-3">{Math.round(row.f3Sum).toLocaleString()}</td>
-								<td class="p-3">{Math.round(row.f5Sum).toLocaleString()}</td>
-								<td class="p-3">{Math.round(row.f7Sum).toLocaleString()}</td>
-								<td class="p-3">{row.f5f3 != null ? row.f5f3.toFixed(2) : '—'}</td>
-								<td class="tron-heading p-3 font-medium">{row.f7f3 != null ? row.f7f3.toFixed(2) : '—'}</td>
-								<td class="tron-text-muted p-3">{row.n}</td>
+								{#if multiGroup}<td class="tron-text-muted p-3">{row.group}</td>{/if}
+								{#each outCols as col (col)}
+									<td class="p-3 {col === headlineCol ? 'tron-heading font-medium' : ''}">{fmtVal(col, outVal(row, col))}</td>
+								{/each}
 							</tr>
 						{/each}
 					</tbody>
 				</table>
 			</div>
-			{#if data.analysis.scanGroup === 'test'}
-				<div class="border-t border-[var(--color-tron-border)] p-4">
-					<h3 class="tron-text-muted mb-2 text-xs font-medium uppercase">Whole run (baseline + test), for reference</h3>
-					<div class="flex flex-wrap gap-4">
-						{#each data.analysis.allChannels as row (row.channel)}
-							<span class="text-xs">
-								<span class="tron-text-muted">{row.channel}:</span>
-								<span class="tron-heading font-medium">{row.f7f3 != null ? row.f7f3.toFixed(2) : '—'}</span>
-							</span>
-						{/each}
-					</div>
+
+			{#if data.storedAnalysis}
+				<div class="border-t border-[var(--color-tron-border)] px-4 py-3">
+					<p class="tron-text-muted text-xs">
+						Stored research-app result: <span class="tron-heading font-medium">{data.storedAnalysis.profileName}</span>
+						· computed {fmtDate(data.storedAnalysis.computedAt)} by {data.storedAnalysis.computedBy}
+						{#if storedRatios.length > 0}
+							·
+							{#each storedRatios as o, i (i)}
+								{i > 0 ? ' · ' : ''}{o.channel} {o.column}={o.value.toFixed(3)}
+							{/each}
+						{/if}
+					</p>
 				</div>
 			{/if}
 			<p class="tron-text-muted border-t border-[var(--color-tron-border)] px-4 py-2 text-xs">
-				F3 = 480 nm reference · F7 = 630 nm signal · Derived, non-destructive — the cartridge record is never modified.
+				F3 = 480 nm reference · F7 = 630 nm signal · Same engine + profiles as the research app · Derived, non-destructive — the cartridge record is never modified.
 			</p>
+		</div>
+
+		<!-- Per-scan-group sums (full engine detail) -->
+		<div class="tron-card">
+			<div class="border-b border-[var(--color-tron-border)] p-4">
+				<h2 class="tron-heading text-lg font-semibold">Scan-group detail</h2>
+			</div>
+			{#each data.liveAnalysis.scanGroups as group (group.label)}
+				{@const chans = Object.entries(group.channels)}
+				{@const sumCols = chans.length > 0 ? Object.keys(chans[0][1].sums) : []}
+				{@const ratioCols = [...new Set(chans.flatMap(([, c]) => Object.keys(c.ratios)))]}
+				<div class="border-b border-[var(--color-tron-border)] last:border-b-0">
+					<p class="tron-text-muted px-4 pt-3 text-xs font-medium uppercase">{group.label} — scans {group.scanRange} ({group.scanCount} per channel)</p>
+					<div class="overflow-x-auto">
+						<table class="w-full text-sm">
+							<thead class="text-left text-[var(--color-tron-text-secondary)]">
+								<tr class="border-b border-[var(--color-tron-border)]">
+									<th class="p-3 font-medium">Well</th>
+									{#each sumCols as col (col)}
+										<th class="p-3 font-medium uppercase">Σ{col}</th>
+									{/each}
+									{#each ratioCols as col (col)}
+										<th class="p-3 font-medium uppercase">{col}</th>
+									{/each}
+								</tr>
+							</thead>
+							<tbody class="divide-y divide-[var(--color-tron-border)]">
+								{#each chans as [ch, c] (ch)}
+									<tr>
+										<td class="tron-heading p-3 font-medium">{ch}</td>
+										{#each sumCols as col (col)}
+											<td class="p-3">{Math.round(c.sums[col] ?? 0).toLocaleString()}</td>
+										{/each}
+										{#each ratioCols as col (col)}
+											<td class="tron-heading p-3 font-medium">{c.ratios[col] != null ? c.ratios[col].toFixed(3) : '—'}</td>
+										{/each}
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				</div>
+			{/each}
 		</div>
 
 		<!-- Raw readings -->
@@ -167,7 +257,7 @@
 						{#each visibleReadings as r, i (i)}
 							<tr>
 								{#each READING_COLS as col (col)}
-									<td class="p-2 {col === 'f3' || col === 'f7' ? 'tron-heading font-medium' : 'text-[var(--color-tron-text-secondary)]'}">{fmt(r[col])}</td>
+									<td class="p-2 {col === 'f3' || col === 'f7' ? 'tron-heading font-medium' : 'text-[var(--color-tron-text-secondary)]'}">{r[col] ?? '—'}</td>
 								{/each}
 							</tr>
 						{/each}

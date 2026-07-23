@@ -19,7 +19,16 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	// Optical test cartridge log — read run status from cartridge_records (where the
 	// device/brevitest-cloud writes the run lifecycle: linked -> underway -> completed).
-	const cartridges = await CartridgeRecord.find({ assayCategory: 'optical_test' })
+	// Select by ASSAY, not assayCategory: most Gen 5 runs are created through paths
+	// that never set a category (only ~19 of ~886 have one), so a category filter
+	// silently hides nearly the whole dataset.
+	const cartridges = await CartridgeRecord.find({
+		$or: [
+			{ assayId: OPTICAL_ASSAY_ID },
+			{ 'assay._id': OPTICAL_ASSAY_ID },
+			{ assayName: /Gen 5 Optical/i }
+		]
+	})
 		.select('serialNumber assayId assayName status statusUpdatedOn checkpoints createdAt analysis rawData device')
 		.sort({ createdAt: -1 })
 		.limit(200)
