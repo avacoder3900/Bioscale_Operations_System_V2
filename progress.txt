@@ -4060,3 +4060,7 @@ app; 109/764 carts have stored analysis; ~40 runs have malformed scans (261 or
 Files: src/lib/server/optical-engine.ts (new), optical-confirmation/+page.server.ts,
 [id]/+page.server.ts, [id]/+page.svelte.
 npm run check: 10 errors — unchanged pre-existing baseline.
+Deployment: preview — https://bioscale-operations-system-mongodb-gi58fzcnh-brevitest.vercel.app
+Source: branch feat/spu-validation-runs @ commit bde86cf1
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit bde86cf1
+What this deployment is for: per-cartridge research-engine optical analysis + assay-based cartridge log, for user review.
