@@ -567,6 +567,33 @@
 			</div>
 		</TronCard>
 
+		<!-- Validation runs this SPU is or was a member of (PRD VALIDATION-05 §6.3) -->
+		{#if (data as any).validationRuns?.length > 0}
+			<TronCard>
+				<h3 class="tron-text-primary mb-3 text-lg font-medium">Validation Runs</h3>
+				<div class="space-y-2">
+					{#each (data as any).validationRuns as run (run.id)}
+						<div class="flex items-center justify-between gap-3 rounded-lg border p-3" style="border-color: var(--color-tron-border); background: var(--color-tron-bg-secondary);">
+							<div class="flex items-center gap-3">
+								<a href="/validation/runs/{run.id}" class="text-sm font-medium hover:underline" style="color: var(--color-tron-cyan);">{run.runNumber}</a>
+								{#if run.name}<span class="tron-text-muted text-sm">{run.name}</span>{/if}
+								{#if run.removed}<span class="tron-text-muted text-xs">(removed from run)</span>{/if}
+							</div>
+							<div class="flex items-center gap-3 text-xs">
+								<span
+									class="rounded-full px-2 py-0.5 font-bold"
+									style="color: {run.status === 'in_progress' ? 'var(--color-tron-cyan)' : run.status === 'completed' ? 'var(--color-tron-green)' : 'var(--color-tron-red)'}; background: rgba(128,128,128,0.12);"
+								>
+									{run.status === 'in_progress' ? 'IN PROGRESS' : run.status === 'completed' ? 'COMPLETED' : 'ABORTED'}
+								</span>
+								<span class="tron-text-muted">{formatDate(run.startedAt)}</span>
+							</div>
+						</div>
+					{/each}
+				</div>
+			</TronCard>
+		{/if}
+
 		<!-- Validation Session History -->
 		{#if data.validationSessions?.length > 0}
 			<TronCard>

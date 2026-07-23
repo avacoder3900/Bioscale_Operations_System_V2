@@ -124,11 +124,23 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		}
 	}
 
+	// Other in-progress runs, for the header switcher — lets an operator hop
+	// between concurrent runs without going back through the list.
+	const otherActive = await ValidationRun.find({ status: 'in_progress', _id: { $ne: params.runId } })
+		.select('runNumber name')
+		.sort({ startedAt: -1 })
+		.lean() as any[];
+
 	return {
 		run: JSON.parse(JSON.stringify(run)),
 		sessionById,
 		spuById,
-		thermoCriteria: STANDARD_THERMO_CRITERIA
+		thermoCriteria: STANDARD_THERMO_CRITERIA,
+		otherActiveRuns: otherActive.map(r => ({
+			id: r._id,
+			runNumber: r.runNumber,
+			name: r.name ?? null
+		}))
 	};
 };
 

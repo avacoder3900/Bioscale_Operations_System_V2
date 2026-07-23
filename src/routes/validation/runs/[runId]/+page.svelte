@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { enhance } from '$app/forms';
-	import { invalidateAll } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
 	import ThermoFileUpload from '$lib/components/validation/thermocouple/ThermoFileUpload.svelte';
 
 	interface StepCell {
@@ -45,6 +45,7 @@
 				prior: Record<string, { status: string; sessionId: string | null; completedAt: string | null; failureReasons: string[] } | null>;
 			}>;
 			thermoCriteria: { minTemp: number; maxTemp: number } | null;
+			otherActiveRuns: { id: string; runNumber: string; name: string | null }[];
 		};
 		form: {
 			error?: string;
@@ -123,6 +124,22 @@
 		return (run.steps ?? []).filter(s => effectiveStatus(m, s) === 'passed').length;
 	}
 
+	// Whole-run rollup for the header summary and the complete-run warning
+	let stepTotals = $derived.by(() => {
+		const t = { passed: 0, failed: 0, uploaded: 0, remaining: 0, cells: 0 };
+		for (const m of members) {
+			for (const s of run.steps ?? []) {
+				t.cells++;
+				const st = effectiveStatus(m, s);
+				if (st === 'passed') t.passed++;
+				else if (st === 'failed') t.failed++;
+				else if (st === 'uploaded') t.uploaded++;
+				else if (st !== 'skipped') t.remaining++;
+			}
+		}
+		return t;
+	});
+
 	function allPassed(m: Member): boolean {
 		return (run.steps ?? []).every(s => effectiveStatus(m, s) === 'passed');
 	}
@@ -161,7 +178,8 @@
 	<!-- Header -->
 	<div class="flex items-start justify-between gap-4">
 		<div>
-			<div class="flex items-center gap-3">
+			<a href="/validation/runs" class="tron-text-muted text-sm transition-colors hover:text-[var(--color-tron-cyan)]">← All runs</a>
+			<div class="mt-1 flex items-center gap-3">
 				<h1 class="tron-heading text-2xl font-bold">{run.runNumber}</h1>
 				<span class="rounded-full px-3 py-1 text-xs font-medium
 					{run.status === 'in_progress'
@@ -194,14 +212,48 @@
 					live{#if lastRefreshed}&nbsp;· updated {lastRefreshed.toLocaleTimeString()}{/if}
 				</span>
 			</p>
+			<!-- At-a-glance rollup so the state of the whole run is readable
+			     without scanning the matrix -->
+			<p class="mt-1 text-sm">
+				<span class="font-medium text-[var(--color-tron-green)]">{stepTotals.passed}/{stepTotals.cells} passed</span>
+				{#if stepTotals.failed > 0}
+					<span class="tron-text-muted">·</span> <span class="text-[var(--color-tron-red)]">{stepTotals.failed} failed</span>
+				{/if}
+				{#if stepTotals.uploaded > 0}
+					<span class="tron-text-muted">·</span> <span class="text-[var(--color-tron-orange)]">{stepTotals.uploaded} awaiting verdict</span>
+				{/if}
+				{#if stepTotals.remaining > 0}
+					<span class="tron-text-muted">· {stepTotals.remaining} not started</span>
+				{/if}
+			</p>
 			{#if run.abortReason}
 				<p class="mt-1 text-sm text-[var(--color-tron-red)]">Aborted: {run.abortReason}</p>
 			{/if}
 		</div>
 
-		{#if inProgress}
-			<div class="flex items-center gap-2">
-				<form method="POST" action="?/completeRun" use:enhance>
+		<div class="flex items-center gap-2">
+			{#if data.otherActiveRuns.length > 0}
+				<select
+					class="tron-input rounded-lg px-3 py-2 text-sm"
+					onchange={(e) => { const id = e.currentTarget.value; if (id) goto(`/validation/runs/${id}`); }}
+				>
+					<option value="" selected>Switch run…</option>
+					{#each data.otherActiveRuns as other (other.id)}
+						<option value={other.id}>{other.runNumber}{other.name ? ` — ${other.name}` : ''}</option>
+					{/each}
+				</select>
+			{/if}
+			{#if inProgress}
+				<form
+					method="POST"
+					action="?/completeRun"
+					use:enhance={({ cancel }) => {
+						const open = stepTotals.cells - stepTotals.passed;
+						if (open > 0 && !confirm(`${open} of ${stepTotals.cells} steps have not passed yet. Complete this run anyway?`)) {
+							cancel();
+						}
+					}}
+				>
 					<button type="submit" class="rounded-lg bg-[var(--color-tron-green)] px-4 py-2 text-sm font-semibold text-[var(--color-tron-bg-primary)] transition-all hover:bg-[var(--color-tron-green)]/90">
 						Complete Run
 					</button>
@@ -209,8 +261,8 @@
 				<button type="button" onclick={() => showAbort = !showAbort} class="rounded-lg border border-[var(--color-tron-red)]/50 px-4 py-2 text-sm font-semibold text-[var(--color-tron-red)] transition-all hover:bg-[var(--color-tron-red)]/10">
 					Abort…
 				</button>
-			</div>
-		{/if}
+			{/if}
+		</div>
 	</div>
 
 	{#if showAbort && inProgress}

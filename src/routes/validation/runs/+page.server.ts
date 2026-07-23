@@ -55,15 +55,23 @@ export const load: PageServerLoad = async ({ locals }) => {
 		.sort({ udi: 1 })
 		.lean() as any[];
 
-	const runs = await ValidationRun.find()
-		.sort({ startedAt: -1 })
-		.limit(50)
-		.lean() as any[];
+	// Active runs are loaded without a limit — they are few, always belong at
+	// the top of the page, and the roster's active-run linkage must see all of
+	// them (a 50-row cap on history must never hide an in-progress run).
+	const [activeRuns, historyRuns] = await Promise.all([
+		ValidationRun.find({ status: 'in_progress' })
+			.sort({ startedAt: -1 })
+			.lean() as Promise<any[]>,
+		ValidationRun.find({ status: { $ne: 'in_progress' } })
+			.sort({ startedAt: -1 })
+			.limit(50)
+			.lean() as Promise<any[]>
+	]);
+	const runs = [...activeRuns, ...historyRuns];
 
 	// Map spuId -> active run (Decision 3: at most one in-progress run per UDI)
 	const activeRunBySpu = new Map<string, { runId: string; runNumber: string }>();
-	for (const run of runs) {
-		if (run.status !== 'in_progress') continue;
+	for (const run of activeRuns) {
 		for (const m of activeMembers(run)) {
 			activeRunBySpu.set(m.spuId, { runId: run._id, runNumber: run.runNumber });
 		}
@@ -89,6 +97,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 				name: r.name ?? null,
 				status: r.status,
 				spuCount: activeMembers(r).length,
+				udis: activeMembers(r).map((m: any) => m.udi),
 				progress,
 				steps: r.steps ?? [],
 				stepSummary: stepSummary(r),

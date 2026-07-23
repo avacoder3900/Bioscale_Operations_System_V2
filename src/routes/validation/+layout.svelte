@@ -3,10 +3,11 @@
 	import { page } from '$app/stores';
 
 	interface Props {
+		data: { activeRunCount?: number };
 		children: Snippet;
 	}
 
-	let { children }: Props = $props();
+	let { data, children }: Props = $props();
 
 	const navItems = [
 		{
@@ -95,6 +96,14 @@
 					/>
 				</svg>
 				{item.label}
+				{#if item.label === 'Runs' && (data.activeRunCount ?? 0) > 0}
+					<span class="rounded-full px-1.5 py-0.5 text-xs font-bold
+						{active
+							? 'bg-[var(--color-tron-bg-primary)]/20 text-[var(--color-tron-bg-primary)]'
+							: 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]'}">
+						{data.activeRunCount}
+					</span>
+				{/if}
 			</a>
 		{/each}
 	</div>

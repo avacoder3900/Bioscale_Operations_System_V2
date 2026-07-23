@@ -4000,3 +4000,31 @@ Deployment: production — https://bioscale-operations-system-mongodb-7ydpo4zns-
 Source: branch master @ commit a3da0859 (PR #35)
 Retrieve this exact code: git checkout master at commit a3da0859
 What this deployment is for: VALIDATION-05 + optical readout + thermo parser fix, live in production.
+
+================================================================================
+2026-07-23 — feat/spu-validation-runs — validation runs UX: accessibility of multiple runs
+================================================================================
+Ease-of-use pass on the runs UI so multiple concurrent runs are easy to reach:
+- /validation now lands on /validation/runs (was magnetometer); Runs nav tab gets a
+  live count badge of in-progress runs (validation/+layout.server.ts counts them).
+- Runs list rebuilt: active runs pinned on top as clickable cards (progress bar,
+  step chips, relative age); history table below (completed/aborted) with a
+  Progress bar column, Completed column, relative timestamps (full date on hover),
+  and a clearer legend. Status filter now lives in ?status= so it survives
+  navigating into a run and back. New search box matches run #, name, OR member
+  UDI ("which run is SPU-0042 in?").
+- Server: in-progress runs are now queried without the 50-row cap (the cap could
+  silently hide an active run and break the roster's active-run linkage); history
+  keeps limit 50. Run summaries carry member UDIs for the search.
+- Run detail: "← All runs" breadcrumb at top; "Switch run…" dropdown jumps between
+  concurrent in-progress runs; header shows whole-run rollup (n/m passed · failed ·
+  awaiting verdict · not started); Complete Run now confirms when steps haven't
+  all passed (PRD S8 warn).
+- SPU detail (PRD §6.3, previously unbuilt): Validation tab gains a "Validation
+  Runs" card listing every run the SPU is/was in (status, date, removed marker),
+  linking to run detail. Load joins ValidationRun by spus.spuId (indexed).
+Files: validation/+page.server.ts, +layout.server.ts, +layout.svelte,
+validation/runs/+page.server.ts, +page.svelte, runs/[runId]/+page.server.ts,
++page.svelte, spu/[spuId]/+page.server.ts, +page.svelte.
+npm run check: 10 errors — unchanged pre-existing baseline (r2.ts, AskBimsWidget,
+assembly/[sessionId]); none in touched files.

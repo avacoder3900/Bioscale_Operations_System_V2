@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { enhance } from '$app/forms';
-	import { invalidateAll } from '$app/navigation';
+	import { invalidateAll, replaceState } from '$app/navigation';
+	import { page } from '$app/stores';
 
 	interface RosterSpu {
 		id: string;
@@ -21,6 +22,7 @@
 		name: string | null;
 		status: string;
 		spuCount: number;
+		udis: string[];
 		progress: { passed: number; total: number };
 		steps: string[];
 		stepSummary: Record<string, { passed: number; failed: number; uploaded: number; total: number }>;
@@ -43,8 +45,33 @@
 	let { data, form }: Props = $props();
 
 	let runName = $state('');
-	let statusFilter = $state<'all' | 'in_progress' | 'completed' | 'aborted'>('all');
 	let isSubmitting = $state(false);
+
+	// History filter lives in the URL (?status=) so it survives the round-trip
+	// to a run detail page and back.
+	type HistoryFilter = 'all' | 'completed' | 'aborted';
+	const initialFilter = $page.url.searchParams.get('status');
+	let statusFilter = $state<HistoryFilter>(
+		initialFilter === 'completed' || initialFilter === 'aborted' ? initialFilter : 'all'
+	);
+	function setFilter(value: HistoryFilter) {
+		statusFilter = value;
+		const url = new URL(window.location.href);
+		if (value === 'all') url.searchParams.delete('status');
+		else url.searchParams.set('status', value);
+		replaceState(url, {});
+	}
+
+	// Search across run number, run name, and member UDIs — answers both
+	// "where is the July batch?" and "which run is SPU-0042 in?"
+	let runQuery = $state('');
+	function matchesRunQuery(r: RunSummary): boolean {
+		const q = runQuery.trim().toLowerCase();
+		if (!q) return true;
+		return r.runNumber.toLowerCase().includes(q)
+			|| (r.name ?? '').toLowerCase().includes(q)
+			|| r.udis.some(u => u.toLowerCase().includes(q));
+	}
 
 	// Combobox picker state: type to search, dropdown to scroll, each selection
 	// joins the staged validation group below.
@@ -75,9 +102,16 @@
 		);
 	});
 
-	let filteredRuns = $derived(
-		statusFilter === 'all' ? data.runs : data.runs.filter(r => r.status === statusFilter)
-	);
+	let activeRuns = $derived(data.runs.filter(r => r.status === 'in_progress' && matchesRunQuery(r)));
+	let historyRuns = $derived(data.runs.filter(r =>
+		r.status !== 'in_progress'
+		&& (statusFilter === 'all' || r.status === statusFilter)
+		&& matchesRunQuery(r)
+	));
+
+	function progressPct(p: { passed: number; total: number }): number {
+		return p.total === 0 ? 0 : Math.round((p.passed / p.total) * 100);
+	}
 
 	function addToGroup(spu: RosterSpu) {
 		if (pickedIds.includes(spu.id)) return;
@@ -126,6 +160,19 @@
 	function fmtDate(d: string | null): string {
 		return d ? new Date(d).toLocaleString() : '—';
 	}
+
+	// Compact relative timestamp for tables; the full date lives in the title
+	function fmtRelative(d: string | null): string {
+		if (!d) return '—';
+		const min = Math.floor((Date.now() - new Date(d).getTime()) / 60000);
+		if (min < 1) return 'just now';
+		if (min < 60) return `${min}m ago`;
+		const hr = Math.floor(min / 60);
+		if (hr < 24) return `${hr}h ago`;
+		const days = Math.floor(hr / 24);
+		if (days < 30) return `${days}d ago`;
+		return new Date(d).toLocaleDateString();
+	}
 </script>
 
 <div class="space-y-6">
@@ -148,15 +195,83 @@
 		</div>
 	{/if}
 
-	<!-- Runs (top): each run with its per-step validation status -->
+	{#snippet stepChips(run: RunSummary)}
+		{#each run.steps as step (step)}
+			{@const s = run.stepSummary[step]}
+			{#if s}
+				{@const pending = s.total - s.passed - s.failed - s.uploaded}
+				<span class="flex items-center gap-1 rounded-full bg-[var(--color-tron-bg-tertiary)] px-2 py-1 text-xs">
+					<span class="tron-text-muted">{SHORT_STEP_LABELS[step] ?? step}:</span>
+					{#if s.passed > 0}<span class="font-medium text-[var(--color-tron-green)]">{s.passed}✓</span>{/if}
+					{#if s.failed > 0}<span class="font-medium text-[var(--color-tron-red)]">{s.failed}✗</span>{/if}
+					{#if s.uploaded > 0}<span class="font-medium text-[var(--color-tron-orange)]">{s.uploaded}↑</span>{/if}
+					{#if pending > 0}<span class="tron-text-muted">{pending} left</span>{/if}
+					{#if s.total === 0}<span class="tron-text-muted">—</span>{/if}
+				</span>
+			{/if}
+		{/each}
+	{/snippet}
+
+	<!-- Search across all runs -->
+	<div class="max-w-md">
+		<input
+			type="text"
+			bind:value={runQuery}
+			placeholder="Search runs by run #, name, or SPU UDI…"
+			class="tron-input w-full rounded-lg px-4 py-2.5"
+		/>
+	</div>
+
+	<!-- Active runs: pinned above everything, one click to open -->
+	<div class="space-y-3">
+		<h2 class="tron-heading text-lg font-semibold">
+			Active Runs{#if activeRuns.length > 0}&nbsp;({activeRuns.length}){/if}
+		</h2>
+		{#if activeRuns.length === 0}
+			<p class="tron-text-muted text-sm">
+				{runQuery.trim() ? `No active runs match “${runQuery}”.` : 'No active runs — build a group below to start one.'}
+			</p>
+		{:else}
+			<div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+				{#each activeRuns as run (run.id)}
+					<a
+						href="/validation/runs/{run.id}"
+						class="tron-card block space-y-3 border border-transparent p-4 transition-colors hover:border-[var(--color-tron-cyan)]/60"
+					>
+						<div class="flex items-center justify-between gap-2">
+							<span class="tron-heading font-semibold text-[var(--color-tron-cyan)]">{run.runNumber}</span>
+							<span class="tron-text-muted text-xs" title={fmtDate(run.startedAt)}>{fmtRelative(run.startedAt)}</span>
+						</div>
+						<p class="tron-text-muted truncate text-sm">
+							{run.name ?? 'Unnamed run'} · {run.spuCount} SPU{run.spuCount === 1 ? '' : 's'}{#if run.createdBy}&nbsp;· {run.createdBy}{/if}
+						</p>
+						<div>
+							<div class="mb-1 flex items-center justify-between text-xs">
+								<span class="tron-text-muted">Steps passed</span>
+								<span class="tron-heading font-medium">{run.progress.passed}/{run.progress.total}</span>
+							</div>
+							<div class="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-tron-bg-tertiary)]">
+								<div class="h-full rounded-full bg-[var(--color-tron-green)]" style="width: {progressPct(run.progress)}%"></div>
+							</div>
+						</div>
+						<div class="flex flex-wrap gap-1.5">
+							{@render stepChips(run)}
+						</div>
+					</a>
+				{/each}
+			</div>
+		{/if}
+	</div>
+
+	<!-- Run history: completed + aborted runs -->
 	<div class="tron-card">
 		<div class="flex items-center justify-between border-b border-[var(--color-tron-border)] p-4">
-			<h2 class="tron-heading text-lg font-semibold">Runs</h2>
+			<h2 class="tron-heading text-lg font-semibold">Run History</h2>
 			<div class="flex gap-2">
-				{#each [['all', 'All'], ['in_progress', 'In Progress'], ['completed', 'Completed'], ['aborted', 'Aborted']] as [value, label] (value)}
+				{#each [['all', 'All'], ['completed', 'Completed'], ['aborted', 'Aborted']] as [value, label] (value)}
 					<button
 						type="button"
-						onclick={() => statusFilter = value as typeof statusFilter}
+						onclick={() => setFilter(value as HistoryFilter)}
 						class="rounded-lg px-3 py-1 text-xs font-medium transition-colors
 							{statusFilter === value
 								? 'bg-[var(--color-tron-cyan)] text-[var(--color-tron-bg-primary)]'
@@ -168,8 +283,10 @@
 			</div>
 		</div>
 
-		{#if filteredRuns.length === 0}
-			<p class="tron-text-muted p-6 text-sm">No validation runs yet — build a group below to start one.</p>
+		{#if historyRuns.length === 0}
+			<p class="tron-text-muted p-6 text-sm">
+				{runQuery.trim() ? `No past runs match “${runQuery}”.` : 'No completed or aborted runs yet.'}
+			</p>
 		{:else}
 			<div class="overflow-x-auto">
 				<table class="w-full text-sm">
@@ -178,14 +295,16 @@
 							<th class="tron-text-muted p-3 font-medium">Run #</th>
 							<th class="tron-text-muted p-3 font-medium">Name</th>
 							<th class="tron-text-muted p-3 font-medium">SPUs</th>
+							<th class="tron-text-muted p-3 font-medium">Progress</th>
 							<th class="tron-text-muted p-3 font-medium">Validation Status</th>
 							<th class="tron-text-muted p-3 font-medium">Status</th>
 							<th class="tron-text-muted p-3 font-medium">Started</th>
+							<th class="tron-text-muted p-3 font-medium">Completed</th>
 							<th class="tron-text-muted p-3 font-medium">By</th>
 						</tr>
 					</thead>
 					<tbody class="divide-y divide-[var(--color-tron-border)]">
-						{#each filteredRuns as run (run.id)}
+						{#each historyRuns as run (run.id)}
 							<tr class="transition-colors hover:bg-[var(--color-tron-bg-tertiary)]">
 								<td class="p-3">
 									<a href="/validation/runs/{run.id}" class="tron-heading font-medium text-[var(--color-tron-cyan)] hover:underline">{run.runNumber}</a>
@@ -193,21 +312,16 @@
 								<td class="p-3">{run.name ?? '—'}</td>
 								<td class="p-3">{run.spuCount}</td>
 								<td class="p-3">
+									<div class="flex items-center gap-2">
+										<div class="h-1.5 w-16 overflow-hidden rounded-full bg-[var(--color-tron-bg-tertiary)]">
+											<div class="h-full rounded-full bg-[var(--color-tron-green)]" style="width: {progressPct(run.progress)}%"></div>
+										</div>
+										<span class="tron-text-muted text-xs">{run.progress.passed}/{run.progress.total}</span>
+									</div>
+								</td>
+								<td class="p-3">
 									<div class="flex flex-wrap items-center gap-2">
-										{#each run.steps as step (step)}
-											{@const s = run.stepSummary[step]}
-											{#if s}
-												{@const pending = s.total - s.passed - s.failed - s.uploaded}
-												<span class="flex items-center gap-1 rounded-full bg-[var(--color-tron-bg-tertiary)] px-2 py-1 text-xs">
-													<span class="tron-text-muted">{SHORT_STEP_LABELS[step] ?? step}:</span>
-													{#if s.passed > 0}<span class="font-medium text-[var(--color-tron-green)]">{s.passed}✓</span>{/if}
-													{#if s.failed > 0}<span class="font-medium text-[var(--color-tron-red)]">{s.failed}✗</span>{/if}
-													{#if s.uploaded > 0}<span class="font-medium text-[var(--color-tron-orange)]">{s.uploaded}↑</span>{/if}
-													{#if pending > 0}<span class="tron-text-muted">{pending}·</span>{/if}
-													{#if s.total === 0}<span class="tron-text-muted">—</span>{/if}
-												</span>
-											{/if}
-										{/each}
+										{@render stepChips(run)}
 									</div>
 								</td>
 								<td class="p-3">
@@ -215,7 +329,8 @@
 										{run.status === 'in_progress' ? 'In Progress' : run.status === 'completed' ? 'Completed' : 'Aborted'}
 									</span>
 								</td>
-								<td class="tron-text-muted p-3">{fmtDate(run.startedAt)}</td>
+								<td class="tron-text-muted p-3" title={fmtDate(run.startedAt)}>{fmtRelative(run.startedAt)}</td>
+								<td class="tron-text-muted p-3" title={fmtDate(run.completedAt)}>{fmtRelative(run.completedAt)}</td>
 								<td class="tron-text-muted p-3">{run.createdBy ?? '—'}</td>
 							</tr>
 						{/each}
@@ -223,7 +338,7 @@
 				</table>
 			</div>
 			<p class="tron-text-muted border-t border-[var(--color-tron-border)] px-4 py-2 text-xs">
-				✓ passed · ✗ failed · ↑ uploaded (awaiting evaluation) · &nbsp;·&nbsp; pending
+				✓ passed · ✗ failed · ↑ uploaded (awaiting verdict) · “n left” = not started · showing the 50 most recent past runs
 			</p>
 		{/if}
 	</div>

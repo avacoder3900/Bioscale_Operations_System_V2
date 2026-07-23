@@ -2,7 +2,7 @@ import { fail, error } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import {
 	connectDB, Spu, Batch, User, Customer, AssemblySession,
-	ElectronicSignature, AuditLog, ParticleDevice, ValidationSession, generateId
+	ElectronicSignature, AuditLog, ParticleDevice, ValidationSession, ValidationRun, generateId
 } from '$lib/server/db';
 import { byId } from '$lib/server/db/native-helpers';
 import type { Actions, PageServerLoad } from './$types';
@@ -16,7 +16,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const s = spu as any;
 
 	// Parallel lookups
-	const [createdByUser, batch, sessions, signatures, auditTrail, customers, validationSessions] = await Promise.all([
+	const [createdByUser, batch, sessions, signatures, auditTrail, customers, validationSessions, validationRuns] = await Promise.all([
 		s.createdBy ? User.findById(s.createdBy, { username: 1 }).lean() : null,
 		s.batch?._id ? Batch.findById(s.batch._id).lean() : null,
 		AssemblySession.find({ spuId: params.spuId }).sort({ createdAt: -1 }).lean(),
@@ -26,6 +26,10 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		ValidationSession.find({ spuId: params.spuId })
 			.select('_id type status startedAt completedAt overallPassed failureReasons criteriaUsed magResults override userId rawData')
 			.sort({ createdAt: -1 })
+			.lean(),
+		ValidationRun.find({ 'spus.spuId': params.spuId })
+			.select('runNumber name status startedAt completedAt spus.spuId spus.removedAt')
+			.sort({ startedAt: -1 })
 			.lean()
 	]);
 
@@ -218,6 +222,15 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 				reason: v.override.reason,
 				originalResult: v.override.originalResult
 			} : null
+		})),
+		validationRuns: (validationRuns as any[]).map((r: any) => ({
+			id: r._id,
+			runNumber: r.runNumber,
+			name: r.name ?? null,
+			status: r.status,
+			startedAt: r.startedAt,
+			completedAt: r.completedAt ?? null,
+			removed: !!(r.spus ?? []).find((m: any) => m.spuId === params.spuId)?.removedAt
 		})),
 		auditTrail: auditTrail.map((a: any) => ({
 			id: a._id,
