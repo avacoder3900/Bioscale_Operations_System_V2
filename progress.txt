@@ -4028,3 +4028,7 @@ validation/runs/+page.server.ts, +page.svelte, runs/[runId]/+page.server.ts,
 +page.svelte, spu/[spuId]/+page.server.ts, +page.svelte.
 npm run check: 10 errors — unchanged pre-existing baseline (r2.ts, AskBimsWidget,
 assembly/[sessionId]); none in touched files.
+Deployment: preview — https://bioscale-operations-system-mongodb-n656kbd0x.vercel.app
+Source: branch feat/spu-validation-runs @ commit 0b154bb2
+Retrieve this exact code: git checkout feat/spu-validation-runs at commit 0b154bb2
+What this deployment is for: validation runs UX pass (pinned active runs, search, run switcher, SPU tie-in), for user review.
