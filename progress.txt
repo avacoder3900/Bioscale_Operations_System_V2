@@ -3930,3 +3930,12 @@ Files:
 Built via workflow (foundation module gated on vitest -> 3 parallel UI consumers ->
 typecheck). npm run check: 46 errors / 430 warnings — all pre-existing master
 baseline, ZERO in touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-op-6a10b0-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-9moOvi9eb-brevitest.vercel.app)
+Source: branches feat/optical-confirmation-analysis-profile AND deploy/optical-analysis @ commit 6ee2adc7
+Retrieve this exact code: git checkout deploy/optical-analysis at commit 6ee2adc7
+What this deployment is for: test the optical analysis tool v2 — F7/F3 (A/B/C) log column
+  + per-cartridge critical-values detail (F7/F3, mode, SD, mean±1σ band, CV, flags) + multi-
+  cartridge group analysis; spectrophotometer tab removed. Vercel build Ready in 1m33s.
+  Verified: preview serves the app (redirects to /login); pages behind cookie-session auth.
