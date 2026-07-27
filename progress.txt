@@ -4077,3 +4077,26 @@ What this deployment is for: test the optical analysis tool v2 — F7/F3 (A/B/C)
   + per-cartridge critical-values detail (F7/F3, mode, SD, mean±1σ band, CV, flags) + multi-
   cartridge group analysis; spectrophotometer tab removed. Vercel build Ready in 1m33s.
   Verified: preview serves the app (redirects to /login); pages behind cookie-session auth.
+
+================================================================================
+2026-07-27 — deploy/optical-analysis-on-master — optical-analysis v2 rebased onto master (Runs tab restored)
+================================================================================
+The previous optical-analysis preview was cut from a pre-PR#35 master, so it lacked the
+Runs tab. Created deploy/optical-analysis-on-master off origin/master (a3da0859) and merged
+feat/optical-confirmation-analysis-profile (91f4e41c). Conflicts: took the branch's v2
+versions of the optical-confirmation pages + optical-analysis.ts (master had grown its own
+simpler readout in dd2d8342); hand-merged validation/+layout.svelte so all four tabs
+survive (Runs, Magnetometer, Thermocouple, Optical Confirmation; Spectrophotometer stays
+removed); union-merged progress.txt. npm run check: 46 errors / 430 warnings — identical
+to pre-merge baseline, no new errors.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-deploy-f53374-brevitest.vercel.app
+Source: branch deploy/optical-analysis-on-master @ commit 869e521a
+Retrieve this exact code: git checkout deploy/optical-analysis-on-master at commit 869e521a
+  (or: git log deploy/optical-analysis-on-master --oneline to find it if the branch has since moved on)
+What this deployment is for: optical-analysis v2 (VALIDATION-04) on current master — verified
+in-browser: Runs tab present, log F7/F3 (A/B/C) + flags + checkboxes, be4beb50 detail
+(A=0.52, data flags, raw-data tree), 4-cartridge group analysis w/ outlier flagging.
+NOTE: the GitHub repo is ALSO connected to a same-named Vercel project under the personal
+scope (alejandro-valdezs-projects) that has no MONGODB_URI — its previews 500 on login.
+Only brevitest-scope preview URLs are usable.
