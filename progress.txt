@@ -4100,3 +4100,27 @@ in-browser: Runs tab present, log F7/F3 (A/B/C) + flags + checkboxes, be4beb50 d
 NOTE: the GitHub repo is ALSO connected to a same-named Vercel project under the personal
 scope (alejandro-valdezs-projects) that has no MONGODB_URI — its previews 500 on login.
 Only brevitest-scope preview URLs are usable.
+
+===2026-07-27 (evening) - PAUSED pending real data===
+Branch deploy/optical-analysis-on-master @ 5bc9cfcf (comparator cartridges in list).
+Preview: bioscale-operations-system-mongodb-git-deploy-f53374-brevitest.vercel.app
+
+VERIFIED IN BROWSER (7-cartridge group analysis, Gen 5 Optical Scan - Start Position
+Corrected / Single Scan Cortisol / COMPARATOR):
+  - Analyze selected -> /validation/optical-confirmation/analyze?ids=... renders
+  - Per-channel group stats: mean, mode, SD, in-range (mean +/- 1sd), CV, N
+  - CV flag at 15% fires; per-cartridge outlier flags fire
+  - Footer confirms derived / non-destructive (cartridge_records untouched)
+  Result: A 180% / B 179% / C 205% CV -- driven by ONE outlier cartridge
+  bb708268-25d6-4626-865c-c8a3e10cfdc1 (A 8.85 / B 8.77 / C 9.49 vs ~0.5-0.6 for the
+  other 6). Rough hand-calc excluding it: A ~7.5%, B ~9% (would pass), C ~50% (still
+  fails, spans 0.15-0.58) -- channel C scatter needs investigation, NOT outlier-driven.
+
+NEXT (needs real data, do not conclude from current numbers):
+  1. Pull actual per-channel readings from the research app for these same barcodes
+  2. Run a real test set through, compare research-app F7/F3 vs BIMS analyze output
+  3. Only then judge whether channel C scatter is optics, cartridges, or our math
+  4. Confirm A/B pass at 15% once the outlier is excluded from a real replicate group
+
+KNOWN UI BUG: floating "Ask BIMS" chat widget overlays the bottom-left of the cartridge
+log table and covers row checkboxes (blocked selecting an 8th row).
