@@ -6,7 +6,7 @@
 			assays: Array<{ id: string; name: string; skuCode: string; duration: number | null; bcodeSteps: number }>;
 			cartridges: Array<{
 				id: string; barcode: string; assayName: string | null;
-				status: string; ran: boolean;
+				status: string; ran: boolean; assigned: boolean;
 				spuUdi: string | null; spuDeviceId: string | null;
 				assignedAt: string | null; underwayAt: string | null; completedAt: string | null;
 				result: { profileName: string | null; computedAt: string | null } | null;
@@ -232,7 +232,15 @@
 								<td class="p-3 font-mono text-xs text-[var(--color-tron-text-primary)]">
 									<a href={'/validation/optical-confirmation/' + c.id} class="hover:text-[var(--color-tron-cyan)] hover:underline">{c.barcode}</a>
 								</td>
-								<td class="p-3">{c.assayName ?? '—'}</td>
+								<td class="p-3">
+									{c.assayName ?? '—'}
+									{#if !c.assigned}
+										<span
+											class="ml-2 rounded-full border border-[var(--color-tron-border)] px-2 py-0.5 text-[10px] tracking-wide text-[var(--color-tron-text-secondary)]"
+											title="Ran the same optical assay but was not assigned through this page — shown as a comparator."
+										>COMPARATOR</span>
+									{/if}
+								</td>
 								<td class="p-3">
 									<span class="rounded-full px-2 py-1 text-xs font-medium {statusClass(c.status)}">{c.status}</span>
 								</td>

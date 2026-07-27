@@ -19,8 +19,17 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	// Optical test cartridge log — read run status from cartridge_records (where the
 	// device/brevitest-cloud writes the run lifecycle: linked -> underway -> completed).
-	const cartridges = await CartridgeRecord.find({ assayCategory: 'optical_test' })
-		.select('serialNumber assayId assayName status statusUpdatedOn checkpoints createdAt analysis rawData device')
+	//
+	// Two sources are merged so group analysis has a usable N:
+	//   1. assayCategory 'optical_test' — cartridges formally assigned via this page.
+	//   2. assayId OPTICAL_ASSAY_ID     — any cartridge that ran the same optical assay
+	//      (e.g. from the bench/research app). These carry no assayCategory tag, but the
+	//      readings are identical in shape, so they are valid comparators.
+	// Read-only: nothing is written back to tag or reclassify these records.
+	const cartridges = await CartridgeRecord.find({
+		$or: [{ assayCategory: 'optical_test' }, { assayId: OPTICAL_ASSAY_ID }]
+	})
+		.select('serialNumber assayId assayName assayCategory status statusUpdatedOn checkpoints createdAt analysis rawData device')
 		.sort({ createdAt: -1 })
 		.limit(200)
 		.lean();
@@ -48,6 +57,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 			id: c._id,
 			barcode: c._id, // cartridge_records _id IS the scanned barcode
 			assayName: c.assayName ?? c.assayId ?? null,
+			// true = formally assigned as a validation cartridge via this page;
+			// false = same-assay run pulled in as a comparator.
+			assigned: c.assayCategory === 'optical_test',
 			status: c.status ?? 'linked',
 			ran: !!(c.checkpoints?.completed || c.checkpoints?.underway || c.status === 'completed'),
 			// The run writes a `device` block — its name is the SPU/reader it ran on.
