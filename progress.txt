@@ -3985,3 +3985,95 @@ Deployment: preview — https://bioscale-operations-system-mongodb-k2qsxjq91.ver
 Source: branch feat/spu-validation-runs @ commit 95946f83
 Retrieve this exact code: git checkout feat/spu-validation-runs at commit 95946f83
 What this deployment is for: approve/reject verdict UX on thermo uploads, for user review.
+
+================================================================================
+2026-07-20 — feat/optical-confirmation-analysis-profile — per-channel F7/F3 analysis in optical-confirmation log + spectrophotometer tab removed
+================================================================================
+VALIDATION-04. Surfaces the research app's "Single Scan Cortisol" analysis profile
+(per-well A/B/C F7/F3 ratio) on cartridges run through Manufacturing > Validation >
+Optical Confirmation. The assay run is unchanged — "Gen 5 Optical Scan" (A9EB41AD)
+loaded onto the cartridge as before; "cortisol" is only the NAME of the analysis
+profile that interprets the resulting optical data.
+
+Data path: brevitest-cloud writes raw fluorometer readings onto
+cartridge_records.rawData.readings[] (channel A/B/C, f1..f8, clear, nir) after a run.
+test_results collection is empty in prod — NOT used. We DERIVE the analysis on read;
+nothing is written to the DB (fully non-destructive, and it sidesteps the strict
+Mongoose schema which doesn't declare rawData/analysis).
+
+Formula (ported verbatim from research analysis.ts, single-scan case): per channel,
+sum f3/f5/f7 over the whole run, then F7/F3 = Σf7/Σf3 (ratio of SUMS, not means;
+guard Σf3=0 → null), also F5/F3. Displayed to 1 decimal in the log, 2 in the detail
+table — matching the research experiment view. Single-scan means NO scan-group
+detection is needed (one group = whole run == research single-scan profile [0]).
+
+Files:
+- src/lib/server/optical-analysis.ts — pure computeOpticalAnalysis(readings) + the
+  OpticalAnalysis/OpticalChannelAnalysis contract. + optical-analysis.test.ts (vitest,
+  4 cases: ratio-of-sums, Σf3=0→null, empty→null, non-numeric skip) — PASS.
+- optical-confirmation/+page.server.ts — derive analysis per cartridge on read.
+- optical-confirmation/+page.svelte — new "F7/F3 (A/B/C)" column (A: x.x B: x.x
+  C: x.x), barcode now links to the detail view.
+- optical-confirmation/[id]/+page.server.ts + +page.svelte — per-cartridge detail
+  view (per-channel table Well|F3 sum|F7 sum|F5 sum|F7/F3|F5/F3|n + collapsible raw
+  JsonTree), ported from feat/optical-cartridge-data-view and refactored onto the
+  shared module. + src/lib/components/JsonTree.svelte.
+- Removed the Spectrophotometer tab: nav item + getSectionName branch in
+  validation/+layout.svelte, the whole routes/validation/spectrophotometer subtree,
+  and the two orphaned SpectrophotometerCapture/Result components (safety-checked:
+  no external importers). Default /validation redirect goes to magnetometer, so
+  nothing breaks.
+
+Built via a 5-agent workflow (disjoint files) + typecheck pass. npm run check:
+46 errors / 430 warnings — all pre-existing master baseline, ZERO in touched files.
+Only 2 benign state_referenced_locally warnings in the ported JsonTree.svelte.
+
+================================================================================
+2026-07-27 — feat/optical-confirmation-analysis-profile — optical analysis TOOL v2: critical values + flagging + multi-cartridge group analysis
+================================================================================
+Turns the v1 F7/F3 log column into an analysis tool an engineer uses to judge a
+run. Data path CONFIRMED live: cartridge_records.rawData.readings[] is populated on
+completed Gen 5 Optical Scan carts (probe: 4 of 19 optical carts have readings,
+A/B/C=42 each, baselineScans=0 -> single scan group; test_results empty). Derive-on
+-read, never writes the DB.
+
+Stats (per user): computed over an ENDPOINT WINDOW = last windowK=10 readings per
+channel (readings are a kinetic curve, so whole-run SD measures the reaction not
+precision). Per channel we show F7/F3 (mean of per-reading f7/f3), MODE, SD, and the
+in-range band = MEAN +/- 1sigma (user picked mean-driven over mode-driven; mode is
+shown but doesn't drive the band), plus F3 avg, F7 avg, ratio CV. Flags (research
+parity): per-channel ratio CV>15%, per-reading |z|>2sigma, cross-well CV>15% (names
+rogue channel). GROUP (net-new): select N cartridges -> per-channel across-cartridge
+mean/mode/SD/band + flag any cartridge outside the group's mean+/-1sigma; cross-
+cartridge CV>15% note.
+
+Verified end-to-end on real prod data via tsx: single-cart bands tight (~0.5 ratio,
+SD ~0.01) with z-outlier flags firing; group correctly flags the ratio~28 cart as the
+outlier among ~0.5/~9/~28 carts.
+
+Files:
+- src/lib/server/optical-analysis.ts — REWRITTEN: analyzeCartridge()/analyzeGroup()
+  + OpticalConfig/BandStat/ChannelAnalysis/CartridgeAnalysis/GroupAnalysis. Replaces
+  v1 computeOpticalAnalysis. + optical-analysis.test.ts (vitest, 5 cases) PASS.
+- optical-confirmation/+page.server.ts — analyzeCartridge per cart; returns trimmed
+  {ratioByChannel,warning,crossWellCv}.
+- optical-confirmation/+page.svelte — F7/F3 col + amber warn indicator; row
+  checkboxes + select-all + sticky "Analyze selected (N)" -> analyze?ids=csv.
+- optical-confirmation/[id]/+page.svelte(+server) — full per-channel critical-values
+  table (Well|F7/F3|Mode|SD|In-range|F3avg|F7avg|Ratio CV|n) + warnings banner + raw
+  JsonTree.
+- optical-confirmation/analyze/+page.svelte(+server) — NEW group-analysis route:
+  per-channel group stats table + per-cartridge table w/ outlier highlighting.
+
+Built via workflow (foundation module gated on vitest -> 3 parallel UI consumers ->
+typecheck). npm run check: 46 errors / 430 warnings — all pre-existing master
+baseline, ZERO in touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-op-6a10b0-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-9moOvi9eb-brevitest.vercel.app)
+Source: branches feat/optical-confirmation-analysis-profile AND deploy/optical-analysis @ commit 6ee2adc7
+Retrieve this exact code: git checkout deploy/optical-analysis at commit 6ee2adc7
+What this deployment is for: test the optical analysis tool v2 — F7/F3 (A/B/C) log column
+  + per-cartridge critical-values detail (F7/F3, mode, SD, mean±1σ band, CV, flags) + multi-
+  cartridge group analysis; spectrophotometer tab removed. Vercel build Ready in 1m33s.
+  Verified: preview serves the app (redirects to /login); pages behind cookie-session auth.

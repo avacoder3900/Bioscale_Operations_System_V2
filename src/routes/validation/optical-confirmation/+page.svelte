@@ -6,11 +6,15 @@
 			assays: Array<{ id: string; name: string; skuCode: string; duration: number | null; bcodeSteps: number }>;
 			cartridges: Array<{
 				id: string; barcode: string; assayName: string | null;
-			analysis: { ratioByChannel: Record<string, number | null>; readingCount: number; scanGroup: string } | null;
 				status: string; ran: boolean;
 				spuUdi: string | null; spuDeviceId: string | null;
 				assignedAt: string | null; underwayAt: string | null; completedAt: string | null;
 				result: { profileName: string | null; computedAt: string | null } | null;
+				analysis: {
+					ratioByChannel: { A: number | null; B: number | null; C: number | null };
+					warning: boolean;
+					crossWellCv: number | null;
+				} | null;
 			}>;
 		};
 		form: {
@@ -50,6 +54,28 @@
 	}
 
 	const ranCount = $derived(data.cartridges.filter((c) => c.ran).length);
+
+	// Multi-select for group analysis.
+	let selected = $state<Set<string>>(new Set());
+	const selectedCount = $derived(selected.size);
+	const allSelected = $derived(
+		data.cartridges.length > 0 && data.cartridges.every((c) => selected.has(c.id))
+	);
+
+	function toggleOne(id: string) {
+		const next = new Set(selected);
+		if (next.has(id)) next.delete(id);
+		else next.add(id);
+		selected = next;
+	}
+	function toggleAll() {
+		selected = allSelected ? new Set() : new Set(data.cartridges.map((c) => c.id));
+	}
+	function analyzeSelected() {
+		if (selected.size < 1) return;
+		window.location.href =
+			'/validation/optical-confirmation/analyze?ids=' + [...selected].join(',');
+	}
 </script>
 
 <div class="space-y-6">
@@ -148,6 +174,21 @@
 			<h2 class="tron-heading text-lg font-semibold">Optical Test Cartridge Log ({data.cartridges.length})</h2>
 			<span class="text-sm text-[var(--color-tron-text-secondary)]">{ranCount} run</span>
 		</div>
+
+		<!-- Group-analysis action bar (sticky) -->
+		<div class="sticky top-0 z-10 flex items-center justify-between gap-4 border-b border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] px-4 py-3">
+			<span class="text-sm text-[var(--color-tron-text-secondary)]">
+				{selectedCount} selected
+			</span>
+			<button
+				type="button"
+				onclick={analyzeSelected}
+				disabled={selectedCount < 1}
+				class="rounded-lg bg-[var(--color-tron-cyan)] px-4 py-2 text-sm font-semibold text-[var(--color-tron-bg-primary)] transition-all hover:bg-[var(--color-tron-cyan)]/90 disabled:cursor-not-allowed disabled:opacity-50"
+			>
+				Analyze selected ({selectedCount})
+			</button>
+		</div>
 		{#if data.cartridges.length === 0}
 			<div class="p-8 text-center">
 				<p class="tron-text-muted">No optical test cartridges assigned yet.</p>
@@ -157,11 +198,20 @@
 				<table class="w-full text-sm">
 					<thead class="text-left text-[var(--color-tron-text-secondary)]">
 						<tr class="border-b border-[var(--color-tron-border)]">
+							<th class="p-3 font-medium">
+								<input
+									type="checkbox"
+									aria-label="Select all cartridges"
+									checked={allSelected}
+									onchange={toggleAll}
+									class="h-4 w-4 cursor-pointer accent-[var(--color-tron-cyan)]"
+								/>
+							</th>
 							<th class="p-3 font-medium">Barcode</th>
 							<th class="p-3 font-medium">Assay</th>
 							<th class="p-3 font-medium">Status</th>
 							<th class="p-3 font-medium">SPU</th>
-							<th class="p-3 font-medium">Analysis (F7/F3)</th>
+							<th class="p-3 font-medium">F7/F3 (A/B/C)</th>
 							<th class="p-3 font-medium">Result</th>
 							<th class="p-3 font-medium">Assigned</th>
 							<th class="p-3 font-medium">Completed</th>
@@ -169,27 +219,42 @@
 					</thead>
 					<tbody class="divide-y divide-[var(--color-tron-border)]">
 						{#each data.cartridges as c (c.id)}
-							<tr>
-								<td class="p-3 font-mono text-xs">
-									<a href="/validation/optical-confirmation/{c.id}" class="text-[var(--color-tron-cyan)] hover:underline">{c.barcode}</a>
+							<tr class={selected.has(c.id) ? 'bg-[var(--color-tron-cyan)]/5' : ''}>
+								<td class="p-3">
+									<input
+										type="checkbox"
+										aria-label={'Select ' + c.barcode}
+										checked={selected.has(c.id)}
+										onchange={() => toggleOne(c.id)}
+										class="h-4 w-4 cursor-pointer accent-[var(--color-tron-cyan)]"
+									/>
+								</td>
+								<td class="p-3 font-mono text-xs text-[var(--color-tron-text-primary)]">
+									<a href={'/validation/optical-confirmation/' + c.id} class="hover:text-[var(--color-tron-cyan)] hover:underline">{c.barcode}</a>
 								</td>
 								<td class="p-3">{c.assayName ?? '—'}</td>
 								<td class="p-3">
 									<span class="rounded-full px-2 py-1 text-xs font-medium {statusClass(c.status)}">{c.status}</span>
 								</td>
 								<td class="p-3 font-mono text-xs text-[var(--color-tron-text-secondary)]">{c.spuUdi ?? '—'}</td>
-								<td class="p-3">
+								<td class="p-3 text-xs font-mono">
 									{#if c.analysis}
-										<span class="flex items-center gap-2 whitespace-nowrap">
-											{#each Object.entries(c.analysis.ratioByChannel) as [ch, ratio] (ch)}
-												<span class="text-xs">
-													<span class="tron-text-muted">{ch}:</span>
-													<span class="tron-heading font-medium">{ratio != null ? ratio.toFixed(1) : '—'}</span>
-												</span>
-											{/each}
+										<span class="inline-flex items-center gap-1">
+										<span class="text-[var(--color-tron-text-secondary)]">A:</span>
+										<span class="text-[var(--color-tron-cyan)]">{c.analysis.ratioByChannel.A != null ? c.analysis.ratioByChannel.A.toFixed(1) : '—'}</span>
+										<span class="text-[var(--color-tron-text-secondary)] ml-2">B:</span>
+										<span class="text-[var(--color-tron-cyan)]">{c.analysis.ratioByChannel.B != null ? c.analysis.ratioByChannel.B.toFixed(1) : '—'}</span>
+										<span class="text-[var(--color-tron-text-secondary)] ml-2">C:</span>
+										<span class="text-[var(--color-tron-cyan)]">{c.analysis.ratioByChannel.C != null ? c.analysis.ratioByChannel.C.toFixed(1) : '—'}</span>
+										{#if c.analysis.warning}
+											<span
+												class="ml-2 text-[var(--color-tron-orange)]"
+												title={'Review — cross-channel CV ' + (c.analysis.crossWellCv != null ? c.analysis.crossWellCv.toFixed(0) + '%' : 'n/a')}
+											>⚠</span>
+										{/if}
 										</span>
 									{:else}
-										<span class="tron-text-muted">—</span>
+										<span class="text-[var(--color-tron-text-secondary)]">—</span>
 									{/if}
 								</td>
 								<td class="p-3 text-[var(--color-tron-text-secondary)]">
