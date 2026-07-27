@@ -1,7 +1,7 @@
 import { error } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, CartridgeRecord } from '$lib/server/db';
-import { computeOpticalAnalysis } from '$lib/server/optical-analysis';
+import { analyzeCartridge } from '$lib/server/optical-analysis';
 import type { PageServerLoad } from './$types';
 
 // Cartridge data view — the "analyze" / view-the-data pathway ported from the
@@ -18,7 +18,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 
 	// Derive-on-read per-channel F7/F3 analysis (the "Single Scan Cortisol"
 	// profile). Non-destructive: computed from rawData.readings, never written back.
-	const analysis = computeOpticalAnalysis((cartridge as any)?.rawData?.readings ?? []);
+	const analysis = analyzeCartridge((cartridge as any)?.rawData?.readings ?? []);
 
 	return {
 		cartridge: JSON.parse(JSON.stringify(cartridge)),

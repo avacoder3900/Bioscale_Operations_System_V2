@@ -1,7 +1,7 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, AssayDefinition, CartridgeRecord } from '$lib/server/db';
-import { computeOpticalAnalysis } from '$lib/server/optical-analysis';
+import { analyzeCartridge } from '$lib/server/optical-analysis';
 import type { Actions, PageServerLoad } from './$types';
 
 // The single optical-confirmation assay in use: "Gen 5 Optical Scan - Start
@@ -33,9 +33,18 @@ export const load: PageServerLoad = async ({ locals }) => {
 			duration: a.duration ?? null,
 			bcodeSteps: Array.isArray(a.BCODE?.code) ? a.BCODE.code.length : 0
 		})),
-		cartridges: cartridges.map((c: any) => ({
+		cartridges: cartridges.map((c: any) => {
 			// Derive-on-read F7/F3 analysis (non-destructive; never written to the DB).
-			analysis: computeOpticalAnalysis(c.rawData?.readings ?? []),
+			const analysis = analyzeCartridge(c.rawData?.readings ?? []);
+			return {
+			// Trimmed analysis for the list view (full analysis lives on the detail page).
+			analysis: analysis
+				? {
+						ratioByChannel: analysis.ratioByChannel,
+						warning: analysis.warning,
+						crossWellCv: analysis.crossWellCv
+					}
+				: null,
 			id: c._id,
 			barcode: c._id, // cartridge_records _id IS the scanned barcode
 			assayName: c.assayName ?? c.assayId ?? null,
@@ -50,7 +59,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 			result: c.analysis
 				? { profileName: c.analysis.profileName ?? null, computedAt: c.analysis.computedAt ?? null }
 				: null
-		}))
+			};
+		})
 	};
 };
 
