@@ -21,7 +21,7 @@
 			Robot Arm — Remote Control
 		</h1>
 		<a
-			href="/manufacturing/cart-mfg/robot-arm"
+			href="/manufacturing/cart-mfg"
 			class="text-xs transition-colors hover:text-[var(--color-tron-cyan)]"
 			style="color: var(--color-tron-text-secondary)"
 		>
