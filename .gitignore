@@ -21,3 +21,11 @@ Thumbs.db
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Claude Code local state (credentials, sessions, transcripts, caches)
+.claude/
+.claude.json
+.claude.json.backup
+
+# Local editor workspace
+bims.code-workspace

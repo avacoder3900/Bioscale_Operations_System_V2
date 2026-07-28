@@ -196,3 +196,12 @@ if (apiKey !== process.env.AGENT_API_KEY) return json({ error: 'Unauthorized' },
   phases[] backfill decision
 - Typecheck: 183 errors = exact pre-existing baseline, zero new (first run showed
   +30, artifact of skipping svelte-kit sync). Production build: in progress.
+- DEPLOYMENT 2026-07-13: committed b971b8bf on perf/data-health-01, pushed to
+  origin (avacoder3900/Bioscale_Operations_System_V2) -> Vercel preview build
+  pending; local prod build unusable on this machine (30GB native alloc crash,
+  machine-level; Vercel is the gate). Preview URL to be logged when status lands.
+- DEPLOYMENT RESULT: b971b8bf failed on Vercel (untracked QMS files: qms-gate.ts,
+  qms.ts, qms-state.ts + admin/qms & photo-staging routes were imported but never
+  committed); fixed in 2b469f46 -> Vercel build SUCCESS. Preview:
+  https://bioscale-operations-system-mongodb-git-perf-da-5173e4-brevitest.vercel.app
+  (branch perf/data-health-01). Local 30GB build crash confirmed machine-only.
