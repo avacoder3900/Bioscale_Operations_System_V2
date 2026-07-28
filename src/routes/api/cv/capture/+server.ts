@@ -7,7 +7,13 @@
  * Request (multipart/form-data):
  *   file:           image blob
  *   cartridgeId:    required — must match an existing CartridgeRecord
- *   phase:          required — manufacturing phase or 'post_run' for R&D
+ *   phase:          required — manufacturing phase or 'post_run' for R&D.
+ *                   Not required when photoType=microscope (scope close-ups
+ *                   document optics, not a manufacturing phase).
+ *   photoType:      optional 'inspection' (default) | 'microscope' — which
+ *                   optics took the shot (CV-CAMERA-02). A microscope shot
+ *                   skips barcode view auto-classification, phase inference,
+ *                   and manufacturing status auto-advance.
  *   cameraIndex:    optional
  *   processingMode: optional 'full' | 'raw'
  *   verdict:        optional 'approved' | 'rejected' — capture-time QC label
@@ -110,15 +116,32 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// Optional station identity — drives the Stage-1 phase sanity check below.
 		const stationId = formData.get('stationId')?.toString().trim() || undefined;
 
+		// Which optics took this photo (CV-CAMERA-02). A station can host an
+		// overview camera and a microscope with one open at a time, so the page
+		// tells us which was selected. Mirrors the parsing in
+		// /api/cv/capture-ingest, which has always carried this for the agent's
+		// own sequence shots — this endpoint previously had no photoType at all,
+		// so every browser capture was filed as 'inspection' even when it was
+		// shot down a microscope.
+		const photoTypeRaw = formData.get('photoType')?.toString().trim();
+		const photoType: 'inspection' | 'microscope' =
+			photoTypeRaw === 'microscope' ? 'microscope' : 'inspection';
+		const isMicroscope = photoType === 'microscope';
+
 		if (!file) return json({ error: 'file is required' }, { status: 400 });
 		if (!cartridgeId) return json({ error: 'cartridgeId is required' }, { status: 400 });
-		if (!phase) return json({ error: 'phase is required' }, { status: 400 });
+		// Microscope close-ups document optics, not a manufacturing phase —
+		// capture-ingest already stores them with phase null, and requiring one
+		// here would 400 every scope shot taken from the browser.
+		if (!phase && !isMicroscope) return json({ error: 'phase is required' }, { status: 400 });
+		const effectivePhase = isMicroscope ? undefined : phase;
 
 		// Station sanity check (CV-PIPELINE-V2 Stage 1): a capture posted from a
 		// station assigned to a different phase is almost always "wrong station
 		// selected in the dropdown". Warn in the success response — never block.
+		// Skipped for microscope shots, which carry no phase to compare.
 		let warning: string | undefined;
-		if (stationId) {
+		if (stationId && !isMicroscope) {
 			const station = await CaptureStation.findById(stationId)
 				.select('name assignedPhase')
 				.lean() as any;
@@ -148,9 +171,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// toggle always wins; when it's unset, auto-classify from barcode presence
 		// (the cartridge barcode shows only in top photos). Detection never blocks
 		// or fails a capture — a null result leaves the view untagged.
+		// Skipped for microscope shots: a close-up down the scope never shows the
+		// cartridge barcode, so auto-classification would confidently label every
+		// one of them as the no-barcode view. capture-ingest skips it for the
+		// same reason.
 		let effectiveView: 'top' | 'bottom' | undefined = view;
 		let viewSource: 'manual' | 'barcode-auto' | undefined = view ? 'manual' : undefined;
-		if (!view) {
+		if (!view && !isMicroscope) {
 			const hasBarcode = await detectBarcodePresence(buffer);
 			if (hasBarcode !== null) {
 				effectiveView = hasBarcode ? BARCODE_VIEW : NO_BARCODE_VIEW;
@@ -190,10 +217,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			processingMode: processingMode === 'raw' || processingMode === 'full' ? processingMode : undefined,
 			cartridgeTag: {
 				cartridgeRecordId: cartridgeId,
-				phase,
+				...(effectivePhase ? { phase: effectivePhase } : {}),
 				...(labels.length > 0 ? { labels } : {}),
 				...(cartridgeTagNotes ? { notes: cartridgeTagNotes } : {})
 			},
+			photoType,
 			cartridgeImageNumber,
 			...(embedding ? { embedding, embeddingVersion: EMBEDDING_VERSION } : {}),
 			...(effectiveView ? { view: effectiveView } : {}),
@@ -216,7 +244,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				tableName: 'cv_images',
 				recordId: imageId,
 				action: 'capture_verdict',
-				newData: { qcLabel: verdict, cartridgeId, phase },
+				newData: { qcLabel: verdict, cartridgeId, phase: effectivePhase, photoType },
 				changedAt: capturedAt,
 				changedBy: locals.user.username
 			});
@@ -228,7 +256,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// then append — atomic, self-healing, and a no-op shape change for the
 		// well-formed majority. $literal keeps the entry stored verbatim (so a
 		// '$' or '.' in any value isn't parsed as an aggregation expression).
-		const photoEntry = { imageId, phase, capturedAt, r2Key: key, r2Url: publicUrl, cartridgeImageNumber };
+		// photoType rides along so cartridge_records.photos[] can tell a microscope
+		// close-up from an inspection shot without joining back to cv_images —
+		// the agent's ingest path has always written it here, this one did not.
+		const photoEntry = {
+			imageId,
+			phase: effectivePhase,
+			capturedAt,
+			r2Key: key,
+			r2Url: publicUrl,
+			cartridgeImageNumber,
+			photoType
+		};
 		await CartridgeRecord.updateOne(
 			{ _id: cartridgeId },
 			[
@@ -251,7 +290,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// cart advances it to wax_qc ("photographed, awaiting verdict"). The verdict
 		// (human scan-gated, or CV) then moves it to wax_ready/wax_rejected. Scoped
 		// to wax_stored so /capture at other phases never re-statuses a cart.
-		if (updated.status === 'wax_stored') {
+		// !isMicroscope: a close-up down the scope is documentation, not a wax
+		// inspection — it must never advance manufacturing status.
+		if (updated.status === 'wax_stored' && !isMicroscope) {
 			await CartridgeRecord.updateOne(
 				{ _id: cartridgeId, status: 'wax_stored' },
 				{ $set: { status: 'wax_qc' } }
@@ -270,7 +311,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// Reagent inspection (REAGENT-INSPECT-AFTER-TOPSEAL): photographing a `sealed`
 		// cart (post Cut Top Seal) advances it to reagent_qc ("photographed, awaiting
 		// verdict"). The scan-gated verdict then moves it to reagent_ready/reagent_rejected.
-		if (updated.status === 'sealed') {
+		// Same reasoning as the wax branch above — scope shots don't move status.
+		if (updated.status === 'sealed' && !isMicroscope) {
 			await CartridgeRecord.updateOne(
 				{ _id: cartridgeId, status: 'sealed' },
 				{ $set: { status: 'reagent_qc' } }
@@ -289,20 +331,27 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// Fire-and-forget: any project deploying at this phase runs inference.
 		// Errors are swallowed inside runPhaseInference — capture response always
 		// succeeds regardless of inference state.
-		runPhaseInference({
-			imageId,
-			imageUrl: publicUrl,
-			cartridgeRecordId: cartridgeId,
-			phase,
-			view: effectiveView ?? null,
-			triggeredBy: 'auto-on-capture'
-		}).catch(err => console.error('[capture] phase-inference failed:', err));
+		// Guarded on effectivePhase: microscope shots carry no phase, and every
+		// deployed model is trained per phase on cartridge-rig optics. Grading a
+		// scope close-up against one would be meaningless. capture-ingest skips
+		// inference on the same condition.
+		if (effectivePhase) {
+			runPhaseInference({
+				imageId,
+				imageUrl: publicUrl,
+				cartridgeRecordId: cartridgeId,
+				phase: effectivePhase,
+				view: effectiveView ?? null,
+				triggeredBy: 'auto-on-capture'
+			}).catch(err => console.error('[capture] phase-inference failed:', err));
+		}
 
 		return json({
 			imageId,
 			cartridgeImageNumber,
 			cartridgeRecordId: cartridgeId,
-			phase,
+			phase: effectivePhase ?? null,
+			photoType,
 			imageUrl: publicUrl,
 			filePath: key,
 			view: effectiveView ?? null,

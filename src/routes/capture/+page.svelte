@@ -50,9 +50,35 @@
 	let mjpegError = $state(false);
 	const MJPEG_FPS = 15;
 	const MJPEG_QUALITY = 80;
+
+	// Cameras the selected station reports (CV-CAMERA-02). A Pi may host an
+	// overview camera plus a Celestron microscope, but only ever streams ONE:
+	// the device can't be shared, and the dual-encode load above is what
+	// browned out the PSU. Switching is therefore a hand-off — swap this single
+	// <img> src, never add a second one.
+	type StationCamera = {
+		id: string;
+		role?: string;
+		label?: string;
+		profile?: string;
+		sequence?: boolean;
+	};
+	let stationCameras = $state<StationCamera[]>([]);
+	let activeCameraId = $state<string | null>(null);
+	let switchingCamera = $state(false);
+	const activeCamera = $derived(
+		stationCameras.find((c) => c.id === activeCameraId) ?? null
+	);
+
+	// &camera= is what makes this URL actually change on a switch — everything
+	// else in it is fixed per (hostname, token), so the <img> would otherwise
+	// keep the old multipart connection open and never re-request. It doubles
+	// as an assertion: the agent 409s if that camera isn't the one it has open,
+	// so a stale tab fails loudly instead of quietly showing the wrong optics.
 	const mjpegUrl = $derived(
 		stationToken && stationHostname
-			? `https://${stationHostname}/preview.mjpg?token=${encodeURIComponent(stationToken)}&fps=${MJPEG_FPS}&q=${MJPEG_QUALITY}`
+			? `https://${stationHostname}/preview.mjpg?token=${encodeURIComponent(stationToken)}&fps=${MJPEG_FPS}&q=${MJPEG_QUALITY}` +
+				(activeCameraId ? `&camera=${encodeURIComponent(activeCameraId)}` : '')
 			: null
 	);
 	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -176,6 +202,84 @@
 			}
 			delete cameraParamThrottle[prop];
 		}, CAMERA_PARAM_THROTTLE_MS);
+	}
+
+	/**
+	 * Re-mint the station JWT.
+	 *
+	 * The token is good for 5 minutes and nothing refreshes it on a timer. An
+	 * already-open MJPEG stream survives expiry because the agent authenticates
+	 * once per HTTP request and then streams forever — but anything that
+	 * RE-ISSUES that request needs a live token. A camera switch does exactly
+	 * that, so without this an operator who'd been on the page more than five
+	 * minutes would 401 → <img> onerror → silent, permanent WebRTC fallback.
+	 */
+	async function refreshStationToken(stationId: string): Promise<string | null> {
+		try {
+			const res = await fetch(`/api/cv/stations/${encodeURIComponent(stationId)}/token`);
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			const body = await res.json();
+			if (!body?.token) throw new Error('empty token');
+			return body.token as string;
+		} catch (e) {
+			flashBanner('err', `Failed to refresh station token: ${e instanceof Error ? e.message : e}`);
+			return null;
+		}
+	}
+
+	let cameraSwitchTimer: ReturnType<typeof setTimeout> | null = null;
+
+	function endCameraSwitch() {
+		switchingCamera = false;
+		if (cameraSwitchTimer) { clearTimeout(cameraSwitchTimer); cameraSwitchTimer = null; }
+	}
+
+	/**
+	 * Hand the station's single capture handle to another camera.
+	 *
+	 * Deliberately does NOT set activeCameraId — the agent's camera_changed
+	 * broadcast is the source of truth, so every open tab converges on what the
+	 * Pi actually opened rather than on what this tab asked for.
+	 */
+	async function selectCamera(cameraId: string) {
+		if (!selectedStationId || !ws || ws.readyState !== WebSocket.OPEN) return;
+		if (switchingCamera || cameraId === activeCameraId) return;
+		if (sequenceRunning) {
+			flashBanner('err', 'Abort the microscope sequence before switching cameras.');
+			return;
+		}
+
+		const fresh = await refreshStationToken(selectedStationId);
+		if (!fresh) return;
+
+		switchingCamera = true;
+		// Safety net: if the agent never answers we must not leave the control
+		// disabled forever.
+		if (cameraSwitchTimer) clearTimeout(cameraSwitchTimer);
+		cameraSwitchTimer = setTimeout(() => {
+			switchingCamera = false;
+			cameraSwitchTimer = null;
+			flashBanner('err', 'Camera switch timed out — the station did not respond.');
+		}, 15_000);
+
+		// Slider state belongs to the camera we're leaving: ranges are per-device
+		// and the agent clamps against them, so a throttled set_camera_param
+		// landing after the swap would be clamped to the wrong camera's range.
+		for (const t of Object.values(cameraParamThrottle)) clearTimeout(t);
+		for (const k of Object.keys(cameraParamThrottle)) delete cameraParamThrottle[k];
+		cameraParams = {};
+		cameraParamsKnown = [];
+		cameraParamRanges = {};
+		// A stale true would pin us to WebRTC even though the new stream is fine.
+		mjpegError = false;
+		stationToken = fresh;
+
+		try {
+			ws.send(JSON.stringify({ cmd: 'select_camera', cameraId }));
+		} catch (e) {
+			endCameraSwitch();
+			flashBanner('err', `Camera switch failed: ${e instanceof Error ? e.message : e}`);
+		}
 	}
 
 	// Just-captured strip (newest first, max 10). `inference` is filled in
@@ -339,7 +443,16 @@
 		if (Array.isArray(cap)) return cap.includes('sequence');
 		return !!cap.sequence;
 	}
-	let stationSupportsSequence = $derived(hasSequenceCapability(selectedStation?.capabilities));
+	// Sequence support is a property of the CAMERA that's open, not of the
+	// station: a dual-camera Pi supports timed runs through the Celestron and
+	// not through the overview cam, so the panel must follow the switch. Falls
+	// back to the station-level capability for single-camera stations and for
+	// agents predating CV-CAMERA-02, which report no per-camera flag.
+	let stationSupportsSequence = $derived(
+		activeCamera
+			? activeCamera.sequence === true
+			: hasSequenceCapability(selectedStation?.capabilities)
+	);
 
 	function startSequence() {
 		if (!isStationLive()) { flashBanner('err', 'Station not connected — pick a station or wait for it to reconnect.'); return; }
@@ -513,6 +626,10 @@
 		cameraParamRanges = {};
 		for (const t of Object.values(cameraParamThrottle)) clearTimeout(t);
 		for (const k of Object.keys(cameraParamThrottle)) delete cameraParamThrottle[k];
+		// The camera roster belongs to the station we're leaving.
+		stationCameras = [];
+		activeCameraId = null;
+		endCameraSwitch();
 		// Drop any in-flight scan trigger — it belonged to the old station.
 		awaitingTriggeredScan = false;
 		if (triggerScanTimer) { clearTimeout(triggerScanTimer); triggerScanTimer = null; }
@@ -595,6 +712,12 @@
 			stationToken = token;
 			stationHostname = station.hostname;
 			mjpegError = false;
+			// Seed the roster from the load payload so the switcher renders
+			// immediately; the agent's hello re-states it authoritatively a
+			// moment later (the load data is only as fresh as the last heartbeat).
+			stationCameras = Array.isArray(station.cameras) ? station.cameras : [];
+			activeCameraId =
+				station.activeCameraId ?? (stationCameras.length > 0 ? stationCameras[0].id : null);
 		} catch (e) {
 			if (isReconnect) { scheduleReconnect(stationId); return; }
 			flashBanner('err', `Failed to fetch station token: ${e instanceof Error ? e.message : e}`);
@@ -637,6 +760,27 @@
 			let msg: any;
 			try { msg = JSON.parse(ev.data); } catch { return; }
 
+			// The agent is authoritative about which optics are live — the load
+			// payload is only as fresh as the last 30 s heartbeat. Applied for
+			// hello and camera_changed alike.
+			if (msg.event === 'hello' || msg.event === 'camera_changed') {
+				if (Array.isArray(msg.cameras)) stationCameras = msg.cameras;
+				if (typeof msg.activeCameraId === 'string') activeCameraId = msg.activeCameraId;
+			}
+
+			if (msg.event === 'camera_changed') {
+				endCameraSwitch();
+				// mjpegUrl is derived from activeCameraId, so the <img> has
+				// already re-requested against the new camera by this point.
+				mjpegError = false;
+				flashBanner(
+					'ok',
+					`Camera: ${activeCamera?.label ?? activeCameraId ?? 'switched'}`,
+					2500
+				);
+				return;
+			}
+
 			if (msg.event === 'hello') {
 				// Single-encoder mode: don't negotiate WebRTC while the MJPEG
 				// view is healthy — the <img> onerror handler falls back to an
@@ -665,6 +809,19 @@
 
 			if (msg.event === 'camera_param_set' && typeof msg.prop === 'string') {
 				cameraParams = { ...cameraParams, [msg.prop]: msg.value };
+				return;
+			}
+
+			// A refused camera switch must re-enable the control and say why —
+			// otherwise the switcher sits disabled until the 15 s safety timeout.
+			if (
+				msg.event === 'error' &&
+				(msg.code === 'select_camera_failed' ||
+					msg.code === 'sequence_running' ||
+					msg.code === 'bad_select_camera')
+			) {
+				endCameraSwitch();
+				flashBanner('err', msg.message || 'Camera switch refused by the station.', 5000);
 				return;
 			}
 
@@ -943,8 +1100,13 @@
 		try {
 			let blob: Blob;
 			if (mjpegShowing && stationHostname && stationToken) {
+				// Same ?camera= assertion as the preview stream: if this tab
+				// thinks the scope is live but the station has since switched,
+				// the agent 409s rather than handing back a frame from the
+				// wrong optics that we'd then file under the wrong photoType.
 				const snapRes = await fetch(
-					`https://${stationHostname}/snapshot.jpg?token=${encodeURIComponent(stationToken)}`
+					`https://${stationHostname}/snapshot.jpg?token=${encodeURIComponent(stationToken)}` +
+						(activeCameraId ? `&camera=${encodeURIComponent(activeCameraId)}` : '')
 				);
 				if (!snapRes.ok) {
 					throw new Error(
@@ -978,6 +1140,10 @@
 			// Sticky view (top/bottom split) — sent when set, NOT reset after capture.
 			if (captureView) form.append('view', captureView);
 			if (selectedStationId) form.append('stationId', selectedStationId);
+			// Which optics took this shot. The server uses it to skip barcode
+			// view auto-classification, phase inference, and the manufacturing
+			// status auto-advance — none of which apply to a scope close-up.
+			if (activeCamera?.role === 'microscope') form.append('photoType', 'microscope');
 
 			const res = await fetch('/api/cv/capture', { method: 'POST', body: form });
 			if (!res.ok) {
@@ -1357,12 +1523,54 @@
 					</select>
 				</div>
 				<div>
-					<label for="cam-sel" class="block text-xs uppercase text-[var(--color-tron-text-secondary)]">Camera</label>
-					<select id="cam-sel" bind:value={selectedCameraId} onchange={() => startCamera()} class="tron-input">
-						{#each cameras as c (c.deviceId)}
-							<option value={c.deviceId}>{c.label || `Camera ${c.deviceId.slice(0, 6)}`}</option>
-						{/each}
-					</select>
+					<span class="block text-xs uppercase text-[var(--color-tron-text-secondary)]">Camera</span>
+					{#if selectedStationId}
+						<!-- Station mode: these are the cameras attached to the Pi, not the
+						     laptop's webcams (which is all this control used to list, making
+						     it meaningless whenever a station was selected). Exactly one is
+						     open at a time — picking one hands the station's single capture
+						     handle over to it. Buttons rather than a <select> on purpose: a
+						     refused switch must leave the control showing what is ACTUALLY
+						     live, and a one-way-bound select would sit on the failed choice. -->
+						<div class="flex flex-wrap items-center gap-1.5 pt-1">
+							{#each stationCameras as c (c.id)}
+								<button
+									type="button"
+									onclick={() => selectCamera(c.id)}
+									disabled={switchingCamera || sequenceRunning || c.id === activeCameraId}
+									title={sequenceRunning
+										? 'Abort the microscope sequence before switching cameras'
+										: c.id === activeCameraId
+											? 'Currently live'
+											: `Switch to ${c.label || c.id}`}
+									class="rounded border px-2 py-1 text-xs font-semibold disabled:opacity-60
+										{c.id === activeCameraId
+											? 'border-[var(--color-tron-cyan)] bg-[rgba(0,212,255,0.15)] text-[var(--color-tron-cyan)]'
+											: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
+								>
+									{c.role === 'microscope' ? '🔬' : '📷'}
+									{c.label || c.id}
+								</button>
+							{:else}
+								<span class="text-xs text-[var(--color-tron-text-secondary)]">(station camera)</span>
+							{/each}
+							{#if switchingCamera}
+								<span class="text-xs text-[var(--color-tron-text-secondary)]">switching…</span>
+							{/if}
+						</div>
+					{:else}
+						<select
+							id="cam-sel"
+							aria-label="Camera"
+							bind:value={selectedCameraId}
+							onchange={() => startCamera()}
+							class="tron-input"
+						>
+							{#each cameras as c (c.deviceId)}
+								<option value={c.deviceId}>{c.label || `Camera ${c.deviceId.slice(0, 6)}`}</option>
+							{/each}
+						</select>
+					{/if}
 				</div>
 			</div>
 		</div>

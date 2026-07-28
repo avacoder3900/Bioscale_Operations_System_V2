@@ -89,8 +89,20 @@ async def _broadcast(message: dict) -> None:
 
 async def health(_request: web.Request) -> web.Response:
     # `capabilities` lets the /capture UI feature-gate. The timed microscope
-    # sequence engine is always compiled in, so "sequence" is always advertised;
-    # the browser still checks camera_ok before offering the Start button.
+    # sequence engine is always compiled in, so "sequence" is advertised
+    # whenever a configured camera enables it — unconditionally true for a
+    # single-camera station, which preserves the historical behavior. The
+    # browser still checks camera_ok before offering the Start button.
+    #
+    # "camera_switch" is what the UI should feature-detect on to show the
+    # camera switcher. Do NOT gate on agent_version: every build shipped so
+    # far reports 0.1.0, so it cannot distinguish them.
+    cameras = camera_mod.list_cameras()
+    capabilities = ["snapshot"]
+    if any(cam["sequence"] for cam in cameras):
+        capabilities.append("sequence")
+    if len(cameras) > 1:
+        capabilities.append("camera_switch")
     return web.json_response(
         {
             "station_id": os.environ.get("STATION_ID", ""),
@@ -98,10 +110,12 @@ async def health(_request: web.Request) -> web.Response:
             "agent_version": __version__,
             "camera_ok": camera_mod.is_available(),
             "camera_profile": camera_mod.profile(),
+            "cameras": cameras,
+            "active_camera_id": camera_mod.active_camera_id(),
             "scanner_ok": scanner_mod.is_available(),
             "led_ok": False,
             "robot_arm_ok": False,
-            "capabilities": ["sequence", "snapshot"],
+            "capabilities": capabilities,
             "uptime_s": int(time.monotonic() - _started_at),
         }
     )
@@ -218,6 +232,10 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
             "event": "hello",
             "station_id": os.environ.get("STATION_ID", ""),
             "agent_version": __version__,
+            # Sent on connect so a freshly-opened tab knows which optics are
+            # live without waiting for a camera_changed broadcast.
+            "cameras": camera_mod.list_cameras(),
+            "activeCameraId": camera_mod.active_camera_id(),
         }
     )
 
@@ -358,6 +376,80 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
                                 "value": actual,
                             }
                         )
+                elif cmd == "select_camera":
+                    # Hand the single capture handle to another camera on this
+                    # station (e.g. overview <-> Celestron microscope). Only one
+                    # is ever open: the device can't be shared, and two live
+                    # JPEG encoders is the load that browned out a station PSU.
+                    #
+                    # Authed by the station JWT taken at connect, with no admin
+                    # claim — same bar as sequence_start. This is an operator
+                    # action, and the BIMS one-operator-per-station lock already
+                    # guarantees a single driver.
+                    camera_id = payload.get("cameraId")
+                    if not isinstance(camera_id, str) or not camera_id:
+                        await ws.send_json(
+                            {
+                                "event": "error",
+                                "code": "bad_select_camera",
+                                "message": "cameraId (string) required",
+                            }
+                        )
+                        continue
+                    if sequence_mod.manager.is_running():
+                        # Swapping optics mid-run would file a split-optics set
+                        # under one sequenceId, with nothing in the payload
+                        # recording which camera took which frame — undetectable
+                        # downstream, so refuse rather than corrupt the run.
+                        await ws.send_json(
+                            {
+                                "event": "error",
+                                "code": "sequence_running",
+                                "message": "cannot switch cameras during a sequence run",
+                            }
+                        )
+                        continue
+                    # Opens a cv2 capture — must not run on the event loop.
+                    switched, detail = await asyncio.to_thread(
+                        camera_mod.switch_camera, camera_id
+                    )
+                    if not switched:
+                        await ws.send_json(
+                            {
+                                "event": "error",
+                                "code": "select_camera_failed",
+                                "message": detail,
+                            }
+                        )
+                        continue
+                    # The range cache was just invalidated (it's per-process but
+                    # the ranges are per-device). Re-warm it off-loop now, or the
+                    # next slider move shells out to v4l2-ctl inline and stalls
+                    # the stream — the same hazard _on_startup warms against.
+                    new_ranges = await asyncio.to_thread(camera_mod.get_camera_ranges)
+                    new_params = await asyncio.to_thread(camera_mod.get_camera_params)
+                    log.info(
+                        "camera switched to %s by operator=%s", camera_id, operator
+                    )
+                    # Broadcast, not send_json: sibling tabs on the same station
+                    # are expected, and a tab left on the old camera would drive
+                    # sliders against the wrong device's ranges.
+                    await _broadcast(
+                        {
+                            "event": "camera_changed",
+                            "cameras": camera_mod.list_cameras(),
+                            "activeCameraId": camera_mod.active_camera_id(),
+                            "cameraOk": camera_mod.is_available(),
+                        }
+                    )
+                    await _broadcast(
+                        {
+                            "event": "camera_params",
+                            "params": new_params,
+                            "known": camera_mod.known_param_names(),
+                            "ranges": new_ranges,
+                        }
+                    )
                 elif cmd == "admin_restart":
                     # Story F1: BIMS admin asks the agent to restart itself.
                     # The known-good workaround for the singleton-track RTP
@@ -521,6 +613,15 @@ async def _heartbeat_loop() -> None:
                 "ledOk": False,
                 "uptimeS": int(time.monotonic() - _started_at),
                 "agentVersion": __version__,
+                # camelCase here, snake_case on /health — the two endpoints
+                # have always differed; matching the neighbours beats
+                # consistency across them.
+                #
+                # The camera list rides the heartbeat as well as registration
+                # so BIMS converges within one interval when a station's
+                # CAMERAS config changes and it restarts without re-registering.
+                "cameras": camera_mod.list_cameras(),
+                "activeCameraId": camera_mod.active_camera_id(),
             }
             try:
                 async with session.post(url, json=body, headers=headers) as resp:
@@ -624,14 +725,25 @@ def build_app() -> web.Application:
     # natively via Tailscale Serve. Same JWT validation as /ws. Uses
     # grab_live (stream resolution) — grab_still renegotiates the sensor
     # per call and must never run per-frame.
+    # An optional ?camera=<id> on either route asserts which optics the caller
+    # expects and 409s on a mismatch, rather than quietly returning frames from
+    # whichever camera happens to be open. It also gives the browser a URL that
+    # actually changes on a switch — the <img> src is otherwise deterministic in
+    # (hostname, token) and would not re-request.
     preview_mod.attach_mjpeg_route(
-        app, camera_mod.grab_live, lambda req: _ws_authenticate(req).ok
+        app,
+        camera_mod.grab_live,
+        lambda req: _ws_authenticate(req).ok,
+        camera_mod.active_camera_id,
     )
     # Single JPEG still for photo capture while WebRTC is torn down
     # (single-encoder mode) — the page fetches this instead of canvasing
     # the <video> element.
     preview_mod.attach_snapshot_route(
-        app, camera_mod.grab_live, lambda req: _ws_authenticate(req).ok
+        app,
+        camera_mod.grab_live,
+        lambda req: _ws_authenticate(req).ok,
+        camera_mod.active_camera_id,
     )
     app.on_startup.append(_on_startup)
     app.on_cleanup.append(_on_cleanup)

@@ -23,6 +23,30 @@ export interface CaptureStationOperator {
 	since: string | Date;
 }
 
+/**
+ * One camera attached to a station (CV-CAMERA-02).
+ *
+ * A Pi may host several — typically an overview camera plus a Celestron
+ * microscope — but exactly one is open at a time: the device can't be shared,
+ * and two simultaneous JPEG encoders is the load that browned out a station
+ * PSU. Declared by the agent's CAMERAS env var; BIMS reflects it, never sets it.
+ */
+export interface CaptureStationCamera {
+	/** Stable per-station id from the agent's CAMERAS config. */
+	id: string;
+	/**
+	 * Typically 'overview' or 'microscope'. Widened to string on purpose so an
+	 * agent can introduce a role without a BIMS deploy to accept it; treat
+	 * anything unrecognized as an overview camera.
+	 */
+	role?: string;
+	label?: string;
+	/** Capture preset the agent applies: 'default' or 'microscope'. */
+	profile?: string;
+	/** Whether the timed grid-sequence engine applies to this camera. */
+	sequence?: boolean;
+}
+
 export interface CaptureStation {
 	_id: string;
 	name: string;
@@ -33,6 +57,13 @@ export interface CaptureStation {
 	lastSeenAt?: string | Date;
 	status?: CaptureStationStatus;
 	capabilities?: CaptureStationCapabilities;
+	/**
+	 * Absent for agents predating CV-CAMERA-02 — treat that as "one unnamed
+	 * camera" and fall back to capabilities.camera, not as "no cameras".
+	 */
+	cameras?: CaptureStationCamera[];
+	/** Which of cameras[] is currently open, as last reported by the agent. */
+	activeCameraId?: string;
 	mode: CaptureStationMode;
 	assignedPhase?: string;
 	currentOperator?: CaptureStationOperator;
@@ -72,6 +103,13 @@ export interface RegisterAgentRequest {
 	hostname: string;
 	ipAddress?: string;
 	capabilities: CaptureStationCapabilities;
+	/**
+	 * Cameras attached to this station (CV-CAMERA-02). Optional: agents
+	 * predating it omit it, and the endpoint must then leave any stored list
+	 * alone rather than clearing it.
+	 */
+	cameras?: CaptureStationCamera[];
+	activeCameraId?: string;
 	agentVersion?: string;
 	/**
 	 * When true on a re-registration call, mints a fresh jwtSecret and
@@ -97,11 +135,23 @@ export interface RegisterAgentResponse {
  * POST /api/cv/stations/[id]/heartbeat.
  */
 export interface HeartbeatRequest {
+	/**
+	 * Health of the camera that is currently OPEN, not of every attached
+	 * camera. An idle second camera must never drag a station to 'degraded'.
+	 */
 	cameraOk: boolean;
 	scannerOk: boolean;
 	ledOk: boolean;
 	uptimeS: number;
 	agentVersion?: string;
+	/**
+	 * Camera list + active selection ride the heartbeat as well as
+	 * registration, so BIMS converges within one interval when a station's
+	 * CAMERAS config changes and it restarts without re-registering.
+	 * Optional — omitted by agents predating CV-CAMERA-02.
+	 */
+	cameras?: CaptureStationCamera[];
+	activeCameraId?: string;
 }
 
 export type LockStationResponse =

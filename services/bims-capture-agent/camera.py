@@ -6,6 +6,14 @@ a tuning preset is selectable (CAMERA_PROFILE env — 'default' or 'microscope')
 If the camera isn't present, `is_available()` returns False and /health surfaces
 camera_ok=False — the agent stays up so the scanner / LED can still work.
 
+A station may have several cameras physically attached (e.g. an overview cam
+plus a Celestron microscope) — describe them in the CAMERAS env var and switch
+between them at runtime with switch_camera(). Exactly ONE is open at a time:
+the device can't be opened concurrently, and dual JPEG encode is what browned
+out a station PSU (see preview.py + the single-encoder rule). CAMERAS unset is
+the historical single-camera behavior, synthesized from CAMERA_DEVICE /
+CAMERA_PROFILE so pre-existing stations need no config change.
+
 WebRTC frame budget on Pi 4: ~720p at 15 fps (see PRD §5.3). The WebRTC track is
 downsampled to that ceiling in recv(); `grab_still()` returns a full-resolution
 frame from the *same* capture handle for the timed microscope sequence (see
@@ -19,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import glob
+import json
 import logging
 import os
 import re
@@ -81,6 +90,106 @@ _PROFILE_DIMS: dict[str, tuple[int, int]] = {
 # Resolved once, lazily, to an OpenCV-openable source (int index or str path).
 _CAMERA_DEVICE_ENV = os.environ.get("CAMERA_DEVICE", "").strip()
 _resolved_source: Optional[object] = None
+
+# CAMERAS: optional JSON array describing every camera attached to this station:
+#   [{"id":"overview","role":"overview","label":"Overview",
+#     "device":"/dev/v4l/by-id/usb-HD_USB_Camera_HD_USB_Camera-video-index0",
+#     "profile":"default"},
+#    {"id":"scope","role":"microscope","label":"Microscope",
+#     "device":"celestron","profile":"microscope","sequence":true}]
+#
+# `device` takes the same spec as CAMERA_DEVICE (index / /dev path / name
+# substring). Prefer a /dev/v4l/by-id/... path: the kernel already keys those by
+# USB vendor+product, so they stay correct across reboots and re-plugging even
+# though the /dev/videoN numbering does not. Name substrings ("celestron") work
+# too and are resolved by _resolve_device_by_name, which skips the phantom
+# metadata node UVC cameras expose alongside the real one.
+_CAMERAS_ENV = os.environ.get("CAMERAS", "").strip()
+
+
+def _normalize_camera(raw: object, index: int) -> Optional[dict]:
+    """Coerce one CAMERAS entry into the internal spec shape, or None if junk."""
+    if not isinstance(raw, dict):
+        log.warning("CAMERAS[%d] is not an object — ignoring", index)
+        return None
+    cam_id = str(raw.get("id") or "").strip() or f"cam{index}"
+    profile = str(raw.get("profile") or "default").strip().lower() or "default"
+    if profile not in _PROFILE_DIMS:
+        log.warning("camera %r: unknown profile %r — using 'default'", cam_id, profile)
+        profile = "default"
+    default_role = "microscope" if profile == "microscope" else "overview"
+    role = str(raw.get("role") or default_role).strip().lower() or default_role
+    device = raw.get("device")
+    return {
+        "id": cam_id,
+        "role": role,
+        "label": str(raw.get("label") or cam_id),
+        "device": ("" if device is None else str(device).strip()),
+        "profile": profile,
+        # The timed grid-sequence engine only makes sense through fixed optics,
+        # so it defaults on for microscope-role cameras and off for the rest.
+        "sequence": bool(raw.get("sequence", role == "microscope")),
+    }
+
+
+def _load_camera_specs() -> list[dict]:
+    """Parse CAMERAS, or synthesize the historical single-camera arrangement.
+
+    The fallback keeps sequence=True regardless of profile: the agent has always
+    advertised the sequence capability unconditionally, and silently revoking it
+    from a default-profile station that uses timed runs would be a regression.
+    Per-camera gating therefore only applies once CAMERAS is explicitly set.
+    """
+    if _CAMERAS_ENV:
+        try:
+            parsed = json.loads(_CAMERAS_ENV)
+        except ValueError:
+            log.exception("CAMERAS is not valid JSON — falling back to CAMERA_DEVICE")
+            parsed = None
+        if isinstance(parsed, list):
+            specs: list[dict] = []
+            seen: set[str] = set()
+            for i, raw in enumerate(parsed):
+                spec = _normalize_camera(raw, i)
+                if spec is None:
+                    continue
+                if spec["id"] in seen:
+                    log.warning("duplicate camera id %r in CAMERAS — ignoring", spec["id"])
+                    continue
+                seen.add(spec["id"])
+                specs.append(spec)
+            if specs:
+                return specs
+            log.warning("CAMERAS yielded no usable entries — falling back to CAMERA_DEVICE")
+        elif parsed is not None:
+            log.warning("CAMERAS must be a JSON array — falling back to CAMERA_DEVICE")
+    is_scope = _CAMERA_PROFILE == "microscope"
+    return [
+        {
+            "id": "microscope" if is_scope else "default",
+            "role": "microscope" if is_scope else "overview",
+            "label": "Microscope" if is_scope else "Camera",
+            "device": _CAMERA_DEVICE_ENV,
+            "profile": _CAMERA_PROFILE,
+            "sequence": True,
+        }
+    ]
+
+
+_CAMERA_SPECS: list[dict] = _load_camera_specs()
+# Which camera is currently open. In-memory only: env is read at import and
+# systemd re-reads EnvironmentFile on restart, so a restart intentionally
+# returns the station to its configured default.
+_active_camera_id: str = _CAMERA_SPECS[0]["id"]
+
+
+def _camera_spec(camera_id: Optional[str] = None) -> dict:
+    """The spec for `camera_id`, or the active one. Falls back to the first."""
+    target = camera_id or _active_camera_id
+    for spec in _CAMERA_SPECS:
+        if spec["id"] == target:
+            return spec
+    return _CAMERA_SPECS[0]
 
 # Friendly-name → (cv2.CAP_PROP_*, value-type, [min, max], rough-typical-range)
 # Operators send {prop: "exposure", value: -5}; we map to the cv2 enum here
@@ -196,15 +305,21 @@ def _resolve_device_by_name(substr: str) -> Optional[str]:
     return f"/dev/video{min(matches)}"
 
 
-def _resolve_device() -> object:
-    """Resolve CAMERA_DEVICE to an OpenCV source: an int index or a str path.
+def _resolve_device(spec: Optional[str] = None) -> object:
+    """Resolve a device spec to an OpenCV source: an int index or a str path.
 
-    Accepts an integer index ("0"), a device path ("/dev/video2"), or a
-    case-insensitive name substring ("celestron"). Unset → index 0 (the
-    historical /dev/video0 default). A name that can't be resolved (or Windows,
-    where name matching is unsupported) falls back to index 0.
+    Accepts an integer index ("0"), a device path ("/dev/video2", or a stable
+    "/dev/v4l/by-id/usb-..." symlink), or a case-insensitive name substring
+    ("celestron"). Empty/unset → index 0 (the historical /dev/video0 default).
+    A name that can't be resolved (or Windows, where name matching is
+    unsupported) falls back to index 0.
+
+    `spec` defaults to the active camera's device so existing callers that
+    passed nothing keep resolving the camera that is actually open.
     """
-    spec = _CAMERA_DEVICE_ENV
+    if spec is None:
+        spec = _camera_spec()["device"]
+    spec = (spec or "").strip()
     if not spec:
         return 0
     if spec.isdigit():
@@ -214,20 +329,25 @@ def _resolve_device() -> object:
     resolved = _resolve_device_by_name(spec)
     if resolved is not None:
         return resolved
-    log.warning("CAMERA_DEVICE=%r unresolved — falling back to index 0", spec)
+    log.warning("camera device spec %r unresolved — falling back to index 0", spec)
     return 0
 
 
 def _camera_source() -> object:
-    """Lazily resolve + cache the OpenCV source for CAMERA_DEVICE."""
+    """Lazily resolve + cache the OpenCV source for the ACTIVE camera.
+
+    Cleared by switch_camera() so the next resolve targets the new device.
+    """
     global _resolved_source
     if _resolved_source is None:
-        _resolved_source = _resolve_device()
+        spec = _camera_spec()
+        _resolved_source = _resolve_device(spec["device"])
         log.info(
-            "camera source resolved to %r (CAMERA_DEVICE=%r, profile=%s)",
+            "camera source resolved to %r (camera=%s, device=%r, profile=%s)",
             _resolved_source,
-            _CAMERA_DEVICE_ENV or "<unset>",
-            _CAMERA_PROFILE,
+            spec["id"],
+            spec["device"] or "<unset>",
+            spec["profile"],
         )
     return _resolved_source
 
@@ -245,9 +365,11 @@ def _open_capture(source: object) -> "cv2.VideoCapture":
     return cv2.VideoCapture(source, cv2.CAP_V4L2)
 
 
-def _profile_dims() -> tuple[int, int]:
-    """Capture (not streaming) resolution for the active CAMERA_PROFILE."""
-    return _PROFILE_DIMS.get(_CAMERA_PROFILE, _PROFILE_DIMS["default"])
+def _profile_dims(profile: Optional[str] = None) -> tuple[int, int]:
+    """Capture (not streaming) resolution for a profile — active one by default."""
+    if profile is None:
+        profile = _camera_spec()["profile"]
+    return _PROFILE_DIMS.get(profile, _PROFILE_DIMS["default"])
 
 
 class CameraTrack(VideoStreamTrack):
@@ -255,16 +377,23 @@ class CameraTrack(VideoStreamTrack):
 
     kind = "video"
 
-    def __init__(self) -> None:
+    def __init__(self, source: Optional[object] = None, profile: Optional[str] = None) -> None:
         super().__init__()
-        source = _camera_source()
+        # Both default to the active camera. Passing them explicitly is what
+        # lets switch_camera() build a track for a DIFFERENT camera without
+        # mutating module state until the new handle is known-good.
+        if source is None:
+            source = _camera_source()
+        if profile is None:
+            profile = _camera_spec()["profile"]
+        self._profile = profile
         # LIVE/STILL SPLIT: the shared handle runs at the STREAM resolution so
         # the live pipeline (decode → encode) costs the same as a plain webcam
         # (~0.9 MP/frame at 720p, vs 2 MP when we captured 1080p and shrank
         # every frame). grab_still() renegotiates the sensor to the profile's
         # full still resolution per shot and restores — ~100-300 ms per still,
         # invisible at multi-second sequence intervals.
-        still_w, still_h = _profile_dims()
+        still_w, still_h = _profile_dims(profile)
         cap_w = min(still_w, _STREAM_WIDTH)
         cap_h = min(still_h, _STREAM_HEIGHT)
         self._still_w, self._still_h = still_w, still_h
@@ -290,7 +419,7 @@ class CameraTrack(VideoStreamTrack):
             # frame. The OpenCV default (~4 frames) serves stale frames,
             # which reads as ~250ms of extra display lag at 15 fps.
             self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            if _CAMERA_PROFILE == "microscope":
+            if profile == "microscope":
                 # Fixed optics: disable autofocus + auto-exposure so a timed
                 # run of stills is consistent shot-to-shot. Values remain live-
                 # adjustable via set_param() from the /capture tuning sliders.
@@ -304,7 +433,7 @@ class CameraTrack(VideoStreamTrack):
                 source,
                 self._native_w,
                 self._native_h,
-                _CAMERA_PROFILE,
+                profile,
                 _STREAM_WIDTH,
                 _STREAM_HEIGHT,
                 _TARGET_FPS,
@@ -408,11 +537,14 @@ class CameraTrack(VideoStreamTrack):
                 self._next_deadline = time.monotonic() + _FRAME_INTERVAL
 
         pts, time_base = await self.next_timestamp()
-        if self.is_open():
-            with self._read_lock:
+        # The open-check must happen INSIDE the lock: checking outside it and
+        # dereferencing inside leaves a window where close() can release the
+        # handle in between (switch_camera closes live handles).
+        with self._read_lock:
+            if self._cap is not None and self._cap.isOpened():
                 ok, frame_bgr = self._cap.read()
-        else:
-            ok, frame_bgr = False, None
+            else:
+                ok, frame_bgr = False, None
         if not ok or frame_bgr is None:
             # Black frame keeps the track alive when the camera glitches —
             # the client sees blank video rather than a torn-down connection.
@@ -442,23 +574,37 @@ class CameraTrack(VideoStreamTrack):
         return video_frame
 
     def close(self) -> None:
-        if self._cap is not None:
-            try:
-                self._cap.release()
-            finally:
-                self._cap = None
+        """Release the capture handle.
+
+        Takes _read_lock: calling release() while another thread sits inside
+        self._cap.read() is a use-after-free on the V4L2 capture object inside
+        OpenCV — not a Python exception anything can catch. That was latent
+        while close() only ever ran on a failed open; switch_camera() closes
+        live handles, so the lock is now load-bearing.
+        """
+        with self._read_lock:
+            if self._cap is not None:
+                try:
+                    self._cap.release()
+                finally:
+                    self._cap = None
 
     # ---------------- camera parameter set/get -------------------------
     def get_param(self, name: str) -> Optional[float]:
         """Read one CAP_PROP value from the underlying cv2 capture."""
-        if self._cap is None or name not in CAMERA_PROPS:
+        if name not in CAMERA_PROPS:
             return None
         cv_prop, _, _, _ = CAMERA_PROPS[name]
-        try:
-            return float(self._cap.get(cv_prop))
-        except Exception:
-            log.exception("camera get_param(%s) failed", name)
-            return None
+        # Same lock as the reads — a cv2 get() against a handle close() is
+        # releasing is the same use-after-free as a read().
+        with self._read_lock:
+            if self._cap is None:
+                return None
+            try:
+                return float(self._cap.get(cv_prop))
+            except Exception:
+                log.exception("camera get_param(%s) failed", name)
+                return None
 
     def get_all_params(self) -> dict[str, float]:
         """Read every known CAP_PROP. Returns name → value. Skips props
@@ -475,24 +621,29 @@ class CameraTrack(VideoStreamTrack):
         """Write one CAP_PROP and return the value the camera reports back
         after the set (which may be clamped or rejected). Returns None if
         the prop isn't recognized or the cv2 call failed."""
-        if self._cap is None or name not in CAMERA_PROPS:
+        if name not in CAMERA_PROPS:
             return None
         cv_prop, _, lo, hi = CAMERA_PROPS[name]
         # Prefer the camera's real V4L2 range so we don't squeeze the value into
         # our advisory guess before the driver ever sees it (the bug behind
         # "the slider won't reach the shown limit"). Falls back to CAMERA_PROPS.
+        # Resolved BEFORE taking _read_lock: on a cold cache this shells out to
+        # v4l2-ctl for up to 5s, which would stall every reader if held.
         real = get_camera_ranges().get(name)
         if real:
             lo, hi = real["min"], real["max"]
         clamped = max(lo, min(hi, value))
-        try:
-            self._cap.set(cv_prop, clamped)
-            actual = float(self._cap.get(cv_prop))
-            log.info("camera set %s=%s (actual=%s)", name, clamped, actual)
-            return actual
-        except Exception:
-            log.exception("camera set_param(%s, %s) failed", name, value)
-            return None
+        with self._read_lock:
+            if self._cap is None:
+                return None
+            try:
+                self._cap.set(cv_prop, clamped)
+                actual = float(self._cap.get(cv_prop))
+            except Exception:
+                log.exception("camera set_param(%s, %s) failed", name, value)
+                return None
+        log.info("camera set %s=%s (actual=%s)", name, clamped, actual)
+        return actual
 
 
 def _ensure_source_track() -> Optional[CameraTrack]:
@@ -516,6 +667,120 @@ def _ensure_source_track() -> Optional[CameraTrack]:
             _relay = MediaRelay()
             _camera_ok = True
         return _track
+
+
+def list_cameras() -> list[dict]:
+    """Every configured camera, with the active one flagged. For /health + UI."""
+    return [
+        {
+            "id": spec["id"],
+            "role": spec["role"],
+            "label": spec["label"],
+            "profile": spec["profile"],
+            "sequence": spec["sequence"],
+            "active": spec["id"] == _active_camera_id,
+        }
+        for spec in _CAMERA_SPECS
+    ]
+
+
+def active_camera_id() -> str:
+    """Id of the camera currently open."""
+    return _active_camera_id
+
+
+def active_camera() -> dict:
+    """Spec of the camera currently open (id/role/label/profile/sequence)."""
+    spec = _camera_spec()
+    return {
+        "id": spec["id"],
+        "role": spec["role"],
+        "label": spec["label"],
+        "profile": spec["profile"],
+        "sequence": spec["sequence"],
+    }
+
+
+def switch_camera(camera_id: str) -> tuple[bool, str]:
+    """Hand the single capture handle over to `camera_id`. Returns (ok, message).
+
+    Exactly one camera is open at a time — the device can't be opened twice,
+    and two simultaneous JPEG encoders is the load that browned out a station
+    PSU. The new camera is opened BEFORE the old one is closed so a failed
+    switch leaves the station exactly as it was rather than off the air; the
+    two handles overlap only for the duration of the open, and only one of
+    them is ever read.
+
+    Callers must reject this while a sequence run is in flight — swapping
+    optics mid-run would produce a split-optics set under one sequenceId with
+    nothing recording which camera shot which frame.
+    """
+    global _track, _relay, _camera_ok, _resolved_source, _v4l2_ranges_cache
+    global _active_camera_id
+
+    target: Optional[dict] = None
+    for spec in _CAMERA_SPECS:
+        if spec["id"] == camera_id:
+            target = spec
+            break
+    if target is None:
+        return False, f"unknown camera {camera_id!r}"
+
+    with _track_lock:
+        if camera_id == _active_camera_id and _track is not None and _track.is_open():
+            return True, "already active"
+        previous_id = _active_camera_id
+        previous = _track
+        source = _resolve_device(target["device"])
+        # Two specs can legitimately resolve to the same node (e.g. an operator
+        # defined two profiles over one lens). Opening it twice would fail, so
+        # release first and accept the brief gap.
+        if previous is not None and _resolved_source is not None and source == _resolved_source:
+            previous.close()
+            previous = None
+        try:
+            candidate: Optional[CameraTrack] = CameraTrack(
+                source=source, profile=target["profile"]
+            )
+        except Exception:
+            log.exception("switch_camera(%s): failed to construct track", camera_id)
+            candidate = None
+        if candidate is not None and not candidate.is_open():
+            candidate.close()
+            candidate = None
+        if candidate is None:
+            if previous is not None:
+                return False, f"camera {camera_id!r} failed to open"
+            # The old handle is already gone (same-device case) — the station
+            # has no camera now, so report it rather than claiming success.
+            _track = None
+            _camera_ok = False
+            return False, f"camera {camera_id!r} failed to open and the previous one was released"
+        if previous is not None:
+            previous.close()
+        _track = candidate
+        # Fresh relay: existing WebRTC subscribers are bound to the old track
+        # and would starve. Browsers recover with webrtc_stop + a new offer;
+        # the MJPEG station view needs nothing, since preview.py calls the
+        # module-level grab_live() per frame rather than holding a track.
+        _relay = MediaRelay()
+        _camera_ok = True
+        _active_camera_id = camera_id
+        _resolved_source = source
+        # Control ranges are per-DEVICE, but this cache is per-process and
+        # set_param() clamps against it — leaving it stale would silently
+        # squeeze values into the previous camera's range before the driver
+        # ever saw them. Callers should re-warm it off the event loop.
+        _v4l2_ranges_cache = None
+
+    log.info(
+        "camera switched: %s -> %s (source=%r, profile=%s)",
+        previous_id,
+        camera_id,
+        source,
+        target["profile"],
+    )
+    return True, "ok"
 
 
 def get_camera_track():
@@ -608,8 +873,8 @@ def exit_still_mode() -> None:
 
 
 def profile() -> str:
-    """Active CAMERA_PROFILE ('default' or 'microscope'). For /health + logging."""
-    return _CAMERA_PROFILE
+    """Active camera's profile ('default' or 'microscope'). For /health + logging."""
+    return _camera_spec()["profile"]
 
 
 def _query_v4l2_ranges() -> dict[str, dict]:

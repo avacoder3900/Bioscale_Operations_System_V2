@@ -19,7 +19,10 @@
  */
 import { json, error } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
-import { CaptureStation } from '$lib/server/db/models/capture-station.js';
+import {
+	CaptureStation,
+	normalizeStationCameras
+} from '$lib/server/db/models/capture-station.js';
 import { requireStationAgentKey } from '$lib/server/auth/station-agent-key';
 import type { RequestHandler } from './$types';
 import type { HeartbeatRequest } from '$lib/types/capture-station';
@@ -44,8 +47,21 @@ export const POST: RequestHandler = async ({ params, request }) => {
 	const agentVersion =
 		typeof body.agentVersion === 'string' ? body.agentVersion : undefined;
 
+	// cameraOk is the health of the camera that is currently OPEN — the agent
+	// reports one capture handle, not a per-camera roll-up. Keep it that way:
+	// AND-ing every attached camera here would let an idle second camera drag
+	// a perfectly healthy station to 'degraded'.
 	const status: 'online' | 'degraded' =
 		cameraOk && scannerOk ? 'online' : 'degraded';
+
+	// Only $set these when the agent actually sent them. Agents predating
+	// CV-CAMERA-02 omit both, and writing undefined would clear a station's
+	// camera list on its next reboot.
+	const cameras = normalizeStationCameras(body.cameras);
+	const activeCameraId =
+		typeof body.activeCameraId === 'string' && body.activeCameraId.trim()
+			? body.activeCameraId.trim()
+			: undefined;
 
 	await connectDB();
 
@@ -64,7 +80,9 @@ export const POST: RequestHandler = async ({ params, request }) => {
 					ledOk,
 					uptimeS,
 					agentVersion
-				}
+				},
+				...(cameras ? { cameras } : {}),
+				...(activeCameraId ? { activeCameraId } : {})
 			}
 		}
 	);

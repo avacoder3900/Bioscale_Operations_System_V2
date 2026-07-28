@@ -12,7 +12,11 @@ Validated against `bims-capture-agent` branch, commit `f1109e8b` and later.
 
 - Raspberry Pi 5 (2GB or 4GB), with a 5V/5A USB-C PD supply (5V/3A works but may undervolt)
 - microSD card, 32GB+, flashed with Raspberry Pi OS Bookworm/Trixie (64-bit recommended)
-- USB UVC webcam at `/dev/video0` (any standard UVC camera; LED-ringed ones are easier to light)
+- One or more USB UVC cameras (any standard UVC camera; LED-ringed ones are easier to light).
+  A station may have several — e.g. an overview camera plus a Celestron microscope — with
+  exactly one open at a time; see `CAMERAS` in README.md. Do **not** assume `/dev/video0`:
+  numbering shifts across reboots and re-plugging, so refer to cameras by their stable
+  `/dev/v4l/by-id/...` symlink.
 - Waveshare Barcode Scanner Module (VID `0218` / PID `0210`) — **must be set to Continuous Mode** with HID keyboard interface (see "First-time scanner setup" below)
 - Ethernet cable (for initial setup with ICS), or known WiFi network the Pi can join
 
@@ -340,7 +344,8 @@ Look for:
 ```
 Active: active (running)
 INFO bims-capture-agent: starting bims-capture-agent v0.1.0 on 0.0.0.0:8765
-INFO bims-capture-agent.camera: camera opened: 1280x720 native, target 1280x720 @ 15 fps
+INFO bims-capture-agent.camera: camera source resolved to '/dev/video0' (camera=default, device='<unset>', profile=default)
+INFO bims-capture-agent.camera: camera opened: source='/dev/video0' 1280x720 native, profile=default, stream ceiling 1280x720 @ 15 fps
 INFO bims-capture-agent: camera ready
 INFO bims-capture-agent.scanner: scanner reading from /dev/input/event5 (USBScn Chip USBScn Module)
 ```
@@ -504,10 +509,14 @@ If something breaks (rebooted Pi, network changed, agent died, env edited by acc
 
 4. **Confirm hardware is detected**
    ```bash
-   lsusb | grep -E "Camera|USBScn"
-   ls /dev/video0 /dev/input/by-id/usb-USBScn*
+   lsusb | grep -E "Camera|Celestron|USBScn"
+   ls /dev/v4l/by-id/ /dev/input/by-id/usb-USBScn*
    ```
-   If either is missing, replug the USB cable.
+   If either is missing, replug the USB cable. Use `/dev/v4l/by-id/` rather than
+   `/dev/video0` — it lists every attached camera under a stable, vendor-keyed name, which
+   is what a multi-camera station's `CAMERAS` entries should reference. Each UVC camera
+   normally shows **two** entries (`-index0` and `-index1`); only `-index0` yields frames,
+   `-index1` is the metadata node.
 
 5. **Check the systemd service**
    ```bash

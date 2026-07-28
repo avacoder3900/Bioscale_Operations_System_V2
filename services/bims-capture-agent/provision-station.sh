@@ -112,6 +112,24 @@ WIFI_SSID=${WIFI_SSID}
 CLOUDFLARE_TUNNEL_TOKEN=
 STATION_AGENT_KEY=${STATION_AGENT_KEY}
 PORT=8765
+
+# --- Cameras (optional) ---------------------------------------------------
+# Leave CAMERAS unset for a single-camera station: the agent falls back to
+# CAMERA_DEVICE / CAMERA_PROFILE, which is the historical behavior.
+#
+# For a station with several cameras (e.g. overview + Celestron microscope),
+# set CAMERAS to a JSON array. Only ONE is ever open at a time; the operator
+# switches from /capture. Find stable device paths with:
+#     ls /dev/v4l/by-id/
+# and use the -index0 entry for each camera (-index1 is the metadata node,
+# which opens fine but never yields frames). Prefer by-id paths over
+# /dev/videoN — the numbering moves across reboots and re-plugging.
+#
+# CAMERAS=[{"id":"overview","role":"overview","label":"Overview","device":"/dev/v4l/by-id/usb-HD_USB_Camera_HD_USB_Camera-video-index0","profile":"default"},{"id":"scope","role":"microscope","label":"Microscope","device":"/dev/v4l/by-id/usb-Celestron_Imager_HD_Celestron_Imager_HD-video-index0","profile":"microscope"}]
+#
+# Note: this file is only written when it does not already exist, so adding
+# CAMERAS to an existing station is a manual edit followed by
+#     sudo systemctl restart bims-capture-agent
 EOF
     install -o root -g root -m 0600 "${tmp}" "${ENV_FILE}"
     rm -f "${tmp}"

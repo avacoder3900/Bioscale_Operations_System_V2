@@ -38,6 +38,54 @@ The camera is no longer hardcoded to `/dev/video0`:
   stills, applies no color pipeline). Live tuning from the `/capture` sliders
   keeps working in either profile.
 
+### Multiple cameras on one station (CV-CAMERA-02)
+
+A station can have several cameras attached — typically an overview camera plus
+the Celestron microscope — described by **`CAMERAS`**, a JSON array:
+
+```json
+[{"id":"overview","role":"overview","label":"Overview",
+  "device":"/dev/v4l/by-id/usb-HD_USB_Camera_HD_USB_Camera-video-index0",
+  "profile":"default"},
+ {"id":"scope","role":"microscope","label":"Microscope",
+  "device":"celestron","profile":"microscope","sequence":true}]
+```
+
+- `device` takes the same spec as `CAMERA_DEVICE`. **Prefer a
+  `/dev/v4l/by-id/...` path** — the kernel keys those by USB vendor+product, so
+  they survive reboots and re-plugging, while `/dev/videoN` numbering does not.
+  Run `ls /dev/v4l/by-id/` on the station to find them. No udev rules needed.
+- `role` is `overview` or `microscope`; it decides the `photoType` recorded on
+  photos taken through that camera.
+- `sequence` defaults to true for microscope-role cameras and false otherwise.
+- **`CAMERAS` unset** → a single camera is synthesized from `CAMERA_DEVICE` /
+  `CAMERA_PROFILE`, which is exactly the historical behavior. Existing stations
+  need no config change.
+
+**Exactly one camera is open at a time.** The device can't be opened twice, and
+running two JPEG encoders at once is what browned out station 3's PSU — a switch
+is a hand-off, not a second stream. Switch from the `/capture` camera buttons, or
+over `/ws`:
+
+- `{cmd:"select_camera", cameraId}` — hand the capture handle to that camera.
+  Refused with an `error` event (`sequence_running`) while a sequence run is
+  active: swapping optics mid-run would file a split-optics set under one
+  `sequenceId` with nothing recording which camera shot which frame.
+- `{event:"camera_changed", cameras, activeCameraId, cameraOk}` — **broadcast**
+  to every connected client, followed by a fresh `camera_params`, so sibling
+  tabs don't keep driving the previous camera's control ranges.
+
+`/health` reports `cameras[]`, `active_camera_id`, and advertises
+`camera_switch` in `capabilities` — feature-detect on that, **not** on
+`agent_version`, which has read `0.1.0` across every build shipped so far.
+
+`/preview.mjpg` and `/snapshot.jpg` accept an optional `?camera=<id>` that
+asserts which optics the caller expects and returns **409** on a mismatch,
+rather than silently serving frames from whichever camera happens to be open.
+
+The active camera is in-memory only: a restart returns the station to the first
+entry in `CAMERAS`.
+
 ## Microscope sequence engine
 
 After a cartridge scan-lock, a run of full-resolution stills is captured on a
@@ -102,7 +150,8 @@ Required keys:
 |---|---|
 | `STATION_ID` | UUID assigned at provisioning time. Stable for the life of the SD card. |
 | `STATION_NAME` | Human-friendly label, e.g. `"Wax Fill Bench 1"`. |
-| `STATION_TOKEN` | Shared secret required in the `X-Station-Token` header on `/ws`. |
+| `STATION_TOKEN` | **Vestigial — the agent never reads it.** `/ws` auth is the per-station HS256 JWT in `STATION_JWT_SECRET`; the `X-Station-Token` header carries that JWT, not this value. Still written by the provisioning scripts. |
+| `STATION_JWT_SECRET` | HS256 secret for verifying browser→Pi auth JWTs. Appended by the provisioning scripts after a successful registration. Empty → all `/ws`, `/preview.mjpg`, and `/snapshot.jpg` requests are rejected. |
 | `BIMS_URL` | Origin used for self-registration + sequence ingest calls back to BIMS. |
 | `PORT` | Optional; defaults to `8765`. |
 
@@ -110,8 +159,9 @@ Optional camera + sequence keys (all have defaults):
 
 | Key | Default | Purpose |
 |---|---|---|
-| `CAMERA_DEVICE` | `0` | Camera selector: index, `/dev/videoN` path, or name substring (Linux only for names). |
-| `CAMERA_PROFILE` | `default` | `default` (1280×720) or `microscope` (1920×1080, AF/AE off). |
+| `CAMERAS` | — | JSON array of cameras on this station (see "Multiple cameras" above). Unset → one camera synthesized from `CAMERA_DEVICE`/`CAMERA_PROFILE`. |
+| `CAMERA_DEVICE` | `0` | Single-camera selector: index, `/dev/videoN` path, or name substring (Linux only for names). Ignored when `CAMERAS` is set. |
+| `CAMERA_PROFILE` | `default` | `default` (1280×720) or `microscope` (1920×1080, AF/AE off). Ignored when `CAMERAS` is set — each entry carries its own `profile`. |
 | `SEQUENCE_COUNT` | `15` | Default stills per run (per-run overridable). |
 | `SEQUENCE_INTERVAL_MS` | `2000` | Milliseconds between shots (per-run overridable). |
 | `GRID_ROWS` | `3` | Grid rows for location stamping; `GRID_ROWS*GRID_COLS` must equal count. |

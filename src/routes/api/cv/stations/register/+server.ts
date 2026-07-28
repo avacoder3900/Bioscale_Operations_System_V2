@@ -20,7 +20,10 @@
 import { json, error } from '@sveltejs/kit';
 import { randomBytes } from 'node:crypto';
 import { connectDB } from '$lib/server/db/connection.js';
-import { CaptureStation } from '$lib/server/db/models/capture-station.js';
+import {
+	CaptureStation,
+	normalizeStationCameras
+} from '$lib/server/db/models/capture-station.js';
 import { AuditLog } from '$lib/server/db/models/audit-log.js';
 import { generateId } from '$lib/server/db/utils.js';
 import { requireStationAgentKey } from '$lib/server/auth/station-agent-key';
@@ -44,7 +47,29 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (!name) return json({ error: 'name is required' }, { status: 400 });
 	if (!hostname) return json({ error: 'hostname is required' }, { status: 400 });
 
-	const capabilities = body.capabilities ?? {
+	const cameras = normalizeStationCameras(body.cameras);
+	const activeCameraId =
+		typeof body.activeCameraId === 'string' && body.activeCameraId.trim()
+			? body.activeCameraId.trim()
+			: undefined;
+
+	// Derive the legacy capability booleans from cameras[] whenever the agent
+	// reports one, so readers that predate CV-CAMERA-02 — the /capture sequence
+	// panel gate, the stations table — keep working with no change.
+	const cameraDerived = cameras
+		? { camera: true, sequence: cameras.some((c) => c.sequence === true) }
+		: null;
+
+	// Only overwrite stored capabilities when the request actually carried them
+	// (or we derived them). This previously $set an all-false default
+	// unconditionally, which meant one reboot of an agent that omits
+	// capabilities silently stripped the station of every capability it had.
+	const capabilities =
+		body.capabilities || cameraDerived
+			? { ...(body.capabilities ?? {}), ...(cameraDerived ?? {}) }
+			: null;
+
+	const CAPABILITY_DEFAULTS = {
 		camera: false,
 		scanner: false,
 		led: false,
@@ -65,9 +90,11 @@ export const POST: RequestHandler = async ({ request }) => {
 		const update: Record<string, unknown> = {
 			lastSeenAt: now,
 			agentVersion: body.agentVersion,
-			capabilities,
 			ipAddress: body.ipAddress ?? existing.ipAddress,
-			status: 'online'
+			status: 'online',
+			...(capabilities ? { capabilities } : {}),
+			...(cameras ? { cameras } : {}),
+			...(activeCameraId ? { activeCameraId } : {})
 		};
 
 		let mintedSecret: string | undefined;
@@ -86,7 +113,9 @@ export const POST: RequestHandler = async ({ request }) => {
 			newData: {
 				hostname,
 				agentVersion: body.agentVersion,
-				capabilities,
+				capabilities: capabilities ?? undefined,
+				cameras: cameras ?? undefined,
+				activeCameraId,
 				ipAddress: body.ipAddress,
 				source: 'agent-self-register',
 				rotated: regenerate
@@ -113,7 +142,9 @@ export const POST: RequestHandler = async ({ request }) => {
 		hostname,
 		ipAddress: body.ipAddress,
 		agentVersion: body.agentVersion,
-		capabilities,
+		capabilities: capabilities ?? CAPABILITY_DEFAULTS,
+		...(cameras ? { cameras } : {}),
+		...(activeCameraId ? { activeCameraId } : {}),
 		status: 'online',
 		mode: 'free',
 		lastSeenAt: now,

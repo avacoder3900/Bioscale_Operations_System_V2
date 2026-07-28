@@ -8,7 +8,11 @@
 import { redirect } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
-import { CaptureStation, deriveStatus } from '$lib/server/db/models/capture-station.js';
+import {
+	CaptureStation,
+	deriveStatus,
+	effectiveCameras
+} from '$lib/server/db/models/capture-station.js';
 import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { FailureLabel } from '$lib/server/db/models/failure-label.js';
 import type { PageServerLoad } from './$types';
@@ -42,13 +46,17 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// the payload — operator fetches one on demand via /api/cv/stations/[id]/token.
 	const stationsRaw = await CaptureStation.find()
 		.select(
-			'_id name hostname capabilities mode assignedPhase status lastSeenAt currentOperator'
+			'_id name hostname capabilities cameras activeCameraId mode assignedPhase status lastSeenAt currentOperator'
 		)
 		.sort({ name: 1 })
 		.lean();
 	const stations = stationsRaw.map((s: any) => ({
 		...s,
 		status: deriveStatus(s),
+		// Stations whose agent predates CV-CAMERA-02 report no cameras[]; that
+		// means one unnamed camera, not zero, so the switcher can render a
+		// consistent list without every consumer re-deriving the fallback.
+		cameras: effectiveCameras(s),
 		currentOperator: s.currentOperator
 			? {
 					_id: s.currentOperator._id ?? null,

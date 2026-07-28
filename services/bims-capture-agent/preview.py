@@ -26,6 +26,7 @@ import cv2
 from aiohttp import web
 
 GetFrame = Callable[[], Optional["object"]]
+GetActiveCamera = Callable[[], str]
 
 _MJPEG_FPS = int(os.environ.get("PREVIEW_FPS", "15") or 15)
 _MJPEG_QUALITY = int(os.environ.get("PREVIEW_JPEG_QUALITY", "80") or 80)
@@ -48,14 +49,38 @@ def _clamped_int(raw: Optional[str], default: int, lo: int, hi: int) -> int:
         return default
 
 
+def _assert_camera(
+    request: web.Request, get_active_camera: Optional[GetActiveCamera]
+) -> None:
+    """409 if ?camera= names anything other than the camera that is open.
+
+    A station holds ONE capture handle; changing it is an explicit operation
+    (the select_camera WS command), never an implicit side effect of asking for
+    a frame. So a request that names a camera is asserting which optics it
+    expects, and a mismatch has to fail loudly — silently serving frames from
+    the wrong sensor is how a microscope shot ends up filed as an overview one.
+    Requests with no ?camera= are unaffected, which keeps older pages working.
+    """
+    wanted = request.query.get("camera")
+    if not wanted or get_active_camera is None:
+        return
+    active = get_active_camera()
+    if wanted != active:
+        raise web.HTTPConflict(
+            text=f"camera {wanted!r} is not active on this station (active: {active!r})"
+        )
+
+
 def attach_mjpeg_route(
     app: web.Application,
     get_frame: GetFrame,
     authenticate: Callable[[web.Request], bool],
+    get_active_camera: Optional[GetActiveCamera] = None,
 ) -> None:
     async def handler(request: web.Request) -> web.StreamResponse:
         if not authenticate(request):
             raise web.HTTPUnauthorized(text="bad or missing ?token=")
+        _assert_camera(request, get_active_camera)
 
         # Remote-tunable per request — the BIMS capture page controls these.
         fps = _clamped_int(request.query.get("fps"), _MJPEG_FPS, 1, 30)
@@ -98,6 +123,7 @@ def attach_snapshot_route(
     app: web.Application,
     get_frame: GetFrame,
     authenticate: Callable[[web.Request], bool],
+    get_active_camera: Optional[GetActiveCamera] = None,
 ) -> None:
     """GET /snapshot.jpg — one live frame as a plain JPEG.
 
@@ -112,6 +138,7 @@ def attach_snapshot_route(
     async def handler(request: web.Request) -> web.Response:
         if not authenticate(request):
             raise web.HTTPUnauthorized(text="bad or missing ?token=")
+        _assert_camera(request, get_active_camera)
         quality = _clamped_int(request.query.get("q"), 92, 30, 95)
         loop = asyncio.get_running_loop()
         frame = await loop.run_in_executor(None, get_frame)
