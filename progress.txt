@@ -3985,3 +3985,38 @@ Deployment: preview — https://bioscale-operations-system-mongodb-k2qsxjq91.ver
 Source: branch feat/spu-validation-runs @ commit 95946f83
 Retrieve this exact code: git checkout feat/spu-validation-runs at commit 95946f83
 What this deployment is for: approve/reject verdict UX on thermo uploads, for user review.
+
+================================================================================
+2026-07-28 — NEWDEV — robot arm UI 404 fixed; arm routes co-located under cart-mfg
+================================================================================
+Selecting "Robot Arm" in the cart-mfg sidebar 404'd. Root cause was a half-finished
+route migration: the sidebar (and the rest of the app) had moved to
+/manufacturing/cart-mfg/robot-arm, and the bare landing +page.svelte there had been
+deleted in favour of a control/ subroute, but jog/ and calibrate/ were still sitting
+at the old top-level /manufacturing/robot-arm/ path. So the nav target resolved to a
+redirect-only route whose siblings didn't exist where anything linked to them.
+
+Moved jog/ and calibrate/ (+page.svelte and +page.server.ts each) into
+src/routes/manufacturing/cart-mfg/robot-arm/ via git mv, then fixed every internal
+link that still pointed at the old path. Pointed the sidebar "Robot Arm" entry
+directly at control/ rather than the bare path, so the 302 hop is skipped and the
+active-state highlight (startsWith) actually matches. Added sidebar entries for Arm
+Jog, Arm Runs and Arm Calib — the runs list had no entry point at all and was only
+reachable by deep link after a run started. control/'s back-link pointed at its own
+redirect (a self-loop); it now goes to the cart-mfg hub. Corrected the stale restore
+hint in robot-arm/+page.server.ts, which named a path that no longer exists.
+
+The bare /robot-arm route is deliberately kept as a 302 to control/ so old bookmarks
+still land somewhere.
+
+Not yet verified against hardware: ROBOT_ARM_BASE_URL / ROBOT_ARM_API_KEY still need
+to point at the Pi for the control, jog and calibrate actions to do anything. This
+commit only makes the pages reachable and render.
+
+Files touched: src/routes/manufacturing/cart-mfg/+layout.svelte,
+cart-mfg/robot-arm/+page.server.ts, cart-mfg/robot-arm/control/+page.svelte,
+and the moved cart-mfg/robot-arm/{jog,calibrate}/{+page.svelte,+page.server.ts}.
+
+npm run check: 46 errors / 434 warnings — unchanged from the pre-existing baseline;
+zero errors in the robot-arm routes or the cart-mfg layout.
+Commit: ba2c37f8 on branch NEWDEV.
