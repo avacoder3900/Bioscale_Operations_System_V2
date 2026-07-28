@@ -4106,3 +4106,17 @@ npm run check: 10 errors / 434 warnings — unchanged from the current baseline,
 errors in any file this branch touches. (The "46 errors" quoted in an earlier entry is
 stale; the baseline on NEWDEV is now 10.)
 Commit: 6c7442dc on branch feat/dual-camera-stations.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-1yw56l1ad-brevitest.vercel.app
+  (second scope: https://bioscale-operations-system-mongodb-ddoa8fs1a.vercel.app)
+Source: branch feat/dual-camera-stations @ commit d81ab97b
+Retrieve this exact code: git checkout feat/dual-camera-stations at commit d81ab97b
+  (or: git log feat/dual-camera-stations --oneline to find it if the branch has since moved on)
+What this deployment is for: verifying the BIMS half of CV-CAMERA-02 — the camera
+switcher renders on /capture in station mode, cameras[]/activeCameraId survive the
+register + heartbeat round trip, and a microscope-tagged capture writes photoType to
+both cv_images and cartridge_records.photos[] without advancing manufacturing status.
+The agent half is NOT exercised by this deployment: no station is running the new
+agent yet, so every station still reports a single camera through the back-compat path
+and the switcher will show one button. Build status: success (both Vercel scopes,
+after the usual transient 'failure' report).
