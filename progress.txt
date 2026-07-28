@@ -4031,3 +4031,78 @@ that control/, jog/, calibrate/ and runs/ all render under /manufacturing/cart-m
 Build status: success (both Vercel scopes). Preview is cookie-session gated — it 302s to
 /login, so the routes need a real login to confirm end to end; the arm itself will not
 respond until ROBOT_ARM_BASE_URL / ROBOT_ARM_API_KEY point at the Pi.
+
+================================================================================
+2026-07-28 — feat/dual-camera-stations — CV-CAMERA-02: two cameras on one capture station
+================================================================================
+A capture station can now host more than one camera — an overview camera plus the
+Celestron microscope — and the operator switches between them from /capture. Exactly
+one is open at a time: the V4L2 device can't be opened twice, MJPEG has no fan-out in
+this agent (every <img> is its own device read AND its own JPEG encode), and dual
+encode is what browned out station 3's PSU. A switch is a hand-off, never a second
+stream.
+
+The blocker was that "microscope" was a STATION property living in three unrelated
+places: CAMERA_PROFILE (env, read once at import into a module global),
+capabilities.sequence on the station document, and photoType stamped by which code
+path took the photo. It is now a CAMERA property.
+
+Latent bug found and fixed first, independent of the feature: camera.py's close() did
+not take _read_lock while three threads call self._cap.read() under it. Calling
+release() mid-read is a use-after-free on the V4L2 capture object inside OpenCV — not
+a Python exception anything can catch. recv() also checked is_open() outside the lock
+and dereferenced inside it. Both were unreachable while close() only ever ran on a
+failed open; a camera switch makes them reachable on every swap.
+
+Camera identification needed no new mechanism. The HD USB Camera (32e4:9230) and the
+Celestron (058f:1445) have distinct USB VID:PIDs and distinct V4L names, and the
+kernel already publishes stable /dev/v4l/by-id/ symlinks keyed by USB vendor+product.
+No udev rules — the only rule on either Pi is 99-rpi-keyboard.rules. _resolve_device()
+already accepted /dev paths and name substrings, and _resolve_device_by_name() already
+skipped the phantom metadata node UVC cameras expose alongside the real one.
+
+New CAMERAS env var (JSON array, each entry carrying its own device/profile/role).
+Unset => one camera synthesized from CAMERA_DEVICE/CAMERA_PROFILE, so the whole
+existing fleet keeps working untouched and there is one code path, not a legacy fork.
+The synthesized entry keeps sequence=true regardless of profile because the agent has
+always advertised that capability unconditionally.
+
+Also fixed while in here: the register endpoint $set capabilities unconditionally from
+an all-false default, so a single reboot of an agent that omits capabilities silently
+stripped a station of every capability it had. And /api/cv/capture had no photoType at
+all, so every browser-initiated capture was filed as 'inspection' even when shot down
+the Celestron — microscope shots now skip the required phase, barcode view
+auto-classification, phase inference, and the wax/reagent status auto-advance, and
+photoType is written to cv_images AND to the cartridge_records.photos[] entry, which
+previously omitted it unlike the agent's own ingest path.
+
+UI note worth remembering: the station JWT is 5 minutes and nothing refreshes it. An
+open MJPEG stream survives expiry because the agent authenticates once per HTTP
+request, but a camera switch RE-ISSUES that GET — so the switcher re-mints the token
+first, or any operator on the page longer than five minutes would 401 into a silent,
+permanent WebRTC fallback.
+
+Files touched: services/bims-capture-agent/{camera,agent,preview}.py, README.md,
+RUNBOOK.md, provision-station.sh; src/lib/server/db/models/capture-station.ts;
+src/lib/types/capture-station.ts; src/routes/api/cv/capture/+server.ts;
+src/routes/api/cv/stations/{register,[id]/heartbeat}/+server.ts;
+src/routes/capture/{+page.server.ts,+page.svelte}; plus the new PRD
+docs/prds/CV-CAMERA-02-dual-camera-stations.md (CV-MICROSCOPE-01 never got one — it is
+cited in six source files but docs/prds/CV-MICROSCOPE-01.md does not exist on any
+branch).
+
+Verified against real deps and real hardware on station 3 (alejandrospi2) by staging
+the new modules in a temp dir and importing them under the station's own venv — the
+running service was never restarted and /opt code was never touched. Both stations'
+actual current configs reproduce exactly through the back-compat path.
+
+NOT yet verified: the live switch itself. That needs the new agent deployed to a
+station and a second camera physically attached — station 3 has only the Celestron and
+station 2 is still on a pre-microscope agent build (its /health reports no
+camera_profile and no capabilities). Note both stations report agent_version 0.1.0, so
+version cannot be used to tell builds apart; feature-detect on cameras[] instead.
+
+npm run check: 10 errors / 434 warnings — unchanged from the current baseline, zero
+errors in any file this branch touches. (The "46 errors" quoted in an earlier entry is
+stale; the baseline on NEWDEV is now 10.)
+Commit: 6c7442dc on branch feat/dual-camera-stations.
