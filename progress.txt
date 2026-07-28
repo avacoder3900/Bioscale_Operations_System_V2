@@ -4020,3 +4020,14 @@ and the moved cart-mfg/robot-arm/{jog,calibrate}/{+page.svelte,+page.server.ts}.
 npm run check: 46 errors / 434 warnings — unchanged from the pre-existing baseline;
 zero errors in the robot-arm routes or the cart-mfg layout.
 Commit: ba2c37f8 on branch NEWDEV.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-newdev-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-doi2uhkk2-brevitest.vercel.app)
+Source: branch NEWDEV @ commit 9726af4a (code change is ba2c37f8; 9726af4a adds this log)
+Retrieve this exact code: git checkout NEWDEV at commit 9726af4a
+  (or: git log NEWDEV --oneline to find it if the branch has since moved on)
+What this deployment is for: verifying the Robot Arm sidebar entry no longer 404s and
+that control/, jog/, calibrate/ and runs/ all render under /manufacturing/cart-mfg/robot-arm.
+Build status: success (both Vercel scopes). Preview is cookie-session gated — it 302s to
+/login, so the routes need a real login to confirm end to end; the arm itself will not
+respond until ROBOT_ARM_BASE_URL / ROBOT_ARM_API_KEY point at the Pi.
