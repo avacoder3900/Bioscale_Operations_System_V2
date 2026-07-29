@@ -428,13 +428,18 @@ def run(protocol: protocol_api.ProtocolContext):
         try:
             serial_write_with_retry(ser, b'C')
             offset_data_raw = serial_read_with_retry(ser)
-            offset_data = str(offset_data_raw).split(':')
-            if len(offset_data) >= 2:
-                offset['x'] = float(offset_data[0][2:])
-                offset['y'] = float(offset_data[1][:-5])
+            # Regex, not positional slicing: some calibrator fixtures prefix the
+            # bend reply (B07: b'= -0.2:2.3\r\n'; others bare b'-4.5:0.8\r\n').
+            # The old str(bytes)[2:] parsing raised on the prefix, forcing a
+            # zero-baseline run whose per-tip adjust was wrong by the baseline.
+            import re as _re_cal
+            _m = _re_cal.search(rb'(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)', offset_data_raw or b'')
+            if _m:
+                offset['x'] = float(_m.group(1))
+                offset['y'] = float(_m.group(2))
                 protocol.comment(f'Offset calibration: x={offset["x"]}, y={offset["y"]}')
             else:
-                raise ValueError('Invalid offset data format')
+                raise ValueError(f'Invalid offset data format: {offset_data_raw!r}')
         except Exception as e:
             # Do NOT bail the run here. The 'C' baseline read can come back blank or
             # malformed even when the calibrator is otherwise fine — operators have

@@ -4696,3 +4696,39 @@ Deployment: robot daemon update (B07 only) — /data/ot2-bridge/ot2-bridge.py
 Source: robot-deployed lineage + regex bend parser; synced to scripts/ot2-bridge.py this commit
 Retrieve this exact code: scripts/ot2-bridge.py @ this commit
 What this deployment is for: Studio Calibrate-tip works on B07 (bend reply with "= " prefix now parses).
+
+================================================================================
+2026-07-29 — master — Run-start deck-calibration FRESHNESS GATE + fill-protocol 'C' parser fix; B07 zero-baseline mystery solved
+================================================================================
+Operator: "make sure reagent fill always runs the newest deck calibration — sometimes it reverts
+to old ones"; then two B07 reagent runs in a row differed with nothing changed.
+
+STALENESS BUGS FOUND (the "reverts"):
+1. A run executes the def SNAPSHOT bundled at protocol upload — Studio edits don't reach runs
+   until a Sync re-upload.
+2. The fill pages posted the protocol id chosen at page LOAD — a page opened before a Sync starts
+   the older upload (still present on the robot) with its stale defs.
+3. Studio Sync re-uploads the stored opentrons_protocols .py — which deploy scripts never updated,
+   so Sync could silently DOWNGRADE the protocol lineage (stored wax .py was months old).
+
+FIXES SHIPPED:
+- NEW src/lib/server/opentrons/protocol-freshness.ts — ensureFreshRunProtocol(): at EVERY wax +
+  reagent startRun, resolves the robot's current entry server-side (posted id no longer trusted),
+  fetches that upload's own on-robot analysis, diffs every BIMS-managed labware def well (x/y/z)
+  against live Mongo, and on ANY mismatch auto re-uploads the stored .py with live defs, repoints,
+  re-verifies the fresh bundle, audit-logs (run_start_auto_resync). A run can no longer start on
+  geometry it can't prove current. Wired into reagent-filling + wax-filling startRun.
+- Stored opentrons_protocols .py refreshed to the DEPLOYED lineages (kills the sync-downgrade).
+- Fill protocols' calibrator 'C' baseline parsing made regex-tolerant (same fix as the daemon):
+  B07's "= -0.2:2.3" reply crashed the old slicing -> every B07 tip-cal run paused ("Could not
+  read offset calibration") and continued with ZERO baseline -> per-tip adjust wrong by the whole
+  baseline (2.3mm y vs 1.8mm holes) + fresh-tip probe scatter each run = the observed
+  different-every-run misses (adjusts -1.0/-2.9, -0.7/-3.1, -0.8/-2.9 across 3 unchanged runs).
+- Deployed parser-fixed reagent to B07 (repointed 620c93ee -> a1985591 via deploy-reagent-to-b07).
+
+npm run check: 11 errors — unchanged baseline.
+
+Deployment: production — Vercel auto-deploy from master push (freshness gate) + robot protocol upload B07 (a1985591)
+Source: branch master @ this commit
+Retrieve this exact code: git log master --oneline (this commit)
+What this deployment is for: every fill run provably uses the live deck calibration; B07 tip-cal runs get a real baseline.
