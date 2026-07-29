@@ -4732,3 +4732,29 @@ Deployment: production — Vercel auto-deploy from master push (freshness gate) 
 Source: branch master @ this commit
 Retrieve this exact code: git log master --oneline (this commit)
 What this deployment is for: every fill run provably uses the live deck calibration; B07 tip-cal runs get a real baseline.
+
+2026-07-29 addendum: operator confirmed B07 reagent fill lands correctly with tip calibration ON
+after the 'C'-parser fix (protocol a1985591) — real baseline (-0.2, 2.3) read, no carriage-004
+counter-shift needed. B14 (13558e8d, tip-cal ON) and R04 wax (77250a2e) also operator-confirmed
+today. Freshness gate live in production as of 662e7ae4.
+
+================================================================================
+2026-07-29 — master — Golden calibration baseline + atomic batch-apply (calibration can no longer silently tear or be lost)
+================================================================================
+Operator asked to lock in today's all-three-robots-confirmed calibration state.
+1. NEW scripts/calibration-baseline.cjs — save/verify/restore the COMPLETE fill-calibration
+   state (all 18 labware defs, robot deck offsets, tip-calibrator fixtures, robot protocol
+   pointers). Saved + round-trip-verified today's state as
+   backups/calibration-golden-2026-07-29-all-robots-confirmed.json (defs=18 offsets=3 fixtures=3).
+   Restore is gated on RESTORE_APPLY=1, can target single loadNames, and hands off to the
+   run-start freshness gate so restored geometry reaches robots automatically on the next run.
+2. applyDeckEditBatch is now ALL-OR-NOTHING: a batch where ANY well would land out of bounds
+   applies NOTHING and the Studio surfaces the per-well reasons as an error. Partial application
+   (rest of group moves, clamped wells dropped) was the documented mechanism that repeatedly
+   corrupted deck calibration (bounds-guard corruption, 2026-07) — that class is now closed.
+npm run check: 11 errors — unchanged baseline.
+
+Deployment: production — Vercel auto-deploy from master push (atomic batch apply)
+Source: branch master @ this commit
+Retrieve this exact code: git log master --oneline (this commit); baseline JSON committed in backups/
+What this deployment is for: today's known-good calibration is restorable forever; group applies can no longer partially apply and tear the deck geometry.
