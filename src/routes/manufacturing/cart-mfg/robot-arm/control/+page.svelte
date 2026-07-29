@@ -1,5 +1,29 @@
 <script lang="ts">
+	import RobotArmConnectionPanel from '$lib/components/RobotArmConnectionPanel.svelte';
+	import RobotArmControlBar from '$lib/components/RobotArmControlBar.svelte';
+
 	let { data, form } = $props();
+
+	// ARM-01 §7.4 — this build is accepted against dry-run only, so the Start
+	// control refuses to submit when the Pi reports live motion. The server
+	// re-checks at submit time; this is the UI half of the same gate.
+	const dryRun = $derived(data.preflight?.checks?.dry_run?.value);
+	const armReachable = $derived(data.preflight != null);
+	const taskStartBlocked = $derived(!armReachable || dryRun !== true || data.holder != null);
+	const taskBlockReason = $derived(
+		!armReachable
+			? 'The arm is unreachable.'
+			: dryRun !== true
+				? 'The arm is not in DRY_RUN — live motion is out of scope for this build.'
+				: data.holder != null
+					? 'The arm is already running something.'
+					: ''
+	);
+
+	let selectedTask = $state('');
+	const selectedTaskMeta = $derived(
+		(data.tasks ?? []).find((t: { name: string }) => t.name === selectedTask) ?? null
+	);
 
 	type ActiveSession = { run_id: string; kind: string };
 	type ConnectError = { error: string };
@@ -28,6 +52,90 @@
 			← back
 		</a>
 	</div>
+
+	<!-- ARM-01 S3 — connection health, ahead of the controls that depend on it -->
+	<RobotArmConnectionPanel
+		preflight={data.preflight}
+		preflightError={data.preflightError}
+		baseUrl={data.armBaseUrl}
+	/>
+
+	<!-- ARM-01 S8 — who holds the arm + always-live stop -->
+	<RobotArmControlBar holder={data.holder} currentUserId={data.currentUserId} />
+
+	<!-- ARM-01 S5 — run a named task from the Pi's registry -->
+	<section
+		class="rounded border p-3 sm:p-4"
+		style="border-color: var(--color-tron-border); background: var(--color-tron-surface);"
+	>
+		<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">
+			RUN TASK
+		</h2>
+
+		{#if (data.tasks ?? []).length === 0}
+			<p class="mt-2 text-xs" style="color: var(--color-tron-text-secondary)">
+				No tasks available — the arm is unreachable or its registry is empty.
+			</p>
+		{:else}
+			<form method="POST" action="?/startTask" class="mt-3 space-y-3">
+				<div>
+					<label
+						for="task_name"
+						class="block text-xs"
+						style="color: var(--color-tron-text-secondary)">Task</label
+					>
+					<select
+						id="task_name"
+						name="task_name"
+						bind:value={selectedTask}
+						required
+						class="mt-1 min-h-[44px] w-full rounded border bg-transparent px-2 text-sm sm:w-auto sm:min-w-[22rem]"
+						style="border-color: var(--color-tron-border); color: var(--color-tron-text)"
+					>
+						<option value="" disabled>Select a task…</option>
+						{#each data.tasks as t (t.name)}
+							<option value={t.name}>{t.name}</option>
+						{/each}
+					</select>
+					{#if selectedTaskMeta}
+						<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
+							{selectedTaskMeta.description ?? ''}
+							{#if selectedTaskMeta.version}<span class="ml-1">v{selectedTaskMeta.version}</span>{/if}
+						</p>
+					{/if}
+				</div>
+
+				<div>
+					<label for="lot_id" class="block text-xs" style="color: var(--color-tron-text-secondary)"
+						>Lot <span class="opacity-60">(optional)</span></label
+					>
+					<input
+						id="lot_id"
+						name="lot_id"
+						type="text"
+						class="mt-1 min-h-[44px] w-full rounded border bg-transparent px-2 text-sm sm:w-64"
+						style="border-color: var(--color-tron-border); color: var(--color-tron-text)"
+					/>
+				</div>
+
+				<div class="flex flex-wrap items-center gap-3">
+					<button
+						type="submit"
+						disabled={taskStartBlocked || !selectedTask}
+						class="min-h-[44px] w-full rounded px-4 text-sm font-semibold disabled:opacity-40 sm:w-auto"
+						style="background: rgba(56,189,248,0.15); color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);"
+					>
+						Start task
+					</button>
+					{#if taskStartBlocked}
+						<span class="text-xs" style="color: var(--color-tron-text-secondary)"
+							>{taskBlockReason}</span
+						>
+					{/if}
+				</div>
+			</form>
+		{/if}
+	</section>
 
 	<!-- Connection / active session banner -->
 	{#if connectError}

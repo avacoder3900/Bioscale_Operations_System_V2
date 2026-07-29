@@ -4031,3 +4031,72 @@ that control/, jog/, calibrate/ and runs/ all render under /manufacturing/cart-m
 Build status: success (both Vercel scopes). Preview is cookie-session gated — it 302s to
 /login, so the routes need a real login to confirm end to end; the arm itself will not
 respond until ROBOT_ARM_BASE_URL / ROBOT_ARM_API_KEY point at the Pi.
+
+================================================================================
+2026-07-29 — feat/arm-pi-connection — ARM-01: arm connection health + task runner
+================================================================================
+Wrote docs/prds/ARM-01-pi-connection-and-task-control.md and implemented stories
+S1-S5, S7 and S8 against it. The PRD was grounded by probing the live arm-pi
+rather than by reading the schema, which changed what the work turned out to be.
+
+Key finding: the BIMS -> Pi path already worked. arm-pi is on the tailnet and
+Tailscale Funnel is up, so https://arm-pi.tailf65a70.ts.net/health answers 200
+from the public internet, auth is enforced (401 without x-api-key, 200 with),
+and GET /tasks lists two registered tasks. So this was never a networking
+problem: robot-arm-client.ts wrapped 17 Pi endpoints and none of them were the
+task endpoints, so running a task was reachable by curl and unreachable from the
+product. That gap is what S1/S5 close.
+
+Three live misconfigurations were found on the Pi and are NOT fixed by this
+commit (they are ops work, story S0, deliberately left for explicit approval
+because restarting the service has a physical-motion consequence):
+  1. Local .env pointed ROBOT_ARM_BASE_URL at arm-pi:8001, which is a stray
+     hand-started uvicorn, not the systemd service on :8000 that the Funnel
+     proxies. Two servers, one serial bus.
+  2. The Pi's ~/robot-arm/.env says DRY_RUN=false and LEADER_PORT=/dev/ttyACM1,
+     but the running service still reports DRY_RUN=true and the old
+     /dev/buslinker-* paths — the .env was corrected and the service was never
+     restarted. The only thing holding the arm in dry-run is an un-restarted
+     process; a reboot arms live motion.
+  3. Pi BIMS_WEBHOOK_URL points at a dev workstation's tailnet IP on a Vite
+     port, so production BIMS receives no arm events at all.
+
+What was built:
+- robot-arm-client.ts: added preflight() (8s), listTasks(), startTask() (15s,
+  matching the existing allowance for the slow calibration calls), plus
+  ArmPreflight / ArmTask / ArmTaskStarted types.
+- robot-arm-lock.ts (new): deriveArmHolder(). The "who holds the arm" lock is
+  DERIVED, not stored — the arm is held iff a RobotArmRun exists in a
+  non-terminal state, and the holder is that run's existing triggeredBy. No
+  schema change, no new collection, no write path, covered by the existing
+  {status, createdAt:-1} index. A stored currentOperator field would be a second
+  source of truth that can drift; capture_stations.currentOperator is the
+  cautionary tale in this repo (no expiry, cleared by hand). A derived lock
+  cannot strand the arm, because the terminal webhook event that finalizes the
+  run IS the release.
+- robot-arm-run.ts: widened the type enum with 'task' (additive only). The
+  webhook was already receiving task.* events and filing them as 'teleop' with a
+  "treated as teleop for now" comment; it now infers 'task' correctly. Added to
+  the runs/ filter whitelist.
+- control/+page.server.ts: safePreflight()/safeTasks() folded into the existing
+  Promise.all, plus a startTask action and a stop action that now audit-logs
+  both holder and stopper.
+- RobotArmConnectionPanel.svelte (new): renders the Pi's own preflight verdict
+  and its `diagnosis` string verbatim rather than re-deriving the logic in
+  TypeScript, so the two cannot drift. Four states (ok / degraded / unreachable
+  / LIVE MOTION), with the configured base URL shown alongside failures.
+- RobotArmControlBar.svelte (new): holder + elapsed time + an always-live Stop,
+  sticky to the viewport bottom on phones. Stop is enabled regardless of who
+  holds the arm — a stop that respects the lock is a stop that fails when you
+  need it most — with a confirm when overriding someone else's run.
+- Responsive pass on the control page: 44x44px touch targets, stacked layout
+  under sm. The arm pages had 1 responsive utility class between all four.
+
+Safety gate: the build is accepted against DRY_RUN only. startTask re-reads the
+Pi's dry_run at submit time rather than trusting what the page rendered, since
+the service could have been restarted since load, and refuses to start if it is
+not true. The UI disables Start for the same reason.
+
+npm run check: 10 errors / 434 warnings, zero in any ARM-01 file. (The 46-error
+baseline recorded at ba2c37f8 has since drifted down; the remaining errors are
+in r2.ts, AskBimsWidget and assembly/[sessionId], none touched here.)
