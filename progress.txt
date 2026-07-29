@@ -4567,3 +4567,106 @@ Deployment: robot protocol upload + BIMS repoint (production data)
 Source: branch master @ working tree (uncommitted port of the 7/22 batching fix), protocols/Wax_Filling_GEN7_Cartridge.py
 Retrieve this exact code: robot R04 protocol 77250a2e; working tree as of this entry (commit pending)
 What this deployment is for: BIMS wax fill does 4 wells per aspiration at 2.2/2.2/2.2/1.6 and never crosses a cartridge wall mid-batch — stops the new-cartridge tip breakage.
+
+================================================================================
+2026-07-29 — master — B14 reagent "deck cal not working": frame mismatch between taught (tip-neutral) geometry and tip-cal fills; 003 reagent wells tip-zeroed + redeployed
+================================================================================
+Operator: reagent fill on B14 missed the holes; Studio move-to-hole hit dead center; wanted to
+run WITH use_tip_calibration=true. Investigation ruled out def staleness (protocol d6709dea,
+uploaded 07-29 16:47, bundled defs byte-identical to Mongo). Real cause: frame mismatch.
+- Fills with use_tip_calibration=true apply the calibrator probe adjust to every dispense;
+  on B14/p300 that adjust is a near-constant ~(-5.9, -1.5)mm (10 probes: x -5.2..-6.4,
+  y -1.2..-1.9) — device-bias dominated (B14 calibrator serial baseline never zeroed on-robot).
+- The taught 003 reagent geometry was TIP-NEUTRAL (proof: operator's Studio verification session
+  had NO calibrate_tip bridge command after the failed 16:51 run -> tipAdjust null -> raw-def
+  move hit exactly). Design contract: fills-with-adjust require TIP-ZEROED defs (adjust
+  pre-subtracted; the Studio does this when teaching after a Calibrate-tip).
+- Reagent holes are 1.8mm diameter — a 5.4mm adjust misses entirely.
+FIX (operator chose to keep tip-cal ON): shifted all 288 ODD (reagent) wells of
+gen4deck_gen7cartridge_003 by (+5.9, +1.5)mm = minus the mean probe adjust (z untouched; even/wax
+wells untouched). Backup: backups/gen4deck_003-backup-2026-07-29-pre-tipzero-shift.json.
+Redeployed via scripts/deploy-reagent-to-b14.cjs; bundled 003 verified == Mongo (0 mismatches).
+Repointed B14 reagent-filling d6709dea -> 2c7f5cba.
+CONSEQUENCES: B14/003 reagent fills MUST now run with use_tip_calibration=TRUE (raw/no-adjust
+motion — including Studio moves without a prior Calibrate-tip — now sits ~5.9mm off; that is
+expected). 003's reagent frame is tied to B14's calibrator bias: re-teach if the carriage moves
+robots or the calibrator is re-zeroed/replaced. Wax fills on B14 always apply their own probe
+adjust — if wax misses on B14 the even wells need the same treatment (wax-bias mean, p20).
+
+Deployment: robot protocol upload + BIMS repoint (production data)
+Source: branch master @ working tree protocols/Reagent_Filling_GEN7.py (same 27-RTP lineage as prior B14 upload) + tip-zeroed 003 Mongo def
+Retrieve this exact code: robot B14 protocol 2c7f5cba; def backup above
+What this deployment is for: B14 reagent fills with tip calibration ON land on the 1.8mm holes (taught frame now tip-zeroed to match the fill's probe adjust).
+
+================================================================================
+2026-07-29 (later) — master — CORRECTION: B14 reagent reverted to raw frame; tip-cal unusable on B14 until probe system is fixed
+================================================================================
+The tip-zero shift from earlier today was wrong to apply — a fill immediately after it still
+missed. Audit-trail archaeology (audit_log: deck_calibration_edit_batch / calibrate_tip /
+deck_calibration_sync) explains why: since 07-27, carriage 003's reagent wells have been through
+repeated ±6mm re-teaches — sometimes with the Studio tip-cal adjust active, sometimes not —
+flipping regions between tip-zeroed and tip-neutral frames across sessions (e.g. +6/+1.5 batches
+07-27T15:30, +6.2/+3.2 on all 288 wells 07-27T21:57, then A-row and per-region tweaks on 07-28/29).
+The frame of any given region is therefore not reconstructable numerically, and blanket shifts
+(mine included) just continue the ping-pong.
+Decisive finding from the probe data: the STUDIO bridge probe and the IN-RUN protocol probe
+disagree systematically (~-6.4 vs ~-5.5 in x, ~0.8mm apart) and overall probe scatter spans
+~1.5mm x / ~2.5mm y — against 1.8mm-diameter reagent holes. Tip calibration on B14 currently
+ADDS more error than the per-tip bend it corrects. It cannot be made reliable by re-teaching.
+ACTION: restored 003's odd wells exactly from
+backups/gen4deck_003-backup-2026-07-29-pre-tipzero-shift.json (the state the operator raw-verified
+in the Studio: "tip went into the hole exactly"); redeploy deduped to the SAME upload d6709dea the
+operator verified against; B14 reagent repointed back to it. Reagent fills on B14 must run with
+use_tip_calibration=OFF (the default) until (a) the calibrator device baseline is re-zeroed on
+B14 and (b) the bridge-vs-protocol probe discrepancy is root-caused and fixed.
+
+Deployment: robot protocol repoint (production data)
+Source: B14 protocol d6709dea (2026-07-29 16:47 upload, raw-verified geometry)
+Retrieve this exact code: robot B14 protocol d6709dea; def state = backups/gen4deck_003-backup-2026-07-29-pre-tipzero-shift.json
+What this deployment is for: reagent fills on B14 land where the Studio raw-verified; tip-cal OFF until the probe system is trustworthy.
+
+================================================================================
+2026-07-29 (final) — master — B14 reagent: root cause was the Studio tipAdjust leak + bridge-vs-run probe mismatch; small counter-shift deployed, tip-cal ON restored
+================================================================================
+Full resolution of the B14 saga. The operator confirmed the pre-shift state was "Studio perfect,
+fills slightly off (right/front)". Chain of causes:
+1. The deck WAS correctly tip-zeroed (taught with Studio calibrate-tip, per design).
+2. The operator's post-fill "raw" Studio verification was NOT raw: startMaintenance() resets
+   hasTip but NOT tipAdjust (+page.svelte ~514 vs 537), so a session killed externally (fill run
+   start) leaks the last adjust into the next connect. Their "hit exactly" check silently applied
+   the 16:44 adjust — which misled this session into the wrong +5.9mm "tip-zero" shift (reverted).
+3. The real residual: the bridge daemon probe and the in-protocol probe differ systematically —
+   bridge mean adjust ≈ (-6.36, -1.35), in-run mean ≈ (-5.53, -1.68) → fills land ≈ (+0.8, -0.35)mm
+   off (right/front) — confirmed by operator observation of the miss direction.
+FIX: shifted 003's 288 odd/reagent wells by (-0.8, +0.35) to cancel the probe mismatch; deployed
++ repointed B14 reagent → protocol 13558e8d. Fills now run with use_tip_calibration=ON.
+EXPECTED QUIRK: Studio checks WITH calibrate-tip now sit ~0.8mm off (opposite direction) — the def
+is in the RUN-probe frame, not the bridge-probe frame. Do NOT "fix" that in the Studio; verify by
+running a fill. Backups: gen4deck_003-backup-2026-07-29-pre-tipzero-shift.json (raw-verified state),
+gen4deck_003-backup-2026-07-29-pre-probe-mismatch-correction.json (pre-final-correction).
+TODO (real fixes): (a) startMaintenance() must clear tipAdjust/nominal on fresh connect — one-line
+guard, page has unrelated uncommitted edits pending; (b) root-cause the 0.8mm bridge-vs-protocol
+probe discrepancy (daemon carries the .py motion "verbatim" — it measurably is not equivalent);
+(c) zero the calibrator devices on-robot fleet-wide.
+
+Deployment: robot protocol upload + BIMS repoint (production data)
+Source: working tree protocols/Reagent_Filling_GEN7.py + 003 def with probe-mismatch correction
+Retrieve this exact code: robot B14 protocol 13558e8d; def backups above
+What this deployment is for: B14 reagent fills with tip calibration ON land centered (probe-frame mismatch cancelled in the def).
+
+================================================================================
+2026-07-29 — master — Studio patch shipped: tipAdjust cleared on connect + slot-11 occupied recovery
+================================================================================
+Committed d8e7404c to master (production deploy via Vercel GitHub integration on push):
+- deck-calibration +page.svelte: startMaintenance() now resets tipAdjust/nominal/refWell/
+  slotOrigin/loadedWells/liveXYZ on every fresh connect (previously only hasTip) — closes the
+  stale-adjust leak that misled the 2026-07-29 B14 re-shift — and the connected message warns
+  to hand-remove any tip left from a dead session (B07 2026-07-28 tip-crush class).
+- maintenance.ts + pick-up-tip endpoint: typed SlotOccupiedError -> 409 {code:SLOT_OCCUPIED}
+  -> page auto-reopens the run when slot 11 holds the other process's tiprack.
+npm run check: 11 errors — unchanged pre-existing baseline; none in touched files.
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ commit d8e7404c
+Retrieve this exact code: git checkout master at commit d8e7404c
+What this deployment is for: Studio sessions can no longer silently reuse a dead session's tip-cal adjust; rack-swap in slot 11 recovers instead of erroring.
