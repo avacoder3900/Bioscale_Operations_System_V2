@@ -4758,3 +4758,43 @@ Deployment: production — Vercel auto-deploy from master push (atomic batch app
 Source: branch master @ this commit
 Retrieve this exact code: git log master --oneline (this commit); baseline JSON committed in backups/
 What this deployment is for: today's known-good calibration is restorable forever; group applies can no longer partially apply and tear the deck geometry.
+
+================================================================================
+2026-07-29 — feat/mcp-live — Remote MCP server at /api/mcp (wraps the agent API; kanban-first tool surface)
+================================================================================
+Converted the BIMS agent REST API into a remote MCP server that Claude Desktop /
+claude.ai / Claude-in-Chrome custom connectors can reach. Supersedes the localhost-only
+services/bims-mcp prototype (left in place): the endpoint now lives INSIDE the SvelteKit
+app, so it deploys with every push at a public HTTPS URL (custom connectors dial in from
+Anthropic's cloud — localhost never works, which is why the prototype stalled).
+
+Built:
+- src/routes/api/mcp/+server.ts — Streamable-HTTP MCP endpoint (@modelcontextprotocol/server
+  v2, stateless: fresh server per request — correct for Vercel serverless).
+- src/lib/server/mcp/bims-mcp.ts — 31 tools, each a thin wrapper calling the existing
+  /api/agent/** endpoints internally (event.fetch + AGENT_API_KEY), so audit logging,
+  collection allowlists, and validation stay enforced in the REST layer. Full kanban
+  control set (board snapshot, create/update/move tasks, subtasks, merge, transitions,
+  proposals, violations) + operations dashboards, saved queries, SPU status, approvals,
+  messages, cartridge photos. Excluded by design: session-cookie ask*/transcribe and the
+  OT-2/scanner long-poll daemon queues.
+- src/lib/server/mcp/auth.ts — connector key gate (Bearer / x-api-key / ?key= — query form
+  because the connector UI only accepts a URL). MCP_API_KEY env var, falls back to
+  AGENT_API_KEY. Timing-safe compare.
+- docs/MCP-SERVER.md — connection guide for every Claude client + env setup.
+Deps: @modelcontextprotocol/server@2.0.0, zod@4.
+
+Validated: npm run check → 10 errors (baseline 11, none in new files); live smoke test on
+dev server: initialize → tools/list (31) → tools/call kanban_board_snapshot returned the
+real board from Atlas; bad key → 401.
+
+TO DO before connectors work in prod: set MCP_API_KEY in Vercel env; merge to master and
+push (Vercel auto-deploy); then add the connector URL https://<host>/api/mcp?key=<MCP_API_KEY>.
+
+Also this session (Ralph boot-up + full audit, reports delivered in-session): security audit
+(login rate limiting still missing; CV mutations lack cv:* permission checks; /api/debug/env
+leaks secret lengths to any user; deactivated-user session bug now CLOSED), data-layer audit
+(Sacred finalization broken: CartridgeRecord.finalizedAt never written, AssayDefinition
+guards a nonexistent field, .save() bypasses sacred/immutable middleware), API inventory
+(183 endpoints, zero fully-unauthenticated; spoofable vercel-cron UA fallback when
+CRON_SECRET unset), code health (1,518 `as any`; 84 contract tests vs 185 endpoints).
