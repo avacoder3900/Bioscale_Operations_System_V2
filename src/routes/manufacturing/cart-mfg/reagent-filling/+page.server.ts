@@ -11,6 +11,7 @@ import { WAX_PAGE_OWNED } from '$lib/server/manufacturing/run-statuses';
 import { resolveFridgeId } from '$lib/server/services/equipment-resolve';
 import { getRobot, robotGet, robotPost, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
 import { calibrationRtpValues } from '$lib/server/opentrons/calibration-rtps';
+import { ensureFreshRunProtocol } from '$lib/server/opentrons/protocol-freshness';
 import type { PageServerLoad, Actions } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -712,16 +713,20 @@ export const actions: Actions = {
 		const robot = await getRobot(robotId);
 		if (!robot) return fail(404, { error: `Robot ${robotId} not found / not active` });
 
-		// Resolve protocol on the robot for type coercion.
-		const robotDoc = await OpentronsRobot.findById(robotId).lean() as any;
-		const protocol = (robotDoc?.protocols ?? []).find(
-			(p: any) => p.opentronsProtocolId === opentronsProtocolId
-		);
-		if (!protocol) {
-			return fail(400, {
-				error: `Protocol ${opentronsProtocolId} isn't uploaded to this robot. Upload it via /opentrons/devices first.`
+		// Freshness gate: resolve the robot's CURRENT reagent protocol server-side
+		// and prove its bundled deck calibration matches live Mongo; auto-resync if
+		// not. The posted opentronsProtocolId is intentionally NOT trusted — a page
+		// loaded before a Sync would post the older upload, which still exists on
+		// the robot and would silently run stale geometry.
+		let protocol: { opentronsProtocolId: string; parametersSchema: any[] | null };
+		try {
+			protocol = await ensureFreshRunProtocol(robot, String(robotId), 'reagent-filling', locals.user.username);
+		} catch (e) {
+			return fail(502, {
+				error: `Deck-calibration freshness check failed: ${e instanceof Error ? e.message : 'unknown'}`
 			});
 		}
+		const runProtocolId = protocol.opentronsProtocolId;
 
 		const paramSchema = (protocol.parametersSchema ?? []) as Array<{
 			variableName: string;
@@ -761,7 +766,7 @@ export const actions: Actions = {
 		try {
 			const createRes = await robotPost(robot, '/runs', {
 				data: {
-					protocolId: opentronsProtocolId,
+					protocolId: runProtocolId,
 					...(Object.keys(runTimeParameterValues).length ? { runTimeParameterValues } : {})
 				}
 			});

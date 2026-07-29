@@ -10,7 +10,7 @@ import type { RequestHandler } from './$types';
 import { requirePermission } from '$lib/server/permissions';
 import { getRobot } from '$lib/server/opentrons/proxy';
 import { connectDB, LabwareDefinition } from '$lib/server/db';
-import { registerLabwareDefinition, loadLabwareInRun, pickUpTip } from '$lib/server/opentrons/maintenance';
+import { registerLabwareDefinition, loadLabwareInRun, pickUpTip, SlotOccupiedError } from '$lib/server/opentrons/maintenance';
 
 export const config = { maxDuration: 60 };
 
@@ -50,6 +50,13 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		}
 		return json({ tiprackLabwareId });
 	} catch (e) {
+		// A different rack occupies slot 11 (e.g. the reagent rack from an earlier
+		// calibration step in this same run). The slot can't be freed in place, so
+		// tell the client to reopen the run and retry — 409 + a stable code lets it
+		// auto-recover instead of showing the raw LocationIsOccupiedError.
+		if (e instanceof SlotOccupiedError) {
+			return json({ code: e.code, message: e.message }, { status: 409 });
+		}
 		console.error('[API] pick-up-tip error:', e instanceof Error ? e.message : e);
 		error(502, e instanceof Error ? e.message : 'Failed to pick up tip');
 	}
