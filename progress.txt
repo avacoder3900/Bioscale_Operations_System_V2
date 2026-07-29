@@ -4670,3 +4670,29 @@ Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ commit d8e7404c
 Retrieve this exact code: git checkout master at commit d8e7404c
 What this deployment is for: Studio sessions can no longer silently reuse a dead session's tip-cal adjust; rack-swap in slot 11 recovers instead of erroring.
+
+================================================================================
+2026-07-29 — master — B07 "calibrator fixture not found" = bend-reply parser, fixed + deployed
+================================================================================
+Studio Calibrate-tip on B07 failed with "calibrator fixture not found — no /dev/ttyACM device
+answered the 'C' bend query (scanner skipped)". Diagnosis over SSH: calibrator (Particle Argon,
+ttyACM1) present and answering — but B07's fixture prefixes its bend reply ("= -0.2:2.3" vs
+R04/B14's bare "-4.5:0.8"), and _parse_bend's positional str(bytes)[2:] slicing choked on the
+prefix -> daemon skipped the real calibrator. (Also explains B07's long "flaky calibrator"
+reputation.) The device had ALSO been off USB 16:14->18:45 today (genuinely flaky cable), but was
+back before the failing attempts. 'I' (particle id) replies are clean — only 'C' is prefixed.
+FIX: _parse_bend now extracts x:y by regex (tolerant of prefixes; self-tested against both reply
+styles). Patched the ROBOT'S deployed daemon lineage (which was NEWER than the repo copy — it
+carries the 7/13 scanner-reenumeration + /maintenance_runs/current_run fixes that never landed on
+master), deployed to B07 (service restarted clean 19:05), and synced that lineage + fix into
+scripts/ot2-bridge.py so the repo is no longer behind the fleet.
+STILL OPEN: (a) R04/B14 daemons run the old parser — fine for their bare replies; roll the patched
+daemon fleet-wide at a quiet moment for consistency. (b) The FILL protocols parse 'C' with the same
+fragile slicing — on B07, fill-time baseline reads will fail/pause ("Could not read offset
+calibration") until the .py parsing gets the same tolerance or the device's "= " prefix is cleared.
+(c) B07 calibrator USB drop 16:14-18:45 = physically flaky connection; reseat/replace cable.
+
+Deployment: robot daemon update (B07 only) — /data/ot2-bridge/ot2-bridge.py
+Source: robot-deployed lineage + regex bend parser; synced to scripts/ot2-bridge.py this commit
+Retrieve this exact code: scripts/ot2-bridge.py @ this commit
+What this deployment is for: Studio Calibrate-tip works on B07 (bend reply with "= " prefix now parses).
