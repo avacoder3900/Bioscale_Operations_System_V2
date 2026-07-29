@@ -4100,3 +4100,39 @@ not true. The UI disables Start for the same reason.
 npm run check: 10 errors / 434 warnings, zero in any ARM-01 file. (The 46-error
 baseline recorded at ba2c37f8 has since drifted down; the remaining errors are
 in r2.ts, AskBimsWidget and assembly/[sessionId], none touched here.)
+
+Deployment: preview — https://bioscale-operations-system-mongodb-9ootzb0ob-brevitest.vercel.app
+  (immutable, SSO-gated: https://bioscale-operations-system-mongodb-cuv6pauky.vercel.app)
+Source: branch feat/arm-pi-connection @ commit b814ef9e
+Retrieve this exact code: git checkout feat/arm-pi-connection at commit b814ef9e
+  (or: git log feat/arm-pi-connection --oneline to find it if the branch has since moved on)
+What this deployment is for: verifying the ARM-01 connection panel, the task runner,
+and the derived holder/stop control bar on the Robot Arm tab.
+Build status: success on both Vercel scopes (~120s; the usual spurious 'failure' did
+not appear this time).
+
+Deployment test results:
+- Preview is live and cookie-session gated: /manufacturing/cart-mfg/robot-arm/control
+  302s to /login on the brevitest-scope alias. The immutable *.vercel.app URL is
+  additionally behind Vercel SSO, so use the -brevitest alias above.
+- Inbound webhook path VERIFIED against the deployment: POST /api/robot-arm/webhook
+  returns 401 with no key, 401 with a wrong key, and 400 "run_id and event.type
+  required" with the real AGENT_API_KEY. So AGENT_API_KEY is correctly configured on
+  Vercel and matches the value the Pi would send. An empty payload was used
+  deliberately so auth was exercised without writing a junk RobotArmRun.
+- ROBOT_ARM_BASE_URL and ROBOT_ARM_API_KEY DO exist on Vercel (Production + Preview)
+  but were last set 83 days ago, which predates the move to the arm-pi host. Their
+  values could not be read: both are marked Sensitive, so 'vercel env pull' returns
+  them blank (same behaviour already documented for STATION_AGENT_KEY). AGENT_API_KEY
+  and MONGODB_URI pull fine, which is how the blank was confirmed to be sensitivity
+  rather than an empty value.
+- NOT yet verified: the outbound BIMS -> Pi direction from the deployment, and the UI
+  itself. Both need a real login, which cannot be done from here. The 83-day-old
+  ROBOT_ARM_BASE_URL most likely still points at the retired alejandros-pc Funnel URL
+  rather than https://arm-pi.tailf65a70.ts.net — if so the connection panel will render
+  its 'unreachable' state, which is itself a valid first read of the panel.
+
+Still outstanding (story S0, deliberately not done in this commit): the three Pi-side
+misconfigurations listed in the entry above. Restarting the robot-arm service has a
+physical-motion consequence (the Pi's .env says DRY_RUN=false), so that work is held
+for explicit approval rather than bundled into a deploy.
