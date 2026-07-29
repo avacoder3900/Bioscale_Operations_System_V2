@@ -19,6 +19,29 @@ export type JogAxis = 'x' | 'y' | 'leftZ' | 'rightZ';
 
 export type RobotRef = { ip: string; port?: number | null };
 
+/**
+ * Thrown by loadLabwareInRun when the target slot already holds a DIFFERENT
+ * labware in this maintenance run (e.g. the reagent tiprack was loaded to
+ * calibrate it, then a wax tip pickup wants the 20µL rack in the same slot 11).
+ * The OT-2 has no gripper and moveLabware/offDeck pauses the run, so the slot
+ * can't be freed in place — the caller recovers by opening a fresh run instead
+ * of leaking a raw LocationIsOccupiedError to the operator.
+ */
+export class SlotOccupiedError extends Error {
+	readonly code = 'SLOT_OCCUPIED';
+	constructor(
+		readonly slot: string,
+		readonly existingLoadName: string,
+		readonly wantedLoadName: string
+	) {
+		super(
+			`Slot ${slot} already holds ${existingLoadName}; cannot load ${wantedLoadName} there. ` +
+				`Reopen the maintenance run to clear it.`
+		);
+		this.name = 'SlotOccupiedError';
+	}
+}
+
 // A protocol run left non-terminal (commonly a `paused` run from the off-deck
 // initial pause that was never resumed/closed) keeps holding the OT-2 run
 // engine, so the robot refuses new maintenance runs with this error. We
@@ -374,6 +397,14 @@ export async function loadLabwareInRun(
 	// Reuse the existing labware id instead of failing.
 	const existing = await loadedLabwareAtSlot(robot, runId, args.slot).catch(() => null);
 	if (existing && existing.loadName === args.loadName) return existing.id;
+	// A DIFFERENT labware already occupies the slot (e.g. the reagent tiprack was loaded
+	// to calibrate it, then a wax tip pickup needs the 20µL rack in the same physical
+	// slot 11). The OT-2 has no gripper and moveLabware/offDeck pauses the run, so the
+	// slot can't be freed in place — surface a typed, recoverable signal the caller
+	// (pick-up-tip endpoint) turns into a fresh run instead of a raw LocationIsOccupiedError.
+	if (existing && existing.loadName !== args.loadName) {
+		throw new SlotOccupiedError(args.slot, existing.loadName, args.loadName);
+	}
 
 	const result = (await sendMaintenanceCommand(
 		robot,
