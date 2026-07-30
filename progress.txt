@@ -5613,3 +5613,9 @@ read-only. Verified locally: tools/list shows 23 readOnly / 11 write annotations
 If read-only persists after this deploy, the remaining causes are on the claude.ai side:
 connector tool permissions in Settings > Connectors, the per-chat tools menu, or declining the
 tool-approval prompt when record_reassembly_parts_usage first fires.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit e23b8e49
+Retrieve this exact code: git checkout master at commit e23b8e49
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: MCP tool annotations (fixes claude.ai read-only classification) + terse reassembly confirmation behavior.
