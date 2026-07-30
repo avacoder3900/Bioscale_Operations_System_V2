@@ -5040,3 +5040,97 @@ Retrieve this exact code: git checkout feat/arm-pi-connection at commit e0c442f2
 What this deployment is for: a rebuilt preview that picks up the corrected
 ROBOT_ARM_BASE_URL (https://arm-pi.tailf65a70.ts.net) so the ARM-01 connection panel can
 reach the now-healthy Pi.
+
+================================================================================
+2026-07-30 — feat/arm-pi-connection — arm control page: controls-first layout, merged session bar, persisted connection log
+================================================================================
+Follow-up to the arm bring-up earlier today. With the arm actually usable, the control
+page's layout became the bottleneck — it had grown by accretion during ARM-01 and buried
+the three controls an operator actually uses.
+
+LAYOUT. Teleop / Record / Replay moved to the top; RUN TASK sits below them. Arm connection
+became a sticky right-hand side panel at lg+ so health stays visible while working, with a
+one-line compact variant under the title on narrow screens. Both variants are driven by the
+same derived state inside RobotArmConnectionPanel (a new `variant` prop) rather than
+duplicated markup, so they cannot drift apart. Root width went max-w-5xl -> max-w-7xl to fit
+the second column, and the page's own p-4 was dropped since cart-mfg/+layout.svelte already
+applies p-4 lg:p-6 (it was doubled).
+
+MERGED SESSION UI. The page carried TWO active-session displays that could contradict each
+other: RobotArmControlBar, and an inline banner at +page.svelte:140-172 whose stop form had
+no confirm and no use:enhance. The banner is deleted. RobotArmControlBar absorbed its states
+and is now the single indicator, sitting directly above the controls it governs.
+
+The subtle part: `active` (live from the Pi) and `holder` (derived from Mongo
+robot_arm_runs via deriveArmHolder) are different sources that CAN disagree — a run whose
+terminal webhook never landed leaves a holder row set forever while the Pi reports nothing
+running. That is exactly the 70-day STALE row seen this morning. Precedence is now explicit:
+the Pi is authoritative for WHETHER something is running, Mongo for WHO and SINCE WHEN. The
+orphaned case renders STALE and states out loud that it blocks Run Task, so a ghost row
+explains itself rather than being a mystery.
+
+Two long-standing bugs in that component, both fixed:
+  - elapsed() had no hour/day rollover, so a 70-day run rendered "101939m 3s". Now "70d 8h".
+  - currentUserId was accepted as a prop but never used — because the component's LOCAL
+    Holder interface omitted userId (ArmHolder in robot-arm-lock.ts:33 has it), which made
+    the comparison un-writable against the declared type. The prop was not vestigial, the
+    type was incomplete. Wired up per ARM-01 §8.4: Stop no longer prompts you to confirm
+    stopping your own run, only someone else's.
+
+CONNECTION LOG. Reuses the existing immutable DeviceEvent collection (30-day TTL) — no new
+model, no schema change. Recorded from the BIMS side rather than pushed by the Pi, because
+the event that matters most — "BIMS cannot reach the arm" — is only observable from here.
+
+Writes on state change, plus an hourly floor while steady. The heartbeat is deliberately
+coarse: /devices/+page.server.ts:19 renders DeviceEvent.find() UNFILTERED with limit(100),
+so a 60s arm heartbeat (~1440 rows/day) would have buried an unrelated page. A 30s dedupe on
+changes absorbs Refresh-button mashing and instantaneous flapping.
+
+device_events carries applyImmutableMiddleware, which blocks updateOne/findOneAndUpdate — so
+no atomic upsert throttle is available and the read-then-write is unavoidably racy across
+concurrent tabs. Accepted deliberately: worst case is two adjacent same-state rows a few ms
+apart in an append-only TTL'd telemetry log that nothing reads for correctness.
+
+"Last connected" folds in the observation from the current request rather than reading the
+newest success row. Reading the row directly would report an hour-old timestamp next to a
+green ONLINE dot, since a steady arm only writes hourly. When down, it falls back to a wider
+query rather than claiming the arm has never connected.
+
+RUN TASK GATE. Kept exactly as-is — it is the UI half of a server-side re-check in startTask
+(+page.server.ts:174-184) that is the real enforcement, and DRY_RUN=false currently blocks
+it by design (ARM-01 §7.4). Only the message improved: it now names the reason and the exact
+fix (set DRY_RUN=true in ~/robot-arm/.env, restart robot-arm), and the already-running case
+points at the session bar.
+
+HOUSEKEEPING. safeActive() normalized to {active, activeError} matching safePreflight(),
+which deleted the hand-written isActive/isError union guards the page carried.
+
+KNOWN TRADEOFF: RobotArmControlBar keeps sticky bottom-0 for phone thumb-reach, but sticky
+only pins while the element's own flow position is on screen — moving it down to sit with
+the controls means it pins across less of the scroll range than before. Judged worth it
+since it now sits directly above the Start buttons, but it is a partial regression against
+ARM-01 §8.4's "always one thumb-reach away".
+
+NOT DONE, flagged for a separate commit: all four robot-arm AuditLog writes
+(control/+page.server.ts:208,242 and calibrate/+page.server.ts:57,83) use field names that
+do not exist in the AuditLog schema — resourceType, resourceId, userId, username, timestamp,
+details. Mongoose strict mode silently drops them, so those audit rows land with NO
+attribution at all, just _id/action/changedAt. Real bug, ~4-line fix, but not a UI change.
+
+Also noted but not acted on: device_events has exactly one index (the TTL on createdAt), so
+the connection-log read filters on an unindexed deviceId and reverse-scans the TTL index.
+Bounded by the 30-day TTL and fine at current volume; if device_events grows past ~100k docs
+add { deviceId: 1, createdAt: -1 }. That is a shared-model change affecting every
+device_events writer, so it wants its own review.
+
+`npm run check`: 40 errors / 434 warnings — IDENTICAL to the pre-change baseline (40), and
+zero errors and zero warnings in the four touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ar-2c5b1f-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-duzxteid7-brevitest.vercel.app)
+Source: branch feat/arm-pi-connection @ commit 33a0603e
+Retrieve this exact code: git checkout feat/arm-pi-connection at commit 33a0603e
+  (or: git log feat/arm-pi-connection --oneline to find it if the branch has moved on)
+What this deployment is for: the reorganized arm control page — controls first, connection
+health as a persistent side panel, one merged session indicator, and connection history at
+the bottom.
