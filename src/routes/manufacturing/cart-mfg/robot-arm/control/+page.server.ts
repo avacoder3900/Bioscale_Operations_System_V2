@@ -8,19 +8,36 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { connectDB } from '$lib/server/db/connection';
-import { AuditLog, generateId } from '$lib/server/db';
+import { AuditLog, DeviceEvent, generateId } from '$lib/server/db';
 import { RobotArmDataset } from '$lib/server/db/models';
 import { requirePermission } from '$lib/server/permissions';
 import { robotArm } from '$lib/server/robot-arm-client';
 import { deriveArmHolder } from '$lib/server/robot-arm-lock';
 import type { Actions, PageServerLoad } from './$types';
 
+// Connection log. Recorded here rather than pushed by the Pi, because the event
+// that matters most — "BIMS cannot reach the arm" — is only observable from this
+// side. Rows go in the shared immutable `device_events` collection (30-day TTL).
+const ARM_DEVICE_ID = 'robot-arm-pi';
+const ARM_CONNECTION_EVENT = 'robot_arm.connection';
+// Same-state heartbeat floor. Deliberately coarse: /devices renders
+// DeviceEvent.find() UNFILTERED with limit(100), so a chatty arm heartbeat would
+// bury an unrelated page. Hourly keeps an anchor row inside the 30-day TTL
+// without crowding that list.
+const ARM_HEARTBEAT_MS = 60 * 60 * 1000;
+// A state CHANGE still won't write if an identical-state row landed this
+// recently — kills Refresh-mashing and instantaneous flapping.
+const ARM_CHANGE_DEDUPE_MS = 30_000;
+const ARM_LOG_LIMIT = 20;
+
+// Normalized to {value, error} rather than a union, so the page doesn't need
+// hand-written type guards to tell a session from an outage.
 async function safeActive() {
 	try {
 		const res = await robotArm.getActive();
-		return res.active;
+		return { active: res.active ?? null, activeError: null };
 	} catch (err) {
-		return { error: (err as Error).message };
+		return { active: null, activeError: (err as Error).message };
 	}
 }
 
@@ -45,6 +62,70 @@ async function safePreflight() {
 	}
 }
 
+interface ConnectionRow {
+	_id: string;
+	success: boolean;
+	errorMessage?: string | null;
+	eventData?: Record<string, unknown> | null;
+	createdAt: string | Date;
+}
+
+/**
+ * Append a connection-log row, but only when it says something new: on an
+ * up<->down transition, or once an hour while the state is steady.
+ *
+ * `device_events` is an immutable log — updateOne/findOneAndUpdate are blocked by
+ * middleware — so there is no atomic upsert available and this read-then-write is
+ * racy across concurrent tabs. That is acceptable: the worst case is two adjacent
+ * rows in the same state a few milliseconds apart, in an append-only TTL'd
+ * telemetry log that nothing reads for correctness.
+ *
+ * Returns the row it wrote, or null if it decided not to write.
+ */
+async function recordConnection(
+	up: boolean,
+	preflight: { ok?: boolean; checks?: Record<string, { ok?: boolean; value?: boolean } | undefined> } | null,
+	errorMessage: string | null,
+	previous: ConnectionRow | null
+): Promise<ConnectionRow | null> {
+	try {
+		const prevUp = previous ? previous.success === true : null;
+		const ageMs = previous ? Date.now() - new Date(previous.createdAt).getTime() : Infinity;
+		const changed = prevUp !== null && prevUp !== up;
+
+		if (changed && ageMs < ARM_CHANGE_DEDUPE_MS) return null;
+		if (!changed && prevUp !== null && ageMs < ARM_HEARTBEAT_MS) return null;
+
+		const row = {
+			_id: generateId(),
+			deviceId: ARM_DEVICE_ID,
+			eventType: ARM_CONNECTION_EVENT,
+			success: up,
+			errorMessage: up ? undefined : (errorMessage ?? '').slice(0, 500),
+			eventData: {
+				reason: changed ? 'change' : 'heartbeat',
+				previous: prevUp === null ? null : prevUp ? 'up' : 'down',
+				preflightOk: preflight?.ok ?? null,
+				dryRun: preflight?.checks?.dry_run?.value ?? null,
+				leaderOk: preflight?.checks?.leader_port?.ok ?? null,
+				followerOk: preflight?.checks?.follower_port?.ok ?? null,
+				baseUrl: env.ROBOT_ARM_BASE_URL ?? null,
+				// The mechanism that observed this, deliberately NOT the user who was
+				// looking — a connection log should not become a surveillance log.
+				observedBy: 'control-page-load'
+			},
+			createdAt: new Date()
+		};
+
+		await DeviceEvent.create(row);
+		return row as unknown as ConnectionRow;
+	} catch {
+		// Telemetry must never break the page it describes — same posture as the
+		// safe* wrappers above.
+		return null;
+	}
+}
+
 async function safeTasks() {
 	try {
 		const res = await robotArm.listTasks();
@@ -59,17 +140,63 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
-	const [active, piRecordings, dbDatasets, preflightResult, tasks, holder] = await Promise.all([
-		safeActive(),
-		safeRecordings(),
-		RobotArmDataset.find({}).select('_id name path').sort({ recordedAt: -1 }).limit(50).lean(),
-		safePreflight(),
-		safeTasks(),
-		deriveArmHolder()
-	]);
+	const [activeResult, piRecordings, dbDatasets, preflightResult, tasks, holder, logRows] =
+		await Promise.all([
+			safeActive(),
+			safeRecordings(),
+			RobotArmDataset.find({}).select('_id name path').sort({ recordedAt: -1 }).limit(50).lean(),
+			safePreflight(),
+			safeTasks(),
+			deriveArmHolder(),
+			DeviceEvent.find({ deviceId: ARM_DEVICE_ID, eventType: ARM_CONNECTION_EVENT })
+				.select('_id success errorMessage eventData createdAt')
+				.sort({ createdAt: -1 })
+				.limit(ARM_LOG_LIMIT)
+				.lean()
+		]);
+
+	// Preflight is the single definition of "reachable" for the log. safeActive()
+	// is a second, independent reachability signal (different endpoint, different
+	// timeout) that can disagree — that disagreement is surfaced in the session
+	// bar, deliberately not blended into this log.
+	const up = preflightResult.preflightError === null;
+	const previous = (logRows[0] as ConnectionRow | undefined) ?? null;
+	const written = await recordConnection(
+		up,
+		preflightResult.preflight,
+		preflightResult.preflightError,
+		previous
+	);
+	const connectionLog = (written ? [written, ...logRows] : logRows) as ConnectionRow[];
+
+	// Fold in what THIS request just observed. Reading "last connected" straight
+	// off the newest success row would report an hour-old timestamp next to a
+	// green ONLINE dot, because a steady arm only writes a heartbeat row hourly.
+	let lastConnected: string | null = null;
+	if (up) {
+		lastConnected = new Date().toISOString();
+	} else {
+		const recent = connectionLog.find((r) => r.success);
+		if (recent) {
+			lastConnected = new Date(recent.createdAt).toISOString();
+		} else {
+			// Down, and no success inside the fetched window — look further back
+			// rather than claiming it has never connected.
+			const older = await DeviceEvent.findOne({
+				deviceId: ARM_DEVICE_ID,
+				eventType: ARM_CONNECTION_EVENT,
+				success: true
+			})
+				.select('createdAt')
+				.sort({ createdAt: -1 })
+				.lean();
+			lastConnected = older ? new Date(older.createdAt).toISOString() : null;
+		}
+	}
 
 	return {
-		active,
+		active: activeResult.active,
+		activeError: activeResult.activeError,
 		piRecordings,
 		dbDatasets: JSON.parse(JSON.stringify(dbDatasets)),
 		preflight: preflightResult.preflight,
@@ -79,7 +206,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 		armBaseUrl: env.ROBOT_ARM_BASE_URL ?? null,
 		tasks,
 		holder,
-		currentUserId: locals.user._id
+		currentUserId: locals.user._id,
+		connectionLog: JSON.parse(JSON.stringify(connectionLog)),
+		lastConnected
 	};
 };
 

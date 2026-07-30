@@ -30,11 +30,21 @@
 	let {
 		preflight = null,
 		preflightError = null,
-		baseUrl = null
+		baseUrl = null,
+		lastConnected = null,
+		variant = 'full'
 	}: {
 		preflight?: Preflight | null;
 		preflightError?: string | null;
 		baseUrl?: string | null;
+		/** ISO timestamp of the most recent SUCCESSFUL reach, from the connection log. */
+		lastConnected?: string | null;
+		/**
+		 * 'full' is the desktop side panel; 'compact' is the single status line
+		 * shown under the page title on narrow screens. Both are driven by the
+		 * same derived state below so they can never disagree.
+		 */
+		variant?: 'full' | 'compact';
 	} = $props();
 
 	let refreshing = $state(false);
@@ -61,6 +71,21 @@
 			.filter((r) => r.check)
 	);
 
+	// Mirrors the CV station list's relativeTime() so "last seen" reads the same
+	// way across the two device fleets.
+	function relativeTime(iso: string | null): string {
+		if (!iso) return 'never';
+		const ms = Date.now() - new Date(iso).getTime();
+		if (Number.isNaN(ms) || ms < 0) return 'just now';
+		const secs = Math.floor(ms / 1000);
+		if (secs < 60) return `${secs}s ago`;
+		const mins = Math.floor(secs / 60);
+		if (mins < 60) return `${mins}m ago`;
+		const hrs = Math.floor(mins / 60);
+		if (hrs < 24) return `${hrs}h ago`;
+		return `${Math.floor(hrs / 24)}d ago`;
+	}
+
 	async function refresh() {
 		refreshing = true;
 		try {
@@ -71,10 +96,45 @@
 	}
 </script>
 
-<section
-	class="rounded border p-3 sm:p-4"
-	style="border-color: var(--color-tron-border); background: var(--color-tron-surface);"
->
+{#if variant === 'compact'}
+	<!--
+		Narrow screens only. The full panel is a lot of vertical space to spend
+		before the controls, so phones get the verdict on one line instead.
+	-->
+	<div
+		class="flex flex-wrap items-center gap-x-3 gap-y-1 rounded border px-3 py-2"
+		style="border-color: var(--color-tron-border); background: var(--color-tron-surface);"
+	>
+		<span class="inline-flex items-center gap-2 text-xs" style="color: var(--color-tron-text)">
+			<span class="inline-block h-2 w-2 rounded-full" style="background: {dotColor}"></span>
+			{label}
+		</span>
+
+		{#if liveMotion}
+			<span
+				class="rounded px-1.5 py-0.5 text-[10px] font-semibold"
+				style="background: rgba(239,68,68,0.15); color: #ef4444;"
+			>
+				⚠ LIVE MOTION
+			</span>
+		{:else if dryRun === true}
+			<span
+				class="rounded px-1.5 py-0.5 text-[10px] font-semibold"
+				style="background: rgba(34,197,94,0.15); color: #22c55e;"
+			>
+				DRY RUN
+			</span>
+		{/if}
+
+		<span class="text-[10px]" style="color: var(--color-tron-text-secondary)">
+			last connected {relativeTime(lastConnected)}
+		</span>
+	</div>
+{:else}
+	<section
+		class="rounded border p-3 sm:p-4"
+		style="border-color: var(--color-tron-border); background: var(--color-tron-surface);"
+	>
 	<div class="flex flex-wrap items-center justify-between gap-2">
 		<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">
 			ARM CONNECTION
@@ -179,4 +239,16 @@
 			</div>
 		{/if}
 	{/if}
-</section>
+
+	<!--
+		Sourced from the persisted connection log, not from this render — so it
+		still answers "when did this last work?" while the arm is down.
+	-->
+	<p
+		class="mt-3 border-t pt-2 text-xs"
+		style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)"
+	>
+		Last connected <span style="color: var(--color-tron-text)">{relativeTime(lastConnected)}</span>
+	</p>
+	</section>
+{/if}
