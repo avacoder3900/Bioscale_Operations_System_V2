@@ -17,7 +17,8 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 	const body = await request.json();
 	const {
 		title, description, status, sizeClass, assignedTo, dueDate, tags,
-		appendContext, projectId, actor, reason, waitingOn, waitingUntil
+		appendContext, projectId, actor, reason, waitingOn, waitingUntil,
+		sourceRef, dor
 	} = body;
 
 	const actorName = typeof actor === 'string' && actor.trim() ? actor.trim() : 'agent';
@@ -54,6 +55,20 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 		oldData.tags = task.tags;
 		$set.tags = tags;
 		changedFields.push('tags');
+	}
+	if (sourceRef !== undefined) {
+		// KB2-08 linkage conventions: pr:<number>, branch:<name>, commit:<sha>
+		oldData.sourceRef = task.sourceRef;
+		$set.sourceRef = sourceRef || null;
+		changedFields.push('sourceRef');
+	}
+	if (dor !== undefined && dor !== null && typeof dor === 'object') {
+		for (const k of ['outcome', 'acceptanceCriteria', 'handoffBrief'] as const) {
+			if (dor[k] !== undefined) {
+				$set[`dor.${k}`] = dor[k];
+				changedFields.push(`dor.${k}`);
+			}
+		}
 	}
 
 	if (projectId !== undefined) {

@@ -83,12 +83,17 @@ export async function transitionTask(opts: TransitionOptions) {
 		);
 	}
 
-	if (to === 'wip') {
-		const wip = await checkWipLimit(task.assignee?._id, taskId);
+	// Expedite is the emergency lane: exempt from personal WIP limits and the
+	// pull window (hard system-wide cap enforced at replenish, KB2-04).
+	if (to === 'wip' && task.classOfService !== 'expedite') {
+		const incomingIsChore = task.itemType === 'chore' || task.classOfService === 'chore';
+		const wip = await checkWipLimit(task.assignee?._id, taskId, incomingIsChore);
 		if (!wip.ok) {
 			throw new TransitionError(
 				'WIP_LIMIT_EXCEEDED',
-				`${wip.assignee} is at their WIP limit (${wip.currentCount}/${wip.limit}). Finish or move an item out of WIP first.`,
+				wip.kind === 'chore_limit_exceeded'
+					? `${wip.assignee} already has ${wip.currentCount} chore(s) in WIP (max ${wip.limit}). Chores are rationed so they don't eat the week.`
+					: `${wip.assignee} is at their WIP limit (${wip.currentCount}/${wip.limit}). Finish or move an item out of WIP first.`,
 				wip
 			);
 		}

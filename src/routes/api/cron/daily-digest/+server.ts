@@ -22,6 +22,16 @@ async function runDigest(request: Request) {
 	authenticateDigest(request);
 	await connectDB();
 
+	// KB2-10 piggyback: daily standing-work supply check — spawns one captured
+	// build option per target below its reorder point (idempotent). Failure
+	// here must never block the digest itself.
+	try {
+		const { standingStatus } = await import('$lib/server/kanban/standing');
+		await standingStatus({ spawn: true, actorUsername: 'system:daily-cron' });
+	} catch (e) {
+		console.error('[daily-digest] standing-target check failed:', e);
+	}
+
 	const settings = await NotificationSettings.findById('default').lean() as any;
 	if (settings?.enabled?.dailyDigest === false) {
 		return json({ success: true, skipped: 'disabled' });

@@ -11,7 +11,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	const body = await request.json();
 	// NOTE: body.status is deliberately ignored — every new item is captured
 	// (Tier 1). Entering Tier 2 happens only through replenishment (KB2-02).
-	const { title, projectId, description, assignedTo, dueDate, source, sourceRef, tags, parentTaskId, actor } = body;
+	const { title, projectId, description, assignedTo, dueDate, source, sourceRef, tags, parentTaskId, actor, board, origin, spawnedFrom, itemType, spike } = body;
 
 	if (!title?.trim()) throw error(400, 'title is required');
 	if (!projectId) throw error(400, 'projectId is required');
@@ -38,6 +38,11 @@ export const POST: RequestHandler = async ({ request }) => {
 		task = await createKanbanItem({
 			title,
 			description: description || undefined,
+			board: board === 'software' ? 'software' : 'ops',
+			origin: origin === 'discovered' ? 'discovered' : 'planned',
+			spawnedFrom: spawnedFrom || undefined,
+			itemType: ['deliverable', 'spike', 'chore'].includes(itemType) ? itemType : undefined,
+			spike: spike || undefined,
 			project: { _id: project._id, name: project.name, color: project.color },
 			assignee,
 			dueDate: dueDate ? new Date(dueDate) : undefined,

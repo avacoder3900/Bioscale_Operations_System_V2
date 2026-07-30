@@ -94,12 +94,16 @@ Mutating (all audit-logged server-side by the wrapped endpoints): `kanban_create
 `kanban_decide_proposal`, `kanban_report_violation`, `create_approval_request`,
 `decide_approval_request`, `send_message`.
 
-**Two-tier kanban (KB2)**: `kanban_replenishment_status` (read) plus the privileged
-commitment-point tools `kanban_replenish`, `kanban_demote`, `kanban_reorder_queue` — these
-require an `actor` (the username of the human driving the session; validated server-side
-against the `kanban:replenish` permission). Task creation lands in `captured` (Tier 1);
-normal updates cannot cross tiers; pulls are limited to the top of the ready queue. See
-`docs/prds/KB2-00-OVERVIEW.md`.
+**Two-tier kanban (KB2)** — the full lifecycle runs through Claude: `kanban_capture` (all
+creation; embeds the discovered-work stop-now test; replaces `kanban_create_task`),
+`kanban_process` (sizing/classing at triage), `kanban_disposition` (icebox/decline/thaw),
+`kanban_replenishment_status` + privileged `kanban_replenish` / `kanban_demote` /
+`kanban_reorder_queue` (actor validated server-side against `kanban:replenish` — only humans
+commit), `kanban_close_spike`, `kanban_flow_metrics` (no per-person stats by design),
+`kanban_get_policy` / `kanban_set_policy` (`kanban:admin`), `kanban_standing_status` /
+`kanban_set_standing_target` (supply targets, e.g. the cartridge build queue). Mutating tools
+require `actor` = the username of the human driving the session; Claude is instructed to ask,
+never guess. See `docs/prds/KB2-00-OVERVIEW.md` and `KB2-09-mcp-toolset.md`.
 
 This replicates the full `/api/agent/**` machine surface except: `ask`/`transcribe` (session-cookie
 routes serving the in-app widget, not machine agents) and the OT-2/scanner long-poll daemon queues

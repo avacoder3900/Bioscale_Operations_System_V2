@@ -4924,3 +4924,43 @@ site = exactly UDIs 202,211,212,218,222,223,229,236,243,244,245,247,248,249,250,
 npm run check: 11 errors — unchanged baseline, none in touched files.
 Branch still NOT deployable until migration runs post-deploy (see KB2-01 note). Next:
 KB2-03 processing flow, then KB2-06 views.
+
+================================================================================
+2026-07-31 — feat/kanban-two-tier — KB2-03..10 complete: the full two-tier system
+================================================================================
+Everything remaining in the KB2 PRD set, in one push:
+- KB2-03 processing: process.ts (processTask — sizeClass+classOfService set by the
+  processor; icebox/decline/thaw); replenish tightened to processed-only + full DoR
+  (outcome, acceptanceCriteria, sizing, fixed-date dueDate, software handoffBrief,
+  spike fields) with exact missing-field rejections.
+- KB2-04 policy engine: wip-limit.ts now reads KanbanPolicy (wipPerPerson=2 both boards,
+  wipChoreMax=1, expedite exempt); expedite systemMax + chore allocation ceiling enforced
+  at replenish; PATCH /kanban/policy endpoint (path-allowlisted, kanban:admin, audited);
+  /kanban/policy tuning UI page incl. StandingTarget CRUD.
+- KB2-05 flow metrics: flow-metrics.ts — Work Item Age vs SLE bands, flow-debt flags
+  (aged-while-overtaken), discovered ratio + fill suggestion, weekly throughput,
+  expedite-rate alert, flow efficiency; per-person aggregates impossible by construction
+  (documented in module header). GET /kanban/flow-metrics.
+- KB2-06 views: /kanban REPLACED with the flat global Queue (supply panel, WIP by
+  assignee w/ age bands, blocked/waiting w/ reasons, rank-badged ready w/ pull-window
+  glow, recent done, cap gauge, min-order banner, quick capture); /kanban/inventory
+  (Tier 1 mgmt: capture/process/rank/icebox/decline/DoR editing); /kanban/replenish (the
+  ceremony: candidates w/ DoR readiness, staging+ordering, commit w/ per-item results,
+  event history); /kanban/flow (no people anywhere); KanbanNav tabs + board switcher.
+  Drag-and-drop and /kanban/list DELETED (KanbanColumn/KanbanTaskCard/CreateTaskModal/
+  WipLimitModal retired). Stop-now test modal + close-spike modal on task detail.
+- KB2-07 spikes/discovered: closeSpike service+endpoint (outcome required, "still
+  unknown" valid, spawns captured/discovered options); discovered-work capture path.
+- KB2-08 software board: review status flows, handoffBrief DoR gate, sourceRef pr:/branch:
+  linkage editable via PATCH + tools; board switcher in all views.
+- KB2-09 MCP toolset v2 COMPLETE: kanban_capture (stop-now test in description; replaces
+  kanban_create_task), kanban_process, kanban_disposition, kanban_close_spike,
+  kanban_flow_metrics, kanban_get/set_policy, kanban_standing_status/set_standing_target
+  + the KB2-02 replenishment set. Full lifecycle drivable through Claude.
+- KB2-10 standing work: StandingTarget model + standing.ts (live actuals from
+  CartridgeRecord/PartDefinition, idempotent build-option spawn), GET/POST /kanban/standing,
+  daily-digest cron piggyback, supply panel on the Queue.
+npm run check: 11 errors — unchanged pre-existing baseline (r2/AskBims/assembly/parts),
+zero in any KB2 file.
+DEPLOY CHECKLIST unchanged (memory + KB2-00): deploy code → run migration APPLY=1 →
+grant kanban:replenish via roles UI → policy/standing docs auto-seed.

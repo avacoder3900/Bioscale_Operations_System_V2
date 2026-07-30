@@ -47,13 +47,17 @@ export async function requireReplenisher(username: string | undefined | null): P
 }
 
 /**
- * Definition-of-Ready check. KB2-03 will extend this (sizeClass/classOfService
- * set at processing, spike fields, software handoff brief); until then the
- * floor is a non-empty outcome statement.
+ * Definition-of-Ready check (KB2-03). The DoR is what makes the commitment
+ * gate objective instead of a judgment call — replenish rejects with the
+ * exact missing fields.
  */
 export function dorMissingFields(task: any): string[] {
 	const missing: string[] = [];
-	if (!task.dor?.outcome?.trim()) missing.push('dor.outcome (outcome statement — what is different when this is done)');
+	if (!task.dor?.outcome?.trim()) missing.push('dor.outcome (outcome statement — what is different when this is done, not the steps)');
+	if (!task.dor?.acceptanceCriteria?.trim()) missing.push('dor.acceptanceCriteria');
+	if (!task.sizeClass) missing.push('sizeClass (set at processing)');
+	if (!task.classOfService) missing.push('classOfService (set at processing)');
+	if (task.classOfService === 'fixed_date' && !task.dueDate) missing.push('dueDate (fixed_date items need a real external date)');
 	if (task.board === 'software' && !task.dor?.handoffBrief?.trim()) {
 		missing.push('dor.handoffBrief (the coding-agent handoff brief — software items commit with one)');
 	}
@@ -110,15 +114,55 @@ export async function replenish(opts: {
 			rejected.push({ taskId, title: task.title, reason: `on the '${task.board}' board, not '${board}'` });
 			continue;
 		}
-		// TODO(KB2-03): tighten to status==='processed' once the processing flow ships.
-		if (!['captured', 'processed'].includes(task.status)) {
-			rejected.push({ taskId, title: task.title, reason: `status '${task.status}' is not an uncommitted Tier 1 option` });
+		if (task.status !== 'processed') {
+			rejected.push({
+				taskId,
+				title: task.title,
+				reason:
+					task.status === 'captured'
+						? "still 'captured' — process it first (size class + class of service are set at processing)"
+						: `status '${task.status}' is not an uncommitted Tier 1 option`
+			});
 			continue;
 		}
 		const missing = dorMissingFields(task);
 		if (missing.length) {
 			rejected.push({ taskId, title: task.title, reason: `Definition of Ready incomplete: ${missing.join('; ')}` });
 			continue;
+		}
+		// Expedite: hard system-wide cap on concurrently committed emergencies (KB2-04).
+		if (task.classOfService === 'expedite') {
+			const expediteMax = policy?.expedite?.systemMax ?? 1;
+			const activeExpedite = await KanbanTask.countDocuments({
+				classOfService: 'expedite',
+				status: { $in: ['ready', 'wip', 'waiting', 'blocked', 'review'] },
+				archived: false
+			});
+			if (activeExpedite >= expediteMax) {
+				rejected.push({ taskId, title: task.title, reason: `expedite limit reached (${activeExpedite}/${expediteMax} system-wide) — a rising expedite rate is an upstream-planning signal, not bad luck` });
+				continue;
+			}
+		}
+		// Chore ceiling: chores are rationed — floor AND ceiling (KB2-04). A ban
+		// would drive small work off the board; the ceiling stops it eating the week.
+		if (task.itemType === 'chore' || task.classOfService === 'chore') {
+			const chorePct = policy?.allocation?.chore ?? 15;
+			const committed = await KanbanTask.countDocuments({
+				board,
+				status: { $in: ['ready', 'wip', 'waiting', 'blocked', 'review'] },
+				archived: false
+			});
+			const chores = await KanbanTask.countDocuments({
+				board,
+				status: { $in: ['ready', 'wip', 'waiting', 'blocked', 'review'] },
+				archived: false,
+				$or: [{ itemType: 'chore' }, { classOfService: 'chore' }]
+			});
+			const ceiling = Math.max(1, Math.ceil(((committed + 1) * chorePct) / 100));
+			if (chores + 1 > ceiling) {
+				rejected.push({ taskId, title: task.title, reason: `chore allocation ceiling reached (${chores}/${ceiling} of committed work at ${chorePct}%)` });
+				continue;
+			}
 		}
 		const readyCount = await KanbanTask.countDocuments({ board, status: 'ready', archived: false });
 		if (readyCount >= readyCap) {
