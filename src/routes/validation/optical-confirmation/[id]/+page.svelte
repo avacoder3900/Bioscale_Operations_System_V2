@@ -1,187 +1,210 @@
 <script lang="ts">
-	interface ChannelRow {
-		channel: string;
+	import JsonTree from '$lib/components/JsonTree.svelte';
+
+	// Mirrors the CartridgeAnalysis contract from $lib/server/optical-analysis
+	// (kept inline so this client component doesn't import a server-only module).
+	interface BandStat {
 		n: number;
-		f3Sum: number;
-		f5Sum: number;
-		f7Sum: number;
-		f7f3: number | null;
-		f5f3: number | null;
+		mean: number;
+		sd: number;
+		cv: number | null;
 	}
-
+	interface ChannelAnalysis {
+		channel: 'A' | 'B' | 'C';
+		n: number;
+		windowK: number;
+		f3: BandStat;
+		f7: BandStat;
+		ratio: number | null;
+		ratioMode: number | null;
+		ratioSd: number | null;
+		ratioCv: number | null;
+		bandLow: number | null;
+		bandHigh: number | null;
+		flags: string[];
+	}
+	interface CartridgeAnalysis {
+		profileName: string;
+		computedAt: string;
+		windowK: number;
+		channels: ChannelAnalysis[];
+		ratioByChannel: { A: number | null; B: number | null; C: number | null };
+		crossWellCv: number | null;
+		rogueChannel: 'A' | 'B' | 'C' | null;
+		warning: boolean;
+		reasons: string[];
+	}
 	interface Props {
-		data: {
-			barcode: string;
-			assayName: string | null;
-			status: string;
-			spuUdi: string | null;
-			completedAt: string | null;
-			analysis: {
-				readingCount: number;
-				baselineScans: number | null;
-				testScans: number | null;
-				scanGroup: 'test' | 'all';
-				channels: ChannelRow[];
-				allChannels: ChannelRow[];
-				ratioByChannel: Record<string, number | null>;
-			} | null;
-			readings: any[];
-			rawData: any;
-		};
+		data: { cartridge: Record<string, unknown>; analysis: CartridgeAnalysis | null };
 	}
-
 	let { data }: Props = $props();
 
-	let showAllReadings = $state(false);
+	const analysis = $derived(data.analysis);
+	const hasReadings = $derived(!!analysis && analysis.channels.length > 0);
+	const windowK = $derived(analysis?.windowK ?? 10);
 
-	const READING_COLS = ['number', 'channel', 'position', 'temperature', 'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'clear', 'nir'] as const;
+	let rawOpen = $state(false);
 
-	let visibleReadings = $derived(showAllReadings ? data.readings : data.readings.slice(0, 30));
-
-	function fmt(v: unknown): string {
-		if (v == null) return '—';
-		if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(2);
-		return String(v);
+	function fmt(v: number | null | undefined, digits: number): string {
+		return v == null || !Number.isFinite(v) ? '—' : v.toFixed(digits);
 	}
-
-	function fmtDate(d: string | null): string {
-		return d ? new Date(d).toLocaleString() : '—';
+	function band(low: number | null, high: number | null): string {
+		if (low == null || high == null) return '—';
+		return `${low.toFixed(2)}–${high.toFixed(2)}`;
 	}
 </script>
 
 <div class="space-y-6">
 	<!-- Header -->
-	<div class="flex items-start justify-between">
-		<div>
-			<h1 class="tron-heading font-mono text-2xl font-bold">{data.barcode}</h1>
-			<p class="tron-text-muted mt-1">
-				{data.assayName ?? 'Optical test cartridge'}
-				{#if data.spuUdi}&nbsp;· ran on {data.spuUdi}{/if}
-				{#if data.completedAt}&nbsp;· completed {fmtDate(data.completedAt)}{/if}
-			</p>
-		</div>
-		<span class="rounded-full bg-[var(--color-tron-bg-tertiary)] px-3 py-1 text-xs font-medium capitalize">{data.status}</span>
+	<div>
+		<a
+			href="/validation/optical-confirmation"
+			class="text-sm text-[var(--color-tron-cyan)] hover:underline"
+		>
+			← Back to Optical Confirmation
+		</a>
+		<h1 class="tron-heading mt-1 text-2xl font-bold">Cartridge Data</h1>
 	</div>
 
-	{#if !data.analysis}
-		<div class="tron-card p-6">
-			<p class="tron-text-muted">No run data yet — this cartridge has no readings. The analysis appears here automatically once the device completes the run.</p>
-		</div>
-	{:else}
-		<!-- Headline ratios -->
-		<div class="tron-card p-6">
-			<h2 class="tron-heading mb-1 text-lg font-semibold">Analysis — F7/F3 per channel</h2>
-			<p class="tron-text-muted mb-4 text-xs">
-				Ratio of summed bands over the
-				{data.analysis.scanGroup === 'test'
-					? `test scans (readings after the first ${data.analysis.baselineScans} baseline scans)`
-					: 'full run (no baseline split recorded)'}
-				· {data.analysis.readingCount} readings total
-			</p>
-			<div class="flex flex-wrap gap-4">
-				{#each Object.entries(data.analysis.ratioByChannel) as [ch, ratio] (ch)}
-					<div class="min-w-28 rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4 text-center">
-						<span class="tron-text-muted block text-xs uppercase">Well {ch}</span>
-						<span class="tron-heading text-3xl font-bold">{ratio != null ? ratio.toFixed(1) : '—'}</span>
-						<span class="tron-text-muted block text-xs">F7/F3</span>
-					</div>
+	<!-- Warning banner -->
+	{#if analysis?.warning}
+		<div
+			class="rounded border border-amber-500/60 bg-amber-500/10 p-4"
+			role="alert"
+		>
+			<div class="flex items-center gap-2">
+				<span class="text-lg text-amber-400">⚠</span>
+				<h2 class="text-sm font-semibold uppercase tracking-wide text-amber-300">
+					Data flags
+				</h2>
+			</div>
+			<ul class="mt-2 space-y-1 pl-7 text-sm text-amber-200 list-disc">
+				{#each analysis.reasons as reason (reason)}
+					<li>{reason}</li>
 				{/each}
-			</div>
-		</div>
-
-		<!-- Per-channel table -->
-		<div class="tron-card">
-			<div class="border-b border-[var(--color-tron-border)] p-4">
-				<h2 class="tron-heading text-lg font-semibold">Per-channel sums ({data.analysis.scanGroup === 'test' ? 'test scans' : 'all readings'})</h2>
-			</div>
-			<div class="overflow-x-auto">
-				<table class="w-full text-sm">
-					<thead class="text-left text-[var(--color-tron-text-secondary)]">
-						<tr class="border-b border-[var(--color-tron-border)]">
-							<th class="p-3 font-medium">Well</th>
-							<th class="p-3 font-medium">F3 sum</th>
-							<th class="p-3 font-medium">F5 sum</th>
-							<th class="p-3 font-medium">F7 sum</th>
-							<th class="p-3 font-medium">F5/F3</th>
-							<th class="p-3 font-medium">F7/F3</th>
-							<th class="p-3 font-medium">n</th>
-						</tr>
-					</thead>
-					<tbody class="divide-y divide-[var(--color-tron-border)]">
-						{#each data.analysis.channels as row (row.channel)}
-							<tr>
-								<td class="tron-heading p-3 font-medium">{row.channel}</td>
-								<td class="p-3">{Math.round(row.f3Sum).toLocaleString()}</td>
-								<td class="p-3">{Math.round(row.f5Sum).toLocaleString()}</td>
-								<td class="p-3">{Math.round(row.f7Sum).toLocaleString()}</td>
-								<td class="p-3">{row.f5f3 != null ? row.f5f3.toFixed(2) : '—'}</td>
-								<td class="tron-heading p-3 font-medium">{row.f7f3 != null ? row.f7f3.toFixed(2) : '—'}</td>
-								<td class="tron-text-muted p-3">{row.n}</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
-			{#if data.analysis.scanGroup === 'test'}
-				<div class="border-t border-[var(--color-tron-border)] p-4">
-					<h3 class="tron-text-muted mb-2 text-xs font-medium uppercase">Whole run (baseline + test), for reference</h3>
-					<div class="flex flex-wrap gap-4">
-						{#each data.analysis.allChannels as row (row.channel)}
-							<span class="text-xs">
-								<span class="tron-text-muted">{row.channel}:</span>
-								<span class="tron-heading font-medium">{row.f7f3 != null ? row.f7f3.toFixed(2) : '—'}</span>
-							</span>
-						{/each}
-					</div>
-				</div>
-			{/if}
-			<p class="tron-text-muted border-t border-[var(--color-tron-border)] px-4 py-2 text-xs">
-				F3 = 480 nm reference · F7 = 630 nm signal · Derived, non-destructive — the cartridge record is never modified.
-			</p>
-		</div>
-
-		<!-- Raw readings -->
-		<div class="tron-card">
-			<div class="flex items-center justify-between border-b border-[var(--color-tron-border)] p-4">
-				<h2 class="tron-heading text-lg font-semibold">Raw readings ({data.readings.length})</h2>
-				{#if data.readings.length > 30}
-					<button
-						type="button"
-						onclick={() => showAllReadings = !showAllReadings}
-						class="rounded-lg bg-[var(--color-tron-bg-tertiary)] px-3 py-1.5 text-xs font-medium text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]"
-					>
-						{showAllReadings ? 'Show first 30' : `Show all ${data.readings.length}`}
-					</button>
-				{/if}
-			</div>
-			<div class="max-h-[32rem] overflow-auto">
-				<table class="w-full text-xs">
-					<thead class="sticky top-0 bg-[var(--color-tron-bg-secondary)] text-left text-[var(--color-tron-text-secondary)]">
-						<tr class="border-b border-[var(--color-tron-border)]">
-							{#each READING_COLS as col (col)}
-								<th class="p-2 font-medium">{col}</th>
-							{/each}
-						</tr>
-					</thead>
-					<tbody class="divide-y divide-[var(--color-tron-border)]">
-						{#each visibleReadings as r, i (i)}
-							<tr>
-								{#each READING_COLS as col (col)}
-									<td class="p-2 {col === 'f3' || col === 'f7' ? 'tron-heading font-medium' : 'text-[var(--color-tron-text-secondary)]'}">{fmt(r[col])}</td>
-								{/each}
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
+			</ul>
 		</div>
 	{/if}
 
-	<!-- Full raw document -->
-	<details class="tron-card p-4">
-		<summary class="tron-text-muted cursor-pointer text-sm hover:text-[var(--color-tron-cyan)]">Full raw data (JSON)</summary>
-		<pre class="mt-3 max-h-96 overflow-auto rounded-lg bg-[var(--color-tron-bg-tertiary)] p-4 text-xs">{JSON.stringify(data.rawData, null, 2)}</pre>
-	</details>
+	<!-- Critical values: per-channel F7/F3 + band + precision -->
+	<div class="tron-card p-4">
+		<div class="mb-3 flex items-baseline justify-between">
+			<h2 class="tron-heading text-sm font-semibold uppercase tracking-wide">Critical values</h2>
+			{#if analysis}
+				<span class="text-xs text-[var(--color-tron-text-secondary)]">{analysis.profileName}</span>
+			{/if}
+		</div>
 
-	<a href="/validation/optical-confirmation" class="inline-block text-sm text-[var(--color-tron-cyan)] hover:underline">← Optical Test Cartridge Log</a>
+		{#if !hasReadings}
+			<p class="text-sm text-[var(--color-tron-text-secondary)]">
+				No optical readings on this cartridge yet — it may not have been run.
+			</p>
+		{:else}
+			<div class="overflow-x-auto">
+				<table class="w-full min-w-[48rem] text-left text-sm">
+					<thead
+						class="text-xs uppercase tracking-wide text-[var(--color-tron-text-secondary)]"
+					>
+						<tr class="border-b border-[var(--color-tron-border)]">
+							<th class="py-2 pr-4 font-medium">Well</th>
+							<th class="py-2 pr-4 font-medium">F7/F3</th>
+							<th class="py-2 pr-4 font-medium">Mode</th>
+							<th class="py-2 pr-4 font-medium">SD</th>
+							<th class="py-2 pr-4 font-medium">In-range</th>
+							<th class="py-2 pr-4 font-medium">F3 avg</th>
+							<th class="py-2 pr-4 font-medium">F7 avg</th>
+							<th class="py-2 pr-4 font-medium">Ratio CV</th>
+							<th class="py-2 font-medium">n</th>
+						</tr>
+					</thead>
+					<tbody class="font-mono">
+						{#each analysis!.channels as ch (ch.channel)}
+							{@const flagged = ch.flags.length > 0}
+							{@const rogue = analysis!.rogueChannel === ch.channel}
+							<tr
+								class="border-b border-[var(--color-tron-border)]/50 {flagged
+									? 'bg-amber-500/10'
+									: ''}"
+							>
+								<td class="py-2 pr-4 text-[var(--color-tron-text-primary)]">
+									<span class="inline-flex items-center gap-1.5">
+										{ch.channel}
+										{#if flagged}<span class="text-amber-400" title={ch.flags.join('\n')}>⚠</span>{/if}
+										{#if rogue}
+											<span
+												class="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300"
+											>
+												outlier
+											</span>
+										{/if}
+									</span>
+								</td>
+								<td class="py-2 pr-4 font-bold text-[var(--color-tron-green)]">
+									{fmt(ch.ratio, 2)}
+								</td>
+								<td class="py-2 pr-4 text-[var(--color-tron-text-primary)]">
+									{fmt(ch.ratioMode, 2)}
+								</td>
+								<td class="py-2 pr-4 text-[var(--color-tron-text-secondary)]">
+									{fmt(ch.ratioSd, 3)}
+								</td>
+								<td class="py-2 pr-4 text-[var(--color-tron-cyan)]">
+									{band(ch.bandLow, ch.bandHigh)}
+								</td>
+								<td class="py-2 pr-4 text-[var(--color-tron-text-primary)]">
+									{fmt(ch.f3.mean, 0)}
+								</td>
+								<td class="py-2 pr-4 text-[var(--color-tron-text-primary)]">
+									{fmt(ch.f7.mean, 0)}
+								</td>
+								<td
+									class="py-2 pr-4 {ch.ratioCv != null && ch.ratioCv > 15
+										? 'font-semibold text-amber-400'
+										: 'text-[var(--color-tron-text-secondary)]'}"
+								>
+									{ch.ratioCv == null ? '—' : `${ch.ratioCv.toFixed(1)}%`}
+								</td>
+								<td class="py-2 text-[var(--color-tron-text-secondary)]">{ch.n}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+
+			<!-- Summary -->
+			<p class="mt-3 text-xs text-[var(--color-tron-text-secondary)]">
+				Cross-channel F7/F3 CV =
+				<span class="text-[var(--color-tron-text-primary)]">
+					{analysis!.crossWellCv == null ? '—' : `${analysis!.crossWellCv.toFixed(1)}%`}
+				</span>
+				· stats over the last {windowK} readings (endpoint window)
+			</p>
+		{/if}
+	</div>
+
+	<!-- Raw data (collapsed by default) -->
+	<div class="tron-card p-4">
+		<button
+			type="button"
+			onclick={() => (rawOpen = !rawOpen)}
+			class="flex w-full items-center gap-2 text-left"
+		>
+			<span class="inline-block w-3 text-[var(--color-tron-text-secondary)]"
+				>{rawOpen ? '▾' : '▸'}</span
+			>
+			<h2 class="tron-heading text-sm font-semibold uppercase tracking-wide">Raw data</h2>
+		</button>
+		{#if rawOpen}
+			<div class="mt-3 overflow-x-auto">
+				<JsonTree value={data.cartridge} name={null} defaultOpenDepth={1} />
+			</div>
+		{/if}
+	</div>
+
+	<!-- Footer note -->
+	<p class="text-xs text-[var(--color-tron-text-secondary)]">
+		F3 = 480 nm reference · F7 = 630 nm signal · stats over the last {windowK} readings (endpoint
+		window) · in-range band = mean ± 1σ · flags: CV>15%, point z>2σ, cross-channel CV>15% ·
+		Derived, non-destructive — the record is never modified.
+	</p>
 </div>

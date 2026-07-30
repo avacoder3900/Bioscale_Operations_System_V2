@@ -46,13 +46,24 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	}
 
 	// Optional group: create/lookup a CartridgeGroup by name.
+	// Scoped to purpose 'assign_batch' so an analysis cohort curated on the optical
+	// log (purpose 'optical_analysis') can never be silently adopted as an assign
+	// batch just because it happens to share a name.
 	let groupId: string | undefined;
 	const groupName = (body.groupName ?? '').toString().trim();
 	if (groupName) {
-		const existing = await CartridgeGroup.findOne({ name: groupName }).lean();
+		const existing = await CartridgeGroup.findOne({
+			name: groupName,
+			purpose: { $ne: 'optical_analysis' }
+		}).lean();
 		if (existing) groupId = (existing as any)._id;
 		else {
-			const g = await CartridgeGroup.create({ _id: generateId(), name: groupName, createdBy: locals.user._id });
+			const g = await CartridgeGroup.create({
+				_id: generateId(),
+				name: groupName,
+				purpose: 'assign_batch',
+				createdBy: locals.user._id
+			});
 			groupId = g._id;
 		}
 	}

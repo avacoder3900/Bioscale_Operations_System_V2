@@ -3984,7 +3984,267 @@ Deployment: preview — https://bioscale-operations-system-mongodb-k2qsxjq91.ver
 Source: branch feat/spu-validation-runs @ commit 95946f83
 Retrieve this exact code: git checkout feat/spu-validation-runs at commit 95946f83
 What this deployment is for: approve/reject verdict UX on thermo uploads, for user review.
-=======
+
+================================================================================
+2026-07-20 — feat/optical-confirmation-analysis-profile — per-channel F7/F3 analysis in optical-confirmation log + spectrophotometer tab removed
+================================================================================
+VALIDATION-04. Surfaces the research app's "Single Scan Cortisol" analysis profile
+(per-well A/B/C F7/F3 ratio) on cartridges run through Manufacturing > Validation >
+Optical Confirmation. The assay run is unchanged — "Gen 5 Optical Scan" (A9EB41AD)
+loaded onto the cartridge as before; "cortisol" is only the NAME of the analysis
+profile that interprets the resulting optical data.
+
+Data path: brevitest-cloud writes raw fluorometer readings onto
+cartridge_records.rawData.readings[] (channel A/B/C, f1..f8, clear, nir) after a run.
+test_results collection is empty in prod — NOT used. We DERIVE the analysis on read;
+nothing is written to the DB (fully non-destructive, and it sidesteps the strict
+Mongoose schema which doesn't declare rawData/analysis).
+
+Formula (ported verbatim from research analysis.ts, single-scan case): per channel,
+sum f3/f5/f7 over the whole run, then F7/F3 = Σf7/Σf3 (ratio of SUMS, not means;
+guard Σf3=0 → null), also F5/F3. Displayed to 1 decimal in the log, 2 in the detail
+table — matching the research experiment view. Single-scan means NO scan-group
+detection is needed (one group = whole run == research single-scan profile [0]).
+
+Files:
+- src/lib/server/optical-analysis.ts — pure computeOpticalAnalysis(readings) + the
+  OpticalAnalysis/OpticalChannelAnalysis contract. + optical-analysis.test.ts (vitest,
+  4 cases: ratio-of-sums, Σf3=0→null, empty→null, non-numeric skip) — PASS.
+- optical-confirmation/+page.server.ts — derive analysis per cartridge on read.
+- optical-confirmation/+page.svelte — new "F7/F3 (A/B/C)" column (A: x.x B: x.x
+  C: x.x), barcode now links to the detail view.
+- optical-confirmation/[id]/+page.server.ts + +page.svelte — per-cartridge detail
+  view (per-channel table Well|F3 sum|F7 sum|F5 sum|F7/F3|F5/F3|n + collapsible raw
+  JsonTree), ported from feat/optical-cartridge-data-view and refactored onto the
+  shared module. + src/lib/components/JsonTree.svelte.
+- Removed the Spectrophotometer tab: nav item + getSectionName branch in
+  validation/+layout.svelte, the whole routes/validation/spectrophotometer subtree,
+  and the two orphaned SpectrophotometerCapture/Result components (safety-checked:
+  no external importers). Default /validation redirect goes to magnetometer, so
+  nothing breaks.
+
+Built via a 5-agent workflow (disjoint files) + typecheck pass. npm run check:
+46 errors / 430 warnings — all pre-existing master baseline, ZERO in touched files.
+Only 2 benign state_referenced_locally warnings in the ported JsonTree.svelte.
+
+================================================================================
+2026-07-27 — feat/optical-confirmation-analysis-profile — optical analysis TOOL v2: critical values + flagging + multi-cartridge group analysis
+================================================================================
+Turns the v1 F7/F3 log column into an analysis tool an engineer uses to judge a
+run. Data path CONFIRMED live: cartridge_records.rawData.readings[] is populated on
+completed Gen 5 Optical Scan carts (probe: 4 of 19 optical carts have readings,
+A/B/C=42 each, baselineScans=0 -> single scan group; test_results empty). Derive-on
+-read, never writes the DB.
+
+Stats (per user): computed over an ENDPOINT WINDOW = last windowK=10 readings per
+channel (readings are a kinetic curve, so whole-run SD measures the reaction not
+precision). Per channel we show F7/F3 (mean of per-reading f7/f3), MODE, SD, and the
+in-range band = MEAN +/- 1sigma (user picked mean-driven over mode-driven; mode is
+shown but doesn't drive the band), plus F3 avg, F7 avg, ratio CV. Flags (research
+parity): per-channel ratio CV>15%, per-reading |z|>2sigma, cross-well CV>15% (names
+rogue channel). GROUP (net-new): select N cartridges -> per-channel across-cartridge
+mean/mode/SD/band + flag any cartridge outside the group's mean+/-1sigma; cross-
+cartridge CV>15% note.
+
+Verified end-to-end on real prod data via tsx: single-cart bands tight (~0.5 ratio,
+SD ~0.01) with z-outlier flags firing; group correctly flags the ratio~28 cart as the
+outlier among ~0.5/~9/~28 carts.
+
+Files:
+- src/lib/server/optical-analysis.ts — REWRITTEN: analyzeCartridge()/analyzeGroup()
+  + OpticalConfig/BandStat/ChannelAnalysis/CartridgeAnalysis/GroupAnalysis. Replaces
+  v1 computeOpticalAnalysis. + optical-analysis.test.ts (vitest, 5 cases) PASS.
+- optical-confirmation/+page.server.ts — analyzeCartridge per cart; returns trimmed
+  {ratioByChannel,warning,crossWellCv}.
+- optical-confirmation/+page.svelte — F7/F3 col + amber warn indicator; row
+  checkboxes + select-all + sticky "Analyze selected (N)" -> analyze?ids=csv.
+- optical-confirmation/[id]/+page.svelte(+server) — full per-channel critical-values
+  table (Well|F7/F3|Mode|SD|In-range|F3avg|F7avg|Ratio CV|n) + warnings banner + raw
+  JsonTree.
+- optical-confirmation/analyze/+page.svelte(+server) — NEW group-analysis route:
+  per-channel group stats table + per-cartridge table w/ outlier highlighting.
+
+Built via workflow (foundation module gated on vitest -> 3 parallel UI consumers ->
+typecheck). npm run check: 46 errors / 430 warnings — all pre-existing master
+baseline, ZERO in touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-op-6a10b0-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-9moOvi9eb-brevitest.vercel.app)
+Source: branches feat/optical-confirmation-analysis-profile AND deploy/optical-analysis @ commit 6ee2adc7
+Retrieve this exact code: git checkout deploy/optical-analysis at commit 6ee2adc7
+What this deployment is for: test the optical analysis tool v2 — F7/F3 (A/B/C) log column
+  + per-cartridge critical-values detail (F7/F3, mode, SD, mean±1σ band, CV, flags) + multi-
+  cartridge group analysis; spectrophotometer tab removed. Vercel build Ready in 1m33s.
+  Verified: preview serves the app (redirects to /login); pages behind cookie-session auth.
+
+================================================================================
+2026-07-27 — deploy/optical-analysis-on-master — optical-analysis v2 rebased onto master (Runs tab restored)
+================================================================================
+The previous optical-analysis preview was cut from a pre-PR#35 master, so it lacked the
+Runs tab. Created deploy/optical-analysis-on-master off origin/master (a3da0859) and merged
+feat/optical-confirmation-analysis-profile (91f4e41c). Conflicts: took the branch's v2
+versions of the optical-confirmation pages + optical-analysis.ts (master had grown its own
+simpler readout in dd2d8342); hand-merged validation/+layout.svelte so all four tabs
+survive (Runs, Magnetometer, Thermocouple, Optical Confirmation; Spectrophotometer stays
+removed); union-merged progress.txt. npm run check: 46 errors / 430 warnings — identical
+to pre-merge baseline, no new errors.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-deploy-f53374-brevitest.vercel.app
+Source: branch deploy/optical-analysis-on-master @ commit 869e521a
+Retrieve this exact code: git checkout deploy/optical-analysis-on-master at commit 869e521a
+  (or: git log deploy/optical-analysis-on-master --oneline to find it if the branch has since moved on)
+What this deployment is for: optical-analysis v2 (VALIDATION-04) on current master — verified
+in-browser: Runs tab present, log F7/F3 (A/B/C) + flags + checkboxes, be4beb50 detail
+(A=0.52, data flags, raw-data tree), 4-cartridge group analysis w/ outlier flagging.
+NOTE: the GitHub repo is ALSO connected to a same-named Vercel project under the personal
+scope (alejandro-valdezs-projects) that has no MONGODB_URI — its previews 500 on login.
+Only brevitest-scope preview URLs are usable.
+
+===2026-07-27 (evening) - PAUSED pending real data===
+Branch deploy/optical-analysis-on-master @ 5bc9cfcf (comparator cartridges in list).
+Preview: bioscale-operations-system-mongodb-git-deploy-f53374-brevitest.vercel.app
+
+VERIFIED IN BROWSER (7-cartridge group analysis, Gen 5 Optical Scan - Start Position
+Corrected / Single Scan Cortisol / COMPARATOR):
+  - Analyze selected -> /validation/optical-confirmation/analyze?ids=... renders
+  - Per-channel group stats: mean, mode, SD, in-range (mean +/- 1sd), CV, N
+  - CV flag at 15% fires; per-cartridge outlier flags fire
+  - Footer confirms derived / non-destructive (cartridge_records untouched)
+  Result: A 180% / B 179% / C 205% CV -- driven by ONE outlier cartridge
+  bb708268-25d6-4626-865c-c8a3e10cfdc1 (A 8.85 / B 8.77 / C 9.49 vs ~0.5-0.6 for the
+  other 6). Rough hand-calc excluding it: A ~7.5%, B ~9% (would pass), C ~50% (still
+  fails, spans 0.15-0.58) -- channel C scatter needs investigation, NOT outlier-driven.
+
+NEXT (needs real data, do not conclude from current numbers):
+  1. Pull actual per-channel readings from the research app for these same barcodes
+  2. Run a real test set through, compare research-app F7/F3 vs BIMS analyze output
+  3. Only then judge whether channel C scatter is optics, cartridges, or our math
+  4. Confirm A/B pass at 15% once the outlier is excluded from a real replicate group
+
+KNOWN UI BUG: floating "Ask BIMS" chat widget overlays the bottom-left of the cartridge
+log table and covers row checkboxes (blocked selecting an 8th row).
+
+================================================================================
+2026-07-30 — feat/optical-group-comparison — optical confirmation: compare groups
+of SPUs against each other, robust median/MAD outliers
+================================================================================
+Extends optical-confirmation validation from "analyze one ad-hoc list of
+cartridges" to "compare named groups against each other, get a dataset, and see
+outliers within a group". Built on deploy/optical-analysis-on-master, NOT master
+— the v2 engine, the [id] detail page and the analyze/ route exist only there.
+
+Two bugs found first, both of which blocked or invalidated the feature:
+  * --color-tron-amber is not defined anywhere in layout.css. analyze/+page.svelte
+    styled its outlier row tint and warning glyph on it, so the outlier
+    highlighting on that page had NEVER actually rendered. Switched to Tailwind's
+    built-in amber-400/500, matching what the [id] page already does.
+  * The Ask BIMS widget is pinned bottom-LEFT at z-index 40 and mounted globally,
+    so it sat on top of the first column of every full-bleed table — which in BIMS
+    is the checkbox column. It had already blocked selecting an 8th row in this
+    very log. Moved to bottom-right; mobile bottom-sheet unchanged.
+
+Probed prod read-only before building. spus.opticalCalibration is real: 17 of 68
+SPUs, shaped channels.{A,B,C}.{rawF3,factor} plus setName/setDate/cartridgeId —
+the timestamp field is setDate, not calibratedAt. Both cartridge-to-SPU joins hit
+32/32 (device.id to particleLink.particleDeviceId, device.name to udi). Readings
+are exactly 126 per cartridge across 193 cartridges. cartridge_groups had 13 docs,
+none with cartridgeIds or purpose, no duplicate names.
+
+Engine (src/lib/server/optical-analysis.ts):
+  * robustStats/robustZ — median, MAD, 1.4826-scaled MAD, IQR, robust CV, and a
+    median +/- k*scale band. MAD=0 is common with clustered replicates and would
+    give +/-Infinity for every non-median point (JSON.stringify(Infinity) is null,
+    so the UI would blank silently) — hence a REPORTED fallback chain
+    mad -> iqr -> sd -> none, surfaced in the UI whenever it is not mad.
+  * ChannelAnalysis gained ratioSeries, the per-reading F7/F3 dataset, which
+    previously never escaped analyzeCartridge.
+  * analyzeGroupRobust + compareGroups. Outliers flag at 3.5 robust SDs from the
+    group median instead of mean +/- 1 SD; groups under minGroupN=5 are not
+    flagged at all. Between-group output is deliberately descriptive: median
+    difference, percent difference, band overlap, separation ratio.
+  * NO p-values / t-test / ANOVA. At n~7 there is no power, so a non-significant p
+    reads to an operator as "these SPUs agree" — absence of evidence reported as
+    evidence of absence. The repo tTest is also pooled-variance (equal-variance,
+    violated the moment a group holds an outlier) and its p-values route through
+    an incompleteBeta that its own source labels not production-grade.
+  * compareGroups emits the raw-calibration caveat from the ENGINE whenever groups
+    span more than one SPU, so the comparison cannot be rendered without it.
+  * analyzeGroup deleted (deprecated one commit earlier, nothing calls it).
+
+CORRECTION to the 2026-07-27 entry in this file: mean +/- 1 SD did NOT fail to
+catch that 8.85 outlier — the band was [-1.39, 4.88], so it WAS flagged. What
+mean/SD got wrong was the SPREAD statistic, 180-205% CV, driven entirely by that
+one member. Robust CV on the same vector is 7.7%. Do not repeat the "masking"
+framing; someone will check the arithmetic.
+
+Persistence: membership cannot live on OpticalTestCartridge.groupId — only
+BIMS-assigned cartridges get such a doc, and the log deliberately also lists ~93
+COMPARATOR cartridges matched by assayId alone. It lives on
+CartridgeGroup.cartridgeIds with a purpose discriminator (assign_batch vs
+optical_analysis). Five audited actions, soft delete only, one group per cartridge
+(double-counting would corrupt between-group medians), 409 on a name collision
+rather than the silent merge the assign endpoint has been doing. No unique index
+on name — the assign endpoint has always used a bare findOne by name. Reads use
+a ?? [] fallback because .lean() does not apply schema defaults. cartridge_records
+is never written.
+
+UI: "Save as group" on the log next to "Analyze selected"; a Group column whose
+pill selects that group's rows; a chips row to pick what to compare plus a
+separate Show filter. The comparison view extends analyze/ (single group = the
+N=1 case) with per-well tables, a hand-rolled SVG strip plot (no new dependency:
+chart.js is canvas and kanban-only, uplot is a dead dep and the wrong shape),
+long-format CSV export with proper quoting AND formula-injection defusing, an
+"Excluded from statistics" card naming every cartridge that contributed nothing
+and why, and a MethodLegend stating the rule in plain language. The band is
+labelled "Expected range", never "In-range"; deltas are "difference", never
+"bias".
+
+Also fixed a latent bug the new filter would have introduced: toggleAll and
+allSelected iterated data.cartridges, so with a filter active "select all" would
+have checked hidden rows. And analyzeSelected used window.location.href, forcing
+a full page reload on every analyze.
+
+Verified against prod via tsx (script deleted after): 193 cartridges over 32 SPUs,
+grouped one group per SPU. compareGroups flagged cartridge
+026b84f1-83c2-4b60-9846-d8696df73a0e at F7/F3 28.61 vs a group median of 9.45
+(13.3 robust SDs) with a readable reason, found two low outliers on well B of
+another SPU, produced between-group separation ratios, emitted the multi-SPU
+caveat, and round-tripped through JSON with no non-finite values.
+
+Caveat worth carrying forward: cartridges sharing an SPU are NOT replicates —
+they are different runs over time — so a whole-history SPU group legitimately
+shows robust CV over 100%. That is exactly why groups are hand-curated rather
+than auto-faceted by SPU. Also, this does NOT resolve the parity check this file
+paused on: until BIMS vs research-app F7/F3 is confirmed on the same barcodes,
+these flags are review signals, never a pass/fail release gate. The UI says so.
+
+Tests: the existing optical test file was run by NO npm script (test:contracts
+only includes tests/contracts/** and logs into a running app), so it was
+decoration. Added test:unit plus tests/vitest.unit.config.ts with no DB or server
+dependency. 22 tests passing, including a side-by-side assertion that on a clean
+7-cartridge group the old rule flags 2 and the new rule flags 0.
+
+npm run check: 46 errors / 430 warnings — unchanged from the master baseline,
+zero in touched files.
+
+Files: src/lib/server/optical-analysis.ts, optical-analysis.test.ts,
+optical-constants.ts (new), src/lib/server/db/models/cartridge-group.ts,
+src/lib/components/validation/optical/GroupPill.svelte, OutlierMark.svelte,
+CalibrationPill.svelte, MethodLegend.svelte, GroupStripPlot.svelte, csv.ts (all
+new), src/routes/validation/optical-confirmation/+page.server.ts and +page.svelte,
+.../analyze/+page.server.ts and +page.svelte,
+src/routes/api/validation/optical-confirmation/assign/+server.ts,
+src/lib/components/ask-bims/AskBimsWidget.svelte, package.json,
+tests/vitest.unit.config.ts (new)
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-op-9547c3-brevitest.vercel.app
+  (immutable alias: https://bioscale-operations-system-mongodb-36gohpeb3-brevitest.vercel.app)
+Source: branch feat/optical-group-comparison @ commit e13d336a
+Retrieve this exact code: git checkout feat/optical-group-comparison at commit e13d336a
+  (or: git log feat/optical-group-comparison --oneline to find it if the branch has moved on)
+What this deployment is for: reviewing group-vs-group optical comparison — name a
+  checked selection as a group on the log, then compare groups per well with
+  median/MAD outlier flagging, a strip plot, and CSV export.
 2026-07-09 — data fix — deck-001 (R04) cartridge 8 left reverted: A2/A4/A6/A8 restored
 ================================================================================
 Operator asked to revert "cartridge 8 on the left" (deck-001, R04) in the Studio. History
@@ -4948,7 +5208,6 @@ Still outstanding (story S0, deliberately not done in this commit): the three Pi
 misconfigurations listed in the entry above. Restarting the robot-arm service has a
 physical-motion consequence (the Pi's .env says DRY_RUN=false), so that work is held
 for explicit approval rather than bundled into a deploy.
-=======
 2026-07-30 — master — Operator was right: Studio tip-cal probed at the WRONG HEIGHT (38.5 park vs the fill's 40.8) — fixed fleet-wide
 ================================================================================
 Operator kept insisting the calibrator z difference between the Studio (38.5) and the reagent fill
