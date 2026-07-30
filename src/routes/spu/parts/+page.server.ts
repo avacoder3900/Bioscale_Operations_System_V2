@@ -1,17 +1,15 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { connectDB, PartDefinition, BomItem, Integration, generateId } from '$lib/server/db';
-import { syncPartsFromBox } from '$lib/server/box-sync';
+import { connectDB, PartDefinition, BomItem, generateId } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'inventory:read');
 	await connectDB();
 
-	const [parts, cartridgeBomItems, boxInteg] = await Promise.all([
+	const [parts, cartridgeBomItems] = await Promise.all([
 		PartDefinition.find().sort({ sortOrder: 1, partNumber: 1 }).lean(),
-		BomItem.find({ bomType: 'cartridge', isActive: true }).lean(),
-		Integration.findOne({ type: 'box' }).lean()
+		BomItem.find({ bomType: 'cartridge', isActive: true }).lean()
 	]);
 
 	// Map parts to expected shape
@@ -82,20 +80,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 		lowStockCount: cartridgeParts.filter(p => p.inventoryCount < p.minimumStockLevel && p.minimumStockLevel > 0).length
 	} : null;
 
-	// Box.com connection status
-	const boxStatus = {
-		isConnected: Boolean((boxInteg as any)?.accessToken),
-		lastSyncAt: (boxInteg as any)?.lastSyncAt ?? null,
-		lastSyncStatus: (boxInteg as any)?.lastSyncStatus ?? null
-	};
-
-	// Sync error detail
-	const syncErrorDetail = (boxInteg as any)?.lastSyncStatus === 'error' ? {
-		message: (boxInteg as any)?.lastSyncError ?? 'Unknown sync error',
-		failedRows: [] as string[],
-		columnIssues: [] as string[]
-	} : null;
-
 	// Computed stats
 	const allCategories = [...new Set(items.map(i => i.category).filter(Boolean))] as string[];
 	const stats = {
@@ -124,8 +108,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 		cartridgeBomSummary,
 		lowStockItems,
 		lowestInventory,
-		boxStatus,
-		syncErrorDetail,
 		stats,
 		categories: allCategories
 	};
@@ -154,42 +136,5 @@ export const actions: Actions = {
 			createdBy: locals.user!._id
 		});
 		return { success: true };
-	},
-
-	sync: async ({ locals }) => {
-		requirePermission(locals.user, 'inventory:write');
-		try {
-			const result = await syncPartsFromBox();
-			const msg = `Sync complete: ${result.upserted} parts upserted from "${result.fileName}"${result.errors.length > 0 ? ` (${result.errors.length} row errors)` : ''}.`;
-			return {
-				success: true,
-				message: msg,
-				syncResult: {
-					upserted: result.upserted,
-					skipped: result.skipped,
-					errorCount: result.errors.length,
-					columnMap: result.columnMap,
-					fileName: result.fileName
-				}
-			};
-		} catch (err: any) {
-			const message = err?.message ?? 'Unknown sync error';
-			console.error('[sync action] Box sync failed:', message);
-
-			// Record error on the Integration doc
-			await connectDB();
-			await Integration.updateOne(
-				{ type: 'box' },
-				{
-					$set: {
-						lastSyncAt: new Date(),
-						lastSyncStatus: 'error',
-						lastSyncError: message
-					}
-				}
-			);
-
-			return fail(500, { error: message });
-		}
 	}
 };

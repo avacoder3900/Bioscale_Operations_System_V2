@@ -68,12 +68,10 @@
 	// Read initial filter state from URL params
 	let searchQuery = $state(params.get('q') ?? '');
 	let selectedCategory = $state(params.get('cat') ?? 'all');
-	let syncing = $state(false);
 	let filtersOpen = $state(!!params.get('fo'));
 	let lowStockOpen = $state(false);
 	let lowInventoryOpen = $state(false);
 	let lowInvTab = $state<'zero' | 'low'>('zero');
-	let syncErrorOpen = $state(false);
 
 	// Numeric range filters (initialized from URL)
 	let invMin = $state(params.get('invMin') ?? '');
@@ -256,11 +254,6 @@
 		if (isNaN(value)) return '—';
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
 	}
-
-	function formatDate(date: Date | string | null): string {
-		if (!date) return '—';
-		return new Date(date).toLocaleDateString();
-	}
 </script>
 
 <div class="space-y-6">
@@ -287,40 +280,7 @@
 	<div class="flex items-center justify-between">
 		<div>
 			<h2 class="tron-text-primary font-mono text-2xl font-bold">SPU Parts</h2>
-			<p class="tron-text-muted">Bill of Materials — synced from Box.com</p>
-		</div>
-		<div class="flex gap-2">
-			{#if data.boxStatus.isConnected}
-				<form
-					method="POST"
-					action="?/sync"
-					use:enhance={() => {
-						syncing = true;
-						return async ({ update }) => {
-							syncing = false;
-							await update();
-						};
-					}}
-				>
-					<TronButton type="submit" variant="default" disabled={syncing}>
-						<svg class="mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-							<path
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								stroke-width="2"
-								d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-							/>
-						</svg>
-						{syncing ? 'Syncing...' : 'Sync from Box'}
-					</TronButton>
-				</form>
-			{:else}
-				<!-- eslint-disable svelte/no-navigation-without-resolve -->
-				<a href="/spu/bom/settings">
-					<TronButton variant="default">Connect to Box</TronButton>
-				</a>
-				<!-- eslint-enable svelte/no-navigation-without-resolve -->
-			{/if}
+			<p class="tron-text-muted">Bill of Materials — maintained in BIMS</p>
 		</div>
 	</div>
 
@@ -419,98 +379,6 @@
 							</div>
 						{/each}
 					</div>
-				</div>
-			{/if}
-		</TronCard>
-		<TronCard>
-			<button
-				class="w-full text-center"
-				onclick={() =>
-					data.boxStatus.lastSyncStatus === 'error' && (syncErrorOpen = !syncErrorOpen)}
-				class:cursor-pointer={data.boxStatus.lastSyncStatus === 'error'}
-				class:cursor-default={data.boxStatus.lastSyncStatus !== 'error'}
-			>
-				<div class="tron-text-muted text-sm">Last Sync</div>
-				<div class="tron-text-primary font-mono text-lg">
-					{data.boxStatus.lastSyncAt ? formatDate(data.boxStatus.lastSyncAt) : 'Never'}
-				</div>
-				{#if data.boxStatus.lastSyncStatus}
-					<div class="inline-flex items-center gap-1">
-						<TronBadge
-							variant={data.boxStatus.lastSyncStatus === 'success'
-								? 'success'
-								: data.boxStatus.lastSyncStatus === 'error'
-									? 'error'
-									: 'warning'}
-						>
-							{data.boxStatus.lastSyncStatus}
-						</TronBadge>
-						{#if data.boxStatus.lastSyncStatus === 'error'}
-							<svg
-								class="h-3 w-3 text-[var(--color-tron-text)] transition-transform {syncErrorOpen
-									? 'rotate-180'
-									: ''}"
-								fill="none"
-								viewBox="0 0 24 24"
-								stroke="currentColor"
-							>
-								<path
-									stroke-linecap="round"
-									stroke-linejoin="round"
-									stroke-width="2"
-									d="M19 9l-7 7-7-7"
-								/>
-							</svg>
-						{/if}
-					</div>
-				{/if}
-			</button>
-			{#if syncErrorOpen && data.syncErrorDetail}
-				<div class="mt-3 border-t border-[var(--color-tron-border)] pt-3 text-left text-sm">
-					<div
-						class="mb-2 rounded border border-[var(--color-tron-red)] bg-[rgba(255,51,102,0.1)] p-2"
-					>
-						<p class="font-medium text-[var(--color-tron-red)]">{data.syncErrorDetail.message}</p>
-					</div>
-					{#if data.syncErrorDetail.failedRows?.length}
-						<div class="mb-2">
-							<span class="tron-text-muted text-xs uppercase">Affected Rows</span>
-							<ul class="mt-1 list-inside list-disc text-xs text-[var(--color-tron-text)]">
-								{#each data.syncErrorDetail.failedRows as row (row)}
-									<li>{row}</li>
-								{/each}
-							</ul>
-						</div>
-					{/if}
-					{#if data.syncErrorDetail.columnIssues?.length}
-						<div class="mb-2">
-							<span class="tron-text-muted text-xs uppercase">Column Issues</span>
-							<ul class="mt-1 list-inside list-disc text-xs text-[var(--color-tron-text)]">
-								{#each data.syncErrorDetail.columnIssues as issue (issue)}
-									<li>{issue}</li>
-								{/each}
-							</ul>
-						</div>
-					{/if}
-					<p class="tron-text-muted mb-2 text-xs">
-						Try verifying the Box file format and column headers, then retry the sync.
-					</p>
-					<form
-						method="POST"
-						action="?/sync"
-						use:enhance={() => {
-							syncing = true;
-							return async ({ update }) => {
-								syncing = false;
-								syncErrorOpen = false;
-								await update();
-							};
-						}}
-					>
-						<TronButton type="submit" variant="default" disabled={syncing}>
-							{syncing ? 'Syncing...' : 'Retry Sync'}
-						</TronButton>
-					</form>
 				</div>
 			{/if}
 		</TronCard>
@@ -906,10 +774,8 @@
 							<td colspan="10" class="tron-text-muted py-8 text-center">
 								{#if searchQuery || selectedCategory !== 'all' || activeFilterCount > 0}
 									No parts match your filters.
-								{:else if !data.boxStatus.isConnected}
-									Connect to Box.com to sync parts data.
 								{:else}
-									No parts yet. Click "Sync from Box" to import data.
+									No parts yet. Use "Add Part" to create one.
 								{/if}
 							</td>
 						</tr>
