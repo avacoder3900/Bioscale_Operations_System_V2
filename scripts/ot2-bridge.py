@@ -1404,16 +1404,23 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
             bend = {"x": 0.0, "y": 0.0}
         log.info("calibrate_tip: bend x=%s y=%s", bend["x"], bend["y"])
 
-        # Where to probe from. ATTACHED: start from the tip's CURRENT position
-        # (the operator already jogged it onto the calibrator) at the CURRENT Z —
-        # no re-approach, no secondary raise. STANDALONE: use the saved calibrator
-        # point and approach it first.
+        # Where to probe from. ATTACHED: keep the tip's CURRENT X/Y as the
+        # reference (the operator may have jogged onto the fixture) but ALWAYS
+        # probe at the fill's z_cal for this mount (reagent 40.8 / wax 34.491).
+        # Probing at the tip's current Z instead (e.g. the studio's 38.5 park
+        # height) pressed the switch levers 2.3mm+ away from where every fill
+        # probes them, biasing the measured adjust between the teach frame and
+        # the fill frame — a persistent studio-vs-fill offset no amount of deck
+        # re-teaching could remove. STANDALONE: saved point, approach first.
         if attached:
             cur = get_current_position(run_id, pipette_id)
             ref_x = cur["x"] if cur["x"] is not None else cal_x
             ref_y = cur["y"] if cur["y"] is not None else cal_y
-            z_probe = cur["z"] if cur["z"] is not None else z_cal
-            log.info("calibrate_tip: probing from current pos x=%s y=%s z=%s", ref_x, ref_y, z_probe)
+            z_probe = z_cal
+            if cur["z"] is None or abs(cur["z"] - z_cal) > 1e-6:
+                move_to_coordinates(run_id, pipette_id, ref_x, ref_y, z_cal, speed=CAL_APPROACH_SPEED)
+            log.info("calibrate_tip: probing from x=%s y=%s at z_cal=%s (tip was at z=%s)",
+                     ref_x, ref_y, z_cal, cur["z"])
         else:
             ref_x, ref_y, z_probe = cal_x, cal_y, z_cal
             move_to_coordinates(run_id, pipette_id, cal_x, cal_y, z_cal, speed=CAL_APPROACH_SPEED)
