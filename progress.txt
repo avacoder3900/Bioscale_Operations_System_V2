@@ -4821,3 +4821,43 @@ Deployment: robot daemon update (B07 + B14 + R04) — /data/ot2-bridge/ot2-bridg
 Source: scripts/ot2-bridge.py @ this commit
 Retrieve this exact code: scripts/ot2-bridge.py @ this commit
 What this deployment is for: Studio Calibrate-tip and fill probes contact the calibrator at the same height, eliminating the teach-vs-fill adjust bias.
+
+================================================================================
+2026-07-30 — feat/box-inventory-disconnect — disconnect Box as inventory source
+================================================================================
+Box no longer supplies parts inventory. PartDefinition becomes BIMS-owned master
+data, edited directly rather than wiped and re-imported on every sync.
+
+Root cause this addresses: syncPartsFromBox() ran deleteMany({}) on
+part_definitions and then re-upserted every row from the Box spreadsheet "Live
+Equipment Overview.xlsx", so any manual correction was destroyed on the next
+sync. The sync had also been failing since 2026-03-04 (lastSyncStatus "partial",
+E11000 dup key on partNumber: null) and its Box access token expired 2026-03-20,
+so the part rows were already effectively BIMS-owned in practice.
+
+Files touched:
+- src/lib/server/box-sync.ts — deleted
+- src/routes/parts/+page.server.ts — removed the ?/sync action, the boxStatus and
+  syncErrorDetail load payload, and the Integration lookup from the load
+  Promise.all. create / createCartridgePart / deleteCartridgePart / withdraw are
+  untouched.
+- src/routes/parts/+page.svelte — removed the Sync from Box and Connect to Box
+  buttons, the Last Sync status card, the sync-error detail panel and its Retry
+  Sync form, and the Box-specific empty-state copy. formatDate kept (still used
+  by the scanned-inventory table).
+
+Box FILE STORAGE is deliberately untouched and still works: src/lib/server/box.ts,
+/api/box/upload, /api/box/files/[id], the documents browser and receiving CoC
+uploads all continue to function. This change is inventory-only.
+
+npm run check: NOT RUN LOCALLY — this worktree has no node_modules and master is
+on Mongoose 9 while the source branch is on Mongoose 8, so sharing them would be
+invalid. The equivalent change was svelte-check clean on perf/data-health-01
+(183/183, the exact pre-existing baseline, zero new, no errors in either edited
+file). Vercel's branch build is the gate here.
+
+Ported from perf/data-health-01 @ d9604550. A straight cherry-pick was not
+possible: master restructured routes in 7c01942b ("remove /spu URL prefix"), so
+the source branch's src/routes/spu/parts/ has no counterpart on master and git's
+rename detection mis-targeted the committed OneDrive clone at
+"OneDrive - Linbeck Group, LLC/Documents/GitHub/Bioscale_Operations_System_V2-dev/".
