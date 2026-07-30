@@ -4761,8 +4761,7 @@ What this deployment is for: today's known-good calibration is restorable foreve
 
 ================================================================================
 2026-07-29 — feat/mcp-live — Remote MCP server at /api/mcp (wraps the agent API; kanban-first tool surface)
-================================================================================
-Converted the BIMS agent REST API into a remote MCP server that Claude Desktop /
+=========================================================================Converted the BIMS agent REST API into a remote MCP server that Claude Desktop /
 claude.ai / Claude-in-Chrome custom connectors can reach. Supersedes the localhost-only
 services/bims-mcp prototype (left in place): the endpoint now lives INSIDE the SvelteKit
 app, so it deploys with every push at a public HTTPS URL (custom connectors dial in from
@@ -4798,3 +4797,27 @@ leaks secret lengths to any user; deactivated-user session bug now CLOSED), data
 guards a nonexistent field, .save() bypasses sacred/immutable middleware), API inventory
 (183 endpoints, zero fully-unauthenticated; spoofable vercel-cron UA fallback when
 CRON_SECRET unset), code health (1,518 `as any`; 84 contract tests vs 185 endpoints).
+=======
+2026-07-30 — master — Operator was right: Studio tip-cal probed at the WRONG HEIGHT (38.5 park vs the fill's 40.8) — fixed fleet-wide
+================================================================================
+Operator kept insisting the calibrator z difference between the Studio (38.5) and the reagent fill
+(40.8) "has to cause some kind of offset". Initially dismissed (the endpoint sends zCal=40.8 in the
+bridge payload) — WRONG: the daemon's ATTACHED-mode calibrate_tip ignored the payload z and probed
+at the tip's CURRENT height ("z_probe = cur z", ot2-bridge.py ~1415). The Studio flow parks at the
+fixture position z (38.5) before calibrating, so every Studio tip-cal pressed the switch levers
+2.3mm below where every reagent fill presses them (wax teaching: ~4mm above the wax fill's 34.49).
+Different lever contact height -> systematically different measured adjust -> a persistent
+teach-frame vs fill-frame bias no deck re-teaching could remove (very likely the B14 ~0.8mm
+bridge-vs-run residual empirically compensated on 07-29).
+FIX: attached mode now keeps the current X/Y as reference but ALWAYS moves to and probes at the
+payload z_cal for the mount (reagent 40.8 / wax 34.491) — Studio probe height == fill probe height
+by construction. Deployed to all three robots (daemons restarted clean 15:34, all idle at deploy).
+NOTE: existing taught decks keep their empirical compensations (captured against fill behavior, so
+they stay valid); FUTURE Studio teaching now measures adjusts in the fill frame directly.
+zCalReagent/zCalWax values themselves unchanged (40.8/34.491 remain the fill-proven heights); the
+38.5 fixture position.z remains a park/jog height only.
+
+Deployment: robot daemon update (B07 + B14 + R04) — /data/ot2-bridge/ot2-bridge.py
+Source: scripts/ot2-bridge.py @ this commit
+Retrieve this exact code: scripts/ot2-bridge.py @ this commit
+What this deployment is for: Studio Calibrate-tip and fill probes contact the calibrator at the same height, eliminating the teach-vs-fill adjust bias.
