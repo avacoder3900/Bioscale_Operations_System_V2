@@ -42,9 +42,11 @@
 		return `${lo.toFixed(2)}–${hi.toFixed(2)}`;
 	}
 	function cvClass(cv: number | null): string {
-		return cv != null && cv > 15
-			? 'text-[var(--color-tron-amber)]'
-			: 'text-[var(--color-tron-text-primary)]';
+		// Tailwind's built-in amber, matching the [id] detail page. The
+		// --color-tron-amber custom property does NOT exist in layout.css, so
+		// styling on it renders as plain body text (this table's warnings were
+		// invisible until 2026-07-30).
+		return cv != null && cv > 15 ? 'text-amber-400' : 'text-[var(--color-tron-text-primary)]';
 	}
 </script>
 
@@ -74,7 +76,7 @@
 		{#if group!.crossCartridgeFlags.length > 0}
 			<div class="space-y-1">
 				{#each group!.crossCartridgeFlags as flag}
-					<p class="text-sm text-[var(--color-tron-amber)]">⚠ {flag}</p>
+					<p class="text-sm text-amber-400">⚠ {flag}</p>
 				{/each}
 			</div>
 		{/if}
@@ -139,7 +141,7 @@
 						{#each group!.cartridges as cart (cart.id)}
 							<tr
 								class="border-b border-[var(--color-tron-border)]/50 {cart.warning
-									? 'bg-[var(--color-tron-amber)]/10'
+									? 'bg-amber-500/10'
 									: ''}"
 							>
 								<td class="py-2 pr-4">
@@ -152,7 +154,7 @@
 									{@const outlier = cart.outlierChannels.includes(c)}
 									<td
 										class="py-2 pr-4 {outlier
-											? 'text-[var(--color-tron-amber)]'
+											? 'text-amber-400'
 											: 'text-[var(--color-tron-text-primary)]'}"
 									>
 										{fmt(cart.ratioByChannel[c])}{outlier ? ' ⚠' : ''}
