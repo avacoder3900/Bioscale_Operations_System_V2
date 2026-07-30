@@ -5533,3 +5533,54 @@ What this deployment is for: Box is no longer the inventory source for parts —
 Verified post-deploy: Vercel success on both projects; production /login HTTP 200;
   master's src/routes/parts/+page.server.ts has zero box-sync references and
   src/lib/server/box-sync.ts is absent while src/lib/server/box.ts remains.
+
+================================================================================
+2026-07-30 — master — Claude-driven SPU reassembly inventory adjustment (MCP tools + agent API)
+================================================================================
+New capability: an operator can tell Claude (via the BIMS MCP connector) "Reassembly completed
+on SPU 203 with all magnets in heating block used" and Claude resolves the parts, presents a
+per-SPU confirmation list (SPU barcode + last-5 header, one row per part with fill-in-the-blank
+quantities — per Alejandro's Figure 1 mock), and only after explicit user approval deducts
+inventory. Same part on multiple SPUs = separate quantity per SPU. Vague prompts with no
+identifiable parts → Claude asks the user to scan the SPU + part barcodes.
+
+Built:
+- src/routes/api/agent/inventory/parts/+server.ts (NEW): GET part resolver — scanned barcode
+  (exact, falls back to partNumber), exact partNumber, or free-text q where every token must
+  match name/description/partNumber/category ("screw upper metal bracket" → the bracket screw).
+  Optional bomType=spu|cartridge filter. Returns candidates w/ live inventoryCount.
+- src/routes/api/agent/inventory/reassembly/+server.ts (NEW): POST atomic per-SPU deduction.
+  Resolves SPUs by _id/udi/barcode with unique-suffix fallback ("203", "71dbc"); parts by
+  barcode/partNumber/exact name. Validates EVERYTHING first — any unresolved ref or non-positive
+  quantity rejects the whole request with per-entry errors, nothing deducted. Requires
+  confirmed:true (agent's assertion the human approved the list). Applies via the existing
+  recordTransaction service (type 'consumption' → decrements PartDefinition.inventoryCount,
+  fires low-stock notification) + one AuditLog per SPU. Response returns previous→new counts.
+- InventoryTransaction model + recordTransaction service: added optional spuId field + index so
+  reassembly deductions are queryable per SPU (additive schema change).
+- src/routes/api/agent/inventory/spu-assembly-map/+server.ts (NEW): GET the active SPU work
+  instruction as a step→parts map (title/text/partNumber/qty per step). This is how Claude
+  resolves assembly-CONTEXT language part names can't ("the screw for the upper metal bracket"
+  matches no part name — it's WI knowledge). Steps live in versions[].steps.partRequirements
+  (partName is stashed in .notes), current version = wi.currentVersion. NOTE: today's active WI
+  is sparse (v1, 1 step, 10 parts) — the map gets useful once Alejandro uploads the detailed
+  SPU build instruction set he offered.
+- src/lib/server/mcp/bims-mcp.ts: three new tools — parts_lookup, spu_assembly_parts_map, and
+  record_reassembly_parts_usage. The record tool's description encodes the mandatory workflow
+  (resolve vague parts → clarify ambiguity → no parts named = ask for barcode scans → show the
+  Figure-1-style per-SPU quantity list → only call with confirmed:true after user approval).
+
+TESTED live against Atlas on a local dev server (port 5199, env from the second working copy's
+.env): parts_lookup "magnet" → the 3 magnet parts + upper bracket (PT-SPU-008/009/010/012 with
+live counts); partNumber + barcode paths OK. Reassembly gates: confirmed:false → 400; unknown
+part/SPU → per-entry errors, nothing applied; qty 0 → rejected; suffix "0202" resolved
+BT-M01-0000-0202. Full end-to-end: deducted 1x PT-SPU-009 on SPU ...0202 (875→874, tx
+PxiLXoMfIPSzQ-aGN5cBp, spuId-linked, AuditLog written) then REVERSED with a documented
+adjustment tx (874→875) via raw driver. MCP layer verified: tools/list = 34 (31+3), tools/call
+parts_lookup("main magnet spherical") → PT-SPU-008 over the wire.
+
+Also: this working copy was missing @modelcontextprotocol/server + zod in node_modules (deps
+were in package.json; nobody had npm-installed since the MCP work landed) — `npm install` fixed
+it, which is also why /api/mcp 500'd locally before. npm run check DROPPED 41 → 10 errors (all
+10 pre-existing, none in the new files; the old 31+ were all cannot-find-module fallout).
+package-lock.json diff is just npm normalizing stale "peer" flags. Not committed/deployed yet.

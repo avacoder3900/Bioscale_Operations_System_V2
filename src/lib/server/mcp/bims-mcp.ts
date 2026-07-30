@@ -185,6 +185,88 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	);
 
 	server.registerTool(
+		'parts_lookup',
+		{
+			description:
+				'Resolve a part reference to BIMS part definitions with live inventory counts. Accepts a scanned part barcode, ' +
+				'an exact part number (e.g. PT-SPU-008), or free-text like "screw for upper metal bracket" (every word must match ' +
+				'the part name/description/number/category). Use this to turn vague part descriptions from operators into concrete ' +
+				'part numbers before recording inventory usage. If it returns multiple candidates, ask the user which one they mean; ' +
+				'if it returns none, ask the user to scan the part barcode and retry with barcode.',
+			inputSchema: z.object({
+				q: z.string().optional().describe('Free-text description of the part (e.g. "magnet heating block spherical").'),
+				barcode: z.string().optional().describe('A scanned part barcode.'),
+				partNumber: z.string().optional().describe('Exact part number, e.g. PT-SPU-017.'),
+				bomType: z.enum(['spu', 'cartridge']).optional().describe('Restrict to one BOM (use "spu" for SPU assembly parts).'),
+				limit: z.number().int().min(1).max(50).optional()
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/inventory/parts', { query: args })
+	);
+
+	server.registerTool(
+		'spu_assembly_parts_map',
+		{
+			description:
+				'The SPU assembly parts knowledge base from work instruction WIMF-SPU-01: a component -> parts map (heater/heating ' +
+				'block, upper magnet bracket, enclosure, drive, linear rail, stage board, antennas, labels, ...) with per-SPU part ' +
+				'quantities, operator-language aliases, and live inventory status per part. Use this FIRST to resolve ' +
+				'assembly-context language that parts_lookup cannot — e.g. "all magnets in the heating block" (3x spherical + 6x ' +
+				'cylindrical), "one well of magnets" (ask how many of each), or "one screw for the upper metal bracket" ' +
+				'(M3 x 10 mm SHCS, PT-SPU-029). Parts flagged inInventory:false exist in the build but are not in the inventory ' +
+				'system yet — report their usage to the user but they cannot be deducted. Also includes the active BIMS work ' +
+				'instruction step map when one exists.'
+		},
+		async () => callAgentApi(fetcher, '/api/agent/inventory/spu-assembly-map')
+	);
+
+	server.registerTool(
+		'record_reassembly_parts_usage',
+		{
+			description:
+				'Deduct parts from inventory after SPU assembly/reassembly work, grouped per SPU. Each deduction is recorded as an ' +
+				'immutable inventory transaction linked to the SPU, and audit-logged.\n\n' +
+				'WORKFLOW (follow exactly):\n' +
+				'1. From the operator\'s message, identify each SPU (barcode, UDI, or short number like "SPU 203") and the parts used. ' +
+				'Resolve vague part descriptions with parts_lookup; ask clarifying questions if a description is too vague or matches ' +
+				'multiple parts. If the operator says what area they worked on but not which parts (e.g. "changed magnets in heating ' +
+				'block" with no specifics), ask them to scan the SPU barcode and then each part barcode.\n' +
+				'2. Before calling this tool, show the operator a confirmation list: one group per SPU, headed by the SPU barcode and ' +
+				'its last 5 characters, with one row per part ("<partNumber> <name> — qty: __"). Leave quantity blank wherever the ' +
+				'operator has not stated it and ask them to fill each blank in. The same part used on different SPUs gets its own row ' +
+				'(and its own quantity) under each SPU.\n' +
+				'3. Only after the operator confirms the complete list (all quantities filled) call this tool with confirmed: true. ' +
+				'Never call it with unconfirmed or guessed quantities.\n\n' +
+				'The request is atomic: if any SPU or part fails to resolve, nothing is deducted and per-entry errors come back — ' +
+				'fix them with the user and retry. On success, report each SPU\'s deductions with previous → new counts.',
+			inputSchema: z.object({
+				confirmed: z
+					.boolean()
+					.describe('Must be true, and only after the user explicitly approved the full per-SPU part+quantity list.'),
+				performedBy: z.string().optional().describe('Name/username of the operator who did the reassembly, if known.'),
+				spus: z
+					.array(
+						z.object({
+							spu: z.string().describe('SPU barcode, UDI, _id, or unique suffix (e.g. "203" or "71dbc").'),
+							parts: z
+								.array(
+									z.object({
+										part: z.string().describe('Part barcode, part number (PT-SPU-xxx), or exact part name.'),
+										quantity: z.number().int().min(1).describe('Units used on this SPU, as confirmed by the user.'),
+										note: z.string().optional().describe('Optional context, e.g. "all magnets in heating block".')
+									})
+								)
+								.min(1)
+						})
+					)
+					.min(1)
+					.describe('One entry per SPU worked on; the same part on two SPUs appears under both.')
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/inventory/reassembly', { method: 'POST', body: args })
+	);
+
+	server.registerTool(
 		'equipment_overview',
 		{ description: 'Equipment list with locations and a status summary (operational / maintenance / problem).' },
 		async () => callAgentApi(fetcher, '/api/agent/operations/equipment')
