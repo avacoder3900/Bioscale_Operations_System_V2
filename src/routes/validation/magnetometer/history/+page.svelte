@@ -8,6 +8,10 @@
 				startedAt: string | null;
 				completedAt: string | null;
 				createdAt: string;
+				/** When the test actually ran on the device. Null = genuinely unknown. */
+				testRanAt: string | null;
+				pullDelaySeconds: number | null;
+				spuUdi: string | null;
 				barcode: string | null;
 				username: string | null;
 				avgMagnitude: number | null;
@@ -50,9 +54,22 @@
 	}
 
 	function exportToCsv() {
-		const headers = ['Barcode', 'Date', 'User', 'Status', 'Avg Magnitude (µT)', 'Result'];
+		const headers = [
+			'Barcode',
+			'SPU',
+			'Test run',
+			'Recorded',
+			'User',
+			'Status',
+			'Avg Magnitude (µT)',
+			'Result'
+		];
 		const rows = data.sessions.map((s) => [
 			s.barcode ?? '',
+			s.spuUdi ?? '',
+			// The time the test ran, not the time it was recorded. Blank rather than
+			// substituted when the payload carried no timestamp.
+			s.testRanAt ? formatDateTime(s.testRanAt) : '',
 			formatDateTime(s.completedAt ?? s.createdAt),
 			s.username ?? '',
 			s.status,
@@ -153,7 +170,8 @@
 				<thead class="border-b border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)]">
 					<tr>
 						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Barcode</th>
-						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Date</th>
+						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Test run</th>
+						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Recorded</th>
 						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">User</th>
 						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Field Strength</th>
 						<th class="tron-text-muted px-4 py-3 text-left text-xs font-medium uppercase">Result</th>
@@ -172,6 +190,25 @@
 								</a>
 							</td>
 							<td class="tron-text-secondary px-4 py-3 text-sm">
+								{#if session.testRanAt}
+									{formatDateTime(session.testRanAt)}
+									{#if session.pullDelaySeconds != null && session.pullDelaySeconds > 3600}
+										<span
+											class="ml-1"
+											style="color: var(--color-tron-orange);"
+											title="The device was still holding this result when it was read {formatDateTime(
+												session.completedAt ?? session.createdAt
+											)} — it was already stale."
+										>⚠</span>
+									{/if}
+								{:else}
+									<span
+										class="tron-text-muted"
+										title="This payload carries no timestamp (legacy format), so the run time is genuinely unknown. It is deliberately not filled in with the time the data was recorded."
+									>unknown</span>
+								{/if}
+							</td>
+							<td class="tron-text-muted px-4 py-3 text-sm">
 								{formatDateTime(session.completedAt ?? session.createdAt)}
 							</td>
 							<td class="tron-text-secondary px-4 py-3 text-sm">

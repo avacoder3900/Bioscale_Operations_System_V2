@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, ValidationSession, User, Spu, AuditLog, generateId } from '$lib/server/db';
 import { getVariable } from '$lib/server/particle';
+import { extractMagTestTime, pullDelaySeconds } from '$lib/server/magnetometer-time';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -14,12 +15,25 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 
 	const user = session.userId ? await User.findById(session.userId, { username: 1 }).lean() as any : null;
 
+	// Prefer the stored testRanAt; derive it from rawData for sessions recorded
+	// before that field existed. Derive-on-read, so no historical record is touched.
+	const derivedTime = extractMagTestTime(session.rawData);
+	const testRanAt: Date | null = session.testRanAt ?? derivedTime?.at ?? null;
+	const recordedAt: Date | null = session.completedAt ?? session.createdAt ?? null;
+
 	return {
 		session: {
 			id: session._id,
 			status: session.status,
 			startedAt: session.startedAt?.toISOString() ?? null,
 			completedAt: session.completedAt?.toISOString() ?? null,
+			// When the test actually ran on the device. Null = genuinely unknown; it is
+			// never backfilled with the time the data was read.
+			testRanAt: testRanAt ? new Date(testRanAt).toISOString() : null,
+			pullDelaySeconds: pullDelaySeconds(
+				testRanAt ? new Date(testRanAt) : null,
+				recordedAt ? new Date(recordedAt) : null
+			),
 			barcode: session.barcode ?? null,
 			username: user?.username ?? null,
 			spuUdi: session.spuUdi ?? null,
@@ -93,6 +107,8 @@ export const actions: Actions = {
 					$set: {
 						status: overallPassed ? 'completed' : 'failed',
 						completedAt: new Date(),
+						// The device's own run time for this payload, not the re-read time.
+						testRanAt: extractMagTestTime(rawResult)?.at ?? null,
 						rawData: rawResult,
 						magResults: parsed,
 						overallPassed,

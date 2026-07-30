@@ -5,6 +5,7 @@ export const config = {
 };
 import { connectDB, ValidationSession, Integration, generateId } from '$lib/server/db';
 import { getVariable } from '$lib/server/particle';
+import { extractMagTestTime } from '$lib/server/magnetometer-time';
 import type { RequestHandler } from './$types';
 import crypto from 'crypto';
 
@@ -96,13 +97,19 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		const overallPassed = failureReasons.length === 0;
 
+		// When the test actually ran on the device, as opposed to when this poll
+		// happened to notice it. See $lib/server/magnetometer-time.
+		const pulledAt = new Date();
+		const testTime = extractMagTestTime(rawResult);
+
 		const sessionId = generateId();
 		await ValidationSession.create({
 			_id: sessionId,
 			type: 'mag',
 			status: overallPassed ? 'completed' : 'failed',
-			startedAt: new Date(),
-			completedAt: new Date(),
+			startedAt: pulledAt,
+			completedAt: pulledAt,
+			testRanAt: testTime?.at ?? null,
 			userId: locals.user._id,
 			spuUdi: spuUdi,
 			spuId: spuId,
@@ -124,7 +131,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				overallPassed,
 				failureCount: failureReasons.length,
 				wellCount: parsed.length,
-				completedAt: new Date().toISOString(),
+				testRanAt: testTime?.at.toISOString() ?? null,
+				pulledAt: pulledAt.toISOString(),
+				completedAt: pulledAt.toISOString(),
 				spuUdi
 			}
 		});
