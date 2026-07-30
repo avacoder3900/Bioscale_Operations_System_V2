@@ -5595,7 +5595,7 @@ not in inventory; antennas PT-SPU-101/102/103 exist but inactive at 0; PT-SPU-09
 count 0. Alejandro says two new parts are coming — tracked in the map, NOT added to inventory.
 
 Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
-Source: branch master @ commit 96f070e6
-Retrieve this exact code: git checkout master at commit 96f070e6
+Source: branch master @ commit 6f5c9a20 (rebased; tip pushed as 702a459c)
+Retrieve this exact code: git checkout master at commit 6f5c9a20
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: SPU reassembly inventory MCP tools (parts_lookup, spu_assembly_parts_map, record_reassembly_parts_usage) so Alejandro can test the reassembly→inventory flow via the Claude BIMS connector.
