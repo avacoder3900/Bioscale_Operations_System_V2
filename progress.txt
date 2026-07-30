@@ -4861,3 +4861,15 @@ possible: master restructured routes in 7c01942b ("remove /spu URL prefix"), so
 the source branch's src/routes/spu/parts/ has no counterpart on master and git's
 rename detection mis-targeted the committed OneDrive clone at
 "OneDrive - Linbeck Group, LLC/Documents/GitHub/Bioscale_Operations_System_V2-dev/".
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit d33f3f4e
+Retrieve this exact code: git checkout master at commit d33f3f4e
+  (full sha d33f3f4e6ac1cd8a0239112fa7c7ec151978e4d6 — merge of PR #37 from feat/box-inventory-disconnect @ a5d5c5ff)
+What this deployment is for: Box is no longer the inventory source for parts — the
+  sync that wiped and re-imported part_definitions on every run is removed, so
+  inventory counts are now BIMS-owned and survive. Box file storage (documents
+  browser, /api/box/upload, receiving CoC uploads) is unaffected by this deploy.
+Verified post-deploy: Vercel success on both projects; production /login HTTP 200;
+  master's src/routes/parts/+page.server.ts has zero box-sync references and
+  src/lib/server/box-sync.ts is absent while src/lib/server/box.ts remains.
