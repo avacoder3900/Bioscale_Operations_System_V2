@@ -5584,3 +5584,18 @@ were in package.json; nobody had npm-installed since the MCP work landed) — `n
 it, which is also why /api/mcp 500'd locally before. npm run check DROPPED 41 → 10 errors (all
 10 pre-existing, none in the new files; the old 31+ were all cannot-find-module fallout).
 package-lock.json diff is just npm normalizing stale "peer" flags. Not committed/deployed yet.
+
+Component map added same session (WIMF-SPU-01 v18 docx from Alejandro): curated component→parts
+map in src/lib/server/services/spu-component-parts.ts (12 components: base structure, drive,
+LRA, heater block, timing belt/stage, stage board, structure top, upper magnet bracket,
+scanner/main board, antennas, enclosure, labels) served by spu-assembly-map with live
+inventory cross-check. Cross-check found: PT-SPU-104 (40 Tooth GT-2 Pulley — the WI v18 part;
+old PT-SPU-017 is 20-tooth) NOT in part_definitions; label parts PT-SPU-056/057/058/059/070/072
+not in inventory; antennas PT-SPU-101/102/103 exist but inactive at 0; PT-SPU-099 Aluminum Tape
+count 0. Alejandro says two new parts are coming — tracked in the map, NOT added to inventory.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 96f070e6
+Retrieve this exact code: git checkout master at commit 96f070e6
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: SPU reassembly inventory MCP tools (parts_lookup, spu_assembly_parts_map, record_reassembly_parts_usage) so Alejandro can test the reassembly→inventory flow via the Claude BIMS connector.
