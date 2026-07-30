@@ -4124,3 +4124,125 @@ NEXT (needs real data, do not conclude from current numbers):
 
 KNOWN UI BUG: floating "Ask BIMS" chat widget overlays the bottom-left of the cartridge
 log table and covers row checkboxes (blocked selecting an 8th row).
+
+================================================================================
+2026-07-30 — feat/optical-group-comparison — optical confirmation: compare groups
+of SPUs against each other, robust median/MAD outliers
+================================================================================
+Extends optical-confirmation validation from "analyze one ad-hoc list of
+cartridges" to "compare named groups against each other, get a dataset, and see
+outliers within a group". Built on deploy/optical-analysis-on-master, NOT master
+— the v2 engine, the [id] detail page and the analyze/ route exist only there.
+
+Two bugs found first, both of which blocked or invalidated the feature:
+  * --color-tron-amber is not defined anywhere in layout.css. analyze/+page.svelte
+    styled its outlier row tint and warning glyph on it, so the outlier
+    highlighting on that page had NEVER actually rendered. Switched to Tailwind's
+    built-in amber-400/500, matching what the [id] page already does.
+  * The Ask BIMS widget is pinned bottom-LEFT at z-index 40 and mounted globally,
+    so it sat on top of the first column of every full-bleed table — which in BIMS
+    is the checkbox column. It had already blocked selecting an 8th row in this
+    very log. Moved to bottom-right; mobile bottom-sheet unchanged.
+
+Probed prod read-only before building. spus.opticalCalibration is real: 17 of 68
+SPUs, shaped channels.{A,B,C}.{rawF3,factor} plus setName/setDate/cartridgeId —
+the timestamp field is setDate, not calibratedAt. Both cartridge-to-SPU joins hit
+32/32 (device.id to particleLink.particleDeviceId, device.name to udi). Readings
+are exactly 126 per cartridge across 193 cartridges. cartridge_groups had 13 docs,
+none with cartridgeIds or purpose, no duplicate names.
+
+Engine (src/lib/server/optical-analysis.ts):
+  * robustStats/robustZ — median, MAD, 1.4826-scaled MAD, IQR, robust CV, and a
+    median +/- k*scale band. MAD=0 is common with clustered replicates and would
+    give +/-Infinity for every non-median point (JSON.stringify(Infinity) is null,
+    so the UI would blank silently) — hence a REPORTED fallback chain
+    mad -> iqr -> sd -> none, surfaced in the UI whenever it is not mad.
+  * ChannelAnalysis gained ratioSeries, the per-reading F7/F3 dataset, which
+    previously never escaped analyzeCartridge.
+  * analyzeGroupRobust + compareGroups. Outliers flag at 3.5 robust SDs from the
+    group median instead of mean +/- 1 SD; groups under minGroupN=5 are not
+    flagged at all. Between-group output is deliberately descriptive: median
+    difference, percent difference, band overlap, separation ratio.
+  * NO p-values / t-test / ANOVA. At n~7 there is no power, so a non-significant p
+    reads to an operator as "these SPUs agree" — absence of evidence reported as
+    evidence of absence. The repo tTest is also pooled-variance (equal-variance,
+    violated the moment a group holds an outlier) and its p-values route through
+    an incompleteBeta that its own source labels not production-grade.
+  * compareGroups emits the raw-calibration caveat from the ENGINE whenever groups
+    span more than one SPU, so the comparison cannot be rendered without it.
+  * analyzeGroup deleted (deprecated one commit earlier, nothing calls it).
+
+CORRECTION to the 2026-07-27 entry in this file: mean +/- 1 SD did NOT fail to
+catch that 8.85 outlier — the band was [-1.39, 4.88], so it WAS flagged. What
+mean/SD got wrong was the SPREAD statistic, 180-205% CV, driven entirely by that
+one member. Robust CV on the same vector is 7.7%. Do not repeat the "masking"
+framing; someone will check the arithmetic.
+
+Persistence: membership cannot live on OpticalTestCartridge.groupId — only
+BIMS-assigned cartridges get such a doc, and the log deliberately also lists ~93
+COMPARATOR cartridges matched by assayId alone. It lives on
+CartridgeGroup.cartridgeIds with a purpose discriminator (assign_batch vs
+optical_analysis). Five audited actions, soft delete only, one group per cartridge
+(double-counting would corrupt between-group medians), 409 on a name collision
+rather than the silent merge the assign endpoint has been doing. No unique index
+on name — the assign endpoint has always used a bare findOne by name. Reads use
+a ?? [] fallback because .lean() does not apply schema defaults. cartridge_records
+is never written.
+
+UI: "Save as group" on the log next to "Analyze selected"; a Group column whose
+pill selects that group's rows; a chips row to pick what to compare plus a
+separate Show filter. The comparison view extends analyze/ (single group = the
+N=1 case) with per-well tables, a hand-rolled SVG strip plot (no new dependency:
+chart.js is canvas and kanban-only, uplot is a dead dep and the wrong shape),
+long-format CSV export with proper quoting AND formula-injection defusing, an
+"Excluded from statistics" card naming every cartridge that contributed nothing
+and why, and a MethodLegend stating the rule in plain language. The band is
+labelled "Expected range", never "In-range"; deltas are "difference", never
+"bias".
+
+Also fixed a latent bug the new filter would have introduced: toggleAll and
+allSelected iterated data.cartridges, so with a filter active "select all" would
+have checked hidden rows. And analyzeSelected used window.location.href, forcing
+a full page reload on every analyze.
+
+Verified against prod via tsx (script deleted after): 193 cartridges over 32 SPUs,
+grouped one group per SPU. compareGroups flagged cartridge
+026b84f1-83c2-4b60-9846-d8696df73a0e at F7/F3 28.61 vs a group median of 9.45
+(13.3 robust SDs) with a readable reason, found two low outliers on well B of
+another SPU, produced between-group separation ratios, emitted the multi-SPU
+caveat, and round-tripped through JSON with no non-finite values.
+
+Caveat worth carrying forward: cartridges sharing an SPU are NOT replicates —
+they are different runs over time — so a whole-history SPU group legitimately
+shows robust CV over 100%. That is exactly why groups are hand-curated rather
+than auto-faceted by SPU. Also, this does NOT resolve the parity check this file
+paused on: until BIMS vs research-app F7/F3 is confirmed on the same barcodes,
+these flags are review signals, never a pass/fail release gate. The UI says so.
+
+Tests: the existing optical test file was run by NO npm script (test:contracts
+only includes tests/contracts/** and logs into a running app), so it was
+decoration. Added test:unit plus tests/vitest.unit.config.ts with no DB or server
+dependency. 22 tests passing, including a side-by-side assertion that on a clean
+7-cartridge group the old rule flags 2 and the new rule flags 0.
+
+npm run check: 46 errors / 430 warnings — unchanged from the master baseline,
+zero in touched files.
+
+Files: src/lib/server/optical-analysis.ts, optical-analysis.test.ts,
+optical-constants.ts (new), src/lib/server/db/models/cartridge-group.ts,
+src/lib/components/validation/optical/GroupPill.svelte, OutlierMark.svelte,
+CalibrationPill.svelte, MethodLegend.svelte, GroupStripPlot.svelte, csv.ts (all
+new), src/routes/validation/optical-confirmation/+page.server.ts and +page.svelte,
+.../analyze/+page.server.ts and +page.svelte,
+src/routes/api/validation/optical-confirmation/assign/+server.ts,
+src/lib/components/ask-bims/AskBimsWidget.svelte, package.json,
+tests/vitest.unit.config.ts (new)
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-op-9547c3-brevitest.vercel.app
+  (immutable alias: https://bioscale-operations-system-mongodb-36gohpeb3-brevitest.vercel.app)
+Source: branch feat/optical-group-comparison @ commit e13d336a
+Retrieve this exact code: git checkout feat/optical-group-comparison at commit e13d336a
+  (or: git log feat/optical-group-comparison --oneline to find it if the branch has moved on)
+What this deployment is for: reviewing group-vs-group optical comparison — name a
+  checked selection as a group on the log, then compare groups per well with
+  median/MAD outlier flagging, a strip plot, and CSV export.
