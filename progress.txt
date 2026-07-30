@@ -3569,8 +3569,7 @@ What this deployment is for: ships the Deck Calibration "Align selection → anc
 
 ================================================================================
 2026-07-09 — feat/cartridge-induct — deliberate cartridge induct recovered at /cv/induct
-================================================================================
-Recovered the induct capability that died in the cartridge-first refactor
+=========================================================================Recovered the induct capability that died in the cartridge-first refactor
 (398f02c2e), redesigned as a deliberate flow instead of the old any-scan
 auto-create: new /cv/induct page (CV nav "Induct") where the operator picks
 what the cartridge should be ready for — Wax inspection (status wax_stored),
@@ -4246,3 +4245,1291 @@ Retrieve this exact code: git checkout feat/optical-group-comparison at commit e
 What this deployment is for: reviewing group-vs-group optical comparison — name a
   checked selection as a group on the log, then compare groups per well with
   median/MAD outlier flagging, a strip plot, and CSV export.
+2026-07-09 — data fix — deck-001 (R04) cartridge 8 left reverted: A2/A4/A6/A8 restored
+================================================================================
+Operator asked to revert "cartridge 8 on the left" (deck-001, R04) in the Studio. History
+forensics (deck_calibration_edits): at 17:58:36Z the B/C wax wells (cols 2-8) were shifted
+(-31.5,-12.5,0); at 17:58:43Z the inverse (+31.5,+12.5,0) was applied to a selection that
+ALSO included A2/A4/A6/A8 — which had never been shifted — leaving the four A-row wax holes
++31.5/+12.5 off (A2 at x=113.1 vs correct 81.6) while B/C came back correct. Fix: restored
+A2/A4/A6/A8 to their recorded pre-17:58:43Z positions ((81.6/87.6/93.6/99.6, 11.499, 7.45))
+via direct Mongo write mirroring the per-well engine (history rows + audit_log entry,
+robotId R04). Verified grid consistency vs B/C rows. NOTE: reaches R04 fills only on Sync.
+NOTE 2: the other six left-bank wax blocks on deck-001 (rows V-X,S-U,P-R,M-O,J-L,G-I, cols
+2-8) still carry today's large (~-31,-12.5,z) shifts — not touched (unknown if intentional).
+
+================================================================================
+2026-07-09 — data fix + diagnosis — deck-001 (R04) "anchored A-row" + wax z inconsistency
+================================================================================
+ANCHORED ROW: operator's cartridge-8 batch (-30.5,-11.5,+7) moved rows B/C but row A was
+rejected by the physical-bounds guard — target y = 11.499-11.5 = -0.001, one micron below
+the y>=0 limit (guard exists because a negative coord makes the robot reject the whole def —
+June deck-003 bug). The apply message did report "4 rejected (out of bounds)" but it's easy
+to miss. FIXED: A2/A4/A6/A8 given the same shift with y clamped to 0 → (51.128/57.128/
+63.128/69.128, 0, 39.45), consistent 6mm col pitch + 9mm row pitch vs B(y 8.999)/C(17.999).
+Z INCONSISTENCY (diagnosed, not yet fixed): deck-001 left-bank wax z is now 3.40 (VWX/STU/
+MNO/JKL/GHI), 4.40 (PQR), 7.45 (DEF), 39.45 (ABC) after two days of block-wise z batches
+(+5/-4.5/+21/-30/+25/+7...). Operator's own reference points: DEF physically correct at
+~13.2 (stored 7.45, Δ5.75), JKL previously good at 9.15 (stored 3.40, Δ5.75) — i.e. original
+uniform wax z (~7.4) sat ~5.75mm below physical truth, and per-block +z chasing created the
+"inconsistent scale between runs". Compounding: the Studio jog session's slotOrigin.z is
+derived from the FIRST hole moved-to, so with inconsistent stored z the session's z frame
+shifts depending on which hole you start from — the moving-target feeling. Proposed fix
+(pending operator choice): reset ALL deck-001 wax z to one uniform value (13.2 = the jog-
+verified physical height, or 7.45 baseline + one global wax-only dz), then never per-block z.
+Robot note: R04 still runs the 7/08 20:33Z protocol bundle — NONE of today's deck-001 edits
+are live for fills until a Sync/redeploy.
+
+================================================================================
+2026-07-09 — data fix + deploy — deck-001 wax z normalized to 13.2, synced to R04; B14 global offset zeroed
+================================================================================
+Per operator request: (1) ALL 288 wax (even-col) wells of gen4deck_gen7cartridge_001 set to
+z=13.2 (was fragmented 3.40/4.40/7.45/39.45/7.55/7.75 after two days of block-wise z batches;
+13.2 = operator jog-verified physical height, ~5.75mm above the 7.4x original) — per-well
+history + audit written. (2) B14 RobotDeckOffset zeroed (was -0.1,-2.4,0 from 7/01 — the
+Studio-vs-fill disparity root cause; B14 decks are Studio-tuned on B14 so the offset double-
+counted). (3) Synced to R04 by redeploying BOTH protocols with the fresh Mongo labware bundle:
+reagent → protocolId 15f2cff6 (27 params, use_tip_calibration default false), wax → 601ffaa9
+(17 params, bims_native present) via deploy-reagent-to-r04.cjs + a wax variant (scratchpad);
+both analyses completed; robot.protocols[] repointed (reagent 1c3b06c3→15f2cff6, wax
+7e37ab7b→601ffaa9). R04 fills now use the z-normalized, cartridge-8-repaired deck-001.
+B14/B07 bundles NOT refreshed (deck-001 lives on R04's carriage; re-sync those robots if
+deck-001 ever moves to them).
+
+================================================================================
+2026-07-09 — data fix + deploy — wax 20uL tiprack def corrected to official Opentrons filter-rack spec; wax redeployed to R04
+================================================================================
+Operator verified on deck-001 cartridge 8 (R04): wax dispenses INSIDE the hole — z 7.5 works
+with the plate surface at 14.95 (bare nozzle). So the original ~7.45 wax z semantics were
+correct; the 13.2 normalization targets the surface and needs revisiting (pending operator
+re-verify after the tiprack fix below).
+TIPRACK FIX: physical wax rack is an Opentrons 96 Filter Tip Rack 20uL, but the custom def
+cosmasanddamian_96_tiprack_20ul had tipLength=45.66, NO tipOverlap, rack top 67.28 (2.59mm
+above the real 64.69 → pickups plunged 2.6mm too deep = "tip rack calibration is low"), and a
+grid ~1mm off official (A1 13.38/75.24 vs 14.36/74.26). Replaced the def geometry with the
+official opentrons_96_filtertiprack_20ul/1 spec from Opentrons shared-data (tipLength 39.2,
+tipOverlap 3.29 → effective extension 35.91, matching R04's measured 34.76 within ~1mm;
+zDim 64.69; official grid/z 25.49/depth 39.2/dia 3.27), keeping loadName/namespace/version so
+the wax .py + Studio references are untouched. Mongo + local lab-Mac JSON mirror + audit row.
+Wax protocol redeployed to R04 with the fixed bundle (601ffaa9 → 46f5f351, analysis completed).
+NOTE: B07/B14 wax bundles still carry the old rack def until their next sync/deploy. NOTE 2:
+R04 legacy tip-length-calibration rows for the old C&D def URI may be stale-but-harmless
+(engine uses def values); flag if pickup height still looks off.
+
+================================================================================
+2026-07-09 — REVERT — wax 20uL tiprack def restored to the original hand-calibrated version
+================================================================================
+Operator tested after the official-spec replacement: pickup still wrong. Root issue: in BIMS
+the labware defs ARE the calibration store — the original def's "irregular" grid (9.15mm
+pitch, A1 13.38/75.24, top 67.28) was hand-tuned to the rack's REAL position; replacing it
+with Opentrons nominal factory geometry discarded that calibration. Restored the original def
+verbatim (recovered from R04's 601ffaa9 protocol bundle over SSH; matches the recorded
+before-state) to Mongo + local lab-Mac JSON + redeployed wax to R04 (46f5f351 → 24b16283,
+analysis completed). Operator will jog-calibrate the rack in the Studio.
+Confirmed for the operator: wax + reagent tipracks are two separate defs — Studio pick-up-tip
+maps right/p20 → cosmasanddamian_96_tiprack_20ul (wax), left/p300 →
+cosmas_and_damian_biotix_96_200ul_tiprack (reagent) (+page.svelte:838); the protocols load the
+same respective defs. Tuning the wax rack cannot move the reagent rack.
+
+================================================================================
+2026-07-09 — data fix + fleet deploy — wax tiprack calibration transferred to the right def; wax protocol deployed to all 3 robots
+================================================================================
+Operator finished jog-calibrating the wax 20uL tiprack — but the Studio's tip-rack picker
+had the BIOTIX (reagent) def selected (it sorts first alphabetically), so the two 96-well
+batches at 20:52/20:53Z (net +6.5mm Y, verified positions A1=(14.38,80.74)) landed on
+cosmas_and_damian_biotix_96_200ul_tiprack instead of cosmasanddamian_96_tiprack_20ul.
+FIX: (1) wax 20uL def wells x/y set to the operator's verified positions (per-well history,
+z/depth/tipLength untouched); (2) biotix def restored to its exact pre-20:52Z per-well state
+from the batch-1 before values (reagent rack unchanged for reagent fills, per operator
+requirement); audit row on labware_definitions. No reagent redeploy needed — all three
+robots' reagent bundles predate the mixup and match the restored def.
+DEPLOY: wax protocol re-uploaded to ALL THREE robots with the corrected bundle (calibrated
+wax rack + current deck defs 001-004): R04 → ea849090, B07 → a754062f, B14 → efd07ef8 (all
+analyses completed; robot.protocols[] wax entries repointed). Wax coordinates are now
+consistent fleet-wide.
+UI FOLLOW-UP (todo): the Studio kind=tip picker should default the rack by selected mount
+(right/p20 → 20uL, left/p300 → biotix) or at least label them "wax"/"reagent" — the
+alphabetical default is how this mixup happened.
+
+================================================================================
+2026-07-09 — bugfix (code) — deck-cal Studio "Pick up tip" LocationIsOccupiedError self-heals
+================================================================================
+Operator hit "loadLabware failed: [LocationIsOccupiedError] Labware cosmas_and_damian_biotix_
+96_200ul_tiprack is already present at slotName=SLOT_11" when picking up a wax tip. Root cause:
+the Studio keeps ONE maintenance run across steps; calibrating the reagent (biotix) rack loaded
+it at slot 11, then a wax pickup needs the 20uL rack in the same physical slot. loadLabwareInRun
+was idempotent only for the SAME loadName (reuses the id) but fell through to loadLabware for a
+DIFFERENT one → LocationIsOccupiedError. OT-2 has no gripper and moveLabware/offDeck PAUSES the
+run (confirmed live: manualMoveWithPause hung 25s + left the run 'paused', and a paused
+maintenance run blocks new runs + resists DELETE — had to restart R04's robot-server to clear;
+that dead-end is why the pause approach was rejected).
+FIX: (1) maintenance.ts — new typed SlotOccupiedError; loadLabwareInRun throws it when a
+different labware occupies the slot. (2) pick-up-tip endpoint — catches it, returns 409
+{code:'SLOT_OCCUPIED'}. (3) deck-calibration/+page.svelte — pickUpTipAction (new doPickUp helper)
+sees the 409, transparently reopens the run (stopMaintenance→startMaintenance, fresh empty deck)
+and retries ONCE (allowRecover guard prevents loops). Operator now just clicks Pick up tip; it
+self-heals instead of erroring.
+VERIFIED against real R04 (scratchpad/verify-fix.cjs mirroring the server calls): with biotix at
+slot 11, guard fires SLOT_OCCUPIED; after reopen slot 11 is empty and the wax rack loads (labware
+id returned). npm run check: 11-error baseline, 0 new in the 3 touched files. NOT committed.
+
+================================================================================
+2026-07-10 — data fix + deploy — deck-003 cartridge 8 wax row A un-anchored; wax deployed to B07
+================================================================================
+Same anchored-row bug as deck-001 cart 8, now on deck-003 (physically on B07, particle ID
+e00fce68fc3b723490857c78). alejandro's 2026-07-09 19:42-19:43Z (-31.3,-11.5,-10) left-bank
+block shift moved cart-8 rows B/C but SILENTLY REJECTED wax row A (A2/A4/A6/A8): y would go
+10.599-11.5 = -0.90 < 0 (physical-bounds guard). Row A was left ~31.3mm right / ~11.5mm up /
++10 z of B/C (history shows row A got only the two z batches, never the block shift).
+FIX (mirror of the deck-1 cart-8 fix): snapped A2/A4/A6/A8 onto the B/C grid — x = B-row column
+x (50.53/56.53/62.53/68.53), z = 38.85 (B/C), y clamped to 0 (ideal -0.90 is off the labware
+front edge). Deltas (-31.3,-10.599,-10). Per-well history + audit (robotId B07). Cartridge 8 is
+now a clean block (A y=0, B 8.10, C 17.10; uniform x per column, z 38.85).
+DEPLOY: wax protocol re-uploaded to B07 with the corrected bundle — B07 wax entry a754062f →
+9a780256 (analysis completed, 17 params, bims_native). B07 was idle. R04/B14 untouched.
+CAVEATS (same as deck 1): (1) row A sits at y=0, ~0.9mm high of its true 9mm-pitch position
+because rows B/C were shifted so far forward that A falls off the coordinate origin — if row A
+misses in a real fill, the proper fix is nudging the whole cart-8 block back (higher y) or the
+labware origin, not the clamp. (2) deck-003 wax z is uniformly 38.85 (surface-tip value); the
+operator found ~7.5 (inside-hole) correct on deck 1 — deck-003 z may want the same treatment,
+but that's a separate ask and deck-003 is at least internally consistent. Flagged, not changed.
+
+================================================================================
+2026-07-10 (cont.) — deck-003 MIDDLE-ABC (cartridge 9) row A un-anchored too; full-deck verified; redeployed to B07
+================================================================================
+Operator flagged the first fix only covered the LEFT front cartridge. Full 24-cartridge scan of
+deck-003 found exactly ONE more anchored row: the MIDDLE column-group front cartridge (cols 9-16,
+rows ABC) — wax row A (A10/A12/A14/A16) stuck at x 229.8-247.8 / y 10.9 / z 49 vs B/C at
+198.5-216.5 / 8.4 / 39 (same block-shift rejection: y would go negative). = operator's "cartridge 9".
+Fixed identically: snapped A10/A12/A14/A16 to B/C grid (x=B col x, z=39, y clamped 0), deltas
+(-31.3,-10.899,-10). Re-scan: all 24 cartridges' rows now aligned (0 x-spread warnings); the 3
+front (ABC) cartridges' row A all match B/C in x (LEFT/MIDDLE y=0, RIGHT y=0.3 — RIGHT was never
+rejected so kept its real value). The remaining z-spread scan noise is the expected wax(~39) vs
+reagent(~8) difference, not a defect.
+DEPLOY: wax re-uploaded to B07 with the fully-corrected bundle — 9a780256 → 651142f5 (analysis
+completed, bims_native). B07 idle. R04/B14 untouched. Same clamp caveat as before (row A at y=0 is
+~0.6-0.9mm high of true 9mm pitch because B/C were shifted forward; nudge the whole block back if
+row A misses in a real fill).
+
+================================================================================
+2026-07-10 (cont.) — data fix + deploy — deck-001 (R04) wax z corruption + left-wax row-A anchor fixed; wax redeployed to R04
+================================================================================
+Operator asked to fix "the same [anchored-row] issue" on R04 deck-001, then "run the changes now."
+Waited out a live editing session (alejandro, 476 edits; confirmed settled — no writes for 3+ min
+before touching anything). Full per-well audit of gen4deck_gen7cartridge_001 found TWO defects, both
+confined to the WAX cartridges (even cols); reagent (odd cols) was clean and left untouched.
+
+DEFECT 1 — wax z corruption (48 wells). Every uncorrupted wax cell already read exactly z=13.2
+(operator's stated target), but four 3x4 blocks held physically-impossible z: LEFT ABC cols 2/4/6/8
+= 2.2 (tip-crash low), MIDDLE ABC + MIDDLE JKL cols 10/12/14/16 = 43.2 (misses ~30mm high), RIGHT
+ABC cols 18/20/22/24 = 38.2. A flat molded cartridge can't have 11-30mm intra-cartridge z spread =
+corruption (likely dragged in by earlier block/align edits). FIX: normalized all 48 to z=13.2
+(scratchpad/fix-deck1-wax-z.cjs, dry-run first, 0 unexpected current values). Per-well history +
+one summary audit (mode:per-well, robotId R04).
+
+DEFECT 2 — left wax front cartridge anchored at the y=0 floor (12 wells). Key insight: reagent
+(odd) and wax (even) holes sit on SEPARATE y-grids within one cartridge (e.g. middle reagent A9=1.55
+vs middle wax A10=11.15, ~9.6mm apart by design) — so cross-parity comparison is meaningless; only
+same-parity across the three carriers is. Left wax A2/B2/C2 = 0/9/18 vs middle wax 11.15/20.15/29.15
+and right wax 10.8/19.8/28.8: the left wax front cartridge (rows ABC, cols 2/4/6/8) was shifted
+~11mm forward and pinned at the y=0 bounds-guard floor — the "anchored row" the Studio can't move.
+Confirming tell: left wax D2=31.12 (the DEF cartridge behind it) already matched middle D10=31.27,
+and the left C->D inter-cartridge gap was 13.1mm vs the deck norm ~2.1mm. FIX: shifted the 12 left-
+wax ABC wells +11.15 in y (A->11.15, B->20.15, C->29.15), restoring the ~2mm gap and aligning with
+middle/right wax (scratchpad/fix-left-wax-y.cjs). This is the PROPER fix the deck-003/B07 caveat
+called for (nudge the whole block back to true y) rather than the y=0 clamp used there — reagent
+grid untouched.
+
+Post-fix scan: all 24 cartridges coherent — every wax front row at z=13.2, x-aligned to B, y~11
+across all three carriers; only residual scan noise is the expected sub-1.5mm per-cartridge z jog
+variation and the by-design reagent/wax y offset. R04 was the only robot touched; B07 deck-003 still
+carries its y=0 clamp (separate deck, no miss reported) and B14/other decks untouched.
+
+Deployment: production (robot) — R04 wax-filling protocol re-uploaded twice (z fix, then y fix)
+Source: Mongo labware_definitions (Studio-corrected geometry) + repo protocols/Wax_Filling_GEN7_Cartridge.py @ commit 33e3863f (unchanged repo code; geometry lives in Mongo, not git)
+Retrieve this exact code: git checkout master at commit 33e3863f; deck geometry = current labware_definitions.gen4deck_gen7cartridge_001 (see deck_calibration_edits/audit_log rows stamped 2026-07-10 ~15:07 & ~15:13 by "claude")
+On-robot: R04 (172.16.28.144) opentrons_robots.protocols[] wax-filling entry repointed 225affb5 -> 9fe0e414 (final; superseded the intermediate z-only 225affb5). Analysis completed, 17 params, bims_native present, tip-calibration OFF.
+What this deployment is for: reagent/wax fills on R04 deck-001 were crashing/missing the front-row wax holes (z off by 11-30mm, left wax band 11mm forward) — this makes the deck internally consistent so wax fill lands in the holes.
+
+================================================================================
+2026-07-10 (cont.) — deck-003 (B07) cart-24 front row matched to carts 8&9; "out of bounds" diagnosed (NOT a bug)
+================================================================================
+Operator: "cartridge 24 on B07 not lining up; when I change the last row it says out of bounds,
+but it works for cartridges 8 and 9 — think it may be a bug." Investigated end to end.
+
+DIAGNOSIS — not a code bug. Full bound-proximity audit of deck-003: the only tight constraint
+anywhere is the FRONT row (row A) sitting at the y=0 labware floor. xDim=454.8 (max well 363.9,
+90mm slack), yDim=276.4 (max well 254.4, 22mm slack) — x and back-y have huge headroom. Row-A y
+BEFORE fix: cart 8 (LEFT) = 0.00, cart 9 (MID) = 0.00, cart 24 (RIGHT) = 0.50. So cart 24 actually
+had MORE headroom than 8/9, not less. The guard (apply-edit.ts outOfBounds) correctly refuses any
+edit that drives a well y<0 — a negative-y well makes the OT-2 reject the whole deck def. The
+reason 8/9 "work" and 24 didn't: carts 8 & 9 were placed at y=0 in the EARLIER session via direct
+DB writes (fix-deck3-cart8/cart9), which bypass the Studio guard; cart 24 was never touched (kept
+its real y=0.5). When the operator tries to jog cart 24's front row further FORWARD in the Studio,
+they're requesting y<0 (the holes already sit at the labware's front edge) and the guard blocks it
+— it would block the identical move on 8/9 too. Root cause is physical: the front holes are at the
+labware frame's front edge, so there is no forward room in the def; gaining room needs a physical
+deck reposition or a robot-level offset, not per-well edits.
+
+FIX (as requested — match cart 24 to the working 8/9): set cart-24 row A A18/A20/A22/A24 y 0.5->0.0
+via DB (fix-deck3-cart24-rowA.cjs), same path as the 8/9 fixes. x (345.9-363.9) and z (2.20) left
+alone; rows B/C already within 0.4mm of 8/9 ("everything else is good"). All three front cartridges
+now read row A = 0.00.
+DEPLOY: wax re-uploaded to B07 (host hidden-leaf.local, robotId 2vIu0fzsbqzkZ7_Zjj3h2) — wax entry
+ca20b29c -> bce634c3 (analysis completed, 17 params, bims_native). NB deck-003 wax z is now uniformly
+~2.2 (was 38.85 in the earlier session — someone reset it between sessions; my deploy bundles current
+Mongo state). R04/B14 untouched.
+Deployment: production (robot) — B07 wax-filling; Source: Mongo labware_definitions gen4deck_gen7cartridge_003 + repo protocols/Wax_Filling_GEN7_Cartridge.py @ commit 33e3863f (repo code unchanged).
+FOLLOW-UP for real editability: the Studio can't move a front row past y=0. If the operator needs
+the front row further forward, options are (a) physically nudge the deck forward in its slot, or
+(b) a UX change so a group-apply CLAMPS the front row to y=0 instead of rejecting the whole 12-hole
+edit (matches what the DB fixes do manually). Flagged, not implemented (needs its own change + test).
+
+================================================================================
+2026-07-10 (cont.) — INCIDENT: B07 tip crash (wax z too deep) — redeploy activated Mongo's 2.2mm wax z; recovered to 7.8
+================================================================================
+Operator: "you broke the tip, it went too deep... z height is -28, should only be 7.8."
+ROOT CAUSE: deck-003 WAX z was sitting at ~2.2mm in Mongo (set by earlier edits, not by me —
+ialas 14:57 batch shows 2.30->2.20). My cart-24 redeploy (bce634c3) re-bundled the CURRENT Mongo
+geometry and pushed wax z=2.2 live to B07. 2.2 is ~5.6mm too deep vs the correct 7.8 -> tip drove
+into the cartridge and bent. I did NOT edit any z myself (my only edit was cart-24 y 0.5->0.0), but
+the redeploy ACTIVATED the too-deep value — so the crash traces to deploying without checking wax
+depth first. Operator had emergency-raised cart-24 row A to z=39.2 (15:54) to pull the tip up.
+RECOVERY: set all 288 deck-003 WAX (even-col) wells z=7.8 (operator's stated correct depth; reagent
+odd-col left at ~8.2). Includes resetting cart-24 row A from the emergency 39.2 down to 7.8.
+scripts: fix-deck3-wax-z78.cjs. Redeployed B07 wax bce634c3 -> d1e101f5 (analysis completed, 17
+params, bims_native). Verified: WAX z=7.8 (288/288), reagent unchanged.
+LESSON: the wax-deploy bundles ALL current Mongo geometry — before any B07/robot redeploy, sanity-
+check the wax z distribution (should be ~7.8 on deck-003, ~13.2 on deck-001) so a stale/too-deep
+value in Mongo isn't pushed live. Deploy pulls whatever is in Mongo NOW, not a reviewed snapshot.
+STILL OPEN (unrelated to crash): the front-row y=-1.5 request — front holes sit at the labware y=0
+edge; robot rejects negative WELL coords (confirmed 422) but ACCEPTS negative cornerOffsetFromSlot,
+so a frame re-baseline is the fix. Paused pending operator's choice; NOT applied.
+Deployment: production (robot) — B07 wax d1e101f5; Source: Mongo gen4deck_gen7cartridge_003 + repo Wax_Filling_GEN7_Cartridge.py @ 33e3863f.
+
+================================================================================
+2026-07-10 (cont.) — R04 deck-001: cart-8 row-A overlap fixed + all wax z set to 7.8; deployed
+================================================================================
+Operator: cart-8 (left front) "off/overlapping"; then "z should be 7.8 not 13, make all coords 7.8".
+FIX 1 — cart-8 row A: A2/A4/A6/A8 had been dragged to y=22.75/z=23.2 (overlapping row B at y=20.15,
+2.79mm apart; wrong A<B<C order). Restored onto the B/C grid: x=B-col x (51.1/57.1/63.1/69.1),
+y=11.15 (one 9mm row-pitch in front of B), z per FIX 2. No overlaps <3mm after.
+FIX 2 — wax depth: operator corrected the earlier 13.2 to 7.8 (the real inside-hole depth; 13.2 was
+too shallow, matches the ~7.5 they'd found on cart-8 top hole with surface 14.95). Set ALL 288
+deck-001 WAX (even-col) wells z=7.8 — sweeps up 276 at 13.2 and 12 at 2.2 (mid cartridge D/E/F cols
+10-16) into one uniform depth. Reagent (odd cols) left at their own z (~8.2/13.x) — NOT changed;
+flagged to operator in case they want those at 7.8 too.
+Pre-deploy sanity (per the B07 crash lesson): confirmed wax z uniform 7.8, no overlaps, before pushing.
+DEPLOY: R04 wax 9fe0e414 -> e1db40a3 (analysis completed, 17 params, bims_native). B07/B14 untouched.
+NOTE on z convention: deck-001 wax now 7.8 (inside-hole), same as deck-003/B07. The earlier "13.2"
+instruction is superseded — 7.8 is the correct dispense depth on these cartridges.
+Deployment: production (robot) — R04 wax e1db40a3; Source: Mongo gen4deck_gen7cartridge_001 + repo Wax_Filling_GEN7_Cartridge.py @ 33e3863f.
+
+================================================================================
+2026-07-10 (cont.) — R04 deck-001: reagent (odd-col) z also set to 7.8 — whole deck now uniform 7.8
+================================================================================
+Operator: R04 still showing z=13.5, "supposed to be 7.8". Cause: prior pass set only WAX (even)
+to 7.8 and left REAGENT (odd) at its per-cartridge z (8.2-14.6, incl 60 wells at 13.5) — that
+13.5 was what they saw. Per "make ALL coordinates 7.8", set the remaining 288 reagent wells to
+7.8. Whole deck-001 now uniform z=7.8 (wax 288 + reagent 288 = 576).
+DEPLOY (wax build): R04 wax e1db40a3 -> f047957a (analysis completed, bims_native). 
+CAVEAT: this repointed the WAX-filling protocol only. The REAGENT-filling protocol build on R04
+still bundles the OLD reagent z — so a REAGENT fill run on R04 would use the stale depth until
+deploy-reagent-to-r04.cjs is also run. Flagged to operator; not auto-run (unsure R04 does reagent
+fills, and flattening reagent to 7.8 overrides its former per-cartridge calibration).
+Deployment: production (robot) — R04 wax f047957a; Source: Mongo gen4deck_gen7cartridge_001 @ 33e3863f.
+
+================================================================================
+2026-07-10 (cont.) — R04 deck-001: ABC front wax band rebuilt to proper order (recurring shift scramble)
+================================================================================
+Operator screenshot: front row of all 3 cartridges out of order. Scan: only ABC-band wax broken —
+row A displaced +31 in x (A.x = B.x+31) and +3 in y (A between B and C) in ALL three cartridges;
+MID/RIGHT B/C also shoved ~12mm forward (y 8/17 vs correct 20/29) and z scrambled (2.8/12.8).
+GHI band (clean, same orientation) confirmed the correct column x = B-row x. Rebuilt 36 wax wells:
+per column share B-row x, y A/B/C=11.15/20.15/29.15 (ascending, ~2mm in front of DEF), z=7.8.
+Disorder scan clean after. DEPLOY: R04 wax f047957a -> 6f24a53b.
+RECURRING CAUSE: operator reports it re-scrambles every time they shift this row. The +31/+3 A-vs-BC
+offset = a cartridge shift where row A didn't move with B/C (front row is at the deck's y~0 edge, so
+a forward/left shift drives it toward bounds and A gets left behind / mis-transformed). Real fix is
+the cornerOffsetFromSlot re-baseline (give the front row headroom — validated earlier: negative
+cornerOffsetFromSlot accepted, Studio+fill both honor it) OR a Studio fix so a group shift never
+leaves one row behind. Not applied yet — flagged to operator.
+Deployment: production (robot) — R04 wax 6f24a53b; Source: Mongo gen4deck_gen7cartridge_001 @ 33e3863f.
+
+================================================================================
+2026-07-10 (cont.) — R04 deck-001: cornerOffsetFromSlot frame re-baseline (+6mm y headroom) — permanent front-row fix
+================================================================================
+Root cause of the recurring "front row won't adjust further / scrambles when shifted" (identical to
+B07): deck-001's front-row holes sit at the deck's y~0 coordinate edge — reagent front row A17 at
+y=0.80mm, only 0.8mm of headroom. The OT-2 rejects any well at a negative coordinate, so a forward
+cartridge shift can't move the front row and the physical-bounds guard rejects/mangles it (row A
+gets left behind — the +31x/+3y scramble).
+FIX (permanent, net-neutral): re-baselined the labware frame — cornerOffsetFromSlot.y 0 -> -6 and
++6 added to every well.y. Robot applies the corner offset to all wells in BOTH the Studio's
+moveToWell-derived origin and the fill's carriage[well] lookup, so physical positions are unchanged
+(verified: A17 phys stays 0.80). Front rows now have 6mm of forward headroom before hitting y=0.
+Range check: new well-y 6.80..262.62, well within yDimension 276.4. Reversible (audit_log
+deck_frame_rebaseline, margin=6). Validated on B07 that negative cornerOffsetFromSlot passes robot
+analysis clean. Applied to Mongo only; NOT yet deployed — operator to Studio-verify net-neutrality
+(a back-row hole must land unchanged; front row must now jog forward) before wax redeploy.
+Side effect: every y value shown in the Studio for deck-001 reads +6 higher; physical unchanged.
+
+--- REVERTED (same day): operator asked not to re-baseline the whole deck, only the last row.
+cornerOffsetFromSlot back to 0,0,0; all wells -6. Deck-001 unchanged from 6f24a53b geometry.
+Note: cornerOffsetFromSlot is a deck-wide property — there is no per-row frame offset, and the
+robot rejects negative WELL coords, so a single row cannot gain forward-of-edge headroom on its
+own. Awaiting operator's target physical position for the front row.
+
+================================================================================
+2026-07-10 (cont.) — R04 deck-001: restored ALL 12 wax front rows + fixed wax z crash-deep regression
+================================================================================
+Operator: "the last row for cartridges 9 and 24 are not there, bring them back." Scan showed it was
+not just those two — EVERY wax (even) column's ABC front band was collapsed/displaced, so the row-A
+holes were hidden underneath row B and vanished from the Studio:
+  - wax cols 10-24: A collapsed onto B (A.y=8.2 ≈ B.y=8.1) — A hidden under B.
+  - wax cols 2-8:  A displaced back to 9.8, B driven NEGATIVE (-0.1, off the deck edge).
+Separately (SAFETY): all wax z had been reset to 2.8/3.8 — crash-deep (correct wax z = 7.8, same
+value that bent a tip on B07). Reagent (odd) columns were all fine (z=7.8, clean ladders).
+Root cause: the wax front row physically wants ~1mm past the deck's front edge (y<0); the robot/guard
+won't hold a negative coord, so any touch collapses row A onto row B. Same edge limit as before — the
+permanent cure is the frame re-baseline the operator declined, so A is placed at the furthest-forward
+VALID spot, y=0.
+FIX (rebuild-wax-frontrow.cjs, per-column, self-consistent): for each of the 12 wax columns rebuilt
+ABC from that column's own intact DEF band (spacing=E-D~9, gapIntoDEF~14.2 measured from its own
+-6-band gaps): C=D-gap, B=C-9, A=max(0,B-9)=0; ABC x = mean of the col's GHI/MNO/STU (+6-band) x;
+and z=7.8 for ALL rows in every wax column. 360 field writes. Scan clean after (all gaps 8-9mm, no
+collapse, z=7.8). DB only — NOT deployed; operator to reload Studio + verify, then wax redeploy.
+Caveat: A sits at y=0 (~1mm behind ideal); it will re-collapse if dragged forward again without the
+cornerOffsetFromSlot re-baseline.
+
+================================================================================
+2026-07-22 — master — Wax R04: 4 wells per aspiration + real cartridge-wall clearance
+================================================================================
+Operator raised the wax gate volumes (gates 4/3/2 -> 2.2uL, gate 1 stays 1.6uL) and R04 started
+filling in ragged 2-then-3-well groups, then bent/broke the tip crossing from the last well of one
+cartridge to the first well of the next — and skipped that first well.
+
+ROOT CAUSE (one cause, two symptoms). dispense_reagent() sizes each aspiration purely by volume:
+available = maximum_volume_per_aspiration(20) - aspirate_remainder(13.5) = 6.5uL usable per trip.
+  - At the OLD uniform 1.6uL, 4 x 1.6 = 6.4 <= 6.5, so a batch was ALWAYS exactly 4 wells, which is
+    exactly one cartridge row (cols 2,4,6,8 = gates 4,3,2,1). Every row/cartridge crossing therefore
+    happened on the trip back to the wax tube in slot 10 — a cross-labware move the API arcs
+    deck-high. Nothing ever traversed the carriage at low height. That alignment was luck, not design.
+  - At 2.2/2.2/2.2/1.6 the batches become 2,3,3,2,3... and no longer land on row boundaries. Batches
+    now OPEN mid-row, so the pipette traverses row-to-row (20.1mm) and cartridge-to-cartridge
+    (22.5mm+) on the API's default in-labware arc of well-top +5mm — not enough to clear the raised
+    wall between cartridge bodies. Simulated over a full deck: 36 low crossings, 12 of them
+    cartridge-wall crossings. The V8 -> U2 crossing in batch 5 is exactly the break the operator saw.
+The protocol HAS a wall-clearance lift (move to well.top(60), settle, drop to well.top(5)) but it was
+gated on `jump_count % jump_frequency == 0` with jump_frequency = 288. There are 288 wax wells on a
+deck, so it fired once at the very first dispense and never again — the guard was dead code. (The
+reagent protocol does this lift before EVERY well, which is why reagent never had this failure.)
+
+FIX (protocols/Wax_Filling_GEN7_Cartridge.py):
+ 1. Batch builder now also breaks at a cartridge-row boundary, so an aspiration never spans two rows.
+    Every row/cartridge crossing is back on the deck-high source-tube trip, as in the 1.6uL era.
+ 2. jump gate replaced with a real predicate: lift only for a crossing WITHIN a batch (idx > 0 and
+    row_key changed) plus the first dispense of the run. idx == 0 arrives from the source tube and is
+    already arced high, so this costs no extra time in the normal case, and saves the tip in the
+    degraded case where volumes are too big to fit a row in one trip.
+ 3. New RTP `aspirate_remainder` (default 11.5uL, was hardcoded 13.5). This is the only knob that
+    sets wells-per-trip: usable = 20 - remainder, and a 2.2/2.2/2.2/1.6 row needs 8.2uL. 11.5 gives
+    8.5uL usable -> a full 4-well row per aspiration, aspirating 19.7uL against the p20's 20uL max.
+    NOTE: this is a liquid-handling constant that has NOT been bench-validated at 11.5 — it is an RTP
+    precisely so it can be put back toward 13.5 at the bench without a redeploy. Safety does not
+    depend on it: at 13.5 the run is still crossing-free, just 108 trips instead of 72.
+ 4. New helpers get_well_row()/row_key() keyed to the real carriage geometry (24 cartridges in a
+    3x8 grid; x-blocks cols 1-8 / 9-16 / 17-24; three rows per cartridge in full_rows_reverse order).
+    Verified against gen4deck_gen7cartridge_001.json: within-row steps are all exactly 6.0mm,
+    row->row 20.1mm, cartridge->cartridge 22.5mm+. The keying lands on the real physical gaps.
+ 5. Run log now prints the aspirate budget (pipette max - remainder = usable, vs the row total) and
+    warns when a row won't fit, so a short-filling run is diagnosable from the log; the previously
+    silent "no well fits" break now says why it stopped.
+
+VERIFICATION: opentrons_simulate analysis completes clean (RTP accepted, within Opentrons' name and
+description caps). Batching simulated against the real labware JSON across 5 gate-volume configs:
+intra-batch crossings drop from 36 (12 cartridge-wall) to 0 for the operator's config, and stay 0 for
+every other config tried. Trips per deck return to 72 — the same as the old 1.6uL config, i.e. the
+higher volumes now cost nothing in wax-tube trips. Motion itself is NOT robot-verified; wants a
+dry-run (no cartridges, or tip-only) on R04 before a production deck.
+
+DEPLOYMENT LINEAGE — READ BEFORE SHIPPING THIS. Queried R04 (172.16.28.144) live while chasing this.
+The wax protocol R04 is actually running (opentronsProtocolId 85e3d4b4-661c-46d8-a17d-600aca7b1bd7,
+uploaded 2026-07-22T14:53) exposes only 10 RTPs: cartridges, wax, row_pattern_0/1/2, tiprack_refilled,
+vol_gate4/3/2/1. It is therefore OLDER THAN MASTER — no bims_native/offset_x/y/z/cal_x/cal_y/z_cal
+(PRD 6) and no dispense_depth. The live run (e13c5c2a, paused) confirms the operator's config exactly:
+vol_gate4/3/2 = 2.2, vol_gate1 = 1.6, cartridges = 4. That is the config simulated above.
+Consequence: master's wax protocol is NOT the deployed lineage, and master still carries
+`well_z_depth = -3.0 + z_offset` — the 3mm dive into a 3.75mm bore documented on 2026-07-13. Deploying
+master's wax file would ship this fix but keep that dive. The correct deploy target is
+feat/fill-resume-after-tip-break, which is a strict superset of master (adds dispense_depth default
+1.0, use_tip_calibration, resume_cartridge/resume_hole) and is STILL UNMERGED.
+So the same fix was applied to BOTH files: protocols/Wax_Filling_GEN7_Cartridge.py on master, and the
+copy in the feat/fill-resume-after-tip-break worktree (.claude/worktrees/fix+scanner-port-reconnect).
+On the branch the row-crossing case reuses that build's existing speed-limited descent (lift to
+jump_height, then a straight-down move at APPROACH_SPEED=20mm/s, then dispense in place) instead of
+letting the dispense arc in — so a cross-wall entry now gets the same gentle approach the first hole
+already got. Both compile and pass `opentrons_simulate` analysis.
+NOT DEPLOYED — R04 has a paused run on it right now. scripts/deploy-wax-to-r04.cjs already existed on
+the branch; extended it to also gate the Mongo repoint on `aspirate_remainder` being present in the
+fresh on-robot analysis and to print the row-fits arithmetic (row total vs 20uL - remainder). It
+already gated on dispense_depth == 1.0 and use_tip_calibration == false, and already bundles the BIMS
+Mongo labware_definitions rather than the local Opentrons app folder (that folder ships stale deck
+geometry and lands ~30mm off). Verify-only by default; DEPLOY_APPLY=1 repoints R04's wax entry.
+A duplicate deploy script briefly added on master was deleted — it pointed at master's protocol and so
+had no dispense_depth gate, which made it a footgun.
+
+================================================================================
+2026-07-22 (cont.) — master — Wax batching fix staged for R04 on the LIVE lineage
+================================================================================
+Operator scoped this down: batching fix ONLY, do not touch dispense depth. That ruled out both
+candidates from the earlier entry — master (adds the PRD-6 calibration RTPs) and
+feat/fill-resume-after-tip-break (adds dispense_depth, which moves the wax dispense from 3.0mm below
+the rim to 1.0mm and is capped at 2.5 so today's 3.0 cannot even be reproduced).
+
+So the fix was applied to the EXACT lineage R04 runs. That lineage is the file the operator had open
+in the IDE (Opentrons app protocols/105aa22c-.../src/Wax_Filling_GEN7_Cartridge.py) — confirmed by
+parameter set: the same 10 RTPs the robot reports, no PRD-6, no dispense_depth. Copied into the repo
+as protocols/Wax_Filling_GEN7_Cartridge.R04_LIVE.py and given the same 5 edits. Verified by diff
+against the robot's own file: the ONLY changes are the aspirate_remainder RTP, the row-boundary break,
+the geometry-driven lift, the row_key/get_well_row helpers, and the budget logging.
+`well_z_depth = -3.0 + z_offset`, jump_height 80, well_prejump_height 25, touch_tip -6.3, the
+calibrator code and the deck list are all byte-identical to what is running.
+
+LABWARE GEOMETRY — THE BIG ONE. scripts/deploy-wax-to-r04.cjs was first written like its reagent
+sibling, bundling the BIMS Mongo `labware_definitions`. On R04 that rule is BACKWARDS and would have
+been a crash. Checked against the robot's own analysis of the protocol it actually ran:
+  gen4deck_gen7cartridge_001 X2 — running protocol: x=82.154 y=265.621 z=7.400  (Opentrons app folder)
+                               — BIMS Mongo copy:   x=51.054 y=253.221 z=2.800
+That is ~31mm in x and 4.6mm in z, on EVERY well of EVERY carriage (max deltas: 001 36.6mm,
+002 24.7mm, 003 33.2mm, 004 31.4mm), plus 6.6mm on the tiprack. R04 runs deck 1 (operator confirmed),
+so bundling the Mongo defs would have driven the tip 31mm off into the cartridge body. Mongo has also
+retired 005/006 while this lineage still loads 005, which surfaced first as a FileNotFoundError.
+The first verify upload (4cac98f8) carried the Mongo defs and was deleted from the robot.
+Rewrote the script to bundle the Opentrons app labware folder — the same source that produced the
+working analysis — and added a hard gate that PROVES it: it pulls the labware definitions back out of
+the robot's analysis of the protocol R04 actually ran (from /runs history, NOT the Mongo entry) and
+out of the fresh upload, and aborts + deletes the upload if any well moved more than 0.001mm.
+Also gates: analysis completed with zero errors; exactly 11 RTPs; dispense_depth and bims_native ABSENT.
+
+ALSO FOUND: BIMS and the Opentrons App are pointing at different protocols on R04.
+opentrons_robots.protocols[wax-filling] = f643dc9b (2026-07-13 upload, BIMS geometry), but every run
+today was started from the Opentrons App against a different upload carrying app geometry. A wax run
+launched from BIMS would therefore use deck geometry ~31mm from the one that has been working. Not
+touched — flagged for the operator. This is why the deploy script baselines on run history.
+
+VERIFY PASS (clean): uploaded 604dca29-b323-4f8b-bcc3-86f69f1bf9b4 to R04, analysis completed with 0
+errors, 11 params, and all 7 labware defs (tuberack, tiprack, carriages 001-005) byte-identical to the
+protocol R04 ran. Budget line confirms the operator's 2.2/2.2/2.2/1.6: row = 8.20uL vs 8.50uL usable
+-> a full 4-well row per trip. Robot is idle (no current run).
+
+Deployment: robot protocol upload (verify-only, NOT repointed in BIMS Mongo)
+Source: branch master @ working tree, protocols/Wax_Filling_GEN7_Cartridge.R04_LIVE.py (uncommitted)
+Retrieve this exact code: protocols/Wax_Filling_GEN7_Cartridge.R04_LIVE.py on master
+What this deployment is for: wax fills a full 4-well cartridge row per aspiration instead of ragged
+2/3-well batches, so it never traverses the cartridge wall on the short arc and stops bending tips.
+NOT repointed in Mongo on purpose — BIMS currently points elsewhere (see above), so repointing would
+also silently switch BIMS runs onto app geometry. That is the operator's call, not a side effect.
+
+================================================================================
+2026-07-28 — master (working session) — BIMS wax fill on R04 snapping tips: corrupt wax-well geometry found + repaired + redeployed
+================================================================================
+Operator report: wax fill run from BIMS on R04 keeps breaking tips at the cartridge holes;
+operator theory was the shorter 20uL filter tip (vs the reagent 200uL Biotix) not being
+accounted for "when changing to BIMS."
+
+ROOT CAUSE (proven from data, not tip length): the 2026-07-28 BIMS-native wax uploads
+(f2296f5a and two earlier rounds, uploaded ~16:15/17:04/18:55 by the operator working the
+R04 BIMS cutover) bundle the Mongo labware_definitions. In those defs the EVEN-column
+(wax-hole) wells of gen4deck_gen7cartridge_001/003/004 had been dragged onto the
+reagent-hole grid: vs the app-folder frame every successful wax fill has used, dx -25..-33mm,
+dy -10..-14mm, dz -4.1..-6.8mm (001: X2 at x=56.854 z=3.3 instead of x=82.154 z=7.4).
+Carriage 002's even wells were untouched and match the app folder EXACTLY (dx=dy=dz=0) —
+that's the clean control. Run eb492b3f (19:45, bims_native=true, carriage 001) dispensed
+X2/X4 at the corrupt coordinates → tip lands ~25mm off the wax hole and ~4.5mm below the
+believed rim → snap. The operator's "4mm" observation matches the dz corruption, which is
+why it presented as a tip-length problem. The ODD-column (reagent) wells are legitimately
+Studio-taught (small dz) and in active use — NOT touched.
+
+Note on tip length itself: cosmasanddamian_96_tiprack_20ul declares tipLength 45.66 (= well
+depth, no tipOverlap) which almost certainly overstates the physical filter tip — the
+zCalWax/zCalReagent gap (34.491 vs 40.8 = 6.31mm at one physical switch) says as much. But
+that error is a self-consistent frame convention baked into EVERY taught wax value (app deck
+defs, z_cal, probe constants); it cancels teach-vs-fill. "Fixing" tipLength alone would push
+every wax motion ~4-6mm DEEPER and break more tips. Left at 45.66 deliberately; a correction
+requires a coordinated re-teach of all wax-frame data (documented in memory).
+
+WHAT WAS DONE:
+1. Backed up the pre-repair Mongo defs (001-004) to
+   backups/labware-defs-backup-2026-07-28-pre-waxwell-restore.json (612KB).
+2. Restored all 288 even-column wells on 001/003/004 in Mongo labware_definitions from the
+   app-folder defs (x/y/z only). Verified: even==app exactly on all four carriages; odd
+   (reagent, Studio-taught) untouched.
+3. New scripts/deploy-wax-bims-to-r04.cjs — uploads HEAD:protocols/Wax_Filling_GEN7_Cartridge.py
+   (the exact BIMS-native lineage the operator ran today; working tree has unrelated in-flight
+   edits) bundling the repaired Mongo defs. Hard gates before repointing: analysis completed,
+   0 errors, bims_native RTP present, and per-carriage geometry check that even wells == app
+   frame and odd wells == Mongo taught values in the robot's OWN analysis.
+4. All gates passed; repointed opentrons_robots R04 wax-filling entry
+   f2296f5a-9659-4946-8cff-bec3deac71e9 → e8a09491-d987-495a-9598-3de6a4877e07.
+
+npm run check: not run (no app-code changes this session — DB data repair + .cjs deploy script only).
+
+Deployment: robot protocol upload + BIMS repoint (production data)
+Source: branch master @ commit 33e3863f (HEAD:protocols/Wax_Filling_GEN7_Cartridge.py) + repaired Mongo labware_definitions
+Retrieve this exact code: git show 33e3863f:protocols/Wax_Filling_GEN7_Cartridge.py; defs backup in backups/labware-defs-backup-2026-07-28-pre-waxwell-restore.json
+What this deployment is for: stop BIMS-native wax fills on R04 snapping tips — wax holes back on the verified physical frame while keeping Studio-taught reagent geometry.
+
+================================================================================
+2026-07-28 (later) — master — CORRECTION: wax-well fix is a HYBRID frame (taught X/Y + app Z), verified by two live fills
+================================================================================
+The earlier entry's diagnosis was half right. Live fill attempts falsified the "app frame is
+the physical truth" assumption:
+  - Taught frame (x≈50-57, z≈2.3-3.3): operator watched it HIT the holes but run ~4-6mm too
+    deep → tips snapped (the taught Z carries the wax-tip-length frame error — the operator's
+    original theory).
+  - App frame (x≈82, z≈7.4-8.85): correct height ("didn't go as deep") but ~26mm off the
+    holes entirely. Robot /labwareOffsets ruled out a compensating LPC offset (only 2025-era
+    tuberack/tiprack entries; today's runs applied 0,0,0). So the 7/22 deploy-script note that
+    app geometry is "what works" held only for whatever was true then — not for carriage 001
+    on R04 today.
+FIX NOW LIVE: even (wax) wells of gen4deck_gen7cartridge_001/003/004 in Mongo = Studio-taught
+X/Y + app-folder Z (001 X2: x=56.854 y=254.321 z=7.4; 003/004 z=8.85). Reagent (odd) wells and
+carriage 002 untouched. Redeployed + repointed: R04 wax-filling → protocol 52dacc36 (gates:
+clean analysis, bims_native present, robot-resolved wells == Mongo exactly).
+scripts/deploy-wax-bims-to-r04.cjs header updated to the corrected diagnosis.
+
+Deployment: robot protocol upload + BIMS repoint (production data)
+Source: branch master @ commit 33e3863f (HEAD wax .py) + hybrid-frame Mongo labware_definitions
+Retrieve this exact code: git show 33e3863f:protocols/Wax_Filling_GEN7_Cartridge.py; def state derivable from backups/labware-defs-backup-2026-07-28-pre-waxwell-restore.json (X/Y) + app folder (Z)
+What this deployment is for: wax fill on R04 lands ON the wax holes (taught X/Y) at the correct height (app Z) — stop tip breakage from both failure modes observed today.
+
+================================================================================
+2026-07-28 (later still) — master working tree — BIMS wax on R04: row-boundary batching port deployed (2.2/2.2/2.2/1.6 fills 4 wells/trip again)
+================================================================================
+After the hybrid-frame fix got wax landing correctly, the operator hit the KNOWN batching
+failure with the raised gate volumes (2.2/2.2/2.2/1.6 = 8.2uL/row vs hardcoded remainder
+13.5 → 6.5uL usable): 2 wells on the first trip, then 3s, batches end mid-row, and the next
+batch opens by crossing a cartridge wall on the short arc → tip breaks ("doesn't register
+it's a new cartridge"). Same failure the 7/22 R04_LIVE deploy fixed for the Opentrons-app
+lineage.
+The working tree already carried the port of that fix onto master (uncommitted, +98/-14):
+aspirate_remainder RTP (default 11.5 → 8.5uL usable ≥ 8.2uL row), batch builder that stops
+at cartridge-row boundaries, first_dispense/crosses_row lift guard replacing the dead
+`jump_count % 288` check, and the 1e-9 float tolerance. Deployed THAT working-tree .py to
+R04 via scripts/deploy-wax-bims-to-r04.cjs (new WAX_PY_REF=worktree mode; extra gate requires
+the aspirate_remainder RTP in the robot analysis). Analysis clean: 18 RTPs, geometry gates
+all 0-mismatch. Repointed R04 wax-filling 52dacc36 → 77250a2e.
+NOTE: the wax .py port is still UNCOMMITTED on master — commit it so the deployed lineage
+is traceable to a SHA.
+
+Deployment: robot protocol upload + BIMS repoint (production data)
+Source: branch master @ working tree (uncommitted port of the 7/22 batching fix), protocols/Wax_Filling_GEN7_Cartridge.py
+Retrieve this exact code: robot R04 protocol 77250a2e; working tree as of this entry (commit pending)
+What this deployment is for: BIMS wax fill does 4 wells per aspiration at 2.2/2.2/2.2/1.6 and never crosses a cartridge wall mid-batch — stops the new-cartridge tip breakage.
+
+================================================================================
+2026-07-29 — master — B14 reagent "deck cal not working": frame mismatch between taught (tip-neutral) geometry and tip-cal fills; 003 reagent wells tip-zeroed + redeployed
+================================================================================
+Operator: reagent fill on B14 missed the holes; Studio move-to-hole hit dead center; wanted to
+run WITH use_tip_calibration=true. Investigation ruled out def staleness (protocol d6709dea,
+uploaded 07-29 16:47, bundled defs byte-identical to Mongo). Real cause: frame mismatch.
+- Fills with use_tip_calibration=true apply the calibrator probe adjust to every dispense;
+  on B14/p300 that adjust is a near-constant ~(-5.9, -1.5)mm (10 probes: x -5.2..-6.4,
+  y -1.2..-1.9) — device-bias dominated (B14 calibrator serial baseline never zeroed on-robot).
+- The taught 003 reagent geometry was TIP-NEUTRAL (proof: operator's Studio verification session
+  had NO calibrate_tip bridge command after the failed 16:51 run -> tipAdjust null -> raw-def
+  move hit exactly). Design contract: fills-with-adjust require TIP-ZEROED defs (adjust
+  pre-subtracted; the Studio does this when teaching after a Calibrate-tip).
+- Reagent holes are 1.8mm diameter — a 5.4mm adjust misses entirely.
+FIX (operator chose to keep tip-cal ON): shifted all 288 ODD (reagent) wells of
+gen4deck_gen7cartridge_003 by (+5.9, +1.5)mm = minus the mean probe adjust (z untouched; even/wax
+wells untouched). Backup: backups/gen4deck_003-backup-2026-07-29-pre-tipzero-shift.json.
+Redeployed via scripts/deploy-reagent-to-b14.cjs; bundled 003 verified == Mongo (0 mismatches).
+Repointed B14 reagent-filling d6709dea -> 2c7f5cba.
+CONSEQUENCES: B14/003 reagent fills MUST now run with use_tip_calibration=TRUE (raw/no-adjust
+motion — including Studio moves without a prior Calibrate-tip — now sits ~5.9mm off; that is
+expected). 003's reagent frame is tied to B14's calibrator bias: re-teach if the carriage moves
+robots or the calibrator is re-zeroed/replaced. Wax fills on B14 always apply their own probe
+adjust — if wax misses on B14 the even wells need the same treatment (wax-bias mean, p20).
+
+Deployment: robot protocol upload + BIMS repoint (production data)
+Source: branch master @ working tree protocols/Reagent_Filling_GEN7.py (same 27-RTP lineage as prior B14 upload) + tip-zeroed 003 Mongo def
+Retrieve this exact code: robot B14 protocol 2c7f5cba; def backup above
+What this deployment is for: B14 reagent fills with tip calibration ON land on the 1.8mm holes (taught frame now tip-zeroed to match the fill's probe adjust).
+
+================================================================================
+2026-07-29 (later) — master — CORRECTION: B14 reagent reverted to raw frame; tip-cal unusable on B14 until probe system is fixed
+================================================================================
+The tip-zero shift from earlier today was wrong to apply — a fill immediately after it still
+missed. Audit-trail archaeology (audit_log: deck_calibration_edit_batch / calibrate_tip /
+deck_calibration_sync) explains why: since 07-27, carriage 003's reagent wells have been through
+repeated ±6mm re-teaches — sometimes with the Studio tip-cal adjust active, sometimes not —
+flipping regions between tip-zeroed and tip-neutral frames across sessions (e.g. +6/+1.5 batches
+07-27T15:30, +6.2/+3.2 on all 288 wells 07-27T21:57, then A-row and per-region tweaks on 07-28/29).
+The frame of any given region is therefore not reconstructable numerically, and blanket shifts
+(mine included) just continue the ping-pong.
+Decisive finding from the probe data: the STUDIO bridge probe and the IN-RUN protocol probe
+disagree systematically (~-6.4 vs ~-5.5 in x, ~0.8mm apart) and overall probe scatter spans
+~1.5mm x / ~2.5mm y — against 1.8mm-diameter reagent holes. Tip calibration on B14 currently
+ADDS more error than the per-tip bend it corrects. It cannot be made reliable by re-teaching.
+ACTION: restored 003's odd wells exactly from
+backups/gen4deck_003-backup-2026-07-29-pre-tipzero-shift.json (the state the operator raw-verified
+in the Studio: "tip went into the hole exactly"); redeploy deduped to the SAME upload d6709dea the
+operator verified against; B14 reagent repointed back to it. Reagent fills on B14 must run with
+use_tip_calibration=OFF (the default) until (a) the calibrator device baseline is re-zeroed on
+B14 and (b) the bridge-vs-protocol probe discrepancy is root-caused and fixed.
+
+Deployment: robot protocol repoint (production data)
+Source: B14 protocol d6709dea (2026-07-29 16:47 upload, raw-verified geometry)
+Retrieve this exact code: robot B14 protocol d6709dea; def state = backups/gen4deck_003-backup-2026-07-29-pre-tipzero-shift.json
+What this deployment is for: reagent fills on B14 land where the Studio raw-verified; tip-cal OFF until the probe system is trustworthy.
+
+================================================================================
+2026-07-29 (final) — master — B14 reagent: root cause was the Studio tipAdjust leak + bridge-vs-run probe mismatch; small counter-shift deployed, tip-cal ON restored
+================================================================================
+Full resolution of the B14 saga. The operator confirmed the pre-shift state was "Studio perfect,
+fills slightly off (right/front)". Chain of causes:
+1. The deck WAS correctly tip-zeroed (taught with Studio calibrate-tip, per design).
+2. The operator's post-fill "raw" Studio verification was NOT raw: startMaintenance() resets
+   hasTip but NOT tipAdjust (+page.svelte ~514 vs 537), so a session killed externally (fill run
+   start) leaks the last adjust into the next connect. Their "hit exactly" check silently applied
+   the 16:44 adjust — which misled this session into the wrong +5.9mm "tip-zero" shift (reverted).
+3. The real residual: the bridge daemon probe and the in-protocol probe differ systematically —
+   bridge mean adjust ≈ (-6.36, -1.35), in-run mean ≈ (-5.53, -1.68) → fills land ≈ (+0.8, -0.35)mm
+   off (right/front) — confirmed by operator observation of the miss direction.
+FIX: shifted 003's 288 odd/reagent wells by (-0.8, +0.35) to cancel the probe mismatch; deployed
++ repointed B14 reagent → protocol 13558e8d. Fills now run with use_tip_calibration=ON.
+EXPECTED QUIRK: Studio checks WITH calibrate-tip now sit ~0.8mm off (opposite direction) — the def
+is in the RUN-probe frame, not the bridge-probe frame. Do NOT "fix" that in the Studio; verify by
+running a fill. Backups: gen4deck_003-backup-2026-07-29-pre-tipzero-shift.json (raw-verified state),
+gen4deck_003-backup-2026-07-29-pre-probe-mismatch-correction.json (pre-final-correction).
+TODO (real fixes): (a) startMaintenance() must clear tipAdjust/nominal on fresh connect — one-line
+guard, page has unrelated uncommitted edits pending; (b) root-cause the 0.8mm bridge-vs-protocol
+probe discrepancy (daemon carries the .py motion "verbatim" — it measurably is not equivalent);
+(c) zero the calibrator devices on-robot fleet-wide.
+
+Deployment: robot protocol upload + BIMS repoint (production data)
+Source: working tree protocols/Reagent_Filling_GEN7.py + 003 def with probe-mismatch correction
+Retrieve this exact code: robot B14 protocol 13558e8d; def backups above
+What this deployment is for: B14 reagent fills with tip calibration ON land centered (probe-frame mismatch cancelled in the def).
+
+================================================================================
+2026-07-29 — master — Studio patch shipped: tipAdjust cleared on connect + slot-11 occupied recovery
+================================================================================
+Committed d8e7404c to master (production deploy via Vercel GitHub integration on push):
+- deck-calibration +page.svelte: startMaintenance() now resets tipAdjust/nominal/refWell/
+  slotOrigin/loadedWells/liveXYZ on every fresh connect (previously only hasTip) — closes the
+  stale-adjust leak that misled the 2026-07-29 B14 re-shift — and the connected message warns
+  to hand-remove any tip left from a dead session (B07 2026-07-28 tip-crush class).
+- maintenance.ts + pick-up-tip endpoint: typed SlotOccupiedError -> 409 {code:SLOT_OCCUPIED}
+  -> page auto-reopens the run when slot 11 holds the other process's tiprack.
+npm run check: 11 errors — unchanged pre-existing baseline; none in touched files.
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ commit d8e7404c
+Retrieve this exact code: git checkout master at commit d8e7404c
+What this deployment is for: Studio sessions can no longer silently reuse a dead session's tip-cal adjust; rack-swap in slot 11 recovers instead of erroring.
+
+================================================================================
+2026-07-29 — master — B07 "calibrator fixture not found" = bend-reply parser, fixed + deployed
+================================================================================
+Studio Calibrate-tip on B07 failed with "calibrator fixture not found — no /dev/ttyACM device
+answered the 'C' bend query (scanner skipped)". Diagnosis over SSH: calibrator (Particle Argon,
+ttyACM1) present and answering — but B07's fixture prefixes its bend reply ("= -0.2:2.3" vs
+R04/B14's bare "-4.5:0.8"), and _parse_bend's positional str(bytes)[2:] slicing choked on the
+prefix -> daemon skipped the real calibrator. (Also explains B07's long "flaky calibrator"
+reputation.) The device had ALSO been off USB 16:14->18:45 today (genuinely flaky cable), but was
+back before the failing attempts. 'I' (particle id) replies are clean — only 'C' is prefixed.
+FIX: _parse_bend now extracts x:y by regex (tolerant of prefixes; self-tested against both reply
+styles). Patched the ROBOT'S deployed daemon lineage (which was NEWER than the repo copy — it
+carries the 7/13 scanner-reenumeration + /maintenance_runs/current_run fixes that never landed on
+master), deployed to B07 (service restarted clean 19:05), and synced that lineage + fix into
+scripts/ot2-bridge.py so the repo is no longer behind the fleet.
+STILL OPEN: (a) R04/B14 daemons run the old parser — fine for their bare replies; roll the patched
+daemon fleet-wide at a quiet moment for consistency. (b) The FILL protocols parse 'C' with the same
+fragile slicing — on B07, fill-time baseline reads will fail/pause ("Could not read offset
+calibration") until the .py parsing gets the same tolerance or the device's "= " prefix is cleared.
+(c) B07 calibrator USB drop 16:14-18:45 = physically flaky connection; reseat/replace cable.
+
+Deployment: robot daemon update (B07 only) — /data/ot2-bridge/ot2-bridge.py
+Source: robot-deployed lineage + regex bend parser; synced to scripts/ot2-bridge.py this commit
+Retrieve this exact code: scripts/ot2-bridge.py @ this commit
+What this deployment is for: Studio Calibrate-tip works on B07 (bend reply with "= " prefix now parses).
+
+================================================================================
+2026-07-29 — master — Run-start deck-calibration FRESHNESS GATE + fill-protocol 'C' parser fix; B07 zero-baseline mystery solved
+================================================================================
+Operator: "make sure reagent fill always runs the newest deck calibration — sometimes it reverts
+to old ones"; then two B07 reagent runs in a row differed with nothing changed.
+
+STALENESS BUGS FOUND (the "reverts"):
+1. A run executes the def SNAPSHOT bundled at protocol upload — Studio edits don't reach runs
+   until a Sync re-upload.
+2. The fill pages posted the protocol id chosen at page LOAD — a page opened before a Sync starts
+   the older upload (still present on the robot) with its stale defs.
+3. Studio Sync re-uploads the stored opentrons_protocols .py — which deploy scripts never updated,
+   so Sync could silently DOWNGRADE the protocol lineage (stored wax .py was months old).
+
+FIXES SHIPPED:
+- NEW src/lib/server/opentrons/protocol-freshness.ts — ensureFreshRunProtocol(): at EVERY wax +
+  reagent startRun, resolves the robot's current entry server-side (posted id no longer trusted),
+  fetches that upload's own on-robot analysis, diffs every BIMS-managed labware def well (x/y/z)
+  against live Mongo, and on ANY mismatch auto re-uploads the stored .py with live defs, repoints,
+  re-verifies the fresh bundle, audit-logs (run_start_auto_resync). A run can no longer start on
+  geometry it can't prove current. Wired into reagent-filling + wax-filling startRun.
+- Stored opentrons_protocols .py refreshed to the DEPLOYED lineages (kills the sync-downgrade).
+- Fill protocols' calibrator 'C' baseline parsing made regex-tolerant (same fix as the daemon):
+  B07's "= -0.2:2.3" reply crashed the old slicing -> every B07 tip-cal run paused ("Could not
+  read offset calibration") and continued with ZERO baseline -> per-tip adjust wrong by the whole
+  baseline (2.3mm y vs 1.8mm holes) + fresh-tip probe scatter each run = the observed
+  different-every-run misses (adjusts -1.0/-2.9, -0.7/-3.1, -0.8/-2.9 across 3 unchanged runs).
+- Deployed parser-fixed reagent to B07 (repointed 620c93ee -> a1985591 via deploy-reagent-to-b07).
+
+npm run check: 11 errors — unchanged baseline.
+
+Deployment: production — Vercel auto-deploy from master push (freshness gate) + robot protocol upload B07 (a1985591)
+Source: branch master @ this commit
+Retrieve this exact code: git log master --oneline (this commit)
+What this deployment is for: every fill run provably uses the live deck calibration; B07 tip-cal runs get a real baseline.
+
+2026-07-29 addendum: operator confirmed B07 reagent fill lands correctly with tip calibration ON
+after the 'C'-parser fix (protocol a1985591) — real baseline (-0.2, 2.3) read, no carriage-004
+counter-shift needed. B14 (13558e8d, tip-cal ON) and R04 wax (77250a2e) also operator-confirmed
+today. Freshness gate live in production as of 662e7ae4.
+
+================================================================================
+2026-07-29 — master — Golden calibration baseline + atomic batch-apply (calibration can no longer silently tear or be lost)
+================================================================================
+Operator asked to lock in today's all-three-robots-confirmed calibration state.
+1. NEW scripts/calibration-baseline.cjs — save/verify/restore the COMPLETE fill-calibration
+   state (all 18 labware defs, robot deck offsets, tip-calibrator fixtures, robot protocol
+   pointers). Saved + round-trip-verified today's state as
+   backups/calibration-golden-2026-07-29-all-robots-confirmed.json (defs=18 offsets=3 fixtures=3).
+   Restore is gated on RESTORE_APPLY=1, can target single loadNames, and hands off to the
+   run-start freshness gate so restored geometry reaches robots automatically on the next run.
+2. applyDeckEditBatch is now ALL-OR-NOTHING: a batch where ANY well would land out of bounds
+   applies NOTHING and the Studio surfaces the per-well reasons as an error. Partial application
+   (rest of group moves, clamped wells dropped) was the documented mechanism that repeatedly
+   corrupted deck calibration (bounds-guard corruption, 2026-07) — that class is now closed.
+npm run check: 11 errors — unchanged baseline.
+
+Deployment: production — Vercel auto-deploy from master push (atomic batch apply)
+Source: branch master @ this commit
+Retrieve this exact code: git log master --oneline (this commit); baseline JSON committed in backups/
+What this deployment is for: today's known-good calibration is restorable forever; group applies can no longer partially apply and tear the deck geometry.
+
+================================================================================
+2026-07-29 — feat/mcp-live — Remote MCP server at /api/mcp (wraps the agent API; kanban-first tool surface)
+=========================================================================Converted the BIMS agent REST API into a remote MCP server that Claude Desktop /
+claude.ai / Claude-in-Chrome custom connectors can reach. Supersedes the localhost-only
+services/bims-mcp prototype (left in place): the endpoint now lives INSIDE the SvelteKit
+app, so it deploys with every push at a public HTTPS URL (custom connectors dial in from
+Anthropic's cloud — localhost never works, which is why the prototype stalled).
+
+Built:
+- src/routes/api/mcp/+server.ts — Streamable-HTTP MCP endpoint (@modelcontextprotocol/server
+  v2, stateless: fresh server per request — correct for Vercel serverless).
+- src/lib/server/mcp/bims-mcp.ts — 31 tools, each a thin wrapper calling the existing
+  /api/agent/** endpoints internally (event.fetch + AGENT_API_KEY), so audit logging,
+  collection allowlists, and validation stay enforced in the REST layer. Full kanban
+  control set (board snapshot, create/update/move tasks, subtasks, merge, transitions,
+  proposals, violations) + operations dashboards, saved queries, SPU status, approvals,
+  messages, cartridge photos. Excluded by design: session-cookie ask*/transcribe and the
+  OT-2/scanner long-poll daemon queues.
+- src/lib/server/mcp/auth.ts — connector key gate (Bearer / x-api-key / ?key= — query form
+  because the connector UI only accepts a URL). MCP_API_KEY env var, falls back to
+  AGENT_API_KEY. Timing-safe compare.
+- docs/MCP-SERVER.md — connection guide for every Claude client + env setup.
+Deps: @modelcontextprotocol/server@2.0.0, zod@4.
+
+Validated: npm run check → 10 errors (baseline 11, none in new files); live smoke test on
+dev server: initialize → tools/list (31) → tools/call kanban_board_snapshot returned the
+real board from Atlas; bad key → 401.
+
+TO DO before connectors work in prod: set MCP_API_KEY in Vercel env; merge to master and
+push (Vercel auto-deploy); then add the connector URL https://<host>/api/mcp?key=<MCP_API_KEY>.
+
+Also this session (Ralph boot-up + full audit, reports delivered in-session): security audit
+(login rate limiting still missing; CV mutations lack cv:* permission checks; /api/debug/env
+leaks secret lengths to any user; deactivated-user session bug now CLOSED), data-layer audit
+(Sacred finalization broken: CartridgeRecord.finalizedAt never written, AssayDefinition
+guards a nonexistent field, .save() bypasses sacred/immutable middleware), API inventory
+(183 endpoints, zero fully-unauthenticated; spoofable vercel-cron UA fallback when
+CRON_SECRET unset), code health (1,518 `as any`; 84 contract tests vs 185 endpoints).
+
+================================================================================
+2026-07-28 — NEWDEV — robot arm UI 404 fixed; arm routes co-located under cart-mfg
+================================================================================
+Selecting "Robot Arm" in the cart-mfg sidebar 404'd. Root cause was a half-finished
+route migration: the sidebar (and the rest of the app) had moved to
+/manufacturing/cart-mfg/robot-arm, and the bare landing +page.svelte there had been
+deleted in favour of a control/ subroute, but jog/ and calibrate/ were still sitting
+at the old top-level /manufacturing/robot-arm/ path. So the nav target resolved to a
+redirect-only route whose siblings didn't exist where anything linked to them.
+
+Moved jog/ and calibrate/ (+page.svelte and +page.server.ts each) into
+src/routes/manufacturing/cart-mfg/robot-arm/ via git mv, then fixed every internal
+link that still pointed at the old path. Pointed the sidebar "Robot Arm" entry
+directly at control/ rather than the bare path, so the 302 hop is skipped and the
+active-state highlight (startsWith) actually matches. Added sidebar entries for Arm
+Jog, Arm Runs and Arm Calib — the runs list had no entry point at all and was only
+reachable by deep link after a run started. control/'s back-link pointed at its own
+redirect (a self-loop); it now goes to the cart-mfg hub. Corrected the stale restore
+hint in robot-arm/+page.server.ts, which named a path that no longer exists.
+
+The bare /robot-arm route is deliberately kept as a 302 to control/ so old bookmarks
+still land somewhere.
+
+Not yet verified against hardware: ROBOT_ARM_BASE_URL / ROBOT_ARM_API_KEY still need
+to point at the Pi for the control, jog and calibrate actions to do anything. This
+commit only makes the pages reachable and render.
+
+Files touched: src/routes/manufacturing/cart-mfg/+layout.svelte,
+cart-mfg/robot-arm/+page.server.ts, cart-mfg/robot-arm/control/+page.svelte,
+and the moved cart-mfg/robot-arm/{jog,calibrate}/{+page.svelte,+page.server.ts}.
+
+npm run check: 46 errors / 434 warnings — unchanged from the pre-existing baseline;
+zero errors in the robot-arm routes or the cart-mfg layout.
+Commit: ba2c37f8 on branch NEWDEV.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-newdev-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-doi2uhkk2-brevitest.vercel.app)
+Source: branch NEWDEV @ commit 9726af4a (code change is ba2c37f8; 9726af4a adds this log)
+Retrieve this exact code: git checkout NEWDEV at commit 9726af4a
+  (or: git log NEWDEV --oneline to find it if the branch has since moved on)
+What this deployment is for: verifying the Robot Arm sidebar entry no longer 404s and
+that control/, jog/, calibrate/ and runs/ all render under /manufacturing/cart-mfg/robot-arm.
+Build status: success (both Vercel scopes). Preview is cookie-session gated — it 302s to
+/login, so the routes need a real login to confirm end to end; the arm itself will not
+respond until ROBOT_ARM_BASE_URL / ROBOT_ARM_API_KEY point at the Pi.
+
+================================================================================
+2026-07-29 — feat/arm-pi-connection — ARM-01: arm connection health + task runner
+================================================================================
+Wrote docs/prds/ARM-01-pi-connection-and-task-control.md and implemented stories
+S1-S5, S7 and S8 against it. The PRD was grounded by probing the live arm-pi
+rather than by reading the schema, which changed what the work turned out to be.
+
+Key finding: the BIMS -> Pi path already worked. arm-pi is on the tailnet and
+Tailscale Funnel is up, so https://arm-pi.tailf65a70.ts.net/health answers 200
+from the public internet, auth is enforced (401 without x-api-key, 200 with),
+and GET /tasks lists two registered tasks. So this was never a networking
+problem: robot-arm-client.ts wrapped 17 Pi endpoints and none of them were the
+task endpoints, so running a task was reachable by curl and unreachable from the
+product. That gap is what S1/S5 close.
+
+Three live misconfigurations were found on the Pi and are NOT fixed by this
+commit (they are ops work, story S0, deliberately left for explicit approval
+because restarting the service has a physical-motion consequence):
+  1. Local .env pointed ROBOT_ARM_BASE_URL at arm-pi:8001, which is a stray
+     hand-started uvicorn, not the systemd service on :8000 that the Funnel
+     proxies. Two servers, one serial bus.
+  2. The Pi's ~/robot-arm/.env says DRY_RUN=false and LEADER_PORT=/dev/ttyACM1,
+     but the running service still reports DRY_RUN=true and the old
+     /dev/buslinker-* paths — the .env was corrected and the service was never
+     restarted. The only thing holding the arm in dry-run is an un-restarted
+     process; a reboot arms live motion.
+  3. Pi BIMS_WEBHOOK_URL points at a dev workstation's tailnet IP on a Vite
+     port, so production BIMS receives no arm events at all.
+
+What was built:
+- robot-arm-client.ts: added preflight() (8s), listTasks(), startTask() (15s,
+  matching the existing allowance for the slow calibration calls), plus
+  ArmPreflight / ArmTask / ArmTaskStarted types.
+- robot-arm-lock.ts (new): deriveArmHolder(). The "who holds the arm" lock is
+  DERIVED, not stored — the arm is held iff a RobotArmRun exists in a
+  non-terminal state, and the holder is that run's existing triggeredBy. No
+  schema change, no new collection, no write path, covered by the existing
+  {status, createdAt:-1} index. A stored currentOperator field would be a second
+  source of truth that can drift; capture_stations.currentOperator is the
+  cautionary tale in this repo (no expiry, cleared by hand). A derived lock
+  cannot strand the arm, because the terminal webhook event that finalizes the
+  run IS the release.
+- robot-arm-run.ts: widened the type enum with 'task' (additive only). The
+  webhook was already receiving task.* events and filing them as 'teleop' with a
+  "treated as teleop for now" comment; it now infers 'task' correctly. Added to
+  the runs/ filter whitelist.
+- control/+page.server.ts: safePreflight()/safeTasks() folded into the existing
+  Promise.all, plus a startTask action and a stop action that now audit-logs
+  both holder and stopper.
+- RobotArmConnectionPanel.svelte (new): renders the Pi's own preflight verdict
+  and its `diagnosis` string verbatim rather than re-deriving the logic in
+  TypeScript, so the two cannot drift. Four states (ok / degraded / unreachable
+  / LIVE MOTION), with the configured base URL shown alongside failures.
+- RobotArmControlBar.svelte (new): holder + elapsed time + an always-live Stop,
+  sticky to the viewport bottom on phones. Stop is enabled regardless of who
+  holds the arm — a stop that respects the lock is a stop that fails when you
+  need it most — with a confirm when overriding someone else's run.
+- Responsive pass on the control page: 44x44px touch targets, stacked layout
+  under sm. The arm pages had 1 responsive utility class between all four.
+
+Safety gate: the build is accepted against DRY_RUN only. startTask re-reads the
+Pi's dry_run at submit time rather than trusting what the page rendered, since
+the service could have been restarted since load, and refuses to start if it is
+not true. The UI disables Start for the same reason.
+
+npm run check: 10 errors / 434 warnings, zero in any ARM-01 file. (The 46-error
+baseline recorded at ba2c37f8 has since drifted down; the remaining errors are
+in r2.ts, AskBimsWidget and assembly/[sessionId], none touched here.)
+
+Deployment: preview — https://bioscale-operations-system-mongodb-9ootzb0ob-brevitest.vercel.app
+  (immutable, SSO-gated: https://bioscale-operations-system-mongodb-cuv6pauky.vercel.app)
+Source: branch feat/arm-pi-connection @ commit b814ef9e
+Retrieve this exact code: git checkout feat/arm-pi-connection at commit b814ef9e
+  (or: git log feat/arm-pi-connection --oneline to find it if the branch has since moved on)
+What this deployment is for: verifying the ARM-01 connection panel, the task runner,
+and the derived holder/stop control bar on the Robot Arm tab.
+Build status: success on both Vercel scopes (~120s; the usual spurious 'failure' did
+not appear this time).
+
+Deployment test results:
+- Preview is live and cookie-session gated: /manufacturing/cart-mfg/robot-arm/control
+  302s to /login on the brevitest-scope alias. The immutable *.vercel.app URL is
+  additionally behind Vercel SSO, so use the -brevitest alias above.
+- Inbound webhook path VERIFIED against the deployment: POST /api/robot-arm/webhook
+  returns 401 with no key, 401 with a wrong key, and 400 "run_id and event.type
+  required" with the real AGENT_API_KEY. So AGENT_API_KEY is correctly configured on
+  Vercel and matches the value the Pi would send. An empty payload was used
+  deliberately so auth was exercised without writing a junk RobotArmRun.
+- ROBOT_ARM_BASE_URL and ROBOT_ARM_API_KEY DO exist on Vercel (Production + Preview)
+  but were last set 83 days ago, which predates the move to the arm-pi host. Their
+  values could not be read: both are marked Sensitive, so 'vercel env pull' returns
+  them blank (same behaviour already documented for STATION_AGENT_KEY). AGENT_API_KEY
+  and MONGODB_URI pull fine, which is how the blank was confirmed to be sensitivity
+  rather than an empty value.
+- NOT yet verified: the outbound BIMS -> Pi direction from the deployment, and the UI
+  itself. Both need a real login, which cannot be done from here. The 83-day-old
+  ROBOT_ARM_BASE_URL most likely still points at the retired alejandros-pc Funnel URL
+  rather than https://arm-pi.tailf65a70.ts.net — if so the connection panel will render
+  its 'unreachable' state, which is itself a valid first read of the panel.
+
+Still outstanding (story S0, deliberately not done in this commit): the three Pi-side
+misconfigurations listed in the entry above. Restarting the robot-arm service has a
+physical-motion consequence (the Pi's .env says DRY_RUN=false), so that work is held
+for explicit approval rather than bundled into a deploy.
+2026-07-30 — master — Operator was right: Studio tip-cal probed at the WRONG HEIGHT (38.5 park vs the fill's 40.8) — fixed fleet-wide
+================================================================================
+Operator kept insisting the calibrator z difference between the Studio (38.5) and the reagent fill
+(40.8) "has to cause some kind of offset". Initially dismissed (the endpoint sends zCal=40.8 in the
+bridge payload) — WRONG: the daemon's ATTACHED-mode calibrate_tip ignored the payload z and probed
+at the tip's CURRENT height ("z_probe = cur z", ot2-bridge.py ~1415). The Studio flow parks at the
+fixture position z (38.5) before calibrating, so every Studio tip-cal pressed the switch levers
+2.3mm below where every reagent fill presses them (wax teaching: ~4mm above the wax fill's 34.49).
+Different lever contact height -> systematically different measured adjust -> a persistent
+teach-frame vs fill-frame bias no deck re-teaching could remove (very likely the B14 ~0.8mm
+bridge-vs-run residual empirically compensated on 07-29).
+FIX: attached mode now keeps the current X/Y as reference but ALWAYS moves to and probes at the
+payload z_cal for the mount (reagent 40.8 / wax 34.491) — Studio probe height == fill probe height
+by construction. Deployed to all three robots (daemons restarted clean 15:34, all idle at deploy).
+NOTE: existing taught decks keep their empirical compensations (captured against fill behavior, so
+they stay valid); FUTURE Studio teaching now measures adjusts in the fill frame directly.
+zCalReagent/zCalWax values themselves unchanged (40.8/34.491 remain the fill-proven heights); the
+38.5 fixture position.z remains a park/jog height only.
+
+Deployment: robot daemon update (B07 + B14 + R04) — /data/ot2-bridge/ot2-bridge.py
+Source: scripts/ot2-bridge.py @ this commit
+Retrieve this exact code: scripts/ot2-bridge.py @ this commit
+What this deployment is for: Studio Calibrate-tip and fill probes contact the calibrator at the same height, eliminating the teach-vs-fill adjust bias.
+
+================================================================================
+2026-07-30 — fix/mag-test-run-time — magnetometer shows when the test RAN, not
+when the data was pulled
+================================================================================
+"Fetch Results" on /validation/magnetometer reads the magnet_validation Particle
+variable, which holds the output of a PREVIOUS run_test on the device. Both read
+paths (the readFromDevice action and the auto-poll endpoint) stamped the session
+with new Date() — the moment of the read — so a result measured weeks earlier was
+recorded and displayed as if it had just been taken.
+
+Not hypothetical. Across 431 magnetometer sessions in production, 153 are
+mislabelled by more than an hour. The worst shows 2026-06-11 for a test that
+actually ran 2025-10-06 — 248 days off. This is also the visible symptom of the
+stale-variable failure mode behind the SPU-203 investigation: a frozen variable
+looks like a fresh test precisely because BIMS dates it by the read.
+
+Root cause and the data we already had: the device reports its own run time. The
+payload's first line is the results filename the firmware wrote, e.g.
+  /validation/magnet-1784661523.txt
+and an older shape carries one too:
+  #003<TAB>1710268200
+The poll endpoint already regex'd that second form for its change-detection
+counter and threw the timestamp away. Nothing ever read the filename form, which
+is what 403 of 426 sessions actually use.
+
+New shared parser src/lib/server/magnetometer-time.ts handles both shapes,
+rejects an unset device clock (anything before 2020, which covers the 1970 and
+2001 epoch defaults) and anything meaningfully in the future, only scans the
+header so reading values can never be mistaken for an epoch, and returns null
+rather than guessing.
+
+Wiring:
+  * readFromDevice + the poll endpoint store testRanAt on the session (additive
+    field on ValidationSession) and return it. startedAt/completedAt keep their
+    existing meaning — when BIMS recorded this — so no existing field is silently
+    redefined. The SPU DHR validation.magnetometer block gets testRanAt alongside
+    its untouched completedAt for the same reason.
+  * The fetch results panel now leads with "Test run <time>", shows the read time
+    beneath it, and warns when the results were already stale on arrival.
+  * History and the [sessionId] detail page DERIVE the time from rawData whenever
+    testRanAt is absent. rawData is already stored on every document, so all 413
+    resolvable historical records display correctly with NO migration and without
+    mutating a single stored record. The detail page previously showed two
+    identical pull-time fields ("Started" and "Completed"); those become "Test
+    run" and "Recorded in BIMS".
+  * History CSV gains SPU and Test run columns.
+
+18 legacy sessions carry no timestamp at all (their payload starts straight in at
+"Channel A ... Channel B ... Channel C"). Those render as "unknown" with a tooltip
+explaining why. Deliberately NOT backfilled with the read time — substituting the
+read time is the exact bug being fixed, and a confidently wrong date is worse than
+an honest gap.
+
+Also fixed while in the file: the history page queried type 'magnetometer', but
+every magnetometer session is written with type 'mag'. It was matching 5 stray
+records out of 431, so that page has been showing almost nothing. Now matches
+both values.
+
+Verified against production with the real module via tsx (script deleted after):
+431 sessions examined, 413 resolved a run time (403 via the filename form, 10 via
+the counter form), 18 honestly unknown, 153 stale by more than an hour, and 0
+implausible timestamps accepted.
+
+Tests: 14 new unit tests — both formats, precedence when a payload has both, the
+legacy no-timestamp payload, unset and future clocks, second vs millisecond
+epochs, and a guard that epoch-looking numbers inside the readings table are never
+mistaken for a timestamp. This branch is off master, which does not have the
+test:unit script or config from the optical branch, so both were added here too.
+
+npm run check: 76 errors / 434 warnings — identical to the clean master baseline
+measured at this branch point (master has drifted up from the 46 recorded on
+older branches), zero in touched files.
+
+Files: src/lib/server/magnetometer-time.ts (new), magnetometer-time.test.ts (new),
+src/lib/server/db/models/validation-session.ts,
+src/routes/validation/magnetometer/+page.server.ts and +page.svelte,
+.../history/+page.server.ts and +page.svelte,
+.../[sessionId]/+page.server.ts and +page.svelte,
+src/routes/api/validation/magnetometer/poll/+server.ts, package.json,
+tests/vitest.unit.config.ts (new)
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-fix-mag-7db9fe-brevitest.vercel.app
+  (immutable alias: https://bioscale-operations-system-mongodb-lgwniznmg-brevitest.vercel.app)
+Source: branch fix/mag-test-run-time @ commit 35d1d792
+Retrieve this exact code: git checkout fix/mag-test-run-time at commit 35d1d792
+  (or: git log fix/mag-test-run-time --oneline to find it if the branch has moved on)
+What this deployment is for: confirming Fetch Results reports the device's own
+  test time rather than the poll time, that stale reads are called out, and that
+  magnetometer history is populated again.
+2026-07-30 — feat/arm-pi-connection — Pi-side arm bring-up completed; preview rebuilt to pick up corrected ROBOT_ARM_BASE_URL
+================================================================================
+This deploy carries NO new BIMS code. Its only purpose was to produce a fresh preview
+build that reads the corrected `ROBOT_ARM_BASE_URL` Vercel env var (env changes are not
+applied to an existing build). Merged origin/master into the branch — 8f7a0171 (MCP
+path-embedded key route) and bc3734d1 (ot2-bridge attached-mode tip-cal z fix). The only
+conflict was progress.txt, where both sides had appended entries; resolved by keeping
+both, verbatim.
+
+Story S0 from the previous entry — the three Pi-side misconfigurations that were
+deliberately held for explicit approval — is now DONE, with the operator at the bench.
+Root causes, in the order they had to be peeled back:
+
+1. STALE systemd ENVIRONMENT. The robot-arm service on arm-pi had been running since
+   2026-07-22; .env had been corrected on 07-28 and 07-29. systemd reads
+   `EnvironmentFile=` only at process start, so both fixes were silently discarded and
+   the server kept insisting on ports .env no longer named. The three .env.bak-* files
+   on the Pi are the fossil record of the same fix being applied twice and lost twice.
+   Lesson: ALWAYS `systemctl restart robot-arm` after touching .env.
+
+2. FOLLOWER BUSLINKER HAD BEEN SWAPPED. The board physically on arm-pi reports USB
+   serial 5C4C126808, not the 5C4C128050 recorded in the PRD inventory, so udev never
+   created /dev/buslinker-follower and the server reported "follower not present" even
+   though it was plugged in. Updated `_KNOWN_ARM_SERIALS` (src/server/app.py) and
+   deploy/pi/udev/99-buslinker.rules together, per the standing rule in the robot-arm
+   CLAUDE.md. Stale 5C4C128050 references remain in that repo's
+   docs/PRD_BIMS_robot_arm.md and docs/pi-deployment.md.
+
+3. BUG IN THE PREFLIGHT CHECK ITSELF. `_diagnose_ports`, `port_status` and `preflight`
+   all tested `cfg in present_devices`, but serial.tools.list_ports.comports()
+   enumerates real device nodes only. The udev symlinks we deliberately configure
+   (/dev/buslinker-leader, /dev/buslinker-follower) are perfectly openable but never
+   appear in that enumeration — so a CORRECTLY configured Pi reported both ports
+   missing. Worse, the generated diagnosis then advised reverting to
+   order-of-enumeration ttyACM* names, contradicting docs/pi-deployment.md, which is
+   the likely cause of the repeated .env flip-flopping. Fixed with `_port_present()`,
+   which realpath-resolves before comparing. Committed to the robot-arm repo (NOT this
+   one) as d418071 on branch robot-arm-pi-integration; arm-pi pulled to the same commit.
+
+arm-pi now reports /health/preflight ok:true with both ports green and an empty
+diagnosis. DRY_RUN was flipped to false with the operator at the bench, so the arms are
+LIVE — the next /teleop/start, /record/start or /replay/start moves real hardware.
+
+Access note for future sessions: `brevitest3` sudo on arm-pi requires a password that
+we do not have, but `ssh root@arm-pi` authenticates by key straight to uid 0. Use that
+for privileged ops. No reflash is ever needed for this.
+
+Caveat NOT closed by this work: every reachability check so far was over the tailnet
+(source 100.104.29.116). Tailscale Funnel is enabled and correctly proxies
+/ -> 127.0.0.1:8000, but no request has yet reached the Pi from the public internet.
+Funnel traffic arrives at the app as 127.0.0.1, so the first 127.0.0.1 line in
+`journalctl -u robot-arm` will be the first hard proof the Vercel->Pi path works.
+
+`npm run check`: 40 errors / 434 warnings (baseline ~46, so at or below it). All 40 are
+in master-owned files — 28 in src/lib/server/mcp/bims-mcp.ts, 8 in
+src/routes/assembly/[sessionId]/+page.svelte, and the rest in api/mcp and r2.ts. Zero
+in robot-arm code; this branch's only edit was progress.txt.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ar-2c5b1f-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-it6r1rzab-brevitest.vercel.app)
+Source: branch feat/arm-pi-connection @ commit e0c442f2
+Retrieve this exact code: git checkout feat/arm-pi-connection at commit e0c442f2
+  (or: git log feat/arm-pi-connection --oneline to find it if the branch has moved on)
+What this deployment is for: a rebuilt preview that picks up the corrected
+ROBOT_ARM_BASE_URL (https://arm-pi.tailf65a70.ts.net) so the ARM-01 connection panel can
+reach the now-healthy Pi.
+
+================================================================================
+2026-07-30 — feat/arm-pi-connection — arm control page: controls-first layout, merged session bar, persisted connection log
+================================================================================
+Follow-up to the arm bring-up earlier today. With the arm actually usable, the control
+page's layout became the bottleneck — it had grown by accretion during ARM-01 and buried
+the three controls an operator actually uses.
+
+LAYOUT. Teleop / Record / Replay moved to the top; RUN TASK sits below them. Arm connection
+became a sticky right-hand side panel at lg+ so health stays visible while working, with a
+one-line compact variant under the title on narrow screens. Both variants are driven by the
+same derived state inside RobotArmConnectionPanel (a new `variant` prop) rather than
+duplicated markup, so they cannot drift apart. Root width went max-w-5xl -> max-w-7xl to fit
+the second column, and the page's own p-4 was dropped since cart-mfg/+layout.svelte already
+applies p-4 lg:p-6 (it was doubled).
+
+MERGED SESSION UI. The page carried TWO active-session displays that could contradict each
+other: RobotArmControlBar, and an inline banner at +page.svelte:140-172 whose stop form had
+no confirm and no use:enhance. The banner is deleted. RobotArmControlBar absorbed its states
+and is now the single indicator, sitting directly above the controls it governs.
+
+The subtle part: `active` (live from the Pi) and `holder` (derived from Mongo
+robot_arm_runs via deriveArmHolder) are different sources that CAN disagree — a run whose
+terminal webhook never landed leaves a holder row set forever while the Pi reports nothing
+running. That is exactly the 70-day STALE row seen this morning. Precedence is now explicit:
+the Pi is authoritative for WHETHER something is running, Mongo for WHO and SINCE WHEN. The
+orphaned case renders STALE and states out loud that it blocks Run Task, so a ghost row
+explains itself rather than being a mystery.
+
+Two long-standing bugs in that component, both fixed:
+  - elapsed() had no hour/day rollover, so a 70-day run rendered "101939m 3s". Now "70d 8h".
+  - currentUserId was accepted as a prop but never used — because the component's LOCAL
+    Holder interface omitted userId (ArmHolder in robot-arm-lock.ts:33 has it), which made
+    the comparison un-writable against the declared type. The prop was not vestigial, the
+    type was incomplete. Wired up per ARM-01 §8.4: Stop no longer prompts you to confirm
+    stopping your own run, only someone else's.
+
+CONNECTION LOG. Reuses the existing immutable DeviceEvent collection (30-day TTL) — no new
+model, no schema change. Recorded from the BIMS side rather than pushed by the Pi, because
+the event that matters most — "BIMS cannot reach the arm" — is only observable from here.
+
+Writes on state change, plus an hourly floor while steady. The heartbeat is deliberately
+coarse: /devices/+page.server.ts:19 renders DeviceEvent.find() UNFILTERED with limit(100),
+so a 60s arm heartbeat (~1440 rows/day) would have buried an unrelated page. A 30s dedupe on
+changes absorbs Refresh-button mashing and instantaneous flapping.
+
+device_events carries applyImmutableMiddleware, which blocks updateOne/findOneAndUpdate — so
+no atomic upsert throttle is available and the read-then-write is unavoidably racy across
+concurrent tabs. Accepted deliberately: worst case is two adjacent same-state rows a few ms
+apart in an append-only TTL'd telemetry log that nothing reads for correctness.
+
+"Last connected" folds in the observation from the current request rather than reading the
+newest success row. Reading the row directly would report an hour-old timestamp next to a
+green ONLINE dot, since a steady arm only writes hourly. When down, it falls back to a wider
+query rather than claiming the arm has never connected.
+
+RUN TASK GATE. Kept exactly as-is — it is the UI half of a server-side re-check in startTask
+(+page.server.ts:174-184) that is the real enforcement, and DRY_RUN=false currently blocks
+it by design (ARM-01 §7.4). Only the message improved: it now names the reason and the exact
+fix (set DRY_RUN=true in ~/robot-arm/.env, restart robot-arm), and the already-running case
+points at the session bar.
+
+HOUSEKEEPING. safeActive() normalized to {active, activeError} matching safePreflight(),
+which deleted the hand-written isActive/isError union guards the page carried.
+
+KNOWN TRADEOFF: RobotArmControlBar keeps sticky bottom-0 for phone thumb-reach, but sticky
+only pins while the element's own flow position is on screen — moving it down to sit with
+the controls means it pins across less of the scroll range than before. Judged worth it
+since it now sits directly above the Start buttons, but it is a partial regression against
+ARM-01 §8.4's "always one thumb-reach away".
+
+NOT DONE, flagged for a separate commit: all four robot-arm AuditLog writes
+(control/+page.server.ts:208,242 and calibrate/+page.server.ts:57,83) use field names that
+do not exist in the AuditLog schema — resourceType, resourceId, userId, username, timestamp,
+details. Mongoose strict mode silently drops them, so those audit rows land with NO
+attribution at all, just _id/action/changedAt. Real bug, ~4-line fix, but not a UI change.
+
+Also noted but not acted on: device_events has exactly one index (the TTL on createdAt), so
+the connection-log read filters on an unindexed deviceId and reverse-scans the TTL index.
+Bounded by the 30-day TTL and fine at current volume; if device_events grows past ~100k docs
+add { deviceId: 1, createdAt: -1 }. That is a shared-model change affecting every
+device_events writer, so it wants its own review.
+
+`npm run check`: 40 errors / 434 warnings — IDENTICAL to the pre-change baseline (40), and
+zero errors and zero warnings in the four touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ar-2c5b1f-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-duzxteid7-brevitest.vercel.app)
+Source: branch feat/arm-pi-connection @ commit 33a0603e
+Retrieve this exact code: git checkout feat/arm-pi-connection at commit 33a0603e
+  (or: git log feat/arm-pi-connection --oneline to find it if the branch has moved on)
+What this deployment is for: the reorganized arm control page — controls first, connection
+health as a persistent side panel, one merged session indicator, and connection history at
+the bottom.
+
+================================================================================
+2026-07-30 — feat/box-inventory-disconnect — disconnect Box as inventory source
+================================================================================
+Box no longer supplies parts inventory. PartDefinition becomes BIMS-owned master
+data, edited directly rather than wiped and re-imported on every sync.
+
+Root cause this addresses: syncPartsFromBox() ran deleteMany({}) on
+part_definitions and then re-upserted every row from the Box spreadsheet "Live
+Equipment Overview.xlsx", so any manual correction was destroyed on the next
+sync. The sync had also been failing since 2026-03-04 (lastSyncStatus "partial",
+E11000 dup key on partNumber: null) and its Box access token expired 2026-03-20,
+so the part rows were already effectively BIMS-owned in practice.
+
+Files touched:
+- src/lib/server/box-sync.ts — deleted
+- src/routes/parts/+page.server.ts — removed the ?/sync action, the boxStatus and
+  syncErrorDetail load payload, and the Integration lookup from the load
+  Promise.all. create / createCartridgePart / deleteCartridgePart / withdraw are
+  untouched.
+- src/routes/parts/+page.svelte — removed the Sync from Box and Connect to Box
+  buttons, the Last Sync status card, the sync-error detail panel and its Retry
+  Sync form, and the Box-specific empty-state copy. formatDate kept (still used
+  by the scanned-inventory table).
+
+Box FILE STORAGE is deliberately untouched and still works: src/lib/server/box.ts,
+/api/box/upload, /api/box/files/[id], the documents browser and receiving CoC
+uploads all continue to function. This change is inventory-only.
+
+npm run check: NOT RUN LOCALLY — this worktree has no node_modules and master is
+on Mongoose 9 while the source branch is on Mongoose 8, so sharing them would be
+invalid. The equivalent change was svelte-check clean on perf/data-health-01
+(183/183, the exact pre-existing baseline, zero new, no errors in either edited
+file). Vercel's branch build is the gate here.
+
+Ported from perf/data-health-01 @ d9604550. A straight cherry-pick was not
+possible: master restructured routes in 7c01942b ("remove /spu URL prefix"), so
+the source branch's src/routes/spu/parts/ has no counterpart on master and git's
+rename detection mis-targeted the committed OneDrive clone at
+"OneDrive - Linbeck Group, LLC/Documents/GitHub/Bioscale_Operations_System_V2-dev/".
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit d33f3f4e
+Retrieve this exact code: git checkout master at commit d33f3f4e
+  (full sha d33f3f4e6ac1cd8a0239112fa7c7ec151978e4d6 — merge of PR #37 from feat/box-inventory-disconnect @ a5d5c5ff)
+What this deployment is for: Box is no longer the inventory source for parts — the
+  sync that wiped and re-imported part_definitions on every run is removed, so
+  inventory counts are now BIMS-owned and survive. Box file storage (documents
+  browser, /api/box/upload, receiving CoC uploads) is unaffected by this deploy.
+Verified post-deploy: Vercel success on both projects; production /login HTTP 200;
+  master's src/routes/parts/+page.server.ts has zero box-sync references and
+  src/lib/server/box-sync.ts is absent while src/lib/server/box.ts remains.

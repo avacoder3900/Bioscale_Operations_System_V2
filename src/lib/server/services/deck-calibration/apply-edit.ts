@@ -234,6 +234,17 @@ export async function applyDeckEditBatch(
 		});
 	}
 
+	// ALL-OR-NOTHING: a batch that can only partly apply must not apply at all.
+	// Partial application tears the group's internal geometry apart — the classic
+	// case is a row clamping at the y=0 edge while the rest of the deck moves,
+	// after which the dropped wells are permanently offset from their neighbors
+	// (and a subsequent Undo moves them AGAIN). This exact mechanism corrupted
+	// deck calibrations repeatedly (2026-07: "calibration keeps getting messed
+	// up"). Fail loudly with the per-well reasons instead; the operator
+	// re-captures with a delta that fits every selected well.
+	if (failed.length > 0) {
+		return { applied: 0, failed, fileSynced: false, results: [] };
+	}
 	if (results.length === 0) {
 		return { applied: 0, failed, fileSynced: false, results };
 	}

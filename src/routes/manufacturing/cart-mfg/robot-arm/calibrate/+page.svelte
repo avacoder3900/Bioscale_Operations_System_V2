@@ -57,7 +57,7 @@
 			Robot Arm — Sync Zero Calibration
 		</h1>
 		<a
-			href="/manufacturing/robot-arm"
+			href="/manufacturing/cart-mfg/robot-arm/control"
 			class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs font-medium transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
 			style="color: var(--color-tron-text)"
 		>
@@ -73,7 +73,7 @@
 			</p>
 			<p class="mt-1 text-xs text-yellow-200/80">
 				Stop the session from the
-				<a href="/manufacturing/robot-arm/control" class="underline">control page</a>
+				<a href="/manufacturing/cart-mfg/robot-arm/control" class="underline">control page</a>
 				before capturing — the arm bus is single-owner.
 			</p>
 		</div>

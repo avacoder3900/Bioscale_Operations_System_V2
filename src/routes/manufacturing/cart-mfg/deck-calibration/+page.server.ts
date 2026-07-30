@@ -144,6 +144,16 @@ export const actions: Actions = {
 				user: { _id: locals.user._id, username: locals.user.username },
 				robotId
 			});
+			// Batch applies are all-or-nothing (partial application tears the group
+			// geometry apart) — surface a full rejection as a loud error, not a
+			// success with applied=0.
+			if (res.applied === 0 && res.failed.length) {
+				const head = res.failed.slice(0, 3).map((f) => `${f.wellName}: ${f.reason}`).join('; ');
+				const more = res.failed.length > 3 ? ` (+${res.failed.length - 3} more)` : '';
+				return fail(400, {
+					error: `Nothing applied — the whole batch was rejected so the group keeps its geometry. ${head}${more}. Re-capture with a delta that fits every selected well.`
+				});
+			}
 			return { success: true, action: 'applyBatch', ...res };
 		} catch (e) {
 			return fail(400, { error: e instanceof Error ? e.message : 'Batch apply failed' });

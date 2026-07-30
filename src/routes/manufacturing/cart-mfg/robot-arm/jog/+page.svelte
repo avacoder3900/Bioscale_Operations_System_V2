@@ -45,7 +45,7 @@
 			Robot Arm — Cartesian Jog
 		</h1>
 		<a
-			href="/manufacturing/robot-arm/control"
+			href="/manufacturing/cart-mfg/robot-arm/control"
 			class="text-xs transition-colors hover:text-[var(--color-tron-cyan)]"
 			style="color: var(--color-tron-text-secondary)"
 		>
@@ -65,7 +65,7 @@
 		<div class="rounded border border-yellow-500/40 bg-yellow-900/10 p-3 text-sm">
 			<p style="color: var(--color-tron-text)">
 				<span class="font-medium text-yellow-400">{data.active?.kind}</span> session active —
-				jog disabled until it stops. <a href="/manufacturing/robot-arm/control" class="ml-2 underline" style="color: var(--color-tron-cyan)">go stop it →</a>
+				jog disabled until it stops. <a href="/manufacturing/cart-mfg/robot-arm/control" class="ml-2 underline" style="color: var(--color-tron-cyan)">go stop it →</a>
 			</p>
 		</div>
 	{/if}

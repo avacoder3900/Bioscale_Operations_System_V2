@@ -42,6 +42,7 @@ Run:
 import os
 import sys
 import glob
+import re
 import time
 import json
 import base64
@@ -107,6 +108,26 @@ HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL_S", "10"))
 # scanner scan for up to that long; a 3s window cut off decodes that landed at
 # 3-5s (marginally-aimed positions) and reported them as "empty (ACK only)".
 SCAN_TIMEOUT = float(os.environ.get("SCAN_TIMEOUT_S", "5.5"))
+
+# A scanner USB re-enumeration (bumped cable, flaky hub) invalidates the open
+# file handle. Reads/writes on the dead fd raise termios.error/OSError — NOT
+# serial.SerialException — so they must not be treated as "scan didn't decode":
+# the handle is dead and udev has likely pointed /dev/scanner at a NEW ttyACM
+# node. Any device-level failure therefore drops the handle and reopens. The
+# observed disconnect->re-enumerate gap is ~2s, so the ladder spans that.
+PORT_OPEN_ATTEMPTS = int(os.environ.get("SCANNER_PORT_OPEN_ATTEMPTS", "3"))
+PORT_REOPEN_DELAY_S = float(os.environ.get("SCANNER_PORT_REOPEN_DELAY_S", "1.0"))
+# Marks a scan that failed because the PORT is down, as opposed to a scan that
+# ran fine but decoded nothing. The two demand opposite responses: a no-decode
+# is worth rastering the gantry for, a dead port never is.
+PORT_ERROR_PREFIX = "scanner port error: "
+
+# The real "is a maintenance run open" endpoint. NOT "/maintenance_runs/current"
+# — that string is captured by the /maintenance_runs/{runId} route as a run
+# literally named "current", so it always 404s ("Run current was not found")
+# whether or not a run is open. Using it made stale-run detection permanently
+# blind, which is how a stuck maintenance run escalated to a wedged engine.
+MAINT_CURRENT_RUN = "/maintenance_runs/current_run"
 
 # Search-raster fallback: when the on-point scan fails (barcode placement varies
 # + the acrylic deck has optical imperfections), the gantry rasters a small grid
@@ -301,7 +322,7 @@ def engine_health() -> dict:
     except Exception:
         out["engineOk"] = False
     try:
-        r = ot2_request("GET", "/maintenance_runs/current", timeout=5)
+        r = ot2_request("GET", MAINT_CURRENT_RUN, timeout=5)
         if r.status_code == 404:
             out["maintenanceRun"] = None
         elif r.status_code < 400:
@@ -354,7 +375,7 @@ def clear_stale_maintenance_run() -> Optional[dict]:
     — if the server is hung this DELETE will also time out (the restart ladder
     handles that case)."""
     try:
-        r = ot2_request("GET", "/maintenance_runs/current", timeout=5)
+        r = ot2_request("GET", MAINT_CURRENT_RUN, timeout=5)
     except Exception:
         return None
     if r.status_code == 404 or r.status_code >= 500:
@@ -364,7 +385,7 @@ def clear_stale_maintenance_run() -> Optional[dict]:
         return None
     log.warning("clearing stale maintenance run %s", mid)
     try:
-        ot2_request("DELETE", "/maintenance_runs/{}".format(mid), timeout=10)
+        close_maintenance_run(mid)  # retries while the run is still winding down
     except Exception as e:
         log.warning("delete maintenance run %s failed: %s", mid, e)
     return {"id": mid, "action": "cleared"}
@@ -481,17 +502,40 @@ def open_maintenance_run(_attempt: int = 0) -> str:
     return run_id
 
 
+# The robot refuses to DELETE a maintenance run while a command is still in
+# flight: "Run is currently active. Allow the run to finish or stop it with a
+# `stop` action". There is no stop action to take — the robot's own OpenAPI spec
+# exposes only GET and DELETE on /maintenance_runs/{runId} — so the only recourse
+# is to let the in-flight command land and re-DELETE. This matters: a maintenance
+# run we fail to delete wedges the run engine, and every later maintenance op
+# 500s with RunConflictError until someone restarts the robot-server by hand.
+CLOSE_ACTIVE_HINTS = ("currently active", "not idle", "allow the run to finish")
+CLOSE_ATTEMPTS = int(os.environ.get("MAINT_CLOSE_ATTEMPTS", "6"))
+CLOSE_RETRY_DELAY_S = float(os.environ.get("MAINT_CLOSE_RETRY_DELAY_S", "2.0"))
+
+
 def close_maintenance_run(run_id: str) -> None:
-    """Best-effort — does not raise on 404."""
-    r = ot2_request("DELETE", "/maintenance_runs/{}".format(run_id))
-    if r.status_code >= 400 and r.status_code != 404:
+    """Delete a maintenance run. Does not raise on 404. Retries while the run is
+    still active — see CLOSE_ACTIVE_HINTS above for why giving up here is what
+    wedges the engine."""
+    detail = None
+    for attempt in range(CLOSE_ATTEMPTS):
+        r = ot2_request("DELETE", "/maintenance_runs/{}".format(run_id))
+        if r.status_code < 400 or r.status_code == 404:
+            return
         body = {}
         try:
             body = r.json() or {}
         except Exception:
             pass
         detail = _first_error_detail(body) or "Robot returned {} on close maintenance run".format(r.status_code)
-        raise RobotCommandError(detail)
+        if not any(h in (detail or "").lower() for h in CLOSE_ACTIVE_HINTS):
+            raise RobotCommandError(detail)  # a real failure, not a wind-down race
+        if attempt < CLOSE_ATTEMPTS - 1:
+            log.warning("maintenance run %s still active — re-deleting in %.0fs (%d/%d)",
+                        run_id, CLOSE_RETRY_DELAY_S, attempt + 1, CLOSE_ATTEMPTS)
+            time.sleep(CLOSE_RETRY_DELAY_S)
+    raise RobotCommandError(detail or "could not close maintenance run {}".format(run_id))
 
 
 def _first_error_detail(body: dict) -> Optional[str]:
@@ -641,9 +685,48 @@ class ScannerPort:
                 pass
             self.ser = None
 
+    def _scan_window(self, wait_s: float) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """One scan window against the currently-open handle. Returns the same
+        (text, raw, error) triple as trigger_and_read for scan outcomes, and
+        RAISES for device-level failures so the caller can reopen the port."""
+        assert self.ser is not None
+        SETTLE_S = 0.15          # rest before each (re)trigger so the engine resets
+        RETRIGGER_EVERY_S = 1.0  # listen this long per burst before re-poking
+        deadline = time.time() + wait_s
+        last_raw: Optional[str] = None
+        got_any = False
+        while time.time() < deadline:
+            # Rest, flush, fire one burst.
+            time.sleep(SETTLE_S)
+            self.ser.reset_input_buffer()
+            self.ser.write(TRIGGER_BYTES)
+            self.ser.flush()
+            burst_deadline = min(deadline, time.time() + RETRIGGER_EVERY_S)
+            buf = bytearray()
+            while time.time() < burst_deadline:
+                chunk = self.ser.read(256)
+                if chunk:
+                    got_any = True
+                    buf.extend(chunk)
+                    time.sleep(0.03)  # let a piecewise payload finish arriving
+                    if _decoded_payload(buf):
+                        break
+                elif _decoded_payload(buf):
+                    break
+            if buf:
+                last_raw = buf.hex()
+            decoded = _decoded_payload(buf)
+            if decoded:
+                return decoded.decode("utf-8", errors="replace").strip(), last_raw, None
+            # else: this burst only ACKed (or was silent) — re-poke.
+        if not got_any:
+            return None, None, "no response within timeout"
+        return None, last_raw, "empty payload (ACK only)"
+
     def trigger_and_read(self, timeout_s: Optional[float] = None, clamp: bool = True) -> Tuple[Optional[str], Optional[str], Optional[str]]:
         """Fire the scanner repeatedly until it decodes or the window expires;
-        return (decoded_text, raw_hex, error).
+        return (decoded_text, raw_hex, error). Reopens the port and retries if
+        the device errors out mid-scan (see PORT_OPEN_ATTEMPTS).
 
         In Command Mode ONE trigger = ONE short scan burst (the module's
         "Single Scanning Time"), then it ACKs and goes idle. A single trigger +
@@ -657,50 +740,37 @@ class ScannerPort:
         wait_s = timeout_s if timeout_s and timeout_s > 0 else SCAN_TIMEOUT
         if clamp:
             wait_s = max(wait_s, SCAN_TIMEOUT)   # on-point scans get the full window
-        SETTLE_S = 0.15          # rest before each (re)trigger so the engine resets
-        RETRIGGER_EVERY_S = 1.0  # listen this long per burst before re-poking
         with self.lock:
-            if not self.is_open():
-                self.open()
-            if not self.is_open():
-                return None, None, "serial port not open"
-            try:
-                assert self.ser is not None
-                deadline = time.time() + wait_s
-                last_raw: Optional[str] = None
-                got_any = False
-                while time.time() < deadline:
-                    # Rest, flush, fire one burst.
-                    time.sleep(SETTLE_S)
-                    self.ser.reset_input_buffer()
-                    self.ser.write(TRIGGER_BYTES)
-                    self.ser.flush()
-                    burst_deadline = min(deadline, time.time() + RETRIGGER_EVERY_S)
-                    buf = bytearray()
-                    while time.time() < burst_deadline:
-                        chunk = self.ser.read(256)
-                        if chunk:
-                            got_any = True
-                            buf.extend(chunk)
-                            time.sleep(0.03)  # let a piecewise payload finish arriving
-                            if _decoded_payload(buf):
-                                break
-                        elif _decoded_payload(buf):
-                            break
-                    if buf:
-                        last_raw = buf.hex()
-                    decoded = _decoded_payload(buf)
-                    if decoded:
-                        return decoded.decode("utf-8", errors="replace").strip(), last_raw, None
-                    # else: this burst only ACKed (or was silent) — re-poke.
-                if not got_any:
-                    return None, None, "no response within timeout"
-                return None, last_raw, "empty payload (ACK only)"
-            except serial.SerialException as e:
-                self.close()
-                return None, None, "serial error: {}".format(e)
-            except Exception as e:
-                return None, None, "unexpected error: {}".format(e)
+            detail = None
+            for attempt in range(PORT_OPEN_ATTEMPTS):
+                if not self.is_open():
+                    self.open()
+                if not self.is_open():
+                    detail = "cannot open {}".format(self.port)
+                else:
+                    try:
+                        return self._scan_window(wait_s)
+                    except Exception as e:
+                        # serial.SerialException, OSError, or the bare
+                        # termios.error that a re-enumerated USB node throws from
+                        # reset_input_buffer(). All of them mean the same thing:
+                        # this handle is dead. Drop it — is_open() would happily
+                        # keep reporting True — so the next attempt opens whatever
+                        # /dev/scanner points at NOW.
+                        self.close()
+                        detail = str(e) or e.__class__.__name__
+                if attempt < PORT_OPEN_ATTEMPTS - 1:
+                    log.warning("scanner port %s failed (%s) — reopening (%d/%d)",
+                                self.port, detail, attempt + 2, PORT_OPEN_ATTEMPTS)
+                    time.sleep(PORT_REOPEN_DELAY_S)
+            return None, None, PORT_ERROR_PREFIX + (detail or "unknown")
+
+
+def is_port_error(err: Optional[str]) -> bool:
+    """True when a scan failed because the serial port is DOWN, as opposed to a
+    scan that ran fine and simply decoded nothing. Callers use this to skip the
+    gantry raster: moving the head around cannot fix a dead scanner."""
+    return bool(err) and err.startswith(PORT_ERROR_PREFIX)
 
 
 def scan_with_retry(port: ScannerPort, timeout_s: float, retry_once: bool) -> dict:
@@ -708,7 +778,9 @@ def scan_with_retry(port: ScannerPort, timeout_s: float, retry_once: bool) -> di
     {barcode, rawPayload, error, attempts}."""
     text, raw, err = port.trigger_and_read(timeout_s)
     attempts = 1
-    if (err or not text) and retry_once:
+    # A port error already exhausted the reopen ladder inside trigger_and_read;
+    # an immediate re-scan would just repeat it. Only retry a genuine no-decode.
+    if (err or not text) and retry_once and not is_port_error(err):
         log.info("Scan attempt 1 failed (%s) — retrying", err or "no barcode")
         text, raw, err = port.trigger_and_read(timeout_s)
         attempts = 2
@@ -722,7 +794,7 @@ def search_scan(port: ScannerPort, run_id: str, pipette_id: str,
     Compensates for barcode-placement variance and acrylic-deck optics. Returns
     a scan dict; the first stop that decodes wins."""
     last = {"barcode": None, "rawPayload": None, "error": "search found nothing", "attempts": 0}
-    for (dx, dy, dz) in SEARCH_OFFSETS:
+    for i, (dx, dy, dz) in enumerate(SEARCH_OFFSETS):
         try:
             move_to_coordinates(run_id, pipette_id, x + dx, y + dy, z - dz)
         except Exception as e:
@@ -732,6 +804,13 @@ def search_scan(port: ScannerPort, run_id: str, pipette_id: str,
         last = {"barcode": text, "rawPayload": raw, "error": err, "attempts": 1}
         if text:
             log.info("search hit at dx=%+d dy=%+d dz=-%d", dx, dy, dz)
+            return last
+        if is_port_error(err):
+            # The scanner is down, not mis-aimed. Every remaining stop would be a
+            # gantry move feeding a dead port — minutes of motion that cannot
+            # succeed, while the single command worker blocks everything behind it.
+            log.warning("search aborted after %d/%d stop(s) — scanner port is down (%s)",
+                        i + 1, len(SEARCH_OFFSETS), err)
             return last
     return last
 
@@ -927,12 +1006,17 @@ def execute_sweep(command_id: str, payload: dict, port: ScannerPort) -> None:
 
             scan = scan_with_retry(port, scan_timeout, retry_once)
             # On failure, raster a small grid around the taught point (placement
-            # variance + acrylic optics) — first stop that decodes wins.
-            if not scan["barcode"]:
+            # variance + acrylic optics) — first stop that decodes wins. But only
+            # when the scanner actually WORKED and just didn't decode; rastering a
+            # dead port is pure dead time.
+            if not scan["barcode"] and not is_port_error(scan["error"]):
                 log.info("Slot %d: on-point scan failed — searching grid", slot_index + 1)
                 scan = search_scan(port, maint_run_id, pipette_id, pos["x"], pos["y"], pos["z"])
                 if scan["barcode"]:
                     log.info("Slot %d: recovered via grid search", slot_index + 1)
+            elif not scan["barcode"]:
+                log.warning("Slot %d: scanner port is down (%s) — skipping grid search",
+                            slot_index + 1, scan["error"])
             slots_done += 1
             if scan["barcode"]:
                 scan_count += 1
@@ -1011,10 +1095,13 @@ def execute_deck_scan(command_id: str, payload: dict, port: ScannerPort) -> None
         home_gantry(maint_run_id, force=True)
         move_to_coordinates(maint_run_id, pipette_id, pos["x"], pos["y"], pos["z"])
         scan = scan_with_retry(port, scan_timeout, True)
-        # Same grid-search fallback as the sweep if the deck QR didn't decode.
-        if not scan["barcode"]:
+        # Same grid-search fallback as the sweep if the deck QR didn't decode —
+        # and, as there, only when the scanner itself is alive.
+        if not scan["barcode"] and not is_port_error(scan["error"]):
             log.info("deck_scan: on-point scan failed — searching grid")
             scan = search_scan(port, maint_run_id, pipette_id, pos["x"], pos["y"], pos["z"])
+        elif not scan["barcode"]:
+            log.warning("deck_scan: scanner port is down (%s) — skipping grid search", scan["error"])
         if scan["barcode"]:
             _post_result(command_id, {"ok": True, "status": 200, "body": {
                 "barcode": scan["barcode"],
@@ -1111,14 +1198,22 @@ CAL_NOMINAL_X = 125.181  # .py calibrator approach point in the carriage frame
 CAL_NOMINAL_Y = 173.247
 
 
+_BEND_RE = re.compile(rb"(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)")
+
+
 def _parse_bend(raw: bytes):
-    """Parse the calibrator's 'C' reply (e.g. b'-4.05:1.55\\r\\n') → {x,y} or None.
-    Matches the .py's str(bytes).split(':') parsing."""
-    parts = str(raw).split(":")
-    if len(parts) < 2 or not raw:
+    """Parse the calibrator's 'C' reply → {x,y} or None. Regex, not positional
+    slicing: some calibrator fixtures prefix the value (B07 answers
+    b'= -0.2:2.3\\r\\n' where R04/B14 answer bare b'-4.5:0.8\\r\\n'), and the
+    old str(bytes)[2:] slicing choked on the prefix — so the daemon skipped the
+    real calibrator and reported "fixture not found" with it plugged in fine."""
+    if not raw:
+        return None
+    m = _BEND_RE.search(raw)
+    if not m:
         return None
     try:
-        return {"x": float(parts[0][2:]), "y": float(parts[1][:-5])}
+        return {"x": float(m.group(1)), "y": float(m.group(2))}
     except Exception:
         return None
 
@@ -1309,16 +1404,23 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
             bend = {"x": 0.0, "y": 0.0}
         log.info("calibrate_tip: bend x=%s y=%s", bend["x"], bend["y"])
 
-        # Where to probe from. ATTACHED: start from the tip's CURRENT position
-        # (the operator already jogged it onto the calibrator) at the CURRENT Z —
-        # no re-approach, no secondary raise. STANDALONE: use the saved calibrator
-        # point and approach it first.
+        # Where to probe from. ATTACHED: keep the tip's CURRENT X/Y as the
+        # reference (the operator may have jogged onto the fixture) but ALWAYS
+        # probe at the fill's z_cal for this mount (reagent 40.8 / wax 34.491).
+        # Probing at the tip's current Z instead (e.g. the studio's 38.5 park
+        # height) pressed the switch levers 2.3mm+ away from where every fill
+        # probes them, biasing the measured adjust between the teach frame and
+        # the fill frame — a persistent studio-vs-fill offset no amount of deck
+        # re-teaching could remove. STANDALONE: saved point, approach first.
         if attached:
             cur = get_current_position(run_id, pipette_id)
             ref_x = cur["x"] if cur["x"] is not None else cal_x
             ref_y = cur["y"] if cur["y"] is not None else cal_y
-            z_probe = cur["z"] if cur["z"] is not None else z_cal
-            log.info("calibrate_tip: probing from current pos x=%s y=%s z=%s", ref_x, ref_y, z_probe)
+            z_probe = z_cal
+            if cur["z"] is None or abs(cur["z"] - z_cal) > 1e-6:
+                move_to_coordinates(run_id, pipette_id, ref_x, ref_y, z_cal, speed=CAL_APPROACH_SPEED)
+            log.info("calibrate_tip: probing from x=%s y=%s at z_cal=%s (tip was at z=%s)",
+                     ref_x, ref_y, z_cal, cur["z"])
         else:
             ref_x, ref_y, z_probe = cal_x, cal_y, z_cal
             move_to_coordinates(run_id, pipette_id, cal_x, cal_y, z_cal, speed=CAL_APPROACH_SPEED)

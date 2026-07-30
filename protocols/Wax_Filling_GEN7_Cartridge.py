@@ -102,6 +102,25 @@ def add_parameters(parameters: protocol_api.Parameters):
         unit="uL",
     )
 
+    # Backing volume aspirated on top of what actually gets dispensed, then blown
+    # back into the source at the end of the cycle. The p20 caps a single aspiration
+    # at 20uL, so this directly sets how many wells fit in one trip to the wax tube:
+    #     usable per trip = 20 - aspirate_remainder
+    # One cartridge row is 4 wax wells (gates 4,3,2,1). To fill a whole row per trip
+    # the four gate volumes must sum to no more than that usable figure — at
+    # 2.2/2.2/2.2/1.6 a row is 8.2uL, which needs a remainder of 11.8 or lower.
+    # Raising this back toward 13.5 (the old hardcoded value) is safe but costs trips:
+    # the protocol will simply fill part of a row per aspiration.
+    parameters.add_float(
+        variable_name="aspirate_remainder",
+        display_name="Aspirate Remainder",
+        description="Backing volume held in the tip per trip. Lower = more wells per aspiration.",
+        default=11.5,
+        minimum=0.0,
+        maximum=18.0,
+        unit="uL",
+    )
+
     # ==================================================================
     # NATIVE-CALIBRATION-SYSTEM PRD 6 — BIMS-driven calibration RTPs.
     # When bims_native is True, the global offset below (supplied by BIMS
@@ -409,13 +428,18 @@ def run(protocol: protocol_api.ProtocolContext):
         try:
             serial_write_with_retry(ser, b'C')
             offset_data_raw = serial_read_with_retry(ser)
-            offset_data = str(offset_data_raw).split(':')
-            if len(offset_data) >= 2:
-                offset['x'] = float(offset_data[0][2:])
-                offset['y'] = float(offset_data[1][:-5])
+            # Regex, not positional slicing: some calibrator fixtures prefix the
+            # bend reply (B07: b'= -0.2:2.3\r\n'; others bare b'-4.5:0.8\r\n').
+            # The old str(bytes)[2:] parsing raised on the prefix, forcing a
+            # zero-baseline run whose per-tip adjust was wrong by the baseline.
+            import re as _re_cal
+            _m = _re_cal.search(rb'(-?\d+(?:\.\d+)?)\s*:\s*(-?\d+(?:\.\d+)?)', offset_data_raw or b'')
+            if _m:
+                offset['x'] = float(_m.group(1))
+                offset['y'] = float(_m.group(2))
                 protocol.comment(f'Offset calibration: x={offset["x"]}, y={offset["y"]}')
             else:
-                raise ValueError('Invalid offset data format')
+                raise ValueError(f'Invalid offset data format: {offset_data_raw!r}')
         except Exception as e:
             # Do NOT bail the run here. The 'C' baseline read can come back blank or
             # malformed even when the calibrator is otherwise fine — operators have
@@ -558,7 +582,7 @@ def run(protocol: protocol_api.ProtocolContext):
         tube_rim_height_2mL = 107.55
         aspirating_z_height_tweak = .25
         max_aspirate_depth = 50+aspirating_z_height_tweak
-        aspirate_remainder = 13.5
+        aspirate_remainder = protocol.params.aspirate_remainder
 
         def source_height(source_volume):
             lookup_table_2mL = collections.OrderedDict()
@@ -618,15 +642,31 @@ def run(protocol: protocol_api.ProtocolContext):
                 source_well = tuberack[source]
                 destination_wells = [carriage[name] for name in wells_to_fill_names]
                 
-                jump_count = 0
-                jump_frequency = 288
                 jump_height = 60
                 tip_dispenses = 180
                 tip_change_count = 0
                 well_prejump_height = 5
+                # True until the very first dispense of the run, which approaches the
+                # carriage from the tip calibrator and always gets the full-height lift.
+                first_dispense = True
                 # Process all wells
                 well_index = 0
-                
+
+                # Log the aspiration budget so a short-filling run is diagnosable from
+                # the run log alone rather than by watching the pipette.
+                row_total = sum(well_volumes[g] for g in ('wax_gate4', 'wax_gate3', 'wax_gate2', 'wax_gate1'))
+                protocol.comment(
+                    f'Aspirate budget: {maximum_volume_per_aspiration}uL pipette max - '
+                    f'{aspirate_remainder}uL remainder = {maximum_volume_per_aspiration - aspirate_remainder}uL '
+                    f'usable per trip; one cartridge row needs {round(row_total, 2)}uL'
+                )
+                if row_total > maximum_volume_per_aspiration - aspirate_remainder:
+                    protocol.comment(
+                        'NOTE: a full cartridge row does not fit in one aspiration, so rows will be '
+                        'filled in parts. Lower the gate volumes or the aspirate remainder to get '
+                        '4 wells per trip.'
+                    )
+
                 while well_index < len(destination_wells):
                     # Calculate how many wells we can do in this aspiration cycle
                     # Must account for variable volumes per well
@@ -645,22 +685,41 @@ def run(protocol: protocol_api.ProtocolContext):
                         vol = well_volumes[gate]
                         
                         # Check if adding this well would exceed capacity
-                        if batch_volume + vol > available_volume:
+                        # (1e-9 tolerance: gate volumes like 2.2 are not exact in binary,
+                        # so a row that fits on paper must not be rejected by rounding)
+                        if batch_volume + vol > available_volume + 1e-9:
                             break
-                        
+
                         # Check tip change limit
                         if batch_size >= wells_before_tip_change:
                             break
-                        
+
+                        # Never let one aspiration span two cartridge rows. A batch that
+                        # ends mid-row forces the NEXT batch to open by crossing a row —
+                        # and every third time, a cartridge wall — on the API's default
+                        # in-labware travel arc (well top + 5mm), which is not enough to
+                        # clear that wall and bends the tip. Ending each batch at a row
+                        # boundary routes every crossing through the trip back to the
+                        # source tube, which arcs at deck-clearing height. This is what
+                        # silently kept the old uniform-1.6uL config safe: 4 x 1.6 = 6.4
+                        # happened to be exactly one row per aspiration.
+                        if batch_size > 0 and row_key(well_name) != row_key(wells_to_fill_names[well_index]):
+                            break
+
                         batch_volume += vol
                         batch_size += 1
-                    
+
                     wells_this_cycle = batch_size
-                    
+
                     # Skip if we can't do any wells (shouldn't happen but safety check)
                     if wells_this_cycle <= 0:
+                        protocol.comment(
+                            f'STOPPING: well {wells_to_fill_names[well_index]} needs more than the '
+                            f'{available_volume}uL usable per aspiration. Lower its gate volume or '
+                            f'the aspirate remainder.'
+                        )
                         break
-                        
+
                     wells_to_fill = destination_wells[well_index:well_index + wells_this_cycle]
                     wells_to_fill_names_batch = wells_to_fill_names[well_index:well_index + wells_this_cycle]
                     
@@ -710,17 +769,26 @@ def run(protocol: protocol_api.ProtocolContext):
                         current_volume = well_volumes[gate]
                         current_rate = dispense_rates[gate]
                         
-                        if jump_count % jump_frequency == 0:
+                        # Wall clearance. idx == 0 arrives from the source tube, which is
+                        # a cross-labware move the API already arcs deck-high, so only a
+                        # crossing WITHIN a batch needs the explicit lift. The batch
+                        # builder normally prevents those entirely; this is the guard for
+                        # when gate volumes are too large to fit a whole row in one trip.
+                        # (This used to be `jump_count % 288 == 0`, which — with 288 wax
+                        # wells on a deck — fired once at the start of the run and never
+                        # again, so no crossing was ever actually cleared.)
+                        crosses_row = idx > 0 and row_key(well_name) != row_key(wells_to_fill_names_batch[idx - 1])
+                        if first_dispense or crosses_row:
                             pipette.move_to(well.top(jump_height))
                             pipette.move_to(well.top(jump_height).move(types.Point(adjust['x'], adjust['y'], 0.0)))
                             protocol.delay(seconds=.3)
                             pipette.move_to(well.top(well_prejump_height).move(types.Point(adjust['x'], adjust['y'], 0.0)))
                             protocol.delay(seconds=.3)
-                            
+                        first_dispense = False
+
                         pipette.dispense(current_volume, well.top(well_z_depth).move(types.Point(adjust['x'], adjust['y'], 0.0)), rate=current_rate)
-                        
+
                         tip_change_count += 1
-                        jump_count += 1
                         dispensed_volume += current_volume
                         protocol.comment(f'Dispensed {current_volume}uL into well {well_name} (tip #{tip_change_count})')
                      
@@ -747,6 +815,27 @@ def run(protocol: protocol_api.ProtocolContext):
         # NOTE: special_columns replaced by per-gate COLUMN_GATE mapping above.
         
         full_rows_reverse = ['X', 'W', 'V', 'U', 'T', 'S', 'R', 'Q', 'P', 'O', 'N', 'M', 'L', 'K', 'J', 'I', 'H', 'G', 'F', 'E', 'D', 'C', 'B', 'A']
+
+        # ------------------------------------------------------------------
+        # Carriage geometry: 24 cartridges in a 3 (x) by 8 (y) grid.
+        #   x-blocks are columns 1-8, 9-16, 17-24 (a ~145mm gap between blocks)
+        #   y-blocks are three rows each, in full_rows_reverse order: X,W,V |
+        #   U,T,S | R,Q,P | ... so one cartridge is 3 rows x 4 wax columns.
+        # The 4 wax wells of a single row sit ~6mm apart on one flat cartridge
+        # top; stepping to the next row, and above all to the next cartridge,
+        # has to clear the raised carriage wall between cartridge bodies.
+        # ------------------------------------------------------------------
+        def get_well_row(well_name):
+            """Extract the row letter from a well name like 'X10' -> 'X'."""
+            i = 0
+            while i < len(well_name) and not well_name[i].isdigit():
+                i += 1
+            return well_name[:i]
+
+        def row_key(well_name):
+            """Identity of the physical row of 4 wax wells this well sits in."""
+            col = int(get_well_column(well_name))
+            return ((col - 1) // 8, full_rows_reverse.index(get_well_row(well_name)))
 
         def get_rows_for_column(col_num, pattern_index):
             """Return appropriate row set based on column number and pattern"""

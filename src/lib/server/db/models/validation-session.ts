@@ -7,7 +7,14 @@ const validationSessionSchema = new Schema({
 	// VALIDATION-05: set when the session was created from a validation run.
 	runId: String,
 	status: { type: String, enum: ['pending', 'in_progress', 'running', 'completed', 'failed', 'timed_out'] },
+	// startedAt/completedAt are when BIMS RECORDED the session — for magnetometer
+	// that is when the Particle variable was polled, which can be long after the
+	// test itself if the variable was stale.
 	startedAt: Date, completedAt: Date, userId: String,
+	// When the test actually ran on the device, parsed out of rawData. Null when the
+	// payload carries no timestamp (legacy format) — never silently backfilled with
+	// the poll time. See $lib/server/magnetometer-time.
+	testRanAt: Date,
 	spuUdi: String, particleDeviceId: String,
 	rawData: Schema.Types.Mixed,
 	magResults: Schema.Types.Mixed,

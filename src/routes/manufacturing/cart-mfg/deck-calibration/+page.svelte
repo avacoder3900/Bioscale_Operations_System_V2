@@ -512,8 +512,21 @@
 			loadedLabwareId = null;
 			deckDirty = false; // fresh run loads the current deck from Mongo
 			hasTip = false;
+			// A fresh run knows nothing from the previous session, so every piece of
+			// frame state must die with it. tipAdjust especially: stopMaintenance()
+			// clears it, but a session killed EXTERNALLY (e.g. a fill run stealing the
+			// run engine) never runs that path — reconnecting then silently folded the
+			// dead session's adjust into every Move-to-hole, which is exactly what made
+			// a "raw" verification look perfect on 2026-07-29 (B14) and led to a wrong
+			// whole-deck re-shift. Same reset list as stopMaintenance's finally.
+			tipAdjust = null;
+			nominal = null;
+			refWell = null;
+			slotOrigin = null;
+			loadedWells = null;
+			liveX = liveY = liveZ = null;
 			if (!pipetteId) errMsg = 'Maintenance run opened but no pipette loaded — jog/move will fail until a pipette is configured.';
-			else msg = `Connected. pipette ${pipetteName} on ${pipetteMount}.`;
+			else msg = `Connected. pipette ${pipetteName} on ${pipetteMount}. If a tip is still on the pipette from an earlier session, remove it by hand before moving — a fresh session assumes a bare nozzle.`;
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { connecting = false; }
 	}
 
@@ -861,15 +874,39 @@
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { calibrating = false; }
 	}
 
+	// Load the tiprack + pick up a tip. If slot 11 already holds a DIFFERENT rack
+	// (e.g. the reagent rack loaded earlier this run to calibrate it, then a wax tip
+	// pickup needs the 20µL rack in the same slot), the endpoint returns 409
+	// SLOT_OCCUPIED — the slot can't be freed in place (no gripper), so reopen the run
+	// (fresh empty deck) once and retry. allowRecover guards against an infinite loop.
+	async function doPickUp(allowRecover: boolean) {
+		const res = await fetch(
+			`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/pick-up-tip`,
+			{
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ pipetteId, tiprackLoadName: tiprackForMount, slot: '11', tipWell })
+			}
+		);
+		if (res.ok) return;
+		const body = await res.json().catch(() => ({}) as any);
+		if (res.status === 409 && body?.code === 'SLOT_OCCUPIED' && allowRecover) {
+			msg = 'Slot 11 had another rack loaded — reopening the run to free it…';
+			await stopMaintenance();
+			await startMaintenance();
+			if (!runId || !pipetteId) throw new Error('Could not reopen the maintenance run to free slot 11');
+			return doPickUp(false);
+		}
+		throw new Error(body?.message || (typeof body === 'string' ? body : `HTTP ${res.status}`));
+	}
+
 	async function pickUpTipAction() {
 		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
 		clearMsg(); busy = true;
 		msg = 'Loading tiprack & picking up a tip…';
 		try {
-			await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/pick-up-tip`, {
-				method: 'POST',
-				body: JSON.stringify({ pipetteId, tiprackLoadName: tiprackForMount, slot: '11', tipWell })
-			});
+			await doPickUp(true);
 			hasTip = true;
 			// Tip state just changed → any nominal taken without the tip is now a
 			// different frame. Force a fresh Move-to-hole before the next capture.

@@ -2,6 +2,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, ValidationSession, Spu, Integration, AuditLog, generateId } from '$lib/server/db';
 import { getVariable } from '$lib/server/particle';
+import { extractMagTestTime, pullDelaySeconds } from '$lib/server/magnetometer-time';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -79,13 +80,21 @@ export const actions: Actions = {
 
 			const overallPassed = failureReasons.length === 0;
 
+			// When the test actually RAN, per the device. `magnet_validation` is a
+			// variable holding the result of a previous run_test, so the time we read
+			// it is not the time it was measured — and a stale variable is a known
+			// failure mode. Null when the payload carries no timestamp.
+			const pulledAt = new Date();
+			const testTime = extractMagTestTime(rawResult);
+
 			const sessionId = generateId();
 			await ValidationSession.create({
 				_id: sessionId,
 				type: 'mag',
 				status: overallPassed ? 'completed' : 'failed',
-				startedAt: new Date(),
-				completedAt: new Date(),
+				startedAt: pulledAt,
+				completedAt: pulledAt,
+				testRanAt: testTime?.at ?? null,
 				userId: locals.user!._id,
 				spuUdi: spu.udi,
 				spuId: spu._id,
@@ -105,7 +114,11 @@ export const actions: Actions = {
 						'validation.magnetometer': {
 							status: 'passed',
 							sessionId,
-							completedAt: new Date(),
+							// completedAt keeps its existing meaning (when BIMS recorded
+							// this) so the DHR field is not silently redefined; testRanAt
+							// is the additive, accurate one.
+							completedAt: pulledAt,
+							testRanAt: testTime?.at ?? null,
 							rawData: rawResult,
 							results: parsed,
 							failureReasons: [],
@@ -146,7 +159,14 @@ export const actions: Actions = {
 				criteriaUsed: { minZ, maxZ },
 				magResults: parsed,
 				rawData: rawResult,
-				completedAt: new Date().toISOString()
+				// The time the TEST ran — this is what the page shows. Null when the
+				// payload has no timestamp, in which case the UI says so rather than
+				// falling back to the pull time.
+				testRanAt: testTime?.at.toISOString() ?? null,
+				testTimeSource: testTime?.source ?? null,
+				pulledAt: pulledAt.toISOString(),
+				pullDelaySeconds: pullDelaySeconds(testTime?.at ?? null, pulledAt),
+				completedAt: pulledAt.toISOString()
 			};
 		} catch (err: any) {
 			return fail(400, { error: `Failed: ${err instanceof Error ? err.message : String(err)}` });

@@ -14,6 +14,7 @@ import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/s
 import { protectLockedCarts, LOCKED_STATUSES } from '$lib/server/manufacturing/locked-cartridges';
 import { getRobot, robotGet, robotPost, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
 import { calibrationRtpValues } from '$lib/server/opentrons/calibration-rtps';
+import { ensureFreshRunProtocol } from '$lib/server/opentrons/protocol-freshness';
 import bcrypt from 'bcryptjs';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -848,18 +849,20 @@ export const actions: Actions = {
 		const robot = await getRobot(robotId);
 		if (!robot) return fail(404, { error: `Robot ${robotId} not found / not active` });
 
-		// Resolve the protocol on the robot to coerce form-string values to
-		// their native types (int/float/bool). Form fields all arrive as
-		// strings; the OT-2 API expects e.g. true (bool) not "true" (str).
-		const robotDoc = await OpentronsRobot.findById(robotId).lean() as any;
-		const protocol = (robotDoc?.protocols ?? []).find(
-			(p: any) => p.opentronsProtocolId === opentronsProtocolId
-		);
-		if (!protocol) {
-			return fail(400, {
-				error: `Protocol ${opentronsProtocolId} isn't uploaded to this robot. Upload it via /opentrons/devices first.`
+		// Freshness gate: resolve the robot's CURRENT wax protocol server-side and
+		// prove its bundled deck calibration matches live Mongo; auto-resync if
+		// not. The posted opentronsProtocolId is intentionally NOT trusted — a page
+		// loaded before a Sync would post the older upload, which still exists on
+		// the robot and would silently run stale geometry.
+		let protocol: { opentronsProtocolId: string; parametersSchema: any[] | null };
+		try {
+			protocol = await ensureFreshRunProtocol(robot, String(robotId), 'wax-filling', locals.user.username);
+		} catch (e) {
+			return fail(502, {
+				error: `Deck-calibration freshness check failed: ${e instanceof Error ? e.message : 'unknown'}`
 			});
 		}
+		const runProtocolId = protocol.opentronsProtocolId;
 
 		const paramSchema = (protocol.parametersSchema ?? []) as Array<{
 			variableName: string;
@@ -901,7 +904,7 @@ export const actions: Actions = {
 		try {
 			const createRes = await robotPost(robot, '/runs', {
 				data: {
-					protocolId: opentronsProtocolId,
+					protocolId: runProtocolId,
 					...(Object.keys(runTimeParameterValues).length ? { runTimeParameterValues } : {})
 				}
 			});
