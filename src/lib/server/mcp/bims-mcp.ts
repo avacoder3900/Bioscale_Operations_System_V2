@@ -17,6 +17,11 @@ import { env } from '$env/dynamic/private';
 type Fetcher = typeof fetch;
 type ToolResult = { content: { type: 'text'; text: string }[]; isError?: boolean };
 
+/** MCP tool annotations: readOnlyHint lets clients run reads without write-gating;
+ *  write tools are explicitly non-destructive (append-only records, reversible). */
+const READ_ONLY = { readOnlyHint: true } as const;
+const WRITE_TOOL = { readOnlyHint: false, destructiveHint: false, idempotentHint: false } as const;
+
 function toolError(text: string): ToolResult {
 	return { isError: true, content: [{ type: 'text', text }] };
 }
@@ -86,7 +91,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'list_collections',
-		{
+		{ annotations: READ_ONLY,
 			description:
 				'List every queryable BIMS collection with its business metadata (what each collection holds, key fields). ' +
 				'Call this first when you are unsure where a piece of data lives.'
@@ -96,7 +101,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'system_dependencies',
-		{
+		{ annotations: READ_ONLY,
 			description: 'List the BIMS system dependency map (which subsystems depend on which services/integrations).'
 		},
 		async () => callAgentApi(fetcher, '/api/agent/dependencies')
@@ -106,7 +111,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'list_saved_queries',
-		{
+		{ annotations: READ_ONLY,
 			description:
 				'List the saved, parameterized read queries available to agents (id, name, parameters schema, target collection). ' +
 				'Call this before run_saved_query to discover valid queryId values.'
@@ -116,7 +121,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'run_saved_query',
-		{
+		{ annotations: READ_ONLY,
 			description:
 				'Execute a saved read-only query against an allowlisted BIMS collection. ' +
 				'Use list_saved_queries first to find the queryId and its parameter schema. Returns up to the query\'s maxRows (default 100).',
@@ -136,7 +141,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'operations_summary',
-		{
+		{ annotations: READ_ONLY,
 			description:
 				'High-level operational counts. Call this for questions like "how is manufacturing doing" or "what is our shipping volume".',
 			inputSchema: z.object({
@@ -150,7 +155,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'operations_dashboard',
-		{
+		{ annotations: READ_ONLY,
 			description:
 				'Full operations rollup: task counts, equipment status, inventory, production, recent audit activity, and pending approvals. ' +
 				'Call this when asked for an overall status of the plant/system.'
@@ -160,7 +165,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'operations_alerts',
-		{
+		{ annotations: READ_ONLY,
 			description:
 				'Current synthesized alerts sorted by severity: low-stock parts, problem equipment, overdue tasks, stale approvals, failed messages. ' +
 				'Call this when asked "what needs attention" or "any problems right now".'
@@ -170,7 +175,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'operations_context',
-		{
+		{ annotations: READ_ONLY,
 			description:
 				'Active work context: active projects, in-progress tasks, equipment alerts, pending approvals and messages. ' +
 				'Useful as a first call to orient on what is currently happening.'
@@ -180,13 +185,13 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'inventory_overview',
-		{ description: 'Inventory state: active parts, low-stock list, categories, and BOM count.' },
+		{ annotations: READ_ONLY, description: 'Inventory state: active parts, low-stock list, categories, and BOM count.' },
 		async () => callAgentApi(fetcher, '/api/agent/operations/inventory')
 	);
 
 	server.registerTool(
 		'parts_lookup',
-		{
+		{ annotations: READ_ONLY,
 			description:
 				'Resolve a part reference to BIMS part definitions with live inventory counts. Accepts a scanned part barcode, ' +
 				'an exact part number (e.g. PT-SPU-008), or free-text like "screw for upper metal bracket" (every word must match ' +
@@ -206,7 +211,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'spu_assembly_parts_map',
-		{
+		{ annotations: READ_ONLY,
 			description:
 				'The SPU assembly parts knowledge base from work instruction WIMF-SPU-01: a component -> parts map (heater/heating ' +
 				'block, upper magnet bracket, enclosure, drive, linear rail, stage board, antennas, labels, ...) with per-SPU part ' +
@@ -222,23 +227,30 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'record_reassembly_parts_usage',
-		{
+		{ annotations: WRITE_TOOL,
 			description:
 				'Deduct parts from inventory after SPU assembly/reassembly work, grouped per SPU. Each deduction is recorded as an ' +
-				'immutable inventory transaction linked to the SPU, and audit-logged.\n\n' +
+				'immutable inventory transaction linked to the SPU, and audit-logged. You HAVE live write access to inventory ' +
+				'through this tool — never tell the operator you are read-only or cannot change counts.\n\n' +
 				'WORKFLOW (follow exactly):\n' +
 				'1. From the operator\'s message, identify each SPU (barcode, UDI, or short number like "SPU 203") and the parts used. ' +
-				'Resolve vague part descriptions with parts_lookup; ask clarifying questions if a description is too vague or matches ' +
-				'multiple parts. If the operator says what area they worked on but not which parts (e.g. "changed magnets in heating ' +
-				'block" with no specifics), ask them to scan the SPU barcode and then each part barcode.\n' +
-				'2. Before calling this tool, show the operator a confirmation list: one group per SPU, headed by the SPU barcode and ' +
-				'its last 5 characters, with one row per part ("<partNumber> <name> — qty: __"). Leave quantity blank wherever the ' +
-				'operator has not stated it and ask them to fill each blank in. The same part used on different SPUs gets its own row ' +
-				'(and its own quantity) under each SPU.\n' +
-				'3. Only after the operator confirms the complete list (all quantities filled) call this tool with confirmed: true. ' +
+				'Resolve component/area language ("magnets in the heater block") with spu_assembly_parts_map and vague part ' +
+				'descriptions with parts_lookup; ask a clarifying question only if a part is genuinely ambiguous. If the operator ' +
+				'says what area they worked on but not which parts at all, ask them to scan the SPU barcode and each part barcode.\n' +
+				'2. Before calling this tool, send the confirmation message. It must contain ONLY the per-SPU list and a one-line ' +
+				'confirm ask — nothing else. Format: one group per SPU, headed by the SPU barcode and its last 5 characters, one row ' +
+				'per part. If the operator NAMED parts in words (e.g. "replaced the magnets in the heater block"), each row restates ' +
+				'"<partNumber> <name> — qty: <n or __>". If the operator provided the parts as SCANNED BARCODES, do NOT restate or ' +
+				'describe the parts — each row is just "<partNumber> — qty: __" for them to fill in. Leave quantity blank wherever ' +
+				'the operator has not stated it. The same part used on different SPUs gets its own row (and its own quantity) under ' +
+				'each SPU.\n' +
+				'3. NEVER add commentary to the confirmation or result messages: no notes about critical parts, retesting, ' +
+				'revalidation, QC, or process implications of the replacement — only mention such things if the operator explicitly ' +
+				'asks.\n' +
+				'4. Only after the operator confirms the complete list (all quantities filled) call this tool with confirmed: true. ' +
 				'Never call it with unconfirmed or guessed quantities.\n\n' +
 				'The request is atomic: if any SPU or part fails to resolve, nothing is deducted and per-entry errors come back — ' +
-				'fix them with the user and retry. On success, report each SPU\'s deductions with previous → new counts.',
+				'fix them with the user and retry. On success, report ONLY each SPU\'s deducted parts with previous → new counts.',
 			inputSchema: z.object({
 				confirmed: z
 					.boolean()
@@ -268,19 +280,19 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'equipment_overview',
-		{ description: 'Equipment list with locations and a status summary (operational / maintenance / problem).' },
+		{ annotations: READ_ONLY, description: 'Equipment list with locations and a status summary (operational / maintenance / problem).' },
 		async () => callAgentApi(fetcher, '/api/agent/operations/equipment')
 	);
 
 	server.registerTool(
 		'documents_overview',
-		{ description: 'Controlled documents and work instructions with status breakdown (draft / review / approved).' },
+		{ annotations: READ_ONLY, description: 'Controlled documents and work instructions with status breakdown (draft / review / approved).' },
 		async () => callAgentApi(fetcher, '/api/agent/operations/documents')
 	);
 
 	server.registerTool(
 		'quality_trends',
-		{ description: 'Quality metrics: test pass rate, cartridge pipeline by phase, recent wax-run completion.' },
+		{ annotations: READ_ONLY, description: 'Quality metrics: test pass rate, cartridge pipeline by phase, recent wax-run completion.' },
 		async () => callAgentApi(fetcher, '/api/agent/operations/quality/trends')
 	);
 
@@ -288,7 +300,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'get_spu_status',
-		{
+		{ annotations: READ_ONLY,
 			description:
 				'Look up a single SPU by exactly one identifier and return its current status: lifecycle status, assembly/QC status, ' +
 				'batch, assigned customer, linked Particle device, and per-modality validation results ' +
@@ -307,7 +319,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'list_spus',
-		{
+		{ annotations: READ_ONLY,
 			description:
 				'List SPUs with optional filters and a status breakdown. Filter by lifecycle status (draft, assembling, assembled, ' +
 				'validating, validated, released-manufacturing, deployed, servicing, retired, voided), batch (id or batchNumber), ' +
@@ -327,7 +339,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'kanban_board_snapshot',
-		{
+		{ annotations: READ_ONLY,
 			description:
 				'The full kanban board: all projects and their tasks grouped by column (blocked, backlog, ready, wip, waiting, done) ' +
 				'plus recent activity. Call this before creating or updating tasks so you have current task/project ids.'
@@ -337,13 +349,13 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'kanban_projects_overview',
-		{ description: 'Kanban projects with per-project task-status counts.' },
+		{ annotations: READ_ONLY, description: 'Kanban projects with per-project task-status counts.' },
 		async () => callAgentApi(fetcher, '/api/agent/operations/projects')
 	);
 
 	server.registerTool(
 		'kanban_create_task',
-		{
+		{ annotations: WRITE_TOOL,
 			description:
 				'Create a kanban task in a project. Requires a projectId from kanban_board_snapshot or kanban_projects_overview. ' +
 				'The mutation is audit-logged server-side as agent activity.',
@@ -370,7 +382,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'kanban_update_task',
-		{
+		{ annotations: WRITE_TOOL,
 			description:
 				'Update a kanban task: move it between columns (status), retitle, describe, prioritize, reassign, re-project, ' +
 				'set due date/tags, or append context notes. Status changes record a transition history entry. Audit-logged.',
@@ -397,7 +409,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'kanban_create_subtasks',
-		{
+		{ annotations: WRITE_TOOL,
 			description: 'Bulk-create subtasks under a parent kanban task. Each subtask is audit-logged.',
 			inputSchema: z.object({
 				parentTaskId: z.string().describe('The parent task _id.'),
@@ -425,7 +437,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'kanban_merge_tasks',
-		{
+		{ annotations: WRITE_TOOL,
 			description:
 				'Merge one kanban task into another: the source task\'s description and tags fold into the target, and the source is archived. ' +
 				'Use for duplicates. Audit-logged on both tasks.',
@@ -440,7 +452,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'kanban_task_transitions',
-		{
+		{ annotations: READ_ONLY,
 			description: 'The status-transition history of a kanban task (when it moved between columns and why).',
 			inputSchema: z.object({ taskId: z.string().describe('The task _id.') })
 		},
@@ -450,7 +462,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'kanban_propose_changes',
-		{
+		{ annotations: WRITE_TOOL,
 			description:
 				'Attach improvement proposals (split / merge / enrich) to kanban tasks for a human to approve, edit, or veto. ' +
 				'Use this instead of direct mutation when a change is judgment-heavy and should be reviewed.',
@@ -473,7 +485,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'kanban_decide_proposal',
-		{
+		{ annotations: WRITE_TOOL,
 			description: 'Resolve a pending kanban proposal: approve, edit, or veto it.',
 			inputSchema: z.object({
 				proposalId: z.string().describe('The proposal id.'),
@@ -492,7 +504,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'kanban_list_violations',
-		{
+		{ annotations: READ_ONLY,
 			description:
 				'List kanban workflow violations (e.g. WIP-limit breaches, stale tasks). Filter by resolution state, type, or task.',
 			inputSchema: z.object({
@@ -508,7 +520,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'kanban_report_violation',
-		{
+		{ annotations: WRITE_TOOL,
 			description: 'Record a kanban workflow violation against a task. Audit-logged.',
 			inputSchema: z.object({
 				type: z.string().describe('Violation type slug.'),
@@ -525,7 +537,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'list_approvals',
-		{
+		{ annotations: READ_ONLY,
 			description: 'List change-approval requests, optionally filtered by status (pending, approved, rejected, …).',
 			inputSchema: z.object({
 				status: z.string().optional(),
@@ -537,7 +549,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'create_approval_request',
-		{
+		{ annotations: WRITE_TOOL,
 			description:
 				'Open a change-approval request for a human stakeholder to review. Use before making changes that need sign-off. Audit-logged.',
 			inputSchema: z.object({
@@ -556,7 +568,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'decide_approval_request',
-		{
+		{ annotations: WRITE_TOOL,
 			description: 'Progress an approval request: reviewed, approved, rejected, escalated, cancelled, or add a comment. Audit-logged.',
 			inputSchema: z.object({
 				approvalId: z.string(),
@@ -573,7 +585,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'list_messages',
-		{
+		{ annotations: READ_ONLY,
 			description: 'List agent messages to/from a BIMS user (notifications, questions, escalations).',
 			inputSchema: z.object({
 				userId: z.string().describe('The BIMS user _id whose messages to list.'),
@@ -587,7 +599,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'send_message',
-		{
+		{ annotations: WRITE_TOOL,
 			description: 'Send a message to a BIMS user (appears in their in-app agent inbox). Audit-logged.',
 			inputSchema: z.object({
 				toUserId: z.string(),
@@ -606,7 +618,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'get_cartridge_photos',
-		{
+		{ annotations: READ_ONLY,
 			description:
 				'All photos for a cartridge by barcode, grouped by manufacturing phase, with tags and notes. Returns public image URLs.',
 			inputSchema: z.object({ barcode: z.string().describe('The cartridge barcode.') })
