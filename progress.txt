@@ -5702,3 +5702,17 @@ npm run check: 11 errors — unchanged pre-existing baseline (r2/AskBims/assembl
 zero in any KB2 file.
 DEPLOY CHECKLIST unchanged (memory + KB2-00): deploy code → run migration APPLY=1 →
 grant kanban:replenish via roles UI → policy/standing docs auto-seed.
+
+Follow-up same day (Alejandro's first live test came back "Claude is in read-only mode"):
+none of the 34 MCP tools declared MCP ToolAnnotations, so the claude.ai connector had no
+readOnlyHint/destructiveHint signal to classify write access. Added annotations to ALL tools
+(23 read-only, 11 writes marked non-destructive/non-idempotent) in bims-mcp.ts. Also reworked
+record_reassembly_parts_usage's workflow per operator feedback: confirmation message is ONLY
+the per-SPU list + one confirm line — explicitly NO commentary about critical parts, retesting,
+revalidation, or QC implications (Claude was lecturing about revalidation during the demo);
+barcode-scanned parts are NOT restated (row = "PT-xxx — qty: __"), only word-named parts get
+name restated; plus an explicit "you HAVE live write access" line so the model stops claiming
+read-only. Verified locally: tools/list shows 23 readOnly / 11 write annotations.
+If read-only persists after this deploy, the remaining causes are on the claude.ai side:
+connector tool permissions in Settings > Connectors, the per-chat tools menu, or declining the
+tool-approval prompt when record_reassembly_parts_usage first fires.
