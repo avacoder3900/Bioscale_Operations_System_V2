@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
 	analyzeCartridge,
-	analyzeGroup,
 	analyzeGroupRobust,
 	compareGroups,
 	robustStats,
@@ -321,12 +320,14 @@ describe('analyzeGroupRobust', () => {
 	it('(l) a clean group produces ZERO flags where mean +/- 1SD flagged 2 of 7', () => {
 		const clean = [0.5, 0.53, 0.55, 0.57, 0.58, 0.6, 0.63];
 
-		// Old rule, for contrast: ~32% of a normal group falls outside +/-1 sigma.
-		const legacy = analyzeGroup(
-			clean.map((A, i) => ({ id: `L-${i}`, readings: flatCartridge({ A, B: 2, C: 2 }) }))
+		// The retired rule, computed inline rather than by keeping dead code alive:
+		// mean +/- 1 sigma leaves ~32% of a normal group outside the band.
+		const m = clean.reduce((a, b) => a + b, 0) / clean.length;
+		const sd = Math.sqrt(
+			clean.reduce((acc, v) => acc + (v - m) * (v - m), 0) / (clean.length - 1)
 		);
-		const legacyFlagged = legacy.cartridges.filter((c) => c.outlierChannels.includes('A'));
-		expect(legacyFlagged.length).toBe(2);
+		const legacyFlagged = clean.filter((v) => v < m - sd || v > m + sd);
+		expect(legacyFlagged).toEqual([0.5, 0.63]);
 
 		// New rule: nothing here is an outlier, because nothing here IS an outlier.
 		const { result } = analyzeGroupRobust(groupOnA('C', 'Clean', clean));
@@ -441,40 +442,5 @@ describe('compareGroups', () => {
 		]);
 		// SvelteKit must serialize this; Infinity/NaN would silently become null.
 		expect(JSON.parse(JSON.stringify(cmp))).toEqual(cmp);
-	});
-});
-
-describe('analyzeGroup', () => {
-	it('(d) flags a cartridge that is a channel-outlier across the group', () => {
-		// Channel A ratios across the 3 cartridges: 2, 2, 5. Mean 3, sd sqrt(3) ~1.732,
-		// band [1.27, 4.73] -> cartridge 3 (ratio 5) is outside -> outlier on A.
-		// Channels B and C identical across all cartridges (ratio 2) -> no outliers.
-		const items = [
-			{ id: 'CART-1', readings: flatCartridge({ A: 2, B: 2, C: 2 }) },
-			{ id: 'CART-2', label: 'Run 2', readings: flatCartridge({ A: 2, B: 2, C: 2 }) },
-			{ id: 'CART-3', readings: flatCartridge({ A: 5, B: 2, C: 2 }) }
-		];
-
-		const g = analyzeGroup(items);
-		expect(g.n).toBe(3);
-		expect(g.windowK).toBe(10);
-		expect(g.channels.map((c) => c.channel)).toEqual(['A', 'B', 'C']);
-
-		const rows = Object.fromEntries(g.cartridges.map((c) => [c.id, c]));
-		expect(rows['CART-3'].outlierChannels).toContain('A');
-		expect(rows['CART-3'].warning).toBe(true);
-		expect(rows['CART-1'].warning).toBe(false);
-		expect(rows['CART-1'].outlierChannels).toEqual([]);
-		// label defaults to id when not provided
-		expect(rows['CART-1'].label).toBe('CART-1');
-		expect(rows['CART-2'].label).toBe('Run 2');
-
-		// channel A varies a lot across cartridges -> cross-cartridge flag
-		expect(g.crossCartridgeFlags.some((f) => /^Channel A:/.test(f))).toBe(true);
-
-		const chA = g.channels.find((c) => c.channel === 'A')!;
-		expect(chA.n).toBe(3);
-		expect(chA.mean).toBeCloseTo(3, 10);
-		expect(chA.sd).toBeCloseTo(Math.sqrt(3), 10);
 	});
 });

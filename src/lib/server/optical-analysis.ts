@@ -108,33 +108,6 @@ export interface CartridgeAnalysis {
 	reasons: string[];
 }
 
-export interface GroupChannelStat {
-	channel: 'A' | 'B' | 'C';
-	n: number;
-	mean: number | null;
-	mode: number | null;
-	sd: number | null;
-	cv: number | null;
-	bandLow: number | null;
-	bandHigh: number | null;
-}
-
-export interface GroupCartridgeRow {
-	id: string;
-	label: string;
-	ratioByChannel: { A: number | null; B: number | null; C: number | null };
-	outlierChannels: Array<'A' | 'B' | 'C'>;
-	warning: boolean;
-}
-
-export interface GroupAnalysis {
-	n: number;
-	windowK: number;
-	channels: GroupChannelStat[];
-	cartridges: GroupCartridgeRow[];
-	crossCartridgeFlags: string[];
-}
-
 const CHANNELS: ReadonlyArray<'A' | 'B' | 'C'> = ['A', 'B', 'C'];
 const PROFILE_NAME = 'Single Scan Cortisol';
 
@@ -473,89 +446,6 @@ export function analyzeCartridge(
 		rogueChannel,
 		warning,
 		reasons
-	};
-}
-
-// ---- group (multi-cartridge) ------------------------------------------------
-
-/**
- * @deprecated Flags on mean +/- 1 SD, which by construction marks ~32% of a clean
- * group. Use `analyzeGroupRobust` / `compareGroups` instead. Retained only so this
- * branch stays deployable while the analyze route is migrated.
- */
-export function analyzeGroup(
-	items: Array<{ id: string; label?: string; readings: unknown[] }>,
-	config?: Partial<OpticalConfig>
-): GroupAnalysis {
-	const cfg: OpticalConfig = { ...DEFAULT_OPTICAL_CONFIG, ...config };
-	const windowK = cfg.windowK;
-
-	const rows: GroupCartridgeRow[] = [];
-
-	for (const item of items) {
-		const analysis = analyzeCartridge(item.readings, config);
-		const ratioByChannel = analysis
-			? analysis.ratioByChannel
-			: { A: null, B: null, C: null };
-		rows.push({
-			id: item.id,
-			label: item.label ?? item.id,
-			ratioByChannel,
-			outlierChannels: [],
-			warning: false
-		});
-	}
-
-	const channels: GroupChannelStat[] = [];
-	const crossCartridgeFlags: string[] = [];
-
-	for (const c of CHANNELS) {
-		const finite = rows
-			.map((r) => r.ratioByChannel[c])
-			.filter((v): v is number => v !== null && Number.isFinite(v));
-		const cn = finite.length;
-		const m = cn > 0 ? mean(finite) : null;
-		const sd = cn > 0 ? sampleSD(finite) : null;
-		const md = mode(finite);
-		const cv = m !== null && sd !== null ? cvPercent(m, sd) : null;
-		const bandLow = m !== null && sd !== null ? m - sd : null;
-		const bandHigh = m !== null && sd !== null ? m + sd : null;
-
-		channels.push({
-			channel: c,
-			n: cn,
-			mean: m,
-			mode: md,
-			sd,
-			cv,
-			bandLow,
-			bandHigh
-		});
-
-		// outlier detection per cartridge on this channel (only when sd > 0)
-		if (sd !== null && sd > 0 && bandLow !== null && bandHigh !== null) {
-			for (const row of rows) {
-				const rc = row.ratioByChannel[c];
-				if (rc !== null && Number.isFinite(rc) && (rc < bandLow || rc > bandHigh)) {
-					row.outlierChannels.push(c);
-					row.warning = true;
-				}
-			}
-		}
-
-		if (cv !== null && cv > cfg.cvThreshold) {
-			crossCartridgeFlags.push(
-				`Channel ${c}: F7/F3 varies ${cv.toFixed(0)}% across the ${cn} cartridges (limit ${cfg.cvThreshold}%)`
-			);
-		}
-	}
-
-	return {
-		n: rows.length,
-		windowK,
-		channels,
-		cartridges: rows,
-		crossCartridgeFlags
 	};
 }
 
