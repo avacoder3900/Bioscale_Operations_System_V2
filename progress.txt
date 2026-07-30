@@ -205,3 +205,93 @@ if (apiKey !== process.env.AGENT_API_KEY) return json({ error: 'Unauthorized' },
   committed); fixed in 2b469f46 -> Vercel build SUCCESS. Preview:
   https://bioscale-operations-system-mongodb-git-perf-da-5173e4-brevitest.vercel.app
   (branch perf/data-health-01). Local 30GB build crash confirmed machine-only.
+- BOX INVENTORY DISCONNECT 2026-07-30: Box is no longer the inventory source.
+  Deleted src/lib/server/box-sync.ts (syncPartsFromBox ran deleteMany({}) on
+  part_definitions then re-upserted from "Live Equipment Overview.xlsx", so any
+  manual edit was destroyed on the next sync). Removed ?/sync action + boxStatus
+  + syncErrorDetail from /spu/parts/+page.server.ts, and the Sync-from-Box /
+  Connect-to-Box buttons, Last Sync card and retry-sync form from
+  /spu/parts/+page.svelte. Box FILE STORAGE deliberately kept: box.ts,
+  /api/box/upload, /api/box/files/[id], documents browser, receiving CoC uploads
+  all verified unchanged. part_definitions (69 rows) NOT modified - kept as-is,
+  now BIMS-owned master data edited directly via mongosh.
+- Context: Box sync was already dead - lastSyncAt 2026-03-04, lastSyncStatus
+  "partial", E11000 dup key on partNumber:null, access token expired 2026-03-20.
+- Tooling: mongosh 2.9.2 installed via winget at
+  C:\Users\aleja\AppData\Local\Programs\mongosh\mongosh.exe (not on PATH; use
+  full path). Target = cluster0.vmsozkl.mongodb.net db "bioscale" (PROD, single
+  DB, .env and .env.local are identical - no dev/prod split).
+- LANDMINE: PartDefinition Mongoose schema (strict) does NOT declare bomType,
+  isBom, quantityPerUnit, inventorySource, supplierPartNumber, barcode - all of
+  which exist on 44-69 of the 69 docs. Any app-side .save() SILENTLY STRIPS them
+  (same class as the CV strict-mode incident). Edit part_definitions via mongosh,
+  not via Mongoose, until the schema is widened.
+- Open items deliberately NOT actioned (user decided): (1) /spu/bom/settings
+  +page.server.ts lines 30-42 returns boxIntegration incl. accessToken AND
+  refreshToken to the CLIENT - SvelteKit serializes load data into the page
+  payload, so any inventory:read user can read both from view-source; the .svelte
+  never references boxIntegration, so it is dead code and safe to delete.
+  (2) /spu/parts load filters to unitCost > 0, hiding 8 parts; PT-CT-111 (35),
+  PT-CT-112 (305), PT-CT-114 (17) hold real stock but never render.
+  (3) PT-CT-103 "Top Seal" has inventoryCount -48. (4) 21 parts still tagged
+  inventorySource "box_estimate", now a false provenance label.
+- Typecheck: 183 errors / 183 warnings = exact pre-existing baseline, zero new;
+  no errors in either edited file.
+- DEPLOYMENT 2026-07-30: committed d9604550a05590202bc1a5e05afdf5204e7fb915 on
+  perf/data-health-01, pushed to origin (avacoder3900/Bioscale_Operations_System_V2)
+  -> Vercel build SUCCESS on both projects (brevitest + alejandro-valdezs-projects),
+  no spurious failure this time. Preview (branch alias, /login returns HTTP 200):
+  https://bioscale-operations-system-mongodb-git-perf-da-5173e4-brevitest.vercel.app
+- INVENTORY EDIT 2026-07-30: first direct-to-Mongo part quantity edits since the
+  Box disconnect. Via mongosh against prod bioscale, guarded on prior value
+  (updateOne matched on {partNumber, inventoryCount: <from>}), all 3 matched:
+    PT-SPU-044 Structure Bottom  129 -> 145   _id vsffmZCeL1Nu9mrzE6LSn
+    PT-SPU-027 Structure Top      34 -> 129   _id 1ary9W3jNeSRRAn0nOlmj
+    PT-SPU-023 Enclosure Back     63 -> 182   _id b3EfKmgXjxm_71vOlszt1
+  updatedAt set manually (mongosh bypasses Mongoose timestamps). Pre-edit backup
+  of the 3 docs in scratchpad/part_definitions-backup-20260730-113117.json.
+  3 matching AuditLog entries written to audit_log, changedBy "alejandrov
+  (mongosh)", reason "Manual inventory correction; Box sync removed".
+- AUDIT COLLECTION DRIFT: three collections exist - audit_log (34449 docs, LIVE,
+  what the AuditLog model binds to), audit_logs (82, stale since 2026-06-23),
+  auditlogs (2, stale since 2026-06-22). Write to audit_log only.
+- LEDGER INVARIANT DISCOVERED 2026-07-30: part_definitions.inventoryCount is
+  DERIVED - it equals the net sum of inventory_transactions.quantity for that
+  partDefinitionId (consumption/scrap rows are stored NEGATIVE). Editing
+  inventoryCount directly WITHOUT a matching transaction silently breaks this.
+  My earlier PT-SPU-044/027/023 edits did exactly that; repaired below.
+- BARCODE RECONCILIATION 2026-07-30 (user-reported discrepancy):
+  * "PT-SPU-03" resolved to PT-SPU-003 M3 Self-Retaining Washer. User count 273
+    CONFIRMED by accepted lots: LOT-20260327-0003 (100) + LOT-20260327-0004 (100)
+    + LOT-20260728-0001 (73) = 273. BIMS showed 173 because only 173 units had
+    receipt transactions - 100 received units were never transacted. Corrected.
+  * PT-SPU-013 Heater Block: user reported lots 17 + 6 = 22 actual. DB DISAGREES -
+    lot 01fc1b22-1c28-4671-80bd-688e0ada8ece records qty 12 (not 17), and lot
+    c86ba345-89e4-45ab-befa-5c36f808b8d9 DOES NOT EXIST anywhere (all 110
+    receiving_lots scanned + generated_barcodes). Set to 22 on user instruction
+    ("trust my physical counts"); disagreement recorded in the tx reason field.
+  * PT-SPU-078 Laser Diode: user attributed barcode 0f28c6ba-664a-4e89-bedc-
+    17340be5cf22 to it, but that barcode is LOT-20260327-0053 belonging to
+    PT-SPU-091 LED Light Assembly, qty 10 (not 6). PT-SPU-078 had zero lots and
+    zero transactions. Set to 6 on user instruction; mismatch recorded in tx
+    reason. PHANTOM LOT c86ba345 NOT created - awaiting user decision.
+- WRITES APPLIED (all guarded on prior value, pre-flight checked all 6 before any
+  write, backup scratchpad/part_definitions-backup-20260730-131353.json):
+    6 x inventory_transactions type "adjustment", performedBy/operatorUsername
+    "alejandro" (operatorId JJtUGWAWTnbou3J3isc1), shape copied from the existing
+    jacob "manual one-time correction" precedent:
+      PT-SPU-044 +16  (129->145, ledger repair, count was already correct)
+      PT-SPU-027 +95  (34->129,  ledger repair)
+      PT-SPU-023 +119 (63->182,  ledger repair)
+      PT-SPU-003 +100 (173->273, count changed)
+      PT-SPU-013 +17  (5->22,    count changed)
+      PT-SPU-078 +6   (0->6,     count changed)
+    3 x audit_log entries for the three count changes (003/013/078).
+  VERIFIED: invariant now HOLDS for all 6. Repo-wide 42->46 holding, 11->8 broken
+  (remaining 8 are pre-existing, not from this session), 16->15 with no tx.
+- SCHEMA DRIFT (inventory_transactions): model enum is
+  deduction/retraction/adjustment/receipt, but live data is creation 2453,
+  consumption 1911, scrap 199, receipt 101, adjustment 6 - "creation",
+  "consumption" and "scrap" are NOT in the enum. Fields operatorId,
+  operatorUsername, notes, lotId, manufacturingStep, cartridgeRecordId also
+  undeclared. Same strict-mode stripping risk as part_definitions.
