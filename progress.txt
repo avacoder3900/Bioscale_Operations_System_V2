@@ -5722,3 +5722,21 @@ Source: branch master @ commit e23b8e49
 Retrieve this exact code: git checkout master at commit e23b8e49
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: MCP tool annotations (fixes claude.ai read-only classification) + terse reassembly confirmation behavior.
+
+Second follow-up ("someone needs to add an inventory mutation to the MCP server" on claude.ai):
+diagnosed via this session's own BIMS connector — the connector CONNECTS fine to live prod
+(inventory_overview returns current Atlas counts) but claude.ai still serves the pre-feature
+31-tool list: record_reassembly_parts_usage / parts_lookup / spu_assembly_parts_map are absent
+from its cached tools/list even though the server (verified sha 8d86d539) registers 34. Ruled
+out wrong-host: the alejandro-valdezs-projects Vercel twin is behind SSO (a connector there
+could not connect at all), so the connector must point at the live main domain. Root cause is
+claude.ai's per-connector tool-list cache. Server-side mitigation: bumped McpServer version
+1.0.0 -> 2.0.0 (bump on every tool add/remove from now on). User-side fix required once:
+remove + re-add (or edit/save) the BIMS connector in claude.ai Settings -> Connectors to force
+a tools/list re-fetch, then start a new conversation.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit c83d87b0
+Retrieve this exact code: git checkout master at commit c83d87b0
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: MCP server version bump so clients re-fetch the 34-tool list (adds the inventory mutation tool to claude.ai connectors).
