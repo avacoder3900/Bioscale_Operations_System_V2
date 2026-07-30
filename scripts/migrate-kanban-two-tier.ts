@@ -11,6 +11,11 @@ import * as dotenv from 'dotenv';
 dotenv.config();
 
 const APPLY = process.env.APPLY === '1';
+// ALL_TO_TIER1=1 (Jacob, 2026-07-31): clean-slate mode — ALL active tasks land in
+// Tier 1 'captured' (including current ready/wip/waiting), the ready queue starts
+// empty, and the first replenishment ceremony populates it. Old data is going to be
+// reorganized/deleted anyway. Archived/done tasks are untouched.
+const ALL_TO_TIER1 = process.env.ALL_TO_TIER1 === '1';
 
 async function main() {
 	await mongoose.connect(process.env.MONGODB_URI!);
@@ -27,11 +32,16 @@ async function main() {
 	await histogram('before');
 
 	// ---- Step 1: status renames ------------------------------------------
-	const renames: [Record<string, unknown>, string][] = [
-		[{ status: 'backlog' }, 'captured'],
-		[{ status: 'todo' }, 'captured'], // rogue value (2 docs) — bypassed enum historically
-		[{ status: 'in_progress' }, 'wip'] // rogue value (1 doc)
-	];
+	const renames: [Record<string, unknown>, string][] = ALL_TO_TIER1
+		? [
+				// Clean slate: every active task becomes an uncommitted Tier 1 option.
+				[{ status: { $in: ['backlog', 'todo', 'in_progress', 'ready', 'wip', 'waiting', 'blocked'] }, archived: { $ne: true } }, 'captured']
+			]
+		: [
+				[{ status: 'backlog' }, 'captured'],
+				[{ status: 'todo' }, 'captured'], // rogue value (2 docs) — bypassed enum historically
+				[{ status: 'in_progress' }, 'wip'] // rogue value (1 doc)
+			];
 	for (const [filter, to] of renames) {
 		const n = await tasks.countDocuments(filter);
 		console.log(`\nStep 1: ${JSON.stringify(filter)} → '${to}' — ${n} docs`);
@@ -63,6 +73,8 @@ async function main() {
 	}
 
 	// ---- Step 3: committedAt backfill for Tier 2 (incl. archived done) ----
+	// In ALL_TO_TIER1 mode only archived/done docs remain Tier 2 (history keeps
+	// its committedAt for metrics); active docs are captured and get none.
 	const tier2NoCommit = {
 		status: { $in: ['ready', 'wip', 'waiting', 'blocked', 'done'] },
 		committedAt: { $exists: false }
@@ -87,25 +99,31 @@ async function main() {
 	console.log('\nStep 4: rank backfill');
 	const statusWeight: Record<string, number> = { wip: 0, waiting: 1, blocked: 1, ready: 2 };
 	for (const board of ['ops']) {
-		const tier2 = await tasks
-			.find({ board: APPLY ? board : { $in: [board, null as never] }, status: { $in: ['wip', 'waiting', 'blocked', 'ready'] }, archived: { $ne: true } })
-			.project({ _id: 1, status: 1, prioritized: 1, createdAt: 1 })
-			.toArray();
-		tier2.sort(
-			(a, b) =>
-				(statusWeight[a.status] ?? 9) - (statusWeight[b.status] ?? 9) ||
-				Number(b.prioritized ?? false) - Number(a.prioritized ?? false) ||
-				new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime()
-		);
-		console.log(`  Tier 2 (${board}): ranking ${tier2.length} docs 1..${tier2.length}`);
-		if (APPLY) {
-			let r = 1;
-			for (const t of tier2) await tasks.updateOne({ _id: t._id }, { $set: { rank: r++ } });
+		if (!ALL_TO_TIER1) {
+			const tier2 = await tasks
+				.find({ board: APPLY ? board : { $in: [board, null as never] }, status: { $in: ['wip', 'waiting', 'blocked', 'ready'] }, archived: { $ne: true } })
+				.project({ _id: 1, status: 1, prioritized: 1, createdAt: 1 })
+				.toArray();
+			tier2.sort(
+				(a, b) =>
+					(statusWeight[a.status] ?? 9) - (statusWeight[b.status] ?? 9) ||
+					Number(b.prioritized ?? false) - Number(a.prioritized ?? false) ||
+					new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime()
+			);
+			console.log(`  Tier 2 (${board}): ranking ${tier2.length} docs 1..${tier2.length}`);
+			if (APPLY) {
+				let r = 1;
+				for (const t of tier2) await tasks.updateOne({ _id: t._id }, { $set: { rank: r++ } });
+			}
+		} else {
+			console.log(`  Tier 2 (${board}): skipped — ALL_TO_TIER1 leaves the ready queue empty`);
 		}
 
 		// Tier 1 per project: prioritized first, then oldest.
 		// ($in includes pre-rename values so the dry run previews correctly; post-step-1 they ARE captured)
-		const tier1Statuses = { $in: ['captured', 'backlog', 'todo'] };
+		const tier1Statuses = ALL_TO_TIER1
+			? { $in: ['captured', 'backlog', 'todo', 'in_progress', 'ready', 'wip', 'waiting', 'blocked'] }
+			: { $in: ['captured', 'backlog', 'todo'] };
 		const projects = await tasks.distinct('project._id', { status: tier1Statuses, archived: { $ne: true } });
 		for (const pid of projects) {
 			const t1 = await tasks
