@@ -94,6 +94,13 @@ Mutating (all audit-logged server-side by the wrapped endpoints): `kanban_create
 `kanban_decide_proposal`, `kanban_report_violation`, `create_approval_request`,
 `decide_approval_request`, `send_message`.
 
+**Two-tier kanban (KB2)**: `kanban_replenishment_status` (read) plus the privileged
+commitment-point tools `kanban_replenish`, `kanban_demote`, `kanban_reorder_queue` — these
+require an `actor` (the username of the human driving the session; validated server-side
+against the `kanban:replenish` permission). Task creation lands in `captured` (Tier 1);
+normal updates cannot cross tiers; pulls are limited to the top of the ready queue. See
+`docs/prds/KB2-00-OVERVIEW.md`.
+
 This replicates the full `/api/agent/**` machine surface except: `ask`/`transcribe` (session-cookie
 routes serving the in-app widget, not machine agents) and the OT-2/scanner long-poll daemon queues
 (not request/response shaped; the robot bridge keeps using them directly).

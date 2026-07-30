@@ -4896,3 +4896,31 @@ to production until KB2-02 lands + migration runs.
 Also: one-off scripts/fix-spu-research-site-2026-07-30.ts (APPLIED to prod): research
 site = exactly UDIs 202,211,212,218,222,223,229,236,243,244,245,247,248,249,250,251
 (6 assigned, 4 strays cleared: 203,215,246,252) for research-app push-assay.
+
+================================================================================
+2026-07-31 — feat/kanban-two-tier — KB2-02 commitment point (replenish/demote/reorder + caps + pull window)
+================================================================================
+- NEW KanbanPolicy singleton model (_id 'default'): readyCap/minOrderPoint per board, WIP
+  limits, pullWindow, expedite, allocation, size-class definitions, SLE seeds. + policy.ts
+  loader (creates with seeds on first read).
+- NEW src/lib/server/kanban/replenish.ts: replenish() (the ONLY Tier1→Tier2 path — actor must
+  be an active user with kanban:replenish or admin:full, incl. when driving through Claude;
+  DoR floor = dor.outcome non-empty + software handoffBrief + spike fields; ready-cap
+  enforcement; per-batch replenishment event id; per-item rejected reasons), demote()
+  (reason required; wip must leave wip first), reorder() (strict 1..N re-rank, global ready
+  scope needs replenisher perm), replenishmentStatus() (candidates w/ DoR readiness, cap
+  gauge, WIP share by class).
+- NEW queue.ts: renumberReady + checkMinOrderPoint (below min → WorkflowViolation
+  'replenishment_needed', auto-resolves on recovery) — shared by transition + replenish
+  without circular imports.
+- transition.ts: pull-window enforcement (ready→wip only from top-N rank, expedite exempt,
+  PULL_WINDOW error) + auto renumber/min-order check when items leave ready.
+- kanban:replenish added to the permission catalog (admin/roles page).
+- 4 new agent endpoints: kanban/replenish, /demote, /reorder, /replenishment-status.
+- 4 new MCP tools: kanban_replenish, kanban_demote, kanban_reorder_queue,
+  kanban_replenishment_status (descriptions carry the method: never guess the actor,
+  humans commit, pull from the top). alerts endpoint surfaces replenishment_needed as
+  critical. docs/MCP-SERVER.md updated.
+npm run check: 11 errors — unchanged baseline, none in touched files.
+Branch still NOT deployable until migration runs post-deploy (see KB2-01 note). Next:
+KB2-03 processing flow, then KB2-06 views.

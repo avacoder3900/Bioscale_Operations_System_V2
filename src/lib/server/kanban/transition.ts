@@ -20,6 +20,8 @@ import {
 	type KanbanOrigin
 } from '$lib/shared/kanban-status';
 import { checkWipLimit } from './wip-limit.js';
+import { getKanbanPolicy } from './policy.js';
+import { renumberReady, checkMinOrderPoint } from './queue.js';
 
 export type TransitionVia = 'ui' | 'mcp' | 'agent-api' | 'system';
 export type TransitionActor = { username: string; via: TransitionVia };
@@ -29,6 +31,7 @@ export class TransitionError extends Error {
 		| 'INVALID_STATUS'
 		| 'TIER_CROSSING_FORBIDDEN'
 		| 'WIP_LIMIT_EXCEEDED'
+		| 'PULL_WINDOW'
 		| 'REASON_REQUIRED'
 		| 'WAITING_DEPENDENCY_REQUIRED'
 		| 'NOT_FOUND';
@@ -91,6 +94,20 @@ export async function transitionTask(opts: TransitionOptions) {
 		}
 	}
 
+	// Pull policy (KB2-02): consume the queue from the top-N only. Preserves
+	// real choice (skill/equipment match) inside a bounded window. Expedite
+	// bypasses the window by definition.
+	if (from === 'ready' && to === 'wip' && task.classOfService !== 'expedite') {
+		const policy = await getKanbanPolicy();
+		const window = policy?.pullWindow ?? 3;
+		if ((task.rank ?? 0) > window) {
+			throw new TransitionError(
+				'PULL_WINDOW',
+				`Pull from the top ${window} of the ready queue (ranks 1–${window}); this item is rank ${task.rank}. If it should be worked now, reorder the queue first.`
+			);
+		}
+	}
+
 	if (to === 'blocked' && !opts.reason?.trim()) {
 		throw new TransitionError('REASON_REQUIRED', "Moving to 'blocked' requires a reason (what is blocking us?).");
 	}
@@ -138,6 +155,14 @@ export async function transitionTask(opts: TransitionOptions) {
 	});
 
 	await task.save();
+
+	// Leaving the ready queue (pull, demote-by-service, done, etc.) → close the
+	// rank gap and check queue depth. Entering ready happens only via replenish,
+	// which does its own renumber/check.
+	if (from === 'ready' && to !== 'ready') {
+		await renumberReady(board);
+		await checkMinOrderPoint(board);
+	}
 
 	await AuditLog.create({
 		_id: generateId(),

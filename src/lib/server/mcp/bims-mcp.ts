@@ -300,7 +300,8 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			description:
 				'Update a kanban task: move it within Tier 2 (status), retitle, describe, resize, reassign, re-project, ' +
 				'set due date/tags, or append context notes. Status changes go through the transition service and record a transition history entry. ' +
-				'Tier crossings (e.g. captured → ready) are rejected server-side — commitment-point crossings need the replenish path (not yet exposed as a tool). Audit-logged.',
+				'Tier crossings (e.g. captured → ready) are rejected server-side — commitment-point crossings go through kanban_replenish / kanban_demote. ' +
+				'Pulling ready → wip is only allowed from the top of the queue (pull window, default top 3). Audit-logged.',
 			inputSchema: z.object({
 				taskId: z.string().describe('The task _id to update.'),
 				title: z.string().optional(),
@@ -323,6 +324,76 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				method: 'PATCH',
 				body: rest
 			})
+	);
+
+	// ------------------------------------------- kanban: the commitment point
+
+	server.registerTool(
+		'kanban_replenishment_status',
+		{
+			description:
+				'The "should we replenish?" view: Tier-1 candidates with Definition-of-Ready readiness (exact missing fields), ' +
+				'current ready queue vs its cap, minimum-order-point signal, and WIP share by class of service. ' +
+				'Call this before kanban_replenish, and whenever asked how the queue is doing.',
+			inputSchema: z.object({
+				board: z.enum(['ops', 'software']).optional().describe('Which board (default ops).')
+			})
+		},
+		async ({ board }) =>
+			callAgentApi(fetcher, '/api/agent/operations/kanban/replenishment-status', { query: { board } })
+	);
+
+	server.registerTool(
+		'kanban_replenish',
+		{
+			description:
+				'THE commitment point: promote Tier-1 options into the global ready queue, in the given order. ' +
+				'Only a human commits work — `actor` must be the username of the human you are working with, and they must hold ' +
+				'the kanban:replenish permission. NEVER guess or invent the actor; if you do not know who you are working with, ask. ' +
+				'Items must satisfy the Definition of Ready (outcome statement; software items also need a handoff brief) and the ' +
+				'ready cap must have room — rejected items come back with exact reasons. One replenishment event id covers the batch (the decision record).',
+			inputSchema: z.object({
+				taskIds: z.array(z.string()).min(1).describe('Task ids to promote, in desired queue order.'),
+				actor: z.string().describe('Username of the human making this commitment (required — never guess).'),
+				board: z.enum(['ops', 'software']).optional().describe('Which board (default ops).'),
+				note: z.string().optional().describe('Optional note recorded on the replenishment event.')
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/replenish', { method: 'POST', body: args })
+	);
+
+	server.registerTool(
+		'kanban_demote',
+		{
+			description:
+				'Unwind a commitment honestly: move a ready/waiting/blocked item back to Tier 1 (processed). ' +
+				'Requires the human actor (kanban:replenish) and a reason. A wip item must leave wip first — deliberate friction.',
+			inputSchema: z.object({
+				taskId: z.string(),
+				actor: z.string().describe('Username of the human making this decision (required — never guess).'),
+				reason: z.string().describe('Why the commitment is being unwound.')
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/demote', { method: 'POST', body: args })
+	);
+
+	server.registerTool(
+		'kanban_reorder_queue',
+		{
+			description:
+				'Explicit, audited re-rank. scope "ready" reorders the global commitment queue (actor needs kanban:replenish); ' +
+				'scope {projectId} reorders Tier-1 options within a project. Ranks are strict ordinals — no ties; ' +
+				'items in scope but omitted from the order keep their relative order after the listed ones.',
+			inputSchema: z.object({
+				scope: z
+					.union([z.literal('ready'), z.object({ projectId: z.string() })])
+					.describe('"ready" for the global queue, or {projectId} for Tier-1 project ranking.'),
+				orderedTaskIds: z.array(z.string()).min(1).describe('Task ids in the desired new order (rank 1 first).'),
+				actor: z.string().describe('Username of the human driving this change (required — never guess).'),
+				board: z.enum(['ops', 'software']).optional().describe('Which board (default ops).')
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/reorder', { method: 'POST', body: args })
 	);
 
 	server.registerTool(
