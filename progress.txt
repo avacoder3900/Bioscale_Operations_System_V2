@@ -5533,3 +5533,115 @@ What this deployment is for: Box is no longer the inventory source for parts —
 Verified post-deploy: Vercel success on both projects; production /login HTTP 200;
   master's src/routes/parts/+page.server.ts has zero box-sync references and
   src/lib/server/box-sync.ts is absent while src/lib/server/box.ts remains.
+
+================================================================================
+2026-07-30 — feat/optical-group-workspace — VALIDATION-06: optical group
+workspace, single-group analyze, group-vs-group compare
+================================================================================
+PR #39 shipped optical analysis groups with nowhere to live. No route listed
+them; they surfaced only as coloured chips on the cartridge log. And three of the
+five group actions — renameGroup, removeFromGroup, archiveGroup — were fully
+implemented, permission-checked and audit-logged server-side with ZERO UI callers
+anywhere in src/. This closes both gaps.
+
+PRD written first at docs/prds/VALIDATION-06-optical-group-workspace.md (commit
+0c416220). Note docs/prds/ jumps 02 -> 05 -> 06 because VALIDATION-03 and -04 were
+never committed to the repo; they still live only under the home docs/prds/.
+
+Scope note: an earlier draft of this feature aligned the two groups row-by-row by
+SPU, so you could read a per-SPU difference. The user explicitly scrapped that
+before implementation. There is no matching logic anywhere in the code.
+
+ENGINE (src/lib/server/optical-analysis.ts) — purely additive, 686 insertions and
+0 deletions. compareGroups, analyzeGroupRobust, analyzeCartridge and the shipped
+/analyze page are untouched, and the pre-existing tests are the regression gate
+proving it.
+
+  * reportGroup() — per-cartridge overall F7/F3 plus group totals. A cartridge's
+    OVERALL IS THE MEAN OF ITS AVAILABLE WELLS. A well with no usable ratio is
+    skipped, never treated as zero, which would drag the headline toward 0.
+    wellsUsed records how many contributed; a cartridge with no usable well is
+    excluded with a stated reason rather than silently counted as data.
+    Chosen over pooling every well reading into one bag because wells legitimately
+    differ from each other, and pooling folds that real between-well spread into
+    the stdev, blunting the run-to-run signal the comparison exists to show.
+
+  * diffGroups() — subtracts avg/stdev/CV/median between two groups.
+    cvDiffPp is named, documented, displayed and CSV-exported as PERCENTAGE
+    POINTS. CV is already a percentage, so a CV minus a CV is pp; labelling it
+    "%" would invite a genuine misreading.
+
+  * Still no p-values, t-tests or ANOVA. Unchanged stance for unchanged reasons:
+    at n~5-10 there is no power, and the repo's tTest is pooled-variance over an
+    incompleteBeta its own source labels not production-grade.
+
+  * notes[] emitted FROM THE ENGINE, so a view cannot render without them. Now
+    three kinds: the multi-SPU raw-F7/F3 calibration caveat, the
+    descriptive-statistics-only disclaimer, and NEW — a skew note when a group's
+    mean and median diverge by more than 10%.
+
+UI — three route trees, tables only, no charts anywhere (verified by grep):
+  * groups/            workspace: list, create from a picker restricted to
+                       cartridges that have ALREADY RUN, rename, archive, and
+                       select exactly two to compare (a third selection replaces
+                       the oldest so the control can never be uncomparable)
+  * groups/[groupId]/  totals row + one row per cartridge (barcode, SPU, A/B/C,
+                       overall), excluded card, remove-from-group
+  * groups/compare/    Group A | Group B | Difference; one overall row expanding
+                       to three well rows behind a button; CSV via the existing
+                       csv.ts helper, which already quotes and defuses formula
+                       injection
+
+groups/compare only resolves because SvelteKit prefers a static segment over the
+sibling dynamic [groupId] route. That is documented in the file with a warning not
+to rename it to anything a group id could collide with.
+
+Built with a 5-agent workflow: one engine agent whose exact exported type source
+was captured as structured output and injected into three parallel UI agents
+working on strictly disjoint file trees, then a single verify agent, with a fix
+phase that proved unnecessary. Every agent was barred from running git and from
+touching files outside its list.
+
+One thing the workflow missed: no agent owned the cartridge log page, so the
+"Groups" nav link the PRD called for was not written and the new workspace was
+only reachable by typing the URL. Added by hand in 3eef9c65.
+
+VERIFIED AGAINST PRODUCTION (throwaway tsx script, deleted after):
+  reportGroup over a real 10-cartridge SPU group (BT-M01-0000-0203):
+    overall n=10 avg=11.161 sd=5.573 cv=49.9% median=9.478
+    per well A/B/C avg 11.683 / 11.704 / 10.097
+  The mean-of-wells definition hand-checks to within 1e-12 on a three-well
+  cartridge: (9.1041+8.9782+8.4817)/3 == overallRatio exactly.
+  diffGroups across two real SPU groups: avgDiff +5.589 (+100.3%), cvDiffPp
+  -31.4pp, medianDiff +1.404, underpowered=false; multi-SPU caveat emitted; JSON
+  round-trip identical with no non-finite values.
+  Both groups tripped the new skew note (mean 18% and 31% off the median) — the
+  exact case where reading CV alone misleads, which is why that note exists. Worth
+  knowing: these SPU-history groups are not replicates, so wide spread is expected.
+
+Tests: 48 passing (34 optical, ~12 of them new; 14 magnetometer). The pre-existing
+compareGroups cases pass untouched.
+
+npm run check: 77 errors / 430 warnings. Errors identical to the current master
+baseline of 77; zero in any VALIDATION-06 file. Warnings 430 vs a 434 baseline.
+
+Files: docs/prds/VALIDATION-06-optical-group-workspace.md (new),
+src/lib/server/optical-analysis.ts, optical-analysis.test.ts,
+src/routes/validation/optical-confirmation/groups/+page.server.ts and +page.svelte
+(new), .../groups/[groupId]/+page.server.ts and +page.svelte (new),
+.../groups/compare/+page.server.ts and +page.svelte (new),
+src/routes/validation/optical-confirmation/+page.svelte (Groups link)
+
+OPEN QUESTION carried from the PRD (OQ-1): the run-only rule is enforced in the
+picker UI, not in saveGroup, so the log page's existing inline "Save as group"
+flow keeps working unchanged. Making it a hard server rule would change shipped
+behaviour — needs the user's call.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-op-4c572f-brevitest.vercel.app
+  (immutable alias: https://bioscale-operations-system-mongodb-1smzhqvzj-brevitest.vercel.app)
+Source: branch feat/optical-group-workspace @ commit 3eef9c65
+Retrieve this exact code: git checkout feat/optical-group-workspace at commit 3eef9c65
+  (or: git log feat/optical-group-workspace --oneline to find it if the branch has moved on)
+What this deployment is for: reviewing the Groups workspace — build a group from
+  already-run cartridges, read one group's avg/stdev/CV/median in a plain table,
+  and compare two groups with a difference column that expands per channel.
