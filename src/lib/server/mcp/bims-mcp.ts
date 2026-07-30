@@ -1,6 +1,18 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod';
 import { env } from '$env/dynamic/private';
+import { TIER2_STATUSES, SIZE_CLASSES, legalStatusesFor } from '$lib/shared/kanban-status';
+
+// Status vocabulary for MCP tool schemas, from the shared module.
+// 'review' is software-board-only and not exposed through these tools yet.
+const OPS_STATUSES = legalStatusesFor('ops') as unknown as [string, ...string[]];
+// Tier 2 moves only — tier crossings (e.g. captured → ready) are rejected
+// server-side pending the replenish tool (KB2-02).
+const TIER2_MOVE_STATUSES = TIER2_STATUSES.filter((s) => s !== 'review') as unknown as [
+	string,
+	...string[]
+];
+const SIZE_CLASS_VALUES = SIZE_CLASSES as unknown as [string, ...string[]];
 
 /**
  * BIMS MCP server — a thin MCP layer over the existing /api/agent/** REST API.
@@ -329,7 +341,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'kanban_board_snapshot',
 		{
 			description:
-				'The full kanban board: all projects and their tasks grouped by column (blocked, backlog, ready, wip, waiting, done) ' +
+				`The full kanban board: all projects and their tasks grouped by column (${OPS_STATUSES.join(', ')}) ` +
 				'plus recent activity. Call this before creating or updating tasks so you have current task/project ids.'
 		},
 		async () => callAgentApi(fetcher, '/api/agent/operations/kanban/board-snapshot')
@@ -342,26 +354,36 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	);
 
 	server.registerTool(
-		'kanban_create_task',
+		'kanban_capture',
 		{
 			description:
-				'Create a kanban task in a project. Requires a projectId from kanban_board_snapshot or kanban_projects_overview. ' +
-				'The mutation is audit-logged server-side as agent activity.',
+				'Capture a kanban option (one line is enough). Everything starts as a captured Tier-1 option — no status choice; ' +
+				'sizing/classing happen at processing (kanban_process) and commitment happens at replenishment (kanban_replenish). ' +
+				'DISCOVERED-WORK TEST — when the idea came up while working another task, ask: "If work stopped right now, is that ' +
+				"task's stated outcome achieved?\" YES → capture here with origin:'discovered' and spawnedFrom set. NO → it was always " +
+				'inside that task — append it there with kanban_update_task appendContext instead of capturing a new item. ' +
+				'For a spike (timeboxed investigation), set itemType:spike with question + timebox — a spike cannot be created without them.',
 			inputSchema: z.object({
-				title: z.string().describe('Task title (required).'),
+				title: z.string().describe('One line is enough.'),
 				projectId: z.string().describe('The kanban project _id.'),
+				board: z.enum(['ops', 'software']).optional().describe('Which board (default ops).'),
 				description: z.string().optional(),
-				status: z
-					.enum(['blocked', 'backlog', 'ready', 'wip', 'waiting', 'done'])
+				origin: z.enum(['planned', 'discovered']).optional().describe("'discovered' when it emerged while working another item."),
+				spawnedFrom: z.string().optional().describe('Task id that was being worked when this was discovered.'),
+				itemType: z.enum(['deliverable', 'spike', 'chore']).optional(),
+				spike: z
+					.object({
+						question: z.string().describe('The question the spike answers. If it cannot be written, the uncertainty is not shaped enough to fund.'),
+						timebox: z.object({ amount: z.number(), unit: z.enum(['hours', 'days']) })
+					})
 					.optional()
-					.describe('Initial column (default backlog).'),
-				prioritized: z.boolean().optional(),
-				taskLength: z.enum(['short', 'medium', 'long']).optional().describe('Effort estimate (default medium).'),
+					.describe('Required when itemType is spike.'),
 				assignedTo: z.string().optional().describe('User _id to assign.'),
 				dueDate: z.string().optional().describe('ISO date string.'),
 				tags: z.array(z.string()).optional(),
 				parentTaskId: z.string().optional().describe('Create as a subtask of this task.'),
-				sourceRef: z.string().optional().describe('External reference (e.g. a conversation or ticket id).')
+				sourceRef: z.string().optional().describe('External reference (e.g. pr:123, branch:name, or a ticket id).'),
+				actor: z.string().optional().describe('Username of the human driving this change (defaults to "agent").')
 			})
 		},
 		async (args) =>
@@ -372,20 +394,34 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'kanban_update_task',
 		{
 			description:
-				'Update a kanban task: move it between columns (status), retitle, describe, prioritize, reassign, re-project, ' +
-				'set due date/tags, or append context notes. Status changes record a transition history entry. Audit-logged.',
+				'Update a kanban task: move it within Tier 2 (status), retitle, describe, resize, reassign, re-project, ' +
+				'set due date/tags, or append context notes. Status changes go through the transition service and record a transition history entry. ' +
+				'Tier crossings (e.g. captured → ready) are rejected server-side — commitment-point crossings go through kanban_replenish / kanban_demote. ' +
+				'Pulling ready → wip is only allowed from the top of the queue (pull window, default top 3). Audit-logged.',
 			inputSchema: z.object({
 				taskId: z.string().describe('The task _id to update.'),
 				title: z.string().optional(),
 				description: z.string().optional().describe('Replaces the description.'),
 				appendContext: z.string().optional().describe('Appends a context note instead of replacing the description.'),
-				status: z.enum(['blocked', 'backlog', 'ready', 'wip', 'waiting', 'done']).optional().describe('Move to this column.'),
-				prioritized: z.boolean().optional(),
-				taskLength: z.enum(['short', 'medium', 'long']).optional(),
+				status: z.enum(TIER2_MOVE_STATUSES).optional().describe('Move to this Tier-2 column. Tier crossings are rejected server-side.'),
+				sizeClass: z.enum(SIZE_CLASS_VALUES).optional().describe('Size class (short/medium/long).'),
+				reason: z.string().optional().describe('Required when moving to blocked (what is blocking us?).'),
+				waitingOn: z.string().optional().describe('Required when moving to waiting: the named external dependency.'),
+				waitingUntil: z.string().optional().describe('Required when moving to waiting: ISO follow-up date.'),
 				assignedTo: z.string().optional().describe('User _id to reassign to.'),
 				projectId: z.string().optional().describe('Move the task to this project.'),
 				dueDate: z.string().optional().describe('ISO date string.'),
-				tags: z.array(z.string()).optional()
+				tags: z.array(z.string()).optional(),
+				sourceRef: z.string().optional().describe('External link — software items: pr:<number>, branch:<name>, commit:<sha>.'),
+				dor: z
+					.object({
+						outcome: z.string().optional().describe('Outcome statement, not steps.'),
+						acceptanceCriteria: z.string().optional(),
+						handoffBrief: z.string().optional().describe('Software board: the coding-agent handoff brief.')
+					})
+					.optional()
+					.describe('Edit Definition-of-Ready fields.'),
+				actor: z.string().optional().describe('Username of the human driving this change (defaults to "agent").')
 			})
 		},
 		async ({ taskId, ...rest }) =>
@@ -395,10 +431,238 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			})
 	);
 
+	// ------------------------------------------- kanban: the commitment point
+
+	server.registerTool(
+		'kanban_replenishment_status',
+		{
+			description:
+				'The "should we replenish?" view: Tier-1 candidates with Definition-of-Ready readiness (exact missing fields), ' +
+				'current ready queue vs its cap, minimum-order-point signal, and WIP share by class of service. ' +
+				'Call this before kanban_replenish, and whenever asked how the queue is doing.',
+			inputSchema: z.object({
+				board: z.enum(['ops', 'software']).optional().describe('Which board (default ops).')
+			})
+		},
+		async ({ board }) =>
+			callAgentApi(fetcher, '/api/agent/operations/kanban/replenishment-status', { query: { board } })
+	);
+
+	server.registerTool(
+		'kanban_replenish',
+		{
+			description:
+				'THE commitment point: promote Tier-1 options into the global ready queue, in the given order. ' +
+				'Only a human commits work — `actor` must be the username of the human you are working with, and they must hold ' +
+				'the kanban:replenish permission. NEVER guess or invent the actor; if you do not know who you are working with, ask. ' +
+				'Items must satisfy the Definition of Ready (outcome statement; software items also need a handoff brief) and the ' +
+				'ready cap must have room — rejected items come back with exact reasons. One replenishment event id covers the batch (the decision record).',
+			inputSchema: z.object({
+				taskIds: z.array(z.string()).min(1).describe('Task ids to promote, in desired queue order.'),
+				actor: z.string().describe('Username of the human making this commitment (required — never guess).'),
+				board: z.enum(['ops', 'software']).optional().describe('Which board (default ops).'),
+				note: z.string().optional().describe('Optional note recorded on the replenishment event.')
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/replenish', { method: 'POST', body: args })
+	);
+
+	server.registerTool(
+		'kanban_demote',
+		{
+			description:
+				'Unwind a commitment honestly: move a ready/waiting/blocked item back to Tier 1 (processed). ' +
+				'Requires the human actor (kanban:replenish) and a reason. A wip item must leave wip first — deliberate friction.',
+			inputSchema: z.object({
+				taskId: z.string(),
+				actor: z.string().describe('Username of the human making this decision (required — never guess).'),
+				reason: z.string().describe('Why the commitment is being unwound.')
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/demote', { method: 'POST', body: args })
+	);
+
+	server.registerTool(
+		'kanban_reorder_queue',
+		{
+			description:
+				'Explicit, audited re-rank. scope "ready" reorders the global commitment queue (actor needs kanban:replenish); ' +
+				'scope {projectId} reorders Tier-1 options within a project. Ranks are strict ordinals — no ties; ' +
+				'items in scope but omitted from the order keep their relative order after the listed ones.',
+			inputSchema: z.object({
+				scope: z
+					.union([z.literal('ready'), z.object({ projectId: z.string() })])
+					.describe('"ready" for the global queue, or {projectId} for Tier-1 project ranking.'),
+				orderedTaskIds: z.array(z.string()).min(1).describe('Task ids in the desired new order (rank 1 first).'),
+				actor: z.string().describe('Username of the human driving this change (required — never guess).'),
+				board: z.enum(['ops', 'software']).optional().describe('Which board (default ops).')
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/reorder', { method: 'POST', body: args })
+	);
+
+	// -------------------------------------------- kanban: processing (triage)
+
+	server.registerTool(
+		'kanban_process',
+		{
+			description:
+				'Process (triage) a captured option: set its size class and class of service — the once-per-item shaping decision, ' +
+				'made by the person processing (never the author or eventual assignee; this removes the inflation incentive). ' +
+				'Also the moment to write the Definition-of-Ready fields: dor.outcome must describe the OUTCOME (what is different ' +
+				'in the world when this is done), not the steps — step lists go stale; outcomes survive a change of approach. ' +
+				'fixed_date requires a real external dueDate. `actor` = the human doing the processing (never guess).',
+			inputSchema: z.object({
+				taskId: z.string(),
+				actor: z.string().describe('Username of the human processing (required — never guess).'),
+				sizeClass: z.enum(['short', 'medium', 'long']).describe('Per the written definitions in policy (kanban_get_policy shows them).'),
+				classOfService: z.enum(['standard', 'fixed_date', 'chore', 'expedite']),
+				dueDate: z.string().optional().describe('ISO date — required for fixed_date.'),
+				dor: z
+					.object({
+						outcome: z.string().optional().describe('Outcome statement, not steps.'),
+						acceptanceCriteria: z.string().optional(),
+						handoffBrief: z.string().optional().describe('Software board: the coding-agent handoff brief.')
+					})
+					.optional()
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/process', { method: 'POST', body: args })
+	);
+
+	server.registerTool(
+		'kanban_disposition',
+		{
+			description:
+				'Tier-1 dispositions: icebox (park indefinitely — visible, skipped at processing), decline (explicitly not doing; ' +
+				'reason required and kept for the record), thaw (un-park an iceboxed option back to captured).',
+			inputSchema: z.object({
+				taskId: z.string(),
+				action: z.enum(['icebox', 'decline', 'thaw']),
+				actor: z.string().describe('Username of the human deciding (required — never guess).'),
+				reason: z.string().optional().describe('Required for decline.')
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/disposition', { method: 'POST', body: args })
+	);
+
+	server.registerTool(
+		'kanban_close_spike',
+		{
+			description:
+				'Close a spike: record the outcome and file what was learned as new captured options (origin discovered). ' +
+				'"We spent the timebox and still don\'t know" is a VALID outcome — never treat an unanswered spike as failure. ' +
+				'A spike\'s output is options, not tasks.',
+			inputSchema: z.object({
+				taskId: z.string(),
+				actor: z.string().describe('Username (required — never guess).'),
+				outcome: z.string().describe('What was learned, including "still unknown".'),
+				spawnOptions: z
+					.array(z.object({ title: z.string(), description: z.string().optional() }))
+					.optional()
+					.describe('New options this spike surfaced — filed as captured/discovered.')
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/spikes/close', { method: 'POST', body: args })
+	);
+
+	// ------------------------------------------- kanban: metrics + policy
+
+	server.registerTool(
+		'kanban_flow_metrics',
+		{
+			description:
+				'Flow metrics for a board: Work Item Age for every unfinished item (vs SLE bands, with flow-debt flags — items that ' +
+				'aged while newer ones finished, the signature of cherry-picking), weekly throughput, discovered-work ratio with a ' +
+				'queue-fill suggestion, expedite rate, and flow efficiency. Deliberately contains NO per-person statistics — the ' +
+				'pathology is diagnosed in the work, not in people. Call when asked "what is stuck", "how is flow", or before replenishment.',
+			inputSchema: z.object({
+				board: z.enum(['ops', 'software']).optional().describe('Which board (default ops).')
+			})
+		},
+		async ({ board }) => callAgentApi(fetcher, '/api/agent/operations/kanban/flow-metrics', { query: { board } })
+	);
+
+	server.registerTool(
+		'kanban_get_policy',
+		{
+			description:
+				'Read the kanban policy: ready caps, min order points, WIP limits, pull window, expedite limits, class allocations, ' +
+				'size-class definitions, SLE seeds, and the recalibration due date.'
+		},
+		async () => callAgentApi(fetcher, '/api/agent/operations/kanban/policy')
+	);
+
+	server.registerTool(
+		'kanban_set_policy',
+		{
+			description:
+				'Tune kanban policy knobs at runtime (no deploy). `actor` must hold kanban:admin. ' +
+				'updates is a map of dot-path → value, e.g. {"boards.ops.readyCap": 10, "pullWindow": 3}. ' +
+				'Valid paths: boards.{ops|software}.{readyCap|minOrderPoint}, wipPerPerson, wipChoreMax, pullWindow, ' +
+				'expedite.{systemMax|alertPctRolling30d}, allocation.{standard|fixed_date|chore}, ' +
+				'sizeClassDefinitions.{short|medium|long}, sle.percentile, sle.perSizeClassDays.{short|medium|long}, recalibrateAfter.',
+			inputSchema: z.object({
+				actor: z.string().describe('Username with kanban:admin (required — never guess).'),
+				updates: z.record(z.string(), z.union([z.string(), z.number()])).describe('Dot-path → new value.')
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/policy', { method: 'PATCH', body: args })
+	);
+
+	// ------------------------------------------- kanban: standing work (supply)
+
+	server.registerTool(
+		'kanban_standing_status',
+		{
+			description:
+				'Standing-work supply targets (e.g. "keep 40 filled cartridges on hand"): live actual-vs-target computed from BIMS ' +
+				'data, reorder-point signals, and any open build option per target. Pass spawn:true to also file one captured build ' +
+				'option for each target below its reorder point (idempotent — never duplicates).',
+			inputSchema: z.object({
+				spawn: z.boolean().optional().describe('Also create build options for targets below reorder point.'),
+				actor: z.string().optional().describe('Username, recorded on spawned options.')
+			})
+		},
+		async ({ spawn, actor }) =>
+			callAgentApi(fetcher, '/api/agent/operations/kanban/standing', {
+				query: { spawn: spawn ? '1' : undefined, actor }
+			})
+	);
+
+	server.registerTool(
+		'kanban_set_standing_target',
+		{
+			description:
+				'Create or update a standing supply target. metric.kind: cartridge_phase_count (params.statuses[], optional ' +
+				'params.skus[]), part_stock (params.partId), or manual (params.value). Standing targets are supply signals, ' +
+				'not flow items — they never enter the queue themselves.',
+			inputSchema: z.object({
+				actor: z.string().describe('Username (required — never guess).'),
+				targetId: z.string().optional().describe('Omit to create; provide to update.'),
+				name: z.string().optional(),
+				metric: z
+					.object({
+						kind: z.enum(['cartridge_phase_count', 'part_stock', 'manual']),
+						params: z.record(z.string(), z.unknown()).optional()
+					})
+					.optional(),
+				target: z.number().optional(),
+				reorderPoint: z.number().optional(),
+				batchSize: z.number().optional(),
+				spawnItemType: z.enum(['chore', 'deliverable']).optional(),
+				active: z.boolean().optional(),
+				notes: z.string().optional()
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/standing', { method: 'POST', body: args })
+	);
+
 	server.registerTool(
 		'kanban_create_subtasks',
 		{
-			description: 'Bulk-create subtasks under a parent kanban task. Each subtask is audit-logged.',
+			description:
+				'Bulk-create subtasks under a parent kanban task. Every subtask starts as a captured Tier-1 option. Each subtask is audit-logged.',
 			inputSchema: z.object({
 				parentTaskId: z.string().describe('The parent task _id.'),
 				subtasks: z
@@ -406,20 +670,20 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 						z.object({
 							title: z.string(),
 							description: z.string().optional(),
-							status: z.enum(['blocked', 'backlog', 'ready', 'wip', 'waiting', 'done']).optional(),
 							assignedTo: z.string().optional(),
 							dueDate: z.string().optional(),
 							tags: z.array(z.string()).optional()
 						})
 					)
 					.min(1)
-					.describe('Subtasks to create.')
+					.describe('Subtasks to create.'),
+				actor: z.string().optional().describe('Username of the human driving this change (defaults to "agent").')
 			})
 		},
-		async ({ parentTaskId, subtasks }) =>
+		async ({ parentTaskId, subtasks, actor }) =>
 			callAgentApi(fetcher, `/api/agent/operations/kanban/tasks/${encodeURIComponent(parentTaskId)}/subtasks`, {
 				method: 'POST',
-				body: { subtasks }
+				body: { subtasks, actor }
 			})
 	);
 

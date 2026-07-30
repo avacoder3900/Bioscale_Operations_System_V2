@@ -3,6 +3,9 @@ import { connectDB, KanbanTask, KanbanProject, AuditLog, User } from '$lib/serve
 import { generateId } from '$lib/server/db/utils.js';
 import { requirePermission } from '$lib/server/permissions';
 import { checkWipLimit } from '$lib/server/kanban/wip-limit';
+import { transitionTask, createKanbanItem, TransitionError } from '$lib/server/kanban/transition';
+import { closeSpike as closeSpikeService } from '$lib/server/kanban/process';
+import { isKanbanStatus, SIZE_CLASSES, type KanbanSizeClass } from '$lib/shared/kanban-status';
 import type { PageServerLoad, Actions } from './$types';
 
 function mapTag(tag: string) {
@@ -39,14 +42,13 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			title: task.title,
 			description: task.description ?? null,
 			status: task.status,
-			prioritized: task.prioritized ?? false,
-			taskLength: task.taskLength as 'short' | 'medium' | 'long' | undefined,
+			sizeClass: task.sizeClass as KanbanSizeClass | undefined,
 			projectId: task.project?._id ?? null,
 			assignedTo: task.assignee?._id ?? null,
 			dueDate: task.dueDate ?? null,
-			sortOrder: task.sortOrder ?? 0,
 			waitingReason: task.waitingReason ?? null,
 			waitingOn: task.waitingOn ?? null,
+			blockedReason: task.blockedReason ?? null,
 			createdAt: task.createdAt,
 			updatedAt: task.updatedAt ?? null,
 			completedDate: task.completedAt ?? (task.status === 'done' ? task.statusChangedAt : null) ?? null,
@@ -55,7 +57,21 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			assigneeName: task.assignee?.username ?? null,
 			projectName: task.project?.name ?? null,
 			projectColor: task.project?.color ?? null,
-			tags: (task.tags ?? []).map(mapTag)
+			tags: (task.tags ?? []).map(mapTag),
+			// KB2-07: spikes + discovered-work provenance
+			itemType: (task.itemType ?? 'deliverable') as string,
+			board: (task.board ?? 'ops') as string,
+			origin: (task.origin ?? 'planned') as string,
+			spawnedFrom: (task.spawnedFrom ?? null) as string | null,
+			spike: task.spike?.question
+				? {
+						question: task.spike.question as string,
+						timebox: task.spike.timebox
+							? { amount: task.spike.timebox.amount as number, unit: task.spike.timebox.unit as string }
+							: null,
+						outcome: (task.spike.outcome ?? null) as string | null
+					}
+				: null
 		},
 		comments: (task.comments ?? []).map((c: any) => ({
 			id: c._id,
@@ -115,18 +131,21 @@ export const actions: Actions = {
 			if (!check.ok) return fail(409, { wipLimitError: check });
 		}
 
+		const $set: any = {
+			title: title.trim(),
+			description: (fd.get('description') as string) || undefined,
+			project,
+			assignee,
+			dueDate: dueDate ? new Date(dueDate) : null,
+			waitingReason: (fd.get('waitingReason') as string) || null,
+			waitingOn: (fd.get('waitingOn') as string) || null
+		};
+		// sizeClass is normally set at processing (KB2-03); accept it only if the form sends a valid value.
+		const sizeClass = fd.get('sizeClass') as string | null;
+		if (sizeClass && (SIZE_CLASSES as readonly string[]).includes(sizeClass)) $set.sizeClass = sizeClass;
+
 		await KanbanTask.updateOne({ _id: params.taskId }, {
-			$set: {
-				title: title.trim(),
-				description: (fd.get('description') as string) || undefined,
-				prioritized: fd.get('prioritized') === 'true',
-				taskLength: fd.get('taskLength') || 'medium',
-				project,
-				assignee,
-				dueDate: dueDate ? new Date(dueDate) : null,
-				waitingReason: (fd.get('waitingReason') as string) || null,
-				waitingOn: (fd.get('waitingOn') as string) || null
-			},
+			$set,
 			$push: {
 				activityLog: {
 					_id: generateId(), action: 'updated', details: { fields: 'task details' },
@@ -145,26 +164,30 @@ export const actions: Actions = {
 		const fd = await request.formData();
 		const newStatus = fd.get('newStatus') as string;
 		if (!newStatus) return fail(400, { error: 'Missing newStatus' });
+		if (!isKanbanStatus(newStatus)) return fail(400, { error: `'${newStatus}' is not a valid status` });
 
-		const task = await KanbanTask.findById(params.taskId).lean() as any;
-		if (!task) return fail(400, { error: 'Task not found' });
+		const reason = (fd.get('reason') as string | null) || (fd.get('waitingReason') as string | null) || undefined;
+		const waitingOn = (fd.get('waitingOn') as string | null) || undefined;
+		const waitingUntilRaw = fd.get('waitingUntil') as string | null;
 
-		// Hard WIP-limit cap. Skip if already in wip (idempotent re-move).
-		if (newStatus === 'wip' && task.status !== 'wip') {
-			const check = await checkWipLimit(task.assignee?._id ?? null, params.taskId);
-			if (!check.ok) return fail(409, { wipLimitError: check });
-		}
-
-		await KanbanTask.updateOne({ _id: params.taskId }, {
-			$set: { status: newStatus, statusChangedAt: new Date() },
-			$push: {
-				activityLog: {
-					_id: generateId(), action: 'status_change',
-					details: { from: task.status, to: newStatus },
-					createdAt: new Date(), createdBy: locals.user._id
+		try {
+			await transitionTask({
+				taskId: params.taskId,
+				to: newStatus,
+				actor: { username: locals.user.username, via: 'ui' },
+				reason,
+				waitingOn,
+				waitingUntil: waitingUntilRaw ? new Date(waitingUntilRaw) : undefined
+			});
+		} catch (e) {
+			if (e instanceof TransitionError) {
+				if (e.code === 'WIP_LIMIT_EXCEEDED') {
+					return fail(409, { wipLimitError: e.details, error: e.message, code: e.code });
 				}
+				return fail(400, { error: e.message, code: e.code });
 			}
-		});
+			throw e;
+		}
 
 		return { success: true };
 	},
@@ -225,6 +248,114 @@ export const actions: Actions = {
 
 		// Tags are just strings — add to the task
 		await KanbanTask.updateOne({ _id: params.taskId }, { $addToSet: { tags: name.trim() } });
+		return { success: true };
+	},
+
+	/**
+	 * KB2-07 — the stop-now test, "Yes" branch: the parent's outcome is
+	 * achievable without this, so it is a NEW OPTION. Created 'captured',
+	 * origin 'discovered', spawnedFrom set. 'ready' is never offered here —
+	 * it goes through replenishment like everything else.
+	 */
+	discoverOption: async ({ request, locals, params }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
+		await connectDB();
+		const fd = await request.formData();
+		const title = fd.get('title')?.toString();
+		if (!title?.trim()) return fail(400, { error: 'Title is required' });
+
+		const parent = await KanbanTask.findById(params.taskId).lean() as any;
+		if (!parent) return fail(404, { error: 'Task not found' });
+
+		try {
+			await createKanbanItem({
+				title,
+				description: fd.get('description')?.toString() || undefined,
+				actor: { username: locals.user.username, via: 'ui' },
+				board: parent.board ?? 'ops',
+				project: parent.project ?? null,
+				origin: 'discovered',
+				spawnedFrom: params.taskId
+			});
+		} catch (e) {
+			if (e instanceof TransitionError) return fail(400, { error: e.message, code: e.code });
+			throw e;
+		}
+		return { success: true, discovered: true };
+	},
+
+	/**
+	 * KB2-07 — the stop-now test, "No" branch: it was always inside the
+	 * parent's boundary. Append as context; do NOT create an item.
+	 */
+	appendContext: async ({ request, locals, params }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
+		await connectDB();
+		const fd = await request.formData();
+		const text = fd.get('text')?.toString();
+		if (!text?.trim()) return fail(400, { error: 'Text is required' });
+
+		const task = await KanbanTask.findById(params.taskId).select('description').lean() as any;
+		if (!task) return fail(404, { error: 'Task not found' });
+
+		const now = new Date();
+		const description = task.description
+			? `${task.description}\n\n— ${text.trim()}`
+			: text.trim();
+		await KanbanTask.updateOne({ _id: params.taskId }, {
+			$set: { description },
+			$push: {
+				activityLog: {
+					_id: generateId(),
+					action: 'context_appended',
+					details: { text: text.trim(), via: 'ui' },
+					createdAt: now,
+					createdBy: locals.user.username
+				}
+			}
+		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'kanban_tasks',
+			recordId: params.taskId,
+			action: 'UPDATE',
+			newData: { contextAppended: text.trim(), via: 'ui' },
+			changedBy: locals.user.username,
+			changedAt: now
+		});
+		return { success: true };
+	},
+
+	/**
+	 * KB2-07 — close a spike: record the outcome ("still unknown" is valid)
+	 * and file the options it created as captured/discovered.
+	 */
+	closeSpike: async ({ request, locals, params }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
+		await connectDB();
+		const fd = await request.formData();
+		const outcome = fd.get('outcome')?.toString();
+		const spawnOptions = fd
+			.getAll('optionTitle')
+			.map((v) => v.toString().trim())
+			.filter(Boolean)
+			.map((title) => ({ title }));
+
+		try {
+			await closeSpikeService({
+				taskId: params.taskId,
+				actorUsername: locals.user.username,
+				via: 'ui',
+				outcome: outcome ?? '',
+				spawnOptions
+			});
+		} catch (e) {
+			if (e instanceof TransitionError) return fail(400, { error: e.message, code: e.code });
+			throw e;
+		}
 		return { success: true };
 	},
 

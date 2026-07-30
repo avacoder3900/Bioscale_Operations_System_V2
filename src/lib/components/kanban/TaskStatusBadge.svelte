@@ -1,5 +1,5 @@
 <script lang="ts">
-	import TronBadge from '$lib/components/ui/TronBadge.svelte';
+	import { STATUS_META, type KanbanStatus } from '$lib/shared/kanban-status';
 
 	interface Props {
 		status: string;
@@ -8,18 +8,15 @@
 
 	let { status, class: className = '' }: Props = $props();
 
-	const statusConfig: Record<
-		string,
-		{ label: string; variant: 'info' | 'success' | 'warning' | 'error' | 'neutral' }
-	> = {
-		backlog: { label: 'Backlog', variant: 'neutral' },
-		ready: { label: 'Ready', variant: 'info' },
-		wip: { label: 'WIP', variant: 'warning' },
-		waiting: { label: 'Waiting', variant: 'error' },
-		done: { label: 'Done', variant: 'success' }
-	};
-
-	let config = $derived(statusConfig[status] ?? { label: status, variant: 'neutral' as const });
+	let meta = $derived(
+		STATUS_META[status as KanbanStatus] ?? { label: status, color: '#6b7280', tier: 1 as const }
+	);
 </script>
 
-<TronBadge variant={config.variant} class={className}>{config.label}</TronBadge>
+<span
+	class="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium {className}"
+	style="color: {meta.color}; border-color: {meta.color}40; background: {meta.color}15;"
+>
+	<span class="h-1.5 w-1.5 rounded-full" style="background: {meta.color};"></span>
+	{meta.label}
+</span>

@@ -101,7 +101,7 @@ Users & Auth —
 
 Kanban & Project Management —
   kanban_projects 🟢 — project containers
-  kanban_tasks 🟢 — board items. status: backlog/ready/wip/waiting/done. priority: high/medium/low. comments[], actionLog[], proposals[](agent-suggested changes: pending/approved/edited/vetoed)
+  kanban_tasks 🟢 — board items. status: captured/processed/icebox/declined (Tier 1, uncommitted) or ready/wip/waiting/blocked/review/done (Tier 2, committed). rank: ordinal priority. sizeClass: short/medium/long. comments[], actionLog[], proposals[](agent-suggested changes: pending/approved/edited/vetoed)
 
 Agent & Integration —
   agent_messages 🟢 — system→user. messageType: info/alert/request/approval/status_update/meeting_summary. status: pending/sent/delivered/read/actioned/failed

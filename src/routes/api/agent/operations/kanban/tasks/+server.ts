@@ -1,7 +1,7 @@
 import { json, error } from '@sveltejs/kit';
-import { connectDB, KanbanTask, KanbanProject, AuditLog } from '$lib/server/db';
-import { generateId } from '$lib/server/db/utils.js';
+import { connectDB, KanbanTask, KanbanProject } from '$lib/server/db';
 import { requireAgentApiKey } from '$lib/server/api-auth';
+import { createKanbanItem, TransitionError } from '$lib/server/kanban/transition';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -9,7 +9,9 @@ export const POST: RequestHandler = async ({ request }) => {
 	await connectDB();
 
 	const body = await request.json();
-	const { title, projectId, description, status, prioritized, taskLength, assignedTo, dueDate, source, sourceRef, tags, parentTaskId } = body;
+	// NOTE: body.status is deliberately ignored — every new item is captured
+	// (Tier 1). Entering Tier 2 happens only through replenishment (KB2-02).
+	const { title, projectId, description, assignedTo, dueDate, source, sourceRef, tags, parentTaskId, actor, board, origin, spawnedFrom, itemType, spike } = body;
 
 	if (!title?.trim()) throw error(400, 'title is required');
 	if (!projectId) throw error(400, 'projectId is required');
@@ -29,37 +31,31 @@ export const POST: RequestHandler = async ({ request }) => {
 		if (!parent) throw error(404, 'Parent task not found');
 	}
 
-	const taskId = generateId();
-	const now = new Date();
-	const taskStatus = status || 'backlog';
+	const actorName = typeof actor === 'string' && actor.trim() ? actor.trim() : 'agent';
 
-	const task = await KanbanTask.create({
-		_id: taskId,
-		title: title.trim(),
-		description: description || undefined,
-		status: taskStatus,
-		prioritized: prioritized === true,
-		taskLength: taskLength || 'medium',
-		project: { _id: project._id, name: project.name, color: project.color },
-		assignee,
-		dueDate: dueDate ? new Date(dueDate) : undefined,
-		source: source || 'agent',
-		sourceRef: sourceRef || undefined,
-		tags: tags || [],
-		parentTaskId: parentTaskId || undefined,
-		statusChangedAt: now,
-		createdBy: 'agent'
-	});
-
-	await AuditLog.create({
-		_id: generateId(),
-		tableName: 'kanban_tasks',
-		recordId: taskId,
-		action: 'INSERT',
-		newData: { title: title.trim(), status: taskStatus, projectId, source: source || 'agent' },
-		changedBy: 'agent',
-		changedAt: now
-	});
+	let task: any;
+	try {
+		task = await createKanbanItem({
+			title,
+			description: description || undefined,
+			board: board === 'software' ? 'software' : 'ops',
+			origin: origin === 'discovered' ? 'discovered' : 'planned',
+			spawnedFrom: spawnedFrom || undefined,
+			itemType: ['deliverable', 'spike', 'chore'].includes(itemType) ? itemType : undefined,
+			spike: spike || undefined,
+			project: { _id: project._id, name: project.name, color: project.color },
+			assignee,
+			dueDate: dueDate ? new Date(dueDate) : undefined,
+			source: source || 'agent',
+			sourceRef: sourceRef || undefined,
+			tags: tags || [],
+			parentTaskId: parentTaskId || undefined,
+			actor: { username: actorName, via: 'agent-api' }
+		});
+	} catch (e) {
+		if (e instanceof TransitionError) throw error(400, e.message);
+		throw e;
+	}
 
 	return json({
 		success: true,
@@ -67,7 +63,6 @@ export const POST: RequestHandler = async ({ request }) => {
 			id: task._id,
 			title: task.title,
 			status: task.status,
-			prioritized: task.prioritized ?? false,
 			projectId: project._id,
 			parentTaskId: parentTaskId || null,
 			createdAt: task.createdAt

@@ -63,7 +63,7 @@
 					<tr class="border-t border-[var(--color-tron-border)]/40">
 						<td class="py-1.5">
 							<a
-								href="/kanban/list?project={r.id}"
+								href="/kanban/inventory"
 								class="inline-flex items-center gap-2 hover:underline"
 								style="color: {r.color};"
 							>

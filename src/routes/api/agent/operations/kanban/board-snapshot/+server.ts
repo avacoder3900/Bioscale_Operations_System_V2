@@ -1,9 +1,11 @@
 import { json } from '@sveltejs/kit';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import { connectDB, KanbanTask, KanbanProject } from '$lib/server/db';
+import { legalStatusesFor } from '$lib/shared/kanban-status';
 import type { RequestHandler } from './$types';
 
-const COLUMNS = ['blocked', 'backlog', 'ready', 'wip', 'waiting', 'done'] as const;
+// All statuses legal on the ops board (i.e. everything except 'review').
+const COLUMNS = legalStatusesFor('ops');
 
 export const GET: RequestHandler = async ({ request }) => {
 	requireAgentApiKey(request);
@@ -12,8 +14,8 @@ export const GET: RequestHandler = async ({ request }) => {
 	const [projects, tasks] = await Promise.all([
 		KanbanProject.find({ isActive: true }).sort({ sortOrder: 1 }).lean(),
 		KanbanTask.find({ archived: { $ne: true } })
-			.select('_id title status prioritized assignee project dueDate tags sortOrder activityLog statusChangedAt')
-			.sort({ sortOrder: 1 })
+			.select('_id title status rank sizeClass assignee project dueDate tags activityLog statusChangedAt')
+			.sort({ rank: 1 })
 			.lean()
 	]);
 
@@ -28,13 +30,14 @@ export const GET: RequestHandler = async ({ request }) => {
 	}
 
 	for (const t of tasks as any[]) {
-		const status = t.status || 'backlog';
+		const status = t.status || 'captured';
 		if (!tasksByStatus[status]) tasksByStatus[status] = [];
 		tasksByStatus[status].push({
 			id: t._id,
 			title: t.title,
 			status: t.status,
-			prioritized: t.prioritized ?? false,
+			rank: t.rank ?? 0,
+			sizeClass: t.sizeClass ?? null,
 			assignee: t.assignee,
 			project: t.project,
 			dueDate: t.dueDate,

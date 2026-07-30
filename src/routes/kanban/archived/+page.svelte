@@ -2,6 +2,7 @@
 	import { enhance } from '$app/forms';
 	import TronButton from '$lib/components/ui/TronButton.svelte';
 	import TaskStatusBadge from '$lib/components/kanban/TaskStatusBadge.svelte';
+	import { ALL_STATUSES } from '$lib/shared/kanban-status';
 
 	let { data, form } = $props();
 
@@ -11,13 +12,9 @@
 	let sortColumn = $state<SortKey | null>(null);
 	let sortDirection = $state<SortDir>('asc');
 
-	const statusOrder: Record<string, number> = {
-		backlog: 0,
-		ready: 2,
-		wip: 3,
-		waiting: 4,
-		done: 5
-	};
+	const statusOrder: Record<string, number> = Object.fromEntries(
+		ALL_STATUSES.map((s, i) => [s, i])
+	);
 
 	let sortedTasks = $derived.by(() => {
 		if (!sortColumn) return data.tasks;
@@ -161,7 +158,7 @@
 								{task.assigneeName ?? '—'}
 							</td>
 							<td class="px-4 py-3">
-								<TaskStatusBadge status={task.status ?? 'backlog'} />
+								<TaskStatusBadge status={task.status ?? 'captured'} />
 							</td>
 							<td class="px-4 py-3" style="color: var(--color-tron-text-muted);">
 								{formatDate(task.statusChangedAt)}

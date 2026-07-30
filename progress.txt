@@ -1,4 +1,4 @@
-## Codebase Patterns
+﻿## Codebase Patterns
 
 ### Server File Pattern
 Every `+page.server.ts` follows:
@@ -5599,3 +5599,106 @@ Source: branch master @ commit 6f5c9a20 (rebased; tip pushed as 702a459c)
 Retrieve this exact code: git checkout master at commit 6f5c9a20
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: SPU reassembly inventory MCP tools (parts_lookup, spu_assembly_parts_map, record_reassembly_parts_usage) so Alejandro can test the reassembly→inventory flow via the Claude BIMS connector.
+
+================================================================================
+2026-07-30 — feat/kanban-two-tier — KB2 PRDs + KB2-01 foundation (two-tier kanban)
+================================================================================
+Workshopped the two-tier kanban refactor (Nicholas Cox draft spec + full code/data audit)
+with Jacob; decisions of record in docs/prds/KB2-00-OVERVIEW.md. Wrote all 11 PRDs
+(KB2-00..10: foundation, commitment point, processing/DoR, policy engine, flow metrics,
+views, spikes/discovered, software board w/ agent handoff briefs, MCP toolset v2,
+standing-work supply panel).
+
+Implemented KB2-01 foundation:
+- src/lib/shared/kanban-status.ts — single source of truth: 10 statuses
+  (captured/processed/icebox/declined | ready/wip/waiting/blocked/review/done), tier
+  derivation, board legality, STATUS_META, aging thresholds, date-field map.
+- src/lib/server/kanban/transition.ts — THE one door for status writes + creation:
+  tier-crossing rejection (commitment point), WIP limit on every path (closes the agent
+  bypass), blocked-needs-reason, waiting-needs-dependency+date, equal actor/via capture
+  for humans and Claude, transitions[]+activityLog+AuditLog in one place.
+- kanban-task model: board/rank/itemType/classOfService/sizeClass/origin/spawnedFrom/
+  committedAt/dor/spike/replenishment fields; prioritized/sortOrder/taskLength DELETED;
+  proposals subdoc gains details/suggestedActions (fixes silent drop).
+- Rewired ALL status write paths + ~25 vocabulary consumers (board, task detail, list,
+  archived, badges, cards, analytics, CFD/aging charts, agent endpoints, MCP tools,
+  ask-bims tier1 metadata). PriorityBadge + kanban-aging.ts deleted.
+- scripts/migrate-kanban-two-tier.ts — idempotent, dry-run-validated against prod
+  (54→captured incl. 2 rogue todo, 1 in_progress→wip; 407 defaults; 353 committedAt;
+  34 tier-2 global ranks; 53 tier-1 ranks across 8 projects). APPLY AFTER DEPLOY.
+npm run check: 11 errors — pre-existing baseline, zero in touched files.
+NOTE: tier-crossing buttons (captured→ready) now intentionally FAIL with
+TIER_CROSSING_FORBIDDEN until KB2-02 ships the replenish path. Do not deploy this branch
+to production until KB2-02 lands + migration runs.
+
+Also: one-off scripts/fix-spu-research-site-2026-07-30.ts (APPLIED to prod): research
+site = exactly UDIs 202,211,212,218,222,223,229,236,243,244,245,247,248,249,250,251
+(6 assigned, 4 strays cleared: 203,215,246,252) for research-app push-assay.
+
+================================================================================
+2026-07-31 — feat/kanban-two-tier — KB2-02 commitment point (replenish/demote/reorder + caps + pull window)
+================================================================================
+- NEW KanbanPolicy singleton model (_id 'default'): readyCap/minOrderPoint per board, WIP
+  limits, pullWindow, expedite, allocation, size-class definitions, SLE seeds. + policy.ts
+  loader (creates with seeds on first read).
+- NEW src/lib/server/kanban/replenish.ts: replenish() (the ONLY Tier1→Tier2 path — actor must
+  be an active user with kanban:replenish or admin:full, incl. when driving through Claude;
+  DoR floor = dor.outcome non-empty + software handoffBrief + spike fields; ready-cap
+  enforcement; per-batch replenishment event id; per-item rejected reasons), demote()
+  (reason required; wip must leave wip first), reorder() (strict 1..N re-rank, global ready
+  scope needs replenisher perm), replenishmentStatus() (candidates w/ DoR readiness, cap
+  gauge, WIP share by class).
+- NEW queue.ts: renumberReady + checkMinOrderPoint (below min → WorkflowViolation
+  'replenishment_needed', auto-resolves on recovery) — shared by transition + replenish
+  without circular imports.
+- transition.ts: pull-window enforcement (ready→wip only from top-N rank, expedite exempt,
+  PULL_WINDOW error) + auto renumber/min-order check when items leave ready.
+- kanban:replenish added to the permission catalog (admin/roles page).
+- 4 new agent endpoints: kanban/replenish, /demote, /reorder, /replenishment-status.
+- 4 new MCP tools: kanban_replenish, kanban_demote, kanban_reorder_queue,
+  kanban_replenishment_status (descriptions carry the method: never guess the actor,
+  humans commit, pull from the top). alerts endpoint surfaces replenishment_needed as
+  critical. docs/MCP-SERVER.md updated.
+npm run check: 11 errors — unchanged baseline, none in touched files.
+Branch still NOT deployable until migration runs post-deploy (see KB2-01 note). Next:
+KB2-03 processing flow, then KB2-06 views.
+
+================================================================================
+2026-07-31 — feat/kanban-two-tier — KB2-03..10 complete: the full two-tier system
+================================================================================
+Everything remaining in the KB2 PRD set, in one push:
+- KB2-03 processing: process.ts (processTask — sizeClass+classOfService set by the
+  processor; icebox/decline/thaw); replenish tightened to processed-only + full DoR
+  (outcome, acceptanceCriteria, sizing, fixed-date dueDate, software handoffBrief,
+  spike fields) with exact missing-field rejections.
+- KB2-04 policy engine: wip-limit.ts now reads KanbanPolicy (wipPerPerson=2 both boards,
+  wipChoreMax=1, expedite exempt); expedite systemMax + chore allocation ceiling enforced
+  at replenish; PATCH /kanban/policy endpoint (path-allowlisted, kanban:admin, audited);
+  /kanban/policy tuning UI page incl. StandingTarget CRUD.
+- KB2-05 flow metrics: flow-metrics.ts — Work Item Age vs SLE bands, flow-debt flags
+  (aged-while-overtaken), discovered ratio + fill suggestion, weekly throughput,
+  expedite-rate alert, flow efficiency; per-person aggregates impossible by construction
+  (documented in module header). GET /kanban/flow-metrics.
+- KB2-06 views: /kanban REPLACED with the flat global Queue (supply panel, WIP by
+  assignee w/ age bands, blocked/waiting w/ reasons, rank-badged ready w/ pull-window
+  glow, recent done, cap gauge, min-order banner, quick capture); /kanban/inventory
+  (Tier 1 mgmt: capture/process/rank/icebox/decline/DoR editing); /kanban/replenish (the
+  ceremony: candidates w/ DoR readiness, staging+ordering, commit w/ per-item results,
+  event history); /kanban/flow (no people anywhere); KanbanNav tabs + board switcher.
+  Drag-and-drop and /kanban/list DELETED (KanbanColumn/KanbanTaskCard/CreateTaskModal/
+  WipLimitModal retired). Stop-now test modal + close-spike modal on task detail.
+- KB2-07 spikes/discovered: closeSpike service+endpoint (outcome required, "still
+  unknown" valid, spawns captured/discovered options); discovered-work capture path.
+- KB2-08 software board: review status flows, handoffBrief DoR gate, sourceRef pr:/branch:
+  linkage editable via PATCH + tools; board switcher in all views.
+- KB2-09 MCP toolset v2 COMPLETE: kanban_capture (stop-now test in description; replaces
+  kanban_create_task), kanban_process, kanban_disposition, kanban_close_spike,
+  kanban_flow_metrics, kanban_get/set_policy, kanban_standing_status/set_standing_target
+  + the KB2-02 replenishment set. Full lifecycle drivable through Claude.
+- KB2-10 standing work: StandingTarget model + standing.ts (live actuals from
+  CartridgeRecord/PartDefinition, idempotent build-option spawn), GET/POST /kanban/standing,
+  daily-digest cron piggyback, supply panel on the Queue.
+npm run check: 11 errors — unchanged pre-existing baseline (r2/AskBims/assembly/parts),
+zero in any KB2 file.
+DEPLOY CHECKLIST unchanged (memory + KB2-00): deploy code → run migration APPLY=1 →
+grant kanban:replenish via roles UI → policy/standing docs auto-seed.

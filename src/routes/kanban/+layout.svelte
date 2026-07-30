@@ -2,6 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import { page } from '$app/stores';
 	import GridBackground from '$lib/components/ui/GridBackground.svelte';
+	import KanbanNav from '$lib/components/kanban/KanbanNav.svelte';
 
 	interface Props {
 		children: Snippet;
@@ -12,21 +13,12 @@
 
 	let { children, data }: Props = $props();
 
+	// Secondary destinations — the primary two-tier views live in KanbanNav below.
 	const navItems = [
-		{
-			href: '/kanban',
-			label: 'Board',
-			icon: 'M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7'
-		},
 		{
 			href: '/kanban/analytics',
 			label: 'Analytics',
 			icon: 'M3 3v18h18M7 17l4-4 4 4 6-6'
-		},
-		{
-			href: '/kanban/list',
-			label: 'List',
-			icon: 'M4 6h16M4 10h16M4 14h16M4 18h16'
 		},
 		{
 			href: '/kanban/projects',
@@ -103,6 +95,7 @@
 
 		<!-- Main Content -->
 		<main class="mx-auto max-w-[90rem] px-4 py-8 sm:px-6 lg:px-8">
+			<KanbanNav />
 			{@render children()}
 		</main>
 	</div>

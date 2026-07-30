@@ -8,7 +8,7 @@ const ALL_PERMISSIONS = [
 	{ group: 'admin', permissions: ['admin:full', 'admin:users'] },
 	{ group: 'user', permissions: ['user:read', 'user:write'] },
 	{ group: 'role', permissions: ['role:read', 'role:write'] },
-	{ group: 'kanban', permissions: ['kanban:read', 'kanban:write', 'kanban:admin'] },
+	{ group: 'kanban', permissions: ['kanban:read', 'kanban:write', 'kanban:replenish', 'kanban:admin'] },
 	{ group: 'spu', permissions: ['spu:read', 'spu:write', 'spu:admin'] },
 	{ group: 'document', permissions: ['document:read', 'document:write', 'document:approve', 'document:train'] },
 	{ group: 'inventory', permissions: ['inventory:read', 'inventory:write'] },

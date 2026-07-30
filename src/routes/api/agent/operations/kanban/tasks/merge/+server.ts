@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { connectDB, KanbanTask, AuditLog } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
 import { requireAgentApiKey } from '$lib/server/api-auth';
+import { transitionTask, TransitionError } from '$lib/server/kanban/transition';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -59,12 +60,28 @@ export const POST: RequestHandler = async ({ request }) => {
 		}
 	});
 
-	// Archive source task
+	// Close the source through the transition service (tier crossing allowed —
+	// a merged Tier 1 option is forced to done). The service records the
+	// transitions[] entry, status_change activity, and its own AuditLog row,
+	// so no manual status/transition writes happen here.
+	try {
+		await transitionTask({
+			taskId: sourceTaskId,
+			to: 'done',
+			actor: { username: 'agent', via: 'agent-api' },
+			reason: `merged into ${targetTaskId}`,
+			allowTierCrossing: true
+		});
+	} catch (e) {
+		if (e instanceof TransitionError) throw error(400, e.message);
+		throw e;
+	}
+
+	// Archive source task (archiving is not a status change)
 	await KanbanTask.findByIdAndUpdate(sourceTaskId, {
 		$set: {
 			archived: true,
-			archivedAt: now,
-			status: 'done'
+			archivedAt: now
 		},
 		$push: {
 			activityLog: {
@@ -77,13 +94,6 @@ export const POST: RequestHandler = async ({ request }) => {
 				},
 				createdAt: now,
 				createdBy: 'agent'
-			},
-			transitions: {
-				_id: generateId(),
-				fromStatus: source.status,
-				toStatus: 'done',
-				changedBy: 'agent',
-				timestamp: now
 			}
 		}
 	});

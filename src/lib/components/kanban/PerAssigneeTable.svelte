@@ -68,7 +68,7 @@
 								<span class="tron-text-muted">— Unassigned —</span>
 							{:else}
 								<a
-									href="/kanban/list?assignee={r.id}"
+									href="/kanban"
 									class="hover:underline"
 									style="color: var(--color-tron-cyan);"
 								>
