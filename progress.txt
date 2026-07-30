@@ -4821,3 +4821,93 @@ Deployment: robot daemon update (B07 + B14 + R04) — /data/ot2-bridge/ot2-bridg
 Source: scripts/ot2-bridge.py @ this commit
 Retrieve this exact code: scripts/ot2-bridge.py @ this commit
 What this deployment is for: Studio Calibrate-tip and fill probes contact the calibrator at the same height, eliminating the teach-vs-fill adjust bias.
+
+================================================================================
+2026-07-30 — fix/mag-test-run-time — magnetometer shows when the test RAN, not
+when the data was pulled
+================================================================================
+"Fetch Results" on /validation/magnetometer reads the magnet_validation Particle
+variable, which holds the output of a PREVIOUS run_test on the device. Both read
+paths (the readFromDevice action and the auto-poll endpoint) stamped the session
+with new Date() — the moment of the read — so a result measured weeks earlier was
+recorded and displayed as if it had just been taken.
+
+Not hypothetical. Across 431 magnetometer sessions in production, 153 are
+mislabelled by more than an hour. The worst shows 2026-06-11 for a test that
+actually ran 2025-10-06 — 248 days off. This is also the visible symptom of the
+stale-variable failure mode behind the SPU-203 investigation: a frozen variable
+looks like a fresh test precisely because BIMS dates it by the read.
+
+Root cause and the data we already had: the device reports its own run time. The
+payload's first line is the results filename the firmware wrote, e.g.
+  /validation/magnet-1784661523.txt
+and an older shape carries one too:
+  #003<TAB>1710268200
+The poll endpoint already regex'd that second form for its change-detection
+counter and threw the timestamp away. Nothing ever read the filename form, which
+is what 403 of 426 sessions actually use.
+
+New shared parser src/lib/server/magnetometer-time.ts handles both shapes,
+rejects an unset device clock (anything before 2020, which covers the 1970 and
+2001 epoch defaults) and anything meaningfully in the future, only scans the
+header so reading values can never be mistaken for an epoch, and returns null
+rather than guessing.
+
+Wiring:
+  * readFromDevice + the poll endpoint store testRanAt on the session (additive
+    field on ValidationSession) and return it. startedAt/completedAt keep their
+    existing meaning — when BIMS recorded this — so no existing field is silently
+    redefined. The SPU DHR validation.magnetometer block gets testRanAt alongside
+    its untouched completedAt for the same reason.
+  * The fetch results panel now leads with "Test run <time>", shows the read time
+    beneath it, and warns when the results were already stale on arrival.
+  * History and the [sessionId] detail page DERIVE the time from rawData whenever
+    testRanAt is absent. rawData is already stored on every document, so all 413
+    resolvable historical records display correctly with NO migration and without
+    mutating a single stored record. The detail page previously showed two
+    identical pull-time fields ("Started" and "Completed"); those become "Test
+    run" and "Recorded in BIMS".
+  * History CSV gains SPU and Test run columns.
+
+18 legacy sessions carry no timestamp at all (their payload starts straight in at
+"Channel A ... Channel B ... Channel C"). Those render as "unknown" with a tooltip
+explaining why. Deliberately NOT backfilled with the read time — substituting the
+read time is the exact bug being fixed, and a confidently wrong date is worse than
+an honest gap.
+
+Also fixed while in the file: the history page queried type 'magnetometer', but
+every magnetometer session is written with type 'mag'. It was matching 5 stray
+records out of 431, so that page has been showing almost nothing. Now matches
+both values.
+
+Verified against production with the real module via tsx (script deleted after):
+431 sessions examined, 413 resolved a run time (403 via the filename form, 10 via
+the counter form), 18 honestly unknown, 153 stale by more than an hour, and 0
+implausible timestamps accepted.
+
+Tests: 14 new unit tests — both formats, precedence when a payload has both, the
+legacy no-timestamp payload, unset and future clocks, second vs millisecond
+epochs, and a guard that epoch-looking numbers inside the readings table are never
+mistaken for a timestamp. This branch is off master, which does not have the
+test:unit script or config from the optical branch, so both were added here too.
+
+npm run check: 76 errors / 434 warnings — identical to the clean master baseline
+measured at this branch point (master has drifted up from the 46 recorded on
+older branches), zero in touched files.
+
+Files: src/lib/server/magnetometer-time.ts (new), magnetometer-time.test.ts (new),
+src/lib/server/db/models/validation-session.ts,
+src/routes/validation/magnetometer/+page.server.ts and +page.svelte,
+.../history/+page.server.ts and +page.svelte,
+.../[sessionId]/+page.server.ts and +page.svelte,
+src/routes/api/validation/magnetometer/poll/+server.ts, package.json,
+tests/vitest.unit.config.ts (new)
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-fix-mag-7db9fe-brevitest.vercel.app
+  (immutable alias: https://bioscale-operations-system-mongodb-lgwniznmg-brevitest.vercel.app)
+Source: branch fix/mag-test-run-time @ commit 35d1d792
+Retrieve this exact code: git checkout fix/mag-test-run-time at commit 35d1d792
+  (or: git log fix/mag-test-run-time --oneline to find it if the branch has moved on)
+What this deployment is for: confirming Fetch Results reports the device's own
+  test time rather than the poll time, that stale reads are called out, and that
+  magnetometer history is populated again.
