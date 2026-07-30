@@ -4972,3 +4972,71 @@ Deployment: robot daemon update (B07 + B14 + R04) — /data/ot2-bridge/ot2-bridg
 Source: scripts/ot2-bridge.py @ this commit
 Retrieve this exact code: scripts/ot2-bridge.py @ this commit
 What this deployment is for: Studio Calibrate-tip and fill probes contact the calibrator at the same height, eliminating the teach-vs-fill adjust bias.
+
+================================================================================
+2026-07-30 — feat/arm-pi-connection — Pi-side arm bring-up completed; preview rebuilt to pick up corrected ROBOT_ARM_BASE_URL
+================================================================================
+This deploy carries NO new BIMS code. Its only purpose was to produce a fresh preview
+build that reads the corrected `ROBOT_ARM_BASE_URL` Vercel env var (env changes are not
+applied to an existing build). Merged origin/master into the branch — 8f7a0171 (MCP
+path-embedded key route) and bc3734d1 (ot2-bridge attached-mode tip-cal z fix). The only
+conflict was progress.txt, where both sides had appended entries; resolved by keeping
+both, verbatim.
+
+Story S0 from the previous entry — the three Pi-side misconfigurations that were
+deliberately held for explicit approval — is now DONE, with the operator at the bench.
+Root causes, in the order they had to be peeled back:
+
+1. STALE systemd ENVIRONMENT. The robot-arm service on arm-pi had been running since
+   2026-07-22; .env had been corrected on 07-28 and 07-29. systemd reads
+   `EnvironmentFile=` only at process start, so both fixes were silently discarded and
+   the server kept insisting on ports .env no longer named. The three .env.bak-* files
+   on the Pi are the fossil record of the same fix being applied twice and lost twice.
+   Lesson: ALWAYS `systemctl restart robot-arm` after touching .env.
+
+2. FOLLOWER BUSLINKER HAD BEEN SWAPPED. The board physically on arm-pi reports USB
+   serial 5C4C126808, not the 5C4C128050 recorded in the PRD inventory, so udev never
+   created /dev/buslinker-follower and the server reported "follower not present" even
+   though it was plugged in. Updated `_KNOWN_ARM_SERIALS` (src/server/app.py) and
+   deploy/pi/udev/99-buslinker.rules together, per the standing rule in the robot-arm
+   CLAUDE.md. Stale 5C4C128050 references remain in that repo's
+   docs/PRD_BIMS_robot_arm.md and docs/pi-deployment.md.
+
+3. BUG IN THE PREFLIGHT CHECK ITSELF. `_diagnose_ports`, `port_status` and `preflight`
+   all tested `cfg in present_devices`, but serial.tools.list_ports.comports()
+   enumerates real device nodes only. The udev symlinks we deliberately configure
+   (/dev/buslinker-leader, /dev/buslinker-follower) are perfectly openable but never
+   appear in that enumeration — so a CORRECTLY configured Pi reported both ports
+   missing. Worse, the generated diagnosis then advised reverting to
+   order-of-enumeration ttyACM* names, contradicting docs/pi-deployment.md, which is
+   the likely cause of the repeated .env flip-flopping. Fixed with `_port_present()`,
+   which realpath-resolves before comparing. Committed to the robot-arm repo (NOT this
+   one) as d418071 on branch robot-arm-pi-integration; arm-pi pulled to the same commit.
+
+arm-pi now reports /health/preflight ok:true with both ports green and an empty
+diagnosis. DRY_RUN was flipped to false with the operator at the bench, so the arms are
+LIVE — the next /teleop/start, /record/start or /replay/start moves real hardware.
+
+Access note for future sessions: `brevitest3` sudo on arm-pi requires a password that
+we do not have, but `ssh root@arm-pi` authenticates by key straight to uid 0. Use that
+for privileged ops. No reflash is ever needed for this.
+
+Caveat NOT closed by this work: every reachability check so far was over the tailnet
+(source 100.104.29.116). Tailscale Funnel is enabled and correctly proxies
+/ -> 127.0.0.1:8000, but no request has yet reached the Pi from the public internet.
+Funnel traffic arrives at the app as 127.0.0.1, so the first 127.0.0.1 line in
+`journalctl -u robot-arm` will be the first hard proof the Vercel->Pi path works.
+
+`npm run check`: 40 errors / 434 warnings (baseline ~46, so at or below it). All 40 are
+in master-owned files — 28 in src/lib/server/mcp/bims-mcp.ts, 8 in
+src/routes/assembly/[sessionId]/+page.svelte, and the rest in api/mcp and r2.ts. Zero
+in robot-arm code; this branch's only edit was progress.txt.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ar-2c5b1f-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-it6r1rzab-brevitest.vercel.app)
+Source: branch feat/arm-pi-connection @ commit e0c442f2
+Retrieve this exact code: git checkout feat/arm-pi-connection at commit e0c442f2
+  (or: git log feat/arm-pi-connection --oneline to find it if the branch has moved on)
+What this deployment is for: a rebuilt preview that picks up the corrected
+ROBOT_ARM_BASE_URL (https://arm-pi.tailf65a70.ts.net) so the ARM-01 connection panel can
+reach the now-healthy Pi.
