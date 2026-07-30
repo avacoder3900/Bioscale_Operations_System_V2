@@ -24,6 +24,23 @@
 		if (!date) return '—';
 		return new Date(date).toLocaleString();
 	}
+
+	/** "3 minutes", "2 days" — how long before the pull the test actually ran. */
+	function humanAge(seconds: number | null): string {
+		if (seconds == null) return '';
+		if (seconds < 90) return `${seconds}s`;
+		const m = Math.round(seconds / 60);
+		if (m < 90) return `${m} min`;
+		const h = Math.round(m / 60);
+		if (h < 48) return `${h} hr`;
+		return `${Math.round(h / 24)} days`;
+	}
+
+	// The magnet_validation variable holds the result of a PREVIOUS run_test, so a
+	// fetch can return data measured long ago. Anything older than an hour is worth
+	// calling out — in production 153 of 413 stored sessions were more than an hour
+	// stale, the worst by 248 days.
+	const STALE_AFTER = 3600;
 </script>
 
 <div class="space-y-6">
@@ -77,10 +94,32 @@
 			<!-- Inline Results -->
 			{#if form?.success && form?.magResults}
 				<div class="rounded-lg border p-4 space-y-4" style="border-color: {form.overallPassed ? 'var(--color-tron-green)' : 'var(--color-tron-red)'}; background: {form.overallPassed ? 'rgba(0,255,100,0.05)' : 'rgba(255,0,0,0.05)'};">
-					<div class="flex items-center justify-between">
+					<div class="flex items-start justify-between">
 						<div>
 							<span class="tron-text-primary font-bold">{form.spuUdi}</span>
-							<span class="tron-text-muted text-xs ml-2">{formatDate(form.completedAt)}</span>
+							<!-- When the test RAN, per the device — not when we read it. -->
+							{#if form.testRanAt}
+								<span class="tron-text-muted text-xs ml-2">
+									Test run {formatDate(form.testRanAt)}
+								</span>
+							{:else}
+								<span
+									class="tron-text-muted text-xs ml-2"
+									title="This device's payload carries no timestamp (legacy format), so the time the test ran is genuinely unknown. It is deliberately not filled in with the time the data was read."
+								>
+									Test run time unknown
+								</span>
+							{/if}
+							<div class="tron-text-muted text-xs mt-1 opacity-70">
+								Data read from device {formatDate(form.pulledAt ?? form.completedAt)}
+							</div>
+							{#if form.pullDelaySeconds != null && form.pullDelaySeconds > STALE_AFTER}
+								<div class="text-xs mt-1" style="color: var(--color-tron-orange);">
+									⚠️ These results were already {humanAge(form.pullDelaySeconds)} old when read — the
+									device was still holding an earlier test. Re-run the test on the SPU if you
+									expected fresh data.
+								</div>
+							{/if}
 						</div>
 						{#if form.overallPassed}
 							<span class="rounded-full px-3 py-1 text-sm font-bold" style="color: var(--color-tron-green); background: rgba(0,255,100,0.15);">PASS</span>
