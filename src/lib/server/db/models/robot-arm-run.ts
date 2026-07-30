@@ -19,7 +19,10 @@ const robotArmRunSchema = new Schema(
 		runId: { type: String, required: true, unique: true, index: true },
 		type: {
 			type: String,
-			enum: ['teleop', 'record', 'replay', 'calibrate'],
+			// 'task' = a named protocol from the Pi's tasks.yaml registry, started
+			// via POST /tasks/{name}/run. Added by ARM-01; enum widening only, so
+			// existing runs are unaffected.
+			enum: ['teleop', 'record', 'replay', 'calibrate', 'task'],
 			required: true
 		},
 		status: {

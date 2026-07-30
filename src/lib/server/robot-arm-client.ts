@@ -159,6 +159,52 @@ export interface PortStatus {
 	diagnosis?: string;
 }
 
+// GET /health/preflight — the Pi's own readiness assessment. Every check
+// carries a human-readable `detail`; `diagnosis` names the concrete fix when
+// a port is misconfigured. We render both verbatim rather than re-deriving
+// them in TypeScript, so the two can't drift.
+export interface PreflightCheck {
+	ok: boolean;
+	detail: string;
+	configured?: string;
+	value?: boolean;
+}
+
+export interface ArmPreflight {
+	ok: boolean;
+	service: string;
+	version: string;
+	checks: {
+		fastapi?: PreflightCheck;
+		api_key_configured?: PreflightCheck;
+		leader_port?: PreflightCheck;
+		follower_port?: PreflightCheck;
+		// dry_run.ok is always true — dry-run vs live is a config choice, not a
+		// fault. The state we care about is `value`.
+		dry_run?: PreflightCheck;
+	};
+	candidates?: PortCandidate[];
+	diagnosis?: string;
+	active: { run_id: string; kind: string } | null;
+}
+
+// GET /tasks — the registry parsed from the Pi's src/config/tasks.yaml.
+export interface ArmTask {
+	name: string;
+	version?: string;
+	module?: string;
+	class?: string;
+	description?: string;
+}
+
+// POST /tasks/{name}/run
+export interface ArmTaskStarted {
+	run_id: string;
+	status: string;
+	task_name: string;
+	lot_id: string | null;
+}
+
 export interface SyncZeroRecord {
 	version: string;
 	captured_at: string;
@@ -234,6 +280,25 @@ export const robotArm = {
 		}),
 	listRecordings: () => robotArmFetch<{ recordings: RecordingMeta[] }>('/recordings'),
 	health: () => robotArmFetch<{ status: string; service: string; version: string }>('/health'),
+
+	// Connection health for the ARM-01 panel. Enumerating serial ports is
+	// slower than a bare /health, so give it more room than the 5s default
+	// without going all the way to the 15s used for calibration.
+	preflight: () => robotArmFetch<ArmPreflight>('/health/preflight', { timeoutMs: 8000 }),
+
+	listTasks: () => robotArmFetch<{ tasks: ArmTask[] }>('/tasks'),
+
+	// Task startup does hardware preflight on the Pi before returning, so it
+	// gets the same 15s allowance as the calibration calls above.
+	startTask: (
+		name: string,
+		body: { lot_id?: string | null; triggered_by?: TriggeredBy; auto_confirm?: boolean } = {}
+	) =>
+		robotArmFetch<ArmTaskStarted>(`/tasks/${encodeURIComponent(name)}/run`, {
+			method: 'POST',
+			body,
+			timeoutMs: 15000
+		}),
 
 	getCalibration: (opts: { live?: boolean } = {}) =>
 		robotArmFetch<CalibrationStatus>(

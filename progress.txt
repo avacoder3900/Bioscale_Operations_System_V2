@@ -4797,6 +4797,157 @@ leaks secret lengths to any user; deactivated-user session bug now CLOSED), data
 guards a nonexistent field, .save() bypasses sacred/immutable middleware), API inventory
 (183 endpoints, zero fully-unauthenticated; spoofable vercel-cron UA fallback when
 CRON_SECRET unset), code health (1,518 `as any`; 84 contract tests vs 185 endpoints).
+
+================================================================================
+2026-07-28 — NEWDEV — robot arm UI 404 fixed; arm routes co-located under cart-mfg
+================================================================================
+Selecting "Robot Arm" in the cart-mfg sidebar 404'd. Root cause was a half-finished
+route migration: the sidebar (and the rest of the app) had moved to
+/manufacturing/cart-mfg/robot-arm, and the bare landing +page.svelte there had been
+deleted in favour of a control/ subroute, but jog/ and calibrate/ were still sitting
+at the old top-level /manufacturing/robot-arm/ path. So the nav target resolved to a
+redirect-only route whose siblings didn't exist where anything linked to them.
+
+Moved jog/ and calibrate/ (+page.svelte and +page.server.ts each) into
+src/routes/manufacturing/cart-mfg/robot-arm/ via git mv, then fixed every internal
+link that still pointed at the old path. Pointed the sidebar "Robot Arm" entry
+directly at control/ rather than the bare path, so the 302 hop is skipped and the
+active-state highlight (startsWith) actually matches. Added sidebar entries for Arm
+Jog, Arm Runs and Arm Calib — the runs list had no entry point at all and was only
+reachable by deep link after a run started. control/'s back-link pointed at its own
+redirect (a self-loop); it now goes to the cart-mfg hub. Corrected the stale restore
+hint in robot-arm/+page.server.ts, which named a path that no longer exists.
+
+The bare /robot-arm route is deliberately kept as a 302 to control/ so old bookmarks
+still land somewhere.
+
+Not yet verified against hardware: ROBOT_ARM_BASE_URL / ROBOT_ARM_API_KEY still need
+to point at the Pi for the control, jog and calibrate actions to do anything. This
+commit only makes the pages reachable and render.
+
+Files touched: src/routes/manufacturing/cart-mfg/+layout.svelte,
+cart-mfg/robot-arm/+page.server.ts, cart-mfg/robot-arm/control/+page.svelte,
+and the moved cart-mfg/robot-arm/{jog,calibrate}/{+page.svelte,+page.server.ts}.
+
+npm run check: 46 errors / 434 warnings — unchanged from the pre-existing baseline;
+zero errors in the robot-arm routes or the cart-mfg layout.
+Commit: ba2c37f8 on branch NEWDEV.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-newdev-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-doi2uhkk2-brevitest.vercel.app)
+Source: branch NEWDEV @ commit 9726af4a (code change is ba2c37f8; 9726af4a adds this log)
+Retrieve this exact code: git checkout NEWDEV at commit 9726af4a
+  (or: git log NEWDEV --oneline to find it if the branch has since moved on)
+What this deployment is for: verifying the Robot Arm sidebar entry no longer 404s and
+that control/, jog/, calibrate/ and runs/ all render under /manufacturing/cart-mfg/robot-arm.
+Build status: success (both Vercel scopes). Preview is cookie-session gated — it 302s to
+/login, so the routes need a real login to confirm end to end; the arm itself will not
+respond until ROBOT_ARM_BASE_URL / ROBOT_ARM_API_KEY point at the Pi.
+
+================================================================================
+2026-07-29 — feat/arm-pi-connection — ARM-01: arm connection health + task runner
+================================================================================
+Wrote docs/prds/ARM-01-pi-connection-and-task-control.md and implemented stories
+S1-S5, S7 and S8 against it. The PRD was grounded by probing the live arm-pi
+rather than by reading the schema, which changed what the work turned out to be.
+
+Key finding: the BIMS -> Pi path already worked. arm-pi is on the tailnet and
+Tailscale Funnel is up, so https://arm-pi.tailf65a70.ts.net/health answers 200
+from the public internet, auth is enforced (401 without x-api-key, 200 with),
+and GET /tasks lists two registered tasks. So this was never a networking
+problem: robot-arm-client.ts wrapped 17 Pi endpoints and none of them were the
+task endpoints, so running a task was reachable by curl and unreachable from the
+product. That gap is what S1/S5 close.
+
+Three live misconfigurations were found on the Pi and are NOT fixed by this
+commit (they are ops work, story S0, deliberately left for explicit approval
+because restarting the service has a physical-motion consequence):
+  1. Local .env pointed ROBOT_ARM_BASE_URL at arm-pi:8001, which is a stray
+     hand-started uvicorn, not the systemd service on :8000 that the Funnel
+     proxies. Two servers, one serial bus.
+  2. The Pi's ~/robot-arm/.env says DRY_RUN=false and LEADER_PORT=/dev/ttyACM1,
+     but the running service still reports DRY_RUN=true and the old
+     /dev/buslinker-* paths — the .env was corrected and the service was never
+     restarted. The only thing holding the arm in dry-run is an un-restarted
+     process; a reboot arms live motion.
+  3. Pi BIMS_WEBHOOK_URL points at a dev workstation's tailnet IP on a Vite
+     port, so production BIMS receives no arm events at all.
+
+What was built:
+- robot-arm-client.ts: added preflight() (8s), listTasks(), startTask() (15s,
+  matching the existing allowance for the slow calibration calls), plus
+  ArmPreflight / ArmTask / ArmTaskStarted types.
+- robot-arm-lock.ts (new): deriveArmHolder(). The "who holds the arm" lock is
+  DERIVED, not stored — the arm is held iff a RobotArmRun exists in a
+  non-terminal state, and the holder is that run's existing triggeredBy. No
+  schema change, no new collection, no write path, covered by the existing
+  {status, createdAt:-1} index. A stored currentOperator field would be a second
+  source of truth that can drift; capture_stations.currentOperator is the
+  cautionary tale in this repo (no expiry, cleared by hand). A derived lock
+  cannot strand the arm, because the terminal webhook event that finalizes the
+  run IS the release.
+- robot-arm-run.ts: widened the type enum with 'task' (additive only). The
+  webhook was already receiving task.* events and filing them as 'teleop' with a
+  "treated as teleop for now" comment; it now infers 'task' correctly. Added to
+  the runs/ filter whitelist.
+- control/+page.server.ts: safePreflight()/safeTasks() folded into the existing
+  Promise.all, plus a startTask action and a stop action that now audit-logs
+  both holder and stopper.
+- RobotArmConnectionPanel.svelte (new): renders the Pi's own preflight verdict
+  and its `diagnosis` string verbatim rather than re-deriving the logic in
+  TypeScript, so the two cannot drift. Four states (ok / degraded / unreachable
+  / LIVE MOTION), with the configured base URL shown alongside failures.
+- RobotArmControlBar.svelte (new): holder + elapsed time + an always-live Stop,
+  sticky to the viewport bottom on phones. Stop is enabled regardless of who
+  holds the arm — a stop that respects the lock is a stop that fails when you
+  need it most — with a confirm when overriding someone else's run.
+- Responsive pass on the control page: 44x44px touch targets, stacked layout
+  under sm. The arm pages had 1 responsive utility class between all four.
+
+Safety gate: the build is accepted against DRY_RUN only. startTask re-reads the
+Pi's dry_run at submit time rather than trusting what the page rendered, since
+the service could have been restarted since load, and refuses to start if it is
+not true. The UI disables Start for the same reason.
+
+npm run check: 10 errors / 434 warnings, zero in any ARM-01 file. (The 46-error
+baseline recorded at ba2c37f8 has since drifted down; the remaining errors are
+in r2.ts, AskBimsWidget and assembly/[sessionId], none touched here.)
+
+Deployment: preview — https://bioscale-operations-system-mongodb-9ootzb0ob-brevitest.vercel.app
+  (immutable, SSO-gated: https://bioscale-operations-system-mongodb-cuv6pauky.vercel.app)
+Source: branch feat/arm-pi-connection @ commit b814ef9e
+Retrieve this exact code: git checkout feat/arm-pi-connection at commit b814ef9e
+  (or: git log feat/arm-pi-connection --oneline to find it if the branch has since moved on)
+What this deployment is for: verifying the ARM-01 connection panel, the task runner,
+and the derived holder/stop control bar on the Robot Arm tab.
+Build status: success on both Vercel scopes (~120s; the usual spurious 'failure' did
+not appear this time).
+
+Deployment test results:
+- Preview is live and cookie-session gated: /manufacturing/cart-mfg/robot-arm/control
+  302s to /login on the brevitest-scope alias. The immutable *.vercel.app URL is
+  additionally behind Vercel SSO, so use the -brevitest alias above.
+- Inbound webhook path VERIFIED against the deployment: POST /api/robot-arm/webhook
+  returns 401 with no key, 401 with a wrong key, and 400 "run_id and event.type
+  required" with the real AGENT_API_KEY. So AGENT_API_KEY is correctly configured on
+  Vercel and matches the value the Pi would send. An empty payload was used
+  deliberately so auth was exercised without writing a junk RobotArmRun.
+- ROBOT_ARM_BASE_URL and ROBOT_ARM_API_KEY DO exist on Vercel (Production + Preview)
+  but were last set 83 days ago, which predates the move to the arm-pi host. Their
+  values could not be read: both are marked Sensitive, so 'vercel env pull' returns
+  them blank (same behaviour already documented for STATION_AGENT_KEY). AGENT_API_KEY
+  and MONGODB_URI pull fine, which is how the blank was confirmed to be sensitivity
+  rather than an empty value.
+- NOT yet verified: the outbound BIMS -> Pi direction from the deployment, and the UI
+  itself. Both need a real login, which cannot be done from here. The 83-day-old
+  ROBOT_ARM_BASE_URL most likely still points at the retired alejandros-pc Funnel URL
+  rather than https://arm-pi.tailf65a70.ts.net — if so the connection panel will render
+  its 'unreachable' state, which is itself a valid first read of the panel.
+
+Still outstanding (story S0, deliberately not done in this commit): the three Pi-side
+misconfigurations listed in the entry above. Restarting the robot-arm service has a
+physical-motion consequence (the Pi's .env says DRY_RUN=false), so that work is held
+for explicit approval rather than bundled into a deploy.
 =======
 2026-07-30 — master — Operator was right: Studio tip-cal probed at the WRONG HEIGHT (38.5 park vs the fill's 40.8) — fixed fleet-wide
 ================================================================================
@@ -4911,6 +5062,168 @@ Retrieve this exact code: git checkout fix/mag-test-run-time at commit 35d1d792
 What this deployment is for: confirming Fetch Results reports the device's own
   test time rather than the poll time, that stale reads are called out, and that
   magnetometer history is populated again.
+2026-07-30 — feat/arm-pi-connection — Pi-side arm bring-up completed; preview rebuilt to pick up corrected ROBOT_ARM_BASE_URL
+================================================================================
+This deploy carries NO new BIMS code. Its only purpose was to produce a fresh preview
+build that reads the corrected `ROBOT_ARM_BASE_URL` Vercel env var (env changes are not
+applied to an existing build). Merged origin/master into the branch — 8f7a0171 (MCP
+path-embedded key route) and bc3734d1 (ot2-bridge attached-mode tip-cal z fix). The only
+conflict was progress.txt, where both sides had appended entries; resolved by keeping
+both, verbatim.
+
+Story S0 from the previous entry — the three Pi-side misconfigurations that were
+deliberately held for explicit approval — is now DONE, with the operator at the bench.
+Root causes, in the order they had to be peeled back:
+
+1. STALE systemd ENVIRONMENT. The robot-arm service on arm-pi had been running since
+   2026-07-22; .env had been corrected on 07-28 and 07-29. systemd reads
+   `EnvironmentFile=` only at process start, so both fixes were silently discarded and
+   the server kept insisting on ports .env no longer named. The three .env.bak-* files
+   on the Pi are the fossil record of the same fix being applied twice and lost twice.
+   Lesson: ALWAYS `systemctl restart robot-arm` after touching .env.
+
+2. FOLLOWER BUSLINKER HAD BEEN SWAPPED. The board physically on arm-pi reports USB
+   serial 5C4C126808, not the 5C4C128050 recorded in the PRD inventory, so udev never
+   created /dev/buslinker-follower and the server reported "follower not present" even
+   though it was plugged in. Updated `_KNOWN_ARM_SERIALS` (src/server/app.py) and
+   deploy/pi/udev/99-buslinker.rules together, per the standing rule in the robot-arm
+   CLAUDE.md. Stale 5C4C128050 references remain in that repo's
+   docs/PRD_BIMS_robot_arm.md and docs/pi-deployment.md.
+
+3. BUG IN THE PREFLIGHT CHECK ITSELF. `_diagnose_ports`, `port_status` and `preflight`
+   all tested `cfg in present_devices`, but serial.tools.list_ports.comports()
+   enumerates real device nodes only. The udev symlinks we deliberately configure
+   (/dev/buslinker-leader, /dev/buslinker-follower) are perfectly openable but never
+   appear in that enumeration — so a CORRECTLY configured Pi reported both ports
+   missing. Worse, the generated diagnosis then advised reverting to
+   order-of-enumeration ttyACM* names, contradicting docs/pi-deployment.md, which is
+   the likely cause of the repeated .env flip-flopping. Fixed with `_port_present()`,
+   which realpath-resolves before comparing. Committed to the robot-arm repo (NOT this
+   one) as d418071 on branch robot-arm-pi-integration; arm-pi pulled to the same commit.
+
+arm-pi now reports /health/preflight ok:true with both ports green and an empty
+diagnosis. DRY_RUN was flipped to false with the operator at the bench, so the arms are
+LIVE — the next /teleop/start, /record/start or /replay/start moves real hardware.
+
+Access note for future sessions: `brevitest3` sudo on arm-pi requires a password that
+we do not have, but `ssh root@arm-pi` authenticates by key straight to uid 0. Use that
+for privileged ops. No reflash is ever needed for this.
+
+Caveat NOT closed by this work: every reachability check so far was over the tailnet
+(source 100.104.29.116). Tailscale Funnel is enabled and correctly proxies
+/ -> 127.0.0.1:8000, but no request has yet reached the Pi from the public internet.
+Funnel traffic arrives at the app as 127.0.0.1, so the first 127.0.0.1 line in
+`journalctl -u robot-arm` will be the first hard proof the Vercel->Pi path works.
+
+`npm run check`: 40 errors / 434 warnings (baseline ~46, so at or below it). All 40 are
+in master-owned files — 28 in src/lib/server/mcp/bims-mcp.ts, 8 in
+src/routes/assembly/[sessionId]/+page.svelte, and the rest in api/mcp and r2.ts. Zero
+in robot-arm code; this branch's only edit was progress.txt.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ar-2c5b1f-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-it6r1rzab-brevitest.vercel.app)
+Source: branch feat/arm-pi-connection @ commit e0c442f2
+Retrieve this exact code: git checkout feat/arm-pi-connection at commit e0c442f2
+  (or: git log feat/arm-pi-connection --oneline to find it if the branch has moved on)
+What this deployment is for: a rebuilt preview that picks up the corrected
+ROBOT_ARM_BASE_URL (https://arm-pi.tailf65a70.ts.net) so the ARM-01 connection panel can
+reach the now-healthy Pi.
+
+================================================================================
+2026-07-30 — feat/arm-pi-connection — arm control page: controls-first layout, merged session bar, persisted connection log
+================================================================================
+Follow-up to the arm bring-up earlier today. With the arm actually usable, the control
+page's layout became the bottleneck — it had grown by accretion during ARM-01 and buried
+the three controls an operator actually uses.
+
+LAYOUT. Teleop / Record / Replay moved to the top; RUN TASK sits below them. Arm connection
+became a sticky right-hand side panel at lg+ so health stays visible while working, with a
+one-line compact variant under the title on narrow screens. Both variants are driven by the
+same derived state inside RobotArmConnectionPanel (a new `variant` prop) rather than
+duplicated markup, so they cannot drift apart. Root width went max-w-5xl -> max-w-7xl to fit
+the second column, and the page's own p-4 was dropped since cart-mfg/+layout.svelte already
+applies p-4 lg:p-6 (it was doubled).
+
+MERGED SESSION UI. The page carried TWO active-session displays that could contradict each
+other: RobotArmControlBar, and an inline banner at +page.svelte:140-172 whose stop form had
+no confirm and no use:enhance. The banner is deleted. RobotArmControlBar absorbed its states
+and is now the single indicator, sitting directly above the controls it governs.
+
+The subtle part: `active` (live from the Pi) and `holder` (derived from Mongo
+robot_arm_runs via deriveArmHolder) are different sources that CAN disagree — a run whose
+terminal webhook never landed leaves a holder row set forever while the Pi reports nothing
+running. That is exactly the 70-day STALE row seen this morning. Precedence is now explicit:
+the Pi is authoritative for WHETHER something is running, Mongo for WHO and SINCE WHEN. The
+orphaned case renders STALE and states out loud that it blocks Run Task, so a ghost row
+explains itself rather than being a mystery.
+
+Two long-standing bugs in that component, both fixed:
+  - elapsed() had no hour/day rollover, so a 70-day run rendered "101939m 3s". Now "70d 8h".
+  - currentUserId was accepted as a prop but never used — because the component's LOCAL
+    Holder interface omitted userId (ArmHolder in robot-arm-lock.ts:33 has it), which made
+    the comparison un-writable against the declared type. The prop was not vestigial, the
+    type was incomplete. Wired up per ARM-01 §8.4: Stop no longer prompts you to confirm
+    stopping your own run, only someone else's.
+
+CONNECTION LOG. Reuses the existing immutable DeviceEvent collection (30-day TTL) — no new
+model, no schema change. Recorded from the BIMS side rather than pushed by the Pi, because
+the event that matters most — "BIMS cannot reach the arm" — is only observable from here.
+
+Writes on state change, plus an hourly floor while steady. The heartbeat is deliberately
+coarse: /devices/+page.server.ts:19 renders DeviceEvent.find() UNFILTERED with limit(100),
+so a 60s arm heartbeat (~1440 rows/day) would have buried an unrelated page. A 30s dedupe on
+changes absorbs Refresh-button mashing and instantaneous flapping.
+
+device_events carries applyImmutableMiddleware, which blocks updateOne/findOneAndUpdate — so
+no atomic upsert throttle is available and the read-then-write is unavoidably racy across
+concurrent tabs. Accepted deliberately: worst case is two adjacent same-state rows a few ms
+apart in an append-only TTL'd telemetry log that nothing reads for correctness.
+
+"Last connected" folds in the observation from the current request rather than reading the
+newest success row. Reading the row directly would report an hour-old timestamp next to a
+green ONLINE dot, since a steady arm only writes hourly. When down, it falls back to a wider
+query rather than claiming the arm has never connected.
+
+RUN TASK GATE. Kept exactly as-is — it is the UI half of a server-side re-check in startTask
+(+page.server.ts:174-184) that is the real enforcement, and DRY_RUN=false currently blocks
+it by design (ARM-01 §7.4). Only the message improved: it now names the reason and the exact
+fix (set DRY_RUN=true in ~/robot-arm/.env, restart robot-arm), and the already-running case
+points at the session bar.
+
+HOUSEKEEPING. safeActive() normalized to {active, activeError} matching safePreflight(),
+which deleted the hand-written isActive/isError union guards the page carried.
+
+KNOWN TRADEOFF: RobotArmControlBar keeps sticky bottom-0 for phone thumb-reach, but sticky
+only pins while the element's own flow position is on screen — moving it down to sit with
+the controls means it pins across less of the scroll range than before. Judged worth it
+since it now sits directly above the Start buttons, but it is a partial regression against
+ARM-01 §8.4's "always one thumb-reach away".
+
+NOT DONE, flagged for a separate commit: all four robot-arm AuditLog writes
+(control/+page.server.ts:208,242 and calibrate/+page.server.ts:57,83) use field names that
+do not exist in the AuditLog schema — resourceType, resourceId, userId, username, timestamp,
+details. Mongoose strict mode silently drops them, so those audit rows land with NO
+attribution at all, just _id/action/changedAt. Real bug, ~4-line fix, but not a UI change.
+
+Also noted but not acted on: device_events has exactly one index (the TTL on createdAt), so
+the connection-log read filters on an unindexed deviceId and reverse-scans the TTL index.
+Bounded by the 30-day TTL and fine at current volume; if device_events grows past ~100k docs
+add { deviceId: 1, createdAt: -1 }. That is a shared-model change affecting every
+device_events writer, so it wants its own review.
+
+`npm run check`: 40 errors / 434 warnings — IDENTICAL to the pre-change baseline (40), and
+zero errors and zero warnings in the four touched files.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ar-2c5b1f-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-duzxteid7-brevitest.vercel.app)
+Source: branch feat/arm-pi-connection @ commit 33a0603e
+Retrieve this exact code: git checkout feat/arm-pi-connection at commit 33a0603e
+  (or: git log feat/arm-pi-connection --oneline to find it if the branch has moved on)
+What this deployment is for: the reorganized arm control page — controls first, connection
+health as a persistent side panel, one merged session indicator, and connection history at
+the bottom.
+
+================================================================================
 2026-07-30 — feat/box-inventory-disconnect — disconnect Box as inventory source
 ================================================================================
 Box no longer supplies parts inventory. PartDefinition becomes BIMS-owned master
@@ -4949,3 +5262,15 @@ possible: master restructured routes in 7c01942b ("remove /spu URL prefix"), so
 the source branch's src/routes/spu/parts/ has no counterpart on master and git's
 rename detection mis-targeted the committed OneDrive clone at
 "OneDrive - Linbeck Group, LLC/Documents/GitHub/Bioscale_Operations_System_V2-dev/".
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit d33f3f4e
+Retrieve this exact code: git checkout master at commit d33f3f4e
+  (full sha d33f3f4e6ac1cd8a0239112fa7c7ec151978e4d6 — merge of PR #37 from feat/box-inventory-disconnect @ a5d5c5ff)
+What this deployment is for: Box is no longer the inventory source for parts — the
+  sync that wiped and re-imported part_definitions on every run is removed, so
+  inventory counts are now BIMS-owned and survive. Box file storage (documents
+  browser, /api/box/upload, receiving CoC uploads) is unaffected by this deploy.
+Verified post-deploy: Vercel success on both projects; production /login HTTP 200;
+  master's src/routes/parts/+page.server.ts has zero box-sync references and
+  src/lib/server/box-sync.ts is absent while src/lib/server/box.ts remains.
