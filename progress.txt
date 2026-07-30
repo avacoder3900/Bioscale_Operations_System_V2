@@ -5134,6 +5134,8 @@ Retrieve this exact code: git checkout feat/arm-pi-connection at commit 33a0603e
 What this deployment is for: the reorganized arm control page — controls first, connection
 health as a persistent side panel, one merged session indicator, and connection history at
 the bottom.
+
+================================================================================
 2026-07-30 — feat/box-inventory-disconnect — disconnect Box as inventory source
 ================================================================================
 Box no longer supplies parts inventory. PartDefinition becomes BIMS-owned master
