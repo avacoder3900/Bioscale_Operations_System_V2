@@ -3,6 +3,8 @@ import { connectDB, KanbanTask, KanbanProject, AuditLog, User } from '$lib/serve
 import { generateId } from '$lib/server/db/utils.js';
 import { requirePermission } from '$lib/server/permissions';
 import { checkWipLimit } from '$lib/server/kanban/wip-limit';
+import { transitionTask, TransitionError } from '$lib/server/kanban/transition';
+import { isKanbanStatus, SIZE_CLASSES, type KanbanSizeClass } from '$lib/shared/kanban-status';
 import type { PageServerLoad, Actions } from './$types';
 
 function mapTag(tag: string) {
@@ -39,14 +41,13 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			title: task.title,
 			description: task.description ?? null,
 			status: task.status,
-			prioritized: task.prioritized ?? false,
-			taskLength: task.taskLength as 'short' | 'medium' | 'long' | undefined,
+			sizeClass: task.sizeClass as KanbanSizeClass | undefined,
 			projectId: task.project?._id ?? null,
 			assignedTo: task.assignee?._id ?? null,
 			dueDate: task.dueDate ?? null,
-			sortOrder: task.sortOrder ?? 0,
 			waitingReason: task.waitingReason ?? null,
 			waitingOn: task.waitingOn ?? null,
+			blockedReason: task.blockedReason ?? null,
 			createdAt: task.createdAt,
 			updatedAt: task.updatedAt ?? null,
 			completedDate: task.completedAt ?? (task.status === 'done' ? task.statusChangedAt : null) ?? null,
@@ -115,18 +116,21 @@ export const actions: Actions = {
 			if (!check.ok) return fail(409, { wipLimitError: check });
 		}
 
+		const $set: any = {
+			title: title.trim(),
+			description: (fd.get('description') as string) || undefined,
+			project,
+			assignee,
+			dueDate: dueDate ? new Date(dueDate) : null,
+			waitingReason: (fd.get('waitingReason') as string) || null,
+			waitingOn: (fd.get('waitingOn') as string) || null
+		};
+		// sizeClass is normally set at processing (KB2-03); accept it only if the form sends a valid value.
+		const sizeClass = fd.get('sizeClass') as string | null;
+		if (sizeClass && (SIZE_CLASSES as readonly string[]).includes(sizeClass)) $set.sizeClass = sizeClass;
+
 		await KanbanTask.updateOne({ _id: params.taskId }, {
-			$set: {
-				title: title.trim(),
-				description: (fd.get('description') as string) || undefined,
-				prioritized: fd.get('prioritized') === 'true',
-				taskLength: fd.get('taskLength') || 'medium',
-				project,
-				assignee,
-				dueDate: dueDate ? new Date(dueDate) : null,
-				waitingReason: (fd.get('waitingReason') as string) || null,
-				waitingOn: (fd.get('waitingOn') as string) || null
-			},
+			$set,
 			$push: {
 				activityLog: {
 					_id: generateId(), action: 'updated', details: { fields: 'task details' },
@@ -145,26 +149,30 @@ export const actions: Actions = {
 		const fd = await request.formData();
 		const newStatus = fd.get('newStatus') as string;
 		if (!newStatus) return fail(400, { error: 'Missing newStatus' });
+		if (!isKanbanStatus(newStatus)) return fail(400, { error: `'${newStatus}' is not a valid status` });
 
-		const task = await KanbanTask.findById(params.taskId).lean() as any;
-		if (!task) return fail(400, { error: 'Task not found' });
+		const reason = (fd.get('reason') as string | null) || (fd.get('waitingReason') as string | null) || undefined;
+		const waitingOn = (fd.get('waitingOn') as string | null) || undefined;
+		const waitingUntilRaw = fd.get('waitingUntil') as string | null;
 
-		// Hard WIP-limit cap. Skip if already in wip (idempotent re-move).
-		if (newStatus === 'wip' && task.status !== 'wip') {
-			const check = await checkWipLimit(task.assignee?._id ?? null, params.taskId);
-			if (!check.ok) return fail(409, { wipLimitError: check });
-		}
-
-		await KanbanTask.updateOne({ _id: params.taskId }, {
-			$set: { status: newStatus, statusChangedAt: new Date() },
-			$push: {
-				activityLog: {
-					_id: generateId(), action: 'status_change',
-					details: { from: task.status, to: newStatus },
-					createdAt: new Date(), createdBy: locals.user._id
+		try {
+			await transitionTask({
+				taskId: params.taskId,
+				to: newStatus,
+				actor: { username: locals.user.username, via: 'ui' },
+				reason,
+				waitingOn,
+				waitingUntil: waitingUntilRaw ? new Date(waitingUntilRaw) : undefined
+			});
+		} catch (e) {
+			if (e instanceof TransitionError) {
+				if (e.code === 'WIP_LIMIT_EXCEEDED') {
+					return fail(409, { wipLimitError: e.details, error: e.message, code: e.code });
 				}
+				return fail(400, { error: e.message, code: e.code });
 			}
-		});
+			throw e;
+		}
 
 		return { success: true };
 	},

@@ -4861,3 +4861,38 @@ possible: master restructured routes in 7c01942b ("remove /spu URL prefix"), so
 the source branch's src/routes/spu/parts/ has no counterpart on master and git's
 rename detection mis-targeted the committed OneDrive clone at
 "OneDrive - Linbeck Group, LLC/Documents/GitHub/Bioscale_Operations_System_V2-dev/".
+
+================================================================================
+2026-07-30 — feat/kanban-two-tier — KB2 PRDs + KB2-01 foundation (two-tier kanban)
+================================================================================
+Workshopped the two-tier kanban refactor (Nicholas Cox draft spec + full code/data audit)
+with Jacob; decisions of record in docs/prds/KB2-00-OVERVIEW.md. Wrote all 11 PRDs
+(KB2-00..10: foundation, commitment point, processing/DoR, policy engine, flow metrics,
+views, spikes/discovered, software board w/ agent handoff briefs, MCP toolset v2,
+standing-work supply panel).
+
+Implemented KB2-01 foundation:
+- src/lib/shared/kanban-status.ts — single source of truth: 10 statuses
+  (captured/processed/icebox/declined | ready/wip/waiting/blocked/review/done), tier
+  derivation, board legality, STATUS_META, aging thresholds, date-field map.
+- src/lib/server/kanban/transition.ts — THE one door for status writes + creation:
+  tier-crossing rejection (commitment point), WIP limit on every path (closes the agent
+  bypass), blocked-needs-reason, waiting-needs-dependency+date, equal actor/via capture
+  for humans and Claude, transitions[]+activityLog+AuditLog in one place.
+- kanban-task model: board/rank/itemType/classOfService/sizeClass/origin/spawnedFrom/
+  committedAt/dor/spike/replenishment fields; prioritized/sortOrder/taskLength DELETED;
+  proposals subdoc gains details/suggestedActions (fixes silent drop).
+- Rewired ALL status write paths + ~25 vocabulary consumers (board, task detail, list,
+  archived, badges, cards, analytics, CFD/aging charts, agent endpoints, MCP tools,
+  ask-bims tier1 metadata). PriorityBadge + kanban-aging.ts deleted.
+- scripts/migrate-kanban-two-tier.ts — idempotent, dry-run-validated against prod
+  (54→captured incl. 2 rogue todo, 1 in_progress→wip; 407 defaults; 353 committedAt;
+  34 tier-2 global ranks; 53 tier-1 ranks across 8 projects). APPLY AFTER DEPLOY.
+npm run check: 11 errors — pre-existing baseline, zero in touched files.
+NOTE: tier-crossing buttons (captured→ready) now intentionally FAIL with
+TIER_CROSSING_FORBIDDEN until KB2-02 ships the replenish path. Do not deploy this branch
+to production until KB2-02 lands + migration runs.
+
+Also: one-off scripts/fix-spu-research-site-2026-07-30.ts (APPLIED to prod): research
+site = exactly UDIs 202,211,212,218,222,223,229,236,243,244,245,247,248,249,250,251
+(6 assigned, 4 strays cleared: 203,215,246,252) for research-app push-assay.

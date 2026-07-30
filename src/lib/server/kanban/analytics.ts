@@ -6,7 +6,14 @@
  * returned shape with their specific blocks.
  */
 import { connectDB, KanbanTask, User } from '$lib/server/db';
-import { agingThresholds, agingSeverity, type AgingSeverity } from '$lib/shared/kanban-aging';
+import {
+	ALL_STATUSES,
+	STATUS_META,
+	AGING_THRESHOLDS,
+	agingLevel,
+	type AgingLevel,
+	type KanbanStatus
+} from '$lib/shared/kanban-status';
 
 export type AnalyticsRange = '7d' | '30d' | '90d' | 'all';
 
@@ -25,14 +32,7 @@ export type KpiBlock = {
 	criticalAgingCount: number;
 };
 
-export type CfdPoint = {
-	date: string; // YYYY-MM-DD
-	backlog: number;
-	ready: number;
-	wip: number;
-	waiting: number;
-	done: number;
-};
+export type CfdPoint = { date: string } & Record<KanbanStatus, number>;
 
 export type WipSegment = {
 	taskId: string;
@@ -89,7 +89,7 @@ export type AgingWipRow = {
 	title: string;
 	status: string;
 	daysInStatus: number;
-	severity: AgingSeverity;
+	severity: AgingLevel;
 	statusColor: string;
 };
 
@@ -253,14 +253,14 @@ function computeKpi(allTasks: any[], since: Date | null): KpiBlock {
 			}
 		}
 
-		// Aging — non-done, non-archived, daysInStatus over the warning threshold
+		// Aging — non-done, non-archived, daysInStatus over the warn threshold
 		if (!isArchived && status !== 'done') {
-			const thresholds = agingThresholds[status];
+			const thresholds = AGING_THRESHOLDS[status as KanbanStatus];
 			if (thresholds) {
 				const age = daysSince(t.statusChangedAt);
 				if (age !== null) {
-					if (age > thresholds.warning) agingCount++;
-					if (age > thresholds.critical) criticalAgingCount++;
+					if (age >= thresholds.warn) agingCount++;
+					if (age >= thresholds.critical) criticalAgingCount++;
 				}
 			}
 		}
@@ -283,7 +283,7 @@ function computeKpi(allTasks: any[], since: Date | null): KpiBlock {
 /**
  * Status of a task at a given point in time. Built by replaying the task's
  * activityLog (sorted, status_change entries only) up to `atMs`. Tasks default
- * to 'backlog' if no transition has occurred yet (matches schema default).
+ * to 'captured' if no transition has occurred yet (matches schema default).
  * Archived tasks count as 'done' once archivedAt is in the past.
  */
 function getTaskStatusAt(task: any, atMs: number): string | null {
@@ -301,7 +301,7 @@ function getTaskStatusAt(task: any, atMs: number): string | null {
 		.map((e) => ({ to: e.details.to as string, t: new Date(e.createdAt).getTime() }))
 		.sort((a, b) => a.t - b.t);
 
-	let lastKnown = 'backlog';
+	let lastKnown = 'captured';
 	for (const tr of transitions) {
 		if (tr.t > atMs) break;
 		lastKnown = tr.to;
@@ -331,11 +331,14 @@ function computeCfd(allTasks: any[], since: Date | null): CfdPoint[] {
 		endOfDay.setHours(23, 59, 59, 999);
 		const eod = endOfDay.getTime();
 
-		const counts = { backlog: 0, ready: 0, wip: 0, waiting: 0, done: 0 };
+		const counts = Object.fromEntries(ALL_STATUSES.map((s) => [s, 0])) as Record<
+			KanbanStatus,
+			number
+		>;
 		for (const t of allTasks) {
 			const status = getTaskStatusAt(t, eod);
 			if (!status) continue;
-			if (status in counts) counts[status as keyof typeof counts]++;
+			if (status in counts) counts[status as KanbanStatus]++;
 		}
 
 		points.push({
@@ -560,14 +563,11 @@ async function computeWipTimeline(allTasks: any[], dayStartMs: number, day: stri
 	};
 }
 
-const STATUS_COLORS: Record<string, string> = {
-	backlog: '#a0a0a0',
-	ready: '#00d4ff',
-	wip: '#ff6600',
-	waiting: '#ff3366',
-	done: '#00ff88'
-};
+const STATUS_COLORS: Record<string, string> = Object.fromEntries(
+	ALL_STATUSES.map((s) => [s, STATUS_META[s].color])
+);
 
+// Load-score weights by sizeClass (unsized items count as medium).
 const SIZE_WEIGHTS: Record<string, number> = { short: 1, medium: 2, long: 4 };
 
 function getCompletionMs(task: any): number | null {
@@ -636,7 +636,7 @@ function computeAgingWip(allTasks: any[]): AgingWipRow[] {
 		if (t.archived || t.status === 'done') continue;
 		const days = daysSince(t.statusChangedAt);
 		if (days === null) continue;
-		const severity = agingSeverity(t.status, days);
+		const severity = agingLevel(t.status as KanbanStatus, days);
 		if (severity === 'normal') continue;
 		rows.push({
 			taskId: t._id,
@@ -667,7 +667,7 @@ function computeTimeInStatus(allTasks: any[], since: Date | null): TimeInStatusR
 		if (transitions.length === 0) continue;
 
 		const durations = new Map<string, number>();
-		let prevStatus = 'backlog';
+		let prevStatus = 'captured';
 		let prevTime = new Date(t.createdAt).getTime();
 		for (const tr of transitions) {
 			const dur = tr.t - prevTime;
@@ -706,7 +706,7 @@ function computePerProject(allTasks: any[], since: Date | null, allProjects: any
 		const aging = ofProject.filter((t: any) => {
 			if (t.archived || t.status === 'done') return false;
 			const days = daysSince(t.statusChangedAt);
-			return days !== null && agingSeverity(t.status, days) !== 'normal';
+			return days !== null && agingLevel(t.status as KanbanStatus, days) !== 'normal';
 		}).length;
 		const cycleTimes = ofProject
 			.filter((t: any) => {
@@ -754,10 +754,10 @@ function computePerAssignee(allTasks: any[], since: Date | null): PerAssigneeRow
 		const aging = tasks.filter((t: any) => {
 			if (t.archived || t.status === 'done') return false;
 			const days = daysSince(t.statusChangedAt);
-			return days !== null && agingSeverity(t.status, days) !== 'normal';
+			return days !== null && agingLevel(t.status as KanbanStatus, days) !== 'normal';
 		}).length;
 		const loadScore = activeTasks.reduce(
-			(acc: number, t: any) => acc + (SIZE_WEIGHTS[t.taskLength ?? 'medium'] ?? 2),
+			(acc: number, t: any) => acc + (SIZE_WEIGHTS[t.sizeClass ?? 'medium'] ?? 2),
 			0
 		);
 		rows.push({ id, username, active, doneInRange, loadScore, wip, aging });

@@ -1,6 +1,18 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod';
 import { env } from '$env/dynamic/private';
+import { TIER2_STATUSES, SIZE_CLASSES, legalStatusesFor } from '$lib/shared/kanban-status';
+
+// Status vocabulary for MCP tool schemas, from the shared module.
+// 'review' is software-board-only and not exposed through these tools yet.
+const OPS_STATUSES = legalStatusesFor('ops') as unknown as [string, ...string[]];
+// Tier 2 moves only — tier crossings (e.g. captured → ready) are rejected
+// server-side pending the replenish tool (KB2-02).
+const TIER2_MOVE_STATUSES = TIER2_STATUSES.filter((s) => s !== 'review') as unknown as [
+	string,
+	...string[]
+];
+const SIZE_CLASS_VALUES = SIZE_CLASSES as unknown as [string, ...string[]];
 
 /**
  * BIMS MCP server — a thin MCP layer over the existing /api/agent/** REST API.
@@ -247,7 +259,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'kanban_board_snapshot',
 		{
 			description:
-				'The full kanban board: all projects and their tasks grouped by column (blocked, backlog, ready, wip, waiting, done) ' +
+				`The full kanban board: all projects and their tasks grouped by column (${OPS_STATUSES.join(', ')}) ` +
 				'plus recent activity. Call this before creating or updating tasks so you have current task/project ids.'
 		},
 		async () => callAgentApi(fetcher, '/api/agent/operations/kanban/board-snapshot')
@@ -264,22 +276,18 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		{
 			description:
 				'Create a kanban task in a project. Requires a projectId from kanban_board_snapshot or kanban_projects_overview. ' +
+				'Every new task starts as a captured Tier-1 option — there is no initial-status choice; sizing and ranking happen at processing. ' +
 				'The mutation is audit-logged server-side as agent activity.',
 			inputSchema: z.object({
 				title: z.string().describe('Task title (required).'),
 				projectId: z.string().describe('The kanban project _id.'),
 				description: z.string().optional(),
-				status: z
-					.enum(['blocked', 'backlog', 'ready', 'wip', 'waiting', 'done'])
-					.optional()
-					.describe('Initial column (default backlog).'),
-				prioritized: z.boolean().optional(),
-				taskLength: z.enum(['short', 'medium', 'long']).optional().describe('Effort estimate (default medium).'),
 				assignedTo: z.string().optional().describe('User _id to assign.'),
 				dueDate: z.string().optional().describe('ISO date string.'),
 				tags: z.array(z.string()).optional(),
 				parentTaskId: z.string().optional().describe('Create as a subtask of this task.'),
-				sourceRef: z.string().optional().describe('External reference (e.g. a conversation or ticket id).')
+				sourceRef: z.string().optional().describe('External reference (e.g. a conversation or ticket id).'),
+				actor: z.string().optional().describe('Username of the human driving this change (defaults to "agent").')
 			})
 		},
 		async (args) =>
@@ -290,20 +298,24 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'kanban_update_task',
 		{
 			description:
-				'Update a kanban task: move it between columns (status), retitle, describe, prioritize, reassign, re-project, ' +
-				'set due date/tags, or append context notes. Status changes record a transition history entry. Audit-logged.',
+				'Update a kanban task: move it within Tier 2 (status), retitle, describe, resize, reassign, re-project, ' +
+				'set due date/tags, or append context notes. Status changes go through the transition service and record a transition history entry. ' +
+				'Tier crossings (e.g. captured → ready) are rejected server-side — commitment-point crossings need the replenish path (not yet exposed as a tool). Audit-logged.',
 			inputSchema: z.object({
 				taskId: z.string().describe('The task _id to update.'),
 				title: z.string().optional(),
 				description: z.string().optional().describe('Replaces the description.'),
 				appendContext: z.string().optional().describe('Appends a context note instead of replacing the description.'),
-				status: z.enum(['blocked', 'backlog', 'ready', 'wip', 'waiting', 'done']).optional().describe('Move to this column.'),
-				prioritized: z.boolean().optional(),
-				taskLength: z.enum(['short', 'medium', 'long']).optional(),
+				status: z.enum(TIER2_MOVE_STATUSES).optional().describe('Move to this Tier-2 column. Tier crossings are rejected server-side.'),
+				sizeClass: z.enum(SIZE_CLASS_VALUES).optional().describe('Size class (short/medium/long).'),
+				reason: z.string().optional().describe('Required when moving to blocked (what is blocking us?).'),
+				waitingOn: z.string().optional().describe('Required when moving to waiting: the named external dependency.'),
+				waitingUntil: z.string().optional().describe('Required when moving to waiting: ISO follow-up date.'),
 				assignedTo: z.string().optional().describe('User _id to reassign to.'),
 				projectId: z.string().optional().describe('Move the task to this project.'),
 				dueDate: z.string().optional().describe('ISO date string.'),
-				tags: z.array(z.string()).optional()
+				tags: z.array(z.string()).optional(),
+				actor: z.string().optional().describe('Username of the human driving this change (defaults to "agent").')
 			})
 		},
 		async ({ taskId, ...rest }) =>
@@ -316,7 +328,8 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	server.registerTool(
 		'kanban_create_subtasks',
 		{
-			description: 'Bulk-create subtasks under a parent kanban task. Each subtask is audit-logged.',
+			description:
+				'Bulk-create subtasks under a parent kanban task. Every subtask starts as a captured Tier-1 option. Each subtask is audit-logged.',
 			inputSchema: z.object({
 				parentTaskId: z.string().describe('The parent task _id.'),
 				subtasks: z
@@ -324,20 +337,20 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 						z.object({
 							title: z.string(),
 							description: z.string().optional(),
-							status: z.enum(['blocked', 'backlog', 'ready', 'wip', 'waiting', 'done']).optional(),
 							assignedTo: z.string().optional(),
 							dueDate: z.string().optional(),
 							tags: z.array(z.string()).optional()
 						})
 					)
 					.min(1)
-					.describe('Subtasks to create.')
+					.describe('Subtasks to create.'),
+				actor: z.string().optional().describe('Username of the human driving this change (defaults to "agent").')
 			})
 		},
-		async ({ parentTaskId, subtasks }) =>
+		async ({ parentTaskId, subtasks, actor }) =>
 			callAgentApi(fetcher, `/api/agent/operations/kanban/tasks/${encodeURIComponent(parentTaskId)}/subtasks`, {
 				method: 'POST',
-				body: { subtasks }
+				body: { subtasks, actor }
 			})
 	);
 

@@ -1,7 +1,14 @@
 import { json } from '@sveltejs/kit';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import { connectDB, KanbanProject, KanbanTask } from '$lib/server/db';
+import { ALL_STATUSES } from '$lib/shared/kanban-status';
 import type { RequestHandler } from './$types';
+
+function emptyCounts(): Record<string, number> {
+	const counts: Record<string, number> = { total: 0 };
+	for (const s of ALL_STATUSES) counts[s] = 0;
+	return counts;
+}
 
 export const GET: RequestHandler = async ({ request }) => {
 	requireAgentApiKey(request);
@@ -18,10 +25,10 @@ export const GET: RequestHandler = async ({ request }) => {
 	for (const t of tasks as any[]) {
 		const pid = t.project?._id || 'unassigned';
 		if (!countsByProject[pid]) {
-			countsByProject[pid] = { total: 0, backlog: 0, ready: 0, wip: 0, waiting: 0, done: 0 };
+			countsByProject[pid] = emptyCounts();
 		}
 		countsByProject[pid].total++;
-		const s = t.status || 'backlog';
+		const s = t.status || 'captured';
 		countsByProject[pid][s] = (countsByProject[pid][s] || 0) + 1;
 	}
 
@@ -33,7 +40,7 @@ export const GET: RequestHandler = async ({ request }) => {
 				name: p.name,
 				color: p.color,
 				isActive: p.isActive,
-				taskCounts: countsByProject[p._id] || { total: 0, backlog: 0, ready: 0, wip: 0, waiting: 0, done: 0 }
+				taskCounts: countsByProject[p._id] || emptyCounts()
 			}))
 		}
 	});

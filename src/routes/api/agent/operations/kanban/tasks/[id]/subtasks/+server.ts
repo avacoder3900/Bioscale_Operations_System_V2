@@ -1,7 +1,7 @@
 import { json, error } from '@sveltejs/kit';
-import { connectDB, KanbanTask, KanbanProject, AuditLog } from '$lib/server/db';
-import { generateId } from '$lib/server/db/utils.js';
+import { connectDB, KanbanTask } from '$lib/server/db';
 import { requireAgentApiKey } from '$lib/server/api-auth';
+import { createKanbanItem, TransitionError } from '$lib/server/kanban/transition';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request, params }) => {
@@ -13,45 +13,36 @@ export const POST: RequestHandler = async ({ request, params }) => {
 	if (!parent) throw error(404, 'Parent task not found');
 
 	const body = await request.json();
-	const { subtasks } = body;
+	const { subtasks, actor } = body;
 
 	if (!Array.isArray(subtasks) || subtasks.length === 0) {
 		throw error(400, 'subtasks array is required and must not be empty');
 	}
 
-	const now = new Date();
+	const actorName = typeof actor === 'string' && actor.trim() ? actor.trim() : 'agent';
 	const created: any[] = [];
 
 	for (const sub of subtasks) {
 		if (!sub.title?.trim()) throw error(400, 'Each subtask requires a title');
 
-		const taskId = generateId();
-		const task = await KanbanTask.create({
-			_id: taskId,
-			title: sub.title.trim(),
-			description: sub.description || undefined,
-			status: sub.status || 'backlog',
-			prioritized: sub.prioritized === true || parent.prioritized === true,
-			taskLength: sub.taskLength || 'short',
-			project: parent.project,
-			assignee: parent.assignee,
-			tags: sub.tags || parent.tags || [],
-			source: 'agent',
-			sourceRef: sub.sourceRef || undefined,
-			parentTaskId,
-			statusChangedAt: now,
-			createdBy: 'agent'
-		});
-
-		await AuditLog.create({
-			_id: generateId(),
-			tableName: 'kanban_tasks',
-			recordId: taskId,
-			action: 'INSERT',
-			newData: { title: sub.title.trim(), parentTaskId, source: 'agent' },
-			changedBy: 'agent',
-			changedAt: now
-		});
+		// Every subtask is captured (Tier 1) — sub.status is deliberately ignored.
+		let task: any;
+		try {
+			task = await createKanbanItem({
+				title: sub.title,
+				description: sub.description || undefined,
+				project: parent.project ?? null,
+				assignee: parent.assignee ?? null,
+				tags: sub.tags || parent.tags || [],
+				source: 'agent',
+				sourceRef: sub.sourceRef || undefined,
+				parentTaskId,
+				actor: { username: actorName, via: 'agent-api' }
+			});
+		} catch (e) {
+			if (e instanceof TransitionError) throw error(400, e.message);
+			throw e;
+		}
 
 		created.push({
 			id: task._id,

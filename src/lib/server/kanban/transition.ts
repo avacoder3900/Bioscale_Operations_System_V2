@@ -1,0 +1,244 @@
+/**
+ * THE single door for kanban status changes and item creation (KB2-01).
+ *
+ * Every path — UI actions, /api/kanban/move, agent API, MCP tools, crons —
+ * calls transitionTask() / createKanbanItem(). No other code may write
+ * task.status. This is what makes every invariant (tier crossing, WIP limits,
+ * blocked-needs-reason) enforceable in exactly one place, and what guarantees
+ * humans and Claude produce identical flow records.
+ */
+import { connectDB, KanbanTask, AuditLog, generateId } from '$lib/server/db';
+import {
+	isKanbanStatus,
+	isTierCrossing,
+	legalStatusesFor,
+	tierOf,
+	STATUS_DATE_FIELD,
+	type KanbanStatus,
+	type KanbanBoard,
+	type KanbanItemType,
+	type KanbanOrigin
+} from '$lib/shared/kanban-status';
+import { checkWipLimit } from './wip-limit.js';
+
+export type TransitionVia = 'ui' | 'mcp' | 'agent-api' | 'system';
+export type TransitionActor = { username: string; via: TransitionVia };
+
+export class TransitionError extends Error {
+	code:
+		| 'INVALID_STATUS'
+		| 'TIER_CROSSING_FORBIDDEN'
+		| 'WIP_LIMIT_EXCEEDED'
+		| 'REASON_REQUIRED'
+		| 'WAITING_DEPENDENCY_REQUIRED'
+		| 'NOT_FOUND';
+	details?: unknown;
+	constructor(code: TransitionError['code'], message: string, details?: unknown) {
+		super(message);
+		this.name = 'TransitionError';
+		this.code = code;
+		this.details = details;
+	}
+}
+
+export interface TransitionOptions {
+	taskId: string;
+	to: KanbanStatus;
+	actor: TransitionActor;
+	reason?: string; // required for → blocked and → declined
+	waitingOn?: string; // required for → waiting (named external dependency)
+	waitingUntil?: Date; // required for → waiting
+	/** ONLY the replenish/demote endpoints (KB2-02) may pass true. */
+	allowTierCrossing?: boolean;
+}
+
+export async function transitionTask(opts: TransitionOptions) {
+	const { taskId, to, actor } = opts;
+	await connectDB();
+
+	if (!isKanbanStatus(to)) {
+		throw new TransitionError('INVALID_STATUS', `'${to}' is not a kanban status.`);
+	}
+
+	const task: any = await KanbanTask.findById(taskId);
+	if (!task) throw new TransitionError('NOT_FOUND', `Task ${taskId} not found`);
+
+	const from = task.status as KanbanStatus;
+	const board = (task.board ?? 'ops') as KanbanBoard;
+	if (from === to) return { task, changed: false as const };
+
+	if (!legalStatusesFor(board).includes(to)) {
+		throw new TransitionError('INVALID_STATUS', `Status '${to}' is not legal on the '${board}' board.`);
+	}
+
+	// The commitment point — the single most important invariant in KB2.
+	if (isTierCrossing(from, to) && !opts.allowTierCrossing) {
+		const direction = tierOf(to) === 2 ? 'promoted (Tier 1 → Tier 2)' : 'demoted (Tier 2 → Tier 1)';
+		throw new TransitionError(
+			'TIER_CROSSING_FORBIDDEN',
+			`Task cannot be ${direction} through a normal update. Commitment-point crossings go through the replenishment path (kanban replenish/demote).`
+		);
+	}
+
+	if (to === 'wip') {
+		const wip = await checkWipLimit(task.assignee?._id, taskId);
+		if (!wip.ok) {
+			throw new TransitionError(
+				'WIP_LIMIT_EXCEEDED',
+				`${wip.assignee} is at their WIP limit (${wip.currentCount}/${wip.limit}). Finish or move an item out of WIP first.`,
+				wip
+			);
+		}
+	}
+
+	if (to === 'blocked' && !opts.reason?.trim()) {
+		throw new TransitionError('REASON_REQUIRED', "Moving to 'blocked' requires a reason (what is blocking us?).");
+	}
+	if (to === 'declined' && !opts.reason?.trim()) {
+		throw new TransitionError('REASON_REQUIRED', "Declining requires a reason — declined items are kept for the record.");
+	}
+	if (to === 'waiting' && (!opts.waitingOn?.trim() || !opts.waitingUntil)) {
+		throw new TransitionError(
+			'WAITING_DEPENDENCY_REQUIRED',
+			"Moving to 'waiting' requires a named external dependency (waitingOn) and a follow-up date (waitingUntil)."
+		);
+	}
+
+	const now = new Date();
+	task.status = to;
+	task.statusChangedAt = now;
+
+	const dateField = STATUS_DATE_FIELD[to];
+	if (dateField) task[dateField] = now;
+	if (tierOf(to) === 2 && !task.committedAt) task.committedAt = now;
+
+	if (to === 'blocked') task.blockedReason = opts.reason!.trim();
+	if (to === 'declined') task.declineReason = opts.reason!.trim();
+	if (to === 'waiting') {
+		task.waitingOn = opts.waitingOn!.trim();
+		task.waitingUntil = opts.waitingUntil;
+		if (opts.reason?.trim()) task.waitingReason = opts.reason.trim();
+	}
+
+	task.transitions.push({
+		_id: generateId(),
+		fromStatus: from,
+		toStatus: to,
+		changedBy: actor.username,
+		via: actor.via,
+		reason: opts.reason?.trim() || undefined,
+		timestamp: now
+	});
+	task.activityLog.push({
+		_id: generateId(),
+		action: 'status_change',
+		details: { from, to, reason: opts.reason?.trim() || undefined, via: actor.via },
+		createdAt: now,
+		createdBy: actor.username
+	});
+
+	await task.save();
+
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'kanban_tasks',
+		recordId: task._id,
+		action: 'UPDATE',
+		newData: { status: to, from, via: actor.via, reason: opts.reason?.trim() || undefined },
+		changedBy: actor.username,
+		changedAt: now
+	});
+
+	return { task, changed: true as const, from, to };
+}
+
+export interface CreateKanbanItemOptions {
+	title: string;
+	actor: TransitionActor;
+	board?: KanbanBoard;
+	description?: string;
+	project?: { _id: string; name: string; color?: string } | null;
+	assignee?: { _id: string; username: string } | null;
+	itemType?: KanbanItemType;
+	origin?: KanbanOrigin;
+	spawnedFrom?: string;
+	parentTaskId?: string;
+	dueDate?: Date;
+	tags?: string[];
+	source?: string;
+	sourceRef?: string;
+	spike?: { question: string; timebox: { amount: number; unit: 'hours' | 'days' } };
+}
+
+/**
+ * Standard creation path: everything starts as a Tier 1 'captured' option at
+ * the bottom of its project's rank scope. There is deliberately no status
+ * argument — entering Tier 2 happens only through replenishment (KB2-02).
+ */
+export async function createKanbanItem(opts: CreateKanbanItemOptions) {
+	await connectDB();
+	const now = new Date();
+	const board = opts.board ?? 'ops';
+
+	if (opts.itemType === 'spike') {
+		if (!opts.spike?.question?.trim() || !opts.spike?.timebox?.amount) {
+			throw new TransitionError(
+				'REASON_REQUIRED',
+				'A spike cannot be created without a question and a timebox. If the question cannot be written, the uncertainty is not shaped enough to fund yet.'
+			);
+		}
+	}
+
+	// Append to the bottom of the Tier 1 rank scope (board + project).
+	const last: any = await KanbanTask.findOne({
+		board,
+		'project._id': opts.project?._id ?? null,
+		status: { $in: ['captured', 'processed'] },
+		archived: false
+	})
+		.sort({ rank: -1 })
+		.select('rank')
+		.lean();
+	const rank = (last?.rank ?? 0) + 1;
+
+	const task = await KanbanTask.create({
+		_id: generateId(),
+		title: opts.title.trim(),
+		description: opts.description || undefined,
+		status: 'captured',
+		board,
+		rank,
+		itemType: opts.itemType ?? 'deliverable',
+		origin: opts.origin ?? 'planned',
+		spawnedFrom: opts.spawnedFrom || undefined,
+		parentTaskId: opts.parentTaskId || undefined,
+		project: opts.project ?? undefined,
+		assignee: opts.assignee ?? undefined,
+		dueDate: opts.dueDate,
+		tags: opts.tags ?? [],
+		source: opts.source,
+		sourceRef: opts.sourceRef,
+		spike: opts.spike,
+		statusChangedAt: now,
+		createdBy: opts.actor.username,
+		activityLog: [{
+			_id: generateId(),
+			action: 'created',
+			details: { origin: opts.origin ?? 'planned', via: opts.actor.via, spawnedFrom: opts.spawnedFrom },
+			createdAt: now,
+			createdBy: opts.actor.username
+		}]
+	});
+
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'kanban_tasks',
+		recordId: task._id,
+		action: 'INSERT',
+		newData: { title: opts.title.trim(), board, status: 'captured', origin: opts.origin ?? 'planned', via: opts.actor.via },
+		changedBy: opts.actor.username,
+		changedAt: now
+	});
+
+	return task;
+}

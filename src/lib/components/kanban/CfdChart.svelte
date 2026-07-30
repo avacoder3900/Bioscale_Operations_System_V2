@@ -14,14 +14,9 @@
 
 	ChartJS.register(Title, Tooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale, Filler);
 
-	interface CfdPoint {
-		date: string;
-		backlog: number;
-		ready: number;
-		wip: number;
-		waiting: number;
-		done: number;
-	}
+	import { STATUS_META, type KanbanStatus } from '$lib/shared/kanban-status';
+
+	type CfdPoint = { date: string } & Partial<Record<KanbanStatus, number>>;
 
 	interface Props {
 		points: CfdPoint[];
@@ -29,22 +24,32 @@
 
 	let { points }: Props = $props();
 
-	// Stack order bottom → top: done, wip, ready, waiting, backlog.
-	// Rationale per PRD: done at bottom (banked work), backlog at top
-	// (new scope pushes the top edge up).
-	const bands = [
-		{ key: 'done', label: 'Done', color: '#00ff88' },
-		{ key: 'wip', label: 'WIP', color: '#ff6600' },
-		{ key: 'ready', label: 'Ready', color: '#00d4ff' },
-		{ key: 'waiting', label: 'Waiting', color: '#ff3366' },
-		{ key: 'backlog', label: 'Backlog', color: '#a0a0a0' }
-	] as const;
+	// Stack order bottom → top: done at bottom (banked work), committed work
+	// in the middle, upstream inventory (captured et al.) at the top so new
+	// scope pushes the top edge up.
+	const BAND_ORDER: KanbanStatus[] = [
+		'done',
+		'review',
+		'wip',
+		'blocked',
+		'waiting',
+		'ready',
+		'processed',
+		'captured',
+		'icebox',
+		'declined'
+	];
+	const bands = BAND_ORDER.map((key) => ({
+		key,
+		label: STATUS_META[key].label,
+		color: STATUS_META[key].color
+	}));
 
 	let chartData = $derived({
 		labels: points.map((p) => p.date),
 		datasets: bands.map((b) => ({
 			label: b.label,
-			data: points.map((p) => p[b.key as keyof CfdPoint] as number),
+			data: points.map((p) => p[b.key] ?? 0),
 			backgroundColor: `${b.color}40`,
 			borderColor: b.color,
 			borderWidth: 1,

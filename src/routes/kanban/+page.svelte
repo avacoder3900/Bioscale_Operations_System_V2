@@ -4,6 +4,7 @@
 	import KanbanColumn from '$lib/components/kanban/KanbanColumn.svelte';
 	import CreateTaskModal from '$lib/components/kanban/CreateTaskModal.svelte';
 	import WipLimitModal from '$lib/components/kanban/WipLimitModal.svelte';
+	import { STATUS_META, type KanbanStatus } from '$lib/shared/kanban-status';
 
 	let { data, form } = $props();
 	let showCreateModal = $state(false);
@@ -28,31 +29,23 @@
 		showMyTasks ? data.tasks.filter((t) => t.assignedTo === data.currentUserId) : data.tasks
 	);
 
-	const columns = [
-		{ key: 'backlog', label: 'Backlog', color: '#a0a0a0', nextStatus: 'ready' },
-		{
-			key: 'ready',
-			label: 'Ready',
-			color: '#00d4ff',
-			prevStatus: 'backlog',
-			nextStatus: 'wip'
-		},
-		{
-			key: 'wip',
-			label: 'WIP',
-			color: '#ff6600',
-			prevStatus: 'ready',
-			nextStatus: 'waiting'
-		},
-		{
-			key: 'waiting',
-			label: 'Waiting',
-			color: '#ff3366',
-			prevStatus: 'wip',
-			nextStatus: 'wip'
-		},
-		{ key: 'done', label: 'Done', color: '#00ff88', prevStatus: 'wip' }
+	// Columns come from the shared status module. Flow (prev/next buttons):
+	// captured→ready→wip→waiting→wip, blocked→wip. Note: captured→ready is a
+	// tier crossing — the server rejects it by design until the replenishment
+	// path lands (KB2-02); the error surfaces in the error display below.
+	const BOARD_COLUMNS: { key: KanbanStatus; prevStatus?: KanbanStatus; nextStatus?: KanbanStatus }[] = [
+		{ key: 'captured', nextStatus: 'ready' },
+		{ key: 'ready', prevStatus: 'captured', nextStatus: 'wip' },
+		{ key: 'wip', prevStatus: 'ready', nextStatus: 'waiting' },
+		{ key: 'waiting', prevStatus: 'wip', nextStatus: 'wip' },
+		{ key: 'blocked', nextStatus: 'wip' },
+		{ key: 'done', prevStatus: 'wip' }
 	];
+	const columns = BOARD_COLUMNS.map((c) => ({
+		...c,
+		label: STATUS_META[c.key].label,
+		color: STATUS_META[c.key].color
+	}));
 
 	interface ProjectGroup {
 		id: string | null;
@@ -91,25 +84,21 @@
 	function tasksByStatus(tasks: typeof data.tasks) {
 		const grouped: Record<string, typeof data.tasks> = {};
 		for (const col of columns) {
-			grouped[col.key] = tasks.filter((t) => {
-				if (col.key === 'backlog') {
-					return t.status === 'backlog';
-				}
-				return t.status === col.key;
-			});
+			grouped[col.key] = tasks.filter((t) => t.status === col.key);
 		}
 		return grouped;
 	}
 
 	/**
-	 * Project section + backlog accordion collapse state are both persisted
-	 * server-side on KanbanProject (collapsed / backlogCollapsed fields).
+	 * Project section + captured-column accordion collapse state are both persisted
+	 * server-side on KanbanProject (collapsed / backlogCollapsed fields — the
+	 * stored field keeps its legacy name; it now folds the Captured column).
 	 * Global state: every user sees and writes the same value. Optimistic
 	 * update + revert on API failure.
 	 *
 	 * Defaults from server-side normalization:
 	 *   - collapsed: false (project sections start expanded)
-	 *   - backlogCollapsed: true (backlogs start collapsed)
+	 *   - backlogCollapsed: true (captured columns start collapsed)
 	 */
 	let collapsed = $state(new Set<string | null>(
 		data.projects.filter((p) => p.collapsed).map((p) => p.id)
@@ -377,9 +366,9 @@
 								config={col}
 								tasks={grouped[col.key] ?? []}
 								onDrop={handleDrop}
-								collapsible={col.key === 'backlog'}
-								collapsed={col.key === 'backlog' && collapsedBacklogs.has(group.id)}
-								onToggleCollapse={col.key === 'backlog' ? () => toggleBacklog(group.id) : undefined}
+								collapsible={col.key === 'captured'}
+								collapsed={col.key === 'captured' && collapsedBacklogs.has(group.id)}
+								onToggleCollapse={col.key === 'captured' ? () => toggleBacklog(group.id) : undefined}
 							/>
 						{/each}
 					</div>

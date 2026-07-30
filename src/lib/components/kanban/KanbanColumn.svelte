@@ -13,8 +13,7 @@
 		title: string;
 		description: string | null;
 		status: string;
-		prioritized: boolean;
-		taskLength: string;
+		sizeClass?: string | null;
 		assignedTo: string | null;
 		assigneeName: string | null;
 		projectId: string | null;

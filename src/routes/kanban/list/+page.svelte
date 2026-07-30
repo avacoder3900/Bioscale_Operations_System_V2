@@ -2,30 +2,25 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import TaskStatusBadge from '$lib/components/kanban/TaskStatusBadge.svelte';
-	import PriorityBadge from '$lib/components/kanban/PriorityBadge.svelte';
+	import { ALL_STATUSES, STATUS_META } from '$lib/shared/kanban-status';
 
 	let { data } = $props();
 
 	type SortKey =
 		| 'title'
 		| 'status'
-		| 'prioritized'
 		| 'project'
 		| 'assignee'
-		| 'taskLength'
+		| 'sizeClass'
 		| 'dueDate';
 	type SortDir = 'asc' | 'desc';
 
 	let sortColumn = $state<SortKey | null>(null);
 	let sortDirection = $state<SortDir>('asc');
 
-	const statusOrder: Record<string, number> = {
-		backlog: 0,
-		ready: 2,
-		wip: 3,
-		waiting: 4,
-		done: 5
-	};
+	const statusOrder: Record<string, number> = Object.fromEntries(
+		ALL_STATUSES.map((s, i) => [s, i])
+	);
 	const sizeOrder: Record<string, number> = { short: 1, medium: 2, long: 3 };
 
 	let sortedTasks = $derived.by(() => {
@@ -47,10 +42,6 @@
 					av = statusOrder[a.status] ?? 0;
 					bv = statusOrder[b.status] ?? 0;
 					break;
-				case 'prioritized':
-					av = a.prioritized ? 1 : 0;
-					bv = b.prioritized ? 1 : 0;
-					break;
 				case 'project':
 					av = (a.projectName ?? '').toLowerCase();
 					bv = (b.projectName ?? '').toLowerCase();
@@ -59,9 +50,9 @@
 					av = (a.assigneeName ?? 'zzz').toLowerCase();
 					bv = (b.assigneeName ?? 'zzz').toLowerCase();
 					break;
-				case 'taskLength':
-					av = sizeOrder[a.taskLength] ?? 0;
-					bv = sizeOrder[b.taskLength] ?? 0;
+				case 'sizeClass':
+					av = sizeOrder[a.sizeClass ?? ''] ?? 0;
+					bv = sizeOrder[b.sizeClass ?? ''] ?? 0;
 					break;
 				case 'dueDate':
 					av = a.dueDate ? new Date(a.dueDate).getTime() : Number.MAX_SAFE_INTEGER;
@@ -96,7 +87,6 @@
 
 	let selectedProject = $derived($page.url.searchParams.get('project') ?? '');
 	let selectedStatus = $derived($page.url.searchParams.get('status') ?? '');
-	let selectedPrioritized = $derived($page.url.searchParams.get('prioritized') ?? '');
 	let selectedAssignee = $derived($page.url.searchParams.get('assignee') ?? '');
 
 	function updateFilter(key: string, value: string) {
@@ -130,7 +120,7 @@
 	</div>
 
 	<!-- Filters -->
-	<div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+	<div class="grid grid-cols-2 gap-3 md:grid-cols-3">
 		<select
 			class="tron-select text-sm"
 			value={selectedProject}
@@ -148,21 +138,9 @@
 			onchange={(e) => updateFilter('status', (e.target as HTMLSelectElement).value)}
 		>
 			<option value="">All Statuses</option>
-			<option value="backlog">Backlog</option>
-			<option value="ready">Ready</option>
-			<option value="wip">WIP</option>
-			<option value="waiting">Waiting</option>
-			<option value="done">Done</option>
-		</select>
-
-		<select
-			class="tron-select text-sm"
-			value={selectedPrioritized}
-			onchange={(e) => updateFilter('prioritized', (e.target as HTMLSelectElement).value)}
-		>
-			<option value="">All Tasks</option>
-			<option value="true">Prioritized</option>
-			<option value="false">Not Prioritized</option>
+			{#each ALL_STATUSES as status}
+				<option value={status}>{STATUS_META[status].label}</option>
+			{/each}
 		</select>
 
 		<select
@@ -188,17 +166,14 @@
 					<th class="cursor-pointer select-none" onclick={() => handleSort('status')}>
 						Status{sortIcon('status')}
 					</th>
-					<th class="cursor-pointer select-none" onclick={() => handleSort('prioritized')}>
-						Priority{sortIcon('prioritized')}
-					</th>
 					<th class="cursor-pointer select-none" onclick={() => handleSort('project')}>
 						Project{sortIcon('project')}
 					</th>
 					<th class="cursor-pointer select-none" onclick={() => handleSort('assignee')}>
 						Assignee{sortIcon('assignee')}
 					</th>
-					<th class="cursor-pointer select-none" onclick={() => handleSort('taskLength')}>
-						Size{sortIcon('taskLength')}
+					<th class="cursor-pointer select-none" onclick={() => handleSort('sizeClass')}>
+						Size{sortIcon('sizeClass')}
 					</th>
 					<th class="cursor-pointer select-none" onclick={() => handleSort('dueDate')}>
 						Due{sortIcon('dueDate')}
@@ -216,7 +191,6 @@
 							{task.title}
 						</td>
 						<td><TaskStatusBadge status={task.status} /></td>
-						<td><PriorityBadge prioritized={task.prioritized} /></td>
 						<td>
 							{#if task.projectName}
 								<span
@@ -243,7 +217,7 @@
 							{/if}
 						</td>
 						<td class="tron-text-muted text-xs">
-							{sizeLabels[task.taskLength] ?? task.taskLength}
+							{task.sizeClass ? (sizeLabels[task.sizeClass] ?? task.sizeClass) : '—'}
 						</td>
 						<td class="text-xs">
 							{#if task.dueDate}
@@ -274,7 +248,7 @@
 					</tr>
 				{:else}
 					<tr>
-						<td colspan="8" class="tron-text-muted py-8 text-center text-sm">
+						<td colspan="7" class="tron-text-muted py-8 text-center text-sm">
 							No tasks match the current filters.
 						</td>
 					</tr>

@@ -10,19 +10,16 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	const project = url.searchParams.get('project');
 	const status = url.searchParams.get('status');
-	const prioritizedParam = url.searchParams.get('prioritized');
 	const assignee = url.searchParams.get('assignee');
 	const source = url.searchParams.get('source');
 
 	const filter: any = { archived: false };
 	if (project) filter['project._id'] = project;
 	if (status) filter.status = status;
-	if (prioritizedParam === 'true') filter.prioritized = true;
-	else if (prioritizedParam === 'false') filter.prioritized = false;
 	if (assignee) filter['assignee._id'] = assignee;
 	if (source) filter.source = source;
 
-	const tasks = await KanbanTask.find(filter).sort({ sortOrder: 1 }).lean();
+	const tasks = await KanbanTask.find(filter).sort({ rank: 1 }).lean();
 
 	return {
 		tasks: tasks.map((t: any) => ({
@@ -30,8 +27,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			title: t.title,
 			description: t.description ?? null,
 			status: t.status,
-			prioritized: t.prioritized ?? false,
-			taskLength: t.taskLength,
+			sizeClass: t.sizeClass ?? null,
+			rank: t.rank ?? 0,
 			projectId: t.project?._id ?? null,
 			assignedTo: t.assignee?._id ?? null,
 			dueDate: t.dueDate ?? null,

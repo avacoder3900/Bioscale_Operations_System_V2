@@ -29,7 +29,8 @@ export const GET: RequestHandler = async ({ request }) => {
 			.select('_id name equipmentType status').lean(),
 		KanbanTask.find({
 			dueDate: { $lt: now },
-			status: { $nin: ['done'] },
+			// Active = anything not finished or deliberately parked/declined
+			status: { $nin: ['done', 'declined', 'icebox'] },
 			archived: { $ne: true }
 		}).select('_id title dueDate status').lean(),
 		ApprovalRequest.find({

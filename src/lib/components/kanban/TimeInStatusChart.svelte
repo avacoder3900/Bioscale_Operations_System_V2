@@ -20,12 +20,13 @@
 
 	let maxTotal = $derived(rows.reduce((m, r) => Math.max(m, r.totalDays), 1));
 
-	const statusLegend = [
-		{ status: 'backlog', label: 'Backlog', color: '#a0a0a0' },
-		{ status: 'ready', label: 'Ready', color: '#00d4ff' },
-		{ status: 'wip', label: 'WIP', color: '#ff6600' },
-		{ status: 'waiting', label: 'Waiting', color: '#ff3366' }
-	];
+	import { ALL_STATUSES, STATUS_META } from '$lib/shared/kanban-status';
+
+	const statusLegend = ALL_STATUSES.filter((s) => s !== 'done').map((status) => ({
+		status,
+		label: STATUS_META[status].label,
+		color: STATUS_META[status].color
+	}));
 </script>
 
 <div class="tron-card p-4">

@@ -4,33 +4,37 @@
 	import TronButton from '$lib/components/ui/TronButton.svelte';
 	import TronInput from '$lib/components/ui/TronInput.svelte';
 	import TaskStatusBadge from '$lib/components/kanban/TaskStatusBadge.svelte';
-	import PriorityBadge from '$lib/components/kanban/PriorityBadge.svelte';
 	import CommentList from '$lib/components/kanban/CommentList.svelte';
 	import TagPicker from '$lib/components/kanban/TagPicker.svelte';
 	import ActivityLog from '$lib/components/kanban/ActivityLog.svelte';
+	import { STATUS_META, type KanbanStatus } from '$lib/shared/kanban-status';
 
 	let { data, form } = $props();
 
 	let saving = $state(false);
 	let archiving = $state(false);
 
-	const statusFlow: Record<string, { prev?: string; next?: string }> = {
-		backlog: { next: 'ready' },
-		ready: { prev: 'backlog', next: 'wip' },
+	// Flow buttons per status. captured→ready is a tier crossing that the
+	// server rejects by design until replenishment lands (KB2-02) — the
+	// error surfaces in the message area above.
+	const statusFlow: Partial<Record<KanbanStatus, { prev?: KanbanStatus; next?: KanbanStatus }>> = {
+		captured: { next: 'ready' },
+		processed: { next: 'ready' },
+		ready: { prev: 'captured', next: 'wip' },
 		wip: { prev: 'ready', next: 'waiting' },
 		waiting: { prev: 'wip', next: 'wip' },
+		blocked: { next: 'wip' },
+		review: { next: 'done' },
 		done: {}
 	};
 
-	const statusLabels: Record<string, string> = {
-		backlog: 'Backlog',
-		ready: 'Ready',
-		wip: 'WIP',
-		waiting: 'Waiting',
-		done: 'Done'
-	};
+	function statusLabel(status: string): string {
+		return STATUS_META[status as KanbanStatus]?.label ?? status;
+	}
 
-	let flow = $derived(statusFlow[data.task.status] ?? {});
+	const sizeLabels: Record<string, string> = { short: 'Short', medium: 'Medium', long: 'Long' };
+
+	let flow = $derived(statusFlow[data.task.status as KanbanStatus] ?? {});
 
 	let dueDateValue = $derived.by(() => {
 		if (!data.task.dueDate) return '';
@@ -120,7 +124,7 @@
 												d="M15 19l-7-7 7-7"
 											/>
 										</svg>
-										{statusLabels[flow.prev] ?? flow.prev}
+										{statusLabel(flow.prev)}
 									</span>
 								</TronButton>
 							</form>
@@ -131,7 +135,7 @@
 								<input type="hidden" name="newStatus" value={flow.next} />
 								<TronButton type="submit" variant="primary">
 									<span class="flex items-center gap-1">
-										{statusLabels[flow.next] ?? flow.next}
+										{statusLabel(flow.next)}
 										<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 											<path
 												stroke-linecap="round"
@@ -181,35 +185,6 @@
 							rows="4"
 							placeholder="Task description...">{data.task.description ?? ''}</textarea
 						>
-					</div>
-
-					<div class="mb-4 grid grid-cols-2 gap-4">
-						<div>
-							<label class="tron-label">Priority</label>
-							<label class="flex cursor-pointer items-center gap-2 pt-2">
-								<input
-									type="checkbox"
-									name="prioritized"
-									value="true"
-									checked={data.task.prioritized}
-									class="h-4 w-4 rounded"
-								/>
-								<span class="text-sm" style="color: var(--color-tron-text);">Prioritized</span>
-							</label>
-						</div>
-						<div>
-							<label for="taskLength" class="tron-label">Size</label>
-							<select
-								id="taskLength"
-								name="taskLength"
-								class="tron-select w-full"
-								value={data.task.taskLength}
-							>
-								<option value="short">Short</option>
-								<option value="medium">Medium</option>
-								<option value="long">Long</option>
-							</select>
-						</div>
 					</div>
 
 					<div class="mb-4">
@@ -320,17 +295,14 @@
 						<dt class="tron-text-muted">Status</dt>
 						<dd><TaskStatusBadge status={data.task.status} /></dd>
 					</div>
-					<div class="flex justify-between">
-						<dt class="tron-text-muted">Priority</dt>
-						<dd><PriorityBadge prioritized={data.task.prioritized} /></dd>
-					</div>
-					<div class="flex justify-between">
-						<dt class="tron-text-muted">Size</dt>
-						<dd class="tron-text-primary">
-							{({ short: 'Short', medium: 'Medium', long: 'Long' } as Record<string, string>)[data.task.taskLength as string] ??
-								data.task.taskLength}
-						</dd>
-					</div>
+					{#if data.task.sizeClass}
+						<div class="flex justify-between">
+							<dt class="tron-text-muted">Size</dt>
+							<dd class="tron-text-primary">
+								{sizeLabels[data.task.sizeClass] ?? data.task.sizeClass}
+							</dd>
+						</div>
+					{/if}
 					{#if data.task.assigneeName}
 						<div class="flex justify-between">
 							<dt class="tron-text-muted">Assigned To</dt>

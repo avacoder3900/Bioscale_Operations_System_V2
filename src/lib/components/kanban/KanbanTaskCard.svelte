@@ -1,5 +1,5 @@
 <script lang="ts">
-	import PriorityBadge from './PriorityBadge.svelte';
+	import { agingLevel, type KanbanStatus } from '$lib/shared/kanban-status';
 
 	interface TagInfo {
 		id: string;
@@ -12,8 +12,7 @@
 		title: string;
 		description: string | null;
 		status: string;
-		prioritized: boolean;
-		taskLength: string;
+		sizeClass?: string | null;
 		assignedTo: string | null;
 		assigneeName: string | null;
 		projectId: string | null;
@@ -55,25 +54,15 @@
 
 	let sourceBadge = $derived(task.source && task.source !== 'manual' ? sourceBadges[task.source] ?? null : null);
 
-	// Aging thresholds by status
-	const agingThresholds: Record<string, { warning: number; critical: number }> = {
-		backlog: { warning: 14, critical: 30 },
-		ready: { warning: 5, critical: 10 },
-		wip: { warning: 3, critical: 7 },
-		waiting: { warning: 3, critical: 7 }
-	};
-
+	// Aging severity from the shared status module (single source of truth)
 	let agingSeverity = $derived.by(() => {
-		if (task.status === 'done' || task.daysInStatus == null) return null;
-		const thresholds = agingThresholds[task.status];
-		if (!thresholds) return null;
-		if (task.daysInStatus > thresholds.critical) return 'critical';
-		if (task.daysInStatus > thresholds.warning) return 'warning';
-		return null;
+		if (task.daysInStatus == null) return null;
+		const level = agingLevel(task.status as KanbanStatus, task.daysInStatus);
+		return level === 'normal' ? null : level;
 	});
 
 	let agingBorderColor = $derived(
-		agingSeverity === 'critical' ? '#ef4444' : agingSeverity === 'warning' ? '#f59e0b' : null
+		agingSeverity === 'critical' ? '#ef4444' : agingSeverity === 'warn' ? '#f59e0b' : null
 	);
 
 	const lengthLabels: Record<string, string> = {
@@ -118,7 +107,6 @@
 	<!-- Title row -->
 	<div class="mb-2 flex items-start justify-between gap-2">
 		<h4 class="tron-text-primary text-sm leading-tight font-medium">{task.title}</h4>
-		<PriorityBadge prioritized={task.prioritized} />
 	</div>
 
 	<!-- Description preview -->
@@ -190,13 +178,15 @@
 				</span>
 			{/if}
 
-			<!-- Task length -->
-			<span
-				class="tron-text-muted inline-flex h-6 w-6 items-center justify-center rounded bg-[var(--color-tron-bg-tertiary)] text-xs"
-				title="Task size: {task.taskLength}"
-			>
-				{lengthLabels[task.taskLength] ?? 'M'}
-			</span>
+			<!-- Size class (set at processing; unsized cards show nothing) -->
+			{#if task.sizeClass}
+				<span
+					class="tron-text-muted inline-flex h-6 w-6 items-center justify-center rounded bg-[var(--color-tron-bg-tertiary)] text-xs"
+					title="Size: {task.sizeClass}"
+				>
+					{lengthLabels[task.sizeClass] ?? '?'}
+				</span>
+			{/if}
 		</div>
 
 		<!-- Due date -->
