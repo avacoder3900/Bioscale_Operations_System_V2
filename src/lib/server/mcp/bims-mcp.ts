@@ -99,7 +99,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '2.6.1' });
+	const server = new McpServer({ name: 'bims-operations', version: '2.7.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -429,10 +429,12 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'sessions; optics results are the Optical Test Cartridge Log (per-cartridge F7/F3 ratios per channel A/B/C, ' +
 				'computed on read). This tool fans out to the right stores for you. Filters combine freely: an SPU ' +
 				'(UDI/barcode/suffix like "203"), a cartridge barcode, a cartridge GROUP NAME (optics cohorts), passed ' +
-				'true/false, and a from/to date window. Examples: "magnetometer results for SPU 203 no matter passing or ' +
-				'failing" → {modality:"magnetometer", spu:"203"}; "optics results for all cartridges in group a3" → ' +
-				'{modality:"optical", group:"a3"}; "optics results for SPU 246 on July 20" → {modality:"optical", ' +
-				'spu:"246", from:"2026-07-20", to:"2026-07-21"}. If the user wants the results as a file, pass the rows to ' +
+				'true/false, a device (Particle id or SPU UDI/device name), and a from/to date window. Optical runs are linked ' +
+				'to the SPU that ran them (device.name = SPU UDI), so optics-for-an-SPU works directly. Examples: ' +
+				'"magnetometer results for SPU 203 no matter passing or failing" → {modality:"magnetometer", spu:"203"}; ' +
+				'"optics results for all cartridges in group a3" → {modality:"optical", group:"a3"}; "optics results for ' +
+				'SPU 212 on July 30" → {modality:"optical", spu:"212", from:"2026-07-30", to:"2026-07-31"}; "optics run on ' +
+				'a particular device" → {modality:"optical", device:"<particle id or UDI>"}. If the user wants the results as a file, pass the rows to ' +
 				'export_data_file. PRESENTATION — magnetometer: show each session exactly as the BIMS page does: a line ' +
 				'"Criteria: Z range <minZ> - <maxZ>" followed by a table "Well | Ch A (Z) | Ch B (Z) | Ch C (Z)" built from ' +
 				'the returned wells[] array, marking each Z value with a check/cross from its chX_pass flag. NEVER present ' +
@@ -445,6 +447,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				spu: z.string().optional().describe('SPU UDI, barcode, _id, or unique suffix (e.g. "203").'),
 				cartridge: z.string().optional().describe('Cartridge barcode or serial number (optical).'),
 				group: z.string().optional().describe('Cartridge group name, e.g. "a3" (optical cohorts).'),
+				device: z
+					.string()
+					.optional()
+					.describe('Particle device id or device name / SPU UDI — filters to results run on that device.'),
 				passed: z.boolean().optional().describe('Filter by outcome; OMIT to get results regardless of outcome.'),
 				from: z.string().optional().describe('ISO date — only results recorded on/after this.'),
 				to: z.string().optional().describe('ISO date — only results recorded on/before this.'),
