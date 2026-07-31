@@ -6274,3 +6274,21 @@ Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
 Source: branch master @ commit 28396b47
 Retrieve this exact code: git checkout master at commit 28396b47
 What this deployment is for: optics results write back to SPU validation.spectrophotometer (sync service + endpoint + MCP tool + daily cron piggyback); prod backfill of 32 SPUs.
+
+================================================================================
+2026-07-31 — master — Stale "running" sweep blocked B14 deck-scan; cleared + made self-healing
+================================================================================
+Operator hit "Another sweep is already running for this robot (id=m-vHB8TlaF9PK4SDRmN_i). Cancel it
+first." on B14. The sweep record started 15:07Z and died when the bridge daemon / robot-server was
+restarted this morning (B14 journal: manual restart via BIMS at 19:35 + restart timeout), leaving
+status='running' forever — same stale-state class as the maintenance-run and tipAdjust leaks.
+FIXED NOW: marked m-vHB8TlaF9PK4SDRmN_i errored (Mongo) — sweeps unblocked immediately.
+FIXED FOREVER: the sweep-start guard in /api/scanner/sweep now self-heals — an in-flight sweep with
+no progress update for 10+ minutes (the loop updates every slot) is auto-marked errored and the new
+sweep proceeds; only genuinely-live sweeps still 409.
+npm run check: 11 errors — unchanged baseline.
+
+Deployment: production — Vercel auto-deploy from master push
+Source: branch master @ this commit
+Retrieve this exact code: git log master --oneline (this commit)
+What this deployment is for: dead sweeps can never permanently block a robot's deck-scan again.
