@@ -99,7 +99,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '2.6.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '2.6.1' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -433,7 +433,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'failing" → {modality:"magnetometer", spu:"203"}; "optics results for all cartridges in group a3" → ' +
 				'{modality:"optical", group:"a3"}; "optics results for SPU 246 on July 20" → {modality:"optical", ' +
 				'spu:"246", from:"2026-07-20", to:"2026-07-21"}. If the user wants the results as a file, pass the rows to ' +
-				'export_data_file.',
+				'export_data_file. PRESENTATION — magnetometer: show each session exactly as the BIMS page does: a line ' +
+				'"Criteria: Z range <minZ> - <maxZ>" followed by a table "Well | Ch A (Z) | Ch B (Z) | Ch C (Z)" built from ' +
+				'the returned wells[] array, marking each Z value with a check/cross from its chX_pass flag. NEVER present ' +
+				'raw axis columns (AT/AX/AY/BT/...) unless the user explicitly asks for raw device output.',
 			inputSchema: z.object({
 				modality: z
 					.enum(['magnetometer', 'thermocouple', 'spectrophotometer', 'optical', 'all'])

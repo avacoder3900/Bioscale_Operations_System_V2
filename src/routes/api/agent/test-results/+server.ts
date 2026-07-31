@@ -112,29 +112,55 @@ export const GET: RequestHandler = async ({ request, url }) => {
 		}
 		const docs = await ValidationSession.find(filter)
 			.select(
-				'type spuId spuUdi barcode particleDeviceId status startedAt completedAt testRanAt overallPassed failureReasons override createdAt results.testType results.passed results.notes'
+				'type spuId spuUdi barcode particleDeviceId status startedAt completedAt testRanAt overallPassed failureReasons override createdAt magResults criteriaUsed results.testType results.passed results.notes'
 			)
 			.sort({ createdAt: -1 })
 			.limit(limit)
 			.lean();
-		sessions = (docs as any[]).map((d) => ({
-			source: 'validation_sessions',
-			modality: normalizeModality(d.type),
-			spuUdi: d.spuUdi ?? null,
-			spuId: d.spuId ?? null,
-			particleDeviceId: d.particleDeviceId ?? null,
-			status: d.status ?? null,
-			overallPassed: d.overallPassed ?? null,
-			failureReasons: d.failureReasons ?? [],
-			overridden: !!d.override,
-			testRanAt: d.testRanAt ?? null,
-			recordedAt: d.createdAt ?? d.startedAt ?? null,
-			subResults: (d.results ?? []).map((r: any) => ({
-				testType: r.testType,
-				passed: r.passed,
-				notes: r.notes
-			}))
-		}));
+		sessions = (docs as any[]).map((d) => {
+			// Per-well Z table exactly as the BIMS magnetometer page renders it:
+			// Well | Ch A (Z) | Ch B (Z) | Ch C (Z), each cell checked against the
+			// session's Z-range criteria.
+			const criteria =
+				d.criteriaUsed && typeof d.criteriaUsed === 'object' ? d.criteriaUsed : null;
+			const inRange = (z: unknown): boolean | null =>
+				typeof z === 'number' &&
+				typeof criteria?.minZ === 'number' &&
+				typeof criteria?.maxZ === 'number'
+					? z >= criteria.minZ && z <= criteria.maxZ
+					: null;
+			const wells = Array.isArray(d.magResults)
+				? d.magResults.map((w: any) => ({
+						well: w.well,
+						chA_Z: w.chA_Z ?? null,
+						chA_pass: inRange(w.chA_Z),
+						chB_Z: w.chB_Z ?? null,
+						chB_pass: inRange(w.chB_Z),
+						chC_Z: w.chC_Z ?? null,
+						chC_pass: inRange(w.chC_Z)
+					}))
+				: [];
+			return {
+				source: 'validation_sessions',
+				modality: normalizeModality(d.type),
+				spuUdi: d.spuUdi ?? null,
+				spuId: d.spuId ?? null,
+				particleDeviceId: d.particleDeviceId ?? null,
+				status: d.status ?? null,
+				overallPassed: d.overallPassed ?? null,
+				failureReasons: d.failureReasons ?? [],
+				overridden: !!d.override,
+				testRanAt: d.testRanAt ?? null,
+				recordedAt: d.createdAt ?? d.startedAt ?? null,
+				criteria,
+				wells,
+				subResults: (d.results ?? []).map((r: any) => ({
+					testType: r.testType,
+					passed: r.passed,
+					notes: r.notes
+				}))
+			};
+		});
 	}
 
 	// --------------------------------------------------------- optical
@@ -250,7 +276,12 @@ export const GET: RequestHandler = async ({ request, url }) => {
 			guidance:
 				'Results come from multiple BIMS tabs: validation_sessions (magnetometer=mag, thermocouple=thermo, ' +
 				'spectrophotometer) and the Optical Test Cartridge Log (cartridge_records analyzed on read). ' +
-				'The legacy test_results collection is empty and is not consulted.'
+				'The legacy test_results collection is empty and is not consulted. ' +
+				'PRESENTATION: render magnetometer results exactly as the BIMS page does — for each session a line ' +
+				'"Criteria: Z range <criteria.minZ> - <criteria.maxZ>" then a table with columns ' +
+				'"Well | Ch A (Z) | Ch B (Z) | Ch C (Z)" built from wells[], marking each Z with a check (pass) or ' +
+				'cross (fail) from the chX_pass flags. Never show raw axis data (T/X/Y columns) unless the user ' +
+				'explicitly asks for raw device output.'
 		}
 	});
 };
