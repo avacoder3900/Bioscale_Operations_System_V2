@@ -63,6 +63,35 @@ const RED = '0.78 0.11 0.11';
 const TILE_BG = '0.93 0.95 0.98';
 const BLACK = '0 0 0';
 
+/**
+ * Compute column positions/widths automatically from content, for callers that
+ * supply arbitrary tables (the universal export endpoint). Columns get width
+ * proportional to their longest cell (clamped), shrunk to fit the page.
+ */
+export function autoLayoutColumns(labels: string[], rows: string[][], landscape = true): PdfColumn[] {
+	const usable = (landscape ? 792 : 612) - 80;
+	const CHAR_W = 4.8;
+	const GAP = 10;
+	let want = labels.map((l, i) => {
+		let m = l.length;
+		for (const r of rows) m = Math.max(m, (r[i] ?? '').length);
+		return Math.min(Math.max(m, 3), 60);
+	});
+	const width = (chars: number) => chars * CHAR_W + GAP;
+	const total = want.reduce((s, c) => s + width(c), 0);
+	if (total > usable) {
+		const scale = (usable - labels.length * GAP) / (total - labels.length * GAP);
+		want = want.map((c) => Math.max(3, Math.floor(c * scale)));
+	}
+	const cols: PdfColumn[] = [];
+	let x = LEFT;
+	labels.forEach((l, i) => {
+		cols.push({ header: l, x, maxChars: want[i] });
+		x += width(want[i]);
+	});
+	return cols;
+}
+
 /** PDF string escaping; non-ASCII is replaced (built-in fonts are WinAnsi). */
 function esc(s: string): string {
 	return s

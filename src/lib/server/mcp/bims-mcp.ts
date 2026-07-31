@@ -99,7 +99,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '2.2.1' });
+	const server = new McpServer({ name: 'bims-operations', version: '2.3.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -139,13 +139,19 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			description:
 				'Execute a saved read-only query against an allowlisted BIMS collection. ' +
 				'Use list_saved_queries first to find the queryId and its parameter schema. Returns up to the query\'s maxRows (default 100). ' +
-				'If the user wants an inventory/parts PDF, call generate_inventory_pdf instead of composing a document from query rows.',
+				'Supports range filters via key suffixes __gte/__lte/__gt/__lt — e.g. {"createdAt__gte": "2026-07-01", ' +
+				'"createdAt__lte": "2026-07-31T17:00:00Z"} for date/time windows. ' +
+				'If the user wants the results as a file (PDF/CSV/JSON), pass the rows to export_data_file ' +
+				'(inventory PDFs: use generate_inventory_pdf instead).',
 			inputSchema: z.object({
 				queryId: z.string().describe('The saved query _id from list_saved_queries.'),
 				parameters: z
 					.record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
 					.optional()
-					.describe('Optional filter parameters merged into the query (scalar values only).')
+					.describe(
+						'Optional filters merged into the query. Plain keys match equality; keys with __gte/__lte/__gt/__lt ' +
+						'suffixes build ranges (ISO date strings are coerced to dates), e.g. {"testRanAt__gte": "2026-07-01"}.'
+					)
 			})
 		},
 		async ({ queryId, parameters }) =>
@@ -340,6 +346,53 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		},
 		async (args) =>
 			callAgentApi(fetcher, '/api/agent/inventory/report', { method: 'POST', body: { ...args, format: 'pdf' } })
+	);
+
+	server.registerTool(
+		'export_data_file',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Universal file export: turn ANY information the user asks for into a downloadable file (PDF, CSV, or JSON), ' +
+				'uploaded and returned as a public URL. Use whenever the user asks for data "as a file/PDF/CSV/report/download" — ' +
+				'e.g. "give me the magnetometer history for SPU 203 as a PDF". WORKFLOW: (1) gather the data with the read tools ' +
+				'(run_saved_query, get_spu_status, list_spus, quality_trends, kanban tools, ...), applying every filter the user ' +
+				'stated (specific SPUs/devices, date/time windows — saved queries accept __gte/__lte range parameters); ' +
+				'(2) assemble the rows and call this tool; (3) give the user the returned url. Pick the format the user asked for ' +
+				'(default pdf). NEVER compose a document yourself from query data — always produce files through this tool so they ' +
+				'are stored, audited, and consistently formatted. Exception: inventory/parts reports have a dedicated tool ' +
+				'(generate_inventory_pdf) that matches the BIMS parts page — use that instead for inventory. ' +
+				'Include every relevant column the data has unless the user narrows it; put filters you applied in subtitleLines ' +
+				'so the file is self-describing.',
+			inputSchema: z.object({
+				title: z.string().describe('Document title, e.g. "Magnetometer History - SPU 203".'),
+				format: z.enum(['pdf', 'csv', 'json']).optional().describe('File type the user asked for (default pdf).'),
+				filename: z.string().optional().describe('Optional filename hint (no extension).'),
+				subtitleLines: z
+					.array(z.string())
+					.optional()
+					.describe('Context lines under the title — state the filters applied (SPU, device, date range).'),
+				stats: z
+					.array(z.object({ label: z.string(), value: z.string() }))
+					.optional()
+					.describe('Up to 6 summary tiles, e.g. {label: "Total Runs", value: "14"}.'),
+				sections: z
+					.array(
+						z.object({
+							heading: z.string().optional().describe('Section heading, e.g. "Failed Runs".'),
+							columns: z
+								.array(z.object({ key: z.string(), label: z.string() }))
+								.min(1)
+								.describe('Column order + labels; key selects the field from each row object.'),
+							rows: z.array(z.record(z.string(), z.unknown())).describe('Row objects keyed by column key.')
+						})
+					)
+					.min(1)
+					.describe('One or more tables. 5000 rows max across all sections.'),
+				footerLines: z.array(z.string()).optional().describe('Closing notes (totals, caveats).'),
+				orientation: z.enum(['landscape', 'portrait']).optional().describe('PDF page orientation (default landscape).')
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/export', { method: 'POST', body: args })
 	);
 
 	server.registerTool(

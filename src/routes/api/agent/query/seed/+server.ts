@@ -118,6 +118,18 @@ const QUERY_ENTRIES = [
 		maxRows: 100
 	},
 	{
+		name: 'SPU Validation Sessions',
+		description:
+			'Validation/test run history per SPU (magnetometer, thermocouple, lux, spectrophotometer). ' +
+			'Filter with parameters: type (e.g. "magnetometer"), spuId, spuUdi, barcode, particleDeviceId, overallPassed, ' +
+			'status, and date/time ranges like {"testRanAt__gte": "2026-07-01", "testRanAt__lte": "2026-07-31"} ' +
+			'(createdAt/startedAt/completedAt ranges also work).',
+		category: 'quality' as const,
+		collectionName: 'validation_sessions',
+		mongoQuery: {},
+		maxRows: 200
+	},
+	{
 		name: 'Failed Test Results',
 		description: 'Test results with failed status',
 		category: 'quality' as const,
