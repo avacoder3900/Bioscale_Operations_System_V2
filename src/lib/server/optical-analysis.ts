@@ -810,3 +810,311 @@ export function compareGroups(
 		notes
 	};
 }
+
+// ---- VALIDATION-06: group report + group-vs-group difference ----------------
+//
+// Additive. `compareGroups`, `analyzeGroupRobust`, `analyzeCartridge` and
+// `robustStats` are load-bearing for the shipped /analyze page and are NOT touched.
+// Everything below is derive-on-read like the rest of this module: nothing here is
+// ever written back to the DB.
+
+/**
+ * One cartridge inside a `GroupReport`.
+ *
+ * `overallRatio` is the MEAN OF THE AVAILABLE WELL RATIOS (A/B/C). Wells that
+ * produced no usable F7/F3 are SKIPPED, never treated as zero — a dead well must not
+ * drag a cartridge's headline number toward 0. `wellsUsed` records how many of the
+ * three actually contributed, so a 1-well number is never mistaken for a 3-well one.
+ */
+export interface GroupReportRow {
+	id: string;
+	label: string;
+	spuUdi: string | null;
+	ratioByChannel: { A: number | null; B: number | null; C: number | null };
+	/** Mean of the available well ratios. null when no well produced one. */
+	overallRatio: number | null;
+	/** How many of A/B/C contributed to `overallRatio` (0-3). */
+	wellsUsed: number;
+	hasReadings: boolean;
+	/** This cartridge's OWN readings were noisy — a different thing from being a group outlier. */
+	cartridgeWarning: boolean;
+	outlierChannels: Array<'A' | 'B' | 'C'>;
+	/**
+	 * Server-authored sentence per well, carried through from `analyzeGroupRobust` so
+	 * the table, the CSV and any tooltip cannot diverge on why a cell is flagged.
+	 */
+	outlierReasons: { A: string | null; B: string | null; C: string | null };
+}
+
+/** A plain, table-shaped read of one group. Avg / stdev / CV / median all come out of `robustStats`. */
+export interface GroupReport {
+	groupId: string;
+	groupName: string;
+	/** Cartridges in the group, INCLUDING any that contributed nothing. */
+	n: number;
+	windowK: number;
+	/** `robustStats` over the per-cartridge `overallRatio` values. */
+	overall: RobustStat;
+	/** `robustStats` per well, across the group's cartridges. */
+	wells: Array<{ channel: 'A' | 'B' | 'C' } & RobustStat>;
+	rows: GroupReportRow[];
+	excluded: ExcludedCartridge[];
+	flags: string[];
+}
+
+/**
+ * Difference between two `RobustStat`s. Pure subtraction — no test statistic, no
+ * p-value, nothing inferential.
+ */
+export interface StatDiff {
+	a: RobustStat | null;
+	b: RobustStat | null;
+	/** a.mean - b.mean */
+	avgDiff: number | null;
+	/** `avgDiff` relative to B's mean, in percent. */
+	avgPctDiff: number | null;
+	/** a.sd - b.sd */
+	sdDiff: number | null;
+	/**
+	 * a.cv - b.cv. CV is ALREADY a percentage, so the difference of two CVs is in
+	 * PERCENTAGE POINTS (pp) — not a percentage change. The field, the column header
+	 * and the CSV all say "pp" for exactly this reason.
+	 */
+	cvDiffPp: number | null;
+	/** a.median - b.median */
+	medianDiff: number | null;
+	/** `medianDiff` relative to B's median, in percent. */
+	medianPctDiff: number | null;
+	/** Either side has fewer than `minGroupN` contributing cartridges. */
+	underpowered: boolean;
+}
+
+export interface GroupDiffReport {
+	computedAt: string;
+	windowK: number;
+	config: OpticalConfig;
+	a: GroupReport;
+	b: GroupReport;
+	overall: StatDiff;
+	wells: Array<{ channel: 'A' | 'B' | 'C' } & StatDiff>;
+	/** Emitted FROM THE ENGINE so the view cannot render the numbers without the caveats. */
+	notes: string[];
+}
+
+/** Mean and median diverging by more than this (percent of |median|) earns the skew note. */
+const SKEW_DIVERGENCE_PCT = 10;
+
+/** x - y, null unless both are present and the result is finite. */
+function diffOf(x: number | null | undefined, y: number | null | undefined): number | null {
+	if (x === null || x === undefined || y === null || y === undefined) return null;
+	if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+	const d = x - y;
+	return Number.isFinite(d) ? d : null;
+}
+
+/** diff/|base|*100. Guarded on base === 0 — an unguarded divide yields Infinity, and
+ *  JSON.stringify(Infinity) is null, which blanks the cell with no error anywhere. */
+function pctOf(diff: number | null, base: number | null | undefined): number | null {
+	if (diff === null || base === null || base === undefined) return null;
+	if (!Number.isFinite(base) || base === 0) return null;
+	const p = (diff / Math.abs(base)) * 100;
+	return Number.isFinite(p) ? p : null;
+}
+
+/** Drop the `channel` tag so a StatDiff's `a`/`b` carry a clean RobustStat. */
+function bareStat(w: ({ channel: 'A' | 'B' | 'C' } & RobustStat) | undefined | null): RobustStat | null {
+	if (!w) return null;
+	const { channel, ...rest } = w;
+	void channel;
+	return rest;
+}
+
+/**
+ * One group, read as a table: a totals row over the whole group plus one row per
+ * cartridge.
+ *
+ * Thin by construction — `analyzeGroupRobust` (which is itself `analyzeCartridge` per
+ * member plus `robustStats` per well) supplies every per-cartridge number and the
+ * outlier marks; this adds only the across-well "overall" the compare view needs.
+ * No new statistic is invented.
+ */
+export function reportGroup(group: GroupInput, config?: Partial<OpticalConfig>): GroupReport {
+	const cfg: OpticalConfig = { ...DEFAULT_OPTICAL_CONFIG, ...config };
+
+	const { result, excluded } = analyzeGroupRobust(group, cfg);
+
+	const rows: GroupReportRow[] = [];
+	const overallValues: number[] = [];
+
+	for (const row of result.cartridges) {
+		// Skip, do not zero-fill. A well with no usable ratio contributes nothing.
+		const used: number[] = [];
+		for (const c of CHANNELS) {
+			const v = row.ratioByChannel[c];
+			if (v !== null && Number.isFinite(v)) used.push(v);
+		}
+		const rawOverall = used.length > 0 ? mean(used) : null;
+		const overallRatio = rawOverall !== null && Number.isFinite(rawOverall) ? rawOverall : null;
+		if (overallRatio !== null) overallValues.push(overallRatio);
+
+		rows.push({
+			id: row.id,
+			label: row.label,
+			spuUdi: row.spuUdi,
+			ratioByChannel: { ...row.ratioByChannel },
+			overallRatio,
+			wellsUsed: used.length,
+			hasReadings: row.hasReadings,
+			cartridgeWarning: row.cartridgeWarning,
+			outlierChannels: [...row.outlierChannels],
+			outlierReasons: { ...row.outlierReasons }
+		});
+	}
+
+	const overall = robustStats(overallValues, cfg.madThreshold);
+
+	const wells = CHANNELS.map((c) => {
+		const vals = rows
+			.map((r) => r.ratioByChannel[c])
+			.filter((v): v is number => v !== null && Number.isFinite(v));
+		return { channel: c, ...robustStats(vals, cfg.madThreshold) };
+	});
+
+	const flags = [...result.flags];
+	// Same rule as the per-well spread flag, applied to the overall — robust CV, not
+	// the outlier-sensitive classic CV.
+	if (overall.n > 0 && overall.robustCv !== null && overall.robustCv > cfg.robustCvThreshold) {
+		flags.push(
+			`Overall F7/F3 varies ${overall.robustCv.toFixed(0)}% across the ${overall.n} ` +
+				`cartridge${overall.n === 1 ? '' : 's'} with a usable value (robust CV, limit ` +
+				`${cfg.robustCvThreshold}%)`
+		);
+	}
+
+	// Backstop: anything with no usable well must be accounted for out loud, never
+	// silently absent from both the totals and the excluded list.
+	const excludedOut = [...excluded];
+	for (const r of rows) {
+		if (r.overallRatio !== null) continue;
+		if (excludedOut.some((e) => e.id === r.id)) continue;
+		excludedOut.push({
+			id: r.id,
+			label: r.label,
+			groupId: group.groupId,
+			groupName: group.groupName,
+			reason: 'No well produced a usable F7/F3, so this cartridge has no overall value.'
+		});
+	}
+
+	return {
+		groupId: group.groupId,
+		groupName: group.groupName,
+		n: rows.length,
+		windowK: cfg.windowK,
+		overall,
+		wells,
+		rows,
+		excluded: excludedOut,
+		flags
+	};
+}
+
+function statDiff(a: RobustStat | null, b: RobustStat | null, minGroupN: number): StatDiff {
+	const avgDiff = diffOf(a?.mean, b?.mean);
+	const medianDiff = diffOf(a?.median, b?.median);
+	return {
+		a: a ?? null,
+		b: b ?? null,
+		avgDiff,
+		avgPctDiff: pctOf(avgDiff, a && b ? b.mean : null),
+		sdDiff: diffOf(a?.sd, b?.sd),
+		cvDiffPp: diffOf(a?.cv, b?.cv),
+		medianDiff,
+		medianPctDiff: pctOf(medianDiff, a && b ? b.median : null),
+		underpowered: (a?.n ?? 0) < minGroupN || (b?.n ?? 0) < minGroupN
+	};
+}
+
+/**
+ * When a group's mean is pulled well off its median, say so. This is the whole point
+ * of showing median next to avg, and it should be stated rather than left for the
+ * reader to notice.
+ */
+function skewNote(report: GroupReport): string | null {
+	const m = report.overall.mean;
+	const med = report.overall.median;
+	if (m === null || med === null) return null;
+	if (!Number.isFinite(m) || !Number.isFinite(med) || med === 0) return null;
+	const divergence = (Math.abs(m - med) / Math.abs(med)) * 100;
+	if (!Number.isFinite(divergence) || divergence <= SKEW_DIVERGENCE_PCT) return null;
+	return (
+		`Group "${report.groupName}": the average F7/F3 (${fmtNum(m)}) sits ` +
+		`${divergence.toFixed(0)}% away from the median (${fmtNum(med)}). The average is being ` +
+		`pulled by an extreme cartridge, so read this group's CV with that in mind — the median ` +
+		`is the more representative centre here.`
+	);
+}
+
+/**
+ * Group A versus Group B, as a difference of descriptive statistics.
+ *
+ * Calls `reportGroup` twice and subtracts. Deliberately DESCRIPTIVE only — no
+ * p-values, no t-test, no ANOVA, for the reasons set out above `compareGroups`.
+ * At n ~ 5-10 there is no power, and a non-significant p would be read as "these
+ * groups agree", i.e. absence of evidence reported as evidence of absence.
+ */
+export function diffGroups(
+	a: GroupInput,
+	b: GroupInput,
+	config?: Partial<OpticalConfig>
+): GroupDiffReport {
+	const cfg: OpticalConfig = { ...DEFAULT_OPTICAL_CONFIG, ...config };
+
+	const ra = reportGroup(a, cfg);
+	const rb = reportGroup(b, cfg);
+
+	const overall = statDiff(ra.overall, rb.overall, cfg.minGroupN);
+
+	const wells = CHANNELS.map((c) => {
+		const wa = bareStat(ra.wells.find((w) => w.channel === c));
+		const wb = bareStat(rb.wells.find((w) => w.channel === c));
+		return { channel: c, ...statDiff(wa, wb, cfg.minGroupN) };
+	});
+
+	// Notes come from the engine, not the template, so the comparison cannot be
+	// rendered without its caveats.
+	const notes: string[] = [];
+
+	const spuUdis = new Set<string>();
+	for (const r of [ra, rb]) {
+		for (const row of r.rows) if (row.spuUdi) spuUdis.add(row.spuUdi);
+	}
+	if (spuUdis.size > 1) {
+		notes.push(
+			'Raw F7/F3, no per-SPU calibration applied. These cartridges ran on ' +
+				`${spuUdis.size} different SPUs, so a difference between groups may be ` +
+				'optics rather than chemistry.'
+		);
+	}
+
+	notes.push(
+		'Descriptive statistics only — no statistical test is performed and no ' +
+			'p-values are computed. Treat a difference as a review signal, not a pass/fail gate.'
+	);
+
+	for (const r of [ra, rb]) {
+		const note = skewNote(r);
+		if (note) notes.push(note);
+	}
+
+	return {
+		computedAt: new Date().toISOString(),
+		windowK: cfg.windowK,
+		config: cfg,
+		a: ra,
+		b: rb,
+		overall,
+		wells,
+		notes
+	};
+}
