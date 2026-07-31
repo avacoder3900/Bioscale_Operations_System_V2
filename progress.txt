@@ -6394,3 +6394,12 @@ Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
 Source: branch master @ commit f3569d69
 Retrieve this exact code: git checkout master at commit f3569d69
 What this deployment is for: physical-count inventory reconciliation (record_physical_count, MCP v2.10.0).
+
+Correction (same day): Alejandro clarified the PT-SPU-003 numbers were EXAMPLES only — he
+had already fixed the count himself. Reverted the demo write in Mongo (removed the two
+example barcodeCounts entries and their altBarcodes registrations, restored
+inventorySource:'scanned'; inventoryCount untouched at 273; the delta-0 adjustment
+transaction and audit entry remain as immutable history). The record_physical_count
+capability itself is unchanged and live — it is exactly the "tell Claude in the web
+interface that physical inventory doesn't align and change it" flow, pending the
+connector re-add + new chat on the claude.ai side.
