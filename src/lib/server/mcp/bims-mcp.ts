@@ -99,7 +99,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '2.3.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '2.4.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -142,7 +142,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'Supports range filters via key suffixes __gte/__lte/__gt/__lt — e.g. {"createdAt__gte": "2026-07-01", ' +
 				'"createdAt__lte": "2026-07-31T17:00:00Z"} for date/time windows. ' +
 				'If the user wants the results as a file (PDF/CSV/JSON), pass the rows to export_data_file ' +
-				'(inventory PDFs: use generate_inventory_pdf instead).',
+				'(inventory files: use generate_inventory_report instead).',
 			inputSchema: z.object({
 				queryId: z.string().describe('The saved query _id from list_saved_queries.'),
 				parameters: z
@@ -212,7 +212,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'lowStockParts (count on hand of zero or below) AND criticalLowStockParts — parts classified "Critical" ' +
 				'(their category field) that are running low — so use this to answer "are any Critical parts low on stock?". ' +
 				'You are authorized to state exact inventory counts back to the user. ' +
-				'If the user wants an inventory PDF, do NOT build one from this data — call generate_inventory_pdf.',
+				'If the user wants an inventory file (PDF/CSV/JSON), do NOT build one from this data — call generate_inventory_report.',
 			inputSchema: z.object({
 				category: z.string().optional().describe('Restrict the parts list to one classification, e.g. "Critical".'),
 				lowStockOnly: z.boolean().optional().describe('Restrict the parts list to parts with count on hand <= 0.')
@@ -235,7 +235,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'if it returns none, ask the user to scan the part barcode and retry with barcode. ' +
 				'You are authorized to answer counting questions ("how many stage boards do we have?") with the exact ' +
 				'inventoryCount from this tool — state the number plainly. Each part\'s category field carries its ' +
-				'Critical / Non-Critical classification. If the user wants an inventory PDF, call generate_inventory_pdf ' +
+				'Critical / Non-Critical classification. If the user wants an inventory file (PDF/CSV/JSON), call generate_inventory_report ' +
 				'instead of composing a document from this data.',
 			inputSchema: z.object({
 				q: z.string().optional().describe('Free-text description of the part (e.g. "magnet heating block spherical").'),
@@ -322,20 +322,25 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	);
 
 	server.registerTool(
-		'generate_inventory_pdf',
+		'generate_inventory_report',
 		{ annotations: WRITE_TOOL,
 			description:
-				'Render an inventory report as a PDF, upload it, and return a public download URL. The PDF mirrors the BIMS parts ' +
-				'page: summary tiles (Total Parts, Classifications, Total Inventory Value, Low Stock), a Needs Attention low-stock ' +
-				'section, and the full parts table with the same columns as the UI (Name, Part #, Classification, Manufacturer, ' +
-				'Qty/Unit, Inventory, Unit Cost, Total Value, Lead Time). ALWAYS use this tool for inventory PDFs — never compose ' +
-				'your own PDF from raw query data, so reports always match what the BIMS software shows. ' +
-				'ONLY call this when the user explicitly asks for a PDF (e.g. "give me a pdf of the total inventory count") — ' +
+				'Render an inventory report as a file (PDF, CSV, or JSON — whichever the user asks for, default PDF), upload it, ' +
+				'and return a public download URL. Every format carries identical content mirroring the BIMS parts page: summary ' +
+				'stats (Total Parts, Classifications, Total Inventory Value, Low Stock), the Low Inventory section, and the full ' +
+				'parts table with the same columns as the UI (Name, Part #, Classification, Manufacturer, Qty/Unit, Inventory, ' +
+				'Unit Cost, Total Value, Lead Time). ALWAYS use this tool for inventory files — never compose your own document ' +
+				'from raw query data, so reports always match what the BIMS software shows. ' +
+				'ONLY call this when the user explicitly asks for a file (e.g. "give me a pdf/csv of the total inventory count") — ' +
 				'for ordinary counting questions answer inline from parts_lookup / inventory_overview instead. ' +
 				'Default scope is "spu-bom" (the SPU Parts Bill of Materials); the user may condition the request on another ' +
 				'scope ("general" = General Inventory / non-BOM, "cartridge", or "all") and/or a classification filter such as ' +
 				'category "Critical", or lowStockOnly. Report the returned url to the user as a link.',
 			inputSchema: z.object({
+				format: z
+					.enum(['pdf', 'csv', 'json'])
+					.optional()
+					.describe('File type the user asked for (default pdf). Same BIMS-page content in every format.'),
 				scope: z
 					.enum(['spu-bom', 'general', 'cartridge', 'all'])
 					.optional()
@@ -344,8 +349,11 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				lowStockOnly: z.boolean().optional().describe('Only parts with count on hand <= 0.')
 			})
 		},
-		async (args) =>
-			callAgentApi(fetcher, '/api/agent/inventory/report', { method: 'POST', body: { ...args, format: 'pdf' } })
+		async ({ format, ...rest }) =>
+			callAgentApi(fetcher, '/api/agent/inventory/report', {
+				method: 'POST',
+				body: { ...rest, format: format ?? 'pdf' }
+			})
 	);
 
 	server.registerTool(
@@ -360,7 +368,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'(2) assemble the rows and call this tool; (3) give the user the returned url. Pick the format the user asked for ' +
 				'(default pdf). NEVER compose a document yourself from query data — always produce files through this tool so they ' +
 				'are stored, audited, and consistently formatted. Exception: inventory/parts reports have a dedicated tool ' +
-				'(generate_inventory_pdf) that matches the BIMS parts page — use that instead for inventory. ' +
+				'(generate_inventory_report) that matches the BIMS parts page — use that instead for inventory. ' +
 				'Include every relevant column the data has unless the user narrows it; put filters you applied in subtitleLines ' +
 				'so the file is self-describing.',
 			inputSchema: z.object({

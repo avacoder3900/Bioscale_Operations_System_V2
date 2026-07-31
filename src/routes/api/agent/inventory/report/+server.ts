@@ -34,8 +34,9 @@ const money = (v: number | null): string =>
  *   (General Inventory / non-BOM), 'cartridge', or 'all'.
  * - category: exact classification filter, e.g. 'Critical'.
  * - lowStockOnly: restrict to parts with inventoryCount <= 0.
- * - format: 'json' (rows inline) or 'pdf' (default — renders a PDF, uploads it
- *   to R2, returns the public URL).
+ * - format: 'pdf' (default), 'csv', or 'json' — all render the same BIMS-page
+ *   content to a file, upload it to R2, and return the public URL.
+ *   'data' returns the rows inline in the response instead of building a file.
  */
 export const POST: RequestHandler = async ({ request }) => {
 	requireAgentApiKey(request);
@@ -47,7 +48,9 @@ export const POST: RequestHandler = async ({ request }) => {
 		? body.category.trim()
 		: undefined;
 	const lowStockOnly = body.lowStockOnly === true;
-	const format: 'pdf' | 'json' = body.format === 'json' ? 'json' : 'pdf';
+	const format: 'pdf' | 'csv' | 'json' | 'data' = ['csv', 'json', 'data'].includes(body.format)
+		? body.format
+		: 'pdf';
 
 	const filter: Record<string, unknown> = { isActive: { $ne: false } };
 	if (scope === 'spu-bom' || scope === 'general') {
@@ -129,7 +132,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		partsWithoutCostData: excludedNoCost.length
 	};
 
-	if (format === 'json') {
+	if (format === 'data') {
 		return json({
 			success: true,
 			data: {
@@ -204,40 +207,106 @@ export const POST: RequestHandler = async ({ request }) => {
 	});
 
 	const generatedAt = new Date();
-	const pdf = generateReportPdf({
-		landscape: true,
-		title: SCOPE_TITLES[scope],
-		subtitleLines: [
-			'Brevitest Technologies - BIMS parts inventory',
-			`Generated ${generatedAt.toISOString()}`,
-			...(filtersApplied.length ? [`Filters: ${filtersApplied.join('; ')}`] : [])
-		],
-		stats: [
-			{ label: 'Total Parts', value: String(rows.length) },
-			{ label: 'Classifications', value: String(classifications.size) },
-			{ label: 'Total Inventory Value', value: money(summary.totalInventoryValue) },
-			{ label: 'Low Stock', value: String(belowMin.length) }
-		],
-		sections,
-		footerLines: [
-			`Totals: ${rows.length} parts, ${totalUnits} units on hand, total inventory value ` +
-				`${money(summary.totalInventoryValue)}` +
-				(excludedNoCost.length
-					? ` (${excludedNoCost.length} parts with no cost data are excluded from the table and totals, as on the BIMS parts page)`
-					: ''),
-			'Counts are live values from BIMS at time of generation. Shaded rows are at or below zero on hand.'
-		],
-		pageFooter: `Brevitest Technologies - BIMS Inventory - ${SCOPE_TITLES[scope]}`
-	});
+	const stats = [
+		{ label: 'Total Parts', value: String(rows.length) },
+		{ label: 'Classifications', value: String(classifications.size) },
+		{ label: 'Total Inventory Value', value: money(summary.totalInventoryValue) },
+		{ label: 'Low Stock', value: String(belowMin.length) }
+	];
+	const footerLines = [
+		`Totals: ${rows.length} parts, ${totalUnits} units on hand, total inventory value ` +
+			`${money(summary.totalInventoryValue)}` +
+			(excludedNoCost.length
+				? ` (${excludedNoCost.length} parts with no cost data are excluded from the table and totals, as on the BIMS parts page)`
+				: ''),
+		'Counts are live values from BIMS at time of generation.'
+	];
+
+	const csvCell = (s: string): string =>
+		/[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+
+	let buffer: Buffer;
+	let contentType: string;
+	let ext: string;
+	if (format === 'csv') {
+		const lines: string[] = [
+			csvCell(SCOPE_TITLES[scope]),
+			csvCell('Brevitest Technologies - BIMS parts inventory'),
+			csvCell(`Generated ${generatedAt.toISOString()}`),
+			...(filtersApplied.length ? [csvCell(`Filters: ${filtersApplied.join('; ')}`)] : []),
+			...stats.map((s) => `${csvCell(s.label)},${csvCell(s.value)}`),
+			''
+		];
+		for (const sec of sections) {
+			lines.push(csvCell(sec.heading));
+			lines.push(sec.columns.map((c) => csvCell(c.header)).join(','));
+			for (const row of sec.rows) lines.push(row.cells.map(csvCell).join(','));
+			lines.push('');
+		}
+		for (const f of footerLines) lines.push(csvCell(f));
+		// UTF-8 BOM so Excel opens the CSV correctly.
+		buffer = Buffer.from('\ufeff' + lines.join('\r\n'), 'utf8');
+		contentType = 'text/csv';
+		ext = 'csv';
+	} else if (format === 'json') {
+		buffer = Buffer.from(
+			JSON.stringify(
+				{
+					title: SCOPE_TITLES[scope],
+					generatedAt: generatedAt.toISOString(),
+					...summary,
+					stats,
+					lowInventory: lowInventory.map((r) => ({
+						partNumber: r.partNumber,
+						name: r.name,
+						category: r.category,
+						inventoryCount: r.inventoryCount,
+						leadTimeDays: r.leadTimeDays
+					})),
+					parts: rows,
+					excludedNoCostParts: excludedNoCost.map((r) => ({
+						partNumber: r.partNumber,
+						name: r.name,
+						inventoryCount: r.inventoryCount
+					})),
+					notes: footerLines
+				},
+				null,
+				2
+			),
+			'utf8'
+		);
+		contentType = 'application/json';
+		ext = 'json';
+	} else {
+		buffer = generateReportPdf({
+			landscape: true,
+			title: SCOPE_TITLES[scope],
+			subtitleLines: [
+				'Brevitest Technologies - BIMS parts inventory',
+				`Generated ${generatedAt.toISOString()}`,
+				...(filtersApplied.length ? [`Filters: ${filtersApplied.join('; ')}`] : [])
+			],
+			stats,
+			sections,
+			footerLines: [
+				footerLines[0],
+				'Counts are live values from BIMS at time of generation. Shaded rows are at or below zero on hand.'
+			],
+			pageFooter: `Brevitest Technologies - BIMS Inventory - ${SCOPE_TITLES[scope]}`
+		});
+		contentType = 'application/pdf';
+		ext = 'pdf';
+	}
 
 	const reportId = generateId();
-	const key = `reports/inventory/inventory-${scope}-${generatedAt.toISOString().slice(0, 10)}-${reportId}.pdf`;
+	const key = `reports/inventory/inventory-${scope}-${generatedAt.toISOString().slice(0, 10)}-${reportId}.${ext}`;
 	let url: string;
 	try {
-		url = await uploadViaWorker(pdf, key, 'application/pdf');
+		url = await uploadViaWorker(buffer, key, contentType);
 	} catch {
 		try {
-			url = await uploadToR2(pdf, key, 'application/pdf');
+			url = await uploadToR2(buffer, key, contentType);
 		} catch (e) {
 			throw error(502, `Report generated but upload to R2 failed: ${(e as Error).message}`);
 		}
@@ -248,11 +317,14 @@ export const POST: RequestHandler = async ({ request }) => {
 		tableName: 'part_definitions',
 		recordId: reportId,
 		action: 'EXPORT',
-		newData: { ...summary, r2Key: key, url },
+		newData: { ...summary, format, r2Key: key, url },
 		changedAt: generatedAt,
 		changedBy: 'agent-api',
-		reason: 'Inventory PDF report generated'
+		reason: 'Inventory report generated'
 	});
 
-	return json({ success: true, data: { ...summary, url, r2Key: key, generatedAt: generatedAt.toISOString() } });
+	return json({
+		success: true,
+		data: { ...summary, format, url, r2Key: key, generatedAt: generatedAt.toISOString() }
+	});
 };
