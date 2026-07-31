@@ -6366,3 +6366,31 @@ Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
 Source: branch master @ commit 07e7fc98
 Retrieve this exact code: git checkout master at commit 07e7fc98
 What this deployment is for: BIMS-style magnetometer tables from get_spu_status/run_saved_query + presentation hints steering stale connector sessions.
+
+================================================================================
+2026-07-31 — master — physical-count reconciliation: absolute counts + per-barcode bins (MCP v2.10.0)
+================================================================================
+Alejandro: let Claude "hardcode" inventory counts after a physical count — "a physical
+count was done on <part> and it is supposed to be 129 not 100", incl. per-barcode bin
+quantities ("barcode X has 100 and barcode Y has 100") for parts with preexisting labels.
+
+- PartDefinition: new barcodeCounts[] ({barcode(lowercase), quantity, countedAt,
+  countedBy}, _id:false) + lastPhysicalCountAt. inventoryCount stays the rolled-up total.
+- NEW /api/agent/inventory/physical-count + record_physical_count MCP tool (v2.10.0),
+  confirmation-gated like reassembly (numbered list → "Confirm?"): sets ABSOLUTE counts;
+  per-barcode entries UPSERT (partial recounts keep other bins); total = stated newCount
+  else sum of all recorded bins; stated-vs-sum mismatch returns a warning (stated wins);
+  unknown labels auto-register into altBarcodes; atomic validation; immutable 'adjustment'
+  InventoryTransaction (previous→new) + manual_inventory_edit audit entry per part;
+  inventorySource set to 'physical_count'. parts_lookup now returns barcodeCounts +
+  lastPhysicalCountAt.
+- Prod-verified with Alejandro's PT-SPU-003 example: BIMS already read 273 (matching his
+  stated actual), so total unchanged (delta 0); both bin barcodes (198e756a-..., 2a5e79ec-...)
+  recorded at 100 each and registered as scan labels; warning surfaced the 273 vs 200 bin-sum
+  gap (73 units not attributed to a stated bin). Adjustment transaction + audit written.
+npm run check: 11 errors (baseline).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit f3569d69
+Retrieve this exact code: git checkout master at commit f3569d69
+What this deployment is for: physical-count inventory reconciliation (record_physical_count, MCP v2.10.0).
