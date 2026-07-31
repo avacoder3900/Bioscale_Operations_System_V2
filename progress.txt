@@ -5970,3 +5970,32 @@ Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
 Source: branch master @ commit a72a18fc
 Retrieve this exact code: git checkout master at commit a72a18fc
 What this deployment is for: generate_inventory_report (any file type: pdf/csv/json, BIMS-page-identical content).
+
+================================================================================
+2026-07-31 — master — native Excel .xlsx reports (MCP v2.5.0)
+================================================================================
+Alejandro received another "excel sheet" that didn't match BIMS and was missing unit cost /
+per-part total cost / total inventory cost. Audit log again shows zero user-generated
+exports — the claude.ai assistant hand-composed the file. CONFIRMED the stale-connector
+diagnosis from inside a Claude Code session: ToolSearch over this session's own BIMS
+connector shows the OLD tool list (pre-2.2.0 descriptions, no generate_inventory_report /
+export_data_file). The connector re-add in claude.ai remains the required user-side fix.
+
+Server-side, since the user keeps asking for Excel specifically:
+- NEW src/lib/server/services/xlsx.ts — zero-dep .xlsx writer: stored-entry ZIP with
+  hand-rolled CRC32; SpreadsheetML with inline strings + native NUMERIC cells (sortable/
+  summable in Excel). Validated: zip integrity, well-formed XML, opens via Quick Look.
+- generate_inventory_report format: pdf | xlsx | csv | json. xlsx = 3 sheets — Summary
+  (Total Parts / Classifications / Total Inventory Value (USD) / Low Stock), Low Inventory,
+  Full Parts List (Name, Part #, Classification, Manufacturer, Qty/Unit, Inventory,
+  Unit Cost (USD), Total Value (USD), Lead Time (days)) + totals row.
+- export_data_file also accepts xlsx (Summary sheet + one sheet per section, numbers kept
+  numeric via rawRows).
+- Prod-verified: workbook parses (3 sheets), row 1 = PT-SPU-002 / $0.18 / $17.82, totals row
+  5099 units / $22,949.26 — matching the BIMS page.
+npm run check: 11 errors (baseline).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit bde42235
+Retrieve this exact code: git checkout master at commit bde42235
+What this deployment is for: native .xlsx output for inventory reports and universal exports (MCP v2.5.0).
