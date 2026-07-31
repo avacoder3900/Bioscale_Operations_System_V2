@@ -99,7 +99,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '2.6.1' });
+	const server = new McpServer({ name: 'bims-operations', version: '2.9.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -429,10 +429,12 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'sessions; optics results are the Optical Test Cartridge Log (per-cartridge F7/F3 ratios per channel A/B/C, ' +
 				'computed on read). This tool fans out to the right stores for you. Filters combine freely: an SPU ' +
 				'(UDI/barcode/suffix like "203"), a cartridge barcode, a cartridge GROUP NAME (optics cohorts), passed ' +
-				'true/false, and a from/to date window. Examples: "magnetometer results for SPU 203 no matter passing or ' +
-				'failing" → {modality:"magnetometer", spu:"203"}; "optics results for all cartridges in group a3" → ' +
-				'{modality:"optical", group:"a3"}; "optics results for SPU 246 on July 20" → {modality:"optical", ' +
-				'spu:"246", from:"2026-07-20", to:"2026-07-21"}. If the user wants the results as a file, pass the rows to ' +
+				'true/false, a device (Particle id or SPU UDI/device name), and a from/to date window. Optical runs are linked ' +
+				'to the SPU that ran them (device.name = SPU UDI), so optics-for-an-SPU works directly. Examples: ' +
+				'"magnetometer results for SPU 203 no matter passing or failing" → {modality:"magnetometer", spu:"203"}; ' +
+				'"optics results for all cartridges in group a3" → {modality:"optical", group:"a3"}; "optics results for ' +
+				'SPU 212 on July 30" → {modality:"optical", spu:"212", from:"2026-07-30", to:"2026-07-31"}; "optics run on ' +
+				'a particular device" → {modality:"optical", device:"<particle id or UDI>"}. If the user wants the results as a file, pass the rows to ' +
 				'export_data_file. PRESENTATION — magnetometer: show each session exactly as the BIMS page does: a line ' +
 				'"Criteria: Z range <minZ> - <maxZ>" followed by a table "Well | Ch A (Z) | Ch B (Z) | Ch C (Z)" built from ' +
 				'the returned wells[] array, marking each Z value with a check/cross from its chX_pass flag. NEVER present ' +
@@ -445,6 +447,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				spu: z.string().optional().describe('SPU UDI, barcode, _id, or unique suffix (e.g. "203").'),
 				cartridge: z.string().optional().describe('Cartridge barcode or serial number (optical).'),
 				group: z.string().optional().describe('Cartridge group name, e.g. "a3" (optical cohorts).'),
+				device: z
+					.string()
+					.optional()
+					.describe('Particle device id or device name / SPU UDI — filters to results run on that device.'),
 				passed: z.boolean().optional().describe('Filter by outcome; OMIT to get results regardless of outcome.'),
 				from: z.string().optional().describe('ISO date — only results recorded on/after this.'),
 				to: z.string().optional().describe('ISO date — only results recorded on/before this.'),
@@ -455,6 +461,59 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			callAgentApi(fetcher, '/api/agent/test-results', {
 				query: { ...rest, passed: passed === undefined ? undefined : String(passed) }
 			})
+	);
+
+	server.registerTool(
+		'validation_tab',
+		{ annotations: READ_ONLY,
+			description:
+				'The BIMS Validation section, tab by tab — use this when asked for a REPORT of validation data so the answer ' +
+				'mirrors exactly what the corresponding BIMS tab shows. Tabs: "runs" (the per-SPU step board: magnetometer / ' +
+				'thermocouple / optical_confirmation status, uploaded results, evaluations); "magnetometer" (sessions with the ' +
+				'per-well Z table and criteria — present as "Well | Ch A (Z) | Ch B (Z) | Ch C (Z)" with check/cross per cell); ' +
+				'"thermocouple" (sessions with temperature stats: min/max/average/stdDev/range/readingCount); ' +
+				'"optical-confirmation" (the Optical Test Cartridge Log: per-cartridge F7/F3 ratios, warnings, group ' +
+				'memberships, plus the group list). A report of OPTICAL data → tab "optical-confirmation"; add group=<name> ' +
+				'to get the group workspace report (robust group stats, per-cartridge rows, outlier flags — what the ' +
+				'group-vs-group page computes). All tabs filter by spu (UDI/barcode/suffix) and from/to dates; runs also by ' +
+				'runId. For pass/fail-focused queries across modalities find_test_results also works; for files pass rows to ' +
+				'export_data_file.',
+			inputSchema: z.object({
+				tab: z
+					.enum(['runs', 'magnetometer', 'thermocouple', 'optical-confirmation'])
+					.describe('Which Validation sub-tab to read.'),
+				spu: z.string().optional().describe('SPU UDI, barcode, _id, or unique suffix (e.g. "212").'),
+				group: z
+					.string()
+					.optional()
+					.describe('optical-confirmation only: cartridge group name → full group workspace report.'),
+				runId: z.string().optional().describe('runs only: a validation run _id or runNumber (e.g. VALRUN-000002).'),
+				from: z.string().optional().describe('ISO date — only records on/after this.'),
+				to: z.string().optional().describe('ISO date — only records on/before this.'),
+				limit: z.number().int().min(1).max(200).optional().describe('Max rows (default 50).')
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/validation/tab', { query: args })
+	);
+
+	server.registerTool(
+		'sync_optics_to_spu',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Mirror the latest optics (optical-confirmation) run outcome into the SPU record\'s ' +
+				'validation.spectrophotometer block. Optics runs land in cartridge_records without touching the SPU, so an ' +
+				'SPU can show spectrophotometer "pending" despite completed optics runs — call this when you see that ' +
+				'mismatch (find_test_results shows optics runs but get_spu_status shows pending), or after new optics runs. ' +
+				'Latest analyzable run wins: no warnings → passed, warnings → failed (reasons recorded). Idempotent; ' +
+				'finalized SPUs are skipped; every change is audit-logged. Also runs automatically once a day.',
+			inputSchema: z.object({
+				spu: z
+					.string()
+					.optional()
+					.describe('SPU UDI/barcode/_id/suffix to sync; omit to sync every SPU with optics runs.')
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/validation/sync-optics', { method: 'POST', body: args })
 	);
 
 	server.registerTool(

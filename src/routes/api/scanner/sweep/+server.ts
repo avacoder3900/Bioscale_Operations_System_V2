@@ -135,10 +135,30 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		robotId: opentronsRobotId,
 		status: { $in: ['running', 'paused'] }
 	})
-		.select('_id status')
+		.select('_id status updatedAt')
 		.lean();
 	if (inFlight) {
-		error(409, `Another sweep is already ${(inFlight as any).status} for this robot (id=${(inFlight as any)._id}). Cancel it first.`);
+		// Self-heal stale records: a sweep whose daemon died mid-flight (bridge or
+		// robot-server restart, crash) stays 'running' forever and blocks every
+		// future sweep for the robot. The sweep loop updates the record on every
+		// slot, so a long-silent one is dead — mark it errored and proceed instead
+		// of forcing the operator to hunt down a phantom.
+		const STALE_MS = 10 * 60 * 1000;
+		const lastTouch = new Date((inFlight as any).updatedAt ?? 0).getTime();
+		if (Date.now() - lastTouch > STALE_MS) {
+			await OpentronsScannerSweepRun.updateOne(
+				{ _id: (inFlight as any)._id, status: { $in: ['running', 'paused'] } },
+				{
+					$set: {
+						status: 'errored',
+						endedAt: new Date(),
+						error: 'auto-cleared by new sweep start: no progress for 10+ minutes (daemon likely restarted mid-sweep)'
+					}
+				}
+			);
+		} else {
+			error(409, `Another sweep is already ${(inFlight as any).status} for this robot (id=${(inFlight as any)._id}). Cancel it first.`);
+		}
 	}
 
 	const sweepRun = await OpentronsScannerSweepRun.create({

@@ -65,6 +65,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const spuRef = q.get('spu')?.trim();
 	const cartridgeRef = q.get('cartridge')?.trim();
 	const groupRef = q.get('group')?.trim();
+	const deviceRef = q.get('device')?.trim();
 	const passedParam = q.get('passed');
 	const passed = passedParam === 'true' ? true : passedParam === 'false' ? false : undefined;
 	const from = q.get('from') ? new Date(q.get('from')!) : undefined;
@@ -101,6 +102,12 @@ export const GET: RequestHandler = async ({ request, url }) => {
 				{ spuId: spu._id },
 				{ spuUdi: spu.udi },
 				...(spu.barcode ? [{ barcode: spu.barcode }] : [])
+			];
+		} else if (deviceRef) {
+			// A "device" may be a Particle device id or an SPU UDI/device name.
+			filter.$or = [
+				{ particleDeviceId: deviceRef },
+				{ spuUdi: new RegExp(`${escapeRegex(deviceRef)}$`, 'i') }
 			];
 		}
 		if (passed !== undefined) filter.overallPassed = passed;
@@ -191,8 +198,10 @@ export const GET: RequestHandler = async ({ request, url }) => {
 				...{}
 			};
 		} else if (spu) {
-			// SPU → optical cartridges via the optical log's usage entries and
-			// any validation-run optical_confirmation step for this SPU.
+			// SPU → optical cartridges. PRIMARY linkage: optical runs record the
+			// running SPU as cartridge_records.device.name (= the SPU UDI).
+			// Also folded in: the optical log's usage entries and any
+			// validation-run optical_confirmation step for this SPU.
 			const [optCarts, runs] = await Promise.all([
 				OpticalTestCartridge.find({ 'usageLog.spuId': spu._id }).select('barcode serialNumber').lean(),
 				ValidationRun.find({ 'spus.udi': spu.udi }).select('runNumber name spus.udi spus.steps').lean()
@@ -212,11 +221,47 @@ export const GET: RequestHandler = async ({ request, url }) => {
 				if (bc) barcodes.push(bc);
 			}
 			optical = { spu: { udi: spu.udi, id: spu._id }, validationRunSteps: runSteps };
-			cartFilter = barcodes.length ? { _id: { $in: [...new Set(barcodes)] } } : null;
-			if (!cartFilter) optical.cartridges = [];
-		} else if (modality !== 'all') {
-			// Pure optical ask with no reference: recent optical cartridges.
+			const ors: Record<string, unknown>[] = [
+				{
+					$and: [
+						OPTICAL_CARTRIDGE_FILTER,
+						{ 'device.name': new RegExp(`^${escapeRegex(spu.udi)}$`, 'i') }
+					]
+				}
+			];
+			if (barcodes.length) ors.push({ _id: { $in: [...new Set(barcodes)] } });
+			cartFilter = { $or: ors };
+		} else if (deviceRef) {
+			// Optics run on a particular device: device.name (SPU UDI) or Particle id.
+			cartFilter = {
+				$and: [
+					OPTICAL_CARTRIDGE_FILTER,
+					{
+						$or: [
+							{ 'device.name': new RegExp(`${escapeRegex(deviceRef)}$`, 'i') },
+							{ 'device.id': deviceRef }
+						]
+					}
+				]
+			};
+		} else if (modality !== 'all' || from || to) {
+			// Pure optical ask (or a bare date-window ask): recent optical cartridges.
 			cartFilter = { ...OPTICAL_CARTRIDGE_FILTER };
+		}
+
+		// A device condition composes with group/cartridge/SPU scoping.
+		if (cartFilter && deviceRef && (groupRef || cartridgeRef || spuRef)) {
+			cartFilter = {
+				$and: [
+					cartFilter,
+					{
+						$or: [
+							{ 'device.name': new RegExp(`${escapeRegex(deviceRef)}$`, 'i') },
+							{ 'device.id': deviceRef }
+						]
+					}
+				]
+			};
 		}
 
 		if (cartFilter) {
@@ -245,7 +290,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 						status: c.status ?? null,
 						createdAt: c.createdAt ?? null,
 						statusUpdatedOn: c.statusUpdatedOn ?? null,
-						device: c.device ?? null,
+						device: c.device ? { id: c.device.id ?? null, name: c.device.name ?? null } : null,
 						hasReadings: Array.isArray(c.rawData?.readings) && c.rawData.readings.length > 0,
 						ratioByChannel: analysis?.ratioByChannel ?? null,
 						crossWellCv: analysis?.crossWellCv ?? null,
@@ -276,7 +321,8 @@ export const GET: RequestHandler = async ({ request, url }) => {
 			guidance:
 				'Results come from multiple BIMS tabs: validation_sessions (magnetometer=mag, thermocouple=thermo, ' +
 				'spectrophotometer) and the Optical Test Cartridge Log (cartridge_records analyzed on read). ' +
-				'The legacy test_results collection is empty and is not consulted. ' +
+				'The legacy test_results collection is empty and is not consulted. Optical runs are linked to the SPU that ' +
+				'ran them via device.name (= the SPU UDI). ' +
 				'PRESENTATION: render magnetometer results exactly as the BIMS page does — for each session a line ' +
 				'"Criteria: Z range <criteria.minZ> - <criteria.maxZ>" then a table with columns ' +
 				'"Well | Ch A (Z) | Ch B (Z) | Ch C (Z)" built from wells[], marking each Z with a check (pass) or ' +
