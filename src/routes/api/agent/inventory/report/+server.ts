@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import { connectDB, PartDefinition, AuditLog, generateId } from '$lib/server/db';
 import { generateReportPdf, type PdfColumn } from '$lib/server/services/pdf-report';
+import { buildXlsx, XLSX_CONTENT_TYPE, type XlsxCell } from '$lib/server/services/xlsx';
 import { uploadViaWorker, uploadToR2 } from '$lib/server/services/r2';
 import type { RequestHandler } from './$types';
 
@@ -34,8 +35,9 @@ const money = (v: number | null): string =>
  *   (General Inventory / non-BOM), 'cartridge', or 'all'.
  * - category: exact classification filter, e.g. 'Critical'.
  * - lowStockOnly: restrict to parts with inventoryCount <= 0.
- * - format: 'pdf' (default), 'csv', or 'json' — all render the same BIMS-page
- *   content to a file, upload it to R2, and return the public URL.
+ * - format: 'pdf' (default), 'csv', 'json', or 'xlsx' — all render the same
+ *   BIMS-page content to a file, upload it to R2, and return the public URL.
+ *   xlsx uses native numeric cells so Excel can sort/sum costs.
  *   'data' returns the rows inline in the response instead of building a file.
  */
 export const POST: RequestHandler = async ({ request }) => {
@@ -48,7 +50,9 @@ export const POST: RequestHandler = async ({ request }) => {
 		? body.category.trim()
 		: undefined;
 	const lowStockOnly = body.lowStockOnly === true;
-	const format: 'pdf' | 'csv' | 'json' | 'data' = ['csv', 'json', 'data'].includes(body.format)
+	const format: 'pdf' | 'csv' | 'json' | 'xlsx' | 'data' = ['csv', 'json', 'xlsx', 'data'].includes(
+		body.format
+	)
 		? body.format
 		: 'pdf';
 
@@ -248,6 +252,61 @@ export const POST: RequestHandler = async ({ request }) => {
 		buffer = Buffer.from('\ufeff' + lines.join('\r\n'), 'utf8');
 		contentType = 'text/csv';
 		ext = 'csv';
+	} else if (format === 'xlsx') {
+		// Native workbook: one sheet per BIMS-page block, numbers as numeric
+		// cells so Excel can sort and sum costs.
+		const summarySheet: XlsxCell[][] = [
+			[SCOPE_TITLES[scope]],
+			['Brevitest Technologies - BIMS parts inventory'],
+			[`Generated ${generatedAt.toISOString()}`],
+			...(filtersApplied.length ? [[`Filters: ${filtersApplied.join('; ')}`]] : []),
+			[],
+			['Total Parts', rows.length],
+			['Classifications', classifications.size],
+			['Total Inventory Value (USD)', summary.totalInventoryValue],
+			['Low Stock', belowMin.length],
+			[],
+			...footerLines.map((f) => [f])
+		];
+		const lowSheet: XlsxCell[][] = [
+			['Part #', 'Name', 'Classification', 'On Hand', 'Lead Time (days)'],
+			...lowInventory.map((r) => [
+				r.partNumber,
+				r.name,
+				r.category || '-',
+				r.inventoryCount,
+				r.leadTimeDays
+			])
+		];
+		const partsSheet: XlsxCell[][] = [
+			[
+				'Name', 'Part #', 'Classification', 'Manufacturer', 'Qty/Unit', 'Inventory',
+				'Unit Cost (USD)', 'Total Value (USD)', 'Lead Time (days)'
+			],
+			...rows.map((r) => [
+				r.name,
+				r.partNumber,
+				r.category || '-',
+				r.manufacturer || r.supplier || '-',
+				r.quantityPerUnit,
+				r.inventoryCount,
+				r.unitCost === null ? null : Math.round(r.unitCost * 100) / 100,
+				r.totalValue,
+				r.leadTimeDays
+			]),
+			[],
+			['Totals', '', '', '', '', totalUnits, '', summary.totalInventoryValue, '']
+		];
+		buffer = buildXlsx(
+			[
+				{ name: 'Summary', rows: summarySheet },
+				...(lowInventory.length && !lowStockOnly ? [{ name: 'Low Inventory', rows: lowSheet }] : []),
+				{ name: 'Full Parts List', rows: partsSheet }
+			],
+			generatedAt
+		);
+		contentType = XLSX_CONTENT_TYPE;
+		ext = 'xlsx';
 	} else if (format === 'json') {
 		buffer = Buffer.from(
 			JSON.stringify(

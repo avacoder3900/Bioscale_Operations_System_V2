@@ -2,6 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { generateReportPdf, autoLayoutColumns } from '$lib/server/services/pdf-report';
+import { buildXlsx, XLSX_CONTENT_TYPE, type XlsxCell } from '$lib/server/services/xlsx';
 import { uploadViaWorker, uploadToR2 } from '$lib/server/services/r2';
 import type { RequestHandler } from './$types';
 
@@ -54,7 +55,9 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	const title: string = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : '';
 	if (!title) throw error(400, 'title is required');
-	const format: 'pdf' | 'csv' | 'json' = ['csv', 'json'].includes(body.format) ? body.format : 'pdf';
+	const format: 'pdf' | 'csv' | 'json' | 'xlsx' = ['csv', 'json', 'xlsx'].includes(body.format)
+		? body.format
+		: 'pdf';
 	const landscape = body.orientation !== 'portrait';
 	const subtitleLines: string[] = Array.isArray(body.subtitleLines)
 		? body.subtitleLines.map(cellText).slice(0, 6)
@@ -136,6 +139,39 @@ export const POST: RequestHandler = async ({ request }) => {
 		buffer = Buffer.from('\ufeff' + parts.join('\r\n'), 'utf8');
 		contentType = 'text/csv';
 		ext = 'csv';
+	} else if (format === 'xlsx') {
+		// One sheet per section; raw values keep their type so numbers land as
+		// native numeric cells. A Summary sheet carries title/filters/stats.
+		const cellValue = (v: unknown): XlsxCell =>
+			typeof v === 'number' && Number.isFinite(v) ? v : cellText(v);
+		const sheets = [];
+		if (subtitleLines.length || stats.length) {
+			sheets.push({
+				name: 'Summary',
+				rows: [
+					[title],
+					[`Generated ${generatedAt.toISOString()} via BIMS agent API`],
+					...subtitleLines.map((l) => [l]),
+					[],
+					...stats.map((s) => [s.label, s.value] as XlsxCell[]),
+					...(footerLines.length ? [[], ...footerLines.map((f) => [f])] : [])
+				] as XlsxCell[][]
+			});
+		}
+		sections.forEach((sec: any, i: number) => {
+			sheets.push({
+				name: sec.heading || `Data ${i + 1}`,
+				rows: [
+					sec.columns.map((c: { label: string }) => c.label),
+					...sec.rawRows.map((row: any) =>
+						sec.columns.map((c: { key: string }) => cellValue(row?.[c.key]))
+					)
+				] as XlsxCell[][]
+			});
+		});
+		buffer = buildXlsx(sheets, generatedAt);
+		contentType = XLSX_CONTENT_TYPE;
+		ext = 'xlsx';
 	} else {
 		buffer = Buffer.from(
 			JSON.stringify(

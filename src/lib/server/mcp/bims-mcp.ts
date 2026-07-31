@@ -99,7 +99,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '2.4.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '2.5.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -325,7 +325,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'generate_inventory_report',
 		{ annotations: WRITE_TOOL,
 			description:
-				'Render an inventory report as a file (PDF, CSV, or JSON — whichever the user asks for, default PDF), upload it, ' +
+				'Render an inventory report as a file (PDF, Excel .xlsx, CSV, or JSON — whichever the user asks for, default PDF), upload it, ' +
 				'and return a public download URL. Every format carries identical content mirroring the BIMS parts page: summary ' +
 				'stats (Total Parts, Classifications, Total Inventory Value, Low Stock), the Low Inventory section, and the full ' +
 				'parts table with the same columns as the UI (Name, Part #, Classification, Manufacturer, Qty/Unit, Inventory, ' +
@@ -338,9 +338,9 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'category "Critical", or lowStockOnly. Report the returned url to the user as a link.',
 			inputSchema: z.object({
 				format: z
-					.enum(['pdf', 'csv', 'json'])
+					.enum(['pdf', 'xlsx', 'csv', 'json'])
 					.optional()
-					.describe('File type the user asked for (default pdf). Same BIMS-page content in every format.'),
+					.describe('File type the user asked for (default pdf; use xlsx when they say Excel/spreadsheet). Same BIMS-page content in every format; xlsx has native numeric cells for costs.'),
 				scope: z
 					.enum(['spu-bom', 'general', 'cartridge', 'all'])
 					.optional()
@@ -360,7 +360,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'export_data_file',
 		{ annotations: WRITE_TOOL,
 			description:
-				'Universal file export: turn ANY information the user asks for into a downloadable file (PDF, CSV, or JSON), ' +
+				'Universal file export: turn ANY information the user asks for into a downloadable file (PDF, Excel .xlsx, CSV, or JSON), ' +
 				'uploaded and returned as a public URL. Use whenever the user asks for data "as a file/PDF/CSV/report/download" — ' +
 				'e.g. "give me the magnetometer history for SPU 203 as a PDF". WORKFLOW: (1) gather the data with the read tools ' +
 				'(run_saved_query, get_spu_status, list_spus, quality_trends, kanban tools, ...), applying every filter the user ' +
@@ -373,7 +373,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'so the file is self-describing.',
 			inputSchema: z.object({
 				title: z.string().describe('Document title, e.g. "Magnetometer History - SPU 203".'),
-				format: z.enum(['pdf', 'csv', 'json']).optional().describe('File type the user asked for (default pdf).'),
+				format: z.enum(['pdf', 'xlsx', 'csv', 'json']).optional().describe('File type the user asked for (default pdf; use xlsx when they say Excel/spreadsheet).'),
 				filename: z.string().optional().describe('Optional filename hint (no extension).'),
 				subtitleLines: z
 					.array(z.string())
