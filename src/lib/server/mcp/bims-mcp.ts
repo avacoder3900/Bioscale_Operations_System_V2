@@ -99,7 +99,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '2.7.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '2.8.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -461,6 +461,26 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			callAgentApi(fetcher, '/api/agent/test-results', {
 				query: { ...rest, passed: passed === undefined ? undefined : String(passed) }
 			})
+	);
+
+	server.registerTool(
+		'sync_optics_to_spu',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Mirror the latest optics (optical-confirmation) run outcome into the SPU record\'s ' +
+				'validation.spectrophotometer block. Optics runs land in cartridge_records without touching the SPU, so an ' +
+				'SPU can show spectrophotometer "pending" despite completed optics runs — call this when you see that ' +
+				'mismatch (find_test_results shows optics runs but get_spu_status shows pending), or after new optics runs. ' +
+				'Latest analyzable run wins: no warnings → passed, warnings → failed (reasons recorded). Idempotent; ' +
+				'finalized SPUs are skipped; every change is audit-logged. Also runs automatically once a day.',
+			inputSchema: z.object({
+				spu: z
+					.string()
+					.optional()
+					.describe('SPU UDI/barcode/_id/suffix to sync; omit to sync every SPU with optics runs.')
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/validation/sync-optics', { method: 'POST', body: args })
 	);
 
 	server.registerTool(
