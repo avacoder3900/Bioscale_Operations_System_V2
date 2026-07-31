@@ -5930,3 +5930,19 @@ dates, and times; universally applicable.
   description defers to it for inventory.
 Visual check: 40-row magnetometer-history sample renders with tiles, red failed rows,
 auto-sized columns. npm run check: 11 errors (baseline).
+
+Universal exports SHIPPED + verified end-to-end in production (commits c77c410e, 25f52217):
+- Real magnetometer type value is 'mag' (427 sessions; 'magnetometer' = 5 legacy placeholder
+  rows) and thermocouple is 'thermo' — seeded query description documents this.
+- Prod verification: seed re-run (10 queries incl. "SPU Validation Sessions"); range-filtered
+  query {"type":"mag","spuUdi":"BT-M01-0000-0203","createdAt__gte":"2026-07-01"} returned 89
+  July runs (1 pass / 88 fail, device 0a10aced202194944a071a4c); export_data_file produced a
+  3-page PDF with stat tiles, failure reasons, and red-highlighted failed rows (row-level
+  "_highlight" flag added to /api/agent/export, verified live):
+  https://brevitest-r2-upload.alejandrov.workers.dev/file/reports%2Fexports%2Fmagnetometer-history-spu-0203-july-2026-2026-07-31-UyZUbPYq77nl08zFiXV2I.pdf
+- Connector must be re-added/refreshed in claude.ai (v2.3.0) for export_data_file to appear.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 25f52217
+Retrieve this exact code: git checkout master at commit 25f52217
+What this deployment is for: universal data-file exports (export_data_file MCP tool + /api/agent/export, pdf/csv/json), saved-query date-range filters, validation_sessions/wax_filling_runs/reagent_batch_records queryable, SPU Validation Sessions saved query.
