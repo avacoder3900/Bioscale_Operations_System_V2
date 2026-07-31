@@ -5906,3 +5906,27 @@ Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
 Source: branch master @ commit f59b48a9
 Retrieve this exact code: git checkout master at commit f59b48a9
 What this deployment is for: MCP tool-description hardening so connector assistants route inventory-PDF requests to generate_inventory_pdf.
+
+================================================================================
+2026-07-31 — master — universal data-file exports (MCP v2.3.0) + saved-query date ranges
+================================================================================
+Alejandro: give Claude the ability to create files of any requested information — e.g.
+"magnetometer history for an SPU as a PDF (or whatever file type)", filterable by device,
+dates, and times; universally applicable.
+
+- NEW export_data_file MCP tool + /api/agent/export: the agent gathers data with its read
+  tools (applying the user's SPU/device/date/time filters), then posts assembled tables;
+  the server renders pdf (styled report writer w/ new autoLayoutColumns — no hand-placed
+  columns needed), csv (UTF-8 BOM for Excel), or json; uploads to R2 under reports/exports/;
+  returns the URL. Caps: 20 sections, 20 columns, 5000 rows. Audit-logged (agent_exports).
+- run_saved_query now accepts __gte/__lte/__gt/__lt parameter suffixes → server-side range
+  filters with ISO-date coercion ({"testRanAt__gte":"2026-07-01"}); still equality-only
+  for plain keys, $-keys/dots still dropped.
+- Query allowlist grew: validation_sessions, wax_filling_runs, reagent_batch_records.
+  New seeded query "SPU Validation Sessions" (magnetometer/thermocouple/lux/spectro
+  history; filters: type, spuId/spuUdi/barcode, particleDeviceId, overallPassed, status,
+  date ranges). Seed must be POSTed after deploy.
+- inventory PDFs still route to generate_inventory_pdf (BIMS-page layout); export_data_file
+  description defers to it for inventory.
+Visual check: 40-row magnetometer-history sample renders with tiles, red failed rows,
+auto-sized columns. npm run check: 11 errors (baseline).

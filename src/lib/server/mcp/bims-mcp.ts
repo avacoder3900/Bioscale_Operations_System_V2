@@ -383,7 +383,9 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 								.array(z.object({ key: z.string(), label: z.string() }))
 								.min(1)
 								.describe('Column order + labels; key selects the field from each row object.'),
-							rows: z.array(z.record(z.string(), z.unknown())).describe('Row objects keyed by column key.')
+							rows: z
+								.array(z.record(z.string(), z.unknown()))
+								.describe('Row objects keyed by column key. Set "_highlight": true on a row to shade it red in the PDF (e.g. failed runs).')
 						})
 					)
 					.min(1)

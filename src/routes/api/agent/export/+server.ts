@@ -91,6 +91,8 @@ export const POST: RequestHandler = async ({ request }) => {
 			rows: sec.rows.map((row: any) =>
 				columns.map((c: { key: string }) => cellText(row?.[c.key]))
 			),
+			// Reserved "_highlight": true on a row shades it red in the PDF.
+			highlights: sec.rows.map((row: any) => row?._highlight === true),
 			rawRows: sec.rows
 		};
 	});
@@ -113,7 +115,7 @@ export const POST: RequestHandler = async ({ request }) => {
 					sec.rows,
 					landscape
 				),
-				rows: sec.rows.map((cells: string[]) => ({ cells }))
+				rows: sec.rows.map((cells: string[], i: number) => ({ cells, highlight: sec.highlights[i] }))
 			})),
 			footerLines: footerLines.length
 				? footerLines

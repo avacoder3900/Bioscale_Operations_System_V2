@@ -120,10 +120,11 @@ const QUERY_ENTRIES = [
 	{
 		name: 'SPU Validation Sessions',
 		description:
-			'Validation/test run history per SPU (magnetometer, thermocouple, lux, spectrophotometer). ' +
-			'Filter with parameters: type (e.g. "magnetometer"), spuId, spuUdi, barcode, particleDeviceId, overallPassed, ' +
-			'status, and date/time ranges like {"testRanAt__gte": "2026-07-01", "testRanAt__lte": "2026-07-31"} ' +
-			'(createdAt/startedAt/completedAt ranges also work).',
+			'Validation/test run history per SPU. IMPORTANT type values as stored: "mag" (magnetometer), "thermo" ' +
+			'(thermocouple), "spectrophotometer" — a handful of legacy placeholder rows use "magnetometer"/"thermocouple". ' +
+			'Filter with parameters: type, spuId, spuUdi, barcode, particleDeviceId, overallPassed, status, and date/time ' +
+			'ranges like {"createdAt__gte": "2026-07-01", "createdAt__lte": "2026-07-31"} (testRanAt/startedAt/completedAt ' +
+			'ranges also work; testRanAt is when the device actually ran the test, createdAt is when BIMS recorded it).',
 		category: 'quality' as const,
 		collectionName: 'validation_sessions',
 		mongoQuery: {},
