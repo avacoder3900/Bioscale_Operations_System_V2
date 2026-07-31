@@ -5769,3 +5769,27 @@ bare-number reply correctly mapped quantities across TWO SPUs (3x + 2x PT-SPU-00
 PT-SPU-009; markdown numbering renders as bullets on claude.ai so the visible list is
 unnumbered, but order-mapping works). All three test consumptions reversed on request via
 documented adjustment txs (test-reversal-*): PT-SPU-008 back to 205, PT-SPU-009 back to 875.
+
+================================================================================
+2026-07-31 — master — part scan-label registry: altBarcodes + case-insensitive resolution
+================================================================================
+Alejandro supplied the physical scan labels for SPU parts: an "on line" set (new bin labels)
+and an "off line" set (mostly the existing part_definitions.barcode values, which are stored
+lowercase). Two problems: parts could hold only ONE barcode, and barcode resolution was
+case-SENSITIVE — scanners emit uppercase, so even existing labels would have failed to
+resolve in the reassembly flow.
+
+- PartDefinition: new altBarcodes [String] (lowercase, sparse index). Primary barcode field
+  unchanged.
+- /api/agent/inventory/parts + reassembly resolvePart: barcode lookup now lowercases input
+  and matches barcode OR altBarcodes.
+- scripts/load-part-alt-barcodes-2026-07-31.cjs (idempotent, run against Atlas): 40 new alt
+  barcodes added across 38 parts, 34 skipped as identical to the primary, 0 cross-part
+  duplicates (aggregation-verified). Typos in source corrected: PT-SPIU-012, "PT- SPU-033",
+  run-together PT-SPU-092 line.
+- NOT loaded, awaiting Alejandro: PT-SPU-001 (74A13ADF-...) and PT-SPU-035 (C7566E26-...)
+  — parts don't exist in part_definitions yet (the pending "two new parts"?); plus 4 bare
+  UUIDs with no part number (6A5524CA-..., 9FFC746F-..., 05CEABE6-..., 66A172C0-...).
+Verified on dev against live Atlas: uppercase scans of a new line label, an existing primary
+label, the new PT-SPU-016 alt, and the corrected PT-SPU-033 label all resolve. No MCP tool
+definition changed — no connector re-add needed for this. npm run check: 11 errors (baseline).

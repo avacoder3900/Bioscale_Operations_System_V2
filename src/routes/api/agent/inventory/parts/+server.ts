@@ -33,7 +33,12 @@ export const GET: RequestHandler = async ({ request, url }) => {
 
 	let parts: any[] = [];
 	if (barcode) {
-		parts = await PartDefinition.find({ ...baseFilter, barcode }).lean();
+		// Stored barcodes are lowercase; scanners typically emit uppercase.
+		const lc = barcode.toLowerCase();
+		parts = await PartDefinition.find({
+			...baseFilter,
+			$or: [{ barcode: lc }, { altBarcodes: lc }]
+		}).lean();
 		if (parts.length === 0) {
 			parts = await PartDefinition.find({
 				...baseFilter,
@@ -73,6 +78,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 				category: p.category,
 				bomType: p.bomType,
 				barcode: p.barcode,
+				altBarcodes: p.altBarcodes,
 				inventoryCount: p.inventoryCount ?? 0,
 				unitOfMeasure: p.unitOfMeasure,
 				quantityPerUnit: p.quantityPerUnit
