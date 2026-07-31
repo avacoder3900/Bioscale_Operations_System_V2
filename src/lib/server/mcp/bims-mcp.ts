@@ -99,7 +99,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '2.5.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '2.6.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -415,6 +415,43 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'documents_overview',
 		{ annotations: READ_ONLY, description: 'Controlled documents and work instructions with status breakdown (draft / review / approved).' },
 		async () => callAgentApi(fetcher, '/api/agent/operations/documents')
+	);
+
+	server.registerTool(
+		'find_test_results',
+		{ annotations: READ_ONLY,
+			description:
+				'THE tool for test/validation outcomes — ANY outcome, passing or failing, not just failures. Use it for every ' +
+				'question about test results, and match the user\'s wording to a modality: "optics"/"optical" → optical, ' +
+				'"mag"/"magnetometer" → magnetometer, "thermo"/"thermocouple" → thermocouple, "spectro" → spectrophotometer. ' +
+				'IMPORTANT: test results in BIMS are NOT all on the Test Results page (that legacy collection is EMPTY) — ' +
+				'they live in the tab matching the feature: magnetometer/thermocouple/spectrophotometer runs are validation ' +
+				'sessions; optics results are the Optical Test Cartridge Log (per-cartridge F7/F3 ratios per channel A/B/C, ' +
+				'computed on read). This tool fans out to the right stores for you. Filters combine freely: an SPU ' +
+				'(UDI/barcode/suffix like "203"), a cartridge barcode, a cartridge GROUP NAME (optics cohorts), passed ' +
+				'true/false, and a from/to date window. Examples: "magnetometer results for SPU 203 no matter passing or ' +
+				'failing" → {modality:"magnetometer", spu:"203"}; "optics results for all cartridges in group a3" → ' +
+				'{modality:"optical", group:"a3"}; "optics results for SPU 246 on July 20" → {modality:"optical", ' +
+				'spu:"246", from:"2026-07-20", to:"2026-07-21"}. If the user wants the results as a file, pass the rows to ' +
+				'export_data_file.',
+			inputSchema: z.object({
+				modality: z
+					.enum(['magnetometer', 'thermocouple', 'spectrophotometer', 'optical', 'all'])
+					.optional()
+					.describe('Which test kind (default all). Map user wording: optics→optical, mag→magnetometer, thermo→thermocouple.'),
+				spu: z.string().optional().describe('SPU UDI, barcode, _id, or unique suffix (e.g. "203").'),
+				cartridge: z.string().optional().describe('Cartridge barcode or serial number (optical).'),
+				group: z.string().optional().describe('Cartridge group name, e.g. "a3" (optical cohorts).'),
+				passed: z.boolean().optional().describe('Filter by outcome; OMIT to get results regardless of outcome.'),
+				from: z.string().optional().describe('ISO date — only results recorded on/after this.'),
+				to: z.string().optional().describe('ISO date — only results recorded on/before this.'),
+				limit: z.number().int().min(1).max(200).optional().describe('Max rows per store (default 50).')
+			})
+		},
+		async ({ passed, ...rest }) =>
+			callAgentApi(fetcher, '/api/agent/test-results', {
+				query: { ...rest, passed: passed === undefined ? undefined : String(passed) }
+			})
 	);
 
 	server.registerTool(

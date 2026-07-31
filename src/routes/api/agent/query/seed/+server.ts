@@ -41,7 +41,10 @@ const SCHEMA_ENTRIES = [
 	{ collectionName: 'cartridge_groups', businessName: 'Cartridge Groups', businessPurpose: 'Lab cartridge groupings', businessDomain: 'cartridge_lab' },
 	{ collectionName: 'firmware_devices', businessName: 'Firmware Devices', businessPurpose: 'Device firmware records', businessDomain: 'cartridge_lab' },
 	{ collectionName: 'firmware_cartridges', businessName: 'Firmware Cartridges', businessPurpose: 'Cartridge firmware records', businessDomain: 'cartridge_lab' },
-	{ collectionName: 'test_results', businessName: 'Test Results', businessPurpose: 'Spectroscopy test result data', businessDomain: 'cartridge_lab' },
+	{ collectionName: 'test_results', businessName: 'Test Results', businessPurpose: 'LEGACY spectroscopy results — currently empty; real results live in validation_sessions (magnetometer/thermocouple) and the optical cartridge log', businessDomain: 'cartridge_lab' },
+	{ collectionName: 'optical_test_cartridges', businessName: 'Optical Test Cartridge Log', businessPurpose: 'Optical-confirmation validation cartridges with usage log (optics testing)', businessDomain: 'manufacturing' },
+	{ collectionName: 'validation_runs', businessName: 'Validation Runs', businessPurpose: 'SPU release-validation runs: magnetometer/thermocouple/optical step status per SPU', businessDomain: 'manufacturing' },
+	{ collectionName: 'validation_groups', businessName: 'Validation Groups', businessPurpose: 'Named groupings of SPU validation work', businessDomain: 'manufacturing' },
 	{ collectionName: 'agent_queries', businessName: 'Agent Queries', businessPurpose: 'Saved query templates for agent', businessDomain: 'agent' },
 	{ collectionName: 'schema_metadata', businessName: 'Schema Metadata', businessPurpose: 'Collection metadata for agent introspection', businessDomain: 'agent' },
 	{ collectionName: 'agent_messages', businessName: 'Agent Messages', businessPurpose: 'Agent-to-user messaging', businessDomain: 'agent' },
@@ -131,12 +134,48 @@ const QUERY_ENTRIES = [
 		maxRows: 200
 	},
 	{
-		name: 'Failed Test Results',
-		description: 'Test results with failed status',
+		name: 'Test Results (All Outcomes)',
+		description:
+			'Test records regardless of outcome — pass parameters like {"status": "failed"} to narrow. ' +
+			'WARNING: this legacy collection is currently EMPTY. Real results live in the tab matching the feature: ' +
+			'magnetometer/thermocouple/spectrophotometer → "SPU Validation Sessions"; optics → "Optical Test Cartridge Log" ' +
+			'/ "Cartridge Groups". Prefer the find_test_results tool, which searches the right stores automatically.',
 		category: 'quality' as const,
 		collectionName: 'test_results',
-		mongoQuery: { status: 'failed' },
+		mongoQuery: {},
 		maxRows: 100
+	},
+	{
+		name: 'Optical Test Cartridge Log',
+		description:
+			'Optical-confirmation validation cartridges (optics test inventory/usage). Filter with parameters: barcode, ' +
+			'serialNumber, groupId, status (available/in_use/depleted/...). The optics RESULTS (per-channel ratios) are ' +
+			'computed from cartridge readings — use the find_test_results tool with modality "optical" for outcomes.',
+		category: 'quality' as const,
+		collectionName: 'optical_test_cartridges',
+		mongoQuery: { isActive: { $ne: false } },
+		maxRows: 200
+	},
+	{
+		name: 'Cartridge Groups',
+		description:
+			'Named cartridge cohorts (optical analysis groups and assign batches). Filter with parameters: name, purpose ' +
+			'(assign_batch | optical_analysis). Membership is the cartridgeIds array; feed a group name to find_test_results ' +
+			'to get optics results for every cartridge in the group.',
+		category: 'quality' as const,
+		collectionName: 'cartridge_groups',
+		mongoQuery: { archivedAt: null },
+		maxRows: 100
+	},
+	{
+		name: 'Validation Runs',
+		description:
+			'SPU release-validation runs: per-SPU step status for magnetometer, thermocouple, and optical_confirmation. ' +
+			'Filter with parameters: runNumber, status, and date ranges like {"createdAt__gte": "2026-07-01"}.',
+		category: 'quality' as const,
+		collectionName: 'validation_runs',
+		mongoQuery: {},
+		maxRows: 50
 	},
 	{
 		name: 'Equipment Status',
@@ -147,6 +186,9 @@ const QUERY_ENTRIES = [
 		maxRows: 50
 	}
 ];
+
+// Renamed/superseded queries: deactivated on seed so stale cards disappear.
+const RETIRED_QUERY_NAMES = ['Failed Test Results'];
 
 export const POST: RequestHandler = async ({ request }) => {
 	requireAgentApiKey(request);
@@ -174,6 +216,12 @@ export const POST: RequestHandler = async ({ request }) => {
 		);
 		queryCount++;
 	}
+
+	// Retire superseded cards (e.g. 'Failed Test Results' → 'Test Results (All Outcomes)').
+	await AgentQuery.updateMany(
+		{ name: { $in: RETIRED_QUERY_NAMES } },
+		{ $set: { isActive: false } }
+	);
 
 	await AuditLog.create({
 		_id: generateId(),

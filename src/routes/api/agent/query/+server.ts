@@ -9,7 +9,8 @@ const ALLOWED_COLLECTIONS = new Set([
 	'production_runs', 'lot_records', 'shipping_lots', 'shipping_packages',
 	'test_results', 'audit_log', 'cartridge_records', 'batches',
 	'agent_messages', 'approval_requests', 'schema_metadata',
-	'validation_sessions', 'wax_filling_runs', 'reagent_batch_records'
+	'validation_sessions', 'wax_filling_runs', 'reagent_batch_records',
+	'optical_test_cartridges', 'cartridge_groups', 'validation_runs', 'validation_groups'
 ]);
 
 function sanitizeFilterValue(value: unknown): unknown {
