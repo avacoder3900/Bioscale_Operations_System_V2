@@ -6117,3 +6117,38 @@ Retrieve this exact code: git checkout master at commit c93d3d17
   (or: git log master --oneline to find it if master has since moved on)
 What this deployment is for: multi-pose joint-map calibration — pose capture, per-pose
 delete, and per-joint fit status/tracking error at /manufacturing/cart-mfg/robot-arm/calibrate.
+
+================================================================================
+2026-07-31 — master — cross-domain test results, any outcome (MCP v2.6.0)
+================================================================================
+Alejandro: alter the "Failed test results" card ("pointed at the empty drawer" — confirmed:
+test_results has 0 docs) to grant access to results of ANY outcome, and teach Claude that
+results live in the tab matching the feature, not just the Test Results page (optics → the
+Optical Test Cartridge Log; magnetometer → validation). Sample prompts: optics for an SPU
+on a date; optics for all cartridges in a group name; magnetometer for an SPU pass or fail.
+
+- NEW find_test_results MCP tool + /api/agent/test-results: modality-aware fan-out.
+  magnetometer/thermocouple/spectrophotometer → validation_sessions (alias-aware: mag/
+  thermo); optical → cartridge_records under OPTICAL_CARTRIDGE_FILTER analyzed derive-on-
+  read via analyzeCartridge (F7/F3 ratioByChannel, crossWellCv, warnings, channel flags).
+  Filters compose: spu (udi/barcode/unique-suffix resolution via spus), cartridge (barcode/
+  serial), group (cartridge_groups NAME → cartridgeIds membership), passed (omit = any
+  outcome), from/to, limit. SPU→optical linkage: optical_test_cartridges.usageLog.spuId +
+  validation_runs spus[].steps.optical_confirmation (step object returned).
+- Cards: 'Failed Test Results' RETIRED (seed now deactivates RETIRED_QUERY_NAMES);
+  'Test Results (All Outcomes)' documents the empty-drawer situation and points to the real
+  stores; new cards Optical Test Cartridge Log, Cartridge Groups, Validation Runs. Schema
+  metadata + query allowlist grew: optical_test_cartridges, cartridge_groups,
+  validation_runs, validation_groups. Seeded in prod (13 queries, 56 schema entries).
+- Prod-verified: magnetometer SPU 203 any-outcome → 94 sessions (2 pass / 92 fail);
+  optics group "control group1" → 6 cartridges with per-channel ratios (~7.2-7.9, no
+  warnings); optics SPU 246 → correctly reports the validation-run optical step
+  (not_started) and zero cartridges — no optics have been run against an SPU yet, so the
+  linkage is in place awaiting data. Groups a/a1-a14/b/testing/control have 0 members
+  (empty legacy groups); populated cohorts are the optical_analysis ones.
+npm run check: 11 errors (baseline).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit ae68c4db
+Retrieve this exact code: git checkout master at commit ae68c4db
+What this deployment is for: find_test_results cross-domain resolver (any outcome), retired Failed-Test-Results card, optical/validation collections queryable (MCP v2.6.0).
