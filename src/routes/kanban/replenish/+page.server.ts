@@ -24,7 +24,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const status = await replenishmentStatus(board);
 
 	// Recent replenishment events — the inspectable decision records.
+	// tableName narrows to the {tableName, recordId} compound index — without it
+	// this regex full-scans the audit log (Atlas query-targeting alert, 2026-07-31).
 	const events = (await AuditLog.find({
+		tableName: 'kanban_tasks',
 		recordId: { $regex: /^replenishment:/ },
 		'newData.board': board
 	})

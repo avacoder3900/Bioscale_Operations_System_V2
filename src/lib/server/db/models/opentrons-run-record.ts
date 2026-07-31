@@ -63,6 +63,9 @@ const opentronsRunRecordSchema = new Schema({
 opentronsRunRecordSchema.index({ manufacturingRunId: 1 });
 opentronsRunRecordSchema.index({ robotId: 1, status: 1 });
 opentronsRunRecordSchema.index({ opentronsRunId: 1 }, { unique: true, sparse: true });
+// The health-poller singleton filters by status alone every 15s — without a
+// status-prefix index that was a permanent COLLSCAN (Atlas alert, 2026-07-31).
+opentronsRunRecordSchema.index({ status: 1 });
 
 export const OpentronsRunRecord = mongoose.models.OpentronsRunRecord
 	|| mongoose.model('OpentronsRunRecord', opentronsRunRecordSchema, 'opentrons_run_records');

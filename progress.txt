@@ -5722,3 +5722,48 @@ Source: branch master @ commit e23b8e49
 Retrieve this exact code: git checkout master at commit e23b8e49
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: MCP tool annotations (fixes claude.ai read-only classification) + terse reassembly confirmation behavior.
+
+================================================================================
+2026-07-31 — master — Atlas query-targeting alerts: root causes + index fixes
+================================================================================
+Atlas fired "Query Targeting: Scanned/Returned > 1000" on all 3 nodes starting 17:08Z.
+Full repo audit + live Atlas index/size snapshot + Query Insights (Jacob) findings:
+
+CONFIRMED OFFENDERS (fixed by adding indexes / narrowing filters):
+1. ot2_bridge_commands sweep-status lookup (kind + payload.sweepRunId) — polled in a loop
+   by DeckLoadingGrid during every deck scan; NO index → full 50K-doc scan per tick.
+   Query Insights #1: 14.5K exec/day, 19.2 min total, 35,997 examined:returned.
+   → index {kind, payload.sweepRunId}.
+2. kanban replenish page AuditLog.find({recordId: /^replenishment:/}) without tableName —
+   full 35K-doc audit_log scan per view (52,116 ratio in QI) → filter now includes
+   tableName so the {tableName,recordId} compound serves it.
+3. /api/kanban/wip-mtime watermark poll: findOne().sort({updatedAt:-1}) on kanban_tasks,
+   polled every few seconds per open board, no updatedAt index → index {updatedAt:-1}
+   (+ {status,archived,statusChangedAt} for the archive cron).
+4. Robot-arm control page DeviceEvent reads (deviceId+eventType) — only a createdAt TTL
+   index existed → index {deviceId,eventType,createdAt:-1} (also covers equipment detail
+   + ask-bims device reads).
+5. opentrons health-poller singleton: OpentronsRunRecord.find({status:$in}) every 15s
+   forever with no status-prefix index → index {status}.
+6. validation_sessions had ZERO indexes (magnetometer poll + history) → {spuId,startedAt},
+   {type,startedAt}.
+7. agent_messages had ZERO indexes (3 endpoints filter by user/status) → {toUserId,createdAt},
+   {fromUserId,createdAt}, {status,createdAt}.
+8. cartridge_records (14.5K docs @ 35KB!): dashboard sort({updatedAt:-1}), createdAt-window
+   counts, and $exists aggregates (QI ratio 164,818 on one shape) → {updatedAt},{createdAt},
+   {reagentInspection.status},{waxQc.status}.
+Indexes build automatically on deploy (Mongoose autoIndex).
+
+ARCHITECTURE FLAGS (decisions needed, not yet changed):
+- scanner_events: 1,575,522 docs, no TTL — heartbeat telemetry accumulating forever.
+  Recommend TTL (e.g. 14d heartbeats / 90d scans) or move heartbeats out of Mongo.
+- ot2_bridge_commands: 50K docs @ 9.1KB avg (~460MB) — completedAt TTL exists (7d) but
+  pending/failed/claimed docs never expire; payloads are fat. Recommend TTL on createdAt
+  or slimming payloads.
+- cartridge_records avg 35.4KB with embedded photos[] + 30+ indexes — doc-size and
+  index-count pressure on the biggest collection; longer-term: move photos to cv_images
+  refs only.
+- traceability/bom search: unanchored case-insensitive regexes (user-triggered, lower heat).
+- Secondaries also alerted → some reads use secondaryPreferred (likely the research app
+  sharing the cluster) — same fixes apply cluster-wide once indexes build.
+npm run check: 11 errors — unchanged baseline.

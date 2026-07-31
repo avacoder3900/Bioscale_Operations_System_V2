@@ -49,6 +49,11 @@ const ot2BridgeCommandSchema = new Schema({
 
 ot2BridgeCommandSchema.index({ deviceId: 1, status: 1, createdAt: 1 });
 ot2BridgeCommandSchema.index({ robotId: 1, createdAt: -1 });
+// Sweep-status endpoint (polled in a loop by the deck-loading UI during every
+// scan) looks up by kind + payload.sweepRunId — was the #1 offender in Atlas
+// Query Insights 2026-07-31: 14.5K executions/day, ~36,000 docs examined per
+// doc returned (full 50K-doc scan per poll tick).
+ot2BridgeCommandSchema.index({ kind: 1, 'payload.sweepRunId': 1 });
 // History self-cleans 7 days after completion (completedAt is also set when
 // a command is failed/expired, so every terminal doc ages out).
 ot2BridgeCommandSchema.index({ completedAt: 1 }, { expireAfterSeconds: 7 * 24 * 3600 });

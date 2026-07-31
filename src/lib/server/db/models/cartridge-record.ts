@@ -237,6 +237,15 @@ cartridgeRecordSchema.index({ 'sample.subjectId': 1 });
 cartridgeRecordSchema.index({ 'testResult.status': 1 });
 cartridgeRecordSchema.index({ arm: 1 });
 cartridgeRecordSchema.index({ experiment: 1 });
+// cartridge-dashboard sorts by updatedAt and counts by createdAt window on the
+// largest collection in the DB — both were unindexed full scans per page load
+// (Atlas query-targeting audit, 2026-07-31).
+cartridgeRecordSchema.index({ updatedAt: -1 });
+cartridgeRecordSchema.index({ createdAt: -1 });
+// Dashboard/statistics aggregates $match on these via $exists — Query Insights
+// showed one such shape at 164,818 docs examined per doc returned.
+cartridgeRecordSchema.index({ 'reagentInspection.status': 1 });
+cartridgeRecordSchema.index({ 'waxQc.status': 1 });
 
 applySacredMiddleware(cartridgeRecordSchema);
 

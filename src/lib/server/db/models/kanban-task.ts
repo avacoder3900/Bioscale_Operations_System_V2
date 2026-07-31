@@ -102,5 +102,11 @@ kanbanTaskSchema.index({ tags: 1 });
 kanbanTaskSchema.index({ archived: 1, archivedAt: -1 });
 kanbanTaskSchema.index({ parentTaskId: 1 });
 kanbanTaskSchema.index({ spawnedFrom: 1 });
+// wip-mtime watermark poll: findOne().sort({updatedAt:-1}) every few seconds
+// per open board — needs this or it full-scans + in-memory-sorts every poll
+// (Atlas query-targeting alert, 2026-07-31).
+kanbanTaskSchema.index({ updatedAt: -1 });
+// archive cron + status-scoped time reads
+kanbanTaskSchema.index({ status: 1, archived: 1, statusChangedAt: 1 });
 
 export const KanbanTask = mongoose.models.KanbanTask || mongoose.model('KanbanTask', kanbanTaskSchema, 'kanban_tasks');

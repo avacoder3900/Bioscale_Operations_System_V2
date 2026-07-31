@@ -44,4 +44,9 @@ const validationSessionSchema = new Schema({
 	createdAt: { type: Date, default: Date.now }
 }, { timestamps: false });
 
+// The magnetometer poll endpoint and history pages had ZERO indexes to work
+// with — every poll was a full collection scan (Atlas alert, 2026-07-31).
+validationSessionSchema.index({ spuId: 1, startedAt: -1 });
+validationSessionSchema.index({ type: 1, startedAt: -1 });
+
 export const ValidationSession = mongoose.models.ValidationSession || mongoose.model('ValidationSession', validationSessionSchema, 'validation_sessions');
