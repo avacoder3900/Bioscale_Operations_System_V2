@@ -139,6 +139,8 @@ export const POST: RequestHandler = async ({ request }) => {
 				queryId,
 				queryName: query.name,
 				rowCount: results.length,
+				// How the assistant should present these rows (set per saved query).
+				presentationHint: query.resultFormat ?? null,
 				results: JSON.parse(JSON.stringify(results)),
 				executedAt: new Date().toISOString()
 			}

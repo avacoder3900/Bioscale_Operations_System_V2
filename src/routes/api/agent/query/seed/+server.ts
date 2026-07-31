@@ -131,7 +131,13 @@ const QUERY_ENTRIES = [
 		category: 'quality' as const,
 		collectionName: 'validation_sessions',
 		mongoQuery: {},
-		maxRows: 200
+		maxRows: 200,
+		resultFormat:
+			'MAGNETOMETER PRESENTATION (match the BIMS page exactly): show ONE value per cell — a table ' +
+			'"Well | Ch A (Z) | Ch B (Z) | Ch C (Z)" using ONLY magResults[].chA_Z / chB_Z / chC_Z, each marked with a ' +
+			'check or cross against criteriaUsed.minZ..maxZ, headed by "Criteria: Z range <minZ> - <maxZ>". ' +
+			'NEVER put T/X/Y axis values in the table — only show raw axis data if the user explicitly asks for raw ' +
+			'device output.'
 	},
 	{
 		name: 'Test Results (All Outcomes)',
@@ -154,7 +160,11 @@ const QUERY_ENTRIES = [
 		category: 'quality' as const,
 		collectionName: 'optical_test_cartridges',
 		mongoQuery: { isActive: { $ne: false } },
-		maxRows: 200
+		maxRows: 200,
+		resultFormat:
+			'These docs are the cartridge INVENTORY, not the readings. Optics READINGS/ratios live on cartridge_records ' +
+			'(device.name = the SPU UDI that ran them). For computed per-channel ratios use the find_test_results or ' +
+			'validation_tab tool if available.'
 	},
 	{
 		name: 'Cartridge Groups',
