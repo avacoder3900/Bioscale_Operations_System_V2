@@ -20,6 +20,19 @@ const partDefinitionSchema = new Schema({
 	quantityPerUnit: Number,
 	barcode: String, // primary scannable barcode label for this part
 	altBarcodes: { type: [String], default: undefined }, // additional valid scan labels (e.g. line-side bin labels), stored lowercase
+	// Per-barcode (bin/label) quantities from physical counts. Each entry is one
+	// physical label on a bin of this part; inventoryCount stays the rolled-up total.
+	barcodeCounts: {
+		type: [{
+			_id: false,
+			barcode: String, // lowercase, like barcode/altBarcodes
+			quantity: Number,
+			countedAt: Date,
+			countedBy: String
+		}],
+		default: undefined
+	},
+	lastPhysicalCountAt: Date,
 	lastBoxSyncAt: Date
 }, { timestamps: true });
 

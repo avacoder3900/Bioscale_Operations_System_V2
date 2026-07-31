@@ -99,7 +99,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '2.9.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '2.10.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -403,6 +403,59 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			})
 		},
 		async (args) => callAgentApi(fetcher, '/api/agent/export', { method: 'POST', body: args })
+	);
+
+	server.registerTool(
+		'record_physical_count',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Reconcile BIMS inventory to a PHYSICAL count — sets ABSOLUTE counts ("it is supposed to be 129 not 100"), ' +
+				'never deltas. You HAVE live write access through this tool. Use it when an operator reports a discrepancy ' +
+				'between an actual count and BIMS, e.g. "a physical count was done on <part> and it is supposed to be 129 ' +
+				'not 100", or with per-bin barcodes: "<part number> is 100 on BIMS but barcode X has 100 and barcode Y has ' +
+				'100". Per-barcode quantities are UPSERTED (a partial recount amends only the bins stated; other recorded ' +
+				'bins are kept) and the part total becomes the stated newCount, or the sum of all recorded barcode counts ' +
+				'when no total is stated. Unknown barcodes are auto-registered to the part so future scans resolve.\n\n' +
+				'WORKFLOW (follow exactly):\n' +
+				'1. Resolve each part with parts_lookup (part number, name, or barcode); ask only if genuinely ambiguous.\n' +
+				'2. Before calling this tool, send a confirmation message: one numbered row per part — ' +
+				'"<n>. <partNumber> <name> — BIMS: <current> → new total: <newCount>" and, when bins were stated, indented ' +
+				'"<barcode> = <qty>" lines. Final line exactly: "Confirm?". No commentary.\n' +
+				'3. Only after the user confirms, call with confirmed: true. Never call with unconfirmed numbers.\n' +
+				'The request is atomic: any unresolvable entry rejects the whole request with per-entry errors. ' +
+				'On success report each part\'s previous → new count (and per-barcode breakdown).',
+			inputSchema: z.object({
+				confirmed: z
+					.boolean()
+					.describe('Must be true, and only after the user explicitly approved the count list.'),
+				performedBy: z.string().optional().describe('Name/username of the person who did the physical count.'),
+				counts: z
+					.array(
+						z.object({
+							part: z.string().describe('Part number (PT-SPU-xxx), part name, or any of its barcodes.'),
+							newCount: z
+								.number()
+								.int()
+								.min(0)
+								.optional()
+								.describe('Absolute counted total. Omit to use the sum of the barcode quantities.'),
+							barcodes: z
+								.array(
+									z.object({
+										barcode: z.string().describe('The physical bin/label barcode.'),
+										quantity: z.number().int().min(0).describe('Counted quantity in that bin.')
+									})
+								)
+								.optional()
+								.describe('Per-bin counted quantities, when the operator stated them per barcode.'),
+							note: z.string().optional().describe('Optional context, e.g. "monthly cycle count".')
+						})
+					)
+					.min(1)
+			})
+		},
+		async (args) =>
+			callAgentApi(fetcher, '/api/agent/inventory/physical-count', { method: 'POST', body: args })
 	);
 
 	server.registerTool(
