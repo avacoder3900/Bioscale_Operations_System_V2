@@ -6244,3 +6244,33 @@ Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
 Source: branch master @ commit 9dc58608
 Retrieve this exact code: git checkout master at commit 9dc58608
 What this deployment is for: optics results by any condition — SPU, device, date, group (MCP v2.7.0).
+
+================================================================================
+2026-07-31 — master — optics→SPU validation write-back SHIPPED + backfilled (MCP v2.8.0)
+================================================================================
+"Fix it" = the flagged write-back gap: optics runs land in cartridge_records (brevitest-
+cloud) and never touched the SPU record, so validation.spectrophotometer sat 'pending'
+despite completed runs (SPU 212: 15 runs).
+
+- NEW src/lib/server/services/optics-validation-sync.ts: per SPU (device.name = UDI),
+  latest analyzable optical run → analyzeCartridge → no warnings = passed / warnings =
+  failed (reasons recorded) → $set validation.spectrophotometer {status, sessionId =
+  cartridge barcode (the cartridge IS the run record), completedAt = run createdAt,
+  results {ratioByChannel, crossWellCv, runCount}, criteriaUsed {profile, windowK}}.
+  Idempotent (status+sessionId compare), finalized SPUs skipped (sacred), audit-logged
+  per change (changedBy optics-validation-sync). cartridge_records itself is never written.
+- Triggers: POST /api/agent/validation/sync-optics {spu?} (suffix-resolving), MCP tool
+  sync_optics_to_spu (v2.8.0), and a daily-digest cron piggyback (best-effort, same
+  pattern as the KB2-10 standing check).
+- BACKFILL RUN IN PROD: 32 SPUs updated to passed (203, 212, 218, 229, 243, 249, ...);
+  immediate re-run: 0 updated / 32 unchanged (idempotency verified). SPU 212 record now
+  shows spectrophotometer passed @ 2026-07-30T20:55:42Z.
+- Left as-is: validation.lux (nothing maps to it from optics; still pending by design)
+  and the SPU-212 thermocouple mismatch the connector flagged (passed on SPU vs
+  in_progress sessions — thermo write-back is manual via validation runs; separate issue).
+npm run check: 11 errors (baseline).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 28396b47
+Retrieve this exact code: git checkout master at commit 28396b47
+What this deployment is for: optics results write back to SPU validation.spectrophotometer (sync service + endpoint + MCP tool + daily cron piggyback); prod backfill of 32 SPUs.
