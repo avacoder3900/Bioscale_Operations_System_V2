@@ -6215,3 +6215,32 @@ Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
 Source: branch master @ commit 5b61409a
 Retrieve this exact code: git checkout master at commit 5b61409a
 What this deployment is for: BIMS-identical magnetometer result tables from find_test_results (MCP v2.6.1).
+
+================================================================================
+2026-07-31 — master — optics by SPU/device/date: device.name linkage (MCP v2.7.0)
+================================================================================
+Alejandro pasted a connector-Claude response claiming optics was unreachable ("no saved
+query, no dedicated tool") and reporting "no optics tests exist" for an SPU. Two truths in
+it: (a) that session predates/hasn't refreshed the connector — find_test_results and the
+optical saved queries DO exist since v2.6.0; (b) my resolver's SPU→optics linkage was
+incomplete. ROOT FINDING: optical cartridge_records store the RUNNING SPU as device.name
+(= the SPU UDI; device.id = its Particle id) — e.g. SPU 212 has 15 optics runs under
+device.name BT-M01-0000-0212 while its usageLog/validation-run linkage is empty.
+
+- find_test_results optical branch: device.name(=UDI) is now the PRIMARY SPU linkage
+  (usageLog + validation_run steps still folded in); new `device` filter (Particle id or
+  UDI/device name) composing with group/spu/cartridge; bare date-window optical asks now
+  scan the optical population. Sessions branch also accepts device (particleDeviceId or
+  spuUdi suffix). Cartridge output's device trimmed to {id,name}.
+- Prod-verified: optics for SPU 212 → 15 runs w/ per-channel ratios; +date window
+  2026-07-30 → exactly the 2 runs from that day; device=<Particle id of 203> → 14 runs all
+  on BT-M01-0000-0203.
+- NOTED (not fixed, flagged by the connector response): spus.validation block shows lux/
+  spectrophotometer pending for SPUs that have optics runs — optics results do not write
+  back to the SPU validation block. If that write-back is wanted it is a separate change.
+npm run check: 11 errors (baseline).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 9dc58608
+Retrieve this exact code: git checkout master at commit 9dc58608
+What this deployment is for: optics results by any condition — SPU, device, date, group (MCP v2.7.0).
