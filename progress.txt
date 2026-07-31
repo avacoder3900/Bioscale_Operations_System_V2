@@ -6062,3 +6062,58 @@ Retrieve this exact code: git checkout feat/robot-arm-pose-calibration at commit
   (or: git log feat/robot-arm-pose-calibration --oneline to find it if the branch has since moved on)
 What this deployment is for: multi-pose joint-map calibration UI — pose capture, per-pose
 delete, and per-joint fit status on /manufacturing/cart-mfg/robot-arm/calibrate.
+
+================================================================================
+2026-07-31 — master — multi-pose calibration UI promoted to production
+================================================================================
+Promoted feat/robot-arm-pose-calibration to master. Rebased onto 28c5ef35b (master had
+moved 14 commits); only progress.txt conflicted — both sides had appended entries, both
+kept in chronological order. The code commit applied cleanly with no conflicts.
+
+npm run check: 61 errors / 426 warnings, zero of them in the three touched files
+(robot-arm-client.ts, calibrate/+page.server.ts, calibrate/+page.svelte). The count rose
+from 57 purely because master's 14 commits added 18 files and 4 errors of their own.
+
+FIELD RESULT — the feature was used against real hardware the same day and found the
+gripper (servo 6) bug it was built for. Diagnosis, in order:
+  - Ruled out clamping: follower gripper Min/Max_Angle_Limit are 0/4095, i.e. unset.
+  - The leader gripper travels 1973..3335 (1362 ticks); the follower claw only ~354.
+    The follower runs OUT OF TRAVEL at roughly 35% of the leader's squeeze, so the
+    relationship SATURATES — it is not one straight line. Active-region slope ~0.72,
+    flat thereafter.
+  - The original fitted scale of 0.8231 therefore kept climbing past the follower's
+    mechanical stop (+707 ticks at full squeeze). On an STS3215 that stalls the motor,
+    trips overload protection, and CUTS TORQUE — the claw goes slack. The reported
+    symptom "won't close all the way" was over-commanding, not under-travel.
+  - Early pose sets made this invisible: captures clustered in the open third of the
+    range (5%..36%), with duplicate poses and one mid-range outlier giving segment
+    slopes of 0.335 and 1.297 either side of it.
+  - After cleanup the fit is honest: gripper scale 0.7187 residual 3.8 (was 170), and
+    shoulder_pan residual fell 112 -> 2.9.
+
+OUTSTANDING, in priority order:
+1. Follower servo 6 needs Max_Angle_Limit set (~2530) so the existing clamp in
+   _mirror_goal stops the goal at the closed position. Until then ~796 ticks of squeeze
+   past the stop remain unprotected and the stall returns on a hard grip. EEPROM write,
+   reversible by writing 4095 back. Not done — needs running on the Pi directly.
+2. STALE-INDEX DELETE BUG (shipped, known). Pose delete posts a positional index, but
+   the Pi renumbers every pose on each mutation (_build_map enumerates and reassigns).
+   Deleting one row shifts everything below it, so a second delete against the page's
+   original numbering removes the WRONG pose. This bit the operator today: it destroyed
+   a good open/close pose pair that had to be physically recaptured. Fix is to post
+   captured_at (already rendered on every row) and resolve it server-side. Was flagged
+   as a warn in the pre-push review and shipped anyway at the operator's direction.
+3. wrist_roll still reads insufficient_range (span 7 ticks across all poses) with a live
+   tracking error near 886. It is the joint with the cord-tangle history; deserves its
+   own capture pass.
+4. The two PRE-EXISTING sync-zero actions in calibrate/+page.server.ts (capture, clear)
+   still write the non-conforming AuditLog shape and are still being silently dropped by
+   Mongoose strict mode. The three new joint-map actions were fixed to the real schema.
+   CLAUDE.md's Form Actions example documents the wrong field names and is the source.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit c93d3d17
+Retrieve this exact code: git checkout master at commit c93d3d17
+  (or: git log master --oneline to find it if master has since moved on)
+What this deployment is for: multi-pose joint-map calibration — pose capture, per-pose
+delete, and per-joint fit status/tracking error at /manufacturing/cart-mfg/robot-arm/calibrate.
