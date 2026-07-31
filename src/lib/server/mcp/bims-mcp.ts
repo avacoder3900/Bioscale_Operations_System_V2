@@ -99,7 +99,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '2.0.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '2.1.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -252,12 +252,16 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'descriptions with parts_lookup; ask a clarifying question only if a part is genuinely ambiguous. If the operator ' +
 				'says what area they worked on but not which parts at all, ask them to scan the SPU barcode and each part barcode.\n' +
 				'2. Before calling this tool, send the confirmation message. It must contain ONLY the per-SPU list and a one-line ' +
-				'confirm ask — nothing else. Format: one group per SPU, headed by the SPU barcode and its last 5 characters, one row ' +
-				'per part. If the operator NAMED parts in words (e.g. "replaced the magnets in the heater block"), each row restates ' +
-				'"<partNumber> <name> — qty: <n or __>". If the operator provided the parts as SCANNED BARCODES, do NOT restate or ' +
-				'describe the parts — each row is just "<partNumber> — qty: __" for them to fill in. Leave quantity blank wherever ' +
-				'the operator has not stated it. The same part used on different SPUs gets its own row (and its own quantity) under ' +
-				'each SPU.\n' +
+				'reply instruction — nothing else. Format: one group per SPU, headed by the SPU barcode and its last 5 characters, ' +
+				'one row per part, every row numbered sequentially ACROSS the whole message (1., 2., 3., ...). If the operator NAMED ' +
+				'parts in words (e.g. "replaced the magnets in the heater block"), each row is "<n>. <partNumber> <name> — qty: ' +
+				'<stated qty or __>". If the operator provided the parts as SCANNED BARCODES, do NOT restate or describe the parts — ' +
+				'each row is just "<n>. <partNumber> — qty: __". The same part used on different SPUs gets its own numbered row ' +
+				'under each SPU. Then the final line: if any quantities are blank, exactly: \'Reply with the quantities in order ' +
+				'(e.g. "2, 6, 1") or confirm.\' — the operator answers with bare numbers, comma or space separated, mapped to the ' +
+				'blank rows in order (they may also write "3=2" to target row 3). If all quantities are already stated, the final ' +
+				'line is exactly: "Confirm?". Accept "yes"/"confirm"/a bare number list as approval; never require them to retype ' +
+				'part numbers.\n' +
 				'3. NEVER add commentary to the confirmation or result messages: no notes about critical parts, retesting, ' +
 				'revalidation, QC, or process implications of the replacement — only mention such things if the operator explicitly ' +
 				'asks.\n' +

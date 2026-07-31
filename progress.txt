@@ -5740,3 +5740,21 @@ Source: branch master @ commit c83d87b0
 Retrieve this exact code: git checkout master at commit c83d87b0
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: MCP server version bump so clients re-fetch the 34-tool list (adds the inventory mutation tool to claude.ai connectors).
+
+================================================================================
+2026-07-31 — master — practice-run reversal + numbered quantity-entry format
+================================================================================
+Alejandro's claude.ai practice run WORKED end-to-end: operator "Nicholas Cox" deducted 1x
+PT-SPU-010 Holding Magnet - Bar on SPU ...0202 through record_reassembly_parts_usage (tx
+fF65_6MDcUF7ol-du90eA, 102->101). Reversed on request with a documented adjustment
+(practice-reversal-* tx, 101->102) — same raw-driver pattern as the 07-30 e2e reversal.
+
+Feedback: operators cannot type into the confirmation list's blanks (chat has no form
+fields). Reworked the record_reassembly_parts_usage confirmation format in bims-mcp.ts:
+every part row is now numbered sequentially across the whole message, and the message ends
+with 'Reply with the quantities in order (e.g. "2, 6, 1") or confirm.' — the operator
+answers with bare comma/space-separated numbers mapped to blank rows in order ("3=2"
+targets a specific row); "yes"/"confirm" approves when all quantities are pre-stated.
+McpServer version bumped 2.1.0 (bump-on-toolset-change policy from yesterday; description
+changes also ride the connector tool-list cache, so a connector re-add may be needed to
+pick this up). npm run check: 11 errors, unchanged baseline.
