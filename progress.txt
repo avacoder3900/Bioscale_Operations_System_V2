@@ -6340,3 +6340,29 @@ Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
 Source: branch master @ commit b86f5115
 Retrieve this exact code: git checkout master at commit b86f5115
 What this deployment is for: validation_tab tool/endpoint — full Validation section access for agents (MCP v2.9.0).
+
+================================================================================
+2026-07-31 — master — one-Z-per-cell magnetometer everywhere + stale-session steering
+================================================================================
+Alejandro: magnetometer responses show "3 values per box" (the assistant formats raw
+magResults T/X/Y/Z itself) and the same stale optics response keeps coming back. The
+optics response is verbatim identical to the earlier one — that claude.ai CONVERSATION
+still runs the pre-2.2.0 cached tool list (existing chats keep their tools; refresh only
+helps NEW chats). Fixes that reach even stale sessions (response CONTENT is not cached):
+
+- get_spu_status single lookup: validation.magnetometer now carries criteria + wells[]
+  (one Z per channel + pass flag — the BIMS table), spectrophotometer.results passthrough,
+  and a guidance block (presentation rule; where histories live; optics = cartridge_records
+  via device.name). Old tool name, new response — works in stale chats.
+- run_saved_query responses now include presentationHint from the saved query's
+  resultFormat. 'SPU Validation Sessions' hint: BIMS one-value Z table, never T/X/Y unless
+  raw requested. 'Optical Test Cartridge Log' hint: docs are inventory, readings live on
+  cartridge_records. Re-seeded in prod.
+- Prod-verified: SPU 212 lookup returns the 5-well Z table (all PASS, criteria 3900-4500)
+  + guidance; saved-query run returns the presentation hint.
+npm run check: 11 errors (baseline).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 07e7fc98
+Retrieve this exact code: git checkout master at commit 07e7fc98
+What this deployment is for: BIMS-style magnetometer tables from get_spu_status/run_saved_query + presentation hints steering stale connector sessions.
