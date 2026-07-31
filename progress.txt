@@ -5758,3 +5758,8 @@ targets a specific row); "yes"/"confirm" approves when all quantities are pre-st
 McpServer version bumped 2.1.0 (bump-on-toolset-change policy from yesterday; description
 changes also ride the connector tool-list cache, so a connector re-add may be needed to
 pick this up). npm run check: 11 errors, unchanged baseline.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 6186bace (feature commit bc468a38, rebased onto concurrent master work)
+Retrieve this exact code: git checkout master at commit 6186bace
+What this deployment is for: numbered quantity-entry format for reassembly confirmations (reply with bare numbers in order).
