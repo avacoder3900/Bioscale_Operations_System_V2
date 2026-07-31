@@ -5763,3 +5763,9 @@ Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
 Source: branch master @ commit 6186bace (feature commit bc468a38, rebased onto concurrent master work)
 Retrieve this exact code: git checkout master at commit 6186bace
 What this deployment is for: numbered quantity-entry format for reassembly confirmations (reply with bare numbers in order).
+
+Numbered-format test (2026-07-31 ~15:22 UTC) confirmed working by Alejandro: ordered
+bare-number reply correctly mapped quantities across TWO SPUs (3x + 2x PT-SPU-008, 8x
+PT-SPU-009; markdown numbering renders as bullets on claude.ai so the visible list is
+unnumbered, but order-mapping works). All three test consumptions reversed on request via
+documented adjustment txs (test-reversal-*): PT-SPU-008 back to 205, PT-SPU-009 back to 875.
