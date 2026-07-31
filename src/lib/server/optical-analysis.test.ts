@@ -3,6 +3,8 @@ import {
 	analyzeCartridge,
 	analyzeGroupRobust,
 	compareGroups,
+	diffGroups,
+	reportGroup,
 	robustStats,
 	robustZ,
 	type GroupInput
@@ -442,5 +444,381 @@ describe('compareGroups', () => {
 		]);
 		// SvelteKit must serialize this; Infinity/NaN would silently become null.
 		expect(JSON.parse(JSON.stringify(cmp))).toEqual(cmp);
+	});
+});
+
+// ---- VALIDATION-06: reportGroup + diffGroups --------------------------------
+
+/** A cartridge carrying readings ONLY for the wells given a ratio. Omitted wells are absent. */
+function partialCartridge(
+	ratios: { A?: number; B?: number; C?: number },
+	count = 10,
+	f3 = 10
+): Reading[] {
+	const out: Reading[] = [];
+	(['A', 'B', 'C'] as const).forEach((ch) => {
+		const r = ratios[ch];
+		if (r === undefined) return;
+		out.push(...channelReadings(ch, f3, Array(count).fill(f3 * r)));
+	});
+	return out;
+}
+
+/** A group where every cartridge has the SAME ratio on all three wells, so the
+ *  per-cartridge overall (mean of wells) is exactly that value. */
+function groupOnAllWells(
+	groupId: string,
+	groupName: string,
+	values: number[],
+	spuUdi: string | null = null
+): GroupInput {
+	return groupOf(
+		groupId,
+		groupName,
+		values.map((v) => ({ A: v, B: v, C: v })),
+		spuUdi
+	);
+}
+
+/** Walk any structure and assert no non-finite number is hiding in it. */
+function assertAllFinite(node: unknown, path = '$'): void {
+	if (typeof node === 'number') {
+		expect(Number.isFinite(node), `${path} must be finite, got ${node}`).toBe(true);
+		return;
+	}
+	if (Array.isArray(node)) {
+		node.forEach((v, i) => assertAllFinite(v, `${path}[${i}]`));
+		return;
+	}
+	if (node !== null && typeof node === 'object') {
+		for (const [k, v] of Object.entries(node)) assertAllFinite(v, `${path}.${k}`);
+	}
+}
+
+describe('reportGroup', () => {
+	it('(t1) overall is the mean of the wells that are PRESENT, not of three slots', () => {
+		const g: GroupInput = {
+			groupId: 'O',
+			groupName: 'Overall',
+			items: [
+				// all three wells: (1 + 2 + 3) / 3 = 2
+				{ id: 'O-3wells', readings: partialCartridge({ A: 1, B: 2, C: 3 }) },
+				// two wells: (1 + 3) / 2 = 2 — the missing well is SKIPPED, not zero.
+				// Zero-filling would have given (1 + 3 + 0)/3 = 1.33.
+				{ id: 'O-2wells', readings: partialCartridge({ A: 1, C: 3 }) },
+				// one well: the well's own value, unchanged.
+				{ id: 'O-1well', readings: partialCartridge({ B: 1.5 }) }
+			]
+		};
+
+		const rep = reportGroup(g);
+		const byId = (id: string) => rep.rows.find((r) => r.id === id)!;
+
+		expect(byId('O-3wells').overallRatio).toBeCloseTo(2, 10);
+		expect(byId('O-3wells').wellsUsed).toBe(3);
+
+		expect(byId('O-2wells').overallRatio).toBeCloseTo(2, 10);
+		expect(byId('O-2wells').wellsUsed).toBe(2);
+		expect(byId('O-2wells').ratioByChannel.B).toBeNull();
+
+		expect(byId('O-1well').overallRatio).toBeCloseTo(1.5, 10);
+		expect(byId('O-1well').wellsUsed).toBe(1);
+		expect(byId('O-1well').ratioByChannel.B).toBeCloseTo(1.5, 10);
+
+		// Nothing here contributed nothing.
+		expect(rep.excluded).toEqual([]);
+		expect(rep.n).toBe(3);
+	});
+
+	it('(t2) a cartridge with no usable well contributes nothing and is excluded with a reason', () => {
+		const g: GroupInput = {
+			groupId: 'X',
+			groupName: 'Mixed',
+			items: [
+				{ id: 'X-ok', readings: flatCartridge({ A: 2, B: 2, C: 2 }) },
+				{ id: 'X-empty', readings: [] },
+				// readings present, but f3 = 0 everywhere so no F7/F3 can be formed
+				{ id: 'X-nof3', readings: flatCartridge({ A: 2, B: 2, C: 2 }, 10, 0) }
+			]
+		};
+
+		const rep = reportGroup(g);
+
+		// Still one row each — a dead cartridge is shown, not silently dropped.
+		expect(rep.rows).toHaveLength(3);
+		expect(rep.n).toBe(3);
+
+		const empty = rep.rows.find((r) => r.id === 'X-empty')!;
+		expect(empty.hasReadings).toBe(false);
+		expect(empty.overallRatio).toBeNull();
+		expect(empty.wellsUsed).toBe(0);
+
+		const nof3 = rep.rows.find((r) => r.id === 'X-nof3')!;
+		expect(nof3.hasReadings).toBe(true);
+		expect(nof3.overallRatio).toBeNull();
+		expect(nof3.wellsUsed).toBe(0);
+
+		expect(rep.excluded.map((e) => e.id).sort()).toEqual(['X-empty', 'X-nof3']);
+		expect(rep.excluded.find((e) => e.id === 'X-empty')!.reason).toMatch(/never run/);
+		expect(rep.excluded.find((e) => e.id === 'X-nof3')!.reason).toMatch(/F3 > 0/);
+		for (const e of rep.excluded) expect(e.reason.length).toBeGreaterThan(0);
+
+		// Only the one usable cartridge reaches the totals.
+		expect(rep.overall.n).toBe(1);
+		expect(rep.overall.median).toBeCloseTo(2, 10);
+	});
+
+	it('(t3) group totals match a hand-computed fixture', () => {
+		// Five cartridges, flat across all wells, at 1 / 2 / 3 / 4 / 5.
+		// Per-cartridge overall == that value, so the totals are stats of [1,2,3,4,5]:
+		//   mean 3, median 3, sample sd sqrt(2.5), cv sqrt(2.5)/3*100,
+		//   deviations |x-3| = [2,1,0,1,2] -> mad 1, madScaled 1.4826.
+		const rep = reportGroup(groupOnAllWells('H', 'Hand', [1, 2, 3, 4, 5]));
+
+		expect(rep.groupId).toBe('H');
+		expect(rep.groupName).toBe('Hand');
+		expect(rep.n).toBe(5);
+		expect(rep.windowK).toBe(10);
+		expect(rep.rows.map((r) => r.overallRatio)).toEqual([1, 2, 3, 4, 5]);
+		expect(rep.rows.every((r) => r.wellsUsed === 3)).toBe(true);
+
+		expect(rep.overall.n).toBe(5);
+		expect(rep.overall.mean).toBeCloseTo(3, 10);
+		expect(rep.overall.median).toBe(3);
+		expect(rep.overall.sd).toBeCloseTo(Math.sqrt(2.5), 10);
+		expect(rep.overall.cv).toBeCloseTo((Math.sqrt(2.5) / 3) * 100, 10);
+		expect(rep.overall.mad).toBe(1);
+		expect(rep.overall.madScaled).toBeCloseTo(1.4826, 10);
+		expect(rep.overall.min).toBe(1);
+		expect(rep.overall.max).toBe(5);
+
+		// Wells are the same set, so each well matches the overall exactly.
+		expect(rep.wells.map((w) => w.channel)).toEqual(['A', 'B', 'C']);
+		for (const w of rep.wells) {
+			expect(w.n).toBe(5);
+			expect(w.mean).toBeCloseTo(3, 10);
+			expect(w.median).toBe(3);
+			expect(w.sd).toBeCloseTo(Math.sqrt(2.5), 10);
+		}
+	});
+
+	it('(t4) a report survives a JSON round-trip with no non-finite numbers', () => {
+		const rep = reportGroup({
+			groupId: 'J',
+			groupName: 'Round trip',
+			items: [
+				...groupOnAllWells('J', 'x', [2, 2, 2, 2, 2]).items, // degenerate on purpose
+				{ id: 'J-empty', readings: [] },
+				{ id: 'J-nof3', readings: flatCartridge({ A: 1, B: 1, C: 1 }, 10, 0) },
+				{ id: 'J-wild', readings: flatCartridge({ A: 8.85, B: 8.77, C: 9.49 }) }
+			]
+		});
+
+		expect(JSON.parse(JSON.stringify(rep))).toEqual(rep);
+		assertAllFinite(rep);
+	});
+});
+
+describe('diffGroups', () => {
+	const SPU_1 = 'BT-M01-0000-0201';
+	const SPU_2 = 'BT-M01-0000-0202';
+
+	it('(u1) identical groups produce all-zero differences', () => {
+		const vals = [1.9, 1.95, 2.0, 2.05, 2.1];
+		const d = diffGroups(groupOnAllWells('A', 'Run 1', vals), groupOnAllWells('B', 'Run 2', vals));
+
+		expect(d.a.groupId).toBe('A');
+		expect(d.b.groupId).toBe('B');
+
+		expect(d.overall.avgDiff).toBeCloseTo(0, 12);
+		expect(d.overall.avgPctDiff).toBeCloseTo(0, 12);
+		expect(d.overall.sdDiff).toBeCloseTo(0, 12);
+		expect(d.overall.cvDiffPp).toBeCloseTo(0, 12);
+		expect(d.overall.medianDiff).toBeCloseTo(0, 12);
+		expect(d.overall.medianPctDiff).toBeCloseTo(0, 12);
+		expect(d.overall.underpowered).toBe(false);
+
+		for (const w of d.wells) {
+			expect(w.avgDiff, `well ${w.channel}`).toBeCloseTo(0, 12);
+			expect(w.cvDiffPp, `well ${w.channel}`).toBeCloseTo(0, 12);
+			expect(w.medianDiff, `well ${w.channel}`).toBeCloseTo(0, 12);
+		}
+		expect(d.wells.map((w) => w.channel)).toEqual(['A', 'B', 'C']);
+
+		// A symmetric comparison must not claim skew.
+		expect(d.notes.some((n) => /pulled by an extreme cartridge/.test(n))).toBe(false);
+		// ...but must always say it is not a test.
+		expect(d.notes.some((n) => /no p-values are computed/i.test(n))).toBe(true);
+		expect(d.notes.some((n) => /p-value|t-test|ANOVA/i.test(n) && !/no p-values/i.test(n))).toBe(
+			false
+		);
+	});
+
+	it('(u2) a 2x offset gives avgPctDiff ~= 100', () => {
+		const d = diffGroups(
+			groupOnAllWells('A', 'High', [3.8, 3.9, 4.0, 4.1, 4.2]),
+			groupOnAllWells('B', 'Low', [1.9, 1.95, 2.0, 2.05, 2.1])
+		);
+
+		expect(d.a.overall.mean).toBeCloseTo(4, 6);
+		expect(d.b.overall.mean).toBeCloseTo(2, 6);
+		expect(d.overall.avgDiff).toBeCloseTo(2, 6);
+		expect(d.overall.avgPctDiff).toBeCloseTo(100, 6);
+		expect(d.overall.medianDiff).toBeCloseTo(2, 6);
+		expect(d.overall.medianPctDiff).toBeCloseTo(100, 6);
+
+		// Every well tells the same story, since all wells were offset together.
+		for (const w of d.wells) {
+			expect(w.avgPctDiff, `well ${w.channel}`).toBeCloseTo(100, 6);
+		}
+	});
+
+	it('(u3) cvDiffPp is a subtraction of CVs — PERCENTAGE POINTS, not a percent change', () => {
+		// A: [90,95,100,105,110] -> mean 100, sd sqrt(62.5), CV 7.9057%
+		// B: [98,99,100,101,102] -> mean 100, sd sqrt(2.5),  CV 1.5811%
+		const d = diffGroups(
+			groupOnAllWells('A', 'Wide', [90, 95, 100, 105, 110]),
+			groupOnAllWells('B', 'Tight', [98, 99, 100, 101, 102])
+		);
+
+		const cvA = Math.sqrt(62.5); // sd/mean*100 with mean 100
+		const cvB = Math.sqrt(2.5);
+		expect(d.a.overall.cv).toBeCloseTo(cvA, 8);
+		expect(d.b.overall.cv).toBeCloseTo(cvB, 8);
+
+		// pp: 7.9057 - 1.5811 = 6.3246
+		expect(d.overall.cvDiffPp).toBeCloseTo(cvA - cvB, 8);
+		expect(d.overall.cvDiffPp).toBeCloseTo(6.324555320336759, 8);
+
+		// It is emphatically NOT the relative change, which would be ~400%.
+		const relativeChange = ((cvA - cvB) / cvB) * 100;
+		expect(relativeChange).toBeGreaterThan(390);
+		expect(Math.abs(d.overall.cvDiffPp! - relativeChange)).toBeGreaterThan(300);
+
+		// The means are equal, so a CV difference is the ONLY difference here.
+		expect(d.overall.avgDiff).toBeCloseTo(0, 8);
+		expect(d.overall.sdDiff).toBeCloseTo(Math.sqrt(62.5) - Math.sqrt(2.5), 8);
+	});
+
+	it('(u4) an n=2 group makes every difference underpowered', () => {
+		const d = diffGroups(
+			groupOnAllWells('A', 'Full', [1.9, 1.95, 2.0, 2.05, 2.1]),
+			groupOnAllWells('B', 'Tiny', [2.0, 2.1])
+		);
+
+		expect(d.b.overall.n).toBe(2);
+		expect(d.overall.underpowered).toBe(true);
+		expect(d.wells.every((w) => w.underpowered)).toBe(true);
+
+		// The stats themselves still render — underpowered marks them, it does not blank them.
+		expect(d.b.overall.mean).toBeCloseTo(2.05, 10);
+
+		// And the reverse orientation is underpowered too.
+		const flipped = diffGroups(
+			groupOnAllWells('B', 'Tiny', [2.0, 2.1]),
+			groupOnAllWells('A', 'Full', [1.9, 1.95, 2.0, 2.05, 2.1])
+		);
+		expect(flipped.overall.underpowered).toBe(true);
+
+		// n=5 on both sides is exactly at the limit and is NOT underpowered.
+		const ok = diffGroups(
+			groupOnAllWells('A', 'Full', [1.9, 1.95, 2.0, 2.05, 2.1]),
+			groupOnAllWells('B', 'Also full', [1.9, 1.95, 2.0, 2.05, 2.1])
+		);
+		expect(ok.overall.underpowered).toBe(false);
+	});
+
+	it('(u5) two distinct SPUs emit the raw-F7/F3 calibration caveat', () => {
+		const vals = [1.9, 1.95, 2.0, 2.05, 2.1];
+		const spanning = diffGroups(
+			groupOnAllWells('A', 'SPU-1', vals, SPU_1),
+			groupOnAllWells('B', 'SPU-2', vals, SPU_2)
+		);
+		expect(spanning.notes.some((n) => /no per-SPU calibration applied/.test(n))).toBe(true);
+		expect(spanning.notes.some((n) => /optics rather than chemistry/.test(n))).toBe(true);
+
+		// Same SPU on both sides -> the confound does not apply, so no caveat.
+		const sameSpu = diffGroups(
+			groupOnAllWells('A', 'Run 1', vals, SPU_1),
+			groupOnAllWells('B', 'Run 2', vals, SPU_1)
+		);
+		expect(sameSpu.notes.some((n) => /no per-SPU calibration applied/.test(n))).toBe(false);
+		expect(sameSpu.notes.some((n) => /no p-values are computed/i.test(n))).toBe(true);
+	});
+
+	it('(u6) a group whose mean is pulled >10% off its median emits the skew note', () => {
+		// Skewed: [1,1,1,1,10] -> median 1, mean 2.8 -> 180% divergence.
+		// Even:   [1,1.05,1.1,1.15,1.2] -> median 1.1, mean 1.1 -> ~0%.
+		const d = diffGroups(
+			groupOnAllWells('S', 'Skewed', [1, 1, 1, 1, 10]),
+			groupOnAllWells('E', 'Even', [1, 1.05, 1.1, 1.15, 1.2])
+		);
+
+		const skew = d.notes.filter((n) => /pulled by an extreme cartridge/.test(n));
+		expect(skew).toHaveLength(1);
+		expect(skew[0]).toMatch(/Group "Skewed"/);
+		expect(skew[0]).toMatch(/CV/);
+		// It names the group in trouble, and does not accuse the well-behaved one.
+		expect(skew[0]).not.toMatch(/Group "Even"/);
+
+		// A 10%-or-less divergence stays quiet.
+		const quiet = diffGroups(
+			groupOnAllWells('A', 'Q1', [1, 1.05, 1.1, 1.15, 1.2]),
+			groupOnAllWells('B', 'Q2', [2, 2.05, 2.1, 2.15, 2.2])
+		);
+		expect(quiet.notes.some((n) => /pulled by an extreme cartridge/.test(n))).toBe(false);
+	});
+
+	it('(u7) the whole diff survives a JSON round-trip with no non-finite numbers', () => {
+		const d = diffGroups(
+			{
+				groupId: 'A',
+				groupName: 'Messy, with a comma',
+				items: [
+					...groupOnAllWells('A', 'x', [0.5, 0.52, 0.55, 0.58, 8.85], SPU_1).items,
+					{ id: 'A-empty', spuUdi: SPU_1, readings: [] },
+					{ id: 'A-nof3', spuUdi: SPU_1, readings: flatCartridge({ A: 1, B: 1, C: 1 }, 10, 0) }
+				]
+			},
+			// Fully degenerate AND undersized: every guard at once.
+			groupOnAllWells('B', 'Degenerate', [2, 2], SPU_2)
+		);
+
+		expect(JSON.parse(JSON.stringify(d))).toEqual(d);
+		assertAllFinite(d);
+
+		// A degenerate group has no scale, so its robust fields are null, not Infinity.
+		expect(d.b.overall.degenerate).toBe(true);
+		expect(d.b.overall.scale).toBeNull();
+		expect(d.b.overall.robustCv).toBeNull();
+		// The classic mean/median difference is still computable across that boundary.
+		expect(d.overall.medianDiff).not.toBeNull();
+	});
+
+	it('(u8) a group with nothing usable yields null differences rather than NaN', () => {
+		const d = diffGroups(
+			groupOnAllWells('A', 'Real', [1.9, 1.95, 2.0, 2.05, 2.1]),
+			{
+				groupId: 'B',
+				groupName: 'All dead',
+				items: [
+					{ id: 'B-1', readings: [] },
+					{ id: 'B-2', readings: [] }
+				]
+			}
+		);
+
+		expect(d.b.overall.n).toBe(0);
+		expect(d.b.overall.mean).toBeNull();
+		expect(d.overall.avgDiff).toBeNull();
+		expect(d.overall.avgPctDiff).toBeNull();
+		expect(d.overall.cvDiffPp).toBeNull();
+		expect(d.overall.medianDiff).toBeNull();
+		expect(d.overall.medianPctDiff).toBeNull();
+		expect(d.overall.underpowered).toBe(true);
+		expect(d.b.excluded).toHaveLength(2);
+
+		expect(JSON.parse(JSON.stringify(d))).toEqual(d);
+		assertAllFinite(d);
 	});
 });

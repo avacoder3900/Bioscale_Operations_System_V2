@@ -242,7 +242,17 @@
 	<div class="tron-card">
 		<div class="flex items-center justify-between border-b border-[var(--color-tron-border)] p-4">
 			<h2 class="tron-heading text-lg font-semibold">Optical Test Cartridge Log ({data.cartridges.length})</h2>
-			<span class="text-sm text-[var(--color-tron-text-secondary)]">{ranCount} run</span>
+			<div class="flex items-center gap-4">
+				<span class="text-sm text-[var(--color-tron-text-secondary)]">{ranCount} run</span>
+				<!-- The Groups workspace is where groups are managed and compared; this
+				     log keeps its own inline "Save as group" for the quick path. -->
+				<a
+					href="/validation/optical-confirmation/groups"
+					class="rounded-lg border border-[var(--color-tron-cyan)]/50 px-3 py-1.5 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/10"
+				>
+					Groups{data.groups.length > 0 ? ` (${data.groups.length})` : ''} →
+				</a>
+			</div>
 		</div>
 
 		<!-- Group-analysis action bar (sticky) -->
