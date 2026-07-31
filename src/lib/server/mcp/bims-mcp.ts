@@ -99,7 +99,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '2.2.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '2.2.1' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -138,7 +138,8 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		{ annotations: READ_ONLY,
 			description:
 				'Execute a saved read-only query against an allowlisted BIMS collection. ' +
-				'Use list_saved_queries first to find the queryId and its parameter schema. Returns up to the query\'s maxRows (default 100).',
+				'Use list_saved_queries first to find the queryId and its parameter schema. Returns up to the query\'s maxRows (default 100). ' +
+				'If the user wants an inventory/parts PDF, call generate_inventory_pdf instead of composing a document from query rows.',
 			inputSchema: z.object({
 				queryId: z.string().describe('The saved query _id from list_saved_queries.'),
 				parameters: z
@@ -204,7 +205,8 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'Inventory state: active parts, low-stock list, categories, and BOM count. The summary always includes ' +
 				'lowStockParts (count on hand of zero or below) AND criticalLowStockParts — parts classified "Critical" ' +
 				'(their category field) that are running low — so use this to answer "are any Critical parts low on stock?". ' +
-				'You are authorized to state exact inventory counts back to the user.',
+				'You are authorized to state exact inventory counts back to the user. ' +
+				'If the user wants an inventory PDF, do NOT build one from this data — call generate_inventory_pdf.',
 			inputSchema: z.object({
 				category: z.string().optional().describe('Restrict the parts list to one classification, e.g. "Critical".'),
 				lowStockOnly: z.boolean().optional().describe('Restrict the parts list to parts with count on hand <= 0.')
@@ -227,7 +229,8 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'if it returns none, ask the user to scan the part barcode and retry with barcode. ' +
 				'You are authorized to answer counting questions ("how many stage boards do we have?") with the exact ' +
 				'inventoryCount from this tool — state the number plainly. Each part\'s category field carries its ' +
-				'Critical / Non-Critical classification.',
+				'Critical / Non-Critical classification. If the user wants an inventory PDF, call generate_inventory_pdf ' +
+				'instead of composing a document from this data.',
 			inputSchema: z.object({
 				q: z.string().optional().describe('Free-text description of the part (e.g. "magnet heating block spherical").'),
 				barcode: z.string().optional().describe('A scanned part barcode.'),
