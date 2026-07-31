@@ -99,7 +99,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '2.8.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '2.9.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -461,6 +461,39 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			callAgentApi(fetcher, '/api/agent/test-results', {
 				query: { ...rest, passed: passed === undefined ? undefined : String(passed) }
 			})
+	);
+
+	server.registerTool(
+		'validation_tab',
+		{ annotations: READ_ONLY,
+			description:
+				'The BIMS Validation section, tab by tab — use this when asked for a REPORT of validation data so the answer ' +
+				'mirrors exactly what the corresponding BIMS tab shows. Tabs: "runs" (the per-SPU step board: magnetometer / ' +
+				'thermocouple / optical_confirmation status, uploaded results, evaluations); "magnetometer" (sessions with the ' +
+				'per-well Z table and criteria — present as "Well | Ch A (Z) | Ch B (Z) | Ch C (Z)" with check/cross per cell); ' +
+				'"thermocouple" (sessions with temperature stats: min/max/average/stdDev/range/readingCount); ' +
+				'"optical-confirmation" (the Optical Test Cartridge Log: per-cartridge F7/F3 ratios, warnings, group ' +
+				'memberships, plus the group list). A report of OPTICAL data → tab "optical-confirmation"; add group=<name> ' +
+				'to get the group workspace report (robust group stats, per-cartridge rows, outlier flags — what the ' +
+				'group-vs-group page computes). All tabs filter by spu (UDI/barcode/suffix) and from/to dates; runs also by ' +
+				'runId. For pass/fail-focused queries across modalities find_test_results also works; for files pass rows to ' +
+				'export_data_file.',
+			inputSchema: z.object({
+				tab: z
+					.enum(['runs', 'magnetometer', 'thermocouple', 'optical-confirmation'])
+					.describe('Which Validation sub-tab to read.'),
+				spu: z.string().optional().describe('SPU UDI, barcode, _id, or unique suffix (e.g. "212").'),
+				group: z
+					.string()
+					.optional()
+					.describe('optical-confirmation only: cartridge group name → full group workspace report.'),
+				runId: z.string().optional().describe('runs only: a validation run _id or runNumber (e.g. VALRUN-000002).'),
+				from: z.string().optional().describe('ISO date — only records on/after this.'),
+				to: z.string().optional().describe('ISO date — only records on/before this.'),
+				limit: z.number().int().min(1).max(200).optional().describe('Max rows (default 50).')
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/validation/tab', { query: args })
 	);
 
 	server.registerTool(
