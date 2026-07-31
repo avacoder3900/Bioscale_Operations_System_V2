@@ -10,7 +10,8 @@ import type { RequestHandler } from './$types';
 export const GET: RequestHandler = async () => {
 	return json({
 		ok: true,
-		deployedAt: '2026-07-29T4',
+		gitSha: env.VERCEL_GIT_COMMIT_SHA?.slice(0, 8) ?? null,
+		gitBranch: env.VERCEL_GIT_COMMIT_REF ?? null,
 		mcpKeySet: Boolean(env.MCP_API_KEY),
 		mcpKeyLength: env.MCP_API_KEY?.length ?? 0,
 		agentKeySet: Boolean(env.AGENT_API_KEY),

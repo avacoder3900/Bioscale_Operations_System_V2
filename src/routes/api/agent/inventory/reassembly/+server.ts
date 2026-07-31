@@ -38,7 +38,12 @@ async function resolveSpu(ref: string): Promise<any | { ambiguous: any[] } | nul
 }
 
 async function resolvePart(ref: string): Promise<any | null> {
-	const byBarcode = await PartDefinition.findOne({ barcode: ref, isActive: { $ne: false } }).lean();
+	// Stored barcodes are lowercase; scanners typically emit uppercase.
+	const lc = ref.toLowerCase();
+	const byBarcode = await PartDefinition.findOne({
+		$or: [{ barcode: lc }, { altBarcodes: lc }],
+		isActive: { $ne: false }
+	}).lean();
 	if (byBarcode) return byBarcode;
 	const exact = new RegExp(`^${escapeRegex(ref)}$`, 'i');
 	return (

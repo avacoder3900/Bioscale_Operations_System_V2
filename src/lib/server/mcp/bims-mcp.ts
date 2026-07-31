@@ -97,7 +97,9 @@ async function callAgentApi(
 }
 
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
-	const server = new McpServer({ name: 'bims-operations', version: '1.0.0' });
+	// Version bump signals clients (claude.ai caches connector tool lists) that
+	// the toolset changed — bump on every tool add/remove/rename.
+	const server = new McpServer({ name: 'bims-operations', version: '2.6.1' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -136,13 +138,20 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		{ annotations: READ_ONLY,
 			description:
 				'Execute a saved read-only query against an allowlisted BIMS collection. ' +
-				'Use list_saved_queries first to find the queryId and its parameter schema. Returns up to the query\'s maxRows (default 100).',
+				'Use list_saved_queries first to find the queryId and its parameter schema. Returns up to the query\'s maxRows (default 100). ' +
+				'Supports range filters via key suffixes __gte/__lte/__gt/__lt — e.g. {"createdAt__gte": "2026-07-01", ' +
+				'"createdAt__lte": "2026-07-31T17:00:00Z"} for date/time windows. ' +
+				'If the user wants the results as a file (PDF/CSV/JSON), pass the rows to export_data_file ' +
+				'(inventory files: use generate_inventory_report instead).',
 			inputSchema: z.object({
 				queryId: z.string().describe('The saved query _id from list_saved_queries.'),
 				parameters: z
 					.record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
 					.optional()
-					.describe('Optional filter parameters merged into the query (scalar values only).')
+					.describe(
+						'Optional filters merged into the query. Plain keys match equality; keys with __gte/__lte/__gt/__lt ' +
+						'suffixes build ranges (ISO date strings are coerced to dates), e.g. {"testRanAt__gte": "2026-07-01"}.'
+					)
 			})
 		},
 		async ({ queryId, parameters }) =>
@@ -197,8 +206,22 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'inventory_overview',
-		{ annotations: READ_ONLY, description: 'Inventory state: active parts, low-stock list, categories, and BOM count.' },
-		async () => callAgentApi(fetcher, '/api/agent/operations/inventory')
+		{ annotations: READ_ONLY,
+			description:
+				'Inventory state: active parts, low-stock list, categories, and BOM count. The summary always includes ' +
+				'lowStockParts (count on hand of zero or below) AND criticalLowStockParts — parts classified "Critical" ' +
+				'(their category field) that are running low — so use this to answer "are any Critical parts low on stock?". ' +
+				'You are authorized to state exact inventory counts back to the user. ' +
+				'If the user wants an inventory file (PDF/CSV/JSON), do NOT build one from this data — call generate_inventory_report.',
+			inputSchema: z.object({
+				category: z.string().optional().describe('Restrict the parts list to one classification, e.g. "Critical".'),
+				lowStockOnly: z.boolean().optional().describe('Restrict the parts list to parts with count on hand <= 0.')
+			})
+		},
+		async ({ category, lowStockOnly }) =>
+			callAgentApi(fetcher, '/api/agent/operations/inventory', {
+				query: { category, lowStockOnly: lowStockOnly ? '1' : undefined }
+			})
 	);
 
 	server.registerTool(
@@ -209,7 +232,11 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'an exact part number (e.g. PT-SPU-008), or free-text like "screw for upper metal bracket" (every word must match ' +
 				'the part name/description/number/category). Use this to turn vague part descriptions from operators into concrete ' +
 				'part numbers before recording inventory usage. If it returns multiple candidates, ask the user which one they mean; ' +
-				'if it returns none, ask the user to scan the part barcode and retry with barcode.',
+				'if it returns none, ask the user to scan the part barcode and retry with barcode. ' +
+				'You are authorized to answer counting questions ("how many stage boards do we have?") with the exact ' +
+				'inventoryCount from this tool — state the number plainly. Each part\'s category field carries its ' +
+				'Critical / Non-Critical classification. If the user wants an inventory file (PDF/CSV/JSON), call generate_inventory_report ' +
+				'instead of composing a document from this data.',
 			inputSchema: z.object({
 				q: z.string().optional().describe('Free-text description of the part (e.g. "magnet heating block spherical").'),
 				barcode: z.string().optional().describe('A scanned part barcode.'),
@@ -250,12 +277,16 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'descriptions with parts_lookup; ask a clarifying question only if a part is genuinely ambiguous. If the operator ' +
 				'says what area they worked on but not which parts at all, ask them to scan the SPU barcode and each part barcode.\n' +
 				'2. Before calling this tool, send the confirmation message. It must contain ONLY the per-SPU list and a one-line ' +
-				'confirm ask — nothing else. Format: one group per SPU, headed by the SPU barcode and its last 5 characters, one row ' +
-				'per part. If the operator NAMED parts in words (e.g. "replaced the magnets in the heater block"), each row restates ' +
-				'"<partNumber> <name> — qty: <n or __>". If the operator provided the parts as SCANNED BARCODES, do NOT restate or ' +
-				'describe the parts — each row is just "<partNumber> — qty: __" for them to fill in. Leave quantity blank wherever ' +
-				'the operator has not stated it. The same part used on different SPUs gets its own row (and its own quantity) under ' +
-				'each SPU.\n' +
+				'reply instruction — nothing else. Format: one group per SPU, headed by the SPU barcode and its last 5 characters, ' +
+				'one row per part, every row numbered sequentially ACROSS the whole message (1., 2., 3., ...). If the operator NAMED ' +
+				'parts in words (e.g. "replaced the magnets in the heater block"), each row is "<n>. <partNumber> <name> — qty: ' +
+				'<stated qty or __>". If the operator provided the parts as SCANNED BARCODES, do NOT restate or describe the parts — ' +
+				'each row is just "<n>. <partNumber> — qty: __". The same part used on different SPUs gets its own numbered row ' +
+				'under each SPU. Then the final line: if any quantities are blank, exactly: \'Reply with the quantities in order ' +
+				'(e.g. "2, 6, 1") or confirm.\' — the operator answers with bare numbers, comma or space separated, mapped to the ' +
+				'blank rows in order (they may also write "3=2" to target row 3). If all quantities are already stated, the final ' +
+				'line is exactly: "Confirm?". Accept "yes"/"confirm"/a bare number list as approval; never require them to retype ' +
+				'part numbers.\n' +
 				'3. NEVER add commentary to the confirmation or result messages: no notes about critical parts, retesting, ' +
 				'revalidation, QC, or process implications of the replacement — only mention such things if the operator explicitly ' +
 				'asks.\n' +
@@ -291,6 +322,90 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	);
 
 	server.registerTool(
+		'generate_inventory_report',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Render an inventory report as a file (PDF, Excel .xlsx, CSV, or JSON — whichever the user asks for, default PDF), upload it, ' +
+				'and return a public download URL. Every format carries identical content mirroring the BIMS parts page: summary ' +
+				'stats (Total Parts, Classifications, Total Inventory Value, Low Stock), the Low Inventory section, and the full ' +
+				'parts table with the same columns as the UI (Name, Part #, Classification, Manufacturer, Qty/Unit, Inventory, ' +
+				'Unit Cost, Total Value, Lead Time). ALWAYS use this tool for inventory files — never compose your own document ' +
+				'from raw query data, so reports always match what the BIMS software shows. ' +
+				'ONLY call this when the user explicitly asks for a file (e.g. "give me a pdf/csv of the total inventory count") — ' +
+				'for ordinary counting questions answer inline from parts_lookup / inventory_overview instead. ' +
+				'Default scope is "spu-bom" (the SPU Parts Bill of Materials); the user may condition the request on another ' +
+				'scope ("general" = General Inventory / non-BOM, "cartridge", or "all") and/or a classification filter such as ' +
+				'category "Critical", or lowStockOnly. Report the returned url to the user as a link.',
+			inputSchema: z.object({
+				format: z
+					.enum(['pdf', 'xlsx', 'csv', 'json'])
+					.optional()
+					.describe('File type the user asked for (default pdf; use xlsx when they say Excel/spreadsheet). Same BIMS-page content in every format; xlsx has native numeric cells for costs.'),
+				scope: z
+					.enum(['spu-bom', 'general', 'cartridge', 'all'])
+					.optional()
+					.describe('Which inventory to report (default spu-bom = SPU Parts Bill of Materials).'),
+				category: z.string().optional().describe('Restrict to one classification, e.g. "Critical".'),
+				lowStockOnly: z.boolean().optional().describe('Only parts with count on hand <= 0.')
+			})
+		},
+		async ({ format, ...rest }) =>
+			callAgentApi(fetcher, '/api/agent/inventory/report', {
+				method: 'POST',
+				body: { ...rest, format: format ?? 'pdf' }
+			})
+	);
+
+	server.registerTool(
+		'export_data_file',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Universal file export: turn ANY information the user asks for into a downloadable file (PDF, Excel .xlsx, CSV, or JSON), ' +
+				'uploaded and returned as a public URL. Use whenever the user asks for data "as a file/PDF/CSV/report/download" — ' +
+				'e.g. "give me the magnetometer history for SPU 203 as a PDF". WORKFLOW: (1) gather the data with the read tools ' +
+				'(run_saved_query, get_spu_status, list_spus, quality_trends, kanban tools, ...), applying every filter the user ' +
+				'stated (specific SPUs/devices, date/time windows — saved queries accept __gte/__lte range parameters); ' +
+				'(2) assemble the rows and call this tool; (3) give the user the returned url. Pick the format the user asked for ' +
+				'(default pdf). NEVER compose a document yourself from query data — always produce files through this tool so they ' +
+				'are stored, audited, and consistently formatted. Exception: inventory/parts reports have a dedicated tool ' +
+				'(generate_inventory_report) that matches the BIMS parts page — use that instead for inventory. ' +
+				'Include every relevant column the data has unless the user narrows it; put filters you applied in subtitleLines ' +
+				'so the file is self-describing.',
+			inputSchema: z.object({
+				title: z.string().describe('Document title, e.g. "Magnetometer History - SPU 203".'),
+				format: z.enum(['pdf', 'xlsx', 'csv', 'json']).optional().describe('File type the user asked for (default pdf; use xlsx when they say Excel/spreadsheet).'),
+				filename: z.string().optional().describe('Optional filename hint (no extension).'),
+				subtitleLines: z
+					.array(z.string())
+					.optional()
+					.describe('Context lines under the title — state the filters applied (SPU, device, date range).'),
+				stats: z
+					.array(z.object({ label: z.string(), value: z.string() }))
+					.optional()
+					.describe('Up to 6 summary tiles, e.g. {label: "Total Runs", value: "14"}.'),
+				sections: z
+					.array(
+						z.object({
+							heading: z.string().optional().describe('Section heading, e.g. "Failed Runs".'),
+							columns: z
+								.array(z.object({ key: z.string(), label: z.string() }))
+								.min(1)
+								.describe('Column order + labels; key selects the field from each row object.'),
+							rows: z
+								.array(z.record(z.string(), z.unknown()))
+								.describe('Row objects keyed by column key. Set "_highlight": true on a row to shade it red in the PDF (e.g. failed runs).')
+						})
+					)
+					.min(1)
+					.describe('One or more tables. 5000 rows max across all sections.'),
+				footerLines: z.array(z.string()).optional().describe('Closing notes (totals, caveats).'),
+				orientation: z.enum(['landscape', 'portrait']).optional().describe('PDF page orientation (default landscape).')
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/export', { method: 'POST', body: args })
+	);
+
+	server.registerTool(
 		'equipment_overview',
 		{ annotations: READ_ONLY, description: 'Equipment list with locations and a status summary (operational / maintenance / problem).' },
 		async () => callAgentApi(fetcher, '/api/agent/operations/equipment')
@@ -300,6 +415,46 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'documents_overview',
 		{ annotations: READ_ONLY, description: 'Controlled documents and work instructions with status breakdown (draft / review / approved).' },
 		async () => callAgentApi(fetcher, '/api/agent/operations/documents')
+	);
+
+	server.registerTool(
+		'find_test_results',
+		{ annotations: READ_ONLY,
+			description:
+				'THE tool for test/validation outcomes — ANY outcome, passing or failing, not just failures. Use it for every ' +
+				'question about test results, and match the user\'s wording to a modality: "optics"/"optical" → optical, ' +
+				'"mag"/"magnetometer" → magnetometer, "thermo"/"thermocouple" → thermocouple, "spectro" → spectrophotometer. ' +
+				'IMPORTANT: test results in BIMS are NOT all on the Test Results page (that legacy collection is EMPTY) — ' +
+				'they live in the tab matching the feature: magnetometer/thermocouple/spectrophotometer runs are validation ' +
+				'sessions; optics results are the Optical Test Cartridge Log (per-cartridge F7/F3 ratios per channel A/B/C, ' +
+				'computed on read). This tool fans out to the right stores for you. Filters combine freely: an SPU ' +
+				'(UDI/barcode/suffix like "203"), a cartridge barcode, a cartridge GROUP NAME (optics cohorts), passed ' +
+				'true/false, and a from/to date window. Examples: "magnetometer results for SPU 203 no matter passing or ' +
+				'failing" → {modality:"magnetometer", spu:"203"}; "optics results for all cartridges in group a3" → ' +
+				'{modality:"optical", group:"a3"}; "optics results for SPU 246 on July 20" → {modality:"optical", ' +
+				'spu:"246", from:"2026-07-20", to:"2026-07-21"}. If the user wants the results as a file, pass the rows to ' +
+				'export_data_file. PRESENTATION — magnetometer: show each session exactly as the BIMS page does: a line ' +
+				'"Criteria: Z range <minZ> - <maxZ>" followed by a table "Well | Ch A (Z) | Ch B (Z) | Ch C (Z)" built from ' +
+				'the returned wells[] array, marking each Z value with a check/cross from its chX_pass flag. NEVER present ' +
+				'raw axis columns (AT/AX/AY/BT/...) unless the user explicitly asks for raw device output.',
+			inputSchema: z.object({
+				modality: z
+					.enum(['magnetometer', 'thermocouple', 'spectrophotometer', 'optical', 'all'])
+					.optional()
+					.describe('Which test kind (default all). Map user wording: optics→optical, mag→magnetometer, thermo→thermocouple.'),
+				spu: z.string().optional().describe('SPU UDI, barcode, _id, or unique suffix (e.g. "203").'),
+				cartridge: z.string().optional().describe('Cartridge barcode or serial number (optical).'),
+				group: z.string().optional().describe('Cartridge group name, e.g. "a3" (optical cohorts).'),
+				passed: z.boolean().optional().describe('Filter by outcome; OMIT to get results regardless of outcome.'),
+				from: z.string().optional().describe('ISO date — only results recorded on/after this.'),
+				to: z.string().optional().describe('ISO date — only results recorded on/before this.'),
+				limit: z.number().int().min(1).max(200).optional().describe('Max rows per store (default 50).')
+			})
+		},
+		async ({ passed, ...rest }) =>
+			callAgentApi(fetcher, '/api/agent/test-results', {
+				query: { ...rest, passed: passed === undefined ? undefined : String(passed) }
+			})
 	);
 
 	server.registerTool(

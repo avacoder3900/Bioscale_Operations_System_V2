@@ -5767,3 +5767,451 @@ ARCHITECTURE FLAGS (decisions needed, not yet changed):
 - Secondaries also alerted → some reads use secondaryPreferred (likely the research app
   sharing the cluster) — same fixes apply cluster-wide once indexes build.
 npm run check: 11 errors — unchanged baseline.
+
+Second follow-up ("someone needs to add an inventory mutation to the MCP server" on claude.ai):
+diagnosed via this session's own BIMS connector — the connector CONNECTS fine to live prod
+(inventory_overview returns current Atlas counts) but claude.ai still serves the pre-feature
+31-tool list: record_reassembly_parts_usage / parts_lookup / spu_assembly_parts_map are absent
+from its cached tools/list even though the server (verified sha 8d86d539) registers 34. Ruled
+out wrong-host: the alejandro-valdezs-projects Vercel twin is behind SSO (a connector there
+could not connect at all), so the connector must point at the live main domain. Root cause is
+claude.ai's per-connector tool-list cache. Server-side mitigation: bumped McpServer version
+1.0.0 -> 2.0.0 (bump on every tool add/remove from now on). User-side fix required once:
+remove + re-add (or edit/save) the BIMS connector in claude.ai Settings -> Connectors to force
+a tools/list re-fetch, then start a new conversation.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit c83d87b0
+Retrieve this exact code: git checkout master at commit c83d87b0
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: MCP server version bump so clients re-fetch the 34-tool list (adds the inventory mutation tool to claude.ai connectors).
+
+================================================================================
+2026-07-31 — master — practice-run reversal + numbered quantity-entry format
+================================================================================
+Alejandro's claude.ai practice run WORKED end-to-end: operator "Nicholas Cox" deducted 1x
+PT-SPU-010 Holding Magnet - Bar on SPU ...0202 through record_reassembly_parts_usage (tx
+fF65_6MDcUF7ol-du90eA, 102->101). Reversed on request with a documented adjustment
+(practice-reversal-* tx, 101->102) — same raw-driver pattern as the 07-30 e2e reversal.
+
+Feedback: operators cannot type into the confirmation list's blanks (chat has no form
+fields). Reworked the record_reassembly_parts_usage confirmation format in bims-mcp.ts:
+every part row is now numbered sequentially across the whole message, and the message ends
+with 'Reply with the quantities in order (e.g. "2, 6, 1") or confirm.' — the operator
+answers with bare comma/space-separated numbers mapped to blank rows in order ("3=2"
+targets a specific row); "yes"/"confirm" approves when all quantities are pre-stated.
+McpServer version bumped 2.1.0 (bump-on-toolset-change policy from yesterday; description
+changes also ride the connector tool-list cache, so a connector re-add may be needed to
+pick this up). npm run check: 11 errors, unchanged baseline.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 6186bace (feature commit bc468a38, rebased onto concurrent master work)
+Retrieve this exact code: git checkout master at commit 6186bace
+What this deployment is for: numbered quantity-entry format for reassembly confirmations (reply with bare numbers in order).
+
+Numbered-format test (2026-07-31 ~15:22 UTC) confirmed working by Alejandro: ordered
+bare-number reply correctly mapped quantities across TWO SPUs (3x + 2x PT-SPU-008, 8x
+PT-SPU-009; markdown numbering renders as bullets on claude.ai so the visible list is
+unnumbered, but order-mapping works). All three test consumptions reversed on request via
+documented adjustment txs (test-reversal-*): PT-SPU-008 back to 205, PT-SPU-009 back to 875.
+
+================================================================================
+2026-07-31 — master — part scan-label registry: altBarcodes + case-insensitive resolution
+================================================================================
+Alejandro supplied the physical scan labels for SPU parts: an "on line" set (new bin labels)
+and an "off line" set (mostly the existing part_definitions.barcode values, which are stored
+lowercase). Two problems: parts could hold only ONE barcode, and barcode resolution was
+case-SENSITIVE — scanners emit uppercase, so even existing labels would have failed to
+resolve in the reassembly flow.
+
+- PartDefinition: new altBarcodes [String] (lowercase, sparse index). Primary barcode field
+  unchanged.
+- /api/agent/inventory/parts + reassembly resolvePart: barcode lookup now lowercases input
+  and matches barcode OR altBarcodes.
+- scripts/load-part-alt-barcodes-2026-07-31.cjs (idempotent, run against Atlas): 40 new alt
+  barcodes added across 38 parts, 34 skipped as identical to the primary, 0 cross-part
+  duplicates (aggregation-verified). Typos in source corrected: PT-SPIU-012, "PT- SPU-033",
+  run-together PT-SPU-092 line.
+- NOT loaded, awaiting Alejandro: PT-SPU-001 (74A13ADF-...) and PT-SPU-035 (C7566E26-...)
+  — parts don't exist in part_definitions yet (the pending "two new parts"?); plus 4 bare
+  UUIDs with no part number (6A5524CA-..., 9FFC746F-..., 05CEABE6-..., 66A172C0-...).
+Verified on dev against live Atlas: uppercase scans of a new line label, an existing primary
+label, the new PT-SPU-016 alt, and the corrected PT-SPU-033 label all resolve. No MCP tool
+definition changed — no connector re-add needed for this. npm run check: 11 errors (baseline).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit ba4d1706
+Retrieve this exact code: git checkout master at commit ba4d1706
+What this deployment is for: scan-label barcode resolution (altBarcodes + case-insensitive) so operators can scan the physical line/off-line part labels in the reassembly flow. Verified live: uppercase scan of new PT-SPU-008 line label resolves in prod.
+
+================================================================================
+2026-07-31 — master — inventory MCP expansion: Critical low-stock, count authorization, PDF reports
+================================================================================
+Alejandro asked to expand the connector's inventory capabilities in three ways: (1) the
+"Low stock parts" card should also answer "are any CRITICAL parts running low?" (Critical /
+Non-Critical is the part_definitions.category field — the parts UI shows category === 'Critical'
+as the Critical Part badge); (2) Claude is explicitly authorized to count any part and state the
+exact number back ("how many stage boards do we have"); (3) on explicit request only, produce a
+PDF of an inventory count — default scope is the SPU Parts Bill of Materials, conditionable to
+General Inventory (non-BOM), cartridge, or all, plus category/low-stock filters.
+
+- src/lib/server/services/pdf-report.ts (NEW): dependency-free PDF 1.4 table writer (same
+  zero-deps rationale as r2.ts — pdf-parse can only read). Letter portrait, Helvetica, repeated
+  column headers per page, totals footer. Smoke-tested: 130-row/3-page report round-trips
+  through pdf-parse with correct text.
+- /api/agent/inventory/report (NEW, POST, agent key): builds the count from part_definitions
+  using the same scope rules as the parts page (spu-bom = bomType spu/missing AND isBom !== false;
+  general = isBom === false; cartridge; all), optional category + lowStockOnly filters,
+  format 'json' or 'pdf'. PDF uploads to R2 (uploadViaWorker, fallback uploadToR2) under
+  reports/inventory/ and returns the public URL. Audit-logged (action EXPORT).
+- /api/agent/operations/inventory: summary now always includes lowStockParts AND
+  criticalLowStockParts (+counts); optional ?category= and ?lowStockOnly=1 filters. Additive —
+  existing fields unchanged.
+- bims-mcp.ts (version 2.1.0 → 2.2.0 — connector needs a re-add/refresh to pick up the new
+  tool list): inventory_overview gained {category, lowStockOnly} inputs and a description
+  covering the Critical-low-stock question + exact-count authorization; parts_lookup description
+  now explicitly authorizes stating exact inventoryCount for counting questions; NEW tool
+  generate_inventory_pdf (only when the user explicitly asks for a PDF; scope/category/
+  lowStockOnly conditions; returns the download URL).
+- query seed: "Low Stock Parts" card description now reads "Lists any part where the count on
+  hand is zero or below" + documents the {"category": "Critical"} parameter; added a
+  "Low Stock Critical Parts" card. Takes effect after POST /api/agent/query/seed is re-run.
+npm run check: 11 errors (baseline, none in touched files). Not yet committed/deployed.
+
+================================================================================
+2026-07-31 — master — inventory PDF v2: full field set + total inventory value
+================================================================================
+Alejandro's feedback on the first inventory PDF: it lacked information — he wants every
+field, specifically per-part unit cost, per-part total value, and the total inventory
+value, on top of what was already shown. Reworked the report:
+
+- pdf-report.ts: optional landscape mode (US Letter 792x612).
+- /api/agent/inventory/report: PDF is now landscape with 9 columns — Part #, Name,
+  Classification, Qty/Unit, On Hand, Unit (of measure), Unit Cost, Total Value (per part),
+  Supplier. Header block shows Total parts / Total units on hand / Total inventory value
+  up front; footer repeats the totals. Cost parsing now tolerates "$"/"," formatting and
+  distinguishes missing cost (rendered "n/a", counted in partsWithoutCostData and excluded
+  from the total) from a true $0.00. JSON format gains the same fields; summary field
+  renamed totalValue → totalInventoryValue (endpoint is new this session, nothing else
+  consumed the old name). generate_inventory_pdf tool description updated to list the
+  fields (no schema change — connector refresh not required beyond the pending 2.2.0 one).
+- Verified against live Atlas that part_definitions.unitCost values are plain numeric
+  strings (parse fine) and categories are exactly Critical / Non-Critical.
+- Smoke test: 90-row landscape sample renders 3 pages, parses via pdf-parse, and a
+  qlmanage visual check shows clean column alignment.
+npm run check: 11 errors (baseline). Not yet committed/deployed.
+
+================================================================================
+2026-07-31 — master — inventory PDF v3: mirrors the BIMS parts page; SHIPPED
+================================================================================
+Alejandro compared the generated PDF against the BIMS parts page (screenshot) and a
+Claude-composed "Inventory List" PDF and asked that report PDFs match the information and
+layout of the BIMS software. Root cause of the mismatched PDF he received: the connector
+model had composed its own document from raw query data instead of calling
+generate_inventory_pdf — the tool description now hard-instructs ALWAYS using the tool
+for inventory PDFs.
+
+- pdf-report.ts rewritten as a styled report writer (still zero-deps): stat tiles, section
+  headings, navy filled table headers, alternating row shading, red-highlighted low-stock
+  rows, per-page footers with page numbers.
+- /api/agent/inventory/report now reproduces the parts page exactly:
+  * Stat tiles: Total Parts / Classifications / Total Inventory Value / Low Stock.
+  * Same table columns and order as the UI: Name, Part #, Classification, Manufacturer,
+    Qty/Unit, Inventory, Unit Cost, Total Value, Lead Time.
+  * Same semantics: spu-bom scope lists only parts with cost data (unitCost > 0; the 2
+    no-cost parts are excluded from table+totals but noted); Low Stock tile counts parts
+    below minimumStockLevel (minimumOrderQty), matching the page's 0; Low Inventory
+    section = zero/negative parts (all parts) + 10 lowest positive, like the page's panel.
+  * JSON format returns the same summary + excludedNoCostParts.
+- Verified against live Atlas: tiles come out 49 parts / 2 classifications / $22,949.26 /
+  low stock 0 — matching the BIMS page screenshot (49 / 2 / $22,934.29 / 0; dollar delta
+  is live drift since the screenshot). Visual render (qlmanage) matches the page layout.
+npm run check: 11 errors (baseline).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 72911374
+Retrieve this exact code: git checkout master at commit 72911374
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: BIMS-matching inventory PDF reports (generate_inventory_pdf MCP tool + /api/agent/inventory/report), Critical low-stock answers in inventory_overview, exact-count authorization in parts_lookup. Push 72911374 also carries the earlier v2 field-set work; deployed via Vercel GitHub integration on push to master.
+
+================================================================================
+2026-07-31 — master — MCP v2.2.1: all inventory read tools redirect PDF asks to generate_inventory_pdf
+================================================================================
+Alejandro again received a PDF that didn't match BIMS. Audit log proves the connector never
+called the report endpoint (only one EXPORT entry exists — my own verification run), i.e.
+the claude.ai assistant composed its own PDF again; its cached tool list predates
+generate_inventory_pdf. Server-side hardening: inventory_overview, parts_lookup, and
+run_saved_query descriptions now all say "if the user wants an inventory PDF, call
+generate_inventory_pdf — don't compose one"; version 2.2.0 → 2.2.1. The real fix is
+user-side: re-add/refresh the BIMS connector in claude.ai so the tool list updates.
+The requested fields (total inventory value, per-part unit cost + total value) were already
+in the endpoint's PDF. npm run check: 11 errors (baseline).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit f59b48a9
+Retrieve this exact code: git checkout master at commit f59b48a9
+What this deployment is for: MCP tool-description hardening so connector assistants route inventory-PDF requests to generate_inventory_pdf.
+
+================================================================================
+2026-07-31 — master — universal data-file exports (MCP v2.3.0) + saved-query date ranges
+================================================================================
+Alejandro: give Claude the ability to create files of any requested information — e.g.
+"magnetometer history for an SPU as a PDF (or whatever file type)", filterable by device,
+dates, and times; universally applicable.
+
+- NEW export_data_file MCP tool + /api/agent/export: the agent gathers data with its read
+  tools (applying the user's SPU/device/date/time filters), then posts assembled tables;
+  the server renders pdf (styled report writer w/ new autoLayoutColumns — no hand-placed
+  columns needed), csv (UTF-8 BOM for Excel), or json; uploads to R2 under reports/exports/;
+  returns the URL. Caps: 20 sections, 20 columns, 5000 rows. Audit-logged (agent_exports).
+- run_saved_query now accepts __gte/__lte/__gt/__lt parameter suffixes → server-side range
+  filters with ISO-date coercion ({"testRanAt__gte":"2026-07-01"}); still equality-only
+  for plain keys, $-keys/dots still dropped.
+- Query allowlist grew: validation_sessions, wax_filling_runs, reagent_batch_records.
+  New seeded query "SPU Validation Sessions" (magnetometer/thermocouple/lux/spectro
+  history; filters: type, spuId/spuUdi/barcode, particleDeviceId, overallPassed, status,
+  date ranges). Seed must be POSTed after deploy.
+- inventory PDFs still route to generate_inventory_pdf (BIMS-page layout); export_data_file
+  description defers to it for inventory.
+Visual check: 40-row magnetometer-history sample renders with tiles, red failed rows,
+auto-sized columns. npm run check: 11 errors (baseline).
+
+Universal exports SHIPPED + verified end-to-end in production (commits c77c410e, 25f52217):
+- Real magnetometer type value is 'mag' (427 sessions; 'magnetometer' = 5 legacy placeholder
+  rows) and thermocouple is 'thermo' — seeded query description documents this.
+- Prod verification: seed re-run (10 queries incl. "SPU Validation Sessions"); range-filtered
+  query {"type":"mag","spuUdi":"BT-M01-0000-0203","createdAt__gte":"2026-07-01"} returned 89
+  July runs (1 pass / 88 fail, device 0a10aced202194944a071a4c); export_data_file produced a
+  3-page PDF with stat tiles, failure reasons, and red-highlighted failed rows (row-level
+  "_highlight" flag added to /api/agent/export, verified live):
+  https://brevitest-r2-upload.alejandrov.workers.dev/file/reports%2Fexports%2Fmagnetometer-history-spu-0203-july-2026-2026-07-31-UyZUbPYq77nl08zFiXV2I.pdf
+- Connector must be re-added/refreshed in claude.ai (v2.3.0) for export_data_file to appear.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 25f52217
+Retrieve this exact code: git checkout master at commit 25f52217
+What this deployment is for: universal data-file exports (export_data_file MCP tool + /api/agent/export, pdf/csv/json), saved-query date-range filters, validation_sessions/wax_filling_runs/reagent_batch_records queryable, SPU Validation Sessions saved query.
+
+================================================================================
+2026-07-31 — master — inventory report in any file type (MCP v2.4.0)
+================================================================================
+Alejandro: the inventory report should come in whatever file type the user specifies,
+still identical to the BIMS parts page.
+
+- /api/agent/inventory/report format param is now pdf (default) | csv | json — all three
+  render the SAME BIMS-page content (stat tiles/summary, Low Inventory section, full parts
+  table with the UI's columns) to a file uploaded to R2, URL returned. CSV has a UTF-8 BOM
+  for Excel; JSON is a structured file (stats, lowInventory[], parts[], excludedNoCostParts,
+  notes). The old inline-JSON response moved to format 'data'.
+- MCP tool RENAMED generate_inventory_pdf → generate_inventory_report with a format input;
+  all cross-references in other tool descriptions updated; version 2.3.0 → 2.4.0. (Connector
+  hadn't been refreshed since before 2.2.0, so the rename costs nothing extra — the same
+  pending re-add picks everything up.)
+- Prod-verified all three formats: identical numbers (49 parts / 2 classifications /
+  $22,949.26 / low stock 0); CSV opens with title+stats+both sections; JSON carries the
+  full structured content. npm run check: 11 errors (baseline).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit a72a18fc
+Retrieve this exact code: git checkout master at commit a72a18fc
+What this deployment is for: generate_inventory_report (any file type: pdf/csv/json, BIMS-page-identical content).
+
+================================================================================
+2026-07-31 — master — native Excel .xlsx reports (MCP v2.5.0)
+================================================================================
+Alejandro received another "excel sheet" that didn't match BIMS and was missing unit cost /
+per-part total cost / total inventory cost. Audit log again shows zero user-generated
+exports — the claude.ai assistant hand-composed the file. CONFIRMED the stale-connector
+diagnosis from inside a Claude Code session: ToolSearch over this session's own BIMS
+connector shows the OLD tool list (pre-2.2.0 descriptions, no generate_inventory_report /
+export_data_file). The connector re-add in claude.ai remains the required user-side fix.
+
+Server-side, since the user keeps asking for Excel specifically:
+- NEW src/lib/server/services/xlsx.ts — zero-dep .xlsx writer: stored-entry ZIP with
+  hand-rolled CRC32; SpreadsheetML with inline strings + native NUMERIC cells (sortable/
+  summable in Excel). Validated: zip integrity, well-formed XML, opens via Quick Look.
+- generate_inventory_report format: pdf | xlsx | csv | json. xlsx = 3 sheets — Summary
+  (Total Parts / Classifications / Total Inventory Value (USD) / Low Stock), Low Inventory,
+  Full Parts List (Name, Part #, Classification, Manufacturer, Qty/Unit, Inventory,
+  Unit Cost (USD), Total Value (USD), Lead Time (days)) + totals row.
+- export_data_file also accepts xlsx (Summary sheet + one sheet per section, numbers kept
+  numeric via rawRows).
+- Prod-verified: workbook parses (3 sheets), row 1 = PT-SPU-002 / $0.18 / $17.82, totals row
+  5099 units / $22,949.26 — matching the BIMS page.
+npm run check: 11 errors (baseline).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit bde42235
+Retrieve this exact code: git checkout master at commit bde42235
+What this deployment is for: native .xlsx output for inventory reports and universal exports (MCP v2.5.0).
+================================================================================
+2026-07-31 — feat/robot-arm-pose-calibration — multi-pose joint-map calibration UI
+================================================================================
+Built the BIMS-side UI for the multi-pose robot-arm calibration whose API landed on the
+Pi earlier today (separate repo C:\Users\aleja\robot-arm, branch feat/multi-pose-calibration
+@ 17144e2). Sync zero captures ONE matched pose and can therefore only ever produce an
+offset; the leader and follower are geared differently (1/345 vs 1/191 vs 1/147), so a 1:1
+teleop mirror over-travels on any joint whose ratios disagree — the gripper is the visible
+casualty. Capturing several poses lets the Pi least-squares fit a per-joint scale as well.
+
+Files: src/lib/server/robot-arm-client.ts (getJointMap/capturePose/deletePose/
+clearJointMap against /calibrate/map*, plus JointMapRecord + JointFitStatus types),
+src/routes/manufacturing/cart-mfg/robot-arm/calibrate/+page.server.ts (joint-map load +
+three actions), and .../calibrate/+page.svelte (pose capture, per-pose delete, per-joint
+fit table with status and live tracking error).
+
+Two real defects were caught by a pre-push review before the push, both verified by hand
+against source rather than taken on the reviewer's word:
+
+1. Serverless timeout overrun. svelte.config.js sets maxDuration: 30. The calibrate load
+   awaits getActive -> getCalibration -> getJointMap strictly sequentially (the serial bus
+   is single-owner, so Promise.all is not available the way control/+page.server.ts uses
+   it). Adding the third call took the worst case from 5+15=20s to 5+15+15=35s. Against an
+   unreachable Pi — the normal case from Vercel, since the host lives on the tailnet —
+   every timer runs to completion and Vercel 504s the invocation, which defeats the whole
+   point of the safeCalibration/safeJointMap wrappers. Cut the live timeouts 15s -> 10s
+   (5+10+10=25s) and made safeActive report reachability, so a host that never answered
+   skips the live reads entirely instead of taking the most expensive path.
+
+2. AuditLog writes were being silently discarded. auditLogSchema declares tableName/
+   recordId/action/oldData/newData/changedAt/changedBy/... — not the resourceType/
+   resourceId/userId/username/timestamp/details shape documented in CLAUDE.md. Mongoose
+   strict mode (no global override in connection.ts) drops unknown paths on create, so
+   every calibration mutation would have persisted as {_id, action, changedAt}: an audit
+   row that looks written but records no operator and no fit data. Rewrote the three new
+   actions to the real schema (rich payload into newData, which is Schema.Types.Mixed).
+   NOTE: the two PRE-EXISTING actions in the same file (capture, clear, for sync zero)
+   still use the non-conforming shape and are still being silently dropped — left alone as
+   out of scope, but they are a live QMS gap. CLAUDE.md's "Form Actions" example documents
+   the wrong field names and is what propagated this; worth correcting at the source.
+
+Also fixed: a whitespace hole in the deletePose index guard (Number('   ') === 0 would have
+silently deleted pose 0), an unguarded fit.status.filter that would 500 the entire route
+during SSR on a malformed joint_map.json, and copy that asserted "No joint map saved.
+Teleop mirrors the leader 1:1." when the host was merely unreachable — on a page whose job
+is telling the operator whether the arm is calibrated, that is the one thing it must not
+state backwards.
+
+npm run check: 57 errors / 426 warnings on this branch; zero diagnostics reference any of
+the three touched files.
+
+NOT YET TESTABLE END-TO-END: the Pi's running process still serves pre-calibration code.
+Its working tree is at 17144e2 with the endpoints present, but robot-arm.service has been
+up since 2026-07-30 15:31:03 CDT — before the checkout — so GET /calibrate/map returns 404.
+The unit is system-scoped, brevitest3 has no passwordless sudo and root SSH is key-denied,
+so the restart needs a human: ssh brevitest3@172.16.28.191 'sudo systemctl restart robot-arm'
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ro-e765c4-brevitest.vercel.app
+Source: branch feat/robot-arm-pose-calibration @ commit 76eb1841
+Retrieve this exact code: git checkout feat/robot-arm-pose-calibration at commit 76eb1841
+  (or: git log feat/robot-arm-pose-calibration --oneline to find it if the branch has since moved on)
+What this deployment is for: multi-pose joint-map calibration UI — pose capture, per-pose
+delete, and per-joint fit status on /manufacturing/cart-mfg/robot-arm/calibrate.
+
+================================================================================
+2026-07-31 — master — multi-pose calibration UI promoted to production
+================================================================================
+Promoted feat/robot-arm-pose-calibration to master. Rebased onto 28c5ef35b (master had
+moved 14 commits); only progress.txt conflicted — both sides had appended entries, both
+kept in chronological order. The code commit applied cleanly with no conflicts.
+
+npm run check: 61 errors / 426 warnings, zero of them in the three touched files
+(robot-arm-client.ts, calibrate/+page.server.ts, calibrate/+page.svelte). The count rose
+from 57 purely because master's 14 commits added 18 files and 4 errors of their own.
+
+FIELD RESULT — the feature was used against real hardware the same day and found the
+gripper (servo 6) bug it was built for. Diagnosis, in order:
+  - Ruled out clamping: follower gripper Min/Max_Angle_Limit are 0/4095, i.e. unset.
+  - The leader gripper travels 1973..3335 (1362 ticks); the follower claw only ~354.
+    The follower runs OUT OF TRAVEL at roughly 35% of the leader's squeeze, so the
+    relationship SATURATES — it is not one straight line. Active-region slope ~0.72,
+    flat thereafter.
+  - The original fitted scale of 0.8231 therefore kept climbing past the follower's
+    mechanical stop (+707 ticks at full squeeze). On an STS3215 that stalls the motor,
+    trips overload protection, and CUTS TORQUE — the claw goes slack. The reported
+    symptom "won't close all the way" was over-commanding, not under-travel.
+  - Early pose sets made this invisible: captures clustered in the open third of the
+    range (5%..36%), with duplicate poses and one mid-range outlier giving segment
+    slopes of 0.335 and 1.297 either side of it.
+  - After cleanup the fit is honest: gripper scale 0.7187 residual 3.8 (was 170), and
+    shoulder_pan residual fell 112 -> 2.9.
+
+OUTSTANDING, in priority order:
+1. Follower servo 6 needs Max_Angle_Limit set (~2530) so the existing clamp in
+   _mirror_goal stops the goal at the closed position. Until then ~796 ticks of squeeze
+   past the stop remain unprotected and the stall returns on a hard grip. EEPROM write,
+   reversible by writing 4095 back. Not done — needs running on the Pi directly.
+2. STALE-INDEX DELETE BUG (shipped, known). Pose delete posts a positional index, but
+   the Pi renumbers every pose on each mutation (_build_map enumerates and reassigns).
+   Deleting one row shifts everything below it, so a second delete against the page's
+   original numbering removes the WRONG pose. This bit the operator today: it destroyed
+   a good open/close pose pair that had to be physically recaptured. Fix is to post
+   captured_at (already rendered on every row) and resolve it server-side. Was flagged
+   as a warn in the pre-push review and shipped anyway at the operator's direction.
+3. wrist_roll still reads insufficient_range (span 7 ticks across all poses) with a live
+   tracking error near 886. It is the joint with the cord-tangle history; deserves its
+   own capture pass.
+4. The two PRE-EXISTING sync-zero actions in calibrate/+page.server.ts (capture, clear)
+   still write the non-conforming AuditLog shape and are still being silently dropped by
+   Mongoose strict mode. The three new joint-map actions were fixed to the real schema.
+   CLAUDE.md's Form Actions example documents the wrong field names and is the source.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit c93d3d17
+Retrieve this exact code: git checkout master at commit c93d3d17
+  (or: git log master --oneline to find it if master has since moved on)
+What this deployment is for: multi-pose joint-map calibration — pose capture, per-pose
+delete, and per-joint fit status/tracking error at /manufacturing/cart-mfg/robot-arm/calibrate.
+
+================================================================================
+2026-07-31 — master — cross-domain test results, any outcome (MCP v2.6.0)
+================================================================================
+Alejandro: alter the "Failed test results" card ("pointed at the empty drawer" — confirmed:
+test_results has 0 docs) to grant access to results of ANY outcome, and teach Claude that
+results live in the tab matching the feature, not just the Test Results page (optics → the
+Optical Test Cartridge Log; magnetometer → validation). Sample prompts: optics for an SPU
+on a date; optics for all cartridges in a group name; magnetometer for an SPU pass or fail.
+
+- NEW find_test_results MCP tool + /api/agent/test-results: modality-aware fan-out.
+  magnetometer/thermocouple/spectrophotometer → validation_sessions (alias-aware: mag/
+  thermo); optical → cartridge_records under OPTICAL_CARTRIDGE_FILTER analyzed derive-on-
+  read via analyzeCartridge (F7/F3 ratioByChannel, crossWellCv, warnings, channel flags).
+  Filters compose: spu (udi/barcode/unique-suffix resolution via spus), cartridge (barcode/
+  serial), group (cartridge_groups NAME → cartridgeIds membership), passed (omit = any
+  outcome), from/to, limit. SPU→optical linkage: optical_test_cartridges.usageLog.spuId +
+  validation_runs spus[].steps.optical_confirmation (step object returned).
+- Cards: 'Failed Test Results' RETIRED (seed now deactivates RETIRED_QUERY_NAMES);
+  'Test Results (All Outcomes)' documents the empty-drawer situation and points to the real
+  stores; new cards Optical Test Cartridge Log, Cartridge Groups, Validation Runs. Schema
+  metadata + query allowlist grew: optical_test_cartridges, cartridge_groups,
+  validation_runs, validation_groups. Seeded in prod (13 queries, 56 schema entries).
+- Prod-verified: magnetometer SPU 203 any-outcome → 94 sessions (2 pass / 92 fail);
+  optics group "control group1" → 6 cartridges with per-channel ratios (~7.2-7.9, no
+  warnings); optics SPU 246 → correctly reports the validation-run optical step
+  (not_started) and zero cartridges — no optics have been run against an SPU yet, so the
+  linkage is in place awaiting data. Groups a/a1-a14/b/testing/control have 0 members
+  (empty legacy groups); populated cohorts are the optical_analysis ones.
+npm run check: 11 errors (baseline).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit ae68c4db
+Retrieve this exact code: git checkout master at commit ae68c4db
+What this deployment is for: find_test_results cross-domain resolver (any outcome), retired Failed-Test-Results card, optical/validation collections queryable (MCP v2.6.0).
+
+================================================================================
+2026-07-31 — master — magnetometer tables match the BIMS page (MCP v2.6.1)
+================================================================================
+Alejandro compared the BIMS magnetometer page (Well | Ch A (Z) | Ch B (Z) | Ch C (Z) with
+per-cell checks vs "Criteria: Z range 3900 – 4500") against the document Claude returned
+(raw axis dump: AT/AX/AY/AZ/BT/...). Fix: find_test_results magnetometer sessions now
+return criteria {minZ,maxZ} and a wells[] array (chA/chB/chC Z + per-cell pass booleans,
+computed the same way the page does), plus PRESENTATION guidance in both the endpoint
+response and the tool description: render the BIMS table, never raw axis columns unless
+raw device output is explicitly requested. Prod-verified on SPU 249: criteria 3900-4500,
+5 wells, all cells PASS, matching the BIMS screenshot exactly.
+npm run check: 11 errors (baseline).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 5b61409a
+Retrieve this exact code: git checkout master at commit 5b61409a
+What this deployment is for: BIMS-identical magnetometer result tables from find_test_results (MCP v2.6.1).
