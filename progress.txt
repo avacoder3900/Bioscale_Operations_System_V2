@@ -6292,3 +6292,32 @@ Deployment: production — Vercel auto-deploy from master push
 Source: branch master @ this commit
 Retrieve this exact code: git log master --oneline (this commit)
 What this deployment is for: dead sweeps can never permanently block a robot's deck-scan again.
+
+================================================================================
+2026-07-31 — master — validation_tab: the whole Validation section, tab by tab (MCP v2.9.0)
+================================================================================
+Alejandro: "give Claude the ability to go into the validation tab and extract information
+from all the subcategories" — optical report asks should go to the Optical Confirmation
+tab, and likewise for every validation test.
+
+- NEW /api/agent/validation/tab + validation_tab MCP tool, mirroring each BIMS Validation
+  sub-tab: runs (per-SPU step board incl. uploaded step results/evaluations/previous-
+  attempt counts), magnetometer (per-well Z table + criteria), thermocouple (temperature
+  stats — stored processedData preferred, else computed min/max/avg/sd/range from raw
+  readings), optical-confirmation (cartridge log w/ per-cartridge ratios, warnings, group
+  memberships + group list; group=<name> runs reportGroup → the group workspace report
+  with robust stats and outlier flags). Filters: spu/from/to/limit; runId for runs.
+- Prod-verified all four tabs: runs board (VALRUN-000001..3 w/ per-step statuses),
+  thermocouple SPU 202 (402 readings, min 22.6 / max 44.55 / avg 40.9), magnetometer SPU
+  249 (criteria 3900-4500, 5 wells PASS), optical group report "control group1" (n=6,
+  mean 7.484, robust CV 2.17%, no outliers).
+- Note on "the fix did not work": server-side everything works (proven by direct API
+  calls); the claude.ai assistant still cannot SEE any 2026-07-31 tool because the
+  connector tool list is cached pre-2.2.0 — the connector re-add in claude.ai remains the
+  gating step for ALL of today's features.
+npm run check: 11 errors (baseline).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit b86f5115
+Retrieve this exact code: git checkout master at commit b86f5115
+What this deployment is for: validation_tab tool/endpoint — full Validation section access for agents (MCP v2.9.0).
