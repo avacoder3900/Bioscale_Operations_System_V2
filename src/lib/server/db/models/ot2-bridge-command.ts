@@ -56,7 +56,12 @@ ot2BridgeCommandSchema.index({ robotId: 1, createdAt: -1 });
 ot2BridgeCommandSchema.index({ kind: 1, 'payload.sweepRunId': 1 });
 // History self-cleans 7 days after completion (completedAt is also set when
 // a command is failed/expired, so every terminal doc ages out).
-ot2BridgeCommandSchema.index({ completedAt: 1 }, { expireAfterSeconds: 7 * 24 * 3600 });
+// Commands are queue messages, not records — their useful life is minutes,
+// and the robots generate ~3,600/day with fat payloads (~460MB by 2026-07-31).
+// Completed commands keep 3 days for debugging; 7-day createdAt TTL is the
+// backstop for failed/expired/stuck states that previously lived forever.
+ot2BridgeCommandSchema.index({ completedAt: 1 }, { expireAfterSeconds: 3 * 24 * 3600 });
+ot2BridgeCommandSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7 * 24 * 3600 });
 
 export const Ot2BridgeCommand = mongoose.models.Ot2BridgeCommand
 	|| mongoose.model('Ot2BridgeCommand', ot2BridgeCommandSchema, 'ot2_bridge_commands');

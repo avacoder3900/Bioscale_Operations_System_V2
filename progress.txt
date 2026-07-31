@@ -6215,3 +6215,23 @@ Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
 Source: branch master @ commit 5b61409a
 Retrieve this exact code: git checkout master at commit 5b61409a
 What this deployment is for: BIMS-identical magnetometer result tables from find_test_results (MCP v2.6.1).
+
+================================================================================
+2026-07-31 — master — Telemetry retention: heartbeat upsert + TTLs + 1.58M-doc purge
+================================================================================
+Jacob approved permanent deletion of stale robot/scanner telemetry (queue messages, not
+records — traceability lives in audit_log/cartridge_records/inventory_transactions).
+- Scanner heartbeats: ingest endpoint now UPSERTS one doc per device (_id hb:<deviceId>)
+  instead of inserting every ping — heartbeats no longer accumulate at all. Consumers
+  unaffected (they only read the latest per device). Diagnosis: 1,575,697 of 1,576,461
+  scanner_events (99.95%) were heartbeats; only 764 real scan/error events existed.
+- scanner_events: 30d TTL on receivedAt (debugging flight-recorder window).
+- ot2_bridge_commands: robots generate ~3,600 commands/day w/ fat payloads; completedAt
+  TTL tightened 7d→3d (collMod applied server-side) + 7d createdAt backstop for
+  failed/expired/stuck states that previously lived forever.
+- PURGED (scripts/purge-telemetry-2026-07-31.ts, APPLY run): 1,575,700 heartbeats + 604
+  old events deleted → scanner_events now 226 docs. Command queue drains to a rolling
+  ~3-day window via TTL. TTL indexes synced server-side so deploy-time autoIndex matches.
+Future flag (not done): slim sweep-command payloads (9KB avg); move cartridge photos out
+of cartridge_records (35KB avg docs).
+npm run check: 11 errors — unchanged baseline.
