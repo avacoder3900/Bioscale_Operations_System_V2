@@ -5946,3 +5946,27 @@ Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
 Source: branch master @ commit 25f52217
 Retrieve this exact code: git checkout master at commit 25f52217
 What this deployment is for: universal data-file exports (export_data_file MCP tool + /api/agent/export, pdf/csv/json), saved-query date-range filters, validation_sessions/wax_filling_runs/reagent_batch_records queryable, SPU Validation Sessions saved query.
+
+================================================================================
+2026-07-31 — master — inventory report in any file type (MCP v2.4.0)
+================================================================================
+Alejandro: the inventory report should come in whatever file type the user specifies,
+still identical to the BIMS parts page.
+
+- /api/agent/inventory/report format param is now pdf (default) | csv | json — all three
+  render the SAME BIMS-page content (stat tiles/summary, Low Inventory section, full parts
+  table with the UI's columns) to a file uploaded to R2, URL returned. CSV has a UTF-8 BOM
+  for Excel; JSON is a structured file (stats, lowInventory[], parts[], excludedNoCostParts,
+  notes). The old inline-JSON response moved to format 'data'.
+- MCP tool RENAMED generate_inventory_pdf → generate_inventory_report with a format input;
+  all cross-references in other tool descriptions updated; version 2.3.0 → 2.4.0. (Connector
+  hadn't been refreshed since before 2.2.0, so the rename costs nothing extra — the same
+  pending re-add picks everything up.)
+- Prod-verified all three formats: identical numbers (49 parts / 2 classifications /
+  $22,949.26 / low stock 0); CSV opens with title+stats+both sections; JSON carries the
+  full structured content. npm run check: 11 errors (baseline).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit a72a18fc
+Retrieve this exact code: git checkout master at commit a72a18fc
+What this deployment is for: generate_inventory_report (any file type: pdf/csv/json, BIMS-page-identical content).
