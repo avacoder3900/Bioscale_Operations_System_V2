@@ -5763,3 +5763,67 @@ Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
 Source: branch master @ commit 6186bace (feature commit bc468a38, rebased onto concurrent master work)
 Retrieve this exact code: git checkout master at commit 6186bace
 What this deployment is for: numbered quantity-entry format for reassembly confirmations (reply with bare numbers in order).
+
+================================================================================
+2026-07-31 — feat/robot-arm-pose-calibration — multi-pose joint-map calibration UI
+================================================================================
+Built the BIMS-side UI for the multi-pose robot-arm calibration whose API landed on the
+Pi earlier today (separate repo C:\Users\aleja\robot-arm, branch feat/multi-pose-calibration
+@ 17144e2). Sync zero captures ONE matched pose and can therefore only ever produce an
+offset; the leader and follower are geared differently (1/345 vs 1/191 vs 1/147), so a 1:1
+teleop mirror over-travels on any joint whose ratios disagree — the gripper is the visible
+casualty. Capturing several poses lets the Pi least-squares fit a per-joint scale as well.
+
+Files: src/lib/server/robot-arm-client.ts (getJointMap/capturePose/deletePose/
+clearJointMap against /calibrate/map*, plus JointMapRecord + JointFitStatus types),
+src/routes/manufacturing/cart-mfg/robot-arm/calibrate/+page.server.ts (joint-map load +
+three actions), and .../calibrate/+page.svelte (pose capture, per-pose delete, per-joint
+fit table with status and live tracking error).
+
+Two real defects were caught by a pre-push review before the push, both verified by hand
+against source rather than taken on the reviewer's word:
+
+1. Serverless timeout overrun. svelte.config.js sets maxDuration: 30. The calibrate load
+   awaits getActive -> getCalibration -> getJointMap strictly sequentially (the serial bus
+   is single-owner, so Promise.all is not available the way control/+page.server.ts uses
+   it). Adding the third call took the worst case from 5+15=20s to 5+15+15=35s. Against an
+   unreachable Pi — the normal case from Vercel, since the host lives on the tailnet —
+   every timer runs to completion and Vercel 504s the invocation, which defeats the whole
+   point of the safeCalibration/safeJointMap wrappers. Cut the live timeouts 15s -> 10s
+   (5+10+10=25s) and made safeActive report reachability, so a host that never answered
+   skips the live reads entirely instead of taking the most expensive path.
+
+2. AuditLog writes were being silently discarded. auditLogSchema declares tableName/
+   recordId/action/oldData/newData/changedAt/changedBy/... — not the resourceType/
+   resourceId/userId/username/timestamp/details shape documented in CLAUDE.md. Mongoose
+   strict mode (no global override in connection.ts) drops unknown paths on create, so
+   every calibration mutation would have persisted as {_id, action, changedAt}: an audit
+   row that looks written but records no operator and no fit data. Rewrote the three new
+   actions to the real schema (rich payload into newData, which is Schema.Types.Mixed).
+   NOTE: the two PRE-EXISTING actions in the same file (capture, clear, for sync zero)
+   still use the non-conforming shape and are still being silently dropped — left alone as
+   out of scope, but they are a live QMS gap. CLAUDE.md's "Form Actions" example documents
+   the wrong field names and is what propagated this; worth correcting at the source.
+
+Also fixed: a whitespace hole in the deletePose index guard (Number('   ') === 0 would have
+silently deleted pose 0), an unguarded fit.status.filter that would 500 the entire route
+during SSR on a malformed joint_map.json, and copy that asserted "No joint map saved.
+Teleop mirrors the leader 1:1." when the host was merely unreachable — on a page whose job
+is telling the operator whether the arm is calibrated, that is the one thing it must not
+state backwards.
+
+npm run check: 57 errors / 426 warnings on this branch; zero diagnostics reference any of
+the three touched files.
+
+NOT YET TESTABLE END-TO-END: the Pi's running process still serves pre-calibration code.
+Its working tree is at 17144e2 with the endpoints present, but robot-arm.service has been
+up since 2026-07-30 15:31:03 CDT — before the checkout — so GET /calibrate/map returns 404.
+The unit is system-scoped, brevitest3 has no passwordless sudo and root SSH is key-denied,
+so the restart needs a human: ssh brevitest3@172.16.28.191 'sudo systemctl restart robot-arm'
+
+Deployment: preview — https://bioscale-operations-system-mongodb-git-feat-ro-e765c4-brevitest.vercel.app
+Source: branch feat/robot-arm-pose-calibration @ commit 76eb1841
+Retrieve this exact code: git checkout feat/robot-arm-pose-calibration at commit 76eb1841
+  (or: git log feat/robot-arm-pose-calibration --oneline to find it if the branch has since moved on)
+What this deployment is for: multi-pose joint-map calibration UI — pose capture, per-pose
+delete, and per-joint fit status on /manufacturing/cart-mfg/robot-arm/calibrate.
