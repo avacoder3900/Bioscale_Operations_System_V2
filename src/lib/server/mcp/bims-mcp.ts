@@ -99,7 +99,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '2.1.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '2.2.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -199,8 +199,21 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 
 	server.registerTool(
 		'inventory_overview',
-		{ annotations: READ_ONLY, description: 'Inventory state: active parts, low-stock list, categories, and BOM count.' },
-		async () => callAgentApi(fetcher, '/api/agent/operations/inventory')
+		{ annotations: READ_ONLY,
+			description:
+				'Inventory state: active parts, low-stock list, categories, and BOM count. The summary always includes ' +
+				'lowStockParts (count on hand of zero or below) AND criticalLowStockParts — parts classified "Critical" ' +
+				'(their category field) that are running low — so use this to answer "are any Critical parts low on stock?". ' +
+				'You are authorized to state exact inventory counts back to the user.',
+			inputSchema: z.object({
+				category: z.string().optional().describe('Restrict the parts list to one classification, e.g. "Critical".'),
+				lowStockOnly: z.boolean().optional().describe('Restrict the parts list to parts with count on hand <= 0.')
+			})
+		},
+		async ({ category, lowStockOnly }) =>
+			callAgentApi(fetcher, '/api/agent/operations/inventory', {
+				query: { category, lowStockOnly: lowStockOnly ? '1' : undefined }
+			})
 	);
 
 	server.registerTool(
@@ -211,7 +224,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'an exact part number (e.g. PT-SPU-008), or free-text like "screw for upper metal bracket" (every word must match ' +
 				'the part name/description/number/category). Use this to turn vague part descriptions from operators into concrete ' +
 				'part numbers before recording inventory usage. If it returns multiple candidates, ask the user which one they mean; ' +
-				'if it returns none, ask the user to scan the part barcode and retry with barcode.',
+				'if it returns none, ask the user to scan the part barcode and retry with barcode. ' +
+				'You are authorized to answer counting questions ("how many stage boards do we have?") with the exact ' +
+				'inventoryCount from this tool — state the number plainly. Each part\'s category field carries its ' +
+				'Critical / Non-Critical classification.',
 			inputSchema: z.object({
 				q: z.string().optional().describe('Free-text description of the part (e.g. "magnet heating block spherical").'),
 				barcode: z.string().optional().describe('A scanned part barcode.'),
@@ -294,6 +310,33 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			})
 		},
 		async (args) => callAgentApi(fetcher, '/api/agent/inventory/reassembly', { method: 'POST', body: args })
+	);
+
+	server.registerTool(
+		'generate_inventory_pdf',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Render an inventory report as a PDF, upload it, and return a public download URL. The PDF mirrors the BIMS parts ' +
+				'page: summary tiles (Total Parts, Classifications, Total Inventory Value, Low Stock), a Needs Attention low-stock ' +
+				'section, and the full parts table with the same columns as the UI (Name, Part #, Classification, Manufacturer, ' +
+				'Qty/Unit, Inventory, Unit Cost, Total Value, Lead Time). ALWAYS use this tool for inventory PDFs — never compose ' +
+				'your own PDF from raw query data, so reports always match what the BIMS software shows. ' +
+				'ONLY call this when the user explicitly asks for a PDF (e.g. "give me a pdf of the total inventory count") — ' +
+				'for ordinary counting questions answer inline from parts_lookup / inventory_overview instead. ' +
+				'Default scope is "spu-bom" (the SPU Parts Bill of Materials); the user may condition the request on another ' +
+				'scope ("general" = General Inventory / non-BOM, "cartridge", or "all") and/or a classification filter such as ' +
+				'category "Critical", or lowStockOnly. Report the returned url to the user as a link.',
+			inputSchema: z.object({
+				scope: z
+					.enum(['spu-bom', 'general', 'cartridge', 'all'])
+					.optional()
+					.describe('Which inventory to report (default spu-bom = SPU Parts Bill of Materials).'),
+				category: z.string().optional().describe('Restrict to one classification, e.g. "Critical".'),
+				lowStockOnly: z.boolean().optional().describe('Only parts with count on hand <= 0.')
+			})
+		},
+		async (args) =>
+			callAgentApi(fetcher, '/api/agent/inventory/report', { method: 'POST', body: { ...args, format: 'pdf' } })
 	);
 
 	server.registerTool(

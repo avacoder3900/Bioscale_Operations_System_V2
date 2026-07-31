@@ -5798,3 +5798,60 @@ Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
 Source: branch master @ commit ba4d1706
 Retrieve this exact code: git checkout master at commit ba4d1706
 What this deployment is for: scan-label barcode resolution (altBarcodes + case-insensitive) so operators can scan the physical line/off-line part labels in the reassembly flow. Verified live: uppercase scan of new PT-SPU-008 line label resolves in prod.
+
+================================================================================
+2026-07-31 — master — inventory MCP expansion: Critical low-stock, count authorization, PDF reports
+================================================================================
+Alejandro asked to expand the connector's inventory capabilities in three ways: (1) the
+"Low stock parts" card should also answer "are any CRITICAL parts running low?" (Critical /
+Non-Critical is the part_definitions.category field — the parts UI shows category === 'Critical'
+as the Critical Part badge); (2) Claude is explicitly authorized to count any part and state the
+exact number back ("how many stage boards do we have"); (3) on explicit request only, produce a
+PDF of an inventory count — default scope is the SPU Parts Bill of Materials, conditionable to
+General Inventory (non-BOM), cartridge, or all, plus category/low-stock filters.
+
+- src/lib/server/services/pdf-report.ts (NEW): dependency-free PDF 1.4 table writer (same
+  zero-deps rationale as r2.ts — pdf-parse can only read). Letter portrait, Helvetica, repeated
+  column headers per page, totals footer. Smoke-tested: 130-row/3-page report round-trips
+  through pdf-parse with correct text.
+- /api/agent/inventory/report (NEW, POST, agent key): builds the count from part_definitions
+  using the same scope rules as the parts page (spu-bom = bomType spu/missing AND isBom !== false;
+  general = isBom === false; cartridge; all), optional category + lowStockOnly filters,
+  format 'json' or 'pdf'. PDF uploads to R2 (uploadViaWorker, fallback uploadToR2) under
+  reports/inventory/ and returns the public URL. Audit-logged (action EXPORT).
+- /api/agent/operations/inventory: summary now always includes lowStockParts AND
+  criticalLowStockParts (+counts); optional ?category= and ?lowStockOnly=1 filters. Additive —
+  existing fields unchanged.
+- bims-mcp.ts (version 2.1.0 → 2.2.0 — connector needs a re-add/refresh to pick up the new
+  tool list): inventory_overview gained {category, lowStockOnly} inputs and a description
+  covering the Critical-low-stock question + exact-count authorization; parts_lookup description
+  now explicitly authorizes stating exact inventoryCount for counting questions; NEW tool
+  generate_inventory_pdf (only when the user explicitly asks for a PDF; scope/category/
+  lowStockOnly conditions; returns the download URL).
+- query seed: "Low Stock Parts" card description now reads "Lists any part where the count on
+  hand is zero or below" + documents the {"category": "Critical"} parameter; added a
+  "Low Stock Critical Parts" card. Takes effect after POST /api/agent/query/seed is re-run.
+npm run check: 11 errors (baseline, none in touched files). Not yet committed/deployed.
+
+================================================================================
+2026-07-31 — master — inventory PDF v2: full field set + total inventory value
+================================================================================
+Alejandro's feedback on the first inventory PDF: it lacked information — he wants every
+field, specifically per-part unit cost, per-part total value, and the total inventory
+value, on top of what was already shown. Reworked the report:
+
+- pdf-report.ts: optional landscape mode (US Letter 792x612).
+- /api/agent/inventory/report: PDF is now landscape with 9 columns — Part #, Name,
+  Classification, Qty/Unit, On Hand, Unit (of measure), Unit Cost, Total Value (per part),
+  Supplier. Header block shows Total parts / Total units on hand / Total inventory value
+  up front; footer repeats the totals. Cost parsing now tolerates "$"/"," formatting and
+  distinguishes missing cost (rendered "n/a", counted in partsWithoutCostData and excluded
+  from the total) from a true $0.00. JSON format gains the same fields; summary field
+  renamed totalValue → totalInventoryValue (endpoint is new this session, nothing else
+  consumed the old name). generate_inventory_pdf tool description updated to list the
+  fields (no schema change — connector refresh not required beyond the pending 2.2.0 one).
+- Verified against live Atlas that part_definitions.unitCost values are plain numeric
+  strings (parse fine) and categories are exactly Critical / Non-Critical.
+- Smoke test: 90-row landscape sample renders 3 pages, parses via pdf-parse, and a
+  qlmanage visual check shows clean column alignment.
+npm run check: 11 errors (baseline). Not yet committed/deployed.

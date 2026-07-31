@@ -62,10 +62,19 @@ const SCHEMA_ENTRIES = [
 const QUERY_ENTRIES = [
 	{
 		name: 'Low Stock Parts',
-		description: 'Find parts with zero or negative inventory',
+		description:
+			'Lists any part where the count on hand is zero or below. Pass parameters {"category": "Critical"} to ask only about Critical-classified parts.',
 		category: 'inventory' as const,
 		collectionName: 'part_definitions',
 		mongoQuery: { isActive: true, inventoryCount: { $lte: 0 } },
+		maxRows: 100
+	},
+	{
+		name: 'Low Stock Critical Parts',
+		description: 'Critical-classified parts that are running low (count on hand zero or below)',
+		category: 'inventory' as const,
+		collectionName: 'part_definitions',
+		mongoQuery: { isActive: true, inventoryCount: { $lte: 0 }, category: 'Critical' },
 		maxRows: 100
 	},
 	{
