@@ -5793,3 +5793,8 @@ resolve in the reassembly flow.
 Verified on dev against live Atlas: uppercase scans of a new line label, an existing primary
 label, the new PT-SPU-016 alt, and the corrected PT-SPU-033 label all resolve. No MCP tool
 definition changed — no connector re-add needed for this. npm run check: 11 errors (baseline).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit ba4d1706
+Retrieve this exact code: git checkout master at commit ba4d1706
+What this deployment is for: scan-label barcode resolution (altBarcodes + case-insensitive) so operators can scan the physical line/off-line part labels in the reassembly flow. Verified live: uppercase scan of new PT-SPU-008 line label resolves in prod.
