@@ -5888,3 +5888,21 @@ Source: branch master @ commit 72911374
 Retrieve this exact code: git checkout master at commit 72911374
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: BIMS-matching inventory PDF reports (generate_inventory_pdf MCP tool + /api/agent/inventory/report), Critical low-stock answers in inventory_overview, exact-count authorization in parts_lookup. Push 72911374 also carries the earlier v2 field-set work; deployed via Vercel GitHub integration on push to master.
+
+================================================================================
+2026-07-31 — master — MCP v2.2.1: all inventory read tools redirect PDF asks to generate_inventory_pdf
+================================================================================
+Alejandro again received a PDF that didn't match BIMS. Audit log proves the connector never
+called the report endpoint (only one EXPORT entry exists — my own verification run), i.e.
+the claude.ai assistant composed its own PDF again; its cached tool list predates
+generate_inventory_pdf. Server-side hardening: inventory_overview, parts_lookup, and
+run_saved_query descriptions now all say "if the user wants an inventory PDF, call
+generate_inventory_pdf — don't compose one"; version 2.2.0 → 2.2.1. The real fix is
+user-side: re-add/refresh the BIMS connector in claude.ai so the tool list updates.
+The requested fields (total inventory value, per-part unit cost + total value) were already
+in the endpoint's PDF. npm run check: 11 errors (baseline).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit f59b48a9
+Retrieve this exact code: git checkout master at commit f59b48a9
+What this deployment is for: MCP tool-description hardening so connector assistants route inventory-PDF requests to generate_inventory_pdf.
