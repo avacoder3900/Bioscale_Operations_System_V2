@@ -230,6 +230,66 @@ export interface CalibrationStatus {
 	live_error?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Multi-pose joint map (v2 calibration)
+//
+// Sync-zero above captures ONE matched pose and can only ever produce an
+// offset. The joint map captures several poses across each joint's travel and
+// least-squares fits a per-joint scale + offset, which is what actually
+// corrects the leader/follower gearing mismatch (1/345 vs 1/191 vs 1/147).
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-joint trustworthiness of the fitted slope. Mirrors `_fit_one` in
+ * src/utils/joint_map.py on the Pi. Anything other than `ok` means that
+ * joint fell back to scale=1.0 (mirror) with an averaged offset — safe, but
+ * not calibrated. The UI must say which, and why.
+ */
+export type JointFitStatus =
+	| 'ok'
+	| 'no_fit'
+	| 'single_pose'
+	| 'insufficient_range'
+	| 'implausible_scale';
+
+export interface CapturedPose {
+	index: number;
+	captured_at: string;
+	captured_by: TriggeredBy | null;
+	leader: number[];
+	follower: number[];
+}
+
+export interface JointMapFit {
+	scale: number[];
+	offset: number[];
+	residual_max: number[];
+	status: JointFitStatus[];
+	joint_names: string[];
+	n_poses: number;
+	fitted_at: string;
+}
+
+export interface JointMapRecord {
+	version: string;
+	joint_names: string[];
+	poses: CapturedPose[];
+	fit: JointMapFit;
+}
+
+export interface JointMapStatus {
+	map: JointMapRecord | null;
+	live: {
+		joint_names: string[];
+		leader: (number | null)[];
+		follower: (number | null)[];
+		predicted_follower: (number | null)[];
+		/** follower − predicted. Growing with travel ⇒ scale still wrong. */
+		tracking_error: (number | null)[];
+	} | null;
+	live_error: string | null;
+}
+
 export const robotArm = {
 	getActive: () => robotArmFetch<ActiveSession>('/sessions/active'),
 	getPortStatus: () => robotArmFetch<PortStatus>('/ports/status'),
@@ -300,10 +360,16 @@ export const robotArm = {
 			timeoutMs: 15000
 		}),
 
+	// Live budget is 10s, not 15s: the calibrate load awaits getActive (5s),
+	// then this, then getJointMap sequentially — the serial bus is
+	// single-owner so they cannot be parallelised. 5+10+10=25s has to stay
+	// under the adapter's maxDuration of 30 in svelte.config.js, or Vercel
+	// kills the invocation with a bare 504 and the live_error banner these
+	// wrappers exist to render never gets a chance to.
 	getCalibration: (opts: { live?: boolean } = {}) =>
 		robotArmFetch<CalibrationStatus>(
 			`/calibrate/sync${opts.live ? '?live=true' : ''}`,
-			{ timeoutMs: opts.live ? 15000 : 5000 }
+			{ timeoutMs: opts.live ? 10000 : 5000 }
 		),
 	captureCalibration: (body: { triggered_by?: TriggeredBy } = {}) =>
 		robotArmFetch<SyncZeroRecord>('/calibrate/sync', {
@@ -313,6 +379,36 @@ export const robotArm = {
 		}),
 	clearCalibration: () =>
 		robotArmFetch<{ removed: boolean }>('/calibrate/sync', {
+			method: 'DELETE',
+			timeoutMs: 5000
+		}),
+
+	// --- multi-pose joint map ---
+
+	// 10s live, for the shared-deadline reason documented on getCalibration.
+	getJointMap: (opts: { live?: boolean } = {}) =>
+		robotArmFetch<JointMapStatus>(`/calibrate/map${opts.live ? '?live=true' : ''}`, {
+			timeoutMs: opts.live ? 10000 : 5000
+		}),
+
+	// Capture opens both buses and briefly holds follower torque before
+	// reading, so it needs the same 15s allowance as a sync-zero capture.
+	capturePose: (body: { triggered_by?: TriggeredBy } = {}) =>
+		robotArmFetch<JointMapRecord>('/calibrate/map/poses', {
+			method: 'POST',
+			body,
+			timeoutMs: 15000
+		}),
+
+	// Delete and clear only touch disk (they refit from saved poses), so the
+	// default timeout is plenty.
+	deletePose: (index: number) =>
+		robotArmFetch<JointMapRecord>(`/calibrate/map/poses/${index}`, {
+			method: 'DELETE',
+			timeoutMs: 5000
+		}),
+	clearJointMap: () =>
+		robotArmFetch<{ removed: boolean }>('/calibrate/map', {
 			method: 'DELETE',
 			timeoutMs: 5000
 		})
