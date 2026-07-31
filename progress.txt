@@ -5855,3 +5855,36 @@ value, on top of what was already shown. Reworked the report:
 - Smoke test: 90-row landscape sample renders 3 pages, parses via pdf-parse, and a
   qlmanage visual check shows clean column alignment.
 npm run check: 11 errors (baseline). Not yet committed/deployed.
+
+================================================================================
+2026-07-31 — master — inventory PDF v3: mirrors the BIMS parts page; SHIPPED
+================================================================================
+Alejandro compared the generated PDF against the BIMS parts page (screenshot) and a
+Claude-composed "Inventory List" PDF and asked that report PDFs match the information and
+layout of the BIMS software. Root cause of the mismatched PDF he received: the connector
+model had composed its own document from raw query data instead of calling
+generate_inventory_pdf — the tool description now hard-instructs ALWAYS using the tool
+for inventory PDFs.
+
+- pdf-report.ts rewritten as a styled report writer (still zero-deps): stat tiles, section
+  headings, navy filled table headers, alternating row shading, red-highlighted low-stock
+  rows, per-page footers with page numbers.
+- /api/agent/inventory/report now reproduces the parts page exactly:
+  * Stat tiles: Total Parts / Classifications / Total Inventory Value / Low Stock.
+  * Same table columns and order as the UI: Name, Part #, Classification, Manufacturer,
+    Qty/Unit, Inventory, Unit Cost, Total Value, Lead Time.
+  * Same semantics: spu-bom scope lists only parts with cost data (unitCost > 0; the 2
+    no-cost parts are excluded from table+totals but noted); Low Stock tile counts parts
+    below minimumStockLevel (minimumOrderQty), matching the page's 0; Low Inventory
+    section = zero/negative parts (all parts) + 10 lowest positive, like the page's panel.
+  * JSON format returns the same summary + excludedNoCostParts.
+- Verified against live Atlas: tiles come out 49 parts / 2 classifications / $22,949.26 /
+  low stock 0 — matching the BIMS page screenshot (49 / 2 / $22,934.29 / 0; dollar delta
+  is live drift since the screenshot). Visual render (qlmanage) matches the page layout.
+npm run check: 11 errors (baseline).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 72911374
+Retrieve this exact code: git checkout master at commit 72911374
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: BIMS-matching inventory PDF reports (generate_inventory_pdf MCP tool + /api/agent/inventory/report), Critical low-stock answers in inventory_overview, exact-count authorization in parts_lookup. Push 72911374 also carries the earlier v2 field-set work; deployed via Vercel GitHub integration on push to master.
