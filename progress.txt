@@ -6565,3 +6565,28 @@ Stacked on feat/perm-01-hot-fixes. Implements docs/prds/PERM-02.
 App behavior unchanged until PERM-03/04 (additive strings are inert to legacy checks; the
 wildcard only ADDS grants for admin:full+bims holders, who already held all legacy strings).
 npm run check: 11 errors — unchanged baseline.
+
+================================================================================
+2026-08-03 — feat/perm-03-shadow — PERM-03: deny-by-default evaluator in shadow (log-only) mode
+================================================================================
+Stacked on feat/perm-02-registry. Implements docs/prds/PERM-03.
+
+- NEW src/lib/server/route-policy.ts — evaluateRoutePolicy(): public prefixes (/login,
+  /logout, /invite) -> allow; no session -> deny(unauthenticated); no `bims` membership ->
+  deny(no-bims-membership); admin-gate map (/admin -> admin:full, /documents/*/approve ->
+  document:approve) -> deny(gate:X); else allow. Classification by CREDENTIAL not path:
+  requests bearing key material (x-api-key/x-agent-api-key/x-station-agent-key/authorization/
+  ?key=//api/mcp/k/) are exempt — machine surface is scoped in PERM-05. Shadow log model
+  (permission_shadow_log, 30-day TTL) registered locally — models/index.ts deliberately NOT
+  touched (Jacob's uncommitted KB2 work lives there).
+- hooks.server.ts: shadowEvaluate() runs on every request after session resolution.
+  LOG-ONLY: writes a row per would-be denial; hard requirement is it can never throw or
+  block (outer try/catch swallow + console.error). Anonymous non-API paths aren't logged
+  (current hooks already redirect those); anonymous /api/ hits ARE logged.
+- NEW scripts/report-shadow-denials.ts — aggregates by caller x path x reason (--days N).
+  PERM-04 flip criterion: >=7 consecutive days where every logged denial is intended.
+Expected legitimate denials to watch for: the stale `admin` (Research Admin) user if anyone
+still uses it (no bims — intended), research users browsing BIMS, any forgotten automation
+hitting session endpoints without keys.
+
+npm run check: 11 errors — unchanged baseline.

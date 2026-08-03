@@ -2,6 +2,7 @@ import type { Handle } from '@sveltejs/kit';
 import { redirect } from '@sveltejs/kit';
 import { sequence } from '@sveltejs/kit/hooks';
 import * as auth from '$lib/server/auth';
+import { shadowEvaluate } from '$lib/server/route-policy';
 import { uploadFile } from '$lib/server/box';
 import { env } from '$env/dynamic/private';
 
@@ -25,6 +26,11 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 		event.locals.user = user;
 		event.locals.session = session;
 	}
+
+	// PERM-03: shadow-evaluate the new permission model (docs/prds/PERM-03).
+	// Log-only — records what deny-by-default WOULD block; never blocks itself.
+	// Enforcement arrives in PERM-04 behind PERMISSIONS_ENFORCE.
+	await shadowEvaluate({ user: event.locals.user, request: event.request, url: event.url });
 
 	// Protect routes
 	const path = event.url.pathname;
