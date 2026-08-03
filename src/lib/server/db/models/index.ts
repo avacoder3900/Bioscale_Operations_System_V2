@@ -26,6 +26,7 @@ export { Role } from './role.js';
 export { InviteToken } from './invite-token.js';
 export { LotRecord } from './lot-record.js';
 export { KanbanPolicy } from './kanban-policy.js';
+export { KanbanTemplate } from './kanban-template.js';
 export { StandingTarget } from './standing-target.js';
 export { KanbanProject } from './kanban-project.js';
 export { KanbanTask } from './kanban-task.js';

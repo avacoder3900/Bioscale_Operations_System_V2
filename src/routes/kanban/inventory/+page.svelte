@@ -11,9 +11,21 @@
 	type TaskRow = (typeof data.tasks)[number];
 
 	let errorMsg = $state('');
+	let successMsg = $state('');
 	let submitting = $state(false);
-	let modal = $state<null | { kind: 'process' | 'decline' | 'dor'; task: TaskRow }>(null);
+	let modal = $state<null | { kind: 'process' | 'decline'; task: TaskRow }>(null);
 	let processCos = $state('standard');
+
+	// KB2-11 — capture-from-template picker state.
+	let selectedTemplateId = $state('');
+	let templateProjectId = $state('');
+	let selectedTemplate = $derived(
+		data.templates.find((t: { id: string }) => t.id === selectedTemplateId) ?? null
+	);
+	$effect(() => {
+		// Changing the template resets the project select to its default.
+		templateProjectId = selectedTemplate?.defaultProjectId ?? '';
+	});
 
 	// Filters — captured|processed default on; icebox/declined behind toggles.
 	let showCaptured = $state(true);
@@ -24,7 +36,11 @@
 	let originFilter = $state('all');
 
 	$effect(() => {
-		if ((form as any)?.error) errorMsg = (form as any).error;
+		const f = form as any;
+		if (f?.error) errorMsg = f.error;
+		successMsg = f?.capturedFromTemplate
+			? `Captured "${f.capturedFromTemplate}" from template — processed and DoR-complete.`
+			: '';
 	});
 
 	let filtered = $derived(
@@ -72,8 +88,10 @@
 		};
 	}
 
+	// KB2-12 — one unified modal: process a captured item, or reshape a
+	// processed one (pre-filled, no status change).
 	function openProcess(task: TaskRow) {
-		processCos = 'standard';
+		processCos = task.classOfService ?? 'standard';
 		modal = { kind: 'process', task };
 	}
 
@@ -119,6 +137,37 @@
 		</select>
 		<TronButton type="submit" variant="primary" disabled={submitting}>Capture</TronButton>
 	</form>
+
+	<!-- KB2-11: capture from a workflow template — lands processed + DoR-complete -->
+	{#if data.templates.length > 0}
+		<form method="POST" action="?/captureFromTemplate" class="flex flex-wrap items-center gap-2" use:enhance={submitEnhance}>
+			<select name="templateId" class="tron-select" title="Workflow template" bind:value={selectedTemplateId}>
+				<option value="">From template…</option>
+				{#each data.templates as tpl (tpl.id)}
+					<option value={tpl.id}>{tpl.name}</option>
+				{/each}
+			</select>
+			{#if selectedTemplateId}
+				<div class="min-w-[220px] flex-1">
+					<TronInput name="title" placeholder={selectedTemplate?.titleTemplate ?? 'Title (optional override)'} />
+				</div>
+				<select name="projectId" class="tron-select" title="Project (optional)" bind:value={templateProjectId}>
+					<option value="">No project</option>
+					{#each data.projects as p (p.id)}
+						<option value={p.id}>{p.name}</option>
+					{/each}
+				</select>
+				{#if selectedTemplate?.classOfService === 'fixed_date'}
+					<input type="date" name="dueDate" class="tron-input" title="Due date (fixed-date template)" required />
+				{/if}
+				<TronButton type="submit" variant="primary" disabled={submitting}>Capture from template</TronButton>
+			{/if}
+		</form>
+	{/if}
+
+	{#if successMsg}
+		<div class="rounded border border-[rgba(0,255,136,0.3)] bg-[rgba(0,255,136,0.1)] px-4 py-3 text-sm" style="color: var(--color-tron-green);">{successMsg}</div>
+	{/if}
 
 	{#if errorMsg}
 		<div class="flex items-start justify-between gap-3 rounded border border-[rgba(255,51,102,0.3)] bg-[rgba(255,51,102,0.1)] px-4 py-3 text-sm" style="color: var(--color-tron-red);">
@@ -199,10 +248,7 @@
 										<button type="submit" name="direction" value="down" class="tron-button !px-2 !py-1 text-xs" title="Rank down" disabled={submitting}>▼</button>
 									</form>
 								{/if}
-								{#if t.status === 'captured'}
-									<TronButton variant="primary" onclick={() => openProcess(t)}>Process…</TronButton>
-								{/if}
-								<TronButton onclick={() => (modal = { kind: 'dor', task: t })}>Edit DoR</TronButton>
+								<TronButton variant="primary" onclick={() => openProcess(t)}>Process</TronButton>
 								<form method="POST" action="?/icebox" use:enhance={submitEnhance}>
 									<input type="hidden" name="taskId" value={t.id} />
 									<TronButton type="submit" disabled={submitting}>Icebox</TronButton>
@@ -229,14 +275,22 @@
 	{/if}
 </div>
 
-<!-- Process… modal (KB2-03) -->
+<!-- Unified Process modal (KB2-03 + KB2-12): processes captured items, reshapes processed ones -->
 {#if modal?.kind === 'process'}
 	<KanbanModal title="Process: {modal.task.title}" onclose={() => (modal = null)} maxWidth="max-w-xl">
-		<p class="tron-text-muted mb-4 text-sm">
-			Processing shapes a captured option into a real candidate: sized and classed by the person
-			processing — not the author, not the eventual assignee.
+		<p class="tron-text-muted mb-3 text-sm">
+			{#if modal.task.status === 'captured'}
+				Processing shapes a captured option into a real candidate: sized and classed by the person
+				processing — not the author, not the eventual assignee.
+			{:else}
+				Reshaping edits size, class, and DoR in place — audited, no status change.
+			{/if}
 		</p>
-		<form method="POST" action="?/process" use:enhance={submitEnhance}>
+		<div class="mb-4 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-3 py-2">
+			<p class="tron-text-primary text-xs font-bold uppercase tracking-wide">The sizing decision test</p>
+			<p class="tron-text-muted mt-1 text-xs">{data.sizingDecisionTest}</p>
+		</div>
+		<form method="POST" action={modal.task.status === 'captured' ? '?/process' : '?/reshape'} use:enhance={submitEnhance}>
 			<input type="hidden" name="taskId" value={modal.task.id} />
 
 			<fieldset class="mb-4">
@@ -244,7 +298,7 @@
 				<div class="space-y-2">
 					{#each SIZE_CLASSES as sc (sc)}
 						<label class="flex items-start gap-2 text-sm">
-							<input type="radio" name="sizeClass" value={sc} required class="mt-1" />
+							<input type="radio" name="sizeClass" value={sc} required class="mt-1" checked={modal.task.sizeClass === sc} />
 							<span>
 								<span class="tron-text-primary font-bold capitalize">{sc}</span>
 								<span class="tron-text-muted block text-xs">{(data.sizeClassDefinitions as Record<string, string>)[sc]}</span>
@@ -265,7 +319,13 @@
 
 			{#if processCos === 'fixed_date'}
 				<div class="mb-4">
-					<TronInput label="Due date (a real external date)" name="dueDate" type="date" required />
+					<TronInput
+						label="Due date (a real external date)"
+						name="dueDate"
+						type="date"
+						value={modal.task.dueDate ? String(modal.task.dueDate).slice(0, 10) : ''}
+						required
+					/>
 				</div>
 			{/if}
 
@@ -286,7 +346,9 @@
 
 			<div class="flex justify-end gap-3">
 				<TronButton onclick={() => (modal = null)}>Cancel</TronButton>
-				<TronButton type="submit" variant="primary" disabled={submitting}>Mark Processed</TronButton>
+				<TronButton type="submit" variant="primary" disabled={submitting}>
+					{modal.task.status === 'captured' ? 'Mark Processed' : 'Save Changes'}
+				</TronButton>
 			</div>
 		</form>
 	</KanbanModal>
@@ -305,35 +367,6 @@
 			<div class="flex justify-end gap-3">
 				<TronButton onclick={() => (modal = null)}>Cancel</TronButton>
 				<TronButton type="submit" variant="danger" disabled={submitting}>Decline</TronButton>
-			</div>
-		</form>
-	</KanbanModal>
-{/if}
-
-<!-- Edit DoR modal — plain field update, no status change -->
-{#if modal?.kind === 'dor'}
-	<KanbanModal title="Definition of Ready: {modal.task.title}" onclose={() => (modal = null)} maxWidth="max-w-xl">
-		<form method="POST" action="?/updateDor" use:enhance={submitEnhance}>
-			<input type="hidden" name="taskId" value={modal.task.id} />
-			<div class="mb-4">
-				<label for="dor-outcome" class="tron-label">Outcome — what is different when this is done, not the steps</label>
-				<textarea id="dor-outcome" name="outcome" class="tron-input w-full" rows="2">{modal.task.dor.outcome}</textarea>
-			</div>
-			<div class="mb-4">
-				<label for="dor-ac" class="tron-label">Acceptance criteria</label>
-				<textarea id="dor-ac" name="acceptanceCriteria" class="tron-input w-full" rows="3">{modal.task.dor.acceptanceCriteria}</textarea>
-			</div>
-			{#if data.board === 'software'}
-				<div class="mb-4">
-					<label for="dor-brief" class="tron-label">Agent handoff brief</label>
-					<textarea id="dor-brief" name="handoffBrief" class="tron-input w-full" rows="3">{modal.task.dor.handoffBrief}</textarea>
-				</div>
-			{:else}
-				<input type="hidden" name="handoffBrief" value={modal.task.dor.handoffBrief} />
-			{/if}
-			<div class="flex justify-end gap-3">
-				<TronButton onclick={() => (modal = null)}>Cancel</TronButton>
-				<TronButton type="submit" variant="primary" disabled={submitting}>Save DoR</TronButton>
 			</div>
 		</form>
 	</KanbanModal>

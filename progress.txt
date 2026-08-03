@@ -6340,3 +6340,21 @@ Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
 Source: branch master @ commit b86f5115
 Retrieve this exact code: git checkout master at commit b86f5115
 What this deployment is for: validation_tab tool/endpoint — full Validation section access for agents (MCP v2.9.0).
+
+================================================================================
+2026-08-03 — master — KB2-11 workflow templates + KB2-12 sizing doctrine & unified Process UX
+================================================================================
+From the sizing-doctrine discussion with Jacob (size = measurement bucket, never a time
+promise; unknown-time projects enter as milestones or spikes, never as themselves):
+- KB2-11: KanbanTemplate model + /kanban/templates agent endpoint (kanban:admin) +
+  captureFromTemplate (create + auto-process in one motion → lands DoR-complete,
+  replenishable). Template CRUD on /kanban/policy; template picker beside the Inventory
+  capture box (board-filtered, fixed_date templates prompt a due date); MCP:
+  kanban_list_templates, kanban_set_template, kanban_capture templateId.
+- KB2-12: sizing decision test (SIZING_DECISION_TEST in process.ts) embedded in the
+  process modal helper + kanban_process/kanban_capture MCP descriptions; policy
+  sizeClassDefinitions defaults updated AND live prod doc patched; Inventory now has ONE
+  "Process" button (no ellipsis) for captured AND processed items — unified modal
+  (process vs new reshapeTask: audited size/class/DoR edit, no status change).
+PRDs: docs/prds/KB2-11-workflow-templates.md, KB2-12-sizing-doctrine-process-ux.md.
+npm run check: 11 errors — unchanged baseline.

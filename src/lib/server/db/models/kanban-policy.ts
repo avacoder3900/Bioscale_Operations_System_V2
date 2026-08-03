@@ -31,9 +31,13 @@ const kanbanPolicySchema = new Schema(
 			chore: { type: Number, default: 15 } // floor AND ceiling
 		},
 		sizeClassDefinitions: {
-			short: { type: String, default: 'Fits in a day or less of focused work.' },
-			medium: { type: String, default: 'A few days; one person; no unknown unknowns.' },
-			long: { type: String, default: 'A week-plus or multiple people; consider splitting or a spike first.' }
+			short: { type: String, default: 'Fits in a day or less of focused work. Known steps (orders, quick fixes, single measurements).' },
+			medium: { type: String, default: 'A few days; one person; no unknown unknowns. Most milestone-sized engineering work.' },
+			long: {
+				type: String,
+				default:
+					'A week-plus or multiple people. Before picking this, apply the sizing test: if you cannot confidently size it, split to the next nameable milestone, or timebox a spike — projects never enter the queue, their milestones do. Size is a measurement bucket, never a time promise (SLEs are computed from history).'
+			}
 		},
 		sle: {
 			percentile: { type: Number, default: 85 },

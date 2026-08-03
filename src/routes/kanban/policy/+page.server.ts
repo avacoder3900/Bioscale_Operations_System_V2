@@ -5,9 +5,10 @@
  * session-authenticated. Also hosts StandingTarget CRUD (KB2-10).
  */
 import { fail, redirect, error } from '@sveltejs/kit';
-import { connectDB, KanbanPolicy, StandingTarget, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, KanbanPolicy, StandingTarget, KanbanTemplate, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission, hasPermission, isAdmin } from '$lib/server/permissions';
 import { getKanbanPolicy } from '$lib/server/kanban/policy';
+import { SIZE_CLASSES, CLASSES_OF_SERVICE } from '$lib/shared/kanban-status';
 import type { PageServerLoad, Actions } from './$types';
 
 function requirePolicyAdmin(user: App.Locals['user']): asserts user {
@@ -24,6 +25,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const policy = await getKanbanPolicy();
 	const targets = (await StandingTarget.find({}).sort({ active: -1, name: 1 }).lean()) as any[];
+	const templates = (await KanbanTemplate.find({}).sort({ active: -1, name: 1 }).lean()) as any[];
 
 	return {
 		canAdmin: hasPermission(locals.user, 'kanban:admin') || isAdmin(locals.user),
@@ -42,6 +44,26 @@ export const load: PageServerLoad = async ({ locals }) => {
 					spawnItemType: t.spawnItemType ?? 'deliverable',
 					active: t.active !== false,
 					notes: t.notes ?? ''
+				}))
+			)
+		),
+		templates: JSON.parse(
+			JSON.stringify(
+				templates.map((t) => ({
+					id: t._id,
+					name: t.name,
+					board: t.board ?? 'ops',
+					itemType: t.itemType ?? 'deliverable',
+					sizeClass: t.sizeClass,
+					classOfService: t.classOfService ?? 'standard',
+					titleTemplate: t.titleTemplate,
+					dorOutcome: t.dor?.outcome ?? '',
+					dorAcceptanceCriteria: t.dor?.acceptanceCriteria ?? '',
+					dorHandoffBrief: t.dor?.handoffBrief ?? '',
+					tags: (t.tags ?? []).join(', '),
+					defaultProjectId: t.defaultProjectId ?? '',
+					notes: t.notes ?? '',
+					active: t.active !== false
 				}))
 			)
 		)
@@ -110,6 +132,52 @@ function parseTargetForm(fd: FormData) {
 			batchSize,
 			spawnItemType,
 			notes: fd.get('notes')?.toString() || undefined
+		}
+	};
+}
+
+// KB2-11 — workflow template form parsing (same shape as parseTargetForm).
+// Spikes cannot be templated: itemType is limited to deliverable|chore.
+function parseTemplateForm(fd: FormData) {
+	const name = fd.get('name')?.toString()?.trim();
+	if (!name) return { error: 'Name is required' };
+	const titleTemplate = fd.get('titleTemplate')?.toString()?.trim();
+	if (!titleTemplate) return { error: 'Title template is required' };
+	const sizeClass = fd.get('sizeClass')?.toString();
+	if (!sizeClass || !(SIZE_CLASSES as readonly string[]).includes(sizeClass)) {
+		return { error: 'A valid size class is required' };
+	}
+	const classOfService = fd.get('classOfService')?.toString();
+	if (!classOfService || !(CLASSES_OF_SERVICE as readonly string[]).includes(classOfService)) {
+		return { error: 'A valid class of service is required' };
+	}
+	const outcome = fd.get('dorOutcome')?.toString()?.trim();
+	const acceptanceCriteria = fd.get('dorAcceptanceCriteria')?.toString()?.trim();
+	if (!outcome || !acceptanceCriteria) {
+		return { error: 'DoR outcome and acceptance criteria are required — a template captures the SOP shape, DoR-complete' };
+	}
+	const board = fd.get('board')?.toString() === 'software' ? 'software' : 'ops';
+	const tags = (fd.get('tags')?.toString() ?? '')
+		.split(',')
+		.map((s) => s.trim())
+		.filter(Boolean);
+	return {
+		doc: {
+			name,
+			board,
+			itemType: fd.get('itemType')?.toString() === 'chore' ? 'chore' : 'deliverable',
+			sizeClass,
+			classOfService,
+			titleTemplate,
+			dor: {
+				outcome,
+				acceptanceCriteria,
+				handoffBrief: board === 'software' ? fd.get('dorHandoffBrief')?.toString() || undefined : undefined
+			},
+			tags,
+			defaultProjectId: fd.get('defaultProjectId')?.toString() || undefined,
+			notes: fd.get('notes')?.toString() || undefined,
+			active: fd.get('active') === 'on'
 		}
 	};
 }
@@ -237,6 +305,85 @@ export const actions: Actions = {
 			_id: generateId(),
 			tableName: 'kanban_standing_targets',
 			recordId: targetId,
+			action: 'UPDATE',
+			oldData: { active: existing.active !== false },
+			newData: { active, via: 'ui' },
+			changedBy: locals.user.username,
+			changedAt: now
+		});
+		return { success: true };
+	},
+
+	// KB2-11 — workflow template CRUD (same gating + audit shape as standing targets).
+	createTemplate: async ({ request, locals }) => {
+		requirePolicyAdmin(locals.user);
+		await connectDB();
+		const fd = await request.formData();
+		const parsed = parseTemplateForm(fd);
+		if ('error' in parsed) return fail(400, { error: parsed.error });
+
+		const now = new Date();
+		const tpl = await KanbanTemplate.create({
+			_id: generateId(),
+			...parsed.doc,
+			createdBy: locals.user.username
+		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'kanban_templates',
+			recordId: tpl._id,
+			action: 'INSERT',
+			newData: { ...parsed.doc, via: 'ui' },
+			changedBy: locals.user.username,
+			changedAt: now
+		});
+		return { success: true };
+	},
+
+	updateTemplate: async ({ request, locals }) => {
+		requirePolicyAdmin(locals.user);
+		await connectDB();
+		const fd = await request.formData();
+		const templateId = fd.get('templateId')?.toString();
+		if (!templateId) return fail(400, { error: 'Missing templateId' });
+		const parsed = parseTemplateForm(fd);
+		if ('error' in parsed) return fail(400, { error: parsed.error });
+
+		const existing = (await KanbanTemplate.findById(templateId).lean()) as any;
+		if (!existing) return fail(404, { error: 'Template not found' });
+
+		const now = new Date();
+		await KanbanTemplate.updateOne({ _id: templateId }, { $set: parsed.doc });
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'kanban_templates',
+			recordId: templateId,
+			action: 'UPDATE',
+			oldData: { name: existing.name, sizeClass: existing.sizeClass, classOfService: existing.classOfService },
+			newData: { ...parsed.doc, via: 'ui' },
+			changedBy: locals.user.username,
+			changedAt: now
+		});
+		return { success: true };
+	},
+
+	toggleTemplate: async ({ request, locals }) => {
+		requirePolicyAdmin(locals.user);
+		await connectDB();
+		const fd = await request.formData();
+		const templateId = fd.get('templateId')?.toString();
+		if (!templateId) return fail(400, { error: 'Missing templateId' });
+
+		const existing = (await KanbanTemplate.findById(templateId).lean()) as any;
+		if (!existing) return fail(404, { error: 'Template not found' });
+
+		const active = existing.active === false; // flip
+		const now = new Date();
+		await KanbanTemplate.updateOne({ _id: templateId }, { $set: { active } });
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'kanban_templates',
+			recordId: templateId,
 			action: 'UPDATE',
 			oldData: { active: existing.active !== false },
 			newData: { active, via: 'ui' },

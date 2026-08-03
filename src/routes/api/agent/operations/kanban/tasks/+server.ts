@@ -13,7 +13,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	// (Tier 1). Entering Tier 2 happens only through replenishment (KB2-02).
 	const { title, projectId, description, assignedTo, dueDate, source, sourceRef, tags, parentTaskId, actor, board, origin, spawnedFrom, itemType, spike } = body;
 
-	if (!title?.trim()) throw error(400, 'title is required');
+	if (!title?.trim() && !body.templateId) throw error(400, 'title is required (unless capturing from a template)');
 	if (!projectId) throw error(400, 'projectId is required');
 
 	const project = await KanbanProject.findById(projectId).lean() as any;
@@ -32,6 +32,26 @@ export const POST: RequestHandler = async ({ request }) => {
 	}
 
 	const actorName = typeof actor === 'string' && actor.trim() ? actor.trim() : 'agent';
+
+	// KB2-11: capture from a workflow template — lands processed + DoR-complete.
+	if (typeof body.templateId === 'string' && body.templateId.trim()) {
+		const { captureFromTemplate } = await import('$lib/server/kanban/process');
+		const { TransitionError } = await import('$lib/server/kanban/transition');
+		try {
+			const result = await captureFromTemplate({
+				templateId: body.templateId.trim(),
+				actorUsername: actorName,
+				via: 'agent-api',
+				title: typeof title === 'string' ? title : undefined,
+				project: { _id: project._id, name: project.name, color: project.color },
+				dueDate: dueDate ? new Date(dueDate) : undefined
+			});
+			return json({ success: true, data: { id: result.taskId, title: result.title, status: 'processed', template: result.templateName, projectId: project._id } }, { status: 201 });
+		} catch (e) {
+			if (e instanceof TransitionError) throw error(400, e.message);
+			throw e;
+		}
+	}
 
 	let task: any;
 	try {

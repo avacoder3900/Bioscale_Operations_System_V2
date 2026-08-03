@@ -7,11 +7,19 @@
 	let { data, form } = $props();
 
 	type TargetRow = (typeof data.targets)[number];
+	type TemplateRow = (typeof data.templates)[number];
 
 	let errorMsg = $state('');
 	let savedMsg = $state('');
 	let submitting = $state(false);
 	let targetModal = $state<null | { target: TargetRow | null }>(null); // null target = create
+	let templateModal = $state<null | { template: TemplateRow | null }>(null); // null template = create
+	let templateBoard = $state('ops'); // drives handoffBrief visibility in the template modal
+
+	function openTemplateModal(template: TemplateRow | null) {
+		templateBoard = template?.board ?? 'ops';
+		templateModal = { template };
+	}
 
 	$effect(() => {
 		if ((form as any)?.error) errorMsg = (form as any).error;
@@ -38,6 +46,7 @@
 					errorMsg = '';
 					savedMsg = 'Saved.';
 					targetModal = null;
+					templateModal = null;
 				}
 				await update({ reset: false });
 			}
@@ -236,6 +245,67 @@
 			</div>
 		{/if}
 	</section>
+
+	<!-- Workflow templates (KB2-11) -->
+	<section class="tron-card !p-4">
+		<div class="mb-3 flex items-center justify-between">
+			<h3 class="tron-text-primary text-sm font-bold uppercase tracking-wide">Workflow templates</h3>
+			{#if data.canAdmin}
+				<TronButton variant="primary" onclick={() => openTemplateModal(null)}>New Template</TronButton>
+			{/if}
+		</div>
+		<p class="tron-text-muted mb-3 text-xs">
+			Ultra-defined recurring work ("Build &amp; validate an SPU") captured once as an SOP shape.
+			Capturing from a template lands the item already processed and DoR-complete — immediately
+			replenishable. Spikes cannot be templated: a templated investigation is a contradiction.
+		</p>
+		{#if data.templates.length === 0}
+			<p class="tron-text-muted text-xs">No workflow templates yet.</p>
+		{:else}
+			<div class="overflow-x-auto">
+				<table class="w-full text-sm">
+					<thead>
+						<tr class="tron-text-muted text-left text-xs uppercase">
+							<th class="pb-2 pr-3">Name</th>
+							<th class="pb-2 pr-3">Board</th>
+							<th class="pb-2 pr-3">Type</th>
+							<th class="pb-2 pr-3">Size</th>
+							<th class="pb-2 pr-3">Class</th>
+							<th class="pb-2 pr-3">Active</th>
+							<th class="pb-2"></th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each data.templates as t (t.id)}
+							<tr class="border-t border-[var(--color-tron-border)] {t.active ? '' : 'opacity-50'}">
+								<td class="tron-text-primary py-2 pr-3">{t.name}</td>
+								<td class="tron-text-muted py-2 pr-3 text-xs">{t.board}</td>
+								<td class="tron-text-muted py-2 pr-3 text-xs">{t.itemType}</td>
+								<td class="tron-text-muted py-2 pr-3 text-xs uppercase">{t.sizeClass}</td>
+								<td class="tron-text-muted py-2 pr-3 text-xs">{t.classOfService}</td>
+								<td class="py-2 pr-3 text-xs font-bold" style="color: {t.active ? 'var(--color-tron-green, #10b981)' : 'var(--color-tron-text-secondary)'};">
+									{t.active ? 'yes' : 'no'}
+								</td>
+								<td class="py-2">
+									{#if data.canAdmin}
+										<div class="flex items-center justify-end gap-2">
+											<TronButton onclick={() => openTemplateModal(t)}>Edit</TronButton>
+											<form method="POST" action="?/toggleTemplate" use:enhance={submitEnhance}>
+												<input type="hidden" name="templateId" value={t.id} />
+												<TronButton type="submit" variant={t.active ? 'danger' : 'default'} disabled={submitting}>
+													{t.active ? 'Deactivate' : 'Reactivate'}
+												</TronButton>
+											</form>
+										</div>
+									{/if}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	</section>
 </div>
 
 <!-- Standing target create/edit modal -->
@@ -292,6 +362,99 @@
 			<div class="flex justify-end gap-3">
 				<TronButton onclick={() => (targetModal = null)}>Cancel</TronButton>
 				<TronButton type="submit" variant="primary" disabled={submitting}>{t ? 'Save Target' : 'Create Target'}</TronButton>
+			</div>
+		</form>
+	</KanbanModal>
+{/if}
+
+<!-- Workflow template create/edit modal (KB2-11) -->
+{#if templateModal}
+	{@const tpl = templateModal.template}
+	<KanbanModal title={tpl ? `Edit template: ${tpl.name}` : 'New workflow template'} onclose={() => (templateModal = null)} maxWidth="max-w-xl">
+		<form method="POST" action={tpl ? '?/updateTemplate' : '?/createTemplate'} use:enhance={submitEnhance}>
+			{#if tpl}
+				<input type="hidden" name="templateId" value={tpl.id} />
+			{/if}
+			<div class="mb-4">
+				<TronInput label="Name" name="name" value={tpl?.name ?? ''} required placeholder="Build & validate an SPU" />
+			</div>
+			<div class="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+				<div>
+					<label for="wt-board" class="tron-label">Board</label>
+					<select id="wt-board" name="board" class="tron-select w-full" bind:value={templateBoard}>
+						<option value="ops">ops</option>
+						<option value="software">software</option>
+					</select>
+				</div>
+				<div>
+					<label for="wt-type" class="tron-label">Item type (spikes cannot be templated)</label>
+					<select id="wt-type" name="itemType" class="tron-select w-full" value={tpl?.itemType ?? 'deliverable'}>
+						<option value="deliverable">Deliverable</option>
+						<option value="chore">Chore</option>
+					</select>
+				</div>
+			</div>
+			<div class="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+				<div>
+					<label for="wt-size" class="tron-label">Size class</label>
+					<select id="wt-size" name="sizeClass" class="tron-select w-full" value={tpl?.sizeClass ?? 'short'}>
+						<option value="short">Short</option>
+						<option value="medium">Medium</option>
+						<option value="long">Long</option>
+					</select>
+				</div>
+				<div>
+					<label for="wt-cos" class="tron-label">Class of service</label>
+					<select id="wt-cos" name="classOfService" class="tron-select w-full" value={tpl?.classOfService ?? 'standard'}>
+						<option value="standard">Standard</option>
+						<option value="fixed_date">Fixed date</option>
+						<option value="chore">Chore</option>
+						<option value="expedite">Expedite</option>
+					</select>
+				</div>
+			</div>
+			<div class="mb-4">
+				<TronInput label="Title template" name="titleTemplate" value={tpl?.titleTemplate ?? ''} required placeholder={'Build & validate SPU {n}'} />
+			</div>
+			<div class="mb-4">
+				<label for="wt-outcome" class="tron-label">DoR — outcome (pre-written from the SOP)</label>
+				<textarea id="wt-outcome" name="dorOutcome" class="tron-input w-full" rows="2" required>{tpl?.dorOutcome ?? ''}</textarea>
+			</div>
+			<div class="mb-4">
+				<label for="wt-ac" class="tron-label">DoR — acceptance criteria</label>
+				<textarea id="wt-ac" name="dorAcceptanceCriteria" class="tron-input w-full" rows="3" required>{tpl?.dorAcceptanceCriteria ?? ''}</textarea>
+			</div>
+			{#if templateBoard === 'software'}
+				<div class="mb-4">
+					<label for="wt-brief" class="tron-label">DoR — agent handoff brief (software)</label>
+					<textarea id="wt-brief" name="dorHandoffBrief" class="tron-input w-full" rows="3">{tpl?.dorHandoffBrief ?? ''}</textarea>
+				</div>
+			{/if}
+			<div class="mb-4">
+				<TronInput label="Tags (comma-separated)" name="tags" value={tpl?.tags ?? ''} placeholder="spu, build" />
+			</div>
+			<div class="mb-4">
+				<label for="wt-project" class="tron-label">Default project</label>
+				<select id="wt-project" name="defaultProjectId" class="tron-select w-full" value={tpl?.defaultProjectId ?? ''}>
+					<option value="">No project</option>
+					{#each data.projects as p (p.id)}
+						<option value={p.id}>{p.name}</option>
+					{/each}
+				</select>
+			</div>
+			<div class="mb-4">
+				<label for="wt-notes" class="tron-label">Notes</label>
+				<textarea id="wt-notes" name="notes" class="tron-input w-full" rows="2">{tpl?.notes ?? ''}</textarea>
+			</div>
+			<div class="mb-4">
+				<label class="flex items-center gap-2 text-sm">
+					<input type="checkbox" name="active" checked={tpl ? tpl.active : true} />
+					<span class="tron-text-primary">Active (available in the Inventory template picker)</span>
+				</label>
+			</div>
+			<div class="flex justify-end gap-3">
+				<TronButton onclick={() => (templateModal = null)}>Cancel</TronButton>
+				<TronButton type="submit" variant="primary" disabled={submitting}>{tpl ? 'Save Template' : 'Create Template'}</TronButton>
 			</div>
 		</form>
 	</KanbanModal>

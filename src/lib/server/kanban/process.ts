@@ -6,9 +6,23 @@
  * author, not the eventual assignee — removes the inflation incentive),
  * plus a rank among the project's options and optionally the DoR fields.
  */
-import { KanbanTask, connectDB } from '$lib/server/db';
-import { transitionTask, TransitionError, type TransitionVia } from './transition.js';
+import { KanbanTask, KanbanTemplate, AuditLog, generateId, connectDB } from '$lib/server/db';
+import { transitionTask, createKanbanItem, TransitionError, type TransitionVia } from './transition.js';
 import type { KanbanClassOfService, KanbanSizeClass } from '$lib/shared/kanban-status';
+
+/**
+ * KB2-12 — the sizing decision test (canonical wording; also embedded in the
+ * process modal + MCP tool descriptions). Size class is a measurement bucket,
+ * never a promise: SLEs are computed from history.
+ *
+ *   Can you confidently pick a size?
+ *   - Yes → deliverable; size it.
+ *   - No, but you can name the next milestone → split; size the milestone.
+ *   - No, and you can't name the milestone → spike; timebox the question.
+ *   - None of the above → it's a project, not an item; only its milestones flow.
+ */
+export const SIZING_DECISION_TEST =
+	"Can you confidently pick a size? Yes → deliverable, size it. No but you can name the next milestone → split and size the milestone (outcome = the milestone). No and you can't name the milestone → make it a spike and timebox the question instead. None of the above → it's a project, not an item — keep it upstream and let its milestones flow.";
 
 export async function processTask(opts: {
 	taskId: string;
@@ -45,6 +59,91 @@ export async function processTask(opts: {
 		actor: { username: opts.actorUsername, via: opts.via }
 	});
 	return { taskId: opts.taskId, title: task.title };
+}
+
+/**
+ * KB2-12 — reshape an already-processed item: edit size/class/DoR in place,
+ * audited, no status change. (The unified Process modal uses processTask for
+ * captured items and this for processed ones.)
+ */
+export async function reshapeTask(opts: {
+	taskId: string;
+	actorUsername: string;
+	via: TransitionVia;
+	sizeClass?: KanbanSizeClass;
+	classOfService?: KanbanClassOfService;
+	dueDate?: Date;
+	dor?: { outcome?: string; acceptanceCriteria?: string; handoffBrief?: string };
+}) {
+	await connectDB();
+	const task: any = await KanbanTask.findById(opts.taskId).lean();
+	if (!task) throw new TransitionError('NOT_FOUND', `Task ${opts.taskId} not found`);
+	if (task.status !== 'processed') {
+		throw new TransitionError('INVALID_STATUS', `reshape applies to 'processed' items (task is '${task.status}').`);
+	}
+	const $set: Record<string, unknown> = {};
+	if (opts.sizeClass) $set.sizeClass = opts.sizeClass;
+	if (opts.classOfService) $set.classOfService = opts.classOfService;
+	if (opts.dueDate) $set.dueDate = opts.dueDate;
+	if (opts.dor?.outcome !== undefined) $set['dor.outcome'] = opts.dor.outcome;
+	if (opts.dor?.acceptanceCriteria !== undefined) $set['dor.acceptanceCriteria'] = opts.dor.acceptanceCriteria;
+	if (opts.dor?.handoffBrief !== undefined) $set['dor.handoffBrief'] = opts.dor.handoffBrief;
+	if (($set.classOfService ?? task.classOfService) === 'fixed_date' && !($set.dueDate ?? task.dueDate)) {
+		throw new TransitionError('REASON_REQUIRED', "classOfService 'fixed_date' requires a real external dueDate.");
+	}
+	if (!Object.keys($set).length) return { taskId: opts.taskId, title: task.title, changed: false };
+	await KanbanTask.updateOne({ _id: opts.taskId }, {
+		$set,
+		$push: {
+			activityLog: {
+				_id: generateId(), action: 'reshaped', details: $set, createdAt: new Date(), createdBy: opts.actorUsername
+			}
+		}
+	});
+	await AuditLog.create({
+		_id: generateId(), tableName: 'kanban_tasks', recordId: opts.taskId, action: 'UPDATE',
+		newData: { reshape: $set, via: opts.via }, changedBy: opts.actorUsername, changedAt: new Date()
+	});
+	return { taskId: opts.taskId, title: task.title, changed: true };
+}
+
+/**
+ * KB2-11 — capture from a workflow template: item is created AND processed in
+ * one motion, landing DoR-complete and immediately replenishable.
+ */
+export async function captureFromTemplate(opts: {
+	templateId: string;
+	actorUsername: string;
+	via: TransitionVia;
+	title?: string; // overrides titleTemplate
+	project?: { _id: string; name: string; color?: string } | null;
+	dueDate?: Date;
+}) {
+	await connectDB();
+	const tpl: any = await KanbanTemplate.findById(opts.templateId).lean();
+	if (!tpl || tpl.active === false) throw new TransitionError('NOT_FOUND', `Template ${opts.templateId} not found or inactive`);
+
+	const task: any = await createKanbanItem({
+		title: (opts.title?.trim() || tpl.titleTemplate).trim(),
+		actor: { username: opts.actorUsername, via: opts.via },
+		board: tpl.board ?? 'ops',
+		itemType: tpl.itemType ?? 'deliverable',
+		project: opts.project ?? null,
+		tags: tpl.tags ?? [],
+		dueDate: opts.dueDate,
+		source: 'template',
+		sourceRef: `template:${tpl._id}`
+	});
+	await KanbanTask.updateOne({ _id: task._id }, { $set: { dor: tpl.dor } });
+	await processTask({
+		taskId: task._id,
+		actorUsername: opts.actorUsername,
+		via: opts.via,
+		sizeClass: tpl.sizeClass,
+		classOfService: tpl.classOfService,
+		dueDate: opts.dueDate
+	});
+	return { taskId: task._id, title: task.title, templateName: tpl.name };
 }
 
 /** Park an option indefinitely — visible, skipped at processing, never auto-archived. */

@@ -4,10 +4,18 @@
  * edits. Everything that changes status goes through the kanban services.
  */
 import { fail, redirect } from '@sveltejs/kit';
-import { connectDB, KanbanTask, KanbanProject, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, KanbanTask, KanbanProject, KanbanTemplate, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { createKanbanItem, TransitionError } from '$lib/server/kanban/transition';
-import { processTask, iceboxTask, declineTask, thawTask } from '$lib/server/kanban/process';
+import {
+	processTask,
+	reshapeTask,
+	captureFromTemplate,
+	iceboxTask,
+	declineTask,
+	thawTask,
+	SIZING_DECISION_TEST
+} from '$lib/server/kanban/process';
 import { reorder, dorMissingFields, ReplenishError } from '$lib/server/kanban/replenish';
 import { getKanbanPolicy } from '$lib/server/kanban/policy';
 import {
@@ -38,8 +46,25 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		.sort({ rank: 1 })
 		.lean()) as any[];
 
+	// KB2-11 — active workflow templates for this board (one-touch capture).
+	const templates = (await KanbanTemplate.find({ active: true, board }).sort({ name: 1 }).lean()) as any[];
+
 	return {
 		board,
+		// KB2-12 — canonical sizing decision test, shown in the process modal.
+		sizingDecisionTest: SIZING_DECISION_TEST,
+		templates: JSON.parse(
+			JSON.stringify(
+				templates.map((t) => ({
+					id: t._id,
+					name: t.name,
+					titleTemplate: t.titleTemplate,
+					sizeClass: t.sizeClass,
+					classOfService: t.classOfService,
+					defaultProjectId: t.defaultProjectId ?? null
+				}))
+			)
+		),
 		sizeClassDefinitions: {
 			short: policy?.sizeClassDefinitions?.short ?? '',
 			medium: policy?.sizeClassDefinitions?.medium ?? '',
@@ -150,6 +175,78 @@ export const actions: Actions = {
 			return serviceFail(e);
 		}
 		return { success: true };
+	},
+
+	// KB2-12 — reshape an already-processed item from the same unified modal:
+	// edit size/class/DoR in place, audited, no status change.
+	reshape: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
+		await connectDB();
+		const fd = await request.formData();
+		const taskId = fd.get('taskId')?.toString();
+		const sizeClass = fd.get('sizeClass')?.toString();
+		const classOfService = fd.get('classOfService')?.toString();
+		if (!taskId) return fail(400, { error: 'Missing taskId' });
+		if (sizeClass && !(SIZE_CLASSES as readonly string[]).includes(sizeClass)) {
+			return fail(400, { error: 'A valid size class is required' });
+		}
+		if (classOfService && !(CLASSES_OF_SERVICE as readonly string[]).includes(classOfService)) {
+			return fail(400, { error: 'A valid class of service is required' });
+		}
+		const dueDateRaw = fd.get('dueDate')?.toString();
+
+		try {
+			await reshapeTask({
+				taskId,
+				actorUsername: locals.user.username,
+				via: 'ui',
+				sizeClass: sizeClass ? (sizeClass as KanbanSizeClass) : undefined,
+				classOfService: classOfService ? (classOfService as KanbanClassOfService) : undefined,
+				dueDate: dueDateRaw ? new Date(dueDateRaw) : undefined,
+				dor: {
+					outcome: fd.get('outcome')?.toString(),
+					acceptanceCriteria: fd.get('acceptanceCriteria')?.toString(),
+					handoffBrief: fd.get('handoffBrief')?.toString()
+				}
+			});
+		} catch (e) {
+			return serviceFail(e);
+		}
+		return { success: true };
+	},
+
+	// KB2-11 — capture from a workflow template: created AND processed in one
+	// motion, landing DoR-complete and immediately replenishable.
+	captureFromTemplate: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
+		await connectDB();
+		const fd = await request.formData();
+		const templateId = fd.get('templateId')?.toString();
+		if (!templateId) return fail(400, { error: 'Pick a template first' });
+
+		const projectId = fd.get('projectId')?.toString();
+		let project = null;
+		if (projectId) {
+			const p = (await KanbanProject.findById(projectId).lean()) as any;
+			if (p) project = { _id: p._id, name: p.name, color: p.color };
+		}
+		const dueDateRaw = fd.get('dueDate')?.toString();
+
+		try {
+			const result = await captureFromTemplate({
+				templateId,
+				actorUsername: locals.user.username,
+				via: 'ui',
+				title: fd.get('title')?.toString() || undefined,
+				project,
+				dueDate: dueDateRaw ? new Date(dueDateRaw) : undefined
+			});
+			return { success: true, capturedFromTemplate: result.title };
+		} catch (e) {
+			return serviceFail(e);
+		}
 	},
 
 	// Rank ▲▼ — one position within the (board, project) Tier 1 scope, via reorder().

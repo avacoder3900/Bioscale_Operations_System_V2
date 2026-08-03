@@ -588,9 +588,13 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'DISCOVERED-WORK TEST — when the idea came up while working another task, ask: "If work stopped right now, is that ' +
 				"task's stated outcome achieved?\" YES → capture here with origin:'discovered' and spawnedFrom set. NO → it was always " +
 				'inside that task — append it there with kanban_update_task appendContext instead of capturing a new item. ' +
-				'For a spike (timeboxed investigation), set itemType:spike with question + timebox — a spike cannot be created without them.',
+				'For a spike (timeboxed investigation), set itemType:spike with question + timebox — a spike cannot be created without them. ' +
+				'SIZING TEST (apply when shaping work): can you confidently pick a size? Yes → deliverable. No but the next milestone is ' +
+				'nameable → capture the milestone, not the project. No milestone nameable → spike. Otherwise it is a project — only its milestones flow. ' +
+				'For ultra-defined recurring work (SPU builds, cartridge fills), pass templateId (see kanban_list_templates) — the item lands already processed and DoR-complete.',
 			inputSchema: z.object({
-				title: z.string().describe('One line is enough.'),
+				title: z.string().optional().describe('One line is enough. Optional when templateId is given (template supplies it).'),
+				templateId: z.string().optional().describe('Capture from a workflow template — lands processed + replenishable.'),
 				projectId: z.string().describe('The kanban project _id.'),
 				board: z.enum(['ops', 'software']).optional().describe('Which board (default ops).'),
 				description: z.string().optional(),
@@ -737,7 +741,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'made by the person processing (never the author or eventual assignee; this removes the inflation incentive). ' +
 				'Also the moment to write the Definition-of-Ready fields: dor.outcome must describe the OUTCOME (what is different ' +
 				'in the world when this is done), not the steps — step lists go stale; outcomes survive a change of approach. ' +
-				'fixed_date requires a real external dueDate. `actor` = the human doing the processing (never guess).',
+				'fixed_date requires a real external dueDate. `actor` = the human doing the processing (never guess). ' +
+				'SIZING TEST — size class is a measurement bucket, never a time promise (SLEs are computed from history): ' +
+				'can you confidently pick a size? Yes → size it. No but the next milestone is nameable → split; size the milestone. ' +
+				'No milestone nameable → convert to a spike and timebox the question. Otherwise it is a project — keep it upstream.',
 			inputSchema: z.object({
 				taskId: z.string(),
 				actor: z.string().describe('Username of the human processing (required — never guess).'),
@@ -834,6 +841,43 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			})
 		},
 		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/policy', { method: 'PATCH', body: args })
+	);
+
+	// ------------------------------------------- kanban: workflow templates
+
+	server.registerTool(
+		'kanban_list_templates',
+		{ annotations: READ_ONLY,
+			description:
+				'List workflow templates for ultra-defined recurring work (SPU builds, cartridge fills). ' +
+				'Capture from one via kanban_capture templateId — the item lands already processed and DoR-complete.'
+		},
+		async () => callAgentApi(fetcher, '/api/agent/operations/kanban/templates')
+	);
+
+	server.registerTool(
+		'kanban_set_template',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Create or update a workflow template (actor needs kanban:admin). Templates encode the SOP shape once: ' +
+				'title, size class, class of service, and a pre-written DoR (outcome + acceptance criteria). Spikes cannot be templated.',
+			inputSchema: z.object({
+				actor: z.string().describe('Username with kanban:admin (required — never guess).'),
+				templateId: z.string().optional().describe('Omit to create; provide to update.'),
+				name: z.string().optional(),
+				board: z.enum(['ops', 'software']).optional(),
+				itemType: z.enum(['deliverable', 'chore']).optional(),
+				sizeClass: z.enum(['short', 'medium', 'long']).optional(),
+				classOfService: z.enum(['standard', 'fixed_date', 'chore', 'expedite']).optional(),
+				titleTemplate: z.string().optional(),
+				dor: z.object({ outcome: z.string(), acceptanceCriteria: z.string(), handoffBrief: z.string().optional() }).optional(),
+				tags: z.array(z.string()).optional(),
+				defaultProjectId: z.string().optional(),
+				active: z.boolean().optional(),
+				notes: z.string().optional()
+			})
+		},
+		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/templates', { method: 'POST', body: args })
 	);
 
 	// ------------------------------------------- kanban: standing work (supply)
