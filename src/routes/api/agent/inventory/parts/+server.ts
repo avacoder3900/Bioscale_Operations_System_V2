@@ -80,6 +80,8 @@ export const GET: RequestHandler = async ({ request, url }) => {
 				barcode: p.barcode,
 				altBarcodes: p.altBarcodes,
 				inventoryCount: p.inventoryCount ?? 0,
+				barcodeCounts: p.barcodeCounts ?? [],
+				lastPhysicalCountAt: p.lastPhysicalCountAt ?? null,
 				unitOfMeasure: p.unitOfMeasure,
 				quantityPerUnit: p.quantityPerUnit
 			}))
