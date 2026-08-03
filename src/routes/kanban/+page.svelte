@@ -3,8 +3,7 @@
 	import TronButton from '$lib/components/ui/TronButton.svelte';
 	import TronInput from '$lib/components/ui/TronInput.svelte';
 	import KanbanModal from '$lib/components/kanban/KanbanModal.svelte';
-	import TaskStatusBadge from '$lib/components/kanban/TaskStatusBadge.svelte';
-	import { agingLevel, type KanbanStatus } from '$lib/shared/kanban-status';
+	import { agingLevel, STATUS_META, type KanbanStatus } from '$lib/shared/kanban-status';
 
 	let { data, form } = $props();
 
@@ -21,14 +20,15 @@
 	});
 
 	let wip = $derived(data.tasks.filter((t: TaskRow) => t.status === 'wip'));
-	let parked = $derived(data.tasks.filter((t: TaskRow) => t.status === 'blocked' || t.status === 'waiting'));
+	let waiting = $derived(data.tasks.filter((t: TaskRow) => t.status === 'waiting'));
+	let blocked = $derived(data.tasks.filter((t: TaskRow) => t.status === 'blocked'));
 	let review = $derived(data.tasks.filter((t: TaskRow) => t.status === 'review'));
 	let ready = $derived(
 		[...data.tasks.filter((t: TaskRow) => t.status === 'ready')].sort((a, b) => a.rank - b.rank)
 	);
 	let doneRecent = $derived(data.tasks.filter((t: TaskRow) => t.status === 'done'));
 
-	// WIP grouped by assignee — grouping headers for legibility, not swim lanes.
+	// WIP grouped by assignee — grouping subheaders inside the single column, not lanes.
 	let wipGroups = $derived.by(() => {
 		const groups = new Map<string, TaskRow[]>();
 		for (const t of wip) {
@@ -109,11 +109,26 @@
 	<input type="hidden" name="taskId" value={t.id} />
 {/snippet}
 
+{#snippet columnHeader(label: string, color: string, count: string)}
+	<div
+		class="mb-3 flex items-center justify-between rounded-t-lg px-3 py-2"
+		style="background: {color}15; border-bottom: 2px solid {color};"
+	>
+		<h3 class="text-sm font-bold" style="color: {color};">{label}</h3>
+		<span
+			class="inline-flex h-6 min-w-[1.5rem] items-center justify-center rounded-full px-1.5 text-xs font-bold"
+			style="background: {color}20; color: {color};"
+		>
+			{count}
+		</span>
+	</div>
+{/snippet}
+
 <div class="space-y-6">
 	<!-- Header -->
 	<div class="flex flex-wrap items-start justify-between gap-4">
 		<div>
-			<h2 class="tron-text-primary text-2xl font-bold">The Queue</h2>
+			<h2 class="tron-text-primary text-2xl font-bold">Queue</h2>
 			<p class="tron-text-muted text-sm">
 				Committed work on the <span class="font-bold uppercase">{data.board}</span> board.
 				<a href={inventoryHref()} class="hover:underline" style="color: var(--color-tron-cyan);">
@@ -136,25 +151,6 @@
 			</div>
 		</div>
 	</div>
-
-	<!-- Quick capture: one line → a Tier 1 'captured' option -->
-	<form
-		method="POST"
-		action="?/create"
-		class="flex flex-wrap items-center gap-2"
-		use:enhance={submitEnhance}
-	>
-		<div class="min-w-[240px] flex-1">
-			<TronInput name="title" placeholder="Quick capture — one line is enough (goes to inventory as 'captured')" required />
-		</div>
-		<select name="projectId" class="tron-select" title="Project (optional)">
-			<option value="">No project</option>
-			{#each data.projects as p (p.id)}
-				<option value={p.id}>{p.name}</option>
-			{/each}
-		</select>
-		<TronButton type="submit" variant="primary" disabled={submitting}>Capture</TronButton>
-	</form>
 
 	<!-- Min order point signal -->
 	{#if data.readyCount < data.minOrderPoint}
@@ -224,29 +220,77 @@
 		{/if}
 	</div>
 
-	<!-- WIP — grouped by assignee (grouping headers, not lanes) -->
-	<section>
-		<h3 class="tron-text-primary mb-3 text-sm font-bold uppercase tracking-wide">
-			In Progress <span class="tron-text-muted font-normal">({wip.length})</span>
-		</h3>
-		{#if wip.length === 0}
-			<p class="tron-text-muted text-xs">Nothing in progress.</p>
-		{/if}
-		{#each wipGroups as [assignee, tasks] (assignee)}
-			<div class="mb-4">
-				<p class="tron-text-muted mb-2 text-xs font-bold uppercase tracking-wide">{assignee}</p>
-				<div class="space-y-2">
-					{#each tasks as t (t.id)}
-						{@const color = ageColor(t)}
-						<div class="tron-card flex flex-wrap items-center gap-3 !p-3" style={color ? `border-left: 3px solid ${color};` : ''}>
-							<div class="min-w-[200px] flex-1">
+	<!-- Horizontal column board — one row, single swim lane. No drag-and-drop:
+	     every move is an explicit button through the transition service. -->
+	<div class="flex gap-4 overflow-x-auto pb-2" style="min-height: 320px;">
+		<!-- Ready — the global ordered queue -->
+		<div class="flex min-w-[250px] max-w-[340px] flex-1 flex-col rounded-lg">
+			{@render columnHeader(STATUS_META.ready.label, STATUS_META.ready.color, `${ready.length} / ${data.readyCap}`)}
+			<div class="max-h-[70vh] flex-1 space-y-2 overflow-y-auto pr-1">
+				<p class="tron-text-muted px-1 text-[10px] uppercase tracking-wide">Pull from the top {data.pullWindow} only</p>
+				{#if ready.length === 0}
+					<p class="tron-text-muted px-1 text-xs">The ready queue is empty. Replenishment decides what enters it.</p>
+				{/if}
+				{#each ready as t (t.id)}
+					{@const inWindow = t.rank >= 1 && t.rank <= data.pullWindow}
+					<div
+						class="tron-card !p-3"
+						style={inWindow ? 'border-color: var(--color-tron-cyan); box-shadow: 0 0 8px rgba(0,212,255,0.15);' : ''}
+					>
+						<div class="flex items-start gap-2">
+							<!-- Rank number badge, top-left. Order IS the layout. -->
+							<span
+								class="flex h-7 w-7 shrink-0 items-center justify-center rounded text-sm font-bold"
+								style={inWindow
+									? 'background: var(--color-tron-cyan); color: var(--color-tron-bg-primary);'
+									: 'background: var(--color-tron-bg-tertiary); color: var(--color-tron-text-secondary);'}
+							>
+								{t.rank}
+							</span>
+							<div class="min-w-0 flex-1">
 								<a href="/kanban/task/{t.id}" class="tron-text-primary text-sm font-medium hover:underline">{t.title}</a>
 								<div class="mt-1 flex flex-wrap items-center gap-1.5">
 									{@render cardChips(t)}
 									{@render ageBadge(t)}
 								</div>
 							</div>
-							<div class="flex shrink-0 items-center gap-2">
+						</div>
+						{#if inWindow || data.canReplenish}
+							<div class="mt-2 flex flex-wrap items-center gap-2">
+								{#if inWindow}
+									<form method="POST" action="?/pull" use:enhance={submitEnhance}>
+										{@render hiddenTask(t)}
+										<TronButton type="submit" variant="primary" disabled={submitting}>Pull</TronButton>
+									</form>
+								{/if}
+								{#if data.canReplenish}
+									<TronButton onclick={() => (modal = { kind: 'demote', task: t })}>Demote…</TronButton>
+								{/if}
+							</div>
+						{/if}
+					</div>
+				{/each}
+			</div>
+		</div>
+
+		<!-- In Progress — grouped by assignee (subheaders, not lanes) -->
+		<div class="flex min-w-[250px] max-w-[340px] flex-1 flex-col rounded-lg">
+			{@render columnHeader(STATUS_META.wip.label, STATUS_META.wip.color, `${wip.length}`)}
+			<div class="max-h-[70vh] flex-1 space-y-2 overflow-y-auto pr-1">
+				{#if wip.length === 0}
+					<p class="tron-text-muted px-1 text-xs">Nothing in progress.</p>
+				{/if}
+				{#each wipGroups as [assignee, tasks] (assignee)}
+					<p class="tron-text-muted px-1 pt-1 text-[10px] font-bold uppercase tracking-wide">{assignee}</p>
+					{#each tasks as t (t.id)}
+						{@const color = ageColor(t)}
+						<div class="tron-card !p-3" style={color ? `border-left: 3px solid ${color};` : ''}>
+							<a href="/kanban/task/{t.id}" class="tron-text-primary text-sm font-medium hover:underline">{t.title}</a>
+							<div class="mt-1 flex flex-wrap items-center gap-1.5">
+								{@render cardChips(t)}
+								{@render ageBadge(t)}
+							</div>
+							<div class="mt-2 flex flex-wrap items-center gap-2">
 								<form method="POST" action="?/move" use:enhance={submitEnhance}>
 									{@render hiddenTask(t)}
 									<input type="hidden" name="to" value="done" />
@@ -257,41 +301,57 @@
 							</div>
 						</div>
 					{/each}
-				</div>
+				{/each}
 			</div>
-		{/each}
-	</section>
+		</div>
 
-	<!-- Blocked / Waiting -->
-	<section>
-		<h3 class="tron-text-primary mb-3 text-sm font-bold uppercase tracking-wide">
-			Blocked / Waiting <span class="tron-text-muted font-normal">({parked.length})</span>
-		</h3>
-		{#if parked.length === 0}
-			<p class="tron-text-muted text-xs">Nothing parked. Good.</p>
-		{:else}
-			<div class="space-y-2">
-				{#each parked as t (t.id)}
-					{@const color = ageColor(t)}
-					<div class="tron-card flex flex-wrap items-center gap-3 !p-3" style={color ? `border-left: 3px solid ${color};` : ''}>
-						<div class="min-w-[200px] flex-1">
-							<div class="flex items-center gap-2">
-								<TaskStatusBadge status={t.status} />
-								<a href="/kanban/task/{t.id}" class="tron-text-primary text-sm font-medium hover:underline">{t.title}</a>
-							</div>
-							<p class="mt-1 text-xs" style="color: var(--color-tron-red);">
-								{#if t.status === 'blocked'}
-									{t.blockedReason ?? 'No reason recorded'}
-								{:else}
-									Waiting on {t.waitingOn ?? '?'} until {fmtDate(t.waitingUntil)}{t.waitingReason ? ` — ${t.waitingReason}` : ''}
-								{/if}
-							</p>
+		<!-- In Review (software board only) -->
+		{#if data.board === 'software'}
+			<div class="flex min-w-[250px] max-w-[340px] flex-1 flex-col rounded-lg">
+				{@render columnHeader(STATUS_META.review.label, STATUS_META.review.color, `${review.length}`)}
+				<div class="max-h-[70vh] flex-1 space-y-2 overflow-y-auto pr-1">
+					{#if review.length === 0}
+						<p class="tron-text-muted px-1 text-xs">No PRs awaiting review.</p>
+					{/if}
+					{#each review as t (t.id)}
+						<div class="tron-card !p-3">
+							<a href="/kanban/task/{t.id}" class="tron-text-primary text-sm font-medium hover:underline">{t.title}</a>
 							<div class="mt-1 flex flex-wrap items-center gap-1.5">
 								{@render cardChips(t)}
 								{@render ageBadge(t)}
 							</div>
+							<div class="mt-2">
+								<form method="POST" action="?/move" use:enhance={submitEnhance}>
+									{@render hiddenTask(t)}
+									<input type="hidden" name="to" value="done" />
+									<TronButton type="submit" variant="primary" disabled={submitting}>Done</TronButton>
+								</form>
+							</div>
 						</div>
-						<div class="flex shrink-0 items-center gap-2">
+					{/each}
+				</div>
+			</div>
+		{/if}
+
+		<!-- Waiting — named external dependency -->
+		<div class="flex min-w-[250px] max-w-[340px] flex-1 flex-col rounded-lg">
+			{@render columnHeader(STATUS_META.waiting.label, STATUS_META.waiting.color, `${waiting.length}`)}
+			<div class="max-h-[70vh] flex-1 space-y-2 overflow-y-auto pr-1">
+				{#if waiting.length === 0}
+					<p class="tron-text-muted px-1 text-xs">Nothing waiting.</p>
+				{/if}
+				{#each waiting as t (t.id)}
+					{@const color = ageColor(t)}
+					<div class="tron-card !p-3" style={color ? `border-left: 3px solid ${color};` : ''}>
+						<a href="/kanban/task/{t.id}" class="tron-text-primary text-sm font-medium hover:underline">{t.title}</a>
+						<p class="mt-1 text-xs" style="color: var(--color-tron-red);">
+							Waiting on {t.waitingOn ?? '?'} until {fmtDate(t.waitingUntil)}{t.waitingReason ? ` — ${t.waitingReason}` : ''}
+						</p>
+						<div class="mt-1 flex flex-wrap items-center gap-1.5">
+							{@render cardChips(t)}
+							{@render ageBadge(t)}
+						</div>
+						<div class="mt-2 flex flex-wrap items-center gap-2">
 							<form method="POST" action="?/resume" use:enhance={submitEnhance}>
 								{@render hiddenTask(t)}
 								<TronButton type="submit" variant="primary" disabled={submitting}>Resume</TronButton>
@@ -303,78 +363,31 @@
 					</div>
 				{/each}
 			</div>
-		{/if}
-	</section>
+		</div>
 
-	<!-- Review (software board only) -->
-	{#if data.board === 'software'}
-		<section>
-			<h3 class="tron-text-primary mb-3 text-sm font-bold uppercase tracking-wide">
-				In Review <span class="tron-text-muted font-normal">({review.length})</span>
-			</h3>
-			{#if review.length === 0}
-				<p class="tron-text-muted text-xs">No PRs awaiting review.</p>
-			{:else}
-				<div class="space-y-2">
-					{#each review as t (t.id)}
-						<div class="tron-card flex flex-wrap items-center gap-3 !p-3">
-							<div class="min-w-[200px] flex-1">
-								<a href="/kanban/task/{t.id}" class="tron-text-primary text-sm font-medium hover:underline">{t.title}</a>
-								<div class="mt-1 flex flex-wrap items-center gap-1.5">
-									{@render cardChips(t)}
-									{@render ageBadge(t)}
-								</div>
-							</div>
-							<form method="POST" action="?/move" use:enhance={submitEnhance}>
+		<!-- Blocked — blocked on us, reason on the card -->
+		<div class="flex min-w-[250px] max-w-[340px] flex-1 flex-col rounded-lg">
+			{@render columnHeader(STATUS_META.blocked.label, STATUS_META.blocked.color, `${blocked.length}`)}
+			<div class="max-h-[70vh] flex-1 space-y-2 overflow-y-auto pr-1">
+				{#if blocked.length === 0}
+					<p class="tron-text-muted px-1 text-xs">Nothing blocked. Good.</p>
+				{/if}
+				{#each blocked as t (t.id)}
+					{@const color = ageColor(t)}
+					<div class="tron-card !p-3" style={color ? `border-left: 3px solid ${color};` : ''}>
+						<a href="/kanban/task/{t.id}" class="tron-text-primary text-sm font-medium hover:underline">{t.title}</a>
+						<p class="mt-1 text-xs" style="color: var(--color-tron-red);">
+							{t.blockedReason ?? 'No reason recorded'}
+						</p>
+						<div class="mt-1 flex flex-wrap items-center gap-1.5">
+							{@render cardChips(t)}
+							{@render ageBadge(t)}
+						</div>
+						<div class="mt-2 flex flex-wrap items-center gap-2">
+							<form method="POST" action="?/resume" use:enhance={submitEnhance}>
 								{@render hiddenTask(t)}
-								<input type="hidden" name="to" value="done" />
-								<TronButton type="submit" variant="primary" disabled={submitting}>Done</TronButton>
+								<TronButton type="submit" variant="primary" disabled={submitting}>Resume</TronButton>
 							</form>
-						</div>
-					{/each}
-				</div>
-			{/if}
-		</section>
-	{/if}
-
-	<!-- Ready — the global ordered queue -->
-	<section>
-		<h3 class="tron-text-primary mb-3 text-sm font-bold uppercase tracking-wide">
-			Ready <span class="tron-text-muted font-normal">({ready.length} / cap {data.readyCap} — pull from the top {data.pullWindow} only)</span>
-		</h3>
-		{#if ready.length === 0}
-			<p class="tron-text-muted text-xs">The ready queue is empty. Replenishment decides what enters it.</p>
-		{:else}
-			<div class="space-y-2">
-				{#each ready as t (t.id)}
-					{@const inWindow = t.rank >= 1 && t.rank <= data.pullWindow}
-					<div
-						class="tron-card flex flex-wrap items-center gap-3 !p-3"
-						style={inWindow ? 'border-color: var(--color-tron-cyan); box-shadow: 0 0 8px rgba(0,212,255,0.15);' : ''}
-					>
-						<!-- Rank number badge, top-left. Order IS the layout. -->
-						<span
-							class="flex h-8 w-8 shrink-0 items-center justify-center rounded font-bold"
-							style={inWindow
-								? 'background: var(--color-tron-cyan); color: var(--color-tron-bg-primary);'
-								: 'background: var(--color-tron-bg-tertiary); color: var(--color-tron-text-secondary);'}
-						>
-							{t.rank}
-						</span>
-						<div class="min-w-[200px] flex-1">
-							<a href="/kanban/task/{t.id}" class="tron-text-primary text-sm font-medium hover:underline">{t.title}</a>
-							<div class="mt-1 flex flex-wrap items-center gap-1.5">
-								{@render cardChips(t)}
-								{@render ageBadge(t)}
-							</div>
-						</div>
-						<div class="flex shrink-0 items-center gap-2">
-							{#if inWindow}
-								<form method="POST" action="?/pull" use:enhance={submitEnhance}>
-									{@render hiddenTask(t)}
-									<TronButton type="submit" variant="primary" disabled={submitting}>Pull</TronButton>
-								</form>
-							{/if}
 							{#if data.canReplenish}
 								<TronButton onclick={() => (modal = { kind: 'demote', task: t })}>Demote…</TronButton>
 							{/if}
@@ -382,29 +395,30 @@
 					</div>
 				{/each}
 			</div>
-		{/if}
-	</section>
+		</div>
 
-	<!-- Done (recent 7 days, pre-archive) -->
-	<section>
-		<h3 class="tron-text-primary mb-3 text-sm font-bold uppercase tracking-wide">
-			Done — last 7 days <span class="tron-text-muted font-normal">({doneRecent.length})</span>
-		</h3>
-		{#if doneRecent.length === 0}
-			<p class="tron-text-muted text-xs">Nothing finished in the last 7 days.</p>
-		{:else}
-			<div class="space-y-1">
+		<!-- Done (recent 7 days, pre-archive) -->
+		<div class="flex min-w-[250px] max-w-[340px] flex-1 flex-col rounded-lg">
+			{@render columnHeader(`${STATUS_META.done.label} — 7d`, STATUS_META.done.color, `${doneRecent.length}`)}
+			<div class="max-h-[70vh] flex-1 space-y-2 overflow-y-auto pr-1">
+				{#if doneRecent.length === 0}
+					<p class="tron-text-muted px-1 text-xs">Nothing finished in the last 7 days.</p>
+				{/if}
 				{#each doneRecent as t (t.id)}
-					<div class="flex flex-wrap items-center gap-2 rounded px-2 py-1 hover:bg-[var(--color-tron-bg-tertiary)]">
-						<span class="h-2 w-2 shrink-0 rounded-full" style="background: #10b981;"></span>
-						<a href="/kanban/task/{t.id}" class="tron-text-primary text-sm hover:underline">{t.title}</a>
-						<span class="tron-text-muted text-xs">{fmtDate(t.completedDate)}</span>
-						{@render cardChips(t)}
+					<div class="tron-card !p-3">
+						<div class="flex items-center gap-2">
+							<span class="h-2 w-2 shrink-0 rounded-full" style="background: #10b981;"></span>
+							<a href="/kanban/task/{t.id}" class="tron-text-primary min-w-0 flex-1 text-sm hover:underline">{t.title}</a>
+							<span class="tron-text-muted shrink-0 text-xs">{fmtDate(t.completedDate)}</span>
+						</div>
+						<div class="mt-1 flex flex-wrap items-center gap-1.5">
+							{@render cardChips(t)}
+						</div>
 					</div>
 				{/each}
 			</div>
-		{/if}
-	</section>
+		</div>
+	</div>
 </div>
 
 <!-- Block… modal -->

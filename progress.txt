@@ -6446,3 +6446,5 @@ will exist or be true when this is done, and how you'd verify it. Outcome, not s
   (407 tasks, none with DoR written yet; 0 templates), so nothing to rewrite — schema-only
   change in practice, script kept for any stragglers.
 npm run check: 11 errors — unchanged baseline.
+
+2026-08-03 — master — Queue page: horizontal single-lane board, capture removed, renamed Queue

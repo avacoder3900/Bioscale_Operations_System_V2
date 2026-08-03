@@ -1,12 +1,13 @@
 /**
- * KB2-06 — "The Queue": the Tier 2 default view. One flat, vertically-ordered
- * global queue per board. Every mutation goes through the transition service
- * (or demote for commitment unwinds) — zero direct status writes here.
+ * KB2-06 — "Queue": the Tier 2 default view. A horizontal single-lane column
+ * board per board (Ready | In Progress | Waiting | Blocked | Done). Every
+ * mutation goes through the transition service (or demote for commitment
+ * unwinds) — zero direct status writes here. Quick capture lives on Inventory.
  */
 import { fail, redirect } from '@sveltejs/kit';
-import { connectDB, KanbanTask, KanbanProject } from '$lib/server/db';
+import { connectDB, KanbanTask } from '$lib/server/db';
 import { requirePermission, hasPermission, isAdmin } from '$lib/server/permissions';
-import { transitionTask, createKanbanItem, TransitionError } from '$lib/server/kanban/transition';
+import { transitionTask, TransitionError } from '$lib/server/kanban/transition';
 import { demote, ReplenishError } from '$lib/server/kanban/replenish';
 import { getKanbanPolicy, boardPolicyOf } from '$lib/server/kanban/policy';
 import { standingStatus } from '$lib/server/kanban/standing';
@@ -126,36 +127,7 @@ async function runTransition(event: RequestEvent, forcedTo?: KanbanStatus) {
 }
 
 export const actions: Actions = {
-	// Quick capture: title only + optional project → a Tier 1 'captured' option.
-	create: async ({ request, locals, url }) => {
-		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'kanban:write');
-		await connectDB();
-		const fd = await request.formData();
-		const title = fd.get('title')?.toString();
-		if (!title?.trim()) return fail(400, { error: 'Title is required' });
-
-		const projectId = fd.get('projectId')?.toString();
-		let project = null;
-		if (projectId) {
-			const p = (await KanbanProject.findById(projectId).lean()) as any;
-			if (p) project = { _id: p._id, name: p.name, color: p.color };
-		}
-
-		try {
-			await createKanbanItem({
-				title,
-				project,
-				board: boardOf(url),
-				actor: { username: locals.user.username, via: 'ui' }
-			});
-		} catch (e) {
-			if (e instanceof TransitionError) return fail(400, { error: e.message, code: e.code });
-			throw e;
-		}
-		return { success: true };
-	},
-
+	// Quick capture lives on the Inventory page — no 'create' action here.
 	pull: (event) => runTransition(event, 'wip'),
 	resume: (event) => runTransition(event, 'wip'),
 	block: (event) => runTransition(event, 'blocked'),
