@@ -129,12 +129,6 @@
 	<div class="flex flex-wrap items-start justify-between gap-4">
 		<div>
 			<h2 class="tron-text-primary text-2xl font-bold">Queue</h2>
-			<p class="tron-text-muted text-sm">
-				Committed work on the <span class="font-bold uppercase">{data.board}</span> board.
-				<a href={inventoryHref()} class="hover:underline" style="color: var(--color-tron-cyan);">
-					{data.capturedCount} option{data.capturedCount === 1 ? '' : 's'} upstream in inventory
-				</a>
-			</p>
 		</div>
 
 		<!-- Ready count vs cap gauge -->

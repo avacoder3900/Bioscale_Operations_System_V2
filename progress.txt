@@ -6486,3 +6486,5 @@ AND the pull window (pullable at any rank); they join the bottom of the ready ra
   spawnSizeClass/templateId. MCP kanban_standing_status + kanban_set_standing_target
   updated; server version 2.12.0 -> 2.13.0.
 npm run check: 11 errors - unchanged baseline (r2.ts, AskBimsWidget, assembly, parts).
+
+2026-08-03 — master — Queue page: subtitle line removed
