@@ -152,15 +152,6 @@
 		</div>
 	</div>
 
-	<!-- Min order point signal -->
-	{#if data.readyCount < data.minOrderPoint}
-		<div class="rounded border border-[rgba(245,158,11,0.4)] bg-[rgba(245,158,11,0.08)] px-4 py-3 text-sm" style="color: #f59e0b;">
-			Ready queue is at {data.readyCount} — below the minimum order point ({data.minOrderPoint}).
-			Run <a href={data.board === 'software' ? '/kanban/replenish?board=software' : '/kanban/replenish'} class="font-bold underline">replenishment</a>
-			before people start pulling from Tier 1 again.
-		</div>
-	{/if}
-
 	<!-- Error banner: the server's explanation, verbatim -->
 	{#if errorMsg}
 		<div class="flex items-start justify-between gap-3 rounded border border-[rgba(255,51,102,0.3)] bg-[rgba(255,51,102,0.1)] px-4 py-3 text-sm" style="color: var(--color-tron-red);">
@@ -169,7 +160,8 @@
 		</div>
 	{/if}
 
-	<!-- Supply panel (KB2-10) — standing targets, read-only -->
+	<!-- Supply panel (KB2-10) — standing targets, read-only. Hidden entirely when no targets exist. -->
+	{#if data.standing.length > 0}
 	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
 		<button
 			type="button"
@@ -190,10 +182,7 @@
 		</button>
 		{#if supplyOpen}
 			<div class="border-t border-[var(--color-tron-border)] px-4 py-3">
-				{#if data.standing.length === 0}
-					<p class="tron-text-muted text-xs">No standing targets defined. Create them on the Policy page.</p>
-				{:else}
-					<div class="space-y-3">
+				<div class="space-y-3">
 						{#each data.standing as s (s.targetId)}
 							<div class="flex flex-wrap items-center gap-3 rounded px-2 py-1 {s.belowReorderPoint ? 'border border-[rgba(255,51,102,0.35)] bg-[rgba(255,51,102,0.06)]' : ''}">
 								<span class="tron-text-primary min-w-[180px] text-sm">{s.name}</span>
@@ -215,10 +204,10 @@
 							</div>
 						{/each}
 					</div>
-				{/if}
 			</div>
 		{/if}
 	</div>
+	{/if}
 
 	<!-- Horizontal column board — one row, single swim lane. No drag-and-drop:
 	     every move is an explicit button through the transition service. -->
