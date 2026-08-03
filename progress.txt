@@ -3456,7 +3456,6 @@ Source: branch master @ commit 4a0fca2af (merge of PR #19, feat/stream-view-filt
 Retrieve this exact code: git checkout master at commit 4a0fca2af
 What this deployment is for: /cv/stream View filter (Top/Bottom/Untagged) + per-card view
 badge, making the barcode-backfilled view tags browsable.
-=======
 2026-07-08 — master (working tree) — R04 reagent "not running" = calibrator log-flood at particle-ID read; robust-ID fix + R04 deploy script
 ================================================================================
 Operator report: reagent test fill on R04 "not running". Diagnosis from the robot's own run record
@@ -6488,3 +6487,74 @@ AND the pull window (pullable at any rank); they join the bottom of the ready ra
 npm run check: 11 errors - unchanged baseline (r2.ts, AskBimsWidget, assembly, parts).
 
 2026-08-03 — master — Queue page: subtitle line removed
+
+================================================================================
+2026-08-03 — feat/perm-01-hot-fixes — Permissions rewrite kickoff: PRD series + hot security fixes
+================================================================================
+Full Ralph load on the permission system (3-agent census: 221 page files, 207 API files/266
+handlers, live Atlas role data). Direction settled with Jacob and captured in a 7-PRD series
+(docs/prds/PERM-00..06): collapse to admin/not-admin via per-app membership permissions
+(`bims`/`research`), 6 admin gates (document approval, kanban tier promotion, lot release/scrap,
+sacred corrections, assay lock, admin:full), deny-by-default hooks with a shadow-mode rollout,
+bots as permanent non-admins with mandatory validated `actor` attribution on MCP writes
+(one chat = one actor), per-fleet device keys later. Key audit findings: 3 drifted permission
+lists (UI 49 / seed 48 / code 52), 23 login-only mutation pages, research-v2 shares users/roles
+and its active "Research Admin" role carries admin:full → passes BIMS admin checks TODAY
+(cross-app leak; membership model closes it).
+
+PERM-01 implemented on this branch (hot fixes, no model change):
+- DELETED /api/mcp/health (leaked agent+MCP key lengths + deploy metadata, anonymous)
+- /api/box/callback: was fully anonymous and could overwrite org Box OAuth tokens — now
+  admin-only, audit log unconditional
+- /api/agent/ask/health 401s anon; /api/debug/env and /api/dev/{seed-test-inventory,test-data}
+  admin-only. Deviation: /api/dev/validate-equipment left session-authed — despite the path it
+  is the wax-filling scan-time deck/oven validator; relocate in PERM-04.
+- Cron fails closed: removed forgeable vercel-cron user-agent fallback from 5 authenticate()
+  helpers (archive-done-tasks, cartridge-cleanup-reminder, bims-anomaly-scan, mocreo-sync,
+  mocreo-heartbeat). DEPLOY PREREQ: CRON_SECRET must be set in Vercel env or scheduled crons
+  401 (they send Bearer $CRON_SECRET automatically once set).
+- Hardcoded passwords out of repo: 'opadmin' → env OT_OPERATOR_PASSWORD (opentrons-clone
+  operator-login), 'processadmin' → env TRAINING_UNLOCK_PASSWORD (analysis/demo). Unset =
+  feature disabled with a 503. ADD THESE TO VERCEL if the workflows are still wanted.
+- admin/users assignRole: $push → $set (single role per user per SECURITY.md; $push stacked
+  duplicates). removeRole roleHistory revocation now uses arrayFilters (stamps all matching
+  grants, matches absent-or-null revokedAt). Caveat: $set replaces the whole roles[] array —
+  reassigning zane (Operator + Research Admin, legit cross-app dual role) via BIMS UI would
+  drop his research role; resolved properly in PERM-06.
+- Removed 403-swallowing try/catch around requirePermission in 3 layouts (cart-mfg,
+  wax-filling, reagent-filling); wi-upload action now rethrows SvelteKit errors instead of
+  converting 403→500; api/spu/work-instruction/active now uses shared timing-safe
+  isAgentApiKey() (new export in api-auth.ts) instead of ad-hoc === compare.
+- scripts/seed.ts: added missing kanban:replenish (seed drift vs roles UI).
+- scripts/fix-duplicate-roles.ts (new, dry-run default): no $push dupes found live; zane's 2
+  entries are distinct cross-app roles, left as-is. scripts/diag-role-usage.ts (new, read-only).
+
+npm run check: 11 errors — identical to pre-existing baseline (r2.ts, AskBimsWidget,
+assembly/parts svelte); none in touched files. Not yet merged to master; needs CRON_SECRET
+verified in Vercel first.
+
+================================================================================
+2026-08-03 - master - KB2-14 Replenish page merged into Inventory commit bar
+================================================================================
+Approved design (Jacob 2026-08-03, PRD docs/prds/KB2-14-inventory-commit-merge.md): the
+Replenish PAGE is retired; the commitment CEREMONY moves into Inventory. The gate itself
+(kanban:replenish actor resolution, DoR check, ready/expedite/chore caps, one batch
+replenishment event - all server-side in replenish.ts) is UNCHANGED.
+- Inventory: staging checkboxes on captured/processed rows (only processed + DoR-complete
+  are checkable; captured -> "process it first" tooltip, DoR-incomplete -> exact missing
+  fields); selecting any shows a sticky footer commit bar ("N selected · Ready x/8",
+  ▲▼ staged-order reorder, optional note, Commit -> existing replenish() service with
+  actor=locals.user.username via 'ui'); promoted-with-ranks + rejected-with-reasons render
+  inline; PERMISSION_DENIED -> clear 403 message. Checkboxes + bar hidden entirely
+  without kanban:replenish/admin. Header gains compact "Ready x/8" chip (red below
+  minOrderPoint).
+- Flow: gains the two sections from the old page - Capacity (WIP-by-classOfService vs
+  allocationTargetsPct, via replenishmentStatus()) and Recent replenishment events
+  (last 10 AuditLog recordId ^replenishment: with tableName:'kanban_tasks' index filter).
+- /kanban/replenish route: page + actions deleted; +page.server.ts stub 302-redirects to
+  /kanban/inventory preserving ?board=software.
+- KanbanNav: Queue | Inventory | Flow | Policy (Replenish tab removed).
+- Demote stays on Queue cards only (ready/waiting/blocked, permission-gated) - verified;
+  the replenish-page demote died with the page. Service layer, 4 agent endpoints, MCP
+  tools all untouched.
+npm run check: 11 errors - unchanged baseline (r2.ts, AskBimsWidget, assembly, parts).
