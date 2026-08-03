@@ -101,8 +101,11 @@ export async function transitionTask(opts: TransitionOptions) {
 
 	// Pull policy (KB2-02): consume the queue from the top-N only. Preserves
 	// real choice (skill/equipment match) inside a bounded window. Expedite
-	// bypasses the window by definition.
-	if (from === 'ready' && to === 'wip' && task.classOfService !== 'expedite') {
+	// bypasses the window by definition; so do supply autopilot cards (KB2-13:
+	// source standing-target/part-reorder) — supply work is always legitimate
+	// to pull, at any rank.
+	const isSupplyCard = task.source === 'standing-target' || task.source === 'part-reorder';
+	if (from === 'ready' && to === 'wip' && task.classOfService !== 'expedite' && !isSupplyCard) {
 		const policy = await getKanbanPolicy();
 		const window = policy?.pullWindow ?? 3;
 		if ((task.rank ?? 0) > window) {

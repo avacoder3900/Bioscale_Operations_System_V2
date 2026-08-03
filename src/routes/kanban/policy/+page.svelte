@@ -194,7 +194,9 @@
 		</div>
 		<p class="tron-text-muted mb-3 text-xs">
 			Standing work ("always have N on hand") is a supply signal, not a flow item. Below the reorder
-			point, exactly one build option is spawned into Tier 1 and flows through the normal commitment point.
+			point, exactly one supply card is spawned — auto-shaped and committed straight to the bottom of
+			the ready queue (KB2-13 autopilot), unless the target opts out of auto-commit. Parts reordering
+			needs no targets here: any active part at/below its minimum order qty spawns its own order card.
 		</p>
 		{#if data.targets.length === 0}
 			<p class="tron-text-muted text-xs">No standing targets yet.</p>
@@ -221,7 +223,7 @@
 								<td class="tron-text-primary py-2 pr-3 text-right">{t.target}</td>
 								<td class="tron-text-primary py-2 pr-3 text-right">{t.reorderPoint}</td>
 								<td class="tron-text-primary py-2 pr-3 text-right">{t.batchSize}</td>
-								<td class="tron-text-muted py-2 pr-3 text-xs">{t.spawnItemType}</td>
+								<td class="tron-text-muted py-2 pr-3 text-xs">{t.spawnItemType}{t.autoCommit ? ' · auto→ready' : ' · captured'}</td>
 								<td class="py-2 pr-3 text-xs font-bold" style="color: {t.active ? 'var(--color-tron-green, #10b981)' : 'var(--color-tron-text-secondary)'};">
 									{t.active ? 'yes' : 'no'}
 								</td>
@@ -325,6 +327,7 @@
 					<select id="st-kind" name="metricKind" class="tron-select w-full" value={t?.metricKind ?? 'cartridge_phase_count'}>
 						<option value="cartridge_phase_count">Cartridge phase count</option>
 						<option value="part_stock">Part stock</option>
+						<option value="reagent_stock">Reagent stock</option>
 						<option value="manual">Manual value</option>
 					</select>
 				</div>
@@ -340,7 +343,8 @@
 				<label for="st-params" class="tron-label">Metric params (JSON)</label>
 				<textarea id="st-params" name="metricParams" class="tron-input w-full font-mono text-xs" rows="3">{t?.metricParams ?? '{"statuses": []}'}</textarea>
 				<p class="tron-text-muted mt-1 text-[11px]">
-					cartridge_phase_count: {'{'}"statuses": [...], "skus": [...]{'}'} · part_stock: {'{'}"partId": "..."{'}'} · manual: {'{'}"value": 12{'}'}
+					cartridge_phase_count: {'{'}"statuses": [...], "skus": [...]{'}'} · part_stock: {'{'}"partId": "..."{'}'} ·
+					reagent_stock: {'{'}"catalogId": "...", "variantKey": "...", "measure": "count"{'}'} · manual: {'{'}"value": 12{'}'}
 				</p>
 			</div>
 			<div class="mb-4 grid grid-cols-3 gap-4">
@@ -348,12 +352,41 @@
 				<TronInput label="Reorder point" name="reorderPoint" type="number" value={t?.reorderPoint ?? ''} required />
 				<TronInput label="Batch size" name="batchSize" type="number" value={t?.batchSize ?? ''} required />
 			</div>
+			<div class="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+				<div>
+					<label for="st-spawn" class="tron-label">Spawned card type</label>
+					<select id="st-spawn" name="spawnItemType" class="tron-select w-full" value={t?.spawnItemType ?? 'deliverable'}>
+						<option value="deliverable">Deliverable</option>
+						<option value="chore">Chore</option>
+					</select>
+				</div>
+				<div>
+					<label for="st-size" class="tron-label">Spawned size class</label>
+					<select id="st-size" name="spawnSizeClass" class="tron-select w-full" value={t?.spawnSizeClass ?? 'short'}>
+						<option value="short">Short</option>
+						<option value="medium">Medium</option>
+						<option value="long">Long</option>
+					</select>
+				</div>
+			</div>
 			<div class="mb-4">
-				<label for="st-spawn" class="tron-label">Spawned option type</label>
-				<select id="st-spawn" name="spawnItemType" class="tron-select w-full" value={t?.spawnItemType ?? 'deliverable'}>
-					<option value="deliverable">Deliverable</option>
-					<option value="chore">Chore</option>
+				<label for="st-template" class="tron-label">Shape template (optional)</label>
+				<select id="st-template" name="templateId" class="tron-select w-full" value={t?.templateId ?? ''}>
+					<option value="">— none (auto-shaped) —</option>
+					{#each data.templates.filter((x: any) => x.active) as tpl (tpl.id)}
+						<option value={tpl.id}>{tpl.name}</option>
+					{/each}
 				</select>
+				<p class="tron-text-muted mt-1 text-[11px]">When set, the template's size/class/DoR shape the spawned card.</p>
+			</div>
+			<div class="mb-4">
+				<label class="tron-text-primary flex items-center gap-2 text-sm">
+					<input type="checkbox" name="autoCommit" checked={t ? t.autoCommit : true} />
+					Auto-commit spawned cards straight to ready (KB2-13 supply autopilot)
+				</label>
+				<p class="tron-text-muted mt-1 text-[11px]">
+					Unchecked = KB2-10 behavior: a captured option that goes through the normal commitment point.
+				</p>
 			</div>
 			<div class="mb-4">
 				<label for="st-notes" class="tron-label">Notes</label>

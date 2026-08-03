@@ -99,7 +99,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '2.12.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '2.13.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -940,12 +940,14 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'kanban_standing_status',
 		{ annotations: READ_ONLY,
 			description:
-				'Standing-work supply targets (e.g. "keep 40 filled cartridges on hand"): live actual-vs-target computed from BIMS ' +
-				'data, reorder-point signals, and any open build option per target. Pass spawn:true to also file one captured build ' +
-				'option for each target below its reorder point (idempotent — never duplicates).',
+				'Supply loops (KB2-13): live actual-vs-target for standing targets (e.g. "keep 40 filled cartridges on hand") PLUS ' +
+				'parts at/below their minimum order qty (partsReorder rows — no per-part targets needed). Pass spawn:true to also ' +
+				'spawn the supply cards for anything below its trigger (idempotent — never duplicates). Spawned cards are ' +
+				'auto-shaped and auto-committed straight to the bottom of the ready queue (exempt from ready cap, chore allocation, ' +
+				'and pull window) unless the target has autoCommit:false.',
 			inputSchema: z.object({
-				spawn: z.boolean().optional().describe('Also create build options for targets below reorder point.'),
-				actor: z.string().optional().describe('Username, recorded on spawned options.')
+				spawn: z.boolean().optional().describe('Also spawn supply cards for targets/parts below their trigger.'),
+				actor: z.string().optional().describe('Username recorded on spawned cards (defaults to system:supply).')
 			})
 		},
 		async ({ spawn, actor }) =>
@@ -959,15 +961,18 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		{ annotations: WRITE_TOOL,
 			description:
 				'Create or update a standing supply target. metric.kind: cartridge_phase_count (params.statuses[], optional ' +
-				'params.skus[]), part_stock (params.partId), or manual (params.value). Standing targets are supply signals, ' +
-				'not flow items — they never enter the queue themselves.',
+				'params.skus[]), part_stock (params.partId), reagent_stock (params.catalogId/variantKey/type, optional ' +
+				'params.statuses[] default ["active"], params.measure "count"|"volume"), or manual (params.value). Below the ' +
+				'reorder point the system spawns ONE supply card, auto-committed straight to ready (KB2-13) — set ' +
+				'autoCommit:false to instead file a captured option through the normal commitment point. templateId links a ' +
+				'KanbanTemplate whose shape (size/class/DoR) the spawned card uses.',
 			inputSchema: z.object({
 				actor: z.string().describe('Username (required — never guess).'),
 				targetId: z.string().optional().describe('Omit to create; provide to update.'),
 				name: z.string().optional(),
 				metric: z
 					.object({
-						kind: z.enum(['cartridge_phase_count', 'part_stock', 'manual']),
+						kind: z.enum(['cartridge_phase_count', 'part_stock', 'reagent_stock', 'manual']),
 						params: z.record(z.string(), z.unknown()).optional()
 					})
 					.optional(),
@@ -975,6 +980,9 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				reorderPoint: z.number().optional(),
 				batchSize: z.number().optional(),
 				spawnItemType: z.enum(['chore', 'deliverable']).optional(),
+				spawnSizeClass: z.enum(['short', 'medium', 'long']).optional().describe('Size class stamped on spawned cards (default short).'),
+				autoCommit: z.boolean().optional().describe('Default true: spawned cards land directly in ready. false = KB2-10 captured option.'),
+				templateId: z.string().optional().describe('Optional KanbanTemplate whose shape the spawned card uses.'),
 				active: z.boolean().optional(),
 				notes: z.string().optional()
 			})

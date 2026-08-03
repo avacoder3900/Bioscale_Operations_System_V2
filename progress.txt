@@ -6449,3 +6449,40 @@ npm run check: 11 errors — unchanged baseline.
 
 2026-08-03 — master — Queue page: horizontal single-lane board, capture removed, renamed Queue
 2026-08-03 — master — Queue page: min-order banner removed; supply panel hidden when no targets
+
+================================================================================
+2026-08-03 - master - KB2-13 supply loops: autopilot supply cards straight to ready (MCP v2.13.0)
+================================================================================
+Jacob's decisions of record (encoded verbatim in docs/prds/KB2-13-supply-loops.md):
+system-spawned supply/reorder work BYPASSES the commitment point - cards land directly
+in ready, auto-committed (scoped exception to KB2-02 human-only replenishment; human
+work still replenishes). Supply cards exempt from ready cap, chore allocation ceiling,
+AND the pull window (pullable at any rank); they join the bottom of the ready rank order.
+- standing.ts: spawned cards auto-shaped (spawnSizeClass default short, classOfService
+  chore-for-chores/standard-for-builds, dor.deliverable auto-written "{name} at or above
+  {target} (currently {actual}); verify: recount") then auto-committed via transitionTask
+  to ready (allowTierCrossing, actor system:supply, via system), ranked bottom +
+  renumberReady + replenishment stamp promotedBy system:supply. StandingTarget gains
+  autoCommit (default true - false restores exact KB2-10 captured-option behavior),
+  spawnSizeClass, templateId (linked KanbanTemplate's shape wins when set).
+- NEW partsReorderSweep(): no per-part targets - active parts with minimumOrderQty>0 and
+  inventoryCount<=minimumOrderQty spawn one "Order {qty} x {partNumber} {name}" chore
+  card (always auto-committed; sourceRef part-reorder:<partId>, idempotent while an
+  open card exists). Runs inside standingStatus({spawn:true}); standingStatus now
+  returns { targets, partsReorder }.
+- Event-driven: recordTransaction() fires checkSupplyForPart() (lazy import, fire-and-
+  forget, never throws into the caller) after any stock decrement - re-checks the
+  part-reorder rule + part_stock standing targets for that part immediately.
+- transition.ts: pull-window check skipped for source standing-target/part-reorder.
+- Queue page load is now a supply tick (spawn:true, try/caught); supply panel shows
+  standing rows + parts-at/below-min rows with links to open cards. Policy page target
+  CRUD gains reagent_stock kind, spawn size class, auto-commit checkbox, template picker.
+- Chemistry (decision 3): metric kind reagent_stock wired against the REAL research-v2
+  ReagentInventory collection (item docs, status active/depleted/expired/discarded;
+  params catalogId/variantKey/type/statuses/measure count|volume). A dedicated BIMS
+  chemical-inventory system still doesn't exist - extension contract documented in
+  standing.ts + PRD (one new computeActual case + enum + MCP schema when it lands).
+- Agent endpoint GET returns { targets, partsReorder }; POST accepts autoCommit/
+  spawnSizeClass/templateId. MCP kanban_standing_status + kanban_set_standing_target
+  updated; server version 2.12.0 -> 2.13.0.
+npm run check: 11 errors - unchanged baseline (r2.ts, AskBimsWidget, assembly, parts).

@@ -160,8 +160,12 @@
 		</div>
 	{/if}
 
-	<!-- Supply panel (KB2-10) — standing targets, read-only. Hidden entirely when no targets exist. -->
-	{#if data.standing.length > 0}
+	<!-- Supply panel (KB2-10/KB2-13) — standing targets + parts below minimum order qty.
+	     Below a reorder point the system spawns an auto-committed supply card straight to
+	     ready (Jacob's KB2-13 decision). Target CRUD lives on the policy page.
+	     Hidden entirely when there is nothing to show. -->
+	{#if data.standing.targets.length > 0 || data.standing.partsReorder.length > 0}
+	{@const supplySignals = data.standing.targets.filter((s: any) => s.belowReorderPoint).length + data.standing.partsReorder.length}
 	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
 		<button
 			type="button"
@@ -169,10 +173,10 @@
 			onclick={() => (supplyOpen = !supplyOpen)}
 		>
 			<span class="tron-text-primary text-sm font-bold">
-				Supply — standing targets
-				{#if data.standing.some((s: any) => s.belowReorderPoint)}
+				Supply — standing targets &amp; reorders
+				{#if supplySignals > 0}
 					<span class="ml-2 rounded-full px-2 py-0.5 text-[10px] font-bold" style="background: rgba(255,51,102,0.15); color: var(--color-tron-red);">
-						{data.standing.filter((s: any) => s.belowReorderPoint).length} below reorder point
+						{supplySignals} below reorder point
 					</span>
 				{/if}
 			</span>
@@ -183,7 +187,7 @@
 		{#if supplyOpen}
 			<div class="border-t border-[var(--color-tron-border)] px-4 py-3">
 				<div class="space-y-3">
-						{#each data.standing as s (s.targetId)}
+						{#each data.standing.targets as s (s.targetId)}
 							<div class="flex flex-wrap items-center gap-3 rounded px-2 py-1 {s.belowReorderPoint ? 'border border-[rgba(255,51,102,0.35)] bg-[rgba(255,51,102,0.06)]' : ''}">
 								<span class="tron-text-primary min-w-[180px] text-sm">{s.name}</span>
 								<div class="h-2 min-w-[120px] flex-1 overflow-hidden rounded-full bg-[var(--color-tron-bg-tertiary)]">
@@ -198,11 +202,28 @@
 								</span>
 								{#if s.openOptionId}
 									<a href="/kanban/task/{s.openOptionId}" class="text-xs hover:underline" style="color: var(--color-tron-cyan);">
-										open build option →
+										open supply card →
 									</a>
 								{/if}
 							</div>
 						{/each}
+						{#if data.standing.partsReorder.length > 0}
+							<p class="tron-text-muted pt-1 text-[10px] uppercase tracking-wide">Parts at/below minimum order qty</p>
+							{#each data.standing.partsReorder as p (p.partId)}
+								<div class="flex flex-wrap items-center gap-3 rounded border border-[rgba(255,51,102,0.35)] bg-[rgba(255,51,102,0.06)] px-2 py-1">
+									<span class="tron-text-primary min-w-[180px] text-sm">{p.partNumber} — {p.name ?? ''}</span>
+									<span class="text-xs font-bold" style="color: var(--color-tron-red);">
+										{p.inventoryCount} on hand
+										<span class="tron-text-muted">(min {p.minimumOrderQty})</span>
+									</span>
+									{#if p.openTaskId}
+										<a href="/kanban/task/{p.openTaskId}" class="text-xs hover:underline" style="color: var(--color-tron-cyan);">
+											open order card →
+										</a>
+									{/if}
+								</div>
+							{/each}
+						{/if}
 					</div>
 			</div>
 		{/if}

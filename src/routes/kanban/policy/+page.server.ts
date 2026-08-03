@@ -42,6 +42,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 					reorderPoint: t.reorderPoint,
 					batchSize: t.batchSize,
 					spawnItemType: t.spawnItemType ?? 'deliverable',
+					spawnSizeClass: t.spawnSizeClass ?? 'short',
+					autoCommit: t.autoCommit !== false,
+					templateId: t.templateId ?? '',
 					active: t.active !== false,
 					notes: t.notes ?? ''
 				}))
@@ -101,7 +104,7 @@ function parseTargetForm(fd: FormData) {
 	const name = fd.get('name')?.toString()?.trim();
 	if (!name) return { error: 'Name is required' };
 	const kind = fd.get('metricKind')?.toString();
-	if (!kind || !['cartridge_phase_count', 'part_stock', 'manual'].includes(kind)) {
+	if (!kind || !['cartridge_phase_count', 'part_stock', 'reagent_stock', 'manual'].includes(kind)) {
 		return { error: 'A valid metric kind is required' };
 	}
 	let params: unknown = {};
@@ -121,6 +124,8 @@ function parseTargetForm(fd: FormData) {
 	}
 	const spawnItemType = fd.get('spawnItemType')?.toString() === 'chore' ? 'chore' : 'deliverable';
 	const board = fd.get('board')?.toString() === 'software' ? 'software' : 'ops';
+	const spawnSizeClassRaw = fd.get('spawnSizeClass')?.toString();
+	const spawnSizeClass = spawnSizeClassRaw && ['short', 'medium', 'long'].includes(spawnSizeClassRaw) ? spawnSizeClassRaw : 'short';
 	return {
 		doc: {
 			name,
@@ -130,6 +135,10 @@ function parseTargetForm(fd: FormData) {
 			reorderPoint,
 			batchSize,
 			spawnItemType,
+			// KB2-13: auto-commit spawned cards straight to ready (checkbox; off = KB2-10 captured option)
+			autoCommit: fd.get('autoCommit') === 'on',
+			spawnSizeClass,
+			templateId: fd.get('templateId')?.toString() || null, // null (not undefined) so an edit can clear the link
 			notes: fd.get('notes')?.toString() || undefined
 		}
 	};

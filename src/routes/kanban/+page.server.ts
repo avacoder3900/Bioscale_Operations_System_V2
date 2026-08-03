@@ -56,6 +56,17 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const { readyCap, minOrderPoint } = boardPolicyOf(policy, board);
 	const pullWindow: number = policy?.pullWindow ?? 3;
 
+	// Supply loops (KB2-10/KB2-13) — the panel load IS a supply tick: anything
+	// below its reorder point (standing targets + below-min parts) spawns its
+	// auto-committed card here, before the task query, so it shows immediately.
+	// Target CRUD lives on the policy page. Never let a supply failure break the board.
+	let standing: Awaited<ReturnType<typeof standingStatus>> = { targets: [], partsReorder: [] };
+	try {
+		standing = await standingStatus({ spawn: true, actorUsername: 'system:supply' });
+	} catch (e) {
+		console.error('[kanban] supply tick failed:', e);
+	}
+
 	const weekAgo = new Date(Date.now() - 7 * DAY);
 	const tasks = (await KanbanTask.find({
 		board,
@@ -67,9 +78,6 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	})
 		.sort({ rank: 1 })
 		.lean()) as any[];
-
-	// Supply panel (KB2-10) — read-only here; CRUD lives on the policy page.
-	const standing = await standingStatus();
 
 	const capturedCount = await KanbanTask.countDocuments({
 		board,
