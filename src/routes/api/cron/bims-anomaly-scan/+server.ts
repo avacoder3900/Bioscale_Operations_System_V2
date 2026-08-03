@@ -5,7 +5,7 @@
  * the workday starts.
  *
  * Auth follows the same pattern as the other cron endpoints — a CRON_SECRET
- * Bearer header, a vercel-cron user-agent on GET, or the agent API key.
+ * Bearer header or the agent API key.
  */
 import { json } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
@@ -15,14 +15,10 @@ import { scanAndPersist } from '$lib/server/integrity-scan';
 import type { RequestHandler } from './$types';
 
 function authenticate(request: Request): void {
+	// CRON_SECRET Bearer (Vercel sends it automatically when the env var is set)
+	// or the agent API key. No user-agent fallback — that header is forgeable.
 	const authHeader = request.headers.get('authorization')?.replace('Bearer ', '');
 	if (env.CRON_SECRET && authHeader === env.CRON_SECRET) return;
-
-	if (request.method === 'GET') {
-		const ua = request.headers.get('user-agent') ?? '';
-		if (ua.startsWith('vercel-cron/')) return;
-	}
-
 	requireAgentApiKey(request);
 }
 

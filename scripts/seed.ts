@@ -22,7 +22,7 @@ const ALL_PERMISSIONS = [
 	'admin:full', 'admin:users',
 	'user:read', 'user:write',
 	'role:read', 'role:write',
-	'kanban:read', 'kanban:write', 'kanban:admin',
+	'kanban:read', 'kanban:write', 'kanban:replenish', 'kanban:admin',
 	'spu:read', 'spu:write', 'spu:admin',
 	'document:read', 'document:write', 'document:approve', 'document:train',
 	'inventory:read', 'inventory:write',
