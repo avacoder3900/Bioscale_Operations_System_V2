@@ -6590,3 +6590,33 @@ still uses it (no bims — intended), research users browsing BIMS, any forgotte
 hitting session endpoints without keys.
 
 npm run check: 11 errors — unchanged baseline.
+
+================================================================================
+2026-08-03 — feat/perm-04-prep — PERM-04 prep: dormant enforcement switch, admin gates installed, permission matrix tests
+================================================================================
+Stacked on feat/perm-03-shadow. Everything here is inert or behavior-neutral today.
+
+- route-policy.ts: shadowEvaluate() -> applyRoutePolicy() with the PERM-04 enforcement branch
+  built in, behind PERMISSIONS_ENFORCE env var (default off = shadow/log-only). When flipped:
+  unauthenticated -> redirect (pages) / 401 (API); no-bims or failed gate -> 403. Rollback =
+  set PERMISSIONS_ENFORCE=false, no deploy needed.
+- Admin gates installed at their action sites (PERM-04 §B). Zero behavior change today:
+  Operators never held manufacturing:write/admin, and Admins hold the gates (PERM-02
+  migration) plus the wildcard.
+    manufacturing:release — qa-qc recordResult (pass/fail release decision), scrapCartridge,
+      overturnScrap; cart-mfg/scrap removeWaxStoredCartridges + removeFromBackingLot
+    assay:lock — assays/[assayId] lock + unlock (was manufacturing:admin)
+    document:approve — already correctly installed (no change needed)
+    kanban:promote — DEFERRED: promotion/demotion is active KB2 territory; install when the
+      KB2 branches merge to avoid conflicts
+    sacred:correct — DEFERRED: no sacred-correction write sites exist yet (Sacred-tier repair
+      from audit-2026-07-29 is a prerequisite); gate goes in with that repair
+- NEW src/lib/server/permissions.test.ts — 9-case permission matrix (npm run test:unit, all
+  pass, 57 total): wildcard scoping, research-role filtering (incl. the zane dual-role case),
+  membership, hasAnyPermission consistency.
+- SECURITY.md: stale-model warning banner pointing at PERM-00 + what's already live (full
+  rewrite of the doc remains PERM-06).
+
+npm run check: 11 errors — unchanged baseline. npm run test:unit: 57/57 pass.
+Remaining before PERM-04 flip: merge stack to production trunk (Jacob), >=7 clean shadow days
+(report-shadow-denials.ts), KB2 merge, then set PERMISSIONS_ENFORCE=true.

@@ -49,9 +49,10 @@ export const actions: Actions = {
 	 * compatibility, but eligibility is now status-agnostic — any existing
 	 * cartridge can be checked out.
 	 */
+	// PERM-04 §B: scrap disposition is an admin gate (manufacturing:release).
 	removeWaxStoredCartridges: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'manufacturing:write');
+		requirePermission(locals.user, 'manufacturing:release');
 		await connectDB();
 
 		const data = await request.formData();
@@ -134,7 +135,7 @@ export const actions: Actions = {
 	 */
 	removeFromBackingLot: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
-		requirePermission(locals.user, 'manufacturing:write');
+		requirePermission(locals.user, 'manufacturing:release');
 		await connectDB();
 
 		const data = await request.formData();

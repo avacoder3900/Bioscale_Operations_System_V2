@@ -14,6 +14,8 @@
  * than in models/index.ts.
  */
 import mongoose from 'mongoose';
+import { error, redirect } from '@sveltejs/kit';
+import { env } from '$env/dynamic/private';
 import { connectDB } from '$lib/server/db/connection';
 import { hasPermission } from '$lib/server/permissions';
 
@@ -92,23 +94,39 @@ const PermissionShadowLog =
 	mongoose.model('PermissionShadowLog', shadowSchema);
 
 /**
- * Evaluate a request against the new model and record would-be denials.
- * NEVER throws and NEVER blocks — total failure of this function must not
- * affect the request (shadow mode's one hard requirement).
+ * Apply the new model to a request. Two modes, selected by PERMISSIONS_ENFORCE:
+ *
+ * - Shadow (default, PERM-03): would-be denials are logged and NOTHING is
+ *   blocked. The logging path can never throw — total failure of it must not
+ *   affect the request.
+ * - Enforce ('true', flipped in PERM-04 after ≥7 clean shadow days): denials
+ *   become real — redirect to /login (pages) / 401 (API) when unauthenticated,
+ *   403 otherwise. Set PERMISSIONS_ENFORCE=false in Vercel to roll back
+ *   instantly without a deploy.
  */
-export async function shadowEvaluate(opts: {
+export async function applyRoutePolicy(opts: {
 	user: MinimalUser;
 	request: Request;
 	url: URL;
 }): Promise<void> {
-	try {
-		const { user, request, url } = opts;
-		const method = request.method;
-		if (method === 'OPTIONS' || method === 'HEAD') return;
-		if (hasApiKeyMaterial(request, url)) return; // machine surface — PERM-05
+	const { user, request, url } = opts;
+	const method = request.method;
+	if (method === 'OPTIONS' || method === 'HEAD') return;
+	if (hasApiKeyMaterial(request, url)) return; // machine surface — PERM-05
 
-		const verdict = evaluateRoutePolicy(user, url.pathname);
-		if (verdict.allow) return;
+	const verdict = evaluateRoutePolicy(user, url.pathname);
+	if (verdict.allow) return;
+
+	if (env.PERMISSIONS_ENFORCE === 'true') {
+		if (verdict.reason === 'unauthenticated') {
+			if (url.pathname.startsWith('/api/')) throw error(401, 'Unauthorized');
+			throw redirect(302, '/login');
+		}
+		throw error(403, `Permission denied: ${verdict.reason}`);
+	}
+
+	// Shadow mode — log only, swallow every failure.
+	try {
 		// Anonymous requests to non-public pages are already redirected by the
 		// current hooks — only log them for /api/ paths, where today they reach
 		// the endpoint's own (possibly missing) check.
@@ -119,10 +137,10 @@ export async function shadowEvaluate(opts: {
 			_id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
 			path: url.pathname,
 			method,
-			username: opts.user?.username ?? null,
+			username: user?.username ?? null,
 			reason: verdict.reason
 		});
 	} catch (e) {
-		console.error('[PERM-SHADOW] evaluation error (ignored):', e instanceof Error ? e.message : e);
+		console.error('[PERM-SHADOW] logging error (ignored):', e instanceof Error ? e.message : e);
 	}
 }

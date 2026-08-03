@@ -1,5 +1,13 @@
 # SECURITY.md — Authentication, Authorization & Security Patterns
 
+> **⚠️ PERMISSIONS REWRITE IN PROGRESS (2026-08-03).** The authorization model described
+> below is being replaced — read **`docs/prds/PERM-00-permissions-rewrite-overview.md`**
+> BEFORE modifying any permission code. Already live: the permission registry is
+> `src/lib/server/permissions-registry.ts` (the lists below are stale); `admin:full` is a
+> wildcard scoped to `bims` membership; research-owned roles count for nothing in BIMS;
+> a shadow-mode deny-by-default evaluator runs in `hooks.server.ts`. The Session/auth
+> sections below remain accurate. This file gets rewritten in PERM-06.
+
 **This is a canonical document.** All agents and developers MUST read this before modifying any auth, permission, session, or user management code. AGENTS.md references this file.
 
 ---
