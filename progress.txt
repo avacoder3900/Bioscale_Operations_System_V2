@@ -6533,3 +6533,35 @@ PERM-01 implemented on this branch (hot fixes, no model change):
 npm run check: 11 errors — identical to pre-existing baseline (r2.ts, AskBimsWidget,
 assembly/parts svelte); none in touched files. Not yet merged to master; needs CRON_SECRET
 verified in Vercel first.
+
+================================================================================
+2026-08-03 — feat/perm-02-registry — PERM-02: permission registry + additive migration (APPLIED to Atlas)
+================================================================================
+Stacked on feat/perm-01-hot-fixes. Implements docs/prds/PERM-02.
+
+- NEW src/lib/server/permissions-registry.ts — pure-data single source of truth:
+  MEMBERSHIP (bims/research), 6 GATE perms, LEGACY groups (now including the previously
+  unassignable cv:write/cv:admin/inventory:retract), ALL_ASSIGNABLE, PROTECTED_ROLE_NAMES
+  (Research Admin/Researcher), canonical Admin/Operator role contents. Importable from both
+  $lib and scripts/ (no sveltekit imports).
+- permissions.ts: admin:full is now a SCOPED WILDCARD — satisfies any BIMS permission iff the
+  user also holds bims; never satisfies research/experiment:*/user:manage. Plus: permissions
+  contributed by research-owned roles are IGNORED in all BIMS checks (bimsPermissions filter).
+  This was forced by a live finding: zane holds Operator + Research Admin, and Research
+  Admin's admin:full would have combined with Operator's new bims to make him a wildcard
+  BIMS admin. It also strips the stale `admin` (Research Admin) user's standing BIMS admin
+  access — the R1 cross-app leak is now closed at the enforcement layer, not just planned.
+  hasAnyPermission routes through hasPermission (wildcard-consistent).
+- admin/roles: local ALL_PERMISSIONS deleted; groups from registry (membership + adminGate
+  groups shown first); setPermissions validates against registry (arbitrary strings rejected);
+  updateRole/deleteRole/setPermissions refuse to touch research-owned roles.
+- scripts/seed.ts: drifted local list deleted; Admin/Operator seeded from registry.
+- NEW scripts/migrate-perm-02-additive.ts (dry-run default, idempotent). APPLIED to Atlas
+  2026-08-03: Admin +[bims, kanban:promote, manufacturing:release, sacred:correct, assay:lock]
+  -> 53 perms, propagated to 8 users; Operator +[bims] -> 10 perms, propagated to 4 users.
+  Viewer + research roles untouched. Verified: all active admins show [bims, admin:full];
+  zane evaluates as Operator-only in BIMS.
+
+App behavior unchanged until PERM-03/04 (additive strings are inert to legacy checks; the
+wildcard only ADDS grants for admin:full+bims holders, who already held all legacy strings).
+npm run check: 11 errors — unchanged baseline.

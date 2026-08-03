@@ -1,32 +1,19 @@
 import { fail } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
+import {
+	ALL_ASSIGNABLE_PERMISSIONS,
+	ASSIGNABLE_PERMISSION_GROUPS,
+	PROTECTED_ROLE_NAMES
+} from '$lib/server/permissions-registry';
 import { connectDB, Role, User, AuditLog, generateId } from '$lib/server/db';
 import type { Actions, PageServerLoad } from './$types';
 
-// All available permissions grouped
-const ALL_PERMISSIONS = [
-	{ group: 'admin', permissions: ['admin:full', 'admin:users'] },
-	{ group: 'user', permissions: ['user:read', 'user:write'] },
-	{ group: 'role', permissions: ['role:read', 'role:write'] },
-	{ group: 'kanban', permissions: ['kanban:read', 'kanban:write', 'kanban:replenish', 'kanban:admin'] },
-	{ group: 'spu', permissions: ['spu:read', 'spu:write', 'spu:admin'] },
-	{ group: 'document', permissions: ['document:read', 'document:write', 'document:approve', 'document:train'] },
-	{ group: 'inventory', permissions: ['inventory:read', 'inventory:write'] },
-	{ group: 'cartridge', permissions: ['cartridge:read', 'cartridge:write'] },
-	{ group: 'cartridgeAdmin', permissions: ['cartridgeAdmin:read', 'cartridgeAdmin:write'] },
-	{ group: 'assay', permissions: ['assay:read', 'assay:write'] },
-	{ group: 'device', permissions: ['device:read', 'device:write'] },
-	{ group: 'testResult', permissions: ['testResult:read', 'testResult:write'] },
-	{ group: 'manufacturing', permissions: ['manufacturing:read', 'manufacturing:write', 'manufacturing:admin'] },
-	{ group: 'waxFilling', permissions: ['waxFilling:read', 'waxFilling:write'] },
-	{ group: 'reagentFilling', permissions: ['reagentFilling:read', 'reagentFilling:write'] },
-	{ group: 'workInstruction', permissions: ['workInstruction:read', 'workInstruction:write', 'workInstruction:approve'] },
-	{ group: 'documentRepo', permissions: ['documentRepo:read', 'documentRepo:write'] },
-	{ group: 'productionRun', permissions: ['productionRun:read', 'productionRun:write'] },
-	{ group: 'shipping', permissions: ['shipping:read', 'shipping:write'] },
-	{ group: 'customer', permissions: ['customer:read', 'customer:write'] },
-	{ group: 'equipment', permissions: ['equipment:read', 'equipment:write'] }
-];
+const ASSIGNABLE = new Set(ALL_ASSIGNABLE_PERMISSIONS);
+
+/** Research-v2 owns these roles (shared roles collection) — BIMS must not edit them. */
+function isProtectedRole(name: string | undefined | null): boolean {
+	return !!name && (PROTECTED_ROLE_NAMES as readonly string[]).includes(name);
+}
 
 export const load: PageServerLoad = async ({ locals, url }) => {
 	requirePermission(locals.user, 'role:read');
@@ -73,7 +60,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			description: r.description ?? null,
 			userCount: roleCountMap.get(r._id) ?? 0
 		})),
-		permissionGroups: ALL_PERMISSIONS.map((g) => ({
+		permissionGroups: ASSIGNABLE_PERMISSION_GROUPS.map((g) => ({
 			resource: g.group,
 			permissions: g.permissions.map((p) => ({
 				id: p,
@@ -110,6 +97,12 @@ export const actions: Actions = {
 		const description = form.get('description')?.toString().trim();
 		if (!roleId) return fail(400, { error: 'Role ID required' });
 
+		const existing = await Role.findById(roleId).lean();
+		if (!existing) return fail(404, { error: 'Role not found' });
+		if (isProtectedRole(existing.name)) {
+			return fail(403, { error: `"${existing.name}" is managed by the research app and cannot be edited here.` });
+		}
+
 		const updates: any = {};
 		if (name) updates.name = name;
 		if (description !== undefined) updates.description = description;
@@ -124,6 +117,12 @@ export const actions: Actions = {
 		const form = await request.formData();
 		const roleId = form.get('roleId')?.toString();
 		if (!roleId) return fail(400, { error: 'Role ID required' });
+
+		const existing = await Role.findById(roleId).lean();
+		if (!existing) return fail(404, { error: 'Role not found' });
+		if (isProtectedRole(existing.name)) {
+			return fail(403, { error: `"${existing.name}" is managed by the research app and cannot be deleted here.` });
+		}
 
 		await Role.deleteOne({ _id: roleId });
 		// Remove this role from all users
@@ -142,6 +141,15 @@ export const actions: Actions = {
 
 		const role = await Role.findById(roleId);
 		if (!role) return fail(400, { error: 'Role not found' });
+		if (isProtectedRole(role.name)) {
+			return fail(403, { error: `"${role.name}" is managed by the research app and cannot be edited here.` });
+		}
+
+		// Only registry-known strings may be persisted (closes the arbitrary-string hole).
+		const invalid = permissions.filter((p) => !ASSIGNABLE.has(p));
+		if (invalid.length) {
+			return fail(400, { error: `Unknown permission(s): ${invalid.join(', ')}` });
+		}
 
 		role.permissions = permissions;
 		await role.save();

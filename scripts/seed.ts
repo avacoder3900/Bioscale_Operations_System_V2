@@ -17,30 +17,13 @@ if (!MONGODB_URI) {
 	process.exit(1);
 }
 
-// All available permissions
-const ALL_PERMISSIONS = [
-	'admin:full', 'admin:users',
-	'user:read', 'user:write',
-	'role:read', 'role:write',
-	'kanban:read', 'kanban:write', 'kanban:replenish', 'kanban:admin',
-	'spu:read', 'spu:write', 'spu:admin',
-	'document:read', 'document:write', 'document:approve', 'document:train',
-	'inventory:read', 'inventory:write',
-	'cartridge:read', 'cartridge:write',
-	'cartridgeAdmin:read', 'cartridgeAdmin:write',
-	'assay:read', 'assay:write',
-	'device:read', 'device:write',
-	'testResult:read', 'testResult:write',
-	'manufacturing:read', 'manufacturing:write', 'manufacturing:admin',
-	'waxFilling:read', 'waxFilling:write',
-	'reagentFilling:read', 'reagentFilling:write',
-	'workInstruction:read', 'workInstruction:write', 'workInstruction:approve',
-	'documentRepo:read', 'documentRepo:write',
-	'productionRun:read', 'productionRun:write',
-	'shipping:read', 'shipping:write',
-	'customer:read', 'customer:write',
-	'equipment:read', 'equipment:write'
-];
+// PERM-02: role contents come from the single registry — no more drifted local lists.
+import {
+	ADMIN_ROLE_PERMISSIONS,
+	OPERATOR_ROLE_PERMISSIONS
+} from '../src/lib/server/permissions-registry';
+
+const ALL_PERMISSIONS = ADMIN_ROLE_PERMISSIONS;
 
 async function seed() {
 	console.log('Connecting to MongoDB...');
@@ -65,12 +48,7 @@ async function seed() {
 		_id: operatorRoleId,
 		name: 'Operator',
 		description: 'Manufacturing operator with read access',
-		permissions: [
-			'kanban:read', 'spu:read', 'manufacturing:read',
-			'waxFilling:read', 'waxFilling:write',
-			'reagentFilling:read', 'reagentFilling:write',
-			'cartridge:read', 'inventory:read'
-		],
+		permissions: OPERATOR_ROLE_PERMISSIONS,
 		createdAt: new Date()
 	};
 
