@@ -417,12 +417,11 @@
 				<TronInput label="Title template" name="titleTemplate" value={tpl?.titleTemplate ?? ''} required placeholder={'Build & validate SPU {n}'} />
 			</div>
 			<div class="mb-4">
-				<label for="wt-outcome" class="tron-label">DoR — outcome (pre-written from the SOP)</label>
-				<textarea id="wt-outcome" name="dorOutcome" class="tron-input w-full" rows="2" required>{tpl?.dorOutcome ?? ''}</textarea>
-			</div>
-			<div class="mb-4">
-				<label for="wt-ac" class="tron-label">DoR — acceptance criteria</label>
-				<textarea id="wt-ac" name="dorAcceptanceCriteria" class="tron-input w-full" rows="3" required>{tpl?.dorAcceptanceCriteria ?? ''}</textarea>
+				<label for="wt-deliverable" class="tron-label">DoR — deliverable (pre-written from the SOP)</label>
+				<textarea id="wt-deliverable" name="dorDeliverable" class="tron-input w-full" rows="3" required>{tpl?.dorDeliverable ?? ''}</textarea>
+				<p class="tron-text-muted mt-1 text-xs">
+					State what will exist or be true when this is done — and how you'd verify it. Outcome, not steps.
+				</p>
 			</div>
 			{#if templateBoard === 'software'}
 				<div class="mb-4">

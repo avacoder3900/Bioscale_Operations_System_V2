@@ -6420,3 +6420,29 @@ transaction and audit entry remain as immutable history). The record_physical_co
 capability itself is unchanged and live — it is exactly the "tell Claude in the web
 interface that physical inventory doesn't align and change it" flow, pending the
 connector re-add + new chat on the claude.ai side.
+
+================================================================================
+2026-08-03 — master — KB2-12 addendum: DoR collapsed to single deliverable field + spike explainer (MCP v2.12.0)
+================================================================================
+Approved by Jacob 2026-08-03: two DoR boxes (outcome + acceptance criteria) were one
+question asked twice. Collapsed everywhere into ONE field dor.deliverable — "state what
+will exist or be true when this is done, and how you'd verify it. Outcome, not steps."
+- Models: KanbanTask.dor + KanbanTemplate.dor become { deliverable, handoffBrief }
+  (template deliverable required). replenish.ts dorMissingFields now gates on
+  dor.deliverable (one check replaces the two old ones); sizeClass/classOfService/
+  fixed_date/handoffBrief/spike checks unchanged.
+- Services: processTask/reshapeTask accept dor.deliverable; captureFromTemplate carries
+  the template dor through untouched.
+- UI: Inventory process modal + policy template modal show a single "Deliverable"
+  textarea with the helper line; inventory updateDor action + agent PATCH + templates
+  endpoint + MCP schemas (kanban_process, kanban_update_task, kanban_set_template)
+  all speak dor.deliverable. MCP bumped 2.11.0 → 2.12.0 (schema change).
+- Spike explainer (Change 2): muted info block beside the Deliverable box in the Process
+  modal — can't write the deliverable? it isn't a deliverable yet; make it a spike
+  (question + timebox; "we still don't know" is a valid recorded answer). Same one-liner
+  appended to the kanban_process MCP description.
+- Migration: scripts/migrate-dor-deliverable.ts (dry-run/APPLY=1, idempotent) — run
+  against prod (db bioscale): 0 tasks + 0 templates carried dor.outcome/acceptanceCriteria
+  (407 tasks, none with DoR written yet; 0 templates), so nothing to rewrite — schema-only
+  change in practice, script kept for any stragglers.
+npm run check: 11 errors — unchanged baseline.

@@ -99,7 +99,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '2.11.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '2.12.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -698,8 +698,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				sourceRef: z.string().optional().describe('External link — software items: pr:<number>, branch:<name>, commit:<sha>.'),
 				dor: z
 					.object({
-						outcome: z.string().optional().describe('Outcome statement, not steps.'),
-						acceptanceCriteria: z.string().optional(),
+						deliverable: z.string().optional().describe("State what will exist or be true when this is done — and how you'd verify it. Outcome, not steps."),
 						handoffBrief: z.string().optional().describe('Software board: the coding-agent handoff brief.')
 					})
 					.optional()
@@ -738,7 +737,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'THE commitment point: promote Tier-1 options into the global ready queue, in the given order. ' +
 				'Only a human commits work — `actor` must be the username of the human you are working with, and they must hold ' +
 				'the kanban:replenish permission. NEVER guess or invent the actor; if you do not know who you are working with, ask. ' +
-				'Items must satisfy the Definition of Ready (outcome statement; software items also need a handoff brief) and the ' +
+				'Items must satisfy the Definition of Ready (deliverable statement; software items also need a handoff brief) and the ' +
 				'ready cap must have room — rejected items come back with exact reasons. One replenishment event id covers the batch (the decision record).',
 			inputSchema: z.object({
 				taskIds: z.array(z.string()).min(1).describe('Task ids to promote, in desired queue order.'),
@@ -792,12 +791,15 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			description:
 				'Process (triage) a captured option: set its size class and class of service — the once-per-item shaping decision, ' +
 				'made by the person processing (never the author or eventual assignee; this removes the inflation incentive). ' +
-				'Also the moment to write the Definition-of-Ready fields: dor.outcome must describe the OUTCOME (what is different ' +
-				'in the world when this is done), not the steps — step lists go stale; outcomes survive a change of approach. ' +
+				'Also the moment to write the Definition-of-Ready: dor.deliverable states what will exist or be true when this is ' +
+				"done — and how you'd verify it. Outcome, not steps — step lists go stale; outcomes survive a change of approach. " +
 				'fixed_date requires a real external dueDate. `actor` = the human doing the processing (never guess). ' +
 				'SIZING TEST — size class is a measurement bucket, never a time promise (SLEs are computed from history): ' +
 				'can you confidently pick a size? Yes → size it. No but the next milestone is nameable → split; size the milestone. ' +
-				'No milestone nameable → convert to a spike and timebox the question. Otherwise it is a project — keep it upstream.',
+				'No milestone nameable → convert to a spike and timebox the question. Otherwise it is a project — keep it upstream. ' +
+				"Can't write the deliverable? If you don't know enough to say what 'done' looks like, this isn't a deliverable yet — " +
+				"make it a spike: a timeboxed investigation with a question ('Can X work?') and a timebox (e.g. 2 days). A spike is " +
+				"done when the timebox ends — 'we still don't know' is a valid recorded answer.",
 			inputSchema: z.object({
 				taskId: z.string(),
 				actor: z.string().describe('Username of the human processing (required — never guess).'),
@@ -806,8 +808,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				dueDate: z.string().optional().describe('ISO date — required for fixed_date.'),
 				dor: z
 					.object({
-						outcome: z.string().optional().describe('Outcome statement, not steps.'),
-						acceptanceCriteria: z.string().optional(),
+						deliverable: z.string().optional().describe("State what will exist or be true when this is done — and how you'd verify it. Outcome, not steps."),
 						handoffBrief: z.string().optional().describe('Software board: the coding-agent handoff brief.')
 					})
 					.optional()
@@ -913,7 +914,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		{ annotations: WRITE_TOOL,
 			description:
 				'Create or update a workflow template (actor needs kanban:admin). Templates encode the SOP shape once: ' +
-				'title, size class, class of service, and a pre-written DoR (outcome + acceptance criteria). Spikes cannot be templated.',
+				'title, size class, class of service, and a pre-written DoR deliverable. Spikes cannot be templated.',
 			inputSchema: z.object({
 				actor: z.string().describe('Username with kanban:admin (required — never guess).'),
 				templateId: z.string().optional().describe('Omit to create; provide to update.'),
@@ -923,7 +924,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				sizeClass: z.enum(['short', 'medium', 'long']).optional(),
 				classOfService: z.enum(['standard', 'fixed_date', 'chore', 'expedite']).optional(),
 				titleTemplate: z.string().optional(),
-				dor: z.object({ outcome: z.string(), acceptanceCriteria: z.string(), handoffBrief: z.string().optional() }).optional(),
+				dor: z.object({ deliverable: z.string().describe("What will exist or be true when this is done — and how you'd verify it. Outcome, not steps."), handoffBrief: z.string().optional() }).optional(),
 				tags: z.array(z.string()).optional(),
 				defaultProjectId: z.string().optional(),
 				active: z.boolean().optional(),

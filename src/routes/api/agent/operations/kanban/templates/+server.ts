@@ -35,8 +35,8 @@ export const POST: RequestHandler = async ({ request }) => {
 		doc = await KanbanTemplate.findByIdAndUpdate(templateId, { $set }, { new: true }).lean();
 		if (!doc) return json({ success: false, error: 'Template not found' }, { status: 404 });
 	} else {
-		if (!$set.name || !$set.titleTemplate || !$set.sizeClass || !($set as any).dor?.outcome || !($set as any).dor?.acceptanceCriteria) {
-			return json({ success: false, error: 'name, titleTemplate, sizeClass, dor.outcome, dor.acceptanceCriteria are required' }, { status: 400 });
+		if (!$set.name || !$set.titleTemplate || !$set.sizeClass || !($set as any).dor?.deliverable) {
+			return json({ success: false, error: 'name, titleTemplate, sizeClass, dor.deliverable are required' }, { status: 400 });
 		}
 		doc = (await KanbanTemplate.create({ _id: generateId(), ...$set, createdBy: user.username })).toObject();
 	}

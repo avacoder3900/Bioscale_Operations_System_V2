@@ -89,8 +89,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					declineReason: t.declineReason ?? null,
 					spawnedFrom: t.spawnedFrom ?? null,
 					dor: {
-						outcome: t.dor?.outcome ?? '',
-						acceptanceCriteria: t.dor?.acceptanceCriteria ?? '',
+						deliverable: t.dor?.deliverable ?? '',
 						handoffBrief: t.dor?.handoffBrief ?? ''
 					},
 					spike: t.spike?.question ? { question: t.spike.question, outcome: t.spike.outcome ?? null } : null,
@@ -166,8 +165,7 @@ export const actions: Actions = {
 				classOfService: classOfService as KanbanClassOfService,
 				dueDate: dueDateRaw ? new Date(dueDateRaw) : undefined,
 				dor: {
-					outcome: fd.get('outcome')?.toString() || undefined,
-					acceptanceCriteria: fd.get('acceptanceCriteria')?.toString() || undefined,
+					deliverable: fd.get('deliverable')?.toString() || undefined,
 					handoffBrief: fd.get('handoffBrief')?.toString() || undefined
 				}
 			});
@@ -205,8 +203,7 @@ export const actions: Actions = {
 				classOfService: classOfService ? (classOfService as KanbanClassOfService) : undefined,
 				dueDate: dueDateRaw ? new Date(dueDateRaw) : undefined,
 				dor: {
-					outcome: fd.get('outcome')?.toString(),
-					acceptanceCriteria: fd.get('acceptanceCriteria')?.toString(),
+					deliverable: fd.get('deliverable')?.toString(),
 					handoffBrief: fd.get('handoffBrief')?.toString()
 				}
 			});
@@ -356,15 +353,14 @@ export const actions: Actions = {
 		if (!task) return fail(404, { error: 'Task not found' });
 
 		const dor = {
-			outcome: fd.get('outcome')?.toString() ?? '',
-			acceptanceCriteria: fd.get('acceptanceCriteria')?.toString() ?? '',
+			deliverable: fd.get('deliverable')?.toString() ?? '',
 			handoffBrief: fd.get('handoffBrief')?.toString() ?? ''
 		};
 		const now = new Date();
 		await KanbanTask.updateOne(
 			{ _id: taskId },
 			{
-				$set: { 'dor.outcome': dor.outcome, 'dor.acceptanceCriteria': dor.acceptanceCriteria, 'dor.handoffBrief': dor.handoffBrief },
+				$set: { 'dor.deliverable': dor.deliverable, 'dor.handoffBrief': dor.handoffBrief },
 				$push: {
 					activityLog: {
 						_id: generateId(),

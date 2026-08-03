@@ -63,7 +63,7 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 		changedFields.push('sourceRef');
 	}
 	if (dor !== undefined && dor !== null && typeof dor === 'object') {
-		for (const k of ['outcome', 'acceptanceCriteria', 'handoffBrief'] as const) {
+		for (const k of ['deliverable', 'handoffBrief'] as const) {
 			if (dor[k] !== undefined) {
 				$set[`dor.${k}`] = dor[k];
 				changedFields.push(`dor.${k}`);

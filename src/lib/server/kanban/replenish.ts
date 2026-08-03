@@ -53,8 +53,7 @@ export async function requireReplenisher(username: string | undefined | null): P
  */
 export function dorMissingFields(task: any): string[] {
 	const missing: string[] = [];
-	if (!task.dor?.outcome?.trim()) missing.push('dor.outcome (outcome statement — what is different when this is done, not the steps)');
-	if (!task.dor?.acceptanceCriteria?.trim()) missing.push('dor.acceptanceCriteria');
+	if (!task.dor?.deliverable?.trim()) missing.push("dor.deliverable (state what will exist/be true when this is done, and how you'd verify it)");
 	if (!task.sizeClass) missing.push('sizeClass (set at processing)');
 	if (!task.classOfService) missing.push('classOfService (set at processing)');
 	if (task.classOfService === 'fixed_date' && !task.dueDate) missing.push('dueDate (fixed_date items need a real external date)');

@@ -51,10 +51,11 @@ const kanbanTaskSchema = new Schema({
 	waitingUntil: Date,
 	blockedReason: String,
 	declineReason: String,
-	// Definition of Ready (KB2-03; handoffBrief is the software-board coding-agent brief, KB2-08)
+	// Definition of Ready (KB2-03/KB2-12; handoffBrief is the software-board coding-agent brief, KB2-08).
+	// deliverable = what will exist/be true when this is done + how you'd verify it (one field,
+	// collapsed from the old outcome + acceptanceCriteria pair — KB2-12 addendum 2026-08-03).
 	dor: {
-		outcome: String,
-		acceptanceCriteria: String,
+		deliverable: String,
 		handoffBrief: String
 	},
 	// Spike fields (KB2-07): question required at creation, outcome at close

@@ -330,12 +330,20 @@
 			{/if}
 
 			<div class="mb-4">
-				<label for="proc-outcome" class="tron-label">Outcome — what is different when this is done (DoR)</label>
-				<textarea id="proc-outcome" name="outcome" class="tron-input w-full" rows="2">{modal.task.dor.outcome}</textarea>
-			</div>
-			<div class="mb-4">
-				<label for="proc-ac" class="tron-label">Acceptance criteria (DoR)</label>
-				<textarea id="proc-ac" name="acceptanceCriteria" class="tron-input w-full" rows="2">{modal.task.dor.acceptanceCriteria}</textarea>
+				<label for="proc-deliverable" class="tron-label">Deliverable (DoR)</label>
+				<textarea id="proc-deliverable" name="deliverable" class="tron-input w-full" rows="3">{modal.task.dor.deliverable}</textarea>
+				<p class="tron-text-muted mt-1 text-xs">
+					State what will exist or be true when this is done — and how you'd verify it. Outcome, not steps.
+				</p>
+				<!-- KB2-12 addendum: spike explainer — when the deliverable can't be written -->
+				<div class="mt-2 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)] px-3 py-2">
+					<p class="tron-text-muted text-xs">
+						<span class="tron-text-primary font-bold">Can't write the deliverable?</span>
+						If you don't know enough to say what 'done' looks like, this isn't a deliverable yet — make it a
+						spike: a timeboxed investigation with a question ('Can X work?') and a timebox (e.g. 2 days). A
+						spike is done when the timebox ends — 'we still don't know' is a valid recorded answer.
+					</p>
+				</div>
 			</div>
 			{#if data.board === 'software'}
 				<div class="mb-4">

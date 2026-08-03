@@ -31,7 +31,7 @@ export async function processTask(opts: {
 	sizeClass: KanbanSizeClass;
 	classOfService: KanbanClassOfService;
 	dueDate?: Date; // required when classOfService === 'fixed_date'
-	dor?: { outcome?: string; acceptanceCriteria?: string; handoffBrief?: string };
+	dor?: { deliverable?: string; handoffBrief?: string };
 }) {
 	await connectDB();
 	const task: any = await KanbanTask.findById(opts.taskId).lean();
@@ -48,8 +48,7 @@ export async function processTask(opts: {
 		classOfService: opts.classOfService
 	};
 	if (opts.dueDate) $set.dueDate = opts.dueDate;
-	if (opts.dor?.outcome !== undefined) $set['dor.outcome'] = opts.dor.outcome;
-	if (opts.dor?.acceptanceCriteria !== undefined) $set['dor.acceptanceCriteria'] = opts.dor.acceptanceCriteria;
+	if (opts.dor?.deliverable !== undefined) $set['dor.deliverable'] = opts.dor.deliverable;
 	if (opts.dor?.handoffBrief !== undefined) $set['dor.handoffBrief'] = opts.dor.handoffBrief;
 	await KanbanTask.updateOne({ _id: opts.taskId }, { $set });
 
@@ -73,7 +72,7 @@ export async function reshapeTask(opts: {
 	sizeClass?: KanbanSizeClass;
 	classOfService?: KanbanClassOfService;
 	dueDate?: Date;
-	dor?: { outcome?: string; acceptanceCriteria?: string; handoffBrief?: string };
+	dor?: { deliverable?: string; handoffBrief?: string };
 }) {
 	await connectDB();
 	const task: any = await KanbanTask.findById(opts.taskId).lean();
@@ -85,8 +84,7 @@ export async function reshapeTask(opts: {
 	if (opts.sizeClass) $set.sizeClass = opts.sizeClass;
 	if (opts.classOfService) $set.classOfService = opts.classOfService;
 	if (opts.dueDate) $set.dueDate = opts.dueDate;
-	if (opts.dor?.outcome !== undefined) $set['dor.outcome'] = opts.dor.outcome;
-	if (opts.dor?.acceptanceCriteria !== undefined) $set['dor.acceptanceCriteria'] = opts.dor.acceptanceCriteria;
+	if (opts.dor?.deliverable !== undefined) $set['dor.deliverable'] = opts.dor.deliverable;
 	if (opts.dor?.handoffBrief !== undefined) $set['dor.handoffBrief'] = opts.dor.handoffBrief;
 	if (($set.classOfService ?? task.classOfService) === 'fixed_date' && !($set.dueDate ?? task.dueDate)) {
 		throw new TransitionError('REASON_REQUIRED', "classOfService 'fixed_date' requires a real external dueDate.");

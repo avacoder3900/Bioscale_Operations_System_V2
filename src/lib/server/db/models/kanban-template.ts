@@ -17,9 +17,10 @@ const kanbanTemplateSchema = new Schema(
 		sizeClass: { type: String, enum: ['short', 'medium', 'long'], required: true },
 		classOfService: { type: String, enum: ['standard', 'fixed_date', 'chore', 'expedite'], default: 'standard' },
 		titleTemplate: { type: String, required: true },
+		// deliverable = what will exist/be true when done + how you'd verify it
+		// (single field, collapsed from outcome + acceptanceCriteria — KB2-12 addendum).
 		dor: {
-			outcome: { type: String, required: true },
-			acceptanceCriteria: { type: String, required: true },
+			deliverable: { type: String, required: true },
 			handoffBrief: String
 		},
 		tags: [String],

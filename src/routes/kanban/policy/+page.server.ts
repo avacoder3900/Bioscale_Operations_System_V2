@@ -57,8 +57,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 					sizeClass: t.sizeClass,
 					classOfService: t.classOfService ?? 'standard',
 					titleTemplate: t.titleTemplate,
-					dorOutcome: t.dor?.outcome ?? '',
-					dorAcceptanceCriteria: t.dor?.acceptanceCriteria ?? '',
+					dorDeliverable: t.dor?.deliverable ?? '',
 					dorHandoffBrief: t.dor?.handoffBrief ?? '',
 					tags: (t.tags ?? []).join(', '),
 					defaultProjectId: t.defaultProjectId ?? '',
@@ -151,10 +150,9 @@ function parseTemplateForm(fd: FormData) {
 	if (!classOfService || !(CLASSES_OF_SERVICE as readonly string[]).includes(classOfService)) {
 		return { error: 'A valid class of service is required' };
 	}
-	const outcome = fd.get('dorOutcome')?.toString()?.trim();
-	const acceptanceCriteria = fd.get('dorAcceptanceCriteria')?.toString()?.trim();
-	if (!outcome || !acceptanceCriteria) {
-		return { error: 'DoR outcome and acceptance criteria are required — a template captures the SOP shape, DoR-complete' };
+	const deliverable = fd.get('dorDeliverable')?.toString()?.trim();
+	if (!deliverable) {
+		return { error: 'DoR deliverable is required — a template captures the SOP shape, DoR-complete' };
 	}
 	const board = fd.get('board')?.toString() === 'software' ? 'software' : 'ops';
 	const tags = (fd.get('tags')?.toString() ?? '')
@@ -170,8 +168,7 @@ function parseTemplateForm(fd: FormData) {
 			classOfService,
 			titleTemplate,
 			dor: {
-				outcome,
-				acceptanceCriteria,
+				deliverable,
 				handoffBrief: board === 'software' ? fd.get('dorHandoffBrief')?.toString() || undefined : undefined
 			},
 			tags,
