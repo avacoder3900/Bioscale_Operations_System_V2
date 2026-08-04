@@ -6604,3 +6604,11 @@ Pi: the CameraStatus interface mirrors robot-arm/src/server/cameras.py CameraWor
 .status() as read, but the field mapping and the rendered tab strip are unproven until the
 page is opened with the arm up. On mismatch the panel renders its error path rather than
 breaking.
+
+Deployment: preview - https://bioscale-operations-system-mongodb-git-feat-ro-4b5a61-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-lsjkmik16-brevitest.vercel.app)
+Source: branch feat/robot-arm-page-consolidation @ commit b4925d70
+Retrieve this exact code: git checkout feat/robot-arm-page-consolidation at commit b4925d70
+What this deployment is for: review ARM-02 - the four arm tabs under one Robot Arm page,
+and the arm camera panel that stays mounted across tab switches. Needs opening with the
+arm Pi reachable; the camera field mapping is unverified against a live device.
