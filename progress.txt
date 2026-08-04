@@ -6612,3 +6612,33 @@ Retrieve this exact code: git checkout feat/robot-arm-page-consolidation at comm
 What this deployment is for: review ARM-02 - the four arm tabs under one Robot Arm page,
 and the arm camera panel that stays mounted across tab switches. Needs opening with the
 arm Pi reachable; the camera field mapping is unverified against a live device.
+
+================================================================================
+2026-08-04 - feat/robot-arm-page-consolidation - fix 500 on all four Robot Arm tabs
+================================================================================
+Every Robot Arm tab returned 500 on a full page load. Diagnosis came from the Vercel
+runtime log, not from inference: "TypeError: cameras.find is not a function" thrown from
+RobotArmCameraPanel during SSR of the arm +layout.svelte.
+
+Root cause: robot-arm/src/server/app.py:857-860 returns an envelope, {"cameras": [...]},
+but robot-arm-client.ts:483 declared it as robotArmFetch<CameraStatus[]>. The generic on
+robotArmFetch is an unchecked cast with no runtime validation, so the wrong shape was
+invisible to `npm run check` - the type said array, the wire said object. The panel then
+called cameras.find(...) on an object.
+
+Why it took down the whole page rather than one panel: the camera panel is rendered in the
++layout, so an SSR throw inside it fails every child route. The prior entry's claim that a
+field mismatch would "render its error path rather than breaking" was wrong - that guard
+only covered the fetch-rejected path (cameras -> []), never a fetch that succeeded with an
+unexpected shape. The /__data.json requests returned 200 throughout; only the HTML render
+500'd, which is the signature of a component-SSR fault rather than a load fault.
+
+Fix, two layers:
+  - robot-arm-client.ts listCameras() now unwraps the envelope and returns
+    Array.isArray(body?.cameras) ? body.cameras : [] - correct shape at the boundary.
+  - +layout.server.ts additionally requires Array.isArray() before passing cameras
+    through, so future drift in the Pi's response degrades to the empty/error state
+    instead of 500ing all four tabs.
+
+`npm run check`: 11 errors / 426 warnings / 91 files-with-problems - byte-identical to the
+baseline recorded in the entry above; zero errors in touched files.

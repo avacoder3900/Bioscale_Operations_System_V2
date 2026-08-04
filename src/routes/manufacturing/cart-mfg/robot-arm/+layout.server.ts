@@ -50,8 +50,13 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 				: 'Unreachable'
 			: null;
 
+	// Belt-and-braces: this load feeds a panel rendered in the *layout*, so any
+	// non-array here 500s all four arm tabs at once rather than degrading to a
+	// single broken panel. Never hand the panel something it can't .find() on.
 	const cameras: CameraStatus[] =
-		camerasResult.status === 'fulfilled' ? camerasResult.value : [];
+		camerasResult.status === 'fulfilled' && Array.isArray(camerasResult.value)
+			? camerasResult.value
+			: [];
 
 	const camerasError =
 		camerasResult.status === 'rejected'

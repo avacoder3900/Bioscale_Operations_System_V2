@@ -480,7 +480,17 @@ export const robotArm = {
 	//
 	// Short timeout on purpose: this runs in a layout load that renders on
 	// all four arm tabs, so it must never be the thing that stalls a page.
-	listCameras: () => robotArmFetch<CameraStatus[]>('/cameras', { timeoutMs: 3000 }),
+	// app.py:857-860 returns an *envelope* — `{"cameras": [...]}` — not a bare
+	// array. Unwrap it here so callers get the array their types promise: the
+	// generic on robotArmFetch is an unchecked cast, so getting this wrong is
+	// invisible to `npm run check` and only shows up as a render-time
+	// "cameras.find is not a function" 500.
+	listCameras: async (): Promise<CameraStatus[]> => {
+		const body = await robotArmFetch<{ cameras?: CameraStatus[] }>('/cameras', {
+			timeoutMs: 3000
+		});
+		return Array.isArray(body?.cameras) ? body.cameras : [];
+	},
 
 	// One JPEG, whatever the worker's latest frame is. The Pi answers from a
 	// slot rather than waiting on the camera, so this returns fast or not at
