@@ -6558,3 +6558,49 @@ replenishment event - all server-side in replenish.ts) is UNCHANGED.
   the replenish-page demote died with the page. Service layer, 4 agent endpoints, MCP
   tools all untouched.
 npm run check: 11 errors - unchanged baseline (r2.ts, AskBimsWidget, assembly, parts).
+
+================================================================================
+2026-08-04 - feat/robot-arm-page-consolidation - ARM-02 arm page consolidation + live arm camera
+================================================================================
+PRD docs/prds/ARM-02-arm-page-consolidation-and-camera.md. Two asks: (1) Jog / Runs /
+Calibrate stop being siblings on the Cart Mfg nav and become tabs inside the Robot Arm
+page; (2) the camera newly mounted on the arm Pi becomes usable in that same window, so
+the arm can be driven and watched at once (incl. during leader-follower).
+- New src/routes/manufacturing/cart-mfg/robot-arm/+layout.svelte hosts the tab strip
+  (Control | Jog | Calibrate | Runs) + +layout.server.ts loads camera status. Because the
+  panel is mounted in the LAYOUT, one component instance survives tab navigation - the
+  feed does not restart when the operator switches tabs. Cart Mfg +layout.svelte drops the
+  three now-nested nav entries.
+- New src/lib/components/RobotArmCameraPanel.svelte: camera picker, fps 1/5/10, size
+  S/M/L, pause, collapse, fullscreen, snapshot download; prefs persisted to localStorage
+  under bims.armCamera.v1.
+- Transport is snapshot POLLING through a same-origin proxy
+  (src/routes/api/robot-arm/cameras/[name]/snapshot/+server.ts), NOT the Pi's MJPEG
+  stream. Two reasons: the browser's per-host connection cap means a hung MJPEG socket
+  starves the rest of the page, and the proxy keeps ROBOT_ARM_API_KEY server-side instead
+  of shipping it to the client. New robotArmFetchBytes() in robot-arm-client.ts is kept
+  separate from robotArmFetch() because the latter JSON.parses every body and would
+  corrupt a JPEG.
+- Frames preload into a detached Image before swap-in, so a slow/failed frame leaves the
+  previous frame up rather than flashing an empty box.
+
+Three silent-failure bugs found and fixed during review, all of the same shape - the UI
+would have looked fine while lying:
+- localStorage restore ran in an $effect tracking `cameras`, which changes identity on
+  every layout invalidation. A background data refresh would have yanked the operator's
+  camera selection back to the saved one mid-use. Now guarded to restore once.
+- `selected` was seeded once from cameras[0]. If the list was empty at first paint (Pi
+  unreachable, or populated by a later invalidate) the panel stayed blank FOREVER with
+  cameras sitting in the dropdown. Replaced with a reactive reconcile effect that also
+  covers a camera disappearing out from under the operator.
+- A deliberately paused feed was about to show the amber "stale" dot, training the
+  operator to ignore the one indicator that means something. Paused vs stale are now
+  visually distinct and a frozen frame is always labelled.
+
+npm run check: 11 errors - identical to the documented baseline (r2.ts, AskBimsWidget,
+assembly, parts); zero in touched files. Warnings 427->426 and files-with-problems 92->91,
+i.e. the only delta is the one warning this branch removed. NOT verified against a live
+Pi: the CameraStatus interface mirrors robot-arm/src/server/cameras.py CameraWorker
+.status() as read, but the field mapping and the rendered tab strip are unproven until the
+page is opened with the arm up. On mismatch the panel renders its error path rather than
+breaking.
