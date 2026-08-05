@@ -6646,3 +6646,32 @@ Retrieve this exact code: git checkout feat/particle-auto-create-spu at commit 3
 What this deployment is for: verifying Particle sync/link auto-creates draft SPUs for
   unmatched BT-M01 devices (0241/0242/0253/0255) and surfaces created[] + errors[] on
   the Particle settings page.
+
+--------------------------------------------------------------------------------
+2026-08-05 - PRODUCTION DATA CORRECTION - SPU BT-M01-0000-0255
+--------------------------------------------------------------------------------
+0255 was created manually in prod ahead of this feature deploying, by an agent script
+that built the document by CLONING an existing draft SPU as a field template so it would
+pick up the schema defaults. That was the wrong approach: it also copied
+BT-M01-0000-0246's entire `validation` block, so a never-assembled unit reported
+magnetometer/thermocouple/spectrophotometer all "passed", carrying 0246's sessionIds,
+rawData and cartridge reference.
+
+This became an active misread rather than cosmetic noise: a real magnetometer run on
+0255 FAILED (11 of 15 channels below the 3900-4500 Z range, session 9RLuZTzJ5mv_OKgNNcFJC,
+test ran 15:40:38, recorded 17:41:31). validation/magnetometer/+page.server.ts:111 writes
+the SPU rollup ONLY when a run passes, so the failed run left the inherited "passed" block
+untouched and BIMS displayed a failed unit as passed.
+
+Corrected: the rollup was rebuilt strictly from 0255's own validation_sessions (note
+`type` in that collection carries BOTH short and long forms - 'mag'/'magnetometer',
+'thermo'/'thermocouple' - so any consumer must alias them). Result: magnetometer failed
+with its own failureReasons, thermocouple/lux/spectrophotometer pending, overall failed,
+qcStatus failed. Also added the `barcode` and creation `statusTransitions` entry the
+shipped auto-create path writes. AuditLog UPDATE row written with the bad block preserved
+in oldData and the reason recorded.
+
+The shipped feature does NOT have this defect - linkDevicesToSpus() calls Spu.create()
+with explicit fields only, so Mongoose applies clean schema defaults and validation comes
+out pending. The cloning existed solely in the one-off manual script, which was only
+needed because the feature had not deployed yet. No other SPU was created this way.
