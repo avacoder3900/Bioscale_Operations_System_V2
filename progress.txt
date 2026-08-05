@@ -6881,3 +6881,31 @@ would lock Operators (not Admins — they have the wildcard) out of real work.
 Tests: new machine-actor.test.ts (6 cases: every gated action refused, ordinary actions
 allowed, both commitment directions, message content). npm run test:unit 63/63 pass.
 npm run check: 11 errors — unchanged baseline.
+
+================================================================================
+2026-08-05 — feat/perm-05-machine — Pre-merge impact audit: one real regression found and fixed
+================================================================================
+Before recommending the merge, computed the actual per-user access diff (old flat matching
+vs new research-filtered + scoped-wildcard logic) against live Atlas data rather than
+reasoning about it. NEW scripts/diag-perm-merge-impact.ts (read-only, re-runnable).
+
+Found: zane (Operator + Research Admin) would have LOST cartridge:write, assay:read,
+assay:write. Those had been reaching him accidentally through the RESEARCH app's role, which
+BIMS now ignores. None of them is an admin gate, so under the target model an Operator holds
+them by right — added them to the Operator role and re-applied the migration (13 perms now,
+propagated to 4 users). Interim window is now regression-free instead of silently removing
+access someone was using.
+
+Remaining intentional losses after the fix:
+- zane loses admin:full (had it only via Research Admin). He is an Operator, not a BIMS
+  admin. Consequence to be aware of: he loses admin-level equipment controls (temp-probe
+  thresholds/mapping, fridge-oven + deck-tray admin actions). If he genuinely needs those,
+  make him an Admin deliberately rather than restoring the accident.
+- `admin` (Research Admin, last login 2026-03-25) loses all BIMS access — this is the
+  cross-app leak closure. Research-v2 is unaffected: it has its own permissions.ts and reads
+  the same role doc, which we never modified.
+Admins gain inventory:retract, cv:write, cv:admin (previously enforced in code but
+unassignable — the CV station "restart agent" control was dead for everyone; now it works).
+
+Verified: npm run test:unit 63/63; tsc has exactly 1 error, the pre-existing r2.ts Buffer
+overload (untouched); svelte-check 11 = baseline.

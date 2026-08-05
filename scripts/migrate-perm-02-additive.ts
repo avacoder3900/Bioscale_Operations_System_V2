@@ -23,7 +23,8 @@ import { dirname, resolve } from 'path';
 import {
 	GATE_PERMISSIONS,
 	PROTECTED_ROLE_NAMES,
-	DEPRECATED_PERMISSIONS
+	DEPRECATED_PERMISSIONS,
+	OPERATOR_ROLE_PERMISSIONS
 } from '../src/lib/server/permissions-registry';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -33,7 +34,7 @@ const APPLY = process.argv.includes('--apply');
 
 const ADDITIONS: Record<string, string[]> = {
 	Admin: ['bims', ...GATE_PERMISSIONS],
-	Operator: ['bims']
+	Operator: OPERATOR_ROLE_PERMISSIONS
 };
 
 async function main() {

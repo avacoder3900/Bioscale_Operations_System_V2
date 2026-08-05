@@ -105,5 +105,12 @@ export const OPERATOR_ROLE_PERMISSIONS: string[] = [
 	'kanban:read', 'spu:read', 'manufacturing:read',
 	'waxFilling:read', 'waxFilling:write',
 	'reagentFilling:read', 'reagentFilling:write',
-	'cartridge:read', 'inventory:read'
+	'cartridge:read', 'inventory:read',
+	// Reached the one dual-role operator (zane) accidentally, via the research
+	// app's role, until BIMS stopped counting research-owned roles (PERM-02).
+	// None of these is an admin gate, so under the target model (`bims` = every
+	// non-admin action) an Operator holds them by right — granting them here
+	// keeps the interim window regression-free instead of quietly removing
+	// access someone was using. Absorbed into plain `bims` at PERM-06.
+	'cartridge:write', 'assay:read', 'assay:write'
 ];
