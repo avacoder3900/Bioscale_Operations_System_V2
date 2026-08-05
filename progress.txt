@@ -6696,3 +6696,50 @@ the PRD promised was never implemented, so nothing enforces this today either wa
 
 `npm run check`: 11 errors / 426 warnings / 91 files-with-problems - identical to
 the baseline above; zero errors in touched files.
+
+================================================================================
+2026-08-05 - feat/robot-arm-page-consolidation - ARM-02 follow-ups: invariant
+             guard, mode-B route tests, scoped jog poll
+================================================================================
+- Jog tab polled every 2s with invalidateAll(), which re-ran the arm layout load
+  too - so the tab where the operator is most likely to be moving the arm was
+  also issuing two extra Pi round trips (camera list + preflight) every two
+  seconds. Load now declares a dependency; the poll invalidates only that.
+  NOT fixed: use:enhance still defaults to invalidateAll() on submit, so each
+  jog click re-runs the layout load. Per-click rather than continuous, and
+  narrowing it means hand-written submit handlers across seven forms on a page
+  this branch cannot exercise yet.
+- NEW src/lib/server/robot-arm-url-invariant.test.ts (27 tests): the check
+  ARM-01 s7.6 promised and s11 left unwritten. Enforces value ACCESS rather than
+  name MENTION - a literal grep for ROBOT_ARM_BASE_URL hits 3 files today (all
+  legitimate error-message prose) and would have been unlandable, and an
+  unlandable check gets deleted. Masks comments/markup/style, keeps string and
+  template-literal bodies as code so bracket access and indirection still bite,
+  and uses a non-alphanumeric boundary rather than \b so PUBLIC_ROBOT_ARM_BASE_URL
+  cannot sneak through on the underscore. Explicitly asserts ROBOT_ARM_PUBLIC_URL
+  stays ALLOWED, including testing the compiled regex against it, so a later
+  broadening to /ROBOT_ARM_\w*URL/ fails loudly instead of silently killing mode B.
+- NEW src/routes/api/robot-arm/cameras/stream-url/server.test.ts (15 tests):
+  pins the soft-failure contract - env unset, Pi throws, Pi returns no
+  stream_token (older build) all yield {available:false} and never a 5xx, and the
+  happy path sets a no-store Cache-Control because the body carries a credential.
+- tests/vitest.unit.config.ts gains a stub for $env/dynamic/private so route
+  handlers can be imported without SvelteKit's vite plugin. package.json gains
+  test:invariants.
+
+`npm run test:unit`: 90 passed (4 files) - run directly, not taken on report.
+`npm run check`: 11 errors / 426 warnings / 91 files - baseline unchanged, zero
+in touched files.
+
+FOUND, NOT FIXED - pre-existing leak of the PRIVATE origin to the browser:
+  control/+page.server.ts:206  armBaseUrl: env.ROBOT_ARM_BASE_URL ?? null
+consumed at control/+page.svelte:61 and :422 as baseUrl={data.armBaseUrl}. This
+is returned from a load function, so it is serialized into page data and readable
+in the browser. It predates ARM-02 (it came in with ARM-01's connection panel,
+whose inline comment defends it as "not a secret" - true of the KEY, but s7.6.1
+is about the ADDRESS). Consequence worth stating: the tailnet FQDN was ALREADY
+reaching browsers on the Control tab before mode B, so mode B's disclosure is
+much less incremental than assumed when the exception was waived. Left alone
+because the fix is a UX decision (drop the diagnostic, or switch it to the
+sanctioned ROBOT_ARM_PUBLIC_URL), not a mechanical one. The new invariant test
+does NOT catch it - +page.server.ts is outside the client scan surface.
