@@ -16,6 +16,48 @@
 	let modal = $state<null | { kind: 'process' | 'decline'; task: TaskRow }>(null);
 	let processCos = $state('standard');
 
+	// KB2-14 — the commitment ceremony: staged taskIds in commit order.
+	let staged = $state<string[]>([]);
+	let commitNote = $state('');
+	let commitResult = $derived((form as any)?.replenishResult ?? null);
+	let taskById = $derived(new Map<string, TaskRow>(data.tasks.map((t: TaskRow) => [t.id, t] as [string, TaskRow])));
+
+	// Only processed + DoR-complete rows are checkable; the gate re-checks server-side.
+	function stageable(t: TaskRow): boolean {
+		return t.status === 'processed' && t.dorMissing.length === 0;
+	}
+	function stageBlockedReason(t: TaskRow): string {
+		if (t.status === 'captured') return "Still 'captured' — process it first";
+		return 'DoR incomplete:\n' + t.dorMissing.join('\n');
+	}
+	function toggleStaged(taskId: string) {
+		staged = staged.includes(taskId) ? staged.filter((id) => id !== taskId) : [...staged, taskId];
+	}
+	function moveStaged(taskId: string, dir: -1 | 1) {
+		const i = staged.indexOf(taskId);
+		const j = i + dir;
+		if (i === -1 || j < 0 || j >= staged.length) return;
+		const next = [...staged];
+		[next[i], next[j]] = [next[j], next[i]];
+		staged = next;
+	}
+
+	// Commit gets its own enhance: on success the staging is spent.
+	function commitEnhance() {
+		submitting = true;
+		return async ({ result, update }: { result: any; update: (opts?: any) => Promise<void> }) => {
+			submitting = false;
+			if (result.type === 'failure') {
+				errorMsg = result.data?.error ?? 'Commit failed';
+			} else if (result.type === 'success') {
+				errorMsg = '';
+				staged = [];
+				commitNote = '';
+			}
+			await update({ reset: false });
+		};
+	}
+
 	// KB2-11 — capture-from-template picker state.
 	let selectedTemplateId = $state('');
 	let templateProjectId = $state('');
@@ -116,12 +158,26 @@
 {/snippet}
 
 <div class="space-y-6">
-	<div>
-		<h2 class="tron-text-primary text-2xl font-bold">Inventory</h2>
-		<p class="tron-text-muted text-sm">
-			Tier 1 — every option we know about on the <span class="font-bold uppercase">{data.board}</span> board.
-			Unbounded, ranked per project. Nothing here is committed.
-		</p>
+	<div class="flex flex-wrap items-start justify-between gap-3">
+		<div>
+			<h2 class="tron-text-primary text-2xl font-bold">Inventory</h2>
+			<p class="tron-text-muted text-sm">
+				Tier 1 — every option we know about on the <span class="font-bold uppercase">{data.board}</span> board.
+				Unbounded, ranked per project. Nothing here is committed.
+			</p>
+		</div>
+		<!-- KB2-14: queue depth where the commitment decision is made -->
+		<span
+			class="rounded-full border px-3 py-1 text-xs font-bold"
+			style={data.ready.belowMinOrderPoint
+				? 'border-color: rgba(255,51,102,0.5); background: rgba(255,51,102,0.12); color: var(--color-tron-red);'
+				: 'border-color: var(--color-tron-border); background: var(--color-tron-bg-tertiary); color: var(--color-tron-text-secondary);'}
+			title={data.ready.belowMinOrderPoint
+				? `Ready queue below the minimum order point (${data.ready.minOrderPoint}) — replenish now`
+				: 'Ready queue depth vs cap'}
+		>
+			Ready {data.ready.count}/{data.ready.cap}
+		</span>
 	</div>
 
 	<!-- Capture box: one line is enough -->
@@ -176,6 +232,34 @@
 		</div>
 	{/if}
 
+	<!-- KB2-14: commit result — promoted with ranks, rejected with the service's reasons -->
+	{#if commitResult}
+		<div class="tron-card space-y-3 !p-4">
+			<h3 class="tron-text-primary text-sm font-bold">
+				Replenishment result — {commitResult.promoted.length} promoted, {commitResult.rejected.length} rejected
+				<span class="tron-text-muted font-normal">(ready {commitResult.readyCount}/{commitResult.readyCap})</span>
+			</h3>
+			{#if commitResult.promoted.length}
+				<ul class="space-y-1">
+					{#each commitResult.promoted as p (p.taskId)}
+						<li class="text-sm" style="color: var(--color-tron-green, #10b981);">
+							#{p.rank} — <a href="/kanban/task/{p.taskId}" class="hover:underline">{p.title}</a>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+			{#if commitResult.rejected.length}
+				<ul class="space-y-1">
+					{#each commitResult.rejected as r (r.taskId)}
+						<li class="text-sm" style="color: var(--color-tron-red);">
+							{r.title ?? r.taskId}: {r.reason}
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		</div>
+	{/if}
+
 	<!-- Filters -->
 	<div class="flex flex-wrap items-center gap-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] px-4 py-3 text-sm">
 		<label class="flex items-center gap-1.5"><input type="checkbox" bind:checked={showCaptured} /> <span class="tron-text-primary">Captured</span></label>
@@ -206,7 +290,23 @@
 			</div>
 			<div class="divide-y divide-[var(--color-tron-border)]">
 				{#each group.tasks as t (t.id)}
-					<div class="flex flex-wrap items-center gap-3 px-4 py-2.5">
+					<div class="flex flex-wrap items-center gap-3 px-4 py-2.5 {staged.includes(t.id) ? 'bg-[rgba(0,212,255,0.06)]' : ''}">
+						{#if data.canReplenish}
+							<!-- KB2-14 staging checkbox: processed + DoR-complete only -->
+							{#if t.status === 'captured' || t.status === 'processed'}
+								<input
+									type="checkbox"
+									class="shrink-0"
+									checked={staged.includes(t.id)}
+									disabled={!stageable(t)}
+									onchange={() => toggleStaged(t.id)}
+									title={stageable(t) ? 'Stage for commitment' : stageBlockedReason(t)}
+									aria-label="Stage for commitment"
+								/>
+							{:else}
+								<span class="w-[13px] shrink-0"></span>
+							{/if}
+						{/if}
 						{#if t.status === 'captured' || t.status === 'processed'}
 							<span class="tron-text-muted w-7 shrink-0 text-right text-xs font-bold">{t.rank}</span>
 						{:else}
@@ -272,6 +372,49 @@
 	{/each}
 	{#if groups.length === 0}
 		<p class="tron-text-muted text-sm">No Tier 1 options match the current filters.</p>
+	{/if}
+
+	<!-- KB2-14: the commit bar — the ceremony itself. Sticks to the viewport
+	     bottom while anything is staged; hidden entirely without the permission. -->
+	{#if data.canReplenish && staged.length > 0}
+		<div
+			class="sticky bottom-2 z-30 rounded-lg border bg-[var(--color-tron-bg-secondary)] p-4"
+			style="border-color: var(--color-tron-cyan); box-shadow: 0 0 14px rgba(0,212,255,0.25);"
+		>
+			<div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+				<span class="tron-text-primary text-sm font-bold">
+					{staged.length} selected
+					<span class="tron-text-muted font-normal"> · Ready {data.ready.count}/{data.ready.cap}</span>
+				</span>
+				<span class="tron-text-muted text-xs">Order below = the order they join the queue</span>
+			</div>
+			<ol class="mb-3 space-y-1.5">
+				{#each staged as id, i (id)}
+					{@const t = taskById.get(id)}
+					<li class="flex items-center gap-2">
+						<span class="tron-text-muted w-5 text-right text-xs font-bold">{i + 1}</span>
+						<span class="tron-text-primary flex-1 truncate text-sm">{t?.title ?? id}</span>
+						<button type="button" class="tron-button !px-2 !py-0.5 text-xs" onclick={() => moveStaged(id, -1)} disabled={i === 0} title="Move up">▲</button>
+						<button type="button" class="tron-button !px-2 !py-0.5 text-xs" onclick={() => moveStaged(id, 1)} disabled={i === staged.length - 1} title="Move down">▼</button>
+						<button type="button" class="text-xs font-bold" style="color: var(--color-tron-red);" onclick={() => toggleStaged(id)} title="Remove">✕</button>
+					</li>
+				{/each}
+			</ol>
+			<form method="POST" action="?/commit" class="flex flex-wrap items-center gap-2" use:enhance={commitEnhance}>
+				{#each staged as id (id)}
+					<input type="hidden" name="taskIds" value={id} />
+				{/each}
+				<input
+					name="note"
+					class="tron-input min-w-[220px] flex-1"
+					placeholder="Note (optional — recorded on the event)"
+					bind:value={commitNote}
+				/>
+				<TronButton type="submit" variant="primary" disabled={submitting}>
+					{submitting ? 'Committing…' : `Commit ${staged.length} item${staged.length === 1 ? '' : 's'}`}
+				</TronButton>
+			</form>
+		</div>
 	{/if}
 </div>
 

@@ -2,11 +2,11 @@
 	import { page } from '$app/stores';
 	import type { KanbanBoard } from '$lib/shared/kanban-status';
 
-	// Primary two-tier views (KB2-06). Every link preserves the ?board= param.
+	// Primary two-tier views (KB2-06; KB2-14 folded Replenish into Inventory).
+	// Every link preserves the ?board= param.
 	const tabs = [
 		{ href: '/kanban', label: 'Queue' },
 		{ href: '/kanban/inventory', label: 'Inventory' },
-		{ href: '/kanban/replenish', label: 'Replenish' },
 		{ href: '/kanban/flow', label: 'Flow' },
 		{ href: '/kanban/policy', label: 'Policy' }
 	];

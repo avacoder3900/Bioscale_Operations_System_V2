@@ -12,6 +12,16 @@
 
 	let maxWeekly = $derived(Math.max(1, ...weekly.map((w) => w.n)));
 
+	// KB2-14 — capacity + replenishment history, moved from the retired Replenish page.
+	let wipByClass = $derived(data.capacity.wipByClassOfService as Record<string, number>);
+	let allocation = $derived(data.capacity.allocationTargetsPct as Record<string, number>);
+	let wipTotal = $derived(Object.values(wipByClass).reduce((a, b) => a + b, 0));
+	const classOrder = ['standard', 'fixed_date', 'chore', 'expedite'];
+
+	function fmtWhen(d: string): string {
+		return new Date(d).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+	}
+
 	const flowDebtExplanation =
 		'Aged past its SLE while newer items finished — the measurable cherry-picking signature. Diagnosed in the work, not in people.';
 
@@ -172,4 +182,62 @@
 			</div>
 		{/if}
 	</section>
+
+	<!-- KB2-14: capacity + replenishment history (moved from the retired Replenish page) -->
+	<div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+		<!-- WIP share per class of service vs allocation targets -->
+		<section class="tron-card !p-4">
+			<h3 class="tron-text-primary mb-3 text-sm font-bold uppercase tracking-wide">Capacity — WIP by class of service</h3>
+			<table class="w-full text-sm">
+				<thead>
+					<tr class="tron-text-muted text-left text-xs uppercase">
+						<th class="pb-2">Class</th>
+						<th class="pb-2 text-right">WIP</th>
+						<th class="pb-2 text-right">Share</th>
+						<th class="pb-2 text-right">Target</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each classOrder as cos (cos)}
+						{@const n = wipByClass[cos] ?? 0}
+						{@const share = wipTotal ? Math.round((n / wipTotal) * 100) : 0}
+						{@const target = allocation?.[cos] ?? null}
+						<tr class="border-t border-[var(--color-tron-border)]">
+							<td class="tron-text-primary py-1.5 capitalize">{cos.replace('_', ' ')}</td>
+							<td class="tron-text-primary py-1.5 text-right">{n}</td>
+							<td class="py-1.5 text-right {target !== null && share > target ? 'font-bold' : 'tron-text-primary'}" style={target !== null && share > target ? 'color: #f59e0b;' : ''}>{share}%</td>
+							<td class="tron-text-muted py-1.5 text-right">{target === null ? '—' : `${target}%`}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+			<p class="tron-text-muted mt-2 text-[11px]">
+				Allocation is advisory at commit time — except the chore ceiling, which is enforced (chore is a floor AND a ceiling).
+			</p>
+		</section>
+
+		<!-- Recent replenishment events -->
+		<section class="tron-card !p-4">
+			<h3 class="tron-text-primary mb-3 text-sm font-bold uppercase tracking-wide">Recent replenishment events</h3>
+			{#if data.events.length === 0}
+				<p class="tron-text-muted text-xs">No replenishment events yet on this board.</p>
+			{:else}
+				<ul class="space-y-1.5">
+					{#each data.events as e (e.id)}
+						<li class="text-sm">
+							<span class="tron-text-primary font-bold">{e.by}</span>
+							<span class="tron-text-muted"> — {fmtWhen(e.at)} — </span>
+							<span class="tron-text-primary">{e.promotedCount} promoted</span>
+							{#if e.rejectedCount}
+								<span style="color: var(--color-tron-red);">, {e.rejectedCount} rejected</span>
+							{/if}
+							{#if e.note}
+								<span class="tron-text-muted block text-xs">“{e.note}”</span>
+							{/if}
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		</section>
+	</div>
 </div>

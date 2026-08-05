@@ -2,10 +2,15 @@
  * KB2-06 — Inventory: the Tier 1 management view. Options grouped by project,
  * ordered by rank; processing (KB2-03), rank moves, icebox/decline/thaw, DoR
  * edits. Everything that changes status goes through the kanban services.
+ *
+ * KB2-14 — the commitment ceremony lives here too: staging checkboxes on
+ * processed + DoR-complete rows feed a sticky commit bar → replenish().
+ * The gate itself (actor permission, DoR, caps, one batch event) is the
+ * unchanged KB2-02 service — moving the UI does not weaken it.
  */
 import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, KanbanTask, KanbanProject, KanbanTemplate, AuditLog, generateId } from '$lib/server/db';
-import { requirePermission } from '$lib/server/permissions';
+import { requirePermission, hasPermission, isAdmin } from '$lib/server/permissions';
 import { createKanbanItem, TransitionError } from '$lib/server/kanban/transition';
 import {
 	processTask,
@@ -16,8 +21,8 @@ import {
 	thawTask,
 	SIZING_DECISION_TEST
 } from '$lib/server/kanban/process';
-import { reorder, dorMissingFields, ReplenishError } from '$lib/server/kanban/replenish';
-import { getKanbanPolicy } from '$lib/server/kanban/policy';
+import { replenish, reorder, dorMissingFields, ReplenishError } from '$lib/server/kanban/replenish';
+import { getKanbanPolicy, boardPolicyOf } from '$lib/server/kanban/policy';
 import {
 	SIZE_CLASSES,
 	CLASSES_OF_SERVICE,
@@ -49,8 +54,19 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// KB2-11 — active workflow templates for this board (one-touch capture).
 	const templates = (await KanbanTemplate.find({ active: true, board }).sort({ name: 1 }).lean()) as any[];
 
+	// KB2-14 — the Ready x/cap chip + commit bar need queue depth here.
+	const { readyCap, minOrderPoint } = boardPolicyOf(policy, board);
+	const readyCount = await KanbanTask.countDocuments({ board, status: 'ready', archived: false });
+
 	return {
 		board,
+		canReplenish: hasPermission(locals.user, 'kanban:replenish') || isAdmin(locals.user),
+		ready: {
+			count: readyCount,
+			cap: readyCap,
+			minOrderPoint,
+			belowMinOrderPoint: readyCount < minOrderPoint
+		},
 		// KB2-12 — canonical sizing decision test, shown in the process modal.
 		sizingDecisionTest: SIZING_DECISION_TEST,
 		templates: JSON.parse(
@@ -109,6 +125,32 @@ function serviceFail(e: unknown) {
 }
 
 export const actions: Actions = {
+	// KB2-14 — the commitment ceremony: one replenishment event per commit,
+	// selected candidates in staged order. The service re-validates everything
+	// (actor holds kanban:replenish, DoR, caps) server-side.
+	commit: async ({ request, locals, url }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'kanban:write');
+		await connectDB();
+		const fd = await request.formData();
+		const taskIds = fd.getAll('taskIds').map((v) => v.toString()).filter(Boolean);
+		if (!taskIds.length) return fail(400, { error: 'Select at least one candidate to commit.' });
+		const note = fd.get('note')?.toString() || undefined;
+
+		try {
+			const result = await replenish({
+				taskIds,
+				board: boardOf(url),
+				actorUsername: locals.user.username,
+				via: 'ui',
+				note
+			});
+			return { replenishResult: JSON.parse(JSON.stringify(result)) };
+		} catch (e) {
+			return serviceFail(e);
+		}
+	},
+
 	// Capture box: one line → 'captured'.
 	capture: async ({ request, locals, url }) => {
 		if (!locals.user) redirect(302, '/login');
