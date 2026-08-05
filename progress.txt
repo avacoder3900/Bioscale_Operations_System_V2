@@ -6909,3 +6909,47 @@ unassignable — the CV station "restart agent" control was dead for everyone; n
 
 Verified: npm run test:unit 63/63; tsc has exactly 1 error, the pre-existing r2.ts Buffer
 overload (untouched); svelte-check 11 = baseline.
+
+================================================================================
+2026-08-05 — master — Permissions rewrite PERM-01..05 merged to master
+================================================================================
+Merged feat/perm-05-machine (the whole stack: PERM-01 hot fixes -> 02 registry -> 03 shadow
+-> 04 prep -> 05 machine surface) into master as cf64e9c7. Validation on the merge commit:
+npm run test:unit 63/63; npm run check 11 errors = baseline.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit cf64e9c7
+Retrieve this exact code: git checkout master at commit cf64e9c7
+  (or: git log master --oneline to find it if master has since moved on)
+What this deployment is for: the permission-system rewrite — closes the anonymous Box-OAuth
+  overwrite and the MCP key-length leak, fails cron closed, ends the cross-app admin leak
+  with research-v2, starts shadow-mode logging for deny-by-default, and makes the machine
+  surface non-admin with mandatory attribution.
+
+NOTE ON TRUNKS: production deploys **master** (confirmed against the last four production
+deployment log entries above, all "Source: branch master"). The June 2026 note that Vercel
+production tracked `main` is stale — origin/main is now 386 commits behind master and 4
+ahead on dead commits; it is not the release trunk. Do not push releases there.
+
+WHAT CHANGES FOR USERS ON THIS DEPLOY (everything else is dormant/log-only):
+- zane loses admin:full (it reached him via the Research Admin role, not a BIMS grant), so
+  he loses admin-level equipment controls — temp-probe thresholds/mapping, fridge-oven and
+  deck-tray admin actions. Make him an Admin deliberately if he needs them.
+- The dormant `admin` (Research Admin) account loses BIMS access entirely — the cross-app
+  leak closure. research-v2 unaffected (own permissions.ts, same role doc, never modified).
+- Admins GAIN inventory:retract, cv:write, cv:admin — previously enforced in code but
+  unassignable, which had left the CV station "restart agent" control dead for everyone.
+- MCP jumps to 3.0.0: `actor` is now REQUIRED on all 23 write tools (Claude will ask "who am
+  I working with?" once per conversation), and kanban_replenish / kanban_demote /
+  reorder(scope:"ready") now REFUSE with instructions — committing work is admin-only and
+  bots are permanent non-admins. Reads unchanged; project-scope reorder still works.
+- Agent API: kanban policy PATCH and templates POST now refuse (their body-`actor` ->
+  kanban:admin lookup was self-declared authorization). Web UI equivalents verified present.
+- opentrons-clone operator login and the analysis training demo return 503 "not configured"
+  until OT_OPERATOR_PASSWORD / TRAINING_UNLOCK_PASSWORD are set in Vercel. Intentional —
+  their passwords used to be hardcoded in the repo.
+
+STILL DORMANT: PERMISSIONS_ENFORCE is unset, so the deny-by-default evaluator only LOGS
+would-be denials to permission_shadow_log (30-day TTL). Next step is >=7 days of
+`npx tsx scripts/report-shadow-denials.ts`, review with Jacob, then flip to enforce and run
+the PERM-04 call-site sweep. PERM-06 cleanup stays interlocked until that sweep lands.
