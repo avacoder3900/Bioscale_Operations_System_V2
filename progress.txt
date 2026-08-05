@@ -6826,3 +6826,58 @@ Two non-human tier-crossing paths logged as PERM-05 follow-ups (in PERM-04 PRD �
   - api/agent/operations/kanban/tasks/merge forces a merged Tier 1 option to done on agent-key
     auth alone. Under "bots are not admins" that is a bot crossing the commitment point;
     needs a decision in PERM-05.
+
+================================================================================
+2026-08-05 — feat/perm-05-machine — PERM-05 machine surface + PERM-06 cleanup script
+================================================================================
+Stacked on feat/perm-04-prep. Implements docs/prds/PERM-05, plus the PERM-06 migration
+(written, deliberately NOT applied — see interlock below).
+
+NEW src/lib/server/machine-actor.ts — the whole machine-surface policy in one module:
+- assertHumanOnly(): admin-gated actions can never be performed by a key-authenticated
+  caller, whatever actor is named. HUMAN_ONLY_ACTIONS maps each to WHERE a human does it,
+  so the refusal tells the model what to say. Covers both directions of the commitment
+  point (replenish + demote + ready-queue reorder), policy/template/standing-target edits,
+  proposal + approval decisions, document approval, lot release, assay lock.
+- resolveActor(): every machine WRITE must name the human it acts for; the name must match
+  an ACTIVE user who holds `bims` (so research-only accounts are rejected too). Attribution
+  only — the resolved user's permissions are never consulted for authorization, because
+  bots can't reach a gate regardless of whom they name. Reserved actor `system` for cron.
+- The refusal IS the mechanism: MISSING_ACTOR_MESSAGE tells the model to ask the human and
+  reuse the name for the conversation. Elicitation deliberately unused (CLI-only support).
+- logMachineActivity(): dual-identity audit row -> AuditLog tableName 'machine_activity',
+  changedBy = the KEY identity (cryptographically true), newData.reportedActor = the claimed
+  human, explicitly labelled attribution:'self-reported'. Shows up in Admin → Agent Activity.
+
+bims-mcp.ts (server version 2.13.0 -> 3.0.0 — clients cache tool lists; major bump because
+tool contracts changed):
+- machineWrite() wraps every mutating tool: human-only check -> actor resolution -> run ->
+  dual-identity log. 23 write tools wrapped; `actor` is now a REQUIRED field on all of them
+  (was optional/absent on 10, and defaulted to the literal string "agent" on 2 — that default
+  is exactly the attribution hole this closes).
+- Reads (31 tools) unchanged — no actor, no friction.
+- Behaviour change for Jacob's workflow: kanban_replenish / kanban_demote / reorder(scope
+  "ready") now REFUSE and return instructions. Committing work is an admin action and bots are
+  non-admins. Project-scope reorder still works. kanban_replenishment_status still shows what
+  is eligible, so the useful half of the flow is intact.
+
+Agent API: the two body-`actor` -> kanban:admin lookups are DELETED, not patched —
+policy PATCH and templates POST now refuse with the human-only message and log the attempt.
+Both have full web-UI equivalents (kanban/policy has 7 actions behind requirePolicyAdmin),
+verified before closing, so no capability is lost.
+
+NEW src/lib/server/fleet-keys.ts — per-fleet device keys (scanner/ot2/mocreo/particle/station),
+timing-safe, ADDITIVE: verifyFleetKey() accepts the fleet key OR the shared AGENT_API_KEY until
+<FLEET>_STRICT=true. Nothing to do on any device the day this ships; rollout is per fleet
+(set env -> update devices -> confirm audit rows -> flip strict). No endpoints switched over
+yet — that's the physical-device step and wants a bench day.
+
+NEW scripts/migrate-perm-06-cleanup.ts — final vocabulary strip (Admin 53 -> 7, Operator
+10 -> 1, delete Viewer, deactivate 4 stale test accounts; research roles untouched).
+DRY RUN VERIFIED, NOT APPLIED. Guarded by an interlock: --apply refuses unless
+PERM06_SWEEP_DONE=true, because stripping legacy strings before the PERM-04 call-site sweep
+would lock Operators (not Admins — they have the wildcard) out of real work.
+
+Tests: new machine-actor.test.ts (6 cases: every gated action refused, ordinary actions
+allowed, both commitment directions, message content). npm run test:unit 63/63 pass.
+npm run check: 11 errors — unchanged baseline.
