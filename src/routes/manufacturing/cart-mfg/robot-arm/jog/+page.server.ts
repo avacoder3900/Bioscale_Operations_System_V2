@@ -38,7 +38,14 @@ async function safeActive() {
  * the Pi every two seconds, forever, on the one tab where the operator is most
  * likely to be actively moving the arm.
  */
-export const ARM_POSE_DEP = 'arm:pose';
+// NOT exported. SvelteKit validates the export surface of +page.server.ts and
+// rejects anything outside {load, actions, prerender, csr, ssr, trailingSlash,
+// config, entries} or an underscore prefix — an arbitrary named export fails
+// the build with "Invalid export". svelte-check does not catch this, so it
+// only shows up in a real build. Exporting it would buy nothing anyway: a
+// +page.server.ts module cannot be imported into client code, so the .svelte
+// side has to repeat the literal regardless.
+const ARM_POSE_DEP = 'arm:pose';
 
 export const load: PageServerLoad = async ({ locals, depends }) => {
 	if (!locals.user) redirect(302, '/login');
