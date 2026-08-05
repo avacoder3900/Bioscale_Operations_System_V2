@@ -1,6 +1,10 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { invalidateAll } from '$app/navigation';
+	import { invalidate } from '$app/navigation';
+
+	// Must match ARM_POSE_DEP in ./+page.server.ts. Repeated as a literal
+	// because a +page.server.ts module cannot be imported into client code.
+	const ARM_POSE_DEP = 'arm:pose';
 
 	let { data, form } = $props();
 
@@ -16,7 +20,10 @@
 
 	$effect(() => {
 		if (polling) {
-			pollHandle = setInterval(() => invalidateAll(), 2000);
+			// Scoped, not invalidateAll(): this only re-runs the load that declared
+			// ARM_POSE_DEP, so the pose refreshes without dragging the arm layout's
+			// camera-list and preflight calls to the Pi along with it every 2s.
+			pollHandle = setInterval(() => invalidate(ARM_POSE_DEP), 2000);
 		} else if (pollHandle) {
 			clearInterval(pollHandle);
 			pollHandle = null;
