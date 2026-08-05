@@ -201,38 +201,63 @@
 
 		let cancelled = false;
 		(async () => {
-			try {
-				const res = await fetch('/api/robot-arm/cameras/stream-url');
-				if (!res.ok || cancelled) return;
-				const body = await res.json();
-				if (cancelled || !body?.available || !body.origin || !body.token) return;
+			// Measured on a real load: the first attempt lost to a cold connection
+			// and fell back, and only a later remount reached direct — so the
+			// operator got the good feed by accident, not by design. The origin
+			// itself answers this probe in ~25ms once warm, so the budget was
+			// never about the server; it was about TLS setup and DNS on the very
+			// first request. Hence a wider timeout plus a couple of retries.
+			//
+			// Retrying is safe precisely because it is not load-bearing: proxy is
+			// already streaming throughout, so a slow probe costs nothing but a
+			// few seconds of stills. Still bounded — an unreachable host must not
+			// be re-probed forever.
+			const PROBE_TIMEOUT_MS = 8000;
+			const ATTEMPTS = 3;
 
-				const origin = String(body.origin);
-				const token = String(body.token);
-
-				// Probe with snapshot.jpg, not the stream. A terminating image has
-				// a dependable load event and can be timed out; an <img> pointed
-				// at multipart/x-mixed-replace has neither, so using the stream
-				// itself as its own reachability test cannot distinguish "works"
-				// from "still waiting".
-				await preload(
-					`${origin}/cameras/${encodeURIComponent(name)}/snapshot.jpg` +
-						`?token=${encodeURIComponent(token)}&t=${Date.now()}`,
-					3000
-				);
+			for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
 				if (cancelled) return;
+				try {
+					const res = await fetch('/api/robot-arm/cameras/stream-url');
+					if (!res.ok || cancelled) return;
+					const body = await res.json();
+					// available:false is a settled answer (no public origin
+					// configured, or the Pi cannot mint) — retrying cannot change
+					// it, so stop rather than burn attempts.
+					if (cancelled || !body?.available || !body.origin || !body.token) return;
 
-				cred = { origin, token };
-				transport = 'direct';
-				// Client-side frame stats describe the polling loop and mean
-				// nothing for a streamed connection. Clear them rather than
-				// leaving a frozen count that looks like a stalled feed.
-				frameCount = 0;
-				lastFrameAt = null;
-				failures = 0;
-			} catch {
-				// Unreachable, blocked, or an expired token — stay on proxy. Never
-				// log the failure body: it contains the credential.
+					const origin = String(body.origin);
+					const token = String(body.token);
+
+					// Probe with snapshot.jpg, not the stream. A terminating image
+					// has a dependable load event and can be timed out; an <img>
+					// pointed at multipart/x-mixed-replace has neither, so using
+					// the stream itself as its own reachability test cannot
+					// distinguish "works" from "still waiting".
+					await preload(
+						`${origin}/cameras/${encodeURIComponent(name)}/snapshot.jpg` +
+							`?token=${encodeURIComponent(token)}&t=${Date.now()}`,
+						PROBE_TIMEOUT_MS
+					);
+					if (cancelled) return;
+
+					cred = { origin, token };
+					transport = 'direct';
+					// Client-side frame stats describe the polling loop and mean
+					// nothing for a streamed connection. Clear them rather than
+					// leaving a frozen count that looks like a stalled feed.
+					frameCount = 0;
+					lastFrameAt = null;
+					failures = 0;
+					return;
+				} catch {
+					// Unreachable, blocked, slow, or an expired token. Never log the
+					// failure: the URL carries the credential. Mint a fresh token on
+					// the next pass rather than reusing one that may have been the
+					// problem.
+					if (cancelled || attempt === ATTEMPTS) return;
+					await new Promise((r) => setTimeout(r, 1500 * attempt));
+				}
 			}
 		})();
 

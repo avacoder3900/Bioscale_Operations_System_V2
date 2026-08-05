@@ -6743,3 +6743,34 @@ much less incremental than assumed when the exception was waived. Left alone
 because the fix is a UX decision (drop the diagnostic, or switch it to the
 sanctioned ROBOT_ARM_PUBLIC_URL), not a mechanical one. The new invariant test
 does NOT catch it - +page.server.ts is outside the client scan surface.
+
+================================================================================
+2026-08-05 - feat/robot-arm-page-consolidation - fix spurious first-load fallback
+             to proxy in the camera transport negotiation
+================================================================================
+First real end-to-end run of ARM-02 mode B. It worked, but the Vercel access log
+showed it worked by accident:
+  12:52:10.41  GET /api/robot-arm/cameras/stream-url   200   <- negotiated
+  12:52:10.41  GET .../cameras/external/snapshot       200   <- proxy starts (by design)
+  12:52:16/17/18  .../snapshot 200 x3                        <- STILL polling 6-8s later
+  12:52:40.81  stream-url 200 + snapshot 200                 <- remount, 2nd negotiation
+  (nothing after; page active until 12:52:49)                <- direct engaged
+Snapshot traffic stopping dead is the signature of direct mode, since those
+frames then go browser->Pi and never touch BIMS. So attempt 1 failed and fell
+back; only a remount (triggered by the operator interacting with a form) reached
+direct. On a plain page load the feed would have stayed on proxy indefinitely.
+
+Not a server problem: timed the exact probe URL through the public Funnel three
+times - connect 0.001s, TLS 0.02s, total 0.022-0.030s, HTTP 200. The 3s probe
+budget was never about the origin being slow, it was about first-request TLS/DNS
+setup from a cold browser.
+
+Fix: probe timeout 3s -> 8s, and up to 3 attempts with backoff (1.5s, 3s),
+minting a fresh token each pass rather than reusing one that may itself have been
+the failure. Retrying is safe because it is not load-bearing - proxy is streaming
+the whole time, so a slow probe costs stills, not blackness. Still bounded, and
+an available:false answer (no public origin configured, or the Pi cannot mint)
+returns immediately instead of burning attempts, since retrying cannot change it.
+
+`npm run check`: 11 errors / 426 warnings / 91 files - baseline unchanged, zero in
+touched files. `npm run test:unit`: 90 passed.
