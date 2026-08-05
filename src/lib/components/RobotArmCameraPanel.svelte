@@ -7,10 +7,22 @@
 	 * between the Control / Jog / Calibrate / Runs tabs. Switching tabs does
 	 * not restart the feed.
 	 *
-	 * Transport is snapshot-polling against a BIMS proxy route, not the Pi's
-	 * MJPEG stream — see the route for why. Frames are preloaded into a
-	 * detached Image before being swapped in, so a slow or failed frame leaves
-	 * the previous one on screen instead of flashing an empty box.
+	 * Two transports, negotiated once per mount:
+	 *
+	 *   proxy  — snapshot-polling through a BIMS route. Works for any viewer
+	 *            that can reach BIMS, including a phone on cellular with no
+	 *            tailnet. This is the floor, and it is never removed.
+	 *   direct — one MJPEG connection straight to the Pi's public origin. Real
+	 *            video instead of stills, at one connection instead of one
+	 *            request per frame. Requires the viewer to reach the Pi.
+	 *
+	 * Direct is attempted, not assumed: we probe first and fall back to proxy
+	 * on any failure, including later ones. A feed that quietly degrades to
+	 * stills is a much better outcome than a feed that stops.
+	 *
+	 * In proxy mode frames are preloaded into a detached Image before being
+	 * swapped in, so a slow or failed frame leaves the previous one on screen
+	 * instead of flashing an empty box.
 	 */
 	import { untrack } from 'svelte';
 	import type { CameraStatus } from '$lib/server/robot-arm-client';
@@ -54,13 +66,32 @@
 	let tabVisible = $state(true);
 	let panelEl = $state<HTMLElement | null>(null);
 
+	// --- transport ---------------------------------------------------------
+	// Starts at 'proxy' so the feed works before negotiation finishes, and so
+	// every failure path has somewhere safe to land.
+	let transport = $state<'proxy' | 'direct'>('proxy');
+	let cred = $state<{ origin: string; token: string } | null>(null);
+	// Plain variable, not $state, on purpose: this is control flow for an
+	// effect that also reads it, and a reactive flag there re-triggers the very
+	// effect that sets it.
+	let negotiated = false;
+
 	let selectedStatus = $derived(cameras.find((c) => c.name === selected) ?? null);
 	let running = $derived(paused || collapsed ? false : tabVisible && !!selected);
 	// Only meaningful while we are actually asking for frames. A deliberately
 	// paused feed is not stale, and labelling it "stale" would train the
 	// operator to ignore the one warning that matters.
+	// In direct mode we hand the socket to the browser and never see individual
+	// frames, so a client-side clock cannot detect a frozen picture. Fall back
+	// to the Pi's own staleness flag, which is computed at the source. It only
+	// refreshes when layout data does, so it is slower to notice than the
+	// polling path — but a late warning beats inventing a client-side one from
+	// numbers we do not have.
 	let stale = $derived(
-		running && lastFrameAt !== null && now - lastFrameAt > STALE_AFTER_MS
+		running &&
+			(transport === 'direct'
+				? !!selectedStatus?.stale
+				: lastFrameAt !== null && now - lastFrameAt > STALE_AFTER_MS)
 	);
 	let reconnecting = $derived(failures > 0);
 
@@ -73,11 +104,25 @@
 				: null
 	);
 
-	function preload(url: string): Promise<void> {
+	function preload(url: string, timeoutMs?: number): Promise<void> {
 		return new Promise((resolve, reject) => {
 			const img = new Image();
-			img.onload = () => resolve();
-			img.onerror = () => reject(new Error('frame load failed'));
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const done = (fn: () => void) => {
+				if (timer) clearTimeout(timer);
+				fn();
+			};
+			img.onload = () => done(resolve);
+			img.onerror = () => done(() => reject(new Error('frame load failed')));
+			if (timeoutMs) {
+				// An origin that black-holes packets never fires either event, so
+				// without this a probe against an unreachable Pi hangs forever and
+				// the fallback never happens. Clearing src aborts the request.
+				timer = setTimeout(() => {
+					img.src = '';
+					reject(new Error('timed out'));
+				}, timeoutMs);
+			}
 			img.src = url;
 		});
 	}
@@ -144,12 +189,89 @@
 		return () => clearInterval(id);
 	});
 
+	// --- transport negotiation ----------------------------------------------
+	// Runs once per mount, the first time a camera is actually being watched.
+	// Deliberately not retried: a viewer who joins the tailnet mid-session keeps
+	// the working proxy feed until reload, which is a far better failure than
+	// re-probing an unreachable host every few seconds forever.
+	$effect(() => {
+		const name = selected;
+		if (!name || !running || negotiated) return;
+		negotiated = true;
+
+		let cancelled = false;
+		(async () => {
+			try {
+				const res = await fetch('/api/robot-arm/cameras/stream-url');
+				if (!res.ok || cancelled) return;
+				const body = await res.json();
+				if (cancelled || !body?.available || !body.origin || !body.token) return;
+
+				const origin = String(body.origin);
+				const token = String(body.token);
+
+				// Probe with snapshot.jpg, not the stream. A terminating image has
+				// a dependable load event and can be timed out; an <img> pointed
+				// at multipart/x-mixed-replace has neither, so using the stream
+				// itself as its own reachability test cannot distinguish "works"
+				// from "still waiting".
+				await preload(
+					`${origin}/cameras/${encodeURIComponent(name)}/snapshot.jpg` +
+						`?token=${encodeURIComponent(token)}&t=${Date.now()}`,
+					3000
+				);
+				if (cancelled) return;
+
+				cred = { origin, token };
+				transport = 'direct';
+				// Client-side frame stats describe the polling loop and mean
+				// nothing for a streamed connection. Clear them rather than
+				// leaving a frozen count that looks like a stalled feed.
+				frameCount = 0;
+				lastFrameAt = null;
+				failures = 0;
+			} catch {
+				// Unreachable, blocked, or an expired token — stay on proxy. Never
+				// log the failure body: it contains the credential.
+			}
+		})();
+
+		return () => {
+			cancelled = true;
+		};
+	});
+
+	// --- direct mode: one long-lived connection ------------------------------
+	$effect(() => {
+		if (transport !== 'direct' || !cred || !selected || !running) return;
+		const c = cred;
+		displaySrc =
+			`${c.origin}/cameras/${encodeURIComponent(selected)}/stream.mjpg` +
+			`?token=${encodeURIComponent(c.token)}&t=${Date.now()}`;
+
+		return () => {
+			// Clearing src is what actually closes the socket. Without this,
+			// "pause" would stop the picture while the Pi kept encoding and
+			// sending frames — the camera would still be powered and busy.
+			displaySrc = null;
+		};
+	});
+
+	// Any error on a direct stream — a drop, or a token that aged out — sends
+	// us back to the transport that always works.
+	function handleStreamError() {
+		if (transport !== 'direct') return;
+		transport = 'proxy';
+		cred = null;
+		displaySrc = null;
+	}
+
 	// --- the polling loop ---------------------------------------------------
 	$effect(() => {
 		const name = selected;
 		const interval = 1000 / fps;
 		const active = running;
-		if (!name || !active) return;
+		if (!name || !active || transport !== 'proxy') return;
 
 		let cancelled = false;
 		let timer: ReturnType<typeof setTimeout>;
@@ -278,11 +400,19 @@
 					style="border-color: var(--color-tron-border); max-width: {SIZES[size]}px"
 				>
 					{#if displaySrc}
+						<!--
+							No crossorigin attribute: an <img> may load cross-origin
+							without CORS, and asking for it here would require the Pi
+							to send headers it does not, breaking direct mode outright.
+							We only display these pixels, never read them back.
+						-->
 						<img
 							src={displaySrc}
 							alt="Live view from arm camera {selected}"
 							class="block w-full transition-opacity"
 							class:opacity-40={stale || reconnecting}
+							referrerpolicy="no-referrer"
+							onerror={handleStreamError}
 						/>
 					{:else}
 						<div
@@ -352,9 +482,19 @@
 						<span style="color: var(--color-tron-text-secondary)">{selected}</span>
 					{/if}
 
+					<!--
+						This control sets the *polling* rate, so it does nothing in
+						direct mode, where the Pi pushes frames at its own pace.
+						Disabled rather than hidden: a knob that silently stops
+						working teaches the operator not to trust the panel.
+					-->
 					<select
 						bind:value={fps}
-						class="rounded border px-2 py-1"
+						disabled={transport === 'direct'}
+						title={transport === 'direct'
+							? 'Streaming directly from the Pi — it controls the frame rate'
+							: 'How often BIMS fetches a new frame'}
+						class="rounded border px-2 py-1 disabled:opacity-50"
 						style="border-color: var(--color-tron-border); background: var(--color-tron-bg); color: var(--color-tron-text)"
 						aria-label="Frame rate"
 					>
@@ -406,9 +546,15 @@
 
 				<!-- Health strip: real numbers, no reassuring fiction -->
 				<div class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
-					{#if reportedSize}{reportedSize} · {/if}{frameCount} frame{frameCount === 1
-						? ''
-						: 's'}
+					{#if reportedSize}{reportedSize} · {/if}
+					{#if transport === 'direct'}
+						<!-- No frame count here on purpose: the browser owns this
+						     connection and we genuinely cannot count its frames. A
+						     number we cannot measure would be worse than none. -->
+						direct stream
+					{:else}
+						{frameCount} frame{frameCount === 1 ? '' : 's'} via BIMS
+					{/if}
 					{#if selectedStatus}
 						· requested {selectedStatus.requested.fps} fps q{selectedStatus.requested.quality}
 					{/if}

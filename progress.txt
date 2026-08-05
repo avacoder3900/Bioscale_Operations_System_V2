@@ -6642,3 +6642,57 @@ Fix, two layers:
 
 `npm run check`: 11 errors / 426 warnings / 91 files-with-problems - byte-identical to the
 baseline recorded in the entry above; zero errors in touched files.
+
+================================================================================
+2026-08-04 - feat/robot-arm-page-consolidation - ARM-02 mode B: optional direct
+             MJPEG from the Pi, with permanent snapshot-proxy fallback
+================================================================================
+Built the second camera transport. The proxy path (every frame round-trips through
+a BIMS serverless function) is why the feed reads as stills rather than video; this
+adds an opt-in path where the browser opens ONE MJPEG connection to the Pi instead.
+
+Pi side (robot-arm repo, commit 9c2c039, deployed + hash-verified on the Pi at
+065efb40708d96b5a876eb00d289c301df00fad3):
+  - POST /cameras/auth now RETURNS the stream token in the JSON body, not just as
+    a Set-Cookie. A cookie is useless here: the browser is on the BIMS origin and
+    the stream is on the Pi's, so a cross-site cookie is exactly what SameSite
+    blocks. Token is camera-scoped, cannot move the arm, and expires in minutes.
+  - NOT YET LIVE: the service needs `sudo systemctl restart robot-arm.service`,
+    which requires interactive auth this session cannot provide.
+
+BIMS side:
+  - robot-arm-client.ts: mintStreamToken() wraps POST /cameras/auth.
+  - NEW /api/robot-arm/cameras/stream-url: mints a token and returns it with an
+    origin. Publishes ROBOT_ARM_PUBLIC_URL, never ROBOT_ARM_BASE_URL - separate
+    vars on purpose, so the private/tailnet address stays server-side as before.
+    Unset => reports unavailable and the panel keeps polling. Failures are soft
+    (json available:false), never 5xx, because the caller has a working fallback.
+  - RobotArmCameraPanel.svelte: negotiates once per mount. Probes with a
+    TERMINATING snapshot.jpg rather than the stream itself - an <img> pointed at
+    multipart/x-mixed-replace has no dependable load event and cannot be timed
+    out, so the stream cannot serve as its own reachability test. On success,
+    src becomes the Pi's stream.mjpg; any error at any later point falls back to
+    proxy permanently. No crossorigin attribute (would demand CORS the Pi does
+    not send). Pause/collapse clears src, which is what actually closes the
+    socket - otherwise "pause" would stop the picture while the Pi kept encoding.
+  - Honesty fixes that fall out of it: the fps selector is DISABLED in direct mode
+    (it sets the polling rate, which no longer exists) rather than silently doing
+    nothing; the frame counter is omitted in direct mode because the browser owns
+    that socket and we genuinely cannot count its frames; staleness switches to
+    the Pi's own server-computed flag, since a client-side clock cannot see a
+    frozen direct stream.
+
+INERT BY DEFAULT: with ROBOT_ARM_PUBLIC_URL unset, behaviour is byte-identical to
+before - stream-url reports unavailable and every viewer polls the proxy.
+
+OPEN DECISION, flagged not resolved: ARM-01 PRD s7.6 consequence 1 states "Nothing
+client-side may reference the Pi ... no Pi hostname rendered into an <img src>".
+Mode B breaks the letter of that rule. It preserves the REASON (G0 "any device":
+proxy stays the default and the fallback, so a phone on cellular is unaffected),
+but the origin an operator would set is the Funnel FQDN, which discloses the
+tailnet name to anyone who can load the arm page. That is the user's invariant to
+waive or keep, so the env var is left unset pending their call. The s11 grep check
+the PRD promised was never implemented, so nothing enforces this today either way.
+
+`npm run check`: 11 errors / 426 warnings / 91 files-with-problems - identical to
+the baseline above; zero errors in touched files.

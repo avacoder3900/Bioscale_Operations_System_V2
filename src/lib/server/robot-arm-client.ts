@@ -498,5 +498,25 @@ export const robotArm = {
 	getCameraSnapshot: (name: string) =>
 		robotArmFetchBytes(`/cameras/${encodeURIComponent(name)}/snapshot.jpg`, {
 			timeoutMs: 4000
-		})
+		}),
+
+	/**
+	 * Exchange the API key for a short-lived, camera-only token the browser
+	 * can put in a stream URL (ARM-02 mode B).
+	 *
+	 * The snapshot proxy above exists because the browser cannot authenticate
+	 * to the Pi. This is the other half of that story: for viewers who *can*
+	 * reach the Pi directly, one token turns the feed into a real MJPEG stream
+	 * instead of a sequence of stills, at ~1 round trip instead of ~1 per frame.
+	 *
+	 * The API key still never leaves the server — only this token does, and it
+	 * reads pixels, cannot move the arm, and expires in minutes (app.py's auth
+	 * note covers the reasoning). Callers must treat the result as a credential:
+	 * never log it, never cache it.
+	 */
+	mintStreamToken: () =>
+		robotArmFetch<{ stream_token?: string; stream_token_expires_in_s?: number }>(
+			'/cameras/auth',
+			{ method: 'POST', timeoutMs: 4000 }
+		)
 };
