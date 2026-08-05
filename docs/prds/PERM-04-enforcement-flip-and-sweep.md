@@ -19,7 +19,7 @@ The sweep happens AFTER the flip, so it is deleting redundant checks, never remo
 | Gate | Sites |
 |---|---|
 | `document:approve` | documents/[id]/approve actions; documents/approvals |
-| `kanban:promote` | tier promotion/demotion actions (align with KB2 two-tier flow) |
+| `kanban:replenish` | ALREADY DONE — `replenish.ts` `requireReplenisher()` is the sole human tier-crossing path; `transitionTask()` blocks all others. No new gate needed. **Open follow-ups for PERM-05:** two non-human callers set `allowTierCrossing` — `standing.ts` supply autopilot (system actor, by design per KB2-13) and `api/agent/operations/kanban/tasks/merge` (agent key forces a merged Tier 1 option to `done`). Under "bots are not admins", the merge path crosses the commitment point without a human gate — review there. |
 | `manufacturing:release` | cart-mfg/qa-qc release actions; scrap disposition |
 | `sacred:correct` | all Sacred-tier correction paths (users, cartridge records, SPU, assay) |
 | `assay:lock` | assays/[assayId] lock/unlock (replaces `manufacturing:admin` there) |

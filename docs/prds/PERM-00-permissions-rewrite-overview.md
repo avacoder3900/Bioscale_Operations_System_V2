@@ -32,6 +32,10 @@ only for Viewer. The system is administering distinctions that don't exist.
 3. **Admin-only activities (the 6 gates):** document approval, kanban tier-1→tier-2 promotion,
    QA lot release + scrap disposition, sacred-record corrections, assay lock/unlock,
    user/role/platform management (covered by `admin:full`).
+   *Implementation note (2026-08-05):* the tier-promotion gate is the EXISTING
+   `kanban:replenish`, not a new `kanban:promote` string — `transitionTask()` already refuses
+   every tier crossing unless `allowTierCrossing` is set, and the only human path that sets it
+   is `replenish.ts`, which requires `kanban:replenish`. Operators don't hold it; Admins do.
 4. **Bots are permanent non-admins.** The shared Claude account / agent key gets exactly Operator
    capability. Machine surface: *propose, don't decide* — admin decisions happen only in the web
    UI with a real session.
@@ -51,7 +55,7 @@ only for Viewer. The system is administering distinctions that don't exist.
 | `research` | Research roles (enforced in research-v2, PERM-06) | Everything in research app |
 | `admin:full` | Admin | Wildcard **within BIMS, only when `bims` is also held** |
 | `document:approve` | Admin (delegable) | Document approval/rejection |
-| `kanban:promote` | Admin (delegable) | Tier 1 → Tier 2 promotion (and demotion policy per KB2) |
+| `kanban:replenish` | Admin (delegable) | Tier 1 → Tier 2 commitment + demotion (the KB2 replenishment path) |
 | `manufacturing:release` | Admin (delegable) | QA/QC lot release, scrap disposition |
 | `sacred:correct` | Admin (delegable) | Corrections to finalized (Sacred-tier) records |
 | `assay:lock` | Admin (delegable) | Assay definition lock/unlock |

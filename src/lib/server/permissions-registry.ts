@@ -14,15 +14,26 @@
 /** Per-app membership. `bims` = everything non-admin in BIMS; `research` = the research app. */
 export const MEMBERSHIP_PERMISSIONS = ['bims', 'research'] as const;
 
-/** Admin-gated activities. `admin:full` is the BIMS wildcard (scoped: only for holders of `bims`). */
+/**
+ * Admin-gated activities. `admin:full` is the BIMS wildcard (scoped: only for holders of `bims`).
+ *
+ * `kanban:replenish` IS the tier-1 → tier-2 gate: transitionTask() refuses every
+ * tier crossing unless the caller sets allowTierCrossing, and the only human path
+ * that sets it is replenish.ts, which requires this permission. A separate
+ * `kanban:promote` string was specced in PERM-00 but would have been a second
+ * name for the same chokepoint — dropped (see PERM-04 §B).
+ */
 export const GATE_PERMISSIONS = [
 	'admin:full',
 	'document:approve',
-	'kanban:promote',
+	'kanban:replenish',
 	'manufacturing:release',
 	'sacred:correct',
 	'assay:lock'
 ] as const;
+
+/** Granted by an earlier migration, now superseded. Stripped by the PERM-02 script. */
+export const DEPRECATED_PERMISSIONS = ['kanban:promote'] as const;
 
 /**
  * Legacy vocabulary (pre-rewrite), grouped for the roles admin UI.
@@ -34,7 +45,8 @@ export const LEGACY_PERMISSION_GROUPS: { group: string; permissions: string[] }[
 	{ group: 'admin', permissions: ['admin:users'] },
 	{ group: 'user', permissions: ['user:read', 'user:write'] },
 	{ group: 'role', permissions: ['role:read', 'role:write'] },
-	{ group: 'kanban', permissions: ['kanban:read', 'kanban:write', 'kanban:replenish', 'kanban:admin'] },
+	// kanban:replenish now lives in GATE_PERMISSIONS (tier-crossing gate)
+	{ group: 'kanban', permissions: ['kanban:read', 'kanban:write', 'kanban:admin'] },
 	{ group: 'spu', permissions: ['spu:read', 'spu:write', 'spu:admin'] },
 	{ group: 'document', permissions: ['document:read', 'document:write', 'document:train'] },
 	{ group: 'inventory', permissions: ['inventory:read', 'inventory:write', 'inventory:retract'] },

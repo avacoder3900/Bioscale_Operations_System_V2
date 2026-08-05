@@ -6795,3 +6795,34 @@ Stacked on feat/perm-03-shadow. Everything here is inert or behavior-neutral tod
 npm run check: 11 errors — unchanged baseline. npm run test:unit: 57/57 pass.
 Remaining before PERM-04 flip: merge stack to production trunk (Jacob), >=7 clean shadow days
 (report-shadow-denials.ts), KB2 merge, then set PERMISSIONS_ENFORCE=true.
+================================================================================
+2026-08-05 — feat/perm-04-prep — PERM-04 correction: kanban tier gate is kanban:replenish (not a new string)
+================================================================================
+Merged current origin/master into the stack (only conflict was progress.txt; both sides kept).
+Stack re-verified against master: npm run check 11 errors (baseline), test:unit 57/57.
+
+Design correction found while installing the last gate. PERM-00 specced a NEW `kanban:promote`
+for the tier-1 -> tier-2 gate. Reading the KB2 code shows that gate already exists and is
+architecturally airtight:
+  - transitionTask() throws TIER_CROSSING_FORBIDDEN on every tier crossing unless the caller
+    passes allowTierCrossing.
+  - Only 4 call sites pass it. The two human ones are replenish.ts promote + demote, both
+    behind requireReplenisher() -> kanban:replenish || isAdmin.
+  - Operators do not hold kanban:replenish; Admins do. So "tier promotion is admin-only" is
+    already true.
+Adding kanban:promote would have been a second name for one chokepoint — exactly the drift
+this project exists to kill. So: GATE_PERMISSIONS now contains kanban:replenish (moved out of
+the legacy kanban group), kanban:promote is retired via a new DEPRECATED_PERMISSIONS list, and
+migrate-perm-02-additive.ts now strips deprecated strings as well as adding missing ones.
+
+Re-ran the migration (APPLIED): Admin +[kanban:replenish] -[kanban:promote], propagated to 8
+users. Note what that reveals — the LIVE Admin role never had kanban:replenish at all (the
+seed-drift from the audit; seed.ts was fixed in PERM-01 but the live role predates it), so
+admins have been passing the replenish gate purely via the isAdmin() fallback in replenish.ts.
+Now they hold the permission itself.
+
+Two non-human tier-crossing paths logged as PERM-05 follow-ups (in PERM-04 PRD §B):
+  - standing.ts supply autopilot promotes with a system actor — by design (KB2-13).
+  - api/agent/operations/kanban/tasks/merge forces a merged Tier 1 option to done on agent-key
+    auth alone. Under "bots are not admins" that is a bot crossing the commitment point;
+    needs a decision in PERM-05.

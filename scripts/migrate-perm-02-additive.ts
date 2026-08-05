@@ -20,7 +20,11 @@ import mongoose from 'mongoose';
 import * as dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
-import { GATE_PERMISSIONS, PROTECTED_ROLE_NAMES } from '../src/lib/server/permissions-registry';
+import {
+	GATE_PERMISSIONS,
+	PROTECTED_ROLE_NAMES,
+	DEPRECATED_PERMISSIONS
+} from '../src/lib/server/permissions-registry';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(__dirname, '..', '.env') });
@@ -49,12 +53,19 @@ async function main() {
 		}
 		const current: string[] = role.permissions ?? [];
 		const missing = additions.filter((p) => !current.includes(p));
-		if (!missing.length) {
+		// Strings granted by an earlier run of this script that the registry has
+		// since superseded (e.g. kanban:promote -> kanban:replenish).
+		const stale = current.filter((p) => (DEPRECATED_PERMISSIONS as readonly string[]).includes(p));
+		if (!missing.length && !stale.length) {
 			console.log(`  ${roleName}: already migrated (${current.length} perms) — no-op`);
 			continue;
 		}
-		const next = [...current, ...missing];
-		console.log(`  ${roleName}: +[${missing.join(', ')}] -> ${next.length} perms${APPLY ? ' [APPLIED]' : ' [dry run]'}`);
+		const next = [...current.filter((p) => !stale.includes(p)), ...missing];
+		const changes = [
+			missing.length ? `+[${missing.join(', ')}]` : '',
+			stale.length ? `-[${stale.join(', ')}]` : ''
+		].filter(Boolean).join(' ');
+		console.log(`  ${roleName}: ${changes} -> ${next.length} perms${APPLY ? ' [APPLIED]' : ' [dry run]'}`);
 		if (APPLY) {
 			await roles.updateOne({ _id: role._id }, { $set: { permissions: next } });
 			// Propagate to every user's denormalized snapshot of this role
