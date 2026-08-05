@@ -6558,3 +6558,143 @@ replenishment event - all server-side in replenish.ts) is UNCHANGED.
   the replenish-page demote died with the page. Service layer, 4 agent endpoints, MCP
   tools all untouched.
 npm run check: 11 errors - unchanged baseline (r2.ts, AskBimsWidget, assembly, parts).
+
+================================================================================
+2026-08-05 - feat/particle-auto-create-spu - Particle sync auto-creates draft SPUs for new BT-M01 devices
+================================================================================
+Registering a device in the Particle console used to be only half the job: the device
+synced into ParticleDevice, but until somebody manually registered a matching SPU in
+BIMS it stayed in the "unmatched" list and never appeared anywhere the SPU record is
+the entry point (magnetometer/thermocouple validation, the SPU detail page). Particle
+sync now closes that gap - a device whose name is a real SPU name and has no matching
+SPU gets a draft SPU minted for it in the same pass that does the linking.
+- src/lib/server/particle.ts: new exported SPU_DEVICE_NAME_PATTERN = /^BT-M01-\d{4}-\d{4}$/.
+  Inside linkDevicesToSpus(), when the suffix lookup misses, a device matching that
+  pattern is created via Spu.create() with status 'draft', assemblyStatus 'created',
+  qcStatus 'pending', udi AND barcode set to the Particle device name, a statusTransitions
+  entry (null -> draft, reason 'auto_created_particle_sync'), and createdBy pinned to the
+  literal 'system:particle-sync'. An AuditLog INSERT row is written
+  alongside it (tableName 'spus', recordId = the new nanoid, newData carrying udi/status/
+  autoCreatedFrom:'particle'/particleDeviceId, reason "Auto-created from Particle device
+  during link", changedBy = actor username). The new record is then put into the in-run
+  spuByNumber map keyed by its numeric suffix, so a second device with the same suffix
+  in the same sync does not double-create; and it falls straight through to the existing
+  link code, so particleLink.particleDeviceId / particleSerial / linkedAt are set in the
+  same iteration - one pass, no second sweep needed. A create failure is caught and
+  pushed onto errors[] rather than aborting the whole run.
+- The pattern guard is deliberately strict and is the whole safety story here. The
+  Particle account currently holds 106 device rows; 68 map to SPUs and 38 come back
+  unmatched, but only 4 of those 38 are genuine SPUs - BT-M01-0000-0255, -0253, -0241
+  and -0242. The remaining 34 are cartridge decks (Cartridge_Deck_GEN4_001), tip
+  calibrators, bench tools (TOOL-CT-047) and scratch/dev names (new4, Argon, 71E50,
+  owl_narwhal). Every one of those carries trailing digits, and the existing
+  extractNumericId() matches on trailing digits (/(\d+)$/), so an unguarded auto-create
+  would happily mint 34 junk records into `spus` - a SACRED collection under
+  applySacredMiddleware, where cleanup is not a delete but a paperwork exercise. Anything
+  that fails the pattern keeps the old behaviour exactly: it is reported in unmatched[]
+  and nothing is written.
+- Plumbing: linkDevicesToSpus(actor?) and syncDevices(actor?) both take an optional
+  actor { _id, username } and now return created: string[] (the device names/UDIs of the
+  SPUs minted this run) alongside the existing counters. syncDevices threads the actor
+  into its post-sync link call and surfaces created[] from it. Link errors are folded into
+  the sync's own errors[] rather than swallowed - a create failure on a sacred collection
+  must never render to the operator as "Successfully synced N device(s)."
+- Hardening applied after an adversarial review pass over the first cut, all real defects
+  rather than theory:
+  * createdBy is pinned to 'system:particle-sync' and NOT the acting user. /assembly's
+    "Start new build" (src/routes/assembly/+page.server.ts:125-130) reuses any recent draft
+    matching { createdBy: <that user>, status:'draft', assemblyStatus:'created', createdAt
+    within 24h }. With the actor's id an auto-created SPU matched all four clauses, so an
+    operator who synced and then started a build would have assembled a physical unit under
+    a UDI already bound to a different Particle device. Actor attribution lives on the
+    AuditLog changedBy instead, where it costs nothing.
+  * Suffix keys are normalised through parseInt, and an exact-UDI map is consulted first.
+    Previously an existing "SPU-255" produced key "255" while device BT-M01-0000-0255
+    produced "0255" - no hit, and the new code would have minted a permanent duplicate into
+    a collection whose delete hooks throw.
+  * Two SPU-named devices sharing a trailing suffix (BT-M01-0000-0255 vs BT-M01-0001-0255)
+    now push an error instead of silently renaming the SPU and stealing the first device's
+    link.
+  * The created SPU is registered in created[]/the lookup maps immediately after
+    Spu.create, and AuditLog.create got its own try/catch. Previously an audit failure
+    left a minted, undeletable SPU absent from every report of the run.
+  * The settings page now renders the error list as well as the counts.
+- src/routes/particle/settings/+page.server.ts passes { _id, username } from locals.user
+  into both the sync and link actions, appends "Created N new SPU(s)." to the result
+  message, and returns created[] to the page. +page.svelte renders it as an open
+  <details> list under the success banner, mirroring the existing unmatched-devices
+  disclosure so both lists read the same way.
+- Known consequence worth stating rather than discovering later: linkDevicesToSpus also
+  OVERWRITES spu.udi with the Particle device name on every link (unchanged behaviour),
+  and the magnetometer page (src/routes/validation/magnetometer/+page.server.ts:14)
+  selects SPUs purely on { 'particleLink.particleDeviceId': { $exists: true, $ne: null } }
+  with no status filter - so an auto-created draft SPU shows up in that device picker as
+  soon as it is linked. That is the intended outcome (the device is testable the moment
+  it exists), but it does mean drafts are now visible there.
+npm run check: 101 errors / 426 warnings across 2000 files - identical before and after
+this change, and ZERO of them are in the three touched files (src/lib/server/particle.ts,
+src/routes/particle/settings/+page.server.ts, +page.svelte). 101 is this branch's real
+baseline off origin/master; an earlier draft of this entry quoted 11, which was wrong.
+Local `npm run build` is not a usable gate on this machine (OOMs at ~30GB) - the Vercel
+branch build is the real one.
+
+Deployment: preview - https://bioscale-operations-system-mongodb-git-feat-pa-1e83a6-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-5zpa6f409-brevitest.vercel.app)
+Source: branch feat/particle-auto-create-spu @ commit 3401f0c9
+Retrieve this exact code: git checkout feat/particle-auto-create-spu at commit 3401f0c9
+  (or: git log feat/particle-auto-create-spu --oneline to find it if the branch has moved on)
+What this deployment is for: verifying Particle sync/link auto-creates draft SPUs for
+  unmatched BT-M01 devices (0241/0242/0253/0255) and surfaces created[] + errors[] on
+  the Particle settings page.
+
+--------------------------------------------------------------------------------
+2026-08-05 - PRODUCTION DATA CORRECTION - SPU BT-M01-0000-0255
+--------------------------------------------------------------------------------
+0255 was created manually in prod ahead of this feature deploying, by an agent script
+that built the document by CLONING an existing draft SPU as a field template so it would
+pick up the schema defaults. That was the wrong approach: it also copied
+BT-M01-0000-0246's entire `validation` block, so a never-assembled unit reported
+magnetometer/thermocouple/spectrophotometer all "passed", carrying 0246's sessionIds,
+rawData and cartridge reference.
+
+This became an active misread rather than cosmetic noise: a real magnetometer run on
+0255 FAILED (11 of 15 channels below the 3900-4500 Z range, session 9RLuZTzJ5mv_OKgNNcFJC,
+test ran 15:40:38, recorded 17:41:31). validation/magnetometer/+page.server.ts:111 writes
+the SPU rollup ONLY when a run passes, so the failed run left the inherited "passed" block
+untouched and BIMS displayed a failed unit as passed.
+
+Corrected: the rollup was rebuilt strictly from 0255's own validation_sessions (note
+`type` in that collection carries BOTH short and long forms - 'mag'/'magnetometer',
+'thermo'/'thermocouple' - so any consumer must alias them). Result: magnetometer failed
+with its own failureReasons, thermocouple/lux/spectrophotometer pending, overall failed,
+qcStatus failed. Also added the `barcode` and creation `statusTransitions` entry the
+shipped auto-create path writes. AuditLog UPDATE row written with the bad block preserved
+in oldData and the reason recorded.
+
+The shipped feature does NOT have this defect - linkDevicesToSpus() calls Spu.create()
+with explicit fields only, so Mongoose applies clean schema defaults and validation comes
+out pending. The cloning existed solely in the one-off manual script, which was only
+needed because the feature had not deployed yet. No other SPU was created this way.
+
+Post-review self-check caught a REGRESSION introduced by the hardening pass itself, before
+merge. The padding-normalisation fix (parseInt on the suffix key) was applied to the ONE
+shared lookup map, so it changed matching for every device, not just SPU-named ones. Against
+live data that meant 8 junk devices would have matched and RENAMED 4 real SPUs:
+Cartridge_Deck_GEN4_001 / Cartridge_Deck_GEN3_001 -> BT-M01-0000-0001,
+Cartridge-Deck-GEN3-002 / Cartridge_Deck_GEN4_002 -> BT-M01-0000-0002,
+Cartridge_Deck_GEN3_003 / Cartridge_Deck_GEN4_003 -> BT-M01-0000-0003, and
+new4 / Cartridge_Deck_GEN4_004 -> BT-M01-0000-0004. linkDevicesToSpus overwrites spu.udi on
+every link, so those four SPUs would have been renamed to deck/scratch names and had their
+particleLink repointed - strictly worse than the duplicate-SPU case the normalisation was
+meant to prevent, and on the sacred collection.
+Fixed by splitting the map in two: spuByNumber keeps the original raw-suffix keys (exact
+legacy behaviour for every device), and spuByNumberNorm is a last-resort lookup consulted
+ONLY when the device name matches SPU_DEVICE_NAME_PATTERN. Non-SPU-named devices can no
+longer reach the normalised path at all. Also moved the same-suffix collision guard BELOW
+the already-linked check so an established link is not re-reported as an error every run,
+and registered newly created SPUs into all three maps rather than just the normalised one.
+Verified by replaying the final matching logic against live prod data read-only:
+linked=3 alreadyLinked=69 created=3 (BT-M01-0000-0241/-0242/-0253) unmatched=34 errors=0,
+with zero renames of existing SPUs and no non-SPU-named device matching any real SPU.
+npm run check after the fix: 101 errors / 426 warnings - unchanged baseline, zero in the
+touched files.

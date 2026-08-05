@@ -194,6 +194,30 @@
 	{#if form?.success && form?.message}
 		<div class="rounded border border-[var(--color-tron-green)] bg-[rgba(0,255,136,0.1)] p-3">
 			<p class="text-sm text-[var(--color-tron-green)]">{form.message}</p>
+			{#if form?.created?.length}
+				<details class="mt-2" open>
+					<summary class="cursor-pointer text-xs text-[var(--color-tron-green)]">
+						SPUs auto-created from new devices ({form.created.length})
+					</summary>
+					<ul class="mt-1 list-inside list-disc text-xs text-[var(--color-tron-green)]">
+						{#each form.created as udi}
+							<li>{udi}</li>
+						{/each}
+					</ul>
+				</details>
+			{/if}
+			{#if form?.errors?.length}
+				<details class="mt-2" open>
+					<summary class="cursor-pointer text-xs text-[var(--color-tron-red)]">
+						Errors ({form.errors.length})
+					</summary>
+					<ul class="mt-1 list-inside list-disc text-xs text-[var(--color-tron-red)]">
+						{#each form.errors as err}
+							<li>{err}</li>
+						{/each}
+					</ul>
+				</details>
+			{/if}
 			{#if form?.unmatched?.length}
 				<details class="mt-2">
 					<summary class="tron-text-muted cursor-pointer text-xs">Unmatched devices ({form.unmatched.length})</summary>
