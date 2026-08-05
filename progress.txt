@@ -6698,3 +6698,13 @@ linked=3 alreadyLinked=69 created=3 (BT-M01-0000-0241/-0242/-0253) unmatched=34 
 with zero renames of existing SPUs and no non-SPU-named device matching any real SPU.
 npm run check after the fix: 101 errors / 426 warnings - unchanged baseline, zero in the
 touched files.
+
+Deployment: production - https://bioscale-operations-system-mongodb.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-mst9jz08l-brevitest.vercel.app)
+Source: branch master @ commit 932e42a9 (merge of PR #41, feat/particle-auto-create-spu @ 522cca70)
+Retrieve this exact code: git checkout master at commit 932e42a9
+  (or: git log master --oneline to find it if master has since moved on)
+What this deployment is for: Particle sync/link now auto-creates draft SPUs for unmatched
+  devices named BT-M01-nnnn-nnnn, so a device registered in the Particle console appears in
+  BIMS (magnetometer picker, SPU detail, servicing scan) without a manual SPU registration.
+  Next Link run is expected to create BT-M01-0000-0241, -0242 and -0253.
