@@ -6637,3 +6637,12 @@ src/routes/particle/settings/+page.server.ts, +page.svelte). 101 is this branch'
 baseline off origin/master; an earlier draft of this entry quoted 11, which was wrong.
 Local `npm run build` is not a usable gate on this machine (OOMs at ~30GB) - the Vercel
 branch build is the real one.
+
+Deployment: preview - https://bioscale-operations-system-mongodb-git-feat-pa-1e83a6-brevitest.vercel.app
+  (immutable: https://bioscale-operations-system-mongodb-5zpa6f409-brevitest.vercel.app)
+Source: branch feat/particle-auto-create-spu @ commit 3401f0c9
+Retrieve this exact code: git checkout feat/particle-auto-create-spu at commit 3401f0c9
+  (or: git log feat/particle-auto-create-spu --oneline to find it if the branch has moved on)
+What this deployment is for: verifying Particle sync/link auto-creates draft SPUs for
+  unmatched BT-M01 devices (0241/0242/0253/0255) and surfaces created[] + errors[] on
+  the Particle settings page.
