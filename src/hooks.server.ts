@@ -2,6 +2,7 @@ import type { Handle } from '@sveltejs/kit';
 import { redirect } from '@sveltejs/kit';
 import { sequence } from '@sveltejs/kit/hooks';
 import * as auth from '$lib/server/auth';
+import { applyRoutePolicy } from '$lib/server/route-policy';
 import { uploadFile } from '$lib/server/box';
 import { env } from '$env/dynamic/private';
 
@@ -25,6 +26,10 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 		event.locals.user = user;
 		event.locals.session = session;
 	}
+
+	// PERM-03/04: the new permission model (docs/prds/PERM-00). Shadow (log-only)
+	// by default; deny-by-default enforcement when PERMISSIONS_ENFORCE=true.
+	await applyRoutePolicy({ user: event.locals.user, request: event.request, url: event.url });
 
 	// Protect routes
 	const path = event.url.pathname;

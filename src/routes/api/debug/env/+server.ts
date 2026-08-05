@@ -1,5 +1,6 @@
 import { json, error } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
+import { isAdmin } from '$lib/server/permissions';
 import type { RequestHandler } from './$types';
 
 /**
@@ -8,7 +9,7 @@ import type { RequestHandler } from './$types';
  */
 export const GET: RequestHandler = async ({ locals }) => {
 	if (!locals.user) throw error(401, 'Unauthorized');
-	// Allow any logged-in user for now; tighten if needed
+	if (!isAdmin(locals.user)) throw error(403, 'Admin access required');
 
 	const detected = (name: string) => {
 		const val = (env as any)[name];

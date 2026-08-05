@@ -12,13 +12,7 @@ const TERMINAL = new Set(['completed', 'aborted', 'voided', 'cancelled', 'Comple
 
 export const load: LayoutServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
-
-	try {
-		requirePermission(locals.user, 'reagentFilling:read');
-	} catch (e: unknown) {
-		if (e && typeof e === 'object' && 'status' in e) throw e;
-		console.error('[REAGENT-FILLING LAYOUT] Permission check error:', e instanceof Error ? e.message : e);
-	}
+	requirePermission(locals.user, 'reagentFilling:read');
 
 	try {
 		await connectDB();

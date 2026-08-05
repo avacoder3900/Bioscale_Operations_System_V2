@@ -17,13 +17,7 @@ const WAX_PAGE_OWNED = ['Setup', 'Loading', 'Running', 'Awaiting Removal',
 
 export const load: LayoutServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
-
-	try {
-		requirePermission(locals.user, 'waxFilling:read');
-	} catch (e: unknown) {
-		if (e && typeof e === 'object' && 'status' in e) throw e;
-		console.error('[WAX-FILLING LAYOUT] Permission check error:', e instanceof Error ? e.message : e);
-	}
+	requirePermission(locals.user, 'waxFilling:read');
 
 	try {
 		await connectDB();

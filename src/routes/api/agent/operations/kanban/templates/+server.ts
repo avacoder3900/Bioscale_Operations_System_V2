@@ -1,10 +1,14 @@
 import { json } from '@sveltejs/kit';
 import { requireAgentApiKey } from '$lib/server/api-auth';
-import { connectDB, KanbanTemplate, User, AuditLog, generateId } from '$lib/server/db';
-import { hasPermission, isAdmin } from '$lib/server/permissions';
+import { connectDB, KanbanTemplate } from '$lib/server/db';
+import {
+	humanOnlyMessage,
+	logMachineActivity,
+	HUMAN_ONLY_ACTIONS
+} from '$lib/server/machine-actor';
 import type { RequestHandler } from './$types';
 
-/** KB2-11: workflow templates. GET = list; POST = create/update (kanban:admin). */
+/** KB2-11: workflow templates. GET = list; writes are human-only (PERM-05). */
 export const GET: RequestHandler = async ({ request, url }) => {
 	requireAgentApiKey(request);
 	await connectDB();
@@ -13,36 +17,32 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	return json({ success: true, data: { templates: JSON.parse(JSON.stringify(templates)) } });
 };
 
+/**
+ * PERM-05: template writes are an admin action, and key-authenticated callers are
+ * permanent non-admins. The old gate resolved `kanban:admin` against an actor
+ * username taken from the request body, so any holder of the shared key could name
+ * an admin. Humans edit templates in Kanban → Policy → Templates.
+ */
 export const POST: RequestHandler = async ({ request }) => {
 	requireAgentApiKey(request);
-	await connectDB();
-	const body = await request.json();
-	const { templateId, actor, ...fields } = body;
-
-	if (!actor?.trim()) return json({ success: false, error: 'actor (username) is required' }, { status: 400 });
-	const user: any = await User.findOne({ username: actor.trim().toLowerCase() }).select('username isActive roles').lean();
-	if (!user || user.isActive === false) return json({ success: false, error: `Actor '${actor}' is not an active BIMS user.` }, { status: 401 });
-	if (!hasPermission(user, 'kanban:admin') && !isAdmin(user)) {
-		return json({ success: false, error: `${user.username} does not hold kanban:admin.` }, { status: 403 });
-	}
-
-	const allowed = ['name', 'board', 'active', 'itemType', 'sizeClass', 'classOfService', 'titleTemplate', 'dor', 'tags', 'defaultProjectId', 'notes'];
-	const $set: Record<string, unknown> = {};
-	for (const k of allowed) if (fields[k] !== undefined) $set[k] = fields[k];
-
-	let doc: any;
-	if (templateId) {
-		doc = await KanbanTemplate.findByIdAndUpdate(templateId, { $set }, { new: true }).lean();
-		if (!doc) return json({ success: false, error: 'Template not found' }, { status: 404 });
-	} else {
-		if (!$set.name || !$set.titleTemplate || !$set.sizeClass || !($set as any).dor?.deliverable) {
-			return json({ success: false, error: 'name, titleTemplate, sizeClass, dor.deliverable are required' }, { status: 400 });
-		}
-		doc = (await KanbanTemplate.create({ _id: generateId(), ...$set, createdBy: user.username })).toObject();
-	}
-	await AuditLog.create({
-		_id: generateId(), tableName: 'kanban_templates', recordId: doc._id,
-		action: templateId ? 'UPDATE' : 'INSERT', newData: $set, changedBy: user.username, changedAt: new Date()
+	await logMachineActivity({
+		keyIdentity: 'agent-shared',
+		reportedActor: null,
+		channel: 'agent-api',
+		tool: 'kanban_set_template',
+		path: '/api/agent/operations/kanban/templates',
+		method: 'POST',
+		ok: false,
+		detail: 'refused: human-only'
 	});
-	return json({ success: true, data: JSON.parse(JSON.stringify(doc)) }, { status: templateId ? 200 : 201 });
+	return json(
+		{
+			success: false,
+			error: humanOnlyMessage(
+				HUMAN_ONLY_ACTIONS.kanban_set_template.what,
+				HUMAN_ONLY_ACTIONS.kanban_set_template.where
+			)
+		},
+		{ status: 403 }
+	);
 };

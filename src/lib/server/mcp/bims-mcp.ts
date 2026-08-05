@@ -2,6 +2,14 @@
 import * as z from 'zod';
 import { env } from '$env/dynamic/private';
 import { TIER2_STATUSES, SIZE_CLASSES, legalStatusesFor } from '$lib/shared/kanban-status';
+import {
+	resolveActor,
+	assertHumanOnly,
+	logMachineActivity,
+	ActorError,
+	HumanOnlyError,
+	HUMAN_ONLY_ACTIONS
+} from '$lib/server/machine-actor';
 
 // Status vocabulary for MCP tool schemas, from the shared module.
 // 'review' is software-board-only and not exposed through these tools yet.
@@ -37,6 +45,64 @@ const WRITE_TOOL = { readOnlyHint: false, destructiveHint: false, idempotentHint
 function toolError(text: string): ToolResult {
 	return { isError: true, content: [{ type: 'text', text }] };
 }
+
+/**
+ * PERM-05: wrapper for every MUTATING tool.
+ *
+ * 1. Admin-gated actions are refused outright — bots are permanent non-admins.
+ * 2. Otherwise the caller must name the human it acts for; an absent or
+ *    unrecognised name refuses the write with instructions to ask. Because the
+ *    refusal is the only path forward, the model asks.
+ * 3. Whatever happens is recorded with both identities (key + claimed human).
+ *
+ * `actionId` doubles as the audit label and the human-only lookup key.
+ */
+async function machineWrite(
+	actionId: string,
+	actor: string | undefined,
+	run: (resolvedActor: string) => Promise<ToolResult>
+): Promise<ToolResult> {
+	try {
+		assertHumanOnly(actionId);
+		const resolved = await resolveActor(actor);
+		const result = await run(resolved.username);
+		await logMachineActivity({
+			keyIdentity: 'mcp-shared',
+			reportedActor: resolved.username,
+			channel: 'mcp',
+			tool: actionId,
+			path: actionId,
+			method: 'WRITE',
+			ok: !result.isError,
+			detail: result.isError ? result.content?.[0]?.text : undefined
+		});
+		return result;
+	} catch (e) {
+		if (e instanceof HumanOnlyError || e instanceof ActorError) {
+			await logMachineActivity({
+				keyIdentity: 'mcp-shared',
+				reportedActor: actor ?? null,
+				channel: 'mcp',
+				tool: actionId,
+				path: actionId,
+				method: 'WRITE',
+				ok: false,
+				detail: e.name
+			});
+			return toolError(e.message);
+		}
+		throw e;
+	}
+}
+
+/** Schema fragment for the mandatory attribution field on every write tool. */
+const ACTOR_FIELD = z
+	.string()
+	.describe(
+		'REQUIRED. BIMS username of the human you are working with — the person this ' +
+			'change is on behalf of. Never guess or use your own name; if you do not know it, ask ' +
+			'them, then reuse the same name for the rest of the conversation.'
+	);
 
 async function callAgentApi(
 	fetcher: Fetcher,
@@ -99,7 +165,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '2.13.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.0.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -295,6 +361,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'The request is atomic: if any SPU or part fails to resolve, nothing is deducted and per-entry errors come back — ' +
 				'fix them with the user and retry. On success, report ONLY each SPU\'s deducted parts with previous → new counts.',
 			inputSchema: z.object({
+				actor: ACTOR_FIELD,
 				confirmed: z
 					.boolean()
 					.describe('Must be true, and only after the user explicitly approved the full per-SPU part+quantity list.'),
@@ -318,7 +385,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 					.describe('One entry per SPU worked on; the same part on two SPUs appears under both.')
 			})
 		},
-		async (args) => callAgentApi(fetcher, '/api/agent/inventory/reassembly', { method: 'POST', body: args })
+		async (args) =>
+			machineWrite('record_reassembly_parts_usage', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, '/api/agent/inventory/reassembly', { method: 'POST', body: { ...args, actor } })
+			)
 	);
 
 	server.registerTool(
@@ -337,6 +407,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'scope ("general" = General Inventory / non-BOM, "cartridge", or "all") and/or a classification filter such as ' +
 				'category "Critical", or lowStockOnly. Report the returned url to the user as a link.',
 			inputSchema: z.object({
+				actor: ACTOR_FIELD,
 				format: z
 					.enum(['pdf', 'xlsx', 'csv', 'json'])
 					.optional()
@@ -350,10 +421,12 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			})
 		},
 		async ({ format, ...rest }) =>
-			callAgentApi(fetcher, '/api/agent/inventory/report', {
-				method: 'POST',
-				body: { ...rest, format: format ?? 'pdf' }
-			})
+			machineWrite('generate_inventory_report', (rest as any).actor, (actor) =>
+				callAgentApi(fetcher, '/api/agent/inventory/report', {
+					method: 'POST',
+					body: { ...rest, actor, format: format ?? 'pdf' }
+				})
+			)
 	);
 
 	server.registerTool(
@@ -372,6 +445,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'Include every relevant column the data has unless the user narrows it; put filters you applied in subtitleLines ' +
 				'so the file is self-describing.',
 			inputSchema: z.object({
+				actor: ACTOR_FIELD,
 				title: z.string().describe('Document title, e.g. "Magnetometer History - SPU 203".'),
 				format: z.enum(['pdf', 'xlsx', 'csv', 'json']).optional().describe('File type the user asked for (default pdf; use xlsx when they say Excel/spreadsheet).'),
 				filename: z.string().optional().describe('Optional filename hint (no extension).'),
@@ -402,7 +476,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				orientation: z.enum(['landscape', 'portrait']).optional().describe('PDF page orientation (default landscape).')
 			})
 		},
-		async (args) => callAgentApi(fetcher, '/api/agent/export', { method: 'POST', body: args })
+		async (args) =>
+			machineWrite('export_data_file', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, '/api/agent/export', { method: 'POST', body: { ...args, actor } })
+			)
 	);
 
 	server.registerTool(
@@ -425,6 +502,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'The request is atomic: any unresolvable entry rejects the whole request with per-entry errors. ' +
 				'On success report each part\'s previous → new count (and per-barcode breakdown).',
 			inputSchema: z.object({
+				actor: ACTOR_FIELD,
 				confirmed: z
 					.boolean()
 					.describe('Must be true, and only after the user explicitly approved the count list.'),
@@ -455,7 +533,12 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			})
 		},
 		async (args) =>
-			callAgentApi(fetcher, '/api/agent/inventory/physical-count', { method: 'POST', body: args })
+			machineWrite('record_physical_count', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, '/api/agent/inventory/physical-count', {
+					method: 'POST',
+					body: { ...args, actor }
+				})
+			)
 	);
 
 	server.registerTool(
@@ -560,13 +643,17 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'Latest analyzable run wins: no warnings → passed, warnings → failed (reasons recorded). Idempotent; ' +
 				'finalized SPUs are skipped; every change is audit-logged. Also runs automatically once a day.',
 			inputSchema: z.object({
+				actor: ACTOR_FIELD,
 				spu: z
 					.string()
 					.optional()
 					.describe('SPU UDI/barcode/_id/suffix to sync; omit to sync every SPU with optics runs.')
 			})
 		},
-		async (args) => callAgentApi(fetcher, '/api/agent/validation/sync-optics', { method: 'POST', body: args })
+		async (args) =>
+			machineWrite('sync_optics_to_spu', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, '/api/agent/validation/sync-optics', { method: 'POST', body: { ...args, actor } })
+			)
 	);
 
 	server.registerTool(
@@ -666,11 +753,16 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				tags: z.array(z.string()).optional(),
 				parentTaskId: z.string().optional().describe('Create as a subtask of this task.'),
 				sourceRef: z.string().optional().describe('External reference (e.g. pr:123, branch:name, or a ticket id).'),
-				actor: z.string().optional().describe('Username of the human driving this change (defaults to "agent").')
+				actor: ACTOR_FIELD
 			})
 		},
 		async (args) =>
-			callAgentApi(fetcher, '/api/agent/operations/kanban/tasks', { method: 'POST', body: { ...args, source: 'mcp' } })
+			machineWrite('kanban_capture', args.actor, (actor) =>
+				callAgentApi(fetcher, '/api/agent/operations/kanban/tasks', {
+					method: 'POST',
+					body: { ...args, actor, source: 'mcp' }
+				})
+			)
 	);
 
 	server.registerTool(
@@ -703,14 +795,16 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 					})
 					.optional()
 					.describe('Edit Definition-of-Ready fields.'),
-				actor: z.string().optional().describe('Username of the human driving this change (defaults to "agent").')
+				actor: ACTOR_FIELD
 			})
 		},
 		async ({ taskId, ...rest }) =>
-			callAgentApi(fetcher, `/api/agent/operations/kanban/tasks/${encodeURIComponent(taskId)}`, {
-				method: 'PATCH',
-				body: rest
-			})
+			machineWrite('kanban_update_task', rest.actor, (actor) =>
+				callAgentApi(fetcher, `/api/agent/operations/kanban/tasks/${encodeURIComponent(taskId)}`, {
+					method: 'PATCH',
+					body: { ...rest, actor }
+				})
+			)
 	);
 
 	// ------------------------------------------- kanban: the commitment point
@@ -730,57 +824,74 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			callAgentApi(fetcher, '/api/agent/operations/kanban/replenishment-status', { query: { board } })
 	);
 
+	// PERM-05: the commitment point (Tier 1 → Tier 2) is an admin gate, and bots
+	// are permanent non-admins. These stay registered so the model can explain
+	// where the human does it, but they never execute. Propose, don't decide.
 	server.registerTool(
 		'kanban_replenish',
 		{ annotations: WRITE_TOOL,
 			description:
-				'THE commitment point: promote Tier-1 options into the global ready queue, in the given order. ' +
-				'Only a human commits work — `actor` must be the username of the human you are working with, and they must hold ' +
-				'the kanban:replenish permission. NEVER guess or invent the actor; if you do not know who you are working with, ask. ' +
-				'Items must satisfy the Definition of Ready (deliverable statement; software items also need a handoff brief) and the ' +
-				'ready cap must have room — rejected items come back with exact reasons. One replenishment event id covers the batch (the decision record).',
+				'THE commitment point: promote Tier-1 options into the global ready queue. HUMAN-ONLY — committing work is an ' +
+				'admin action and cannot be done through this connection. Calling it returns instructions for the human. ' +
+				'Use kanban_replenishment_status to show what is eligible, and say what you would commit; the person does it in ' +
+				'Kanban → Inventory.',
 			inputSchema: z.object({
-				taskIds: z.array(z.string()).min(1).describe('Task ids to promote, in desired queue order.'),
-				actor: z.string().describe('Username of the human making this commitment (required — never guess).'),
+				taskIds: z.array(z.string()).min(1).describe('Task ids that would be promoted, in desired queue order.'),
+				actor: ACTOR_FIELD,
 				board: z.enum(['ops', 'software']).optional().describe('Which board (default ops).'),
-				note: z.string().optional().describe('Optional note recorded on the replenishment event.')
+				note: z.string().optional()
 			})
 		},
-		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/replenish', { method: 'POST', body: args })
+		async (args) =>
+			machineWrite('kanban_replenish', args.actor, () =>
+				callAgentApi(fetcher, '/api/agent/operations/kanban/replenish', { method: 'POST', body: args })
+			)
 	);
 
 	server.registerTool(
 		'kanban_demote',
 		{ annotations: WRITE_TOOL,
 			description:
-				'Unwind a commitment honestly: move a ready/waiting/blocked item back to Tier 1 (processed). ' +
-				'Requires the human actor (kanban:replenish) and a reason. A wip item must leave wip first — deliberate friction.',
+				'Unwind a commitment: move a ready/waiting/blocked item back to Tier 1. HUMAN-ONLY — crossing the commitment ' +
+				'point in either direction is an admin action. Calling it returns instructions for the human.',
 			inputSchema: z.object({
 				taskId: z.string(),
-				actor: z.string().describe('Username of the human making this decision (required — never guess).'),
-				reason: z.string().describe('Why the commitment is being unwound.')
+				actor: ACTOR_FIELD,
+				reason: z.string().describe('Why the commitment would be unwound.')
 			})
 		},
-		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/demote', { method: 'POST', body: args })
+		async (args) =>
+			machineWrite('kanban_demote', args.actor, () =>
+				callAgentApi(fetcher, '/api/agent/operations/kanban/demote', { method: 'POST', body: args })
+			)
 	);
 
 	server.registerTool(
 		'kanban_reorder_queue',
 		{ annotations: WRITE_TOOL,
 			description:
-				'Explicit, audited re-rank. scope "ready" reorders the global commitment queue (actor needs kanban:replenish); ' +
-				'scope {projectId} reorders Tier-1 options within a project. Ranks are strict ordinals — no ties; ' +
-				'items in scope but omitted from the order keep their relative order after the listed ones.',
+				'Explicit, audited re-rank. scope {projectId} reorders Tier-1 options within a project — allowed. ' +
+				'scope "ready" reorders the committed queue, which is HUMAN-ONLY (it is a commitment decision) and returns ' +
+				'instructions instead. Ranks are strict ordinals — no ties; items in scope but omitted keep their relative order after the listed ones.',
 			inputSchema: z.object({
 				scope: z
 					.union([z.literal('ready'), z.object({ projectId: z.string() })])
-					.describe('"ready" for the global queue, or {projectId} for Tier-1 project ranking.'),
+					.describe('"ready" for the global committed queue (human-only), or {projectId} for Tier-1 project ranking.'),
 				orderedTaskIds: z.array(z.string()).min(1).describe('Task ids in the desired new order (rank 1 first).'),
-				actor: z.string().describe('Username of the human driving this change (required — never guess).'),
+				actor: ACTOR_FIELD,
 				board: z.enum(['ops', 'software']).optional().describe('Which board (default ops).')
 			})
 		},
-		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/reorder', { method: 'POST', body: args })
+		async (args) =>
+			machineWrite(
+				args.scope === 'ready' ? 'kanban_reorder_ready' : 'kanban_reorder_project',
+				args.actor,
+				(actor) =>
+					callAgentApi(fetcher, '/api/agent/operations/kanban/reorder', {
+						method: 'POST',
+						body: { ...args, actor }
+					})
+			)
 	);
 
 	// -------------------------------------------- kanban: processing (triage)
@@ -814,7 +925,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 					.optional()
 			})
 		},
-		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/process', { method: 'POST', body: args })
+		async (args) =>
+			machineWrite('kanban_process', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, '/api/agent/operations/kanban/process', { method: 'POST', body: { ...args, actor } })
+			)
 	);
 
 	server.registerTool(
@@ -830,7 +944,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				reason: z.string().optional().describe('Required for decline.')
 			})
 		},
-		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/disposition', { method: 'POST', body: args })
+		async (args) =>
+			machineWrite('kanban_disposition', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, '/api/agent/operations/kanban/disposition', { method: 'POST', body: { ...args, actor } })
+			)
 	);
 
 	server.registerTool(
@@ -850,7 +967,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 					.describe('New options this spike surfaced — filed as captured/discovered.')
 			})
 		},
-		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/spikes/close', { method: 'POST', body: args })
+		async (args) =>
+			machineWrite('kanban_close_spike', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, '/api/agent/operations/kanban/spikes/close', { method: 'POST', body: { ...args, actor } })
+			)
 	);
 
 	// ------------------------------------------- kanban: metrics + policy
@@ -894,7 +1014,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				updates: z.record(z.string(), z.union([z.string(), z.number()])).describe('Dot-path → new value.')
 			})
 		},
-		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/policy', { method: 'PATCH', body: args })
+		async (args) =>
+			machineWrite('kanban_set_policy', (args as any).actor, () =>
+				callAgentApi(fetcher, '/api/agent/operations/kanban/policy', { method: 'PATCH', body: args })
+			)
 	);
 
 	// ------------------------------------------- kanban: workflow templates
@@ -931,7 +1054,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				notes: z.string().optional()
 			})
 		},
-		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/templates', { method: 'POST', body: args })
+		async (args) =>
+			machineWrite('kanban_set_template', (args as any).actor, () =>
+				callAgentApi(fetcher, '/api/agent/operations/kanban/templates', { method: 'POST', body: args })
+			)
 	);
 
 	// ------------------------------------------- kanban: standing work (supply)
@@ -987,7 +1113,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				notes: z.string().optional()
 			})
 		},
-		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/standing', { method: 'POST', body: args })
+		async (args) =>
+			machineWrite('kanban_set_standing_target', (args as any).actor, () =>
+				callAgentApi(fetcher, '/api/agent/operations/kanban/standing', { method: 'POST', body: args })
+			)
 	);
 
 	server.registerTool(
@@ -1013,10 +1142,12 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			})
 		},
 		async ({ parentTaskId, subtasks, actor }) =>
-			callAgentApi(fetcher, `/api/agent/operations/kanban/tasks/${encodeURIComponent(parentTaskId)}/subtasks`, {
-				method: 'POST',
-				body: { subtasks, actor }
-			})
+			machineWrite('kanban_create_subtasks', actor, (resolved) =>
+				callAgentApi(fetcher, `/api/agent/operations/kanban/tasks/${encodeURIComponent(parentTaskId)}/subtasks`, {
+					method: 'POST',
+					body: { subtasks, actor: resolved }
+				})
+			)
 	);
 
 	server.registerTool(
@@ -1026,12 +1157,16 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'Merge one kanban task into another: the source task\'s description and tags fold into the target, and the source is archived. ' +
 				'Use for duplicates. Audit-logged on both tasks.',
 			inputSchema: z.object({
+				actor: ACTOR_FIELD,
 				targetTaskId: z.string().describe('The task that survives.'),
 				sourceTaskId: z.string().describe('The duplicate task to fold in and archive.'),
 				reason: z.string().optional().describe('Why the merge was made.')
 			})
 		},
-		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/tasks/merge', { method: 'POST', body: args })
+		async (args) =>
+			machineWrite('kanban_merge_tasks', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, '/api/agent/operations/kanban/tasks/merge', { method: 'POST', body: { ...args, actor } })
+			)
 	);
 
 	server.registerTool(
@@ -1051,6 +1186,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'Attach improvement proposals (split / merge / enrich) to kanban tasks for a human to approve, edit, or veto. ' +
 				'Use this instead of direct mutation when a change is judgment-heavy and should be reviewed.',
 			inputSchema: z.object({
+				actor: ACTOR_FIELD,
 				proposals: z
 					.array(
 						z.object({
@@ -1063,8 +1199,13 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 					.min(1)
 			})
 		},
-		async ({ proposals }) =>
-			callAgentApi(fetcher, '/api/agent/operations/kanban/proposals', { method: 'POST', body: { proposals } })
+		async ({ proposals, actor }: any) =>
+			machineWrite('kanban_propose_changes', actor, (resolved) =>
+				callAgentApi(fetcher, '/api/agent/operations/kanban/proposals', {
+					method: 'POST',
+					body: { proposals, actor: resolved }
+				})
+			)
 	);
 
 	server.registerTool(
@@ -1080,10 +1221,12 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			})
 		},
 		async ({ proposalId, ...rest }) =>
-			callAgentApi(fetcher, `/api/agent/operations/kanban/proposals/${encodeURIComponent(proposalId)}`, {
-				method: 'PATCH',
-				body: rest
-			})
+			machineWrite('kanban_decide_proposal', (rest as any).actor, () =>
+				callAgentApi(fetcher, `/api/agent/operations/kanban/proposals/${encodeURIComponent(proposalId)}`, {
+					method: 'PATCH',
+					body: rest
+				})
+			)
 	);
 
 	server.registerTool(
@@ -1107,6 +1250,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		{ annotations: WRITE_TOOL,
 			description: 'Record a kanban workflow violation against a task. Audit-logged.',
 			inputSchema: z.object({
+				actor: ACTOR_FIELD,
 				type: z.string().describe('Violation type slug.'),
 				taskId: z.string(),
 				description: z.string(),
@@ -1114,7 +1258,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				severity: z.string().optional()
 			})
 		},
-		async (args) => callAgentApi(fetcher, '/api/agent/operations/kanban/violations', { method: 'POST', body: args })
+		async (args) =>
+			machineWrite('kanban_report_violation', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, '/api/agent/operations/kanban/violations', { method: 'POST', body: { ...args, actor } })
+			)
 	);
 
 	// ----------------------------------------------------------- approvals
@@ -1137,6 +1284,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			description:
 				'Open a change-approval request for a human stakeholder to review. Use before making changes that need sign-off. Audit-logged.',
 			inputSchema: z.object({
+				actor: ACTOR_FIELD,
 				changeTitle: z.string(),
 				changeType: z.string().describe('Category of change (e.g. process, document, equipment).'),
 				changeDescription: z.string().optional(),
@@ -1147,7 +1295,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				dueDate: z.string().optional().describe('ISO date string.')
 			})
 		},
-		async (args) => callAgentApi(fetcher, '/api/agent/approvals', { method: 'POST', body: args })
+		async (args) =>
+			machineWrite('create_approval_request', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, '/api/agent/approvals', { method: 'POST', body: { ...args, actor } })
+			)
 	);
 
 	server.registerTool(
@@ -1162,7 +1313,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				decisionRationale: z.string().optional()
 			})
 		},
-		async (args) => callAgentApi(fetcher, '/api/agent/approvals', { method: 'PATCH', body: args })
+		async (args) =>
+			machineWrite('decide_approval_request', (args as any).actor, () =>
+				callAgentApi(fetcher, '/api/agent/approvals', { method: 'PATCH', body: args })
+			)
 	);
 
 	// ------------------------------------------------------------ messages
@@ -1186,6 +1340,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		{ annotations: WRITE_TOOL,
 			description: 'Send a message to a BIMS user (appears in their in-app agent inbox). Audit-logged.',
 			inputSchema: z.object({
+				actor: ACTOR_FIELD,
 				toUserId: z.string(),
 				content: z.string(),
 				subject: z.string().optional(),
@@ -1195,7 +1350,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				relatedEntityId: z.string().optional()
 			})
 		},
-		async (args) => callAgentApi(fetcher, '/api/agent/messages', { method: 'POST', body: args })
+		async (args) =>
+			machineWrite('send_message', (args as any).actor, (actor) =>
+				callAgentApi(fetcher, '/api/agent/messages', { method: 'POST', body: { ...args, actor } })
+			)
 	);
 
 	// ---------------------------------------------------------- cartridges

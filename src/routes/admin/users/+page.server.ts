@@ -160,9 +160,13 @@ export const actions: Actions = {
 		if (!role) return fail(400, { error: 'Role not found' });
 
 		const now = new Date();
+		// $set replaces the roles array (single role per user, per SECURITY.md) —
+		// $push here previously stacked duplicate role subdocs on reassignment.
 		await User.updateOne({ _id: userId }, {
+			$set: {
+				roles: [{ roleId: role._id, roleName: role.name, permissions: role.permissions, assignedAt: now, assignedBy: locals.user!._id }]
+			},
 			$push: {
-				roles: { roleId: role._id, roleName: role.name, permissions: role.permissions, assignedAt: now, assignedBy: locals.user!._id },
 				roleHistory: {
 					_id: generateId(), roleId: role._id, roleName: role.name, permissions: role.permissions,
 					grantedAt: now, grantedBy: { _id: locals.user!._id, username: locals.user!.username }
@@ -183,12 +187,15 @@ export const actions: Actions = {
 
 		const now = new Date();
 		await User.updateOne({ _id: userId }, { $pull: { roles: { roleId } } });
+		// arrayFilters stamps every un-revoked grant of this role, and matches
+		// subdocs where revokedAt is absent as well as explicitly null.
 		await User.updateOne(
-			{ _id: userId, 'roleHistory.roleId': roleId, 'roleHistory.revokedAt': null },
+			{ _id: userId },
 			{ $set: {
-				'roleHistory.$.revokedAt': now,
-				'roleHistory.$.revokedBy': { _id: locals.user!._id, username: locals.user!.username }
-			} }
+				'roleHistory.$[h].revokedAt': now,
+				'roleHistory.$[h].revokedBy': { _id: locals.user!._id, username: locals.user!.username }
+			} },
+			{ arrayFilters: [{ 'h.roleId': roleId, 'h.revokedAt': null }] }
 		);
 		await AuditLog.create({ _id: generateId(), tableName: 'users', recordId: userId, action: 'UPDATE', changedBy: locals.user?.username, changedAt: new Date() });
 		return { success: true };

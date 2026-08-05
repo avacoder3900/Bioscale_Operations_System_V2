@@ -6708,3 +6708,204 @@ What this deployment is for: Particle sync/link now auto-creates draft SPUs for 
   devices named BT-M01-nnnn-nnnn, so a device registered in the Particle console appears in
   BIMS (magnetometer picker, SPU detail, servicing scan) without a manual SPU registration.
   Next Link run is expected to create BT-M01-0000-0241, -0242 and -0253.
+
+================================================================================
+2026-08-03 — feat/perm-02-registry — PERM-02: permission registry + additive migration (APPLIED to Atlas)
+================================================================================
+Stacked on feat/perm-01-hot-fixes. Implements docs/prds/PERM-02.
+
+- NEW src/lib/server/permissions-registry.ts — pure-data single source of truth:
+  MEMBERSHIP (bims/research), 6 GATE perms, LEGACY groups (now including the previously
+  unassignable cv:write/cv:admin/inventory:retract), ALL_ASSIGNABLE, PROTECTED_ROLE_NAMES
+  (Research Admin/Researcher), canonical Admin/Operator role contents. Importable from both
+  $lib and scripts/ (no sveltekit imports).
+- permissions.ts: admin:full is now a SCOPED WILDCARD — satisfies any BIMS permission iff the
+  user also holds bims; never satisfies research/experiment:*/user:manage. Plus: permissions
+  contributed by research-owned roles are IGNORED in all BIMS checks (bimsPermissions filter).
+  This was forced by a live finding: zane holds Operator + Research Admin, and Research
+  Admin's admin:full would have combined with Operator's new bims to make him a wildcard
+  BIMS admin. It also strips the stale `admin` (Research Admin) user's standing BIMS admin
+  access — the R1 cross-app leak is now closed at the enforcement layer, not just planned.
+  hasAnyPermission routes through hasPermission (wildcard-consistent).
+- admin/roles: local ALL_PERMISSIONS deleted; groups from registry (membership + adminGate
+  groups shown first); setPermissions validates against registry (arbitrary strings rejected);
+  updateRole/deleteRole/setPermissions refuse to touch research-owned roles.
+- scripts/seed.ts: drifted local list deleted; Admin/Operator seeded from registry.
+- NEW scripts/migrate-perm-02-additive.ts (dry-run default, idempotent). APPLIED to Atlas
+  2026-08-03: Admin +[bims, kanban:promote, manufacturing:release, sacred:correct, assay:lock]
+  -> 53 perms, propagated to 8 users; Operator +[bims] -> 10 perms, propagated to 4 users.
+  Viewer + research roles untouched. Verified: all active admins show [bims, admin:full];
+  zane evaluates as Operator-only in BIMS.
+
+App behavior unchanged until PERM-03/04 (additive strings are inert to legacy checks; the
+wildcard only ADDS grants for admin:full+bims holders, who already held all legacy strings).
+npm run check: 11 errors — unchanged baseline.
+
+================================================================================
+2026-08-03 — feat/perm-03-shadow — PERM-03: deny-by-default evaluator in shadow (log-only) mode
+================================================================================
+Stacked on feat/perm-02-registry. Implements docs/prds/PERM-03.
+
+- NEW src/lib/server/route-policy.ts — evaluateRoutePolicy(): public prefixes (/login,
+  /logout, /invite) -> allow; no session -> deny(unauthenticated); no `bims` membership ->
+  deny(no-bims-membership); admin-gate map (/admin -> admin:full, /documents/*/approve ->
+  document:approve) -> deny(gate:X); else allow. Classification by CREDENTIAL not path:
+  requests bearing key material (x-api-key/x-agent-api-key/x-station-agent-key/authorization/
+  ?key=//api/mcp/k/) are exempt — machine surface is scoped in PERM-05. Shadow log model
+  (permission_shadow_log, 30-day TTL) registered locally — models/index.ts deliberately NOT
+  touched (Jacob's uncommitted KB2 work lives there).
+- hooks.server.ts: shadowEvaluate() runs on every request after session resolution.
+  LOG-ONLY: writes a row per would-be denial; hard requirement is it can never throw or
+  block (outer try/catch swallow + console.error). Anonymous non-API paths aren't logged
+  (current hooks already redirect those); anonymous /api/ hits ARE logged.
+- NEW scripts/report-shadow-denials.ts — aggregates by caller x path x reason (--days N).
+  PERM-04 flip criterion: >=7 consecutive days where every logged denial is intended.
+Expected legitimate denials to watch for: the stale `admin` (Research Admin) user if anyone
+still uses it (no bims — intended), research users browsing BIMS, any forgotten automation
+hitting session endpoints without keys.
+
+npm run check: 11 errors — unchanged baseline.
+
+================================================================================
+2026-08-03 — feat/perm-04-prep — PERM-04 prep: dormant enforcement switch, admin gates installed, permission matrix tests
+================================================================================
+Stacked on feat/perm-03-shadow. Everything here is inert or behavior-neutral today.
+
+- route-policy.ts: shadowEvaluate() -> applyRoutePolicy() with the PERM-04 enforcement branch
+  built in, behind PERMISSIONS_ENFORCE env var (default off = shadow/log-only). When flipped:
+  unauthenticated -> redirect (pages) / 401 (API); no-bims or failed gate -> 403. Rollback =
+  set PERMISSIONS_ENFORCE=false, no deploy needed.
+- Admin gates installed at their action sites (PERM-04 §B). Zero behavior change today:
+  Operators never held manufacturing:write/admin, and Admins hold the gates (PERM-02
+  migration) plus the wildcard.
+    manufacturing:release — qa-qc recordResult (pass/fail release decision), scrapCartridge,
+      overturnScrap; cart-mfg/scrap removeWaxStoredCartridges + removeFromBackingLot
+    assay:lock — assays/[assayId] lock + unlock (was manufacturing:admin)
+    document:approve — already correctly installed (no change needed)
+    kanban:promote — DEFERRED: promotion/demotion is active KB2 territory; install when the
+      KB2 branches merge to avoid conflicts
+    sacred:correct — DEFERRED: no sacred-correction write sites exist yet (Sacred-tier repair
+      from audit-2026-07-29 is a prerequisite); gate goes in with that repair
+- NEW src/lib/server/permissions.test.ts — 9-case permission matrix (npm run test:unit, all
+  pass, 57 total): wildcard scoping, research-role filtering (incl. the zane dual-role case),
+  membership, hasAnyPermission consistency.
+- SECURITY.md: stale-model warning banner pointing at PERM-00 + what's already live (full
+  rewrite of the doc remains PERM-06).
+
+npm run check: 11 errors — unchanged baseline. npm run test:unit: 57/57 pass.
+Remaining before PERM-04 flip: merge stack to production trunk (Jacob), >=7 clean shadow days
+(report-shadow-denials.ts), KB2 merge, then set PERMISSIONS_ENFORCE=true.
+================================================================================
+2026-08-05 — feat/perm-04-prep — PERM-04 correction: kanban tier gate is kanban:replenish (not a new string)
+================================================================================
+Merged current origin/master into the stack (only conflict was progress.txt; both sides kept).
+Stack re-verified against master: npm run check 11 errors (baseline), test:unit 57/57.
+
+Design correction found while installing the last gate. PERM-00 specced a NEW `kanban:promote`
+for the tier-1 -> tier-2 gate. Reading the KB2 code shows that gate already exists and is
+architecturally airtight:
+  - transitionTask() throws TIER_CROSSING_FORBIDDEN on every tier crossing unless the caller
+    passes allowTierCrossing.
+  - Only 4 call sites pass it. The two human ones are replenish.ts promote + demote, both
+    behind requireReplenisher() -> kanban:replenish || isAdmin.
+  - Operators do not hold kanban:replenish; Admins do. So "tier promotion is admin-only" is
+    already true.
+Adding kanban:promote would have been a second name for one chokepoint — exactly the drift
+this project exists to kill. So: GATE_PERMISSIONS now contains kanban:replenish (moved out of
+the legacy kanban group), kanban:promote is retired via a new DEPRECATED_PERMISSIONS list, and
+migrate-perm-02-additive.ts now strips deprecated strings as well as adding missing ones.
+
+Re-ran the migration (APPLIED): Admin +[kanban:replenish] -[kanban:promote], propagated to 8
+users. Note what that reveals — the LIVE Admin role never had kanban:replenish at all (the
+seed-drift from the audit; seed.ts was fixed in PERM-01 but the live role predates it), so
+admins have been passing the replenish gate purely via the isAdmin() fallback in replenish.ts.
+Now they hold the permission itself.
+
+Two non-human tier-crossing paths logged as PERM-05 follow-ups (in PERM-04 PRD §B):
+  - standing.ts supply autopilot promotes with a system actor — by design (KB2-13).
+  - api/agent/operations/kanban/tasks/merge forces a merged Tier 1 option to done on agent-key
+    auth alone. Under "bots are not admins" that is a bot crossing the commitment point;
+    needs a decision in PERM-05.
+
+================================================================================
+2026-08-05 — feat/perm-05-machine — PERM-05 machine surface + PERM-06 cleanup script
+================================================================================
+Stacked on feat/perm-04-prep. Implements docs/prds/PERM-05, plus the PERM-06 migration
+(written, deliberately NOT applied — see interlock below).
+
+NEW src/lib/server/machine-actor.ts — the whole machine-surface policy in one module:
+- assertHumanOnly(): admin-gated actions can never be performed by a key-authenticated
+  caller, whatever actor is named. HUMAN_ONLY_ACTIONS maps each to WHERE a human does it,
+  so the refusal tells the model what to say. Covers both directions of the commitment
+  point (replenish + demote + ready-queue reorder), policy/template/standing-target edits,
+  proposal + approval decisions, document approval, lot release, assay lock.
+- resolveActor(): every machine WRITE must name the human it acts for; the name must match
+  an ACTIVE user who holds `bims` (so research-only accounts are rejected too). Attribution
+  only — the resolved user's permissions are never consulted for authorization, because
+  bots can't reach a gate regardless of whom they name. Reserved actor `system` for cron.
+- The refusal IS the mechanism: MISSING_ACTOR_MESSAGE tells the model to ask the human and
+  reuse the name for the conversation. Elicitation deliberately unused (CLI-only support).
+- logMachineActivity(): dual-identity audit row -> AuditLog tableName 'machine_activity',
+  changedBy = the KEY identity (cryptographically true), newData.reportedActor = the claimed
+  human, explicitly labelled attribution:'self-reported'. Shows up in Admin → Agent Activity.
+
+bims-mcp.ts (server version 2.13.0 -> 3.0.0 — clients cache tool lists; major bump because
+tool contracts changed):
+- machineWrite() wraps every mutating tool: human-only check -> actor resolution -> run ->
+  dual-identity log. 23 write tools wrapped; `actor` is now a REQUIRED field on all of them
+  (was optional/absent on 10, and defaulted to the literal string "agent" on 2 — that default
+  is exactly the attribution hole this closes).
+- Reads (31 tools) unchanged — no actor, no friction.
+- Behaviour change for Jacob's workflow: kanban_replenish / kanban_demote / reorder(scope
+  "ready") now REFUSE and return instructions. Committing work is an admin action and bots are
+  non-admins. Project-scope reorder still works. kanban_replenishment_status still shows what
+  is eligible, so the useful half of the flow is intact.
+
+Agent API: the two body-`actor` -> kanban:admin lookups are DELETED, not patched —
+policy PATCH and templates POST now refuse with the human-only message and log the attempt.
+Both have full web-UI equivalents (kanban/policy has 7 actions behind requirePolicyAdmin),
+verified before closing, so no capability is lost.
+
+NEW src/lib/server/fleet-keys.ts — per-fleet device keys (scanner/ot2/mocreo/particle/station),
+timing-safe, ADDITIVE: verifyFleetKey() accepts the fleet key OR the shared AGENT_API_KEY until
+<FLEET>_STRICT=true. Nothing to do on any device the day this ships; rollout is per fleet
+(set env -> update devices -> confirm audit rows -> flip strict). No endpoints switched over
+yet — that's the physical-device step and wants a bench day.
+
+NEW scripts/migrate-perm-06-cleanup.ts — final vocabulary strip (Admin 53 -> 7, Operator
+10 -> 1, delete Viewer, deactivate 4 stale test accounts; research roles untouched).
+DRY RUN VERIFIED, NOT APPLIED. Guarded by an interlock: --apply refuses unless
+PERM06_SWEEP_DONE=true, because stripping legacy strings before the PERM-04 call-site sweep
+would lock Operators (not Admins — they have the wildcard) out of real work.
+
+Tests: new machine-actor.test.ts (6 cases: every gated action refused, ordinary actions
+allowed, both commitment directions, message content). npm run test:unit 63/63 pass.
+npm run check: 11 errors — unchanged baseline.
+
+================================================================================
+2026-08-05 — feat/perm-05-machine — Pre-merge impact audit: one real regression found and fixed
+================================================================================
+Before recommending the merge, computed the actual per-user access diff (old flat matching
+vs new research-filtered + scoped-wildcard logic) against live Atlas data rather than
+reasoning about it. NEW scripts/diag-perm-merge-impact.ts (read-only, re-runnable).
+
+Found: zane (Operator + Research Admin) would have LOST cartridge:write, assay:read,
+assay:write. Those had been reaching him accidentally through the RESEARCH app's role, which
+BIMS now ignores. None of them is an admin gate, so under the target model an Operator holds
+them by right — added them to the Operator role and re-applied the migration (13 perms now,
+propagated to 4 users). Interim window is now regression-free instead of silently removing
+access someone was using.
+
+Remaining intentional losses after the fix:
+- zane loses admin:full (had it only via Research Admin). He is an Operator, not a BIMS
+  admin. Consequence to be aware of: he loses admin-level equipment controls (temp-probe
+  thresholds/mapping, fridge-oven + deck-tray admin actions). If he genuinely needs those,
+  make him an Admin deliberately rather than restoring the accident.
+- `admin` (Research Admin, last login 2026-03-25) loses all BIMS access — this is the
+  cross-app leak closure. Research-v2 is unaffected: it has its own permissions.ts and reads
+  the same role doc, which we never modified.
+Admins gain inventory:retract, cv:write, cv:admin (previously enforced in code but
+unassignable — the CV station "restart agent" control was dead for everyone; now it works).
+
+Verified: npm run test:unit 63/63; tsc has exactly 1 error, the pre-existing r2.ts Buffer
+overload (untouched); svelte-check 11 = baseline.
