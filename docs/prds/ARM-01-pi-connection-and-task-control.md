@@ -198,6 +198,34 @@ The capture stations put the device channel in the client, so the operator's bro
 **Consequences that follow, and are therefore in scope:**
 
 1. **Nothing client-side may reference the Pi.** No `fetch` to `ROBOT_ARM_BASE_URL` from a `.svelte` file, no Pi hostname rendered into a link or an `<img src>`. Today this holds — every arm page reaches the Pi in its load function or a form action. It must stay a rule, not an accident; §11 adds a grep check to keep it honest.
+
+   > **Amended 2026-08-05 — one sanctioned exception: ARM-02 mode B.**
+   > The camera panel may render the Pi's origin into an `<img src>` for a
+   > direct MJPEG stream. Proxying every frame through a serverless function
+   > costs a round trip per frame, which is the difference between video and a
+   > slideshow while someone is jogging the arm.
+   >
+   > The exception is bounded so the *reason* for the rule survives intact:
+   > - It uses **`ROBOT_ARM_PUBLIC_URL`**, a separate variable from
+   >   `ROBOT_ARM_BASE_URL`. The private address keeps its original
+   >   server-only guarantee; only an origin an operator has explicitly
+   >   designated as public is ever emitted.
+   > - **Unset means off.** The default is still the proxy, so G0 is unchanged:
+   >   a phone on cellular with no tailnet sees the arm exactly as before.
+   > - The proxy is a **permanent fallback**, not a bootstrap. Any failure of
+   >   the direct path — unreachable host, expired token, dropped stream —
+   >   returns the viewer to it.
+   > - `ROBOT_ARM_API_KEY` is still never sent. What ships is a camera-scoped
+   >   token that cannot move the arm and expires in minutes.
+   >
+   > What is genuinely given up, and was accepted knowingly: the Funnel FQDN
+   > discloses the tailnet name to anyone who can load the arm page. The origin
+   > is already publicly reachable — that is what Funnel means — so this is a
+   > disclosure of naming, not of access.
+   >
+   > A §11 grep check must therefore allow `ROBOT_ARM_PUBLIC_URL` in client
+   > code while still failing on `ROBOT_ARM_BASE_URL`. (That check remains
+   > unwritten; it was never implemented.)
 2. **The UI must survive a phone.** "Any device" is not met by a page that renders but cannot be operated. The arm pages are currently near-zero responsive: **1 responsive utility class across all four** (`control` 1, `jog` 0, `calibrate` 0, `runs` 0). Story S7.
 3. **Multiple devices can now issue commands at once.** This is new — it was implicitly single-operator when control required a tailnet workstation. Story S8.
 4. **Reachability now depends on BIMS's egress, not the operator's network.** A operator on cellular sees exactly what an operator on the lab LAN sees, including failures. Good for consistency; it also means one misconfigured `ROBOT_ARM_BASE_URL` breaks every device at once, which raises the value of the §8.1 panel.
