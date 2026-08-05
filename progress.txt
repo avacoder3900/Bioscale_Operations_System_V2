@@ -6675,3 +6675,26 @@ The shipped feature does NOT have this defect - linkDevicesToSpus() calls Spu.cr
 with explicit fields only, so Mongoose applies clean schema defaults and validation comes
 out pending. The cloning existed solely in the one-off manual script, which was only
 needed because the feature had not deployed yet. No other SPU was created this way.
+
+Post-review self-check caught a REGRESSION introduced by the hardening pass itself, before
+merge. The padding-normalisation fix (parseInt on the suffix key) was applied to the ONE
+shared lookup map, so it changed matching for every device, not just SPU-named ones. Against
+live data that meant 8 junk devices would have matched and RENAMED 4 real SPUs:
+Cartridge_Deck_GEN4_001 / Cartridge_Deck_GEN3_001 -> BT-M01-0000-0001,
+Cartridge-Deck-GEN3-002 / Cartridge_Deck_GEN4_002 -> BT-M01-0000-0002,
+Cartridge_Deck_GEN3_003 / Cartridge_Deck_GEN4_003 -> BT-M01-0000-0003, and
+new4 / Cartridge_Deck_GEN4_004 -> BT-M01-0000-0004. linkDevicesToSpus overwrites spu.udi on
+every link, so those four SPUs would have been renamed to deck/scratch names and had their
+particleLink repointed - strictly worse than the duplicate-SPU case the normalisation was
+meant to prevent, and on the sacred collection.
+Fixed by splitting the map in two: spuByNumber keeps the original raw-suffix keys (exact
+legacy behaviour for every device), and spuByNumberNorm is a last-resort lookup consulted
+ONLY when the device name matches SPU_DEVICE_NAME_PATTERN. Non-SPU-named devices can no
+longer reach the normalised path at all. Also moved the same-suffix collision guard BELOW
+the already-linked check so an established link is not re-reported as an error every run,
+and registered newly created SPUs into all three maps rather than just the normalised one.
+Verified by replaying the final matching logic against live prod data read-only:
+linked=3 alreadyLinked=69 created=3 (BT-M01-0000-0241/-0242/-0253) unmatched=34 errors=0,
+with zero renames of existing SPUs and no non-SPU-named device matching any real SPU.
+npm run check after the fix: 101 errors / 426 warnings - unchanged baseline, zero in the
+touched files.

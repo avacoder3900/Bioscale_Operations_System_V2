@@ -144,17 +144,21 @@ export async function linkDevicesToSpus(
 	let linked = 0;
 	let alreadyLinked = 0;
 
-	// Build a map of numeric suffix → SPU for fast lookup.
-	// Keys are normalised past zero-padding so an existing "SPU-255" still matches a
-	// device named "BT-M01-0000-0255" — otherwise we would mint a duplicate SPU into a
-	// sacred (undeletable) collection for a device that already has one.
+	// Lookup maps. `spuByNumber` keeps the original raw-suffix behaviour untouched.
+	// `spuByNumberNorm` ignores zero-padding so an existing "SPU-255" still matches a
+	// device named "BT-M01-0000-0255" instead of minting a duplicate into a sacred
+	// (undeletable) collection — but it is consulted ONLY for SPU-named devices, see below.
 	const normaliseNum = (num: string) => String(parseInt(num, 10));
 	const spuByNumber = new Map<string, any>();
+	const spuByNumberNorm = new Map<string, any>();
 	const spuByUdi = new Map<string, any>();
 	for (const spu of allSpus) {
 		if (spu.udi) spuByUdi.set(spu.udi, spu);
 		const num = extractNumericId(spu.udi);
-		if (num) spuByNumber.set(normaliseNum(num), spu);
+		if (num) {
+			spuByNumber.set(num, spu);
+			spuByNumberNorm.set(normaliseNum(num), spu);
+		}
 	}
 
 	for (const device of devices) {
@@ -171,8 +175,14 @@ export async function linkDevicesToSpus(
 			continue;
 		}
 
-		// Exact-UDI match wins over suffix matching.
-		let spu = spuByUdi.get(deviceName) ?? spuByNumber.get(normaliseNum(deviceNum));
+		// Exact UDI wins, then raw suffix (unchanged legacy behaviour). The padding-
+		// normalised map is a LAST resort and only for devices whose name is a real SPU
+		// name — otherwise "Cartridge_Deck_GEN4_001" (suffix "001" → "1") would match SPU
+		// BT-M01-0000-0001 (suffix "0001" → "1") and rename it to the deck's name.
+		let spu = spuByUdi.get(deviceName) ?? spuByNumber.get(deviceNum);
+		if (!spu && SPU_DEVICE_NAME_PATTERN.test(deviceName)) {
+			spu = spuByNumberNorm.get(normaliseNum(deviceNum));
+		}
 
 		// No SPU for this device yet — auto-create one if the name is a real SPU name.
 		if (!spu) {
@@ -215,7 +225,8 @@ export async function linkDevicesToSpus(
 			// Registered immediately so a later failure can never orphan an SPU that is
 			// absent from created[]/the lookup maps — the row cannot be deleted afterwards.
 			spu = { _id: newSpuId, udi: deviceName, particleLink: null };
-			spuByNumber.set(normaliseNum(deviceNum), spu);
+			spuByNumber.set(deviceNum, spu);
+			spuByNumberNorm.set(normaliseNum(deviceNum), spu);
 			spuByUdi.set(deviceName, spu);
 			created.push(deviceName);
 
@@ -237,18 +248,23 @@ export async function linkDevicesToSpus(
 			} catch (err) {
 				errors.push(`${deviceName}: SPU created but audit log failed — ${err instanceof Error ? err.message : String(err)}`);
 			}
-		} else if (spu.udi && spu.udi !== deviceName
-			&& SPU_DEVICE_NAME_PATTERN.test(spu.udi) && SPU_DEVICE_NAME_PATTERN.test(deviceName)) {
-			// Two distinct SPU-named devices share a trailing-digit suffix (e.g.
-			// BT-M01-0000-0255 vs BT-M01-0001-0255). Overwriting would silently rename the
-			// SPU and steal the other device's link, so refuse and report instead.
-			errors.push(`${deviceName}: suffix ${deviceNum} already belongs to ${spu.udi} — not relinking`);
+		}
+
+		// Check if already linked to this device (before the collision guard, so a
+		// long-standing link is not re-reported as an error on every single run).
+		if (spu.particleLink?.particleDeviceId === device.id) {
+			alreadyLinked++;
 			continue;
 		}
 
-		// Check if already linked to this device
-		if (spu.particleLink?.particleDeviceId === device.id) {
-			alreadyLinked++;
+		// Two distinct SPU-named devices share a trailing-digit suffix (e.g.
+		// BT-M01-0000-0255 vs BT-M01-0001-0255). Overwriting would silently rename the SPU
+		// and steal the other device's link, so refuse and report instead. Non-SPU-named
+		// devices are exempt: renaming "SPU-0209" → "BT-M01-0000-0209" is the intended
+		// legacy behaviour and must keep working.
+		if (spu.udi && spu.udi !== deviceName
+			&& SPU_DEVICE_NAME_PATTERN.test(spu.udi) && SPU_DEVICE_NAME_PATTERN.test(deviceName)) {
+			errors.push(`${deviceName}: suffix ${deviceNum} already belongs to ${spu.udi} — not relinking`);
 			continue;
 		}
 
