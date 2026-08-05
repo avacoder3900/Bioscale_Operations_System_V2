@@ -6558,3 +6558,82 @@ replenishment event - all server-side in replenish.ts) is UNCHANGED.
   the replenish-page demote died with the page. Service layer, 4 agent endpoints, MCP
   tools all untouched.
 npm run check: 11 errors - unchanged baseline (r2.ts, AskBimsWidget, assembly, parts).
+
+================================================================================
+2026-08-05 - feat/particle-auto-create-spu - Particle sync auto-creates draft SPUs for new BT-M01 devices
+================================================================================
+Registering a device in the Particle console used to be only half the job: the device
+synced into ParticleDevice, but until somebody manually registered a matching SPU in
+BIMS it stayed in the "unmatched" list and never appeared anywhere the SPU record is
+the entry point (magnetometer/thermocouple validation, the SPU detail page). Particle
+sync now closes that gap - a device whose name is a real SPU name and has no matching
+SPU gets a draft SPU minted for it in the same pass that does the linking.
+- src/lib/server/particle.ts: new exported SPU_DEVICE_NAME_PATTERN = /^BT-M01-\d{4}-\d{4}$/.
+  Inside linkDevicesToSpus(), when the suffix lookup misses, a device matching that
+  pattern is created via Spu.create() with status 'draft', assemblyStatus 'created',
+  qcStatus 'pending', udi AND barcode set to the Particle device name, a statusTransitions
+  entry (null -> draft, reason 'auto_created_particle_sync'), and createdBy pinned to the
+  literal 'system:particle-sync'. An AuditLog INSERT row is written
+  alongside it (tableName 'spus', recordId = the new nanoid, newData carrying udi/status/
+  autoCreatedFrom:'particle'/particleDeviceId, reason "Auto-created from Particle device
+  during link", changedBy = actor username). The new record is then put into the in-run
+  spuByNumber map keyed by its numeric suffix, so a second device with the same suffix
+  in the same sync does not double-create; and it falls straight through to the existing
+  link code, so particleLink.particleDeviceId / particleSerial / linkedAt are set in the
+  same iteration - one pass, no second sweep needed. A create failure is caught and
+  pushed onto errors[] rather than aborting the whole run.
+- The pattern guard is deliberately strict and is the whole safety story here. The
+  Particle account currently holds 106 device rows; 68 map to SPUs and 38 come back
+  unmatched, but only 4 of those 38 are genuine SPUs - BT-M01-0000-0255, -0253, -0241
+  and -0242. The remaining 34 are cartridge decks (Cartridge_Deck_GEN4_001), tip
+  calibrators, bench tools (TOOL-CT-047) and scratch/dev names (new4, Argon, 71E50,
+  owl_narwhal). Every one of those carries trailing digits, and the existing
+  extractNumericId() matches on trailing digits (/(\d+)$/), so an unguarded auto-create
+  would happily mint 34 junk records into `spus` - a SACRED collection under
+  applySacredMiddleware, where cleanup is not a delete but a paperwork exercise. Anything
+  that fails the pattern keeps the old behaviour exactly: it is reported in unmatched[]
+  and nothing is written.
+- Plumbing: linkDevicesToSpus(actor?) and syncDevices(actor?) both take an optional
+  actor { _id, username } and now return created: string[] (the device names/UDIs of the
+  SPUs minted this run) alongside the existing counters. syncDevices threads the actor
+  into its post-sync link call and surfaces created[] from it. Link errors are folded into
+  the sync's own errors[] rather than swallowed - a create failure on a sacred collection
+  must never render to the operator as "Successfully synced N device(s)."
+- Hardening applied after an adversarial review pass over the first cut, all real defects
+  rather than theory:
+  * createdBy is pinned to 'system:particle-sync' and NOT the acting user. /assembly's
+    "Start new build" (src/routes/assembly/+page.server.ts:125-130) reuses any recent draft
+    matching { createdBy: <that user>, status:'draft', assemblyStatus:'created', createdAt
+    within 24h }. With the actor's id an auto-created SPU matched all four clauses, so an
+    operator who synced and then started a build would have assembled a physical unit under
+    a UDI already bound to a different Particle device. Actor attribution lives on the
+    AuditLog changedBy instead, where it costs nothing.
+  * Suffix keys are normalised through parseInt, and an exact-UDI map is consulted first.
+    Previously an existing "SPU-255" produced key "255" while device BT-M01-0000-0255
+    produced "0255" - no hit, and the new code would have minted a permanent duplicate into
+    a collection whose delete hooks throw.
+  * Two SPU-named devices sharing a trailing suffix (BT-M01-0000-0255 vs BT-M01-0001-0255)
+    now push an error instead of silently renaming the SPU and stealing the first device's
+    link.
+  * The created SPU is registered in created[]/the lookup maps immediately after
+    Spu.create, and AuditLog.create got its own try/catch. Previously an audit failure
+    left a minted, undeletable SPU absent from every report of the run.
+  * The settings page now renders the error list as well as the counts.
+- src/routes/particle/settings/+page.server.ts passes { _id, username } from locals.user
+  into both the sync and link actions, appends "Created N new SPU(s)." to the result
+  message, and returns created[] to the page. +page.svelte renders it as an open
+  <details> list under the success banner, mirroring the existing unmatched-devices
+  disclosure so both lists read the same way.
+- Known consequence worth stating rather than discovering later: linkDevicesToSpus also
+  OVERWRITES spu.udi with the Particle device name on every link (unchanged behaviour),
+  and the magnetometer page (src/routes/validation/magnetometer/+page.server.ts:14)
+  selects SPUs purely on { 'particleLink.particleDeviceId': { $exists: true, $ne: null } }
+  with no status filter - so an auto-created draft SPU shows up in that device picker as
+  soon as it is linked. That is the intended outcome (the device is testable the moment
+  it exists), but it does mean drafts are now visible there.
+npm run check: 101 errors / 426 warnings across 2000 files - identical before and after
+this change, and ZERO of them are in the three touched files (src/lib/server/particle.ts,
+src/routes/particle/settings/+page.server.ts, +page.svelte). 101 is this branch's real
+baseline off origin/master; an earlier draft of this entry quoted 11, which was wrong.
+Local `npm run build` is not a usable gate on this machine (OOMs at ~30GB) - the Vercel
+branch build is the real one.
