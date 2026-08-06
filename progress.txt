@@ -7023,3 +7023,40 @@ Retrieve this exact code: git checkout master at commit 3e6ee349
 What this deployment is for: reagent fill run timer — elapsed stopwatch as the primary
 readout plus a work-based (wells, not cartridges) run estimate replacing the ~2x-long
 flat countdown, and run completion driven by OT-2 terminal status instead of timer expiry.
+
+================================================================================
+2026-08-06 — master — stop the spurious "Robot status timed out (bridge slow)" banner
+================================================================================
+Alejandro: every reagent run pops a red "Robot status timed out (bridge slow) — retrying"
+banner right after the cartridge scan. The run always starts anyway; he just wants it gone.
+
+Root cause: a client timeout shorter than a normal round trip, not an actual fault. The
+bridge is a relay — BIMS writes an Ot2BridgeCommand to Mongo, the on-robot daemon
+long-polls for it (POLL_WAIT_MS 18s), runs it against the OT-2 HTTP API one command at a
+time, writes the result back. Every hop budgets 30s for that: the daemon's RELAY_TIMEOUT_S
+= 30, proxy.ts BRIDGE_TIMEOUT_MS = 30_000, and the runs/[rid] endpoint's maxDuration = 45.
+EmbeddedRunController's browser-side AbortSignal was 6s.
+
+Why right after the scan specifically: the queue is serialized per robot. Entering Running
+mounts the controller, which polls immediately — behind whatever startRun just enqueued
+(freshness re-sync, run create, play, auto_resume_run) and behind the scan itself, which
+per the scanner's command mode can't be shorter than ~5s. So the first poll routinely sat
+in the queue past 6s, aborted, painted the banner, and the next poll 2s later cleared it.
+Transient and cosmetic — the run was never affected, which is why it always started fine.
+
+Fix (EmbeddedRunController.svelte, shared by wax + reagent so both get it):
+- POLL_TIMEOUT_MS 6s -> 20s and ACTION_TIMEOUT_MS 12s -> 30s, so the browser stops giving
+  up before the chain it is waiting on has even reached its own deadline.
+- Split error state: operator-pressed control actions still surface immediately (they are
+  waiting on it), but background poll failures now need POLL_FAILURES_BEFORE_WARNING = 3
+  consecutive misses before the banner appears, and the copy says how many checks have
+  gone unanswered instead of implying a one-off blip is a fault. A successful poll resets
+  the counter. Net effect: a lone slow poll is silent, a genuinely dead bridge still warns
+  (fast failures like a 502 trip all three in ~6s; slow timeouts take longer by design,
+  since a slow response may still be on its way).
+
+Note this is observational only — BIMS polling the run status has no bearing on whether the
+protocol executes, so tolerating a slow poll costs nothing operationally.
+
+npm run check: 11 errors (baseline, unchanged). npm run test:unit: 80 passed.
+npm run build: clean.

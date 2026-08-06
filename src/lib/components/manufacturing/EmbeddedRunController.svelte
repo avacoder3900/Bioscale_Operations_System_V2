@@ -39,7 +39,11 @@
 
 	let run = $state<any>(null);
 	let runStatus = $state<string>('idle');
+	/** Set by a control action the operator pressed — always surfaced immediately. */
 	let lastError = $state<string | null>(null);
+	/** Set by the background poll — surfaced only once it stops being transient. */
+	let pollError = $state<string | null>(null);
+	let pollFailures = $state(0);
 	let actionInFlight = $state<string | null>(null);
 	let terminalFired = $state(false);
 	// Auto-resume the initial "confirm off-deck labware" pause so operators don't
@@ -49,8 +53,20 @@
 	let destroyed = false;
 
 	const TERMINAL = new Set(['succeeded', 'failed', 'stopped']);
-	const POLL_TIMEOUT_MS = 6000;
-	const ACTION_TIMEOUT_MS = 12000;
+	// Every hop in the bridge chain budgets 30s for one round trip: the daemon's
+	// RELAY_TIMEOUT_S, bridgeFetch's BRIDGE_TIMEOUT_MS, and the endpoint's
+	// maxDuration of 45s. The browser used to give up at 6s, which is shorter than
+	// a normal round trip rather than longer, so it reported a timeout for requests
+	// that were still perfectly on track.
+	const POLL_TIMEOUT_MS = 20_000;
+	const ACTION_TIMEOUT_MS = 30_000;
+	/**
+	 * The bridge is a serialized queue — one command per robot at a time. A status
+	 * GET issued while the daemon is mid-scan or mid-upload waits its turn, which
+	 * is normal operation, not a fault. Only sustained failure is worth showing,
+	 * so a lone slow poll no longer paints a red banner over a healthy run.
+	 */
+	const POLL_FAILURES_BEFORE_WARNING = 3;
 
 	function schedulePoll() {
 		if (!destroyed) pollHandle = setTimeout(poll, pollMs);
@@ -78,6 +94,8 @@
 					const next = (run.status ?? 'idle') as string;
 					runStatus = next;
 					lastError = null;
+					pollError = null;
+					pollFailures = 0;
 					if (!terminalFired && TERMINAL.has(next)) {
 						terminalFired = true;
 						if (onComplete) onComplete(next, run);
@@ -90,11 +108,13 @@
 					}
 				}
 			} else {
-				lastError = `Robot returned ${res.status}`;
+				pollFailures += 1;
+				pollError = `Robot returned ${res.status}`;
 			}
 		} catch (err) {
-			lastError = (err as any)?.name === 'TimeoutError'
-				? 'Robot status timed out (bridge slow) — retrying'
+			pollFailures += 1;
+			pollError = (err as any)?.name === 'TimeoutError'
+				? `Robot status has not answered for ${pollFailures} checks — the bridge may be busy or down`
 				: err instanceof Error ? err.message : 'Failed to reach robot';
 		}
 		// Keep polling even after terminal so the operator sees the final state.
@@ -200,6 +220,12 @@
 		}
 	});
 
+	// An action the operator pressed reports straight away — they are waiting on it.
+	// A background poll only earns the banner once it has failed repeatedly.
+	let visibleError = $derived(
+		lastError ?? (pollFailures >= POLL_FAILURES_BEFORE_WARNING ? pollError : null)
+	);
+
 	let isTerminal = $derived(TERMINAL.has(runStatus));
 	// Stop must always be available while the run is live (any non-terminal state,
 	// incl. finishing / blocked-by-open-door / awaiting-recovery).
@@ -223,9 +249,9 @@
 		</span>
 	</div>
 
-	{#if lastError}
+	{#if visibleError}
 		<div class="rounded border border-red-500/40 bg-red-900/10 p-2 text-xs text-red-300">
-			{lastError}
+			{visibleError}
 		</div>
 	{/if}
 
