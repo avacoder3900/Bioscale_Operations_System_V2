@@ -109,6 +109,24 @@
 	// run clock while the robot is paused — paused time isn't fill time.
 	let robotStatus = $state<string | null>(null);
 
+	/**
+	 * Run-time parameters BIMS pre-selects for a reagent run, overriding the .py's
+	 * own defaults. These seed the form; the operator can still change any of them.
+	 *
+	 * use_tip_calibration: the protocol declares it `default=False`, so operators
+	 * were ticking it on before every single run — 59 of the last 60 reagent runs
+	 * across all three robots had it on, the one exception being a cancelled run.
+	 * Pre-selecting it matches what the line actually does. Deliberately NOT in
+	 * contextReadonly: a flaky tip calibrator is a real failure mode, and turning
+	 * this off is the documented workaround (it falls back to nominal well
+	 * positions), so the operator has to keep that escape hatch.
+	 *
+	 * Kept as one frozen constant rather than an inline literal so the pre-scan
+	 * panel gets a stable object identity: ProtocolStartPanel re-seeds the whole
+	 * form whenever contextValues changes, which would wipe an operator's edits.
+	 */
+	const REAGENT_PARAM_DEFAULTS = Object.freeze({ use_tip_calibration: true });
+
 	// "Run again": complete the just-finished run (→ Top Sealing, robot freed),
 	// then start a fresh run on the same robot reusing the same assay + protocol
 	// params — landing on barcode scanning. Mirrors the wax flow.
@@ -606,6 +624,7 @@
 			<ProtocolStartPanel
 				robot={{ _id: data.opentronsRobotId, name: data.robotId }}
 				protocols={data.robotProtocols}
+				contextValues={REAGENT_PARAM_DEFAULTS}
 				lastTipState={data.lastTipState}
 				submitting={submitting}
 				formAction="?/startRun"
@@ -668,7 +687,7 @@
 				<ProtocolStartPanel
 					robot={{ _id: data.opentronsRobotId, name: data.robotId }}
 					protocols={data.robotProtocols}
-					contextValues={{ cartridges: data.cartridges.length }}
+					contextValues={{ ...REAGENT_PARAM_DEFAULTS, cartridges: data.cartridges.length }}
 					contextReadonly={['cartridges']}
 					lastTipState={data.lastTipState}
 					submitting={submitting}

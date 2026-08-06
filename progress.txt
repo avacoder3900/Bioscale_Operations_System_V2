@@ -7210,3 +7210,41 @@ Deployment (robot-side — NOT a Vercel deploy):
   Disk before deploy: B07 18%, R04 6%, B14 18% — no cleanup needed.
   Rollback: cp /data/ot2-bridge/ot2-bridge.py.bak-20260806 /data/ot2-bridge/ot2-bridge.py
            && systemctl restart ot2-bridge
+
+================================================================================
+2026-08-06 — master — reagent: pre-select USE TIP CALIBRATION so it isn't ticked every run
+================================================================================
+Alejandro: "make it so that it automatically uses the tip calibration and I don't have to
+check it every time" — scoped to reagent filling.
+
+Reagent_Filling_GEN7.py declares use_tip_calibration with default=False, and
+ProtocolStartPanel seeds its form straight from the .py's RTP defaults, so the box came up
+unchecked every run and the operator ticked it every run.
+
+Checked before changing it, because [[project-b07-calibrator-and-build-state]] records
+tip-cal being turned OFF fleet-wide at one point over calibrator flakiness. That is no
+longer how the line runs: of the last 60 reagent runs that recorded the flag,
+B07 ON=28/OFF=0, B14 ON=23/OFF=1, R04 ON=8/OFF=0 — 59 of 60 ON, and the single OFF
+(2026-08-03T14:48, B14) was a Cancelled run. Pre-selecting it matches actual practice.
+
+Fix: new REAGENT_PARAM_DEFAULTS constant on the reagent page, passed as contextValues to
+BOTH ProtocolStartPanel instances — the pre-scan "Set protocol parameters" panel (which had
+no contextValues at all, and is the one operators actually use) and the post-scan direct-
+start panel. contextValues wins over the .py default when the form seeds.
+
+Deliberately NOT added to contextReadonly: a flaky tip calibrator is a real failure mode and
+switching this off is the documented workaround (protocol falls back to nominal well
+positions, see the use_tip_calibration branches in the .py), so the operator keeps the
+escape hatch. The panel already renders bool params with a hidden input that always posts
+true/false, so unticking a pre-selected param correctly posts false instead of being dropped.
+
+Verified the value survives the whole path: the pre-scan panel's FormData is captured and
+replayed verbatim into ?/startRun (startRunWithCapturedParams only injects param_cartridges),
+and startRun parses param_<name> with `value = s === 'true' || s === 'on'` for bool RTPs.
+Frozen constant so the pre-scan panel's contextValues identity is stable — ProtocolStartPanel
+re-seeds the entire form when contextValues changes, which would wipe operator edits.
+
+Wax untouched (explicitly scoped to reagent). The .py default stays False, so nothing changes
+for anyone driving these protocols from the Opentrons app rather than BIMS.
+
+npm run check: 11 errors (baseline, unchanged). npm run test:unit: 80 passed. npm run build: clean.
