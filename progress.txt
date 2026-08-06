@@ -7248,3 +7248,10 @@ Wax untouched (explicitly scoped to reagent). The .py default stays False, so no
 for anyone driving these protocols from the Opentrons app rather than BIMS.
 
 npm run check: 11 errors (baseline, unchanged). npm run test:unit: 80 passed. npm run build: clean.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit efb48862
+Retrieve this exact code: git checkout master at commit efb48862
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: USE TIP CALIBRATION comes up pre-selected on the reagent
+run-start form (still un-tickable) so operators stop checking it manually every run.
