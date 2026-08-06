@@ -49,6 +49,29 @@
 	// Auto-resume the initial "confirm off-deck labware" pause so operators don't
 	// click resume at the start of the wax/reagent protocol. Fires once.
 	let autoResumedInitial = $state(false);
+	/**
+	 * The operator asked for this pause. Auto-resume must never override it — that
+	 * bug made Pause look broken: the daemon's own auto_resume_run almost always
+	 * won the race for the initial off-deck pause, so the browser never observed
+	 * it, autoResumedInitial stayed false, and the first pause the browser ever saw
+	 * was the operator's — which it immediately resumed.
+	 */
+	let operatorPaused = $state(false);
+	/**
+	 * Pause is requested but the robot has not reported `paused` yet. The OT-2
+	 * finishes its current command first, which for a fill is a whole
+	 * aspirate/dispense sequence, so this can take a few seconds. Held separately
+	 * because the reconcile poll would otherwise overwrite the optimistic status
+	 * with `running` and make it look like the click did nothing.
+	 */
+	let pausePending = $state(false);
+	let pauseRequestedAt = 0;
+	/**
+	 * A pause that was asked for and never landed. Kept separate from lastError
+	 * because a successful poll clears that one every 2s, and this needs to stay
+	 * up until the operator does something about it.
+	 */
+	let pauseWarning = $state<string | null>(null);
 	let pollHandle: ReturnType<typeof setTimeout> | null = null;
 	let destroyed = false;
 
@@ -67,6 +90,33 @@
 	 * so a lone slow poll no longer paints a red banner over a healthy run.
 	 */
 	const POLL_FAILURES_BEFORE_WARNING = 3;
+	/**
+	 * Auto-resume exists for exactly one thing: the engine's off-deck "confirm deck
+	 * loaded" pause at the very start of a run. Bound it to the run's own age
+	 * rather than to how long this component has been mounted, so that reloading
+	 * the page mid-run cannot re-arm it against a pause the operator made earlier.
+	 * The daemon gives up watching at AUTO_RESUME_TIMEOUT_S (75s); allow headroom.
+	 */
+	const AUTO_RESUME_WINDOW_MS = 90_000;
+	/**
+	 * How long a requested pause may sit unacknowledged before we stop claiming it
+	 * is on its way. The OT-2 pauses at the next command boundary, and a fill's
+	 * longest single step is an aspirate-and-dispense batch, so this is generous.
+	 * Past it, say so and re-enable the button rather than leaving the operator
+	 * staring at a disabled control.
+	 */
+	const PAUSE_LAND_TIMEOUT_MS = 60_000;
+
+	/**
+	 * Is this run still young enough that a pause could plausibly be the initial
+	 * off-deck one? Measured from the run's own startedAt, so it survives reloads.
+	 * A run with no startedAt yet has not begun, so it is trivially within.
+	 */
+	function withinAutoResumeWindow(): boolean {
+		const startedAt = run?.startedAt ? new Date(run.startedAt).getTime() : null;
+		if (!startedAt || Number.isNaN(startedAt)) return true;
+		return Date.now() - startedAt < AUTO_RESUME_WINDOW_MS;
+	}
 
 	function schedulePoll() {
 		if (!destroyed) pollHandle = setTimeout(poll, pollMs);
@@ -96,15 +146,33 @@
 					lastError = null;
 					pollError = null;
 					pollFailures = 0;
+
 					if (!terminalFired && TERMINAL.has(next)) {
 						terminalFired = true;
 						if (onComplete) onComplete(next, run);
 					}
-					// Off-deck labware makes the engine pause once at the very start;
-					// auto-resume it (only the first pause, never error-recovery).
-					else if (!autoResumedInitial && next === 'paused') {
-						autoResumedInitial = true;
-						void handleAction('resume');
+
+					if (next === 'paused') {
+						// The robot has actually settled into the pause.
+						pausePending = false;
+						pauseWarning = null;
+						// Off-deck labware makes the engine pause once at the very start;
+						// auto-resume only THAT pause. Never one the operator asked for,
+						// never one late in the run, never error-recovery.
+						if (!autoResumedInitial && !operatorPaused && withinAutoResumeWindow()) {
+							autoResumedInitial = true;
+							void handleAction('resume');
+						}
+					} else if (TERMINAL.has(next)) {
+						pausePending = false;
+					} else if (pausePending && Date.now() - pauseRequestedAt > PAUSE_LAND_TIMEOUT_MS) {
+						// Requested a pause, but the robot is still going well past the
+						// point where it should have hit a command boundary. Stop implying
+						// the pause is imminent and let them act on it.
+						pausePending = false;
+						pauseWarning =
+							'The robot has not acknowledged the pause and is still running — '
+							+ 'try Pause again, or use Stop if it needs to come down now.';
 					}
 				}
 			} else {
@@ -123,6 +191,24 @@
 
 	async function handleAction(action: 'play' | 'pause' | 'stop' | 'resume') {
 		actionInFlight = action;
+		// Any fresh action supersedes a stale "pause never landed" complaint.
+		pauseWarning = null;
+		// Record what the operator wants BEFORE the request, so a poll that lands
+		// mid-flight can't auto-resume a pause they just asked for.
+		if (action === 'pause') {
+			operatorPaused = true;
+			pausePending = true;
+			pauseRequestedAt = Date.now();
+			// Whatever the initial off-deck pause did or didn't do, it is settled as
+			// far as this run is concerned — never auto-resume after a manual pause.
+			autoResumedInitial = true;
+		} else if (action === 'play' || action === 'resume') {
+			operatorPaused = false;
+			pausePending = false;
+		} else if (action === 'stop') {
+			pausePending = false;
+		}
+
 		// Optimistic UI: flip the visible status immediately. Polls won't overwrite
 		// it while actionInFlight is set, so it won't flicker back.
 		if (action === 'play' || action === 'resume') runStatus = 'running';
@@ -148,6 +234,14 @@
 				lastError = null;
 			} else {
 				lastError = (body as any).detail ?? (body as any).message ?? `Robot returned ${res.status}`;
+				// The robot definitively refused. Don't leave the UI claiming a pause
+				// is coming when none is — re-enable the button so it can be retried.
+				// (A timeout is NOT handled here: the request may still have landed,
+				// so that case falls through to the reconcile poll.)
+				if (action === 'pause') {
+					pausePending = false;
+					operatorPaused = false;
+				}
 			}
 		} catch (err) {
 			lastError = (err as any)?.name === 'TimeoutError'
@@ -223,17 +317,28 @@
 	// An action the operator pressed reports straight away — they are waiting on it.
 	// A background poll only earns the banner once it has failed repeatedly.
 	let visibleError = $derived(
-		lastError ?? (pollFailures >= POLL_FAILURES_BEFORE_WARNING ? pollError : null)
+		lastError ?? pauseWarning ?? (pollFailures >= POLL_FAILURES_BEFORE_WARNING ? pollError : null)
 	);
 
 	let isTerminal = $derived(TERMINAL.has(runStatus));
+
+	/**
+	 * What the operator sees. While a pause is pending the robot still reports
+	 * `running` until it finishes the command in flight, and the reconcile poll
+	 * would otherwise flip the chip straight back to RUNNING — which reads as
+	 * "the button did nothing". Keep saying PAUSE-REQUESTED until it lands.
+	 */
+	let displayStatus = $derived(
+		pausePending && !isTerminal && runStatus !== 'paused' ? 'pause-requested' : runStatus
+	);
+
 	// Stop must always be available while the run is live (any non-terminal state,
 	// incl. finishing / blocked-by-open-door / awaiting-recovery).
 	let canStop = $derived(!isTerminal);
-	let canPause = $derived(runStatus === 'running');
+	let canPause = $derived(runStatus === 'running' && !pausePending);
 	// Play/Resume: any live, non-running, non-transitioning state.
 	let canPlay = $derived(
-		!isTerminal && runStatus !== 'running' && runStatus !== 'pause-requested' && runStatus !== 'stop-requested'
+		!isTerminal && displayStatus !== 'running' && displayStatus !== 'pause-requested' && displayStatus !== 'stop-requested'
 	);
 </script>
 
@@ -242,12 +347,19 @@
 		<h3 class="text-lg font-semibold text-[var(--color-tron-text)]">Running on {robotName}</h3>
 		<span
 			class="rounded-full border px-3 py-1 text-xs font-medium uppercase tracking-wider {statusColor(
-				runStatus
+				displayStatus
 			)}"
 		>
-			{runStatus}
+			{displayStatus}
 		</span>
 	</div>
+
+	{#if pausePending && !isTerminal && runStatus !== 'paused'}
+		<div class="rounded border border-yellow-500/40 bg-yellow-900/10 p-2 text-xs text-yellow-300">
+			Pause requested — the robot finishes the step it is already on before it stops,
+			so this can take a few seconds on a fill.
+		</div>
+	{/if}
 
 	{#if visibleError}
 		<div class="rounded border border-red-500/40 bg-red-900/10 p-2 text-xs text-red-300">
@@ -290,7 +402,7 @@
 			disabled={!canPlay || !!actionInFlight}
 			class="flex-1 rounded border border-green-500/50 bg-green-900/20 px-4 py-2 text-sm font-medium text-green-300 transition-colors hover:bg-green-900/40 disabled:cursor-not-allowed disabled:opacity-30"
 		>
-			▶ {runStatus === 'paused' ? 'Resume' : 'Play'}
+			▶ {displayStatus === 'paused' ? 'Resume' : 'Play'}
 		</button>
 		<button
 			type="button"

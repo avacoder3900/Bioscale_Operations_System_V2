@@ -7067,3 +7067,54 @@ Retrieve this exact code: git checkout master at commit fe8d60aa
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: suppressing the spurious "Robot status timed out (bridge
 slow)" banner that appeared on every wax/reagent run right after the cartridge scan.
+
+================================================================================
+2026-08-06 — master — Pause actually pauses: stop auto-resume from cancelling operator pauses
+================================================================================
+Alejandro: "the pause button doesn't work well — I click it during a reagent or wax fill and
+it doesn't pause, the robot keeps going, and eventually I have to cancel the run." Follow-up
+detail that pinned it exactly: "it says pause requested and then I have to press again for
+it to actually pause."
+
+Root cause: the client's auto-resume was cancelling the operator's pause. EmbeddedRunController
+auto-resumes the engine's initial off-deck "confirm deck loaded" pause so runs start hands-off,
+guarded by a one-shot autoResumedInitial. But the daemon's own execute_auto_resume_run polls
+the robot directly at 1s from ON the robot, while the browser goes through the serialized
+bridge queue at 2s+ — so the daemon almost always wins that race and the browser NEVER observes
+the initial pause. autoResumedInitial therefore stayed false for the whole run, and the first
+pause the browser ever saw was the operator's, which it dutifully resumed.
+
+That is exactly why pressing twice worked: press #1 paused the robot, the client resumed it and
+in doing so finally consumed the one-shot; press #2 then had nothing left to override it. The
+operator was manually burning off a stale flag every single run.
+
+Fix (EmbeddedRunController.svelte — shared, so wax + reagent both get it):
+- operatorPaused: set the instant Pause is pressed, BEFORE the request goes out, so a poll
+  landing mid-flight cannot resume a pause that was just asked for. Pressing Pause also marks
+  autoResumedInitial done — after a manual pause there is no initial pause left to chase.
+- Auto-resume is now bounded by the RUN's age (startedAt, AUTO_RESUME_WINDOW_MS 90s — the
+  daemon's AUTO_RESUME_TIMEOUT_S of 75s plus headroom) instead of by component lifetime.
+  Reloading the page mid-run can no longer re-arm auto-resume against an earlier pause.
+- pausePending + displayStatus: the OT-2 pauses at the next command boundary, so it keeps
+  reporting `running` for a few seconds. The reconcile poll used to flip the chip straight
+  back to RUNNING, which read as "the click did nothing". The chip now holds PAUSE-REQUESTED
+  until the robot really pauses, with a note that it finishes its current step first.
+- pausePending is bounded by PAUSE_LAND_TIMEOUT_MS (60s): past that, say the pause was not
+  acknowledged and re-enable the button rather than leaving a permanently disabled control.
+  Held in its own pauseWarning state because a successful poll clears lastError every 2s.
+- A hard (non-conflict) refusal of a pause clears the pending state so it can be retried;
+  a TIMEOUT deliberately does not, since the request may still have landed.
+
+STILL OPEN — both need a robot-side deploy of scripts/ot2-bridge.py, not a Vercel push:
+1. execute_auto_resume_run watches for up to AUTO_RESUME_TIMEOUT_S (75s) and resumes the first
+   pause it sees. If a run's initial pause hasn't happened yet and the operator pauses inside
+   that window, the DAEMON will resume it — same bug, server side, where the browser can't
+   defend. Narrow (the initial pause normally lands within ~1-2s of play, and the daemon breaks
+   out immediately after) but real, especially if a protocol ever stops producing an initial pause.
+2. clear_stale_protocol_run() treats `paused` as stale and STOPs it to free the run engine. It
+   only fires when opening a maintenance run hits a conflict (deck scan / jog), but a
+   deliberately-paused fill run is indistinguishable from a leftover off-deck pause to it — so
+   starting a scan while a fill is paused will kill the fill. Likely related to "eventually
+   leads me to having to cancel it".
+
+npm run check: 11 errors (baseline, unchanged). npm run test:unit: 80 passed. npm run build: clean.
