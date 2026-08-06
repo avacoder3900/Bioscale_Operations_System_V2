@@ -28,12 +28,19 @@
 		robotName = 'OT-2',
 		opentronsRunId,
 		onComplete,
+		onStatusChange,
 		pollMs = 2000
 	} = $props<{
 		robotId: string;
 		robotName?: string;
 		opentronsRunId: string;
 		onComplete?: (status: string, run: any) => void;
+		/**
+		 * Fired whenever the robot's own status changes. This is the REAL status,
+		 * not the optimistic one — a pause the robot has not acted on yet still
+		 * reports `running`, which is what a caller timing the run needs to know.
+		 */
+		onStatusChange?: (status: string) => void;
 		pollMs?: number;
 	}>();
 
@@ -72,6 +79,8 @@
 	 * up until the operator does something about it.
 	 */
 	let pauseWarning = $state<string | null>(null);
+	/** Last status handed to onStatusChange, so it only fires on real transitions. */
+	let lastNotifiedStatus: string | null = null;
 	let pollHandle: ReturnType<typeof setTimeout> | null = null;
 	let destroyed = false;
 
@@ -143,6 +152,10 @@
 				if (!actionInFlight) {
 					const next = (run.status ?? 'idle') as string;
 					runStatus = next;
+					if (next !== lastNotifiedStatus) {
+						lastNotifiedStatus = next;
+						onStatusChange?.(next);
+					}
 					lastError = null;
 					pollError = null;
 					pollFailures = 0;

@@ -105,6 +105,10 @@
 	let runFinishedLocal = $state(false);
 	const runFinished = $derived(runFinishedLocal || !!data.runState.opentronsRunFinalStatus);
 
+	// The robot's own status, reported by EmbeddedRunController. Used to hold the
+	// run clock while the robot is paused — paused time isn't fill time.
+	let robotStatus = $state<string | null>(null);
+
 	// "Run again": complete the just-finished run (→ Top Sealing, robot freed),
 	// then start a fresh run on the same robot reusing the same assay + protocol
 	// params — landing on barcode scanning. Mirrors the wax flow.
@@ -683,6 +687,7 @@
 				robotId={data.opentronsRobotId}
 				robotName={data.runState.assayTypeName ?? 'Reagent Run'}
 				opentronsRunId={data.runState.opentronsRunId}
+				onStatusChange={(status) => { robotStatus = status; }}
 				onComplete={(status) => {
 					// The .py landed terminal — reveal the run-complete controls. The
 					// run does NOT auto-advance; the operator sends it on or re-runs.
@@ -706,6 +711,7 @@
 				runEndTime={new Date(data.runState.runEndTime ?? (Date.now() + 600000))}
 				protocolParameters={data.runState.protocolParameters}
 				robotFinished={runFinished}
+				paused={robotStatus === 'paused'}
 				autoCompleteOnExpiry={!data.runState.opentronsRunId}
 				onTimerComplete={() => { runFinishedLocal = true; }}
 				onAbort={(reason, photoUrl) => submitForm('abortRun', { reason, photoUrl: photoUrl ?? '' })}

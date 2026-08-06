@@ -7125,3 +7125,32 @@ Retrieve this exact code: git checkout master at commit c07d8959
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Pause on a wax/reagent fill run now holds on the first press
 instead of being auto-resumed away, and the chip reports PAUSE-REQUESTED until it lands.
+
+================================================================================
+2026-08-06 — master — hold the reagent run clock while the robot is paused
+================================================================================
+Alejandro: "when it gets paused, the timer is still running — make sure the timer stops
+when it's paused as well."
+
+The stopwatch (RunExecution.svelte) only ever knew runStartTime and wall-clock now; pause
+state lives in EmbeddedRunController, and nothing connected the two. So a paused robot kept
+accruing "elapsed" and kept burning down the remaining estimate for work that wasn't
+happening — which also meant the finish time it implied was wrong by however long the
+operator paused.
+
+- EmbeddedRunController: new optional onStatusChange(status) prop, fired on real status
+  transitions only. Deliberately the ROBOT's status, not the optimistic one — a pause the
+  robot hasn't acted on yet still reports `running`, and the clock should keep going until
+  it actually stops, not from the moment the button was clicked.
+- reagent-filling/+page.svelte: tracks robotStatus, passes paused={robotStatus === 'paused'}.
+- RunExecution: accumulates paused time across however many pauses (pausedAccumMs plus the
+  currently-open stretch) and subtracts it from elapsed. Remaining is now derived from the
+  BUDGET (runEndTime - runStartTime) minus adjusted elapsed, rather than from the wall-clock
+  end stamp — so a pause pushes the projected finish out instead of eating the estimate.
+  While paused the readout goes yellow and says "paused — clock held", and once any pause
+  has happened it shows "Not counting N min paused" so the held time is visible rather than
+  looking like a frozen/broken timer.
+
+Wax has no run timer (its RunExecution shows only the start clock), so this is reagent-only.
+
+npm run check: 11 errors (baseline, unchanged). npm run test:unit: 80 passed. npm run build: clean.

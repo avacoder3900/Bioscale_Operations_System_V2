@@ -27,12 +27,18 @@
 		 * no robot status to wait on.
 		 */
 		autoCompleteOnExpiry?: boolean;
+		/**
+		 * The robot is paused. The clock holds while this is true — a paused robot
+		 * is not filling, so counting that time would both misreport how long the
+		 * fill took and eat the remaining estimate for work that never happened.
+		 */
+		paused?: boolean;
 	}
 
 	let {
 		assayTypeName, cartridgeCount, runStartTime, runEndTime, onTimerComplete, onAbort,
 		readonly: isReadonly = false, protocolParameters = null,
-		robotFinished = false, autoCompleteOnExpiry = false
+		robotFinished = false, autoCompleteOnExpiry = false, paused = false
 	}: Props = $props();
 
 	let now = $state(Date.now());
@@ -50,11 +56,28 @@
 	// rather than letting the stopwatch keep climbing.
 	const clock = $derived(isReadonly ? new Date(runEndTime).getTime() : now);
 
+	// Time the robot spent paused, which is not fill time. Accumulated across
+	// however many times the operator pauses, plus the stretch currently open.
+	let pausedAccumMs = $state(0);
+	let pausedSince = $state<number | null>(null);
+	$effect(() => {
+		if (paused && pausedSince === null) {
+			pausedSince = Date.now();
+		} else if (!paused && pausedSince !== null) {
+			pausedAccumMs += Date.now() - pausedSince;
+			pausedSince = null;
+		}
+	});
+	const pausedMs = $derived(pausedAccumMs + (pausedSince !== null ? Math.max(0, clock - pausedSince) : 0));
+
+	// runEndTime - runStartTime is the DURATION the estimate budgeted. Remaining is
+	// measured against that budget rather than against the wall-clock end stamp, so
+	// a pause pushes the finish out instead of silently burning the estimate down.
 	const estimateMs = $derived(new Date(runEndTime).getTime() - new Date(runStartTime).getTime());
-	const elapsedMs = $derived(Math.max(0, clock - new Date(runStartTime).getTime()));
-	const remainingMs = $derived(Math.max(0, new Date(runEndTime).getTime() - clock));
+	const elapsedMs = $derived(Math.max(0, clock - new Date(runStartTime).getTime() - pausedMs));
+	const remainingMs = $derived(Math.max(0, estimateMs - elapsedMs));
 	const progress = $derived(estimateMs > 0 ? Math.min(1, elapsedMs / estimateMs) : 0);
-	const pastEstimate = $derived(!isReadonly && estimateMs > 0 && remainingMs <= 0);
+	const pastEstimate = $derived(!isReadonly && estimateMs > 0 && elapsedMs >= estimateMs);
 
 	const complete = $derived(isReadonly || robotFinished || manuallyFinished);
 
@@ -138,10 +161,12 @@
 				</p>
 			</div>
 		{:else}
-			<div class="text-5xl font-mono font-bold text-[var(--color-tron-cyan)] tabular-nums">
+			<div class="text-5xl font-mono font-bold tabular-nums {paused ? 'text-yellow-300' : 'text-[var(--color-tron-cyan)]'}">
 				{String(elapsedMin).padStart(2, '0')}:{String(elapsedSec).padStart(2, '0')}
 			</div>
-			<p class="mt-2 text-sm text-[var(--color-tron-text-secondary)]">elapsed</p>
+			<p class="mt-2 text-sm {paused ? 'text-yellow-300' : 'text-[var(--color-tron-text-secondary)]'}">
+				{paused ? 'paused — clock held' : 'elapsed'}
+			</p>
 
 			{#if estimateMs > 0}
 				<p class="mt-1 text-xs {pastEstimate ? 'text-amber-300' : 'text-[var(--color-tron-text-secondary)]'}">
@@ -152,12 +177,18 @@
 					{/if}
 				</p>
 			{/if}
+
+			{#if pausedAccumMs > 0 || pausedSince !== null}
+				<p class="mt-1 text-[11px] text-[var(--color-tron-text-secondary)]">
+					Not counting {Math.round(pausedMs / 60000)} min paused
+				</p>
+			{/if}
 		{/if}
 
 		<!-- Progress bar — position against the estimate, not a countdown to a deadline -->
 		<div class="mt-4 h-2 w-full overflow-hidden rounded-full bg-[var(--color-tron-border)]">
 			<div
-				class="h-full rounded-full transition-all duration-1000 {complete ? 'bg-green-500' : pastEstimate ? 'bg-amber-500' : 'bg-[var(--color-tron-cyan)]'}"
+				class="h-full rounded-full transition-all duration-1000 {complete ? 'bg-green-500' : paused ? 'bg-yellow-400' : pastEstimate ? 'bg-amber-500' : 'bg-[var(--color-tron-cyan)]'}"
 				style="width: {complete ? 100 : progress * 100}%"
 			></div>
 		</div>
