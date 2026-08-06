@@ -7060,3 +7060,10 @@ protocol executes, so tolerating a slow poll costs nothing operationally.
 
 npm run check: 11 errors (baseline, unchanged). npm run test:unit: 80 passed.
 npm run build: clean.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit fe8d60aa
+Retrieve this exact code: git checkout master at commit fe8d60aa
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: suppressing the spurious "Robot status timed out (bridge
+slow)" banner that appeared on every wax/reagent run right after the cartridge scan.
