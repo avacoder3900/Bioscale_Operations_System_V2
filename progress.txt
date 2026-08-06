@@ -7118,3 +7118,10 @@ STILL OPEN — both need a robot-side deploy of scripts/ot2-bridge.py, not a Ver
    leads me to having to cancel it".
 
 npm run check: 11 errors (baseline, unchanged). npm run test:unit: 80 passed. npm run build: clean.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit c07d8959
+Retrieve this exact code: git checkout master at commit c07d8959
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Pause on a wax/reagent fill run now holds on the first press
+instead of being auto-resumed away, and the chip reports PAUSE-REQUESTED until it lands.
