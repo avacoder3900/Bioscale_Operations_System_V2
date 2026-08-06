@@ -166,8 +166,8 @@
 				<div class="mt-1 font-mono text-lg" style="color: var(--color-tron-text)">{data.reagent.minCoolingTimeMin} <span class="text-xs">min</span></div>
 			</div>
 			<div class="rounded border border-[var(--color-tron-border)] p-3">
-				<div class="text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Fill time per cartridge</div>
-				<div class="mt-1 font-mono text-lg" style="color: var(--color-tron-text)">{data.reagent.fillTimePerCartridgeMin} <span class="text-xs">min</span></div>
+				<div class="text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Est. full deck (24 × 4 rows)</div>
+				<div class="mt-1 font-mono text-lg" style="color: var(--color-tron-text)">{data.reagent.fullDeckEstimateMin} <span class="text-xs">min</span></div>
 			</div>
 			<div class="rounded border border-[var(--color-tron-border)] p-3">
 				<div class="text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Max time before seal</div>

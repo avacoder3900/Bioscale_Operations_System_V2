@@ -6953,3 +6953,60 @@ STILL DORMANT: PERMISSIONS_ENFORCE is unset, so the deny-by-default evaluator on
 would-be denials to permission_shadow_log (30-day TTL). Next step is >=7 days of
 `npx tsx scripts/report-shadow-denials.ts`, review with Jacob, then flip to enforce and run
 the PERM-04 call-site sweep. PERM-06 cleanup stays interlocked until that sweep lands.
+
+================================================================================
+2026-08-06 — master — reagent run timer: elapsed stopwatch + work-based estimate (was ~2x too long)
+================================================================================
+Alejandro: filling 24 cartridges across all four wells shows "47 minutes" but the run
+actually takes ~25. Asked for either a stopwatch or a corrected timer. Did both, in the
+roles that make each honest.
+
+Root cause. The countdown was one multiplication done once in the startRun action
+(reagent-filling/+page.server.ts): cartridgeCount x reagentFilling.fillTimePerCartridgeMin,
+stored as runEndTime. The setting in Mongo is 2.0 min/cartridge, so 24 carts predicted
+48 min. The formula never looked at the well_* run-time parameters, so a one-row run and a
+four-row run of the same deck predicted identically — the cartridge count is not what the
+protocol spends its time on.
+
+What actually drives the run. Each selected reagent row is one dispense_reagent() call in
+Reagent_Filling_GEN7.py: pick up + calibrate a tip, aspirate in batches of 10 wells, dispense
+into every well, drop the tip. A full row (well_2..well_5) fills 3 wells per cartridge; a
+single-column selection (well_2a..well_5c) fills 1. So the cost is
+startup + rows x per-row + wellsFilled x per-well.
+
+Fitted against reagent_batch_records. Took the fastest run of each distinct
+(dispenses, rows) shape — fastest = least operator dwell = closest to robot-only time.
+Fit: 60s startup + 60s/row + 3.7s/well. Predicted vs measured: 288 wells 22.8 vs 22.0 min,
+264 -> 21.3 vs 21.0, 207 -> 16.8 vs 17.3, 192 -> 16.8 vs 16.5, 180 -> 16.1 vs 15.4.
+
+Files:
+- NEW src/lib/manufacturing/reagent-run-estimate.ts — countReagentWork() +
+  estimateReagentRunSeconds(); tuning constants overridable from settings; falls back to
+  assuming a full four-row deck when a run has no well_* params recorded; flags
+  run_calibration_check (it ends in an unbounded operator pause the estimate can't cover).
+- NEW src/lib/manufacturing/reagent-run-estimate.test.ts — 17 tests, incl. a regression
+  guard asserting the model stays within 2 min of each measured run shape.
+- reagent-filling/+page.server.ts — startRun now estimates from protocolParameters.
+- reagent-filling/RunExecution.svelte — the big readout is now ELAPSED (counts up, always
+  true); the estimate is a secondary "~N min remaining (estimated)" line that switches to
+  an amber "past the ~N min estimate — waiting on the robot" instead of lying. Added a
+  breakdown line ("4 reagent rows x 24 cartridges = 288 wells, ~23 min") so an operator can
+  sanity-check the number. The progress bar is position-against-estimate, not a deadline.
+- Behaviour fix in the same file: the countdown hitting zero used to declare "Filling
+  Complete" and fire onTimerComplete. With a correct (shorter) estimate that would now fire
+  ~2 min BEFORE a typical run ends. Completion is now driven only by the OT-2 terminal
+  status the EmbeddedRunController already polls (new robotFinished prop), with
+  autoCompleteOnExpiry as a fallback for runs with no opentronsRunId, and FinishTimerButton
+  still available as the operator override. The 3-beep alarm moved to actual completion
+  (suppressed on a page load of an already-finished run).
+- manufacturing-settings.ts — reagentFilling gains startupOverheadSec,
+  secondsPerReagentGroup, secondsPerDispense; fillTimePerCartridgeMin left in place and
+  commented as legacy (no migration needed — absent fields fall through to defaults).
+- reagent-filling/settings — the three knobs replace the flat fill-time input, with a live
+  worked example ("24 x 4 rows estimates ~23 min; measured runs took 22-25 min").
+- opentron-control/settings — the read-only "Fill time per cartridge" tile became
+  "Est. full deck (24 x 4 rows)", computed through the same estimator.
+
+npm run check: 11 errors (baseline, unchanged — all pre-existing in r2.ts, AskBimsWidget,
+assembly/[sessionId], parts). npm run test:unit: 65 passed. npm run build: clean.
+Not yet deployed.

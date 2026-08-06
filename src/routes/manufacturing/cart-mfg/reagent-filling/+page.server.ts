@@ -12,6 +12,7 @@ import { resolveFridgeId } from '$lib/server/services/equipment-resolve';
 import { getRobot, robotGet, robotPost, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
 import { calibrationRtpValues } from '$lib/server/opentrons/calibration-rtps';
 import { ensureFreshRunProtocol } from '$lib/server/opentrons/protocol-freshness';
+import { estimateReagentRunSeconds } from '$lib/manufacturing/reagent-run-estimate';
 import type { PageServerLoad, Actions } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -838,13 +839,18 @@ export const actions: Actions = {
 				}
 				: { nextTipIndex: 0, hostname: null, capturedAt: new Date() };
 
-		// Compute end-time estimate from settings (used by the existing UI).
+		// Estimated finish time. Driven by how many wells the selected reagent rows
+		// will actually fill, not by cartridge count alone — see
+		// src/lib/manufacturing/reagent-run-estimate.ts for the model and the fit.
 		const settingsDoc = await ManufacturingSettings.findById('default').lean() as any;
-		const fillTime = settingsDoc?.reagentFilling?.fillTimePerCartridgeMin ?? 0.5;
 		const cartridgeCount = run.cartridgeCount ?? run.cartridgesFilled?.length ?? 0;
-		const runDurationMs = cartridgeCount * fillTime * 60 * 1000;
+		const estimate = estimateReagentRunSeconds(
+			protocolParameters,
+			cartridgeCount,
+			settingsDoc?.reagentFilling
+		);
 		const runStartTime = new Date();
-		const runEndTime = new Date(runStartTime.getTime() + runDurationMs);
+		const runEndTime = new Date(runStartTime.getTime() + estimate.seconds * 1000);
 
 		await ReagentBatchRecord.findByIdAndUpdate(runId, {
 			$set: {
