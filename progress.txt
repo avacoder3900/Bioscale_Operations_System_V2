@@ -7007,6 +7007,19 @@ Files:
 - opentron-control/settings — the read-only "Fill time per cartridge" tile became
   "Est. full deck (24 x 4 rows)", computed through the same estimator.
 
-npm run check: 11 errors (baseline, unchanged — all pre-existing in r2.ts, AskBimsWidget,
-assembly/[sessionId], parts). npm run test:unit: 65 passed. npm run build: clean.
-Not yet deployed.
+Rebased onto master before pushing: local master was 20+ commits stale (the PERM-01..05
+permissions rewrite had landed and shipped in between), so this was built on an old base.
+Only progress.txt conflicted; all source files merged clean. Re-verified on the new base:
+npm run check 11 errors (baseline, unchanged — pre-existing in r2.ts, AskBimsWidget,
+assembly/[sessionId], parts), npm run test:unit 80 passed (5 files — picks up the new
+permissions.test.ts + machine-actor.test.ts), npm run build clean. Confirmed the two
+permissions these files gate on (manufacturing:admin, manufacturing:read) are still in
+permissions-registry.ts after the rewrite.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 3e6ee349
+Retrieve this exact code: git checkout master at commit 3e6ee349
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: reagent fill run timer — elapsed stopwatch as the primary
+readout plus a work-based (wells, not cartridges) run estimate replacing the ~2x-long
+flat countdown, and run completion driven by OT-2 terminal status instead of timer expiry.
