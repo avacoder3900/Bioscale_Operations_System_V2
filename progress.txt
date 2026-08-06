@@ -7154,3 +7154,10 @@ operator paused.
 Wax has no run timer (its RunExecution shows only the start clock), so this is reagent-only.
 
 npm run check: 11 errors (baseline, unchanged). npm run test:unit: 80 passed. npm run build: clean.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 739324ee
+Retrieve this exact code: git checkout master at commit 739324ee
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: the reagent run stopwatch holds while the robot is paused, and
+paused time no longer counts against the remaining-time estimate.
