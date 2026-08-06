@@ -7161,3 +7161,52 @@ Retrieve this exact code: git checkout master at commit 739324ee
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: the reagent run stopwatch holds while the robot is paused, and
 paused time no longer counts against the remaining-time estimate.
+
+================================================================================
+2026-08-06 — master — daemon: never auto-resume or auto-kill a deliberately-paused run
+================================================================================
+The two robot-side hazards flagged in the Pause writeup above, now fixed in
+scripts/ot2-bridge.py and deployed to all three robots.
+
+Both had the same root problem: by STATUS ALONE, the engine's start-of-run off-deck
+"confirm deck loaded" pause and an operator pressing Pause are both just `paused`. The
+daemon couldn't tell them apart, so it treated a deliberate pause as a leftover.
+
+The discriminator: run.actions. The OT-2 API documents it as "client-initiated run control
+actions, ordered oldest to newest" — so a commanded pause (POST /runs/<id>/actions with
+actionType 'pause') lands there, while the engine's own protocol-level wait does NOT. New
+pause_was_commanded() reads the LATEST play/pause/stop in that log rather than "has ever
+been paused", because the log is append-only: checking for any pause would keep a run
+flagged for life and make a genuinely stale off-deck pause later in that run unclearable.
+Latest action 'pause' = the operator's most recent instruction was stop. Verified against
+the robot's own OpenAPI schema (RunActionType is play|pause|stop|resume-from-recovery|...)
+and unit-checked offline over 14 cases incl. null/malformed/empty action logs.
+
+1. execute_auto_resume_run: now refuses to resume when the pause was commanded, and reports
+   {"resumed": ..., "declined": ...}. Previously it would undo a Pause pressed inside its
+   75s watch window — the same bug the browser had, but server-side where the browser
+   can't defend.
+2. clear_stale_protocol_run: a commanded pause now raises RobotCommandError like the ACTIVE
+   case instead of being silently stopped. Starting a deck scan while a fill was
+   deliberately paused used to kill the fill; it now fails loudly telling the operator to
+   resume or stop it explicitly. Refactored _current_protocol_run to carry pauseCommanded,
+   plus a shared _fetch_run helper.
+
+Evidence this was real, straight off B07's run d2d46890a action log:
+  play, play, pause, play, pause, play, pause, stop
+i.e. start, auto-resume of the initial pause, then THREE operator pauses each undone by a
+play, and finally the operator giving up and stopping the run. Exactly the reported
+"I press pause, it keeps going, eventually I have to cancel it".
+
+Deployment (robot-side — NOT a Vercel deploy):
+  Deployed: scripts/ot2-bridge.py md5 c7b0e96d... to B07 172.16.28.101, R04 172.16.28.144,
+  B14 172.16.28.71 at /data/ot2-bridge/ot2-bridge.py; prior version (md5 b63bad15..., which
+  matched git HEAD exactly on all three — no robot-only drift) saved alongside as
+  ot2-bridge.py.bak-20260806.
+  All three: py_compile OK on device, systemctl restart, active + enabled, scanner port
+  reopened, zero errors in the journal since restart. Verified end-to-end by pushing a
+  read-only GET /health through the Mongo command queue to each: R04 2.6s, B07 0.9s,
+  B14 0.6s round trip. All three robots were idle (stopped/succeeded) before the restart.
+  Disk before deploy: B07 18%, R04 6%, B14 18% — no cleanup needed.
+  Rollback: cp /data/ot2-bridge/ot2-bridge.py.bak-20260806 /data/ot2-bridge/ot2-bridge.py
+           && systemctl restart ot2-bridge

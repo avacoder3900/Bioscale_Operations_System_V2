@@ -399,8 +399,50 @@ ACTIVE_RUN_STATES = {"running", "finishing"}
 TERMINAL_RUN_STATES = {"stopped", "failed", "succeeded"}
 
 
+def _run_actions(run_data: dict) -> list:
+    """The run's action log — the play/pause/stop COMMANDS issued against it."""
+    return (run_data or {}).get("actions") or []
+
+
+def pause_was_commanded(run_data: dict) -> bool:
+    """True if the run is paused because somebody asked for it.
+
+    This is the one reliable way to tell the two kinds of `paused` apart:
+
+      - The engine's own start-of-run pause (off-deck labware, "confirm deck
+        loaded") is a protocol-level wait. Nothing appears in run.actions except
+        the `play` that started the run.
+      - An operator pressing Pause in BIMS goes out as POST /runs/<id>/actions
+        with actionType 'pause'. The OT-2 API documents run.actions as
+        "client-initiated run control actions, ordered oldest to newest", so
+        that — and only that — lands in the log.
+
+    We look at the LATEST action rather than "has ever been paused", because the
+    log is append-only: a run that was paused and then resumed would otherwise
+    stay flagged for the rest of its life, and a genuinely stale off-deck pause
+    later in that run could never be cleared. Latest action 'pause' means the
+    operator's most recent instruction was stop; anything else means it was go.
+    """
+    for action in reversed(_run_actions(run_data)):
+        kind = (action.get("actionType") or "").lower()
+        if kind in ("play", "pause", "stop"):
+            return kind == "pause"
+    return False
+
+
+def _fetch_run(run_id: str, timeout: float = 6) -> Optional[dict]:
+    """GET /runs/<id> -> the `data` object, or None if it can't be read."""
+    try:
+        r = ot2_request("GET", "/runs/{}".format(run_id), timeout=timeout)
+        if r.status_code >= 400:
+            return None
+        return ((r.json() or {}).get("data")) or None
+    except Exception:
+        return None
+
+
 def _current_protocol_run() -> Optional[dict]:
-    """Return {'id','status'} for the robot's current protocol run, or None."""
+    """Return {'id','status','pauseCommanded'} for the current protocol run."""
     try:
         r = ot2_request("GET", "/runs", timeout=8)
         if r.status_code >= 400:
@@ -414,8 +456,9 @@ def _current_protocol_run() -> Optional[dict]:
         return None
     for run in (body.get("data") or []):
         if run.get("id") == cur_id:
-            return {"id": cur_id, "status": run.get("status")}
-    return {"id": cur_id, "status": None}
+            return {"id": cur_id, "status": run.get("status"),
+                    "pauseCommanded": pause_was_commanded(run)}
+    return {"id": cur_id, "status": None, "pauseCommanded": False}
 
 
 def clear_stale_protocol_run() -> Optional[dict]:
@@ -433,6 +476,13 @@ def clear_stale_protocol_run() -> Optional[dict]:
         raise RobotCommandError(
             "Robot has an ACTIVE protocol run (status={}) — refusing to "
             "auto-clear it. Stop that run before scanning.".format(status))
+    if status == "paused" and run.get("pauseCommanded"):
+        # A deliberately-paused fill is not a leftover. It looks identical to the
+        # start-of-run off-deck pause by status alone, which is how paused fills
+        # were getting silently stopped when someone started a deck scan.
+        raise RobotCommandError(
+            "Robot has a protocol run that was deliberately PAUSED — refusing to "
+            "auto-clear it. Resume it, or stop it explicitly, before scanning.")
     # Stale: paused / idle / blocked-by-open-door / stop-requested / awaiting-recovery
     run_id = run["id"]
     log.warning("clearing stale protocol run %s (status=%s) blocking maintenance op",
@@ -1154,16 +1204,23 @@ def execute_auto_resume_run(command_id: str, payload: dict) -> None:
     log.info("auto_resume_run %s: watching run %s for the initial pause", command_id, run_id)
     deadline = time.time() + AUTO_RESUME_TIMEOUT_S
     resumed = False
+    declined = False
     while time.time() < deadline:
         time.sleep(1.0)
-        try:
-            r = ot2_request("GET", "/runs/{}".format(run_id), timeout=6)
-            if r.status_code >= 400:
-                continue
-            status = (((r.json() or {}).get("data")) or {}).get("status")
-        except Exception:
+        data = _fetch_run(run_id)
+        if data is None:
             continue
+        status = data.get("status")
         if status == "paused":
+            # Only the engine's own start-of-run pause is ours to clear. If the
+            # pause was COMMANDED, an operator asked for it — leave it alone.
+            # Without this the daemon would undo a Pause pressed inside the
+            # AUTO_RESUME_TIMEOUT_S window, which is the same bug the browser had.
+            if pause_was_commanded(data):
+                declined = True
+                log.info("auto_resume_run %s: run %s was paused on purpose — not resuming",
+                         command_id, run_id)
+                break
             try:
                 ot2_request("POST", "/runs/{}/actions".format(run_id),
                             {"data": {"actionType": "play"}}, timeout=10)
@@ -1176,7 +1233,8 @@ def execute_auto_resume_run(command_id: str, payload: dict) -> None:
             log.info("auto_resume_run %s: run %s ended (%s) before pausing", command_id, run_id, status)
             break
         # 'running' / 'idle' / None -> keep waiting for the initial pause
-    _post_result(command_id, {"ok": True, "status": 200, "body": {"resumed": resumed}})
+    _post_result(command_id, {"ok": True, "status": 200,
+                              "body": {"resumed": resumed, "declined": declined}})
 
 
 # Tip calibration (NATIVE-CALIBRATION-SYSTEM PRD 4) -------------------------
