@@ -7295,3 +7295,10 @@ verbatim into ?/startRun, which parses param_<name> with parseFloat for float RT
 defaults stay 1.60, so driving the protocol from the Opentrons app is unaffected.
 
 npm run check: 11 errors (baseline, unchanged). npm run test:unit: 80 passed. npm run build: clean.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 441102f8
+Retrieve this exact code: git checkout master at commit 441102f8
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: wax run-start form comes up with gate 1 at 1.6 and gates 2-4
+at 2.2 (still editable) so operators stop retyping them every run.
