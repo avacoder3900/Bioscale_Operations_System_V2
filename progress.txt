@@ -7255,3 +7255,43 @@ Retrieve this exact code: git checkout master at commit efb48862
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: USE TIP CALIBRATION comes up pre-selected on the reagent
 run-start form (still un-tickable) so operators stop checking it manually every run.
+
+================================================================================
+2026-08-07 — master — wax: pre-select the gate volumes (1.6 / 2.2 / 2.2 / 2.2)
+================================================================================
+Alejandro: "when you start a wax fill, make it automatically go to wells 2-4 have 2.2 and
+well 1 has 1.6 so I don't have to adjust it every time."
+
+Wax_Filling_GEN7_Cartridge.py declares vol_gate1..vol_gate4 all at default=1.60, and
+ProtocolStartPanel seeds from the .py's RTP defaults, so the operator retyped three fields
+on every wax run.
+
+Confirmed against wax_filling_runs before changing it — every run since 2026-07-28 has been
+gate1=1.6, gate2/3/4=2.2 (16 consecutive runs across R04 and B07); everything before that
+was the 1.6/1.6/1.6/1.6 protocol default. So these are already the operating values; this
+only removes the typing.
+
+Checked the row-alignment hazard from [[project-wax-batch-row-alignment]], since gate
+volumes are exactly what un-aligns aspiration batches. It holds at these values, per the
+.py's own documented arithmetic (comment above the aspirate_remainder RTP): a cartridge row
+is 4 wax wells (gates 4,3,2,1) = 8.2uL at 2.2/2.2/2.2/1.6, and usable-per-trip is
+20 - aspirate_remainder, so a whole row fits per trip as long as the remainder is <= 11.8.
+Its default is 11.5 and every recent run recorded 11.5. A batch ending mid-row would force
+the next to open by crossing a cartridge wall and bend the tip; the protocol also guards
+this structurally with the row_key check in the batching loop.
+
+Fix: new WAX_PARAM_DEFAULTS constant on the wax page, spread into contextValues on ALL
+THREE ProtocolStartPanel instances (the deck-loaded panel, the pre-scan "Set protocol
+parameters" panel, and the orchestrated scan-and-start panel) so the defaults hold whichever
+path the run starts from. contextValues wins over the .py default when the form seeds.
+
+NOT added to contextReadonly — gate volumes are the main fill-quality tuning knob and stay
+editable per run. dispense_depth deliberately left alone: it is per-robot (B07 needed its
+own value to stop tips breaking on dispense, see [[project-b07-wax-dispense-depth]]) and has
+no single correct default; recent runs show -1, 0 and 1 across robots.
+
+Value path verified end-to-end as with reagent: the pre-scan panel's FormData is replayed
+verbatim into ?/startRun, which parses param_<name> with parseFloat for float RTPs. The .py
+defaults stay 1.60, so driving the protocol from the Opentrons app is unaffected.
+
+npm run check: 11 errors (baseline, unchanged). npm run test:unit: 80 passed. npm run build: clean.

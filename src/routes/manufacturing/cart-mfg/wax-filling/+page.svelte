@@ -125,6 +125,38 @@
 	let paramsReady = $state(false);
 	let capturedParamsFd = $state<FormData | null>(null);
 
+	/**
+	 * Run-time parameters BIMS pre-selects for a wax run, overriding the .py's own
+	 * defaults. These seed the form; the operator can still change any of them.
+	 *
+	 * Gate volumes: the .py defaults all four gates to 1.60, but the line has run
+	 * gate 1 at 1.6 and gates 2-4 at 2.2 on every wax run since 2026-07-28 (16
+	 * consecutive runs across R04 and B07), so the operator retyped three fields
+	 * every time. These are the values already in use — this only stops the typing.
+	 *
+	 * Row alignment holds at these volumes. Per the .py's own arithmetic, a
+	 * cartridge row is 4 wax wells (gates 4,3,2,1) = 8.2uL at 2.2/2.2/2.2/1.6,
+	 * which fits the 20uL - aspirate_remainder budget as long as the remainder is
+	 * <= 11.8; its default is 11.5. That matters because an aspiration batch that
+	 * ends mid-row forces the next one to open by crossing a cartridge wall, which
+	 * bends the tip — see the row_key batching guard in the protocol.
+	 *
+	 * Deliberately NOT in contextReadonly: gate volumes are the main tuning knob
+	 * for fill quality, so they stay editable per run.
+	 *
+	 * dispense_depth is intentionally left alone — it is per-robot (B07 needed a
+	 * different value to stop tips breaking on dispense) and has no single default.
+	 *
+	 * Frozen for a stable object identity: ProtocolStartPanel re-seeds the whole
+	 * form when contextValues changes, which would wipe an operator's edits.
+	 */
+	const WAX_PARAM_DEFAULTS = Object.freeze({
+		vol_gate1: 1.6,
+		vol_gate2: 2.2,
+		vol_gate3: 2.2,
+		vol_gate4: 2.2
+	});
+
 	// Orchestrated scan-and-start (deck_load substage): one Start Run press
 	// drives deck-barcode scan → cartridge sweep → loadDeck → startRun. Each
 	// step is rendered in a visible checklist; any failure aborts and opens
@@ -1084,7 +1116,7 @@
 					<ProtocolStartPanel
 						robot={{ _id: data.opentronsRobotId, name: data.robotName }}
 						protocols={data.robotProtocols}
-						contextValues={{ cartridges: data.runState.plannedCartridgeCount ?? 24 }}
+						contextValues={{ ...WAX_PARAM_DEFAULTS, cartridges: data.runState.plannedCartridgeCount ?? 24 }}
 						contextReadonly={['cartridges']}
 						lastTipState={data.lastTipState}
 						submitting={submitting}
@@ -1121,7 +1153,7 @@
 					<ProtocolStartPanel
 						robot={{ _id: data.opentronsRobotId, name: data.robotName }}
 						protocols={data.robotProtocols}
-						contextValues={{ cartridges: data.runState.plannedCartridgeCount ?? 24 }}
+						contextValues={{ ...WAX_PARAM_DEFAULTS, cartridges: data.runState.plannedCartridgeCount ?? 24 }}
 						contextReadonly={['cartridges']}
 						lastTipState={data.lastTipState}
 						submitting={submitting}
@@ -1191,7 +1223,7 @@
 					<ProtocolStartPanel
 						robot={{ _id: data.opentronsRobotId, name: data.robotName }}
 						protocols={data.robotProtocols}
-						contextValues={{ cartridges: data.runState.plannedCartridgeCount ?? 24 }}
+						contextValues={{ ...WAX_PARAM_DEFAULTS, cartridges: data.runState.plannedCartridgeCount ?? 24 }}
 						contextReadonly={['cartridges']}
 						lastTipState={data.lastTipState}
 						submitting={submitting || orchestrating}
