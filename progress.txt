@@ -7329,3 +7329,10 @@ this is presentation only. Added countdownMin/Sec and overMin/Sec derivations pl
 helper, and refreshed the two comments that described the stopwatch layout.
 
 npm run check: 11 errors (baseline, unchanged). npm run test:unit: 80 passed. npm run build: clean.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit fae44b7c
+Retrieve this exact code: git checkout master at commit fae44b7c
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: reagent run timer shows a countdown as the headline number
+again (elapsed demoted to a secondary line), still robot-driven for completion.
