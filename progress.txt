@@ -7302,3 +7302,30 @@ Retrieve this exact code: git checkout master at commit 441102f8
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: wax run-start form comes up with gate 1 at 1.6 and gates 2-4
 at 2.2 (still editable) so operators stop retyping them every run.
+
+================================================================================
+2026-08-07 — master — reagent run timer: back to a countdown as the headline number
+================================================================================
+Alejandro, on the run-timer work from 2026-08-06: "can you actually change it to the
+countdown instead of stopwatch?"
+
+Swapped the visual hierarchy back — the big number is MM:SS remaining again, with elapsed
+demoted to a small line underneath. Everything that made the earlier change necessary is
+kept, because the original countdown's problems were never about it being a countdown:
+
+- It still does NOT decide the run is over. Completion comes from the OT-2 terminal status
+  (robotFinished), with autoCompleteOnExpiry only for runs that have no opentronsRunId.
+  Hitting zero used to fire onTimerComplete and show "Filling Complete" mid-fill.
+- Past zero it flips to "+MM:SS over the ~N min estimate — waiting on the robot" in amber
+  and keeps counting UP, so an under-estimate reads as an under-estimate rather than as a
+  finished run. This is the specific reason a bare countdown was wrong before: the old
+  estimate ran ~2x long so it never expired early, but the corrected estimate does.
+- It still holds while the robot is paused ("paused — countdown held", yellow), and paused
+  time still doesn't burn the estimate down.
+- Elapsed is still shown, just secondary: "12:34 elapsed, not counting 3 min paused".
+
+No logic changed — remainingMs/elapsedMs/pastEstimate already existed with these semantics;
+this is presentation only. Added countdownMin/Sec and overMin/Sec derivations plus a pad()
+helper, and refreshed the two comments that described the stopwatch layout.
+
+npm run check: 11 errors (baseline, unchanged). npm run test:unit: 80 passed. npm run build: clean.

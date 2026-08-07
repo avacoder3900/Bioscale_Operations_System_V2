@@ -47,10 +47,11 @@
 	let abortPhotoUrl = $state('');
 	let manuallyFinished = $state(false);
 
-	// The estimate is an estimate: it drives the "remaining" hint and the progress
-	// bar, never the "this run is over" decision. Only the robot (or the operator
-	// via Finish) decides that — an estimate that expires early used to declare
-	// "Filling Complete" while the pipette was still moving.
+	// The countdown is the headline number, but it is still only an estimate: it
+	// never decides that the run is over. Only the robot (or the operator via
+	// Finish) does. An estimate that expires early used to declare "Filling
+	// Complete" while the pipette was still moving, so when this hits zero it
+	// keeps counting UP as "+MM:SS over" instead of claiming the fill is done.
 	// Viewing a finished run: runEndTime is its real finish time (the completion
 	// actions overwrite the estimate with the actual), so freeze the clock there
 	// rather than letting the stopwatch keep climbing.
@@ -83,8 +84,18 @@
 
 	const elapsedMin = $derived(Math.floor(elapsedMs / 60000));
 	const elapsedSec = $derived(Math.floor((elapsedMs % 60000) / 1000));
-	const remainingMin = $derived(Math.ceil(remainingMs / 60000));
 	const estimateMin = $derived(Math.round(estimateMs / 60000));
+
+	// The countdown itself, and — once it runs out — how far past the estimate we
+	// are. The clock keeps meaning something after zero instead of just sitting
+	// there: the run isn't over until the robot says so.
+	const countdownMin = $derived(Math.floor(remainingMs / 60000));
+	const countdownSec = $derived(Math.floor((remainingMs % 60000) / 1000));
+	const overMs = $derived(Math.max(0, elapsedMs - estimateMs));
+	const overMin = $derived(Math.floor(overMs / 60000));
+	const overSec = $derived(Math.floor((overMs % 60000) / 1000));
+
+	const pad = (n: number) => String(n).padStart(2, '0');
 
 	// Where the estimate came from, so an operator can sanity-check it rather than
 	// having to trust a bare number.
@@ -150,39 +161,38 @@
 		<span>Cartridges: <strong class="text-[var(--color-tron-text)]">{cartridgeCount}</strong></span>
 	</div>
 
-	<!-- Elapsed stopwatch. The big number is time actually spent, which is always
-	     true; the estimate underneath is advisory. -->
+	<!-- Countdown to the estimated finish, with elapsed underneath so the number
+	     the countdown is derived from stays visible. Past zero it flips to
+	     "+MM:SS over" rather than pretending the fill is done. -->
 	<div class="rounded-xl border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6 text-center">
 		{#if complete}
 			<div class="space-y-2">
 				<div class="text-2xl font-bold text-green-400">Filling Complete</div>
 				<p class="text-sm text-[var(--color-tron-text-secondary)]">
-					Took {elapsedMin}:{String(elapsedSec).padStart(2, '0')}. Use the controls below to finish.
+					Took {elapsedMin}:{pad(elapsedSec)}. Use the controls below to finish.
 				</p>
 			</div>
 		{:else}
-			<div class="text-5xl font-mono font-bold tabular-nums {paused ? 'text-yellow-300' : 'text-[var(--color-tron-cyan)]'}">
-				{String(elapsedMin).padStart(2, '0')}:{String(elapsedSec).padStart(2, '0')}
+			<div class="text-5xl font-mono font-bold tabular-nums {paused ? 'text-yellow-300' : pastEstimate ? 'text-amber-300' : 'text-[var(--color-tron-cyan)]'}">
+				{#if pastEstimate}
+					+{pad(overMin)}:{pad(overSec)}
+				{:else}
+					{pad(countdownMin)}:{pad(countdownSec)}
+				{/if}
 			</div>
-			<p class="mt-2 text-sm {paused ? 'text-yellow-300' : 'text-[var(--color-tron-text-secondary)]'}">
-				{paused ? 'paused — clock held' : 'elapsed'}
+			<p class="mt-2 text-sm {paused ? 'text-yellow-300' : pastEstimate ? 'text-amber-300' : 'text-[var(--color-tron-text-secondary)]'}">
+				{#if paused}
+					paused — countdown held
+				{:else if pastEstimate}
+					over the ~{estimateMin} min estimate — waiting on the robot
+				{:else}
+					remaining (estimated)
+				{/if}
 			</p>
 
-			{#if estimateMs > 0}
-				<p class="mt-1 text-xs {pastEstimate ? 'text-amber-300' : 'text-[var(--color-tron-text-secondary)]'}">
-					{#if pastEstimate}
-						past the ~{estimateMin} min estimate — waiting on the robot to report finished
-					{:else}
-						~{remainingMin} min remaining (estimated)
-					{/if}
-				</p>
-			{/if}
-
-			{#if pausedAccumMs > 0 || pausedSince !== null}
-				<p class="mt-1 text-[11px] text-[var(--color-tron-text-secondary)]">
-					Not counting {Math.round(pausedMs / 60000)} min paused
-				</p>
-			{/if}
+			<p class="mt-1 text-xs text-[var(--color-tron-text-secondary)]">
+				{elapsedMin}:{pad(elapsedSec)} elapsed{#if pausedAccumMs > 0 || pausedSince !== null}, not counting {Math.round(pausedMs / 60000)} min paused{/if}
+			</p>
 		{/if}
 
 		<!-- Progress bar — position against the estimate, not a countdown to a deadline -->
