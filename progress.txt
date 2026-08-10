@@ -7381,3 +7381,13 @@ Retrieve this exact code: git checkout feat/arm-wax-fill at commit fbd1eaa5
 What this deployment is for: first end-to-end scaffold of the ARM-WAX-01 wax
 fill cell UI/state machine for review on preview before any hardware run.
 2026-08-10 -- ARM-WAX-01 tooling section added to /manufacturing/cart-mfg/robot-arm/calibrate (labware JSON registry, project-tagged; bundled nest one-click register) -- feat/arm-wax-fill @ f47c05e9ea2d763700f434b255e1e65771145fd0
+
+--- Deployment 2026-08-10 ---
+Preview URL: https://bioscale-operations-system-mongodb-48tufmeo1.vercel.app
+Source: branch feat/arm-wax-fill @ commit 28e7039f881d53cf6039b2917fd40da946d39f96
+Vercel state: success (GitHub deployment id 5840469654)
+What this deployment is for: test pass on the ARM-WAX-01 calibrate tooling
+section (labware JSON registry + bundled nest one-click register) and the
+wax-fill run UI. Note: preview URLs sit behind Vercel SSO, so agent-key API
+endpoints (/api/robot-arm/*) cannot be curl-tested against preview — browser
+(SSO cookie) only. Prod will not have this limitation once merged.
