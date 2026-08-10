@@ -119,6 +119,13 @@ export { RobotArm } from './robot-arm.js';
 export { RobotArmServo } from './robot-arm-servo.js';
 export { RobotArmRun } from './robot-arm-run.js';
 export { RobotArmDataset } from './robot-arm-dataset.js';
+export {
+	ArmWaxFillRun,
+	ARM_WAX_PHASES,
+	DECK_TOKEN,
+	NEXT_PHASE,
+	TERMINAL_PHASES
+} from './arm-wax-fill-run.js';
 
 // Manufacturing Analytics
 export { ProcessAnalyticsEvent } from './process-analytics-event.js';

@@ -1,0 +1,326 @@
+{
+  "ordering": [
+    [
+      "A1",
+      "B1",
+      "C1"
+    ],
+    [
+      "A2",
+      "B2",
+      "C2"
+    ],
+    [
+      "A3",
+      "B3",
+      "C3"
+    ],
+    [
+      "A4",
+      "B4",
+      "C4"
+    ],
+    [
+      "A5",
+      "B5",
+      "C5"
+    ],
+    [
+      "A6",
+      "B6",
+      "C6"
+    ],
+    [
+      "A7",
+      "B7",
+      "C7"
+    ],
+    [
+      "A8",
+      "B8",
+      "C8"
+    ]
+  ],
+  "brand": {
+    "brand": "Brevitest",
+    "brandId": []
+  },
+  "metadata": {
+    "displayName": "Brevitest Arm Nest 1x Gen7 Cartridge",
+    "displayCategory": "other",
+    "displayVolumeUnits": "µL",
+    "tags": []
+  },
+  "dimensions": {
+    "xDimension": 127.76,
+    "yDimension": 85.48,
+    "zDimension": 12.7
+  },
+  "wells": {
+    "A1": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 52.83,
+      "y": 34,
+      "z": 8.2
+    },
+    "B1": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 52.83,
+      "y": 43,
+      "z": 8.2
+    },
+    "C1": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 52.83,
+      "y": 52,
+      "z": 8.2
+    },
+    "A2": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 56.09,
+      "y": 33.2,
+      "z": 3.3
+    },
+    "B2": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 56.09,
+      "y": 42.2,
+      "z": 3.3
+    },
+    "C2": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 56.09,
+      "y": 51.2,
+      "z": 3.3
+    },
+    "A3": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 58.83,
+      "y": 34,
+      "z": 8.2
+    },
+    "B3": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 58.83,
+      "y": 43,
+      "z": 8.2
+    },
+    "C3": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 58.83,
+      "y": 52,
+      "z": 8.2
+    },
+    "A4": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 62.09,
+      "y": 33.2,
+      "z": 3.3
+    },
+    "B4": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 62.09,
+      "y": 42.2,
+      "z": 3.3
+    },
+    "C4": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 62.09,
+      "y": 51.2,
+      "z": 3.3
+    },
+    "A5": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 64.83,
+      "y": 34,
+      "z": 8.2
+    },
+    "B5": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 64.83,
+      "y": 43,
+      "z": 8.2
+    },
+    "C5": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 64.83,
+      "y": 52,
+      "z": 8.2
+    },
+    "A6": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 68.09,
+      "y": 33.2,
+      "z": 3.3
+    },
+    "B6": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 68.09,
+      "y": 42.2,
+      "z": 3.3
+    },
+    "C6": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 68.09,
+      "y": 51.2,
+      "z": 3.3
+    },
+    "A7": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 70.83,
+      "y": 34,
+      "z": 8.2
+    },
+    "B7": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 70.83,
+      "y": 43,
+      "z": 8.2
+    },
+    "C7": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 70.83,
+      "y": 52,
+      "z": 8.2
+    },
+    "A8": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 74.09,
+      "y": 33.2,
+      "z": 3.3
+    },
+    "B8": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 74.09,
+      "y": 42.2,
+      "z": 3.3
+    },
+    "C8": {
+      "depth": 3.75,
+      "totalLiquidVolume": 18,
+      "shape": "circular",
+      "diameter": 1.8,
+      "x": 74.09,
+      "y": 51.2,
+      "z": 3.3
+    }
+  },
+  "groups": [
+    {
+      "metadata": {
+        "wellBottomShape": "flat"
+      },
+      "wells": [
+        "A1",
+        "B1",
+        "C1",
+        "A2",
+        "B2",
+        "C2",
+        "A3",
+        "B3",
+        "C3",
+        "A4",
+        "B4",
+        "C4",
+        "A5",
+        "B5",
+        "C5",
+        "A6",
+        "B6",
+        "C6",
+        "A7",
+        "B7",
+        "C7",
+        "A8",
+        "B8",
+        "C8"
+      ]
+    }
+  ],
+  "parameters": {
+    "format": "irregular",
+    "quirks": [],
+    "isTiprack": false,
+    "isMagneticModuleCompatible": false,
+    "loadName": "brevitest_arm_nest_1_gen7cartridge",
+    "tipOverlap": 0
+  },
+  "namespace": "cosmas_damian",
+  "version": 1,
+  "schemaVersion": 2,
+  "cornerOffsetFromSlot": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+  }
+}
