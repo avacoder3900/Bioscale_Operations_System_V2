@@ -7380,3 +7380,4 @@ Retrieve this exact code: git checkout feat/arm-wax-fill at commit fbd1eaa5
   (or: git log feat/arm-wax-fill --oneline to find it if the branch has since moved on)
 What this deployment is for: first end-to-end scaffold of the ARM-WAX-01 wax
 fill cell UI/state machine for review on preview before any hardware run.
+2026-08-10 -- ARM-WAX-01 tooling section added to /manufacturing/cart-mfg/robot-arm/calibrate (labware JSON registry, project-tagged; bundled nest one-click register) -- feat/arm-wax-fill @ f47c05e9ea2d763700f434b255e1e65771145fd0
