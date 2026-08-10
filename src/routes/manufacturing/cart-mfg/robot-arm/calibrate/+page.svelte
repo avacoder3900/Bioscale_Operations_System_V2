@@ -115,6 +115,18 @@
 	// "No map saved" and "couldn't reach the host" both arrive as map === null.
 	// Only the first justifies telling the operator teleop is mirroring 1:1.
 	const hostUnreachable = $derived(data.reachable === false);
+
+	// --- ARM-WAX tooling (labware JSONs) ---
+
+	const tooling = $derived(
+		data.tooling && !('error' in data.tooling) ? data.tooling : null
+	);
+	const toolingError = $derived(
+		data.tooling && 'error' in data.tooling ? data.tooling.error : null
+	);
+	const missingCount = $derived(
+		tooling ? tooling.required.filter((t) => !t.present).length : 0
+	);
 </script>
 
 <div class="mx-auto max-w-5xl space-y-6 p-4">
@@ -472,4 +484,143 @@
 			</button>
 		</form>
 	{/if}
+
+	<!-- ============ ARM-WAX tooling (labware JSONs) ============ -->
+	<div
+		class="rounded-lg border p-4"
+		style="border-color: var(--color-tron-border); background: var(--color-tron-surface)"
+	>
+		<div class="flex items-center justify-between">
+			<h2 class="text-sm font-bold uppercase tracking-widest" style="color: var(--color-tron-cyan)">
+				ARM-WAX-01 Tooling — Labware JSONs
+			</h2>
+			{#if tooling}
+				<span
+					class="rounded border px-2 py-0.5 font-mono text-xs"
+					style="border-color: var(--color-tron-border); color: {missingCount === 0
+						? 'var(--color-tron-cyan)'
+						: 'var(--color-tron-yellow, #eab308)'}"
+				>
+					{missingCount === 0 ? 'all tooling registered' : `${missingCount} missing`}
+				</span>
+			{/if}
+		</div>
+		<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
+			Custom deck fixtures for the arm-fed wax fill. Definitions registered here go into the
+			shared labware library and are bundled automatically with every protocol upload, so new
+			tooling reaches the OT-2 without code changes.
+			<a href="/opentrons/labware" class="underline">Full library →</a>
+		</p>
+
+		{#if toolingError}
+			<p class="mt-3 text-xs text-red-300">Couldn't load tooling list: {toolingError}</p>
+		{:else if tooling}
+			<!-- Required tooling status -->
+			<table class="mt-3 w-full text-xs">
+				<thead>
+					<tr class="border-b" style="border-color: var(--color-tron-border)">
+						<th class="px-2 py-1 text-left" style="color: var(--color-tron-text-secondary)">Fixture</th>
+						<th class="px-2 py-1 text-left" style="color: var(--color-tron-text-secondary)">loadName</th>
+						<th class="px-2 py-1 text-left" style="color: var(--color-tron-text-secondary)">Status</th>
+						<th class="px-2 py-1"></th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each tooling.required as t (t.loadName)}
+						<tr class="border-b" style="border-color: var(--color-tron-border)">
+							<td class="px-2 py-1.5">{t.label}</td>
+							<td class="px-2 py-1.5 font-mono">{t.loadName}</td>
+							<td class="px-2 py-1.5">
+								{#if t.present}
+									<span class="text-green-300">In library v{t.version}</span>
+								{:else}
+									<span class="text-yellow-300">Missing</span>
+								{/if}
+							</td>
+							<td class="px-2 py-1.5 text-right">
+								{#if !t.present && t.bundled}
+									<form method="POST" action="?/registerBundled" class="inline">
+										<input type="hidden" name="loadName" value={t.loadName} />
+										<button
+											type="submit"
+											class="rounded border px-2 py-0.5 text-xs transition-colors hover:opacity-80"
+											style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)"
+										>
+											Register bundled JSON
+										</button>
+									</form>
+								{/if}
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+
+			<!-- Registered project defs -->
+			{#if tooling.defs.length > 0}
+				<div class="mt-4">
+					<h3
+						class="text-xs font-bold uppercase tracking-wider"
+						style="color: var(--color-tron-text-secondary)"
+					>
+						Registered definitions
+					</h3>
+					<table class="mt-1 w-full text-xs">
+						<tbody>
+							{#each tooling.defs as d (d.id)}
+								<tr class="border-b" style="border-color: var(--color-tron-border)">
+									<td class="px-2 py-1.5">{d.displayName}</td>
+									<td class="px-2 py-1.5 font-mono">{d.namespace}/{d.loadName} v{d.version}</td>
+									<td class="px-2 py-1.5" style="color: var(--color-tron-text-secondary)">
+										{d.project ?? 'library (untagged)'}
+										{#if d.uploadedBy}· {d.uploadedBy}{/if}
+									</td>
+									<td class="px-2 py-1.5 text-right">
+										<form method="POST" action="?/removeTooling" class="inline">
+											<input type="hidden" name="id" value={d.id} />
+											<button
+												type="submit"
+												class="text-xs underline transition-colors hover:text-red-400"
+												style="color: var(--color-tron-text-secondary)"
+											>
+												Remove
+											</button>
+										</form>
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+
+			<!-- Upload new tooling -->
+			<form
+				method="POST"
+				action="?/uploadTooling"
+				enctype="multipart/form-data"
+				class="mt-4 flex items-center gap-3"
+			>
+				<input
+					type="file"
+					name="labwareFile"
+					accept=".json,application/json"
+					class="text-xs"
+					style="color: var(--color-tron-text-secondary)"
+				/>
+				<button
+					type="submit"
+					class="rounded border px-3 py-1 text-xs font-bold uppercase tracking-wider transition-colors hover:opacity-80"
+					style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)"
+				>
+					Add tooling JSON
+				</button>
+			</form>
+			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
+				Opentrons labware definition .json — needs <span class="font-mono">namespace</span> +
+				<span class="font-mono">parameters.loadName</span>. Re-uploading the same
+				name/version replaces it.
+			</p>
+		{/if}
+	</div>
 </div>

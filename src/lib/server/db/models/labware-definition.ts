@@ -16,7 +16,10 @@ const labwareDefinitionSchema = new Schema({
 	category: String,                               // metadata.displayCategory
 	fileName: String,                               // original .json filename (display only)
 	definition: { type: Schema.Types.Mixed, required: true }, // the full labware JSON
-	uploadedBy: String
+	uploadedBy: String,
+	// Optional project tag (e.g. 'ARM-WAX-01') so project pages can list just
+	// their own tooling. Untagged defs are general library entries.
+	project: String
 }, { timestamps: true });
 
 // One row per (namespace, loadName, version) — re-upload upserts.

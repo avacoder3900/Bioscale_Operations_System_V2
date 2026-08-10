@@ -11,10 +11,123 @@
  * operator can verify alignment before pressing GO on the control page.
  */
 import { fail, redirect } from '@sveltejs/kit';
-import { connectDB, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, AuditLog, LabwareDefinition, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { robotArm } from '$lib/server/robot-arm-client';
 import type { Actions, PageServerLoad } from './$types';
+// Bundled with the app (Vite JSON import) so "register" works on Vercel too,
+// where loose repo files are not on disk at runtime.
+import bundledNestDef from '../../../../../../protocols/labware/brevitest_arm_nest_1_gen7cartridge.json';
+
+/**
+ * ARM-WAX tooling (labware JSONs) — project-scoped section of this page.
+ *
+ * The wax-fill run needs custom labware the stock Opentrons library doesn't
+ * have (the arm-facing cartridge nest today; trays/fixtures later). Tooling
+ * registered here lands in the same LabwareDefinition library that is
+ * auto-bundled with every protocol upload (LABWARE-LIBRARY-AUTO-BUNDLE), so
+ * adding a new fixture JSON requires no code change to reach the OT-2.
+ */
+const ARM_WAX_PROJECT = 'ARM-WAX-01';
+const REQUIRED_TOOLING: { loadName: string; label: string; bundled: boolean }[] = [
+	{
+		loadName: 'brevitest_arm_nest_1_gen7cartridge',
+		label: 'Arm nest — 1x Gen7 cartridge (deck slot 1)',
+		bundled: true
+	}
+	// Future fixtures (multi-slot nest, wax reservoir adapter, gripper jig)
+	// get a row here as they are designed.
+];
+
+const BUNDLED_DEFS: Record<string, unknown> = {
+	brevitest_arm_nest_1_gen7cartridge: bundledNestDef
+};
+
+async function loadTooling() {
+	const loadNames = REQUIRED_TOOLING.map((t) => t.loadName);
+	const defs = await LabwareDefinition.find({
+		$or: [{ project: ARM_WAX_PROJECT }, { loadName: { $in: loadNames } }]
+	})
+		.select('namespace loadName version displayName category fileName uploadedBy project updatedAt')
+		.sort({ loadName: 1, version: -1 })
+		.lean();
+	const plain = JSON.parse(JSON.stringify(defs)) as any[];
+	return {
+		project: ARM_WAX_PROJECT,
+		required: REQUIRED_TOOLING.map((t) => {
+			const match = plain.filter((d) => d.loadName === t.loadName);
+			return {
+				...t,
+				present: match.length > 0,
+				version: match[0]?.version ?? null
+			};
+		}),
+		defs: plain.map((d) => ({
+			id: String(d._id),
+			namespace: d.namespace,
+			loadName: d.loadName,
+			version: d.version ?? 1,
+			displayName: d.displayName ?? d.loadName,
+			uploadedBy: d.uploadedBy ?? '',
+			project: d.project ?? null,
+			updatedAt: d.updatedAt ?? ''
+		}))
+	};
+}
+
+/** Parse + validate an Opentrons labware definition, or return an error string. */
+function parseLabwareDef(text: string):
+	| { def: any; namespace: string; loadName: string; version: number }
+	| { error: string } {
+	let def: any;
+	try {
+		def = JSON.parse(text);
+	} catch {
+		return { error: 'Not valid JSON.' };
+	}
+	const namespace = def?.namespace;
+	const loadName = def?.parameters?.loadName;
+	const version = Number(def?.version ?? 1);
+	if (!namespace || !loadName) {
+		return { error: 'Not an Opentrons labware definition (missing namespace or parameters.loadName).' };
+	}
+	return { def, namespace, loadName, version };
+}
+
+async function upsertToolingDef(
+	parsed: { def: any; namespace: string; loadName: string; version: number },
+	fileName: string,
+	user: { _id: string; username: string }
+) {
+	const { def, namespace, loadName, version } = parsed;
+	const displayName = def?.metadata?.displayName ?? loadName;
+	const category = def?.metadata?.displayCategory ?? 'Other';
+	await LabwareDefinition.findOneAndUpdate(
+		{ namespace, loadName, version },
+		{
+			$set: {
+				displayName,
+				category,
+				fileName,
+				definition: def,
+				uploadedBy: user.username,
+				project: ARM_WAX_PROJECT
+			},
+			$setOnInsert: { _id: generateId() }
+		},
+		{ upsert: true, new: true }
+	);
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'labware_definitions',
+		recordId: `${namespace}/${loadName}/${version}`,
+		action: 'robot_arm.calibrate.tooling_upsert',
+		changedBy: user.username,
+		changedAt: new Date(),
+		newData: { namespace, loadName, version, displayName, project: ARM_WAX_PROJECT }
+	});
+	return { namespace, loadName, version, displayName };
+}
 
 async function safeCalibration(live: boolean) {
 	try {
@@ -64,7 +177,16 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const calibration = await safeCalibration(live);
 	const jointMap = await safeJointMap(live);
 
-	return { active, reachable, calibration, jointMap };
+	// Tooling list is DB-only — independent of arm-host reachability.
+	await connectDB();
+	let tooling: Awaited<ReturnType<typeof loadTooling>> | { error: string };
+	try {
+		tooling = await loadTooling();
+	} catch (err) {
+		tooling = { error: (err as Error).message };
+	}
+
+	return { active, reachable, calibration, jointMap, tooling };
 };
 
 export const actions: Actions = {
@@ -209,6 +331,84 @@ export const actions: Actions = {
 			return res.removed
 				? { success: 'Joint map cleared. Teleop reverts to a 1:1 mirror.' }
 				: { success: 'No saved joint map to clear.' };
+		} catch (err) {
+			return fail(500, { error: (err as Error).message });
+		}
+	},
+
+	// --- ARM-WAX tooling (labware JSONs) ---
+
+	uploadTooling: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+
+		const fd = await request.formData();
+		const file = fd.get('labwareFile');
+		if (!(file instanceof File) || file.size === 0) {
+			return fail(400, { error: 'Choose a labware .json file first.' });
+		}
+		const parsed = parseLabwareDef(await file.text());
+		if ('error' in parsed) return fail(400, { error: parsed.error });
+
+		try {
+			const saved = await upsertToolingDef(parsed, file.name, locals.user);
+			return {
+				success: `Registered ${saved.displayName} (${saved.loadName} v${saved.version}) to ${ARM_WAX_PROJECT}. It will be bundled with the next protocol upload.`
+			};
+		} catch (err) {
+			return fail(500, { error: (err as Error).message });
+		}
+	},
+
+	registerBundled: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+
+		const fd = await request.formData();
+		const loadName = fd.get('loadName')?.toString() ?? '';
+		const bundled = BUNDLED_DEFS[loadName];
+		if (!bundled) return fail(400, { error: `No bundled definition for "${loadName}".` });
+
+		const parsed = parseLabwareDef(JSON.stringify(bundled));
+		if ('error' in parsed) return fail(500, { error: `Bundled JSON is invalid: ${parsed.error}` });
+
+		try {
+			const saved = await upsertToolingDef(parsed, `${loadName}.json`, locals.user);
+			return {
+				success: `Registered bundled ${saved.displayName} (${saved.loadName} v${saved.version}) to ${ARM_WAX_PROJECT}.`
+			};
+		} catch (err) {
+			return fail(500, { error: (err as Error).message });
+		}
+	},
+
+	removeTooling: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+
+		const fd = await request.formData();
+		const id = fd.get('id')?.toString();
+		if (!id) return fail(400, { error: 'Missing definition id.' });
+
+		try {
+			const doc = await LabwareDefinition.findById(id)
+				.select('namespace loadName version')
+				.lean() as any;
+			if (!doc) return fail(404, { error: 'Definition not found (already removed?).' });
+			await LabwareDefinition.deleteOne({ _id: id });
+			await AuditLog.create({
+				_id: generateId(),
+				tableName: 'labware_definitions',
+				recordId: `${doc.namespace}/${doc.loadName}/${doc.version}`,
+				action: 'robot_arm.calibrate.tooling_remove',
+				changedBy: locals.user.username,
+				changedAt: new Date(),
+				newData: { removedId: id }
+			});
+			return { success: `Removed ${doc.loadName} v${doc.version} from the library.` };
 		} catch (err) {
 			return fail(500, { error: (err as Error).message });
 		}
