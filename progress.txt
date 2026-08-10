@@ -7336,3 +7336,47 @@ Retrieve this exact code: git checkout master at commit fae44b7c
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: reagent run timer shows a countdown as the headline number
 again (elapsed demoted to a secondary line), still robot-driven for completion.
+
+================================================================================
+2026-08-10 — feat/arm-wax-fill — ARM-WAX-01 arm+OT-2 coordinated wax fill cell (scaffolding)
+================================================================================
+New cell for filling ONE Gen7 cartridge with the SO-ARM101 doing cartridge
+place/remove and the OT-2 doing the wax dispensing, with a hard deck-token
+interlock so both machines can never be authorized over the deck at once.
+
+Built this session:
+- src/lib/server/db/models/arm-wax-fill-run.ts — ArmWaxFillRun model
+  (arm_wax_fill_runs): phase machine created → arm_loading → loaded →
+  ot2_filling → filled → arm_unloading → complete (+failed/aborted), events[]
+  trail, cross-refs to arm run ids + OT-2 run/protocol ids, verify stamps.
+- src/lib/server/arm-wax-fill.ts — transition layer; DECK_TOKEN ownership is
+  derived from phase (never stored), each transition re-verifies live
+  hardware (arm session parked, OT-2 idle/homed/succeeded via opentrons
+  proxy) and throws TransitionError on any illegal step. Cartridge status
+  flips ready_for_wax → wax_filling → wax_filled; AuditLog on every
+  transition.
+- protocols/labware/brevitest_arm_nest_1_gen7cartridge.json — single-slot
+  arm-nest labware (Gen7 pocket, slot-1 geometry; expansion slots later).
+- protocols/Wax_Filling_ARM_Single_Cartridge.py — OT-2 side: P20 fills gates
+  4→1 per enabled channel from the wax tube, homes + parks so the gantry is
+  provably clear during both arm phases.
+- UI: /manufacturing/cart-mfg/robot-arm/wax-fill (create run: scan cart,
+  pick robot, per-gate volumes, channels, dry-run, create-missing-test-cart)
+  and /wax-fill/[runId] step console (deck-token banner, guarded one-button
+  transitions, protocol picker in loaded phase, event log, abort). Nav link
+  added to cart-mfg layout.
+- Agent endpoint GET/POST /api/robot-arm/wax-fill/[runId] — Pi/agents poll
+  "may my machine move" (armMayMove/ot2MayMove) and report failures;
+  x-agent-api-key auth.
+- PRD: docs/prds/ARM-WAX-01-arm-wax-fill-cell.md (incl. v1 limitation:
+  operator confirms each handoff; auto-advance designed but not enabled).
+
+npm run check: 100 errors — all pre-existing baseline (51 in
+src/lib/server/mcp/bims-mcp.ts etc.); zero errors in any new file.
+
+Deployment: preview — via Vercel GitHub integration on push
+Source: branch feat/arm-wax-fill @ commit fbd1eaa5
+Retrieve this exact code: git checkout feat/arm-wax-fill at commit fbd1eaa5
+  (or: git log feat/arm-wax-fill --oneline to find it if the branch has since moved on)
+What this deployment is for: first end-to-end scaffold of the ARM-WAX-01 wax
+fill cell UI/state machine for review on preview before any hardware run.
