@@ -2,6 +2,7 @@
 	import { enhance } from '$app/forms';
 	import TronCard from '$lib/components/ui/TronCard.svelte';
 	import TronButton from '$lib/components/ui/TronButton.svelte';
+	import { SpuSerial, type SpuConnectionState } from '$lib/services/spu-serial';
 
 	interface Props {
 		data: {
@@ -40,6 +41,54 @@
 	// Live telemetry read straight off the device while a move is in flight
 	let moving = $state(false);
 	let livePosition = $state<number | null>(null);
+
+	// --- Direct USB transport -------------------------------------------------
+	// BIMS runs on Vercel, so the server can never see the SPU's COM port. The
+	// browser is the only part of the app on the same machine as the device, so
+	// Web Serial is what makes "plugged in over micro-USB" actually mean
+	// something. When a port is open we drive the stage over the wire; otherwise
+	// we fall back to the Particle Cloud proxy so the page still works from a
+	// machine with no SPU attached.
+	const spuSerial = new SpuSerial();
+	const usbSupported = SpuSerial.isSupported();
+	let usbState = $state<SpuConnectionState>('disconnected');
+	let usbError = $state('');
+	let serialLog = $state<string[]>([]);
+	let showSerialLog = $state(false);
+
+	const usbConnected = $derived(usbState === 'connected');
+	// Over the cable the device in hand *is* the target, so a DB selection is only
+	// required for the cloud transport (and later, to file the record).
+	const canDrive = $derived(usbConnected || Boolean(selectedSpuId));
+
+	spuSerial.addEventListener((event) => {
+		if (event.type === 'state') usbState = event.state;
+		if (event.type === 'error') usbError = event.error.message;
+		if (event.type === 'line') {
+			// Firmware Log.info output streams here live — the operator's window
+			// into what the device is actually doing. Bounded so a long session
+			// cannot grow without limit.
+			serialLog = [...serialLog, event.line].slice(-200);
+		}
+	});
+
+	async function connectUsb() {
+		usbError = '';
+		try {
+			await spuSerial.connect();
+			// Learn where the stage currently is so the readout is not blank.
+			const { result } = await spuSerial.readPosition();
+			position = result;
+		} catch (e: any) {
+			// A dismissed port picker is a cancellation, not an error worth showing.
+			if (e?.name !== 'NotFoundError') usbError = e?.message ?? 'Could not open the serial port.';
+		}
+	}
+
+	async function disconnectUsb() {
+		usbError = '';
+		await spuSerial.disconnect();
+	}
 
 	const selectedSpu = $derived(data.spus.find((s) => s.id === selectedSpuId));
 	const allCaptured = $derived(captured.every((p) => p !== null));
@@ -80,29 +129,64 @@
 		}
 	}
 
+	/** Particle Cloud proxy — the transport that works without a cable. */
+	async function callOverCloud(action: 'pos' | 'home' | 'jog' | 'goto', microns?: number) {
+		const res = await fetch('/api/validation/magnetometer/calibrate', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ spuId: selectedSpuId, action, microns })
+		});
+		const body = await res.json();
+		if (!res.ok) {
+			apiError = body.error ?? `Request failed (${res.status})`;
+			return null;
+		}
+		return body.position as number;
+	}
+
+	/**
+	 * Direct USB. The numeric commands are the same firmware code paths the cloud
+	 * function runs — 20 = reset_stage(true), 22 = move_stage, 23 = reset + move
+	 * to position + sleep — so behaviour is identical, minus the cloud round trip.
+	 */
+	async function callOverUsb(action: 'pos' | 'home' | 'jog' | 'goto', microns?: number) {
+		if (action === 'pos') return (await spuSerial.readPosition()).result;
+		if (action === 'home') return (await spuSerial.home()).result;
+		if (action === 'jog') return (await spuSerial.jog(microns as number, fw.stepDelay)).result;
+		if (action === 'goto') {
+			// Firmware rejects out-of-range targets with -1; catch it before the wire
+			// so the operator gets a real message instead of a silent no-op.
+			const target = microns as number;
+			if (target < 0 || target > fw.stageLimit) {
+				apiError = `Target ${target} µm is outside the stage limit (0–${fw.stageLimit} µm).`;
+				return null;
+			}
+			return (await spuSerial.goto(target, fw.stepDelay)).result;
+		}
+		return null;
+	}
+
 	async function call(action: 'pos' | 'home' | 'jog' | 'goto', microns?: number): Promise<number | null> {
-		if (!selectedSpuId || busy) return null;
+		if (!canDrive || busy) return null;
 		busy = true;
 		apiError = '';
 		const signal = { done: false };
-		if (action !== 'pos') {
+		// Mid-move position can only come from the Particle variable poll: over USB
+		// the firmware blocks inside move_stage's step loop and emits nothing until
+		// the move completes. Skip the poll entirely on USB, and for devices with
+		// no cloud id.
+		if (action !== 'pos' && !usbConnected && selectedSpu?.particleDeviceId) {
 			moving = true;
 			livePosition = position;
 			void trackMotion(signal);
+		} else if (action !== 'pos') {
+			moving = true;
 		}
 		try {
-			const res = await fetch('/api/validation/magnetometer/calibrate', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ spuId: selectedSpuId, action, microns })
-			});
-			const body = await res.json();
-			if (!res.ok) {
-				apiError = body.error ?? `Request failed (${res.status})`;
-				return null;
-			}
-			position = body.position;
-			return body.position;
+			const p = usbConnected ? await callOverUsb(action, microns) : await callOverCloud(action, microns);
+			if (p === null) return null;
+			position = p;
+			return p;
 		} catch (e: any) {
 			apiError = e?.message ?? 'Network error';
 			return null;
@@ -214,13 +298,62 @@
 						{/each}
 					</select>
 				</div>
-				<TronButton variant="primary" disabled={!selectedSpuId || busy} onclick={home}>
+				<TronButton variant="primary" disabled={!canDrive || busy} onclick={home}>
 					{busy ? 'Working…' : 'Home stage (zero at limit switch)'}
 				</TronButton>
 				<TronButton variant="ghost" disabled={busy} onclick={() => call('pos')}>
 					Read position
 				</TronButton>
 			</div>
+
+			<!--
+				Direct USB link. BIMS itself runs on Vercel and cannot reach a COM
+				port, so the browser holds the wire. Connecting is necessarily a
+				manual click: Web Serial will not open a port without a user gesture.
+			-->
+			<div class="flex flex-wrap items-center gap-3 border-t border-[var(--color-tron-border)] pt-3">
+				{#if !usbSupported}
+					<span class="text-xs text-[var(--color-tron-text-secondary)]">
+						Direct USB needs Chrome or Edge — using Particle Cloud.
+					</span>
+				{:else if usbConnected}
+					<span class="rounded border border-[var(--color-tron-cyan)] px-2 py-0.5 text-xs text-[var(--color-tron-cyan)]">
+						● USB connected — direct control
+					</span>
+					<TronButton variant="ghost" disabled={busy} onclick={disconnectUsb}>Disconnect USB</TronButton>
+				{:else}
+					<span class="rounded border border-[var(--color-tron-border)] px-2 py-0.5 text-xs text-[var(--color-tron-text-secondary)]">
+						○ Particle Cloud — {selectedSpu?.particleDeviceId ? 'via cloud' : 'no device linked'}
+					</span>
+					<TronButton
+						variant="primary"
+						disabled={busy || usbState === 'connecting'}
+						onclick={connectUsb}
+					>
+						{usbState === 'connecting' ? 'Connecting…' : 'Connect SPU over USB'}
+					</TronButton>
+				{/if}
+
+				{#if usbSupported}
+					<button
+						type="button"
+						class="text-xs text-[var(--color-tron-text-secondary)] underline"
+						onclick={() => (showSerialLog = !showSerialLog)}
+					>
+						{showSerialLog ? 'Hide' : 'Show'} device output
+					</button>
+				{/if}
+			</div>
+
+			{#if usbError}
+				<p class="text-sm text-[var(--color-tron-red)]">{usbError}</p>
+			{/if}
+
+			{#if showSerialLog}
+				<pre class="max-h-48 overflow-auto rounded border border-[var(--color-tron-border)] bg-black/40 p-2 font-mono text-xs text-[var(--color-tron-text-secondary)]">{serialLog.length
+						? serialLog.join('\n')
+						: 'No device output yet. Connect over USB to stream firmware logs.'}</pre>
+			{/if}
 			<div class="flex items-center gap-6 text-sm">
 				<span class="text-[var(--color-tron-text-secondary)]">
 					Device: <span class="text-[var(--color-tron-cyan)]">{selectedSpu?.particleDeviceId ?? '—'}</span>
@@ -250,7 +383,7 @@
 			<h3 class="tron-text-primary text-lg font-bold">Jog</h3>
 			<div class="flex flex-wrap items-center gap-2">
 				{#each JOG_STEPS as step (step)}
-					<TronButton disabled={!selectedSpuId || busy} onclick={() => jog(step)}>
+					<TronButton disabled={!canDrive || busy} onclick={() => jog(step)}>
 						{step > 0 ? `+${step}` : step} µm
 					</TronButton>
 				{/each}
@@ -262,8 +395,8 @@
 						class="tron-input w-28"
 						aria-label="Custom jog microns"
 					/>
-					<TronButton disabled={!selectedSpuId || busy || !customJog} onclick={() => jog(-Math.abs(customJog))}>−</TronButton>
-					<TronButton disabled={!selectedSpuId || busy || !customJog} onclick={() => jog(Math.abs(customJog))}>+</TronButton>
+					<TronButton disabled={!canDrive || busy || !customJog} onclick={() => jog(-Math.abs(customJog))}>−</TronButton>
+					<TronButton disabled={!canDrive || busy || !customJog} onclick={() => jog(Math.abs(customJog))}>+</TronButton>
 				</div>
 			</div>
 			<p class="text-xs text-[var(--color-tron-text-secondary)]">
@@ -302,12 +435,12 @@
 							<td class="py-1 text-right">
 								<div class="flex justify-end gap-2">
 									<TronButton
-										disabled={!selectedSpuId || busy || position === null || !homed}
+										disabled={!canDrive || busy || position === null || !homed}
 										onclick={() => capture(i)}
 									>
 										Capture
 									</TronButton>
-									<TronButton variant="ghost" disabled={!selectedSpuId || busy} onclick={() => testWell(i)}>
+									<TronButton variant="ghost" disabled={!canDrive || busy} onclick={() => testWell(i)}>
 										Test
 									</TronButton>
 									{#if captured[i] !== null}
