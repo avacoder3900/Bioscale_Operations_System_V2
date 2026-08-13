@@ -37,6 +37,9 @@
 	let notes = $state('');
 	let captured = $state<(number | null)[]>(Array(fw.numWells).fill(null));
 	let testResult = $state<{ well: number; position: number } | null>(null);
+	// Live telemetry read straight off the device while a move is in flight
+	let moving = $state(false);
+	let livePosition = $state<number | null>(null);
 
 	const selectedSpu = $derived(data.spus.find((s) => s.id === selectedSpuId));
 	const allCaptured = $derived(captured.every((p) => p !== null));
@@ -49,10 +52,44 @@
 
 	const JOG_STEPS = [-1000, -100, -25, 25, 100, 1000];
 
+	const LIVE_POLL_MS = 400;
+
+	/**
+	 * Poll stage_pos/stage_moving until the move finishes. Runs alongside the
+	 * blocking stage_control call rather than after it, so the operator sees the
+	 * stage travel instead of just its final resting place. Every failure mode
+	 * here is swallowed: the authoritative position is whatever stage_control
+	 * returns, and a flaky sample must never surface as a move error.
+	 */
+	async function trackMotion(signal: { done: boolean }) {
+		while (!signal.done) {
+			await new Promise((r) => setTimeout(r, LIVE_POLL_MS));
+			if (signal.done) break;
+			try {
+				const res = await fetch(
+					`/api/validation/magnetometer/calibrate/live?spuId=${encodeURIComponent(selectedSpuId)}`
+				);
+				if (!res.ok) continue;
+				const body = await res.json();
+				if (signal.done) break;
+				if (typeof body.position === 'number') livePosition = body.position;
+				moving = Boolean(body.moving);
+			} catch {
+				// ignore — next tick tries again
+			}
+		}
+	}
+
 	async function call(action: 'pos' | 'home' | 'jog' | 'goto', microns?: number): Promise<number | null> {
 		if (!selectedSpuId || busy) return null;
 		busy = true;
 		apiError = '';
+		const signal = { done: false };
+		if (action !== 'pos') {
+			moving = true;
+			livePosition = position;
+			void trackMotion(signal);
+		}
 		try {
 			const res = await fetch('/api/validation/magnetometer/calibrate', {
 				method: 'POST',
@@ -70,6 +107,9 @@
 			apiError = e?.message ?? 'Network error';
 			return null;
 		} finally {
+			signal.done = true;
+			moving = false;
+			livePosition = null;
 			busy = false;
 		}
 	}
@@ -187,11 +227,18 @@
 				</span>
 				<span class="text-[var(--color-tron-text-secondary)]">
 					Stage position:
-					<span class="font-mono text-lg {homed ? 'text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-orange)]'}">
-						{position !== null ? `${position.toLocaleString()} µm` : '—'}
-					</span>
-					{#if position !== null && !homed}
-						<span class="text-xs text-[var(--color-tron-orange)]">(not homed this session)</span>
+					{#if moving}
+						<span class="font-mono text-lg text-[var(--color-tron-orange)]">
+							{livePosition !== null ? `${livePosition.toLocaleString()} µm` : '—'}
+						</span>
+						<span class="text-xs text-[var(--color-tron-orange)] animate-pulse">● moving</span>
+					{:else}
+						<span class="font-mono text-lg {homed ? 'text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-orange)]'}">
+							{position !== null ? `${position.toLocaleString()} µm` : '—'}
+						</span>
+						{#if position !== null && !homed}
+							<span class="text-xs text-[var(--color-tron-orange)]">(not homed this session)</span>
+						{/if}
 					{/if}
 				</span>
 			</div>
