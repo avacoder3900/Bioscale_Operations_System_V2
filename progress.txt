@@ -7336,3 +7336,57 @@ Retrieve this exact code: git checkout master at commit fae44b7c
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: reagent run timer shows a countdown as the headline number
 again (elapsed demoted to a secondary line), still robot-driven for completion.
+
+================================================================================
+2026-08-13 — feat/magnetometer-stage-calibration — SPU magnetometer stage
+calibration tool + live stage position during moves
+================================================================================
+Alejandro: "try to recover work on the magnetometer calibration feature for the
+validation tab. it was a tool to set the location of each read position and create
+[the] code that will replace the current code. but its a tool first, that then makes
+the fix" — then: "commit both to a working branch off of master. It should also
+directly control the spu from the bims so we can see the motion in real time".
+
+Recovered the calibration tool onto a clean branch off origin/master (the work had
+been sitting in the validation-runs worktree on an unrelated branch). Two commits:
+
+  8b2b00cf  SPU magnetometer stage calibration tool
+  31466a6d  live stage position during calibration moves
+
+The tool is the deliverable, and the constants are its output. The operator homes the
+stage, jogs to each of the 8 well read positions, captures each one, and the page
+emits the MAGNETOMETER_FIRST_POSITION / STAGE_MICRONS_TO_MAGNETOMETER_START_POSITION
+constants to paste into firmware — measured rather than derived, which is the actual
+fix for the read positions drifting off the wells.
+
+Real-time motion: stage_control blocks for the whole duration of a move, so its return
+value only ever reported the FINAL position. Firmware v90 (separate repo, below) adds
+stage_pos + stage_moving cloud variables; because the sketch runs SYSTEM_THREAD(ENABLED)
+the Particle system thread keeps answering variable reads while the motion loop is
+blocked. BIMS polls them at 400ms through /api/validation/magnetometer/calibrate/live
+alongside the move, and the readout switches to a pulsing "moving" live value during
+travel. Polling is best-effort by design: stage_control's return value stays
+authoritative and a dropped sample never surfaces as a move error.
+
+VALIDATION NOTE — npm run build was NOT run locally (it OOMs at ~30GB on this machine;
+the Vercel branch build is the gate and it passed, see below). svelte-check in this
+worktree reports 100 pre-existing errors across 115 files, almost all missing-dep noise
+(jsqr, bwip-js/browser) because the worktree has no full node_modules. Zero errors in
+the magnetometer files — grepped specifically to confirm.
+
+Deployment: preview — https://bioscale-operations-system-mongodb-6am6i1a4s.vercel.app
+Source: branch feat/magnetometer-stage-calibration @ commit 31466a6d
+Retrieve this exact code: git checkout feat/magnetometer-stage-calibration at commit 31466a6d
+  (or: git log feat/magnetometer-stage-calibration --oneline to find it if the branch has moved on)
+What this deployment is for: operator-driven tool to measure the 8 magnetometer well
+read positions on a real SPU and emit the firmware constants, with the stage motion
+visible live in the browser while it travels.
+
+NOT YET DONE — this is a preview, not production, and it is only half the loop:
+  - Firmware v90 is committed in brevitest-device-SPU_Firmware_v72_AV on branch
+    feat/magnetometer-stage-calibration @ 6d83c0d, compiled clean for msom
+    (particle compile msom src --target 6.3.3, flash 138130 / RAM 41468, saved as
+    firmware/test-firmware-v90.bin) but is NOT pushed and NOT flashed to any device.
+    The live position readout shows nothing until v90 is on the SPU.
+  - No captured calibration has been run on hardware yet, so the emitted constants
+    are still unverified against real well positions.
