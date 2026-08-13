@@ -10,6 +10,17 @@ import type { Actions, PageServerLoad } from './$types';
 const TEMPLATE_VERSION = 'avery-94102-v1';
 const LABELS_PER_SHEET = 80;
 
+// How long a minted preview stays claimable. UUID v4 collisions are not the
+// risk here — the risk is a browser tab left open on an already-printed
+// preview, which an operator can re-print (Ctrl+P) to produce a second
+// physical sheet carrying UUIDs identical to a sheet already in inventory.
+// Bounding the window bounds that exposure. The client shows a countdown and
+// auto-re-mints while unprinted, but THIS constant is the real gate: the
+// browser timer can be frozen by laptop sleep or edited in devtools, so
+// ?/addToInventory refuses any claim past expiresAt regardless.
+// (Surfaced to the client via load(); SvelteKit rejects unknown exports here.)
+const PREVIEW_TTL_MS = 5 * 60 * 1000;
+
 // Inventory wiring:
 //   PT-CT-106 "Barcodes" is the single existing part with all the ROG /
 //   accessioning / lot-tracking / cart-mfg-dev alert plumbing already
@@ -55,7 +66,20 @@ export const load: PageServerLoad = async ({ locals }) => {
 		| { avery94102SheetsOnHand?: number; alertThreshold?: number }
 		| null;
 
-	const recent = await BarcodeSheetBatch.find({})
+	// Lazy sweep: retire reservations whose window closed. Their barcodeIds
+	// stay in the collection on purpose — mintCartridgeBarcodes scans this
+	// field, so an abandoned reservation's UUIDs are burned permanently and
+	// can never be re-issued to a future print.
+	await BarcodeSheetBatch.updateMany(
+		{ status: 'reserved', expiresAt: { $lte: new Date() } },
+		{ $set: { status: 'expired' } }
+	);
+
+	// Only committed batches belong in the operator-facing history; reserved
+	// and expired rows are bookkeeping, and have no printedAt to sort on.
+	const recent = await BarcodeSheetBatch.find({
+		status: { $nin: ['reserved', 'expired'] }
+	})
 		.select('firstBarcodeId lastBarcodeId totalLabels sheetsUsed printedAt printedBy')
 		.sort({ printedAt: -1 })
 		.limit(10)
@@ -65,17 +89,25 @@ export const load: PageServerLoad = async ({ locals }) => {
 		sheetsOnHand: inventory?.avery94102SheetsOnHand ?? 0,
 		alertThreshold: inventory?.alertThreshold ?? 5,
 		labelsPerSheet: LABELS_PER_SHEET,
+		previewTtlMs: PREVIEW_TTL_MS,
 		recent: JSON.parse(JSON.stringify(recent))
 	};
 };
 
 export const actions: Actions = {
-	// Generate UUIDs and a preview. Intentionally does NOT persist a
-	// BarcodeSheetBatch or decrement template sheets — those happen only
-	// when the operator confirms "Add to inventory" after printing
-	// (?/addToInventory below). If they cancel the print or click "No",
-	// the minted UUIDs are simply discarded; UUID v4 has 122 bits of
-	// entropy, so the small "wasted" allocation is harmless.
+	// Generate UUIDs and a preview, and persist them as a `reserved`
+	// BarcodeSheetBatch. Inventory is still NOT touched here — sheet
+	// deduction and the PT-CT-106 transactions happen only when the operator
+	// confirms "Add to inventory" after printing (?/addToInventory below).
+	//
+	// The reservation exists for two reasons:
+	//   1. It timestamps the mint server-side, so preview staleness can be
+	//      enforced somewhere the browser can't lie about.
+	//   2. It makes minted-but-abandoned UUIDs visible. Previously a
+	//      cancelled print discarded them silently, which meant labels that
+	//      physically came out of the printer had no record anywhere. Now
+	//      every minted UUID is burned in barcodeIds forever, so
+	//      mintCartridgeBarcodes can never re-issue one.
 	print: async ({ request, locals }) => {
 		requirePermission(locals.user, 'manufacturing:write');
 		await connectDB();
@@ -130,13 +162,38 @@ export const actions: Actions = {
 			| null)?.avery94102SheetsOnHand ?? 0;
 		const sheetsAfter = Math.max(0, sheetsBefore - sheetsToPrint);
 
+		// Reserve the batch. Written before the UUIDs reach the browser so
+		// there is no window where a printed label exists without a record.
+		const mintedAt = new Date();
+		const expiresAt = new Date(mintedAt.getTime() + PREVIEW_TTL_MS);
+		const batchId = generateId();
+		await BarcodeSheetBatch.create({
+			_id: batchId,
+			status: 'reserved',
+			mintedAt,
+			expiresAt,
+			sheetsUsed: sheetsToPrint,
+			labelsPerSheet: LABELS_PER_SHEET,
+			totalLabels,
+			barcodeIds: barcodes,
+			firstBarcodeId: barcodes[0],
+			lastBarcodeId: barcodes[barcodes.length - 1],
+			printerName: 'browser-avery-94102',
+			templateVersion: TEMPLATE_VERSION
+		});
+
 		return {
 			success: true,
+			batchId,
 			barcodes,
 			skip,
 			firstSheetCount: count,
 			sheetsToPrint,
 			totalLabels,
+			// Epoch ms so the client can run a countdown without timezone or
+			// clock-format parsing games.
+			expiresAtMs: expiresAt.getTime(),
+			previewTtlMs: PREVIEW_TTL_MS,
 			// Display only — actual deduction happens on confirm.
 			sheetsRemainingAfter: sheetsAfter,
 			spotCheck
@@ -162,9 +219,16 @@ export const actions: Actions = {
 		const firstSheetCount = Number(data.get('firstSheetCount') ?? 0);
 		const barcodesStr = (data.get('barcodes') as string | null)?.trim() ?? '';
 		const barcodes = barcodesStr.split(',').filter(Boolean);
+		const batchId = (data.get('batchId') as string | null)?.trim() ?? '';
 
 		if (!Number.isInteger(sheetsToPrint) || sheetsToPrint < 1) {
 			return fail(400, { addError: 'Invalid sheetsToPrint' });
+		}
+		if (!batchId) {
+			// Pre-TTL page left open across the deploy, or a hand-rolled POST.
+			return fail(400, {
+				addError: 'This preview predates the reservation system. Re-generate the barcodes and print again.'
+			});
 		}
 		if (barcodes.length === 0 || barcodes.length !== totalLabels) {
 			return fail(400, { addError: 'Missing or mismatched barcodes' });
@@ -179,14 +243,19 @@ export const actions: Actions = {
 			const dupes = (cartCollisions as Array<{ _id: string }>).map((c) => c._id).join(', ');
 			return fail(409, { addError: `Barcodes already used on cartridges: ${dupes}` });
 		}
-		const priorBatchCollisions = await BarcodeSheetBatch.find({ barcodeIds: { $in: barcodes } }).select('_id').lean();
+		// `_id: { $ne: batchId }` is load-bearing: this batch's own reservation
+		// row now lives in this collection and holds exactly these barcodeIds,
+		// so without the exclusion every confirm would collide with itself.
+		const priorBatchCollisions = await BarcodeSheetBatch.find({
+			_id: { $ne: batchId },
+			barcodeIds: { $in: barcodes }
+		}).select('_id').lean();
 		if (priorBatchCollisions.length > 0) {
 			return fail(409, { addError: 'Barcodes were already added to inventory in another batch' });
 		}
 
 		const printedAt = new Date();
 		const user = locals.user!;
-		const batchId = generateId();
 
 		// Resolve PT-CT-106 (creates it on first run if a fresh env hasn't
 		// been seeded) and snapshot current inventory levels.
@@ -198,23 +267,52 @@ export const actions: Actions = {
 		const sheetsBefore = inv?.avery94102SheetsOnHand ?? 0;
 		const sheetsAfter = Math.max(0, sheetsBefore - sheetsToPrint);
 
-		await BarcodeSheetBatch.create({
-			_id: batchId,
-			sheetsUsed: sheetsToPrint,
-			labelsPerSheet: LABELS_PER_SHEET,
-			totalLabels,
-			barcodeIds: barcodes,
-			firstBarcodeId: barcodes[0],
-			lastBarcodeId: barcodes[barcodes.length - 1],
-			printedAt,
-			printedBy: { _id: user._id, username: user.username },
-			printerName: 'browser-avery-94102',
-			templateVersion: TEMPLATE_VERSION,
-			sheetsRemainingBefore: sheetsBefore,
-			sheetsRemainingAfter: sheetsAfter,
-			status: 'printed',
-			labelsUsed: 0
-		});
+		// Atomically claim the reservation. The filter is the whole safety
+		// property: a single findOneAndUpdate that matches only a still-open
+		// `reserved` row means a stale tab, a double-submit, a replayed POST
+		// and a second browser window all lose the race and get a clean 409 —
+		// none of them can reach the inventory writes below. Do NOT split this
+		// into a read-then-write; the gap is the bug.
+		const claimed = await BarcodeSheetBatch.findOneAndUpdate(
+			{ _id: batchId, status: 'reserved', expiresAt: { $gt: new Date() } },
+			{
+				$set: {
+					status: 'printed',
+					printedAt,
+					printedBy: { _id: user._id, username: user.username },
+					sheetsRemainingBefore: sheetsBefore,
+					sheetsRemainingAfter: sheetsAfter,
+					labelsUsed: 0
+				}
+			},
+			{ new: true }
+		).lean();
+
+		if (!claimed) {
+			// Losing the race is expected operator behaviour, not an error
+			// state — say which case it was so the UI can tell the operator
+			// whether their physical labels are already accounted for.
+			const existing = await BarcodeSheetBatch.findById(batchId)
+				.select('status expiresAt')
+				.lean() as { status?: string; expiresAt?: Date } | null;
+
+			if (!existing) {
+				return fail(409, {
+					addError: 'This print batch no longer exists. Re-generate the barcodes and print again.'
+				});
+			}
+			if (existing.status === 'reserved' || existing.status === 'expired') {
+				return fail(409, {
+					addError:
+						'This preview sat open too long and expired, so it can no longer be added to inventory. ' +
+						'Discard the printed sheet — its labels were never recorded and must not be used — then generate and print a fresh batch.',
+					addExpired: true
+				});
+			}
+			return fail(409, {
+				addError: 'These barcodes were already added to inventory. No second batch was created.'
+			});
+		}
 
 		// Keep the legacy avery94102SheetsOnHand counter in step so the
 		// cart-mfg-dev "Barcode sheets low" alert continues to fire.
