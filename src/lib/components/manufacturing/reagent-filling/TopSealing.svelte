@@ -17,12 +17,21 @@
 		elapsedSeconds: number;
 	}
 
+	/** Mirrors ScanCheckResult in $lib/server/cartridge-scan-check (server types can't be imported here) */
+	interface ScanCheckResult {
+		barcode: string;
+		position: number;
+		ok: boolean;
+		flags: { code: string; message: string }[];
+	}
+
 	interface Props {
 		acceptedCartridges: CartridgeItem[];
 		currentBatch: SealBatch | null;
 		onCreateBatch: (topSealLotId: string) => void;
-		onScanCartridge: (batchId: string, cartridgeRecordId: string) => void;
-		onCompleteBatch: (batchId: string) => void;
+		onCompleteBatch: (batchId: string, cartridgeRecordIds: string[]) => void;
+		/** Runs the batch checker over every scanned barcode at once */
+		onCheck: (barcodes: string[], allowedIds: string[]) => Promise<ScanCheckResult[]>;
 		onProceedToStorage: () => void;
 		readonly?: boolean;
 	}
@@ -31,8 +40,8 @@
 		acceptedCartridges,
 		currentBatch,
 		onCreateBatch,
-		onScanCartridge,
 		onCompleteBatch,
+		onCheck,
 		onProceedToStorage,
 		readonly: isReadonly = false
 	}: Props = $props();
@@ -47,10 +56,59 @@
 	// Track locally scanned IDs + barcodes for slot display
 	let locallyScannedIds = new SvelteSet<string>();
 	let scannedBarcodes = $state<string[]>([]);
+	// Record IDs in scan order — sent to the server once, on batch completion
+	let scannedRecordIds = $state<string[]>([]);
 	// Track batch ID to reset local state when batch changes
 	let lastBatchId = $state<string | null>(null);
 
 	const MAX_PER_BATCH = 12;
+	// Local scans are the only source of truth while a batch is open — the server
+	// is not told about individual scans any more, so scannedCount stays 0 until
+	// the batch is completed in one call.
+	const totalScanned = $derived(scannedBarcodes.length);
+
+	// Batch check state — the whole batch is checked once, after scanning
+	let checking = $state(false);
+	let checkResults = $state<ScanCheckResult[] | null>(null);
+	let checkError = $state('');
+
+	const flagged = $derived((checkResults ?? []).filter((r) => !r.ok));
+	const checkPassed = $derived(checkResults !== null && flagged.length === 0);
+
+	/** Any edit to the scan set invalidates a previous check */
+	function invalidateCheck() {
+		checkResults = null;
+		checkError = '';
+	}
+
+	function flagsFor(index: number): { code: string; message: string }[] {
+		return checkResults?.find((r) => r.position === index)?.flags ?? [];
+	}
+
+	async function runCheck() {
+		if (checking || totalScanned === 0) return;
+		checking = true;
+		checkError = '';
+		try {
+			checkResults = await onCheck(
+				[...scannedBarcodes],
+				acceptedCartridges.map((c) => c.cartridgeId)
+			);
+		} catch (err) {
+			checkResults = null;
+			checkError = err instanceof Error ? err.message : 'Check failed';
+		} finally {
+			checking = false;
+		}
+	}
+
+	function removeScan(index: number) {
+		const barcode = scannedBarcodes[index];
+		if (barcode !== undefined) locallyScannedIds.delete(barcode);
+		scannedBarcodes = scannedBarcodes.filter((_, i) => i !== index);
+		scannedRecordIds = scannedRecordIds.filter((_, i) => i !== index);
+		invalidateCheck();
+	}
 	const unsealed = $derived(acceptedCartridges.filter((c) => !locallyScannedIds.has(c.cartridgeId)));
 	const allSealed = $derived(unsealed.length === 0 && !currentBatch);
 	const filteredUnsealed = $derived(
@@ -66,6 +124,7 @@
 			lastBatchId = batchId;
 			locallyScannedIds.clear();
 			scannedBarcodes = [];
+			scannedRecordIds = [];
 		}
 	});
 
@@ -97,30 +156,31 @@
 		if (!currentBatch) return;
 		scanError = '';
 		playBeep(true);
+		invalidateCheck();
 		locallyScannedIds.add(found.cartridgeId);
 		scannedBarcodes = [...scannedBarcodes, found.cartridgeId];
-		onScanCartridge(currentBatch.batchId, found.id);
+		scannedRecordIds = [...scannedRecordIds, found.id];
 	}
 
+	/**
+	 * Capture only — every scan lands, nothing is judged here. Duplicates,
+	 * over-capacity scans, cartridges outside the accepted list and already-sealed
+	 * cartridges are all caught by the batch check once scanning is finished.
+	 */
 	function scanCartridge() {
 		const value = cartridgeInput.trim();
 		if (!value || !currentBatch) return;
 
-		const found = unsealed.find((c) => c.cartridgeId === value);
-		if (!found) {
-			scanError = 'Cartridge not found in accepted list';
-			playBeep(false);
-			cartridgeInput = '';
-			return;
-		}
-
 		cartridgeInput = '';
-		addCartridge(found);
+		// The record ID is only known for cartridges in the accepted list; an
+		// unrecognised barcode is still captured so the checker can flag it.
+		const found = acceptedCartridges.find((c) => c.cartridgeId === value);
+		addCartridge({ id: found?.id ?? value, cartridgeId: value, deckPosition: found?.deckPosition ?? 0 });
 		setTimeout(() => cartridgeInputEl?.focus(), 100);
 	}
 
 	function clickCartridge(item: CartridgeItem) {
-		if (!currentBatch || Math.max(currentBatch.scannedCount, scannedBarcodes.length) >= MAX_PER_BATCH) return;
+		if (!currentBatch || totalScanned >= MAX_PER_BATCH) return;
 		addCartridge(item);
 	}
 
@@ -223,7 +283,7 @@
 
 			<div class="mt-3 flex items-center justify-between">
 				<span class="text-sm text-[var(--color-tron-text)]">
-					{currentBatch.scannedCount} / {currentBatch.totalTarget} scanned
+					{totalScanned} / {currentBatch.totalTarget} scanned
 				</span>
 				{#if currentBatch.firstScanTime}
 					<span class="text-xs text-[var(--color-tron-text-secondary)]">
@@ -236,19 +296,23 @@
 			<div class="mt-3 grid grid-cols-6 gap-1.5">
 				{#each Array.from({ length: currentBatch.totalTarget }, (_, i) => i) as pos (pos)}
 					{@const barcode = scannedBarcodes[pos]}
-					{@const isFilled = pos < currentBatch.scannedCount || barcode}
-					{@const totalScanned = Math.max(currentBatch.scannedCount, scannedBarcodes.length)}
+					{@const isFilled = pos < totalScanned || barcode}
 					{@const isNext = pos === totalScanned && totalScanned < MAX_PER_BATCH}
+					{@const slotFlags = flagsFor(pos)}
+					{@const isFlagged = slotFlags.length > 0}
 					<div
-						class="flex flex-col items-center justify-center rounded border px-1 py-1.5 {isFilled
-							? 'border-cyan-500/50 bg-cyan-900/30'
-							: isNext
-								? 'animate-pulse border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/20'
-								: 'border-[var(--color-tron-border)]/50 bg-[var(--color-tron-surface)]/50'}"
+						title={isFlagged ? slotFlags.map((f) => f.message).join('; ') : undefined}
+						class="flex flex-col items-center justify-center rounded border px-1 py-1.5 {isFlagged
+							? 'border-red-500 bg-red-900/30'
+							: isFilled
+								? 'border-cyan-500/50 bg-cyan-900/30'
+								: isNext
+									? 'animate-pulse border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/20'
+									: 'border-[var(--color-tron-border)]/50 bg-[var(--color-tron-surface)]/50'}"
 					>
 						<span class="text-[10px] text-[var(--color-tron-text-secondary)]">{pos + 1}</span>
 						{#if barcode}
-							<span class="mt-0.5 max-w-full truncate text-[10px] font-mono text-cyan-300" title={barcode}>{shortBarcode(barcode)}</span>
+							<span class="mt-0.5 max-w-full truncate text-[10px] font-mono {isFlagged ? 'text-red-300' : 'text-cyan-300'}" title={barcode}>{shortBarcode(barcode)}</span>
 						{:else if isFilled}
 							<span class="mt-0.5 text-[10px] text-cyan-400">sealed</span>
 						{/if}
@@ -256,33 +320,36 @@
 				{/each}
 			</div>
 
-			<!-- Scan cartridge input -->
-			{#if currentBatch.scannedCount < MAX_PER_BATCH}
-				<div class="mt-3 flex gap-2">
-					<input
-						bind:this={cartridgeInputEl}
-						bind:value={cartridgeInput}
-						onkeydown={(e) => { if (e.key === 'Enter') scanCartridge(); }}
-						placeholder="Scan cartridge barcode..."
-						class="min-h-[44px] flex-1 rounded border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
-					/>
-					{#if unsealed.length > 0}
-						<button
-							type="button"
-							onclick={() => { cartridgeInput = unsealed[0].cartridgeId; scanCartridge(); }}
-							class="min-h-[44px] rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-orange)] hover:text-[var(--color-tron-orange)]"
-						>
-							Test
-						</button>
-					{/if}
-				</div>
-				{#if scanError}
-					<p class="mt-1 text-xs text-red-400">{scanError}</p>
+			<!-- Scan cartridge input — always available; over-capacity scans are flagged by the check -->
+			{#if totalScanned >= MAX_PER_BATCH}
+				<p class="mt-3 text-xs text-amber-300">
+					Batch full ({MAX_PER_BATCH}) — further scans will be flagged.
+				</p>
+			{/if}
+			<div class="mt-3 flex gap-2">
+				<input
+					bind:this={cartridgeInputEl}
+					bind:value={cartridgeInput}
+					onkeydown={(e) => { if (e.key === 'Enter') scanCartridge(); }}
+					placeholder="Scan cartridge barcode..."
+					class="min-h-[44px] flex-1 rounded border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+				/>
+				{#if unsealed.length > 0}
+					<button
+						type="button"
+						onclick={() => { cartridgeInput = unsealed[0].cartridgeId; scanCartridge(); }}
+						class="min-h-[44px] rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-orange)] hover:text-[var(--color-tron-orange)]"
+					>
+						Test
+					</button>
 				{/if}
+			</div>
+			{#if scanError}
+				<p class="mt-1 text-xs text-red-400">{scanError}</p>
 			{/if}
 
 			<!-- Available cartridges — click to add to batch -->
-			{#if unsealed.length > 0 && currentBatch.scannedCount < MAX_PER_BATCH}
+			{#if unsealed.length > 0 && totalScanned < MAX_PER_BATCH}
 				<div class="mt-4">
 					<div class="flex items-center justify-between">
 						<p class="text-sm font-medium text-[var(--color-tron-text)]">
@@ -318,10 +385,48 @@
 				</div>
 			{/if}
 
-			<!-- Top Sealed button — show when server or local scans have added cartridges -->
-			{#if currentBatch.scannedCount > 0 || scannedBarcodes.length > 0}
-				{@const totalScanned = Math.max(currentBatch.scannedCount, scannedBarcodes.length)}
-				<button type="button" onclick={() => onCompleteBatch(currentBatch!.batchId)}
+			<!-- Check results — every flagged barcode must be resolved before sealing -->
+			{#if checkError}
+				<p class="mt-4 rounded border border-red-500/40 bg-red-900/10 px-3 py-2 text-sm text-red-300">{checkError}</p>
+			{/if}
+			{#if flagged.length > 0}
+				<div class="mt-4 rounded-lg border border-red-500/50 bg-red-900/10 p-4">
+					<p class="text-sm font-semibold text-red-400">
+						{flagged.length} cartridge{flagged.length !== 1 ? 's' : ''} flagged — remove or re-scan to continue
+					</p>
+					<ul class="mt-3 space-y-2">
+						{#each flagged as f (f.position)}
+							<li class="flex items-center justify-between gap-3 rounded border border-red-500/30 bg-[var(--color-tron-bg)]/40 px-3 py-2">
+								<div class="min-w-0">
+									<span class="font-mono text-xs text-[var(--color-tron-text)]">#{f.position + 1} {f.barcode}</span>
+									<p class="text-xs text-red-300">{f.flags.map((x) => x.message).join(' · ')}</p>
+								</div>
+								<button
+									type="button"
+									onclick={() => removeScan(f.position)}
+									class="shrink-0 rounded border border-red-500/50 px-3 py-1.5 text-xs text-red-300 transition-colors hover:bg-red-900/30"
+								>
+									Remove
+								</button>
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{:else if checkPassed}
+				<p class="mt-4 rounded border border-green-500/40 bg-green-900/10 px-3 py-2 text-sm text-green-400">
+					All {totalScanned} barcode{totalScanned !== 1 ? 's' : ''} passed the check.
+				</p>
+			{/if}
+
+			<!-- Check, then commit every scan in the batch in one request -->
+			{#if totalScanned > 0 && !checkPassed}
+				<button type="button" onclick={runCheck} disabled={checking}
+					class="mt-4 min-h-[52px] w-full rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-6 py-3 text-base font-bold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30 disabled:opacity-50"
+				>
+					{checking ? 'Checking…' : `Check ${totalScanned} Barcode${totalScanned !== 1 ? 's' : ''}`}
+				</button>
+			{:else if checkPassed}
+				<button type="button" onclick={() => onCompleteBatch(currentBatch!.batchId, scannedRecordIds)}
 					class="mt-4 min-h-[52px] w-full rounded-lg border border-green-500/50 bg-green-900/20 px-6 py-3 text-base font-bold text-green-400 transition-all hover:bg-green-900/30"
 				>
 					Top Sealed ({totalScanned} cartridge{totalScanned !== 1 ? 's' : ''})

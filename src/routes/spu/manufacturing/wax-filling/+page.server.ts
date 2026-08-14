@@ -4,6 +4,7 @@ import {
 } from '$lib/server/db';
 import { isAdmin, hasPermission } from '$lib/server/permissions';
 import { releaseTrayForRun, coolingStatus, DEFAULT_COOLING_REQUIRED_MIN } from '$lib/server/cooling';
+import { checkCartridgeScans } from '$lib/server/cartridge-scan-check';
 import type { PageServerLoad, Actions } from './$types';
 
 /** Map DB status → UI stage string (STAGES const in svelte) */
@@ -314,6 +315,31 @@ export const actions: Actions = {
 		return { success: true };
 	},
 
+	/**
+	 * Check a whole deck's worth of scans at once. Called after the operator has
+	 * finished scanning — never during scanning.
+	 */
+	checkScans: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		let barcodes: string[] = [];
+		const raw = data.get('barcodes') as string;
+		if (raw) {
+			try {
+				const parsed = JSON.parse(raw);
+				if (!Array.isArray(parsed)) return fail(400, { error: 'Invalid barcode list' });
+				barcodes = parsed.filter((b: any): b is string => typeof b === 'string' && !!b);
+			} catch {
+				return fail(400, { error: 'Invalid barcode list' });
+			}
+		}
+
+		const results = await checkCartridgeScans(barcodes, 'wax-deck', { capacity: 24 });
+		return { success: true, results };
+	},
+
 	/** Start the robot run */
 	startRun: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
@@ -442,6 +468,91 @@ export const actions: Actions = {
 		}
 
 		return { success: true };
+	},
+
+	/**
+	 * Complete QC in ONE round trip. Instead of a `rejectCartridge` POST per scan
+	 * (N+1 requests per tray), the client scans everything locally and submits all
+	 * rejections here alongside the run completion. Rejections and the waxFilling
+	 * phase write go out as a single bulkWrite.
+	 */
+	completeQCBatch: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+
+		const data = await request.formData();
+		const runId = data.get('runId') as string;
+		const now = new Date();
+
+		let rejections: { cartridgeId: string; rejectionReason?: string }[] = [];
+		const raw = data.get('rejectedCartridges') as string;
+		if (raw) {
+			try {
+				const parsed = JSON.parse(raw);
+				if (!Array.isArray(parsed)) return fail(400, { error: 'Invalid rejection data' });
+				rejections = parsed.filter(
+					(r: any) => r && typeof r.cartridgeId === 'string' && r.cartridgeId
+				);
+			} catch {
+				return fail(400, { error: 'Invalid rejection data' });
+			}
+		}
+
+		const run = await WaxFillingRun.findByIdAndUpdate(runId, {
+			$set: { status: 'Storage', runEndTime: now }
+		}, { new: true }).lean() as any;
+		if (!run) return fail(404, { error: 'Run not found' });
+
+		const operator = { _id: locals.user._id, username: locals.user.username };
+		const rejectedIds = new Set(rejections.map((r) => r.cartridgeId));
+		const bulkOps: any[] = [];
+
+		// Rejections (WRITE-ONCE on waxQc) — these own currentPhase for their cartridges
+		for (const r of rejections) {
+			bulkOps.push({
+				updateOne: {
+					filter: { _id: r.cartridgeId, 'waxQc.recordedAt': { $exists: false } },
+					update: {
+						$set: {
+							'waxQc.status': 'Rejected',
+							'waxQc.rejectionReason': r.rejectionReason || '',
+							'waxQc.operator': operator,
+							'waxQc.timestamp': now,
+							'waxQc.recordedAt': now,
+							currentPhase: 'voided'
+						}
+					}
+				}
+			});
+		}
+
+		// Write waxFilling phase to all cartridges (WRITE-ONCE). Rejected cartridges
+		// still get the phase record but keep currentPhase 'voided'.
+		for (const cid of (run.cartridgeIds ?? []) as string[]) {
+			const set: Record<string, any> = {
+				'waxFilling.runId': run._id,
+				'waxFilling.robotId': run.robot?._id,
+				'waxFilling.robotName': run.robot?.name,
+				'waxFilling.deckId': run.deckId,
+				'waxFilling.waxTubeId': run.waxTubeId,
+				'waxFilling.waxSourceLot': run.waxSourceLot,
+				'waxFilling.operator': run.operator,
+				'waxFilling.runStartTime': run.runStartTime,
+				'waxFilling.runEndTime': now,
+				'waxFilling.recordedAt': now
+			};
+			if (!rejectedIds.has(cid)) set.currentPhase = 'wax_filled';
+			bulkOps.push({
+				updateOne: {
+					filter: { _id: cid, 'waxFilling.recordedAt': { $exists: false } },
+					update: { $set: set }
+				}
+			});
+		}
+
+		if (bulkOps.length > 0) await CartridgeRecord.bulkWrite(bulkOps);
+
+		return { success: true, rejected: rejectedIds.size };
 	},
 
 	/** Cancel / abort an active run */

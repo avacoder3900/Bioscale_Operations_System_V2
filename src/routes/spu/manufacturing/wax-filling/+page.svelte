@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { enhance } from '$app/forms';
+	import { enhance, deserialize } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
 	import { page } from '$app/stores';
 	import SetupConfirmation from '$lib/components/manufacturing/wax-filling/SetupConfirmation.svelte';
@@ -166,6 +166,37 @@
 		await invalidateAll();
 		submitting = false;
 		submittingTooLong = false;
+	}
+
+	/**
+	 * Run the batch checker over a finished scan set. Returns one result per
+	 * barcode; the grid renders the flags. Preview mode short-circuits to "clean"
+	 * so the flow stays clickable without touching the DB.
+	 */
+	async function checkScans(barcodes: string[]) {
+		if (previewParam) {
+			return barcodes.map((barcode, position) => ({ barcode, position, ok: true, flags: [] }));
+		}
+		const fd = new FormData();
+		fd.set('barcodes', JSON.stringify(barcodes));
+		const res = await fetch('?/checkScans', {
+			method: 'POST',
+			body: fd,
+			headers: { 'x-sveltekit-action': 'true' }
+		});
+		const result = deserialize(await res.text());
+		if (result.type === 'failure') {
+			throw new Error((result.data?.error as string) ?? 'Check failed');
+		}
+		if (result.type !== 'success') {
+			throw new Error('Check failed');
+		}
+		return (result.data?.results ?? []) as {
+			barcode: string;
+			position: number;
+			ok: boolean;
+			flags: { code: string; message: string }[];
+		}[];
 	}
 
 	async function submitAction(action: string, formData: Record<string, string>) {
@@ -339,36 +370,28 @@
 		submittingTooLong = false;
 		const slowTimer = setTimeout(() => { submittingTooLong = true; }, 5000);
 		try {
-			// Reject each cartridge individually
-			for (const c of rejectedCartridges) {
+			// One round trip for the whole tray: all rejections + run completion.
+			const trayId = data.runState.coolingTrayId ?? data.qcCartridges[0]?.coolingTrayId;
+			if (trayId) {
 				const fd = new FormData();
-				fd.set('cartridgeId', c.cartridgeId);
-				fd.set('reasonCode', c.reasonCode);
-				const res = await fetch('?/rejectCartridge', {
+				fd.set('trayId', trayId);
+				if (data.runState.runId) fd.set('runId', data.runState.runId);
+				fd.set(
+					'rejectedCartridges',
+					JSON.stringify(
+						rejectedCartridges.map((c) => ({
+							cartridgeId: c.cartridgeId,
+							rejectionReason: c.reasonCode
+						}))
+					)
+				);
+				const res = await fetch('?/completeQCBatch', {
 					method: 'POST',
 					body: fd,
 					headers: { 'x-sveltekit-action': 'true' }
 				});
 				if (!res.ok) {
-					errorMsg = 'Failed to reject cartridge';
-					break;
-				}
-			}
-			// Then complete QC for the tray
-			if (!errorMsg) {
-				const trayId = data.runState.coolingTrayId ?? data.qcCartridges[0]?.coolingTrayId;
-				if (trayId) {
-					const fd = new FormData();
-					fd.set('trayId', trayId);
-					if (data.runState.runId) fd.set('runId', data.runState.runId);
-					const res = await fetch('?/completeQC', {
-						method: 'POST',
-						body: fd,
-						headers: { 'x-sveltekit-action': 'true' }
-					});
-					if (!res.ok) {
-						errorMsg = 'Failed to complete QC';
-					}
+					errorMsg = 'Failed to complete QC';
 				}
 			}
 		} catch (e) {
@@ -811,6 +834,7 @@
 				availableLots={previewParam ? [{ lotId: 'LOT-PREVIEW', ready: true }] : data.ovenLots}
 				plannedCartridgeCount={previewParam ? 24 : data.runState.plannedCartridgeCount}
 				onComplete={handleDeckLoadComplete}
+				onCheck={checkScans}
 				readonly={isPreviewOrPast}
 				suppressFocus={showCancelModal}
 			/>

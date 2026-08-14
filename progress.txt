@@ -295,3 +295,47 @@ if (apiKey !== process.env.AGENT_API_KEY) return json({ error: 'Unauthorized' },
   "consumption" and "scrap" are NOT in the enum. Fields operatorId,
   operatorUsername, notes, lotId, manufacturingStep, cartridgeRecordId also
   undeclared. Same strict-mode stripping risk as part_definitions.
+
+### 2026-08-14: Cartridge scanning — capture first, check once at the end (perf/data-health-01)
+- Operator complaint: validating every scan made wax/reagent filling crawl. Flow
+  is now scan-everything -> one checker pass -> flag the bad ones, instead of a
+  judgement per scan.
+- NEW src/lib/server/cartridge-scan-check.ts: checkCartridgeScans(barcodes,
+  context, {capacity, allowedIds}). Local checks (duplicate, over_capacity) in
+  memory, then ONE CartridgeRecord.find({_id:{$in:...}}) for the whole set.
+  Flags: duplicate / over_capacity / voided / already_wax_filled /
+  already_reagent_filled / already_sealed / unknown / not_accepted. Contexts:
+  wax-deck (24), reagent-deck (24), top-seal (12).
+- "unknown" is deliberately NOT flagged on either deck: both loadDeck actions
+  $setOnInsert a stub for a first-time barcode, so a new barcode there is by
+  design. It only flags at top-seal, where the cartridge must already exist.
+- Scanning now judges nothing on all three surfaces. Removed: wax DeckLoadingGrid
+  isFull/duplicate/no-oven-lot rejections, reagent DeckLoadingGrid isFull/duplicate
+  rejections, TopSealing "not found in accepted list". Scan inputs stay open past
+  capacity so an extra scan lands and gets flagged rather than silently dropped;
+  no-ready-lot became a standing banner instead of a per-scan error.
+- Checking is a ?/checkScans action per page, read back through deserialize() from
+  $app/forms. Flagged slots turn red w/ reasons on hover + a list underneath with
+  #position, barcode, reasons and a Remove button. Submit is replaced by "Check N
+  Barcodes" until the set passes — no override path (per user). Any scan/undo/
+  remove invalidates the result and puts the Check button back.
+- Persistence also batched in the same pass: TopSealing no longer POSTs per scan
+  (scanCartridgeForSeal action deleted, no remaining refs); completeSealBatch now
+  takes cartridgeRecordIds[] and does one $addToSet $each + one bulkWrite. Wax QC
+  replaced its sequential per-cartridge ?/rejectCartridge loop with completeQCBatch
+  (one request, one bulkWrite). 12-cartridge seal batch: 12 blocking round trips
+  during scanning -> 0.
+- TWO PRE-EXISTING BUGS found and fixed in the new wax QC path (old data unaffected,
+  still empty in DB):
+  * wax QC rejection reasons were silently dropping — client sent formData
+    'reasonCode', rejectCartridge action read 'rejectionReason', so every
+    waxQc.rejectionReason recorded ''. completeQCBatch maps reasonCode ->
+    rejectionReason.
+  * rejected cartridges were being marked wax_filled — completeQC set
+    currentPhase:'wax_filled' on ALL run.cartridgeIds after the rejection writes had
+    set 'voided', overwriting them. completeQCBatch only sets currentPhase for
+    non-rejected cartridges.
+- Typecheck: 183 errors / 183 warnings in 74 files = exact pre-existing baseline,
+  zero new, and zero errors in any of the four touched components or the new
+  checker. Local production build not attempted (OOMs ~30GB on this machine);
+  Vercel branch build is the gate.

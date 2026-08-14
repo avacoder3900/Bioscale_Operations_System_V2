@@ -3,6 +3,7 @@ import {
 	connectDB, ReagentBatchRecord, AssayDefinition, CartridgeRecord, Consumable,
 	ManufacturingSettings, WaxFillingRun, generateId
 } from '$lib/server/db';
+import { checkCartridgeScans } from '$lib/server/cartridge-scan-check';
 import type { PageServerLoad, Actions } from './$types';
 
 const TERMINAL = new Set(['completed', 'aborted', 'voided', 'cancelled', 'Completed', 'Aborted', 'Cancelled']);
@@ -453,34 +454,54 @@ export const actions: Actions = {
 		return { success: true, batchId };
 	},
 
-	/** Scan a cartridge into a seal batch */
-	scanCartridgeForSeal: async ({ request, locals }) => {
+	/**
+	 * Check a whole scan set at once. Called after the operator has finished
+	 * scanning — never during scanning. `context` selects which rules apply.
+	 */
+	checkScans: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
 
 		const data = await request.formData();
-		const runId = data.get('runId') as string;
-		const batchId = data.get('batchId') as string;
-		const cartridgeRecordId = data.get('cartridgeRecordId') as string;
+		const context = (data.get('context') as string) === 'top-seal' ? 'top-seal' : 'reagent-deck';
 
-		if (!cartridgeRecordId) return fail(400, { error: 'Cartridge ID required' });
+		let barcodes: string[] = [];
+		const raw = data.get('barcodes') as string;
+		if (raw) {
+			try {
+				const parsed = JSON.parse(raw);
+				if (!Array.isArray(parsed)) return fail(400, { error: 'Invalid barcode list' });
+				barcodes = parsed.filter((b: any): b is string => typeof b === 'string' && !!b);
+			} catch {
+				return fail(400, { error: 'Invalid barcode list' });
+			}
+		}
 
-		// Mark cartridge in the sealBatch as scanned
-		await ReagentBatchRecord.findOneAndUpdate(
-			{ _id: runId, 'sealBatches._id': batchId },
-			{ $addToSet: { 'sealBatches.$.cartridgeIds': cartridgeRecordId } }
-		);
+		let allowedIds: string[] | undefined;
+		const rawAllowed = data.get('allowedIds') as string;
+		if (rawAllowed) {
+			try {
+				const parsed = JSON.parse(rawAllowed);
+				if (Array.isArray(parsed)) {
+					allowedIds = parsed.filter((b: any): b is string => typeof b === 'string' && !!b);
+				}
+			} catch {
+				return fail(400, { error: 'Invalid accepted list' });
+			}
+		}
 
-		// Mark the cartridgeFilled entry with topSealBatchId
-		await ReagentBatchRecord.findOneAndUpdate(
-			{ _id: runId, 'cartridgesFilled.cartridgeId': cartridgeRecordId },
-			{ $set: { 'cartridgesFilled.$.topSealBatchId': batchId } }
-		);
-
-		return { success: true };
+		const results = await checkCartridgeScans(barcodes, context, {
+			capacity: context === 'top-seal' ? 12 : 24,
+			allowedIds
+		});
+		return { success: true, results };
 	},
 
-	/** Complete a seal batch */
+	/**
+	 * Complete a seal batch.
+	 * All cartridges scanned on the client are persisted here in one shot —
+	 * there is no per-scan round trip any more.
+	 */
 	completeSealBatch: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
@@ -489,6 +510,41 @@ export const actions: Actions = {
 		const runId = data.get('runId') as string;
 		const batchId = data.get('batchId') as string;
 		const now = new Date();
+
+		// Cartridge record IDs, in scan order, submitted once for the whole batch
+		let cartridgeRecordIds: string[] = [];
+		const rawIds = data.get('cartridgeRecordIds') as string | null;
+		if (rawIds) {
+			try {
+				const parsed = JSON.parse(rawIds);
+				if (!Array.isArray(parsed)) return fail(400, { error: 'Invalid cartridge list' });
+				cartridgeRecordIds = parsed.filter((id): id is string => typeof id === 'string' && !!id);
+			} catch {
+				return fail(400, { error: 'Invalid cartridge list' });
+			}
+		}
+		// De-dupe while preserving scan order
+		cartridgeRecordIds = [...new Set(cartridgeRecordIds)];
+
+		if (!cartridgeRecordIds.length) {
+			return fail(400, { error: 'No cartridges scanned for this batch' });
+		}
+
+		// Persist the whole scan set, then close the batch — one write each
+		await ReagentBatchRecord.findOneAndUpdate(
+			{ _id: runId, 'sealBatches._id': batchId },
+			{ $addToSet: { 'sealBatches.$.cartridgeIds': { $each: cartridgeRecordIds } } }
+		);
+
+		// Stamp topSealBatchId on each cartridgesFilled entry in one bulk pass
+		await ReagentBatchRecord.bulkWrite(
+			cartridgeRecordIds.map((cid) => ({
+				updateOne: {
+					filter: { _id: runId, 'cartridgesFilled.cartridgeId': cid },
+					update: { $set: { 'cartridgesFilled.$.topSealBatchId': batchId } }
+				}
+			}))
+		);
 
 		const run = await ReagentBatchRecord.findOneAndUpdate(
 			{ _id: runId, 'sealBatches._id': batchId },

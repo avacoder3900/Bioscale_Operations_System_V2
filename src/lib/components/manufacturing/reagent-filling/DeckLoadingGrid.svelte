@@ -4,13 +4,23 @@
 		cartridgeId: string;
 	}
 
+	/** Mirrors ScanCheckResult in $lib/server/cartridge-scan-check (server types can't be imported here) */
+	interface ScanCheckResult {
+		barcode: string;
+		position: number;
+		ok: boolean;
+		flags: { code: string; message: string }[];
+	}
+
 	interface Props {
 		onComplete: (data: { deckId: string; cartridgeScans: CartridgeScan[] }) => void;
+		/** Runs the batch checker over every scanned barcode at once */
+		onCheck: (barcodes: string[]) => Promise<ScanCheckResult[]>;
 		readonly?: boolean;
 		focusPaused?: boolean;
 	}
 
-	let { onComplete, readonly: isReadonly = false, focusPaused = false }: Props = $props();
+	let { onComplete, onCheck, readonly: isReadonly = false, focusPaused = false }: Props = $props();
 
 	// 8 rows x 3 cols, vertical snake: Col1 down, Col2 up, Col3 down
 	const GRID_ROWS = [
@@ -42,11 +52,59 @@
 
 	const positionMap = $derived.by(() => {
 		const map = new SvelteMap<number, CartridgeScan>();
-		for (let i = 0; i < scans.length; i++) {
+		for (let i = 0; i < scans.length && i < TOTAL_POSITIONS; i++) {
 			map.set(SCAN_ORDER[i], scans[i]);
 		}
 		return map;
 	});
+
+	// Map position -> scan index, so a slot can look up its own check flags
+	const positionIndexMap = $derived.by(() => {
+		const map = new SvelteMap<number, number>();
+		for (let i = 0; i < scans.length && i < TOTAL_POSITIONS; i++) {
+			map.set(SCAN_ORDER[i], i);
+		}
+		return map;
+	});
+
+	// Batch check state — nothing is validated during scanning; the whole set is
+	// checked once the operator is done, and every bad barcode comes back flagged.
+	let checking = $state(false);
+	let checkResults = $state<ScanCheckResult[] | null>(null);
+	let checkError = $state('');
+
+	const flagged = $derived((checkResults ?? []).filter((r) => !r.ok));
+	const checkPassed = $derived(checkResults !== null && flagged.length === 0);
+
+	/** Any edit to the scan set invalidates a previous check */
+	function invalidateCheck() {
+		checkResults = null;
+		checkError = '';
+	}
+
+	function flagsFor(index: number): { code: string; message: string }[] {
+		return checkResults?.find((r) => r.position === index)?.flags ?? [];
+	}
+
+	/** Check the whole scan set at once, then flag whatever is unacceptable */
+	async function runCheck() {
+		if (checking || scans.length === 0) return;
+		checking = true;
+		checkError = '';
+		try {
+			checkResults = await onCheck(scans.map((s) => s.cartridgeId));
+		} catch (err) {
+			checkResults = null;
+			checkError = err instanceof Error ? err.message : 'Check failed';
+		} finally {
+			checking = false;
+		}
+	}
+
+	function removeScan(index: number) {
+		scans = scans.filter((_, i) => i !== index);
+		invalidateCheck();
+	}
 
 	function playBeep(success: boolean) {
 		try {
@@ -84,21 +142,19 @@
 		setTimeout(() => deckInputEl?.focus(), 50);
 	}
 
+	/**
+	 * Capture only — every scan lands, nothing is judged here. Duplicates,
+	 * over-capacity scans and unusable cartridges are caught by the batch check
+	 * once scanning is finished, so the operator is never stopped mid-deck.
+	 */
 	function handleCartridgeKeydown(e: KeyboardEvent) {
 		if (e.key === 'Enter' && cartridgeInput.trim()) {
 			e.preventDefault();
 			const scanned = cartridgeInput.trim();
 			cartridgeInput = '';
 
-			if (isFull) { playBeep(false); return; }
-
-			if (scans.some((s) => s.cartridgeId === scanned)) {
-				playBeep(false);
-				deckError = `Cartridge "${scanned}" already scanned`;
-				return;
-			}
-
 			deckError = '';
+			invalidateCheck();
 			scans = [...scans, { cartridgeId: scanned }];
 			playBeep(true);
 		}
@@ -122,6 +178,7 @@
 		if (scans.length > 0) {
 			scans = scans.slice(0, -1);
 			deckError = '';
+			invalidateCheck();
 		}
 	}
 
@@ -130,7 +187,7 @@
 	});
 
 	$effect(() => {
-		if (step === 'loading' && cartridgeInputEl && !focusPaused && !isFull) cartridgeInputEl.focus();
+		if (step === 'loading' && cartridgeInputEl && !focusPaused) cartridgeInputEl.focus();
 	});
 </script>
 
@@ -224,12 +281,15 @@
 				</span>
 			</div>
 
-			<!-- Scan input -->
-			{#if !isFull}
-				<div class="flex items-center gap-3 rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-surface)] p-4">
+			<!-- Scan input — always available; over-capacity scans are flagged by the check -->
+			<div class="flex items-center gap-3 rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-surface)] p-4">
 					<div class="flex-1">
 						<label for="cartridge-scan-input" class="tron-label">
-							Scan Cartridge → Position {nextPosition}
+							{#if isFull}
+								Deck full ({TOTAL_POSITIONS}) — further scans will be flagged
+							{:else}
+								Scan Cartridge → Position {nextPosition}
+							{/if}
 						</label>
 						<input
 							bind:this={cartridgeInputEl}
@@ -260,7 +320,6 @@
 						Test
 					</button>
 				</div>
-			{/if}
 
 			{#if deckError}
 				<p class="text-sm text-[var(--color-tron-red)]">{deckError}</p>
@@ -277,25 +336,33 @@
 							{#each row as pos (pos)}
 								{@const scan = positionMap.get(pos)}
 								{@const isNext = pos === nextPosition}
+								{@const scanIndex = positionIndexMap.get(pos)}
+								{@const slotFlags = scanIndex === undefined ? [] : flagsFor(scanIndex)}
+								{@const isFlagged = slotFlags.length > 0}
 								<div
+									title={isFlagged ? slotFlags.map((f) => f.message).join('; ') : undefined}
 									class="flex min-h-[44px] flex-col items-center justify-center rounded border text-center text-xs transition-all
-										{scan
-										? 'border-green-500/50 bg-green-900/30'
-										: isNext
-											? 'animate-pulse border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/10'
-											: 'border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)]'}"
+										{isFlagged
+										? 'border-red-500 bg-red-900/30'
+										: scan
+											? 'border-green-500/50 bg-green-900/30'
+											: isNext
+												? 'animate-pulse border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/10'
+												: 'border-[var(--color-tron-border)] bg-[var(--color-tron-bg-tertiary)]'}"
 								>
 									<span
-										class="font-mono text-[10px] {scan
-											? 'text-green-400'
-											: isNext
-												? 'text-[var(--color-tron-cyan)]'
-												: 'text-[var(--color-tron-text-secondary)]'}"
+										class="font-mono text-[10px] {isFlagged
+											? 'text-red-400'
+											: scan
+												? 'text-green-400'
+												: isNext
+													? 'text-[var(--color-tron-cyan)]'
+													: 'text-[var(--color-tron-text-secondary)]'}"
 									>
 										{pos}
 									</span>
 									{#if scan}
-										<span class="mt-0.5 max-w-full truncate px-0.5 font-mono text-[8px] text-green-300">
+										<span class="mt-0.5 max-w-full truncate px-0.5 font-mono text-[8px] {isFlagged ? 'text-red-300' : 'text-green-300'}">
 											{scan.cartridgeId.length > 6 ? scan.cartridgeId.slice(-6) : scan.cartridgeId}
 										</span>
 									{/if}
@@ -312,6 +379,41 @@
 				</div>
 			</div>
 
+			<!-- Check results — every flagged barcode must be resolved before loading -->
+			{#if checkError}
+				<p class="rounded border border-red-500/40 bg-red-900/10 px-3 py-2 text-sm text-red-300">{checkError}</p>
+			{/if}
+			{#if flagged.length > 0}
+				<div class="rounded-lg border border-red-500/50 bg-red-900/10 p-4">
+					<p class="text-sm font-semibold text-red-400">
+						{flagged.length} cartridge{flagged.length !== 1 ? 's' : ''} flagged — remove or re-scan to continue
+					</p>
+					<ul class="mt-3 space-y-2">
+						{#each flagged as f (f.position)}
+							<li class="flex items-center justify-between gap-3 rounded border border-red-500/30 bg-[var(--color-tron-bg)]/40 px-3 py-2">
+								<div class="min-w-0">
+									<span class="font-mono text-xs text-[var(--color-tron-text)]">
+										#{f.position + 1} {f.barcode}
+									</span>
+									<p class="text-xs text-red-300">{f.flags.map((x) => x.message).join(' · ')}</p>
+								</div>
+								<button
+									type="button"
+									onclick={() => removeScan(f.position)}
+									class="shrink-0 rounded border border-red-500/50 px-3 py-1.5 text-xs text-red-300 transition-colors hover:bg-red-900/30"
+								>
+									Remove
+								</button>
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{:else if checkPassed}
+				<p class="rounded border border-green-500/40 bg-green-900/10 px-3 py-2 text-sm text-green-400">
+					All {scans.length} barcode{scans.length !== 1 ? 's' : ''} passed the check.
+				</p>
+			{/if}
+
 			<!-- Action buttons -->
 			<div class="flex gap-3">
 				{#if scans.length > 0}
@@ -323,21 +425,22 @@
 						Undo Last
 					</button>
 				{/if}
-				{#if isFull}
+				{#if scans.length > 0 && !checkPassed}
+					<button
+						type="button"
+						onclick={runCheck}
+						disabled={checking}
+						class="min-h-[44px] flex-1 rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-6 py-3 text-sm font-bold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30 disabled:opacity-50"
+					>
+						{checking ? 'Checking…' : `Check ${scans.length} Barcode${scans.length !== 1 ? 's' : ''}`}
+					</button>
+				{:else if checkPassed}
 					<button
 						type="button"
 						onclick={confirmPartialLoad}
 						class="min-h-[44px] flex-1 rounded-lg border border-green-500/50 bg-green-900/20 px-6 py-3 text-sm font-bold text-green-400 transition-all hover:bg-green-900/30"
 					>
-						Confirm Full Load ({scans.length} cartridges)
-					</button>
-				{:else if scans.length > 0}
-					<button
-						type="button"
-						onclick={confirmPartialLoad}
-						class="min-h-[44px] flex-1 rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/20 px-4 py-2 text-sm font-semibold text-[var(--color-tron-cyan)] transition-all hover:bg-[var(--color-tron-cyan)]/30"
-					>
-						Confirm Partial Load ({scans.length} cartridges)
+						{isFull ? 'Confirm Full Load' : 'Confirm Partial Load'} ({scans.length} cartridges)
 					</button>
 				{/if}
 			</div>

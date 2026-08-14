@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/stores';
+	import { deserialize } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
 	import SetupConfirmation from '$lib/components/manufacturing/reagent-filling/SetupConfirmation.svelte';
 	import ReagentPreparation from '$lib/components/manufacturing/reagent-filling/ReagentPreparation.svelte';
@@ -100,6 +101,43 @@
 		requestAnimationFrame(() => {
 			document.querySelector('[data-error-banner]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
 		});
+	}
+
+	/**
+	 * Run the batch checker over a finished scan set. Returns one result per
+	 * barcode; the component renders the flags. Preview mode short-circuits to
+	 * "clean" so the flow stays clickable without touching the DB.
+	 */
+	async function checkScans(
+		barcodes: string[],
+		context: 'reagent-deck' | 'top-seal' = 'reagent-deck',
+		allowedIds?: string[]
+	) {
+		if (previewParam) {
+			return barcodes.map((barcode, position) => ({ barcode, position, ok: true, flags: [] }));
+		}
+		const fd = new FormData();
+		fd.set('barcodes', JSON.stringify(barcodes));
+		fd.set('context', context);
+		if (allowedIds) fd.set('allowedIds', JSON.stringify(allowedIds));
+		const res = await fetch('?/checkScans', {
+			method: 'POST',
+			body: fd,
+			headers: { 'x-sveltekit-action': 'true' }
+		});
+		const result = deserialize(await res.text());
+		if (result.type === 'failure') {
+			throw new Error((result.data?.error as string) ?? 'Check failed');
+		}
+		if (result.type !== 'success') {
+			throw new Error('Check failed');
+		}
+		return (result.data?.results ?? []) as {
+			barcode: string;
+			position: number;
+			ok: boolean;
+			flags: { code: string; message: string }[];
+		}[];
 	}
 
 	async function submitForm(action: string, extraData: Record<string, string> = {}) {
@@ -573,6 +611,7 @@
 		<DeckLoadingGrid
 			onComplete={({ deckId, cartridgeScans }) =>
 				submitForm('loadDeck', { deckId, cartridgeScans: JSON.stringify(cartridgeScans) })}
+			onCheck={(barcodes) => checkScans(barcodes, 'reagent-deck')}
 			readonly={isViewingPast}
 			focusPaused={showCancelModal}
 		/>
@@ -615,12 +654,13 @@
 			onCreateBatch={(topSealLotId) => {
 				submitScanAction('createTopSealBatch', { topSealLotId }, true);
 			}}
-			onScanCartridge={(batchId, cartridgeRecordId) => {
-				submitScanAction('scanCartridgeForSeal', { batchId, cartridgeRecordId });
-			}}
-			onCompleteBatch={(batchId) => {
+			onCheck={(barcodes, allowedIds) => checkScans(barcodes, 'top-seal', allowedIds)}
+			onCompleteBatch={(batchId, cartridgeRecordIds) => {
 				if (previewParam) { errorMsg = 'Actions disabled in preview mode'; return; }
-				submitForm('completeSealBatch', { batchId });
+				submitForm('completeSealBatch', {
+					batchId,
+					cartridgeRecordIds: JSON.stringify(cartridgeRecordIds)
+				});
 			}}
 			onProceedToStorage={() => {
 				if (previewParam) { errorMsg = 'Actions disabled in preview mode'; return; }
