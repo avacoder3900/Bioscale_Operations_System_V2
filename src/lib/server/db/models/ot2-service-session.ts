@@ -56,7 +56,10 @@ const ot2ServiceSessionSchema = new Schema({
 	// operator is shown, and what `goto_well` rewinds to.
 	location: {
 		_id: false,
+		// The checkpoint fires BEFORE a dispense, so wellName is the hole the fill
+		// is about to do; lastWellName is the one it just finished.
 		wellName: String,         // e.g. 'B7'
+		lastWellName: String,
 		volumeUl: Number,         // volume it was dispensing there
 		tipNumber: Number,        // tip_change_count at that point
 		adjustX: Number,          // tip-cal offset in force at that point

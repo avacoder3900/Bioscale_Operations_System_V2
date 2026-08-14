@@ -44,6 +44,7 @@ function locationFrom(body: any) {
 	const loc = body?.location ?? {};
 	return {
 		wellName: typeof loc.wellName === 'string' ? loc.wellName : undefined,
+		lastWellName: typeof loc.lastWellName === 'string' ? loc.lastWellName : undefined,
 		volumeUl: Number.isFinite(Number(loc.volumeUl)) ? Number(loc.volumeUl) : undefined,
 		tipNumber: Number.isFinite(Number(loc.tipNumber)) ? Number(loc.tipNumber) : undefined,
 		adjustX: Number.isFinite(Number(loc.adjustX)) ? Number(loc.adjustX) : undefined,

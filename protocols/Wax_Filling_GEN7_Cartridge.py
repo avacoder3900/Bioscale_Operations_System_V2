@@ -620,6 +620,10 @@ def run(protocol: protocol_api.ProtocolContext):
         _SVC_MAX_SESSION_S = 900
 
         _svc = { 'base': None, 'key': None, 'run_id': None, 'enabled': False, 'last_poll': 0.0 }
+        # The checkpoint fires BEFORE dispensing into a well, so the well we park
+        # at is the NEXT hole. Track the last hole actually filled as well — that
+        # is usually the one the operator wants to look at when something is off.
+        _svc_last = { 'well': None }
 
         def _svc_http(method, path, body=None, timeout=None):
             url = _svc['base'] + path
@@ -721,9 +725,13 @@ def run(protocol: protocol_api.ProtocolContext):
                 pipette.move_to(well.top(base_z + off['z'] + z_extra).move(
                     types.Point(adjust['x'] + off['x'], adjust['y'] + off['y'], 0.0)))
 
-            protocol.comment(f'SERVICE: parked at well {well_name} — awaiting operator')
+            protocol.comment(
+                f"SERVICE: parked before well {well_name} "
+                f"(last filled: {_svc_last['well'] or 'none yet'}) — awaiting operator"
+            )
             _svc_post('entered', location={
-                'wellName': well_name, 'volumeUl': volume_ul, 'tipNumber': tip_no,
+                'wellName': well_name, 'lastWellName': _svc_last['well'],
+                'volumeUl': volume_ul, 'tipNumber': tip_no,
                 'adjustX': adjust['x'], 'adjustY': adjust['y']
             })
 
@@ -1064,6 +1072,7 @@ def run(protocol: protocol_api.ProtocolContext):
                         tip_change_count += 1
                         dispensed_volume += current_volume
                         wells_done_this_batch += 1
+                        _svc_last['well'] = well_name
                         protocol.comment(f'Dispensed {current_volume}uL into well {well_name} (tip #{tip_change_count})')
 
                     if service_interrupted:

@@ -331,13 +331,17 @@
 	{#if serviceEnabled && session?.location?.wellName}
 		<div class="rounded border border-[var(--color-tron-border)] bg-black/20 p-2 text-xs">
 			<span class="uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
-				Last hole:
+				Last hole filled:
 			</span>
 			<span class="ml-2 font-mono" style="color: var(--color-tron-text)">
-				{session.location.wellName}
+				{session.location.lastWellName ?? '—'}
 				{#if session.location.volumeUl != null}· {session.location.volumeUl}µL{/if}
 				{#if session.location.tipNumber != null}· dispense #{session.location.tipNumber}{/if}
 			</span>
+			<span class="ml-3 uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
+				Stopped before:
+			</span>
+			<span class="ml-2 font-mono" style="color: var(--color-tron-text)">{session.location.wellName}</span>
 		</div>
 	{:else if currentCommand}
 		<div class="rounded border border-[var(--color-tron-border)] bg-black/20 p-2 text-xs">
@@ -353,7 +357,9 @@
 			<div class="flex items-baseline justify-between">
 				<h4 class="text-sm font-semibold text-orange-300">Calibrate mid-run</h4>
 				<span class="font-mono text-[11px] text-orange-300/80">
-					{serviceParked ? `parked at ${session?.location?.wellName ?? '—'}` : 'waiting for the fill to reach the next hole…'}
+					{serviceParked
+						? `parked before ${session?.location?.wellName ?? '—'}`
+						: 'waiting for the fill to reach the next hole…'}
 				</span>
 			</div>
 
@@ -398,7 +404,7 @@
 					<button type="button" disabled={!!serviceBusy || !!servicePending}
 						onclick={() => serviceCommand('goto_well')}
 						class="flex-1 rounded border border-[var(--color-tron-border)] px-3 py-2 disabled:opacity-30"
-						style="color: var(--color-tron-text)">↩ Return to hole</button>
+						style="color: var(--color-tron-text)">↩ Go to next hole</button>
 					<button type="button" disabled={!!serviceBusy || !!servicePending}
 						onclick={() => serviceCommand('tip_cal')}
 						class="flex-1 rounded border border-[var(--color-tron-border)] px-3 py-2 disabled:opacity-30"
