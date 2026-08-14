@@ -4821,3 +4821,74 @@ Deployment: robot daemon update (B07 + B14 + R04) — /data/ot2-bridge/ot2-bridg
 Source: scripts/ot2-bridge.py @ this commit
 Retrieve this exact code: scripts/ot2-bridge.py @ this commit
 What this deployment is for: Studio Calibrate-tip and fill probes contact the calibrator at the same height, eliminating the teach-vs-fill adjust bias.
+
+================================================================================
+2026-08-14 — feat/wax-fill-service-mode — In-run service mode: pause the wax fill at a hole, jog/verify, change tip + recalibrate, resume on the exact well
+================================================================================
+Operators had no way to check a suspect hole mid-fill: the only controls were Play/Pause/Stop, so
+verifying an alignment meant stopping the run and losing the deck. This adds a "Pause & Calibrate"
+path that parks the fill between wells, shows the hole it was just at, and lets the operator jog
+X/Y/Z, return to that hole, change the tip, or force a tip calibration — then resume on the exact
+well it left off at.
+
+WHY IT LIVES IN THE PROTOCOL: the OT-2 only accepts gantry motion inside a maintenance run, and
+`openMaintenanceRun()` cannot open one while this run is alive — `clearStaleProtocolRun()`
+(maintenance.ts:67-92) classifies a `paused` protocol run as STALE and stops + DELETES it to free
+the run engine. So routing mid-run jogs through the existing maintenance/jog/tip-cal endpoints would
+destroy the fill. Nothing in the repo injects into a live protocol run either (zero POSTs to
+/runs/{id}/commands; `fixit` intent only applies in awaiting-recovery). The service loop therefore
+runs inside the protocol, where the pipette, deck geometry and tip-cal adjust are already ours —
+and because the run never stops, "resume exactly where it was" is just the next loop iteration.
+
+This is explicitly NOT the engine's Pause. A paused engine stops executing the protocol, so the
+service loop could neither move the gantry nor poll — it would deadlock. The new button is separate,
+and EmbeddedRunController's first-pause auto-resume is now gated on there being no open session so
+it can't fight the operator.
+
+TRANSPORT: the protocol talks to BIMS directly over HTTPS with stdlib urllib, reading BIMS_BASE_URL
+and BIMS_AGENT_API_KEY out of the bridge daemon's /data/ot2-bridge/.env (the robot already reaches
+BIMS outbound — that is what ot2-bridge.py does all day). Deliberately NOT the bridge command queue:
+that daemon executes one command at a time, so a parked session would stall the 2s run-status polls
+the operator's own screen depends on. Between wells the check is throttled to >=2.5s and any network
+failure answers "no", so a hiccup can never stall a fill. All of it is inert during analysis/
+simulation and whenever the bridge env is missing, so a robot without the daemon fills as before.
+
+Files:
+- NEW src/lib/server/db/models/ot2-service-session.ts — the session IS the channel (status,
+  location, one pendingCommand at a time with deliveredAt so a retried poll can't re-issue a
+  physical move twice, lastResult, history). Registered in models/index.ts.
+- NEW src/routes/api/agent/ot2/service/[runId]/+server.ts — protocol-facing. GET long-polls
+  (<=10s hold, maxDuration 30) and atomically hands out + marks delivered; POST takes
+  entered/location/result/resumed. requireAgentApiKey, same as the other /api/agent/ot2 routes.
+- NEW src/routes/api/opentrons-lab/robots/[id]/runs/[rid]/service/{+server.ts,command/+server.ts} —
+  operator-facing open/close/read and one-verb-at-a-time queueing, manufacturing:read/write plus an
+  AuditLog row per action. Jog clamped to +-10mm.
+- protocols/Wax_Filling_GEN7_Cartridge.py — split calibrate_current_tip() out of
+  pick_up_and_calibrate_tip() with the probe body UNCHANGED, so a re-calibration need not burn a
+  fresh tip; added the _svc_* helpers and _svc_session loop; added a checkpoint at the top of the
+  per-well dispense loop. Verbs: jog / goto_well / change_tip / tip_cal / resume.
+- src/lib/components/manufacturing/EmbeddedRunController.svelte — serviceEnabled prop (wax only),
+  service panel (jog pad with 0.1/0.5/1/5mm steps, return-to-hole, tip controls), and the "Last
+  action:" readout — which showed the run's ACTION history, not the protocol's position — replaced
+  by the real hole when a session is open.
+- src/routes/manufacturing/cart-mfg/wax-filling/+page.svelte — passes serviceEnabled.
+
+Two correctness points worth calling out:
+- Emptying the tip mid-batch (change_tip, or tip_cal with wax aboard — probing with wax in the tip
+  would smear the calibrator's limit switches) sets needs_reaspirate. The dispense loop then banks
+  what actually went out, moves well_index to the first UNFILLED well and re-enters the aspiration
+  cycle. Without that the rest of the batch would be dispensed from an empty tip and silently
+  under-filled.
+- Operator jog offsets are discarded on resume, and only a tip calibration changes the `adjust` the
+  fill uses. Silently folding a hand jog into the fill would corrupt calibration the same way the
+  stale-tipAdjust bug did on 2026-07-29.
+Wax is scoped first by request; the reagent protocol is untouched and serviceEnabled stays false there.
+
+npm run check: 10 errors / 434 warnings — all 10 pre-existing (r2.ts, AskBimsWidget.svelte,
+assembly/[sessionId]/+page.svelte); zero from these changes. Local `npm run build` is not run on this
+machine (it OOMs); the Vercel branch build is the gate.
+
+NOT YET DONE — this is untested against a robot. The protocol change must be deployed
+(OpentronProtocol.fileContent + re-upload) before any of it does anything, and the single biggest
+assumption to smoke-test first is that urllib.request works inside the Opentrons protocol sandbox on
+apiLevel 2.19. If it does not, the fallback is a flag file under /data written by a new daemon verb.

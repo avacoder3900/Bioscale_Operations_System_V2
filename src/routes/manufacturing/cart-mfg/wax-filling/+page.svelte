@@ -1236,6 +1236,7 @@
 					robotId={data.opentronsRobotId}
 					robotName={data.robotName}
 					opentronsRunId={data.runState.opentronsRunId}
+					serviceEnabled={true}
 					onComplete={(status) => {
 						// Stamp pipetteTipState.after + consumed onto the wax run.
 						// Wax status stays 'Running' until the operator confirms

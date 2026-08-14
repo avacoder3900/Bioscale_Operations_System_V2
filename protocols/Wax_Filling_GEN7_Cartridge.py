@@ -482,8 +482,13 @@ def run(protocol: protocol_api.ProtocolContext):
         protocol.comment(f'Loaded carriage for particle ID: {particle_id}')
         protocol.comment(f'Applied robot offsets: x={robot_offsets["x"]}, y={robot_offsets["y"]}, z={robot_offsets["z"]}')
 
-        def pick_up_and_calibrate_tip():
-            nonlocal _tip_index
+        def calibrate_current_tip():
+            """Probe the tip calibrator with the tip that is ALREADY attached.
+
+            Split out of pick_up_and_calibrate_tip with the probe body unchanged,
+            so in-run service mode (WAX-SERVICE-1) can force a re-calibration
+            without burning a fresh tip. pick_up_and_calibrate_tip now wraps this.
+            """
             # PRD 6: calibrator point + probe Z are RTPs (defaults = the previously
             # hardcoded values). Move points track cal_x/cal_y; the limit-switch
             # constants below shift by the same delta so the returned offset is
@@ -491,27 +496,6 @@ def run(protocol: protocol_api.ProtocolContext):
             cal_x = protocol.params.cal_x
             cal_y = protocol.params.cal_y
             z_cal = protocol.params.z_cal
-
-            if (pipette.has_tip):
-                pipette.drop_tip()
-
-            # Check if rack is exhausted before picking up
-            if not protocol.is_simulating() and _tip_index >= len(_all_tips):
-                protocol.pause('TIP TRACKER: tiprack exhausted — refill rack, enable "Tiprack Refilled" on next run, then click Resume to continue with current run from A1')
-                _tip_index = 0
-                pipette.starting_tip = _all_tips[0]
-                save_tip_state(0)
-
-            pipette.pick_up_tip()
-
-            # Persist immediately after pickup so an aborted run still advances the counter
-            if not protocol.is_simulating():
-                _tip_index += 1
-                save_tip_state(_tip_index)
-                if _tip_index < len(_all_tips):
-                    protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} — next tip will be {_all_tips[_tip_index].well_name} (index {_tip_index})')
-                else:
-                    protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} — rack now empty')
 
             pipette.move_to(types.Location(types.Point(x=cal_x, y=cal_y, z=z_cal), carriage), speed=None)
 
@@ -575,6 +559,274 @@ def run(protocol: protocol_api.ProtocolContext):
             pipette.move_to(types.Location(types.Point(x=cal_x + 2.0, y=cal_y + 1.0, z=z_cal + 20), carriage), force_direct=True, speed=20)
             
             return { 'x': xOffset, 'y': yOffset }
+
+        def pick_up_and_calibrate_tip():
+            """Drop any attached tip, take a fresh one, and calibrate it."""
+            nonlocal _tip_index
+
+            if (pipette.has_tip):
+                pipette.drop_tip()
+
+            # Check if rack is exhausted before picking up
+            if not protocol.is_simulating() and _tip_index >= len(_all_tips):
+                protocol.pause('TIP TRACKER: tiprack exhausted — refill rack, enable "Tiprack Refilled" on next run, then click Resume to continue with current run from A1')
+                _tip_index = 0
+                pipette.starting_tip = _all_tips[0]
+                save_tip_state(0)
+
+            pipette.pick_up_tip()
+
+            # Persist immediately after pickup so an aborted run still advances the counter
+            if not protocol.is_simulating():
+                _tip_index += 1
+                save_tip_state(_tip_index)
+                if _tip_index < len(_all_tips):
+                    protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} — next tip will be {_all_tips[_tip_index].well_name} (index {_tip_index})')
+                else:
+                    protocol.comment(f'TIP TRACKER: consumed tip {_all_tips[_tip_index - 1].well_name} — rack now empty')
+
+            return calibrate_current_tip()
+
+        # =====================================================================
+        # IN-RUN SERVICE MODE (WAX-SERVICE-1)
+        #
+        # Lets an operator interrupt a fill BETWEEN WELLS to check a hole, jog
+        # the gantry, change the tip, or force a tip calibration — without
+        # stopping the run.
+        #
+        # Why it lives in the protocol: the OT-2 only accepts gantry motion
+        # inside a maintenance run, and a maintenance run cannot be opened while
+        # this run is alive — BIMS would have to stop and delete the fill to get
+        # one. So the motion has to happen here, where the pipette is already
+        # ours. Nothing stops, so resuming lands on exactly the well we left.
+        #
+        # Channel: BIMS over HTTPS, reusing the bridge daemon's credentials from
+        # /data/ot2-bridge/.env. Deliberately NOT the bridge command queue — that
+        # daemon executes one command at a time, so a parked session would stall
+        # the run-status polls the operator's own screen depends on.
+        #
+        # Inert during analysis/simulation and whenever the bridge env is
+        # missing, so a robot without the daemon fills exactly as it did before.
+        # =====================================================================
+        import json as _json_svc
+        import urllib.request as _url_svc
+
+        _SVC_ENV_PATH = '/data/ot2-bridge/.env'
+        _SVC_MIN_POLL_S = 2.5       # between-well check cadence
+        _SVC_IDLE_WAIT_MS = 8000    # long-poll hold while parked
+        _SVC_HTTP_TIMEOUT_S = 15
+        # Wax must not sit congealing in the tip indefinitely; a session that
+        # outlives this resumes itself.
+        _SVC_MAX_SESSION_S = 900
+
+        _svc = { 'base': None, 'key': None, 'run_id': None, 'enabled': False, 'last_poll': 0.0 }
+
+        def _svc_http(method, path, body=None, timeout=None):
+            url = _svc['base'] + path
+            data = None
+            headers = { 'x-agent-api-key': _svc['key'] }
+            if body is not None:
+                data = _json_svc.dumps(body).encode('utf-8')
+                headers['Content-Type'] = 'application/json'
+            req = _url_svc.Request(url, data=data, headers=headers, method=method)
+            with _url_svc.urlopen(req, timeout=timeout or _SVC_HTTP_TIMEOUT_S) as resp:
+                raw = resp.read().decode('utf-8')
+            return _json_svc.loads(raw) if raw else {}
+
+        def _svc_discover_run_id():
+            """Ask the robot's own HTTP API which run is current — the protocol
+            context does not expose its run id."""
+            try:
+                req = _url_svc.Request('http://localhost:31950/runs',
+                                       headers={ 'opentrons-version': '3' })
+                with _url_svc.urlopen(req, timeout=5) as resp:
+                    body = _json_svc.loads(resp.read().decode('utf-8'))
+            except Exception:
+                return None
+            current = (body.get('links') or {}).get('current')
+            href = current.get('href') if isinstance(current, dict) else current
+            if isinstance(href, str) and href.strip('/'):
+                return href.rstrip('/').split('/')[-1]
+            for entry in (body.get('data') or []):
+                if entry.get('status') in ('running', 'paused', 'idle'):
+                    return entry.get('id')
+            return None
+
+        def _svc_setup():
+            if protocol.is_simulating():
+                return
+            try:
+                with open(_SVC_ENV_PATH) as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line or line.startswith('#') or '=' not in line:
+                            continue
+                        k, v = line.split('=', 1)
+                        v = v.strip().strip('"').strip("'")
+                        if k.strip() == 'BIMS_BASE_URL':
+                            _svc['base'] = v.rstrip('/')
+                        elif k.strip() == 'BIMS_AGENT_API_KEY':
+                            _svc['key'] = v
+            except Exception as _e:
+                protocol.comment(f'SERVICE: no bridge env at {_SVC_ENV_PATH} ({_e}) — in-run service disabled')
+                return
+            _svc['run_id'] = _svc_discover_run_id()
+            _svc['enabled'] = bool(_svc['base'] and _svc['key'] and _svc['run_id'])
+            if _svc['enabled']:
+                protocol.comment(f"SERVICE: in-run service available (run {_svc['run_id']})")
+            else:
+                protocol.comment('SERVICE: could not resolve BIMS URL/key/run id — in-run service disabled')
+
+        def _svc_post(event, **fields):
+            payload = { 'event': event }
+            payload.update(fields)
+            try:
+                return _svc_http('POST', f"/api/agent/ot2/service/{_svc['run_id']}", payload)
+            except Exception as _e:
+                protocol.comment(f'SERVICE: report failed ({_e})')
+                return {}
+
+        def _svc_wanted():
+            """Cheap throttled check, safe to call once per well.
+
+            A network hiccup must never stall a fill, so any failure answers
+            'no'."""
+            if not _svc['enabled']:
+                return False
+            now = time.time()
+            if now - _svc['last_poll'] < _SVC_MIN_POLL_S:
+                return False
+            _svc['last_poll'] = now
+            try:
+                body = _svc_http('GET', f"/api/agent/ot2/service/{_svc['run_id']}", timeout=5)
+            except Exception:
+                return False
+            return bool(body.get('service'))
+
+        def _svc_session(well, well_name, volume_ul, tip_no, adjust, base_z, jump_height, well_prejump_height):
+            """Park at this well and take operator commands until they resume.
+
+            Returns (adjust, needs_reaspirate). needs_reaspirate is True when the
+            tip was emptied — the caller must re-aspirate for the wells it has
+            not dispensed yet, or they would be dispensed dry.
+            """
+            needs_reaspirate = False
+            started = time.time()
+            # Operator jog offsets, applied ON TOP of the tip-cal adjust. These are
+            # for VERIFICATION ONLY and are deliberately discarded on resume —
+            # silently folding a hand jog into the fill would corrupt calibration.
+            off = { 'x': 0.0, 'y': 0.0, 'z': 0.0 }
+
+            def _go(z_extra=0.0):
+                pipette.move_to(well.top(base_z + off['z'] + z_extra).move(
+                    types.Point(adjust['x'] + off['x'], adjust['y'] + off['y'], 0.0)))
+
+            protocol.comment(f'SERVICE: parked at well {well_name} — awaiting operator')
+            _svc_post('entered', location={
+                'wellName': well_name, 'volumeUl': volume_ul, 'tipNumber': tip_no,
+                'adjustX': adjust['x'], 'adjustY': adjust['y']
+            })
+
+            while True:
+                if time.time() - started > _SVC_MAX_SESSION_S:
+                    protocol.comment('SERVICE: session time limit reached — resuming to protect the wax in the tip')
+                    _svc_post('resumed')
+                    break
+                try:
+                    body = _svc_http(
+                        'GET',
+                        f"/api/agent/ot2/service/{_svc['run_id']}?wait={_SVC_IDLE_WAIT_MS}",
+                        timeout=(_SVC_IDLE_WAIT_MS / 1000.0) + 10
+                    )
+                except Exception:
+                    time.sleep(1.0)
+                    continue
+
+                if not body.get('service'):
+                    protocol.comment('SERVICE: session closed — resuming the fill')
+                    break
+
+                cmd = body.get('command')
+                if not cmd:
+                    continue    # long-poll expired with nothing queued
+
+                verb = cmd.get('verb')
+                args = cmd.get('args') or {}
+                ok = True
+                detail = ''
+                try:
+                    if verb == 'jog':
+                        axis = args.get('axis')
+                        mm = float(args.get('mm') or 0.0)
+                        if axis not in ('x', 'y', 'z'):
+                            raise ValueError(f'bad jog axis {axis}')
+                        off[axis] += mm
+                        _go()
+                        detail = f"jog {axis} {mm:+.2f}mm (offset now x={off['x']:+.2f} y={off['y']:+.2f} z={off['z']:+.2f})"
+
+                    elif verb == 'goto_well':
+                        # Rewind: full safe approach back to the dispense point,
+                        # exactly the motion the fill itself uses.
+                        off['x'] = off['y'] = off['z'] = 0.0
+                        pipette.move_to(well.top(jump_height))
+                        pipette.move_to(well.top(jump_height).move(
+                            types.Point(adjust['x'], adjust['y'], 0.0)))
+                        protocol.delay(seconds=.3)
+                        pipette.move_to(well.top(well_prejump_height).move(
+                            types.Point(adjust['x'], adjust['y'], 0.0)))
+                        protocol.delay(seconds=.3)
+                        _go()
+                        detail = f'returned to well {well_name} dispense position'
+
+                    elif verb == 'change_tip':
+                        _svc_empty_tip()
+                        adjust = pick_up_and_calibrate_tip()
+                        needs_reaspirate = True
+                        off['x'] = off['y'] = off['z'] = 0.0
+                        detail = f"new tip calibrated: adjust x={adjust['x']} y={adjust['y']}"
+
+                    elif verb == 'tip_cal':
+                        # Probing with wax in the tip would smear the calibrator's
+                        # limit switches, so empty it first — which is why this
+                        # also forces a re-aspirate.
+                        if pipette.current_volume > 0:
+                            _svc_empty_tip()
+                            needs_reaspirate = True
+                        adjust = calibrate_current_tip()
+                        off['x'] = off['y'] = off['z'] = 0.0
+                        detail = f"recalibrated current tip: adjust x={adjust['x']} y={adjust['y']}"
+
+                    elif verb == 'resume':
+                        _svc_post('result', id=cmd.get('id'), verb=verb, ok=True, detail='resuming')
+                        _svc_post('resumed')
+                        protocol.comment(f'SERVICE: operator resumed at well {well_name}')
+                        break
+
+                    else:
+                        ok = False
+                        detail = f'unknown verb {verb}'
+                except Exception as _e:
+                    ok = False
+                    detail = f'{verb} failed: {_e}'
+                    protocol.comment(f'SERVICE: {detail}')
+
+                _svc_post('result', id=cmd.get('id'), verb=verb, ok=ok, detail=detail)
+
+            return adjust, needs_reaspirate
+
+        def _svc_empty_tip():
+            """Discard whatever is in the tip to the trash (operator's choice:
+            wax is not returned to the source once a tip is suspect)."""
+            if pipette.current_volume <= 0:
+                return
+            try:
+                pipette.blow_out(location=protocol.fixed_trash['A1'].top())
+            except Exception as _e:
+                # Trash handles differ across API levels; dropping the tip
+                # discards the wax with it either way.
+                protocol.comment(f'SERVICE: blow-out to trash unavailable ({_e}) — discarding with the tip')
+
+        _svc_setup()
 
         disposal_volume = 1
         maximum_volume_per_aspiration = 20
@@ -761,6 +1013,11 @@ def run(protocol: protocol_api.ProtocolContext):
                     dispensed_volume = 0
                     well_z_depth = -3.0 + z_offset
 
+                    # WAX-SERVICE-1: track how far into this batch we actually got,
+                    # so an operator interruption can rewind the cursor correctly.
+                    wells_done_this_batch = 0
+                    service_interrupted = False
+
                     for idx, well in enumerate(wells_to_fill):
                         # Determine volume and rate for this specific well via gate
                         well_name = wells_to_fill_names_batch[idx]
@@ -768,7 +1025,23 @@ def run(protocol: protocol_api.ProtocolContext):
                         gate = COLUMN_GATE.get(col, 'wax_gate4')
                         current_volume = well_volumes[gate]
                         current_rate = dispense_rates[gate]
-                        
+
+                        # --- in-run service checkpoint (WAX-SERVICE-1) -----------
+                        # Throttled and failure-tolerant: only actually stops when
+                        # an operator asked for it from BIMS.
+                        if _svc_wanted():
+                            adjust, _svc_reaspirate = _svc_session(
+                                well, well_name, current_volume, tip_change_count,
+                                adjust, well_z_depth, jump_height, well_prejump_height
+                            )
+                            # Back from the trash/calibrator — never assume the head
+                            # is still poised over this well. Force the full
+                            # lift-and-approach before the next dispense.
+                            first_dispense = True
+                            if _svc_reaspirate:
+                                service_interrupted = True
+                                break
+
                         # Wall clearance. idx == 0 arrives from the source tube, which is
                         # a cross-labware move the API already arcs deck-high, so only a
                         # crossing WITHIN a batch needs the explicit lift. The batch
@@ -790,11 +1063,25 @@ def run(protocol: protocol_api.ProtocolContext):
 
                         tip_change_count += 1
                         dispensed_volume += current_volume
+                        wells_done_this_batch += 1
                         protocol.comment(f'Dispensed {current_volume}uL into well {well_name} (tip #{tip_change_count})')
-                     
+
+                    if service_interrupted:
+                        # The tip was emptied mid-batch. Bank what actually went out,
+                        # move the cursor to the first well we did NOT fill, and let
+                        # the outer loop re-aspirate for the rest — dispensing the
+                        # remainder from an empty tip would silently under-fill them.
+                        source_volume -= dispensed_volume
+                        well_index += wells_done_this_batch
+                        protocol.comment(
+                            f'SERVICE: re-aspirating for the remaining '
+                            f'{wells_this_cycle - wells_done_this_batch} well(s) of this batch'
+                        )
+                        continue
+
                     source_volume -= dispensed_volume
                     well_index += wells_this_cycle
-                    
+
                     # Blow out remaining liquid
                     pipette.blow_out(location=source_well.top())
                     

@@ -28,13 +28,18 @@
 		robotName = 'OT-2',
 		opentronsRunId,
 		onComplete,
-		pollMs = 2000
+		pollMs = 2000,
+		serviceEnabled = false
 	} = $props<{
 		robotId: string;
 		robotName?: string;
 		opentronsRunId: string;
 		onComplete?: (status: string, run: any) => void;
 		pollMs?: number;
+		/** Show the in-run service panel (WAX-SERVICE-1). Only the wax fill
+		 *  protocol implements the in-protocol service loop, so this stays off
+		 *  for reagent until that protocol gets the same treatment. */
+		serviceEnabled?: boolean;
 	}>();
 
 	let run = $state<any>(null);
@@ -51,6 +56,23 @@
 	const TERMINAL = new Set(['succeeded', 'failed', 'stopped']);
 	const POLL_TIMEOUT_MS = 6000;
 	const ACTION_TIMEOUT_MS = 12000;
+
+	// ---- In-run service session (WAX-SERVICE-1) ---------------------------
+	// This is NOT the engine's Pause. A paused engine stops executing the
+	// protocol, so the in-protocol service loop could neither move the gantry
+	// nor poll — it would deadlock. The fill keeps running; it just parks
+	// itself between wells and takes commands.
+	let session = $state<any>(null);
+	let serviceBusy = $state<string | null>(null);
+	let serviceError = $state<string | null>(null);
+	let jogStep = $state(1);
+	const JOG_STEPS = [0.1, 0.5, 1, 5];
+	const SERVICE_URL = $derived(
+		`/api/opentrons-lab/robots/${robotId}/runs/${opentronsRunId}/service`
+	);
+	let serviceOpen = $derived(!!session);
+	let serviceParked = $derived(session?.status === 'active');
+	let servicePending = $derived(session?.pendingCommand?.id ?? null);
 
 	function schedulePoll() {
 		if (!destroyed) pollHandle = setTimeout(poll, pollMs);
@@ -80,11 +102,16 @@
 					lastError = null;
 					if (!terminalFired && TERMINAL.has(next)) {
 						terminalFired = true;
+						// The run is over, so nothing is left to park — don't leave a
+						// session hanging open against a dead run.
+						if (serviceEnabled && session) void toggleService('close');
 						if (onComplete) onComplete(next, run);
 					}
 					// Off-deck labware makes the engine pause once at the very start;
 					// auto-resume it (only the first pause, never error-recovery).
-					else if (!autoResumedInitial && next === 'paused') {
+					// Never fire while a service session is open — the operator is
+					// deliberately parked and auto-resuming would fight them.
+					else if (!autoResumedInitial && next === 'paused' && !serviceOpen) {
 						autoResumedInitial = true;
 						void handleAction('resume');
 					}
@@ -97,6 +124,7 @@
 				? 'Robot status timed out (bridge slow) — retrying'
 				: err instanceof Error ? err.message : 'Failed to reach robot';
 		}
+		if (serviceEnabled) await refreshSession();
 		// Keep polling even after terminal so the operator sees the final state.
 		schedulePoll();
 	}
@@ -136,6 +164,58 @@
 		} finally {
 			actionInFlight = null;
 			pollNow(); // reconcile to the robot's true state right away
+		}
+	}
+
+	async function refreshSession() {
+		try {
+			const res = await fetch(SERVICE_URL, { signal: AbortSignal.timeout(POLL_TIMEOUT_MS) });
+			if (res.ok) session = (await res.json()).session ?? null;
+		} catch {
+			// A failed session poll is not worth a banner — the next tick retries.
+		}
+	}
+
+	/** Ask the fill to park itself at the next well, or abandon the request. */
+	async function toggleService(action: 'open' | 'close') {
+		serviceBusy = action;
+		serviceError = null;
+		try {
+			const res = await fetch(SERVICE_URL, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ action }),
+				signal: AbortSignal.timeout(ACTION_TIMEOUT_MS)
+			});
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) serviceError = (body as any).message ?? `Request failed (${res.status})`;
+			else session = (body as any).session ?? null;
+		} catch (err) {
+			serviceError = err instanceof Error ? err.message : 'Request failed';
+		} finally {
+			serviceBusy = null;
+			void refreshSession();
+		}
+	}
+
+	/** Queue one verb for the parked protocol. Only one runs at a time. */
+	async function serviceCommand(verb: string, args: Record<string, unknown> = {}) {
+		serviceBusy = verb;
+		serviceError = null;
+		try {
+			const res = await fetch(`${SERVICE_URL}/command`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ verb, args }),
+				signal: AbortSignal.timeout(ACTION_TIMEOUT_MS)
+			});
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) serviceError = (body as any).message ?? `Command failed (${res.status})`;
+		} catch (err) {
+			serviceError = err instanceof Error ? err.message : 'Command failed';
+		} finally {
+			serviceBusy = null;
+			void refreshSession();
 		}
 	}
 
@@ -248,12 +328,105 @@
 		</div>
 	</div>
 
-	{#if currentCommand}
+	{#if serviceEnabled && session?.location?.wellName}
+		<div class="rounded border border-[var(--color-tron-border)] bg-black/20 p-2 text-xs">
+			<span class="uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
+				Last hole:
+			</span>
+			<span class="ml-2 font-mono" style="color: var(--color-tron-text)">
+				{session.location.wellName}
+				{#if session.location.volumeUl != null}· {session.location.volumeUl}µL{/if}
+				{#if session.location.tipNumber != null}· dispense #{session.location.tipNumber}{/if}
+			</span>
+		</div>
+	{:else if currentCommand}
 		<div class="rounded border border-[var(--color-tron-border)] bg-black/20 p-2 text-xs">
 			<span class="uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
 				Last action:
 			</span>
 			<span class="ml-2 font-mono" style="color: var(--color-tron-text)">{currentCommand}</span>
+		</div>
+	{/if}
+
+	{#if serviceEnabled && serviceOpen}
+		<div class="space-y-3 rounded-lg border border-orange-500/50 bg-orange-900/10 p-3">
+			<div class="flex items-baseline justify-between">
+				<h4 class="text-sm font-semibold text-orange-300">Calibrate mid-run</h4>
+				<span class="font-mono text-[11px] text-orange-300/80">
+					{serviceParked ? `parked at ${session?.location?.wellName ?? '—'}` : 'waiting for the fill to reach the next hole…'}
+				</span>
+			</div>
+
+			{#if serviceError}
+				<div class="rounded border border-red-500/40 bg-red-900/10 p-2 text-xs text-red-300">{serviceError}</div>
+			{/if}
+			{#if session?.lastResult?.detail}
+				<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-2 font-mono text-[11px]"
+					style="color: var(--color-tron-text-secondary)">
+					{session.lastResult.ok === false ? '✗' : '✓'} {session.lastResult.detail}
+				</div>
+			{/if}
+
+			{#if serviceParked}
+				<div class="flex items-center gap-2 text-xs">
+					<span style="color: var(--color-tron-text-secondary)">Step</span>
+					{#each JOG_STEPS as step (step)}
+						<button type="button" onclick={() => { jogStep = step; }}
+							class="rounded border px-2 py-0.5 font-mono {jogStep === step
+								? 'border-orange-400 bg-orange-900/40 text-orange-200'
+								: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}"
+						>{step}mm</button>
+					{/each}
+				</div>
+
+				<div class="grid grid-cols-3 gap-2 text-sm">
+					{#each [['x', 'X'], ['y', 'Y'], ['z', 'Z']] as [axis, label] (axis)}
+						<div class="flex items-center gap-1">
+							<button type="button" disabled={!!serviceBusy || !!servicePending}
+								onclick={() => serviceCommand('jog', { axis, mm: -jogStep })}
+								class="flex-1 rounded border border-[var(--color-tron-border)] py-1 font-mono disabled:opacity-30"
+								style="color: var(--color-tron-text)">−{label}</button>
+							<button type="button" disabled={!!serviceBusy || !!servicePending}
+								onclick={() => serviceCommand('jog', { axis, mm: jogStep })}
+								class="flex-1 rounded border border-[var(--color-tron-border)] py-1 font-mono disabled:opacity-30"
+								style="color: var(--color-tron-text)">+{label}</button>
+						</div>
+					{/each}
+				</div>
+
+				<div class="flex flex-wrap gap-2 text-xs">
+					<button type="button" disabled={!!serviceBusy || !!servicePending}
+						onclick={() => serviceCommand('goto_well')}
+						class="flex-1 rounded border border-[var(--color-tron-border)] px-3 py-2 disabled:opacity-30"
+						style="color: var(--color-tron-text)">↩ Return to hole</button>
+					<button type="button" disabled={!!serviceBusy || !!servicePending}
+						onclick={() => serviceCommand('tip_cal')}
+						class="flex-1 rounded border border-[var(--color-tron-border)] px-3 py-2 disabled:opacity-30"
+						style="color: var(--color-tron-text)">◎ Calibrate tip</button>
+					<button type="button" disabled={!!serviceBusy || !!servicePending}
+						onclick={() => serviceCommand('change_tip')}
+						class="flex-1 rounded border border-[var(--color-tron-border)] px-3 py-2 disabled:opacity-30"
+						style="color: var(--color-tron-text)">⟲ New tip + calibrate</button>
+				</div>
+
+				<p class="text-[11px] leading-snug" style="color: var(--color-tron-text-secondary)">
+					Jogging is for checking alignment only — the offset is discarded on resume.
+					Only a tip calibration changes what the fill uses. Emptying the tip re-aspirates
+					for the rest of the batch automatically.
+				</p>
+			{/if}
+
+			<div class="flex gap-2">
+				<button type="button" disabled={!!serviceBusy || !serviceParked || !!servicePending}
+					onclick={() => serviceCommand('resume')}
+					class="flex-1 rounded border border-green-500/50 bg-green-900/20 px-4 py-2 text-sm font-medium text-green-300 disabled:opacity-30"
+				>▶ Resume fill</button>
+				<button type="button" disabled={!!serviceBusy}
+					onclick={() => toggleService('close')}
+					class="rounded border border-[var(--color-tron-border)] px-3 py-2 text-sm disabled:opacity-30"
+					style="color: var(--color-tron-text-secondary)"
+				>Cancel</button>
+			</div>
 		</div>
 	{/if}
 
@@ -284,6 +457,19 @@
 		>
 			■ Stop
 		</button>
+		{#if serviceEnabled && !serviceOpen && runStatus === 'running'}
+			<!-- Deliberately NOT the engine's Pause: the fill keeps running and
+			     parks itself between holes, which is what lets it resume on the
+			     exact well it stopped at. -->
+			<button
+				type="button"
+				onclick={() => toggleService('open')}
+				disabled={!!serviceBusy}
+				class="flex-1 rounded border border-orange-500/50 bg-orange-900/20 px-4 py-2 text-sm font-medium text-orange-300 transition-colors hover:bg-orange-900/40 disabled:cursor-not-allowed disabled:opacity-30"
+			>
+				⚙ Pause &amp; Calibrate
+			</button>
+		{/if}
 	</div>
 
 	{#if TERMINAL.has(runStatus)}
