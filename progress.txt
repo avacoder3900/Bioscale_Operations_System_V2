@@ -7439,3 +7439,50 @@ Retrieve this exact code: git checkout master at commit 32909585
   (or: git log master --oneline to find it if master has since moved on)
 What this deployment is for: KB2-15 — the consolidated Flow page (Analytics merged in,
   per-person leaderboard widgets deleted) and the single kanban nav row.
+
+================================================================================
+2026-08-13 — master — SPU magnetometer stage calibration tool shipped to production
+================================================================================
+Alejandro: "lets push this feature to master".
+
+Merged feat/magnetometer-stage-calibration into master (fast-forward; origin/master
+was merged into the branch first — the only conflict was both sides appending to
+progress.txt, resolved by keeping both entries).
+
+What shipped:
+- /validation/magnetometer/calibration — the operator tool: home the stage, jog to
+  each well, capture the position of each, save a CalibrationRecord, and emit the
+  firmware constants (MAGNETOMETER_FIRST_POSITION / MAGNETOMETER_LAST_POSITION /
+  STAGE_MICRONS_TO_MAGNETOMETER_START_POSITION plus the well_move table) for pasting
+  into brevitest-firmware. The tool comes first; the firmware fix is its output.
+- Direct USB control: src/lib/services/spu-serial.ts drives the stage over Web Serial
+  from the browser, so the motion is visible in real time instead of round-tripping
+  through the Particle cloud. Cloud transport remains the fallback with no cable.
+- Live stage position readout while a jog/goto is in flight.
+- "Stage Calibration Tool" link added to the existing /validation/magnetometer page.
+
+svelte-check: 98 errors / 429 warnings — baseline (master's own), 0 in the new files.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 38464973
+Retrieve this exact code: git checkout master at commit 38464973
+  (or: git log master --oneline to find it if master has since moved on)
+What this deployment is for: measuring real magnetometer well positions on a bench SPU
+  and generating the firmware constants that replace the hardcoded ones.
+
+Corrections to the preview entry above (same date, feat/magnetometer-stage-calibration):
+- That entry says v90 is "NOT pushed and NOT flashed to any device" and that no
+  calibration had been captured on hardware. Both are now out of date. A calibration
+  WAS captured on BT-M01-0000-0203, the measured positions were written into the
+  firmware well_move table (brevitest-device-SPU_Firmware_v72_AV, branch
+  feat/magnetometer-stage-calibration @ 0795024), and that build is flashed to 0203.
+- The firmware branch is still local-only: 0795024 is NOT pushed to any remote, so
+  the constants live on this machine only. That is the next thing to lose.
+
+Still open:
+- The validation run (serial cmd 70) on 0203 is blocked on hardware: validate_magnets()
+  guards on device_state.detector_on, so the jig cartridge must be physically inserted
+  before the well readings can be taken. The tool's output is therefore not yet
+  confirmed against a passing validation run.
+- BT-M01-0000-0256 is still on the old product build (no prune_validation_files, old
+  well positions) and keeps serving stale magnet-validation files.
