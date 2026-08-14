@@ -7378,3 +7378,10 @@ What changed:
   $page.url.pathname; /api/kanban/wip-timeline re-imports from the new module.
 
 npm run check: 11 errors = baseline, 0 new.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 32909585
+Retrieve this exact code: git checkout master at commit 32909585
+  (or: git log master --oneline to find it if master has since moved on)
+What this deployment is for: KB2-15 — the consolidated Flow page (Analytics merged in,
+  per-person leaderboard widgets deleted) and the single kanban nav row.
