@@ -339,3 +339,19 @@ if (apiKey !== process.env.AGENT_API_KEY) return json({ error: 'Unauthorized' },
   zero new, and zero errors in any of the four touched components or the new
   checker. Local production build not attempted (OOMs ~30GB on this machine);
   Vercel branch build is the gate.
+- DEPLOYMENT 2026-08-14: committed bf600717 on perf/data-health-01, pushed to
+  origin (avacoder3900/Bioscale_Operations_System_V2) -> Vercel build SUCCESS
+  (~60s, no spurious-failure flip this time).
+  Deployment: preview —
+  https://bioscale-operations-system-mongodb-git-perf-da-5173e4-brevitest.vercel.app
+  (branch alias, same as the 2b469f46 deploy; stable across commits on this branch)
+  Inspector: https://vercel.com/brevitest/bioscale-operations-system-mongodb/2FNM8hRGtHyvWC4Pt1WZ4iHw5qyx
+  Source: branch perf/data-health-01 @ commit bf600717
+  Retrieve this exact code: git checkout perf/data-health-01 at commit bf600717
+  What this deployment is for: operator verification of the new scan flow — scan a
+  full wax deck and a reagent deck without interruption, then Check, and confirm
+  duplicates / over-capacity / already-filled barcodes come back flagged and block
+  submit until removed. Verified serving (200, redirects to login).
+  Pre-flight: every $lib/server import in the touched files confirmed tracked in
+  git before pushing — the 2026-07-13 b971b8bf failure on this branch was exactly
+  an untracked-but-imported file.
