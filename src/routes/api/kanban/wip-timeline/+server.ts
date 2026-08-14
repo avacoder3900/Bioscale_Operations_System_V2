@@ -1,6 +1,6 @@
 import { json } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { loadWipTimeline } from '$lib/server/kanban/analytics';
+import { loadWipTimeline } from '$lib/server/kanban/wip-timeline';
 import type { RequestHandler } from './$types';
 
 /**

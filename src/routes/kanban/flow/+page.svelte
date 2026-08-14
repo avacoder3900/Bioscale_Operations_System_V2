@@ -1,16 +1,25 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
+	import { page } from '$app/stores';
 	import TaskStatusBadge from '$lib/components/kanban/TaskStatusBadge.svelte';
+	import KpiCard from '$lib/components/kanban/KpiCard.svelte';
+	import CfdChart from '$lib/components/kanban/CfdChart.svelte';
+	import WipTimelineWidget from '$lib/components/kanban/WipTimelineWidget.svelte';
+	import ThroughputChart from '$lib/components/kanban/ThroughputChart.svelte';
+	import CycleScatterChart from '$lib/components/kanban/CycleScatterChart.svelte';
+	import AgingWipChart from '$lib/components/kanban/AgingWipChart.svelte';
+	import TimeInStatusChart from '$lib/components/kanban/TimeInStatusChart.svelte';
+	import PerProjectTable from '$lib/components/kanban/PerProjectTable.svelte';
+	import SourceMixDonut from '$lib/components/kanban/SourceMixDonut.svelte';
 
 	let { data } = $props();
 
 	let age = $derived(data.metrics.workItemAge.items as any[]);
 	let sle = $derived(data.metrics.workItemAge.sle);
 	let ratio = $derived(data.metrics.discoveredRatio);
-	let weekly = $derived(data.metrics.weeklyDone as { week: string; n: number }[]);
 	let expedite = $derived(data.metrics.expedite);
 	let efficiency = $derived(data.metrics.flowEfficiency);
-
-	let maxWeekly = $derived(Math.max(1, ...weekly.map((w) => w.n)));
+	let kpi = $derived(data.history.kpi);
 
 	// KB2-14 — capacity + replenishment history, moved from the retired Replenish page.
 	let wipByClass = $derived(data.capacity.wipByClassOfService as Record<string, number>);
@@ -18,16 +27,27 @@
 	let wipTotal = $derived(Object.values(wipByClass).reduce((a, b) => a + b, 0));
 	const classOrder = ['standard', 'fixed_date', 'chore', 'expedite'];
 
+	// KB2-15 — range selector for the historical charts. Flow's signal cards
+	// keep their policy-defined windows; range is for exploration.
+	const ranges: { key: '7d' | '30d' | '90d' | 'all'; label: string }[] = [
+		{ key: '7d', label: '7 days' },
+		{ key: '30d', label: '30 days' },
+		{ key: '90d', label: '90 days' },
+		{ key: 'all', label: 'All' }
+	];
+
+	function setRange(key: '7d' | '30d' | '90d' | 'all') {
+		const params = new URLSearchParams($page.url.searchParams);
+		params.set('range', key);
+		goto(`${$page.url.pathname}?${params.toString()}`, { replaceState: true, noScroll: true });
+	}
+
 	function fmtWhen(d: string): string {
 		return new Date(d).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 	}
 
 	const flowDebtExplanation =
 		'Aged past its SLE while newer items finished — the measurable cherry-picking signature. Diagnosed in the work, not in people.';
-
-	function fmtWeek(w: string): string {
-		return new Date(w).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-	}
 
 	const sizeClasses = ['short', 'medium', 'long'];
 
@@ -39,13 +59,66 @@
 </script>
 
 <div class="space-y-6">
-	<div>
-		<h2 class="tron-text-primary text-2xl font-bold">Flow</h2>
-		<p class="tron-text-muted text-sm">
-			How work moves on the <span class="font-bold uppercase">{data.board}</span> board.
-			No people on this screen — the pathology is diagnosed in the work.
-		</p>
+	<div class="flex flex-wrap items-center justify-between gap-4">
+		<div>
+			<h2 class="tron-text-primary text-2xl font-bold">Flow</h2>
+			<p class="tron-text-muted text-sm">
+				How work moves on the <span class="font-bold uppercase">{data.board}</span> board —
+				{data.history.taskCount.active} active · {data.history.taskCount.archivedInRange} archived in range.
+				The pathology is diagnosed in the work, not in people.
+			</p>
+		</div>
+
+		<!-- Date range selector — drives the historical charts below -->
+		<div class="flex items-center gap-1 rounded-lg border border-[var(--color-tron-border)] p-1">
+			{#each ranges as r}
+				{@const active = data.history.range === r.key}
+				<button
+					type="button"
+					class="rounded px-3 py-1 text-xs font-medium transition-all {active
+						? 'bg-[var(--color-tron-cyan)] text-[var(--color-tron-bg-primary)]'
+						: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
+					onclick={() => setRange(r.key)}
+				>
+					{r.label}
+				</button>
+			{/each}
+		</div>
 	</div>
+
+	<!-- KPI cards (KB2-15, ported from Analytics; person-free) -->
+	<section class="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
+		<KpiCard
+			label="Active tasks"
+			value={String(kpi.activeTasks)}
+			subline="not archived, not done"
+			accent="#00d4ff"
+		/>
+		<KpiCard
+			label="Throughput"
+			value={String(kpi.throughputInRange)}
+			subline="completed in range"
+			accent="#00ff88"
+		/>
+		<KpiCard
+			label="WIP right now"
+			value={String(kpi.wipCount)}
+			subline="across {kpi.wipAssignees} {kpi.wipAssignees === 1 ? 'person' : 'people'}"
+			accent="#ff6600"
+		/>
+		<KpiCard
+			label="Stuck in Waiting"
+			value={String(kpi.waitingCount)}
+			subline={kpi.oldestWaitingDays === null ? 'none' : `oldest: ${kpi.oldestWaitingDays}d`}
+			accent="#ff3366"
+		/>
+		<KpiCard
+			label="Aging tasks"
+			value={String(kpi.agingCount)}
+			subline="{kpi.criticalAgingCount} critical"
+			accent="#f59e0b"
+		/>
+	</section>
 
 	<!-- Signal cards -->
 	<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -161,26 +234,25 @@
 		{/if}
 	</section>
 
-	<!-- Weekly throughput -->
-	<section class="tron-card !p-4">
-		<h3 class="tron-text-primary mb-3 text-sm font-bold uppercase tracking-wide">Throughput — items done per week</h3>
-		{#if weekly.length === 0}
-			<p class="tron-text-muted text-xs">No completions in the window yet.</p>
-		{:else}
-			<div class="flex h-40 items-end gap-2">
-				{#each weekly as w (w.week)}
-					<div class="flex flex-1 flex-col items-center gap-1">
-						<span class="tron-text-primary text-xs font-bold">{w.n}</span>
-						<div
-							class="w-full rounded-t"
-							style="height: {(w.n / maxWeekly) * 100}%; min-height: 3px; background: var(--color-tron-cyan);"
-							title="{w.n} done, week of {fmtWeek(w.week)}"
-						></div>
-						<span class="tron-text-muted text-[10px]">{fmtWeek(w.week)}</span>
-					</div>
-				{/each}
-			</div>
-		{/if}
+	<!-- CFD (KB2-15, ported; board + range aware) -->
+	<CfdChart points={data.history.cfd} />
+
+	<!-- Daily WIP timeline (KB2-15, ported) — coordination view: who is on what.
+	     Cross-board by design (one human, one limit). No totals, ever. -->
+	<WipTimelineWidget data={data.wipTimeline} />
+
+	<!-- Historical flow charts (KB2-15, ported; board + range aware) -->
+	<section class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+		<ThroughputChart points={data.history.throughput} />
+		<CycleScatterChart block={data.history.cycleScatter} />
+		<AgingWipChart rows={data.history.agingWip} />
+		<TimeInStatusChart rows={data.history.timeInStatus} />
+	</section>
+
+	<!-- Entry mix + per-project breakdown (KB2-15, ported; person-free) -->
+	<section class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+		<SourceMixDonut slices={data.history.sourceMix} />
+		<PerProjectTable rows={data.history.perProject} />
 	</section>
 
 	<!-- KB2-14: capacity + replenishment history (moved from the retired Replenish page) -->

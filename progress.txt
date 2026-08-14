@@ -7336,3 +7336,45 @@ Retrieve this exact code: git checkout master at commit fae44b7c
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: reagent run timer shows a countdown as the headline number
 again (elapsed demoted to a secondary line), still robot-driven for completion.
+
+================================================================================
+2026-08-14 — master — KB2-15: Analytics folded into Flow, single kanban nav
+================================================================================
+Consolidated the two overlapping metrics pages per Jacob's direction (PRD:
+docs/prds/KB2-15-flow-consolidation.md, written first per Ralph protocol). The old
+/kanban/analytics page had the richer charts but the wrong philosophy: no board filter
+(mixed ops+software into every number), still read the retired user.wipLimit field, and
+carried three per-person widgets that violated KB2-00 decision #12 (no per-person
+productivity aggregates).
+
+Decisions (Jacob, in-session): keep the daily WIP timeline — "who is working on what" is a
+present-tense coordination view (per-person WIP is a limit, not a score); DELETE the
+per-assignee table (done-count + load score = a leaderboard) and the creator-mix donut
+(creation counts reward ticket spam). One throughput chart, not two. Page keeps the name
+Flow at /kanban/flow.
+
+What changed:
+- NEW src/lib/server/kanban/flow-history.ts — person-free historical computations ported
+  from analytics.ts (KPI block, CFD, throughput, cycle scatter, aging rows, time-in-status,
+  per-project, source mix), all (board, range) aware. Keeps the activityLog-replay method
+  (only source covering pre-KB2 archived history; transitionTask() writes identical entries
+  so it stays correct going forward). Ops board filter is {$ne:'software'} so pre-migration
+  stragglers without a board field still count.
+- NEW src/lib/server/kanban/wip-timeline.ts — WIP timeline moved out of analytics.ts; lane
+  count now from KanbanPolicy.wipPerPerson (retires the last read of user.wipLimit).
+  Header documents the decision-#12 boundary: per-person presence allowed, per-person
+  aggregation never.
+- DELETED src/lib/server/kanban/analytics.ts (889 lines), PerAssigneeTable.svelte,
+  CreatorMixDonut.svelte, kanban/analytics/+page.svelte.
+- /kanban/analytics → 302 redirect stub to /kanban/flow (range preserved) — same pattern
+  as the KB2-14 /kanban/replenish stub.
+- flow/+page.server.ts + +page.svelte — merged page: range selector, 5 KPI cards, flow
+  signal cards, Work Item Age, CFD, WIP timeline, throughput bar + cycle scatter, aging +
+  time-in-status, source mix + per-project, capacity + replenishment events. Flow's old
+  inline weekly bars replaced by the Chart.js ThroughputChart. flow-metrics.ts and the MCP
+  kanban_flow_metrics payload untouched.
+- Single nav row: KanbanNav gains Projects + Archive; the second header nav in
+  kanban/+layout.svelte removed. WipTimelineWidget's hardcoded /kanban/analytics gotos →
+  $page.url.pathname; /api/kanban/wip-timeline re-imports from the new module.
+
+npm run check: 11 errors = baseline, 0 new.

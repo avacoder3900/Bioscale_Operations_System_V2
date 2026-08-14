@@ -2,13 +2,16 @@
 	import { page } from '$app/stores';
 	import type { KanbanBoard } from '$lib/shared/kanban-status';
 
-	// Primary two-tier views (KB2-06; KB2-14 folded Replenish into Inventory).
+	// The single kanban nav (KB2-06; KB2-14 folded Replenish into Inventory;
+	// KB2-15 folded Analytics into Flow and absorbed the old header nav).
 	// Every link preserves the ?board= param.
 	const tabs = [
 		{ href: '/kanban', label: 'Queue' },
 		{ href: '/kanban/inventory', label: 'Inventory' },
 		{ href: '/kanban/flow', label: 'Flow' },
-		{ href: '/kanban/policy', label: 'Policy' }
+		{ href: '/kanban/policy', label: 'Policy' },
+		{ href: '/kanban/projects', label: 'Projects' },
+		{ href: '/kanban/archived', label: 'Archive' }
 	];
 
 	let board = $derived<KanbanBoard>(

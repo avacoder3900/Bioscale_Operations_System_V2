@@ -1,6 +1,5 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { page } from '$app/stores';
 	import GridBackground from '$lib/components/ui/GridBackground.svelte';
 	import KanbanNav from '$lib/components/kanban/KanbanNav.svelte';
 
@@ -12,30 +11,8 @@
 	}
 
 	let { children, data }: Props = $props();
-
-	// Secondary destinations — the primary two-tier views live in KanbanNav below.
-	const navItems = [
-		{
-			href: '/kanban/analytics',
-			label: 'Analytics',
-			icon: 'M3 3v18h18M7 17l4-4 4 4 6-6'
-		},
-		{
-			href: '/kanban/projects',
-			label: 'Projects',
-			icon: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z'
-		},
-		{
-			href: '/kanban/archived',
-			label: 'Archive',
-			icon: 'M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4'
-		}
-	];
-
-	function isActive(href: string, currentPath: string): boolean {
-		if (href === '/kanban') return currentPath === '/kanban';
-		return currentPath.startsWith(href);
-	}
+	// KB2-15: the old secondary header nav (Analytics | Projects | Archive) is
+	// gone — every destination lives on the single KanbanNav row below.
 </script>
 
 <GridBackground>
@@ -67,28 +44,6 @@
 							<p class="tron-text-muted text-xs">Task Management</p>
 						</div>
 					</div>
-					<nav class="flex items-center gap-1">
-						{#each navItems as item}
-							{@const active = isActive(item.href, $page.url.pathname)}
-							<a
-								href={item.href}
-								class="flex min-h-[var(--size-touch-target)] items-center gap-2 rounded-lg px-4 py-2 transition-all duration-200
-									{active
-									? 'bg-[var(--color-tron-cyan)] text-[var(--color-tron-bg-primary)]'
-									: 'text-[var(--color-tron-text-secondary)] hover:bg-[var(--color-tron-bg-tertiary)] hover:text-[var(--color-tron-cyan)]'}"
-							>
-								<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-									<path
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										stroke-width="2"
-										d={item.icon}
-									/>
-								</svg>
-								<span class="font-medium">{item.label}</span>
-							</a>
-						{/each}
-					</nav>
 				</div>
 			</div>
 		</header>
