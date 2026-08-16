@@ -11,7 +11,6 @@ const kanbanTemplateSchema = new Schema(
 	{
 		_id: { type: String, default: () => generateId() },
 		name: { type: String, required: true },
-		board: { type: String, enum: ['ops', 'software'], default: 'ops' },
 		active: { type: Boolean, default: true },
 		itemType: { type: String, enum: ['deliverable', 'chore'], default: 'deliverable' },
 		sizeClass: { type: String, enum: ['short', 'medium', 'long'], required: true },
@@ -23,8 +22,7 @@ const kanbanTemplateSchema = new Schema(
 			deliverable: { type: String, required: true },
 			handoffBrief: String
 		},
-		tags: [String],
-		defaultProjectId: String,
+		tags: [String], // KB2-16: tags replaced defaultProjectId — the item inherits these at capture
 		notes: String,
 		createdBy: String
 	},

@@ -1,5 +1,4 @@
 import { connectDB, KanbanPolicy } from '$lib/server/db';
-import type { KanbanBoard } from '$lib/shared/kanban-status';
 
 /** Load the policy singleton, creating it with seed defaults on first use. */
 export async function getKanbanPolicy(): Promise<any> {
@@ -12,9 +11,14 @@ export async function getKanbanPolicy(): Promise<any> {
 	return policy;
 }
 
-export function boardPolicyOf(policy: any, board: KanbanBoard): { readyCap: number; minOrderPoint: number } {
+/**
+ * KB2-16: one queue, one policy block. Falls back to the pre-migration
+ * boards.ops values so the code is safe to deploy before the data migration
+ * has run.
+ */
+export function queuePolicyOf(policy: any): { readyCap: number; minOrderPoint: number } {
 	return {
-		readyCap: policy?.boards?.[board]?.readyCap ?? 8,
-		minOrderPoint: policy?.boards?.[board]?.minOrderPoint ?? 3
+		readyCap: policy?.readyCap ?? policy?.boards?.ops?.readyCap ?? 8,
+		minOrderPoint: policy?.minOrderPoint ?? policy?.boards?.ops?.minOrderPoint ?? 3
 	};
 }

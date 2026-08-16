@@ -6,19 +6,14 @@ import mongoose, { Schema } from 'mongoose';
  * adjustable via admin UI / MCP without a deploy. Numbers are SEEDS to be
  * recomputed from measured flow (see recalibrateAfter).
  */
-const boardPolicy = {
-	readyCap: { type: Number, default: 8 },
-	minOrderPoint: { type: Number, default: 3 }
-};
-
 const kanbanPolicySchema = new Schema(
 	{
 		_id: { type: String, default: 'default' },
-		boards: {
-			ops: boardPolicy,
-			software: boardPolicy
-		},
-		wipPerPerson: { type: Number, default: 2 }, // across BOTH boards combined
+		// KB2-16: one board, one queue — the per-board policy blocks collapsed to
+		// a single top-level pair (migration copies the old boards.ops values).
+		readyCap: { type: Number, default: 8 },
+		minOrderPoint: { type: Number, default: 3 },
+		wipPerPerson: { type: Number, default: 2 }, // one human, one limit
 		wipChoreMax: { type: Number, default: 1 },
 		pullWindow: { type: Number, default: 3 }, // pull only from top-N of global ready order
 		expedite: {

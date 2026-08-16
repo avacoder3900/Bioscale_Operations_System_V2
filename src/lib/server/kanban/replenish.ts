@@ -9,9 +9,8 @@
 import { connectDB, KanbanTask, User, AuditLog, generateId } from '$lib/server/db';
 import { hasPermission, isAdmin } from '$lib/server/permissions';
 import { transitionTask, type TransitionVia } from './transition.js';
-import { getKanbanPolicy, boardPolicyOf } from './policy.js';
+import { getKanbanPolicy, queuePolicyOf } from './policy.js';
 import { renumberReady, checkMinOrderPoint } from './queue.js';
-import type { KanbanBoard } from '$lib/shared/kanban-status';
 
 export class ReplenishError extends Error {
 	code: 'ACTOR_INVALID' | 'PERMISSION_DENIED' | 'NOT_ELIGIBLE' | 'DOR_INCOMPLETE' | 'READY_CAP' | 'NOT_FOUND';
@@ -57,7 +56,9 @@ export function dorMissingFields(task: any): string[] {
 	if (!task.sizeClass) missing.push('sizeClass (set at processing)');
 	if (!task.classOfService) missing.push('classOfService (set at processing)');
 	if (task.classOfService === 'fixed_date' && !task.dueDate) missing.push('dueDate (fixed_date items need a real external date)');
-	if (task.board === 'software' && !task.dor?.handoffBrief?.trim()) {
+	// KB2-16: 'software' is a tag now, but the invariant survives — software
+	// items still commit with a coding-agent handoff brief (KB2-08).
+	if ((task.tags ?? []).includes('software') && !task.dor?.handoffBrief?.trim()) {
 		missing.push('dor.handoffBrief (the coding-agent handoff brief — software items commit with one)');
 	}
 	if (task.itemType === 'spike') {
@@ -67,8 +68,8 @@ export function dorMissingFields(task: any): string[] {
 	return missing;
 }
 
-async function readyTasks(board: KanbanBoard) {
-	return (await KanbanTask.find({ board, status: 'ready', archived: false })
+async function readyTasks() {
+	return (await KanbanTask.find({ status: 'ready', archived: false })
 		.sort({ rank: 1 })
 		.select('_id title rank classOfService itemType')
 		.lean()) as any[];
@@ -88,15 +89,13 @@ export interface ReplenishResult {
  */
 export async function replenish(opts: {
 	taskIds: string[];
-	board?: KanbanBoard;
 	actorUsername: string;
 	via: TransitionVia;
 	note?: string;
 }): Promise<ReplenishResult> {
 	const actor = await requireReplenisher(opts.actorUsername);
-	const board = opts.board ?? 'ops';
 	const policy = await getKanbanPolicy();
-	const { readyCap } = boardPolicyOf(policy, board);
+	const { readyCap } = queuePolicyOf(policy);
 	const eventId = generateId();
 	const now = new Date();
 
@@ -107,10 +106,6 @@ export async function replenish(opts: {
 		const task: any = await KanbanTask.findById(taskId).lean();
 		if (!task) {
 			rejected.push({ taskId, reason: 'not found' });
-			continue;
-		}
-		if (task.board !== board) {
-			rejected.push({ taskId, title: task.title, reason: `on the '${task.board}' board, not '${board}'` });
 			continue;
 		}
 		if (task.status !== 'processed') {
@@ -147,12 +142,10 @@ export async function replenish(opts: {
 		if (task.itemType === 'chore' || task.classOfService === 'chore') {
 			const chorePct = policy?.allocation?.chore ?? 15;
 			const committed = await KanbanTask.countDocuments({
-				board,
 				status: { $in: ['ready', 'wip', 'waiting', 'blocked', 'review'] },
 				archived: false
 			});
 			const chores = await KanbanTask.countDocuments({
-				board,
 				status: { $in: ['ready', 'wip', 'waiting', 'blocked', 'review'] },
 				archived: false,
 				$or: [{ itemType: 'chore' }, { classOfService: 'chore' }]
@@ -163,7 +156,7 @@ export async function replenish(opts: {
 				continue;
 			}
 		}
-		const readyCount = await KanbanTask.countDocuments({ board, status: 'ready', archived: false });
+		const readyCount = await KanbanTask.countDocuments({ status: 'ready', archived: false });
 		if (readyCount >= readyCap) {
 			rejected.push({ taskId, title: task.title, reason: `ready cap reached (${readyCount}/${readyCap}) — demote something or raise the cap in policy` });
 			continue;
@@ -183,8 +176,8 @@ export async function replenish(opts: {
 		promoted.push({ taskId, title: task.title, rank });
 	}
 
-	await renumberReady(board);
-	await checkMinOrderPoint(board);
+	await renumberReady();
+	await checkMinOrderPoint();
 
 	await AuditLog.create({
 		_id: generateId(),
@@ -193,7 +186,6 @@ export async function replenish(opts: {
 		action: 'UPDATE',
 		newData: {
 			event: 'replenishment',
-			board,
 			promoted: promoted.map((p) => p.taskId),
 			rejected: rejected.map((r) => ({ taskId: r.taskId, reason: r.reason })),
 			note: opts.note,
@@ -203,7 +195,7 @@ export async function replenish(opts: {
 		changedAt: now
 	});
 
-	const readyCount = await KanbanTask.countDocuments({ board, status: 'ready', archived: false });
+	const readyCount = await KanbanTask.countDocuments({ status: 'ready', archived: false });
 	return { eventId, promoted, rejected, readyCount, readyCap };
 }
 
@@ -234,10 +226,8 @@ export async function demote(opts: {
 		allowTierCrossing: true,
 		reason: opts.reason.trim()
 	});
-	// Back into the Tier 1 scope at the bottom of its project's rank order.
+	// Back into Tier 1 at the bottom of the global rank order.
 	const last: any = await KanbanTask.findOne({
-		board: task.board,
-		'project._id': task.project?._id ?? null,
 		status: { $in: ['captured', 'processed'] },
 		archived: false,
 		_id: { $ne: opts.taskId }
@@ -247,29 +237,27 @@ export async function demote(opts: {
 		.lean();
 	await KanbanTask.updateOne({ _id: opts.taskId }, { $set: { rank: (last?.rank ?? 0) + 1 } });
 
-	await renumberReady(task.board ?? 'ops');
-	await checkMinOrderPoint(task.board ?? 'ops');
+	await renumberReady();
+	await checkMinOrderPoint();
 	return { taskId: opts.taskId, title: task.title };
 }
 
-/** Explicit, audited re-rank. Tier 2: scope='ready'. Tier 1: scope={projectId}. */
+/** Explicit, audited re-rank. Tier 2: scope='ready'. Tier 1: scope='tier1' (KB2-16: one flat list). */
 export async function reorder(opts: {
-	board?: KanbanBoard;
-	scope: 'ready' | { projectId: string };
+	scope: 'ready' | 'tier1';
 	orderedTaskIds: string[];
 	actorUsername: string;
 	via: TransitionVia;
 }): Promise<{ reordered: number }> {
 	// Ready-queue reordering is a commitment-order decision → replenisher permission.
-	// Tier 1 project ordering is ordinary management → kanban:write is checked by the endpoints.
-	const board = opts.board ?? 'ops';
+	// Tier 1 ordering is ordinary management → kanban:write is checked by the endpoints.
 	if (opts.scope === 'ready') await requireReplenisher(opts.actorUsername);
 	await connectDB();
 
 	const filter =
 		opts.scope === 'ready'
-			? { board, status: 'ready', archived: false }
-			: { board, 'project._id': opts.scope.projectId, status: { $in: ['captured', 'processed'] }, archived: false };
+			? { status: 'ready', archived: false }
+			: { status: { $in: ['captured', 'processed'] }, archived: false };
 	const inScope = (await KanbanTask.find(filter).select('_id').lean()) as any[];
 	const inScopeIds = new Set(inScope.map((t) => String(t._id)));
 
@@ -288,7 +276,7 @@ export async function reorder(opts: {
 	await AuditLog.create({
 		_id: generateId(),
 		tableName: 'kanban_tasks',
-		recordId: opts.scope === 'ready' ? `reorder:ready:${board}` : `reorder:project:${opts.scope.projectId}`,
+		recordId: opts.scope === 'ready' ? 'reorder:ready' : 'reorder:tier1',
 		action: 'UPDATE',
 		newData: { event: 'reorder', order: opts.orderedTaskIds, via: opts.via },
 		changedBy: opts.actorUsername,
@@ -298,28 +286,26 @@ export async function reorder(opts: {
 }
 
 /** The "should we replenish?" one-call: candidates, capacity, signals. */
-export async function replenishmentStatus(board: KanbanBoard = 'ops') {
+export async function replenishmentStatus() {
 	const policy = await getKanbanPolicy();
-	const { readyCap, minOrderPoint } = boardPolicyOf(policy, board);
-	const ready = await readyTasks(board);
+	const { readyCap, minOrderPoint } = queuePolicyOf(policy);
+	const ready = await readyTasks();
 
 	const candidates = (await KanbanTask.find({
-		board,
 		status: { $in: ['captured', 'processed'] },
 		archived: false
 	})
-		.sort({ 'project._id': 1, rank: 1 })
-		.select('_id title status rank project itemType classOfService sizeClass origin dor spike')
+		.sort({ rank: 1, createdAt: 1 })
+		.select('_id title status rank tags itemType classOfService sizeClass origin dor spike')
 		.lean()) as any[];
 
-	const wip = (await KanbanTask.find({ board, status: 'wip', archived: false })
+	const wip = (await KanbanTask.find({ status: 'wip', archived: false })
 		.select('classOfService')
 		.lean()) as any[];
 	const byClass: Record<string, number> = {};
 	for (const t of wip) byClass[t.classOfService ?? 'standard'] = (byClass[t.classOfService ?? 'standard'] ?? 0) + 1;
 
 	return {
-		board,
 		ready: { count: ready.length, cap: readyCap, minOrderPoint, belowMinOrderPoint: ready.length < minOrderPoint, queue: ready },
 		wipByClassOfService: byClass,
 		allocationTargetsPct: policy.allocation,
@@ -329,7 +315,7 @@ export async function replenishmentStatus(board: KanbanBoard = 'ops') {
 				taskId: c._id,
 				title: c.title,
 				status: c.status,
-				project: c.project?.name,
+				tags: c.tags ?? [],
 				rank: c.rank,
 				itemType: c.itemType,
 				classOfService: c.classOfService,

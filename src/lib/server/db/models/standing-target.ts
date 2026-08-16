@@ -11,7 +11,6 @@ const standingTargetSchema = new Schema(
 	{
 		_id: { type: String, default: () => generateId() },
 		name: { type: String, required: true }, // "Filled cartridges on hand"
-		board: { type: String, default: 'ops' },
 		metric: {
 			// reagent_stock: ReagentInventory items (research-v2 shared collection).
 			// Future chemistry inventory systems: add a kind here + a computeActual case

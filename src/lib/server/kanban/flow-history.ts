@@ -1,7 +1,9 @@
 /**
  * KB2-15 — person-free historical chart data for the consolidated Flow view
- * (CFD, throughput, cycle scatter, aging, time-in-status, per-project, source
- * mix, KPI block). Ported from the retired analytics.ts, made board-aware.
+ * (CFD, throughput, cycle scatter, aging, time-in-status, per-tag, source
+ * mix, KPI block). Ported from the retired analytics.ts. KB2-16: the board
+ * discriminator and per-project breakdown are gone — one board, tags carry
+ * the grouping.
  *
  * HARD CONSTRAINT — same as flow-metrics.ts, enforced here at the query layer:
  * nothing in this module returns per-person throughput, per-person cycle time,
@@ -14,16 +16,16 @@
  * history, and transitionTask() writes identical entries, so it stays correct
  * for post-KB2 data too.
  */
-import { connectDB, KanbanTask, KanbanProject } from '$lib/server/db';
+import { connectDB, KanbanTask } from '$lib/server/db';
 import {
 	ALL_STATUSES,
 	STATUS_META,
 	AGING_THRESHOLDS,
 	agingLevel,
 	type AgingLevel,
-	type KanbanBoard,
 	type KanbanStatus
 } from '$lib/shared/kanban-status';
+import { tagColor } from '$lib/shared/tag-color';
 
 export type FlowHistoryRange = '7d' | '30d' | '90d' | 'all';
 
@@ -52,7 +54,7 @@ export type CycleScatterPoint = {
 	title: string;
 	completedAt: string;
 	cycleTimeDays: number;
-	projectColor: string;
+	color: string; // KB2-16: hashed from the first tag (was project color)
 };
 
 export type CycleScatterBlock = {
@@ -84,9 +86,8 @@ export type TimeInStatusRow = {
 	segments: TimeInStatusSegment[];
 };
 
-export type PerProjectRow = {
-	id: string;
-	name: string;
+export type PerTagRow = {
+	tag: string;
 	color: string;
 	active: number;
 	doneInRange: number;
@@ -113,7 +114,7 @@ export type FlowHistoryData = {
 	cycleScatter: CycleScatterBlock;
 	agingWip: AgingWipRow[];
 	timeInStatus: TimeInStatusRow[];
-	perProject: PerProjectRow[];
+	perTag: PerTagRow[];
 	sourceMix: SourceMixSlice[];
 };
 
@@ -129,14 +130,6 @@ export function rangeToSince(range: FlowHistoryRange): Date | null {
 export function parseRange(raw: string | null): FlowHistoryRange {
 	if (raw === '7d' || raw === '30d' || raw === '90d' || raw === 'all') return raw;
 	return '30d';
-}
-
-/**
- * Board filter that keeps pre-migration stragglers (docs without a board
- * field) on the ops board rather than silently dropping them.
- */
-function boardFilter(board: KanbanBoard) {
-	return board === 'software' ? { board: 'software' } : { board: { $ne: 'software' } };
 }
 
 function percentile(arr: number[], p: number): number | null {
@@ -356,7 +349,7 @@ function computeCycleScatter(allTasks: any[], since: Date | null): CycleScatterB
 			title: t.title,
 			completedAt: new Date(completedAtMs).toISOString(),
 			cycleTimeDays: Math.round(ct * 10) / 10,
-			projectColor: t.project?.color ?? '#888'
+			color: tagColor((t.tags ?? [])[0])
 		});
 	}
 	const cycleTimes = points.map((p) => p.cycleTimeDays);
@@ -429,24 +422,35 @@ function computeTimeInStatus(allTasks: any[], since: Date | null): TimeInStatusR
 	return rows.slice(0, 20);
 }
 
-function computePerProject(allTasks: any[], since: Date | null, allProjects: any[]): PerProjectRow[] {
+/**
+ * KB2-16 — per-tag breakdown (replaces per-project). A task with N tags counts
+ * toward all N rows; untagged tasks group under '(untagged)'.
+ */
+function computePerTag(allTasks: any[], since: Date | null): PerTagRow[] {
 	const sinceMs = since?.getTime() ?? 0;
-	const rows: PerProjectRow[] = [];
-	for (const p of allProjects) {
-		const ofProject = allTasks.filter((t: any) => t.project?._id === p._id);
-		const active = ofProject.filter((t: any) => !t.archived && t.status !== 'done').length;
-		const doneInRange = ofProject.filter((t: any) => {
+	const byTag = new Map<string, any[]>();
+	for (const t of allTasks) {
+		const tags: string[] = t.tags?.length ? t.tags : ['(untagged)'];
+		for (const tag of tags) {
+			if (!byTag.has(tag)) byTag.set(tag, []);
+			byTag.get(tag)!.push(t);
+		}
+	}
+	const rows: PerTagRow[] = [];
+	for (const [tag, ofTag] of byTag.entries()) {
+		const active = ofTag.filter((t: any) => !t.archived && t.status !== 'done').length;
+		const doneInRange = ofTag.filter((t: any) => {
 			if (t.status !== 'done') return false;
 			const ms = getCompletionMs(t);
 			return ms !== null && ms >= sinceMs;
 		}).length;
-		const wip = ofProject.filter((t: any) => !t.archived && t.status === 'wip').length;
-		const aging = ofProject.filter((t: any) => {
+		const wip = ofTag.filter((t: any) => !t.archived && t.status === 'wip').length;
+		const aging = ofTag.filter((t: any) => {
 			if (t.archived || t.status === 'done') return false;
 			const days = daysSince(t.statusChangedAt);
 			return days !== null && agingLevel(t.status as KanbanStatus, days) !== 'normal';
 		}).length;
-		const cycleTimes = ofProject
+		const cycleTimes = ofTag
 			.filter((t: any) => {
 				if (t.status !== 'done') return false;
 				const ms = getCompletionMs(t);
@@ -456,9 +460,8 @@ function computePerProject(allTasks: any[], since: Date | null, allProjects: any
 			.filter((x): x is number => x !== null);
 		const medianCycleDays = percentile(cycleTimes, 50);
 		rows.push({
-			id: p._id,
-			name: p.name,
-			color: p.color ?? '#888',
+			tag,
+			color: tag === '(untagged)' ? '#6b7280' : tagColor(tag),
 			active,
 			doneInRange,
 			medianCycleDays,
@@ -492,20 +495,15 @@ function computeSourceMix(allTasks: any[], since: Date | null): SourceMixSlice[]
 	].filter((s) => s.count > 0);
 }
 
-export async function loadFlowHistory(
-	board: KanbanBoard,
-	range: FlowHistoryRange
-): Promise<FlowHistoryData> {
+export async function loadFlowHistory(range: FlowHistoryRange): Promise<FlowHistoryData> {
 	await connectDB();
 	const since = rangeToSince(range);
-	const bf = boardFilter(board);
 
-	const [activeTasks, archivedInRange, allProjects] = await Promise.all([
-		KanbanTask.find({ ...bf, archived: false }).lean(),
+	const [activeTasks, archivedInRange] = await Promise.all([
+		KanbanTask.find({ archived: false }).lean(),
 		since
-			? KanbanTask.find({ ...bf, archived: true, archivedAt: { $gte: since } }).lean()
-			: KanbanTask.find({ ...bf, archived: true }).lean(),
-		KanbanProject.find({ isActive: true }).lean()
+			? KanbanTask.find({ archived: true, archivedAt: { $gte: since } }).lean()
+			: KanbanTask.find({ archived: true }).lean()
 	]);
 
 	const allTasks = [...activeTasks, ...archivedInRange];
@@ -524,7 +522,7 @@ export async function loadFlowHistory(
 		cycleScatter: computeCycleScatter(allTasks, since),
 		agingWip: computeAgingWip(allTasks),
 		timeInStatus: computeTimeInStatus(allTasks, since),
-		perProject: computePerProject(allTasks, since, allProjects),
+		perTag: computePerTag(allTasks, since),
 		sourceMix: computeSourceMix(allTasks, since)
 	};
 }

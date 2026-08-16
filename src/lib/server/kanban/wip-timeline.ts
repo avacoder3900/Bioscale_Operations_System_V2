@@ -8,17 +8,18 @@
  * rankable aggregate. If a change adds a number next to a person's name that
  * could go in a spreadsheet column, it doesn't belong here.
  *
- * Deliberately cross-board: one human, one limit, across both boards (KB2-04).
- * Lane count comes from KanbanPolicy.wipPerPerson — the old per-user
- * `user.wipLimit` field is retired.
+ * One human, one limit (KB2-04). Lane count comes from
+ * KanbanPolicy.wipPerPerson — the old per-user `user.wipLimit` field is
+ * retired. KB2-16: segments color by first tag (projects are gone).
  */
 import { connectDB, KanbanTask } from '$lib/server/db';
 import { getKanbanPolicy } from './policy.js';
+import { tagColor } from '$lib/shared/tag-color';
 
 export type WipSegment = {
 	taskId: string;
 	taskTitle: string;
-	projectColor: string;
+	color: string; // KB2-16: hashed from the first tag (was project color)
 	startBucket: number; // 0=before 7am, 1..44=regular 15-min cells (7:00..17:45), 45=after 6pm
 	endBucket: number;   // exclusive; fill cells [startBucket, endBucket)
 	startUtc: string;
@@ -183,7 +184,7 @@ async function computeWipTimeline(
 	for (const task of allTasks) {
 		const assigneeId = task.assignee?._id;
 		const assigneeName = task.assignee?.username ?? '— Unassigned —';
-		const projectColor = task.project?.color ?? '#888888';
+		const color = tagColor((task.tags ?? [])[0]);
 
 		const intervals = extractWipIntervals(task);
 		for (const iv of intervals) {
@@ -204,7 +205,7 @@ async function computeWipTimeline(
 			const seg: WipSegment = {
 				taskId: task._id,
 				taskTitle: task.title,
-				projectColor,
+				color,
 				startBucket: bucketIndexFor(clippedStart, dayStartMs),
 				endBucket: bucketIndexFor(clippedEnd, dayStartMs),
 				startUtc: new Date(iv.enterMs).toISOString(),
@@ -256,7 +257,7 @@ async function computeWipTimeline(
 	};
 }
 
-/** Load the WIP timeline for a day. Cross-board on purpose — see module header. */
+/** Load the WIP timeline for a day. */
 export async function loadWipTimeline(
 	dayRaw: string | null,
 	tzOffsetMin: number = 0

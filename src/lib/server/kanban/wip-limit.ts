@@ -3,8 +3,8 @@
  * any status transition into 'wip' or any assignee change that would land an
  * existing wip task on a user at their limit.
  *
- * The limit lives in KanbanPolicy.wipPerPerson (across BOTH boards combined)
- * — replaces the old per-user `user.wipLimit` field. At most
+ * The limit lives in KanbanPolicy.wipPerPerson — one human, one limit
+ * (replaces the old per-user `user.wipLimit` field). At most
  * KanbanPolicy.wipChoreMax of a person's WIP may be chores. Per PRD
  * KANBAN-WIP-LIMIT-ENFORCEMENT: no bypass, including admins. Per-person WIP
  * is a limit, not a score.
@@ -41,7 +41,7 @@ export async function checkWipLimit(
 
 	const filter: any = {
 		'assignee._id': assigneeId,
-		status: 'wip', // both boards — one human, one limit
+		status: 'wip', // one human, one limit
 		archived: false
 	};
 	if (excludeTaskId) filter._id = { $ne: excludeTaskId };

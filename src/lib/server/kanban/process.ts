@@ -4,7 +4,7 @@
  * Processing is the once-per-item decision that shapes a captured option:
  * size class + class of service are set BY THE PERSON PROCESSING (not the
  * author, not the eventual assignee — removes the inflation incentive),
- * plus a rank among the project's options and optionally the DoR fields.
+ * plus a rank among the Tier 1 options and optionally the DoR fields.
  */
 import { KanbanTask, KanbanTemplate, AuditLog, generateId, connectDB } from '$lib/server/db';
 import { transitionTask, createKanbanItem, TransitionError, type TransitionVia } from './transition.js';
@@ -114,7 +114,6 @@ export async function captureFromTemplate(opts: {
 	actorUsername: string;
 	via: TransitionVia;
 	title?: string; // overrides titleTemplate
-	project?: { _id: string; name: string; color?: string } | null;
 	dueDate?: Date;
 }) {
 	await connectDB();
@@ -124,9 +123,7 @@ export async function captureFromTemplate(opts: {
 	const task: any = await createKanbanItem({
 		title: (opts.title?.trim() || tpl.titleTemplate).trim(),
 		actor: { username: opts.actorUsername, via: opts.via },
-		board: tpl.board ?? 'ops',
 		itemType: tpl.itemType ?? 'deliverable',
-		project: opts.project ?? null,
 		tags: tpl.tags ?? [],
 		dueDate: opts.dueDate,
 		source: 'template',
@@ -200,8 +197,7 @@ export async function closeSpike(opts: {
 			title: o.title,
 			description: o.description,
 			actor: { username: opts.actorUsername, via: opts.via },
-			board: task.board ?? 'ops',
-			project: task.project ?? null,
+			tags: task.tags ?? [],
 			origin: 'discovered',
 			spawnedFrom: opts.taskId,
 			source: 'spike-close'

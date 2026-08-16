@@ -11,11 +11,9 @@ import { connectDB, KanbanTask, AuditLog, generateId } from '$lib/server/db';
 import {
 	isKanbanStatus,
 	isTierCrossing,
-	legalStatusesFor,
 	tierOf,
 	STATUS_DATE_FIELD,
 	type KanbanStatus,
-	type KanbanBoard,
 	type KanbanItemType,
 	type KanbanOrigin
 } from '$lib/shared/kanban-status';
@@ -67,12 +65,7 @@ export async function transitionTask(opts: TransitionOptions) {
 	if (!task) throw new TransitionError('NOT_FOUND', `Task ${taskId} not found`);
 
 	const from = task.status as KanbanStatus;
-	const board = (task.board ?? 'ops') as KanbanBoard;
 	if (from === to) return { task, changed: false as const };
-
-	if (!legalStatusesFor(board).includes(to)) {
-		throw new TransitionError('INVALID_STATUS', `Status '${to}' is not legal on the '${board}' board.`);
-	}
 
 	// The commitment point — the single most important invariant in KB2.
 	if (isTierCrossing(from, to) && !opts.allowTierCrossing) {
@@ -168,8 +161,8 @@ export async function transitionTask(opts: TransitionOptions) {
 	// rank gap and check queue depth. Entering ready happens only via replenish,
 	// which does its own renumber/check.
 	if (from === 'ready' && to !== 'ready') {
-		await renumberReady(board);
-		await checkMinOrderPoint(board);
+		await renumberReady();
+		await checkMinOrderPoint();
 	}
 
 	await AuditLog.create({
@@ -188,9 +181,7 @@ export async function transitionTask(opts: TransitionOptions) {
 export interface CreateKanbanItemOptions {
 	title: string;
 	actor: TransitionActor;
-	board?: KanbanBoard;
 	description?: string;
-	project?: { _id: string; name: string; color?: string } | null;
 	assignee?: { _id: string; username: string } | null;
 	itemType?: KanbanItemType;
 	origin?: KanbanOrigin;
@@ -205,13 +196,13 @@ export interface CreateKanbanItemOptions {
 
 /**
  * Standard creation path: everything starts as a Tier 1 'captured' option at
- * the bottom of its project's rank scope. There is deliberately no status
- * argument — entering Tier 2 happens only through replenishment (KB2-02).
+ * the bottom of the global Tier 1 rank order (KB2-16: one flat list). There is
+ * deliberately no status argument — entering Tier 2 happens only through
+ * replenishment (KB2-02).
  */
 export async function createKanbanItem(opts: CreateKanbanItemOptions) {
 	await connectDB();
 	const now = new Date();
-	const board = opts.board ?? 'ops';
 
 	if (opts.itemType === 'spike') {
 		if (!opts.spike?.question?.trim() || !opts.spike?.timebox?.amount) {
@@ -222,10 +213,8 @@ export async function createKanbanItem(opts: CreateKanbanItemOptions) {
 		}
 	}
 
-	// Append to the bottom of the Tier 1 rank scope (board + project).
+	// Append to the bottom of the global Tier 1 rank order.
 	const last: any = await KanbanTask.findOne({
-		board,
-		'project._id': opts.project?._id ?? null,
 		status: { $in: ['captured', 'processed'] },
 		archived: false
 	})
@@ -239,13 +228,11 @@ export async function createKanbanItem(opts: CreateKanbanItemOptions) {
 		title: opts.title.trim(),
 		description: opts.description || undefined,
 		status: 'captured',
-		board,
 		rank,
 		itemType: opts.itemType ?? 'deliverable',
 		origin: opts.origin ?? 'planned',
 		spawnedFrom: opts.spawnedFrom || undefined,
 		parentTaskId: opts.parentTaskId || undefined,
-		project: opts.project ?? undefined,
 		assignee: opts.assignee ?? undefined,
 		dueDate: opts.dueDate,
 		tags: opts.tags ?? [],
@@ -268,7 +255,7 @@ export async function createKanbanItem(opts: CreateKanbanItemOptions) {
 		tableName: 'kanban_tasks',
 		recordId: task._id,
 		action: 'INSERT',
-		newData: { title: opts.title.trim(), board, status: 'captured', origin: opts.origin ?? 'planned', via: opts.actor.via },
+		newData: { title: opts.title.trim(), status: 'captured', origin: opts.origin ?? 'planned', via: opts.actor.via },
 		changedBy: opts.actor.username,
 		changedAt: now
 	});

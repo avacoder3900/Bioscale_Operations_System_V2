@@ -10,14 +10,11 @@
 // Tier 1 — upstream, uncommitted. Unbounded inventory of options.
 export const TIER1_STATUSES = ['captured', 'processed', 'icebox', 'declined'] as const;
 
-// Tier 2 — downstream, committed. Bounded, globally ordered per board.
+// Tier 2 — downstream, committed. Bounded, one globally ordered queue.
 export const TIER2_STATUSES = ['ready', 'wip', 'waiting', 'blocked', 'review', 'done'] as const;
 
 export const ALL_STATUSES = [...TIER1_STATUSES, ...TIER2_STATUSES] as const;
 export type KanbanStatus = (typeof ALL_STATUSES)[number];
-
-export const BOARDS = ['ops', 'software'] as const;
-export type KanbanBoard = (typeof BOARDS)[number];
 
 export const ITEM_TYPES = ['deliverable', 'spike', 'chore'] as const;
 export type KanbanItemType = (typeof ITEM_TYPES)[number];
@@ -48,10 +45,8 @@ export function isTierCrossing(from: KanbanStatus, to: KanbanStatus): boolean {
 	return tierOf(from) !== tierOf(to);
 }
 
-/** `review` (PR open) is legal only on the software board. */
-export function legalStatusesFor(board: KanbanBoard): readonly KanbanStatus[] {
-	return board === 'software' ? ALL_STATUSES : ALL_STATUSES.filter((s) => s !== 'review');
-}
+// KB2-16: the ops/software board discriminator is gone — one board, tags carry
+// the distinction (`software` is just a tag) and `review` is legal everywhere.
 
 export const STATUS_META: Record<KanbanStatus, { label: string; color: string; tier: 1 | 2 }> = {
 	captured: { label: 'Captured', color: '#94a3b8', tier: 1 },
