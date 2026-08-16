@@ -7511,3 +7511,20 @@ npm run check: 11 errors = baseline, 0 new (none in the task page).
 Note: working tree also carries Alejandro's uncommitted camera_capture.py /
 camera_capture_NO_POST_PROCESSING.py edits — deliberately left untouched, not part of
 this branch's commits.
+
+================================================================================
+2026-08-16 — feat/kanban-tweaks — Decline label + tiered CFDs on Flow
+================================================================================
+Two more small kanban tweaks on the same branch:
+
+- Inventory: "Decline…" buttons → "Decline" (Jacob found the ellipsis noisy).
+- Flow: the single CFD mixed unbounded Tier 1 inventory (~45 of ~63 items) with the
+  committed pipeline, drowning the delivery signal. Split into two stacked charts —
+  Tier 2 (ready → done) first, Tier 1 (captured/processed/icebox/declined) below.
+  CfdChart.svelte gained optional title + statuses props; data unchanged (each CFD
+  point already carried all status counts). Decision: NO historical data reset — the
+  stale July flatline ages out of the range selector naturally.
+
+npm run check: 11 errors = baseline, 0 new.
+Branch is still local-only (push blocked: keychain is DuckyDrakeHaus, repo needs
+Quickj10) — Jacob will trigger the push to master when the tweak batch is done.
