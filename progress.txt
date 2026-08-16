@@ -7486,3 +7486,28 @@ Still open:
   confirmed against a passing validation run.
 - BT-M01-0000-0256 is still on the old product build (no prune_validation_files, old
   well positions) and keeps serving stale magnet-validation files.
+
+================================================================================
+2026-08-16 — feat/kanban-tweaks — task detail: back link returns to origin page + autosave on navigate away
+================================================================================
+Two small kanban task-detail fixes (src/routes/kanban/task/[taskId]/+page.svelte only;
+no server changes):
+
+1. "Back to Board" was hardcoded to /kanban, so arriving from Inventory (or Flow,
+   Archived, …) always dumped you back on the Queue board. The page now captures the
+   in-app origin via afterNavigate — any /kanban/* page except another task detail,
+   query string preserved — and the back link (plus the post-archive redirect) returns
+   there. Direct/external entry still falls back to /kanban.
+
+2. Edit-form changes now auto-save on navigation away. The form tracks dirty state on
+   input; beforeNavigate cancels the pending navigation, POSTs the form to the existing
+   ?/update action (x-sveltekit-action + deserialize, same wire format as enhance), and
+   resumes the navigation on success. On action failure (e.g. cleared title) the page
+   stays put and shows the error banner instead of silently dropping the edit. Tab
+   close / hard navigation gets a best-effort navigator.sendBeacon flush. The Save
+   Changes button still works and clears the dirty flag.
+
+npm run check: 11 errors = baseline, 0 new (none in the task page).
+Note: working tree also carries Alejandro's uncommitted camera_capture.py /
+camera_capture_NO_POST_PROCESSING.py edits — deliberately left untouched, not part of
+this branch's commits.
