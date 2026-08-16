@@ -11,6 +11,7 @@
 	import TimeInStatusChart from '$lib/components/kanban/TimeInStatusChart.svelte';
 	import PerProjectTable from '$lib/components/kanban/PerProjectTable.svelte';
 	import SourceMixDonut from '$lib/components/kanban/SourceMixDonut.svelte';
+	import { TIER1_STATUSES, TIER2_STATUSES } from '$lib/shared/kanban-status';
 
 	let { data } = $props();
 
@@ -234,8 +235,19 @@
 		{/if}
 	</section>
 
-	<!-- CFD (KB2-15, ported; board + range aware) -->
-	<CfdChart points={data.history.cfd} />
+	<!-- CFDs (KB2-15, ported; board + range aware) — split by tier so the
+	     unbounded Tier 1 inventory can't drown the committed-flow signal.
+	     Tier 2 (the delivery pipeline) first; Tier 1 (inventory) below it. -->
+	<CfdChart
+		points={data.history.cfd}
+		title="Cumulative Flow — Tier 2 (committed: ready → done)"
+		statuses={TIER2_STATUSES}
+	/>
+	<CfdChart
+		points={data.history.cfd}
+		title="Cumulative Flow — Tier 1 (inventory: captured / processed / icebox / declined)"
+		statuses={TIER1_STATUSES}
+	/>
 
 	<!-- Daily WIP timeline (KB2-15, ported) — coordination view: who is on what.
 	     Cross-board by design (one human, one limit). No totals, ever. -->

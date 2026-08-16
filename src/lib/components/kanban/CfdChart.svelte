@@ -20,9 +20,12 @@
 
 	interface Props {
 		points: CfdPoint[];
+		title?: string;
+		/** Which status bands to stack; defaults to all. Order here is ignored — BAND_ORDER wins. */
+		statuses?: readonly KanbanStatus[];
 	}
 
-	let { points }: Props = $props();
+	let { points, title = 'Cumulative Flow Diagram', statuses }: Props = $props();
 
 	// Stack order bottom → top: done at bottom (banked work), committed work
 	// in the middle, upstream inventory (captured et al.) at the top so new
@@ -39,11 +42,13 @@
 		'icebox',
 		'declined'
 	];
-	const bands = BAND_ORDER.map((key) => ({
-		key,
-		label: STATUS_META[key].label,
-		color: STATUS_META[key].color
-	}));
+	let bands = $derived(
+		BAND_ORDER.filter((key) => !statuses || statuses.includes(key)).map((key) => ({
+			key,
+			label: STATUS_META[key].label,
+			color: STATUS_META[key].color
+		}))
+	);
 
 	let chartData = $derived({
 		labels: points.map((p) => p.date),
@@ -81,7 +86,7 @@
 </script>
 
 <div class="tron-card p-4">
-	<h3 class="tron-text-primary mb-3 text-sm font-bold">Cumulative Flow Diagram</h3>
+	<h3 class="tron-text-primary mb-3 text-sm font-bold">{title}</h3>
 	{#if points.length === 0}
 		<p class="tron-text-muted text-xs">Not enough data to render.</p>
 	{:else}
