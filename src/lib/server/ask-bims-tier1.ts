@@ -100,7 +100,7 @@ Users & Auth —
   invite_tokens 🟢 — one-time invitation tokens. status: pending/accepted/expired
 
 Kanban & Project Management —
-  kanban_projects 🟢 — project containers
+  kanban_projects 🟢 — RETIRED (KB2-16): dead data; tasks carry tags instead
   kanban_tasks 🟢 — board items. status: captured/processed/icebox/declined (Tier 1, uncommitted) or ready/wip/waiting/blocked/review/done (Tier 2, committed). rank: ordinal priority. sizeClass: short/medium/long. comments[], actionLog[], proposals[](agent-suggested changes: pending/approved/edited/vetoed)
 
 Agent & Integration —

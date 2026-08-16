@@ -1,7 +1,7 @@
 ﻿import { McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod';
 import { env } from '$env/dynamic/private';
-import { TIER2_STATUSES, SIZE_CLASSES, legalStatusesFor } from '$lib/shared/kanban-status';
+import { ALL_STATUSES, TIER2_STATUSES, SIZE_CLASSES } from '$lib/shared/kanban-status';
 import {
 	resolveActor,
 	assertHumanOnly,
@@ -12,14 +12,11 @@ import {
 } from '$lib/server/machine-actor';
 
 // Status vocabulary for MCP tool schemas, from the shared module.
-// 'review' is software-board-only and not exposed through these tools yet.
-const OPS_STATUSES = legalStatusesFor('ops') as unknown as [string, ...string[]];
+// KB2-16: one board — 'review' is legal for all work.
+const BOARD_STATUSES = ALL_STATUSES as unknown as [string, ...string[]];
 // Tier 2 moves only — tier crossings (e.g. captured → ready) are rejected
-// server-side pending the replenish tool (KB2-02).
-const TIER2_MOVE_STATUSES = TIER2_STATUSES.filter((s) => s !== 'review') as unknown as [
-	string,
-	...string[]
-];
+// server-side (KB2-02).
+const TIER2_MOVE_STATUSES = TIER2_STATUSES as unknown as [string, ...string[]];
 const SIZE_CLASS_VALUES = SIZE_CLASSES as unknown as [string, ...string[]];
 
 /**
@@ -707,16 +704,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'kanban_board_snapshot',
 		{ annotations: READ_ONLY,
 			description:
-				`The full kanban board: all projects and their tasks grouped by column (${OPS_STATUSES.join(', ')}) ` +
-				'plus recent activity. Call this before creating or updating tasks so you have current task/project ids.'
+				`The full kanban board: all tasks grouped by column (${BOARD_STATUSES.join(', ')}) ` +
+				'plus recent activity. KB2-16: projects are gone — tasks carry tags. Call this before creating or updating tasks so you have current task ids.'
 		},
 		async () => callAgentApi(fetcher, '/api/agent/operations/kanban/board-snapshot')
-	);
-
-	server.registerTool(
-		'kanban_projects_overview',
-		{ annotations: READ_ONLY, description: 'Kanban projects with per-project task-status counts.' },
-		async () => callAgentApi(fetcher, '/api/agent/operations/projects')
 	);
 
 	server.registerTool(
@@ -735,8 +726,6 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			inputSchema: z.object({
 				title: z.string().optional().describe('One line is enough. Optional when templateId is given (template supplies it).'),
 				templateId: z.string().optional().describe('Capture from a workflow template — lands processed + replenishable.'),
-				projectId: z.string().describe('The kanban project _id.'),
-				board: z.enum(['ops', 'software']).optional().describe('Which board (default ops).'),
 				description: z.string().optional(),
 				origin: z.enum(['planned', 'discovered']).optional().describe("'discovered' when it emerged while working another item."),
 				spawnedFrom: z.string().optional().describe('Task id that was being worked when this was discovered.'),
@@ -769,7 +758,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'kanban_update_task',
 		{ annotations: WRITE_TOOL,
 			description:
-				'Update a kanban task: move it within Tier 2 (status), retitle, describe, resize, reassign, re-project, ' +
+				'Update a kanban task: move it within Tier 2 (status), retitle, describe, resize, reassign, ' +
 				'set due date/tags, or append context notes. Status changes go through the transition service and record a transition history entry. ' +
 				'Tier crossings (e.g. captured → ready) are rejected server-side — commitment-point crossings go through kanban_replenish / kanban_demote. ' +
 				'Pulling ready → wip is only allowed from the top of the queue (pull window, default top 3). Audit-logged.',
@@ -784,14 +773,13 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				waitingOn: z.string().optional().describe('Required when moving to waiting: the named external dependency.'),
 				waitingUntil: z.string().optional().describe('Required when moving to waiting: ISO follow-up date.'),
 				assignedTo: z.string().optional().describe('User _id to reassign to.'),
-				projectId: z.string().optional().describe('Move the task to this project.'),
 				dueDate: z.string().optional().describe('ISO date string.'),
 				tags: z.array(z.string()).optional(),
 				sourceRef: z.string().optional().describe('External link — software items: pr:<number>, branch:<name>, commit:<sha>.'),
 				dor: z
 					.object({
 						deliverable: z.string().optional().describe("State what will exist or be true when this is done — and how you'd verify it. Outcome, not steps."),
-						handoffBrief: z.string().optional().describe('Software board: the coding-agent handoff brief.')
+						handoffBrief: z.string().optional().describe("The coding-agent handoff brief (required to commit items tagged 'software').")
 					})
 					.optional()
 					.describe('Edit Definition-of-Ready fields.'),
@@ -815,13 +803,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			description:
 				'The "should we replenish?" view: Tier-1 candidates with Definition-of-Ready readiness (exact missing fields), ' +
 				'current ready queue vs its cap, minimum-order-point signal, and WIP share by class of service. ' +
-				'Call this before kanban_replenish, and whenever asked how the queue is doing.',
-			inputSchema: z.object({
-				board: z.enum(['ops', 'software']).optional().describe('Which board (default ops).')
-			})
+				'Call this before kanban_replenish, and whenever asked how the queue is doing.'
 		},
-		async ({ board }) =>
-			callAgentApi(fetcher, '/api/agent/operations/kanban/replenishment-status', { query: { board } })
+		async () =>
+			callAgentApi(fetcher, '/api/agent/operations/kanban/replenishment-status')
 	);
 
 	// PERM-05: the commitment point (Tier 1 → Tier 2) is an admin gate, and bots
@@ -834,11 +819,10 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'THE commitment point: promote Tier-1 options into the global ready queue. HUMAN-ONLY — committing work is an ' +
 				'admin action and cannot be done through this connection. Calling it returns instructions for the human. ' +
 				'Use kanban_replenishment_status to show what is eligible, and say what you would commit; the person does it in ' +
-				'Kanban → Inventory.',
+				'Kanban → Tier 1.',
 			inputSchema: z.object({
 				taskIds: z.array(z.string()).min(1).describe('Task ids that would be promoted, in desired queue order.'),
 				actor: ACTOR_FIELD,
-				board: z.enum(['ops', 'software']).optional().describe('Which board (default ops).'),
 				note: z.string().optional()
 			})
 		},
@@ -870,21 +854,20 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'kanban_reorder_queue',
 		{ annotations: WRITE_TOOL,
 			description:
-				'Explicit, audited re-rank. scope {projectId} reorders Tier-1 options within a project — allowed. ' +
+				'Explicit, audited re-rank. scope "tier1" reorders the global Tier-1 option list (KB2-16: one flat list) — allowed. ' +
 				'scope "ready" reorders the committed queue, which is HUMAN-ONLY (it is a commitment decision) and returns ' +
 				'instructions instead. Ranks are strict ordinals — no ties; items in scope but omitted keep their relative order after the listed ones.',
 			inputSchema: z.object({
 				scope: z
-					.union([z.literal('ready'), z.object({ projectId: z.string() })])
-					.describe('"ready" for the global committed queue (human-only), or {projectId} for Tier-1 project ranking.'),
+					.union([z.literal('ready'), z.literal('tier1')])
+					.describe('"ready" for the global committed queue (human-only), or "tier1" for the global Tier-1 option ranking.'),
 				orderedTaskIds: z.array(z.string()).min(1).describe('Task ids in the desired new order (rank 1 first).'),
-				actor: ACTOR_FIELD,
-				board: z.enum(['ops', 'software']).optional().describe('Which board (default ops).')
+				actor: ACTOR_FIELD
 			})
 		},
 		async (args) =>
 			machineWrite(
-				args.scope === 'ready' ? 'kanban_reorder_ready' : 'kanban_reorder_project',
+				args.scope === 'ready' ? 'kanban_reorder_ready' : 'kanban_reorder_tier1',
 				args.actor,
 				(actor) =>
 					callAgentApi(fetcher, '/api/agent/operations/kanban/reorder', {
@@ -920,7 +903,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				dor: z
 					.object({
 						deliverable: z.string().optional().describe("State what will exist or be true when this is done — and how you'd verify it. Outcome, not steps."),
-						handoffBrief: z.string().optional().describe('Software board: the coding-agent handoff brief.')
+						handoffBrief: z.string().optional().describe("The coding-agent handoff brief (required to commit items tagged 'software').")
 					})
 					.optional()
 			})
@@ -979,15 +962,12 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'kanban_flow_metrics',
 		{ annotations: READ_ONLY,
 			description:
-				'Flow metrics for a board: Work Item Age for every unfinished item (vs SLE bands, with flow-debt flags — items that ' +
+				'Flow metrics: Work Item Age for every unfinished item (vs SLE bands, with flow-debt flags — items that ' +
 				'aged while newer ones finished, the signature of cherry-picking), weekly throughput, discovered-work ratio with a ' +
 				'queue-fill suggestion, expedite rate, and flow efficiency. Deliberately contains NO per-person statistics — the ' +
-				'pathology is diagnosed in the work, not in people. Call when asked "what is stuck", "how is flow", or before replenishment.',
-			inputSchema: z.object({
-				board: z.enum(['ops', 'software']).optional().describe('Which board (default ops).')
-			})
+				'pathology is diagnosed in the work, not in people. Call when asked "what is stuck", "how is flow", or before replenishment.'
 		},
-		async ({ board }) => callAgentApi(fetcher, '/api/agent/operations/kanban/flow-metrics', { query: { board } })
+		async () => callAgentApi(fetcher, '/api/agent/operations/kanban/flow-metrics')
 	);
 
 	server.registerTool(
@@ -1005,8 +985,8 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		{ annotations: WRITE_TOOL,
 			description:
 				'Tune kanban policy knobs at runtime (no deploy). `actor` must hold kanban:admin. ' +
-				'updates is a map of dot-path → value, e.g. {"boards.ops.readyCap": 10, "pullWindow": 3}. ' +
-				'Valid paths: boards.{ops|software}.{readyCap|minOrderPoint}, wipPerPerson, wipChoreMax, pullWindow, ' +
+				'updates is a map of dot-path → value, e.g. {"readyCap": 10, "pullWindow": 3}. ' +
+				'Valid paths: readyCap, minOrderPoint, wipPerPerson, wipChoreMax, pullWindow, ' +
 				'expedite.{systemMax|alertPctRolling30d}, allocation.{standard|fixed_date|chore}, ' +
 				'sizeClassDefinitions.{short|medium|long}, sle.percentile, sle.perSizeClassDays.{short|medium|long}, recalibrateAfter.',
 			inputSchema: z.object({
@@ -1042,14 +1022,12 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				actor: z.string().describe('Username with kanban:admin (required — never guess).'),
 				templateId: z.string().optional().describe('Omit to create; provide to update.'),
 				name: z.string().optional(),
-				board: z.enum(['ops', 'software']).optional(),
 				itemType: z.enum(['deliverable', 'chore']).optional(),
 				sizeClass: z.enum(['short', 'medium', 'long']).optional(),
 				classOfService: z.enum(['standard', 'fixed_date', 'chore', 'expedite']).optional(),
 				titleTemplate: z.string().optional(),
 				dor: z.object({ deliverable: z.string().describe("What will exist or be true when this is done — and how you'd verify it. Outcome, not steps."), handoffBrief: z.string().optional() }).optional(),
-				tags: z.array(z.string()).optional(),
-				defaultProjectId: z.string().optional(),
+				tags: z.array(z.string()).optional().describe('Tags stamped on items captured from this template (KB2-16: tags replaced projects).'),
 				active: z.boolean().optional(),
 				notes: z.string().optional()
 			})

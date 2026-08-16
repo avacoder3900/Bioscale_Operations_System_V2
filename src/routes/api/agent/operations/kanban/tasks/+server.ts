@@ -1,5 +1,5 @@
 import { json, error } from '@sveltejs/kit';
-import { connectDB, KanbanTask, KanbanProject } from '$lib/server/db';
+import { connectDB, KanbanTask } from '$lib/server/db';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import { createKanbanItem, TransitionError } from '$lib/server/kanban/transition';
 import type { RequestHandler } from './$types';
@@ -11,13 +11,10 @@ export const POST: RequestHandler = async ({ request }) => {
 	const body = await request.json();
 	// NOTE: body.status is deliberately ignored — every new item is captured
 	// (Tier 1). Entering Tier 2 happens only through replenishment (KB2-02).
-	const { title, projectId, description, assignedTo, dueDate, source, sourceRef, tags, parentTaskId, actor, board, origin, spawnedFrom, itemType, spike } = body;
+	// KB2-16: projectId/board are gone — tags carry both jobs.
+	const { title, description, assignedTo, dueDate, source, sourceRef, tags, parentTaskId, actor, origin, spawnedFrom, itemType, spike } = body;
 
 	if (!title?.trim() && !body.templateId) throw error(400, 'title is required (unless capturing from a template)');
-	if (!projectId) throw error(400, 'projectId is required');
-
-	const project = await KanbanProject.findById(projectId).lean() as any;
-	if (!project) throw error(404, 'Project not found');
 
 	let assignee = null;
 	if (assignedTo) {
@@ -43,10 +40,9 @@ export const POST: RequestHandler = async ({ request }) => {
 				actorUsername: actorName,
 				via: 'agent-api',
 				title: typeof title === 'string' ? title : undefined,
-				project: { _id: project._id, name: project.name, color: project.color },
 				dueDate: dueDate ? new Date(dueDate) : undefined
 			});
-			return json({ success: true, data: { id: result.taskId, title: result.title, status: 'processed', template: result.templateName, projectId: project._id } }, { status: 201 });
+			return json({ success: true, data: { id: result.taskId, title: result.title, status: 'processed', template: result.templateName } }, { status: 201 });
 		} catch (e) {
 			if (e instanceof TransitionError) throw error(400, e.message);
 			throw e;
@@ -58,12 +54,10 @@ export const POST: RequestHandler = async ({ request }) => {
 		task = await createKanbanItem({
 			title,
 			description: description || undefined,
-			board: board === 'software' ? 'software' : 'ops',
 			origin: origin === 'discovered' ? 'discovered' : 'planned',
 			spawnedFrom: spawnedFrom || undefined,
 			itemType: ['deliverable', 'spike', 'chore'].includes(itemType) ? itemType : undefined,
 			spike: spike || undefined,
-			project: { _id: project._id, name: project.name, color: project.color },
 			assignee,
 			dueDate: dueDate ? new Date(dueDate) : undefined,
 			source: source || 'agent',
@@ -83,7 +77,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			id: task._id,
 			title: task.title,
 			status: task.status,
-			projectId: project._id,
+			tags: task.tags ?? [],
 			parentTaskId: parentTaskId || null,
 			createdAt: task.createdAt
 		}

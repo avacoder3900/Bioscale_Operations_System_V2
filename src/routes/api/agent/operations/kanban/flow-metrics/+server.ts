@@ -9,10 +9,9 @@ import type { RequestHandler } from './$types';
  * discovered-work ratio, throughput trend, expedite rate, flow efficiency.
  * NO per-person aggregates, by design (enforced in the metrics module).
  */
-export const GET: RequestHandler = async ({ request, url }) => {
+export const GET: RequestHandler = async ({ request }) => {
 	requireAgentApiKey(request);
 	await connectDB();
-	const board = url.searchParams.get('board') === 'software' ? 'software' : 'ops';
-	const data = await flowMetrics(board);
+	const data = await flowMetrics();
 	return json({ success: true, data: JSON.parse(JSON.stringify(data)) });
 };
