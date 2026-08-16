@@ -353,13 +353,13 @@
 									<input type="hidden" name="taskId" value={t.id} />
 									<TronButton type="submit" disabled={submitting}>Icebox</TronButton>
 								</form>
-								<TronButton variant="danger" onclick={() => (modal = { kind: 'decline', task: t })}>Decline…</TronButton>
+								<TronButton variant="danger" onclick={() => (modal = { kind: 'decline', task: t })}>Decline</TronButton>
 							{:else if t.status === 'icebox'}
 								<form method="POST" action="?/thaw" use:enhance={submitEnhance}>
 									<input type="hidden" name="taskId" value={t.id} />
 									<TronButton type="submit" disabled={submitting}>Thaw</TronButton>
 								</form>
-								<TronButton variant="danger" onclick={() => (modal = { kind: 'decline', task: t })}>Decline…</TronButton>
+								<TronButton variant="danger" onclick={() => (modal = { kind: 'decline', task: t })}>Decline</TronButton>
 							{/if}
 						</div>
 					</div>
