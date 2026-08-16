@@ -32,6 +32,10 @@ operator applies directly.
    migration: schema fields dropped from the model, data cleaned by the migration script.
 10. **KanbanPolicy:** `boards.ops` / `boards.software` collapse to a single top-level policy
     block seeded from the `ops` values. `wipPerPerson` unchanged (was already cross-board).
+11. **Pages are named for what they are (Jacob, in-session):** `/kanban` is titled exactly
+    **"Tier 2"** and `/kanban/inventory` exactly **"Tier 1"** — nav labels, headings, and any
+    user-facing copy using "Queue"/"Inventory" as page names. Routes/URLs unchanged; prose
+    descriptions ("unbounded inventory of options") stay.
 
 ## Migration (script, run deliberately — ALL_TO_TIER1 precedent)
 

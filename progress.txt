@@ -7528,3 +7528,46 @@ Two more small kanban tweaks on the same branch:
 npm run check: 11 errors = baseline, 0 new.
 Branch is still local-only (push blocked: keychain is DuckyDrakeHaus, repo needs
 Quickj10) — Jacob will trigger the push to master when the tweak batch is done.
+
+================================================================================
+2026-08-16 — feat/kanban-tweaks — KB2-16: projects removed, one board, tags everywhere; pages renamed Tier 1 / Tier 2
+================================================================================
+Jacob's in-session decision (PRD: docs/prds/KB2-16-projects-to-tags.md, written first;
+supersedes KB2-00 decisions #8 software board and #10 projects-stay): projects are too
+one-dimensional — tasks + tags do the same job; the ops/software board discriminator is
+replaced by a 'software' tag; Tier 1 is one solid iterable list with a global operator-
+applied order. Late addendum (decision #11): pages are named for what they are — /kanban
+is titled "Tier 2", /kanban/inventory "Tier 1" (nav + headings; routes/URLs unchanged).
+
+What changed (commits 01c2c7b6, bf5976c6, e9cfcdd4, 6bc818e0 + this docs commit):
+- Vocabulary: BOARDS/KanbanBoard/legalStatusesFor deleted; 'review' legal everywhere.
+- Models: task loses project subdoc + board (indexes → {status, rank}); policy collapses
+  boards.ops/software to one top-level readyCap/minOrderPoint (queuePolicyOf falls back
+  to the old boards.ops values so deploy-before-migrate is safe); template loses board +
+  defaultProjectId (tags instead); standing target loses board; KanbanProject model gone.
+- Engine: Tier 1 rank is one global ordinal list; one global ready queue; reorder scope
+  'tier1' replaces {projectId}; software handoff-brief DoR invariant keyed on the
+  'software' tag; per-tag flow breakdown replaces per-project; tag-hash colors
+  ($lib/shared/tag-color) replace project colors in WIP timeline + cycle scatter.
+- UI: Tier 1 page = flat globally-ranked list, ▲▼ rerank global, multi-select match-any
+  tag filter, capture takes comma-separated tags; Tier 2 board shows tag chips and an
+  In Review column when occupied; task detail loses the project select (back-link +
+  autosave work preserved); Flow loses the board selector; Policy has a single queue
+  block; Archive shows Tags; /kanban/projects + project ui-state API deleted; nav has
+  no Projects link or board switcher.
+- Agent API + MCP — BREAKING for callers passing board/projectId (heads-up Alejandro):
+  kanban_capture no longer requires projectId; kanban_projects_overview and
+  /api/agent/operations/projects are gone; board params dropped across
+  replenish/replenishment-status/flow-metrics/board-snapshot; reorder scope is
+  'ready'|'tier1' (legacy {projectId} accepted, maps to 'tier1'); set_policy paths are
+  readyCap/minOrderPoint.
+- Docs: KB2-00 decisions #8/#10 marked SUPERSEDED inline; KB2-17 strategy-layer concept
+  note captured (no build - the FOCUS.md doc + an MCP drift-report ritual is the shape).
+
+Migration: scripts/migrate-kb2-16-projects-to-tags.ts (dry-run default, --apply to
+write, idempotent; syntax-checked only). NOT RUN AGAINST PRODUCTION — prod tasks still
+carry project/board fields until it runs. Order: deploy KB2-16 code → run migration.
+The code tolerates unmigrated data (rank ties break on createdAt; queuePolicyOf reads
+old boards.ops values; legacy board:* replenishment signals auto-resolve).
+
+npm run check: 11 errors = baseline, 0 new (all 11 in untouched files).
