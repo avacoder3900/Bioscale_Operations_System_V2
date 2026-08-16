@@ -6,7 +6,7 @@
 
 	let { data, form } = $props();
 
-	type SortKey = 'title' | 'project' | 'assignee' | 'status' | 'completed';
+	type SortKey = 'title' | 'tags' | 'assignee' | 'status' | 'completed';
 	type SortDir = 'asc' | 'desc';
 
 	let sortColumn = $state<SortKey | null>(null);
@@ -31,9 +31,9 @@
 					av = a.title.toLowerCase();
 					bv = b.title.toLowerCase();
 					break;
-				case 'project':
-					av = (a.projectName ?? 'zzz').toLowerCase();
-					bv = (b.projectName ?? 'zzz').toLowerCase();
+				case 'tags':
+					av = (a.tags?.[0]?.name ?? 'zzz').toLowerCase();
+					bv = (b.tags?.[0]?.name ?? 'zzz').toLowerCase();
 					break;
 				case 'assignee':
 					av = (a.assigneeName ?? 'zzz').toLowerCase();
@@ -125,8 +125,8 @@
 						<th class="cursor-pointer select-none px-4 py-3 text-left font-medium" style="color: var(--color-tron-text-muted);" onclick={() => handleSort('title')}>
 							Title{sortIcon('title')}
 						</th>
-						<th class="cursor-pointer select-none px-4 py-3 text-left font-medium" style="color: var(--color-tron-text-muted);" onclick={() => handleSort('project')}>
-							Project{sortIcon('project')}
+						<th class="cursor-pointer select-none px-4 py-3 text-left font-medium" style="color: var(--color-tron-text-muted);" onclick={() => handleSort('tags')}>
+							Tags{sortIcon('tags')}
 						</th>
 						<th class="cursor-pointer select-none px-4 py-3 text-left font-medium" style="color: var(--color-tron-text-muted);" onclick={() => handleSort('assignee')}>
 							Assignee{sortIcon('assignee')}
@@ -152,7 +152,7 @@
 								</a>
 							</td>
 							<td class="px-4 py-3" style="color: var(--color-tron-text);">
-								{task.projectName ?? '—'}
+								{(task.tags ?? []).map((t: any) => t.name).join(', ') || '—'}
 							</td>
 							<td class="px-4 py-3" style="color: var(--color-tron-text);">
 								{task.assigneeName ?? '—'}

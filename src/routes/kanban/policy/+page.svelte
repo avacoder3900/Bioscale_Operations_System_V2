@@ -14,10 +14,8 @@
 	let submitting = $state(false);
 	let targetModal = $state<null | { target: TargetRow | null }>(null); // null target = create
 	let templateModal = $state<null | { template: TemplateRow | null }>(null); // null template = create
-	let templateBoard = $state('ops'); // drives handoffBrief visibility in the template modal
 
 	function openTemplateModal(template: TemplateRow | null) {
-		templateBoard = template?.board ?? 'ops';
 		templateModal = { template };
 	}
 
@@ -98,12 +96,10 @@
 		<fieldset disabled={!data.canAdmin} class="space-y-6">
 			<!-- Boards -->
 			<section class="tron-card !p-4">
-				<h3 class="tron-text-primary mb-3 text-sm font-bold uppercase tracking-wide">Per-board queue limits</h3>
+				<h3 class="tron-text-primary mb-3 text-sm font-bold uppercase tracking-wide">Queue limits</h3>
 				<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-					{@render knob('Ops — ready cap', 'ops_readyCap', p.boards?.ops?.readyCap ?? 8, 'Maximum items in the ops ready queue. Rule of thumb: throughput × replenishment interval + buffer.')}
-					{@render knob('Ops — minimum order point', 'ops_minOrderPoint', p.boards?.ops?.minOrderPoint ?? 3, 'Below this many ready items, a replenishment-needed signal is raised.')}
-					{@render knob('Software — ready cap', 'software_readyCap', p.boards?.software?.readyCap ?? 8, 'Maximum items in the software ready queue.')}
-					{@render knob('Software — minimum order point', 'software_minOrderPoint', p.boards?.software?.minOrderPoint ?? 3, 'Below this, replenish the software queue.')}
+					{@render knob('Ready cap', 'readyCap', p.readyCap ?? p.boards?.ops?.readyCap ?? 8, 'Maximum items in the ready queue. Rule of thumb: throughput × replenishment interval + buffer.')}
+					{@render knob('Minimum order point', 'minOrderPoint', p.minOrderPoint ?? p.boards?.ops?.minOrderPoint ?? 3, 'Below this many ready items, a replenishment-needed signal is raised.')}
 				</div>
 			</section>
 
@@ -111,7 +107,7 @@
 			<section class="tron-card !p-4">
 				<h3 class="tron-text-primary mb-3 text-sm font-bold uppercase tracking-wide">WIP and pull discipline</h3>
 				<div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-					{@render knob('WIP per person', 'wipPerPerson', p.wipPerPerson ?? 2, 'Concurrent wip items per person across BOTH boards combined. A limit, not a score.')}
+					{@render knob('WIP per person', 'wipPerPerson', p.wipPerPerson ?? 2, 'Concurrent wip items per person. A limit, not a score.')}
 					{@render knob('Chore max per person', 'wipChoreMax', p.wipChoreMax ?? 1, 'Of the personal WIP, at most this many chores — rationed so small work cannot eat the week.')}
 					{@render knob('Pull window', 'pullWindow', p.pullWindow ?? 3, 'Pull only from the top N of the global ready order — bounded choice, no cherry-picking from the tail.')}
 				</div>
@@ -269,7 +265,6 @@
 					<thead>
 						<tr class="tron-text-muted text-left text-xs uppercase">
 							<th class="pb-2 pr-3">Name</th>
-							<th class="pb-2 pr-3">Board</th>
 							<th class="pb-2 pr-3">Type</th>
 							<th class="pb-2 pr-3">Size</th>
 							<th class="pb-2 pr-3">Class</th>
@@ -281,7 +276,6 @@
 						{#each data.templates as t (t.id)}
 							<tr class="border-t border-[var(--color-tron-border)] {t.active ? '' : 'opacity-50'}">
 								<td class="tron-text-primary py-2 pr-3">{t.name}</td>
-								<td class="tron-text-muted py-2 pr-3 text-xs">{t.board}</td>
 								<td class="tron-text-muted py-2 pr-3 text-xs">{t.itemType}</td>
 								<td class="tron-text-muted py-2 pr-3 text-xs uppercase">{t.sizeClass}</td>
 								<td class="tron-text-muted py-2 pr-3 text-xs">{t.classOfService}</td>
@@ -329,13 +323,6 @@
 						<option value="part_stock">Part stock</option>
 						<option value="reagent_stock">Reagent stock</option>
 						<option value="manual">Manual value</option>
-					</select>
-				</div>
-				<div>
-					<label for="st-board" class="tron-label">Board</label>
-					<select id="st-board" name="board" class="tron-select w-full" value={t?.board ?? 'ops'}>
-						<option value="ops">ops</option>
-						<option value="software">software</option>
 					</select>
 				</div>
 			</div>
@@ -411,21 +398,12 @@
 			<div class="mb-4">
 				<TronInput label="Name" name="name" value={tpl?.name ?? ''} required placeholder="Build & validate an SPU" />
 			</div>
-			<div class="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-				<div>
-					<label for="wt-board" class="tron-label">Board</label>
-					<select id="wt-board" name="board" class="tron-select w-full" bind:value={templateBoard}>
-						<option value="ops">ops</option>
-						<option value="software">software</option>
-					</select>
-				</div>
-				<div>
-					<label for="wt-type" class="tron-label">Item type (spikes cannot be templated)</label>
-					<select id="wt-type" name="itemType" class="tron-select w-full" value={tpl?.itemType ?? 'deliverable'}>
-						<option value="deliverable">Deliverable</option>
-						<option value="chore">Chore</option>
-					</select>
-				</div>
+			<div class="mb-4">
+				<label for="wt-type" class="tron-label">Item type (spikes cannot be templated)</label>
+				<select id="wt-type" name="itemType" class="tron-select w-full" value={tpl?.itemType ?? 'deliverable'}>
+					<option value="deliverable">Deliverable</option>
+					<option value="chore">Chore</option>
+				</select>
 			</div>
 			<div class="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
 				<div>
@@ -456,23 +434,12 @@
 					State what will exist or be true when this is done — and how you'd verify it. Outcome, not steps.
 				</p>
 			</div>
-			{#if templateBoard === 'software'}
-				<div class="mb-4">
-					<label for="wt-brief" class="tron-label">DoR — agent handoff brief (software)</label>
-					<textarea id="wt-brief" name="dorHandoffBrief" class="tron-input w-full" rows="3">{tpl?.dorHandoffBrief ?? ''}</textarea>
-				</div>
-			{/if}
 			<div class="mb-4">
-				<TronInput label="Tags (comma-separated)" name="tags" value={tpl?.tags ?? ''} placeholder="spu, build" />
+				<label for="wt-brief" class="tron-label">DoR — agent handoff brief (required to commit items tagged 'software')</label>
+				<textarea id="wt-brief" name="dorHandoffBrief" class="tron-input w-full" rows="3">{tpl?.dorHandoffBrief ?? ''}</textarea>
 			</div>
 			<div class="mb-4">
-				<label for="wt-project" class="tron-label">Default project</label>
-				<select id="wt-project" name="defaultProjectId" class="tron-select w-full" value={tpl?.defaultProjectId ?? ''}>
-					<option value="">No project</option>
-					{#each data.projects as p (p.id)}
-						<option value={p.id}>{p.name}</option>
-					{/each}
-				</select>
+				<TronInput label="Tags (comma-separated)" name="tags" value={tpl?.tags ?? ''} placeholder="spu, build" />
 			</div>
 			<div class="mb-4">
 				<label for="wt-notes" class="tron-label">Notes</label>

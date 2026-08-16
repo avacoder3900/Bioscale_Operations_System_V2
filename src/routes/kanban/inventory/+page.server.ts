@@ -1,7 +1,8 @@
 /**
- * KB2-06 — Inventory: the Tier 1 management view. Options grouped by project,
- * ordered by rank; processing (KB2-03), rank moves, icebox/decline/thaw, DoR
- * edits. Everything that changes status goes through the kanban services.
+ * KB2-06 — Inventory: the Tier 1 management view. KB2-16: one flat list in
+ * global rank order (projects are gone — tags carry the grouping); processing
+ * (KB2-03), rank moves, icebox/decline/thaw, DoR edits. Everything that
+ * changes status goes through the kanban services.
  *
  * KB2-14 — the commitment ceremony lives here too: staging checkboxes on
  * processed + DoR-complete rows feed a sticky commit bar → replenish().
@@ -9,7 +10,7 @@
  * unchanged KB2-02 service — moving the UI does not weaken it.
  */
 import { fail, redirect } from '@sveltejs/kit';
-import { connectDB, KanbanTask, KanbanProject, KanbanTemplate, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, KanbanTask, KanbanTemplate, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission, hasPermission, isAdmin } from '$lib/server/permissions';
 import { createKanbanItem, TransitionError } from '$lib/server/kanban/transition';
 import {
@@ -22,44 +23,36 @@ import {
 	SIZING_DECISION_TEST
 } from '$lib/server/kanban/process';
 import { replenish, reorder, dorMissingFields, ReplenishError } from '$lib/server/kanban/replenish';
-import { getKanbanPolicy, boardPolicyOf } from '$lib/server/kanban/policy';
+import { getKanbanPolicy, queuePolicyOf } from '$lib/server/kanban/policy';
 import {
 	SIZE_CLASSES,
 	CLASSES_OF_SERVICE,
-	type KanbanBoard,
 	type KanbanSizeClass,
 	type KanbanClassOfService
 } from '$lib/shared/kanban-status';
 import type { PageServerLoad, Actions } from './$types';
 
-function boardOf(url: URL): KanbanBoard {
-	return url.searchParams.get('board') === 'software' ? 'software' : 'ops';
-}
-
-export const load: PageServerLoad = async ({ locals, url }) => {
+export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'kanban:read');
 	await connectDB();
-	const board = boardOf(url);
 
 	const policy = await getKanbanPolicy();
 	const tasks = (await KanbanTask.find({
-		board,
 		status: { $in: ['captured', 'processed', 'icebox', 'declined'] },
 		archived: false
 	})
-		.sort({ rank: 1 })
+		.sort({ rank: 1, createdAt: 1 })
 		.lean()) as any[];
 
-	// KB2-11 — active workflow templates for this board (one-touch capture).
-	const templates = (await KanbanTemplate.find({ active: true, board }).sort({ name: 1 }).lean()) as any[];
+	// KB2-11 — active workflow templates (one-touch capture).
+	const templates = (await KanbanTemplate.find({ active: true }).sort({ name: 1 }).lean()) as any[];
 
 	// KB2-14 — the Ready x/cap chip + commit bar need queue depth here.
-	const { readyCap, minOrderPoint } = boardPolicyOf(policy, board);
-	const readyCount = await KanbanTask.countDocuments({ board, status: 'ready', archived: false });
+	const { readyCap, minOrderPoint } = queuePolicyOf(policy);
+	const readyCount = await KanbanTask.countDocuments({ status: 'ready', archived: false });
 
 	return {
-		board,
 		canReplenish: hasPermission(locals.user, 'kanban:replenish') || isAdmin(locals.user),
 		ready: {
 			count: readyCount,
@@ -77,7 +70,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					titleTemplate: t.titleTemplate,
 					sizeClass: t.sizeClass,
 					classOfService: t.classOfService,
-					defaultProjectId: t.defaultProjectId ?? null
+					tags: t.tags ?? []
 				}))
 			)
 		),
@@ -98,9 +91,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 					classOfService: t.classOfService ?? null,
 					sizeClass: t.sizeClass ?? null,
 					origin: t.origin ?? 'planned',
-					projectId: t.project?._id ?? null,
-					projectName: t.project?.name ?? null,
-					projectColor: t.project?.color ?? null,
+					tags: t.tags ?? [],
 					dueDate: t.dueDate ?? null,
 					declineReason: t.declineReason ?? null,
 					spawnedFrom: t.spawnedFrom ?? null,
@@ -128,7 +119,7 @@ export const actions: Actions = {
 	// KB2-14 — the commitment ceremony: one replenishment event per commit,
 	// selected candidates in staged order. The service re-validates everything
 	// (actor holds kanban:replenish, DoR, caps) server-side.
-	commit: async ({ request, locals, url }) => {
+	commit: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'kanban:write');
 		await connectDB();
@@ -140,7 +131,6 @@ export const actions: Actions = {
 		try {
 			const result = await replenish({
 				taskIds,
-				board: boardOf(url),
 				actorUsername: locals.user.username,
 				via: 'ui',
 				note
@@ -151,8 +141,8 @@ export const actions: Actions = {
 		}
 	},
 
-	// Capture box: one line → 'captured'.
-	capture: async ({ request, locals, url }) => {
+	// Capture box: one line → 'captured'. Optional comma-separated tags.
+	capture: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'kanban:write');
 		await connectDB();
@@ -160,18 +150,15 @@ export const actions: Actions = {
 		const title = fd.get('title')?.toString();
 		if (!title?.trim()) return fail(400, { error: 'Title is required' });
 
-		const projectId = fd.get('projectId')?.toString();
-		let project = null;
-		if (projectId) {
-			const p = (await KanbanProject.findById(projectId).lean()) as any;
-			if (p) project = { _id: p._id, name: p.name, color: p.color };
-		}
+		const tags = (fd.get('tags')?.toString() ?? '')
+			.split(',')
+			.map((s) => s.trim())
+			.filter(Boolean);
 
 		try {
 			await createKanbanItem({
 				title,
-				project,
-				board: boardOf(url),
+				tags,
 				actor: { username: locals.user.username, via: 'ui' }
 			});
 		} catch (e) {
@@ -265,12 +252,6 @@ export const actions: Actions = {
 		const templateId = fd.get('templateId')?.toString();
 		if (!templateId) return fail(400, { error: 'Pick a template first' });
 
-		const projectId = fd.get('projectId')?.toString();
-		let project = null;
-		if (projectId) {
-			const p = (await KanbanProject.findById(projectId).lean()) as any;
-			if (p) project = { _id: p._id, name: p.name, color: p.color };
-		}
 		const dueDateRaw = fd.get('dueDate')?.toString();
 
 		try {
@@ -279,7 +260,6 @@ export const actions: Actions = {
 				actorUsername: locals.user.username,
 				via: 'ui',
 				title: fd.get('title')?.toString() || undefined,
-				project,
 				dueDate: dueDateRaw ? new Date(dueDateRaw) : undefined
 			});
 			return { success: true, capturedFromTemplate: result.title };
@@ -288,7 +268,7 @@ export const actions: Actions = {
 		}
 	},
 
-	// Rank ▲▼ — one position within the (board, project) Tier 1 scope, via reorder().
+	// Rank ▲▼ — one position within the global Tier 1 order (KB2-16), via reorder().
 	rankMove: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'kanban:write');
@@ -300,20 +280,11 @@ export const actions: Actions = {
 			return fail(400, { error: 'Missing taskId or direction' });
 		}
 
-		const task = (await KanbanTask.findById(taskId).select('board project status').lean()) as any;
-		if (!task) return fail(404, { error: 'Task not found' });
-		const projectId = task.project?._id;
-		if (!projectId) {
-			return fail(400, { error: 'Rank moves need a project scope — assign this option to a project first.' });
-		}
-
 		const scope = (await KanbanTask.find({
-			board: task.board ?? 'ops',
-			'project._id': projectId,
 			status: { $in: ['captured', 'processed'] },
 			archived: false
 		})
-			.sort({ rank: 1 })
+			.sort({ rank: 1, createdAt: 1 })
 			.select('_id')
 			.lean()) as any[];
 		const ids = scope.map((t) => String(t._id));
@@ -325,8 +296,7 @@ export const actions: Actions = {
 
 		try {
 			await reorder({
-				board: (task.board ?? 'ops') as KanbanBoard,
-				scope: { projectId },
+				scope: 'tier1',
 				orderedTaskIds: ids,
 				actorUsername: locals.user.username,
 				via: 'ui'

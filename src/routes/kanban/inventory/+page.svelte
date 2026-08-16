@@ -5,6 +5,7 @@
 	import KanbanModal from '$lib/components/kanban/KanbanModal.svelte';
 	import TaskStatusBadge from '$lib/components/kanban/TaskStatusBadge.svelte';
 	import { SIZE_CLASSES, CLASSES_OF_SERVICE } from '$lib/shared/kanban-status';
+	import { tagColor } from '$lib/shared/tag-color';
 
 	let { data, form } = $props();
 
@@ -60,14 +61,9 @@
 
 	// KB2-11 — capture-from-template picker state.
 	let selectedTemplateId = $state('');
-	let templateProjectId = $state('');
 	let selectedTemplate = $derived(
 		data.templates.find((t: { id: string }) => t.id === selectedTemplateId) ?? null
 	);
-	$effect(() => {
-		// Changing the template resets the project select to its default.
-		templateProjectId = selectedTemplate?.defaultProjectId ?? '';
-	});
 
 	// Filters — captured|processed default on; icebox/declined behind toggles.
 	let showCaptured = $state(true);
@@ -76,6 +72,16 @@
 	let showDeclined = $state(false);
 	let itemTypeFilter = $state('all');
 	let originFilter = $state('all');
+	// KB2-16 — tag filter (match-any). Empty selection = no tag filtering.
+	let tagFilter = $state<string[]>([]);
+	let allTags = $derived.by(() => {
+		const set = new Set<string>();
+		for (const t of data.tasks as TaskRow[]) for (const tag of t.tags ?? []) set.add(tag);
+		return [...set].sort((a, b) => a.localeCompare(b));
+	});
+	function toggleTagFilter(tag: string) {
+		tagFilter = tagFilter.includes(tag) ? tagFilter.filter((t) => t !== tag) : [...tagFilter, tag];
+	}
 
 	$effect(() => {
 		const f = form as any;
@@ -93,24 +99,10 @@
 			if (t.status === 'declined' && !showDeclined) return false;
 			if (itemTypeFilter !== 'all' && t.itemType !== itemTypeFilter) return false;
 			if (originFilter !== 'all' && t.origin !== originFilter) return false;
+			if (tagFilter.length && !tagFilter.some((tag) => (t.tags ?? []).includes(tag))) return false;
 			return true;
 		})
 	);
-
-	// Grouped by project, ordered by Tier 1 rank (server sort preserved).
-	let groups = $derived.by(() => {
-		const byProject = new Map<string, { name: string; color: string | null; tasks: TaskRow[] }>();
-		for (const t of filtered) {
-			const key = t.projectId ?? '__none';
-			if (!byProject.has(key)) {
-				byProject.set(key, { name: t.projectName ?? 'No project', color: t.projectColor, tasks: [] });
-			}
-			byProject.get(key)!.tasks.push(t);
-		}
-		return [...byProject.entries()]
-			.map(([id, g]) => ({ id, ...g }))
-			.sort((a, b) => (a.id === '__none' ? 1 : b.id === '__none' ? -1 : a.name.localeCompare(b.name)));
-	});
 
 	function submitEnhance() {
 		submitting = true;
@@ -160,10 +152,10 @@
 <div class="space-y-6">
 	<div class="flex flex-wrap items-start justify-between gap-3">
 		<div>
-			<h2 class="tron-text-primary text-2xl font-bold">Inventory</h2>
+			<h2 class="tron-text-primary text-2xl font-bold">Tier 1</h2>
 			<p class="tron-text-muted text-sm">
-				Tier 1 — every option we know about on the <span class="font-bold uppercase">{data.board}</span> board.
-				Unbounded, ranked per project. Nothing here is committed.
+				The unbounded inventory of options — every option we know about, one flat list,
+				globally ranked. Nothing here is committed.
 			</p>
 		</div>
 		<!-- KB2-14: queue depth where the commitment decision is made -->
@@ -185,12 +177,7 @@
 		<div class="min-w-[240px] flex-1">
 			<TronInput name="title" placeholder="Capture an option — one line is enough" required />
 		</div>
-		<select name="projectId" class="tron-select" title="Project (optional)">
-			<option value="">No project</option>
-			{#each data.projects as p (p.id)}
-				<option value={p.id}>{p.name}</option>
-			{/each}
-		</select>
+		<input name="tags" class="tron-input min-w-[180px]" placeholder="Tags (comma-separated, optional)" title="Tags" />
 		<TronButton type="submit" variant="primary" disabled={submitting}>Capture</TronButton>
 	</form>
 
@@ -207,12 +194,6 @@
 				<div class="min-w-[220px] flex-1">
 					<TronInput name="title" placeholder={selectedTemplate?.titleTemplate ?? 'Title (optional override)'} />
 				</div>
-				<select name="projectId" class="tron-select" title="Project (optional)" bind:value={templateProjectId}>
-					<option value="">No project</option>
-					{#each data.projects as p (p.id)}
-						<option value={p.id}>{p.name}</option>
-					{/each}
-				</select>
 				{#if selectedTemplate?.classOfService === 'fixed_date'}
 					<input type="date" name="dueDate" class="tron-input" title="Due date (fixed-date template)" required />
 				{/if}
@@ -280,16 +261,34 @@
 		<span class="tron-text-muted ml-auto text-xs">{filtered.length} option{filtered.length === 1 ? '' : 's'}</span>
 	</div>
 
-	<!-- Options grouped by project -->
-	{#each groups as group (group.id)}
-		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
-			<div class="flex items-center gap-2 border-b border-[var(--color-tron-border)] px-4 py-3">
-				<span class="h-3 w-3 rounded-full" style="background: {group.color ?? '#6b7280'};"></span>
-				<span class="text-sm font-bold" style="color: {group.color ?? 'var(--color-tron-text-primary)'};">{group.name}</span>
-				<span class="tron-text-muted text-xs">({group.tasks.length})</span>
-			</div>
-			<div class="divide-y divide-[var(--color-tron-border)]">
-				{#each group.tasks as t (t.id)}
+	<!-- KB2-16 — tag filter (match-any) -->
+	{#if allTags.length > 0}
+		<div class="flex flex-wrap items-center gap-1.5 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] px-4 py-2.5">
+			<span class="tron-text-muted mr-1 text-xs uppercase tracking-wide">Tags</span>
+			{#each allTags as tag (tag)}
+				{@const active = tagFilter.includes(tag)}
+				<button
+					type="button"
+					class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors"
+					style={active
+						? `border-color: ${tagColor(tag)}; background: ${tagColor(tag)}20; color: ${tagColor(tag)};`
+						: 'border-color: var(--color-tron-border); color: var(--color-tron-text-secondary);'}
+					onclick={() => toggleTagFilter(tag)}
+				>
+					<span class="h-2 w-2 rounded-full" style="background: {tagColor(tag)};"></span>
+					{tag}
+				</button>
+			{/each}
+			{#if tagFilter.length}
+				<button type="button" class="tron-text-muted ml-1 text-xs hover:underline" onclick={() => (tagFilter = [])}>clear</button>
+			{/if}
+		</div>
+	{/if}
+
+	<!-- KB2-16 — one flat iterable list, global rank order -->
+	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
+		<div class="divide-y divide-[var(--color-tron-border)]">
+			{#each filtered as t (t.id)}
 					<div class="flex flex-wrap items-center gap-3 px-4 py-2.5 {staged.includes(t.id) ? 'bg-[rgba(0,212,255,0.06)]' : ''}">
 						{#if data.canReplenish}
 							<!-- KB2-14 staging checkbox: processed + DoR-complete only -->
@@ -329,6 +328,12 @@
 								{#if t.classOfService && t.classOfService !== 'standard'}
 									<span class="tron-text-muted rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[10px] uppercase">{t.classOfService}</span>
 								{/if}
+								{#each t.tags ?? [] as tag (tag)}
+									<span class="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px]" style="background: {tagColor(tag)}18; color: {tagColor(tag)};">
+										<span class="h-1.5 w-1.5 rounded-full" style="background: {tagColor(tag)};"></span>
+										{tag}
+									</span>
+								{/each}
 							</div>
 							{#if t.status === 'declined' && t.declineReason}
 								<p class="mt-0.5 text-xs" style="color: var(--color-tron-red);">Declined: {t.declineReason}</p>
@@ -338,16 +343,14 @@
 						<!-- Controls -->
 						<div class="flex shrink-0 flex-wrap items-center gap-1.5">
 							{#if t.status === 'captured' || t.status === 'processed'}
-								{#if t.projectId}
-									<form method="POST" action="?/rankMove" use:enhance={submitEnhance} class="flex items-center">
-										<input type="hidden" name="taskId" value={t.id} />
-										<button type="submit" name="direction" value="up" class="tron-button !px-2 !py-1 text-xs" title="Rank up" disabled={submitting}>▲</button>
-									</form>
-									<form method="POST" action="?/rankMove" use:enhance={submitEnhance} class="flex items-center">
-										<input type="hidden" name="taskId" value={t.id} />
-										<button type="submit" name="direction" value="down" class="tron-button !px-2 !py-1 text-xs" title="Rank down" disabled={submitting}>▼</button>
-									</form>
-								{/if}
+								<form method="POST" action="?/rankMove" use:enhance={submitEnhance} class="flex items-center">
+									<input type="hidden" name="taskId" value={t.id} />
+									<button type="submit" name="direction" value="up" class="tron-button !px-2 !py-1 text-xs" title="Rank up" disabled={submitting}>▲</button>
+								</form>
+								<form method="POST" action="?/rankMove" use:enhance={submitEnhance} class="flex items-center">
+									<input type="hidden" name="taskId" value={t.id} />
+									<button type="submit" name="direction" value="down" class="tron-button !px-2 !py-1 text-xs" title="Rank down" disabled={submitting}>▼</button>
+								</form>
 								<TronButton variant="primary" onclick={() => openProcess(t)}>Process</TronButton>
 								<form method="POST" action="?/icebox" use:enhance={submitEnhance}>
 									<input type="hidden" name="taskId" value={t.id} />
@@ -363,16 +366,12 @@
 							{/if}
 						</div>
 					</div>
-				{/each}
-				{#if group.tasks.length === 0}
-					<p class="tron-text-muted px-4 py-3 text-xs">No options match the filters.</p>
-				{/if}
-			</div>
-		</section>
-	{/each}
-	{#if groups.length === 0}
-		<p class="tron-text-muted text-sm">No Tier 1 options match the current filters.</p>
-	{/if}
+			{/each}
+			{#if filtered.length === 0}
+				<p class="tron-text-muted px-4 py-3 text-xs">No Tier 1 options match the current filters.</p>
+			{/if}
+		</div>
+	</section>
 
 	<!-- KB2-14: the commit bar — the ceremony itself. Sticks to the viewport
 	     bottom while anything is staged; hidden entirely without the permission. -->
@@ -488,7 +487,7 @@
 					</p>
 				</div>
 			</div>
-			{#if data.board === 'software'}
+			{#if (modal.task.tags ?? []).includes('software')}
 				<div class="mb-4">
 					<label for="proc-brief" class="tron-label">Agent handoff brief (software DoR — lets a coding agent execute without re-discovery)</label>
 					<textarea id="proc-brief" name="handoffBrief" class="tron-input w-full" rows="3">{modal.task.dor.handoffBrief}</textarea>

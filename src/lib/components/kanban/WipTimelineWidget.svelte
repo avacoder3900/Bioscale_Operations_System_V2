@@ -6,7 +6,7 @@
 	interface WipSegment {
 		taskId: string;
 		taskTitle: string;
-		projectColor: string;
+		color: string;
 		startBucket: number;
 		endBucket: number;
 		startUtc: string;
@@ -330,7 +330,7 @@
 													title={cell ? `${cell.taskTitle}\n${formatRange(cell)}` : ''}
 													class="block h-5 shrink-0 border-r border-[var(--color-tron-bg-primary)] transition-opacity hover:opacity-80"
 													style="width: {isOverflowCell ? '32px' : '18px'}; background: {cell
-														? cell.projectColor
+														? cell.color
 														: 'rgba(160,160,160,0.08)'}; {lane.isOverflow && cell ? 'outline: 1px solid var(--color-tron-red);' : ''}"
 												></a>
 											{/each}
@@ -342,10 +342,10 @@
 												<a
 													href="/kanban/task/{seg.taskId}"
 													class="inline-flex items-center gap-1 text-[10px] hover:underline"
-													style="color: {seg.projectColor};"
+													style="color: {seg.color};"
 													title={seg.taskTitle}
 												>
-													<span class="h-1.5 w-1.5 shrink-0 rounded-full" style="background: {seg.projectColor};"></span>
+													<span class="h-1.5 w-1.5 shrink-0 rounded-full" style="background: {seg.color};"></span>
 													<span class="max-w-[240px] truncate">{seg.taskTitle}</span>
 												</a>
 											{/each}

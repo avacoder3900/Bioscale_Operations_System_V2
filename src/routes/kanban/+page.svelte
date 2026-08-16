@@ -4,6 +4,7 @@
 	import TronInput from '$lib/components/ui/TronInput.svelte';
 	import KanbanModal from '$lib/components/kanban/KanbanModal.svelte';
 	import { agingLevel, STATUS_META, type KanbanStatus } from '$lib/shared/kanban-status';
+	import { tagColor } from '$lib/shared/tag-color';
 
 	let { data, form } = $props();
 
@@ -48,10 +49,6 @@
 		return d ? new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—';
 	}
 
-	function inventoryHref(): string {
-		return data.board === 'software' ? '/kanban/inventory?board=software' : '/kanban/inventory';
-	}
-
 	// Shared enhance: banner on failure, close modals on success.
 	function submitEnhance() {
 		submitting = true;
@@ -86,12 +83,12 @@
 	{#if t.sizeClass}
 		<span class="tron-text-muted rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[10px] uppercase">{t.sizeClass}</span>
 	{/if}
-	{#if t.projectName}
-		<span class="inline-flex items-center gap-1 text-[10px]" style="color: {t.projectColor ?? 'var(--color-tron-text-secondary)'};">
-			<span class="h-2 w-2 rounded-full" style="background: {t.projectColor ?? '#6b7280'};"></span>
-			{t.projectName}
+	{#each t.tags as tag (tag)}
+		<span class="inline-flex items-center gap-1 text-[10px]" style="color: {tagColor(tag)};">
+			<span class="h-2 w-2 rounded-full" style="background: {tagColor(tag)};"></span>
+			{tag}
 		</span>
-	{/if}
+	{/each}
 {/snippet}
 
 {#snippet ageBadge(t: TaskRow)}
@@ -128,7 +125,8 @@
 	<!-- Header -->
 	<div class="flex flex-wrap items-start justify-between gap-4">
 		<div>
-			<h2 class="tron-text-primary text-2xl font-bold">Queue</h2>
+			<h2 class="tron-text-primary text-2xl font-bold">Tier 2</h2>
+			<p class="tron-text-muted text-sm">The committed queue — bounded, globally ordered.</p>
 		</div>
 
 		<!-- Ready count vs cap gauge -->
@@ -309,14 +307,11 @@
 			</div>
 		</div>
 
-		<!-- In Review (software board only) -->
-		{#if data.board === 'software'}
+		<!-- In Review (KB2-16: review is legal for all work; shown when occupied) -->
+		{#if review.length > 0}
 			<div class="flex min-w-[250px] max-w-[340px] flex-1 flex-col rounded-lg">
 				{@render columnHeader(STATUS_META.review.label, STATUS_META.review.color, `${review.length}`)}
 				<div class="max-h-[70vh] flex-1 space-y-2 overflow-y-auto pr-1">
-					{#if review.length === 0}
-						<p class="tron-text-muted px-1 text-xs">No PRs awaiting review.</p>
-					{/if}
 					{#each review as t (t.id)}
 						<div class="tron-card !p-3">
 							<a href="/kanban/task/{t.id}" class="tron-text-primary text-sm font-medium hover:underline">{t.title}</a>
