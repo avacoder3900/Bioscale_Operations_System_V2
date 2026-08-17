@@ -7585,3 +7585,24 @@ Retrieve this exact code: git checkout master at this entry's merge commit
 What this deployment is for: task-detail back link returns to the page you came from +
   edit form autosaves on navigate away; Inventory Decline buttons lose the ellipsis;
   Flow shows two CFDs (Tier 2 committed flow above, Tier 1 inventory below).
+
+================================================================================
+2026-08-17 — master — KB2-16 shipped to production: projects→tags, one board, Tier 1/Tier 2
+================================================================================
+Fast-forwarded master to feat/kanban-tweaks @ c9855010 (KB2-16 complete + small tweaks
+already live). npm run check: 11 errors = baseline, 0 new.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit (this commit's parent c9855010; git log master --oneline)
+Retrieve this exact code: git checkout master at this entry's commit
+What this deployment is for: KB2-16 — projects removed (tags carry everything), single
+  board ('software' is a tag), Tier 1 = one flat globally-ranked list with tag filter,
+  pages renamed exactly "Tier 1"/"Tier 2", per-tag flow breakdown, MCP/agent API updated.
+
+POST-DEPLOY REQUIRED (Jacob, from laptop):
+  git pull
+  npx tsx scripts/migrate-kb2-16-projects-to-tags.ts          # dry run, eyeball counts
+  npx tsx scripts/migrate-kb2-16-projects-to-tags.ts --apply  # idempotent
+Until --apply runs, prod tasks still carry project/board fields (code tolerates this;
+tags appear once migrated). MCP/agent callers passing board/projectId are BROKEN as of
+this deploy — heads-up Alejandro.
