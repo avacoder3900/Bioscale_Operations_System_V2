@@ -247,25 +247,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			{ updatePipeline: true }
 		);
 
-		// Wax inspection (WAX-INSPECTION-READY-REJECTED): photographing a wax_stored
-		// cart advances it to wax_qc ("photographed, awaiting verdict"). The verdict
-		// (human scan-gated, or CV) then moves it to wax_ready/wax_rejected. Scoped
-		// to wax_stored so /capture at other phases never re-statuses a cart.
-		if (updated.status === 'wax_stored') {
-			await CartridgeRecord.updateOne(
-				{ _id: cartridgeId, status: 'wax_stored' },
-				{ $set: { status: 'wax_qc' } }
-			);
-			await AuditLog.create({
-				_id: generateId(),
-				tableName: 'cartridge_records',
-				recordId: cartridgeId,
-				action: 'wax_inspection_photo',
-				newData: { status: 'wax_qc', from: 'wax_stored', imageId, phase },
-				changedAt: capturedAt,
-				changedBy: locals.user.username
-			});
-		}
+		// WAX-SIMPLIFY-2: photographing a wax-stage cart no longer changes its status
+		// (the old wax_stored → wax_qc auto-advance is gone). Wax rejects are an
+		// explicit POST /api/cv/wax-verdict from the Wax Reject page.
 
 		// Reagent inspection (REAGENT-INSPECT-AFTER-TOPSEAL): photographing a `sealed`
 		// cart (post Cut Top Seal) advances it to reagent_qc ("photographed, awaiting

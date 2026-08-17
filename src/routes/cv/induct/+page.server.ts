@@ -18,11 +18,12 @@
  *
  * "Ready for" → status derivation (see how each inline inspection statuses a
  * cart at capture/verdict time):
- *   - wax inspect:      photographing a `wax_stored` cart → wax_qc  (capture)
+ *   - wax reject:       a `wax_filled` cart is photographed + rejected → wax_rejected
+ *                       (WAX-SIMPLIFY-2; passes are implicit, no status change)
  *   - reagent inspect:  photographing a `sealed` cart     → reagent_qc (capture)
  *   - post-mortem:      photographs a `completed` cart, no status change
  * So the status a cart must be induct-created at to be "ready for" each is
- * wax_stored / sealed / completed respectively.
+ * wax_filled / sealed / completed respectively.
  */
 import { error, fail, redirect } from '@sveltejs/kit';
 import { hasPermission } from '$lib/server/permissions';
@@ -33,9 +34,9 @@ import type { PageServerLoad, Actions } from './$types';
 // to the exact status that makes it "ready for" that inspection (derived above).
 const READY_FOR = {
 	wax: {
-		status: 'wax_stored',
-		label: 'Wax inspection',
-		blurb: 'Photograph on Wax Inspect to advance wax_stored → wax_qc, then a verdict.'
+		status: 'wax_filled',
+		label: 'Wax reject',
+		blurb: 'Wax Reject: photograph + reject wax_filled → wax_rejected; passes are implicit (no status change).'
 	},
 	reagent: {
 		status: 'sealed',

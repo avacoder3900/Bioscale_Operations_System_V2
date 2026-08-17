@@ -3,6 +3,7 @@ import { requirePermission } from '$lib/server/permissions';
 import { connectDB, EquipmentLocation, Equipment, WaxFillingRun, ReagentBatchRecord, CartridgeRecord, BackingLot } from '$lib/server/db';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import { WAX_FILLING_ACTIVE, REAGENT_FILLING_ACTIVE } from '$lib/server/manufacturing/run-statuses';
+import { WAX_STAGE_STATUSES } from '$lib/shared/cartridge-wax-status';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -45,7 +46,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// Compute occupant counts from CartridgeRecord + BackingLot.
 	//
 	// Fridges have three buckets — same split used by /inventory/fridge-storage:
-	//   (1) waxAccepted: status='wax_stored' (post-QC, live inventory)
+	//   (1) waxAccepted: status∈WAX_STAGE_STATUSES with a fridge scan (live inventory)
 	//   (2) waxScrapped: status='scrapped' with waxStorage.location set
 	//       (physically still in the fridge as QA quarantine until checkout)
 	//   (3) reagent: status∈{stored, reagent_filled} with storage.fridgeName
@@ -56,7 +57,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// BackingLot.cartridgeCount (decremented by wax-filling loadDeck).
 	const [waxAcceptedCounts, waxScrappedCounts, reagentCounts, ovenCountsById] = await Promise.all([
 		CartridgeRecord.aggregate([
-			{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored', _id: { $nin: checkedOutIds } } },
+			{ $match: { 'waxStorage.location': { $exists: true }, status: { $in: [...WAX_STAGE_STATUSES] }, _id: { $nin: checkedOutIds } } },
 			{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
 		]).catch(() => []),
 		CartridgeRecord.aggregate([

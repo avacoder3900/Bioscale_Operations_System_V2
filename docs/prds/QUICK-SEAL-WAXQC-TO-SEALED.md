@@ -1,5 +1,8 @@
 # PRD: Quick-Seal shortcut (wax_qc / wax_ready → sealed)
 
+> **Amended 2026-08-17 by WAX-SIMPLIFY-1..3:** accepted input statuses are now
+> `wax_filled` / `wax_ready` (plus legacy `wax_qc` rows). `wax_qc` is no longer produced.
+
 ## Goal
 A dead-simple cart-mfg page where an operator **bulk-scans cartridge barcodes**
 into a free-text box (no clicking between scans) and moves them all from the wax

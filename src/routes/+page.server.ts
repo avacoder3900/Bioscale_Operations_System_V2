@@ -8,6 +8,7 @@ import {
 } from '$lib/server/db';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import { WAX_FILLING_ACTIVE } from '$lib/server/manufacturing/run-statuses';
+import { WAX_STAGE_STATUSES } from '$lib/shared/cartridge-wax-status';
 import type { Actions, PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -16,7 +17,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	// Manually checked-out cartridges are physically removed from fridges
 	// but preserve their scrapped/accepted quality markers. Exclude them
-	// from every fridge/wax_stored occupancy aggregation below.
+	// from every fridge/wax-stage occupancy aggregation below.
 	const checkedOutIds = await getCheckedOutCartridgeIds();
 
 	const stateFilter = url.searchParams.get('state');
@@ -185,7 +186,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				storageCounts = await (async () => {
 					const [waxCounts, reagentCounts] = await Promise.all([
 						CartridgeRecord.aggregate([
-							{ $match: { 'waxStorage.location': { $exists: true }, status: 'wax_stored', _id: { $nin: checkedOutIds } } },
+							{ $match: { 'waxStorage.location': { $exists: true }, status: { $in: [...WAX_STAGE_STATUSES] }, _id: { $nin: checkedOutIds } } },
 							{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
 						]),
 						CartridgeRecord.aggregate([
@@ -203,7 +204,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				// Map from barcode/name key → actual _id for detail links
 				const fridgeIdMap = new Map((fridges as any[]).map((f: any) => [f.barcode ?? f.name ?? String(f._id), String(f._id)]));
 
-				const phaseOrder = ['backing', 'wax_filled', 'wax_stored', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured', 'stored', 'released', 'shipped'];
+				const phaseOrder = ['backing', 'wax_filled', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filled', 'inspected', 'sealed', 'reagent_qc', 'reagent_ready', 'reagent_rejected', 'cured', 'stored', 'released', 'shipped'];
 				const phaseMap = new Map((phaseCounts as any[]).map((p: any) => [p._id, p.count]));
 				// 'backing' isn't a CartridgeRecord status anymore — aggregate BackingLot.
 				const backingAgg = await BackingLot.aggregate([
@@ -226,14 +227,15 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 				[fridgeCapacityAgg, allRobots, activeWaxRuns, allAssays,
 					cartridgeBomItems, dailyThroughputAgg, recentWaxRuns, recentReagentRuns, consumableCountsAgg
 				] = await Promise.all([
-					// Count ALL cartridges physically present in a fridge — wax_stored
-					// (post-QC), scrapped (QA quarantine, still occupies the slot), and
-					// reagent stored. Matches occupancy logic in /equipment/activity and
-					// /inventory/fridge-storage so capacity utilisation is consistent.
+					// Count ALL cartridges physically present in a fridge — wax-stage
+					// (wax_filled/wax_ready with a fridge location), scrapped (QA quarantine,
+					// still occupies the slot), and reagent stored. Matches occupancy logic in
+					// /equipment/activity and /inventory/fridge-storage so capacity utilisation
+					// is consistent.
 					(async () => {
 						const [waxCounts, scrappedCounts, storedCounts] = await Promise.all([
 							CartridgeRecord.aggregate([
-								{ $match: { status: 'wax_stored', 'waxStorage.location': { $exists: true }, _id: { $nin: checkedOutIds } } },
+								{ $match: { status: { $in: [...WAX_STAGE_STATUSES] }, 'waxStorage.location': { $exists: true }, _id: { $nin: checkedOutIds } } },
 								{ $group: { _id: '$waxStorage.location', count: { $sum: 1 } } }
 							]),
 							CartridgeRecord.aggregate([

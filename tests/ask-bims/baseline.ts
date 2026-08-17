@@ -118,7 +118,7 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		text: 'Show me cartridges currently in wax storage.',
 		requiredTools: [], // either find_cartridges OR list_cartridges_in_storage is acceptable
 		forbiddenTools: ['count_cartridges_by_status', 'get_run_yield', 'trace_cartridge'],
-		notes: 'Either find_cartridges(status=wax_stored) or list_cartridges_in_storage works. Both are correct; assertion is purely on forbiddenTools.',
+		notes: 'Either find_cartridges(status=wax_filled|wax_ready) or list_cartridges_in_storage works. Both are correct; assertion is purely on forbiddenTools.',
 		expectedAnswerPhrases: [/storage|stored|fridge|cart/i]
 	},
 
@@ -685,8 +685,8 @@ export const BASELINE_QUESTIONS: TestQuestion[] = [
 		text: 'how many cartridges are ready for reagent filling?',
 		requiredTools: ['count_cartridges_by_status'],
 		forbiddenTools: ['list_reagent_inventory', 'count_inventory_by_variant'],
-		expectedAnswerPhrases: [/wax.?stored|wax_stored|ready|reagent fill/i],
-		notes: 'Rule 9 — different action, same pattern. "Ready for reagent filling" = wax-stored cartridges (the upstream queue). Should NOT route to reagent inventory tools.'
+		expectedAnswerPhrases: [/wax.?filled|wax_filled|wax.?ready|wax_ready|ready|reagent fill/i],
+		notes: 'Rule 9 — different action, same pattern. "Ready for reagent filling" = wax_filled + wax_ready cartridges (the upstream queue; WAX-SIMPLIFY-3). Should NOT route to reagent inventory tools.'
 	},
 	{
 		id: 'how-many-can-i-ship-upstream',

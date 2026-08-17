@@ -16,6 +16,7 @@ import {
 import { requirePermission } from '$lib/server/permissions';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 import { ANY_TERMINAL } from '$lib/server/manufacturing/run-statuses';
+import { WAX_STAGE_STATUSES } from '$lib/shared/cartridge-wax-status';
 import type { PageServerLoad } from './$types';
 
 export const config = { maxDuration: 60 };
@@ -228,10 +229,11 @@ async function loadWaxFill(now: Date): Promise<PipelineRow[]> {
 }
 
 async function loadCooling(now: Date, checkedOutIds: string[]): Promise<PipelineRow[]> {
-	// Group wax_stored cartridges by waxStorage.location (denormalised name).
+	// Group wax-stage cartridges sitting in a fridge by waxStorage.location
+	// (denormalised name). WAX-SIMPLIFY-1: wax_filled IS the stored state.
 	const agg = await CartridgeRecord.aggregate([
 		{ $match: {
-			status: 'wax_stored',
+			status: { $in: [...WAX_STAGE_STATUSES] },
 			'waxStorage.location': { $exists: true, $ne: null },
 			_id: { $nin: checkedOutIds }
 		}},

@@ -1,6 +1,10 @@
 # WAX-FLOW-4 — Wax Inspect: first inline CV deployment
 
 **Date:** 2026-06-11 · **Owner:** Jacob · **Status:** Approved (conversation 2026-06-11)
+> **Shortcut 2026-08-17 by WAX-SIMPLIFY-2:** the inline-CV verdict path is parked (page stays
+> reachable at `/wax-inspect` but is out of the menu; nothing is deployed at `wax_filled`).
+> Wax QC is visual-only for now — rejects go through the new Wax Reject page. Bring this back
+> when a model is ready.
 
 ## Intent (Jacob)
 

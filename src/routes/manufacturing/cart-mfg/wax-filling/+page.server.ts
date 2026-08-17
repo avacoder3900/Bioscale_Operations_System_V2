@@ -1116,14 +1116,16 @@ export const actions: Actions = {
 
 
 	/**
-	 * Confirm deck removed + store in one commit (WAX-FLOW: deck-removed → fridge
-	 * → wax_stored). Replaces the old cooling → completeQC → recordStorage →
-	 * completeRun chain on this page now that QC is the wax-inspect photo/verdict
-	 * flow on an already-stored cart. The operator clicks "Confirm — Deck Removed",
-	 * picks the fridge the deck is stored in, and every cartridge on the run goes
-	 * straight wax_filling → wax_stored. Preserves the two non-redundant side
-	 * effects from the old chain: the waxFilling phase WRITE-ONCE record (DHR /
-	 * traceability) and the per-cartridge wax consumption (PT-CT-105).
+	 * Confirm deck removed + store in one commit (WAX-SIMPLIFY-1: deck-removed →
+	 * fridge → wax_filled). Replaces the old cooling → completeQC → recordStorage →
+	 * completeRun chain. The operator clicks "Confirm — Deck Removed", picks the
+	 * fridge the deck is stored in, and every cartridge on the run goes straight
+	 * wax_filling → wax_filled — wax_filled IS the stored state; the fridge is a
+	 * location (waxStorage), not a status. Visual QC happens by eye on wax_filled
+	 * carts; rejects go through the Wax Reject page. Preserves the two
+	 * non-redundant side effects from the old chain: the waxFilling phase
+	 * WRITE-ONCE record (DHR / traceability) and the per-cartridge wax consumption
+	 * (PT-CT-105).
 	 */
 	storeDeckAndComplete: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
@@ -1155,7 +1157,7 @@ export const actions: Actions = {
 
 			if (safeIds.length > 0) {
 				// One write per cart: stamp the waxFilling phase record + storage
-				// location and flip straight to wax_stored. Filter on status so we
+				// location and flip straight to wax_filled. Filter on status so we
 				// only touch this run's carts that are actually still wax_filling.
 				const bulkOps = safeIds.map((cid: string) => ({
 					updateOne: {
@@ -1177,7 +1179,7 @@ export const actions: Actions = {
 								'waxStorage.operator': { _id: locals.user!._id, username: locals.user!.username },
 								'waxStorage.timestamp': now,
 								'waxStorage.recordedAt': now,
-								status: 'wax_stored'
+								status: 'wax_filled'
 							}
 						}
 					}
@@ -1221,7 +1223,7 @@ export const actions: Actions = {
 				action: 'UPDATE',
 				changedBy: locals.user?.username,
 				changedAt: now,
-				newData: { status: 'completed', cartridgeStatus: 'wax_stored', storageLocation }
+				newData: { status: 'completed', cartridgeStatus: 'wax_filled', storageLocation }
 			});
 		} catch (e) {
 			console.error('[storeDeckAndComplete] audit log failed:', e instanceof Error ? e.message : e);

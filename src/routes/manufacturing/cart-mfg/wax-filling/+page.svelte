@@ -392,9 +392,9 @@
 	let pendingOverrideAction = $state('');
 	let pendingOverrideData = $state<Record<string, string>>({});
 
-	// Deck-removal is the terminal commit (storeDeckAndComplete → wax_stored, run
+	// Deck-removal is the terminal commit (storeDeckAndComplete → wax_filled, run
 	// completed → page idle), so this page owns only Loading → Running. Cooling/QC/
-	// storage were removed (WAX-FLOW: deck-removed → fridge → wax_stored).
+	// storage were removed (WAX-SIMPLIFY-1: deck-removed → fridge → wax_filled).
 	const STAGES = ['Loading', 'Running'] as const;
 
 	// Optimistic stage: prevents UI flash when invalidateAll() returns stale/failed data
@@ -679,7 +679,7 @@
 
 	function handleDeckRemoved(storageLocation: string) {
 		// Deck-removed is now the single commit: write the waxFilling phase record,
-		// store in the chosen fridge, flip the whole deck to wax_stored, complete
+		// store in the chosen fridge, land the whole deck at wax_filled, complete
 		// the run. Replaces the old cooling → QC → storage chain.
 		if (data.runState.runId) {
 			submitAction('storeDeckAndComplete', {
@@ -747,7 +747,7 @@
 
 	// Timeline bubbles (3): the Loading stage is split into "Wax fill setup"
 	// (wax_prep) and "Barcode scanning" (deck_load/ready_to_run); then Run. The
-	// run ends at deck-removal (→ fridge → wax_stored) inside the Run stage, so
+	// run ends at deck-removal (→ fridge, status wax_filled) inside the Run stage, so
 	// there are no cooling/QC/storage bubbles.
 	const TIMELINE = ['Wax fill setup', 'Barcode scanning', 'Run'] as const;
 	const currentBubbleIndex = $derived.by(() => {
