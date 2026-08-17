@@ -7606,3 +7606,17 @@ POST-DEPLOY REQUIRED (Jacob, from laptop):
 Until --apply runs, prod tasks still carry project/board fields (code tolerates this;
 tags appear once migrated). MCP/agent callers passing board/projectId are BROKEN as of
 this deploy — heads-up Alejandro.
+
+================================================================================
+2026-08-17 — master — KB2-16 production migration APPLIED
+================================================================================
+Ran scripts/migrate-kb2-16-projects-to-tags.ts against production Atlas (bioscale db)
+after the KB2-16 code was live: dry run → --apply → dry run again to confirm convergence.
+Counts: 9 projects → 411 tasks received their project's name as a tag and lost the
+project subdoc; 0 software-board tasks (nothing gained a 'software' tag); board unset on
+409 tasks; 52 Tier 1 options re-ranked into one global 1..N; 5 Ready items re-ranked;
+policy singleton collapsed to readyCap=8 / minOrderPoint=3 with the boards block dropped;
+0 templates touched; two stale {board,...} indexes dropped and {status, rank} ensured;
+0 legacy board:* signals / standing targets to clean. Re-run dry run showed 0 remaining
+project subdocs, 0 board fields, no stale indexes. kanban_projects collection left in
+place as dead data per the PRD. The POST-DEPLOY REQUIRED step above is now complete.
