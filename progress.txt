@@ -7385,3 +7385,46 @@ Retrieve this exact code: git checkout master at commit 32909585
   (or: git log master --oneline to find it if master has since moved on)
 What this deployment is for: KB2-15 — the consolidated Flow page (Analytics merged in,
   per-person leaderboard widgets deleted) and the single kanban nav row.
+
+================================================================================
+2026-08-17 — jq/barcode-scanning — Zebra ZT230 cartridge barcode printing via Browser Print
+================================================================================
+New branch + worktree (..\Bioscale_Operations_System_V2-jq-barcode-scanning) for a run of
+barcode-scanning work. First deliverable: print the same cartridge UUID barcodes the Avery
+94102 page mints onto a Zebra ZT230 loaded with 2-across ¾" x ¾" roll labels.
+
+Delivery choice: Zebra Browser Print (local agent on the operator PC, printer on USB or
+LAN/WiFi) rather than a server push — Vercel can't reach the lab LAN (same constraint the
+OT-2 bridge exists for), and Browser Print needs no daemon deployed. Positional
+repeatability comes from the ZPL, not the transport: every element is at absolute dot
+coordinates from one geometry function, with a per-printer x/y offset and a mint-nothing
+alignment label. Built so a queue + lab-side bridge can be added later without rework.
+
+- src/lib/server/services/barcode-print-batch.ts (NEW) — reserve → atomic-claim → confirm
+  lifecycle extracted from print-barcodes/+page.server.ts. `medium: 'avery-sheet' |
+  'zebra-roll'`: Avery keeps sheet consumption + avery94102SheetsOnHand mirror; Zebra
+  records only the `creation` of N labels on PT-CT-106 (labels come off a roll). Same
+  5-min PREVIEW_TTL_MS, same distinguishable 409s, same AuditLog row.
+- src/routes/manufacturing/print-barcodes/+page.server.ts — rewritten on the service.
+  Response shapes unchanged; +page.svelte untouched except copy (it said the page mints
+  CART-NNNNNN — it mints UUIDs) and a link to the Zebra page.
+- src/lib/zebra/cartridge-label-zpl.ts (NEW, isomorphic, 11 unit tests) — computeGeometry(),
+  buildCartridgeLabelsZpl() (one ^XA..^XZ per 2-label row; ^BQN QR of the raw UUID, A/B/C
+  marks, UUID text split over two centred lines; text auto-drops if the QR leaves no room),
+  buildAlignmentZpl(). Refuses any payload outside [0-9a-f-] so ^/~ can't reach ^FD.
+- src/lib/zebra/browser-print.ts (NEW) — talks to the agent's REST API directly
+  (https:9101 → http:9100 fallback; /available, /default, /write, /read + ~HS parse).
+  No Zebra JS bundle.
+- src/routes/manufacturing/print-barcodes/zebra/ (NEW) — ?/mint (1–400 labels) and
+  ?/confirm; page has printer picker (remembered), calibration panel (dpi, gap, x/y
+  offset, darkness, speed, QR module size), alignment-row button, canvas preview drawn
+  from the same geometry, countdown, "Send to printer" → confirm modal, .zpl download
+  fallback. Nav: Manufacturing → "Print Barcodes (Zebra)".
+- docs/ZEBRA-ZT230-BARCODE-PRINTING.md — setup runbook (agent install, USB vs IP, accept
+  origin, media calibration, offset dial-in, operator flow).
+
+Not yet verified against the physical ZT230 — needs Browser Print installed on a lab PC
+and the printer on USB or a lab-LAN IP. Assumptions to confirm on first print: 203 dpi
+model, 0.125" column gap, agent accepts the text/plain JSON body on /write.
+
+npm run check: 11 errors (baseline, unchanged). npm run test:unit: 91 passed (80 + 11 new).

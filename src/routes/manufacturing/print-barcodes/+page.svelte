@@ -315,8 +315,9 @@
 			<h1 class="text-xl font-semibold" style="color: var(--color-tron-cyan)">Print Cartridge Barcodes</h1>
 			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
 				Avery 94102 — 8&times;10 grid, 80 labels per sheet (¾&quot; square). Each print mints fresh
-				<code class="font-mono text-[11px]" style="color: var(--color-tron-cyan)">CART-NNNNNN</code>
-				barcodes; uniqueness is enforced atomically against existing cartridges.
+				UUID barcodes; uniqueness is enforced atomically against existing cartridges.
+				Printing to the Zebra ZT230 roll printer instead? Use the
+				<a href="/manufacturing/print-barcodes/zebra" class="underline" style="color: var(--color-tron-cyan)">Zebra page</a>.
 			</p>
 		</div>
 
