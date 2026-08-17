@@ -71,7 +71,7 @@ export const actions: Actions = {
 		}
 
 		// Validate existence only — status is preserved on checkout, so any
-		// status is eligible (wax_stored, scrapped, completed, etc.). Fail
+		// status is eligible (wax_filled, wax_rejected, scrapped, completed, etc.). Fail
 		// the whole group on any "not found" so operators see a clear
 		// failure mode rather than a silent partial-success.
 		const cartridges = await CartridgeRecord.find({ _id: { $in: cartridgeIds } })

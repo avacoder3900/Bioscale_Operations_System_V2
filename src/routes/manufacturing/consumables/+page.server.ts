@@ -7,6 +7,7 @@ import {
 } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
+import { WAX_STAGE_STATUSES } from '$lib/shared/cartridge-wax-status';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -52,7 +53,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 		status: { $nin: ['completed', 'Completed', 'aborted', 'Aborted', 'cancelled', 'Cancelled', 'voided'] }
 	});
 
-	const waxStored = await CartridgeRecord.countDocuments({ status: 'wax_stored', _id: { $nin: checkedOutIds } });
+	// WAX-SIMPLIFY-1: wax_filled IS the stored state. `waxStored` = wax-stage carts
+	// eligible for reagent filling; `waxInFridge` = the subset with a fridge scan.
+	const waxStored = await CartridgeRecord.countDocuments({ status: { $in: [...WAX_STAGE_STATUSES] }, _id: { $nin: checkedOutIds } });
+	const waxInFridge = await CartridgeRecord.countDocuments({ status: { $in: [...WAX_STAGE_STATUSES] }, 'waxStorage.location': { $exists: true, $ne: null }, _id: { $nin: checkedOutIds } });
 	const reagentStored = await CartridgeRecord.countDocuments({ status: 'stored', _id: { $nin: checkedOutIds } });
 	const sealed = await CartridgeRecord.countDocuments({ status: 'sealed', _id: { $nin: checkedOutIds } });
 	// Count both 'scrapped' (QC rejects) and legacy 'voided' — same semantic
@@ -134,8 +138,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 				{ name: 'Pipette Tips', icon: '🔬', count: null as number | null, unit: 'tips' }
 			],
 			outputs: [
-				{ name: 'Wax-Filled', icon: '🟡', count: (phaseMap.get('wax_stored') ?? 0) + (phaseMap.get('wax_filled') ?? 0), unit: 'cartridges' },
-				{ name: 'In Fridge', icon: '❄️', count: waxStored, unit: 'stored' }
+				{ name: 'Wax-Filled', icon: '🟡', count: waxStored, unit: 'cartridges' },
+				{ name: 'In Fridge', icon: '❄️', count: waxInFridge, unit: 'stored' }
 			],
 			activeRuns: activeWaxRuns, completedRuns: waxStats[0]?.totalRuns ?? 0
 		},

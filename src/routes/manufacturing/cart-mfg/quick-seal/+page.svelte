@@ -1,6 +1,6 @@
 <script lang="ts">
 	/**
-	 * Quick-Seal shortcut: bulk-scan cartridge barcodes (wax_qc / wax_ready) and
+	 * Quick-Seal shortcut: bulk-scan cartridge barcodes (wax_filled / wax_ready) and
 	 * flip them all to `sealed`. The scan box is a textarea so a keyboard-wedge
 	 * scanner's Enter just adds a newline — focus stays put, scan many in a row.
 	 */
@@ -62,15 +62,15 @@
 	<div>
 		<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Quick Seal</h1>
 		<p class="text-xs" style="color: var(--color-tron-text-secondary)">
-			Scan cartridges at <span class="font-mono">wax_qc</span> or <span class="font-mono">wax_ready</span>
-			(after the wax pic) to move them straight to <span class="font-mono">sealed</span> — the state right
+			Scan cartridges at <span class="font-mono">wax_filled</span> or <span class="font-mono">wax_ready</span>
+			to move them straight to <span class="font-mono">sealed</span> — the state right
 			before the reagent picture. Just keep scanning into the box; no need to click between scans.
 		</p>
 	</div>
 
 	<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-2 text-xs" style="color: var(--color-tron-text-secondary)">
 		Eligible right now: <span class="font-mono text-[var(--color-tron-cyan)]">{data.eligible.total}</span>
-		(wax_qc {data.eligible.wax_qc} · wax_ready {data.eligible.wax_ready})
+		(wax_filled {data.eligible.wax_filled} · wax_ready {data.eligible.wax_ready}{#if data.eligible.wax_qc} · legacy wax_qc {data.eligible.wax_qc}{/if})
 	</div>
 
 	{#if errMsg}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{errMsg}</div>{/if}

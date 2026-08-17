@@ -69,8 +69,8 @@
 
 	const pipelineStages = $derived([
 		{ label: 'Backing', count: data.pipeline.backing.backedTotal, sub: `${data.pipeline.backing.totalReadyCartridges} ready`, color: 'text-[var(--color-tron-purple)]' },
-		{ label: 'Wax Fill', count: data.pipeline.waxFilling.inProgress + data.pipeline.waxFilling.waxFilled, sub: `${data.pipeline.waxFilling.inProgress} filling`, color: 'text-[var(--color-tron-yellow)]' },
-		{ label: 'Cooling', count: data.pipeline.waxFilling.waxStored, sub: 'in fridge', color: 'text-[var(--color-tron-blue)]' },
+		{ label: 'Wax Fill', count: data.pipeline.waxFilling.inProgress, sub: 'filling', color: 'text-[var(--color-tron-yellow)]' },
+		{ label: 'Wax-Filled', count: data.pipeline.waxFilling.waxStage, sub: 'ready for reagent', color: 'text-[var(--color-tron-blue)]' },
 		{ label: 'Reagent', count: data.pipeline.reagentFilling.inProgress + data.pipeline.reagentFilling.reagentFilled, sub: `${data.pipeline.reagentFilling.inProgress} filling`, color: 'text-[var(--color-tron-orange)]' },
 		{ label: 'Seal', count: data.pipeline.reagentFilling.sealed, sub: 'sealed', color: 'text-[var(--color-tron-cyan)]' },
 		{ label: 'Store', count: data.pipeline.storage.stored, sub: `${data.pipeline.storage.voided} voided`, color: 'text-[var(--color-tron-green)]' }

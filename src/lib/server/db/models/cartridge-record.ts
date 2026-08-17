@@ -39,7 +39,7 @@ const cartridgeRecordSchema = new Schema({
 	},
 	waxQc: {
 		status: { type: String, enum: ['Accepted', 'Rejected', 'Pending'] },
-		rejectionReason: String, operator: operatorRef, timestamp: Date, recordedAt: Date
+		rejectionReason: String, source: String, operator: operatorRef, timestamp: Date, recordedAt: Date
 	},
 	waxStorage: {
 		locationId: String,           // Equipment._id of the fridge (authoritative join key - S1a)
@@ -159,9 +159,11 @@ const cartridgeRecordSchema = new Schema({
 	status: {
 		type: String,
 		enum: [
-			// Wax inspection flow (WAX-INSPECTION-READY-REJECTED): wax_stored → (photo)
-			// → wax_qc (awaiting verdict) → wax_ready | wax_rejected. Only wax_ready → reagent.
-			'backing', 'wax_filling', 'wax_filled', 'wax_stored', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filling', 'reagent_filled',
+			// Wax stage (WAX-SIMPLIFY-1..3, see src/lib/shared/cartridge-wax-status.ts):
+			// wax_filled IS the stored state; visual pass is implicit; Wax Reject page →
+			// wax_rejected. wax_filled | wax_ready → reagent. `wax_qc` is retired but kept
+			// in the enum so historical rows still validate; `wax_stored` is migrated away.
+			'backing', 'wax_filling', 'wax_filled', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filling', 'reagent_filled',
 			// Reagent inspection flow (REAGENT-INSPECT-AFTER-TOPSEAL): after Cut Top Seal a
 			// cartridge is `sealed`; a photo on the Reagent Inspect page → reagent_qc;
 			// a scan-gated verdict → reagent_ready | reagent_rejected.
@@ -227,7 +229,7 @@ cartridgeRecordSchema.index({ 'reagentFilling.runId': 1 });
 cartridgeRecordSchema.index({ 'reagentFilling.assayType._id': 1 });
 cartridgeRecordSchema.index({ 'storage.locationId': 1 });
 cartridgeRecordSchema.index({ 'storage.fridgeId': 1 });         // S1a: canonical fridge join
-cartridgeRecordSchema.index({ 'waxStorage.locationId': 1 });    // S1a: canonical fridge join for wax_stored
+cartridgeRecordSchema.index({ 'waxStorage.locationId': 1 });    // S1a: canonical fridge join for wax-stage carts in a fridge
 cartridgeRecordSchema.index({ 'storage.containerBarcode': 1 });
 cartridgeRecordSchema.index({ 'qaqcRelease.shippingLotId': 1 });
 cartridgeRecordSchema.index({ 'shipping.packageId': 1 });

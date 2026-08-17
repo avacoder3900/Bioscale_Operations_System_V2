@@ -1,31 +1,34 @@
 /**
  * Quick-Seal shortcut (QUICK-SEAL-WAXQC-TO-SEALED.md).
  *
- * Bulk-scan cartridge barcodes and move them from the wax inspection stage
- * (wax_qc / wax_ready) straight to `sealed` — the state right before the reagent
- * picture. Shortcuts wax_qc → wax_ready → reagent_filling → reagent_filled → sealed
- * for a workflow where those steps are handled outside BIMS.
+ * Bulk-scan cartridge barcodes and move them from the wax stage
+ * (wax_filled / wax_ready, plus legacy wax_qc) straight to `sealed` — the state
+ * right before the reagent picture. Shortcuts reagent_filling → reagent_filled →
+ * sealed for a workflow where those steps are handled outside BIMS.
  *
- * Accepts wax_qc OR wax_ready. Any other status (or not-found) is rejected per-cart
- * and reported; valid carts in the same batch still process.
+ * WAX-SIMPLIFY: wax_filled is accepted (it is the wax-stage resting state now).
+ * Any other status (or not-found) is rejected per-cart and reported; valid carts
+ * in the same batch still process.
  */
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, CartridgeRecord, AuditLog, generateId } from '$lib/server/db';
+import { WAX_STAGE_STATUSES } from '$lib/shared/cartridge-wax-status';
 import type { PageServerLoad, Actions } from './$types';
 
-const ACCEPTED = new Set(['wax_qc', 'wax_ready']);
+const ACCEPTED = new Set<string>([...WAX_STAGE_STATUSES, 'wax_qc']);
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:read');
 	await connectDB();
 
-	const [waxQc, waxReady] = await Promise.all([
+	const [waxFilled, waxQc, waxReady] = await Promise.all([
+		CartridgeRecord.countDocuments({ status: 'wax_filled' }),
 		CartridgeRecord.countDocuments({ status: 'wax_qc' }),
 		CartridgeRecord.countDocuments({ status: 'wax_ready' })
 	]);
-	return { eligible: { wax_qc: waxQc, wax_ready: waxReady, total: waxQc + waxReady } };
+	return { eligible: { wax_filled: waxFilled, wax_qc: waxQc, wax_ready: waxReady, total: waxFilled + waxQc + waxReady } };
 };
 
 export const actions: Actions = {

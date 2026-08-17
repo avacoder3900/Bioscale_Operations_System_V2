@@ -7667,3 +7667,61 @@ Verification status:
            tracking numbers, typed task links, Tier 1 tag autocomplete).
   note:    pre-existing tasks still have no tracking number — backfill is a
            separate /px-off ID-keyed pass, not done here.
+2026-08-17 — feat/wax-status-simplify — WAX-SIMPLIFY-1..3: wax_stored dropped, reject-only wax inspection, reagent gate widened
+================================================================================
+Jacob's decisions (conversation 2026-08-17): (1) wax_stored is redundant — "if they have been
+filled with wax they are stored" — collapse into wax_filled; (2) shortcut the wax QC / CV
+verdict flow for now: inspect by eye at wax_filled, only REJECTS get recorded, on a new page
+where the cart is scanned + photographed (so every failure image is captured for training) —
+not-rejected implicitly means accepted; (3) reagent filling accepts wax_filled OR wax_ready.
+Confirmed follow-on decisions: existing wax_qc carts migrate to wax_filled (not wax_ready);
+/wax-inspect stays in the codebase (out of the menu) for when CV comes back.
+
+PRDs: docs/prds/WAX-SIMPLIFY-1-DROP-WAX-STORED.md, WAX-SIMPLIFY-2-REJECT-ONLY-INSPECTION.md,
+WAX-SIMPLIFY-3-REAGENT-GATE.md (supersede WAX-INSPECTION-READY-REJECTED + WAX-FLOW-4's verdict
+intent; supersession banners added to the old PRDs, nothing rewritten).
+
+Built (bab03d13, 51 files):
+- NEW src/lib/shared/cartridge-wax-status.ts — WAX_STAGE_STATUSES=['wax_filled','wax_ready'],
+  LEGACY_WAX_STATUSES, WAX_REJECTABLE_STATUSES, WAX_ORDER, isWaxStage(), isReagentEligible()
+  (the ONE reagent admission rule; used by both api/dev/validate-equipment and
+  reagent-filling startRun so they can't disagree).
+- Model: wax_stored removed from CartridgeRecord.status enum (wax_qc kept for historical
+  rows); waxQc.source added (was written but not in schema).
+- Wax-fill terminal step (wax-filling storeDeckAndComplete + opentron-control completeRun):
+  fridge scan still records waxStorage.* — status stays wax_filled. "Where" is a field,
+  "what stage" is the status; they were conflated.
+- quick-wax-store/ DELETED (quick-wax-fill already lands wax_filled); quick-seal accepts
+  wax_filled too.
+- api/cv/capture: wax_stored→wax_qc auto-advance block removed. api/cv/wax-verdict:
+  eligible-from = wax_filled|wax_ready|wax_qc|wax_stored, reason optional, imageId audited,
+  update filtered on the cart's actual status (409 on race), priorStatus set.
+- NEW /manufacturing/cart-mfg/wax-reject (Wax Reject): scanner sticky context, Pi-station /
+  USB capture cloned from wax-inspect; Space = photo (POST /api/cv/capture phase wax_filled
+  verdict:'rejected' → CvImage qcLabel rejected = training label); reason chips
+  (underfill/overfill/bubble/smear/other + note); Reject (Enter) disabled until a photo
+  exists → wax_rejected; feed of last 50 rejects; counts wax_filled / rejected today.
+  Nav: "Wax Inspect" → "Wax Reject"; /wax-inspect still loads with a grey "visual-only —
+  use Wax Reject" banner, ALLOWED_STATUSES minus wax_stored, optimistic bump removed.
+- Consumer sweep: fridge occupancy everywhere (/, cartridge-dashboard, fridges-ovens,
+  equipment/location, equipment/activity, inventory/fridge-storage, pipeline, consumables)
+  = status ∈ WAX_STAGE_STATUSES AND waxStorage.location; phaseOrder/STAGES/LifecycleStage
+  drop wax_stored; cart-mfg tiles split "Wax Fill (filling)" / "Wax-Filled (ready for
+  reagent)"; cartridge-admin/failures also lists status wax_rejected; equipment-activity
+  event kind cartridge_wax_stored → cartridge_wax_filled; ask-bims + tier1 doc strings and
+  list_cartridges_in_storage query; seed-domain-data + ask-bims baseline test updated. Svelte
+  color maps keep wax_stored/wax_qc keys so historical rows render.
+- Migration: scripts/migrate-wax-simplify.ts (dry-run default, --apply, idempotent):
+  wax_stored → wax_filled, wax_qc → wax_filled (priorStatus + AuditLog per cart),
+  StandingTarget.metric.params.statuses rewritten. DRY RUN vs prod 2026-08-17: 227 wax_stored,
+  196 wax_qc, 0 standing targets; live wax_filled=17, wax_ready=330. NOT APPLIED — deploy day.
+
+npm run check: 11 errors = baseline, 0 new.
+
+DEPLOY-DAY RUNBOOK (order matters — deploy, then migrate):
+  1. merge feat/wax-status-simplify → master, push (Vercel builds production)
+  2. npx tsx scripts/migrate-wax-simplify.ts            # dry run, eyeball counts
+  3. npx tsx scripts/migrate-wax-simplify.ts --apply    # idempotent
+  Until --apply runs: 227 wax_stored carts are invisible to fridge/wax-stage counts and are
+  refused at the reagent gate with a "legacy status — run migrate-wax-simplify" hint;
+  Wax Reject will still accept them. Nothing breaks, it just under-counts.

@@ -13,6 +13,7 @@ import { getRobot, robotGet, robotPost, bridgeDeviceIdForRobot } from '$lib/serv
 import { calibrationRtpValues } from '$lib/server/opentrons/calibration-rtps';
 import { ensureFreshRunProtocol } from '$lib/server/opentrons/protocol-freshness';
 import { estimateReagentRunSeconds } from '$lib/manufacturing/reagent-run-estimate';
+import { isReagentEligible } from '$lib/shared/cartridge-wax-status';
 import type { PageServerLoad, Actions } from './$types';
 
 // Extend Vercel serverless timeout to 60s
@@ -620,18 +621,20 @@ export const actions: Actions = {
 				return fail(400, { error: `Cartridge ${missingIds[0]} not found. Must complete wax filling first.` });
 			}
 
-			// Hard state-machine gate: cartridge MUST be at status='wax_ready'
-			// before reagent filling can begin — i.e. it completed wax filling
-			// (→ wax_stored) AND passed wax inspection (wax_stored → wax_qc →
-			// wax_ready). Per the model's documented flow, only wax_ready feeds
-			// reagent. NOTE: this previously checked wax_stored, which rejected
-			// every inspected cart (a stale gate from before wax inspection was
-			// added). Applies to both research and production reagent runs.
-			const notReady = (existingCartridges as any[]).filter((c: any) => c.status !== 'wax_ready');
+			// Hard state-machine gate (WAX-SIMPLIFY-3): cartridge must be in the wax
+			// stage — wax_filled or wax_ready — to enter reagent filling. Visual wax
+			// pass is implicit; only wax_rejected carts are turned away. Same helper
+			// as validate-equipment's live scan check so the two gates never disagree.
+			// Applies to both research and production reagent runs.
+			const notReady = (existingCartridges as any[])
+				.map((c: any) => ({ c, gate: isReagentEligible(c.status) }))
+				.filter((x) => !x.gate.ok);
 			if (notReady.length > 0) {
-				const details = notReady.map((c: any) => `${c._id} (status=${c.status ?? 'none'})`).join(', ');
+				const details = notReady
+					.map((x) => `${x.c._id} — ${(x.gate as { hint: string }).hint}`)
+					.join('; ');
 				return fail(400, {
-					error: `Cartridge(s) not ready for reagent filling — must be 'wax_ready' (wax filled + inspection passed) first. Complete wax filling and wax inspection before scanning: ${details}`
+					error: `Cartridge(s) can't be reagent-filled — must be wax_filled or wax_ready: ${details}`
 				});
 			}
 		}
