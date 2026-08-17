@@ -7653,4 +7653,17 @@ Verification status:
   svelte-check: 0 errors in kanban files. The 96 errors / 429 warnings reported
   repo-wide are pre-existing (missing optional deps sharp/chart.js plus untouched
   assembly/capture/parts WIP) and are unchanged by this branch.
-  No migration required for this deploy. Preview only — NOT merged to master.
+  No migration required for this deploy. Preview verified by user, then merged.
+
+## Deployment (production) — 2026-08-17
+  source:  feat/kanban-tier2-freeform -> master (fast-forward, 2 commits)
+  branch:  master
+  commit:  67988e2d63d31b0789ceb50408741e23e0eb21e2
+  URL:     https://bioscale-operations-system-mongodb-p35xn4l2x-brevitest.vercel.app
+  alias:   https://bioscale-operations-system-mongodb.vercel.app
+  build:   Vercel production, Ready (2m). No rebuild-from-scratch — same SHA as
+           the verified preview, so Vercel promoted the existing build.
+  content: identical to the preview entry above (Tier 2 free-reign pull, TASK-NNN
+           tracking numbers, typed task links, Tier 1 tag autocomplete).
+  note:    pre-existing tasks still have no tracking number — backfill is a
+           separate /px-off ID-keyed pass, not done here.
