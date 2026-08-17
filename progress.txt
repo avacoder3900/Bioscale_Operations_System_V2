@@ -7428,3 +7428,29 @@ and the printer on USB or a lab-LAN IP. Assumptions to confirm on first print: 2
 model, 0.125" column gap, agent accepts the text/plain JSON body on /write.
 
 npm run check: 11 errors (baseline, unchanged). npm run test:unit: 91 passed (80 + 11 new).
+
+================================================================================
+2026-08-17 — jq/barcode-scanning — PRDs: direct OT-2 control over Tailscale (OT2-TAILNET-0/1/2), gateway deferred
+================================================================================
+Side thread from the Zebra work, per Jacob: "is there a better way to run the OT-2 bridge?"
+Decisions recorded in docs/prds/OT2-TAILNET-0-PLAN.md — keep the OT-2 Pis modified (bridge
+stays for the serial gantry scanner / sweeps / deck-scan), add Tailscale to each Pi with
+`tailscale serve` fronting :31950 over HTTPS (same pattern as the CV capture Pis), and give
+BIMS a hybrid transport: browser → robot directly when on the tailnet, existing
+Ot2BridgeCommand queue otherwise. Start Run stays on the queue (durable/audited); pause,
+resume, cancel, status, jog, health go direct. Auth is tailnet ACLs (tag:ot2 reachable only
+from tag:lab-workstation; no Funnel). Lab Mac stays a jump box; a consolidated gateway +
+printer job queue is written up as LAB-GATEWAY-1-DEFERRED.md with the triggers that would
+make it worth doing.
+
+Docs only, no code:
+- docs/prds/OT2-TAILNET-0-PLAN.md — why, decisions, order (B07 → R04 → B14), risks (mixed
+  content ⇒ must use tailscale serve; CORS check on robot-server; /data persistence; ACLs).
+- docs/prds/OT2-TAILNET-1-PI-PROVISIONING.md — static tailscale under /data, userspace-
+  networking fallback, serve --https=443 → localhost:31950, ACL policy snippet, verification.
+- docs/prds/OT2-TAILNET-2-DIRECT-CONTROL.md — OpentronsRobot.directUrl, browser-only
+  src/lib/opentrons/direct-client.ts (probe + per-call fallback), /runs/[rid]/record route
+  so BIMS still gets the audit/run-record writes, transport pill in EmbeddedRunController.
+- docs/prds/LAB-GATEWAY-1-DEFERRED.md.
+Next on this thread: TAILNET-1 on B07 (lab task), then TAILNET-2 (~1 day). Zebra printer
+verification against the physical ZT230 is still the open item on the barcode work.
