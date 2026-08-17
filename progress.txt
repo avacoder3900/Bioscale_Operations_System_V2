@@ -7571,3 +7571,17 @@ The code tolerates unmigrated data (rank ties break on createdAt; queuePolicyOf 
 old boards.ops values; legacy board:* replenishment signals auto-resolve).
 
 npm run check: 11 errors = baseline, 0 new (all 11 in untouched files).
+
+================================================================================
+2026-08-16 — master — small kanban tweaks shipped: back-link origin + autosave, Decline label, tiered CFDs
+================================================================================
+Cherry-picked the pre-KB2-16 tweaks from feat/kanban-tweaks onto master for production
+(b13ff816, dbf8202c, 7f5c1883 + docs). KB2-16 (projects→tags, one board) is still building
+on the feature branch and deliberately NOT included — it requires a prod data migration.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit (this commit; git log master --oneline to confirm)
+Retrieve this exact code: git checkout master at this entry's merge commit
+What this deployment is for: task-detail back link returns to the page you came from +
+  edit form autosaves on navigate away; Inventory Decline buttons lose the ellipsis;
+  Flow shows two CFDs (Tier 2 committed flow above, Tier 1 inventory below).
