@@ -75,7 +75,6 @@ const NUMBER_FIELDS: [string, string][] = [
 	['minOrderPoint', 'minOrderPoint'],
 	['wipPerPerson', 'wipPerPerson'],
 	['wipChoreMax', 'wipChoreMax'],
-	['pullWindow', 'pullWindow'],
 	['expedite_systemMax', 'expedite.systemMax'],
 	['expedite_alertPct', 'expedite.alertPctRolling30d'],
 	['allocation_standard', 'allocation.standard'],

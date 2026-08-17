@@ -52,6 +52,13 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const { readyCap, minOrderPoint } = queuePolicyOf(policy);
 	const readyCount = await KanbanTask.countDocuments({ status: 'ready', archived: false });
 
+	// KB2-25 — the whole tag vocabulary, board-wide, so the capture box can
+	// complete against tags that live on tasks this page never loads (ready/wip/
+	// done/archived). `distinct` already de-dupes; we only sort for stable UI.
+	const tagVocabulary = ((await KanbanTask.distinct('tags')) as string[])
+		.filter((t) => typeof t === 'string' && t.trim().length > 0)
+		.sort((a, b) => a.localeCompare(b));
+
 	return {
 		canReplenish: hasPermission(locals.user, 'kanban:replenish') || isAdmin(locals.user),
 		ready: {
@@ -62,6 +69,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		},
 		// KB2-12 — canonical sizing decision test, shown in the process modal.
 		sizingDecisionTest: SIZING_DECISION_TEST,
+		// KB2-25 — autocomplete source for the capture box.
+		tagVocabulary,
 		templates: JSON.parse(
 			JSON.stringify(
 				templates.map((t) => ({
@@ -150,10 +159,26 @@ export const actions: Actions = {
 		const title = fd.get('title')?.toString();
 		if (!title?.trim()) return fail(400, { error: 'Title is required' });
 
-		const tags = (fd.get('tags')?.toString() ?? '')
-			.split(',')
-			.map((s) => s.trim())
-			.filter(Boolean);
+		// KB2-25 — canonicalise before writing. Client autocomplete is a
+		// convenience, not a guarantee: someone can still type "Firmware " when
+		// "firmware" exists, or paste the same tag twice. Fold each entry onto an
+		// existing tag when it matches case-insensitively so the vocabulary stays
+		// closed instead of growing near-duplicates.
+		const existingByKey = new Map(
+			((await KanbanTask.distinct('tags')) as string[])
+				.filter((t) => typeof t === 'string' && t.trim().length > 0)
+				.map((t) => [t.trim().toLowerCase(), t.trim()])
+		);
+		const seen = new Set<string>();
+		const tags: string[] = [];
+		for (const raw of (fd.get('tags')?.toString() ?? '').split(',')) {
+			const trimmed = raw.trim().replace(/\s+/g, ' ');
+			if (!trimmed) continue;
+			const key = trimmed.toLowerCase();
+			if (seen.has(key)) continue;
+			seen.add(key);
+			tags.push(existingByKey.get(key) ?? trimmed);
+		}
 
 		try {
 			await createKanbanItem({

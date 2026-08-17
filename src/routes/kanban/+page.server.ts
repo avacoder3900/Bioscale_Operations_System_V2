@@ -49,7 +49,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	const policy = await getKanbanPolicy();
 	const { readyCap, minOrderPoint } = queuePolicyOf(policy);
-	const pullWindow: number = policy?.pullWindow ?? 3;
 
 	// Supply loops (KB2-10/KB2-13) — the panel load IS a supply tick: anything
 	// below its reorder point (standing targets + below-min parts) spawns its
@@ -80,7 +79,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const readyCount = tasks.filter((t) => t.status === 'ready').length;
 
 	return {
-		pullWindow,
 		readyCap,
 		minOrderPoint,
 		readyCount,

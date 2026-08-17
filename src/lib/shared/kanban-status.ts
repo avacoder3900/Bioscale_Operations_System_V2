@@ -28,6 +28,29 @@ export type KanbanSizeClass = (typeof SIZE_CLASSES)[number];
 export const ORIGINS = ['planned', 'discovered'] as const;
 export type KanbanOrigin = (typeof ORIGINS)[number];
 
+// KB2-20: task-to-task link vocabulary. Stored one-way; the reverse direction
+// is derived at read time via LINK_INVERSE so a link can never be half-written.
+export const LINK_TYPES = ['blocks', 'blocked_by', 'relates_to'] as const;
+export type KanbanLinkType = (typeof LINK_TYPES)[number];
+
+export const LINK_INVERSE: Readonly<Record<KanbanLinkType, KanbanLinkType>> = {
+	blocks: 'blocked_by',
+	blocked_by: 'blocks',
+	relates_to: 'relates_to'
+};
+
+export const LINK_LABEL: Readonly<Record<KanbanLinkType, string>> = {
+	blocks: 'Blocks',
+	blocked_by: 'Blocked by',
+	relates_to: 'Relates to'
+};
+
+const LINK_SET: ReadonlySet<string> = new Set(LINK_TYPES);
+
+export function isKanbanLinkType(s: string): s is KanbanLinkType {
+	return LINK_SET.has(s);
+}
+
 const TIER1_SET: ReadonlySet<string> = new Set(TIER1_STATUSES);
 const TIER2_SET: ReadonlySet<string> = new Set(TIER2_STATUSES);
 

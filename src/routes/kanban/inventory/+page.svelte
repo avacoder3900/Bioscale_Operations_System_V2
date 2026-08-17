@@ -17,6 +17,67 @@
 	let modal = $state<null | { kind: 'process' | 'decline'; task: TaskRow }>(null);
 	let processCos = $state('standard');
 
+	// KB2-25 — tag autocomplete. The field stays a plain comma-separated string
+	// (the server action still parses it, and still canonicalises); this only
+	// steers typing toward tags that already exist so we stop minting variants
+	// like "Firmware" / "firmware" / "firmware ".
+	let tagsInput = $state('');
+	let tagsFocused = $state(false);
+	let tagHighlight = $state(0);
+
+	// Everything before the fragment being typed, and the fragment itself.
+	let tagPrefix = $derived(tagsInput.slice(0, tagsInput.lastIndexOf(',') + 1));
+	let tagFragment = $derived(tagsInput.slice(tagsInput.lastIndexOf(',') + 1).trim());
+	let tagsChosen = $derived(
+		new Set(
+			tagPrefix
+				.split(',')
+				.map((s) => s.trim().toLowerCase())
+				.filter(Boolean)
+		)
+	);
+	let tagSuggestions = $derived(
+		(() => {
+			const frag = tagFragment.toLowerCase();
+			const pool = (data.tagVocabulary ?? []).filter((t: string) => !tagsChosen.has(t.toLowerCase()));
+			if (!frag) return pool.slice(0, 8);
+			// Prefix matches first — they're what the typist most likely means.
+			const starts = pool.filter((t: string) => t.toLowerCase().startsWith(frag));
+			const contains = pool.filter(
+				(t: string) => !t.toLowerCase().startsWith(frag) && t.toLowerCase().includes(frag)
+			);
+			return [...starts, ...contains].slice(0, 8);
+		})()
+	);
+	// An exact hit needs no suggestion list — the tag is already canonical.
+	let showTagMenu = $derived(
+		tagsFocused &&
+			tagSuggestions.length > 0 &&
+			!(tagSuggestions.length === 1 && tagSuggestions[0].toLowerCase() === tagFragment.toLowerCase())
+	);
+
+	function applyTag(tag: string) {
+		tagsInput = tagPrefix + (tagPrefix ? ' ' : '') + tag + ', ';
+		tagHighlight = 0;
+	}
+	function onTagKeydown(e: KeyboardEvent) {
+		if (!showTagMenu) return;
+		if (e.key === 'ArrowDown') {
+			e.preventDefault();
+			tagHighlight = (tagHighlight + 1) % tagSuggestions.length;
+		} else if (e.key === 'ArrowUp') {
+			e.preventDefault();
+			tagHighlight = (tagHighlight - 1 + tagSuggestions.length) % tagSuggestions.length;
+		} else if (e.key === 'Tab' || (e.key === 'Enter' && tagFragment)) {
+			// Enter only completes while a fragment is in flight, so a finished
+			// tag list still submits the form on the first Enter.
+			e.preventDefault();
+			applyTag(tagSuggestions[Math.min(tagHighlight, tagSuggestions.length - 1)]);
+		} else if (e.key === 'Escape') {
+			tagsFocused = false;
+		}
+	}
+
 	// KB2-14 — the commitment ceremony: staged taskIds in commit order.
 	let staged = $state<string[]>([]);
 	let commitNote = $state('');
@@ -116,6 +177,10 @@
 				if (result.type === 'success') {
 					errorMsg = '';
 					modal = null;
+					// KB2-25 — update() resets the form, but a bound value would just
+					// repaint itself back into the field. Clear the state too.
+					tagsInput = '';
+					tagsFocused = false;
 				}
 				await update();
 			}
@@ -177,7 +242,41 @@
 		<div class="min-w-[240px] flex-1">
 			<TronInput name="title" placeholder="Capture an option — one line is enough" required />
 		</div>
-		<input name="tags" class="tron-input min-w-[180px]" placeholder="Tags (comma-separated, optional)" title="Tags" />
+		<!-- KB2-25: tag field with match-as-you-type against the existing vocabulary -->
+		<div class="relative min-w-[180px]">
+			<input
+				name="tags"
+				class="tron-input w-full"
+				placeholder="Tags (comma-separated, optional)"
+				title="Tags — matches existing tags as you type"
+				autocomplete="off"
+				bind:value={tagsInput}
+				onfocus={() => (tagsFocused = true)}
+				onblur={() => setTimeout(() => (tagsFocused = false), 120)}
+				onkeydown={onTagKeydown}
+			/>
+			{#if showTagMenu}
+				<div
+					class="absolute left-0 right-0 top-full z-20 mt-1 overflow-hidden rounded border"
+					style="border-color: var(--color-tron-border); background: var(--color-tron-bg-secondary);"
+				>
+					{#each tagSuggestions as tag, i (tag)}
+						<button
+							type="button"
+							class="flex w-full items-center gap-2 px-2 py-1 text-left text-xs"
+							style={i === tagHighlight
+								? 'background: var(--color-tron-bg-tertiary); color: var(--color-tron-cyan);'
+								: 'color: var(--color-tron-text-secondary);'}
+							onmouseenter={() => (tagHighlight = i)}
+							onclick={() => applyTag(tag)}
+						>
+							<span class="h-2 w-2 shrink-0 rounded-full" style="background: {tagColor(tag)};"></span>
+							{tag}
+						</button>
+					{/each}
+				</div>
+			{/if}
+		</div>
 		<TronButton type="submit" variant="primary" disabled={submitting}>Capture</TronButton>
 	</form>
 

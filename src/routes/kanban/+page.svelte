@@ -229,23 +229,17 @@
 		<div class="flex min-w-[250px] max-w-[340px] flex-1 flex-col rounded-lg">
 			{@render columnHeader(STATUS_META.ready.label, STATUS_META.ready.color, `${ready.length} / ${data.readyCap}`)}
 			<div class="max-h-[70vh] flex-1 space-y-2 overflow-y-auto pr-1">
-				<p class="tron-text-muted px-1 text-[10px] uppercase tracking-wide">Pull from the top {data.pullWindow} only</p>
+				<p class="tron-text-muted px-1 text-[10px] uppercase tracking-wide">Pull any task — rank is a suggestion, not a gate</p>
 				{#if ready.length === 0}
 					<p class="tron-text-muted px-1 text-xs">The ready queue is empty. Replenishment decides what enters it.</p>
 				{/if}
 				{#each ready as t (t.id)}
-					{@const inWindow = t.rank >= 1 && t.rank <= data.pullWindow}
-					<div
-						class="tron-card !p-3"
-						style={inWindow ? 'border-color: var(--color-tron-cyan); box-shadow: 0 0 8px rgba(0,212,255,0.15);' : ''}
-					>
+					<div class="tron-card !p-3">
 						<div class="flex items-start gap-2">
 							<!-- Rank number badge, top-left. Order IS the layout. -->
 							<span
 								class="flex h-7 w-7 shrink-0 items-center justify-center rounded text-sm font-bold"
-								style={inWindow
-									? 'background: var(--color-tron-cyan); color: var(--color-tron-bg-primary);'
-									: 'background: var(--color-tron-bg-tertiary); color: var(--color-tron-text-secondary);'}
+								style="background: var(--color-tron-cyan); color: var(--color-tron-bg-primary);"
 							>
 								{t.rank}
 							</span>
@@ -257,19 +251,15 @@
 								</div>
 							</div>
 						</div>
-						{#if inWindow || data.canReplenish}
-							<div class="mt-2 flex flex-wrap items-center gap-2">
-								{#if inWindow}
-									<form method="POST" action="?/pull" use:enhance={submitEnhance}>
-										{@render hiddenTask(t)}
-										<TronButton type="submit" variant="primary" disabled={submitting}>Pull</TronButton>
-									</form>
-								{/if}
-								{#if data.canReplenish}
-									<TronButton onclick={() => (modal = { kind: 'demote', task: t })}>Demote…</TronButton>
-								{/if}
-							</div>
-						{/if}
+						<div class="mt-2 flex flex-wrap items-center gap-2">
+							<form method="POST" action="?/pull" use:enhance={submitEnhance}>
+								{@render hiddenTask(t)}
+								<TronButton type="submit" variant="primary" disabled={submitting}>Pull</TronButton>
+							</form>
+							{#if data.canReplenish}
+								<TronButton onclick={() => (modal = { kind: 'demote', task: t })}>Demote…</TronButton>
+							{/if}
+						</div>
 					</div>
 				{/each}
 			</div>

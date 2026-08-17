@@ -17,6 +17,10 @@ const operatorRef = { _id: String, username: String };
  */
 const kanbanTaskSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
+	// KB2-20: human-facing tracking number, e.g. TASK-001. Allocated once at
+	// capture from the atomic KanbanCounter; never reused, never renumbered.
+	// Cosmetic identity only — `_id` stays the key for every relation/route.
+	trackingNumber: { type: String },
 	title: { type: String, required: true },
 	description: String,
 	status: { type: String, enum: ALL_STATUSES, default: 'captured' },
@@ -69,6 +73,20 @@ const kanbanTaskSchema = new Schema({
 		content: String, createdAt: Date, createdBy: operatorRef
 	}],
 	parentTaskId: String,
+	// KB2-20: explicit, typed task-to-task links. Stored one-way on the task
+	// that declares the relationship; the reverse direction is derived at read
+	// time so a link can never be half-written.
+	//   blocks     — this task must finish before `taskId` can start
+	//   blocked_by — `taskId` must finish before this one can start
+	//   relates_to — soft association, no scheduling meaning
+	links: [{
+		_id: { type: String, default: () => generateId() },
+		taskId: { type: String, required: true },
+		type: { type: String, enum: ['blocks', 'blocked_by', 'relates_to'], default: 'relates_to' },
+		note: String,
+		createdAt: { type: Date, default: Date.now },
+		createdBy: String // username
+	}],
 	transitions: [{
 		_id: { type: String, default: () => generateId() },
 		fromStatus: String, toStatus: String,
@@ -99,6 +117,9 @@ kanbanTaskSchema.index({ 'assignee._id': 1, status: 1 });
 kanbanTaskSchema.index({ tags: 1 });
 kanbanTaskSchema.index({ archived: 1, archivedAt: -1 });
 kanbanTaskSchema.index({ parentTaskId: 1 });
+// Sparse+unique: legacy tasks with no number stay legal, new ones can't collide.
+kanbanTaskSchema.index({ trackingNumber: 1 }, { unique: true, sparse: true });
+kanbanTaskSchema.index({ 'links.taskId': 1 });
 kanbanTaskSchema.index({ spawnedFrom: 1 });
 // wip-mtime watermark poll: findOne().sort({updatedAt:-1}) every few seconds
 // per open board — needs this or it full-scans + in-memory-sorts every poll

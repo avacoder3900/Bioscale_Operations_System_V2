@@ -15,7 +15,10 @@ const kanbanPolicySchema = new Schema(
 		minOrderPoint: { type: Number, default: 3 },
 		wipPerPerson: { type: Number, default: 2 }, // one human, one limit
 		wipChoreMax: { type: Number, default: 1 },
-		pullWindow: { type: Number, default: 3 }, // pull only from top-N of global ready order
+		// NOTE: `pullWindow` was removed — the ready queue is pull-anywhere now.
+		// Rank still orders the queue as a recommendation; it no longer gates
+		// which cards may be pulled. Stored values on existing policy docs are
+		// ignored by strict mode and can be dropped whenever.
 		expedite: {
 			systemMax: { type: Number, default: 1 },
 			alertPctRolling30d: { type: Number, default: 5 }

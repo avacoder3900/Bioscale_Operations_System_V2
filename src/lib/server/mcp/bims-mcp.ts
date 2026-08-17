@@ -985,8 +985,8 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		{ annotations: WRITE_TOOL,
 			description:
 				'Tune kanban policy knobs at runtime (no deploy). `actor` must hold kanban:admin. ' +
-				'updates is a map of dot-path → value, e.g. {"readyCap": 10, "pullWindow": 3}. ' +
-				'Valid paths: readyCap, minOrderPoint, wipPerPerson, wipChoreMax, pullWindow, ' +
+				'updates is a map of dot-path → value, e.g. {"readyCap": 10, "wipPerPerson": 2}. ' +
+				'Valid paths: readyCap, minOrderPoint, wipPerPerson, wipChoreMax, ' +
 				'expedite.{systemMax|alertPctRolling30d}, allocation.{standard|fixed_date|chore}, ' +
 				'sizeClassDefinitions.{short|medium|long}, sle.percentile, sle.perSizeClassDays.{short|medium|long}, recalibrateAfter.',
 			inputSchema: z.object({

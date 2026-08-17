@@ -106,11 +106,14 @@
 			<!-- WIP + pull -->
 			<section class="tron-card !p-4">
 				<h3 class="tron-text-primary mb-3 text-sm font-bold uppercase tracking-wide">WIP and pull discipline</h3>
-				<div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+				<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
 					{@render knob('WIP per person', 'wipPerPerson', p.wipPerPerson ?? 2, 'Concurrent wip items per person. A limit, not a score.')}
 					{@render knob('Chore max per person', 'wipChoreMax', p.wipChoreMax ?? 1, 'Of the personal WIP, at most this many chores — rationed so small work cannot eat the week.')}
-					{@render knob('Pull window', 'pullWindow', p.pullWindow ?? 3, 'Pull only from the top N of the global ready order — bounded choice, no cherry-picking from the tail.')}
 				</div>
+				<p class="tron-text-muted mt-3 text-xs">
+					The pull window was removed — any ready task can be pulled regardless of rank. Rank still
+					orders the queue as a recommendation.
+				</p>
 			</section>
 
 			<!-- Expedite -->
