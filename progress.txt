@@ -7620,3 +7620,37 @@ policy singleton collapsed to readyCap=8 / minOrderPoint=3 with the boards block
 0 legacy board:* signals / standing targets to clean. Re-run dry run showed 0 remaining
 project subdocs, 0 board fields, no stale indexes. kanban_projects collection left in
 place as dead data per the PRD. The POST-DEPLOY REQUIRED step above is now complete.
+
+================================================================================
+2026-08-17 — feat/kanban-tier2-freeform — Tier 2 free-reign pull, tracking numbers, links, tag autocomplete
+================================================================================
+Deployment (preview):
+  branch:  feat/kanban-tier2-freeform
+  commit:  6f6fc7c60eb0c595d040bc51ae86784be61024de
+  URL:     https://bioscale-operations-system-mongodb-7064bxapu.vercel.app
+  build:   Vercel preview, success (Deployment has completed)
+
+What this deployment is for:
+  - Tier 2 pull window REMOVED. Any Ready task is startable; rank is now only an
+    ordering suggestion. WIP limit is the sole remaining gate and its rejection
+    message names the tasks the person already holds.
+  - TASK-NNN tracking numbers on every newly created task. Backed by a new
+    KanbanCounter model; numbers allocated by findOneAndUpdate upsert so
+    concurrent captures cannot collide, and never reused.
+  - Typed task links: relates / blocks / blocked_by / derived_from, written
+    bidirectionally in one pass, mirror removed on unlink, audit on both sides.
+    Spawning a follow-on task creates it pre-linked to its parent.
+  - Tier 1 capture tag autocomplete over existing vocabulary (prefix first, Tab
+    accepts, Enter only mid-word). Server folds case variants onto existing tags
+    so near-duplicates cannot enter the vocabulary by any entry path.
+
+NOT DONE — deliberate:
+  Pre-existing tasks have NO tracking number and were not backfilled. That is a
+  bulk ID-keyed write and belongs in a separate /px-off solo pass. Until then the
+  board is mixed: new tasks numbered, old ones blank.
+
+Verification status:
+  svelte-check: 0 errors in kanban files. The 96 errors / 429 warnings reported
+  repo-wide are pre-existing (missing optional deps sharp/chart.js plus untouched
+  assembly/capture/parts WIP) and are unchanged by this branch.
+  No migration required for this deploy. Preview only — NOT merged to master.
