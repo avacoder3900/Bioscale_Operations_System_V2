@@ -7778,3 +7778,33 @@ Flow CFD title, MCP kanban_update_task / policy / standing descriptions, machine
 HUMAN_ONLY_ACTIONS what/where, transition audit direction string, replenish demote error,
 ask-bims-tier1 schema doc. Code identifiers (TIER2_STATUSES etc.) unchanged. KB2-00 decision
 #5 amended + pull-window seed row struck. MCP 3.0.1 → 3.0.2. check: 11 = baseline.
+
+================================================================================
+2026-08-18 — feat/kanban-tweaks — KB2-18: BIMS kanban MCP improvements (Alejandro's spec) ALL DONE
+================================================================================
+Alejandro's bims-mcp-improvements-spec.md (from the Aug 18 ~45-op roadmap import via MCP) filed
+as docs/prds/KB2-18-MCP-IMPROVEMENTS.md with a decisions header. Every item shipped (81303e61):
+P0-1 dor at capture (already done this morning for kanban_capture; now also on subtasks; the
+  created activity records dorSetAtCapture; response echoes dor + dorSet).
+P0-2 kanban_capture_bulk → POST /api/agent/operations/kanban/tasks/bulk (1–50 items, PER-ITEM
+  results, not a transaction; bad spike / unknown parent / cycle rejects only that item).
+P1-3 tags.ts: normalizeTags() (trim, collapse ws, case-fold onto existing vocabulary, de-dupe)
+  now runs INSIDE createKanbanItem and on every tags write (agent PATCH, merge, UI capture —
+  inventory's inline copy replaced); renameTag() + kanban_rename_tag (from/to|null/scope).
+P1-4 built on Alejandro's KB2-20 typed links instead of a parallel field: links + blockedBy
+  sugar accepted on capture/bulk/subtasks/PATCH + MCP; removeLinkId; DFS cycle guard on
+  blocks/blocked_by (assertNoBlockingCycle in transition.ts, id pre-allocated at create so the
+  guard sees the owner); board-snapshot carries links (declared+derived) + resolved blockedBy /
+  blocks; replenishment-status adds blockedByOpen + warning (never hard-blocks).
+P1-5 parentTaskId on PATCH/MCP via setParent(): exists / no self / no cycle / max depth 3 /
+  null detaches / audited both sides / NO status coupling (nothing coupled before either).
+P2-6 agent-shapes.ts captureEcho (id, trackingNumber, description, itemType, origin, dor,
+  dorSet, links); merge de-dupes tags case-insensitively; replenishment-status dorChecklist
+  (deliverable / handoffBrief ok|missing|n/a / sizeClass / classOfService); snapshot params
+  statuses, tag, includeActivity (MCP schema exposes them, tool description tells the model
+  to narrow); the two 'MCP Test' artifacts declined (reason "test artifacts").
+MCP 3.0.2 → 3.1.0. Smoke-tested 20 assertions end-to-end against the live agent API from a
+local dev server (bulk mixed batch, casing fold, cycle + self rejections, snapshot both
+directions + filters + 400 on bad status, replenishment warning, re-parent + cycle + detach,
+subtask dor + tag inheritance, rename + remove) — all PASS; 4 smoke tasks declined afterwards.
+npm run check: 11 = baseline.
