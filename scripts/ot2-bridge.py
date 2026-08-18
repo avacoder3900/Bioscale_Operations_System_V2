@@ -1543,6 +1543,40 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
                 log.warning("calibrate_tip: close run failed: %s", e)
 
 
+TIP_SWAP_REQUEST_PATH = "/data/ot2-bridge/tip-swap-request.json"
+
+
+def execute_tip_swap_request(command_id: str, payload: dict) -> None:
+    """Operator pressed "Swap tip" on the BIMS wax run page. The running wax
+    protocol polls TIP_SWAP_REQUEST_PATH before every dispense; when it finds
+    the file it empties the tip into the source, swaps the tip (mode 'rack' =
+    robot takes the next tracked tip; 'hand' = pauses for the operator to push
+    one on), re-probes it on the calibrator, re-aspirates and continues at the
+    very well it was about to fill. The protocol deletes the file when it acts.
+    payload: { mode: 'rack'|'hand', cancel?: bool }"""
+    try:
+        if payload.get("cancel"):
+            try:
+                os.remove(TIP_SWAP_REQUEST_PATH)
+                log.info("tip_swap_request %s: cancelled (file removed)", command_id)
+            except FileNotFoundError:
+                pass
+            _post_result(command_id, {"ok": True, "status": 200, "body": {"cancelled": True}})
+            return
+        mode = "hand" if str(payload.get("mode") or "rack") == "hand" else "rack"
+        os.makedirs(os.path.dirname(TIP_SWAP_REQUEST_PATH), exist_ok=True)
+        tmp = TIP_SWAP_REQUEST_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"mode": mode, "requestedAt": time.time(),
+                       "requestedBy": payload.get("requestedBy"), "runId": payload.get("runId")}, f)
+        os.replace(tmp, TIP_SWAP_REQUEST_PATH)
+        log.info("tip_swap_request %s: mode=%s written to %s", command_id, mode, TIP_SWAP_REQUEST_PATH)
+        _post_result(command_id, {"ok": True, "status": 200, "body": {"mode": mode, "path": TIP_SWAP_REQUEST_PATH}})
+    except Exception as e:
+        log.error("tip_swap_request %s failed: %s", command_id, e)
+        _post_result(command_id, {"ok": False, "error": str(e)})
+
+
 def execute_command(cmd: dict, port: ScannerPort) -> None:
     command_id = cmd.get("_id")
     kind = cmd.get("kind")
@@ -1563,6 +1597,8 @@ def execute_command(cmd: dict, port: ScannerPort) -> None:
         execute_auto_resume_run(command_id, cmd.get("payload") or {})
     elif kind == "calibrate_tip":
         execute_calibrate_tip(command_id, cmd.get("payload") or {})
+    elif kind == "tip_swap_request":
+        execute_tip_swap_request(command_id, cmd.get("payload") or {})
     else:
         log.warning("Unknown command kind '%s' (id=%s)", kind, command_id)
         _post_result(command_id, {"ok": False, "error": "unknown command kind: {}".format(kind)})

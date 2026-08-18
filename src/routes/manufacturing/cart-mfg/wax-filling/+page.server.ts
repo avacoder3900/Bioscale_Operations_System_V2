@@ -1482,6 +1482,53 @@ export const actions: Actions = {
 	 * AND to WaxFillingRun.notes[] so run-history surfaces can read run.notes
 	 * directly. At most one wax_run note per cartridge — re-saving overwrites.
 	 */
+	/**
+	 * Mid-run tip swap (2026-08-18). Asks the on-robot bridge daemon to write a
+	 * request file that the running wax protocol polls before every dispense.
+	 * The protocol then empties the tip, swaps it (mode 'rack' = robot takes the
+	 * next tracked tip; 'hand' = pauses for the operator to push one on),
+	 * re-probes it on the calibrator, and re-aspirates + continues at the very
+	 * well it was about to fill. Works whether the run is running or paused.
+	 */
+	requestTipSwap: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		await connectDB();
+		const data = await request.formData();
+		const runId = data.get('runId')?.toString();
+		const mode = data.get('mode')?.toString() === 'hand' ? 'hand' : 'rack';
+		const cancel = data.get('cancel')?.toString() === 'true';
+		if (!runId) return fail(400, { error: 'Missing runId' });
+		const run = await WaxFillingRun.findById(runId).lean() as any;
+		if (!run) return fail(404, { error: 'Run not found' });
+		const robotId = run.robot?._id;
+		const robot = robotId ? await OpentronsRobot.findById(robotId).lean() as any : null;
+		if (!robot) return fail(400, { error: 'Run has no OT-2 robot' });
+		try {
+			await Ot2BridgeCommand.create({
+				_id: generateId(),
+				robotId: String(robotId),
+				deviceId: bridgeDeviceIdForRobot(robot as any),
+				kind: 'tip_swap_request',
+				payload: { mode, cancel, runId: run.opentronsRunId ?? null, requestedBy: locals.user.username },
+				ttlMs: 120_000,
+				requestedBy: locals.user.username
+			});
+		} catch (e) {
+			return fail(502, { error: `Could not reach the robot bridge: ${e instanceof Error ? e.message : 'unknown'}` });
+		}
+		await AuditLog.create({
+			_id: generateId(),
+			action: cancel ? 'wax_tip_swap_cancel' : 'wax_tip_swap_request',
+			resourceType: 'wax_filling_run',
+			resourceId: runId,
+			userId: locals.user._id,
+			username: locals.user.username,
+			timestamp: new Date(),
+			details: { mode, opentronsRunId: run.opentronsRunId ?? null }
+		});
+		return { success: true, tipSwap: cancel ? 'cancelled' : mode };
+	},
+
 	recordWaxRunNote: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
 		await connectDB();
