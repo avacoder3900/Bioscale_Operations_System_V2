@@ -154,7 +154,13 @@
 		vol_gate1: 1.6,
 		vol_gate2: 2.2,
 		vol_gate3: 2.2,
-		vol_gate4: 2.2
+		vol_gate4: 2.2,
+		// Tip calibration is OPT-IN for wax (2026-08-18): the p20 probe against a
+		// baseline zeroed for the reagent tip walked B07's wax tip onto the reagent
+		// hole. OFF = fill exactly where the Deck Calibration Studio shows the hole.
+		// Only posted when the protocol declares the RTP (server filters by schema).
+		use_tip_calibration: false,
+		run_calibration_check: false
 	});
 
 	// Orchestrated scan-and-start (deck_load substage): one Start Run press
