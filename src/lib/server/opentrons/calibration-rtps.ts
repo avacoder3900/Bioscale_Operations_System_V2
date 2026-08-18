@@ -14,11 +14,14 @@
  * to its built-in per-robot table = current behavior. The reference robot's row
  * is 0,0,0, so its "apply to all labware" is a positional no-op.
  */
-import { connectDB, RobotDeckOffset, TipCalibratorFixture } from '$lib/server/db';
+import { connectDB, RobotDeckOffset } from '$lib/server/db';
+import {
+	finite,
+	loadCalibratorFixture,
+	Z_CAL_FOR_PROCESS
+} from '$lib/server/services/deck-calibration/tip-calibrator';
 
 type ParamDef = { variableName: string };
-
-const Z_CAL_DEFAULT = { 'wax-filling': 34.491, 'reagent-filling': 40.8 } as const;
 
 export async function calibrationRtpValues(
 	robotId: string,
@@ -33,9 +36,9 @@ export async function calibrationRtpValues(
 	if (!declared.has('bims_native')) return out;
 
 	const off = (await RobotDeckOffset.findOne({ robotId }).lean()) as any;
-	const fix =
-		((await TipCalibratorFixture.findOne({ robotId }).lean()) as any) ||
-		((await TipCalibratorFixture.findOne({ robotId: 'global' }).lean()) as any);
+	// Same fallback chain the calibration wizard uses: this robot's taught point,
+	// else the shared 'global' one. One helper owns that order.
+	const { fixture: fix } = await loadCalibratorFixture(robotId);
 
 	// Drive BIMS-native offset only when a captured offset exists for this robot.
 	out['bims_native'] = !!off;
@@ -45,13 +48,17 @@ export async function calibrationRtpValues(
 		if (declared.has('offset_y')) out['offset_y'] = Number(o.y ?? 0);
 		if (declared.has('offset_z')) out['offset_z'] = Number(o.z ?? 0);
 	}
+	// With no fixture at all we inject nothing and let the .py keep its own
+	// built-in calibrator point — same as before the wizard existed.
 	if (fix) {
 		const p = fix.position ?? {};
-		if (declared.has('cal_x') && p.x != null) out['cal_x'] = Number(p.x);
-		if (declared.has('cal_y') && p.y != null) out['cal_y'] = Number(p.y);
+		const x = finite(p.x);
+		const y = finite(p.y);
+		if (declared.has('cal_x') && x !== undefined) out['cal_x'] = x;
+		if (declared.has('cal_y') && y !== undefined) out['cal_y'] = y;
 		if (declared.has('z_cal')) {
-			const z = processType === 'wax-filling' ? fix.zCalWax : fix.zCalReagent;
-			out['z_cal'] = Number(z ?? Z_CAL_DEFAULT[processType]);
+			const { zCalKey, defaultZ } = Z_CAL_FOR_PROCESS[processType];
+			out['z_cal'] = finite(fix[zCalKey]) ?? defaultZ;
 		}
 	}
 	return out;
