@@ -101,6 +101,55 @@ const ACTOR_FIELD = z
 			'them, then reuse the same name for the rest of the conversation.'
 	);
 
+// ---- shared kanban schemas (MCP-IMPROVEMENTS 2026-08-18) ----------------
+const DOR_FIELD = z
+	.object({
+		deliverable: z.string().optional().describe("What will exist or be true when this is done — and how you'd verify it. Outcome, not steps."),
+		handoffBrief: z.string().optional().describe("The coding-agent handoff brief (required to commit items tagged 'software').")
+	})
+	.optional()
+	.describe('Definition-of-Ready fields. Optional at capture — pre-fills kanban_process; required only to replenish.');
+
+const LINK_TYPES = ['blocks', 'blocked_by', 'relates_to'] as const;
+const LINKS_FIELD = z
+	.array(
+		z.object({
+			taskId: z.string().describe('The other task _id.'),
+			type: z.enum(LINK_TYPES).optional().describe("'blocks' = this task must finish before taskId starts; 'blocked_by' = taskId must finish first; 'relates_to' = soft association (default)."),
+			note: z.string().optional()
+		})
+	)
+	.optional()
+	.describe('Typed task links. Stored once, visible from both sides. Blocking edges are cycle-checked.');
+const BLOCKED_BY_FIELD = z
+	.array(z.string())
+	.optional()
+	.describe("Shorthand for links of type 'blocked_by' — task ids that must finish before this one can start. Cycle-checked; ids must exist.");
+
+/** One capture item — shared by kanban_capture, kanban_capture_bulk items, kanban_create_subtasks. */
+const CAPTURE_ITEM_SHAPE = {
+	title: z.string().describe('One line is enough.'),
+	description: z.string().optional(),
+	origin: z.enum(['planned', 'discovered']).optional().describe("'discovered' when it emerged while working another item."),
+	spawnedFrom: z.string().optional().describe('Task id that was being worked when this was discovered.'),
+	itemType: z.enum(['deliverable', 'spike', 'chore']).optional(),
+	spike: z
+		.object({
+			question: z.string().describe('The question the spike answers. If it cannot be written, the uncertainty is not shaped enough to fund.'),
+			timebox: z.object({ amount: z.number(), unit: z.enum(['hours', 'days']) })
+		})
+		.optional()
+		.describe('Required when itemType is spike.'),
+	assignedTo: z.string().optional().describe('User _id to assign.'),
+	dueDate: z.string().optional().describe('ISO date string.'),
+	tags: z.array(z.string()).optional().describe('Trimmed and case-folded onto the existing vocabulary server-side.'),
+	parentTaskId: z.string().optional().describe('Create as a subtask of this task.'),
+	sourceRef: z.string().optional().describe('External reference (e.g. pr:123, branch:name, or a ticket id).'),
+	dor: DOR_FIELD,
+	links: LINKS_FIELD,
+	blockedBy: BLOCKED_BY_FIELD
+};
+
 async function callAgentApi(
 	fetcher: Fetcher,
 	path: string,
@@ -162,7 +211,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.0.2' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.1.0' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -704,51 +753,50 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'kanban_board_snapshot',
 		{ annotations: READ_ONLY,
 			description:
-				`The full kanban board: all tasks grouped by column (${BOARD_STATUSES.join(', ')}) ` +
-				'plus recent activity. KB2-16: projects are gone — tasks carry tags. Call this before creating or updating tasks so you have current task ids.'
+				`The kanban board: tasks grouped by column (${BOARD_STATUSES.join(', ')}). ` +
+				'Every task carries tags, parentTaskId, links (declared + derived) and resolved blockedBy / blocks lists. ' +
+				'KB2-16: projects are gone — tags carry grouping. Call this before creating or updating tasks so you have current task ids. ' +
+				'It is large: narrow with statuses / tag and pass includeActivity:false unless you need the activity feed.',
+			inputSchema: z.object({
+				statuses: z.array(z.enum(BOARD_STATUSES)).optional().describe('Only return tasks in these columns (column list stays complete).'),
+				tag: z.string().optional().describe('Only tasks carrying this tag (case-insensitive exact match).'),
+				includeActivity: z.boolean().optional().describe('Default true. false drops recentActivity per task — big token saving.')
+			})
 		},
-		async () => callAgentApi(fetcher, '/api/agent/operations/kanban/board-snapshot')
+		async ({ statuses, tag, includeActivity }) =>
+			callAgentApi(fetcher, '/api/agent/operations/kanban/board-snapshot', {
+				query: {
+					statuses: statuses?.length ? statuses.join(',') : undefined,
+					tag,
+					includeActivity: includeActivity === false ? 'false' : undefined
+				}
+			})
 	);
+
+	const CAPTURE_DOCTRINE =
+		'Everything starts as a captured Tier-1 option — no status choice; ' +
+		'sizing/classing happen at processing (kanban_process) and commitment happens at replenishment (kanban_replenish). ' +
+		'DISCOVERED-WORK TEST — when the idea came up while working another task, ask: "If work stopped right now, is that ' +
+		"task's stated outcome achieved?\" YES → capture here with origin:'discovered' and spawnedFrom set. NO → it was always " +
+		'inside that task — append it there with kanban_update_task appendContext instead of capturing a new item. ' +
+		'For a spike (timeboxed investigation), set itemType:spike with question + timebox — a spike cannot be created without them. ' +
+		'SIZING TEST (apply when shaping work): can you confidently pick a size? Yes → deliverable. No but the next milestone is ' +
+		'nameable → capture the milestone, not the project. No milestone nameable → spike. Otherwise it is a project — only its milestones flow. ' +
+		'Options that are BORN SHAPED (workshops, punch lists) may carry dor at capture — it pre-fills processing and is never required here. ' +
+		'Gating: pass blockedBy (task ids) or typed links; blocking edges are cycle-checked. ' +
+		'Response echoes the stored task (id, trackingNumber, description, itemType, origin, dor, links) so no snapshot re-read is needed.';
 
 	server.registerTool(
 		'kanban_capture',
 		{ annotations: WRITE_TOOL,
 			description:
-				'Capture a kanban option (one line is enough). Everything starts as a captured Tier-1 option — no status choice; ' +
-				'sizing/classing happen at processing (kanban_process) and commitment happens at replenishment (kanban_replenish). ' +
-				'DISCOVERED-WORK TEST — when the idea came up while working another task, ask: "If work stopped right now, is that ' +
-				"task's stated outcome achieved?\" YES → capture here with origin:'discovered' and spawnedFrom set. NO → it was always " +
-				'inside that task — append it there with kanban_update_task appendContext instead of capturing a new item. ' +
-				'For a spike (timeboxed investigation), set itemType:spike with question + timebox — a spike cannot be created without them. ' +
-				'SIZING TEST (apply when shaping work): can you confidently pick a size? Yes → deliverable. No but the next milestone is ' +
-				'nameable → capture the milestone, not the project. No milestone nameable → spike. Otherwise it is a project — only its milestones flow. ' +
-				'For ultra-defined recurring work (SPU builds, cartridge fills), pass templateId (see kanban_list_templates) — the item lands already processed and DoR-complete.',
+				'Capture ONE kanban option (one line is enough). ' + CAPTURE_DOCTRINE + ' ' +
+				'For ultra-defined recurring work (SPU builds, cartridge fills), pass templateId (see kanban_list_templates) — the item lands already processed and DoR-complete. ' +
+				'For 2+ items use kanban_capture_bulk.',
 			inputSchema: z.object({
+				...CAPTURE_ITEM_SHAPE,
 				title: z.string().optional().describe('One line is enough. Optional when templateId is given (template supplies it).'),
 				templateId: z.string().optional().describe('Capture from a workflow template — lands processed + replenishable.'),
-				description: z.string().optional(),
-				origin: z.enum(['planned', 'discovered']).optional().describe("'discovered' when it emerged while working another item."),
-				spawnedFrom: z.string().optional().describe('Task id that was being worked when this was discovered.'),
-				itemType: z.enum(['deliverable', 'spike', 'chore']).optional(),
-				spike: z
-					.object({
-						question: z.string().describe('The question the spike answers. If it cannot be written, the uncertainty is not shaped enough to fund.'),
-						timebox: z.object({ amount: z.number(), unit: z.enum(['hours', 'days']) })
-					})
-					.optional()
-					.describe('Required when itemType is spike.'),
-				assignedTo: z.string().optional().describe('User _id to assign.'),
-				dueDate: z.string().optional().describe('ISO date string.'),
-				tags: z.array(z.string()).optional(),
-				parentTaskId: z.string().optional().describe('Create as a subtask of this task.'),
-				sourceRef: z.string().optional().describe('External reference (e.g. pr:123, branch:name, or a ticket id).'),
-				dor: z
-					.object({
-						deliverable: z.string().optional().describe("Optional at capture: what will exist or be true when this is done — and how you'd verify it. Pre-fills processing."),
-						handoffBrief: z.string().optional().describe("Optional at capture: the coding-agent handoff brief (needed to commit items tagged 'software').")
-					})
-					.optional()
-					.describe('Definition-of-Ready fields may be written at capture; they pre-fill kanban_process and are required only to replenish.'),
 				actor: ACTOR_FIELD
 			})
 		},
@@ -757,6 +805,54 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				callAgentApi(fetcher, '/api/agent/operations/kanban/tasks', {
 					method: 'POST',
 					body: { ...args, actor, source: 'mcp' }
+				})
+			)
+	);
+
+	server.registerTool(
+		'kanban_capture_bulk',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Capture MANY kanban options in one call (1–50). Same item shape as kanban_capture, minus actor/templateId. ' +
+				'PER-ITEM RESULTS, NOT A TRANSACTION: every item is validated and created independently in input order; a bad item ' +
+				'(e.g. a spike without a question, an unknown parentTaskId, a blocking cycle) is rejected on its own with a clear error and the ' +
+				'rest still land. Each success is audit-logged like a single capture. Response: results[] in input order ' +
+				'({index, success, task | error}) + summary {requested, created, rejected}. ' + CAPTURE_DOCTRINE,
+			inputSchema: z.object({
+				items: z.array(z.object(CAPTURE_ITEM_SHAPE)).min(1).max(50).describe('1–50 capture items, in the order you want them ranked.'),
+				actor: ACTOR_FIELD
+			})
+		},
+		async ({ items, actor }) =>
+			machineWrite('kanban_capture_bulk', actor, (resolved) =>
+				callAgentApi(fetcher, '/api/agent/operations/kanban/tasks/bulk', {
+					method: 'POST',
+					body: { items: items.map((i) => ({ ...i, source: 'mcp' })), actor: resolved }
+				})
+			)
+	);
+
+	server.registerTool(
+		'kanban_rename_tag',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Bulk rename or remove a tag across the board (taxonomy migration). Exact case-sensitive match on `from`; ' +
+				"`to` null/empty REMOVES the tag. scope 'active' (default) skips declined + archived tasks; 'all' includes them. " +
+				'If a task already carries `to` (any casing), `from` is simply dropped — no task ends up with both. ' +
+				'One audit row per touched task plus a summary row. Returns touched count + task ids. ' +
+				'Note: new writes are already trimmed and case-folded onto the existing vocabulary, so this is for retiring/merging tags, not routine hygiene.',
+			inputSchema: z.object({
+				from: z.string().describe('Existing tag, exact casing.'),
+				to: z.string().nullable().optional().describe('New tag; null or omitted removes `from` entirely.'),
+				scope: z.enum(['active', 'all']).optional(),
+				actor: ACTOR_FIELD
+			})
+		},
+		async ({ from, to, scope, actor }) =>
+			machineWrite('kanban_rename_tag', actor, (resolved) =>
+				callAgentApi(fetcher, '/api/agent/operations/kanban/tags/rename', {
+					method: 'POST',
+					body: { from, to: to ?? null, scope, actor: resolved }
 				})
 			)
 	);
@@ -783,13 +879,11 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				dueDate: z.string().optional().describe('ISO date string.'),
 				tags: z.array(z.string()).optional(),
 				sourceRef: z.string().optional().describe('External link — software items: pr:<number>, branch:<name>, commit:<sha>.'),
-				dor: z
-					.object({
-						deliverable: z.string().optional().describe("State what will exist or be true when this is done — and how you'd verify it. Outcome, not steps."),
-						handoffBrief: z.string().optional().describe("The coding-agent handoff brief (required to commit items tagged 'software').")
-					})
-					.optional()
-					.describe('Edit Definition-of-Ready fields.'),
+				dor: DOR_FIELD,
+				links: LINKS_FIELD,
+				blockedBy: BLOCKED_BY_FIELD,
+				removeLinkId: z.string().optional().describe('Remove a declared link by its linkId (from the snapshot). Derived (inverse) links are removed from the task that declared them.'),
+				parentTaskId: z.string().nullable().optional().describe('Re-parent this task under another (milestone-with-components); null detaches. Parent must exist; no self/cycles; max depth 3. No status coupling — a captured milestone may parent ready components.'),
 				actor: ACTOR_FIELD
 			})
 		},
@@ -808,7 +902,9 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'kanban_replenishment_status',
 		{ annotations: READ_ONLY,
 			description:
-				'The "should we replenish?" view: Tier-1 candidates with Definition-of-Ready readiness (exact missing fields), ' +
+				'The "should we replenish?" view: Tier-1 candidates with Definition-of-Ready readiness (exact missing fields plus a ' +
+				"per-candidate dorChecklist — deliverable / handoffBrief (n/a unless tagged 'software') / sizeClass / classOfService), " +
+				'a blockedByOpen warning when a candidate is gated on unfinished tasks (warning only — humans may still commit it), ' +
 				'current ready queue vs its cap, minimum-order-point signal, and WIP share by class of service. ' +
 				'Call this before kanban_replenish, and whenever asked how the queue is doing.'
 		},
@@ -1112,17 +1208,9 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			inputSchema: z.object({
 				parentTaskId: z.string().describe('The parent task _id.'),
 				subtasks: z
-					.array(
-						z.object({
-							title: z.string(),
-							description: z.string().optional(),
-							assignedTo: z.string().optional(),
-							dueDate: z.string().optional(),
-							tags: z.array(z.string()).optional()
-						})
-					)
+					.array(z.object({ ...CAPTURE_ITEM_SHAPE, parentTaskId: z.undefined().optional() }))
 					.min(1)
-					.describe('Subtasks to create.'),
+					.describe('Subtasks to create — same shape as a capture item (dor / links / blockedBy allowed). Assignee and tags default to the parent\'s.'),
 				actor: z.string().optional().describe('Username of the human driving this change (defaults to "agent").')
 			})
 		},

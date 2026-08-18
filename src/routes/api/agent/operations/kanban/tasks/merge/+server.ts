@@ -3,6 +3,7 @@ import { connectDB, KanbanTask, AuditLog } from '$lib/server/db';
 import { generateId } from '$lib/server/db/utils.js';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import { transitionTask, TransitionError } from '$lib/server/kanban/transition';
+import { normalizeTags } from '$lib/server/kanban/tags';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -36,8 +37,8 @@ export const POST: RequestHandler = async ({ request }) => {
 		`\n\n---\n**Merged from: ${source.title}** (${source._id})\n${source.description || '(no description)'}`
 	].join('').trim();
 
-	// Merge tags (deduplicate)
-	const mergedTags = [...new Set([...(target.tags || []), ...(source.tags || [])])];
+	// Merge tags — case-insensitive de-dupe onto the canonical vocabulary (P1-3/P2-6.2).
+	const mergedTags = await normalizeTags([...(target.tags || []), ...(source.tags || [])]);
 
 	// Update target: absorb source content
 	await KanbanTask.findByIdAndUpdate(targetTaskId, {

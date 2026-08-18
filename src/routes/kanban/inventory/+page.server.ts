@@ -13,6 +13,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, KanbanTask, KanbanTemplate, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission, hasPermission, isAdmin } from '$lib/server/permissions';
 import { createKanbanItem, TransitionError } from '$lib/server/kanban/transition';
+import { normalizeTags } from '$lib/server/kanban/tags';
 import {
 	processTask,
 	reshapeTask,
@@ -159,26 +160,10 @@ export const actions: Actions = {
 		const title = fd.get('title')?.toString();
 		if (!title?.trim()) return fail(400, { error: 'Title is required' });
 
-		// KB2-25 — canonicalise before writing. Client autocomplete is a
-		// convenience, not a guarantee: someone can still type "Firmware " when
-		// "firmware" exists, or paste the same tag twice. Fold each entry onto an
-		// existing tag when it matches case-insensitively so the vocabulary stays
-		// closed instead of growing near-duplicates.
-		const existingByKey = new Map(
-			((await KanbanTask.distinct('tags')) as string[])
-				.filter((t) => typeof t === 'string' && t.trim().length > 0)
-				.map((t) => [t.trim().toLowerCase(), t.trim()])
-		);
-		const seen = new Set<string>();
-		const tags: string[] = [];
-		for (const raw of (fd.get('tags')?.toString() ?? '').split(',')) {
-			const trimmed = raw.trim().replace(/\s+/g, ' ');
-			if (!trimmed) continue;
-			const key = trimmed.toLowerCase();
-			if (seen.has(key)) continue;
-			seen.add(key);
-			tags.push(existingByKey.get(key) ?? trimmed);
-		}
+		// KB2-25 — canonicalise before writing (client autocomplete is a
+		// convenience, not a guarantee). Shared rule with every other capture
+		// path: trim, case-fold onto the existing vocabulary, de-dupe.
+		const tags = await normalizeTags(fd.get('tags')?.toString() ?? '');
 
 		// Optional at capture — whatever is written here pre-fills the Process modal.
 		const deliverable = fd.get('deliverable')?.toString().trim() || undefined;
