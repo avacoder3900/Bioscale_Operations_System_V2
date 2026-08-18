@@ -7812,3 +7812,11 @@ Docs only, no code:
 - docs/prds/LAB-GATEWAY-1-DEFERRED.md.
 Next on this thread: TAILNET-1 on B07 (lab task), then TAILNET-2 (~1 day). Zebra printer
 verification against the physical ZT230 is still the open item on the barcode work.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 4576a6ca (merge of jq/barcode-scanning 4dcc1401 + master afcebd42)
+Retrieve this exact code: git checkout master at commit 4576a6ca
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: first live test of /manufacturing/print-barcodes/zebra against
+the physical ZT230 via Zebra Browser Print (Avery page moved onto the shared batch service;
+OT2-TAILNET PRDs ride along as docs).
