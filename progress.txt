@@ -8082,3 +8082,18 @@ What this deployment is for: wax fills land the wax hole again on tip-neutral-ta
 
 Deployment: production — Vercel auto-deploy from master push (form defaults ON / 4.0)
 Source: branch master @ commit 9fbf1c1c
+
+================================================================================
+2026-08-18 — master — wax: per-carrier legs (tip every 96 wells + checkpoint pause after cartridges 8/16)
+================================================================================
+Operator: only 8/24 cartridges good on a full run; cartridges must come off the heated deck every 8;
+tips go bad mid-run undetectably. Built wells_per_tip (default 96 = one carrier) and
+pause_between_carriers (default ON: drop tip, pause "CHECKPOINT: carrier N done — remove those
+cartridges, do NOT move the deck, Resume", fresh probed tip for the next carrier). Tip counter
+re-aligns at each checkpoint so Start-at-cartridge runs still change tips on carrier edges. Wax .py
+now 26 RTPs; stored .py synced. Discussed but NOT built yet: BIMS "Resume this run" button (auto-fill
+Start-at-cartridge/hole from the OT-2 log, same BIMS run record) and pause-to-inspect at tip change.
+
+Deployment: robot protocol — B07 wax entry repointed 1cd39003 -> 99152e18-d7a1-4a46-b500-c8294b4ca7be
+Source: branch master @ this commit
+What this deployment is for: one fresh tip per carrier + operator checkpoint to remove finished cartridges.
