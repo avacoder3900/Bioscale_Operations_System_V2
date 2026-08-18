@@ -40,7 +40,8 @@ import {
 } from '$lib/server/db';
 import { getRobot, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
 import {
-	TIP_FOR_MOUNT,
+	TIP_PROFILE,
+	asTipProfile,
 	resolveCalibratorPoint,
 	applyCalibratorOverride,
 	readProbeResult,
@@ -96,7 +97,20 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	const body = await request.json().catch(() => ({}) as any);
 	const robotId = body?.robotId?.toString().trim();
-	const mount: CalMount = body?.mount?.toString().trim() === 'right' ? 'right' : 'left';
+	// Both of these fail CLOSED. `mount` used to silently fall back to 'left'
+	// for any unrecognised value, and the calibration Z used to be derived from
+	// it — so a caller that sent nothing got a real probe at a guessed depth.
+	const rawMount = body?.mount?.toString().trim();
+	if (rawMount !== 'left' && rawMount !== 'right') {
+		error(400, "mount must be exactly 'left' or 'right'");
+	}
+	const mount: CalMount = rawMount;
+	// Which tip is on that mount is an operator choice; it is never inferred
+	// from the mount, because the pipettes are not fixed to mounts on this fleet.
+	const tipProfile = asTipProfile(body?.tipProfile);
+	if (!tipProfile) {
+		error(400, "tipProfile must be exactly 'wax' (p20) or 'reagent' (p300)");
+	}
 	const tipWell = body?.tipWell?.toString().trim() || 'A1';
 	// ATTACHED mode: probe inside the studio's open maintenance run (tip already
 	// picked up there) so the tip + run survive for deck tuning. Both required.
@@ -113,14 +127,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	await connectDB();
 
-	const tipSpec = TIP_FOR_MOUNT[mount];
+	const tipSpec = TIP_PROFILE[tipProfile];
 	const tipDef = (await LabwareDefinition.findOne({ loadName: tipSpec.loadName }).lean()) as any;
 	if (!tipDef?.definition) {
 		error(400, `Tiprack '${tipSpec.loadName}' not in the BIMS labware library`);
 	}
 
 	// Calibrator point: per-robot fixture → 'global' fallback → .py default …
-	const saved = await resolveCalibratorPoint(String(robot._id), mount);
+	const saved = await resolveCalibratorPoint(String(robot._id), tipProfile);
 	// … then the operator's jogged point wins, axis by axis, when they sent one.
 	const { point: calibrator, overridden } = applyCalibratorOverride(saved.point, body?.calibrator);
 	const calibratorSource: CalSource = overridden ? 'jogged' : saved.source;

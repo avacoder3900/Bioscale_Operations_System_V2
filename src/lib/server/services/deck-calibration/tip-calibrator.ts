@@ -36,31 +36,51 @@ export type CalSource =
 export const DEFAULT_CALIBRATOR_XY = { x: 125.181, y: 173.247 } as const;
 
 /**
- * mount → tip type. right = p20 (wax, 20µL rack); left = p300 (reagent, Biotix
- * 200µL rack). Same mapping as the studio's tiprackForMount and the protocols.
+ * Which tip is being calibrated. This is an OPERATOR CHOICE, never inferred.
+ *
+ * This used to be a mount → tip mapping (TIP_FOR_MOUNT: right = p20/wax,
+ * left = p300/reagent). That assumption is false on this fleet — the pipettes
+ * are not always on those mounts — and it silently picked both the wrong
+ * calibration Z and the wrong tiprack definition:
+ *
+ *   p300 on the right  → 34.491 instead of 40.8 = 6.309 mm too LOW (crash)
+ *   p20  on the left   → 40.8 instead of 34.491 = 6.309 mm too high (no reading)
+ *
+ * Mount now only says which arm to move. The profile says what is on it.
  */
-export const TIP_FOR_MOUNT: Record<
-	CalMount,
+export type TipProfile = 'wax' | 'reagent';
+
+export const TIP_PROFILE: Record<
+	TipProfile,
 	{
 		loadName: string;
 		zCalKey: 'zCalWax' | 'zCalReagent';
 		defaultZ: number;
 		process: CalProcess;
+		pipette: string;
 	}
 > = {
-	right: {
+	wax: {
 		loadName: 'cosmasanddamian_96_tiprack_20ul',
 		zCalKey: 'zCalWax',
 		defaultZ: 34.491,
-		process: 'wax-filling'
+		process: 'wax-filling',
+		pipette: 'p20'
 	},
-	left: {
+	reagent: {
 		loadName: 'cosmas_and_damian_biotix_96_200ul_tiprack',
 		zCalKey: 'zCalReagent',
 		defaultZ: 40.8,
-		process: 'reagent-filling'
+		process: 'reagent-filling',
+		pipette: 'p300'
 	}
 };
+
+/** Narrow untrusted input to a TipProfile. Returns undefined — never a guess. */
+export function asTipProfile(v: unknown): TipProfile | undefined {
+	const s = typeof v === 'string' ? v.trim() : '';
+	return s === 'wax' || s === 'reagent' ? s : undefined;
+}
 
 /** process → the fixture field + default that carries its calibration Z. */
 export const Z_CAL_FOR_PROCESS: Record<
@@ -104,14 +124,18 @@ export async function loadCalibratorFixture(
 }
 
 /**
- * The calibrator point this robot should use for the given mount, with the
- * per-mount calibration Z (zCalWax for p20/wax, zCalReagent for p300/reagent).
+ * The calibrator point this robot should use for the tip being calibrated.
+ *
+ * Takes the operator's explicit TipProfile, NOT the mount: zCalWax for the
+ * p20/wax tip, zCalReagent for the p300/reagent tip. Passing a mount here is
+ * what caused the 6.309 mm wrong-Z bug — the signature is deliberately typed
+ * so that mistake no longer compiles.
  */
 export async function resolveCalibratorPoint(
 	robotId: string,
-	mount: CalMount
+	profile: TipProfile
 ): Promise<ResolvedCalibrator> {
-	const spec = TIP_FOR_MOUNT[mount];
+	const spec = TIP_PROFILE[profile];
 	const { fixture, source } = await loadCalibratorFixture(robotId);
 	return {
 		point: {

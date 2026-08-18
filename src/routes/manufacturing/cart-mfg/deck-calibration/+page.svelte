@@ -835,7 +835,18 @@
 	let calX = $state(125.181), calY = $state(173.247), calZ = $state(34.491);
 	let tipWell = $state('A1');
 	let hasTip = $state(false);
-	const tiprackForMount = $derived(desiredMount === 'right' ? 'cosmasanddamian_96_tiprack_20ul' : 'cosmas_and_damian_biotix_96_200ul_tiprack');
+	// Which tip is on the mount is an OPERATOR CHOICE, never inferred. The
+	// pipettes are not fixed to mounts on this fleet, so deriving the tiprack
+	// (or the calibration Z) from desiredMount loaded the wrong definition and
+	// probed at the wrong depth. Starts null so nothing can proceed on a guess.
+	let tipProfile = $state<'wax' | 'reagent' | null>(null);
+	const tiprackForProfile = $derived(
+		tipProfile === 'wax'
+			? 'cosmasanddamian_96_tiprack_20ul'
+			: tipProfile === 'reagent'
+				? 'cosmas_and_damian_biotix_96_200ul_tiprack'
+				: null
+	);
 
 	// ── PRD 4: robot-side tip calibration (limit-switch probe via the bridge). ──
 	// The returned adjust{x,y} is the per-tip bend correction; we apply it to every
@@ -845,11 +856,13 @@
 	async function calibrateTip() {
 		if (!runId || !pipetteId) { errMsg = 'Open a run first'; return; }
 		if (!hasTip) { errMsg = 'Pick up a tip first — calibration probes that tip and keeps it on for tuning'; return; }
+		if (!tipProfile) { errMsg = 'Pick the tip type first (p20/wax or p300/reagent) — the probe depth depends on it and is never guessed'; return; }
 		clearMsg(); calibrating = true;
 		msg = 'Calibrating tip on the fixture… (slow limit-switch probe; the tip stays on for tuning)';
 		try {
 			// Probe inside THIS run so the tip + session survive for deck tuning.
-			const res = await api('/api/scanner/calibrate-tip', { method: 'POST', body: JSON.stringify({ robotId: selectedRobotId, mount: desiredMount, tipWell, runId, pipetteId }) });
+			// tipProfile — NOT the mount — decides the probe Z and the tiprack.
+			const res = await api('/api/scanner/calibrate-tip', { method: 'POST', body: JSON.stringify({ robotId: selectedRobotId, mount: desiredMount, tipProfile, tipWell, runId, pipetteId }) });
 			if (res?.adjust && typeof res.adjust.x === 'number') {
 				tipAdjust = { x: res.adjust.x, y: res.adjust.y };
 				// The probe moved the gantry and changed the applied adjust → any prior
@@ -863,18 +876,19 @@
 
 	async function pickUpTipAction() {
 		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
+		if (!tiprackForProfile) { errMsg = 'Pick the tip type first (p20/wax or p300/reagent) — it is not inferred from the mount'; return; }
 		clearMsg(); busy = true;
 		msg = 'Loading tiprack & picking up a tip…';
 		try {
 			await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/pick-up-tip`, {
 				method: 'POST',
-				body: JSON.stringify({ pipetteId, tiprackLoadName: tiprackForMount, slot: '11', tipWell })
+				body: JSON.stringify({ pipetteId, tiprackLoadName: tiprackForProfile, slot: '11', tipWell })
 			});
 			hasTip = true;
 			// Tip state just changed → any nominal taken without the tip is now a
 			// different frame. Force a fresh Move-to-hole before the next capture.
 			nominal = null; refWell = null;
-			msg = `Picked up a tip (${tiprackForMount} ${tipWell}). Now go to the calibrator or a hole.`;
+			msg = `Picked up a tip (${tiprackForProfile} ${tipWell}). Now go to the calibrator or a hole.`;
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
 	}
 	async function goToCalibrator() {
@@ -1177,13 +1191,35 @@
 				<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-black/20 p-2">
 					<div class="mb-1 flex items-center justify-between text-[11px]" style="color: var(--color-tron-text-secondary)">
 						<span class="font-bold uppercase tracking-wider">Tip</span>
-						<span>{hasTip ? '🟢 tip on' : 'no tip'} · {tiprackForMount.includes('20ul') ? 'p20 rack' : 'p300 rack'}{tipAdjust ? ` · zeroed (${tipAdjust.x}, ${tipAdjust.y})` : ''}</span>
+						<span>{hasTip ? '🟢 tip on' : 'no tip'} · {tipProfile ? (tipProfile === 'wax' ? 'p20 rack' : 'p300 rack') : 'tip type not set'}{tipAdjust ? ` · zeroed (${tipAdjust.x}, ${tipAdjust.y})` : ''}</span>
+					</div>
+					<!--
+						Tip type is chosen explicitly. It sets BOTH the tiprack definition and
+						the calibration probe Z, neither of which can be read off the mount —
+						the pipettes are not fixed to mounts on this fleet.
+					-->
+					<div class="mb-2">
+						<div class="mb-1 text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Tip type on {desiredMount}</div>
+						<div class="grid grid-cols-2 gap-2">
+							{#each [['wax', 'p20 · wax'], ['reagent', 'p300 · reagent']] as [p, lbl] (p)}
+								<button
+									type="button"
+									onclick={() => (tipProfile = p as 'wax' | 'reagent')}
+									disabled={busy || hasTip}
+									title={hasTip ? 'Drop the tip before changing tip type' : 'Sets the tiprack and the calibration probe Z'}
+									class="rounded border px-2 py-1.5 text-[11px] transition-colors disabled:opacity-40 {tipProfile === p ? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)]/60'}"
+									style={tipProfile === p ? '' : 'color: var(--color-tron-text-secondary)'}>{lbl}</button>
+							{/each}
+						</div>
+						{#if !tipProfile}
+							<p class="mt-1 text-[10px] text-amber-300/90">Pick the tip type — probe depth differs by 6.309 mm and is never guessed.</p>
+						{/if}
 					</div>
 					<div class="grid grid-cols-2 gap-2">
-						<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Pick up tip</button>
+						<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy || !tipProfile} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Pick up tip</button>
 						<button type="button" onclick={goToCalibrator} disabled={!pipetteId || busy} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Go to calibrator</button>
 					</div>
-					<button type="button" onclick={calibrateTip} disabled={busy || calibrating || !pipetteId || !hasTip} class="mt-2 w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Probe the tip on the limit-switch fixture (slow); keeps the tip on for deck tuning. Pick up a tip first.">
+					<button type="button" onclick={calibrateTip} disabled={busy || calibrating || !pipetteId || !hasTip || !tipProfile} class="mt-2 w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Probe the tip on the limit-switch fixture (slow); keeps the tip on for deck tuning. Pick up a tip first.">
 						{calibrating ? 'Calibrating tip…' : hasTip ? 'Calibrate tip (probe, keeps tip)' : 'Calibrate tip — pick up a tip first'}
 					</button>
 					{#if tipAdjust}
