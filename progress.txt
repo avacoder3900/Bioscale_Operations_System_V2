@@ -7958,3 +7958,29 @@ Retrieve this exact code: git checkout master at commit 3a24b047
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Zebra page with calibrated ZT230 defaults + Content-Type fix,
 for the first mint→print→confirm run on the physical printer.
+
+================================================================================
+2026-08-18 — jq/barcode-scanning → master — ZT230 final calibration (ruler-measured), 100-label live run clean, session notes
+================================================================================
+Full narrative of the bench session (setup gotchas, every calibration step and why,
+live-run results, tools) is in docs/sessions/2026-08-18-zebra-zt230-bench-session.md —
+read that first. Short version of what changed in code since the previous entry:
+
+- Media sensor over the centre web caused blank rows + PAPER OUT during the first 200-batch;
+  Jacob fixed sensor/pressure and found the ribbon wasn't covering the left edge. Batch
+  04iO0uB6vOMgF-LgCjRmI (~130 of 200 physically printed) confirmed as 200 per Jacob with an
+  audit note; -N PT-CT-106 adjustment pending his count.
+- Geometry re-measured with a printed dot ruler (buildRulerZpl): labels are 150 dots (0.74")
+  across the web, ~160 (0.787") along the feed, right label at 188–338 → pitch 188. Jacob's
+  calliper: QR left margin 1.88 vs 2.71 mm → offsetX +7, gap 31 dots (0.153"). ^LT-8 clipped
+  the top row → offsetY 0 with the A/B/C marks at 2 mm from the top. UUID text stays 10-dot
+  ^A0 but left-aligned at the QR edge (centred proportional text drifted per UUID; fixed-
+  pitch font B rejected as too big). ^LS added for negative X (bounded by dot 0 either way).
+- Live run of 100 minted labels (batch GOQVfGWjucaP8SNPaZhtD): no blank rows, all uniqueness
+  checks pass, PT-CT-106 ledger consistent with concurrent WI-01 consumption. Jacob approved
+  the remaining 1900.
+- Tools: scripts/zebra-send.ts (+ruler, --w/--h), scripts/zebra-bulk-print.mts (mint → print →
+  drain-check → confirm → run audit, using the page's own service code via
+  scripts/tsconfig.json + $env shim), page Feed button + width/length fields, calib key v3.
+
+npm run check: 11 errors (baseline). test:unit 91 passed.

@@ -30,8 +30,8 @@ export interface ZebraLabelConfig {
 	columns: number;
 	/** Horizontal gap between adjacent labels. */
 	columnGapIn: number;
-	/** Whole-design nudge, in dots. + = right / down. offsetY may be negative
-	 *  (-120..120, sent as ^LT); negative offsetX clamps at the print origin. */
+	/** Whole-design nudge, in dots. + = right / down. Negative offsetY is sent
+	 *  as ^LT (-120..120); negative offsetX is sent as ^LS (shift left). */
 	offsetX: number;
 	offsetY: number;
 	/** ~SD absolute darkness 0–30. Omit to leave the printer setting alone. */
@@ -48,19 +48,23 @@ export interface ZebraLabelConfig {
 	humanReadable: boolean;
 }
 
-// Calibrated on the lab ZT230-200dpi (serial 52J150301773) 2026-08-18 against
-// the actual roll: labels are 20 mm × 20 mm (0.787"), not ¾" — the printer's
-// own gap sensor reports 161 dots — with a 0.13" web between the two columns.
-// TOF sat ~1 mm low, hence ^LT-8. Alignment rows landed on the die-cut on both
-// columns with these values; treat them as the baseline, not a suggestion.
+// Re-measured with a printed dot ruler (buildRulerZpl) after the ribbon/sensor
+// fix, 2026-08-18 PM: across the web the labels are 150 dots (0.74") wide with
+// dot 0 on the left label's edge and the right label at 188–338 → gap 38 dots
+// (0.187"). Along the feed they are ~160 dots (0.787"). Alignment boxes land
+// on all four die-cut edges of both labels with these values.
 export const ZT230_2X_075_DEFAULTS: ZebraLabelConfig = {
 	dpi: 203,
-	labelWidthIn: 0.787,
+	labelWidthIn: 0.74,
 	labelHeightIn: 0.787,
 	columns: 2,
-	columnGapIn: 0.13,
-	offsetX: 0,
-	offsetY: -8,
+	// Jacob measured QR left margins 1.88 mm (left label) vs 2.71 mm (right):
+	// col 1 origin sits 7 dots right of dot 0; pitch stays 188 → gap 31 dots.
+	columnGapIn: 0.153,
+	offsetX: 7,
+	// ^LT-8 clipped the A/B/C row above top-of-form; keep TOF and put the
+	// marks 1 mm down instead (see abcTop).
+	offsetY: 0,
 	qrMagnification: 3,
 	qrEcc: 'M',
 	abcMarks: true,
@@ -115,37 +119,37 @@ export function computeGeometry(cfg: ZebraLabelConfig): LabelGeometry {
 	const labelW = round(cfg.labelWidthIn * dpi);
 	const labelH = round(cfg.labelHeightIn * dpi);
 	const gap = round(cfg.columnGapIn * dpi);
-	const printWidth = cfg.columns * labelW + (cfg.columns - 1) * gap + Math.max(0, cfg.offsetX);
+	const printWidth = cfg.columns * labelW + (cfg.columns - 1) * gap + Math.max(0, cfg.offsetX) + 8;
 
 	// Avery cell proportions: ABC marks along the top starting 0.08" in with
 	// 0.22" spacing; QR centred at 0.347" from the left edge (B column).
 	const abcFont = cfg.abcMarks ? round(0.075 * dpi) : 0; // ≈15 dots @203 (was 12; "slightly bigger" — Jacob 2026-08-18)
-	const abcTop = round(0.02 * dpi);
+	// 2 mm from the top edge. At 1 mm the marks were occasionally clipped by
+	// feed drift over a 100-label run (Jacob 2026-08-18) → moved 8 dots down,
+	// with the ABC→QR gap tightened so the QR itself barely moves.
+	const abcTop = round(0.08 * dpi);
 	const abcLeft = round(0.08 * dpi);
 	const abcSpacing = round(0.22 * dpi);
 
 	const qrSize = qrModulesForUuid(cfg.qrEcc) * cfg.qrMagnification;
 	const qrCenterX = round(0.347 * dpi);
 	const qrLeft = Math.max(0, qrCenterX - Math.floor(qrSize / 2));
-	const qrTop = cfg.abcMarks ? abcTop + abcFont + round(0.02 * dpi) : round(0.04 * dpi);
+	const qrTop = cfg.abcMarks ? abcTop + abcFont + 1 : round(0.04 * dpi);
 
 	// Two text lines below the QR, sized to whatever height is left. If the
 	// QR is so large there is no room, the text is dropped rather than
 	// overrunning the label edge (which would print onto the next label).
+	// UUID text: ^A0 at 10 dots (0.05"), two lines, LEFT-ALIGNED at the QR's
+	// left edge. ^A0 is proportional, so centring made two different UUIDs
+	// start at visibly different x; left-aligning pins the start on every
+	// label (Jacob 2026-08-18). The text is an internal aid — the QR is what
+	// gets scanned — so 10 dots is deliberate ("that udi can be small").
 	const textLines = cfg.humanReadable ? 2 : 0;
-	const textTop = qrTop + qrSize + round(0.015 * dpi);
-	const remaining = labelH - textTop - round(0.01 * dpi);
-	let textFont = 0;
-	if (textLines > 0) {
-		// 18 chars per line must fit labelW; ^A0 is ~0.5×height per char.
-		// Cap at 0.05" (10 dots @203): the UUID text is an internal aid, the QR
-		// is what gets scanned — Jacob 2026-08-18: "that udi can be small".
-		// The earlier 0.07" cap put line 2 on the bottom die-cut edge.
-		const byWidth = Math.floor(labelW / (18 * 0.52));
-		const byHeight = Math.floor(remaining / (textLines * 1.1));
-		textFont = Math.min(round(0.05 * dpi), byWidth, byHeight);
-	}
-	const finalTextLines = textFont >= round(0.03 * dpi) ? textLines : 0;
+	const textTop = qrTop + qrSize + 2;
+	const remaining = labelH - textTop - 2;
+	const textFont = round(0.05 * dpi);
+	const fits = textLines > 0 && remaining >= textLines * round(textFont * 1.05);
+	const finalTextLines = fits ? textLines : 0;
 
 	return {
 		labelW, labelH, gap, printWidth,
@@ -171,6 +175,10 @@ function header(cfg: ZebraLabelConfig, g: LabelGeometry): string {
 	// X stays in ^FO arithmetic (positive shifts only; negative clamps at 0).
 	const lt = Math.max(-120, Math.min(120, round(cfg.offsetY)));
 	if (lt !== 0) parts.push(`^LT${lt}`);
+	// Horizontal nudge LEFT via Label Shift: ^LS<a> shifts every field a dots to
+	// the left (positive a = left). Positive offsetX is applied in ^FO arithmetic;
+	// negative offsetX becomes ^LS so the design can start left of the origin.
+	if (cfg.offsetX < 0) parts.push(`^LS${Math.min(9999, -round(cfg.offsetX))}`);
 	parts.push('^PON');   // normal orientation
 	if (cfg.printSpeedIps !== undefined) parts.push(`^PR${Math.round(cfg.printSpeedIps)}`);
 	return parts.join('');
@@ -183,7 +191,7 @@ function fo(x: number, y: number): string {
 
 /** One label's fields at column origin `cx` (dots). */
 function labelFields(code: string, cx: number, cfg: ZebraLabelConfig, g: LabelGeometry): string {
-	const ox = cx + cfg.offsetX;
+	const ox = cx + Math.max(0, cfg.offsetX); // negative X handled by ^LS in header()
 	const oy = 0; // vertical offset is applied printer-wide via ^LT in header()
 	const out: string[] = [];
 
@@ -200,11 +208,12 @@ function labelFields(code: string, cx: number, cfg: ZebraLabelConfig, g: LabelGe
 	if (g.textLines > 0) {
 		const half = Math.ceil(code.length / 2);
 		const lines = [code.slice(0, half), code.slice(half)];
-		const lineH = round(g.textFont * 1.1);
+		const lineH = round(g.textFont * 1.05);
 		for (let i = 0; i < lines.length; i++) {
-			// ^FB<width>,1,0,C  → one line, centred across the label width.
+			// Left-aligned at the QR's left edge (^FB …,L) so the start x is the
+			// same on every label regardless of the UUID's character widths.
 			out.push(
-				`${fo(ox, oy + g.textTop + i * lineH)}^FB${g.labelW},1,0,C,0^A0N,${g.textFont},${round(g.textFont * 0.9)}^FD${lines[i]}^FS`
+				`${fo(ox + g.qrLeft, oy + g.textTop + i * lineH)}^FB${g.labelW - g.qrLeft},1,0,L,0^A0N,${g.textFont},${round(g.textFont * 0.9)}^FD${lines[i]}^FS`
 			);
 		}
 	}
@@ -259,9 +268,31 @@ export function buildCartridgeLabelsZpl(barcodes: string[], cfg: ZebraLabelConfi
 export function buildFeedZpl(rows = 2, cfg: ZebraLabelConfig = ZT230_2X_075_DEFAULTS): ZplJob {
 	const g = computeGeometry(cfg);
 	const n = Math.max(1, Math.min(10, Math.round(rows)));
-	const zpl = `^XA^PW${g.printWidth}^LL${g.labelLength}^FO2,2^GB1,1,1^FS^PQ${n}^XZ
-`;
+	const zpl = `^XA^PW${g.printWidth}^LL${g.labelLength}^FO2,2^GB1,1,1^FS^PQ${n}^XZ\n`;
 	return { zpl, rows: n, labels: n * cfg.columns, geometry: g };
+}
+
+/**
+ * Ruler row: tick marks every 8 dots (≈1 mm @203) across the whole printhead,
+ * numbered every 40 dots (5 mm), on two lines (top and bottom of the row) so the
+ * die-cut edges of BOTH labels can be read off in dots. Used to set per-column
+ * origins exactly instead of nudging both columns together.
+ */
+export function buildRulerZpl(cfg: ZebraLabelConfig = ZT230_2X_075_DEFAULTS, widthDots = 420): ZplJob {
+	const g = computeGeometry(cfg);
+	let f = `^XA^CI28^PW${widthDots}^LL${g.labelLength}^LH0,0^PON`;
+	const rows = [0, g.labelH - 40];
+	for (const y of rows) {
+		for (let x = 0; x < widthDots; x += 8) {
+			const major = x % 40 === 0;
+			f += `^FO${x},${y}^GB1,${major ? 22 : 10},1^FS`;
+			if (major) f += `^FO${x + 2},${y + 24}^A0N,12,10^FD${x}^FS`;
+		}
+	}
+	// centre-line labels
+	f += `^FO4,${Math.round(g.labelH / 2) - 6}^A0N,12,10^FDdots from head edge (8/mm)^FS`;
+	f += '^PQ1^XZ\n';
+	return { zpl: f, rows: 1, labels: cfg.columns, geometry: g };
 }
 
 /**
@@ -275,7 +306,7 @@ export function buildAlignmentZpl(cfg: ZebraLabelConfig = ZT230_2X_075_DEFAULTS)
 	const pitch = g.labelW + g.gap;
 	let f = header(cfg, g);
 	for (let col = 0; col < cfg.columns; col++) {
-		const ox = col * pitch + cfg.offsetX;
+		const ox = col * pitch + Math.max(0, cfg.offsetX); // negative X via ^LS
 		const oy = 0; // vertical offset via ^LT in header()
 		f += `${fo(ox, oy)}^GB${g.labelW},${g.labelH},1^FS`;
 		f += `${fo(ox + g.labelW / 2 - 1, oy)}^GB2,${g.labelH},1^FS`;

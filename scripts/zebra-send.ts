@@ -13,7 +13,7 @@
  * Options: --printer=<uid|name> (default: first printer), --dpi=203|300, --w=0.75 --h=0.75 (label in),
  *          --gap=0.125, --x=0 --y=0 (dots), --mag=3, --dark=<0-30>, --dry (print ZPL, don't send)
  */
-import { buildAlignmentZpl, buildCartridgeLabelsZpl, ZT230_2X_075_DEFAULTS, type ZebraLabelConfig } from '../src/lib/zebra/cartridge-label-zpl';
+import { buildAlignmentZpl, buildCartridgeLabelsZpl, buildRulerZpl, ZT230_2X_075_DEFAULTS, type ZebraLabelConfig } from '../src/lib/zebra/cartridge-label-zpl';
 
 const BASE = process.env.BROWSER_PRINT_URL ?? 'http://localhost:9100';
 const args = process.argv.slice(2);
@@ -66,6 +66,7 @@ console.error(`→ ${device.name} (${device.connection})`);
 let zpl: string;
 switch (cmd) {
 	case 'align': zpl = buildAlignmentZpl(cfg).zpl; break;
+	case 'ruler': zpl = buildRulerZpl(cfg).zpl; break;
 	case 'labels': {
 		if (!positional.length) { console.error('labels: give at least one uuid'); process.exit(1); }
 		zpl = buildCartridgeLabelsZpl(positional, cfg).zpl; break;
