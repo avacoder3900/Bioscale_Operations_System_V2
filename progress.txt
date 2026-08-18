@@ -8008,3 +8008,28 @@ Deployment: production — Vercel auto-deploy from master push (wax run-start fo
 Source: branch master @ commit 4dd04f0f
 Retrieve this exact code: git checkout master at commit 4dd04f0f
 What this deployment is for: USE TIP CALIBRATION / RUN CALIBRATION CHECK pre-selected OFF on the wax run-start form.
+
+================================================================================
+2026-08-18 — master — wax: start a fill partway through the deck (Start at cartridge / hole)
+================================================================================
+Operator re-taught deck-004 wax and wanted to fill only positions 16..24 without re-running 1..15.
+Ported resume_window() + resume_cartridge/resume_hole RTPs from feat/fill-resume-after-tip-break
+onto the guarded wax build (now 24 RTPs). START = (cartridge, hole) 1-based; END = existing
+`cartridges`. Slices on cartridge = row boundaries (batching intact); source-volume model reduced
+by the skipped wells + "volume needed for the remaining N wells" comment; empty window pauses.
+BIMS wax startRun: `cartridges` is locked to the SCANNED count, so with a start > 1 the server
+converts count -> end (start 16 + 9 scanned = end 24; protocolParameters.cartridgesScanned kept).
+deploy-wax-tipcal-guards.cjs gate changed to "bundled == live Mongo" (+ delta vs current protocol
+printed) so a freshly re-taught deck can be deployed. Stored wax .py re-synced (pre-image in
+calibration-backups/). npm run check: 11 errors — baseline. Unit-checked resume_window
+(cart 16..24 -> wells 180..288, first well C10).
+
+Deployment: robot protocol — B07 wax entry repointed 9c2a2abd -> 2f616b20-ace4-49c6-8f44-808e01276ca2
+Source: branch master @ commit 87450841
+Retrieve this exact code: git checkout master at commit 87450841
+What this deployment is for: fill cartridges 16..24 on the re-taught deck-004 without refilling 1..15.
+
+Deployment: production — Vercel auto-deploy from master push (count->end translation in startRun)
+Source: branch master @ commit 87450841
+Retrieve this exact code: git checkout master at commit 87450841
+What this deployment is for: "Start at cartridge 16" with 9 scanned cartridges runs 16..24 instead of an empty run.
