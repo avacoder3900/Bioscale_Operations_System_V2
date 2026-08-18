@@ -23,7 +23,7 @@
 		{ href: '/manufacturing/cart-mfg/top-seal-cutting', label: 'Cut Top Seal', icon: 'M4 6h16M4 12h16M4 18h7' },
 		{ href: '/manufacturing/cart-mfg/quick-wax-fill', label: 'Quick Wax Fill', icon: 'M19 14l-7 7m0 0l-7-7m7 7V3' },
 		{ href: '/manufacturing/cart-mfg/quick-seal', label: 'Quick Seal', icon: 'M13 10V3L4 14h7v7l9-11h-7z' },
-		{ href: '/manufacturing/cart-mfg/quick-reagent-test', label: 'Quick Rgt Test', icon: 'M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z' },
+		{ href: '/manufacturing/cart-mfg/state-change', label: 'State Change', icon: 'M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z' },
 		{ href: '/manufacturing/cart-mfg/reagent-inspect', label: 'Reagent Inspect', icon: 'M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z M15 12a3 3 0 11-6 0 3 3 0 016 0z' },
 		{ href: '/manufacturing/cart-mfg/post-mortem-inspect', label: 'Post-Mortem', icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7' },
 		{ href: '/cv/forensic-capture', label: 'Forensic Capture', icon: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z' },
