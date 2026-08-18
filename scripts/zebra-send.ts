@@ -10,8 +10,8 @@
  *   npx tsx scripts/zebra-send.ts status                     # ~HS host status
  *   npx tsx scripts/zebra-send.ts list                       # printers the agent sees
  *
- * Options: --printer=<uid|name> (default: first printer), --dpi=203|300,
- *          --gap=0.125, --mag=3, --dark=<0-30>, --dry (print ZPL, don't send)
+ * Options: --printer=<uid|name> (default: first printer), --dpi=203|300, --w=0.75 --h=0.75 (label in),
+ *          --gap=0.125, --x=0 --y=0 (dots), --mag=3, --dark=<0-30>, --dry (print ZPL, don't send)
  */
 import { buildAlignmentZpl, buildCartridgeLabelsZpl, ZT230_2X_075_DEFAULTS, type ZebraLabelConfig } from '../src/lib/zebra/cartridge-label-zpl';
 
@@ -41,6 +41,8 @@ async function read(device: Dev): Promise<string> {
 const cfg: ZebraLabelConfig = {
 	...ZT230_2X_075_DEFAULTS,
 	dpi: Number(opt('dpi') ?? ZT230_2X_075_DEFAULTS.dpi),
+	labelWidthIn: Number(opt('w') ?? ZT230_2X_075_DEFAULTS.labelWidthIn),
+	labelHeightIn: Number(opt('h') ?? ZT230_2X_075_DEFAULTS.labelHeightIn),
 	columnGapIn: Number(opt('gap') ?? ZT230_2X_075_DEFAULTS.columnGapIn),
 	offsetX: Number(opt('x') ?? 0),
 	offsetY: Number(opt('y') ?? 0),

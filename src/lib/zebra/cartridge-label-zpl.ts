@@ -3,8 +3,8 @@
  * printer). Pure + isomorphic: no DOM, no Mongoose, no SvelteKit — imported by
  * the print page (client) to build the job and by unit tests.
  *
- * Media assumption (configurable): 2-across rows of ¾" × ¾" square labels
- * with a small gap between columns. Each ZPL format (^XA…^XZ) is one physical
+ * Media (configurable): 2-across rows of 20 mm square labels (sold as ¾")
+ * with a 0.13" gap between columns. Each ZPL format (^XA…^XZ) is one physical
  * ROW of the roll, i.e. up to `columns` labels, so the printer advances one
  * label length per format.
  *
@@ -30,7 +30,8 @@ export interface ZebraLabelConfig {
 	columns: number;
 	/** Horizontal gap between adjacent labels. */
 	columnGapIn: number;
-	/** Whole-design nudge, in dots. + = right / down. May be negative. */
+	/** Whole-design nudge, in dots. + = right / down. offsetY may be negative
+	 *  (-120..120, sent as ^LT); negative offsetX clamps at the print origin. */
 	offsetX: number;
 	offsetY: number;
 	/** ~SD absolute darkness 0–30. Omit to leave the printer setting alone. */
@@ -47,14 +48,19 @@ export interface ZebraLabelConfig {
 	humanReadable: boolean;
 }
 
+// Calibrated on the lab ZT230-200dpi (serial 52J150301773) 2026-08-18 against
+// the actual roll: labels are 20 mm × 20 mm (0.787"), not ¾" — the printer's
+// own gap sensor reports 161 dots — with a 0.13" web between the two columns.
+// TOF sat ~1 mm low, hence ^LT-8. Alignment rows landed on the die-cut on both
+// columns with these values; treat them as the baseline, not a suggestion.
 export const ZT230_2X_075_DEFAULTS: ZebraLabelConfig = {
 	dpi: 203,
-	labelWidthIn: 0.75,
-	labelHeightIn: 0.75,
+	labelWidthIn: 0.787,
+	labelHeightIn: 0.787,
 	columns: 2,
-	columnGapIn: 0.125,
+	columnGapIn: 0.13,
 	offsetX: 0,
-	offsetY: 0,
+	offsetY: -8,
 	qrMagnification: 3,
 	qrEcc: 'M',
 	abcMarks: true,
@@ -154,7 +160,14 @@ function header(cfg: ZebraLabelConfig, g: LabelGeometry): string {
 	parts.push('^CI28');
 	parts.push(`^PW${g.printWidth}`);
 	parts.push(`^LL${g.labelLength}`);
-	parts.push('^LH0,0'); // we do our own offsets in ^FO so they can go negative
+	parts.push('^LH0,0');
+	// Vertical nudge via Label Top: ^LT accepts -120..120 dots and moves the
+	// whole image, so a NEGATIVE offset (image starts above the printer's
+	// sensed top-of-form) actually works — ^FO cannot go below 0. Verified on
+	// the ZT230 2026-08-18: TOF sat ~1 mm below the die-cut edge; ^LT-8 fixes it.
+	// X stays in ^FO arithmetic (positive shifts only; negative clamps at 0).
+	const lt = Math.max(-120, Math.min(120, round(cfg.offsetY)));
+	if (lt !== 0) parts.push(`^LT${lt}`);
 	parts.push('^PON');   // normal orientation
 	if (cfg.printSpeedIps !== undefined) parts.push(`^PR${Math.round(cfg.printSpeedIps)}`);
 	return parts.join('');
@@ -168,7 +181,7 @@ function fo(x: number, y: number): string {
 /** One label's fields at column origin `cx` (dots). */
 function labelFields(code: string, cx: number, cfg: ZebraLabelConfig, g: LabelGeometry): string {
 	const ox = cx + cfg.offsetX;
-	const oy = cfg.offsetY;
+	const oy = 0; // vertical offset is applied printer-wide via ^LT in header()
 	const out: string[] = [];
 
 	if (cfg.abcMarks) {
@@ -247,7 +260,7 @@ export function buildAlignmentZpl(cfg: ZebraLabelConfig = ZT230_2X_075_DEFAULTS)
 	let f = header(cfg, g);
 	for (let col = 0; col < cfg.columns; col++) {
 		const ox = col * pitch + cfg.offsetX;
-		const oy = cfg.offsetY;
+		const oy = 0; // vertical offset via ^LT in header()
 		f += `${fo(ox, oy)}^GB${g.labelW},${g.labelH},1^FS`;
 		f += `${fo(ox + g.labelW / 2 - 1, oy)}^GB2,${g.labelH},1^FS`;
 		f += `${fo(ox, oy + g.labelH / 2 - 1)}^GB${g.labelW},2,1^FS`;
