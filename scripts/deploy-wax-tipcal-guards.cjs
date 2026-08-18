@@ -186,7 +186,7 @@ async function main() {
   });
   const after = ((await robots.findOne({ _id: R.id })).protocols ?? []).filter((p) => p.protocolType === 'wax-filling').map((p) => p.opentronsProtocolId);
   console.log(`  ${R.name} wax entries AFTER:  ${JSON.stringify(after)}`);
-  console.log(`\nDONE. ${R.name} wax now runs the tip-cal-guarded build (tip-cal OFF by default). Rollback: repoint at ${JSON.stringify(before)}.`);
+  console.log(`\nDONE. ${R.name} wax now runs the tip-cal-guarded build (tip-cal ON by default, cap 4.0mm). Rollback: repoint at ${JSON.stringify(before)}.`);
   await mongoose.disconnect();
 }
 main().catch(async (e) => { console.error('ERROR:', e.message); try { await mongoose.disconnect(); } catch {} process.exit(1); });
