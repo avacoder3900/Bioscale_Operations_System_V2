@@ -265,6 +265,19 @@
 						>
 					</div>
 
+					<!-- DoR deliverable — editable at any tier; pre-fills Process, required to commit -->
+					<div class="mb-4">
+						<label for="deliverable" class="tron-label">Deliverable (DoR)</label>
+						<textarea
+							id="deliverable"
+							name="deliverable"
+							class="tron-input w-full"
+							rows="3"
+							placeholder="What will exist or be true when this is done — and how you'd verify it. Outcome, not steps."
+							>{data.task.dor.deliverable}</textarea
+						>
+					</div>
+
 					<div class="mb-4">
 						<label for="assignedTo" class="tron-label">Assign To</label>
 						<select

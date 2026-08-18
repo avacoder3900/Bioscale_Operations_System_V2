@@ -125,8 +125,8 @@
 	<!-- Header -->
 	<div class="flex flex-wrap items-start justify-between gap-4">
 		<div>
-			<h2 class="tron-text-primary text-2xl font-bold">Tier 2</h2>
-			<p class="tron-text-muted text-sm">The committed queue — bounded, globally ordered.</p>
+			<h2 class="tron-text-primary text-2xl font-bold">Board</h2>
+			<p class="tron-text-muted text-sm">Committed work — everything here is already approved. Pull anything.</p>
 		</div>
 
 		<!-- Ready count vs cap gauge -->
@@ -229,20 +229,14 @@
 		<div class="flex min-w-[250px] max-w-[340px] flex-1 flex-col rounded-lg">
 			{@render columnHeader(STATUS_META.ready.label, STATUS_META.ready.color, `${ready.length} / ${data.readyCap}`)}
 			<div class="max-h-[70vh] flex-1 space-y-2 overflow-y-auto pr-1">
-				<p class="tron-text-muted px-1 text-[10px] uppercase tracking-wide">Pull any task — rank is a suggestion, not a gate</p>
 				{#if ready.length === 0}
 					<p class="tron-text-muted px-1 text-xs">The ready queue is empty. Replenishment decides what enters it.</p>
 				{/if}
 				{#each ready as t (t.id)}
 					<div class="tron-card !p-3">
 						<div class="flex items-start gap-2">
-							<!-- Rank number badge, top-left. Order IS the layout. -->
-							<span
-								class="flex h-7 w-7 shrink-0 items-center justify-center rounded text-sm font-bold"
-								style="background: var(--color-tron-cyan); color: var(--color-tron-bg-primary);"
-							>
-								{t.rank}
-							</span>
+							<!-- No rank badge: being on the board IS the approval. Cards sit in
+							     commit order (rank is kept server-side only as a stable sort key). -->
 							<div class="min-w-0 flex-1">
 								<a href="/kanban/task/{t.id}" class="tron-text-primary text-sm font-medium hover:underline">{t.title}</a>
 								<div class="mt-1 flex flex-wrap items-center gap-1.5">

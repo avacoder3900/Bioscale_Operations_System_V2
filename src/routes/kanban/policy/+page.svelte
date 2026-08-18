@@ -111,8 +111,8 @@
 					{@render knob('Chore max per person', 'wipChoreMax', p.wipChoreMax ?? 1, 'Of the personal WIP, at most this many chores — rationed so small work cannot eat the week.')}
 				</div>
 				<p class="tron-text-muted mt-3 text-xs">
-					The pull window was removed — any ready task can be pulled regardless of rank. Rank still
-					orders the queue as a recommendation.
+					There is no pull window and no priority list on the Board — being committed is the approval,
+					so any ready task can be pulled. The WIP limits above are the only gate on starting work.
 				</p>
 			</section>
 

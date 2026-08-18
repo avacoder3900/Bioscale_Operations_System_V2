@@ -1,15 +1,22 @@
 import { json, error } from '@sveltejs/kit';
 import { connectDB, KanbanTask } from '$lib/server/db';
 import { requireAgentApiKey } from '$lib/server/api-auth';
-import { createKanbanItem, TransitionError } from '$lib/server/kanban/transition';
+import { TransitionError } from '$lib/server/kanban/transition';
+import { captureOptionsFromBody, captureOne } from '$lib/server/kanban/agent-shapes';
 import type { RequestHandler } from './$types';
 
+/**
+ * Create subtasks under a parent (kanban_create_subtasks). Every subtask is
+ * captured (Tier 1) — sub.status is ignored. Each element accepts the same
+ * shape as a single capture (incl. dor / links / blockedBy — P0-1, P1-4);
+ * assignee/tags default to the parent's when omitted.
+ */
 export const POST: RequestHandler = async ({ request, params }) => {
 	requireAgentApiKey(request);
 	await connectDB();
 
 	const { id: parentTaskId } = params;
-	const parent = await KanbanTask.findById(parentTaskId).lean() as any;
+	const parent = (await KanbanTask.findById(parentTaskId).lean()) as any;
 	if (!parent) throw error(404, 'Parent task not found');
 
 	const body = await request.json();
@@ -23,40 +30,29 @@ export const POST: RequestHandler = async ({ request, params }) => {
 	const created: any[] = [];
 
 	for (const sub of subtasks) {
-		if (!sub.title?.trim()) throw error(400, 'Each subtask requires a title');
-
-		// Every subtask is captured (Tier 1) — sub.status is deliberately ignored.
-		let task: any;
+		if (!sub?.title?.trim()) throw error(400, 'Each subtask requires a title');
 		try {
-			task = await createKanbanItem({
-				title: sub.title,
-				description: sub.description || undefined,
-				assignee: parent.assignee ?? null,
-				tags: sub.tags || parent.tags || [],
-				source: 'agent',
-				sourceRef: sub.sourceRef || undefined,
-				parentTaskId,
-				actor: { username: actorName, via: 'agent-api' }
-			});
+			const opts = await captureOptionsFromBody(
+				{ ...sub, parentTaskId, tags: sub.tags ?? parent.tags ?? [] },
+				{ username: actorName, via: 'agent-api' },
+				{ assignee: parent.assignee ?? null, source: 'agent' }
+			);
+			created.push(await captureOne(opts));
 		} catch (e) {
 			if (e instanceof TransitionError) throw error(400, e.message);
 			throw e;
 		}
-
-		created.push({
-			id: task._id,
-			title: task.title,
-			status: task.status,
-			parentTaskId
-		});
 	}
 
-	return json({
-		success: true,
-		data: {
-			parentTaskId,
-			parentTitle: parent.title,
-			subtasks: created
-		}
-	}, { status: 201 });
+	return json(
+		{
+			success: true,
+			data: {
+				parentTaskId,
+				parentTitle: parent.title,
+				subtasks: created
+			}
+		},
+		{ status: 201 }
+	);
 };

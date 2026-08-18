@@ -52,8 +52,12 @@ task update. Demotion is allowed and audited.
    `transitionTask()`. Equal data capture regardless of channel.
 4. **No drag-and-drop.** Cards advance via explicit buttons mapped 1:1 to named transitions
    (drag/drop was buggy; buttons are auditable operations).
-5. **Tier 2 board is one flat vertical queue** — no horizontal swim lanes. Rank number badge
-   top-left of each card. There is one priority order on a team this size (~7 people).
+5. **The Board (formerly "Tier 2") is one flat vertical queue** — no horizontal swim lanes.
+   **[AMENDED 2026-08-18 (Jacob): the page is called "Board", the rank badge is gone, and there
+   is no pull window — "if something has been committed to the board it has already been
+   approved; we don't need another list of priority on the board." Rank on the Board is a
+   hidden stable sort key (commit order) only; Tier 1 keeps its explicit rank.]** ~~Rank number
+   badge top-left of each card. There is one priority order on a team this size (~7 people).~~
 6. **Only a human replenishes** — including a human driving Claude. Every mutating MCP tool takes a
    required `actor` (username); replenish validates it. New permission `kanban:replenish`.
 7. **Weekly replenishment cadence.**
@@ -88,7 +92,7 @@ task update. Demotion is allowed and audited.
 | Ready cap (per board) | 8 | throughput × replenishment interval + buffer; recompute after 4 weeks of done data |
 | Minimum order point | 3 | below this, emit replenishment signal |
 | WIP per person | 2 (max 1 chore) | across both boards combined |
-| Pull window | top 3 of global ready order | enforced server-side |
+| ~~Pull window~~ | ~~top 3 of global ready order~~ | REMOVED 2026-08-17/18 — any ready task may be pulled; WIP limit is the only gate |
 | Expedite | 1 system-wide; alert if >5% of committed items over rolling month | |
 | Capacity allocation | standard 60% / fixed_date 25% / chore 15% (floor AND ceiling) | recompute from arrival rates after 60 days |
 | SLE | seed from historical archived data (19 samples: p50 3d, p85 20d, all 'medium') | 85th percentile default; show "insufficient data" until n is real |
