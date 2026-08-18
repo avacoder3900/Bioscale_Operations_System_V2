@@ -7883,3 +7883,24 @@ local dev server (bulk mixed batch, casing fold, cycle + self rejections, snapsh
 directions + filters + 400 on bad status, replenishment warning, re-parent + cycle + detach,
 subtask dor + tag inheritance, rename + remove) — all PASS; 4 smoke tasks declined afterwards.
 npm run check: 11 = baseline.
+
+================================================================================
+2026-08-18 — master — kanban tweaks batch + KB2-18 MCP improvements shipped to production
+================================================================================
+Merged feat/kanban-tweaks → master (merge commit 1ba73585; concurrent Zebra barcode-printing +
+OT2-TAILNET PRD work from the other agent merged cleanly, only progress.txt overlapped). No data
+migration needed. Contents: deliverable writable at any tier (9b24c857); "Tier 2" → "Board",
+rank badge + pull-window language gone (67b62b11); KB2-18 MCP improvements (81303e61) — see
+the entries above.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 1ba73585
+Retrieve this exact code: git checkout master at 1ba73585
+What this deployment is for: unblock the roadmap/strategy push through MCP — kanban_capture_bulk,
+  kanban_rename_tag, links/blockedBy + cycle guard, re-parenting, snapshot filters, dor at
+  capture everywhere, dorChecklist + blockedByOpen in replenishment status (MCP 3.1.0); plus
+  Board rename and deliverable-at-capture in the UI.
+Heads-up Alejandro/Nick: Claude Desktop will pick up the new tools on its next MCP session
+(reconnect if the tool list looks stale). Pending chat-side work can proceed: DoR backfill on
+the 41 roadmap tasks, re-tag cleanup via kanban_rename_tag, John's A4M punch-list import via
+kanban_capture_bulk.
