@@ -216,7 +216,7 @@ export async function demote(opts: {
 		throw new ReplenishError('NOT_ELIGIBLE', 'A wip item must leave wip (finish, block, or wait) before it can be demoted — deliberate friction.');
 	}
 	if (!['ready', 'waiting', 'blocked', 'review'].includes(task.status)) {
-		throw new ReplenishError('NOT_ELIGIBLE', `Status '${task.status}' is not a demotable Tier 2 state.`);
+		throw new ReplenishError('NOT_ELIGIBLE', `Status '${task.status}' is not a demotable Board state.`);
 	}
 
 	await transitionTask({

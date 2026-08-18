@@ -71,15 +71,16 @@ export async function transitionTask(opts: TransitionOptions) {
 
 	// The commitment point — the single most important invariant in KB2.
 	if (isTierCrossing(from, to) && !opts.allowTierCrossing) {
-		const direction = tierOf(to) === 2 ? 'promoted (Tier 1 → Tier 2)' : 'demoted (Tier 2 → Tier 1)';
+		const direction = tierOf(to) === 2 ? 'promoted (Tier 1 → Board)' : 'demoted (Board → Tier 1)';
 		throw new TransitionError(
 			'TIER_CROSSING_FORBIDDEN',
 			`Task cannot be ${direction} through a normal update. Commitment-point crossings go through the replenishment path (kanban replenish/demote).`
 		);
 	}
 
-	// Expedite is the emergency lane: exempt from personal WIP limits and the
-	// pull window (hard system-wide cap enforced at replenish, KB2-04).
+	// Expedite is the emergency lane: exempt from personal WIP limits (its
+	// hard system-wide cap is enforced at replenish, KB2-04). There is no pull
+	// window — any ready task may be pulled; WIP is the only gate on starting.
 	if (to === 'wip' && task.classOfService !== 'expedite') {
 		const incomingIsChore = task.itemType === 'chore' || task.classOfService === 'chore';
 		const wip = await checkWipLimit(task.assignee?._id, taskId, incomingIsChore);

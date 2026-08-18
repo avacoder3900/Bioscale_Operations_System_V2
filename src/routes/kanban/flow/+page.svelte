@@ -240,7 +240,7 @@
 	     Tier 2 (the delivery pipeline) first; Tier 1 (inventory) below it. -->
 	<CfdChart
 		points={data.history.cfd}
-		title="Cumulative Flow — Tier 2 (committed: ready → done)"
+		title="Cumulative Flow — Board (committed: ready → done)"
 		statuses={TIER2_STATUSES}
 	/>
 	<CfdChart

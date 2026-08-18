@@ -162,7 +162,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.0.1' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.0.2' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -765,16 +765,16 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'kanban_update_task',
 		{ annotations: WRITE_TOOL,
 			description:
-				'Update a kanban task: move it within Tier 2 (status), retitle, describe, resize, reassign, ' +
+				'Update a kanban task: move it within the Board (status), retitle, describe, resize, reassign, ' +
 				'set due date/tags, or append context notes. Status changes go through the transition service and record a transition history entry. ' +
 				'Tier crossings (e.g. captured → ready) are rejected server-side — commitment-point crossings go through kanban_replenish / kanban_demote. ' +
-				'Pulling ready → wip is only allowed from the top of the queue (pull window, default top 3). Audit-logged.',
+				'Any ready task may be pulled to wip (there is no pull window — being on the Board is the approval); the WIP limit is the only gate. Audit-logged.',
 			inputSchema: z.object({
 				taskId: z.string().describe('The task _id to update.'),
 				title: z.string().optional(),
 				description: z.string().optional().describe('Replaces the description.'),
 				appendContext: z.string().optional().describe('Appends a context note instead of replacing the description.'),
-				status: z.enum(TIER2_MOVE_STATUSES).optional().describe('Move to this Tier-2 column. Tier crossings are rejected server-side.'),
+				status: z.enum(TIER2_MOVE_STATUSES).optional().describe('Move to this Board column. Tier crossings are rejected server-side.'),
 				sizeClass: z.enum(SIZE_CLASS_VALUES).optional().describe('Size class (short/medium/long).'),
 				reason: z.string().optional().describe('Required when moving to blocked (what is blocking us?).'),
 				waitingOn: z.string().optional().describe('Required when moving to waiting: the named external dependency.'),
@@ -981,7 +981,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 		'kanban_get_policy',
 		{ annotations: READ_ONLY,
 			description:
-				'Read the kanban policy: ready caps, min order points, WIP limits, pull window, expedite limits, class allocations, ' +
+				'Read the kanban policy: ready caps, min order points, WIP limits, expedite limits, class allocations, ' +
 				'size-class definitions, SLE seeds, and the recalibration due date.'
 		},
 		async () => callAgentApi(fetcher, '/api/agent/operations/kanban/policy')
@@ -1054,8 +1054,8 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'Supply loops (KB2-13): live actual-vs-target for standing targets (e.g. "keep 40 filled cartridges on hand") PLUS ' +
 				'parts at/below their minimum order qty (partsReorder rows — no per-part targets needed). Pass spawn:true to also ' +
 				'spawn the supply cards for anything below its trigger (idempotent — never duplicates). Spawned cards are ' +
-				'auto-shaped and auto-committed straight to the bottom of the ready queue (exempt from ready cap, chore allocation, ' +
-				'and pull window) unless the target has autoCommit:false.',
+				'auto-shaped and auto-committed straight to the bottom of the ready queue (exempt from ready cap and chore ' +
+				'allocation) unless the target has autoCommit:false.',
 			inputSchema: z.object({
 				spawn: z.boolean().optional().describe('Also spawn supply cards for targets/parts below their trigger.'),
 				actor: z.string().optional().describe('Username recorded on spawned cards (defaults to system:supply).')

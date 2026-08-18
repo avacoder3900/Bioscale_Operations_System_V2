@@ -5,10 +5,11 @@
 	// KB2-15 folded Analytics into Flow and absorbed the old header nav;
 	// KB2-16 removed Projects and the ops/software board switcher — one board,
 	// tags carry the grouping).
-	// KB2-16 decision #11: the pages are named for what they are — Tier 2 (the
-	// committed queue) and Tier 1 (the unbounded option inventory). Routes stay.
+	// KB2-16 decision #11 (amended 2026-08-18): the committed queue is simply
+	// "Board" — once something is on it, it's approved; no second priority list.
+	// Tier 1 stays the unbounded option inventory. Routes stay.
 	const tabs = [
-		{ href: '/kanban', label: 'Tier 2' },
+		{ href: '/kanban', label: 'Board' },
 		{ href: '/kanban/inventory', label: 'Tier 1' },
 		{ href: '/kanban/flow', label: 'Flow' },
 		{ href: '/kanban/policy', label: 'Policy' },

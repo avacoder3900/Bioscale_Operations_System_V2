@@ -108,8 +108,8 @@ async function shapeAndCommit(opts: {
 		actor: { username: SUPPLY_ACTOR, via: 'system' },
 		allowTierCrossing: true
 	});
-	// Bottom of the global ready rank order; pull-window exemption makes it
-	// pullable anyway (transition.ts skips the window for supply sources).
+	// Bottom of the global ready rank order (commit order); there is no pull
+	// window, so position never blocks anyone from pulling it.
 	const last: any = await KanbanTask.findOne({ status: 'ready', archived: false, _id: { $ne: opts.taskId } })
 		.sort({ rank: -1 })
 		.select('rank')
