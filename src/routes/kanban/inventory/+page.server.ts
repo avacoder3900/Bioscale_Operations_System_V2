@@ -180,10 +180,14 @@ export const actions: Actions = {
 			tags.push(existingByKey.get(key) ?? trimmed);
 		}
 
+		// Optional at capture — whatever is written here pre-fills the Process modal.
+		const deliverable = fd.get('deliverable')?.toString().trim() || undefined;
+
 		try {
 			await createKanbanItem({
 				title,
 				tags,
+				dor: deliverable ? { deliverable } : undefined,
 				actor: { username: locals.user.username, via: 'ui' }
 			});
 		} catch (e) {

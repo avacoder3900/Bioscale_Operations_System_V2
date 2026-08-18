@@ -183,6 +183,12 @@ export interface CreateKanbanItemOptions {
 	sourceRef?: string;
 	spike?: { question: string; timebox: { amount: number; unit: 'hours' | 'days' } };
 	/**
+	 * Optional Definition-of-Ready fields at capture. A Tier 1 option may carry
+	 * its deliverable from birth; processing pre-fills from it rather than
+	 * asking twice. Still not required until replenishment (KB2-02 DoR floor).
+	 */
+	dor?: { deliverable?: string; handoffBrief?: string };
+	/**
 	 * KB2-20: links to declare at birth. This is how "a task spawns the task it
 	 * needs" arrives already wired — the caller passes the originating task and
 	 * the relationship, and the new card comes back linked and selectable.
@@ -450,6 +456,13 @@ export async function createKanbanItem(opts: CreateKanbanItemOptions) {
 		source: opts.source,
 		sourceRef: opts.sourceRef,
 		spike: opts.spike,
+		dor:
+			opts.dor?.deliverable?.trim() || opts.dor?.handoffBrief?.trim()
+				? {
+						deliverable: opts.dor.deliverable?.trim() || undefined,
+						handoffBrief: opts.dor.handoffBrief?.trim() || undefined
+					}
+				: undefined,
 		links,
 		statusChangedAt: now,
 		createdBy: opts.actor.username,

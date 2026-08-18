@@ -162,7 +162,7 @@ async function callAgentApi(
 export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 	// Version bump signals clients (claude.ai caches connector tool lists) that
 	// the toolset changed — bump on every tool add/remove/rename.
-	const server = new McpServer({ name: 'bims-operations', version: '3.0.0' });
+	const server = new McpServer({ name: 'bims-operations', version: '3.0.1' });
 
 	// ---------------------------------------------------------------- meta
 
@@ -742,6 +742,13 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				tags: z.array(z.string()).optional(),
 				parentTaskId: z.string().optional().describe('Create as a subtask of this task.'),
 				sourceRef: z.string().optional().describe('External reference (e.g. pr:123, branch:name, or a ticket id).'),
+				dor: z
+					.object({
+						deliverable: z.string().optional().describe("Optional at capture: what will exist or be true when this is done — and how you'd verify it. Pre-fills processing."),
+						handoffBrief: z.string().optional().describe("Optional at capture: the coding-agent handoff brief (needed to commit items tagged 'software').")
+					})
+					.optional()
+					.describe('Definition-of-Ready fields may be written at capture; they pre-fill kanban_process and are required only to replenish.'),
 				actor: ACTOR_FIELD
 			})
 		},

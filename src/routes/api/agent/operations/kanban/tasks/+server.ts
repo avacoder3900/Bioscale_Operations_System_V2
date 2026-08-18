@@ -12,7 +12,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	// NOTE: body.status is deliberately ignored — every new item is captured
 	// (Tier 1). Entering Tier 2 happens only through replenishment (KB2-02).
 	// KB2-16: projectId/board are gone — tags carry both jobs.
-	const { title, description, assignedTo, dueDate, source, sourceRef, tags, parentTaskId, actor, origin, spawnedFrom, itemType, spike } = body;
+	const { title, description, assignedTo, dueDate, source, sourceRef, tags, parentTaskId, actor, origin, spawnedFrom, itemType, spike, dor } = body;
 
 	if (!title?.trim() && !body.templateId) throw error(400, 'title is required (unless capturing from a template)');
 
@@ -58,6 +58,13 @@ export const POST: RequestHandler = async ({ request }) => {
 			spawnedFrom: spawnedFrom || undefined,
 			itemType: ['deliverable', 'spike', 'chore'].includes(itemType) ? itemType : undefined,
 			spike: spike || undefined,
+			dor:
+				dor && typeof dor === 'object'
+					? {
+							deliverable: typeof dor.deliverable === 'string' ? dor.deliverable : undefined,
+							handoffBrief: typeof dor.handoffBrief === 'string' ? dor.handoffBrief : undefined
+						}
+					: undefined,
 			assignee,
 			dueDate: dueDate ? new Date(dueDate) : undefined,
 			source: source || 'agent',

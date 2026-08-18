@@ -55,6 +55,12 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			tags: (task.tags ?? []).map(mapTag),
 			// KB2-07: spikes + discovered-work provenance
 			itemType: (task.itemType ?? 'deliverable') as string,
+			// DoR is editable at any tier — a Tier 1 option can carry its deliverable
+			// from capture; processing/replenishment pre-fill from it.
+			dor: {
+				deliverable: (task.dor?.deliverable ?? '') as string,
+				handoffBrief: (task.dor?.handoffBrief ?? '') as string
+			},
 			origin: (task.origin ?? 'planned') as string,
 			spawnedFrom: (task.spawnedFrom ?? null) as string | null,
 			spike: task.spike?.question
@@ -109,7 +115,7 @@ export const actions: Actions = {
 
 		// If this update changes the assignee of a task already in WIP, check
 		// the new assignee's WIP capacity.
-		const existing = await KanbanTask.findById(params.taskId).select('status assignee').lean() as any;
+		const existing = await KanbanTask.findById(params.taskId).select('status assignee dor').lean() as any;
 		if (existing?.status === 'wip' && assignee && existing.assignee?._id !== assignee._id) {
 			const check = await checkWipLimit(assignee._id, params.taskId);
 			if (!check.ok) return fail(409, { wipLimitError: check });
@@ -127,14 +133,23 @@ export const actions: Actions = {
 		const sizeClass = fd.get('sizeClass') as string | null;
 		if (sizeClass && (SIZE_CLASSES as readonly string[]).includes(sizeClass)) $set.sizeClass = sizeClass;
 
+		// Deliverable is editable at any tier; only touch it when the form sent it.
+		const deliverableRaw = fd.get('deliverable');
+		const dorChanged =
+			deliverableRaw !== null && (deliverableRaw.toString().trim() || '') !== (existing?.dor?.deliverable ?? '');
+		if (deliverableRaw !== null) $set['dor.deliverable'] = deliverableRaw.toString().trim() || undefined;
+
+		const now = new Date();
+		const activity: any[] = [
+			{ _id: generateId(), action: 'updated', details: { fields: 'task details' }, createdAt: now, createdBy: locals.user._id }
+		];
+		if (dorChanged) {
+			activity.push({ _id: generateId(), action: 'dor_updated', details: { fields: ['deliverable'] }, createdAt: now, createdBy: locals.user._id });
+		}
+
 		await KanbanTask.updateOne({ _id: params.taskId }, {
 			$set,
-			$push: {
-				activityLog: {
-					_id: generateId(), action: 'updated', details: { fields: 'task details' },
-					createdAt: new Date(), createdBy: locals.user._id
-				}
-			}
+			$push: { activityLog: { $each: activity } }
 		});
 
 		return { success: true };
