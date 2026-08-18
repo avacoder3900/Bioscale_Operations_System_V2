@@ -7916,3 +7916,45 @@ What this deployment is for: ROBOTARM-01 — new "Robot Arm Deck" labware defini
   labware/robotarm_cartridge_deck_001.json by scripts/verify-robotarm-deck.ts.
 Next step: calibrate the deck in the UI at /opentrons/labware — nudge x/y/z per well and save;
   offsets land in RobotDeckOffset, the definition itself stays the untouched reference.
+
+================================================================================
+2026-08-18 — jq/barcode-scanning → master — Zebra ZT230 bench-verified: calibrated defaults, ^LT fix, Content-Type fix
+================================================================================
+Live session with Jacob at the printer. Ethernet on the ZT230 showed 000.000.000.000 (no
+DHCP on that wall port; the printer is not on the 172.16.28.0/24 WiFi subnet either), so we
+went USB → Browser Print 1.3.2.489 on Jacob's PC lists it as 52j150301773 (usb). Windows
+reports "ZTC ZT230-200dpi ZPL" → 203 dpi; thermal transfer with ribbon.
+
+Findings and fixes, all now on master:
+- Browser Print /write rejects a POST with no Content-Type ("Failed to write to device:
+  null"); the client now sends text/plain (still a CORS simple request). This would have
+  broken the page's Send button on first use.
+- Hot-replugging USB crashed the agent (javaw exited, :9100 closed) — relaunch from the
+  desktop shortcut; documented (there is no window, only a right-click tray icon).
+- The roll is 20 mm × 20 mm labels (sold as ¾"), ~0.13" web; the printer's sensor reports
+  161 dots. First alignment row (¾" geometry) fell ~1 mm short on the right/bottom; 20 mm
+  geometry lands on the die-cut in both columns.
+- Top-of-form sat ~1 mm below the die-cut. A negative Y offset did nothing because ^FO
+  clamps at 0 — switched the vertical offset to ^LT (label top, −120..120), ^LT-8 nailed it.
+- Layout tuned with Jacob in hand: UUID text 14 → 10 dots (line 2 was on the bottom edge;
+  "the udi can be small"), A B C 12 → 15 dots. Approved: "you nailed it" / "looks pretty
+  good from an alignment repeatability perspective".
+- New: buildFeedZpl (empty ^XA^XZ is ignored by the printer; a 1-dot mark feeds), Feed 2
+  rows button on the page, Label size field in the calibration panel, calib localStorage
+  key bumped to v2 so cached ¾" values don't override the new baseline.
+- New: scripts/zebra-send.ts (align | labels | raw | status | list; --w --h --gap --x --y
+  --mag --dark --dry) — the bench tool used for the whole session.
+- docs/ZEBRA-ZT230-BARCODE-PRINTING.md: "Bench-verified 2026-08-18" section + gotchas.
+- 10 test labels (random UUIDs, NOT minted — told Jacob to discard) printed and scanned OK.
+
+Not yet done: the end-to-end run through the BIMS page itself (mint → Send via agent →
+confirm → PT-CT-106 + audit) — waiting on the production build of 3a24b047.
+
+npm run check: 11 errors (baseline). test:unit 91 passed.
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit 3a24b047 (fast-forwarded from jq/barcode-scanning)
+Retrieve this exact code: git checkout master at commit 3a24b047
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Zebra page with calibrated ZT230 defaults + Content-Type fix,
+for the first mint→print→confirm run on the physical printer.
