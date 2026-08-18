@@ -7725,3 +7725,22 @@ DEPLOY-DAY RUNBOOK (order matters — deploy, then migrate):
   Until --apply runs: 227 wax_stored carts are invisible to fridge/wax-stage counts and are
   refused at the reagent gate with a "legacy status — run migrate-wax-simplify" hint;
   Wax Reject will still accept them. Nothing breaks, it just under-counts.
+
+================================================================================
+2026-08-17 — master — WAX-SIMPLIFY-1..3 shipped to production + migration APPLIED
+================================================================================
+Merged feat/wax-status-simplify into master (merge commit dad155c2; concurrent kanban tier-2
+free-reign work 6f6fc7c6 from the other machine merged cleanly — only progress.txt conflicted,
+both entries kept). Pushed; Vercel production build went live (version.json 1787007198559).
+
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app
+Source: branch master @ commit dad155c2
+Retrieve this exact code: git checkout master at dad155c2
+What this deployment is for: WAX-SIMPLIFY — wax_stored gone (wax_filled is the stored state),
+  new Wax Reject page (scan + mandatory photo → wax_rejected; passes implicit), Wax Inspect
+  out of the menu, reagent gate accepts wax_filled|wax_ready.
+
+Migration scripts/migrate-wax-simplify.ts run AFTER the build was live: dry run → --apply →
+dry run. 227 wax_stored → wax_filled, 196 wax_qc → wax_filled (priorStatus + AuditLog per
+cart, changedBy 'migration:wax-simplify'), 0 standing targets touched. Wax-stage counts now:
+wax_filled=440, wax_ready=330. Re-run dry: 0/0/0. The deploy-day runbook above is COMPLETE.
