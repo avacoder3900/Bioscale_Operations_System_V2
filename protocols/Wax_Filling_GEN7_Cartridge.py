@@ -138,6 +138,29 @@ def add_parameters(parameters: protocol_api.Parameters):
         default=False
     )
 
+    # ── Per-carrier legs (2026-08-18) ────────────────────────────────────────────
+    # A deck is 3 carriers x 8 cartridges and the fill order is carrier 1 -> 2 -> 3.
+    # Cartridges must come OFF the heated deck after ~8 (heat vs wax/cartridge), and a
+    # p20 tip carrying wax for 180 dispenses (~15 cartridges) was going bad mid-run
+    # with no way for the robot to notice (OT-2 has no pressure/liquid sensing).
+    # Default: fresh probed tip every 96 wells (= 8 cartridges = one carrier) and a
+    # checkpoint pause at each carrier boundary to remove the finished cartridges.
+    parameters.add_int(
+        variable_name="wells_per_tip",
+        display_name="Wells per tip",
+        description="Change (and re-probe) the tip after this many dispenses. 96 = one carrier (8 cartridges).",
+        default=96,
+        minimum=4,
+        maximum=288,
+        unit="wells",
+    )
+    parameters.add_bool(
+        variable_name="pause_between_carriers",
+        display_name="Pause between carriers",
+        description="Drop the tip and pause after cartridge 8 and 16 so the finished cartridges can be removed.",
+        default=True
+    )
+
     # Per-gate wax volumes (columns: Gate4=2,10,18 | Gate3=4,12,20 | Gate2=6,14,22 | Gate1=8,16,24)
     parameters.add_bool(
         variable_name="tiprack_refilled",
@@ -857,8 +880,16 @@ def run(protocol: protocol_api.ProtocolContext):
                 destination_wells = [carriage[name] for name in wells_to_fill_names]
                 
                 jump_height = 60
-                tip_dispenses = 180
+                # Wells per tip (RTP; was hardcoded 180). Batches never cross a tip
+                # boundary (see wells_before_tip_change), and 96 is a whole number of
+                # rows and cartridges, so a tip change lands exactly on a carrier edge.
+                tip_dispenses = max(4, int(protocol.params.wells_per_tip))
                 tip_change_count = 0
+                pause_between_carriers = bool(protocol.params.pause_between_carriers)
+
+                def carrier_of(well_name):
+                    """0-based carrier (0 = cols 2-8, 1 = cols 10-16, 2 = cols 18-24)."""
+                    return (int(get_well_column(well_name)) - 1) // 8
                 well_prejump_height = 5
                 # True until the very first dispense of the run, which approaches the
                 # carriage from the tip calibrator and always gets the full-height lift.
@@ -1015,9 +1046,29 @@ def run(protocol: protocol_api.ProtocolContext):
                     # Blow out remaining liquid
                     pipette.blow_out(location=source_well.top())
                     
+                    # CARRIER CHECKPOINT: the next well starts a new carrier -> drop the
+                    # tip (pipette parks at the trash, away from the deck), pause so the
+                    # operator removes the finished 8 cartridges, then continue with a
+                    # fresh probed tip. Skips the plain tip-change below (tip is fresh).
+                    if well_index < len(destination_wells) and pause_between_carriers and \
+                            carrier_of(wells_to_fill_names[well_index]) != carrier_of(wells_to_fill_names[well_index - 1]):
+                        done_c = carrier_of(wells_to_fill_names[well_index - 1])
+                        next_c = carrier_of(wells_to_fill_names[well_index])
+                        if pipette.has_tip:
+                            pipette.drop_tip()
+                        protocol.comment(f'CHECKPOINT: carrier {done_c + 1} (cartridges {done_c * 8 + 1}-{done_c * 8 + 8}) done; {well_index} of {len(destination_wells)} wells filled.')
+                        protocol.pause(
+                            f'CHECKPOINT: carrier {done_c + 1} done (cartridges {done_c * 8 + 1}-{done_c * 8 + 8}). '
+                            f'Remove those cartridges — do NOT move the deck. '
+                            f'Click Resume to continue with carrier {next_c + 1} (cartridges {next_c * 8 + 1}-{next_c * 8 + 8}) on a fresh tip.'
+                        )
+                        adjust = pick_up_and_calibrate_tip()
+                        # Re-align the wells-per-tip counter to the carrier edge (matters
+                        # when the run started mid-deck via Start-at-cartridge).
+                        tip_change_count = 0
                     # CHECK FOR TIP CHANGE AFTER COMPLETING ASPIRATION CYCLE
-                    if tip_change_count % tip_dispenses == 0 and well_index < len(destination_wells):
-                        protocol.comment('Changing tip after completing aspiration cycle')
+                    elif tip_change_count % tip_dispenses == 0 and well_index < len(destination_wells):
+                        protocol.comment(f'Changing tip after {tip_dispenses} dispenses')
                         adjust = pick_up_and_calibrate_tip()
 
                 if pipette.has_tip:
