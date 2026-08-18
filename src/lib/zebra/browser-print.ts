@@ -117,10 +117,17 @@ export async function sendZpl(device: BrowserPrintDevice, zpl: string): Promise<
 		},
 		data: zpl
 	});
-	// No explicit Content-Type: a text/plain body is a CORS "simple request",
-	// which is what the agent expects (Zebra's own SDK does the same).
+	// Content-Type must be set explicitly. Verified against Browser Print
+	// 1.3.2.489 on 2026-08-18: a POST with no Content-Type header is rejected
+	// with "Failed to write to device: null"; text/plain (a CORS "simple
+	// request", so no preflight) is accepted and the printer gets the data.
 	const res = await withTimeout(
-		(signal) => fetch(`${st.baseUrl}/write`, { method: 'POST', body: payload, signal }),
+		(signal) => fetch(`${st.baseUrl}/write`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'text/plain' },
+			body: payload,
+			signal
+		}),
 		30_000
 	);
 	if (!res.ok) {
@@ -139,7 +146,7 @@ export async function queryHostStatus(device: BrowserPrintDevice): Promise<{ raw
 	try {
 		await sendZpl(device, '~HS');
 		const res = await withTimeout(
-			(signal) => fetch(`${st.baseUrl}/read`, { method: 'POST', body: JSON.stringify({ device }), signal }),
+			(signal) => fetch(`${st.baseUrl}/read`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ device }), signal }),
 			5000
 		);
 		if (!res.ok) return null;
