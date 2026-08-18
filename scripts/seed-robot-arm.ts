@@ -3,7 +3,7 @@
  *
  * Run with: npx tsx scripts/seed-robot-arm.ts
  *
- * Idempotent: upserts by serialNumber (arms) and (armId, motorId) (servos).
+ * Idempotent: upserts by role (arms) and (armId, motorId) (servos).
  * Re-running won't duplicate documents.
  */
 import mongoose from 'mongoose';
@@ -32,18 +32,22 @@ const JOINT_NAMES = [
 
 const ARMS = [
 	{
+		// Leader BusLinker replaced 2026-08-18 (old board 5C4C126959 failed).
+		// Serial read from the Pi via `udevadm info -q property -n /dev/ttyACM1`.
 		role: 'leader' as const,
-		serialNumber: '5C4C126959',
-		comPort: 'COM10',
+		serialNumber: '5C4C128110',
+		comPort: '/dev/buslinker-leader',
 		modelName: 'so-arm-101',
 		voltage: 12,
 		controllerChip: 'CH343',
 		firmwareVersion: '3.9'
 	},
 	{
+		// Follower board on arm-pi reports 5C4C126808, not the 5C4C128050
+		// listed in the PRD Phase D inventory.
 		role: 'follower' as const,
-		serialNumber: '5C4C128050',
-		comPort: 'COM11',
+		serialNumber: '5C4C126808',
+		comPort: '/dev/buslinker-follower',
 		modelName: 'so-arm-101',
 		voltage: 12,
 		controllerChip: 'CH343',
@@ -60,8 +64,11 @@ async function main() {
 	);
 
 	for (const armData of ARMS) {
+		// Upsert by role, NOT by serialNumber. A BusLinker board swap changes
+		// the serial but not the role, so keying on serialNumber would insert a
+		// second document and then blow up on the unique index on `role`.
 		const arm = await RobotArm.findOneAndUpdate(
-			{ serialNumber: armData.serialNumber },
+			{ role: armData.role },
 			{ $set: armData, $setOnInsert: { isActive: true } },
 			{ upsert: true, new: true, setDefaultsOnInsert: true }
 		);
