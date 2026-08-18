@@ -99,28 +99,29 @@ def add_parameters(parameters: protocol_api.Parameters):
 
     # ------------------------------------------------------------------
     # Tip-calibration controls (2026-08-18). The per-tip X/Y probe on the
-    # calibrator fixture is OPT-IN, mirroring the reagent protocol. On B07 the
-    # p20/wax probe against a baseline zeroed for the p300/reagent recipe
-    # returned x=-1.5..-3.1mm run to run — the wax and reagent holes are only
-    # ~3.5mm apart, so that "correction" walked the tip onto the REAGENT hole.
-    # OFF = dispense exactly where the deck definition (Deck Calibration Studio)
-    # says the wax hole is. Turn ON only after the calibrator baseline has been
-    # zeroed for the wax tip.
+    # calibrator fixture, switchable like the reagent protocol. DEFAULT ON:
+    # the decks are taught in the Deck Calibration Studio WITH "Calibrate tip"
+    # active, i.e. the stored hole coordinates are tip-neutral and only land
+    # when the fill applies the same probe adjust (B07/deck-004 confirmed
+    # 2026-08-18: OFF parks the tip on the REAGENT hole; ON lands the wax hole).
+    # OFF only for a deck taught raw (no Calibrate tip) or a dead calibrator.
     parameters.add_bool(
         variable_name="use_tip_calibration",
         display_name="USE TIP CALIBRATION",
-        description="OFF = dispense at the taught wax hole. ON = shift X/Y by the calibrator tip-bend probe.",
-        default=False
+        description="ON = shift X/Y by the calibrator probe (decks are taught tip-neutral). OFF = raw taught position.",
+        default=True
     )
 
     # Any adjust larger than this is rejected as a bad probe (missed switch,
-    # wrong baseline). Half the wax<->reagent hole spacing (~3.5mm) is 1.75mm,
-    # so 1.5mm is the largest value that can still land in the WAX hole.
+    # bad baseline, bent tip): retry once with a fresh tip, then pause and
+    # continue at nominal. B07's NORMAL wax adjust is about (-2.3, +0.7)mm
+    # (p20 recipe vs a baseline zeroed for the reagent tip), so the cap must
+    # sit well above that; a missed probe returns >5mm.
     parameters.add_float(
         variable_name="max_tip_adjust",
         display_name="Max tip adjust (mm)",
         description="Reject a tip-calibration adjust larger than this in X or Y (retry once, then nominal).",
-        default=1.5,
+        default=4.0,
         minimum=0.3,
         maximum=5.0,
         unit="mm",

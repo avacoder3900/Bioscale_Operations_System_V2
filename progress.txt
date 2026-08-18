@@ -8063,3 +8063,22 @@ npm run check: 11 errors (baseline). test:unit 91 passed.
 (yjqDRuFzLLLTg_RyJnE7Y … nLE65rLcyvnlD4g7VowqT), each drained + confirmed, no error flags, no
 blank rows; final audit 2000 unique / 0 on cartridges / each in exactly one batch; PT-CT-106
 816 → 2816. Details in docs/sessions/2026-08-18-zebra-zt230-bench-session.md §4.
+
+================================================================================
+2026-08-18 — master — CORRECTION: wax tip calibration ON by default, max_tip_adjust 4.0 (B07 A/B)
+================================================================================
+Operator A/B on B07/deck-004 with RUN CALIBRATION CHECK: tip-cal OFF parked the tip on the REAGENT
+hole; tip-cal ON with cap 5 landed the wax hole. The decks are taught in the Studio WITH Calibrate-tip
+active (tip-neutral coords), so the fill must apply the same probe adjust — the earlier OFF default
+and the 1.5mm cap (which rejected B07's normal ~2.3mm wax adjust and fell back to nominal) were wrong
+for these decks. Defaults flipped in the .py + WAX_PARAM_DEFAULTS (use_tip_calibration true,
+max_tip_adjust 4.0); stored wax .py re-synced. The morning's "reagent hole" symptom stands as
+untaught C2/C3 wax wells (since re-taught by the operator today) + probe scatter, not the .py.
+
+Deployment: robot protocol — B07 wax entry repointed 24d1dc1f -> 1cd39003-2e3d-4b98-8f3b-f39283f40c89
+Source: branch master @ commit 9fbf1c1c
+Retrieve this exact code: git checkout master at commit 9fbf1c1c
+What this deployment is for: wax fills land the wax hole again on tip-neutral-taught decks (tip-cal ON, cap 4.0).
+
+Deployment: production — Vercel auto-deploy from master push (form defaults ON / 4.0)
+Source: branch master @ commit 9fbf1c1c

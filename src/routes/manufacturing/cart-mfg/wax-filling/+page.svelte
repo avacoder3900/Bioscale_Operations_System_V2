@@ -155,11 +155,14 @@
 		vol_gate2: 2.2,
 		vol_gate3: 2.2,
 		vol_gate4: 2.2,
-		// Tip calibration is OPT-IN for wax (2026-08-18): the p20 probe against a
-		// baseline zeroed for the reagent tip walked B07's wax tip onto the reagent
-		// hole. OFF = fill exactly where the Deck Calibration Studio shows the hole.
+		// Tip calibration ON by default (2026-08-18): decks are taught in the Studio
+		// with "Calibrate tip" active (tip-neutral coordinates), so the fill must
+		// apply the same probe adjust to land the wax hole — OFF parks the tip on
+		// the reagent hole (confirmed on B07/deck-004). max_tip_adjust 4.0 rejects
+		// only genuinely bad probes (B07's normal wax adjust is ~2.3mm).
 		// Only posted when the protocol declares the RTP (server filters by schema).
-		use_tip_calibration: false,
+		use_tip_calibration: true,
+		max_tip_adjust: 4.0,
 		run_calibration_check: false
 	});
 
